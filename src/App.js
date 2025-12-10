@@ -1783,6 +1783,12 @@ const InputView = () => {
     const rawValue = value.replace(/,/g, "");
     if (!/^\d*$/.test(rawValue)) return;
 
+    // 規則：『來客數』＆『新客數』不能超過兩位數
+    if ((key === "traffic" || key === "newCustomers") && rawValue.length > 2) {
+      showToast("⚠️ 人數限制：不能超過兩位數 (最大 99)", "error");
+      return;
+    }
+
     setFormData((prev) => ({
       ...prev,
       [key]: formatNumber(rawValue),
