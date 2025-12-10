@@ -908,22 +908,23 @@ const DashboardView = () => {
               subText="本月新增體驗人數"
             />
             <MiniKpiCard
-              title="平均消耗客單"
-              value={fmtMoney(analytics.avgTrafficASP)}
-              icon={Zap}
-              color="text-sky-500"
+              title="總新客締結"
+              value={fmtNum(grandTotal.newCustomerClosings)}
+              icon={CheckSquare}
+              color="text-teal-500"
               subText={
-                <span
-                  className={
-                    analytics.avgTrafficASP >= targets.trafficASP
-                      ? "text-emerald-500 font-bold"
-                      : "text-rose-500 font-bold"
-                  }
-                >
-                  {analytics.avgTrafficASP >= targets.trafficASP
-                    ? "達標"
-                    : "未達標"}{" "}
-                  (目標 {fmtNum(targets.trafficASP)})
+                <span>
+                  成交率{" "}
+                  <span className="font-bold">
+                    {grandTotal.newCustomers > 0
+                      ? (
+                          (grandTotal.newCustomerClosings /
+                            grandTotal.newCustomers) *
+                          100
+                        ).toFixed(0)
+                      : 0}
+                    %
+                  </span>
                 </span>
               }
             />
@@ -1096,18 +1097,18 @@ const RegionalView = () => {
                 </div>
                 <div className="text-center border-l border-stone-200">
                   <p className="text-[10px] text-stone-400 font-bold uppercase mb-1">
-                    消耗客單
-                  </p>
-                  <p className="text-stone-700 font-bold">
-                    {fmtNum(region.trafficASP)}
-                  </p>
-                </div>
-                <div className="text-center border-l border-stone-200">
-                  <p className="text-[10px] text-stone-400 font-bold uppercase mb-1">
                     新客數
                   </p>
                   <p className="text-stone-700 font-bold">
                     {fmtNum(region.newCustomersTotal)}
+                  </p>
+                </div>
+                <div className="text-center border-l border-stone-200">
+                  <p className="text-[10px] text-stone-400 font-bold uppercase mb-1">
+                    締結數
+                  </p>
+                  <p className="text-stone-700 font-bold">
+                    {fmtNum(region.newCustomerClosingsTotal)}
                   </p>
                 </div>
               </div>
@@ -1234,7 +1235,7 @@ const RankingView = () => {
 
   const handleExportCSV = () => {
     const headers = [
-      "排名,店名,區域,現金業績,達成率,保養品業績,來客數,消耗客單,新客數",
+      "排名,店名,區域,現金業績,達成率,保養品業績,來客數,消耗客單,新客數,新客締結",
     ];
     const rows = sortedData.map((store, index) => {
       const name = store.name.replace("CYJ", "").replace("店", "");
@@ -1248,6 +1249,7 @@ const RankingView = () => {
         store.trafficTotal,
         store.trafficASP,
         store.newCustomersTotal,
+        store.newCustomerClosingsTotal,
       ].join(",");
     });
 
@@ -1308,9 +1310,15 @@ const RankingView = () => {
                 </th>
                 <th
                   className="p-4 cursor-pointer text-right"
-                  onClick={() => requestSort("trafficASP")}
+                  onClick={() => requestSort("newCustomersTotal")}
                 >
-                  消耗客單
+                  新客數
+                </th>
+                <th
+                  className="p-4 cursor-pointer text-right"
+                  onClick={() => requestSort("newCustomerClosingsTotal")}
+                >
+                  締結數
                 </th>
               </tr>
             </thead>
@@ -1333,7 +1341,10 @@ const RankingView = () => {
                     {fmtNum(store.trafficTotal)}
                   </td>
                   <td className="p-4 text-right font-mono text-stone-600">
-                    {fmtNum(store.trafficASP)}
+                    {fmtNum(store.newCustomersTotal)}
+                  </td>
+                  <td className="p-4 text-right font-mono text-stone-600">
+                    {fmtNum(store.newCustomerClosingsTotal)}
                   </td>
                 </tr>
               ))}
@@ -1722,6 +1733,7 @@ const InputView = () => {
     skincareSales: "",
     traffic: "",
     newCustomers: "",
+    newCustomerClosings: "", // NEW
     newCustomerSales: "",
   });
 
@@ -1735,6 +1747,7 @@ const InputView = () => {
     skincareSales: "保養品業績",
     traffic: "來客數",
     newCustomers: "新客數",
+    newCustomerClosings: "新客締結人數", // NEW
     newCustomerSales: "新客業績",
   };
 
@@ -1783,8 +1796,13 @@ const InputView = () => {
     const rawValue = value.replace(/,/g, "");
     if (!/^\d*$/.test(rawValue)) return;
 
-    // 規則：『來客數』＆『新客數』不能超過兩位數
-    if ((key === "traffic" || key === "newCustomers") && rawValue.length > 2) {
+    // 規則：『來客數』＆『新客數』＆『新客締結人數』不能超過兩位數
+    if (
+      (key === "traffic" ||
+        key === "newCustomers" ||
+        key === "newCustomerClosings") &&
+      rawValue.length > 2
+    ) {
       showToast("⚠️ 人數限制：不能超過兩位數 (最大 99)", "error");
       return;
     }
@@ -1873,6 +1891,7 @@ const InputView = () => {
         skincareSales: parseNumber(formData.skincareSales),
         traffic: parseNumber(formData.traffic),
         newCustomers: parseNumber(formData.newCustomers),
+        newCustomerClosings: parseNumber(formData.newCustomerClosings), // NEW
         newCustomerSales: parseNumber(formData.newCustomerSales),
         timestamp: serverTimestamp(),
       };
@@ -1918,6 +1937,7 @@ const InputView = () => {
         skincareSales: "",
         traffic: "",
         newCustomers: "",
+        newCustomerClosings: "",
         newCustomerSales: "",
       });
     } catch (err) {
@@ -2293,6 +2313,7 @@ const HistoryView = () => {
         skincareSales: Number(editForm.skincareSales),
         traffic: Number(editForm.traffic),
         newCustomers: Number(editForm.newCustomers),
+        newCustomerClosings: Number(editForm.newCustomerClosings), // NEW
         newCustomerSales: Number(editForm.newCustomerSales),
       };
 
@@ -2383,6 +2404,7 @@ const HistoryView = () => {
                   <th className="p-4 text-right">保養品</th>
                   <th className="p-4 text-right">來客</th>
                   <th className="p-4 text-right">新客</th>
+                  <th className="p-4 text-right">締結</th>
                   <th className="p-4 text-center sticky right-0 bg-stone-100 shadow-l">
                     動作
                   </th>
@@ -2409,6 +2431,7 @@ const HistoryView = () => {
                         "skincareSales",
                         "traffic",
                         "newCustomers",
+                        "newCustomerClosings", // NEW
                       ].map((field) => (
                         <td key={field} className="p-4 text-right font-mono">
                           {isEditing ? (
@@ -4010,6 +4033,11 @@ export default function App() {
         (a, b) => a + (b.newCustomers || 0),
         0
       );
+      // NEW: Aggregate new customer closings
+      const newCustomerClosingsTotal = storeRecs.reduce(
+        (a, b) => a + (b.newCustomerClosings || 0),
+        0
+      );
       const newCustomerSalesTotal = storeRecs.reduce(
         (a, b) => a + (b.newCustomerSales || 0),
         0
@@ -4029,6 +4057,7 @@ export default function App() {
         operationalAccrualTotal, // Return for aggregation
         trafficTotal,
         newCustomersTotal,
+        newCustomerClosingsTotal, // Return for aggregation
         newCustomerSalesTotal,
         skincareSalesTotal,
         cashBudget: budget.cashTarget,
@@ -4061,6 +4090,7 @@ export default function App() {
         skincareSales: acc.skincareSales + s.skincareSalesTotal,
         traffic: acc.traffic + s.trafficTotal,
         newCustomers: acc.newCustomers + s.newCustomersTotal,
+        newCustomerClosings: acc.newCustomerClosings + s.newCustomerClosingsTotal, // Aggregate Closings
         newCustomerSales: acc.newCustomerSales + s.newCustomerSalesTotal,
         budget: acc.budget + s.cashBudget,
         accrualBudget: acc.accrualBudget + s.accrualBudget,
@@ -4073,6 +4103,7 @@ export default function App() {
         skincareSales: 0,
         traffic: 0,
         newCustomers: 0,
+        newCustomerClosings: 0, // Init
         newCustomerSales: 0,
         budget: 0,
         accrualBudget: 0,
@@ -4103,6 +4134,10 @@ export default function App() {
           (a, b) => a + b.newCustomersTotal,
           0
         );
+        const newCustomerClosingsTotal = managed.reduce(
+          (a, b) => a + b.newCustomerClosingsTotal,
+          0
+        );
 
         // FIXED: Calculate Weighted ASP for Region using Operational Accrual
         const trafficASP =
@@ -4118,6 +4153,7 @@ export default function App() {
           skincareSalesTotal,
           trafficTotal,
           newCustomersTotal,
+          newCustomerClosingsTotal, // Return regional total
           trafficASP,
           achievement: budget > 0 ? (cashTotal / budget) * 100 : 0,
         };
