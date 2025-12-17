@@ -951,7 +951,10 @@ const DashboardView = () => {
           </div>
         </div>
 
-        <Card title="全品牌日營運走勢" subtitle="現金業績 vs 課程操作人數趨勢分析">
+        <Card
+          title="全品牌日營運走勢"
+          subtitle="現金業績 vs 課程操作人數趨勢分析"
+        >
           <div className="h-[300px] w-full">
             <ResponsiveContainer width="100%" height="100%">
               <ComposedChart
@@ -1435,9 +1438,18 @@ const StoreAnalysisView = () => {
       0
     );
     // New aggregations
-    const totalNewCustomers = data.reduce((a, b) => a + (b.newCustomers || 0), 0);
-    const totalNewCustomerSales = data.reduce((a, b) => a + (b.newCustomerSales || 0), 0);
-    const totalNewCustomerClosings = data.reduce((a, b) => a + (b.newCustomerClosings || 0), 0);
+    const totalNewCustomers = data.reduce(
+      (a, b) => a + (b.newCustomers || 0),
+      0
+    );
+    const totalNewCustomerSales = data.reduce(
+      (a, b) => a + (b.newCustomerSales || 0),
+      0
+    );
+    const totalNewCustomerClosings = data.reduce(
+      (a, b) => a + (b.newCustomerClosings || 0),
+      0
+    );
 
     const budget =
       budgets[`${selectedStore}_${targetYear}_${monthInt}`]?.cashTarget || 0;
@@ -1447,11 +1459,14 @@ const StoreAnalysisView = () => {
       achievement: budget > 0 ? (totalCash / budget) * 100 : 0,
       trafficASP:
         totalTraffic > 0 ? Math.round(totalOpAccrual / totalTraffic) : 0,
-      
+
       // New metric properties
-      newCustomerASP: totalNewCustomers > 0 ? Math.round(totalNewCustomerSales / totalNewCustomers) : 0,
+      newCustomerASP:
+        totalNewCustomers > 0
+          ? Math.round(totalNewCustomerSales / totalNewCustomers)
+          : 0,
       totalNewCustomerClosings,
-      
+
       dailyData: data.map((d) => ({
         // 確保圖表顯示日期也是標準化後的
         date: toStandardDateFormat(d.date).split("/")[2],
@@ -1530,7 +1545,7 @@ const StoreAnalysisView = () => {
                   {fmtMoney(storeMetrics.budget)}
                 </h3>
               </div>
-              
+
               {/* New: New Customer ASP */}
               <div className="bg-white p-5 rounded-2xl border shadow-sm">
                 <p className="text-stone-400 text-xs font-bold mb-1">
@@ -1542,7 +1557,7 @@ const StoreAnalysisView = () => {
               </div>
 
               {/* New: New Customer Closings */}
-               <div className="bg-white p-5 rounded-2xl border shadow-sm">
+              <div className="bg-white p-5 rounded-2xl border shadow-sm">
                 <p className="text-stone-400 text-xs font-bold mb-1">
                   總新客留單
                 </p>
@@ -1551,7 +1566,7 @@ const StoreAnalysisView = () => {
                 </h3>
               </div>
             </div>
-            
+
             <Card title={`${selectedStore} 日趨勢`}>
               <div className="h-[300px] w-full">
                 <ResponsiveContainer width="100%" height="100%">
@@ -1597,9 +1612,10 @@ const AuditView = () => {
     selectedYear,
     selectedMonth,
   } = useContext(AppContext);
-  const [checkDate, setCheckDate] = useState(
-    analytics.latestDate === "無資料" ? "" : analytics.latestDate
-  );
+
+  // 修改：預設帶入系統當天日期 (YYYY-MM-DD)，不論有無數據
+  const [checkDate, setCheckDate] = useState(formatLocalYYYYMMDD(new Date()));
+
   const [auditType, setAuditType] = useState("daily");
 
   const auditData = useMemo(() => {
@@ -1685,17 +1701,12 @@ const AuditView = () => {
             </button>
           </div>
           {auditType === "daily" && (
-            <select
+            <input
+              type="date"
               value={checkDate}
               onChange={(e) => setCheckDate(e.target.value)}
-              className="px-4 py-2 border rounded-xl bg-stone-50"
-            >
-              {analytics.allDates.map((d) => (
-                <option key={d} value={d}>
-                  {d}
-                </option>
-              ))}
-            </select>
+              className="px-4 py-2 border rounded-xl bg-stone-50 outline-none focus:ring-2 focus:ring-amber-200"
+            />
           )}
         </div>
         <div className="border border-rose-100 rounded-3xl overflow-hidden shadow-sm mb-8">
@@ -4123,7 +4134,8 @@ export default function App() {
         skincareSales: acc.skincareSales + s.skincareSalesTotal,
         traffic: acc.traffic + s.trafficTotal,
         newCustomers: acc.newCustomers + s.newCustomersTotal,
-        newCustomerClosings: acc.newCustomerClosings + s.newCustomerClosingsTotal, // Aggregate Closings
+        newCustomerClosings:
+          acc.newCustomerClosings + s.newCustomerClosingsTotal, // Aggregate Closings
         newCustomerSales: acc.newCustomerSales + s.newCustomerSalesTotal,
         budget: acc.budget + s.cashBudget,
         accrualBudget: acc.accrualBudget + s.accrualBudget,
