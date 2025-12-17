@@ -1745,9 +1745,9 @@ const InputView = () => {
     accrual: "總權責業績 (自動計算)",
     operationalAccrual: "操作權責 (技術)",
     skincareSales: "保養品業績",
-    traffic: "來客數",
+    traffic: "課程操作人數",
     newCustomers: "新客數",
-    newCustomerClosings: "新客締結人數", // NEW
+    newCustomerClosings: "新客留單人數", // NEW
     newCustomerSales: "新客業績",
   };
 
@@ -1796,7 +1796,7 @@ const InputView = () => {
     const rawValue = value.replace(/,/g, "");
     if (!/^\d*$/.test(rawValue)) return;
 
-    // 規則：『來客數』＆『新客數』＆『新客締結人數』不能超過兩位數
+    // 規則：『課程操作人數』＆『新客數』＆『新客留單人數』不能超過兩位數
     if (
       (key === "traffic" ||
         key === "newCustomers" ||
