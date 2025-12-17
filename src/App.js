@@ -1429,7 +1429,12 @@ const StoreAnalysisView = () => {
         const m = parseInt(parts[1]);
         return (y === targetYear || y === rocYear) && m === monthInt;
       })
-      .sort((a, b) => a.date.localeCompare(b.date));
+      // 修正排序邏輯：使用標準化日期 (YYYY/MM/DD) 進行比較，解決個位數月份排序錯誤問題
+      .sort((a, b) => {
+        const dateA = toStandardDateFormat(a.date);
+        const dateB = toStandardDateFormat(b.date);
+        return dateA.localeCompare(dateB);
+      });
 
     const totalCash = data.reduce((a, b) => a + (b.cash || 0), 0);
     const totalTraffic = data.reduce((a, b) => a + (b.traffic || 0), 0);
