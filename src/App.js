@@ -894,11 +894,11 @@ const DashboardView = () => {
           </h3>
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
             <MiniKpiCard
-              title="總來客數"
+              title="課程操作人數"
               value={fmtNum(grandTotal.traffic)}
               icon={Users}
               color="text-blue-500"
-              subText="本月累計進店人數"
+              subText="本月累計操作人數"
             />
             <MiniKpiCard
               title="總新客數"
@@ -908,13 +908,13 @@ const DashboardView = () => {
               subText="本月新增體驗人數"
             />
             <MiniKpiCard
-              title="總新客締結"
+              title="總新客留單"
               value={fmtNum(grandTotal.newCustomerClosings)}
               icon={CheckSquare}
               color="text-teal-500"
               subText={
                 <span>
-                  成交率{" "}
+                  留單率{" "}
                   <span className="font-bold">
                     {grandTotal.newCustomers > 0
                       ? (
@@ -951,7 +951,7 @@ const DashboardView = () => {
           </div>
         </div>
 
-        <Card title="全品牌日營運走勢" subtitle="現金業績 vs 來客數趨勢分析">
+        <Card title="全品牌日營運走勢" subtitle="現金業績 vs 課程操作人數趨勢分析">
           <div className="h-[300px] w-full">
             <ResponsiveContainer width="100%" height="100%">
               <ComposedChart
@@ -1002,7 +1002,7 @@ const DashboardView = () => {
                   yAxisId="right"
                   type="monotone"
                   dataKey="traffic"
-                  name="來客數"
+                  name="課程操作人數"
                   stroke="#0ea5e9"
                   strokeWidth={3}
                 />
@@ -1089,7 +1089,7 @@ const RegionalView = () => {
               <div className="grid grid-cols-3 gap-2 py-4 border-t border-stone-100 bg-stone-50/50 -mx-6 px-6">
                 <div className="text-center">
                   <p className="text-[10px] text-stone-400 font-bold uppercase mb-1">
-                    總來客數
+                    課程操作人數
                   </p>
                   <p className="text-stone-700 font-bold">
                     {fmtNum(region.trafficTotal)}
@@ -1105,7 +1105,7 @@ const RegionalView = () => {
                 </div>
                 <div className="text-center border-l border-stone-200">
                   <p className="text-[10px] text-stone-400 font-bold uppercase mb-1">
-                    締結數
+                    留單數
                   </p>
                   <p className="text-stone-700 font-bold">
                     {fmtNum(region.newCustomerClosingsTotal)}
@@ -1235,7 +1235,7 @@ const RankingView = () => {
 
   const handleExportCSV = () => {
     const headers = [
-      "排名,店名,區域,現金業績,達成率,保養品業績,來客數,消耗客單,新客數,新客締結",
+      "排名,店名,區域,現金業績,達成率,保養品業績,課程操作人數,消耗客單,新客數,新客留單",
     ];
     const rows = sortedData.map((store, index) => {
       const name = store.name.replace("CYJ", "").replace("店", "");
@@ -1306,7 +1306,7 @@ const RankingView = () => {
                   className="p-4 cursor-pointer text-right"
                   onClick={() => requestSort("trafficTotal")}
                 >
-                  來客數
+                  課程操作人數
                 </th>
                 <th
                   className="p-4 cursor-pointer text-right"
@@ -1318,7 +1318,7 @@ const RankingView = () => {
                   className="p-4 cursor-pointer text-right"
                   onClick={() => requestSort("newCustomerClosingsTotal")}
                 >
-                  締結數
+                  留單數
                 </th>
               </tr>
             </thead>
@@ -1365,6 +1365,7 @@ const StoreAnalysisView = () => {
     selectedYear,
     selectedMonth,
     fmtMoney,
+    fmtNum,
     currentUser,
     userRole,
     activeView,
@@ -1433,6 +1434,11 @@ const StoreAnalysisView = () => {
       (a, b) => a + (b.operationalAccrual || 0),
       0
     );
+    // New aggregations
+    const totalNewCustomers = data.reduce((a, b) => a + (b.newCustomers || 0), 0);
+    const totalNewCustomerSales = data.reduce((a, b) => a + (b.newCustomerSales || 0), 0);
+    const totalNewCustomerClosings = data.reduce((a, b) => a + (b.newCustomerClosings || 0), 0);
+
     const budget =
       budgets[`${selectedStore}_${targetYear}_${monthInt}`]?.cashTarget || 0;
 
@@ -1441,6 +1447,11 @@ const StoreAnalysisView = () => {
       achievement: budget > 0 ? (totalCash / budget) * 100 : 0,
       trafficASP:
         totalTraffic > 0 ? Math.round(totalOpAccrual / totalTraffic) : 0,
+      
+      // New metric properties
+      newCustomerASP: totalNewCustomers > 0 ? Math.round(totalNewCustomerSales / totalNewCustomers) : 0,
+      totalNewCustomerClosings,
+      
       dailyData: data.map((d) => ({
         // 確保圖表顯示日期也是標準化後的
         date: toStandardDateFormat(d.date).split("/")[2],
@@ -1485,7 +1496,7 @@ const StoreAnalysisView = () => {
         </Card>
         {selectedStore && storeMetrics && (
           <>
-            <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5 gap-4">
               <div className="bg-white p-5 rounded-2xl border shadow-sm">
                 <p className="text-stone-400 text-xs font-bold mb-1">
                   現金業績
@@ -1519,7 +1530,28 @@ const StoreAnalysisView = () => {
                   {fmtMoney(storeMetrics.budget)}
                 </h3>
               </div>
+              
+              {/* New: New Customer ASP */}
+              <div className="bg-white p-5 rounded-2xl border shadow-sm">
+                <p className="text-stone-400 text-xs font-bold mb-1">
+                  新客平均客單
+                </p>
+                <h3 className="text-2xl font-bold text-stone-700">
+                  {fmtMoney(storeMetrics.newCustomerASP)}
+                </h3>
+              </div>
+
+              {/* New: New Customer Closings */}
+               <div className="bg-white p-5 rounded-2xl border shadow-sm">
+                <p className="text-stone-400 text-xs font-bold mb-1">
+                  總新客留單
+                </p>
+                <h3 className="text-2xl font-bold text-stone-700">
+                  {fmtNum(storeMetrics.totalNewCustomerClosings)}
+                </h3>
+              </div>
             </div>
+            
             <Card title={`${selectedStore} 日趨勢`}>
               <div className="h-[300px] w-full">
                 <ResponsiveContainer width="100%" height="100%">
@@ -1539,6 +1571,7 @@ const StoreAnalysisView = () => {
                       yAxisId="right"
                       type="monotone"
                       dataKey="traffic"
+                      name="課程操作人數"
                       stroke="#0ea5e9"
                       strokeWidth={2}
                     />
@@ -2402,9 +2435,9 @@ const HistoryView = () => {
                   <th className="p-4 text-right">總權責</th>
                   <th className="p-4 text-right">操作權責</th>
                   <th className="p-4 text-right">保養品</th>
-                  <th className="p-4 text-right">來客</th>
+                  <th className="p-4 text-right">操作人數</th>
                   <th className="p-4 text-right">新客</th>
-                  <th className="p-4 text-right">締結</th>
+                  <th className="p-4 text-right">留單</th>
                   <th className="p-4 text-center sticky right-0 bg-stone-100 shadow-l">
                     動作
                   </th>
