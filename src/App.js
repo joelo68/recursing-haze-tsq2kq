@@ -52,60 +52,40 @@ import {
   Settings,
   ClipboardCheck,
   Menu,
-  Bell,
   Search,
   Filter,
   Trash2,
   Save,
   Plus,
-  ArrowUpRight,
-  ArrowDownRight,
   DollarSign,
   Target,
   Users,
-  Zap,
   Award,
-  Cloud,
   Loader2,
   FileText,
   AlertCircle,
   CheckCircle,
   User,
   Store,
-  Calendar,
   Lock,
   LogOut,
-  Shield,
-  Briefcase,
-  Copy,
-  Wallet,
   FileWarning,
   Edit2,
-  BarChart2,
+  LineChart as LineChartIcon, // Renamed to avoid conflict
   CheckSquare,
-  KeyRound,
   X,
-  RefreshCw,
-  Eye,
-  EyeOff,
-  Heart,
   Download,
-  ArrowUpDown,
-  ArrowUp,
-  ArrowDown,
   ChevronLeft,
   ChevronRight,
-  History,
   Activity,
   Sparkles,
   ChevronDown,
   Coffee,
-  Calculator,
   ShoppingBag,
   CreditCard,
-  Users2,
   Smartphone,
   Monitor,
+  Bell, // Fixed: Added back Bell component
 } from "lucide-react";
 
 // --- Firebase 初始化 ---
@@ -140,7 +120,7 @@ const ROLES = {
 const ALL_MENU_ITEMS = [
   { id: "dashboard", label: "營運總覽", icon: LayoutDashboard },
   { id: "regional", label: "區域分析", icon: MapIcon },
-  { id: "store-analysis", label: "單店分析", icon: BarChart2 },
+  { id: "store-analysis", label: "單店分析", icon: LineChartIcon },
   { id: "ranking", label: "詳細報表", icon: TrendingUp },
   { id: "audit", label: "回報檢核", icon: ClipboardCheck },
   { id: "history", label: "數據修正", icon: FileText },
@@ -881,6 +861,24 @@ const DashboardView = () => {
                 </>
               }
             />
+            {/* NEW: Total Refund Card */}
+            <MiniKpiCard
+              title="總退費金額"
+              value={fmtMoney(grandTotal.refund)}
+              icon={FileWarning}
+              color="text-rose-600"
+              subText={
+                <>
+                  佔現金{" "}
+                  <span className="font-bold text-stone-700 ml-1">
+                    {grandTotal.cash > 0
+                      ? ((grandTotal.refund / grandTotal.cash) * 100).toFixed(1)
+                      : 0}
+                    %
+                  </span>
+                </>
+              }
+            />
           </div>
         </div>
 
@@ -1436,7 +1434,11 @@ const StoreAnalysisView = () => {
         return dateA.localeCompare(dateB);
       });
 
-    const totalCash = data.reduce((a, b) => a + (b.cash || 0), 0);
+    // 邏輯修正：計算總現金時，扣除退費 (Total Cash = Gross Cash - Refund)
+    const grossCash = data.reduce((a, b) => a + (b.cash || 0), 0);
+    const totalRefund = data.reduce((a, b) => a + (b.refund || 0), 0); // NEW: Store Refund
+    const totalCash = grossCash - totalRefund;
+
     const totalTraffic = data.reduce((a, b) => a + (b.traffic || 0), 0);
     const totalOpAccrual = data.reduce(
       (a, b) => a + (b.operationalAccrual || 0),
@@ -1460,7 +1462,7 @@ const StoreAnalysisView = () => {
       budgets[`${selectedStore}_${targetYear}_${monthInt}`]?.cashTarget || 0;
 
     return {
-      totalCash,
+      totalCash, // 此值已扣除退費
       achievement: budget > 0 ? (totalCash / budget) * 100 : 0,
       trafficASP:
         totalTraffic > 0 ? Math.round(totalOpAccrual / totalTraffic) : 0,
@@ -1471,11 +1473,13 @@ const StoreAnalysisView = () => {
           ? Math.round(totalNewCustomerSales / totalNewCustomers)
           : 0,
       totalNewCustomerClosings,
+      totalRefund, // NEW
 
       dailyData: data.map((d) => ({
         // 確保圖表顯示日期也是標準化後的
         date: toStandardDateFormat(d.date).split("/")[2],
-        cash: d.cash,
+        // 圖表顯示的每日業績也要扣除當日退費
+        cash: (d.cash || 0) - (d.refund || 0),
         traffic: d.traffic,
       })),
       budget,
@@ -1516,7 +1520,9 @@ const StoreAnalysisView = () => {
         </Card>
         {selectedStore && storeMetrics && (
           <>
-            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5 gap-4">
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-6 gap-4">
+              {" "}
+              {/* Changed to 6 cols to fit new card */}
               <div className="bg-white p-5 rounded-2xl border shadow-sm">
                 <p className="text-stone-400 text-xs font-bold mb-1">
                   現金業績
@@ -1550,7 +1556,6 @@ const StoreAnalysisView = () => {
                   {fmtMoney(storeMetrics.budget)}
                 </h3>
               </div>
-
               {/* New: New Customer ASP */}
               <div className="bg-white p-5 rounded-2xl border shadow-sm">
                 <p className="text-stone-400 text-xs font-bold mb-1">
@@ -1560,7 +1565,6 @@ const StoreAnalysisView = () => {
                   {fmtMoney(storeMetrics.newCustomerASP)}
                 </h3>
               </div>
-
               {/* New: New Customer Closings */}
               <div className="bg-white p-5 rounded-2xl border shadow-sm">
                 <p className="text-stone-400 text-xs font-bold mb-1">
@@ -1568,6 +1572,15 @@ const StoreAnalysisView = () => {
                 </p>
                 <h3 className="text-2xl font-bold text-stone-700">
                   {fmtNum(storeMetrics.totalNewCustomerClosings)}
+                </h3>
+              </div>
+              {/* NEW: Total Refund */}
+              <div className="bg-white p-5 rounded-2xl border shadow-sm">
+                <p className="text-stone-400 text-xs font-bold mb-1">
+                  總退費金額
+                </p>
+                <h3 className="text-2xl font-bold text-rose-500">
+                  {fmtMoney(storeMetrics.totalRefund)}
                 </h3>
               </div>
             </div>
@@ -1784,6 +1797,7 @@ const InputView = () => {
     newCustomers: "",
     newCustomerClosings: "", // NEW
     newCustomerSales: "",
+    refund: "", // NEW: 當日退費
   });
 
   // 目標設定狀態
@@ -1798,6 +1812,7 @@ const InputView = () => {
     newCustomers: "新客數",
     newCustomerClosings: "新客留單人數", // NEW
     newCustomerSales: "新客業績",
+    refund: "當日退費", // NEW
   };
 
   const today = new Date().toISOString().split("T")[0];
@@ -1942,6 +1957,7 @@ const InputView = () => {
         newCustomers: parseNumber(formData.newCustomers),
         newCustomerClosings: parseNumber(formData.newCustomerClosings), // NEW
         newCustomerSales: parseNumber(formData.newCustomerSales),
+        refund: parseNumber(formData.refund), // NEW: 儲存退費
         timestamp: serverTimestamp(),
       };
 
@@ -1988,6 +2004,7 @@ const InputView = () => {
         newCustomers: "",
         newCustomerClosings: "",
         newCustomerSales: "",
+        refund: "",
       });
     } catch (err) {
       console.error(err);
@@ -2256,9 +2273,15 @@ const InputView = () => {
               <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-6">
                 {Object.keys(formData).map((key) => {
                   const isReadOnly = key === "accrual";
+                  const isRefund = key === "refund"; // Check for refund field
+
                   return (
                     <div key={key}>
-                      <label className="block text-xs font-bold mb-1.5 text-stone-500">
+                      <label
+                        className={`block text-xs font-bold mb-1.5 ${
+                          isRefund ? "text-rose-500" : "text-stone-500"
+                        }`}
+                      >
                         {LABELS[key] || key}
                       </label>
                       <input
@@ -2273,7 +2296,9 @@ const InputView = () => {
                         className={`w-full border-2 p-3 rounded-xl outline-none font-bold transition-all focus:shadow-lg focus:shadow-amber-50 focus:bg-amber-50/10 ${
                           isReadOnly
                             ? "bg-stone-100 text-stone-500 border-stone-100 cursor-not-allowed"
-                            : "border-stone-100 focus:border-amber-400 text-stone-700"
+                            : `border-stone-100 focus:border-amber-400 ${
+                                isRefund ? "text-rose-500" : "text-stone-700"
+                              }`
                         }`}
                       />
                     </div>
@@ -2364,6 +2389,7 @@ const HistoryView = () => {
         newCustomers: Number(editForm.newCustomers),
         newCustomerClosings: Number(editForm.newCustomerClosings), // NEW
         newCustomerSales: Number(editForm.newCustomerSales),
+        refund: Number(editForm.refund), // NEW
       };
 
       await updateDoc(docRef, cleanData);
@@ -2448,6 +2474,7 @@ const HistoryView = () => {
                   <th className="p-4">日期</th>
                   <th className="p-4">店名</th>
                   <th className="p-4 text-right">現金</th>
+                  <th className="p-4 text-right">退費</th>
                   <th className="p-4 text-right">總權責</th>
                   <th className="p-4 text-right">操作權責</th>
                   <th className="p-4 text-right">保養品</th>
@@ -2475,6 +2502,7 @@ const HistoryView = () => {
                       {/* Editable Cells */}
                       {[
                         "cash",
+                        "refund", // NEW
                         "accrual",
                         "operationalAccrual",
                         "skincareSales",
@@ -2495,7 +2523,9 @@ const HistoryView = () => {
                           ) : (
                             <span
                               className={
-                                field === "accrual"
+                                field === "refund"
+                                  ? "text-rose-500 font-bold"
+                                  : field === "accrual"
                                   ? "text-stone-400"
                                   : "text-stone-700"
                               }
@@ -2545,7 +2575,7 @@ const HistoryView = () => {
                 })}
                 {filteredData.length === 0 && (
                   <tr>
-                    <td colSpan="9" className="p-8 text-center text-stone-400">
+                    <td colSpan="11" className="p-8 text-center text-stone-400">
                       沒有符合條件的資料
                     </td>
                   </tr>
@@ -4058,7 +4088,8 @@ export default function App() {
       return {
         date: date.split("/")[2],
         fullDate: date,
-        cash: dayRecs.reduce((a, b) => a + (b.cash || 0), 0),
+        // 邏輯修正：每日業績總合扣除當日退費
+        cash: dayRecs.reduce((a, b) => a + (b.cash || 0) - (b.refund || 0), 0),
         traffic: dayRecs.reduce((a, b) => a + (b.traffic || 0), 0),
       };
     });
@@ -4068,7 +4099,12 @@ export default function App() {
     );
     const storeStats = storeList.map((s) => {
       const storeRecs = currentMonthData.filter((r) => r.storeName === s.name);
-      const cashTotal = storeRecs.reduce((a, b) => a + (b.cash || 0), 0);
+
+      // 邏輯修正：計算單店月總業績時，扣除退費
+      const grossCashTotal = storeRecs.reduce((a, b) => a + (b.cash || 0), 0);
+      const refundTotal = storeRecs.reduce((a, b) => a + (b.refund || 0), 0); // NEW: Refund Total
+      const cashTotal = grossCashTotal - refundTotal; // Net Cash
+
       const accrualTotal = storeRecs.reduce((a, b) => a + (b.accrual || 0), 0);
 
       // NEW: Calculate Operational Accrual Total (Pure Technical)
@@ -4101,7 +4137,7 @@ export default function App() {
       const budget = budgets[budgetKey] || { cashTarget: 0, accrualTarget: 0 };
       return {
         ...s,
-        cashTotal,
+        cashTotal, // 已經是淨現金 (扣除退費)
         accrualTotal,
         operationalAccrualTotal, // Return for aggregation
         trafficTotal,
@@ -4109,6 +4145,7 @@ export default function App() {
         newCustomerClosingsTotal, // Return for aggregation
         newCustomerSalesTotal,
         skincareSalesTotal,
+        refundTotal, // NEW
         cashBudget: budget.cashTarget,
         accrualBudget: budget.accrualTarget,
         projection:
@@ -4142,6 +4179,7 @@ export default function App() {
         newCustomerClosings:
           acc.newCustomerClosings + s.newCustomerClosingsTotal, // Aggregate Closings
         newCustomerSales: acc.newCustomerSales + s.newCustomerSalesTotal,
+        refund: acc.refund + s.refundTotal, // NEW: Aggregate Refund
         budget: acc.budget + s.cashBudget,
         accrualBudget: acc.accrualBudget + s.accrualBudget,
         projection: acc.projection + s.projection,
@@ -4155,6 +4193,7 @@ export default function App() {
         newCustomers: 0,
         newCustomerClosings: 0, // Init
         newCustomerSales: 0,
+        refund: 0, // NEW
         budget: 0,
         accrualBudget: 0,
         projection: 0,
@@ -4164,7 +4203,7 @@ export default function App() {
     const regionalStats = Object.entries(visibleManagers).map(
       ([mgr, stores]) => {
         const managed = storeStats.filter((s) => s.manager === mgr);
-        const cashTotal = managed.reduce((a, b) => a + b.cashTotal, 0);
+        const cashTotal = managed.reduce((a, b) => a + b.cashTotal, 0); // 已經是淨現金
         const accrualTotal = managed.reduce((a, b) => a + b.accrualTotal, 0);
 
         // NEW: Sum Operational Accrual for Region
@@ -4189,6 +4228,8 @@ export default function App() {
           0
         );
 
+        const refundTotal = managed.reduce((a, b) => a + b.refundTotal, 0); // NEW
+
         // FIXED: Calculate Weighted ASP for Region using Operational Accrual
         const trafficASP =
           trafficTotal > 0
@@ -4204,6 +4245,7 @@ export default function App() {
           trafficTotal,
           newCustomersTotal,
           newCustomerClosingsTotal, // Return regional total
+          refundTotal, // NEW
           trafficASP,
           achievement: budget > 0 ? (cashTotal / budget) * 100 : 0,
         };
