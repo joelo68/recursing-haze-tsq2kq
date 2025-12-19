@@ -85,7 +85,7 @@ import {
   CreditCard,
   Smartphone,
   Monitor,
-  Bell, // Fixed: Added back Bell component
+  Bell,
 } from "lucide-react";
 
 // --- Firebase 初始化 ---
@@ -1793,6 +1793,7 @@ const InputView = () => {
     accrual: "",
     operationalAccrual: "",
     skincareSales: "",
+    skincareRefund: "", // NEW: 當日保養品退費
     traffic: "",
     newCustomers: "",
     newCustomerClosings: "", // NEW
@@ -1808,6 +1809,7 @@ const InputView = () => {
     accrual: "總權責業績 (自動計算)",
     operationalAccrual: "操作權責 (技術)",
     skincareSales: "保養品業績",
+    skincareRefund: "當日保養品退費", // NEW
     traffic: "課程操作人數",
     newCustomers: "新客數",
     newCustomerClosings: "新客留單人數", // NEW
@@ -1953,6 +1955,7 @@ const InputView = () => {
         accrual: parseNumber(formData.accrual),
         operationalAccrual: parseNumber(formData.operationalAccrual),
         skincareSales: parseNumber(formData.skincareSales),
+        skincareRefund: parseNumber(formData.skincareRefund), // NEW
         traffic: parseNumber(formData.traffic),
         newCustomers: parseNumber(formData.newCustomers),
         newCustomerClosings: parseNumber(formData.newCustomerClosings), // NEW
@@ -2000,6 +2003,7 @@ const InputView = () => {
         accrual: "",
         operationalAccrual: "",
         skincareSales: "",
+        skincareRefund: "",
         traffic: "",
         newCustomers: "",
         newCustomerClosings: "",
@@ -2101,6 +2105,20 @@ const InputView = () => {
       showToast("目標更新失敗", "error");
     }
   };
+
+  // Determine key order for form layout
+  const formKeys = [
+    "cash",
+    "refund", // Pair 1
+    "accrual",
+    "operationalAccrual", // Pair 2
+    "skincareSales",
+    "skincareRefund", // Pair 3
+    "traffic",
+    "newCustomers", // Pair 4
+    "newCustomerClosings",
+    "newCustomerSales", // Pair 5
+  ];
 
   return (
     <ViewWrapper>
@@ -2271,9 +2289,9 @@ const InputView = () => {
                 日報數據輸入
               </h3>
               <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-6">
-                {Object.keys(formData).map((key) => {
+                {formKeys.map((key) => {
                   const isReadOnly = key === "accrual";
-                  const isRefund = key === "refund"; // Check for refund field
+                  const isRefund = key === "refund" || key === "skincareRefund"; // Check for refund fields
 
                   return (
                     <div key={key}>
@@ -2297,7 +2315,9 @@ const InputView = () => {
                           isReadOnly
                             ? "bg-stone-100 text-stone-500 border-stone-100 cursor-not-allowed"
                             : `border-stone-100 focus:border-amber-400 ${
-                                isRefund ? "text-rose-500" : "text-stone-700"
+                                isRefund
+                                  ? "text-rose-500 font-extrabold"
+                                  : "text-stone-700"
                               }`
                         }`}
                       />
@@ -2385,6 +2405,7 @@ const HistoryView = () => {
         accrual: Number(editForm.accrual),
         operationalAccrual: Number(editForm.operationalAccrual),
         skincareSales: Number(editForm.skincareSales),
+        skincareRefund: Number(editForm.skincareRefund), // NEW
         traffic: Number(editForm.traffic),
         newCustomers: Number(editForm.newCustomers),
         newCustomerClosings: Number(editForm.newCustomerClosings), // NEW
@@ -2478,6 +2499,7 @@ const HistoryView = () => {
                   <th className="p-4 text-right">總權責</th>
                   <th className="p-4 text-right">操作權責</th>
                   <th className="p-4 text-right">保養品</th>
+                  <th className="p-4 text-right">保養退費</th>
                   <th className="p-4 text-right">操作人數</th>
                   <th className="p-4 text-right">新客</th>
                   <th className="p-4 text-right">留單</th>
@@ -2506,6 +2528,7 @@ const HistoryView = () => {
                         "accrual",
                         "operationalAccrual",
                         "skincareSales",
+                        "skincareRefund", // NEW
                         "traffic",
                         "newCustomers",
                         "newCustomerClosings", // NEW
@@ -2523,7 +2546,7 @@ const HistoryView = () => {
                           ) : (
                             <span
                               className={
-                                field === "refund"
+                                field === "refund" || field === "skincareRefund"
                                   ? "text-rose-500 font-bold"
                                   : field === "accrual"
                                   ? "text-stone-400"
@@ -2575,7 +2598,7 @@ const HistoryView = () => {
                 })}
                 {filteredData.length === 0 && (
                   <tr>
-                    <td colSpan="11" className="p-8 text-center text-stone-400">
+                    <td colSpan="12" className="p-8 text-center text-stone-400">
                       沒有符合條件的資料
                     </td>
                   </tr>
@@ -4128,10 +4151,16 @@ export default function App() {
         0
       );
 
-      const skincareSalesTotal = storeRecs.reduce(
+      // NEW: Skincare Sales Net Calculation
+      const grossSkincareSales = storeRecs.reduce(
         (a, b) => a + (b.skincareSales || 0),
         0
       );
+      const skincareRefundTotal = storeRecs.reduce(
+        (a, b) => a + (b.skincareRefund || 0),
+        0
+      );
+      const skincareSalesTotal = grossSkincareSales - skincareRefundTotal;
 
       const budgetKey = `${s.name}_${targetYear}_${monthInt}`;
       const budget = budgets[budgetKey] || { cashTarget: 0, accrualTarget: 0 };
@@ -4144,7 +4173,8 @@ export default function App() {
         newCustomersTotal,
         newCustomerClosingsTotal, // Return for aggregation
         newCustomerSalesTotal,
-        skincareSalesTotal,
+        skincareSalesTotal, // Net Skincare
+        skincareRefundTotal, // Store
         refundTotal, // NEW
         cashBudget: budget.cashTarget,
         accrualBudget: budget.accrualTarget,
@@ -4174,6 +4204,7 @@ export default function App() {
         accrual: acc.accrual + s.accrualTotal,
         operationalAccrual: acc.operationalAccrual + s.operationalAccrualTotal, // Aggregate Operational
         skincareSales: acc.skincareSales + s.skincareSalesTotal,
+        skincareRefund: acc.skincareRefund + s.skincareRefundTotal, // Aggregate Skincare Refund
         traffic: acc.traffic + s.trafficTotal,
         newCustomers: acc.newCustomers + s.newCustomersTotal,
         newCustomerClosings:
@@ -4189,6 +4220,7 @@ export default function App() {
         accrual: 0,
         operationalAccrual: 0, // Init
         skincareSales: 0,
+        skincareRefund: 0,
         traffic: 0,
         newCustomers: 0,
         newCustomerClosings: 0, // Init
@@ -4213,8 +4245,14 @@ export default function App() {
         );
 
         const budget = managed.reduce((a, b) => a + b.cashBudget, 0);
+
+        // Net Skincare Sales
         const skincareSalesTotal = managed.reduce(
           (a, b) => a + b.skincareSalesTotal,
+          0
+        );
+        const skincareRefundTotal = managed.reduce(
+          (a, b) => a + b.skincareRefundTotal,
           0
         );
 
@@ -4242,6 +4280,7 @@ export default function App() {
           accrualTotal,
           operationalAccrualTotal,
           skincareSalesTotal,
+          skincareRefundTotal,
           trafficTotal,
           newCustomersTotal,
           newCustomerClosingsTotal, // Return regional total
