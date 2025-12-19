@@ -1571,76 +1571,99 @@ const StoreAnalysisView = () => {
               </div>
             </div>
             
-            {/* 修正後的圖表呈現：拆分為兩個獨立圖表 */}
-            <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-              {/* Chart 1: Revenue Trend (Cash & Accrual) */}
-              <Card title="財務營收趨勢" subtitle="現金(淨額) vs 權責業績">
-                <div className="h-[300px] w-full">
-                  <ResponsiveContainer width="100%" height="100%">
-                    <ComposedChart data={storeMetrics.dailyData} margin={{top: 10, right: 10, left: 0, bottom: 0}}>
-                      <defs>
-                        <linearGradient id="colorCash" x1="0" y1="0" x2="0" y2="1">
-                          <stop offset="5%" stopColor="#f59e0b" stopOpacity={0.2}/>
-                          <stop offset="95%" stopColor="#f59e0b" stopOpacity={0}/>
-                        </linearGradient>
-                      </defs>
-                      <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#e7e5e4" />
-                      <XAxis dataKey="date" tick={{fontSize: 12, fill: '#78716c'}} axisLine={false} tickLine={false} />
-                      <YAxis tickFormatter={(val) => `$${val/1000}k`} tick={{fontSize: 12, fill: '#78716c'}} axisLine={false} tickLine={false} />
-                      <RechartsTooltip
-                        contentStyle={{ borderRadius: '12px', border: 'none', boxShadow: '0 4px 6px -1px rgb(0 0 0 / 0.1)' }}
-                        formatter={(value) => fmtMoney(value)}
-                        cursor={{ stroke: '#f59e0b', strokeWidth: 1, strokeDasharray: '4 4' }}
-                      />
-                      <Legend iconType="circle" />
-                      <Area 
-                        type="monotone" 
-                        dataKey="cash" 
-                        name="現金業績 (淨額)" 
-                        stroke="#f59e0b" 
-                        fill="url(#colorCash)" 
-                        strokeWidth={2} 
-                        activeDot={{ r: 6 }}
-                      />
-                      <Line 
-                        type="monotone" 
-                        dataKey="accrual" 
-                        name="權責業績" 
-                        stroke="#8b5cf6" 
-                        strokeWidth={3} 
-                        dot={false}
-                        activeDot={{ r: 6 }}
-                      />
-                    </ComposedChart>
-                  </ResponsiveContainer>
-                </div>
-              </Card>
+            {/* 修正後的圖表呈現：整合式雙軸圖表 (Bar + Line + Line) */}
+            <Card title="綜合營運趨勢分析" subtitle="長條：現金業績｜實線：權責業績｜虛線(右軸)：操作人數">
+              <div className="h-[400px] w-full">
+                <ResponsiveContainer width="100%" height="100%">
+                  <ComposedChart data={storeMetrics.dailyData} margin={{top: 20, right: 20, left: 20, bottom: 20}}>
+                    <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#e7e5e4" />
+                    
+                    {/* X軸：日期 */}
+                    <XAxis 
+                      dataKey="date" 
+                      tick={{fontSize: 12, fill: '#78716c'}} 
+                      axisLine={{ stroke: '#e7e5e4' }} 
+                      tickLine={false} 
+                      dy={10}
+                    />
 
-              {/* Chart 2: Traffic Trend */}
-              <Card title="客流操作趨勢" subtitle="每日課程操作人數">
-                <div className="h-[300px] w-full">
-                   <ResponsiveContainer width="100%" height="100%">
-                    <BarChart data={storeMetrics.dailyData} margin={{top: 10, right: 10, left: 0, bottom: 0}}>
-                      <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#e7e5e4" />
-                      <XAxis dataKey="date" tick={{fontSize: 12, fill: '#78716c'}} axisLine={false} tickLine={false} />
-                      <YAxis allowDecimals={false} tick={{fontSize: 12, fill: '#78716c'}} axisLine={false} tickLine={false} />
-                      <RechartsTooltip
-                        cursor={{fill: '#f0f9ff'}}
-                        contentStyle={{ borderRadius: '12px', border: 'none', boxShadow: '0 4px 6px -1px rgb(0 0 0 / 0.1)' }}
-                      />
-                      <Legend />
-                      <Bar 
-                        dataKey="traffic" 
-                        name="課程操作人數" 
-                        fill="#0ea5e9" 
-                        radius={[6, 6, 0, 0]} 
-                        barSize={24} 
-                      />
-                    </BarChart>
-                  </ResponsiveContainer>
-                </div>
-              </Card>
-            </div>
+                    {/* 左側 Y軸：金額 (現金 & 權責) */}
+                    <YAxis 
+                      yAxisId="left"
+                      tickFormatter={(val) => val === 0 ? 0 : `$${val/1000}k`} 
+                      tick={{fontSize: 12, fill: '#f59e0b'}} // Amber color for Money axis
+                      axisLine={false} 
+                      tickLine={false} 
+                      label={{ value: '金額 (NT$)', angle: -90, position: 'insideLeft', fill: '#d6d3d1', fontSize: 10 }}
+                    />
+
+                    {/* 右側 Y軸：人數 (Traffic) */}
+                    <YAxis 
+                      yAxisId="right"
+                      orientation="right"
+                      allowDecimals={false}
+                      tick={{fontSize: 12, fill: '#0ea5e9'}} // Blue color for Traffic axis
+                      axisLine={false} 
+                      tickLine={false}
+                      label={{ value: '人數', angle: 90, position: 'insideRight', fill: '#d6d3d1', fontSize: 10 }}
+                    />
+
+                    <RechartsTooltip
+                      contentStyle={{ borderRadius: '16px', border: 'none', boxShadow: '0 10px 15px -3px rgb(0 0 0 / 0.1)', padding: '12px' }}
+                      formatter={(value, name) => {
+                        if (name === "課程操作人數") return [fmtNum(value), name];
+                        return [fmtMoney(value), name];
+                      }}
+                      labelStyle={{ color: '#78716c', marginBottom: '0.5rem', fontWeight: 'bold' }}
+                      cursor={{ fill: '#f5f5f4', opacity: 0.6 }}
+                    />
+                    
+                    <Legend 
+                      verticalAlign="top" 
+                      height={36} 
+                      iconType="circle"
+                      wrapperStyle={{ paddingBottom: '20px', fontSize: '12px', fontWeight: 'bold' }}
+                    />
+
+                    {/* 1. 現金業績 (Net) - 長條圖 (Bar) - 最底層，穩重 */}
+                    <Bar 
+                      yAxisId="left"
+                      dataKey="cash" 
+                      name="現金業績 (淨額)" 
+                      fill="#fbbf24" // Amber-400
+                      radius={[4, 4, 0, 0]}
+                      barSize={20}
+                      fillOpacity={0.9}
+                    />
+
+                    {/* 2. 權責業績 - 實線折線圖 (Line) - 對比現金 */}
+                    <Line 
+                      yAxisId="left"
+                      type="monotone" 
+                      dataKey="accrual" 
+                      name="權責業績" 
+                      stroke="#8b5cf6" // Violet-500
+                      strokeWidth={3} 
+                      dot={{ r: 4, fill: '#8b5cf6', strokeWidth: 2, stroke: '#fff' }}
+                      activeDot={{ r: 6 }}
+                    />
+
+                    {/* 3. 課程操作人數 - 虛線折線圖 (Line) - 右軸 */}
+                    <Line 
+                      yAxisId="right"
+                      type="monotone" 
+                      dataKey="traffic" 
+                      name="課程操作人數" 
+                      stroke="#0ea5e9" // Sky-500
+                      strokeWidth={2}
+                      strokeDasharray="5 5" // 虛線設計
+                      dot={{ r: 3, fill: '#0ea5e9', strokeWidth: 2, stroke: '#fff' }}
+                    />
+
+                  </ComposedChart>
+                </ResponsiveContainer>
+              </div>
+            </Card>
           </>
         )}
       </div>
