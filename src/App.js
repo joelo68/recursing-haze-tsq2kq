@@ -970,20 +970,27 @@ const DashboardView = () => {
                   yAxisId="left"
                   stroke="#a8a29e"
                   tick={{ fontSize: 12 }}
+                  tickFormatter={(val) => fmtNum(val)}
                 />
                 <YAxis
                   yAxisId="right"
                   orientation="right"
                   stroke="#a8a29e"
                   tick={{ fontSize: 12 }}
+                  tickFormatter={(val) => fmtNum(val)}
                 />
                 <RechartsTooltip
                   contentStyle={{
                     borderRadius: "16px",
                     border: "none",
                     padding: "12px",
+                    boxShadow: "0 4px 6px -1px rgb(0 0 0 / 0.1)",
                   }}
                   cursor={{ fill: "#fafaf9" }}
+                  formatter={(value, name) => {
+                    if (name === "現金業績") return [fmtMoney(value), name];
+                    return [fmtNum(value), name];
+                  }}
                 />
                 <Area
                   yAxisId="left"
@@ -1001,7 +1008,7 @@ const DashboardView = () => {
                   dataKey="traffic"
                   name="課程操作人數"
                   stroke="#0ea5e9"
-                  strokeWidth={2}
+                  strokeWidth={3}
                 />
               </ComposedChart>
             </ResponsiveContainer>
