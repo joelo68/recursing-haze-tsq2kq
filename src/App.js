@@ -948,7 +948,10 @@ const DashboardView = () => {
           </div>
         </div>
 
-        <Card title="全品牌日營運走勢" subtitle="現金業績 vs 課程操作人數趨勢分析">
+        <Card
+          title="全品牌日營運走勢"
+          subtitle="現金業績 vs 課程操作人數趨勢分析"
+        >
           <div className="h-[300px] w-full">
             <ResponsiveContainer width="100%" height="100%">
               <ComposedChart
@@ -970,7 +973,10 @@ const DashboardView = () => {
                   yAxisId="left"
                   stroke="#a8a29e"
                   tick={{ fontSize: 12 }}
-                  tickFormatter={(val) => fmtNum(val)}
+                  width={60}
+                  tickFormatter={(val) =>
+                    val === 0 ? "0" : `$${(val / 1000).toFixed(0)}k`
+                  }
                 />
                 <YAxis
                   yAxisId="right"
@@ -1448,9 +1454,18 @@ const StoreAnalysisView = () => {
       0
     );
     // New aggregations
-    const totalNewCustomers = data.reduce((a, b) => a + (b.newCustomers || 0), 0);
-    const totalNewCustomerSales = data.reduce((a, b) => a + (b.newCustomerSales || 0), 0);
-    const totalNewCustomerClosings = data.reduce((a, b) => a + (b.newCustomerClosings || 0), 0);
+    const totalNewCustomers = data.reduce(
+      (a, b) => a + (b.newCustomers || 0),
+      0
+    );
+    const totalNewCustomerSales = data.reduce(
+      (a, b) => a + (b.newCustomerSales || 0),
+      0
+    );
+    const totalNewCustomerClosings = data.reduce(
+      (a, b) => a + (b.newCustomerClosings || 0),
+      0
+    );
 
     const budget =
       budgets[`${selectedStore}_${targetYear}_${monthInt}`]?.cashTarget || 0;
@@ -1460,12 +1475,15 @@ const StoreAnalysisView = () => {
       achievement: budget > 0 ? (totalCash / budget) * 100 : 0,
       trafficASP:
         totalTraffic > 0 ? Math.round(totalOpAccrual / totalTraffic) : 0,
-      
+
       // New metric properties
-      newCustomerASP: totalNewCustomers > 0 ? Math.round(totalNewCustomerSales / totalNewCustomers) : 0,
+      newCustomerASP:
+        totalNewCustomers > 0
+          ? Math.round(totalNewCustomerSales / totalNewCustomers)
+          : 0,
       totalNewCustomerClosings,
       totalRefund, // NEW
-      
+
       dailyData: data.map((d) => ({
         // 確保圖表顯示日期也是標準化後的
         date: toStandardDateFormat(d.date).split("/")[2],
@@ -1512,7 +1530,9 @@ const StoreAnalysisView = () => {
         </Card>
         {selectedStore && storeMetrics && (
           <>
-            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-6 gap-4"> {/* Changed to 6 cols to fit new card */}
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-6 gap-4">
+              {" "}
+              {/* Changed to 6 cols to fit new card */}
               <div className="bg-white p-5 rounded-2xl border shadow-sm">
                 <p className="text-stone-400 text-xs font-bold mb-1">
                   現金業績
@@ -1546,7 +1566,6 @@ const StoreAnalysisView = () => {
                   {fmtMoney(storeMetrics.budget)}
                 </h3>
               </div>
-              
               {/* New: New Customer ASP */}
               <div className="bg-white p-5 rounded-2xl border shadow-sm">
                 <p className="text-stone-400 text-xs font-bold mb-1">
@@ -1556,9 +1575,8 @@ const StoreAnalysisView = () => {
                   {fmtMoney(storeMetrics.newCustomerASP)}
                 </h3>
               </div>
-
               {/* New: New Customer Closings */}
-               <div className="bg-white p-5 rounded-2xl border shadow-sm">
+              <div className="bg-white p-5 rounded-2xl border shadow-sm">
                 <p className="text-stone-400 text-xs font-bold mb-1">
                   總新客留單
                 </p>
@@ -1566,7 +1584,6 @@ const StoreAnalysisView = () => {
                   {fmtNum(storeMetrics.totalNewCustomerClosings)}
                 </h3>
               </div>
-
               {/* NEW: Total Refund */}
               <div className="bg-white p-5 rounded-2xl border shadow-sm">
                 <p className="text-stone-400 text-xs font-bold mb-1">
@@ -1577,66 +1594,105 @@ const StoreAnalysisView = () => {
                 </h3>
               </div>
             </div>
-            
+
             {/* 修正後的圖表呈現：整合式雙軸圖表 (Bar + Line + Line) */}
-            <Card title="綜合營運趨勢分析" subtitle="長條：現金業績｜實線：權責業績｜虛線(右軸)：操作人數">
+            <Card
+              title="綜合營運趨勢分析"
+              subtitle="長條：現金業績｜實線：權責業績｜虛線(右軸)：操作人數"
+            >
               <div className="h-[400px] w-full">
                 <ResponsiveContainer width="100%" height="100%">
-                  <ComposedChart data={storeMetrics.dailyData} margin={{top: 20, right: 20, left: 20, bottom: 20}}>
-                    <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#e7e5e4" />
-                    
+                  <ComposedChart
+                    data={storeMetrics.dailyData}
+                    margin={{ top: 20, right: 20, left: 20, bottom: 20 }}
+                  >
+                    <CartesianGrid
+                      strokeDasharray="3 3"
+                      vertical={false}
+                      stroke="#e7e5e4"
+                    />
+
                     {/* X軸：日期 */}
-                    <XAxis 
-                      dataKey="date" 
-                      tick={{fontSize: 12, fill: '#78716c'}} 
-                      axisLine={{ stroke: '#e7e5e4' }} 
-                      tickLine={false} 
+                    <XAxis
+                      dataKey="date"
+                      tick={{ fontSize: 12, fill: "#78716c" }}
+                      axisLine={{ stroke: "#e7e5e4" }}
+                      tickLine={false}
                       dy={10}
                     />
 
-                    {/* 左側 Y軸：金額 (現金 & 權責) */}
-                    <YAxis 
+                    {/* 左側 Y軸：金額 (現金 & 權責) - 改為 k 值顯示 */}
+                    <YAxis
                       yAxisId="left"
-                      tickFormatter={(val) => val === 0 ? 0 : `$${val/1000}k`} 
-                      tick={{fontSize: 12, fill: '#f59e0b'}} // Amber color for Money axis
-                      axisLine={false} 
-                      tickLine={false} 
-                      label={{ value: '金額 (NT$)', angle: -90, position: 'insideLeft', fill: '#d6d3d1', fontSize: 10 }}
+                      width={80}
+                      tickFormatter={(val) =>
+                        val === 0 ? "0" : `$${(val / 1000).toFixed(0)}k`
+                      }
+                      tick={{ fontSize: 12, fill: "#f59e0b" }} // Amber color for Money axis
+                      axisLine={false}
+                      tickLine={false}
+                      label={{
+                        value: "金額 (NT$)",
+                        angle: -90,
+                        position: "insideLeft",
+                        fill: "#d6d3d1",
+                        fontSize: 10,
+                      }}
                     />
 
                     {/* 右側 Y軸：人數 (Traffic) */}
-                    <YAxis 
+                    <YAxis
                       yAxisId="right"
                       orientation="right"
                       allowDecimals={false}
-                      tick={{fontSize: 12, fill: '#0ea5e9'}} // Blue color for Traffic axis
-                      axisLine={false} 
+                      tick={{ fontSize: 12, fill: "#0ea5e9" }} // Blue color for Traffic axis
+                      axisLine={false}
                       tickLine={false}
-                      label={{ value: '人數', angle: 90, position: 'insideRight', fill: '#d6d3d1', fontSize: 10 }}
+                      label={{
+                        value: "人數",
+                        angle: 90,
+                        position: "insideRight",
+                        fill: "#d6d3d1",
+                        fontSize: 10,
+                      }}
                     />
 
                     <RechartsTooltip
-                      contentStyle={{ borderRadius: '16px', border: 'none', boxShadow: '0 10px 15px -3px rgb(0 0 0 / 0.1)', padding: '12px' }}
+                      contentStyle={{
+                        borderRadius: "16px",
+                        border: "none",
+                        boxShadow: "0 10px 15px -3px rgb(0 0 0 / 0.1)",
+                        padding: "12px",
+                      }}
                       formatter={(value, name) => {
-                        if (name === "課程操作人數") return [fmtNum(value), name];
+                        if (name === "課程操作人數")
+                          return [fmtNum(value), name];
                         return [fmtMoney(value), name];
                       }}
-                      labelStyle={{ color: '#78716c', marginBottom: '0.5rem', fontWeight: 'bold' }}
-                      cursor={{ fill: '#f5f5f4', opacity: 0.6 }}
+                      labelStyle={{
+                        color: "#78716c",
+                        marginBottom: "0.5rem",
+                        fontWeight: "bold",
+                      }}
+                      cursor={{ fill: "#f5f5f4", opacity: 0.6 }}
                     />
-                    
-                    <Legend 
-                      verticalAlign="top" 
-                      height={36} 
+
+                    <Legend
+                      verticalAlign="top"
+                      height={36}
                       iconType="circle"
-                      wrapperStyle={{ paddingBottom: '20px', fontSize: '12px', fontWeight: 'bold' }}
+                      wrapperStyle={{
+                        paddingBottom: "20px",
+                        fontSize: "12px",
+                        fontWeight: "bold",
+                      }}
                     />
 
                     {/* 1. 現金業績 (Net) - 長條圖 (Bar) - 最底層，穩重 */}
-                    <Bar 
+                    <Bar
                       yAxisId="left"
-                      dataKey="cash" 
-                      name="現金業績 (淨額)" 
+                      dataKey="cash"
+                      name="現金業績 (淨額)"
                       fill="#fbbf24" // Amber-400
                       radius={[4, 4, 0, 0]}
                       barSize={20}
@@ -1644,29 +1700,38 @@ const StoreAnalysisView = () => {
                     />
 
                     {/* 2. 權責業績 - 實線折線圖 (Line) - 對比現金 */}
-                    <Line 
+                    <Line
                       yAxisId="left"
-                      type="monotone" 
-                      dataKey="accrual" 
-                      name="權責業績" 
+                      type="monotone"
+                      dataKey="accrual"
+                      name="權責業績"
                       stroke="#8b5cf6" // Violet-500
-                      strokeWidth={3} 
-                      dot={{ r: 4, fill: '#8b5cf6', strokeWidth: 2, stroke: '#fff' }}
+                      strokeWidth={3}
+                      dot={{
+                        r: 4,
+                        fill: "#8b5cf6",
+                        strokeWidth: 2,
+                        stroke: "#fff",
+                      }}
                       activeDot={{ r: 6 }}
                     />
 
                     {/* 3. 課程操作人數 - 虛線折線圖 (Line) - 右軸 */}
-                    <Line 
+                    <Line
                       yAxisId="right"
-                      type="monotone" 
-                      dataKey="traffic" 
-                      name="課程操作人數" 
+                      type="monotone"
+                      dataKey="traffic"
+                      name="課程操作人數"
                       stroke="#0ea5e9" // Sky-500
                       strokeWidth={2}
                       strokeDasharray="5 5" // 虛線設計
-                      dot={{ r: 3, fill: '#0ea5e9', strokeWidth: 2, stroke: '#fff' }}
+                      dot={{
+                        r: 3,
+                        fill: "#0ea5e9",
+                        strokeWidth: 2,
+                        stroke: "#fff",
+                      }}
                     />
-
                   </ComposedChart>
                 </ResponsiveContainer>
               </div>
@@ -1689,10 +1754,10 @@ const AuditView = () => {
     selectedYear,
     selectedMonth,
   } = useContext(AppContext);
-  
+
   // 修改：預設帶入系統當天日期 (YYYY-MM-DD)，不論有無數據
   const [checkDate, setCheckDate] = useState(formatLocalYYYYMMDD(new Date()));
-  
+
   const [auditType, setAuditType] = useState("daily");
 
   const auditData = useMemo(() => {
@@ -2167,11 +2232,16 @@ const InputView = () => {
 
   // Determine key order for form layout
   const formKeys = [
-    "cash", "refund", // Pair 1
-    "accrual", "operationalAccrual", // Pair 2
-    "skincareSales", "skincareRefund", // Pair 3
-    "traffic", "newCustomers", // Pair 4
-    "newCustomerClosings", "newCustomerSales" // Pair 5
+    "cash",
+    "refund", // Pair 1
+    "accrual",
+    "operationalAccrual", // Pair 2
+    "skincareSales",
+    "skincareRefund", // Pair 3
+    "traffic",
+    "newCustomers", // Pair 4
+    "newCustomerClosings",
+    "newCustomerSales", // Pair 5
   ];
 
   return (
@@ -2349,7 +2419,11 @@ const InputView = () => {
 
                   return (
                     <div key={key}>
-                      <label className={`block text-xs font-bold mb-1.5 ${isRefund ? "text-rose-500" : "text-stone-500"}`}>
+                      <label
+                        className={`block text-xs font-bold mb-1.5 ${
+                          isRefund ? "text-rose-500" : "text-stone-500"
+                        }`}
+                      >
                         {LABELS[key] || key}
                       </label>
                       <input
@@ -2364,7 +2438,11 @@ const InputView = () => {
                         className={`w-full border-2 p-3 rounded-xl outline-none font-bold transition-all focus:shadow-lg focus:shadow-amber-50 focus:bg-amber-50/10 ${
                           isReadOnly
                             ? "bg-stone-100 text-stone-500 border-stone-100 cursor-not-allowed"
-                            : `border-stone-100 focus:border-amber-400 ${isRefund ? "text-rose-500 font-extrabold" : "text-stone-700"}`
+                            : `border-stone-100 focus:border-amber-400 ${
+                                isRefund
+                                  ? "text-rose-500 font-extrabold"
+                                  : "text-stone-700"
+                              }`
                         }`}
                       />
                     </div>
@@ -4168,7 +4246,7 @@ export default function App() {
     );
     const storeStats = storeList.map((s) => {
       const storeRecs = currentMonthData.filter((r) => r.storeName === s.name);
-      
+
       // 邏輯修正：計算單店月總業績時，扣除退費
       const grossCashTotal = storeRecs.reduce((a, b) => a + (b.cash || 0), 0);
       const refundTotal = storeRecs.reduce((a, b) => a + (b.refund || 0), 0); // NEW: Refund Total
@@ -4198,8 +4276,14 @@ export default function App() {
       );
 
       // NEW: Skincare Sales Net Calculation
-      const grossSkincareSales = storeRecs.reduce((a, b) => a + (b.skincareSales || 0), 0);
-      const skincareRefundTotal = storeRecs.reduce((a, b) => a + (b.skincareRefund || 0), 0);
+      const grossSkincareSales = storeRecs.reduce(
+        (a, b) => a + (b.skincareSales || 0),
+        0
+      );
+      const skincareRefundTotal = storeRecs.reduce(
+        (a, b) => a + (b.skincareRefund || 0),
+        0
+      );
       const skincareSalesTotal = grossSkincareSales - skincareRefundTotal;
 
       const budgetKey = `${s.name}_${targetYear}_${monthInt}`;
@@ -4247,7 +4331,8 @@ export default function App() {
         skincareRefund: acc.skincareRefund + s.skincareRefundTotal, // Aggregate Skincare Refund
         traffic: acc.traffic + s.trafficTotal,
         newCustomers: acc.newCustomers + s.newCustomersTotal,
-        newCustomerClosings: acc.newCustomerClosings + s.newCustomerClosingsTotal, // Aggregate Closings
+        newCustomerClosings:
+          acc.newCustomerClosings + s.newCustomerClosingsTotal, // Aggregate Closings
         newCustomerSales: acc.newCustomerSales + s.newCustomerSalesTotal,
         refund: acc.refund + s.refundTotal, // NEW: Aggregate Refund
         budget: acc.budget + s.cashBudget,
@@ -4284,7 +4369,7 @@ export default function App() {
         );
 
         const budget = managed.reduce((a, b) => a + b.cashBudget, 0);
-        
+
         // Net Skincare Sales
         const skincareSalesTotal = managed.reduce(
           (a, b) => a + b.skincareSalesTotal,
@@ -4304,7 +4389,7 @@ export default function App() {
           (a, b) => a + b.newCustomerClosingsTotal,
           0
         );
-        
+
         const refundTotal = managed.reduce((a, b) => a + b.refundTotal, 0); // NEW
 
         // FIXED: Calculate Weighted ASP for Region using Operational Accrual
