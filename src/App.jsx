@@ -16,7 +16,7 @@ import {
       Area,
       Cell,
       PieChart,
-      Pie,
+      Pie as RechartsPie,
     } from "recharts";
 import React, {
   useState,
@@ -62,7 +62,7 @@ import {
   Area,
   Cell,
   PieChart,
-  Pie,
+  Pie as RechartsPie,
 } from "recharts";
 import {
   LayoutDashboard,
