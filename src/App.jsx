@@ -106,7 +106,10 @@ const firebaseConfig =
 const app = initializeApp(firebaseConfig);
 const auth = getAuth(app);
 const db = getFirestore(app);
-const appId = typeof __app_id !== "undefined" ? __app_id : "default-app-id";
+
+// 修正：處理 appId 可能包含斜線的問題，避免 Firestore 路徑錯誤
+const rawAppId = typeof __app_id !== "undefined" ? __app_id : "default-app-id";
+const appId = rawAppId.replace(/\//g, "_");
 
 // --- 權限與角色定義 ---
 const ROLES = {
