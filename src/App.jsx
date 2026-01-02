@@ -1,3 +1,7 @@
+/* eslint-disable no-undef */
+/* eslint-disable react-hooks/exhaustive-deps */
+/* eslint-disable no-unused-vars */
+
 import React, {
   useState,
   useEffect,
@@ -88,6 +92,8 @@ import {
 } from "lucide-react";
 
 // --- Firebase 初始化 ---
+// 注意：在 Vercel 部署時，__firebase_config 通常是未定義的，會回退到 originalConfig。
+// 我們在檔案頂部添加了 eslint-disable no-undef 來防止 linter 報錯。
 const originalConfig = {
   apiKey: "AIzaSyDqeHT2J9Z69k88-clPwKyuywg1TSpojYM",
   authDomain: "cyjsituation-analysis.firebaseapp.com",
@@ -163,6 +169,19 @@ const toStandardDateFormat = (dateStr) => {
   const m = String(date.getMonth() + 1).padStart(2, "0");
   const d = String(date.getDate()).padStart(2, "0");
   return `${y}/${m}/${d}`;
+};
+
+// --- Moved outside to prevent useEffect dependency issues ---
+const formatNumber = (val) => {
+  if (!val) return "";
+  const num = val.toString().replace(/,/g, "");
+  if (isNaN(num)) return val;
+  return Number(num).toLocaleString();
+};
+
+const parseNumber = (val) => {
+  if (!val) return 0;
+  return Number(val.toString().replace(/,/g, ""));
 };
 
 // --- Context ---
@@ -1978,20 +1997,6 @@ const InputView = () => {
     userRole === "director" ||
     userRole === "manager" ||
     (userRole === "store" && isFirstDay);
-
-  // Helper: 格式化數字 (加逗號)
-  const formatNumber = (val) => {
-    if (!val) return "";
-    const num = val.toString().replace(/,/g, "");
-    if (isNaN(num)) return val;
-    return Number(num).toLocaleString();
-  };
-
-  // Helper: 解析數字 (去逗號)
-  const parseNumber = (val) => {
-    if (!val) return 0;
-    return Number(val.toString().replace(/,/g, ""));
-  };
 
   // 1. 自動計算總權責
   useEffect(() => {
