@@ -1,23 +1,7 @@
 /* eslint-disable no-undef */
 /* eslint-disable react-hooks/exhaustive-deps */
 /* eslint-disable no-unused-vars */
-import {
-      BarChart,
-      Bar,
-      XAxis,
-      YAxis,
-      CartesianGrid,
-      Tooltip as RechartsTooltip,
-      Legend,
-      ResponsiveContainer,
-      LineChart,
-      Line,
-      ComposedChart,
-      Area,
-      Cell,
-      PieChart,
-      Pie as RechartsPie,
-    } from "recharts";
+
 import React, {
   useState,
   useEffect,
@@ -62,7 +46,7 @@ import {
   Area,
   Cell,
   PieChart,
-  Pie as RechartsPie,
+  Pie,
 } from "recharts";
 import {
   LayoutDashboard,
