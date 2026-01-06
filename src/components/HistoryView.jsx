@@ -42,7 +42,11 @@ const HistoryView = () => {
 
   const startEdit = (report) => {
     setEditId(report.id);
-    setEditForm({ ...report });
+    // 編輯開始時，確保日期格式標準化，方便 input type="date" 使用
+    setEditForm({ 
+      ...report,
+      date: toStandardDateFormat(report.date) // 確保轉換為 YYYY-MM-DD
+    });
   };
   
   const cancelEdit = () => {
@@ -67,6 +71,8 @@ const HistoryView = () => {
       );
       const cleanData = {
         ...editForm,
+        // 確保日期被儲存
+        date: editForm.date, 
         cash: Number(editForm.cash),
         accrual: Number(editForm.accrual),
         operationalAccrual: Number(editForm.operationalAccrual),
@@ -102,13 +108,9 @@ const HistoryView = () => {
   return (
     <ViewWrapper>
       <Card title="數據修正中心" subtitle="查詢並修正歷史日報數據">
-        {/* 關鍵修正 1: 使用 grid grid-cols-1 
-          這是一個 CSS 技巧，可以強制內部的寬表格「服從」父層的寬度，
-          防止表格把整個 Card 撐大到超出螢幕。
-        */}
         <div className="grid grid-cols-1 gap-6 w-full">
           
-          {/* 篩選器區域 */}
+          {/* 篩選器區域 (保持不變) */}
           <div className="grid grid-cols-1 md:grid-cols-[1fr_1fr_auto] gap-4 bg-stone-50 p-4 rounded-2xl border border-stone-100 items-end w-full">
             <div className="w-full min-w-0">
               <label className="block text-xs font-bold text-stone-400 mb-1">
@@ -159,10 +161,6 @@ const HistoryView = () => {
             </button>
           </div>
 
-          {/* 關鍵修正 2: 表格容器
-            設定 w-full 和 overflow-x-auto，
-            並確保外層已經有 grid-cols-1 限制住它。
-          */}
           <div className="w-full overflow-x-auto border border-stone-200 rounded-xl bg-white shadow-sm">
             <table className="w-full text-left text-sm whitespace-nowrap">
               <thead className="bg-stone-100 text-stone-500 font-bold uppercase text-xs">
@@ -186,12 +184,26 @@ const HistoryView = () => {
                   const isEditing = editId === row.id;
                   return (
                     <tr key={row.id} className="group hover:bg-stone-50 transition-colors">
+                      {/* === 修改點：日期欄位 === */}
                       <td className="p-4 font-mono font-bold text-stone-600">
-                        {toStandardDateFormat(row.date)}
+                        {isEditing ? (
+                          <input
+                            type="date"
+                            value={editForm.date}
+                            onChange={(e) => handleEditChange("date", e.target.value)}
+                            className="w-32 px-2 py-1 border border-amber-300 rounded outline-none focus:ring-2 focus:ring-amber-200 bg-white shadow-sm font-mono text-sm"
+                          />
+                        ) : (
+                          toStandardDateFormat(row.date)
+                        )}
                       </td>
+
+                      {/* 店名欄位 (維持不可編輯) */}
                       <td className="p-4 font-bold text-stone-700">
                         {row.storeName.replace("CYJ", "").replace("店", "")}
                       </td>
+
+                      {/* 數值欄位 (維持原有邏輯) */}
                       {[
                         "cash",
                         "refund",
@@ -229,6 +241,7 @@ const HistoryView = () => {
                         </td>
                       ))}
                       
+                      {/* 動作按鈕 (維持原有邏輯) */}
                       <td className="p-4 text-center sticky right-0 bg-white group-hover:bg-stone-50">
                         {isEditing ? (
                           <div className="flex justify-center gap-2">
