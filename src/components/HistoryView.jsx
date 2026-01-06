@@ -1,3 +1,4 @@
+// src/components/HistoryView.jsx
 import React, { useState, useContext, useMemo } from "react";
 import { Edit2, Trash2, Save, X, ChevronDown, RotateCcw } from "lucide-react";
 import {
@@ -110,7 +111,7 @@ const HistoryView = () => {
       <Card title="數據修正中心" subtitle="查詢並修正歷史日報數據">
         <div className="grid grid-cols-1 gap-6 w-full">
           
-          {/* 篩選器區域 (保持不變) */}
+          {/* 篩選器區域 */}
           <div className="grid grid-cols-1 md:grid-cols-[1fr_1fr_auto] gap-4 bg-stone-50 p-4 rounded-2xl border border-stone-100 items-end w-full">
             <div className="w-full min-w-0">
               <label className="block text-xs font-bold text-stone-400 mb-1">
@@ -184,11 +185,13 @@ const HistoryView = () => {
                   const isEditing = editId === row.id;
                   return (
                     <tr key={row.id} className="group hover:bg-stone-50 transition-colors">
-                      {/* === 修改點：日期欄位 === */}
+                      {/* === 修改點：日期欄位加入 max 屬性 === */}
                       <td className="p-4 font-mono font-bold text-stone-600">
                         {isEditing ? (
                           <input
                             type="date"
+                            // ★ 設定最大日期為今天，防堵未來日期
+                            max={new Date().toLocaleDateString("en-CA")}
                             value={editForm.date}
                             onChange={(e) => handleEditChange("date", e.target.value)}
                             className="w-32 px-2 py-1 border border-amber-300 rounded outline-none focus:ring-2 focus:ring-amber-200 bg-white shadow-sm font-mono text-sm"
