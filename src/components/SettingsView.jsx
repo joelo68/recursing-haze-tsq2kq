@@ -1,0 +1,943 @@
+// src/components/SettingsView.jsx
+import React, { useState, useContext, useEffect, useMemo } from "react";
+import {
+  Save,
+  Plus,
+  Trash2,
+  Edit2,
+  Lock,
+  User,
+  Store,
+  Target,
+  CheckCircle,
+  AlertCircle,
+  X,
+  Shield,
+  ChevronDown,
+} from "lucide-react";
+import { doc, setDoc, updateDoc, deleteField } from "firebase/firestore";
+import { db, appId } from "../config/firebase";
+import { AppContext } from "../AppContext";
+import { ViewWrapper, Card } from "./SharedUI";
+import { DEFAULT_PERMISSIONS, ALL_MENU_ITEMS } from "../constants";
+import { generateUUID } from "../utils/helpers";
+
+const SettingsView = () => {
+  const {
+    targets,
+    setTargets,
+    showToast,
+    managers,
+    storeAccounts,
+    managerAuth,
+    userRole,
+    permissions,
+  } = useContext(AppContext);
+
+  const [activeTab, setActiveTab] = useState("kpi");
+  const [localTargets, setLocalTargets] = useState(targets);
+  const [localPermissions, setLocalPermissions] = useState(
+    permissions || DEFAULT_PERMISSIONS
+  );
+  
+  // 店經理帳號表單
+  const [newStoreAccount, setNewStoreAccount] = useState({
+    name: "",
+    password: "",
+    stores: "",
+  });
+
+  // 區長表單
+  const [newManager, setNewManager] = useState({ name: "", password: "" });
+  const [editingManager, setEditingManager] = useState(null);
+  const [editingManagerStores, setEditingManagerStores] = useState([]);
+
+  // 店家管理表單
+  const [newShop, setNewShop] = useState({ name: "", manager: "" });
+
+  useEffect(() => {
+    if (permissions) setLocalPermissions(permissions);
+  }, [permissions]);
+
+  useEffect(() => {
+    if (targets) setLocalTargets(targets);
+  }, [targets]);
+
+  // --- Handlers ---
+
+  const handleSaveTargets = async () => {
+    try {
+      await setDoc(
+        doc(
+          db,
+          "artifacts",
+          appId,
+          "public",
+          "data",
+          "global_settings",
+          "kpi_targets"
+        ),
+        localTargets
+      );
+      setTargets(localTargets);
+      showToast("KPI 參數已儲存", "success");
+    } catch (e) {
+      console.error(e);
+      showToast("儲存失敗", "error");
+    }
+  };
+
+  const handleSavePermissions = async () => {
+    try {
+      await setDoc(
+        doc(
+          db,
+          "artifacts",
+          appId,
+          "public",
+          "data",
+          "global_settings",
+          "permissions"
+        ),
+        localPermissions
+      );
+      showToast("權限設定已更新", "success");
+    } catch (e) {
+      console.error(e);
+      showToast("更新失敗", "error");
+    }
+  };
+
+  const togglePermission = (role, menuId) => {
+    const current = localPermissions[role] || [];
+    const updated = current.includes(menuId)
+      ? current.filter((id) => id !== menuId)
+      : [...current, menuId];
+    setLocalPermissions({ ...localPermissions, [role]: updated });
+  };
+
+  const handleAddGlobalStore = async () => {
+    if (!newShop.name || !newShop.manager) {
+      showToast("請輸入店名並選擇區域", "error");
+      return;
+    }
+    const allStores = Object.values(managers).flat();
+    if (allStores.includes(newShop.name)) {
+      showToast("該店名已存在", "error");
+      return;
+    }
+    try {
+      const currentStores = managers[newShop.manager] || [];
+      const updatedStores = [...currentStores, newShop.name];
+      const updatedManagers = { ...managers, [newShop.manager]: updatedStores };
+      await setDoc(
+        doc(
+          db,
+          "artifacts",
+          appId,
+          "public",
+          "data",
+          "global_settings",
+          "org_structure"
+        ),
+        { managers: updatedManagers }
+      );
+      setNewShop({ name: "", manager: "" });
+      showToast(`已新增 ${newShop.name} 至 ${newShop.manager}區`, "success");
+    } catch (e) {
+      console.error(e);
+      showToast("新增失敗", "error");
+    }
+  };
+
+  const handleDeleteGlobalStore = async (storeName, managerName) => {
+    if (
+      !confirm(
+        `確定要刪除「${storeName}」嗎？\n注意：這不會刪除該店的歷史日報數據，但會將其從組織架構中移除。`
+      )
+    )
+      return;
+    try {
+      const currentStores = managers[managerName] || [];
+      const updatedStores = currentStores.filter((s) => s !== storeName);
+      const updatedManagers = { ...managers, [managerName]: updatedStores };
+      await setDoc(
+        doc(
+          db,
+          "artifacts",
+          appId,
+          "public",
+          "data",
+          "global_settings",
+          "org_structure"
+        ),
+        { managers: updatedManagers }
+      );
+      showToast("店家已移除", "success");
+    } catch (e) {
+      showToast("移除失敗", "error");
+    }
+  };
+
+  const availableUnassignedStores = useMemo(() => {
+    const allGlobalStores = Object.values(managers).flat();
+    const assignedGlobalStores = storeAccounts.flatMap((a) => a.stores || []);
+    return allGlobalStores
+      .filter((s) => !assignedGlobalStores.includes(s))
+      .sort();
+  }, [managers, storeAccounts]);
+
+  const handleAddStoreAccount = async () => {
+    if (!newStoreAccount.name || !newStoreAccount.password) {
+      showToast("請輸入名稱與密碼", "error");
+      return;
+    }
+    const storesArray = newStoreAccount.stores ? [newStoreAccount.stores] : [];
+    const newAccount = {
+      id: generateUUID(),
+      name: newStoreAccount.name,
+      password: newStoreAccount.password,
+      stores: storesArray,
+    };
+    const updatedAccounts = [...storeAccounts, newAccount];
+    try {
+      await setDoc(
+        doc(
+          db,
+          "artifacts",
+          appId,
+          "public",
+          "data",
+          "global_settings",
+          "store_account_data"
+        ),
+        { accounts: updatedAccounts }
+      );
+      setNewStoreAccount({ name: "", password: "", stores: "" });
+      showToast("店經理帳號已新增", "success");
+    } catch (e) {
+      showToast("新增失敗", "error");
+    }
+  };
+
+  const handleDeleteStoreAccount = async (id) => {
+    if (!confirm("確定要刪除此帳號嗎？")) return;
+    const updatedAccounts = storeAccounts.filter((a) => a.id !== id);
+    try {
+      await setDoc(
+        doc(
+          db,
+          "artifacts",
+          appId,
+          "public",
+          "data",
+          "global_settings",
+          "store_account_data"
+        ),
+        { accounts: updatedAccounts }
+      );
+      showToast("帳號已刪除", "success");
+    } catch (e) {
+      showToast("刪除失敗", "error");
+    }
+  };
+
+  const orphanedStores = useMemo(() => {
+    const allKnownStores = [
+      ...new Set(storeAccounts.flatMap((a) => a.stores || [])),
+    ];
+    const assignedStores = Object.values(managers).flat();
+    return allKnownStores.filter((s) => !assignedStores.includes(s)).sort();
+  }, [storeAccounts, managers]);
+
+  const handleAddManager = async () => {
+    if (!newManager.name || !newManager.password) {
+      showToast("請輸入區長姓名與密碼", "error");
+      return;
+    }
+    if (managers[newManager.name]) {
+      showToast("該區長已存在", "error");
+      return;
+    }
+    try {
+      const newManagersList = { ...managers, [newManager.name]: [] };
+      await setDoc(
+        doc(
+          db,
+          "artifacts",
+          appId,
+          "public",
+          "data",
+          "global_settings",
+          "org_structure"
+        ),
+        { managers: newManagersList },
+        { merge: true }
+      );
+      await setDoc(
+        doc(
+          db,
+          "artifacts",
+          appId,
+          "public",
+          "data",
+          "global_settings",
+          "manager_auth"
+        ),
+        { [newManager.name]: newManager.password },
+        { merge: true }
+      );
+      setNewManager({ name: "", password: "" });
+      showToast("區長已新增", "success");
+    } catch (e) {
+      showToast("新增失敗", "error");
+    }
+  };
+
+  const handleSaveManagerStores = async (managerName) => {
+    try {
+      const updatedManagers = {
+        ...managers,
+        [managerName]: editingManagerStores,
+      };
+      await setDoc(
+        doc(
+          db,
+          "artifacts",
+          appId,
+          "public",
+          "data",
+          "global_settings",
+          "org_structure"
+        ),
+        { managers: updatedManagers }
+      );
+      setEditingManager(null);
+      showToast(`${managerName}轄區已更新`, "success");
+    } catch (e) {
+      showToast("更新失敗", "error");
+    }
+  };
+
+  const handleAddStoreToEditing = (storeName) => {
+    if (!storeName) return;
+    if (!editingManagerStores.includes(storeName)) {
+      setEditingManagerStores([...editingManagerStores, storeName]);
+    }
+  };
+
+  const handleRemoveStoreFromEditing = (storeName) => {
+    setEditingManagerStores(
+      editingManagerStores.filter((s) => s !== storeName)
+    );
+  };
+
+  const handleDeleteManager = async (managerName) => {
+    if (!confirm(`確定要移除區長 ${managerName} 及其所有設定嗎？`)) return;
+    try {
+      const newManagers = { ...managers };
+      delete newManagers[managerName];
+      await setDoc(
+        doc(
+          db,
+          "artifacts",
+          appId,
+          "public",
+          "data",
+          "global_settings",
+          "org_structure"
+        ),
+        { managers: newManagers }
+      );
+      const newAuth = { ...managerAuth };
+      delete newAuth[managerName];
+      await setDoc(
+        doc(
+          db,
+          "artifacts",
+          appId,
+          "public",
+          "data",
+          "global_settings",
+          "manager_auth"
+        ),
+        newAuth
+      );
+      showToast("區長資料已移除", "success");
+    } catch (e) {
+      showToast("移除失敗", "error");
+    }
+  };
+
+  if (userRole !== "director")
+    return (
+      <ViewWrapper>
+        <Card title="權限不足">
+          <div className="text-center py-10 text-stone-400">
+            <Lock size={48} className="mx-auto mb-4 opacity-50" />
+            <p>僅總監可存取系統設定</p>
+          </div>
+        </Card>
+      </ViewWrapper>
+    );
+
+  return (
+    <ViewWrapper>
+      <div className="space-y-6">
+        <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-4">
+          <h2 className="text-2xl font-bold text-stone-800">系統管理中心</h2>
+          <div className="bg-white p-1 rounded-xl shadow-sm border border-stone-100 flex overflow-x-auto max-w-full">
+            {["kpi", "permissions", "shops", "stores", "managers"].map(
+              (tab) => (
+                <button
+                  key={tab}
+                  onClick={() => setActiveTab(tab)}
+                  className={`px-4 py-2 rounded-lg text-sm font-bold whitespace-nowrap transition-all ${
+                    activeTab === tab
+                      ? "bg-stone-800 text-white shadow"
+                      : "text-stone-500 hover:bg-stone-50"
+                  }`}
+                >
+                  {tab === "kpi"
+                    ? "KPI 參數"
+                    : tab === "permissions"
+                    ? "權限設定"
+                    : tab === "shops"
+                    ? "店家管理"
+                    : tab === "stores"
+                    ? "店經理帳號"
+                    : "組織架構"}
+                </button>
+              )
+            )}
+          </div>
+        </div>
+
+        {/* 1. KPI 參數 */}
+        {activeTab === "kpi" && (
+          <Card title="KPI 目標參數設定" subtitle="設定全域的計算基準值">
+            <div className="max-w-md space-y-6">
+              <div>
+                <label className="block text-sm font-bold text-stone-500 mb-2">
+                  目標新客客單 (New Customer ASP)
+                </label>
+                <div className="relative">
+                  <span className="absolute left-4 top-3 text-stone-400 font-bold">
+                    $
+                  </span>
+                  <input
+                    type="number"
+                    value={localTargets.newASP}
+                    onChange={(e) =>
+                      setLocalTargets({
+                        ...localTargets,
+                        newASP: Number(e.target.value),
+                      })
+                    }
+                    className="w-full pl-8 pr-4 py-3 border-2 border-stone-100 rounded-xl focus:border-amber-400 outline-none font-bold text-stone-700"
+                  />
+                </div>
+              </div>
+              <div>
+                <label className="block text-sm font-bold text-stone-500 mb-2">
+                  目標消耗客單 (Traffic ASP)
+                </label>
+                <div className="relative">
+                  <span className="absolute left-4 top-3 text-stone-400 font-bold">
+                    $
+                  </span>
+                  <input
+                    type="number"
+                    value={localTargets.trafficASP}
+                    onChange={(e) =>
+                      setLocalTargets({
+                        ...localTargets,
+                        trafficASP: Number(e.target.value),
+                      })
+                    }
+                    className="w-full pl-8 pr-4 py-3 border-2 border-stone-100 rounded-xl focus:border-amber-400 outline-none font-bold text-stone-700"
+                  />
+                </div>
+              </div>
+              <button
+                onClick={handleSaveTargets}
+                className="w-full bg-stone-800 text-white py-3 rounded-xl font-bold hover:bg-stone-900 transition-colors shadow-lg"
+              >
+                儲存 KPI 設定
+              </button>
+            </div>
+          </Card>
+        )}
+
+        {/* 2. 權限設定 */}
+        {activeTab === "permissions" && (
+          <Card title="角色權限管理" subtitle="設定各職級可存取的系統模組">
+            <div className="overflow-x-auto">
+              <table className="w-full text-left text-sm">
+                <thead>
+                  <tr className="border-b border-stone-200">
+                    <th className="p-4 font-bold text-stone-500">功能模組</th>
+                    <th className="p-4 font-bold text-stone-700 text-center bg-teal-50/50">
+                      區長 (Manager)
+                    </th>
+                    <th className="p-4 font-bold text-stone-700 text-center bg-amber-50/50">
+                      店經理 (Store)
+                    </th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-stone-100">
+                  {ALL_MENU_ITEMS.map((item) => (
+                    <tr key={item.id} className="hover:bg-stone-50">
+                      <td className="p-4 flex items-center gap-3">
+                        <div className="p-2 bg-stone-100 rounded-lg text-stone-500">
+                          <item.icon size={18} />
+                        </div>
+                        <span className="font-bold text-stone-700">
+                          {item.label}
+                        </span>
+                      </td>
+                      <td className="p-4 text-center bg-teal-50/30">
+                        <input
+                          type="checkbox"
+                          checked={localPermissions.manager?.includes(item.id)}
+                          onChange={() => togglePermission("manager", item.id)}
+                          className="w-5 h-5 rounded border-stone-300 text-teal-600 focus:ring-teal-500 cursor-pointer"
+                        />
+                      </td>
+                      <td className="p-4 text-center bg-amber-50/30">
+                        <input
+                          type="checkbox"
+                          checked={localPermissions.store?.includes(item.id)}
+                          onChange={() => togglePermission("store", item.id)}
+                          className="w-5 h-5 rounded border-stone-300 text-amber-600 focus:ring-amber-500 cursor-pointer"
+                        />
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+            <div className="mt-6 flex justify-end">
+              <button
+                onClick={handleSavePermissions}
+                className="bg-stone-800 text-white px-6 py-2.5 rounded-xl font-bold hover:bg-stone-700 shadow-lg active:scale-95 transition-all"
+              >
+                儲存權限設定
+              </button>
+            </div>
+          </Card>
+        )}
+
+        {/* 3. 店家管理 (Shops) */}
+        {activeTab === "shops" && (
+          <div className="space-y-6">
+            <Card title="新增營運店家">
+              <div className="flex flex-col md:flex-row gap-4 items-end">
+                <div className="flex-1 w-full">
+                  <label className="block text-xs font-bold text-stone-400 mb-1">
+                    分店簡稱
+                  </label>
+                  <input
+                    type="text"
+                    value={newShop.name}
+                    onChange={(e) =>
+                      setNewShop({ ...newShop, name: e.target.value })
+                    }
+                    placeholder="例如: 中山"
+                    className="w-full px-4 py-2 border-2 border-stone-100 rounded-xl outline-none focus:border-amber-400 font-bold"
+                  />
+                </div>
+                <div className="flex-1 w-full">
+                  <label className="block text-xs font-bold text-stone-400 mb-1">
+                    所屬區域 (區長)
+                  </label>
+                  <div className="relative">
+                    <select
+                      value={newShop.manager}
+                      onChange={(e) =>
+                        setNewShop({ ...newShop, manager: e.target.value })
+                      }
+                      className="w-full px-4 py-2 border-2 border-stone-100 rounded-xl outline-none focus:border-amber-400 font-bold appearance-none bg-white text-stone-700"
+                    >
+                      <option value="">請選擇...</option>
+                      {Object.keys(managers).map((m) => (
+                        <option key={m} value={m}>
+                          {m} 區
+                        </option>
+                      ))}
+                    </select>
+                    <ChevronDown
+                      size={16}
+                      className="absolute right-3 top-3 text-stone-400 pointer-events-none"
+                    />
+                  </div>
+                </div>
+                <button
+                  onClick={handleAddGlobalStore}
+                  className="w-full md:w-auto bg-stone-800 text-white px-6 py-2.5 rounded-xl font-bold hover:bg-stone-700 shadow-sm flex items-center justify-center gap-2"
+                >
+                  <Plus size={18} /> 新增店家
+                </button>
+              </div>
+            </Card>
+            <Card title="全域店家列表">
+              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+                {Object.entries(managers).map(([mgr, stores]) => (
+                  <div
+                    key={mgr}
+                    className="bg-stone-50 rounded-2xl p-4 border border-stone-100"
+                  >
+                    <div className="flex items-center gap-2 mb-3 border-b border-stone-200 pb-2">
+                      <div className="w-6 h-6 rounded-full bg-stone-200 flex items-center justify-center text-xs font-bold text-stone-500">
+                        {mgr[0]}
+                      </div>
+                      <span className="font-bold text-stone-700">{mgr} 區</span>
+                      <span className="text-xs text-stone-400 ml-auto">
+                        {stores.length} 間
+                      </span>
+                    </div>
+                    <div className="flex flex-wrap gap-2">
+                      {stores.length > 0 ? (
+                        stores.map((store) => (
+                          <div
+                            key={store}
+                            className="group relative flex items-center"
+                          >
+                            <span className="px-3 py-1.5 bg-white border border-stone-200 rounded-lg text-xs font-bold text-stone-600 shadow-sm pr-7">
+                              {store}
+                            </span>
+                            <button
+                              onClick={() =>
+                                handleDeleteGlobalStore(store, mgr)
+                              }
+                              className="absolute right-1 p-1 text-stone-300 hover:text-rose-500 transition-colors"
+                            >
+                              <X size={12} />
+                            </button>
+                          </div>
+                        ))
+                      ) : (
+                        <span className="text-xs text-stone-400 italic">
+                          無店家
+                        </span>
+                      )}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </Card>
+          </div>
+        )}
+
+        {/* 4. 店經理帳號 (Stores) */}
+        {activeTab === "stores" && (
+          <div className="space-y-6">
+            <Card title="新增店經理帳號">
+              <div className="grid grid-cols-1 md:grid-cols-4 gap-4 items-end">
+                <div>
+                  <label className="block text-xs font-bold text-stone-400 mb-1">
+                    姓名 / 帳號名稱
+                  </label>
+                  <input
+                    type="text"
+                    value={newStoreAccount.name}
+                    onChange={(e) =>
+                      setNewStoreAccount({
+                        ...newStoreAccount,
+                        name: e.target.value,
+                      })
+                    }
+                    placeholder="例如: 王小明"
+                    className="w-full px-4 py-2 border-2 border-stone-100 rounded-xl outline-none focus:border-amber-400 font-bold"
+                  />
+                </div>
+                <div>
+                  <label className="block text-xs font-bold text-stone-400 mb-1">
+                    登入密碼
+                  </label>
+                  <input
+                    type="text"
+                    value={newStoreAccount.password}
+                    onChange={(e) =>
+                      setNewStoreAccount({
+                        ...newStoreAccount,
+                        password: e.target.value,
+                      })
+                    }
+                    placeholder="設定密碼"
+                    className="w-full px-4 py-2 border-2 border-stone-100 rounded-xl outline-none focus:border-amber-400 font-bold"
+                  />
+                </div>
+                <div className="md:col-span-2">
+                  <label className="block text-xs font-bold text-stone-400 mb-1">
+                    分配管理店家
+                  </label>
+                  <div className="flex gap-2">
+                    <div className="relative w-full">
+                      <Store
+                        size={16}
+                        className="absolute left-3 top-3 text-stone-400 pointer-events-none"
+                      />
+                      <select
+                        value={newStoreAccount.stores}
+                        onChange={(e) =>
+                          setNewStoreAccount({
+                            ...newStoreAccount,
+                            stores: e.target.value,
+                          })
+                        }
+                        className="w-full pl-10 pr-4 py-2 border-2 border-stone-100 rounded-xl outline-none focus:border-amber-400 font-bold appearance-none bg-white text-stone-700"
+                      >
+                        <option value="">請選擇未分配店家...</option>
+                        {availableUnassignedStores.map((s) => (
+                          <option key={s} value={s}>
+                            {s}
+                          </option>
+                        ))}
+                      </select>
+                      <ChevronDown
+                        size={16}
+                        className="absolute right-3 top-3 text-stone-400 pointer-events-none"
+                      />
+                    </div>
+                    <button
+                      onClick={handleAddStoreAccount}
+                      className="bg-stone-800 text-white px-4 rounded-xl font-bold shrink-0 hover:bg-stone-700"
+                    >
+                      <Plus size={20} />
+                    </button>
+                  </div>
+                </div>
+              </div>
+            </Card>
+            <Card title="現有店經理列表">
+              <div className="overflow-x-auto">
+                <table className="w-full text-left text-sm">
+                  <thead className="bg-stone-50 font-bold text-stone-500 uppercase">
+                    <tr>
+                      <th className="p-4 rounded-tl-xl">姓名</th>
+                      <th className="p-4">密碼</th>
+                      <th className="p-4">負責店家</th>
+                      <th className="p-4 rounded-tr-xl text-right">操作</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-stone-100">
+                    {storeAccounts.map((account) => (
+                      <tr key={account.id} className="hover:bg-stone-50">
+                        <td className="p-4 font-bold text-stone-700">
+                          {account.name}
+                        </td>
+                        <td className="p-4 font-mono text-stone-500">
+                          {account.password}
+                        </td>
+                        <td className="p-4">
+                          <div className="flex flex-wrap gap-1">
+                            {account.stores &&
+                              account.stores.map((s) => (
+                                <span
+                                  key={s}
+                                  className="px-2 py-1 bg-stone-100 rounded text-xs font-bold text-stone-600"
+                                >
+                                  {s}
+                                </span>
+                              ))}
+                          </div>
+                        </td>
+                        <td className="p-4 text-right">
+                          <button
+                            onClick={() => handleDeleteStoreAccount(account.id)}
+                            className="text-rose-400 hover:text-rose-600 hover:bg-rose-50 p-2 rounded-lg transition-colors"
+                          >
+                            <Trash2 size={18} />
+                          </button>
+                        </td>
+                      </tr>
+                    ))}
+                    {storeAccounts.length === 0 && (
+                      <tr>
+                        <td
+                          colSpan="4"
+                          className="p-8 text-center text-stone-400"
+                        >
+                          目前沒有帳號
+                        </td>
+                      </tr>
+                    )}
+                  </tbody>
+                </table>
+              </div>
+            </Card>
+          </div>
+        )}
+
+        {/* 5. 組織架構 (Managers) - 您要求的邏輯還原 */}
+        {activeTab === "managers" && (
+          <div className="space-y-6">
+            <Card title="新增區長">
+              <div className="grid grid-cols-1 md:grid-cols-3 gap-4 items-end">
+                <div>
+                  <label className="block text-xs font-bold text-stone-400 mb-1">
+                    區長姓名
+                  </label>
+                  <input
+                    type="text"
+                    value={newManager.name}
+                    onChange={(e) =>
+                      setNewManager({ ...newManager, name: e.target.value })
+                    }
+                    placeholder="例如: Jonas"
+                    className="w-full px-4 py-2 border-2 border-stone-100 rounded-xl outline-none focus:border-amber-400 font-bold"
+                  />
+                </div>
+                <div>
+                  <label className="block text-xs font-bold text-stone-400 mb-1">
+                    預設密碼
+                  </label>
+                  <input
+                    type="text"
+                    value={newManager.password}
+                    onChange={(e) =>
+                      setNewManager({ ...newManager, password: e.target.value })
+                    }
+                    placeholder="設定密碼"
+                    className="w-full px-4 py-2 border-2 border-stone-100 rounded-xl outline-none focus:border-amber-400 font-bold"
+                  />
+                </div>
+                <button
+                  onClick={handleAddManager}
+                  className="bg-stone-800 text-white py-2.5 rounded-xl font-bold hover:bg-stone-700 shadow-sm flex items-center justify-center gap-2"
+                >
+                  <Plus size={18} /> 新增區長
+                </button>
+              </div>
+            </Card>
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+              {Object.entries(managers).map(([managerName, stores]) => (
+                <Card key={managerName} className="border border-stone-200">
+                  <div className="flex justify-between items-start mb-4">
+                    <div>
+                      <h3 className="text-lg font-bold text-stone-700 flex items-center gap-2">
+                        <User size={20} className="text-amber-500" />
+                        {managerName} 區
+                      </h3>
+                      <p className="text-xs text-stone-400 mt-1 font-mono">
+                        密碼: {managerAuth[managerName] || "未設定"}
+                      </p>
+                    </div>
+                    <div className="flex gap-2">
+                      <button
+                        onClick={() => {
+                          setEditingManager(managerName);
+                          setEditingManagerStores(stores);
+                        }}
+                        className="text-xs bg-stone-100 text-stone-600 px-3 py-1.5 rounded-lg hover:bg-stone-200 font-bold"
+                      >
+                        編輯轄區
+                      </button>
+                      <button
+                        onClick={() => handleDeleteManager(managerName)}
+                        className="text-rose-400 hover:bg-rose-50 p-1.5 rounded-lg"
+                      >
+                        <Trash2 size={16} />
+                      </button>
+                    </div>
+                  </div>
+                  {editingManager === managerName ? (
+                    <div className="mt-4 animate-in fade-in slide-in-from-top-2 bg-stone-50 p-4 rounded-xl border border-stone-200">
+                      <label className="block text-xs font-bold text-stone-400 mb-2">
+                        已分配店家 (點擊 X 移除)
+                      </label>
+                      <div className="flex flex-wrap gap-2 mb-4">
+                        {editingManagerStores.map((s) => (
+                          <div
+                            key={s}
+                            className="group relative flex items-center"
+                          >
+                            <span className="px-3 py-1.5 bg-white border border-stone-200 rounded-lg text-xs font-bold text-stone-600 shadow-sm pr-7">
+                              {s}
+                            </span>
+                            <button
+                              onClick={() => handleRemoveStoreFromEditing(s)}
+                              className="absolute right-1 p-1 text-stone-300 hover:text-rose-500 transition-colors"
+                            >
+                              <X size={12} />
+                            </button>
+                          </div>
+                        ))}
+                        {editingManagerStores.length === 0 && (
+                          <span className="text-xs text-stone-400 italic">
+                            暫無店家
+                          </span>
+                        )}
+                      </div>
+                      <div className="mb-4">
+                        <label className="block text-xs font-bold text-stone-400 mb-1">
+                          新增未分配店家
+                        </label>
+                        <div className="relative">
+                          <select
+                            onChange={(e) => {
+                              handleAddStoreToEditing(e.target.value);
+                              e.target.value = "";
+                            }}
+                            className="w-full px-4 py-2 border-2 border-stone-200 rounded-xl outline-none focus:border-amber-400 font-bold appearance-none bg-white text-stone-700"
+                          >
+                            <option value="">請選擇...</option>
+                            {orphanedStores
+                              .filter((s) => !editingManagerStores.includes(s))
+                              .map((s) => (
+                                <option key={s} value={s}>
+                                  {s}
+                                </option>
+                              ))}
+                          </select>
+                          <ChevronDown
+                            size={16}
+                            className="absolute right-3 top-3 text-stone-400 pointer-events-none"
+                          />
+                        </div>
+                      </div>
+                      <div className="flex gap-2 justify-end">
+                        <button
+                          onClick={() => setEditingManager(null)}
+                          className="px-3 py-1.5 text-xs font-bold text-stone-400 hover:text-stone-600"
+                        >
+                          取消
+                        </button>
+                        <button
+                          onClick={() => handleSaveManagerStores(managerName)}
+                          className="px-4 py-1.5 bg-stone-800 text-white text-xs font-bold rounded-lg hover:bg-stone-900"
+                        >
+                          儲存變更
+                        </button>
+                      </div>
+                    </div>
+                  ) : (
+                    <div className="flex flex-wrap gap-2 mt-4">
+                      {stores.length > 0 ? (
+                        stores.map((s) => (
+                          <span
+                            key={s}
+                            className="px-2.5 py-1 bg-stone-50 border border-stone-100 rounded-lg text-xs font-bold text-stone-600"
+                          >
+                            {s}
+                          </span>
+                        ))
+                      ) : (
+                        <span className="text-xs text-stone-300 italic">
+                          尚未分配店家
+                        </span>
+                      )}
+                    </div>
+                  )}
+                </Card>
+              ))}
+            </div>
+          </div>
+        )}
+      </div>
+    </ViewWrapper>
+  );
+};
+
+export default SettingsView;

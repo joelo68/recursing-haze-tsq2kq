@@ -1,10 +1,8 @@
-    // vite.config.js
-    import { defineConfig } from 'vite';
-    import react from '@vitejs/plugin-react';
+import { defineConfig } from 'vite'
+import react from '@vitejs/plugin-react'
 
-    export default defineConfig({
-      plugins: [react()],
-      // 確保這裡沒有 build.rollupOptions.external 和 resolve.alias
-      // 除非是針對特定問題的精確解決方案
-    });
-    
+// https://vitejs.dev/config/
+export default defineConfig({
+  plugins: [react()],
+  base: '/recursing-haze-tsq2kq/',  // ⚠️ 請注意：這裡一定要改成您 GitHub 舊專案的「倉庫名稱」
+})
