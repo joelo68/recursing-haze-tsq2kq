@@ -134,6 +134,7 @@ import SystemMonitor from "./components/SystemMonitor";
 import SettingsView from "./components/SettingsView";
 import AuditView from "./components/AuditView";
 import { useAnalytics } from "./hooks/useAnalytics";
+import AnnualView from "./components/AnnualView";
 // ==================== 原本的 UI 元件定義已移除 (移至 components 資料夾) ====================
 
 // --- 接下來是 const AppContext = ... (保持原本的程式碼) ---
@@ -699,6 +700,7 @@ export default function App() {
             {activeView === "input" && <InputView />}
             {activeView === "logs" && <SystemMonitor />}
             {activeView === "settings" && <SettingsView />}
+            {activeView === "annual" && <AnnualView />}
             {activeView === "store-analysis" && <StoreAnalysisView />}
           </main>
         </div>

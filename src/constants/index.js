@@ -9,6 +9,7 @@ import {
   Upload,
   Activity,
   Settings,
+  Calendar, // ★ 1. 新增這一個 Icon
 } from "lucide-react";
 
 export const ROLES = {
@@ -19,6 +20,7 @@ export const ROLES = {
 
 export const ALL_MENU_ITEMS = [
   { id: "dashboard", label: "營運總覽", icon: LayoutDashboard },
+  { id: "annual", label: "年度分析", icon: Calendar },
   { id: "regional", label: "區域分析", icon: MapIcon },
   { id: "store-analysis", label: "單店分析", icon: Store },
   { id: "ranking", label: "詳細報表", icon: TrendingUp },
@@ -38,7 +40,8 @@ export const DEFAULT_REGIONAL_MANAGERS = {
 };
 
 export const DEFAULT_PERMISSIONS = {
+  // ★ 3. 記得在每個角色的權限陣列裡都補上 "annual"
   director: ALL_MENU_ITEMS.map((i) => i.id),
-  manager: ["dashboard", "regional", "store-analysis", "audit"],
-  store: ["dashboard", "store-analysis", "ranking", "history", "input"],
+  manager: ["dashboard", "annual", "regional", "store-analysis", "audit"],
+  store: ["dashboard", "annual", "store-analysis", "ranking", "history", "input"],
 };
