@@ -9,7 +9,8 @@ import {
   Upload,
   Activity,
   Settings,
-  Calendar, // ★ 1. 新增這一個 Icon
+  Calendar, 
+  Target, // ★ 1. 新增這個 Icon (用於年度目標設定)
 } from "lucide-react";
 
 export const ROLES = {
@@ -20,7 +21,8 @@ export const ROLES = {
 
 export const ALL_MENU_ITEMS = [
   { id: "dashboard", label: "營運總覽", icon: LayoutDashboard },
-  { id: "annual", label: "年度分析", icon: Calendar },
+  { id: "annual", label: "年度分析", icon: Calendar }, // 這是看報表的
+  { id: "targets", label: "年度目標設定", icon: Target }, // ★ 2. 新增這個項目 (這是您剛剛做的輸入頁面)
   { id: "regional", label: "區域分析", icon: MapIcon },
   { id: "store-analysis", label: "單店分析", icon: Store },
   { id: "ranking", label: "詳細報表", icon: TrendingUp },
@@ -40,8 +42,12 @@ export const DEFAULT_REGIONAL_MANAGERS = {
 };
 
 export const DEFAULT_PERMISSIONS = {
-  // ★ 3. 記得在每個角色的權限陣列裡都補上 "annual"
+  // 總監擁有所有權限 (包含 targets)
   director: ALL_MENU_ITEMS.map((i) => i.id),
-  manager: ["dashboard", "annual", "regional", "store-analysis", "audit"],
+  
+  // ★ 3. 記得把 "targets" 加給區長 (如果需要的話)
+  manager: ["dashboard", "annual", "targets", "regional", "store-analysis", "audit"],
+  
+  // 店長通常只需要看分析和輸入日報，不需要設定年度目標，所以這裡不加 targets
   store: ["dashboard", "annual", "store-analysis", "ranking", "history", "input"],
 };

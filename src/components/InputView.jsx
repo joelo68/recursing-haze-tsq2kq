@@ -1,13 +1,14 @@
 /* eslint-disable react-hooks/exhaustive-deps */
-import React, { useState, useEffect, useContext } from "react";
+import React, { useState, useEffect, useContext, useMemo } from "react";
 import { 
-  Target, FileText, Upload, DollarSign, CreditCard 
+  FileText, Upload, DollarSign,
+  RotateCcw, Activity, AlertCircle, X, CheckCircle 
 } from "lucide-react";
 import { 
   collection, addDoc, setDoc, doc, serverTimestamp 
 } from "firebase/firestore";
 
-// --- 路徑修正：根據你的專案結構，這些應該在上一層 ---
+// --- 路徑修正 ---
 import { db, appId } from "../config/firebase"; 
 import { parseNumber, formatNumber, toStandardDateFormat } from "../utils/helpers";
 import { AppContext } from "../AppContext";
@@ -21,18 +22,18 @@ const InputView = () => {
     currentUser,
     userRole,
     managers,
-    budgets,
     inputDate,
     setInputDate,
     showToast,
     logActivity,
     rawData,
-    openConfirm,
   } = useContext(AppContext);
 
   const [selectedManager, setSelectedManager] = useState("");
   const [selectedStore, setSelectedStore] = useState("");
-  const [formData, setFormData] = useState({
+  
+  // 預設表單值
+  const defaultFormData = {
     cash: "",
     accrual: "",
     operationalAccrual: "",
@@ -43,8 +44,14 @@ const InputView = () => {
     newCustomerClosings: "",
     newCustomerSales: "",
     refund: "",
-  });
-  const [targetInput, setTargetInput] = useState({ cash: "", accrual: "" });
+  };
+
+  const [formData, setFormData] = useState(defaultFormData);
+  
+  // 新增狀態
+  const [isSubmitting, setIsSubmitting] = useState(false);
+  const [showConfirmModal, setShowConfirmModal] = useState(false); 
+  const [existingReportId, setExistingReportId] = useState(null); 
 
   const LABELS = {
     cash: "現金業績",
@@ -60,11 +67,42 @@ const InputView = () => {
   };
   
   const today = new Date().toISOString().split("T")[0];
-  const isFirstDay = inputDate.endsWith("-01");
-  const canEditTargets =
-    userRole === "director" ||
-    userRole === "manager" ||
-    (userRole === "store" && isFirstDay);
+
+  // ==========================================
+  // ★★★ 1. 自動暫存 (Auto-Save) 機制 ★★★
+  // ==========================================
+  // A. 載入暫存
+  useEffect(() => {
+    const savedDraft = localStorage.getItem("cyj_input_draft_v3");
+    if (savedDraft) {
+      try {
+        const parsed = JSON.parse(savedDraft);
+        if (parsed.formData) setFormData(parsed.formData);
+        if (parsed.store) setSelectedStore(parsed.store);
+        if (parsed.manager) setSelectedManager(parsed.manager);
+        if (parsed.date) setInputDate(parsed.date);
+      } catch (e) {
+        console.error("暫存讀取失敗", e);
+        localStorage.removeItem("cyj_input_draft_v3");
+      }
+    }
+  }, []);
+
+  // B. 寫入暫存
+  useEffect(() => {
+    const draft = {
+      formData,
+      store: selectedStore,
+      manager: selectedManager,
+      date: inputDate,
+      timestamp: Date.now()
+    };
+    localStorage.setItem("cyj_input_draft_v3", JSON.stringify(draft));
+  }, [formData, selectedStore, selectedManager, inputDate]);
+
+  // ==========================================
+  // 邏輯處理區
+  // ==========================================
 
   // --- 自動計算總權責 ---
   useEffect(() => {
@@ -97,7 +135,7 @@ const InputView = () => {
   };
 
   // --- 計算可選店家 ---
-  const availableStores = React.useMemo(() => {
+  const availableStores = useMemo(() => {
     if (!selectedManager) {
       if (userRole === "store" && currentUser) {
         return (currentUser.stores || [currentUser.storeName]).map((s) =>
@@ -109,9 +147,9 @@ const InputView = () => {
     return (managers[selectedManager] || []).map((s) => `CYJ${s}店`);
   }, [selectedManager, managers, userRole, currentUser]);
 
-  // --- 初始化選擇 ---
+  // --- 初始化選擇 (僅在沒有暫存還原時執行) ---
   useEffect(() => {
-    if (userRole === "store" && currentUser) {
+    if (!selectedStore && userRole === "store" && currentUser) {
       const myStores = currentUser.stores || [currentUser.storeName];
       if (myStores.length > 0) {
         const shortName = myStores[0].replace("CYJ", "").replace("店", "");
@@ -124,39 +162,51 @@ const InputView = () => {
           : `CYJ${myStores[0]}店`;
         setSelectedStore(fullName);
       }
-    } else if (userRole === "manager" && currentUser) {
+    } else if (!selectedManager && userRole === "manager" && currentUser) {
       setSelectedManager(currentUser.name);
     }
   }, [userRole, currentUser, managers]);
 
-  // --- 初始化目標輸入框 ---
-  useEffect(() => {
-    if (!selectedStore || !inputDate) {
-      setTargetInput({ cash: "", accrual: "" });
+  // --- 重置功能 ---
+  const handleReset = () => {
+    if (confirm("確定要清空目前輸入的所有內容嗎？")) {
+      setFormData(defaultFormData);
+      localStorage.removeItem("cyj_input_draft_v3");
+      showToast("表格已重置", "info");
+    }
+  };
+
+  // ==========================================
+  // ★★★ 2. 提交與確認邏輯 ★★★
+  // ==========================================
+
+  // 第一步：預先檢查 -> 打開確認視窗
+  const handlePreSubmit = (e) => {
+    e.preventDefault();
+    if (!selectedStore) {
+      showToast("請選擇店家", "error");
       return;
     }
-    const dateObj = new Date(inputDate);
-    if (isNaN(dateObj.getTime())) return;
-    const year = dateObj.getFullYear();
-    const month = dateObj.getMonth() + 1;
-    const budgetKey = `${selectedStore}_${year}_${month}`;
-    const budget = budgets[budgetKey];
-    if (budget) {
-      setTargetInput({
-        cash: budget.cashTarget || "",
-        accrual: budget.accrualTarget || "",
-      });
-    } else {
-      setTargetInput({ cash: "", accrual: "" });
+    if (inputDate > today) {
+      showToast("⛔ 不可以提交未來業績！", "error");
+      return;
     }
-  }, [selectedStore, inputDate, budgets]);
+    
+    // 檢查是否為覆蓋舊資料
+    const formattedInputDate = toStandardDateFormat(inputDate);
+    const existingReport = rawData.find((d) => {
+      const recordDate = toStandardDateFormat(d.date);
+      return recordDate === formattedInputDate && d.storeName === selectedStore;
+    });
 
-  // --- 儲存報表 ---
-  const saveReport = async (existingId = null) => {
+    setExistingReportId(existingReport ? existingReport.id : null);
+    setShowConfirmModal(true); // 打開視窗
+  };
+
+  // 第二步：最終提交 (寫入資料庫)
+  const handleFinalSubmit = async () => {
+    setIsSubmitting(true);
     try {
-      if (isFirstDay) {
-        await handleUpdateTargets(true);
-      }
       const normalizedDate = toStandardDateFormat(inputDate);
       const payload = {
         date: normalizedDate,
@@ -172,132 +222,38 @@ const InputView = () => {
         newCustomerSales: parseNumber(formData.newCustomerSales),
         refund: parseNumber(formData.refund),
         timestamp: serverTimestamp(),
+        submittedBy: currentUser?.name || "unknown", // 紀錄提交者
       };
-      if (existingId) {
+
+      if (existingReportId) {
+        // 更新舊資料
         await setDoc(
-          doc(
-            db,
-            "artifacts",
-            appId,
-            "public",
-            "data",
-            "daily_reports",
-            existingId
-          ),
+          doc(db, "artifacts", appId, "public", "data", "daily_reports", existingReportId),
           payload
         );
         showToast("資料已更新 (覆蓋舊資料)", "success");
-        logActivity(
-          userRole,
-          currentUser?.name,
-          "更新日報(覆蓋)",
-          `${selectedStore} ${normalizedDate}`
-        );
+        logActivity(userRole, currentUser?.name, "更新日報(覆蓋)", `${selectedStore} ${normalizedDate}`);
       } else {
+        // 新增資料
         await addDoc(
           collection(db, "artifacts", appId, "public", "data", "daily_reports"),
           payload
         );
         showToast("日報提交成功", "success");
-        logActivity(
-          userRole,
-          currentUser?.name,
-          "提交日報",
-          `${selectedStore} ${normalizedDate}`
-        );
+        logActivity(userRole, currentUser?.name, "提交日報", `${selectedStore} ${normalizedDate}`);
       }
-      setFormData({
-        cash: "",
-        accrual: "",
-        operationalAccrual: "",
-        skincareSales: "",
-        skincareRefund: "",
-        traffic: "",
-        newCustomers: "",
-        newCustomerClosings: "",
-        newCustomerSales: "",
-        refund: "",
-      });
+
+      // 清除狀態與暫存
+      setFormData(defaultFormData);
+      localStorage.removeItem("cyj_input_draft_v3");
+      setShowConfirmModal(false);
+      setExistingReportId(null);
+
     } catch (err) {
       console.error(err);
-      showToast("提交失敗", "error");
-    }
-  };
-
-  // --- 提交表單處理 ---
-  const handleSubmit = async (e) => {
-    e.preventDefault();
-    if (!selectedStore) {
-      showToast("請選擇店家", "error");
-      return;
-    }
-    if (inputDate > today) {
-      showToast("⛔ 不可以提交未來業績！\n請確認日期符合規定。", "error");
-      return;
-    }
-    if (isFirstDay) {
-      const cashT = Number(targetInput.cash);
-      const accrualT = Number(targetInput.accrual);
-      if (!cashT || !accrualT || cashT <= 0 || accrualT <= 0) {
-        showToast(
-          "⚠️ 每月1號為目標設定日，請務必填寫當月「現金」與「權責」目標！",
-          "error"
-        );
-        return;
-      }
-    }
-    const formattedInputDate = toStandardDateFormat(inputDate);
-    const existingReport = rawData.find((d) => {
-      const recordDate = toStandardDateFormat(d.date);
-      return recordDate === formattedInputDate && d.storeName === selectedStore;
-    });
-    if (existingReport) {
-      openConfirm(
-        "⚠️ 資料覆蓋確認",
-        `系統檢測到 ${selectedStore} 在 ${formattedInputDate} 已經有一筆回報紀錄。\n\n您確定要提交並「覆蓋」原有的資料嗎？`,
-        () => saveReport(existingReport.id)
-      );
-    } else {
-      saveReport();
-    }
-  };
-
-  // --- 更新目標 ---
-  const handleUpdateTargets = async (silent = false) => {
-    if (!selectedStore || !inputDate) return;
-    const dateObj = new Date(inputDate);
-    const year = dateObj.getFullYear();
-    const month = dateObj.getMonth() + 1;
-    const budgetKey = `${selectedStore}_${year}_${month}`;
-    try {
-      await setDoc(
-        doc(
-          db,
-          "artifacts",
-          appId,
-          "public",
-          "data",
-          "monthly_targets",
-          budgetKey
-        ),
-        {
-          cashTarget: Number(targetInput.cash),
-          accrualTarget: Number(targetInput.accrual),
-        },
-        { merge: true }
-      );
-      if (!silent) {
-        showToast(`${month}月目標已更新`, "success");
-        logActivity(
-          userRole,
-          currentUser?.name,
-          "更新月目標",
-          `${selectedStore} ${year}/${month}`
-        );
-      }
-    } catch (e) {
-      console.error(e);
-      showToast("目標更新失敗", "error");
+      showToast("提交失敗，請檢查網路", "error");
+    } finally {
+      setIsSubmitting(false);
     }
   };
 
@@ -316,9 +272,15 @@ const InputView = () => {
 
   return (
     <ViewWrapper>
-      <div className="max-w-2xl mx-auto space-y-6">
-        <Card title="日報與目標管理">
+      <div className="max-w-2xl mx-auto space-y-6 pb-20">
+        <Card title="日報數據回報">
           <div className="space-y-6">
+            
+            {/* 自動暫存提示 */}
+            <div className="flex items-center gap-2 text-xs text-amber-600 bg-amber-50 p-2 rounded-lg justify-center">
+               <CheckCircle size={14} /> 系統已啟用自動暫存保護，輸入內容將自動保存
+            </div>
+
             <div className="bg-stone-50 p-5 rounded-2xl border border-stone-100 space-y-4">
               <div>
                 <label className="block text-xs font-bold mb-1.5 text-stone-400 uppercase">
@@ -379,106 +341,11 @@ const InputView = () => {
                 </div>
               </div>
             </div>
-            {selectedStore && (
-              <div
-                className={`p-5 rounded-2xl border transition-all ${
-                  canEditTargets
-                    ? "bg-white border-stone-200 shadow-sm"
-                    : "bg-stone-50 border-stone-100 opacity-90"
-                }`}
-              >
-                <div className="flex justify-between items-center mb-4">
-                  <h3 className="font-bold text-stone-600 flex items-center gap-2">
-                    <Target size={18} className="text-amber-500" /> 當月營運目標
-                    ({new Date(inputDate).getMonth() + 1}月){" "}
-                    {isFirstDay && (
-                      <span className="text-xs bg-rose-100 text-rose-500 px-2 py-0.5 rounded-full ml-2">
-                        1號必填
-                      </span>
-                    )}
-                  </h3>
-                  {canEditTargets && (
-                    <button
-                      onClick={() => handleUpdateTargets(false)}
-                      className="text-xs bg-stone-800 text-white px-3 py-1.5 rounded-lg hover:bg-stone-700 transition-colors font-bold shadow-md active:scale-95"
-                    >
-                      更新目標
-                    </button>
-                  )}
-                </div>
-                <div className="flex gap-4">
-                  <div className="flex-1">
-                    <label className="block text-[10px] font-bold text-stone-400 uppercase mb-1">
-                      現金目標{" "}
-                      {isFirstDay && <span className="text-rose-500">*</span>}
-                    </label>
-                    <div className="relative">
-                      <DollarSign
-                        size={14}
-                        className="absolute left-3 top-3 text-stone-400"
-                      />
-                      <input
-                        type="number"
-                        value={targetInput.cash}
-                        onChange={(e) =>
-                          setTargetInput({
-                            ...targetInput,
-                            cash: e.target.value,
-                          })
-                        }
-                        disabled={!canEditTargets}
-                        placeholder="0"
-                        className={`w-full pl-8 pr-3 py-2 border-2 rounded-xl font-mono font-bold outline-none transition-all ${
-                          canEditTargets
-                            ? "border-stone-200 focus:border-amber-400 bg-white text-stone-700"
-                            : "border-transparent bg-stone-100 text-stone-500"
-                        }`}
-                      />
-                    </div>
-                  </div>
-                  <div className="flex-1">
-                    <label className="block text-[10px] font-bold text-stone-400 uppercase mb-1">
-                      權責目標{" "}
-                      {isFirstDay && <span className="text-rose-500">*</span>}
-                    </label>
-                    <div className="relative">
-                      <CreditCard
-                        size={14}
-                        className="absolute left-3 top-3 text-stone-400"
-                      />
-                      <input
-                        type="number"
-                        value={targetInput.accrual}
-                        onChange={(e) =>
-                          setTargetInput({
-                            ...targetInput,
-                            accrual: e.target.value,
-                          })
-                        }
-                        disabled={!canEditTargets}
-                        placeholder="0"
-                        className={`w-full pl-8 pr-3 py-2 border-2 rounded-xl font-mono font-bold outline-none transition-all ${
-                          canEditTargets
-                            ? "border-stone-200 focus:border-cyan-400 bg-white text-stone-700"
-                            : "border-transparent bg-stone-100 text-stone-500"
-                        }`}
-                      />
-                    </div>
-                  </div>
-                </div>
-                {!canEditTargets && (
-                  <p className="text-[10px] text-stone-400 mt-2 text-right">
-                    * 僅區長或每月1號可修改
-                  </p>
-                )}
-              </div>
-            )}
-            <form
-              onSubmit={handleSubmit}
-              className="bg-white p-5 rounded-2xl border border-stone-200 shadow-sm"
-            >
+
+            {/* 日報輸入表格 */}
+            <div className="bg-white p-5 rounded-2xl border border-stone-200 shadow-sm">
               <h3 className="font-bold text-stone-600 mb-4 flex items-center gap-2">
-                <FileText size={18} className="text-stone-400" /> 日報數據輸入
+                <FileText size={18} className="text-stone-400" /> 業績與客流數據
               </h3>
               <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-6">
                 {formKeys.map((key) => {
@@ -516,15 +383,98 @@ const InputView = () => {
                   );
                 })}
               </div>
-              <button
-                type="submit"
-                className="w-full bg-gradient-to-r from-stone-800 to-stone-700 hover:from-stone-700 hover:to-stone-600 text-white py-4 rounded-xl font-bold shadow-lg shadow-stone-200 transition-all active:scale-[0.98] flex items-center justify-center gap-2"
-              >
-                <Upload size={20} /> 提交日報數據
-              </button>
-            </form>
+              
+              <div className="flex gap-3">
+                <button
+                  onClick={handleReset}
+                  className="px-4 py-4 bg-stone-100 text-stone-500 rounded-xl font-bold hover:bg-stone-200 transition-colors flex items-center gap-2"
+                >
+                  <RotateCcw size={20} />
+                </button>
+                <button
+                  onClick={handlePreSubmit}
+                  disabled={isSubmitting}
+                  className="flex-1 bg-gradient-to-r from-stone-800 to-stone-700 hover:from-stone-700 hover:to-stone-600 text-white py-4 rounded-xl font-bold shadow-lg shadow-stone-200 transition-all active:scale-[0.98] flex items-center justify-center gap-2 disabled:opacity-50"
+                >
+                  {isSubmitting ? <Activity className="animate-spin" /> : <Upload size={20} />} 
+                  提交日報數據
+                </button>
+              </div>
+            </div>
           </div>
         </Card>
+
+        {/* ========================================== */}
+        {/* ★★★ 提交確認視窗 (Modal) ★★★ */}
+        {/* ========================================== */}
+        {showConfirmModal && (
+          <div className="fixed inset-0 z-[999] flex items-center justify-center p-4 bg-stone-900/60 backdrop-blur-sm animate-in fade-in duration-200">
+            <div className="bg-white rounded-2xl shadow-2xl w-full max-w-md overflow-hidden animate-in zoom-in-95 duration-200">
+              
+              {/* 標題 */}
+              <div className="bg-amber-400 p-4 flex items-center justify-between">
+                <h3 className="text-white text-lg font-bold flex items-center gap-2">
+                  <AlertCircle className="text-white" /> 請再次確認數據
+                </h3>
+                <button onClick={() => setShowConfirmModal(false)} className="text-white/80 hover:text-white">
+                  <X size={24} />
+                </button>
+              </div>
+
+              {/* 內容清單 */}
+              <div className="p-6 space-y-4">
+                <div className="bg-stone-50 p-4 rounded-xl border border-stone-100 space-y-2">
+                   <div className="flex justify-between border-b border-stone-200 pb-2 mb-2">
+                      <span className="text-stone-500 font-bold">日期</span>
+                      <span className="text-stone-800 font-mono font-bold text-lg">{inputDate}</span>
+                   </div>
+                   <div className="flex justify-between border-b border-stone-200 pb-2 mb-2">
+                      <span className="text-stone-500 font-bold">店家</span>
+                      <span className="text-stone-800 font-bold text-lg">{selectedStore}</span>
+                   </div>
+                   <div className="flex justify-between items-center">
+                      <span className="text-stone-500 font-bold">現金業績</span>
+                      <span className="text-amber-600 font-mono font-bold text-xl">${formData.cash || 0}</span>
+                   </div>
+                   <div className="flex justify-between items-center">
+                      <span className="text-stone-500 font-bold">總權責</span>
+                      <span className="text-indigo-600 font-mono font-bold text-xl">${formData.accrual || 0}</span>
+                   </div>
+                </div>
+
+                {existingReportId && (
+                  <div className="flex items-start gap-2 text-xs text-rose-500 bg-rose-50 p-3 rounded-lg border border-rose-100">
+                     <AlertCircle size={14} className="mt-0.5 shrink-0"/>
+                     <p className="font-bold">注意：系統偵測到當日已有資料，提交將會「覆蓋」原有紀錄。</p>
+                  </div>
+                )}
+
+                <div className="flex items-start gap-2 text-xs text-stone-500 bg-blue-50 p-3 rounded-lg">
+                   <AlertCircle size={14} className="text-blue-500 mt-0.5 shrink-0"/>
+                   <p>請確認日期與金額無誤。提交後若需修改，請至「數據修正中心」進行調整。</p>
+                </div>
+              </div>
+
+              {/* 按鈕區 */}
+              <div className="p-4 bg-stone-50 flex gap-3 border-t border-stone-100">
+                <button
+                  onClick={() => setShowConfirmModal(false)}
+                  className="flex-1 py-3 bg-white border border-stone-300 text-stone-600 rounded-xl font-bold hover:bg-stone-100 transition-colors"
+                >
+                  <RotateCcw size={16} className="inline mr-1"/> 返回修改
+                </button>
+                <button
+                  onClick={handleFinalSubmit}
+                  disabled={isSubmitting}
+                  className="flex-1 py-3 bg-stone-800 text-white rounded-xl font-bold hover:bg-stone-700 shadow-md transition-all flex items-center justify-center gap-2"
+                >
+                  {isSubmitting ? '提交中...' : '確認提交'} <CheckCircle size={18}/>
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
+
       </div>
     </ViewWrapper>
   );

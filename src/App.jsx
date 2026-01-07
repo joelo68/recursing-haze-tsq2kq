@@ -55,11 +55,6 @@ import {
 } from "recharts";
 
 // --- 4. Lucide Icons ---
-// 注意：我們已經移除部分被移入子元件的 Icon，但保留了可能在 DashboardView 內使用的 Icon
-// 如果發現有 Icon 消失 (undefined)，請從下方加回去
-// 找到原本 import ... from "lucide-react" 那一大段
-// 用下面這一段直接取代它：
-
 import {
   LayoutDashboard,
   Upload,
@@ -77,7 +72,7 @@ import {
   Target,
   Users,
   Award,
-  Loader2,      // <--- 補回這個 (讀取圈圈)
+  Loader2,
   FileText,
   AlertCircle,
   CheckCircle,
@@ -95,13 +90,14 @@ import {
   Activity,
   Sparkles,
   ChevronDown,
-  Coffee,       // <--- 補回這個 (錯誤就是因為少了他)
+  Coffee,
   ShoppingBag,
   CreditCard,
   Smartphone,
   Monitor,
   Bell,
 } from "lucide-react";
+
 // --- 5. 常數與工具 ---
 import {
   ROLES,
@@ -118,7 +114,7 @@ import {
   parseNumber,
 } from "./utils/helpers";
 
-// --- 6. 引入新拆分的元件 (取代原本冗長的定義) ---
+// --- 6. 引入元件 ---
 import { ViewWrapper, Card, Skeleton, Toast, ConfirmModal } from "./components/SharedUI";
 import { Sidebar, MobileTopNav } from "./components/Navigation";
 import LoginView from "./components/LoginView";
@@ -135,69 +131,7 @@ import SettingsView from "./components/SettingsView";
 import AuditView from "./components/AuditView";
 import { useAnalytics } from "./hooks/useAnalytics";
 import AnnualView from "./components/AnnualView";
-// ==================== 原本的 UI 元件定義已移除 (移至 components 資料夾) ====================
-
-// --- 接下來是 const AppContext = ... (保持原本的程式碼) ---
-// 請將你原本 App.jsx 中，從這裡往下的所有程式碼 (DashboardView, Main App component 等) 完整貼在這裡
-// 不要遺漏原本 AppContext 的定義以及 App 主程式
-// ... (以下請保留你原本檔案中 AppContext 之後的所有內容)
-
-  const handlePasswordReset = async () => {
-    setError("");
-    if (!newPassword || !oldPassword) {
-      setError("請輸入舊密碼與新密碼");
-      return;
-    }
-    setIsLoading(true);
-    let isVerified = false;
-    if (role === "store" && selectedUser) {
-      const account = storeAccounts.find((a) => a.id === selectedUser);
-      if (account && account.password === oldPassword) isVerified = true;
-    } else if (role === "manager" && selectedUser) {
-      const correctPass = managerAuth[selectedUser] || "0000";
-      if (correctPass === oldPassword) isVerified = true;
-    }
-
-    if (!isVerified) {
-      setError("舊密碼錯誤");
-      setIsLoading(false);
-      return;
-    }
-
-    let success = false;
-    if (role === "store" && selectedUser) {
-      success = await onUpdatePassword(selectedUser, newPassword);
-    } else if (role === "manager" && selectedUser) {
-      success = await onUpdateManagerPassword(selectedUser, newPassword);
-    }
-
-    if (success) {
-      alert("密碼更新成功");
-      setIsResetting(false);
-      setNewPassword("");
-      setOldPassword("");
-      setPassword("");
-    } else {
-      setError("更新失敗");
-    }
-    setIsLoading(false);
-  };
-
-
-// --- Dashboard View ---
-// --- Regional View ---
-// --- Ranking View ---
-// --- StoreAnalysis View ---
-
-// --- Audit View ---
-
-// --- Input View ---
-
-// --- History View ---
-
-// --- Settings View ---
-
-// --- Log View ---
+import TargetView from "./components/TargetView"; // ★★★ 新增：引入目標設定頁面 ★★★
 
 // --- Main App Component ---
 export default function App() {
@@ -378,6 +312,8 @@ export default function App() {
       currentUser?.name || (userRole === "director" ? "總監" : "未知");
     if (userRole) logActivity(userRole, userName, "登出系統", "使用者手動登出");
     localStorage.removeItem("cyj_input_draft");
+    localStorage.removeItem("cyj_input_draft_v2"); // 清除新版暫存
+    localStorage.removeItem("cyj_input_draft_v3"); // 清除最新版暫存
     setUserRole(null);
     setCurrentUser(null);
     setActiveView("dashboard");
@@ -474,15 +410,14 @@ export default function App() {
     return managers;
   }, [managers, userRole, currentUser]);
 
- // --- Analytics Logic (從 Hook 引入) ---
   const analytics = useAnalytics(
-    visibleRawData,   // 傳入篩選後的日報資料
-    visibleManagers,  // 傳入篩選後的組織架構
-    budgets,          // 傳入預算資料
-    selectedYear,     // 傳入年份
-    selectedMonth     // 傳入月份
+    visibleRawData,
+    visibleManagers,
+    budgets,
+    selectedYear,
+    selectedMonth
   );
-  // --- Helpers ---
+
   const showToast = (message, type = "info") => setToast({ message, type });
   
   const openConfirm = useCallback(
@@ -505,7 +440,6 @@ export default function App() {
   const fmtMoney = (val) => `$${(val || 0).toLocaleString()}`;
   const fmtNum = (val) => (val || 0).toLocaleString();
 
-  // --- Context Value (被誤刪的部分) ---
   const contextValue = useMemo(
     () => ({
       user,
@@ -612,7 +546,8 @@ export default function App() {
               </button>
               <h1 className="text-xl md:text-2xl font-extrabold text-stone-800 tracking-tight truncate hidden sm:block flex items-center gap-2">
                 <span className="text-amber-600">●</span>{" "}
-                {ALL_MENU_ITEMS.find((i) => i.id === activeView)?.label}
+                {/* 顯示標題：如果找不到 (例如是新的 targets 頁面)，就顯示預設文字 */}
+                {ALL_MENU_ITEMS.find((i) => i.id === activeView)?.label || (activeView === 'targets' ? '年度目標設定' : 'DRCYJ System')}
               </h1>
               <h1 className="text-lg font-bold text-stone-800 tracking-tight truncate md:hidden flex items-center gap-2">
                 <Coffee size={20} className="text-amber-600" /> DRCYJ Cloud
@@ -702,6 +637,8 @@ export default function App() {
             {activeView === "settings" && <SettingsView />}
             {activeView === "annual" && <AnnualView />}
             {activeView === "store-analysis" && <StoreAnalysisView />}
+            {/* ★★★ 新增：顯示目標設定頁面 ★★★ */}
+            {activeView === "targets" && <TargetView />}
           </main>
         </div>
         {toast && (
@@ -722,4 +659,3 @@ export default function App() {
     </AppContext.Provider>
   );
 }
-// ★★★ 這一行非常重要，絕對不能少 ★★★
