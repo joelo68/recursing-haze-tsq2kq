@@ -196,21 +196,21 @@ const TargetView = () => {
 
             <div className="flex flex-wrap gap-3 w-full md:w-auto">
               {/* 年份選擇 */}
-              <div className="relative min-w-[100px]">
+              <div className="relative min-w-[100px] flex-1 md:flex-none">
                  <select
                    value={selectedYear}
                    onChange={(e) => setSelectedYear(Number(e.target.value))}
-                   className="w-full pl-9 pr-4 py-2 bg-stone-50 border border-stone-200 rounded-xl font-bold text-stone-700 outline-none focus:border-indigo-400 appearance-none"
+                   className="w-full pl-9 pr-4 py-3 md:py-2 bg-stone-50 border border-stone-200 rounded-xl font-bold text-stone-700 outline-none focus:border-indigo-400 appearance-none"
                  >
                    <option value={currentYear - 1}>{currentYear - 1} 年</option>
                    <option value={currentYear}>{currentYear} 年</option>
                    <option value={currentYear + 1}>{currentYear + 1} 年</option>
                  </select>
-                 <Calendar className="absolute left-3 top-2.5 text-stone-400 pointer-events-none" size={16} />
+                 <Calendar className="absolute left-3 top-3.5 md:top-2.5 text-stone-400 pointer-events-none" size={16} />
               </div>
 
               {/* 區域選擇 (僅總監) */}
-              <div className="relative min-w-[120px]">
+              <div className="relative min-w-[120px] flex-1 md:flex-none">
                  <select
                     value={selectedManager}
                     onChange={(e) => {
@@ -218,7 +218,7 @@ const TargetView = () => {
                       setSelectedStore("");
                     }}
                     disabled={userRole !== "director"}
-                    className="w-full pl-3 pr-8 py-2 bg-stone-50 border border-stone-200 rounded-xl font-bold text-stone-700 outline-none focus:border-indigo-400 disabled:opacity-50"
+                    className="w-full pl-3 pr-8 py-3 md:py-2 bg-stone-50 border border-stone-200 rounded-xl font-bold text-stone-700 outline-none focus:border-indigo-400 disabled:opacity-50"
                   >
                     <option value="">選擇區域...</option>
                     {Object.keys(managers).map((m) => (
@@ -228,116 +228,204 @@ const TargetView = () => {
               </div>
 
               {/* 店家選擇 */}
-              <div className="relative min-w-[140px]">
+              <div className="relative min-w-[140px] flex-1 md:flex-none">
                   <select
                     value={selectedStore}
                     onChange={(e) => setSelectedStore(e.target.value)}
                     disabled={!selectedManager}
-                    className="w-full pl-9 pr-4 py-2 bg-stone-50 border border-stone-200 rounded-xl font-bold text-stone-700 outline-none focus:border-indigo-400 appearance-none disabled:opacity-50"
+                    className="w-full pl-9 pr-4 py-3 md:py-2 bg-stone-50 border border-stone-200 rounded-xl font-bold text-stone-700 outline-none focus:border-indigo-400 appearance-none disabled:opacity-50"
                   >
                     <option value="">選擇店家...</option>
                     {availableStores.map((s) => (
                       <option key={s} value={s}>{s}</option>
                     ))}
                   </select>
-                  <Store className="absolute left-3 top-2.5 text-stone-400 pointer-events-none" size={16} />
+                  <Store className="absolute left-3 top-3.5 md:top-2.5 text-stone-400 pointer-events-none" size={16} />
               </div>
             </div>
           </div>
         </Card>
 
-        {/* 12個月輸入表格 */}
         {selectedStore ? (
-          <Card title={`${selectedStore} - ${selectedYear} 年度預算表`}>
-            <div className="overflow-hidden rounded-xl border border-stone-200">
-              <table className="w-full text-sm text-left">
-                <thead className="bg-stone-50 text-stone-500 font-bold border-b border-stone-200">
-                  <tr>
-                    <th className="py-3 pl-4">月份</th>
-                    <th className="py-3 px-2">現金目標 (Cash)</th>
-                    <th className="py-3 px-2">權責目標 (Accrual)</th>
-                    <th className="py-3 px-2 w-[80px]">狀態</th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-stone-100">
-                  {monthTargets.map((item, idx) => {
-                    const locked = isMonthLocked(idx);
-                    
-                    return (
-                      <tr key={item.month} className={`transition-colors ${locked ? 'bg-stone-50/50' : 'hover:bg-stone-50'}`}>
-                        <td className="py-2 pl-4 font-bold text-stone-600 w-[80px]">
-                          {item.month} 月
-                        </td>
-                        <td className="py-2 px-2">
-                          <div className="relative">
-                            <DollarSign size={14} className={`absolute left-3 top-3 ${locked ? 'text-stone-300' : 'text-stone-400'}`} />
-                            <input
-                              type="text"
-                              placeholder={locked ? "-" : "0"}
-                              value={item.cashTarget}
-                              onChange={(e) => handleInputChange(idx, 'cashTarget', e.target.value)}
-                              disabled={locked}
-                              className={`w-full pl-8 pr-3 py-2 border rounded-lg font-mono font-bold outline-none transition-colors
-                                ${locked
-                                  ? "bg-transparent text-stone-400 border-transparent cursor-not-allowed" 
-                                  : "bg-white text-stone-700 border-stone-200 focus:border-amber-400 focus:ring-2 focus:ring-amber-100"
-                                }
-                              `}
-                            />
-                          </div>
-                        </td>
-                        <td className="py-2 px-2">
-                           <div className="relative">
-                            <CreditCard size={14} className={`absolute left-3 top-3 ${locked ? 'text-stone-300' : 'text-stone-400'}`} />
-                            <input
-                              type="text"
-                              placeholder={locked ? "-" : "0"}
-                              value={item.accrualTarget}
-                              onChange={(e) => handleInputChange(idx, 'accrualTarget', e.target.value)}
-                              disabled={locked}
-                              className={`w-full pl-8 pr-3 py-2 border rounded-lg font-mono font-bold outline-none transition-colors
-                                ${locked
-                                  ? "bg-transparent text-stone-400 border-transparent cursor-not-allowed" 
-                                  : "bg-white text-stone-700 border-stone-200 focus:border-indigo-400 focus:ring-2 focus:ring-indigo-100"
-                                }
-                              `}
-                            />
-                          </div>
-                        </td>
-                        <td className="py-2 px-2 text-center">
-                          {locked ? (
-                            <div className="flex items-center justify-center text-stone-300" title="已鎖定 (僅區長可修改)">
-                              <Lock size={16} />
-                            </div>
-                          ) : (
-                            item.cashTarget ? (
-                              <div className="flex items-center justify-center text-emerald-500" title="待儲存">
-                                <CheckCircle size={16} className="opacity-0 group-hover:opacity-50" />
-                              </div>
-                            ) : (
-                              <div className="flex items-center justify-center text-stone-200">
-                                <TrendingUp size={16} />
-                              </div>
-                            )
-                          )}
-                        </td>
+          <>
+            {/* ★★★ 1. 電腦版視圖 (Desktop Table) - 僅在 md 以上顯示 ★★★ */}
+            <div className="hidden md:block">
+              <Card title={`${selectedStore} - ${selectedYear} 年度預算表`}>
+                <div className="overflow-hidden rounded-xl border border-stone-200">
+                  <table className="w-full text-sm text-left">
+                    <thead className="bg-stone-50 text-stone-500 font-bold border-b border-stone-200">
+                      <tr>
+                        <th className="py-3 pl-4">月份</th>
+                        <th className="py-3 px-2">現金目標 (Cash)</th>
+                        <th className="py-3 px-2">權責目標 (Accrual)</th>
+                        <th className="py-3 px-2 w-[80px]">狀態</th>
                       </tr>
-                    );
-                  })}
-                </tbody>
-              </table>
+                    </thead>
+                    <tbody className="divide-y divide-stone-100">
+                      {monthTargets.map((item, idx) => {
+                        const locked = isMonthLocked(idx);
+                        return (
+                          <tr key={item.month} className={`transition-colors ${locked ? 'bg-stone-50/50' : 'hover:bg-stone-50'}`}>
+                            <td className="py-2 pl-4 font-bold text-stone-600 w-[80px]">
+                              {item.month} 月
+                            </td>
+                            <td className="py-2 px-2">
+                              <div className="relative">
+                                <DollarSign size={14} className={`absolute left-3 top-3 ${locked ? 'text-stone-300' : 'text-stone-400'}`} />
+                                <input
+                                  type="text"
+                                  placeholder={locked ? "-" : "0"}
+                                  value={item.cashTarget}
+                                  onChange={(e) => handleInputChange(idx, 'cashTarget', e.target.value)}
+                                  disabled={locked}
+                                  className={`w-full pl-8 pr-3 py-2 border rounded-lg font-mono font-bold outline-none transition-colors
+                                    ${locked
+                                      ? "bg-transparent text-stone-400 border-transparent cursor-not-allowed" 
+                                      : "bg-white text-stone-700 border-stone-200 focus:border-amber-400 focus:ring-2 focus:ring-amber-100"
+                                    }
+                                  `}
+                                />
+                              </div>
+                            </td>
+                            <td className="py-2 px-2">
+                               <div className="relative">
+                                <CreditCard size={14} className={`absolute left-3 top-3 ${locked ? 'text-stone-300' : 'text-stone-400'}`} />
+                                <input
+                                  type="text"
+                                  placeholder={locked ? "-" : "0"}
+                                  value={item.accrualTarget}
+                                  onChange={(e) => handleInputChange(idx, 'accrualTarget', e.target.value)}
+                                  disabled={locked}
+                                  className={`w-full pl-8 pr-3 py-2 border rounded-lg font-mono font-bold outline-none transition-colors
+                                    ${locked
+                                      ? "bg-transparent text-stone-400 border-transparent cursor-not-allowed" 
+                                      : "bg-white text-stone-700 border-stone-200 focus:border-indigo-400 focus:ring-2 focus:ring-indigo-100"
+                                    }
+                                  `}
+                                />
+                              </div>
+                            </td>
+                            <td className="py-2 px-2 text-center">
+                              {locked ? (
+                                <div className="flex items-center justify-center text-stone-300" title="已鎖定">
+                                  <Lock size={16} />
+                                </div>
+                              ) : (
+                                item.cashTarget ? (
+                                  <div className="flex items-center justify-center text-emerald-500">
+                                    <CheckCircle size={16} className="opacity-0 group-hover:opacity-50" />
+                                  </div>
+                                ) : (
+                                  <div className="flex items-center justify-center text-stone-200">
+                                    <TrendingUp size={16} />
+                                  </div>
+                                )
+                              )}
+                            </td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                </div>
+              </Card>
             </div>
 
-            <div className="mt-6 flex justify-end">
+            {/* ★★★ 2. 手機版視圖 (Mobile Cards) - 僅在 md 以下顯示 ★★★ */}
+            <div className="md:hidden space-y-4">
+              <div className="flex items-center justify-between px-2">
+                <h3 className="font-bold text-stone-700 text-lg flex items-center gap-2">
+                  <Store size={18} className="text-amber-500"/> 
+                  {selectedStore} 
+                  <span className="text-xs font-normal text-stone-400 bg-white px-2 py-1 rounded-full border">{selectedYear}</span>
+                </h3>
+              </div>
+
+              {monthTargets.map((item, idx) => {
+                const locked = isMonthLocked(idx);
+                return (
+                  <div 
+                    key={item.month} 
+                    className={`p-4 rounded-2xl border shadow-sm transition-all
+                      ${locked 
+                        ? "bg-stone-100 border-stone-200 opacity-80" 
+                        : "bg-white border-stone-100"
+                      }
+                    `}
+                  >
+                    <div className="flex justify-between items-center mb-4 border-b border-stone-100 pb-2">
+                      <h4 className="font-bold text-lg text-stone-700 flex items-center gap-2">
+                        <span className="bg-stone-800 text-white text-xs px-2 py-1 rounded-md">{item.month} 月</span>
+                        {item.cashTarget && !locked && <CheckCircle size={16} className="text-emerald-500"/>}
+                      </h4>
+                      {locked && (
+                        <div className="flex items-center gap-1 text-xs font-bold text-stone-400 bg-stone-200 px-2 py-1 rounded-lg">
+                          <Lock size={12} /> 已鎖定
+                        </div>
+                      )}
+                    </div>
+
+                    <div className="space-y-4">
+                      {/* 現金目標輸入 */}
+                      <div>
+                        <label className="text-xs font-bold text-stone-400 mb-1 block flex items-center gap-1">
+                          <DollarSign size={12}/> 現金目標 (Cash)
+                        </label>
+                        <input
+                          type="text"
+                          inputMode="numeric" // 手機彈出數字鍵盤
+                          placeholder={locked ? "未設定" : "輸入金額..."}
+                          value={item.cashTarget}
+                          onChange={(e) => handleInputChange(idx, 'cashTarget', e.target.value)}
+                          disabled={locked}
+                          className={`w-full p-3 border-2 rounded-xl text-lg font-bold outline-none transition-all
+                            ${locked
+                              ? "bg-transparent border-transparent text-stone-400" 
+                              : "bg-stone-50 border-stone-100 text-stone-800 focus:bg-white focus:border-amber-400 focus:shadow-lg"
+                            }
+                          `}
+                        />
+                      </div>
+
+                      {/* 權責目標輸入 */}
+                      <div>
+                        <label className="text-xs font-bold text-stone-400 mb-1 block flex items-center gap-1">
+                          <CreditCard size={12}/> 權責目標 (Accrual)
+                        </label>
+                        <input
+                          type="text"
+                          inputMode="numeric" // 手機彈出數字鍵盤
+                          placeholder={locked ? "未設定" : "輸入金額..."}
+                          value={item.accrualTarget}
+                          onChange={(e) => handleInputChange(idx, 'accrualTarget', e.target.value)}
+                          disabled={locked}
+                          className={`w-full p-3 border-2 rounded-xl text-lg font-bold outline-none transition-all
+                            ${locked
+                              ? "bg-transparent border-transparent text-stone-400" 
+                              : "bg-stone-50 border-stone-100 text-stone-800 focus:bg-white focus:border-indigo-400 focus:shadow-lg"
+                            }
+                          `}
+                        />
+                      </div>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+
+            {/* 底部懸浮儲存按鈕 (手機版優化) */}
+            <div className="fixed bottom-6 left-0 right-0 px-4 md:static md:px-0 z-50 md:mt-6 md:flex md:justify-end">
                <button
                  onClick={handleSaveAll}
                  disabled={isSaving}
-                 className="px-8 py-3 bg-stone-800 text-white rounded-xl font-bold shadow-lg hover:bg-stone-700 hover:shadow-xl active:scale-95 transition-all flex items-center gap-2 disabled:opacity-50"
+                 className="w-full md:w-auto px-8 py-4 md:py-3 bg-stone-800 text-white rounded-2xl md:rounded-xl font-bold shadow-2xl md:shadow-lg hover:bg-stone-700 hover:shadow-xl active:scale-95 transition-all flex items-center justify-center gap-2 disabled:opacity-50"
                >
-                 {isSaving ? "儲存中..." : <><Save size={18} /> 儲存設定</>}
+                 {isSaving ? "儲存中..." : <><Save size={20} /> 儲存設定</>}
                </button>
             </div>
-          </Card>
+            {/* 墊高底部，避免最後一張卡片被懸浮按鈕擋住 */}
+            <div className="h-24 md:hidden"></div>
+          </>
         ) : (
           <div className="py-20 text-center text-stone-400 bg-stone-50 rounded-2xl border-2 border-dashed border-stone-200">
              <Store size={48} className="mx-auto mb-2 opacity-20" />

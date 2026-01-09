@@ -10,19 +10,21 @@ import {
   Activity,
   Settings,
   Calendar, 
-  Target, // ★ 1. 新增這個 Icon (用於年度目標設定)
+  Target, // 年度目標設定 Icon
 } from "lucide-react";
 
 export const ROLES = {
   DIRECTOR: { id: "director", label: "總監", pass: "16500" },
   MANAGER: { id: "manager", label: "區長", pass: null },
   STORE: { id: "store", label: "店經理", pass: null },
+  // ★★★ 1. 新增管理師身份 ★★★
+  THERAPIST: { id: "therapist", label: "管理師", pass: null },
 };
 
 export const ALL_MENU_ITEMS = [
   { id: "dashboard", label: "營運總覽", icon: LayoutDashboard },
-  { id: "annual", label: "年度分析", icon: Calendar }, // 這是看報表的
-  { id: "targets", label: "年度目標設定", icon: Target }, // ★ 2. 新增這個項目 (這是您剛剛做的輸入頁面)
+  { id: "annual", label: "年度分析", icon: Calendar },
+  { id: "targets", label: "年度目標設定", icon: Target },
   { id: "regional", label: "區域分析", icon: MapIcon },
   { id: "store-analysis", label: "單店分析", icon: Store },
   { id: "ranking", label: "詳細報表", icon: TrendingUp },
@@ -42,12 +44,15 @@ export const DEFAULT_REGIONAL_MANAGERS = {
 };
 
 export const DEFAULT_PERMISSIONS = {
-  // 總監擁有所有權限 (包含 targets)
+  // 總監擁有所有權限
   director: ALL_MENU_ITEMS.map((i) => i.id),
   
-  // ★ 3. 記得把 "targets" 加給區長 (如果需要的話)
+  // 區長權限
   manager: ["dashboard", "annual", "targets", "regional", "store-analysis", "audit"],
   
-  // 店長通常只需要看分析和輸入日報，不需要設定年度目標，所以這裡不加 targets
-  store: ["dashboard", "annual", "store-analysis", "ranking", "history", "input"],
+  // 店經理權限 (補上 targets 以便進行目標設定)
+  store: ["dashboard", "annual", "targets", "store-analysis", "ranking", "history", "input"],
+
+  // ★★★ 2. 設定管理師權限 (目前先開放日報輸入) ★★★
+  therapist: ["input"],
 };

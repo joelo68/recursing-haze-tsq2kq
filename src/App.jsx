@@ -131,7 +131,7 @@ import SettingsView from "./components/SettingsView";
 import AuditView from "./components/AuditView";
 import { useAnalytics } from "./hooks/useAnalytics";
 import AnnualView from "./components/AnnualView";
-import TargetView from "./components/TargetView"; // ★★★ 新增：引入目標設定頁面 ★★★
+import TargetView from "./components/TargetView";
 
 // --- Main App Component ---
 export default function App() {
@@ -156,6 +156,10 @@ export default function App() {
   const [storeAccounts, setStoreAccounts] = useState([]);
   const [managerAuth, setManagerAuth] = useState({});
   const [permissions, setPermissions] = useState(DEFAULT_PERMISSIONS);
+  
+  // ★ 新增：管理師名單狀態 (用於身分識別)
+  const [therapists, setTherapists] = useState([]);
+
   const [selectedYear, setSelectedYear] = useState(
     new Date().getFullYear().toString()
   );
@@ -288,6 +292,13 @@ export default function App() {
       ),
       (s) => s.exists() && setPermissions(s.data())
     );
+    
+    // ★ 關鍵：讀取管理師名單
+    const unsubTherapists = onSnapshot(
+      collection(db, "artifacts", appId, "public", "data", "therapists"),
+      (s) => setTherapists(s.docs.map((d) => ({ id: d.id, ...d.data() })))
+    );
+
     return () => {
       unsubReports();
       unsubBudgets();
@@ -296,28 +307,56 @@ export default function App() {
       unsubAccounts();
       unsubManagerAuth();
       unsubPermissions();
+      unsubTherapists();
     };
   }, [user]);
 
+  // ★★★ 關鍵修正：登入時自動補全管理師資料 (店名) ★★★
   const handleLogin = (roleId, userInfo = null) => {
+    let finalUser = userInfo;
+
+    // 如果是管理師登入，嘗試從名單中補全店名
+    if (roleId === 'therapist' && userInfo?.name) {
+       console.log("正在補全管理師資料:", userInfo.name);
+       const foundTherapist = therapists.find(t => t.name === userInfo.name);
+       
+       if (foundTherapist) {
+         console.log("找到完整資料:", foundTherapist);
+         finalUser = {
+           ...userInfo,
+           ...foundTherapist, // 這會把 store: "蘆洲" 補進去
+           id: foundTherapist.id || userInfo.id
+         };
+       }
+    }
+
     setUserRole(roleId);
-    if (userInfo) setCurrentUser(userInfo);
-    const userName =
-      userInfo?.name || (roleId === "director" ? "總監" : "未知");
+    if (finalUser) setCurrentUser(finalUser);
+    
+    const userName = finalUser?.name || (roleId === "director" ? "總監" : "未知");
     logActivity(roleId, userName, "登入系統", "登入成功");
-    setActiveView(roleId === ROLES.STORE.id ? "input" : "dashboard");
+    
+    // 只有管理師預設跳轉到日報輸入
+    if (roleId === "therapist") {
+      setActiveView("input");
+    } else {
+      setActiveView("dashboard");
+    }
   };
+
   const handleLogout = () => {
     const userName =
       currentUser?.name || (userRole === "director" ? "總監" : "未知");
     if (userRole) logActivity(userRole, userName, "登出系統", "使用者手動登出");
     localStorage.removeItem("cyj_input_draft");
-    localStorage.removeItem("cyj_input_draft_v2"); // 清除新版暫存
-    localStorage.removeItem("cyj_input_draft_v3"); // 清除最新版暫存
+    localStorage.removeItem("cyj_input_draft_v2"); 
+    localStorage.removeItem("cyj_input_draft_v3"); 
+    localStorage.removeItem("cyj_therapist_draft"); 
     setUserRole(null);
     setCurrentUser(null);
     setActiveView("dashboard");
   };
+  
   const handleUpdateStorePassword = async (id, newPass) => {
     try {
       const updated = storeAccounts.map((a) =>
@@ -449,6 +488,7 @@ export default function App() {
       budgets,
       targets,
       rawData: visibleRawData,
+      allReports: rawData, // ★★★ 關鍵修改：將原始全區資料 (rawData) 暴露為 allReports，供 Dashboard 計算排名用
       showToast,
       openConfirm,
       fmtMoney,
@@ -470,6 +510,7 @@ export default function App() {
       navigateToStore,
       activeView,
       appId,
+      therapists, 
     }),
     [
       user,
@@ -479,6 +520,7 @@ export default function App() {
       budgets,
       targets,
       visibleRawData,
+      rawData, // ★ Dependency 記得加入 rawData
       inputDate,
       selectedYear,
       selectedMonth,
@@ -493,6 +535,7 @@ export default function App() {
       navigateToStore,
       activeView,
       appId,
+      therapists,
     ]
   );
 
@@ -512,6 +555,7 @@ export default function App() {
         storeAccounts={storeAccounts}
         managers={managers}
         managerAuth={managerAuth}
+        therapists={therapists}
         onUpdatePassword={handleUpdateStorePassword}
         onUpdateManagerPassword={handleUpdateManagerPassword}
       />
@@ -546,7 +590,6 @@ export default function App() {
               </button>
               <h1 className="text-xl md:text-2xl font-extrabold text-stone-800 tracking-tight truncate hidden sm:block flex items-center gap-2">
                 <span className="text-amber-600">●</span>{" "}
-                {/* 顯示標題：如果找不到 (例如是新的 targets 頁面)，就顯示預設文字 */}
                 {ALL_MENU_ITEMS.find((i) => i.id === activeView)?.label || (activeView === 'targets' ? '年度目標設定' : 'DRCYJ System')}
               </h1>
               <h1 className="text-lg font-bold text-stone-800 tracking-tight truncate md:hidden flex items-center gap-2">
@@ -637,7 +680,6 @@ export default function App() {
             {activeView === "settings" && <SettingsView />}
             {activeView === "annual" && <AnnualView />}
             {activeView === "store-analysis" && <StoreAnalysisView />}
-            {/* ★★★ 新增：顯示目標設定頁面 ★★★ */}
             {activeView === "targets" && <TargetView />}
           </main>
         </div>

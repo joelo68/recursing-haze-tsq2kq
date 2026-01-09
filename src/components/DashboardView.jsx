@@ -1,5 +1,5 @@
 // src/components/DashboardView.jsx
-import React, { useContext } from "react";
+import React, { useContext, useMemo } from "react";
 
 // 1. 引入圖表庫 (Recharts)
 import {
@@ -11,7 +11,7 @@ import {
 import {
   TrendingUp, DollarSign, Target, Users, Award, Loader2,
   CheckSquare, Activity, Sparkles, ShoppingBag, CreditCard,
-  FileWarning
+  FileWarning, Trophy, Medal, AlertTriangle, Crown, Map
 } from "lucide-react";
 
 // 3. 引入共用元件與工具
@@ -21,9 +21,70 @@ import { formatNumber } from "../utils/helpers";
 import { AppContext } from "../AppContext";
 
 const DashboardView = () => {
-  const { analytics, fmtMoney, fmtNum, targets, selectedYear } = useContext(AppContext);
+  const { analytics, fmtMoney, fmtNum, targets, userRole, currentUser, allReports, budgets, managers, selectedYear, selectedMonth } = useContext(AppContext);
 
-  // 防護機制：避免資料載入前白畫面
+  // --- 通用排名計算邏輯 (支援 店長 & 區長) ---
+  const myRankings = useMemo(() => {
+    if ((userRole !== 'store' && userRole !== 'manager') || !allReports) return [];
+
+    // 1. 計算「全區」所有店家的當月業績
+    const storeStats = {};
+    allReports.forEach(report => {
+      const rDate = new Date(report.date);
+      if (rDate.getFullYear() !== parseInt(selectedYear) || (rDate.getMonth() + 1) !== parseInt(selectedMonth)) {
+        return;
+      }
+      const sName = report.storeName;
+      if (!storeStats[sName]) storeStats[sName] = 0;
+      storeStats[sName] += (Number(report.cash) || 0);
+    });
+
+    // 2. 轉換為陣列並計算達成率
+    const rankingList = Object.keys(storeStats).map(storeName => {
+      const budgetKey = `${storeName}_${selectedYear}_${parseInt(selectedMonth)}`;
+      const budgetData = budgets[budgetKey];
+      const target = budgetData ? Number(budgetData.cashTarget || 0) : 0;
+      const actual = storeStats[storeName];
+      const rate = target > 0 ? (actual / target) * 100 : 0;
+
+      return { storeName, actual, target, rate };
+    });
+
+    // 3. 全區排序 (高 -> 低)
+    rankingList.sort((a, b) => b.rate - a.rate);
+
+    // 4. 標記名次與是否為後段班
+    const fullRankedList = rankingList.map((item, index) => ({
+      ...item,
+      rank: index + 1,
+      totalStores: rankingList.length,
+      isBottom5: (index + 1) > (rankingList.length - 5)
+    }));
+
+    // 5. 根據角色篩選「我管理的店家」
+    let myManagedStores = [];
+    if (userRole === 'store' && currentUser) {
+      myManagedStores = currentUser.stores || [currentUser.storeName];
+    } else if (userRole === 'manager' && managers) {
+      // 區長：從 managers 物件中取出該區長名下的所有店
+      myManagedStores = Object.values(managers).flat().map(s => `CYJ${s}店`);
+    }
+
+    // 6. 過濾結果
+    const myResults = fullRankedList.filter(item => 
+      myManagedStores.some(myStore => {
+         const cleanMy = myStore.replace("CYJ","").replace("店","");
+         const cleanItem = item.storeName.replace("CYJ","").replace("店","");
+         return cleanItem === cleanMy;
+      })
+    );
+
+    return myResults;
+
+  }, [userRole, allReports, currentUser, managers, budgets, selectedYear, selectedMonth]);
+
+
+  // 防護機制
   if (!analytics || !analytics.grandTotal) {
     return (
       <div className="flex h-96 items-center justify-center">
@@ -43,25 +104,15 @@ const DashboardView = () => {
 
   const MiniKpiCard = ({ title, value, subText, icon: Icon, color }) => (
     <div className="bg-white p-5 rounded-3xl border border-stone-100 shadow-sm hover:shadow-md transition-all group relative overflow-hidden">
-      <div
-        className={`absolute top-0 right-0 p-3 opacity-10 group-hover:opacity-20 transition-opacity ${color}`}
-      >
+      <div className={`absolute top-0 right-0 p-3 opacity-10 group-hover:opacity-20 transition-opacity ${color}`}>
         <Icon size={64} />
       </div>
       <div className="flex flex-col h-full justify-between relative z-10">
         <div>
-          <p className="text-stone-400 text-xs font-bold uppercase tracking-wider mb-1">
-            {title}
-          </p>
-          <h3 className="text-2xl font-extrabold text-stone-700 font-mono tracking-tight">
-            {value}
-          </h3>
+          <p className="text-stone-400 text-xs font-bold uppercase tracking-wider mb-1">{title}</p>
+          <h3 className="text-2xl font-extrabold text-stone-700 font-mono tracking-tight">{value}</h3>
         </div>
-        {subText && (
-          <div className="mt-3 pt-3 border-t border-stone-50 text-xs font-medium text-stone-500 flex items-center gap-1">
-            {subText}
-          </div>
-        )}
+        {subText && <div className="mt-3 pt-3 border-t border-stone-50 text-xs font-medium text-stone-500 flex items-center gap-1">{subText}</div>}
       </div>
     </div>
   );
@@ -69,7 +120,166 @@ const DashboardView = () => {
   return (
     <ViewWrapper>
       <div className="space-y-8 pb-10">
-        {/* 月度監控區塊 (Day X) */}
+        
+        {/* =====================================================================================
+            1. 店經理視圖 (Store View) - 維持原本的卡片式設計
+           ===================================================================================== */}
+        {userRole === 'store' && myRankings.length > 0 && (
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-6 animate-in slide-in-from-top-4 duration-500">
+            {myRankings.map((storeRank) => (
+              <div 
+                key={storeRank.storeName} 
+                className={`rounded-3xl p-6 text-white shadow-xl relative overflow-hidden transition-all
+                  ${storeRank.isBottom5 
+                    ? "bg-gradient-to-br from-rose-500 to-red-600 shadow-rose-200" 
+                    : "bg-gradient-to-br from-amber-400 to-orange-600 shadow-amber-200"
+                  }
+                `}
+              >
+                <div className="absolute top-0 right-0 p-4 opacity-10">
+                  {storeRank.isBottom5 ? <AlertTriangle size={120} /> : <Trophy size={120} />}
+                </div>
+                <div className="relative z-10">
+                  <div className="flex items-center gap-2 mb-4">
+                    <div className="bg-white/20 p-2 rounded-lg backdrop-blur-sm">
+                      {storeRank.isBottom5 ? <Activity size={20} className="text-white" /> : <Medal size={20} className="text-yellow-100" />}
+                    </div>
+                    <h3 className="font-bold text-lg tracking-wider opacity-90">{storeRank.storeName}</h3>
+                    {storeRank.isBottom5 && (
+                      <span className="ml-auto bg-white/20 px-2 py-1 rounded text-xs font-bold flex items-center gap-1">需加強</span>
+                    )}
+                  </div>
+                  <div className="flex items-end gap-4 mb-2">
+                    <div>
+                      <p className="text-white/80 text-xs font-bold uppercase mb-1">全區排名</p>
+                      <div className="flex items-baseline gap-2">
+                        <span className="text-5xl font-extrabold font-mono text-white tracking-tighter">No.{storeRank.rank}</span>
+                        <span className="text-white/60 font-bold text-sm">/ {storeRank.totalStores}</span>
+                      </div>
+                    </div>
+                    <div className="flex-1 text-right">
+                      <p className="text-white/80 text-xs font-bold uppercase mb-1">目標達成率</p>
+                      <p className="text-3xl font-mono font-bold text-white">{storeRank.rate.toFixed(1)}%</p>
+                    </div>
+                  </div>
+                  <div className="mt-4 pt-4 border-t border-white/20 flex justify-between text-xs font-medium text-white/90">
+                    <span>目前業績: {fmtMoney(storeRank.actual)}</span>
+                    <span>目標: {fmtMoney(storeRank.target)}</span>
+                  </div>
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+
+        {/* =====================================================================================
+            2. 區長視圖 (Manager View) - 統一列表式戰情看板 (★ 配色優化版 ★)
+           ===================================================================================== */}
+        {userRole === 'manager' && myRankings.length > 0 && (
+          <div className="animate-in slide-in-from-top-4 duration-500">
+            <div className="bg-white rounded-3xl border border-stone-200 shadow-xl overflow-hidden relative">
+              {/* 頂部標題列 (已改為暖色系) */}
+              <div className="bg-gradient-to-r from-amber-500 to-orange-600 p-6 flex justify-between items-center text-white relative overflow-hidden">
+                <div className="absolute right-0 top-0 p-4 opacity-10"><Map size={100} /></div>
+                <div className="relative z-10 flex items-center gap-3">
+                  <div className="p-2 bg-white/20 rounded-xl backdrop-blur-md">
+                    <Crown size={24} className="text-white" />
+                  </div>
+                  <div>
+                    <h3 className="text-xl font-bold tracking-wide">區域門市戰情排行</h3>
+                    <p className="text-amber-100 text-xs font-medium">Rankings & Performance</p>
+                  </div>
+                </div>
+                <div className="relative z-10 text-right">
+                  <p className="text-xs text-amber-100 font-bold uppercase">管理店家數</p>
+                  <p className="text-2xl font-mono font-bold text-white">{myRankings.length}</p>
+                </div>
+              </div>
+
+              {/* 列表內容 */}
+              <div className="p-2">
+                <table className="w-full text-left border-collapse">
+                  <thead>
+                    <tr className="text-xs font-bold text-stone-400 border-b border-stone-100">
+                      <th className="p-4 w-20 text-center">排名</th>
+                      <th className="p-4">門市名稱</th>
+                      <th className="p-4 text-right">目前業績</th>
+                      <th className="p-4 text-right hidden sm:table-cell">目標金額</th>
+                      <th className="p-4 text-right">達成率</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {myRankings.map((store, idx) => (
+                      <tr 
+                        key={store.storeName} 
+                        className={`group transition-colors border-b last:border-0 border-stone-50
+                          ${store.isBottom5 
+                            ? "bg-rose-50 hover:bg-rose-100" // 後五名：紅色警示背景
+                            : "hover:bg-stone-50"            // 正常：灰色互動背景
+                          }
+                        `}
+                      >
+                        {/* 排名 */}
+                        <td className="p-4 text-center">
+                          <span className={`inline-flex items-center justify-center w-8 h-8 rounded-full text-xs font-bold
+                            ${idx === 0 ? "bg-amber-100 text-amber-700" : 
+                              idx === 1 ? "bg-stone-200 text-stone-600" : 
+                              idx === 2 ? "bg-orange-100 text-orange-700" : 
+                              "bg-stone-50 text-stone-400"}
+                          `}>
+                            {store.rank}
+                          </span>
+                        </td>
+
+                        {/* 店名 */}
+                        <td className="p-4">
+                          <div className="flex items-center gap-2">
+                            <span className={`font-bold ${store.isBottom5 ? "text-rose-700" : "text-stone-700"}`}>
+                              {store.storeName}
+                            </span>
+                            {store.isBottom5 && (
+                              <span className="text-[10px] font-bold px-1.5 py-0.5 bg-rose-200 text-rose-700 rounded flex items-center gap-1 animate-pulse">
+                                <AlertTriangle size={10} /> 需關注
+                              </span>
+                            )}
+                          </div>
+                        </td>
+
+                        {/* 業績 */}
+                        <td className="p-4 text-right font-mono font-medium text-stone-600">
+                          {fmtMoney(store.actual)}
+                        </td>
+
+                        {/* 目標 (手機版隱藏) */}
+                        <td className="p-4 text-right font-mono text-stone-400 text-sm hidden sm:table-cell">
+                          {fmtMoney(store.target)}
+                        </td>
+
+                        {/* 達成率 */}
+                        <td className="p-4 text-right">
+                          <div className="flex flex-col items-end">
+                            <span className={`text-lg font-bold font-mono ${store.isBottom5 ? "text-rose-600" : (store.rate >= 100 ? "text-emerald-500" : "text-amber-500")}`}>
+                              {store.rate.toFixed(1)}%
+                            </span>
+                            {/* 進度條 */}
+                            <div className="w-24 h-1.5 bg-stone-100 rounded-full mt-1 overflow-hidden">
+                              <div 
+                                className={`h-full rounded-full ${store.isBottom5 ? "bg-rose-500" : (store.rate >= 100 ? "bg-emerald-400" : "bg-amber-400")}`}
+                                style={{ width: `${Math.min(store.rate, 100)}%` }}
+                              ></div>
+                            </div>
+                          </div>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* 月度監控區塊 (Day X) - 維持不變 */}
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
           <div className="lg:col-span-2 bg-white rounded-3xl p-6 md:p-8 border border-stone-100 shadow-xl shadow-stone-200/50 relative overflow-hidden group">
             <div className="absolute top-0 right-0 w-64 h-64 bg-indigo-50 rounded-full blur-3xl -mr-16 -mt-16 pointer-events-none opacity-60"></div>

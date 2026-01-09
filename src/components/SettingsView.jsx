@@ -5,6 +5,7 @@ import {
   Plus,
   Trash2,
   Edit2,
+  Edit,
   Lock,
   User,
   Store,
@@ -14,8 +15,25 @@ import {
   X,
   Shield,
   ChevronDown,
+  Search,
+  UserCheck,
+  UserX,
+  Key
 } from "lucide-react";
-import { doc, setDoc, updateDoc, deleteField } from "firebase/firestore";
+import { 
+  doc, 
+  setDoc, 
+  updateDoc, 
+  deleteField,
+  collection,
+  addDoc,
+  deleteDoc,
+  onSnapshot,
+  serverTimestamp,
+  query,
+  orderBy
+} from "firebase/firestore";
+
 import { db, appId } from "../config/firebase";
 import { AppContext } from "../AppContext";
 import { ViewWrapper, Card } from "./SharedUI";
@@ -54,6 +72,43 @@ const SettingsView = () => {
 
   // 店家管理表單
   const [newShop, setNewShop] = useState({ name: "", manager: "" });
+
+  // 管理師相關狀態
+  const [therapists, setTherapists] = useState([]);
+  const [isAddingTherapist, setIsAddingTherapist] = useState(false);
+  const [editingTherapist, setEditingTherapist] = useState(null);
+  const [searchTerm, setSearchTerm] = useState("");
+  
+  // 管理師表單狀態
+  const [formManager, setFormManager] = useState("");
+  const [formStore, setFormStore] = useState("");
+  const [formName, setFormName] = useState("");
+  const [formPassword, setFormPassword] = useState("0000");
+
+  // 監聽管理師列表
+  useEffect(() => {
+    const q = query(collection(db, "artifacts", appId, "public", "data", "therapists"), orderBy("store"));
+    const unsubscribe = onSnapshot(q, (snapshot) => {
+      const list = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+      setTherapists(list);
+    });
+    return () => unsubscribe();
+  }, []);
+
+  // 計算可選店家
+  const availableStoresForTherapist = useMemo(() => {
+    if (!formManager) return [];
+    return managers[formManager] || [];
+  }, [formManager, managers]);
+
+  // 過濾顯示的管理師
+  const filteredTherapists = useMemo(() => {
+    return therapists.filter(t => 
+      t.name.includes(searchTerm) || 
+      t.store.includes(searchTerm) ||
+      (t.status === 'resigned' && searchTerm === '離職')
+    );
+  }, [therapists, searchTerm]);
 
   useEffect(() => {
     if (permissions) setLocalPermissions(permissions);
@@ -116,6 +171,7 @@ const SettingsView = () => {
     setLocalPermissions({ ...localPermissions, [role]: updated });
   };
 
+  // ... (保留原本的 handleAddGlobalStore, handleDeleteGlobalStore 等)
   const handleAddGlobalStore = async () => {
     if (!newShop.name || !newShop.manager) {
       showToast("請輸入店名並選擇區域", "error");
@@ -369,6 +425,80 @@ const SettingsView = () => {
     }
   };
 
+  // 管理師 CRUD
+  const handleAddTherapist = async () => {
+    if (!formStore || !formName || !formPassword) {
+      showToast("請填寫完整資訊", "error");
+      return;
+    }
+
+    try {
+      await addDoc(collection(db, "artifacts", appId, "public", "data", "therapists"), {
+        name: formName,
+        store: formStore,
+        manager: formManager,
+        password: formPassword,
+        status: "active",
+        createdAt: serverTimestamp()
+      });
+      showToast(`已新增管理師：${formName}`, "success");
+      setIsAddingTherapist(false);
+      setFormName("");
+      setFormPassword("0000");
+    } catch (error) {
+      console.error(error);
+      showToast("新增失敗", "error");
+    }
+  };
+
+  const handleUpdateTherapist = async () => {
+    if (!editingTherapist) return;
+    try {
+      const docRef = doc(db, "artifacts", appId, "public", "data", "therapists", editingTherapist.id);
+      await updateDoc(docRef, {
+        store: formStore,
+        manager: formManager,
+        name: formName,
+        password: formPassword,
+        status: editingTherapist.status, 
+        updatedAt: serverTimestamp()
+      });
+      showToast("資料更新成功", "success");
+      setEditingTherapist(null);
+    } catch (error) {
+      showToast("更新失敗", "error");
+    }
+  };
+
+  const toggleStatus = async (therapist) => {
+    try {
+      const newStatus = therapist.status === "active" ? "resigned" : "active";
+      const docRef = doc(db, "artifacts", appId, "public", "data", "therapists", therapist.id);
+      await updateDoc(docRef, { status: newStatus });
+      showToast(`${therapist.name} 已標記為${newStatus === 'active' ? '在職' : '離職'}`, "info");
+    } catch (error) {
+      showToast("狀態更新失敗", "error");
+    }
+  };
+
+  const handleDeleteTherapist = async (id) => {
+    if(!confirm("⚠️ 刪除後無法復原！建議使用「設為離職」來保留歷史數據。\n\n確定要刪除嗎？")) return;
+    try {
+      await deleteDoc(doc(db, "artifacts", appId, "public", "data", "therapists", id));
+      showToast("已刪除", "success");
+    } catch (error) {
+      showToast("刪除失敗", "error");
+    }
+  };
+
+  const openEdit = (t) => {
+    setEditingTherapist(t);
+    setFormManager(t.manager || "");
+    setFormStore(t.store);
+    setFormName(t.name);
+    setFormPassword(t.password);
+  };
+
   if (userRole !== "director")
     return (
       <ViewWrapper>
@@ -387,12 +517,12 @@ const SettingsView = () => {
         <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-4">
           <h2 className="text-2xl font-bold text-stone-800">系統管理中心</h2>
           <div className="bg-white p-1 rounded-xl shadow-sm border border-stone-100 flex overflow-x-auto max-w-full">
-            {["kpi", "permissions", "shops", "stores", "managers"].map(
+            {["kpi", "permissions", "shops", "stores", "managers", "therapists"].map(
               (tab) => (
                 <button
                   key={tab}
                   onClick={() => setActiveTab(tab)}
-                  className={`px-4 py-2 rounded-lg text-sm font-bold whitespace-nowrap transition-all ${
+                  className={`px-4 py-2 rounded-lg text-sm font-bold whitespace-nowrap transition-all flex items-center gap-1 ${
                     activeTab === tab
                       ? "bg-stone-800 text-white shadow"
                       : "text-stone-500 hover:bg-stone-50"
@@ -406,7 +536,10 @@ const SettingsView = () => {
                     ? "店家管理"
                     : tab === "stores"
                     ? "店經理帳號"
-                    : "組織架構"}
+                    : tab === "managers"
+                    ? "組織架構"
+                    : <><UserCheck size={16}/> 人員帳號管理</>
+                  }
                 </button>
               )
             )}
@@ -469,7 +602,7 @@ const SettingsView = () => {
           </Card>
         )}
 
-        {/* 2. 權限設定 */}
+        {/* 2. 權限設定 (★ 本次修改重點 ★) */}
         {activeTab === "permissions" && (
           <Card title="角色權限管理" subtitle="設定各職級可存取的系統模組">
             <div className="overflow-x-auto">
@@ -482,6 +615,10 @@ const SettingsView = () => {
                     </th>
                     <th className="p-4 font-bold text-stone-700 text-center bg-amber-50/50">
                       店經理 (Store)
+                    </th>
+                    {/* ★ 新增：管理師欄位 ★ */}
+                    <th className="p-4 font-bold text-stone-700 text-center bg-indigo-50/50">
+                      管理師 (Therapist)
                     </th>
                   </tr>
                 </thead>
@@ -510,6 +647,15 @@ const SettingsView = () => {
                           checked={localPermissions.store?.includes(item.id)}
                           onChange={() => togglePermission("store", item.id)}
                           className="w-5 h-5 rounded border-stone-300 text-amber-600 focus:ring-amber-500 cursor-pointer"
+                        />
+                      </td>
+                      {/* ★ 新增：管理師核取方塊 ★ */}
+                      <td className="p-4 text-center bg-indigo-50/30">
+                        <input
+                          type="checkbox"
+                          checked={localPermissions.therapist?.includes(item.id)}
+                          onChange={() => togglePermission("therapist", item.id)}
+                          className="w-5 h-5 rounded border-stone-300 text-indigo-600 focus:ring-indigo-500 cursor-pointer"
                         />
                       </td>
                     </tr>
@@ -770,7 +916,7 @@ const SettingsView = () => {
           </div>
         )}
 
-        {/* 5. 組織架構 (Managers) - 您要求的邏輯還原 */}
+        {/* 5. 組織架構 (Managers) */}
         {activeTab === "managers" && (
           <div className="space-y-6">
             <Card title="新增區長">
@@ -933,6 +1079,157 @@ const SettingsView = () => {
                 </Card>
               ))}
             </div>
+          </div>
+        )}
+
+        {/* 6. 管理師帳號管理 (Therapists) */}
+        {activeTab === "therapists" && (
+          <div className="space-y-6">
+            
+            {/* 搜尋與新增列 */}
+            <Card>
+              <div className="flex flex-col md:flex-row gap-4 justify-between items-center">
+                <div className="relative w-full md:w-64">
+                   <Search className="absolute left-3 top-2.5 text-stone-400" size={16} />
+                   <input 
+                     type="text" 
+                     placeholder="搜尋姓名或店家..."
+                     value={searchTerm}
+                     onChange={(e) => setSearchTerm(e.target.value)}
+                     className="w-full pl-9 pr-4 py-2 bg-stone-50 border border-stone-200 rounded-xl outline-none focus:border-amber-400"
+                   />
+                </div>
+                <button 
+                  onClick={() => setIsAddingTherapist(true)}
+                  className="w-full md:w-auto px-4 py-2 bg-stone-800 text-white rounded-xl font-bold flex items-center justify-center gap-2 hover:bg-stone-700 transition-colors"
+                >
+                  <Plus size={18} /> 新增人員
+                </button>
+              </div>
+            </Card>
+
+            {/* 新增/編輯 Modal (內嵌式) */}
+            {(isAddingTherapist || editingTherapist) && (
+              <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50 backdrop-blur-sm">
+                <div className="bg-white w-full max-w-md rounded-2xl shadow-2xl overflow-hidden animate-in zoom-in-95">
+                  <div className="bg-amber-400 p-4 font-bold text-white flex justify-between items-center">
+                    <span>{editingTherapist ? "編輯人員資料" : "新增管理師"}</span>
+                    <button onClick={() => { setIsAddingTherapist(false); setEditingTherapist(null); }}><X size={20}/></button>
+                  </div>
+                  <div className="p-6 space-y-4">
+                    <div className="grid grid-cols-2 gap-4">
+                      <div>
+                        <label className="text-xs font-bold text-stone-400 block mb-1">區域</label>
+                        <select 
+                          value={formManager} 
+                          onChange={(e) => { setFormManager(e.target.value); setFormStore(""); }}
+                          className="w-full p-2 border rounded-lg font-bold bg-stone-50"
+                        >
+                          <option value="">選擇區域</option>
+                          {Object.keys(managers).map(m => <option key={m} value={m}>{m}區</option>)}
+                        </select>
+                      </div>
+                      <div>
+                        <label className="text-xs font-bold text-stone-400 block mb-1">所屬店家</label>
+                        <select 
+                          value={formStore} 
+                          onChange={(e) => setFormStore(e.target.value)}
+                          className="w-full p-2 border rounded-lg font-bold bg-stone-50"
+                          disabled={!formManager}
+                        >
+                          <option value="">選擇店家</option>
+                          {availableStoresForTherapist.map(s => <option key={s} value={s}>{s}</option>)}
+                        </select>
+                      </div>
+                    </div>
+                    <div>
+                        <label className="text-xs font-bold text-stone-400 block mb-1">姓名</label>
+                        <input 
+                          type="text" 
+                          value={formName}
+                          onChange={(e) => setFormName(e.target.value)}
+                          className="w-full p-2 border rounded-lg font-bold"
+                          placeholder="請輸入姓名"
+                        />
+                    </div>
+                    <div>
+                        <label className="text-xs font-bold text-stone-400 block mb-1">登入密碼 (預設 0000)</label>
+                        <input 
+                          type="text" 
+                          value={formPassword}
+                          onChange={(e) => setFormPassword(e.target.value)}
+                          className="w-full p-2 border rounded-lg font-mono"
+                          placeholder="0000"
+                        />
+                    </div>
+                    
+                    <div className="pt-4 flex gap-3">
+                      <button 
+                        onClick={() => { setIsAddingTherapist(false); setEditingTherapist(null); }}
+                        className="flex-1 py-3 bg-stone-100 text-stone-500 rounded-xl font-bold"
+                      >
+                        取消
+                      </button>
+                      <button 
+                        onClick={editingTherapist ? handleUpdateTherapist : handleAddTherapist}
+                        className="flex-1 py-3 bg-stone-800 text-white rounded-xl font-bold"
+                      >
+                        {editingTherapist ? "儲存修改" : "確認新增"}
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            )}
+
+            {/* 人員列表 */}
+            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+              {filteredTherapists.map(t => (
+                <div key={t.id} className={`bg-white p-4 rounded-xl border-l-4 shadow-sm flex flex-col gap-2 ${t.status === 'resigned' ? 'border-stone-200 opacity-60' : 'border-amber-400'}`}>
+                   <div className="flex justify-between items-start">
+                      <div>
+                         <div className="text-xs text-stone-400 font-bold mb-1 flex items-center gap-1">
+                           <Store size={12}/> {t.store}店
+                         </div>
+                         <div className="text-lg font-bold text-stone-700 flex items-center gap-2">
+                           {t.name}
+                           {t.status === 'resigned' && <span className="text-[10px] bg-stone-100 px-2 rounded text-stone-500">已離職</span>}
+                         </div>
+                      </div>
+                      <div className="flex gap-1">
+                         <button onClick={() => openEdit(t)} className="p-2 hover:bg-stone-100 rounded-lg text-stone-400" title="編輯">
+                           <Edit size={16}/>
+                         </button>
+                         <button 
+                           onClick={() => toggleStatus(t)} 
+                           className={`p-2 rounded-lg ${t.status === 'active' ? 'hover:bg-rose-50 text-stone-400 hover:text-rose-500' : 'hover:bg-emerald-50 text-stone-400 hover:text-emerald-600'}`}
+                           title={t.status === 'active' ? "設為離職" : "復職"}
+                         >
+                           {t.status === 'active' ? <UserX size={16}/> : <UserCheck size={16}/>}
+                         </button>
+                      </div>
+                   </div>
+                   
+                   <div className="mt-2 pt-2 border-t border-stone-100 flex justify-between items-center text-sm">
+                      <span className="text-stone-400 font-mono text-xs flex items-center gap-1">
+                        <Key size={12}/> 密碼: {t.password}
+                      </span>
+                      {/* 僅測試用刪除按鈕 */}
+                      <button onClick={() => handleDeleteTherapist(t.id)} className="text-stone-300 hover:text-rose-400">
+                        <Trash2 size={14}/>
+                      </button>
+                   </div>
+                </div>
+              ))}
+              
+              {filteredTherapists.length === 0 && (
+                <div className="col-span-full py-10 text-center text-stone-400 bg-white rounded-2xl border-2 border-dashed border-stone-100">
+                  <User size={48} className="mx-auto mb-2 opacity-20"/>
+                  <p>尚無管理師資料，請點擊「新增人員」開始建檔</p>
+                </div>
+              )}
+            </div>
+
           </div>
         )}
       </div>

@@ -1,3 +1,4 @@
+// src/components/SystemMonitor.jsx
 import React, { useState, useEffect, useContext } from "react";
 import {
   Smartphone, Monitor, ChevronLeft, ChevronRight
@@ -67,10 +68,17 @@ const SystemMonitor = () => {
             店經理
           </span>
         );
+      // ★★★ 新增：管理師的識別標籤 ★★★
+      case "therapist":
+        return (
+          <span className="bg-indigo-100 text-indigo-600 px-2.5 py-1 rounded-lg text-xs font-bold">
+            管理師
+          </span>
+        );
       default:
         return (
           <span className="bg-stone-100 text-stone-500 px-2.5 py-1 rounded-lg text-xs">
-            未知
+            未知 ({role})
           </span>
         );
     }
