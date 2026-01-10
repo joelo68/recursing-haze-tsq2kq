@@ -65,6 +65,10 @@ const SettingsView = () => {
     stores: "",
   });
 
+  // ★ 新增：店經理編輯狀態
+  const [editingStoreAccount, setEditingStoreAccount] = useState(null);
+  const [editStoreForm, setEditStoreForm] = useState({ name: "", password: "", stores: [] });
+
   // 區長表單
   const [newManager, setNewManager] = useState({ name: "", password: "" });
   const [editingManager, setEditingManager] = useState(null);
@@ -95,7 +99,7 @@ const SettingsView = () => {
     return () => unsubscribe();
   }, []);
 
-  // 計算可選店家
+  // 計算可選店家 (管理師用)
   const availableStoresForTherapist = useMemo(() => {
     if (!formManager) return [];
     return managers[formManager] || [];
@@ -171,7 +175,6 @@ const SettingsView = () => {
     setLocalPermissions({ ...localPermissions, [role]: updated });
   };
 
-  // ... (保留原本的 handleAddGlobalStore, handleDeleteGlobalStore 等)
   const handleAddGlobalStore = async () => {
     if (!newShop.name || !newShop.manager) {
       showToast("請輸入店名並選擇區域", "error");
@@ -243,6 +246,21 @@ const SettingsView = () => {
       .sort();
   }, [managers, storeAccounts]);
 
+  // ★ 新增：計算編輯模式下的可選店家 (包含未分配 + 該帳號目前已擁有的)
+  const availableStoresForEditing = useMemo(() => {
+    const allGlobalStores = Object.values(managers).flat();
+    // 找出所有"別人"擁有的店 (不含自己目前擁有的)
+    const otherAssignedStores = storeAccounts
+      .filter(a => a.id !== editingStoreAccount?.id)
+      .flatMap(a => a.stores || []);
+    
+    // 可選 = 全部 - 別人擁有的 - 自己已經選了的
+    return allGlobalStores
+      .filter(s => !otherAssignedStores.includes(s))
+      .filter(s => !editStoreForm.stores.includes(s))
+      .sort();
+  }, [managers, storeAccounts, editingStoreAccount, editStoreForm.stores]);
+
   const handleAddStoreAccount = async () => {
     if (!newStoreAccount.name || !newStoreAccount.password) {
       showToast("請輸入名稱與密碼", "error");
@@ -273,6 +291,73 @@ const SettingsView = () => {
       showToast("店經理帳號已新增", "success");
     } catch (e) {
       showToast("新增失敗", "error");
+    }
+  };
+
+  // ★ 新增：開啟編輯店經理帳號 Modal
+  const openEditStoreAccount = (account) => {
+    setEditingStoreAccount(account);
+    setEditStoreForm({
+      name: account.name,
+      password: account.password,
+      stores: account.stores || []
+    });
+  };
+
+  // ★ 新增：在編輯表單中增加店家
+  const handleAddStoreToEditForm = (storeName) => {
+    if (storeName && !editStoreForm.stores.includes(storeName)) {
+      setEditStoreForm({
+        ...editStoreForm,
+        stores: [...editStoreForm.stores, storeName]
+      });
+    }
+  };
+
+  // ★ 新增：在編輯表單中移除店家
+  const handleRemoveStoreFromEditForm = (storeName) => {
+    setEditStoreForm({
+      ...editStoreForm,
+      stores: editStoreForm.stores.filter(s => s !== storeName)
+    });
+  };
+
+  // ★ 新增：儲存店經理帳號更新
+  const handleUpdateStoreAccount = async () => {
+    if (!editStoreForm.name || !editStoreForm.password) {
+      showToast("請輸入名稱與密碼", "error");
+      return;
+    }
+
+    const updatedAccounts = storeAccounts.map(acc => {
+      if (acc.id === editingStoreAccount.id) {
+        return {
+          ...acc,
+          name: editStoreForm.name,
+          password: editStoreForm.password,
+          stores: editStoreForm.stores
+        };
+      }
+      return acc;
+    });
+
+    try {
+      await setDoc(
+        doc(
+          db,
+          "artifacts",
+          appId,
+          "public",
+          "data",
+          "global_settings",
+          "store_account_data"
+        ),
+        { accounts: updatedAccounts }
+      );
+      showToast("帳號資料已更新", "success");
+      setEditingStoreAccount(null);
+    } catch (e) {
+      showToast("更新失敗", "error");
     }
   };
 
@@ -602,7 +687,7 @@ const SettingsView = () => {
           </Card>
         )}
 
-        {/* 2. 權限設定 (★ 本次修改重點 ★) */}
+        {/* 2. 權限設定 */}
         {activeTab === "permissions" && (
           <Card title="角色權限管理" subtitle="設定各職級可存取的系統模組">
             <div className="overflow-x-auto">
@@ -616,7 +701,6 @@ const SettingsView = () => {
                     <th className="p-4 font-bold text-stone-700 text-center bg-amber-50/50">
                       店經理 (Store)
                     </th>
-                    {/* ★ 新增：管理師欄位 ★ */}
                     <th className="p-4 font-bold text-stone-700 text-center bg-indigo-50/50">
                       管理師 (Therapist)
                     </th>
@@ -649,7 +733,6 @@ const SettingsView = () => {
                           className="w-5 h-5 rounded border-stone-300 text-amber-600 focus:ring-amber-500 cursor-pointer"
                         />
                       </td>
-                      {/* ★ 新增：管理師核取方塊 ★ */}
                       <td className="p-4 text-center bg-indigo-50/30">
                         <input
                           type="checkbox"
@@ -775,7 +858,7 @@ const SettingsView = () => {
           </div>
         )}
 
-        {/* 4. 店經理帳號 (Stores) */}
+        {/* 4. 店經理帳號 (Stores) - ★ 本次修改重點：新增編輯與多店管理 ★ */}
         {activeTab === "stores" && (
           <div className="space-y-6">
             <Card title="新增店經理帳號">
@@ -856,6 +939,77 @@ const SettingsView = () => {
                 </div>
               </div>
             </Card>
+
+            {/* ★ 編輯視窗 Modal ★ */}
+            {editingStoreAccount && (
+              <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50 backdrop-blur-sm">
+                <div className="bg-white w-full max-w-md rounded-2xl shadow-2xl overflow-hidden animate-in zoom-in-95">
+                  <div className="bg-amber-400 p-4 font-bold text-white flex justify-between items-center">
+                    <span>編輯店經理帳號</span>
+                    <button onClick={() => setEditingStoreAccount(null)}><X size={20}/></button>
+                  </div>
+                  <div className="p-6 space-y-4">
+                    <div>
+                        <label className="text-xs font-bold text-stone-400 block mb-1">姓名 / 帳號</label>
+                        <input 
+                          type="text" 
+                          value={editStoreForm.name}
+                          onChange={(e) => setEditStoreForm({...editStoreForm, name: e.target.value})}
+                          className="w-full p-2 border rounded-lg font-bold"
+                        />
+                    </div>
+                    <div>
+                        <label className="text-xs font-bold text-stone-400 block mb-1">密碼</label>
+                        <input 
+                          type="text" 
+                          value={editStoreForm.password}
+                          onChange={(e) => setEditStoreForm({...editStoreForm, password: e.target.value})}
+                          className="w-full p-2 border rounded-lg font-mono"
+                        />
+                    </div>
+                    <div>
+                        <label className="text-xs font-bold text-stone-400 block mb-1">管理店家 (可多選)</label>
+                        <div className="flex flex-wrap gap-2 mb-2 p-2 bg-stone-50 rounded-lg min-h-[40px]">
+                          {editStoreForm.stores.map(s => (
+                            <span key={s} className="px-2 py-1 bg-white border border-stone-200 rounded text-xs font-bold text-stone-600 shadow-sm flex items-center gap-1">
+                              {s}
+                              <button onClick={() => handleRemoveStoreFromEditForm(s)} className="text-stone-300 hover:text-rose-500"><X size={12}/></button>
+                            </span>
+                          ))}
+                          {editStoreForm.stores.length === 0 && <span className="text-xs text-stone-300 italic self-center">尚未分配店家</span>}
+                        </div>
+                        <div className="relative">
+                          <select 
+                            onChange={(e) => { handleAddStoreToEditForm(e.target.value); e.target.value = ""; }}
+                            className="w-full p-2 border rounded-lg font-bold bg-white"
+                          >
+                            <option value="">+ 加入負責店家</option>
+                            {availableStoresForEditing.map(s => (
+                              <option key={s} value={s}>{s}</option>
+                            ))}
+                          </select>
+                        </div>
+                    </div>
+                    
+                    <div className="pt-4 flex gap-3">
+                      <button 
+                        onClick={() => setEditingStoreAccount(null)}
+                        className="flex-1 py-3 bg-stone-100 text-stone-500 rounded-xl font-bold"
+                      >
+                        取消
+                      </button>
+                      <button 
+                        onClick={handleUpdateStoreAccount}
+                        className="flex-1 py-3 bg-stone-800 text-white rounded-xl font-bold"
+                      >
+                        儲存變更
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            )}
+
             <Card title="現有店經理列表">
               <div className="overflow-x-auto">
                 <table className="w-full text-left text-sm">
@@ -889,10 +1043,18 @@ const SettingsView = () => {
                               ))}
                           </div>
                         </td>
-                        <td className="p-4 text-right">
+                        <td className="p-4 text-right flex justify-end gap-1">
+                          <button
+                            onClick={() => openEditStoreAccount(account)}
+                            className="text-stone-400 hover:text-stone-600 hover:bg-stone-100 p-2 rounded-lg transition-colors"
+                            title="編輯"
+                          >
+                            <Edit2 size={18} />
+                          </button>
                           <button
                             onClick={() => handleDeleteStoreAccount(account.id)}
                             className="text-rose-400 hover:text-rose-600 hover:bg-rose-50 p-2 rounded-lg transition-colors"
+                            title="刪除"
                           >
                             <Trash2 size={18} />
                           </button>
