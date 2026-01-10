@@ -96,6 +96,7 @@ import {
   Smartphone,
   Monitor,
   Bell,
+  Clock, 
 } from "lucide-react";
 
 // --- 5. 常數與工具 ---
@@ -156,9 +157,12 @@ export default function App() {
   const [storeAccounts, setStoreAccounts] = useState([]);
   const [managerAuth, setManagerAuth] = useState({});
   const [permissions, setPermissions] = useState(DEFAULT_PERMISSIONS);
-  
-  // ★ 新增：管理師名單狀態 (用於身分識別)
   const [therapists, setTherapists] = useState([]);
+
+  // ★★★ 閒置自動登出相關狀態 (修正版) ★★★
+  const [showIdleWarning, setShowIdleWarning] = useState(false);
+  const [countdown, setCountdown] = useState(15); // 新增：倒數秒數狀態
+  const idleTimerRef = useRef(null);       
 
   const [selectedYear, setSelectedYear] = useState(
     new Date().getFullYear().toString()
@@ -192,6 +196,105 @@ export default function App() {
       console.error("Failed to log activity", e);
     }
   }, []);
+
+  // ★★★ 修正 handleLogout ★★★
+  const handleLogout = useCallback((reason = "使用者手動登出") => {
+    const userName =
+      currentUser?.name || (userRole === "director" ? "總監" : "未知");
+    
+    if (userRole) {
+      logActivity(userRole, userName, "登出系統", reason);
+    }
+
+    // 清除計時器與狀態
+    if (idleTimerRef.current) clearTimeout(idleTimerRef.current);
+    setShowIdleWarning(false);
+    setCountdown(15);
+
+    localStorage.removeItem("cyj_input_draft");
+    localStorage.removeItem("cyj_input_draft_v2"); 
+    localStorage.removeItem("cyj_input_draft_v3"); 
+    localStorage.removeItem("cyj_therapist_draft"); 
+    setUserRole(null);
+    setCurrentUser(null);
+    setActiveView("dashboard");
+  }, [currentUser, userRole, logActivity]);
+
+  // ★★★ 啟動閒置計時器 (只負責觸發警告) ★★★
+  const startIdleTimer = useCallback(() => {
+    if (idleTimerRef.current) clearTimeout(idleTimerRef.current);
+
+    // 2分45秒 (165000ms) 後顯示警告視窗
+    idleTimerRef.current = setTimeout(() => {
+      setCountdown(15); // 重置倒數秒數
+      setShowIdleWarning(true);
+    }, 165000); 
+  }, []);
+
+  // ★★★ 倒數計時與自動登出邏輯 (使用 useEffect 驅動動畫) ★★★
+  useEffect(() => {
+    let interval = null;
+
+    // 當警告視窗出現且還有登入身份時，開始倒數
+    if (showIdleWarning && userRole) {
+      interval = setInterval(() => {
+        setCountdown((prevCount) => {
+          if (prevCount <= 1) {
+            // 倒數結束，執行登出
+            clearInterval(interval);
+            handleLogout("閒置超過 3 分鐘自動登出");
+            return 0;
+          }
+          return prevCount - 1;
+        });
+      }, 1000);
+    }
+
+    return () => {
+      if (interval) clearInterval(interval);
+    };
+  }, [showIdleWarning, userRole, handleLogout]);
+
+  // ★★★ 使用者活動處理函式 ★★★
+  const handleUserActivity = useCallback(() => {
+    if (!userRole) return;
+
+    // 如果警告視窗開著，代表使用者回來了，關閉視窗並重置倒數
+    if (showIdleWarning) {
+      setShowIdleWarning(false);
+      setCountdown(15);
+    }
+    
+    // 重置閒置計時器
+    startIdleTimer();
+  }, [userRole, showIdleWarning, startIdleTimer]);
+
+  // ★★★ 監聽全域事件 ★★★
+  useEffect(() => {
+    if (userRole) {
+      const events = ['mousemove', 'mousedown', 'keypress', 'scroll', 'touchstart', 'click'];
+      
+      let activityTimeout;
+      const throttledActivity = () => {
+        if (!activityTimeout) {
+          handleUserActivity();
+          activityTimeout = setTimeout(() => {
+            activityTimeout = null;
+          }, 1000); 
+        }
+      };
+
+      events.forEach(event => window.addEventListener(event, throttledActivity));
+      
+      startIdleTimer();
+
+      return () => {
+        events.forEach(event => window.removeEventListener(event, throttledActivity));
+        if (idleTimerRef.current) clearTimeout(idleTimerRef.current);
+      };
+    }
+  }, [userRole, handleUserActivity, startIdleTimer]);
+
 
   useEffect(() => {
     const initAuth = async () => {
@@ -293,7 +396,6 @@ export default function App() {
       (s) => s.exists() && setPermissions(s.data())
     );
     
-    // ★ 關鍵：讀取管理師名單
     const unsubTherapists = onSnapshot(
       collection(db, "artifacts", appId, "public", "data", "therapists"),
       (s) => setTherapists(s.docs.map((d) => ({ id: d.id, ...d.data() })))
@@ -311,11 +413,9 @@ export default function App() {
     };
   }, [user]);
 
-  // ★★★ 關鍵修正：登入時自動補全管理師資料 (店名) ★★★
   const handleLogin = (roleId, userInfo = null) => {
     let finalUser = userInfo;
 
-    // 如果是管理師登入，嘗試從名單中補全店名
     if (roleId === 'therapist' && userInfo?.name) {
        console.log("正在補全管理師資料:", userInfo.name);
        const foundTherapist = therapists.find(t => t.name === userInfo.name);
@@ -324,7 +424,7 @@ export default function App() {
          console.log("找到完整資料:", foundTherapist);
          finalUser = {
            ...userInfo,
-           ...foundTherapist, // 這會把 store: "蘆洲" 補進去
+           ...foundTherapist,
            id: foundTherapist.id || userInfo.id
          };
        }
@@ -336,7 +436,6 @@ export default function App() {
     const userName = finalUser?.name || (roleId === "director" ? "總監" : "未知");
     logActivity(roleId, userName, "登入系統", "登入成功");
     
-    // 只有管理師預設跳轉到日報輸入
     if (roleId === "therapist") {
       setActiveView("input");
     } else {
@@ -344,19 +443,6 @@ export default function App() {
     }
   };
 
-  const handleLogout = () => {
-    const userName =
-      currentUser?.name || (userRole === "director" ? "總監" : "未知");
-    if (userRole) logActivity(userRole, userName, "登出系統", "使用者手動登出");
-    localStorage.removeItem("cyj_input_draft");
-    localStorage.removeItem("cyj_input_draft_v2"); 
-    localStorage.removeItem("cyj_input_draft_v3"); 
-    localStorage.removeItem("cyj_therapist_draft"); 
-    setUserRole(null);
-    setCurrentUser(null);
-    setActiveView("dashboard");
-  };
-  
   const handleUpdateStorePassword = async (id, newPass) => {
     try {
       const updated = storeAccounts.map((a) =>
@@ -488,7 +574,7 @@ export default function App() {
       budgets,
       targets,
       rawData: visibleRawData,
-      allReports: rawData, // ★★★ 關鍵修改：將原始全區資料 (rawData) 暴露為 allReports，供 Dashboard 計算排名用
+      allReports: rawData,
       showToast,
       openConfirm,
       fmtMoney,
@@ -520,7 +606,7 @@ export default function App() {
       budgets,
       targets,
       visibleRawData,
-      rawData, // ★ Dependency 記得加入 rawData
+      rawData,
       inputDate,
       selectedYear,
       selectedMonth,
@@ -571,7 +657,7 @@ export default function App() {
           setSidebarOpen={setSidebarOpen}
           user={user}
           userRole={userRole}
-          onLogout={handleLogout}
+          onLogout={() => handleLogout()} 
           permissions={permissions}
           currentUser={currentUser}
         />
@@ -667,7 +753,7 @@ export default function App() {
             setActiveView={setActiveView}
             permissions={permissions}
             userRole={userRole}
-            onLogout={handleLogout}
+            onLogout={() => handleLogout()}
           />
           <main className="flex-1 p-4 md:p-8 overflow-y-auto overflow-x-hidden min-w-0 w-full">
             {activeView === "dashboard" && <DashboardView />}
@@ -697,6 +783,31 @@ export default function App() {
           onConfirm={confirmModal.onConfirm}
           onCancel={closeConfirmModal}
         />
+
+        {/* ★★★ 閒置警告視窗 (動態倒數) ★★★ */}
+        {showIdleWarning && (
+          <div className="fixed inset-0 z-[9999] flex items-center justify-center bg-black/60 backdrop-blur-sm animate-in fade-in duration-300">
+            <div className="bg-white p-8 rounded-3xl shadow-2xl max-w-sm w-full text-center space-y-6 animate-in zoom-in-95 duration-300 border border-stone-200">
+              <div className="w-20 h-20 bg-amber-100 text-amber-600 rounded-full flex items-center justify-center mx-auto shadow-inner">
+                <Clock size={40} className="animate-pulse" /> 
+              </div>
+              <div>
+                <h3 className="text-2xl font-bold text-stone-800 mb-2">閒置提醒</h3>
+                <p className="text-stone-500 font-medium">
+                  系統偵測到您已閒置一段時間。<br/>
+                  將於 <span className="text-rose-500 text-2xl font-black font-mono inline-block min-w-[2ch]">{countdown}</span> 秒後自動登出。
+                </p>
+              </div>
+              <button 
+                onClick={handleUserActivity}
+                className="w-full py-4 bg-stone-800 text-white rounded-2xl font-bold hover:bg-stone-700 transition-all active:scale-95 shadow-lg"
+              >
+                保持登入
+              </button>
+            </div>
+          </div>
+        )}
+
       </div>
     </AppContext.Provider>
   );
