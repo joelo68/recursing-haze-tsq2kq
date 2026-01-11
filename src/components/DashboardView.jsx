@@ -173,12 +173,12 @@ const DashboardView = () => {
         )}
 
         {/* =====================================================================================
-            2. 區長視圖 (Manager View) - 統一列表式戰情看板 (★ 配色優化版 ★)
+            2. 區長視圖 (Manager View) - RWD 優化版
            ===================================================================================== */}
         {userRole === 'manager' && myRankings.length > 0 && (
           <div className="animate-in slide-in-from-top-4 duration-500">
             <div className="bg-white rounded-3xl border border-stone-200 shadow-xl overflow-hidden relative">
-              {/* 頂部標題列 (已改為暖色系) */}
+              {/* 頂部標題列 */}
               <div className="bg-gradient-to-r from-amber-500 to-orange-600 p-6 flex justify-between items-center text-white relative overflow-hidden">
                 <div className="absolute right-0 top-0 p-4 opacity-10"><Map size={100} /></div>
                 <div className="relative z-10 flex items-center gap-3">
@@ -196,16 +196,18 @@ const DashboardView = () => {
                 </div>
               </div>
 
-              {/* 列表內容 */}
-              <div className="p-2">
-                <table className="w-full text-left border-collapse">
+              {/* 列表內容 - 加入 overflow-x-auto 支援橫向捲動 */}
+              <div className="p-0 sm:p-2 overflow-x-auto">
+                <table className="w-full text-left border-collapse min-w-[350px]">
                   <thead>
                     <tr className="text-xs font-bold text-stone-400 border-b border-stone-100">
-                      <th className="p-4 w-20 text-center">排名</th>
-                      <th className="p-4">門市名稱</th>
-                      <th className="p-4 text-right">目前業績</th>
-                      <th className="p-4 text-right hidden sm:table-cell">目標金額</th>
-                      <th className="p-4 text-right">達成率</th>
+                      {/* RWD 優化：縮小手機版 padding */}
+                      <th className="p-3 sm:p-4 w-16 sm:w-20 text-center">排名</th>
+                      <th className="p-3 sm:p-4">門市名稱</th>
+                      <th className="p-3 sm:p-4 text-right">目前業績</th>
+                      {/* RWD 優化：手機版隱藏「目標金額」欄位 */}
+                      <th className="p-3 sm:p-4 text-right hidden sm:table-cell">目標金額</th>
+                      <th className="p-3 sm:p-4 text-right">達成率</th>
                     </tr>
                   </thead>
                   <tbody>
@@ -214,14 +216,14 @@ const DashboardView = () => {
                         key={store.storeName} 
                         className={`group transition-colors border-b last:border-0 border-stone-50
                           ${store.isBottom5 
-                            ? "bg-rose-50 hover:bg-rose-100" // 後五名：紅色警示背景
-                            : "hover:bg-stone-50"            // 正常：灰色互動背景
+                            ? "bg-rose-50 hover:bg-rose-100" 
+                            : "hover:bg-stone-50" 
                           }
                         `}
                       >
                         {/* 排名 */}
-                        <td className="p-4 text-center">
-                          <span className={`inline-flex items-center justify-center w-8 h-8 rounded-full text-xs font-bold
+                        <td className="p-3 sm:p-4 text-center">
+                          <span className={`inline-flex items-center justify-center w-6 h-6 sm:w-8 sm:h-8 rounded-full text-xs font-bold
                             ${idx === 0 ? "bg-amber-100 text-amber-700" : 
                               idx === 1 ? "bg-stone-200 text-stone-600" : 
                               idx === 2 ? "bg-orange-100 text-orange-700" : 
@@ -232,37 +234,37 @@ const DashboardView = () => {
                         </td>
 
                         {/* 店名 */}
-                        <td className="p-4">
-                          <div className="flex items-center gap-2">
-                            <span className={`font-bold ${store.isBottom5 ? "text-rose-700" : "text-stone-700"}`}>
+                        <td className="p-3 sm:p-4">
+                          <div className="flex flex-col sm:flex-row sm:items-center gap-1 sm:gap-2">
+                            <span className={`font-bold text-sm sm:text-base ${store.isBottom5 ? "text-rose-700" : "text-stone-700"}`}>
                               {store.storeName}
                             </span>
                             {store.isBottom5 && (
-                              <span className="text-[10px] font-bold px-1.5 py-0.5 bg-rose-200 text-rose-700 rounded flex items-center gap-1 animate-pulse">
-                                <AlertTriangle size={10} /> 需關注
+                              <span className="w-fit text-[10px] font-bold px-1.5 py-0.5 bg-rose-200 text-rose-700 rounded flex items-center gap-1 animate-pulse">
+                                <AlertTriangle size={10} /> <span className="hidden sm:inline">需關注</span>
                               </span>
                             )}
                           </div>
                         </td>
 
                         {/* 業績 */}
-                        <td className="p-4 text-right font-mono font-medium text-stone-600">
+                        <td className="p-3 sm:p-4 text-right font-mono font-medium text-stone-600 text-sm sm:text-base">
                           {fmtMoney(store.actual)}
                         </td>
 
                         {/* 目標 (手機版隱藏) */}
-                        <td className="p-4 text-right font-mono text-stone-400 text-sm hidden sm:table-cell">
+                        <td className="p-3 sm:p-4 text-right font-mono text-stone-400 text-sm hidden sm:table-cell">
                           {fmtMoney(store.target)}
                         </td>
 
                         {/* 達成率 */}
-                        <td className="p-4 text-right">
+                        <td className="p-3 sm:p-4 text-right">
                           <div className="flex flex-col items-end">
-                            <span className={`text-lg font-bold font-mono ${store.isBottom5 ? "text-rose-600" : (store.rate >= 100 ? "text-emerald-500" : "text-amber-500")}`}>
+                            <span className={`text-base sm:text-lg font-bold font-mono ${store.isBottom5 ? "text-rose-600" : (store.rate >= 100 ? "text-emerald-500" : "text-amber-500")}`}>
                               {store.rate.toFixed(1)}%
                             </span>
                             {/* 進度條 */}
-                            <div className="w-24 h-1.5 bg-stone-100 rounded-full mt-1 overflow-hidden">
+                            <div className="w-16 sm:w-24 h-1 sm:h-1.5 bg-stone-100 rounded-full mt-1 overflow-hidden">
                               <div 
                                 className={`h-full rounded-full ${store.isBottom5 ? "bg-rose-500" : (store.rate >= 100 ? "bg-emerald-400" : "bg-amber-400")}`}
                                 style={{ width: `${Math.min(store.rate, 100)}%` }}

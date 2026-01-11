@@ -3,10 +3,10 @@ import React, { useState, useEffect, useContext, useMemo } from "react";
 import { 
   FileText, Upload, DollarSign,
   RotateCcw, Activity, AlertCircle, X, CheckCircle, User, Star, Bug,
-  Layers, Users, TrendingDown // ★ 新增 UI 圖示
+  Layers, Users, TrendingDown, Calendar, AlertTriangle
 } from "lucide-react";
 import { 
-  collection, addDoc, setDoc, doc, serverTimestamp, query, where, getDocs, getDoc, getDocFromServer 
+  collection, addDoc, setDoc, doc, serverTimestamp, getDocFromServer 
 } from "firebase/firestore";
 
 import { db, appId } from "../config/firebase"; 
@@ -15,8 +15,17 @@ import { AppContext } from "../AppContext";
 import { ViewWrapper, Card } from "./SharedUI";
 import SmartDatePicker from "./SmartDatePicker";
 
+// ★★★ 輔助函式：取得當地時間的 YYYY-MM-DD (修正 UTC 時差問題) ★★★
+const getLocalTodayString = () => {
+  const now = new Date();
+  const year = now.getFullYear();
+  const month = String(now.getMonth() + 1).padStart(2, '0');
+  const day = String(now.getDate()).padStart(2, '0');
+  return `${year}-${month}-${day}`;
+};
+
 // ============================================================================
-// ★★★ 子元件 A：店長專用輸入介面 (StoreInputView) - 版面優化版 ★★★
+// ★★★ 子元件 A：店長專用輸入介面 (StoreInputView) ★★★
 // ============================================================================
 const StoreInputView = () => {
   const {
@@ -31,7 +40,10 @@ const StoreInputView = () => {
   };
   const [formData, setFormData] = useState(defaultFormData);
   const [isSubmitting, setIsSubmitting] = useState(false);
+  
+  // ★ 視窗狀態控制
   const [showConfirmModal, setShowConfirmModal] = useState(false); 
+  const [showDateWarningModal, setShowDateWarningModal] = useState(false); 
   const [existingReportId, setExistingReportId] = useState(null); 
   
   const LABELS = {
@@ -39,7 +51,32 @@ const StoreInputView = () => {
     skincareSales: "保養品業績", skincareRefund: "當日保養品退費", traffic: "課程操作人數",
     newCustomers: "新客數", newCustomerClosings: "新客留單人數", newCustomerSales: "新客業績", refund: "當日退費",
   };
-  const today = new Date().toISOString().split("T")[0];
+  
+  // 使用修正後的當地日期
+  const today = getLocalTodayString();
+
+  // ★★★ 喚醒監聽器 ★★★
+  useEffect(() => {
+    const handleWakeUp = () => {
+      if (document.visibilityState === "visible" || document.hasFocus()) {
+        const realToday = getLocalTodayString(); 
+        const isFormEmpty = Object.values(formData).every(val => val === "");
+        
+        if (inputDate !== realToday && isFormEmpty) {
+           console.log(`[系統喚醒] 日期校正: ${inputDate} -> ${realToday}`);
+           setInputDate(realToday);
+        }
+      }
+    };
+
+    document.addEventListener("visibilitychange", handleWakeUp);
+    window.addEventListener("focus", handleWakeUp);
+
+    return () => {
+      document.removeEventListener("visibilitychange", handleWakeUp);
+      window.removeEventListener("focus", handleWakeUp);
+    };
+  }, [inputDate, formData, setInputDate]);
 
   useEffect(() => {
     const savedDraft = localStorage.getItem("cyj_input_draft_v3");
@@ -49,7 +86,11 @@ const StoreInputView = () => {
         if (parsed.formData) setFormData(parsed.formData);
         if (parsed.store) setSelectedStore(parsed.store);
         if (parsed.manager) setSelectedManager(parsed.manager);
-        if (parsed.date) setInputDate(parsed.date);
+        
+        const draftDate = parsed.date;
+        if (draftDate === getLocalTodayString()) {
+           setInputDate(draftDate);
+        }
       } catch (e) { console.error(e); }
     }
   }, []);
@@ -107,13 +148,30 @@ const StoreInputView = () => {
     }
   };
 
+  // ★★★ 修改：提交前檢查流程 ★★★
   const handlePreSubmit = (e) => {
     e.preventDefault();
     if (!selectedStore) return showToast("請選擇店家", "error");
     if (inputDate > today) return showToast("不可提交未來日期", "error");
+
     const formattedInputDate = toStandardDateFormat(inputDate);
+    // 檢查是否有舊資料
     const existingReport = rawData.find((d) => toStandardDateFormat(d.date) === formattedInputDate && d.storeName === selectedStore);
     setExistingReportId(existingReport ? existingReport.id : null);
+
+    // ★ 檢查是否為「非當日」提交
+    if (inputDate !== today) {
+      // 觸發「非當日警示視窗」
+      setShowDateWarningModal(true);
+    } else {
+      // 若是當日，直接進入確認視窗
+      setShowConfirmModal(true);
+    }
+  };
+
+  // ★ 新增：從日期警示視窗 -> 進入確認視窗
+  const handleDateWarningConfirm = () => {
+    setShowDateWarningModal(false);
     setShowConfirmModal(true);
   };
 
@@ -150,7 +208,6 @@ const StoreInputView = () => {
     }
   };
 
-  // ★ 輔助渲染函式：統一欄位樣式
   const renderField = (key) => (
     <div key={key}>
       <label className={`block text-xs font-bold mb-1.5 ${key.includes('Refund') ? "text-rose-500" : "text-stone-500"}`}>
@@ -178,7 +235,6 @@ const StoreInputView = () => {
          <CheckCircle size={14} /> 店務日報：輸入內容將自動暫存
       </div>
 
-      {/* 1. 頂部選擇區 */}
       <div className="bg-white p-6 rounded-2xl border border-stone-100 shadow-sm space-y-4">
         <div>
           <label className="block text-xs font-bold mb-1.5 text-stone-400 uppercase">回報日期</label>
@@ -206,14 +262,12 @@ const StoreInputView = () => {
         </div>
       </div>
 
-      {/* 2. 數據輸入區 (★ 重點優化區塊 ★) */}
       <div className="bg-white p-6 rounded-2xl border border-stone-200 shadow-lg space-y-8">
         <div className="flex items-center gap-2 pb-2 border-b border-stone-100">
            <FileText size={20} className="text-amber-500" /> 
            <h3 className="font-bold text-stone-700 text-lg">店務數據回報</h3>
         </div>
         
-        {/* A. 核心業績 (4 欄) */}
         <div>
           <h4 className="text-xs font-bold text-stone-400 uppercase tracking-wider mb-4 flex items-center gap-2">
             <Layers size={14}/> 核心業績數據
@@ -226,7 +280,6 @@ const StoreInputView = () => {
           </div>
         </div>
 
-        {/* B. 新客與客流 (4 欄) */}
         <div>
           <h4 className="text-xs font-bold text-stone-400 uppercase tracking-wider mb-4 flex items-center gap-2">
             <Users size={14}/> 新客與客流
@@ -239,7 +292,6 @@ const StoreInputView = () => {
           </div>
         </div>
 
-        {/* C. 退費資訊 (4 欄) */}
         <div>
           <h4 className="text-xs font-bold text-rose-300 uppercase tracking-wider mb-4 flex items-center gap-2 border-b border-rose-50 pb-1 w-full">
             <TrendingDown size={14}/> 退費資訊 (若無則留白)
@@ -250,7 +302,6 @@ const StoreInputView = () => {
           </div>
         </div>
 
-        {/* D. 操作按鈕 */}
         <div className="flex gap-4 pt-4 border-t border-stone-100">
           <button onClick={handleReset} className="px-6 py-4 bg-stone-100 text-stone-500 rounded-xl hover:bg-stone-200 transition-colors">
             <RotateCcw size={20} />
@@ -261,6 +312,56 @@ const StoreInputView = () => {
         </div>
       </div>
 
+      {/* ★★★ 1. 非當日提交警示視窗 (新增) ★★★ */}
+      {showDateWarningModal && (
+        <div className="fixed inset-0 z-[1000] flex items-center justify-center p-4 bg-stone-900/80 backdrop-blur-sm">
+          <div className="bg-white rounded-3xl shadow-2xl w-full max-w-sm overflow-hidden animate-in zoom-in-95 border-4 border-rose-100">
+            <div className="bg-rose-500 p-6 flex flex-col items-center text-center">
+              <div className="bg-white/20 p-3 rounded-full mb-3">
+                <Calendar size={32} className="text-white"/>
+              </div>
+              <h3 className="text-white text-xl font-extrabold tracking-wide">日期確認</h3>
+            </div>
+            <div className="p-6 space-y-6 text-center">
+              <div>
+                <p className="text-stone-500 font-bold mb-1">您選擇的回報日期是</p>
+                <p className="text-3xl font-mono font-black text-rose-600">{inputDate}</p>
+              </div>
+              
+              <div className="bg-rose-50 p-4 rounded-xl border border-rose-100 text-left">
+                <p className="flex items-start gap-2 text-rose-800 text-sm font-bold">
+                  <AlertTriangle size={18} className="shrink-0 mt-0.5"/>
+                  <span>
+                    系統偵測到此日期 <u>並非今天</u> ({today})。
+                    {existingReportId && (
+                      <span className="block mt-2 pt-2 border-t border-rose-200 text-rose-600">
+                        ⚠️ 注意：該日期已有日報紀錄，繼續提交將會 <span className="underline font-black">覆蓋舊資料</span>！
+                      </span>
+                    )}
+                  </span>
+                </p>
+              </div>
+
+              <div className="flex gap-3">
+                <button 
+                  onClick={() => setShowDateWarningModal(false)} 
+                  className="flex-1 py-3.5 bg-stone-100 text-stone-500 rounded-xl font-bold hover:bg-stone-200 transition-colors"
+                >
+                  取消
+                </button>
+                <button 
+                  onClick={handleDateWarningConfirm} 
+                  className="flex-1 py-3.5 bg-rose-600 text-white rounded-xl font-bold hover:bg-rose-700 shadow-lg shadow-rose-200 transition-all active:scale-95"
+                >
+                  確認日期無誤
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ★★★ 2. 資料確認視窗 (既有，順序在日期警示之後) ★★★ */}
       {showConfirmModal && (
         <div className="fixed inset-0 z-[999] flex items-center justify-center p-4 bg-stone-900/60 backdrop-blur-sm">
           <div className="bg-white rounded-2xl shadow-xl w-full max-w-md overflow-hidden animate-in zoom-in-95">
@@ -272,7 +373,8 @@ const StoreInputView = () => {
                  <div className="flex justify-between font-bold text-amber-600 border-t pt-2"><span>現金業績</span><span>${formData.cash}</span></div>
                  <div className="flex justify-between font-bold text-indigo-600"><span>總權責</span><span>${formData.accrual}</span></div>
               </div>
-              {existingReportId && <p className="text-xs text-rose-500 font-bold bg-rose-50 p-2 rounded">⚠️ 注意：當日已有資料，提交將覆蓋舊紀錄。</p>}
+              {/* 若非當日且有舊資料，這邊再次小小提醒 */}
+              {existingReportId && <p className="text-xs text-rose-500 font-bold bg-rose-50 p-2 rounded">⚠️ 提醒：資料將覆蓋當日舊紀錄。</p>}
               <div className="flex gap-3 pt-2">
                 <button onClick={()=>setShowConfirmModal(false)} className="flex-1 py-3 border rounded-xl font-bold text-stone-500 hover:bg-stone-50">返回</button>
                 <button onClick={handleFinalSubmit} className="flex-1 py-3 bg-stone-800 text-white rounded-xl font-bold hover:bg-stone-900">確認提交</button>
@@ -286,7 +388,7 @@ const StoreInputView = () => {
 };
 
 // ============================================================================
-// ★★★ 子元件 B: 管理師專用輸入介面 (TherapistInputView) - 完全保留您的修正 ★★★
+// ★★★ 子元件 B: 管理師專用輸入介面 (TherapistInputView) - 升級版 ★★★
 // ============================================================================
 const TherapistInputView = () => {
   const { currentUser, inputDate, setInputDate, showToast, logActivity } = useContext(AppContext);
@@ -297,6 +399,10 @@ const TherapistInputView = () => {
   const [formData, setFormData] = useState(defaultPersonalData);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [hasSubmittedToday, setHasSubmittedToday] = useState(false);
+
+  // ★ 新增視窗狀態
+  const [showConfirmModal, setShowConfirmModal] = useState(false); 
+  const [showDateWarningModal, setShowDateWarningModal] = useState(false); 
 
   // Debug Info
   const [debugInfo, setDebugInfo] = useState(null);
@@ -309,13 +415,42 @@ const TherapistInputView = () => {
     notes: "工作備註 (選填)"
   };
 
+  const today = getLocalTodayString();
+
+  // ★★★ 喚醒監聽器 ★★★
+  useEffect(() => {
+    const handleWakeUp = () => {
+      if (document.visibilityState === "visible" || document.hasFocus()) {
+        const realToday = getLocalTodayString();
+        const isFormEmpty = !formData.serviceRevenue && !formData.salesRevenue && !formData.serviceCount;
+        
+        if (inputDate !== realToday && isFormEmpty) {
+           console.log(`[系統喚醒] 日期校正: ${inputDate} -> ${realToday}`);
+           setInputDate(realToday);
+        }
+      }
+    };
+
+    document.addEventListener("visibilitychange", handleWakeUp);
+    window.addEventListener("focus", handleWakeUp);
+    
+    return () => {
+      document.removeEventListener("visibilitychange", handleWakeUp);
+      window.removeEventListener("focus", handleWakeUp);
+    };
+  }, [inputDate, formData, setInputDate]);
+
   useEffect(() => {
     const savedDraft = localStorage.getItem("cyj_therapist_draft");
     if (savedDraft) {
       try {
         const parsed = JSON.parse(savedDraft);
         if (parsed.formData) setFormData(parsed.formData);
-        if (parsed.date) setInputDate(parsed.date);
+        
+        const draftDate = parsed.date;
+        if (draftDate === getLocalTodayString()) {
+           setInputDate(draftDate);
+        }
       } catch (e) { console.error(e); }
     }
   }, []);
@@ -330,7 +465,6 @@ const TherapistInputView = () => {
       if (!currentUser?.id) return;
       try {
         const normalizedDate = toStandardDateFormat(inputDate);
-        // ★ ID 檢查也要同步換成橫線
         const safeDate = normalizedDate.replace(/\//g, "-");
         const docId = `${safeDate}_${currentUser.id}`;
         
@@ -354,10 +488,24 @@ const TherapistInputView = () => {
     setFormData(prev => ({ ...prev, [key]: value }));
   };
 
-  const handleSubmit = async () => {
+  // ★★★ 修改：提交前流程 ★★★
+  const handlePreSubmit = () => {
     if (!formData.serviceRevenue && !formData.serviceCount) return showToast("請至少輸入一項數據", "error");
-    if (hasSubmittedToday && !confirm("確定要「覆蓋」之前的資料嗎？")) return;
+    
+    if (inputDate !== today) {
+      setShowDateWarningModal(true);
+    } else {
+      setShowConfirmModal(true);
+    }
+  };
 
+  // 從警示視窗進入確認視窗
+  const handleDateWarningConfirm = () => {
+    setShowDateWarningModal(false);
+    setShowConfirmModal(true);
+  };
+
+  const handleFinalSubmit = async () => {
     setIsSubmitting(true);
     setDebugInfo(null); 
 
@@ -367,16 +515,13 @@ const TherapistInputView = () => {
       }
 
       const normalizedDate = toStandardDateFormat(inputDate);
-      
-      // ★★★ 關鍵修正：將日期中的斜線換成橫線，避免變成子資料夾 ★★★
       const safeDate = normalizedDate.replace(/\//g, "-");
       const docId = `${safeDate}_${currentUser.id}`;
       
       const payload = {
-        date: normalizedDate, // 內文保留原始格式沒關係
+        date: normalizedDate, 
         therapistId: currentUser.id,
         therapistName: currentUser.name,
-        // ★ 安全防護：如果 App.jsx 沒抓到店名，這裡給個預設值，避免列表報錯
         storeName: currentUser.store || "未註記店家", 
         serviceRevenue: parseNumber(formData.serviceRevenue),
         salesRevenue: parseNumber(formData.salesRevenue),
@@ -398,6 +543,7 @@ const TherapistInputView = () => {
         setHasSubmittedToday(true);
         setFormData(defaultPersonalData);
         localStorage.removeItem("cyj_therapist_draft");
+        setShowConfirmModal(false); // 關閉視窗
       } else {
         throw new Error("寫入失敗，雲端查無資料。");
       }
@@ -490,12 +636,110 @@ const TherapistInputView = () => {
              <textarea value={formData.notes} onChange={(e) => handleTextChange("notes", e.target.value)} placeholder="選填：今日工作備註..." rows="2" className="w-full border-2 p-3 rounded-xl text-sm font-medium text-stone-600 focus:border-stone-400 outline-none" />
           </div>
 
-          <button onClick={handleSubmit} disabled={isSubmitting} className="w-full py-4 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl font-bold shadow-lg transition-all flex items-center justify-center gap-2 active:scale-95 disabled:opacity-50">
+          <button onClick={handlePreSubmit} disabled={isSubmitting} className="w-full py-4 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl font-bold shadow-lg transition-all flex items-center justify-center gap-2 active:scale-95 disabled:opacity-50">
             {isSubmitting ? <Activity className="animate-spin"/> : <Upload size={20}/>}
             提交個人日報
           </button>
         </div>
       </Card>
+
+      {/* ★★★ 1. 管理師版：非當日提交警示視窗 ★★★ */}
+      {showDateWarningModal && (
+        <div className="fixed inset-0 z-[1000] flex items-center justify-center p-4 bg-stone-900/80 backdrop-blur-sm">
+          <div className="bg-white rounded-3xl shadow-2xl w-full max-w-sm overflow-hidden animate-in zoom-in-95 border-4 border-rose-100">
+            <div className="bg-rose-500 p-6 flex flex-col items-center text-center">
+              <div className="bg-white/20 p-3 rounded-full mb-3">
+                <Calendar size={32} className="text-white"/>
+              </div>
+              <h3 className="text-white text-xl font-extrabold tracking-wide">日期確認</h3>
+            </div>
+            <div className="p-6 space-y-6 text-center">
+              <div>
+                <p className="text-stone-500 font-bold mb-1">您選擇的回報日期是</p>
+                <p className="text-3xl font-mono font-black text-rose-600">{inputDate}</p>
+              </div>
+              
+              <div className="bg-rose-50 p-4 rounded-xl border border-rose-100 text-left">
+                <p className="flex items-start gap-2 text-rose-800 text-sm font-bold">
+                  <AlertTriangle size={18} className="shrink-0 mt-0.5"/>
+                  <span>
+                    系統偵測到此日期 <u>並非今天</u> ({today})。
+                    {hasSubmittedToday && (
+                      <span className="block mt-2 pt-2 border-t border-rose-200 text-rose-600">
+                        ⚠️ 注意：該日期已有您的回報紀錄，繼續提交將會 <span className="underline font-black">覆蓋舊資料</span>！
+                      </span>
+                    )}
+                  </span>
+                </p>
+              </div>
+
+              <div className="flex gap-3">
+                <button 
+                  onClick={() => setShowDateWarningModal(false)} 
+                  className="flex-1 py-3.5 bg-stone-100 text-stone-500 rounded-xl font-bold hover:bg-stone-200 transition-colors"
+                >
+                  取消
+                </button>
+                <button 
+                  onClick={handleDateWarningConfirm} 
+                  className="flex-1 py-3.5 bg-rose-600 text-white rounded-xl font-bold hover:bg-rose-700 shadow-lg shadow-rose-200 transition-all active:scale-95"
+                >
+                  確認日期無誤
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ★★★ 2. 管理師版：資料確認視窗 (整合版) ★★★ */}
+      {showConfirmModal && (
+        <div className="fixed inset-0 z-[999] flex items-center justify-center p-4 bg-stone-900/60 backdrop-blur-sm">
+          <div className="bg-white rounded-2xl shadow-xl w-full max-w-md overflow-hidden animate-in zoom-in-95">
+            <div className="bg-indigo-600 p-4 flex justify-between items-center">
+              <h3 className="text-white font-bold flex gap-2"><AlertCircle/> 確認提交</h3>
+              <button onClick={()=>setShowConfirmModal(false)}><X className="text-white"/></button>
+            </div>
+            <div className="p-6 space-y-4">
+              <div className="bg-stone-50 p-4 rounded-xl space-y-2 text-sm">
+                 <div className="flex justify-between font-bold text-stone-700"><span>日期</span><span>{inputDate}</span></div>
+                 <div className="flex justify-between font-bold text-stone-700"><span>人員</span><span>{currentUser?.name}</span></div>
+                 <div className="border-t border-stone-200 my-2 pt-2 space-y-1">
+                    <div className="flex justify-between">
+                      <span className="text-stone-500">操作權責</span>
+                      <span className="font-mono font-bold text-indigo-600">${formData.serviceRevenue || 0}</span>
+                    </div>
+                    <div className="flex justify-between">
+                      <span className="text-stone-500">銷售業績</span>
+                      <span className="font-mono font-bold text-amber-600">${formData.salesRevenue || 0}</span>
+                    </div>
+                    <div className="flex justify-between">
+                      <span className="text-stone-500">操作人次</span>
+                      <span className="font-mono font-bold text-stone-700">{formData.serviceCount || 0}</span>
+                    </div>
+                 </div>
+                 {formData.notes && (
+                   <div className="bg-white p-2 rounded border border-stone-200 text-stone-500 text-xs italic">
+                     備註: {formData.notes}
+                   </div>
+                 )}
+              </div>
+              
+              {hasSubmittedToday && (
+                <p className="text-xs text-rose-500 font-bold bg-rose-50 p-2 rounded flex items-center gap-1">
+                  <AlertTriangle size={12}/> 提醒：資料將覆蓋當日舊紀錄。
+                </p>
+              )}
+
+              <div className="flex gap-3 pt-2">
+                <button onClick={()=>setShowConfirmModal(false)} className="flex-1 py-3 border rounded-xl font-bold text-stone-500 hover:bg-stone-50">返回</button>
+                <button onClick={handleFinalSubmit} className="flex-1 py-3 bg-indigo-600 text-white rounded-xl font-bold hover:bg-indigo-700 shadow-md">確認提交</button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
     </div>
   );
 };

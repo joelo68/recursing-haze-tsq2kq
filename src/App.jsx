@@ -159,10 +159,10 @@ export default function App() {
   const [permissions, setPermissions] = useState(DEFAULT_PERMISSIONS);
   const [therapists, setTherapists] = useState([]);
 
-  // ★★★ 閒置自動登出相關狀態 (修正版) ★★★
+  // ★★★ 閒置自動登出相關狀態 (保留) ★★★
   const [showIdleWarning, setShowIdleWarning] = useState(false);
-  const [countdown, setCountdown] = useState(15); // 新增：倒數秒數狀態
-  const idleTimerRef = useRef(null);       
+  const [countdown, setCountdown] = useState(15);
+  const lastActivityTimeRef = useRef(Date.now()); 
 
   const [selectedYear, setSelectedYear] = useState(
     new Date().getFullYear().toString()
@@ -197,8 +197,8 @@ export default function App() {
     }
   }, []);
 
-  // ★★★ 修正 handleLogout ★★★
-  const handleLogout = useCallback((reason = "使用者手動登出") => {
+  // ★★★ handleLogout (單純登出，移除寫入 users_status 邏輯) ★★★
+  const handleLogout = useCallback(async (reason = "使用者手動登出") => {
     const userName =
       currentUser?.name || (userRole === "director" ? "總監" : "未知");
     
@@ -206,94 +206,84 @@ export default function App() {
       logActivity(userRole, userName, "登出系統", reason);
     }
 
-    // 清除計時器與狀態
-    if (idleTimerRef.current) clearTimeout(idleTimerRef.current);
+    // 重置閒置狀態
     setShowIdleWarning(false);
     setCountdown(15);
+    lastActivityTimeRef.current = Date.now(); 
 
+    // 清除本地暫存
     localStorage.removeItem("cyj_input_draft");
     localStorage.removeItem("cyj_input_draft_v2"); 
     localStorage.removeItem("cyj_input_draft_v3"); 
     localStorage.removeItem("cyj_therapist_draft"); 
+    
     setUserRole(null);
     setCurrentUser(null);
     setActiveView("dashboard");
   }, [currentUser, userRole, logActivity]);
 
-  // ★★★ 啟動閒置計時器 (只負責觸發警告) ★★★
-  const startIdleTimer = useCallback(() => {
-    if (idleTimerRef.current) clearTimeout(idleTimerRef.current);
 
-    // 2分45秒 (165000ms) 後顯示警告視窗
-    idleTimerRef.current = setTimeout(() => {
-      setCountdown(15); // 重置倒數秒數
-      setShowIdleWarning(true);
-    }, 165000); 
-  }, []);
-
-  // ★★★ 倒數計時與自動登出邏輯 (使用 useEffect 驅動動畫) ★★★
-  useEffect(() => {
-    let interval = null;
-
-    // 當警告視窗出現且還有登入身份時，開始倒數
-    if (showIdleWarning && userRole) {
-      interval = setInterval(() => {
-        setCountdown((prevCount) => {
-          if (prevCount <= 1) {
-            // 倒數結束，執行登出
-            clearInterval(interval);
-            handleLogout("閒置超過 3 分鐘自動登出");
-            return 0;
-          }
-          return prevCount - 1;
-        });
-      }, 1000);
-    }
-
-    return () => {
-      if (interval) clearInterval(interval);
-    };
-  }, [showIdleWarning, userRole, handleLogout]);
-
-  // ★★★ 使用者活動處理函式 ★★★
+  // ★★★ 使用者活動處理 (保留) ★★★
   const handleUserActivity = useCallback(() => {
     if (!userRole) return;
-
-    // 如果警告視窗開著，代表使用者回來了，關閉視窗並重置倒數
+    lastActivityTimeRef.current = Date.now();
     if (showIdleWarning) {
       setShowIdleWarning(false);
       setCountdown(15);
     }
-    
-    // 重置閒置計時器
-    startIdleTimer();
-  }, [userRole, showIdleWarning, startIdleTimer]);
+  }, [userRole, showIdleWarning]);
 
-  // ★★★ 監聽全域事件 ★★★
+
+  // ★★★ 閒置計時邏輯 (保留) ★★★
+  useEffect(() => {
+    let intervalId = null;
+    if (userRole) {
+      intervalId = setInterval(() => {
+        const now = Date.now();
+        const elapsed = now - lastActivityTimeRef.current; 
+        const WARNING_THRESHOLD = 165 * 1000; // 2分45秒
+        const LOGOUT_THRESHOLD = 180 * 1000;  // 3分鐘
+
+        if (elapsed > LOGOUT_THRESHOLD) {
+          clearInterval(intervalId);
+          handleLogout("閒置超過 3 分鐘自動登出");
+        } else if (elapsed > WARNING_THRESHOLD) {
+          if (!showIdleWarning) {
+             setShowIdleWarning(true);
+          }
+          const remaining = Math.ceil((LOGOUT_THRESHOLD - elapsed) / 1000);
+          setCountdown(remaining > 0 ? remaining : 0);
+        } else {
+          if (showIdleWarning) {
+            setShowIdleWarning(false); 
+          }
+        }
+      }, 1000); 
+    }
+    return () => { if (intervalId) clearInterval(intervalId); };
+  }, [userRole, showIdleWarning, handleLogout]);
+
+
+  // ★★★ 監聽全域事件 (保留) ★★★
   useEffect(() => {
     if (userRole) {
       const events = ['mousemove', 'mousedown', 'keypress', 'scroll', 'touchstart', 'click'];
-      
       let activityTimeout;
       const throttledActivity = () => {
         if (!activityTimeout) {
           handleUserActivity();
           activityTimeout = setTimeout(() => {
             activityTimeout = null;
-          }, 1000); 
+          }, 500); 
         }
       };
-
       events.forEach(event => window.addEventListener(event, throttledActivity));
-      
-      startIdleTimer();
-
+      lastActivityTimeRef.current = Date.now();
       return () => {
         events.forEach(event => window.removeEventListener(event, throttledActivity));
-        if (idleTimerRef.current) clearTimeout(idleTimerRef.current);
       };
     }
-  }, [userRole, handleUserActivity, startIdleTimer]);
+  }, [userRole, handleUserActivity]);
 
 
   useEffect(() => {
@@ -417,11 +407,8 @@ export default function App() {
     let finalUser = userInfo;
 
     if (roleId === 'therapist' && userInfo?.name) {
-       console.log("正在補全管理師資料:", userInfo.name);
        const foundTherapist = therapists.find(t => t.name === userInfo.name);
-       
        if (foundTherapist) {
-         console.log("找到完整資料:", foundTherapist);
          finalUser = {
            ...userInfo,
            ...foundTherapist,
