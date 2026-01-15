@@ -159,9 +159,11 @@ export default function App() {
   const [permissions, setPermissions] = useState(DEFAULT_PERMISSIONS);
   const [therapists, setTherapists] = useState([]);
 
-  // ★★★ 閒置自動登出相關狀態 (保留) ★★★
+  // ★★★ 閒置自動登出相關狀態 (時間戳記版) ★★★
   const [showIdleWarning, setShowIdleWarning] = useState(false);
   const [countdown, setCountdown] = useState(15);
+  
+  // 使用 useRef 記錄「最後活動時間」，這不會因為 render 而重置，且在背景也能保持正確
   const lastActivityTimeRef = useRef(Date.now()); 
 
   const [selectedYear, setSelectedYear] = useState(
@@ -197,7 +199,7 @@ export default function App() {
     }
   }, []);
 
-  // ★★★ handleLogout (單純登出，移除寫入 users_status 邏輯) ★★★
+  // ★★★ 修改：handleLogout (加入離線狀態更新) ★★★
   const handleLogout = useCallback(async (reason = "使用者手動登出") => {
     const userName =
       currentUser?.name || (userRole === "director" ? "總監" : "未知");
@@ -206,27 +208,42 @@ export default function App() {
       logActivity(userRole, userName, "登出系統", reason);
     }
 
-    // 重置閒置狀態
+    // ★ 新增：登出時將資料庫狀態改為離線
+    if (currentUser) {
+       try {
+         const userId = currentUser.id || user?.uid;
+         if (userId) {
+            await setDoc(doc(db, "artifacts", appId, "public", "data", "users_status", userId), {
+              isOnline: false,
+              lastActiveAt: serverTimestamp()
+            }, { merge: true });
+         }
+       } catch(e) { console.error("Update offline status failed", e); }
+    }
+
+    // 重置狀態
     setShowIdleWarning(false);
     setCountdown(15);
-    lastActivityTimeRef.current = Date.now(); 
+    lastActivityTimeRef.current = Date.now(); // 避免登出後殘留舊時間
 
-    // 清除本地暫存
     localStorage.removeItem("cyj_input_draft");
     localStorage.removeItem("cyj_input_draft_v2"); 
     localStorage.removeItem("cyj_input_draft_v3"); 
     localStorage.removeItem("cyj_therapist_draft"); 
-    
     setUserRole(null);
     setCurrentUser(null);
     setActiveView("dashboard");
-  }, [currentUser, userRole, logActivity]);
+  }, [currentUser, userRole, logActivity, user]);
 
 
-  // ★★★ 使用者活動處理 (保留) ★★★
+  // ★★★ 使用者活動處理：更新「最後活動時間」 ★★★
   const handleUserActivity = useCallback(() => {
     if (!userRole) return;
+
+    // 更新最後活動時間為「現在」
     lastActivityTimeRef.current = Date.now();
+
+    // 如果警告視窗開著，關閉它
     if (showIdleWarning) {
       setShowIdleWarning(false);
       setCountdown(15);
@@ -234,40 +251,107 @@ export default function App() {
   }, [userRole, showIdleWarning]);
 
 
-  // ★★★ 閒置計時邏輯 (保留) ★★★
+  // ★★★ 核心計時邏輯 (setInterval 檢查時間差) ★★★
   useEffect(() => {
     let intervalId = null;
+
     if (userRole) {
       intervalId = setInterval(() => {
         const now = Date.now();
-        const elapsed = now - lastActivityTimeRef.current; 
-        const WARNING_THRESHOLD = 165 * 1000; // 2分45秒
-        const LOGOUT_THRESHOLD = 180 * 1000;  // 3分鐘
+        const elapsed = now - lastActivityTimeRef.current; // 經過毫秒數
+
+        const WARNING_THRESHOLD = 165 * 1000; // 2分45秒 (165秒)
+        const LOGOUT_THRESHOLD = 180 * 1000;  // 3分鐘 (180秒)
 
         if (elapsed > LOGOUT_THRESHOLD) {
+          // 超過 3 分鐘 -> 登出
           clearInterval(intervalId);
-          handleLogout("閒置超過 3 分鐘自動登出");
+          handleLogout("閒置超過 3 分鐘自動登出 (含背景執行)");
         } else if (elapsed > WARNING_THRESHOLD) {
+          // 超過 2分45秒 -> 顯示警告，並計算倒數秒數
           if (!showIdleWarning) {
              setShowIdleWarning(true);
           }
+          // 動態計算剩餘秒數 (避免倒數動畫卡住)
           const remaining = Math.ceil((LOGOUT_THRESHOLD - elapsed) / 1000);
           setCountdown(remaining > 0 ? remaining : 0);
         } else {
+          // 正常活動中
           if (showIdleWarning) {
-            setShowIdleWarning(false); 
+            setShowIdleWarning(false); // 如果時間差恢復正常(例如手動操作後)，關閉視窗
           }
         }
-      }, 1000); 
+      }, 1000); // 每秒檢查一次
     }
-    return () => { if (intervalId) clearInterval(intervalId); };
+
+    return () => {
+      if (intervalId) clearInterval(intervalId);
+    };
   }, [userRole, showIdleWarning, handleLogout]);
 
 
-  // ★★★ 監聽全域事件 (保留) ★★★
+  // ★★★ 新增：心跳回報機制 (Heartbeat) ★★★
+  // 每 60 秒向資料庫更新一次「最後活動時間」，讓 SystemMonitor 知道此人在線
+  useEffect(() => {
+    let heartbeatInterval = null;
+
+    if (userRole && currentUser) {
+      // 定義回報函式
+      const sendHeartbeat = async () => {
+        try {
+          const userId = currentUser.id || user?.uid; 
+          if (!userId) return;
+
+          const userName = currentUser.name || (userRole === "director" ? "總監" : "未知");
+          const userStore = currentUser.storeName || currentUser.store || (userRole === "manager" ? "區域管理" : "");
+          
+          // 判斷裝置類型
+          let device = "PC";
+          if (typeof navigator !== "undefined") {
+            const ua = navigator.userAgent.toLowerCase();
+            if (ua.includes("android")) device = "Android";
+            else if (ua.includes("iphone") || ua.includes("ipad")) device = "iOS";
+            else if (ua.includes("mobile")) device = "Mobile";
+          }
+
+          // 寫入/更新狀態
+          await setDoc(
+            doc(db, "artifacts", appId, "public", "data", "users_status", userId),
+            {
+              name: userName,
+              role: userRole,
+              store: userStore,
+              device: device,
+              lastActiveAt: serverTimestamp(), // 關鍵：伺服器時間
+              isOnline: true
+            },
+            { merge: true }
+          );
+        } catch (e) {
+          console.error("Heartbeat failed", e);
+        }
+      };
+
+      // 1. 登入後立刻回報一次
+      sendHeartbeat();
+
+      // 2. 之後每 60 秒回報一次
+      heartbeatInterval = setInterval(sendHeartbeat, 60000);
+    }
+
+    return () => {
+      if (heartbeatInterval) clearInterval(heartbeatInterval);
+    };
+  }, [userRole, currentUser, user]);
+
+
+  // ★★★ 監聽全域事件 ★★★
   useEffect(() => {
     if (userRole) {
+      // 監聽各種互動事件，包含手機觸控
       const events = ['mousemove', 'mousedown', 'keypress', 'scroll', 'touchstart', 'click'];
+      
+      // 簡單節流，避免頻繁觸發
       let activityTimeout;
       const throttledActivity = () => {
         if (!activityTimeout) {
@@ -277,8 +361,12 @@ export default function App() {
           }, 500); 
         }
       };
+
       events.forEach(event => window.addEventListener(event, throttledActivity));
+      
+      // 初始化時間
       lastActivityTimeRef.current = Date.now();
+
       return () => {
         events.forEach(event => window.removeEventListener(event, throttledActivity));
       };
@@ -407,8 +495,11 @@ export default function App() {
     let finalUser = userInfo;
 
     if (roleId === 'therapist' && userInfo?.name) {
+       console.log("正在補全管理師資料:", userInfo.name);
        const foundTherapist = therapists.find(t => t.name === userInfo.name);
+       
        if (foundTherapist) {
+         console.log("找到完整資料:", foundTherapist);
          finalUser = {
            ...userInfo,
            ...foundTherapist,
@@ -469,6 +560,20 @@ export default function App() {
       );
       return true;
     } catch (e) {
+      return false;
+    }
+  };
+
+  // ★★★ 新增：管理師密碼更新函式 ★★★
+  const handleUpdateTherapistPassword = async (id, newPass) => {
+    try {
+      await updateDoc(
+        doc(db, "artifacts", appId, "public", "data", "therapists", id),
+        { password: newPass }
+      );
+      return true;
+    } catch (e) {
+      console.error(e);
       return false;
     }
   };
@@ -580,6 +685,8 @@ export default function App() {
       logActivity,
       handleUpdateStorePassword,
       handleUpdateManagerPassword,
+      // ★ 傳遞新函式
+      handleUpdateTherapistPassword,
       navigateToStore,
       activeView,
       appId,
@@ -605,6 +712,7 @@ export default function App() {
       logActivity,
       handleUpdateStorePassword,
       handleUpdateManagerPassword,
+      handleUpdateTherapistPassword,
       navigateToStore,
       activeView,
       appId,
@@ -631,11 +739,13 @@ export default function App() {
         therapists={therapists}
         onUpdatePassword={handleUpdateStorePassword}
         onUpdateManagerPassword={handleUpdateManagerPassword}
+        onUpdateTherapistPassword={handleUpdateTherapistPassword}
       />
     );
 
   return (
     <AppContext.Provider value={contextValue}>
+      {/* (View Layout) */}
       <div className="flex min-h-screen bg-[#F9F8F6] text-stone-600 font-sans selection:bg-stone-200 selection:text-stone-800 overflow-x-hidden">
         <Sidebar
           activeView={activeView}

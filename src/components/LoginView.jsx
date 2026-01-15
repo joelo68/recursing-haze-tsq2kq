@@ -1,8 +1,8 @@
 // src/components/LoginView.jsx
 import React, { useState, useEffect, useMemo } from "react";
 import { Coffee, AlertCircle, Loader2, MapPin, Store, UserCheck, Lock } from "lucide-react";
-import { collection, query, where, getDocs } from "firebase/firestore"; // ★ 新增引用
-import { db, appId } from "../config/firebase"; // ★ 新增引用
+import { collection, query, where, getDocs } from "firebase/firestore"; 
+import { db, appId } from "../config/firebase"; 
 import { ROLES } from "../constants"; 
 
 const LoginView = ({
@@ -12,6 +12,7 @@ const LoginView = ({
   managerAuth,
   onUpdatePassword,
   onUpdateManagerPassword,
+  onUpdateTherapistPassword, // ★ 新增：接收更新管理師密碼的函式
 }) => {
   const [role, setRole] = useState("director");
   const [password, setPassword] = useState("");
@@ -23,7 +24,7 @@ const LoginView = ({
   const [newPassword, setNewPassword] = useState("");
 
   // ==========================================
-  // ★★★ 新增：管理師登入專用狀態 ★★★
+  // 管理師登入專用狀態
   // ==========================================
   const [therapistList, setTherapistList] = useState([]); 
   const [loadingTherapists, setLoadingTherapists] = useState(false);
@@ -66,7 +67,7 @@ const LoginView = ({
   }, [tStore, therapistList]);
 
   // ==========================================
-  // 原有一般登入邏輯 (總監/區長/店長)
+  // 1. 一般登入邏輯 (總監/區長/店長)
   // ==========================================
   const handleAuth = async () => {
     setError("");
@@ -117,7 +118,7 @@ const LoginView = ({
   };
 
   // ==========================================
-  // ★★★ 新增：管理師登入邏輯 ★★★
+  // 2. 管理師登入邏輯
   // ==========================================
   const handleTherapistLogin = async () => {
     setError("");
@@ -143,6 +144,9 @@ const LoginView = ({
     }
   };
 
+  // ==========================================
+  // 3. 修改密碼邏輯 (整合管理師)
+  // ==========================================
   const handlePasswordReset = async () => {
     setError("");
     if (!newPassword || !oldPassword) {
@@ -150,13 +154,19 @@ const LoginView = ({
       return;
     }
     setIsLoading(true);
+    
     let isVerified = false;
+
+    // 驗證舊密碼
     if (role === "store" && selectedUser) {
       const account = storeAccounts.find((a) => a.id === selectedUser);
       if (account && account.password === oldPassword) isVerified = true;
     } else if (role === "manager" && selectedUser) {
       const correctPass = managerAuth[selectedUser] || "0000";
       if (correctPass === oldPassword) isVerified = true;
+    } else if (role === "therapist" && tPersonId) {
+      const therapist = therapistList.find(t => t.id === tPersonId);
+      if (therapist && therapist.password === oldPassword) isVerified = true;
     }
 
     if (!isVerified) {
@@ -165,19 +175,24 @@ const LoginView = ({
       return;
     }
 
+    // 執行更新
     let success = false;
     if (role === "store" && selectedUser) {
       success = await onUpdatePassword(selectedUser, newPassword);
     } else if (role === "manager" && selectedUser) {
       success = await onUpdateManagerPassword(selectedUser, newPassword);
+    } else if (role === "therapist" && tPersonId) {
+      // ★ 呼叫管理師更新 API
+      success = await onUpdateTherapistPassword(tPersonId, newPassword);
     }
 
     if (success) {
-      alert("密碼更新成功");
+      alert("密碼更新成功，請重新登入");
       setIsResetting(false);
       setNewPassword("");
       setOldPassword("");
       setPassword("");
+      setTPassword("");
     } else {
       setError("更新失敗");
     }
@@ -197,7 +212,7 @@ const LoginView = ({
           <p className="text-stone-400 font-medium mt-2">智慧營運管理系統</p>
         </div>
 
-        {/* 角色切換按鈕 (自動包含管理師) */}
+        {/* 角色切換按鈕 */}
         <div className="bg-stone-100 p-1.5 rounded-2xl flex mb-8 overflow-x-auto">
           {Object.entries(ROLES).map(([key, r]) => (
             <button
@@ -236,68 +251,90 @@ const LoginView = ({
               </div>
             ) : (
               <>
-                {/* 1. 選擇區域 */}
-                <div className="relative">
-                  <MapPin className="absolute left-4 top-3.5 text-stone-400" size={18} />
-                  <select
-                    value={tRegion}
-                    onChange={(e) => { setTRegion(e.target.value); setTStore(""); setTPersonId(""); }}
-                    className="w-full pl-12 pr-4 py-3 bg-stone-50 border-2 border-stone-100 rounded-2xl outline-none font-bold text-stone-700 appearance-none"
-                  >
-                    <option value="">請選擇區域...</option>
-                    {Object.keys(managers).map((m) => (
-                      <option key={m} value={m}>{m}區</option>
-                    ))}
-                  </select>
-                </div>
+                {!isResetting ? (
+                  <>
+                    {/* 1. 選擇區域 */}
+                    <div className="relative">
+                      <MapPin className="absolute left-4 top-3.5 text-stone-400" size={18} />
+                      <select
+                        value={tRegion}
+                        onChange={(e) => { setTRegion(e.target.value); setTStore(""); setTPersonId(""); }}
+                        className="w-full pl-12 pr-4 py-3 bg-stone-50 border-2 border-stone-100 rounded-2xl outline-none font-bold text-stone-700 appearance-none"
+                      >
+                        <option value="">請選擇區域...</option>
+                        {Object.keys(managers).map((m) => (
+                          <option key={m} value={m}>{m}區</option>
+                        ))}
+                      </select>
+                    </div>
 
-                {/* 2. 選擇店家 */}
-                <div className="relative">
-                  <Store className="absolute left-4 top-3.5 text-stone-400" size={18} />
-                  <select
-                    value={tStore}
-                    onChange={(e) => { setTStore(e.target.value); setTPersonId(""); }}
-                    disabled={!tRegion}
-                    className="w-full pl-12 pr-4 py-3 bg-stone-50 border-2 border-stone-100 rounded-2xl outline-none font-bold text-stone-700 appearance-none disabled:opacity-50"
-                  >
-                    <option value="">請選擇店家...</option>
-                    {filteredStores.map((s) => (
-                      <option key={s} value={s}>{s}店</option>
-                    ))}
-                  </select>
-                </div>
+                    {/* 2. 選擇店家 */}
+                    <div className="relative">
+                      <Store className="absolute left-4 top-3.5 text-stone-400" size={18} />
+                      <select
+                        value={tStore}
+                        onChange={(e) => { setTStore(e.target.value); setTPersonId(""); }}
+                        disabled={!tRegion}
+                        className="w-full pl-12 pr-4 py-3 bg-stone-50 border-2 border-stone-100 rounded-2xl outline-none font-bold text-stone-700 appearance-none disabled:opacity-50"
+                      >
+                        <option value="">請選擇店家...</option>
+                        {filteredStores.map((s) => (
+                          <option key={s} value={s}>{s}店</option>
+                        ))}
+                      </select>
+                    </div>
 
-                {/* 3. 選擇姓名 */}
-                <div className="relative">
-                  <UserCheck className="absolute left-4 top-3.5 text-stone-400" size={18} />
-                  <select
-                    value={tPersonId}
-                    onChange={(e) => setTPersonId(e.target.value)}
-                    disabled={!tStore}
-                    className="w-full pl-12 pr-4 py-3 bg-stone-50 border-2 border-stone-100 rounded-2xl outline-none font-bold text-stone-700 appearance-none disabled:opacity-50"
-                  >
-                    <option value="">請選擇姓名...</option>
-                    {filteredTherapists.map((t) => (
-                      <option key={t.id} value={t.id}>{t.name}</option>
-                    ))}
-                  </select>
-                </div>
-                {tStore && filteredTherapists.length === 0 && (
-                   <p className="text-xs text-rose-400 pl-2 text-center font-bold">⚠️ 該店尚無人員資料，請聯繫總監建立</p>
+                    {/* 3. 選擇姓名 */}
+                    <div className="relative">
+                      <UserCheck className="absolute left-4 top-3.5 text-stone-400" size={18} />
+                      <select
+                        value={tPersonId}
+                        onChange={(e) => setTPersonId(e.target.value)}
+                        disabled={!tStore}
+                        className="w-full pl-12 pr-4 py-3 bg-stone-50 border-2 border-stone-100 rounded-2xl outline-none font-bold text-stone-700 appearance-none disabled:opacity-50"
+                      >
+                        <option value="">請選擇姓名...</option>
+                        {filteredTherapists.map((t) => (
+                          <option key={t.id} value={t.id}>{t.name}</option>
+                        ))}
+                      </select>
+                    </div>
+                    {tStore && filteredTherapists.length === 0 && (
+                       <p className="text-xs text-rose-400 pl-2 text-center font-bold">⚠️ 該店尚無人員資料，請聯繫總監建立</p>
+                    )}
+
+                    {/* 4. 輸入密碼 */}
+                    <div className="relative">
+                      <Lock className="absolute left-4 top-3.5 text-stone-400" size={18} />
+                      <input
+                        type="password"
+                        value={tPassword}
+                        onChange={(e) => setTPassword(e.target.value)}
+                        placeholder="請輸入密碼"
+                        className="w-full pl-12 pr-4 py-3 bg-stone-50 border-2 border-stone-100 rounded-2xl outline-none font-bold text-stone-700"
+                        onKeyDown={(e) => e.key === "Enter" && handleTherapistLogin()}
+                      />
+                    </div>
+                  </>
+                ) : (
+                  // ★ 管理師修改密碼介面
+                  <div className="space-y-3 animate-in fade-in slide-in-from-right-4 duration-300">
+                    <input
+                      type="password"
+                      value={oldPassword}
+                      onChange={(e) => setOldPassword(e.target.value)}
+                      placeholder="舊密碼"
+                      className="w-full px-4 py-3 bg-white border-2 border-stone-200 rounded-2xl font-bold"
+                    />
+                    <input
+                      type="text"
+                      value={newPassword}
+                      onChange={(e) => setNewPassword(e.target.value)}
+                      placeholder="新密碼"
+                      className="w-full px-4 py-3 bg-white border-2 border-stone-200 rounded-2xl font-bold"
+                    />
+                  </div>
                 )}
-
-                {/* 4. 輸入密碼 */}
-                <div className="relative">
-                  <Lock className="absolute left-4 top-3.5 text-stone-400" size={18} />
-                  <input
-                    type="password"
-                    value={tPassword}
-                    onChange={(e) => setTPassword(e.target.value)}
-                    placeholder="請輸入密碼"
-                    className="w-full pl-12 pr-4 py-3 bg-stone-50 border-2 border-stone-100 rounded-2xl outline-none font-bold text-stone-700"
-                    onKeyDown={(e) => e.key === "Enter" && handleTherapistLogin()}
-                  />
-                </div>
 
                 {error && (
                   <div className="p-3 bg-rose-50 text-rose-500 text-sm font-bold rounded-xl flex items-center gap-2">
@@ -305,13 +342,36 @@ const LoginView = ({
                   </div>
                 )}
 
-                <button
-                  onClick={handleTherapistLogin}
-                  disabled={isLoading || !tPersonId || !tPassword}
-                  className="w-full py-4 bg-stone-800 hover:bg-stone-900 text-white rounded-2xl font-bold shadow-lg disabled:opacity-50 disabled:cursor-not-allowed"
-                >
-                  {isLoading ? <Loader2 className="animate-spin" /> : "管理師登入"}
-                </button>
+                {!isResetting ? (
+                  <button
+                    onClick={handleTherapistLogin}
+                    disabled={isLoading || !tPersonId || !tPassword}
+                    className="w-full py-4 bg-stone-800 hover:bg-stone-900 text-white rounded-2xl font-bold shadow-lg disabled:opacity-50 disabled:cursor-not-allowed"
+                  >
+                    {isLoading ? <Loader2 className="animate-spin" /> : "管理師登入"}
+                  </button>
+                ) : (
+                  <button
+                    onClick={handlePasswordReset}
+                    disabled={isLoading}
+                    className="w-full py-4 bg-rose-500 hover:bg-rose-600 text-white rounded-2xl font-bold shadow-lg"
+                  >
+                    {isLoading ? <Loader2 className="animate-spin" /> : "確認修改"}
+                  </button>
+                )}
+
+                {/* 切換修改密碼按鈕 (管理師) */}
+                {tPersonId && (
+                  <button
+                    onClick={() => {
+                      setIsResetting(!isResetting);
+                      setError("");
+                    }}
+                    className="w-full text-center text-xs text-stone-400 hover:text-stone-600 font-bold py-2"
+                  >
+                    {isResetting ? "返回登入" : "修改密碼?"}
+                  </button>
+                )}
               </>
             )
           ) : (
