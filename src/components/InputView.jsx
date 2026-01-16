@@ -3,7 +3,7 @@ import React, { useState, useEffect, useContext, useMemo } from "react";
 import { 
   FileText, Upload, DollarSign,
   RotateCcw, Activity, AlertCircle, X, CheckCircle, User, Star, Bug,
-  Layers, Users, TrendingDown, Calendar, AlertTriangle
+  Layers, Users, TrendingDown, Calendar, AlertTriangle, Calculator
 } from "lucide-react";
 import { 
   collection, addDoc, setDoc, doc, serverTimestamp, getDocFromServer 
@@ -25,7 +25,7 @@ const getLocalTodayString = () => {
 };
 
 // ============================================================================
-// ★★★ 子元件 A：店長專用輸入介面 (StoreInputView) ★★★
+// ★★★ 子元件 A：店長專用輸入介面 (StoreInputView) - 維持不變 ★★★
 // ============================================================================
 const StoreInputView = () => {
   const {
@@ -41,7 +41,6 @@ const StoreInputView = () => {
   const [formData, setFormData] = useState(defaultFormData);
   const [isSubmitting, setIsSubmitting] = useState(false);
   
-  // ★ 視窗狀態控制
   const [showConfirmModal, setShowConfirmModal] = useState(false); 
   const [showDateWarningModal, setShowDateWarningModal] = useState(false); 
   const [existingReportId, setExistingReportId] = useState(null); 
@@ -52,10 +51,8 @@ const StoreInputView = () => {
     newCustomers: "新客數", newCustomerClosings: "新客留單人數", newCustomerSales: "新客業績", refund: "當日退費",
   };
   
-  // 使用修正後的當地日期
   const today = getLocalTodayString();
 
-  // ★★★ 喚醒監聽器 ★★★
   useEffect(() => {
     const handleWakeUp = () => {
       if (document.visibilityState === "visible" || document.hasFocus()) {
@@ -148,28 +145,22 @@ const StoreInputView = () => {
     }
   };
 
-  // ★★★ 修改：提交前檢查流程 ★★★
   const handlePreSubmit = (e) => {
     e.preventDefault();
     if (!selectedStore) return showToast("請選擇店家", "error");
     if (inputDate > today) return showToast("不可提交未來日期", "error");
 
     const formattedInputDate = toStandardDateFormat(inputDate);
-    // 檢查是否有舊資料
     const existingReport = rawData.find((d) => toStandardDateFormat(d.date) === formattedInputDate && d.storeName === selectedStore);
     setExistingReportId(existingReport ? existingReport.id : null);
 
-    // ★ 檢查是否為「非當日」提交
     if (inputDate !== today) {
-      // 觸發「非當日警示視窗」
       setShowDateWarningModal(true);
     } else {
-      // 若是當日，直接進入確認視窗
       setShowConfirmModal(true);
     }
   };
 
-  // ★ 新增：從日期警示視窗 -> 進入確認視窗
   const handleDateWarningConfirm = () => {
     setShowDateWarningModal(false);
     setShowConfirmModal(true);
@@ -312,7 +303,6 @@ const StoreInputView = () => {
         </div>
       </div>
 
-      {/* ★★★ 1. 非當日提交警示視窗 (新增) ★★★ */}
       {showDateWarningModal && (
         <div className="fixed inset-0 z-[1000] flex items-center justify-center p-4 bg-stone-900/80 backdrop-blur-sm">
           <div className="bg-white rounded-3xl shadow-2xl w-full max-w-sm overflow-hidden animate-in zoom-in-95 border-4 border-rose-100">
@@ -361,7 +351,6 @@ const StoreInputView = () => {
         </div>
       )}
 
-      {/* ★★★ 2. 資料確認視窗 (既有，順序在日期警示之後) ★★★ */}
       {showConfirmModal && (
         <div className="fixed inset-0 z-[999] flex items-center justify-center p-4 bg-stone-900/60 backdrop-blur-sm">
           <div className="bg-white rounded-2xl shadow-xl w-full max-w-md overflow-hidden animate-in zoom-in-95">
@@ -373,7 +362,6 @@ const StoreInputView = () => {
                  <div className="flex justify-between font-bold text-amber-600 border-t pt-2"><span>現金業績</span><span>${formData.cash}</span></div>
                  <div className="flex justify-between font-bold text-indigo-600"><span>總權責</span><span>${formData.accrual}</span></div>
               </div>
-              {/* 若非當日且有舊資料，這邊再次小小提醒 */}
               {existingReportId && <p className="text-xs text-rose-500 font-bold bg-rose-50 p-2 rounded">⚠️ 提醒：資料將覆蓋當日舊紀錄。</p>}
               <div className="flex gap-3 pt-2">
                 <button onClick={()=>setShowConfirmModal(false)} className="flex-1 py-3 border rounded-xl font-bold text-stone-500 hover:bg-stone-50">返回</button>
@@ -388,41 +376,50 @@ const StoreInputView = () => {
 };
 
 // ============================================================================
-// ★★★ 子元件 B: 管理師專用輸入介面 (TherapistInputView) - 升級版 ★★★
+// ★★★ 子元件 B: 管理師專用輸入介面 (TherapistInputView) - 修正計算公式 ★★★
 // ============================================================================
 const TherapistInputView = () => {
   const { currentUser, inputDate, setInputDate, showToast, logActivity } = useContext(AppContext);
   
   const defaultPersonalData = {
-    serviceRevenue: "", salesRevenue: "", serviceCount: "", designatedCount: "", notes: ""
+    totalRevenue: "",        // 1. 今日總業績 (新+舊-退)
+    newCustomerRevenue: "",  // 2. 今日新客業績
+    newCustomerCount: "",    // 3. 今日新客人數
+    newCustomerClosings: "", // 4. 今日新客翻單人數
+    oldCustomerRevenue: "",  // 5. 今日舊客業績
+    oldCustomerCount: "",    // 6. 今日舊客人數
+    returnRevenue: "",       // 7. 今日當月退費業績
   };
+  
   const [formData, setFormData] = useState(defaultPersonalData);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [hasSubmittedToday, setHasSubmittedToday] = useState(false);
 
-  // ★ 新增視窗狀態
+  // 視窗狀態
   const [showConfirmModal, setShowConfirmModal] = useState(false); 
   const [showDateWarningModal, setShowDateWarningModal] = useState(false); 
 
-  // Debug Info
   const [debugInfo, setDebugInfo] = useState(null);
 
+  // ★ 更新：總業績說明 與 退費欄位名稱
   const LABELS = {
-    serviceRevenue: "個人操作權責 (技術)",
-    salesRevenue: "個人銷售業績 (產品/課程)",
-    serviceCount: "總操作人次",
-    designatedCount: "指定客次",
-    notes: "工作備註 (選填)"
+    totalRevenue: "今日總業績 (新客+舊客-退費)", // 更新說明
+    newCustomerRevenue: "新客業績",
+    newCustomerCount: "新客人數",
+    newCustomerClosings: "新客翻單人數",
+    oldCustomerRevenue: "舊客業績",
+    oldCustomerCount: "舊客人數",
+    returnRevenue: "今日當月退費業績", // 更新欄位名稱
   };
 
   const today = getLocalTodayString();
 
-  // ★★★ 喚醒監聽器 ★★★
+  // 喚醒監聽
   useEffect(() => {
     const handleWakeUp = () => {
       if (document.visibilityState === "visible" || document.hasFocus()) {
         const realToday = getLocalTodayString();
-        const isFormEmpty = !formData.serviceRevenue && !formData.salesRevenue && !formData.serviceCount;
+        const isFormEmpty = !formData.newCustomerRevenue && !formData.oldCustomerRevenue;
         
         if (inputDate !== realToday && isFormEmpty) {
            console.log(`[系統喚醒] 日期校正: ${inputDate} -> ${realToday}`);
@@ -440,8 +437,9 @@ const TherapistInputView = () => {
     };
   }, [inputDate, formData, setInputDate]);
 
+  // 暫存讀取
   useEffect(() => {
-    const savedDraft = localStorage.getItem("cyj_therapist_draft");
+    const savedDraft = localStorage.getItem("cyj_therapist_draft_v2"); 
     if (savedDraft) {
       try {
         const parsed = JSON.parse(savedDraft);
@@ -455,10 +453,23 @@ const TherapistInputView = () => {
     }
   }, []);
 
+  // 寫入暫存
   useEffect(() => {
     const draft = { formData, date: inputDate, timestamp: Date.now() };
-    localStorage.setItem("cyj_therapist_draft", JSON.stringify(draft));
+    localStorage.setItem("cyj_therapist_draft_v2", JSON.stringify(draft));
   }, [formData, inputDate]);
+
+  // ★★★★ 更新：自動計算總業績 (新客 + 舊客 - 退費) ★★★★
+  useEffect(() => {
+    const newRev = parseNumber(formData.newCustomerRevenue) || 0;
+    const oldRev = parseNumber(formData.oldCustomerRevenue) || 0;
+    const returnRev = parseNumber(formData.returnRevenue) || 0; // 取得退費金額
+    const total = newRev + oldRev - returnRev; // 執行扣除
+    
+    if (parseNumber(formData.totalRevenue) !== total) {
+      setFormData(prev => ({ ...prev, totalRevenue: formatNumber(total) }));
+    }
+  }, [formData.newCustomerRevenue, formData.oldCustomerRevenue, formData.returnRevenue]); // 增加監聽 returnRevenue
 
   useEffect(() => {
     const checkSubmission = async () => {
@@ -484,13 +495,10 @@ const TherapistInputView = () => {
     setFormData(prev => ({ ...prev, [key]: formatNumber(rawValue) }));
   };
 
-  const handleTextChange = (key, value) => {
-    setFormData(prev => ({ ...prev, [key]: value }));
-  };
-
-  // ★★★ 修改：提交前流程 ★★★
   const handlePreSubmit = () => {
-    if (!formData.serviceRevenue && !formData.serviceCount) return showToast("請至少輸入一項數據", "error");
+    // 檢查邏輯：至少要輸入一項業績或人數
+    const hasData = formData.newCustomerRevenue || formData.oldCustomerRevenue || formData.newCustomerCount || formData.oldCustomerCount || formData.returnRevenue;
+    if (!hasData) return showToast("請至少輸入一項業績或人數數據", "error");
     
     if (inputDate !== today) {
       setShowDateWarningModal(true);
@@ -499,7 +507,6 @@ const TherapistInputView = () => {
     }
   };
 
-  // 從警示視窗進入確認視窗
   const handleDateWarningConfirm = () => {
     setShowDateWarningModal(false);
     setShowConfirmModal(true);
@@ -523,11 +530,15 @@ const TherapistInputView = () => {
         therapistId: currentUser.id,
         therapistName: currentUser.name,
         storeName: currentUser.store || "未註記店家", 
-        serviceRevenue: parseNumber(formData.serviceRevenue),
-        salesRevenue: parseNumber(formData.salesRevenue),
-        serviceCount: parseNumber(formData.serviceCount),
-        designatedCount: parseNumber(formData.designatedCount),
-        notes: formData.notes,
+        
+        totalRevenue: parseNumber(formData.totalRevenue),
+        newCustomerRevenue: parseNumber(formData.newCustomerRevenue),
+        newCustomerCount: parseNumber(formData.newCustomerCount),
+        newCustomerClosings: parseNumber(formData.newCustomerClosings),
+        oldCustomerRevenue: parseNumber(formData.oldCustomerRevenue),
+        oldCustomerCount: parseNumber(formData.oldCustomerCount),
+        returnRevenue: parseNumber(formData.returnRevenue),
+        
         updatedAt: serverTimestamp(),
       };
 
@@ -542,8 +553,8 @@ const TherapistInputView = () => {
         showToast("提交成功！", "success");
         setHasSubmittedToday(true);
         setFormData(defaultPersonalData);
-        localStorage.removeItem("cyj_therapist_draft");
-        setShowConfirmModal(false); // 關閉視窗
+        localStorage.removeItem("cyj_therapist_draft_v2");
+        setShowConfirmModal(false); 
       } else {
         throw new Error("寫入失敗，雲端查無資料。");
       }
@@ -604,36 +615,67 @@ const TherapistInputView = () => {
       )}
 
       <Card title="個人績效回報">
-        <div className="space-y-4">
-          <div className="grid grid-cols-2 gap-4">
-             <div>
-                <label className="text-xs font-bold text-stone-500 mb-1 block">{LABELS.serviceRevenue}</label>
-                <div className="relative">
-                  <DollarSign size={14} className="absolute left-3 top-3.5 text-stone-400"/>
-                  <input type="text" value={formData.serviceRevenue} onChange={(e) => handleNumberChange("serviceRevenue", e.target.value)} placeholder="0" className="w-full pl-8 pr-3 py-3 border-2 border-stone-100 rounded-xl font-bold text-indigo-600 focus:border-indigo-400 outline-none" />
-                </div>
-             </div>
-             <div>
-                <label className="text-xs font-bold text-stone-500 mb-1 block">{LABELS.salesRevenue}</label>
-                <div className="relative">
-                  <DollarSign size={14} className="absolute left-3 top-3.5 text-stone-400"/>
-                  <input type="text" value={formData.salesRevenue} onChange={(e) => handleNumberChange("salesRevenue", e.target.value)} placeholder="0" className="w-full pl-8 pr-3 py-3 border-2 border-stone-100 rounded-xl font-bold text-amber-600 focus:border-amber-400 outline-none" />
-                </div>
-             </div>
-          </div>
-          <div className="grid grid-cols-2 gap-4">
-             <div>
-                <label className="text-xs font-bold text-stone-500 mb-1 block">{LABELS.serviceCount}</label>
-                <input type="text" value={formData.serviceCount} onChange={(e) => handleNumberChange("serviceCount", e.target.value)} placeholder="0" className="w-full border-2 p-3 rounded-xl font-bold text-stone-700 focus:border-indigo-400 outline-none" />
-             </div>
-             <div>
-                <label className="text-xs font-bold text-stone-500 mb-1 block">{LABELS.designatedCount}</label>
-                <input type="text" value={formData.designatedCount} onChange={(e) => handleNumberChange("designatedCount", e.target.value)} placeholder="0" className="w-full border-2 p-3 rounded-xl font-bold text-stone-700 focus:border-indigo-400 outline-none" />
+        <div className="space-y-6">
+          
+          {/* 1. 總業績 (唯讀) */}
+          <div className="bg-indigo-50 p-4 rounded-xl border border-indigo-100">
+             <label className="text-xs font-bold text-indigo-500 mb-1 flex items-center gap-1">
+                <Calculator size={12}/> {LABELS.totalRevenue} (自動加總)
+             </label>
+             <div className="relative">
+                <DollarSign size={18} className="absolute left-3 top-3.5 text-indigo-400"/>
+                <input 
+                  type="text" 
+                  value={formData.totalRevenue} 
+                  readOnly 
+                  className="w-full pl-10 pr-3 py-3 border-2 border-indigo-200 rounded-xl font-mono text-2xl font-bold text-indigo-700 bg-white outline-none" 
+                  placeholder="0"
+                />
              </div>
           </div>
+
+          {/* 2. 新客數據區 */}
           <div>
-             <label className="text-xs font-bold text-stone-500 mb-1 block">{LABELS.notes}</label>
-             <textarea value={formData.notes} onChange={(e) => handleTextChange("notes", e.target.value)} placeholder="選填：今日工作備註..." rows="2" className="w-full border-2 p-3 rounded-xl text-sm font-medium text-stone-600 focus:border-stone-400 outline-none" />
+            <h4 className="text-xs font-bold text-stone-400 uppercase tracking-wider mb-2 flex items-center gap-2">
+                <Star size={12}/> 新客數據
+            </h4>
+            <div className="grid grid-cols-2 gap-4">
+                <div>
+                    <label className="text-xs font-bold text-stone-500 mb-1 block">{LABELS.newCustomerRevenue}</label>
+                    <input type="text" value={formData.newCustomerRevenue} onChange={(e) => handleNumberChange("newCustomerRevenue", e.target.value)} placeholder="0" className="w-full border-2 p-3 rounded-xl font-bold text-amber-600 focus:border-amber-400 outline-none" inputMode="numeric"/>
+                </div>
+                <div>
+                    <label className="text-xs font-bold text-stone-500 mb-1 block">{LABELS.newCustomerCount}</label>
+                    <input type="text" value={formData.newCustomerCount} onChange={(e) => handleNumberChange("newCustomerCount", e.target.value)} placeholder="0" className="w-full border-2 p-3 rounded-xl font-bold text-stone-700 focus:border-amber-400 outline-none" inputMode="numeric"/>
+                </div>
+                <div className="col-span-2">
+                    <label className="text-xs font-bold text-stone-500 mb-1 block">{LABELS.newCustomerClosings}</label>
+                    <input type="text" value={formData.newCustomerClosings} onChange={(e) => handleNumberChange("newCustomerClosings", e.target.value)} placeholder="0" className="w-full border-2 p-3 rounded-xl font-bold text-stone-700 focus:border-amber-400 outline-none" inputMode="numeric"/>
+                </div>
+            </div>
+          </div>
+
+          {/* 3. 舊客數據區 */}
+          <div>
+            <h4 className="text-xs font-bold text-stone-400 uppercase tracking-wider mb-2 flex items-center gap-2">
+                <Users size={12}/> 舊客數據
+            </h4>
+            <div className="grid grid-cols-2 gap-4">
+                <div>
+                    <label className="text-xs font-bold text-stone-500 mb-1 block">{LABELS.oldCustomerRevenue}</label>
+                    <input type="text" value={formData.oldCustomerRevenue} onChange={(e) => handleNumberChange("oldCustomerRevenue", e.target.value)} placeholder="0" className="w-full border-2 p-3 rounded-xl font-bold text-indigo-600 focus:border-indigo-400 outline-none" inputMode="numeric"/>
+                </div>
+                <div>
+                    <label className="text-xs font-bold text-stone-500 mb-1 block">{LABELS.oldCustomerCount}</label>
+                    <input type="text" value={formData.oldCustomerCount} onChange={(e) => handleNumberChange("oldCustomerCount", e.target.value)} placeholder="0" className="w-full border-2 p-3 rounded-xl font-bold text-stone-700 focus:border-indigo-400 outline-none" inputMode="numeric"/>
+                </div>
+            </div>
+          </div>
+
+          {/* 4. 退費 */}
+          <div>
+             <label className="text-xs font-bold text-rose-500 mb-1 block flex items-center gap-1"><TrendingDown size={12}/> {LABELS.returnRevenue}</label>
+             <input type="text" value={formData.returnRevenue} onChange={(e) => handleNumberChange("returnRevenue", e.target.value)} placeholder="0" className="w-full border-2 p-3 rounded-xl font-bold text-rose-600 border-rose-100 focus:border-rose-400 outline-none mb-4" inputMode="numeric"/>
           </div>
 
           <button onClick={handlePreSubmit} disabled={isSubmitting} className="w-full py-4 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl font-bold shadow-lg transition-all flex items-center justify-center gap-2 active:scale-95 disabled:opacity-50">
@@ -643,7 +685,7 @@ const TherapistInputView = () => {
         </div>
       </Card>
 
-      {/* ★★★ 1. 管理師版：非當日提交警示視窗 ★★★ */}
+      {/* 日期警示視窗 */}
       {showDateWarningModal && (
         <div className="fixed inset-0 z-[1000] flex items-center justify-center p-4 bg-stone-900/80 backdrop-blur-sm">
           <div className="bg-white rounded-3xl shadow-2xl w-full max-w-sm overflow-hidden animate-in zoom-in-95 border-4 border-rose-100">
@@ -692,7 +734,7 @@ const TherapistInputView = () => {
         </div>
       )}
 
-      {/* ★★★ 2. 管理師版：資料確認視窗 (整合版) ★★★ */}
+      {/* 資料確認視窗 (更新：移除備註顯示) */}
       {showConfirmModal && (
         <div className="fixed inset-0 z-[999] flex items-center justify-center p-4 bg-stone-900/60 backdrop-blur-sm">
           <div className="bg-white rounded-2xl shadow-xl w-full max-w-md overflow-hidden animate-in zoom-in-95">
@@ -704,25 +746,21 @@ const TherapistInputView = () => {
               <div className="bg-stone-50 p-4 rounded-xl space-y-2 text-sm">
                  <div className="flex justify-between font-bold text-stone-700"><span>日期</span><span>{inputDate}</span></div>
                  <div className="flex justify-between font-bold text-stone-700"><span>人員</span><span>{currentUser?.name}</span></div>
+                 
                  <div className="border-t border-stone-200 my-2 pt-2 space-y-1">
                     <div className="flex justify-between">
-                      <span className="text-stone-500">操作權責</span>
-                      <span className="font-mono font-bold text-indigo-600">${formData.serviceRevenue || 0}</span>
+                      <span className="text-stone-500">今日總業績</span>
+                      <span className="font-mono font-bold text-indigo-600 text-lg">${formData.totalRevenue || 0}</span>
                     </div>
-                    <div className="flex justify-between">
-                      <span className="text-stone-500">銷售業績</span>
-                      <span className="font-mono font-bold text-amber-600">${formData.salesRevenue || 0}</span>
+                    <div className="flex justify-between text-xs text-stone-400 pl-2">
+                      <span>(新客 ${formData.newCustomerRevenue || 0} + 舊客 ${formData.oldCustomerRevenue || 0})</span>
                     </div>
-                    <div className="flex justify-between">
-                      <span className="text-stone-500">操作人次</span>
-                      <span className="font-mono font-bold text-stone-700">{formData.serviceCount || 0}</span>
+                    
+                    <div className="flex justify-between mt-2">
+                      <span className="text-stone-500">退費業績</span>
+                      <span className="font-mono font-bold text-rose-500">${formData.returnRevenue || 0}</span>
                     </div>
                  </div>
-                 {formData.notes && (
-                   <div className="bg-white p-2 rounded border border-stone-200 text-stone-500 text-xs italic">
-                     備註: {formData.notes}
-                   </div>
-                 )}
               </div>
               
               {hasSubmittedToday && (

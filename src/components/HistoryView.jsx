@@ -42,7 +42,7 @@ const HistoryView = () => {
     return row.storeName || row.store || "未註記";
   };
 
-  // 定義欄位寬度 (min-w) 確保不換行
+  // 1. 定義店務日報欄位
   const STORE_FIELDS = [
     { key: "cash", label: "現金", width: "min-w-[100px]" },
     { key: "accrual", label: "總權責", width: "min-w-[100px]" },
@@ -54,6 +54,17 @@ const HistoryView = () => {
     { key: "newCustomerSales", label: "新客業績", width: "min-w-[100px]" },
     { key: "refund", label: "退費", width: "min-w-[100px]", isNegative: true },
     { key: "skincareRefund", label: "保養品退", width: "min-w-[100px]", isNegative: true },
+  ];
+
+  // 2. ★ 更新：管理師日報新欄位 (移除了備註)
+  const THERAPIST_FIELDS = [
+    { key: "totalRevenue", label: "總業績", width: "min-w-[100px]", isHighlight: true, readOnly: true }, // 自動計算
+    { key: "newCustomerRevenue", label: "新客業績", width: "min-w-[100px]" },
+    { key: "newCustomerCount", label: "新客人數", width: "min-w-[80px]" },
+    { key: "newCustomerClosings", label: "新客翻單", width: "min-w-[80px]" },
+    { key: "oldCustomerRevenue", label: "舊客業績", width: "min-w-[100px]" },
+    { key: "oldCustomerCount", label: "舊客人數", width: "min-w-[80px]" },
+    { key: "returnRevenue", label: "退費", width: "min-w-[100px]", isNegative: true },
   ];
 
   // 資料讀取邏輯
@@ -128,7 +139,28 @@ const HistoryView = () => {
     setEditForm({ ...row, date: toStandardDateFormat(row.date) }); 
   };
   const cancelEdit = () => { setEditId(null); setEditForm({}); };
-  const handleEditChange = (field, value) => { setEditForm((prev) => ({ ...prev, [field]: value })); };
+  
+  const handleEditChange = (field, value) => { 
+    setEditForm((prev) => {
+      const newState = { ...prev, [field]: value };
+      
+      // ★★★★ 更新：管理師模式下，自動計算總業績 (新客 + 舊客 - 退費) ★★★★
+      if (activeTab === "therapist" && (field === "newCustomerRevenue" || field === "oldCustomerRevenue" || field === "returnRevenue")) {
+        const newRev = Number(newState.newCustomerRevenue || 0);
+        const oldRev = Number(newState.oldCustomerRevenue || 0);
+        const returnRev = Number(newState.returnRevenue || 0);
+        newState.totalRevenue = newRev + oldRev - returnRev; // 執行扣除
+      }
+      
+      if (activeTab === "store" && (field === "operationalAccrual" || field === "skincareSales")) {
+         const op = Number(newState.operationalAccrual || 0);
+         const skin = Number(newState.skincareSales || 0);
+         newState.accrual = op + skin;
+      }
+
+      return newState;
+    }); 
+  };
   
   const saveEdit = async () => {
     try {
@@ -151,13 +183,16 @@ const HistoryView = () => {
           skincareRefund: Number(editForm.skincareRefund || 0),
         };
       } else {
+        // ★ 更新：管理師資料儲存邏輯 (移除 notes, 加入新欄位)
         cleanData = { 
           ...editForm, 
-          serviceRevenue: Number(editForm.serviceRevenue || 0), 
-          salesRevenue: Number(editForm.salesRevenue || 0), 
-          serviceCount: Number(editForm.serviceCount || 0), 
-          designatedCount: Number(editForm.designatedCount || 0), 
-          notes: editForm.notes || "" 
+          totalRevenue: Number(editForm.totalRevenue || 0),
+          newCustomerRevenue: Number(editForm.newCustomerRevenue || 0),
+          newCustomerCount: Number(editForm.newCustomerCount || 0),
+          newCustomerClosings: Number(editForm.newCustomerClosings || 0),
+          oldCustomerRevenue: Number(editForm.oldCustomerRevenue || 0),
+          oldCustomerCount: Number(editForm.oldCustomerCount || 0),
+          returnRevenue: Number(editForm.returnRevenue || 0),
         };
       }
 
@@ -185,7 +220,7 @@ const HistoryView = () => {
 
   return (
     <ViewWrapper>
-      {/* ★ 這裡使用 grid grid-cols-1 強制約束子元素寬度，解決 Card 撐開問題 ★ */}
+      {/* 使用 grid grid-cols-1 強制約束子元素寬度，解決 Card 撐開問題 */}
       <div className="grid grid-cols-1 gap-6 w-full pb-20">
         
         {/* 標題與分頁 */}
@@ -199,8 +234,8 @@ const HistoryView = () => {
         </div>
 
         <Card>
-          {/* ★ Card 內部使用 w-full overflow-hidden 確保邊界 ★ */}
-          <div className="space-y-4 w-full overflow-hidden">
+          {/* 移除 overflow-hidden，允許日期選擇器彈出顯示 */}
+          <div className="space-y-4 w-full">
             {/* 篩選器 */}
             <div className="flex flex-wrap gap-4 bg-stone-50 p-4 rounded-xl items-end border border-stone-100">
               <div className="flex-1 min-w-[200px]">
@@ -222,7 +257,6 @@ const HistoryView = () => {
             </div>
 
             {/* 資料表格區塊 */}
-            {/* ★ 關鍵：外層 w-full，內層 overflow-x-auto 負責捲動 ★ */}
             <div className="w-full border border-stone-200 rounded-xl bg-white shadow-sm flex flex-col">
               <div className="overflow-x-auto w-full rounded-xl"> 
                 <table className="w-full text-left text-sm whitespace-nowrap">
@@ -240,16 +274,18 @@ const HistoryView = () => {
                           </th>
                         ))
                       ) : ( 
+                        // ★ 更新：管理師日報表頭 (移除了備註)
                         <> 
-                          <th className="p-4 min-w-[120px]">姓名</th>
-                          <th className="p-4 text-right text-indigo-600 min-w-[120px]">技術業績</th>
-                          <th className="p-4 text-right text-amber-600 min-w-[120px]">銷售業績</th>
-                          <th className="p-4 text-right min-w-[100px]">操作人次</th>
-                          <th className="p-4 min-w-[200px]">備註</th> 
+                          <th className="p-4 min-w-[100px]">姓名</th>
+                          {THERAPIST_FIELDS.map(f => (
+                            <th key={f.key} className={`p-4 text-right ${f.isNegative ? "text-rose-500" : f.isHighlight ? "text-indigo-600" : ""} ${f.width}`}>
+                              {f.label}
+                            </th>
+                          ))}
                         </> 
                       )}
                       
-                      {/* 2. 右側固定：動作 (Desktop Sticky) - 確保按鈕永遠可見 */}
+                      {/* 2. 右側固定：動作 (Desktop Sticky) */}
                       <th className="p-4 text-center bg-stone-100 md:sticky md:right-0 md:z-20 border-l border-stone-200 min-w-[100px] shadow-[-4px_0_8px_-2px_rgba(0,0,0,0.05)]">
                         動作
                       </th>
@@ -291,7 +327,8 @@ const HistoryView = () => {
                                     type="number" 
                                     value={editForm[f.key]} 
                                     onChange={(e)=>handleEditChange(f.key,e.target.value)} 
-                                    className={`border rounded w-20 text-right px-1 outline-none focus:border-amber-400 ${f.isNegative ? "text-rose-500" : ""}`}
+                                    readOnly={f.key === 'accrual'} 
+                                    className={`border rounded w-20 text-right px-1 outline-none focus:border-amber-400 ${f.isNegative ? "text-rose-500" : ""} ${f.key === 'accrual' ? 'bg-stone-100 text-stone-500' : ''}`}
                                   />
                                 ) : (
                                   <span className={f.isNegative ? "text-rose-500 font-bold" : ""}>{fmt(row[f.key])}</span>
@@ -299,16 +336,24 @@ const HistoryView = () => {
                               </td>
                             ))
                           ) : ( 
+                            // ★ 更新：管理師日報內容列 (移除了備註)
                             <> 
                               <td className="p-4 font-bold">{row.therapistName}</td>
-                              {["serviceRevenue", "salesRevenue", "serviceCount"].map(k => (
-                                <td key={k} className="p-4 text-right">
-                                  {isEditing ? <input type="number" value={editForm[k]} onChange={(e)=>handleEditChange(k,e.target.value)} className="border rounded w-20 text-right"/> : fmt(row[k])}
+                              {THERAPIST_FIELDS.map(f => (
+                                <td key={f.key} className="p-4 text-right">
+                                  {isEditing ? (
+                                    <input 
+                                      type="number" 
+                                      value={editForm[f.key]} 
+                                      onChange={(e)=>handleEditChange(f.key,e.target.value)} 
+                                      readOnly={f.readOnly} // 總業績唯讀
+                                      className={`border rounded w-20 text-right px-1 outline-none focus:border-indigo-400 ${f.isNegative ? "text-rose-500" : f.isHighlight ? "font-bold text-indigo-600" : ""} ${f.readOnly ? "bg-stone-100 text-stone-500 cursor-not-allowed" : ""}`}
+                                    />
+                                  ) : (
+                                    <span className={f.isNegative ? "text-rose-500 font-bold" : f.isHighlight ? "text-indigo-600 font-bold" : ""}>{fmt(row[f.key])}</span>
+                                  )}
                                 </td>
                               ))}
-                              <td className="p-4 text-xs max-w-[150px] truncate">
-                                {isEditing ? <input type="text" value={editForm.notes} onChange={(e)=>handleEditChange('notes',e.target.value)} className="border rounded w-full"/> : row.notes}
-                              </td> 
                             </> 
                           )}
                           

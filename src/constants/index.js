@@ -10,21 +10,22 @@ import {
   Activity,
   Settings,
   Calendar, 
-  Target, // 年度目標設定 Icon
+  Target, 
+  UserCog, 
+  CalendarOff
 } from "lucide-react";
 
 export const ROLES = {
   DIRECTOR: { id: "director", label: "總監", pass: "16500" },
   MANAGER: { id: "manager", label: "區長", pass: null },
   STORE: { id: "store", label: "店經理", pass: null },
-  // ★★★ 1. 新增管理師身份 ★★★
   THERAPIST: { id: "therapist", label: "管理師", pass: null },
 };
 
 export const ALL_MENU_ITEMS = [
   { id: "dashboard", label: "營運總覽", icon: LayoutDashboard },
   { id: "annual", label: "年度分析", icon: Calendar },
-  { id: "targets", label: "年度目標設定", icon: Target },
+  { id: "targets", label: "年度目標設定", icon: Target }, 
   { id: "regional", label: "區域分析", icon: MapIcon },
   { id: "store-analysis", label: "單店分析", icon: Store },
   { id: "ranking", label: "詳細報表", icon: TrendingUp },
@@ -33,6 +34,8 @@ export const ALL_MENU_ITEMS = [
   { id: "input", label: "日報輸入", icon: Upload },
   { id: "logs", label: "系統監控", icon: Activity },
   { id: "settings", label: "參數設定", icon: Settings },
+  { id: "t-targets", label: "管理師目標", icon: UserCog }, 
+  { id: "t-schedule", label: "管理師排休", icon: CalendarOff },
 ];
 
 export const DEFAULT_REGIONAL_MANAGERS = {
@@ -48,11 +51,11 @@ export const DEFAULT_PERMISSIONS = {
   director: ALL_MENU_ITEMS.map((i) => i.id),
   
   // 區長權限
-  manager: ["dashboard", "annual", "targets", "regional", "store-analysis", "audit"],
+  manager: ["dashboard", "annual", "targets", "regional", "store-analysis", "audit", "t-targets", "t-schedule"],
   
-  // 店經理權限 (補上 targets 以便進行目標設定)
-  store: ["dashboard", "annual", "targets", "store-analysis", "ranking", "history", "input"],
+  // 店經理權限
+  store: ["dashboard", "annual", "targets", "store-analysis", "ranking", "history", "input", "t-targets", "t-schedule"],
 
-  // ★★★ 2. 設定管理師權限 (目前先開放日報輸入) ★★★
-  therapist: ["input"],
+  // ★★★ 管理師權限：新增 dashboard ★★★
+  therapist: ["dashboard", "input"],
 };
