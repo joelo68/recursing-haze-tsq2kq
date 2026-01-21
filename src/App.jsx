@@ -11,111 +11,13 @@ import React, {
   useRef,
 } from "react";
 
-// --- 1. 設定檔 ---
 import { app, auth, db, appId } from "./config/firebase";
-
-// --- 2. Firebase SDK ---
-import {
-  onAuthStateChanged,
-  signInAnonymously,
-  signInWithCustomToken,
-} from "firebase/auth";
-
-import {
-  collection,
-  addDoc,
-  deleteDoc,
-  updateDoc,
-  doc,
-  onSnapshot,
-  serverTimestamp,
-  setDoc,
-  query,
-  orderBy,
-  limit,
-} from "firebase/firestore";
-
-// --- 3. Recharts 圖表 ---
-import {
-  BarChart,
-  Bar,
-  XAxis,
-  YAxis,
-  CartesianGrid,
-  Tooltip as RechartsTooltip,
-  Legend,
-  ResponsiveContainer,
-  LineChart,
-  Line,
-  ComposedChart,
-  Area,
-  Cell,
-  PieChart,
-  Pie,
-} from "recharts";
-
-// --- 4. Lucide Icons ---
-import {
-  LayoutDashboard,
-  Upload,
-  TrendingUp,
-  Map as MapIcon,
-  Settings,
-  ClipboardCheck,
-  Menu,
-  Search,
-  Filter,
-  Trash2,
-  Save,
-  Plus,
-  DollarSign,
-  Target,
-  Users,
-  Award,
-  Loader2,
-  FileText,
-  AlertCircle,
-  CheckCircle,
-  User,
-  Store,
-  Lock,
-  LogOut,
-  FileWarning,
-  Edit2,
-  CheckSquare,
-  X,
-  Download,
-  ChevronLeft,
-  ChevronRight,
-  Activity,
-  Sparkles,
-  ChevronDown,
-  Coffee,
-  ShoppingBag,
-  CreditCard,
-  Smartphone,
-  Monitor,
-  Bell,
-  Clock, 
-} from "lucide-react";
-
-// --- 5. 常數與工具 ---
-import {
-  ROLES,
-  ALL_MENU_ITEMS,
-  DEFAULT_REGIONAL_MANAGERS,
-  DEFAULT_PERMISSIONS,
-} from "./constants";
-
-import {
-  generateUUID,
-  formatLocalYYYYMMDD,
-  toStandardDateFormat,
-  formatNumber,
-  parseNumber,
-} from "./utils/helpers";
-
-// --- 6. 引入元件 ---
+import { onAuthStateChanged, signInAnonymously, signInWithCustomToken } from "firebase/auth";
+import { collection, addDoc, deleteDoc, updateDoc, doc, onSnapshot, serverTimestamp, setDoc, query, orderBy, limit } from "firebase/firestore";
+import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip as RechartsTooltip, Legend, ResponsiveContainer, LineChart, Line, ComposedChart, Area, Cell, PieChart, Pie } from "recharts";
+import { LayoutDashboard, Upload, TrendingUp, Map as MapIcon, Settings, ClipboardCheck, Menu, Search, Filter, Trash2, Save, Plus, DollarSign, Target, Users, Award, Loader2, FileText, AlertCircle, CheckCircle, User, Store, Lock, LogOut, FileWarning, Edit2, CheckSquare, X, Download, ChevronLeft, ChevronRight, Activity, Sparkles, ChevronDown, Coffee, ShoppingBag, CreditCard, Smartphone, Monitor, Bell, Clock } from "lucide-react";
+import { ROLES, ALL_MENU_ITEMS, DEFAULT_REGIONAL_MANAGERS, DEFAULT_PERMISSIONS } from "./constants/index";
+import { generateUUID, formatLocalYYYYMMDD, toStandardDateFormat, formatNumber, parseNumber } from "./utils/helpers";
 import { ViewWrapper, Card, Skeleton, Toast, ConfirmModal } from "./components/SharedUI";
 import { Sidebar, MobileTopNav } from "./components/Navigation";
 import LoginView from "./components/LoginView";
@@ -133,11 +35,9 @@ import AuditView from "./components/AuditView";
 import { useAnalytics } from "./hooks/useAnalytics";
 import AnnualView from "./components/AnnualView";
 import TargetView from "./components/TargetView";
-// ★ 新增引用
 import TherapistTargetView from "./components/TherapistTargetView";
 import TherapistScheduleView from "./components/TherapistScheduleView";
 
-// --- Main App Component ---
 export default function App() {
   const [user, setUser] = useState(null);
   const [userRole, setUserRole] = useState(null);
@@ -146,12 +46,7 @@ export default function App() {
   const [activeView, setActiveView] = useState("dashboard");
   const [isSidebarOpen, setSidebarOpen] = useState(true);
   const [toast, setToast] = useState(null);
-  const [confirmModal, setConfirmModal] = useState({
-    isOpen: false,
-    title: "",
-    message: "",
-    onConfirm: null,
-  });
+  const [confirmModal, setConfirmModal] = useState({ isOpen: false, title: "", message: "", onConfirm: null });
   const [globalSearchTerm, setGlobalSearchTerm] = useState("");
   
   const [rawData, setRawData] = useState([]); 
@@ -162,7 +57,8 @@ export default function App() {
   const [managerAuth, setManagerAuth] = useState({});
   const [permissions, setPermissions] = useState(DEFAULT_PERMISSIONS);
   const [therapists, setTherapists] = useState([]);
-  
+  const [trainerAuth, setTrainerAuth] = useState({ password: "0000" });
+
   const [therapistReports, setTherapistReports] = useState([]); 
   const [therapistSchedules, setTherapistSchedules] = useState({}); 
   const [therapistTargets, setTherapistTargets] = useState({}); 
@@ -171,15 +67,12 @@ export default function App() {
   const [countdown, setCountdown] = useState(15);
   const lastActivityTimeRef = useRef(Date.now()); 
 
-  const [selectedYear, setSelectedYear] = useState(
-    new Date().getFullYear().toString()
-  );
-  const [selectedMonth, setSelectedMonth] = useState(
-    (new Date().getMonth() + 1).toString()
-  );
-  const [inputDate, setInputDate] = useState(() =>
-    formatLocalYYYYMMDD(new Date())
-  );
+  const [selectedYear, setSelectedYear] = useState(new Date().getFullYear().toString());
+  const [selectedMonth, setSelectedMonth] = useState((new Date().getMonth() + 1).toString());
+  const [inputDate, setInputDate] = useState(() => formatLocalYYYYMMDD(new Date()));
+
+  // 輔助函式：標準化店名 (移除 CYJ 與 店)
+  const normalizeStore = (s) => (s || "").replace(/CYJ|店/g, "").trim();
 
   const logActivity = useCallback(async (role, user, action, details) => {
     let device = "PC";
@@ -189,39 +82,22 @@ export default function App() {
       else if (ua.includes("iphone")||ua.includes("ipad")) device = "iOS";
       else if (ua.includes("mobile")) device = "Mobile";
     }
-    try {
-      await addDoc(
-        collection(db, "artifacts", appId, "public", "data", "system_logs"),
-        { timestamp: serverTimestamp(), role, user, action, details, device }
-      );
-    } catch (e) {
-      console.error("Failed to log activity", e);
-    }
+    try { await addDoc(collection(db, "artifacts", appId, "public", "data", "system_logs"), { timestamp: serverTimestamp(), role, user, action, details, device }); } catch (e) { console.error("Failed to log activity", e); }
   }, []);
 
   const handleLogout = useCallback(async (reason = "使用者手動登出") => {
-    const userName = currentUser?.name || (userRole === "director" ? "總監" : "未知");
+    const userName = currentUser?.name || (userRole === "director" ? "總監" : (userRole === "trainer" ? "教專" : "未知"));
     if (userRole) logActivity(userRole, userName, "登出系統", reason);
-    setShowIdleWarning(false);
-    setCountdown(15);
-    lastActivityTimeRef.current = Date.now(); 
-    localStorage.removeItem("cyj_input_draft");
-    localStorage.removeItem("cyj_input_draft_v2"); 
-    localStorage.removeItem("cyj_input_draft_v3"); 
-    localStorage.removeItem("cyj_therapist_draft"); 
-    localStorage.removeItem("cyj_therapist_draft_v2");
-    setUserRole(null);
-    setCurrentUser(null);
-    setActiveView("dashboard");
+    setShowIdleWarning(false); setCountdown(15); lastActivityTimeRef.current = Date.now(); 
+    localStorage.removeItem("cyj_input_draft"); localStorage.removeItem("cyj_input_draft_v2"); localStorage.removeItem("cyj_input_draft_v3"); 
+    localStorage.removeItem("cyj_therapist_draft"); localStorage.removeItem("cyj_therapist_draft_v2");
+    setUserRole(null); setCurrentUser(null); setActiveView("dashboard");
   }, [currentUser, userRole, logActivity]);
 
   const handleUserActivity = useCallback(() => {
     if (!userRole) return;
     lastActivityTimeRef.current = Date.now();
-    if (showIdleWarning) {
-      setShowIdleWarning(false);
-      setCountdown(15);
-    }
+    if (showIdleWarning) { setShowIdleWarning(false); setCountdown(15); }
   }, [userRole, showIdleWarning]);
 
   useEffect(() => {
@@ -230,18 +106,10 @@ export default function App() {
       intervalId = setInterval(() => {
         const now = Date.now();
         const elapsed = now - lastActivityTimeRef.current; 
-        const WARNING_THRESHOLD = 165 * 1000; 
-        const LOGOUT_THRESHOLD = 180 * 1000;  
-        if (elapsed > LOGOUT_THRESHOLD) {
-          clearInterval(intervalId);
-          handleLogout("閒置超過 3 分鐘自動登出");
-        } else if (elapsed > WARNING_THRESHOLD) {
-          if (!showIdleWarning) setShowIdleWarning(true);
-          const remaining = Math.ceil((LOGOUT_THRESHOLD - elapsed) / 1000);
-          setCountdown(remaining > 0 ? remaining : 0);
-        } else {
-          if (showIdleWarning) setShowIdleWarning(false); 
-        }
+        const WARNING_THRESHOLD = 165 * 1000; const LOGOUT_THRESHOLD = 180 * 1000;  
+        if (elapsed > LOGOUT_THRESHOLD) { clearInterval(intervalId); handleLogout("閒置超過 3 分鐘自動登出"); } 
+        else if (elapsed > WARNING_THRESHOLD) { if (!showIdleWarning) setShowIdleWarning(true); const remaining = Math.ceil((LOGOUT_THRESHOLD - elapsed) / 1000); setCountdown(remaining > 0 ? remaining : 0); } 
+        else { if (showIdleWarning) setShowIdleWarning(false); }
       }, 1000); 
     }
     return () => { if (intervalId) clearInterval(intervalId); };
@@ -251,35 +119,19 @@ export default function App() {
     if (userRole) {
       const events = ['mousemove', 'mousedown', 'keypress', 'scroll', 'touchstart', 'click'];
       let activityTimeout;
-      const throttledActivity = () => {
-        if (!activityTimeout) {
-          handleUserActivity();
-          activityTimeout = setTimeout(() => { activityTimeout = null; }, 500); 
-        }
-      };
+      const throttledActivity = () => { if (!activityTimeout) { handleUserActivity(); activityTimeout = setTimeout(() => { activityTimeout = null; }, 500); } };
       events.forEach(event => window.addEventListener(event, throttledActivity));
       lastActivityTimeRef.current = Date.now();
-      return () => {
-        events.forEach(event => window.removeEventListener(event, throttledActivity));
-      };
+      return () => { events.forEach(event => window.removeEventListener(event, throttledActivity)); };
     }
   }, [userRole, handleUserActivity]);
 
   useEffect(() => {
     const initAuth = async () => {
-      try {
-        if (typeof __initial_auth_token !== "undefined" && __initial_auth_token) {
-          await signInWithCustomToken(auth, __initial_auth_token);
-        } else {
-          await signInAnonymously(auth);
-        }
-      } catch (error) { console.warn("Auth Error:", error); }
+      try { if (typeof __initial_auth_token !== "undefined" && __initial_auth_token) { await signInWithCustomToken(auth, __initial_auth_token); } else { await signInAnonymously(auth); } } catch (error) { console.warn("Auth Error:", error); }
     };
     initAuth();
-    return onAuthStateChanged(auth, (u) => {
-      setUser(u);
-      setLoading(false);
-    });
+    return onAuthStateChanged(auth, (u) => { setUser(u); setLoading(false); });
   }, []);
 
   useEffect(() => {
@@ -295,9 +147,10 @@ export default function App() {
     const unsubTherapistReports = onSnapshot(query(collection(db, "artifacts", appId, "public", "data", "therapist_daily_reports"), orderBy("date", "desc"), limit(1000)), (s) => setTherapistReports(s.docs.map((d) => ({ id: d.id, ...d.data() }))));
     const unsubTherapistSchedules = onSnapshot(collection(db, "artifacts", appId, "public", "data", "therapist_schedules"), (s) => { const schedules = {}; s.docs.forEach((d) => (schedules[d.id] = d.data())); setTherapistSchedules(schedules); });
     const unsubTherapistTargets = onSnapshot(collection(db, "artifacts", appId, "public", "data", "therapist_targets"), (s) => { const t = {}; s.docs.forEach((d) => (t[d.id] = d.data())); setTherapistTargets(t); });
+    const unsubTrainerAuth = onSnapshot(doc(db, "artifacts", appId, "public", "data", "global_settings", "trainer_auth"), (s) => { if (s.exists()) setTrainerAuth(s.data()); else setTrainerAuth({ password: "0000" }); });
 
     return () => {
-      unsubReports(); unsubBudgets(); unsubTargets(); unsubOrg(); unsubAccounts(); unsubManagerAuth(); unsubPermissions(); unsubTherapists(); unsubTherapistReports(); unsubTherapistSchedules(); unsubTherapistTargets();
+      unsubReports(); unsubBudgets(); unsubTargets(); unsubOrg(); unsubAccounts(); unsubManagerAuth(); unsubPermissions(); unsubTherapists(); unsubTherapistReports(); unsubTherapistSchedules(); unsubTherapistTargets(); unsubTrainerAuth();
     };
   }, [user]);
 
@@ -311,36 +164,81 @@ export default function App() {
     }
     setUserRole(roleId);
     if (finalUser) setCurrentUser(finalUser);
-    const userName = finalUser?.name || (roleId === "director" ? "總監" : "未知");
+    const userName = finalUser?.name || (roleId === "director" ? "總監" : (roleId === "trainer" ? "教專" : "未知"));
     logActivity(roleId, userName, "登入系統", "登入成功");
-    
-    // ★★★ 修改：所有角色登入後都先看 Dashboard ★★★
     setActiveView("dashboard");
   };
 
   const handleUpdateStorePassword = async (id, newPass) => { try { const updated = storeAccounts.map((a) => a.id === id ? { ...a, password: newPass } : a); await setDoc(doc(db, "artifacts", appId, "public", "data", "global_settings", "store_account_data"), { accounts: updated }); return true; } catch (e) { return false; } };
   const handleUpdateManagerPassword = async (name, newPass) => { try { await setDoc(doc(db, "artifacts", appId, "public", "data", "global_settings", "manager_auth"), { [name]: newPass }, { merge: true }); return true; } catch (e) { return false; } };
   const handleUpdateTherapistPassword = async (id, newPass) => { try { await updateDoc(doc(db, "artifacts", appId, "public", "data", "therapists", id), { password: newPass }); return true; } catch (e) { console.error(e); return false; } };
+  const handleUpdateTrainerAuth = async (newPass) => { try { await setDoc(doc(db, "artifacts", appId, "public", "data", "global_settings", "trainer_auth"), { password: newPass }); return true; } catch (e) { console.error(e); return false; } };
 
   const navigateToStore = useCallback((storeName) => { setActiveView("store-analysis"); window.dispatchEvent(new CustomEvent("navigate-to-store", { detail: storeName })); }, []);
 
-  // ★★★ 修正：資料過濾邏輯防呆 (避免白畫面) ★★★
+  // ★★★ 資料過濾邏輯：店家日報 (visibleRawData) ★★★
   const visibleRawData = useMemo(() => {
+    if (userRole === ROLES.TRAINER.id) return []; // 教專不看店家營收
     if (userRole === ROLES.STORE.id && currentUser) {
-      // 確保 currentUser.stores 存在
       const myStores = (currentUser.stores || [currentUser.storeName] || []).map((s) => (s && s.startsWith("CYJ") ? s : `CYJ${s}店`));
       return rawData.filter((d) => myStores.includes(d.storeName));
     }
     if (userRole === ROLES.MANAGER.id && currentUser) {
-      // 確保 managers[currentUser.name] 存在
       const myStores = (managers[currentUser.name] || []).map((s) => `CYJ${s}店`);
       return rawData.filter((d) => myStores.includes(d.storeName));
     }
     return rawData;
   }, [rawData, userRole, currentUser, managers]);
 
+  // ★★★ 資料過濾邏輯：管理師日報 (visibleTherapistReports) ★★★
+  const visibleTherapistReports = useMemo(() => {
+    // 1. 總監/教專：看全部
+    if (userRole === ROLES.DIRECTOR.id || userRole === ROLES.TRAINER.id) {
+      return therapistReports;
+    }
+    // 2. 區長：只看轄區內
+    if (userRole === ROLES.MANAGER.id && currentUser) {
+      const myStores = managers[currentUser.name] || []; // ["安平", "永康"...]
+      return therapistReports.filter(r => myStores.includes(normalizeStore(r.storeName)));
+    }
+    // 3. 店長：只看本店
+    if (userRole === ROLES.STORE.id && currentUser) {
+      const myStores = (currentUser.stores || [currentUser.storeName] || []).map(normalizeStore);
+      return therapistReports.filter(r => myStores.includes(normalizeStore(r.storeName)));
+    }
+    // 4. 管理師：只看自己
+    if (userRole === ROLES.THERAPIST.id && currentUser) {
+      return therapistReports.filter(r => r.therapistId === currentUser.id);
+    }
+    return [];
+  }, [therapistReports, userRole, currentUser, managers]);
+
+  // ★★★ 資料過濾邏輯：管理師名單 (visibleTherapists) ★★★
+  const visibleTherapists = useMemo(() => {
+    // 1. 總監/教專：看全部
+    if (userRole === ROLES.DIRECTOR.id || userRole === ROLES.TRAINER.id) {
+      return therapists;
+    }
+    // 2. 區長：只看轄區內
+    if (userRole === ROLES.MANAGER.id && currentUser) {
+      const myStores = managers[currentUser.name] || [];
+      return therapists.filter(t => myStores.includes(normalizeStore(t.store)));
+    }
+    // 3. 店長：只看本店
+    if (userRole === ROLES.STORE.id && currentUser) {
+      const myStores = (currentUser.stores || [currentUser.storeName] || []).map(normalizeStore);
+      return therapists.filter(t => myStores.includes(normalizeStore(t.store)));
+    }
+    // 4. 管理師：只看自己
+    if (userRole === ROLES.THERAPIST.id && currentUser) {
+      return therapists.filter(t => t.id === currentUser.id);
+    }
+    return [];
+  }, [therapists, userRole, currentUser, managers]);
+
+  // ★★★ 資料過濾邏輯：區域管理權限 (visibleManagers) ★★★
   const visibleManagers = useMemo(() => {
-    // 區長：只回傳自己，若名字對不上則回傳空物件，避免崩潰
+    if (userRole === ROLES.TRAINER.id) return managers; // 教專看全區架構
     if (userRole === ROLES.MANAGER.id && currentUser) {
       const myStores = managers[currentUser.name] || [];
       return { [currentUser.name]: myStores };
@@ -363,15 +261,18 @@ export default function App() {
   const closeConfirmModal = () => setConfirmModal((p) => ({ ...p, isOpen: false }));
   const fmtMoney = (val) => `$${(val || 0).toLocaleString()}`;
   const fmtNum = (val) => (val || 0).toLocaleString();
-
   const allStoreNames = useMemo(() => Object.values(managers).flat().map((s) => `CYJ${s}店`), [managers]);
 
   const contextValue = useMemo(() => ({
-    user, loading, analytics, managers: visibleManagers, budgets, targets, rawData: visibleRawData, allReports: rawData, showToast, openConfirm, fmtMoney, fmtNum, inputDate, setInputDate, storeList: analytics?.storeList || [], setTargets, selectedYear, selectedMonth, permissions, storeAccounts, managerAuth, currentUser, userRole, logActivity, handleUpdateStorePassword, handleUpdateManagerPassword, handleUpdateTherapistPassword, navigateToStore, activeView, appId, therapists, therapistReports, therapistSchedules, therapistTargets,
-  }), [user, loading, analytics, visibleManagers, budgets, targets, visibleRawData, rawData, inputDate, selectedYear, selectedMonth, permissions, storeAccounts, managerAuth, currentUser, userRole, logActivity, handleUpdateStorePassword, handleUpdateManagerPassword, handleUpdateTherapistPassword, navigateToStore, activeView, appId, therapists, therapistReports, therapistSchedules, therapistTargets]);
+    user, loading, analytics, managers: visibleManagers, budgets, targets, rawData: visibleRawData, allReports: rawData, showToast, openConfirm, fmtMoney, fmtNum, inputDate, setInputDate, storeList: analytics?.storeList || [], setTargets, selectedYear, selectedMonth, permissions, storeAccounts, managerAuth, currentUser, userRole, logActivity, handleUpdateStorePassword, handleUpdateManagerPassword, handleUpdateTherapistPassword, navigateToStore, activeView, appId, 
+    // ★ 使用過濾後的資料覆蓋
+    therapists: visibleTherapists, 
+    therapistReports: visibleTherapistReports, 
+    therapistSchedules, therapistTargets, trainerAuth, handleUpdateTrainerAuth
+  }), [user, loading, analytics, visibleManagers, budgets, targets, visibleRawData, rawData, inputDate, selectedYear, selectedMonth, permissions, storeAccounts, managerAuth, currentUser, userRole, logActivity, handleUpdateStorePassword, handleUpdateManagerPassword, handleUpdateTherapistPassword, navigateToStore, activeView, appId, visibleTherapists, visibleTherapistReports, therapistSchedules, therapistTargets, trainerAuth, handleUpdateTrainerAuth]);
 
   if (loading) return <div className="min-h-screen flex flex-col items-center justify-center bg-[#F9F8F6]"><Loader2 className="w-16 h-16 animate-spin text-stone-400 mb-4" /><p className="animate-pulse text-stone-500 font-bold tracking-wider">Loading DRCYJ Cloud...</p></div>;
-  if (!userRole) return <LoginView onLogin={handleLogin} storeAccounts={storeAccounts} managers={managers} managerAuth={managerAuth} therapists={therapists} onUpdatePassword={handleUpdateStorePassword} onUpdateManagerPassword={handleUpdateManagerPassword} onUpdateTherapistPassword={handleUpdateTherapistPassword} />;
+  if (!userRole) return <LoginView onLogin={handleLogin} storeAccounts={storeAccounts} managers={managers} managerAuth={managerAuth} therapists={therapists} onUpdatePassword={handleUpdateStorePassword} onUpdateManagerPassword={handleUpdateManagerPassword} onUpdateTherapistPassword={handleUpdateTherapistPassword} trainerAuth={trainerAuth} handleUpdateTrainerAuth={handleUpdateTrainerAuth} />;
 
   return (
     <AppContext.Provider value={contextValue}>
@@ -406,8 +307,6 @@ export default function App() {
             {activeView === "annual" && <AnnualView />}
             {activeView === "store-analysis" && <StoreAnalysisView />}
             {activeView === "targets" && <TargetView />}
-            
-            {/* ★★★ 這裡將會正確渲染出對應的畫面 ★★★ */}
             {activeView === "t-targets" && <TherapistTargetView />}
             {activeView === "t-schedule" && <TherapistScheduleView />}
           </main>

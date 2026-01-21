@@ -12,11 +12,13 @@ import {
   Calendar, 
   Target, 
   UserCog, 
-  CalendarOff
+  CalendarOff,
 } from "lucide-react";
 
 export const ROLES = {
   DIRECTOR: { id: "director", label: "總監", pass: "16500" },
+  // ★ 新增角色：教專 (TRAINER)，密碼由資料庫控制
+  TRAINER: { id: "trainer", label: "教專", pass: null }, 
   MANAGER: { id: "manager", label: "區長", pass: null },
   STORE: { id: "store", label: "店經理", pass: null },
   THERAPIST: { id: "therapist", label: "管理師", pass: null },
@@ -33,9 +35,9 @@ export const ALL_MENU_ITEMS = [
   { id: "history", label: "數據修正", icon: FileText },
   { id: "input", label: "日報輸入", icon: Upload },
   { id: "logs", label: "系統監控", icon: Activity },
-  { id: "settings", label: "參數設定", icon: Settings },
   { id: "t-targets", label: "管理師目標", icon: UserCog }, 
   { id: "t-schedule", label: "管理師排休", icon: CalendarOff },
+  { id: "settings", label: "參數設定", icon: Settings },
 ];
 
 export const DEFAULT_REGIONAL_MANAGERS = {
@@ -50,12 +52,10 @@ export const DEFAULT_PERMISSIONS = {
   // 總監擁有所有權限
   director: ALL_MENU_ITEMS.map((i) => i.id),
   
-  // 區長權限
-  manager: ["dashboard", "annual", "targets", "regional", "store-analysis", "audit", "t-targets", "t-schedule"],
-  
-  // 店經理權限
-  store: ["dashboard", "annual", "targets", "store-analysis", "ranking", "history", "input", "t-targets", "t-schedule"],
+  // ★ 教專權限：看人、不看店營收 (Ranking/Audit 需配合資料流過濾)
+  trainer: ["dashboard", "ranking", "audit", "settings", "t-targets", "t-schedule"],
 
-  // ★★★ 管理師權限：新增 dashboard ★★★
+  manager: ["dashboard", "annual", "targets", "regional", "store-analysis", "audit", "t-targets", "t-schedule"],
+  store: ["dashboard", "annual", "targets", "store-analysis", "ranking", "history", "input", "t-targets", "t-schedule"],
   therapist: ["dashboard", "input"],
 };

@@ -1,6 +1,6 @@
 // src/components/TherapistScheduleView.jsx
-import React, { useState, useContext, useEffect } from "react";
-import { Save, Calendar } from "lucide-react";
+import React, { useState, useContext, useEffect, useMemo } from "react";
+import { Save, Calendar, MapPin, Store, User } from "lucide-react";
 import { doc, setDoc, serverTimestamp } from "firebase/firestore";
 import { db, appId } from "../config/firebase";
 import { AppContext } from "../AppContext";
@@ -12,24 +12,62 @@ const TherapistScheduleView = () => {
     therapists,
     therapistSchedules,
     userRole,
-    currentUser
+    currentUser,
+    managers
   } = useContext(AppContext);
 
   const [tScheduleYear, setTScheduleYear] = useState(new Date().getFullYear().toString());
   const [tScheduleMonth, setTScheduleMonth] = useState((new Date().getMonth() + 1).toString());
+  
+  // 三層篩選狀態
+  const [selectedRegion, setSelectedRegion] = useState("");
+  const [selectedStore, setSelectedStore] = useState("");
   const [tScheduleTherapist, setTScheduleTherapist] = useState("");
+  
   const [tLocalSchedule, setTLocalSchedule] = useState([]); // Array of days off
 
-  const activeTherapists = therapists
-    .filter(t => t.status === 'active')
-    .sort((a, b) => a.store.localeCompare(b.store));
-
+  // 1. 初始化權限與預設值
   useEffect(() => {
-    if (userRole === 'therapist' && currentUser?.id) {
+    if (userRole === 'therapist' && currentUser) {
+      const myRegion = Object.keys(managers).find(mgr => managers[mgr].includes(currentUser.storeName?.replace("CYJ","").replace("店","")));
+      if (myRegion) setSelectedRegion(myRegion);
+      setSelectedStore(currentUser.store || "");
       setTScheduleTherapist(currentUser.id);
+    } 
+    else if (userRole === 'store' && currentUser) {
+      const myStores = currentUser.stores || [currentUser.storeName];
+      if (myStores.length > 0) {
+        const firstStore = myStores[0].replace("CYJ", "").replace("店", "");
+        const myRegion = Object.keys(managers).find(mgr => managers[mgr].includes(firstStore));
+        if (myRegion) setSelectedRegion(myRegion);
+        if (myStores.length === 1) setSelectedStore(firstStore);
+      }
     }
-  }, [userRole, currentUser]);
+    else if (userRole === 'manager' && currentUser) {
+      setSelectedRegion(currentUser.name);
+    }
+  }, [userRole, currentUser, managers]);
 
+  // 2. 計算可用的店家列表
+  const availableStores = useMemo(() => {
+    if (!selectedRegion) return [];
+    const regionStores = managers[selectedRegion] || [];
+    if (userRole === 'store' && currentUser) {
+      const myStores = (currentUser.stores || [currentUser.storeName]).map(s => s.replace("CYJ", "").replace("店", ""));
+      return regionStores.filter(s => myStores.includes(s));
+    }
+    return regionStores;
+  }, [selectedRegion, managers, userRole, currentUser]);
+
+  // 3. 計算可用的管理師列表
+  const availableTherapists = useMemo(() => {
+    if (!selectedStore) return [];
+    return therapists
+      .filter(t => t.status === 'active' && t.store === selectedStore)
+      .sort((a, b) => a.name.localeCompare(b.name));
+  }, [selectedStore, therapists]);
+
+  // 4. 讀取排休資料
   useEffect(() => {
     if (tScheduleTherapist && tScheduleYear && tScheduleMonth) {
       const docId = `${tScheduleTherapist}_${tScheduleYear}_${parseInt(tScheduleMonth)}`;
@@ -70,30 +108,85 @@ const TherapistScheduleView = () => {
     <ViewWrapper>
       <Card title="管理師每月排修設定" subtitle="點擊日期設定休假 (紅色代表休假)">
         <div className="space-y-6">
-          <div className="flex flex-col md:flex-row gap-4 items-end">
+          {/* 三層篩選器 */}
+          <div className="flex flex-col md:flex-row gap-4 items-end bg-stone-50 p-4 rounded-xl border border-stone-200">
+            
+            {/* 1. 區域選擇 */}
             <div className="flex-1 w-full">
-              <label className="block text-xs font-bold text-stone-400 mb-1">選擇管理師</label>
+              <label className="block text-xs font-bold text-stone-400 mb-1 flex items-center gap-1">
+                <MapPin size={12}/> 區域 (區長)
+              </label>
               <select 
-                value={tScheduleTherapist} 
-                onChange={(e) => setTScheduleTherapist(e.target.value)} 
-                disabled={userRole === 'therapist'}
+                value={selectedRegion} 
+                onChange={(e) => { 
+                  setSelectedRegion(e.target.value); 
+                  setSelectedStore(""); 
+                  setTScheduleTherapist(""); 
+                }}
+                disabled={userRole === 'manager' || userRole === 'therapist' || (userRole === 'store' && selectedRegion !== "")}
                 className="w-full px-4 py-2 border-2 border-stone-200 rounded-xl outline-none focus:border-amber-400 font-bold bg-white disabled:bg-stone-100 disabled:text-stone-500"
               >
-                <option value="">請選擇...</option>
-                {activeTherapists.map(t => (
-                  <option key={t.id} value={t.id}>{t.store}店 - {t.name}</option>
+                <option value="">請選擇區域...</option>
+                {Object.keys(managers).map(mgr => (
+                  <option key={mgr} value={mgr}>{mgr}區</option>
                 ))}
               </select>
             </div>
-            <div className="w-full md:w-32">
-              <label className="block text-xs font-bold text-stone-400 mb-1">年度</label>
-              <select value={tScheduleYear} onChange={(e) => setTScheduleYear(e.target.value)} className="w-full px-4 py-2 border-2 border-stone-200 rounded-xl font-bold bg-white"><option value="2024">2024</option><option value="2025">2025</option><option value="2026">2026</option></select>
+
+            {/* 2. 店家選擇 */}
+            <div className="flex-1 w-full">
+              <label className="block text-xs font-bold text-stone-400 mb-1 flex items-center gap-1">
+                <Store size={12}/> 店家
+              </label>
+              <select 
+                value={selectedStore} 
+                onChange={(e) => { 
+                  setSelectedStore(e.target.value); 
+                  setTScheduleTherapist(""); 
+                }} 
+                disabled={!selectedRegion || userRole === 'therapist'}
+                className="w-full px-4 py-2 border-2 border-stone-200 rounded-xl outline-none focus:border-amber-400 font-bold bg-white disabled:bg-stone-100 disabled:text-stone-500"
+              >
+                <option value="">請選擇店家...</option>
+                {availableStores.map(store => (
+                  <option key={store} value={store}>{store}店</option>
+                ))}
+              </select>
             </div>
-            <div className="w-full md:w-32">
-              <label className="block text-xs font-bold text-stone-400 mb-1">月份</label>
-              <select value={tScheduleMonth} onChange={(e) => setTScheduleMonth(e.target.value)} className="w-full px-4 py-2 border-2 border-stone-200 rounded-xl font-bold bg-white">{Array.from({length: 12}, (_, i) => i + 1).map(m => <option key={m} value={m}>{m}月</option>)}</select>
+
+            {/* 3. 管理師選擇 */}
+            <div className="flex-1 w-full">
+              <label className="block text-xs font-bold text-stone-400 mb-1 flex items-center gap-1">
+                <User size={12}/> 管理師
+              </label>
+              <select 
+                value={tScheduleTherapist} 
+                onChange={(e) => setTScheduleTherapist(e.target.value)} 
+                disabled={!selectedStore || userRole === 'therapist'}
+                className="w-full px-4 py-2 border-2 border-stone-200 rounded-xl outline-none focus:border-amber-400 font-bold bg-white disabled:bg-stone-100 disabled:text-stone-500"
+              >
+                <option value="">請選擇管理師...</option>
+                {availableTherapists.map(t => (
+                  <option key={t.id} value={t.id}>{t.name}</option>
+                ))}
+              </select>
             </div>
-            <button onClick={handleSaveTherapistSchedule} className="w-full md:w-auto bg-stone-800 text-white px-6 py-2.5 rounded-xl font-bold hover:bg-stone-700 shadow-sm flex items-center justify-center gap-2">
+
+            {/* 年月選擇 */}
+            <div className="flex gap-2 w-full md:w-auto">
+              <div className="w-1/2 md:w-24">
+                <label className="block text-xs font-bold text-stone-400 mb-1">年度</label>
+                <select value={tScheduleYear} onChange={(e) => setTScheduleYear(e.target.value)} className="w-full px-4 py-2 border-2 border-stone-200 rounded-xl font-bold bg-white"><option value="2024">2024</option><option value="2025">2025</option><option value="2026">2026</option></select>
+              </div>
+              <div className="w-1/2 md:w-24">
+                <label className="block text-xs font-bold text-stone-400 mb-1">月份</label>
+                <select value={tScheduleMonth} onChange={(e) => setTScheduleMonth(e.target.value)} className="w-full px-4 py-2 border-2 border-stone-200 rounded-xl font-bold bg-white">{Array.from({length: 12}, (_, i) => i + 1).map(m => <option key={m} value={m}>{m}月</option>)}</select>
+              </div>
+            </div>
+          </div>
+
+          <div className="flex justify-end">
+            <button onClick={handleSaveTherapistSchedule} disabled={!tScheduleTherapist} className="w-full md:w-auto bg-stone-800 text-white px-8 py-3 rounded-xl font-bold hover:bg-stone-700 shadow-sm flex items-center justify-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed transition-all active:scale-95">
               <Save size={18}/> 儲存排休
             </button>
           </div>
@@ -130,9 +223,11 @@ const TherapistScheduleView = () => {
               </div>
             </div>
           ) : (
-            <div className="py-12 text-center text-stone-400 border-2 border-dashed border-stone-100 rounded-2xl">
-              <Calendar size={48} className="mx-auto mb-2 opacity-20"/>
-              <p>請先選擇管理師以進行排休</p>
+            <div className="py-20 text-center text-stone-400 border-2 border-dashed border-stone-100 rounded-2xl flex flex-col items-center justify-center gap-4">
+              <div className="w-16 h-16 bg-stone-50 rounded-full flex items-center justify-center">
+                 <Calendar size={32} className="opacity-20"/>
+              </div>
+              <p>請依序選擇 區域 &gt; 店家 &gt; 管理師 以進行排休</p>
             </div>
           )}
         </div>

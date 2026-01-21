@@ -376,7 +376,7 @@ const StoreInputView = () => {
 };
 
 // ============================================================================
-// ★★★ 子元件 B: 管理師專用輸入介面 (TherapistInputView) - 修正計算公式 ★★★
+// ★★★ 子元件 B: 管理師專用輸入介面 (TherapistInputView) - 修正欄位名稱 ★★★
 // ============================================================================
 const TherapistInputView = () => {
   const { currentUser, inputDate, setInputDate, showToast, logActivity } = useContext(AppContext);
@@ -385,7 +385,7 @@ const TherapistInputView = () => {
     totalRevenue: "",        // 1. 今日總業績 (新+舊-退)
     newCustomerRevenue: "",  // 2. 今日新客業績
     newCustomerCount: "",    // 3. 今日新客人數
-    newCustomerClosings: "", // 4. 今日新客翻單人數
+    newCustomerClosings: "", // 4. 今日新客留單人數 (變數名不變，僅改 UI Label)
     oldCustomerRevenue: "",  // 5. 今日舊客業績
     oldCustomerCount: "",    // 6. 今日舊客人數
     returnRevenue: "",       // 7. 今日當月退費業績
@@ -401,15 +401,15 @@ const TherapistInputView = () => {
 
   const [debugInfo, setDebugInfo] = useState(null);
 
-  // ★ 更新：總業績說明 與 退費欄位名稱
+  // ★ 更新：修改標籤名稱
   const LABELS = {
-    totalRevenue: "今日總業績 (新客+舊客-退費)", // 更新說明
+    totalRevenue: "今日總業績 (新客+舊客-退費)", 
     newCustomerRevenue: "新客業績",
     newCustomerCount: "新客人數",
-    newCustomerClosings: "新客翻單人數",
+    newCustomerClosings: "新客留單人數", // ★ 更新為「留單」
     oldCustomerRevenue: "舊客業績",
     oldCustomerCount: "舊客人數",
-    returnRevenue: "今日當月退費業績", // 更新欄位名稱
+    returnRevenue: "今日當月退費業績", 
   };
 
   const today = getLocalTodayString();
@@ -459,17 +459,17 @@ const TherapistInputView = () => {
     localStorage.setItem("cyj_therapist_draft_v2", JSON.stringify(draft));
   }, [formData, inputDate]);
 
-  // ★★★★ 更新：自動計算總業績 (新客 + 舊客 - 退費) ★★★★
+  // 自動計算總業績
   useEffect(() => {
     const newRev = parseNumber(formData.newCustomerRevenue) || 0;
     const oldRev = parseNumber(formData.oldCustomerRevenue) || 0;
-    const returnRev = parseNumber(formData.returnRevenue) || 0; // 取得退費金額
-    const total = newRev + oldRev - returnRev; // 執行扣除
+    const returnRev = parseNumber(formData.returnRevenue) || 0; 
+    const total = newRev + oldRev - returnRev; 
     
     if (parseNumber(formData.totalRevenue) !== total) {
       setFormData(prev => ({ ...prev, totalRevenue: formatNumber(total) }));
     }
-  }, [formData.newCustomerRevenue, formData.oldCustomerRevenue, formData.returnRevenue]); // 增加監聽 returnRevenue
+  }, [formData.newCustomerRevenue, formData.oldCustomerRevenue, formData.returnRevenue]); 
 
   useEffect(() => {
     const checkSubmission = async () => {
@@ -496,7 +496,6 @@ const TherapistInputView = () => {
   };
 
   const handlePreSubmit = () => {
-    // 檢查邏輯：至少要輸入一項業績或人數
     const hasData = formData.newCustomerRevenue || formData.oldCustomerRevenue || formData.newCustomerCount || formData.oldCustomerCount || formData.returnRevenue;
     if (!hasData) return showToast("請至少輸入一項業績或人數數據", "error");
     
@@ -734,7 +733,7 @@ const TherapistInputView = () => {
         </div>
       )}
 
-      {/* 資料確認視窗 (更新：移除備註顯示) */}
+      {/* 資料確認視窗 */}
       {showConfirmModal && (
         <div className="fixed inset-0 z-[999] flex items-center justify-center p-4 bg-stone-900/60 backdrop-blur-sm">
           <div className="bg-white rounded-2xl shadow-xl w-full max-w-md overflow-hidden animate-in zoom-in-95">
