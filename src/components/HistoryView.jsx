@@ -18,11 +18,10 @@ import { AppContext } from "../AppContext";
 import { toStandardDateFormat } from "../utils/helpers";
 
 const HistoryView = () => {
-  // ★ 修改 1: 取得 userRole
-  const { showToast, managers, userRole } = useContext(AppContext);
+  const { showToast, managers, userRole, currentUser } = useContext(AppContext);
   
-  // ★ 修改 2: 若是教專，預設 tab 為 'therapist'
-  const [activeTab, setActiveTab] = useState(userRole === 'trainer' ? 'therapist' : 'store');
+  // 1. 根據權限設定預設頁籤
+  const [activeTab, setActiveTab] = useState((userRole === 'trainer' || userRole === 'therapist') ? 'therapist' : 'store');
   
   // 資料狀態
   const [storeRawData, setStoreRawData] = useState([]);
@@ -41,19 +40,53 @@ const HistoryView = () => {
 
   const fmt = (val) => (typeof val === "number" ? val.toLocaleString() : val);
   
-  // 取得所有店家列表
-  const allStores = useMemo(
-    () => Object.values(managers).flat().map((s) => `CYJ${s}店`).sort(),
-    [managers]
-  );
+  // 定義「被允許查看」的店家清單
+  const myAllowedStores = useMemo(() => {
+    // 總監與教專看全部
+    if (userRole === 'director' || userRole === 'trainer') return null; 
 
-  // 取得資料列的店名 (防呆)
+    // 區長：只看轄區
+    if (userRole === 'manager' && currentUser) {
+      return (managers[currentUser.name] || []).map(s => s.trim());
+    }
+
+    // 店長：只看本店
+    if (userRole === 'store' && currentUser) {
+      const stores = currentUser.stores || [currentUser.storeName];
+      return stores.map(s => s.replace(/CYJ|店/g, '').trim());
+    }
+
+    // 管理師只看自己的店
+    if (userRole === 'therapist' && currentUser) {
+      return [currentUser.store];
+    }
+
+    return [];
+  }, [userRole, currentUser, managers]);
+  
+  // 下拉選單來源
+  const allStores = useMemo(() => {
+    let baseList = [];
+    if (myAllowedStores !== null) {
+        baseList = myAllowedStores;
+    } else {
+        baseList = Object.values(managers).flat();
+    }
+    return baseList.filter(s => s).map((s) => `CYJ${s}店`).sort();
+  }, [managers, myAllowedStores]);
+
+  // 自動預選店家
+  useEffect(() => {
+    if (allStores.length === 1) {
+      setFilterStore(allStores[0]);
+    }
+  }, [allStores]);
+
   const getStoreName = (row) => {
     if (!row) return "";
     return row.storeName || row.store || "未註記";
   };
 
-  // 1. 定義店務日報欄位
   const STORE_FIELDS = [
     { key: "cash", label: "現金", width: "min-w-[100px]" },
     { key: "accrual", label: "總權責", width: "min-w-[100px]" },
@@ -67,7 +100,6 @@ const HistoryView = () => {
     { key: "skincareRefund", label: "保養品退", width: "min-w-[100px]", isNegative: true },
   ];
 
-  // 2. 定義管理師日報欄位
   const THERAPIST_FIELDS = [
     { key: "totalRevenue", label: "總業績", width: "min-w-[100px]", isHighlight: true, readOnly: true },
     { key: "newCustomerRevenue", label: "新客業績", width: "min-w-[100px]" },
@@ -78,7 +110,6 @@ const HistoryView = () => {
     { key: "returnRevenue", label: "退費", width: "min-w-[100px]", isNegative: true },
   ];
 
-  // 資料讀取邏輯
   useEffect(() => {
     if (!startDate || !endDate) return;
 
@@ -86,9 +117,8 @@ const HistoryView = () => {
       setIsLoading(true);
       try {
         const collectionName = activeTab === "store" ? "daily_reports" : "therapist_daily_reports";
-        const dataMap = new Map(); // 用 Map 去除重複資料
+        const dataMap = new Map(); 
 
-        // 1. 查詢標準格式 (YYYY-MM-DD)
         const q1 = query(
           collection(db, "artifacts", appId, "public", "data", collectionName),
           where("date", ">=", startDate),
@@ -98,7 +128,6 @@ const HistoryView = () => {
         const snap1 = await getDocs(q1);
         snap1.docs.forEach(doc => dataMap.set(doc.id, { id: doc.id, ...doc.data() }));
 
-        // 2. 查詢斜線格式 (YYYY/MM/DD) - 處理舊資料
         const startSlash = startDate.replace(/-/g, "/");
         const endSlash = endDate.replace(/-/g, "/");
         const q2 = query(
@@ -110,7 +139,6 @@ const HistoryView = () => {
         const snap2 = await getDocs(q2);
         snap2.docs.forEach(doc => dataMap.set(doc.id, { id: doc.id, ...doc.data() }));
 
-        // 轉回陣列並排序
         const mergedData = Array.from(dataMap.values()).sort((a, b) => b.date.localeCompare(a.date));
 
         if (activeTab === "store") {
@@ -132,21 +160,37 @@ const HistoryView = () => {
 
   const currentRawData = activeTab === "store" ? storeRawData : therapistRawData;
 
-  // 篩選店家 (Loose Matching)
+  // 資料過濾邏輯
   const filteredData = useMemo(() => {
     return currentRawData.filter((d) => {
+      
+      // 1. 管理師特例
+      if (userRole === 'therapist') {
+         if (activeTab !== 'therapist') return false; 
+         if (d.therapistId !== currentUser?.id) return false;
+      }
+      // 2. 區長/店長權限檢查
+      else if (myAllowedStores !== null) {
+         const normalize = (s) => String(s || "").replace(/CYJ/ig, "").replace(/店/g, "").replace(/\s/g, "").toLowerCase().trim();
+         const cleanRowStore = normalize(getStoreName(d));
+         const isAllowed = myAllowedStores.some(allowed => cleanRowStore === normalize(allowed));
+         if (!isAllowed) return false;
+      }
+
+      // 3. 通用店家篩選器 (★ 修改處：改為精確比對)
       let matchStore = true;
       if (filterStore) {
         const normalize = (s) => String(s || "").replace(/CYJ/ig, "").replace(/店/g, "").replace(/\s/g, "").toLowerCase().trim();
         const cleanFilter = normalize(filterStore);
         const cleanRow = normalize(getStoreName(d));
-        matchStore = cleanRow.includes(cleanFilter) || cleanFilter.includes(cleanRow);
+        
+        // ★ 修改：從 includes 改為 ===，避免「新莊」被「新店(新)」匹配到
+        matchStore = cleanRow === cleanFilter;
       }
       return matchStore;
     });
-  }, [currentRawData, filterStore]);
+  }, [currentRawData, filterStore, myAllowedStores, userRole, currentUser, activeTab]);
 
-  // --- 編輯功能 ---
   const startEdit = (row) => { 
     setEditId(row.id); 
     setEditForm({ ...row, date: toStandardDateFormat(row.date) }); 
@@ -157,7 +201,6 @@ const HistoryView = () => {
     setEditForm((prev) => {
       const newState = { ...prev, [field]: value };
       
-      // 自動計算連動
       if (activeTab === "therapist" && (field === "newCustomerRevenue" || field === "oldCustomerRevenue" || field === "returnRevenue")) {
         const newRev = Number(newState.newCustomerRevenue || 0);
         const oldRev = Number(newState.oldCustomerRevenue || 0);
@@ -235,23 +278,22 @@ const HistoryView = () => {
       <div className="grid grid-cols-1 gap-6 w-full pb-20">
         
         {/* 標題與分頁 */}
-        <div className="flex items-center gap-3">
+        <div className="flex flex-col sm:flex-row items-start sm:items-center gap-3">
            <h2 className="text-2xl font-bold text-stone-800">數據修正中心</h2>
-           <span className="text-stone-400">|</span>
+           <span className="hidden sm:inline text-stone-400">|</span>
            
-           {/* ★ 修改 3: 根據權限渲染按鈕 */}
-           <div className="flex bg-stone-200 p-1 rounded-xl">
-              {userRole !== 'trainer' && (
+           <div className="flex bg-stone-200 p-1 rounded-xl w-full sm:w-auto">
+              {userRole !== 'trainer' && userRole !== 'therapist' && (
                 <button 
                   onClick={() => {setActiveTab("store"); setFilterStore("");}} 
-                  className={`px-4 py-2 rounded-lg text-sm font-bold flex gap-2 transition-all ${activeTab === 'store' ? 'bg-white text-stone-800 shadow-sm' : 'text-stone-500 hover:text-stone-700'}`}
+                  className={`flex-1 sm:flex-none px-4 py-2 rounded-lg text-sm font-bold flex justify-center items-center gap-2 transition-all ${activeTab === 'store' ? 'bg-white text-stone-800 shadow-sm' : 'text-stone-500 hover:text-stone-700'}`}
                 >
                   <Store size={16}/> 店務日報
                 </button>
               )}
               <button 
                 onClick={() => {setActiveTab("therapist"); setFilterStore("");}} 
-                className={`px-4 py-2 rounded-lg text-sm font-bold flex gap-2 transition-all ${activeTab === 'therapist' ? 'bg-white text-stone-800 shadow-sm' : 'text-stone-500 hover:text-stone-700'}`}
+                className={`flex-1 sm:flex-none px-4 py-2 rounded-lg text-sm font-bold flex justify-center items-center gap-2 transition-all ${activeTab === 'therapist' ? 'bg-white text-stone-800 shadow-sm' : 'text-stone-500 hover:text-stone-700'}`}
               >
                 <User size={16}/> 管理師日報
               </button>
@@ -260,46 +302,57 @@ const HistoryView = () => {
 
         <Card>
           <div className="space-y-4 w-full">
-            {/* 篩選器 - UI 優化版 */}
-            <div className="flex flex-wrap gap-4 bg-stone-50 p-4 rounded-xl items-end border border-stone-100">
+            
+            {/* 篩選器 - RWD 優化版 (強制日期堆疊在手機上) */}
+            <div className="flex flex-wrap items-end gap-4 bg-stone-50 p-4 rounded-xl border border-stone-100">
               
               {/* 日期區間選擇 */}
-              <div className="w-full lg:w-auto flex-grow min-w-[340px]">
+              <div className="w-full md:w-auto flex-grow">
                 <label className="block text-xs font-bold text-stone-400 mb-1 flex items-center gap-1">
                   <Calendar size={12}/> 篩選日期區間
                 </label>
-                <div className="flex items-center gap-2">
+                {/* 斷點改為 md:flex-row，確保手機上垂直堆疊，不被切斷 */}
+                <div className="flex flex-col md:flex-row items-center gap-2 w-full">
                   <input 
                     type="date" 
                     value={startDate} 
                     onChange={(e) => setStartDate(e.target.value)} 
-                    className="flex-1 min-w-[140px] px-4 py-2 rounded-xl font-bold bg-white border border-stone-200 outline-none focus:border-amber-400"
+                    className="w-full sm:w-auto flex-grow px-4 py-2 rounded-xl font-bold bg-white border border-stone-200 outline-none focus:border-amber-400"
                   />
-                  <span className="shrink-0 text-stone-400 font-bold px-2">至</span>
+                  <span className="text-stone-400 font-bold transform rotate-90 md:rotate-0">→</span>
                   <input 
                     type="date" 
                     value={endDate} 
                     onChange={(e) => setEndDate(e.target.value)} 
-                    className="flex-1 min-w-[140px] px-4 py-2 rounded-xl font-bold bg-white border border-stone-200 outline-none focus:border-amber-400"
+                    className="w-full sm:w-auto flex-grow px-4 py-2 rounded-xl font-bold bg-white border border-stone-200 outline-none focus:border-amber-400"
                   />
                 </div>
               </div>
 
-              {/* 店家篩選 */}
-              <div className="w-full sm:w-auto flex-grow min-w-[200px]">
-                <label className="block text-xs font-bold text-stone-400 mb-1">篩選店家</label>
-                <select value={filterStore} onChange={(e) => setFilterStore(e.target.value)} className="w-full px-4 py-2 rounded-xl font-bold bg-white border border-stone-200 outline-none focus:border-amber-400">
-                  <option value="">全部店家</option>
-                  {allStores.map((s) => <option key={s} value={s}>{s}</option>)}
-                </select>
+              {/* 店家篩選 & 重置按鈕 */}
+              <div className="flex gap-2 w-full md:w-auto shrink-0">
+                <div className="flex-grow min-w-[150px]">
+                  <label className="block text-xs font-bold text-stone-400 mb-1">篩選店家</label>
+                  <select 
+                    value={filterStore} 
+                    onChange={(e) => setFilterStore(e.target.value)} 
+                    disabled={allStores.length === 1}
+                    className="w-full px-4 py-2 rounded-xl font-bold bg-white border border-stone-200 outline-none focus:border-amber-400 h-[42px] disabled:bg-stone-100 disabled:text-stone-500"
+                  >
+                    {allStores.length > 1 && <option value="">全部店家</option>}
+                    {allStores.map((s) => <option key={s} value={s}>{s}</option>)}
+                  </select>
+                </div>
+                
+                <div className="flex items-end">
+                  <button onClick={() => { setStartDate(getToday()); setEndDate(getToday()); if(allStores.length > 1) setFilterStore(""); }} className="px-4 py-2 bg-white border border-stone-200 text-stone-600 rounded-xl font-bold flex gap-2 hover:bg-stone-50 transition-colors shadow-sm h-[42px] items-center justify-center whitespace-nowrap">
+                    <RotateCcw size={16} /> <span className="hidden sm:inline">重置</span>
+                  </button>
+                </div>
               </div>
-              
-              <button onClick={() => { setStartDate(getToday()); setEndDate(getToday()); setFilterStore(""); }} className="px-4 py-2 bg-white border border-stone-200 text-stone-600 rounded-xl font-bold flex gap-2 hover:bg-stone-50 transition-colors shadow-sm shrink-0">
-                <RotateCcw size={16} /> 重置
-              </button>
+
             </div>
 
-            {/* 資料表格 */}
             <div className="w-full border border-stone-200 rounded-xl bg-white shadow-sm flex flex-col">
               <div className="overflow-x-auto w-full rounded-xl"> 
                 <table className="w-full text-left text-sm whitespace-nowrap">

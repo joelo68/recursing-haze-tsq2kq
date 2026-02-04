@@ -62,6 +62,9 @@ export default function App() {
   const [therapistReports, setTherapistReports] = useState([]); 
   const [therapistSchedules, setTherapistSchedules] = useState({}); 
   const [therapistTargets, setTherapistTargets] = useState({}); 
+  
+  // ★ 新增：檢核排除名單 (Audit Exclusions)
+  const [auditExclusions, setAuditExclusions] = useState([]);
 
   const [showIdleWarning, setShowIdleWarning] = useState(false);
   const [countdown, setCountdown] = useState(15);
@@ -148,9 +151,15 @@ export default function App() {
     const unsubTherapistSchedules = onSnapshot(collection(db, "artifacts", appId, "public", "data", "therapist_schedules"), (s) => { const schedules = {}; s.docs.forEach((d) => (schedules[d.id] = d.data())); setTherapistSchedules(schedules); });
     const unsubTherapistTargets = onSnapshot(collection(db, "artifacts", appId, "public", "data", "therapist_targets"), (s) => { const t = {}; s.docs.forEach((d) => (t[d.id] = d.data())); setTherapistTargets(t); });
     const unsubTrainerAuth = onSnapshot(doc(db, "artifacts", appId, "public", "data", "global_settings", "trainer_auth"), (s) => { if (s.exists()) setTrainerAuth(s.data()); else setTrainerAuth({ password: "0000" }); });
+    
+    // ★ 監聽排除名單
+    const unsubAuditExclusions = onSnapshot(doc(db, "artifacts", appId, "public", "data", "global_settings", "audit_exclusions"), (s) => {
+      if (s.exists()) setAuditExclusions(s.data().stores || []);
+      else setAuditExclusions([]);
+    });
 
     return () => {
-      unsubReports(); unsubBudgets(); unsubTargets(); unsubOrg(); unsubAccounts(); unsubManagerAuth(); unsubPermissions(); unsubTherapists(); unsubTherapistReports(); unsubTherapistSchedules(); unsubTherapistTargets(); unsubTrainerAuth();
+      unsubReports(); unsubBudgets(); unsubTargets(); unsubOrg(); unsubAccounts(); unsubManagerAuth(); unsubPermissions(); unsubTherapists(); unsubTherapistReports(); unsubTherapistSchedules(); unsubTherapistTargets(); unsubTrainerAuth(); unsubAuditExclusions();
     };
   }, [user]);
 
@@ -173,6 +182,14 @@ export default function App() {
   const handleUpdateManagerPassword = async (name, newPass) => { try { await setDoc(doc(db, "artifacts", appId, "public", "data", "global_settings", "manager_auth"), { [name]: newPass }, { merge: true }); return true; } catch (e) { return false; } };
   const handleUpdateTherapistPassword = async (id, newPass) => { try { await updateDoc(doc(db, "artifacts", appId, "public", "data", "therapists", id), { password: newPass }); return true; } catch (e) { console.error(e); return false; } };
   const handleUpdateTrainerAuth = async (newPass) => { try { await setDoc(doc(db, "artifacts", appId, "public", "data", "global_settings", "trainer_auth"), { password: newPass }); return true; } catch (e) { console.error(e); return false; } };
+  
+  // ★ 更新排除名單函式
+  const handleUpdateAuditExclusions = async (newExclusions) => {
+    try {
+      await setDoc(doc(db, "artifacts", appId, "public", "data", "global_settings", "audit_exclusions"), { stores: newExclusions });
+      return true;
+    } catch (e) { console.error(e); return false; }
+  };
 
   const navigateToStore = useCallback((storeName) => { setActiveView("store-analysis"); window.dispatchEvent(new CustomEvent("navigate-to-store", { detail: storeName })); }, []);
 
@@ -265,11 +282,12 @@ export default function App() {
 
   const contextValue = useMemo(() => ({
     user, loading, analytics, managers: visibleManagers, budgets, targets, rawData: visibleRawData, allReports: rawData, showToast, openConfirm, fmtMoney, fmtNum, inputDate, setInputDate, storeList: analytics?.storeList || [], setTargets, selectedYear, selectedMonth, permissions, storeAccounts, managerAuth, currentUser, userRole, logActivity, handleUpdateStorePassword, handleUpdateManagerPassword, handleUpdateTherapistPassword, navigateToStore, activeView, appId, 
-    // ★ 使用過濾後的資料覆蓋
     therapists: visibleTherapists, 
     therapistReports: visibleTherapistReports, 
-    therapistSchedules, therapistTargets, trainerAuth, handleUpdateTrainerAuth
-  }), [user, loading, analytics, visibleManagers, budgets, targets, visibleRawData, rawData, inputDate, selectedYear, selectedMonth, permissions, storeAccounts, managerAuth, currentUser, userRole, logActivity, handleUpdateStorePassword, handleUpdateManagerPassword, handleUpdateTherapistPassword, navigateToStore, activeView, appId, visibleTherapists, visibleTherapistReports, therapistSchedules, therapistTargets, trainerAuth, handleUpdateTrainerAuth]);
+    therapistSchedules, therapistTargets, trainerAuth, handleUpdateTrainerAuth,
+    // ★ 傳遞排除名單設定與函式
+    auditExclusions, handleUpdateAuditExclusions
+  }), [user, loading, analytics, visibleManagers, budgets, targets, visibleRawData, rawData, inputDate, selectedYear, selectedMonth, permissions, storeAccounts, managerAuth, currentUser, userRole, logActivity, handleUpdateStorePassword, handleUpdateManagerPassword, handleUpdateTherapistPassword, navigateToStore, activeView, appId, visibleTherapists, visibleTherapistReports, therapistSchedules, therapistTargets, trainerAuth, handleUpdateTrainerAuth, auditExclusions, handleUpdateAuditExclusions]);
 
   if (loading) return <div className="min-h-screen flex flex-col items-center justify-center bg-[#F9F8F6]"><Loader2 className="w-16 h-16 animate-spin text-stone-400 mb-4" /><p className="animate-pulse text-stone-500 font-bold tracking-wider">Loading DRCYJ Cloud...</p></div>;
   if (!userRole) return <LoginView onLogin={handleLogin} storeAccounts={storeAccounts} managers={managers} managerAuth={managerAuth} therapists={therapists} onUpdatePassword={handleUpdateStorePassword} onUpdateManagerPassword={handleUpdateManagerPassword} onUpdateTherapistPassword={handleUpdateTherapistPassword} trainerAuth={trainerAuth} handleUpdateTrainerAuth={handleUpdateTrainerAuth} />;

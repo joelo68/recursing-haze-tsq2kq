@@ -1,6 +1,6 @@
 // src/components/AuditView.jsx
 import React, { useState, useMemo, useContext } from "react";
-import { AlertCircle, UserX, CheckCircle } from "lucide-react"; // 新增 icon
+import { AlertCircle, UserX, CheckCircle, Target, FileText, Settings, X, Save, Ban } from "lucide-react"; 
 
 import { AppContext } from "../AppContext";
 import { formatLocalYYYYMMDD, toStandardDateFormat } from "../utils/helpers";
@@ -11,30 +11,66 @@ const AuditView = () => {
   const {
     managers,      
     showToast,
-    budgets,        // 這是關鍵：我們改用這裡的資料來檢核目標
+    budgets,        
     selectedYear,
     selectedMonth,
-    rawData,        // 日報檢核依然用這裡
-    // ★ 新增引用 (用於管理師檢核)
+    rawData,        
     therapists,
     therapistReports,
-    therapistSchedules
+    therapistSchedules,
+    userRole,
+    therapistTargets,
+    auditExclusions,
+    handleUpdateAuditExclusions
   } = useContext(AppContext);
 
   const [checkDate, setCheckDate] = useState(formatLocalYYYYMMDD(new Date()));
-  const [auditType, setAuditType] = useState("daily"); // 'daily' | 'target' | 'therapist'
+  const [auditType, setAuditType] = useState(userRole === 'trainer' ? "therapist-daily" : "daily"); 
 
-  // 1. 標準化檢查清單 (給日曆元件用)
+  const [isConfigModalOpen, setIsConfigModalOpen] = useState(false);
+  const [localExclusions, setLocalExclusions] = useState([]);
+
+  const openConfigModal = () => {
+    setLocalExclusions(auditExclusions || []);
+    setIsConfigModalOpen(true);
+  };
+
+  const saveConfig = async () => {
+    await handleUpdateAuditExclusions(localExclusions);
+    setIsConfigModalOpen(false);
+    showToast("排除名單已更新", "success");
+  };
+
+  const toggleExclusion = (store) => {
+    setLocalExclusions(prev => {
+      if (prev.includes(store)) return prev.filter(s => s !== store);
+      return [...prev, store];
+    });
+  };
+
+  // --- 資料源準備 (給 SmartDatePicker 用) ---
+
   const activeStoresForCalendar = useMemo(() => {
     const allMyStores = Object.values(managers).flat();
-    return allMyStores.map(storeName => ({
-      id: storeName,
-      name: `${storeName}店`,
-      stores: [storeName] 
-    }));
-  }, [managers]);
+    return allMyStores
+      .filter(storeName => !auditExclusions.includes(storeName)) // 日曆排除免檢核店家
+      .map(storeName => ({
+        id: storeName,
+        name: `${storeName}店`,
+        stores: [storeName] 
+      }));
+  }, [managers, auditExclusions]);
 
-  // 2. 雙重標準化資料副本 (修正日期格式問題)
+  const activeTherapistsForCalendar = useMemo(() => {
+    return therapists
+      .filter(t => t.status === 'active')
+      .map(t => ({
+        id: t.id,
+        name: t.name,     
+        stores: [t.name] 
+      }));
+  }, [therapists]);
+
   const normalizedRawData = useMemo(() => {
     return rawData.map(report => ({
       ...report,
@@ -43,12 +79,26 @@ const AuditView = () => {
     }));
   }, [rawData]);
 
-  // --- A. 日報檢核邏輯 (保留您原本的程式碼) ---
+  const normalizedTherapistReports = useMemo(() => {
+    return therapistReports.map(report => ({
+      ...report,
+      storeName: report.therapistName, 
+      date: toStandardDateFormat(report.date)
+    }));
+  }, [therapistReports]);
+
+  const isTherapistMode = auditType === 'therapist-daily';
+  const calendarStores = isTherapistMode ? activeTherapistsForCalendar : activeStoresForCalendar;
+  const calendarSalesData = isTherapistMode ? normalizedTherapistReports : normalizedRawData;
+
+
+  // --- 下方列表檢核邏輯 ---
+
+  // 1. 店家日報檢核
   const auditData = useMemo(() => {
     if (!checkDate) return { submitted: [], missing: [], missingByManager: {} };
     const targetDate = toStandardDateFormat(checkDate);
     
-    // 檢查 rawData (日報資料庫)
     const submitted = new Set(
       rawData
         .filter((d) => toStandardDateFormat(d.date) === targetDate)
@@ -59,8 +109,9 @@ const AuditView = () => {
     Object.entries(managers).forEach(([manager, stores]) => {
       const missing = [];
       stores.forEach((s) => {
+        if (auditExclusions.includes(s)) return; // 排除免檢核店家
+
         const fullName = `CYJ${s}店`;
-        // 支援檢查全名或簡稱
         if (!submitted.has(fullName) && !submitted.has(s)) {
              missing.push(fullName);
         }
@@ -72,9 +123,9 @@ const AuditView = () => {
       missing: Object.values(missingByManager).flat(),
       missingByManager,
     };
-  }, [checkDate, rawData, managers]);
+  }, [checkDate, rawData, managers, auditExclusions]);
 
-  // --- B. 目標檢核邏輯 (保留您原本的程式碼) ---
+  // 2. 店家目標檢核 (★ 修改：已啟用排除功能)
   const targetAuditData = useMemo(() => {
     const missingByManager = {};
     const y = parseInt(selectedYear);
@@ -83,12 +134,12 @@ const AuditView = () => {
     Object.entries(managers).forEach(([manager, stores]) => {
       const missing = [];
       stores.forEach((s) => {
+        // ★ 這裡加入了排除邏輯
+        if (auditExclusions.includes(s)) return;
+
         const name = `CYJ${s}店`;
-        // ★★★ 關鍵修正：直接檢查 budgets (目標資料庫) ★★★
         const key = `${name}_${y}_${m}`;
         const b = budgets[key];
-        
-        // 如果沒設定，或數值都為 0，視為未完成
         if (!b || (!b.cashTarget && !b.accrualTarget)) missing.push(name);
       });
       if (missing.length) missingByManager[manager] = missing;
@@ -97,9 +148,9 @@ const AuditView = () => {
       missing: Object.values(missingByManager).flat(),
       missingByManager,
     };
-  }, [budgets, managers, selectedYear, selectedMonth]);
+  }, [budgets, managers, selectedYear, selectedMonth, auditExclusions]); // 加入 auditExclusions
 
-  // --- C. ★ 新增：管理師日報檢核 (含排休過濾) ---
+  // 3. 管理師日報檢核
   const therapistAuditData = useMemo(() => {
     if (!checkDate) return { missing: [], missingByManager: {} };
     
@@ -109,30 +160,24 @@ const AuditView = () => {
     const month = targetDate.getMonth() + 1;
     const day = targetDate.getDate();
 
-    // 1. 找出當日已提交的人員 ID
     const submittedIds = new Set(
       (therapistReports || [])
         .filter(r => toStandardDateFormat(r.date) === targetDateStr)
         .map(r => r.therapistId)
     );
 
-    // 2. 準備分區容器
     const missingByManager = {};
     
-    // 3. 遍歷所有活躍管理師
     (therapists || []).filter(t => t.status === 'active').forEach(t => {
-      // 檢查排休：如果該員在該年該月有排休紀錄，且包含當日 -> 跳過
       const scheduleKey = `${t.id}_${year}_${month}`;
       const schedule = therapistSchedules[scheduleKey];
       const isOff = schedule?.daysOff?.includes(day);
 
-      if (isOff) return; // 休假中，不需回報
+      if (isOff) return; 
 
-      // 沒休假且沒提交 -> 記上一筆
       if (!submittedIds.has(t.id)) {
         const mgr = t.manager || "未分區";
         if (!missingByManager[mgr]) missingByManager[mgr] = [];
-        // 顯示 姓名 (店名)
         missingByManager[mgr].push(`${t.name} (${t.store}店)`);
       }
     });
@@ -143,25 +188,47 @@ const AuditView = () => {
     };
   }, [checkDate, therapists, therapistReports, therapistSchedules]);
 
-  // 決定目前要顯示哪一份數據
+  // 4. 管理師目標檢核
+  const therapistTargetAuditData = useMemo(() => {
+    const missingByManager = {};
+    const year = selectedYear;
+    const monthKey = parseInt(selectedMonth).toString(); 
+
+    (therapists || []).filter(t => t.status === 'active').forEach(t => {
+       const docId = `${t.id}_${year}`;
+       const data = therapistTargets[docId];
+       const targetVal = data?.monthlyTargets?.[monthKey];
+       const hasTarget = targetVal && parseInt(targetVal) > 0;
+
+       if (!hasTarget) {
+         const mgr = t.manager || "未分區";
+         if (!missingByManager[mgr]) missingByManager[mgr] = [];
+         missingByManager[mgr].push(`${t.name} (${t.store}店)`);
+       }
+    });
+
+    return { 
+        missing: Object.values(missingByManager).flat(), 
+        missingByManager 
+    };
+  }, [therapists, therapistTargets, selectedYear, selectedMonth]);
+
+
   const activeData = 
     auditType === "daily" ? auditData : 
     auditType === "target" ? targetAuditData : 
-    therapistAuditData;
+    auditType === "therapist-daily" ? therapistAuditData :
+    therapistTargetAuditData; 
 
   const handleCopy = () => {
     let text = "";
-    if (auditType === 'target') {
-        text = `未設定目標(${selectedYear}/${selectedMonth})：\n`;
-    } else if (auditType === 'therapist') {
-        text = `管理師未回報(${checkDate})：\n`;
-    } else {
-        text = `未回報(${checkDate})：\n`;
-    }
+    if (auditType === 'target') text = `店家未設定目標(${selectedYear}/${selectedMonth})：\n`;
+    else if (auditType === 'therapist-target') text = `管理師未設目標(${selectedYear}/${selectedMonth})：\n`;
+    else if (auditType === 'therapist-daily') text = `管理師未回報(${checkDate})：\n`;
+    else text = `店家未回報(${checkDate})：\n`;
 
     Object.entries(activeData.missingByManager).forEach(([mgr, list]) => {
-      // 針對店家名稱做簡化 (移除 CYJ/店)，針對管理師名單則保持原樣
-      const cleanList = list.map(s => auditType === 'therapist' ? s : s.replace("CYJ", "").replace("店", ""));
+      const cleanList = list.map(s => (auditType.includes('therapist')) ? s : s.replace("CYJ", "").replace("店", ""));
       text += `${mgr}區：${cleanList.join("、")}\n`;
     });
     
@@ -175,63 +242,73 @@ const AuditView = () => {
         <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 mb-6">
           
           <div className="flex flex-col sm:flex-row gap-3 w-full md:w-auto">
-            {/* 切換按鈕 */}
             <div className="bg-stone-100 p-1 rounded-xl flex shrink-0 self-start overflow-x-auto max-w-full">
+              
+              {userRole !== 'trainer' && (
+                <>
+                  <button
+                    onClick={() => setAuditType("daily")}
+                    className={`px-4 py-2 rounded-lg text-sm font-bold transition-all whitespace-nowrap ${
+                      auditType === "daily" ? "bg-white text-stone-800 shadow-sm" : "text-stone-400 hover:text-stone-600"
+                    }`}
+                  >
+                    店家日報
+                  </button>
+                  <button
+                    onClick={() => setAuditType("target")}
+                    className={`px-4 py-2 rounded-lg text-sm font-bold transition-all whitespace-nowrap ${
+                      auditType === "target" ? "bg-white text-stone-800 shadow-sm" : "text-stone-400 hover:text-stone-600"
+                    }`}
+                  >
+                    店家目標
+                  </button>
+                </>
+              )}
+
               <button
-                onClick={() => setAuditType("daily")}
+                onClick={() => setAuditType("therapist-daily")}
                 className={`px-4 py-2 rounded-lg text-sm font-bold transition-all whitespace-nowrap ${
-                  auditType === "daily"
-                    ? "bg-white text-stone-800 shadow-sm"
-                    : "text-stone-400 hover:text-stone-600"
+                  auditType === "therapist-daily" ? "bg-white text-stone-800 shadow-sm" : "text-stone-400 hover:text-stone-600"
                 }`}
               >
-                店家日報
+                管理師日報
               </button>
               <button
-                onClick={() => setAuditType("target")}
+                onClick={() => setAuditType("therapist-target")}
                 className={`px-4 py-2 rounded-lg text-sm font-bold transition-all whitespace-nowrap ${
-                  auditType === "target"
-                    ? "bg-white text-stone-800 shadow-sm"
-                    : "text-stone-400 hover:text-stone-600"
+                  auditType === "therapist-target" ? "bg-white text-stone-800 shadow-sm" : "text-stone-400 hover:text-stone-600"
                 }`}
               >
-                店家目標
-              </button>
-              {/* ★ 新增：管理師檢核按鈕 ★ */}
-              <button
-                onClick={() => setAuditType("therapist")}
-                className={`px-4 py-2 rounded-lg text-sm font-bold transition-all whitespace-nowrap ${
-                  auditType === "therapist"
-                    ? "bg-white text-stone-800 shadow-sm"
-                    : "text-stone-400 hover:text-stone-600"
-                }`}
-              >
-                管理師檢核
+                管理師目標
               </button>
             </div>
 
-            {/* 日報 & 管理師檢核需要選日期 */}
-            {(auditType === "daily" || auditType === "therapist") && (
-               <div className="w-full sm:w-auto relative z-10">
-                  <SmartDatePicker 
-                    selectedDate={checkDate}
-                    onDateSelect={setCheckDate}
-                    stores={activeStoresForCalendar}  
-                    salesData={normalizedRawData}     
-                  />
-               </div>
-            )}
-            
-            {/* 目標檢核時顯示當前月份提示 */}
-            {auditType === "target" && (
-               <div className="px-4 py-2 bg-indigo-50 text-indigo-600 font-bold rounded-xl text-sm border border-indigo-100 flex items-center gap-2 self-start">
-                  檢核月份：{selectedYear} 年 {selectedMonth} 月
-               </div>
-            )}
+            <div className="flex gap-2 items-center w-full sm:w-auto">
+                {(auditType === "daily" || auditType === "therapist-daily") ? (
+                   <div className="w-full sm:w-auto relative z-10">
+                      <SmartDatePicker 
+                        selectedDate={checkDate}
+                        onDateSelect={setCheckDate}
+                        stores={calendarStores}       
+                        salesData={calendarSalesData} 
+                      />
+                   </div>
+                ) : (
+                   <div className="px-4 py-2 bg-indigo-50 text-indigo-600 font-bold rounded-xl text-sm border border-indigo-100 flex items-center gap-2 self-start flex-grow">
+                      <Target size={16}/> 檢核月份：{selectedYear} 年 {selectedMonth} 月
+                   </div>
+                )}
+
+                {/* 只有在店家相關檢核 (daily 或 target) 且有權限時才顯示設定按鈕 */}
+                {(userRole === 'director' || userRole === 'manager') && (auditType === 'daily' || auditType === 'target') && (
+                  <button onClick={openConfigModal} className="p-2 bg-stone-100 text-stone-500 rounded-xl hover:bg-stone-200" title="設定排除店家">
+                    <Settings size={20}/>
+                  </button>
+                )}
+            </div>
           </div>
 
-          {/* 右上角狀態圖例 */}
-          {auditType !== "target" && (
+          {(auditType === "daily" || auditType === "therapist-daily") && (
             <div className="flex items-center gap-4 text-sm font-medium text-stone-600 self-start md:self-center pl-1 hidden md:flex">
               <div className="flex items-center gap-1.5">
                 <span className="w-2.5 h-2.5 rounded-full bg-emerald-400 shadow-sm"></span>
@@ -251,7 +328,9 @@ const AuditView = () => {
           <div className="bg-rose-50 px-6 py-4 flex justify-between items-center flex-wrap gap-2">
             <h4 className="font-bold text-rose-600 flex items-center gap-2">
               <AlertCircle size={20} /> 
-              {auditType === 'therapist' ? "未回報人員 (已排除休假)" : "未完成名單"} 
+              {auditType === 'therapist-daily' ? "未回報人員 (已排除休假)" : 
+               auditType === 'therapist-target' ? "未設定目標人員" :
+               "未完成名單"} 
               <span className="bg-white px-2 py-0.5 rounded-full text-xs border border-rose-200 shadow-sm">{activeData.missing.length}</span>
             </h4>
             <button
@@ -272,8 +351,8 @@ const AuditView = () => {
                         key={idx}
                         className="bg-white px-2 py-1 rounded-lg text-xs border border-stone-200 text-stone-600 font-medium flex items-center gap-1"
                       >
-                        {auditType === 'therapist' && <UserX size={10} className="text-rose-400"/>}
-                        {auditType === 'therapist' ? s : s.replace("CYJ", "").replace("店", "")}
+                        {auditType.includes('therapist') && <UserX size={10} className="text-rose-400"/>}
+                        {auditType.includes('therapist') ? s : s.replace("CYJ", "").replace("店", "")}
                       </span>
                     ))}
                   </div>
@@ -287,13 +366,59 @@ const AuditView = () => {
                      <CheckCircle size={24}/>
                    </div>
                    全數完成！
-                   {auditType === 'therapist' && <span className="text-xs text-stone-400 font-normal">休假人員已自動排除</span>}
+                   {auditType === 'therapist-daily' && <span className="text-xs text-stone-400 font-normal">休假人員已自動排除</span>}
                 </div>
               </div>
             )}
           </div>
         </div>
       </Card>
+
+      {isConfigModalOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm p-4 animate-in fade-in duration-200">
+          <div className="bg-white w-full max-w-lg rounded-2xl shadow-2xl overflow-hidden flex flex-col max-h-[90vh]">
+            <div className="bg-stone-800 text-white p-4 font-bold text-lg flex justify-between items-center shrink-0">
+              <span className="flex items-center gap-2"><Ban size={20} className="text-rose-400"/> 設定免檢核店家</span>
+              <button onClick={() => setIsConfigModalOpen(false)} className="hover:bg-white/10 p-1 rounded-lg transition-colors"><X size={20}/></button>
+            </div>
+            <div className="p-4 bg-stone-50 border-b border-stone-200 shrink-0 text-sm text-stone-500">
+              <p>勾選的店家將 <span className="font-bold text-rose-500">不會</span> 出現在未回報名單與目標檢核中。</p>
+            </div>
+            <div className="p-6 overflow-y-auto space-y-6">
+              {Object.entries(managers).map(([mgr, stores]) => (
+                <div key={mgr}>
+                  <h4 className="font-bold text-stone-400 text-xs uppercase mb-2 ml-1">{mgr} 區</h4>
+                  <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
+                    {stores.map(store => {
+                      const isExcluded = localExclusions.includes(store);
+                      return (
+                        <button
+                          key={store}
+                          onClick={() => toggleExclusion(store)}
+                          className={`px-3 py-2 rounded-xl text-sm font-bold border-2 transition-all flex items-center justify-center gap-2 ${
+                            isExcluded 
+                              ? "bg-rose-50 border-rose-500 text-rose-600 shadow-sm" 
+                              : "bg-white border-stone-200 text-stone-500 hover:border-stone-400"
+                          }`}
+                        >
+                          {isExcluded && <CheckCircle size={14}/>}
+                          {store}
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
+              ))}
+            </div>
+            <div className="p-4 border-t border-stone-100 bg-white shrink-0 flex justify-end gap-3">
+              <button onClick={() => setIsConfigModalOpen(false)} className="px-6 py-2.5 rounded-xl font-bold text-stone-500 hover:bg-stone-50">取消</button>
+              <button onClick={saveConfig} className="px-6 py-2.5 rounded-xl font-bold bg-stone-800 text-white hover:bg-stone-700 shadow-lg flex items-center gap-2">
+                <Save size={18}/> 儲存設定
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </ViewWrapper>
   );
 };
