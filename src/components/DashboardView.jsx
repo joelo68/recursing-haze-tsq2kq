@@ -14,6 +14,7 @@ const DashboardView = () => {
 
   const [viewMode, setViewMode] = useState((userRole === 'therapist' || userRole === 'trainer') ? 'therapist' : 'store');
 
+  // --- 店家排行邏輯 (維持不變) ---
   const myStoreRankings = useMemo(() => {
     if ((userRole !== 'store' && userRole !== 'manager') || !allReports) return [];
     const storeStats = {};
@@ -49,15 +50,19 @@ const DashboardView = () => {
     }));
   }, [userRole, allReports, currentUser, managers, budgets, selectedYear, selectedMonth]);
 
+  // --- 管理師數據邏輯 (全區計算) ---
   const therapistStats = useMemo(() => {
+    // 若無資料則回傳空
     if (!therapistReports) return { rankings: [], myStats: null, grandTotal: {} };
     
+    // 1. 篩選月份 (注意：這裡必須確保 therapistReports 包含「全區」資料，才能算出全區排名)
     const currentMonthReports = therapistReports.filter(r => {
       const dStr = r.date.replace(/-/g, "/"); 
       const d = new Date(dStr);
       return d.getFullYear() === parseInt(selectedYear) && (d.getMonth() + 1) === parseInt(selectedMonth);
     });
 
+    // 2. 聚合數據 (加總每個人的各項數值)
     const statsMap = {};
     currentMonthReports.forEach(r => {
       const id = r.therapistId;
@@ -86,11 +91,13 @@ const DashboardView = () => {
       statsMap[id].returnRevenue += (Number(r.returnRevenue) || 0);
     });
 
+    // 3. 計算衍生指標 (締結率、佔比、ASP) 並排序 (全區排序)
     const rankings = Object.values(statsMap).map(item => {
         const total = item.totalRevenue || 1; 
         const newMix = Math.round((item.newCustomerRevenue / total) * 100);
         const oldMix = Math.round((item.oldCustomerRevenue / total) * 100);
         
+        // 締結率分母防呆
         const newCount = item.newCustomerCount || 1;
         const newRate = (item.newCustomerClosings / newCount) * 100;
 
@@ -105,19 +112,23 @@ const DashboardView = () => {
             newAsp: newAsp,
             oldAsp: oldAsp
         };
-    }).sort((a, b) => b.totalRevenue - a.totalRevenue);
+    }).sort((a, b) => b.totalRevenue - a.totalRevenue); // 依業績由高到低排序
 
+    // 4. 指派排名 (Rank 是基於全區資料的 index，1 為第一名)
     rankings.forEach((item, index) => { item.rank = index + 1; });
     
+    // 5. 找出目前使用者 (用來顯示藍色個人卡片)
     let myStats = null;
-    if (userRole === 'therapist' && currentUser) { myStats = rankings.find(r => r.id === currentUser.id); }
+    if (userRole === 'therapist' && currentUser) { 
+        myStats = rankings.find(r => r.id === currentUser.id); 
+    }
     
-    // ★ 修改：grandTotal 累加 oldCustomerRevenue
+    // 6. 計算全區總計
     const grandTotal = rankings.reduce((acc, curr) => ({ 
         totalRevenue: acc.totalRevenue + curr.totalRevenue, 
         serviceCount: acc.serviceCount + curr.serviceCount, 
         newCustomerRevenue: acc.newCustomerRevenue + curr.newCustomerRevenue, 
-        oldCustomerRevenue: acc.oldCustomerRevenue + curr.oldCustomerRevenue, // 新增
+        oldCustomerRevenue: acc.oldCustomerRevenue + curr.oldCustomerRevenue,
         returnRevenue: acc.returnRevenue + curr.returnRevenue, 
         count: acc.count + 1 
     }), { totalRevenue: 0, serviceCount: 0, newCustomerRevenue: 0, oldCustomerRevenue: 0, returnRevenue: 0, count: 0 });
@@ -153,6 +164,7 @@ const DashboardView = () => {
 
         {viewMode === 'store' && (
           <div className="space-y-8 animate-in fade-in slide-in-from-bottom-4 duration-500">
+            {/* ... (門市營運部分的程式碼保持不變) ... */}
             {userRole === 'store' && myStoreRankings.length > 0 && (
               <div className="grid grid-cols-1 md:grid-cols-2 gap-6">{myStoreRankings.map((storeRank) => ( <div key={storeRank.storeName} className={`rounded-3xl p-6 text-white shadow-xl relative overflow-hidden transition-all ${storeRank.isBottom5 ? "bg-gradient-to-br from-rose-500 to-red-600 shadow-rose-200" : "bg-gradient-to-br from-amber-400 to-orange-600 shadow-amber-200"}`}><div className="absolute top-0 right-0 p-4 opacity-10">{storeRank.isBottom5 ? <AlertTriangle size={120} /> : <Trophy size={120} />}</div><div className="relative z-10"><div className="flex items-center gap-2 mb-4"><div className="bg-white/20 p-2 rounded-lg backdrop-blur-sm">{storeRank.isBottom5 ? <Activity size={20} className="text-white" /> : <Medal size={20} className="text-yellow-100" />}</div><h3 className="font-bold text-lg tracking-wider opacity-90">{storeRank.storeName}</h3>{storeRank.isBottom5 && <span className="ml-auto bg-white/20 px-2 py-1 rounded text-xs font-bold flex items-center gap-1">需加強</span>}</div><div className="flex items-end gap-4 mb-2"><div><p className="text-white/80 text-xs font-bold uppercase mb-1">全區排名</p><div className="flex items-baseline gap-2"><span className="text-5xl font-extrabold font-mono text-white tracking-tighter">No.{storeRank.rank}</span><span className="text-white/60 font-bold text-sm">/ {storeRank.totalStores}</span></div></div><div className="flex-1 text-right"><p className="text-white/80 text-xs font-bold uppercase mb-1">目標達成率</p><p className="text-3xl font-mono font-bold text-white">{storeRank.rate.toFixed(1)}%</p></div></div><div className="mt-4 pt-4 border-t border-white/20 flex justify-between text-xs font-medium text-white/90"><span>目前業績: {fmtMoney(storeRank.actual)}</span><span>目標: {fmtMoney(storeRank.target)}</span></div></div></div> ))}</div>
             )}
@@ -169,13 +181,24 @@ const DashboardView = () => {
           </div>
         )}
 
+        {/* --- 人員績效視圖 (Therapist View) --- */}
         {viewMode === 'therapist' && (
           <div className="space-y-8 animate-in fade-in slide-in-from-bottom-4 duration-500 w-full min-w-0">
+            
+            {/* ★★★ 修改 1：個人績效戰情面板 (Blue Card) ★★★ */}
             {therapistStats.myStats && (
-              <div className="bg-gradient-to-br from-indigo-600 to-purple-700 rounded-3xl p-6 text-white shadow-xl relative overflow-hidden"><div className="absolute top-0 right-0 p-4 opacity-10"><Award size={140} /></div><div className="relative z-10 flex flex-col md:flex-row justify-between items-end gap-6"><div><div className="flex items-center gap-3 mb-2"><span className="bg-white/20 px-3 py-1 rounded-full text-xs font-bold backdrop-blur-sm">No.{therapistStats.myStats.rank}</span><span className="text-indigo-200 font-bold tracking-wider text-sm">{therapistStats.myStats.store}店</span></div><h2 className="text-3xl md:text-4xl font-extrabold mb-1">{therapistStats.myStats.name}</h2><p className="text-indigo-100 text-sm">個人績效戰情面板 ({selectedMonth}月)</p></div><div className="flex gap-6 text-right"><div><p className="text-xs text-indigo-200 font-bold uppercase mb-1">個人總業績</p><p className="text-3xl font-mono font-bold">{fmtMoney(therapistStats.myStats.totalRevenue)}</p></div><div><p className="text-xs text-indigo-200 font-bold uppercase mb-1">操作人次</p><p className="text-3xl font-mono font-bold">{therapistStats.myStats.serviceCount}</p></div></div></div></div>
+              <div className="bg-gradient-to-br from-indigo-600 to-purple-700 rounded-3xl p-6 text-white shadow-xl relative overflow-hidden"><div className="absolute top-0 right-0 p-4 opacity-10"><Award size={140} /></div><div className="relative z-10 flex flex-col md:flex-row justify-between items-end gap-6"><div><div className="flex items-center gap-3 mb-2"><span className="bg-white/20 px-3 py-1 rounded-full text-xs font-bold backdrop-blur-sm">No.{therapistStats.myStats.rank}</span><span className="text-indigo-200 font-bold tracking-wider text-sm">{therapistStats.myStats.store}店</span></div><h2 className="text-3xl md:text-4xl font-extrabold mb-1">{therapistStats.myStats.name}</h2><p className="text-indigo-100 text-sm">個人績效戰情面板 ({selectedMonth}月)</p></div>
+              
+              <div className="flex gap-6 text-right">
+                {/* 顯示項目：個人總業績 / 新客締結率 */}
+                <div><p className="text-xs text-indigo-200 font-bold uppercase mb-1">個人總業績</p><p className="text-3xl font-mono font-bold">{fmtMoney(therapistStats.myStats.totalRevenue)}</p></div>
+                <div><p className="text-xs text-indigo-200 font-bold uppercase mb-1">新客締結率</p><p className="text-3xl font-mono font-bold">{therapistStats.myStats.newClosingRate.toFixed(1)}%</p></div>
+              </div>
+              
+              </div></div>
             )}
             
-            {/* ★ 修改：更新 KPI 卡片 (移除操作數，新增舊客與佔比，改為 5 欄) */}
+            {/* 全區總覽小卡 */}
             {(userRole !== 'therapist') && (
                <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-5 gap-4">
                  <MiniKpiCard title="管理師總業績" value={fmtMoney(therapistStats.grandTotal.totalRevenue)} icon={DollarSign} color="text-indigo-500" subText={`${therapistStats.grandTotal.count} 位在職人員`} />
@@ -205,7 +228,11 @@ const DashboardView = () => {
                       </tr>
                     </thead>
                     <tbody className="text-sm">
-                      {therapistStats.rankings.map((t, idx) => (
+                      {/* ★★★ 修改 2：顯示過濾邏輯 ★★★ */}
+                      {/* 先計算完排名 (在 therapistStats 裡已完成)，這裡只過濾「顯示」哪一列 */}
+                      {therapistStats.rankings
+                        .filter(t => userRole !== 'therapist' || t.id === currentUser?.id)
+                        .map((t, idx) => (
                         <tr key={t.id} className={`border-b border-stone-50 hover:bg-stone-50 transition-colors ${currentUser?.id === t.id ? "bg-indigo-50 hover:bg-indigo-100" : ""}`}>
                           <td className="p-3 md:p-4 text-center">
                             <span className={`inline-flex items-center justify-center w-8 h-8 rounded-full text-xs font-bold ${idx < 3 ? "bg-amber-100 text-amber-700 ring-4 ring-amber-50" : "bg-stone-100 text-stone-500"}`}>

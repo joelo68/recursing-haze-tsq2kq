@@ -1,9 +1,10 @@
+// src/components/AnnualView.jsx
 import React, { useContext, useMemo, useState, useEffect } from "react";
 import {
   ComposedChart, Line, Bar, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer,
   Area
 } from "recharts";
-import { Target, TrendingUp, DollarSign, Activity, Calendar, Award, Filter, ArrowRight } from "lucide-react";
+import { Target, TrendingUp, DollarSign, Activity, Calendar, Award, Filter, ArrowRight, Settings, X, Ban, CheckCircle, Save } from "lucide-react";
 
 import { AppContext } from "../AppContext";
 import { ViewWrapper, Card } from "./SharedUI";
@@ -53,14 +54,23 @@ const AnnualView = () => {
     managers, 
     fmtMoney, 
     fmtNum, 
-    selectedYear 
+    selectedYear,
+    // ★ 新增引用：共用排除名單與更新函式
+    auditExclusions,
+    handleUpdateAuditExclusions,
+    userRole,
+    showToast
   } = useContext(AppContext);
 
   // ==========================================
-  // 1. 本地狀態：自訂月份區間
+  // 1. 本地狀態：自訂月份區間 & 設定視窗
   // ==========================================
   const [startMonthStr, setStartMonthStr] = useState(`${selectedYear}-01`);
   const [endMonthStr, setEndMonthStr] = useState(`${selectedYear}-12`);
+  
+  // ★ 設定視窗狀態
+  const [isConfigModalOpen, setIsConfigModalOpen] = useState(false);
+  const [localExclusions, setLocalExclusions] = useState([]);
 
   // 當全域年份改變時，重置為整年
   useEffect(() => {
@@ -69,7 +79,28 @@ const AnnualView = () => {
   }, [selectedYear]);
 
   // ==========================================
-  // 2. 季度切換邏輯
+  // 2. 排除設定邏輯 (與回報檢核共用)
+  // ==========================================
+  const openConfigModal = () => {
+    setLocalExclusions(auditExclusions || []);
+    setIsConfigModalOpen(true);
+  };
+
+  const saveConfig = async () => {
+    await handleUpdateAuditExclusions(localExclusions);
+    setIsConfigModalOpen(false);
+    showToast("排除名單已更新，報表已重新計算", "success");
+  };
+
+  const toggleExclusion = (store) => {
+    setLocalExclusions(prev => {
+      if (prev.includes(store)) return prev.filter(s => s !== store);
+      return [...prev, store];
+    });
+  };
+
+  // ==========================================
+  // 3. 季度切換邏輯
   // ==========================================
   const handleQuarterClick = (q) => {
     let start = "01";
@@ -98,10 +129,14 @@ const AnnualView = () => {
   }, [startMonthStr, endMonthStr, selectedYear]);
 
   // ==========================================
-  // 3. 核心計算邏輯
+  // 4. 核心計算邏輯 (★ 已加入排除邏輯)
   // ==========================================
   const annualData = useMemo(() => {
-    const visibleStoreNames = Object.values(managers).flat().map(s => `CYJ${s}店`);
+    // ★ 關鍵修改：過濾掉在排除名單中的店家
+    const visibleStoreNames = Object.values(managers)
+      .flat()
+      .filter(storeName => !auditExclusions.includes(storeName)) // 排除邏輯
+      .map(s => `CYJ${s}店`);
 
     const monthList = [];
     let current = new Date(`${startMonthStr}-01`);
@@ -127,6 +162,10 @@ const AnnualView = () => {
     }));
 
     rawData.forEach(d => {
+      // ★ 資料面過濾：若該筆資料屬於被排除的店家，直接略過
+      const rawStoreName = d.storeName ? d.storeName.replace("CYJ", "").replace("店", "") : "";
+      if (auditExclusions.includes(rawStoreName)) return;
+
       if (!d.date) return;
       const dateStr = d.date.replace(/-/g, "/");
       const parts = dateStr.split("/");
@@ -146,7 +185,7 @@ const AnnualView = () => {
     let totalBudget = 0;
     let totalAccrual = 0;
     let totalAccrualBudget = 0;
-    let totalTraffic = 0; // ★★★ 修正點 1：新增操作人次加總變數
+    let totalTraffic = 0;
 
     statsMap.forEach(stat => {
       visibleStoreNames.forEach(storeName => {
@@ -164,7 +203,7 @@ const AnnualView = () => {
       totalBudget += stat.budget;
       totalAccrual += stat.accrual;
       totalAccrualBudget += stat.accrualBudget;
-      totalTraffic += stat.traffic; // ★★★ 修正點 2：累加人次
+      totalTraffic += stat.traffic;
     });
 
     return {
@@ -176,10 +215,10 @@ const AnnualView = () => {
         accrual: totalAccrual,
         accrualBudget: totalAccrualBudget,
         accrualAch: totalAccrualBudget > 0 ? (totalAccrual / totalAccrualBudget) * 100 : 0,
-        traffic: totalTraffic, // ★★★ 修正點 3：回傳總人次
+        traffic: totalTraffic,
       }
     };
-  }, [rawData, budgets, managers, startMonthStr, endMonthStr]);
+  }, [rawData, budgets, managers, startMonthStr, endMonthStr, auditExclusions]); // 加入 auditExclusions 相依性
 
   const { monthlyStats, totals } = annualData;
 
@@ -202,8 +241,21 @@ const AnnualView = () => {
                  <p className="text-xs text-stone-500 font-medium">Performance Analytics</p>
                </div>
              </div>
-             <div className="md:ml-auto px-4 py-1.5 bg-stone-100 text-stone-500 text-xs font-bold rounded-full self-start">
-               權限範圍: 自動篩選 ({Object.values(managers).flat().length} 店)
+             
+             {/* ★ 權限範圍與設定按鈕 */}
+             <div className="flex items-center gap-2 self-start md:self-auto md:ml-auto">
+               <div className="px-4 py-1.5 bg-stone-100 text-stone-500 text-xs font-bold rounded-full">
+                 權限範圍: 自動篩選 ({Object.values(managers).flat().filter(s => !auditExclusions.includes(s)).length} 店)
+               </div>
+               {(userRole === 'director' || userRole === 'manager') && (
+                  <button 
+                    onClick={openConfigModal} 
+                    className="p-1.5 bg-stone-100 text-stone-500 rounded-full hover:bg-stone-200 transition-colors" 
+                    title="設定排除店家 (不計入目標與業績)"
+                  >
+                    <Settings size={16}/>
+                  </button>
+               )}
              </div>
            </div>
 
@@ -310,35 +362,19 @@ const AnnualView = () => {
                   tickLine={false} 
                   tickFormatter={(val) => `${(val/10000).toFixed(0)}萬`} 
                 />
-                
-                {/* 1. Tooltip 排序 (確保浮動視窗內的文字順序也是正確的) */}
                 <Tooltip 
                   contentStyle={{ borderRadius: '12px', border: 'none', boxShadow: '0 4px 12px rgba(0,0,0,0.1)' }}
                   formatter={(value) => fmtMoney(value)}
                   itemSorter={(item) => {
-                    const order = {
-                      "現金預算": 1,
-                      "權責預算": 2,
-                      "實際現金": 3,
-                      "實際權責": 4
-                    };
+                    const order = { "現金預算": 1, "權責預算": 2, "實際現金": 3, "實際權責": 4 };
                     return order[item.name] || 99;
                   }}
                 />
-
-                {/* 2. Legend 使用自定義元件 */}
-                <Legend 
-                  content={<CustomLegend />} 
-                  verticalAlign="top" 
-                  height={36}
-                />
-                
-                {/* 3. 圖表元件 */}
+                <Legend content={<CustomLegend />} verticalAlign="top" height={36} />
                 <Area type="monotone" dataKey="budget" name="現金預算" stroke="#fbbf24" fill="#fef3c7" strokeWidth={2} fillOpacity={0.5} />
                 <Line type="monotone" dataKey="accrualBudget" name="權責預算" stroke="#818cf8" strokeWidth={2} strokeDasharray="5 5" dot={false} />
                 <Bar dataKey="cash" name="實際現金" barSize={12} radius={[4, 4, 0, 0]} fill="#f59e0b" />
                 <Line type="monotone" dataKey="accrual" name="實際權責" stroke="#4f46e5" strokeWidth={3} dot={{r:3}} />
-
               </ComposedChart>
             </ResponsiveContainer>
           </div>
@@ -391,7 +427,6 @@ const AnnualView = () => {
                   <td className="py-4 text-right font-mono text-stone-500 text-xs pl-4 border-l border-dashed border-stone-200">{fmtMoney(totals.accrualBudget)}</td>
                   <td className="py-4 text-right font-mono text-indigo-600">{fmtMoney(totals.accrual)}</td>
                   <td className="py-4 text-right text-emerald-600">{totals.accrualAch.toFixed(1)}%</td>
-                  {/* ★★★ 修正點 4：顯示總人次 ★★★ */}
                   <td className="py-4 text-right font-mono pl-4 border-l border-dashed border-stone-200">{fmtNum(totals.traffic)}</td>
                 </tr>
               </tfoot>
@@ -400,6 +435,54 @@ const AnnualView = () => {
         </Card>
 
       </div>
+
+      {/* ★★★ 設定視窗 (Modal) ★★★ */}
+      {isConfigModalOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm p-4 animate-in fade-in duration-200">
+          <div className="bg-white w-full max-w-lg rounded-2xl shadow-2xl overflow-hidden flex flex-col max-h-[90vh]">
+            <div className="bg-stone-800 text-white p-4 font-bold text-lg flex justify-between items-center shrink-0">
+              <span className="flex items-center gap-2"><Ban size={20} className="text-rose-400"/> 設定不計算店家</span>
+              <button onClick={() => setIsConfigModalOpen(false)} className="hover:bg-white/10 p-1 rounded-lg transition-colors"><X size={20}/></button>
+            </div>
+            <div className="p-4 bg-stone-50 border-b border-stone-200 shrink-0 text-sm text-stone-500">
+              <p>勾選的店家將 <span className="font-bold text-rose-500">不會</span> 計入年度預算與實際業績。</p>
+              <p className="text-xs mt-1 text-stone-400">(此設定與「回報檢核」共用排除名單)</p>
+            </div>
+            <div className="p-6 overflow-y-auto space-y-6">
+              {Object.entries(managers).map(([mgr, stores]) => (
+                <div key={mgr}>
+                  <h4 className="font-bold text-stone-400 text-xs uppercase mb-2 ml-1">{mgr} 區</h4>
+                  <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
+                    {stores.map(store => {
+                      const isExcluded = localExclusions.includes(store);
+                      return (
+                        <button
+                          key={store}
+                          onClick={() => toggleExclusion(store)}
+                          className={`px-3 py-2 rounded-xl text-sm font-bold border-2 transition-all flex items-center justify-center gap-2 ${
+                            isExcluded 
+                              ? "bg-rose-50 border-rose-500 text-rose-600 shadow-sm" 
+                              : "bg-white border-stone-200 text-stone-500 hover:border-stone-400"
+                          }`}
+                        >
+                          {isExcluded && <CheckCircle size={14}/>}
+                          {store}
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
+              ))}
+            </div>
+            <div className="p-4 border-t border-stone-100 bg-white shrink-0 flex justify-end gap-3">
+              <button onClick={() => setIsConfigModalOpen(false)} className="px-6 py-2.5 rounded-xl font-bold text-stone-500 hover:bg-stone-50">取消</button>
+              <button onClick={saveConfig} className="px-6 py-2.5 rounded-xl font-bold bg-stone-800 text-white hover:bg-stone-700 shadow-lg flex items-center gap-2">
+                <Save size={18}/> 儲存設定
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </ViewWrapper>
   );
 };

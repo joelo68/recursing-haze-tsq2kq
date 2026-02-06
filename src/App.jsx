@@ -209,8 +209,9 @@ export default function App() {
 
   // ★★★ 資料過濾邏輯：管理師日報 (visibleTherapistReports) ★★★
   const visibleTherapistReports = useMemo(() => {
-    // 1. 總監/教專：看全部
-    if (userRole === ROLES.DIRECTOR.id || userRole === ROLES.TRAINER.id) {
+    // 1. 總監/教專/管理師：為了計算全區排名，管理師也需要讀取全部資料 (但在 DashboardView 層級會過濾顯示)
+    // ★★★ 修正點：加入 ROLES.THERAPIST.id 允許讀取全區資料 ★★★
+    if (userRole === ROLES.DIRECTOR.id || userRole === ROLES.TRAINER.id || userRole === ROLES.THERAPIST.id) {
       return therapistReports;
     }
     // 2. 區長：只看轄區內
@@ -223,10 +224,7 @@ export default function App() {
       const myStores = (currentUser.stores || [currentUser.storeName] || []).map(normalizeStore);
       return therapistReports.filter(r => myStores.includes(normalizeStore(r.storeName)));
     }
-    // 4. 管理師：只看自己
-    if (userRole === ROLES.THERAPIST.id && currentUser) {
-      return therapistReports.filter(r => r.therapistId === currentUser.id);
-    }
+    
     return [];
   }, [therapistReports, userRole, currentUser, managers]);
 
@@ -246,7 +244,7 @@ export default function App() {
       const myStores = (currentUser.stores || [currentUser.storeName] || []).map(normalizeStore);
       return therapists.filter(t => myStores.includes(normalizeStore(t.store)));
     }
-    // 4. 管理師：只看自己
+    // 4. 管理師：只看自己 (保持不變，管理師不需要看到其他人事資料，只需業績排行)
     if (userRole === ROLES.THERAPIST.id && currentUser) {
       return therapists.filter(t => t.id === currentUser.id);
     }
