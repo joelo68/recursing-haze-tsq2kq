@@ -1,7 +1,7 @@
 // src/components/DashboardView.jsx
 import React, { useContext, useMemo, useState } from "react";
 import { XAxis, YAxis, CartesianGrid, Tooltip as RechartsTooltip, ResponsiveContainer, Line, ComposedChart, Area } from "recharts";
-import { TrendingUp, DollarSign, Target, Users, Award, Loader2, CheckSquare, Activity, Sparkles, ShoppingBag, CreditCard, FileWarning, Trophy, Medal, AlertTriangle, Crown, Map, User, Store as StoreIcon, ArrowRight, ArrowLeft } from "lucide-react";
+import { TrendingUp, DollarSign, Target, Users, Award, Loader2, CheckSquare, Activity, Sparkles, ShoppingBag, CreditCard, FileWarning, Trophy, Medal, AlertTriangle, Crown, Map, User, Store as StoreIcon, ArrowRight, ArrowLeft, Frown, Flame, Zap, Download } from "lucide-react";
 import { ViewWrapper, Card } from "./SharedUI";
 import { formatNumber } from "../utils/helpers";
 import { AppContext } from "../AppContext";
@@ -52,17 +52,16 @@ const DashboardView = () => {
 
   // --- 管理師數據邏輯 (全區計算) ---
   const therapistStats = useMemo(() => {
-    // 若無資料則回傳空
     if (!therapistReports) return { rankings: [], myStats: null, grandTotal: {} };
     
-    // 1. 篩選月份 (注意：這裡必須確保 therapistReports 包含「全區」資料，才能算出全區排名)
+    // 1. 篩選月份
     const currentMonthReports = therapistReports.filter(r => {
       const dStr = r.date.replace(/-/g, "/"); 
       const d = new Date(dStr);
       return d.getFullYear() === parseInt(selectedYear) && (d.getMonth() + 1) === parseInt(selectedMonth);
     });
 
-    // 2. 聚合數據 (加總每個人的各項數值)
+    // 2. 聚合數據
     const statsMap = {};
     currentMonthReports.forEach(r => {
       const id = r.therapistId;
@@ -91,13 +90,12 @@ const DashboardView = () => {
       statsMap[id].returnRevenue += (Number(r.returnRevenue) || 0);
     });
 
-    // 3. 計算衍生指標 (締結率、佔比、ASP) 並排序 (全區排序)
+    // 3. 計算衍生指標
     const rankings = Object.values(statsMap).map(item => {
         const total = item.totalRevenue || 1; 
         const newMix = Math.round((item.newCustomerRevenue / total) * 100);
         const oldMix = Math.round((item.oldCustomerRevenue / total) * 100);
         
-        // 締結率分母防呆
         const newCount = item.newCustomerCount || 1;
         const newRate = (item.newCustomerClosings / newCount) * 100;
 
@@ -112,18 +110,31 @@ const DashboardView = () => {
             newAsp: newAsp,
             oldAsp: oldAsp
         };
-    }).sort((a, b) => b.totalRevenue - a.totalRevenue); // 依業績由高到低排序
+    }).sort((a, b) => b.totalRevenue - a.totalRevenue); // 全區排序
 
-    // 4. 指派排名 (Rank 是基於全區資料的 index，1 為第一名)
-    rankings.forEach((item, index) => { item.rank = index + 1; });
+    const totalTherapists = rankings.length;
+
+    // 4. 指派排名與狀態標籤
+    rankings.forEach((item, index) => { 
+        item.rank = index + 1; 
+        item.totalPeers = totalTherapists;
+        
+        if (item.rank <= 3) item.status = "TOP";
+        else if (item.rank > totalTherapists - 10) item.status = "DANGER";
+        else item.status = "NORMAL";
+
+        if (index > 0) {
+            item.gapToNext = rankings[index - 1].totalRevenue - item.totalRevenue;
+        } else {
+            item.gapToNext = 0;
+        }
+    });
     
-    // 5. 找出目前使用者 (用來顯示藍色個人卡片)
     let myStats = null;
     if (userRole === 'therapist' && currentUser) { 
         myStats = rankings.find(r => r.id === currentUser.id); 
     }
     
-    // 6. 計算全區總計
     const grandTotal = rankings.reduce((acc, curr) => ({ 
         totalRevenue: acc.totalRevenue + curr.totalRevenue, 
         serviceCount: acc.serviceCount + curr.serviceCount, 
@@ -135,6 +146,67 @@ const DashboardView = () => {
     
     return { rankings, myStats, grandTotal };
   }, [therapistReports, selectedYear, selectedMonth, userRole, currentUser]);
+
+  // ★★★ CSV 匯出功能 (已修正檔名) ★★★
+  const handleExportCSV = () => {
+    const dataToExport = therapistStats.rankings.filter(t => userRole !== 'therapist' || t.id === currentUser?.id);
+
+    const headers = ["排名,姓名,所屬店家,個人總業績,新客業績,舊客業績,新舊客佔比,新客締結率,新客平均業績,舊客平均業績"];
+    const rows = dataToExport.map(t => [
+      t.rank,
+      t.name,
+      t.store,
+      t.totalRevenue,
+      t.newCustomerRevenue,
+      t.oldCustomerRevenue,
+      `"${t.revenueMix}"`,
+      `${t.newClosingRate.toFixed(1)}%`,
+      Math.round(t.newAsp),
+      Math.round(t.oldAsp)
+    ].join(","));
+
+    const csvContent = "\uFEFF" + [headers, ...rows].join("\n");
+    const blob = new Blob([csvContent], { type: "text/csv;charset=utf-8;" });
+    const link = document.createElement("a");
+    const url = URL.createObjectURL(blob);
+    
+    // ★ 修正處：使用當日日期作為檔名
+    const today = new Date().toISOString().split("T")[0];
+    link.setAttribute("href", url);
+    link.setAttribute("download", `管理師績效排行_${today}.csv`);
+    
+    link.style.visibility = "hidden";
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+  };
+
+  const getMotivationalMessage = (stats) => {
+      if (!stats) return { title: "努力加載中...", sub: "Data Loading..." };
+      
+      const { rank, totalPeers, status, gapToNext } = stats;
+      const beaten = totalPeers - rank;
+
+      if (status === "TOP") {
+          return { 
+              title: rank === 1 ? "全區制霸！無人能敵" : "表現卓越！王者風範", 
+              sub: "請繼續保持這份榮耀",
+              icon: Crown
+          };
+      } else if (status === "DANGER") {
+          return { 
+              title: `警報！您僅贏過 ${beaten} 人`, 
+              sub: `距離上一名還差 ${fmtMoney(gapToNext)}，請加油好嗎？`,
+              icon: AlertTriangle
+          };
+      } else {
+          return { 
+              title: `表現平穩，擊敗了 ${beaten} 位夥伴`, 
+              sub: `再多做 ${fmtMoney(gapToNext)} 就能前進一名！`,
+              icon: Zap
+          };
+      }
+  };
 
   if (!analytics || !analytics.grandTotal) return <div className="flex h-96 items-center justify-center"><Loader2 className="h-10 w-10 animate-spin text-stone-300" /><span className="ml-3 text-stone-400 font-bold">數據載入中...</span></div>;
 
@@ -164,7 +236,7 @@ const DashboardView = () => {
 
         {viewMode === 'store' && (
           <div className="space-y-8 animate-in fade-in slide-in-from-bottom-4 duration-500">
-            {/* ... (門市營運部分的程式碼保持不變) ... */}
+            {/* ... (門市營運部分保持不變) ... */}
             {userRole === 'store' && myStoreRankings.length > 0 && (
               <div className="grid grid-cols-1 md:grid-cols-2 gap-6">{myStoreRankings.map((storeRank) => ( <div key={storeRank.storeName} className={`rounded-3xl p-6 text-white shadow-xl relative overflow-hidden transition-all ${storeRank.isBottom5 ? "bg-gradient-to-br from-rose-500 to-red-600 shadow-rose-200" : "bg-gradient-to-br from-amber-400 to-orange-600 shadow-amber-200"}`}><div className="absolute top-0 right-0 p-4 opacity-10">{storeRank.isBottom5 ? <AlertTriangle size={120} /> : <Trophy size={120} />}</div><div className="relative z-10"><div className="flex items-center gap-2 mb-4"><div className="bg-white/20 p-2 rounded-lg backdrop-blur-sm">{storeRank.isBottom5 ? <Activity size={20} className="text-white" /> : <Medal size={20} className="text-yellow-100" />}</div><h3 className="font-bold text-lg tracking-wider opacity-90">{storeRank.storeName}</h3>{storeRank.isBottom5 && <span className="ml-auto bg-white/20 px-2 py-1 rounded text-xs font-bold flex items-center gap-1">需加強</span>}</div><div className="flex items-end gap-4 mb-2"><div><p className="text-white/80 text-xs font-bold uppercase mb-1">全區排名</p><div className="flex items-baseline gap-2"><span className="text-5xl font-extrabold font-mono text-white tracking-tighter">No.{storeRank.rank}</span><span className="text-white/60 font-bold text-sm">/ {storeRank.totalStores}</span></div></div><div className="flex-1 text-right"><p className="text-white/80 text-xs font-bold uppercase mb-1">目標達成率</p><p className="text-3xl font-mono font-bold text-white">{storeRank.rate.toFixed(1)}%</p></div></div><div className="mt-4 pt-4 border-t border-white/20 flex justify-between text-xs font-medium text-white/90"><span>目前業績: {fmtMoney(storeRank.actual)}</span><span>目標: {fmtMoney(storeRank.target)}</span></div></div></div> ))}</div>
             )}
@@ -185,18 +257,61 @@ const DashboardView = () => {
         {viewMode === 'therapist' && (
           <div className="space-y-8 animate-in fade-in slide-in-from-bottom-4 duration-500 w-full min-w-0">
             
-            {/* ★★★ 修改 1：個人績效戰情面板 (Blue Card) ★★★ */}
-            {therapistStats.myStats && (
-              <div className="bg-gradient-to-br from-indigo-600 to-purple-700 rounded-3xl p-6 text-white shadow-xl relative overflow-hidden"><div className="absolute top-0 right-0 p-4 opacity-10"><Award size={140} /></div><div className="relative z-10 flex flex-col md:flex-row justify-between items-end gap-6"><div><div className="flex items-center gap-3 mb-2"><span className="bg-white/20 px-3 py-1 rounded-full text-xs font-bold backdrop-blur-sm">No.{therapistStats.myStats.rank}</span><span className="text-indigo-200 font-bold tracking-wider text-sm">{therapistStats.myStats.store}店</span></div><h2 className="text-3xl md:text-4xl font-extrabold mb-1">{therapistStats.myStats.name}</h2><p className="text-indigo-100 text-sm">個人績效戰情面板 ({selectedMonth}月)</p></div>
+            {/* ★★★ 修改 1：動態視覺個人績效卡 (含羞恥/激勵模式) ★★★ */}
+            {therapistStats.myStats && (() => {
+              const info = getMotivationalMessage(therapistStats.myStats);
+              const status = therapistStats.myStats.status;
               
-              <div className="flex gap-6 text-right">
-                {/* 顯示項目：個人總業績 / 新客締結率 */}
-                <div><p className="text-xs text-indigo-200 font-bold uppercase mb-1">個人總業績</p><p className="text-3xl font-mono font-bold">{fmtMoney(therapistStats.myStats.totalRevenue)}</p></div>
-                <div><p className="text-xs text-indigo-200 font-bold uppercase mb-1">新客締結率</p><p className="text-3xl font-mono font-bold">{therapistStats.myStats.newClosingRate.toFixed(1)}%</p></div>
-              </div>
-              
-              </div></div>
-            )}
+              let bgClass = "bg-gradient-to-br from-indigo-600 to-purple-700"; 
+              let shadowClass = "shadow-indigo-200";
+              if (status === "TOP") {
+                  bgClass = "bg-gradient-to-br from-amber-400 to-orange-500";
+                  shadowClass = "shadow-amber-200";
+              } else if (status === "DANGER") {
+                  bgClass = "bg-gradient-to-br from-rose-600 to-red-700"; 
+                  shadowClass = "shadow-rose-200";
+              }
+
+              return (
+                <div className={`${bgClass} rounded-3xl p-6 text-white shadow-xl ${shadowClass} relative overflow-hidden transition-all duration-500`}>
+                  <div className="absolute top-0 right-0 p-4 opacity-10">
+                    <info.icon size={140} />
+                  </div>
+                  <div className="relative z-10 flex flex-col md:flex-row justify-between items-end gap-6">
+                    <div>
+                      <div className="flex items-center gap-3 mb-2">
+                        <span className="bg-white/20 px-3 py-1 rounded-full text-xs font-bold backdrop-blur-sm flex items-center gap-1">
+                          {status === 'DANGER' && <Flame size={12} className="animate-pulse"/>}
+                          No.{therapistStats.myStats.rank}
+                        </span>
+                        <span className="text-white/80 font-bold tracking-wider text-sm">{therapistStats.myStats.store}店</span>
+                      </div>
+                      <h2 className="text-3xl md:text-4xl font-extrabold mb-1">{therapistStats.myStats.name}</h2>
+                      
+                      {/* ★★★ 毒舌/激勵文案顯示區 ★★★ */}
+                      <div className="mt-2 p-3 bg-black/10 rounded-xl backdrop-blur-md border border-white/10 max-w-md">
+                        <p className="font-bold text-sm flex items-center gap-2">
+                           {status === 'DANGER' && <Frown size={16}/>}
+                           {info.title}
+                        </p>
+                        <p className="text-xs text-white/70 mt-1">{info.sub}</p>
+                      </div>
+                    </div>
+                    
+                    <div className="flex gap-6 text-right">
+                      <div>
+                        <p className="text-xs text-white/60 font-bold uppercase mb-1">個人總業績</p>
+                        <p className="text-3xl font-mono font-bold">{fmtMoney(therapistStats.myStats.totalRevenue)}</p>
+                      </div>
+                      <div>
+                        <p className="text-xs text-white/60 font-bold uppercase mb-1">新客締結率</p>
+                        <p className="text-3xl font-mono font-bold">{therapistStats.myStats.newClosingRate.toFixed(1)}%</p>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              );
+            })()}
             
             {/* 全區總覽小卡 */}
             {(userRole !== 'therapist') && (
@@ -211,6 +326,17 @@ const DashboardView = () => {
             
             <Card title="管理師績效排行榜" subtitle="依本月個人總業績排序 (即時更新)">
               <div className="grid grid-cols-1 w-full">
+                
+                {/* ★★★ 匯出按鈕 ★★★ */}
+                <div className="flex justify-end mb-4">
+                  <button 
+                    onClick={handleExportCSV} 
+                    className="flex items-center gap-2 px-4 py-2 bg-emerald-50 text-emerald-600 rounded-xl text-sm font-bold hover:bg-emerald-100 transition-colors border border-emerald-100"
+                  >
+                    <Download size={16} /> 匯出 CSV
+                  </button>
+                </div>
+
                 <div className="overflow-x-auto w-full pb-2">
                   <table className="w-full text-left border-collapse min-w-[1200px] whitespace-nowrap">
                     <thead>
@@ -228,20 +354,22 @@ const DashboardView = () => {
                       </tr>
                     </thead>
                     <tbody className="text-sm">
-                      {/* ★★★ 修改 2：顯示過濾邏輯 ★★★ */}
-                      {/* 先計算完排名 (在 therapistStats 裡已完成)，這裡只過濾「顯示」哪一列 */}
                       {therapistStats.rankings
                         .filter(t => userRole !== 'therapist' || t.id === currentUser?.id)
                         .map((t, idx) => (
                         <tr key={t.id} className={`border-b border-stone-50 hover:bg-stone-50 transition-colors ${currentUser?.id === t.id ? "bg-indigo-50 hover:bg-indigo-100" : ""}`}>
                           <td className="p-3 md:p-4 text-center">
-                            <span className={`inline-flex items-center justify-center w-8 h-8 rounded-full text-xs font-bold ${idx < 3 ? "bg-amber-100 text-amber-700 ring-4 ring-amber-50" : "bg-stone-100 text-stone-500"}`}>
+                            <span className={`inline-flex items-center justify-center w-8 h-8 rounded-full text-xs font-bold ${
+                                t.rank <= 3 ? "bg-amber-100 text-amber-700 ring-4 ring-amber-50" : 
+                                t.status === "DANGER" ? "bg-rose-100 text-rose-700 ring-4 ring-rose-50" : "bg-stone-100 text-stone-500"
+                            }`}>
                               {t.rank}
                             </span>
                           </td>
                           <td className="p-3 md:p-4 font-bold text-stone-700 flex items-center gap-2">
                             {t.name}
                             {currentUser?.id === t.id && <span className="px-2 py-0.5 bg-indigo-200 text-indigo-700 text-[10px] rounded-full">ME</span>}
+                            {t.status === "DANGER" && <span className="text-[10px] bg-rose-100 text-rose-600 px-1.5 py-0.5 rounded font-bold">加油</span>}
                           </td>
                           <td className="p-3 md:p-4 text-stone-500">{t.store}店</td>
                           <td className="p-3 md:p-4 text-right font-mono font-bold text-indigo-600">{fmtMoney(t.totalRevenue)}</td>

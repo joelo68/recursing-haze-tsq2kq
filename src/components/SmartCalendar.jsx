@@ -1,8 +1,8 @@
+// src/components/SmartCalendar.jsx
 import React, { useState, useMemo, useEffect } from "react";
 import { ChevronLeft, ChevronRight, X } from "lucide-react";
 
 // ★ iPhone/Safari 專用：日期轉換小幫手
-// 它可以把 "2026-01-04" 轉成 "2026/01/04"，防止 NaN 錯誤
 const safeParseDate = (dateInput) => {
   if (!dateInput) return new Date();
   
@@ -12,7 +12,6 @@ const safeParseDate = (dateInput) => {
     : dateInput;
     
   const d = new Date(dateStr);
-  // 如果轉換失敗 (Invalid Date)，就回傳今天，防止崩潰
   return isNaN(d.getTime()) ? new Date() : d;
 };
 
@@ -23,10 +22,8 @@ const SmartCalendar = ({
   salesData = [],
   onClose,
 }) => {
-  // 1. 初始化時使用「安全轉換」函數
   const [currentDate, setCurrentDate] = useState(() => safeParseDate(selectedDate));
 
-  // 當外部傳入的 selectedDate 改變時，也要更新月曆顯示的月份
   useEffect(() => {
     if (selectedDate) {
       setCurrentDate(safeParseDate(selectedDate));
@@ -36,18 +33,23 @@ const SmartCalendar = ({
   const year = currentDate.getFullYear();
   const month = currentDate.getMonth();
 
-  // 取得當月天數
   const daysInMonth = new Date(year, month + 1, 0).getDate();
-  // 取得當月第一天是星期幾
   const firstDayOfMonth = new Date(year, month, 1).getDay();
 
-  // --- 數據分析邏輯 (保持不變) ---
+  // --- 數據分析邏輯 ---
   const getDayStatus = (day) => {
+    // ★★★ 修正點：加入未來日期判斷 ★★★
+    const checkDate = new Date(year, month, day);
+    const today = new Date();
+    today.setHours(0, 0, 0, 0); // 將時間歸零，只比較日期
+
+    // 如果該日期 > 今天 (即明天以後)，不顯示任何燈號
+    if (checkDate > today) return "none";
+
     if (!salesData || salesData.length === 0) return "none";
 
     // 格式化當前日期 YYYY-MM-DD
     const targetDate = `${year}-${String(month + 1).padStart(2, "0")}-${String(day).padStart(2, "0")}`;
-    // 轉成 YYYY/MM/DD 做比對 (資料源通常是 / )
     const targetDateSlash = targetDate.replace(/-/g, "/");
 
     // 1. 找出當天所有銷售紀錄
@@ -59,7 +61,6 @@ const SmartCalendar = ({
     if (dayRecords.length === 0) return "none";
 
     // 2. 判斷是否有店家名單需要檢查
-    // (如果 stores 是空陣列，代表是數據修正模式，只要有資料就顯示綠色)
     if (!stores || (Array.isArray(stores) && stores.length === 0) || (typeof stores === 'object' && Object.keys(stores).length === 0)) {
         return "complete"; 
     }
@@ -73,14 +74,12 @@ const SmartCalendar = ({
         }
       });
     } else {
-       // 物件格式支援
        Object.values(stores).forEach(list => {
           if(Array.isArray(list)) list.forEach(s => allStoreNames.push(typeof s === 'string' ? s : s.name));
        });
     }
     
-    // 簡單判斷：如果資料筆數 >= 店家總數，算完成 (這裡簡化邏輯以提升效能)
-    // 嚴謹邏輯可參考 AuditDashboard
+    // 如果資料筆數 >= 店家總數，算完成
     return dayRecords.length >= allStoreNames.length ? "complete" : "incomplete";
   };
 

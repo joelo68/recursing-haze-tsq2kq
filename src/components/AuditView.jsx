@@ -67,7 +67,8 @@ const AuditView = () => {
       .map(t => ({
         id: t.id,
         name: t.name,     
-        stores: [t.name] 
+        // 使用 ID 作為檢核鍵值，確保準確度
+        stores: [t.id] 
       }));
   }, [therapists]);
 
@@ -79,13 +80,53 @@ const AuditView = () => {
     }));
   }, [rawData]);
 
+  // ★★★ 修正核心：整合排班表，解決紅燈問題 ★★★
   const normalizedTherapistReports = useMemo(() => {
-    return therapistReports.map(report => ({
+    // 1. 真實回報資料 (改用 ID 對應)
+    const realReports = therapistReports.map(report => ({
       ...report,
-      storeName: report.therapistName, 
+      storeName: report.therapistId, 
       date: toStandardDateFormat(report.date)
     }));
-  }, [therapistReports]);
+
+    // 如果不是管理師日報模式，直接回傳
+    if (auditType !== 'therapist-daily') return realReports;
+
+    // 2. 自動產生「休假幽靈回報」
+    // 原理：日曆元件只認「有無資料」，不知道排休。
+    // 我們主動幫排休的人補上一筆 "isGhost" 資料，讓日曆認為該員「已完成 (休假)」，
+    // 這樣當天上班的人全交時，就會顯示綠燈。
+    const ghostReports = [];
+    const y = parseInt(selectedYear);
+    const m = parseInt(selectedMonth);
+    // 取得當月天數
+    const daysInMonth = new Date(y, m, 0).getDate();
+
+    // 遍歷所有在職管理師
+    therapists.filter(t => t.status === 'active').forEach(t => {
+      // 取得該員當月排班表
+      const scheduleKey = `${t.id}_${y}_${m}`;
+      const schedule = therapistSchedules[scheduleKey];
+      const daysOff = schedule?.daysOff || []; // 例如 [1, 5, 6]
+
+      // 針對每一個休假日，建立假資料
+      daysOff.forEach(day => {
+        const dateStr = `${y}/${m.toString().padStart(2, '0')}/${day.toString().padStart(2, '0')}`;
+        
+        ghostReports.push({
+          id: `ghost_${t.id}_${dateStr}`, // 唯一 ID
+          storeName: t.id,                // 對應管理師 ID
+          date: dateStr,
+          isGhost: true,                  // 標記為幽靈資料
+          revenue: 0                      // 避免影響數值計算 (如果有顯示的話)
+        });
+      });
+    });
+
+    // 合併 真實回報 + 休假回報
+    return [...realReports, ...ghostReports];
+
+  }, [therapistReports, auditType, selectedYear, selectedMonth, therapists, therapistSchedules]);
 
   const isTherapistMode = auditType === 'therapist-daily';
   const calendarStores = isTherapistMode ? activeTherapistsForCalendar : activeStoresForCalendar;
@@ -125,7 +166,7 @@ const AuditView = () => {
     };
   }, [checkDate, rawData, managers, auditExclusions]);
 
-  // 2. 店家目標檢核 (★ 修改：已啟用排除功能)
+  // 2. 店家目標檢核
   const targetAuditData = useMemo(() => {
     const missingByManager = {};
     const y = parseInt(selectedYear);
@@ -134,7 +175,6 @@ const AuditView = () => {
     Object.entries(managers).forEach(([manager, stores]) => {
       const missing = [];
       stores.forEach((s) => {
-        // ★ 這裡加入了排除邏輯
         if (auditExclusions.includes(s)) return;
 
         const name = `CYJ${s}店`;
@@ -148,9 +188,9 @@ const AuditView = () => {
       missing: Object.values(missingByManager).flat(),
       missingByManager,
     };
-  }, [budgets, managers, selectedYear, selectedMonth, auditExclusions]); // 加入 auditExclusions
+  }, [budgets, managers, selectedYear, selectedMonth, auditExclusions]);
 
-  // 3. 管理師日報檢核
+  // 3. 管理師日報檢核 (這裡本來就有排休邏輯，保持不變)
   const therapistAuditData = useMemo(() => {
     if (!checkDate) return { missing: [], missingByManager: {} };
     
@@ -173,7 +213,7 @@ const AuditView = () => {
       const schedule = therapistSchedules[scheduleKey];
       const isOff = schedule?.daysOff?.includes(day);
 
-      if (isOff) return; 
+      if (isOff) return; // 休假者不列入未回報
 
       if (!submittedIds.has(t.id)) {
         const mgr = t.manager || "未分區";
