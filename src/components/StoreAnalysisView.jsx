@@ -1,3 +1,4 @@
+// src/components/StoreAnalysisView.jsx
 import React, { useState, useEffect, useMemo, useContext } from "react";
 import {
   ComposedChart, Bar, Line, XAxis, YAxis, CartesianGrid, 
@@ -21,10 +22,30 @@ const StoreAnalysisView = () => {
     currentUser,
     userRole,
     activeView,
+    // ★★★ 1. 取得當前品牌 ★★★
+    currentBrand
   } = useContext(AppContext);
 
   const [selectedManager, setSelectedManager] = useState("");
   const [selectedStore, setSelectedStore] = useState("");
+
+  // ★★★ 2. 定義品牌前綴 (與 Dashboard/History 一致) ★★★
+  const brandPrefix = useMemo(() => {
+    let name = "CYJ";
+    if (currentBrand) {
+      const id = typeof currentBrand === 'string' ? currentBrand : (currentBrand.id || "CYJ");
+      const normalizedId = id.toLowerCase();
+      
+      if (normalizedId.includes("anniu") || normalizedId.includes("anew")) {
+        name = "安妞";
+      } else if (normalizedId.includes("yibo")) {
+        name = "伊啵";
+      } else {
+        name = "CYJ";
+      }
+    }
+    return name;
+  }, [currentBrand]);
 
   useEffect(() => {
     if (
@@ -42,25 +63,42 @@ const StoreAnalysisView = () => {
       window.removeEventListener("navigate-to-store", handleStoreNav);
   }, []);
 
+  // ★★★ 3. 修正選單列表 (使用動態前綴) ★★★
   const availableStores = useMemo(() => {
-    if (userRole === "director")
+    // 輔助函式：確保店名格式正確 (前綴 + 店名 + 店)
+    const formatStoreName = (s) => {
+      // 先移除可能已有的前綴和後綴，取得核心店名 (例如 "中山")
+      const coreName = s.replace(/CYJ|安妞|伊啵|Anew|Yibo|店/gi, "").trim();
+      // 加上當前品牌前綴 (例如 "安妞中山店")
+      return `${brandPrefix}${coreName}店`;
+    };
+
+    if (userRole === "director" || userRole === "trainer") // 教專也可以看
       return selectedManager
-        ? (managers[selectedManager] || []).map((s) => `CYJ${s}店`)
+        ? (managers[selectedManager] || []).map(formatStoreName)
         : [];
+        
     if (userRole === "manager")
       return Object.values(managers)
         .flat()
-        .map((s) => `CYJ${s}店`);
+        .map(formatStoreName);
+        
     if (userRole === "store" && currentUser)
-      return (currentUser.stores || [currentUser.storeName]).map((s) =>
-        s.startsWith("CYJ") ? s : `CYJ${s}店`
-      );
+      return (currentUser.stores || [currentUser.storeName]).map((s) => {
+        return formatStoreName(s);
+      });
+      
     return [];
-  }, [selectedManager, managers, currentUser, userRole]);
+  }, [selectedManager, managers, currentUser, userRole, brandPrefix]);
 
   useEffect(() => {
-    if (currentUser && availableStores.length === 1 && !selectedStore)
-      setSelectedStore(availableStores[0]);
+    // 當選單變更導致當前選擇無效時，自動選第一個
+    if (currentUser && availableStores.length > 0) {
+       // 如果當前沒選，或者選的店不在新的列表裡 (例如切換品牌後)
+       if (!selectedStore || !availableStores.includes(selectedStore)) {
+          setSelectedStore(availableStores[0]);
+       }
+    }
   }, [currentUser, availableStores, selectedStore]);
 
   const storeMetrics = useMemo(() => {
@@ -71,6 +109,8 @@ const StoreAnalysisView = () => {
 
     const data = rawData
       .filter((d) => {
+        // rawData 已經由 AppContext 根據品牌過濾過了
+        // 這裡只需要確保店名匹配 (注意：rawData 裡的 storeName 應該已經包含正確前綴)
         if (d.storeName !== selectedStore) return false;
         if (!d.date) return false;
         const parts = d.date.replace(/-/g, "/").split("/");
@@ -105,6 +145,7 @@ const StoreAnalysisView = () => {
       0
     );
 
+    // 預算讀取：使用 selectedStore (它現在包含了正確的前綴)
     const budget =
       budgets[`${selectedStore}_${targetYear}_${monthInt}`]?.cashTarget || 0;
 
@@ -120,7 +161,7 @@ const StoreAnalysisView = () => {
       totalNewCustomerClosings,
       totalRefund,
       dailyData: data.map((d) => ({
-        date: toStandardDateFormat(d.date).split("/")[2],
+        date: toStandardDateFormat(d.date).split("/")[2], // 只取日期部分
         cash: (d.cash || 0) - (d.refund || 0),
         accrual: d.accrual || 0,
         traffic: d.traffic,
@@ -133,24 +174,24 @@ const StoreAnalysisView = () => {
     <ViewWrapper>
       <div className="space-y-6">
         <Card title="單店營運分析">
-          <div className="flex gap-4">
+          <div className="flex flex-col sm:flex-row gap-4">
             <select
               value={selectedManager}
               onChange={(e) => setSelectedManager(e.target.value)}
-              disabled={userRole !== "director"}
-              className="px-4 py-2 border rounded-xl"
+              disabled={userRole !== "director" && userRole !== "trainer"}
+              className="px-4 py-2 border rounded-xl font-bold text-stone-700 outline-none focus:border-amber-400 bg-white"
             >
               <option value="">選擇區長</option>
               {Object.keys(managers).map((m) => (
                 <option key={m} value={m}>
-                  {m}
+                  {m}區
                 </option>
               ))}
             </select>
             <select
               value={selectedStore}
               onChange={(e) => setSelectedStore(e.target.value)}
-              className="px-4 py-2 border rounded-xl"
+              className="px-4 py-2 border rounded-xl font-bold text-stone-700 outline-none focus:border-amber-400 bg-white"
             >
               <option value="">選擇店家</option>
               {availableStores.map((s) => (
@@ -161,7 +202,8 @@ const StoreAnalysisView = () => {
             </select>
           </div>
         </Card>
-        {selectedStore && storeMetrics && (
+        
+        {selectedStore && storeMetrics ? (
           <>
             <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-6 gap-4">
               <div className="bg-white p-5 rounded-2xl border shadow-sm">
@@ -224,7 +266,7 @@ const StoreAnalysisView = () => {
             </div>
 
             <Card
-              title="綜合營運趨勢分析"
+              title={`${selectedStore} 營運趨勢`}
               subtitle="長條：現金業績｜實線：權責業績｜虛線(右軸)：操作人數"
             >
               <div className="h-[400px] w-full">
@@ -350,6 +392,11 @@ const StoreAnalysisView = () => {
               </div>
             </Card>
           </>
+        ) : (
+          <div className="p-10 text-center text-stone-400 bg-stone-50 rounded-xl border border-stone-100">
+             <p className="font-bold">請選擇區長與店家以查看報表</p>
+             <p className="text-xs mt-1">若選單為空，請確認是否已在「參數設定」中分配店家</p>
+          </div>
         )}
       </div>
     </ViewWrapper>

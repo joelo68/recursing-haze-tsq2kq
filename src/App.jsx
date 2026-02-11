@@ -16,7 +16,8 @@ import { onAuthStateChanged, signInAnonymously, signInWithCustomToken } from "fi
 import { collection, addDoc, deleteDoc, updateDoc, doc, onSnapshot, serverTimestamp, setDoc, query, orderBy, limit } from "firebase/firestore";
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip as RechartsTooltip, Legend, ResponsiveContainer, LineChart, Line, ComposedChart, Area, Cell, PieChart, Pie } from "recharts";
 import { LayoutDashboard, Upload, TrendingUp, Map as MapIcon, Settings, ClipboardCheck, Menu, Search, Filter, Trash2, Save, Plus, DollarSign, Target, Users, Award, Loader2, FileText, AlertCircle, CheckCircle, User, Store, Lock, LogOut, FileWarning, Edit2, CheckSquare, X, Download, ChevronLeft, ChevronRight, Activity, Sparkles, ChevronDown, Coffee, ShoppingBag, CreditCard, Smartphone, Monitor, Bell, Clock } from "lucide-react";
-import { ROLES, ALL_MENU_ITEMS, DEFAULT_REGIONAL_MANAGERS, DEFAULT_PERMISSIONS } from "./constants/index";
+// 引入 BRANDS
+import { ROLES, ALL_MENU_ITEMS, DEFAULT_REGIONAL_MANAGERS, DEFAULT_PERMISSIONS, BRANDS } from "./constants/index";
 import { generateUUID, formatLocalYYYYMMDD, toStandardDateFormat, formatNumber, parseNumber } from "./utils/helpers";
 import { ViewWrapper, Card, Skeleton, Toast, ConfirmModal } from "./components/SharedUI";
 import { Sidebar, MobileTopNav } from "./components/Navigation";
@@ -49,10 +50,37 @@ export default function App() {
   const [confirmModal, setConfirmModal] = useState({ isOpen: false, title: "", message: "", onConfirm: null });
   const [globalSearchTerm, setGlobalSearchTerm] = useState("");
   
+  // 品牌狀態管理 (預設為 CYJ)
+  const [currentBrandId, setCurrentBrandId] = useState("cyj");
+
+  // 取得當前品牌的完整設定物件
+  const currentBrand = useMemo(() => 
+    BRANDS.find(b => b.id === currentBrandId) || BRANDS[0]
+  , [currentBrandId]);
+
+  // 動態路徑產生器
+  const getCollectionPath = useCallback((collectionName) => {
+    if (currentBrand.pathType === 'legacy') {
+      return collection(db, "artifacts", appId, "public", "data", collectionName);
+    } else {
+      return collection(db, "brands", currentBrand.id, collectionName);
+    }
+  }, [currentBrand]);
+
+  const getDocPath = useCallback((docName) => {
+    if (currentBrand.pathType === 'legacy') {
+      return doc(db, "artifacts", appId, "public", "data", "global_settings", docName);
+    } else {
+      return doc(db, "brands", currentBrand.id, "settings", docName);
+    }
+  }, [currentBrand]);
+
   const [rawData, setRawData] = useState([]); 
   const [budgets, setBudgets] = useState({});
   const [targets, setTargets] = useState({ newASP: 3500, trafficASP: 1200 });
-  const [managers, setManagers] = useState(DEFAULT_REGIONAL_MANAGERS);
+  
+  // ★★★ 修正：初始值設為空物件 ★★★
+  const [managers, setManagers] = useState({});
   const [storeAccounts, setStoreAccounts] = useState([]);
   const [managerAuth, setManagerAuth] = useState({});
   const [permissions, setPermissions] = useState(DEFAULT_PERMISSIONS);
@@ -63,7 +91,6 @@ export default function App() {
   const [therapistSchedules, setTherapistSchedules] = useState({}); 
   const [therapistTargets, setTherapistTargets] = useState({}); 
   
-  // ★ 新增：檢核排除名單 (Audit Exclusions)
   const [auditExclusions, setAuditExclusions] = useState([]);
 
   const [showIdleWarning, setShowIdleWarning] = useState(false);
@@ -74,9 +101,9 @@ export default function App() {
   const [selectedMonth, setSelectedMonth] = useState((new Date().getMonth() + 1).toString());
   const [inputDate, setInputDate] = useState(() => formatLocalYYYYMMDD(new Date()));
 
-  // 輔助函式：標準化店名 (移除 CYJ 與 店)
   const normalizeStore = (s) => (s || "").replace(/CYJ|店/g, "").trim();
 
+  // 日誌記錄
   const logActivity = useCallback(async (role, user, action, details) => {
     let device = "PC";
     if (typeof navigator !== "undefined") {
@@ -85,8 +112,10 @@ export default function App() {
       else if (ua.includes("iphone")||ua.includes("ipad")) device = "iOS";
       else if (ua.includes("mobile")) device = "Mobile";
     }
-    try { await addDoc(collection(db, "artifacts", appId, "public", "data", "system_logs"), { timestamp: serverTimestamp(), role, user, action, details, device }); } catch (e) { console.error("Failed to log activity", e); }
-  }, []);
+    try { 
+      await addDoc(getCollectionPath("system_logs"), { timestamp: serverTimestamp(), role, user, action, details, device }); 
+    } catch (e) { console.error("Failed to log activity", e); }
+  }, [getCollectionPath]);
 
   const handleLogout = useCallback(async (reason = "使用者手動登出") => {
     const userName = currentUser?.name || (userRole === "director" ? "總監" : (userRole === "trainer" ? "教專" : "未知"));
@@ -137,31 +166,152 @@ export default function App() {
     return onAuthStateChanged(auth, (u) => { setUser(u); setLoading(false); });
   }, []);
 
+  // ★★★ 核心修正：資料監聽 + 強制清空邏輯 ★★★
   useEffect(() => {
     if (!user) return;
-    const unsubReports = onSnapshot(query(collection(db, "artifacts", appId, "public", "data", "daily_reports"), orderBy("date", "desc")), (s) => setRawData(s.docs.map((d) => ({ id: d.id, ...d.data() }))));
-    const unsubBudgets = onSnapshot(collection(db, "artifacts", appId, "public", "data", "monthly_targets"), (s) => { const b = {}; s.docs.forEach((d) => (b[d.id] = d.data())); setBudgets(b); });
-    const unsubTargets = onSnapshot(doc(db, "artifacts", appId, "public", "data", "global_settings", "kpi_targets"), (s) => s.exists() && setTargets(s.data()));
-    const unsubOrg = onSnapshot(doc(db, "artifacts", appId, "public", "data", "global_settings", "org_structure"), (s) => s.exists() && setManagers(s.data().managers));
-    const unsubAccounts = onSnapshot(doc(db, "artifacts", appId, "public", "data", "global_settings", "store_account_data"), (s) => s.exists() && setStoreAccounts(s.data().accounts));
-    const unsubManagerAuth = onSnapshot(doc(db, "artifacts", appId, "public", "data", "global_settings", "manager_auth"), (s) => s.exists() && setManagerAuth(s.data()));
-    const unsubPermissions = onSnapshot(doc(db, "artifacts", appId, "public", "data", "global_settings", "permissions"), (s) => s.exists() && setPermissions(s.data()));
-    const unsubTherapists = onSnapshot(collection(db, "artifacts", appId, "public", "data", "therapists"), (s) => setTherapists(s.docs.map((d) => ({ id: d.id, ...d.data() }))));
-    const unsubTherapistReports = onSnapshot(query(collection(db, "artifacts", appId, "public", "data", "therapist_daily_reports"), orderBy("date", "desc"), limit(1000)), (s) => setTherapistReports(s.docs.map((d) => ({ id: d.id, ...d.data() }))));
-    const unsubTherapistSchedules = onSnapshot(collection(db, "artifacts", appId, "public", "data", "therapist_schedules"), (s) => { const schedules = {}; s.docs.forEach((d) => (schedules[d.id] = d.data())); setTherapistSchedules(schedules); });
-    const unsubTherapistTargets = onSnapshot(collection(db, "artifacts", appId, "public", "data", "therapist_targets"), (s) => { const t = {}; s.docs.forEach((d) => (t[d.id] = d.data())); setTherapistTargets(t); });
-    const unsubTrainerAuth = onSnapshot(doc(db, "artifacts", appId, "public", "data", "global_settings", "trainer_auth"), (s) => { if (s.exists()) setTrainerAuth(s.data()); else setTrainerAuth({ password: "0000" }); });
+
+    // 1. 在重新訂閱前，先強制清空所有數據，避免殘留 (Ghost Data)
+    setRawData([]);
+    setBudgets({});
+    setManagers({}); // 清空區長
+    setStoreAccounts([]); // 清空店長
+    setManagerAuth({});
+    setTherapists([]); // 清空管理師
+    setTherapistReports([]);
+    setTherapistSchedules({});
+    setTherapistTargets({});
+    setPermissions(DEFAULT_PERMISSIONS);
+    setTargets({ newASP: 3500, trafficASP: 1200 });
+
+    // 2. 開始訂閱新品牌的資料
     
-    // ★ 監聽排除名單
-    const unsubAuditExclusions = onSnapshot(doc(db, "artifacts", appId, "public", "data", "global_settings", "audit_exclusions"), (s) => {
-      if (s.exists()) setAuditExclusions(s.data().stores || []);
-      else setAuditExclusions([]);
-    });
+    // 日報
+    const unsubReports = onSnapshot(
+      query(getCollectionPath("daily_reports"), orderBy("date", "desc")), 
+      (s) => setRawData(s.docs.map((d) => ({ id: d.id, ...d.data() })))
+    );
+
+    // 目標
+    const unsubBudgets = onSnapshot(
+      getCollectionPath("monthly_targets"), 
+      (s) => { const b = {}; s.docs.forEach((d) => (b[d.id] = d.data())); setBudgets(b); }
+    );
+
+    // KPI
+    const unsubTargets = onSnapshot(
+      getDocPath("kpi_targets"), 
+      (s) => {
+        if (s.exists()) {
+          setTargets(s.data());
+        } else {
+          setTargets({ newASP: 3500, trafficASP: 1200 });
+        }
+      }
+    );
+    
+    // 組織架構 (重要：處理無資料狀況)
+    const unsubOrg = onSnapshot(
+      getDocPath("org_structure"), 
+      (s) => {
+        if (s.exists()) {
+          const rawManagers = s.data().managers || {};
+          const filteredManagers = {};
+          Object.keys(rawManagers).forEach(key => {
+            if (!key.includes("未分配") && !key.includes("未分區")) {
+              filteredManagers[key] = rawManagers[key];
+            }
+          });
+          setManagers(filteredManagers);
+        } else {
+          // ★★★ 如果是 CYJ 且無資料(異常)，才用預設值；其他品牌無資料則清空 ★★★
+          if (currentBrand.id === 'cyj') {
+            setManagers(DEFAULT_REGIONAL_MANAGERS);
+          } else {
+            setManagers({}); // 確保新品牌是乾淨的
+          }
+        }
+      }
+    );
+
+    // 店家帳號 (重要：無資料時清空)
+    const unsubAccounts = onSnapshot(
+      getDocPath("store_account_data"), 
+      (s) => {
+        if (s.exists()) {
+          setStoreAccounts(s.data().accounts);
+        } else {
+          setStoreAccounts([]); // ★ 清空
+        }
+      }
+    );
+
+    // 區長密碼 (重要：無資料時清空)
+    const unsubManagerAuth = onSnapshot(
+      getDocPath("manager_auth"), 
+      (s) => {
+        if (s.exists()) {
+          setManagerAuth(s.data());
+        } else {
+          setManagerAuth({}); // ★ 清空
+        }
+      }
+    );
+
+    // 權限設定
+    const unsubPermissions = onSnapshot(
+      getDocPath("permissions"), 
+      (s) => {
+        if (s.exists()) {
+          setPermissions(s.data());
+        } else {
+          setPermissions(DEFAULT_PERMISSIONS);
+        }
+      }
+    );
+
+    // 管理師名單
+    const unsubTherapists = onSnapshot(
+      getCollectionPath("therapists"), 
+      (s) => setTherapists(s.docs.map((d) => ({ id: d.id, ...d.data() })))
+    );
+
+    // 管理師日報
+    const unsubTherapistReports = onSnapshot(
+      query(getCollectionPath("therapist_daily_reports"), orderBy("date", "desc"), limit(1000)), 
+      (s) => setTherapistReports(s.docs.map((d) => ({ id: d.id, ...d.data() })))
+    );
+
+    // 排班
+    const unsubTherapistSchedules = onSnapshot(
+      getCollectionPath("therapist_schedules"), 
+      (s) => { const schedules = {}; s.docs.forEach((d) => (schedules[d.id] = d.data())); setTherapistSchedules(schedules); }
+    );
+
+    // 管理師目標
+    const unsubTherapistTargets = onSnapshot(
+      getCollectionPath("therapist_targets"), 
+      (s) => { const t = {}; s.docs.forEach((d) => (t[d.id] = d.data())); setTherapistTargets(t); }
+    );
+
+    // 教專密碼
+    const unsubTrainerAuth = onSnapshot(
+      getDocPath("trainer_auth"), 
+      (s) => { if (s.exists()) setTrainerAuth(s.data()); else setTrainerAuth({ password: "0000" }); }
+    );
+    
+    // 排除名單
+    const unsubAuditExclusions = onSnapshot(
+      getDocPath("audit_exclusions"), 
+      (s) => {
+        if (s.exists()) setAuditExclusions(s.data().stores || []);
+        else setAuditExclusions([]);
+      }
+    );
 
     return () => {
       unsubReports(); unsubBudgets(); unsubTargets(); unsubOrg(); unsubAccounts(); unsubManagerAuth(); unsubPermissions(); unsubTherapists(); unsubTherapistReports(); unsubTherapistSchedules(); unsubTherapistTargets(); unsubTrainerAuth(); unsubAuditExclusions();
     };
-  }, [user]);
+  }, [user, currentBrand, getCollectionPath, getDocPath]);
 
   const handleLogin = (roleId, userInfo = null) => {
     let finalUser = userInfo;
@@ -178,24 +328,22 @@ export default function App() {
     setActiveView("dashboard");
   };
 
-  const handleUpdateStorePassword = async (id, newPass) => { try { const updated = storeAccounts.map((a) => a.id === id ? { ...a, password: newPass } : a); await setDoc(doc(db, "artifacts", appId, "public", "data", "global_settings", "store_account_data"), { accounts: updated }); return true; } catch (e) { return false; } };
-  const handleUpdateManagerPassword = async (name, newPass) => { try { await setDoc(doc(db, "artifacts", appId, "public", "data", "global_settings", "manager_auth"), { [name]: newPass }, { merge: true }); return true; } catch (e) { return false; } };
-  const handleUpdateTherapistPassword = async (id, newPass) => { try { await updateDoc(doc(db, "artifacts", appId, "public", "data", "therapists", id), { password: newPass }); return true; } catch (e) { console.error(e); return false; } };
-  const handleUpdateTrainerAuth = async (newPass) => { try { await setDoc(doc(db, "artifacts", appId, "public", "data", "global_settings", "trainer_auth"), { password: newPass }); return true; } catch (e) { console.error(e); return false; } };
+  const handleUpdateStorePassword = async (id, newPass) => { try { const updated = storeAccounts.map((a) => a.id === id ? { ...a, password: newPass } : a); await setDoc(getDocPath("store_account_data"), { accounts: updated }); return true; } catch (e) { return false; } };
+  const handleUpdateManagerPassword = async (name, newPass) => { try { await setDoc(getDocPath("manager_auth"), { [name]: newPass }, { merge: true }); return true; } catch (e) { return false; } };
+  const handleUpdateTherapistPassword = async (id, newPass) => { try { await updateDoc(doc(getCollectionPath("therapists"), id), { password: newPass }); return true; } catch (e) { console.error(e); return false; } };
+  const handleUpdateTrainerAuth = async (newPass) => { try { await setDoc(getDocPath("trainer_auth"), { password: newPass }); return true; } catch (e) { console.error(e); return false; } };
   
-  // ★ 更新排除名單函式
   const handleUpdateAuditExclusions = async (newExclusions) => {
     try {
-      await setDoc(doc(db, "artifacts", appId, "public", "data", "global_settings", "audit_exclusions"), { stores: newExclusions });
+      await setDoc(getDocPath("audit_exclusions"), { stores: newExclusions });
       return true;
     } catch (e) { console.error(e); return false; }
   };
 
   const navigateToStore = useCallback((storeName) => { setActiveView("store-analysis"); window.dispatchEvent(new CustomEvent("navigate-to-store", { detail: storeName })); }, []);
 
-  // ★★★ 資料過濾邏輯：店家日報 (visibleRawData) ★★★
   const visibleRawData = useMemo(() => {
-    if (userRole === ROLES.TRAINER.id) return []; // 教專不看店家營收
+    if (userRole === ROLES.TRAINER.id) return []; 
     if (userRole === ROLES.STORE.id && currentUser) {
       const myStores = (currentUser.stores || [currentUser.storeName] || []).map((s) => (s && s.startsWith("CYJ") ? s : `CYJ${s}店`));
       return rawData.filter((d) => myStores.includes(d.storeName));
@@ -207,68 +355,77 @@ export default function App() {
     return rawData;
   }, [rawData, userRole, currentUser, managers]);
 
-  // ★★★ 資料過濾邏輯：管理師日報 (visibleTherapistReports) ★★★
   const visibleTherapistReports = useMemo(() => {
-    // 1. 總監/教專/管理師：為了計算全區排名，管理師也需要讀取全部資料 (但在 DashboardView 層級會過濾顯示)
-    // ★★★ 修正點：加入 ROLES.THERAPIST.id 允許讀取全區資料 ★★★
     if (userRole === ROLES.DIRECTOR.id || userRole === ROLES.TRAINER.id || userRole === ROLES.THERAPIST.id) {
       return therapistReports;
     }
-    // 2. 區長：只看轄區內
     if (userRole === ROLES.MANAGER.id && currentUser) {
-      const myStores = managers[currentUser.name] || []; // ["安平", "永康"...]
+      const myStores = managers[currentUser.name] || []; 
       return therapistReports.filter(r => myStores.includes(normalizeStore(r.storeName)));
     }
-    // 3. 店長：只看本店
     if (userRole === ROLES.STORE.id && currentUser) {
       const myStores = (currentUser.stores || [currentUser.storeName] || []).map(normalizeStore);
       return therapistReports.filter(r => myStores.includes(normalizeStore(r.storeName)));
     }
-    
     return [];
   }, [therapistReports, userRole, currentUser, managers]);
 
-  // ★★★ 資料過濾邏輯：管理師名單 (visibleTherapists) ★★★
   const visibleTherapists = useMemo(() => {
-    // 1. 總監/教專：看全部
     if (userRole === ROLES.DIRECTOR.id || userRole === ROLES.TRAINER.id) {
       return therapists;
     }
-    // 2. 區長：只看轄區內
     if (userRole === ROLES.MANAGER.id && currentUser) {
       const myStores = managers[currentUser.name] || [];
       return therapists.filter(t => myStores.includes(normalizeStore(t.store)));
     }
-    // 3. 店長：只看本店
     if (userRole === ROLES.STORE.id && currentUser) {
       const myStores = (currentUser.stores || [currentUser.storeName] || []).map(normalizeStore);
       return therapists.filter(t => myStores.includes(normalizeStore(t.store)));
     }
-    // 4. 管理師：只看自己 (保持不變，管理師不需要看到其他人事資料，只需業績排行)
     if (userRole === ROLES.THERAPIST.id && currentUser) {
       return therapists.filter(t => t.id === currentUser.id);
     }
     return [];
   }, [therapists, userRole, currentUser, managers]);
 
-  // ★★★ 資料過濾邏輯：區域管理權限 (visibleManagers) ★★★
   const visibleManagers = useMemo(() => {
-    if (userRole === ROLES.TRAINER.id) return managers; // 教專看全區架構
+    let result = managers; 
+
     if (userRole === ROLES.MANAGER.id && currentUser) {
       const myStores = managers[currentUser.name] || [];
-      return { [currentUser.name]: myStores };
-    }
-    if (userRole === ROLES.STORE.id && currentUser) {
+      result = { [currentUser.name]: myStores };
+    } else if (userRole === ROLES.STORE.id && currentUser) {
       const myStores = currentUser.stores || (currentUser.storeName ? [currentUser.storeName] : []);
       const filteredManagers = {};
       Object.entries(managers).forEach(([mgr, stores]) => {
         const intersectingStores = stores.filter((s) => myStores.includes(s));
         if (intersectingStores.length > 0) filteredManagers[mgr] = intersectingStores;
       });
-      return filteredManagers;
+      result = filteredManagers;
     }
-    return managers;
-  }, [managers, userRole, currentUser]);
+    
+    if (activeView !== 'settings') {
+       const filtered = {};
+       Object.entries(result).forEach(([mgr, stores]) => {
+          if (!mgr.includes("未分配") && !mgr.includes("未分區")) {
+             filtered[mgr] = stores;
+          }
+       });
+       return filtered;
+    }
+
+    return result;
+  }, [managers, userRole, currentUser, activeView]);
+
+  const publicManagers = useMemo(() => {
+     const filtered = {};
+     Object.entries(managers).forEach(([mgr, stores]) => {
+        if (!mgr.includes("未分配") && !mgr.includes("未分區")) {
+           filtered[mgr] = stores;
+        }
+     });
+     return filtered;
+  }, [managers]);
 
   const analytics = useAnalytics(visibleRawData, visibleManagers, budgets, selectedYear, selectedMonth);
   const showToast = (message, type = "info") => setToast({ message, type });
@@ -283,12 +440,31 @@ export default function App() {
     therapists: visibleTherapists, 
     therapistReports: visibleTherapistReports, 
     therapistSchedules, therapistTargets, trainerAuth, handleUpdateTrainerAuth,
-    // ★ 傳遞排除名單設定與函式
-    auditExclusions, handleUpdateAuditExclusions
-  }), [user, loading, analytics, visibleManagers, budgets, targets, visibleRawData, rawData, inputDate, selectedYear, selectedMonth, permissions, storeAccounts, managerAuth, currentUser, userRole, logActivity, handleUpdateStorePassword, handleUpdateManagerPassword, handleUpdateTherapistPassword, navigateToStore, activeView, appId, visibleTherapists, visibleTherapistReports, therapistSchedules, therapistTargets, trainerAuth, handleUpdateTrainerAuth, auditExclusions, handleUpdateAuditExclusions]);
+    auditExclusions, handleUpdateAuditExclusions,
+    // 品牌相關
+    currentBrand, setCurrentBrandId, getCollectionPath, getDocPath
+  }), [user, loading, analytics, visibleManagers, budgets, targets, visibleRawData, rawData, inputDate, selectedYear, selectedMonth, permissions, storeAccounts, managerAuth, currentUser, userRole, logActivity, handleUpdateStorePassword, handleUpdateManagerPassword, handleUpdateTherapistPassword, navigateToStore, activeView, appId, visibleTherapists, visibleTherapistReports, therapistSchedules, therapistTargets, trainerAuth, handleUpdateTrainerAuth, auditExclusions, handleUpdateAuditExclusions, currentBrand, setCurrentBrandId, getCollectionPath, getDocPath]);
 
   if (loading) return <div className="min-h-screen flex flex-col items-center justify-center bg-[#F9F8F6]"><Loader2 className="w-16 h-16 animate-spin text-stone-400 mb-4" /><p className="animate-pulse text-stone-500 font-bold tracking-wider">Loading DRCYJ Cloud...</p></div>;
-  if (!userRole) return <LoginView onLogin={handleLogin} storeAccounts={storeAccounts} managers={managers} managerAuth={managerAuth} therapists={therapists} onUpdatePassword={handleUpdateStorePassword} onUpdateManagerPassword={handleUpdateManagerPassword} onUpdateTherapistPassword={handleUpdateTherapistPassword} trainerAuth={trainerAuth} handleUpdateTrainerAuth={handleUpdateTrainerAuth} />;
+  
+  if (!userRole) return (
+    <LoginView 
+      onLogin={handleLogin} 
+      storeAccounts={storeAccounts} 
+      managers={publicManagers} 
+      managerAuth={managerAuth} 
+      therapists={therapists} 
+      onUpdatePassword={handleUpdateStorePassword} 
+      onUpdateManagerPassword={handleUpdateManagerPassword} 
+      onUpdateTherapistPassword={handleUpdateTherapistPassword} 
+      trainerAuth={trainerAuth} 
+      handleUpdateTrainerAuth={handleUpdateTrainerAuth}
+      
+      // ★★★ 務必補上這兩行，登入頁的按鈕才會動 ★★★
+      currentBrandId={currentBrandId}
+      onSwitchBrand={setCurrentBrandId}
+    />
+  );
 
   return (
     <AppContext.Provider value={contextValue}>

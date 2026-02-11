@@ -1,3 +1,4 @@
+// src/components/RegionalView.jsx
 import React, { useMemo, useContext } from "react";
 import {
   PieChart,
@@ -11,7 +12,33 @@ import { AppContext } from "../AppContext";
 import { ViewWrapper, Card } from "./SharedUI";
 
 const RegionalView = () => {
-  const { analytics, fmtMoney, fmtNum, userRole } = useContext(AppContext);
+  // ★★★ 1. 引入 currentBrand ★★★
+  const { analytics, fmtMoney, fmtNum, userRole, currentBrand } = useContext(AppContext);
+
+  // ★★★ 2. 定義品牌前綴 (用於標題) ★★★
+  const brandPrefix = useMemo(() => {
+    let name = "CYJ";
+    if (currentBrand) {
+      const id = typeof currentBrand === 'string' ? currentBrand : (currentBrand.id || "CYJ");
+      const normalizedId = id.toLowerCase();
+      
+      if (normalizedId.includes("anniu") || normalizedId.includes("anew")) {
+        name = "安妞";
+      } else if (normalizedId.includes("yibo")) {
+        name = "伊啵";
+      } else {
+        name = "CYJ";
+      }
+    }
+    return name;
+  }, [currentBrand]);
+
+  // ★★★ 3. 通用店名清洗函式 ★★★
+  const cleanStoreName = (name) => {
+    if (!name) return "";
+    // 移除所有可能的品牌前綴與 "店" 字
+    return name.replace(/CYJ|安妞|伊啵|Anew|Yibo|店/gi, "").trim();
+  };
 
   const pieData = useMemo(
     () =>
@@ -113,7 +140,8 @@ const RegionalView = () => {
         </div>
         {userRole === "director" ? (
           <div className="grid grid-cols-1 md:grid-cols-2 gap-6 animate-in slide-in-from-bottom-4 duration-500">
-            <Card title="各區現金業績貢獻佔比" subtitle="區長業績分佈分析">
+            {/* 動態標題 */}
+            <Card title={`各區現金業績貢獻佔比 (${brandPrefix})`} subtitle="區長業績分佈分析">
               <div className="h-[350px] w-full flex justify-center items-center">
                 <ResponsiveContainer width="100%" height="100%">
                   <PieChart>
@@ -167,7 +195,8 @@ const RegionalView = () => {
                       >
                         <div className="flex justify-between items-start mb-4">
                           <h4 className="font-bold text-stone-700">
-                            {store.name.replace("CYJ", "").replace("店", "")}
+                            {/* 使用 cleanStoreName 替代硬編碼 */}
+                            {cleanStoreName(store.name)}
                           </h4>
                           <span className="text-sm font-bold text-emerald-600">
                             {store.achievement.toFixed(1)}%

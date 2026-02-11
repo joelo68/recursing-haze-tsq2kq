@@ -1,6 +1,6 @@
 // src/components/AuditView.jsx
 import React, { useState, useMemo, useContext } from "react";
-import { AlertCircle, UserX, CheckCircle, Target, FileText, Settings, X, Save, Ban } from "lucide-react"; 
+import { AlertCircle, UserX, CheckCircle, Target, FileText, Settings, X, Save, Ban, HelpCircle } from "lucide-react"; 
 
 import { AppContext } from "../AppContext";
 import { formatLocalYYYYMMDD, toStandardDateFormat } from "../utils/helpers";
@@ -20,8 +20,10 @@ const AuditView = () => {
     therapistSchedules,
     userRole,
     therapistTargets,
-    auditExclusions,
-    handleUpdateAuditExclusions
+    auditExclusions = [], // 給予預設值，防止未定義錯誤
+    handleUpdateAuditExclusions,
+    // ★★★ 1. 引入 currentBrand ★★★
+    currentBrand
   } = useContext(AppContext);
 
   const [checkDate, setCheckDate] = useState(formatLocalYYYYMMDD(new Date()));
@@ -29,6 +31,24 @@ const AuditView = () => {
 
   const [isConfigModalOpen, setIsConfigModalOpen] = useState(false);
   const [localExclusions, setLocalExclusions] = useState([]);
+
+  // ★★★ 2. 定義品牌前綴 (標準化邏輯) ★★★
+  const brandPrefix = useMemo(() => {
+    let name = "CYJ";
+    if (currentBrand) {
+      const id = typeof currentBrand === 'string' ? currentBrand : (currentBrand.id || "CYJ");
+      const normalizedId = id.toLowerCase();
+      
+      if (normalizedId.includes("anniu") || normalizedId.includes("anew")) {
+        name = "安妞";
+      } else if (normalizedId.includes("yibo")) {
+        name = "伊啵";
+      } else {
+        name = "CYJ";
+      }
+    }
+    return name;
+  }, [currentBrand]);
 
   const openConfigModal = () => {
     setLocalExclusions(auditExclusions || []);
@@ -51,15 +71,29 @@ const AuditView = () => {
   // --- 資料源準備 (給 SmartDatePicker 用) ---
 
   const activeStoresForCalendar = useMemo(() => {
+    // 取得所有店家簡稱 (例如 "中山")
     const allMyStores = Object.values(managers).flat();
+    
     return allMyStores
-      .filter(storeName => !auditExclusions.includes(storeName)) // 日曆排除免檢核店家
-      .map(storeName => ({
-        id: storeName,
-        name: `${storeName}店`,
-        stores: [storeName] 
-      }));
-  }, [managers, auditExclusions]);
+      .filter(storeName => !auditExclusions.includes(storeName)) 
+      .map(storeName => {
+        // ★★★ 關鍵修正：產生所有可能的店名變體 (別名) ★★★
+        // 日曆元件會拿這些變體去跟 rawData 比對，只要中一個就亮綠燈
+        const aliases = [
+          storeName,                          // 中山
+          `${storeName}店`,                   // 中山店
+          `${brandPrefix}${storeName}`,       // 安妞中山
+          `${brandPrefix}${storeName}店`,     // 安妞中山店
+          `CYJ${storeName}店`                 // CYJ中山店 (舊資料相容)
+        ];
+
+        return {
+          id: storeName,          
+          name: `${storeName}店`, // 畫面上顯示的名稱
+          stores: aliases         // 讓日曆去認這 5 種名字
+        };
+      });
+  }, [managers, auditExclusions, brandPrefix]);
 
   const activeTherapistsForCalendar = useMemo(() => {
     return therapists
@@ -67,63 +101,56 @@ const AuditView = () => {
       .map(t => ({
         id: t.id,
         name: t.name,     
-        // 使用 ID 作為檢核鍵值，確保準確度
         stores: [t.id] 
       }));
   }, [therapists]);
 
+  // ★★★ 簡化資料處理：只統一日期，保留原始店名 ★★★
   const normalizedRawData = useMemo(() => {
-    return rawData.map(report => ({
-      ...report,
-      storeName: report.storeName ? report.storeName.replace(/CYJ|店/g, "") : "",
-      date: toStandardDateFormat(report.date) 
-    }));
+    return rawData.map(report => {
+      // 1. 統一日期格式為 YYYY-MM-DD
+      const safeDate = report.date ? toStandardDateFormat(report.date) : "";
+      
+      return {
+        ...report,
+        // 保留原始店名 (例如 "安妞中山店")，讓上面的 aliases 去抓它
+        storeName: report.storeName, 
+        date: safeDate 
+      };
+    });
   }, [rawData]);
 
-  // ★★★ 修正核心：整合排班表，解決紅燈問題 ★★★
   const normalizedTherapistReports = useMemo(() => {
-    // 1. 真實回報資料 (改用 ID 對應)
     const realReports = therapistReports.map(report => ({
       ...report,
       storeName: report.therapistId, 
-      date: toStandardDateFormat(report.date)
+      date: report.date ? toStandardDateFormat(report.date) : ""
     }));
 
-    // 如果不是管理師日報模式，直接回傳
     if (auditType !== 'therapist-daily') return realReports;
 
-    // 2. 自動產生「休假幽靈回報」
-    // 原理：日曆元件只認「有無資料」，不知道排休。
-    // 我們主動幫排休的人補上一筆 "isGhost" 資料，讓日曆認為該員「已完成 (休假)」，
-    // 這樣當天上班的人全交時，就會顯示綠燈。
     const ghostReports = [];
     const y = parseInt(selectedYear);
     const m = parseInt(selectedMonth);
-    // 取得當月天數
-    const daysInMonth = new Date(y, m, 0).getDate();
 
-    // 遍歷所有在職管理師
     therapists.filter(t => t.status === 'active').forEach(t => {
-      // 取得該員當月排班表
       const scheduleKey = `${t.id}_${y}_${m}`;
       const schedule = therapistSchedules[scheduleKey];
-      const daysOff = schedule?.daysOff || []; // 例如 [1, 5, 6]
+      const daysOff = schedule?.daysOff || []; 
 
-      // 針對每一個休假日，建立假資料
       daysOff.forEach(day => {
-        const dateStr = `${y}/${m.toString().padStart(2, '0')}/${day.toString().padStart(2, '0')}`;
+        const dateStr = `${y}-${m.toString().padStart(2, '0')}-${day.toString().padStart(2, '0')}`;
         
         ghostReports.push({
-          id: `ghost_${t.id}_${dateStr}`, // 唯一 ID
-          storeName: t.id,                // 對應管理師 ID
+          id: `ghost_${t.id}_${dateStr}`, 
+          storeName: t.id,                
           date: dateStr,
-          isGhost: true,                  // 標記為幽靈資料
-          revenue: 0                      // 避免影響數值計算 (如果有顯示的話)
+          isGhost: true,                  
+          revenue: 0                      
         });
       });
     });
 
-    // 合併 真實回報 + 休假回報
     return [...realReports, ...ghostReports];
 
   }, [therapistReports, auditType, selectedYear, selectedMonth, therapists, therapistSchedules]);
@@ -135,38 +162,38 @@ const AuditView = () => {
 
   // --- 下方列表檢核邏輯 ---
 
-  // 1. 店家日報檢核
   const auditData = useMemo(() => {
     if (!checkDate) return { submitted: [], missing: [], missingByManager: {} };
     const targetDate = toStandardDateFormat(checkDate);
     
-    const submitted = new Set(
-      rawData
+    const submittedRaw = rawData
         .filter((d) => toStandardDateFormat(d.date) === targetDate)
-        .map((d) => d.storeName)
-    );
-    
+        .map((d) => d.storeName);
+
     const missingByManager = {};
+    
     Object.entries(managers).forEach(([manager, stores]) => {
       const missing = [];
       stores.forEach((s) => {
-        if (auditExclusions.includes(s)) return; // 排除免檢核店家
+        if (auditExclusions.includes(s)) return; 
 
-        const fullName = `CYJ${s}店`;
-        if (!submitted.has(fullName) && !submitted.has(s)) {
-             missing.push(fullName);
+        // 寬容檢查：只要包含簡稱就算有交
+        const isSubmitted = submittedRaw.some(rawName => rawName && rawName.includes(s));
+
+        if (!isSubmitted) {
+             // 顯示時加上品牌前綴，讓使用者知道是哪一家的店
+             missing.push(`${brandPrefix}${s}店`);
         }
       });
       if (missing.length) missingByManager[manager] = missing;
     });
     return {
-      submitted: Array.from(submitted),
+      submitted: submittedRaw,
       missing: Object.values(missingByManager).flat(),
       missingByManager,
     };
-  }, [checkDate, rawData, managers, auditExclusions]);
+  }, [checkDate, rawData, managers, auditExclusions, brandPrefix]);
 
-  // 2. 店家目標檢核
   const targetAuditData = useMemo(() => {
     const missingByManager = {};
     const y = parseInt(selectedYear);
@@ -177,9 +204,11 @@ const AuditView = () => {
       stores.forEach((s) => {
         if (auditExclusions.includes(s)) return;
 
-        const name = `CYJ${s}店`;
+        // 目標檢核使用完整 key (包含前綴)
+        const name = `${brandPrefix}${s}店`;
         const key = `${name}_${y}_${m}`;
         const b = budgets[key];
+        
         if (!b || (!b.cashTarget && !b.accrualTarget)) missing.push(name);
       });
       if (missing.length) missingByManager[manager] = missing;
@@ -188,17 +217,16 @@ const AuditView = () => {
       missing: Object.values(missingByManager).flat(),
       missingByManager,
     };
-  }, [budgets, managers, selectedYear, selectedMonth, auditExclusions]);
+  }, [budgets, managers, selectedYear, selectedMonth, auditExclusions, brandPrefix]);
 
-  // 3. 管理師日報檢核 (這裡本來就有排休邏輯，保持不變)
   const therapistAuditData = useMemo(() => {
     if (!checkDate) return { missing: [], missingByManager: {} };
     
-    const targetDate = new Date(checkDate);
     const targetDateStr = toStandardDateFormat(checkDate);
-    const year = targetDate.getFullYear().toString();
-    const month = targetDate.getMonth() + 1;
-    const day = targetDate.getDate();
+    const targetDateObj = new Date(targetDateStr);
+    const year = targetDateObj.getFullYear().toString();
+    const month = targetDateObj.getMonth() + 1;
+    const day = targetDateObj.getDate();
 
     const submittedIds = new Set(
       (therapistReports || [])
@@ -213,7 +241,7 @@ const AuditView = () => {
       const schedule = therapistSchedules[scheduleKey];
       const isOff = schedule?.daysOff?.includes(day);
 
-      if (isOff) return; // 休假者不列入未回報
+      if (isOff) return; 
 
       if (!submittedIds.has(t.id)) {
         const mgr = t.manager || "未分區";
@@ -228,7 +256,6 @@ const AuditView = () => {
     };
   }, [checkDate, therapists, therapistReports, therapistSchedules]);
 
-  // 4. 管理師目標檢核
   const therapistTargetAuditData = useMemo(() => {
     const missingByManager = {};
     const year = selectedYear;
@@ -260,6 +287,7 @@ const AuditView = () => {
     auditType === "therapist-daily" ? therapistAuditData :
     therapistTargetAuditData; 
 
+  // ★★★ 3. 複製功能優化：自動清洗字串 ★★★
   const handleCopy = () => {
     let text = "";
     if (auditType === 'target') text = `店家未設定目標(${selectedYear}/${selectedMonth})：\n`;
@@ -268,7 +296,11 @@ const AuditView = () => {
     else text = `店家未回報(${checkDate})：\n`;
 
     Object.entries(activeData.missingByManager).forEach(([mgr, list]) => {
-      const cleanList = list.map(s => (auditType.includes('therapist')) ? s : s.replace("CYJ", "").replace("店", ""));
+      const cleanList = list.map(s => {
+        if (auditType.includes('therapist')) return s;
+        // 使用 Regex 移除所有前綴
+        return s.replace(/CYJ|安妞|伊啵|Anew|Yibo|店/gi, "").trim();
+      });
       text += `${mgr}區：${cleanList.join("、")}\n`;
     });
     
@@ -326,12 +358,19 @@ const AuditView = () => {
             <div className="flex gap-2 items-center w-full sm:w-auto">
                 {(auditType === "daily" || auditType === "therapist-daily") ? (
                    <div className="w-full sm:w-auto relative z-10">
-                      <SmartDatePicker 
-                        selectedDate={checkDate}
-                        onDateSelect={setCheckDate}
-                        stores={calendarStores}       
-                        salesData={calendarSalesData} 
-                      />
+                      {/* 如果沒有店家資料，顯示明確提示 */}
+                      {activeStoresForCalendar.length === 0 ? (
+                        <div className="px-4 py-3 bg-rose-50 text-rose-600 text-sm font-bold rounded-xl border border-rose-100 flex items-center gap-2 whitespace-nowrap animate-pulse">
+                          <HelpCircle size={18} /> 尚未設定檢核店家 (請至參數設定)
+                        </div>
+                      ) : (
+                        <SmartDatePicker 
+                          selectedDate={checkDate}
+                          onDateSelect={setCheckDate}
+                          stores={calendarStores}       
+                          salesData={calendarSalesData} 
+                        />
+                      )}
                    </div>
                 ) : (
                    <div className="px-4 py-2 bg-indigo-50 text-indigo-600 font-bold rounded-xl text-sm border border-indigo-100 flex items-center gap-2 self-start flex-grow">
@@ -339,7 +378,6 @@ const AuditView = () => {
                    </div>
                 )}
 
-                {/* 只有在店家相關檢核 (daily 或 target) 且有權限時才顯示設定按鈕 */}
                 {(userRole === 'director' || userRole === 'manager') && (auditType === 'daily' || auditType === 'target') && (
                   <button onClick={openConfigModal} className="p-2 bg-stone-100 text-stone-500 rounded-xl hover:bg-stone-200" title="設定排除店家">
                     <Settings size={20}/>
@@ -392,7 +430,7 @@ const AuditView = () => {
                         className="bg-white px-2 py-1 rounded-lg text-xs border border-stone-200 text-stone-600 font-medium flex items-center gap-1"
                       >
                         {auditType.includes('therapist') && <UserX size={10} className="text-rose-400"/>}
-                        {auditType.includes('therapist') ? s : s.replace("CYJ", "").replace("店", "")}
+                        {auditType.includes('therapist') ? s : s.replace(/CYJ|安妞|伊啵|Anew|Yibo|店/gi, "").replace(brandPrefix, "")}
                       </span>
                     ))}
                   </div>

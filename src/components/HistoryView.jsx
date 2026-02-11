@@ -18,7 +18,11 @@ import { AppContext } from "../AppContext";
 import { toStandardDateFormat } from "../utils/helpers";
 
 const HistoryView = () => {
-  const { showToast, managers, userRole, currentUser } = useContext(AppContext);
+  const { 
+    showToast, managers, userRole, currentUser, 
+    // ★★★ 1. 引入路徑函式與品牌資訊 ★★★
+    getCollectionPath, getDocPath, currentBrand 
+  } = useContext(AppContext);
   
   // 1. 根據權限設定預設頁籤
   const [activeTab, setActiveTab] = useState((userRole === 'trainer' || userRole === 'therapist') ? 'therapist' : 'store');
@@ -39,24 +43,39 @@ const HistoryView = () => {
   const [editForm, setEditForm] = useState({});
 
   const fmt = (val) => (typeof val === "number" ? val.toLocaleString() : val);
+
+  // ★★★ 2. 定義品牌前綴 (與 Dashboard/Input 一致) ★★★
+  const brandPrefix = useMemo(() => {
+    let name = "CYJ";
+    if (currentBrand) {
+      const id = typeof currentBrand === 'string' ? currentBrand : (currentBrand.id || "CYJ");
+      const normalizedId = id.toLowerCase();
+      
+      if (normalizedId.includes("anniu") || normalizedId.includes("anew")) {
+        name = "安妞";
+      } else if (normalizedId.includes("yibo")) {
+        name = "伊啵";
+      } else {
+        name = "CYJ";
+      }
+    }
+    return name;
+  }, [currentBrand]);
   
   // 定義「被允許查看」的店家清單
   const myAllowedStores = useMemo(() => {
-    // 總監與教專看全部
     if (userRole === 'director' || userRole === 'trainer') return null; 
 
-    // 區長：只看轄區
     if (userRole === 'manager' && currentUser) {
       return (managers[currentUser.name] || []).map(s => s.trim());
     }
 
-    // 店長：只看本店
     if (userRole === 'store' && currentUser) {
       const stores = currentUser.stores || [currentUser.storeName];
-      return stores.map(s => s.replace(/CYJ|店/g, '').trim());
+      // 移除可能的前綴，只留核心店名
+      return stores.map(s => s.replace(/CYJ|安妞|伊啵|Anew|Yibo|店/gi, '').trim());
     }
 
-    // 管理師只看自己的店
     if (userRole === 'therapist' && currentUser) {
       return [currentUser.store];
     }
@@ -64,7 +83,7 @@ const HistoryView = () => {
     return [];
   }, [userRole, currentUser, managers]);
   
-  // 下拉選單來源
+  // ★★★ 3. 下拉選單來源 (修正為動態前綴) ★★★
   const allStores = useMemo(() => {
     let baseList = [];
     if (myAllowedStores !== null) {
@@ -72,8 +91,9 @@ const HistoryView = () => {
     } else {
         baseList = Object.values(managers).flat();
     }
-    return baseList.filter(s => s).map((s) => `CYJ${s}店`).sort();
-  }, [managers, myAllowedStores]);
+    // 使用 brandPrefix 組合店名 (例如 "安妞中山店")
+    return baseList.filter(s => s).map((s) => `${brandPrefix}${s}店`).sort();
+  }, [managers, myAllowedStores, brandPrefix]);
 
   // 自動預選店家
   useEffect(() => {
@@ -110,6 +130,7 @@ const HistoryView = () => {
     { key: "returnRevenue", label: "退費", width: "min-w-[100px]", isNegative: true },
   ];
 
+  // ★★★ 4. 讀取資料邏輯 (修正為 getCollectionPath) ★★★
   useEffect(() => {
     if (!startDate || !endDate) return;
 
@@ -119,8 +140,11 @@ const HistoryView = () => {
         const collectionName = activeTab === "store" ? "daily_reports" : "therapist_daily_reports";
         const dataMap = new Map(); 
 
+        // 使用 getCollectionPath 取得正確的品牌資料夾
+        const collectionRef = getCollectionPath(collectionName);
+
         const q1 = query(
-          collection(db, "artifacts", appId, "public", "data", collectionName),
+          collectionRef,
           where("date", ">=", startDate),
           where("date", "<=", endDate),
           orderBy("date", "desc")
@@ -128,10 +152,11 @@ const HistoryView = () => {
         const snap1 = await getDocs(q1);
         snap1.docs.forEach(doc => dataMap.set(doc.id, { id: doc.id, ...doc.data() }));
 
+        // 相容性查詢 (處理 / 和 - 日期格式)
         const startSlash = startDate.replace(/-/g, "/");
         const endSlash = endDate.replace(/-/g, "/");
         const q2 = query(
-          collection(db, "artifacts", appId, "public", "data", collectionName),
+          collectionRef,
           where("date", ">=", startSlash),
           where("date", "<=", endSlash),
           orderBy("date", "desc")
@@ -156,11 +181,11 @@ const HistoryView = () => {
     };
 
     fetchData();
-  }, [activeTab, startDate, endDate, appId, showToast]);
+  }, [activeTab, startDate, endDate, getCollectionPath, showToast, currentBrand]); // 加入 currentBrand 依賴，切換品牌時重抓
 
   const currentRawData = activeTab === "store" ? storeRawData : therapistRawData;
 
-  // 資料過濾邏輯
+  // ★★★ 5. 資料過濾邏輯 (修正店名匹配) ★★★
   const filteredData = useMemo(() => {
     return currentRawData.filter((d) => {
       
@@ -171,20 +196,22 @@ const HistoryView = () => {
       }
       // 2. 區長/店長權限檢查
       else if (myAllowedStores !== null) {
-         const normalize = (s) => String(s || "").replace(/CYJ/ig, "").replace(/店/g, "").replace(/\s/g, "").toLowerCase().trim();
+         // 標準化：移除所有可能的前綴和後綴，只比對核心店名 (如 "中山")
+         const normalize = (s) => String(s || "").replace(/CYJ|安妞|伊啵|Anew|Yibo|店/gi, "").replace(/\s/g, "").toLowerCase().trim();
          const cleanRowStore = normalize(getStoreName(d));
          const isAllowed = myAllowedStores.some(allowed => cleanRowStore === normalize(allowed));
          if (!isAllowed) return false;
       }
 
-      // 3. 通用店家篩選器 (★ 修改處：改為精確比對)
+      // 3. 通用店家篩選器
       let matchStore = true;
       if (filterStore) {
-        const normalize = (s) => String(s || "").replace(/CYJ/ig, "").replace(/店/g, "").replace(/\s/g, "").toLowerCase().trim();
+        // 這裡做精確比對，因為 filterStore 和 d.storeName 現在應該都有正確的品牌前綴了
+        // 但為了保險，我們還是比較「核心店名」
+        const normalize = (s) => String(s || "").replace(/CYJ|安妞|伊啵|Anew|Yibo|店/gi, "").replace(/\s/g, "").toLowerCase().trim();
         const cleanFilter = normalize(filterStore);
         const cleanRow = normalize(getStoreName(d));
         
-        // ★ 修改：從 includes 改為 ===，避免「新莊」被「新店(新)」匹配到
         matchStore = cleanRow === cleanFilter;
       }
       return matchStore;
@@ -221,7 +248,9 @@ const HistoryView = () => {
   const saveEdit = async () => {
     try {
       const collectionName = activeTab === "store" ? "daily_reports" : "therapist_daily_reports";
-      const docRef = doc(db, "artifacts", appId, "public", "data", collectionName, editId);
+      // ★★★ 修正：使用 getCollectionPath ★★★
+      const collectionRef = getCollectionPath(collectionName);
+      const docRef = doc(collectionRef, editId);
       
       let cleanData = {};
       if (activeTab === "store") {
@@ -265,7 +294,9 @@ const HistoryView = () => {
     if (!confirm("確定刪除?")) return;
     try {
       const collectionName = activeTab === "store" ? "daily_reports" : "therapist_daily_reports";
-      await deleteDoc(doc(db, "artifacts", appId, "public", "data", collectionName, id));
+      // ★★★ 修正：使用 getCollectionPath ★★★
+      const collectionRef = getCollectionPath(collectionName);
+      await deleteDoc(doc(collectionRef, id));
       showToast("已刪除", "success");
       
       const updateState = activeTab === "store" ? setStoreRawData : setTherapistRawData;
@@ -279,7 +310,11 @@ const HistoryView = () => {
         
         {/* 標題與分頁 */}
         <div className="flex flex-col sm:flex-row items-start sm:items-center gap-3">
-           <h2 className="text-2xl font-bold text-stone-800">數據修正中心</h2>
+           <div className="flex items-center gap-2">
+              <h2 className="text-2xl font-bold text-stone-800">數據修正中心</h2>
+              {/* 顯示當前品牌標籤，方便確認 */}
+              <span className="px-2 py-1 bg-stone-100 text-stone-500 rounded text-xs font-bold">{brandPrefix}</span>
+           </div>
            <span className="hidden sm:inline text-stone-400">|</span>
            
            <div className="flex bg-stone-200 p-1 rounded-xl w-full sm:w-auto">
@@ -303,7 +338,7 @@ const HistoryView = () => {
         <Card>
           <div className="space-y-4 w-full">
             
-            {/* 篩選器 - RWD 優化版 (強制日期堆疊在手機上) */}
+            {/* 篩選器 */}
             <div className="flex flex-wrap items-end gap-4 bg-stone-50 p-4 rounded-xl border border-stone-100">
               
               {/* 日期區間選擇 */}
@@ -311,7 +346,6 @@ const HistoryView = () => {
                 <label className="block text-xs font-bold text-stone-400 mb-1 flex items-center gap-1">
                   <Calendar size={12}/> 篩選日期區間
                 </label>
-                {/* 斷點改為 md:flex-row，確保手機上垂直堆疊，不被切斷 */}
                 <div className="flex flex-col md:flex-row items-center gap-2 w-full">
                   <input 
                     type="date" 
@@ -400,14 +434,15 @@ const HistoryView = () => {
 
                     {!isLoading && filteredData.map((row) => {
                       const isEditing = editId === row.id;
-                      const displayStore = getStoreName(row).replace("CYJ", "").replace("店", "");
+                      // 顯示時移除所有前綴，保持乾淨
+                      const displayStore = getStoreName(row).replace(/CYJ|安妞|伊啵|Anew|Yibo|店/gi, "");
                       
                       return (
                         <tr key={row.id} className="group hover:bg-stone-50 transition-colors">
                           <td className="p-4 md:sticky md:left-0 bg-white group-hover:bg-stone-50 md:z-10 border-r border-stone-100">
                             <div className="flex flex-col">
                               {isEditing ? <input type="date" value={editForm.date} onChange={(e)=>handleEditChange('date',e.target.value)} className="border rounded px-2 py-1 mb-1 text-xs"/> : <span className="font-mono font-bold text-stone-600">{row.date}</span>}
-                              <span className="font-bold text-stone-800">{displayStore || <span className="text-stone-300 text-xs">未註記</span>}</span>
+                              <span className="font-bold text-stone-800">{displayStore}店</span>
                             </div>
                           </td>
                           
@@ -468,7 +503,7 @@ const HistoryView = () => {
                     {!isLoading && filteredData.length === 0 && (
                       <tr>
                         <td colSpan={20} className="p-10 text-center text-stone-400">
-                          該日期區間無相關資料
+                          該日期區間無相關資料 (請確認日期或篩選條件)
                         </td>
                       </tr>
                     )}

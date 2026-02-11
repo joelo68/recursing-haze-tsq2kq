@@ -1,16 +1,13 @@
 // src/components/SmartCalendar.jsx
-import React, { useState, useMemo, useEffect } from "react";
-import { ChevronLeft, ChevronRight, X } from "lucide-react";
+import React, { useState, useEffect } from "react";
+import { ChevronLeft, ChevronRight } from "lucide-react";
 
 // ★ iPhone/Safari 專用：日期轉換小幫手
 const safeParseDate = (dateInput) => {
   if (!dateInput) return new Date();
-  
-  // 如果是字串，就把 - 換成 / (解決 iOS 兼容性問題)
   const dateStr = typeof dateInput === 'string' 
     ? dateInput.replace(/-/g, '/') 
     : dateInput;
-    
   const d = new Date(dateStr);
   return isNaN(d.getTime()) ? new Date() : d;
 };
@@ -36,51 +33,52 @@ const SmartCalendar = ({
   const daysInMonth = new Date(year, month + 1, 0).getDate();
   const firstDayOfMonth = new Date(year, month, 1).getDay();
 
-  // --- 數據分析邏輯 ---
+  // --- ★★★ 核心修正：數據分析邏輯 (改用「點名法」且不隱藏空資料) ★★★ ---
   const getDayStatus = (day) => {
-    // ★★★ 修正點：加入未來日期判斷 ★★★
     const checkDate = new Date(year, month, day);
     const today = new Date();
-    today.setHours(0, 0, 0, 0); // 將時間歸零，只比較日期
+    today.setHours(0, 0, 0, 0);
 
-    // 如果該日期 > 今天 (即明天以後)，不顯示任何燈號
+    // 未來日期不顯示任何燈號
     if (checkDate > today) return "none";
-
-    if (!salesData || salesData.length === 0) return "none";
 
     // 格式化當前日期 YYYY-MM-DD
     const targetDate = `${year}-${String(month + 1).padStart(2, "0")}-${String(day).padStart(2, "0")}`;
-    const targetDateSlash = targetDate.replace(/-/g, "/");
-
-    // 1. 找出當天所有銷售紀錄
+    
+    // 1. 找出當天所有銷售紀錄 (統一日期格式為 YYYY-MM-DD 進行比對)
     const dayRecords = salesData.filter((record) => {
       if (!record.date) return false;
-      return record.date.replace(/-/g, "/") === targetDateSlash;
+      return record.date.replace(/\//g, "-") === targetDate;
     });
 
-    if (dayRecords.length === 0) return "none";
+    // ★ 關鍵修正：這裡移除了 "if (dayRecords.length === 0) return 'none'"
+    // 即使當天沒人回報 (dayRecords 為空)，只要有設定店家 (stores)，就應該顯示紅燈！
 
-    // 2. 判斷是否有店家名單需要檢查
-    if (!stores || (Array.isArray(stores) && stores.length === 0) || (typeof stores === 'object' && Object.keys(stores).length === 0)) {
-        return "complete"; 
+    // 2. 判斷是否有店家名單
+    // 如果連「應檢核店家」都沒有，才真的不顯示燈號
+    if (!stores || (Array.isArray(stores) && stores.length === 0)) {
+        return "none"; 
     }
 
-    // 3. 有店家名單，檢查是否全數回報
-    let allStoreNames = [];
-    if (Array.isArray(stores)) {
-      stores.forEach(manager => {
-        if(manager.stores) {
-          manager.stores.forEach(s => allStoreNames.push(typeof s === 'string' ? s : s.name));
-        }
-      });
-    } else {
-       Object.values(stores).forEach(list => {
-          if(Array.isArray(list)) list.forEach(s => allStoreNames.push(typeof s === 'string' ? s : s.name));
-       });
-    }
-    
-    // 如果資料筆數 >= 店家總數，算完成
-    return dayRecords.length >= allStoreNames.length ? "complete" : "incomplete";
+    // 3. 逐一檢查每個「應回報單位」是否已回報 (點名法)
+    const isAllSubmitted = stores.every(target => {
+        // 取出該店家的所有合法別名 (例如 ["中山", "中山店", "安妞中山店"])
+        // 這些別名是由 AuditView 準備好的
+        const aliases = Array.isArray(target.stores) 
+            ? target.stores.map(s => typeof s === 'string' ? s : s.name)
+            : [];
+            
+        if (aliases.length === 0) return true; // 沒設定別名就當作不用檢查
+
+        // 檢查：本日收到的日報中，有沒有任何一筆屬於這個別名列表？
+        // 只要命中一個別名 (例如 "安妞中山店")，就算該店已回報
+        const hasRecord = dayRecords.some(record => aliases.includes(record.storeName));
+        
+        return hasRecord;
+    });
+
+    // 如果所有店家都打勾，就是綠燈 (complete)，否則紅燈 (incomplete)
+    return isAllSubmitted ? "complete" : "incomplete";
   };
 
   // --- 操作處理 ---
@@ -130,12 +128,10 @@ const SmartCalendar = ({
 
       {/* 日期格子 */}
       <div className="grid grid-cols-7 gap-1">
-        {/* 補空白 */}
         {Array.from({ length: firstDayOfMonth }).map((_, i) => (
           <div key={`empty-${i}`} />
         ))}
 
-        {/* 畫日期 */}
         {Array.from({ length: daysInMonth }).map((_, i) => {
           const day = i + 1;
           const dateStr = `${year}-${String(month + 1).padStart(2, "0")}-${String(day).padStart(2, "0")}`;

@@ -13,7 +13,10 @@ const TherapistScheduleView = () => {
     therapistSchedules,
     userRole,
     currentUser,
-    managers
+    managers,
+    // ★★★ 1. 引入動態路徑與品牌資訊 ★★★
+    getCollectionPath,
+    currentBrand
   } = useContext(AppContext);
 
   const [tScheduleYear, setTScheduleYear] = useState(new Date().getFullYear().toString());
@@ -26,42 +29,93 @@ const TherapistScheduleView = () => {
   
   const [tLocalSchedule, setTLocalSchedule] = useState([]); // Array of days off
 
+  // ★★★ 2. 定義品牌前綴 (與 Dashboard/TargetView 一致，確保穩健) ★★★
+  const brandPrefix = useMemo(() => {
+    let name = "CYJ";
+    if (currentBrand) {
+      const id = typeof currentBrand === 'string' ? currentBrand : (currentBrand.id || "CYJ");
+      const normalizedId = id.toLowerCase();
+      
+      if (normalizedId.includes("anniu") || normalizedId.includes("anew")) {
+        name = "安妞";
+      } else if (normalizedId.includes("yibo")) {
+        name = "伊啵";
+      } else {
+        name = "CYJ";
+      }
+    }
+    return name;
+  }, [currentBrand]);
+
   // 1. 初始化權限與預設值
   useEffect(() => {
+    // 切換品牌時重置
+    setSelectedRegion("");
+    setSelectedStore("");
+    setTScheduleTherapist("");
+
+    // 輔助函式：清理店名 (使用正規表達式移除所有可能前綴)
+    const cleanStoreName = (name) => {
+      if (!name) return "";
+      return name.replace(/CYJ|安妞|伊啵|Anew|Yibo|店/gi, "").trim();
+    };
+
     if (userRole === 'therapist' && currentUser) {
-      const myRegion = Object.keys(managers).find(mgr => managers[mgr].includes(currentUser.storeName?.replace("CYJ","").replace("店","")));
+      // 管理師：全部鎖定，直接選自己
+      const rawStoreName = currentUser.storeName || currentUser.store || "";
+      const cleanName = cleanStoreName(rawStoreName);
+
+      const myRegion = Object.keys(managers).find(mgr => managers[mgr].includes(cleanName));
       if (myRegion) setSelectedRegion(myRegion);
-      setSelectedStore(currentUser.store || "");
+      
+      // 設定店名 (使用清洗後的核心店名)
+      setSelectedStore(cleanName || currentUser.store);
       setTScheduleTherapist(currentUser.id);
     } 
     else if (userRole === 'store' && currentUser) {
+      // 店長：鎖定區域(選第一個找到的)，店家限制在自己管轄範圍
       const myStores = currentUser.stores || [currentUser.storeName];
       if (myStores.length > 0) {
-        const firstStore = myStores[0].replace("CYJ", "").replace("店", "");
-        const myRegion = Object.keys(managers).find(mgr => managers[mgr].includes(firstStore));
+        const firstRawName = myStores[0];
+        const cleanFirst = cleanStoreName(firstRawName);
+
+        const myRegion = Object.keys(managers).find(mgr => managers[mgr].includes(cleanFirst));
         if (myRegion) setSelectedRegion(myRegion);
-        if (myStores.length === 1) setSelectedStore(firstStore);
+        
+        // 若只有一家店，直接選中
+        if (myStores.length === 1) {
+             setSelectedStore(cleanFirst);
+        }
       }
     }
     else if (userRole === 'manager' && currentUser) {
+      // 區長：鎖定區域為自己
       setSelectedRegion(currentUser.name);
     }
-  }, [userRole, currentUser, managers]);
+  }, [userRole, currentUser, managers, brandPrefix, currentBrand]);
 
-  // 2. 計算可用的店家列表
+  // 2. 計算可用的店家列表 (依據區域)
   const availableStores = useMemo(() => {
     if (!selectedRegion) return [];
+    
     const regionStores = managers[selectedRegion] || [];
+    
+    // 如果是店長，只能看自己管轄的店 (取交集)
     if (userRole === 'store' && currentUser) {
-      const myStores = (currentUser.stores || [currentUser.storeName]).map(s => s.replace("CYJ", "").replace("店", ""));
-      return regionStores.filter(s => myStores.includes(s));
+      const myStoresRaw = (currentUser.stores || [currentUser.storeName]);
+      // 將店長管轄的店名清乾淨
+      const myStoresClean = myStoresRaw.map(s => s.replace(/CYJ|安妞|伊啵|Anew|Yibo|店/gi, "").trim());
+      return regionStores.filter(s => myStoresClean.includes(s));
     }
+    
     return regionStores;
   }, [selectedRegion, managers, userRole, currentUser]);
 
-  // 3. 計算可用的管理師列表
+  // 3. 計算可用的管理師列表 (依據店家)
   const availableTherapists = useMemo(() => {
     if (!selectedStore) return [];
+    // Therapists 資料庫裡的 store 欄位通常存的是 "簡稱" (例如 "中山")
+    // 所以這裡 selectedStore 也必須是簡稱
     return therapists
       .filter(t => t.status === 'active' && t.store === selectedStore)
       .sort((a, b) => a.name.localeCompare(b.name));
@@ -85,19 +139,24 @@ const TherapistScheduleView = () => {
     });
   };
 
+  // 5. 儲存排休 (修正寫入路徑)
   const handleSaveTherapistSchedule = async () => {
     if (!tScheduleTherapist) return showToast("請選擇管理師", "error");
     try {
       const docId = `${tScheduleTherapist}_${tScheduleYear}_${parseInt(tScheduleMonth)}`;
-      await setDoc(doc(db, "artifacts", appId, "public", "data", "therapist_schedules", docId), {
+      
+      // ★★★ 3. 使用動態路徑 getCollectionPath ★★★
+      await setDoc(doc(getCollectionPath("therapist_schedules"), docId), {
         therapistId: tScheduleTherapist,
         year: tScheduleYear,
         month: parseInt(tScheduleMonth),
         daysOff: tLocalSchedule,
         updatedAt: serverTimestamp()
       }, { merge: true });
+      
       showToast("排休已儲存", "success");
     } catch (e) {
+      console.error(e);
       showToast("儲存失敗", "error");
     }
   };
@@ -149,7 +208,9 @@ const TherapistScheduleView = () => {
               >
                 <option value="">請選擇店家...</option>
                 {availableStores.map(store => (
-                  <option key={store} value={store}>{store}店</option>
+                  // 顯示：加上品牌前綴 (如：安妞中山店)
+                  // 值：維持簡稱 (如：中山) 以便後續篩選
+                  <option key={store} value={store}>{brandPrefix}{store}店</option>
                 ))}
               </select>
             </div>
@@ -176,7 +237,9 @@ const TherapistScheduleView = () => {
             <div className="flex gap-2 w-full md:w-auto">
               <div className="w-1/2 md:w-24">
                 <label className="block text-xs font-bold text-stone-400 mb-1">年度</label>
-                <select value={tScheduleYear} onChange={(e) => setTScheduleYear(e.target.value)} className="w-full px-4 py-2 border-2 border-stone-200 rounded-xl font-bold bg-white"><option value="2024">2024</option><option value="2025">2025</option><option value="2026">2026</option></select>
+                <select value={tScheduleYear} onChange={(e) => setTScheduleYear(e.target.value)} className="w-full px-4 py-2 border-2 border-stone-200 rounded-xl font-bold bg-white">
+                  {[2024, 2025, 2026].map(y => <option key={y} value={y}>{y}</option>)}
+                </select>
               </div>
               <div className="w-1/2 md:w-24">
                 <label className="block text-xs font-bold text-stone-400 mb-1">月份</label>

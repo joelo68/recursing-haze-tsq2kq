@@ -1,3 +1,4 @@
+// src/components/InputView.jsx
 /* eslint-disable react-hooks/exhaustive-deps */
 import React, { useState, useEffect, useContext, useMemo } from "react";
 import { 
@@ -15,7 +16,6 @@ import { AppContext } from "../AppContext";
 import { ViewWrapper, Card } from "./SharedUI";
 import SmartDatePicker from "./SmartDatePicker";
 
-// ★★★ 輔助函式：取得當地時間的 YYYY-MM-DD (修正 UTC 時差問題) ★★★
 const getLocalTodayString = () => {
   const now = new Date();
   const year = now.getFullYear();
@@ -25,11 +25,14 @@ const getLocalTodayString = () => {
 };
 
 // ============================================================================
-// ★★★ 子元件 A：店長專用輸入介面 (StoreInputView) - 維持不變 ★★★
+// ★★★ 子元件 A：店長專用輸入介面 (StoreInputView) ★★★
 // ============================================================================
 const StoreInputView = () => {
   const {
     currentUser, userRole, managers, inputDate, setInputDate, showToast, logActivity, rawData,
+    getCollectionPath, 
+    // ★★★ 確保取得最新品牌資訊 ★★★
+    currentBrand 
   } = useContext(AppContext);
 
   const [selectedManager, setSelectedManager] = useState("");
@@ -52,6 +55,22 @@ const StoreInputView = () => {
   };
   
   const today = getLocalTodayString();
+
+  // ★★★ 定義品牌前綴 ★★★
+  const brandPrefix = useMemo(() => {
+    if (!currentBrand) return "CYJ";
+    // 處理 currentBrand 可能是字串或物件
+    const bId = typeof currentBrand === 'string' ? currentBrand : currentBrand.id;
+    const bName = typeof currentBrand === 'string' ? currentBrand : (currentBrand.label || currentBrand.name);
+    return bId === 'cyj' ? 'CYJ' : bName;
+  }, [currentBrand]);
+
+  // ★★★ 品牌切換時，強制重置表單 ★★★
+  useEffect(() => {
+    setFormData(defaultFormData);
+    setSelectedStore("");
+    setSelectedManager("");
+  }, [currentBrand]); // 當品牌改變時觸發
 
   useEffect(() => {
     const handleWakeUp = () => {
@@ -76,7 +95,8 @@ const StoreInputView = () => {
   }, [inputDate, formData, setInputDate]);
 
   useEffect(() => {
-    const savedDraft = localStorage.getItem("cyj_input_draft_v3");
+    const brandKey = typeof currentBrand === 'string' ? currentBrand : currentBrand?.id || 'unknown';
+    const savedDraft = localStorage.getItem(`input_draft_${brandKey}`); // 依品牌分開暫存
     if (savedDraft) {
       try {
         const parsed = JSON.parse(savedDraft);
@@ -90,12 +110,13 @@ const StoreInputView = () => {
         }
       } catch (e) { console.error(e); }
     }
-  }, []);
+  }, [currentBrand]);
 
   useEffect(() => {
+    const brandKey = typeof currentBrand === 'string' ? currentBrand : currentBrand?.id || 'unknown';
     const draft = { formData, store: selectedStore, manager: selectedManager, date: inputDate, timestamp: Date.now() };
-    localStorage.setItem("cyj_input_draft_v3", JSON.stringify(draft));
-  }, [formData, selectedStore, selectedManager, inputDate]);
+    localStorage.setItem(`input_draft_${brandKey}`, JSON.stringify(draft));
+  }, [formData, selectedStore, selectedManager, inputDate, currentBrand]);
 
   useEffect(() => {
     const op = parseNumber(formData.operationalAccrual);
@@ -112,35 +133,52 @@ const StoreInputView = () => {
     setFormData(prev => ({ ...prev, [key]: formatNumber(rawValue) }));
   };
 
+  // ★★★ 修正：使用動態前綴產生店名列表 ★★★
   const availableStores = useMemo(() => {
     if (!selectedManager) {
       if (userRole === "store" && currentUser) {
-        return (currentUser.stores || [currentUser.storeName]).map((s) => s.startsWith("CYJ") ? s : `CYJ${s}店`);
+        return (currentUser.stores || [currentUser.storeName]).map((s) => {
+            if (s.startsWith(brandPrefix)) return s;
+            // 相容性處理
+            if (brandPrefix === 'CYJ' && s.startsWith('CYJ')) return s;
+            return `${brandPrefix}${s}店`;
+        });
       }
       return [];
     }
-    return (managers[selectedManager] || []).map((s) => `CYJ${s}店`);
-  }, [selectedManager, managers, userRole, currentUser]);
+    return (managers[selectedManager] || []).map((s) => `${brandPrefix}${s}店`);
+  }, [selectedManager, managers, userRole, currentUser, brandPrefix]);
 
   useEffect(() => {
     if (!selectedStore && userRole === "store" && currentUser) {
       const myStores = currentUser.stores || [currentUser.storeName];
       if (myStores.length > 0) {
-        const shortName = myStores[0].replace("CYJ", "").replace("店", "");
-        const foundMgr = Object.keys(managers).find((mgr) => managers[mgr].includes(shortName));
+        let rawName = myStores[0];
+        rawName = rawName.replace(/店$/, "");
+        
+        // 移除前綴以比對區長
+        if (rawName.startsWith(brandPrefix)) {
+            rawName = rawName.substring(brandPrefix.length);
+        } else if (rawName.startsWith("CYJ")) {
+            rawName = rawName.substring(3);
+        }
+
+        const foundMgr = Object.keys(managers).find((mgr) => managers[mgr].includes(rawName));
         if (foundMgr) setSelectedManager(foundMgr);
-        const fullName = myStores[0].startsWith("CYJ") ? myStores[0] : `CYJ${myStores[0]}店`;
+        
+        const fullName = myStores[0].startsWith(brandPrefix) ? myStores[0] : `${brandPrefix}${rawName}店`;
         setSelectedStore(fullName);
       }
     } else if (!selectedManager && userRole === "manager" && currentUser) {
       setSelectedManager(currentUser.name);
     }
-  }, [userRole, currentUser, managers]);
+  }, [userRole, currentUser, managers, brandPrefix]);
 
   const handleReset = () => {
     if (confirm("確定要重置嗎？")) {
       setFormData(defaultFormData);
-      localStorage.removeItem("cyj_input_draft_v3");
+      const brandKey = typeof currentBrand === 'string' ? currentBrand : currentBrand?.id || 'unknown';
+      localStorage.removeItem(`input_draft_${brandKey}`);
       showToast("表格已重置", "info");
     }
   };
@@ -151,6 +189,7 @@ const StoreInputView = () => {
     if (inputDate > today) return showToast("不可提交未來日期", "error");
 
     const formattedInputDate = toStandardDateFormat(inputDate);
+    // 這裡 rawData 應該已經是當前品牌的資料 (由 AppContext 過濾)
     const existingReport = rawData.find((d) => toStandardDateFormat(d.date) === formattedInputDate && d.storeName === selectedStore);
     setExistingReportId(existingReport ? existingReport.id : null);
 
@@ -170,30 +209,35 @@ const StoreInputView = () => {
     setIsSubmitting(true);
     try {
       const normalizedDate = toStandardDateFormat(inputDate);
+      const brandId = typeof currentBrand === 'string' ? currentBrand : currentBrand?.id || 'unknown';
+      
       const payload = {
         date: normalizedDate,
         storeName: selectedStore,
+        // ★★★ 寫入當下品牌 ID，方便追蹤 ★★★
+        brandId: brandId, 
         ...Object.keys(formData).reduce((acc, key) => ({ ...acc, [key]: parseNumber(formData[key]) }), {}),
         timestamp: serverTimestamp(),
         submittedBy: currentUser?.name || "unknown",
       };
 
+      // ★★★ 使用 getCollectionPath 確保寫入當前品牌的資料夾 ★★★
       if (existingReportId) {
-        await setDoc(doc(db, "artifacts", appId, "public", "data", "daily_reports", existingReportId), payload);
+        await setDoc(doc(getCollectionPath("daily_reports"), existingReportId), payload);
         logActivity(userRole, currentUser?.name, "更新日報(覆蓋)", `${selectedStore} ${normalizedDate}`);
       } else {
-        await addDoc(collection(db, "artifacts", appId, "public", "data", "daily_reports"), payload);
+        await addDoc(getCollectionPath("daily_reports"), payload);
         logActivity(userRole, currentUser?.name, "提交日報", `${selectedStore} ${normalizedDate}`);
       }
 
       setFormData(defaultFormData);
-      localStorage.removeItem("cyj_input_draft_v3");
+      localStorage.removeItem(`input_draft_${brandId}`);
       setShowConfirmModal(false);
       setExistingReportId(null);
       showToast("提交成功", "success");
     } catch (err) {
       console.error(err);
-      showToast("提交失敗", "error");
+      showToast("提交失敗: " + err.message, "error");
     } finally {
       setIsSubmitting(false);
     }
@@ -223,7 +267,7 @@ const StoreInputView = () => {
   return (
     <div className="space-y-6">
       <div className="flex items-center gap-2 text-xs text-amber-600 bg-amber-50 p-2 rounded-lg justify-center">
-         <CheckCircle size={14} /> 店務日報：輸入內容將自動暫存
+         <CheckCircle size={14} /> 店務日報：輸入內容將自動暫存 ({brandPrefix})
       </div>
 
       <div className="bg-white p-6 rounded-2xl border border-stone-100 shadow-sm space-y-4">
@@ -371,21 +415,25 @@ const StoreInputView = () => {
           </div>
         </div>
       )}
+
     </div>
   );
 };
 
 // ============================================================================
-// ★★★ 子元件 B: 管理師專用輸入介面 (TherapistInputView) - 修正欄位名稱 ★★★
+// ★★★ 子元件 B: 管理師專用輸入介面 (TherapistInputView) ★★★
 // ============================================================================
 const TherapistInputView = () => {
-  const { currentUser, inputDate, setInputDate, showToast, logActivity } = useContext(AppContext);
+  const { 
+    currentUser, inputDate, setInputDate, showToast, logActivity,
+    getCollectionPath, currentBrand 
+  } = useContext(AppContext);
   
   const defaultPersonalData = {
     totalRevenue: "",        // 1. 今日總業績 (新+舊-退)
     newCustomerRevenue: "",  // 2. 今日新客業績
     newCustomerCount: "",    // 3. 今日新客人數
-    newCustomerClosings: "", // 4. 今日新客留單人數 (變數名不變，僅改 UI Label)
+    newCustomerClosings: "", // 4. 今日新客留單人數
     oldCustomerRevenue: "",  // 5. 今日舊客業績
     oldCustomerCount: "",    // 6. 今日舊客人數
     returnRevenue: "",       // 7. 今日當月退費業績
@@ -395,18 +443,16 @@ const TherapistInputView = () => {
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [hasSubmittedToday, setHasSubmittedToday] = useState(false);
 
-  // 視窗狀態
   const [showConfirmModal, setShowConfirmModal] = useState(false); 
   const [showDateWarningModal, setShowDateWarningModal] = useState(false); 
 
   const [debugInfo, setDebugInfo] = useState(null);
 
-  // ★ 更新：修改標籤名稱
   const LABELS = {
     totalRevenue: "今日總業績 (新客+舊客-退費)", 
     newCustomerRevenue: "新客業績",
     newCustomerCount: "新客人數",
-    newCustomerClosings: "新客留單人數", // ★ 更新為「留單」
+    newCustomerClosings: "新客留單人數", 
     oldCustomerRevenue: "舊客業績",
     oldCustomerCount: "舊客人數",
     returnRevenue: "今日當月退費業績", 
@@ -414,7 +460,6 @@ const TherapistInputView = () => {
 
   const today = getLocalTodayString();
 
-  // 喚醒監聽
   useEffect(() => {
     const handleWakeUp = () => {
       if (document.visibilityState === "visible" || document.hasFocus()) {
@@ -437,9 +482,9 @@ const TherapistInputView = () => {
     };
   }, [inputDate, formData, setInputDate]);
 
-  // 暫存讀取
   useEffect(() => {
-    const savedDraft = localStorage.getItem("cyj_therapist_draft_v2"); 
+    const brandKey = typeof currentBrand === 'string' ? currentBrand : currentBrand?.id || 'unknown';
+    const savedDraft = localStorage.getItem(`therapist_draft_${brandKey}`); 
     if (savedDraft) {
       try {
         const parsed = JSON.parse(savedDraft);
@@ -451,15 +496,14 @@ const TherapistInputView = () => {
         }
       } catch (e) { console.error(e); }
     }
-  }, []);
+  }, [currentBrand]);
 
-  // 寫入暫存
   useEffect(() => {
+    const brandKey = typeof currentBrand === 'string' ? currentBrand : currentBrand?.id || 'unknown';
     const draft = { formData, date: inputDate, timestamp: Date.now() };
-    localStorage.setItem("cyj_therapist_draft_v2", JSON.stringify(draft));
-  }, [formData, inputDate]);
+    localStorage.setItem(`therapist_draft_${brandKey}`, JSON.stringify(draft));
+  }, [formData, inputDate, currentBrand]);
 
-  // 自動計算總業績
   useEffect(() => {
     const newRev = parseNumber(formData.newCustomerRevenue) || 0;
     const oldRev = parseNumber(formData.oldCustomerRevenue) || 0;
@@ -479,7 +523,7 @@ const TherapistInputView = () => {
         const safeDate = normalizedDate.replace(/\//g, "-");
         const docId = `${safeDate}_${currentUser.id}`;
         
-        const docRef = doc(db, "artifacts", appId, "public", "data", "therapist_daily_reports", docId);
+        const docRef = doc(getCollectionPath("therapist_daily_reports"), docId);
         const docSnap = await getDocFromServer(docRef);
         setHasSubmittedToday(docSnap.exists());
       } catch (e) {
@@ -487,7 +531,7 @@ const TherapistInputView = () => {
       }
     };
     checkSubmission();
-  }, [inputDate, currentUser]);
+  }, [inputDate, currentUser, getCollectionPath]);
 
   const handleNumberChange = (key, value) => {
     const rawValue = value.replace(/,/g, "");
@@ -523,12 +567,14 @@ const TherapistInputView = () => {
       const normalizedDate = toStandardDateFormat(inputDate);
       const safeDate = normalizedDate.replace(/\//g, "-");
       const docId = `${safeDate}_${currentUser.id}`;
+      const brandId = typeof currentBrand === 'string' ? currentBrand : currentBrand?.id || 'unknown';
       
       const payload = {
         date: normalizedDate, 
         therapistId: currentUser.id,
         therapistName: currentUser.name,
         storeName: currentUser.store || "未註記店家", 
+        brandId: brandId, // 加入品牌 ID
         
         totalRevenue: parseNumber(formData.totalRevenue),
         newCustomerRevenue: parseNumber(formData.newCustomerRevenue),
@@ -541,7 +587,7 @@ const TherapistInputView = () => {
         updatedAt: serverTimestamp(),
       };
 
-      const docRef = doc(db, "artifacts", appId, "public", "data", "therapist_daily_reports", docId);
+      const docRef = doc(getCollectionPath("therapist_daily_reports"), docId);
       
       await setDoc(docRef, payload);
       
@@ -552,7 +598,7 @@ const TherapistInputView = () => {
         showToast("提交成功！", "success");
         setHasSubmittedToday(true);
         setFormData(defaultPersonalData);
-        localStorage.removeItem("cyj_therapist_draft_v2");
+        localStorage.removeItem(`therapist_draft_${brandId}`);
         setShowConfirmModal(false); 
       } else {
         throw new Error("寫入失敗，雲端查無資料。");
@@ -563,7 +609,7 @@ const TherapistInputView = () => {
       setDebugInfo({
         error: e.message,
         code: e.code || "unknown",
-        path: `artifacts/${appId}/.../therapist_daily_reports`,
+        path: `brands/.../therapist_daily_reports`,
       });
       showToast("提交失敗", "error");
     } finally {
@@ -616,7 +662,6 @@ const TherapistInputView = () => {
       <Card title="個人績效回報">
         <div className="space-y-6">
           
-          {/* 1. 總業績 (唯讀) */}
           <div className="bg-indigo-50 p-4 rounded-xl border border-indigo-100">
              <label className="text-xs font-bold text-indigo-500 mb-1 flex items-center gap-1">
                 <Calculator size={12}/> {LABELS.totalRevenue} (自動加總)
@@ -633,7 +678,6 @@ const TherapistInputView = () => {
              </div>
           </div>
 
-          {/* 2. 新客數據區 */}
           <div>
             <h4 className="text-xs font-bold text-stone-400 uppercase tracking-wider mb-2 flex items-center gap-2">
                 <Star size={12}/> 新客數據
@@ -654,7 +698,6 @@ const TherapistInputView = () => {
             </div>
           </div>
 
-          {/* 3. 舊客數據區 */}
           <div>
             <h4 className="text-xs font-bold text-stone-400 uppercase tracking-wider mb-2 flex items-center gap-2">
                 <Users size={12}/> 舊客數據
@@ -671,7 +714,6 @@ const TherapistInputView = () => {
             </div>
           </div>
 
-          {/* 4. 退費 */}
           <div>
              <label className="text-xs font-bold text-rose-500 mb-1 block flex items-center gap-1"><TrendingDown size={12}/> {LABELS.returnRevenue}</label>
              <input type="text" value={formData.returnRevenue} onChange={(e) => handleNumberChange("returnRevenue", e.target.value)} placeholder="0" className="w-full border-2 p-3 rounded-xl font-bold text-rose-600 border-rose-100 focus:border-rose-400 outline-none mb-4" inputMode="numeric"/>
@@ -684,7 +726,6 @@ const TherapistInputView = () => {
         </div>
       </Card>
 
-      {/* 日期警示視窗 */}
       {showDateWarningModal && (
         <div className="fixed inset-0 z-[1000] flex items-center justify-center p-4 bg-stone-900/80 backdrop-blur-sm">
           <div className="bg-white rounded-3xl shadow-2xl w-full max-w-sm overflow-hidden animate-in zoom-in-95 border-4 border-rose-100">
@@ -733,7 +774,6 @@ const TherapistInputView = () => {
         </div>
       )}
 
-      {/* 資料確認視窗 */}
       {showConfirmModal && (
         <div className="fixed inset-0 z-[999] flex items-center justify-center p-4 bg-stone-900/60 backdrop-blur-sm">
           <div className="bg-white rounded-2xl shadow-xl w-full max-w-md overflow-hidden animate-in zoom-in-95">

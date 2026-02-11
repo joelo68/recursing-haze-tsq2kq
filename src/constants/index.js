@@ -15,9 +15,17 @@ import {
   CalendarOff,
 } from "lucide-react";
 
+// ★★★ 新增：品牌定義 (Step 1) ★★★
+// pathType: 'legacy' 代表舊路徑(CYJ), 'standard' 代表新架構(新品牌)
+export const BRANDS = [
+  { id: "cyj", label: "CYJ", pathType: "legacy" },
+  { id: "anniu", label: "安妞", pathType: "standard" },
+  { id: "yibo", label: "伊啵", pathType: "standard" },
+];
+
 export const ROLES = {
   DIRECTOR: { id: "director", label: "總監", pass: "16500" },
-  // ★ 新增角色：教專 (TRAINER)，密碼由資料庫控制
+  // 教專 (TRAINER)，密碼由資料庫控制
   TRAINER: { id: "trainer", label: "教專", pass: null }, 
   MANAGER: { id: "manager", label: "區長", pass: null },
   STORE: { id: "store", label: "店經理", pass: null },
@@ -52,7 +60,7 @@ export const DEFAULT_PERMISSIONS = {
   // 總監擁有所有權限
   director: ALL_MENU_ITEMS.map((i) => i.id),
   
-  // ★ 教專權限：看人、不看店營收 (Ranking/Audit 需配合資料流過濾)
+  // 教專權限
   trainer: ["dashboard", "ranking", "audit", "settings", "t-targets", "t-schedule"],
 
   manager: ["dashboard", "annual", "targets", "regional", "store-analysis", "audit", "t-targets", "t-schedule"],

@@ -59,7 +59,9 @@ const AnnualView = () => {
     auditExclusions,
     handleUpdateAuditExclusions,
     userRole,
-    showToast
+    showToast,
+    // ★★★ 1. 引入 currentBrand ★★★
+    currentBrand
   } = useContext(AppContext);
 
   // ==========================================
@@ -71,6 +73,30 @@ const AnnualView = () => {
   // ★ 設定視窗狀態
   const [isConfigModalOpen, setIsConfigModalOpen] = useState(false);
   const [localExclusions, setLocalExclusions] = useState([]);
+
+  // ★★★ 2. 定義品牌前綴 ★★★
+  const brandPrefix = useMemo(() => {
+    let name = "CYJ";
+    if (currentBrand) {
+      const id = typeof currentBrand === 'string' ? currentBrand : (currentBrand.id || "CYJ");
+      const normalizedId = id.toLowerCase();
+      
+      if (normalizedId.includes("anniu") || normalizedId.includes("anew")) {
+        name = "安妞";
+      } else if (normalizedId.includes("yibo")) {
+        name = "伊啵";
+      } else {
+        name = "CYJ";
+      }
+    }
+    return name;
+  }, [currentBrand]);
+
+  // ★★★ 3. 通用店名清洗函式 ★★★
+  const cleanStoreName = (name) => {
+    if (!name) return "";
+    return name.replace(/CYJ|安妞|伊啵|Anew|Yibo|店/gi, "").trim();
+  };
 
   // 當全域年份改變時，重置為整年
   useEffect(() => {
@@ -129,14 +155,14 @@ const AnnualView = () => {
   }, [startMonthStr, endMonthStr, selectedYear]);
 
   // ==========================================
-  // 4. 核心計算邏輯 (★ 已加入排除邏輯)
+  // 4. 核心計算邏輯 (★ 已加入排除邏輯與品牌支援)
   // ==========================================
   const annualData = useMemo(() => {
-    // ★ 關鍵修改：過濾掉在排除名單中的店家
+    // ★ 關鍵修改：使用動態前綴生成店家完整名稱
     const visibleStoreNames = Object.values(managers)
       .flat()
-      .filter(storeName => !auditExclusions.includes(storeName)) // 排除邏輯
-      .map(s => `CYJ${s}店`);
+      .filter(storeName => !auditExclusions.includes(storeName)) // storeName 是簡稱 (如 "中山")
+      .map(s => `${brandPrefix}${s}店`); // 轉為完整名 (如 "安妞中山店")
 
     const monthList = [];
     let current = new Date(`${startMonthStr}-01`);
@@ -162,8 +188,8 @@ const AnnualView = () => {
     }));
 
     rawData.forEach(d => {
-      // ★ 資料面過濾：若該筆資料屬於被排除的店家，直接略過
-      const rawStoreName = d.storeName ? d.storeName.replace("CYJ", "").replace("店", "") : "";
+      // ★ 資料面過濾：清洗店名後比對排除名單
+      const rawStoreName = cleanStoreName(d.storeName);
       if (auditExclusions.includes(rawStoreName)) return;
 
       if (!d.date) return;
@@ -189,6 +215,7 @@ const AnnualView = () => {
 
     statsMap.forEach(stat => {
       visibleStoreNames.forEach(storeName => {
+        // key 格式: "安妞中山店_2024_1"
         const key = `${storeName}_${stat.y}_${stat.m}`;
         if (budgets[key]) {
           stat.budget += (budgets[key].cashTarget || 0);
@@ -218,7 +245,7 @@ const AnnualView = () => {
         traffic: totalTraffic,
       }
     };
-  }, [rawData, budgets, managers, startMonthStr, endMonthStr, auditExclusions]); // 加入 auditExclusions 相依性
+  }, [rawData, budgets, managers, startMonthStr, endMonthStr, auditExclusions, brandPrefix]); 
 
   const { monthlyStats, totals } = annualData;
 
@@ -237,7 +264,7 @@ const AnnualView = () => {
                  <Calendar size={24} />
                </div>
                <div>
-                 <h1 className="text-2xl font-bold text-stone-800">經營績效分析</h1>
+                 <h1 className="text-2xl font-bold text-stone-800">經營績效分析 ({brandPrefix})</h1>
                  <p className="text-xs text-stone-500 font-medium">Performance Analytics</p>
                </div>
              </div>
@@ -441,7 +468,7 @@ const AnnualView = () => {
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm p-4 animate-in fade-in duration-200">
           <div className="bg-white w-full max-w-lg rounded-2xl shadow-2xl overflow-hidden flex flex-col max-h-[90vh]">
             <div className="bg-stone-800 text-white p-4 font-bold text-lg flex justify-between items-center shrink-0">
-              <span className="flex items-center gap-2"><Ban size={20} className="text-rose-400"/> 設定不計算店家</span>
+              <span className="flex items-center gap-2"><Ban size={20} className="text-rose-400"/> 設定不計算店家 ({brandPrefix})</span>
               <button onClick={() => setIsConfigModalOpen(false)} className="hover:bg-white/10 p-1 rounded-lg transition-colors"><X size={20}/></button>
             </div>
             <div className="p-4 bg-stone-50 border-b border-stone-200 shrink-0 text-sm text-stone-500">

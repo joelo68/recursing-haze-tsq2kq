@@ -1,3 +1,4 @@
+// src/components/TargetView.jsx
 import React, { useState, useContext, useEffect, useMemo } from "react";
 import { 
   Save, Calendar, Store, DollarSign, CreditCard, TrendingUp, Lock, CheckCircle 
@@ -16,7 +17,10 @@ const TargetView = () => {
     currentUser, 
     budgets, 
     showToast, 
-    logActivity 
+    logActivity,
+    // ★★★ 1. 引入動態路徑與品牌資訊 ★★★
+    getCollectionPath,
+    currentBrand
   } = useContext(AppContext);
 
   // --- 狀態管理 ---
@@ -35,43 +39,88 @@ const TargetView = () => {
     }))
   );
 
-  // --- 計算可選店家 ---
-  const availableStores = useMemo(() => {
-    if (!selectedManager) {
-      if (userRole === "store" && currentUser) {
-        return (currentUser.stores || [currentUser.storeName]).map((s) =>
-          s.startsWith("CYJ") ? s : `CYJ${s}店`
-        );
+  // ★★★ 2. 定義品牌前綴 (與 Dashboard/History 一致，確保穩健) ★★★
+  const brandPrefix = useMemo(() => {
+    let name = "CYJ";
+    if (currentBrand) {
+      const id = typeof currentBrand === 'string' ? currentBrand : (currentBrand.id || "CYJ");
+      const normalizedId = id.toLowerCase();
+      
+      if (normalizedId.includes("anniu") || normalizedId.includes("anew")) {
+        name = "安妞";
+      } else if (normalizedId.includes("yibo")) {
+        name = "伊啵";
+      } else {
+        name = "CYJ";
       }
-      return [];
     }
-    return (managers[selectedManager] || []).map((s) => `CYJ${s}店`);
-  }, [selectedManager, managers, userRole, currentUser]);
+    return name;
+  }, [currentBrand]);
 
-  // --- 初始化權限與預設店家 ---
+  // ★★★ 3. 計算可選店家 (使用標準化命名邏輯) ★★★
+  const availableStores = useMemo(() => {
+    // 輔助函式：確保店名格式正確 (前綴 + 店名 + 店)
+    const formatStoreName = (s) => {
+      // 先移除可能已有的前綴和後綴，取得核心店名
+      const coreName = s.replace(/CYJ|安妞|伊啵|Anew|Yibo|店/gi, "").trim();
+      return `${brandPrefix}${coreName}店`;
+    };
+
+    if (userRole === "director" || userRole === "trainer") // 教專與總監
+      return selectedManager
+        ? (managers[selectedManager] || []).map(formatStoreName)
+        : [];
+        
+    if (userRole === "manager")
+      return Object.values(managers)
+        .flat()
+        .map(formatStoreName);
+        
+    if (userRole === "store" && currentUser)
+      return (currentUser.stores || [currentUser.storeName]).map(formatStoreName);
+      
+    return [];
+  }, [selectedManager, managers, currentUser, userRole, brandPrefix]);
+
+  // --- 初始化權限與預設店家 (修正自動選擇邏輯) ---
   useEffect(() => {
+    // 切換品牌時，若當前選擇的店不在新列表內，則重置
+    if (selectedStore && !availableStores.includes(selectedStore)) {
+      setSelectedStore("");
+    }
+
     if (userRole === "store" && currentUser) {
       const myStores = currentUser.stores || [currentUser.storeName];
       if (myStores.length > 0) {
-        const shortName = myStores[0].replace("CYJ", "").replace("店", "");
+        let rawName = myStores[0];
+        // 移除常見後綴與前綴，還原成「簡稱」以比對區長名單
+        rawName = rawName.replace(/CYJ|安妞|伊啵|Anew|Yibo|店/gi, "").trim();
+
         const foundMgr = Object.keys(managers).find((mgr) =>
-          managers[mgr].includes(shortName)
+          managers[mgr].includes(rawName)
         );
         if (foundMgr) setSelectedManager(foundMgr);
-        const fullName = myStores[0].startsWith("CYJ") ? myStores[0] : `CYJ${myStores[0]}店`;
+        
+        // 設定選中店名 (使用新前綴)
+        const fullName = `${brandPrefix}${rawName}店`;
         setSelectedStore(fullName);
       }
     } else if (userRole === "manager" && currentUser) {
       setSelectedManager(currentUser.name);
     }
-  }, [userRole, currentUser, managers]);
+  }, [userRole, currentUser, managers, brandPrefix, availableStores]); // 加入 availableStores 依賴
 
   // --- 從 budgets 載入既有資料 ---
   useEffect(() => {
-    if (!selectedStore) return;
+    if (!selectedStore) {
+      // 若沒選店家，重置為空
+      setMonthTargets(Array.from({ length: 12 }, (_, i) => ({ month: i + 1, cashTarget: "", accrualTarget: "" })));
+      return;
+    }
 
     const newTargets = Array.from({ length: 12 }, (_, i) => {
       const month = i + 1;
+      // Key 的格式必須與寫入時完全一致： "安妞中山店_2024_1"
       const key = `${selectedStore}_${selectedYear}_${month}`;
       const existing = budgets[key];
       
@@ -88,7 +137,7 @@ const TargetView = () => {
   // ★★★ 核心邏輯：判斷該月份是否鎖定 ★★★
   const isMonthLocked = (monthIndex) => {
     // 1. 總監和區長永遠不鎖定
-    if (userRole === "director" || userRole === "manager") return false;
+    if (userRole === "director" || userRole === "manager" || userRole === "trainer") return false;
 
     // 2. 店長：檢查資料庫是否已經有數字
     const month = monthIndex + 1;
@@ -140,8 +189,12 @@ const TargetView = () => {
 
         // 有輸入才存
         if (cash > 0 || accrual > 0) {
+           // Key: "安妞中山店_2024_1"
            const key = `${selectedStore}_${selectedYear}_${item.month}`;
-           const docRef = doc(db, "artifacts", appId, "public", "data", "monthly_targets", key);
+           
+           // ★★★ 3. 修正寫入路徑：使用動態路徑 getCollectionPath ★★★
+           const docRef = doc(getCollectionPath("monthly_targets"), key);
+           
            batch.set(docRef, {
              cashTarget: cash,
              accrualTarget: accrual,
@@ -184,7 +237,7 @@ const TargetView = () => {
               <div>
                 <h2 className="text-xl font-bold text-stone-800">年度目標設定</h2>
                 <div className="flex items-center gap-2 text-xs text-stone-500">
-                  <p>Annual Budget Planning</p>
+                  <p>Annual Budget Planning ({brandPrefix})</p>
                   {userRole === 'store' && (
                     <span className="flex items-center gap-1 text-amber-600 bg-amber-50 px-2 py-0.5 rounded-full">
                       <Lock size={10} /> 鎖定規則：已設定月份僅區長可修改
@@ -209,7 +262,7 @@ const TargetView = () => {
                  <Calendar className="absolute left-3 top-3.5 md:top-2.5 text-stone-400 pointer-events-none" size={16} />
               </div>
 
-              {/* 區域選擇 (僅總監) */}
+              {/* 區域選擇 (僅總監/教專) */}
               <div className="relative min-w-[120px] flex-1 md:flex-none">
                  <select
                     value={selectedManager}
@@ -217,7 +270,7 @@ const TargetView = () => {
                       setSelectedManager(e.target.value);
                       setSelectedStore("");
                     }}
-                    disabled={userRole !== "director"}
+                    disabled={userRole !== "director" && userRole !== "trainer"}
                     className="w-full pl-3 pr-8 py-3 md:py-2 bg-stone-50 border border-stone-200 rounded-xl font-bold text-stone-700 outline-none focus:border-indigo-400 disabled:opacity-50"
                   >
                     <option value="">選擇區域...</option>
@@ -248,7 +301,7 @@ const TargetView = () => {
 
         {selectedStore ? (
           <>
-            {/* ★★★ 1. 電腦版視圖 (Desktop Table) - 僅在 md 以上顯示 ★★★ */}
+            {/* 1. 電腦版視圖 (Desktop Table) */}
             <div className="hidden md:block">
               <Card title={`${selectedStore} - ${selectedYear} 年度預算表`}>
                 <div className="overflow-hidden rounded-xl border border-stone-200">
@@ -331,7 +384,7 @@ const TargetView = () => {
               </Card>
             </div>
 
-            {/* ★★★ 2. 手機版視圖 (Mobile Cards) - 僅在 md 以下顯示 ★★★ */}
+            {/* 2. 手機版視圖 (Mobile Cards) */}
             <div className="md:hidden space-y-4">
               <div className="flex items-center justify-between px-2">
                 <h3 className="font-bold text-stone-700 text-lg flex items-center gap-2">

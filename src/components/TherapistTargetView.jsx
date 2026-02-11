@@ -13,7 +13,10 @@ const TherapistTargetView = () => {
     therapistTargets,
     userRole,
     currentUser,
-    managers // 引入區域資料
+    managers, // 引入區域資料
+    // ★★★ 1. 引入動態路徑與品牌資訊 ★★★
+    getCollectionPath,
+    currentBrand
   } = useContext(AppContext);
 
   const [tTargetYear, setTTargetYear] = useState(new Date().getFullYear().toString());
@@ -25,33 +28,69 @@ const TherapistTargetView = () => {
   
   const [tLocalTargets, setTLocalTargets] = useState({});
 
+  // ★★★ 2. 定義品牌前綴 (與 Dashboard/TargetView 一致，確保穩健) ★★★
+  const brandPrefix = useMemo(() => {
+    let name = "CYJ";
+    if (currentBrand) {
+      const id = typeof currentBrand === 'string' ? currentBrand : (currentBrand.id || "CYJ");
+      const normalizedId = id.toLowerCase();
+      
+      if (normalizedId.includes("anniu") || normalizedId.includes("anew")) {
+        name = "安妞";
+      } else if (normalizedId.includes("yibo")) {
+        name = "伊啵";
+      } else {
+        name = "CYJ";
+      }
+    }
+    return name;
+  }, [currentBrand]);
+
   // 1. 初始化權限與預設值
   useEffect(() => {
+    // 切換品牌時重置
+    setSelectedRegion("");
+    setSelectedStore("");
+    setTTargetTherapist("");
+
+    // 輔助函式：清理店名 (使用正規表達式移除所有可能前綴)
+    const cleanStoreName = (name) => {
+      if (!name) return "";
+      return name.replace(/CYJ|安妞|伊啵|Anew|Yibo|店/gi, "").trim();
+    };
+
     if (userRole === 'therapist' && currentUser) {
       // 管理師：全部鎖定，直接選自己
-      // 反查自己的區域與店家 (為了顯示好看，雖然邏輯上只需 ID)
-      const myRegion = Object.keys(managers).find(mgr => managers[mgr].includes(currentUser.storeName?.replace("CYJ","").replace("店","")));
+      const rawStoreName = currentUser.storeName || currentUser.store || "";
+      const cleanName = cleanStoreName(rawStoreName);
+      
+      const myRegion = Object.keys(managers).find(mgr => managers[mgr].includes(cleanName));
       if (myRegion) setSelectedRegion(myRegion);
-      setSelectedStore(currentUser.store || "");
+      
+      // 設定店名 (使用清洗後的核心店名，以匹配 availableStores)
+      setSelectedStore(cleanName || currentUser.store); 
       setTTargetTherapist(currentUser.id);
     } 
     else if (userRole === 'store' && currentUser) {
-      // 店長：鎖定區域(選第一個找到的)，店家限制在自己管轄範圍
+      // 店長：鎖定區域，限制店家
       const myStores = currentUser.stores || [currentUser.storeName];
-      // 簡單起見，預設選第一個店的區域
       if (myStores.length > 0) {
-        const firstStore = myStores[0].replace("CYJ", "").replace("店", "");
-        const myRegion = Object.keys(managers).find(mgr => managers[mgr].includes(firstStore));
+        const firstRawName = myStores[0];
+        const cleanFirst = cleanStoreName(firstRawName);
+
+        const myRegion = Object.keys(managers).find(mgr => managers[mgr].includes(cleanFirst));
         if (myRegion) setSelectedRegion(myRegion);
-        // 若只有一家店，直接選中
-        if (myStores.length === 1) setSelectedStore(firstStore);
+        
+        if (myStores.length === 1) {
+             setSelectedStore(cleanFirst); 
+        }
       }
     }
     else if (userRole === 'manager' && currentUser) {
       // 區長：鎖定區域為自己
       setSelectedRegion(currentUser.name);
     }
-  }, [userRole, currentUser, managers]);
+  }, [userRole, currentUser, managers, brandPrefix, currentBrand]);
 
   // 2. 計算可用的店家列表 (依據區域)
   const availableStores = useMemo(() => {
@@ -59,10 +98,11 @@ const TherapistTargetView = () => {
     
     const regionStores = managers[selectedRegion] || [];
     
-    // 如果是店長，只能看自己管轄的店 (取交集)
+    // 如果是店長，只能看自己管轄的店
     if (userRole === 'store' && currentUser) {
-      const myStores = (currentUser.stores || [currentUser.storeName]).map(s => s.replace("CYJ", "").replace("店", ""));
-      return regionStores.filter(s => myStores.includes(s));
+      const myStoresRaw = (currentUser.stores || [currentUser.storeName]);
+      const myStoresClean = myStoresRaw.map(s => s.replace(/CYJ|安妞|伊啵|Anew|Yibo|店/gi, "").trim());
+      return regionStores.filter(s => myStoresClean.includes(s));
     }
     
     return regionStores;
@@ -71,6 +111,7 @@ const TherapistTargetView = () => {
   // 3. 計算可用的管理師列表 (依據店家)
   const availableTherapists = useMemo(() => {
     if (!selectedStore) return [];
+    // Therapists 資料庫裡的 store 欄位通常存的是 "簡稱" (例如 "中山")
     return therapists
       .filter(t => t.status === 'active' && t.store === selectedStore)
       .sort((a, b) => a.name.localeCompare(b.name));
@@ -80,6 +121,7 @@ const TherapistTargetView = () => {
   useEffect(() => {
     if (tTargetTherapist && tTargetYear) {
       const docId = `${tTargetTherapist}_${tTargetYear}`;
+      // 這裡依賴 AppContext 自動載入的 therapistTargets
       const data = therapistTargets[docId] || {};
       setTLocalTargets(data.monthlyTargets || {});
     } else {
@@ -87,19 +129,23 @@ const TherapistTargetView = () => {
     }
   }, [tTargetTherapist, tTargetYear, therapistTargets]);
 
-  // 5. 儲存處理
+  // 5. 儲存處理 (修正寫入路徑)
   const handleSaveTherapistTargets = async () => {
     if (!tTargetTherapist) return showToast("請選擇管理師", "error");
     try {
       const docId = `${tTargetTherapist}_${tTargetYear}`;
-      await setDoc(doc(db, "artifacts", appId, "public", "data", "therapist_targets", docId), {
+      
+      // ★★★ 3. 使用動態路徑 getCollectionPath ★★★
+      await setDoc(doc(getCollectionPath("therapist_targets"), docId), {
         therapistId: tTargetTherapist,
         year: tTargetYear,
         monthlyTargets: tLocalTargets,
         updatedAt: serverTimestamp()
       }, { merge: true });
+      
       showToast("目標已儲存", "success");
     } catch (e) {
+      console.error(e);
       showToast("儲存失敗", "error");
     }
   };
@@ -149,7 +195,8 @@ const TherapistTargetView = () => {
               >
                 <option value="">請選擇店家...</option>
                 {availableStores.map(store => (
-                  <option key={store} value={store}>{store}店</option>
+                  // 顯示時加上當前品牌前綴 (如 "安妞中山店")，但 value 保持核心簡稱
+                  <option key={store} value={store}>{brandPrefix}{store}店</option>
                 ))}
               </select>
             </div>
