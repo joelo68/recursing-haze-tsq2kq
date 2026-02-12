@@ -1,7 +1,7 @@
 // src/components/DashboardView.jsx
 import React, { useContext, useMemo, useState } from "react";
 import { XAxis, YAxis, CartesianGrid, Tooltip as RechartsTooltip, ResponsiveContainer, Line, ComposedChart, Area } from "recharts";
-import { TrendingUp, DollarSign, Target, Users, Award, Loader2, CheckSquare, Activity, Sparkles, ShoppingBag, CreditCard, FileWarning, Trophy, Medal, AlertTriangle, Crown, Map, User, Store as StoreIcon, ArrowRight, ArrowLeft, Frown, Flame, Zap, Download } from "lucide-react";
+import { TrendingUp, DollarSign, Target, Users, Award, Loader2, CheckSquare, Activity, Sparkles, ShoppingBag, CreditCard, FileWarning, Trophy, Medal, AlertTriangle, Crown, Map, User, Store as StoreIcon, ArrowRight, ArrowLeft, Frown, Flame, Zap, Download, UserCheck } from "lucide-react";
 import { ViewWrapper, Card } from "./SharedUI";
 import { formatNumber } from "../utils/helpers";
 import { AppContext } from "../AppContext";
@@ -86,6 +86,8 @@ const DashboardView = () => {
     const stats = {
       cash: 0, accrual: 0, skincareSales: 0, traffic: 0,
       newCustomers: 0, newCustomerClosings: 0,
+      newCustomerSales: 0, // ★ 新增：用於修正計算
+      operationalAccrual: 0, // ★ 新增：用於修正計算
       budget: 0, accrualBudget: 0,
       dailyData: Array.from({ length: daysInMonth }, (_, i) => ({
         date: `${m}/${i + 1}`,
@@ -106,13 +108,19 @@ const DashboardView = () => {
       const cash = (Number(report.cash) || 0) - (Number(report.refund) || 0);
       const accrual = Number(report.accrual) || 0;
       const traffic = Number(report.traffic) || 0;
+      const skincareSales = Number(report.skincareSales) || 0;
+      
+      // ★ 邏輯修正：優先取用 operationalAccrual，若無則回推 (總權責 - 產品)
+      const opAccrual = Number(report.operationalAccrual) || (accrual - skincareSales);
 
       stats.cash += cash;
       stats.accrual += accrual;
-      stats.skincareSales += (Number(report.skincareSales) || 0);
+      stats.skincareSales += skincareSales;
       stats.traffic += traffic;
       stats.newCustomers += (Number(report.newCustomers) || 0);
       stats.newCustomerClosings += (Number(report.newCustomerClosings) || 0);
+      stats.newCustomerSales += (Number(report.newCustomerSales) || 0); // 累加新客業績
+      stats.operationalAccrual += opAccrual; // 累加操作權責
 
       const dayIndex = rDate.getDate() - 1;
       if (stats.dailyData[dayIndex]) {
@@ -134,26 +142,20 @@ const DashboardView = () => {
 
     // 衍生指標
     const achievement = stats.budget > 0 ? (stats.cash / stats.budget) * 100 : 0;
-    const avgTrafficASP = stats.traffic > 0 ? Math.round(stats.accrual / stats.traffic) : 0;
-    const avgNewCustomerASP = stats.newCustomers > 0 ? Math.round(stats.cash / stats.newCustomers) : 0;
+    
+    // ★ 修正 KPI：使用操作權責 (排除產品) 計算
+    const avgTrafficASP = stats.traffic > 0 ? Math.round(stats.operationalAccrual / stats.traffic) : 0;
+    
+    // ★ 修正 KPI：使用新客業績 (排除舊客) 計算
+    const avgNewCustomerASP = stats.newCustomers > 0 ? Math.round(stats.newCustomerSales / stats.newCustomers) : 0;
+    
     const projection = daysPassed > 0 ? Math.round((stats.cash / daysPassed) * daysInMonth) : 0;
 
-    // ★★★ 關鍵修正：裁切圖表資料 ★★★
-    // 如果是當月，只取到 daysPassed (今天)
-    // 如果是未來月份 (daysPassed === 0)，顯示整月空網格，避免圖表壞掉
+    // 裁切圖表資料
     const slicedDailyTotals = stats.dailyData.slice(0, daysPassed === 0 ? daysInMonth : daysPassed);
 
     return {
-      grandTotal: {
-        cash: stats.cash,
-        accrual: stats.accrual,
-        skincareSales: stats.skincareSales,
-        traffic: stats.traffic,
-        newCustomers: stats.newCustomers,
-        newCustomerClosings: stats.newCustomerClosings,
-        budget: stats.budget,
-        projection
-      },
+      grandTotal: { ...stats, projection },
       dailyTotals: slicedDailyTotals,
       totalAchievement: achievement,
       avgTrafficASP,
@@ -164,7 +166,7 @@ const DashboardView = () => {
 
   }, [allReports, budgets, selectedYear, selectedMonth, visibleStores, brandPrefix, cleanName]);
 
-  // --- 店家排行邏輯 ---
+  // --- 店家排行邏輯 (維持不變) ---
   const myStoreRankings = useMemo(() => {
     if ((userRole !== 'store' && userRole !== 'manager') || !allReports) return [];
     
@@ -205,7 +207,7 @@ const DashboardView = () => {
     });
   }, [userRole, allReports, visibleStores, budgets, selectedYear, selectedMonth, cleanName]);
 
-  // --- 管理師數據邏輯 ---
+  // --- 管理師數據邏輯 (新增 KPI 計算) ---
   const therapistStats = useMemo(() => {
     if (!therapistReports) return { rankings: [], myStats: null, grandTotal: {} };
     
@@ -247,6 +249,7 @@ const DashboardView = () => {
         const newAsp = item.newCustomerRevenue / newCount;
         const oldAsp = item.oldCustomerRevenue / oldCount;
 
+        // ★ 新增 newAsp 與 oldAsp 到回傳物件
         return { ...item, revenueMix: `${newMix}% / ${oldMix}%`, newClosingRate: newRate, newAsp, oldAsp };
     }).sort((a, b) => b.totalRevenue - a.totalRevenue);
 
@@ -265,14 +268,17 @@ const DashboardView = () => {
         myStats = rankings.find(r => r.id === currentUser.id); 
     }
     
+    // ★ 修正：確保 grandTotal 累加人數，防止白畫面或 NaN
     const grandTotal = rankings.reduce((acc, curr) => ({ 
         totalRevenue: acc.totalRevenue + curr.totalRevenue, 
         serviceCount: acc.serviceCount + curr.serviceCount, 
         newCustomerRevenue: acc.newCustomerRevenue + curr.newCustomerRevenue, 
         oldCustomerRevenue: acc.oldCustomerRevenue + curr.oldCustomerRevenue,
+        newCustomerCount: acc.newCustomerCount + curr.newCustomerCount, // 累加
+        oldCustomerCount: acc.oldCustomerCount + curr.oldCustomerCount, // 累加
         returnRevenue: acc.returnRevenue + curr.returnRevenue, 
         count: acc.count + 1 
-    }), { totalRevenue: 0, serviceCount: 0, newCustomerRevenue: 0, oldCustomerRevenue: 0, returnRevenue: 0, count: 0 });
+    }), { totalRevenue: 0, serviceCount: 0, newCustomerRevenue: 0, oldCustomerRevenue: 0, newCustomerCount: 0, oldCustomerCount: 0, returnRevenue: 0, count: 0 });
     
     return { rankings, myStats, grandTotal };
   }, [therapistReports, selectedYear, selectedMonth, userRole, currentUser]);
@@ -381,12 +387,47 @@ const DashboardView = () => {
               return ( <div className={`${bgClass} rounded-3xl p-6 text-white shadow-xl ${shadowClass} relative overflow-hidden transition-all duration-500`}> <div className="absolute top-0 right-0 p-4 opacity-10"><info.icon size={140} /></div> <div className="relative z-10 flex flex-col md:flex-row justify-between items-end gap-6"> <div> <div className="flex items-center gap-3 mb-2"><span className="bg-white/20 px-3 py-1 rounded-full text-xs font-bold backdrop-blur-sm flex items-center gap-1">{status === 'DANGER' && <Flame size={12} className="animate-pulse"/>}No.{therapistStats.myStats.rank}</span><span className="text-white/80 font-bold tracking-wider text-sm">{therapistStats.myStats.store}店</span></div><h2 className="text-3xl md:text-4xl font-extrabold mb-1">{therapistStats.myStats.name}</h2><div className="mt-2 p-3 bg-black/10 rounded-xl backdrop-blur-md border border-white/10 max-w-md"><p className="font-bold text-sm flex items-center gap-2">{status === 'DANGER' && <Frown size={16}/>}{info.title}</p><p className="text-xs text-white/70 mt-1">{info.sub}</p></div> </div> <div className="flex gap-6 text-right"> <div><p className="text-xs text-white/60 font-bold uppercase mb-1">個人總業績</p><p className="text-3xl font-mono font-bold">{fmtMoney(therapistStats.myStats.totalRevenue)}</p></div> <div><p className="text-xs text-white/60 font-bold uppercase mb-1">新客締結率</p><p className="text-3xl font-mono font-bold">{therapistStats.myStats.newClosingRate.toFixed(0)}%</p></div> </div> </div> </div> );
             })()}
             
-            {(userRole !== 'therapist') && ( <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-5 gap-4"> <MiniKpiCard title="管理師總業績" value={fmtMoney(therapistStats.grandTotal.totalRevenue)} icon={DollarSign} color="text-indigo-500" subText={`${therapistStats.grandTotal.count} 位在職人員`} /> <MiniKpiCard title="管理師新客業績" value={fmtMoney(therapistStats.grandTotal.newCustomerRevenue)} icon={Sparkles} color="text-amber-500" /> <MiniKpiCard title="管理師舊客業績" value={fmtMoney(therapistStats.grandTotal.oldCustomerRevenue)} icon={TrendingUp} color="text-cyan-500" /> <MiniKpiCard title="管理師新舊客佔比" value={`${Math.round((therapistStats.grandTotal.newCustomerRevenue / (therapistStats.grandTotal.totalRevenue || 1)) * 100)}% / ${Math.round((therapistStats.grandTotal.oldCustomerRevenue / (therapistStats.grandTotal.totalRevenue || 1)) * 100)}%`} icon={Activity} color="text-fuchsia-500" subText="新客 / 舊客" /> <MiniKpiCard title="管理師退費總額" value={fmtMoney(therapistStats.grandTotal.returnRevenue)} icon={FileWarning} color="text-rose-500" /> </div> )}
+            {(userRole !== 'therapist') && ( 
+                <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-5 gap-4"> 
+                    <MiniKpiCard title="管理師總業績" value={fmtMoney(therapistStats.grandTotal.totalRevenue)} icon={DollarSign} color="text-indigo-500" subText={`${therapistStats.grandTotal.count} 位在職人員`} /> 
+                    <MiniKpiCard title="管理師新客業績" value={fmtMoney(therapistStats.grandTotal.newCustomerRevenue)} icon={Sparkles} color="text-amber-500" /> 
+                    <MiniKpiCard title="管理師舊客業績" value={fmtMoney(therapistStats.grandTotal.oldCustomerRevenue)} icon={TrendingUp} color="text-cyan-500" /> 
+                    
+                    {/* ★ 新增：新舊客佔比 (補回遺失的項目) ★ */}
+                    <MiniKpiCard 
+                        title="管理師新舊客佔比" 
+                        value={`${Math.round((therapistStats.grandTotal.newCustomerRevenue / (therapistStats.grandTotal.totalRevenue || 1)) * 100)}% / ${Math.round((therapistStats.grandTotal.oldCustomerRevenue / (therapistStats.grandTotal.totalRevenue || 1)) * 100)}%`} 
+                        icon={Activity} 
+                        color="text-fuchsia-500" 
+                        subText="新客 / 舊客" 
+                    /> 
+                    
+                    <MiniKpiCard title="管理師退費總額" value={fmtMoney(therapistStats.grandTotal.returnRevenue)} icon={FileWarning} color="text-rose-500" /> 
+                    
+                    {/* ★ 新增：新客平均業績 ★ */}
+                    <MiniKpiCard 
+                        title="新客平均業績" 
+                        value={fmtMoney(therapistStats.grandTotal.newCustomerCount > 0 ? Math.round(therapistStats.grandTotal.newCustomerRevenue / therapistStats.grandTotal.newCustomerCount) : 0)} 
+                        icon={Award} 
+                        color="text-emerald-500" 
+                        subText={<>人數 <span className="font-bold">{fmtNum(therapistStats.grandTotal.newCustomerCount)}</span></>}
+                    /> 
+
+                    {/* ★ 新增：舊客平均業績 ★ */}
+                    <MiniKpiCard 
+                        title="舊客平均業績" 
+                        value={fmtMoney(therapistStats.grandTotal.oldCustomerCount > 0 ? Math.round(therapistStats.grandTotal.oldCustomerRevenue / therapistStats.grandTotal.oldCustomerCount) : 0)} 
+                        icon={UserCheck} 
+                        color="text-blue-500" 
+                        subText={<>人數 <span className="font-bold">{fmtNum(therapistStats.grandTotal.oldCustomerCount)}</span></>}
+                    /> 
+                </div> 
+            )}
             
             <Card title="管理師績效排行榜" subtitle="依本月個人總業績排序 (即時更新)">
               <div className="grid grid-cols-1 w-full">
                 <div className="flex justify-end mb-4"><button onClick={handleExportCSV} className="flex items-center gap-2 px-4 py-2 bg-emerald-50 text-emerald-600 rounded-xl text-sm font-bold hover:bg-emerald-100 transition-colors border border-emerald-100"><Download size={16} /> 匯出 CSV</button></div>
-                <div className="overflow-x-auto w-full pb-2"><table className="w-full text-left border-collapse min-w-[1200px] whitespace-nowrap"><thead><tr className="text-xs font-bold text-stone-400 border-b border-stone-100 bg-stone-50/50"><th className="p-3 md:p-4 w-16 text-center">排名</th><th className="p-3 md:p-4">姓名</th><th className="p-3 md:p-4">所屬店家</th><th className="p-3 md:p-4 text-right">個人總業績</th><th className="p-3 md:p-4 text-right">新客業績</th><th className="p-3 md:p-4 text-right">舊客業績</th><th className="p-3 md:p-4 text-center">新舊客佔比</th><th className="p-3 md:p-4 text-right">新客締結率</th><th className="p-3 md:p-4 text-right">新客平均業績</th><th className="p-3 md:p-4 text-right">舊客平均業績</th></tr></thead><tbody className="text-sm">{therapistStats.rankings.filter(t => userRole !== 'therapist' || t.id === currentUser?.id).map((t, idx) => (<tr key={t.id} className={`border-b border-stone-50 hover:bg-stone-50 transition-colors ${currentUser?.id === t.id ? "bg-indigo-50 hover:bg-indigo-100" : ""}`}><td className="p-3 md:p-4 text-center"><span className={`inline-flex items-center justify-center w-8 h-8 rounded-full text-xs font-bold ${t.rank <= 3 ? "bg-amber-100 text-amber-700 ring-4 ring-amber-50" : t.status === "DANGER" ? "bg-rose-100 text-rose-700 ring-4 ring-rose-50" : "bg-stone-100 text-stone-500"}`}>{t.rank}</span></td><td className="p-3 md:p-4 font-bold text-stone-700 flex items-center gap-2">{t.name}{currentUser?.id === t.id && <span className="px-2 py-0.5 bg-indigo-200 text-indigo-700 text-[10px] rounded-full">ME</span>}{t.status === "DANGER" && <span className="text-[10px] bg-rose-100 text-rose-600 px-1.5 py-0.5 rounded font-bold">加油</span>}</td><td className="p-3 md:p-4 text-stone-500">{t.store}店</td><td className="p-3 md:p-4 text-right font-mono font-bold text-indigo-600">{fmtMoney(t.totalRevenue)}</td><td className="p-3 md:p-4 text-right font-mono text-stone-600">{fmtMoney(t.newCustomerRevenue)}</td><td className="p-3 md:p-4 text-right font-mono text-stone-600">{fmtMoney(t.oldCustomerRevenue)}</td><td className="p-3 md:p-4 text-center font-mono text-xs text-stone-400">{t.revenueMix}</td><td className="p-3 md:p-4 text-right font-mono font-bold text-stone-700">{t.newClosingRate.toFixed(0)}%</td><td className="p-3 md:p-4 text-right font-mono text-stone-600">{fmtNum(Math.round(t.newAsp))}</td><td className="p-3 md:p-4 text-right font-mono text-stone-600">{fmtNum(Math.round(t.oldAsp))}</td></tr>))} {therapistStats.rankings.length === 0 && (<tr><td colSpan={10} className="p-8 text-center text-stone-400">本月尚無資料</td></tr>)}</tbody></table></div>
+                <div className="overflow-x-auto w-full pb-2"><table className="w-full text-left border-collapse min-w-[1200px] whitespace-nowrap"><thead><tr className="text-xs font-bold text-stone-400 border-b border-stone-100 bg-stone-50/50"><th className="p-3 md:p-4 w-16 text-center">排名</th><th className="p-3 md:p-4">姓名</th><th className="p-3 md:p-4">所屬店家</th><th className="p-3 md:p-4 text-right">個人總業績</th><th className="p-3 md:p-4 text-right">新客業績</th><th className="p-3 md:p-4 text-right">舊客業績</th><th className="p-3 md:p-4 text-center">新舊客佔比</th><th className="p-3 md:p-4 text-center">新客平均</th><th className="p-3 md:p-4 text-center">舊客平均</th><th className="p-3 md:p-4 text-right">新客締結率</th></tr></thead><tbody className="text-sm">{therapistStats.rankings.filter(t => userRole !== 'therapist' || t.id === currentUser?.id).map((t, idx) => (<tr key={t.id} className={`border-b border-stone-50 hover:bg-stone-50 transition-colors ${currentUser?.id === t.id ? "bg-indigo-50 hover:bg-indigo-100" : ""}`}><td className="p-3 md:p-4 text-center"><span className={`inline-flex items-center justify-center w-8 h-8 rounded-full text-xs font-bold ${t.rank <= 3 ? "bg-amber-100 text-amber-700 ring-4 ring-amber-50" : t.status === "DANGER" ? "bg-rose-100 text-rose-700 ring-4 ring-rose-50" : "bg-stone-100 text-stone-500"}`}>{t.rank}</span></td><td className="p-3 md:p-4 font-bold text-stone-700 flex items-center gap-2">{t.name}{currentUser?.id === t.id && <span className="px-2 py-0.5 bg-indigo-200 text-indigo-700 text-[10px] rounded-full">ME</span>}{t.status === "DANGER" && <span className="text-[10px] bg-rose-100 text-rose-600 px-1.5 py-0.5 rounded font-bold">加油</span>}</td><td className="p-3 md:p-4 text-stone-500">{t.store}店</td><td className="p-3 md:p-4 text-right font-mono font-bold text-indigo-600">{fmtMoney(t.totalRevenue)}</td><td className="p-3 md:p-4 text-right font-mono text-stone-600">{fmtMoney(t.newCustomerRevenue)}</td><td className="p-3 md:p-4 text-right font-mono text-stone-600">{fmtMoney(t.oldCustomerRevenue)}</td><td className="p-3 md:p-4 text-center font-mono text-xs text-stone-400">{t.revenueMix}</td><td className="p-3 md:p-4 text-center font-mono font-bold text-fuchsia-600">{fmtMoney(Math.round(t.newAsp))}</td><td className="p-3 md:p-4 text-center font-mono font-bold text-blue-600">{fmtMoney(Math.round(t.oldAsp))}</td><td className="p-3 md:p-4 text-right font-mono font-bold text-stone-700">{t.newClosingRate.toFixed(0)}%</td></tr>))} {therapistStats.rankings.length === 0 && (<tr><td colSpan={10} className="p-8 text-center text-stone-400">本月尚無資料</td></tr>)}</tbody></table></div>
                 <div className="md:hidden py-2 text-center text-stone-400 text-xs flex justify-center items-center gap-1 bg-stone-50 rounded-b-xl border-t border-stone-100"><ArrowLeft size={12}/> 左右滑動以查看更多 <ArrowRight size={12}/></div>
               </div>
             </Card>
