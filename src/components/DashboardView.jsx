@@ -15,7 +15,7 @@ const DashboardView = () => {
 
   const [viewMode, setViewMode] = useState((userRole === 'therapist' || userRole === 'trainer') ? 'therapist' : 'store');
 
-  // ★★★ 1. 品牌資訊與前綴邏輯 ★★★
+  // 1. 品牌資訊與前綴邏輯
   const { brandInfo, brandPrefix } = useMemo(() => {
     let id = "CYJ";
     let name = "CYJ"; 
@@ -41,7 +41,31 @@ const DashboardView = () => {
     return { brandInfo: { id, name }, brandPrefix: name };
   }, [currentBrand]);
 
-  // ★★★ 2. 本地計算 Dashboard 統計數據 (移除小數點) ★★★
+  // 2. 輔助函式：清洗店名 (統一轉為簡稱)
+  const cleanName = useMemo(() => (name) => {
+    if (!name) return "";
+    return name
+      .replace(new RegExp(`^(${brandPrefix}|CYJ|Anew|Yibo)`, 'i'), '')
+      .replace(/店$/, '')
+      .trim();
+  }, [brandPrefix]);
+
+  // 3. 計算當前使用者可見的店家列表 (權限控制)
+  const visibleStores = useMemo(() => {
+    if (userRole === 'director') {
+      return Object.values(managers).flat();
+    }
+    if (userRole === 'manager' && currentUser) {
+      return managers[currentUser.name] || [];
+    }
+    if (userRole === 'store' && currentUser) {
+      const rawStores = currentUser.stores || [currentUser.storeName];
+      return rawStores.map(s => cleanName(s)).filter(s => s);
+    }
+    return []; 
+  }, [userRole, currentUser, managers, cleanName]);
+
+  // 4. 本地計算 Dashboard 統計數據 (含圖表日期裁切)
   const dashboardStats = useMemo(() => {
     if (!allReports) return null;
 
@@ -49,16 +73,16 @@ const DashboardView = () => {
     const m = parseInt(selectedMonth);
     const daysInMonth = new Date(y, m, 0).getDate();
     
-    // 計算經過天數
     const now = new Date();
-    let daysPassed = daysInMonth; // 預設為整月
+    let daysPassed = daysInMonth; 
+    
+    // 判斷經過天數
     if (now.getFullYear() === y && (now.getMonth() + 1) === m) {
-        daysPassed = now.getDate();
+        daysPassed = now.getDate(); // 如果是這個月，只算到今天
     } else if (now < new Date(y, m - 1, 1)) {
         daysPassed = 0; // 未來月份
     }
 
-    // 初始化累加器
     const stats = {
       cash: 0, accrual: 0, skincareSales: 0, traffic: 0,
       newCustomers: 0, newCustomerClosings: 0,
@@ -71,12 +95,15 @@ const DashboardView = () => {
       }))
     };
 
-    // 篩選當月資料並加總
+    // 篩選並加總資料
     allReports.forEach(report => {
       const rDate = new Date(report.date);
       if (rDate.getFullYear() !== y || (rDate.getMonth() + 1) !== m) return;
 
-      const cash = (Number(report.cash) || 0) - (Number(report.refund) || 0); // 扣除退費
+      const reportStoreClean = cleanName(report.storeName);
+      if (!visibleStores.includes(reportStoreClean)) return;
+
+      const cash = (Number(report.cash) || 0) - (Number(report.refund) || 0);
       const accrual = Number(report.accrual) || 0;
       const traffic = Number(report.traffic) || 0;
 
@@ -87,7 +114,6 @@ const DashboardView = () => {
       stats.newCustomers += (Number(report.newCustomers) || 0);
       stats.newCustomerClosings += (Number(report.newCustomerClosings) || 0);
 
-      // 日資料 (用於圖表)
       const dayIndex = rDate.getDate() - 1;
       if (stats.dailyData[dayIndex]) {
         stats.dailyData[dayIndex].cash += cash;
@@ -95,9 +121,8 @@ const DashboardView = () => {
       }
     });
 
-    // 計算目標 (Budget)
-    const allStoreNames = Object.values(managers).flat();
-    allStoreNames.forEach(storeName => {
+    // 計算目標
+    visibleStores.forEach(storeName => {
         const fullName = `${brandPrefix}${storeName}店`;
         const budgetKey = `${fullName}_${y}_${m}`;
         const b = budgets[budgetKey];
@@ -109,13 +134,14 @@ const DashboardView = () => {
 
     // 衍生指標
     const achievement = stats.budget > 0 ? (stats.cash / stats.budget) * 100 : 0;
-    
-    // ★ 修改：加入 Math.round 確保平均客單為整數
     const avgTrafficASP = stats.traffic > 0 ? Math.round(stats.accrual / stats.traffic) : 0;
     const avgNewCustomerASP = stats.newCustomers > 0 ? Math.round(stats.cash / stats.newCustomers) : 0;
-    
-    // ★ 修改：加入 Math.round 確保推估值為整數
     const projection = daysPassed > 0 ? Math.round((stats.cash / daysPassed) * daysInMonth) : 0;
+
+    // ★★★ 關鍵修正：裁切圖表資料 ★★★
+    // 如果是當月，只取到 daysPassed (今天)
+    // 如果是未來月份 (daysPassed === 0)，顯示整月空網格，避免圖表壞掉
+    const slicedDailyTotals = stats.dailyData.slice(0, daysPassed === 0 ? daysInMonth : daysPassed);
 
     return {
       grandTotal: {
@@ -128,7 +154,7 @@ const DashboardView = () => {
         budget: stats.budget,
         projection
       },
-      dailyTotals: stats.dailyData,
+      dailyTotals: slicedDailyTotals,
       totalAchievement: achievement,
       avgTrafficASP,
       avgNewCustomerASP,
@@ -136,7 +162,7 @@ const DashboardView = () => {
       daysInMonth
     };
 
-  }, [allReports, budgets, selectedYear, selectedMonth, managers, brandPrefix]);
+  }, [allReports, budgets, selectedYear, selectedMonth, visibleStores, brandPrefix, cleanName]);
 
   // --- 店家排行邏輯 ---
   const myStoreRankings = useMemo(() => {
@@ -173,28 +199,11 @@ const DashboardView = () => {
       isBottom5: (index + 1) > (rankingList.length - 5) 
     }));
     
-    let myManagedStores = [];
-    if (userRole === 'store' && currentUser) {
-      myManagedStores = (currentUser.stores || [currentUser.storeName] || []).filter(s => s);
-    } else if (userRole === 'manager' && managers && currentUser) {
-      myManagedStores = managers[currentUser.name] || [];
-    }
-
     return fullRankedList.filter(item => {
-        const cleanItemName = item.storeName
-            .replace(new RegExp(`^(${brandPrefix}|CYJ|Anew|Yibo)`, 'i'), '')
-            .replace(/店$/, '')
-            .trim();
-
-        return myManagedStores.some(myStore => {
-            const cleanMyStore = myStore
-                .replace(new RegExp(`^(${brandPrefix}|CYJ|Anew|Yibo)`, 'i'), '')
-                .replace(/店$/, '')
-                .trim();
-            return cleanItemName === cleanMyStore;
-        });
+        const cleanItemName = cleanName(item.storeName);
+        return visibleStores.includes(cleanItemName);
     });
-  }, [userRole, allReports, currentUser, managers, budgets, selectedYear, selectedMonth, brandPrefix]);
+  }, [userRole, allReports, visibleStores, budgets, selectedYear, selectedMonth, cleanName]);
 
   // --- 管理師數據邏輯 ---
   const therapistStats = useMemo(() => {
