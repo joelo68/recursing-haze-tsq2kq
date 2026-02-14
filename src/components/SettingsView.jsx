@@ -3,7 +3,8 @@ import React, { useState, useContext, useEffect, useMemo } from "react";
 import {
   Save, Plus, Trash2, Edit2, Edit, Lock, User, Store, Target,
   CheckCircle, AlertCircle, X, Shield, ChevronDown, Search,
-  UserCheck, UserX, Key, Calendar, DollarSign, Users, LayoutGrid
+  UserCheck, UserX, Key, Calendar, DollarSign, Users, LayoutGrid,
+  Database // ★ 新增 Database 圖示
 } from "lucide-react";
 import { 
   doc, setDoc, updateDoc, deleteField, collection, addDoc, deleteDoc, getDoc,
@@ -15,6 +16,7 @@ import { AppContext } from "../AppContext";
 import { ViewWrapper, Card } from "./SharedUI";
 import { DEFAULT_PERMISSIONS, ALL_MENU_ITEMS } from "../constants/index";
 import { generateUUID } from "../utils/helpers";
+import SystemMaintenance from "./SystemMaintenance"; // ★ 引入新元件
 
 const SettingsView = () => {
   const {
@@ -29,7 +31,6 @@ const SettingsView = () => {
   const [localTargets, setLocalTargets] = useState(targets);
   const [localPermissions, setLocalPermissions] = useState(permissions || DEFAULT_PERMISSIONS);
   
-  // ★★★ 關鍵修正：引入本地狀態，解決畫面不更新問題 ★★★
   const [localManagers, setLocalManagers] = useState(managers || {});
 
   // 當 Context 的 managers 改變時 (例如切換品牌)，同步更新本地狀態
@@ -65,7 +66,9 @@ const SettingsView = () => {
       { id: "shops", label: "店家管理", isAdminOnly: true },
       { id: "stores", label: "店經理帳號", isAdminOnly: true },
       { id: "managers", label: "組織架構", isAdminOnly: true },
-      { id: "therapists", label: "人員帳號", isAdminOnly: true }
+      { id: "therapists", label: "人員帳號", isAdminOnly: true },
+      // ★★★ 新增：系統維護頁籤 (僅限總監) ★★★
+      { id: "maintenance", label: "系統維護", isAdminOnly: true, icon: Database }
     ];
     allTabsDefinition.forEach(tab => {
       if (userRole === 'director') {
@@ -88,7 +91,6 @@ const SettingsView = () => {
     }
   }, [visibleTabs, activeTab]);
 
-  // ★★★ 修改：使用 localManagers 進行渲染 ★★★
   const managerEntries = useMemo(() => {
     const currentManagers = localManagers || {};
     const entries = Object.entries(currentManagers);
@@ -101,7 +103,7 @@ const SettingsView = () => {
       if (b[0] === UNASSIGNED_KEY) return -1;
       return a[0].localeCompare(b[0]);
     });
-  }, [localManagers]); // 依賴改為 localManagers
+  }, [localManagers]);
 
   const availableTherapists = useMemo(() => {
     let list = therapists.filter(t => t.status === 'active');
@@ -130,10 +132,6 @@ const SettingsView = () => {
   const handleSavePermissions = async () => { try { await setDoc(getDocPath("permissions"), localPermissions); showToast("權限設定已更新", "success"); } catch (e) { showToast("更新失敗", "error"); } };
   const togglePermission = (role, menuId) => { const current = localPermissions[role] || []; const updated = current.includes(menuId) ? current.filter((id) => id !== menuId) : [...current, menuId]; setLocalPermissions({ ...localPermissions, [role]: updated }); };
   
-  // ------------------------------------------------------------------
-  // 核心邏輯：店家管理 (本地更新 + 遠端寫入)
-  // ------------------------------------------------------------------
-
   const handleAddGlobalStore = async () => { 
     if (!newShop.name || !newShop.manager) return showToast("請輸入完整資訊", "error"); 
     try { 
@@ -149,7 +147,7 @@ const SettingsView = () => {
       }
 
       await setDoc(docRef, { managers: newManagers }); 
-      setLocalManagers(newManagers); // ★ 立即更新 UI
+      setLocalManagers(newManagers);
 
       setNewShop({ name: "", manager: "" }); 
       showToast("已新增", "success"); 
@@ -162,19 +160,15 @@ const SettingsView = () => {
     
     try { 
       const docRef = getDocPath("org_structure");
-      
-      // 1. 讀取最新
       const docSnap = await getDoc(docRef);
       if (!docSnap.exists()) throw new Error("讀取設定檔失敗");
 
       let newManagers = JSON.parse(JSON.stringify(docSnap.data().managers || {}));
 
-      // 2. 移除
       if (Array.isArray(newManagers[managerName])) {
         newManagers[managerName] = newManagers[managerName].filter(x => x !== storeName);
       }
 
-      // 3. 加入未分配
       if (!isPermanentDelete) {
         if (!Array.isArray(newManagers[UNASSIGNED_KEY])) {
           newManagers[UNASSIGNED_KEY] = [];
@@ -184,9 +178,8 @@ const SettingsView = () => {
         }
       }
 
-      // 4. 存檔並更新 UI
       await setDoc(docRef, { managers: newManagers }); 
-      setLocalManagers(newManagers); // ★ 立即更新 UI
+      setLocalManagers(newManagers);
       
       showToast(isPermanentDelete ? "已永久刪除" : "已移至未分配", "success"); 
     } catch(e) { 
@@ -220,14 +213,12 @@ const SettingsView = () => {
       newManagers[UNASSIGNED_KEY] = newManagers[UNASSIGNED_KEY].filter(s => !addedStores.includes(s));
 
       await setDoc(docRef, { managers: newManagers }); 
-      setLocalManagers(newManagers); // ★ 立即更新 UI
+      setLocalManagers(newManagers);
       
       setEditingManager(null); 
       showToast("已更新", "success"); 
     } catch(e){ showToast("失敗", "error"); } 
   };
-
-  // ------------------------------------------------------------------
 
   const availableUnassignedStores = useMemo(() => { const all = Object.values(localManagers || {}).flat(); const assigned = storeAccounts.flatMap(a=>a.stores||[]); return all.filter(s=>!assigned.includes(s)).sort(); }, [localManagers, storeAccounts]);
   const availableStoresForManagerEdit = useMemo(() => { return (localManagers && localManagers[UNASSIGNED_KEY]) ? localManagers[UNASSIGNED_KEY].sort() : []; }, [localManagers]);
@@ -257,7 +248,7 @@ const SettingsView = () => {
       let newManagers = docSnap.exists() ? docSnap.data().managers : {};
       newManagers[newManager.name] = [];
       await setDoc(docRef, { managers: newManagers }); 
-      setLocalManagers(newManagers); // ★ 更新 UI
+      setLocalManagers(newManagers); 
       
       await setDoc(getDocPath("manager_auth"), { [newManager.name]: newManager.password }, {merge:true}); 
       setNewManager({name:"", password:""}); 
@@ -275,7 +266,7 @@ const SettingsView = () => {
         let newManagers = docSnap.exists() ? docSnap.data().managers : {};
         delete newManagers[name]; 
         await setDoc(docRef, { managers: newManagers }); 
-        setLocalManagers(newManagers); // ★ 更新 UI
+        setLocalManagers(newManagers); 
         showToast("已刪除", "success");
     } catch (e) { showToast("刪除失敗", "error"); }
   };
@@ -337,6 +328,10 @@ const SettingsView = () => {
           </div>
         )}
         {activeTab === "therapists" && ( <div className="space-y-6"><Card><div className="flex flex-col md:flex-row gap-4 justify-between items-center"><div className="relative w-full md:w-64"><Search className="absolute left-3 top-2.5 text-stone-400" size={16} /><input type="text" placeholder="搜尋姓名或店家..." value={searchTerm} onChange={(e) => setSearchTerm(e.target.value)} className="w-full pl-9 pr-4 py-2 bg-stone-50 border border-stone-200 rounded-xl outline-none focus:border-amber-400" /></div><button onClick={() => setIsAddingTherapist(true)} className="w-full md:w-auto px-4 py-2 bg-stone-800 text-white rounded-xl font-bold flex items-center justify-center gap-2 hover:bg-stone-700 transition-colors"><Plus size={18} /> 新增人員</button></div></Card>{(isAddingTherapist || editingTherapist) && (<div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50 backdrop-blur-sm"><div className="bg-white w-full max-w-md rounded-2xl shadow-2xl overflow-hidden animate-in zoom-in-95"><div className="bg-amber-400 p-4 font-bold text-white flex justify-between items-center"><span>{editingTherapist ? "編輯人員資料" : "新增管理師"}</span><button onClick={() => { setIsAddingTherapist(false); setEditingTherapist(null); }}><X size={20}/></button></div><div className="p-6 space-y-4"><div className="grid grid-cols-2 gap-4"><div><label className="text-xs font-bold text-stone-400 block mb-1">區域</label><select value={formManager} onChange={(e) => { setFormManager(e.target.value); setFormStore(""); }} className="w-full p-2 border rounded-lg font-bold bg-stone-50"><option value="">選擇區域</option>{Object.keys(localManagers).map(m => <option key={m} value={m}>{m}區</option>)}</select></div><div><label className="text-xs font-bold text-stone-400 block mb-1">所屬店家</label><select value={formStore} onChange={(e) => setFormStore(e.target.value)} className="w-full p-2 border rounded-lg font-bold bg-stone-50" disabled={!formManager}><option value="">選擇店家</option>{availableStoresForTherapist.map(s => <option key={s} value={s}>{s}</option>)}</select></div></div><div><label className="text-xs font-bold text-stone-400 block mb-1">姓名</label><input type="text" value={formName} onChange={(e) => setFormName(e.target.value)} className="w-full p-2 border rounded-lg font-bold" placeholder="請輸入姓名" /></div><div><label className="text-xs font-bold text-stone-400 block mb-1">登入密碼 (預設 0000)</label><input type="text" value={formPassword} onChange={(e) => setFormPassword(e.target.value)} className="w-full p-2 border rounded-lg font-mono" placeholder="0000" /></div><div className="pt-4 flex gap-3"><button onClick={() => { setIsAddingTherapist(false); setEditingTherapist(null); }} className="flex-1 py-3 bg-stone-100 text-stone-500 rounded-xl font-bold">取消</button><button onClick={editingTherapist ? handleUpdateTherapist : handleAddTherapist} className="flex-1 py-3 bg-stone-800 text-white rounded-xl font-bold">{editingTherapist ? "儲存修改" : "確認新增"}</button></div></div></div></div>)}<div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">{filteredTherapists.map(t => (<div key={t.id} className={`bg-white p-4 rounded-xl border-l-4 shadow-sm flex flex-col gap-2 ${t.status === 'resigned' ? 'border-stone-200 opacity-60' : 'border-amber-400'}`}><div className="flex justify-between items-start"><div><div className="text-xs text-stone-400 font-bold mb-1 flex items-center gap-1"><Store size={12}/> {t.store}店</div><div className="text-lg font-bold text-stone-700 flex items-center gap-2">{t.name}{t.status === 'resigned' && <span className="text-[10px] bg-stone-100 px-2 rounded text-stone-500">已離職</span>}</div></div><div className="flex gap-1"><button onClick={() => openEdit(t)} className="p-2 hover:bg-stone-100 rounded-lg text-stone-400" title="編輯"><Edit size={16}/></button><button onClick={() => toggleStatus(t)} className={`p-2 rounded-lg ${t.status === 'active' ? 'hover:bg-rose-50 text-stone-400 hover:text-rose-500' : 'hover:bg-emerald-50 text-stone-400 hover:text-emerald-600'}`} title={t.status === 'active' ? "設為離職" : "復職"}>{t.status === 'active' ? <UserX size={16}/> : <UserCheck size={16}/>}</button></div></div><div className="mt-2 pt-2 border-t border-stone-100 flex justify-between items-center text-sm"><span className="text-stone-400 font-mono text-xs flex items-center gap-1"><Key size={12}/> 密碼: {t.password}</span><button onClick={() => handleDeleteTherapist(t.id)} className="text-stone-300 hover:text-rose-400"><Trash2 size={14}/></button></div></div>))}</div></div> )}
+        
+        {/* ★★★ 新增：系統維護頁面內容 ★★★ */}
+        {activeTab === "maintenance" && <SystemMaintenance />}
+        
       </div>
     </ViewWrapper>
   );
