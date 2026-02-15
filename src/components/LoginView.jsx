@@ -1,6 +1,9 @@
 // src/components/LoginView.jsx
 import React, { useState, useEffect, useMemo } from "react";
-import { Coffee, AlertCircle, Loader2, MapPin, Store, UserCheck, Lock, Sparkles, Crown, ArrowRight, ChevronLeft } from "lucide-react";
+import { 
+  Coffee, AlertCircle, Loader2, MapPin, Store, UserCheck, Lock, 
+  Sparkles, Crown, ArrowRight, ChevronLeft, Heart 
+} from "lucide-react";
 import { ROLES, BRANDS } from "../constants/index"; 
 
 // ★★★ 自定義各品牌總監密碼 (請在此修改) ★★★
@@ -22,10 +25,12 @@ const LoginView = ({
   handleUpdateTrainerAuth,
   currentBrandId,
   onSwitchBrand,
-  therapists = [] 
+  therapists = [],
+  // ★★★ 接收 hasSelectedBrand 屬性 ★★★
+  hasSelectedBrand = false 
 }) => {
-  // 控制是否顯示初始品牌選擇遮罩
-  const [showBrandSelector, setShowBrandSelector] = useState(true);
+  // ★★★ 如果已經選過品牌，就不顯示選擇器 ★★★
+  const [showBrandSelector, setShowBrandSelector] = useState(!hasSelectedBrand);
 
   const [role, setRole] = useState("director");
   const [password, setPassword] = useState("");
@@ -47,7 +52,6 @@ const LoginView = ({
 
   // ★★★ 極簡風格配色 (Minimalist Theme) ★★★
   const themeColors = useMemo(() => {
-    // 只保留細微的重點色，大部分使用黑白灰
     switch(currentBrandId) {
       case 'anniu': return { text: "text-rose-900", accent: "bg-rose-600 hover:bg-rose-700", border: "focus:border-rose-400", ring: "focus:ring-rose-100" };
       case 'yibo': return { text: "text-yellow-900", accent: "bg-yellow-500 hover:bg-yellow-600", border: "focus:border-yellow-400", ring: "focus:ring-yellow-100" };
@@ -81,11 +85,9 @@ const LoginView = ({
     try {
       if (role === "director") {
         // ★★★ 修改：根據當前品牌 ID 取得對應密碼 ★★★
-        // 優先使用 BRAND_DIRECTOR_PASSWORDS 設定的密碼，若找不到則預設 0000
         const correctPass = BRAND_DIRECTOR_PASSWORDS[currentBrandId] || "0000";
         
         if (password === correctPass) {
-           // 登入成功，名稱顯示該品牌的總監 (例如：安妞總監)
            onLogin("director", { name: `${currentBrandConfig.label}總監` }); 
         } else {
            setError("密碼錯誤");
@@ -123,7 +125,6 @@ const LoginView = ({
     else if (role === "manager" && selectedUser) { const correctPass = managerAuth[selectedUser] || "0000"; if (correctPass === oldPassword) isVerified = true; } 
     else if (role === "therapist" && tPersonId) { const therapist = therapists.find(t => t.id === tPersonId); if (therapist && therapist.password === oldPassword) isVerified = true; } 
     else if (role === "trainer") { const correctPass = trainerAuth?.password || "0000"; if (correctPass === oldPassword) isVerified = true; }
-    // 注意：目前總監密碼是寫死的，若要開放總監修改密碼，需要後端支援或寫入 constants
 
     if (!isVerified) { setError("舊密碼錯誤"); setIsLoading(false); return; }
     let success = false;
@@ -136,20 +137,18 @@ const LoginView = ({
     setIsLoading(false);
   };
 
-  // 共用輸入框樣式
   const inputClass = `w-full px-4 py-3 bg-white border border-stone-200 rounded-lg outline-none text-stone-700 transition-all focus:border-stone-400 focus:ring-2 ${themeColors.ring}`;
   const selectClass = `w-full px-4 py-3 bg-white border border-stone-200 rounded-lg outline-none text-stone-700 appearance-none transition-all focus:border-stone-400 focus:ring-2 ${themeColors.ring} disabled:bg-stone-50 disabled:text-stone-400`;
 
   return (
     <div className="min-h-screen flex items-center justify-center bg-stone-50 p-4 font-sans text-stone-800">
       
-      {/* ★★★ 主登入卡片 (極簡版) ★★★ */}
+      {/* 主登入卡片 */}
       <div 
         className={`w-full max-w-md bg-white p-8 rounded-2xl shadow-sm border border-stone-200 transition-all duration-500 transform 
           ${showBrandSelector ? "opacity-0 scale-95 pointer-events-none absolute" : "opacity-100 scale-100 relative"}
         `}
       >
-        {/* 返回選擇品牌按鈕 */}
         <button 
           onClick={() => setShowBrandSelector(true)}
           className="absolute top-6 left-6 text-stone-400 hover:text-stone-600 transition-colors flex items-center gap-1 text-sm font-medium"
@@ -158,17 +157,17 @@ const LoginView = ({
         </button>
 
         <div className="text-center mb-10 mt-2">
-          {/* Logo 簡化為圖標 */}
+          {/* Logo */}
           <div className="flex justify-center mb-4">
              {currentBrandId === 'yibo' ? <Sparkles size={40} className={themeColors.text} strokeWidth={1.5} /> : 
-              currentBrandId === 'anniu' ? <Coffee size={40} className={themeColors.text} strokeWidth={1.5} /> :
+              currentBrandId === 'anniu' ? <Heart size={40} className={themeColors.text} strokeWidth={1.5} /> :
               <Crown size={40} className={themeColors.text} strokeWidth={1.5} />}
           </div>
           <h1 className={`text-2xl font-bold tracking-tight ${themeColors.text}`}>{currentBrandConfig.label} 營運管理</h1>
           <p className="text-stone-400 text-sm mt-1">請登入您的帳戶</p>
         </div>
 
-        {/* 角色切換 (極簡線條風) */}
+        {/* 角色切換 */}
         <div className="flex justify-center mb-8 border-b border-stone-100 pb-1">
           {Object.entries(ROLES).map(([key, r]) => (
             <button
@@ -259,7 +258,7 @@ const LoginView = ({
         </div>
       </div>
 
-      {/* ★★★ 2. 品牌選擇遮罩 (極簡風格) ★★★ */}
+      {/* 品牌選擇遮罩 */}
       {showBrandSelector && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-white/90 backdrop-blur-sm animate-in fade-in duration-300">
           <div className="w-full max-w-lg p-8">
@@ -273,7 +272,10 @@ const LoginView = ({
                 let btnIcon = Crown;
                 let activeClass = "hover:border-stone-400 hover:bg-stone-50";
                 
-                if (brand.id === 'anniu') { btnIcon = Coffee; activeClass = "hover:border-rose-200 hover:bg-rose-50 hover:text-rose-900"; }
+                if (brand.id === 'anniu') { 
+                    btnIcon = Heart; 
+                    activeClass = "hover:border-rose-200 hover:bg-rose-50 hover:text-rose-900"; 
+                }
                 else if (brand.id === 'yibo') { btnIcon = Sparkles; activeClass = "hover:border-yellow-200 hover:bg-yellow-50 hover:text-yellow-900"; }
                 else { activeClass = "hover:border-stone-400 hover:bg-stone-50 hover:text-stone-900"; }
 

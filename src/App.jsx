@@ -15,9 +15,13 @@ import { app, auth, db, appId } from "./config/firebase";
 import { onAuthStateChanged, signInAnonymously, signInWithCustomToken } from "firebase/auth";
 import { collection, addDoc, deleteDoc, updateDoc, doc, onSnapshot, serverTimestamp, setDoc, query, orderBy, limit } from "firebase/firestore";
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip as RechartsTooltip, Legend, ResponsiveContainer, LineChart, Line, ComposedChart, Area, Cell, PieChart, Pie } from "recharts";
-import { LayoutDashboard, Upload, TrendingUp, Map as MapIcon, Settings, ClipboardCheck, Menu, Search, Filter, Trash2, Save, Plus, DollarSign, Target, Users, Award, Loader2, FileText, AlertCircle, CheckCircle, User, Store, Lock, LogOut, FileWarning, Edit2, CheckSquare, X, Download, ChevronLeft, ChevronRight, Activity, Sparkles, ChevronDown, Coffee, ShoppingBag, CreditCard, Smartphone, Monitor, Bell, Clock } from "lucide-react";
-// 引入 BRANDS
-import { ROLES, ALL_MENU_ITEMS, DEFAULT_REGIONAL_MANAGERS, DEFAULT_PERMISSIONS, BRANDS } from "./constants/index";
+import { 
+  LayoutDashboard, Upload, TrendingUp, Map as MapIcon, Settings, ClipboardCheck, Menu, Search, Filter, Trash2, Save, Plus, DollarSign, Target, Users, Award, Loader2, FileText, AlertCircle, CheckCircle, User, Store, Lock, LogOut, FileWarning, Edit2, CheckSquare, X, Download, ChevronLeft, ChevronRight, Activity, Sparkles, ChevronDown, 
+  Heart, Coffee, 
+  ShoppingBag, CreditCard, Smartphone, Monitor, Bell, Clock, Music 
+} from "lucide-react";
+
+import { ROLES, ALL_MENU_ITEMS, DEFAULT_REGIONAL_MANAGERS, DEFAULT_PERMISSIONS } from "./constants/index";
 import { generateUUID, formatLocalYYYYMMDD, toStandardDateFormat, formatNumber, parseNumber } from "./utils/helpers";
 import { ViewWrapper, Card, Skeleton, Toast, ConfirmModal } from "./components/SharedUI";
 import { Sidebar, MobileTopNav } from "./components/Navigation";
@@ -39,6 +43,40 @@ import TargetView from "./components/TargetView";
 import TherapistTargetView from "./components/TherapistTargetView";
 import TherapistScheduleView from "./components/TherapistScheduleView";
 
+// ★★★ 修正重點：統一使用英文 ID，並使用 label 作為顯示名稱 ★★★
+const BRANDS = [
+  { 
+    id: 'cyj', 
+    label: 'CYJ', // 顯示名稱
+    icon: Sparkles, 
+    pathType: 'legacy', 
+    color: 'amber',
+    gradient: 'from-amber-500 to-orange-600',
+    bg: 'bg-amber-50',
+    text: 'text-amber-600'
+  },
+  { 
+    id: 'anniu', // ★ 改為英文 ID (對應資料庫與 LoginView 設定)
+    label: 'Anew (安妞)', 
+    icon: Heart,  
+    pathType: 'new', 
+    color: 'rose', 
+    gradient: 'from-rose-400 to-pink-600',
+    bg: 'bg-rose-50',
+    text: 'text-rose-600'
+  },
+  { 
+    id: 'yibo', // ★ 改為英文 ID
+    label: 'Yibo (伊啵)', 
+    icon: Music, 
+    pathType: 'new',
+    color: 'sky',
+    gradient: 'from-sky-400 to-indigo-600',
+    bg: 'bg-sky-50',
+    text: 'text-sky-600'
+  }
+];
+
 export default function App() {
   const [user, setUser] = useState(null);
   const [userRole, setUserRole] = useState(null);
@@ -50,15 +88,19 @@ export default function App() {
   const [confirmModal, setConfirmModal] = useState({ isOpen: false, title: "", message: "", onConfirm: null });
   const [globalSearchTerm, setGlobalSearchTerm] = useState("");
   
-  // 品牌狀態管理 (預設為 CYJ)
+  // 品牌狀態管理
   const [currentBrandId, setCurrentBrandId] = useState("cyj");
+  const [hasSelectedBrand, setHasSelectedBrand] = useState(false);
 
-  // 取得當前品牌的完整設定物件
   const currentBrand = useMemo(() => 
     BRANDS.find(b => b.id === currentBrandId) || BRANDS[0]
   , [currentBrandId]);
 
-  // 動態路徑產生器
+  const handleSwitchBrand = (brandId) => {
+    setCurrentBrandId(brandId);
+    setHasSelectedBrand(true);
+  };
+
   const getCollectionPath = useCallback((collectionName) => {
     if (currentBrand.pathType === 'legacy') {
       return collection(db, "artifacts", appId, "public", "data", collectionName);
@@ -79,7 +121,6 @@ export default function App() {
   const [budgets, setBudgets] = useState({});
   const [targets, setTargets] = useState({ newASP: 3500, trafficASP: 1200 });
   
-  // ★★★ 修正：初始值設為空物件 ★★★
   const [managers, setManagers] = useState({});
   const [storeAccounts, setStoreAccounts] = useState([]);
   const [managerAuth, setManagerAuth] = useState({});
@@ -103,7 +144,6 @@ export default function App() {
 
   const normalizeStore = (s) => (s || "").replace(/CYJ|店/g, "").trim();
 
-  // 日誌記錄
   const logActivity = useCallback(async (role, user, action, details) => {
     let device = "PC";
     if (typeof navigator !== "undefined") {
@@ -123,7 +163,11 @@ export default function App() {
     setShowIdleWarning(false); setCountdown(15); lastActivityTimeRef.current = Date.now(); 
     localStorage.removeItem("cyj_input_draft"); localStorage.removeItem("cyj_input_draft_v2"); localStorage.removeItem("cyj_input_draft_v3"); 
     localStorage.removeItem("cyj_therapist_draft"); localStorage.removeItem("cyj_therapist_draft_v2");
-    setUserRole(null); setCurrentUser(null); setActiveView("dashboard");
+    
+    // 只清除角色，保留品牌選擇狀態
+    setUserRole(null); 
+    setCurrentUser(null); 
+    setActiveView("dashboard");
   }, [currentUser, userRole, logActivity]);
 
   const handleUserActivity = useCallback(() => {
@@ -166,38 +210,32 @@ export default function App() {
     return onAuthStateChanged(auth, (u) => { setUser(u); setLoading(false); });
   }, []);
 
-  // ★★★ 核心修正：資料監聽 + 強制清空邏輯 ★★★
+  // 資料監聽 + 強制清空邏輯
   useEffect(() => {
     if (!user) return;
 
-    // 1. 在重新訂閱前，先強制清空所有數據，避免殘留 (Ghost Data)
     setRawData([]);
     setBudgets({});
-    setManagers({}); // 清空區長
-    setStoreAccounts([]); // 清空店長
+    setManagers({}); 
+    setStoreAccounts([]); 
     setManagerAuth({});
-    setTherapists([]); // 清空管理師
+    setTherapists([]); 
     setTherapistReports([]);
     setTherapistSchedules({});
     setTherapistTargets({});
     setPermissions(DEFAULT_PERMISSIONS);
     setTargets({ newASP: 3500, trafficASP: 1200 });
 
-    // 2. 開始訂閱新品牌的資料
-    
-    // 日報
     const unsubReports = onSnapshot(
       query(getCollectionPath("daily_reports"), orderBy("date", "desc")), 
       (s) => setRawData(s.docs.map((d) => ({ id: d.id, ...d.data() })))
     );
 
-    // 目標
     const unsubBudgets = onSnapshot(
       getCollectionPath("monthly_targets"), 
       (s) => { const b = {}; s.docs.forEach((d) => (b[d.id] = d.data())); setBudgets(b); }
     );
 
-    // KPI
     const unsubTargets = onSnapshot(
       getDocPath("kpi_targets"), 
       (s) => {
@@ -209,7 +247,6 @@ export default function App() {
       }
     );
     
-    // 組織架構 (重要：處理無資料狀況)
     const unsubOrg = onSnapshot(
       getDocPath("org_structure"), 
       (s) => {
@@ -223,41 +260,37 @@ export default function App() {
           });
           setManagers(filteredManagers);
         } else {
-          // ★★★ 如果是 CYJ 且無資料(異常)，才用預設值；其他品牌無資料則清空 ★★★
           if (currentBrand.id === 'cyj') {
             setManagers(DEFAULT_REGIONAL_MANAGERS);
           } else {
-            setManagers({}); // 確保新品牌是乾淨的
+            setManagers({}); 
           }
         }
       }
     );
 
-    // 店家帳號 (重要：無資料時清空)
     const unsubAccounts = onSnapshot(
       getDocPath("store_account_data"), 
       (s) => {
         if (s.exists()) {
           setStoreAccounts(s.data().accounts);
         } else {
-          setStoreAccounts([]); // ★ 清空
+          setStoreAccounts([]); 
         }
       }
     );
 
-    // 區長密碼 (重要：無資料時清空)
     const unsubManagerAuth = onSnapshot(
       getDocPath("manager_auth"), 
       (s) => {
         if (s.exists()) {
           setManagerAuth(s.data());
         } else {
-          setManagerAuth({}); // ★ 清空
+          setManagerAuth({}); 
         }
       }
     );
 
-    // 權限設定
     const unsubPermissions = onSnapshot(
       getDocPath("permissions"), 
       (s) => {
@@ -269,37 +302,31 @@ export default function App() {
       }
     );
 
-    // 管理師名單
     const unsubTherapists = onSnapshot(
       getCollectionPath("therapists"), 
       (s) => setTherapists(s.docs.map((d) => ({ id: d.id, ...d.data() })))
     );
 
-    // 管理師日報
     const unsubTherapistReports = onSnapshot(
       query(getCollectionPath("therapist_daily_reports"), orderBy("date", "desc"), limit(1000)), 
       (s) => setTherapistReports(s.docs.map((d) => ({ id: d.id, ...d.data() })))
     );
 
-    // 排班
     const unsubTherapistSchedules = onSnapshot(
       getCollectionPath("therapist_schedules"), 
       (s) => { const schedules = {}; s.docs.forEach((d) => (schedules[d.id] = d.data())); setTherapistSchedules(schedules); }
     );
 
-    // 管理師目標
     const unsubTherapistTargets = onSnapshot(
       getCollectionPath("therapist_targets"), 
       (s) => { const t = {}; s.docs.forEach((d) => (t[d.id] = d.data())); setTherapistTargets(t); }
     );
 
-    // 教專密碼
     const unsubTrainerAuth = onSnapshot(
       getDocPath("trainer_auth"), 
       (s) => { if (s.exists()) setTrainerAuth(s.data()); else setTrainerAuth({ password: "0000" }); }
     );
     
-    // 排除名單
     const unsubAuditExclusions = onSnapshot(
       getDocPath("audit_exclusions"), 
       (s) => {
@@ -441,7 +468,6 @@ export default function App() {
     therapistReports: visibleTherapistReports, 
     therapistSchedules, therapistTargets, trainerAuth, handleUpdateTrainerAuth,
     auditExclusions, handleUpdateAuditExclusions,
-    // 品牌相關
     currentBrand, setCurrentBrandId, getCollectionPath, getDocPath
   }), [user, loading, analytics, visibleManagers, budgets, targets, visibleRawData, rawData, inputDate, selectedYear, selectedMonth, permissions, storeAccounts, managerAuth, currentUser, userRole, logActivity, handleUpdateStorePassword, handleUpdateManagerPassword, handleUpdateTherapistPassword, navigateToStore, activeView, appId, visibleTherapists, visibleTherapistReports, therapistSchedules, therapistTargets, trainerAuth, handleUpdateTrainerAuth, auditExclusions, handleUpdateAuditExclusions, currentBrand, setCurrentBrandId, getCollectionPath, getDocPath]);
 
@@ -460,9 +486,10 @@ export default function App() {
       trainerAuth={trainerAuth} 
       handleUpdateTrainerAuth={handleUpdateTrainerAuth}
       
-      // ★★★ 務必補上這兩行，登入頁的按鈕才會動 ★★★
       currentBrandId={currentBrandId}
-      onSwitchBrand={setCurrentBrandId}
+      onSwitchBrand={handleSwitchBrand}
+      hasSelectedBrand={hasSelectedBrand}
+      brands={BRANDS} 
     />
   );
 
