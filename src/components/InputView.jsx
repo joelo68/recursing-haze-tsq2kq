@@ -31,7 +31,6 @@ const StoreInputView = () => {
   const {
     currentUser, userRole, managers, inputDate, setInputDate, showToast, logActivity, rawData,
     getCollectionPath, 
-    // ★★★ 確保取得最新品牌資訊 ★★★
     currentBrand 
   } = useContext(AppContext);
 
@@ -56,21 +55,26 @@ const StoreInputView = () => {
   
   const today = getLocalTodayString();
 
-  // ★★★ 定義品牌前綴 ★★★
+  // ★★★ 修改重點 1：強制使用簡稱前綴 ★★★
   const brandPrefix = useMemo(() => {
     if (!currentBrand) return "CYJ";
-    // 處理 currentBrand 可能是字串或物件
     const bId = typeof currentBrand === 'string' ? currentBrand : currentBrand.id;
-    const bName = typeof currentBrand === 'string' ? currentBrand : (currentBrand.label || currentBrand.name);
-    return bId === 'cyj' ? 'CYJ' : bName;
+    
+    // 透過 ID 強制對應到簡稱
+    switch(bId) {
+      case 'anniu': return '安妞';
+      case 'yibo': return '伊啵';
+      case 'cyj': return 'CYJ';
+      default: return 'CYJ';
+    }
   }, [currentBrand]);
 
-  // ★★★ 品牌切換時，強制重置表單 ★★★
+  // 品牌切換時，強制重置表單
   useEffect(() => {
     setFormData(defaultFormData);
     setSelectedStore("");
     setSelectedManager("");
-  }, [currentBrand]); // 當品牌改變時觸發
+  }, [currentBrand]);
 
   useEffect(() => {
     const handleWakeUp = () => {
@@ -96,7 +100,7 @@ const StoreInputView = () => {
 
   useEffect(() => {
     const brandKey = typeof currentBrand === 'string' ? currentBrand : currentBrand?.id || 'unknown';
-    const savedDraft = localStorage.getItem(`input_draft_${brandKey}`); // 依品牌分開暫存
+    const savedDraft = localStorage.getItem(`input_draft_${brandKey}`);
     if (savedDraft) {
       try {
         const parsed = JSON.parse(savedDraft);
@@ -133,20 +137,27 @@ const StoreInputView = () => {
     setFormData(prev => ({ ...prev, [key]: formatNumber(rawValue) }));
   };
 
-  // ★★★ 修正：使用動態前綴產生店名列表 ★★★
+  // ★★★ 修改重點 2：優化店名產生邏輯，避免重複前綴 ★★★
   const availableStores = useMemo(() => {
+    // A. 如果是店長登入 (沒有選區長)
     if (!selectedManager) {
       if (userRole === "store" && currentUser) {
         return (currentUser.stores || [currentUser.storeName]).map((s) => {
-            if (s.startsWith(brandPrefix)) return s;
-            // 相容性處理
-            if (brandPrefix === 'CYJ' && s.startsWith('CYJ')) return s;
-            return `${brandPrefix}${s}店`;
+            // 清除各種可能的舊前綴，只留核心店名
+            let coreName = s.replace(/^(CYJ|Anew\s*\(安妞\)|Yibo\s*\(伊啵\)|安妞|伊啵|Anew|Yibo)\s*/i, "").replace(/店$/, "");
+            // 加上當前設定的簡短前綴
+            return `${brandPrefix}${coreName}店`;
         });
       }
       return [];
     }
-    return (managers[selectedManager] || []).map((s) => `${brandPrefix}${s}店`);
+    // B. 如果是總監/區長選單 (從 managers 列表讀取)
+    // 假設 managers 裡存的是核心店名 (如 "古亭", "復北")
+    return (managers[selectedManager] || []).map((s) => {
+        // 同樣做一次清理，確保不會有雙重前綴
+        let coreName = s.replace(/^(CYJ|Anew\s*\(安妞\)|Yibo\s*\(伊啵\)|安妞|伊啵|Anew|Yibo)\s*/i, "").replace(/店$/, "");
+        return `${brandPrefix}${coreName}店`;
+    });
   }, [selectedManager, managers, userRole, currentUser, brandPrefix]);
 
   useEffect(() => {
@@ -154,20 +165,17 @@ const StoreInputView = () => {
       const myStores = currentUser.stores || [currentUser.storeName];
       if (myStores.length > 0) {
         let rawName = myStores[0];
-        rawName = rawName.replace(/店$/, "");
-        
-        // 移除前綴以比對區長
-        if (rawName.startsWith(brandPrefix)) {
-            rawName = rawName.substring(brandPrefix.length);
-        } else if (rawName.startsWith("CYJ")) {
-            rawName = rawName.substring(3);
-        }
+        // 清理前綴以比對區長
+        rawName = rawName.replace(/^(CYJ|Anew\s*\(安妞\)|Yibo\s*\(伊啵\)|安妞|伊啵|Anew|Yibo)\s*/i, "").replace(/店$/, "");
 
-        const foundMgr = Object.keys(managers).find((mgr) => managers[mgr].includes(rawName));
+        const foundMgr = Object.keys(managers).find((mgr) => 
+            // 模糊比對
+            managers[mgr].some(s => s.includes(rawName))
+        );
         if (foundMgr) setSelectedManager(foundMgr);
         
-        const fullName = myStores[0].startsWith(brandPrefix) ? myStores[0] : `${brandPrefix}${rawName}店`;
-        setSelectedStore(fullName);
+        // 設定初始選中店家 (使用新的簡稱格式)
+        setSelectedStore(`${brandPrefix}${rawName}店`);
       }
     } else if (!selectedManager && userRole === "manager" && currentUser) {
       setSelectedManager(currentUser.name);
@@ -189,7 +197,6 @@ const StoreInputView = () => {
     if (inputDate > today) return showToast("不可提交未來日期", "error");
 
     const formattedInputDate = toStandardDateFormat(inputDate);
-    // 這裡 rawData 應該已經是當前品牌的資料 (由 AppContext 過濾)
     const existingReport = rawData.find((d) => toStandardDateFormat(d.date) === formattedInputDate && d.storeName === selectedStore);
     setExistingReportId(existingReport ? existingReport.id : null);
 
@@ -214,14 +221,12 @@ const StoreInputView = () => {
       const payload = {
         date: normalizedDate,
         storeName: selectedStore,
-        // ★★★ 寫入當下品牌 ID，方便追蹤 ★★★
         brandId: brandId, 
         ...Object.keys(formData).reduce((acc, key) => ({ ...acc, [key]: parseNumber(formData[key]) }), {}),
         timestamp: serverTimestamp(),
         submittedBy: currentUser?.name || "unknown",
       };
 
-      // ★★★ 使用 getCollectionPath 確保寫入當前品牌的資料夾 ★★★
       if (existingReportId) {
         await setDoc(doc(getCollectionPath("daily_reports"), existingReportId), payload);
         logActivity(userRole, currentUser?.name, "更新日報(覆蓋)", `${selectedStore} ${normalizedDate}`);
@@ -574,7 +579,7 @@ const TherapistInputView = () => {
         therapistId: currentUser.id,
         therapistName: currentUser.name,
         storeName: currentUser.store || "未註記店家", 
-        brandId: brandId, // 加入品牌 ID
+        brandId: brandId, 
         
         totalRevenue: parseNumber(formData.totalRevenue),
         newCustomerRevenue: parseNumber(formData.newCustomerRevenue),
