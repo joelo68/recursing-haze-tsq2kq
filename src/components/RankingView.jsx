@@ -6,7 +6,6 @@ import { ViewWrapper, Card } from "./SharedUI";
 
 const RankingView = () => {
   const { 
-    // ★★★ 1. 改用原始報表資料 (allReports) ★★★
     allReports,
     fmtMoney, 
     fmtNum, 
@@ -43,10 +42,9 @@ const RankingView = () => {
 
   const getCoreStoreName = (fullName) => {
     if (!fullName) return "";
-    return fullName
-      .replace(new RegExp(`^(${brandPrefix}|CYJ|安妞|伊啵|Anew|Yibo)`, 'i'), '')
-      .replace(/店$/, '')
-      .trim();
+    let core = String(fullName).replace(new RegExp(`^(${brandPrefix}|CYJ|安妞|伊啵|Anew|Yibo)`, 'i'), '').trim();
+    if (core === "新店") return "新店"; // 防止「新店」被誤刪
+    return core.replace(/店$/, '').trim();
   };
 
   // --- 設定視窗函式 ---
@@ -68,7 +66,6 @@ const RankingView = () => {
     });
   };
 
-  // ★★★ 2. 核心計算邏輯：直接從 allReports 聚合數據 ★★★
   const processedData = useMemo(() => {
     if (!allReports) return [];
 
@@ -76,21 +73,25 @@ const RankingView = () => {
     const targetMonth = parseInt(selectedMonth);
     const storeMap = {};
 
-    // 1. 遍歷所有報表進行加總
     allReports.forEach(report => {
-      // 日期過濾
       const rDate = new Date(report.date);
       if (rDate.getFullYear() !== targetYear || (rDate.getMonth() + 1) !== targetMonth) return;
 
-      const storeName = report.storeName;
-      if (!storeName) return;
+      const rawStoreName = report.storeName;
+      if (!rawStoreName) return;
 
-      // 初始化店家數據容器
-      if (!storeMap[storeName]) {
-        storeMap[storeName] = {
-          name: storeName,
-          displayName: getCoreStoreName(storeName),
-          manager: "未分配", // 稍後補上
+      // ★★★ 核心修正：取得核心店名後，強制組裝成標準化名稱作為分類 Key ★★★
+      const coreName = getCoreStoreName(rawStoreName);
+      if (!coreName) return;
+      
+      const standardName = `${brandPrefix}${coreName}店`; // 強制統一成例如 "CYJ新店店"
+
+      // 初始化店家數據容器 (以 standardName 作為 Key)
+      if (!storeMap[standardName]) {
+        storeMap[standardName] = {
+          name: standardName,
+          displayName: coreName, // 畫面上顯示乾淨的 "新店"
+          manager: "未分配",
           cashTotal: 0,
           refundTotal: 0,
           accrualTotal: 0,
@@ -102,7 +103,8 @@ const RankingView = () => {
         };
       }
 
-      const d = storeMap[storeName];
+      // 將資料累加進同一個籃子
+      const d = storeMap[standardName];
       d.cashTotal += (Number(report.cash) || 0);
       d.refundTotal += (Number(report.refund) || 0);
       d.accrualTotal += (Number(report.accrual) || 0);
@@ -113,16 +115,15 @@ const RankingView = () => {
       d.newCustomerClosingsTotal += (Number(report.newCustomerClosings) || 0);
     });
 
-    // 2. 轉換為陣列並計算衍生指標
     let results = Object.values(storeMap).map(store => {
       // 補上區長資訊
       const coreName = store.displayName;
-      const foundManager = Object.keys(managers).find(mgr => managers[mgr].includes(coreName));
+      const foundManager = Object.keys(managers).find(mgr => (managers[mgr] || []).includes(coreName));
       store.manager = foundManager || "未分配";
 
-      // 計算淨現金 (扣除退費)
+      // 計算淨現金
       const netCash = store.cashTotal - store.refundTotal;
-      store.cashTotal = netCash; // 更新為淨額以便顯示
+      store.cashTotal = netCash; 
 
       // 讀取目標
       const budgetKey = `${store.name}_${targetYear}_${targetMonth}`;
@@ -130,7 +131,6 @@ const RankingView = () => {
       const cashTarget = budgetData ? Number(budgetData.cashTarget || 0) : 0;
       const accrualTarget = budgetData ? Number(budgetData.accrualTarget || 0) : 0;
 
-      // 計算達成率與客單
       return {
         ...store,
         cashTarget,
@@ -141,11 +141,11 @@ const RankingView = () => {
       };
     });
 
-    // 3. 過濾排除名單
+    // 過濾排除名單
     results = results.filter(store => !(auditExclusions || []).includes(store.displayName));
 
     return results;
-  }, [allReports, budgets, selectedYear, selectedMonth, auditExclusions, managers, brandPrefix]); // brandPrefix 用於 getCoreStoreName
+  }, [allReports, budgets, selectedYear, selectedMonth, auditExclusions, managers, brandPrefix]); 
 
   // --- 排序邏輯 ---
   const sortedData = useMemo(() => {

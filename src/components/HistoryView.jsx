@@ -1,5 +1,5 @@
 // src/components/HistoryView.jsx
-import React, { useState, useContext, useMemo, useEffect } from "react";
+import React, { useState, useContext, useMemo, useEffect, useCallback } from "react";
 import { Edit2, Trash2, Save, X, RotateCcw, Store, User, Loader2, Calendar, Search, ArrowRight, ArrowLeft } from "lucide-react";
 import {
   doc,
@@ -61,6 +61,14 @@ const HistoryView = () => {
     }
     return name;
   }, [currentBrand]);
+
+  // ★★★ 統一的店名清洗函式 (加入新店防呆判斷) ★★★
+  const cleanStoreName = useCallback((name) => {
+    if (!name) return "";
+    let core = String(name).replace(/^(CYJ|Anew\s*\(安妞\)|Yibo\s*\(伊啵\)|安妞|伊啵|Anew|Yibo)\s*/i, '').trim();
+    if (core === "新店") return "新店"; // ★ 防止「新店」被誤刪
+    return core.replace(/店$/, '').trim();
+  }, []);
   
   // 定義「被允許查看」的店家清單
   const myAllowedStores = useMemo(() => {
@@ -72,8 +80,8 @@ const HistoryView = () => {
 
     if (userRole === 'store' && currentUser) {
       const stores = currentUser.stores || [currentUser.storeName];
-      // 移除可能的前綴，只留核心店名
-      return stores.map(s => s.replace(/CYJ|安妞|伊啵|Anew|Yibo|店/gi, '').trim());
+      // ★ 使用安全的清洗函式
+      return stores.map(s => cleanStoreName(s));
     }
 
     if (userRole === 'therapist' && currentUser) {
@@ -81,7 +89,7 @@ const HistoryView = () => {
     }
 
     return [];
-  }, [userRole, currentUser, managers]);
+  }, [userRole, currentUser, managers, cleanStoreName]);
   
   // ★★★ 3. 下拉選單來源 (修正為動態前綴) ★★★
   const allStores = useMemo(() => {
@@ -181,11 +189,11 @@ const HistoryView = () => {
     };
 
     fetchData();
-  }, [activeTab, startDate, endDate, getCollectionPath, showToast, currentBrand]); // 加入 currentBrand 依賴，切換品牌時重抓
+  }, [activeTab, startDate, endDate, getCollectionPath, showToast, currentBrand]);
 
   const currentRawData = activeTab === "store" ? storeRawData : therapistRawData;
 
-  // ★★★ 5. 資料過濾邏輯 (修正店名匹配) ★★★
+  // ★★★ 5. 資料過濾邏輯 (套用安全的店名比對) ★★★
   const filteredData = useMemo(() => {
     return currentRawData.filter((d) => {
       
@@ -196,27 +204,21 @@ const HistoryView = () => {
       }
       // 2. 區長/店長權限檢查
       else if (myAllowedStores !== null) {
-         // 標準化：移除所有可能的前綴和後綴，只比對核心店名 (如 "中山")
-         const normalize = (s) => String(s || "").replace(/CYJ|安妞|伊啵|Anew|Yibo|店/gi, "").replace(/\s/g, "").toLowerCase().trim();
-         const cleanRowStore = normalize(getStoreName(d));
-         const isAllowed = myAllowedStores.some(allowed => cleanRowStore === normalize(allowed));
+         const cleanRowStore = cleanStoreName(getStoreName(d));
+         const isAllowed = myAllowedStores.some(allowed => cleanRowStore === cleanStoreName(allowed));
          if (!isAllowed) return false;
       }
 
       // 3. 通用店家篩選器
       let matchStore = true;
       if (filterStore) {
-        // 這裡做精確比對，因為 filterStore 和 d.storeName 現在應該都有正確的品牌前綴了
-        // 但為了保險，我們還是比較「核心店名」
-        const normalize = (s) => String(s || "").replace(/CYJ|安妞|伊啵|Anew|Yibo|店/gi, "").replace(/\s/g, "").toLowerCase().trim();
-        const cleanFilter = normalize(filterStore);
-        const cleanRow = normalize(getStoreName(d));
-        
+        const cleanFilter = cleanStoreName(filterStore);
+        const cleanRow = cleanStoreName(getStoreName(d));
         matchStore = cleanRow === cleanFilter;
       }
       return matchStore;
     });
-  }, [currentRawData, filterStore, myAllowedStores, userRole, currentUser, activeTab]);
+  }, [currentRawData, filterStore, myAllowedStores, userRole, currentUser, activeTab, cleanStoreName]);
 
   const startEdit = (row) => { 
     setEditId(row.id); 
@@ -248,7 +250,6 @@ const HistoryView = () => {
   const saveEdit = async () => {
     try {
       const collectionName = activeTab === "store" ? "daily_reports" : "therapist_daily_reports";
-      // ★★★ 修正：使用 getCollectionPath ★★★
       const collectionRef = getCollectionPath(collectionName);
       const docRef = doc(collectionRef, editId);
       
@@ -294,7 +295,6 @@ const HistoryView = () => {
     if (!confirm("確定刪除?")) return;
     try {
       const collectionName = activeTab === "store" ? "daily_reports" : "therapist_daily_reports";
-      // ★★★ 修正：使用 getCollectionPath ★★★
       const collectionRef = getCollectionPath(collectionName);
       await deleteDoc(doc(collectionRef, id));
       showToast("已刪除", "success");
@@ -434,8 +434,8 @@ const HistoryView = () => {
 
                     {!isLoading && filteredData.map((row) => {
                       const isEditing = editId === row.id;
-                      // 顯示時移除所有前綴，保持乾淨
-                      const displayStore = getStoreName(row).replace(/CYJ|安妞|伊啵|Anew|Yibo|店/gi, "");
+                      // ★★★ 顯示時套用安全的清洗函式 ★★★
+                      const displayStore = cleanStoreName(getStoreName(row));
                       
                       return (
                         <tr key={row.id} className="group hover:bg-stone-50 transition-colors">

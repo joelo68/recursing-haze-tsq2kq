@@ -140,9 +140,11 @@ export default function App() {
   const [selectedMonth, setSelectedMonth] = useState((new Date().getMonth() + 1).toString());
   const [inputDate, setInputDate] = useState(() => formatLocalYYYYMMDD(new Date()));
 
-  // ★★★ 核心修正 1：通用的店名清洗函式，確保所有品牌都能正確抓取「核心店名」 ★★★
+  // ★★★ 修正：「新店」店名防呆 ★★★
   const normalizeStore = useCallback((s) => {
-      return String(s || "").replace(/^(CYJ|Anew\s*\(安妞\)|Yibo\s*\(伊啵\)|安妞|伊啵|Anew|Yibo)\s*/i, '').replace(/店$/, '').trim();
+      let core = String(s || "").replace(/^(CYJ|Anew\s*\(安妞\)|Yibo\s*\(伊啵\)|安妞|伊啵|Anew|Yibo)\s*/i, '').trim();
+      if (core === "新店") return "新店"; 
+      return core.replace(/店$/, '').trim();
   }, []);
 
   const logActivity = useCallback(async (role, user, action, details) => {
@@ -368,7 +370,6 @@ export default function App() {
 
   const navigateToStore = useCallback((storeName) => { setActiveView("store-analysis"); window.dispatchEvent(new CustomEvent("navigate-to-store", { detail: storeName })); }, []);
 
-  // ★★★ 核心修正 2：改用統一的 normalizeStore 來過濾權限，解決非 CYJ 品牌抓不到資料的問題 ★★★
   const visibleRawData = useMemo(() => {
     if (userRole === ROLES.TRAINER.id) return []; 
     if (userRole === ROLES.STORE.id && currentUser) {
@@ -459,7 +460,6 @@ export default function App() {
   const openConfirm = useCallback((title, message, onConfirm) => setConfirmModal({ isOpen: true, title, message, onConfirm: () => { onConfirm(); setConfirmModal((p) => ({ ...p, isOpen: false })); }, }), []);
   const closeConfirmModal = () => setConfirmModal((p) => ({ ...p, isOpen: false }));
   
-  // ★★★ 核心修正 3：搜尋欄動態生成店名，不再寫死 CYJ ★★★
   const allStoreNames = useMemo(() => {
       const prefix = currentBrandId === 'anniu' ? '安妞' : currentBrandId === 'yibo' ? '伊啵' : 'CYJ';
       return Object.values(managers).flat().map((s) => `${prefix}${normalizeStore(s)}店`);

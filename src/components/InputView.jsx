@@ -55,12 +55,10 @@ const StoreInputView = () => {
   
   const today = getLocalTodayString();
 
-  // ★★★ 修改重點 1：強制使用簡稱前綴 ★★★
   const brandPrefix = useMemo(() => {
     if (!currentBrand) return "CYJ";
     const bId = typeof currentBrand === 'string' ? currentBrand : currentBrand.id;
     
-    // 透過 ID 強制對應到簡稱
     switch(bId) {
       case 'anniu': return '安妞';
       case 'yibo': return '伊啵';
@@ -69,7 +67,6 @@ const StoreInputView = () => {
     }
   }, [currentBrand]);
 
-  // 品牌切換時，強制重置表單
   useEffect(() => {
     setFormData(defaultFormData);
     setSelectedStore("");
@@ -137,44 +134,41 @@ const StoreInputView = () => {
     setFormData(prev => ({ ...prev, [key]: formatNumber(rawValue) }));
   };
 
-  // ★★★ 修改重點 2：優化店名產生邏輯，避免重複前綴 ★★★
+  // ★★★ 修正：加入新店防呆機制的選單列表 ★★★
   const availableStores = useMemo(() => {
-    // A. 如果是店長登入 (沒有選區長)
     if (!selectedManager) {
       if (userRole === "store" && currentUser) {
         return (currentUser.stores || [currentUser.storeName]).map((s) => {
-            // 清除各種可能的舊前綴，只留核心店名
-            let coreName = s.replace(/^(CYJ|Anew\s*\(安妞\)|Yibo\s*\(伊啵\)|安妞|伊啵|Anew|Yibo)\s*/i, "").replace(/店$/, "");
-            // 加上當前設定的簡短前綴
+            let coreName = String(s).replace(/^(CYJ|Anew\s*\(安妞\)|Yibo\s*\(伊啵\)|安妞|伊啵|Anew|Yibo)\s*/i, "").trim();
+            if (coreName !== "新店") coreName = coreName.replace(/店$/, ""); // 防止新店被誤刪
             return `${brandPrefix}${coreName}店`;
         });
       }
       return [];
     }
-    // B. 如果是總監/區長選單 (從 managers 列表讀取)
-    // 假設 managers 裡存的是核心店名 (如 "古亭", "復北")
+    
     return (managers[selectedManager] || []).map((s) => {
-        // 同樣做一次清理，確保不會有雙重前綴
-        let coreName = s.replace(/^(CYJ|Anew\s*\(安妞\)|Yibo\s*\(伊啵\)|安妞|伊啵|Anew|Yibo)\s*/i, "").replace(/店$/, "");
+        let coreName = String(s).replace(/^(CYJ|Anew\s*\(安妞\)|Yibo\s*\(伊啵\)|安妞|伊啵|Anew|Yibo)\s*/i, "").trim();
+        if (coreName !== "新店") coreName = coreName.replace(/店$/, ""); // 防止新店被誤刪
         return `${brandPrefix}${coreName}店`;
     });
   }, [selectedManager, managers, userRole, currentUser, brandPrefix]);
 
+  // ★★★ 修正：加入新店防呆機制的店名初始化 ★★★
   useEffect(() => {
     if (!selectedStore && userRole === "store" && currentUser) {
       const myStores = currentUser.stores || [currentUser.storeName];
       if (myStores.length > 0) {
-        let rawName = myStores[0];
-        // 清理前綴以比對區長
-        rawName = rawName.replace(/^(CYJ|Anew\s*\(安妞\)|Yibo\s*\(伊啵\)|安妞|伊啵|Anew|Yibo)\s*/i, "").replace(/店$/, "");
+        let rawName = String(myStores[0]).replace(/^(CYJ|Anew\s*\(安妞\)|Yibo\s*\(伊啵\)|安妞|伊啵|Anew|Yibo)\s*/i, "").trim();
+        if (rawName !== "新店") {
+            rawName = rawName.replace(/店$/, ""); // 防止新店被誤刪
+        }
 
         const foundMgr = Object.keys(managers).find((mgr) => 
-            // 模糊比對
             managers[mgr].some(s => s.includes(rawName))
         );
         if (foundMgr) setSelectedManager(foundMgr);
         
-        // 設定初始選中店家 (使用新的簡稱格式)
         setSelectedStore(`${brandPrefix}${rawName}店`);
       }
     } else if (!selectedManager && userRole === "manager" && currentUser) {

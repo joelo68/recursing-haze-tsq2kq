@@ -1,5 +1,5 @@
 // src/components/AuditView.jsx
-import React, { useState, useMemo, useContext } from "react";
+import React, { useState, useMemo, useContext, useCallback } from "react";
 import { AlertCircle, UserX, CheckCircle, Target, FileText, Settings, X, Save, Ban, HelpCircle } from "lucide-react"; 
 
 import { AppContext } from "../AppContext";
@@ -50,6 +50,14 @@ const AuditView = () => {
     return name;
   }, [currentBrand]);
 
+  // ★★★ 3. 統一的店名清洗函式 (修正：加入新店防呆判斷) ★★★
+  const cleanStoreName = useCallback((name) => {
+    if (!name) return "";
+    let core = String(name).replace(/^(CYJ|Anew\s*\(安妞\)|Yibo\s*\(伊啵\)|安妞|伊啵|Anew|Yibo)\s*/i, '').trim();
+    if (core === "新店") return "新店"; // ★ 防止「新店」被誤刪
+    return core.replace(/店$/, '').trim();
+  }, []);
+
   const openConfigModal = () => {
     setLocalExclusions(auditExclusions || []);
     setIsConfigModalOpen(true);
@@ -77,8 +85,6 @@ const AuditView = () => {
     return allMyStores
       .filter(storeName => !auditExclusions.includes(storeName)) 
       .map(storeName => {
-        // ★★★ 關鍵修正：產生所有可能的店名變體 (別名) ★★★
-        // 日曆元件會拿這些變體去跟 rawData 比對，只要中一個就亮綠燈
         const aliases = [
           storeName,                          // 中山
           `${storeName}店`,                   // 中山店
@@ -105,15 +111,11 @@ const AuditView = () => {
       }));
   }, [therapists]);
 
-  // ★★★ 簡化資料處理：只統一日期，保留原始店名 ★★★
   const normalizedRawData = useMemo(() => {
     return rawData.map(report => {
-      // 1. 統一日期格式為 YYYY-MM-DD
       const safeDate = report.date ? toStandardDateFormat(report.date) : "";
-      
       return {
         ...report,
-        // 保留原始店名 (例如 "安妞中山店")，讓上面的 aliases 去抓它
         storeName: report.storeName, 
         date: safeDate 
       };
@@ -287,7 +289,7 @@ const AuditView = () => {
     auditType === "therapist-daily" ? therapistAuditData :
     therapistTargetAuditData; 
 
-  // ★★★ 3. 複製功能優化：自動清洗字串 ★★★
+  // ★★★ 4. 複製功能優化：使用新的 cleanStoreName 函式 ★★★
   const handleCopy = () => {
     let text = "";
     if (auditType === 'target') text = `店家未設定目標(${selectedYear}/${selectedMonth})：\n`;
@@ -298,8 +300,7 @@ const AuditView = () => {
     Object.entries(activeData.missingByManager).forEach(([mgr, list]) => {
       const cleanList = list.map(s => {
         if (auditType.includes('therapist')) return s;
-        // 使用 Regex 移除所有前綴
-        return s.replace(/CYJ|安妞|伊啵|Anew|Yibo|店/gi, "").trim();
+        return cleanStoreName(s); // 改用安全的清洗函式
       });
       text += `${mgr}區：${cleanList.join("、")}\n`;
     });
@@ -358,7 +359,6 @@ const AuditView = () => {
             <div className="flex gap-2 items-center w-full sm:w-auto">
                 {(auditType === "daily" || auditType === "therapist-daily") ? (
                    <div className="w-full sm:w-auto relative z-10">
-                      {/* 如果沒有店家資料，顯示明確提示 */}
                       {activeStoresForCalendar.length === 0 ? (
                         <div className="px-4 py-3 bg-rose-50 text-rose-600 text-sm font-bold rounded-xl border border-rose-100 flex items-center gap-2 whitespace-nowrap animate-pulse">
                           <HelpCircle size={18} /> 尚未設定檢核店家 (請至參數設定)
@@ -430,7 +430,8 @@ const AuditView = () => {
                         className="bg-white px-2 py-1 rounded-lg text-xs border border-stone-200 text-stone-600 font-medium flex items-center gap-1"
                       >
                         {auditType.includes('therapist') && <UserX size={10} className="text-rose-400"/>}
-                        {auditType.includes('therapist') ? s : s.replace(/CYJ|安妞|伊啵|Anew|Yibo|店/gi, "").replace(brandPrefix, "")}
+                        {/* ★★★ 5. 渲染時也套用新的安全清洗函式 ★★★ */}
+                        {auditType.includes('therapist') ? s : cleanStoreName(s)}
                       </span>
                     ))}
                   </div>

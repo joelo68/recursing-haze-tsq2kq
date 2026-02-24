@@ -83,10 +83,12 @@ const StoreAnalysisView = () => {
     return { brandPrefix: name, brandId: id };
   }, [currentBrand]);
 
-  // ★★★ 統一的店名清洗函式 (徹底解決字串比對不一致的問題) ★★★
+  // ★★★ 統一的店名清洗函式 (修正：加入新店防呆判斷) ★★★
   const cleanStoreName = useCallback((name) => {
     if (!name) return "";
-    return String(name).replace(/^(CYJ|Anew\s*\(安妞\)|Yibo\s*\(伊啵\)|安妞|伊啵|Anew|Yibo|Ann)\s*/i, '').replace(/店$/, '').trim();
+    let core = String(name).replace(/^(CYJ|Anew\s*\(安妞\)|Yibo\s*\(伊啵\)|安妞|伊啵|Anew|Yibo|Ann)\s*/i, '').trim();
+    if (core === "新店") return "新店"; // ★ 防止「新店」被誤刪成「新」
+    return core.replace(/店$/, '').trim();
   }, []);
 
   // 2. 讀取設定
@@ -309,7 +311,6 @@ const StoreAnalysisView = () => {
   // ==========================================
   
   const calculateHealthMetrics = (dataList) => {
-    // ★★★ 防護網：預設安全回傳值，就算完全沒資料，也保證不回傳 null 導致畫面崩潰 ★★★
     const defaultHealth = {
         raw: { cashToAccrual: 0, retailRatio: 0, retention: 0, aspMining: 0, acquisitionQuality: 0 },
         scores: { financial: 0, sales: 0, loyalty: 0, mining: 0, acquisition: 0 }

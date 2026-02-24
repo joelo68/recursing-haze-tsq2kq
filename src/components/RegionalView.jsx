@@ -52,11 +52,12 @@ const RegionalView = () => {
     return { brandInfo: { id, name }, brandPrefix: name };
   }, [currentBrand]);
 
-  // 2. ★★★ 強化的通用店名清洗函式 ★★★
-  // 無論資料庫存的是舊版 "Anew(安妞)古亭店" 還是新版 "安妞古亭店"，都會被洗成 "古亭"
+  // ★★★ 2. 強化的通用店名清洗函式 (修正：加入新店防呆機制) ★★★
   const cleanStoreName = (name) => {
     if (!name) return "";
-    return name.replace(/^(CYJ|Anew\s*\(安妞\)|Yibo\s*\(伊啵\)|安妞|伊啵|Anew|Yibo)\s*/i, '').replace(/店$/, '').trim();
+    let core = String(name).replace(/^(CYJ|Anew\s*\(安妞\)|Yibo\s*\(伊啵\)|安妞|伊啵|Anew|Yibo)\s*/i, '').trim();
+    if (core === "新店") return "新店"; // ★ 防止「新店」被誤刪成「新」
+    return core.replace(/店$/, '').trim();
   };
 
   // 3. 本地即時運算區域數據
@@ -97,13 +98,12 @@ const RegionalView = () => {
           achievement: 0
         };
 
-        // ★★★ 核心修正：使用清洗後的核心名稱進行比對，徹底解決區長抓不到舊資料的問題 ★★★
         allReports.forEach(r => {
           const rDate = new Date(r.date);
           if (rDate.getFullYear() !== y || (rDate.getMonth() + 1) !== m) return;
           
           const reportCoreName = cleanStoreName(r.storeName);
-          if (reportCoreName !== storeName) return; // 只看核心名字 (例如: 古亭 === 古亭)
+          if (reportCoreName !== storeName) return; 
 
           const cash = (Number(r.cash) || 0) - (Number(r.refund) || 0);
           const accrual = Number(r.accrual) || 0;
@@ -167,7 +167,7 @@ const RegionalView = () => {
             <h1 className="text-2xl font-bold text-stone-700">{brandInfo.name} 區域分析</h1>
         </div>
 
-        {/* ★★★ 新增：無資料時的友善提示 (避免白畫面感) ★★★ */}
+        {/* 無資料時的友善提示 */}
         {regionalData.length === 0 && (
            <div className="p-16 text-center text-stone-400 bg-white rounded-3xl border border-stone-100 shadow-sm mt-6 flex flex-col items-center">
               <Map size={48} className="mb-4 text-stone-200" />
@@ -176,7 +176,7 @@ const RegionalView = () => {
            </div>
         )}
 
-        {/* 區域卡片列表 (加入 ?. 防呆) */}
+        {/* 區域卡片列表 */}
         {regionalData.length > 0 && (
           <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-6">
             {regionalData.map((region) => (

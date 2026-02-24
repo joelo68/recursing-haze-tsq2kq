@@ -41,13 +41,12 @@ const DashboardView = () => {
     return { brandInfo: { id, name }, brandPrefix: name };
   }, [currentBrand]);
 
-  // 2. 輔助函式：清洗店名 (統一轉為簡稱)
+  // ★★★ 2. 輔助函式：清洗店名 (包含新店防呆機制) ★★★
   const cleanName = useMemo(() => (name) => {
     if (!name) return "";
-    return name
-      .replace(new RegExp(`^(${brandPrefix}|CYJ|Anew|Yibo)`, 'i'), '')
-      .replace(/店$/, '')
-      .trim();
+    let core = String(name).replace(new RegExp(`^(${brandPrefix}|CYJ|Anew|Yibo|安妞|伊啵)`, 'i'), '').trim();
+    if (core === "新店") return "新店"; // ★ 防止「新店」被誤刪成「新」
+    return core.replace(/店$/, '').trim();
   }, [brandPrefix]);
 
   // 3. 計算當前使用者可見的店家列表 (權限控制)
@@ -65,7 +64,7 @@ const DashboardView = () => {
     return []; 
   }, [userRole, currentUser, managers, cleanName]);
 
-  // 4. 本地計算 Dashboard 統計數據 (含圖表日期裁切)
+  // 4. 本地計算 Dashboard 統計數據
   const dashboardStats = useMemo(() => {
     if (!allReports) return null;
 
@@ -82,7 +81,6 @@ const DashboardView = () => {
         daysPassed = 0; 
     }
 
-    // ★★★ 修正 1：在初始物件中加入 operationalAccrual 與 newCustomerSales ★★★
     const stats = {
       cash: 0, accrual: 0, operationalAccrual: 0, skincareSales: 0, traffic: 0,
       newCustomers: 0, newCustomerClosings: 0, newCustomerSales: 0,
@@ -108,7 +106,6 @@ const DashboardView = () => {
 
       stats.cash += cash;
       stats.accrual += accrual;
-      // ★★★ 加入累加邏輯 ★★★
       stats.operationalAccrual += (Number(report.operationalAccrual) || 0);
       stats.newCustomerSales += (Number(report.newCustomerSales) || 0);
       
@@ -137,7 +134,6 @@ const DashboardView = () => {
     const achievement = stats.budget > 0 ? (stats.cash / stats.budget) * 100 : 0;
     const projection = daysPassed > 0 ? Math.round((stats.cash / daysPassed) * daysInMonth) : 0;
 
-    // ★★★ 修正 2：套用正確的商業計算邏輯 ★★★
     const avgTrafficASP = stats.traffic > 0 ? Math.round(stats.operationalAccrual / stats.traffic) : 0;
     const avgNewCustomerASP = stats.newCustomers > 0 ? Math.round(stats.newCustomerSales / stats.newCustomers) : 0;
 
@@ -177,9 +173,13 @@ const DashboardView = () => {
       const rDate = new Date(report.date);
       if (rDate.getFullYear() !== y || (rDate.getMonth() + 1) !== m) return;
       
-      const name = report.storeName;
-      if (!storeStats[name]) storeStats[name] = 0;
-      storeStats[name] += ((Number(report.cash) || 0) - (Number(report.refund) || 0));
+      // ★★★ 核心修正：強制標準化店名，解決「CYJ新店」與「CYJ新店店」分家問題 ★★★
+      const cName = cleanName(report.storeName);
+      if (!cName) return; // 略過無效資料
+      const standardName = `${brandPrefix}${cName}店`; // 強制組合成標準名稱 (如：CYJ新店店)
+      
+      if (!storeStats[standardName]) storeStats[standardName] = 0;
+      storeStats[standardName] += ((Number(report.cash) || 0) - (Number(report.refund) || 0));
     });
 
     const rankingList = Object.keys(storeStats).map(storeName => {
@@ -204,7 +204,7 @@ const DashboardView = () => {
         const cleanItemName = cleanName(item.storeName);
         return visibleStores.includes(cleanItemName);
     });
-  }, [userRole, allReports, visibleStores, budgets, selectedYear, selectedMonth, cleanName]);
+  }, [userRole, allReports, visibleStores, budgets, selectedYear, selectedMonth, cleanName, brandPrefix]);
 
   const therapistStats = useMemo(() => {
     if (!therapistReports) return { rankings: [], myStats: null, grandTotal: {} };
