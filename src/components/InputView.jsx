@@ -134,35 +134,28 @@ const StoreInputView = () => {
     setFormData(prev => ({ ...prev, [key]: formatNumber(rawValue) }));
   };
 
-  // ★★★ 修正：加入新店防呆機制的選單列表 ★★★
   const availableStores = useMemo(() => {
     if (!selectedManager) {
       if (userRole === "store" && currentUser) {
         return (currentUser.stores || [currentUser.storeName]).map((s) => {
-            let coreName = String(s).replace(/^(CYJ|Anew\s*\(安妞\)|Yibo\s*\(伊啵\)|安妞|伊啵|Anew|Yibo)\s*/i, "").trim();
-            if (coreName !== "新店") coreName = coreName.replace(/店$/, ""); // 防止新店被誤刪
+            let coreName = s.replace(/^(CYJ|Anew\s*\(安妞\)|Yibo\s*\(伊啵\)|安妞|伊啵|Anew|Yibo)\s*/i, "").replace(/店$/, "");
             return `${brandPrefix}${coreName}店`;
         });
       }
       return [];
     }
-    
     return (managers[selectedManager] || []).map((s) => {
-        let coreName = String(s).replace(/^(CYJ|Anew\s*\(安妞\)|Yibo\s*\(伊啵\)|安妞|伊啵|Anew|Yibo)\s*/i, "").trim();
-        if (coreName !== "新店") coreName = coreName.replace(/店$/, ""); // 防止新店被誤刪
+        let coreName = s.replace(/^(CYJ|Anew\s*\(安妞\)|Yibo\s*\(伊啵\)|安妞|伊啵|Anew|Yibo)\s*/i, "").replace(/店$/, "");
         return `${brandPrefix}${coreName}店`;
     });
   }, [selectedManager, managers, userRole, currentUser, brandPrefix]);
 
-  // ★★★ 修正：加入新店防呆機制的店名初始化 ★★★
   useEffect(() => {
     if (!selectedStore && userRole === "store" && currentUser) {
       const myStores = currentUser.stores || [currentUser.storeName];
       if (myStores.length > 0) {
-        let rawName = String(myStores[0]).replace(/^(CYJ|Anew\s*\(安妞\)|Yibo\s*\(伊啵\)|安妞|伊啵|Anew|Yibo)\s*/i, "").trim();
-        if (rawName !== "新店") {
-            rawName = rawName.replace(/店$/, ""); // 防止新店被誤刪
-        }
+        let rawName = myStores[0];
+        rawName = rawName.replace(/^(CYJ|Anew\s*\(安妞\)|Yibo\s*\(伊啵\)|安妞|伊啵|Anew|Yibo)\s*/i, "").replace(/店$/, "");
 
         const foundMgr = Object.keys(managers).find((mgr) => 
             managers[mgr].some(s => s.includes(rawName))
@@ -191,7 +184,22 @@ const StoreInputView = () => {
     if (inputDate > today) return showToast("不可提交未來日期", "error");
 
     const formattedInputDate = toStandardDateFormat(inputDate);
-    const existingReport = rawData.find((d) => toStandardDateFormat(d.date) === formattedInputDate && d.storeName === selectedStore);
+    
+    const getCore = (name) => {
+        if (!name) return "";
+        let core = String(name).replace(/^(CYJ|Anew\s*\(安妞\)|Yibo\s*\(伊啵\)|安妞|伊啵|Anew|Yibo)\s*/i, '').trim();
+        if (core === "新店") return "新店";
+        return core.replace(/店$/, '').trim();
+    };
+
+    const targetCoreStore = getCore(selectedStore);
+
+    const existingReport = rawData.find((d) => {
+        const isSameDate = toStandardDateFormat(d.date) === formattedInputDate;
+        const isSameStore = getCore(d.storeName) === targetCoreStore;
+        return isSameDate && isSameStore;
+    });
+
     setExistingReportId(existingReport ? existingReport.id : null);
 
     if (inputDate !== today) {
@@ -207,7 +215,10 @@ const StoreInputView = () => {
   };
 
   const handleFinalSubmit = async () => {
+    // 防呆：防止使用者重複點擊
+    if (isSubmitting) return;
     setIsSubmitting(true);
+    
     try {
       const normalizedDate = toStandardDateFormat(inputDate);
       const brandId = typeof currentBrand === 'string' ? currentBrand : currentBrand?.id || 'unknown';
@@ -221,11 +232,20 @@ const StoreInputView = () => {
         submittedBy: currentUser?.name || "unknown",
       };
 
+      // ★★★ 升級版：給予絕對唯一的 ID (防止因連點或網路延遲產生分身) ★★★
+      let targetDocId = existingReportId;
+      if (!targetDocId) {
+         // 將 2026/02/24 轉換為 2026-02-24，並組合成固定 ID
+         const safeDate = normalizedDate.replace(/\//g, "-");
+         targetDocId = `${safeDate}_${selectedStore}`; 
+      }
+
+      // 不管是新增還是更新，統一使用 setDoc 覆蓋同一個 ID
+      await setDoc(doc(getCollectionPath("daily_reports"), targetDocId), payload);
+
       if (existingReportId) {
-        await setDoc(doc(getCollectionPath("daily_reports"), existingReportId), payload);
         logActivity(userRole, currentUser?.name, "更新日報(覆蓋)", `${selectedStore} ${normalizedDate}`);
       } else {
-        await addDoc(getCollectionPath("daily_reports"), payload);
         logActivity(userRole, currentUser?.name, "提交日報", `${selectedStore} ${normalizedDate}`);
       }
 
@@ -340,8 +360,8 @@ const StoreInputView = () => {
           <button onClick={handleReset} className="px-6 py-4 bg-stone-100 text-stone-500 rounded-xl hover:bg-stone-200 transition-colors">
             <RotateCcw size={20} />
           </button>
-          <button onClick={handlePreSubmit} disabled={isSubmitting} className="flex-1 bg-stone-800 text-white py-4 rounded-xl font-bold shadow-xl hover:bg-stone-900 transition-all active:scale-95 disabled:opacity-70">
-            {isSubmitting ? <Activity className="animate-spin mx-auto"/> : "提交日報"}
+          <button onClick={handlePreSubmit} disabled={isSubmitting} className="flex-1 bg-stone-800 text-white py-4 rounded-xl font-bold shadow-xl hover:bg-stone-900 transition-all active:scale-95 disabled:opacity-70 flex justify-center items-center gap-2">
+            {isSubmitting ? <Activity className="animate-spin"/> : "提交日報"}
           </button>
         </div>
       </div>
@@ -406,9 +426,12 @@ const StoreInputView = () => {
                  <div className="flex justify-between font-bold text-indigo-600"><span>總權責</span><span>${formData.accrual}</span></div>
               </div>
               {existingReportId && <p className="text-xs text-rose-500 font-bold bg-rose-50 p-2 rounded">⚠️ 提醒：資料將覆蓋當日舊紀錄。</p>}
+              
               <div className="flex gap-3 pt-2">
-                <button onClick={()=>setShowConfirmModal(false)} className="flex-1 py-3 border rounded-xl font-bold text-stone-500 hover:bg-stone-50">返回</button>
-                <button onClick={handleFinalSubmit} className="flex-1 py-3 bg-stone-800 text-white rounded-xl font-bold hover:bg-stone-900">確認提交</button>
+                <button onClick={()=>setShowConfirmModal(false)} disabled={isSubmitting} className="flex-1 py-3 border rounded-xl font-bold text-stone-500 hover:bg-stone-50 disabled:opacity-50">返回</button>
+                <button onClick={handleFinalSubmit} disabled={isSubmitting} className="flex-1 py-3 bg-stone-800 text-white rounded-xl font-bold hover:bg-stone-900 disabled:opacity-70 flex justify-center items-center gap-2">
+                  {isSubmitting ? <Activity className="animate-spin" size={20}/> : "確認提交"}
+                </button>
               </div>
             </div>
           </div>
@@ -555,6 +578,7 @@ const TherapistInputView = () => {
   };
 
   const handleFinalSubmit = async () => {
+    if (isSubmitting) return;
     setIsSubmitting(true);
     setDebugInfo(null); 
 
@@ -808,8 +832,10 @@ const TherapistInputView = () => {
               )}
 
               <div className="flex gap-3 pt-2">
-                <button onClick={()=>setShowConfirmModal(false)} className="flex-1 py-3 border rounded-xl font-bold text-stone-500 hover:bg-stone-50">返回</button>
-                <button onClick={handleFinalSubmit} className="flex-1 py-3 bg-indigo-600 text-white rounded-xl font-bold hover:bg-indigo-700 shadow-md">確認提交</button>
+                <button onClick={()=>setShowConfirmModal(false)} disabled={isSubmitting} className="flex-1 py-3 border rounded-xl font-bold text-stone-500 hover:bg-stone-50 disabled:opacity-50">返回</button>
+                <button onClick={handleFinalSubmit} disabled={isSubmitting} className="flex-1 py-3 bg-indigo-600 text-white rounded-xl font-bold hover:bg-indigo-700 shadow-md disabled:opacity-70 flex justify-center items-center gap-2">
+                  {isSubmitting ? <Activity className="animate-spin" size={20}/> : "確認提交"}
+                </button>
               </div>
             </div>
           </div>
