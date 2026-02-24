@@ -76,16 +76,16 @@ const DashboardView = () => {
     const now = new Date();
     let daysPassed = daysInMonth; 
     
-    // 判斷經過天數
     if (now.getFullYear() === y && (now.getMonth() + 1) === m) {
-        daysPassed = now.getDate(); // 如果是這個月，只算到今天
+        daysPassed = now.getDate(); 
     } else if (now < new Date(y, m - 1, 1)) {
-        daysPassed = 0; // 未來月份
+        daysPassed = 0; 
     }
 
+    // ★★★ 修正 1：在初始物件中加入 operationalAccrual 與 newCustomerSales ★★★
     const stats = {
-      cash: 0, accrual: 0, skincareSales: 0, traffic: 0,
-      newCustomers: 0, newCustomerClosings: 0,
+      cash: 0, accrual: 0, operationalAccrual: 0, skincareSales: 0, traffic: 0,
+      newCustomers: 0, newCustomerClosings: 0, newCustomerSales: 0,
       budget: 0, accrualBudget: 0,
       dailyData: Array.from({ length: daysInMonth }, (_, i) => ({
         date: `${m}/${i + 1}`,
@@ -95,7 +95,6 @@ const DashboardView = () => {
       }))
     };
 
-    // 篩選並加總資料
     allReports.forEach(report => {
       const rDate = new Date(report.date);
       if (rDate.getFullYear() !== y || (rDate.getMonth() + 1) !== m) return;
@@ -109,6 +108,10 @@ const DashboardView = () => {
 
       stats.cash += cash;
       stats.accrual += accrual;
+      // ★★★ 加入累加邏輯 ★★★
+      stats.operationalAccrual += (Number(report.operationalAccrual) || 0);
+      stats.newCustomerSales += (Number(report.newCustomerSales) || 0);
+      
       stats.skincareSales += (Number(report.skincareSales) || 0);
       stats.traffic += traffic;
       stats.newCustomers += (Number(report.newCustomers) || 0);
@@ -121,7 +124,6 @@ const DashboardView = () => {
       }
     });
 
-    // 計算目標
     visibleStores.forEach(storeName => {
         const fullName = `${brandPrefix}${storeName}店`;
         const budgetKey = `${fullName}_${y}_${m}`;
@@ -132,25 +134,25 @@ const DashboardView = () => {
         }
     });
 
-    // 衍生指標
     const achievement = stats.budget > 0 ? (stats.cash / stats.budget) * 100 : 0;
-    const avgTrafficASP = stats.traffic > 0 ? Math.round(stats.accrual / stats.traffic) : 0;
-    const avgNewCustomerASP = stats.newCustomers > 0 ? Math.round(stats.cash / stats.newCustomers) : 0;
     const projection = daysPassed > 0 ? Math.round((stats.cash / daysPassed) * daysInMonth) : 0;
 
-    // ★★★ 關鍵修正：裁切圖表資料 ★★★
-    // 如果是當月，只取到 daysPassed (今天)
-    // 如果是未來月份 (daysPassed === 0)，顯示整月空網格，避免圖表壞掉
+    // ★★★ 修正 2：套用正確的商業計算邏輯 ★★★
+    const avgTrafficASP = stats.traffic > 0 ? Math.round(stats.operationalAccrual / stats.traffic) : 0;
+    const avgNewCustomerASP = stats.newCustomers > 0 ? Math.round(stats.newCustomerSales / stats.newCustomers) : 0;
+
     const slicedDailyTotals = stats.dailyData.slice(0, daysPassed === 0 ? daysInMonth : daysPassed);
 
     return {
       grandTotal: {
         cash: stats.cash,
         accrual: stats.accrual,
+        operationalAccrual: stats.operationalAccrual,
         skincareSales: stats.skincareSales,
         traffic: stats.traffic,
         newCustomers: stats.newCustomers,
         newCustomerClosings: stats.newCustomerClosings,
+        newCustomerSales: stats.newCustomerSales,
         budget: stats.budget,
         projection
       },
@@ -164,7 +166,6 @@ const DashboardView = () => {
 
   }, [allReports, budgets, selectedYear, selectedMonth, visibleStores, brandPrefix, cleanName]);
 
-  // --- 店家排行邏輯 ---
   const myStoreRankings = useMemo(() => {
     if ((userRole !== 'store' && userRole !== 'manager') || !allReports) return [];
     
@@ -205,7 +206,6 @@ const DashboardView = () => {
     });
   }, [userRole, allReports, visibleStores, budgets, selectedYear, selectedMonth, cleanName]);
 
-  // --- 管理師數據邏輯 ---
   const therapistStats = useMemo(() => {
     if (!therapistReports) return { rankings: [], myStats: null, grandTotal: {} };
     
@@ -288,7 +288,7 @@ const DashboardView = () => {
       t.newCustomerRevenue,
       t.oldCustomerRevenue,
       `"${t.revenueMix}"`,
-      `${t.newClosingRate.toFixed(0)}%`, // CSV 也改為整數
+      `${t.newClosingRate.toFixed(0)}%`,
       Math.round(t.newAsp),
       Math.round(t.oldAsp)
     ].join(","));

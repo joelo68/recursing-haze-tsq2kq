@@ -43,11 +43,10 @@ import TargetView from "./components/TargetView";
 import TherapistTargetView from "./components/TherapistTargetView";
 import TherapistScheduleView from "./components/TherapistScheduleView";
 
-// ★★★ 修正重點：統一使用英文 ID，並使用 label 作為顯示名稱 ★★★
 const BRANDS = [
   { 
     id: 'cyj', 
-    label: 'CYJ', // 顯示名稱
+    label: 'CYJ', 
     icon: Sparkles, 
     pathType: 'legacy', 
     color: 'amber',
@@ -56,7 +55,7 @@ const BRANDS = [
     text: 'text-amber-600'
   },
   { 
-    id: 'anniu', // ★ 改為英文 ID (對應資料庫與 LoginView 設定)
+    id: 'anniu', 
     label: 'Anew (安妞)', 
     icon: Heart,  
     pathType: 'new', 
@@ -66,7 +65,7 @@ const BRANDS = [
     text: 'text-rose-600'
   },
   { 
-    id: 'yibo', // ★ 改為英文 ID
+    id: 'yibo', 
     label: 'Yibo (伊啵)', 
     icon: Music, 
     pathType: 'new',
@@ -88,7 +87,6 @@ export default function App() {
   const [confirmModal, setConfirmModal] = useState({ isOpen: false, title: "", message: "", onConfirm: null });
   const [globalSearchTerm, setGlobalSearchTerm] = useState("");
   
-  // 品牌狀態管理
   const [currentBrandId, setCurrentBrandId] = useState("cyj");
   const [hasSelectedBrand, setHasSelectedBrand] = useState(false);
 
@@ -142,7 +140,10 @@ export default function App() {
   const [selectedMonth, setSelectedMonth] = useState((new Date().getMonth() + 1).toString());
   const [inputDate, setInputDate] = useState(() => formatLocalYYYYMMDD(new Date()));
 
-  const normalizeStore = (s) => (s || "").replace(/CYJ|店/g, "").trim();
+  // ★★★ 核心修正 1：通用的店名清洗函式，確保所有品牌都能正確抓取「核心店名」 ★★★
+  const normalizeStore = useCallback((s) => {
+      return String(s || "").replace(/^(CYJ|Anew\s*\(安妞\)|Yibo\s*\(伊啵\)|安妞|伊啵|Anew|Yibo)\s*/i, '').replace(/店$/, '').trim();
+  }, []);
 
   const logActivity = useCallback(async (role, user, action, details) => {
     let device = "PC";
@@ -164,7 +165,6 @@ export default function App() {
     localStorage.removeItem("cyj_input_draft"); localStorage.removeItem("cyj_input_draft_v2"); localStorage.removeItem("cyj_input_draft_v3"); 
     localStorage.removeItem("cyj_therapist_draft"); localStorage.removeItem("cyj_therapist_draft_v2");
     
-    // 只清除角色，保留品牌選擇狀態
     setUserRole(null); 
     setCurrentUser(null); 
     setActiveView("dashboard");
@@ -210,7 +210,6 @@ export default function App() {
     return onAuthStateChanged(auth, (u) => { setUser(u); setLoading(false); });
   }, []);
 
-  // 資料監聽 + 強制清空邏輯
   useEffect(() => {
     if (!user) return;
 
@@ -369,51 +368,52 @@ export default function App() {
 
   const navigateToStore = useCallback((storeName) => { setActiveView("store-analysis"); window.dispatchEvent(new CustomEvent("navigate-to-store", { detail: storeName })); }, []);
 
+  // ★★★ 核心修正 2：改用統一的 normalizeStore 來過濾權限，解決非 CYJ 品牌抓不到資料的問題 ★★★
   const visibleRawData = useMemo(() => {
     if (userRole === ROLES.TRAINER.id) return []; 
     if (userRole === ROLES.STORE.id && currentUser) {
-      const myStores = (currentUser.stores || [currentUser.storeName] || []).map((s) => (s && s.startsWith("CYJ") ? s : `CYJ${s}店`));
-      return rawData.filter((d) => myStores.includes(d.storeName));
+      const myCores = (currentUser.stores || [currentUser.storeName] || []).map(normalizeStore).filter(Boolean);
+      return rawData.filter((d) => myCores.includes(normalizeStore(d.storeName)));
     }
     if (userRole === ROLES.MANAGER.id && currentUser) {
-      const myStores = (managers[currentUser.name] || []).map((s) => `CYJ${s}店`);
-      return rawData.filter((d) => myStores.includes(d.storeName));
+      const myCores = (managers[currentUser.name] || []).map(normalizeStore).filter(Boolean);
+      return rawData.filter((d) => myCores.includes(normalizeStore(d.storeName)));
     }
     return rawData;
-  }, [rawData, userRole, currentUser, managers]);
+  }, [rawData, userRole, currentUser, managers, normalizeStore]);
 
   const visibleTherapistReports = useMemo(() => {
     if (userRole === ROLES.DIRECTOR.id || userRole === ROLES.TRAINER.id || userRole === ROLES.THERAPIST.id) {
       return therapistReports;
     }
     if (userRole === ROLES.MANAGER.id && currentUser) {
-      const myStores = managers[currentUser.name] || []; 
-      return therapistReports.filter(r => myStores.includes(normalizeStore(r.storeName)));
+      const myCores = (managers[currentUser.name] || []).map(normalizeStore).filter(Boolean); 
+      return therapistReports.filter(r => myCores.includes(normalizeStore(r.storeName)));
     }
     if (userRole === ROLES.STORE.id && currentUser) {
-      const myStores = (currentUser.stores || [currentUser.storeName] || []).map(normalizeStore);
-      return therapistReports.filter(r => myStores.includes(normalizeStore(r.storeName)));
+      const myCores = (currentUser.stores || [currentUser.storeName] || []).map(normalizeStore).filter(Boolean);
+      return therapistReports.filter(r => myCores.includes(normalizeStore(r.storeName)));
     }
     return [];
-  }, [therapistReports, userRole, currentUser, managers]);
+  }, [therapistReports, userRole, currentUser, managers, normalizeStore]);
 
   const visibleTherapists = useMemo(() => {
     if (userRole === ROLES.DIRECTOR.id || userRole === ROLES.TRAINER.id) {
       return therapists;
     }
     if (userRole === ROLES.MANAGER.id && currentUser) {
-      const myStores = managers[currentUser.name] || [];
-      return therapists.filter(t => myStores.includes(normalizeStore(t.store)));
+      const myCores = (managers[currentUser.name] || []).map(normalizeStore).filter(Boolean);
+      return therapists.filter(t => myCores.includes(normalizeStore(t.store)));
     }
     if (userRole === ROLES.STORE.id && currentUser) {
-      const myStores = (currentUser.stores || [currentUser.storeName] || []).map(normalizeStore);
-      return therapists.filter(t => myStores.includes(normalizeStore(t.store)));
+      const myCores = (currentUser.stores || [currentUser.storeName] || []).map(normalizeStore).filter(Boolean);
+      return therapists.filter(t => myCores.includes(normalizeStore(t.store)));
     }
     if (userRole === ROLES.THERAPIST.id && currentUser) {
       return therapists.filter(t => t.id === currentUser.id);
     }
     return [];
-  }, [therapists, userRole, currentUser, managers]);
+  }, [therapists, userRole, currentUser, managers, normalizeStore]);
 
   const visibleManagers = useMemo(() => {
     let result = managers; 
@@ -422,10 +422,10 @@ export default function App() {
       const myStores = managers[currentUser.name] || [];
       result = { [currentUser.name]: myStores };
     } else if (userRole === ROLES.STORE.id && currentUser) {
-      const myStores = currentUser.stores || (currentUser.storeName ? [currentUser.storeName] : []);
+      const myCores = (currentUser.stores || (currentUser.storeName ? [currentUser.storeName] : [])).map(normalizeStore);
       const filteredManagers = {};
       Object.entries(managers).forEach(([mgr, stores]) => {
-        const intersectingStores = stores.filter((s) => myStores.includes(s));
+        const intersectingStores = stores.filter((s) => myCores.includes(normalizeStore(s)));
         if (intersectingStores.length > 0) filteredManagers[mgr] = intersectingStores;
       });
       result = filteredManagers;
@@ -442,7 +442,7 @@ export default function App() {
     }
 
     return result;
-  }, [managers, userRole, currentUser, activeView]);
+  }, [managers, userRole, currentUser, activeView, normalizeStore]);
 
   const publicManagers = useMemo(() => {
      const filtered = {};
@@ -458,9 +458,15 @@ export default function App() {
   const showToast = (message, type = "info") => setToast({ message, type });
   const openConfirm = useCallback((title, message, onConfirm) => setConfirmModal({ isOpen: true, title, message, onConfirm: () => { onConfirm(); setConfirmModal((p) => ({ ...p, isOpen: false })); }, }), []);
   const closeConfirmModal = () => setConfirmModal((p) => ({ ...p, isOpen: false }));
+  
+  // ★★★ 核心修正 3：搜尋欄動態生成店名，不再寫死 CYJ ★★★
+  const allStoreNames = useMemo(() => {
+      const prefix = currentBrandId === 'anniu' ? '安妞' : currentBrandId === 'yibo' ? '伊啵' : 'CYJ';
+      return Object.values(managers).flat().map((s) => `${prefix}${normalizeStore(s)}店`);
+  }, [managers, currentBrandId, normalizeStore]);
+
   const fmtMoney = (val) => `$${(val || 0).toLocaleString()}`;
   const fmtNum = (val) => (val || 0).toLocaleString();
-  const allStoreNames = useMemo(() => Object.values(managers).flat().map((s) => `CYJ${s}店`), [managers]);
 
   const contextValue = useMemo(() => ({
     user, loading, analytics, managers: visibleManagers, budgets, targets, rawData: visibleRawData, allReports: rawData, showToast, openConfirm, fmtMoney, fmtNum, inputDate, setInputDate, storeList: analytics?.storeList || [], setTargets, selectedYear, selectedMonth, permissions, storeAccounts, managerAuth, currentUser, userRole, logActivity, handleUpdateStorePassword, handleUpdateManagerPassword, handleUpdateTherapistPassword, navigateToStore, activeView, appId, 
@@ -485,11 +491,9 @@ export default function App() {
       onUpdateTherapistPassword={handleUpdateTherapistPassword} 
       trainerAuth={trainerAuth} 
       handleUpdateTrainerAuth={handleUpdateTrainerAuth}
-      
       currentBrandId={currentBrandId}
       onSwitchBrand={handleSwitchBrand}
       hasSelectedBrand={hasSelectedBrand}
-      brands={BRANDS} 
     />
   );
 

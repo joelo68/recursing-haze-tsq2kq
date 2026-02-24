@@ -1,5 +1,5 @@
 // src/components/StoreAnalysisView.jsx
-import React, { useState, useEffect, useMemo, useContext } from "react";
+import React, { useState, useEffect, useMemo, useContext, useCallback } from "react";
 import {
   ComposedChart, Bar, Line, XAxis, YAxis, CartesianGrid, 
   Tooltip as RechartsTooltip, Legend, ResponsiveContainer,
@@ -83,6 +83,12 @@ const StoreAnalysisView = () => {
     return { brandPrefix: name, brandId: id };
   }, [currentBrand]);
 
+  // ★★★ 統一的店名清洗函式 (徹底解決字串比對不一致的問題) ★★★
+  const cleanStoreName = useCallback((name) => {
+    if (!name) return "";
+    return String(name).replace(/^(CYJ|Anew\s*\(安妞\)|Yibo\s*\(伊啵\)|安妞|伊啵|Anew|Yibo|Ann)\s*/i, '').replace(/店$/, '').trim();
+  }, []);
+
   // 2. 讀取設定
   const currentBenchmarks = useMemo(() => {
     const dbBenchmarks = targets?.benchmarks || {};
@@ -101,37 +107,37 @@ const StoreAnalysisView = () => {
 
   // 3. 找出屬於當前品牌的區長 (Reverse Lookup)
   const targetBrandManagers = useMemo(() => {
-    if (!managers) return [];
+    const safeManagers = managers || {}; 
     
     if (brandId === 'default') {
-        return Object.keys(managers).filter(mgr => {
-             const stores = managers[mgr] || [];
-             const isSideBrand = stores.some(s => /安妞|Anew|伊啵|Yibo/i.test(s));
+        return Object.keys(safeManagers).filter(mgr => {
+             const stores = safeManagers[mgr] || [];
+             const isSideBrand = stores.some(s => /安妞|Anew|伊啵|Yibo/i.test(String(s || "")));
              return !isSideBrand;
         });
     }
 
     const detectedManagers = new Set();
-    Object.keys(managers).forEach(mgr => {
-        const stores = managers[mgr] || [];
+    Object.keys(safeManagers).forEach(mgr => {
+        const stores = safeManagers[mgr] || [];
         const match = brandId === '安妞' 
-            ? stores.some(s => /安妞|Anew|Ann/i.test(s))
-            : stores.some(s => /伊啵|Yibo/i.test(s));
+            ? stores.some(s => /安妞|Anew|Ann/i.test(String(s || "")))
+            : stores.some(s => /伊啵|Yibo/i.test(String(s || "")));
         if (match) detectedManagers.add(mgr);
     });
 
     if (detectedManagers.size === 0 && rawData) {
         rawData.forEach(d => {
-            const name = d.storeName;
+            const name = d.storeName || "";
             const isTarget = brandId === '安妞' 
-                ? /安妞|Anew|Ann/i.test(name)
-                : /伊啵|Yibo/i.test(name);
+                ? /安妞|Anew|Ann/i.test(String(name))
+                : /伊啵|Yibo/i.test(String(name));
             
             if (isTarget) {
-                const core = name.replace(/^(CYJ|安妞|伊啵|Anew|Yibo|Ann)\s*/i, "").replace(/店$/, "").trim();
-                Object.keys(managers).forEach(mgr => {
-                    const stores = managers[mgr] || [];
-                    if (stores.some(s => s.includes(core))) {
+                const core = cleanStoreName(name);
+                Object.keys(safeManagers).forEach(mgr => {
+                    const stores = safeManagers[mgr] || [];
+                    if (stores.some(s => cleanStoreName(s) === core)) {
                         detectedManagers.add(mgr);
                     }
                 });
@@ -140,25 +146,27 @@ const StoreAnalysisView = () => {
     }
 
     if (detectedManagers.size === 0) {
-        return Object.keys(managers);
+        return Object.keys(safeManagers);
     }
 
     return Array.from(detectedManagers);
-  }, [managers, brandId, rawData]);
+  }, [managers, brandId, rawData, cleanStoreName]);
 
   // 初始化選單
   useEffect(() => {
     if (activeView === "store-analysis") {
         if (userRole === "store" && currentUser) {
             const myStore = currentUser.stores?.[0] || currentUser.storeName;
-            const coreName = myStore.replace(/^(CYJ|安妞|伊啵|Anew|Yibo|Ann)\s*/i, "").replace(/店$/, "").trim();
-            const fullName = `${brandPrefix}${coreName}店`;
-            setSelectedStore(fullName);
+            if (myStore) { 
+                const coreName = cleanStoreName(myStore);
+                const fullName = `${brandPrefix}${coreName}店`;
+                setSelectedStore(fullName);
+            }
         } else if (userRole === "manager" && currentUser) {
-            setSelectedManager(currentUser.name);
+            setSelectedManager(currentUser.name || "");
         }
     }
-  }, [activeView, currentUser, userRole, brandPrefix]);
+  }, [activeView, currentUser, userRole, brandPrefix, cleanStoreName]);
 
   useEffect(() => {
     const handleStoreNav = (e) => setSelectedStore(e.detail);
@@ -168,25 +176,29 @@ const StoreAnalysisView = () => {
 
   // 4. 選單列表
   const availableStores = useMemo(() => {
+    const safeManagers = managers || {};
+
     const formatStoreName = (s) => {
-      let coreName = s.replace(/^(CYJ|安妞|伊啵|Anew|Yibo|Ann)\s*/i, "").replace(/店$/, "").trim();
-      return `${brandPrefix}${coreName}店`;
+      if (!s) return ""; 
+      return `${brandPrefix}${cleanStoreName(s)}店`;
     };
 
     if (userRole === "director" || userRole === "trainer") {
-        if (selectedManager) return (managers[selectedManager] || []).map(formatStoreName);
-        const allStores = targetBrandManagers.flatMap(mgr => managers[mgr] || []);
-        return allStores.map(formatStoreName);
+        if (selectedManager) return (safeManagers[selectedManager] || []).map(formatStoreName).filter(Boolean);
+        const allStores = targetBrandManagers.flatMap(mgr => safeManagers[mgr] || []);
+        return allStores.map(formatStoreName).filter(Boolean);
     }
         
     if (userRole === "manager")
-      return Object.values(managers).flat().map(formatStoreName);
+      return Object.values(safeManagers).flat().map(formatStoreName).filter(Boolean);
         
-    if (userRole === "store" && currentUser)
-      return (currentUser.stores || [currentUser.storeName]).map((s) => formatStoreName(s));
+    if (userRole === "store" && currentUser) {
+      const myStores = currentUser.stores || (currentUser.storeName ? [currentUser.storeName] : []);
+      return myStores.map((s) => formatStoreName(s)).filter(Boolean);
+    }
       
     return [];
-  }, [selectedManager, managers, currentUser, userRole, brandPrefix, targetBrandManagers]);
+  }, [selectedManager, managers, currentUser, userRole, brandPrefix, targetBrandManagers, cleanStoreName]);
 
   useEffect(() => {
     if (userRole === "store" && currentUser && availableStores.length > 0) {
@@ -201,13 +213,14 @@ const StoreAnalysisView = () => {
   // ==========================================
   const exceptionLists = useMemo(() => {
     if (!isManagementRole || !rawData) return null;
+    const safeManagers = managers || {};
 
     let targetRawStores = [];
     
     if (userRole === 'manager' && currentUser) {
-        targetRawStores = managers[currentUser.name] || [];
+        targetRawStores = safeManagers[currentUser.name] || [];
     } else if (userRole === 'director' || userRole === 'trainer') {
-        targetRawStores = targetBrandManagers.flatMap(mgr => managers[mgr] || []);
+        targetRawStores = targetBrandManagers.flatMap(mgr => safeManagers[mgr] || []);
     }
 
     if (targetRawStores.length === 0) return null;
@@ -219,14 +232,15 @@ const StoreAnalysisView = () => {
     const storeStats = {};
 
     targetRawStores.forEach(s => {
-        const coreName = s.replace(/^(CYJ|安妞|伊啵|Anew|Yibo|Ann)\s*/i, "").replace(/店$/, "").trim();
+        if (!s) return; 
+        const coreName = cleanStoreName(s);
         let mgrName = "未分配";
-        Object.entries(managers).forEach(([m, list]) => {
-            if(list.includes(s)) mgrName = m;
+        Object.entries(safeManagers).forEach(([m, list]) => {
+            if((list || []).includes(s)) mgrName = m;
         });
 
         storeStats[coreName] = {
-            id: s,
+            id: String(s),
             name: `${coreName}店`,
             manager: mgrName,
             cash: 0, accrual: 0, skincare: 0, traffic: 0, newCust: 0, newSales: 0, foundData: false 
@@ -234,27 +248,27 @@ const StoreAnalysisView = () => {
     });
 
     rawData.forEach(d => {
-        if (!d.date) return;
-        const parts = d.date.replace(/-/g, "/").split("/");
+        if (!d.date || !d.storeName) return; 
+        const parts = String(d.date).replace(/-/g, "/").split("/");
         const y = parseInt(parts[0]);
         const m = parseInt(parts[1]);
         if (!((y === targetYear || y === rocYear) && m === monthInt)) return;
 
-        const dCore = d.storeName.replace(/^(CYJ|安妞|伊啵|Anew|Yibo|Ann)\s*/i, "").replace(/店$/, "").trim();
+        const dCore = cleanStoreName(d.storeName);
         
         if (storeStats[dCore]) {
             storeStats[dCore].foundData = true;
-            storeStats[dCore].cash += (d.cash || 0) - (d.refund || 0);
-            storeStats[dCore].accrual += (d.accrual || 0);
-            storeStats[dCore].skincare += (d.skincareSales || 0);
-            storeStats[dCore].traffic += (d.traffic || 0);
-            storeStats[dCore].newCust += (d.newCustomers || 0);
-            storeStats[dCore].newSales += (d.newCustomerSales || 0);
+            storeStats[dCore].cash += (Number(d.cash) || 0) - (Number(d.refund) || 0);
+            storeStats[dCore].accrual += (Number(d.accrual) || 0);
+            storeStats[dCore].skincare += (Number(d.skincareSales) || 0);
+            storeStats[dCore].traffic += (Number(d.traffic) || 0);
+            storeStats[dCore].newCust += (Number(d.newCustomers) || 0);
+            storeStats[dCore].newSales += (Number(d.newCustomerSales) || 0);
         }
     });
 
     const cfg = currentBenchmarks;
-    const getThreshold = (val) => (val > 5 ? val / 100 : val); 
+    const getThreshold = (val) => (Number(val) > 5 ? Number(val) / 100 : Number(val)); 
 
     const reportCards = Object.values(storeStats)
         .filter(s => s.foundData)
@@ -264,7 +278,7 @@ const StoreAnalysisView = () => {
             const productRatio = s.cash > 0 ? s.skincare / s.cash : 0;
             const retentionRate = s.traffic > 0 ? oldCust / s.traffic : 0;
             const newCustomerASP = s.newCust > 0 ? Math.round(s.newSales / s.newCust) : 0;
-            const targetASP = targets.newASP || 3500;
+            const targetASP = Number(targets?.newASP) || 3500;
             const acquisitionRate = targetASP > 0 ? newCustomerASP / targetASP : 0;
 
             return {
@@ -287,7 +301,7 @@ const StoreAnalysisView = () => {
 
     return { financialRisks, retentionRisks, salesRisks };
 
-  }, [rawData, userRole, currentUser, managers, isManagementRole, targets, currentBenchmarks, targetBrandManagers, selectedYear, selectedMonth]);
+  }, [rawData, userRole, currentUser, managers, isManagementRole, targets, currentBenchmarks, targetBrandManagers, selectedYear, selectedMonth, cleanStoreName]);
 
 
   // ==========================================
@@ -295,14 +309,20 @@ const StoreAnalysisView = () => {
   // ==========================================
   
   const calculateHealthMetrics = (dataList) => {
-    if (!dataList || dataList.length === 0) return null;
+    // ★★★ 防護網：預設安全回傳值，就算完全沒資料，也保證不回傳 null 導致畫面崩潰 ★★★
+    const defaultHealth = {
+        raw: { cashToAccrual: 0, retailRatio: 0, retention: 0, aspMining: 0, acquisitionQuality: 0 },
+        scores: { financial: 0, sales: 0, loyalty: 0, mining: 0, acquisition: 0 }
+    };
 
-    const cash = dataList.reduce((a, b) => a + (b.cash || 0) - (b.refund || 0), 0);
-    const accrual = dataList.reduce((a, b) => a + (b.accrual || 0), 0);
-    const skincare = dataList.reduce((a, b) => a + (b.skincareSales || 0), 0);
-    const traffic = dataList.reduce((a, b) => a + (b.traffic || 0), 0);
-    const newCust = dataList.reduce((a, b) => a + (b.newCustomers || 0), 0);
-    const newSales = dataList.reduce((a, b) => a + (b.newCustomerSales || 0), 0);
+    if (!dataList || dataList.length === 0) return defaultHealth;
+
+    const cash = dataList.reduce((a, b) => a + (Number(b.cash) || 0) - (Number(b.refund) || 0), 0);
+    const accrual = dataList.reduce((a, b) => a + (Number(b.accrual) || 0), 0);
+    const skincare = dataList.reduce((a, b) => a + (Number(b.skincareSales) || 0), 0);
+    const traffic = dataList.reduce((a, b) => a + (Number(b.traffic) || 0), 0);
+    const newCust = dataList.reduce((a, b) => a + (Number(b.newCustomers) || 0), 0);
+    const newSales = dataList.reduce((a, b) => a + (Number(b.newCustomerSales) || 0), 0);
     
     const oldCust = Math.max(0, traffic - newCust);
     const oldSales = Math.max(0, cash - newSales);
@@ -314,14 +334,14 @@ const StoreAnalysisView = () => {
       aspMining: (oldCust > 0 && newCust > 0 && (newSales/newCust) > 0) 
                  ? (oldSales / oldCust) / (newSales / newCust)
                  : 0,
-      acquisitionQuality: (newCust > 0 && targets.newASP > 0) 
-                          ? (newSales / newCust) / targets.newASP
+      acquisitionQuality: (newCust > 0 && (Number(targets?.newASP) || 3500) > 0) 
+                          ? (newSales / newCust) / (Number(targets?.newASP) || 3500)
                           : 0
     };
 
     const normalize = (val, min, max) => {
-      const nMin = min > 5 ? min / 100 : min;
-      const nMax = max > 5 ? max / 100 : max;
+      const nMin = Number(min) > 5 ? Number(min) / 100 : Number(min);
+      const nMax = Number(max) > 5 ? Number(max) / 100 : Number(max);
 
       if (val <= nMin) return 60 * (val / nMin);
       if (val >= nMax) return 100;
@@ -342,33 +362,34 @@ const StoreAnalysisView = () => {
   };
 
   const storeMetrics = useMemo(() => {
-    if (!selectedStore) return null;
+    if (!selectedStore || !rawData) return null;
     const targetYear = parseInt(selectedYear);
     const monthInt = parseInt(selectedMonth);
     const rocYear = targetYear - 1911;
 
-    const targetCoreName = selectedStore.replace(/^(CYJ|安妞|伊啵|Anew|Yibo|Ann)\s*/i, "").replace(/店$/, "").trim();
+    const targetCoreName = cleanStoreName(selectedStore);
 
     const data = rawData.filter((d) => {
-        if (!d.date) return false;
-        const parts = d.date.replace(/-/g, "/").split("/");
+        if (!d.date || !d.storeName) return false;
+        const parts = String(d.date).replace(/-/g, "/").split("/");
         const y = parseInt(parts[0]);
         const m = parseInt(parts[1]);
         if (!((y === targetYear || y === rocYear) && m === monthInt)) return false;
 
-        const dCoreName = d.storeName.replace(/^(CYJ|安妞|伊啵|Anew|Yibo|Ann)\s*/i, "").replace(/店$/, "").trim();
+        const dCoreName = cleanStoreName(d.storeName);
         return dCoreName === targetCoreName;
     }).sort((a, b) => toStandardDateFormat(a.date).localeCompare(toStandardDateFormat(b.date)));
 
-    const grossCash = data.reduce((a, b) => a + (b.cash || 0), 0);
-    const totalRefund = data.reduce((a, b) => a + (b.refund || 0), 0);
+    const grossCash = data.reduce((a, b) => a + (Number(b.cash) || 0), 0);
+    const totalRefund = data.reduce((a, b) => a + (Number(b.refund) || 0), 0);
     const totalCash = grossCash - totalRefund;
-    const totalTraffic = data.reduce((a, b) => a + (b.traffic || 0), 0);
-    const totalOpAccrual = data.reduce((a, b) => a + (b.operationalAccrual || 0), 0);
-    const totalNewCustomers = data.reduce((a, b) => a + (b.newCustomers || 0), 0);
-    const totalNewCustomerSales = data.reduce((a, b) => a + (b.newCustomerSales || 0), 0);
-    const totalNewCustomerClosings = data.reduce((a, b) => a + (b.newCustomerClosings || 0), 0);
-    const budget = budgets[`${selectedStore}_${targetYear}_${monthInt}`]?.cashTarget || 0;
+    const totalTraffic = data.reduce((a, b) => a + (Number(b.traffic) || 0), 0);
+    const totalOpAccrual = data.reduce((a, b) => a + (Number(b.operationalAccrual) || 0), 0);
+    const totalNewCustomers = data.reduce((a, b) => a + (Number(b.newCustomers) || 0), 0);
+    const totalNewCustomerSales = data.reduce((a, b) => a + (Number(b.newCustomerSales) || 0), 0);
+    const totalNewCustomerClosings = data.reduce((a, b) => a + (Number(b.newCustomerClosings) || 0), 0);
+    const budgetData = budgets[`${selectedStore}_${targetYear}_${monthInt}`] || {};
+    const budget = Number(budgetData.cashTarget || 0);
 
     const health = calculateHealthMetrics(data);
 
@@ -380,21 +401,22 @@ const StoreAnalysisView = () => {
       totalNewCustomerClosings,
       totalRefund,
       dailyData: data.map((d) => ({
-        date: toStandardDateFormat(d.date).split("/")[2],
-        cash: (d.cash || 0) - (d.refund || 0),
-        accrual: d.accrual || 0,
-        traffic: d.traffic,
+        date: String(toStandardDateFormat(d.date)).split("/")[2],
+        cash: (Number(d.cash) || 0) - (Number(d.refund) || 0),
+        accrual: Number(d.accrual) || 0,
+        traffic: Number(d.traffic) || 0,
       })),
       budget,
       health
     };
-  }, [selectedStore, selectedYear, selectedMonth, rawData, budgets, targets, currentBenchmarks]);
+  }, [selectedStore, selectedYear, selectedMonth, rawData, budgets, targets, currentBenchmarks, cleanStoreName]);
 
   const benchmarkMetrics = useMemo(() => {
-    if (!showBenchmark) return null;
+    if (!showBenchmark || !rawData) return null;
     const targetYear = parseInt(selectedYear);
     const monthInt = parseInt(selectedMonth);
     const rocYear = targetYear - 1911;
+    const safeManagers = managers || {};
 
     const validCores = new Set();
     const relevantManagers = (userRole === 'manager' && selectedManager) 
@@ -402,27 +424,29 @@ const StoreAnalysisView = () => {
         : targetBrandManagers;
 
     relevantManagers.forEach(mgr => {
-        (managers[mgr] || []).forEach(s => {
-            const core = s.replace(/^(CYJ|安妞|伊啵|Anew|Yibo|Ann)\s*/i, "").replace(/店$/, "").trim();
+        (safeManagers[mgr] || []).forEach(s => {
+            if(!s) return;
+            const core = cleanStoreName(s);
             if(core) validCores.add(core);
         });
     });
 
     let benchmarkStores = rawData.filter(d => {
-        const core = d.storeName.replace(/^(CYJ|安妞|伊啵|Anew|Yibo|Ann)\s*/i, "").replace(/店$/, "").trim();
+        if(!d.storeName) return false;
+        const core = cleanStoreName(d.storeName);
         return validCores.has(core);
     });
 
     const benchmarkData = benchmarkStores.filter(d => {
         if (!d.date) return false;
-        const parts = d.date.replace(/-/g, "/").split("/");
+        const parts = String(d.date).replace(/-/g, "/").split("/");
         const y = parseInt(parts[0]);
         const m = parseInt(parts[1]);
         return (y === targetYear || y === rocYear) && m === monthInt;
     }).filter(d => d.storeName !== selectedStore); 
 
     return calculateHealthMetrics(benchmarkData);
-  }, [selectedYear, selectedMonth, rawData, managers, selectedManager, userRole, brandPrefix, showBenchmark, targets, selectedStore, currentBenchmarks, brandId, targetBrandManagers]);
+  }, [selectedYear, selectedMonth, rawData, managers, selectedManager, userRole, brandPrefix, showBenchmark, targets, selectedStore, currentBenchmarks, brandId, targetBrandManagers, cleanStoreName]);
 
   const radarData = useMemo(() => {
     if (!storeMetrics?.health) return [];
@@ -457,7 +481,7 @@ const StoreAnalysisView = () => {
             <p className={`font-mono font-bold text-sm ${
                 type === 'danger' ? 'text-rose-500' : 'text-amber-500'
             }`}>
-                {type === 'currency' ? fmtMoney(value) : `${(value * 100).toFixed(0)}%`}
+                {type === 'currency' ? fmtMoney(value) : `${(Number(value) * 100).toFixed(0)}%`}
             </p>
             <p className="text-[10px] text-stone-400">{label}</p>
         </div>
@@ -466,20 +490,17 @@ const StoreAnalysisView = () => {
   );
 
   const handleJumpToStore = (fullStoreName) => {
-    const formatStoreName = (s) => {
-        let coreName = s.replace(/^(CYJ|安妞|伊啵|Anew|Yibo|Ann)\s*/i, "").replace(/店$/, "").trim();
-        return `${brandPrefix}${coreName}店`;
-    };
-    setSelectedStore(formatStoreName(fullStoreName));
+    setSelectedStore(`${brandPrefix}${cleanStoreName(fullStoreName)}店`);
   };
 
   const cfg = currentBenchmarks;
 
-  // 格式化顯示函數
   const formatThreshold = (val) => {
-      const num = val > 5 ? val : val * 100;
+      const num = Number(val) > 5 ? Number(val) : Number(val) * 100;
       return `${num.toFixed(0)}%`;
   };
+
+  const getCalcThreshold = (val) => Number(val) > 5 ? Number(val) / 100 : Number(val);
 
   return (
     <ViewWrapper>
@@ -560,7 +581,6 @@ const StoreAnalysisView = () => {
                                 {exceptionLists.financialRisks.length} 間
                             </span>
                         </div>
-                        {/* ★★★ 修改重點：增加 max-height (約5間店) 與 overflow-y-auto ★★★ */}
                         <div className="p-2 flex-1 min-h-[200px] max-h-[300px] overflow-y-auto no-scrollbar">
                             {exceptionLists.financialRisks.length > 0 ? (
                                 exceptionLists.financialRisks.map(store => (
@@ -596,7 +616,6 @@ const StoreAnalysisView = () => {
                                 {exceptionLists.retentionRisks.length} 間
                             </span>
                         </div>
-                        {/* ★★★ 修改重點：增加 max-height (約5間店) 與 overflow-y-auto ★★★ */}
                         <div className="p-2 flex-1 min-h-[200px] max-h-[300px] overflow-y-auto no-scrollbar">
                             {exceptionLists.retentionRisks.length > 0 ? (
                                 exceptionLists.retentionRisks.map(store => (
@@ -618,7 +637,7 @@ const StoreAnalysisView = () => {
                             )}
                         </div>
                         <div className="p-3 bg-stone-50 text-xs text-stone-400 text-center border-t border-stone-100">
-                            篩選標準：{cfg.loyalty.label} &lt; {formatThreshold((cfg.loyalty.min > 5 ? cfg.loyalty.min / 100 : cfg.loyalty.min) - 0.1)}
+                            篩選標準：{cfg.loyalty.label} &lt; {formatThreshold(getCalcThreshold(cfg.loyalty.min) - 0.1)}
                         </div>
                     </div>
 
@@ -632,7 +651,6 @@ const StoreAnalysisView = () => {
                                 {exceptionLists.salesRisks.length} 間
                             </span>
                         </div>
-                        {/* ★★★ 修改重點：增加 max-height (約5間店) 與 overflow-y-auto ★★★ */}
                         <div className="p-2 flex-1 min-h-[200px] max-h-[300px] overflow-y-auto no-scrollbar">
                             {exceptionLists.salesRisks.length > 0 ? (
                                 exceptionLists.salesRisks.map(store => (
@@ -663,7 +681,6 @@ const StoreAnalysisView = () => {
 
         {selectedStore && storeMetrics ? (
           <div className="animate-in fade-in slide-in-from-right-8 duration-500">
-            {/* ... 下方的單店內容完全不變 ... */}
             <div className="flex flex-col xl:flex-row gap-6">
                
                <div className="w-full xl:w-1/3 bg-white rounded-2xl border border-stone-100 shadow-sm p-4 flex flex-col relative overflow-hidden">
@@ -726,7 +743,7 @@ const StoreAnalysisView = () => {
                                 fillOpacity={0.4}
                             />
                             <Legend wrapperStyle={{ fontSize: '12px', paddingTop: '10px' }}/>
-                            <RechartsTooltip contentStyle={{ borderRadius: '12px', fontSize: '12px' }} formatter={(val) => val.toFixed(0)}/>
+                            <RechartsTooltip contentStyle={{ borderRadius: '12px', fontSize: '12px' }} formatter={(val) => (Number(val) || 0).toFixed(0)}/>
                         </RadarChart>
                     </ResponsiveContainer>
                   </div>

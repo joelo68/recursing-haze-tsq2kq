@@ -10,15 +10,15 @@ import {
 } from "recharts";
 import { AppContext } from "../AppContext";
 import { ViewWrapper, Card } from "./SharedUI";
-import { Loader2 } from "lucide-react";
+import { Loader2, Map } from "lucide-react";
 
 const RegionalView = () => {
   const { 
     fmtMoney, 
     fmtNum, 
     userRole, 
+    currentUser,
     currentBrand,
-    // ★ 改用原始資料自行運算，不再依賴舊的 analytics
     allReports,
     managers,
     budgets,
@@ -52,22 +52,23 @@ const RegionalView = () => {
     return { brandInfo: { id, name }, brandPrefix: name };
   }, [currentBrand]);
 
-  // 2. 通用店名清洗函式
+  // 2. ★★★ 強化的通用店名清洗函式 ★★★
+  // 無論資料庫存的是舊版 "Anew(安妞)古亭店" 還是新版 "安妞古亭店"，都會被洗成 "古亭"
   const cleanStoreName = (name) => {
     if (!name) return "";
-    return name.replace(new RegExp(`^(${brandPrefix}|CYJ|Anew|Yibo)`, 'i'), '').replace(/店$/, '').trim();
+    return name.replace(/^(CYJ|Anew\s*\(安妞\)|Yibo\s*\(伊啵\)|安妞|伊啵|Anew|Yibo)\s*/i, '').replace(/店$/, '').trim();
   };
 
-  // ★★★ 3. 本地即時運算區域數據 (核心修正) ★★★
+  // 3. 本地即時運算區域數據
   const regionalData = useMemo(() => {
     if (!allReports || !managers) return null;
 
     const y = parseInt(selectedYear);
     const m = parseInt(selectedMonth);
 
-    // 準備容器
-    const stats = Object.keys(managers).map(mgr => ({
-      manager: mgr,
+    // 準備容器 (加入防呆，避免 managers 傳入 undefined 導致錯誤)
+    const stats = Object.keys(managers || {}).map(mgr => ({
+      manager: mgr || "未命名",
       stores: [],
       cashTotal: 0,
       accrualTotal: 0,
@@ -84,10 +85,9 @@ const RegionalView = () => {
       const storeList = managers[region.manager] || [];
       
       // 遍歷該區的每家店
-      storeList.forEach(storeName => { // storeName 是簡稱 (如: 中山)
-        const fullName = `${brandPrefix}${storeName}店`; // 組合完整名稱
+      storeList.forEach(storeName => { 
+        const fullName = `${brandPrefix}${storeName}店`; 
         
-        // 初始單店數據
         const storeStat = {
           name: fullName,
           cleanName: storeName,
@@ -97,11 +97,13 @@ const RegionalView = () => {
           achievement: 0
         };
 
-        // 1. 加總業績 (從 allReports)
+        // ★★★ 核心修正：使用清洗後的核心名稱進行比對，徹底解決區長抓不到舊資料的問題 ★★★
         allReports.forEach(r => {
           const rDate = new Date(r.date);
           if (rDate.getFullYear() !== y || (rDate.getMonth() + 1) !== m) return;
-          if (r.storeName !== fullName) return; // 精準比對
+          
+          const reportCoreName = cleanStoreName(r.storeName);
+          if (reportCoreName !== storeName) return; // 只看核心名字 (例如: 古亭 === 古亭)
 
           const cash = (Number(r.cash) || 0) - (Number(r.refund) || 0);
           const accrual = Number(r.accrual) || 0;
@@ -109,7 +111,6 @@ const RegionalView = () => {
           storeStat.cashTotal += cash;
           storeStat.accrualTotal += accrual;
 
-          // 累加到區域總計
           region.cashTotal += cash;
           region.accrualTotal += accrual;
           region.skincareSalesTotal += (Number(r.skincareSales) || 0);
@@ -118,7 +119,7 @@ const RegionalView = () => {
           region.newCustomerClosingsTotal += (Number(r.newCustomerClosings) || 0);
         });
 
-        // 2. 取得目標 (從 budgets)
+        // 取得目標
         const budgetKey = `${fullName}_${y}_${m}`;
         const b = budgets[budgetKey];
         if (b) {
@@ -136,7 +137,6 @@ const RegionalView = () => {
       region.achievement = region.budgetTotal > 0 ? (region.cashTotal / region.budgetTotal) * 100 : 0;
     });
 
-    // 排序：業績高的區域排前面
     return stats.sort((a, b) => b.cashTotal - a.cashTotal);
 
   }, [allReports, managers, budgets, selectedYear, selectedMonth, brandPrefix]);
@@ -167,88 +167,99 @@ const RegionalView = () => {
             <h1 className="text-2xl font-bold text-stone-700">{brandInfo.name} 區域分析</h1>
         </div>
 
-        {/* 區域卡片列表 */}
-        <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-6">
-          {regionalData.map((region) => (
-            <Card
-              key={region.manager}
-              className="hover:shadow-lg transition-shadow duration-300 border-l-4 border-l-stone-200"
-            >
-              <div className="flex justify-between items-start mb-6 border-b border-stone-50 pb-4">
-                <div className="flex items-center gap-3">
-                  <div className="w-12 h-12 rounded-full bg-stone-100 flex items-center justify-center font-bold text-stone-500 text-lg">
-                    {region.manager.charAt(0)}
+        {/* ★★★ 新增：無資料時的友善提示 (避免白畫面感) ★★★ */}
+        {regionalData.length === 0 && (
+           <div className="p-16 text-center text-stone-400 bg-white rounded-3xl border border-stone-100 shadow-sm mt-6 flex flex-col items-center">
+              <Map size={48} className="mb-4 text-stone-200" />
+              <p className="text-lg font-bold text-stone-600">目前無區域資料可顯示</p>
+              <p className="text-sm mt-2">您的權限可能未配置相關區域，或是該區域本月尚無業績紀錄。</p>
+           </div>
+        )}
+
+        {/* 區域卡片列表 (加入 ?. 防呆) */}
+        {regionalData.length > 0 && (
+          <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-6">
+            {regionalData.map((region) => (
+              <Card
+                key={region.manager}
+                className="hover:shadow-lg transition-shadow duration-300 border-l-4 border-l-stone-200"
+              >
+                <div className="flex justify-between items-start mb-6 border-b border-stone-50 pb-4">
+                  <div className="flex items-center gap-3">
+                    <div className="w-12 h-12 rounded-full bg-stone-100 flex items-center justify-center font-bold text-stone-500 text-lg uppercase">
+                      {region.manager?.charAt(0) || "-"}
+                    </div>
+                    <div>
+                      <h3 className="text-xl font-bold text-stone-700">
+                        {region.manager} 區
+                      </h3>
+                    </div>
                   </div>
-                  <div>
-                    <h3 className="text-xl font-bold text-stone-700">
-                      {region.manager} 區
-                    </h3>
+                  <div className="text-right">
+                    <div
+                      className={`px-3 py-1 rounded-lg text-sm font-bold mb-1 inline-block ${
+                        region.achievement >= 100
+                          ? "bg-emerald-100 text-emerald-700"
+                          : "bg-amber-50 text-amber-600"
+                      }`}
+                    >
+                      {(region.achievement || 0).toFixed(0)}%
+                    </div>
                   </div>
                 </div>
-                <div className="text-right">
-                  <div
-                    className={`px-3 py-1 rounded-lg text-sm font-bold mb-1 inline-block ${
-                      region.achievement >= 100
-                        ? "bg-emerald-100 text-emerald-700"
-                        : "bg-amber-50 text-amber-600"
-                    }`}
-                  >
-                    {region.achievement.toFixed(0)}%
+                <div className="space-y-3 mb-6">
+                  <div className="flex justify-between items-center">
+                    <span className="text-stone-500 text-sm">現金總業績</span>
+                    <span className="text-lg font-bold text-stone-700">
+                      {fmtMoney(region.cashTotal)}
+                    </span>
+                  </div>
+                  <div className="flex justify-between items-center">
+                    <span className="text-stone-500 text-sm">權責總業績</span>
+                    <span className="text-base font-bold text-stone-600">
+                      {fmtMoney(region.accrualTotal)}
+                    </span>
+                  </div>
+                  <div className="flex justify-between items-center">
+                    <span className="text-stone-500 text-sm">保養品業績</span>
+                    <span className="text-base font-bold text-rose-500">
+                      {fmtMoney(region.skincareSalesTotal)}
+                    </span>
                   </div>
                 </div>
-              </div>
-              <div className="space-y-3 mb-6">
-                <div className="flex justify-between items-center">
-                  <span className="text-stone-500 text-sm">現金總業績</span>
-                  <span className="text-lg font-bold text-stone-700">
-                    {fmtMoney(region.cashTotal)}
-                  </span>
+                <div className="grid grid-cols-3 gap-2 py-4 border-t border-stone-100 bg-stone-50/50 -mx-6 px-6">
+                  <div className="text-center">
+                    <p className="text-[10px] text-stone-400 font-bold uppercase mb-1">
+                      課程操作
+                    </p>
+                    <p className="text-stone-700 font-bold">
+                      {fmtNum(region.trafficTotal)}
+                    </p>
+                  </div>
+                  <div className="text-center border-l border-stone-200">
+                    <p className="text-[10px] text-stone-400 font-bold uppercase mb-1">
+                      新客數
+                    </p>
+                    <p className="text-stone-700 font-bold">
+                      {fmtNum(region.newCustomersTotal)}
+                    </p>
+                  </div>
+                  <div className="text-center border-l border-stone-200">
+                    <p className="text-[10px] text-stone-400 font-bold uppercase mb-1">
+                      留單數
+                    </p>
+                    <p className="text-stone-700 font-bold">
+                      {fmtNum(region.newCustomerClosingsTotal)}
+                    </p>
+                  </div>
                 </div>
-                <div className="flex justify-between items-center">
-                  <span className="text-stone-500 text-sm">權責總業績</span>
-                  <span className="text-base font-bold text-stone-600">
-                    {fmtMoney(region.accrualTotal)}
-                  </span>
-                </div>
-                <div className="flex justify-between items-center">
-                  <span className="text-stone-500 text-sm">保養品業績</span>
-                  <span className="text-base font-bold text-rose-500">
-                    {fmtMoney(region.skincareSalesTotal)}
-                  </span>
-                </div>
-              </div>
-              <div className="grid grid-cols-3 gap-2 py-4 border-t border-stone-100 bg-stone-50/50 -mx-6 px-6">
-                <div className="text-center">
-                  <p className="text-[10px] text-stone-400 font-bold uppercase mb-1">
-                    課程操作
-                  </p>
-                  <p className="text-stone-700 font-bold">
-                    {fmtNum(region.trafficTotal)}
-                  </p>
-                </div>
-                <div className="text-center border-l border-stone-200">
-                  <p className="text-[10px] text-stone-400 font-bold uppercase mb-1">
-                    新客數
-                  </p>
-                  <p className="text-stone-700 font-bold">
-                    {fmtNum(region.newCustomersTotal)}
-                  </p>
-                </div>
-                <div className="text-center border-l border-stone-200">
-                  <p className="text-[10px] text-stone-400 font-bold uppercase mb-1">
-                    留單數
-                  </p>
-                  <p className="text-stone-700 font-bold">
-                    {fmtNum(region.newCustomerClosingsTotal)}
-                  </p>
-                </div>
-              </div>
-            </Card>
-          ))}
-        </div>
+              </Card>
+            ))}
+          </div>
+        )}
 
         {/* 總監視角：圓餅圖 */}
-        {userRole === "director" ? (
+        {userRole === "director" && regionalData.length > 0 && pieData.length > 0 ? (
           <div className="grid grid-cols-1 md:grid-cols-2 gap-6 animate-in slide-in-from-bottom-4 duration-500">
             <Card title={`各區現金業績貢獻佔比 (${brandPrefix})`} subtitle="區長業績分佈分析">
               <div className="h-[350px] w-full flex justify-center items-center">
@@ -280,7 +291,7 @@ const RegionalView = () => {
               </div>
             </Card>
           </div>
-        ) : (
+        ) : userRole !== "director" && regionalData.length > 0 ? (
           /* 非總監視角 (區長/店長)：顯示分店細節 */
           <div className="space-y-6">
             {regionalData.map((region) => {
@@ -298,7 +309,7 @@ const RegionalView = () => {
                     </h3>
                   </div>
                   <div className="p-6 grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
-                    {region.stores.map((store) => (
+                    {(region.stores || []).map((store) => (
                       <div
                         key={store.name}
                         className="bg-white border border-stone-100 rounded-2xl p-5 hover:shadow-lg transition-all"
@@ -307,8 +318,8 @@ const RegionalView = () => {
                           <h4 className="font-bold text-stone-700">
                             {store.cleanName}
                           </h4>
-                          <span className={`text-sm font-bold ${store.achievement >= 100 ? 'text-emerald-600' : 'text-amber-500'}`}>
-                            {store.achievement.toFixed(0)}%
+                          <span className={`text-sm font-bold ${(store.achievement || 0) >= 100 ? 'text-emerald-600' : 'text-amber-500'}`}>
+                            {(store.achievement || 0).toFixed(0)}%
                           </span>
                         </div>
                         <div className="space-y-2 text-sm">
@@ -332,7 +343,7 @@ const RegionalView = () => {
               );
             })}
           </div>
-        )}
+        ) : null}
       </div>
     </ViewWrapper>
   );
