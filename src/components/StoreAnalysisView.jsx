@@ -43,6 +43,7 @@ const DEFAULT_BENCHMARKS = {
 const StoreAnalysisView = () => {
   const {
     rawData,
+    allReports,
     budgets,
     managers,
     targets, 
@@ -83,12 +84,18 @@ const StoreAnalysisView = () => {
     return { brandPrefix: name, brandId: id };
   }, [currentBrand]);
 
-  // ★★★ 統一的店名清洗函式 (修正：加入新店防呆判斷) ★★★
   const cleanStoreName = useCallback((name) => {
     if (!name) return "";
     let core = String(name).replace(/^(CYJ|Anew\s*\(安妞\)|Yibo\s*\(伊啵\)|安妞|伊啵|Anew|Yibo|Ann)\s*/i, '').trim();
-    if (core === "新店") return "新店"; // ★ 防止「新店」被誤刪成「新」
+    if (core === "新店") return "新店"; 
     return core.replace(/店$/, '').trim();
+  }, []);
+
+  const isBrandMatch = useCallback((storeName, bId) => {
+      const name = String(storeName || "");
+      if (bId === '安妞') return /安妞|Anew|Ann/i.test(name);
+      if (bId === '伊啵') return /伊啵|Yibo/i.test(name);
+      return !(/安妞|Anew|伊啵|Yibo/i.test(name)); 
   }, []);
 
   // 2. 讀取設定
@@ -107,7 +114,6 @@ const StoreAnalysisView = () => {
 
   const isManagementRole = userRole === "director" || userRole === "trainer" || userRole === "manager";
 
-  // 3. 找出屬於當前品牌的區長 (Reverse Lookup)
   const targetBrandManagers = useMemo(() => {
     const safeManagers = managers || {}; 
     
@@ -154,7 +160,6 @@ const StoreAnalysisView = () => {
     return Array.from(detectedManagers);
   }, [managers, brandId, rawData, cleanStoreName]);
 
-  // 初始化選單
   useEffect(() => {
     if (activeView === "store-analysis") {
         if (userRole === "store" && currentUser) {
@@ -176,7 +181,6 @@ const StoreAnalysisView = () => {
     return () => window.removeEventListener("navigate-to-store", handleStoreNav);
   }, []);
 
-  // 4. 選單列表
   const availableStores = useMemo(() => {
     const safeManagers = managers || {};
 
@@ -211,7 +215,318 @@ const StoreAnalysisView = () => {
   }, [currentUser, availableStores, selectedStore, userRole]);
 
   // ==========================================
-  // ★★★ 5. 全局掃描引擎 ★★★
+  // 單店運算與彙整運算引擎
+  // ==========================================
+  const calculateHealthMetrics = useCallback((dataList) => {
+    const defaultHealth = {
+        raw: { cashToAccrual: 0, retailRatio: 0, retention: 0, aspMining: 0, acquisitionQuality: 0 },
+        scores: { financial: 0, sales: 0, loyalty: 0, mining: 0, acquisition: 0 }
+    };
+
+    if (!dataList || dataList.length === 0) return defaultHealth;
+
+    const cash = dataList.reduce((a, b) => a + (Number(b.cash) || 0) - (Number(b.refund) || 0), 0);
+    const accrual = dataList.reduce((a, b) => a + (Number(b.accrual) || 0), 0);
+    const skincare = dataList.reduce((a, b) => a + (Number(b.skincareSales) || 0), 0);
+    const traffic = dataList.reduce((a, b) => a + (Number(b.traffic) || 0), 0);
+    const newCust = dataList.reduce((a, b) => a + (Number(b.newCustomers) || 0), 0);
+    const newSales = dataList.reduce((a, b) => a + (Number(b.newCustomerSales) || 0), 0);
+    
+    const oldCust = Math.max(0, traffic - newCust);
+    const oldSales = Math.max(0, cash - newSales);
+
+    const rawMetrics = {
+      cashToAccrual: accrual > 0 ? cash / accrual : 0,
+      retailRatio: cash > 0 ? skincare / cash : 0,
+      retention: traffic > 0 ? oldCust / traffic : 0,
+      aspMining: (oldCust > 0 && newCust > 0 && (newSales/newCust) > 0) 
+                 ? (oldSales / oldCust) / (newSales / newCust)
+                 : 0,
+      acquisitionQuality: (newCust > 0 && (Number(targets?.newASP) || 3500) > 0) 
+                          ? (newSales / newCust) / (Number(targets?.newASP) || 3500)
+                          : 0
+    };
+
+    const normalize = (val, min, max) => {
+      const nMin = Number(min) > 5 ? Number(min) / 100 : Number(min);
+      const nMax = Number(max) > 5 ? Number(max) / 100 : Number(max);
+      if (val <= nMin) return 60 * (val / nMin);
+      if (val >= nMax) return 100;
+      return 60 + ((val - nMin) / (nMax - nMin)) * 40;
+    };
+
+    const cfg = currentBenchmarks;
+
+    const scores = {
+      financial: normalize(rawMetrics.cashToAccrual, cfg.financial.min, cfg.financial.max),
+      sales: normalize(rawMetrics.retailRatio, cfg.sales.min, cfg.sales.max),
+      loyalty: normalize(rawMetrics.retention, cfg.loyalty.min, cfg.loyalty.max),
+      mining: normalize(rawMetrics.aspMining, cfg.mining.min, cfg.mining.max),
+      acquisition: normalize(rawMetrics.acquisitionQuality, cfg.acquisition.min, cfg.acquisition.max)
+    };
+
+    return { raw: rawMetrics, scores };
+  }, [currentBenchmarks, targets]);
+
+  const getAggregateData = useCallback((storesList) => {
+    const targetYear = parseInt(selectedYear);
+    const monthInt = parseInt(selectedMonth);
+    const rocYear = targetYear - 1911;
+    
+    const data = allReports.filter(d => {
+        if (!d.date || !d.storeName) return false;
+        const parts = String(d.date).replace(/-/g, "/").split("/");
+        const y = parseInt(parts[0]);
+        const m = parseInt(parts[1]);
+        if (!((y === targetYear || y === rocYear) && m === monthInt)) return false;
+        
+        const core = cleanStoreName(d.storeName);
+        return storesList.includes(core);
+    });
+
+    const cash = data.reduce((a, b) => a + (Number(b.cash) || 0) - (Number(b.refund) || 0), 0);
+    const refund = data.reduce((a, b) => a + (Number(b.refund) || 0), 0);
+    const traffic = data.reduce((a, b) => a + (Number(b.traffic) || 0), 0);
+    const opAccrual = data.reduce((a, b) => a + (Number(b.operationalAccrual) || 0), 0);
+    const newCust = data.reduce((a, b) => a + (Number(b.newCustomers) || 0), 0);
+    const newSales = data.reduce((a, b) => a + (Number(b.newCustomerSales) || 0), 0);
+    const newClosings = data.reduce((a, b) => a + (Number(b.newCustomerClosings) || 0), 0);
+    
+    let totalBudget = 0;
+    storesList.forEach(core => {
+        const budgetKey = `${brandPrefix}${core}店_${targetYear}_${monthInt}`;
+        if(budgets[budgetKey]) {
+            totalBudget += Number(budgets[budgetKey].cashTarget || 0);
+        }
+    });
+
+    const health = calculateHealthMetrics(data);
+
+    return {
+        totalCash: cash,
+        totalRefund: refund,
+        totalTraffic: traffic,
+        trafficASP: traffic > 0 ? Math.round(opAccrual / traffic) : 0,
+        newCustomerASP: newCust > 0 ? Math.round(newSales / newCust) : 0,
+        totalNewCustomerClosings: newClosings,
+        budget: totalBudget,
+        achievement: totalBudget > 0 ? (cash / totalBudget) * 100 : 0,
+        health
+    };
+  }, [allReports, selectedYear, selectedMonth, cleanStoreName, brandPrefix, budgets, calculateHealthMetrics]);
+
+  const globalMetrics = useMemo(() => {
+    if (!allReports) return null;
+    const targetYear = parseInt(selectedYear);
+    const monthInt = parseInt(selectedMonth);
+    const rocYear = targetYear - 1911;
+
+    const globalData = allReports.filter(d => {
+        if (!d.date || !d.storeName) return false;
+        const parts = String(d.date).replace(/-/g, "/").split("/");
+        const y = parseInt(parts[0]);
+        const m = parseInt(parts[1]);
+        if (!((y === targetYear || y === rocYear) && m === monthInt)) return false;
+        
+        return isBrandMatch(d.storeName, brandId);
+    });
+
+    const uniqueCores = new Set(globalData.map(d => cleanStoreName(d.storeName)));
+    let totalBudget = 0;
+    uniqueCores.forEach(core => {
+        const budgetKey = `${brandPrefix}${core}店_${targetYear}_${monthInt}`;
+        if(budgets[budgetKey]) {
+            totalBudget += Number(budgets[budgetKey].cashTarget || 0);
+        }
+    });
+
+    const cash = globalData.reduce((a, b) => a + (Number(b.cash) || 0) - (Number(b.refund) || 0), 0);
+    const refund = globalData.reduce((a, b) => a + (Number(b.refund) || 0), 0);
+    const traffic = globalData.reduce((a, b) => a + (Number(b.traffic) || 0), 0);
+    const opAccrual = globalData.reduce((a, b) => a + (Number(b.operationalAccrual) || 0), 0);
+    const newCust = globalData.reduce((a, b) => a + (Number(b.newCustomers) || 0), 0);
+    const newSales = globalData.reduce((a, b) => a + (Number(b.newCustomerSales) || 0), 0);
+    const newClosings = globalData.reduce((a, b) => a + (Number(b.newCustomerClosings) || 0), 0);
+
+    const health = calculateHealthMetrics(globalData);
+
+    return {
+        totalCash: cash,
+        totalRefund: refund,
+        totalTraffic: traffic,
+        trafficASP: traffic > 0 ? Math.round(opAccrual / traffic) : 0,
+        newCustomerASP: newCust > 0 ? Math.round(newSales / newCust) : 0,
+        totalNewCustomerClosings: newClosings,
+        budget: totalBudget,
+        achievement: totalBudget > 0 ? (cash / totalBudget) * 100 : 0,
+        health
+    };
+  }, [allReports, selectedYear, selectedMonth, isBrandMatch, brandId, brandPrefix, budgets, cleanStoreName, calculateHealthMetrics]);
+
+  const regionMetrics = useMemo(() => {
+    if (!isManagementRole || !allReports) return null;
+    let targetManager = selectedManager;
+    if (userRole === 'manager') targetManager = currentUser.name; 
+    
+    if (!targetManager) return null; 
+
+    const regionStores = (managers[targetManager] || []).map(cleanStoreName);
+    return getAggregateData(regionStores);
+  }, [isManagementRole, selectedManager, userRole, currentUser, allReports, managers, cleanStoreName, getAggregateData]);
+
+  const storeMetrics = useMemo(() => {
+    if (!selectedStore || !rawData) return null;
+    const targetYear = parseInt(selectedYear);
+    const monthInt = parseInt(selectedMonth);
+    const rocYear = targetYear - 1911;
+
+    const targetCoreName = cleanStoreName(selectedStore);
+
+    const data = rawData.filter((d) => {
+        if (!d.date || !d.storeName) return false;
+        const parts = String(d.date).replace(/-/g, "/").split("/");
+        const y = parseInt(parts[0]);
+        const m = parseInt(parts[1]);
+        if (!((y === targetYear || y === rocYear) && m === monthInt)) return false;
+
+        return cleanStoreName(d.storeName) === targetCoreName;
+    }).sort((a, b) => toStandardDateFormat(a.date).localeCompare(toStandardDateFormat(b.date)));
+
+    const grossCash = data.reduce((a, b) => a + (Number(b.cash) || 0), 0);
+    const totalRefund = data.reduce((a, b) => a + (Number(b.refund) || 0), 0);
+    const totalCash = grossCash - totalRefund;
+    const totalTraffic = data.reduce((a, b) => a + (Number(b.traffic) || 0), 0);
+    const totalOpAccrual = data.reduce((a, b) => a + (Number(b.operationalAccrual) || 0), 0);
+    const totalNewCustomers = data.reduce((a, b) => a + (Number(b.newCustomers) || 0), 0);
+    const totalNewCustomerSales = data.reduce((a, b) => a + (Number(b.newCustomerSales) || 0), 0);
+    const totalNewCustomerClosings = data.reduce((a, b) => a + (Number(b.newCustomerClosings) || 0), 0);
+    const budgetData = budgets[`${selectedStore}_${targetYear}_${monthInt}`] || {};
+    const budget = Number(budgetData.cashTarget || 0);
+
+    const health = calculateHealthMetrics(data);
+
+    return {
+      totalCash,
+      achievement: budget > 0 ? (totalCash / budget) * 100 : 0,
+      trafficASP: totalTraffic > 0 ? Math.round(totalOpAccrual / totalTraffic) : 0,
+      newCustomerASP: totalNewCustomers > 0 ? Math.round(totalNewCustomerSales / totalNewCustomers) : 0,
+      totalNewCustomerClosings,
+      totalRefund,
+      dailyData: data.map((d) => ({
+        date: String(toStandardDateFormat(d.date)).split("/")[2],
+        cash: (Number(d.cash) || 0) - (Number(d.refund) || 0),
+        accrual: Number(d.accrual) || 0,
+        traffic: Number(d.traffic) || 0,
+      })),
+      budget,
+      health
+    };
+  }, [selectedStore, selectedYear, selectedMonth, rawData, budgets, cleanStoreName, calculateHealthMetrics]);
+
+  const benchmarkMetrics = useMemo(() => {
+      if (!showBenchmark || !allReports) return null;
+      const targetYear = parseInt(selectedYear);
+      const monthInt = parseInt(selectedMonth);
+      const rocYear = targetYear - 1911;
+
+      const benchmarkData = allReports.filter(d => {
+          if (!d.date || !d.storeName) return false;
+          const parts = String(d.date).replace(/-/g, "/").split("/");
+          const y = parseInt(parts[0]);
+          const m = parseInt(parts[1]);
+          if (!((y === targetYear || y === rocYear) && m === monthInt)) return false;
+
+          if (!isBrandMatch(d.storeName, brandId)) return false;
+          if (cleanStoreName(d.storeName) === cleanStoreName(selectedStore)) return false;
+
+          return true;
+      });
+
+      return calculateHealthMetrics(benchmarkData);
+  }, [selectedYear, selectedMonth, allReports, showBenchmark, selectedStore, cleanStoreName, isBrandMatch, brandId, calculateHealthMetrics]);
+
+
+  const radarData = useMemo(() => {
+    if (!storeMetrics?.health) return [];
+    const s = storeMetrics.health.scores;
+    const b = benchmarkMetrics?.scores || { financial:0, sales:0, loyalty:0, mining:0, acquisition:0 }; 
+    const cfg = currentBenchmarks;
+
+    return [
+      { subject: '財務健康', A: s.financial, B: b.financial, fullMark: 100, label: cfg.financial.label },
+      { subject: '銷售結構', A: s.sales, B: b.sales, fullMark: 100, label: cfg.sales.label },
+      { subject: '顧客黏著', A: s.loyalty, B: b.loyalty, fullMark: 100, label: cfg.loyalty.label },
+      { subject: '客單挖掘', A: s.mining, B: b.mining, fullMark: 100, label: cfg.mining.label },
+      { subject: '新客質量', A: s.acquisition, B: b.acquisition, fullMark: 100, label: cfg.acquisition.label },
+    ];
+  }, [storeMetrics, benchmarkMetrics, currentBenchmarks]);
+
+  const isManagerView = userRole === 'manager' || (userRole === 'director' && selectedManager);
+  const activeManagementMetrics = (isManagerView && regionMetrics) ? regionMetrics : globalMetrics;
+  const managementRadarTitle = isManagerView 
+      ? `${userRole === 'manager' ? currentUser.name : selectedManager}區 體質診斷`
+      : `${brandPrefix} 全區體質診斷`;
+      
+  const managementRadarData = useMemo(() => {
+      if (!globalMetrics || !activeManagementMetrics) return [];
+      const cfg = currentBenchmarks;
+      const s = activeManagementMetrics.health.scores;
+      const b = globalMetrics.health.scores;
+
+      return [
+        { subject: '財務健康', A: s.financial, B: b.financial, fullMark: 100, label: cfg.financial.label },
+        { subject: '銷售結構', A: s.sales, B: b.sales, fullMark: 100, label: cfg.sales.label },
+        { subject: '顧客黏著', A: s.loyalty, B: b.loyalty, fullMark: 100, label: cfg.loyalty.label },
+        { subject: '客單挖掘', A: s.mining, B: b.mining, fullMark: 100, label: cfg.mining.label },
+        { subject: '新客質量', A: s.acquisition, B: b.acquisition, fullMark: 100, label: cfg.acquisition.label },
+      ];
+  }, [activeManagementMetrics, globalMetrics, currentBenchmarks]);
+
+  // ==========================================
+  // ★★★ 白話文翻譯蒟蒻 (輕量化明亮風格設計) ★★★
+  // ==========================================
+  const RadarGuideTooltip = () => {
+    const cfg = currentBenchmarks;
+    return (
+      <div className="group relative z-[100]">
+          <HelpCircle size={18} className="text-stone-400 cursor-help hover:text-amber-500 transition-colors"/>
+          <div className="absolute right-0 top-full mt-2 w-[260px] sm:w-[320px] p-4 bg-white border border-stone-200 text-stone-600 text-xs rounded-2xl shadow-xl opacity-0 group-hover:opacity-100 transition-all duration-300 pointer-events-none translate-y-2 group-hover:translate-y-0">
+              <p className="font-bold text-sm text-stone-800 mb-3 border-b border-stone-100 pb-2 flex items-center gap-2">
+                 <Activity size={16} className="text-amber-500"/> 五力雷達圖指標說明
+              </p>
+              <div className="space-y-3 text-left">
+                  <div>
+                      <p className="font-bold text-emerald-600">1. {cfg.financial.label} (財務健康)</p>
+                      <p className="text-[11px] text-stone-500 mt-0.5 leading-relaxed">當月收進來的現金，夠不夠抵銷做課程消耗的成本？避免陷入「只做白工沒收錢」的窘境。</p>
+                  </div>
+                  <div>
+                      <p className="font-bold text-blue-500">2. {cfg.sales.label} (銷售結構)</p>
+                      <p className="text-[11px] text-stone-500 mt-0.5 leading-relaxed">保養品佔總業績比例。檢視團隊在「手作課程」之外，推銷居家保養品的能力。</p>
+                  </div>
+                  <div>
+                      <p className="font-bold text-purple-600">3. {cfg.loyalty.label} (顧客黏著)</p>
+                      <p className="text-[11px] text-stone-500 mt-0.5 leading-relaxed">舊客佔總客流的比例。檢視服務滿意度，分數過低代表客人一直流失，只靠新客苦撐。</p>
+                  </div>
+                  <div>
+                      <p className="font-bold text-amber-600">4. {cfg.mining.label} (客單挖掘)</p>
+                      <p className="text-[11px] text-stone-500 mt-0.5 leading-relaxed">舊客平均消費 vs 新客平均消費。高分代表能讓老客人「持續加購或升級」，創造高終身價值。</p>
+                  </div>
+                  <div>
+                      <p className="font-bold text-rose-500">5. {cfg.acquisition.label} (新客質量)</p>
+                      <p className="text-[11px] text-stone-500 mt-0.5 leading-relaxed">新客客單價與預期目標的落差。檢視行銷帶來的客人含金量，以及美容師的首單締結功力。</p>
+                  </div>
+              </div>
+              <div className="mt-4 pt-2 border-t border-stone-100 text-[10px] text-stone-400 text-center font-bold bg-stone-50 -mx-4 -mb-4 p-3 rounded-b-2xl">
+                  圖形越飽滿、越靠近外圈，代表經營體質越健康
+              </div>
+          </div>
+      </div>
+    );
+  };
+
+
+  // ==========================================
+  // 全局異常店家清單掃描
   // ==========================================
   const exceptionLists = useMemo(() => {
     if (!isManagementRole || !rawData) return null;
@@ -305,165 +620,6 @@ const StoreAnalysisView = () => {
 
   }, [rawData, userRole, currentUser, managers, isManagementRole, targets, currentBenchmarks, targetBrandManagers, selectedYear, selectedMonth, cleanStoreName]);
 
-
-  // ==========================================
-  // 單店運算
-  // ==========================================
-  
-  const calculateHealthMetrics = (dataList) => {
-    const defaultHealth = {
-        raw: { cashToAccrual: 0, retailRatio: 0, retention: 0, aspMining: 0, acquisitionQuality: 0 },
-        scores: { financial: 0, sales: 0, loyalty: 0, mining: 0, acquisition: 0 }
-    };
-
-    if (!dataList || dataList.length === 0) return defaultHealth;
-
-    const cash = dataList.reduce((a, b) => a + (Number(b.cash) || 0) - (Number(b.refund) || 0), 0);
-    const accrual = dataList.reduce((a, b) => a + (Number(b.accrual) || 0), 0);
-    const skincare = dataList.reduce((a, b) => a + (Number(b.skincareSales) || 0), 0);
-    const traffic = dataList.reduce((a, b) => a + (Number(b.traffic) || 0), 0);
-    const newCust = dataList.reduce((a, b) => a + (Number(b.newCustomers) || 0), 0);
-    const newSales = dataList.reduce((a, b) => a + (Number(b.newCustomerSales) || 0), 0);
-    
-    const oldCust = Math.max(0, traffic - newCust);
-    const oldSales = Math.max(0, cash - newSales);
-
-    const rawMetrics = {
-      cashToAccrual: accrual > 0 ? cash / accrual : 0,
-      retailRatio: cash > 0 ? skincare / cash : 0,
-      retention: traffic > 0 ? oldCust / traffic : 0,
-      aspMining: (oldCust > 0 && newCust > 0 && (newSales/newCust) > 0) 
-                 ? (oldSales / oldCust) / (newSales / newCust)
-                 : 0,
-      acquisitionQuality: (newCust > 0 && (Number(targets?.newASP) || 3500) > 0) 
-                          ? (newSales / newCust) / (Number(targets?.newASP) || 3500)
-                          : 0
-    };
-
-    const normalize = (val, min, max) => {
-      const nMin = Number(min) > 5 ? Number(min) / 100 : Number(min);
-      const nMax = Number(max) > 5 ? Number(max) / 100 : Number(max);
-
-      if (val <= nMin) return 60 * (val / nMin);
-      if (val >= nMax) return 100;
-      return 60 + ((val - nMin) / (nMax - nMin)) * 40;
-    };
-
-    const cfg = currentBenchmarks;
-
-    const scores = {
-      financial: normalize(rawMetrics.cashToAccrual, cfg.financial.min, cfg.financial.max),
-      sales: normalize(rawMetrics.retailRatio, cfg.sales.min, cfg.sales.max),
-      loyalty: normalize(rawMetrics.retention, cfg.loyalty.min, cfg.loyalty.max),
-      mining: normalize(rawMetrics.aspMining, cfg.mining.min, cfg.mining.max),
-      acquisition: normalize(rawMetrics.acquisitionQuality, cfg.acquisition.min, cfg.acquisition.max)
-    };
-
-    return { raw: rawMetrics, scores };
-  };
-
-  const storeMetrics = useMemo(() => {
-    if (!selectedStore || !rawData) return null;
-    const targetYear = parseInt(selectedYear);
-    const monthInt = parseInt(selectedMonth);
-    const rocYear = targetYear - 1911;
-
-    const targetCoreName = cleanStoreName(selectedStore);
-
-    const data = rawData.filter((d) => {
-        if (!d.date || !d.storeName) return false;
-        const parts = String(d.date).replace(/-/g, "/").split("/");
-        const y = parseInt(parts[0]);
-        const m = parseInt(parts[1]);
-        if (!((y === targetYear || y === rocYear) && m === monthInt)) return false;
-
-        const dCoreName = cleanStoreName(d.storeName);
-        return dCoreName === targetCoreName;
-    }).sort((a, b) => toStandardDateFormat(a.date).localeCompare(toStandardDateFormat(b.date)));
-
-    const grossCash = data.reduce((a, b) => a + (Number(b.cash) || 0), 0);
-    const totalRefund = data.reduce((a, b) => a + (Number(b.refund) || 0), 0);
-    const totalCash = grossCash - totalRefund;
-    const totalTraffic = data.reduce((a, b) => a + (Number(b.traffic) || 0), 0);
-    const totalOpAccrual = data.reduce((a, b) => a + (Number(b.operationalAccrual) || 0), 0);
-    const totalNewCustomers = data.reduce((a, b) => a + (Number(b.newCustomers) || 0), 0);
-    const totalNewCustomerSales = data.reduce((a, b) => a + (Number(b.newCustomerSales) || 0), 0);
-    const totalNewCustomerClosings = data.reduce((a, b) => a + (Number(b.newCustomerClosings) || 0), 0);
-    const budgetData = budgets[`${selectedStore}_${targetYear}_${monthInt}`] || {};
-    const budget = Number(budgetData.cashTarget || 0);
-
-    const health = calculateHealthMetrics(data);
-
-    return {
-      totalCash,
-      achievement: budget > 0 ? (totalCash / budget) * 100 : 0,
-      trafficASP: totalTraffic > 0 ? Math.round(totalOpAccrual / totalTraffic) : 0,
-      newCustomerASP: totalNewCustomers > 0 ? Math.round(totalNewCustomerSales / totalNewCustomers) : 0,
-      totalNewCustomerClosings,
-      totalRefund,
-      dailyData: data.map((d) => ({
-        date: String(toStandardDateFormat(d.date)).split("/")[2],
-        cash: (Number(d.cash) || 0) - (Number(d.refund) || 0),
-        accrual: Number(d.accrual) || 0,
-        traffic: Number(d.traffic) || 0,
-      })),
-      budget,
-      health
-    };
-  }, [selectedStore, selectedYear, selectedMonth, rawData, budgets, targets, currentBenchmarks, cleanStoreName]);
-
-  const benchmarkMetrics = useMemo(() => {
-    if (!showBenchmark || !rawData) return null;
-    const targetYear = parseInt(selectedYear);
-    const monthInt = parseInt(selectedMonth);
-    const rocYear = targetYear - 1911;
-    const safeManagers = managers || {};
-
-    const validCores = new Set();
-    const relevantManagers = (userRole === 'manager' && selectedManager) 
-        ? [selectedManager] 
-        : targetBrandManagers;
-
-    relevantManagers.forEach(mgr => {
-        (safeManagers[mgr] || []).forEach(s => {
-            if(!s) return;
-            const core = cleanStoreName(s);
-            if(core) validCores.add(core);
-        });
-    });
-
-    let benchmarkStores = rawData.filter(d => {
-        if(!d.storeName) return false;
-        const core = cleanStoreName(d.storeName);
-        return validCores.has(core);
-    });
-
-    const benchmarkData = benchmarkStores.filter(d => {
-        if (!d.date) return false;
-        const parts = String(d.date).replace(/-/g, "/").split("/");
-        const y = parseInt(parts[0]);
-        const m = parseInt(parts[1]);
-        return (y === targetYear || y === rocYear) && m === monthInt;
-    }).filter(d => d.storeName !== selectedStore); 
-
-    return calculateHealthMetrics(benchmarkData);
-  }, [selectedYear, selectedMonth, rawData, managers, selectedManager, userRole, brandPrefix, showBenchmark, targets, selectedStore, currentBenchmarks, brandId, targetBrandManagers, cleanStoreName]);
-
-  const radarData = useMemo(() => {
-    if (!storeMetrics?.health) return [];
-    const s = storeMetrics.health.scores;
-    const b = benchmarkMetrics?.scores || { financial:0, sales:0, loyalty:0, mining:0, acquisition:0 };
-    const cfg = currentBenchmarks;
-
-    return [
-      { subject: '財務健康', A: s.financial, B: b.financial, fullMark: 100, label: cfg.financial.label },
-      { subject: '銷售結構', A: s.sales, B: b.sales, fullMark: 100, label: cfg.sales.label },
-      { subject: '顧客黏著', A: s.loyalty, B: b.loyalty, fullMark: 100, label: cfg.loyalty.label },
-      { subject: '客單挖掘', A: s.mining, B: b.mining, fullMark: 100, label: cfg.mining.label },
-      { subject: '新客質量', A: s.acquisition, B: b.acquisition, fullMark: 100, label: cfg.acquisition.label },
-    ];
-  }, [storeMetrics, benchmarkMetrics, currentBenchmarks]);
-
   const AlertItem = ({ store, value, label, type, onClick, fmtMoney }) => (
     <div 
         onClick={() => onClick(store.id)}
@@ -502,6 +658,8 @@ const StoreAnalysisView = () => {
   };
 
   const getCalcThreshold = (val) => Number(val) > 5 ? Number(val) / 100 : Number(val);
+  
+  const showToggle = selectedStore || (isManagementRole && isManagerView);
 
   return (
     <ViewWrapper>
@@ -544,19 +702,100 @@ const StoreAnalysisView = () => {
               </select>
             </div>
             
-            {selectedStore && (
+            {showToggle && (
                 <div className="flex items-center gap-2 mt-2 sm:mt-0">
                 <label className="flex items-center cursor-pointer relative">
                     <input type="checkbox" checked={showBenchmark} onChange={(e) => setShowBenchmark(e.target.checked)} className="sr-only peer" />
                     <div className="w-11 h-6 bg-stone-200 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-stone-500"></div>
                     <span className="ml-3 text-sm font-bold text-stone-500">
-                        {userRole === 'manager' ? '顯示區域平均' : '顯示全區平均'}
+                        顯示全區平均
                     </span>
                 </label>
                 </div>
             )}
           </div>
         </Card>
+
+        {/* 管理者專用雷達圖 */}
+        {!selectedStore && isManagementRole && activeManagementMetrics ? (
+          <div className="animate-in fade-in slide-in-from-bottom-4 duration-500">
+            <div className="flex flex-col xl:flex-row gap-6 mb-6">
+               <div className="w-full xl:w-1/3 bg-white rounded-2xl border border-stone-100 shadow-sm p-4 flex flex-col relative">
+                  <div className="flex justify-between items-center mb-2">
+                    <div>
+                        <h3 className="font-bold text-stone-700 flex items-center gap-2"><Activity size={18} className="text-indigo-500"/> {managementRadarTitle}</h3>
+                        <p className="text-xs text-stone-400">Regional Five-Force Analysis</p>
+                    </div>
+                    {/* ★ 加入白話文翻譯蒟蒻 ★ */}
+                    <RadarGuideTooltip />
+                  </div>
+                  <div className="h-[350px] w-full relative">
+                    <ResponsiveContainer width="100%" height="100%">
+                        <RadarChart cx="50%" cy="50%" outerRadius="70%" data={managementRadarData}>
+                            <PolarGrid stroke="#cbd5e1" />
+                            <PolarAngleAxis dataKey="subject" tick={{ fill: '#78716c', fontSize: 12, fontWeight: 'bold' }} />
+                            <PolarRadiusAxis angle={30} domain={[0, 100]} tick={false} axisLine={false} />
+                            
+                            {showBenchmark && isManagerView && (
+                                <Radar name="全品牌平均" dataKey="B" stroke="#a8a29e" fill="#a8a29e" fillOpacity={0.1} />
+                            )}
+                            
+                            <Radar name={isManagerView ? "區域平均" : "全品牌平均"} dataKey="A" stroke="#6366f1" fill="#6366f1" fillOpacity={0.4} />
+                            <Legend wrapperStyle={{ fontSize: '12px', paddingTop: '10px' }}/>
+                            <RechartsTooltip contentStyle={{ borderRadius: '12px', fontSize: '12px' }} formatter={(val) => (Number(val) || 0).toFixed(0)}/>
+                        </RadarChart>
+                    </ResponsiveContainer>
+                  </div>
+               </div>
+
+               <div className="w-full xl:w-2/3 grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4 content-start">
+                  <div className="bg-white p-5 rounded-2xl border shadow-sm flex flex-col justify-between">
+                    <div><p className="text-stone-400 text-xs font-bold mb-1">彙整現金業績</p><h3 className="text-2xl font-bold text-stone-700">{fmtMoney(activeManagementMetrics.totalCash)}</h3></div>
+                    <p className={`text-sm font-bold mt-2 ${activeManagementMetrics.achievement >= 100 ? "text-emerald-500" : "text-amber-500"}`}>{activeManagementMetrics.achievement.toFixed(1)}% 達成</p>
+                  </div>
+                  <div className="bg-white p-5 rounded-2xl border shadow-sm">
+                    <p className="text-stone-400 text-xs font-bold mb-1">彙整消耗客單</p>
+                    <h3 className="text-2xl font-bold text-stone-700">{fmtMoney(activeManagementMetrics.trafficASP)}</h3>
+                  </div>
+                  <div className="bg-white p-5 rounded-2xl border shadow-sm">
+                    <p className="text-stone-400 text-xs font-bold mb-1">彙整目標</p>
+                    <h3 className="text-2xl font-bold text-stone-700">{fmtMoney(activeManagementMetrics.budget)}</h3>
+                  </div>
+                  <div className="bg-white p-5 rounded-2xl border shadow-sm">
+                    <p className="text-stone-400 text-xs font-bold mb-1">平均新客客單</p>
+                    <h3 className="text-2xl font-bold text-stone-700">{fmtMoney(activeManagementMetrics.newCustomerASP)}</h3>
+                  </div>
+                  <div className="bg-white p-5 rounded-2xl border shadow-sm">
+                    <p className="text-stone-400 text-xs font-bold mb-1">總新客留單</p>
+                    <h3 className="text-2xl font-bold text-stone-700">{fmtNum(activeManagementMetrics.totalNewCustomerClosings)}</h3>
+                  </div>
+                  <div className="bg-white p-5 rounded-2xl border shadow-sm">
+                    <p className="text-stone-400 text-xs font-bold mb-1">總退費金額</p>
+                    <h3 className="text-2xl font-bold text-rose-500">{fmtMoney(activeManagementMetrics.totalRefund)}</h3>
+                  </div>
+                  
+                  <div className="bg-stone-50 p-5 rounded-2xl border border-stone-100">
+                    <p className="text-stone-400 text-xs font-bold mb-1">{cfg.financial.label} (體質)</p>
+                    <h3 className={`text-xl font-bold font-mono ${activeManagementMetrics.health.raw.cashToAccrual < getCalcThreshold(cfg.financial.min) ? 'text-rose-500' : 'text-stone-700'}`}>
+                        {(activeManagementMetrics.health.raw.cashToAccrual * 100).toFixed(0)}%
+                    </h3>
+                  </div>
+                  <div className="bg-stone-50 p-5 rounded-2xl border border-stone-100">
+                    <p className="text-stone-400 text-xs font-bold mb-1">{cfg.sales.label} (銷售)</p>
+                    <h3 className={`text-xl font-bold font-mono ${activeManagementMetrics.health.raw.retailRatio < getCalcThreshold(cfg.sales.min) ? 'text-rose-500' : 'text-stone-700'}`}>
+                        {(activeManagementMetrics.health.raw.retailRatio * 100).toFixed(1)}%
+                    </h3>
+                  </div>
+                  <div className="bg-stone-50 p-5 rounded-2xl border border-stone-100">
+                    <p className="text-stone-400 text-xs font-bold mb-1">{cfg.loyalty.label} (黏著)</p>
+                    <h3 className="text-xl font-bold font-mono text-stone-700">
+                        {(activeManagementMetrics.health.raw.retention * 100).toFixed(1)}%
+                    </h3>
+                  </div>
+               </div>
+            </div>
+          </div>
+        ) : null}
 
         {/* 異常監控看板 */}
         {!selectedStore && isManagementRole && exceptionLists ? (
@@ -680,11 +919,12 @@ const StoreAnalysisView = () => {
             </div>
         ) : null}
 
+        {/* 單店分析雷達圖與指標 */}
         {selectedStore && storeMetrics ? (
           <div className="animate-in fade-in slide-in-from-right-8 duration-500">
             <div className="flex flex-col xl:flex-row gap-6">
                
-               <div className="w-full xl:w-1/3 bg-white rounded-2xl border border-stone-100 shadow-sm p-4 flex flex-col relative overflow-hidden">
+               <div className="w-full xl:w-1/3 bg-white rounded-2xl border border-stone-100 shadow-sm p-4 flex flex-col relative">
                   
                   <div className="flex justify-between items-center mb-2">
                     <div>
@@ -702,20 +942,9 @@ const StoreAnalysisView = () => {
                               storeMetrics.health.scores.loyalty < 60 ? "舊客流失風險" :
                               storeMetrics.health.scores.sales < 60 ? "產品銷售偏弱" : "體質健康"}
                         </span>
-
-                        <div className="group relative">
-                            <HelpCircle size={16} className="text-stone-300 cursor-help"/>
-                            <div className="absolute right-0 w-64 p-3 bg-stone-800 text-white text-xs rounded-xl shadow-xl opacity-0 group-hover:opacity-100 transition-opacity z-50 pointer-events-none">
-                                <p className="font-bold mb-1">指標說明 (滿分基準)：</p>
-                                <ul className="space-y-1 opacity-90">
-                                    <li>• {cfg.financial.label}：{formatThreshold(cfg.financial.max)} (現金大於權責)</li>
-                                    <li>• {cfg.sales.label}：{formatThreshold(cfg.sales.max)} (產品銷售佔比)</li>
-                                    <li>• {cfg.loyalty.label}：{formatThreshold(cfg.loyalty.max)} (顧客留存度)</li>
-                                    <li>• {cfg.mining.label}：{formatThreshold(cfg.mining.max)} (舊客單價 &gt; 新客)</li>
-                                    <li>• {cfg.acquisition.label}：{formatThreshold(cfg.acquisition.max)} (大於目標客單)</li>
-                                </ul>
-                            </div>
-                        </div>
+                        
+                        {/* ★ 加入白話文翻譯蒟蒻 ★ */}
+                        <RadarGuideTooltip />
                     </div>
                   </div>
 
@@ -728,7 +957,7 @@ const StoreAnalysisView = () => {
                             
                             {showBenchmark && (
                                 <Radar
-                                    name={userRole === 'manager' ? "區域平均" : "全區平均"}
+                                    name="全區平均" 
                                     dataKey="B"
                                     stroke="#a8a29e"
                                     fill="#a8a29e"

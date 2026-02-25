@@ -1,6 +1,6 @@
 // src/components/InputView.jsx
 /* eslint-disable react-hooks/exhaustive-deps */
-import React, { useState, useEffect, useContext, useMemo } from "react";
+import React, { useState, useEffect, useContext, useMemo, useCallback } from "react";
 import { 
   FileText, Upload, DollarSign,
   RotateCcw, Activity, AlertCircle, X, CheckCircle, User, Star, Bug,
@@ -66,6 +66,14 @@ const StoreInputView = () => {
       default: return 'CYJ';
     }
   }, [currentBrand]);
+
+  // ★★★ 統一的核心店名清洗函式 (套用於選單與檢查) ★★★
+  const getCoreStoreName = useCallback((name) => {
+    if (!name) return "";
+    let core = String(name).replace(/^(CYJ|Anew\s*\(安妞\)|Yibo\s*\(伊啵\)|安妞|伊啵|Anew|Yibo)\s*/i, '').trim();
+    if (core === "新店") return "新店"; // 防止新店被誤刪
+    return core.replace(/店$/, '').trim();
+  }, []);
 
   useEffect(() => {
     setFormData(defaultFormData);
@@ -134,40 +142,39 @@ const StoreInputView = () => {
     setFormData(prev => ({ ...prev, [key]: formatNumber(rawValue) }));
   };
 
+  // ★★★ 修正：使用統一防呆函式產生選單，確保顯示 CYJ新店店 ★★★
   const availableStores = useMemo(() => {
     if (!selectedManager) {
       if (userRole === "store" && currentUser) {
         return (currentUser.stores || [currentUser.storeName]).map((s) => {
-            let coreName = s.replace(/^(CYJ|Anew\s*\(安妞\)|Yibo\s*\(伊啵\)|安妞|伊啵|Anew|Yibo)\s*/i, "").replace(/店$/, "");
-            return `${brandPrefix}${coreName}店`;
+            return `${brandPrefix}${getCoreStoreName(s)}店`;
         });
       }
       return [];
     }
     return (managers[selectedManager] || []).map((s) => {
-        let coreName = s.replace(/^(CYJ|Anew\s*\(安妞\)|Yibo\s*\(伊啵\)|安妞|伊啵|Anew|Yibo)\s*/i, "").replace(/店$/, "");
-        return `${brandPrefix}${coreName}店`;
+        return `${brandPrefix}${getCoreStoreName(s)}店`;
     });
-  }, [selectedManager, managers, userRole, currentUser, brandPrefix]);
+  }, [selectedManager, managers, userRole, currentUser, brandPrefix, getCoreStoreName]);
 
+  // ★★★ 修正：初始設定店家時也套用防呆函式 ★★★
   useEffect(() => {
     if (!selectedStore && userRole === "store" && currentUser) {
       const myStores = currentUser.stores || [currentUser.storeName];
       if (myStores.length > 0) {
-        let rawName = myStores[0];
-        rawName = rawName.replace(/^(CYJ|Anew\s*\(安妞\)|Yibo\s*\(伊啵\)|安妞|伊啵|Anew|Yibo)\s*/i, "").replace(/店$/, "");
+        let coreName = getCoreStoreName(myStores[0]);
 
         const foundMgr = Object.keys(managers).find((mgr) => 
-            managers[mgr].some(s => s.includes(rawName))
+            managers[mgr].some(s => s.includes(coreName))
         );
         if (foundMgr) setSelectedManager(foundMgr);
         
-        setSelectedStore(`${brandPrefix}${rawName}店`);
+        setSelectedStore(`${brandPrefix}${coreName}店`);
       }
     } else if (!selectedManager && userRole === "manager" && currentUser) {
       setSelectedManager(currentUser.name);
     }
-  }, [userRole, currentUser, managers, brandPrefix]);
+  }, [userRole, currentUser, managers, brandPrefix, selectedStore, getCoreStoreName]);
 
   const handleReset = () => {
     if (confirm("確定要重置嗎？")) {
@@ -185,18 +192,12 @@ const StoreInputView = () => {
 
     const formattedInputDate = toStandardDateFormat(inputDate);
     
-    const getCore = (name) => {
-        if (!name) return "";
-        let core = String(name).replace(/^(CYJ|Anew\s*\(安妞\)|Yibo\s*\(伊啵\)|安妞|伊啵|Anew|Yibo)\s*/i, '').trim();
-        if (core === "新店") return "新店";
-        return core.replace(/店$/, '').trim();
-    };
-
-    const targetCoreStore = getCore(selectedStore);
+    // ★★★ 使用統一防呆函式進行比對 ★★★
+    const targetCoreStore = getCoreStoreName(selectedStore);
 
     const existingReport = rawData.find((d) => {
         const isSameDate = toStandardDateFormat(d.date) === formattedInputDate;
-        const isSameStore = getCore(d.storeName) === targetCoreStore;
+        const isSameStore = getCoreStoreName(d.storeName) === targetCoreStore;
         return isSameDate && isSameStore;
     });
 
@@ -215,7 +216,6 @@ const StoreInputView = () => {
   };
 
   const handleFinalSubmit = async () => {
-    // 防呆：防止使用者重複點擊
     if (isSubmitting) return;
     setIsSubmitting(true);
     
@@ -232,15 +232,12 @@ const StoreInputView = () => {
         submittedBy: currentUser?.name || "unknown",
       };
 
-      // ★★★ 升級版：給予絕對唯一的 ID (防止因連點或網路延遲產生分身) ★★★
       let targetDocId = existingReportId;
       if (!targetDocId) {
-         // 將 2026/02/24 轉換為 2026-02-24，並組合成固定 ID
          const safeDate = normalizedDate.replace(/\//g, "-");
          targetDocId = `${safeDate}_${selectedStore}`; 
       }
 
-      // 不管是新增還是更新，統一使用 setDoc 覆蓋同一個 ID
       await setDoc(doc(getCollectionPath("daily_reports"), targetDocId), payload);
 
       if (existingReportId) {
