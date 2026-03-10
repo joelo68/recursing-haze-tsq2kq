@@ -226,7 +226,7 @@ const StoreAnalysisView = () => {
     if (!dataList || dataList.length === 0) return defaultHealth;
 
     const cash = dataList.reduce((a, b) => a + (Number(b.cash) || 0) - (Number(b.refund) || 0), 0);
-    const accrual = dataList.reduce((a, b) => a + (Number(b.accrual) || 0), 0);
+    const accrual = dataList.reduce((a, b) => a + (Number(b.accrual) || 0), 0); // 這裡的 accrual 已經過前面的攔截器處理
     const skincare = dataList.reduce((a, b) => a + (Number(b.skincareSales) || 0), 0);
     const traffic = dataList.reduce((a, b) => a + (Number(b.traffic) || 0), 0);
     const newCust = dataList.reduce((a, b) => a + (Number(b.newCustomers) || 0), 0);
@@ -282,6 +282,13 @@ const StoreAnalysisView = () => {
         
         const core = cleanStoreName(d.storeName);
         return storesList.includes(core);
+    }).map(d => {
+        // ★★★ 安妞專屬邏輯：總權責只看「操作權責 (技術)」排除保養品 ★★★
+        let adjustedAccrual = Number(d.accrual) || 0;
+        if (brandId === '安妞') {
+            adjustedAccrual = Number(d.operationalAccrual) || 0;
+        }
+        return { ...d, accrual: adjustedAccrual };
     });
 
     const cash = data.reduce((a, b) => a + (Number(b.cash) || 0) - (Number(b.refund) || 0), 0);
@@ -313,7 +320,7 @@ const StoreAnalysisView = () => {
         achievement: totalBudget > 0 ? (cash / totalBudget) * 100 : 0,
         health
     };
-  }, [allReports, selectedYear, selectedMonth, cleanStoreName, brandPrefix, budgets, calculateHealthMetrics]);
+  }, [allReports, selectedYear, selectedMonth, cleanStoreName, brandPrefix, brandId, budgets, calculateHealthMetrics]);
 
   const globalMetrics = useMemo(() => {
     if (!allReports) return null;
@@ -329,6 +336,13 @@ const StoreAnalysisView = () => {
         if (!((y === targetYear || y === rocYear) && m === monthInt)) return false;
         
         return isBrandMatch(d.storeName, brandId);
+    }).map(d => {
+        // ★★★ 安妞專屬邏輯：總權責只看「操作權責 (技術)」排除保養品 ★★★
+        let adjustedAccrual = Number(d.accrual) || 0;
+        if (brandId === '安妞') {
+            adjustedAccrual = Number(d.operationalAccrual) || 0;
+        }
+        return { ...d, accrual: adjustedAccrual };
     });
 
     const uniqueCores = new Set(globalData.map(d => cleanStoreName(d.storeName)));
@@ -390,6 +404,13 @@ const StoreAnalysisView = () => {
         if (!((y === targetYear || y === rocYear) && m === monthInt)) return false;
 
         return cleanStoreName(d.storeName) === targetCoreName;
+    }).map(d => {
+        // ★★★ 安妞專屬邏輯：總權責只看「操作權責 (技術)」排除保養品 ★★★
+        let adjustedAccrual = Number(d.accrual) || 0;
+        if (brandId === '安妞') {
+            adjustedAccrual = Number(d.operationalAccrual) || 0;
+        }
+        return { ...d, accrual: adjustedAccrual };
     }).sort((a, b) => toStandardDateFormat(a.date).localeCompare(toStandardDateFormat(b.date)));
 
     const grossCash = data.reduce((a, b) => a + (Number(b.cash) || 0), 0);
@@ -415,13 +436,13 @@ const StoreAnalysisView = () => {
       dailyData: data.map((d) => ({
         date: String(toStandardDateFormat(d.date)).split("/")[2],
         cash: (Number(d.cash) || 0) - (Number(d.refund) || 0),
-        accrual: Number(d.accrual) || 0,
+        accrual: Number(d.accrual) || 0, // 圖表的權責也已經是被攔截過濾後的版本
         traffic: Number(d.traffic) || 0,
       })),
       budget,
       health
     };
-  }, [selectedStore, selectedYear, selectedMonth, rawData, budgets, cleanStoreName, calculateHealthMetrics]);
+  }, [selectedStore, selectedYear, selectedMonth, rawData, budgets, cleanStoreName, calculateHealthMetrics, brandId]);
 
   const benchmarkMetrics = useMemo(() => {
       if (!showBenchmark || !allReports) return null;
@@ -440,6 +461,13 @@ const StoreAnalysisView = () => {
           if (cleanStoreName(d.storeName) === cleanStoreName(selectedStore)) return false;
 
           return true;
+      }).map(d => {
+          // ★★★ 安妞專屬邏輯：總權責只看「操作權責 (技術)」排除保養品 ★★★
+          let adjustedAccrual = Number(d.accrual) || 0;
+          if (brandId === '安妞') {
+              adjustedAccrual = Number(d.operationalAccrual) || 0;
+          }
+          return { ...d, accrual: adjustedAccrual };
       });
 
       return calculateHealthMetrics(benchmarkData);
@@ -576,7 +604,14 @@ const StoreAnalysisView = () => {
         if (storeStats[dCore]) {
             storeStats[dCore].foundData = true;
             storeStats[dCore].cash += (Number(d.cash) || 0) - (Number(d.refund) || 0);
-            storeStats[dCore].accrual += (Number(d.accrual) || 0);
+            
+            // ★★★ 安妞專屬邏輯：總權責只看「操作權責 (技術)」排除保養品 ★★★
+            let currentAccrual = Number(d.accrual) || 0;
+            if (brandId === '安妞') {
+                currentAccrual = Number(d.operationalAccrual) || 0;
+            }
+            storeStats[dCore].accrual += currentAccrual;
+
             storeStats[dCore].skincare += (Number(d.skincareSales) || 0);
             storeStats[dCore].traffic += (Number(d.traffic) || 0);
             storeStats[dCore].newCust += (Number(d.newCustomers) || 0);
@@ -618,7 +653,7 @@ const StoreAnalysisView = () => {
 
     return { financialRisks, retentionRisks, salesRisks };
 
-  }, [rawData, userRole, currentUser, managers, isManagementRole, targets, currentBenchmarks, targetBrandManagers, selectedYear, selectedMonth, cleanStoreName]);
+  }, [rawData, userRole, currentUser, managers, isManagementRole, targets, currentBenchmarks, targetBrandManagers, selectedYear, selectedMonth, cleanStoreName, brandId]);
 
   const AlertItem = ({ store, value, label, type, onClick, fmtMoney }) => (
     <div 
@@ -943,7 +978,6 @@ const StoreAnalysisView = () => {
                               storeMetrics.health.scores.sales < 60 ? "產品銷售偏弱" : "體質健康"}
                         </span>
                         
-                        {/* ★ 加入白話文翻譯蒟蒻 ★ */}
                         <RadarGuideTooltip />
                     </div>
                   </div>
@@ -1028,7 +1062,7 @@ const StoreAnalysisView = () => {
 
             <Card
               title={`${selectedStore} 營運趨勢`}
-              subtitle="長條：現金業績｜實線：權責業績｜虛線(右軸)：操作人數"
+              subtitle={`長條：現金業績｜實線：權責業績${brandPrefix === '安妞' ? '(不含產品)' : ''}｜虛線(右軸)：操作人數`}
             >
               <div className="h-[400px] w-full">
                 <ResponsiveContainer width="100%" height="100%">

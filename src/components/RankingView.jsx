@@ -80,17 +80,16 @@ const RankingView = () => {
       const rawStoreName = report.storeName;
       if (!rawStoreName) return;
 
-      // ★★★ 核心修正：取得核心店名後，強制組裝成標準化名稱作為分類 Key ★★★
       const coreName = getCoreStoreName(rawStoreName);
       if (!coreName) return;
       
-      const standardName = `${brandPrefix}${coreName}店`; // 強制統一成例如 "CYJ新店店"
+      const standardName = `${brandPrefix}${coreName}店`; 
 
-      // 初始化店家數據容器 (以 standardName 作為 Key)
+      // 初始化店家數據容器 
       if (!storeMap[standardName]) {
         storeMap[standardName] = {
           name: standardName,
-          displayName: coreName, // 畫面上顯示乾淨的 "新店"
+          displayName: coreName, 
           manager: "未分配",
           cashTotal: 0,
           refundTotal: 0,
@@ -105,10 +104,18 @@ const RankingView = () => {
 
       // 將資料累加進同一個籃子
       const d = storeMap[standardName];
+      const operationalAccrual = Number(report.operationalAccrual) || 0;
+      let accrual = Number(report.accrual) || 0;
+
+      // ★★★ 安妞專屬邏輯：總權責只看「操作權責 (技術)」排除保養品 ★★★
+      if (brandPrefix === '安妞') {
+         accrual = operationalAccrual;
+      }
+
       d.cashTotal += (Number(report.cash) || 0);
       d.refundTotal += (Number(report.refund) || 0);
-      d.accrualTotal += (Number(report.accrual) || 0);
-      d.operationalAccrualTotal += (Number(report.operationalAccrual) || 0);
+      d.accrualTotal += accrual;
+      d.operationalAccrualTotal += operationalAccrual;
       d.skincareSalesTotal += (Number(report.skincareSales) || 0);
       d.trafficTotal += (Number(report.traffic) || 0);
       d.newCustomersTotal += (Number(report.newCustomers) || 0);

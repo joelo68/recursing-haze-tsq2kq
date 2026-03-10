@@ -155,7 +155,7 @@ const AnnualView = () => {
   }, [startMonthStr, endMonthStr, selectedYear]);
 
   // ==========================================
-  // 4. 核心計算邏輯 (★ 已加入排除邏輯與品牌支援)
+  // 4. 核心計算邏輯 (★ 已加入排除邏輯、品牌支援與安妞權責攔截)
   // ==========================================
   const annualData = useMemo(() => {
     // ★ 關鍵修改：使用動態前綴生成店家完整名稱
@@ -201,9 +201,16 @@ const AnnualView = () => {
       
       const targetStat = statsMap.find(s => s.y === realYear && s.m === m);
       if (targetStat) {
-        targetStat.cash += (d.cash || 0) - (d.refund || 0);
-        targetStat.accrual += (d.accrual || 0);
-        targetStat.traffic += (d.traffic || 0);
+        targetStat.cash += (Number(d.cash) || 0) - (Number(d.refund) || 0);
+        
+        // ★★★ 安妞專屬邏輯：總權責只看「操作權責 (技術)」排除保養品 ★★★
+        let currentAccrual = Number(d.accrual) || 0;
+        if (brandPrefix === '安妞') {
+            currentAccrual = Number(d.operationalAccrual) || 0;
+        }
+        targetStat.accrual += currentAccrual;
+        
+        targetStat.traffic += (Number(d.traffic) || 0);
       }
     });
 
@@ -218,8 +225,8 @@ const AnnualView = () => {
         // key 格式: "安妞中山店_2024_1"
         const key = `${storeName}_${stat.y}_${stat.m}`;
         if (budgets[key]) {
-          stat.budget += (budgets[key].cashTarget || 0);
-          stat.accrualBudget += (budgets[key].accrualTarget || 0);
+          stat.budget += (Number(budgets[key].cashTarget) || 0);
+          stat.accrualBudget += (Number(budgets[key].accrualTarget) || 0);
         }
       });
 
@@ -357,11 +364,17 @@ const AnnualView = () => {
               </div>
             </div>
           </div>
-          <div className="bg-white border-2 border-indigo-100 rounded-2xl p-6 shadow-sm relative overflow-hidden">
+          <div className="bg-white border-2 border-indigo-100 rounded-2xl p-6 shadow-sm relative overflow-hidden flex flex-col justify-center">
              <div className="absolute top-0 right-0 p-4 opacity-5 text-indigo-600"><Activity size={100} /></div>
              <div className="relative z-10">
               <p className="text-indigo-400 font-bold text-sm mb-1 flex items-center gap-1"><Award size={14}/> 區間權責達成</p>
-              <h2 className="text-4xl font-extrabold font-mono tracking-tight mb-4 text-stone-700">{fmtMoney(totals.accrual)}</h2>
+              <h2 className={`text-4xl font-extrabold font-mono tracking-tight text-stone-700 ${brandPrefix === '安妞' ? 'mb-1' : 'mb-4'}`}>{fmtMoney(totals.accrual)}</h2>
+              {/* ★ 針對安妞的文字提示 */}
+              {brandPrefix === '安妞' && (
+                <p className="text-[11px] text-indigo-400 mb-3 font-medium flex items-center gap-1">
+                  <span className="inline-block w-1 h-1 bg-indigo-400 rounded-full"></span> 僅含技術操作 (排除產品)
+                </p>
+              )}
               <div className="space-y-2">
                 <div className="flex justify-between text-xs font-medium text-stone-400">
                   <span>區間目標 {fmtMoney(totals.accrualBudget)}</span>
@@ -376,7 +389,7 @@ const AnnualView = () => {
         </div>
 
         {/* 區塊 2: 趨勢圖表 */}
-        <Card title="區間營收趨勢分析" subtitle="實際 vs 預算 (現金/權責)">
+        <Card title="區間營收趨勢分析" subtitle={`實際 vs 預算 (現金/權責${brandPrefix === '安妞' ? ' - 不含產品' : ''})`}>
           <div className="h-[350px] w-full">
             <ResponsiveContainer width="100%" height="100%">
               <ComposedChart data={monthlyStats} margin={{ top: 20, right: 0, left: 0, bottom: 0 }}>
@@ -418,7 +431,9 @@ const AnnualView = () => {
                   <th className="pb-3 text-right text-amber-600">現金業績</th>
                   <th className="pb-3 text-right">達成率</th>
                   <th className="pb-3 text-right text-indigo-400/60 pl-4 border-l border-dashed border-stone-200">權責目標</th>
-                  <th className="pb-3 text-right text-indigo-600">權責業績</th>
+                  <th className="pb-3 text-right text-indigo-600">
+                    權責業績 {brandPrefix === '安妞' && <span className="text-[10px] text-indigo-400 font-normal normal-case ml-1">(純操作)</span>}
+                  </th>
                   <th className="pb-3 text-right">達成率</th>
                   <th className="pb-3 text-right pl-4 border-l border-dashed border-stone-200">操作人次</th>
                 </tr>
