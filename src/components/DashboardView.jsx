@@ -1,5 +1,5 @@
 // src/components/DashboardView.jsx
-import React, { useContext, useMemo, useState } from "react";
+import React, { useContext, useMemo, useState, useEffect } from "react";
 import { XAxis, YAxis, CartesianGrid, Tooltip as RechartsTooltip, ResponsiveContainer, Line, ComposedChart, Area } from "recharts";
 import { TrendingUp, DollarSign, Target, Users, Award, Loader2, CheckSquare, Activity, Sparkles, ShoppingBag, CreditCard, FileWarning, Trophy, Medal, AlertTriangle, Crown, Map, User, Store as StoreIcon, ArrowRight, ArrowLeft, Frown, Flame, Zap, Download } from "lucide-react";
 import { ViewWrapper, Card } from "./SharedUI";
@@ -14,6 +14,16 @@ const DashboardView = () => {
   } = useContext(AppContext);
 
   const [viewMode, setViewMode] = useState((userRole === 'therapist' || userRole === 'trainer') ? 'therapist' : 'store');
+  
+  // 單店篩選狀態
+  const [selectedDashboardManager, setSelectedDashboardManager] = useState("");
+  const [selectedDashboardStore, setSelectedDashboardStore] = useState("");
+
+  // 當切換品牌時，重置篩選
+  useEffect(() => {
+    setSelectedDashboardManager("");
+    setSelectedDashboardStore("");
+  }, [currentBrand]);
 
   // 1. 品牌資訊與前綴邏輯
   const { brandInfo, brandPrefix } = useMemo(() => {
@@ -41,30 +51,86 @@ const DashboardView = () => {
     return { brandInfo: { id, name }, brandPrefix: name };
   }, [currentBrand]);
 
-  // ★★★ 2. 輔助函式：清洗店名 (包含新店防呆機制) ★★★
+  // 2. 輔助函式：清洗店名
   const cleanName = useMemo(() => (name) => {
     if (!name) return "";
     let core = String(name).replace(new RegExp(`^(${brandPrefix}|CYJ|Anew|Yibo|安妞|伊啵)`, 'i'), '').trim();
-    if (core === "新店") return "新店"; // ★ 防止「新店」被誤刪成「新」
+    if (core === "新店") return "新店"; 
     return core.replace(/店$/, '').trim();
   }, [brandPrefix]);
 
-  // 3. 計算當前使用者可見的店家列表 (權限控制)
-  const visibleStores = useMemo(() => {
-    if (userRole === 'director') {
-      return Object.values(managers).flat();
+  // 3. 計算基礎可見店名清單
+  const baseVisibleStores = useMemo(() => {
+    if (userRole === 'director' || userRole === 'trainer') {
+      return Object.values(managers).flat().map(cleanName).filter(Boolean);
     }
     if (userRole === 'manager' && currentUser) {
-      return managers[currentUser.name] || [];
+      return (managers[currentUser.name] || []).map(cleanName).filter(Boolean);
     }
     if (userRole === 'store' && currentUser) {
       const rawStores = currentUser.stores || [currentUser.storeName];
-      return rawStores.map(s => cleanName(s)).filter(s => s);
+      return rawStores.map(cleanName).filter(Boolean);
     }
     return []; 
   }, [userRole, currentUser, managers, cleanName]);
 
-  // 4. 本地計算 Dashboard 統計數據
+  const availableStoresForFilter = useMemo(() => {
+    const uniqueStores = [...new Set(baseVisibleStores)];
+    return uniqueStores.sort().map(s => `${brandPrefix}${s}店`);
+  }, [baseVisibleStores, brandPrefix]);
+
+  // 將店名依照區長進行分組，用於產生下拉選單選項
+  const groupedStoresForFilter = useMemo(() => {
+    const groups = {};
+    const availableSet = new Set(availableStoresForFilter);
+
+    Object.entries(managers || {}).forEach(([mgrName, rawStores]) => {
+        const mgrValidStores = [];
+        (rawStores || []).forEach(rs => {
+            const core = cleanName(rs);
+            const fullName = `${brandPrefix}${core}店`;
+            if (availableSet.has(fullName) && !mgrValidStores.includes(fullName)) {
+                mgrValidStores.push(fullName);
+            }
+        });
+        if (mgrValidStores.length > 0) {
+            groups[mgrName] = mgrValidStores.sort();
+        }
+    });
+
+    const inGroups = new Set(Object.values(groups).flat());
+    const orphans = availableStoresForFilter.filter(s => !inGroups.has(s));
+    if (orphans.length > 0) {
+        groups['其他'] = orphans.sort();
+    }
+
+    return groups;
+  }, [managers, availableStoresForFilter, cleanName, brandPrefix]);
+
+  // 連動邏輯：根據選擇的區長，決定單店下拉選單要顯示哪些店
+  const availableStoresForDropdown = useMemo(() => {
+    if (userRole === 'manager' && currentUser) {
+         return groupedStoresForFilter[currentUser.name] || Object.values(groupedStoresForFilter).flat().sort();
+    }
+    if (selectedDashboardManager && groupedStoresForFilter[selectedDashboardManager]) {
+        return groupedStoresForFilter[selectedDashboardManager];
+    }
+    return Object.values(groupedStoresForFilter).flat().sort();
+  }, [selectedDashboardManager, groupedStoresForFilter, userRole, currentUser]);
+
+  // 4. 實際生效的過濾清單
+  const effectiveStores = useMemo(() => {
+    if (selectedDashboardStore) {
+      return [cleanName(selectedDashboardStore)];
+    }
+    if (selectedDashboardManager) {
+      const stores = managers[selectedDashboardManager] || [];
+      return stores.map(cleanName).filter(Boolean);
+    }
+    return baseVisibleStores;
+  }, [baseVisibleStores, selectedDashboardStore, selectedDashboardManager, managers, cleanName]);
+
+  // 5. 本地計算 Dashboard 統計數據
   const dashboardStats = useMemo(() => {
     if (!allReports) return null;
 
@@ -98,14 +164,14 @@ const DashboardView = () => {
       if (rDate.getFullYear() !== y || (rDate.getMonth() + 1) !== m) return;
 
       const reportStoreClean = cleanName(report.storeName);
-      if (!visibleStores.includes(reportStoreClean)) return;
+      if (!effectiveStores.includes(reportStoreClean)) return;
 
       const cash = (Number(report.cash) || 0) - (Number(report.refund) || 0);
       const traffic = Number(report.traffic) || 0;
       const operationalAccrual = Number(report.operationalAccrual) || 0;
       const skincareSales = Number(report.skincareSales) || 0;
 
-      // ★★★ 安妞專屬邏輯：總權責只看「操作權責 (技術)」排除保養品 ★★★
+      // 安妞專屬邏輯：總權責只看「操作權責 (技術)」排除保養品
       let accrual = Number(report.accrual) || 0;
       if (brandPrefix === '安妞') {
          accrual = operationalAccrual; 
@@ -128,7 +194,7 @@ const DashboardView = () => {
       }
     });
 
-    visibleStores.forEach(storeName => {
+    effectiveStores.forEach(storeName => {
         const fullName = `${brandPrefix}${storeName}店`;
         const budgetKey = `${fullName}_${y}_${m}`;
         const b = budgets[budgetKey];
@@ -167,15 +233,16 @@ const DashboardView = () => {
       daysInMonth
     };
 
-  }, [allReports, budgets, selectedYear, selectedMonth, visibleStores, brandPrefix, cleanName]);
+  }, [allReports, budgets, selectedYear, selectedMonth, effectiveStores, brandPrefix, cleanName]);
 
   const myStoreRankings = useMemo(() => {
-    if ((userRole !== 'store' && userRole !== 'manager') || !allReports) return [];
+    if ((userRole !== 'store' && userRole !== 'manager' && userRole !== 'director') || !allReports) return [];
     
     const storeStats = {};
     const y = parseInt(selectedYear);
     const m = parseInt(selectedMonth);
 
+    // 先計算所有店家的業績 (為了正確計算全區排名)
     allReports.forEach(report => {
       const rDate = new Date(report.date);
       if (rDate.getFullYear() !== y || (rDate.getMonth() + 1) !== m) return;
@@ -197,6 +264,7 @@ const DashboardView = () => {
       return { storeName, actual, target, rate };
     });
 
+    // 依達成率排序
     rankingList.sort((a, b) => b.rate - a.rate);
     
     const fullRankedList = rankingList.map((item, index) => ({ 
@@ -206,11 +274,12 @@ const DashboardView = () => {
       isBottom5: (index + 1) > (rankingList.length - 5) 
     }));
     
+    // 最後只過濾出畫面上要顯示的店家
     return fullRankedList.filter(item => {
         const cleanItemName = cleanName(item.storeName);
-        return visibleStores.includes(cleanItemName);
+        return effectiveStores.includes(cleanItemName);
     });
-  }, [userRole, allReports, visibleStores, budgets, selectedYear, selectedMonth, cleanName, brandPrefix]);
+  }, [userRole, allReports, effectiveStores, budgets, selectedYear, selectedMonth, cleanName, brandPrefix]);
 
   const therapistStats = useMemo(() => {
     if (!therapistReports) return { rankings: [], myStats: null, grandTotal: {} };
@@ -218,7 +287,14 @@ const DashboardView = () => {
     const currentMonthReports = therapistReports.filter(r => {
       const dStr = r.date.replace(/-/g, "/"); 
       const d = new Date(dStr);
-      return d.getFullYear() === parseInt(selectedYear) && (d.getMonth() + 1) === parseInt(selectedMonth);
+      const isTargetMonth = d.getFullYear() === parseInt(selectedYear) && (d.getMonth() + 1) === parseInt(selectedMonth);
+      if (!isTargetMonth) return false;
+
+      // 套用動態篩選器
+      const rStoreClean = cleanName(r.storeName);
+      if (!effectiveStores.includes(rStoreClean)) return false;
+
+      return true;
     });
 
     const statsMap = {};
@@ -281,7 +357,7 @@ const DashboardView = () => {
     }), { totalRevenue: 0, serviceCount: 0, newCustomerRevenue: 0, oldCustomerRevenue: 0, returnRevenue: 0, count: 0 });
     
     return { rankings, myStats, grandTotal };
-  }, [therapistReports, selectedYear, selectedMonth, userRole, currentUser]);
+  }, [therapistReports, selectedYear, selectedMonth, effectiveStores, cleanName, userRole, currentUser]);
 
   const handleExportCSV = () => {
     const dataToExport = therapistStats.rankings.filter(t => userRole !== 'therapist' || t.id === currentUser?.id);
@@ -342,10 +418,60 @@ const DashboardView = () => {
     <ViewWrapper>
       <div className="space-y-8 pb-10 w-full min-w-0">
         
-        {/* 動態品牌名稱 */}
-        <div className="flex items-center gap-3 mb-2 px-2 animate-in fade-in slide-in-from-left-2 duration-500">
-            <div className={`w-2 h-8 rounded-full ${brandInfo.id.toLowerCase().includes('anniu') ? 'bg-teal-500' : brandInfo.id.toLowerCase().includes('yibo') ? 'bg-purple-500' : 'bg-amber-500'}`}></div>
-            <h1 className="text-2xl font-bold text-stone-700">{brandInfo.name} 營運總覽</h1>
+        {/* 動態品牌名稱與雙層連動篩選區 */}
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 mb-2 px-2 animate-in fade-in slide-in-from-left-2 duration-500">
+            <div className="flex items-center gap-3 shrink-0">
+                <div className={`w-2 h-8 rounded-full ${brandInfo.id.toLowerCase().includes('anniu') ? 'bg-teal-500' : brandInfo.id.toLowerCase().includes('yibo') ? 'bg-purple-500' : 'bg-amber-500'}`}></div>
+                <h1 className="text-2xl font-bold text-stone-700">{brandInfo.name} 營運總覽</h1>
+            </div>
+
+            {(userRole === 'director' || userRole === 'trainer' || userRole === 'manager') && (
+                <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-2 w-full sm:w-auto overflow-x-auto no-scrollbar pb-1 sm:pb-0">
+                    
+                    {/* 第一層：選區長 (總監專屬) */}
+                    {(userRole === 'director' || userRole === 'trainer') && (
+                        <select
+                            value={selectedDashboardManager}
+                            onChange={(e) => {
+                                setSelectedDashboardManager(e.target.value);
+                                setSelectedDashboardStore(""); 
+                            }}
+                            className="px-4 py-2.5 border border-stone-200 rounded-xl text-sm font-bold text-stone-600 outline-none focus:border-amber-400 bg-white shadow-sm cursor-pointer min-w-[120px] hover:border-stone-300 transition-colors"
+                        >
+                            <option value="">全品牌</option>
+                            {Object.keys(groupedStoresForFilter).map(m => (
+                                <option key={m} value={m}>{m}區</option>
+                            ))}
+                        </select>
+                    )}
+                    
+                    {/* 第二層：選店家 (分組顯示) */}
+                    <select
+                        value={selectedDashboardStore}
+                        onChange={(e) => setSelectedDashboardStore(e.target.value)}
+                        className="px-4 py-2.5 border border-stone-200 rounded-xl text-sm font-bold text-stone-600 outline-none focus:border-amber-400 bg-white shadow-sm cursor-pointer min-w-[140px] hover:border-stone-300 transition-colors"
+                    >
+                        <option value="" className="font-bold text-stone-800">
+                            {selectedDashboardManager || userRole === 'manager' ? "全區店家" : "顯示全區"}
+                        </option>
+                        
+                        {/* 如果沒有選定特定區長，則顯示所有區長分組；若有選定，則直接列出該區門市 */}
+                        {(!selectedDashboardManager && userRole !== 'manager') ? (
+                            Object.entries(groupedStoresForFilter).map(([mgrName, stores]) => (
+                                <optgroup key={mgrName} label={`${mgrName} 區`} className="font-bold text-stone-400 bg-stone-50">
+                                    {stores.map(s => (
+                                        <option key={s} value={s} className="font-medium text-stone-700 bg-white">{s}</option>
+                                    ))}
+                                </optgroup>
+                            ))
+                        ) : (
+                            availableStoresForDropdown.map(s => (
+                                <option key={s} value={s} className="font-medium text-stone-700 bg-white">{s}</option>
+                            ))
+                        )}
+                    </select>
+                </div>
+            )}
         </div>
 
         {userRole !== 'therapist' && userRole !== 'trainer' && (
@@ -359,33 +485,36 @@ const DashboardView = () => {
 
         {viewMode === 'store' && (
           <div className="space-y-8 animate-in fade-in slide-in-from-bottom-4 duration-500">
-            {/* 店家營運區塊 */}
+            
+            {/* 店長專屬視角 - 店家營運區塊 */}
             {userRole === 'store' && myStoreRankings.length > 0 && (
               <div className="grid grid-cols-1 md:grid-cols-2 gap-6">{myStoreRankings.map((storeRank) => ( <div key={storeRank.storeName} className={`rounded-3xl p-6 text-white shadow-xl relative overflow-hidden transition-all ${storeRank.isBottom5 ? "bg-gradient-to-br from-rose-500 to-red-600 shadow-rose-200" : "bg-gradient-to-br from-amber-400 to-orange-600 shadow-amber-200"}`}><div className="absolute top-0 right-0 p-4 opacity-10">{storeRank.isBottom5 ? <AlertTriangle size={120} /> : <Trophy size={120} />}</div><div className="relative z-10"><div className="flex items-center gap-2 mb-4"><div className="bg-white/20 p-2 rounded-lg backdrop-blur-sm">{storeRank.isBottom5 ? <Activity size={20} className="text-white" /> : <Medal size={20} className="text-yellow-100" />}</div><h3 className="font-bold text-lg tracking-wider opacity-90">{storeRank.storeName}</h3>{storeRank.isBottom5 && <span className="ml-auto bg-white/20 px-2 py-1 rounded text-xs font-bold flex items-center gap-1">需加強</span>}</div><div className="flex items-end gap-4 mb-2"><div><p className="text-white/80 text-xs font-bold uppercase mb-1">全區排名</p><div className="flex items-baseline gap-2"><span className="text-5xl font-extrabold font-mono text-white tracking-tighter">No.{storeRank.rank}</span><span className="text-white/60 font-bold text-sm">/ {storeRank.totalStores}</span></div></div><div className="flex-1 text-right"><p className="text-white/80 text-xs font-bold uppercase mb-1">目標達成率</p><p className="text-3xl font-mono font-bold text-white">{storeRank.rate.toFixed(0)}%</p></div></div><div className="mt-4 pt-4 border-t border-white/20 flex justify-between text-xs font-medium text-white/90"><span>目前業績: {fmtMoney(storeRank.actual)}</span><span>目標: {fmtMoney(storeRank.target)}</span></div></div></div> ))}</div>
             )}
-            {userRole === 'manager' && myStoreRankings.length > 0 && (
-              <div className="bg-white rounded-3xl border border-stone-200 shadow-xl overflow-hidden relative"><div className="bg-gradient-to-r from-amber-500 to-orange-600 p-6 flex justify-between items-center text-white relative overflow-hidden"><div className="absolute right-0 top-0 p-4 opacity-10"><Map size={100} /></div><div className="relative z-10 flex items-center gap-3"><div className="p-2 bg-white/20 rounded-xl backdrop-blur-md"><Crown size={24} className="text-white" /></div><div><h3 className="text-xl font-bold tracking-wide">區域門市戰情排行</h3><p className="text-amber-100 text-xs font-medium">Rankings & Performance</p></div></div><div className="relative z-10 text-right"><p className="text-xs text-amber-100 font-bold uppercase">管理店家數</p><p className="text-2xl font-mono font-bold text-white">{myStoreRankings.length}</p></div></div><div className="p-0 sm:p-2 overflow-x-auto"><table className="w-full text-left border-collapse min-w-[350px]"><thead><tr className="text-xs font-bold text-stone-400 border-b border-stone-100"><th className="p-3 sm:p-4 w-16 sm:w-20 text-center">排名</th><th className="p-3 sm:p-4">門市名稱</th><th className="p-3 sm:p-4 text-right">目前業績</th><th className="p-3 sm:p-4 text-right hidden sm:table-cell">目標金額</th><th className="p-3 sm:p-4 text-right">達成率</th></tr></thead><tbody>{myStoreRankings.map((store, idx) => (<tr key={store.storeName} className={`group transition-colors border-b last:border-0 border-stone-50 ${store.isBottom5 ? "bg-rose-50 hover:bg-rose-100" : "hover:bg-stone-50" }`}><td className="p-3 sm:p-4 text-center"><span className={`inline-flex items-center justify-center w-6 h-6 sm:w-8 sm:h-8 rounded-full text-xs font-bold ${idx === 0 ? "bg-amber-100 text-amber-700" : idx === 1 ? "bg-stone-200 text-stone-600" : idx === 2 ? "bg-orange-100 text-orange-700" : "bg-stone-50 text-stone-400"}`}>{store.rank}</span></td><td className="p-3 sm:p-4"><div className="flex flex-col sm:flex-row sm:items-center gap-1 sm:gap-2"><span className={`font-bold text-sm sm:text-base ${store.isBottom5 ? "text-rose-700" : "text-stone-700"}`}>{store.storeName}</span>{store.isBottom5 && (<span className="w-fit text-[10px] font-bold px-1.5 py-0.5 bg-rose-200 text-rose-700 rounded flex items-center gap-1 animate-pulse"><AlertTriangle size={10} /> <span className="hidden sm:inline">需關注</span></span>)}</div></td><td className="p-3 sm:p-4 text-right font-mono font-medium text-stone-600 text-sm sm:text-base">{fmtMoney(store.actual)}</td><td className="p-3 sm:p-4 text-right font-mono text-stone-400 text-sm hidden sm:table-cell">{fmtMoney(store.target)}</td><td className="p-3 sm:p-4 text-right"><div className="flex flex-col items-end"><span className={`text-base sm:text-lg font-bold font-mono ${store.isBottom5 ? "text-rose-600" : (store.rate >= 100 ? "text-emerald-500" : "text-amber-500")}`}>{store.rate.toFixed(0)}%</span><div className="w-16 sm:w-24 h-1 sm:h-1.5 bg-stone-100 rounded-full mt-1 overflow-hidden"><div className={`h-full rounded-full ${store.isBottom5 ? "bg-rose-500" : (store.rate >= 100 ? "bg-emerald-400" : "bg-amber-400")}`} style={{ width: `${Math.min(store.rate, 100)}%` }}></div></div></div></td></tr>))}</tbody></table></div></div>
-            )}
+            
+            {/* 1. 營運節奏監控 & 月底現金推估 (改放在最上方) */}
             <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
               <div className="lg:col-span-2 bg-white rounded-3xl p-6 md:p-8 border border-stone-100 shadow-xl shadow-stone-200/50 relative overflow-hidden group"><div className="absolute top-0 right-0 w-64 h-64 bg-indigo-50 rounded-full blur-3xl -mr-16 -mt-16 pointer-events-none opacity-60"></div><div className="flex flex-col md:flex-row justify-between items-start md:items-center mb-8 relative z-10"><div><div className="flex items-center gap-2 mb-2"><div className="p-1.5 bg-indigo-50 rounded-lg"><Activity size={16} className="text-indigo-500" /></div><span className="text-xs font-bold uppercase tracking-widest text-stone-400">營運節奏監控</span></div><h2 className="text-3xl md:text-4xl font-extrabold font-mono tracking-tight text-stone-700">Day {daysPassed} <span className="text-lg text-stone-300 font-sans">/ {daysInMonth}</span></h2></div><div className={`mt-4 md:mt-0 px-4 py-2 rounded-xl flex items-center gap-2 ${paceGap >= 0 ? "bg-emerald-50 text-emerald-600 border border-emerald-100" : "bg-rose-50 text-rose-600 border border-rose-100"}`}><span className="text-sm font-bold">{paceGap >= 0 ? "超前進度" : "落後進度"}</span><span className="text-xl font-mono font-bold">{Math.abs(paceGap).toFixed(0)}%</span></div></div><div className="space-y-6 relative z-10"><div className="space-y-2"><div className="flex justify-between text-sm font-bold"><span className="text-stone-500">實際達成率</span><span className={totalAchievement >= timeProgress ? "text-emerald-500" : "text-rose-500"}>{totalAchievement.toFixed(0)}%</span></div><div className="w-full bg-stone-100 h-3 rounded-full overflow-hidden shadow-inner"><div className={`h-full rounded-full transition-all duration-1000 ${totalAchievement >= 100 ? "bg-gradient-to-r from-emerald-400 to-teal-400" : totalAchievement >= timeProgress ? "bg-emerald-400" : "bg-rose-400"}`} style={{ width: `${Math.min(totalAchievement, 100)}%` }} /></div></div><div className="space-y-2"><div className="flex justify-between text-sm font-medium"><span className="text-stone-400">時間進度 (應達)</span><span className="text-stone-400">{timeProgress.toFixed(0)}%</span></div><div className="w-full bg-stone-50 h-1.5 rounded-full overflow-hidden"><div className="h-full bg-stone-300 rounded-full" style={{ width: `${Math.min(timeProgress, 100)}%` }} /></div></div></div></div>
               <div className="bg-white rounded-3xl p-6 border border-stone-100 shadow-lg shadow-stone-100 flex flex-col justify-center relative overflow-hidden group"><div className="relative z-10"><p className="text-emerald-600/70 text-xs font-bold uppercase tracking-wider mb-2 flex items-center gap-1"><Target size={14} /> 月底現金推估</p><h3 className="text-3xl xl:text-4xl font-extrabold text-stone-700 font-mono mb-4">{fmtMoney(storeGrandTotal.projection)}</h3><div className="inline-flex items-center gap-2 px-3 py-1.5 bg-emerald-50 text-emerald-700 rounded-lg text-xs font-bold"><span>預估達成</span><span>{storeGrandTotal.budget > 0 ? ((storeGrandTotal.projection / storeGrandTotal.budget) * 100).toFixed(0) : 0}%</span></div><div className="mt-4 pt-4 border-t border-stone-50"><div className="flex justify-between items-center text-xs text-stone-400"><span>本月目標</span><span className="font-mono font-bold text-stone-500">{fmtMoney(storeGrandTotal.budget)}</span></div></div></div></div>
             </div>
+            
+            {/* 2. 財務績效指標 */}
             <div><h3 className="text-lg font-bold text-stone-700 mb-4 flex items-center gap-2 pl-1"><div className="w-1 h-6 bg-amber-500 rounded-full"></div>財務績效</h3><div className="grid grid-cols-1 md:grid-cols-3 gap-4">
               <MiniKpiCard title="總現金業績" value={fmtMoney(storeGrandTotal.cash)} icon={DollarSign} color="text-amber-500" subText={<span className={`font-bold ${totalAchievement >= 100 ? "text-emerald-600" : "text-amber-600"}`}>{totalAchievement.toFixed(0)}% 目標達成率</span>} />
-              
-              {/* ★★★ 修正：總權責業績的動態提示文字 ★★★ */}
-              <MiniKpiCard 
-                title="總權責業績" 
-                value={fmtMoney(storeGrandTotal.accrual)} 
-                icon={CreditCard} 
-                color="text-cyan-500" 
-                subText={brandPrefix === '安妞' ? "僅含技術操作 (排除產品)" : "含技術操作與產品銷售"} 
-              />
-              
+              <MiniKpiCard title="總權責業績" value={fmtMoney(storeGrandTotal.accrual)} icon={CreditCard} color="text-cyan-500" subText={brandPrefix === '安妞' ? "僅含技術操作 (排除產品)" : "含技術操作與產品銷售"} />
               <MiniKpiCard title="總保養品業績" value={fmtMoney(storeGrandTotal.skincareSales)} icon={ShoppingBag} color="text-rose-500" subText={<>佔權責 <span className="font-bold text-stone-700 ml-1">{storeGrandTotal.accrual > 0 ? ((storeGrandTotal.skincareSales / storeGrandTotal.accrual) * 100).toFixed(0) : 0}%</span></>} />
             </div></div>
+            
+            {/* 3. 營運效率與客流指標 */}
             <div><h3 className="text-lg font-bold text-stone-700 mb-4 flex items-center gap-2 pl-1"><div className="w-1 h-6 bg-cyan-500 rounded-full"></div>營運效率與客流</h3><div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5 gap-4"><MiniKpiCard title="課程操作人數" value={fmtNum(storeGrandTotal.traffic)} icon={Users} color="text-blue-500" subText="本月累計操作人數" /><MiniKpiCard title="平均操作權責" value={fmtMoney(dashboardStats.avgTrafficASP)} icon={TrendingUp} color="text-indigo-500" subText={<span className={dashboardStats.avgTrafficASP >= targets.trafficASP ? "text-emerald-500 font-bold" : "text-rose-500 font-bold"}>{dashboardStats.avgTrafficASP >= targets.trafficASP ? "達標" : "未達標"} (目標 {fmtNum(targets.trafficASP)})</span>} /><MiniKpiCard title="總新客數" value={fmtNum(storeGrandTotal.newCustomers)} icon={Sparkles} color="text-purple-500" subText="本月新增體驗人數" /><MiniKpiCard title="總新客留單" value={fmtNum(storeGrandTotal.newCustomerClosings)} icon={CheckSquare} color="text-teal-500" subText={<span>留單率 <span className="font-bold">{storeGrandTotal.newCustomers > 0 ? ((storeGrandTotal.newCustomerClosings / storeGrandTotal.newCustomers) * 100).toFixed(0) : 0}%</span></span>} /><MiniKpiCard title="新客平均客單" value={fmtMoney(dashboardStats.avgNewCustomerASP)} icon={Award} color="text-fuchsia-500" subText={<span className={dashboardStats.avgNewCustomerASP >= targets.newASP ? "text-emerald-500 font-bold" : "text-rose-500 font-bold"}>{dashboardStats.avgNewCustomerASP >= targets.newASP ? "達標" : "未達標"} (目標 {fmtNum(targets.newASP)})</span>} /></div></div>
+            
+            {/* 4. 營運走勢趨勢圖 */}
             <Card title={`${brandInfo.name} 日營運走勢`} subtitle="現金業績 vs 課程操作人數趨勢分析"><div className="h-[300px] w-full"><ResponsiveContainer width="100%" height="100%"><ComposedChart data={dailyTotals} margin={{ top: 10, right: 10, left: 0, bottom: 0 }}><CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#f5f5f4" /><XAxis dataKey="date" stroke="#a8a29e" tick={{ fontSize: 12 }} dy={10} /><YAxis yAxisId="left" stroke="#a8a29e" tick={{ fontSize: 12 }} width={60} tickFormatter={(val) => val === 0 ? "0" : `$${(val / 1000).toFixed(0)}k`} /><YAxis yAxisId="right" orientation="right" stroke="#a8a29e" tick={{ fontSize: 12 }} tickFormatter={(val) => fmtNum(val)} /><RechartsTooltip contentStyle={{ borderRadius: "16px", border: "none", padding: "12px", boxShadow: "0 4px 6px -1px rgb(0 0 0 / 0.1)", }} cursor={{ fill: "#fafaf9" }} formatter={(value, name) => { if (name === "現金業績") return [fmtMoney(value), name]; return [fmtNum(value), name]; }} /><Area yAxisId="left" type="monotone" dataKey="cash" name="現金業績" stroke="#f59e0b" fill="#f59e0b" fillOpacity={0.2} strokeWidth={3} /><Line yAxisId="right" type="monotone" dataKey="traffic" name="課程操作人數" stroke="#0ea5e9" strokeWidth={3} /></ComposedChart></ResponsiveContainer></div></Card>
+
+            {/* 5. 戰情排行分析 (★ 已移至最下方，宏觀 -> 微觀) */}
+            {(userRole === 'manager' || userRole === 'director') && myStoreRankings.length > 0 && (
+              <div className="bg-white rounded-3xl border border-stone-200 shadow-xl overflow-hidden relative"><div className="bg-gradient-to-r from-amber-500 to-orange-600 p-6 flex justify-between items-center text-white relative overflow-hidden"><div className="absolute right-0 top-0 p-4 opacity-10"><Map size={100} /></div><div className="relative z-10 flex items-center gap-3"><div className="p-2 bg-white/20 rounded-xl backdrop-blur-md"><Crown size={24} className="text-white" /></div><div><h3 className="text-xl font-bold tracking-wide">戰情排行分析</h3><p className="text-amber-100 text-xs font-medium">Rankings & Performance</p></div></div><div className="relative z-10 text-right"><p className="text-xs text-amber-100 font-bold uppercase">目前顯示店家數</p><p className="text-2xl font-mono font-bold text-white">{myStoreRankings.length}</p></div></div><div className="p-0 sm:p-2 overflow-x-auto"><table className="w-full text-left border-collapse min-w-[350px]"><thead><tr className="text-xs font-bold text-stone-400 border-b border-stone-100"><th className="p-3 sm:p-4 w-16 sm:w-20 text-center">全區排名</th><th className="p-3 sm:p-4">門市名稱</th><th className="p-3 sm:p-4 text-right">目前業績</th><th className="p-3 sm:p-4 text-right hidden sm:table-cell">目標金額</th><th className="p-3 sm:p-4 text-right">達成率</th></tr></thead><tbody>{myStoreRankings.map((store) => (<tr key={store.storeName} className={`group transition-colors border-b last:border-0 border-stone-50 ${store.isBottom5 ? "bg-rose-50 hover:bg-rose-100" : "hover:bg-stone-50" }`}><td className="p-3 sm:p-4 text-center"><span className={`inline-flex items-center justify-center w-6 h-6 sm:w-8 sm:h-8 rounded-full text-xs font-bold ${store.rank === 1 ? "bg-amber-100 text-amber-700" : store.rank === 2 ? "bg-stone-200 text-stone-600" : store.rank === 3 ? "bg-orange-100 text-orange-700" : "bg-stone-50 text-stone-400"}`}>{store.rank}</span></td><td className="p-3 sm:p-4"><div className="flex flex-col sm:flex-row sm:items-center gap-1 sm:gap-2"><span className={`font-bold text-sm sm:text-base ${store.isBottom5 ? "text-rose-700" : "text-stone-700"}`}>{store.storeName}</span>{store.isBottom5 && (<span className="w-fit text-[10px] font-bold px-1.5 py-0.5 bg-rose-200 text-rose-700 rounded flex items-center gap-1 animate-pulse"><AlertTriangle size={10} /> <span className="hidden sm:inline">需關注</span></span>)}</div></td><td className="p-3 sm:p-4 text-right font-mono font-medium text-stone-600 text-sm sm:text-base">{fmtMoney(store.actual)}</td><td className="p-3 sm:p-4 text-right font-mono text-stone-400 text-sm hidden sm:table-cell">{fmtMoney(store.target)}</td><td className="p-3 sm:p-4 text-right"><div className="flex flex-col items-end"><span className={`text-base sm:text-lg font-bold font-mono ${store.isBottom5 ? "text-rose-600" : (store.rate >= 100 ? "text-emerald-500" : "text-amber-500")}`}>{store.rate.toFixed(0)}%</span><div className="w-16 sm:w-24 h-1 sm:h-1.5 bg-stone-100 rounded-full mt-1 overflow-hidden"><div className={`h-full rounded-full ${store.isBottom5 ? "bg-rose-500" : (store.rate >= 100 ? "bg-emerald-400" : "bg-amber-400")}`} style={{ width: `${Math.min(store.rate, 100)}%` }}></div></div></div></td></tr>))}</tbody></table></div></div>
+            )}
+
           </div>
         )}
 
