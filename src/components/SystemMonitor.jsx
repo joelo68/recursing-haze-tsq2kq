@@ -1,30 +1,32 @@
 // src/components/SystemMonitor.jsx
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useContext } from "react";
 import {
   Smartphone, Monitor, ChevronLeft, ChevronRight, RefreshCw,
   Calendar
 } from "lucide-react";
 import { 
-  query, collection, limit, onSnapshot, where, Timestamp 
+  query, limit, onSnapshot, where, Timestamp 
 } from "firebase/firestore";
 
-import { db, appId } from "../config/firebase";
+import { AppContext } from "../AppContext";
 import { ViewWrapper, Card } from "./SharedUI";
 
 const SystemMonitor = () => {
+  // ★★★ 取得當前品牌的全域路徑與資訊 ★★★
+  const { getCollectionPath, currentBrand } = useContext(AppContext);
+  
   const [logs, setLogs] = useState([]);
   const [loading, setLoading] = useState(false);
   const [currentPage, setCurrentPage] = useState(1);
   const itemsPerPage = 20;
 
-  // 日期篩選狀態 (預設今天)
   const todayStr = new Date().toISOString().split('T')[0];
   const [dateRange, setDateRange] = useState({
     start: todayStr,
     end: todayStr
   });
 
-  // 搜尋系統日誌 (支援日期篩選)
+  // ★★★ 動態抓取「當前品牌」的操作日誌 ★★★
   const fetchLogs = () => {
     setLoading(true);
     setLogs([]); 
@@ -36,15 +38,14 @@ const SystemMonitor = () => {
     endDate.setHours(23, 59, 59, 999);
 
     const q = query(
-      collection(db, "artifacts", appId, "public", "data", "system_logs"),
+      getCollectionPath("system_logs"), // 這裡會自動切換為 brands/anniu/system_logs 等路徑
       where("timestamp", ">=", Timestamp.fromDate(startDate)),
       where("timestamp", "<=", Timestamp.fromDate(endDate)),
-      limit(500) // 移除後端排序，避免索引問題
+      limit(500) 
     );
 
     const unsubscribe = onSnapshot(q, (snapshot) => {
       let fetchedLogs = snapshot.docs.map((doc) => ({ id: doc.id, ...doc.data() }));
-      // 前端排序：最新時間在最上面
       fetchedLogs.sort((a, b) => {
          const tA = a.timestamp?.toMillis ? a.timestamp.toMillis() : 0;
          const tB = b.timestamp?.toMillis ? b.timestamp.toMillis() : 0;
@@ -57,11 +58,11 @@ const SystemMonitor = () => {
     return unsubscribe;
   };
 
-  // 當日期改變時重新訂閱
+  // 當日期「或品牌」改變時重新抓取
   useEffect(() => {
     const unsub = fetchLogs();
     return () => unsub(); 
-  }, [dateRange]);
+  }, [dateRange, currentBrand]);
 
   const totalPages = Math.ceil(logs.length / itemsPerPage);
   const currentData = logs.slice(
@@ -108,23 +109,20 @@ const SystemMonitor = () => {
     <ViewWrapper>
       <div className="space-y-6 pb-20">
         
-        {/* 系統操作日誌 (含日期篩選器) */}
         <Card>
-          {/* ★ RWD 修正區塊：items-end 改為 items-start，讓手機版靠左對齊 ★ */}
           <div className="flex flex-col md:flex-row justify-between items-start md:items-center mb-6 gap-4">
             <div>
-              <h3 className="text-lg font-bold text-stone-700">系統操作日誌</h3>
+              {/* ★ 標題加上品牌名稱，讓管理者清楚目前在看誰的紀錄 ★ */}
+              <h3 className="text-lg font-bold text-stone-700">系統操作日誌 <span className="text-amber-600 ml-1">({currentBrand.label})</span></h3>
               <p className="text-xs text-stone-400">追蹤系統內的所有操作紀錄</p>
             </div>
             
-            {/* ★ 日期篩選器 RWD 優化：加入 w-full md:w-auto, flex-wrap, 並讓 input flex-1 自動填滿 ★ */}
             <div className="flex flex-wrap items-center gap-2 bg-stone-50 p-1.5 rounded-xl border border-stone-200 w-full md:w-auto">
               <div className="flex items-center gap-2 px-2">
                 <Calendar size={14} className="text-stone-400"/>
                 <span className="text-xs font-bold text-stone-500 whitespace-nowrap">日期範圍</span>
               </div>
               
-              {/* 日期輸入框區域 */}
               <div className="flex items-center gap-2 flex-1 w-full sm:w-auto">
                 <input 
                   type="date" 
@@ -150,7 +148,6 @@ const SystemMonitor = () => {
             </div>
           ) : (
             <>
-              {/* 表格區塊：加入 overflow-x-auto 確保手機不破版 */}
               <div className="overflow-x-auto min-h-[400px] rounded-2xl border border-stone-100">
                 <table className="w-full text-left border-collapse min-w-[600px]">
                   <thead className="bg-stone-50/50 text-stone-400 font-bold text-xs uppercase tracking-wider border-b border-stone-100">

@@ -13,7 +13,7 @@ import React, {
 
 import { app, auth, db, appId } from "./config/firebase";
 import { onAuthStateChanged, signInAnonymously, signInWithCustomToken } from "firebase/auth";
-import { collection, addDoc, deleteDoc, updateDoc, doc, onSnapshot, serverTimestamp, setDoc, query, orderBy, limit } from "firebase/firestore";
+import { collection, addDoc, deleteDoc, updateDoc, doc, onSnapshot, serverTimestamp, setDoc, query, orderBy, limit, deleteField } from "firebase/firestore";
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip as RechartsTooltip, Legend, ResponsiveContainer, LineChart, Line, ComposedChart, Area, Cell, PieChart, Pie } from "recharts";
 import { 
   LayoutDashboard, Upload, TrendingUp, Map as MapIcon, Settings, ClipboardCheck, Menu, Search, Filter, Trash2, Save, Plus, DollarSign, Target, Users, Award, Loader2, FileText, AlertCircle, CheckCircle, User, Store, Lock, LogOut, FileWarning, Edit2, CheckSquare, X, Download, ChevronLeft, ChevronRight, Activity, Sparkles, ChevronDown, 
@@ -124,6 +124,8 @@ export default function App() {
   const [managerAuth, setManagerAuth] = useState({});
   const [permissions, setPermissions] = useState(DEFAULT_PERMISSIONS);
   const [therapists, setTherapists] = useState([]);
+  
+  const [directorAuth, setDirectorAuth] = useState({});
   const [trainerAuth, setTrainerAuth] = useState({ password: "0000" });
 
   const [therapistReports, setTherapistReports] = useState([]); 
@@ -140,7 +142,6 @@ export default function App() {
   const [selectedMonth, setSelectedMonth] = useState((new Date().getMonth() + 1).toString());
   const [inputDate, setInputDate] = useState(() => formatLocalYYYYMMDD(new Date()));
 
-  // ★★★ 修正：「新店」店名防呆 ★★★
   const normalizeStore = useCallback((s) => {
       let core = String(s || "").replace(/^(CYJ|Anew\s*\(安妞\)|Yibo\s*\(伊啵\)|安妞|伊啵|Anew|Yibo)\s*/i, '').trim();
       if (core === "新店") return "新店"; 
@@ -156,9 +157,17 @@ export default function App() {
       else if (ua.includes("mobile")) device = "Mobile";
     }
     try { 
-      await addDoc(getCollectionPath("system_logs"), { timestamp: serverTimestamp(), role, user, action, details, device }); 
+      await addDoc(getCollectionPath("system_logs"), { 
+        timestamp: serverTimestamp(), 
+        role, 
+        user, 
+        action, 
+        details, 
+        device,
+        brand: currentBrandId 
+      }); 
     } catch (e) { console.error("Failed to log activity", e); }
-  }, [getCollectionPath]);
+  }, [getCollectionPath, currentBrandId]);
 
   const handleLogout = useCallback(async (reason = "使用者手動登出") => {
     const userName = currentUser?.name || (userRole === "director" ? "總監" : (userRole === "trainer" ? "教專" : "未知"));
@@ -215,129 +224,56 @@ export default function App() {
   useEffect(() => {
     if (!user) return;
 
-    setRawData([]);
-    setBudgets({});
-    setManagers({}); 
-    setStoreAccounts([]); 
-    setManagerAuth({});
-    setTherapists([]); 
-    setTherapistReports([]);
-    setTherapistSchedules({});
-    setTherapistTargets({});
-    setPermissions(DEFAULT_PERMISSIONS);
-    setTargets({ newASP: 3500, trafficASP: 1200 });
+    setRawData([]); setBudgets({}); setManagers({}); setStoreAccounts([]); setManagerAuth({}); setTherapists([]); setTherapistReports([]); setTherapistSchedules({}); setTherapistTargets({}); setPermissions(DEFAULT_PERMISSIONS); setTargets({ newASP: 3500, trafficASP: 1200 });
 
-    const unsubReports = onSnapshot(
-      query(getCollectionPath("daily_reports"), orderBy("date", "desc")), 
-      (s) => setRawData(s.docs.map((d) => ({ id: d.id, ...d.data() })))
-    );
-
-    const unsubBudgets = onSnapshot(
-      getCollectionPath("monthly_targets"), 
-      (s) => { const b = {}; s.docs.forEach((d) => (b[d.id] = d.data())); setBudgets(b); }
-    );
-
-    const unsubTargets = onSnapshot(
-      getDocPath("kpi_targets"), 
-      (s) => {
-        if (s.exists()) {
-          setTargets(s.data());
-        } else {
-          setTargets({ newASP: 3500, trafficASP: 1200 });
-        }
-      }
-    );
-    
-    const unsubOrg = onSnapshot(
-      getDocPath("org_structure"), 
-      (s) => {
+    const unsubReports = onSnapshot(query(getCollectionPath("daily_reports"), orderBy("date", "desc")), (s) => setRawData(s.docs.map((d) => ({ id: d.id, ...d.data() }))));
+    const unsubBudgets = onSnapshot(getCollectionPath("monthly_targets"), (s) => { const b = {}; s.docs.forEach((d) => (b[d.id] = d.data())); setBudgets(b); });
+    const unsubTargets = onSnapshot(getDocPath("kpi_targets"), (s) => { if (s.exists()) setTargets(s.data()); else setTargets({ newASP: 3500, trafficASP: 1200 }); });
+    const unsubOrg = onSnapshot(getDocPath("org_structure"), (s) => {
         if (s.exists()) {
           const rawManagers = s.data().managers || {};
           const filteredManagers = {};
-          Object.keys(rawManagers).forEach(key => {
-            if (!key.includes("未分配") && !key.includes("未分區")) {
-              filteredManagers[key] = rawManagers[key];
-            }
-          });
+          Object.keys(rawManagers).forEach(key => { if (!key.includes("未分配") && !key.includes("未分區")) filteredManagers[key] = rawManagers[key]; });
           setManagers(filteredManagers);
         } else {
-          if (currentBrand.id === 'cyj') {
-            setManagers(DEFAULT_REGIONAL_MANAGERS);
-          } else {
-            setManagers({}); 
-          }
+          if (currentBrand.id === 'cyj') setManagers(DEFAULT_REGIONAL_MANAGERS); else setManagers({}); 
         }
-      }
-    );
+    });
 
-    const unsubAccounts = onSnapshot(
-      getDocPath("store_account_data"), 
-      (s) => {
+    const unsubAccounts = onSnapshot(getDocPath("store_account_data"), (s) => { if (s.exists()) setStoreAccounts(s.data().accounts); else setStoreAccounts([]); });
+    const unsubManagerAuth = onSnapshot(getDocPath("manager_auth"), (s) => { if (s.exists()) setManagerAuth(s.data()); else setManagerAuth({}); });
+    const unsubPermissions = onSnapshot(getDocPath("permissions"), (s) => { if (s.exists()) setPermissions(s.data()); else setPermissions(DEFAULT_PERMISSIONS); });
+    const unsubTherapists = onSnapshot(getCollectionPath("therapists"), (s) => setTherapists(s.docs.map((d) => ({ id: d.id, ...d.data() }))));
+    const unsubTherapistReports = onSnapshot(query(getCollectionPath("therapist_daily_reports"), orderBy("date", "desc"), limit(1000)), (s) => setTherapistReports(s.docs.map((d) => ({ id: d.id, ...d.data() }))));
+    const unsubTherapistSchedules = onSnapshot(getCollectionPath("therapist_schedules"), (s) => { const schedules = {}; s.docs.forEach((d) => (schedules[d.id] = d.data())); setTherapistSchedules(schedules); });
+    const unsubTherapistTargets = onSnapshot(getCollectionPath("therapist_targets"), (s) => { const t = {}; s.docs.forEach((d) => (t[d.id] = d.data())); setTherapistTargets(t); });
+    const unsubTrainerAuth = onSnapshot(getDocPath("trainer_auth"), (s) => { if (s.exists()) setTrainerAuth(s.data()); else setTrainerAuth({ password: "0000" }); });
+    const unsubAuditExclusions = onSnapshot(getDocPath("audit_exclusions"), (s) => { if (s.exists()) setAuditExclusions(s.data().stores || []); else setAuditExclusions([]); });
+
+    const unsubDirectorAuth = onSnapshot(
+      getDocPath("director_auth"), 
+      (s) => { 
         if (s.exists()) {
-          setStoreAccounts(s.data().accounts);
+           let data = { ...s.data() };
+           if (data.password && Object.keys(data).length === 1) {
+             setDirectorAuth({ "營運總監": data.password });
+           } else {
+             delete data.password; 
+             if (Object.keys(data).length === 0) data = { "營運總監": "0000" };
+             setDirectorAuth(data);
+           }
         } else {
-          setStoreAccounts([]); 
+           let defaultPass = "0000";
+           if (currentBrand.id === 'cyj') defaultPass = "16500";
+           if (currentBrand.id === 'anniu') defaultPass = "8888";
+           if (currentBrand.id === 'yibo') defaultPass = "9999";
+           setDirectorAuth({ "營運總監": defaultPass }); 
         }
-      }
-    );
-
-    const unsubManagerAuth = onSnapshot(
-      getDocPath("manager_auth"), 
-      (s) => {
-        if (s.exists()) {
-          setManagerAuth(s.data());
-        } else {
-          setManagerAuth({}); 
-        }
-      }
-    );
-
-    const unsubPermissions = onSnapshot(
-      getDocPath("permissions"), 
-      (s) => {
-        if (s.exists()) {
-          setPermissions(s.data());
-        } else {
-          setPermissions(DEFAULT_PERMISSIONS);
-        }
-      }
-    );
-
-    const unsubTherapists = onSnapshot(
-      getCollectionPath("therapists"), 
-      (s) => setTherapists(s.docs.map((d) => ({ id: d.id, ...d.data() })))
-    );
-
-    const unsubTherapistReports = onSnapshot(
-      query(getCollectionPath("therapist_daily_reports"), orderBy("date", "desc"), limit(1000)), 
-      (s) => setTherapistReports(s.docs.map((d) => ({ id: d.id, ...d.data() })))
-    );
-
-    const unsubTherapistSchedules = onSnapshot(
-      getCollectionPath("therapist_schedules"), 
-      (s) => { const schedules = {}; s.docs.forEach((d) => (schedules[d.id] = d.data())); setTherapistSchedules(schedules); }
-    );
-
-    const unsubTherapistTargets = onSnapshot(
-      getCollectionPath("therapist_targets"), 
-      (s) => { const t = {}; s.docs.forEach((d) => (t[d.id] = d.data())); setTherapistTargets(t); }
-    );
-
-    const unsubTrainerAuth = onSnapshot(
-      getDocPath("trainer_auth"), 
-      (s) => { if (s.exists()) setTrainerAuth(s.data()); else setTrainerAuth({ password: "0000" }); }
-    );
-    
-    const unsubAuditExclusions = onSnapshot(
-      getDocPath("audit_exclusions"), 
-      (s) => {
-        if (s.exists()) setAuditExclusions(s.data().stores || []);
-        else setAuditExclusions([]);
       }
     );
 
     return () => {
-      unsubReports(); unsubBudgets(); unsubTargets(); unsubOrg(); unsubAccounts(); unsubManagerAuth(); unsubPermissions(); unsubTherapists(); unsubTherapistReports(); unsubTherapistSchedules(); unsubTherapistTargets(); unsubTrainerAuth(); unsubAuditExclusions();
+      unsubReports(); unsubBudgets(); unsubTargets(); unsubOrg(); unsubAccounts(); unsubManagerAuth(); unsubPermissions(); unsubTherapists(); unsubTherapistReports(); unsubTherapistSchedules(); unsubTherapistTargets(); unsubTrainerAuth(); unsubAuditExclusions(); unsubDirectorAuth();
     };
   }, [user, currentBrand, getCollectionPath, getDocPath]);
 
@@ -345,9 +281,7 @@ export default function App() {
     let finalUser = userInfo;
     if (roleId === 'therapist' && userInfo?.name) {
        const foundTherapist = therapists.find(t => t.name === userInfo.name);
-       if (foundTherapist) {
-         finalUser = { ...userInfo, ...foundTherapist, id: foundTherapist.id || userInfo.id };
-       }
+       if (foundTherapist) { finalUser = { ...userInfo, ...foundTherapist, id: foundTherapist.id || userInfo.id }; }
     }
     setUserRole(roleId);
     if (finalUser) setCurrentUser(finalUser);
@@ -361,11 +295,27 @@ export default function App() {
   const handleUpdateTherapistPassword = async (id, newPass) => { try { await updateDoc(doc(getCollectionPath("therapists"), id), { password: newPass }); return true; } catch (e) { console.error(e); return false; } };
   const handleUpdateTrainerAuth = async (newPass) => { try { await setDoc(getDocPath("trainer_auth"), { password: newPass }); return true; } catch (e) { console.error(e); return false; } };
   
+  // ★★★ 升級支援刪除、新增、修改密碼、以及【修改名稱】 ★★★
+  const handleUpdateDirectorAuth = async (action, name, newPass, newName = null) => { 
+    try { 
+      const docRef = getDocPath("director_auth");
+      if (action === 'delete') {
+         await updateDoc(docRef, { [name]: deleteField() });
+      } else if (action === 'rename') {
+         // 為了安全起見，先合併寫入新名稱與舊密碼，再把舊名稱欄位刪除
+         await setDoc(docRef, { [newName]: newPass }, { merge: true });
+         await updateDoc(docRef, { [name]: deleteField() });
+      } else {
+         await setDoc(docRef, { [name]: newPass }, { merge: true }); 
+      }
+      return true; 
+    } catch (e) { 
+      console.error(e); return false; 
+    } 
+  };
+
   const handleUpdateAuditExclusions = async (newExclusions) => {
-    try {
-      await setDoc(getDocPath("audit_exclusions"), { stores: newExclusions });
-      return true;
-    } catch (e) { console.error(e); return false; }
+    try { await setDoc(getDocPath("audit_exclusions"), { stores: newExclusions }); return true; } catch (e) { console.error(e); return false; }
   };
 
   const navigateToStore = useCallback((storeName) => { setActiveView("store-analysis"); window.dispatchEvent(new CustomEvent("navigate-to-store", { detail: storeName })); }, []);
@@ -399,9 +349,7 @@ export default function App() {
   }, [therapistReports, userRole, currentUser, managers, normalizeStore]);
 
   const visibleTherapists = useMemo(() => {
-    if (userRole === ROLES.DIRECTOR.id || userRole === ROLES.TRAINER.id) {
-      return therapists;
-    }
+    if (userRole === ROLES.DIRECTOR.id || userRole === ROLES.TRAINER.id) return therapists;
     if (userRole === ROLES.MANAGER.id && currentUser) {
       const myCores = (managers[currentUser.name] || []).map(normalizeStore).filter(Boolean);
       return therapists.filter(t => myCores.includes(normalizeStore(t.store)));
@@ -410,15 +358,12 @@ export default function App() {
       const myCores = (currentUser.stores || [currentUser.storeName] || []).map(normalizeStore).filter(Boolean);
       return therapists.filter(t => myCores.includes(normalizeStore(t.store)));
     }
-    if (userRole === ROLES.THERAPIST.id && currentUser) {
-      return therapists.filter(t => t.id === currentUser.id);
-    }
+    if (userRole === ROLES.THERAPIST.id && currentUser) return therapists.filter(t => t.id === currentUser.id);
     return [];
   }, [therapists, userRole, currentUser, managers, normalizeStore]);
 
   const visibleManagers = useMemo(() => {
     let result = managers; 
-
     if (userRole === ROLES.MANAGER.id && currentUser) {
       const myStores = managers[currentUser.name] || [];
       result = { [currentUser.name]: myStores };
@@ -435,22 +380,17 @@ export default function App() {
     if (activeView !== 'settings') {
        const filtered = {};
        Object.entries(result).forEach(([mgr, stores]) => {
-          if (!mgr.includes("未分配") && !mgr.includes("未分區")) {
-             filtered[mgr] = stores;
-          }
+          if (!mgr.includes("未分配") && !mgr.includes("未分區")) filtered[mgr] = stores;
        });
        return filtered;
     }
-
     return result;
   }, [managers, userRole, currentUser, activeView, normalizeStore]);
 
   const publicManagers = useMemo(() => {
      const filtered = {};
      Object.entries(managers).forEach(([mgr, stores]) => {
-        if (!mgr.includes("未分配") && !mgr.includes("未分區")) {
-           filtered[mgr] = stores;
-        }
+        if (!mgr.includes("未分配") && !mgr.includes("未分區")) filtered[mgr] = stores;
      });
      return filtered;
   }, [managers]);
@@ -491,6 +431,8 @@ export default function App() {
       onUpdateTherapistPassword={handleUpdateTherapistPassword} 
       trainerAuth={trainerAuth} 
       handleUpdateTrainerAuth={handleUpdateTrainerAuth}
+      directorAuth={directorAuth} 
+      handleUpdateDirectorAuth={handleUpdateDirectorAuth} 
       currentBrandId={currentBrandId}
       onSwitchBrand={handleSwitchBrand}
       hasSelectedBrand={hasSelectedBrand}
