@@ -1,7 +1,7 @@
 // src/components/DashboardView.jsx
 import React, { useContext, useMemo, useState, useEffect } from "react";
 import { XAxis, YAxis, CartesianGrid, Tooltip as RechartsTooltip, ResponsiveContainer, Line, ComposedChart, Area } from "recharts";
-import { TrendingUp, DollarSign, Target, Users, Award, Loader2, CheckSquare, Activity, Sparkles, ShoppingBag, CreditCard, FileWarning, Trophy, Medal, AlertTriangle, Crown, Map, User, Store as StoreIcon, ArrowRight, ArrowLeft, Frown, Flame, Zap, Download, PieChart } from "lucide-react";
+import { TrendingUp, DollarSign, Target, Users, Award, Loader2, CheckSquare, Activity, Sparkles, ShoppingBag, CreditCard, FileWarning, Trophy, Medal, AlertTriangle, Crown, Map, User, Store as StoreIcon, ArrowRight, ArrowLeft, Frown, Flame, Zap, Download, PieChart, Star } from "lucide-react";
 import { ViewWrapper, Card } from "./SharedUI";
 import { formatNumber } from "../utils/helpers";
 import { AppContext } from "../AppContext";
@@ -144,6 +144,9 @@ const DashboardView = () => {
       cash: 0, accrual: 0, operationalAccrual: 0, skincareSales: 0, traffic: 0,
       newCustomers: 0, newCustomerClosings: 0, newCustomerSales: 0,
       budget: 0, accrualBudget: 0,
+      challengeBudget: 0, challengeAccrualBudget: 0, 
+      hasChallengeCash: false,
+      hasChallengeAccrual: false,
       dailyData: Array.from({ length: daysInMonth }, (_, i) => ({
         date: `${m}/${i + 1}`,
         day: i + 1,
@@ -191,18 +194,33 @@ const DashboardView = () => {
         const budgetKey = `${fullName}_${y}_${m}`;
         const b = budgets[budgetKey];
         if (b) {
-            stats.budget += (Number(b.cashTarget) || 0);
-            stats.accrualBudget += (Number(b.accrualTarget) || 0);
+            const baseCash = Number(b.cashTarget) || 0;
+            const baseAccrual = Number(b.accrualTarget) || 0;
+            const chalCash = Number(b.challengeCashTarget) || 0;
+            const chalAccrual = Number(b.challengeAccrualTarget) || 0;
+
+            stats.budget += baseCash;
+            stats.accrualBudget += baseAccrual;
+            
+            if (chalCash > 0) stats.hasChallengeCash = true;
+            if (chalAccrual > 0) stats.hasChallengeAccrual = true;
+
+            stats.challengeBudget += (chalCash > 0 ? chalCash : baseCash);
+            stats.challengeAccrualBudget += (chalAccrual > 0 ? chalAccrual : baseAccrual);
         }
     });
 
     const achievement = stats.budget > 0 ? (stats.cash / stats.budget) * 100 : 0;
+    const accrualAchievement = stats.accrualBudget > 0 ? (stats.accrual / stats.accrualBudget) * 100 : 0;
+    
+    const challengeAchievement = stats.challengeBudget > 0 ? (stats.cash / stats.challengeBudget) * 100 : 0;
+    const challengeAccrualAchievement = stats.challengeAccrualBudget > 0 ? (stats.accrual / stats.challengeAccrualBudget) * 100 : 0;
+
     const projection = daysPassed > 0 ? Math.round((stats.cash / daysPassed) * daysInMonth) : 0;
 
     const avgTrafficASP = stats.traffic > 0 ? Math.round(stats.operationalAccrual / stats.traffic) : 0;
     const avgNewCustomerASP = stats.newCustomers > 0 ? Math.round(stats.newCustomerSales / stats.newCustomers) : 0;
 
-    // ★★★ 計算新舊客結構佔比 (保護分母避免除以0) ★★★
     const newRevMix = stats.cash > 0 ? Math.round((stats.newCustomerSales / stats.cash) * 100) : 0;
     const oldRevMix = stats.cash > 0 ? Math.max(0, 100 - newRevMix) : 0;
 
@@ -228,18 +246,26 @@ const DashboardView = () => {
         newCustomerClosings: stats.newCustomerClosings,
         newCustomerSales: stats.newCustomerSales,
         budget: stats.budget,
+        accrualBudget: stats.accrualBudget,
+        challengeBudget: stats.challengeBudget, 
+        challengeAccrualBudget: stats.challengeAccrualBudget, 
+        hasChallengeCash: stats.hasChallengeCash,
+        hasChallengeAccrual: stats.hasChallengeAccrual,
         projection
       },
       dailyTotals: slicedDailyTotals,
       totalAchievement: achievement,
+      totalAccrualAchievement: accrualAchievement,
+      challengeAchievement, 
+      challengeAccrualAchievement, 
       avgTrafficASP,
       avgNewCustomerASP,
       daysPassed,
       daysInMonth,
-      newRevMix,     // ★ 輸出新客業績比
-      oldRevMix,     // ★ 輸出舊客業績比
-      newCountMix,   // ★ 輸出新客人數比
-      oldCountMix    // ★ 輸出舊客人數比
+      newRevMix,     
+      oldRevMix,     
+      newCountMix,   
+      oldCountMix    
     };
 
   }, [allReports, budgets, selectedYear, selectedMonth, effectiveStores, brandPrefix, cleanName]);
@@ -267,9 +293,22 @@ const DashboardView = () => {
       const budgetKey = `${storeName}_${y}_${m}`;
       const budgetData = budgets[budgetKey];
       const target = budgetData ? Number(budgetData.cashTarget || 0) : 0;
+      const challengeTarget = budgetData ? Number(budgetData.challengeCashTarget || 0) : 0; 
+      
       const actual = storeStats[storeName];
       const rate = target > 0 ? (actual / target) * 100 : 0;
-      return { storeName, actual, target, rate };
+      const challengeRate = challengeTarget > 0 ? (actual / challengeTarget) * 100 : 0; 
+
+      return { 
+        storeName, 
+        actual, 
+        target, 
+        rate,
+        challengeTarget, 
+        challengeRate,   
+        hasChallenge: challengeTarget > 0, 
+        passedChallenge: challengeTarget > 0 && actual >= challengeTarget 
+      };
     });
 
     rankingList.sort((a, b) => b.rate - a.rate);
@@ -425,9 +464,15 @@ const DashboardView = () => {
   const paceGap = totalAchievement - timeProgress;
   
   const MiniKpiCard = ({ title, value, subText, icon: Icon, color }) => (
-    <div className="bg-white p-5 rounded-3xl border border-stone-100 shadow-sm hover:shadow-md transition-all group relative overflow-hidden h-full">
+    <div className="bg-white p-5 rounded-3xl border border-stone-100 shadow-sm hover:shadow-md transition-all group relative overflow-hidden h-full flex flex-col">
       <div className={`absolute top-0 right-0 p-3 opacity-10 group-hover:opacity-20 transition-opacity ${color}`}><Icon size={64} /></div>
-      <div className="flex flex-col h-full justify-between relative z-10"><div><p className="text-stone-400 text-xs font-bold uppercase tracking-wider mb-1">{title}</p><h3 className="text-2xl font-extrabold text-stone-700 font-mono tracking-tight">{value}</h3></div>{subText && <div className="mt-3 pt-3 border-t border-stone-50 text-xs font-medium text-stone-500 flex items-center gap-1">{subText}</div>}</div>
+      <div className="flex flex-col h-full justify-between relative z-10">
+        <div>
+           <p className="text-stone-400 text-xs font-bold uppercase tracking-wider mb-1">{title}</p>
+           <h3 className="text-2xl font-extrabold text-stone-700 font-mono tracking-tight">{value}</h3>
+        </div>
+        {subText && <div className="mt-3 pt-3 border-t border-stone-50 text-xs font-medium text-stone-500 flex flex-col gap-1">{subText}</div>}
+      </div>
     </div>
   );
 
@@ -498,34 +543,200 @@ const DashboardView = () => {
 
         {viewMode === 'store' && (
           <div className="space-y-8 animate-in fade-in slide-in-from-bottom-4 duration-500">
+            
             {userRole === 'store' && myStoreRankings.length > 0 && (
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-6">{myStoreRankings.map((storeRank) => ( <div key={storeRank.storeName} className={`rounded-3xl p-6 text-white shadow-xl relative overflow-hidden transition-all ${storeRank.isBottom5 ? "bg-gradient-to-br from-rose-500 to-red-600 shadow-rose-200" : "bg-gradient-to-br from-amber-400 to-orange-600 shadow-amber-200"}`}><div className="absolute top-0 right-0 p-4 opacity-10">{storeRank.isBottom5 ? <AlertTriangle size={120} /> : <Trophy size={120} />}</div><div className="relative z-10"><div className="flex items-center gap-2 mb-4"><div className="bg-white/20 p-2 rounded-lg backdrop-blur-sm">{storeRank.isBottom5 ? <Activity size={20} className="text-white" /> : <Medal size={20} className="text-yellow-100" />}</div><h3 className="font-bold text-lg tracking-wider opacity-90">{storeRank.storeName}</h3>{storeRank.isBottom5 && <span className="ml-auto bg-white/20 px-2 py-1 rounded text-xs font-bold flex items-center gap-1">需加強</span>}</div><div className="flex items-end gap-4 mb-2"><div><p className="text-white/80 text-xs font-bold uppercase mb-1">全區排名</p><div className="flex items-baseline gap-2"><span className="text-5xl font-extrabold font-mono text-white tracking-tighter">No.{storeRank.rank}</span><span className="text-white/60 font-bold text-sm">/ {storeRank.totalStores}</span></div></div><div className="flex-1 text-right"><p className="text-white/80 text-xs font-bold uppercase mb-1">目標達成率</p><p className="text-3xl font-mono font-bold text-white">{storeRank.rate.toFixed(0)}%</p></div></div><div className="mt-4 pt-4 border-t border-white/20 flex justify-between text-xs font-medium text-white/90"><span>目前業績: {fmtMoney(storeRank.actual)}</span><span>目標: {fmtMoney(storeRank.target)}</span></div></div></div> ))}</div>
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-6">{myStoreRankings.map((storeRank) => ( 
+                <div key={storeRank.storeName} className={`rounded-3xl p-6 text-white shadow-xl relative overflow-hidden transition-all ${storeRank.isBottom5 ? "bg-gradient-to-br from-rose-500 to-red-600 shadow-rose-200" : "bg-gradient-to-br from-amber-400 to-orange-600 shadow-amber-200"}`}>
+                  <div className="absolute top-0 right-0 p-4 opacity-10">{storeRank.isBottom5 ? <AlertTriangle size={120} /> : <Trophy size={120} />}</div>
+                  <div className="relative z-10">
+                    <div className="flex items-center gap-2 mb-4">
+                      <div className="bg-white/20 p-2 rounded-lg backdrop-blur-sm">{storeRank.isBottom5 ? <Activity size={20} className="text-white" /> : <Medal size={20} className="text-yellow-100" />}</div>
+                      <h3 className="font-bold text-lg tracking-wider opacity-90">{storeRank.storeName}</h3>
+                      {storeRank.passedChallenge && (
+                        <span className="bg-gradient-to-r from-yellow-300 to-amber-500 text-amber-900 px-2 py-0.5 rounded text-[11px] font-bold flex items-center gap-1 shadow-sm ml-1 animate-pulse">
+                          <Star size={12} className="fill-current" /> 突破挑戰
+                        </span>
+                      )}
+                      {storeRank.isBottom5 && <span className="ml-auto bg-white/20 px-2 py-1 rounded text-xs font-bold flex items-center gap-1">需加強</span>}
+                    </div>
+                    <div className="flex items-end gap-4 mb-2">
+                      <div>
+                        <p className="text-white/80 text-xs font-bold uppercase mb-1">全區排名</p>
+                        <div className="flex items-baseline gap-2">
+                          <span className="text-5xl font-extrabold font-mono text-white tracking-tighter">No.{storeRank.rank}</span>
+                          <span className="text-white/60 font-bold text-sm">/ {storeRank.totalStores}</span>
+                        </div>
+                      </div>
+                      <div className="flex-1 text-right">
+                        <p className="text-white/80 text-xs font-bold uppercase mb-1">預算目標達成率</p>
+                        <p className="text-3xl font-mono font-bold text-white">{storeRank.rate.toFixed(0)}%</p>
+                      </div>
+                    </div>
+                    <div className="mt-4 pt-4 border-t border-white/20 flex flex-col gap-1 text-xs font-medium text-white/90">
+                      <div className="flex justify-between">
+                         <span>目前業績: {fmtMoney(storeRank.actual)}</span>
+                         <span>預算目標: {fmtMoney(storeRank.target)}</span>
+                      </div>
+                      {storeRank.hasChallenge && (
+                         <div className="flex justify-between text-yellow-200 mt-1 pt-1 border-t border-white/10">
+                           <span>挑戰目標達成率: {storeRank.challengeRate.toFixed(0)}%</span>
+                           <span>挑戰目標: {fmtMoney(storeRank.challengeTarget)}</span>
+                         </div>
+                      )}
+                    </div>
+                  </div>
+                </div> 
+              ))}</div>
             )}
             
             <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-              <div className="lg:col-span-2 bg-white rounded-3xl p-6 md:p-8 border border-stone-100 shadow-xl shadow-stone-200/50 relative overflow-hidden group"><div className="absolute top-0 right-0 w-64 h-64 bg-indigo-50 rounded-full blur-3xl -mr-16 -mt-16 pointer-events-none opacity-60"></div><div className="flex flex-col md:flex-row justify-between items-start md:items-center mb-8 relative z-10"><div><div className="flex items-center gap-2 mb-2"><div className="p-1.5 bg-indigo-50 rounded-lg"><Activity size={16} className="text-indigo-500" /></div><span className="text-xs font-bold uppercase tracking-widest text-stone-400">營運節奏監控</span></div><h2 className="text-3xl md:text-4xl font-extrabold font-mono tracking-tight text-stone-700">Day {daysPassed} <span className="text-lg text-stone-300 font-sans">/ {daysInMonth}</span></h2></div><div className={`mt-4 md:mt-0 px-4 py-2 rounded-xl flex items-center gap-2 ${paceGap >= 0 ? "bg-emerald-50 text-emerald-600 border border-emerald-100" : "bg-rose-50 text-rose-600 border border-rose-100"}`}><span className="text-sm font-bold">{paceGap >= 0 ? "超前進度" : "落後進度"}</span><span className="text-xl font-mono font-bold">{Math.abs(paceGap).toFixed(0)}%</span></div></div><div className="space-y-6 relative z-10"><div className="space-y-2"><div className="flex justify-between text-sm font-bold"><span className="text-stone-500">實際達成率</span><span className={totalAchievement >= timeProgress ? "text-emerald-500" : "text-rose-500"}>{totalAchievement.toFixed(0)}%</span></div><div className="w-full bg-stone-100 h-3 rounded-full overflow-hidden shadow-inner"><div className={`h-full rounded-full transition-all duration-1000 ${totalAchievement >= 100 ? "bg-gradient-to-r from-emerald-400 to-teal-400" : totalAchievement >= timeProgress ? "bg-emerald-400" : "bg-rose-400"}`} style={{ width: `${Math.min(totalAchievement, 100)}%` }} /></div></div><div className="space-y-2"><div className="flex justify-between text-sm font-medium"><span className="text-stone-400">時間進度 (應達)</span><span className="text-stone-400">{timeProgress.toFixed(0)}%</span></div><div className="w-full bg-stone-50 h-1.5 rounded-full overflow-hidden"><div className="h-full bg-stone-300 rounded-full" style={{ width: `${Math.min(timeProgress, 100)}%` }} /></div></div></div></div>
-              <div className="bg-white rounded-3xl p-6 border border-stone-100 shadow-lg shadow-stone-100 flex flex-col justify-center relative overflow-hidden group"><div className="relative z-10"><p className="text-emerald-600/70 text-xs font-bold uppercase tracking-wider mb-2 flex items-center gap-1"><Target size={14} /> 月底現金推估</p><h3 className="text-3xl xl:text-4xl font-extrabold text-stone-700 font-mono mb-4">{fmtMoney(storeGrandTotal.projection)}</h3><div className="inline-flex items-center gap-2 px-3 py-1.5 bg-emerald-50 text-emerald-700 rounded-lg text-xs font-bold"><span>預估達成</span><span>{storeGrandTotal.budget > 0 ? ((storeGrandTotal.projection / storeGrandTotal.budget) * 100).toFixed(0) : 0}%</span></div><div className="mt-4 pt-4 border-t border-stone-50"><div className="flex justify-between items-center text-xs text-stone-400"><span>本月目標</span><span className="font-mono font-bold text-stone-500">{fmtMoney(storeGrandTotal.budget)}</span></div></div></div></div>
+              
+              <div className="lg:col-span-2 bg-white rounded-3xl p-6 md:p-8 border border-stone-100 shadow-xl shadow-stone-200/50 relative overflow-hidden group">
+                <div className="absolute top-0 right-0 w-64 h-64 bg-indigo-50 rounded-full blur-3xl -mr-16 -mt-16 pointer-events-none opacity-60"></div>
+                <div className="flex flex-col md:flex-row justify-between items-start md:items-center mb-8 relative z-10">
+                  <div>
+                    <div className="flex items-center gap-2 mb-2">
+                      <div className="p-1.5 bg-indigo-50 rounded-lg"><Activity size={16} className="text-indigo-500" /></div>
+                      <span className="text-xs font-bold uppercase tracking-widest text-stone-400">營運節奏監控</span>
+                    </div>
+                    <h2 className="text-3xl md:text-4xl font-extrabold font-mono tracking-tight text-stone-700">Day {daysPassed} <span className="text-lg text-stone-300 font-sans">/ {daysInMonth}</span></h2>
+                  </div>
+                  <div className={`mt-4 md:mt-0 px-4 py-2 rounded-xl flex items-center gap-2 ${paceGap >= 0 ? "bg-emerald-50 text-emerald-600 border border-emerald-100" : "bg-rose-50 text-rose-600 border border-rose-100"}`}>
+                    <span className="text-sm font-bold">{paceGap >= 0 ? "超前預算" : "落後預算"}</span>
+                    <span className="text-xl font-mono font-bold">{Math.abs(paceGap).toFixed(0)}%</span>
+                  </div>
+                </div>
+                
+                <div className="space-y-6 relative z-10">
+                  <div className="space-y-2">
+                    <div className="flex justify-between text-sm font-bold">
+                      <span className="text-stone-500">實際達成率 (預算)</span>
+                      <span className={totalAchievement >= timeProgress ? "text-emerald-500" : "text-rose-500"}>{totalAchievement.toFixed(0)}%</span>
+                    </div>
+                    <div className="w-full bg-stone-100 h-3 rounded-full overflow-hidden shadow-inner">
+                      <div className={`h-full rounded-full transition-all duration-1000 ${totalAchievement >= 100 ? "bg-gradient-to-r from-emerald-400 to-teal-400" : totalAchievement >= timeProgress ? "bg-emerald-400" : "bg-rose-400"}`} style={{ width: `${Math.min(totalAchievement, 100)}%` }} />
+                    </div>
+                  </div>
+                  
+                  {storeGrandTotal.hasChallengeCash && (
+                     <div className="space-y-2 pt-2">
+                       <div className="flex justify-between text-sm font-bold">
+                         <span className="text-amber-600 flex items-center gap-1"><Star size={14} className="fill-amber-500"/> 挑戰目標達成率 (加碼)</span>
+                         <span className={dashboardStats.challengeAchievement >= 100 ? "text-amber-500 drop-shadow-sm" : "text-amber-600/70"}>
+                           {dashboardStats.challengeAchievement.toFixed(0)}%
+                         </span>
+                       </div>
+                       <div className="w-full bg-amber-50 h-2.5 rounded-full overflow-hidden border border-amber-100">
+                         <div 
+                           className={`h-full rounded-full transition-all duration-1000 ${dashboardStats.challengeAchievement >= 100 ? "bg-gradient-to-r from-amber-400 to-yellow-400 shadow-[0_0_10px_rgba(251,191,36,0.8)]" : "bg-amber-300"}`} 
+                           style={{ width: `${Math.min(dashboardStats.challengeAchievement, 100)}%` }} 
+                         />
+                       </div>
+                     </div>
+                  )}
+
+                  <div className="space-y-2 border-t border-stone-50 pt-2">
+                    <div className="flex justify-between text-xs font-medium">
+                      <span className="text-stone-400">時間進度 (應達)</span>
+                      <span className="text-stone-400">{timeProgress.toFixed(0)}%</span>
+                    </div>
+                    <div className="w-full bg-stone-50 h-1.5 rounded-full overflow-hidden">
+                      <div className="h-full bg-stone-300 rounded-full" style={{ width: `${Math.min(timeProgress, 100)}%` }} />
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+              <div className="bg-white rounded-3xl p-6 border border-stone-100 shadow-lg shadow-stone-100 flex flex-col justify-center relative overflow-hidden group">
+                <div className="relative z-10">
+                  <p className="text-emerald-600/70 text-xs font-bold uppercase tracking-wider mb-2 flex items-center gap-1"><Target size={14} /> 月底現金推估</p>
+                  <h3 className="text-3xl xl:text-4xl font-extrabold text-stone-700 font-mono mb-4">{fmtMoney(storeGrandTotal.projection)}</h3>
+                  
+                  {/* ★★★ 雙軌預估達成區塊 ★★★ */}
+                  <div className="flex flex-col gap-2 items-start">
+                    <div className="inline-flex items-center gap-2 px-3 py-1.5 bg-emerald-50 text-emerald-700 rounded-lg text-xs font-bold border border-emerald-100">
+                      <span>{storeGrandTotal.hasChallengeCash ? '預算預估達成' : '預估達成'}</span>
+                      <span className="text-sm">{storeGrandTotal.budget > 0 ? ((storeGrandTotal.projection / storeGrandTotal.budget) * 100).toFixed(0) : 0}%</span>
+                    </div>
+                    {storeGrandTotal.hasChallengeCash && (
+                      <div className="inline-flex items-center gap-2 px-3 py-1.5 bg-amber-50 text-amber-700 rounded-lg text-xs font-bold border border-amber-100 shadow-sm">
+                        <Star size={12} className="fill-amber-500 text-amber-500 -mr-1" />
+                        <span>挑戰預估達成</span>
+                        <span className="text-sm">{storeGrandTotal.challengeBudget > 0 ? ((storeGrandTotal.projection / storeGrandTotal.challengeBudget) * 100).toFixed(0) : 0}%</span>
+                      </div>
+                    )}
+                  </div>
+
+                  <div className="mt-4 pt-4 border-t border-stone-50 flex flex-col gap-1">
+                    <div className="flex justify-between items-center text-xs text-stone-400">
+                      <span>預算目標</span><span className="font-mono font-bold text-stone-500">{fmtMoney(storeGrandTotal.budget)}</span>
+                    </div>
+                    {storeGrandTotal.hasChallengeCash && (
+                      <div className="flex justify-between items-center text-xs text-amber-500/80">
+                        <span>挑戰目標</span><span className="font-mono font-bold">{fmtMoney(storeGrandTotal.challengeBudget)}</span>
+                      </div>
+                    )}
+                  </div>
+                </div>
+              </div>
             </div>
             
-            <div><h3 className="text-lg font-bold text-stone-700 mb-4 flex items-center gap-2 pl-1"><div className="w-1 h-6 bg-amber-500 rounded-full"></div>財務績效</h3><div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-              <MiniKpiCard title="總現金業績" value={fmtMoney(storeGrandTotal.cash)} icon={DollarSign} color="text-amber-500" subText={<span className={`font-bold ${totalAchievement >= 100 ? "text-emerald-600" : "text-amber-600"}`}>{totalAchievement.toFixed(0)}% 目標達成率</span>} />
-              <MiniKpiCard title="總權責業績" value={fmtMoney(storeGrandTotal.accrual)} icon={CreditCard} color="text-cyan-500" subText={brandPrefix === '安妞' ? "僅含技術操作 (排除產品)" : "含技術操作與產品銷售"} />
-              <MiniKpiCard title="總保養品業績" value={fmtMoney(storeGrandTotal.skincareSales)} icon={ShoppingBag} color="text-rose-500" subText={<>佔權責 <span className="font-bold text-stone-700 ml-1">{storeGrandTotal.accrual > 0 ? ((storeGrandTotal.skincareSales / storeGrandTotal.accrual) * 100).toFixed(0) : 0}%</span></>} />
-            </div></div>
+            <div><h3 className="text-lg font-bold text-stone-700 mb-4 flex items-center gap-2 pl-1"><div className="w-1 h-6 bg-amber-500 rounded-full"></div>財務績效</h3>
+              <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                <MiniKpiCard 
+                  title="總現金業績" 
+                  value={fmtMoney(storeGrandTotal.cash)} 
+                  icon={DollarSign} color="text-amber-500" 
+                  subText={
+                    <div className="flex flex-col gap-1 w-full">
+                      <div className="flex items-center justify-between">
+                         <span className={`font-bold ${totalAchievement >= 100 ? "text-emerald-600" : "text-stone-500"}`}>預算目標達成率</span>
+                         <span className={`font-bold ${totalAchievement >= 100 ? "text-emerald-600" : "text-stone-500"}`}>{totalAchievement.toFixed(0)}%</span>
+                      </div>
+                      {storeGrandTotal.hasChallengeCash && (
+                         <div className="flex items-center justify-between border-t border-stone-100 pt-1">
+                           <span className={`font-bold text-[11px] ${dashboardStats.challengeAchievement >= 100 ? "text-amber-600" : "text-amber-600/60"}`}><Star size={10} className="inline mb-0.5"/> 挑戰目標達成率</span>
+                           <span className={`font-bold text-[11px] ${dashboardStats.challengeAchievement >= 100 ? "text-amber-600" : "text-amber-600/60"}`}>{dashboardStats.challengeAchievement.toFixed(0)}%</span>
+                         </div>
+                      )}
+                    </div>
+                  } 
+                />
+                
+                <MiniKpiCard 
+                  title="總權責業績" 
+                  value={fmtMoney(storeGrandTotal.accrual)} 
+                  icon={CreditCard} color="text-cyan-500" 
+                  subText={
+                    <div className="flex flex-col gap-1 w-full">
+                      <div className="flex items-center justify-between">
+                         <span className={`font-bold ${dashboardStats.totalAccrualAchievement >= 100 ? "text-emerald-600" : "text-stone-500"}`}>預算目標達成率</span>
+                         <span className={`font-bold ${dashboardStats.totalAccrualAchievement >= 100 ? "text-emerald-600" : "text-stone-500"}`}>{dashboardStats.totalAccrualAchievement.toFixed(0)}%</span>
+                      </div>
+                      {storeGrandTotal.hasChallengeAccrual && (
+                         <div className="flex items-center justify-between border-t border-stone-100 pt-1">
+                           <span className={`font-bold text-[11px] ${dashboardStats.challengeAccrualAchievement >= 100 ? "text-amber-600" : "text-amber-600/60"}`}><Star size={10} className="inline mb-0.5"/> 挑戰目標達成率</span>
+                           <span className={`font-bold text-[11px] ${dashboardStats.challengeAccrualAchievement >= 100 ? "text-amber-600" : "text-amber-600/60"}`}>{dashboardStats.challengeAccrualAchievement.toFixed(0)}%</span>
+                         </div>
+                      )}
+                    </div>
+                  } 
+                />
+                
+                <MiniKpiCard title="總保養品業績" value={fmtMoney(storeGrandTotal.skincareSales)} icon={ShoppingBag} color="text-rose-500" subText={<>佔權責 <span className="font-bold text-stone-700 ml-1">{storeGrandTotal.accrual > 0 ? ((storeGrandTotal.skincareSales / storeGrandTotal.accrual) * 100).toFixed(0) : 0}%</span></>} />
+              </div>
+            </div>
             
             <div>
                <h3 className="text-lg font-bold text-stone-700 mb-4 flex items-center gap-2 pl-1">
                  <div className="w-1 h-6 bg-cyan-500 rounded-full"></div>營運效率與客流
                </h3>
-               {/* ★ 將 grid 修改為 xl:grid-cols-6 來容納 6 張卡片，或是自動排版 */}
                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-6 gap-4">
                  <MiniKpiCard title="課程操作人數" value={fmtNum(storeGrandTotal.traffic)} icon={Users} color="text-blue-500" subText="本月累計操作人數" />
                  <MiniKpiCard title="平均操作權責" value={fmtMoney(dashboardStats.avgTrafficASP)} icon={TrendingUp} color="text-indigo-500" subText={<span className={dashboardStats.avgTrafficASP >= targets.trafficASP ? "text-emerald-500 font-bold" : "text-rose-500 font-bold"}>{dashboardStats.avgTrafficASP >= targets.trafficASP ? "達標" : "未達標"} (目標 {fmtNum(targets.trafficASP)})</span>} />
                  <MiniKpiCard title="總新客數" value={fmtNum(storeGrandTotal.newCustomers)} icon={Sparkles} color="text-purple-500" subText="本月新增體驗人數" />
                  <MiniKpiCard title="總新客留單" value={fmtNum(storeGrandTotal.newCustomerClosings)} icon={CheckSquare} color="text-teal-500" subText={<span>留單率 <span className="font-bold">{storeGrandTotal.newCustomers > 0 ? ((storeGrandTotal.newCustomerClosings / storeGrandTotal.newCustomers) * 100).toFixed(0) : 0}%</span></span>} />
                  <MiniKpiCard title="新客平均客單" value={fmtMoney(dashboardStats.avgNewCustomerASP)} icon={Award} color="text-fuchsia-500" subText={<span className={dashboardStats.avgNewCustomerASP >= targets.newASP ? "text-emerald-500 font-bold" : "text-rose-500 font-bold"}>{dashboardStats.avgNewCustomerASP >= targets.newASP ? "達標" : "未達標"} (目標 {fmtNum(targets.newASP)})</span>} />
-                 
-                 {/* ★★★ 新增：第 6 張卡片，同時顯示人數與業績的新舊佔比 ★★★ */}
                  <MiniKpiCard 
                    title="新 / 舊客 結構比" 
                    value={`${dashboardStats.newCountMix}% / ${dashboardStats.oldCountMix}%`} 
@@ -543,7 +754,35 @@ const DashboardView = () => {
             <Card title={`${brandInfo.name} 日營運走勢`} subtitle="現金業績 vs 課程操作人數趨勢分析"><div className="h-[300px] w-full"><ResponsiveContainer width="100%" height="100%"><ComposedChart data={dailyTotals} margin={{ top: 10, right: 10, left: 0, bottom: 0 }}><CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#f5f5f4" /><XAxis dataKey="date" stroke="#a8a29e" tick={{ fontSize: 12 }} dy={10} /><YAxis yAxisId="left" stroke="#a8a29e" tick={{ fontSize: 12 }} width={60} tickFormatter={(val) => val === 0 ? "0" : `$${(val / 1000).toFixed(0)}k`} /><YAxis yAxisId="right" orientation="right" stroke="#a8a29e" tick={{ fontSize: 12 }} tickFormatter={(val) => fmtNum(val)} /><RechartsTooltip contentStyle={{ borderRadius: "16px", border: "none", padding: "12px", boxShadow: "0 4px 6px -1px rgb(0 0 0 / 0.1)", }} cursor={{ fill: "#fafaf9" }} formatter={(value, name) => { if (name === "現金業績") return [fmtMoney(value), name]; return [fmtNum(value), name]; }} /><Area yAxisId="left" type="monotone" dataKey="cash" name="現金業績" stroke="#f59e0b" fill="#f59e0b" fillOpacity={0.2} strokeWidth={3} /><Line yAxisId="right" type="monotone" dataKey="traffic" name="課程操作人數" stroke="#0ea5e9" strokeWidth={3} /></ComposedChart></ResponsiveContainer></div></Card>
 
             {(userRole === 'manager' || userRole === 'director') && myStoreRankings.length > 0 && (
-              <div className="bg-white rounded-3xl border border-stone-200 shadow-xl overflow-hidden relative"><div className="bg-gradient-to-r from-amber-500 to-orange-600 p-6 flex justify-between items-center text-white relative overflow-hidden"><div className="absolute right-0 top-0 p-4 opacity-10"><Map size={100} /></div><div className="relative z-10 flex items-center gap-3"><div className="p-2 bg-white/20 rounded-xl backdrop-blur-md"><Crown size={24} className="text-white" /></div><div><h3 className="text-xl font-bold tracking-wide">戰情排行分析</h3><p className="text-amber-100 text-xs font-medium">Rankings & Performance</p></div></div><div className="relative z-10 text-right"><p className="text-xs text-amber-100 font-bold uppercase">目前顯示店家數</p><p className="text-2xl font-mono font-bold text-white">{myStoreRankings.length}</p></div></div><div className="p-0 sm:p-2 overflow-x-auto"><table className="w-full text-left border-collapse min-w-[350px]"><thead><tr className="text-xs font-bold text-stone-400 border-b border-stone-100"><th className="p-3 sm:p-4 w-16 sm:w-20 text-center">全區排名</th><th className="p-3 sm:p-4">門市名稱</th><th className="p-3 sm:p-4 text-right">目前業績</th><th className="p-3 sm:p-4 text-right hidden sm:table-cell">目標金額</th><th className="p-3 sm:p-4 text-right">達成率</th></tr></thead><tbody>{myStoreRankings.map((store) => (<tr key={store.storeName} className={`group transition-colors border-b last:border-0 border-stone-50 ${store.isBottom5 ? "bg-rose-50 hover:bg-rose-100" : "hover:bg-stone-50" }`}><td className="p-3 sm:p-4 text-center"><span className={`inline-flex items-center justify-center w-6 h-6 sm:w-8 sm:h-8 rounded-full text-xs font-bold ${store.rank === 1 ? "bg-amber-100 text-amber-700" : store.rank === 2 ? "bg-stone-200 text-stone-600" : store.rank === 3 ? "bg-orange-100 text-orange-700" : "bg-stone-50 text-stone-400"}`}>{store.rank}</span></td><td className="p-3 sm:p-4"><div className="flex flex-col sm:flex-row sm:items-center gap-1 sm:gap-2"><span className={`font-bold text-sm sm:text-base ${store.isBottom5 ? "text-rose-700" : "text-stone-700"}`}>{store.storeName}</span>{store.isBottom5 && (<span className="w-fit text-[10px] font-bold px-1.5 py-0.5 bg-rose-200 text-rose-700 rounded flex items-center gap-1 animate-pulse"><AlertTriangle size={10} /> <span className="hidden sm:inline">需關注</span></span>)}</div></td><td className="p-3 sm:p-4 text-right font-mono font-medium text-stone-600 text-sm sm:text-base">{fmtMoney(store.actual)}</td><td className="p-3 sm:p-4 text-right font-mono text-stone-400 text-sm hidden sm:table-cell">{fmtMoney(store.target)}</td><td className="p-3 sm:p-4 text-right"><div className="flex flex-col items-end"><span className={`text-base sm:text-lg font-bold font-mono ${store.isBottom5 ? "text-rose-600" : (store.rate >= 100 ? "text-emerald-500" : "text-amber-500")}`}>{store.rate.toFixed(0)}%</span><div className="w-16 sm:w-24 h-1 sm:h-1.5 bg-stone-100 rounded-full mt-1 overflow-hidden"><div className={`h-full rounded-full ${store.isBottom5 ? "bg-rose-500" : (store.rate >= 100 ? "bg-emerald-400" : "bg-amber-400")}`} style={{ width: `${Math.min(store.rate, 100)}%` }}></div></div></div></td></tr>))}</tbody></table></div></div>
+              <div className="bg-white rounded-3xl border border-stone-200 shadow-xl overflow-hidden relative"><div className="bg-gradient-to-r from-amber-500 to-orange-600 p-6 flex justify-between items-center text-white relative overflow-hidden"><div className="absolute right-0 top-0 p-4 opacity-10"><Map size={100} /></div><div className="relative z-10 flex items-center gap-3"><div className="p-2 bg-white/20 rounded-xl backdrop-blur-md"><Crown size={24} className="text-white" /></div><div><h3 className="text-xl font-bold tracking-wide">戰情排行分析</h3><p className="text-amber-100 text-xs font-medium">Rankings & Performance</p></div></div><div className="relative z-10 text-right"><p className="text-xs text-amber-100 font-bold uppercase">目前顯示店家數</p><p className="text-2xl font-mono font-bold text-white">{myStoreRankings.length}</p></div></div><div className="p-0 sm:p-2 overflow-x-auto"><table className="w-full text-left border-collapse min-w-[350px]"><thead><tr className="text-xs font-bold text-stone-400 border-b border-stone-100"><th className="p-3 sm:p-4 w-16 sm:w-20 text-center">全區排名</th><th className="p-3 sm:p-4">門市名稱</th><th className="p-3 sm:p-4 text-right">目前業績</th><th className="p-3 sm:p-4 text-right hidden sm:table-cell">目標金額</th><th className="p-3 sm:p-4 text-right">達成率</th></tr></thead><tbody>{myStoreRankings.map((store) => (<tr key={store.storeName} className={`group transition-colors border-b last:border-0 border-stone-50 ${store.isBottom5 ? "bg-rose-50 hover:bg-rose-100" : "hover:bg-stone-50" }`}>
+                <td className="p-3 sm:p-4 text-center"><span className={`inline-flex items-center justify-center w-6 h-6 sm:w-8 sm:h-8 rounded-full text-xs font-bold ${store.rank === 1 ? "bg-amber-100 text-amber-700" : store.rank === 2 ? "bg-stone-200 text-stone-600" : store.rank === 3 ? "bg-orange-100 text-orange-700" : "bg-stone-50 text-stone-400"}`}>{store.rank}</span></td>
+                <td className="p-3 sm:p-4">
+                  <div className="flex flex-col sm:flex-row sm:items-center gap-1 sm:gap-2">
+                    <span className={`font-bold text-sm sm:text-base ${store.isBottom5 ? "text-rose-700" : "text-stone-700"}`}>{store.storeName}</span>
+                    {store.isBottom5 && (<span className="w-fit text-[10px] font-bold px-1.5 py-0.5 bg-rose-200 text-rose-700 rounded flex items-center gap-1 animate-pulse"><AlertTriangle size={10} /> <span className="hidden sm:inline">需關注</span></span>)}
+                    {store.passedChallenge && (
+                      <span className="w-fit text-[10px] font-bold px-1.5 py-0.5 bg-gradient-to-r from-amber-400 to-orange-500 text-white rounded flex items-center gap-1 shadow-sm">
+                        <Star size={10} className="fill-current" /> <span className="hidden sm:inline">突破挑戰</span>
+                      </span>
+                    )}
+                  </div>
+                </td>
+                <td className="p-3 sm:p-4 text-right font-mono font-medium text-stone-600 text-sm sm:text-base">{fmtMoney(store.actual)}</td>
+                <td className="p-3 sm:p-4 text-right font-mono text-stone-400 text-sm hidden sm:table-cell">
+                   {fmtMoney(store.target)}
+                   {store.hasChallenge && (
+                     <div className="text-[10px] text-amber-500 mt-0.5 flex items-center justify-end gap-0.5">
+                       <Star size={8} className="fill-amber-500"/> {fmtMoney(store.challengeTarget)}
+                     </div>
+                   )}
+                </td>
+                <td className="p-3 sm:p-4 text-right">
+                  <div className="flex flex-col items-end">
+                    <span className={`text-base sm:text-lg font-bold font-mono ${store.isBottom5 ? "text-rose-600" : (store.rate >= 100 ? "text-emerald-500" : "text-stone-600")}`}>{store.rate.toFixed(0)}%</span>
+                    <div className="w-16 sm:w-24 h-1 sm:h-1.5 bg-stone-100 rounded-full mt-1 overflow-hidden"><div className={`h-full rounded-full ${store.isBottom5 ? "bg-rose-500" : (store.rate >= 100 ? "bg-emerald-400" : "bg-stone-400")}`} style={{ width: `${Math.min(store.rate, 100)}%` }}></div></div>
+                  </div>
+                </td>
+              </tr>))}</tbody></table></div></div>
             )}
 
           </div>

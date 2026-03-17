@@ -4,37 +4,29 @@ import {
   ComposedChart, Line, Bar, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer,
   Area
 } from "recharts";
-import { Target, TrendingUp, DollarSign, Activity, Calendar, Award, Filter, ArrowRight, Settings, X, Ban, CheckCircle, Save } from "lucide-react";
+import { Target, TrendingUp, DollarSign, Activity, Calendar, Award, Filter, ArrowRight, Settings, X, Ban, CheckCircle, Save, Star } from "lucide-react";
 
 import { AppContext } from "../AppContext";
 import { ViewWrapper, Card } from "./SharedUI";
 
-// ★★★ 自定義圖例元件：完全控制順序與樣式 ★★★
+// ★★★ 自定義圖例元件 ★★★
 const CustomLegend = () => {
   return (
     <div className="flex flex-wrap items-center justify-center gap-3 sm:gap-6 pb-2 select-none">
-      
-      {/* 1. 現金預算 (Area: 淺黃填充 + 深黃邊框) */}
       <div className="flex items-center gap-1.5">
         <div className="w-3 h-3 rounded-[2px]" style={{ backgroundColor: '#fef3c7', border: '2px solid #fbbf24' }}></div>
         <span className="text-xs font-bold text-stone-600">現金預算</span>
       </div>
-
-      {/* 2. 權責預算 (Line: 淺藍虛線) */}
       <div className="flex items-center gap-1.5">
         <div className="flex items-center justify-center w-6">
           <div className="w-full h-0 border-t-2 border-dashed border-[#818cf8]"></div>
         </div>
         <span className="text-xs font-bold text-stone-600">權責預算</span>
       </div>
-
-      {/* 3. 實際現金 (Bar: 橘色實心) */}
       <div className="flex items-center gap-1.5">
         <div className="w-3 h-3 rounded-[2px] bg-[#f59e0b]"></div>
         <span className="text-xs font-bold text-stone-600">實際現金</span>
       </div>
-
-      {/* 4. 實際權責 (Line: 深藍實線 + 圓點) */}
       <div className="flex items-center gap-1.5">
         <div className="relative flex items-center justify-center w-6">
            <div className="w-full h-[2px] bg-[#4f46e5]"></div>
@@ -42,7 +34,11 @@ const CustomLegend = () => {
         </div>
         <span className="text-xs font-bold text-stone-600">實際權責</span>
       </div>
-
+      {/* 挑戰目標標記說明 */}
+      <div className="flex items-center gap-1.5">
+        <Star size={14} className="text-amber-500 fill-amber-500" />
+        <span className="text-xs font-bold text-stone-600">挑戰目標 (當月有加碼時)</span>
+      </div>
     </div>
   );
 };
@@ -58,35 +54,16 @@ const AnnualView = () => {
     auditExclusions,
     handleUpdateAuditExclusions,
     userRole,
-    currentUser, // ★ 新增引入 currentUser
     showToast,
     currentBrand
   } = useContext(AppContext);
 
-  // ==========================================
-  // 1. 本地狀態：自訂月份區間 & 雙層聯動篩選器
-  // ==========================================
   const [startMonthStr, setStartMonthStr] = useState(`${selectedYear}-01`);
   const [endMonthStr, setEndMonthStr] = useState(`${selectedYear}-12`);
   
-  // ★ 新增：篩選器狀態
-  const [selectedAnnualManager, setSelectedAnnualManager] = useState("");
-  const [selectedAnnualStore, setSelectedAnnualStore] = useState("");
-
   const [isConfigModalOpen, setIsConfigModalOpen] = useState(false);
   const [localExclusions, setLocalExclusions] = useState([]);
 
-  // 當切換品牌或年份時，重置過濾與時間區間
-  useEffect(() => {
-    setSelectedAnnualManager("");
-    setSelectedAnnualStore("");
-    setStartMonthStr(`${selectedYear}-01`);
-    setEndMonthStr(`${selectedYear}-12`);
-  }, [currentBrand, selectedYear]);
-
-  // ==========================================
-  // 2. 品牌資訊與篩選引擎
-  // ==========================================
   const brandPrefix = useMemo(() => {
     let name = "CYJ";
     if (currentBrand) {
@@ -99,84 +76,16 @@ const AnnualView = () => {
     return name;
   }, [currentBrand]);
 
-  const cleanName = useMemo(() => (name) => {
+  const cleanStoreName = (name) => {
     if (!name) return "";
-    let core = String(name).replace(new RegExp(`^(${brandPrefix}|CYJ|Anew|Yibo|安妞|伊啵)`, 'i'), '').trim();
-    if (core === "新店") return "新店"; 
-    return core.replace(/店$/, '').trim();
-  }, [brandPrefix]);
+    return name.replace(/CYJ|安妞|伊啵|Anew|Yibo|店/gi, "").trim();
+  };
 
-  const baseVisibleStores = useMemo(() => {
-    if (userRole === 'director' || userRole === 'trainer' || userRole === 'therapist') {
-      return Object.values(managers).flat().map(cleanName).filter(Boolean);
-    }
-    if (userRole === 'manager' && currentUser) {
-      return (managers[currentUser.name] || []).map(cleanName).filter(Boolean);
-    }
-    if (userRole === 'store' && currentUser) {
-      const rawStores = currentUser.stores || [currentUser.storeName];
-      return rawStores.map(cleanName).filter(Boolean);
-    }
-    return []; 
-  }, [userRole, currentUser, managers, cleanName]);
+  useEffect(() => {
+    setStartMonthStr(`${selectedYear}-01`);
+    setEndMonthStr(`${selectedYear}-12`);
+  }, [selectedYear]);
 
-  const availableStoresForFilter = useMemo(() => {
-    const uniqueStores = [...new Set(baseVisibleStores)];
-    return uniqueStores.sort().map(s => `${brandPrefix}${s}店`);
-  }, [baseVisibleStores, brandPrefix]);
-
-  const groupedStoresForFilter = useMemo(() => {
-    const groups = {};
-    const availableSet = new Set(availableStoresForFilter);
-
-    Object.entries(managers || {}).forEach(([mgrName, rawStores]) => {
-        const mgrValidStores = [];
-        (rawStores || []).forEach(rs => {
-            const core = cleanName(rs);
-            const fullName = `${brandPrefix}${core}店`;
-            if (availableSet.has(fullName) && !mgrValidStores.includes(fullName)) {
-                mgrValidStores.push(fullName);
-            }
-        });
-        if (mgrValidStores.length > 0) {
-            groups[mgrName] = mgrValidStores.sort();
-        }
-    });
-
-    const inGroups = new Set(Object.values(groups).flat());
-    const orphans = availableStoresForFilter.filter(s => !inGroups.has(s));
-    if (orphans.length > 0) {
-        groups['其他'] = orphans.sort();
-    }
-
-    return groups;
-  }, [managers, availableStoresForFilter, cleanName, brandPrefix]);
-
-  const availableStoresForDropdown = useMemo(() => {
-    if (userRole === 'manager' && currentUser) {
-         return groupedStoresForFilter[currentUser.name] || Object.values(groupedStoresForFilter).flat().sort();
-    }
-    if (selectedAnnualManager && groupedStoresForFilter[selectedAnnualManager]) {
-        return groupedStoresForFilter[selectedAnnualManager];
-    }
-    return Object.values(groupedStoresForFilter).flat().sort();
-  }, [selectedAnnualManager, groupedStoresForFilter, userRole, currentUser]);
-
-  const effectiveStores = useMemo(() => {
-    if (selectedAnnualStore) {
-      return [cleanName(selectedAnnualStore)];
-    }
-    if (selectedAnnualManager) {
-      const stores = managers[selectedAnnualManager] || [];
-      return stores.map(cleanName).filter(Boolean);
-    }
-    return baseVisibleStores;
-  }, [baseVisibleStores, selectedAnnualStore, selectedAnnualManager, managers, cleanName]);
-
-
-  // ==========================================
-  // 3. 設定排除視窗邏輯
-  // ==========================================
   const openConfigModal = () => {
     setLocalExclusions(auditExclusions || []);
     setIsConfigModalOpen(true);
@@ -220,12 +129,12 @@ const AnnualView = () => {
   }, [startMonthStr, endMonthStr, selectedYear]);
 
   // ==========================================
-  // 4. 核心運算邏輯 (結合有效篩選與排除設定)
+  // 核心計算邏輯：精準區分「現金挑戰」與「權責挑戰」
   // ==========================================
   const annualData = useMemo(() => {
-    // 目標店家 = 在有效清單中，且沒有被「排除設定」打勾的店家
-    const targetStoreNames = effectiveStores
-      .filter(s => !auditExclusions.includes(s))
+    const visibleStoreNames = Object.values(managers)
+      .flat()
+      .filter(storeName => !auditExclusions.includes(storeName)) 
       .map(s => `${brandPrefix}${s}店`); 
 
     const monthList = [];
@@ -237,18 +146,27 @@ const AnnualView = () => {
     while (current <= end) {
       const y = current.getFullYear();
       const m = current.getMonth() + 1;
-      monthList.push({ label: `${y}/${m}`, y, m, dateKey: `${y}/${m.toString().padStart(2, '0')}` });
+      monthList.push({
+        label: `${y}/${m}`,
+        y, 
+        m,
+        dateKey: `${y}/${m.toString().padStart(2, '0')}`
+      });
       current.setMonth(current.getMonth() + 1);
     }
 
-    const statsMap = monthList.map(item => ({ ...item, cash: 0, accrual: 0, traffic: 0, budget: 0, accrualBudget: 0 }));
+    const statsMap = monthList.map(item => ({
+      ...item,
+      cash: 0, accrual: 0, traffic: 0, budget: 0, accrualBudget: 0,
+      challengeBudget: 0, challengeAccrualBudget: 0, 
+      hasChallenge: false,
+      hasChallengeCash: false,       // ★ 標記該月是否有現金挑戰
+      hasChallengeAccrual: false     // ★ 標記該月是否有權責挑戰
+    }));
 
     rawData.forEach(d => {
-      const rawStoreName = cleanName(d.storeName);
-      
-      // 雙層防護：不在篩選清單內，或是被排除設定打勾，一律不計入
+      const rawStoreName = cleanStoreName(d.storeName);
       if (auditExclusions.includes(rawStoreName)) return;
-      if (!effectiveStores.includes(rawStoreName)) return;
 
       if (!d.date) return;
       const dateStr = d.date.replace(/-/g, "/");
@@ -270,14 +188,26 @@ const AnnualView = () => {
       }
     });
 
-    let totalCash = 0; let totalBudget = 0; let totalAccrual = 0; let totalAccrualBudget = 0; let totalTraffic = 0;
+    let totalCash = 0, totalBudget = 0, totalAccrual = 0, totalAccrualBudget = 0, totalTraffic = 0;
 
     statsMap.forEach(stat => {
-      targetStoreNames.forEach(storeName => {
+      visibleStoreNames.forEach(storeName => {
         const key = `${storeName}_${stat.y}_${stat.m}`;
         if (budgets[key]) {
-          stat.budget += (Number(budgets[key].cashTarget) || 0);
-          stat.accrualBudget += (Number(budgets[key].accrualTarget) || 0);
+          const bCash = Number(budgets[key].cashTarget) || 0;
+          const bAcc = Number(budgets[key].accrualTarget) || 0;
+          const chalCash = Number(budgets[key].challengeCashTarget) || 0;
+          const chalAcc = Number(budgets[key].challengeAccrualTarget) || 0;
+
+          stat.budget += bCash;
+          stat.accrualBudget += bAcc;
+          
+          stat.challengeBudget += (chalCash > 0 ? chalCash : bCash);
+          stat.challengeAccrualBudget += (chalAcc > 0 ? chalAcc : bAcc);
+
+          if (chalCash > 0 || chalAcc > 0) stat.hasChallenge = true;
+          if (chalCash > 0) stat.hasChallengeCash = true;
+          if (chalAcc > 0) stat.hasChallengeAccrual = true;
         }
       });
 
@@ -299,26 +229,63 @@ const AnnualView = () => {
         traffic: totalTraffic,
       }
     };
-  }, [rawData, budgets, startMonthStr, endMonthStr, auditExclusions, brandPrefix, effectiveStores, cleanName]); 
+  }, [rawData, budgets, managers, startMonthStr, endMonthStr, auditExclusions, brandPrefix]); 
 
   const { monthlyStats, totals } = annualData;
 
-  // 用於動態顯示上方標題的文字
-  const currentViewLabel = useMemo(() => {
-      if (selectedAnnualStore) return `${cleanName(selectedAnnualStore)}店`;
-      if (selectedAnnualManager) return `${selectedAnnualManager}區`;
-      return "全區";
-  }, [selectedAnnualStore, selectedAnnualManager, cleanName]);
-
-  const currentActiveStoresCount = effectiveStores.filter(s => !auditExclusions.includes(s)).length;
+  // ★★★ 智慧型客製化 Tooltip：動態判斷顯示項目 ★★★
+  const CustomTooltip = ({ active, payload, label }) => {
+    if (active && payload && payload.length) {
+      const data = payload[0].payload; 
+      
+      return (
+        <div className="bg-white p-3.5 rounded-2xl shadow-xl border border-stone-100 text-sm min-w-[180px]">
+          <p className="font-bold text-stone-700 mb-3 border-b border-stone-100 pb-2">{label}</p>
+          <div className="space-y-2.5">
+            {/* 如果有挑戰現金，才顯示這一行 */}
+            {data.hasChallengeCash && (
+              <div className="flex items-center justify-between gap-6 font-bold bg-amber-50 px-2 py-1.5 rounded-lg text-amber-700 shadow-sm border border-amber-100">
+                <span className="flex items-center gap-1.5 text-xs"><Star size={12} className="fill-amber-500 text-amber-500"/>挑戰現金</span>
+                <span className="font-mono">{fmtMoney(data.challengeBudget)}</span>
+              </div>
+            )}
+            {/* 如果有挑戰權責，才顯示這一行 */}
+            {data.hasChallengeAccrual && (
+              <div className="flex items-center justify-between gap-6 font-bold bg-indigo-50 px-2 py-1.5 rounded-lg text-indigo-700 shadow-sm border border-indigo-100">
+                <span className="flex items-center gap-1.5 text-xs"><Star size={12} className="fill-indigo-500 text-indigo-500"/>挑戰權責</span>
+                <span className="font-mono">{fmtMoney(data.challengeAccrualBudget)}</span>
+              </div>
+            )}
+            
+            <div className="flex items-center justify-between gap-6 text-stone-500 text-xs mt-2">
+              <span className="flex items-center gap-1.5"><div className="w-2.5 h-2.5 rounded-[2px] bg-[#fef3c7] border border-[#fbbf24]"></div>預算現金</span>
+              <span className="font-mono">{fmtMoney(data.budget)}</span>
+            </div>
+            <div className="flex items-center justify-between gap-6 text-stone-500 text-xs">
+              <span className="flex items-center gap-1.5"><div className="w-2.5 h-0.5 bg-[#818cf8]"></div>預算權責</span>
+              <span className="font-mono">{fmtMoney(data.accrualBudget)}</span>
+            </div>
+            <div className="flex items-center justify-between gap-6 font-bold text-amber-600 text-xs pt-1">
+              <span className="flex items-center gap-1.5"><div className="w-2.5 h-2.5 rounded-[2px] bg-[#f59e0b]"></div>實際現金</span>
+              <span className="font-mono">{fmtMoney(data.cash)}</span>
+            </div>
+            <div className="flex items-center justify-between gap-6 font-bold text-indigo-600 text-xs">
+              <span className="flex items-center gap-1.5"><div className="w-2.5 h-2.5 rounded-full bg-[#4f46e5]"></div>實際權責</span>
+              <span className="font-mono">{fmtMoney(data.accrual)}</span>
+            </div>
+          </div>
+        </div>
+      );
+    }
+    return null;
+  };
 
   return (
     <ViewWrapper>
       <div className="space-y-6 pb-12">
         
-        {/* 標題與權限顯示 */}
         <div className="flex flex-col gap-4 mb-2">
-           <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 animate-in fade-in slide-in-from-left-2 duration-500">
+           <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
              <div className="flex items-center gap-3">
                <div className="p-3 bg-amber-100 text-amber-600 rounded-xl shadow-sm">
                  <Calendar size={24} />
@@ -330,8 +297,8 @@ const AnnualView = () => {
              </div>
              
              <div className="flex items-center gap-2 self-start md:self-auto md:ml-auto">
-               <div className="px-4 py-1.5 bg-stone-100 text-stone-500 text-xs font-bold rounded-full transition-all">
-                 檢視範圍: {currentViewLabel} ({currentActiveStoresCount} 店)
+               <div className="px-4 py-1.5 bg-stone-100 text-stone-500 text-xs font-bold rounded-full">
+                 權限範圍: 自動篩選 ({Object.values(managers).flat().filter(s => !auditExclusions.includes(s)).length} 店)
                </div>
                {(userRole === 'director' || userRole === 'manager') && (
                   <button 
@@ -345,58 +312,7 @@ const AnnualView = () => {
              </div>
            </div>
 
-           {/* ★★★ 工具列：雙層聯動篩選器 & 快速區間 ★★★ */}
-           <div className="bg-white p-4 rounded-2xl border border-stone-100 shadow-sm flex flex-col xl:flex-row items-start xl:items-center gap-4 animate-in fade-in slide-in-from-bottom-4 duration-500">
-              
-              {/* 單店篩選器 (安插在快速篩選左側) */}
-              {(userRole === 'director' || userRole === 'trainer' || userRole === 'manager') && (
-                <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-2 w-full xl:w-auto overflow-x-auto no-scrollbar">
-                    
-                    {(userRole === 'director' || userRole === 'trainer') && (
-                        <select
-                            value={selectedAnnualManager}
-                            onChange={(e) => {
-                                setSelectedAnnualManager(e.target.value);
-                                setSelectedAnnualStore(""); 
-                            }}
-                            className="px-3 py-2 border border-stone-200 rounded-xl text-sm font-bold text-stone-600 outline-none focus:border-amber-400 bg-stone-50 shadow-sm cursor-pointer min-w-[120px] hover:border-stone-300 transition-colors"
-                        >
-                            <option value="">全品牌</option>
-                            {Object.keys(groupedStoresForFilter).map(m => (
-                                <option key={m} value={m}>{m}區</option>
-                            ))}
-                        </select>
-                    )}
-                    
-                    <select
-                        value={selectedAnnualStore}
-                        onChange={(e) => setSelectedAnnualStore(e.target.value)}
-                        className="px-3 py-2 border border-stone-200 rounded-xl text-sm font-bold text-stone-600 outline-none focus:border-amber-400 bg-stone-50 shadow-sm cursor-pointer min-w-[140px] hover:border-stone-300 transition-colors"
-                    >
-                        <option value="" className="font-bold text-stone-800">
-                            {selectedAnnualManager || userRole === 'manager' ? "全區店家" : "顯示全區"}
-                        </option>
-                        
-                        {(!selectedAnnualManager && userRole !== 'manager') ? (
-                            Object.entries(groupedStoresForFilter).map(([mgrName, stores]) => (
-                                <optgroup key={mgrName} label={`${mgrName} 區`} className="font-bold text-stone-400 bg-white">
-                                    {stores.map(s => (
-                                        <option key={s} value={s} className="font-medium text-stone-700 bg-white">{s}</option>
-                                    ))}
-                                </optgroup>
-                            ))
-                        ) : (
-                            availableStoresForDropdown.map(s => (
-                                <option key={s} value={s} className="font-medium text-stone-700 bg-white">{s}</option>
-                            ))
-                        )}
-                    </select>
-
-                    <div className="hidden xl:block w-px h-6 bg-stone-200 mx-2"></div>
-                </div>
-              )}
-
-              {/* 快速篩選按鈕 */}
+           <div className="bg-white p-4 rounded-2xl border border-stone-100 shadow-sm flex flex-col xl:flex-row items-start xl:items-center gap-4">
               <div className="flex items-center gap-2 text-stone-600 font-bold text-sm whitespace-nowrap shrink-0">
                 <Filter size={18} className="text-amber-500"/>
                 <span>快速篩選：</span>
@@ -405,9 +321,7 @@ const AnnualView = () => {
                 <button 
                   onClick={() => handleQuarterClick('ALL')}
                   className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all border ${
-                    activeQuarter === 'ALL' 
-                      ? 'bg-stone-800 text-white border-stone-800' 
-                      : 'bg-stone-50 text-stone-500 border-stone-200 hover:bg-stone-100'
+                    activeQuarter === 'ALL' ? 'bg-stone-800 text-white border-stone-800' : 'bg-stone-50 text-stone-500 border-stone-200 hover:bg-stone-100'
                   }`}
                 >
                   整年度
@@ -417,41 +331,32 @@ const AnnualView = () => {
                     key={q}
                     onClick={() => handleQuarterClick(q)}
                     className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all border ${
-                      activeQuarter === q 
-                        ? 'bg-amber-500 text-white border-amber-500 shadow-md shadow-amber-200' 
-                        : 'bg-stone-50 text-stone-500 border-stone-200 hover:bg-stone-100'
+                      activeQuarter === q ? 'bg-amber-500 text-white border-amber-500 shadow-md shadow-amber-200' : 'bg-stone-50 text-stone-500 border-stone-200 hover:bg-stone-100'
                     }`}
                   >
                     Q{q}
                   </button>
                 ))}
               </div>
-              
               <div className="hidden xl:block w-px h-8 bg-stone-200 mx-2"></div>
-              
               <div className="flex items-center gap-2 text-stone-600 font-bold text-sm whitespace-nowrap xl:ml-0 shrink-0">
                 <span>自訂區間：</span>
               </div>
               <div className="flex items-center gap-2 w-full md:w-auto">
                 <input 
-                  type="month" 
-                  value={startMonthStr}
-                  onChange={(e) => setStartMonthStr(e.target.value)}
+                  type="month" value={startMonthStr} onChange={(e) => setStartMonthStr(e.target.value)}
                   className="bg-stone-50 border border-stone-200 text-stone-700 text-sm rounded-lg focus:ring-amber-500 focus:border-amber-500 block w-full p-2 font-mono"
                 />
                 <span className="text-stone-400"><ArrowRight size={16}/></span>
                 <input 
-                  type="month" 
-                  value={endMonthStr}
-                  onChange={(e) => setEndMonthStr(e.target.value)}
+                  type="month" value={endMonthStr} onChange={(e) => setEndMonthStr(e.target.value)}
                   className="bg-stone-50 border border-stone-200 text-stone-700 text-sm rounded-lg focus:ring-amber-500 focus:border-amber-500 block w-full p-2 font-mono"
                 />
               </div>
            </div>
         </div>
 
-        {/* 區塊 1: 區間總 KPI */}
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-4 animate-in fade-in slide-in-from-bottom-4 duration-500 delay-100">
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
           <div className="bg-gradient-to-br from-amber-500 to-orange-500 rounded-2xl p-6 text-white shadow-lg relative overflow-hidden">
             <div className="absolute top-0 right-0 p-4 opacity-20"><DollarSign size={100} /></div>
             <div className="relative z-10">
@@ -473,7 +378,6 @@ const AnnualView = () => {
              <div className="relative z-10">
               <p className="text-indigo-400 font-bold text-sm mb-1 flex items-center gap-1"><Award size={14}/> 區間權責達成</p>
               <h2 className={`text-4xl font-extrabold font-mono tracking-tight text-stone-700 ${brandPrefix === '安妞' ? 'mb-1' : 'mb-4'}`}>{fmtMoney(totals.accrual)}</h2>
-              {/* ★ 針對安妞的文字提示 */}
               {brandPrefix === '安妞' && (
                 <p className="text-[11px] text-indigo-400 mb-3 font-medium flex items-center gap-1">
                   <span className="inline-block w-1 h-1 bg-indigo-400 rounded-full"></span> 僅含技術操作 (排除產品)
@@ -492,97 +396,142 @@ const AnnualView = () => {
           </div>
         </div>
 
-        {/* 區塊 2: 趨勢圖表 */}
-        <div className="animate-in fade-in slide-in-from-bottom-4 duration-500 delay-200">
-          <Card title="區間營收趨勢分析" subtitle={`實際 vs 預算 (現金/權責${brandPrefix === '安妞' ? ' - 不含產品' : ''})`}>
-            <div className="h-[350px] w-full">
-              <ResponsiveContainer width="100%" height="100%">
-                <ComposedChart data={monthlyStats} margin={{ top: 20, right: 0, left: 0, bottom: 0 }}>
-                  <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#f5f5f4" />
-                  <XAxis dataKey="label" tick={{ fontSize: 12, fill: '#78716c' }} axisLine={false} tickLine={false} dy={10} />
-                  <YAxis 
-                    width={50} 
-                    tick={{ fontSize: 11, fill: '#a8a29e' }} 
-                    axisLine={false} 
-                    tickLine={false} 
-                    tickFormatter={(val) => `${(val/10000).toFixed(0)}萬`} 
-                  />
-                  <Tooltip 
-                    contentStyle={{ borderRadius: '12px', border: 'none', boxShadow: '0 4px 12px rgba(0,0,0,0.1)' }}
-                    formatter={(value) => fmtMoney(value)}
-                    itemSorter={(item) => {
-                      const order = { "現金預算": 1, "權責預算": 2, "實際現金": 3, "實際權責": 4 };
-                      return order[item.name] || 99;
-                    }}
-                  />
-                  <Legend content={<CustomLegend />} verticalAlign="top" height={36} />
-                  <Area type="monotone" dataKey="budget" name="現金預算" stroke="#fbbf24" fill="#fef3c7" strokeWidth={2} fillOpacity={0.5} />
-                  <Line type="monotone" dataKey="accrualBudget" name="權責預算" stroke="#818cf8" strokeWidth={2} strokeDasharray="5 5" dot={false} />
-                  <Bar dataKey="cash" name="實際現金" barSize={12} radius={[4, 4, 0, 0]} fill="#f59e0b" />
-                  <Line type="monotone" dataKey="accrual" name="實際權責" stroke="#4f46e5" strokeWidth={3} dot={{r:3}} />
-                </ComposedChart>
-              </ResponsiveContainer>
-            </div>
-          </Card>
-        </div>
+        <Card title="區間營收趨勢分析" subtitle={`實際 vs 預算 (現金/權責${brandPrefix === '安妞' ? ' - 不含產品' : ''})`}>
+          <div className="h-[350px] w-full">
+            <ResponsiveContainer width="100%" height="100%">
+              <ComposedChart data={monthlyStats} margin={{ top: 20, right: 0, left: 0, bottom: 0 }}>
+                <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#f5f5f4" />
+                <XAxis dataKey="label" tick={{ fontSize: 12, fill: '#78716c' }} axisLine={false} tickLine={false} dy={10} />
+                <YAxis 
+                  width={50} 
+                  tick={{ fontSize: 11, fill: '#a8a29e' }} 
+                  axisLine={false} 
+                  tickLine={false} 
+                  tickFormatter={(val) => `${(val/10000).toFixed(0)}萬`} 
+                />
+                
+                {/* ★ 掛上客製化的精準 Tooltip */}
+                <Tooltip content={<CustomTooltip />} cursor={{ fill: '#fafaf9' }} />
+                
+                <Legend content={<CustomLegend />} verticalAlign="top" height={36} />
+                <Area type="monotone" dataKey="budget" name="現金預算" stroke="#fbbf24" fill="#fef3c7" strokeWidth={2} fillOpacity={0.5} />
+                <Line type="monotone" dataKey="accrualBudget" name="權責預算" stroke="#818cf8" strokeWidth={2} strokeDasharray="5 5" dot={false} />
+                
+                {/* ★ 挑戰現金星星標記 */}
+                <Line 
+                  type="monotone" 
+                  dataKey="challengeBudget" 
+                  name="挑戰現金" 
+                  stroke="none" 
+                  isAnimationActive={false}
+                  dot={(props) => {
+                    const { cx, cy, payload } = props;
+                    if (payload.hasChallengeCash) {
+                      return (
+                        <svg x={cx - 8} y={cy - 8} width="16" height="16" viewBox="0 0 24 24" fill="#f59e0b" stroke="#b45309" strokeWidth="1" xmlns="http://www.w3.org/2000/svg">
+                          <polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"></polygon>
+                        </svg>
+                      );
+                    }
+                    return null;
+                  }}
+                  activeDot={false}
+                />
+                
+                {/* ★ 挑戰權責星星標記 */}
+                <Line 
+                  type="monotone" 
+                  dataKey="challengeAccrualBudget" 
+                  name="挑戰權責" 
+                  stroke="none" 
+                  isAnimationActive={false}
+                  dot={(props) => {
+                    const { cx, cy, payload } = props;
+                    if (payload.hasChallengeAccrual) {
+                      return (
+                        <svg x={cx - 8} y={cy - 8} width="16" height="16" viewBox="0 0 24 24" fill="#818cf8" stroke="#4f46e5" strokeWidth="1" xmlns="http://www.w3.org/2000/svg">
+                          <polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"></polygon>
+                        </svg>
+                      );
+                    }
+                    return null;
+                  }}
+                  activeDot={false}
+                />
+
+                <Bar dataKey="cash" name="實際現金" barSize={12} radius={[4, 4, 0, 0]} fill="#f59e0b" />
+                <Line type="monotone" dataKey="accrual" name="實際權責" stroke="#4f46e5" strokeWidth={3} dot={{r:3}} />
+              </ComposedChart>
+            </ResponsiveContainer>
+          </div>
+        </Card>
 
         {/* 區塊 3: 詳細數據表 */}
-        <div className="animate-in fade-in slide-in-from-bottom-4 duration-500 delay-300">
-          <Card title="區間詳細數據表">
-            <div className="overflow-x-auto -mx-4 md:mx-0 px-4 md:px-0">
-              <table className="w-full text-left text-sm whitespace-nowrap">
-                <thead className="text-stone-400 font-bold border-b border-stone-100 text-xs uppercase">
-                  <tr>
-                    <th className="pb-3 pl-2">月份</th>
-                    <th className="pb-3 text-right text-amber-500/60">現金目標</th>
-                    <th className="pb-3 text-right text-amber-600">現金業績</th>
-                    <th className="pb-3 text-right">達成率</th>
-                    <th className="pb-3 text-right text-indigo-400/60 pl-4 border-l border-dashed border-stone-200">權責目標</th>
-                    <th className="pb-3 text-right text-indigo-600">
-                      權責業績 {brandPrefix === '安妞' && <span className="text-[10px] text-indigo-400 font-normal normal-case ml-1">(純操作)</span>}
-                    </th>
-                    <th className="pb-3 text-right">達成率</th>
-                    <th className="pb-3 text-right pl-4 border-l border-dashed border-stone-200">操作人次</th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-stone-50">
-                  {monthlyStats.map((stat, idx) => (
-                    <tr key={idx} className="group hover:bg-stone-50 transition-colors">
-                      <td className="py-4 pl-2 font-bold text-stone-700">{stat.label}</td>
-                      <td className="py-4 text-right font-mono text-stone-400 text-xs">{fmtMoney(stat.budget)}</td>
-                      <td className="py-4 text-right font-mono text-stone-700 font-bold">{fmtMoney(stat.cash)}</td>
-                      <td className="py-4 text-right font-bold">
-                         <span className={`px-2 py-1 rounded-md text-xs ${stat.achievement >= 100 ? 'bg-amber-100 text-amber-700' : 'bg-stone-100 text-stone-400'}`}>
-                           {stat.achievement.toFixed(1)}%
-                         </span>
-                      </td>
-                      <td className="py-4 text-right font-mono text-stone-400 text-xs pl-4 border-l border-dashed border-stone-100">{fmtMoney(stat.accrualBudget)}</td>
-                      <td className="py-4 text-right font-mono text-indigo-600 font-bold">{fmtMoney(stat.accrual)}</td>
-                      <td className="py-4 text-right font-bold">
-                         <span className={`px-2 py-1 rounded-md text-xs ${stat.accrualAchievement >= 100 ? 'bg-indigo-100 text-indigo-700' : 'bg-stone-100 text-stone-400'}`}>
-                           {stat.accrualAchievement.toFixed(1)}%
-                         </span>
-                      </td>
-                      <td className="py-4 text-right font-mono text-stone-600 pl-4 border-l border-dashed border-stone-100">{fmtNum(stat.traffic)}</td>
-                    </tr>
-                  ))}
-                </tbody>
-                <tfoot className="bg-stone-50 font-bold text-stone-800 border-t-2 border-stone-100">
-                  <tr>
-                    <td className="py-4 pl-2 text-stone-500">區間總計</td>
-                    <td className="py-4 text-right font-mono text-stone-500 text-xs">{fmtMoney(totals.budget)}</td>
-                    <td className="py-4 text-right font-mono text-amber-600">{fmtMoney(totals.cash)}</td>
-                    <td className="py-4 text-right text-emerald-600">{totals.cashAch.toFixed(1)}%</td>
-                    <td className="py-4 text-right font-mono text-stone-500 text-xs pl-4 border-l border-dashed border-stone-200">{fmtMoney(totals.accrualBudget)}</td>
-                    <td className="py-4 text-right font-mono text-indigo-600">{fmtMoney(totals.accrual)}</td>
-                    <td className="py-4 text-right text-emerald-600">{totals.accrualAch.toFixed(1)}%</td>
-                    <td className="py-4 text-right font-mono pl-4 border-l border-dashed border-stone-200">{fmtNum(totals.traffic)}</td>
-                  </tr>
-                </tfoot>
-              </table>
-            </div>
-          </Card>
-        </div>
+        <Card title="區間詳細數據表">
+          <div className="overflow-x-auto -mx-4 md:mx-0 px-4 md:px-0">
+            <table className="w-full text-left text-sm whitespace-nowrap">
+              <thead className="text-stone-400 font-bold border-b border-stone-100 text-xs uppercase">
+                <tr>
+                  <th className="pb-3 pl-2">月份</th>
+                  <th className="pb-3 text-right text-amber-500/60">現金目標</th>
+                  <th className="pb-3 text-right text-amber-600">現金業績</th>
+                  <th className="pb-3 text-right">達成率</th>
+                  <th className="pb-3 text-right text-indigo-400/60 pl-4 border-l border-dashed border-stone-200">權責目標</th>
+                  <th className="pb-3 text-right text-indigo-600">
+                    權責業績 {brandPrefix === '安妞' && <span className="text-[10px] text-indigo-400 font-normal normal-case ml-1">(純操作)</span>}
+                  </th>
+                  <th className="pb-3 text-right">達成率</th>
+                  <th className="pb-3 text-right pl-4 border-l border-dashed border-stone-200">操作人次</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-stone-50">
+                {monthlyStats.map((stat, idx) => {
+                   // 表格星星的 Hover 提示字眼動態組合
+                   let titleText = [];
+                   if (stat.hasChallengeCash) titleText.push(`現金: ${fmtMoney(stat.challengeBudget)}`);
+                   if (stat.hasChallengeAccrual) titleText.push(`權責: ${fmtMoney(stat.challengeAccrualBudget)}`);
+                   const starTitle = titleText.length > 0 ? `挑戰目標\n${titleText.join('\n')}` : "";
+
+                   return (
+                     <tr key={idx} className="group hover:bg-stone-50 transition-colors">
+                       <td className="py-4 pl-2 font-bold text-stone-700">
+                         {stat.label}
+                         {stat.hasChallenge && <Star size={10} className="inline ml-1 mb-1 text-amber-500 fill-amber-500 cursor-help" title={starTitle}/>}
+                       </td>
+                       <td className="py-4 text-right font-mono text-stone-400 text-xs">{fmtMoney(stat.budget)}</td>
+                       <td className="py-4 text-right font-mono text-stone-700 font-bold">{fmtMoney(stat.cash)}</td>
+                       <td className="py-4 text-right font-bold">
+                          <span className={`px-2 py-1 rounded-md text-xs ${stat.achievement >= 100 ? 'bg-amber-100 text-amber-700' : 'bg-stone-100 text-stone-400'}`}>
+                            {stat.achievement.toFixed(1)}%
+                          </span>
+                       </td>
+                       <td className="py-4 text-right font-mono text-stone-400 text-xs pl-4 border-l border-dashed border-stone-100">{fmtMoney(stat.accrualBudget)}</td>
+                       <td className="py-4 text-right font-mono text-indigo-600 font-bold">{fmtMoney(stat.accrual)}</td>
+                       <td className="py-4 text-right font-bold">
+                          <span className={`px-2 py-1 rounded-md text-xs ${stat.accrualAchievement >= 100 ? 'bg-indigo-100 text-indigo-700' : 'bg-stone-100 text-stone-400'}`}>
+                            {stat.accrualAchievement.toFixed(1)}%
+                          </span>
+                       </td>
+                       <td className="py-4 text-right font-mono text-stone-600 pl-4 border-l border-dashed border-stone-100">{fmtNum(stat.traffic)}</td>
+                     </tr>
+                   );
+                })}
+              </tbody>
+              <tfoot className="bg-stone-50 font-bold text-stone-800 border-t-2 border-stone-100">
+                <tr>
+                  <td className="py-4 pl-2 text-stone-500">區間總計</td>
+                  <td className="py-4 text-right font-mono text-stone-500 text-xs">{fmtMoney(totals.budget)}</td>
+                  <td className="py-4 text-right font-mono text-amber-600">{fmtMoney(totals.cash)}</td>
+                  <td className="py-4 text-right text-emerald-600">{totals.cashAch.toFixed(1)}%</td>
+                  <td className="py-4 text-right font-mono text-stone-500 text-xs pl-4 border-l border-dashed border-stone-200">{fmtMoney(totals.accrualBudget)}</td>
+                  <td className="py-4 text-right font-mono text-indigo-600">{fmtMoney(totals.accrual)}</td>
+                  <td className="py-4 text-right text-emerald-600">{totals.accrualAch.toFixed(1)}%</td>
+                  <td className="py-4 text-right font-mono pl-4 border-l border-dashed border-stone-200">{fmtNum(totals.traffic)}</td>
+                </tr>
+              </tfoot>
+            </table>
+          </div>
+        </Card>
 
       </div>
 
