@@ -1,7 +1,7 @@
 // src/components/DashboardView.jsx
 import React, { useContext, useMemo, useState, useEffect } from "react";
 import { XAxis, YAxis, CartesianGrid, Tooltip as RechartsTooltip, ResponsiveContainer, Line, ComposedChart, Area } from "recharts";
-import { TrendingUp, DollarSign, Target, Users, Award, Loader2, CheckSquare, Activity, Sparkles, ShoppingBag, CreditCard, FileWarning, Trophy, Medal, AlertTriangle, Crown, Map, User, Store as StoreIcon, ArrowRight, ArrowLeft, Frown, Flame, Zap, Download } from "lucide-react";
+import { TrendingUp, DollarSign, Target, Users, Award, Loader2, CheckSquare, Activity, Sparkles, ShoppingBag, CreditCard, FileWarning, Trophy, Medal, AlertTriangle, Crown, Map, User, Store as StoreIcon, ArrowRight, ArrowLeft, Frown, Flame, Zap, Download, PieChart } from "lucide-react";
 import { ViewWrapper, Card } from "./SharedUI";
 import { formatNumber } from "../utils/helpers";
 import { AppContext } from "../AppContext";
@@ -55,7 +55,6 @@ const DashboardView = () => {
     return core.replace(/店$/, '').trim();
   }, [brandPrefix]);
 
-  // ★★★ 修正：將 therapist 也加入可以讀取全區店名清單的權限，讓他們的資料不會被過濾器誤擋 ★★★
   const baseVisibleStores = useMemo(() => {
     if (userRole === 'director' || userRole === 'trainer' || userRole === 'therapist') {
       return Object.values(managers).flat().map(cleanName).filter(Boolean);
@@ -132,9 +131,11 @@ const DashboardView = () => {
     
     const now = new Date();
     let daysPassed = daysInMonth; 
+    let isCurrentMonth = false;
     
     if (now.getFullYear() === y && (now.getMonth() + 1) === m) {
-        daysPassed = now.getDate(); 
+        daysPassed = Math.max(0, now.getDate() - 1); 
+        isCurrentMonth = true;
     } else if (now < new Date(y, m - 1, 1)) {
         daysPassed = 0; 
     }
@@ -201,7 +202,20 @@ const DashboardView = () => {
     const avgTrafficASP = stats.traffic > 0 ? Math.round(stats.operationalAccrual / stats.traffic) : 0;
     const avgNewCustomerASP = stats.newCustomers > 0 ? Math.round(stats.newCustomerSales / stats.newCustomers) : 0;
 
-    const slicedDailyTotals = stats.dailyData.slice(0, daysPassed === 0 ? daysInMonth : daysPassed);
+    // ★★★ 計算新舊客結構佔比 (保護分母避免除以0) ★★★
+    const newRevMix = stats.cash > 0 ? Math.round((stats.newCustomerSales / stats.cash) * 100) : 0;
+    const oldRevMix = stats.cash > 0 ? Math.max(0, 100 - newRevMix) : 0;
+
+    const newCountMix = stats.traffic > 0 ? Math.round((stats.newCustomers / stats.traffic) * 100) : 0;
+    const oldCountMix = stats.traffic > 0 ? Math.max(0, 100 - newCountMix) : 0;
+
+    let chartDays = daysInMonth;
+    if (isCurrentMonth) {
+        chartDays = Math.max(1, daysPassed); 
+    } else if (daysPassed === 0) {
+        chartDays = 0;
+    }
+    const slicedDailyTotals = stats.dailyData.slice(0, chartDays);
 
     return {
       grandTotal: {
@@ -221,7 +235,11 @@ const DashboardView = () => {
       avgTrafficASP,
       avgNewCustomerASP,
       daysPassed,
-      daysInMonth
+      daysInMonth,
+      newRevMix,     // ★ 輸出新客業績比
+      oldRevMix,     // ★ 輸出舊客業績比
+      newCountMix,   // ★ 輸出新客人數比
+      oldCountMix    // ★ 輸出舊客人數比
     };
 
   }, [allReports, budgets, selectedYear, selectedMonth, effectiveStores, brandPrefix, cleanName]);
@@ -495,7 +513,32 @@ const DashboardView = () => {
               <MiniKpiCard title="總保養品業績" value={fmtMoney(storeGrandTotal.skincareSales)} icon={ShoppingBag} color="text-rose-500" subText={<>佔權責 <span className="font-bold text-stone-700 ml-1">{storeGrandTotal.accrual > 0 ? ((storeGrandTotal.skincareSales / storeGrandTotal.accrual) * 100).toFixed(0) : 0}%</span></>} />
             </div></div>
             
-            <div><h3 className="text-lg font-bold text-stone-700 mb-4 flex items-center gap-2 pl-1"><div className="w-1 h-6 bg-cyan-500 rounded-full"></div>營運效率與客流</h3><div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5 gap-4"><MiniKpiCard title="課程操作人數" value={fmtNum(storeGrandTotal.traffic)} icon={Users} color="text-blue-500" subText="本月累計操作人數" /><MiniKpiCard title="平均操作權責" value={fmtMoney(dashboardStats.avgTrafficASP)} icon={TrendingUp} color="text-indigo-500" subText={<span className={dashboardStats.avgTrafficASP >= targets.trafficASP ? "text-emerald-500 font-bold" : "text-rose-500 font-bold"}>{dashboardStats.avgTrafficASP >= targets.trafficASP ? "達標" : "未達標"} (目標 {fmtNum(targets.trafficASP)})</span>} /><MiniKpiCard title="總新客數" value={fmtNum(storeGrandTotal.newCustomers)} icon={Sparkles} color="text-purple-500" subText="本月新增體驗人數" /><MiniKpiCard title="總新客留單" value={fmtNum(storeGrandTotal.newCustomerClosings)} icon={CheckSquare} color="text-teal-500" subText={<span>留單率 <span className="font-bold">{storeGrandTotal.newCustomers > 0 ? ((storeGrandTotal.newCustomerClosings / storeGrandTotal.newCustomers) * 100).toFixed(0) : 0}%</span></span>} /><MiniKpiCard title="新客平均客單" value={fmtMoney(dashboardStats.avgNewCustomerASP)} icon={Award} color="text-fuchsia-500" subText={<span className={dashboardStats.avgNewCustomerASP >= targets.newASP ? "text-emerald-500 font-bold" : "text-rose-500 font-bold"}>{dashboardStats.avgNewCustomerASP >= targets.newASP ? "達標" : "未達標"} (目標 {fmtNum(targets.newASP)})</span>} /></div></div>
+            <div>
+               <h3 className="text-lg font-bold text-stone-700 mb-4 flex items-center gap-2 pl-1">
+                 <div className="w-1 h-6 bg-cyan-500 rounded-full"></div>營運效率與客流
+               </h3>
+               {/* ★ 將 grid 修改為 xl:grid-cols-6 來容納 6 張卡片，或是自動排版 */}
+               <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-6 gap-4">
+                 <MiniKpiCard title="課程操作人數" value={fmtNum(storeGrandTotal.traffic)} icon={Users} color="text-blue-500" subText="本月累計操作人數" />
+                 <MiniKpiCard title="平均操作權責" value={fmtMoney(dashboardStats.avgTrafficASP)} icon={TrendingUp} color="text-indigo-500" subText={<span className={dashboardStats.avgTrafficASP >= targets.trafficASP ? "text-emerald-500 font-bold" : "text-rose-500 font-bold"}>{dashboardStats.avgTrafficASP >= targets.trafficASP ? "達標" : "未達標"} (目標 {fmtNum(targets.trafficASP)})</span>} />
+                 <MiniKpiCard title="總新客數" value={fmtNum(storeGrandTotal.newCustomers)} icon={Sparkles} color="text-purple-500" subText="本月新增體驗人數" />
+                 <MiniKpiCard title="總新客留單" value={fmtNum(storeGrandTotal.newCustomerClosings)} icon={CheckSquare} color="text-teal-500" subText={<span>留單率 <span className="font-bold">{storeGrandTotal.newCustomers > 0 ? ((storeGrandTotal.newCustomerClosings / storeGrandTotal.newCustomers) * 100).toFixed(0) : 0}%</span></span>} />
+                 <MiniKpiCard title="新客平均客單" value={fmtMoney(dashboardStats.avgNewCustomerASP)} icon={Award} color="text-fuchsia-500" subText={<span className={dashboardStats.avgNewCustomerASP >= targets.newASP ? "text-emerald-500 font-bold" : "text-rose-500 font-bold"}>{dashboardStats.avgNewCustomerASP >= targets.newASP ? "達標" : "未達標"} (目標 {fmtNum(targets.newASP)})</span>} />
+                 
+                 {/* ★★★ 新增：第 6 張卡片，同時顯示人數與業績的新舊佔比 ★★★ */}
+                 <MiniKpiCard 
+                   title="新 / 舊客 結構比" 
+                   value={`${dashboardStats.newCountMix}% / ${dashboardStats.oldCountMix}%`} 
+                   icon={PieChart} 
+                   color="text-pink-500" 
+                   subText={
+                     <span className="flex items-center gap-1 text-stone-500">
+                       業績比 <span className="font-bold text-stone-700">{dashboardStats.newRevMix}% / {dashboardStats.oldRevMix}%</span>
+                     </span>
+                   } 
+                 />
+               </div>
+            </div>
             
             <Card title={`${brandInfo.name} 日營運走勢`} subtitle="現金業績 vs 課程操作人數趨勢分析"><div className="h-[300px] w-full"><ResponsiveContainer width="100%" height="100%"><ComposedChart data={dailyTotals} margin={{ top: 10, right: 10, left: 0, bottom: 0 }}><CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#f5f5f4" /><XAxis dataKey="date" stroke="#a8a29e" tick={{ fontSize: 12 }} dy={10} /><YAxis yAxisId="left" stroke="#a8a29e" tick={{ fontSize: 12 }} width={60} tickFormatter={(val) => val === 0 ? "0" : `$${(val / 1000).toFixed(0)}k`} /><YAxis yAxisId="right" orientation="right" stroke="#a8a29e" tick={{ fontSize: 12 }} tickFormatter={(val) => fmtNum(val)} /><RechartsTooltip contentStyle={{ borderRadius: "16px", border: "none", padding: "12px", boxShadow: "0 4px 6px -1px rgb(0 0 0 / 0.1)", }} cursor={{ fill: "#fafaf9" }} formatter={(value, name) => { if (name === "現金業績") return [fmtMoney(value), name]; return [fmtNum(value), name]; }} /><Area yAxisId="left" type="monotone" dataKey="cash" name="現金業績" stroke="#f59e0b" fill="#f59e0b" fillOpacity={0.2} strokeWidth={3} /><Line yAxisId="right" type="monotone" dataKey="traffic" name="課程操作人數" stroke="#0ea5e9" strokeWidth={3} /></ComposedChart></ResponsiveContainer></div></Card>
 
