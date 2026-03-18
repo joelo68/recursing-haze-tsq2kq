@@ -13,6 +13,13 @@ import { ViewWrapper, Card } from "./SharedUI";
 import { formatNumber } from "../utils/helpers";
 import { AppContext } from "../AppContext";
 
+// ==========================================
+// ★★★ 系統全域 Gemini API Key (企業共用版) ★★★
+// 請將您申請到的 Key 貼在下方的引號中，例如: "AIzaSyxxxxxxxxx"
+// 只要在這裡填入，所有區長與高管登入後就會自動共用這把鑰匙，不需再手動設定！
+// ==========================================
+const SYSTEM_GEMINI_KEY = "AIzaSyDlSKy0ktpTJFxa2mZL2RU6fbBtB1dBNus"; 
+
 const DashboardView = () => {
   const { 
     fmtMoney, fmtNum, targets, userRole, currentUser, 
@@ -29,7 +36,15 @@ const DashboardView = () => {
   // ==========================================
   const [isAIChatOpen, setIsAIChatOpen] = useState(false);
   const [showAIConfig, setShowAIConfig] = useState(false);
-  const [geminiApiKey, setGeminiApiKey] = useState(() => localStorage.getItem("drcyj_gemini_key") || "");
+  
+  // ★ 升級：優先讀取系統全域金鑰，若無才讀取本機記憶體
+  const [geminiApiKey, setGeminiApiKey] = useState(() => {
+    if (SYSTEM_GEMINI_KEY && SYSTEM_GEMINI_KEY.length > 10) {
+        return SYSTEM_GEMINI_KEY;
+    }
+    return localStorage.getItem("drcyj_gemini_key") || "";
+  });
+
   const [aiInput, setAiInput] = useState("");
   const [isAILoading, setIsAILoading] = useState(false);
   
@@ -56,7 +71,6 @@ const DashboardView = () => {
 
   // ★ 初始化 AI 對話 (加入動態問候語)
   const [aiMessages, setAiMessages] = useState(() => {
-    // 從 currentUser 取得名字，若沒有則用角色稱呼
     const userName = currentUser?.name || (userRole === 'director' ? '總監' : userRole === 'manager' ? '區長' : '主管');
     return [
       { role: "model", text: `${userName} 您好！我是 DRCYJ 專屬營運分析師 🤖\n我已經讀取了目前的【全區深度營運數據】。\n請問您想進行哪方面的深入分析呢？\n(例如：「幫我找出新客締結率最低的人」、「目前的業績達成率有跟上時間進度嗎？」)` }
@@ -65,7 +79,6 @@ const DashboardView = () => {
 
   const messagesEndRef = useRef(null);
 
-  // 當使用者名字改變時，更新第一句招呼語
   useEffect(() => {
     const userName = currentUser?.name || (userRole === 'director' ? '總監' : userRole === 'manager' ? '區長' : '主管');
     setAiMessages(prev => {
@@ -77,11 +90,10 @@ const DashboardView = () => {
     });
   }, [currentUser, userRole]);
 
-  // ★★★ 設計 AI 聊天視窗的品牌配色 (去除沉重黑色) ★★★
+  // ★★★ 設計 AI 聊天視窗的品牌配色 ★★★
   const aiTheme = useMemo(() => {
     const brandId = brandInfo.id;
     if (brandId.includes('anniu') || brandId.includes('anew')) {
-        // 安妞: 使用 Teal/Teal 配色
         return {
             fab: 'bg-teal-500 hover:bg-teal-600 shadow-teal-100',
             ping: 'bg-teal-400',
@@ -91,7 +103,6 @@ const DashboardView = () => {
             sendBtn: 'bg-teal-600'
         };
     } else if (brandId.includes('yibo')) {
-        // 伊啵: 使用 Purple/Indigo 配色
         return {
             fab: 'bg-purple-500 hover:bg-purple-600 shadow-purple-100',
             ping: 'bg-purple-400',
@@ -101,13 +112,12 @@ const DashboardView = () => {
             sendBtn: 'bg-purple-600'
         };
     } else {
-        // CYJ (預設): 使用原本的 Amber/Orange 配色
         return {
             fab: 'bg-amber-500 hover:bg-amber-600 shadow-amber-100',
             ping: 'bg-orange-400',
-            header: 'bg-amber-500 text-amber-950', // Amber 亮色做 Header
+            header: 'bg-amber-500 text-amber-950', 
             headerIcon: 'text-amber-800',
-            userMsg: 'bg-amber-500 text-amber-950', // 使用者訊息也用 Amber
+            userMsg: 'bg-amber-500 text-amber-950', 
             sendBtn: 'bg-amber-600'
         };
     }
@@ -525,36 +535,29 @@ const DashboardView = () => {
       return;
     }
 
-    const currentKey = geminiApiKey.trim(); // 確保不會有複製到的多餘空白
+    const currentKey = geminiApiKey.trim(); 
     const newMsg = { role: "user", text: aiInput };
     
-    // 預先更新畫面上的使用者對話
     setAiMessages(prev => [...prev, newMsg]);
     setAiInput("");
     setIsAILoading(true);
 
     try {
-      // 1. 萃取「深度」背景情境數據
       const { grandTotal, totalAchievement, daysPassed, daysInMonth, avgTrafficASP, avgNewCustomerASP, newCountMix, oldCountMix } = dashboardStats;
       const timeProgress = daysInMonth > 0 ? (daysPassed / daysInMonth) * 100 : 0;
       
-      // 把「所有店家」的詳細狀況打包
       const detailedStores = myStoreRankings.length > 0 
         ? myStoreRankings.map(s => `- ${s.storeName}: 業績 ${fmtNum(s.actual)} (目標 ${fmtNum(s.target)}, 達成率 ${s.rate.toFixed(1)}%)`).join("\n      ")
         : "本區/本店目前尚無業績排名資料。";
 
-      // 把「所有人員」的深度 KPI 打包（包含締結率、客單價、所屬店家）
       const detailedTherapists = therapistStats.rankings.length > 0
         ? therapistStats.rankings.map(t => `- ${t.name}(${t.storeDisplay}): 業績 ${fmtNum(t.totalRevenue)}, 新客締結率 ${t.newClosingRate.toFixed(0)}%, 新客均單 ${fmtNum(Math.round(t.newAsp))}, 舊客均單 ${fmtNum(Math.round(t.oldAsp))}`).join("\n      ")
         : "本月尚無人員績效資料。";
 
-      // 把「每日走勢」打包，讓 AI 能看出哪天業績掉下來
       const dailyTrend = dashboardStats.dailyTotals.map(d => `${d.date}(業績${fmtNum(d.cash)},客流${d.traffic})`).join("、");
 
-      // 取得名字 (用於 Prompt 背景)
       const userNameForPrompt = currentUser?.name || '主管';
 
-      // ★ 給予 AI 高階分析師的 System Prompt (賦予它批判性思考)
       const systemPrompt = `
       你現在是 DRCYJ 醫美集團的高階數據分析師，正在向「${userNameForPrompt}」進行營運匯報。
       請根據以下【本月所有深度數據】回答使用者的問題。
@@ -585,9 +588,8 @@ const DashboardView = () => {
       2. 任何店或人的達成率如果低於目前的時間進度 (${timeProgress.toFixed(1)}%)，就代表進度落後，必須點名並提醒。
       `;
 
-      // 2. 組合歷史對話紀錄 (嚴格遵守 user -> model 交替格式)
       const apiContents = [];
-      aiMessages.slice(1).forEach(msg => { // 略過第一句預設招呼語
+      aiMessages.slice(1).forEach(msg => { 
         apiContents.push({
           role: msg.role === "user" ? "user" : "model",
           parts: [{ text: msg.text }]
@@ -595,24 +597,21 @@ const DashboardView = () => {
       });
       apiContents.push({ role: "user", parts: [{ text: newMsg.text }] });
 
-      // 3. 發送請求給 Gemini (使用 gemini-2.5-flash)
       const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${currentKey}`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          systemInstruction: { parts: [{ text: systemPrompt }] }, // System 指令
+          systemInstruction: { parts: [{ text: systemPrompt }] }, 
           contents: apiContents
         })
       });
 
-      // ★ 深度錯誤捕捉：如果連線不成功，印出真正的錯誤原因
       if (!response.ok) {
         const errorData = await response.json().catch(() => ({}));
         const specificError = errorData?.error?.message || `HTTP 狀態碼: ${response.status}`;
         throw new Error(specificError);
       }
 
-      // 4. 解析成功回傳的結果
       const data = await response.json();
       const aiReply = data.candidates[0].content.parts[0].text;
       
@@ -620,8 +619,6 @@ const DashboardView = () => {
 
     } catch (error) {
       console.error("Gemini API Error Detail:", error);
-      
-      // 在對話框中印出具體的錯誤原因，方便除錯
       setAiMessages(prev => [...prev, { 
         role: "model", 
         text: `❌ 抱歉，Google 伺服器拒絕了請求。\n\n【錯誤代碼】\n${error.message}\n\n💡 常見解決方式：\n1. API Key 不正確，請點擊右上角 🔑 重新貼上。\n2. 若您剛申請 Key，Google 可能需要幾分鐘時間開通。\n3. 您發問的問題過長超出了限制。`
@@ -1042,7 +1039,6 @@ const DashboardView = () => {
       
       {(userRole === 'director' || userRole === 'manager' || userRole === 'trainer') && (
         <>
-          {/* 右下角圓形啟動按鈕 (使用動態配色) */}
           {!isAIChatOpen && (
             <button 
               onClick={() => setIsAIChatOpen(true)}
@@ -1056,27 +1052,27 @@ const DashboardView = () => {
             </button>
           )}
 
-          {/* 聊天視窗本體 (配色更新) */}
           {isAIChatOpen && (
             <div className="fixed bottom-6 right-4 sm:right-6 w-[calc(100vw-2rem)] sm:w-96 bg-white rounded-3xl shadow-[0_10px_40px_-10px_rgba(0,0,0,0.2)] border border-stone-200 z-50 flex flex-col overflow-hidden animate-in slide-in-from-bottom-10 fade-in duration-300" style={{ height: 'min(600px, 80vh)' }}>
               
-              {/* Header (使用動態配色) */}
               <div className={`${aiTheme.header} p-4 flex items-center justify-between shrink-0 shadow-sm`}>
                 <div className="flex items-center gap-2">
                   <Bot size={20} className={aiTheme.headerIcon} />
                   <h3 className="font-bold text-sm">DRCYJ 營運分析師</h3>
                 </div>
                 <div className="flex items-center gap-1">
-                  <button onClick={() => setShowAIConfig(!showAIConfig)} className="p-1.5 hover:bg-black/10 rounded-lg transition-colors" title="設定 API Key">
-                    <Key size={16} />
-                  </button>
+                  {/* ★ 若尚未設定全域 Key，才顯示鑰匙按鈕，避免其他人誤按 */}
+                  {(!SYSTEM_GEMINI_KEY || SYSTEM_GEMINI_KEY.length < 10) && (
+                    <button onClick={() => setShowAIConfig(!showAIConfig)} className="p-1.5 hover:bg-black/10 rounded-lg transition-colors" title="設定 API Key">
+                      <Key size={16} />
+                    </button>
+                  )}
                   <button onClick={() => setIsAIChatOpen(false)} className="p-1.5 hover:bg-black/10 rounded-lg transition-colors">
                     <X size={20} />
                   </button>
                 </div>
               </div>
 
-              {/* API Key 設定面板 */}
               {showAIConfig && (
                 <div className="p-4 bg-amber-50 border-b border-amber-100 shrink-0">
                   <p className="text-xs text-amber-700 font-bold mb-2">設定 Google Gemini API Key</p>
@@ -1094,7 +1090,6 @@ const DashboardView = () => {
                 </div>
               )}
 
-              {/* 訊息對話區 */}
               <div className="flex-1 overflow-y-auto p-4 space-y-4 bg-stone-50/50">
                 {aiMessages.map((msg, index) => (
                   <div key={index} className={`flex w-full ${msg.role === "user" ? "justify-end" : "justify-start"}`}>
@@ -1117,7 +1112,6 @@ const DashboardView = () => {
                 <div ref={messagesEndRef} />
               </div>
 
-              {/* 輸入區 */}
               <div className="p-3 bg-white border-t border-stone-100 shrink-0">
                 <div className="relative flex items-center">
                   <input 
@@ -1141,7 +1135,8 @@ const DashboardView = () => {
                     <Send size={16} />
                   </button>
                 </div>
-                {!geminiApiKey && (
+                {/* 若無金鑰才會提示 */}
+                {!geminiApiKey && (!SYSTEM_GEMINI_KEY || SYSTEM_GEMINI_KEY.length < 10) && (
                   <p className="text-[10px] text-rose-500 text-center mt-2 font-bold cursor-pointer" onClick={() => setShowAIConfig(true)}>
                     ⚠️ 尚未設定 Gemini API Key，點此設定
                   </p>
