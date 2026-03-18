@@ -18,7 +18,7 @@ import { AppContext } from "../AppContext";
 // 請將您申請到的 Key 貼在下方的引號中，例如: "AIzaSyxxxxxxxxx"
 // 只要在這裡填入，所有區長與高管登入後就會自動共用這把鑰匙，不需再手動設定！
 // ==========================================
-const SYSTEM_GEMINI_KEY = "AIzaSyDlSKy0ktpTJFxa2mZL2RU6fbBtB1dBNus"; 
+const SYSTEM_GEMINI_KEY = import.meta.env.VITE_GEMINI_KEY || "";
 
 const DashboardView = () => {
   const { 
