@@ -155,6 +155,8 @@ const DashboardView = () => {
       }))
     };
 
+    let maxDataDay = 0; // ★ 智慧判斷：記錄目前有實質業績的最晚日期
+
     allReports.forEach(report => {
       const rDate = new Date(report.date);
       if (rDate.getFullYear() !== y || (rDate.getMonth() + 1) !== m) return;
@@ -170,6 +172,14 @@ const DashboardView = () => {
       let accrual = Number(report.accrual) || 0;
       if (brandPrefix === '安妞') {
          accrual = operationalAccrual; 
+      }
+
+      // ★ 如果這天有實質業績或客數，就將它視為有效回報日
+      const actualDay = rDate.getDate();
+      if (cash !== 0 || traffic !== 0 || accrual !== 0 || operationalAccrual !== 0 || skincareSales !== 0) {
+         if (actualDay > maxDataDay) {
+             maxDataDay = actualDay;
+         }
       }
 
       stats.cash += cash;
@@ -188,6 +198,18 @@ const DashboardView = () => {
         stats.dailyData[dayIndex].traffic += traffic;
       }
     });
+
+    // ★★★ 智慧動態天數修正 ★★★
+    // 如果是當月，且「有人已經提早填了今天的業績(maxDataDay)」，則將分母擴張到今天
+    if (isCurrentMonth) {
+        if (maxDataDay > daysPassed) {
+            daysPassed = maxDataDay;
+        }
+        // 防呆：推估天數絕對不能超過「真正的今天」
+        if (daysPassed > now.getDate()) {
+            daysPassed = now.getDate();
+        }
+    }
 
     effectiveStores.forEach(storeName => {
         const fullName = `${brandPrefix}${storeName}店`;
@@ -652,7 +674,6 @@ const DashboardView = () => {
                   <p className="text-emerald-600/70 text-xs font-bold uppercase tracking-wider mb-2 flex items-center gap-1"><Target size={14} /> 月底現金推估</p>
                   <h3 className="text-3xl xl:text-4xl font-extrabold text-stone-700 font-mono mb-4">{fmtMoney(storeGrandTotal.projection)}</h3>
                   
-                  {/* ★★★ 雙軌預估達成區塊 ★★★ */}
                   <div className="flex flex-col gap-2 items-start">
                     <div className="inline-flex items-center gap-2 px-3 py-1.5 bg-emerald-50 text-emerald-700 rounded-lg text-xs font-bold border border-emerald-100">
                       <span>{storeGrandTotal.hasChallengeCash ? '預算預估達成' : '預估達成'}</span>

@@ -6,9 +6,6 @@ import {
 } from "lucide-react";
 import { ROLES, BRANDS } from "../constants/index"; 
 
-// ★★★ 系統最高授權碼 (Master Key) ★★★
-const MASTER_ADMIN_KEY = "BOSS888"; 
-
 const LoginView = ({
   onLogin,
   storeAccounts,
@@ -20,7 +17,8 @@ const LoginView = ({
   trainerAuth,
   handleUpdateTrainerAuth,
   directorAuth,             
-  handleUpdateDirectorAuth, 
+  handleUpdateDirectorAuth,
+  masterAuth, // ★ 接收從資料庫撈來的 Master Key
   currentBrandId,
   onSwitchBrand,
   therapists = [],
@@ -35,7 +33,6 @@ const LoginView = ({
   const [isLoading, setIsLoading] = useState(false);
   const [isResetting, setIsResetting] = useState(false);
   
-  // 帳號管理專用狀態
   const [oldPassword, setOldPassword] = useState("");
   const [newPassword, setNewPassword] = useState("");
   const [directorManageMode, setDirectorManageMode] = useState("edit-pass"); 
@@ -78,7 +75,6 @@ const LoginView = ({
     return therapists.filter(t => t.store === tStore);
   }, [tStore, therapists]);
 
-  // 高階主管職級權重排序演算法
   const sortedDirectorNames = useMemo(() => {
     const getTitleWeight = (name) => {
       if (name.includes("總經理")) return 1;
@@ -96,13 +92,17 @@ const LoginView = ({
     });
   }, [directorAuth]);
 
+  // ★ 取得雲端動態的 Master Key，如果沒有就用預設值 BOSS888
+  const currentMasterKey = masterAuth?.password || "BOSS888";
+
   const handleAuth = async () => {
     setError(""); setIsLoading(true); await new Promise((r) => setTimeout(r, 600));
     try {
       if (role === "director") {
         if (!selectedUser) { setError("請選擇高管帳號"); setIsLoading(false); return; }
         const correctPass = directorAuth[selectedUser] || "0000";
-        if (password === correctPass || password === MASTER_ADMIN_KEY) {
+        // ★ 登入時一樣支援 Master Key 當作無敵鑰匙
+        if (password === correctPass || password === currentMasterKey) {
            onLogin("director", { name: selectedUser }); 
         } else {
            setError("密碼錯誤");
@@ -135,9 +135,8 @@ const LoginView = ({
     setError("");
     setIsLoading(true);
     
-    // ★★★ 重新建構：先依照動作模式進行「絕對防禦」攔截 ★★★
     if (role === "director") {
-       const isMaster = (oldPassword === MASTER_ADMIN_KEY);
+       const isMaster = (oldPassword === currentMasterKey);
        let success = false;
 
        if (directorManageMode === 'add') {
@@ -161,7 +160,6 @@ const LoginView = ({
            success = await handleUpdateDirectorAuth('delete', selectedUser, null);
        
        } else if (directorManageMode === 'edit-pass') {
-           // 改密碼：本人 或 Master Key 都可以
            let isSelf = false;
            if (selectedUser && directorAuth[selectedUser] === oldPassword) {
                isSelf = true;
@@ -317,7 +315,6 @@ const LoginView = ({
                         <button onClick={() => {setDirectorManageMode('delete'); setError("");}} className={`flex-1 py-1.5 text-xs font-bold rounded-md ${directorManageMode === 'delete' ? 'bg-white shadow-sm text-rose-600' : 'text-stone-400 hover:text-rose-500'}`}>刪除</button>
                       </div>
                       
-                      {/* UI 提示 */}
                       {directorManageMode !== 'edit-pass' && (
                         <p className="text-[11px] text-rose-500 mb-2 px-1 font-medium">* 此操作僅限最高管理員 (Master Key) 執行</p>
                       )}

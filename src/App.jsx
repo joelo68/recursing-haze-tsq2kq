@@ -56,7 +56,7 @@ const BRANDS = [
   },
   { 
     id: 'anniu', 
-    label: 'Anew (安妞)', 
+    label: '安妞', 
     icon: Heart,  
     pathType: 'new', 
     color: 'rose', 
@@ -66,7 +66,7 @@ const BRANDS = [
   },
   { 
     id: 'yibo', 
-    label: 'Yibo (伊啵)', 
+    label: '伊啵', 
     icon: Music, 
     pathType: 'new',
     color: 'sky',
@@ -127,6 +127,8 @@ export default function App() {
   
   const [directorAuth, setDirectorAuth] = useState({});
   const [trainerAuth, setTrainerAuth] = useState({ password: "0000" });
+  // ★ 新增：最高授權碼狀態 (Master Key)
+  const [masterAuth, setMasterAuth] = useState({ password: "BOSS888" });
 
   const [therapistReports, setTherapistReports] = useState([]); 
   const [therapistSchedules, setTherapistSchedules] = useState({}); 
@@ -272,8 +274,20 @@ export default function App() {
       }
     );
 
+    // ★ 新增：監聽最高授權碼 (Master Key)
+    const unsubMasterAuth = onSnapshot(
+      getDocPath("master_auth"), 
+      (s) => { 
+        if (s.exists() && s.data().password) {
+          setMasterAuth(s.data());
+        } else {
+          setMasterAuth({ password: "BOSS888" }); // 預設防呆值
+        }
+      }
+    );
+
     return () => {
-      unsubReports(); unsubBudgets(); unsubTargets(); unsubOrg(); unsubAccounts(); unsubManagerAuth(); unsubPermissions(); unsubTherapists(); unsubTherapistReports(); unsubTherapistSchedules(); unsubTherapistTargets(); unsubTrainerAuth(); unsubAuditExclusions(); unsubDirectorAuth();
+      unsubReports(); unsubBudgets(); unsubTargets(); unsubOrg(); unsubAccounts(); unsubManagerAuth(); unsubPermissions(); unsubTherapists(); unsubTherapistReports(); unsubTherapistSchedules(); unsubTherapistTargets(); unsubTrainerAuth(); unsubAuditExclusions(); unsubDirectorAuth(); unsubMasterAuth();
     };
   }, [user, currentBrand, getCollectionPath, getDocPath]);
 
@@ -295,14 +309,12 @@ export default function App() {
   const handleUpdateTherapistPassword = async (id, newPass) => { try { await updateDoc(doc(getCollectionPath("therapists"), id), { password: newPass }); return true; } catch (e) { console.error(e); return false; } };
   const handleUpdateTrainerAuth = async (newPass) => { try { await setDoc(getDocPath("trainer_auth"), { password: newPass }); return true; } catch (e) { console.error(e); return false; } };
   
-  // ★★★ 升級支援刪除、新增、修改密碼、以及【修改名稱】 ★★★
   const handleUpdateDirectorAuth = async (action, name, newPass, newName = null) => { 
     try { 
       const docRef = getDocPath("director_auth");
       if (action === 'delete') {
          await updateDoc(docRef, { [name]: deleteField() });
       } else if (action === 'rename') {
-         // 為了安全起見，先合併寫入新名稱與舊密碼，再把舊名稱欄位刪除
          await setDoc(docRef, { [newName]: newPass }, { merge: true });
          await updateDoc(docRef, { [name]: deleteField() });
       } else {
@@ -433,6 +445,7 @@ export default function App() {
       handleUpdateTrainerAuth={handleUpdateTrainerAuth}
       directorAuth={directorAuth} 
       handleUpdateDirectorAuth={handleUpdateDirectorAuth} 
+      masterAuth={masterAuth} // ★ 傳入動態的 Master Key
       currentBrandId={currentBrandId}
       onSwitchBrand={handleSwitchBrand}
       hasSelectedBrand={hasSelectedBrand}
