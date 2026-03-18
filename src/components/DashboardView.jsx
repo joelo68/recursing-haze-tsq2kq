@@ -1,7 +1,14 @@
 // src/components/DashboardView.jsx
-import React, { useContext, useMemo, useState, useEffect } from "react";
+import React, { useContext, useMemo, useState, useEffect, useRef } from "react";
 import { XAxis, YAxis, CartesianGrid, Tooltip as RechartsTooltip, ResponsiveContainer, Line, ComposedChart, Area } from "recharts";
-import { TrendingUp, DollarSign, Target, Users, Award, Loader2, CheckSquare, Activity, Sparkles, ShoppingBag, CreditCard, FileWarning, Trophy, Medal, AlertTriangle, Crown, Map, User, Store as StoreIcon, ArrowRight, ArrowLeft, Frown, Flame, Zap, Download, PieChart, Star } from "lucide-react";
+import { 
+  TrendingUp, DollarSign, Target, Users, Award, Loader2, CheckSquare, Activity, 
+  Sparkles, ShoppingBag, CreditCard, FileWarning, Trophy, Medal, AlertTriangle, 
+  Crown, Map as MapIcon, User, Store as StoreIcon, ArrowRight, ArrowLeft, Frown, 
+  Flame, Zap, Download, PieChart, Star, 
+  // 引入 Icon
+  MessageSquare, Bot, Send, X, Key
+} from "lucide-react";
 import { ViewWrapper, Card } from "./SharedUI";
 import { formatNumber } from "../utils/helpers";
 import { AppContext } from "../AppContext";
@@ -13,39 +20,113 @@ const DashboardView = () => {
     currentBrand 
   } = useContext(AppContext);
 
-  const [viewMode, setViewMode] = useState((userRole === 'therapist' || userRole === 'trainer') ? 'therapist' : 'store');
-  
+  const [viewMode, setViewMode] = useState((userRole === 'therapist' || userRole === 'trainer' || userRole === 'manager') ? 'therapist' : 'store');
   const [selectedDashboardManager, setSelectedDashboardManager] = useState("");
   const [selectedDashboardStore, setSelectedDashboardStore] = useState("");
 
-  useEffect(() => {
-    setSelectedDashboardManager("");
-    setSelectedDashboardStore("");
-  }, [currentBrand]);
-
+  // ==========================================
+  // ★★★ AI 助理專用狀態 (Phase 1.5) ★★★
+  // ==========================================
+  const [isAIChatOpen, setIsAIChatOpen] = useState(false);
+  const [showAIConfig, setShowAIConfig] = useState(false);
+  const [geminiApiKey, setGeminiApiKey] = useState(() => localStorage.getItem("drcyj_gemini_key") || "");
+  const [aiInput, setAiInput] = useState("");
+  const [isAILoading, setIsAILoading] = useState(false);
+  
+  // 取得品牌核心資訊（用於顏色判斷）
   const { brandInfo, brandPrefix } = useMemo(() => {
     let id = "CYJ";
     let name = "CYJ"; 
     
     if (currentBrand) {
-      if (typeof currentBrand === 'string') {
-        id = currentBrand;
-      } else if (typeof currentBrand === 'object') {
+      if (typeof currentBrand === 'string') { id = currentBrand; } 
+      else if (typeof currentBrand === 'object') {
         id = currentBrand.id || "CYJ";
         name = currentBrand.name || currentBrand.label || id;
       }
     }
 
     const normalizedId = id.toLowerCase();
-    if (normalizedId.includes("anniu") || normalizedId.includes("anew")) {
-      name = "安妞";
-    } else if (normalizedId.includes("yibo")) {
-      name = "伊啵";
-    } else {
-      name = "CYJ";
-    }
+    if (normalizedId.includes("anniu") || normalizedId.includes("anew")) { name = "安妞"; } 
+    else if (normalizedId.includes("yibo")) { name = "伊啵"; } 
+    else { name = "CYJ"; }
 
-    return { brandInfo: { id, name }, brandPrefix: name };
+    return { brandInfo: { id: normalizedId, name }, brandPrefix: name };
+  }, [currentBrand]);
+
+  // ★ 初始化 AI 對話 (加入動態問候語)
+  const [aiMessages, setAiMessages] = useState(() => {
+    // 從 currentUser 取得名字，若沒有則用角色稱呼
+    const userName = currentUser?.name || (userRole === 'director' ? '總監' : userRole === 'manager' ? '區長' : '主管');
+    return [
+      { role: "model", text: `${userName} 您好！我是 DRCYJ 專屬營運分析師 🤖\n我已經讀取了目前的【全區深度營運數據】。\n請問您想進行哪方面的深入分析呢？\n(例如：「幫我找出新客締結率最低的人」、「目前的業績達成率有跟上時間進度嗎？」)` }
+    ];
+  });
+
+  const messagesEndRef = useRef(null);
+
+  // 當使用者名字改變時，更新第一句招呼語
+  useEffect(() => {
+    const userName = currentUser?.name || (userRole === 'director' ? '總監' : userRole === 'manager' ? '區長' : '主管');
+    setAiMessages(prev => {
+        const newMsgs = [...prev];
+        if (newMsgs.length > 0 && newMsgs[0].role === 'model' && newMsgs[0].text.includes('營運分析師 🤖')) {
+            newMsgs[0].text = `${userName} 您好！我是 DRCYJ 專屬營運分析師 🤖\n我已經讀取了目前的【全區深度營運數據】。\n請問您想進行哪方面的深入分析呢？\n(例如：「幫我找出新客締結率最低的人」、「目前的業績達成率有跟上時間進度嗎？」)`;
+        }
+        return newMsgs;
+    });
+  }, [currentUser, userRole]);
+
+  // ★★★ 設計 AI 聊天視窗的品牌配色 (去除沉重黑色) ★★★
+  const aiTheme = useMemo(() => {
+    const brandId = brandInfo.id;
+    if (brandId.includes('anniu') || brandId.includes('anew')) {
+        // 安妞: 使用 Teal/Teal 配色
+        return {
+            fab: 'bg-teal-500 hover:bg-teal-600 shadow-teal-100',
+            ping: 'bg-teal-400',
+            header: 'bg-teal-600 text-white',
+            headerIcon: 'text-teal-100',
+            userMsg: 'bg-teal-500 text-white',
+            sendBtn: 'bg-teal-600'
+        };
+    } else if (brandId.includes('yibo')) {
+        // 伊啵: 使用 Purple/Indigo 配色
+        return {
+            fab: 'bg-purple-500 hover:bg-purple-600 shadow-purple-100',
+            ping: 'bg-purple-400',
+            header: 'bg-purple-600 text-white',
+            headerIcon: 'text-purple-100',
+            userMsg: 'bg-purple-500 text-white',
+            sendBtn: 'bg-purple-600'
+        };
+    } else {
+        // CYJ (預設): 使用原本的 Amber/Orange 配色
+        return {
+            fab: 'bg-amber-500 hover:bg-amber-600 shadow-amber-100',
+            ping: 'bg-orange-400',
+            header: 'bg-amber-500 text-amber-950', // Amber 亮色做 Header
+            headerIcon: 'text-amber-800',
+            userMsg: 'bg-amber-500 text-amber-950', // 使用者訊息也用 Amber
+            sendBtn: 'bg-amber-600'
+        };
+    }
+  }, [brandInfo]);
+
+  const scrollToBottom = () => {
+    messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
+  };
+  useEffect(() => { scrollToBottom(); }, [aiMessages, isAIChatOpen]);
+
+  const handleSaveApiKey = () => {
+    localStorage.setItem("drcyj_gemini_key", geminiApiKey.trim());
+    setShowAIConfig(false);
+    alert("Gemini API Key 已儲存！您可以開始對話了。");
+  };
+
+  useEffect(() => {
+    setSelectedDashboardManager("");
+    setSelectedDashboardStore("");
   }, [currentBrand]);
 
   const cleanName = useMemo(() => (name) => {
@@ -155,7 +236,7 @@ const DashboardView = () => {
       }))
     };
 
-    let maxDataDay = 0; // ★ 智慧判斷：記錄目前有實質業績的最晚日期
+    let maxDataDay = 0; 
 
     allReports.forEach(report => {
       const rDate = new Date(report.date);
@@ -174,7 +255,6 @@ const DashboardView = () => {
          accrual = operationalAccrual; 
       }
 
-      // ★ 如果這天有實質業績或客數，就將它視為有效回報日
       const actualDay = rDate.getDate();
       if (cash !== 0 || traffic !== 0 || accrual !== 0 || operationalAccrual !== 0 || skincareSales !== 0) {
          if (actualDay > maxDataDay) {
@@ -199,13 +279,10 @@ const DashboardView = () => {
       }
     });
 
-    // ★★★ 智慧動態天數修正 ★★★
-    // 如果是當月，且「有人已經提早填了今天的業績(maxDataDay)」，則將分母擴張到今天
     if (isCurrentMonth) {
         if (maxDataDay > daysPassed) {
             daysPassed = maxDataDay;
         }
-        // 防呆：推估天數絕對不能超過「真正的今天」
         if (daysPassed > now.getDate()) {
             daysPassed = now.getDate();
         }
@@ -289,7 +366,6 @@ const DashboardView = () => {
       newCountMix,   
       oldCountMix    
     };
-
   }, [allReports, budgets, selectedYear, selectedMonth, effectiveStores, brandPrefix, cleanName]);
 
   const myStoreRankings = useMemo(() => {
@@ -437,6 +513,125 @@ const DashboardView = () => {
     return { rankings, myStats, grandTotal };
   }, [therapistReports, selectedYear, selectedMonth, effectiveStores, cleanName, userRole, currentUser]);
 
+  // ==========================================
+  // ★★★ 發送 AI 訊息的邏輯 (Phase 1.5 深度數據注入版) ★★★
+  // ==========================================
+  const handleSendToAI = async () => {
+    if (!aiInput.trim() || !geminiApiKey) {
+      if (!geminiApiKey) {
+         alert("請先點擊右上角 🔑 設定您的 Gemini API Key！");
+         setShowAIConfig(true);
+      }
+      return;
+    }
+
+    const currentKey = geminiApiKey.trim(); // 確保不會有複製到的多餘空白
+    const newMsg = { role: "user", text: aiInput };
+    
+    // 預先更新畫面上的使用者對話
+    setAiMessages(prev => [...prev, newMsg]);
+    setAiInput("");
+    setIsAILoading(true);
+
+    try {
+      // 1. 萃取「深度」背景情境數據
+      const { grandTotal, totalAchievement, daysPassed, daysInMonth, avgTrafficASP, avgNewCustomerASP, newCountMix, oldCountMix } = dashboardStats;
+      const timeProgress = daysInMonth > 0 ? (daysPassed / daysInMonth) * 100 : 0;
+      
+      // 把「所有店家」的詳細狀況打包
+      const detailedStores = myStoreRankings.length > 0 
+        ? myStoreRankings.map(s => `- ${s.storeName}: 業績 ${fmtNum(s.actual)} (目標 ${fmtNum(s.target)}, 達成率 ${s.rate.toFixed(1)}%)`).join("\n      ")
+        : "本區/本店目前尚無業績排名資料。";
+
+      // 把「所有人員」的深度 KPI 打包（包含締結率、客單價、所屬店家）
+      const detailedTherapists = therapistStats.rankings.length > 0
+        ? therapistStats.rankings.map(t => `- ${t.name}(${t.storeDisplay}): 業績 ${fmtNum(t.totalRevenue)}, 新客締結率 ${t.newClosingRate.toFixed(0)}%, 新客均單 ${fmtNum(Math.round(t.newAsp))}, 舊客均單 ${fmtNum(Math.round(t.oldAsp))}`).join("\n      ")
+        : "本月尚無人員績效資料。";
+
+      // 把「每日走勢」打包，讓 AI 能看出哪天業績掉下來
+      const dailyTrend = dashboardStats.dailyTotals.map(d => `${d.date}(業績${fmtNum(d.cash)},客流${d.traffic})`).join("、");
+
+      // 取得名字 (用於 Prompt 背景)
+      const userNameForPrompt = currentUser?.name || '主管';
+
+      // ★ 給予 AI 高階分析師的 System Prompt (賦予它批判性思考)
+      const systemPrompt = `
+      你現在是 DRCYJ 醫美集團的高階數據分析師，正在向「${userNameForPrompt}」進行營運匯報。
+      請根據以下【本月所有深度數據】回答使用者的問題。
+      你的回答不僅要給出表面數字，還要「主動比較、找出異常點、分析落後原因，並給出具體的管理或銷售建議」。
+      如果被問到跨月、跨年或系統沒有的深度數據（例如保養品庫存細節），請誠實告知「抱歉，目前畫面中沒有這項數據可以供我分析」。
+      回答請保持專業、語氣誠懇、條理分明（建議多用條列式）。
+
+      【全區核心指標總覽】
+      - 總現金業績: ${fmtNum(grandTotal.cash)} (目標: ${fmtNum(grandTotal.budget)}, 達成率: ${totalAchievement.toFixed(1)}%)
+      - 月底推估現金: ${fmtNum(grandTotal.projection)}
+      - 總保養品業績: ${fmtNum(grandTotal.skincareSales)}
+      - 總服務客流: ${fmtNum(grandTotal.traffic)} 人 (新客佔 ${newCountMix}%, 舊客佔 ${oldCountMix}%)
+      - 總新客體驗人數: ${fmtNum(grandTotal.newCustomers)} 人 (留單數: ${fmtNum(grandTotal.newCustomerClosings)})
+      - 全區平均操作客單價: ${fmtNum(avgTrafficASP)} / 新客平均客單價: ${fmtNum(avgNewCustomerASP)}
+      - 目前時間進度: ${timeProgress.toFixed(1)}% (已過 ${daysPassed} 天 / 本月 ${daysInMonth} 天)
+
+      【每日營運趨勢概況 (依日期排列)】
+      ${dailyTrend}
+
+      【各門市詳細業績與達成率清單】
+      ${detailedStores}
+
+      【全區管理師詳細績效排行榜 (包含締結率與客單價)】
+      ${detailedTherapists}
+
+      【分析師守則】
+      1. 當使用者問「誰最差」、「哪裡有問題」，請務必分析「達成率」、「新客締結率」或「客單價」。
+      2. 任何店或人的達成率如果低於目前的時間進度 (${timeProgress.toFixed(1)}%)，就代表進度落後，必須點名並提醒。
+      `;
+
+      // 2. 組合歷史對話紀錄 (嚴格遵守 user -> model 交替格式)
+      const apiContents = [];
+      aiMessages.slice(1).forEach(msg => { // 略過第一句預設招呼語
+        apiContents.push({
+          role: msg.role === "user" ? "user" : "model",
+          parts: [{ text: msg.text }]
+        });
+      });
+      apiContents.push({ role: "user", parts: [{ text: newMsg.text }] });
+
+      // 3. 發送請求給 Gemini (使用 gemini-2.5-flash)
+      const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${currentKey}`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          systemInstruction: { parts: [{ text: systemPrompt }] }, // System 指令
+          contents: apiContents
+        })
+      });
+
+      // ★ 深度錯誤捕捉：如果連線不成功，印出真正的錯誤原因
+      if (!response.ok) {
+        const errorData = await response.json().catch(() => ({}));
+        const specificError = errorData?.error?.message || `HTTP 狀態碼: ${response.status}`;
+        throw new Error(specificError);
+      }
+
+      // 4. 解析成功回傳的結果
+      const data = await response.json();
+      const aiReply = data.candidates[0].content.parts[0].text;
+      
+      setAiMessages(prev => [...prev, { role: "model", text: aiReply }]);
+
+    } catch (error) {
+      console.error("Gemini API Error Detail:", error);
+      
+      // 在對話框中印出具體的錯誤原因，方便除錯
+      setAiMessages(prev => [...prev, { 
+        role: "model", 
+        text: `❌ 抱歉，Google 伺服器拒絕了請求。\n\n【錯誤代碼】\n${error.message}\n\n💡 常見解決方式：\n1. API Key 不正確，請點擊右上角 🔑 重新貼上。\n2. 若您剛申請 Key，Google 可能需要幾分鐘時間開通。\n3. 您發問的問題過長超出了限制。`
+      }]);
+    } finally {
+      setIsAILoading(false);
+    }
+  };
+
+
   const handleExportCSV = () => {
     const dataToExport = therapistStats.rankings.filter(t => userRole !== 'therapist' || t.id === currentUser?.id);
     const headers = ["排名,姓名,所屬店家,個人總業績,新客業績,舊客業績,新舊客佔比,新客締結率,新客人數,新客留單數,新客平均業績,舊客平均業績"];
@@ -500,8 +695,9 @@ const DashboardView = () => {
 
   return (
     <ViewWrapper>
-      <div className="space-y-8 pb-10 w-full min-w-0">
+      <div className="space-y-8 pb-10 w-full min-w-0 relative">
         
+        {/* Header Section */}
         <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 mb-2 px-2 animate-in fade-in slide-in-from-left-2 duration-500">
             <div className="flex items-center gap-3 shrink-0">
                 <div className={`w-2 h-8 rounded-full ${brandInfo.id.toLowerCase().includes('anniu') ? 'bg-teal-500' : brandInfo.id.toLowerCase().includes('yibo') ? 'bg-purple-500' : 'bg-amber-500'}`}></div>
@@ -563,9 +759,10 @@ const DashboardView = () => {
           </div>
         )}
 
+        {/* --- 門市營運視圖 --- */}
         {viewMode === 'store' && (
-          <div className="space-y-8 animate-in fade-in slide-in-from-bottom-4 duration-500">
-            
+          <div className="space-y-8 animate-in fade-in slide-in-from-bottom-4 duration-500 w-full min-w-0">
+            {/* 我的店家戰情卡 (僅店經理顯示) */}
             {userRole === 'store' && myStoreRankings.length > 0 && (
               <div className="grid grid-cols-1 md:grid-cols-2 gap-6">{myStoreRankings.map((storeRank) => ( 
                 <div key={storeRank.storeName} className={`rounded-3xl p-6 text-white shadow-xl relative overflow-hidden transition-all ${storeRank.isBottom5 ? "bg-gradient-to-br from-rose-500 to-red-600 shadow-rose-200" : "bg-gradient-to-br from-amber-400 to-orange-600 shadow-amber-200"}`}>
@@ -598,7 +795,7 @@ const DashboardView = () => {
                       <div className="flex justify-between">
                          <span>目前業績: {fmtMoney(storeRank.actual)}</span>
                          <span>預算目標: {fmtMoney(storeRank.target)}</span>
-                      </div>
+                       </div>
                       {storeRank.hasChallenge && (
                          <div className="flex justify-between text-yellow-200 mt-1 pt-1 border-t border-white/10">
                            <span>挑戰目標達成率: {storeRank.challengeRate.toFixed(0)}%</span>
@@ -611,8 +808,8 @@ const DashboardView = () => {
               ))}</div>
             )}
             
+            {/* 時間進度與預估 */}
             <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-              
               <div className="lg:col-span-2 bg-white rounded-3xl p-6 md:p-8 border border-stone-100 shadow-xl shadow-stone-200/50 relative overflow-hidden group">
                 <div className="absolute top-0 right-0 w-64 h-64 bg-indigo-50 rounded-full blur-3xl -mr-16 -mt-16 pointer-events-none opacity-60"></div>
                 <div className="flex flex-col md:flex-row justify-between items-start md:items-center mb-8 relative z-10">
@@ -702,6 +899,7 @@ const DashboardView = () => {
               </div>
             </div>
             
+            {/* 財務與營運卡片 */}
             <div><h3 className="text-lg font-bold text-stone-700 mb-4 flex items-center gap-2 pl-1"><div className="w-1 h-6 bg-amber-500 rounded-full"></div>財務績效</h3>
               <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
                 <MiniKpiCard 
@@ -748,6 +946,7 @@ const DashboardView = () => {
               </div>
             </div>
             
+            {/* 營運效率與客流 */}
             <div>
                <h3 className="text-lg font-bold text-stone-700 mb-4 flex items-center gap-2 pl-1">
                  <div className="w-1 h-6 bg-cyan-500 rounded-full"></div>營運效率與客流
@@ -772,10 +971,12 @@ const DashboardView = () => {
                </div>
             </div>
             
+            {/* 走勢圖 */}
             <Card title={`${brandInfo.name} 日營運走勢`} subtitle="現金業績 vs 課程操作人數趨勢分析"><div className="h-[300px] w-full"><ResponsiveContainer width="100%" height="100%"><ComposedChart data={dailyTotals} margin={{ top: 10, right: 10, left: 0, bottom: 0 }}><CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#f5f5f4" /><XAxis dataKey="date" stroke="#a8a29e" tick={{ fontSize: 12 }} dy={10} /><YAxis yAxisId="left" stroke="#a8a29e" tick={{ fontSize: 12 }} width={60} tickFormatter={(val) => val === 0 ? "0" : `$${(val / 1000).toFixed(0)}k`} /><YAxis yAxisId="right" orientation="right" stroke="#a8a29e" tick={{ fontSize: 12 }} tickFormatter={(val) => fmtNum(val)} /><RechartsTooltip contentStyle={{ borderRadius: "16px", border: "none", padding: "12px", boxShadow: "0 4px 6px -1px rgb(0 0 0 / 0.1)", }} cursor={{ fill: "#fafaf9" }} formatter={(value, name) => { if (name === "現金業績") return [fmtMoney(value), name]; return [fmtNum(value), name]; }} /><Area yAxisId="left" type="monotone" dataKey="cash" name="現金業績" stroke="#f59e0b" fill="#f59e0b" fillOpacity={0.2} strokeWidth={3} /><Line yAxisId="right" type="monotone" dataKey="traffic" name="課程操作人數" stroke="#0ea5e9" strokeWidth={3} /></ComposedChart></ResponsiveContainer></div></Card>
 
-            {(userRole === 'manager' || userRole === 'director') && myStoreRankings.length > 0 && (
-              <div className="bg-white rounded-3xl border border-stone-200 shadow-xl overflow-hidden relative"><div className="bg-gradient-to-r from-amber-500 to-orange-600 p-6 flex justify-between items-center text-white relative overflow-hidden"><div className="absolute right-0 top-0 p-4 opacity-10"><Map size={100} /></div><div className="relative z-10 flex items-center gap-3"><div className="p-2 bg-white/20 rounded-xl backdrop-blur-md"><Crown size={24} className="text-white" /></div><div><h3 className="text-xl font-bold tracking-wide">戰情排行分析</h3><p className="text-amber-100 text-xs font-medium">Rankings & Performance</p></div></div><div className="relative z-10 text-right"><p className="text-xs text-amber-100 font-bold uppercase">目前顯示店家數</p><p className="text-2xl font-mono font-bold text-white">{myStoreRankings.length}</p></div></div><div className="p-0 sm:p-2 overflow-x-auto"><table className="w-full text-left border-collapse min-w-[350px]"><thead><tr className="text-xs font-bold text-stone-400 border-b border-stone-100"><th className="p-3 sm:p-4 w-16 sm:w-20 text-center">全區排名</th><th className="p-3 sm:p-4">門市名稱</th><th className="p-3 sm:p-4 text-right">目前業績</th><th className="p-3 sm:p-4 text-right hidden sm:table-cell">目標金額</th><th className="p-3 sm:p-4 text-right">達成率</th></tr></thead><tbody>{myStoreRankings.map((store) => (<tr key={store.storeName} className={`group transition-colors border-b last:border-0 border-stone-50 ${store.isBottom5 ? "bg-rose-50 hover:bg-rose-100" : "hover:bg-stone-50" }`}>
+            {/* 戰情排行分析 */}
+            {(userRole === 'manager' || userRole === 'director' || userRole === 'store') && myStoreRankings.length > 0 && (
+              <div className="bg-white rounded-3xl border border-stone-200 shadow-xl overflow-hidden relative"><div className="bg-gradient-to-r from-amber-500 to-orange-600 p-6 flex justify-between items-center text-white relative overflow-hidden"><div className="absolute right-0 top-0 p-4 opacity-10"><MapIcon size={100} /></div><div className="relative z-10 flex items-center gap-3"><div className="p-2 bg-white/20 rounded-xl backdrop-blur-md"><Crown size={24} className="text-white" /></div><div><h3 className="text-xl font-bold tracking-wide">戰情排行分析</h3><p className="text-amber-100 text-xs font-medium">Rankings & Performance</p></div></div><div className="relative z-10 text-right"><p className="text-xs text-amber-100 font-bold uppercase">目前顯示店家數</p><p className="text-2xl font-mono font-bold text-white">{myStoreRankings.length}</p></div></div><div className="p-0 sm:p-2 overflow-x-auto"><table className="w-full text-left border-collapse min-w-[350px]"><thead><tr className="text-xs font-bold text-stone-400 border-b border-stone-100"><th className="p-3 sm:p-4 w-16 sm:w-20 text-center">全區排名</th><th className="p-3 sm:p-4">門市名稱</th><th className="p-3 sm:p-4 text-right">目前業績</th><th className="p-3 sm:p-4 text-right hidden sm:table-cell">目標金額</th><th className="p-3 sm:p-4 text-right">達成率</th></tr></thead><tbody>{myStoreRankings.map((store) => (<tr key={store.storeName} className={`group transition-colors border-b last:border-0 border-stone-50 ${store.isBottom5 ? "bg-rose-50 hover:bg-rose-100" : "hover:bg-stone-50" }`}>
                 <td className="p-3 sm:p-4 text-center"><span className={`inline-flex items-center justify-center w-6 h-6 sm:w-8 sm:h-8 rounded-full text-xs font-bold ${store.rank === 1 ? "bg-amber-100 text-amber-700" : store.rank === 2 ? "bg-stone-200 text-stone-600" : store.rank === 3 ? "bg-orange-100 text-orange-700" : "bg-stone-50 text-stone-400"}`}>{store.rank}</span></td>
                 <td className="p-3 sm:p-4">
                   <div className="flex flex-col sm:flex-row sm:items-center gap-1 sm:gap-2">
@@ -822,7 +1023,7 @@ const DashboardView = () => {
               return ( <div className={`${bgClass} rounded-3xl p-6 text-white shadow-xl ${shadowClass} relative overflow-hidden transition-all duration-500`}> <div className="absolute top-0 right-0 p-4 opacity-10"><info.icon size={140} /></div> <div className="relative z-10 flex flex-col md:flex-row justify-between items-end gap-6"> <div> <div className="flex items-center gap-3 mb-2"><span className="bg-white/20 px-3 py-1 rounded-full text-xs font-bold backdrop-blur-sm flex items-center gap-1">{status === 'DANGER' && <Flame size={12} className="animate-pulse"/>}No.{therapistStats.myStats.rank}</span><span className="text-white/80 font-bold tracking-wider text-sm">{therapistStats.myStats.storeDisplay}</span></div><h2 className="text-3xl md:text-4xl font-extrabold mb-1">{therapistStats.myStats.name}</h2><div className="mt-2 p-3 bg-black/10 rounded-xl backdrop-blur-md border border-white/10 max-w-md"><p className="font-bold text-sm flex items-center gap-2">{status === 'DANGER' && <Frown size={16}/>}{info.title}</p><p className="text-xs text-white/70 mt-1">{info.sub}</p></div> </div> <div className="flex gap-6 text-right"> <div><p className="text-xs text-white/60 font-bold uppercase mb-1">個人總業績</p><p className="text-3xl font-mono font-bold">{fmtMoney(therapistStats.myStats.totalRevenue)}</p></div> <div><p className="text-xs text-white/60 font-bold uppercase mb-1">新客締結率</p><p className="text-3xl font-mono font-bold">{therapistStats.myStats.newClosingRate.toFixed(0)}%</p></div> </div> </div> </div> );
             })()}
             
-            {(userRole !== 'therapist') && ( <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-5 gap-4"> <MiniKpiCard title="管理師總業績" value={fmtMoney(therapistStats.grandTotal.totalRevenue)} icon={DollarSign} color="text-indigo-500" subText={`${therapistStats.grandTotal.count} 位在職人員`} /> <MiniKpiCard title="管理師新客業績" value={fmtMoney(therapistStats.grandTotal.newCustomerRevenue)} icon={Sparkles} color="text-amber-500" /> <MiniKpiCard title="管理師舊客業績" value={fmtMoney(therapistStats.grandTotal.oldCustomerRevenue)} icon={TrendingUp} color="text-cyan-500" /> <MiniKpiCard title="管理師新舊客佔比" value={`${Math.round((therapistStats.grandTotal.newCustomerRevenue / (therapistStats.grandTotal.totalRevenue || 1)) * 100)}% / ${Math.round((therapistStats.grandTotal.oldCustomerRevenue / (therapistStats.grandTotal.totalRevenue || 1)) * 100)}%`} icon={Activity} color="text-fuchsia-500" subText="新客 / 舊客" /> <MiniKpiCard title="管理師退費總額" value={fmtMoney(therapistStats.grandTotal.returnRevenue)} icon={FileWarning} color="text-rose-500" /> </div> )}
+            {(userRole !== 'therapist' || userRole === 'trainer') && ( <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-5 gap-4"> <MiniKpiCard title="管理師總業績" value={fmtMoney(therapistStats.grandTotal.totalRevenue)} icon={DollarSign} color="text-indigo-500" subText={`${therapistStats.grandTotal.count} 位在職人員`} /> <MiniKpiCard title="管理師新客業績" value={fmtMoney(therapistStats.grandTotal.newCustomerRevenue)} icon={Sparkles} color="text-amber-500" /> <MiniKpiCard title="管理師舊客業績" value={fmtMoney(therapistStats.grandTotal.oldCustomerRevenue)} icon={TrendingUp} color="text-cyan-500" /> <MiniKpiCard title="管理師新舊客佔比" value={`${Math.round((therapistStats.grandTotal.newCustomerRevenue / (therapistStats.grandTotal.totalRevenue || 1)) * 100)}% / ${Math.round((therapistStats.grandTotal.oldCustomerRevenue / (therapistStats.grandTotal.totalRevenue || 1)) * 100)}%`} icon={Activity} color="text-fuchsia-500" subText="新客 / 舊客" /> <MiniKpiCard title="管理師退費總額" value={fmtMoney(therapistStats.grandTotal.returnRevenue)} icon={FileWarning} color="text-rose-500" /> </div> )}
             
             <Card title="管理師績效排行榜" subtitle="依本月個人總業績排序 (即時更新)">
               <div className="grid grid-cols-1 w-full">
@@ -834,6 +1035,123 @@ const DashboardView = () => {
           </div>
         )}
       </div>
+
+      {/* ========================================== */}
+      {/* ★★★ AI 助理聊天懸浮視窗 (僅開放給區長、高管、教專) ★★★ */}
+      {/* ========================================== */}
+      
+      {(userRole === 'director' || userRole === 'manager' || userRole === 'trainer') && (
+        <>
+          {/* 右下角圓形啟動按鈕 (使用動態配色) */}
+          {!isAIChatOpen && (
+            <button 
+              onClick={() => setIsAIChatOpen(true)}
+              className={`fixed bottom-6 right-6 p-4 ${aiTheme.fab} text-white rounded-full shadow-2xl transition-transform hover:scale-110 flex items-center justify-center group z-50`}
+            >
+              <Bot size={28} className="group-hover:animate-bounce" />
+              <div className="absolute -top-1 -right-1 flex h-4 w-4">
+                <span className={`animate-ping absolute inline-flex h-full w-full rounded-full ${aiTheme.ping} opacity-75`}></span>
+                <span className={`relative inline-flex rounded-full h-4 w-4 ${aiTheme.ping}`}></span>
+              </div>
+            </button>
+          )}
+
+          {/* 聊天視窗本體 (配色更新) */}
+          {isAIChatOpen && (
+            <div className="fixed bottom-6 right-4 sm:right-6 w-[calc(100vw-2rem)] sm:w-96 bg-white rounded-3xl shadow-[0_10px_40px_-10px_rgba(0,0,0,0.2)] border border-stone-200 z-50 flex flex-col overflow-hidden animate-in slide-in-from-bottom-10 fade-in duration-300" style={{ height: 'min(600px, 80vh)' }}>
+              
+              {/* Header (使用動態配色) */}
+              <div className={`${aiTheme.header} p-4 flex items-center justify-between shrink-0 shadow-sm`}>
+                <div className="flex items-center gap-2">
+                  <Bot size={20} className={aiTheme.headerIcon} />
+                  <h3 className="font-bold text-sm">DRCYJ 營運分析師</h3>
+                </div>
+                <div className="flex items-center gap-1">
+                  <button onClick={() => setShowAIConfig(!showAIConfig)} className="p-1.5 hover:bg-black/10 rounded-lg transition-colors" title="設定 API Key">
+                    <Key size={16} />
+                  </button>
+                  <button onClick={() => setIsAIChatOpen(false)} className="p-1.5 hover:bg-black/10 rounded-lg transition-colors">
+                    <X size={20} />
+                  </button>
+                </div>
+              </div>
+
+              {/* API Key 設定面板 */}
+              {showAIConfig && (
+                <div className="p-4 bg-amber-50 border-b border-amber-100 shrink-0">
+                  <p className="text-xs text-amber-700 font-bold mb-2">設定 Google Gemini API Key</p>
+                  <input 
+                    type="password" 
+                    value={geminiApiKey}
+                    onChange={(e) => setGeminiApiKey(e.target.value)}
+                    placeholder="貼上您的 API Key..."
+                    className="w-full px-3 py-2 rounded-lg text-sm border border-amber-200 focus:outline-none focus:border-amber-400 mb-2"
+                  />
+                  <div className="flex justify-end gap-2">
+                    <button onClick={() => setShowAIConfig(false)} className="px-3 py-1.5 text-xs text-stone-500 hover:bg-stone-200 rounded-lg font-bold transition-colors">取消</button>
+                    <button onClick={handleSaveApiKey} className="px-3 py-1.5 text-xs bg-amber-500 text-white hover:bg-amber-600 rounded-lg font-bold transition-colors">儲存金鑰</button>
+                  </div>
+                </div>
+              )}
+
+              {/* 訊息對話區 */}
+              <div className="flex-1 overflow-y-auto p-4 space-y-4 bg-stone-50/50">
+                {aiMessages.map((msg, index) => (
+                  <div key={index} className={`flex w-full ${msg.role === "user" ? "justify-end" : "justify-start"}`}>
+                    <div className={`max-w-[85%] rounded-2xl p-3 text-sm ${
+                      msg.role === "user" 
+                        ? `${aiTheme.userMsg} rounded-tr-sm shadow-md`
+                        : "bg-white border border-stone-100 text-stone-700 shadow-sm rounded-tl-sm"
+                    }`}>
+                      <p className="whitespace-pre-wrap leading-relaxed">{msg.text}</p>
+                    </div>
+                  </div>
+                ))}
+                {isAILoading && (
+                  <div className="flex w-full justify-start">
+                    <div className="bg-white border border-stone-100 text-stone-400 shadow-sm rounded-2xl rounded-tl-sm p-3 text-sm flex items-center gap-2">
+                      <Loader2 size={16} className="animate-spin" /> 正在深度分析中...
+                    </div>
+                  </div>
+                )}
+                <div ref={messagesEndRef} />
+              </div>
+
+              {/* 輸入區 */}
+              <div className="p-3 bg-white border-t border-stone-100 shrink-0">
+                <div className="relative flex items-center">
+                  <input 
+                    type="text"
+                    value={aiInput}
+                    onChange={(e) => setAiInput(e.target.value)}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter' && !e.nativeEvent.isComposing) {
+                        handleSendToAI();
+                      }
+                    }}
+                    placeholder="問我關於營運績效的問題..."
+                    className="w-full pl-4 pr-12 py-3 bg-stone-50 border border-stone-100 focus:border-stone-200 focus:bg-white focus:ring-0 rounded-xl text-sm transition-colors outline-none text-stone-700 placeholder-stone-400"
+                    disabled={isAILoading}
+                  />
+                  <button 
+                    onClick={handleSendToAI}
+                    disabled={isAILoading || !aiInput.trim()}
+                    className={`absolute right-2 p-1.5 ${aiTheme.sendBtn} text-white rounded-lg disabled:opacity-50 disabled:bg-stone-300 transition-colors`}
+                  >
+                    <Send size={16} />
+                  </button>
+                </div>
+                {!geminiApiKey && (
+                  <p className="text-[10px] text-rose-500 text-center mt-2 font-bold cursor-pointer" onClick={() => setShowAIConfig(true)}>
+                    ⚠️ 尚未設定 Gemini API Key，點此設定
+                  </p>
+                )}
+              </div>
+            </div>
+          )}
+        </>
+      )}
+
     </ViewWrapper>
   );
 };
