@@ -1,29 +1,15 @@
 // src/components/DashboardView.jsx
-import React, { useContext, useMemo, useState, useEffect, useRef } from "react";
+import React, { useContext, useMemo, useState } from "react";
 import { XAxis, YAxis, CartesianGrid, Tooltip as RechartsTooltip, ResponsiveContainer, Line, ComposedChart, Area } from "recharts";
 import { 
   TrendingUp, DollarSign, Target, Users, Award, Loader2, CheckSquare, Activity, 
   Sparkles, ShoppingBag, CreditCard, FileWarning, Trophy, Medal, AlertTriangle, 
   Crown, Map as MapIcon, User, Store as StoreIcon, ArrowRight, ArrowLeft, Frown, 
-  Flame, Zap, Download, PieChart, Star, 
-  // 引入 Icon
-  MessageSquare, Bot, Send, X, Key
+  Flame, Zap, Download, PieChart, Star
 } from "lucide-react";
 import { ViewWrapper, Card } from "./SharedUI";
 import { formatNumber } from "../utils/helpers";
 import { AppContext } from "../AppContext";
-
-// ==========================================
-// ★★★ 系統全域 Gemini API Key (企業共用版) ★★★
-// 請將您申請到的 Key 貼在下方的引號中，例如: "AIzaSyxxxxxxxxx"
-// 只要在這裡填入，所有區長與高管登入後就會自動共用這把鑰匙，不需再手動設定！
-// ==========================================
-// ★ 最終防禦：將金鑰拆解，避開 GitHub 的自動掃描偵測
-const part1 = "AIzaSy"; // Google 偵測的關鍵頭
-const part2 = "BeIrMlZXMholt_";
-const part3 = "fjhJZPzC_iLUs-XZCdI";
-
-const SYSTEM_GEMINI_KEY = part1 + part2 + part3;
 
 const DashboardView = () => {
   const { 
@@ -36,23 +22,6 @@ const DashboardView = () => {
   const [selectedDashboardManager, setSelectedDashboardManager] = useState("");
   const [selectedDashboardStore, setSelectedDashboardStore] = useState("");
 
-  // ==========================================
-  // ★★★ AI 助理專用狀態 (Phase 1.5) ★★★
-  // ==========================================
-  const [isAIChatOpen, setIsAIChatOpen] = useState(false);
-  const [showAIConfig, setShowAIConfig] = useState(false);
-  
-  // ★ 升級：優先讀取系統全域金鑰，若無才讀取本機記憶體
-  const [geminiApiKey, setGeminiApiKey] = useState(() => {
-    if (SYSTEM_GEMINI_KEY && SYSTEM_GEMINI_KEY.length > 10) {
-        return SYSTEM_GEMINI_KEY;
-    }
-    return localStorage.getItem("drcyj_gemini_key") || "";
-  });
-
-  const [aiInput, setAiInput] = useState("");
-  const [isAILoading, setIsAILoading] = useState(false);
-  
   // 取得品牌核心資訊（用於顏色判斷）
   const { brandInfo, brandPrefix } = useMemo(() => {
     let id = "CYJ";
@@ -72,76 +41,6 @@ const DashboardView = () => {
     else { name = "CYJ"; }
 
     return { brandInfo: { id: normalizedId, name }, brandPrefix: name };
-  }, [currentBrand]);
-
-  // ★ 初始化 AI 對話 (加入動態問候語)
-  const [aiMessages, setAiMessages] = useState(() => {
-    const userName = currentUser?.name || (userRole === 'director' ? '總監' : userRole === 'manager' ? '區長' : '主管');
-    return [
-      { role: "model", text: `${userName} 您好！我是 DRCYJ 專屬營運分析師 🤖\n我已經讀取了目前的【全區深度營運數據】。\n請問您想進行哪方面的深入分析呢？\n(例如：「幫我找出新客締結率最低的人」、「目前的業績達成率有跟上時間進度嗎？」)` }
-    ];
-  });
-
-  const messagesEndRef = useRef(null);
-
-  useEffect(() => {
-    const userName = currentUser?.name || (userRole === 'director' ? '總監' : userRole === 'manager' ? '區長' : '主管');
-    setAiMessages(prev => {
-        const newMsgs = [...prev];
-        if (newMsgs.length > 0 && newMsgs[0].role === 'model' && newMsgs[0].text.includes('營運分析師 🤖')) {
-            newMsgs[0].text = `${userName} 您好！我是 DRCYJ 專屬營運分析師 🤖\n我已經讀取了目前的【全區深度營運數據】。\n請問您想進行哪方面的深入分析呢？\n(例如：「幫我找出新客締結率最低的人」、「目前的業績達成率有跟上時間進度嗎？」)`;
-        }
-        return newMsgs;
-    });
-  }, [currentUser, userRole]);
-
-  // ★★★ 設計 AI 聊天視窗的品牌配色 ★★★
-  const aiTheme = useMemo(() => {
-    const brandId = brandInfo.id;
-    if (brandId.includes('anniu') || brandId.includes('anew')) {
-        return {
-            fab: 'bg-teal-500 hover:bg-teal-600 shadow-teal-100',
-            ping: 'bg-teal-400',
-            header: 'bg-teal-600 text-white',
-            headerIcon: 'text-teal-100',
-            userMsg: 'bg-teal-500 text-white',
-            sendBtn: 'bg-teal-600'
-        };
-    } else if (brandId.includes('yibo')) {
-        return {
-            fab: 'bg-purple-500 hover:bg-purple-600 shadow-purple-100',
-            ping: 'bg-purple-400',
-            header: 'bg-purple-600 text-white',
-            headerIcon: 'text-purple-100',
-            userMsg: 'bg-purple-500 text-white',
-            sendBtn: 'bg-purple-600'
-        };
-    } else {
-        return {
-            fab: 'bg-amber-500 hover:bg-amber-600 shadow-amber-100',
-            ping: 'bg-orange-400',
-            header: 'bg-amber-500 text-amber-950', 
-            headerIcon: 'text-amber-800',
-            userMsg: 'bg-amber-500 text-amber-950', 
-            sendBtn: 'bg-amber-600'
-        };
-    }
-  }, [brandInfo]);
-
-  const scrollToBottom = () => {
-    messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
-  };
-  useEffect(() => { scrollToBottom(); }, [aiMessages, isAIChatOpen]);
-
-  const handleSaveApiKey = () => {
-    localStorage.setItem("drcyj_gemini_key", geminiApiKey.trim());
-    setShowAIConfig(false);
-    alert("Gemini API Key 已儲存！您可以開始對話了。");
-  };
-
-  useEffect(() => {
-    setSelectedDashboardManager("");
-    setSelectedDashboardStore("");
   }, [currentBrand]);
 
   const cleanName = useMemo(() => (name) => {
@@ -331,6 +230,7 @@ const DashboardView = () => {
     const challengeAccrualAchievement = stats.challengeAccrualBudget > 0 ? (stats.accrual / stats.challengeAccrualBudget) * 100 : 0;
 
     const projection = daysPassed > 0 ? Math.round((stats.cash / daysPassed) * daysInMonth) : 0;
+    const accrualProjection = daysPassed > 0 ? Math.round((stats.accrual / daysPassed) * daysInMonth) : 0;
 
     const avgTrafficASP = stats.traffic > 0 ? Math.round(stats.operationalAccrual / stats.traffic) : 0;
     const avgNewCustomerASP = stats.newCustomers > 0 ? Math.round(stats.newCustomerSales / stats.newCustomers) : 0;
@@ -365,7 +265,8 @@ const DashboardView = () => {
         challengeAccrualBudget: stats.challengeAccrualBudget, 
         hasChallengeCash: stats.hasChallengeCash,
         hasChallengeAccrual: stats.hasChallengeAccrual,
-        projection
+        projection,         
+        accrualProjection   
       },
       dailyTotals: slicedDailyTotals,
       totalAchievement: achievement,
@@ -527,112 +428,6 @@ const DashboardView = () => {
     
     return { rankings, myStats, grandTotal };
   }, [therapistReports, selectedYear, selectedMonth, effectiveStores, cleanName, userRole, currentUser]);
-
-  // ==========================================
-  // ★★★ 發送 AI 訊息的邏輯 (Phase 1.5 深度數據注入版) ★★★
-  // ==========================================
-  const handleSendToAI = async () => {
-    if (!aiInput.trim() || !geminiApiKey) {
-      if (!geminiApiKey) {
-         alert("請先點擊右上角 🔑 設定您的 Gemini API Key！");
-         setShowAIConfig(true);
-      }
-      return;
-    }
-
-    const currentKey = geminiApiKey.trim(); 
-    const newMsg = { role: "user", text: aiInput };
-    
-    setAiMessages(prev => [...prev, newMsg]);
-    setAiInput("");
-    setIsAILoading(true);
-
-    try {
-      const { grandTotal, totalAchievement, daysPassed, daysInMonth, avgTrafficASP, avgNewCustomerASP, newCountMix, oldCountMix } = dashboardStats;
-      const timeProgress = daysInMonth > 0 ? (daysPassed / daysInMonth) * 100 : 0;
-      
-      const detailedStores = myStoreRankings.length > 0 
-        ? myStoreRankings.map(s => `- ${s.storeName}: 業績 ${fmtNum(s.actual)} (目標 ${fmtNum(s.target)}, 達成率 ${s.rate.toFixed(1)}%)`).join("\n      ")
-        : "本區/本店目前尚無業績排名資料。";
-
-      const detailedTherapists = therapistStats.rankings.length > 0
-        ? therapistStats.rankings.map(t => `- ${t.name}(${t.storeDisplay}): 業績 ${fmtNum(t.totalRevenue)}, 新客締結率 ${t.newClosingRate.toFixed(0)}%, 新客均單 ${fmtNum(Math.round(t.newAsp))}, 舊客均單 ${fmtNum(Math.round(t.oldAsp))}`).join("\n      ")
-        : "本月尚無人員績效資料。";
-
-      const dailyTrend = dashboardStats.dailyTotals.map(d => `${d.date}(業績${fmtNum(d.cash)},客流${d.traffic})`).join("、");
-
-      const userNameForPrompt = currentUser?.name || '主管';
-
-      const systemPrompt = `
-      你現在是 DRCYJ 醫美集團的高階數據分析師，正在向「${userNameForPrompt}」進行營運匯報。
-      請根據以下【本月所有深度數據】回答使用者的問題。
-      你的回答不僅要給出表面數字，還要「主動比較、找出異常點、分析落後原因，並給出具體的管理或銷售建議」。
-      如果被問到跨月、跨年或系統沒有的深度數據（例如保養品庫存細節），請誠實告知「抱歉，目前畫面中沒有這項數據可以供我分析」。
-      回答請保持專業、語氣誠懇、條理分明（建議多用條列式）。
-
-      【全區核心指標總覽】
-      - 總現金業績: ${fmtNum(grandTotal.cash)} (目標: ${fmtNum(grandTotal.budget)}, 達成率: ${totalAchievement.toFixed(1)}%)
-      - 月底推估現金: ${fmtNum(grandTotal.projection)}
-      - 總保養品業績: ${fmtNum(grandTotal.skincareSales)}
-      - 總服務客流: ${fmtNum(grandTotal.traffic)} 人 (新客佔 ${newCountMix}%, 舊客佔 ${oldCountMix}%)
-      - 總新客體驗人數: ${fmtNum(grandTotal.newCustomers)} 人 (留單數: ${fmtNum(grandTotal.newCustomerClosings)})
-      - 全區平均操作客單價: ${fmtNum(avgTrafficASP)} / 新客平均客單價: ${fmtNum(avgNewCustomerASP)}
-      - 目前時間進度: ${timeProgress.toFixed(1)}% (已過 ${daysPassed} 天 / 本月 ${daysInMonth} 天)
-
-      【每日營運趨勢概況 (依日期排列)】
-      ${dailyTrend}
-
-      【各門市詳細業績與達成率清單】
-      ${detailedStores}
-
-      【全區管理師詳細績效排行榜 (包含締結率與客單價)】
-      ${detailedTherapists}
-
-      【分析師守則】
-      1. 當使用者問「誰最差」、「哪裡有問題」，請務必分析「達成率」、「新客締結率」或「客單價」。
-      2. 任何店或人的達成率如果低於目前的時間進度 (${timeProgress.toFixed(1)}%)，就代表進度落後，必須點名並提醒。
-      `;
-
-      const apiContents = [];
-      aiMessages.slice(1).forEach(msg => { 
-        apiContents.push({
-          role: msg.role === "user" ? "user" : "model",
-          parts: [{ text: msg.text }]
-        });
-      });
-      apiContents.push({ role: "user", parts: [{ text: newMsg.text }] });
-
-      const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${currentKey}`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          systemInstruction: { parts: [{ text: systemPrompt }] }, 
-          contents: apiContents
-        })
-      });
-
-      if (!response.ok) {
-        const errorData = await response.json().catch(() => ({}));
-        const specificError = errorData?.error?.message || `HTTP 狀態碼: ${response.status}`;
-        throw new Error(specificError);
-      }
-
-      const data = await response.json();
-      const aiReply = data.candidates[0].content.parts[0].text;
-      
-      setAiMessages(prev => [...prev, { role: "model", text: aiReply }]);
-
-    } catch (error) {
-      console.error("Gemini API Error Detail:", error);
-      setAiMessages(prev => [...prev, { 
-        role: "model", 
-        text: `❌ 抱歉，Google 伺服器拒絕了請求。\n\n【錯誤代碼】\n${error.message}\n\n💡 常見解決方式：\n1. API Key 不正確，請點擊右上角 🔑 重新貼上。\n2. 若您剛申請 Key，Google 可能需要幾分鐘時間開通。\n3. 您發問的問題過長超出了限制。`
-      }]);
-    } finally {
-      setIsAILoading(false);
-    }
-  };
-
 
   const handleExportCSV = () => {
     const dataToExport = therapistStats.rankings.filter(t => userRole !== 'therapist' || t.id === currentUser?.id);
@@ -810,11 +605,15 @@ const DashboardView = () => {
               ))}</div>
             )}
             
-            {/* 時間進度與預估 */}
+            {/* 營運節奏監控 與 全新月底推估 */}
             <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-              <div className="lg:col-span-2 bg-white rounded-3xl p-6 md:p-8 border border-stone-100 shadow-xl shadow-stone-200/50 relative overflow-hidden group">
+              
+              {/* ★★★ 優化排版：營運節奏監控 (Flex滿版) ★★★ */}
+              <div className="lg:col-span-2 bg-white rounded-3xl p-6 md:p-8 border border-stone-100 shadow-xl shadow-stone-200/50 relative overflow-hidden group flex flex-col h-full">
                 <div className="absolute top-0 right-0 w-64 h-64 bg-indigo-50 rounded-full blur-3xl -mr-16 -mt-16 pointer-events-none opacity-60"></div>
-                <div className="flex flex-col md:flex-row justify-between items-start md:items-center mb-8 relative z-10">
+                
+                {/* 標題區塊 */}
+                <div className="flex flex-col md:flex-row justify-between items-start md:items-center mb-6 md:mb-8 relative z-10 shrink-0">
                   <div>
                     <div className="flex items-center gap-2 mb-2">
                       <div className="p-1.5 bg-indigo-50 rounded-lg"><Activity size={16} className="text-indigo-500" /></div>
@@ -828,74 +627,144 @@ const DashboardView = () => {
                   </div>
                 </div>
                 
-                <div className="space-y-6 relative z-10">
-                  <div className="space-y-2">
-                    <div className="flex justify-between text-sm font-bold">
-                      <span className="text-stone-500">實際達成率 (預算)</span>
-                      <span className={totalAchievement >= timeProgress ? "text-emerald-500" : "text-rose-500"}>{totalAchievement.toFixed(0)}%</span>
-                    </div>
-                    <div className="w-full bg-stone-100 h-3 rounded-full overflow-hidden shadow-inner">
-                      <div className={`h-full rounded-full transition-all duration-1000 ${totalAchievement >= 100 ? "bg-gradient-to-r from-emerald-400 to-teal-400" : totalAchievement >= timeProgress ? "bg-emerald-400" : "bg-rose-400"}`} style={{ width: `${Math.min(totalAchievement, 100)}%` }} />
-                    </div>
-                  </div>
+                {/* 內容區塊 (Flex動態填滿空間) */}
+                <div className="flex-1 flex flex-col relative z-10">
                   
-                  {storeGrandTotal.hasChallengeCash && (
-                     <div className="space-y-2 pt-2">
-                       <div className="flex justify-between text-sm font-bold">
-                         <span className="text-amber-600 flex items-center gap-1"><Star size={14} className="fill-amber-500"/> 挑戰目標達成率 (加碼)</span>
-                         <span className={dashboardStats.challengeAchievement >= 100 ? "text-amber-500 drop-shadow-sm" : "text-amber-600/70"}>
-                           {dashboardStats.challengeAchievement.toFixed(0)}%
-                         </span>
+                  {/* 中間：達成率進度條 (置中顯示) */}
+                  <div className="flex-1 flex flex-col justify-center gap-8 pb-8">
+                    <div className="space-y-3">
+                      <div className="flex justify-between text-sm md:text-base font-bold">
+                        <span className="text-stone-500">實際達成率 (預算)</span>
+                        <span className={totalAchievement >= timeProgress ? "text-emerald-500" : "text-rose-500"}>{totalAchievement.toFixed(0)}%</span>
+                      </div>
+                      <div className="w-full bg-stone-100 h-3.5 md:h-4 rounded-full overflow-hidden shadow-inner">
+                        <div className={`h-full rounded-full transition-all duration-1000 ${totalAchievement >= 100 ? "bg-gradient-to-r from-emerald-400 to-teal-400" : totalAchievement >= timeProgress ? "bg-emerald-400" : "bg-rose-400"}`} style={{ width: `${Math.min(totalAchievement, 100)}%` }} />
+                      </div>
+                    </div>
+                    
+                    {storeGrandTotal.hasChallengeCash && (
+                       <div className="space-y-3">
+                         <div className="flex justify-between text-sm md:text-base font-bold">
+                           <span className="text-amber-600 flex items-center gap-1"><Star size={14} className="fill-amber-500"/> 挑戰目標達成率 (加碼)</span>
+                           <span className={dashboardStats.challengeAchievement >= 100 ? "text-amber-500 drop-shadow-sm" : "text-amber-600/70"}>
+                             {dashboardStats.challengeAchievement.toFixed(0)}%
+                           </span>
+                         </div>
+                         <div className="w-full bg-amber-50 h-3 md:h-3.5 rounded-full overflow-hidden border border-amber-100">
+                           <div 
+                             className={`h-full rounded-full transition-all duration-1000 ${dashboardStats.challengeAchievement >= 100 ? "bg-gradient-to-r from-amber-400 to-yellow-400 shadow-[0_0_10px_rgba(251,191,36,0.8)]" : "bg-amber-300"}`} 
+                             style={{ width: `${Math.min(dashboardStats.challengeAchievement, 100)}%` }} 
+                           />
+                         </div>
                        </div>
-                       <div className="w-full bg-amber-50 h-2.5 rounded-full overflow-hidden border border-amber-100">
-                         <div 
-                           className={`h-full rounded-full transition-all duration-1000 ${dashboardStats.challengeAchievement >= 100 ? "bg-gradient-to-r from-amber-400 to-yellow-400 shadow-[0_0_10px_rgba(251,191,36,0.8)]" : "bg-amber-300"}`} 
-                           style={{ width: `${Math.min(dashboardStats.challengeAchievement, 100)}%` }} 
-                         />
-                       </div>
-                     </div>
-                  )}
+                    )}
+                  </div>
 
-                  <div className="space-y-2 border-t border-stone-50 pt-2">
-                    <div className="flex justify-between text-xs font-medium">
+                  {/* 底部：時間進度 (貼齊底部 mt-auto) */}
+                  <div className="space-y-2 pt-4 md:pt-5 border-t border-stone-100 mt-auto shrink-0">
+                    <div className="flex justify-between text-xs md:text-sm font-medium">
                       <span className="text-stone-400">時間進度 (應達)</span>
                       <span className="text-stone-400">{timeProgress.toFixed(0)}%</span>
                     </div>
-                    <div className="w-full bg-stone-50 h-1.5 rounded-full overflow-hidden">
+                    <div className="w-full bg-stone-50 h-2 rounded-full overflow-hidden">
                       <div className="h-full bg-stone-300 rounded-full" style={{ width: `${Math.min(timeProgress, 100)}%` }} />
                     </div>
                   </div>
+                  
                 </div>
               </div>
 
-              <div className="bg-white rounded-3xl p-6 border border-stone-100 shadow-lg shadow-stone-100 flex flex-col justify-center relative overflow-hidden group">
-                <div className="relative z-10">
-                  <p className="text-emerald-600/70 text-xs font-bold uppercase tracking-wider mb-2 flex items-center gap-1"><Target size={14} /> 月底現金推估</p>
-                  <h3 className="text-3xl xl:text-4xl font-extrabold text-stone-700 font-mono mb-4">{fmtMoney(storeGrandTotal.projection)}</h3>
-                  
-                  <div className="flex flex-col gap-2 items-start">
-                    <div className="inline-flex items-center gap-2 px-3 py-1.5 bg-emerald-50 text-emerald-700 rounded-lg text-xs font-bold border border-emerald-100">
-                      <span>{storeGrandTotal.hasChallengeCash ? '預算預估達成' : '預估達成'}</span>
-                      <span className="text-sm">{storeGrandTotal.budget > 0 ? ((storeGrandTotal.projection / storeGrandTotal.budget) * 100).toFixed(0) : 0}%</span>
-                    </div>
-                    {storeGrandTotal.hasChallengeCash && (
-                      <div className="inline-flex items-center gap-2 px-3 py-1.5 bg-amber-50 text-amber-700 rounded-lg text-xs font-bold border border-amber-100 shadow-sm">
-                        <Star size={12} className="fill-amber-500 text-amber-500 -mr-1" />
-                        <span>挑戰預估達成</span>
-                        <span className="text-sm">{storeGrandTotal.challengeBudget > 0 ? ((storeGrandTotal.projection / storeGrandTotal.challengeBudget) * 100).toFixed(0) : 0}%</span>
-                      </div>
-                    )}
-                  </div>
+              {/* 月底推估 (垂直整合版) */}
+              <div className="bg-white rounded-3xl p-6 border border-stone-100 shadow-lg shadow-stone-100 flex flex-col relative overflow-hidden group h-full">
+                <div className="relative z-10 flex flex-col h-full">
+                  <p className="text-emerald-600/70 text-xs font-bold uppercase tracking-wider mb-4 flex items-center gap-1 shrink-0">
+                    <Target size={14} /> 月底推估
+                  </p>
 
-                  <div className="mt-4 pt-4 border-t border-stone-50 flex flex-col gap-1">
-                    <div className="flex justify-between items-center text-xs text-stone-400">
-                      <span>預算目標</span><span className="font-mono font-bold text-stone-500">{fmtMoney(storeGrandTotal.budget)}</span>
-                    </div>
-                    {storeGrandTotal.hasChallengeCash && (
-                      <div className="flex justify-between items-center text-xs text-amber-500/80">
-                        <span>挑戰目標</span><span className="font-mono font-bold">{fmtMoney(storeGrandTotal.challengeBudget)}</span>
+                  <div className="flex flex-col gap-5 flex-1 justify-center">
+
+                    {/* 上半部：現金區塊 */}
+                    <div className="bg-stone-50/50 rounded-2xl p-4 border border-stone-100">
+                      <div className="flex items-center justify-between mb-2">
+                        <div className="text-stone-500 text-xs font-bold flex items-center gap-1.5">
+                          <div className="w-1.5 h-1.5 rounded-full bg-amber-500"></div>現金推估
+                        </div>
                       </div>
-                    )}
+                      <h3 className="text-3xl font-extrabold text-stone-700 font-mono tracking-tight mb-3">
+                        {fmtMoney(storeGrandTotal.projection)}
+                      </h3>
+
+                      {/* 達成率 Badge */}
+                      <div className="flex flex-wrap gap-2 mb-3">
+                        <div className="inline-flex items-center gap-1 px-2 py-1 bg-emerald-50 text-emerald-700 rounded-md text-[11px] font-bold border border-emerald-100">
+                          <span>{storeGrandTotal.hasChallengeCash ? '預算達成' : '預估達成'}</span>
+                          <span>{storeGrandTotal.budget > 0 ? ((storeGrandTotal.projection / storeGrandTotal.budget) * 100).toFixed(0) : 0}%</span>
+                        </div>
+                        {storeGrandTotal.hasChallengeCash && (
+                          <div className="inline-flex items-center gap-1 px-2 py-1 bg-amber-50 text-amber-700 rounded-md text-[11px] font-bold border border-amber-100 shadow-sm">
+                            <Star size={10} className="fill-amber-500 text-amber-500" />
+                            <span>挑戰達成</span>
+                            <span>{storeGrandTotal.challengeBudget > 0 ? ((storeGrandTotal.projection / storeGrandTotal.challengeBudget) * 100).toFixed(0) : 0}%</span>
+                          </div>
+                        )}
+                      </div>
+
+                      {/* 底層目標數字 */}
+                      <div className="space-y-1.5 pt-3 border-t border-stone-200/60">
+                        <div className="flex justify-between items-center text-[11px]">
+                           <span className="text-stone-400">預算目標</span>
+                           <span className="font-mono font-bold text-stone-500">{fmtMoney(storeGrandTotal.budget)}</span>
+                        </div>
+                        {storeGrandTotal.hasChallengeCash && (
+                           <div className="flex justify-between items-center text-[11px]">
+                             <span className="text-amber-600/80">挑戰目標</span>
+                             <span className="font-mono font-bold text-amber-600">{fmtMoney(storeGrandTotal.challengeBudget)}</span>
+                           </div>
+                        )}
+                      </div>
+                    </div>
+
+                    {/* 下半部：權責區塊 */}
+                    <div className="bg-stone-50/50 rounded-2xl p-4 border border-stone-100">
+                       <div className="flex items-center justify-between mb-2">
+                        <div className="text-stone-500 text-xs font-bold flex items-center gap-1.5">
+                          <div className="w-1.5 h-1.5 rounded-full bg-indigo-500"></div>權責推估
+                        </div>
+                      </div>
+                      <h3 className="text-3xl font-extrabold text-stone-700 font-mono tracking-tight mb-3">
+                        {fmtMoney(storeGrandTotal.accrualProjection)}
+                      </h3>
+
+                      {/* 達成率 Badge */}
+                      <div className="flex flex-wrap gap-2 mb-3">
+                        <div className="inline-flex items-center gap-1 px-2 py-1 bg-emerald-50 text-emerald-700 rounded-md text-[11px] font-bold border border-emerald-100">
+                          <span>{storeGrandTotal.hasChallengeAccrual ? '預算達成' : '預估達成'}</span>
+                          <span>{storeGrandTotal.accrualBudget > 0 ? ((storeGrandTotal.accrualProjection / storeGrandTotal.accrualBudget) * 100).toFixed(0) : 0}%</span>
+                        </div>
+                        {storeGrandTotal.hasChallengeAccrual && (
+                          <div className="inline-flex items-center gap-1 px-2 py-1 bg-amber-50 text-amber-700 rounded-md text-[11px] font-bold border border-amber-100 shadow-sm">
+                            <Star size={10} className="fill-amber-500 text-amber-500" />
+                            <span>挑戰達成</span>
+                            <span>{storeGrandTotal.challengeAccrualBudget > 0 ? ((storeGrandTotal.accrualProjection / storeGrandTotal.challengeAccrualBudget) * 100).toFixed(0) : 0}%</span>
+                          </div>
+                        )}
+                      </div>
+
+                      {/* 底層目標數字 */}
+                      <div className="space-y-1.5 pt-3 border-t border-stone-200/60">
+                        <div className="flex justify-between items-center text-[11px]">
+                           <span className="text-stone-400">預算目標</span>
+                           <span className="font-mono font-bold text-stone-500">{fmtMoney(storeGrandTotal.accrualBudget)}</span>
+                        </div>
+                        {storeGrandTotal.hasChallengeAccrual && (
+                           <div className="flex justify-between items-center text-[11px]">
+                             <span className="text-amber-600/80">挑戰目標</span>
+                             <span className="font-mono font-bold text-amber-600">{fmtMoney(storeGrandTotal.challengeAccrualBudget)}</span>
+                           </div>
+                        )}
+                      </div>
+                    </div>
+
                   </div>
                 </div>
               </div>
@@ -1037,120 +906,6 @@ const DashboardView = () => {
           </div>
         )}
       </div>
-
-      {/* ========================================== */}
-      {/* ★★★ AI 助理聊天懸浮視窗 (僅開放給區長、高管、教專) ★★★ */}
-      {/* ========================================== */}
-      
-      {(userRole === 'director' || userRole === 'manager' || userRole === 'trainer') && (
-        <>
-          {!isAIChatOpen && (
-            <button 
-              onClick={() => setIsAIChatOpen(true)}
-              className={`fixed bottom-6 right-6 p-4 ${aiTheme.fab} text-white rounded-full shadow-2xl transition-transform hover:scale-110 flex items-center justify-center group z-50`}
-            >
-              <Bot size={28} className="group-hover:animate-bounce" />
-              <div className="absolute -top-1 -right-1 flex h-4 w-4">
-                <span className={`animate-ping absolute inline-flex h-full w-full rounded-full ${aiTheme.ping} opacity-75`}></span>
-                <span className={`relative inline-flex rounded-full h-4 w-4 ${aiTheme.ping}`}></span>
-              </div>
-            </button>
-          )}
-
-          {isAIChatOpen && (
-            <div className="fixed bottom-6 right-4 sm:right-6 w-[calc(100vw-2rem)] sm:w-96 bg-white rounded-3xl shadow-[0_10px_40px_-10px_rgba(0,0,0,0.2)] border border-stone-200 z-50 flex flex-col overflow-hidden animate-in slide-in-from-bottom-10 fade-in duration-300" style={{ height: 'min(600px, 80vh)' }}>
-              
-              <div className={`${aiTheme.header} p-4 flex items-center justify-between shrink-0 shadow-sm`}>
-                <div className="flex items-center gap-2">
-                  <Bot size={20} className={aiTheme.headerIcon} />
-                  <h3 className="font-bold text-sm">DRCYJ 營運分析師</h3>
-                </div>
-                <div className="flex items-center gap-1">
-                  {/* ★ 若尚未設定全域 Key，才顯示鑰匙按鈕，避免其他人誤按 */}
-                  {(!SYSTEM_GEMINI_KEY || SYSTEM_GEMINI_KEY.length < 10) && (
-                    <button onClick={() => setShowAIConfig(!showAIConfig)} className="p-1.5 hover:bg-black/10 rounded-lg transition-colors" title="設定 API Key">
-                      <Key size={16} />
-                    </button>
-                  )}
-                  <button onClick={() => setIsAIChatOpen(false)} className="p-1.5 hover:bg-black/10 rounded-lg transition-colors">
-                    <X size={20} />
-                  </button>
-                </div>
-              </div>
-
-              {showAIConfig && (
-                <div className="p-4 bg-amber-50 border-b border-amber-100 shrink-0">
-                  <p className="text-xs text-amber-700 font-bold mb-2">設定 Google Gemini API Key</p>
-                  <input 
-                    type="password" 
-                    value={geminiApiKey}
-                    onChange={(e) => setGeminiApiKey(e.target.value)}
-                    placeholder="貼上您的 API Key..."
-                    className="w-full px-3 py-2 rounded-lg text-sm border border-amber-200 focus:outline-none focus:border-amber-400 mb-2"
-                  />
-                  <div className="flex justify-end gap-2">
-                    <button onClick={() => setShowAIConfig(false)} className="px-3 py-1.5 text-xs text-stone-500 hover:bg-stone-200 rounded-lg font-bold transition-colors">取消</button>
-                    <button onClick={handleSaveApiKey} className="px-3 py-1.5 text-xs bg-amber-500 text-white hover:bg-amber-600 rounded-lg font-bold transition-colors">儲存金鑰</button>
-                  </div>
-                </div>
-              )}
-
-              <div className="flex-1 overflow-y-auto p-4 space-y-4 bg-stone-50/50">
-                {aiMessages.map((msg, index) => (
-                  <div key={index} className={`flex w-full ${msg.role === "user" ? "justify-end" : "justify-start"}`}>
-                    <div className={`max-w-[85%] rounded-2xl p-3 text-sm ${
-                      msg.role === "user" 
-                        ? `${aiTheme.userMsg} rounded-tr-sm shadow-md`
-                        : "bg-white border border-stone-100 text-stone-700 shadow-sm rounded-tl-sm"
-                    }`}>
-                      <p className="whitespace-pre-wrap leading-relaxed">{msg.text}</p>
-                    </div>
-                  </div>
-                ))}
-                {isAILoading && (
-                  <div className="flex w-full justify-start">
-                    <div className="bg-white border border-stone-100 text-stone-400 shadow-sm rounded-2xl rounded-tl-sm p-3 text-sm flex items-center gap-2">
-                      <Loader2 size={16} className="animate-spin" /> 正在深度分析中...
-                    </div>
-                  </div>
-                )}
-                <div ref={messagesEndRef} />
-              </div>
-
-              <div className="p-3 bg-white border-t border-stone-100 shrink-0">
-                <div className="relative flex items-center">
-                  <input 
-                    type="text"
-                    value={aiInput}
-                    onChange={(e) => setAiInput(e.target.value)}
-                    onKeyDown={(e) => {
-                      if (e.key === 'Enter' && !e.nativeEvent.isComposing) {
-                        handleSendToAI();
-                      }
-                    }}
-                    placeholder="問我關於營運績效的問題..."
-                    className="w-full pl-4 pr-12 py-3 bg-stone-50 border border-stone-100 focus:border-stone-200 focus:bg-white focus:ring-0 rounded-xl text-sm transition-colors outline-none text-stone-700 placeholder-stone-400"
-                    disabled={isAILoading}
-                  />
-                  <button 
-                    onClick={handleSendToAI}
-                    disabled={isAILoading || !aiInput.trim()}
-                    className={`absolute right-2 p-1.5 ${aiTheme.sendBtn} text-white rounded-lg disabled:opacity-50 disabled:bg-stone-300 transition-colors`}
-                  >
-                    <Send size={16} />
-                  </button>
-                </div>
-                {/* 若無金鑰才會提示 */}
-                {!geminiApiKey && (!SYSTEM_GEMINI_KEY || SYSTEM_GEMINI_KEY.length < 10) && (
-                  <p className="text-[10px] text-rose-500 text-center mt-2 font-bold cursor-pointer" onClick={() => setShowAIConfig(true)}>
-                    ⚠️ 尚未設定 Gemini API Key，點此設定
-                  </p>
-                )}
-              </div>
-            </div>
-          )}
-        </>
-      )}
 
     </ViewWrapper>
   );
