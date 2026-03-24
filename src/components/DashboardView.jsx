@@ -398,7 +398,6 @@ const DashboardView = () => {
 
         const finalStoreDisplay = item.storeDisplay + '店';
 
-        // ★ 新增：檢查這個人是否在「系統目前的 HR 名單」內
         const isSystemStaff = therapists && Array.isArray(therapists) && therapists.some(t => t.id === item.id);
 
         return { ...item, storeDisplay: finalStoreDisplay, revenueMix: `${newMix}% / ${oldMix}%`, newClosingRate: newRate, newAsp, oldAsp, isSystemStaff };
@@ -505,67 +504,84 @@ const DashboardView = () => {
     <ViewWrapper>
       <div className="space-y-8 pb-10 w-full min-w-0 relative">
         
-        {/* Header Section */}
-        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 mb-2 px-2 animate-in fade-in slide-in-from-left-2 duration-500">
-            <div className="flex items-center gap-3 shrink-0">
+        {/* ======================================= */}
+        {/* ★★★ 整合式控制面板 (Unified Control Panel) ★★★ */}
+        {/* ======================================= */}
+        <div className="bg-white p-4 md:p-5 rounded-3xl border border-stone-200 shadow-sm animate-in fade-in slide-in-from-top-2 mb-6">
+          <div className="flex flex-col xl:flex-row justify-between gap-5">
+            
+            {/* 左側：標題與切換器 */}
+            <div className="flex flex-col sm:flex-row sm:items-center gap-4 md:gap-5 shrink-0">
+              {/* 標題區 */}
+              <div className="flex items-center gap-3">
                 <div className={`w-2 h-8 rounded-full ${brandInfo.id.toLowerCase().includes('anniu') ? 'bg-teal-500' : brandInfo.id.toLowerCase().includes('yibo') ? 'bg-purple-500' : 'bg-amber-500'}`}></div>
-                <h1 className="text-2xl font-bold text-stone-700">{brandInfo.name} 營運總覽</h1>
-            </div>
-
-            {(userRole === 'director' || userRole === 'trainer' || userRole === 'manager') && (
-                <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-2 w-full sm:w-auto overflow-x-auto no-scrollbar pb-1 sm:pb-0">
-                    
-                    {(userRole === 'director' || userRole === 'trainer') && (
-                        <select
-                            value={selectedDashboardManager}
-                            onChange={(e) => {
-                                setSelectedDashboardManager(e.target.value);
-                                setSelectedDashboardStore(""); 
-                            }}
-                            className="px-4 py-2.5 border border-stone-200 rounded-xl text-sm font-bold text-stone-600 outline-none focus:border-amber-400 bg-white shadow-sm cursor-pointer min-w-[120px] hover:border-stone-300 transition-colors"
-                        >
-                            <option value="">全品牌</option>
-                            {Object.keys(groupedStoresForFilter).map(m => (
-                                <option key={m} value={m}>{m}區</option>
-                            ))}
-                        </select>
-                    )}
-                    
-                    <select
-                        value={selectedDashboardStore}
-                        onChange={(e) => setSelectedDashboardStore(e.target.value)}
-                        className="px-4 py-2.5 border border-stone-200 rounded-xl text-sm font-bold text-stone-600 outline-none focus:border-amber-400 bg-white shadow-sm cursor-pointer min-w-[140px] hover:border-stone-300 transition-colors"
-                    >
-                        <option value="" className="font-bold text-stone-800">
-                            {selectedDashboardManager || userRole === 'manager' ? "全區店家" : "顯示全區"}
-                        </option>
-                        
-                        {(!selectedDashboardManager && userRole !== 'manager') ? (
-                            Object.entries(groupedStoresForFilter).map(([mgrName, stores]) => (
-                                <optgroup key={mgrName} label={`${mgrName} 區`} className="font-bold text-stone-400 bg-stone-50">
-                                    {stores.map(s => (
-                                        <option key={s} value={s} className="font-medium text-stone-700 bg-white">{s}</option>
-                                    ))}
-                                </optgroup>
-                            ))
-                        ) : (
-                            availableStoresForDropdown.map(s => (
-                                <option key={s} value={s} className="font-medium text-stone-700 bg-white">{s}</option>
-                            ))
-                        )}
-                    </select>
+                <div>
+                  <h1 className="text-xl md:text-2xl font-extrabold text-stone-800 tracking-tight">{brandInfo.name} 營運總覽</h1>
+                  <p className="text-[11px] md:text-xs text-stone-400 font-bold tracking-wider uppercase mt-0.5">Dashboard</p>
                 </div>
-            )}
-        </div>
+              </div>
 
-        {userRole !== 'therapist' && userRole !== 'trainer' && (
-          <div className="flex justify-center mb-4">
-            <div className="bg-stone-200 p-1 rounded-2xl flex shadow-inner">
-               <button onClick={() => setViewMode('store')} className={`px-6 py-2 rounded-xl text-sm font-bold flex items-center gap-2 transition-all ${viewMode === 'store' ? 'bg-white text-stone-800 shadow-sm' : 'text-stone-500 hover:text-stone-700'}`}><StoreIcon size={16}/> 門市營運</button>
-               <button onClick={() => setViewMode('therapist')} className={`px-6 py-2 rounded-xl text-sm font-bold flex items-center gap-2 transition-all ${viewMode === 'therapist' ? 'bg-white text-stone-800 shadow-sm' : 'text-stone-500 hover:text-stone-700'}`}><User size={16}/> 人員績效</button>
+              {/* 分隔線與切換按鈕 (依權限顯示) */}
+              {userRole !== 'therapist' && userRole !== 'trainer' && (
+                <>
+                  <div className="hidden sm:block w-px h-10 bg-stone-100"></div>
+                  <div className="bg-stone-100/80 p-1 rounded-2xl flex shadow-inner w-fit border border-stone-200/50">
+                     <button onClick={() => setViewMode('store')} className={`px-4 md:px-5 py-2 rounded-xl text-sm font-bold flex items-center gap-2 transition-all duration-200 ${viewMode === 'store' ? 'bg-white text-stone-800 shadow-sm ring-1 ring-stone-200/50' : 'text-stone-500 hover:text-stone-700 hover:bg-stone-200/50'}`}><StoreIcon size={16}/> 門市營運</button>
+                     <button onClick={() => setViewMode('therapist')} className={`px-4 md:px-5 py-2 rounded-xl text-sm font-bold flex items-center gap-2 transition-all duration-200 ${viewMode === 'therapist' ? 'bg-white text-stone-800 shadow-sm ring-1 ring-stone-200/50' : 'text-stone-500 hover:text-stone-700 hover:bg-stone-200/50'}`}><User size={16}/> 人員績效</button>
+                  </div>
+                </>
+              )}
             </div>
+
+            {/* 右側：店家篩選器 */}
+            <div className="flex flex-wrap xl:flex-nowrap items-center gap-2 md:gap-3">
+              {(userRole === 'director' || userRole === 'trainer' || userRole === 'manager') && (
+                <div className="flex items-center gap-2 w-full sm:w-auto">
+                  {(userRole === 'director' || userRole === 'trainer') && (
+                    <select
+                        value={selectedDashboardManager}
+                        onChange={(e) => {
+                            setSelectedDashboardManager(e.target.value);
+                            setSelectedDashboardStore(""); 
+                        }}
+                        className="flex-1 sm:flex-none px-4 py-2.5 border border-stone-200 rounded-xl text-sm font-bold text-stone-600 outline-none focus:border-amber-400 focus:ring-2 focus:ring-amber-100 bg-stone-50 hover:bg-white transition-all cursor-pointer min-w-[120px]"
+                    >
+                        <option value="">全品牌</option>
+                        {Object.keys(groupedStoresForFilter).map(m => (
+                            <option key={m} value={m}>{m}區</option>
+                        ))}
+                    </select>
+                  )}
+                  
+                  <select
+                      value={selectedDashboardStore}
+                      onChange={(e) => setSelectedDashboardStore(e.target.value)}
+                      className="flex-1 sm:flex-none px-4 py-2.5 border border-stone-200 rounded-xl text-sm font-bold text-stone-600 outline-none focus:border-amber-400 focus:ring-2 focus:ring-amber-100 bg-stone-50 hover:bg-white transition-all cursor-pointer min-w-[140px]"
+                  >
+                      <option value="" className="font-bold text-stone-800">
+                          {selectedDashboardManager || userRole === 'manager' ? "全區店家" : "顯示全區"}
+                      </option>
+                      
+                      {(!selectedDashboardManager && userRole !== 'manager') ? (
+                          Object.entries(groupedStoresForFilter).map(([mgrName, stores]) => (
+                              <optgroup key={mgrName} label={`${mgrName} 區`} className="font-bold text-stone-400 bg-stone-50">
+                                  {stores.map(s => (
+                                      <option key={s} value={s} className="font-medium text-stone-700 bg-white">{s}</option>
+                                  ))}
+                              </optgroup>
+                          ))
+                      ) : (
+                          availableStoresForDropdown.map(s => (
+                              <option key={s} value={s} className="font-medium text-stone-700 bg-white">{s}</option>
+                          ))
+                      )}
+                  </select>
+                </div>
+              )}
+            </div>
+
           </div>
-        )}
+        </div>
 
         {/* --- 門市營運視圖 --- */}
         {viewMode === 'store' && (
@@ -922,7 +938,6 @@ const DashboardView = () => {
                     <tr key={t.id} className={`border-b border-stone-50 hover:bg-stone-50 transition-colors ${currentUser?.id === t.id ? "bg-indigo-50 hover:bg-indigo-100" : ""}`}>
                       <td className="p-3 md:p-4 text-center"><span className={`inline-flex items-center justify-center w-8 h-8 rounded-full text-xs font-bold ${t.rank <= 3 ? "bg-amber-100 text-amber-700 ring-4 ring-amber-50" : t.status === "DANGER" ? "bg-rose-100 text-rose-700 ring-4 ring-rose-50" : "bg-stone-100 text-stone-500"}`}>{t.rank}</span></td>
                       
-                      {/* ★ 新增：檢查在職狀態並加上標籤 */}
                       <td className="p-3 md:p-4 font-bold text-stone-700 flex flex-wrap items-center gap-2">
                         {t.name}
                         {!t.isSystemStaff && <span className="text-[10px] bg-stone-100 text-stone-500 px-1.5 py-0.5 rounded font-bold border border-stone-200">支援/離職</span>}
