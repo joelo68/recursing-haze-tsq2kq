@@ -3,16 +3,17 @@ import React, { useContext, useMemo, useState } from "react";
 import { 
   Calendar, Search, DollarSign, CreditCard, Users, Sparkles, 
   AlertCircle, TrendingUp, CheckCircle, Map as MapIcon, Store as StoreIcon,
-  Settings, X, Ban, Save // ★ 新增設定視窗所需的 Icon
+  Settings, X, Ban, Save 
 } from "lucide-react";
 import { ViewWrapper, Card } from "./SharedUI";
 import { AppContext } from "../AppContext";
+import SmartDatePicker from "./SmartDatePicker"; // ★ 引入智慧日曆元件
 
 const DailyView = () => {
   const { 
     fmtMoney, fmtNum, userRole, currentUser, 
     allReports, managers, currentBrand,
-    auditExclusions, handleUpdateAuditExclusions, showToast // ★ 引入黑名單全域變數與更新函式
+    auditExclusions, handleUpdateAuditExclusions, showToast 
   } = useContext(AppContext);
 
   // 預設日期為「昨天」
@@ -25,11 +26,20 @@ const DailyView = () => {
     return `${yyyy}-${mm}-${dd}`;
   });
 
+  // ★ 取得「今天」的日期字串，作為未來日期的阻擋上限
+  const today = useMemo(() => {
+    const d = new Date();
+    const yyyy = d.getFullYear();
+    const mm = String(d.getMonth() + 1).padStart(2, '0');
+    const dd = String(d.getDate()).padStart(2, '0');
+    return `${yyyy}-${mm}-${dd}`;
+  }, []);
+
   const [selectedManager, setSelectedManager] = useState("");
   const [selectedStore, setSelectedStore] = useState("");
   const [sortConfig, setSortConfig] = useState({ key: 'cash', direction: 'desc' });
 
-  // ★ 設定視窗專用狀態
+  // 設定視窗專用狀態
   const [isConfigModalOpen, setIsConfigModalOpen] = useState(false);
   const [localExclusions, setLocalExclusions] = useState([]);
 
@@ -85,7 +95,7 @@ const DailyView = () => {
     return baseVisibleStores;
   }, [baseVisibleStores, selectedStore, selectedManager, managers, cleanName]);
 
-  // ★ 核心資料處理：抓取選定日期的資料 (加入黑名單排除)
+  // 核心資料處理：抓取選定日期的資料 (加入黑名單排除)
   const dailyData = useMemo(() => {
     const targetDateObj = new Date(selectedDate);
     const targetY = targetDateObj.getFullYear();
@@ -97,7 +107,7 @@ const DailyView = () => {
 
     // 初始化所有應顯示的店家
     effectiveStores.forEach(storeName => {
-      // ★ 防呆：如果店家在排除名單中，直接略過，不列入計算與清單
+      // 防呆：如果店家在排除名單中，直接略過，不列入計算與清單
       if (auditExclusions.includes(storeName)) return;
 
       storeDataMap[storeName] = {
@@ -113,7 +123,7 @@ const DailyView = () => {
         if (rDate.getFullYear() === targetY && (rDate.getMonth() + 1) === targetM && rDate.getDate() === targetD) {
           const cName = cleanName(report.storeName);
           
-          // ★ 防呆：略過排除名單的報表數據
+          // 防呆：略過排除名單的報表數據
           if (auditExclusions.includes(cName)) return;
 
           if (storeDataMap[cName]) {
@@ -176,7 +186,7 @@ const DailyView = () => {
     }));
   };
 
-  // ★ 處理黑名單設定視窗邏輯
+  // 處理黑名單設定視窗邏輯
   const toggleExclusion = (store) => {
     setLocalExclusions(prev => 
       prev.includes(store) ? prev.filter(s => s !== store) : [...prev, store]
@@ -221,14 +231,13 @@ const DailyView = () => {
           </div>
 
           <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-3">
-            {/* 日期選擇器 */}
-            <div className="flex items-center gap-2 bg-white px-4 py-2.5 rounded-xl border border-stone-200 shadow-sm">
-              <Search size={16} className="text-stone-400" />
-              <input 
-                type="date" 
-                value={selectedDate}
-                onChange={(e) => setSelectedDate(e.target.value)}
-                className="outline-none text-sm font-bold text-stone-700 bg-transparent cursor-pointer"
+            
+            {/* ★ 替換為 SmartDatePicker，統一 UI 體驗與防呆 */}
+            <div className="w-full sm:w-auto relative z-20">
+              <SmartDatePicker 
+                selectedDate={selectedDate}
+                onDateSelect={setSelectedDate}
+                maxDate={today} // 防呆：阻擋點擊未來日期
               />
             </div>
 
@@ -246,7 +255,7 @@ const DailyView = () => {
                   {availableStoresForDropdown.map(s => <option key={s} value={s} className="font-medium text-stone-700">{s}</option>)}
                 </select>
 
-                {/* ★ 排除店家設定按鈕 */}
+                {/* 排除店家設定按鈕 */}
                 <button 
                   onClick={() => { setLocalExclusions(auditExclusions || []); setIsConfigModalOpen(true); }} 
                   className="p-2.5 bg-stone-100 text-stone-500 rounded-xl hover:bg-stone-200 transition-colors shadow-sm border border-stone-200"
@@ -343,7 +352,7 @@ const DailyView = () => {
 
       </div>
 
-      {/* ★ 排除店家設定視窗 Modal */}
+      {/* 排除店家設定視窗 Modal */}
       {isConfigModalOpen && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm p-4 animate-in fade-in duration-200">
           <div className="bg-white w-full max-w-lg rounded-2xl shadow-2xl overflow-hidden flex flex-col max-h-[90vh]">
