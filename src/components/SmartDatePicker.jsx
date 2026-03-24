@@ -2,7 +2,7 @@ import React, { useState, useRef, useEffect } from "react";
 import { Calendar as CalendarIcon } from "lucide-react";
 import SmartCalendar from "./SmartCalendar";
 
-const SmartDatePicker = ({ selectedDate, onDateSelect, stores, salesData }) => {
+const SmartDatePicker = ({ selectedDate, onDateSelect, stores, salesData, maxDate }) => { // ★ 新增 maxDate
   const [isOpen, setIsOpen] = useState(false);
   const containerRef = useRef(null);
 
@@ -25,7 +25,6 @@ const SmartDatePicker = ({ selectedDate, onDateSelect, stores, salesData }) => {
       {/* 1. 按鈕本體 */}
       <button
         onClick={() => setIsOpen(!isOpen)}
-        // 👇 修改這裡：加入 w-full，保留 min-w-[180px]
         className="w-full flex items-center justify-between gap-3 bg-white border border-stone-200 px-4 py-2.5 rounded-xl text-stone-700 font-bold hover:bg-stone-50 transition-colors shadow-sm min-w-[180px]"
       >
         <span className="text-lg">{selectedDate}</span>
@@ -57,6 +56,7 @@ const SmartDatePicker = ({ selectedDate, onDateSelect, stores, salesData }) => {
               stores={stores}
               salesData={salesData}
               onClose={() => setIsOpen(false)}
+              maxDate={maxDate} // ★ 將 maxDate 傳遞給日曆繪製元件
             />
           </div>
         </>

@@ -18,6 +18,7 @@ const SmartCalendar = ({
   stores = [],
   salesData = [],
   onClose,
+  maxDate // ★ 新增接收 maxDate 參數
 }) => {
   const [currentDate, setCurrentDate] = useState(() => safeParseDate(selectedDate));
 
@@ -51,9 +52,6 @@ const SmartCalendar = ({
       return record.date.replace(/\//g, "-") === targetDate;
     });
 
-    // ★ 關鍵修正：這裡移除了 "if (dayRecords.length === 0) return 'none'"
-    // 即使當天沒人回報 (dayRecords 為空)，只要有設定店家 (stores)，就應該顯示紅燈！
-
     // 2. 判斷是否有店家名單
     // 如果連「應檢核店家」都沒有，才真的不顯示燈號
     if (!stores || (Array.isArray(stores) && stores.length === 0)) {
@@ -63,7 +61,6 @@ const SmartCalendar = ({
     // 3. 逐一檢查每個「應回報單位」是否已回報 (點名法)
     const isAllSubmitted = stores.every(target => {
         // 取出該店家的所有合法別名 (例如 ["中山", "中山店", "安妞中山店"])
-        // 這些別名是由 AuditView 準備好的
         const aliases = Array.isArray(target.stores) 
             ? target.stores.map(s => typeof s === 'string' ? s : s.name)
             : [];
@@ -71,7 +68,6 @@ const SmartCalendar = ({
         if (aliases.length === 0) return true; // 沒設定別名就當作不用檢查
 
         // 檢查：本日收到的日報中，有沒有任何一筆屬於這個別名列表？
-        // 只要命中一個別名 (例如 "安妞中山店")，就算該店已回報
         const hasRecord = dayRecords.some(record => aliases.includes(record.storeName));
         
         return hasRecord;
@@ -137,14 +133,19 @@ const SmartCalendar = ({
           const dateStr = `${year}-${String(month + 1).padStart(2, "0")}-${String(day).padStart(2, "0")}`;
           const isSelected = dateStr === selectedDate;
           const status = getDayStatus(day);
+          
+          // ★ 新增：判斷是否超過設定的最大日期 (未來日期)
+          const isFuture = maxDate && dateStr > maxDate;
 
           return (
             <button
               key={day}
-              onClick={() => handleDateClick(day)}
+              onClick={() => !isFuture && handleDateClick(day)} // ★ 若為未來日期則取消點擊功能
+              disabled={isFuture} // ★ 加上 disabled 屬性防呆
               className={`
                 relative h-9 rounded-lg text-sm font-bold flex items-center justify-center transition-all
-                ${isSelected 
+                ${isFuture ? "text-stone-300 opacity-50 cursor-not-allowed bg-transparent" : // ★ 未來日期反灰樣式
+                  isSelected 
                   ? "bg-stone-800 text-white shadow-md scale-105 z-10" 
                   : "text-stone-700 hover:bg-stone-100"
                 }
@@ -152,8 +153,8 @@ const SmartCalendar = ({
             >
               {day}
               
-              {/* 狀態點點 */}
-              {!isSelected && status !== "none" && (
+              {/* 狀態點點 (未來日期不顯示) */}
+              {!isSelected && !isFuture && status !== "none" && (
                 <span className={`
                   absolute bottom-1 w-1.5 h-1.5 rounded-full
                   ${status === "complete" ? "bg-emerald-400" : "bg-rose-500"}

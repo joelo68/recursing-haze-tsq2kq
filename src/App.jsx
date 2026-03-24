@@ -42,6 +42,8 @@ import AnnualView from "./components/AnnualView";
 import TargetView from "./components/TargetView";
 import TherapistTargetView from "./components/TherapistTargetView";
 import TherapistScheduleView from "./components/TherapistScheduleView";
+// ★ 新增：引入每日戰情元件
+import DailyView from "./components/DailyView";
 
 const BRANDS = [
   { 
@@ -475,6 +477,8 @@ export default function App() {
           <MobileTopNav activeView={activeView} setActiveView={setActiveView} permissions={permissions} userRole={userRole} onLogout={() => handleLogout()} />
           <main className="flex-1 p-4 md:p-8 overflow-y-auto overflow-x-hidden min-w-0 w-full">
             {activeView === "dashboard" && <DashboardView />}
+            {/* ★ 新增：每日戰情路由 */}
+            {activeView === "daily" && <DailyView />}
             {activeView === "regional" && <RegionalView />}
             {activeView === "ranking" && <RankingView />}
             {activeView === "audit" && <AuditView />}

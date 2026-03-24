@@ -34,6 +34,7 @@ export const ROLES = {
 
 export const ALL_MENU_ITEMS = [
   { id: "dashboard", label: "營運總覽", icon: LayoutDashboard },
+  { id: "daily", label: "每日戰情", icon: Calendar, roles: ["director", "trainer", "manager"] },
   { id: "annual", label: "年度分析", icon: Calendar },
   { id: "targets", label: "年度目標設定", icon: Target }, 
   { id: "regional", label: "區域分析", icon: MapIcon },
