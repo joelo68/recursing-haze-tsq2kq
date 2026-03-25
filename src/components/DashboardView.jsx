@@ -18,7 +18,8 @@ const DashboardView = () => {
     currentBrand, therapists 
   } = useContext(AppContext);
 
-  const [viewMode, setViewMode] = useState((userRole === 'therapist' || userRole === 'trainer' || userRole === 'manager') ? 'therapist' : 'store');
+  // ★ 修正：將 manager 從預設看 therapist 的條件中移除
+  const [viewMode, setViewMode] = useState((userRole === 'therapist' || userRole === 'trainer') ? 'therapist' : 'store');
   const [selectedDashboardManager, setSelectedDashboardManager] = useState("");
   const [selectedDashboardStore, setSelectedDashboardStore] = useState("");
 

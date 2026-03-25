@@ -17,7 +17,8 @@ const DailyView = () => {
     therapistReports, therapists 
   } = useContext(AppContext);
 
-  const [viewMode, setViewMode] = useState((userRole === 'therapist' || userRole === 'trainer' || userRole === 'manager') ? 'therapist' : 'store');
+  // ★ 修正：將 manager 從預設看 therapist 的條件中移除
+  const [viewMode, setViewMode] = useState((userRole === 'therapist' || userRole === 'trainer') ? 'therapist' : 'store');
 
   const [selectedDate, setSelectedDate] = useState(() => {
     const d = new Date();
@@ -376,8 +377,8 @@ const DailyView = () => {
                           <>
                             <td className="p-4 text-center font-mono font-bold text-amber-600">{fmtMoney(store.cash)}</td>
                             <td className="p-4 text-center font-mono font-bold text-indigo-600">{fmtMoney(store.accrual)}</td>
-                            <td className="p-4 text-center font-mono text-stone-600">{fmtNum(store.traffic)}</td>
-                            <td className="p-4 text-center font-mono text-emerald-600">{fmtNum(store.newCustomers)}</td>
+                            <td className="p-4 text-center font-mono text-stone-600">{fmtMoney(store.traffic)}</td>
+                            <td className="p-4 text-center font-mono text-emerald-600">{fmtMoney(store.newCustomers)}</td>
                             <td className="p-4 text-center font-mono text-stone-500">{fmtMoney(store.skincareSales)}</td>
                           </>
                         ) : (
