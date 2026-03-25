@@ -14,7 +14,7 @@ import React, {
 
 import { app, auth, db, appId } from "./config/firebase";
 import { onAuthStateChanged, signInAnonymously, signInWithCustomToken } from "firebase/auth";
-import { collection, addDoc, deleteDoc, updateDoc, doc, onSnapshot, serverTimestamp, setDoc, query, orderBy, limit, deleteField, where } from "firebase/firestore";
+import { collection, addDoc, deleteDoc, updateDoc, doc, onSnapshot, serverTimestamp, setDoc, query, orderBy, limit, deleteField, where, increment } from "firebase/firestore";
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip as RechartsTooltip, Legend, ResponsiveContainer, LineChart, Line, ComposedChart, Area, Cell, PieChart, Pie } from "recharts";
 import { 
   LayoutDashboard, Upload, TrendingUp, Map as MapIcon, Settings, ClipboardCheck, Menu, Search, Filter, Trash2, Save, Plus, DollarSign, Target, Users, Award, Loader2, FileText, AlertCircle, CheckCircle, User, Store, Lock, LogOut, FileWarning, Edit2, CheckSquare, X, Download, ChevronLeft, ChevronRight, Activity, Sparkles, ChevronDown, 
@@ -91,6 +91,10 @@ export default function App() {
   
   const [currentBrandId, setCurrentBrandId] = useState("cyj");
   const [hasSelectedBrand, setHasSelectedBrand] = useState(false);
+
+  // ★ 新增：今日與昨日的登入計數器
+  const [dailyLoginCount, setDailyLoginCount] = useState(0);
+  const [yesterdayLoginCount, setYesterdayLoginCount] = useState(0);
 
   const currentBrand = useMemo(() => 
     BRANDS.find(b => b.id === currentBrandId) || BRANDS[0]
@@ -169,6 +173,16 @@ export default function App() {
         device,
         brand: currentBrandId 
       }); 
+      
+      // 核心監控邏輯：如果動作是「登入系統」，立刻對雲端計數器執行 +1
+      if (action === "登入系統") {
+        const todayStr = formatLocalYYYYMMDD(new Date());
+        await setDoc(doc(getCollectionPath("system_stats"), todayStr), {
+          count: increment(1),
+          updatedAt: serverTimestamp()
+        }, { merge: true });
+      }
+
     } catch (e) { console.error("Failed to log activity", e); }
   }, [getCollectionPath, currentBrandId]);
 
@@ -284,17 +298,31 @@ export default function App() {
       }
     );
 
+    // ★ 監聽今日與昨日登入次數
+    const todayStr = formatLocalYYYYMMDD(new Date());
+    const d = new Date();
+    d.setDate(d.getDate() - 1);
+    const yesterdayStr = formatLocalYYYYMMDD(d);
+
+    const unsubStatsToday = onSnapshot(doc(getCollectionPath("system_stats"), todayStr), (s) => {
+      if (s.exists()) setDailyLoginCount(s.data().count || 0);
+      else setDailyLoginCount(0);
+    });
+
+    const unsubStatsYesterday = onSnapshot(doc(getCollectionPath("system_stats"), yesterdayStr), (s) => {
+      if (s.exists()) setYesterdayLoginCount(s.data().count || 0);
+      else setYesterdayLoginCount(0);
+    });
+
     return () => {
-      unsubBudgets(); unsubTargets(); unsubOrg(); unsubAccounts(); unsubManagerAuth(); unsubPermissions(); unsubTherapists(); unsubTherapistSchedules(); unsubTherapistTargets(); unsubTrainerAuth(); unsubAuditExclusions(); unsubDirectorAuth(); unsubMasterAuth();
+      unsubBudgets(); unsubTargets(); unsubOrg(); unsubAccounts(); unsubManagerAuth(); unsubPermissions(); unsubTherapists(); unsubTherapistSchedules(); unsubTherapistTargets(); unsubTrainerAuth(); unsubAuditExclusions(); unsubDirectorAuth(); unsubMasterAuth(); 
+      unsubStatsToday(); unsubStatsYesterday();
     };
   }, [user, currentBrand, getCollectionPath, getDocPath]);
 
-  // ★★★ 核心效能防護網：全域資料讀取攔截器 ★★★
   useEffect(() => {
     if (!user) return;
 
-    // 定義「不需要」或「自己會抓取」資料的頁面
-    // 當使用者切換到這些頁面時，App.jsx 絕對不發送任何 Firebase 請求！
     const skipFetchViews = ['history', 'logs', 'settings', 'targets', 't-targets', 't-schedule', 'daily'];
     if (skipFetchViews.includes(activeView)) {
       setRawData([]);
@@ -463,14 +491,16 @@ export default function App() {
   const fmtMoney = (val) => `$${(val || 0).toLocaleString()}`;
   const fmtNum = (val) => (val || 0).toLocaleString();
 
+  // ★ 記得將 yesterdayLoginCount 一併暴露出去
   const contextValue = useMemo(() => ({
     user, loading, analytics, managers: visibleManagers, budgets, targets, rawData: visibleRawData, allReports: rawData, showToast, openConfirm, fmtMoney, fmtNum, inputDate, setInputDate, storeList: analytics?.storeList || [], setTargets, selectedYear, selectedMonth, permissions, storeAccounts, managerAuth, currentUser, userRole, logActivity, handleUpdateStorePassword, handleUpdateManagerPassword, handleUpdateTherapistPassword, navigateToStore, activeView, appId, 
     therapists: visibleTherapists, 
     therapistReports: visibleTherapistReports, 
     therapistSchedules, therapistTargets, trainerAuth, handleUpdateTrainerAuth,
     auditExclusions, handleUpdateAuditExclusions,
-    currentBrand, setCurrentBrandId, getCollectionPath, getDocPath
-  }), [user, loading, analytics, visibleManagers, budgets, targets, visibleRawData, rawData, inputDate, selectedYear, selectedMonth, permissions, storeAccounts, managerAuth, currentUser, userRole, logActivity, handleUpdateStorePassword, handleUpdateManagerPassword, handleUpdateTherapistPassword, navigateToStore, activeView, appId, visibleTherapists, visibleTherapistReports, therapistSchedules, therapistTargets, trainerAuth, handleUpdateTrainerAuth, auditExclusions, handleUpdateAuditExclusions, currentBrand, setCurrentBrandId, getCollectionPath, getDocPath]);
+    currentBrand, setCurrentBrandId, getCollectionPath, getDocPath,
+    dailyLoginCount, yesterdayLoginCount
+  }), [user, loading, analytics, visibleManagers, budgets, targets, visibleRawData, rawData, inputDate, selectedYear, selectedMonth, permissions, storeAccounts, managerAuth, currentUser, userRole, logActivity, handleUpdateStorePassword, handleUpdateManagerPassword, handleUpdateTherapistPassword, navigateToStore, activeView, appId, visibleTherapists, visibleTherapistReports, therapistSchedules, therapistTargets, trainerAuth, handleUpdateTrainerAuth, auditExclusions, handleUpdateAuditExclusions, currentBrand, setCurrentBrandId, getCollectionPath, getDocPath, dailyLoginCount, yesterdayLoginCount]);
 
   const memoizedViews = useMemo(() => {
     return (

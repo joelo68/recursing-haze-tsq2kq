@@ -15,10 +15,9 @@ const DashboardView = () => {
   const { 
     fmtMoney, fmtNum, targets, userRole, currentUser, 
     allReports, budgets, managers, selectedYear, selectedMonth, therapistReports,
-    currentBrand, therapists 
+    currentBrand, therapists, dailyLoginCount, yesterdayLoginCount // ★ 取出昨日數據
   } = useContext(AppContext);
 
-  // ★ 修正：將 manager 從預設看 therapist 的條件中移除
   const [viewMode, setViewMode] = useState((userRole === 'therapist' || userRole === 'trainer') ? 'therapist' : 'store');
   const [selectedDashboardManager, setSelectedDashboardManager] = useState("");
   const [selectedDashboardStore, setSelectedDashboardStore] = useState("");
@@ -441,7 +440,7 @@ const DashboardView = () => {
 
   const handleExportCSV = () => {
     const dataToExport = therapistStats.rankings.filter(t => userRole !== 'therapist' || t.id === currentUser?.id);
-    const headers = ["排名,姓名,所屬店家,個人總業績,新客業績,舊客業績,新舊客佔比,新客締結率,新客人數,新客留單數,新客平均業績,舊客平均業績,在職狀態"];
+    const headers = ["排名,姓名,所屬店家,個人總業績,今明業績,舊客業績,新舊客佔比,新客締結率,新客人數,新客留單數,新客平均業績,舊客平均業績,在職狀態"];
     const rows = dataToExport.map(t => [
       t.rank,
       t.name,
@@ -517,7 +516,32 @@ const DashboardView = () => {
               <div className="flex items-center gap-3">
                 <div className={`w-2 h-8 rounded-full ${brandInfo.id.toLowerCase().includes('anniu') ? 'bg-teal-500' : brandInfo.id.toLowerCase().includes('yibo') ? 'bg-purple-500' : 'bg-amber-500'}`}></div>
                 <div>
-                  <h1 className="text-xl md:text-2xl font-extrabold text-stone-800 tracking-tight">{brandInfo.name} 營運總覽</h1>
+                  <div className="flex items-center gap-3">
+                    <h1 className="text-xl md:text-2xl font-extrabold text-stone-800 tracking-tight">{brandInfo.name} 營運總覽</h1>
+                    
+                    {/* ★★★ 今日/昨日 雙重登入次數監控膠囊 ★★★ */}
+                    {(userRole === 'director' || userRole === 'trainer' || userRole === 'manager') && (
+                      <div className="hidden sm:flex items-center gap-3 px-3 py-1.5 bg-stone-50 border border-stone-200 rounded-xl shadow-sm">
+                        <div className="flex items-center gap-1.5" title="今日系統登入次數">
+                          <div className="relative flex h-2 w-2">
+                            <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
+                            <span className="relative inline-flex rounded-full h-2 w-2 bg-emerald-500"></span>
+                          </div>
+                          <span className="text-[10px] font-bold text-stone-500 tracking-widest">今日</span>
+                          <span className="text-sm font-mono font-black text-stone-700">{dailyLoginCount || 0}</span>
+                        </div>
+                        
+                        <div className="w-px h-4 bg-stone-200"></div>
+                        
+                        <div className="flex items-center gap-1.5" title="昨日系統登入次數">
+                          <div className="h-2 w-2 rounded-full bg-stone-300"></div>
+                          <span className="text-[10px] font-bold text-stone-400 tracking-widest">昨日</span>
+                          <span className="text-sm font-mono font-bold text-stone-500">{yesterdayLoginCount || 0}</span>
+                        </div>
+                      </div>
+                    )}
+                  </div>
+
                   <p className="text-[11px] md:text-xs text-stone-400 font-bold tracking-wider uppercase mt-0.5">Dashboard</p>
                 </div>
               </div>
