@@ -87,7 +87,7 @@ const SystemMonitor = () => {
   const getRoleBadge = (role) => {
     switch (role) {
       case "director":
-        return <span className="bg-rose-100 text-rose-600 px-2 py-0.5 rounded text-xs font-bold">總監</span>;
+        return <span className="bg-rose-100 text-rose-600 px-2 py-0.5 rounded text-xs font-bold">高階</span>;
       case "manager":
         return <span className="bg-teal-100 text-teal-600 px-2 py-0.5 rounded text-xs font-bold">區長</span>;
       case "store":
