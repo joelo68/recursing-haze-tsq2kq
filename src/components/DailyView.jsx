@@ -1,10 +1,11 @@
 // src/components/DailyView.jsx
-import React, { useContext, useMemo, useState } from "react";
+import React, { useContext, useMemo, useState, useEffect } from "react";
 import { 
   Calendar, Search, DollarSign, CreditCard, Users, Sparkles, 
   AlertCircle, TrendingUp, CheckCircle, Map as MapIcon, Store as StoreIcon,
-  Settings, X, Ban, Save, User, FileWarning 
+  Settings, X, Ban, Save, User, FileWarning, Loader2 
 } from "lucide-react";
+import { query, where, onSnapshot } from "firebase/firestore";
 import { ViewWrapper, Card } from "./SharedUI";
 import { AppContext } from "../AppContext";
 import SmartDatePicker from "./SmartDatePicker";
@@ -12,12 +13,11 @@ import SmartDatePicker from "./SmartDatePicker";
 const DailyView = () => {
   const { 
     fmtMoney, fmtNum, userRole, currentUser, 
-    allReports, managers, currentBrand,
+    managers, currentBrand,
     auditExclusions, handleUpdateAuditExclusions, showToast,
-    therapistReports, therapists 
+    therapists, getCollectionPath
   } = useContext(AppContext);
 
-  // ★ 修正：將 manager 從預設看 therapist 的條件中移除
   const [viewMode, setViewMode] = useState((userRole === 'therapist' || userRole === 'trainer') ? 'therapist' : 'store');
 
   const [selectedDate, setSelectedDate] = useState(() => {
@@ -45,6 +45,42 @@ const DailyView = () => {
 
   const [isConfigModalOpen, setIsConfigModalOpen] = useState(false);
   const [localExclusions, setLocalExclusions] = useState([]);
+
+  // ★ 核心優化：專屬的單日資料狀態
+  const [dailyStoreReports, setDailyStoreReports] = useState([]);
+  const [dailyTherapistReports, setDailyTherapistReports] = useState([]);
+  const [isLoading, setIsLoading] = useState(false);
+
+  // ★ 核心優化：只抓取「選定日期 (selectedDate)」那一天的資料
+  useEffect(() => {
+    setIsLoading(true);
+    
+    // 查詢店務日報 (精準綁定日期)
+    const storeQuery = query(
+      getCollectionPath("daily_reports"), 
+      where("date", "==", selectedDate)
+    );
+    
+    const unsubStore = onSnapshot(storeQuery, (snapshot) => {
+      setDailyStoreReports(snapshot.docs.map(d => d.data()));
+    });
+
+    // 查詢管理師日報 (精準綁定日期)
+    const therapistQuery = query(
+      getCollectionPath("therapist_daily_reports"), 
+      where("date", "==", selectedDate)
+    );
+
+    const unsubTherapist = onSnapshot(therapistQuery, (snapshot) => {
+      setDailyTherapistReports(snapshot.docs.map(d => d.data()));
+      setIsLoading(false); // 兩個都抓完才解除載入狀態
+    });
+
+    return () => {
+      unsubStore();
+      unsubTherapist();
+    };
+  }, [selectedDate, currentBrand, getCollectionPath]);
 
   const { brandInfo, brandPrefix } = useMemo(() => {
     let id = "CYJ", name = "CYJ"; 
@@ -98,11 +134,6 @@ const DailyView = () => {
   }, [baseVisibleStores, selectedStore, selectedManager, managers, cleanName]);
 
   const dailyData = useMemo(() => {
-    const targetDateObj = new Date(selectedDate);
-    const targetY = targetDateObj.getFullYear();
-    const targetM = targetDateObj.getMonth() + 1;
-    const targetD = targetDateObj.getDate();
-
     const storeDataMap = {};
     let totalCash = 0, totalAccrual = 0, totalTraffic = 0, totalNewCust = 0, totalSkincare = 0;
 
@@ -111,28 +142,24 @@ const DailyView = () => {
       storeDataMap[storeName] = { storeName, isReported: false, cash: 0, accrual: 0, traffic: 0, newCustomers: 0, newCustomerSales: 0, skincareSales: 0 };
     });
 
-    if (allReports) {
-      allReports.forEach(report => {
-        const rDate = new Date(report.date);
-        if (rDate.getFullYear() === targetY && (rDate.getMonth() + 1) === targetM && rDate.getDate() === targetD) {
-          const cName = cleanName(report.storeName);
-          if (auditExclusions.includes(cName)) return;
+    // 改用精準抓取的 dailyStoreReports
+    dailyStoreReports.forEach(report => {
+      const cName = cleanName(report.storeName);
+      if (auditExclusions.includes(cName)) return;
 
-          if (storeDataMap[cName]) {
-            const cash = (Number(report.cash) || 0) - (Number(report.refund) || 0);
-            let accrual = Number(report.accrual) || 0;
-            if (brandPrefix === '安妞') accrual = Number(report.operationalAccrual) || 0;
-            const traffic = Number(report.traffic) || 0;
-            const newCust = Number(report.newCustomers) || 0;
-            const skincare = Number(report.skincareSales) || 0;
+      if (storeDataMap[cName]) {
+        const cash = (Number(report.cash) || 0) - (Number(report.refund) || 0);
+        let accrual = Number(report.accrual) || 0;
+        if (brandPrefix === '安妞') accrual = Number(report.operationalAccrual) || 0;
+        const traffic = Number(report.traffic) || 0;
+        const newCust = Number(report.newCustomers) || 0;
+        const skincare = Number(report.skincareSales) || 0;
 
-            storeDataMap[cName] = { storeName: cName, isReported: true, cash, accrual, traffic, newCustomers: newCust, skincareSales: skincare, newCustomerSales: Number(report.newCustomerSales) || 0 };
+        storeDataMap[cName] = { storeName: cName, isReported: true, cash, accrual, traffic, newCustomers: newCust, skincareSales: skincare, newCustomerSales: Number(report.newCustomerSales) || 0 };
 
-            totalCash += cash; totalAccrual += accrual; totalTraffic += traffic; totalNewCust += newCust; totalSkincare += skincare;
-          }
-        }
-      });
-    }
+        totalCash += cash; totalAccrual += accrual; totalTraffic += traffic; totalNewCust += newCust; totalSkincare += skincare;
+      }
+    });
 
     let list = Object.values(storeDataMap);
     list.sort((a, b) => {
@@ -150,47 +177,38 @@ const DailyView = () => {
     });
 
     return { list, totals: { cash: totalCash, accrual: totalAccrual, traffic: totalTraffic, newCustomers: totalNewCust, skincare: totalSkincare }, reportedCount: list.filter(s => s.isReported).length, totalCount: list.length };
-  }, [allReports, effectiveStores, selectedDate, cleanName, brandPrefix, sortConfig, auditExclusions]);
+  }, [dailyStoreReports, effectiveStores, cleanName, brandPrefix, sortConfig, auditExclusions]);
 
   const therapistDailyData = useMemo(() => {
-    if (!therapistReports) return { list: [], totals: {}, reportedCount: 0 };
-
-    const targetDateObj = new Date(selectedDate);
-    const targetY = targetDateObj.getFullYear();
-    const targetM = targetDateObj.getMonth() + 1;
-    const targetD = targetDateObj.getDate();
-
     let totalRev = 0, newRev = 0, oldRev = 0, returnRev = 0, newCount = 0;
     const list = [];
 
-    therapistReports.forEach(r => {
-      const rDate = new Date(r.date.replace(/-/g, '/'));
-      if (rDate.getFullYear() === targetY && (rDate.getMonth() + 1) === targetM && rDate.getDate() === targetD) {
-        const cName = cleanName(r.storeName);
+    // 改用精準抓取的 dailyTherapistReports
+    dailyTherapistReports.forEach(r => {
+      const cName = cleanName(r.storeName);
 
-        if (auditExclusions.includes(cName)) return;
-        if (!effectiveStores.includes(cName)) return;
+      if (auditExclusions.includes(cName)) return;
+      if (!effectiveStores.includes(cName)) return;
 
-        const total = Number(r.totalRevenue) || 0;
-        const newR = Number(r.newCustomerRevenue) || 0;
-        const oldR = Number(r.oldCustomerRevenue) || 0;
-        const ret = Number(r.returnRevenue) || 0;
-        const nC = Number(r.newCustomerCount) || 0;
+      const total = Number(r.totalRevenue) || 0;
+      const newR = Number(r.newCustomerRevenue) || 0;
+      const oldR = Number(r.oldCustomerRevenue) || 0;
+      const ret = Number(r.returnRevenue) || 0;
+      const nC = Number(r.newCustomerCount) || 0;
 
-        totalRev += total; newRev += newR; oldRev += oldR; returnRev += ret; newCount += nC;
+      totalRev += total; newRev += newR; oldRev += oldR; returnRev += ret; newCount += nC;
 
-        list.push({
-          id: r.therapistId,
-          name: r.therapistName,
-          storeName: cName,
-          totalRevenue: total,
-          newCustomerRevenue: newR,
-          oldCustomerRevenue: oldR,
-          returnRevenue: ret,
-          newCustomerCount: nC,
-          newCustomerClosings: Number(r.newCustomerClosings) || 0,
-        });
-      }
+      list.push({
+        id: r.therapistId,
+        name: r.therapistName,
+        storeName: cName,
+        totalRevenue: total,
+        newCustomerRevenue: newR,
+        oldCustomerRevenue: oldR,
+        returnRevenue: ret,
+        newCustomerCount: nC,
+        newCustomerClosings: Number(r.newCustomerClosings) || 0,
+      });
     });
 
     list.sort((a, b) => {
@@ -208,7 +226,7 @@ const DailyView = () => {
       totals: { totalRev, newRev, oldRev, returnRev, newCount },
       reportedCount: list.length
     };
-  }, [therapistReports, selectedDate, effectiveStores, auditExclusions, cleanName, therapists, therapistSortConfig]);
+  }, [dailyTherapistReports, effectiveStores, auditExclusions, cleanName, therapists, therapistSortConfig]);
 
   const handleSort = (key) => setSortConfig(prev => ({ key, direction: prev.key === key && prev.direction === 'desc' ? 'asc' : 'desc' }));
   const handleTherapistSort = (key) => setTherapistSortConfig(prev => ({ key, direction: prev.key === key && prev.direction === 'desc' ? 'asc' : 'desc' }));
@@ -243,15 +261,11 @@ const DailyView = () => {
     <ViewWrapper>
       <div className="space-y-6 pb-10 w-full min-w-0 relative">
         
-        {/* ======================================= */}
-        {/* ★★★ 整合式控制面板 (Unified Control Panel) ★★★ */}
-        {/* ======================================= */}
+        {/* 控制面板 */}
         <div className="bg-white p-4 md:p-5 rounded-3xl border border-stone-200 shadow-sm animate-in fade-in slide-in-from-top-2">
           <div className="flex flex-col xl:flex-row justify-between gap-5">
             
-            {/* 左側：標題與切換器 */}
             <div className="flex flex-col sm:flex-row sm:items-center gap-4 md:gap-5 shrink-0">
-              {/* 標題區 */}
               <div className="flex items-center gap-3">
                 <div className={`p-2.5 rounded-2xl ${brandInfo.id.includes('anniu') ? 'bg-teal-50 text-teal-600' : brandInfo.id.includes('yibo') ? 'bg-purple-50 text-purple-600' : 'bg-amber-50 text-amber-600'}`}>
                   <Calendar size={24} />
@@ -262,7 +276,6 @@ const DailyView = () => {
                 </div>
               </div>
 
-              {/* 分隔線與切換按鈕 (依權限顯示) */}
               {userRole !== 'therapist' && userRole !== 'trainer' && (
                 <>
                   <div className="hidden sm:block w-px h-10 bg-stone-100"></div>
@@ -274,14 +287,11 @@ const DailyView = () => {
               )}
             </div>
 
-            {/* 右側：日期與店家篩選器 */}
             <div className="flex flex-wrap xl:flex-nowrap items-center gap-2 md:gap-3">
-              {/* 獨立日期選擇器 */}
               <div className="w-full sm:w-auto min-w-[160px] z-20">
                 <SmartDatePicker selectedDate={selectedDate} onDateSelect={setSelectedDate} maxDate={today} />
               </div>
 
-              {/* 店家與區域下拉選單 */}
               {(userRole === 'director' || userRole === 'trainer' || userRole === 'manager') && (
                 <div className="flex items-center gap-2 w-full sm:w-auto">
                   {(userRole === 'director' || userRole === 'trainer') && (
@@ -295,7 +305,6 @@ const DailyView = () => {
                     {availableStoresForDropdown.map(s => <option key={s} value={s} className="font-medium text-stone-700">{s}</option>)}
                   </select>
                   
-                  {/* 設定按鈕 */}
                   <button 
                     onClick={() => { setLocalExclusions(auditExclusions || []); setIsConfigModalOpen(true); }} 
                     className="p-2.5 bg-stone-50 text-stone-500 rounded-xl hover:bg-stone-200 hover:text-stone-700 transition-colors border border-stone-200 shadow-sm shrink-0"
@@ -310,177 +319,171 @@ const DailyView = () => {
           </div>
         </div>
 
-        {/* ======================================= */}
-        {/* 門市營運視圖 */}
-        {/* ======================================= */}
-        {viewMode === 'store' && (
-          <div className="space-y-6 animate-in fade-in slide-in-from-bottom-4 duration-500 w-full min-w-0">
-            {/* 總結數據卡片 */}
-            <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-4">
-              <MiniKpiCard title="單日現金總額" value={fmtMoney(dailyData.totals.cash)} icon={DollarSign} color={{bg: 'bg-amber-50', text: 'text-amber-600'}} subText={`共 ${dailyData.reportedCount} 間門市產生業績`} />
-              <MiniKpiCard title="單日權責總額" value={fmtMoney(dailyData.totals.accrual)} icon={CreditCard} color={{bg: 'bg-cyan-50', text: 'text-cyan-600'}} />
-              <MiniKpiCard title="單日操作人次" value={fmtNum(dailyData.totals.traffic)} icon={Users} color={{bg: 'bg-blue-50', text: 'text-blue-600'}} />
-              <MiniKpiCard title="單日新客數" value={fmtNum(dailyData.totals.newCustomers)} icon={Sparkles} color={{bg: 'bg-purple-50', text: 'text-purple-600'}} />
-            </div>
+        {/* 載入中狀態 (改為局部載入) */}
+        {isLoading ? (
+           <div className="flex h-64 items-center justify-center bg-white rounded-3xl border border-stone-200 shadow-sm">
+             <Loader2 className="h-10 w-10 animate-spin text-stone-300" />
+             <span className="ml-3 text-stone-400 font-bold">調閱單日戰情中...</span>
+           </div>
+        ) : (
+          <>
+            {/* 門市營運視圖 */}
+            {viewMode === 'store' && (
+              <div className="space-y-6 animate-in fade-in slide-in-from-bottom-4 duration-500 w-full min-w-0">
+                <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-4">
+                  <MiniKpiCard title="單日現金總額" value={fmtMoney(dailyData.totals.cash)} icon={DollarSign} color={{bg: 'bg-amber-50', text: 'text-amber-600'}} subText={`共 ${dailyData.reportedCount} 間門市產生業績`} />
+                  <MiniKpiCard title="單日權責總額" value={fmtMoney(dailyData.totals.accrual)} icon={CreditCard} color={{bg: 'bg-cyan-50', text: 'text-cyan-600'}} />
+                  <MiniKpiCard title="單日操作人次" value={fmtNum(dailyData.totals.traffic)} icon={Users} color={{bg: 'bg-blue-50', text: 'text-blue-600'}} />
+                  <MiniKpiCard title="單日新客數" value={fmtNum(dailyData.totals.newCustomers)} icon={Sparkles} color={{bg: 'bg-purple-50', text: 'text-purple-600'}} />
+                </div>
 
-            {/* 報表狀態提示 */}
-            <div className="flex items-center gap-3 px-2">
-              <div className="flex-1 h-px bg-stone-200"></div>
-              <span className="text-xs font-bold text-stone-400 uppercase tracking-widest px-2 flex items-center gap-2">
-                回報狀態: {dailyData.reportedCount} / {dailyData.totalCount} 店 
-                {dailyData.reportedCount < dailyData.totalCount && <span className="text-rose-500 flex items-center gap-1"><AlertCircle size={14}/> 缺交提醒</span>}
-              </span>
-              <div className="flex-1 h-px bg-stone-200"></div>
-            </div>
+                <div className="flex items-center gap-3 px-2">
+                  <div className="flex-1 h-px bg-stone-200"></div>
+                  <span className="text-xs font-bold text-stone-400 uppercase tracking-widest px-2 flex items-center gap-2">
+                    回報狀態: {dailyData.reportedCount} / {dailyData.totalCount} 店 
+                    {dailyData.reportedCount < dailyData.totalCount && <span className="text-rose-500 flex items-center gap-1"><AlertCircle size={14}/> 缺交提醒</span>}
+                  </span>
+                  <div className="flex-1 h-px bg-stone-200"></div>
+                </div>
 
-            {/* 詳細數據表格 */}
-            <Card>
-              <div className="overflow-x-auto w-full pb-2">
-                <table className="w-full text-left border-collapse min-w-[800px] whitespace-nowrap">
-                  <thead>
-                    <tr className="text-xs font-bold text-stone-400 border-b border-stone-100 bg-stone-50/50">
-                      <th className="p-4 w-16 text-center">排名</th>
-                      <th className="p-4">門市名稱</th>
-                      <th className="p-4 text-center cursor-pointer hover:bg-stone-100 transition-colors" onClick={() => handleSort('cash')}>
-                        現金業績 {sortConfig.key === 'cash' && (sortConfig.direction === 'desc' ? '↓' : '↑')}
-                      </th>
-                      <th className="p-4 text-center cursor-pointer hover:bg-stone-100 transition-colors" onClick={() => handleSort('accrual')}>
-                        權責業績 {sortConfig.key === 'accrual' && (sortConfig.direction === 'desc' ? '↓' : '↑')}
-                      </th>
-                      <th className="p-4 text-center cursor-pointer hover:bg-stone-100 transition-colors" onClick={() => handleSort('traffic')}>
-                        操作客流 {sortConfig.key === 'traffic' && (sortConfig.direction === 'desc' ? '↓' : '↑')}
-                      </th>
-                      <th className="p-4 text-center cursor-pointer hover:bg-stone-100 transition-colors" onClick={() => handleSort('newCustomers')}>
-                        新客數 {sortConfig.key === 'newCustomers' && (sortConfig.direction === 'desc' ? '↓' : '↑')}
-                      </th>
-                      <th className="p-4 text-center">保養品</th>
-                    </tr>
-                  </thead>
-                  <tbody className="text-sm">
-                    {dailyData.list.map((store) => (
-                      <tr key={store.storeName} className={`border-b border-stone-50 transition-colors ${!store.isReported ? "bg-rose-50/30" : "hover:bg-stone-50"}`}>
-                        <td className="p-4 text-center">
-                          {!store.isReported ? (
-                            <AlertCircle size={20} className="text-rose-400 mx-auto" />
-                          ) : (
-                            <span className={`inline-flex items-center justify-center w-8 h-8 rounded-full text-xs font-bold ${store.rank <= 3 ? "bg-amber-100 text-amber-700 ring-4 ring-amber-50" : "bg-stone-100 text-stone-500"}`}>
-                              {store.rank}
-                            </span>
-                          )}
-                        </td>
-                        <td className="p-4 font-bold text-stone-700 flex items-center gap-2">
-                          {brandPrefix}{store.storeName}店
-                          {!store.isReported && <span className="px-2 py-0.5 bg-rose-100 text-rose-600 text-[10px] rounded animate-pulse">未回報</span>}
-                        </td>
-                        
-                        {store.isReported ? (
-                          <>
-                            <td className="p-4 text-center font-mono font-bold text-amber-600">{fmtMoney(store.cash)}</td>
-                            <td className="p-4 text-center font-mono font-bold text-indigo-600">{fmtMoney(store.accrual)}</td>
-                            <td className="p-4 text-center font-mono text-stone-600">{fmtMoney(store.traffic)}</td>
-                            <td className="p-4 text-center font-mono text-emerald-600">{fmtMoney(store.newCustomers)}</td>
-                            <td className="p-4 text-center font-mono text-stone-500">{fmtMoney(store.skincareSales)}</td>
-                          </>
-                        ) : (
-                          <td colSpan="5" className="p-4 text-center text-rose-400 font-bold text-xs tracking-widest">
-                            --- 無資料 / 等待回報中 ---
-                          </td>
+                <Card>
+                  <div className="overflow-x-auto w-full pb-2">
+                    <table className="w-full text-left border-collapse min-w-[800px] whitespace-nowrap">
+                      <thead>
+                        <tr className="text-xs font-bold text-stone-400 border-b border-stone-100 bg-stone-50/50">
+                          <th className="p-4 w-16 text-center">排名</th>
+                          <th className="p-4">門市名稱</th>
+                          <th className="p-4 text-center cursor-pointer hover:bg-stone-100 transition-colors" onClick={() => handleSort('cash')}>
+                            現金業績 {sortConfig.key === 'cash' && (sortConfig.direction === 'desc' ? '↓' : '↑')}
+                          </th>
+                          <th className="p-4 text-center cursor-pointer hover:bg-stone-100 transition-colors" onClick={() => handleSort('accrual')}>
+                            權責業績 {sortConfig.key === 'accrual' && (sortConfig.direction === 'desc' ? '↓' : '↑')}
+                          </th>
+                          <th className="p-4 text-center cursor-pointer hover:bg-stone-100 transition-colors" onClick={() => handleSort('traffic')}>
+                            操作客流 {sortConfig.key === 'traffic' && (sortConfig.direction === 'desc' ? '↓' : '↑')}
+                          </th>
+                          <th className="p-4 text-center cursor-pointer hover:bg-stone-100 transition-colors" onClick={() => handleSort('newCustomers')}>
+                            新客數 {sortConfig.key === 'newCustomers' && (sortConfig.direction === 'desc' ? '↓' : '↑')}
+                          </th>
+                          <th className="p-4 text-center">保養品</th>
+                        </tr>
+                      </thead>
+                      <tbody className="text-sm">
+                        {dailyData.list.map((store) => (
+                          <tr key={store.storeName} className={`border-b border-stone-50 transition-colors ${!store.isReported ? "bg-rose-50/30" : "hover:bg-stone-50"}`}>
+                            <td className="p-4 text-center">
+                              {!store.isReported ? (
+                                <AlertCircle size={20} className="text-rose-400 mx-auto" />
+                              ) : (
+                                <span className={`inline-flex items-center justify-center w-8 h-8 rounded-full text-xs font-bold ${store.rank <= 3 ? "bg-amber-100 text-amber-700 ring-4 ring-amber-50" : "bg-stone-100 text-stone-500"}`}>
+                                  {store.rank}
+                                </span>
+                              )}
+                            </td>
+                            <td className="p-4 font-bold text-stone-700 flex items-center gap-2">
+                              {brandPrefix}{store.storeName}店
+                              {!store.isReported && <span className="px-2 py-0.5 bg-rose-100 text-rose-600 text-[10px] rounded animate-pulse">未回報</span>}
+                            </td>
+                            
+                            {store.isReported ? (
+                              <>
+                                <td className="p-4 text-center font-mono font-bold text-amber-600">{fmtMoney(store.cash)}</td>
+                                <td className="p-4 text-center font-mono font-bold text-indigo-600">{fmtMoney(store.accrual)}</td>
+                                <td className="p-4 text-center font-mono text-stone-600">{fmtMoney(store.traffic)}</td>
+                                <td className="p-4 text-center font-mono text-emerald-600">{fmtMoney(store.newCustomers)}</td>
+                                <td className="p-4 text-center font-mono text-stone-500">{fmtMoney(store.skincareSales)}</td>
+                              </>
+                            ) : (
+                              <td colSpan="5" className="p-4 text-center text-rose-400 font-bold text-xs tracking-widest">
+                                --- 無資料 / 等待回報中 ---
+                              </td>
+                            )}
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                </Card>
+              </div>
+            )}
+
+            {/* 人員績效視圖 */}
+            {viewMode === 'therapist' && (
+              <div className="space-y-6 animate-in fade-in slide-in-from-bottom-4 duration-500 w-full min-w-0">
+                <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-4">
+                  <MiniKpiCard title="單日管理師總業績" value={fmtMoney(therapistDailyData.totals.totalRev)} icon={DollarSign} color={{bg: 'bg-indigo-50', text: 'text-indigo-600'}} />
+                  <MiniKpiCard title="單日新客業績" value={fmtMoney(therapistDailyData.totals.newRev)} icon={Sparkles} color={{bg: 'bg-amber-50', text: 'text-amber-600'}} />
+                  <MiniKpiCard title="單日舊客業績" value={fmtMoney(therapistDailyData.totals.oldRev)} icon={TrendingUp} color={{bg: 'bg-cyan-50', text: 'text-cyan-600'}} />
+                  <MiniKpiCard title="單日退費總額" value={fmtMoney(therapistDailyData.totals.returnRev)} icon={FileWarning} color={{bg: 'bg-rose-50', text: 'text-rose-600'}} />
+                </div>
+
+                <div className="flex items-center gap-3 px-2">
+                  <div className="flex-1 h-px bg-stone-200"></div>
+                  <span className="text-xs font-bold text-stone-400 uppercase tracking-widest px-2 flex items-center gap-2">
+                    今日回報人數: {therapistDailyData.reportedCount} 人
+                  </span>
+                  <div className="flex-1 h-px bg-stone-200"></div>
+                </div>
+
+                <Card>
+                  <div className="overflow-x-auto w-full pb-2">
+                    <table className="w-full text-left border-collapse min-w-[800px] whitespace-nowrap">
+                      <thead>
+                        <tr className="text-xs font-bold text-stone-400 border-b border-stone-100 bg-stone-50/50">
+                          <th className="p-4 w-16 text-center">排名</th>
+                          <th className="p-4">人員姓名</th>
+                          <th className="p-4">門市名稱</th>
+                          <th className="p-4 text-right cursor-pointer hover:bg-stone-100 transition-colors" onClick={() => handleTherapistSort('totalRevenue')}>
+                            個人總業績 {therapistSortConfig.key === 'totalRevenue' && (therapistSortConfig.direction === 'desc' ? '↓' : '↑')}
+                          </th>
+                          <th className="p-4 text-right cursor-pointer hover:bg-stone-100 transition-colors" onClick={() => handleTherapistSort('newCustomerRevenue')}>
+                            新客業績 {therapistSortConfig.key === 'newCustomerRevenue' && (therapistSortConfig.direction === 'desc' ? '↓' : '↑')}
+                          </th>
+                          <th className="p-4 text-right cursor-pointer hover:bg-stone-100 transition-colors" onClick={() => handleTherapistSort('oldCustomerRevenue')}>
+                            舊客業績 {therapistSortConfig.key === 'oldCustomerRevenue' && (therapistSortConfig.direction === 'desc' ? '↓' : '↑')}
+                          </th>
+                          <th className="p-4 text-right cursor-pointer hover:bg-stone-100 text-rose-400 transition-colors" onClick={() => handleTherapistSort('returnRevenue')}>
+                            當日退費 {therapistSortConfig.key === 'returnRevenue' && (therapistSortConfig.direction === 'desc' ? '↓' : '↑')}
+                          </th>
+                          <th className="p-4 text-center cursor-pointer hover:bg-stone-100 transition-colors" onClick={() => handleTherapistSort('newCustomerCount')}>
+                            新客人數 {therapistSortConfig.key === 'newCustomerCount' && (therapistSortConfig.direction === 'desc' ? '↓' : '↑')}
+                          </th>
+                        </tr>
+                      </thead>
+                      <tbody className="text-sm">
+                        {therapistDailyData.list.filter(t => userRole !== 'therapist' || t.id === currentUser?.id).map((t) => (
+                          <tr key={t.id} className={`border-b border-stone-50 transition-colors hover:bg-stone-50 ${currentUser?.id === t.id ? "bg-indigo-50 hover:bg-indigo-100" : ""}`}>
+                            <td className="p-4 text-center">
+                               <span className={`inline-flex items-center justify-center w-8 h-8 rounded-full text-xs font-bold ${t.rank <= 3 ? "bg-amber-100 text-amber-700 ring-4 ring-amber-50" : "bg-stone-100 text-stone-500"}`}>
+                                 {t.rank}
+                               </span>
+                            </td>
+                            <td className="p-4 font-bold text-stone-700 flex flex-wrap items-center gap-2">
+                               {t.name}
+                               {!t.isSystemStaff && <span className="text-[10px] bg-stone-100 text-stone-500 px-1.5 py-0.5 rounded font-bold border border-stone-200">支援/離職</span>}
+                               {currentUser?.id === t.id && <span className="px-2 py-0.5 bg-indigo-200 text-indigo-700 text-[10px] rounded-full">ME</span>}
+                            </td>
+                            <td className="p-4 text-stone-500">{brandPrefix}{t.storeName}店</td>
+                            <td className="p-4 text-right font-mono font-bold text-indigo-600">{fmtMoney(t.totalRevenue)}</td>
+                            <td className="p-4 text-right font-mono text-stone-600">{fmtMoney(t.newCustomerRevenue)}</td>
+                            <td className="p-4 text-right font-mono text-stone-600">{fmtMoney(t.oldCustomerRevenue)}</td>
+                            <td className="p-4 text-right font-mono text-rose-500">{fmtMoney(t.returnRevenue)}</td>
+                            <td className="p-4 text-center font-mono text-emerald-600">{fmtNum(t.newCustomerCount)}</td>
+                          </tr>
+                        ))}
+                        {therapistDailyData.list.length === 0 && (
+                          <tr><td colSpan="8" className="p-8 text-center text-stone-400 font-bold">目前無相關人員資料</td></tr>
                         )}
-                      </tr>
-                    ))}
-                    
-                    {dailyData.list.length === 0 && (
-                      <tr><td colSpan="7" className="p-8 text-center text-stone-400 font-bold">目前無相關店家資料</td></tr>
-                    )}
-                  </tbody>
-                </table>
+                      </tbody>
+                    </table>
+                  </div>
+                </Card>
               </div>
-            </Card>
-          </div>
+            )}
+          </>
         )}
-
-        {/* ======================================= */}
-        {/* 人員績效視圖 */}
-        {/* ======================================= */}
-        {viewMode === 'therapist' && (
-          <div className="space-y-6 animate-in fade-in slide-in-from-bottom-4 duration-500 w-full min-w-0">
-            {/* 總結數據卡片 */}
-            <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-4">
-              <MiniKpiCard title="單日管理師總業績" value={fmtMoney(therapistDailyData.totals.totalRev)} icon={DollarSign} color={{bg: 'bg-indigo-50', text: 'text-indigo-600'}} />
-              <MiniKpiCard title="單日新客業績" value={fmtMoney(therapistDailyData.totals.newRev)} icon={Sparkles} color={{bg: 'bg-amber-50', text: 'text-amber-600'}} />
-              <MiniKpiCard title="單日舊客業績" value={fmtMoney(therapistDailyData.totals.oldRev)} icon={TrendingUp} color={{bg: 'bg-cyan-50', text: 'text-cyan-600'}} />
-              <MiniKpiCard title="單日退費總額" value={fmtMoney(therapistDailyData.totals.returnRev)} icon={FileWarning} color={{bg: 'bg-rose-50', text: 'text-rose-600'}} />
-            </div>
-
-            {/* 報表狀態提示 */}
-            <div className="flex items-center gap-3 px-2">
-              <div className="flex-1 h-px bg-stone-200"></div>
-              <span className="text-xs font-bold text-stone-400 uppercase tracking-widest px-2 flex items-center gap-2">
-                今日回報人數: {therapistDailyData.reportedCount} 人
-              </span>
-              <div className="flex-1 h-px bg-stone-200"></div>
-            </div>
-
-            {/* 詳細數據表格 */}
-            <Card>
-              <div className="overflow-x-auto w-full pb-2">
-                <table className="w-full text-left border-collapse min-w-[800px] whitespace-nowrap">
-                  <thead>
-                    <tr className="text-xs font-bold text-stone-400 border-b border-stone-100 bg-stone-50/50">
-                      <th className="p-4 w-16 text-center">排名</th>
-                      <th className="p-4">人員姓名</th>
-                      <th className="p-4">門市名稱</th>
-                      <th className="p-4 text-right cursor-pointer hover:bg-stone-100 transition-colors" onClick={() => handleTherapistSort('totalRevenue')}>
-                        個人總業績 {therapistSortConfig.key === 'totalRevenue' && (therapistSortConfig.direction === 'desc' ? '↓' : '↑')}
-                      </th>
-                      <th className="p-4 text-right cursor-pointer hover:bg-stone-100 transition-colors" onClick={() => handleTherapistSort('newCustomerRevenue')}>
-                        新客業績 {therapistSortConfig.key === 'newCustomerRevenue' && (therapistSortConfig.direction === 'desc' ? '↓' : '↑')}
-                      </th>
-                      <th className="p-4 text-right cursor-pointer hover:bg-stone-100 transition-colors" onClick={() => handleTherapistSort('oldCustomerRevenue')}>
-                        舊客業績 {therapistSortConfig.key === 'oldCustomerRevenue' && (therapistSortConfig.direction === 'desc' ? '↓' : '↑')}
-                      </th>
-                      <th className="p-4 text-right cursor-pointer hover:bg-stone-100 text-rose-400 transition-colors" onClick={() => handleTherapistSort('returnRevenue')}>
-                        當日退費 {therapistSortConfig.key === 'returnRevenue' && (therapistSortConfig.direction === 'desc' ? '↓' : '↑')}
-                      </th>
-                      <th className="p-4 text-center cursor-pointer hover:bg-stone-100 transition-colors" onClick={() => handleTherapistSort('newCustomerCount')}>
-                        新客人數 {therapistSortConfig.key === 'newCustomerCount' && (therapistSortConfig.direction === 'desc' ? '↓' : '↑')}
-                      </th>
-                    </tr>
-                  </thead>
-                  <tbody className="text-sm">
-                    {therapistDailyData.list.filter(t => userRole !== 'therapist' || t.id === currentUser?.id).map((t) => (
-                      <tr key={t.id} className={`border-b border-stone-50 transition-colors hover:bg-stone-50 ${currentUser?.id === t.id ? "bg-indigo-50 hover:bg-indigo-100" : ""}`}>
-                        <td className="p-4 text-center">
-                           <span className={`inline-flex items-center justify-center w-8 h-8 rounded-full text-xs font-bold ${t.rank <= 3 ? "bg-amber-100 text-amber-700 ring-4 ring-amber-50" : "bg-stone-100 text-stone-500"}`}>
-                             {t.rank}
-                           </span>
-                        </td>
-                        <td className="p-4 font-bold text-stone-700 flex flex-wrap items-center gap-2">
-                           {t.name}
-                           {!t.isSystemStaff && <span className="text-[10px] bg-stone-100 text-stone-500 px-1.5 py-0.5 rounded font-bold border border-stone-200">支援/離職</span>}
-                           {currentUser?.id === t.id && <span className="px-2 py-0.5 bg-indigo-200 text-indigo-700 text-[10px] rounded-full">ME</span>}
-                        </td>
-                        <td className="p-4 text-stone-500">{brandPrefix}{t.storeName}店</td>
-                        <td className="p-4 text-right font-mono font-bold text-indigo-600">{fmtMoney(t.totalRevenue)}</td>
-                        <td className="p-4 text-right font-mono text-stone-600">{fmtMoney(t.newCustomerRevenue)}</td>
-                        <td className="p-4 text-right font-mono text-stone-600">{fmtMoney(t.oldCustomerRevenue)}</td>
-                        <td className="p-4 text-right font-mono text-rose-500">{fmtMoney(t.returnRevenue)}</td>
-                        <td className="p-4 text-center font-mono text-emerald-600">{fmtNum(t.newCustomerCount)}</td>
-                      </tr>
-                    ))}
-                    {therapistDailyData.list.length === 0 && (
-                      <tr><td colSpan="8" className="p-8 text-center text-stone-400 font-bold">目前無相關人員資料</td></tr>
-                    )}
-                  </tbody>
-                </table>
-              </div>
-            </Card>
-          </div>
-        )}
-
       </div>
 
-      {/* 排除店家設定視窗 Modal */}
       {isConfigModalOpen && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm p-4 animate-in fade-in duration-200">
           <div className="bg-white w-full max-w-lg rounded-2xl shadow-2xl overflow-hidden flex flex-col max-h-[90vh]">

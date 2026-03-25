@@ -173,7 +173,7 @@ export default function App() {
   }, [getCollectionPath, currentBrandId]);
 
   const handleLogout = useCallback(async (reason = "使用者手動登出") => {
-    const userName = currentUser?.name || (userRole === "director" ? "總監" : (userRole === "trainer" ? "教專" : "未知"));
+    const userName = currentUser?.name || (userRole === "director" ? "高階主管" : (userRole === "trainer" ? "教專" : "未知"));
     if (userRole) logActivity(userRole, userName, "登出系統", reason);
     setShowIdleWarning(false); setCountdown(15); lastActivityTimeRef.current = Date.now(); 
     localStorage.removeItem("cyj_input_draft"); localStorage.removeItem("cyj_input_draft_v2"); localStorage.removeItem("cyj_input_draft_v3"); 
@@ -289,8 +289,18 @@ export default function App() {
     };
   }, [user, currentBrand, getCollectionPath, getDocPath]);
 
+  // ★★★ 核心效能防護網：全域資料讀取攔截器 ★★★
   useEffect(() => {
     if (!user) return;
+
+    // 定義「不需要」或「自己會抓取」資料的頁面
+    // 當使用者切換到這些頁面時，App.jsx 絕對不發送任何 Firebase 請求！
+    const skipFetchViews = ['history', 'logs', 'settings', 'targets', 't-targets', 't-schedule', 'daily'];
+    if (skipFetchViews.includes(activeView)) {
+      setRawData([]);
+      setTherapistReports([]);
+      return; 
+    }
 
     setRawData([]); 
     setTherapistReports([]);
@@ -298,7 +308,7 @@ export default function App() {
     const targetYear = selectedYear;
     let startDate, endDate;
 
-    if (activeView === 'annual' || activeView === 'history') {
+    if (activeView === 'annual') {
       startDate = `${targetYear}-01-01`;
       endDate = `${targetYear}-12-31`;
     } else {
@@ -333,7 +343,6 @@ export default function App() {
     };
   }, [user, currentBrand, selectedYear, selectedMonth, activeView, getCollectionPath]);
 
-  // ★ 效能優化 1：使用 useCallback 記憶所有動作函數，避免 Context 頻繁刷新
   const handleLogin = useCallback((roleId, userInfo = null) => {
     let finalUser = userInfo;
     if (roleId === 'therapist' && userInfo?.name) {
@@ -342,7 +351,7 @@ export default function App() {
     }
     setUserRole(roleId);
     if (finalUser) setCurrentUser(finalUser);
-    const userName = finalUser?.name || (roleId === "director" ? "總監" : (roleId === "trainer" ? "教專" : "未知"));
+    const userName = finalUser?.name || (roleId === "director" ? "高階主管" : (roleId === "trainer" ? "教專" : "未知"));
     logActivity(roleId, userName, "登入系統", "登入成功");
     setActiveView("dashboard");
   }, [therapists, logActivity]);
@@ -463,10 +472,6 @@ export default function App() {
     currentBrand, setCurrentBrandId, getCollectionPath, getDocPath
   }), [user, loading, analytics, visibleManagers, budgets, targets, visibleRawData, rawData, inputDate, selectedYear, selectedMonth, permissions, storeAccounts, managerAuth, currentUser, userRole, logActivity, handleUpdateStorePassword, handleUpdateManagerPassword, handleUpdateTherapistPassword, navigateToStore, activeView, appId, visibleTherapists, visibleTherapistReports, therapistSchedules, therapistTargets, trainerAuth, handleUpdateTrainerAuth, auditExclusions, handleUpdateAuditExclusions, currentBrand, setCurrentBrandId, getCollectionPath, getDocPath]);
 
-  // ★ 效能優化 2：畫面視圖絕對隔離 (View Isolation)
-  // 將主要視圖用 useMemo 緩存。這樣一來，使用者在「頂部搜尋列」打字時，
-  // 雖然 App 會重新渲染，但這包龐大的圖表視圖不會跟著瞎起鬨（跳過 diff 與 re-render），
-  // 從而徹底解決輸入卡頓的問題！
   const memoizedViews = useMemo(() => {
     return (
       <main className="flex-1 p-4 md:p-8 overflow-y-auto overflow-x-hidden min-w-0 w-full relative">
@@ -533,7 +538,6 @@ export default function App() {
           </header>
           <MobileTopNav activeView={activeView} setActiveView={setActiveView} permissions={permissions} userRole={userRole} onLogout={() => handleLogout()} />
           
-          {/* ★ 替換為我們剛才封裝好、具有防護罩的視圖！ */}
           {memoizedViews}
           
         </div>
