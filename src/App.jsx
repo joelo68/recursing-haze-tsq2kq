@@ -1,3 +1,4 @@
+// src/App.jsx
 /* eslint-disable no-undef */
 /* eslint-disable react-hooks/exhaustive-deps */
 /* eslint-disable no-unused-vars */
@@ -13,7 +14,7 @@ import React, {
 
 import { app, auth, db, appId } from "./config/firebase";
 import { onAuthStateChanged, signInAnonymously, signInWithCustomToken } from "firebase/auth";
-import { collection, addDoc, deleteDoc, updateDoc, doc, onSnapshot, serverTimestamp, setDoc, query, orderBy, limit, deleteField } from "firebase/firestore";
+import { collection, addDoc, deleteDoc, updateDoc, doc, onSnapshot, serverTimestamp, setDoc, query, orderBy, limit, deleteField, where } from "firebase/firestore";
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip as RechartsTooltip, Legend, ResponsiveContainer, LineChart, Line, ComposedChart, Area, Cell, PieChart, Pie } from "recharts";
 import { 
   LayoutDashboard, Upload, TrendingUp, Map as MapIcon, Settings, ClipboardCheck, Menu, Search, Filter, Trash2, Save, Plus, DollarSign, Target, Users, Award, Loader2, FileText, AlertCircle, CheckCircle, User, Store, Lock, LogOut, FileWarning, Edit2, CheckSquare, X, Download, ChevronLeft, ChevronRight, Activity, Sparkles, ChevronDown, 
@@ -42,7 +43,6 @@ import AnnualView from "./components/AnnualView";
 import TargetView from "./components/TargetView";
 import TherapistTargetView from "./components/TherapistTargetView";
 import TherapistScheduleView from "./components/TherapistScheduleView";
-// ★ 新增：引入每日戰情元件
 import DailyView from "./components/DailyView";
 
 const BRANDS = [
@@ -129,7 +129,6 @@ export default function App() {
   
   const [directorAuth, setDirectorAuth] = useState({});
   const [trainerAuth, setTrainerAuth] = useState({ password: "0000" });
-  // ★ 新增：最高授權碼狀態 (Master Key)
   const [masterAuth, setMasterAuth] = useState({ password: "BOSS888" });
 
   const [therapistReports, setTherapistReports] = useState([]); 
@@ -225,12 +224,12 @@ export default function App() {
     return onAuthStateChanged(auth, (u) => { setUser(u); setLoading(false); });
   }, []);
 
+  // 1. 全域靜態設定資料抓取
   useEffect(() => {
     if (!user) return;
 
-    setRawData([]); setBudgets({}); setManagers({}); setStoreAccounts([]); setManagerAuth({}); setTherapists([]); setTherapistReports([]); setTherapistSchedules({}); setTherapistTargets({}); setPermissions(DEFAULT_PERMISSIONS); setTargets({ newASP: 3500, trafficASP: 1200 });
+    setBudgets({}); setManagers({}); setStoreAccounts([]); setManagerAuth({}); setTherapists([]); setTherapistSchedules({}); setTherapistTargets({}); setPermissions(DEFAULT_PERMISSIONS); setTargets({ newASP: 3500, trafficASP: 1200 });
 
-    const unsubReports = onSnapshot(query(getCollectionPath("daily_reports"), orderBy("date", "desc")), (s) => setRawData(s.docs.map((d) => ({ id: d.id, ...d.data() }))));
     const unsubBudgets = onSnapshot(getCollectionPath("monthly_targets"), (s) => { const b = {}; s.docs.forEach((d) => (b[d.id] = d.data())); setBudgets(b); });
     const unsubTargets = onSnapshot(getDocPath("kpi_targets"), (s) => { if (s.exists()) setTargets(s.data()); else setTargets({ newASP: 3500, trafficASP: 1200 }); });
     const unsubOrg = onSnapshot(getDocPath("org_structure"), (s) => {
@@ -248,7 +247,6 @@ export default function App() {
     const unsubManagerAuth = onSnapshot(getDocPath("manager_auth"), (s) => { if (s.exists()) setManagerAuth(s.data()); else setManagerAuth({}); });
     const unsubPermissions = onSnapshot(getDocPath("permissions"), (s) => { if (s.exists()) setPermissions(s.data()); else setPermissions(DEFAULT_PERMISSIONS); });
     const unsubTherapists = onSnapshot(getCollectionPath("therapists"), (s) => setTherapists(s.docs.map((d) => ({ id: d.id, ...d.data() }))));
-    const unsubTherapistReports = onSnapshot(query(getCollectionPath("therapist_daily_reports"), orderBy("date", "desc"), limit(1000)), (s) => setTherapistReports(s.docs.map((d) => ({ id: d.id, ...d.data() }))));
     const unsubTherapistSchedules = onSnapshot(getCollectionPath("therapist_schedules"), (s) => { const schedules = {}; s.docs.forEach((d) => (schedules[d.id] = d.data())); setTherapistSchedules(schedules); });
     const unsubTherapistTargets = onSnapshot(getCollectionPath("therapist_targets"), (s) => { const t = {}; s.docs.forEach((d) => (t[d.id] = d.data())); setTherapistTargets(t); });
     const unsubTrainerAuth = onSnapshot(getDocPath("trainer_auth"), (s) => { if (s.exists()) setTrainerAuth(s.data()); else setTrainerAuth({ password: "0000" }); });
@@ -276,22 +274,69 @@ export default function App() {
       }
     );
 
-    // ★ 新增：監聽最高授權碼 (Master Key)
     const unsubMasterAuth = onSnapshot(
       getDocPath("master_auth"), 
       (s) => { 
         if (s.exists() && s.data().password) {
           setMasterAuth(s.data());
         } else {
-          setMasterAuth({ password: "BOSS888" }); // 預設防呆值
+          setMasterAuth({ password: "BOSS888" }); 
         }
       }
     );
 
     return () => {
-      unsubReports(); unsubBudgets(); unsubTargets(); unsubOrg(); unsubAccounts(); unsubManagerAuth(); unsubPermissions(); unsubTherapists(); unsubTherapistReports(); unsubTherapistSchedules(); unsubTherapistTargets(); unsubTrainerAuth(); unsubAuditExclusions(); unsubDirectorAuth(); unsubMasterAuth();
+      unsubBudgets(); unsubTargets(); unsubOrg(); unsubAccounts(); unsubManagerAuth(); unsubPermissions(); unsubTherapists(); unsubTherapistSchedules(); unsubTherapistTargets(); unsubTrainerAuth(); unsubAuditExclusions(); unsubDirectorAuth(); unsubMasterAuth();
     };
   }, [user, currentBrand, getCollectionPath, getDocPath]);
+
+  // ★ 2. 終極企業級效能進化：智慧按需讀取 (Smart View-Based Fetching)
+  useEffect(() => {
+    if (!user) return;
+
+    setRawData([]); 
+    setTherapistReports([]);
+
+    const targetYear = selectedYear;
+    let startDate, endDate;
+
+    // 依照使用者現在所在的「畫面(activeView)」決定抓取資料的範圍
+    if (activeView === 'annual' || activeView === 'history') {
+      // 情境 A：年度覆盤或歷史查詢 ➔ 抓取該年度「一整年」
+      startDate = `${targetYear}-01-01`;
+      endDate = `${targetYear}-12-31`;
+    } else {
+      // 情境 B：日常營運 (Dashboard, Daily, Ranking 等) ➔ 只抓畫面上方所選的「單一月份」
+      const m = String(selectedMonth).padStart(2, '0');
+      startDate = `${targetYear}-${m}-01`;
+      endDate = `${targetYear}-${m}-31`; // 日期字串比對用到 31 日即可安全涵蓋該月所有天數
+    }
+
+    const unsubReports = onSnapshot(
+      query(
+        getCollectionPath("daily_reports"), 
+        where("date", ">=", startDate),
+        where("date", "<=", endDate),
+        orderBy("date", "desc")
+      ), 
+      (s) => setRawData(s.docs.map((d) => ({ id: d.id, ...d.data() })))
+    );
+    
+    const unsubTherapistReports = onSnapshot(
+      query(
+        getCollectionPath("therapist_daily_reports"), 
+        where("date", ">=", startDate),
+        where("date", "<=", endDate),
+        orderBy("date", "desc")
+      ), 
+      (s) => setTherapistReports(s.docs.map((d) => ({ id: d.id, ...d.data() })))
+    );
+
+    return () => {
+      unsubReports();
+      unsubTherapistReports();
+    };
+  }, [user, currentBrand, selectedYear, selectedMonth, activeView, getCollectionPath]);
 
   const handleLogin = (roleId, userInfo = null) => {
     let finalUser = userInfo;
@@ -447,7 +492,7 @@ export default function App() {
       handleUpdateTrainerAuth={handleUpdateTrainerAuth}
       directorAuth={directorAuth} 
       handleUpdateDirectorAuth={handleUpdateDirectorAuth} 
-      masterAuth={masterAuth} // ★ 傳入動態的 Master Key
+      masterAuth={masterAuth}
       currentBrandId={currentBrandId}
       onSwitchBrand={handleSwitchBrand}
       hasSelectedBrand={hasSelectedBrand}
@@ -477,7 +522,6 @@ export default function App() {
           <MobileTopNav activeView={activeView} setActiveView={setActiveView} permissions={permissions} userRole={userRole} onLogout={() => handleLogout()} />
           <main className="flex-1 p-4 md:p-8 overflow-y-auto overflow-x-hidden min-w-0 w-full">
             {activeView === "dashboard" && <DashboardView />}
-            {/* ★ 新增：每日戰情路由 */}
             {activeView === "daily" && <DailyView />}
             {activeView === "regional" && <RegionalView />}
             {activeView === "ranking" && <RankingView />}
