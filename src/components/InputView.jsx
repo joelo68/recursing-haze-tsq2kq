@@ -185,13 +185,13 @@ const StoreInputView = () => {
   const handlePreSubmit = (e) => {
     e.preventDefault();
     if (!selectedStore) return showToast("請選擇店家", "error");
-    if (inputDate > today) return showToast("不可提交未來日期", "error"); // 保留此檢查作為雙重防護
+    if (inputDate > today) return showToast("不可提交未來日期", "error"); 
 
-    const formattedInputDate = toStandardDateFormat(inputDate);
+    const formattedInputDate = toStandardDateFormat(inputDate).replace(/\//g, "-");
     const targetCoreStore = getCoreStoreName(selectedStore);
 
     const existingReport = rawData.find((d) => {
-        const isSameDate = toStandardDateFormat(d.date) === formattedInputDate;
+        const isSameDate = toStandardDateFormat(d.date).replace(/\//g, "-") === formattedInputDate;
         const isSameStore = getCoreStoreName(d.storeName) === targetCoreStore;
         return isSameDate && isSameStore;
     });
@@ -215,11 +215,13 @@ const StoreInputView = () => {
     setIsSubmitting(true);
     
     try {
+      // ★ 核心防呆：強制替換掉所有斜線，確保產出純淨的 YYYY-MM-DD
       const normalizedDate = toStandardDateFormat(inputDate);
+      const safeDate = normalizedDate.replace(/\//g, "-");
       const brandId = typeof currentBrand === 'string' ? currentBrand : currentBrand?.id || 'unknown';
       
       const payload = {
-        date: normalizedDate,
+        date: safeDate, // ★ 致命錯誤修正：改存 safeDate！
         storeName: selectedStore,
         brandId: brandId, 
         ...Object.keys(formData).reduce((acc, key) => ({ ...acc, [key]: parseNumber(formData[key]) }), {}),
@@ -229,16 +231,15 @@ const StoreInputView = () => {
 
       let targetDocId = existingReportId;
       if (!targetDocId) {
-         const safeDate = normalizedDate.replace(/\//g, "-");
          targetDocId = `${safeDate}_${selectedStore}`; 
       }
 
       await setDoc(doc(getCollectionPath("daily_reports"), targetDocId), payload);
 
       if (existingReportId) {
-        logActivity(userRole, currentUser?.name, "更新日報(覆蓋)", `${selectedStore} ${normalizedDate}`);
+        logActivity(userRole, currentUser?.name, "更新日報(覆蓋)", `${selectedStore} ${safeDate}`);
       } else {
-        logActivity(userRole, currentUser?.name, "提交日報", `${selectedStore} ${normalizedDate}`);
+        logActivity(userRole, currentUser?.name, "提交日報", `${selectedStore} ${safeDate}`);
       }
 
       setFormData(defaultFormData);
@@ -291,7 +292,6 @@ const StoreInputView = () => {
       <div className="bg-white p-6 rounded-2xl border border-stone-100 shadow-sm space-y-4">
         <div>
           <label className="block text-xs font-bold mb-1.5 text-stone-400 uppercase">回報日期</label>
-          {/* ★ 加入 maxDate 屬性阻擋未來日期 */}
           <SmartDatePicker 
             selectedDate={inputDate} 
             onDateSelect={setInputDate} 
@@ -514,7 +514,7 @@ const TherapistInputView = () => {
   };
 
   const handlePreSubmit = () => {
-    if (inputDate > today) return showToast("不可提交未來日期", "error"); // 雙重防護
+    if (inputDate > today) return showToast("不可提交未來日期", "error");
     const hasData = formData.newCustomerRevenue || formData.oldCustomerRevenue || formData.newCustomerCount || formData.oldCustomerCount || formData.returnRevenue;
     if (!hasData) return showToast("請至少輸入一項業績或人數數據", "error");
     
@@ -538,13 +538,14 @@ const TherapistInputView = () => {
     try {
       if (!currentUser || !currentUser.id) throw new Error("目前使用者 ID 無法辨識，請重新登入！");
 
+      // ★ 核心防呆：強制替換掉所有斜線，確保產出純淨的 YYYY-MM-DD
       const normalizedDate = toStandardDateFormat(inputDate);
       const safeDate = normalizedDate.replace(/\//g, "-");
       const docId = `${safeDate}_${currentUser.id}`;
       const brandId = typeof currentBrand === 'string' ? currentBrand : currentBrand?.id || 'unknown';
       
       const payload = {
-        date: normalizedDate, 
+        date: safeDate, // ★ 致命錯誤修正：改存 safeDate！
         therapistId: currentUser.id,
         therapistName: currentUser.name,
         storeName: currentUser.store || "未註記店家", 
@@ -566,7 +567,7 @@ const TherapistInputView = () => {
       
       const verifySnap = await getDocFromServer(docRef);
       if (verifySnap.exists()) {
-        logActivity("therapist", currentUser.name, "個人日報提交", `${normalizedDate} 業績`);
+        logActivity("therapist", currentUser.name, "個人日報提交", `${safeDate} 業績`);
         showToast("提交成功！", "success");
         setHasSubmittedToday(true);
         setFormData(defaultPersonalData);
@@ -605,7 +606,6 @@ const TherapistInputView = () => {
       <div className="bg-stone-50 p-4 rounded-2xl border border-stone-200 flex flex-col sm:flex-row sm:justify-between sm:items-center gap-3">
          <span className="text-stone-500 font-bold text-sm">回報日期</span>
          <div className="w-full sm:w-auto">
-            {/* ★ 換上 SmartDatePicker 並加入 maxDate 屬性 */}
             <SmartDatePicker 
               selectedDate={inputDate} 
               onDateSelect={setInputDate} 
@@ -667,7 +667,6 @@ const TherapistInputView = () => {
         </div>
       </Card>
 
-      {/* Warning/Confirm Modals omitted for brevity (they are unchanged) */}
       {showDateWarningModal && (
         <div className="fixed inset-0 z-[1000] flex items-center justify-center p-4 bg-stone-900/80 backdrop-blur-sm">
           <div className="bg-white rounded-3xl shadow-2xl w-full max-w-sm overflow-hidden animate-in zoom-in-95 border-4 border-rose-100">
