@@ -1,0 +1,21 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    
+    // 基本防禦：必須透過 App 匿名登入或自訂 Token 登入後才能存取
+    match /{document=**} {
+      allow read, write: if request.auth != null;
+    }
+
+    // 企業級防篡改：系統日誌 (System Logs) 絕對禁止修改或刪除
+    match /brands/{brandId}/system_logs/{logId} {
+      allow create, read: if request.auth != null;
+      allow update, delete: if false; // 鎖死刪除與更新權限
+    }
+    
+    match /artifacts/{appId}/public/data/system_logs/{logId} {
+      allow create, read: if request.auth != null;
+      allow update, delete: if false; // 鎖死舊版路徑
+    }
+  }
+}

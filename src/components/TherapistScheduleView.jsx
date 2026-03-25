@@ -165,7 +165,7 @@ const TherapistScheduleView = () => {
 
   return (
     <ViewWrapper>
-      <Card title="管理師每月排修設定" subtitle="點擊日期設定休假 (紅色代表休假)">
+      <Card title="管理師每月排休設定" subtitle="點擊日期設定休假 (紅色代表休假)">
         <div className="space-y-6">
           {/* 三層篩選器 */}
           <div className="flex flex-col md:flex-row gap-4 items-end bg-stone-50 p-4 rounded-xl border border-stone-200">
