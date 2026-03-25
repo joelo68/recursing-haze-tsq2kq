@@ -224,7 +224,6 @@ export default function App() {
     return onAuthStateChanged(auth, (u) => { setUser(u); setLoading(false); });
   }, []);
 
-  // 1. 全域靜態設定資料抓取
   useEffect(() => {
     if (!user) return;
 
@@ -290,7 +289,6 @@ export default function App() {
     };
   }, [user, currentBrand, getCollectionPath, getDocPath]);
 
-  // ★ 2. 終極企業級效能進化：智慧按需讀取 (Smart View-Based Fetching)
   useEffect(() => {
     if (!user) return;
 
@@ -300,16 +298,13 @@ export default function App() {
     const targetYear = selectedYear;
     let startDate, endDate;
 
-    // 依照使用者現在所在的「畫面(activeView)」決定抓取資料的範圍
     if (activeView === 'annual' || activeView === 'history') {
-      // 情境 A：年度覆盤或歷史查詢 ➔ 抓取該年度「一整年」
       startDate = `${targetYear}-01-01`;
       endDate = `${targetYear}-12-31`;
     } else {
-      // 情境 B：日常營運 (Dashboard, Daily, Ranking 等) ➔ 只抓畫面上方所選的「單一月份」
       const m = String(selectedMonth).padStart(2, '0');
       startDate = `${targetYear}-${m}-01`;
-      endDate = `${targetYear}-${m}-31`; // 日期字串比對用到 31 日即可安全涵蓋該月所有天數
+      endDate = `${targetYear}-${m}-31`; 
     }
 
     const unsubReports = onSnapshot(
@@ -338,7 +333,8 @@ export default function App() {
     };
   }, [user, currentBrand, selectedYear, selectedMonth, activeView, getCollectionPath]);
 
-  const handleLogin = (roleId, userInfo = null) => {
+  // ★ 效能優化 1：使用 useCallback 記憶所有動作函數，避免 Context 頻繁刷新
+  const handleLogin = useCallback((roleId, userInfo = null) => {
     let finalUser = userInfo;
     if (roleId === 'therapist' && userInfo?.name) {
        const foundTherapist = therapists.find(t => t.name === userInfo.name);
@@ -349,33 +345,27 @@ export default function App() {
     const userName = finalUser?.name || (roleId === "director" ? "總監" : (roleId === "trainer" ? "教專" : "未知"));
     logActivity(roleId, userName, "登入系統", "登入成功");
     setActiveView("dashboard");
-  };
+  }, [therapists, logActivity]);
 
-  const handleUpdateStorePassword = async (id, newPass) => { try { const updated = storeAccounts.map((a) => a.id === id ? { ...a, password: newPass } : a); await setDoc(getDocPath("store_account_data"), { accounts: updated }); return true; } catch (e) { return false; } };
-  const handleUpdateManagerPassword = async (name, newPass) => { try { await setDoc(getDocPath("manager_auth"), { [name]: newPass }, { merge: true }); return true; } catch (e) { return false; } };
-  const handleUpdateTherapistPassword = async (id, newPass) => { try { await updateDoc(doc(getCollectionPath("therapists"), id), { password: newPass }); return true; } catch (e) { console.error(e); return false; } };
-  const handleUpdateTrainerAuth = async (newPass) => { try { await setDoc(getDocPath("trainer_auth"), { password: newPass }); return true; } catch (e) { console.error(e); return false; } };
+  const showToast = useCallback((message, type = "info") => setToast({ message, type }), []);
+  const openConfirm = useCallback((title, message, onConfirm) => setConfirmModal({ isOpen: true, title, message, onConfirm: () => { onConfirm(); setConfirmModal((p) => ({ ...p, isOpen: false })); }, }), []);
+  const closeConfirmModal = useCallback(() => setConfirmModal((p) => ({ ...p, isOpen: false })), []);
+
+  const handleUpdateStorePassword = useCallback(async (id, newPass) => { try { const updated = storeAccounts.map((a) => a.id === id ? { ...a, password: newPass } : a); await setDoc(getDocPath("store_account_data"), { accounts: updated }); return true; } catch (e) { return false; } }, [storeAccounts, getDocPath]);
+  const handleUpdateManagerPassword = useCallback(async (name, newPass) => { try { await setDoc(getDocPath("manager_auth"), { [name]: newPass }, { merge: true }); return true; } catch (e) { return false; } }, [getDocPath]);
+  const handleUpdateTherapistPassword = useCallback(async (id, newPass) => { try { await updateDoc(doc(getCollectionPath("therapists"), id), { password: newPass }); return true; } catch (e) { console.error(e); return false; } }, [getCollectionPath]);
+  const handleUpdateTrainerAuth = useCallback(async (newPass) => { try { await setDoc(getDocPath("trainer_auth"), { password: newPass }); return true; } catch (e) { console.error(e); return false; } }, [getDocPath]);
+  const handleUpdateAuditExclusions = useCallback(async (newExclusions) => { try { await setDoc(getDocPath("audit_exclusions"), { stores: newExclusions }); return true; } catch (e) { console.error(e); return false; } }, [getDocPath]);
   
-  const handleUpdateDirectorAuth = async (action, name, newPass, newName = null) => { 
+  const handleUpdateDirectorAuth = useCallback(async (action, name, newPass, newName = null) => { 
     try { 
       const docRef = getDocPath("director_auth");
-      if (action === 'delete') {
-         await updateDoc(docRef, { [name]: deleteField() });
-      } else if (action === 'rename') {
-         await setDoc(docRef, { [newName]: newPass }, { merge: true });
-         await updateDoc(docRef, { [name]: deleteField() });
-      } else {
-         await setDoc(docRef, { [name]: newPass }, { merge: true }); 
-      }
+      if (action === 'delete') { await updateDoc(docRef, { [name]: deleteField() }); } 
+      else if (action === 'rename') { await setDoc(docRef, { [newName]: newPass }, { merge: true }); await updateDoc(docRef, { [name]: deleteField() }); } 
+      else { await setDoc(docRef, { [name]: newPass }, { merge: true }); }
       return true; 
-    } catch (e) { 
-      console.error(e); return false; 
-    } 
-  };
-
-  const handleUpdateAuditExclusions = async (newExclusions) => {
-    try { await setDoc(getDocPath("audit_exclusions"), { stores: newExclusions }); return true; } catch (e) { console.error(e); return false; }
-  };
+    } catch (e) { console.error(e); return false; } 
+  }, [getDocPath]);
 
   const navigateToStore = useCallback((storeName) => { setActiveView("store-analysis"); window.dispatchEvent(new CustomEvent("navigate-to-store", { detail: storeName })); }, []);
 
@@ -455,9 +445,6 @@ export default function App() {
   }, [managers]);
 
   const analytics = useAnalytics(visibleRawData, visibleManagers, budgets, selectedYear, selectedMonth);
-  const showToast = (message, type = "info") => setToast({ message, type });
-  const openConfirm = useCallback((title, message, onConfirm) => setConfirmModal({ isOpen: true, title, message, onConfirm: () => { onConfirm(); setConfirmModal((p) => ({ ...p, isOpen: false })); }, }), []);
-  const closeConfirmModal = () => setConfirmModal((p) => ({ ...p, isOpen: false }));
   
   const allStoreNames = useMemo(() => {
       const prefix = currentBrandId === 'anniu' ? '安妞' : currentBrandId === 'yibo' ? '伊啵' : 'CYJ';
@@ -475,6 +462,31 @@ export default function App() {
     auditExclusions, handleUpdateAuditExclusions,
     currentBrand, setCurrentBrandId, getCollectionPath, getDocPath
   }), [user, loading, analytics, visibleManagers, budgets, targets, visibleRawData, rawData, inputDate, selectedYear, selectedMonth, permissions, storeAccounts, managerAuth, currentUser, userRole, logActivity, handleUpdateStorePassword, handleUpdateManagerPassword, handleUpdateTherapistPassword, navigateToStore, activeView, appId, visibleTherapists, visibleTherapistReports, therapistSchedules, therapistTargets, trainerAuth, handleUpdateTrainerAuth, auditExclusions, handleUpdateAuditExclusions, currentBrand, setCurrentBrandId, getCollectionPath, getDocPath]);
+
+  // ★ 效能優化 2：畫面視圖絕對隔離 (View Isolation)
+  // 將主要視圖用 useMemo 緩存。這樣一來，使用者在「頂部搜尋列」打字時，
+  // 雖然 App 會重新渲染，但這包龐大的圖表視圖不會跟著瞎起鬨（跳過 diff 與 re-render），
+  // 從而徹底解決輸入卡頓的問題！
+  const memoizedViews = useMemo(() => {
+    return (
+      <main className="flex-1 p-4 md:p-8 overflow-y-auto overflow-x-hidden min-w-0 w-full relative">
+        {activeView === "dashboard" && <DashboardView />}
+        {activeView === "daily" && <DailyView />}
+        {activeView === "regional" && <RegionalView />}
+        {activeView === "ranking" && <RankingView />}
+        {activeView === "audit" && <AuditView />}
+        {activeView === "history" && <HistoryView />}
+        {activeView === "input" && <InputView />}
+        {activeView === "logs" && <SystemMonitor />}
+        {activeView === "settings" && <SettingsView />}
+        {activeView === "annual" && <AnnualView />}
+        {activeView === "store-analysis" && <StoreAnalysisView />}
+        {activeView === "targets" && <TargetView />}
+        {activeView === "t-targets" && <TherapistTargetView />}
+        {activeView === "t-schedule" && <TherapistScheduleView />}
+      </main>
+    );
+  }, [activeView]);
 
   if (loading) return <div className="min-h-screen flex flex-col items-center justify-center bg-[#F9F8F6]"><Loader2 className="w-16 h-16 animate-spin text-stone-400 mb-4" /><p className="animate-pulse text-stone-500 font-bold tracking-wider">Loading DRCYJ Cloud...</p></div>;
   
@@ -520,22 +532,10 @@ export default function App() {
             </div>
           </header>
           <MobileTopNav activeView={activeView} setActiveView={setActiveView} permissions={permissions} userRole={userRole} onLogout={() => handleLogout()} />
-          <main className="flex-1 p-4 md:p-8 overflow-y-auto overflow-x-hidden min-w-0 w-full">
-            {activeView === "dashboard" && <DashboardView />}
-            {activeView === "daily" && <DailyView />}
-            {activeView === "regional" && <RegionalView />}
-            {activeView === "ranking" && <RankingView />}
-            {activeView === "audit" && <AuditView />}
-            {activeView === "history" && <HistoryView />}
-            {activeView === "input" && <InputView />}
-            {activeView === "logs" && <SystemMonitor />}
-            {activeView === "settings" && <SettingsView />}
-            {activeView === "annual" && <AnnualView />}
-            {activeView === "store-analysis" && <StoreAnalysisView />}
-            {activeView === "targets" && <TargetView />}
-            {activeView === "t-targets" && <TherapistTargetView />}
-            {activeView === "t-schedule" && <TherapistScheduleView />}
-          </main>
+          
+          {/* ★ 替換為我們剛才封裝好、具有防護罩的視圖！ */}
+          {memoizedViews}
+          
         </div>
         {toast && (<Toast message={toast.message} type={toast.type} onClose={() => setToast(null)} />)}
         <ConfirmModal isOpen={confirmModal.isOpen} title={confirmModal.title} message={confirmModal.message} onConfirm={confirmModal.onConfirm} onCancel={closeConfirmModal} />

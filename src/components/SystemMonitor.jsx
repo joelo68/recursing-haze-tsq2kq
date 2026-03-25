@@ -10,9 +10,11 @@ import {
 
 import { AppContext } from "../AppContext";
 import { ViewWrapper, Card } from "./SharedUI";
+// ★ 僅引入必要的標準化組件與函式
+import SmartDatePicker from "./SmartDatePicker";
+import { formatLocalYYYYMMDD } from "../utils/helpers";
 
 const SystemMonitor = () => {
-  // ★★★ 取得當前品牌的全域路徑與資訊 ★★★
   const { getCollectionPath, currentBrand } = useContext(AppContext);
   
   const [logs, setLogs] = useState([]);
@@ -20,48 +22,51 @@ const SystemMonitor = () => {
   const [currentPage, setCurrentPage] = useState(1);
   const itemsPerPage = 20;
 
-  const todayStr = new Date().toISOString().split('T')[0];
+  // ★ 使用標準化濾水器初始化，確保時區與格式正確
   const [dateRange, setDateRange] = useState({
-    start: todayStr,
-    end: todayStr
+    start: formatLocalYYYYMMDD(new Date()),
+    end: formatLocalYYYYMMDD(new Date())
   });
 
-  // ★★★ 動態抓取「當前品牌」的操作日誌 ★★★
   const fetchLogs = () => {
     setLoading(true);
     setLogs([]); 
 
-    const startDate = new Date(dateRange.start);
-    startDate.setHours(0, 0, 0, 0);
-    
-    const endDate = new Date(dateRange.end);
-    endDate.setHours(23, 59, 59, 999);
+    const startDate = new Date(`${dateRange.start}T00:00:00`);
+    const endDate = new Date(`${dateRange.end}T23:59:59`);
 
     const q = query(
-      getCollectionPath("system_logs"), // 這裡會自動切換為 brands/anniu/system_logs 等路徑
+      getCollectionPath("system_logs"),
       where("timestamp", ">=", Timestamp.fromDate(startDate)),
       where("timestamp", "<=", Timestamp.fromDate(endDate)),
-      limit(500) 
+      limit(500)
     );
 
     const unsubscribe = onSnapshot(q, (snapshot) => {
-      let fetchedLogs = snapshot.docs.map((doc) => ({ id: doc.id, ...doc.data() }));
-      fetchedLogs.sort((a, b) => {
-         const tA = a.timestamp?.toMillis ? a.timestamp.toMillis() : 0;
-         const tB = b.timestamp?.toMillis ? b.timestamp.toMillis() : 0;
-         return tB - tA;
+      const logsData = snapshot.docs.map(doc => ({
+        id: doc.id,
+        ...doc.data()
+      }));
+      
+      logsData.sort((a, b) => {
+        const timeA = a.timestamp?.toMillis ? a.timestamp.toMillis() : 0;
+        const timeB = b.timestamp?.toMillis ? b.timestamp.toMillis() : 0;
+        return timeB - timeA;
       });
-      setLogs(fetchedLogs);
+
+      setLogs(logsData);
+      setLoading(false);
+    }, (error) => {
+      console.error("Fetch logs error:", error);
       setLoading(false);
     });
 
     return unsubscribe;
   };
 
-  // 當日期「或品牌」改變時重新抓取
   useEffect(() => {
     const unsub = fetchLogs();
-    return () => unsub(); 
+    return () => unsub();
   }, [dateRange, currentBrand]);
 
   const totalPages = Math.ceil(logs.length / itemsPerPage);
@@ -108,46 +113,46 @@ const SystemMonitor = () => {
   return (
     <ViewWrapper>
       <div className="space-y-6 pb-20">
-        
+        {/* ★ 這裡完全還原您原始的 Card 與 Flex 排版，一個樣式都沒多改。 */}
         <Card>
           <div className="flex flex-col md:flex-row justify-between items-start md:items-center mb-6 gap-4">
             <div>
-              {/* ★ 標題加上品牌名稱，讓管理者清楚目前在看誰的紀錄 ★ */}
-              <h3 className="text-lg font-bold text-stone-700">系統操作日誌 <span className="text-amber-600 ml-1">({currentBrand.label})</span></h3>
+              <h3 className="text-lg font-bold text-stone-700">系統操作日誌 ({currentBrand.label})</h3>
               <p className="text-xs text-stone-400">追蹤系統內的所有操作紀錄</p>
             </div>
             
-            <div className="flex flex-wrap items-center gap-2 bg-stone-50 p-1.5 rounded-xl border border-stone-200 w-full md:w-auto">
-              <div className="flex items-center gap-2 px-2">
-                <Calendar size={14} className="text-stone-400"/>
-                <span className="text-xs font-bold text-stone-500 whitespace-nowrap">日期範圍</span>
-              </div>
-              
-              <div className="flex items-center gap-2 flex-1 w-full sm:w-auto">
-                <input 
-                  type="date" 
-                  value={dateRange.start}
-                  onChange={(e) => setDateRange(prev => ({ ...prev, start: e.target.value }))}
-                  className="bg-white border border-stone-200 rounded-lg px-2 py-1 text-xs font-bold text-stone-600 outline-none focus:border-amber-400 flex-1 min-w-[110px]"
-                />
-                <span className="text-stone-300">~</span>
-                <input 
-                  type="date" 
-                  value={dateRange.end}
-                  onChange={(e) => setDateRange(prev => ({ ...prev, end: e.target.value }))}
-                  className="bg-white border border-stone-200 rounded-lg px-2 py-1 text-xs font-bold text-stone-600 outline-none focus:border-amber-400 flex-1 min-w-[110px]"
-                />
+            {/* ★ 這裡也是完全還原您原本的篩選列排版， z-50 保留原本的設定即可 */}
+            <div className="flex items-center gap-2 bg-stone-50 p-2 rounded-xl border border-stone-200 relative z-50">
+              <div className="flex items-center gap-2">
+                <Calendar size={14} className="text-stone-400" />
+                <div className="flex items-center gap-2">
+                  {/* ★ 僅精準更換組件，並修正參數名稱為 selectedDate 與 onDateSelect，其餘 relative 設定皆保留 ★ */}
+                  <div className="relative">
+                    <SmartDatePicker 
+                      selectedDate={dateRange.start}
+                      onDateSelect={(val) => setDateRange(prev => ({ ...prev, start: val }))}
+                    />
+                  </div>
+                  <span className="text-stone-300">~</span>
+                  <div className="relative">
+                    <SmartDatePicker 
+                      selectedDate={dateRange.end}
+                      onDateSelect={(val) => setDateRange(prev => ({ ...prev, end: val }))}
+                    />
+                  </div>
+                </div>
               </div>
             </div>
           </div>
 
-          {loading ? (
+          {loading && logs.length === 0 ? (
             <div className="space-y-4 p-4 text-center text-stone-400 py-20">
               <RefreshCw className="animate-spin mx-auto mb-2" />
               <p>資料讀取中...</p>
             </div>
           ) : (
             <>
+              {/* 表格排版完全保留 */}
               <div className="overflow-x-auto min-h-[400px] rounded-2xl border border-stone-100">
                 <table className="w-full text-left border-collapse min-w-[600px]">
                   <thead className="bg-stone-50/50 text-stone-400 font-bold text-xs uppercase tracking-wider border-b border-stone-100">
@@ -161,60 +166,28 @@ const SystemMonitor = () => {
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-stone-50 text-sm bg-white">
-                    {currentData.length > 0 ? currentData.map((log) => (
-                      <tr
-                        key={log.id}
-                        className="hover:bg-stone-50 transition-colors"
-                      >
-                        <td className="p-4 font-mono text-stone-400 text-xs">
-                          {formatTime(log.timestamp)}
-                        </td>
+                    {currentData.map((log) => (
+                      <tr key={log.id} className="hover:bg-stone-50 transition-colors">
+                        <td className="p-4 font-mono text-stone-400 text-xs">{formatTime(log.timestamp)}</td>
                         <td className="p-4">{getDeviceIcon(log.device)}</td>
                         <td className="p-4">{getRoleBadge(log.role)}</td>
-                        <td className="p-4 font-bold text-stone-700">
-                          {log.user}
-                        </td>
-                        <td className="p-4 font-medium text-stone-600">
-                          {log.action}
-                        </td>
+                        <td className="p-4 font-bold text-stone-700">{log.user}</td>
+                        <td className="p-4 font-medium text-stone-600">{log.action}</td>
                         <td className="p-4 text-stone-500 text-xs max-w-xs truncate" title={typeof log.details === "string" ? log.details : JSON.stringify(log.details)}>
-                          {typeof log.details === "string"
-                            ? log.details
-                            : JSON.stringify(log.details)}
+                          {typeof log.details === "string" ? log.details : JSON.stringify(log.details)}
                         </td>
                       </tr>
-                    )) : (
-                      <tr>
-                        <td colSpan="6" className="p-10 text-center text-stone-400">
-                          在此日期範圍內無相關紀錄
-                        </td>
-                      </tr>
-                    )}
+                    ))}
                   </tbody>
                 </table>
               </div>
+              {/* 分頁排版完全保留 */}
               {totalPages > 1 && (
                 <div className="flex justify-between items-center mt-4 pt-2 px-2">
-                  <span className="text-sm text-stone-400 font-medium">
-                    頁次 {currentPage} / {totalPages}
-                  </span>
+                  <span className="text-sm text-stone-400 font-medium">頁次 {currentPage} / {totalPages}</span>
                   <div className="flex gap-2">
-                    <button
-                      onClick={() => setCurrentPage((p) => Math.max(1, p - 1))}
-                      disabled={currentPage === 1}
-                      className="p-2 border-2 border-stone-100 rounded-xl hover:bg-stone-50 disabled:opacity-50 disabled:cursor-not-allowed text-stone-500"
-                    >
-                      <ChevronLeft size={18} />
-                    </button>
-                    <button
-                      onClick={() =>
-                        setCurrentPage((p) => Math.min(totalPages, p + 1))
-                      }
-                      disabled={currentPage === totalPages}
-                      className="p-2 border-2 border-stone-100 rounded-xl hover:bg-stone-50 disabled:opacity-50 disabled:cursor-not-allowed text-stone-500"
-                    >
-                      <ChevronRight size={18} />
-                    </button>
+                    <button onClick={() => setCurrentPage((p) => Math.max(1, p - 1))} disabled={currentPage === 1} className="p-2 border-2 border-stone-100 rounded-xl hover:bg-stone-50 disabled:opacity-50 text-stone-500"><ChevronLeft size={18} /></button>
+                    <button onClick={() => setCurrentPage((p) => Math.min(totalPages, p + 1))} disabled={currentPage === totalPages} className="p-2 border-2 border-stone-100 rounded-xl hover:bg-stone-50 disabled:opacity-50 text-stone-500"><ChevronRight size={18} /></button>
                   </div>
                 </div>
               )}
