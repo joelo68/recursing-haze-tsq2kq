@@ -1,6 +1,9 @@
 // src/components/HistoryView.jsx
 import React, { useState, useContext, useMemo, useEffect, useCallback } from "react";
-import { Edit2, Trash2, Save, X, RotateCcw, Store, User, Loader2, Calendar, Search, ArrowRight, ArrowLeft } from "lucide-react";
+import { 
+  Edit2, Trash2, Save, X, RotateCcw, Store, User, Loader2, 
+  Calendar, Search, ArrowRight, ArrowLeft, Database
+} from "lucide-react";
 import {
   doc,
   updateDoc,
@@ -30,14 +33,14 @@ const HistoryView = () => {
   const [therapistRawData, setTherapistRawData] = useState([]);
   const [isLoading, setIsLoading] = useState(false);
   
-  // 取得今天日期的標準化字串
+  // ★ 效能防護開關：預設不載入任何資料
+  const [hasQueried, setHasQueried] = useState(false);
+
   const todayStr = formatLocalYYYYMMDD(new Date());
 
-  // ★ 狀態解耦：這兩個是用來綁定「UI 畫面」的日期，使用者隨便選都不會觸發讀取
   const [startDate, setStartDate] = useState(todayStr);
   const [endDate, setEndDate] = useState(todayStr);
 
-  // ★ 狀態解耦：這才是真正送給 Firebase 去「查詢」的日期範圍
   const [queryRange, setQueryRange] = useState({ start: todayStr, end: todayStr });
 
   const [filterStore, setFilterStore] = useState("");
@@ -110,16 +113,22 @@ const HistoryView = () => {
     { key: "returnRevenue", label: "退費", width: "min-w-[100px]", isNegative: true },
   ];
 
-  // ★ 核心優化：這裡只監聽 `queryRange`，不理會 UI 的 `startDate` 與 `endDate`
+  // ★ 核心優化：如果 hasQueried 為 false，絕對不發送 Firebase 請求
   useEffect(() => {
+    if (!hasQueried) {
+      setStoreRawData([]);
+      setTherapistRawData([]);
+      return;
+    }
+    
     if (!queryRange.start || !queryRange.end) return;
+    
     const fetchData = async () => {
       setIsLoading(true);
       try {
         const collectionName = activeTab === "store" ? "daily_reports" : "therapist_daily_reports";
         const collectionRef = getCollectionPath(collectionName);
         
-        // 使用真正的 queryRange 發送請求
         const q = query(
           collectionRef, 
           where("date", ">=", queryRange.start), 
@@ -137,7 +146,7 @@ const HistoryView = () => {
       }
     };
     fetchData();
-  }, [activeTab, queryRange, getCollectionPath, showToast, currentBrand]);
+  }, [activeTab, queryRange, getCollectionPath, showToast, currentBrand, hasQueried]);
 
   const filteredData = useMemo(() => {
     return (activeTab === "store" ? storeRawData : therapistRawData).filter((d) => {
@@ -201,6 +210,7 @@ const HistoryView = () => {
   // ★ 執行查詢動作
   const handleExecuteQuery = () => {
     setQueryRange({ start: startDate, end: endDate });
+    setHasQueried(true); // 開啟抓取開關
   };
 
   // ★ 執行重置動作
@@ -208,6 +218,9 @@ const HistoryView = () => {
     setStartDate(todayStr);
     setEndDate(todayStr);
     setQueryRange({ start: todayStr, end: todayStr });
+    setHasQueried(false); // 關閉開關，清空畫面
+    setStoreRawData([]);
+    setTherapistRawData([]);
     if(allStores.length > 1) setFilterStore("");
   };
 
@@ -271,7 +284,6 @@ const HistoryView = () => {
                 </div>
                 
                 <div className="flex items-end gap-2">
-                  {/* ★ 新增：專屬的查詢按鈕！ */}
                   <button 
                     onClick={handleExecuteQuery} 
                     className="px-6 py-2 bg-stone-800 text-white rounded-xl font-bold flex gap-2 hover:bg-stone-900 transition-colors shadow-sm h-[46px] items-center justify-center whitespace-nowrap active:scale-95"
@@ -279,7 +291,6 @@ const HistoryView = () => {
                     <Search size={16} /> <span className="hidden sm:inline">查詢</span>
                   </button>
                   
-                  {/* 重置按鈕改為圖示按鈕以節省空間 */}
                   <button 
                     onClick={handleResetQuery} 
                     title="重置為今天"
@@ -292,50 +303,65 @@ const HistoryView = () => {
             </div>
 
             <div className="w-full border border-stone-200 rounded-xl bg-white shadow-sm flex flex-col relative z-10">
-              <div className="overflow-x-auto w-full rounded-xl"> 
-                <table className="w-full text-left text-sm whitespace-nowrap">
-                  <thead className="bg-stone-100 text-stone-500 font-bold uppercase text-xs">
-                    <tr>
-                      <th className="p-4 md:sticky md:left-0 bg-stone-100 md:z-20 border-r border-stone-200 min-w-[140px]">日期 / 店名</th>
-                      {activeTab === "store" ? ( STORE_FIELDS.map(f => (<th key={f.key} className={`p-4 text-right ${f.isNegative ? "text-rose-500" : ""} ${f.width}`}>{f.label}</th>)) ) : ( <> <th className="p-4 min-w-[100px]">姓名</th>{THERAPIST_FIELDS.map(f => (<th key={f.key} className={`p-4 text-right ${f.isNegative ? "text-rose-500" : f.isHighlight ? "text-indigo-600" : ""} ${f.width}`}>{f.label}</th>))}</> )}
-                      <th className="p-4 text-center bg-stone-100 md:sticky md:right-0 md:z-20 border-l border-stone-200 min-w-[100px] shadow-[-4px_0_8px_-2px_rgba(0,0,0,0.05)]">動作</th>
-                    </tr>
-                  </thead>
-                  <tbody className="divide-y divide-stone-100">
-                    {isLoading && <tr><td colSpan={20} className="p-10 text-center"><Loader2 className="animate-spin inline mr-2"/>資料讀取中...</td></tr>}
-                    {!isLoading && filteredData.map((row) => {
-                      const isEditing = editId === row.id;
-                      const displayStore = cleanStoreName(getStoreName(row));
-                      return (
-                        <tr key={row.id} className="group hover:bg-stone-50 transition-colors">
-                          <td className="p-4 md:sticky md:left-0 bg-white group-hover:bg-stone-50 md:z-10 border-r border-stone-100">
-                            <div className="flex flex-col">
-                              {isEditing ? (
-                                <div className="mb-1 w-32 relative">
-                                  <SmartDatePicker 
-                                    selectedDate={editForm.date}
-                                    onDateSelect={(val) => handleEditChange('date', val)}
-                                    maxDate={todayStr} 
-                                  />
-                                </div>
-                              ) : (
-                                <span className="font-mono font-bold text-stone-600">{row.date}</span>
-                              )}
-                              <span className="font-bold text-stone-800">{displayStore}店</span>
-                            </div>
-                          </td>
-                          {activeTab === "store" ? ( STORE_FIELDS.map(f => (<td key={f.key} className="p-4 text-right">{isEditing ? (<input type="number" value={editForm[f.key]} onChange={(e)=>handleEditChange(f.key,e.target.value)} readOnly={f.key === 'accrual'} className={`border rounded w-20 text-right px-1 outline-none focus:border-amber-400 ${f.isNegative ? "text-rose-500" : ""} ${f.key === 'accrual' ? 'bg-stone-100 text-stone-500' : ''}`}/>) : (<span className={f.isNegative ? "text-rose-500 font-bold" : ""}>{fmt(row[f.key])}</span>)}</td>)) ) : ( <> <td className="p-4 font-bold">{row.therapistName}</td>{THERAPIST_FIELDS.map(f => (<td key={f.key} className="p-4 text-right">{isEditing ? (<input type="number" value={editForm[f.key]} onChange={(e)=>handleEditChange(f.key,e.target.value)} readOnly={f.readOnly} className={`border rounded w-20 text-right px-1 outline-none focus:border-indigo-400 ${f.isNegative ? "text-rose-500" : f.isHighlight ? "font-bold text-indigo-600" : ""} ${f.readOnly ? "bg-stone-100 text-stone-500 cursor-not-allowed" : ""}`}/>) : (<span className={f.isNegative ? "text-rose-500 font-bold" : f.isHighlight ? "text-indigo-600 font-bold" : ""}>{fmt(row[f.key])}</span>)}</td>))}</> )}
-                          <td className="p-4 text-center md:sticky md:right-0 bg-white group-hover:bg-stone-50 md:z-10 border-l border-stone-100 shadow-[-4px_0_8px_-2px_rgba(0,0,0,0.05)]">
-                            {isEditing ? ( <div className="flex gap-2 justify-center"><button onClick={saveEdit} className="p-1.5 bg-emerald-100 text-emerald-600 rounded hover:bg-emerald-200"><Save size={16}/></button><button onClick={cancelEdit} className="p-1.5 bg-stone-100 text-stone-500 rounded hover:bg-stone-200"><X size={16}/></button></div> ) : ( <div className="flex gap-2 justify-center"><button onClick={()=>startEdit(row)} className="p-1.5 hover:bg-amber-50 text-amber-500 rounded transition-colors"><Edit2 size={16}/></button><button onClick={()=>handleDelete(row.id)} className="p-1.5 hover:bg-rose-50 text-rose-500 rounded transition-colors"><Trash2 size={16}/></button></div> )}
-                          </td>
-                        </tr>
-                      );
-                    })}
-                    {!isLoading && filteredData.length === 0 && ( <tr><td colSpan={20} className="p-10 text-center text-stone-400">該日期區間無相關資料 (請確認日期或篩選條件)</td></tr> )}
-                  </tbody>
-                </table>
-              </div>
-              <div className="md:hidden py-2 text-center text-stone-400 text-xs flex justify-center items-center gap-1 bg-stone-50 rounded-b-xl border-t border-stone-100"><ArrowLeft size={12}/> 左右滑動以查看更多 <ArrowRight size={12}/></div>
+              
+              {/* ★ 加入待命區 UI 邏輯 */}
+              {!hasQueried ? (
+                <div className="flex flex-col items-center justify-center py-20 px-4 text-center bg-stone-50/50 rounded-xl border-2 border-dashed border-stone-200 m-2">
+                  <Database size={48} className="text-stone-300 mb-4" />
+                  <h4 className="text-stone-500 font-bold text-lg mb-2 tracking-wide">數據查詢待命區</h4>
+                  <p className="text-stone-400 text-sm max-w-sm">
+                    為保護系統效能，進入此頁面時不會預先載入歷史資料。<br/><br/>
+                    請在上方設定好日期範圍與店家後，點擊「<strong className="text-stone-600">查詢</strong>」以調閱紀錄。
+                  </p>
+                </div>
+              ) : (
+                <div className="overflow-x-auto w-full rounded-xl"> 
+                  <table className="w-full text-left text-sm whitespace-nowrap">
+                    <thead className="bg-stone-100 text-stone-500 font-bold uppercase text-xs">
+                      <tr>
+                        <th className="p-4 md:sticky md:left-0 bg-stone-100 md:z-20 border-r border-stone-200 min-w-[140px]">日期 / 店名</th>
+                        {activeTab === "store" ? ( STORE_FIELDS.map(f => (<th key={f.key} className={`p-4 text-right ${f.isNegative ? "text-rose-500" : ""} ${f.width}`}>{f.label}</th>)) ) : ( <> <th className="p-4 min-w-[100px]">姓名</th>{THERAPIST_FIELDS.map(f => (<th key={f.key} className={`p-4 text-right ${f.isNegative ? "text-rose-500" : f.isHighlight ? "text-indigo-600" : ""} ${f.width}`}>{f.label}</th>))}</> )}
+                        <th className="p-4 text-center bg-stone-100 md:sticky md:right-0 md:z-20 border-l border-stone-200 min-w-[100px] shadow-[-4px_0_8px_-2px_rgba(0,0,0,0.05)]">動作</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-stone-100">
+                      {isLoading && <tr><td colSpan={20} className="p-10 text-center"><Loader2 className="animate-spin inline mr-2"/>資料讀取中...</td></tr>}
+                      {!isLoading && filteredData.map((row) => {
+                        const isEditing = editId === row.id;
+                        const displayStore = cleanStoreName(getStoreName(row));
+                        return (
+                          <tr key={row.id} className="group hover:bg-stone-50 transition-colors">
+                            <td className="p-4 md:sticky md:left-0 bg-white group-hover:bg-stone-50 md:z-10 border-r border-stone-100">
+                              <div className="flex flex-col">
+                                {isEditing ? (
+                                  <div className="mb-1 w-32 relative">
+                                    <SmartDatePicker 
+                                      selectedDate={editForm.date}
+                                      onDateSelect={(val) => handleEditChange('date', val)}
+                                      maxDate={todayStr} 
+                                    />
+                                  </div>
+                                ) : (
+                                  <span className="font-mono font-bold text-stone-600">{row.date}</span>
+                                )}
+                                <span className="font-bold text-stone-800">{displayStore}店</span>
+                              </div>
+                            </td>
+                            {activeTab === "store" ? ( STORE_FIELDS.map(f => (<td key={f.key} className="p-4 text-right">{isEditing ? (<input type="number" value={editForm[f.key]} onChange={(e)=>handleEditChange(f.key,e.target.value)} readOnly={f.key === 'accrual'} className={`border rounded w-20 text-right px-1 outline-none focus:border-amber-400 ${f.isNegative ? "text-rose-500" : ""} ${f.key === 'accrual' ? 'bg-stone-100 text-stone-500' : ''}`}/>) : (<span className={f.isNegative ? "text-rose-500 font-bold" : ""}>{fmt(row[f.key])}</span>)}</td>)) ) : ( <> <td className="p-4 font-bold">{row.therapistName}</td>{THERAPIST_FIELDS.map(f => (<td key={f.key} className="p-4 text-right">{isEditing ? (<input type="number" value={editForm[f.key]} onChange={(e)=>handleEditChange(f.key,e.target.value)} readOnly={f.readOnly} className={`border rounded w-20 text-right px-1 outline-none focus:border-indigo-400 ${f.isNegative ? "text-rose-500" : f.isHighlight ? "font-bold text-indigo-600" : ""} ${f.readOnly ? "bg-stone-100 text-stone-500 cursor-not-allowed" : ""}`}/>) : (<span className={f.isNegative ? "text-rose-500 font-bold" : f.isHighlight ? "text-indigo-600 font-bold" : ""}>{fmt(row[f.key])}</span>)}</td>))}</> )}
+                            <td className="p-4 text-center md:sticky md:right-0 bg-white group-hover:bg-stone-50 md:z-10 border-l border-stone-100 shadow-[-4px_0_8px_-2px_rgba(0,0,0,0.05)]">
+                              {isEditing ? ( <div className="flex gap-2 justify-center"><button onClick={saveEdit} className="p-1.5 bg-emerald-100 text-emerald-600 rounded hover:bg-emerald-200"><Save size={16}/></button><button onClick={cancelEdit} className="p-1.5 bg-stone-100 text-stone-500 rounded hover:bg-stone-200"><X size={16}/></button></div> ) : ( <div className="flex gap-2 justify-center"><button onClick={()=>startEdit(row)} className="p-1.5 hover:bg-amber-50 text-amber-500 rounded transition-colors"><Edit2 size={16}/></button><button onClick={()=>handleDelete(row.id)} className="p-1.5 hover:bg-rose-50 text-rose-500 rounded transition-colors"><Trash2 size={16}/></button></div> )}
+                            </td>
+                          </tr>
+                        );
+                      })}
+                      {!isLoading && filteredData.length === 0 && ( <tr><td colSpan={20} className="p-10 text-center text-stone-400">該日期區間無相關資料 (請確認日期或篩選條件)</td></tr> )}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+              {hasQueried && (
+                <div className="md:hidden py-2 text-center text-stone-400 text-xs flex justify-center items-center gap-1 bg-stone-50 rounded-b-xl border-t border-stone-100"><ArrowLeft size={12}/> 左右滑動以查看更多 <ArrowRight size={12}/></div>
+              )}
             </div>
           </div>
         </Card>

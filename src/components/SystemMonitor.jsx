@@ -2,7 +2,7 @@
 import React, { useState, useEffect, useContext } from "react";
 import {
   Smartphone, Monitor, ChevronLeft, ChevronRight, RefreshCw,
-  Calendar
+  Calendar, Search, RotateCcw, ShieldAlert
 } from "lucide-react";
 import { 
   query, limit, onSnapshot, where, Timestamp 
@@ -10,7 +10,6 @@ import {
 
 import { AppContext } from "../AppContext";
 import { ViewWrapper, Card } from "./SharedUI";
-// ★ 僅引入必要的標準化組件與函式
 import SmartDatePicker from "./SmartDatePicker";
 import { formatLocalYYYYMMDD } from "../utils/helpers";
 
@@ -22,24 +21,33 @@ const SystemMonitor = () => {
   const [currentPage, setCurrentPage] = useState(1);
   const itemsPerPage = 20;
 
-  // ★ 使用標準化濾水器初始化，確保時區與格式正確
-  const [dateRange, setDateRange] = useState({
-    start: formatLocalYYYYMMDD(new Date()),
-    end: formatLocalYYYYMMDD(new Date())
+  // ★ 極致效能防護：新增一個開關，預設為 false (不載入資料)
+  const [hasQueried, setHasQueried] = useState(false);
+
+  const todayStr = formatLocalYYYYMMDD(new Date());
+
+  const [uiDateRange, setUiDateRange] = useState({
+    start: todayStr,
+    end: todayStr
+  });
+
+  const [queryDateRange, setQueryDateRange] = useState({
+    start: todayStr,
+    end: todayStr
   });
 
   const fetchLogs = () => {
     setLoading(true);
     setLogs([]); 
 
-    const startDate = new Date(`${dateRange.start}T00:00:00`);
-    const endDate = new Date(`${dateRange.end}T23:59:59`);
+    const startDate = new Date(`${queryDateRange.start}T00:00:00`);
+    const endDate = new Date(`${queryDateRange.end}T23:59:59`);
 
     const q = query(
       getCollectionPath("system_logs"),
       where("timestamp", ">=", Timestamp.fromDate(startDate)),
       where("timestamp", "<=", Timestamp.fromDate(endDate)),
-      limit(500)
+      limit(500) 
     );
 
     const unsubscribe = onSnapshot(q, (snapshot) => {
@@ -64,10 +72,17 @@ const SystemMonitor = () => {
     return unsubscribe;
   };
 
+  // ★ 核心優化：如果 hasQueried 是 false，直接打斷，絕對不發送 Firebase 請求
   useEffect(() => {
+    if (!hasQueried) {
+      setLogs([]); // 確保資料是空的
+      return;
+    }
     const unsub = fetchLogs();
-    return () => unsub();
-  }, [dateRange, currentBrand]);
+    return () => {
+      if (unsub) unsub();
+    };
+  }, [queryDateRange, currentBrand, hasQueried]);
 
   const totalPages = Math.ceil(logs.length / itemsPerPage);
   const currentData = logs.slice(
@@ -110,50 +125,93 @@ const SystemMonitor = () => {
       </div>
     );
 
+  const handleExecuteQuery = () => {
+    setCurrentPage(1); 
+    setQueryDateRange(uiDateRange);
+    setHasQueried(true); // ★ 點擊查詢後才開啟開關
+  };
+
+  const handleResetQuery = () => {
+    setUiDateRange({ start: todayStr, end: todayStr });
+    setQueryDateRange({ start: todayStr, end: todayStr });
+    setHasQueried(false); // ★ 重置時關閉開關，清空畫面
+    setCurrentPage(1);
+    setLogs([]);
+  };
+
   return (
     <ViewWrapper>
       <div className="space-y-6 pb-20">
-        {/* ★ 這裡完全還原您原始的 Card 與 Flex 排版，一個樣式都沒多改。 */}
-        <Card>
-          <div className="flex flex-col md:flex-row justify-between items-start md:items-center mb-6 gap-4">
+        <Card className="!overflow-visible z-30 relative">
+          <div className="flex flex-col lg:flex-row justify-between items-start lg:items-center mb-6 gap-4">
             <div>
               <h3 className="text-lg font-bold text-stone-700">系統操作日誌 ({currentBrand.label})</h3>
               <p className="text-xs text-stone-400">追蹤系統內的所有操作紀錄</p>
             </div>
             
-            {/* ★ 這裡也是完全還原您原本的篩選列排版， z-50 保留原本的設定即可 */}
-            <div className="flex items-center gap-2 bg-stone-50 p-2 rounded-xl border border-stone-200 relative z-50">
+            <div className="flex flex-wrap items-center gap-2 bg-stone-50 p-2 rounded-xl border border-stone-200 relative z-50 w-full lg:w-auto">
               <div className="flex items-center gap-2">
                 <Calendar size={14} className="text-stone-400" />
                 <div className="flex items-center gap-2">
-                  {/* ★ 僅精準更換組件，並修正參數名稱為 selectedDate 與 onDateSelect，其餘 relative 設定皆保留 ★ */}
-                  <div className="relative">
+                  <div className="relative w-32 sm:w-36">
                     <SmartDatePicker 
-                      selectedDate={dateRange.start}
-                      onDateSelect={(val) => setDateRange(prev => ({ ...prev, start: val }))}
+                      selectedDate={uiDateRange.start}
+                      onDateSelect={(val) => setUiDateRange(prev => {
+                        const newEnd = val > prev.end ? val : prev.end;
+                        return { start: val, end: newEnd };
+                      })}
+                      maxDate={todayStr} 
                     />
                   </div>
                   <span className="text-stone-300">~</span>
-                  <div className="relative">
+                  <div className="relative w-32 sm:w-36">
                     <SmartDatePicker 
-                      selectedDate={dateRange.end}
-                      onDateSelect={(val) => setDateRange(prev => ({ ...prev, end: val }))}
+                      selectedDate={uiDateRange.end}
+                      onDateSelect={(val) => setUiDateRange(prev => ({ ...prev, end: val }))}
+                      align="right"
+                      minDate={uiDateRange.start} 
+                      maxDate={todayStr}          
                     />
                   </div>
                 </div>
               </div>
+              
+              <div className="flex items-center gap-2 w-full sm:w-auto mt-2 sm:mt-0 lg:ml-2">
+                <button 
+                  onClick={handleExecuteQuery} 
+                  className="flex-1 sm:flex-none px-4 py-2 bg-stone-800 text-white rounded-lg text-sm font-bold flex gap-2 hover:bg-stone-900 transition-colors shadow-sm items-center justify-center whitespace-nowrap active:scale-95"
+                >
+                  <Search size={16} /> 查詢
+                </button>
+                <button 
+                  onClick={handleResetQuery} 
+                  title="重置為今天"
+                  className="px-3 py-2 bg-white border border-stone-200 text-stone-500 rounded-lg hover:bg-stone-50 transition-colors shadow-sm flex items-center justify-center"
+                >
+                  <RotateCcw size={16} />
+                </button>
+              </div>
             </div>
           </div>
 
-          {loading && logs.length === 0 ? (
+          {/* ★ 畫面呈現邏輯：尚未查詢 -> 讀取中 -> 顯示表格 */}
+          {!hasQueried ? (
+            <div className="flex flex-col items-center justify-center py-20 px-4 text-center bg-stone-50/50 rounded-2xl border-2 border-dashed border-stone-200">
+              <ShieldAlert size={48} className="text-stone-300 mb-4" />
+              <h4 className="text-stone-500 font-bold text-lg mb-2 tracking-wide">日誌查詢待命區</h4>
+              <p className="text-stone-400 text-sm max-w-sm">
+                系統日誌資料量龐大，為保護系統效能與節省雲端資源，進入此頁面時不會預先載入資料。<br/><br/>
+                請在上方設定好日期範圍後，點擊「<strong className="text-stone-600">查詢</strong>」以調閱紀錄。
+              </p>
+            </div>
+          ) : loading && logs.length === 0 ? (
             <div className="space-y-4 p-4 text-center text-stone-400 py-20">
-              <RefreshCw className="animate-spin mx-auto mb-2" />
-              <p>資料讀取中...</p>
+              <RefreshCw className="animate-spin mx-auto mb-2" size={32} />
+              <p className="font-bold tracking-widest">資料調閱中...</p>
             </div>
           ) : (
             <>
-              {/* 表格排版完全保留 */}
-              <div className="overflow-x-auto min-h-[400px] rounded-2xl border border-stone-100">
+              <div className="overflow-x-auto min-h-[400px] rounded-2xl border border-stone-100 relative z-10">
                 <table className="w-full text-left border-collapse min-w-[600px]">
                   <thead className="bg-stone-50/50 text-stone-400 font-bold text-xs uppercase tracking-wider border-b border-stone-100">
                     <tr>
@@ -178,10 +236,14 @@ const SystemMonitor = () => {
                         </td>
                       </tr>
                     ))}
+                    {currentData.length === 0 && (
+                      <tr>
+                        <td colSpan="6" className="p-10 text-center text-stone-400 font-bold">在此日期範圍內無相關紀錄</td>
+                      </tr>
+                    )}
                   </tbody>
                 </table>
               </div>
-              {/* 分頁排版完全保留 */}
               {totalPages > 1 && (
                 <div className="flex justify-between items-center mt-4 pt-2 px-2">
                   <span className="text-sm text-stone-400 font-medium">頁次 {currentPage} / {totalPages}</span>
