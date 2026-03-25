@@ -15,7 +15,6 @@ import {
 import { db, appId } from "../config/firebase";
 import { ViewWrapper, Card } from "./SharedUI";
 import { AppContext } from "../AppContext";
-// ★ 引入標準化日期組件與濾水器
 import SmartDatePicker from "./SmartDatePicker";
 import { formatLocalYYYYMMDD, toStandardDateFormat } from "../utils/helpers";
 
@@ -31,9 +30,15 @@ const HistoryView = () => {
   const [therapistRawData, setTherapistRawData] = useState([]);
   const [isLoading, setIsLoading] = useState(false);
   
-  // 初始化日期，確保時區與格式正確
-  const [startDate, setStartDate] = useState(() => formatLocalYYYYMMDD(new Date()));
-  const [endDate, setEndDate] = useState(() => formatLocalYYYYMMDD(new Date()));
+  // 取得今天日期的標準化字串
+  const todayStr = formatLocalYYYYMMDD(new Date());
+
+  // ★ 狀態解耦：這兩個是用來綁定「UI 畫面」的日期，使用者隨便選都不會觸發讀取
+  const [startDate, setStartDate] = useState(todayStr);
+  const [endDate, setEndDate] = useState(todayStr);
+
+  // ★ 狀態解耦：這才是真正送給 Firebase 去「查詢」的日期範圍
+  const [queryRange, setQueryRange] = useState({ start: todayStr, end: todayStr });
 
   const [filterStore, setFilterStore] = useState("");
   const [editId, setEditId] = useState(null);
@@ -105,24 +110,34 @@ const HistoryView = () => {
     { key: "returnRevenue", label: "退費", width: "min-w-[100px]", isNegative: true },
   ];
 
+  // ★ 核心優化：這裡只監聽 `queryRange`，不理會 UI 的 `startDate` 與 `endDate`
   useEffect(() => {
-    if (!startDate || !endDate) return;
+    if (!queryRange.start || !queryRange.end) return;
     const fetchData = async () => {
       setIsLoading(true);
       try {
         const collectionName = activeTab === "store" ? "daily_reports" : "therapist_daily_reports";
         const collectionRef = getCollectionPath(collectionName);
-        // 使用清洗後的 YYYY-MM-DD 精準查詢
-        const q = query(collectionRef, where("date", ">=", startDate), where("date", "<=", endDate), orderBy("date", "desc"));
+        
+        // 使用真正的 queryRange 發送請求
+        const q = query(
+          collectionRef, 
+          where("date", ">=", queryRange.start), 
+          where("date", "<=", queryRange.end), 
+          orderBy("date", "desc")
+        );
+        
         const snap = await getDocs(q);
         const data = snap.docs.map(doc => ({ id: doc.id, ...doc.data() }));
         if (activeTab === "store") setStoreRawData(data); else setTherapistRawData(data);
       } catch (e) {
         showToast("讀取失敗: " + e.message, "error");
-      } finally { setIsLoading(false); }
+      } finally { 
+        setIsLoading(false); 
+      }
     };
     fetchData();
-  }, [activeTab, startDate, endDate, getCollectionPath, showToast, currentBrand]);
+  }, [activeTab, queryRange, getCollectionPath, showToast, currentBrand]);
 
   const filteredData = useMemo(() => {
     return (activeTab === "store" ? storeRawData : therapistRawData).filter((d) => {
@@ -163,7 +178,6 @@ const HistoryView = () => {
       let cleanData = {};
       const fields = activeTab === "store" ? ["cash", "accrual", "operationalAccrual", "skincareSales", "traffic", "newCustomers", "newCustomerClosings", "newCustomerSales", "refund", "skincareRefund"] : ["totalRevenue", "newCustomerRevenue", "newCustomerCount", "newCustomerClosings", "oldCustomerRevenue", "oldCustomerCount", "returnRevenue"];
       fields.forEach(f => { cleanData[f] = Number(editForm[f] || 0); });
-      // 將 editForm 裡的 date、storeName 等資訊與清洗後的數字欄位合併
       cleanData = { ...editForm, ...cleanData };
       await updateDoc(docRef, cleanData);
       showToast("更新成功", "success");
@@ -184,8 +198,18 @@ const HistoryView = () => {
     } catch (e) { showToast("刪除失敗", "error"); }
   };
 
-  // 取得今天日期的標準化字串
-  const todayStr = formatLocalYYYYMMDD(new Date());
+  // ★ 執行查詢動作
+  const handleExecuteQuery = () => {
+    setQueryRange({ start: startDate, end: endDate });
+  };
+
+  // ★ 執行重置動作
+  const handleResetQuery = () => {
+    setStartDate(todayStr);
+    setEndDate(todayStr);
+    setQueryRange({ start: todayStr, end: todayStr });
+    if(allStores.length > 1) setFilterStore("");
+  };
 
   return (
     <ViewWrapper>
@@ -206,7 +230,6 @@ const HistoryView = () => {
            </div>
         </div>
 
-        {/* 修正 1：移除外層 overflow-hidden，確保日曆 Portal 正常運作 */}
         <Card className="!overflow-visible z-30 relative">
           <div className="space-y-4 w-full">
             
@@ -216,26 +239,23 @@ const HistoryView = () => {
                 <label className="block text-xs font-bold text-stone-400 mb-1 flex items-center gap-1"><Calendar size={12}/> 篩選日期區間</label>
                 <div className="flex flex-col md:flex-row items-center gap-2 w-full">
                   <div className="w-full sm:w-44">
-                    {/* ★ 核心防呆：起始日 */}
                     <SmartDatePicker 
                       selectedDate={startDate}
                       onDateSelect={(val) => {
                         setStartDate(val);
-                        // 如果選的起始日大於目前的截止日，自動推移截止日
                         if (val > endDate) setEndDate(val);
                       }}
-                      maxDate={todayStr} // 不能選未來
+                      maxDate={todayStr} 
                     />
                   </div>
                   <span className="text-stone-400 font-bold transform rotate-90 md:rotate-0">→</span>
                   <div className="w-full sm:w-44 relative">
-                    {/* ★ 核心防呆：截止日 */}
                     <SmartDatePicker 
                       selectedDate={endDate}
                       onDateSelect={(val) => setEndDate(val)}
                       align="right"
-                      minDate={startDate} // 不能早於起始日
-                      maxDate={todayStr}  // 不能選未來
+                      minDate={startDate} 
+                      maxDate={todayStr}  
                     />
                   </div>
                 </div>
@@ -249,8 +269,24 @@ const HistoryView = () => {
                     {allStores.map((s) => <option key={s} value={s}>{s}</option>)}
                   </select>
                 </div>
-                <div className="flex items-end">
-                  <button onClick={() => { setStartDate(todayStr); setEndDate(todayStr); if(allStores.length > 1) setFilterStore(""); }} className="px-4 py-2 bg-white border border-stone-200 text-stone-600 rounded-xl font-bold flex gap-2 hover:bg-stone-50 transition-colors shadow-sm h-[46px] items-center justify-center whitespace-nowrap"><RotateCcw size={16} /> <span className="hidden sm:inline">重置</span></button>
+                
+                <div className="flex items-end gap-2">
+                  {/* ★ 新增：專屬的查詢按鈕！ */}
+                  <button 
+                    onClick={handleExecuteQuery} 
+                    className="px-6 py-2 bg-stone-800 text-white rounded-xl font-bold flex gap-2 hover:bg-stone-900 transition-colors shadow-sm h-[46px] items-center justify-center whitespace-nowrap active:scale-95"
+                  >
+                    <Search size={16} /> <span className="hidden sm:inline">查詢</span>
+                  </button>
+                  
+                  {/* 重置按鈕改為圖示按鈕以節省空間 */}
+                  <button 
+                    onClick={handleResetQuery} 
+                    title="重置為今天"
+                    className="px-3 py-2 bg-white border border-stone-200 text-stone-500 rounded-xl hover:bg-stone-50 transition-colors shadow-sm h-[46px] flex items-center justify-center"
+                  >
+                    <RotateCcw size={18} />
+                  </button>
                 </div>
               </div>
             </div>
@@ -274,13 +310,12 @@ const HistoryView = () => {
                         <tr key={row.id} className="group hover:bg-stone-50 transition-colors">
                           <td className="p-4 md:sticky md:left-0 bg-white group-hover:bg-stone-50 md:z-10 border-r border-stone-100">
                             <div className="flex flex-col">
-                              {/* ★ 關鍵修正 1：將表格內部的舊輸入框也替換為 SmartDatePicker ★ */}
                               {isEditing ? (
                                 <div className="mb-1 w-32 relative">
                                   <SmartDatePicker 
                                     selectedDate={editForm.date}
                                     onDateSelect={(val) => handleEditChange('date', val)}
-                                    maxDate={todayStr} // 表格內的編輯也不能選未來
+                                    maxDate={todayStr} 
                                   />
                                 </div>
                               ) : (
