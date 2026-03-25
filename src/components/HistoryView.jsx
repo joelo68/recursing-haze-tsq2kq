@@ -184,6 +184,9 @@ const HistoryView = () => {
     } catch (e) { showToast("刪除失敗", "error"); }
   };
 
+  // 取得今天日期的標準化字串
+  const todayStr = formatLocalYYYYMMDD(new Date());
+
   return (
     <ViewWrapper>
       <div className="grid grid-cols-1 gap-6 w-full pb-20">
@@ -213,18 +216,26 @@ const HistoryView = () => {
                 <label className="block text-xs font-bold text-stone-400 mb-1 flex items-center gap-1"><Calendar size={12}/> 篩選日期區間</label>
                 <div className="flex flex-col md:flex-row items-center gap-2 w-full">
                   <div className="w-full sm:w-44">
+                    {/* ★ 核心防呆：起始日 */}
                     <SmartDatePicker 
                       selectedDate={startDate}
-                      onDateSelect={(val) => setStartDate(val)}
+                      onDateSelect={(val) => {
+                        setStartDate(val);
+                        // 如果選的起始日大於目前的截止日，自動推移截止日
+                        if (val > endDate) setEndDate(val);
+                      }}
+                      maxDate={todayStr} // 不能選未來
                     />
                   </div>
                   <span className="text-stone-400 font-bold transform rotate-90 md:rotate-0">→</span>
                   <div className="w-full sm:w-44 relative">
-                    {/* 第二個選取器靠右對齊，防止超出 */}
+                    {/* ★ 核心防呆：截止日 */}
                     <SmartDatePicker 
                       selectedDate={endDate}
                       onDateSelect={(val) => setEndDate(val)}
                       align="right"
+                      minDate={startDate} // 不能早於起始日
+                      maxDate={todayStr}  // 不能選未來
                     />
                   </div>
                 </div>
@@ -239,7 +250,7 @@ const HistoryView = () => {
                   </select>
                 </div>
                 <div className="flex items-end">
-                  <button onClick={() => { const today = formatLocalYYYYMMDD(new Date()); setStartDate(today); setEndDate(today); if(allStores.length > 1) setFilterStore(""); }} className="px-4 py-2 bg-white border border-stone-200 text-stone-600 rounded-xl font-bold flex gap-2 hover:bg-stone-50 transition-colors shadow-sm h-[46px] items-center justify-center whitespace-nowrap"><RotateCcw size={16} /> <span className="hidden sm:inline">重置</span></button>
+                  <button onClick={() => { setStartDate(todayStr); setEndDate(todayStr); if(allStores.length > 1) setFilterStore(""); }} className="px-4 py-2 bg-white border border-stone-200 text-stone-600 rounded-xl font-bold flex gap-2 hover:bg-stone-50 transition-colors shadow-sm h-[46px] items-center justify-center whitespace-nowrap"><RotateCcw size={16} /> <span className="hidden sm:inline">重置</span></button>
                 </div>
               </div>
             </div>
@@ -269,6 +280,7 @@ const HistoryView = () => {
                                   <SmartDatePicker 
                                     selectedDate={editForm.date}
                                     onDateSelect={(val) => handleEditChange('date', val)}
+                                    maxDate={todayStr} // 表格內的編輯也不能選未來
                                   />
                                 </div>
                               ) : (

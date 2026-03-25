@@ -1,9 +1,11 @@
+// src/components/SmartDatePicker.jsx
 import React, { useState, useRef, useEffect } from "react";
 import ReactDOM from "react-dom"; 
 import { Calendar as CalendarIcon, X } from "lucide-react";
 import SmartCalendar from "./SmartCalendar";
 
-const SmartDatePicker = ({ selectedDate, onDateSelect, stores, salesData, maxDate, align = "left" }) => {
+// ★ 新增 minDate 參數
+const SmartDatePicker = ({ selectedDate, onDateSelect, stores, salesData, maxDate, minDate, align = "left" }) => {
   const [isOpen, setIsOpen] = useState(false);
   const containerRef = useRef(null);
   const calendarRef = useRef(null);
@@ -38,10 +40,7 @@ const SmartDatePicker = ({ selectedDate, onDateSelect, stores, salesData, maxDat
          if (leftPos < 0) leftPos = 12; 
       }
 
-      setCoords({
-        top: rect.bottom + window.scrollY + 2,
-        left: leftPos
-      });
+      setCoords({ top: rect.bottom + window.scrollY + 2, left: leftPos });
     }
   }, [isOpen, selectedDate]); 
 
@@ -49,9 +48,7 @@ const SmartDatePicker = ({ selectedDate, onDateSelect, stores, salesData, maxDat
     const handleClickOutside = (event) => {
       if (window.innerWidth >= 768) { 
         if (containerRef.current && containerRef.current.contains(event.target)) return; 
-        if (calendarRef.current && !calendarRef.current.contains(event.target)) {
-          setIsOpen(false);
-        }
+        if (calendarRef.current && !calendarRef.current.contains(event.target)) setIsOpen(false);
       }
     };
     document.addEventListener("mousedown", handleClickOutside);
@@ -59,43 +56,26 @@ const SmartDatePicker = ({ selectedDate, onDateSelect, stores, salesData, maxDat
   }, [isOpen]);
 
   const DesktopCalendar = (
-    <div ref={calendarRef} className="z-[9999] animate-in fade-in zoom-in-95 duration-200 absolute shadow-2xl rounded-2xl border border-stone-100 bg-white" style={{
-      top: `${coords.top}px`,
-      left: `${coords.left}px`,
-    }}>
+    <div ref={calendarRef} className="z-[9999] animate-in fade-in zoom-in-95 duration-200 absolute shadow-2xl rounded-2xl border border-stone-100 bg-white" style={{ top: `${coords.top}px`, left: `${coords.left}px` }}>
       <SmartCalendar 
         selectedDate={selectedDate}
-        onDateSelect={(date) => {
-          onDateSelect(date);
-          setIsOpen(false); 
-        }}
-        stores={stores}
-        salesData={salesData}
-        onClose={() => setIsOpen(false)}
-        maxDate={maxDate}
+        onDateSelect={(date) => { onDateSelect(date); setIsOpen(false); }}
+        stores={stores} salesData={salesData} onClose={() => setIsOpen(false)}
+        maxDate={maxDate} minDate={minDate} // ★ 傳遞給底層
       />
     </div>
   );
 
   const MobileCalendar = (
     <>
-      {/* 全螢幕背景遮罩 */}
       <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-[9998] animate-in fade-in duration-300" onClick={() => setIsOpen(false)}/>
-      
-      {/* 畫面中央的日曆彈窗 */}
       <div ref={calendarRef} className="z-[9999] animate-in fade-in zoom-in-95 duration-300 fixed top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 flex justify-center items-center max-w-[95vw]">
-         {/* ★ 核心修正：加入 w-fit 讓白框緊緊貼合日曆本體，拒絕多餘白邊！ */}
          <div className="overflow-hidden rounded-3xl shadow-2xl bg-white w-fit">
             <SmartCalendar 
               selectedDate={selectedDate}
-              onDateSelect={(date) => {
-                onDateSelect(date);
-                setIsOpen(false); 
-              }}
-              stores={stores}
-              salesData={salesData}
-              onClose={() => setIsOpen(false)}
-              maxDate={maxDate}
+              onDateSelect={(date) => { onDateSelect(date); setIsOpen(false); }}
+              stores={stores} salesData={salesData} onClose={() => setIsOpen(false)}
+              maxDate={maxDate} minDate={minDate} // ★ 傳遞給底層
             />
          </div>
       </div>
@@ -104,19 +84,11 @@ const SmartDatePicker = ({ selectedDate, onDateSelect, stores, salesData, maxDat
 
   return (
     <div className="relative w-full" ref={containerRef}>
-      <button
-        type="button" 
-        onClick={toggleCalendar}
-        className="w-full flex items-center justify-between gap-3 bg-white border border-stone-200 px-3 py-2 rounded-lg text-stone-700 font-bold hover:bg-stone-50 transition-colors shadow-sm"
-      >
+      <button type="button" onClick={toggleCalendar} className="w-full flex items-center justify-between gap-3 bg-white border border-stone-200 px-3 py-2 rounded-lg text-stone-700 font-bold hover:bg-stone-50 transition-colors shadow-sm">
         <span className="text-sm">{selectedDate}</span>
         <CalendarIcon size={14} className="text-stone-400 ml-auto shrink-0" />
       </button>
-
-      {isOpen && ReactDOM.createPortal(
-        window.innerWidth < 768 ? MobileCalendar : DesktopCalendar,
-        document.body 
-      )}
+      {isOpen && ReactDOM.createPortal(window.innerWidth < 768 ? MobileCalendar : DesktopCalendar, document.body)}
     </div>
   );
 };
