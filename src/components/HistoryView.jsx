@@ -33,7 +33,6 @@ const HistoryView = () => {
   const [therapistRawData, setTherapistRawData] = useState([]);
   const [isLoading, setIsLoading] = useState(false);
   
-  // ★ 效能防護開關：預設不載入任何資料
   const [hasQueried, setHasQueried] = useState(false);
 
   const todayStr = formatLocalYYYYMMDD(new Date());
@@ -113,7 +112,6 @@ const HistoryView = () => {
     { key: "returnRevenue", label: "退費", width: "min-w-[100px]", isNegative: true },
   ];
 
-  // ★ 核心優化：如果 hasQueried 為 false，絕對不發送 Firebase 請求
   useEffect(() => {
     if (!hasQueried) {
       setStoreRawData([]);
@@ -164,7 +162,13 @@ const HistoryView = () => {
     });
   }, [storeRawData, therapistRawData, filterStore, myAllowedStores, userRole, currentUser, activeTab, cleanStoreName]);
 
-  const startEdit = (row) => { setEditId(row.id); setEditForm({ ...row, date: toStandardDateFormat(row.date) }); };
+  const startEdit = (row) => { 
+    setEditId(row.id); 
+    // ★ 修復：開啟修改當下，強制將舊的 / 替換為 -
+    const safeDate = String(row.date || "").replace(/\//g, "-");
+    setEditForm({ ...row, date: safeDate }); 
+  };
+  
   const cancelEdit = () => { setEditId(null); setEditForm({}); };
   
   const handleEditChange = (field, value) => { 
@@ -187,7 +191,11 @@ const HistoryView = () => {
       let cleanData = {};
       const fields = activeTab === "store" ? ["cash", "accrual", "operationalAccrual", "skincareSales", "traffic", "newCustomers", "newCustomerClosings", "newCustomerSales", "refund", "skincareRefund"] : ["totalRevenue", "newCustomerRevenue", "newCustomerCount", "newCustomerClosings", "oldCustomerRevenue", "oldCustomerCount", "returnRevenue"];
       fields.forEach(f => { cleanData[f] = Number(editForm[f] || 0); });
-      cleanData = { ...editForm, ...cleanData };
+      
+      // ★ 終極修復：存檔前，強制把日期格式洗成標準的橫線格式
+      const finalSafeDate = String(editForm.date || "").replace(/\//g, "-");
+      cleanData = { ...editForm, ...cleanData, date: finalSafeDate };
+
       await updateDoc(docRef, cleanData);
       showToast("更新成功", "success");
       const updateState = activeTab === "store" ? setStoreRawData : setTherapistRawData;
@@ -207,18 +215,16 @@ const HistoryView = () => {
     } catch (e) { showToast("刪除失敗", "error"); }
   };
 
-  // ★ 執行查詢動作
   const handleExecuteQuery = () => {
     setQueryRange({ start: startDate, end: endDate });
-    setHasQueried(true); // 開啟抓取開關
+    setHasQueried(true);
   };
 
-  // ★ 執行重置動作
   const handleResetQuery = () => {
     setStartDate(todayStr);
     setEndDate(todayStr);
     setQueryRange({ start: todayStr, end: todayStr });
-    setHasQueried(false); // 關閉開關，清空畫面
+    setHasQueried(false);
     setStoreRawData([]);
     setTherapistRawData([]);
     if(allStores.length > 1) setFilterStore("");
@@ -304,7 +310,6 @@ const HistoryView = () => {
 
             <div className="w-full border border-stone-200 rounded-xl bg-white shadow-sm flex flex-col relative z-10">
               
-              {/* ★ 加入待命區 UI 邏輯 */}
               {!hasQueried ? (
                 <div className="flex flex-col items-center justify-center py-20 px-4 text-center bg-stone-50/50 rounded-xl border-2 border-dashed border-stone-200 m-2">
                   <Database size={48} className="text-stone-300 mb-4" />

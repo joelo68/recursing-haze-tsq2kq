@@ -15,7 +15,7 @@ const DashboardView = () => {
   const { 
     fmtMoney, fmtNum, targets, userRole, currentUser, 
     allReports, budgets, managers, selectedYear, selectedMonth, therapistReports,
-    currentBrand, therapists, dailyLoginCount, yesterdayLoginCount // ★ 取出昨日數據
+    currentBrand, therapists, dailyLoginCount, yesterdayLoginCount 
   } = useContext(AppContext);
 
   const [viewMode, setViewMode] = useState((userRole === 'therapist' || userRole === 'trainer') ? 'therapist' : 'store');
@@ -516,12 +516,13 @@ const DashboardView = () => {
               <div className="flex items-center gap-3">
                 <div className={`w-2 h-8 rounded-full ${brandInfo.id.toLowerCase().includes('anniu') ? 'bg-teal-500' : brandInfo.id.toLowerCase().includes('yibo') ? 'bg-purple-500' : 'bg-amber-500'}`}></div>
                 <div>
-                  <div className="flex items-center gap-3">
+                  {/* ★ 加入 flex-wrap 讓手機版空間不夠時自動換行排列 */}
+                  <div className="flex flex-wrap items-center gap-2">
                     <h1 className="text-xl md:text-2xl font-extrabold text-stone-800 tracking-tight">{brandInfo.name} 營運總覽</h1>
                     
-                    {/* ★★★ 今日/昨日 雙重登入次數監控膠囊 ★★★ */}
+                    {/* ★★★ 今日/昨日 雙重登入次數監控膠囊 (移除 hidden，加入完美自適應) ★★★ */}
                     {(userRole === 'director' || userRole === 'trainer' || userRole === 'manager') && (
-                      <div className="hidden sm:flex items-center gap-3 px-3 py-1.5 bg-stone-50 border border-stone-200 rounded-xl shadow-sm">
+                      <div className="flex items-center gap-2 sm:gap-3 px-2 sm:px-3 py-1 sm:py-1.5 bg-stone-50 border border-stone-200 rounded-lg sm:rounded-xl shadow-sm">
                         <div className="flex items-center gap-1.5" title="今日系統登入次數">
                           <div className="relative flex h-2 w-2">
                             <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
@@ -531,7 +532,7 @@ const DashboardView = () => {
                           <span className="text-sm font-mono font-black text-stone-700">{dailyLoginCount || 0}</span>
                         </div>
                         
-                        <div className="w-px h-4 bg-stone-200"></div>
+                        <div className="w-px h-3 sm:h-4 bg-stone-200"></div>
                         
                         <div className="flex items-center gap-1.5" title="昨日系統登入次數">
                           <div className="h-2 w-2 rounded-full bg-stone-300"></div>
