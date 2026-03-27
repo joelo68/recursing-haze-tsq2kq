@@ -1,3 +1,4 @@
+// src/components/SystemMaintenance.jsx
 import React, { useState, useContext } from "react";
 import { db } from "../config/firebase";
 import { collection, getDocs, doc, writeBatch } from "firebase/firestore";
@@ -23,7 +24,6 @@ export default function SystemMaintenance() {
 
   // 工具 1: ★ 光速級資料格式深度清洗 (Batch Update) ★
   const handleFixDateFormats = async () => {
-    // ★ 修正：改用 currentBrand.label
     if (!window.confirm(`確定要對【${currentBrand.label}】執行深度日期清洗嗎？\n此操作不可逆，將強制統一所有混亂日期格式。`)) return;
     
     setLoading(true);
@@ -56,6 +56,11 @@ export default function SystemMaintenance() {
                 const newDate = `${y}-${m}-${d}`;
                 
                 if (newDate !== data.date) {
+                  // ★★★ 新增詳細 Log 追蹤 ★★★
+                  const storeDisplay = data.storeName || data.store || "未知店家";
+                  const personDisplay = data.therapistName ? ` - ${data.therapistName}` : "";
+                  addLog(`✏️ 修正 [${data.date} ➡️ ${newDate}] ${storeDisplay}${personDisplay}`);
+
                   batch.update(doc(getCollectionPath(colName), document.id), { date: newDate });
                   colFixedCount++;
                   totalFixedCount++;
@@ -94,7 +99,6 @@ export default function SystemMaintenance() {
   const handleBackupData = async () => {
     setLoading(true);
     setLogs([]);
-    // ★ 修正：改用 currentBrand.label
     addLog(`📦 正在準備打包 ${currentBrand.label} 所有日報數據...`);
 
     try {
@@ -188,7 +192,7 @@ export default function SystemMaintenance() {
         </div>
       </div>
 
-      <div className="bg-stone-900 rounded-2xl p-4 font-mono text-xs text-green-400 h-48 overflow-y-auto shadow-inner border border-stone-800">
+      <div className="bg-stone-900 rounded-2xl p-4 font-mono text-xs text-green-400 h-64 overflow-y-auto shadow-inner border border-stone-800">
         <div className="flex justify-between items-center mb-2 border-b border-stone-800 pb-2">
           <span className="font-bold text-stone-500 tracking-wider">SYSTEM LOGS</span>
           {loading && <span className="text-amber-400 animate-pulse flex items-center gap-1"><Loader2 size={12} className="animate-spin"/> Processing...</span>}
