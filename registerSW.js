@@ -1,0 +1,1 @@
+if('serviceWorker' in navigator) {window.addEventListener('load', () => {navigator.serviceWorker.register('/recursing-haze-tsq2kq/sw.js', { scope: '/recursing-haze-tsq2kq/' })})}
