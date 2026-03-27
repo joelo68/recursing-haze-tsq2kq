@@ -3,6 +3,7 @@
 /* eslint-disable react-hooks/exhaustive-deps */
 /* eslint-disable no-unused-vars */
 
+// ★ 1. 引入 lazy 和 Suspense
 import React, {
   useState,
   useEffect,
@@ -10,6 +11,8 @@ import React, {
   useContext,
   useCallback,
   useRef,
+  lazy,
+  Suspense
 } from "react";
 
 import { app, auth, db, appId } from "./config/firebase";
@@ -26,24 +29,27 @@ import { ROLES, ALL_MENU_ITEMS, DEFAULT_REGIONAL_MANAGERS, DEFAULT_PERMISSIONS }
 import { generateUUID, formatLocalYYYYMMDD, toStandardDateFormat, formatNumber, parseNumber } from "./utils/helpers";
 import { ViewWrapper, Card, Skeleton, Toast, ConfirmModal } from "./components/SharedUI";
 import { Sidebar, MobileTopNav } from "./components/Navigation";
-import LoginView from "./components/LoginView";
 import { AppContext } from "./AppContext";
-import DashboardView from "./components/DashboardView";
-import SmartDatePicker from "./components/SmartDatePicker";
-import InputView from "./components/InputView";
-import HistoryView from "./components/HistoryView";
-import RegionalView from "./components/RegionalView";
-import RankingView from "./components/RankingView";
-import StoreAnalysisView from "./components/StoreAnalysisView";
-import SystemMonitor from "./components/SystemMonitor";
-import SettingsView from "./components/SettingsView";
-import AuditView from "./components/AuditView";
 import { useAnalytics } from "./hooks/useAnalytics";
-import AnnualView from "./components/AnnualView";
-import TargetView from "./components/TargetView";
-import TherapistTargetView from "./components/TherapistTargetView";
-import TherapistScheduleView from "./components/TherapistScheduleView";
-import DailyView from "./components/DailyView";
+
+// ★ 2. 登入頁面保留靜態引入 (確保登入畫面最快顯示)
+import LoginView from "./components/LoginView";
+
+// ★ 3. 核心優化：將所有內部頁面改為「懶加載 (Lazy Loading)」
+const DashboardView = lazy(() => import("./components/DashboardView"));
+const DailyView = lazy(() => import("./components/DailyView"));
+const RegionalView = lazy(() => import("./components/RegionalView"));
+const RankingView = lazy(() => import("./components/RankingView"));
+const StoreAnalysisView = lazy(() => import("./components/StoreAnalysisView"));
+const AuditView = lazy(() => import("./components/AuditView"));
+const HistoryView = lazy(() => import("./components/HistoryView"));
+const InputView = lazy(() => import("./components/InputView"));
+const SystemMonitor = lazy(() => import("./components/SystemMonitor"));
+const SettingsView = lazy(() => import("./components/SettingsView"));
+const AnnualView = lazy(() => import("./components/AnnualView"));
+const TargetView = lazy(() => import("./components/TargetView"));
+const TherapistTargetView = lazy(() => import("./components/TherapistTargetView"));
+const TherapistScheduleView = lazy(() => import("./components/TherapistScheduleView"));
 
 const BRANDS = [
   { 
@@ -92,7 +98,6 @@ export default function App() {
   const [currentBrandId, setCurrentBrandId] = useState("cyj");
   const [hasSelectedBrand, setHasSelectedBrand] = useState(false);
 
-  // ★ 新增：今日與昨日的登入計數器
   const [dailyLoginCount, setDailyLoginCount] = useState(0);
   const [yesterdayLoginCount, setYesterdayLoginCount] = useState(0);
 
@@ -174,7 +179,6 @@ export default function App() {
         brand: currentBrandId 
       }); 
       
-      // 核心監控邏輯：如果動作是「登入系統」，立刻對雲端計數器執行 +1
       if (action === "登入系統") {
         const todayStr = formatLocalYYYYMMDD(new Date());
         await setDoc(doc(getCollectionPath("system_stats"), todayStr), {
@@ -298,7 +302,6 @@ export default function App() {
       }
     );
 
-    // ★ 監聽今日與昨日登入次數
     const todayStr = formatLocalYYYYMMDD(new Date());
     const d = new Date();
     d.setDate(d.getDate() - 1);
@@ -491,7 +494,6 @@ export default function App() {
   const fmtMoney = (val) => `$${(val || 0).toLocaleString()}`;
   const fmtNum = (val) => (val || 0).toLocaleString();
 
-  // ★ 記得將 yesterdayLoginCount 一併暴露出去
   const contextValue = useMemo(() => ({
     user, loading, analytics, managers: visibleManagers, budgets, targets, rawData: visibleRawData, allReports: rawData, showToast, openConfirm, fmtMoney, fmtNum, inputDate, setInputDate, storeList: analytics?.storeList || [], setTargets, selectedYear, selectedMonth, permissions, storeAccounts, managerAuth, currentUser, userRole, logActivity, handleUpdateStorePassword, handleUpdateManagerPassword, handleUpdateTherapistPassword, navigateToStore, activeView, appId, 
     therapists: visibleTherapists, 
@@ -502,23 +504,31 @@ export default function App() {
     dailyLoginCount, yesterdayLoginCount
   }), [user, loading, analytics, visibleManagers, budgets, targets, visibleRawData, rawData, inputDate, selectedYear, selectedMonth, permissions, storeAccounts, managerAuth, currentUser, userRole, logActivity, handleUpdateStorePassword, handleUpdateManagerPassword, handleUpdateTherapistPassword, navigateToStore, activeView, appId, visibleTherapists, visibleTherapistReports, therapistSchedules, therapistTargets, trainerAuth, handleUpdateTrainerAuth, auditExclusions, handleUpdateAuditExclusions, currentBrand, setCurrentBrandId, getCollectionPath, getDocPath, dailyLoginCount, yesterdayLoginCount]);
 
+  // ★ 4. 核心優化：渲染畫面時使用 <Suspense> 緩衝區
   const memoizedViews = useMemo(() => {
     return (
       <main className="flex-1 p-4 md:p-8 overflow-y-auto overflow-x-hidden min-w-0 w-full relative">
-        {activeView === "dashboard" && <DashboardView />}
-        {activeView === "daily" && <DailyView />}
-        {activeView === "regional" && <RegionalView />}
-        {activeView === "ranking" && <RankingView />}
-        {activeView === "audit" && <AuditView />}
-        {activeView === "history" && <HistoryView />}
-        {activeView === "input" && <InputView />}
-        {activeView === "logs" && <SystemMonitor />}
-        {activeView === "settings" && <SettingsView />}
-        {activeView === "annual" && <AnnualView />}
-        {activeView === "store-analysis" && <StoreAnalysisView />}
-        {activeView === "targets" && <TargetView />}
-        {activeView === "t-targets" && <TherapistTargetView />}
-        {activeView === "t-schedule" && <TherapistScheduleView />}
+        <Suspense fallback={
+          <div className="flex h-[70vh] items-center justify-center flex-col animate-in fade-in duration-300">
+            <Loader2 className="w-12 h-12 animate-spin text-stone-300 mb-4" />
+            <span className="text-stone-400 font-bold tracking-widest text-sm">系統模組載入中...</span>
+          </div>
+        }>
+          {activeView === "dashboard" && <DashboardView />}
+          {activeView === "daily" && <DailyView />}
+          {activeView === "regional" && <RegionalView />}
+          {activeView === "ranking" && <RankingView />}
+          {activeView === "audit" && <AuditView />}
+          {activeView === "history" && <HistoryView />}
+          {activeView === "input" && <InputView />}
+          {activeView === "logs" && <SystemMonitor />}
+          {activeView === "settings" && <SettingsView />}
+          {activeView === "annual" && <AnnualView />}
+          {activeView === "store-analysis" && <StoreAnalysisView />}
+          {activeView === "targets" && <TargetView />}
+          {activeView === "t-targets" && <TherapistTargetView />}
+          {activeView === "t-schedule" && <TherapistScheduleView />}
+        </Suspense>
       </main>
     );
   }, [activeView]);
