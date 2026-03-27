@@ -3,7 +3,6 @@
 /* eslint-disable react-hooks/exhaustive-deps */
 /* eslint-disable no-unused-vars */
 
-// ★ 1. 引入 lazy 和 Suspense
 import React, {
   useState,
   useEffect,
@@ -21,7 +20,7 @@ import { collection, addDoc, deleteDoc, updateDoc, doc, onSnapshot, serverTimest
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip as RechartsTooltip, Legend, ResponsiveContainer, LineChart, Line, ComposedChart, Area, Cell, PieChart, Pie } from "recharts";
 import { 
   LayoutDashboard, Upload, TrendingUp, Map as MapIcon, Settings, ClipboardCheck, Menu, Search, Filter, Trash2, Save, Plus, DollarSign, Target, Users, Award, Loader2, FileText, AlertCircle, CheckCircle, User, Store, Lock, LogOut, FileWarning, Edit2, CheckSquare, X, Download, ChevronLeft, ChevronRight, Activity, Sparkles, ChevronDown, 
-  Heart, Coffee, 
+  Heart, Coffee, Shield, 
   ShoppingBag, CreditCard, Smartphone, Monitor, Bell, Clock, Music 
 } from "lucide-react";
 
@@ -32,10 +31,8 @@ import { Sidebar, MobileTopNav } from "./components/Navigation";
 import { AppContext } from "./AppContext";
 import { useAnalytics } from "./hooks/useAnalytics";
 
-// ★ 2. 登入頁面保留靜態引入 (確保登入畫面最快顯示)
 import LoginView from "./components/LoginView";
 
-// ★ 3. 核心優化：將所有內部頁面改為「懶加載 (Lazy Loading)」
 const DashboardView = lazy(() => import("./components/DashboardView"));
 const DailyView = lazy(() => import("./components/DailyView"));
 const RegionalView = lazy(() => import("./components/RegionalView"));
@@ -52,36 +49,9 @@ const TherapistTargetView = lazy(() => import("./components/TherapistTargetView"
 const TherapistScheduleView = lazy(() => import("./components/TherapistScheduleView"));
 
 const BRANDS = [
-  { 
-    id: 'cyj', 
-    label: 'CYJ', 
-    icon: Sparkles, 
-    pathType: 'legacy', 
-    color: 'amber',
-    gradient: 'from-amber-500 to-orange-600',
-    bg: 'bg-amber-50',
-    text: 'text-amber-600'
-  },
-  { 
-    id: 'anniu', 
-    label: '安妞', 
-    icon: Heart,  
-    pathType: 'new', 
-    color: 'rose', 
-    gradient: 'from-rose-400 to-pink-600',
-    bg: 'bg-rose-50',
-    text: 'text-rose-600'
-  },
-  { 
-    id: 'yibo', 
-    label: '伊啵', 
-    icon: Music, 
-    pathType: 'new',
-    color: 'sky',
-    gradient: 'from-sky-400 to-indigo-600',
-    bg: 'bg-sky-50',
-    text: 'text-sky-600'
-  }
+  { id: 'cyj', label: 'CYJ', icon: Sparkles, pathType: 'legacy', color: 'amber', gradient: 'from-amber-500 to-orange-600', bg: 'bg-amber-50', text: 'text-amber-600' },
+  { id: 'anniu', label: '安妞', icon: Heart, pathType: 'new', color: 'rose', gradient: 'from-rose-400 to-pink-600', bg: 'bg-rose-50', text: 'text-rose-600' },
+  { id: 'yibo', label: '伊啵', icon: Music, pathType: 'new', color: 'sky', gradient: 'from-sky-400 to-indigo-600', bg: 'bg-sky-50', text: 'text-sky-600' }
 ];
 
 export default function App() {
@@ -94,71 +64,64 @@ export default function App() {
   const [toast, setToast] = useState(null);
   const [confirmModal, setConfirmModal] = useState({ isOpen: false, title: "", message: "", onConfirm: null });
   const [globalSearchTerm, setGlobalSearchTerm] = useState("");
-  
   const [currentBrandId, setCurrentBrandId] = useState("cyj");
   const [hasSelectedBrand, setHasSelectedBrand] = useState(false);
-
   const [dailyLoginCount, setDailyLoginCount] = useState(0);
   const [yesterdayLoginCount, setYesterdayLoginCount] = useState(0);
 
-  const currentBrand = useMemo(() => 
-    BRANDS.find(b => b.id === currentBrandId) || BRANDS[0]
-  , [currentBrandId]);
-
-  const handleSwitchBrand = (brandId) => {
-    setCurrentBrandId(brandId);
-    setHasSelectedBrand(true);
-  };
+  const currentBrand = useMemo(() => BRANDS.find(b => b.id === currentBrandId) || BRANDS[0], [currentBrandId]);
+  const handleSwitchBrand = (brandId) => { setCurrentBrandId(brandId); setHasSelectedBrand(true); };
 
   const getCollectionPath = useCallback((collectionName) => {
-    if (currentBrand.pathType === 'legacy') {
-      return collection(db, "artifacts", appId, "public", "data", collectionName);
-    } else {
-      return collection(db, "brands", currentBrand.id, collectionName);
-    }
+    return currentBrand.pathType === 'legacy' ? collection(db, "artifacts", appId, "public", "data", collectionName) : collection(db, "brands", currentBrand.id, collectionName);
   }, [currentBrand]);
 
   const getDocPath = useCallback((docName) => {
-    if (currentBrand.pathType === 'legacy') {
-      return doc(db, "artifacts", appId, "public", "data", "global_settings", docName);
-    } else {
-      return doc(db, "brands", currentBrand.id, "settings", docName);
-    }
+    return currentBrand.pathType === 'legacy' ? doc(db, "artifacts", appId, "public", "data", "global_settings", docName) : doc(db, "brands", currentBrand.id, "settings", docName);
   }, [currentBrand]);
 
   const [rawData, setRawData] = useState([]); 
   const [budgets, setBudgets] = useState({});
   const [targets, setTargets] = useState({ newASP: 3500, trafficASP: 1200 });
-  
   const [managers, setManagers] = useState({});
   const [storeAccounts, setStoreAccounts] = useState([]);
   const [managerAuth, setManagerAuth] = useState({});
   const [permissions, setPermissions] = useState(DEFAULT_PERMISSIONS);
   const [therapists, setTherapists] = useState([]);
-  
   const [directorAuth, setDirectorAuth] = useState({});
   const [trainerAuth, setTrainerAuth] = useState({ password: "0000" });
   const [masterAuth, setMasterAuth] = useState({ password: "BOSS888" });
-
   const [therapistReports, setTherapistReports] = useState([]); 
   const [therapistSchedules, setTherapistSchedules] = useState({}); 
   const [therapistTargets, setTherapistTargets] = useState({}); 
-  
   const [auditExclusions, setAuditExclusions] = useState([]);
 
-  const [showIdleWarning, setShowIdleWarning] = useState(false);
-  const [countdown, setCountdown] = useState(15);
-  const lastActivityTimeRef = useRef(Date.now()); 
+  // ★ 新增：全域資安設定檔 (預設 3 分鐘，總監絕對豁免)
+  const [securityConfig, setSecurityConfig] = useState({
+    enabled: true, timeoutMinutes: 3, warningSeconds: 15, exemptRoles: ["director", "master"]
+  });
 
   const [selectedYear, setSelectedYear] = useState(new Date().getFullYear().toString());
   const [selectedMonth, setSelectedMonth] = useState((new Date().getMonth() + 1).toString());
   const [inputDate, setInputDate] = useState(() => formatLocalYYYYMMDD(new Date()));
 
-  const normalizeStore = useCallback((s) => {
-      let core = String(s || "").replace(/^(CYJ|Anew\s*\(安妞\)|Yibo\s*\(伊啵\)|安妞|伊啵|Anew|Yibo)\s*/i, '').trim();
-      if (core === "新店") return "新店"; 
-      return core.replace(/店$/, '').trim();
-  }, []);
+  const [showIdleWarning, setShowIdleWarning] = useState(false);
+  const [countdown, setCountdown] = useState(15);
+  const lastActivityTimeRef = useRef(Date.now()); 
+  const isWarningShowingRef = useRef(false);
+
+  const handleStayLoggedIn = useCallback(() => {
+    lastActivityTimeRef.current = Date.now();
+    isWarningShowingRef.current = false; 
+    setShowIdleWarning(false);           
+    setCountdown(securityConfig.warningSeconds || 15);
+  }, [securityConfig]);
+
+  const handleUserActivity = useCallback(() => {
+    if (!userRole) return;
+    if (isWarningShowingRef.current) return; 
+    lastActivityTimeRef.current = Date.now();
+  }, [userRole]); 
 
   const logActivity = useCallback(async (role, user, action, details) => {
     let device = "PC";
@@ -169,70 +132,91 @@ export default function App() {
       else if (ua.includes("mobile")) device = "Mobile";
     }
     try { 
-      await addDoc(getCollectionPath("system_logs"), { 
-        timestamp: serverTimestamp(), 
-        role, 
-        user, 
-        action, 
-        details, 
-        device,
-        brand: currentBrandId 
-      }); 
-      
+      await addDoc(getCollectionPath("system_logs"), { timestamp: serverTimestamp(), role, user, action, details, device, brand: currentBrandId }); 
       if (action === "登入系統") {
         const todayStr = formatLocalYYYYMMDD(new Date());
-        await setDoc(doc(getCollectionPath("system_stats"), todayStr), {
-          count: increment(1),
-          updatedAt: serverTimestamp()
-        }, { merge: true });
+        await setDoc(doc(getCollectionPath("system_stats"), todayStr), { count: increment(1), updatedAt: serverTimestamp() }, { merge: true });
       }
-
     } catch (e) { console.error("Failed to log activity", e); }
   }, [getCollectionPath, currentBrandId]);
 
   const handleLogout = useCallback(async (reason = "使用者手動登出") => {
     const userName = currentUser?.name || (userRole === "director" ? "高階主管" : (userRole === "trainer" ? "教專" : "未知"));
     if (userRole) logActivity(userRole, userName, "登出系統", reason);
-    setShowIdleWarning(false); setCountdown(15); lastActivityTimeRef.current = Date.now(); 
+    
+    isWarningShowingRef.current = false; 
+    setShowIdleWarning(false); 
+    setCountdown(securityConfig.warningSeconds || 15); 
+    lastActivityTimeRef.current = Date.now(); 
+    
     localStorage.removeItem("cyj_input_draft"); localStorage.removeItem("cyj_input_draft_v2"); localStorage.removeItem("cyj_input_draft_v3"); 
     localStorage.removeItem("cyj_therapist_draft"); localStorage.removeItem("cyj_therapist_draft_v2");
     
-    setUserRole(null); 
-    setCurrentUser(null); 
-    setActiveView("dashboard");
-  }, [currentUser, userRole, logActivity]);
+    setUserRole(null); setCurrentUser(null); setActiveView("dashboard");
+  }, [currentUser, userRole, logActivity, securityConfig]);
 
-  const handleUserActivity = useCallback(() => {
-    if (!userRole) return;
-    lastActivityTimeRef.current = Date.now();
-    if (showIdleWarning) { setShowIdleWarning(false); setCountdown(15); }
-  }, [userRole, showIdleWarning]);
-
+  // ★ 升級版：讀取動態設定的閒置計時器
   useEffect(() => {
     let intervalId = null;
     if (userRole) {
+      // ★ 攔截器 1：關閉自動登出，或是總監/豁免職務，直接不啟動計時！
+      const isExempt = securityConfig.exemptRoles?.includes(userRole) || userRole === 'director' || userRole === 'master';
+      if (!securityConfig.enabled || isExempt) {
+         return; 
+      }
+
       intervalId = setInterval(() => {
         const now = Date.now();
         const elapsed = now - lastActivityTimeRef.current; 
-        const WARNING_THRESHOLD = 165 * 1000; const LOGOUT_THRESHOLD = 180 * 1000;  
-        if (elapsed > LOGOUT_THRESHOLD) { clearInterval(intervalId); handleLogout("閒置超過 3 分鐘自動登出"); } 
-        else if (elapsed > WARNING_THRESHOLD) { if (!showIdleWarning) setShowIdleWarning(true); const remaining = Math.ceil((LOGOUT_THRESHOLD - elapsed) / 1000); setCountdown(remaining > 0 ? remaining : 0); } 
-        else { if (showIdleWarning) setShowIdleWarning(false); }
+        
+        // ★ 將寫死的 3 分鐘，換成資料庫設定的分鐘數
+        const LOGOUT_THRESHOLD = (securityConfig.timeoutMinutes || 3) * 60 * 1000;  
+        const WARNING_THRESHOLD = LOGOUT_THRESHOLD - ((securityConfig.warningSeconds || 15) * 1000);
+        
+        if (elapsed > LOGOUT_THRESHOLD) { 
+          clearInterval(intervalId); 
+          handleLogout(`閒置超過 ${securityConfig.timeoutMinutes} 分鐘自動登出`); 
+        } 
+        else if (elapsed > WARNING_THRESHOLD) { 
+          if (!isWarningShowingRef.current) {
+            isWarningShowingRef.current = true; 
+            setShowIdleWarning(true); 
+          }
+          const remaining = Math.ceil((LOGOUT_THRESHOLD - elapsed) / 1000); 
+          setCountdown(remaining > 0 ? remaining : 0); 
+        } 
+        else { 
+          if (isWarningShowingRef.current) {
+            isWarningShowingRef.current = false;
+            setShowIdleWarning(false); 
+          }
+        }
       }, 1000); 
     }
     return () => { if (intervalId) clearInterval(intervalId); };
-  }, [userRole, showIdleWarning, handleLogout]);
+  }, [userRole, handleLogout, securityConfig]); 
 
   useEffect(() => {
     if (userRole) {
       const events = ['mousemove', 'mousedown', 'keypress', 'scroll', 'touchstart', 'click'];
       let activityTimeout;
-      const throttledActivity = () => { if (!activityTimeout) { handleUserActivity(); activityTimeout = setTimeout(() => { activityTimeout = null; }, 500); } };
+      const throttledActivity = () => { 
+        if (!activityTimeout) { 
+          handleUserActivity(); 
+          activityTimeout = setTimeout(() => { activityTimeout = null; }, 500); 
+        } 
+      };
       events.forEach(event => window.addEventListener(event, throttledActivity));
       lastActivityTimeRef.current = Date.now();
       return () => { events.forEach(event => window.removeEventListener(event, throttledActivity)); };
     }
   }, [userRole, handleUserActivity]);
+
+  const normalizeStore = useCallback((s) => {
+      let core = String(s || "").replace(/^(CYJ|Anew\s*\(安妞\)|Yibo\s*\(伊啵\)|安妞|伊啵|Anew|Yibo)\s*/i, '').trim();
+      if (core === "新店") return "新店"; 
+      return core.replace(/店$/, '').trim();
+  }, []);
 
   useEffect(() => {
     const initAuth = async () => {
@@ -244,8 +228,10 @@ export default function App() {
 
   useEffect(() => {
     if (!user) return;
-
     setBudgets({}); setManagers({}); setStoreAccounts([]); setManagerAuth({}); setTherapists([]); setTherapistSchedules({}); setTherapistTargets({}); setPermissions(DEFAULT_PERMISSIONS); setTargets({ newASP: 3500, trafficASP: 1200 });
+    
+    // 初始化設定，防止舊品牌殘留
+    setSecurityConfig({ enabled: true, timeoutMinutes: 3, warningSeconds: 15, exemptRoles: ["director", "master"] });
 
     const unsubBudgets = onSnapshot(getCollectionPath("monthly_targets"), (s) => { const b = {}; s.docs.forEach((d) => (b[d.id] = d.data())); setBudgets(b); });
     const unsubTargets = onSnapshot(getDocPath("kpi_targets"), (s) => { if (s.exists()) setTargets(s.data()); else setTargets({ newASP: 3500, trafficASP: 1200 }); });
@@ -269,122 +255,66 @@ export default function App() {
     const unsubTrainerAuth = onSnapshot(getDocPath("trainer_auth"), (s) => { if (s.exists()) setTrainerAuth(s.data()); else setTrainerAuth({ password: "0000" }); });
     const unsubAuditExclusions = onSnapshot(getDocPath("audit_exclusions"), (s) => { if (s.exists()) setAuditExclusions(s.data().stores || []); else setAuditExclusions([]); });
 
-    const unsubDirectorAuth = onSnapshot(
-      getDocPath("director_auth"), 
-      (s) => { 
+    // ★ 監聽 Firebase 的資安設定檔
+    const unsubSecurityConfig = onSnapshot(getDocPath("security_config"), (s) => { 
+      if (s.exists()) {
+         setSecurityConfig(s.data()); 
+      } else {
+         setSecurityConfig({ enabled: true, timeoutMinutes: 3, warningSeconds: 15, exemptRoles: ["director", "master"] });
+      }
+    });
+
+    const unsubDirectorAuth = onSnapshot(getDocPath("director_auth"), (s) => { 
         if (s.exists()) {
            let data = { ...s.data() };
-           if (data.password && Object.keys(data).length === 1) {
-             setDirectorAuth({ "營運總監": data.password });
-           } else {
-             delete data.password; 
-             if (Object.keys(data).length === 0) data = { "營運總監": "0000" };
-             setDirectorAuth(data);
-           }
+           if (data.password && Object.keys(data).length === 1) { setDirectorAuth({ "營運總監": data.password }); } 
+           else { delete data.password; if (Object.keys(data).length === 0) data = { "營運總監": "0000" }; setDirectorAuth(data); }
         } else {
            let defaultPass = "0000";
-           if (currentBrand.id === 'cyj') defaultPass = "16500";
-           if (currentBrand.id === 'anniu') defaultPass = "8888";
-           if (currentBrand.id === 'yibo') defaultPass = "9999";
+           if (currentBrand.id === 'cyj') defaultPass = "16500"; if (currentBrand.id === 'anniu') defaultPass = "8888"; if (currentBrand.id === 'yibo') defaultPass = "9999";
            setDirectorAuth({ "營運總監": defaultPass }); 
         }
-      }
-    );
+    });
 
-    const unsubMasterAuth = onSnapshot(
-      getDocPath("master_auth"), 
-      (s) => { 
-        if (s.exists() && s.data().password) {
-          setMasterAuth(s.data());
-        } else {
-          setMasterAuth({ password: "BOSS888" }); 
-        }
-      }
-    );
+    const unsubMasterAuth = onSnapshot(getDocPath("master_auth"), (s) => { if (s.exists() && s.data().password) { setMasterAuth(s.data()); } else { setMasterAuth({ password: "BOSS888" }); } });
 
     const todayStr = formatLocalYYYYMMDD(new Date());
-    const d = new Date();
-    d.setDate(d.getDate() - 1);
+    const d = new Date(); d.setDate(d.getDate() - 1);
     const yesterdayStr = formatLocalYYYYMMDD(d);
 
-    const unsubStatsToday = onSnapshot(doc(getCollectionPath("system_stats"), todayStr), (s) => {
-      if (s.exists()) setDailyLoginCount(s.data().count || 0);
-      else setDailyLoginCount(0);
-    });
+    const unsubStatsToday = onSnapshot(doc(getCollectionPath("system_stats"), todayStr), (s) => { if (s.exists()) setDailyLoginCount(s.data().count || 0); else setDailyLoginCount(0); });
+    const unsubStatsYesterday = onSnapshot(doc(getCollectionPath("system_stats"), yesterdayStr), (s) => { if (s.exists()) setYesterdayLoginCount(s.data().count || 0); else setYesterdayLoginCount(0); });
 
-    const unsubStatsYesterday = onSnapshot(doc(getCollectionPath("system_stats"), yesterdayStr), (s) => {
-      if (s.exists()) setYesterdayLoginCount(s.data().count || 0);
-      else setYesterdayLoginCount(0);
-    });
-
-    return () => {
-      unsubBudgets(); unsubTargets(); unsubOrg(); unsubAccounts(); unsubManagerAuth(); unsubPermissions(); unsubTherapists(); unsubTherapistSchedules(); unsubTherapistTargets(); unsubTrainerAuth(); unsubAuditExclusions(); unsubDirectorAuth(); unsubMasterAuth(); 
-      unsubStatsToday(); unsubStatsYesterday();
+    return () => { 
+      unsubBudgets(); unsubTargets(); unsubOrg(); unsubAccounts(); unsubManagerAuth(); unsubPermissions(); unsubTherapists(); unsubTherapistSchedules(); unsubTherapistTargets(); unsubTrainerAuth(); unsubAuditExclusions(); unsubDirectorAuth(); unsubMasterAuth(); unsubStatsToday(); unsubStatsYesterday(); 
+      unsubSecurityConfig(); // ★ 卸載監聽
     };
   }, [user, currentBrand, getCollectionPath, getDocPath]);
 
   useEffect(() => {
     if (!user) return;
-
     const skipFetchViews = ['history', 'logs', 'settings', 'targets', 't-targets', 't-schedule', 'daily'];
-    if (skipFetchViews.includes(activeView)) {
-      setRawData([]);
-      setTherapistReports([]);
-      return; 
-    }
+    if (skipFetchViews.includes(activeView)) { setRawData([]); setTherapistReports([]); return; }
 
-    setRawData([]); 
-    setTherapistReports([]);
-
+    setRawData([]); setTherapistReports([]);
     const targetYear = selectedYear;
     let startDate, endDate;
 
-    if (activeView === 'annual') {
-      startDate = `${targetYear}-01-01`;
-      endDate = `${targetYear}-12-31`;
-    } else {
-      const m = String(selectedMonth).padStart(2, '0');
-      startDate = `${targetYear}-${m}-01`;
-      endDate = `${targetYear}-${m}-31`; 
-    }
+    if (activeView === 'annual') { startDate = `${targetYear}-01-01`; endDate = `${targetYear}-12-31`; } 
+    else { const m = String(selectedMonth).padStart(2, '0'); startDate = `${targetYear}-${m}-01`; endDate = `${targetYear}-${m}-31`; }
 
-    const unsubReports = onSnapshot(
-      query(
-        getCollectionPath("daily_reports"), 
-        where("date", ">=", startDate),
-        where("date", "<=", endDate),
-        orderBy("date", "desc")
-      ), 
-      (s) => setRawData(s.docs.map((d) => ({ id: d.id, ...d.data() })))
-    );
-    
-    const unsubTherapistReports = onSnapshot(
-      query(
-        getCollectionPath("therapist_daily_reports"), 
-        where("date", ">=", startDate),
-        where("date", "<=", endDate),
-        orderBy("date", "desc")
-      ), 
-      (s) => setTherapistReports(s.docs.map((d) => ({ id: d.id, ...d.data() })))
-    );
+    const unsubReports = onSnapshot(query(getCollectionPath("daily_reports"), where("date", ">=", startDate), where("date", "<=", endDate), orderBy("date", "desc")), (s) => setRawData(s.docs.map((d) => ({ id: d.id, ...d.data() }))));
+    const unsubTherapistReports = onSnapshot(query(getCollectionPath("therapist_daily_reports"), where("date", ">=", startDate), where("date", "<=", endDate), orderBy("date", "desc")), (s) => setTherapistReports(s.docs.map((d) => ({ id: d.id, ...d.data() }))));
 
-    return () => {
-      unsubReports();
-      unsubTherapistReports();
-    };
+    return () => { unsubReports(); unsubTherapistReports(); };
   }, [user, currentBrand, selectedYear, selectedMonth, activeView, getCollectionPath]);
 
   const handleLogin = useCallback((roleId, userInfo = null) => {
     let finalUser = userInfo;
-    if (roleId === 'therapist' && userInfo?.name) {
-       const foundTherapist = therapists.find(t => t.name === userInfo.name);
-       if (foundTherapist) { finalUser = { ...userInfo, ...foundTherapist, id: foundTherapist.id || userInfo.id }; }
-    }
-    setUserRole(roleId);
-    if (finalUser) setCurrentUser(finalUser);
+    if (roleId === 'therapist' && userInfo?.name) { const foundTherapist = therapists.find(t => t.name === userInfo.name); if (foundTherapist) { finalUser = { ...userInfo, ...foundTherapist, id: foundTherapist.id || userInfo.id }; } }
+    setUserRole(roleId); if (finalUser) setCurrentUser(finalUser);
     const userName = finalUser?.name || (roleId === "director" ? "高階主管" : (roleId === "trainer" ? "教專" : "未知"));
-    logActivity(roleId, userName, "登入系統", "登入成功");
-    setActiveView("dashboard");
+    logActivity(roleId, userName, "登入系統", "登入成功"); setActiveView("dashboard");
   }, [therapists, logActivity]);
 
   const showToast = useCallback((message, type = "info") => setToast({ message, type }), []);
@@ -411,100 +341,57 @@ export default function App() {
 
   const visibleRawData = useMemo(() => {
     if (userRole === ROLES.TRAINER.id) return []; 
-    if (userRole === ROLES.STORE.id && currentUser) {
-      const myCores = (currentUser.stores || [currentUser.storeName] || []).map(normalizeStore).filter(Boolean);
-      return rawData.filter((d) => myCores.includes(normalizeStore(d.storeName)));
-    }
-    if (userRole === ROLES.MANAGER.id && currentUser) {
-      const myCores = (managers[currentUser.name] || []).map(normalizeStore).filter(Boolean);
-      return rawData.filter((d) => myCores.includes(normalizeStore(d.storeName)));
-    }
+    if (userRole === ROLES.STORE.id && currentUser) { const myCores = (currentUser.stores || [currentUser.storeName] || []).map(normalizeStore).filter(Boolean); return rawData.filter((d) => myCores.includes(normalizeStore(d.storeName))); }
+    if (userRole === ROLES.MANAGER.id && currentUser) { const myCores = (managers[currentUser.name] || []).map(normalizeStore).filter(Boolean); return rawData.filter((d) => myCores.includes(normalizeStore(d.storeName))); }
     return rawData;
   }, [rawData, userRole, currentUser, managers, normalizeStore]);
 
   const visibleTherapistReports = useMemo(() => {
-    if (userRole === ROLES.DIRECTOR.id || userRole === ROLES.TRAINER.id || userRole === ROLES.THERAPIST.id) {
-      return therapistReports;
-    }
-    if (userRole === ROLES.MANAGER.id && currentUser) {
-      const myCores = (managers[currentUser.name] || []).map(normalizeStore).filter(Boolean); 
-      return therapistReports.filter(r => myCores.includes(normalizeStore(r.storeName)));
-    }
-    if (userRole === ROLES.STORE.id && currentUser) {
-      const myCores = (currentUser.stores || [currentUser.storeName] || []).map(normalizeStore).filter(Boolean);
-      return therapistReports.filter(r => myCores.includes(normalizeStore(r.storeName)));
-    }
+    if (userRole === ROLES.DIRECTOR.id || userRole === ROLES.TRAINER.id || userRole === ROLES.THERAPIST.id) { return therapistReports; }
+    if (userRole === ROLES.MANAGER.id && currentUser) { const myCores = (managers[currentUser.name] || []).map(normalizeStore).filter(Boolean); return therapistReports.filter(r => myCores.includes(normalizeStore(r.storeName))); }
+    if (userRole === ROLES.STORE.id && currentUser) { const myCores = (currentUser.stores || [currentUser.storeName] || []).map(normalizeStore).filter(Boolean); return therapistReports.filter(r => myCores.includes(normalizeStore(r.storeName))); }
     return [];
   }, [therapistReports, userRole, currentUser, managers, normalizeStore]);
 
   const visibleTherapists = useMemo(() => {
     if (userRole === ROLES.DIRECTOR.id || userRole === ROLES.TRAINER.id) return therapists;
-    if (userRole === ROLES.MANAGER.id && currentUser) {
-      const myCores = (managers[currentUser.name] || []).map(normalizeStore).filter(Boolean);
-      return therapists.filter(t => myCores.includes(normalizeStore(t.store)));
-    }
-    if (userRole === ROLES.STORE.id && currentUser) {
-      const myCores = (currentUser.stores || [currentUser.storeName] || []).map(normalizeStore).filter(Boolean);
-      return therapists.filter(t => myCores.includes(normalizeStore(t.store)));
-    }
+    if (userRole === ROLES.MANAGER.id && currentUser) { const myCores = (managers[currentUser.name] || []).map(normalizeStore).filter(Boolean); return therapists.filter(t => myCores.includes(normalizeStore(t.store))); }
+    if (userRole === ROLES.STORE.id && currentUser) { const myCores = (currentUser.stores || [currentUser.storeName] || []).map(normalizeStore).filter(Boolean); return therapists.filter(t => myCores.includes(normalizeStore(t.store))); }
     if (userRole === ROLES.THERAPIST.id && currentUser) return therapists.filter(t => t.id === currentUser.id);
     return [];
   }, [therapists, userRole, currentUser, managers, normalizeStore]);
 
   const visibleManagers = useMemo(() => {
     let result = managers; 
-    if (userRole === ROLES.MANAGER.id && currentUser) {
-      const myStores = managers[currentUser.name] || [];
-      result = { [currentUser.name]: myStores };
-    } else if (userRole === ROLES.STORE.id && currentUser) {
+    if (userRole === ROLES.MANAGER.id && currentUser) { const myStores = managers[currentUser.name] || []; result = { [currentUser.name]: myStores }; } 
+    else if (userRole === ROLES.STORE.id && currentUser) {
       const myCores = (currentUser.stores || (currentUser.storeName ? [currentUser.storeName] : [])).map(normalizeStore);
       const filteredManagers = {};
-      Object.entries(managers).forEach(([mgr, stores]) => {
-        const intersectingStores = stores.filter((s) => myCores.includes(normalizeStore(s)));
-        if (intersectingStores.length > 0) filteredManagers[mgr] = intersectingStores;
-      });
+      Object.entries(managers).forEach(([mgr, stores]) => { const intersectingStores = stores.filter((s) => myCores.includes(normalizeStore(s))); if (intersectingStores.length > 0) filteredManagers[mgr] = intersectingStores; });
       result = filteredManagers;
     }
-    
     if (activeView !== 'settings') {
        const filtered = {};
-       Object.entries(result).forEach(([mgr, stores]) => {
-          if (!mgr.includes("未分配") && !mgr.includes("未分區")) filtered[mgr] = stores;
-       });
+       Object.entries(result).forEach(([mgr, stores]) => { if (!mgr.includes("未分配") && !mgr.includes("未分區")) filtered[mgr] = stores; });
        return filtered;
     }
     return result;
   }, [managers, userRole, currentUser, activeView, normalizeStore]);
 
-  const publicManagers = useMemo(() => {
-     const filtered = {};
-     Object.entries(managers).forEach(([mgr, stores]) => {
-        if (!mgr.includes("未分配") && !mgr.includes("未分區")) filtered[mgr] = stores;
-     });
-     return filtered;
-  }, [managers]);
+  const publicManagers = useMemo(() => { const filtered = {}; Object.entries(managers).forEach(([mgr, stores]) => { if (!mgr.includes("未分配") && !mgr.includes("未分區")) filtered[mgr] = stores; }); return filtered; }, [managers]);
 
   const analytics = useAnalytics(visibleRawData, visibleManagers, budgets, selectedYear, selectedMonth);
-  
-  const allStoreNames = useMemo(() => {
-      const prefix = currentBrandId === 'anniu' ? '安妞' : currentBrandId === 'yibo' ? '伊啵' : 'CYJ';
-      return Object.values(managers).flat().map((s) => `${prefix}${normalizeStore(s)}店`);
-  }, [managers, currentBrandId, normalizeStore]);
+  const allStoreNames = useMemo(() => { const prefix = currentBrandId === 'anniu' ? '安妞' : currentBrandId === 'yibo' ? '伊啵' : 'CYJ'; return Object.values(managers).flat().map((s) => `${prefix}${normalizeStore(s)}店`); }, [managers, currentBrandId, normalizeStore]);
 
   const fmtMoney = (val) => `$${(val || 0).toLocaleString()}`;
   const fmtNum = (val) => (val || 0).toLocaleString();
 
+  // ★ 將 securityConfig 加入 Context，傳遞給 SettingsView 使用
   const contextValue = useMemo(() => ({
     user, loading, analytics, managers: visibleManagers, budgets, targets, rawData: visibleRawData, allReports: rawData, showToast, openConfirm, fmtMoney, fmtNum, inputDate, setInputDate, storeList: analytics?.storeList || [], setTargets, selectedYear, selectedMonth, permissions, storeAccounts, managerAuth, currentUser, userRole, logActivity, handleUpdateStorePassword, handleUpdateManagerPassword, handleUpdateTherapistPassword, navigateToStore, activeView, appId, 
-    therapists: visibleTherapists, 
-    therapistReports: visibleTherapistReports, 
-    therapistSchedules, therapistTargets, trainerAuth, handleUpdateTrainerAuth,
-    auditExclusions, handleUpdateAuditExclusions,
-    currentBrand, setCurrentBrandId, getCollectionPath, getDocPath,
-    dailyLoginCount, yesterdayLoginCount
-  }), [user, loading, analytics, visibleManagers, budgets, targets, visibleRawData, rawData, inputDate, selectedYear, selectedMonth, permissions, storeAccounts, managerAuth, currentUser, userRole, logActivity, handleUpdateStorePassword, handleUpdateManagerPassword, handleUpdateTherapistPassword, navigateToStore, activeView, appId, visibleTherapists, visibleTherapistReports, therapistSchedules, therapistTargets, trainerAuth, handleUpdateTrainerAuth, auditExclusions, handleUpdateAuditExclusions, currentBrand, setCurrentBrandId, getCollectionPath, getDocPath, dailyLoginCount, yesterdayLoginCount]);
+    therapists: visibleTherapists, therapistReports: visibleTherapistReports, therapistSchedules, therapistTargets, trainerAuth, handleUpdateTrainerAuth, auditExclusions, handleUpdateAuditExclusions, currentBrand, setCurrentBrandId, getCollectionPath, getDocPath, dailyLoginCount, yesterdayLoginCount, securityConfig
+  }), [user, loading, analytics, visibleManagers, budgets, targets, visibleRawData, rawData, inputDate, selectedYear, selectedMonth, permissions, storeAccounts, managerAuth, currentUser, userRole, logActivity, handleUpdateStorePassword, handleUpdateManagerPassword, handleUpdateTherapistPassword, navigateToStore, activeView, appId, visibleTherapists, visibleTherapistReports, therapistSchedules, therapistTargets, trainerAuth, handleUpdateTrainerAuth, auditExclusions, handleUpdateAuditExclusions, currentBrand, setCurrentBrandId, getCollectionPath, getDocPath, dailyLoginCount, yesterdayLoginCount, securityConfig]);
 
-  // ★ 4. 核心優化：渲染畫面時使用 <Suspense> 緩衝區
   const memoizedViews = useMemo(() => {
     return (
       <main className="flex-1 p-4 md:p-8 overflow-y-auto overflow-x-hidden min-w-0 w-full relative">
@@ -518,13 +405,13 @@ export default function App() {
           {activeView === "daily" && <DailyView />}
           {activeView === "regional" && <RegionalView />}
           {activeView === "ranking" && <RankingView />}
+          {activeView === "store-analysis" && <StoreAnalysisView />}
           {activeView === "audit" && <AuditView />}
           {activeView === "history" && <HistoryView />}
           {activeView === "input" && <InputView />}
           {activeView === "logs" && <SystemMonitor />}
           {activeView === "settings" && <SettingsView />}
           {activeView === "annual" && <AnnualView />}
-          {activeView === "store-analysis" && <StoreAnalysisView />}
           {activeView === "targets" && <TargetView />}
           {activeView === "t-targets" && <TherapistTargetView />}
           {activeView === "t-schedule" && <TherapistScheduleView />}
@@ -537,22 +424,10 @@ export default function App() {
   
   if (!userRole) return (
     <LoginView 
-      onLogin={handleLogin} 
-      storeAccounts={storeAccounts} 
-      managers={publicManagers} 
-      managerAuth={managerAuth} 
-      therapists={therapists} 
-      onUpdatePassword={handleUpdateStorePassword} 
-      onUpdateManagerPassword={handleUpdateManagerPassword} 
-      onUpdateTherapistPassword={handleUpdateTherapistPassword} 
-      trainerAuth={trainerAuth} 
-      handleUpdateTrainerAuth={handleUpdateTrainerAuth}
-      directorAuth={directorAuth} 
-      handleUpdateDirectorAuth={handleUpdateDirectorAuth} 
-      masterAuth={masterAuth}
-      currentBrandId={currentBrandId}
-      onSwitchBrand={handleSwitchBrand}
-      hasSelectedBrand={hasSelectedBrand}
+      onLogin={handleLogin} storeAccounts={storeAccounts} managers={publicManagers} managerAuth={managerAuth} therapists={therapists} 
+      onUpdatePassword={handleUpdateStorePassword} onUpdateManagerPassword={handleUpdateManagerPassword} onUpdateTherapistPassword={handleUpdateTherapistPassword} 
+      trainerAuth={trainerAuth} handleUpdateTrainerAuth={handleUpdateTrainerAuth} directorAuth={directorAuth} handleUpdateDirectorAuth={handleUpdateDirectorAuth} masterAuth={masterAuth}
+      currentBrandId={currentBrandId} onSwitchBrand={handleSwitchBrand} hasSelectedBrand={hasSelectedBrand}
     />
   );
 
@@ -583,7 +458,35 @@ export default function App() {
         </div>
         {toast && (<Toast message={toast.message} type={toast.type} onClose={() => setToast(null)} />)}
         <ConfirmModal isOpen={confirmModal.isOpen} title={confirmModal.title} message={confirmModal.message} onConfirm={confirmModal.onConfirm} onCancel={closeConfirmModal} />
-        {showIdleWarning && (<div className="fixed inset-0 z-[9999] flex items-center justify-center bg-black/60 backdrop-blur-sm animate-in fade-in duration-300"><div className="bg-white p-8 rounded-3xl shadow-2xl max-w-sm w-full text-center space-y-6 animate-in zoom-in-95 duration-300 border border-stone-200"><div className="w-20 h-20 bg-amber-100 text-amber-600 rounded-full flex items-center justify-center mx-auto shadow-inner"><Clock size={40} className="animate-pulse" /> </div><div><h3 className="text-2xl font-bold text-stone-800 mb-2">閒置提醒</h3><p className="text-stone-500 font-medium">系統偵測到您已閒置一段時間。<br/>將於 <span className="text-rose-500 text-2xl font-black font-mono inline-block min-w-[2ch]">{countdown}</span> 秒後自動登出。</p></div><button onClick={handleUserActivity} className="w-full py-4 bg-stone-800 text-white rounded-2xl font-bold hover:bg-stone-700 transition-all active:scale-95 shadow-lg">保持登入</button></div></div>)}
+        
+        {showIdleWarning && (
+          <div className="fixed inset-0 z-[9999] flex items-center justify-center bg-stone-900/40 backdrop-blur-md animate-in fade-in duration-300 p-4">
+            <div className="bg-white p-8 md:p-10 rounded-[2rem] shadow-2xl shadow-stone-900/20 max-w-sm w-full text-center animate-in zoom-in-95 slide-in-from-bottom-4 duration-500 border border-white/60 relative overflow-hidden">
+              <div className="absolute top-0 left-0 right-0 h-1.5 bg-gradient-to-r from-amber-300 via-amber-500 to-amber-300"></div>
+              <div className="w-24 h-24 bg-amber-50 text-amber-500 rounded-full flex items-center justify-center mx-auto mb-6 relative">
+                <div className="absolute inset-0 rounded-full border-4 border-amber-100 animate-ping opacity-30 duration-1000"></div>
+                <Clock size={40} className="animate-pulse" strokeWidth={1.5} />
+              </div>
+              <div className="mb-8">
+                <h3 className="text-2xl font-extrabold text-stone-800 mb-3 tracking-tight">系統閒置提醒</h3>
+                <p className="text-stone-500 font-medium text-sm leading-relaxed mb-6">
+                  為了保護您的營業數據安全，系統偵測到您已閒置一段時間。系統將於倒數結束後自動登出。
+                </p>
+                <div className="bg-rose-50 text-rose-600 inline-flex flex-col items-center justify-center rounded-2xl px-8 py-3.5 border border-rose-100/50 shadow-sm shadow-rose-100/50">
+                   <span className="text-[10px] font-black text-rose-400 mb-1 tracking-[0.2em] uppercase">Auto Logout</span>
+                   <div className="flex items-baseline gap-1.5">
+                     <span className="text-5xl font-black font-mono tracking-tighter tabular-nums">{countdown}</span>
+                     <span className="text-sm font-bold">秒</span>
+                   </div>
+                </div>
+              </div>
+              <button onClick={handleStayLoggedIn} className="w-full py-4 bg-stone-900 text-white rounded-2xl font-bold tracking-wide hover:bg-stone-800 hover:shadow-xl hover:shadow-stone-900/10 active:scale-[0.97] transition-all flex items-center justify-center gap-2">
+                <Shield size={18} strokeWidth={2} /> 確認並保持登入
+              </button>
+            </div>
+          </div>
+        )}
+
       </div>
     </AppContext.Provider>
   );

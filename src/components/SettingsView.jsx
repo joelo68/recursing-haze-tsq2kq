@@ -4,7 +4,7 @@ import {
   Save, Plus, Trash2, Edit2, Edit, Lock, User, Store, Target,
   CheckCircle, AlertCircle, X, Shield, ChevronDown, Search,
   UserCheck, UserX, Key, Calendar, DollarSign, Users, LayoutGrid,
-  Database, Activity
+  Database, Activity, Clock
 } from "lucide-react";
 import { 
   doc, setDoc, updateDoc, deleteField, collection, addDoc, deleteDoc, getDoc,
@@ -18,7 +18,6 @@ import { DEFAULT_PERMISSIONS, ALL_MENU_ITEMS } from "../constants/index";
 import { generateUUID } from "../utils/helpers";
 import SystemMaintenance from "./SystemMaintenance";
 
-// 定義預設值
 const DEFAULT_BENCHMARKS_INIT = {
   default: {
     financial: { min: 0.8, max: 1.2, label: "現權責比" }, 
@@ -36,48 +35,12 @@ const DEFAULT_BENCHMARKS_INIT = {
   }
 };
 
-// ★★★ 修改重點：將 ASP 改為「客單」，更口語化 ★★★
 const BENCHMARK_CATEGORIES = [
-  { 
-    id: 'financial', 
-    title: '財務健康 (回收率)', 
-    sub: '現金佔權責比例 (建議 80% 以上)', 
-    type: 'percent', 
-    suffix: '%', 
-    step: 5 
-  },
-  { 
-    id: 'sales', 
-    title: '銷售結構 (產品比)', 
-    sub: '產品業績佔比 (建議 10%-45%)', 
-    type: 'percent', 
-    suffix: '%', 
-    step: 1 
-  },
-  { 
-    id: 'loyalty', 
-    title: '顧客黏著 (留客率)', 
-    sub: '舊客佔總客數比 (建議 50% 以上)', 
-    type: 'percent', 
-    suffix: '%', 
-    step: 1 
-  },
-  { 
-    id: 'mining', 
-    title: '客單挖掘 (舊客強度)', 
-    sub: '舊客客單是新客的幾% (建議 >100%)',  // ASP -> 客單
-    type: 'percent', 
-    suffix: '%', 
-    step: 5 
-  },
-  { 
-    id: 'acquisition', 
-    title: '新客質量 (達標率)', 
-    sub: '新客客單達成目標的幾% (基準 100%)', // ASP -> 客單
-    type: 'percent', 
-    suffix: '%', 
-    step: 5 
-  },
+  { id: 'financial', title: '財務健康 (回收率)', sub: '現金佔權責比例 (建議 80% 以上)', type: 'percent', suffix: '%', step: 5 },
+  { id: 'sales', title: '銷售結構 (產品比)', sub: '產品業績佔比 (建議 10%-45%)', type: 'percent', suffix: '%', step: 1 },
+  { id: 'loyalty', title: '顧客黏著 (留客率)', sub: '舊客佔總客數比 (建議 50% 以上)', type: 'percent', suffix: '%', step: 1 },
+  { id: 'mining', title: '客單挖掘 (舊客強度)', sub: '舊客客單是新客的幾% (建議 >100%)', type: 'percent', suffix: '%', step: 5 },
+  { id: 'acquisition', title: '新客質量 (達標率)', sub: '新客客單達成目標的幾% (基準 100%)', type: 'percent', suffix: '%', step: 5 },
 ];
 
 const SettingsView = () => {
@@ -87,53 +50,40 @@ const SettingsView = () => {
     therapists, therapistTargets, therapistSchedules,
     trainerAuth, handleUpdateTrainerAuth,
     getDocPath, getCollectionPath,
-    currentBrand 
+    currentBrand, securityConfig // ★ 引入資安設定
   } = useContext(AppContext);
 
   const [activeTab, setActiveTab] = useState("");
   const [localTargets, setLocalTargets] = useState(targets || {});
   const [localPermissions, setLocalPermissions] = useState(permissions || DEFAULT_PERMISSIONS);
   const [localManagers, setLocalManagers] = useState(managers || {});
+  
+  // ★ 新增：本地端的資安設定狀態
+  const [localSecurityConfig, setLocalSecurityConfig] = useState({
+    enabled: true, timeoutMinutes: 3, warningSeconds: 15, exemptRoles: ["director", "master"]
+  });
 
   const { brandKey, brandLabel } = useMemo(() => {
-    let key = "default";
-    let label = "通用預設 (CYJ)";
-
+    let key = "default"; let label = "通用預設 (CYJ)";
     if (currentBrand) {
       const id = typeof currentBrand === 'string' ? currentBrand : (currentBrand.id || "CYJ");
       const normalizedId = id.toLowerCase();
-      
-      if (normalizedId.includes("anniu") || normalizedId.includes("anew")) {
-        key = "安妞";
-        label = "安妞";
-      } else if (normalizedId.includes("yibo")) {
-        key = "伊啵";
-        label = "伊啵";
-      } else {
-        key = "default";
-        label = "通用預設 (CYJ)";
-      }
+      if (normalizedId.includes("anniu") || normalizedId.includes("anew")) { key = "安妞"; label = "安妞"; } 
+      else if (normalizedId.includes("yibo")) { key = "伊啵"; label = "伊啵"; }
     }
     return { brandKey: key, brandLabel: label };
   }, [currentBrand]);
 
-  useEffect(() => {
-    if (managers) setLocalManagers(managers);
-  }, [managers]);
-
+  useEffect(() => { if (managers) setLocalManagers(managers); }, [managers]);
+  useEffect(() => { if (permissions) setLocalPermissions(permissions); }, [permissions]);
   useEffect(() => { 
-    if (permissions) setLocalPermissions(permissions); 
-  }, [permissions]);
-
-  useEffect(() => { 
-    if (targets) {
-        setLocalTargets(prev => ({
-            ...prev,
-            ...targets,
-            benchmarks: targets.benchmarks || DEFAULT_BENCHMARKS_INIT
-        }));
-    }
+    if (targets) { setLocalTargets(prev => ({ ...prev, ...targets, benchmarks: targets.benchmarks || DEFAULT_BENCHMARKS_INIT })); }
   }, [targets]);
+  
+  // ★ 同步 Firebase 傳來的資安設定
+  useEffect(() => {
+    if (securityConfig) setLocalSecurityConfig(securityConfig);
+  }, [securityConfig]);
 
   const [newStoreAccount, setNewStoreAccount] = useState({ name: "", password: "", stores: "" });
   const [editingStoreAccount, setEditingStoreAccount] = useState(null);
@@ -159,7 +109,7 @@ const SettingsView = () => {
     const allTabsDefinition = [
       { id: "kpi", label: "KPI 參數", isAdminOnly: true, icon: Target },
       { id: "health", label: "體質診斷", isAdminOnly: true, icon: Activity },
-      { id: "permissions", label: "權限設定", isAdminOnly: true, icon: Lock },
+      { id: "permissions", label: "權限與資安", isAdminOnly: true, icon: Shield }, // ★ 標題升級
       { id: "trainer-account", label: "教專帳號", isAdminOnly: true, icon: Users }, 
       { id: "shops", label: "店家管理", isAdminOnly: true, icon: Store },
       { id: "stores", label: "店經理帳號", isAdminOnly: true, icon: UserCheck },
@@ -168,13 +118,8 @@ const SettingsView = () => {
       { id: "maintenance", label: "系統維護", isAdminOnly: true, icon: Database }
     ];
     allTabsDefinition.forEach(tab => {
-      if (userRole === 'director') {
-        tabs.push(tab);
-      } else {
-        if (!tab.isAdminOnly && tab.permissionId && myPerms.includes(tab.permissionId)) {
-          tabs.push(tab);
-        }
-      }
+      if (userRole === 'director') tabs.push(tab);
+      else if (!tab.isAdminOnly && tab.permissionId && myPerms.includes(tab.permissionId)) tabs.push(tab);
     });
     return tabs;
   }, [userRole, permissions]);
@@ -182,9 +127,7 @@ const SettingsView = () => {
   useEffect(() => {
     if (visibleTabs.length > 0) {
       const isCurrentTabValid = visibleTabs.some(t => t.id === activeTab);
-      if (!activeTab || !isCurrentTabValid) {
-        setActiveTab(visibleTabs[0].id);
-      }
+      if (!activeTab || !isCurrentTabValid) setActiveTab(visibleTabs[0].id);
     }
   }, [visibleTabs, activeTab]);
 
@@ -192,9 +135,7 @@ const SettingsView = () => {
     const currentManagers = localManagers || {};
     const entries = Object.entries(currentManagers);
     const hasUnassigned = entries.some(([key]) => key === UNASSIGNED_KEY);
-    if (!hasUnassigned) {
-      entries.push([UNASSIGNED_KEY, []]);
-    }
+    if (!hasUnassigned) entries.push([UNASSIGNED_KEY, []]);
     return entries.sort((a, b) => {
       if (a[0] === UNASSIGNED_KEY) return 1; 
       if (b[0] === UNASSIGNED_KEY) return -1;
@@ -211,37 +152,24 @@ const SettingsView = () => {
     return [];
   }, [therapists, userRole, currentUser, localManagers]);
 
-  const handleUpdateTrainer = async () => {
-    if (!newTrainerPass) return showToast("請輸入新密碼", "error");
-    const success = await handleUpdateTrainerAuth(newTrainerPass);
-    if (success) { showToast("教專密碼已更新", "success"); setNewTrainerPass(""); } else { showToast("更新失敗", "error"); }
-  };
-
+  const handleUpdateTrainer = async () => { if (!newTrainerPass) return showToast("請輸入新密碼", "error"); const success = await handleUpdateTrainerAuth(newTrainerPass); if (success) { showToast("教專密碼已更新", "success"); setNewTrainerPass(""); } else { showToast("更新失敗", "error"); } };
   const handleSaveTargets = async () => { try { await setDoc(getDocPath("kpi_targets"), localTargets); setTargets(localTargets); showToast("設定已儲存", "success"); } catch (e) { showToast("儲存失敗", "error"); } };
   const handleSavePermissions = async () => { try { await setDoc(getDocPath("permissions"), localPermissions); showToast("權限設定已更新", "success"); } catch (e) { showToast("更新失敗", "error"); } };
   const togglePermission = (role, menuId) => { const current = localPermissions[role] || []; const updated = current.includes(menuId) ? current.filter((id) => id !== menuId) : [...current, menuId]; setLocalPermissions({ ...localPermissions, [role]: updated }); };
+  
+  // ★ 新增：儲存資安設定
+  const handleSaveSecurityConfig = async () => { 
+    try { 
+      await setDoc(getDocPath("security_config"), localSecurityConfig); 
+      showToast("資安與登入控管已更新", "success"); 
+    } catch (e) { showToast("更新失敗", "error"); } 
+  };
+
   const handleBenchmarkChange = (categoryId, field, value, type) => {
     let numValue = parseFloat(value);
-    
     if (isNaN(numValue)) numValue = 0;
-
-    if (type === 'percent') {
-        numValue = numValue / 100;
-    }
-
-    setLocalTargets(prev => ({
-        ...prev,
-        benchmarks: {
-            ...prev.benchmarks,
-            [brandKey]: { 
-                ...(prev.benchmarks?.[brandKey] || DEFAULT_BENCHMARKS_INIT["default"]),
-                [categoryId]: {
-                    ...(prev.benchmarks?.[brandKey]?.[categoryId] || DEFAULT_BENCHMARKS_INIT["default"][categoryId]),
-                    [field]: numValue
-                }
-            }
-        }
-    }));
+    if (type === 'percent') numValue = numValue / 100;
+    setLocalTargets(prev => ({ ...prev, benchmarks: { ...prev.benchmarks, [brandKey]: { ...(prev.benchmarks?.[brandKey] || DEFAULT_BENCHMARKS_INIT["default"]), [categoryId]: { ...(prev.benchmarks?.[brandKey]?.[categoryId] || DEFAULT_BENCHMARKS_INIT["default"][categoryId]), [field]: numValue } } } }));
   };
 
   const handleAddGlobalStore = async () => { if (!newShop.name || !newShop.manager) return showToast("請輸入完整資訊", "error"); try { const targetManager = newShop.manager; const docRef = getDocPath("org_structure"); const docSnap = await getDoc(docRef); let newManagers = docSnap.exists() ? { ...docSnap.data().managers } : {}; if (!newManagers[targetManager]) newManagers[targetManager] = []; if (!newManagers[targetManager].includes(newShop.name)) { newManagers[targetManager].push(newShop.name); } await setDoc(docRef, { managers: newManagers }); setLocalManagers(newManagers); setNewShop({ name: "", manager: "" }); showToast("已新增", "success"); } catch (e) { showToast("失敗: " + e.message, "error"); } };
@@ -291,103 +219,128 @@ const SettingsView = () => {
         {activeTab === "health" && (
             <Card title="門市體質診斷標準">
                 <div className="space-y-6 w-full min-w-0">
-                    <div className="bg-stone-50 p-4 rounded-xl border border-stone-200 flex items-center gap-2">
-                        <Lock size={18} className="text-amber-500" />
-                        <span className="text-sm font-bold text-stone-600">當前設定品牌：</span>
-                        <span className="text-lg font-bold text-amber-600">{brandLabel}</span>
-                    </div>
-
+                    <div className="bg-stone-50 p-4 rounded-xl border border-stone-200 flex items-center gap-2"><Lock size={18} className="text-amber-500" /><span className="text-sm font-bold text-stone-600">當前設定品牌：</span><span className="text-lg font-bold text-amber-600">{brandLabel}</span></div>
                     <div className="grid grid-cols-1 md:grid-cols-2 2xl:grid-cols-3 gap-4">
                         {BENCHMARK_CATEGORIES.map(cat => {
                             const currentVal = localTargets.benchmarks?.[brandKey]?.[cat.id] || DEFAULT_BENCHMARKS_INIT[brandKey]?.[cat.id] || DEFAULT_BENCHMARKS_INIT["default"][cat.id];
-                            
-                            // 顯示優化：百分比顯示
                             const displayMin = (currentVal.min * 100).toFixed(0);
                             const displayMax = (currentVal.max * 100).toFixed(0);
-
                             return (
                                 <div key={cat.id} className="bg-stone-50 border border-stone-200 rounded-xl p-4 hover:shadow-sm transition-shadow">
-                                    <div className="mb-3 flex justify-between items-start">
-                                        <div><h4 className="font-bold text-stone-700">{cat.title}</h4><p className="text-[10px] text-stone-400 mt-0.5">{cat.sub}</p></div>
-                                        <span className="text-[10px] font-bold text-stone-400 bg-white px-2 py-1 rounded border border-stone-100 ml-2 whitespace-nowrap">標準: {displayMin}% - {displayMax}%</span>
-                                    </div>
+                                    <div className="mb-3 flex justify-between items-start"><div><h4 className="font-bold text-stone-700">{cat.title}</h4><p className="text-[10px] text-stone-400 mt-0.5">{cat.sub}</p></div><span className="text-[10px] font-bold text-stone-400 bg-white px-2 py-1 rounded border border-stone-100 ml-2 whitespace-nowrap">標準: {displayMin}% - {displayMax}%</span></div>
                                     <div className="grid grid-cols-2 gap-3">
-                                        <div>
-                                            <label className="block text-[10px] font-bold text-stone-400 mb-1">及格 ({cat.suffix})</label>
-                                            <div className="relative">
-                                                <input 
-                                                    type="number" 
-                                                    step={cat.step}
-                                                    value={displayMin} 
-                                                    onChange={(e) => handleBenchmarkChange(cat.id, 'min', e.target.value, cat.type)} 
-                                                    className="w-full pl-3 pr-8 py-2 border rounded-lg font-mono font-bold text-stone-700 focus:border-amber-400 outline-none text-center bg-white"
-                                                />
-                                                <span className="absolute right-3 top-2 text-xs font-bold text-stone-400 pointer-events-none">{cat.suffix}</span>
-                                            </div>
-                                        </div>
-                                        <div>
-                                            <label className="block text-[10px] font-bold text-stone-400 mb-1">滿分 ({cat.suffix})</label>
-                                            <div className="relative">
-                                                <input 
-                                                    type="number" 
-                                                    step={cat.step}
-                                                    value={displayMax} 
-                                                    onChange={(e) => handleBenchmarkChange(cat.id, 'max', e.target.value, cat.type)} 
-                                                    className="w-full pl-3 pr-8 py-2 border rounded-lg font-mono font-bold text-stone-700 focus:border-amber-400 outline-none text-center bg-white"
-                                                />
-                                                <span className="absolute right-3 top-2 text-xs font-bold text-stone-400 pointer-events-none">{cat.suffix}</span>
-                                            </div>
-                                        </div>
+                                        <div><label className="block text-[10px] font-bold text-stone-400 mb-1">及格 ({cat.suffix})</label><div className="relative"><input type="number" step={cat.step} value={displayMin} onChange={(e) => handleBenchmarkChange(cat.id, 'min', e.target.value, cat.type)} className="w-full pl-3 pr-8 py-2 border rounded-lg font-mono font-bold text-stone-700 focus:border-amber-400 outline-none text-center bg-white"/><span className="absolute right-3 top-2 text-xs font-bold text-stone-400 pointer-events-none">{cat.suffix}</span></div></div>
+                                        <div><label className="block text-[10px] font-bold text-stone-400 mb-1">滿分 ({cat.suffix})</label><div className="relative"><input type="number" step={cat.step} value={displayMax} onChange={(e) => handleBenchmarkChange(cat.id, 'max', e.target.value, cat.type)} className="w-full pl-3 pr-8 py-2 border rounded-lg font-mono font-bold text-stone-700 focus:border-amber-400 outline-none text-center bg-white"/><span className="absolute right-3 top-2 text-xs font-bold text-stone-400 pointer-events-none">{cat.suffix}</span></div></div>
                                     </div>
                                 </div>
                             );
                         })}
                     </div>
-
-                    <div className="flex justify-end pt-4 border-t border-stone-100">
-                        <button onClick={handleSaveTargets} className="w-full md:w-auto bg-stone-800 text-white px-8 py-3 rounded-xl font-bold hover:bg-stone-700 shadow-lg active:scale-95 transition-all flex items-center justify-center gap-2">
-                            <Save size={18} /> 儲存體質標準
-                        </button>
-                    </div>
+                    <div className="flex justify-end pt-4 border-t border-stone-100"><button onClick={handleSaveTargets} className="w-full md:w-auto bg-stone-800 text-white px-8 py-3 rounded-xl font-bold hover:bg-stone-700 shadow-lg active:scale-95 transition-all flex items-center justify-center gap-2"><Save size={18} /> 儲存體質標準</button></div>
                 </div>
             </Card>
         )}
 
-        {/* ... 其他 Tabs ... */}
-        {activeTab === "trainer-account" && (<Card title="教專帳號管理"><div className="max-w-md w-full space-y-6 min-w-0"><div className="bg-stone-50 p-4 rounded-xl border border-stone-200"><p className="text-xs font-bold text-stone-400 uppercase mb-1">目前設定</p><div className="flex justify-between items-center"><span className="font-bold text-stone-700">教專 (Trainer)</span><span className="font-mono bg-white px-3 py-1 rounded border text-stone-500">{trainerAuth?.password || "0000"}</span></div></div><div><label className="block text-sm font-bold text-stone-500 mb-2">設定新密碼</label><input type="text" value={newTrainerPass} onChange={(e) => setNewTrainerPass(e.target.value)} placeholder="輸入新密碼" className="w-full px-4 py-3 border-2 border-stone-100 rounded-xl outline-none focus:border-amber-400 font-bold"/></div><button onClick={handleUpdateTrainer} className="w-full bg-stone-800 text-white py-3 rounded-xl font-bold hover:bg-stone-900 shadow-lg">更新密碼</button></div></Card>)}
-        
-        {activeTab === "permissions" && (<Card title="角色權限管理"><div className="overflow-x-auto w-full pb-2"><div className="min-w-[600px]"><table className="w-full text-left text-sm"><thead><tr className="border-b border-stone-200"><th className="p-4 font-bold text-stone-500 sticky left-0 bg-white z-10">功能模組</th><th className="p-4 font-bold text-stone-700 text-center bg-rose-50/50">教專</th><th className="p-4 font-bold text-stone-700 text-center bg-teal-50/50">區長</th><th className="p-4 font-bold text-stone-700 text-center bg-amber-50/50">店經理</th><th className="p-4 font-bold text-stone-700 text-center bg-indigo-50/50">管理師</th></tr></thead><tbody className="divide-y divide-stone-100">{ALL_MENU_ITEMS.map((item) => (<tr key={item.id} className="hover:bg-stone-50"><td className="p-4 flex items-center gap-3 sticky left-0 bg-white/95 backdrop-blur-sm z-10 border-r border-stone-100 md:border-none shadow-[2px_0_5px_-2px_rgba(0,0,0,0.05)] md:shadow-none"><div className="p-2 bg-stone-100 rounded-lg text-stone-500 shrink-0"><item.icon size={18} /></div><span className="font-bold text-stone-700 whitespace-nowrap">{item.label}</span></td><td className="p-4 text-center bg-rose-50/30"><input type="checkbox" checked={localPermissions.trainer?.includes(item.id)} onChange={() => togglePermission("trainer", item.id)} className="w-5 h-5 rounded border-stone-300 text-rose-600 focus:ring-rose-500 cursor-pointer"/></td><td className="p-4 text-center bg-teal-50/30"><input type="checkbox" checked={localPermissions.manager?.includes(item.id)} onChange={() => togglePermission("manager", item.id)} className="w-5 h-5 rounded cursor-pointer"/></td><td className="p-4 text-center bg-amber-50/30"><input type="checkbox" checked={localPermissions.store?.includes(item.id)} onChange={() => togglePermission("store", item.id)} className="w-5 h-5 rounded cursor-pointer"/></td><td className="p-4 text-center bg-indigo-50/30"><input type="checkbox" checked={localPermissions.therapist?.includes(item.id)} onChange={() => togglePermission("therapist", item.id)} className="w-5 h-5 rounded cursor-pointer"/></td></tr>))}</tbody></table></div></div><div className="mt-6 flex justify-end"><button onClick={handleSavePermissions} className="w-full md:w-auto bg-stone-800 text-white px-6 py-3 rounded-xl font-bold hover:bg-stone-700 shadow-lg active:scale-95 transition-all">儲存權限</button></div></Card>)}
-        
-        {activeTab === "shops" && ( <div className="space-y-6 w-full max-w-full min-w-0"><Card title="新增營運店家"><div className="flex flex-col md:flex-row gap-4 items-end"><div className="flex-1 w-full"><label className="block text-xs font-bold text-stone-400 mb-1">分店簡稱</label><input type="text" value={newShop.name} onChange={(e) => setNewShop({ ...newShop, name: e.target.value })} placeholder="例如: 中山" className="w-full px-4 py-2 border-2 border-stone-100 rounded-xl outline-none focus:border-amber-400 font-bold"/></div><div className="flex-1 w-full"><label className="block text-xs font-bold text-stone-400 mb-1">所屬區域</label><div className="relative"><select value={newShop.manager} onChange={(e) => setNewShop({ ...newShop, manager: e.target.value })} className="w-full px-4 py-2 border-2 border-stone-100 rounded-xl outline-none focus:border-amber-400 font-bold appearance-none bg-white text-stone-700"><option value="">請選擇...</option>{Object.keys(localManagers).map((m) => (<option key={m} value={m}>{m} 區</option>))}</select><ChevronDown size={16} className="absolute right-3 top-3 text-stone-400 pointer-events-none"/></div></div><button onClick={handleAddGlobalStore} className="w-full md:w-auto bg-stone-800 text-white px-6 py-2.5 rounded-xl font-bold hover:bg-stone-700 shadow-sm flex items-center justify-center gap-2"><Plus size={18} /> 新增</button></div></Card><Card title="全域店家列表"><div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">{managerEntries.map(([mgr, stores]) => (<div key={mgr} className={`bg-stone-50 rounded-2xl p-4 border ${mgr === UNASSIGNED_KEY ? "border-stone-300 shadow-inner" : "border-stone-100"}`}><div className="flex items-center gap-2 mb-3 border-b border-stone-200 pb-2"><span className={`font-bold ${mgr === UNASSIGNED_KEY ? "text-stone-500" : "text-stone-700"}`}>{mgr} {mgr!==UNASSIGNED_KEY && "區"}</span><span className="text-xs text-stone-400 ml-auto">{stores.length} 間</span></div><div className="flex flex-wrap gap-2">{stores.map((store) => (<div key={store} className="group relative flex items-center"><span className={`px-3 py-1.5 border rounded-lg text-xs font-bold shadow-sm pr-7 ${mgr === UNASSIGNED_KEY ? "bg-white text-stone-500 border-stone-200" : "bg-white text-stone-600 border-stone-200"}`}>{store}</span><button onClick={() => handleDeleteGlobalStore(store, mgr)} className="absolute right-1 p-1 text-stone-300 hover:text-rose-500 transition-colors"><X size={12} /></button></div>))}</div></div>))}</div></Card></div> )}
-        {/* RWD 優化：店經理列表 */}
-        {activeTab === "stores" && ( <div className="space-y-6 w-full max-w-full min-w-0"><Card title="新增店經理帳號"><div className="grid grid-cols-1 md:grid-cols-4 gap-4 items-end"><div><label className="block text-xs font-bold text-stone-400 mb-1">姓名 / 帳號</label><input type="text" value={newStoreAccount.name} onChange={(e) => setNewStoreAccount({ ...newStoreAccount, name: e.target.value })} placeholder="例如: 王小明" className="w-full px-4 py-2 border-2 border-stone-100 rounded-xl outline-none focus:border-amber-400 font-bold"/></div><div><label className="block text-xs font-bold text-stone-400 mb-1">登入密碼</label><input type="text" value={newStoreAccount.password} onChange={(e) => setNewStoreAccount({ ...newStoreAccount, password: e.target.value })} placeholder="設定密碼" className="w-full px-4 py-2 border-2 border-stone-100 rounded-xl outline-none focus:border-amber-400 font-bold"/></div><div className="md:col-span-2"><label className="block text-xs font-bold text-stone-400 mb-1">分配管理店家</label><div className="flex gap-2"><div className="relative w-full"><Store size={16} className="absolute left-3 top-3 text-stone-400 pointer-events-none"/><select value={newStoreAccount.stores} onChange={(e) => setNewStoreAccount({ ...newStoreAccount, stores: e.target.value })} className="w-full pl-10 pr-4 py-2 border-2 border-stone-100 rounded-xl outline-none focus:border-amber-400 font-bold appearance-none bg-white text-stone-700"><option value="">請選擇未分配店家...</option>{availableUnassignedStores.map((s) => (<option key={s} value={s}>{s}</option>))}</select><ChevronDown size={16} className="absolute right-3 top-3 text-stone-400 pointer-events-none"/></div><button onClick={handleAddStoreAccount} className="bg-stone-800 text-white px-4 rounded-xl font-bold shrink-0 hover:bg-stone-700"><Plus size={20} /></button></div></div></div></Card><Card title="現有店經理列表"><div className="overflow-x-auto w-full pb-2"><div className="min-w-[600px]"><table className="w-full text-left text-sm"><thead className="bg-stone-50 font-bold text-stone-500 uppercase"><tr><th className="p-4 rounded-tl-xl">姓名</th><th className="p-4">密碼</th><th className="p-4">負責店家</th><th className="p-4 rounded-tr-xl text-right">操作</th></tr></thead><tbody className="divide-y divide-stone-100">{storeAccounts.map((account) => (<tr key={account.id} className="hover:bg-stone-50"><td className="p-4 font-bold text-stone-700">{account.name}</td><td className="p-4 font-mono text-stone-500">{account.password}</td><td className="p-4"><div className="flex flex-wrap gap-1">{account.stores && account.stores.map((s) => (<span key={s} className="px-2 py-1 bg-stone-100 rounded text-xs font-bold text-stone-600">{s}</span>))}</div></td><td className="p-4 text-right flex justify-end gap-1"><button onClick={() => openEditStoreAccount(account)} className="text-stone-400 hover:text-stone-600 hover:bg-stone-100 p-2 rounded-lg transition-colors"><Edit2 size={18} /></button><button onClick={() => handleDeleteStoreAccount(account.id)} className="text-rose-400 hover:text-rose-600 hover:bg-rose-50 p-2 rounded-lg transition-colors"><Trash2 size={18} /></button></td></tr>))}</tbody></table></div></div></Card>{editingStoreAccount && (<div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50 backdrop-blur-sm"><div className="bg-white w-full max-w-md rounded-2xl shadow-2xl overflow-hidden animate-in zoom-in-95"><div className="bg-amber-400 p-4 font-bold text-white flex justify-between items-center"><span>編輯店經理帳號</span><button onClick={() => setEditingStoreAccount(null)}><X size={20}/></button></div><div className="p-6 space-y-4"><div><label className="text-xs font-bold text-stone-400 block mb-1">姓名 / 帳號</label><input type="text" value={editStoreForm.name} onChange={(e) => setEditStoreForm({...editStoreForm, name: e.target.value})} className="w-full p-2 border rounded-lg font-bold"/></div><div><label className="text-xs font-bold text-stone-400 block mb-1">密碼</label><input type="text" value={editStoreForm.password} onChange={(e) => setEditStoreForm({...editStoreForm, password: e.target.value})} className="w-full p-2 border rounded-lg font-mono"/></div><div><label className="text-xs font-bold text-stone-400 block mb-1">管理店家 (可多選)</label><div className="flex flex-wrap gap-2 mb-2 p-2 bg-stone-50 rounded-lg min-h-[40px]">{editStoreForm.stores.map(s => (<span key={s} className="px-2 py-1 bg-white border border-stone-200 rounded text-xs font-bold text-stone-600 shadow-sm flex items-center gap-1">{s} <button onClick={() => handleRemoveStoreFromEditForm(s)} className="text-stone-300 hover:text-rose-500"><X size={12}/></button></span>))}</div><div className="relative"><select onChange={(e) => { handleAddStoreToEditForm(e.target.value); e.target.value = ""; }} className="w-full p-2 border rounded-lg font-bold bg-white"><option value="">+ 加入負責店家</option>{availableStoresForEditing.map(s => <option key={s} value={s}>{s}</option>)}</select></div></div><div className="pt-4 flex gap-3"><button onClick={() => setEditingStoreAccount(null)} className="flex-1 py-3 bg-stone-100 text-stone-500 rounded-xl font-bold">取消</button><button onClick={handleUpdateStoreAccount} className="flex-1 py-3 bg-stone-800 text-white rounded-xl font-bold">儲存變更</button></div></div></div></div>)}</div> )}
-        {activeTab === "managers" && (
+        {/* ========================================== */}
+        {/* ★ 雙卡片設計：權限設定 + 資安設定合而為一 */}
+        {/* ========================================== */}
+        {activeTab === "permissions" && (
           <div className="space-y-6 w-full max-w-full min-w-0">
-            <Card title="新增區長">
-              <div className="flex flex-col md:flex-row gap-4 items-end">
-                <div className="flex-1 w-full"><label className="block text-xs font-bold text-stone-400 mb-1">區長姓名</label><input type="text" value={newManager.name} onChange={(e) => setNewManager({ ...newManager, name: e.target.value })} placeholder="例如: Jonas" className="w-full px-4 py-2 border-2 border-stone-100 rounded-xl outline-none focus:border-amber-400 font-bold" /></div>
-                <div className="flex-1 w-full"><label className="block text-xs font-bold text-stone-400 mb-1">預設密碼</label><input type="text" value={newManager.password} onChange={(e) => setNewManager({ ...newManager, password: e.target.value })} placeholder="設定密碼" className="w-full px-4 py-2 border-2 border-stone-100 rounded-xl outline-none focus:border-amber-400 font-bold" /></div>
-                <button onClick={handleAddManager} className="w-full md:w-auto bg-stone-800 text-white px-6 py-2.5 rounded-xl font-bold hover:bg-stone-700 shadow-sm flex items-center justify-center gap-2"><Plus size={18} /> 新增區長</button>
+            {/* 上半部：角色權限 */}
+            <Card title="模組讀寫權限管理">
+              <div className="overflow-x-auto w-full pb-2">
+                <div className="min-w-[600px]">
+                  <table className="w-full text-left text-sm">
+                    <thead><tr className="border-b border-stone-200"><th className="p-4 font-bold text-stone-500 sticky left-0 bg-white z-10">功能模組</th><th className="p-4 font-bold text-stone-700 text-center bg-rose-50/50">教專</th><th className="p-4 font-bold text-stone-700 text-center bg-teal-50/50">區長</th><th className="p-4 font-bold text-stone-700 text-center bg-amber-50/50">店經理</th><th className="p-4 font-bold text-stone-700 text-center bg-indigo-50/50">管理師</th></tr></thead>
+                    <tbody className="divide-y divide-stone-100">
+                      {ALL_MENU_ITEMS.map((item) => (
+                        <tr key={item.id} className="hover:bg-stone-50">
+                          <td className="p-4 flex items-center gap-3 sticky left-0 bg-white/95 backdrop-blur-sm z-10 border-r border-stone-100 md:border-none shadow-[2px_0_5px_-2px_rgba(0,0,0,0.05)] md:shadow-none"><div className="p-2 bg-stone-100 rounded-lg text-stone-500 shrink-0"><item.icon size={18} /></div><span className="font-bold text-stone-700 whitespace-nowrap">{item.label}</span></td>
+                          <td className="p-4 text-center bg-rose-50/30"><input type="checkbox" checked={localPermissions.trainer?.includes(item.id)} onChange={() => togglePermission("trainer", item.id)} className="w-5 h-5 rounded border-stone-300 text-rose-600 focus:ring-rose-500 cursor-pointer"/></td>
+                          <td className="p-4 text-center bg-teal-50/30"><input type="checkbox" checked={localPermissions.manager?.includes(item.id)} onChange={() => togglePermission("manager", item.id)} className="w-5 h-5 rounded cursor-pointer"/></td>
+                          <td className="p-4 text-center bg-amber-50/30"><input type="checkbox" checked={localPermissions.store?.includes(item.id)} onChange={() => togglePermission("store", item.id)} className="w-5 h-5 rounded cursor-pointer"/></td>
+                          <td className="p-4 text-center bg-indigo-50/30"><input type="checkbox" checked={localPermissions.therapist?.includes(item.id)} onChange={() => togglePermission("therapist", item.id)} className="w-5 h-5 rounded cursor-pointer"/></td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+              <div className="mt-6 flex justify-end">
+                <button onClick={handleSavePermissions} className="w-full md:w-auto bg-stone-800 text-white px-8 py-3 rounded-xl font-bold hover:bg-stone-700 shadow-lg active:scale-95 transition-all">儲存模組權限</button>
               </div>
             </Card>
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-              {managerEntries.map(([managerName, stores]) => (
-                <Card key={managerName} className={`border ${managerName === UNASSIGNED_KEY ? "border-stone-300 bg-stone-50" : "border-stone-200"}`}>
-                  <div className="flex flex-wrap justify-between items-start gap-3 mb-4">
-                    <div><h3 className={`text-lg font-bold flex items-center gap-2 ${managerName === UNASSIGNED_KEY ? "text-stone-500" : "text-stone-700"}`}>{managerName === UNASSIGNED_KEY ? <LayoutGrid size={20} /> : <User size={20} className="text-amber-500" />}{managerName} {managerName !== UNASSIGNED_KEY && "區"}</h3>{managerName !== UNASSIGNED_KEY && <p className="text-xs text-stone-400 mt-1 font-mono">密碼: {managerAuth[managerName] || "未設定"}</p>}</div>
-                    {managerName !== UNASSIGNED_KEY && (<div className="flex gap-2"><button onClick={() => { setEditingManager(managerName); setEditingManagerStores(stores); }} className="text-xs bg-stone-100 text-stone-600 px-3 py-1.5 rounded-lg hover:bg-stone-200 font-bold whitespace-nowrap">編輯轄區</button><button onClick={() => handleDeleteManager(managerName)} className="text-rose-400 hover:bg-rose-50 p-1.5 rounded-lg"><Trash2 size={16} /></button></div>)}
-                  </div>
-                  {editingManager === managerName ? (
-                    <div className="mt-4 animate-in fade-in bg-stone-50 p-4 rounded-xl border border-stone-200"><label className="block text-xs font-bold text-stone-400 mb-2">已分配店家</label><div className="flex flex-wrap gap-2 mb-4">{editingManagerStores.map((s) => (<div key={s} className="group relative flex items-center"><span className="px-3 py-1.5 bg-white border border-stone-200 rounded-lg text-xs font-bold text-stone-600 shadow-sm pr-7">{s}</span><button onClick={() => handleRemoveStoreFromEditing(s)} className="absolute right-1 p-1 text-stone-300 hover:text-rose-500 transition-colors"><X size={12} /></button></div>))}</div><div className="mb-4"><label className="block text-xs font-bold text-stone-400 mb-1">新增未分配店家 (從未分配清單選擇)</label><div className="relative"><select onChange={(e) => { handleAddStoreToEditing(e.target.value); e.target.value = ""; }} className="w-full px-4 py-2 border-2 border-stone-200 rounded-xl font-bold bg-white appearance-none text-stone-700"><option value="">+ 點擊選擇店家</option>{availableStoresForManagerEdit.filter((s) => !editingManagerStores.includes(s)).map((s) => (<option key={s} value={s}>{s}</option>))}</select><ChevronDown size={16} className="absolute right-3 top-3 text-stone-400 pointer-events-none"/></div></div><div className="flex gap-2 justify-end"><button onClick={() => setEditingManager(null)} className="px-3 py-1.5 text-xs font-bold text-stone-400 hover:text-stone-600">取消</button><button onClick={() => handleSaveManagerStores(managerName)} className="px-4 py-1.5 bg-stone-800 text-white text-xs font-bold rounded-lg hover:bg-stone-700 shadow-sm">儲存變更</button></div></div>
-                  ) : (
-                    <div className="flex flex-wrap gap-2 mt-4">{stores.map((s) => (<span key={s} className={`px-2.5 py-1 border rounded-lg text-xs font-bold ${managerName === UNASSIGNED_KEY ? "bg-white border-stone-200 text-stone-400" : "bg-stone-50 border-stone-100 text-stone-600"}`}>{s}</span>))}</div>
-                  )}
-                </Card>
-              ))}
-            </div>
+
+            {/* 下半部：資安控管 */}
+            <Card title="資安與閒置登入控管">
+              <div className="space-y-6">
+                <div>
+                   <label className="block text-sm font-bold text-stone-500 mb-2 flex items-center gap-2"><Clock size={16}/> 閒置自動登出時間</label>
+                   <div className="relative max-w-sm">
+                     <select
+                       value={localSecurityConfig.enabled ? localSecurityConfig.timeoutMinutes : 0}
+                       onChange={(e) => {
+                         const val = Number(e.target.value);
+                         if (val === 0) setLocalSecurityConfig({...localSecurityConfig, enabled: false});
+                         else setLocalSecurityConfig({...localSecurityConfig, enabled: true, timeoutMinutes: val});
+                       }}
+                       className="w-full pl-4 pr-10 py-3 border-2 border-stone-200 rounded-xl outline-none focus:border-amber-400 font-bold text-stone-700 bg-white appearance-none cursor-pointer hover:border-stone-300 transition-colors"
+                     >
+                       <option value={1}>1 分鐘</option>
+                       <option value={3}>3 分鐘 (建議)</option>
+                       <option value={5}>5 分鐘</option>
+                       <option value={15}>15 分鐘</option>
+                       <option value={30}>30 分鐘</option>
+                       <option value={60}>60 分鐘</option>
+                       <option value={0}>不限制 (永不登出，注意資安風險)</option>
+                     </select>
+                     <ChevronDown size={18} className="absolute right-4 top-3.5 text-stone-400 pointer-events-none" />
+                   </div>
+                </div>
+
+                <div>
+                   <label className="block text-sm font-bold text-stone-500 mb-2 flex items-center gap-2"><Shield size={16}/> 豁免自動登出的職務 <span className="text-xs font-normal text-stone-400 ml-2">(打勾代表該職務不會被強制登出)</span></label>
+                   <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-5 gap-3">
+                     
+                     <label className="flex items-center gap-3 p-3 border-2 border-amber-100 rounded-xl bg-amber-50 text-amber-700 cursor-not-allowed opacity-80">
+                       <input type="checkbox" checked disabled className="w-5 h-5 rounded text-amber-500" />
+                       <span className="font-bold">高階主管 <br/><span className="text-[10px] font-normal opacity-80">系統絕對豁免</span></span>
+                     </label>
+
+                     {[{id:'trainer', label:'教專'}, {id:'manager', label:'區長'}, {id:'store', label:'店經理'}, {id:'therapist', label:'管理師'}].map(role => (
+                       <label key={role.id} className={`flex items-center gap-3 p-3 border-2 rounded-xl cursor-pointer transition-all ${localSecurityConfig.exemptRoles?.includes(role.id) ? 'border-amber-400 bg-amber-50/30' : 'border-stone-100 bg-white hover:border-stone-200'}`}>
+                         <input type="checkbox"
+                           checked={localSecurityConfig.exemptRoles?.includes(role.id)}
+                           onChange={(e) => {
+                             const checked = e.target.checked;
+                             let newRoles = [...(localSecurityConfig.exemptRoles || ["director", "master"])];
+                             if(checked && !newRoles.includes(role.id)) newRoles.push(role.id);
+                             if(!checked) newRoles = newRoles.filter(r => r !== role.id);
+                             setLocalSecurityConfig({...localSecurityConfig, exemptRoles: newRoles});
+                           }}
+                           className="w-5 h-5 rounded border-stone-300 text-amber-500 focus:ring-amber-500"
+                         />
+                         <span className={`font-bold ${localSecurityConfig.exemptRoles?.includes(role.id) ? 'text-amber-700' : 'text-stone-600'}`}>{role.label}</span>
+                       </label>
+                     ))}
+                   </div>
+                </div>
+                
+                <div className="flex justify-end pt-4 border-t border-stone-100">
+                   <button onClick={handleSaveSecurityConfig} className="w-full md:w-auto bg-stone-800 text-white px-8 py-3 rounded-xl font-bold hover:bg-stone-700 shadow-lg active:scale-95 transition-all flex items-center gap-2 justify-center">
+                     <Save size={18} /> 儲存資安設定
+                   </button>
+                </div>
+              </div>
+            </Card>
           </div>
         )}
-        {/* RWD 優化：人員帳號 */}
+        
+        {/* ... 其他 Tabs ... */}
+        {activeTab === "trainer-account" && (<Card title="教專帳號管理"><div className="max-w-md w-full space-y-6 min-w-0"><div className="bg-stone-50 p-4 rounded-xl border border-stone-200"><p className="text-xs font-bold text-stone-400 uppercase mb-1">目前設定</p><div className="flex justify-between items-center"><span className="font-bold text-stone-700">教專 (Trainer)</span><span className="font-mono bg-white px-3 py-1 rounded border text-stone-500">{trainerAuth?.password || "0000"}</span></div></div><div><label className="block text-sm font-bold text-stone-500 mb-2">設定新密碼</label><input type="text" value={newTrainerPass} onChange={(e) => setNewTrainerPass(e.target.value)} placeholder="輸入新密碼" className="w-full px-4 py-3 border-2 border-stone-100 rounded-xl outline-none focus:border-amber-400 font-bold"/></div><button onClick={handleUpdateTrainer} className="w-full bg-stone-800 text-white py-3 rounded-xl font-bold hover:bg-stone-900 shadow-lg">更新密碼</button></div></Card>)}
+        {activeTab === "shops" && ( <div className="space-y-6 w-full max-w-full min-w-0"><Card title="新增營運店家"><div className="flex flex-col md:flex-row gap-4 items-end"><div className="flex-1 w-full"><label className="block text-xs font-bold text-stone-400 mb-1">分店簡稱</label><input type="text" value={newShop.name} onChange={(e) => setNewShop({ ...newShop, name: e.target.value })} placeholder="例如: 中山" className="w-full px-4 py-2 border-2 border-stone-100 rounded-xl outline-none focus:border-amber-400 font-bold"/></div><div className="flex-1 w-full"><label className="block text-xs font-bold text-stone-400 mb-1">所屬區域</label><div className="relative"><select value={newShop.manager} onChange={(e) => setNewShop({ ...newShop, manager: e.target.value })} className="w-full px-4 py-2 border-2 border-stone-100 rounded-xl outline-none focus:border-amber-400 font-bold appearance-none bg-white text-stone-700"><option value="">請選擇...</option>{Object.keys(localManagers).map((m) => (<option key={m} value={m}>{m} 區</option>))}</select><ChevronDown size={16} className="absolute right-3 top-3 text-stone-400 pointer-events-none"/></div></div><button onClick={handleAddGlobalStore} className="w-full md:w-auto bg-stone-800 text-white px-6 py-2.5 rounded-xl font-bold hover:bg-stone-700 shadow-sm flex items-center justify-center gap-2"><Plus size={18} /> 新增</button></div></Card><Card title="全域店家列表"><div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">{managerEntries.map(([mgr, stores]) => (<div key={mgr} className={`bg-stone-50 rounded-2xl p-4 border ${mgr === UNASSIGNED_KEY ? "border-stone-300 shadow-inner" : "border-stone-100"}`}><div className="flex items-center gap-2 mb-3 border-b border-stone-200 pb-2"><span className={`font-bold ${mgr === UNASSIGNED_KEY ? "text-stone-500" : "text-stone-700"}`}>{mgr} {mgr!==UNASSIGNED_KEY && "區"}</span><span className="text-xs text-stone-400 ml-auto">{stores.length} 間</span></div><div className="flex flex-wrap gap-2">{stores.map((store) => (<div key={store} className="group relative flex items-center"><span className={`px-3 py-1.5 border rounded-lg text-xs font-bold shadow-sm pr-7 ${mgr === UNASSIGNED_KEY ? "bg-white text-stone-500 border-stone-200" : "bg-white text-stone-600 border-stone-200"}`}>{store}</span><button onClick={() => handleDeleteGlobalStore(store, mgr)} className="absolute right-1 p-1 text-stone-300 hover:text-rose-500 transition-colors"><X size={12} /></button></div>))}</div></div>))}</div></Card></div> )}
+        {activeTab === "stores" && ( <div className="space-y-6 w-full max-w-full min-w-0"><Card title="新增店經理帳號"><div className="grid grid-cols-1 md:grid-cols-4 gap-4 items-end"><div><label className="block text-xs font-bold text-stone-400 mb-1">姓名 / 帳號</label><input type="text" value={newStoreAccount.name} onChange={(e) => setNewStoreAccount({ ...newStoreAccount, name: e.target.value })} placeholder="例如: 王小明" className="w-full px-4 py-2 border-2 border-stone-100 rounded-xl outline-none focus:border-amber-400 font-bold"/></div><div><label className="block text-xs font-bold text-stone-400 mb-1">登入密碼</label><input type="text" value={newStoreAccount.password} onChange={(e) => setNewStoreAccount({ ...newStoreAccount, password: e.target.value })} placeholder="設定密碼" className="w-full px-4 py-2 border-2 border-stone-100 rounded-xl outline-none focus:border-amber-400 font-bold"/></div><div className="md:col-span-2"><label className="block text-xs font-bold text-stone-400 mb-1">分配管理店家</label><div className="flex gap-2"><div className="relative w-full"><Store size={16} className="absolute left-3 top-3 text-stone-400 pointer-events-none"/><select value={newStoreAccount.stores} onChange={(e) => setNewStoreAccount({ ...newStoreAccount, stores: e.target.value })} className="w-full pl-10 pr-4 py-2 border-2 border-stone-100 rounded-xl outline-none focus:border-amber-400 font-bold appearance-none bg-white text-stone-700"><option value="">請選擇未分配店家...</option>{availableUnassignedStores.map((s) => (<option key={s} value={s}>{s}</option>))}</select><ChevronDown size={16} className="absolute right-3 top-3 text-stone-400 pointer-events-none"/></div><button onClick={handleAddStoreAccount} className="bg-stone-800 text-white px-4 rounded-xl font-bold shrink-0 hover:bg-stone-700"><Plus size={20} /></button></div></div></div></Card><Card title="現有店經理列表"><div className="overflow-x-auto w-full pb-2"><div className="min-w-[600px]"><table className="w-full text-left text-sm"><thead className="bg-stone-50 font-bold text-stone-500 uppercase"><tr><th className="p-4 rounded-tl-xl">姓名</th><th className="p-4">密碼</th><th className="p-4">負責店家</th><th className="p-4 rounded-tr-xl text-right">操作</th></tr></thead><tbody className="divide-y divide-stone-100">{storeAccounts.map((account) => (<tr key={account.id} className="hover:bg-stone-50"><td className="p-4 font-bold text-stone-700">{account.name}</td><td className="p-4 font-mono text-stone-500">{account.password}</td><td className="p-4"><div className="flex flex-wrap gap-1">{account.stores && account.stores.map((s) => (<span key={s} className="px-2 py-1 bg-stone-100 rounded text-xs font-bold text-stone-600">{s}</span>))}</div></td><td className="p-4 text-right flex justify-end gap-1"><button onClick={() => openEditStoreAccount(account)} className="text-stone-400 hover:text-stone-600 hover:bg-stone-100 p-2 rounded-lg transition-colors"><Edit2 size={18} /></button><button onClick={() => handleDeleteStoreAccount(account.id)} className="text-rose-400 hover:text-rose-600 hover:bg-rose-50 p-2 rounded-lg transition-colors"><Trash2 size={18} /></button></td></tr>))}</tbody></table></div></div></Card>{editingStoreAccount && (<div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50 backdrop-blur-sm"><div className="bg-white w-full max-w-md rounded-2xl shadow-2xl overflow-hidden animate-in zoom-in-95"><div className="bg-amber-400 p-4 font-bold text-white flex justify-between items-center"><span>編輯店經理帳號</span><button onClick={() => setEditingStoreAccount(null)}><X size={20}/></button></div><div className="p-6 space-y-4"><div><label className="text-xs font-bold text-stone-400 block mb-1">姓名 / 帳號</label><input type="text" value={editStoreForm.name} onChange={(e) => setEditStoreForm({...editStoreForm, name: e.target.value})} className="w-full p-2 border rounded-lg font-bold"/></div><div><label className="text-xs font-bold text-stone-400 block mb-1">密碼</label><input type="text" value={editStoreForm.password} onChange={(e) => setEditStoreForm({...editStoreForm, password: e.target.value})} className="w-full p-2 border rounded-lg font-mono"/></div><div><label className="text-xs font-bold text-stone-400 block mb-1">管理店家 (可多選)</label><div className="flex flex-wrap gap-2 mb-2 p-2 bg-stone-50 rounded-lg min-h-[40px]">{editStoreForm.stores.map(s => (<span key={s} className="px-2 py-1 bg-white border border-stone-200 rounded text-xs font-bold text-stone-600 shadow-sm flex items-center gap-1">{s} <button onClick={() => handleRemoveStoreFromEditForm(s)} className="text-stone-300 hover:text-rose-500"><X size={12}/></button></span>))}</div><div className="relative"><select onChange={(e) => { handleAddStoreToEditForm(e.target.value); e.target.value = ""; }} className="w-full p-2 border rounded-lg font-bold bg-white"><option value="">+ 加入負責店家</option>{availableStoresForEditing.map(s => <option key={s} value={s}>{s}</option>)}</select></div></div><div className="pt-4 flex gap-3"><button onClick={() => setEditingStoreAccount(null)} className="flex-1 py-3 bg-stone-100 text-stone-500 rounded-xl font-bold">取消</button><button onClick={handleUpdateStoreAccount} className="flex-1 py-3 bg-stone-800 text-white rounded-xl font-bold">儲存變更</button></div></div></div></div>)}</div> )}
+        {activeTab === "managers" && ( <div className="space-y-6 w-full max-w-full min-w-0"><Card title="新增區長"><div className="flex flex-col md:flex-row gap-4 items-end"><div className="flex-1 w-full"><label className="block text-xs font-bold text-stone-400 mb-1">區長姓名</label><input type="text" value={newManager.name} onChange={(e) => setNewManager({ ...newManager, name: e.target.value })} placeholder="例如: Jonas" className="w-full px-4 py-2 border-2 border-stone-100 rounded-xl outline-none focus:border-amber-400 font-bold" /></div><div className="flex-1 w-full"><label className="block text-xs font-bold text-stone-400 mb-1">預設密碼</label><input type="text" value={newManager.password} onChange={(e) => setNewManager({ ...newManager, password: e.target.value })} placeholder="設定密碼" className="w-full px-4 py-2 border-2 border-stone-100 rounded-xl outline-none focus:border-amber-400 font-bold" /></div><button onClick={handleAddManager} className="w-full md:w-auto bg-stone-800 text-white px-6 py-2.5 rounded-xl font-bold hover:bg-stone-700 shadow-sm flex items-center justify-center gap-2"><Plus size={18} /> 新增區長</button></div></Card><div className="grid grid-cols-1 md:grid-cols-2 gap-6">{managerEntries.map(([managerName, stores]) => (<Card key={managerName} className={`border ${managerName === UNASSIGNED_KEY ? "border-stone-300 bg-stone-50" : "border-stone-200"}`}><div className="flex flex-wrap justify-between items-start gap-3 mb-4"><div><h3 className={`text-lg font-bold flex items-center gap-2 ${managerName === UNASSIGNED_KEY ? "text-stone-500" : "text-stone-700"}`}>{managerName === UNASSIGNED_KEY ? <LayoutGrid size={20} /> : <User size={20} className="text-amber-500" />}{managerName} {managerName !== UNASSIGNED_KEY && "區"}</h3>{managerName !== UNASSIGNED_KEY && <p className="text-xs text-stone-400 mt-1 font-mono">密碼: {managerAuth[managerName] || "未設定"}</p>}</div>{managerName !== UNASSIGNED_KEY && (<div className="flex gap-2"><button onClick={() => { setEditingManager(managerName); setEditingManagerStores(stores); }} className="text-xs bg-stone-100 text-stone-600 px-3 py-1.5 rounded-lg hover:bg-stone-200 font-bold whitespace-nowrap">編輯轄區</button><button onClick={() => handleDeleteManager(managerName)} className="text-rose-400 hover:bg-rose-50 p-1.5 rounded-lg"><Trash2 size={16} /></button></div>)}</div>{editingManager === managerName ? (<div className="mt-4 animate-in fade-in bg-stone-50 p-4 rounded-xl border border-stone-200"><label className="block text-xs font-bold text-stone-400 mb-2">已分配店家</label><div className="flex flex-wrap gap-2 mb-4">{editingManagerStores.map((s) => (<div key={s} className="group relative flex items-center"><span className="px-3 py-1.5 bg-white border border-stone-200 rounded-lg text-xs font-bold text-stone-600 shadow-sm pr-7">{s}</span><button onClick={() => handleRemoveStoreFromEditing(s)} className="absolute right-1 p-1 text-stone-300 hover:text-rose-500 transition-colors"><X size={12} /></button></div>))}</div><div className="mb-4"><label className="block text-xs font-bold text-stone-400 mb-1">新增未分配店家 (從未分配清單選擇)</label><div className="relative"><select onChange={(e) => { handleAddStoreToEditing(e.target.value); e.target.value = ""; }} className="w-full px-4 py-2 border-2 border-stone-200 rounded-xl font-bold bg-white appearance-none text-stone-700"><option value="">+ 點擊選擇店家</option>{availableStoresForManagerEdit.filter((s) => !editingManagerStores.includes(s)).map((s) => (<option key={s} value={s}>{s}</option>))}</select><ChevronDown size={16} className="absolute right-3 top-3 text-stone-400 pointer-events-none"/></div></div><div className="flex gap-2 justify-end"><button onClick={() => setEditingManager(null)} className="px-3 py-1.5 text-xs font-bold text-stone-400 hover:text-stone-600">取消</button><button onClick={() => handleSaveManagerStores(managerName)} className="px-4 py-1.5 bg-stone-800 text-white text-xs font-bold rounded-lg hover:bg-stone-700 shadow-sm">儲存變更</button></div></div>) : (<div className="flex flex-wrap gap-2 mt-4">{stores.map((s) => (<span key={s} className={`px-2.5 py-1 border rounded-lg text-xs font-bold ${managerName === UNASSIGNED_KEY ? "bg-white border-stone-200 text-stone-400" : "bg-stone-50 border-stone-100 text-stone-600"}`}>{s}</span>))}</div>)}</Card>))}</div></div> )}
         {activeTab === "therapists" && ( <div className="space-y-6 w-full max-w-full min-w-0"><Card><div className="flex flex-col md:flex-row gap-4 justify-between items-center"><div className="relative w-full md:w-64"><Search className="absolute left-3 top-2.5 text-stone-400" size={16} /><input type="text" placeholder="搜尋姓名或店家..." value={searchTerm} onChange={(e) => setSearchTerm(e.target.value)} className="w-full pl-9 pr-4 py-2 bg-stone-50 border border-stone-200 rounded-xl outline-none focus:border-amber-400" /></div><button onClick={() => setIsAddingTherapist(true)} className="w-full md:w-auto px-4 py-2 bg-stone-800 text-white rounded-xl font-bold flex items-center justify-center gap-2 hover:bg-stone-700 transition-colors"><Plus size={18} /> 新增人員</button></div></Card>{(isAddingTherapist || editingTherapist) && (<div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50 backdrop-blur-sm"><div className="bg-white w-full max-w-md rounded-2xl shadow-2xl overflow-hidden animate-in zoom-in-95 max-h-[90vh] overflow-y-auto"><div className="bg-amber-400 p-4 font-bold text-white flex justify-between items-center"><span>{editingTherapist ? "編輯人員資料" : "新增管理師"}</span><button onClick={() => { setIsAddingTherapist(false); setEditingTherapist(null); }}><X size={20}/></button></div><div className="p-6 space-y-4"><div className="grid grid-cols-2 gap-4"><div><label className="text-xs font-bold text-stone-400 block mb-1">區域</label><select value={formManager} onChange={(e) => { setFormManager(e.target.value); setFormStore(""); }} className="w-full p-2 border rounded-lg font-bold bg-stone-50"><option value="">選擇區域</option>{Object.keys(localManagers).map(m => <option key={m} value={m}>{m}區</option>)}</select></div><div><label className="text-xs font-bold text-stone-400 block mb-1">所屬店家</label><select value={formStore} onChange={(e) => setFormStore(e.target.value)} className="w-full p-2 border rounded-lg font-bold bg-stone-50" disabled={!formManager}><option value="">選擇店家</option>{availableStoresForTherapist.map(s => <option key={s} value={s}>{s}</option>)}</select></div></div><div><label className="text-xs font-bold text-stone-400 block mb-1">姓名</label><input type="text" value={formName} onChange={(e) => setFormName(e.target.value)} className="w-full p-2 border rounded-lg font-bold" placeholder="請輸入姓名" /></div><div><label className="text-xs font-bold text-stone-400 block mb-1">登入密碼 (預設 0000)</label><input type="text" value={formPassword} onChange={(e) => setFormPassword(e.target.value)} className="w-full p-2 border rounded-lg font-mono" placeholder="0000" /></div><div className="pt-4 flex gap-3"><button onClick={() => { setIsAddingTherapist(false); setEditingTherapist(null); }} className="flex-1 py-3 bg-stone-100 text-stone-500 rounded-xl font-bold">取消</button><button onClick={editingTherapist ? handleUpdateTherapist : handleAddTherapist} className="flex-1 py-3 bg-stone-800 text-white rounded-xl font-bold">{editingTherapist ? "儲存修改" : "確認新增"}</button></div></div></div></div>)}<div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">{filteredTherapists.map(t => (<div key={t.id} className={`bg-white p-4 rounded-xl border-l-4 shadow-sm flex flex-col gap-2 ${t.status === 'resigned' ? 'border-stone-200 opacity-60' : 'border-amber-400'}`}><div className="flex justify-between items-start"><div><div className="text-xs text-stone-400 font-bold mb-1 flex items-center gap-1"><Store size={12}/> {t.store}店</div><div className="text-lg font-bold text-stone-700 flex items-center gap-2">{t.name}{t.status === 'resigned' && <span className="text-[10px] bg-stone-100 px-2 rounded text-stone-500">已離職</span>}</div></div><div className="flex gap-1"><button onClick={() => openEdit(t)} className="p-2 hover:bg-stone-100 rounded-lg text-stone-400" title="編輯"><Edit size={16}/></button><button onClick={() => toggleStatus(t)} className={`p-2 rounded-lg ${t.status === 'active' ? 'hover:bg-rose-50 text-stone-400 hover:text-rose-500' : 'hover:bg-emerald-50 text-stone-400 hover:text-emerald-600'}`} title={t.status === 'active' ? "設為離職" : "復職"}>{t.status === 'active' ? <UserX size={16}/> : <UserCheck size={16}/>}</button></div></div><div className="mt-2 pt-2 border-t border-stone-100 flex justify-between items-center text-sm"><span className="text-stone-400 font-mono text-xs flex items-center gap-1"><Key size={12}/> 密碼: {t.password}</span><button onClick={() => handleDeleteTherapist(t.id)} className="text-stone-300 hover:text-rose-400"><Trash2 size={14}/></button></div></div>))}</div></div> )}
         
         {activeTab === "maintenance" && <SystemMaintenance />}
