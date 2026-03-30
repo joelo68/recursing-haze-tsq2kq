@@ -33,6 +33,37 @@ import { useAnalytics } from "./hooks/useAnalytics";
 
 import LoginView from "./components/LoginView";
 
+// ==========================================
+// ★ 系統核心版本號 (改版時只需修改這裡並 deploy 即可)
+// ==========================================
+const CURRENT_APP_VERSION = "2.2.1"; 
+
+// ★ 判斷本地端是否「比雲端新」
+const isNewerVersion = (local, remote) => {
+  if (!remote) return true;
+  const l = local.split('.').map(Number);
+  const r = remote.split('.').map(Number);
+  for (let i = 0; i < Math.max(l.length, r.length); i++) {
+    const numL = l[i] || 0; const numR = r[i] || 0;
+    if (numL > numR) return true;
+    if (numL < numR) return false;
+  }
+  return false;
+};
+
+// ★ 判斷本地端是否「比雲端舊」
+const isOlderVersion = (local, remote) => {
+  if (!remote) return false;
+  const l = local.split('.').map(Number);
+  const r = remote.split('.').map(Number);
+  for (let i = 0; i < Math.max(l.length, r.length); i++) {
+    const numL = l[i] || 0; const numR = r[i] || 0;
+    if (numL < numR) return true;
+    if (numL > numR) return false;
+  }
+  return false;
+};
+
 const DashboardView = lazy(() => import("./components/DashboardView"));
 const DailyView = lazy(() => import("./components/DailyView"));
 const RegionalView = lazy(() => import("./components/RegionalView"));
@@ -69,6 +100,9 @@ export default function App() {
   const [dailyLoginCount, setDailyLoginCount] = useState(0);
   const [yesterdayLoginCount, setYesterdayLoginCount] = useState(0);
 
+  // ★ 強制更新狀態
+  const [isUpdating, setIsUpdating] = useState(false);
+
   const currentBrand = useMemo(() => BRANDS.find(b => b.id === currentBrandId) || BRANDS[0], [currentBrandId]);
   const handleSwitchBrand = (brandId) => { setCurrentBrandId(brandId); setHasSelectedBrand(true); };
 
@@ -96,7 +130,6 @@ export default function App() {
   const [therapistTargets, setTherapistTargets] = useState({}); 
   const [auditExclusions, setAuditExclusions] = useState([]);
 
-  // ★ 新增：全域資安設定檔 (預設 3 分鐘，總監絕對豁免)
   const [securityConfig, setSecurityConfig] = useState({
     enabled: true, timeoutMinutes: 3, warningSeconds: 15, exemptRoles: ["director", "master"]
   });
@@ -155,21 +188,16 @@ export default function App() {
     setUserRole(null); setCurrentUser(null); setActiveView("dashboard");
   }, [currentUser, userRole, logActivity, securityConfig]);
 
-  // ★ 升級版：讀取動態設定的閒置計時器
   useEffect(() => {
     let intervalId = null;
     if (userRole) {
-      // ★ 攔截器 1：關閉自動登出，或是總監/豁免職務，直接不啟動計時！
       const isExempt = securityConfig.exemptRoles?.includes(userRole) || userRole === 'director' || userRole === 'master';
-      if (!securityConfig.enabled || isExempt) {
-         return; 
-      }
+      if (!securityConfig.enabled || isExempt) return; 
 
       intervalId = setInterval(() => {
         const now = Date.now();
         const elapsed = now - lastActivityTimeRef.current; 
         
-        // ★ 將寫死的 3 分鐘，換成資料庫設定的分鐘數
         const LOGOUT_THRESHOLD = (securityConfig.timeoutMinutes || 3) * 60 * 1000;  
         const WARNING_THRESHOLD = LOGOUT_THRESHOLD - ((securityConfig.warningSeconds || 15) * 1000);
         
@@ -229,8 +257,6 @@ export default function App() {
   useEffect(() => {
     if (!user) return;
     setBudgets({}); setManagers({}); setStoreAccounts([]); setManagerAuth({}); setTherapists([]); setTherapistSchedules({}); setTherapistTargets({}); setPermissions(DEFAULT_PERMISSIONS); setTargets({ newASP: 3500, trafficASP: 1200 });
-    
-    // 初始化設定，防止舊品牌殘留
     setSecurityConfig({ enabled: true, timeoutMinutes: 3, warningSeconds: 15, exemptRoles: ["director", "master"] });
 
     const unsubBudgets = onSnapshot(getCollectionPath("monthly_targets"), (s) => { const b = {}; s.docs.forEach((d) => (b[d.id] = d.data())); setBudgets(b); });
@@ -255,12 +281,43 @@ export default function App() {
     const unsubTrainerAuth = onSnapshot(getDocPath("trainer_auth"), (s) => { if (s.exists()) setTrainerAuth(s.data()); else setTrainerAuth({ password: "0000" }); });
     const unsubAuditExclusions = onSnapshot(getDocPath("audit_exclusions"), (s) => { if (s.exists()) setAuditExclusions(s.data().stores || []); else setAuditExclusions([]); });
 
-    // ★ 監聽 Firebase 的資安設定檔
     const unsubSecurityConfig = onSnapshot(getDocPath("security_config"), (s) => { 
-      if (s.exists()) {
-         setSecurityConfig(s.data()); 
-      } else {
-         setSecurityConfig({ enabled: true, timeoutMinutes: 3, warningSeconds: 15, exemptRoles: ["director", "master"] });
+      if (s.exists()) setSecurityConfig(s.data()); 
+      else setSecurityConfig({ enabled: true, timeoutMinutes: 3, warningSeconds: 15, exemptRoles: ["director", "master"] });
+    });
+
+    // =======================================================
+    // ★ 終極版全域雷達：總監驅動自動更新機制
+    // =======================================================
+    const globalVersionRef = doc(db, "artifacts", appId, "public", "data", "global_settings", "system_version");
+    const unsubVersion = onSnapshot(globalVersionRef, (s) => {
+      const remoteVersion = s.exists() ? s.data().version : null;
+
+      // 如果雲端完全沒資料，總監一登入就幫忙初始化
+      if (!remoteVersion) {
+        if (userRole === 'director' || userRole === 'master') {
+          setDoc(globalVersionRef, { version: CURRENT_APP_VERSION }, { merge: true });
+        }
+        return;
+      }
+
+      // 情境 A：如果本地版本比雲端「舊」 -> 我是舊版使用者，需要被更新
+      if (isOlderVersion(CURRENT_APP_VERSION, remoteVersion)) {
+        setIsUpdating(true);
+        
+        localStorage.clear();
+        sessionStorage.clear();
+        
+        setTimeout(() => {
+          window.location.reload(true);
+        }, 3000);
+      } 
+      // 情境 B：如果本地版本比雲端「新」 -> 我是總監剛佈署完登入
+      else if (isNewerVersion(CURRENT_APP_VERSION, remoteVersion)) {
+        if (userRole === 'director' || userRole === 'master') {
+          // 總監自動幫全系統廣播「升級」雲端版本號！
+          setDoc(globalVersionRef, { version: CURRENT_APP_VERSION }, { merge: true });
+        }
       }
     });
 
@@ -287,9 +344,10 @@ export default function App() {
 
     return () => { 
       unsubBudgets(); unsubTargets(); unsubOrg(); unsubAccounts(); unsubManagerAuth(); unsubPermissions(); unsubTherapists(); unsubTherapistSchedules(); unsubTherapistTargets(); unsubTrainerAuth(); unsubAuditExclusions(); unsubDirectorAuth(); unsubMasterAuth(); unsubStatsToday(); unsubStatsYesterday(); 
-      unsubSecurityConfig(); // ★ 卸載監聽
+      unsubSecurityConfig();
+      unsubVersion(); // ★ 卸載版本監聽
     };
-  }, [user, currentBrand, getCollectionPath, getDocPath]);
+  }, [user, currentBrand, getCollectionPath, getDocPath, userRole]); 
 
   useEffect(() => {
     if (!user) return;
@@ -386,7 +444,6 @@ export default function App() {
   const fmtMoney = (val) => `$${(val || 0).toLocaleString()}`;
   const fmtNum = (val) => (val || 0).toLocaleString();
 
-  // ★ 將 securityConfig 加入 Context，傳遞給 SettingsView 使用
   const contextValue = useMemo(() => ({
     user, loading, analytics, managers: visibleManagers, budgets, targets, rawData: visibleRawData, allReports: rawData, showToast, openConfirm, fmtMoney, fmtNum, inputDate, setInputDate, storeList: analytics?.storeList || [], setTargets, selectedYear, selectedMonth, permissions, storeAccounts, managerAuth, currentUser, userRole, logActivity, handleUpdateStorePassword, handleUpdateManagerPassword, handleUpdateTherapistPassword, navigateToStore, activeView, appId, 
     therapists: visibleTherapists, therapistReports: visibleTherapistReports, therapistSchedules, therapistTargets, trainerAuth, handleUpdateTrainerAuth, auditExclusions, handleUpdateAuditExclusions, currentBrand, setCurrentBrandId, getCollectionPath, getDocPath, dailyLoginCount, yesterdayLoginCount, securityConfig
@@ -422,6 +479,18 @@ export default function App() {
 
   if (loading) return <div className="min-h-screen flex flex-col items-center justify-center bg-[#F9F8F6]"><Loader2 className="w-16 h-16 animate-spin text-stone-400 mb-4" /><p className="animate-pulse text-stone-500 font-bold tracking-wider">Loading DRCYJ Cloud...</p></div>;
   
+  // ★ 強制更新攔截畫面 (最高優先級)
+  if (isUpdating) {
+    return (
+      <div className="fixed inset-0 z-[99999] flex flex-col items-center justify-center bg-stone-900 text-white animate-in fade-in duration-300">
+        <Loader2 className="w-16 h-16 animate-spin text-amber-500 mb-6" />
+        <h2 className="text-3xl font-bold mb-2 tracking-widest">系統強制更新中</h2>
+        <p className="text-stone-400 font-mono">正在為您同步最新版本 (v{CURRENT_APP_VERSION} ➡️ 新版)</p>
+        <p className="text-stone-500 text-sm mt-4 animate-pulse">請稍候，畫面即將自動重新載入...</p>
+      </div>
+    );
+  }
+
   if (!userRole) return (
     <LoginView 
       onLogin={handleLogin} storeAccounts={storeAccounts} managers={publicManagers} managerAuth={managerAuth} therapists={therapists} 
@@ -439,8 +508,23 @@ export default function App() {
           <header className="h-20 bg-white/80 backdrop-blur-md border-b border-stone-200 sticky top-0 z-40 px-4 md:px-8 flex items-center justify-between shadow-sm shadow-stone-200/50 shrink-0 transition-all">
             <div className="flex items-center gap-4">
               <button onClick={() => setSidebarOpen(!isSidebarOpen)} className="p-2.5 hover:bg-stone-100 rounded-xl text-stone-400 hidden md:block transition-colors"><Menu size={24} /></button>
-              <h1 className="text-xl md:text-2xl font-extrabold text-stone-800 tracking-tight truncate hidden sm:block flex items-center gap-2"><span className="text-amber-600">●</span> {ALL_MENU_ITEMS.find((i) => i.id === activeView)?.label || (activeView === 'targets' ? '年度目標設定' : 'DRCYJ System')}</h1>
-              <h1 className="text-lg font-bold text-stone-800 tracking-tight truncate md:hidden flex items-center gap-2"><Coffee size={20} className="text-amber-600" /> DRCYJ Cloud</h1>
+              
+              {/* 電腦版：當前頁面標題 + 版本號標籤 */}
+              <h1 className="text-xl md:text-2xl font-extrabold text-stone-800 tracking-tight truncate hidden sm:flex items-center gap-2">
+                <span className="text-amber-600">●</span> 
+                {ALL_MENU_ITEMS.find((i) => i.id === activeView)?.label || (activeView === 'targets' ? '年度目標設定' : 'DRCYJ System')}
+                <span className="ml-2 text-[11px] font-mono bg-stone-100 text-stone-400 px-2 py-0.5 rounded-md border border-stone-200/60 shadow-inner select-all" title="系統當前版本">
+                  v{CURRENT_APP_VERSION}
+                </span>
+              </h1>
+              
+              {/* 手機版：系統 LOGO + 版本號標籤 */}
+              <h1 className="text-lg font-bold text-stone-800 tracking-tight truncate md:hidden flex items-center gap-2">
+                <Coffee size={20} className="text-amber-600" /> DRCYJ Cloud
+                <span className="ml-1 text-[10px] font-mono bg-stone-100 text-stone-400 px-1.5 py-0.5 rounded-md border border-stone-200/60 shadow-inner select-all">
+                  v{CURRENT_APP_VERSION}
+                </span>
+              </h1>
             </div>
             <div className="flex items-center gap-3 md:gap-5 flex-1 justify-end">
               <div className="relative hidden md:block w-56 lg:w-72 group"><Search className="absolute left-3 top-2.5 text-stone-400 group-focus-within:text-stone-600 transition-colors" size={18} /><input type="text" placeholder="搜尋店名..." value={globalSearchTerm} onChange={(e) => setGlobalSearchTerm(e.target.value)} className="w-full pl-10 pr-4 py-2 bg-white border border-stone-200 rounded-full text-sm focus:ring-4 focus:ring-stone-100 focus:border-stone-300 transition-all outline-none shadow-sm text-stone-600 placeholder-stone-300" />{globalSearchTerm && (<div className="absolute top-full left-0 right-0 mt-2 bg-white border border-stone-200 rounded-2xl shadow-xl z-50 max-h-60 overflow-y-auto animate-in fade-in slide-in-from-top-2">{allStoreNames.filter((s) => s.includes(globalSearchTerm)).length > 0 ? (allStoreNames.filter((s) => s.includes(globalSearchTerm)).map((s) => (<button key={s} onClick={() => { navigateToStore(s); setGlobalSearchTerm(""); }} className="w-full text-left px-4 py-3 hover:bg-stone-50 text-sm font-medium text-stone-600 flex items-center gap-2 transition-colors"><Store size={16} className="text-stone-400" /> {s}</button>))) : (<div className="px-4 py-3 text-xs text-stone-400 text-center">無相符店家</div>)}</div>)}</div>

@@ -1,14 +1,16 @@
 // src/components/SystemMaintenance.jsx
 import React, { useState, useContext } from "react";
 import { db } from "../config/firebase";
-import { getDocs, doc, writeBatch } from "firebase/firestore"; // ★ 乾淨的引入，移除了未使用的變數
+import { getDocs, doc, writeBatch } from "firebase/firestore"; 
 import { AppContext } from "../AppContext";
 import { Loader2, Database, Download, RefreshCw, AlertTriangle, Play, Scissors, ClipboardList, Trash2 } from "lucide-react";
 
 export default function SystemMaintenance() {
   const { currentBrand, userRole, showToast, getCollectionPath } = useContext(AppContext);
   const [logs, setLogs] = useState([]);
-  const [loading, setLoading] = useState(false);
+  
+  // ★ 修正 Bug 1：將單一 boolean 改為紀錄具體執行動作的 ID
+  const [loadingAction, setLoadingAction] = useState(null);
 
   // 權限防護
   if (userRole !== "director") {
@@ -20,7 +22,6 @@ export default function SystemMaintenance() {
     );
   }
 
-  // ★ 升級版 Log 紀錄器：使用物件來儲存，避免畫面渲染時字串裁切出錯
   const addLog = (msg) => {
     const timeStr = new Date().toLocaleTimeString('zh-TW', { hour12: false });
     setLogs((prev) => [{ id: Date.now() + Math.random(), time: timeStr, text: msg }, ...prev]);
@@ -33,7 +34,8 @@ export default function SystemMaintenance() {
     const brandName = currentBrand?.label || "目前品牌";
     if (!window.confirm(`確定要對【${brandName}】執行深度日期清洗嗎？\n此操作不可逆，將強制統一所有混亂日期格式。`)) return;
     
-    setLoading(true); setLogs([]);
+    setLoadingAction('fixDates'); 
+    setLogs([]);
     addLog(`🚀 啟動光速深度清洗引擎... 目標品牌：${brandName}`);
     
     try {
@@ -50,34 +52,50 @@ export default function SystemMaintenance() {
         for (const docSnap of snapshot.docs) { 
           const data = docSnap.data();
           if (data.date) {
-            let cleanStr = String(data.date).replace(/\//g, '-').trim();
-            const parts = cleanStr.split('-');
-            if (parts.length === 3) {
-              const y = parts[0];
-              const m = String(parseInt(parts[1], 10)).padStart(2, '0');
-              const d = String(parseInt(parts[2], 10)).padStart(2, '0');
-              
-              if (!isNaN(y) && !isNaN(m) && !isNaN(d)) {
-                const newDate = `${y}-${m}-${d}`;
-                if (newDate !== data.date) {
-                  const storeDisplay = data.storeName || data.store || "未知店家";
-                  const personDisplay = data.therapistName ? ` - ${data.therapistName}` : "";
-                  addLog(`✏️ 修正 [${data.date} ➡️ ${newDate}] ${storeDisplay}${personDisplay}`);
+            let origDate = String(data.date).trim();
+            let newDate = origDate;
 
-                  batch.update(doc(getCollectionPath(colName), docSnap.id), { date: newDate });
-                  colFixedCount++; totalFixedCount++; operationCount++;
-
-                  if (operationCount === 490) {
-                    await batch.commit(); 
-                    batch = writeBatch(db); 
-                    operationCount = 0;
+            // ★ 修正 Bug 2：強化版日期格式捕捉器 (處理 YYYYMMDD, YYYY.MM.DD, 年月日 等各種奇葩格式)
+            if (/^\d{8}$/.test(origDate)) {
+                // 處理連續數字無符號: 20260327
+                newDate = `${origDate.substring(0,4)}-${origDate.substring(4,6)}-${origDate.substring(6,8)}`;
+            } else {
+                // 將 / . 年 月 統一替換成 -，並移除 日
+                let cleanStr = origDate.replace(/[\/\.年月]/g, '-').replace(/日/g, '').replace(/-+/g, '-').trim();
+                cleanStr = cleanStr.replace(/^-+|-+$/g, ''); // 移除頭尾可能多餘的 -
+                
+                const parts = cleanStr.split('-');
+                if (parts.length === 3) {
+                  const y = parts[0];
+                  const m = String(parseInt(parts[1], 10)).padStart(2, '0');
+                  const d = String(parseInt(parts[2], 10)).padStart(2, '0');
+                  
+                  if (!isNaN(y) && !isNaN(m) && !isNaN(d)) {
+                    newDate = `${y}-${m}-${d}`;
                   }
                 }
+            }
+
+            // 如果格式被修正了，就寫入資料庫並記錄 Log
+            if (newDate !== origDate) {
+              const storeDisplay = data.storeName || data.store || "未知店家";
+              const personDisplay = data.therapistName ? ` - ${data.therapistName}` : "";
+              addLog(`✏️ 修正 [${origDate} ➡️ ${newDate}] ${storeDisplay}${personDisplay}`);
+
+              batch.update(doc(getCollectionPath(colName), docSnap.id), { date: newDate });
+              colFixedCount++; totalFixedCount++; operationCount++;
+
+              // Firestore 批次寫入上限是 500
+              if (operationCount === 490) {
+                await batch.commit(); 
+                batch = writeBatch(db); 
+                operationCount = 0;
               }
             }
           }
         }
-        addLog(`✅ [${colName}] 掃描完畢，發現 ${colFixedCount} 筆需修正。`);
+        // ★ 新增：明確印出掃描總數，證明系統有去檢查其他品牌的資料庫
+        addLog(`✅ [${colName}] 掃描完畢，共檢查 ${snapshot.size} 筆，發現 ${colFixedCount} 筆需修正。`);
       }
 
       if (operationCount > 0) await batch.commit();
@@ -93,7 +111,7 @@ export default function SystemMaintenance() {
       addLog(`❌ 執行失敗: ${error.message}`);
       showToast("清洗過程發生錯誤", "error");
     } finally {
-      setLoading(false);
+      setLoadingAction(null);
     }
   };
 
@@ -104,7 +122,8 @@ export default function SystemMaintenance() {
     const brandName = currentBrand?.label || "目前品牌";
     if (!window.confirm(`確定要啟動【重複數據清道夫】嗎？\n系統會掃描同一天、同店、同人的重複報表，並自動「保留最新的一筆、刪除舊的」。此操作不可逆！`)) return;
 
-    setLoading(true); setLogs([]);
+    setLoadingAction('removeDups'); 
+    setLogs([]);
     addLog(`🕵️‍♂️ 啟動重複數據掃描雷達... 目標品牌：${brandName}`);
 
     try {
@@ -159,7 +178,7 @@ export default function SystemMaintenance() {
             }
           }
         }
-        addLog(`✅ [${colName}] 分析完畢，清除了 ${colDuplicateCount} 筆重複垃圾。`);
+        addLog(`✅ [${colName}] 分析完畢，共檢查 ${snapshot.size} 筆，清除 ${colDuplicateCount} 筆重複垃圾。`);
       }
 
       if (operationCount > 0) await batch.commit();
@@ -176,7 +195,7 @@ export default function SystemMaintenance() {
       addLog(`❌ 掃描失敗: ${error.message}`);
       showToast("掃描過程發生錯誤", "error");
     } finally {
-      setLoading(false);
+      setLoadingAction(null);
     }
   };
 
@@ -186,7 +205,9 @@ export default function SystemMaintenance() {
   const handleBackupData = async () => {
     const brandName = currentBrand?.label || "目前品牌";
     const brandId = currentBrand?.id || "unknown";
-    setLoading(true); setLogs([]);
+    
+    setLoadingAction('backup'); 
+    setLogs([]);
     addLog(`📦 正在準備打包 ${brandName} 所有日報數據...`);
 
     try {
@@ -209,7 +230,7 @@ export default function SystemMaintenance() {
       addLog(`❌ 匯出失敗: ${error.message}`);
       showToast("備份失敗", "error");
     } finally {
-      setLoading(false);
+      setLoadingAction(null);
     }
   };
 
@@ -230,15 +251,18 @@ export default function SystemMaintenance() {
         <h1 className="text-3xl font-extrabold text-stone-900 tracking-tighter">系統維護控制台</h1>
       </div>
 
-      {/* ★ 瘦身秘密：用 map 迴圈自動產生 4 張卡片，省下 100 多行程式碼！ ★ */}
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
         {[
-          { icon: Database, bg: 'bg-amber-50', text: 'text-amber-600', border: 'border-amber-100', title: '格式標準化', desc: '批次統一混亂日期格式，修正為 YYYY-MM-DD。', action: handleFixDateFormats, btnTxt: '執行清洗' },
-          { icon: Scissors, bg: 'bg-purple-50', text: 'text-purple-600', border: 'border-purple-100', title: '重複清道夫', desc: '掃描同天同人重複送出紀錄，刪除多餘垃圾。', action: handleRemoveDuplicates, btnTxt: '掃描清除' },
-          { icon: Download, bg: 'bg-blue-50', text: 'text-blue-600', border: 'border-blue-100', title: '全量數據備份', desc: '下載品牌所有歷史日報為 JSON 供備份使用。', action: handleBackupData, btnTxt: '下載備份' },
-          { icon: RefreshCw, bg: 'bg-rose-50', text: 'text-rose-600', border: 'border-rose-100', title: '強制系統重置', desc: '若遇畫面異常或卡頓，可清除快取並重載。', action: handleHardReset, btnTxt: '強制重置', danger: true },
+          { id: 'fixDates', icon: Database, bg: 'bg-amber-50', text: 'text-amber-600', border: 'border-amber-100', title: '格式標準化', desc: '批次統一混亂日期格式，修正為 YYYY-MM-DD。', action: handleFixDateFormats, btnTxt: '執行清洗' },
+          { id: 'removeDups', icon: Scissors, bg: 'bg-purple-50', text: 'text-purple-600', border: 'border-purple-100', title: '重複清道夫', desc: '掃描同天同人重複送出紀錄，刪除多餘垃圾。', action: handleRemoveDuplicates, btnTxt: '掃描清除' },
+          { id: 'backup', icon: Download, bg: 'bg-blue-50', text: 'text-blue-600', border: 'border-blue-100', title: '全量數據備份', desc: '下載品牌所有歷史日報為 JSON 供備份使用。', action: handleBackupData, btnTxt: '下載備份' },
+          { id: 'reset', icon: RefreshCw, bg: 'bg-rose-50', text: 'text-rose-600', border: 'border-rose-100', title: '強制系統重置', desc: '若遇畫面異常或卡頓，可清除快取並重載。', action: handleHardReset, btnTxt: '強制重置', danger: true },
         ].map((tool, i) => {
           const Icon = tool.icon;
+          // ★ 修改：透過比對 loadingAction 來決定要不要禁用按鈕
+          const isThisLoading = loadingAction === tool.id;
+          const isAnyLoading = loadingAction !== null;
+
           return (
             <div key={i} className="bg-white p-7 rounded-3xl border border-stone-100 shadow-sm shadow-stone-100/70 hover:shadow-xl hover:shadow-amber-950/5 hover:-translate-y-1 hover:border-amber-100 transition-all duration-300 flex flex-col group">
               <div className={`w-14 h-14 ${tool.bg} ${tool.border} rounded-2xl flex items-center justify-center ${tool.text} mb-6 border shadow-inner transition-colors duration-300 group-hover:bg-white group-hover:shadow-none`}>
@@ -247,12 +271,13 @@ export default function SystemMaintenance() {
               <h3 className="text-xl font-bold text-stone-800 mb-1.5 tracking-tight">{tool.title}</h3>
               <p className="text-sm text-stone-500 mb-6 flex-1 leading-relaxed">{tool.desc}</p>
               {tool.danger ? (
-                <button onClick={tool.action} className="w-full py-3 bg-rose-50 text-rose-600 border border-rose-100 rounded-xl text-sm font-semibold hover:bg-rose-100 transition-colors flex items-center justify-center gap-2 active:scale-95 shadow-sm shadow-rose-100/50">
+                <button onClick={tool.action} disabled={isAnyLoading} className="w-full py-3 bg-rose-50 text-rose-600 border border-rose-100 rounded-xl text-sm font-semibold hover:bg-rose-100 disabled:opacity-40 disabled:cursor-not-allowed transition-colors flex items-center justify-center gap-2 active:scale-95 shadow-sm shadow-rose-100/50">
                   <Icon size={16}/> {tool.btnTxt}
                 </button>
               ) : (
-                <button onClick={tool.action} disabled={loading} className="w-full py-3 bg-white text-stone-700 border border-stone-200 rounded-xl text-sm font-semibold hover:bg-stone-50 hover:border-stone-300 disabled:opacity-40 disabled:cursor-not-allowed transition-colors flex items-center justify-center gap-2 active:scale-95 group-hover:bg-amber-50 group-hover:text-amber-700 group-hover:border-amber-100 shadow-sm">
-                  {loading ? <Loader2 className="animate-spin" size={16}/> : <Icon size={16} className="fill-current"/>}
+                <button onClick={tool.action} disabled={isAnyLoading} className="w-full py-3 bg-white text-stone-700 border border-stone-200 rounded-xl text-sm font-semibold hover:bg-stone-50 hover:border-stone-300 disabled:opacity-40 disabled:cursor-not-allowed transition-colors flex items-center justify-center gap-2 active:scale-95 group-hover:bg-amber-50 group-hover:text-amber-700 group-hover:border-amber-100 shadow-sm">
+                  {/* ★ 修正 Bug 1：只有被按下的那顆按鈕才會轉圈圈 */}
+                  {isThisLoading ? <Loader2 className="animate-spin text-amber-600" size={16}/> : <Icon size={16} className="fill-current"/>}
                   {tool.btnTxt}
                 </button>
               )}
@@ -261,15 +286,14 @@ export default function SystemMaintenance() {
         })}
       </div>
 
-      {/* 視覺系 SYSTEM LOGS (告別黑底綠字理工風) */}
       <div className="bg-white rounded-3xl p-7 shadow-sm shadow-stone-100/70 border border-stone-100 transition-all hover:shadow-lg hover:border-amber-50 hover:shadow-amber-950/5">
         <div className="flex justify-between items-center mb-5 pb-5 border-b border-stone-100">
           <div className="flex items-center gap-3">
              <ClipboardList className="text-stone-400" />
              <span className="font-extrabold text-stone-900 tracking-tight text-lg">系統稽核日誌 (SYSTEM LOGS)</span>
           </div>
-          {loading && <span className="text-xs text-amber-600 bg-amber-50 px-3 py-1.5 rounded-full font-semibold animate-pulse flex items-center gap-1.5"><Loader2 size={12} className="animate-spin"/> 維護中，請稍候...</span>}
-          {logs.length > 0 && !loading && <button onClick={() => setLogs([])} className="text-xs text-stone-400 hover:text-stone-600 flex items-center gap-1.5 px-2 py-1 hover:bg-stone-100 rounded-md transition-colors"><Trash2 size={14}/> 清除日誌</button>}
+          {loadingAction && <span className="text-xs text-amber-600 bg-amber-50 px-3 py-1.5 rounded-full font-semibold animate-pulse flex items-center gap-1.5"><Loader2 size={12} className="animate-spin"/> 維護中，請稍候...</span>}
+          {logs.length > 0 && !loadingAction && <button onClick={() => setLogs([])} className="text-xs text-stone-400 hover:text-stone-600 flex items-center gap-1.5 px-2 py-1 hover:bg-stone-100 rounded-md transition-colors"><Trash2 size={14}/> 清除日誌</button>}
         </div>
         
         <div className="bg-gradient-to-b from-stone-50 to-white rounded-2xl p-6 font-mono text-sm h-80 overflow-y-auto shadow-inner border border-stone-100 space-y-2.5 selection:bg-amber-100">
