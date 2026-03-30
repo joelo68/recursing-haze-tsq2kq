@@ -548,8 +548,9 @@ export default function App() {
     );
   }
 
-  if (!userRole) return (
+ if (!userRole) return (
     <LoginView 
+      appVersion={CURRENT_APP_VERSION}  // ★ 新增這行，讓系統把最新版本號送給登入畫面！
       onLogin={handleLogin} storeAccounts={storeAccounts} managers={publicManagers} managerAuth={managerAuth} therapists={therapists} 
       onUpdatePassword={handleUpdateStorePassword} onUpdateManagerPassword={handleUpdateManagerPassword} onUpdateTherapistPassword={handleUpdateTherapistPassword} 
       trainerAuth={trainerAuth} handleUpdateTrainerAuth={handleUpdateTrainerAuth} directorAuth={directorAuth} handleUpdateDirectorAuth={handleUpdateDirectorAuth} masterAuth={masterAuth}

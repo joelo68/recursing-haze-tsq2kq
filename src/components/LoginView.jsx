@@ -7,6 +7,7 @@ import {
 import { ROLES, BRANDS } from "../constants/index"; 
 
 const LoginView = ({
+  appVersion = "2.2.5", // ★ 新增：接收從 App.jsx 傳來的系統版本號
   onLogin,
   storeAccounts,
   managers,
@@ -18,7 +19,7 @@ const LoginView = ({
   handleUpdateTrainerAuth,
   directorAuth,             
   handleUpdateDirectorAuth,
-  masterAuth, // ★ 接收從資料庫撈來的 Master Key
+  masterAuth, 
   currentBrandId,
   onSwitchBrand,
   therapists = [],
@@ -92,7 +93,6 @@ const LoginView = ({
     });
   }, [directorAuth]);
 
-  // ★ 取得雲端動態的 Master Key，如果沒有就用預設值 BOSS888
   const currentMasterKey = masterAuth?.password || "BOSS888";
 
   const handleAuth = async () => {
@@ -101,7 +101,6 @@ const LoginView = ({
       if (role === "director") {
         if (!selectedUser) { setError("請選擇高管帳號"); setIsLoading(false); return; }
         const correctPass = directorAuth[selectedUser] || "0000";
-        // ★ 登入時一樣支援 Master Key 當作無敵鑰匙
         if (password === correctPass || password === currentMasterKey) {
            onLogin("director", { name: selectedUser }); 
         } else {
@@ -212,7 +211,8 @@ const LoginView = ({
   const selectClass = `w-full px-4 py-3 bg-white border border-stone-200 rounded-lg outline-none text-stone-700 appearance-none transition-all focus:border-stone-400 focus:ring-2 ${themeColors.ring} disabled:bg-stone-50 disabled:text-stone-400`;
 
   return (
-    <div className="min-h-screen flex items-center justify-center bg-stone-50 p-4 font-sans text-stone-800">
+    // ★ 加上 flex-col 讓主框與底部的系統字樣能完美垂直置中
+    <div className="min-h-screen flex flex-col items-center justify-center bg-stone-50 p-4 font-sans text-stone-800">
       
       <div className={`w-full max-w-md bg-white p-8 rounded-2xl shadow-sm border border-stone-200 transition-all duration-500 transform ${showBrandSelector ? "opacity-0 scale-95 pointer-events-none absolute" : "opacity-100 scale-100 relative"}`}>
         <button onClick={() => setShowBrandSelector(true)} className="absolute top-6 left-6 text-stone-400 hover:text-stone-600 transition-colors flex items-center gap-1 text-sm font-medium"><ChevronLeft size={16}/> 切換品牌</button>
@@ -392,6 +392,16 @@ const LoginView = ({
         </div>
       </div>
 
+      {/* ★ 密碼登入頁面的底部版本號 */}
+      <div className={`mt-8 text-center transition-all duration-500 transform ${showBrandSelector ? "opacity-0 scale-95 pointer-events-none absolute" : "opacity-100 scale-100 relative"}`}>
+         <p className="text-[10px] text-stone-400 font-medium tracking-widest uppercase flex items-center justify-center gap-1.5">
+           DRCYJ Cloud System
+           <span className="text-[10px] font-mono bg-stone-200/50 text-stone-400 px-1.5 py-0.5 rounded border border-stone-200/60 shadow-inner select-all tracking-normal lowercase">
+             v{appVersion}
+           </span>
+         </p>
+      </div>
+
       {showBrandSelector && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-white/90 backdrop-blur-sm animate-in fade-in duration-300">
           <div className="w-full max-w-lg p-8">
@@ -432,8 +442,14 @@ const LoginView = ({
               })}
             </div>
             
+            {/* ★ 品牌選擇畫面的底部版本號 */}
             <div className="mt-12 text-center">
-              <p className="text-[10px] text-stone-300 font-medium tracking-widest uppercase">DRCYJ Cloud System</p>
+              <p className="text-[10px] text-stone-400 font-medium tracking-widest uppercase flex items-center justify-center gap-1.5">
+                DRCYJ Cloud System
+                <span className="text-[10px] font-mono bg-stone-100 text-stone-400 px-1.5 py-0.5 rounded border border-stone-200 shadow-inner select-all tracking-normal lowercase">
+                  v{appVersion}
+                </span>
+              </p>
             </div>
           </div>
         </div>
