@@ -2,7 +2,8 @@
 import React, { useState, useContext, useMemo, useEffect, useCallback } from "react";
 import { 
   Edit2, Trash2, Save, X, RotateCcw, Store, User, Loader2, 
-  Calendar, Search, ArrowRight, ArrowLeft, Database
+  Calendar, Search, ArrowRight, ArrowLeft, Database,
+  ChevronLeft, ChevronRight // ★ 新增翻頁圖示
 } from "lucide-react";
 import {
   doc,
@@ -45,6 +46,12 @@ const HistoryView = () => {
   const [filterStore, setFilterStore] = useState("");
   const [editId, setEditId] = useState(null);
   const [editForm, setEditForm] = useState({});
+
+  // ==========================================
+  // ★ 新增：分頁系統狀態
+  // ==========================================
+  const [currentPage, setCurrentPage] = useState(1);
+  const ITEMS_PER_PAGE = 50; // 每頁顯示 50 筆，效能最佳化
 
   const fmt = (val) => (typeof val === "number" ? val.toLocaleString() : val);
 
@@ -137,6 +144,9 @@ const HistoryView = () => {
         const snap = await getDocs(q);
         const data = snap.docs.map(doc => ({ id: doc.id, ...doc.data() }));
         if (activeTab === "store") setStoreRawData(data); else setTherapistRawData(data);
+        
+        // ★ 查詢完畢後，強制回到第一頁
+        setCurrentPage(1);
       } catch (e) {
         showToast("讀取失敗: " + e.message, "error");
       } finally { 
@@ -162,9 +172,22 @@ const HistoryView = () => {
     });
   }, [storeRawData, therapistRawData, filterStore, myAllowedStores, userRole, currentUser, activeTab, cleanStoreName]);
 
+  // ==========================================
+  // ★ 新增：計算分頁資料
+  // ==========================================
+  const totalPages = Math.ceil(filteredData.length / ITEMS_PER_PAGE) || 1;
+  const paginatedData = useMemo(() => {
+    const startIndex = (currentPage - 1) * ITEMS_PER_PAGE;
+    return filteredData.slice(startIndex, startIndex + ITEMS_PER_PAGE);
+  }, [filteredData, currentPage]);
+
+  // 當過濾條件改變時，回到第一頁
+  useEffect(() => {
+    setCurrentPage(1);
+  }, [filterStore, activeTab]);
+
   const startEdit = (row) => { 
     setEditId(row.id); 
-    // ★ 修復：開啟修改當下，強制將舊的 / 替換為 -
     const safeDate = String(row.date || "").replace(/\//g, "-");
     setEditForm({ ...row, date: safeDate }); 
   };
@@ -192,7 +215,6 @@ const HistoryView = () => {
       const fields = activeTab === "store" ? ["cash", "accrual", "operationalAccrual", "skincareSales", "traffic", "newCustomers", "newCustomerClosings", "newCustomerSales", "refund", "skincareRefund"] : ["totalRevenue", "newCustomerRevenue", "newCustomerCount", "newCustomerClosings", "oldCustomerRevenue", "oldCustomerCount", "returnRevenue"];
       fields.forEach(f => { cleanData[f] = Number(editForm[f] || 0); });
       
-      // ★ 終極修復：存檔前，強制把日期格式洗成標準的橫線格式
       const finalSafeDate = String(editForm.date || "").replace(/\//g, "-");
       cleanData = { ...editForm, ...cleanData, date: finalSafeDate };
 
@@ -228,6 +250,7 @@ const HistoryView = () => {
     setStoreRawData([]);
     setTherapistRawData([]);
     if(allStores.length > 1) setFilterStore("");
+    setCurrentPage(1);
   };
 
   return (
@@ -249,10 +272,10 @@ const HistoryView = () => {
            </div>
         </div>
 
-        <Card className="!overflow-visible z-30 relative">
-          <div className="space-y-4 w-full">
+        <Card className="!overflow-visible z-30 relative flex flex-col h-full">
+          <div className="space-y-4 w-full flex-1 flex flex-col">
             
-            <div className="flex flex-wrap items-end gap-4 bg-stone-50 p-4 rounded-xl border border-stone-100 relative z-30">
+            <div className="flex flex-wrap items-end gap-4 bg-stone-50 p-4 rounded-xl border border-stone-100 relative z-30 shrink-0">
               
               <div className="w-full md:w-auto flex-grow">
                 <label className="block text-xs font-bold text-stone-400 mb-1 flex items-center gap-1"><Calendar size={12}/> 篩選日期區間</label>
@@ -292,9 +315,11 @@ const HistoryView = () => {
                 <div className="flex items-end gap-2">
                   <button 
                     onClick={handleExecuteQuery} 
-                    className="px-6 py-2 bg-stone-800 text-white rounded-xl font-bold flex gap-2 hover:bg-stone-900 transition-colors shadow-sm h-[46px] items-center justify-center whitespace-nowrap active:scale-95"
+                    disabled={isLoading}
+                    className="px-6 py-2 bg-stone-800 text-white rounded-xl font-bold flex gap-2 hover:bg-stone-900 transition-colors shadow-sm h-[46px] items-center justify-center whitespace-nowrap active:scale-95 disabled:opacity-50"
                   >
-                    <Search size={16} /> <span className="hidden sm:inline">查詢</span>
+                    {isLoading ? <Loader2 size={16} className="animate-spin" /> : <Search size={16} />} 
+                    <span className="hidden sm:inline">{isLoading ? '讀取中' : '查詢'}</span>
                   </button>
                   
                   <button 
@@ -308,7 +333,7 @@ const HistoryView = () => {
               </div>
             </div>
 
-            <div className="w-full border border-stone-200 rounded-xl bg-white shadow-sm flex flex-col relative z-10">
+            <div className="w-full border border-stone-200 rounded-xl bg-white shadow-sm flex flex-col relative z-10 flex-1">
               
               {!hasQueried ? (
                 <div className="flex flex-col items-center justify-center py-20 px-4 text-center bg-stone-50/50 rounded-xl border-2 border-dashed border-stone-200 m-2">
@@ -320,52 +345,86 @@ const HistoryView = () => {
                   </p>
                 </div>
               ) : (
-                <div className="overflow-x-auto w-full rounded-xl"> 
-                  <table className="w-full text-left text-sm whitespace-nowrap">
-                    <thead className="bg-stone-100 text-stone-500 font-bold uppercase text-xs">
-                      <tr>
-                        <th className="p-4 md:sticky md:left-0 bg-stone-100 md:z-20 border-r border-stone-200 min-w-[140px]">日期 / 店名</th>
-                        {activeTab === "store" ? ( STORE_FIELDS.map(f => (<th key={f.key} className={`p-4 text-right ${f.isNegative ? "text-rose-500" : ""} ${f.width}`}>{f.label}</th>)) ) : ( <> <th className="p-4 min-w-[100px]">姓名</th>{THERAPIST_FIELDS.map(f => (<th key={f.key} className={`p-4 text-right ${f.isNegative ? "text-rose-500" : f.isHighlight ? "text-indigo-600" : ""} ${f.width}`}>{f.label}</th>))}</> )}
-                        <th className="p-4 text-center bg-stone-100 md:sticky md:right-0 md:z-20 border-l border-stone-200 min-w-[100px] shadow-[-4px_0_8px_-2px_rgba(0,0,0,0.05)]">動作</th>
-                      </tr>
-                    </thead>
-                    <tbody className="divide-y divide-stone-100">
-                      {isLoading && <tr><td colSpan={20} className="p-10 text-center"><Loader2 className="animate-spin inline mr-2"/>資料讀取中...</td></tr>}
-                      {!isLoading && filteredData.map((row) => {
-                        const isEditing = editId === row.id;
-                        const displayStore = cleanStoreName(getStoreName(row));
-                        return (
-                          <tr key={row.id} className="group hover:bg-stone-50 transition-colors">
-                            <td className="p-4 md:sticky md:left-0 bg-white group-hover:bg-stone-50 md:z-10 border-r border-stone-100">
-                              <div className="flex flex-col">
-                                {isEditing ? (
-                                  <div className="mb-1 w-32 relative">
-                                    <SmartDatePicker 
-                                      selectedDate={editForm.date}
-                                      onDateSelect={(val) => handleEditChange('date', val)}
-                                      maxDate={todayStr} 
-                                    />
-                                  </div>
-                                ) : (
-                                  <span className="font-mono font-bold text-stone-600">{row.date}</span>
-                                )}
-                                <span className="font-bold text-stone-800">{displayStore}店</span>
-                              </div>
-                            </td>
-                            {activeTab === "store" ? ( STORE_FIELDS.map(f => (<td key={f.key} className="p-4 text-right">{isEditing ? (<input type="number" value={editForm[f.key]} onChange={(e)=>handleEditChange(f.key,e.target.value)} readOnly={f.key === 'accrual'} className={`border rounded w-20 text-right px-1 outline-none focus:border-amber-400 ${f.isNegative ? "text-rose-500" : ""} ${f.key === 'accrual' ? 'bg-stone-100 text-stone-500' : ''}`}/>) : (<span className={f.isNegative ? "text-rose-500 font-bold" : ""}>{fmt(row[f.key])}</span>)}</td>)) ) : ( <> <td className="p-4 font-bold">{row.therapistName}</td>{THERAPIST_FIELDS.map(f => (<td key={f.key} className="p-4 text-right">{isEditing ? (<input type="number" value={editForm[f.key]} onChange={(e)=>handleEditChange(f.key,e.target.value)} readOnly={f.readOnly} className={`border rounded w-20 text-right px-1 outline-none focus:border-indigo-400 ${f.isNegative ? "text-rose-500" : f.isHighlight ? "font-bold text-indigo-600" : ""} ${f.readOnly ? "bg-stone-100 text-stone-500 cursor-not-allowed" : ""}`}/>) : (<span className={f.isNegative ? "text-rose-500 font-bold" : f.isHighlight ? "text-indigo-600 font-bold" : ""}>{fmt(row[f.key])}</span>)}</td>))}</> )}
-                            <td className="p-4 text-center md:sticky md:right-0 bg-white group-hover:bg-stone-50 md:z-10 border-l border-stone-100 shadow-[-4px_0_8px_-2px_rgba(0,0,0,0.05)]">
-                              {isEditing ? ( <div className="flex gap-2 justify-center"><button onClick={saveEdit} className="p-1.5 bg-emerald-100 text-emerald-600 rounded hover:bg-emerald-200"><Save size={16}/></button><button onClick={cancelEdit} className="p-1.5 bg-stone-100 text-stone-500 rounded hover:bg-stone-200"><X size={16}/></button></div> ) : ( <div className="flex gap-2 justify-center"><button onClick={()=>startEdit(row)} className="p-1.5 hover:bg-amber-50 text-amber-500 rounded transition-colors"><Edit2 size={16}/></button><button onClick={()=>handleDelete(row.id)} className="p-1.5 hover:bg-rose-50 text-rose-500 rounded transition-colors"><Trash2 size={16}/></button></div> )}
-                            </td>
-                          </tr>
-                        );
-                      })}
-                      {!isLoading && filteredData.length === 0 && ( <tr><td colSpan={20} className="p-10 text-center text-stone-400">該日期區間無相關資料 (請確認日期或篩選條件)</td></tr> )}
-                    </tbody>
-                  </table>
-                </div>
-              )}
-              {hasQueried && (
-                <div className="md:hidden py-2 text-center text-stone-400 text-xs flex justify-center items-center gap-1 bg-stone-50 rounded-b-xl border-t border-stone-100"><ArrowLeft size={12}/> 左右滑動以查看更多 <ArrowRight size={12}/></div>
+                <>
+                  <div className="overflow-x-auto w-full rounded-t-xl"> 
+                    <table className="w-full text-left text-sm whitespace-nowrap">
+                      <thead className="bg-stone-100 text-stone-500 font-bold uppercase text-xs">
+                        <tr>
+                          <th className="p-4 md:sticky md:left-0 bg-stone-100 md:z-20 border-r border-stone-200 min-w-[140px]">日期 / 店名</th>
+                          {activeTab === "store" ? ( STORE_FIELDS.map(f => (<th key={f.key} className={`p-4 text-right ${f.isNegative ? "text-rose-500" : ""} ${f.width}`}>{f.label}</th>)) ) : ( <> <th className="p-4 min-w-[100px]">姓名</th>{THERAPIST_FIELDS.map(f => (<th key={f.key} className={`p-4 text-right ${f.isNegative ? "text-rose-500" : f.isHighlight ? "text-indigo-600" : ""} ${f.width}`}>{f.label}</th>))}</> )}
+                          <th className="p-4 text-center bg-stone-100 md:sticky md:right-0 md:z-20 border-l border-stone-200 min-w-[100px] shadow-[-4px_0_8px_-2px_rgba(0,0,0,0.05)]">動作</th>
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-stone-100">
+                        {isLoading && <tr><td colSpan={20} className="p-10 text-center"><Loader2 className="animate-spin inline mr-2"/>資料讀取中...</td></tr>}
+                        
+                        {/* ★ 改用 paginatedData 來渲染，不再一次畫幾千筆 */}
+                        {!isLoading && paginatedData.map((row) => {
+                          const isEditing = editId === row.id;
+                          const displayStore = cleanStoreName(getStoreName(row));
+                          return (
+                            <tr key={row.id} className="group hover:bg-stone-50 transition-colors">
+                              <td className="p-4 md:sticky md:left-0 bg-white group-hover:bg-stone-50 md:z-10 border-r border-stone-100">
+                                <div className="flex flex-col">
+                                  {isEditing ? (
+                                    <div className="mb-1 w-32 relative">
+                                      <SmartDatePicker 
+                                        selectedDate={editForm.date}
+                                        onDateSelect={(val) => handleEditChange('date', val)}
+                                        maxDate={todayStr} 
+                                      />
+                                    </div>
+                                  ) : (
+                                    <span className="font-mono font-bold text-stone-600">{row.date}</span>
+                                  )}
+                                  <span className="font-bold text-stone-800">{displayStore}店</span>
+                                </div>
+                              </td>
+                              {activeTab === "store" ? ( STORE_FIELDS.map(f => (<td key={f.key} className="p-4 text-right">{isEditing ? (<input type="number" value={editForm[f.key]} onChange={(e)=>handleEditChange(f.key,e.target.value)} readOnly={f.key === 'accrual'} className={`border rounded w-20 text-right px-1 outline-none focus:border-amber-400 ${f.isNegative ? "text-rose-500" : ""} ${f.key === 'accrual' ? 'bg-stone-100 text-stone-500' : ''}`}/>) : (<span className={f.isNegative ? "text-rose-500 font-bold" : ""}>{fmt(row[f.key])}</span>)}</td>)) ) : ( <> <td className="p-4 font-bold">{row.therapistName}</td>{THERAPIST_FIELDS.map(f => (<td key={f.key} className="p-4 text-right">{isEditing ? (<input type="number" value={editForm[f.key]} onChange={(e)=>handleEditChange(f.key,e.target.value)} readOnly={f.readOnly} className={`border rounded w-20 text-right px-1 outline-none focus:border-indigo-400 ${f.isNegative ? "text-rose-500" : f.isHighlight ? "font-bold text-indigo-600" : ""} ${f.readOnly ? "bg-stone-100 text-stone-500 cursor-not-allowed" : ""}`}/>) : (<span className={f.isNegative ? "text-rose-500 font-bold" : f.isHighlight ? "text-indigo-600 font-bold" : ""}>{fmt(row[f.key])}</span>)}</td>))}</> )}
+                              <td className="p-4 text-center md:sticky md:right-0 bg-white group-hover:bg-stone-50 md:z-10 border-l border-stone-100 shadow-[-4px_0_8px_-2px_rgba(0,0,0,0.05)]">
+                                {isEditing ? ( <div className="flex gap-2 justify-center"><button onClick={saveEdit} className="p-1.5 bg-emerald-100 text-emerald-600 rounded hover:bg-emerald-200"><Save size={16}/></button><button onClick={cancelEdit} className="p-1.5 bg-stone-100 text-stone-500 rounded hover:bg-stone-200"><X size={16}/></button></div> ) : ( <div className="flex gap-2 justify-center"><button onClick={()=>startEdit(row)} className="p-1.5 hover:bg-amber-50 text-amber-500 rounded transition-colors"><Edit2 size={16}/></button><button onClick={()=>handleDelete(row.id)} className="p-1.5 hover:bg-rose-50 text-rose-500 rounded transition-colors"><Trash2 size={16}/></button></div> )}
+                              </td>
+                            </tr>
+                          );
+                        })}
+                        {!isLoading && filteredData.length === 0 && ( <tr><td colSpan={20} className="p-10 text-center text-stone-400">該日期區間無相關資料 (請確認日期或篩選條件)</td></tr> )}
+                      </tbody>
+                    </table>
+                  </div>
+
+                  {/* ========================================== */}
+                  {/* ★ 新增：分頁控制列 (Pagination UI) */}
+                  {/* ========================================== */}
+                  {!isLoading && filteredData.length > 0 && (
+                    <div className="flex flex-col sm:flex-row items-center justify-between px-6 py-4 bg-stone-50 border-t border-stone-200 rounded-b-xl gap-4">
+                      <div className="text-sm font-bold text-stone-500">
+                        共查詢到 <span className="text-stone-800">{filteredData.length}</span> 筆資料
+                      </div>
+                      
+                      <div className="flex items-center gap-2">
+                        <button 
+                          onClick={() => setCurrentPage(p => Math.max(1, p - 1))}
+                          disabled={currentPage === 1}
+                          className="p-2 rounded-lg bg-white border border-stone-200 text-stone-600 hover:bg-stone-100 disabled:opacity-50 disabled:cursor-not-allowed transition-colors shadow-sm"
+                        >
+                          <ChevronLeft size={18} />
+                        </button>
+                        
+                        <div className="px-4 text-sm font-bold text-stone-600 font-mono">
+                          {currentPage} / {totalPages}
+                        </div>
+                        
+                        <button 
+                          onClick={() => setCurrentPage(p => Math.min(totalPages, p + 1))}
+                          disabled={currentPage === totalPages}
+                          className="p-2 rounded-lg bg-white border border-stone-200 text-stone-600 hover:bg-stone-100 disabled:opacity-50 disabled:cursor-not-allowed transition-colors shadow-sm"
+                        >
+                          <ChevronRight size={18} />
+                        </button>
+                      </div>
+                    </div>
+                  )}
+                </>
               )}
             </div>
           </div>
