@@ -65,20 +65,38 @@ const isOlderVersion = (local, remote) => {
   return false;
 };
 
-const DashboardView = lazy(() => import("./components/DashboardView"));
-const DailyView = lazy(() => import("./components/DailyView"));
-const RegionalView = lazy(() => import("./components/RegionalView"));
-const RankingView = lazy(() => import("./components/RankingView"));
-const StoreAnalysisView = lazy(() => import("./components/StoreAnalysisView"));
-const AuditView = lazy(() => import("./components/AuditView"));
-const HistoryView = lazy(() => import("./components/HistoryView"));
-const InputView = lazy(() => import("./components/InputView"));
-const SystemMonitor = lazy(() => import("./components/SystemMonitor"));
-const SettingsView = lazy(() => import("./components/SettingsView"));
-const AnnualView = lazy(() => import("./components/AnnualView"));
-const TargetView = lazy(() => import("./components/TargetView"));
-const TherapistTargetView = lazy(() => import("./components/TherapistTargetView"));
-const TherapistScheduleView = lazy(() => import("./components/TherapistScheduleView"));
+// ==========================================
+// ★ 新增：具備「防白畫面」自動重整機制的懶加載包裝器
+// ==========================================
+const lazyWithRetry = (componentImport) =>
+  lazy(async () => {
+    try {
+      return await componentImport();
+    } catch (error) {
+      console.warn("模組載入失敗 (可能因雲端版本更新)，正在自動重整讀取最新檔案...", error);
+      // 遇到找不到舊檔案的錯誤時，直接強制破冰重整，避免白畫面
+      const currentUrl = window.location.href.split('?')[0]; 
+      window.location.replace(`${currentUrl}?v=${new Date().getTime()}`);
+      // 回傳一個空的佔位元件，避免 React 崩潰
+      return { default: () => <div className="p-10 text-center text-stone-400">正在同步最新模組...</div> };
+    }
+  });
+
+// ★ 將原本的 lazy 替換為 lazyWithRetry
+const DashboardView = lazyWithRetry(() => import("./components/DashboardView"));
+const DailyView = lazyWithRetry(() => import("./components/DailyView"));
+const RegionalView = lazyWithRetry(() => import("./components/RegionalView"));
+const RankingView = lazyWithRetry(() => import("./components/RankingView"));
+const StoreAnalysisView = lazyWithRetry(() => import("./components/StoreAnalysisView"));
+const AuditView = lazyWithRetry(() => import("./components/AuditView"));
+const HistoryView = lazyWithRetry(() => import("./components/HistoryView"));
+const InputView = lazyWithRetry(() => import("./components/InputView"));
+const SystemMonitor = lazyWithRetry(() => import("./components/SystemMonitor"));
+const SettingsView = lazyWithRetry(() => import("./components/SettingsView"));
+const AnnualView = lazyWithRetry(() => import("./components/AnnualView"));
+const TargetView = lazyWithRetry(() => import("./components/TargetView"));
+const TherapistTargetView = lazyWithRetry(() => import("./components/TherapistTargetView"));
+const TherapistScheduleView = lazyWithRetry(() => import("./components/TherapistScheduleView"));
 
 const BRANDS = [
   { id: 'cyj', label: 'CYJ', icon: Sparkles, pathType: 'legacy', color: 'amber', gradient: 'from-amber-500 to-orange-600', bg: 'bg-amber-50', text: 'text-amber-600' },
