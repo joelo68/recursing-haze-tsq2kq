@@ -389,8 +389,9 @@ const DailyView = () => {
                               <>
                                 <td className="p-4 text-center font-mono font-bold text-amber-600">{fmtMoney(store.cash)}</td>
                                 <td className="p-4 text-center font-mono font-bold text-indigo-600">{fmtMoney(store.accrual)}</td>
-                                <td className="p-4 text-center font-mono text-stone-600">{fmtMoney(store.traffic)}</td>
-                                <td className="p-4 text-center font-mono text-emerald-600">{fmtMoney(store.newCustomers)}</td>
+                                {/* ★ 修復：將操作客流與新客數改為純數字 fmtNum */}
+                                <td className="p-4 text-center font-mono text-stone-600">{fmtNum(store.traffic)}</td>
+                                <td className="p-4 text-center font-mono text-emerald-600">{fmtNum(store.newCustomers)}</td>
                                 <td className="p-4 text-center font-mono text-stone-500">{fmtMoney(store.skincareSales)}</td>
                               </>
                             ) : (
@@ -468,6 +469,7 @@ const DailyView = () => {
                             <td className="p-4 text-right font-mono text-stone-600">{fmtMoney(t.newCustomerRevenue)}</td>
                             <td className="p-4 text-right font-mono text-stone-600">{fmtMoney(t.oldCustomerRevenue)}</td>
                             <td className="p-4 text-right font-mono text-rose-500">{fmtMoney(t.returnRevenue)}</td>
+                            {/* ★ 人員視圖的「新客人數」已確認是 fmtNum，維持不變 */}
                             <td className="p-4 text-center font-mono text-emerald-600">{fmtNum(t.newCustomerCount)}</td>
                           </tr>
                         ))}
