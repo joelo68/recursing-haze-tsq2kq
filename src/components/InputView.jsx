@@ -17,8 +17,14 @@ import { AppContext } from "../AppContext";
 import { ViewWrapper, Card } from "./SharedUI";
 import SmartDatePicker from "./SmartDatePicker";
 
+// ★ 營業日換日線邏輯：如果現在是凌晨 00:00 ~ 02:59，則自動將日期退回「昨天」
 const getLocalTodayString = () => {
   const now = new Date();
+  
+  if (now.getHours() < 3) {
+    now.setDate(now.getDate() - 1);
+  }
+  
   const year = now.getFullYear();
   const month = String(now.getMonth() + 1).padStart(2, '0');
   const day = String(now.getDate()).padStart(2, '0');
