@@ -16,12 +16,11 @@ import React, {
 
 import { app, auth, db, appId } from "./config/firebase";
 import { onAuthStateChanged, signInAnonymously, signInWithCustomToken } from "firebase/auth";
-// ★ 引入 getDoc
 import { collection, addDoc, deleteDoc, updateDoc, doc, getDoc, onSnapshot, serverTimestamp, setDoc, query, orderBy, limit, deleteField, where, increment } from "firebase/firestore";
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip as RechartsTooltip, Legend, ResponsiveContainer, LineChart, Line, ComposedChart, Area, Cell, PieChart, Pie } from "recharts";
 import { 
   LayoutDashboard, Upload, TrendingUp, Map as MapIcon, Settings, ClipboardCheck, Menu, Search, Filter, Trash2, Save, Plus, DollarSign, Target, Users, Award, Loader2, FileText, AlertCircle, CheckCircle, User, Store, Lock, LogOut, FileWarning, Edit2, CheckSquare, X, Download, ChevronLeft, ChevronRight, Activity, Sparkles, ChevronDown, 
-  Heart, Coffee, Shield, 
+  Heart, Coffee, Shield, WifiOff, // ★ 新增 WifiOff 圖示
   ShoppingBag, CreditCard, Smartphone, Monitor, Bell, Clock, Music 
 } from "lucide-react";
 
@@ -39,7 +38,6 @@ import LoginView from "./components/LoginView";
 // ==========================================
 const CURRENT_APP_VERSION = "2.2.4"; 
 
-// ★ 判斷本地端是否「比雲端新」
 const isNewerVersion = (local, remote) => {
   if (!remote) return true;
   const l = local.split('.').map(Number);
@@ -52,7 +50,6 @@ const isNewerVersion = (local, remote) => {
   return false;
 };
 
-// ★ 判斷本地端是否「比雲端舊」
 const isOlderVersion = (local, remote) => {
   if (!remote) return false;
   const l = local.split('.').map(Number);
@@ -65,24 +62,18 @@ const isOlderVersion = (local, remote) => {
   return false;
 };
 
-// ==========================================
-// ★ 新增：具備「防白畫面」自動重整機制的懶加載包裝器
-// ==========================================
 const lazyWithRetry = (componentImport) =>
   lazy(async () => {
     try {
       return await componentImport();
     } catch (error) {
-      console.warn("模組載入失敗 (可能因雲端版本更新)，正在自動重整讀取最新檔案...", error);
-      // 遇到找不到舊檔案的錯誤時，直接強制破冰重整，避免白畫面
+      console.warn("模組載入失敗，正在自動重整...", error);
       const currentUrl = window.location.href.split('?')[0]; 
       window.location.replace(`${currentUrl}?v=${new Date().getTime()}`);
-      // 回傳一個空的佔位元件，避免 React 崩潰
       return { default: () => <div className="p-10 text-center text-stone-400">正在同步最新模組...</div> };
     }
   });
 
-// ★ 將原本的 lazy 替換為 lazyWithRetry
 const DashboardView = lazyWithRetry(() => import("./components/DashboardView"));
 const DailyView = lazyWithRetry(() => import("./components/DailyView"));
 const RegionalView = lazyWithRetry(() => import("./components/RegionalView"));
@@ -121,6 +112,9 @@ export default function App() {
 
   // ★ 強制更新狀態
   const [isUpdating, setIsUpdating] = useState(false);
+
+  // ★ 全域網路連線狀態
+  const [isOnline, setIsOnline] = useState(navigator.onLine);
 
   const currentBrand = useMemo(() => BRANDS.find(b => b.id === currentBrandId) || BRANDS[0], [currentBrandId]);
   const handleSwitchBrand = (brandId) => { setCurrentBrandId(brandId); setHasSelectedBrand(true); };
@@ -162,6 +156,22 @@ export default function App() {
   const lastActivityTimeRef = useRef(Date.now()); 
   const isWarningShowingRef = useRef(false);
 
+  // =======================================================
+  // ★ 網路狀態生命探測器
+  // =======================================================
+  useEffect(() => {
+    const handleOnline = () => setIsOnline(true);
+    const handleOffline = () => setIsOnline(false);
+
+    window.addEventListener('online', handleOnline);
+    window.addEventListener('offline', handleOffline);
+
+    return () => {
+      window.removeEventListener('online', handleOnline);
+      window.removeEventListener('offline', handleOffline);
+    };
+  }, []);
+
   const handleStayLoggedIn = useCallback(() => {
     lastActivityTimeRef.current = Date.now();
     isWarningShowingRef.current = false; 
@@ -176,6 +186,7 @@ export default function App() {
   }, [userRole]); 
 
   const logActivity = useCallback(async (role, user, action, details) => {
+    if (!isOnline) return; // 離線時不寫入 LOG 避免堆積
     let device = "PC";
     if (typeof navigator !== "undefined") {
       const ua = navigator.userAgent.toLowerCase();
@@ -190,7 +201,7 @@ export default function App() {
         await setDoc(doc(getCollectionPath("system_stats"), todayStr), { count: increment(1), updatedAt: serverTimestamp() }, { merge: true });
       }
     } catch (e) { console.error("Failed to log activity", e); }
-  }, [getCollectionPath, currentBrandId]);
+  }, [getCollectionPath, currentBrandId, isOnline]);
 
   const handleLogout = useCallback(async (reason = "使用者手動登出") => {
     const userName = currentUser?.name || (userRole === "director" ? "高階主管" : (userRole === "trainer" ? "教專" : "未知"));
@@ -207,32 +218,24 @@ export default function App() {
     setUserRole(null); setCurrentUser(null); setActiveView("dashboard");
   }, [currentUser, userRole, logActivity, securityConfig]);
 
-  // =======================================================
-  // ★ 終極防護網一：系統版本監聽與喚醒雷達 (獨立運作，不受登入狀態影響)
-  // =======================================================
   useEffect(() => {
     const globalVersionRef = doc(db, "artifacts", appId, "public", "data", "global_settings", "system_version");
 
-    // 負責執行強制更新的殺手函式
     const checkAndExecuteUpdate = (remoteVersion) => {
       if (remoteVersion && isOlderVersion(CURRENT_APP_VERSION, remoteVersion)) {
         setIsUpdating(true);
-        
-        // 溫和清除草稿暫存
         localStorage.removeItem("cyj_input_draft");
         localStorage.removeItem("cyj_input_draft_v2");
         localStorage.removeItem("cyj_input_draft_v3");
         localStorage.removeItem("cyj_therapist_draft");
         localStorage.removeItem("cyj_therapist_draft_v2");
         
-        // 擊殺頑固的 PWA 離線快取
         if ('serviceWorker' in navigator) {
           navigator.serviceWorker.getRegistrations().then((registrations) => {
             for (let registration of registrations) registration.unregister();
           }).catch(err => console.warn('SW unregister error', err));
         }
         
-        // 3 秒後破冰重載
         setTimeout(() => {
           const currentUrl = window.location.href.split('?')[0]; 
           const newUrl = `${currentUrl}?v=${new Date().getTime()}`;
@@ -241,14 +244,12 @@ export default function App() {
       }
     };
 
-    // 1. WebSocket 即時監聽
     const unsubVersion = onSnapshot(globalVersionRef, (s) => {
       if (s.exists()) checkAndExecuteUpdate(s.data().version);
     });
 
-    // 2. 喚醒雷達：當 App 從背景被滑出來時，主動發送一次檢查，解決休眠斷線問題！
     const handleVisibilityChange = async () => {
-      if (document.visibilityState === 'visible') {
+      if (document.visibilityState === 'visible' && isOnline) {
         try {
           const s = await getDoc(globalVersionRef);
           if (s.exists()) checkAndExecuteUpdate(s.data().version);
@@ -263,17 +264,13 @@ export default function App() {
       unsubVersion();
       document.removeEventListener("visibilitychange", handleVisibilityChange);
     };
-  }, []); // 空陣列，確保這支雷達永遠在背景運作
+  }, [isOnline]); 
 
-  // =======================================================
-  // ★ 終極防護網二：總監專屬廣播引擎
-  // =======================================================
   useEffect(() => {
     if (userRole === 'director' || userRole === 'master') {
       const globalVersionRef = doc(db, "artifacts", appId, "public", "data", "global_settings", "system_version");
       getDoc(globalVersionRef).then(s => {
          const remoteVersion = s.exists() ? s.data().version : null;
-         // 如果雲端沒資料，或是總監帶了更新的版本登入，就幫全台灣廣播更新！
          if (!remoteVersion || isNewerVersion(CURRENT_APP_VERSION, remoteVersion)) {
             setDoc(globalVersionRef, { version: CURRENT_APP_VERSION }, { merge: true });
          }
@@ -501,10 +498,11 @@ export default function App() {
   const fmtMoney = (val) => `$${(val || 0).toLocaleString()}`;
   const fmtNum = (val) => (val || 0).toLocaleString();
 
+  // ★ 將 isOnline 加入全域 Context，供各頁面使用
   const contextValue = useMemo(() => ({
     user, loading, analytics, managers: visibleManagers, budgets, targets, rawData: visibleRawData, allReports: rawData, showToast, openConfirm, fmtMoney, fmtNum, inputDate, setInputDate, storeList: analytics?.storeList || [], setTargets, selectedYear, selectedMonth, permissions, storeAccounts, managerAuth, currentUser, userRole, logActivity, handleUpdateStorePassword, handleUpdateManagerPassword, handleUpdateTherapistPassword, navigateToStore, activeView, appId, 
-    therapists: visibleTherapists, therapistReports: visibleTherapistReports, therapistSchedules, therapistTargets, trainerAuth, handleUpdateTrainerAuth, auditExclusions, handleUpdateAuditExclusions, currentBrand, setCurrentBrandId, getCollectionPath, getDocPath, dailyLoginCount, yesterdayLoginCount, securityConfig
-  }), [user, loading, analytics, visibleManagers, budgets, targets, visibleRawData, rawData, inputDate, selectedYear, selectedMonth, permissions, storeAccounts, managerAuth, currentUser, userRole, logActivity, handleUpdateStorePassword, handleUpdateManagerPassword, handleUpdateTherapistPassword, navigateToStore, activeView, appId, visibleTherapists, visibleTherapistReports, therapistSchedules, therapistTargets, trainerAuth, handleUpdateTrainerAuth, auditExclusions, handleUpdateAuditExclusions, currentBrand, setCurrentBrandId, getCollectionPath, getDocPath, dailyLoginCount, yesterdayLoginCount, securityConfig]);
+    therapists: visibleTherapists, therapistReports: visibleTherapistReports, therapistSchedules, therapistTargets, trainerAuth, handleUpdateTrainerAuth, auditExclusions, handleUpdateAuditExclusions, currentBrand, setCurrentBrandId, getCollectionPath, getDocPath, dailyLoginCount, yesterdayLoginCount, securityConfig, isOnline
+  }), [user, loading, analytics, visibleManagers, budgets, targets, visibleRawData, rawData, inputDate, selectedYear, selectedMonth, permissions, storeAccounts, managerAuth, currentUser, userRole, logActivity, handleUpdateStorePassword, handleUpdateManagerPassword, handleUpdateTherapistPassword, navigateToStore, activeView, appId, visibleTherapists, visibleTherapistReports, therapistSchedules, therapistTargets, trainerAuth, handleUpdateTrainerAuth, auditExclusions, handleUpdateAuditExclusions, currentBrand, setCurrentBrandId, getCollectionPath, getDocPath, dailyLoginCount, yesterdayLoginCount, securityConfig, isOnline]);
 
   const memoizedViews = useMemo(() => {
     return (
@@ -536,7 +534,7 @@ export default function App() {
 
   if (loading) return <div className="min-h-screen flex flex-col items-center justify-center bg-[#F9F8F6]"><Loader2 className="w-16 h-16 animate-spin text-stone-400 mb-4" /><p className="animate-pulse text-stone-500 font-bold tracking-wider">Loading DRCYJ Cloud...</p></div>;
   
-  // ★ 強制更新攔截畫面 (最高優先級)
+  // ★ 強制更新攔截畫面
   if (isUpdating) {
     return (
       <div className="fixed inset-0 z-[99999] flex flex-col items-center justify-center bg-stone-900 text-white animate-in fade-in duration-300">
@@ -548,9 +546,9 @@ export default function App() {
     );
   }
 
- if (!userRole) return (
+  if (!userRole) return (
     <LoginView 
-      appVersion={CURRENT_APP_VERSION}  // ★ 新增這行，讓系統把最新版本號送給登入畫面！
+      appVersion={CURRENT_APP_VERSION}
       onLogin={handleLogin} storeAccounts={storeAccounts} managers={publicManagers} managerAuth={managerAuth} therapists={therapists} 
       onUpdatePassword={handleUpdateStorePassword} onUpdateManagerPassword={handleUpdateManagerPassword} onUpdateTherapistPassword={handleUpdateTherapistPassword} 
       trainerAuth={trainerAuth} handleUpdateTrainerAuth={handleUpdateTrainerAuth} directorAuth={directorAuth} handleUpdateDirectorAuth={handleUpdateDirectorAuth} masterAuth={masterAuth}
@@ -560,7 +558,18 @@ export default function App() {
 
   return (
     <AppContext.Provider value={contextValue}>
-      <div className="flex min-h-screen bg-[#F9F8F6] text-stone-600 font-sans selection:bg-stone-200 selection:text-stone-800 overflow-x-hidden">
+      {/* ========================================== */}
+      {/* ★ 全域斷線警告橫幅 (絕對置頂，不可忽略) */}
+      {/* ========================================== */}
+      {!isOnline && (
+        <div className="fixed top-0 left-0 right-0 bg-rose-500 text-white z-[999999] py-2 px-4 flex items-center justify-center gap-2 shadow-md animate-in slide-in-from-top-full duration-300">
+          <WifiOff size={18} className="animate-pulse" />
+          <span className="text-sm font-bold tracking-wide">目前無網路連線！請確保網路通暢，以免報表無法成功送出。</span>
+        </div>
+      )}
+
+      {/* 如果斷線，將整個應用程式往下推，以免蓋住 Header */}
+      <div className={`flex min-h-screen bg-[#F9F8F6] text-stone-600 font-sans selection:bg-stone-200 selection:text-stone-800 overflow-x-hidden transition-all duration-300 ${!isOnline ? 'mt-9' : 'mt-0'}`}>
         <Sidebar activeView={activeView} setActiveView={setActiveView} isSidebarOpen={isSidebarOpen} setSidebarOpen={setSidebarOpen} user={user} userRole={userRole} onLogout={() => handleLogout()} permissions={permissions} currentUser={currentUser} />
         <div className={`flex-1 flex flex-col transition-all duration-500 w-full max-w-full ${isSidebarOpen ? "md:ml-64" : "md:ml-20"} ml-0`}>
           <header className="h-20 bg-white/80 backdrop-blur-md border-b border-stone-200 sticky top-0 z-40 px-4 md:px-8 flex items-center justify-between shadow-sm shadow-stone-200/50 shrink-0 transition-all">

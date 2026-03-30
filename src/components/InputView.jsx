@@ -4,7 +4,8 @@ import React, { useState, useEffect, useContext, useMemo, useCallback } from "re
 import { 
   FileText, Upload, DollarSign,
   RotateCcw, Activity, AlertCircle, X, CheckCircle, User, Star, Bug,
-  Layers, Users, TrendingDown, Calendar, AlertTriangle, Calculator
+  Layers, Users, TrendingDown, Calendar, AlertTriangle, Calculator,
+  WifiOff // ★ 新增 WifiOff 圖示
 } from "lucide-react";
 import { 
   collection, addDoc, setDoc, doc, serverTimestamp, getDocFromServer 
@@ -31,7 +32,8 @@ const StoreInputView = () => {
   const {
     currentUser, userRole, managers, inputDate, setInputDate, showToast, logActivity, rawData,
     getCollectionPath, 
-    currentBrand 
+    currentBrand,
+    isOnline // ★ 從 Context 中解構出網路狀態
   } = useContext(AppContext);
 
   const [selectedManager, setSelectedManager] = useState("");
@@ -184,6 +186,10 @@ const StoreInputView = () => {
 
   const handlePreSubmit = (e) => {
     e.preventDefault();
+    if (!isOnline) {
+      showToast("目前處於離線狀態，無法送出日報", "error");
+      return;
+    }
     if (!selectedStore) return showToast("請選擇店家", "error");
     if (inputDate > today) return showToast("不可提交未來日期", "error"); 
 
@@ -211,17 +217,16 @@ const StoreInputView = () => {
   };
 
   const handleFinalSubmit = async () => {
-    if (isSubmitting) return;
+    if (isSubmitting || !isOnline) return;
     setIsSubmitting(true);
     
     try {
-      // ★ 核心防呆：強制替換掉所有斜線，確保產出純淨的 YYYY-MM-DD
       const normalizedDate = toStandardDateFormat(inputDate);
       const safeDate = normalizedDate.replace(/\//g, "-");
       const brandId = typeof currentBrand === 'string' ? currentBrand : currentBrand?.id || 'unknown';
       
       const payload = {
-        date: safeDate, // ★ 致命錯誤修正：改存 safeDate！
+        date: safeDate, 
         storeName: selectedStore,
         brandId: brandId, 
         ...Object.keys(formData).reduce((acc, key) => ({ ...acc, [key]: parseNumber(formData[key]) }), {}),
@@ -351,8 +356,22 @@ const StoreInputView = () => {
 
         <div className="flex gap-4 pt-4 border-t border-stone-100">
           <button onClick={handleReset} className="px-6 py-4 bg-stone-100 text-stone-500 rounded-xl hover:bg-stone-200 transition-colors"><RotateCcw size={20} /></button>
-          <button onClick={handlePreSubmit} disabled={isSubmitting} className="flex-1 bg-stone-800 text-white py-4 rounded-xl font-bold shadow-xl hover:bg-stone-900 transition-all active:scale-95 disabled:opacity-70 flex justify-center items-center gap-2">
-            {isSubmitting ? <Activity className="animate-spin"/> : "提交日報"}
+          
+          {/* ★ 網路狀態判斷防呆按鈕 */}
+          <button 
+            onClick={handlePreSubmit} 
+            disabled={isSubmitting || !isOnline} 
+            className={`flex-1 py-4 rounded-xl font-bold shadow-xl transition-all active:scale-95 disabled:opacity-70 flex justify-center items-center gap-2
+              ${!isOnline ? 'bg-stone-300 text-stone-500 cursor-not-allowed shadow-none' : 'bg-stone-800 text-white hover:bg-stone-900'}
+            `}
+          >
+            {!isOnline ? (
+              <><WifiOff className="animate-pulse" size={20}/> 離線鎖定中</>
+            ) : isSubmitting ? (
+              <><Activity className="animate-spin" size={20}/> 提交中...</>
+            ) : (
+              "提交日報"
+            )}
           </button>
         </div>
       </div>
@@ -377,7 +396,12 @@ const StoreInputView = () => {
             <div className="p-6 space-y-4">
               <div className="bg-stone-50 p-4 rounded-xl space-y-2"><div className="flex justify-between font-bold text-stone-700"><span>日期</span><span>{inputDate}</span></div><div className="flex justify-between font-bold text-stone-700"><span>店家</span><span>{selectedStore}</span></div><div className="flex justify-between font-bold text-amber-600 border-t pt-2"><span>現金業績</span><span>${formData.cash}</span></div><div className="flex justify-between font-bold text-indigo-600"><span>總權責</span><span>${formData.accrual}</span></div></div>
               {existingReportId && <p className="text-xs text-rose-500 font-bold bg-rose-50 p-2 rounded">⚠️ 提醒：資料將覆蓋當日舊紀錄。</p>}
-              <div className="flex gap-3 pt-2"><button onClick={()=>setShowConfirmModal(false)} disabled={isSubmitting} className="flex-1 py-3 border rounded-xl font-bold text-stone-500 hover:bg-stone-50 disabled:opacity-50">返回</button><button onClick={handleFinalSubmit} disabled={isSubmitting} className="flex-1 py-3 bg-stone-800 text-white rounded-xl font-bold hover:bg-stone-900 disabled:opacity-70 flex justify-center items-center gap-2">{isSubmitting ? <Activity className="animate-spin" size={20}/> : "確認提交"}</button></div>
+              <div className="flex gap-3 pt-2">
+                <button onClick={()=>setShowConfirmModal(false)} disabled={isSubmitting} className="flex-1 py-3 border rounded-xl font-bold text-stone-500 hover:bg-stone-50 disabled:opacity-50">返回</button>
+                <button onClick={handleFinalSubmit} disabled={isSubmitting || !isOnline} className="flex-1 py-3 bg-stone-800 text-white rounded-xl font-bold hover:bg-stone-900 disabled:opacity-70 flex justify-center items-center gap-2">
+                  {!isOnline ? <WifiOff size={20}/> : isSubmitting ? <Activity className="animate-spin" size={20}/> : "確認提交"}
+                </button>
+              </div>
             </div>
           </div>
         </div>
@@ -392,7 +416,8 @@ const StoreInputView = () => {
 const TherapistInputView = () => {
   const { 
     currentUser, inputDate, setInputDate, showToast, logActivity,
-    getCollectionPath, currentBrand 
+    getCollectionPath, currentBrand,
+    isOnline // ★ 從 Context 中解構出網路狀態
   } = useContext(AppContext);
   
   const defaultPersonalData = {
@@ -481,7 +506,7 @@ const TherapistInputView = () => {
 
   useEffect(() => {
     const checkSubmission = async () => {
-      if (!currentUser?.id) return;
+      if (!currentUser?.id || !isOnline) return; // 離線時不發送無效請求
       try {
         const normalizedDate = toStandardDateFormat(inputDate);
         const safeDate = normalizedDate.replace(/\//g, "-");
@@ -494,7 +519,7 @@ const TherapistInputView = () => {
       }
     };
     checkSubmission();
-  }, [inputDate, currentUser, getCollectionPath]);
+  }, [inputDate, currentUser, getCollectionPath, isOnline]);
 
   const handleNumberChange = (key, value) => {
     const rawValue = value.replace(/,/g, "");
@@ -514,6 +539,10 @@ const TherapistInputView = () => {
   };
 
   const handlePreSubmit = () => {
+    if (!isOnline) {
+      showToast("目前處於離線狀態，無法送出日報", "error");
+      return;
+    }
     if (inputDate > today) return showToast("不可提交未來日期", "error");
     const hasData = formData.newCustomerRevenue || formData.oldCustomerRevenue || formData.newCustomerCount || formData.oldCustomerCount || formData.returnRevenue;
     if (!hasData) return showToast("請至少輸入一項業績或人數數據", "error");
@@ -531,21 +560,20 @@ const TherapistInputView = () => {
   };
 
   const handleFinalSubmit = async () => {
-    if (isSubmitting) return;
+    if (isSubmitting || !isOnline) return;
     setIsSubmitting(true);
     setDebugInfo(null); 
 
     try {
       if (!currentUser || !currentUser.id) throw new Error("目前使用者 ID 無法辨識，請重新登入！");
 
-      // ★ 核心防呆：強制替換掉所有斜線，確保產出純淨的 YYYY-MM-DD
       const normalizedDate = toStandardDateFormat(inputDate);
       const safeDate = normalizedDate.replace(/\//g, "-");
       const docId = `${safeDate}_${currentUser.id}`;
       const brandId = typeof currentBrand === 'string' ? currentBrand : currentBrand?.id || 'unknown';
       
       const payload = {
-        date: safeDate, // ★ 致命錯誤修正：改存 safeDate！
+        date: safeDate, 
         therapistId: currentUser.id,
         therapistName: currentUser.name,
         storeName: currentUser.store || "未註記店家", 
@@ -661,8 +689,21 @@ const TherapistInputView = () => {
              <input type="text" value={formData.returnRevenue} onChange={(e) => handleNumberChange("returnRevenue", e.target.value)} placeholder="0" className="w-full border-2 p-3 rounded-xl font-bold text-rose-600 border-rose-100 focus:border-rose-400 outline-none mb-4" inputMode="numeric" pattern="[0-9]*"/>
           </div>
 
-          <button onClick={handlePreSubmit} disabled={isSubmitting} className="w-full py-4 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl font-bold shadow-lg transition-all flex items-center justify-center gap-2 active:scale-95 disabled:opacity-50">
-            {isSubmitting ? <Activity className="animate-spin"/> : <Upload size={20}/>} 提交個人日報
+          {/* ★ 網路狀態判斷防呆按鈕 */}
+          <button 
+            onClick={handlePreSubmit} 
+            disabled={isSubmitting || !isOnline} 
+            className={`w-full py-4 rounded-xl font-bold shadow-lg transition-all flex items-center justify-center gap-2 active:scale-95 disabled:opacity-50
+              ${!isOnline ? 'bg-stone-300 text-stone-500 cursor-not-allowed shadow-none' : 'bg-indigo-600 hover:bg-indigo-700 text-white'}
+            `}
+          >
+            {!isOnline ? (
+              <><WifiOff className="animate-pulse" size={20}/> 離線鎖定中</>
+            ) : isSubmitting ? (
+              <><Activity className="animate-spin" size={20}/> 提交中...</>
+            ) : (
+              <><Upload size={20}/> 提交個人日報</>
+            )}
           </button>
         </div>
       </Card>
@@ -687,7 +728,12 @@ const TherapistInputView = () => {
             <div className="p-6 space-y-4">
               <div className="bg-stone-50 p-4 rounded-xl space-y-2 text-sm"><div className="flex justify-between font-bold text-stone-700"><span>日期</span><span>{inputDate}</span></div><div className="flex justify-between font-bold text-stone-700"><span>人員</span><span>{currentUser?.name}</span></div><div className="border-t border-stone-200 my-2 pt-2 space-y-1"><div className="flex justify-between"><span className="text-stone-500">今日總業績</span><span className="font-mono font-bold text-indigo-600 text-lg">${formData.totalRevenue || 0}</span></div><div className="flex justify-between text-xs text-stone-400 pl-2"><span>(新客 ${formData.newCustomerRevenue || 0} + 舊客 ${formData.oldCustomerRevenue || 0})</span></div><div className="flex justify-between mt-2"><span className="text-stone-500">退費業績</span><span className="font-mono font-bold text-rose-500">${formData.returnRevenue || 0}</span></div></div></div>
               {hasSubmittedToday && <p className="text-xs text-rose-500 font-bold bg-rose-50 p-2 rounded flex items-center gap-1"><AlertTriangle size={12}/> 提醒：資料將覆蓋當日舊紀錄。</p>}
-              <div className="flex gap-3 pt-2"><button onClick={()=>setShowConfirmModal(false)} disabled={isSubmitting} className="flex-1 py-3 border rounded-xl font-bold text-stone-500 hover:bg-stone-50 disabled:opacity-50">返回</button><button onClick={handleFinalSubmit} disabled={isSubmitting} className="flex-1 py-3 bg-indigo-600 text-white rounded-xl font-bold hover:bg-indigo-700 shadow-md disabled:opacity-70 flex justify-center items-center gap-2">{isSubmitting ? <Activity className="animate-spin" size={20}/> : "確認提交"}</button></div>
+              <div className="flex gap-3 pt-2">
+                <button onClick={()=>setShowConfirmModal(false)} disabled={isSubmitting} className="flex-1 py-3 border rounded-xl font-bold text-stone-500 hover:bg-stone-50 disabled:opacity-50">返回</button>
+                <button onClick={handleFinalSubmit} disabled={isSubmitting || !isOnline} className="flex-1 py-3 bg-indigo-600 text-white rounded-xl font-bold hover:bg-indigo-700 shadow-md disabled:opacity-70 flex justify-center items-center gap-2">
+                  {!isOnline ? <WifiOff size={20}/> : isSubmitting ? <Activity className="animate-spin" size={20}/> : "確認提交"}
+                </button>
+              </div>
             </div>
           </div>
         </div>
