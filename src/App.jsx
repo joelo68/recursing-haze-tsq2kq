@@ -16,7 +16,8 @@ import React, {
 
 import { app, auth, db, appId } from "./config/firebase";
 import { onAuthStateChanged, signInAnonymously, signInWithCustomToken } from "firebase/auth";
-import { collection, addDoc, deleteDoc, updateDoc, doc, onSnapshot, serverTimestamp, setDoc, query, orderBy, limit, deleteField, where, increment } from "firebase/firestore";
+// ★ 引入 getDoc
+import { collection, addDoc, deleteDoc, updateDoc, doc, getDoc, onSnapshot, serverTimestamp, setDoc, query, orderBy, limit, deleteField, where, increment } from "firebase/firestore";
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip as RechartsTooltip, Legend, ResponsiveContainer, LineChart, Line, ComposedChart, Area, Cell, PieChart, Pie } from "recharts";
 import { 
   LayoutDashboard, Upload, TrendingUp, Map as MapIcon, Settings, ClipboardCheck, Menu, Search, Filter, Trash2, Save, Plus, DollarSign, Target, Users, Award, Loader2, FileText, AlertCircle, CheckCircle, User, Store, Lock, LogOut, FileWarning, Edit2, CheckSquare, X, Download, ChevronLeft, ChevronRight, Activity, Sparkles, ChevronDown, 
@@ -36,7 +37,7 @@ import LoginView from "./components/LoginView";
 // ==========================================
 // ★ 系統核心版本號 (改版時只需修改這裡並 deploy 即可)
 // ==========================================
-const CURRENT_APP_VERSION = "2.2.1"; 
+const CURRENT_APP_VERSION = "2.2.4"; 
 
 // ★ 判斷本地端是否「比雲端新」
 const isNewerVersion = (local, remote) => {
@@ -188,6 +189,80 @@ export default function App() {
     setUserRole(null); setCurrentUser(null); setActiveView("dashboard");
   }, [currentUser, userRole, logActivity, securityConfig]);
 
+  // =======================================================
+  // ★ 終極防護網一：系統版本監聽與喚醒雷達 (獨立運作，不受登入狀態影響)
+  // =======================================================
+  useEffect(() => {
+    const globalVersionRef = doc(db, "artifacts", appId, "public", "data", "global_settings", "system_version");
+
+    // 負責執行強制更新的殺手函式
+    const checkAndExecuteUpdate = (remoteVersion) => {
+      if (remoteVersion && isOlderVersion(CURRENT_APP_VERSION, remoteVersion)) {
+        setIsUpdating(true);
+        
+        // 溫和清除草稿暫存
+        localStorage.removeItem("cyj_input_draft");
+        localStorage.removeItem("cyj_input_draft_v2");
+        localStorage.removeItem("cyj_input_draft_v3");
+        localStorage.removeItem("cyj_therapist_draft");
+        localStorage.removeItem("cyj_therapist_draft_v2");
+        
+        // 擊殺頑固的 PWA 離線快取
+        if ('serviceWorker' in navigator) {
+          navigator.serviceWorker.getRegistrations().then((registrations) => {
+            for (let registration of registrations) registration.unregister();
+          }).catch(err => console.warn('SW unregister error', err));
+        }
+        
+        // 3 秒後破冰重載
+        setTimeout(() => {
+          const currentUrl = window.location.href.split('?')[0]; 
+          const newUrl = `${currentUrl}?v=${new Date().getTime()}`;
+          window.location.replace(newUrl);
+        }, 3000);
+      }
+    };
+
+    // 1. WebSocket 即時監聽
+    const unsubVersion = onSnapshot(globalVersionRef, (s) => {
+      if (s.exists()) checkAndExecuteUpdate(s.data().version);
+    });
+
+    // 2. 喚醒雷達：當 App 從背景被滑出來時，主動發送一次檢查，解決休眠斷線問題！
+    const handleVisibilityChange = async () => {
+      if (document.visibilityState === 'visible') {
+        try {
+          const s = await getDoc(globalVersionRef);
+          if (s.exists()) checkAndExecuteUpdate(s.data().version);
+        } catch (e) {
+          console.warn("Wake up version check failed", e);
+        }
+      }
+    };
+    document.addEventListener("visibilitychange", handleVisibilityChange);
+
+    return () => {
+      unsubVersion();
+      document.removeEventListener("visibilitychange", handleVisibilityChange);
+    };
+  }, []); // 空陣列，確保這支雷達永遠在背景運作
+
+  // =======================================================
+  // ★ 終極防護網二：總監專屬廣播引擎
+  // =======================================================
+  useEffect(() => {
+    if (userRole === 'director' || userRole === 'master') {
+      const globalVersionRef = doc(db, "artifacts", appId, "public", "data", "global_settings", "system_version");
+      getDoc(globalVersionRef).then(s => {
+         const remoteVersion = s.exists() ? s.data().version : null;
+         // 如果雲端沒資料，或是總監帶了更新的版本登入，就幫全台灣廣播更新！
+         if (!remoteVersion || isNewerVersion(CURRENT_APP_VERSION, remoteVersion)) {
+            setDoc(globalVersionRef, { version: CURRENT_APP_VERSION }, { merge: true });
+         }
+      }).catch(e => console.warn("Broadcast failed", e));
+    }
+  }, [userRole]);
+
   useEffect(() => {
     let intervalId = null;
     if (userRole) {
@@ -286,41 +361,6 @@ export default function App() {
       else setSecurityConfig({ enabled: true, timeoutMinutes: 3, warningSeconds: 15, exemptRoles: ["director", "master"] });
     });
 
-    // =======================================================
-    // ★ 終極版全域雷達：總監驅動自動更新機制
-    // =======================================================
-    const globalVersionRef = doc(db, "artifacts", appId, "public", "data", "global_settings", "system_version");
-    const unsubVersion = onSnapshot(globalVersionRef, (s) => {
-      const remoteVersion = s.exists() ? s.data().version : null;
-
-      // 如果雲端完全沒資料，總監一登入就幫忙初始化
-      if (!remoteVersion) {
-        if (userRole === 'director' || userRole === 'master') {
-          setDoc(globalVersionRef, { version: CURRENT_APP_VERSION }, { merge: true });
-        }
-        return;
-      }
-
-      // 情境 A：如果本地版本比雲端「舊」 -> 我是舊版使用者，需要被更新
-      if (isOlderVersion(CURRENT_APP_VERSION, remoteVersion)) {
-        setIsUpdating(true);
-        
-        localStorage.clear();
-        sessionStorage.clear();
-        
-        setTimeout(() => {
-          window.location.reload(true);
-        }, 3000);
-      } 
-      // 情境 B：如果本地版本比雲端「新」 -> 我是總監剛佈署完登入
-      else if (isNewerVersion(CURRENT_APP_VERSION, remoteVersion)) {
-        if (userRole === 'director' || userRole === 'master') {
-          // 總監自動幫全系統廣播「升級」雲端版本號！
-          setDoc(globalVersionRef, { version: CURRENT_APP_VERSION }, { merge: true });
-        }
-      }
-    });
-
     const unsubDirectorAuth = onSnapshot(getDocPath("director_auth"), (s) => { 
         if (s.exists()) {
            let data = { ...s.data() };
@@ -345,9 +385,8 @@ export default function App() {
     return () => { 
       unsubBudgets(); unsubTargets(); unsubOrg(); unsubAccounts(); unsubManagerAuth(); unsubPermissions(); unsubTherapists(); unsubTherapistSchedules(); unsubTherapistTargets(); unsubTrainerAuth(); unsubAuditExclusions(); unsubDirectorAuth(); unsubMasterAuth(); unsubStatsToday(); unsubStatsYesterday(); 
       unsubSecurityConfig();
-      unsubVersion(); // ★ 卸載版本監聽
     };
-  }, [user, currentBrand, getCollectionPath, getDocPath, userRole]); 
+  }, [user, currentBrand, getCollectionPath, getDocPath]); 
 
   useEffect(() => {
     if (!user) return;
@@ -509,7 +548,6 @@ export default function App() {
             <div className="flex items-center gap-4">
               <button onClick={() => setSidebarOpen(!isSidebarOpen)} className="p-2.5 hover:bg-stone-100 rounded-xl text-stone-400 hidden md:block transition-colors"><Menu size={24} /></button>
               
-              {/* 電腦版：當前頁面標題 + 版本號標籤 */}
               <h1 className="text-xl md:text-2xl font-extrabold text-stone-800 tracking-tight truncate hidden sm:flex items-center gap-2">
                 <span className="text-amber-600">●</span> 
                 {ALL_MENU_ITEMS.find((i) => i.id === activeView)?.label || (activeView === 'targets' ? '年度目標設定' : 'DRCYJ System')}
@@ -518,7 +556,6 @@ export default function App() {
                 </span>
               </h1>
               
-              {/* 手機版：系統 LOGO + 版本號標籤 */}
               <h1 className="text-lg font-bold text-stone-800 tracking-tight truncate md:hidden flex items-center gap-2">
                 <Coffee size={20} className="text-amber-600" /> DRCYJ Cloud
                 <span className="ml-1 text-[10px] font-mono bg-stone-100 text-stone-400 px-1.5 py-0.5 rounded-md border border-stone-200/60 shadow-inner select-all">
