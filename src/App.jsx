@@ -36,7 +36,7 @@ import LoginView from "./components/LoginView";
 // ==========================================
 // ★ 系統核心版本號 (改版時只需修改這裡並 deploy 即可)
 // ==========================================
-const CURRENT_APP_VERSION = "2.2.7"; 
+const CURRENT_APP_VERSION = "2.2.8"; 
 
 const isNewerVersion = (local, remote) => {
   if (!remote) return true;
