@@ -7,7 +7,7 @@ import {
 import { ROLES, BRANDS } from "../constants/index"; 
 
 const LoginView = ({
-  appVersion = "2.2.5", // ★ 新增：接收從 App.jsx 傳來的系統版本號
+  appVersion = "2.2.5", 
   onLogin,
   storeAccounts,
   managers,
@@ -71,9 +71,25 @@ const LoginView = ({
     return tRegion ? (managers[tRegion] || []) : [];
   }, [tRegion, managers]);
 
+  // ★★★ 核心修正：全方位離職過濾器 (兼容所有可能的欄位名稱) ★★★
   const filteredTherapists = useMemo(() => {
     if (!tStore) return [];
-    return therapists.filter(t => t.store === tStore);
+    
+    return therapists.filter(t => {
+      // 1. 基本條件：必須是該店家的
+      if (t.store !== tStore) return false;
+      
+      // 2. 攔截所有可能的「離職/停用」標籤
+      // 只要符合其中一個條件，就代表已離職，直接過濾掉 (return false)
+      const isResigned = 
+        t.isResigned === true || 
+        t.resigned === true || 
+        t.status === 'resigned' || 
+        t.status === '離職' || 
+        t.isActive === false;
+
+      return !isResigned; // 沒離職的人才留下
+    });
   }, [tStore, therapists]);
 
   const sortedDirectorNames = useMemo(() => {
@@ -126,6 +142,17 @@ const LoginView = ({
     try {
       if (!tPersonId) { setError("請選擇姓名"); setIsLoading(false); return; }
       const therapist = therapists.find(t => t.id === tPersonId);
+      
+      // ★ 雙重保險：登入時再次檢查離職狀態
+      const isUserResigned = 
+        therapist?.isResigned === true || 
+        therapist?.resigned === true || 
+        therapist?.status === 'resigned' || 
+        therapist?.status === '離職' || 
+        therapist?.isActive === false;
+
+      if (isUserResigned) { setError("此帳號已停用"); setIsLoading(false); return; }
+      
       if (therapist && therapist.password === tPassword) onLogin("therapist", therapist); else setError("密碼錯誤 (預設 0000)");
     } catch (e) { setError("登入發生錯誤"); } finally { setIsLoading(false); }
   };
@@ -211,7 +238,6 @@ const LoginView = ({
   const selectClass = `w-full px-4 py-3 bg-white border border-stone-200 rounded-lg outline-none text-stone-700 appearance-none transition-all focus:border-stone-400 focus:ring-2 ${themeColors.ring} disabled:bg-stone-50 disabled:text-stone-400`;
 
   return (
-    // ★ 加上 flex-col 讓主框與底部的系統字樣能完美垂直置中
     <div className="min-h-screen flex flex-col items-center justify-center bg-stone-50 p-4 font-sans text-stone-800">
       
       <div className={`w-full max-w-md bg-white p-8 rounded-2xl shadow-sm border border-stone-200 transition-all duration-500 transform ${showBrandSelector ? "opacity-0 scale-95 pointer-events-none absolute" : "opacity-100 scale-100 relative"}`}>
@@ -329,7 +355,7 @@ const LoginView = ({
 
                       {directorManageMode === 'add' && (
                         <>
-                          <input type="text" value={newDirectorName} onChange={(e) => setNewDirectorName(e.target.value)} placeholder="輸入新主管名稱 (例如：營運長)" className={inputClass} />
+                          <input type="text" value={newDirectorName} onChange={(e) => setNewDirectorName(e.target.value)} placeholder="輸入新主管名稱" className={inputClass} />
                           <input type="text" value={newPassword} onChange={(e) => setNewPassword(e.target.value)} placeholder="設定新密碼" className={inputClass} />
                         </>
                       )}
@@ -338,7 +364,7 @@ const LoginView = ({
                         <>
                           <div className="relative">
                             <select value={selectedUser} onChange={(e) => setSelectedUser(e.target.value)} className={selectClass}>
-                              <option value="">選擇要修改密碼的主管</option>
+                              <option value="">選擇主管帳號</option>
                               {sortedDirectorNames.map((dName) => (<option key={dName} value={dName}>{dName}</option>))}
                             </select>
                           </div>
@@ -354,14 +380,14 @@ const LoginView = ({
                               {sortedDirectorNames.map((dName) => (<option key={dName} value={dName}>{dName}</option>))}
                             </select>
                           </div>
-                          <input type="text" value={newDirectorName} onChange={(e) => setNewDirectorName(e.target.value)} placeholder="輸入新的名稱 (例如：陳營運長)" className={inputClass} />
+                          <input type="text" value={newDirectorName} onChange={(e) => setNewDirectorName(e.target.value)} placeholder="輸入新名稱" className={inputClass} />
                         </>
                       )}
                       
                       {directorManageMode === 'delete' && (
                         <div className="relative">
                           <select value={selectedUser} onChange={(e) => setSelectedUser(e.target.value)} className={`${selectClass} text-rose-600`}>
-                            <option value="">選擇要刪除的主管</option>
+                            <option value="">選擇要刪除的帳號</option>
                             {sortedDirectorNames.map((dName) => (<option key={dName} value={dName}>{dName}</option>))}
                           </select>
                         </div>
@@ -384,15 +410,12 @@ const LoginView = ({
                 <button onClick={handlePasswordReset} disabled={isLoading} className={`w-full py-3.5 text-white rounded-lg font-bold shadow-sm transition-all ${role === 'director' && directorManageMode === 'delete' ? 'bg-rose-600 hover:bg-rose-700' : 'bg-stone-800 hover:bg-stone-900'}`}>{isLoading ? <Loader2 className="animate-spin mx-auto" /> : (role === 'director' && directorManageMode === 'delete' ? "確認刪除" : "確認執行")}</button>
               )}
 
-              {(role === "director" || role === "store" || role === "manager" || role === "trainer") && (
-                <button onClick={() => { setIsResetting(!isResetting); setError(""); }} className="w-full text-center text-xs text-stone-400 hover:text-stone-600 py-2 transition-colors">{isResetting ? "取消並返回登入" : "帳號與密碼管理?"}</button>
-              )}
+              <button onClick={() => { setIsResetting(!isResetting); setError(""); }} className="w-full text-center text-xs text-stone-400 hover:text-stone-600 py-2 transition-colors">{isResetting ? "返回登入" : "管理帳號密碼?"}</button>
             </>
           )}
         </div>
       </div>
 
-      {/* ★ 密碼登入頁面的底部版本號 */}
       <div className={`mt-8 text-center transition-all duration-500 transform ${showBrandSelector ? "opacity-0 scale-95 pointer-events-none absolute" : "opacity-100 scale-100 relative"}`}>
          <p className="text-[10px] text-stone-400 font-medium tracking-widest uppercase flex items-center justify-center gap-1.5">
            DRCYJ Cloud System
@@ -415,10 +438,7 @@ const LoginView = ({
                 let btnIcon = Crown;
                 let activeClass = "hover:border-stone-400 hover:bg-stone-50";
                 
-                if (brand.id === 'anniu') { 
-                    btnIcon = Heart; 
-                    activeClass = "hover:border-rose-200 hover:bg-rose-50 hover:text-rose-900"; 
-                }
+                if (brand.id === 'anniu') { btnIcon = Heart; activeClass = "hover:border-rose-200 hover:bg-rose-50 hover:text-rose-900"; }
                 else if (brand.id === 'yibo') { btnIcon = Sparkles; activeClass = "hover:border-yellow-200 hover:bg-yellow-50 hover:text-yellow-900"; }
                 else { activeClass = "hover:border-stone-400 hover:bg-stone-50 hover:text-stone-900"; }
 
@@ -442,7 +462,6 @@ const LoginView = ({
               })}
             </div>
             
-            {/* ★ 品牌選擇畫面的底部版本號 */}
             <div className="mt-12 text-center">
               <p className="text-[10px] text-stone-400 font-medium tracking-widest uppercase flex items-center justify-center gap-1.5">
                 DRCYJ Cloud System
