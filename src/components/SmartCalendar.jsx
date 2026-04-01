@@ -17,8 +17,8 @@ const SmartCalendar = ({
   stores = [],
   salesData = [],
   onClose,
-  maxDate, // ★ 接收 maxDate (不可大於此日期)
-  minDate  // ★ 接收 minDate (不可小於此日期)
+  maxDate, // ★ 接收從外部傳來的最大日期 (Date 物件)
+  minDate  // ★ 接收從外部傳來的最小日期 (Date 物件)
 }) => {
   const [currentDate, setCurrentDate] = useState(() => safeParseDate(selectedDate));
 
@@ -76,6 +76,8 @@ const SmartCalendar = ({
 
   return (
     <div className="bg-white p-4 rounded-xl shadow-xl border border-stone-100 w-[320px] select-none">
+      
+      {/* 頂部月份切換控制 */}
       <div className="flex items-center justify-between mb-4">
         <button onClick={handlePrevMonth} className="p-1 hover:bg-stone-100 rounded-lg transition-colors text-stone-600">
           <ChevronLeft size={20} />
@@ -86,12 +88,14 @@ const SmartCalendar = ({
         </button>
       </div>
 
+      {/* 星期標題 */}
       <div className="grid grid-cols-7 mb-2">
         {["日", "一", "二", "三", "四", "五", "六"].map((d) => (
           <div key={d} className="text-center text-xs font-bold text-stone-400 py-1">{d}</div>
         ))}
       </div>
 
+      {/* 日期網格 */}
       <div className="grid grid-cols-7 gap-1">
         {Array.from({ length: firstDayOfMonth }).map((_, i) => <div key={`empty-${i}`} />)}
 
@@ -101,10 +105,12 @@ const SmartCalendar = ({
           const isSelected = dateStr === selectedDate;
           const status = getDayStatus(day);
           
-          // ★ 核心防呆邏輯：判斷是否超出範圍
-          const isFuture = maxDate && dateStr > maxDate;
-          const isPast = minDate && dateStr < minDate;
-          const isDisabled = isFuture || isPast;
+          // ★★★ 核心邊界鎖定防呆邏輯 ★★★
+          // 把這一天轉成 Date 物件，用 getTime() 轉換成精準的毫秒數來比對大小
+          const currentDayObj = new Date(year, month, day);
+          const isBeforeMin = minDate ? currentDayObj.getTime() < minDate.getTime() : false;
+          const isAfterMax = maxDate ? currentDayObj.getTime() > maxDate.getTime() : false;
+          const isDisabled = isBeforeMin || isAfterMax;
 
           return (
             <button
@@ -113,13 +119,16 @@ const SmartCalendar = ({
               disabled={isDisabled} 
               className={`
                 relative h-9 rounded-lg text-sm font-bold flex items-center justify-center transition-all
-                ${isDisabled ? "text-stone-300 opacity-40 cursor-not-allowed bg-transparent" : 
-                  isSelected ? "bg-stone-800 text-white shadow-md scale-105 z-10" : 
-                  "text-stone-700 hover:bg-stone-100"
+                ${isDisabled 
+                  ? "text-stone-300 opacity-30 cursor-not-allowed bg-stone-50/50" // ★ 被封鎖的樣式：明顯反灰、滑鼠禁按
+                  : isSelected 
+                    ? "bg-stone-800 text-white shadow-md scale-105 z-10" 
+                    : "text-stone-700 hover:bg-stone-100 cursor-pointer"
                 }
               `}
             >
               {day}
+              {/* 如果被鎖定了，就不顯示紅綠點 */}
               {!isSelected && !isDisabled && status !== "none" && (
                 <span className={`absolute bottom-1 w-1.5 h-1.5 rounded-full ${status === "complete" ? "bg-emerald-400" : "bg-rose-500"}`} />
               )}

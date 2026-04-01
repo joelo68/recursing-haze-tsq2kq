@@ -1,5 +1,5 @@
 // src/components/AuditView.jsx
-import React, { useState, useMemo, useContext, useCallback } from "react";
+import React, { useState, useMemo, useContext, useCallback, useEffect } from "react";
 import { AlertCircle, UserX, CheckCircle, Target, FileText, Settings, X, Save, Ban, HelpCircle } from "lucide-react"; 
 
 import { AppContext } from "../AppContext";
@@ -20,9 +20,8 @@ const AuditView = () => {
     therapistSchedules,
     userRole,
     therapistTargets,
-    auditExclusions = [], // 給予預設值，防止未定義錯誤
+    auditExclusions = [], 
     handleUpdateAuditExclusions,
-    // ★★★ 1. 引入 currentBrand ★★★
     currentBrand
   } = useContext(AppContext);
 
@@ -32,7 +31,33 @@ const AuditView = () => {
   const [isConfigModalOpen, setIsConfigModalOpen] = useState(false);
   const [localExclusions, setLocalExclusions] = useState([]);
 
-  // ★★★ 2. 定義品牌前綴 (標準化邏輯) ★★★
+  // ★★★ 邊界防呆 1：當右上角全局月份改變時，將日曆重置到該月 1 號 ★★★
+  useEffect(() => {
+    if (!checkDate || !selectedYear || !selectedMonth) return;
+    
+    const currentObj = new Date(checkDate);
+    const currentYearStr = currentObj.getFullYear().toString();
+    const currentMonthStr = (currentObj.getMonth() + 1).toString();
+    
+    // 只要全局月份變了，就強制把下方的日曆切到該月的 1 號
+    if (currentYearStr !== selectedYear || currentMonthStr !== selectedMonth) {
+      const newMonth = selectedMonth.padStart(2, '0');
+      setCheckDate(`${selectedYear}-${newMonth}-01`);
+    }
+  }, [selectedYear, selectedMonth]);
+
+  // ★★★ 邊界防呆 2：計算當月的極限範圍 (供日曆元件鎖定使用) ★★★
+  const { minBoundary, maxBoundary } = useMemo(() => {
+    const y = parseInt(selectedYear);
+    const m = parseInt(selectedMonth);
+    const maxDays = new Date(y, m, 0).getDate(); // 取得該月最後一天
+    
+    return {
+      minBoundary: `${y}-${String(m).padStart(2, '0')}-01`,
+      maxBoundary: `${y}-${String(m).padStart(2, '0')}-${maxDays}`
+    };
+  }, [selectedYear, selectedMonth]);
+
   const brandPrefix = useMemo(() => {
     let name = "CYJ";
     if (currentBrand) {
@@ -50,11 +75,10 @@ const AuditView = () => {
     return name;
   }, [currentBrand]);
 
-  // ★★★ 3. 統一的店名清洗函式 (修正：加入新店防呆判斷) ★★★
   const cleanStoreName = useCallback((name) => {
     if (!name) return "";
     let core = String(name).replace(/^(CYJ|Anew\s*\(安妞\)|Yibo\s*\(伊啵\)|安妞|伊啵|Anew|Yibo)\s*/i, '').trim();
-    if (core === "新店") return "新店"; // ★ 防止「新店」被誤刪
+    if (core === "新店") return "新店"; 
     return core.replace(/店$/, '').trim();
   }, []);
 
@@ -76,27 +100,24 @@ const AuditView = () => {
     });
   };
 
-  // --- 資料源準備 (給 SmartDatePicker 用) ---
-
   const activeStoresForCalendar = useMemo(() => {
-    // 取得所有店家簡稱 (例如 "中山")
     const allMyStores = Object.values(managers).flat();
     
     return allMyStores
       .filter(storeName => !auditExclusions.includes(storeName)) 
       .map(storeName => {
         const aliases = [
-          storeName,                          // 中山
-          `${storeName}店`,                   // 中山店
-          `${brandPrefix}${storeName}`,       // 安妞中山
-          `${brandPrefix}${storeName}店`,     // 安妞中山店
-          `CYJ${storeName}店`                 // CYJ中山店 (舊資料相容)
+          storeName,                          
+          `${storeName}店`,                   
+          `${brandPrefix}${storeName}`,       
+          `${brandPrefix}${storeName}店`,     
+          `CYJ${storeName}店`                 
         ];
 
         return {
           id: storeName,          
-          name: `${storeName}店`, // 畫面上顯示的名稱
-          stores: aliases         // 讓日曆去認這 5 種名字
+          name: `${storeName}店`, 
+          stores: aliases         
         };
       });
   }, [managers, auditExclusions, brandPrefix]);
@@ -161,9 +182,6 @@ const AuditView = () => {
   const calendarStores = isTherapistMode ? activeTherapistsForCalendar : activeStoresForCalendar;
   const calendarSalesData = isTherapistMode ? normalizedTherapistReports : normalizedRawData;
 
-
-  // --- 下方列表檢核邏輯 ---
-
   const auditData = useMemo(() => {
     if (!checkDate) return { submitted: [], missing: [], missingByManager: {} };
     const targetDate = toStandardDateFormat(checkDate);
@@ -179,11 +197,9 @@ const AuditView = () => {
       stores.forEach((s) => {
         if (auditExclusions.includes(s)) return; 
 
-        // 寬容檢查：只要包含簡稱就算有交
         const isSubmitted = submittedRaw.some(rawName => rawName && rawName.includes(s));
 
         if (!isSubmitted) {
-             // 顯示時加上品牌前綴，讓使用者知道是哪一家的店
              missing.push(`${brandPrefix}${s}店`);
         }
       });
@@ -206,7 +222,6 @@ const AuditView = () => {
       stores.forEach((s) => {
         if (auditExclusions.includes(s)) return;
 
-        // 目標檢核使用完整 key (包含前綴)
         const name = `${brandPrefix}${s}店`;
         const key = `${name}_${y}_${m}`;
         const b = budgets[key];
@@ -289,7 +304,6 @@ const AuditView = () => {
     auditType === "therapist-daily" ? therapistAuditData :
     therapistTargetAuditData; 
 
-  // ★★★ 4. 複製功能優化：使用新的 cleanStoreName 函式 ★★★
   const handleCopy = () => {
     let text = "";
     if (auditType === 'target') text = `店家未設定目標(${selectedYear}/${selectedMonth})：\n`;
@@ -300,7 +314,7 @@ const AuditView = () => {
     Object.entries(activeData.missingByManager).forEach(([mgr, list]) => {
       const cleanList = list.map(s => {
         if (auditType.includes('therapist')) return s;
-        return cleanStoreName(s); // 改用安全的清洗函式
+        return cleanStoreName(s);
       });
       text += `${mgr}區：${cleanList.join("、")}\n`;
     });
@@ -369,6 +383,11 @@ const AuditView = () => {
                           onDateSelect={setCheckDate}
                           stores={calendarStores}       
                           salesData={calendarSalesData} 
+                          // ★★★ 傳入邊界鎖定參數，支援原生與自訂屬性 ★★★
+                          min={minBoundary}
+                          max={maxBoundary}
+                          minDate={new Date(parseInt(selectedYear), parseInt(selectedMonth) - 1, 1)}
+                          maxDate={new Date(parseInt(selectedYear), parseInt(selectedMonth), 0)}
                         />
                       )}
                    </div>
@@ -379,7 +398,7 @@ const AuditView = () => {
                 )}
 
                 {(userRole === 'director' || userRole === 'manager') && (auditType === 'daily' || auditType === 'target') && (
-                  <button onClick={openConfigModal} className="p-2 bg-stone-100 text-stone-500 rounded-xl hover:bg-stone-200" title="設定排除店家">
+                  <button onClick={openConfigModal} className="p-2 bg-stone-100 text-stone-500 rounded-xl hover:bg-stone-200 self-end" title="設定排除店家">
                     <Settings size={20}/>
                   </button>
                 )}
@@ -430,7 +449,6 @@ const AuditView = () => {
                         className="bg-white px-2 py-1 rounded-lg text-xs border border-stone-200 text-stone-600 font-medium flex items-center gap-1"
                       >
                         {auditType.includes('therapist') && <UserX size={10} className="text-rose-400"/>}
-                        {/* ★★★ 5. 渲染時也套用新的安全清洗函式 ★★★ */}
                         {auditType.includes('therapist') ? s : cleanStoreName(s)}
                       </span>
                     ))}
