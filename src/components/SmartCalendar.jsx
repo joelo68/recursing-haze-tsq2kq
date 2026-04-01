@@ -17,8 +17,10 @@ const SmartCalendar = ({
   stores = [],
   salesData = [],
   onClose,
-  maxDate, // ★ 接收從外部傳來的最大日期 (Date 物件)
-  minDate  // ★ 接收從外部傳來的最小日期 (Date 物件)
+  maxDate, 
+  minDate,
+  min, // ★ 新增：相容其他頁面可能傳遞的 min 屬性
+  max  // ★ 新增：相容其他頁面可能傳遞的 max 屬性
 }) => {
   const [currentDate, setCurrentDate] = useState(() => safeParseDate(selectedDate));
 
@@ -74,6 +76,17 @@ const SmartCalendar = ({
     if (onClose) onClose();
   };
 
+  // ★★★ 智慧邊界翻譯機：將傳入的字串或 Date 物件統一轉換為時間戳 (毫秒) ★★★
+  const parseBoundaryTime = (boundaryObj, boundaryStr) => {
+    if (boundaryObj instanceof Date) return boundaryObj.getTime();
+    if (typeof boundaryObj === 'string') return new Date(boundaryObj.replace(/-/g, '/')).getTime();
+    if (typeof boundaryStr === 'string') return new Date(boundaryStr.replace(/-/g, '/')).getTime();
+    return null;
+  };
+
+  const minBoundaryTime = parseBoundaryTime(minDate, min);
+  const maxBoundaryTime = parseBoundaryTime(maxDate, max);
+
   return (
     <div className="bg-white p-4 rounded-xl shadow-xl border border-stone-100 w-[320px] select-none">
       
@@ -105,11 +118,10 @@ const SmartCalendar = ({
           const isSelected = dateStr === selectedDate;
           const status = getDayStatus(day);
           
-          // ★★★ 核心邊界鎖定防呆邏輯 ★★★
-          // 把這一天轉成 Date 物件，用 getTime() 轉換成精準的毫秒數來比對大小
-          const currentDayObj = new Date(year, month, day);
-          const isBeforeMin = minDate ? currentDayObj.getTime() < minDate.getTime() : false;
-          const isAfterMax = maxDate ? currentDayObj.getTime() > maxDate.getTime() : false;
+          // ★★★ 修復後的防呆邏輯：確保無論傳入什麼格式都不會當機 ★★★
+          const currentDayTime = new Date(year, month, day).getTime();
+          const isBeforeMin = minBoundaryTime ? currentDayTime < minBoundaryTime : false;
+          const isAfterMax = maxBoundaryTime ? currentDayTime > maxBoundaryTime : false;
           const isDisabled = isBeforeMin || isAfterMax;
 
           return (
@@ -120,7 +132,7 @@ const SmartCalendar = ({
               className={`
                 relative h-9 rounded-lg text-sm font-bold flex items-center justify-center transition-all
                 ${isDisabled 
-                  ? "text-stone-300 opacity-30 cursor-not-allowed bg-stone-50/50" // ★ 被封鎖的樣式：明顯反灰、滑鼠禁按
+                  ? "text-stone-300 opacity-30 cursor-not-allowed bg-stone-50/50" 
                   : isSelected 
                     ? "bg-stone-800 text-white shadow-md scale-105 z-10" 
                     : "text-stone-700 hover:bg-stone-100 cursor-pointer"
@@ -128,7 +140,6 @@ const SmartCalendar = ({
               `}
             >
               {day}
-              {/* 如果被鎖定了，就不顯示紅綠點 */}
               {!isSelected && !isDisabled && status !== "none" && (
                 <span className={`absolute bottom-1 w-1.5 h-1.5 rounded-full ${status === "complete" ? "bg-emerald-400" : "bg-rose-500"}`} />
               )}
