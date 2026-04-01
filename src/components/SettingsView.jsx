@@ -18,6 +18,9 @@ import { DEFAULT_PERMISSIONS, ALL_MENU_ITEMS } from "../constants/index";
 import { generateUUID } from "../utils/helpers";
 import SystemMaintenance from "./SystemMaintenance";
 
+// ★ 引入自訂日曆元件
+import SmartDatePicker from "./SmartDatePicker";
+
 const getTodayStr = () => {
   const d = new Date();
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
@@ -194,7 +197,7 @@ const SettingsView = () => {
       await addDoc(getCollectionPath("therapists"), { 
         name: formName, store: formStore, manager: formManager, password: formPassword, 
         status: 'active', 
-        onboardDate: formOnboardDate, // 仍使用 onboardDate 欄位記錄，但 UI 顯示為上線日
+        onboardDate: formOnboardDate, 
         resignDate: formResignDate,   
         createdAt: serverTimestamp() 
       }); 
@@ -249,7 +252,7 @@ const SettingsView = () => {
     setFormPassword("0000"); 
     setFormStore(""); 
     setFormManager("");
-    setFormOnboardDate(getTodayStr()); // 預設上線日為今天
+    setFormOnboardDate(getTodayStr()); 
     setFormResignDate("");
   };
 
@@ -487,19 +490,37 @@ const SettingsView = () => {
                       <input type="text" value={formPassword} onChange={(e) => setFormPassword(e.target.value)} className="w-full px-4 py-3 border border-stone-200 rounded-xl font-mono bg-stone-50 outline-none focus:border-amber-400 focus:bg-white transition-colors" placeholder="預設 0000" />
                     </div>
                     
-                    {/* ★ 更新這裡：改為上線日 */}
+                    {/* ★ 更新這裡：全面改用自訂的 SmartDatePicker */}
                     <div className="grid grid-cols-2 gap-4 pt-1 border-t border-stone-100">
                       <div>
                         <label className="text-xs font-bold text-stone-400 block mb-1.5 uppercase tracking-wider flex items-center gap-1">
                           <Calendar size={12}/> 上線日 (生效日)
                         </label>
-                        <input type="date" value={formOnboardDate} onChange={(e) => setFormOnboardDate(e.target.value)} className="w-full px-4 py-3 border border-stone-200 rounded-xl font-mono font-bold text-sm bg-stone-50 outline-none focus:border-amber-400 focus:bg-white transition-colors" />
+                        <SmartDatePicker 
+                          selectedDate={formOnboardDate || getTodayStr()} 
+                          onDateSelect={setFormOnboardDate} 
+                        />
                       </div>
                       <div>
                         <label className="text-xs font-bold text-stone-400 block mb-1.5 uppercase tracking-wider flex items-center gap-1">
                           <Calendar size={12}/> 停權日 (選填)
                         </label>
-                        <input type="date" value={formResignDate} onChange={(e) => setFormResignDate(e.target.value)} className="w-full px-4 py-3 border border-stone-200 rounded-xl font-mono font-bold text-sm bg-stone-50 outline-none focus:border-amber-400 focus:bg-white transition-colors" />
+                        <div className="relative">
+                          <SmartDatePicker 
+                            selectedDate={formResignDate || "未設定"} 
+                            onDateSelect={setFormResignDate} 
+                          />
+                          {/* ★ 加入專屬清除按鈕，一鍵取消停權日 */}
+                          {formResignDate && (
+                            <button 
+                              onClick={(e) => { e.preventDefault(); e.stopPropagation(); setFormResignDate(""); }} 
+                              className="absolute right-[36px] top-1/2 -translate-y-1/2 p-1 text-stone-300 hover:text-rose-500 z-10 transition-colors bg-white rounded-full"
+                              title="清除日期"
+                            >
+                              <X size={14} />
+                            </button>
+                          )}
+                        </div>
                       </div>
                     </div>
 
@@ -548,7 +569,6 @@ const SettingsView = () => {
                             <h3 className={`text-xl font-bold tracking-tight flex items-center gap-2 ${isArchived ? 'text-stone-600' : 'text-stone-800'}`}>
                               {t.name}
                             </h3>
-                            {/* ★ 更新這裡：改為顯示上線日 */}
                             <div className="text-[10px] font-mono text-stone-400 mt-1 flex flex-col gap-0.5">
                               {t.onboardDate && <span>上線: {t.onboardDate}</span>}
                               {t.resignDate && <span className="text-rose-400/80">停權: {t.resignDate}</span>}

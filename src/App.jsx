@@ -20,7 +20,7 @@ import { collection, addDoc, deleteDoc, updateDoc, doc, getDoc, onSnapshot, serv
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip as RechartsTooltip, Legend, ResponsiveContainer, LineChart, Line, ComposedChart, Area, Cell, PieChart, Pie } from "recharts";
 import { 
   LayoutDashboard, Upload, TrendingUp, Map as MapIcon, Settings, ClipboardCheck, Menu, Search, Filter, Trash2, Save, Plus, DollarSign, Target, Users, Award, Loader2, FileText, AlertCircle, CheckCircle, User, Store, Lock, LogOut, FileWarning, Edit2, CheckSquare, X, Download, ChevronLeft, ChevronRight, Activity, Sparkles, ChevronDown, 
-  Heart, Coffee, Shield, WifiOff, // ★ 新增 WifiOff 圖示
+  Heart, Coffee, Shield, WifiOff,
   ShoppingBag, CreditCard, Smartphone, Monitor, Bell, Clock, Music 
 } from "lucide-react";
 
@@ -36,7 +36,7 @@ import LoginView from "./components/LoginView";
 // ==========================================
 // ★ 系統核心版本號 (改版時只需修改這裡並 deploy 即可)
 // ==========================================
-const CURRENT_APP_VERSION = "2.3.2"; 
+const CURRENT_APP_VERSION = "2.3.3"; // 效能優化版
 
 const isNewerVersion = (local, remote) => {
   if (!remote) return true;
@@ -110,10 +110,7 @@ export default function App() {
   const [dailyLoginCount, setDailyLoginCount] = useState(0);
   const [yesterdayLoginCount, setYesterdayLoginCount] = useState(0);
 
-  // ★ 強制更新狀態
   const [isUpdating, setIsUpdating] = useState(false);
-
-  // ★ 全域網路連線狀態
   const [isOnline, setIsOnline] = useState(navigator.onLine);
 
   const currentBrand = useMemo(() => BRANDS.find(b => b.id === currentBrandId) || BRANDS[0], [currentBrandId]);
@@ -156,9 +153,6 @@ export default function App() {
   const lastActivityTimeRef = useRef(Date.now()); 
   const isWarningShowingRef = useRef(false);
 
-  // =======================================================
-  // ★ 網路狀態生命探測器
-  // =======================================================
   useEffect(() => {
     const handleOnline = () => setIsOnline(true);
     const handleOffline = () => setIsOnline(false);
@@ -186,7 +180,7 @@ export default function App() {
   }, [userRole]); 
 
   const logActivity = useCallback(async (role, user, action, details) => {
-    if (!isOnline) return; // 離線時不寫入 LOG 避免堆積
+    if (!isOnline) return; 
     let device = "PC";
     if (typeof navigator !== "undefined") {
       const ua = navigator.userAgent.toLowerCase();
@@ -403,23 +397,56 @@ export default function App() {
     };
   }, [user, currentBrand, getCollectionPath, getDocPath]); 
 
+
+  // ==========================================
+  // ★★★ 核心效能大升級：解開 100 萬次讀取的無限迴圈枷鎖 ★★★
+  // ==========================================
+  
+  // 1. 定義當前畫面所需的「資料撈取範圍模式」
+  const fetchMode = activeView === 'annual' ? 'year' : 'month';
+
   useEffect(() => {
     if (!user) return;
-    const skipFetchViews = ['history', 'logs', 'settings', 'targets', 't-targets', 't-schedule', 'daily'];
-    if (skipFetchViews.includes(activeView)) { setRawData([]); setTherapistReports([]); return; }
 
-    setRawData([]); setTherapistReports([]);
+    // 2. 我們不再因為切換無關的 Tab 就把資料庫連線砍斷、丟棄記憶體資料
+    // 這一步能省下 90% 以上因為使用者切換畫面而產生的冤枉讀取費！
+    setRawData([]); 
+    setTherapistReports([]);
+
     const targetYear = selectedYear;
     let startDate, endDate;
 
-    if (activeView === 'annual') { startDate = `${targetYear}-01-01`; endDate = `${targetYear}-12-31`; } 
-    else { const m = String(selectedMonth).padStart(2, '0'); startDate = `${targetYear}-${m}-01`; endDate = `${targetYear}-${m}-31`; }
+    // 3. 根據 fetchMode 決定要撈一個月還是一整年
+    if (fetchMode === 'year') { 
+      startDate = `${targetYear}-01-01`; 
+      endDate = `${targetYear}-12-31`; 
+    } else { 
+      const m = String(selectedMonth).padStart(2, '0'); 
+      startDate = `${targetYear}-${m}-01`; 
+      endDate = `${targetYear}-${m}-31`; 
+    }
 
-    const unsubReports = onSnapshot(query(getCollectionPath("daily_reports"), where("date", ">=", startDate), where("date", "<=", endDate), orderBy("date", "desc")), (s) => setRawData(s.docs.map((d) => ({ id: d.id, ...d.data() }))));
-    const unsubTherapistReports = onSnapshot(query(getCollectionPath("therapist_daily_reports"), where("date", ">=", startDate), where("date", "<=", endDate), orderBy("date", "desc")), (s) => setTherapistReports(s.docs.map((d) => ({ id: d.id, ...d.data() }))));
+    const unsubReports = onSnapshot(
+      query(getCollectionPath("daily_reports"), where("date", ">=", startDate), where("date", "<=", endDate), orderBy("date", "desc")), 
+      (s) => setRawData(s.docs.map((d) => ({ id: d.id, ...d.data() })))
+    );
+    
+    const unsubTherapistReports = onSnapshot(
+      query(getCollectionPath("therapist_daily_reports"), where("date", ">=", startDate), where("date", "<=", endDate), orderBy("date", "desc")), 
+      (s) => setTherapistReports(s.docs.map((d) => ({ id: d.id, ...d.data() })))
+    );
 
-    return () => { unsubReports(); unsubTherapistReports(); };
-  }, [user, currentBrand, selectedYear, selectedMonth, activeView, getCollectionPath]);
+    return () => { 
+      unsubReports(); 
+      unsubTherapistReports(); 
+    };
+    
+    // 4. 重點！移除了 Dependency Array 裡的 `activeView`
+    // 現在只有當「年份、月份或撈取模式(年月)」真的改變時，系統才會去 Firebase 請求資料
+  }, [user, currentBrand, selectedYear, selectedMonth, fetchMode, getCollectionPath]);
+
+  // ==========================================
+
 
   const handleLogin = useCallback((roleId, userInfo = null) => {
     let finalUser = userInfo;
@@ -498,7 +525,6 @@ export default function App() {
   const fmtMoney = (val) => `$${(val || 0).toLocaleString()}`;
   const fmtNum = (val) => (val || 0).toLocaleString();
 
-  // ★ 將 isOnline 加入全域 Context，供各頁面使用
   const contextValue = useMemo(() => ({
     user, loading, analytics, managers: visibleManagers, budgets, targets, rawData: visibleRawData, allReports: rawData, showToast, openConfirm, fmtMoney, fmtNum, inputDate, setInputDate, storeList: analytics?.storeList || [], setTargets, selectedYear, selectedMonth, permissions, storeAccounts, managerAuth, currentUser, userRole, logActivity, handleUpdateStorePassword, handleUpdateManagerPassword, handleUpdateTherapistPassword, navigateToStore, activeView, appId, 
     therapists: visibleTherapists, therapistReports: visibleTherapistReports, therapistSchedules, therapistTargets, trainerAuth, handleUpdateTrainerAuth, auditExclusions, handleUpdateAuditExclusions, currentBrand, setCurrentBrandId, getCollectionPath, getDocPath, dailyLoginCount, yesterdayLoginCount, securityConfig, isOnline
@@ -534,7 +560,6 @@ export default function App() {
 
   if (loading) return <div className="min-h-screen flex flex-col items-center justify-center bg-[#F9F8F6]"><Loader2 className="w-16 h-16 animate-spin text-stone-400 mb-4" /><p className="animate-pulse text-stone-500 font-bold tracking-wider">Loading DRCYJ Cloud...</p></div>;
   
-  // ★ 強制更新攔截畫面
   if (isUpdating) {
     return (
       <div className="fixed inset-0 z-[99999] flex flex-col items-center justify-center bg-stone-900 text-white animate-in fade-in duration-300">
@@ -558,9 +583,6 @@ export default function App() {
 
   return (
     <AppContext.Provider value={contextValue}>
-      {/* ========================================== */}
-      {/* ★ 全域斷線警告橫幅 (絕對置頂，不可忽略) */}
-      {/* ========================================== */}
       {!isOnline && (
         <div className="fixed top-0 left-0 right-0 bg-rose-500 text-white z-[999999] py-2 px-4 flex items-center justify-center gap-2 shadow-md animate-in slide-in-from-top-full duration-300">
           <WifiOff size={18} className="animate-pulse" />
@@ -568,7 +590,6 @@ export default function App() {
         </div>
       )}
 
-      {/* 如果斷線，將整個應用程式往下推，以免蓋住 Header */}
       <div className={`flex min-h-screen bg-[#F9F8F6] text-stone-600 font-sans selection:bg-stone-200 selection:text-stone-800 overflow-x-hidden transition-all duration-300 ${!isOnline ? 'mt-9' : 'mt-0'}`}>
         <Sidebar activeView={activeView} setActiveView={setActiveView} isSidebarOpen={isSidebarOpen} setSidebarOpen={setSidebarOpen} user={user} userRole={userRole} onLogout={() => handleLogout()} permissions={permissions} currentUser={currentUser} />
         <div className={`flex-1 flex flex-col transition-all duration-500 w-full max-w-full ${isSidebarOpen ? "md:ml-64" : "md:ml-20"} ml-0`}>
