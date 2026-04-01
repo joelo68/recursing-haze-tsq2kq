@@ -31,26 +31,22 @@ const AuditView = () => {
   const [isConfigModalOpen, setIsConfigModalOpen] = useState(false);
   const [localExclusions, setLocalExclusions] = useState([]);
 
-  // ★★★ 邊界防呆 1：當右上角全局月份改變時，將日曆重置到該月 1 號 ★★★
   useEffect(() => {
     if (!checkDate || !selectedYear || !selectedMonth) return;
-    
     const currentObj = new Date(checkDate);
     const currentYearStr = currentObj.getFullYear().toString();
     const currentMonthStr = (currentObj.getMonth() + 1).toString();
     
-    // 只要全局月份變了，就強制把下方的日曆切到該月的 1 號
     if (currentYearStr !== selectedYear || currentMonthStr !== selectedMonth) {
       const newMonth = selectedMonth.padStart(2, '0');
       setCheckDate(`${selectedYear}-${newMonth}-01`);
     }
   }, [selectedYear, selectedMonth]);
 
-  // ★★★ 邊界防呆 2：計算當月的極限範圍 (供日曆元件鎖定使用) ★★★
   const { minBoundary, maxBoundary } = useMemo(() => {
     const y = parseInt(selectedYear);
     const m = parseInt(selectedMonth);
-    const maxDays = new Date(y, m, 0).getDate(); // 取得該月最後一天
+    const maxDays = new Date(y, m, 0).getDate(); 
     
     return {
       minBoundary: `${y}-${String(m).padStart(2, '0')}-01`,
@@ -63,14 +59,8 @@ const AuditView = () => {
     if (currentBrand) {
       const id = typeof currentBrand === 'string' ? currentBrand : (currentBrand.id || "CYJ");
       const normalizedId = id.toLowerCase();
-      
-      if (normalizedId.includes("anniu") || normalizedId.includes("anew")) {
-        name = "安妞";
-      } else if (normalizedId.includes("yibo")) {
-        name = "伊啵";
-      } else {
-        name = "CYJ";
-      }
+      if (normalizedId.includes("anniu") || normalizedId.includes("anew")) { name = "安妞"; } 
+      else if (normalizedId.includes("yibo")) { name = "伊啵"; } 
     }
     return name;
   }, [currentBrand]);
@@ -102,52 +92,50 @@ const AuditView = () => {
 
   const activeStoresForCalendar = useMemo(() => {
     const allMyStores = Object.values(managers).flat();
-    
     return allMyStores
       .filter(storeName => !auditExclusions.includes(storeName)) 
       .map(storeName => {
         const aliases = [
-          storeName,                          
-          `${storeName}店`,                   
-          `${brandPrefix}${storeName}`,       
-          `${brandPrefix}${storeName}店`,     
-          `CYJ${storeName}店`                 
+          storeName, `${storeName}店`, `${brandPrefix}${storeName}`,       
+          `${brandPrefix}${storeName}店`, `CYJ${storeName}店`                 
         ];
-
-        return {
-          id: storeName,          
-          name: `${storeName}店`, 
-          stores: aliases         
-        };
+        return { id: storeName, name: `${storeName}店`, stores: aliases };
       });
   }, [managers, auditExclusions, brandPrefix]);
 
   const activeTherapistsForCalendar = useMemo(() => {
-    return therapists
-      .filter(t => t.status === 'active')
-      .map(t => ({
-        id: t.id,
-        name: t.name,     
-        stores: [t.id] 
-      }));
-  }, [therapists]);
+    const y = parseInt(selectedYear);
+    const m = parseInt(selectedMonth);
+    const monthStart = new Date(y, m - 1, 1);
+    const monthEnd = new Date(y, m, 0);
+
+    return therapists.filter(t => {
+      const obDate = t.onboardDate ? new Date(t.onboardDate) : new Date("2000-01-01");
+      if (obDate > monthEnd) return false; 
+      
+      const isResignedStatus = t.status === 'resigned' || t.isActive === false || t.isResigned === true;
+      if (t.resignDate) {
+          const rDate = new Date(t.resignDate);
+          if (rDate < monthStart) return false; 
+      } else if (isResignedStatus) {
+          return false; 
+      }
+      return true;
+    }).map(t => ({
+      id: t.id, name: t.name, stores: [t.id] 
+    }));
+  }, [therapists, selectedYear, selectedMonth]);
 
   const normalizedRawData = useMemo(() => {
     return rawData.map(report => {
       const safeDate = report.date ? toStandardDateFormat(report.date) : "";
-      return {
-        ...report,
-        storeName: report.storeName, 
-        date: safeDate 
-      };
+      return { ...report, storeName: report.storeName, date: safeDate };
     });
   }, [rawData]);
 
   const normalizedTherapistReports = useMemo(() => {
     const realReports = therapistReports.map(report => ({
-      ...report,
-      storeName: report.therapistId, 
-      date: report.date ? toStandardDateFormat(report.date) : ""
+      ...report, storeName: report.therapistId, date: report.date ? toStandardDateFormat(report.date) : ""
     }));
 
     if (auditType !== 'therapist-daily') return realReports;
@@ -156,26 +144,25 @@ const AuditView = () => {
     const y = parseInt(selectedYear);
     const m = parseInt(selectedMonth);
 
-    therapists.filter(t => t.status === 'active').forEach(t => {
+    therapists.forEach(t => {
+      const obDate = t.onboardDate ? new Date(t.onboardDate) : new Date("2000-01-01");
+      if (obDate > new Date(y, m, 0)) return; 
+      
+      const isResignedStatus = t.status === 'resigned' || t.isActive === false || t.isResigned === true;
+      if (t.resignDate && new Date(t.resignDate) < new Date(y, m - 1, 1)) return;
+      if (!t.resignDate && isResignedStatus) return;
+
       const scheduleKey = `${t.id}_${y}_${m}`;
       const schedule = therapistSchedules[scheduleKey];
       const daysOff = schedule?.daysOff || []; 
 
       daysOff.forEach(day => {
         const dateStr = `${y}-${m.toString().padStart(2, '0')}-${day.toString().padStart(2, '0')}`;
-        
-        ghostReports.push({
-          id: `ghost_${t.id}_${dateStr}`, 
-          storeName: t.id,                
-          date: dateStr,
-          isGhost: true,                  
-          revenue: 0                      
-        });
+        ghostReports.push({ id: `ghost_${t.id}_${dateStr}`, storeName: t.id, date: dateStr, isGhost: true, revenue: 0 });
       });
     });
 
     return [...realReports, ...ghostReports];
-
   }, [therapistReports, auditType, selectedYear, selectedMonth, therapists, therapistSchedules]);
 
   const isTherapistMode = auditType === 'therapist-daily';
@@ -185,55 +172,36 @@ const AuditView = () => {
   const auditData = useMemo(() => {
     if (!checkDate) return { submitted: [], missing: [], missingByManager: {} };
     const targetDate = toStandardDateFormat(checkDate);
-    
-    const submittedRaw = rawData
-        .filter((d) => toStandardDateFormat(d.date) === targetDate)
-        .map((d) => d.storeName);
-
+    const submittedRaw = rawData.filter((d) => toStandardDateFormat(d.date) === targetDate).map((d) => d.storeName);
     const missingByManager = {};
-    
     Object.entries(managers).forEach(([manager, stores]) => {
       const missing = [];
       stores.forEach((s) => {
         if (auditExclusions.includes(s)) return; 
-
         const isSubmitted = submittedRaw.some(rawName => rawName && rawName.includes(s));
-
-        if (!isSubmitted) {
-             missing.push(`${brandPrefix}${s}店`);
-        }
+        if (!isSubmitted) missing.push(`${brandPrefix}${s}店`);
       });
       if (missing.length) missingByManager[manager] = missing;
     });
-    return {
-      submitted: submittedRaw,
-      missing: Object.values(missingByManager).flat(),
-      missingByManager,
-    };
+    return { submitted: submittedRaw, missing: Object.values(missingByManager).flat(), missingByManager };
   }, [checkDate, rawData, managers, auditExclusions, brandPrefix]);
 
   const targetAuditData = useMemo(() => {
     const missingByManager = {};
     const y = parseInt(selectedYear);
     const m = parseInt(selectedMonth);
-    
     Object.entries(managers).forEach(([manager, stores]) => {
       const missing = [];
       stores.forEach((s) => {
         if (auditExclusions.includes(s)) return;
-
         const name = `${brandPrefix}${s}店`;
         const key = `${name}_${y}_${m}`;
         const b = budgets[key];
-        
         if (!b || (!b.cashTarget && !b.accrualTarget)) missing.push(name);
       });
       if (missing.length) missingByManager[manager] = missing;
     });
-    return {
-      missing: Object.values(missingByManager).flat(),
-      missingByManager,
-    };
+    return { missing: Object.values(missingByManager).flat(), missingByManager };
   }, [budgets, managers, selectedYear, selectedMonth, auditExclusions, brandPrefix]);
 
   const therapistAuditData = useMemo(() => {
@@ -241,6 +209,8 @@ const AuditView = () => {
     
     const targetDateStr = toStandardDateFormat(checkDate);
     const targetDateObj = new Date(targetDateStr);
+    targetDateObj.setHours(0,0,0,0); 
+    
     const year = targetDateObj.getFullYear().toString();
     const month = targetDateObj.getMonth() + 1;
     const day = targetDateObj.getDate();
@@ -253,11 +223,23 @@ const AuditView = () => {
 
     const missingByManager = {};
     
-    (therapists || []).filter(t => t.status === 'active').forEach(t => {
+    (therapists || []).forEach(t => {
+      const obDate = t.onboardDate ? new Date(t.onboardDate) : new Date("2000-01-01");
+      obDate.setHours(0,0,0,0);
+      if (targetDateObj < obDate) return; 
+
+      const isResignedStatus = t.status === 'resigned' || t.isActive === false || t.isResigned === true;
+      if (t.resignDate) {
+        const rDate = new Date(t.resignDate);
+        rDate.setHours(0,0,0,0);
+        if (targetDateObj > rDate) return; 
+      } else if (isResignedStatus) {
+        return; 
+      }
+
       const scheduleKey = `${t.id}_${year}_${month}`;
       const schedule = therapistSchedules[scheduleKey];
       const isOff = schedule?.daysOff?.includes(day);
-
       if (isOff) return; 
 
       if (!submittedIds.has(t.id)) {
@@ -267,19 +249,31 @@ const AuditView = () => {
       }
     });
 
-    return { 
-        missing: Object.values(missingByManager).flat(), 
-        missingByManager 
-    };
+    return { missing: Object.values(missingByManager).flat(), missingByManager };
   }, [checkDate, therapists, therapistReports, therapistSchedules]);
 
   const therapistTargetAuditData = useMemo(() => {
     const missingByManager = {};
-    const year = selectedYear;
-    const monthKey = parseInt(selectedMonth).toString(); 
+    const y = parseInt(selectedYear);
+    const m = parseInt(selectedMonth);
+    const monthKey = m.toString(); 
+    
+    const monthStart = new Date(y, m - 1, 1);
+    const monthEnd = new Date(y, m, 0);
 
-    (therapists || []).filter(t => t.status === 'active').forEach(t => {
-       const docId = `${t.id}_${year}`;
+    (therapists || []).forEach(t => {
+       const obDate = t.onboardDate ? new Date(t.onboardDate) : new Date("2000-01-01");
+       if (obDate > monthEnd) return; 
+
+       const isResignedStatus = t.status === 'resigned' || t.isActive === false || t.isResigned === true;
+       if (t.resignDate) {
+           const rDate = new Date(t.resignDate);
+           if (rDate < monthStart) return; 
+       } else if (isResignedStatus) {
+           return;
+       }
+
+       const docId = `${t.id}_${selectedYear}`;
        const data = therapistTargets[docId];
        const targetVal = data?.monthlyTargets?.[monthKey];
        const hasTarget = targetVal && parseInt(targetVal) > 0;
@@ -291,12 +285,8 @@ const AuditView = () => {
        }
     });
 
-    return { 
-        missing: Object.values(missingByManager).flat(), 
-        missingByManager 
-    };
+    return { missing: Object.values(missingByManager).flat(), missingByManager };
   }, [therapists, therapistTargets, selectedYear, selectedMonth]);
-
 
   const activeData = 
     auditType === "daily" ? auditData : 
@@ -330,44 +320,14 @@ const AuditView = () => {
           
           <div className="flex flex-col sm:flex-row gap-3 w-full md:w-auto">
             <div className="bg-stone-100 p-1 rounded-xl flex shrink-0 self-start overflow-x-auto max-w-full">
-              
               {userRole !== 'trainer' && (
                 <>
-                  <button
-                    onClick={() => setAuditType("daily")}
-                    className={`px-4 py-2 rounded-lg text-sm font-bold transition-all whitespace-nowrap ${
-                      auditType === "daily" ? "bg-white text-stone-800 shadow-sm" : "text-stone-400 hover:text-stone-600"
-                    }`}
-                  >
-                    店家日報
-                  </button>
-                  <button
-                    onClick={() => setAuditType("target")}
-                    className={`px-4 py-2 rounded-lg text-sm font-bold transition-all whitespace-nowrap ${
-                      auditType === "target" ? "bg-white text-stone-800 shadow-sm" : "text-stone-400 hover:text-stone-600"
-                    }`}
-                  >
-                    店家目標
-                  </button>
+                  <button onClick={() => setAuditType("daily")} className={`px-4 py-2 rounded-lg text-sm font-bold transition-all whitespace-nowrap ${auditType === "daily" ? "bg-white text-stone-800 shadow-sm" : "text-stone-400 hover:text-stone-600"}`}>店家日報</button>
+                  <button onClick={() => setAuditType("target")} className={`px-4 py-2 rounded-lg text-sm font-bold transition-all whitespace-nowrap ${auditType === "target" ? "bg-white text-stone-800 shadow-sm" : "text-stone-400 hover:text-stone-600"}`}>店家目標</button>
                 </>
               )}
-
-              <button
-                onClick={() => setAuditType("therapist-daily")}
-                className={`px-4 py-2 rounded-lg text-sm font-bold transition-all whitespace-nowrap ${
-                  auditType === "therapist-daily" ? "bg-white text-stone-800 shadow-sm" : "text-stone-400 hover:text-stone-600"
-                }`}
-              >
-                管理師日報
-              </button>
-              <button
-                onClick={() => setAuditType("therapist-target")}
-                className={`px-4 py-2 rounded-lg text-sm font-bold transition-all whitespace-nowrap ${
-                  auditType === "therapist-target" ? "bg-white text-stone-800 shadow-sm" : "text-stone-400 hover:text-stone-600"
-                }`}
-              >
-                管理師目標
-              </button>
+              <button onClick={() => setAuditType("therapist-daily")} className={`px-4 py-2 rounded-lg text-sm font-bold transition-all whitespace-nowrap ${auditType === "therapist-daily" ? "bg-white text-stone-800 shadow-sm" : "text-stone-400 hover:text-stone-600"}`}>管理師日報</button>
+              <button onClick={() => setAuditType("therapist-target")} className={`px-4 py-2 rounded-lg text-sm font-bold transition-all whitespace-nowrap ${auditType === "therapist-target" ? "bg-white text-stone-800 shadow-sm" : "text-stone-400 hover:text-stone-600"}`}>管理師目標</button>
             </div>
 
             <div className="flex gap-2 items-center w-full sm:w-auto">
@@ -375,7 +335,7 @@ const AuditView = () => {
                    <div className="w-full sm:w-auto relative z-10">
                       {activeStoresForCalendar.length === 0 ? (
                         <div className="px-4 py-3 bg-rose-50 text-rose-600 text-sm font-bold rounded-xl border border-rose-100 flex items-center gap-2 whitespace-nowrap animate-pulse">
-                          <HelpCircle size={18} /> 尚未設定檢核店家 (請至參數設定)
+                          <HelpCircle size={18} /> 尚未設定檢核店家
                         </div>
                       ) : (
                         <SmartDatePicker 
@@ -383,7 +343,6 @@ const AuditView = () => {
                           onDateSelect={setCheckDate}
                           stores={calendarStores}       
                           salesData={calendarSalesData} 
-                          // ★★★ 傳入邊界鎖定參數，支援原生與自訂屬性 ★★★
                           min={minBoundary}
                           max={maxBoundary}
                           minDate={new Date(parseInt(selectedYear), parseInt(selectedMonth) - 1, 1)}
@@ -407,35 +366,24 @@ const AuditView = () => {
 
           {(auditType === "daily" || auditType === "therapist-daily") && (
             <div className="flex items-center gap-4 text-sm font-medium text-stone-600 self-start md:self-center pl-1 hidden md:flex">
-              <div className="flex items-center gap-1.5">
-                <span className="w-2.5 h-2.5 rounded-full bg-emerald-400 shadow-sm"></span>
-                <span className="whitespace-nowrap">全數回報</span>
-              </div>
-              <div className="flex items-center gap-1.5">
-                <span className="w-2.5 h-2.5 rounded-full bg-rose-500 shadow-sm"></span>
-                <span className="whitespace-nowrap">回報不完全</span>
-              </div>
+              <div className="flex items-center gap-1.5"><span className="w-2.5 h-2.5 rounded-full bg-emerald-400 shadow-sm"></span><span className="whitespace-nowrap">全數回報</span></div>
+              <div className="flex items-center gap-1.5"><span className="w-2.5 h-2.5 rounded-full bg-rose-500 shadow-sm"></span><span className="whitespace-nowrap">回報不完全</span></div>
             </div>
           )}
 
         </div>
         
-        {/* 未完成名單列表 */}
         <div className="border border-rose-100 rounded-3xl overflow-hidden shadow-sm mb-8">
           <div className="bg-rose-50 px-6 py-4 flex justify-between items-center flex-wrap gap-2">
             <h4 className="font-bold text-rose-600 flex items-center gap-2">
               <AlertCircle size={20} /> 
-              {auditType === 'therapist-daily' ? "未回報人員 (已排除休假)" : 
-               auditType === 'therapist-target' ? "未設定目標人員" :
+              {/* ★ 修改文字為未上線 */}
+              {auditType === 'therapist-daily' ? "未回報人員 (已排除休假/未上線)" : 
+               auditType === 'therapist-target' ? "未設定目標人員 (已排除未上線)" :
                "未完成名單"} 
               <span className="bg-white px-2 py-0.5 rounded-full text-xs border border-rose-200 shadow-sm">{activeData.missing.length}</span>
             </h4>
-            <button
-              onClick={handleCopy}
-              className="text-xs bg-white text-rose-500 px-4 py-2 rounded-xl border border-rose-200 font-bold hover:bg-rose-50 transition-colors"
-            >
-              複製名單
-            </button>
+            <button onClick={handleCopy} className="text-xs bg-white text-rose-500 px-4 py-2 rounded-xl border border-rose-200 font-bold hover:bg-rose-50 transition-colors">複製名單</button>
           </div>
           <div className="p-6 bg-white grid grid-cols-1 md:grid-cols-3 gap-4">
             {Object.entries(activeData.missingByManager).map(
@@ -444,10 +392,7 @@ const AuditView = () => {
                   <div className="font-bold text-stone-600 mb-2">{mgr} 區</div>
                   <div className="flex flex-wrap gap-2">
                     {list.map((s, idx) => (
-                      <span
-                        key={idx}
-                        className="bg-white px-2 py-1 rounded-lg text-xs border border-stone-200 text-stone-600 font-medium flex items-center gap-1"
-                      >
+                      <span key={idx} className="bg-white px-2 py-1 rounded-lg text-xs border border-stone-200 text-stone-600 font-medium flex items-center gap-1">
                         {auditType.includes('therapist') && <UserX size={10} className="text-rose-400"/>}
                         {auditType.includes('therapist') ? s : cleanStoreName(s)}
                       </span>
@@ -459,11 +404,10 @@ const AuditView = () => {
             {activeData.missing.length === 0 && (
               <div className="col-span-3 text-center py-10">
                 <div className="inline-flex flex-col items-center gap-2 text-emerald-500 font-bold text-lg">
-                   <div className="w-12 h-12 rounded-full bg-emerald-100 flex items-center justify-center mb-2">
-                     <CheckCircle size={24}/>
-                   </div>
+                   <div className="w-12 h-12 rounded-full bg-emerald-100 flex items-center justify-center mb-2"><CheckCircle size={24}/></div>
                    全數完成！
-                   {auditType === 'therapist-daily' && <span className="text-xs text-stone-400 font-normal">休假人員已自動排除</span>}
+                   {/* ★ 修改文字為未上線 */}
+                   {auditType === 'therapist-daily' && <span className="text-xs text-stone-400 font-normal">未上線、停權、休假人員已自動排除</span>}
                 </div>
               </div>
             )}
@@ -489,15 +433,7 @@ const AuditView = () => {
                     {stores.map(store => {
                       const isExcluded = localExclusions.includes(store);
                       return (
-                        <button
-                          key={store}
-                          onClick={() => toggleExclusion(store)}
-                          className={`px-3 py-2 rounded-xl text-sm font-bold border-2 transition-all flex items-center justify-center gap-2 ${
-                            isExcluded 
-                              ? "bg-rose-50 border-rose-500 text-rose-600 shadow-sm" 
-                              : "bg-white border-stone-200 text-stone-500 hover:border-stone-400"
-                          }`}
-                        >
+                        <button key={store} onClick={() => toggleExclusion(store)} className={`px-3 py-2 rounded-xl text-sm font-bold border-2 transition-all flex items-center justify-center gap-2 ${isExcluded ? "bg-rose-50 border-rose-500 text-rose-600 shadow-sm" : "bg-white border-stone-200 text-stone-500 hover:border-stone-400"}`}>
                           {isExcluded && <CheckCircle size={14}/>}
                           {store}
                         </button>
@@ -509,9 +445,7 @@ const AuditView = () => {
             </div>
             <div className="p-4 border-t border-stone-100 bg-white shrink-0 flex justify-end gap-3">
               <button onClick={() => setIsConfigModalOpen(false)} className="px-6 py-2.5 rounded-xl font-bold text-stone-500 hover:bg-stone-50">取消</button>
-              <button onClick={saveConfig} className="px-6 py-2.5 rounded-xl font-bold bg-stone-800 text-white hover:bg-stone-700 shadow-lg flex items-center gap-2">
-                <Save size={18}/> 儲存設定
-              </button>
+              <button onClick={saveConfig} className="px-6 py-2.5 rounded-xl font-bold bg-stone-800 text-white hover:bg-stone-700 shadow-lg flex items-center gap-2"><Save size={18}/> 儲存設定</button>
             </div>
           </div>
         </div>
