@@ -36,7 +36,7 @@ import LoginView from "./components/LoginView";
 // ==========================================
 // ★ 系統核心版本號 (改版時只需修改這裡並 deploy 即可)
 // ==========================================
-const CURRENT_APP_VERSION = "2.3.3"; // 效能優化版
+const CURRENT_APP_VERSION = "2.4.0"; // 年度報表秒開效能版
 
 const isNewerVersion = (local, remote) => {
   if (!remote) return true;
@@ -125,6 +125,7 @@ export default function App() {
   }, [currentBrand]);
 
   const [rawData, setRawData] = useState([]); 
+  const [annualAggregatedData, setAnnualAggregatedData] = useState([]); // ★ 新增：專放年度總帳卡
   const [budgets, setBudgets] = useState({});
   const [targets, setTargets] = useState({ newASP: 3500, trafficASP: 1200 });
   const [managers, setManagers] = useState({});
@@ -402,47 +403,46 @@ export default function App() {
   // ★★★ 核心效能大升級：解開 100 萬次讀取的無限迴圈枷鎖 ★★★
   // ==========================================
   
-  // 1. 定義當前畫面所需的「資料撈取範圍模式」
   const fetchMode = activeView === 'annual' ? 'year' : 'month';
 
   useEffect(() => {
     if (!user) return;
 
-    // 2. 我們不再因為切換無關的 Tab 就把資料庫連線砍斷、丟棄記憶體資料
-    // 這一步能省下 90% 以上因為使用者切換畫面而產生的冤枉讀取費！
     setRawData([]); 
     setTherapistReports([]);
+    setAnnualAggregatedData([]); // 切換時清空舊總計
 
     const targetYear = selectedYear;
-    let startDate, endDate;
 
-    // 3. 根據 fetchMode 決定要撈一個月還是一整年
     if (fetchMode === 'year') { 
-      startDate = `${targetYear}-01-01`; 
-      endDate = `${targetYear}-12-31`; 
+      // 🚀 黑洞二號修復：年度報表只撈取輕量級的 monthly_aggregated (僅幾十筆)
+      const unsubAgg = onSnapshot(
+        query(getCollectionPath("monthly_aggregated"), where("year", "in", [targetYear, String(targetYear)])),
+        (s) => setAnnualAggregatedData(s.docs.map((d) => ({ id: d.id, ...d.data() })))
+      );
+      return () => unsubAgg();
+      
     } else { 
+      // 正常月份模式：只撈取「當月」的日報
       const m = String(selectedMonth).padStart(2, '0'); 
-      startDate = `${targetYear}-${m}-01`; 
-      endDate = `${targetYear}-${m}-31`; 
+      const startDate = `${targetYear}-${m}-01`; 
+      const endDate = `${targetYear}-${m}-31`; 
+
+      const unsubReports = onSnapshot(
+        query(getCollectionPath("daily_reports"), where("date", ">=", startDate), where("date", "<=", endDate), orderBy("date", "desc")), 
+        (s) => setRawData(s.docs.map((d) => ({ id: d.id, ...d.data() })))
+      );
+      
+      const unsubTherapistReports = onSnapshot(
+        query(getCollectionPath("therapist_daily_reports"), where("date", ">=", startDate), where("date", "<=", endDate), orderBy("date", "desc")), 
+        (s) => setTherapistReports(s.docs.map((d) => ({ id: d.id, ...d.data() })))
+      );
+
+      return () => { 
+        unsubReports(); 
+        unsubTherapistReports(); 
+      };
     }
-
-    const unsubReports = onSnapshot(
-      query(getCollectionPath("daily_reports"), where("date", ">=", startDate), where("date", "<=", endDate), orderBy("date", "desc")), 
-      (s) => setRawData(s.docs.map((d) => ({ id: d.id, ...d.data() })))
-    );
-    
-    const unsubTherapistReports = onSnapshot(
-      query(getCollectionPath("therapist_daily_reports"), where("date", ">=", startDate), where("date", "<=", endDate), orderBy("date", "desc")), 
-      (s) => setTherapistReports(s.docs.map((d) => ({ id: d.id, ...d.data() })))
-    );
-
-    return () => { 
-      unsubReports(); 
-      unsubTherapistReports(); 
-    };
-    
-    // 4. 重點！移除了 Dependency Array 裡的 `activeView`
-    // 現在只有當「年份、月份或撈取模式(年月)」真的改變時，系統才會去 Firebase 請求資料
   }, [user, currentBrand, selectedYear, selectedMonth, fetchMode, getCollectionPath]);
 
   // ==========================================
@@ -526,9 +526,11 @@ export default function App() {
   const fmtNum = (val) => (val || 0).toLocaleString();
 
   const contextValue = useMemo(() => ({
-    user, loading, analytics, managers: visibleManagers, budgets, targets, rawData: visibleRawData, allReports: rawData, showToast, openConfirm, fmtMoney, fmtNum, inputDate, setInputDate, storeList: analytics?.storeList || [], setTargets, selectedYear, selectedMonth, permissions, storeAccounts, managerAuth, currentUser, userRole, logActivity, handleUpdateStorePassword, handleUpdateManagerPassword, handleUpdateTherapistPassword, navigateToStore, activeView, appId, 
+    user, loading, analytics, managers: visibleManagers, budgets, targets, rawData: visibleRawData, allReports: rawData, 
+    annualAggregatedData, // ★ 把總帳卡傳遞給下層元件
+    showToast, openConfirm, fmtMoney, fmtNum, inputDate, setInputDate, storeList: analytics?.storeList || [], setTargets, selectedYear, selectedMonth, permissions, storeAccounts, managerAuth, currentUser, userRole, logActivity, handleUpdateStorePassword, handleUpdateManagerPassword, handleUpdateTherapistPassword, navigateToStore, activeView, appId, 
     therapists: visibleTherapists, therapistReports: visibleTherapistReports, therapistSchedules, therapistTargets, trainerAuth, handleUpdateTrainerAuth, auditExclusions, handleUpdateAuditExclusions, currentBrand, setCurrentBrandId, getCollectionPath, getDocPath, dailyLoginCount, yesterdayLoginCount, securityConfig, isOnline
-  }), [user, loading, analytics, visibleManagers, budgets, targets, visibleRawData, rawData, inputDate, selectedYear, selectedMonth, permissions, storeAccounts, managerAuth, currentUser, userRole, logActivity, handleUpdateStorePassword, handleUpdateManagerPassword, handleUpdateTherapistPassword, navigateToStore, activeView, appId, visibleTherapists, visibleTherapistReports, therapistSchedules, therapistTargets, trainerAuth, handleUpdateTrainerAuth, auditExclusions, handleUpdateAuditExclusions, currentBrand, setCurrentBrandId, getCollectionPath, getDocPath, dailyLoginCount, yesterdayLoginCount, securityConfig, isOnline]);
+  }), [user, loading, analytics, visibleManagers, budgets, targets, visibleRawData, rawData, annualAggregatedData, inputDate, selectedYear, selectedMonth, permissions, storeAccounts, managerAuth, currentUser, userRole, logActivity, handleUpdateStorePassword, handleUpdateManagerPassword, handleUpdateTherapistPassword, navigateToStore, activeView, appId, visibleTherapists, visibleTherapistReports, therapistSchedules, therapistTargets, trainerAuth, handleUpdateTrainerAuth, auditExclusions, handleUpdateAuditExclusions, currentBrand, setCurrentBrandId, getCollectionPath, getDocPath, dailyLoginCount, yesterdayLoginCount, securityConfig, isOnline]);
 
   const memoizedViews = useMemo(() => {
     return (

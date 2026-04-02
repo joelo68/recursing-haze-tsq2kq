@@ -6,9 +6,10 @@ import {
   UserCheck, UserX, Key, Calendar, DollarSign, Users, LayoutGrid,
   Database, Activity, Clock, Archive, MoreVertical
 } from "lucide-react";
+// ★ 確保這裡有引入 getDocs 和 writeBatch
 import { 
   doc, setDoc, updateDoc, deleteField, collection, addDoc, deleteDoc, getDoc,
-  serverTimestamp, arrayUnion, arrayRemove
+  serverTimestamp, arrayUnion, arrayRemove, getDocs, writeBatch
 } from "firebase/firestore";
 
 import { db, appId } from "../config/firebase";
@@ -490,7 +491,6 @@ const SettingsView = () => {
                       <input type="text" value={formPassword} onChange={(e) => setFormPassword(e.target.value)} className="w-full px-4 py-3 border border-stone-200 rounded-xl font-mono bg-stone-50 outline-none focus:border-amber-400 focus:bg-white transition-colors" placeholder="預設 0000" />
                     </div>
                     
-                    {/* ★ 更新這裡：全面改用自訂的 SmartDatePicker */}
                     <div className="grid grid-cols-2 gap-4 pt-1 border-t border-stone-100">
                       <div>
                         <label className="text-xs font-bold text-stone-400 block mb-1.5 uppercase tracking-wider flex items-center gap-1">
@@ -510,7 +510,6 @@ const SettingsView = () => {
                             selectedDate={formResignDate || "未設定"} 
                             onDateSelect={setFormResignDate} 
                           />
-                          {/* ★ 加入專屬清除按鈕，一鍵取消停權日 */}
                           {formResignDate && (
                             <button 
                               onClick={(e) => { e.preventDefault(); e.stopPropagation(); setFormResignDate(""); }} 
@@ -611,6 +610,101 @@ const SettingsView = () => {
         )}
         
         {activeTab === "maintenance" && <SystemMaintenance />}
+
+        {/* ========================================== */}
+        {/* ★ 階段一：歷史資料結算區 (僅限高階主管操作，且對現有報表 0 影響) */}
+        {/* ========================================== */}
+        {userRole === 'director' && (
+          <div className="mt-8 p-6 bg-rose-50 border border-rose-200 rounded-2xl shadow-sm w-full max-w-full">
+            <h3 className="text-lg font-bold text-rose-700 mb-2 flex items-center gap-2">
+              <AlertCircle size={20} />
+              系統維護：歷史日報背景結算 (生成月總計)
+            </h3>
+            <p className="text-sm text-rose-600 mb-4 leading-relaxed">
+              此功能會將系統開站以來的所有歷史日報按月份進行加總，並寫入一個名為 <code>monthly_aggregated</code> 的全新資料表。<br/>
+              這是一個<b>唯讀且獨立</b>的操作，絕對<b>不會</b>修改、影響或刪除任何現有的營運日報，對前線營運 100% 零影響。
+            </p>
+            
+            <button 
+              onClick={async () => {
+                if (!window.confirm("確定要執行歷史結算嗎？這可能會消耗較多讀取數（僅建議執行一次）。")) return;
+                
+                try {
+                  showToast("開始結算歷史資料，請勿關閉視窗...", "info");
+                  
+                  // 1. 撈取所有日報
+                  const reportsRef = getCollectionPath("daily_reports");
+                  const snapshot = await getDocs(reportsRef);
+
+                  const aggregatedData = {};
+
+                  // 2. 依照「YYYY-MM」與「店家」進行分組加總
+                  snapshot.forEach((docSnap) => {
+                    const data = docSnap.data();
+                    if (!data.date || !data.storeName) return;
+
+                    const yearMonth = data.date.substring(0, 7); // 取出 "2024-03"
+                    const year = data.date.substring(0, 4);      // 取出 "2024"
+                    const store = data.storeName;
+                    const key = `${yearMonth}_${store}`; // 例如 "2024-03_新店"
+
+                    if (!aggregatedData[key]) {
+                      aggregatedData[key] = {
+                        id: key,
+                        yearMonth,
+                        year,
+                        storeName: store,
+                        recordCount: 0 // 記錄這個月合併了幾張日報
+                      };
+                    }
+
+                    aggregatedData[key].recordCount += 1;
+
+                    // 自動加總所有「數字型態」的欄位 (現金、業績、客數等)
+                    Object.keys(data).forEach(field => {
+                      if (typeof data[field] === 'number') {
+                        aggregatedData[key][field] = (aggregatedData[key][field] || 0) + data[field];
+                      }
+                    });
+                  });
+
+                  // 3. 寫入新的 monthly_aggregated 表格 (加入分批防呆機制)
+                  const items = Object.values(aggregatedData);
+                  const aggregatedRef = getCollectionPath("monthly_aggregated");
+                  
+                  // Firebase Batch 一次最多只能塞 500 筆，我們切成 400 筆一包分批寫入
+                  const chunkArray = (arr, size) => {
+                    const chunks = [];
+                    for (let i = 0; i < arr.length; i += size) {
+                      chunks.push(arr.slice(i, i + size));
+                    }
+                    return chunks;
+                  };
+
+                  const batches = chunkArray(items, 400); 
+                  
+                  for (const currentBatch of batches) {
+                    const batch = writeBatch(db);
+                    currentBatch.forEach(item => {
+                      const docRef = doc(aggregatedRef, item.id);
+                      batch.set(docRef, item, { merge: true }); 
+                    });
+                    await batch.commit();
+                  }
+
+                  showToast(`結算完成！共合併了 ${snapshot.size} 筆日報，成功生成 ${items.length} 筆月份總計。`, "success");
+                  
+                } catch (error) {
+                  console.error("結算失敗:", error);
+                  showToast("結算發生錯誤，請查看 Console", "error");
+                }
+              }}
+              className="px-6 py-3 bg-rose-600 text-white font-bold rounded-xl hover:bg-rose-700 active:scale-95 transition-all shadow-md flex items-center justify-center gap-2"
+            >
+              <Database size={18} /> 一鍵結算歷史總計 (Data Backfill)
+            </button>
+          </div>
+        )}
         
       </div>
     </ViewWrapper>

@@ -49,7 +49,7 @@ const CustomLegend = () => {
 
 const AnnualView = () => {
   const { 
-    rawData, 
+    annualAggregatedData, // ★ 接收從 App.jsx 傳來的高效能總帳卡
     budgets, 
     managers, 
     fmtMoney, 
@@ -58,7 +58,7 @@ const AnnualView = () => {
     auditExclusions,
     handleUpdateAuditExclusions,
     userRole,
-    currentUser, // ★ 新增引入 currentUser
+    currentUser,
     showToast,
     currentBrand
   } = useContext(AppContext);
@@ -69,7 +69,6 @@ const AnnualView = () => {
   const [startMonthStr, setStartMonthStr] = useState(`${selectedYear}-01`);
   const [endMonthStr, setEndMonthStr] = useState(`${selectedYear}-12`);
   
-  // ★ 新增：篩選器狀態
   const [selectedAnnualManager, setSelectedAnnualManager] = useState("");
   const [selectedAnnualStore, setSelectedAnnualStore] = useState("");
 
@@ -220,7 +219,7 @@ const AnnualView = () => {
   }, [startMonthStr, endMonthStr, selectedYear]);
 
   // ==========================================
-  // 4. 核心運算邏輯 (結合有效篩選與排除設定)
+  // 4. 核心運算邏輯 (★ 改為讀取 annualAggregatedData)
   // ==========================================
   const annualData = useMemo(() => {
     // 目標店家 = 在有效清單中，且沒有被「排除設定」打勾的店家
@@ -243,22 +242,23 @@ const AnnualView = () => {
 
     const statsMap = monthList.map(item => ({ ...item, cash: 0, accrual: 0, traffic: 0, budget: 0, accrualBudget: 0 }));
 
-    rawData.forEach(d => {
+    // ★ 核心切換：改由讀取 monthly_aggregated 總帳卡
+    annualAggregatedData.forEach(d => {
       const rawStoreName = cleanName(d.storeName);
       
       // 雙層防護：不在篩選清單內，或是被排除設定打勾，一律不計入
       if (auditExclusions.includes(rawStoreName)) return;
       if (!effectiveStores.includes(rawStoreName)) return;
 
-      if (!d.date) return;
-      const dateStr = d.date.replace(/-/g, "/");
-      const parts = dateStr.split("/");
+      if (!d.yearMonth) return; // ★ 從 d.date 變成 d.yearMonth (例如 "2024-03")
+      const parts = d.yearMonth.split("-");
       const y = parseInt(parts[0]);
       const m = parseInt(parts[1]);
       const realYear = y < 1911 ? y + 1911 : y;
       
       const targetStat = statsMap.find(s => s.y === realYear && s.m === m);
       if (targetStat) {
+        // ★ 因為結算腳本已經把現金和退費都分開加總了，所以直接相減即可
         targetStat.cash += (Number(d.cash) || 0) - (Number(d.refund) || 0);
         
         let currentAccrual = Number(d.accrual) || 0;
@@ -299,7 +299,7 @@ const AnnualView = () => {
         traffic: totalTraffic,
       }
     };
-  }, [rawData, budgets, startMonthStr, endMonthStr, auditExclusions, brandPrefix, effectiveStores, cleanName]); 
+  }, [annualAggregatedData, budgets, startMonthStr, endMonthStr, auditExclusions, brandPrefix, effectiveStores, cleanName]); // ★ 依賴陣列換成 annualAggregatedData
 
   const { monthlyStats, totals } = annualData;
 
