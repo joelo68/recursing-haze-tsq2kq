@@ -4,7 +4,7 @@ import {
   Save, Plus, Trash2, Edit2, Edit, Lock, User, Store, Target,
   CheckCircle, AlertCircle, X, Shield, ChevronDown, Search,
   UserCheck, UserX, Key, Calendar, DollarSign, Users, LayoutGrid,
-  Database, Activity, Clock, Archive, MoreVertical
+  Database, Activity, Clock, Archive, MoreVertical, CheckSquare
 } from "lucide-react";
 // ★ 確保這裡有引入 getDocs 和 writeBatch
 import { 
@@ -611,10 +611,11 @@ const SettingsView = () => {
         
         {activeTab === "maintenance" && <SystemMaintenance />}
 
-        {/* ========================================== */}
-        {/* ★ 階段一：歷史資料結算區 (僅限高階主管操作，且對現有報表 0 影響) */}
-        {/* ========================================== */}
-        {userRole === 'director' && (
+        {/* ========================================================================= */}
+        {/* ★ 系統開發維護區 (目前功能已達成，使用註解隱藏以防誤觸，必要時可開啟) ★ */}
+        {/* ========================================================================= */}
+
+        {/* {userRole === 'director' && (
           <div className="mt-8 p-6 bg-rose-50 border border-rose-200 rounded-2xl shadow-sm w-full max-w-full">
             <h3 className="text-lg font-bold text-rose-700 mb-2 flex items-center gap-2">
               <AlertCircle size={20} />
@@ -632,21 +633,19 @@ const SettingsView = () => {
                 try {
                   showToast("開始結算歷史資料，請勿關閉視窗...", "info");
                   
-                  // 1. 撈取所有日報
                   const reportsRef = getCollectionPath("daily_reports");
                   const snapshot = await getDocs(reportsRef);
 
                   const aggregatedData = {};
 
-                  // 2. 依照「YYYY-MM」與「店家」進行分組加總
                   snapshot.forEach((docSnap) => {
                     const data = docSnap.data();
                     if (!data.date || !data.storeName) return;
 
-                    const yearMonth = data.date.substring(0, 7); // 取出 "2024-03"
-                    const year = data.date.substring(0, 4);      // 取出 "2024"
+                    const yearMonth = data.date.substring(0, 7); 
+                    const year = data.date.substring(0, 4);      
                     const store = data.storeName;
-                    const key = `${yearMonth}_${store}`; // 例如 "2024-03_新店"
+                    const key = `${yearMonth}_${store}`; 
 
                     if (!aggregatedData[key]) {
                       aggregatedData[key] = {
@@ -654,13 +653,12 @@ const SettingsView = () => {
                         yearMonth,
                         year,
                         storeName: store,
-                        recordCount: 0 // 記錄這個月合併了幾張日報
+                        recordCount: 0 
                       };
                     }
 
                     aggregatedData[key].recordCount += 1;
 
-                    // 自動加總所有「數字型態」的欄位 (現金、業績、客數等)
                     Object.keys(data).forEach(field => {
                       if (typeof data[field] === 'number') {
                         aggregatedData[key][field] = (aggregatedData[key][field] || 0) + data[field];
@@ -668,11 +666,9 @@ const SettingsView = () => {
                     });
                   });
 
-                  // 3. 寫入新的 monthly_aggregated 表格 (加入分批防呆機制)
                   const items = Object.values(aggregatedData);
                   const aggregatedRef = getCollectionPath("monthly_aggregated");
                   
-                  // Firebase Batch 一次最多只能塞 500 筆，我們切成 400 筆一包分批寫入
                   const chunkArray = (arr, size) => {
                     const chunks = [];
                     for (let i = 0; i < arr.length; i += size) {
@@ -705,6 +701,95 @@ const SettingsView = () => {
             </button>
           </div>
         )}
+        */}
+
+        {/* {userRole === 'director' && (
+          <div className="mt-6 p-6 bg-amber-50 border border-amber-200 rounded-2xl shadow-sm w-full max-w-full">
+            <h3 className="text-lg font-bold text-amber-700 mb-2 flex items-center gap-2">
+              <Lock size={20} />
+              系統維護：人員排班與目標「時間鎖」標籤升級
+            </h3>
+            <p className="text-sm text-amber-600 mb-4 leading-relaxed">
+              此功能會幫過去所有的「人員排班表」與「人員業績目標」補上 <code>year</code> 欄位。<br/>
+              完成後我們就能把系統的時間鎖掛回去，徹底封印最後一個無效讀取黑洞！
+            </p>
+            
+            <button 
+              onClick={async () => {
+                if (!window.confirm("確定要執行時間鎖標籤升級嗎？")) return;
+                
+                try {
+                  showToast("開始掃描並升級資料，請稍候...", "info");
+                  
+                  const schedulesRef = getCollectionPath("therapist_schedules");
+                  const targetsRef = getCollectionPath("therapist_targets");
+                  
+                  const [schedulesSnap, targetsSnap] = await Promise.all([
+                    getDocs(schedulesRef),
+                    getDocs(targetsRef)
+                  ]);
+
+                  const allUpdates = [];
+
+                  const processSnap = (snap, collName) => {
+                    snap.forEach(docSnap => {
+                      const data = docSnap.data();
+                      if (data.year) return;
+
+                      let yearStr = "2026";
+                      if (data.yearMonth) {
+                        yearStr = data.yearMonth.substring(0, 4);
+                      } else if (docSnap.id.match(/^202\d/)) {
+                        yearStr = docSnap.id.substring(0, 4);
+                      }
+
+                      allUpdates.push({
+                        ref: doc(getCollectionPath(collName), docSnap.id),
+                        year: yearStr
+                      });
+                    });
+                  };
+
+                  processSnap(schedulesSnap, "therapist_schedules");
+                  processSnap(targetsSnap, "therapist_targets");
+
+                  if (allUpdates.length === 0) {
+                    showToast("檢查完畢，所有資料都已經有時間標籤了！", "success");
+                    return;
+                  }
+
+                  const chunkArray = (arr, size) => {
+                    const chunks = [];
+                    for (let i = 0; i < arr.length; i += size) {
+                      chunks.push(arr.slice(i, i + size));
+                    }
+                    return chunks;
+                  };
+
+                  const batches = chunkArray(allUpdates, 400); 
+                  
+                  for (const currentBatch of batches) {
+                    const batch = writeBatch(db);
+                    currentBatch.forEach(item => {
+                      batch.update(item.ref, { year: item.year }); 
+                    });
+                    await batch.commit();
+                  }
+
+                  showToast(`升級完成！成功幫 ${allUpdates.length} 筆舊資料掛上時間鎖標籤。`, "success");
+                  
+                } catch (error) {
+                  console.error("升級失敗:", error);
+                  showToast("發生錯誤，請查看 Console", "error");
+                }
+              }}
+              className="px-6 py-3 bg-amber-500 text-white font-bold rounded-xl hover:bg-amber-600 active:scale-95 transition-all shadow-md flex items-center justify-center gap-2"
+            >
+              <CheckSquare size={18} /> 一鍵補齊時間標籤 (Time-Lock Backfill)
+            </button>
+          </div>
+        )}
+        */}
         
       </div>
     </ViewWrapper>

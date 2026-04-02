@@ -34,9 +34,9 @@ import { useAnalytics } from "./hooks/useAnalytics";
 import LoginView from "./components/LoginView";
 
 // ==========================================
-// ★ 系統核心版本號 (改版時只需修改這裡並 deploy 即可)
+// ★ 系統核心版本號 (黑洞全封印效能版)
 // ==========================================
-const CURRENT_APP_VERSION = "2.4.0"; // 年度報表秒開效能版
+const CURRENT_APP_VERSION = "2.5.0"; 
 
 const isNewerVersion = (local, remote) => {
   if (!remote) return true;
@@ -125,7 +125,7 @@ export default function App() {
   }, [currentBrand]);
 
   const [rawData, setRawData] = useState([]); 
-  const [annualAggregatedData, setAnnualAggregatedData] = useState([]); // ★ 新增：專放年度總帳卡
+  const [annualAggregatedData, setAnnualAggregatedData] = useState([]); 
   const [budgets, setBudgets] = useState({});
   const [targets, setTargets] = useState({ newASP: 3500, trafficASP: 1200 });
   const [managers, setManagers] = useState({});
@@ -339,10 +339,17 @@ export default function App() {
     return onAuthStateChanged(auth, (u) => { setUser(u); setLoading(false); });
   }, []);
 
+
+  // ==========================================
+  // ★ 黑洞一號修復：將時間鎖 (selectedYear) 重新掛回
+  // ==========================================
   useEffect(() => {
     if (!user) return;
     setBudgets({}); setManagers({}); setStoreAccounts([]); setManagerAuth({}); setTherapists([]); setTherapistSchedules({}); setTherapistTargets({}); setPermissions(DEFAULT_PERMISSIONS); setTargets({ newASP: 3500, trafficASP: 1200 });
     setSecurityConfig({ enabled: true, timeoutMinutes: 3, warningSeconds: 15, exemptRoles: ["director", "master"] });
+
+    // ★ 把被選中的年份轉為字串
+    const targetYearStr = String(selectedYear);
 
     const unsubBudgets = onSnapshot(getCollectionPath("monthly_targets"), (s) => { const b = {}; s.docs.forEach((d) => (b[d.id] = d.data())); setBudgets(b); });
     const unsubTargets = onSnapshot(getDocPath("kpi_targets"), (s) => { if (s.exists()) setTargets(s.data()); else setTargets({ newASP: 3500, trafficASP: 1200 }); });
@@ -360,9 +367,21 @@ export default function App() {
     const unsubAccounts = onSnapshot(getDocPath("store_account_data"), (s) => { if (s.exists()) setStoreAccounts(s.data().accounts); else setStoreAccounts([]); });
     const unsubManagerAuth = onSnapshot(getDocPath("manager_auth"), (s) => { if (s.exists()) setManagerAuth(s.data()); else setManagerAuth({}); });
     const unsubPermissions = onSnapshot(getDocPath("permissions"), (s) => { if (s.exists()) setPermissions(s.data()); else setPermissions(DEFAULT_PERMISSIONS); });
+    
     const unsubTherapists = onSnapshot(getCollectionPath("therapists"), (s) => setTherapists(s.docs.map((d) => ({ id: d.id, ...d.data() }))));
-    const unsubTherapistSchedules = onSnapshot(getCollectionPath("therapist_schedules"), (s) => { const schedules = {}; s.docs.forEach((d) => (schedules[d.id] = d.data())); setTherapistSchedules(schedules); });
-    const unsubTherapistTargets = onSnapshot(getCollectionPath("therapist_targets"), (s) => { const t = {}; s.docs.forEach((d) => (t[d.id] = d.data())); setTherapistTargets(t); });
+    
+    // 🚀 掛回時間鎖：加上 where("year", "==", targetYearStr)
+    const unsubTherapistSchedules = onSnapshot(
+      query(getCollectionPath("therapist_schedules"), where("year", "==", targetYearStr)), 
+      (s) => { const schedules = {}; s.docs.forEach((d) => (schedules[d.id] = d.data())); setTherapistSchedules(schedules); }
+    );
+    
+    // 🚀 掛回時間鎖：加上 where("year", "==", targetYearStr)
+    const unsubTherapistTargets = onSnapshot(
+      query(getCollectionPath("therapist_targets"), where("year", "==", targetYearStr)), 
+      (s) => { const t = {}; s.docs.forEach((d) => (t[d.id] = d.data())); setTherapistTargets(t); }
+    );
+    
     const unsubTrainerAuth = onSnapshot(getDocPath("trainer_auth"), (s) => { if (s.exists()) setTrainerAuth(s.data()); else setTrainerAuth({ password: "0000" }); });
     const unsubAuditExclusions = onSnapshot(getDocPath("audit_exclusions"), (s) => { if (s.exists()) setAuditExclusions(s.data().stores || []); else setAuditExclusions([]); });
 
@@ -396,13 +415,13 @@ export default function App() {
       unsubBudgets(); unsubTargets(); unsubOrg(); unsubAccounts(); unsubManagerAuth(); unsubPermissions(); unsubTherapists(); unsubTherapistSchedules(); unsubTherapistTargets(); unsubTrainerAuth(); unsubAuditExclusions(); unsubDirectorAuth(); unsubMasterAuth(); unsubStatsToday(); unsubStatsYesterday(); 
       unsubSecurityConfig();
     };
-  }, [user, currentBrand, getCollectionPath, getDocPath]); 
+  // ★ 依賴陣列中加入 selectedYear，確保切換年份時會重新抓取該年資料
+  }, [user, currentBrand, getCollectionPath, getDocPath, selectedYear]); 
 
 
   // ==========================================
-  // ★★★ 核心效能大升級：解開 100 萬次讀取的無限迴圈枷鎖 ★★★
+  // ★ 黑洞二號修復：年度報表輕量化 (維持不變)
   // ==========================================
-  
   const fetchMode = activeView === 'annual' ? 'year' : 'month';
 
   useEffect(() => {
@@ -415,7 +434,6 @@ export default function App() {
     const targetYear = selectedYear;
 
     if (fetchMode === 'year') { 
-      // 🚀 黑洞二號修復：年度報表只撈取輕量級的 monthly_aggregated (僅幾十筆)
       const unsubAgg = onSnapshot(
         query(getCollectionPath("monthly_aggregated"), where("year", "in", [targetYear, String(targetYear)])),
         (s) => setAnnualAggregatedData(s.docs.map((d) => ({ id: d.id, ...d.data() })))
@@ -423,7 +441,6 @@ export default function App() {
       return () => unsubAgg();
       
     } else { 
-      // 正常月份模式：只撈取「當月」的日報
       const m = String(selectedMonth).padStart(2, '0'); 
       const startDate = `${targetYear}-${m}-01`; 
       const endDate = `${targetYear}-${m}-31`; 
@@ -444,8 +461,6 @@ export default function App() {
       };
     }
   }, [user, currentBrand, selectedYear, selectedMonth, fetchMode, getCollectionPath]);
-
-  // ==========================================
 
 
   const handleLogin = useCallback((roleId, userInfo = null) => {
@@ -527,7 +542,7 @@ export default function App() {
 
   const contextValue = useMemo(() => ({
     user, loading, analytics, managers: visibleManagers, budgets, targets, rawData: visibleRawData, allReports: rawData, 
-    annualAggregatedData, // ★ 把總帳卡傳遞給下層元件
+    annualAggregatedData, 
     showToast, openConfirm, fmtMoney, fmtNum, inputDate, setInputDate, storeList: analytics?.storeList || [], setTargets, selectedYear, selectedMonth, permissions, storeAccounts, managerAuth, currentUser, userRole, logActivity, handleUpdateStorePassword, handleUpdateManagerPassword, handleUpdateTherapistPassword, navigateToStore, activeView, appId, 
     therapists: visibleTherapists, therapistReports: visibleTherapistReports, therapistSchedules, therapistTargets, trainerAuth, handleUpdateTrainerAuth, auditExclusions, handleUpdateAuditExclusions, currentBrand, setCurrentBrandId, getCollectionPath, getDocPath, dailyLoginCount, yesterdayLoginCount, securityConfig, isOnline
   }), [user, loading, analytics, visibleManagers, budgets, targets, visibleRawData, rawData, annualAggregatedData, inputDate, selectedYear, selectedMonth, permissions, storeAccounts, managerAuth, currentUser, userRole, logActivity, handleUpdateStorePassword, handleUpdateManagerPassword, handleUpdateTherapistPassword, navigateToStore, activeView, appId, visibleTherapists, visibleTherapistReports, therapistSchedules, therapistTargets, trainerAuth, handleUpdateTrainerAuth, auditExclusions, handleUpdateAuditExclusions, currentBrand, setCurrentBrandId, getCollectionPath, getDocPath, dailyLoginCount, yesterdayLoginCount, securityConfig, isOnline]);
