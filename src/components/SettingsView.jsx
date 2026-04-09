@@ -59,8 +59,14 @@ const SettingsView = () => {
     therapists, therapistTargets, therapistSchedules,
     trainerAuth, handleUpdateTrainerAuth,
     getDocPath, getCollectionPath,
-    currentBrand, securityConfig 
+    currentBrand, securityConfig,
+    fetchGlobalData // ★ 新增：提取單次抓取函數
   } = useContext(AppContext);
+
+  // ★ 新增：每次進入設定頁面時，自動抓取一次最新資料
+  useEffect(() => {
+    if (fetchGlobalData) fetchGlobalData();
+  }, [fetchGlobalData]);
 
   const [activeTab, setActiveTab] = useState("");
   const [localTargets, setLocalTargets] = useState(targets || {});
@@ -156,15 +162,16 @@ const SettingsView = () => {
     });
   }, [localManagers]);
 
-  const handleUpdateTrainer = async () => { if (!newTrainerPass) return showToast("請輸入新密碼", "error"); const success = await handleUpdateTrainerAuth(newTrainerPass); if (success) { showToast("教專密碼已更新", "success"); setNewTrainerPass(""); } else { showToast("更新失敗", "error"); } };
+  const handleUpdateTrainer = async () => { if (!newTrainerPass) return showToast("請輸入新密碼", "error"); const success = await handleUpdateTrainerAuth(newTrainerPass); if (success) { showToast("教專密碼已更新", "success"); setNewTrainerPass(""); if (fetchGlobalData) fetchGlobalData(); } else { showToast("更新失敗", "error"); } };
   const handleSaveTargets = async () => { try { await setDoc(getDocPath("kpi_targets"), localTargets); setTargets(localTargets); showToast("設定已儲存", "success"); } catch (e) { showToast("儲存失敗", "error"); } };
-  const handleSavePermissions = async () => { try { await setDoc(getDocPath("permissions"), localPermissions); showToast("權限設定已更新", "success"); } catch (e) { showToast("更新失敗", "error"); } };
+  const handleSavePermissions = async () => { try { await setDoc(getDocPath("permissions"), localPermissions); showToast("權限設定已更新", "success"); if (fetchGlobalData) fetchGlobalData(); } catch (e) { showToast("更新失敗", "error"); } };
   const togglePermission = (role, menuId) => { const current = localPermissions[role] || []; const updated = current.includes(menuId) ? current.filter((id) => id !== menuId) : [...current, menuId]; setLocalPermissions({ ...localPermissions, [role]: updated }); };
   
   const handleSaveSecurityConfig = async () => { 
     try { 
       await setDoc(getDocPath("security_config"), localSecurityConfig); 
       showToast("資安與登入控管已更新", "success"); 
+      if (fetchGlobalData) fetchGlobalData();
     } catch (e) { showToast("更新失敗", "error"); } 
   };
 
@@ -175,22 +182,22 @@ const SettingsView = () => {
     setLocalTargets(prev => ({ ...prev, benchmarks: { ...prev.benchmarks, [brandKey]: { ...(prev.benchmarks?.[brandKey] || DEFAULT_BENCHMARKS_INIT["default"]), [categoryId]: { ...(prev.benchmarks?.[brandKey]?.[categoryId] || DEFAULT_BENCHMARKS_INIT["default"][categoryId]), [field]: numValue } } } }));
   };
 
-  const handleAddGlobalStore = async () => { if (!newShop.name || !newShop.manager) return showToast("請輸入完整資訊", "error"); try { const targetManager = newShop.manager; const docRef = getDocPath("org_structure"); const docSnap = await getDoc(docRef); let newManagers = docSnap.exists() ? { ...docSnap.data().managers } : {}; if (!newManagers[targetManager]) newManagers[targetManager] = []; if (!newManagers[targetManager].includes(newShop.name)) { newManagers[targetManager].push(newShop.name); } await setDoc(docRef, { managers: newManagers }); setLocalManagers(newManagers); setNewShop({ name: "", manager: "" }); showToast("已新增", "success"); } catch (e) { showToast("失敗: " + e.message, "error"); } };
-  const handleDeleteGlobalStore = async (storeName, managerName) => { const isPermanentDelete = managerName === UNASSIGNED_KEY; if(!confirm(isPermanentDelete ? "確定永久刪除此店家？" : "確定將此店家移至『未分配』名單？")) return; try { const docRef = getDocPath("org_structure"); const docSnap = await getDoc(docRef); if (!docSnap.exists()) throw new Error("讀取設定檔失敗"); let newManagers = JSON.parse(JSON.stringify(docSnap.data().managers || {})); if (Array.isArray(newManagers[managerName])) { newManagers[managerName] = newManagers[managerName].filter(x => x !== storeName); } if (!isPermanentDelete) { if (!Array.isArray(newManagers[UNASSIGNED_KEY])) { newManagers[UNASSIGNED_KEY] = []; } if (!newManagers[UNASSIGNED_KEY].includes(storeName)) { newManagers[UNASSIGNED_KEY].push(storeName); } } await setDoc(docRef, { managers: newManagers }); setLocalManagers(newManagers); showToast(isPermanentDelete ? "已永久刪除" : "已移至未分配", "success"); } catch(e) { console.error(e); showToast("失敗: " + e.message, "error"); } };
-  const handleSaveManagerStores = async (name) => { try { const docRef = getDocPath("org_structure"); const docSnap = await getDoc(docRef); let newManagers = docSnap.exists() ? JSON.parse(JSON.stringify(docSnap.data().managers)) : {}; const newStores = editingManagerStores; const originalStores = newManagers[name] || []; const removedStores = originalStores.filter(s => !newStores.includes(s)); const addedStores = newStores.filter(s => !originalStores.includes(s)); newManagers[name] = newStores; if (!Array.isArray(newManagers[UNASSIGNED_KEY])) { newManagers[UNASSIGNED_KEY] = []; } removedStores.forEach(s => { if (!newManagers[UNASSIGNED_KEY].includes(s)) newManagers[UNASSIGNED_KEY].push(s); }); newManagers[UNASSIGNED_KEY] = newManagers[UNASSIGNED_KEY].filter(s => !addedStores.includes(s)); await setDoc(docRef, { managers: newManagers }); setLocalManagers(newManagers); setEditingManager(null); showToast("已更新", "success"); } catch(e){ showToast("失敗", "error"); } };
+  const handleAddGlobalStore = async () => { if (!newShop.name || !newShop.manager) return showToast("請輸入完整資訊", "error"); try { const targetManager = newShop.manager; const docRef = getDocPath("org_structure"); const docSnap = await getDoc(docRef); let newManagers = docSnap.exists() ? { ...docSnap.data().managers } : {}; if (!newManagers[targetManager]) newManagers[targetManager] = []; if (!newManagers[targetManager].includes(newShop.name)) { newManagers[targetManager].push(newShop.name); } await setDoc(docRef, { managers: newManagers }); setLocalManagers(newManagers); setNewShop({ name: "", manager: "" }); showToast("已新增", "success"); if (fetchGlobalData) fetchGlobalData(); } catch (e) { showToast("失敗: " + e.message, "error"); } };
+  const handleDeleteGlobalStore = async (storeName, managerName) => { const isPermanentDelete = managerName === UNASSIGNED_KEY; if(!confirm(isPermanentDelete ? "確定永久刪除此店家？" : "確定將此店家移至『未分配』名單？")) return; try { const docRef = getDocPath("org_structure"); const docSnap = await getDoc(docRef); if (!docSnap.exists()) throw new Error("讀取設定檔失敗"); let newManagers = JSON.parse(JSON.stringify(docSnap.data().managers || {})); if (Array.isArray(newManagers[managerName])) { newManagers[managerName] = newManagers[managerName].filter(x => x !== storeName); } if (!isPermanentDelete) { if (!Array.isArray(newManagers[UNASSIGNED_KEY])) { newManagers[UNASSIGNED_KEY] = []; } if (!newManagers[UNASSIGNED_KEY].includes(storeName)) { newManagers[UNASSIGNED_KEY].push(storeName); } } await setDoc(docRef, { managers: newManagers }); setLocalManagers(newManagers); showToast(isPermanentDelete ? "已永久刪除" : "已移至未分配", "success"); if (fetchGlobalData) fetchGlobalData(); } catch(e) { console.error(e); showToast("失敗: " + e.message, "error"); } };
+  const handleSaveManagerStores = async (name) => { try { const docRef = getDocPath("org_structure"); const docSnap = await getDoc(docRef); let newManagers = docSnap.exists() ? JSON.parse(JSON.stringify(docSnap.data().managers)) : {}; const newStores = editingManagerStores; const originalStores = newManagers[name] || []; const removedStores = originalStores.filter(s => !newStores.includes(s)); const addedStores = newStores.filter(s => !originalStores.includes(s)); newManagers[name] = newStores; if (!Array.isArray(newManagers[UNASSIGNED_KEY])) { newManagers[UNASSIGNED_KEY] = []; } removedStores.forEach(s => { if (!newManagers[UNASSIGNED_KEY].includes(s)) newManagers[UNASSIGNED_KEY].push(s); }); newManagers[UNASSIGNED_KEY] = newManagers[UNASSIGNED_KEY].filter(s => !addedStores.includes(s)); await setDoc(docRef, { managers: newManagers }); setLocalManagers(newManagers); setEditingManager(null); showToast("已更新", "success"); if (fetchGlobalData) fetchGlobalData(); } catch(e){ showToast("失敗", "error"); } };
   const availableUnassignedStores = useMemo(() => { const all = Object.values(localManagers || {}).flat(); const assigned = storeAccounts.flatMap(a=>a.stores||[]); return all.filter(s=>!assigned.includes(s)).sort(); }, [localManagers, storeAccounts]);
   const availableStoresForManagerEdit = useMemo(() => { return (localManagers && localManagers[UNASSIGNED_KEY]) ? localManagers[UNASSIGNED_KEY].sort() : []; }, [localManagers]);
   const availableStoresForEditing = useMemo(() => { const all = Object.values(localManagers || {}).flat(); const assigned = storeAccounts.filter(a=>a.id!==editingStoreAccount?.id).flatMap(a=>a.stores||[]); return all.filter(s=>!assigned.includes(s) && !editStoreForm.stores.includes(s)).sort(); }, [localManagers, storeAccounts, editingStoreAccount, editStoreForm]);
-  const handleAddStoreAccount = async () => { if(!newStoreAccount.name || !newStoreAccount.password) return showToast("請輸入完整", "error"); const newAcc = { id: generateUUID(), ...newStoreAccount, stores: newStoreAccount.stores?[newStoreAccount.stores]:[] }; try { await setDoc(getDocPath("store_account_data"), { accounts: [...storeAccounts, newAcc] }); setNewStoreAccount({name:"", password:"", stores:""}); showToast("已新增", "success"); } catch(e){ showToast("失敗", "error"); } };
+  const handleAddStoreAccount = async () => { if(!newStoreAccount.name || !newStoreAccount.password) return showToast("請輸入完整", "error"); const newAcc = { id: generateUUID(), ...newStoreAccount, stores: newStoreAccount.stores?[newStoreAccount.stores]:[] }; try { await setDoc(getDocPath("store_account_data"), { accounts: [...storeAccounts, newAcc] }); setNewStoreAccount({name:"", password:"", stores:""}); showToast("已新增", "success"); if (fetchGlobalData) fetchGlobalData(); } catch(e){ showToast("失敗", "error"); } };
   const openEditStoreAccount = (account) => { setEditingStoreAccount(account); setEditStoreForm({ name: account.name, password: account.password, stores: account.stores || [] }); };
   const handleAddStoreToEditForm = (storeName) => { if (storeName && !editStoreForm.stores.includes(storeName)) { setEditStoreForm({ ...editStoreForm, stores: [...editStoreForm.stores, storeName] }); } };
   const handleRemoveStoreFromEditForm = (storeName) => { setEditStoreForm({ ...editStoreForm, stores: editStoreForm.stores.filter(s => s !== storeName) }); };
-  const handleUpdateStoreAccount = async () => { if(!editStoreForm.name) return; const newAccs = storeAccounts.map(a => a.id === editingStoreAccount.id ? { ...a, ...editStoreForm } : a); await setDoc(getDocPath("store_account_data"), { accounts: newAccs }); setEditingStoreAccount(null); showToast("已更新", "success"); };
-  const handleDeleteStoreAccount = async (id) => { if(!confirm("確定?")) return; const newAccs = storeAccounts.filter(a=>a.id!==id); await setDoc(getDocPath("store_account_data"), { accounts: newAccs }); showToast("已刪除", "success"); };
-  const handleAddManager = async () => { if(!newManager.name) return; try { const docRef = getDocPath("org_structure"); const docSnap = await getDoc(docRef); let newManagers = docSnap.exists() ? docSnap.data().managers : {}; newManagers[newManager.name] = []; await setDoc(docRef, { managers: newManagers }); setLocalManagers(newManagers); await setDoc(getDocPath("manager_auth"), { [newManager.name]: newManager.password }, {merge:true}); setNewManager({name:"", password:""}); showToast("已新增", "success"); } catch(e){ showToast("失敗", "error"); } };
+  const handleUpdateStoreAccount = async () => { if(!editStoreForm.name) return; const newAccs = storeAccounts.map(a => a.id === editingStoreAccount.id ? { ...a, ...editStoreForm } : a); await setDoc(getDocPath("store_account_data"), { accounts: newAccs }); setEditingStoreAccount(null); showToast("已更新", "success"); if (fetchGlobalData) fetchGlobalData(); };
+  const handleDeleteStoreAccount = async (id) => { if(!confirm("確定?")) return; const newAccs = storeAccounts.filter(a=>a.id!==id); await setDoc(getDocPath("store_account_data"), { accounts: newAccs }); showToast("已刪除", "success"); if (fetchGlobalData) fetchGlobalData(); };
+  const handleAddManager = async () => { if(!newManager.name) return; try { const docRef = getDocPath("org_structure"); const docSnap = await getDoc(docRef); let newManagers = docSnap.exists() ? docSnap.data().managers : {}; newManagers[newManager.name] = []; await setDoc(docRef, { managers: newManagers }); setLocalManagers(newManagers); await setDoc(getDocPath("manager_auth"), { [newManager.name]: newManager.password }, {merge:true}); setNewManager({name:"", password:""}); showToast("已新增", "success"); if (fetchGlobalData) fetchGlobalData(); } catch(e){ showToast("失敗", "error"); } };
   const handleAddStoreToEditing = (storeName) => { if (!storeName) return; if (!editingManagerStores.includes(storeName)) { setEditingManagerStores([...editingManagerStores, storeName]); } };
   const handleRemoveStoreFromEditing = (storeName) => { setEditingManagerStores( editingManagerStores.filter((s) => s !== storeName) ); };
-  const handleDeleteManager = async (name) => { if(!confirm("確定?")) return; try { const docRef = getDocPath("org_structure"); const docSnap = await getDoc(docRef); let newManagers = docSnap.exists() ? docSnap.data().managers : {}; delete newManagers[name]; await setDoc(docRef, { managers: newManagers }); setLocalManagers(newManagers); showToast("已刪除", "success"); } catch (e) { showToast("刪除失敗", "error"); } };
+  const handleDeleteManager = async (name) => { if(!confirm("確定?")) return; try { const docRef = getDocPath("org_structure"); const docSnap = await getDoc(docRef); let newManagers = docSnap.exists() ? docSnap.data().managers : {}; delete newManagers[name]; await setDoc(docRef, { managers: newManagers }); setLocalManagers(newManagers); showToast("已刪除", "success"); if (fetchGlobalData) fetchGlobalData(); } catch (e) { showToast("刪除失敗", "error"); } };
   
   const handleAddTherapist = async () => { 
     if(!formName) return showToast("請輸入姓名", "error"); 
@@ -205,6 +212,7 @@ const SettingsView = () => {
       setIsAddingTherapist(false); 
       setFormName(""); 
       showToast("已新增", "success"); 
+      if (fetchGlobalData) fetchGlobalData();
     } catch(e) { showToast("失敗", "error"); } 
   };
 
@@ -218,6 +226,7 @@ const SettingsView = () => {
     }); 
     setEditingTherapist(null); 
     showToast("已更新", "success"); 
+    if (fetchGlobalData) fetchGlobalData();
   };
 
   const toggleStatus = async (t) => { 
@@ -233,9 +242,10 @@ const SettingsView = () => {
     
     await updateDoc(ref, updates); 
     showToast(isNowActive ? "帳號已停用並記錄停權日" : "帳號已重新啟用", "success"); 
+    if (fetchGlobalData) fetchGlobalData();
   };
 
-  const handleDeleteTherapist = async (id) => { if(!confirm("確定要永久刪除此帳號？(這將導致該員歷史報表數據遺失，建議使用帳號暫停代替)")) return; await deleteDoc(doc(getCollectionPath("therapists"), id)); showToast("已徹底刪除", "success"); };
+  const handleDeleteTherapist = async (id) => { if(!confirm("確定要永久刪除此帳號？(這將導致該員歷史報表數據遺失，建議使用帳號暫停代替)")) return; await deleteDoc(doc(getCollectionPath("therapists"), id)); showToast("已徹底刪除", "success"); if (fetchGlobalData) fetchGlobalData(); };
   
   const openEdit = (t) => { 
     setEditingTherapist(t); 

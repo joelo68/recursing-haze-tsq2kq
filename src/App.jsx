@@ -16,7 +16,7 @@ import React, {
 
 import { app, auth, db, appId } from "./config/firebase";
 import { onAuthStateChanged, signInAnonymously, signInWithCustomToken } from "firebase/auth";
-import { collection, addDoc, deleteDoc, updateDoc, doc, getDoc, onSnapshot, serverTimestamp, setDoc, query, orderBy, limit, deleteField, where, increment } from "firebase/firestore";
+import { collection, addDoc, deleteDoc, updateDoc, doc, getDoc, onSnapshot, serverTimestamp, setDoc, query, orderBy, limit, deleteField, where, increment, getDocs } from "firebase/firestore";
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip as RechartsTooltip, Legend, ResponsiveContainer, LineChart, Line, ComposedChart, Area, Cell, PieChart, Pie } from "recharts";
 import { 
   LayoutDashboard, Upload, TrendingUp, Map as MapIcon, Settings, ClipboardCheck, Menu, Search, Filter, Trash2, Save, Plus, DollarSign, Target, Users, Award, Loader2, FileText, AlertCircle, CheckCircle, User, Store, Lock, LogOut, FileWarning, Edit2, CheckSquare, X, Download, ChevronLeft, ChevronRight, Activity, Sparkles, ChevronDown, 
@@ -339,9 +339,60 @@ export default function App() {
     return onAuthStateChanged(auth, (u) => { setUser(u); setLoading(false); });
   }, []);
 
+  // ==========================================
+  // ★ 流量極致優化：設定檔與人員改為單次讀取 (取代 onSnapshot)
+  // ==========================================
+  const fetchGlobalData = useCallback(async () => {
+    if (!user) return;
+    try {
+      const [orgSnap, accSnap, mAuthSnap, permSnap, thSnap, trAuthSnap, audSnap, secSnap, dAuthSnap, mastSnap] = await Promise.all([
+        getDoc(getDocPath("org_structure")),
+        getDoc(getDocPath("store_account_data")),
+        getDoc(getDocPath("manager_auth")),
+        getDoc(getDocPath("permissions")),
+        getDocs(getCollectionPath("therapists")),
+        getDoc(getDocPath("trainer_auth")),
+        getDoc(getDocPath("audit_exclusions")),
+        getDoc(getDocPath("security_config")),
+        getDoc(getDocPath("director_auth")),
+        getDoc(getDocPath("master_auth"))
+      ]);
+
+      if (orgSnap.exists()) {
+        const rawManagers = orgSnap.data().managers || {};
+        const filteredManagers = {};
+        Object.keys(rawManagers).forEach(key => { if (!key.includes("未分配") && !key.includes("未分區")) filteredManagers[key] = rawManagers[key]; });
+        setManagers(filteredManagers);
+      } else {
+        setManagers(currentBrand.id === 'cyj' ? DEFAULT_REGIONAL_MANAGERS : {}); 
+      }
+
+      setStoreAccounts(accSnap.exists() ? accSnap.data().accounts : []);
+      setManagerAuth(mAuthSnap.exists() ? mAuthSnap.data() : {});
+      setPermissions(permSnap.exists() ? permSnap.data() : DEFAULT_PERMISSIONS);
+      setTherapists(thSnap.docs.map((d) => ({ id: d.id, ...d.data() })));
+      setTrainerAuth(trAuthSnap.exists() ? trAuthSnap.data() : { password: "0000" });
+      setAuditExclusions(audSnap.exists() ? (audSnap.data().stores || []) : []);
+      setSecurityConfig(secSnap.exists() ? secSnap.data() : { enabled: true, timeoutMinutes: 3, warningSeconds: 15, exemptRoles: ["director", "master"] });
+
+      if (dAuthSnap.exists()) {
+         let data = { ...dAuthSnap.data() };
+         if (data.password && Object.keys(data).length === 1) { setDirectorAuth({ "營運總監": data.password }); } 
+         else { delete data.password; if (Object.keys(data).length === 0) data = { "營運總監": "0000" }; setDirectorAuth(data); }
+      } else {
+         let defaultPass = "0000";
+         if (currentBrand.id === 'cyj') defaultPass = "16500"; if (currentBrand.id === 'anniu') defaultPass = "8888"; if (currentBrand.id === 'yibo') defaultPass = "9999";
+         setDirectorAuth({ "營運總監": defaultPass }); 
+      }
+
+      setMasterAuth((mastSnap.exists() && mastSnap.data().password) ? mastSnap.data() : { password: "BOSS888" });
+    } catch (error) {
+      console.error("Fetch Global Data Error:", error);
+    }
+  }, [user, currentBrand, getDocPath, getCollectionPath]);
 
   // ==========================================
-  // ★ 黑洞一號修復：將時間鎖 (selectedYear) 重新掛回
+  // ★ 黑洞一號修復：將時間鎖 (selectedYear) 重新掛回 + 流量極致優化
   // ==========================================
   useEffect(() => {
     if (!user) return;
@@ -351,24 +402,12 @@ export default function App() {
     // ★ 把被選中的年份轉為字串
     const targetYearStr = String(selectedYear);
 
+    // ★ 1. 執行單次讀取 (取代原本的 10 個 onSnapshot)
+    fetchGlobalData();
+
+    // ★ 2. 保留需要「即時連線」的高頻營運數據
     const unsubBudgets = onSnapshot(getCollectionPath("monthly_targets"), (s) => { const b = {}; s.docs.forEach((d) => (b[d.id] = d.data())); setBudgets(b); });
     const unsubTargets = onSnapshot(getDocPath("kpi_targets"), (s) => { if (s.exists()) setTargets(s.data()); else setTargets({ newASP: 3500, trafficASP: 1200 }); });
-    const unsubOrg = onSnapshot(getDocPath("org_structure"), (s) => {
-        if (s.exists()) {
-          const rawManagers = s.data().managers || {};
-          const filteredManagers = {};
-          Object.keys(rawManagers).forEach(key => { if (!key.includes("未分配") && !key.includes("未分區")) filteredManagers[key] = rawManagers[key]; });
-          setManagers(filteredManagers);
-        } else {
-          if (currentBrand.id === 'cyj') setManagers(DEFAULT_REGIONAL_MANAGERS); else setManagers({}); 
-        }
-    });
-
-    const unsubAccounts = onSnapshot(getDocPath("store_account_data"), (s) => { if (s.exists()) setStoreAccounts(s.data().accounts); else setStoreAccounts([]); });
-    const unsubManagerAuth = onSnapshot(getDocPath("manager_auth"), (s) => { if (s.exists()) setManagerAuth(s.data()); else setManagerAuth({}); });
-    const unsubPermissions = onSnapshot(getDocPath("permissions"), (s) => { if (s.exists()) setPermissions(s.data()); else setPermissions(DEFAULT_PERMISSIONS); });
-    
-    const unsubTherapists = onSnapshot(getCollectionPath("therapists"), (s) => setTherapists(s.docs.map((d) => ({ id: d.id, ...d.data() }))));
     
     // 🚀 掛回時間鎖：加上 where("year", "==", targetYearStr)
     const unsubTherapistSchedules = onSnapshot(
@@ -381,28 +420,6 @@ export default function App() {
       query(getCollectionPath("therapist_targets"), where("year", "==", targetYearStr)), 
       (s) => { const t = {}; s.docs.forEach((d) => (t[d.id] = d.data())); setTherapistTargets(t); }
     );
-    
-    const unsubTrainerAuth = onSnapshot(getDocPath("trainer_auth"), (s) => { if (s.exists()) setTrainerAuth(s.data()); else setTrainerAuth({ password: "0000" }); });
-    const unsubAuditExclusions = onSnapshot(getDocPath("audit_exclusions"), (s) => { if (s.exists()) setAuditExclusions(s.data().stores || []); else setAuditExclusions([]); });
-
-    const unsubSecurityConfig = onSnapshot(getDocPath("security_config"), (s) => { 
-      if (s.exists()) setSecurityConfig(s.data()); 
-      else setSecurityConfig({ enabled: true, timeoutMinutes: 3, warningSeconds: 15, exemptRoles: ["director", "master"] });
-    });
-
-    const unsubDirectorAuth = onSnapshot(getDocPath("director_auth"), (s) => { 
-        if (s.exists()) {
-           let data = { ...s.data() };
-           if (data.password && Object.keys(data).length === 1) { setDirectorAuth({ "營運總監": data.password }); } 
-           else { delete data.password; if (Object.keys(data).length === 0) data = { "營運總監": "0000" }; setDirectorAuth(data); }
-        } else {
-           let defaultPass = "0000";
-           if (currentBrand.id === 'cyj') defaultPass = "16500"; if (currentBrand.id === 'anniu') defaultPass = "8888"; if (currentBrand.id === 'yibo') defaultPass = "9999";
-           setDirectorAuth({ "營運總監": defaultPass }); 
-        }
-    });
-
-    const unsubMasterAuth = onSnapshot(getDocPath("master_auth"), (s) => { if (s.exists() && s.data().password) { setMasterAuth(s.data()); } else { setMasterAuth({ password: "BOSS888" }); } });
 
     const todayStr = formatLocalYYYYMMDD(new Date());
     const d = new Date(); d.setDate(d.getDate() - 1);
@@ -412,11 +429,10 @@ export default function App() {
     const unsubStatsYesterday = onSnapshot(doc(getCollectionPath("system_stats"), yesterdayStr), (s) => { if (s.exists()) setYesterdayLoginCount(s.data().count || 0); else setYesterdayLoginCount(0); });
 
     return () => { 
-      unsubBudgets(); unsubTargets(); unsubOrg(); unsubAccounts(); unsubManagerAuth(); unsubPermissions(); unsubTherapists(); unsubTherapistSchedules(); unsubTherapistTargets(); unsubTrainerAuth(); unsubAuditExclusions(); unsubDirectorAuth(); unsubMasterAuth(); unsubStatsToday(); unsubStatsYesterday(); 
-      unsubSecurityConfig();
+      unsubBudgets(); unsubTargets(); unsubTherapistSchedules(); unsubTherapistTargets(); unsubStatsToday(); unsubStatsYesterday(); 
     };
-  // ★ 依賴陣列中加入 selectedYear，確保切換年份時會重新抓取該年資料
-  }, [user, currentBrand, getCollectionPath, getDocPath, selectedYear]); 
+  // ★ 依賴陣列中加入 selectedYear，確保切換年份時會重新抓取該年資料，並加上 fetchGlobalData
+  }, [user, currentBrand, getCollectionPath, getDocPath, selectedYear, fetchGlobalData]); 
 
 
   // ==========================================
@@ -544,8 +560,9 @@ export default function App() {
     user, loading, analytics, managers: visibleManagers, budgets, targets, rawData: visibleRawData, allReports: rawData, 
     annualAggregatedData, 
     showToast, openConfirm, fmtMoney, fmtNum, inputDate, setInputDate, storeList: analytics?.storeList || [], setTargets, selectedYear, selectedMonth, permissions, storeAccounts, managerAuth, currentUser, userRole, logActivity, handleUpdateStorePassword, handleUpdateManagerPassword, handleUpdateTherapistPassword, navigateToStore, activeView, appId, 
-    therapists: visibleTherapists, therapistReports: visibleTherapistReports, therapistSchedules, therapistTargets, trainerAuth, handleUpdateTrainerAuth, auditExclusions, handleUpdateAuditExclusions, currentBrand, setCurrentBrandId, getCollectionPath, getDocPath, dailyLoginCount, yesterdayLoginCount, securityConfig, isOnline
-  }), [user, loading, analytics, visibleManagers, budgets, targets, visibleRawData, rawData, annualAggregatedData, inputDate, selectedYear, selectedMonth, permissions, storeAccounts, managerAuth, currentUser, userRole, logActivity, handleUpdateStorePassword, handleUpdateManagerPassword, handleUpdateTherapistPassword, navigateToStore, activeView, appId, visibleTherapists, visibleTherapistReports, therapistSchedules, therapistTargets, trainerAuth, handleUpdateTrainerAuth, auditExclusions, handleUpdateAuditExclusions, currentBrand, setCurrentBrandId, getCollectionPath, getDocPath, dailyLoginCount, yesterdayLoginCount, securityConfig, isOnline]);
+    therapists: visibleTherapists, therapistReports: visibleTherapistReports, therapistSchedules, therapistTargets, trainerAuth, handleUpdateTrainerAuth, auditExclusions, handleUpdateAuditExclusions, currentBrand, setCurrentBrandId, getCollectionPath, getDocPath, dailyLoginCount, yesterdayLoginCount, securityConfig, isOnline,
+    fetchGlobalData // 👈 新增：讓設定頁面等可以隨時呼叫重新抓取資料
+  }), [user, loading, analytics, visibleManagers, budgets, targets, visibleRawData, rawData, annualAggregatedData, inputDate, selectedYear, selectedMonth, permissions, storeAccounts, managerAuth, currentUser, userRole, logActivity, handleUpdateStorePassword, handleUpdateManagerPassword, handleUpdateTherapistPassword, navigateToStore, activeView, appId, visibleTherapists, visibleTherapistReports, therapistSchedules, therapistTargets, trainerAuth, handleUpdateTrainerAuth, auditExclusions, handleUpdateAuditExclusions, currentBrand, setCurrentBrandId, getCollectionPath, getDocPath, dailyLoginCount, yesterdayLoginCount, securityConfig, isOnline, fetchGlobalData]);
 
   const memoizedViews = useMemo(() => {
     return (
@@ -633,7 +650,7 @@ export default function App() {
               <div className="relative hidden md:block w-56 lg:w-72 group"><Search className="absolute left-3 top-2.5 text-stone-400 group-focus-within:text-stone-600 transition-colors" size={18} /><input type="text" placeholder="搜尋店名..." value={globalSearchTerm} onChange={(e) => setGlobalSearchTerm(e.target.value)} className="w-full pl-10 pr-4 py-2 bg-white border border-stone-200 rounded-full text-sm focus:ring-4 focus:ring-stone-100 focus:border-stone-300 transition-all outline-none shadow-sm text-stone-600 placeholder-stone-300" />{globalSearchTerm && (<div className="absolute top-full left-0 right-0 mt-2 bg-white border border-stone-200 rounded-2xl shadow-xl z-50 max-h-60 overflow-y-auto animate-in fade-in slide-in-from-top-2">{allStoreNames.filter((s) => s.includes(globalSearchTerm)).length > 0 ? (allStoreNames.filter((s) => s.includes(globalSearchTerm)).map((s) => (<button key={s} onClick={() => { navigateToStore(s); setGlobalSearchTerm(""); }} className="w-full text-left px-4 py-3 hover:bg-stone-50 text-sm font-medium text-stone-600 flex items-center gap-2 transition-colors"><Store size={16} className="text-stone-400" /> {s}</button>))) : (<div className="px-4 py-3 text-xs text-stone-400 text-center">無相符店家</div>)}</div>)}</div>
               <div className="flex items-center gap-2 bg-stone-100 px-2 py-1 md:px-3 md:py-1.5 rounded-lg border border-stone-200">
                 <Filter size={16} className="text-stone-400 hidden sm:block" />
-                <select value={selectedYear} onChange={(e) => setSelectedYear(e.target.value)} className="bg-transparent text-sm font-bold text-stone-600 outline-none border-r border-stone-200 pr-2 mr-2 cursor-pointer hover:text-stone-800 transition-colors">{[2024, 2025, 2026].map((y) => (<option key={y} value={y}>{y}</option>))}</select>
+                <select value={selectedYear} onChange={(e) => setSelectedYear(e.target.value)} className="bg-transparent text-sm font-bold text-stone-600 outline-none border-r border-stone-200 pr-2 mr-2 cursor-pointer hover:text-stone-800 transition-colors">{[2025, 2026, 2027].map((y) => (<option key={y} value={y}>{y}</option>))}</select>
                 <select value={selectedMonth} onChange={(e) => setSelectedMonth(e.target.value)} className="bg-transparent text-sm font-bold text-stone-600 outline-none cursor-pointer hover:text-stone-800 transition-colors">{Array.from({ length: 12 }, (_, i) => i + 1).map((m) => (<option key={m} value={m}>{m}月</option>))}</select>
               </div>
             </div>
