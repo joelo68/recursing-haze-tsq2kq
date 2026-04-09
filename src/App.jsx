@@ -36,7 +36,7 @@ import LoginView from "./components/LoginView";
 // ==========================================
 // ★ 系統核心版本號 (黑洞全封印效能版)
 // ==========================================
-const CURRENT_APP_VERSION = "2.5.0"; 
+const CURRENT_APP_VERSION = "2.5.1"; 
 
 const isNewerVersion = (local, remote) => {
   if (!remote) return true;
