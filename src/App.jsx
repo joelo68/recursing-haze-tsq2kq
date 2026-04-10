@@ -34,9 +34,9 @@ import { useAnalytics } from "./hooks/useAnalytics";
 import LoginView from "./components/LoginView";
 
 // ==========================================
-// ★ 系統核心版本號 (黑洞全封印效能版)
+// ★ 系統核心版本號 (終極動態快取版)
 // ==========================================
-const CURRENT_APP_VERSION = "2.5.1"; 
+const CURRENT_APP_VERSION = "2.5.2"; 
 
 const isNewerVersion = (local, remote) => {
   if (!remote) return true;
@@ -391,31 +391,27 @@ export default function App() {
     }
   }, [user, currentBrand, getDocPath, getCollectionPath]);
 
+
   // ==========================================
-  // ★ 黑洞一號修復：將時間鎖 (selectedYear) 重新掛回 + 流量極致優化
+  // ★ 黑洞一號修復：將時間鎖 (selectedYear) 重新掛回
   // ==========================================
   useEffect(() => {
     if (!user) return;
     setBudgets({}); setManagers({}); setStoreAccounts([]); setManagerAuth({}); setTherapists([]); setTherapistSchedules({}); setTherapistTargets({}); setPermissions(DEFAULT_PERMISSIONS); setTargets({ newASP: 3500, trafficASP: 1200 });
     setSecurityConfig({ enabled: true, timeoutMinutes: 3, warningSeconds: 15, exemptRoles: ["director", "master"] });
 
-    // ★ 把被選中的年份轉為字串
     const targetYearStr = String(selectedYear);
 
-    // ★ 1. 執行單次讀取 (取代原本的 10 個 onSnapshot)
     fetchGlobalData();
 
-    // ★ 2. 保留需要「即時連線」的高頻營運數據
     const unsubBudgets = onSnapshot(getCollectionPath("monthly_targets"), (s) => { const b = {}; s.docs.forEach((d) => (b[d.id] = d.data())); setBudgets(b); });
     const unsubTargets = onSnapshot(getDocPath("kpi_targets"), (s) => { if (s.exists()) setTargets(s.data()); else setTargets({ newASP: 3500, trafficASP: 1200 }); });
     
-    // 🚀 掛回時間鎖：加上 where("year", "==", targetYearStr)
     const unsubTherapistSchedules = onSnapshot(
       query(getCollectionPath("therapist_schedules"), where("year", "==", targetYearStr)), 
       (s) => { const schedules = {}; s.docs.forEach((d) => (schedules[d.id] = d.data())); setTherapistSchedules(schedules); }
     );
     
-    // 🚀 掛回時間鎖：加上 where("year", "==", targetYearStr)
     const unsubTherapistTargets = onSnapshot(
       query(getCollectionPath("therapist_targets"), where("year", "==", targetYearStr)), 
       (s) => { const t = {}; s.docs.forEach((d) => (t[d.id] = d.data())); setTherapistTargets(t); }
@@ -431,52 +427,116 @@ export default function App() {
     return () => { 
       unsubBudgets(); unsubTargets(); unsubTherapistSchedules(); unsubTherapistTargets(); unsubStatsToday(); unsubStatsYesterday(); 
     };
-  // ★ 依賴陣列中加入 selectedYear，確保切換年份時會重新抓取該年資料，並加上 fetchGlobalData
   }, [user, currentBrand, getCollectionPath, getDocPath, selectedYear, fetchGlobalData]); 
 
 
-  // ==========================================
-  // ★ 黑洞二號修復：年度報表輕量化 (維持不變)
-  // ==========================================
-  const fetchMode = activeView === 'annual' ? 'year' : 'month';
+  // =========================================================================
+  // ★ 終極效能修復：動態快取 (Local Cache) 與視窗解綁
+  // =========================================================================
+  
+  // 建立本地快取池，用來存放「過去月份」的歷史資料
+  const monthCacheRef = useRef({});
 
+  // 💦 [獨立水龍頭 A]：年度總帳卡 (永遠只看 selectedYear，不受切換畫面影響)
+  useEffect(() => {
+    if (!user) return;
+    const targetYear = String(selectedYear);
+
+    const unsubAgg = onSnapshot(
+      query(getCollectionPath("monthly_aggregated"), where("year", "in", [targetYear, Number(targetYear)])),
+      (s) => setAnnualAggregatedData(s.docs.map((d) => ({ id: d.id, ...d.data() })))
+    );
+
+    return () => unsubAgg();
+  }, [user, currentBrand, selectedYear, getCollectionPath]);
+
+  // 💦 [獨立水龍頭 B]：月度日報與管理師明細 (導入動態快取策略)
   useEffect(() => {
     if (!user) return;
 
-    setRawData([]); 
-    setTherapistReports([]);
-    setAnnualAggregatedData([]); // 切換時清空舊總計
+    const targetYear = String(selectedYear);
+    const targetMonth = String(selectedMonth).padStart(2, '0');
+    // 讓快取 Key 包含品牌，切換品牌時才不會拿到舊資料
+    const cacheKey = `${currentBrand.id}_${targetYear}_${targetMonth}`;
 
-    const targetYear = selectedYear;
+    // 判斷是否為「現實中的當前月份」
+    const now = new Date();
+    const currentRealYear = String(now.getFullYear());
+    const currentRealMonth = String(now.getMonth() + 1).padStart(2, '0');
+    const isCurrentMonth = (targetYear === currentRealYear && targetMonth === currentRealMonth);
 
-    if (fetchMode === 'year') { 
-      const unsubAgg = onSnapshot(
-        query(getCollectionPath("monthly_aggregated"), where("year", "in", [targetYear, String(targetYear)])),
-        (s) => setAnnualAggregatedData(s.docs.map((d) => ({ id: d.id, ...d.data() })))
-      );
-      return () => unsubAgg();
-      
-    } else { 
-      const m = String(selectedMonth).padStart(2, '0'); 
-      const startDate = `${targetYear}-${m}-01`; 
-      const endDate = `${targetYear}-${m}-31`; 
+    const startDate = `${targetYear}-${targetMonth}-01`;
+    const endDate = `${targetYear}-${targetMonth}-31`;
+
+    if (isCurrentMonth) {
+      // 👉 【情境一】當前月份：店長隨時會輸入，保持 onSnapshot 即時連線
+      setRawData([]);
+      setTherapistReports([]);
 
       const unsubReports = onSnapshot(
-        query(getCollectionPath("daily_reports"), where("date", ">=", startDate), where("date", "<=", endDate), orderBy("date", "desc")), 
+        query(getCollectionPath("daily_reports"), where("date", ">=", startDate), where("date", "<=", endDate), orderBy("date", "desc")),
         (s) => setRawData(s.docs.map((d) => ({ id: d.id, ...d.data() })))
       );
-      
+
       const unsubTherapistReports = onSnapshot(
-        query(getCollectionPath("therapist_daily_reports"), where("date", ">=", startDate), where("date", "<=", endDate), orderBy("date", "desc")), 
+        query(getCollectionPath("therapist_daily_reports"), where("date", ">=", startDate), where("date", "<=", endDate), orderBy("date", "desc")),
         (s) => setTherapistReports(s.docs.map((d) => ({ id: d.id, ...d.data() })))
       );
 
-      return () => { 
-        unsubReports(); 
-        unsubTherapistReports(); 
+      return () => {
+        unsubReports();
+        unsubTherapistReports();
+      };
+
+    } else {
+      // 👉 【情境二】過去月份：歷史資料不變，採用 getDocs 並放入 Local Cache
+      if (monthCacheRef.current[cacheKey]) {
+        // 🎯 命中快取！直接從瀏覽器記憶體取出，Firebase 讀取數 = 0
+        setRawData(monthCacheRef.current[cacheKey].reports);
+        setTherapistReports(monthCacheRef.current[cacheKey].therapistReports);
+        return;
+      }
+
+      // 沒有快取，向 Firebase 單次索取
+      setRawData([]);
+      setTherapistReports([]);
+      let isMounted = true;
+
+      const fetchPastMonth = async () => {
+        try {
+          const [reportsSnap, tReportsSnap] = await Promise.all([
+            getDocs(query(getCollectionPath("daily_reports"), where("date", ">=", startDate), where("date", "<=", endDate), orderBy("date", "desc"))),
+            getDocs(query(getCollectionPath("therapist_daily_reports"), where("date", ">=", startDate), where("date", "<=", endDate), orderBy("date", "desc")))
+          ]);
+
+          if (!isMounted) return;
+
+          const reportsData = reportsSnap.docs.map(d => ({ id: d.id, ...d.data() }));
+          const tReportsData = tReportsSnap.docs.map(d => ({ id: d.id, ...d.data() }));
+
+          // 📦 存入快取池 (下一次切換回來就不會再抓了)
+          monthCacheRef.current[cacheKey] = {
+            reports: reportsData,
+            therapistReports: tReportsData
+          };
+
+          setRawData(reportsData);
+          setTherapistReports(tReportsData);
+
+        } catch (e) {
+          console.error("單次獲取歷史月份失敗:", e);
+        }
+      };
+
+      fetchPastMonth();
+
+      return () => {
+        isMounted = false; // 防止組件卸載後還去 setState
       };
     }
-  }, [user, currentBrand, selectedYear, selectedMonth, fetchMode, getCollectionPath]);
+  }, [user, currentBrand, selectedYear, selectedMonth, getCollectionPath]);
+
+  // =========================================================================
 
 
   const handleLogin = useCallback((roleId, userInfo = null) => {
@@ -561,7 +621,7 @@ export default function App() {
     annualAggregatedData, 
     showToast, openConfirm, fmtMoney, fmtNum, inputDate, setInputDate, storeList: analytics?.storeList || [], setTargets, selectedYear, selectedMonth, permissions, storeAccounts, managerAuth, currentUser, userRole, logActivity, handleUpdateStorePassword, handleUpdateManagerPassword, handleUpdateTherapistPassword, navigateToStore, activeView, appId, 
     therapists: visibleTherapists, therapistReports: visibleTherapistReports, therapistSchedules, therapistTargets, trainerAuth, handleUpdateTrainerAuth, auditExclusions, handleUpdateAuditExclusions, currentBrand, setCurrentBrandId, getCollectionPath, getDocPath, dailyLoginCount, yesterdayLoginCount, securityConfig, isOnline,
-    fetchGlobalData // 👈 新增：讓設定頁面等可以隨時呼叫重新抓取資料
+    fetchGlobalData 
   }), [user, loading, analytics, visibleManagers, budgets, targets, visibleRawData, rawData, annualAggregatedData, inputDate, selectedYear, selectedMonth, permissions, storeAccounts, managerAuth, currentUser, userRole, logActivity, handleUpdateStorePassword, handleUpdateManagerPassword, handleUpdateTherapistPassword, navigateToStore, activeView, appId, visibleTherapists, visibleTherapistReports, therapistSchedules, therapistTargets, trainerAuth, handleUpdateTrainerAuth, auditExclusions, handleUpdateAuditExclusions, currentBrand, setCurrentBrandId, getCollectionPath, getDocPath, dailyLoginCount, yesterdayLoginCount, securityConfig, isOnline, fetchGlobalData]);
 
   const memoizedViews = useMemo(() => {
