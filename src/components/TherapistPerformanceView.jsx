@@ -102,7 +102,7 @@ const TherapistPerformanceView = ({ therapistStats, brandInfo }) => {
         return ( 
           <div className="grid grid-cols-1 lg:grid-cols-12 gap-4 lg:gap-5">
             
-            {/* 1. 紫色英雄卡 (佔比縮小：12 份中的 5 份) */}
+            {/* 1. 紫色英雄卡 */}
             <div className={`lg:col-span-12 xl:col-span-5 ${bgClass} rounded-3xl p-6 md:p-8 text-white shadow-xl ${shadowClass} relative overflow-hidden transition-all duration-500 flex flex-col justify-between`}> 
                 <div className="absolute top-0 right-0 p-4 opacity-10 pointer-events-none"><info.icon size={160} /></div> 
                 <div className="relative z-10 flex flex-col justify-between h-full w-full"> 
@@ -119,7 +119,7 @@ const TherapistPerformanceView = ({ therapistStats, brandInfo }) => {
                           <p className="font-bold text-sm flex items-center gap-2">{status === 'DANGER' && <Frown size={18}/>}{info.title}</p>
                           <p className="text-xs text-white/70 mt-1 font-medium">{info.sub}</p>
                       </div> 
-                      <div className="flex gap-6 text-right w-full sm:w-auto xl:w-full 2xl:w-auto justify-start sm:justify-end xl:justify-start 2xl:justify-end"> 
+                      <div className="flex gap-6 text-right w-full md:w-auto justify-end"> 
                           <div><p className="text-xs text-white/60 font-bold uppercase mb-1 whitespace-nowrap">個人總業績</p><p className="text-2xl sm:text-3xl font-mono font-bold tracking-tight">{fmtMoney(therapistStats.myStats.totalRevenue)}</p></div> 
                           <div><p className="text-xs text-white/60 font-bold uppercase mb-1 whitespace-nowrap">新客締結率</p><p className="text-2xl sm:text-3xl font-mono font-bold tracking-tight">{therapistStats.myStats.newClosingRate.toFixed(0)}%</p></div> 
                       </div> 
@@ -127,7 +127,7 @@ const TherapistPerformanceView = ({ therapistStats, brandInfo }) => {
                 </div> 
             </div>
 
-            {/* 2. 兩張堆疊的分析 KPI 小卡 (佔比擴充：12 份中的 3 份) */}
+            {/* 2. 分析 KPI 小卡 */}
             <div className="lg:col-span-6 xl:col-span-3 flex flex-col gap-4 lg:gap-5">
                <div className="bg-white rounded-3xl border border-stone-200 shadow-sm overflow-hidden flex flex-col flex-1 h-full">
                  <div className="bg-amber-50/80 px-4 py-3 text-amber-900 flex items-center gap-1.5 border-b border-amber-100/60">
@@ -158,7 +158,7 @@ const TherapistPerformanceView = ({ therapistStats, brandInfo }) => {
                </div>
             </div>
 
-            {/* 3. 本月風雲榜 (Top 5) (佔比擴充：12 份中的 4 份) */}
+            {/* 3. 本月風雲榜 (Top 5) */}
             <div className="lg:col-span-6 xl:col-span-4 bg-white rounded-3xl border border-stone-200 shadow-sm overflow-hidden flex flex-col h-full">
                <div className="bg-amber-50/80 px-5 py-4 text-amber-900 flex items-center gap-2 border-b border-amber-100/60">
                  <Award size={18} strokeWidth={2.5} className="text-amber-500"/>
@@ -170,11 +170,12 @@ const TherapistPerformanceView = ({ therapistStats, brandInfo }) => {
                      key={t.id} 
                      className={`flex justify-between items-center p-2.5 md:p-3 rounded-2xl border transition-colors ${t.id === currentUser?.id ? 'bg-indigo-50 border-indigo-200 shadow-sm' : 'bg-white border-stone-100 shadow-[0_2px_8px_-4px_rgba(0,0,0,0.05)]'}`}
                    >
-                     {/* ★ 核心修正：加入 whitespace-nowrap 絕對禁止換行 */}
+                     {/* ★ 移除 truncate，改用 flex-wrap 讓標籤自然換行，絕對不切字 */}
                      <div className="flex items-center gap-3 text-sm font-bold text-stone-700 flex-1 min-w-0 pr-2">
                        <span className={`shrink-0 w-7 h-7 flex items-center justify-center rounded-full text-xs font-black shadow-inner ${i===0?'bg-gradient-to-br from-yellow-300 to-amber-500 text-white':i===1?'bg-gradient-to-br from-stone-200 to-stone-400 text-white':i===2?'bg-gradient-to-br from-orange-200 to-orange-400 text-white':'bg-stone-100 text-stone-400'}`}>{i+1}</span>
-                       <div className="flex items-center gap-1.5 whitespace-nowrap overflow-hidden">
-                         <span className="truncate">{t.name}</span>
+                       <div className="flex flex-wrap items-center gap-x-1.5 gap-y-0.5">
+                         <span className="text-stone-700 font-bold">{t.name}</span>
+                         <span className="shrink-0 text-[10px] text-stone-500 bg-stone-100/80 px-1.5 py-0.5 rounded font-medium border border-stone-200/50 tracking-wider">{t.storeDisplay}</span>
                          {t.id === currentUser?.id && <span className="shrink-0 text-[9px] bg-indigo-500 text-white px-1.5 py-0.5 rounded-full tracking-wider">ME</span>}
                        </div>
                      </div>
@@ -193,33 +194,41 @@ const TherapistPerformanceView = ({ therapistStats, brandInfo }) => {
       {/* ★ 底部版塊：昨日 Top 3 + 大盤雷達 + 衝刺進度條 ★ */}
       {/* ========================================================= */}
       {therapistStats.myStats && (
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-4 lg:gap-5">
+        <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-12 gap-4 lg:gap-5">
           
-          {/* 1. 昨日戰績 (Top 3) */}
-          <div className="bg-white rounded-3xl border border-stone-200 shadow-sm overflow-hidden flex flex-col">
+          {/* 1. 昨日戰績 (Top 3) - ★ 擴充至 5/12 的超大空間 ★ */}
+          <div className="md:col-span-2 xl:col-span-5 bg-white rounded-3xl border border-stone-200 shadow-sm overflow-hidden flex flex-col">
             <div className="bg-amber-50/80 px-5 py-4 text-amber-900 flex items-center gap-2 border-b border-amber-100/60">
               <Crown size={18} strokeWidth={2.5} className="text-amber-500"/>
               <h3 className="text-sm font-extrabold tracking-wide">昨日戰績 (Top 3)</h3>
             </div>
             <div className="p-5 space-y-4 flex-1 bg-stone-50/30 flex flex-col justify-center">
-              {therapistStats.yesterdayTop3?.length > 0 ? therapistStats.yesterdayTop3.map((t, i) => (
-                <div key={t.id} className="flex justify-between items-center bg-white p-3 md:p-3.5 rounded-2xl border border-stone-100 shadow-[0_2px_8px_-4px_rgba(0,0,0,0.05)]">
-                  {/* ★ 核心修正：同步防腰斬設定 */}
-                  <div className="flex items-center gap-3 text-sm font-bold text-stone-700 flex-1 min-w-0 pr-2">
-                    <span className={`shrink-0 w-7 h-7 flex items-center justify-center rounded-full text-xs font-black shadow-inner ${i===0?'bg-gradient-to-br from-yellow-300 to-amber-500 text-white':i===1?'bg-gradient-to-br from-stone-200 to-stone-400 text-white':'bg-gradient-to-br from-orange-200 to-orange-400 text-white'}`}>{i+1}</span>
-                    <div className="flex items-center gap-1.5 whitespace-nowrap overflow-hidden">
-                      <span className="truncate">{t.name}</span>
-                      {t.id === currentUser?.id && <span className="shrink-0 text-[9px] bg-indigo-500 text-white px-1.5 py-0.5 rounded-full tracking-wider">ME</span>}
+              {therapistStats.yesterdayTop3?.length > 0 ? therapistStats.yesterdayTop3.map((t, i) => {
+                const matchedInfo = therapistStats.rankings.find(r => r.id === t.id);
+                const displayStore = matchedInfo?.storeDisplay || t.storeDisplay || "未知店";
+
+                return (
+                  <div key={t.id} className="flex justify-between items-center bg-white p-3 md:p-3.5 rounded-2xl border border-stone-100 shadow-[0_2px_8px_-4px_rgba(0,0,0,0.05)]">
+                    {/* ★ 移除 truncate，改用 flex-wrap 讓標籤自然換行，絕對不切字 */}
+                    <div className="flex items-center gap-3 text-sm font-bold text-stone-700 flex-1 min-w-0 pr-2">
+                      <span className={`shrink-0 w-7 h-7 flex items-center justify-center rounded-full text-xs font-black shadow-inner ${i===0?'bg-gradient-to-br from-yellow-300 to-amber-500 text-white':i===1?'bg-gradient-to-br from-stone-200 to-stone-400 text-white':'bg-gradient-to-br from-orange-200 to-orange-400 text-white'}`}>{i+1}</span>
+                      <div className="flex flex-wrap items-center gap-x-1.5 gap-y-0.5">
+                        <span className="text-stone-700 font-bold">{t.name}</span>
+                        <span className="shrink-0 text-[10px] text-stone-500 bg-stone-100/80 px-1.5 py-0.5 rounded font-medium border border-stone-200/50 tracking-wider">
+                          {displayStore}
+                        </span>
+                        {t.id === currentUser?.id && <span className="shrink-0 text-[9px] bg-indigo-500 text-white px-1.5 py-0.5 rounded-full tracking-wider">ME</span>}
+                      </div>
                     </div>
+                    <span className={`shrink-0 font-mono font-black text-right pl-1 ${t.id === currentUser?.id ? 'text-indigo-600' : 'text-stone-700'}`}>{fmtMoney(t.revenue)}</span>
                   </div>
-                  <span className={`shrink-0 font-mono font-black text-right pl-1 ${t.id === currentUser?.id ? 'text-indigo-600' : 'text-stone-700'}`}>{fmtMoney(t.revenue)}</span>
-                </div>
-              )) : <div className="text-xs font-bold text-stone-400 text-center py-6 bg-stone-50 rounded-2xl border border-dashed border-stone-200">昨日無業績紀錄</div>}
+                );
+              }) : <div className="text-xs font-bold text-stone-400 text-center py-6 bg-stone-50 rounded-2xl border border-dashed border-stone-200">昨日無業績紀錄</div>}
             </div>
           </div>
 
-          {/* 2. 全區營運大盤雷達 */}
-          <div className="bg-white rounded-3xl border border-stone-200 shadow-sm overflow-hidden flex flex-col">
+          {/* 2. 全區營運大盤雷達 - ★ 佔 4/12 空間 ★ */}
+          <div className="md:col-span-1 xl:col-span-4 bg-white rounded-3xl border border-stone-200 shadow-sm overflow-hidden flex flex-col">
              <div className="bg-amber-50/80 px-5 py-4 text-amber-900 flex items-center gap-2 border-b border-amber-100/60">
                <Target size={18} strokeWidth={2.5} className="text-amber-500"/>
                <h3 className="text-sm font-extrabold tracking-wide">全區營運雷達</h3>
@@ -262,8 +271,8 @@ const TherapistPerformanceView = ({ therapistStats, brandInfo }) => {
              </div>
           </div>
 
-          {/* 3. 個人衝刺進度條 (Gauge) */}
-          <div className="bg-white rounded-3xl border border-stone-200 shadow-sm overflow-hidden flex flex-col">
+          {/* 3. 個人衝刺進度條 (Gauge) - ★ 佔 3/12 空間 ★ */}
+          <div className="md:col-span-1 xl:col-span-3 bg-white rounded-3xl border border-stone-200 shadow-sm overflow-hidden flex flex-col">
               <div className="bg-amber-50/80 px-5 py-4 text-amber-900 flex items-center gap-2 border-b border-amber-100/60">
                 <Zap size={18} strokeWidth={2.5} className="text-amber-500"/>
                 <h3 className="text-sm font-extrabold tracking-wide">個人衝刺中！</h3>
