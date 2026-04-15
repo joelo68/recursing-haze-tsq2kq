@@ -245,7 +245,7 @@ export function useDashboardStats() {
   }, [userRole, allReports, effectiveStores, budgets, selectedYear, selectedMonth, cleanName, brandPrefix]);
 
   const therapistStats = useMemo(() => {
-    if (!therapistReports) return { rankings: [], myStats: null, grandTotal: {} };
+    if (!therapistReports) return { rankings: [], myStats: null, grandTotal: {}, yesterdayTop3: [] };
     const currentMonthReports = therapistReports.filter(r => {
       const dStr = r.date.replace(/-/g, "/"); const d = new Date(dStr);
       const isTargetMonth = d.getFullYear() === parseInt(selectedYear) && (d.getMonth() + 1) === parseInt(selectedMonth);
@@ -297,19 +297,40 @@ export function useDashboardStats() {
     let myStats = null;
     if (userRole === 'therapist' && currentUser) { myStats = rankings.find(r => r.id === currentUser.id); }
     
+    // ★ 更新：將「新客數量」與「新客締結數」一併加總，以供大盤雷達運算
     const grandTotal = rankings.reduce((acc, curr) => ({ 
         totalRevenue: acc.totalRevenue + curr.totalRevenue, serviceCount: acc.serviceCount + curr.serviceCount, 
         newCustomerRevenue: acc.newCustomerRevenue + curr.newCustomerRevenue, oldCustomerRevenue: acc.oldCustomerRevenue + curr.oldCustomerRevenue,
-        returnRevenue: acc.returnRevenue + curr.returnRevenue, 
-    }), { totalRevenue: 0, serviceCount: 0, newCustomerRevenue: 0, oldCustomerRevenue: 0, returnRevenue: 0 });
+        returnRevenue: acc.returnRevenue + curr.returnRevenue,
+        newCustomerCount: acc.newCustomerCount + curr.newCustomerCount,
+        newCustomerClosings: acc.newCustomerClosings + curr.newCustomerClosings
+    }), { totalRevenue: 0, serviceCount: 0, newCustomerRevenue: 0, oldCustomerRevenue: 0, returnRevenue: 0, newCustomerCount: 0, newCustomerClosings: 0 });
     
+    // ★ 新增：大盤雷達指標運算
+    grandTotal.regionalNewClosingRate = grandTotal.newCustomerCount > 0 ? (grandTotal.newCustomerClosings / grandTotal.newCustomerCount) * 100 : 0;
+    grandTotal.regionalNewAsp = grandTotal.newCustomerCount > 0 ? (grandTotal.newCustomerRevenue / grandTotal.newCustomerCount) : 0;
+
     let systemTherapistCount = 0;
     if (therapists && Array.isArray(therapists)) {
         systemTherapistCount = therapists.filter(t => { return effectiveStores.includes(cleanName(t.store)); }).length;
     }
     grandTotal.count = systemTherapistCount;
 
-    return { rankings, myStats, grandTotal };
+    // ★ 新增：計算昨日全區前三名戰神
+    const yesterday = new Date();
+    yesterday.setDate(yesterday.getDate() - 1);
+    const yStr = `${yesterday.getFullYear()}-${String(yesterday.getMonth()+1).padStart(2,'0')}-${String(yesterday.getDate()).padStart(2,'0')}`;
+    const yesterdayMap = {};
+    
+    therapistReports.forEach(r => {
+        if (r.date === yStr && effectiveStores.includes(cleanName(r.storeName))) {
+            if (!yesterdayMap[r.therapistId]) yesterdayMap[r.therapistId] = { id: r.therapistId, name: r.therapistName, revenue: 0 };
+            yesterdayMap[r.therapistId].revenue += (Number(r.totalRevenue) || 0);
+        }
+    });
+    const yesterdayTop3 = Object.values(yesterdayMap).sort((a,b) => b.revenue - a.revenue).slice(0, 3);
+
+    return { rankings, myStats, grandTotal, yesterdayTop3 };
   }, [therapistReports, selectedYear, selectedMonth, effectiveStores, cleanName, userRole, currentUser, therapists]);
 
   return {

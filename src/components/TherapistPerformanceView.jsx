@@ -1,11 +1,46 @@
 // src/components/TherapistPerformanceView.jsx
 import React, { useContext } from "react";
-import { Flame, Crown, AlertTriangle, Zap, Frown, DollarSign, Sparkles, TrendingUp, Activity, FileWarning, Download, ArrowLeft, ArrowRight, Store } from "lucide-react";
+import { Flame, Crown, AlertTriangle, Zap, Frown, DollarSign, Sparkles, TrendingUp, Activity, FileWarning, Download, ArrowLeft, ArrowRight, Store, ArrowUp, ArrowDown, Target, Users, Receipt, Award } from "lucide-react";
 import { AppContext } from "../AppContext";
 import { Card } from "./SharedUI";
 
+// ★ 專屬的 SVG 半圓儀表板元件
+const GaugeChart = ({ progress }) => {
+  const safeProgress = Math.min(100, Math.max(0, progress));
+  const radius = 70;
+  const circumference = Math.PI * radius;
+  const strokeDashoffset = circumference - (circumference * safeProgress) / 100;
+  const needleAngle = -90 + (safeProgress / 100) * 180;
+
+  return (
+    <div className="relative w-48 h-32 mx-auto flex flex-col items-center justify-end">
+      <svg viewBox="0 0 200 120" className="w-full h-full overflow-visible absolute top-0">
+        <path d="M 30 100 A 70 70 0 0 1 170 100" fill="none" stroke="#f5f5f4" strokeWidth="18" strokeLinecap="round" />
+        <path 
+          d="M 30 100 A 70 70 0 0 1 170 100" 
+          fill="none" 
+          stroke="#f59e0b" 
+          strokeWidth="18" 
+          strokeLinecap="round" 
+          strokeDasharray={circumference} 
+          strokeDashoffset={strokeDashoffset} 
+          className="transition-all duration-1000 ease-out"
+        />
+        <g transform={`rotate(${needleAngle} 100 100)`} className="transition-transform duration-1000 ease-out">
+          <polygon points="96,100 104,100 100,50" fill="#44403c" />
+        </g>
+        <circle cx="100" cy="100" r="8" fill="#44403c" />
+        <circle cx="100" cy="100" r="3" fill="#ffffff" />
+      </svg>
+      <div className="relative z-10 bg-white/80 backdrop-blur-sm px-4 py-1 rounded-xl mb-1">
+        <span className="text-3xl font-black text-stone-800 font-mono tracking-tighter">{safeProgress}%</span>
+      </div>
+    </div>
+  );
+};
+
 const TherapistPerformanceView = ({ therapistStats, brandInfo }) => {
-  const { fmtMoney, fmtNum, userRole, currentUser } = useContext(AppContext);
+  const { fmtMoney, fmtNum, userRole, currentUser, therapistTargets, selectedYear, selectedMonth } = useContext(AppContext);
 
   const handleExportCSV = () => {
     const dataToExport = therapistStats.rankings.filter(t => userRole !== 'therapist' || t.id === currentUser?.id);
@@ -52,6 +87,10 @@ const TherapistPerformanceView = ({ therapistStats, brandInfo }) => {
 
   return (
     <div className="space-y-8 animate-in fade-in slide-in-from-bottom-4 duration-500 w-full min-w-0">
+      
+      {/* ========================================================= */}
+      {/* ★ 頂部版塊：個人英雄卡 + KPI分析小卡 + 本月戰績 Top 5 ★ */}
+      {/* ========================================================= */}
       {therapistStats.myStats && (() => {
         const info = getMotivationalMessage(therapistStats.myStats);
         const status = therapistStats.myStats.status;
@@ -59,8 +98,228 @@ const TherapistPerformanceView = ({ therapistStats, brandInfo }) => {
         let shadowClass = "shadow-indigo-200";
         if (status === "TOP") { bgClass = "bg-gradient-to-br from-amber-400 to-orange-500"; shadowClass = "shadow-amber-200"; } 
         else if (status === "DANGER") { bgClass = "bg-gradient-to-br from-rose-600 to-red-700"; shadowClass = "shadow-rose-200"; }
-        return ( <div className={`${bgClass} rounded-3xl p-6 text-white shadow-xl ${shadowClass} relative overflow-hidden transition-all duration-500`}> <div className="absolute top-0 right-0 p-4 opacity-10"><info.icon size={140} /></div> <div className="relative z-10 flex flex-col md:flex-row justify-between items-end gap-6"> <div> <div className="flex items-center gap-3 mb-2"><span className="bg-white/20 px-3 py-1 rounded-full text-xs font-bold backdrop-blur-sm flex items-center gap-1">{status === 'DANGER' && <Flame size={12} className="animate-pulse"/>}No.{therapistStats.myStats.rank}</span><span className="text-white/80 font-bold tracking-wider text-sm">{therapistStats.myStats.storeDisplay}</span></div><h2 className="text-3xl md:text-4xl font-extrabold mb-1">{therapistStats.myStats.name}</h2><div className="mt-2 p-3 bg-black/10 rounded-xl backdrop-blur-md border border-white/10 max-w-md"><p className="font-bold text-sm flex items-center gap-2">{status === 'DANGER' && <Frown size={16}/>}{info.title}</p><p className="text-xs text-white/70 mt-1">{info.sub}</p></div> </div> <div className="flex gap-6 text-right"> <div><p className="text-xs text-white/60 font-bold uppercase mb-1">個人總業績</p><p className="text-3xl font-mono font-bold">{fmtMoney(therapistStats.myStats.totalRevenue)}</p></div> <div><p className="text-xs text-white/60 font-bold uppercase mb-1">新客締結率</p><p className="text-3xl font-mono font-bold">{therapistStats.myStats.newClosingRate.toFixed(0)}%</p></div> </div> </div> </div> );
+        
+        return ( 
+          <div className="grid grid-cols-1 lg:grid-cols-12 gap-4 lg:gap-5">
+            
+            {/* 1. 紫色英雄卡 (佔比縮小：12 份中的 5 份) */}
+            <div className={`lg:col-span-12 xl:col-span-5 ${bgClass} rounded-3xl p-6 md:p-8 text-white shadow-xl ${shadowClass} relative overflow-hidden transition-all duration-500 flex flex-col justify-between`}> 
+                <div className="absolute top-0 right-0 p-4 opacity-10 pointer-events-none"><info.icon size={160} /></div> 
+                <div className="relative z-10 flex flex-col justify-between h-full w-full"> 
+                    <div>
+                      <div className="flex items-center gap-3 mb-3">
+                          <span className="bg-white/20 px-3 py-1 rounded-full text-xs font-bold backdrop-blur-sm flex items-center gap-1">{status === 'DANGER' && <Flame size={12} className="animate-pulse"/>}No.{therapistStats.myStats.rank}</span>
+                          <span className="text-white/80 font-bold tracking-wider text-sm">{therapistStats.myStats.storeDisplay}</span>
+                      </div>
+                      <h2 className="text-4xl md:text-5xl font-extrabold mb-1 tracking-tight">{therapistStats.myStats.name}</h2>
+                    </div>
+                    
+                    <div className="mt-8 flex flex-col sm:flex-row xl:flex-col 2xl:flex-row justify-between items-start sm:items-end gap-6 w-full">
+                      <div className="p-3.5 bg-black/10 rounded-2xl backdrop-blur-md border border-white/10 w-full sm:max-w-sm xl:max-w-full 2xl:max-w-sm">
+                          <p className="font-bold text-sm flex items-center gap-2">{status === 'DANGER' && <Frown size={18}/>}{info.title}</p>
+                          <p className="text-xs text-white/70 mt-1 font-medium">{info.sub}</p>
+                      </div> 
+                      <div className="flex gap-6 text-right w-full sm:w-auto xl:w-full 2xl:w-auto justify-start sm:justify-end xl:justify-start 2xl:justify-end"> 
+                          <div><p className="text-xs text-white/60 font-bold uppercase mb-1 whitespace-nowrap">個人總業績</p><p className="text-2xl sm:text-3xl font-mono font-bold tracking-tight">{fmtMoney(therapistStats.myStats.totalRevenue)}</p></div> 
+                          <div><p className="text-xs text-white/60 font-bold uppercase mb-1 whitespace-nowrap">新客締結率</p><p className="text-2xl sm:text-3xl font-mono font-bold tracking-tight">{therapistStats.myStats.newClosingRate.toFixed(0)}%</p></div> 
+                      </div> 
+                    </div>
+                </div> 
+            </div>
+
+            {/* 2. 兩張堆疊的分析 KPI 小卡 (佔比擴充：12 份中的 3 份) */}
+            <div className="lg:col-span-6 xl:col-span-3 flex flex-col gap-4 lg:gap-5">
+               <div className="bg-white rounded-3xl border border-stone-200 shadow-sm overflow-hidden flex flex-col flex-1 h-full">
+                 <div className="bg-amber-50/80 px-4 py-3 text-amber-900 flex items-center gap-1.5 border-b border-amber-100/60">
+                   <Users size={16} strokeWidth={2.5} className="text-amber-500"/>
+                   <h3 className="text-xs font-bold tracking-wide">本月新客佔比</h3>
+                 </div>
+                 <div className="p-4 md:p-5 flex-1 flex flex-col justify-center bg-stone-50/30">
+                   <p className="text-[11px] font-bold text-stone-500 mb-1">您的新客業績</p>
+                   <p className="text-xl md:text-2xl font-black font-mono text-stone-800 leading-none">{fmtMoney(therapistStats.myStats.newCustomerRevenue)}</p>
+                   <div className="w-full bg-stone-200 h-1.5 rounded-full mt-3 md:mt-4 overflow-hidden">
+                      <div className="bg-amber-500 h-full rounded-full transition-all duration-1000" style={{ width: `${Math.min(100, (therapistStats.myStats.newCustomerRevenue / (therapistStats.myStats.totalRevenue || 1)) * 100)}%` }}></div>
+                   </div>
+                 </div>
+               </div>
+
+               <div className="bg-white rounded-3xl border border-stone-200 shadow-sm overflow-hidden flex flex-col flex-1 h-full">
+                 <div className="bg-amber-50/80 px-4 py-3 text-amber-900 flex items-center gap-1.5 border-b border-amber-100/60">
+                   <Receipt size={16} strokeWidth={2.5} className="text-amber-500"/>
+                   <h3 className="text-xs font-bold tracking-wide">新客平均客單</h3>
+                 </div>
+                 <div className="p-4 md:p-5 flex-1 flex flex-col justify-center bg-stone-50/30">
+                   <p className="text-[11px] font-bold text-stone-500 mb-1">您的平均客單</p>
+                   <p className="text-xl md:text-2xl font-black font-mono text-stone-800 leading-none">{fmtMoney(Math.round(therapistStats.myStats.newAsp))}</p>
+                   <div className="w-full bg-stone-200 h-1.5 rounded-full mt-3 md:mt-4 overflow-hidden">
+                      <div className="bg-amber-500 h-full rounded-full transition-all duration-1000" style={{ width: `${Math.min(100, (therapistStats.myStats.newAsp / (therapistStats.grandTotal.regionalNewAsp || 1)) * 100)}%` }}></div>
+                   </div>
+                 </div>
+               </div>
+            </div>
+
+            {/* 3. 本月風雲榜 (Top 5) (佔比擴充：12 份中的 4 份) */}
+            <div className="lg:col-span-6 xl:col-span-4 bg-white rounded-3xl border border-stone-200 shadow-sm overflow-hidden flex flex-col h-full">
+               <div className="bg-amber-50/80 px-5 py-4 text-amber-900 flex items-center gap-2 border-b border-amber-100/60">
+                 <Award size={18} strokeWidth={2.5} className="text-amber-500"/>
+                 <h3 className="text-sm font-extrabold tracking-wide">本月風雲榜 (Top 5)</h3>
+               </div>
+               <div className="p-4 md:p-5 space-y-3 flex-1 bg-stone-50/30 flex flex-col justify-center">
+                 {therapistStats.rankings.slice(0, 5).map((t, i) => (
+                   <div 
+                     key={t.id} 
+                     className={`flex justify-between items-center p-2.5 md:p-3 rounded-2xl border transition-colors ${t.id === currentUser?.id ? 'bg-indigo-50 border-indigo-200 shadow-sm' : 'bg-white border-stone-100 shadow-[0_2px_8px_-4px_rgba(0,0,0,0.05)]'}`}
+                   >
+                     {/* ★ 核心修正：加入 whitespace-nowrap 絕對禁止換行 */}
+                     <div className="flex items-center gap-3 text-sm font-bold text-stone-700 flex-1 min-w-0 pr-2">
+                       <span className={`shrink-0 w-7 h-7 flex items-center justify-center rounded-full text-xs font-black shadow-inner ${i===0?'bg-gradient-to-br from-yellow-300 to-amber-500 text-white':i===1?'bg-gradient-to-br from-stone-200 to-stone-400 text-white':i===2?'bg-gradient-to-br from-orange-200 to-orange-400 text-white':'bg-stone-100 text-stone-400'}`}>{i+1}</span>
+                       <div className="flex items-center gap-1.5 whitespace-nowrap overflow-hidden">
+                         <span className="truncate">{t.name}</span>
+                         {t.id === currentUser?.id && <span className="shrink-0 text-[9px] bg-indigo-500 text-white px-1.5 py-0.5 rounded-full tracking-wider">ME</span>}
+                       </div>
+                     </div>
+                     <span className={`shrink-0 font-mono font-black text-right pl-1 ${t.id === currentUser?.id ? 'text-indigo-600' : 'text-stone-600'}`}>{fmtMoney(t.totalRevenue)}</span>
+                   </div>
+                 ))}
+                 {therapistStats.rankings.length === 0 && <div className="text-xs font-bold text-stone-400 text-center py-6">本月尚無排名資料</div>}
+               </div>
+            </div>
+
+          </div>
+        );
       })()}
+
+      {/* ========================================================= */}
+      {/* ★ 底部版塊：昨日 Top 3 + 大盤雷達 + 衝刺進度條 ★ */}
+      {/* ========================================================= */}
+      {therapistStats.myStats && (
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-4 lg:gap-5">
+          
+          {/* 1. 昨日戰績 (Top 3) */}
+          <div className="bg-white rounded-3xl border border-stone-200 shadow-sm overflow-hidden flex flex-col">
+            <div className="bg-amber-50/80 px-5 py-4 text-amber-900 flex items-center gap-2 border-b border-amber-100/60">
+              <Crown size={18} strokeWidth={2.5} className="text-amber-500"/>
+              <h3 className="text-sm font-extrabold tracking-wide">昨日戰績 (Top 3)</h3>
+            </div>
+            <div className="p-5 space-y-4 flex-1 bg-stone-50/30 flex flex-col justify-center">
+              {therapistStats.yesterdayTop3?.length > 0 ? therapistStats.yesterdayTop3.map((t, i) => (
+                <div key={t.id} className="flex justify-between items-center bg-white p-3 md:p-3.5 rounded-2xl border border-stone-100 shadow-[0_2px_8px_-4px_rgba(0,0,0,0.05)]">
+                  {/* ★ 核心修正：同步防腰斬設定 */}
+                  <div className="flex items-center gap-3 text-sm font-bold text-stone-700 flex-1 min-w-0 pr-2">
+                    <span className={`shrink-0 w-7 h-7 flex items-center justify-center rounded-full text-xs font-black shadow-inner ${i===0?'bg-gradient-to-br from-yellow-300 to-amber-500 text-white':i===1?'bg-gradient-to-br from-stone-200 to-stone-400 text-white':'bg-gradient-to-br from-orange-200 to-orange-400 text-white'}`}>{i+1}</span>
+                    <div className="flex items-center gap-1.5 whitespace-nowrap overflow-hidden">
+                      <span className="truncate">{t.name}</span>
+                      {t.id === currentUser?.id && <span className="shrink-0 text-[9px] bg-indigo-500 text-white px-1.5 py-0.5 rounded-full tracking-wider">ME</span>}
+                    </div>
+                  </div>
+                  <span className={`shrink-0 font-mono font-black text-right pl-1 ${t.id === currentUser?.id ? 'text-indigo-600' : 'text-stone-700'}`}>{fmtMoney(t.revenue)}</span>
+                </div>
+              )) : <div className="text-xs font-bold text-stone-400 text-center py-6 bg-stone-50 rounded-2xl border border-dashed border-stone-200">昨日無業績紀錄</div>}
+            </div>
+          </div>
+
+          {/* 2. 全區營運大盤雷達 */}
+          <div className="bg-white rounded-3xl border border-stone-200 shadow-sm overflow-hidden flex flex-col">
+             <div className="bg-amber-50/80 px-5 py-4 text-amber-900 flex items-center gap-2 border-b border-amber-100/60">
+               <Target size={18} strokeWidth={2.5} className="text-amber-500"/>
+               <h3 className="text-sm font-extrabold tracking-wide">全區營運雷達</h3>
+             </div>
+             <div className="p-5 space-y-6 flex-1 bg-stone-50/30 flex flex-col justify-center">
+               
+               <div className="flex justify-between items-center border-b border-stone-100 pb-5">
+                 <div>
+                   <p className="text-[10px] font-bold text-stone-400 uppercase tracking-wider mb-1">全區新客締結率</p>
+                   <div className="flex items-baseline gap-2">
+                     <span className="text-3xl font-black text-stone-800 font-mono tracking-tighter">{therapistStats.grandTotal.regionalNewClosingRate.toFixed(0)}%</span>
+                     <span className="text-xs text-stone-400 font-bold">平均</span>
+                   </div>
+                 </div>
+                 <div className="text-right">
+                   <p className="text-[10px] font-bold text-stone-400 mb-1">您的表現</p>
+                   <div className={`flex items-center gap-1 font-black text-xl font-mono ${therapistStats.myStats.newClosingRate >= therapistStats.grandTotal.regionalNewClosingRate ? 'text-emerald-500' : 'text-rose-500'}`}>
+                     {therapistStats.myStats.newClosingRate.toFixed(0)}%
+                     {therapistStats.myStats.newClosingRate >= therapistStats.grandTotal.regionalNewClosingRate ? <ArrowUp size={18} strokeWidth={3}/> : <ArrowDown size={18} strokeWidth={3}/>}
+                   </div>
+                 </div>
+               </div>
+
+               <div className="flex justify-between items-center">
+                 <div>
+                   <p className="text-[10px] font-bold text-stone-400 uppercase tracking-wider mb-1">全區新客平均客單</p>
+                   <div className="flex items-baseline gap-2">
+                     <span className="text-2xl font-black text-stone-800 font-mono tracking-tighter">{fmtMoney(Math.round(therapistStats.grandTotal.regionalNewAsp))}</span>
+                   </div>
+                 </div>
+                 <div className="text-right">
+                   <p className="text-[10px] font-bold text-stone-400 mb-1">您的表現</p>
+                   <div className={`flex items-center justify-end gap-1 font-black text-xl font-mono ${therapistStats.myStats.newAsp >= therapistStats.grandTotal.regionalNewAsp ? 'text-emerald-500' : 'text-rose-500'}`}>
+                     {fmtMoney(Math.round(therapistStats.myStats.newAsp))}
+                     {therapistStats.myStats.newAsp >= therapistStats.grandTotal.regionalNewAsp ? <ArrowUp size={18} strokeWidth={3}/> : <ArrowDown size={18} strokeWidth={3}/>}
+                   </div>
+                 </div>
+               </div>
+
+             </div>
+          </div>
+
+          {/* 3. 個人衝刺進度條 (Gauge) */}
+          <div className="bg-white rounded-3xl border border-stone-200 shadow-sm overflow-hidden flex flex-col">
+              <div className="bg-amber-50/80 px-5 py-4 text-amber-900 flex items-center gap-2 border-b border-amber-100/60">
+                <Zap size={18} strokeWidth={2.5} className="text-amber-500"/>
+                <h3 className="text-sm font-extrabold tracking-wide">個人衝刺中！</h3>
+              </div>
+              
+              <div className="p-5 flex-1 bg-stone-50/30 flex flex-col items-center justify-between">
+                  {(() => {
+                      const getMyTarget = () => {
+                        if (!therapistTargets) return 0;
+                        const myId = therapistStats.myStats.id;
+                        const myName = therapistStats.myStats.name;
+                        const yStr = String(selectedYear);
+                        const mStr = String(selectedMonth);
+                        const mPad = mStr.padStart(2, '0');
+
+                        const targetList = Object.values(therapistTargets);
+                        const matchedDoc = targetList.find(t => 
+                          (t.therapistId === myId || t.name === myName || t.therapistName === myName) && 
+                          String(t.year) === yStr
+                        );
+
+                        if (matchedDoc) {
+                          if (matchedDoc[mStr] !== undefined && matchedDoc[mStr] !== "") return Number(matchedDoc[mStr]);
+                          if (matchedDoc[mPad] !== undefined && matchedDoc[mPad] !== "") return Number(matchedDoc[mPad]);
+                          if (matchedDoc[`month_${mStr}`]) return Number(matchedDoc[`month_${mStr}`]);
+                          if (matchedDoc.target) return Number(matchedDoc.target);
+                        }
+                        return 0;
+                      };
+                      
+                      let myTargetVal = getMyTarget();
+                      if (myTargetVal === 0) myTargetVal = 800000;
+                      
+                      const rev = therapistStats.myStats.totalRevenue;
+                      const progress = Math.min(100, Math.round((rev / myTargetVal) * 100));
+                      const remaining = Math.max(0, myTargetVal - rev);
+                      return (
+                          <>
+                            <div className="flex-1 flex flex-col justify-center w-full mt-2">
+                              <GaugeChart progress={progress} />
+                            </div>
+                            
+                            <div className="text-center mt-6 w-full bg-white p-3 md:p-4 rounded-2xl border border-stone-100 shadow-[0_2px_8px_-4px_rgba(0,0,0,0.05)]">
+                               <p className="text-[11px] font-bold text-stone-500 leading-relaxed">
+                                 距離本月目標 <span className="font-mono font-black text-stone-800">{fmtMoney(myTargetVal)}</span><br/>
+                                 還差 <span className="text-rose-500 font-mono font-black">{fmtMoney(remaining)}</span>
+                               </p>
+                            </div>
+                          </>
+                      );
+                  })()}
+              </div>
+          </div>
+
+        </div>
+      )}
       
       {(userRole !== 'therapist' || userRole === 'trainer') && ( 
         <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-5 gap-4"> 
