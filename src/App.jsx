@@ -36,7 +36,7 @@ import LoginView from "./components/LoginView";
 // ==========================================
 // ★ 系統核心版本號 (終極動態快取版)
 // ==========================================
-const CURRENT_APP_VERSION = "2.6.3"; 
+const CURRENT_APP_VERSION = "2.6.5"; 
 
 const isNewerVersion = (local, remote) => {
   if (!remote) return true;
@@ -339,9 +339,6 @@ export default function App() {
     return onAuthStateChanged(auth, (u) => { setUser(u); setLoading(false); });
   }, []);
 
-  // ==========================================
-  // ★ 流量極致優化：設定檔與人員改為單次讀取 (取代 onSnapshot)
-  // ==========================================
   const fetchGlobalData = useCallback(async () => {
     if (!user) return;
     try {
@@ -391,10 +388,6 @@ export default function App() {
     }
   }, [user, currentBrand, getDocPath, getCollectionPath]);
 
-
-  // ==========================================
-  // ★ 黑洞一號修復：將時間鎖 (selectedYear) 重新掛回
-  // ==========================================
   useEffect(() => {
     if (!user) return;
     setBudgets({}); setManagers({}); setStoreAccounts([]); setManagerAuth({}); setTherapists([]); setTherapistSchedules({}); setTherapistTargets({}); setPermissions(DEFAULT_PERMISSIONS); setTargets({ newASP: 3500, trafficASP: 1200 });
@@ -430,14 +423,8 @@ export default function App() {
   }, [user, currentBrand, getCollectionPath, getDocPath, selectedYear, fetchGlobalData]); 
 
 
-  // =========================================================================
-  // ★ 終極效能修復：動態快取 (Local Cache) 與視窗解綁
-  // =========================================================================
-  
-  // 建立本地快取池，用來存放「過去月份」的歷史資料
   const monthCacheRef = useRef({});
 
-  // 💦 [獨立水龍頭 A]：年度總帳卡 (永遠只看 selectedYear，不受切換畫面影響)
   useEffect(() => {
     if (!user) return;
     const targetYear = String(selectedYear);
@@ -450,16 +437,13 @@ export default function App() {
     return () => unsubAgg();
   }, [user, currentBrand, selectedYear, getCollectionPath]);
 
-  // 💦 [獨立水龍頭 B]：月度日報與管理師明細 (導入動態快取策略)
   useEffect(() => {
     if (!user) return;
 
     const targetYear = String(selectedYear);
     const targetMonth = String(selectedMonth).padStart(2, '0');
-    // 讓快取 Key 包含品牌，切換品牌時才不會拿到舊資料
     const cacheKey = `${currentBrand.id}_${targetYear}_${targetMonth}`;
 
-    // 判斷是否為「現實中的當前月份」
     const now = new Date();
     const currentRealYear = String(now.getFullYear());
     const currentRealMonth = String(now.getMonth() + 1).padStart(2, '0');
@@ -469,7 +453,6 @@ export default function App() {
     const endDate = `${targetYear}-${targetMonth}-31`;
 
     if (isCurrentMonth) {
-      // 👉 【情境一】當前月份：店長隨時會輸入，保持 onSnapshot 即時連線
       setRawData([]);
       setTherapistReports([]);
 
@@ -489,15 +472,12 @@ export default function App() {
       };
 
     } else {
-      // 👉 【情境二】過去月份：歷史資料不變，採用 getDocs 並放入 Local Cache
       if (monthCacheRef.current[cacheKey]) {
-        // 🎯 命中快取！直接從瀏覽器記憶體取出，Firebase 讀取數 = 0
         setRawData(monthCacheRef.current[cacheKey].reports);
         setTherapistReports(monthCacheRef.current[cacheKey].therapistReports);
         return;
       }
 
-      // 沒有快取，向 Firebase 單次索取
       setRawData([]);
       setTherapistReports([]);
       let isMounted = true;
@@ -514,7 +494,6 @@ export default function App() {
           const reportsData = reportsSnap.docs.map(d => ({ id: d.id, ...d.data() }));
           const tReportsData = tReportsSnap.docs.map(d => ({ id: d.id, ...d.data() }));
 
-          // 📦 存入快取池 (下一次切換回來就不會再抓了)
           monthCacheRef.current[cacheKey] = {
             reports: reportsData,
             therapistReports: tReportsData
@@ -531,12 +510,10 @@ export default function App() {
       fetchPastMonth();
 
       return () => {
-        isMounted = false; // 防止組件卸載後還去 setState
+        isMounted = false; 
       };
     }
   }, [user, currentBrand, selectedYear, selectedMonth, getCollectionPath]);
-
-  // =========================================================================
 
 
   const handleLogin = useCallback((roleId, userInfo = null) => {
@@ -576,20 +553,25 @@ export default function App() {
     return rawData;
   }, [rawData, userRole, currentUser, managers, normalizeStore]);
 
+
+  // ============================================================================
+  // ★ 終極權限解鎖：炸毀資料防火牆 ★
+  // 無論是店長還是區長，只要是合法登入角色，系統一律下發「全區管理師報表」
+  // 讓前端畫面可以自動算出全區排名與全區大盤，不受權限影響！
+  // ============================================================================
   const visibleTherapistReports = useMemo(() => {
-    if (userRole === ROLES.DIRECTOR.id || userRole === ROLES.TRAINER.id || userRole === ROLES.THERAPIST.id) { return therapistReports; }
-    if (userRole === ROLES.MANAGER.id && currentUser) { const myCores = (managers[currentUser.name] || []).map(normalizeStore).filter(Boolean); return therapistReports.filter(r => myCores.includes(normalizeStore(r.storeName))); }
-    if (userRole === ROLES.STORE.id && currentUser) { const myCores = (currentUser.stores || [currentUser.storeName] || []).map(normalizeStore).filter(Boolean); return therapistReports.filter(r => myCores.includes(normalizeStore(r.storeName))); }
-    return [];
-  }, [therapistReports, userRole, currentUser, managers, normalizeStore]);
+    return therapistReports;
+  }, [therapistReports]);
 
   const visibleTherapists = useMemo(() => {
-    if (userRole === ROLES.DIRECTOR.id || userRole === ROLES.TRAINER.id) return therapists;
-    if (userRole === ROLES.MANAGER.id && currentUser) { const myCores = (managers[currentUser.name] || []).map(normalizeStore).filter(Boolean); return therapists.filter(t => myCores.includes(normalizeStore(t.store))); }
-    if (userRole === ROLES.STORE.id && currentUser) { const myCores = (currentUser.stores || [currentUser.storeName] || []).map(normalizeStore).filter(Boolean); return therapists.filter(t => myCores.includes(normalizeStore(t.store))); }
-    if (userRole === ROLES.THERAPIST.id && currentUser) return therapists.filter(t => t.id === currentUser.id);
+    if (userRole === 'director' || userRole === 'trainer' || userRole === 'manager' || userRole === 'store' || userRole === 'master') {
+      return therapists;
+    }
+    if (userRole === 'therapist' && currentUser) return therapists.filter(t => t.id === currentUser.id);
     return [];
-  }, [therapists, userRole, currentUser, managers, normalizeStore]);
+  }, [therapists, userRole, currentUser]);
+  // ============================================================================
+
 
   const visibleManagers = useMemo(() => {
     let result = managers; 

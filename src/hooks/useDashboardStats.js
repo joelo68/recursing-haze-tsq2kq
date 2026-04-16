@@ -37,9 +37,10 @@ export function useDashboardStats() {
     return core.replace(/店$/, '').trim();
   }, [brandPrefix]);
 
+  // ★ 1. 嚴格權限基礎池 (專門保護「門市營運」頁面的機密)
   const baseVisibleStores = useMemo(() => {
-    if (userRole === 'director' || userRole === 'trainer' || userRole === 'therapist') {
-      return Object.values(managers).flat().map(cleanName).filter(Boolean);
+    if (userRole === 'director' || userRole === 'trainer' || userRole === 'therapist' || userRole === 'master') {
+      return Object.values(managers || {}).flat().map(cleanName).filter(Boolean);
     }
     if (userRole === 'manager' && currentUser) {
       return (managers[currentUser.name] || []).map(cleanName).filter(Boolean);
@@ -92,17 +93,38 @@ export function useDashboardStats() {
     return Object.values(groupedStoresForFilter).flat().sort();
   }, [selectedDashboardManager, groupedStoresForFilter, userRole, currentUser]);
 
+  // ★ 2. 安全鎖定的門市過濾器 (專門給門市營運的大盤數據使用)
   const effectiveStores = useMemo(() => {
-    if (selectedDashboardStore) {
-      return [cleanName(selectedDashboardStore)];
-    }
-    if (selectedDashboardManager) {
-      const stores = managers[selectedDashboardManager] || [];
-      return stores.map(cleanName).filter(Boolean);
-    }
+    if (selectedDashboardStore) return [cleanName(selectedDashboardStore)];
+    if (selectedDashboardManager) return (managers[selectedDashboardManager] || []).map(cleanName).filter(Boolean);
     return baseVisibleStores;
   }, [baseVisibleStores, selectedDashboardStore, selectedDashboardManager, managers, cleanName]);
 
+  // ============================================================================
+  // ★ 3. 人員績效專屬「上帝視角通行證」 (God Mode)
+  // ============================================================================
+  const allCompanyStores = useMemo(() => {
+    const stores = new Set();
+    if (allReports) {
+      allReports.forEach(r => { if (r.storeName) stores.add(cleanName(r.storeName)); });
+    }
+    if (therapistReports) {
+      therapistReports.forEach(r => { if (r.storeName) stores.add(cleanName(r.storeName)); });
+    }
+    return Array.from(stores).filter(Boolean);
+  }, [allReports, therapistReports, cleanName]);
+
+  const therapistEffectiveStores = useMemo(() => {
+    if (selectedDashboardStore) return [cleanName(selectedDashboardStore)];
+    if (selectedDashboardManager && managers[selectedDashboardManager]) {
+        return managers[selectedDashboardManager].map(cleanName).filter(Boolean);
+    }
+    return allCompanyStores; // 🏆 預設發放上帝視角 (只給人員績效用)
+  }, [selectedDashboardStore, selectedDashboardManager, managers, allCompanyStores, cleanName]);
+
+  // ============================================================================
+  // ★ 門市營運總覽 (Dashboard & 排行榜) - 絕對防護
+  // ============================================================================
   const dashboardStats = useMemo(() => {
     if (!allReports) return null;
     const y = parseInt(selectedYear); const m = parseInt(selectedMonth);
@@ -127,6 +149,8 @@ export function useDashboardStats() {
       const rDate = new Date(report.date);
       if (rDate.getFullYear() !== y || (rDate.getMonth() + 1) !== m) return;
       const reportStoreClean = cleanName(report.storeName);
+      
+      // 🔒 嚴格使用 effectiveStores 防護
       if (!effectiveStores.includes(reportStoreClean)) return;
 
       const cash = (Number(report.cash) || 0) - (Number(report.refund) || 0);
@@ -205,7 +229,7 @@ export function useDashboardStats() {
   }, [allReports, budgets, selectedYear, selectedMonth, effectiveStores, brandPrefix, cleanName]);
 
   const myStoreRankings = useMemo(() => {
-    if ((userRole !== 'store' && userRole !== 'manager' && userRole !== 'director') || !allReports) return [];
+    if (!allReports) return [];
     const storeStats = {}; const y = parseInt(selectedYear); const m = parseInt(selectedMonth);
 
     allReports.forEach(report => {
@@ -240,18 +264,26 @@ export function useDashboardStats() {
     
     return fullRankedList.filter(item => {
         const cleanItemName = cleanName(item.storeName);
-        return effectiveStores.includes(cleanItemName);
+        // 🔒 修正：將這裡鎖回 effectiveStores！確保「門市營運」頁面不會外洩資料！
+        return effectiveStores.includes(cleanItemName); 
     });
-  }, [userRole, allReports, effectiveStores, budgets, selectedYear, selectedMonth, cleanName, brandPrefix]);
+  }, [allReports, effectiveStores, budgets, selectedYear, selectedMonth, cleanName, brandPrefix]);
 
+  // ============================================================================
+  // ★ 人員績效大盤 (Therapist Stats) - 上帝視角全開
+  // ============================================================================
   const therapistStats = useMemo(() => {
     if (!therapistReports) return { rankings: [], myStats: null, grandTotal: {}, yesterdayTop3: [], todayTop3: [] };
+    
     const currentMonthReports = therapistReports.filter(r => {
       const dStr = r.date.replace(/-/g, "/"); const d = new Date(dStr);
       const isTargetMonth = d.getFullYear() === parseInt(selectedYear) && (d.getMonth() + 1) === parseInt(selectedMonth);
       if (!isTargetMonth) return false;
       const rStoreClean = cleanName(r.storeName);
-      if (!effectiveStores.includes(rStoreClean)) return false;
+      
+      // 🏆 只有人員績效使用 therapistEffectiveStores 享受上帝視角！
+      if (!therapistEffectiveStores.includes(rStoreClean)) return false;
+      
       return true;
     });
 
@@ -305,31 +337,41 @@ export function useDashboardStats() {
         newCustomerClosings: acc.newCustomerClosings + curr.newCustomerClosings
     }), { totalRevenue: 0, serviceCount: 0, newCustomerRevenue: 0, oldCustomerRevenue: 0, returnRevenue: 0, newCustomerCount: 0, newCustomerClosings: 0 });
     
-    // ==========================================
-    // ★ 修正：強制對齊主管頁面 (dashboardStats) 的單一真相來源 ★
-    // ==========================================
-    grandTotal.regionalNewClosingRate = (dashboardStats && dashboardStats.grandTotal.newCustomers > 0)
-        ? (dashboardStats.grandTotal.newCustomerClosings / dashboardStats.grandTotal.newCustomers) * 100 
-        : 0;
+    // 從 allReports 直接算出全區均單與締結率，保證數值與總表一模一樣
+    let globalNewCustomerSales = 0;
+    let globalNewCustomers = 0;
+    let globalNewCustomerClosings = 0;
     
-    grandTotal.regionalNewAsp = dashboardStats ? dashboardStats.avgNewCustomerASP : 0;
+    if (allReports) {
+        allReports.forEach(report => {
+            const rDate = new Date(report.date);
+            if (rDate.getFullYear() === parseInt(selectedYear) && (rDate.getMonth() + 1) === parseInt(selectedMonth)) {
+                if (therapistEffectiveStores.includes(cleanName(report.storeName))) {
+                    globalNewCustomerSales += (Number(report.newCustomerSales) || 0);
+                    globalNewCustomers += (Number(report.newCustomers) || 0);
+                    globalNewCustomerClosings += (Number(report.newCustomerClosings) || 0);
+                }
+            }
+        });
+    }
+
+    grandTotal.regionalNewClosingRate = globalNewCustomers > 0 ? (globalNewCustomerClosings / globalNewCustomers) * 100 : 0;
+    grandTotal.regionalNewAsp = globalNewCustomers > 0 ? (globalNewCustomerSales / globalNewCustomers) : 0;
 
     let systemTherapistCount = 0;
     if (therapists && Array.isArray(therapists)) {
-        systemTherapistCount = therapists.filter(t => { return effectiveStores.includes(cleanName(t.store)); }).length;
+        systemTherapistCount = therapists.filter(t => { return therapistEffectiveStores.includes(cleanName(t.store)); }).length;
     }
     grandTotal.count = systemTherapistCount;
 
-    // ==========================================
-    // ★ 計算昨日戰績 (Top 3) ★
-    // ==========================================
+    // 昨日戰績 (Top 3)
     const yesterday = new Date();
     yesterday.setDate(yesterday.getDate() - 1);
     const yStr = `${yesterday.getFullYear()}-${String(yesterday.getMonth()+1).padStart(2,'0')}-${String(yesterday.getDate()).padStart(2,'0')}`;
     const yesterdayMap = {};
     
     therapistReports.forEach(r => {
-        if (r.date === yStr && effectiveStores.includes(cleanName(r.storeName))) {
+        if (r.date === yStr && therapistEffectiveStores.includes(cleanName(r.storeName))) {
             if (!yesterdayMap[r.therapistId]) {
                 yesterdayMap[r.therapistId] = { 
                     id: r.therapistId, 
@@ -349,15 +391,13 @@ export function useDashboardStats() {
         else if (!t.storeDisplay || t.storeDisplay === "店") { t.storeDisplay = "未知店"; }
     });
 
-    // ==========================================
-    // ★ 計算今日即時戰績 (Top 3) ★
-    // ==========================================
+    // 今日即時戰績 (Top 3)
     const today = new Date();
     const tStr = `${today.getFullYear()}-${String(today.getMonth()+1).padStart(2,'0')}-${String(today.getDate()).padStart(2,'0')}`;
     const todayMap = {};
 
     therapistReports.forEach(r => {
-        if (r.date === tStr && effectiveStores.includes(cleanName(r.storeName))) {
+        if (r.date === tStr && therapistEffectiveStores.includes(cleanName(r.storeName))) {
             if (!todayMap[r.therapistId]) {
                 todayMap[r.therapistId] = { 
                     id: r.therapistId, 
@@ -378,8 +418,7 @@ export function useDashboardStats() {
     });
 
     return { rankings, myStats, grandTotal, yesterdayTop3, todayTop3 };
-  // ★ 注意：這裡加入了 dashboardStats 作為相依陣列，確保數據連動
-  }, [therapistReports, selectedYear, selectedMonth, effectiveStores, cleanName, userRole, currentUser, therapists, dashboardStats]);
+  }, [therapistReports, selectedYear, selectedMonth, therapistEffectiveStores, allReports, cleanName, userRole, currentUser, therapists]);
 
   return {
     viewMode, setViewMode,
