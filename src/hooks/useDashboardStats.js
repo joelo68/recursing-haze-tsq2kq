@@ -245,7 +245,7 @@ export function useDashboardStats() {
   }, [userRole, allReports, effectiveStores, budgets, selectedYear, selectedMonth, cleanName, brandPrefix]);
 
   const therapistStats = useMemo(() => {
-    if (!therapistReports) return { rankings: [], myStats: null, grandTotal: {}, yesterdayTop3: [] };
+    if (!therapistReports) return { rankings: [], myStats: null, grandTotal: {}, yesterdayTop3: [], todayTop3: [] };
     const currentMonthReports = therapistReports.filter(r => {
       const dStr = r.date.replace(/-/g, "/"); const d = new Date(dStr);
       const isTargetMonth = d.getFullYear() === parseInt(selectedYear) && (d.getMonth() + 1) === parseInt(selectedMonth);
@@ -297,7 +297,6 @@ export function useDashboardStats() {
     let myStats = null;
     if (userRole === 'therapist' && currentUser) { myStats = rankings.find(r => r.id === currentUser.id); }
     
-    // ★ 更新：將「新客數量」與「新客締結數」一併加總，以供大盤雷達運算
     const grandTotal = rankings.reduce((acc, curr) => ({ 
         totalRevenue: acc.totalRevenue + curr.totalRevenue, serviceCount: acc.serviceCount + curr.serviceCount, 
         newCustomerRevenue: acc.newCustomerRevenue + curr.newCustomerRevenue, oldCustomerRevenue: acc.oldCustomerRevenue + curr.oldCustomerRevenue,
@@ -306,9 +305,14 @@ export function useDashboardStats() {
         newCustomerClosings: acc.newCustomerClosings + curr.newCustomerClosings
     }), { totalRevenue: 0, serviceCount: 0, newCustomerRevenue: 0, oldCustomerRevenue: 0, returnRevenue: 0, newCustomerCount: 0, newCustomerClosings: 0 });
     
-    // ★ 新增：大盤雷達指標運算
-    grandTotal.regionalNewClosingRate = grandTotal.newCustomerCount > 0 ? (grandTotal.newCustomerClosings / grandTotal.newCustomerCount) * 100 : 0;
-    grandTotal.regionalNewAsp = grandTotal.newCustomerCount > 0 ? (grandTotal.newCustomerRevenue / grandTotal.newCustomerCount) : 0;
+    // ==========================================
+    // ★ 修正：強制對齊主管頁面 (dashboardStats) 的單一真相來源 ★
+    // ==========================================
+    grandTotal.regionalNewClosingRate = (dashboardStats && dashboardStats.grandTotal.newCustomers > 0)
+        ? (dashboardStats.grandTotal.newCustomerClosings / dashboardStats.grandTotal.newCustomers) * 100 
+        : 0;
+    
+    grandTotal.regionalNewAsp = dashboardStats ? dashboardStats.avgNewCustomerASP : 0;
 
     let systemTherapistCount = 0;
     if (therapists && Array.isArray(therapists)) {
@@ -316,7 +320,9 @@ export function useDashboardStats() {
     }
     grandTotal.count = systemTherapistCount;
 
-    // ★ 新增：計算昨日全區前三名戰神
+    // ==========================================
+    // ★ 計算昨日戰績 (Top 3) ★
+    // ==========================================
     const yesterday = new Date();
     yesterday.setDate(yesterday.getDate() - 1);
     const yStr = `${yesterday.getFullYear()}-${String(yesterday.getMonth()+1).padStart(2,'0')}-${String(yesterday.getDate()).padStart(2,'0')}`;
@@ -324,14 +330,56 @@ export function useDashboardStats() {
     
     therapistReports.forEach(r => {
         if (r.date === yStr && effectiveStores.includes(cleanName(r.storeName))) {
-            if (!yesterdayMap[r.therapistId]) yesterdayMap[r.therapistId] = { id: r.therapistId, name: r.therapistName, revenue: 0 };
+            if (!yesterdayMap[r.therapistId]) {
+                yesterdayMap[r.therapistId] = { 
+                    id: r.therapistId, 
+                    name: r.therapistName, 
+                    storeDisplay: cleanName(r.storeName || r.store || "") ? cleanName(r.storeName || r.store || "") + '店' : "", 
+                    revenue: 0 
+                };
+            }
             yesterdayMap[r.therapistId].revenue += (Number(r.totalRevenue) || 0);
         }
     });
+    
     const yesterdayTop3 = Object.values(yesterdayMap).sort((a,b) => b.revenue - a.revenue).slice(0, 3);
+    yesterdayTop3.forEach(t => {
+        const matchedTherapist = rankings.find(r => r.id === t.id);
+        if (matchedTherapist && matchedTherapist.storeDisplay) { t.storeDisplay = matchedTherapist.storeDisplay; } 
+        else if (!t.storeDisplay || t.storeDisplay === "店") { t.storeDisplay = "未知店"; }
+    });
 
-    return { rankings, myStats, grandTotal, yesterdayTop3 };
-  }, [therapistReports, selectedYear, selectedMonth, effectiveStores, cleanName, userRole, currentUser, therapists]);
+    // ==========================================
+    // ★ 計算今日即時戰績 (Top 3) ★
+    // ==========================================
+    const today = new Date();
+    const tStr = `${today.getFullYear()}-${String(today.getMonth()+1).padStart(2,'0')}-${String(today.getDate()).padStart(2,'0')}`;
+    const todayMap = {};
+
+    therapistReports.forEach(r => {
+        if (r.date === tStr && effectiveStores.includes(cleanName(r.storeName))) {
+            if (!todayMap[r.therapistId]) {
+                todayMap[r.therapistId] = { 
+                    id: r.therapistId, 
+                    name: r.therapistName, 
+                    storeDisplay: cleanName(r.storeName || r.store || "") ? cleanName(r.storeName || r.store || "") + '店' : "", 
+                    revenue: 0 
+                };
+            }
+            todayMap[r.therapistId].revenue += (Number(r.totalRevenue) || 0);
+        }
+    });
+
+    const todayTop3 = Object.values(todayMap).sort((a,b) => b.revenue - a.revenue).slice(0, 3);
+    todayTop3.forEach(t => {
+        const matchedTherapist = rankings.find(r => r.id === t.id);
+        if (matchedTherapist && matchedTherapist.storeDisplay) { t.storeDisplay = matchedTherapist.storeDisplay; } 
+        else if (!t.storeDisplay || t.storeDisplay === "店") { t.storeDisplay = "未知店"; }
+    });
+
+    return { rankings, myStats, grandTotal, yesterdayTop3, todayTop3 };
+  // ★ 注意：這裡加入了 dashboardStats 作為相依陣列，確保數據連動
+  }, [therapistReports, selectedYear, selectedMonth, effectiveStores, cleanName, userRole, currentUser, therapists, dashboardStats]);
 
   return {
     viewMode, setViewMode,
