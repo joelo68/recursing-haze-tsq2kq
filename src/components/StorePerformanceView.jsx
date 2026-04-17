@@ -1,7 +1,7 @@
 // src/components/StorePerformanceView.jsx
 import React, { useContext } from "react";
 import { XAxis, YAxis, CartesianGrid, Tooltip as RechartsTooltip, ResponsiveContainer, Line, ComposedChart, Area } from "recharts";
-import { AlertTriangle, Trophy, Medal, Star, Activity, Target, DollarSign, CreditCard, ShoppingBag, Users, TrendingUp, Sparkles, CheckSquare, Award, PieChart, Crown, Map as MapIcon } from "lucide-react";
+import { AlertTriangle, Trophy, Medal, Star, Activity, Target, DollarSign, CreditCard, ShoppingBag, Users, TrendingUp, Sparkles, CheckSquare, Award, PieChart, Crown, Map as MapIcon, Flame } from "lucide-react";
 import { AppContext } from "../AppContext";
 import { Card } from "./SharedUI";
 
@@ -267,8 +267,6 @@ const StorePerformanceView = ({ dashboardStats, myStoreRankings, brandInfo }) =>
            <MiniKpiCard title="平均操作權責" value={fmtMoney(dashboardStats.avgTrafficASP)} icon={TrendingUp} color="text-indigo-500" subText={<span className={dashboardStats.avgTrafficASP >= targets.trafficASP ? "text-emerald-500 font-bold" : "text-rose-500 font-bold"}>{dashboardStats.avgTrafficASP >= targets.trafficASP ? "達標" : "未達標"} (目標 {fmtNum(targets.trafficASP)})</span>} />
            <MiniKpiCard title="總新客數" value={fmtNum(storeGrandTotal.newCustomers)} icon={Sparkles} color="text-purple-500" subText="本月新增體驗人數" />
            <MiniKpiCard title="總新客留單" value={fmtNum(storeGrandTotal.newCustomerClosings)} icon={CheckSquare} color="text-teal-500" subText={<span>留單率 <span className="font-bold">{storeGrandTotal.newCustomers > 0 ? ((storeGrandTotal.newCustomerClosings / storeGrandTotal.newCustomers) * 100).toFixed(0) : 0}%</span></span>} />
-           
-           {/* ★ 修改這裡：新客平均客單 (加入總業績) */}
            <MiniKpiCard 
              title="新客平均客單" 
              value={fmtMoney(dashboardStats.avgNewCustomerASP)} 
@@ -285,9 +283,102 @@ const StorePerformanceView = ({ dashboardStats, myStoreRankings, brandInfo }) =>
                </div>
              } 
            />
-           
            <MiniKpiCard title="新 / 舊客 結構比" value={`${dashboardStats.newCountMix}% / ${dashboardStats.oldCountMix}%`} icon={PieChart} color="text-pink-500" subText={<span className="flex items-center gap-1 text-stone-500">業績比 <span className="font-bold text-stone-700">{dashboardStats.newRevMix}% / {dashboardStats.oldRevMix}%</span></span>} />
          </div>
+      </div>
+
+      {/* ============================================================================== */}
+      {/* ★ 全區門市實時戰報 (加入「戰鬥挑釁風」小方塊)                                       */}
+      {/* ============================================================================== */}
+      <div className="grid grid-cols-1 lg:grid-cols-3 gap-4 lg:gap-5 mb-2 mt-4">
+        
+        {/* 1. 本月全區門市 Top 3 */}
+        <div className="bg-white rounded-3xl border border-stone-100 shadow-sm hover:shadow-md transition-all relative overflow-hidden flex flex-col h-full group">
+          <div className="absolute top-0 right-0 p-4 opacity-[0.03] group-hover:opacity-10 transition-opacity text-amber-500 pointer-events-none"><Trophy size={80} /></div>
+          <div className="p-5 flex flex-col h-full relative z-10">
+            <p className="text-stone-400 text-xs font-bold uppercase tracking-wider mb-5 flex items-center gap-1.5">
+              <Trophy size={14} className="text-amber-400"/> 本月全區 TOP 3
+            </p>
+            <div className="flex flex-col gap-4 flex-1 justify-center">
+              {dashboardStats.storeMonthlyTop3?.length > 0 ? dashboardStats.storeMonthlyTop3.map((s, i) => (
+                <div key={s.name} className="flex justify-between items-center w-full group/item">
+                  <div className="flex items-center gap-3">
+                    <span className={`w-6 h-6 flex items-center justify-center rounded-full text-[11px] font-bold ${i===0 ? 'bg-amber-50 text-amber-500' : i===1 ? 'bg-stone-50 text-stone-400' : 'bg-orange-50 text-orange-400'}`}>
+                      {i+1}
+                    </span>
+                    <div className="flex items-center gap-2">
+                      <span className="text-sm font-bold text-stone-600 group-hover/item:text-stone-800 transition-colors">{s.name}</span>
+                      {s.streak && (
+                        <span className="text-[9px] font-bold bg-stone-100 text-stone-500 px-1.5 py-0.5 rounded shadow-sm border border-stone-200 tracking-wider">
+                          {s.badgeText}
+                        </span>
+                      )}
+                    </div>
+                  </div>
+                  <span className="font-mono font-bold text-stone-600 tracking-tight">{fmtMoney(s.revenue)}</span>
+                </div>
+              )) : <div className="text-xs font-medium text-stone-300 text-center py-6">本月尚無紀錄</div>}
+            </div>
+          </div>
+        </div>
+
+        {/* 2. 昨日全區門市 Top 3 */}
+        <div className="bg-white rounded-3xl border border-stone-100 shadow-sm hover:shadow-md transition-all relative overflow-hidden flex flex-col h-full group">
+          <div className="absolute top-0 right-0 p-4 opacity-[0.03] group-hover:opacity-10 transition-opacity text-orange-500 pointer-events-none"><Crown size={80} /></div>
+          <div className="p-5 flex flex-col h-full relative z-10">
+            <p className="text-stone-400 text-xs font-bold uppercase tracking-wider mb-5 flex items-center gap-1.5">
+              <Crown size={14} className="text-orange-400"/> 昨日全區 TOP 3
+            </p>
+            <div className="flex flex-col gap-4 flex-1 justify-center">
+              {dashboardStats.storeYesterdayTop3?.length > 0 ? dashboardStats.storeYesterdayTop3.map((s, i) => (
+                <div key={s.name} className="flex justify-between items-center w-full group/item">
+                  <div className="flex items-center gap-3">
+                    <span className={`w-6 h-6 flex items-center justify-center rounded-full text-[11px] font-bold ${i===0 ? 'bg-orange-50 text-orange-500' : i===1 ? 'bg-stone-50 text-stone-400' : 'bg-amber-50/60 text-amber-600/70'}`}>
+                      {i+1}
+                    </span>
+                    <div className="flex items-center gap-2">
+                      <span className="text-sm font-bold text-stone-600 group-hover/item:text-stone-800 transition-colors">{s.name}</span>
+                      {s.streak && (
+                        <span className="text-[9px] font-bold bg-stone-100 text-stone-500 px-1.5 py-0.5 rounded shadow-sm border border-stone-200 tracking-wider">
+                          {s.badgeText}
+                        </span>
+                      )}
+                    </div>
+                  </div>
+                  <span className="font-mono font-bold text-stone-600 tracking-tight">{fmtMoney(s.revenue)}</span>
+                </div>
+              )) : <div className="text-xs font-medium text-stone-300 text-center py-6">昨日尚無紀錄</div>}
+            </div>
+          </div>
+        </div>
+
+        {/* 3. 今日全區門市 Top 3 */}
+        <div className="bg-white rounded-3xl border border-stone-100 shadow-sm hover:shadow-md transition-all relative overflow-hidden flex flex-col h-full group">
+          <div className="absolute top-0 right-0 p-4 opacity-[0.03] group-hover:opacity-10 transition-opacity text-rose-500 pointer-events-none"><Flame size={80} /></div>
+          <div className="p-5 flex flex-col h-full relative z-10">
+            <p className="text-stone-400 text-xs font-bold uppercase tracking-wider mb-5 flex items-center gap-1.5">
+              <Flame size={14} className="text-rose-400"/> 今日全區 TOP 3
+              <span className="relative flex h-1.5 w-1.5 ml-1">
+                <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-rose-300 opacity-75"></span>
+                <span className="relative inline-flex rounded-full h-1.5 w-1.5 bg-rose-400"></span>
+              </span>
+            </p>
+            <div className="flex flex-col gap-4 flex-1 justify-center">
+              {dashboardStats.storeTodayTop3?.length > 0 ? dashboardStats.storeTodayTop3.map((s, i) => (
+                <div key={s.name} className="flex justify-between items-center w-full group/item">
+                  <div className="flex items-center gap-3">
+                    <span className={`w-6 h-6 flex items-center justify-center rounded-full text-[11px] font-bold ${i===0 ? 'bg-rose-50 text-rose-500' : i===1 ? 'bg-stone-50 text-stone-400' : 'bg-rose-50/50 text-rose-400'}`}>
+                      {i+1}
+                    </span>
+                    <span className="text-sm font-bold text-stone-600 group-hover/item:text-stone-800 transition-colors">{s.name}</span>
+                  </div>
+                  <span className="font-mono font-bold text-stone-600 tracking-tight">{fmtMoney(s.revenue)}</span>
+                </div>
+              )) : <div className="text-xs font-medium text-stone-300 text-center py-6">今日尚未開單</div>}
+            </div>
+          </div>
+        </div>
+
       </div>
       
       {/* 走勢圖 */}
