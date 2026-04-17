@@ -21,7 +21,7 @@ import SmartDatePicker from "./SmartDatePicker";
 const getLocalTodayString = () => {
   const now = new Date();
   
-  if (now.getHours() < 3) {
+  if (now.getHours() < 4) {
     now.setDate(now.getDate() - 1);
   }
   
