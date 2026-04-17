@@ -1,5 +1,5 @@
 // src/components/TherapistPerformanceView.jsx
-import React, { useContext } from "react";
+import React, { useContext, useMemo } from "react";
 import { Flame, Crown, AlertTriangle, Zap, Frown, DollarSign, Sparkles, TrendingUp, Activity, FileWarning, Download, ArrowLeft, ArrowRight, Store, ArrowUp, ArrowDown, Target, Users, Receipt, Award, UsersRound, Trophy } from "lucide-react";
 import { AppContext } from "../AppContext";
 import { Card } from "./SharedUI";
@@ -40,12 +40,89 @@ const GaugeChart = ({ progress, color = "#f59e0b" }) => {
 };
 
 const TherapistPerformanceView = ({ therapistStats, brandInfo }) => {
-  const { fmtMoney, fmtNum, userRole, currentUser, therapistTargets, selectedYear, selectedMonth } = useContext(AppContext);
+  const { fmtMoney, fmtNum, userRole, currentUser, managers, therapistTargets, selectedYear, selectedMonth, targets, therapists } = useContext(AppContext);
+
+  const isManagerial = userRole !== 'therapist';
 
   // ============================================================================
-  // ★ 判斷是否為主管視角 (店長、教專、區長、總監，全部視為主管視角)
+  // ★ [完美修復] 全方位目標抓取引擎：針對 monthlyTargets 結構進行深度解析
   // ============================================================================
-  const isManagerial = userRole !== 'therapist';
+  const resolveTherapistTarget = (memberId, memberName) => {
+    let foundTarget = 0;
+    const yStr = String(selectedYear);
+    const mStr = String(selectedMonth);
+    const mPad = mStr.padStart(2, '0');
+    const targetList = Object.values(therapistTargets || {});
+    
+    const matchedDoc = targetList.find(t => 
+        (t.therapistId === memberId || t.name === memberName || t.therapistName === memberName) && 
+        String(t.year) === yStr
+    );
+
+    if (matchedDoc) {
+        // 1. 優先進入 monthlyTargets 物件尋找 (對應 TherapistTargetView.jsx 的寫入邏輯)
+        if (matchedDoc.monthlyTargets && matchedDoc.monthlyTargets[mStr] !== undefined && matchedDoc.monthlyTargets[mStr] !== "") {
+            foundTarget = Number(matchedDoc.monthlyTargets[mStr]);
+        } 
+        // 2. 若無，則掃描外層的舊版結構
+        else {
+            const possibleKeys = [mStr, mPad, `month_${mStr}`, `month_${mPad}`, 'target'];
+            for (let k of possibleKeys) {
+                if (matchedDoc[k] !== undefined && matchedDoc[k] !== null && matchedDoc[k] !== "") {
+                    foundTarget = Number(matchedDoc[k]);
+                    break;
+                }
+            }
+        }
+    }
+
+    if (foundTarget === 0 && therapists) {
+        const tInfo = therapists.find(t => t.id === memberId || t.name === memberName);
+        if (tInfo?.target) foundTarget = Number(tInfo.target);
+        else if (tInfo?.monthlyTarget) foundTarget = Number(tInfo.monthlyTarget);
+    }
+
+    return foundTarget > 0 ? foundTarget : 800000; 
+  };
+
+  const myTeamStats = useMemo(() => {
+    if (!isManagerial || (userRole !== 'store' && userRole !== 'manager')) return null;
+
+    let myStores = [];
+    if (userRole === 'store') myStores = currentUser.stores || [currentUser.storeName] || [];
+    if (userRole === 'manager') myStores = managers[currentUser.name] || [];
+
+    const isMyTeam = (storeDisplay) => {
+        if (!storeDisplay) return false;
+        return myStores.some(ms => {
+            const core = ms.replace(/店$/, '').trim();
+            return storeDisplay.includes(core);
+        });
+    };
+
+    const teamMembers = therapistStats.rankings.filter(t => isMyTeam(t.storeDisplay));
+    if (teamMembers.length === 0) return null;
+
+    const totalRev = teamMembers.reduce((sum, t) => sum + t.totalRevenue, 0);
+    const newRev = teamMembers.reduce((sum, t) => sum + t.newCustomerRevenue, 0);
+    const oldRev = teamMembers.reduce((sum, t) => sum + t.oldCustomerRevenue, 0);
+    const newCount = teamMembers.reduce((sum, t) => sum + t.newCustomerCount, 0);
+    const newClosings = teamMembers.reduce((sum, t) => sum + t.newCustomerClosings, 0);
+
+    const teamNewAsp = newCount > 0 ? newRev / newCount : 0;
+    const teamClosingRate = newCount > 0 ? (newClosings / newCount) * 100 : 0;
+    const mvp = teamMembers.length > 0 ? teamMembers[0] : null;
+
+    const regionClosingRate = therapistStats.grandTotal.regionalNewClosingRate || 0;
+    const warnings = teamMembers.filter(t => t.newClosingRate < regionClosingRate);
+
+    let teamTarget = 0;
+    teamMembers.forEach(member => {
+        teamTarget += resolveTherapistTarget(member.id, member.name);
+    });
+
+    return { teamMembers, totalRev, newRev, oldRev, teamNewAsp, teamClosingRate, mvp, warnings, teamTarget, isMyTeam };
+  }, [isManagerial, userRole, currentUser, managers, therapistStats.rankings, therapistStats.grandTotal.regionalNewClosingRate, therapistTargets, selectedYear, selectedMonth, therapists]);
 
   const handleExportCSV = () => {
     const dataToExport = therapistStats.rankings.filter(t => userRole !== 'therapist' || t.id === currentUser?.id);
@@ -74,11 +151,21 @@ const TherapistPerformanceView = ({ therapistStats, brandInfo }) => {
       else return { title: `表現平穩，擊敗了 ${beaten} 位夥伴`, sub: `再多做 ${fmtMoney(gapToNext)} 就能前進一名！`, icon: Zap };
   };
 
+  const MiniKpiCard = ({ title, value, subText, icon: Icon, color }) => (
+    <div className="bg-white p-5 rounded-3xl border border-stone-100 shadow-sm hover:shadow-md transition-all group relative overflow-hidden h-full flex flex-col">
+      <div className={`absolute top-0 right-0 p-3 opacity-10 group-hover:opacity-20 transition-opacity ${color}`}><Icon size={64} /></div>
+      <div className="flex flex-col h-full justify-between relative z-10">
+        <div><p className="text-stone-400 text-xs font-bold uppercase tracking-wider mb-1">{title}</p><h3 className="text-2xl font-extrabold text-stone-700 font-mono tracking-tight">{value}</h3></div>
+        {subText && <div className="mt-3 pt-3 border-t border-stone-50 text-xs font-medium text-stone-500 flex flex-col gap-1">{subText}</div>}
+      </div>
+    </div>
+  );
+
   return (
     <div className="space-y-8 animate-in fade-in slide-in-from-bottom-4 duration-500 w-full min-w-0">
       
       {/* ============================================================================== */}
-      {/* ★ 管理師視角專屬區塊 ★ (如果是管理師，且有抓到個人資料)                          */}
+      {/* ★ [視角 1] 管理師個人視角 ★                                                  */}
       {/* ============================================================================== */}
       {!isManagerial && therapistStats.myStats && (() => {
         const info = getMotivationalMessage(therapistStats.myStats);
@@ -168,7 +255,18 @@ const TherapistPerformanceView = ({ therapistStats, brandInfo }) => {
                    <div className="p-4 md:p-5 flex-1 flex flex-col justify-center bg-stone-50/30">
                       {(() => {
                           const newAsp = Math.round(therapistStats.myStats.newAsp || 0);
-                          const targetAsp = 25000;
+                          
+                          let targetAsp = targets?.newASP;
+                          if (!targetAsp || targetAsp === 3500) { 
+                              if (brandInfo?.id === 'cyj' || brandInfo?.name?.toUpperCase().includes('CYJ')) {
+                                  targetAsp = 16000;
+                              } else if (brandInfo?.id === 'anniu' || brandInfo?.name?.includes('安妞')) {
+                                  targetAsp = 25000;
+                              } else {
+                                  targetAsp = 25000;
+                              }
+                          }
+                          
                           const achieveRate = targetAsp > 0 ? Math.round((newAsp / targetAsp) * 100) : 0;
                           const safeRate = Math.min(100, achieveRate);
                           const isReached = achieveRate >= 100;
@@ -225,9 +323,9 @@ const TherapistPerformanceView = ({ therapistStats, brandInfo }) => {
               </div>
             </div>
 
-            {/* --- 管理師底部版塊 --- */}
-            <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-12 gap-4 lg:gap-5">
-              {/* 1. 今日即時戰績 (Top 3) */}
+            {/* --- 管理師底部即時戰況 --- */}
+            <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-12 gap-4 lg:gap-5 mb-8">
+              {/* 今日即時戰神 */}
               <div className="md:col-span-1 xl:col-span-3 bg-white rounded-3xl border border-stone-200 shadow-sm overflow-hidden flex flex-col relative group">
                 <div className="absolute top-0 right-0 p-4 opacity-5 text-rose-500"><Flame size={80} /></div>
                 <div className="bg-rose-50/80 px-5 py-4 text-rose-900 flex items-center justify-between border-b border-rose-100/60">
@@ -239,7 +337,7 @@ const TherapistPerformanceView = ({ therapistStats, brandInfo }) => {
                     const matchedInfo = therapistStats.rankings.find(r => r.id === t.id);
                     const displayStore = matchedInfo?.storeDisplay || t.storeDisplay || "未知店";
                     return (
-                      <div key={t.id} className="flex justify-between items-center bg-white p-3 rounded-2xl border border-stone-100 shadow-[0_2px_8px_-4px_rgba(0,0,0,0.05)]">
+                      <div key={t.id} className="flex justify-between items-center bg-white p-3 md:p-4 rounded-2xl border border-stone-100 shadow-[0_2px_8px_-4px_rgba(0,0,0,0.05)]">
                         <div className="flex items-center gap-3 text-sm font-bold text-stone-700 flex-1 min-w-0 pr-2">
                           <span className={`shrink-0 w-7 h-7 flex items-center justify-center rounded-full text-xs font-black shadow-inner ${i===0?'bg-gradient-to-br from-rose-400 to-red-600 text-white':i===1?'bg-gradient-to-br from-stone-200 to-stone-400 text-white':'bg-gradient-to-br from-orange-200 to-orange-400 text-white'}`}>{i+1}</span>
                           <div className="flex flex-col gap-0.5 min-w-0">
@@ -257,7 +355,7 @@ const TherapistPerformanceView = ({ therapistStats, brandInfo }) => {
                 </div>
               </div>
 
-              {/* 2. 昨日戰績 (Top 3) */}
+              {/* 昨日戰績 */}
               <div className="md:col-span-1 xl:col-span-3 bg-white rounded-3xl border border-stone-200 shadow-sm overflow-hidden flex flex-col">
                 <div className="bg-amber-50/80 px-5 py-4 text-amber-900 flex items-center gap-2 border-b border-amber-100/60">
                   <Crown size={18} strokeWidth={2.5} className="text-amber-500"/>
@@ -268,7 +366,7 @@ const TherapistPerformanceView = ({ therapistStats, brandInfo }) => {
                     const matchedInfo = therapistStats.rankings.find(r => r.id === t.id);
                     const displayStore = matchedInfo?.storeDisplay || t.storeDisplay || "未知店";
                     return (
-                      <div key={t.id} className="flex justify-between items-center bg-white p-3 rounded-2xl border border-stone-100 shadow-[0_2px_8px_-4px_rgba(0,0,0,0.05)]">
+                      <div key={t.id} className="flex justify-between items-center bg-white p-3 md:p-4 rounded-2xl border border-stone-100 shadow-[0_2px_8px_-4px_rgba(0,0,0,0.05)]">
                         <div className="flex items-center gap-3 text-sm font-bold text-stone-700 flex-1 min-w-0 pr-2">
                           <span className={`shrink-0 w-7 h-7 flex items-center justify-center rounded-full text-xs font-black shadow-inner ${i===0?'bg-gradient-to-br from-yellow-300 to-amber-500 text-white':i===1?'bg-gradient-to-br from-stone-200 to-stone-400 text-white':'bg-gradient-to-br from-orange-200 to-orange-400 text-white'}`}>{i+1}</span>
                           <div className="flex flex-col gap-0.5 min-w-0">
@@ -286,7 +384,7 @@ const TherapistPerformanceView = ({ therapistStats, brandInfo }) => {
                 </div>
               </div>
 
-              {/* 3. 全區營運大盤雷達 */}
+              {/* 全區營運大盤雷達 */}
               <div className="md:col-span-1 xl:col-span-3 bg-white rounded-3xl border border-stone-200 shadow-sm overflow-hidden flex flex-col">
                  <div className="bg-amber-50/80 px-5 py-4 text-amber-900 flex items-center gap-2 border-b border-amber-100/60">
                    <Target size={18} strokeWidth={2.5} className="text-amber-500"/>
@@ -327,7 +425,7 @@ const TherapistPerformanceView = ({ therapistStats, brandInfo }) => {
                  </div>
               </div>
 
-              {/* 4. 個人衝刺進度條 (Gauge) */}
+              {/* 個人衝刺進度條 (Gauge) */}
               <div className="md:col-span-1 xl:col-span-3 bg-white rounded-3xl border border-stone-200 shadow-sm overflow-hidden flex flex-col">
                   <div className="bg-amber-50/80 px-5 py-4 text-amber-900 flex items-center gap-2 border-b border-amber-100/60">
                     <Zap size={18} strokeWidth={2.5} className="text-amber-500"/>
@@ -335,31 +433,8 @@ const TherapistPerformanceView = ({ therapistStats, brandInfo }) => {
                   </div>
                   <div className="p-5 flex-1 bg-stone-50/30 flex flex-col items-center justify-between">
                       {(() => {
-                          const getMyTarget = () => {
-                            if (!therapistTargets) return 0;
-                            const myId = therapistStats.myStats.id;
-                            const myName = therapistStats.myStats.name;
-                            const yStr = String(selectedYear);
-                            const mStr = String(selectedMonth);
-                            const mPad = mStr.padStart(2, '0');
-
-                            const targetList = Object.values(therapistTargets);
-                            const matchedDoc = targetList.find(t => 
-                              (t.therapistId === myId || t.name === myName || t.therapistName === myName) && 
-                              String(t.year) === yStr
-                            );
-
-                            if (matchedDoc) {
-                              if (matchedDoc[mStr] !== undefined && matchedDoc[mStr] !== "") return Number(matchedDoc[mStr]);
-                              if (matchedDoc[mPad] !== undefined && matchedDoc[mPad] !== "") return Number(matchedDoc[mPad]);
-                              if (matchedDoc[`month_${mStr}`]) return Number(matchedDoc[`month_${mStr}`]);
-                              if (matchedDoc.target) return Number(matchedDoc.target);
-                            }
-                            return 0;
-                          };
-                          
-                          let myTargetVal = getMyTarget();
-                          if (myTargetVal === 0) myTargetVal = 800000;
+                          // ★ 使用最新開發的引擎解析目標金額
+                          const myTargetVal = resolveTherapistTarget(therapistStats.myStats.id, therapistStats.myStats.name);
                           
                           const rev = therapistStats.myStats.totalRevenue;
                           const progress = Math.min(100, Math.round((rev / myTargetVal) * 100));
@@ -386,12 +461,147 @@ const TherapistPerformanceView = ({ therapistStats, brandInfo }) => {
       })()}
 
       {/* ============================================================================== */}
-      {/* ★ 主管視角專屬區塊 ★ (如果是店長、教專、經理或總監)                               */}
+      {/* ★ [視角 2] 店長與區長專屬視角 (新增：我的戰隊實時監控)                           */}
       {/* ============================================================================== */}
-      {isManagerial && (
-        <>
-          {/* --- 主管頂部版塊 --- */}
-          <div className="grid grid-cols-1 lg:grid-cols-12 gap-4 lg:gap-5 mb-8">
+      {isManagerial && myTeamStats && myTeamStats.teamMembers.length > 0 && (
+        <div className="grid grid-cols-1 lg:grid-cols-12 gap-4 lg:gap-5 mb-8">
+             
+             {/* 1. 輕量通透版：全區 TOP 5 看板 (4/12) */}
+             <div className="lg:col-span-12 xl:col-span-4 bg-white rounded-3xl border border-stone-200 shadow-sm relative overflow-hidden flex flex-col h-full min-h-[320px]">
+                <div className="absolute top-0 right-0 p-4 opacity-[0.03] text-amber-900 pointer-events-none"><Trophy size={180} /></div> 
+                <div className="bg-amber-50/80 px-5 py-4 text-amber-900 flex items-center gap-2 border-b border-amber-100/60 relative z-10">
+                  <Trophy size={18} strokeWidth={2.5} className="text-amber-500"/>
+                  <h3 className="text-sm font-extrabold tracking-wide">本月全區 Top 5 榮耀榜</h3>
+                </div>
+                <div className="p-4 md:p-5 flex-1 bg-stone-50/30 flex flex-col justify-center gap-3 relative z-10">
+                  {therapistStats.rankings.slice(0, 5).map((t, i) => {
+                    const isMyOwnTeam = myTeamStats.isMyTeam(t.storeDisplay);
+                    return (
+                      <div key={t.id} className={`flex justify-between items-center p-3 rounded-2xl border transition-shadow ${isMyOwnTeam ? 'bg-amber-50/60 border-amber-100 shadow-sm' : 'bg-white border-stone-100 shadow-[0_2px_8px_-4px_rgba(0,0,0,0.04)] hover:shadow-md'}`}>
+                        <div className="flex items-center gap-3 flex-1 min-w-0 pr-2">
+                          <span className={`shrink-0 w-8 h-8 flex items-center justify-center rounded-full text-xs font-black shadow-inner ${i===0 ? 'bg-gradient-to-br from-yellow-300 to-amber-500 text-white ring-2 ring-yellow-100/50' : i===1 ? 'bg-gradient-to-br from-stone-200 to-stone-400 text-white' : i===2 ? 'bg-gradient-to-br from-orange-200 to-orange-400 text-white' : 'bg-stone-100 text-stone-400'}`}>
+                            {i+1}
+                          </span>
+                          <div className="flex flex-wrap items-center gap-x-2 gap-y-0.5 whitespace-nowrap overflow-hidden">
+                            <span className="font-extrabold text-[15px] text-stone-800 truncate">{t.name}</span>
+                            <span className={`shrink-0 text-[10px] px-1.5 py-0.5 rounded font-medium border tracking-wider ${isMyOwnTeam ? 'bg-amber-100 text-amber-700 border-amber-200/50' : 'text-stone-500 bg-stone-100/80 border-stone-200/50'}`}>
+                              {t.storeDisplay}
+                            </span>
+                          </div>
+                        </div>
+                        <span className={`shrink-0 font-mono font-bold text-lg ${isMyOwnTeam ? 'text-amber-600' : 'text-stone-700'}`}>{fmtMoney(t.totalRevenue)}</span>
+                      </div>
+                    )
+                  })}
+                </div>
+             </div>
+
+             {/* 2. ✨ 我的戰隊實時監控 (8/12) */}
+             <div className="lg:col-span-12 xl:col-span-8 bg-white rounded-3xl border border-stone-200 shadow-sm relative overflow-hidden flex flex-col h-full min-h-[320px]">
+                 {/* 專屬 Header */}
+                 <div className="bg-indigo-50/80 px-5 py-4 text-indigo-900 flex items-center justify-between border-b border-indigo-100/60 relative z-10">
+                    <div className="flex items-center gap-2">
+                        <Sparkles size={18} strokeWidth={2.5} className="text-indigo-500"/>
+                        <h3 className="text-sm font-extrabold tracking-wide">
+                            ✨ 我的戰隊實時監控 
+                            <span className="ml-2 font-normal text-indigo-600/80">
+                                ({userRole === 'manager' ? currentUser?.name + '區' : (currentUser?.storeName || '門市')})
+                            </span>
+                        </h3>
+                    </div>
+                    <span className="text-[10px] font-bold bg-white text-indigo-600 px-2 py-0.5 rounded border border-indigo-100 shadow-sm">管轄 {myTeamStats.teamMembers.length} 人</span>
+                 </div>
+                 
+                 {/* 三欄式管理面板 */}
+                 <div className="p-4 md:p-5 flex-1 bg-stone-50/30 grid grid-cols-1 md:grid-cols-3 gap-4">
+                     
+                     {/* Col 1: 團隊進度 */}
+                     <div className="flex flex-col gap-3 bg-white p-4 md:p-5 rounded-2xl border border-stone-100 shadow-[0_2px_8px_-4px_rgba(0,0,0,0.05)] relative overflow-hidden">
+                        <div className="absolute top-0 right-0 w-16 h-16 bg-indigo-50 rounded-bl-full -mr-8 -mt-8"></div>
+                        <p className="text-[11px] font-bold text-stone-400 uppercase tracking-wider">團隊進度 (達成率)</p>
+                        <div className="flex items-baseline gap-1 mt-1">
+                            <span className="text-4xl font-black text-stone-800 font-mono tracking-tighter">
+                                {Math.round((myTeamStats.totalRev / (myTeamStats.teamTarget || 1))*100)}%
+                            </span>
+                        </div>
+                        <div className="w-full bg-stone-100 h-2.5 rounded-full overflow-hidden mt-2 mb-1 shadow-inner">
+                            <div className="bg-indigo-500 h-full transition-all duration-1000" style={{width: `${Math.min(100, (myTeamStats.totalRev / (myTeamStats.teamTarget || 1))*100)}%`}}></div>
+                        </div>
+                        <div className="flex flex-col text-[10px] font-bold mt-auto pt-2 gap-1">
+                            <div className="flex justify-between items-center"><span className="text-stone-400">目前總業績</span><span className="text-stone-700 font-mono text-xs">{fmtMoney(myTeamStats.totalRev)}</span></div>
+                            <div className="flex justify-between items-center"><span className="text-stone-400">本月總目標</span><span className="text-stone-600 font-mono text-xs">{fmtMoney(myTeamStats.teamTarget)}</span></div>
+                        </div>
+                     </div>
+
+                     {/* Col 2: 團隊健康度 (對標全區) */}
+                     <div className="flex flex-col gap-0 bg-white p-4 md:p-5 rounded-2xl border border-stone-100 shadow-[0_2px_8px_-4px_rgba(0,0,0,0.05)] justify-between">
+                        <div>
+                            <p className="text-[11px] font-bold text-stone-400 uppercase tracking-wider mb-2">戰隊均單 vs 全區</p>
+                            <div className="flex items-center justify-between">
+                                <div className="flex flex-col">
+                                    <span className="text-xl font-black font-mono text-stone-800 leading-none mb-1">{fmtMoney(Math.round(myTeamStats.teamNewAsp))}</span>
+                                    <span className="text-[9px] text-stone-400">全區 {fmtMoney(Math.round(therapistStats.grandTotal.regionalNewAsp))}</span>
+                                </div>
+                                {myTeamStats.teamNewAsp >= therapistStats.grandTotal.regionalNewAsp ? (
+                                    <span className="text-[10px] font-bold text-emerald-600 bg-emerald-50 px-2 py-1 rounded-lg flex items-center gap-1 border border-emerald-100"><ArrowUp size={12}/> 領先</span>
+                                ) : (
+                                    <span className="text-[10px] font-bold text-rose-600 bg-rose-50 px-2 py-1 rounded-lg flex items-center gap-1 border border-rose-100"><ArrowDown size={12}/> 落後</span>
+                                )}
+                            </div>
+                        </div>
+                        <div className="border-t border-stone-100 my-4 border-dashed"></div>
+                        <div>
+                            <p className="text-[11px] font-bold text-stone-400 uppercase tracking-wider mb-2">戰隊締結率 vs 全區</p>
+                            <div className="flex items-center justify-between">
+                                <div className="flex flex-col">
+                                    <span className="text-xl font-black font-mono text-stone-800 leading-none mb-1">{myTeamStats.teamClosingRate.toFixed(0)}%</span>
+                                    <span className="text-[9px] text-stone-400">全區 {therapistStats.grandTotal.regionalNewClosingRate.toFixed(0)}%</span>
+                                </div>
+                                {myTeamStats.teamClosingRate >= therapistStats.grandTotal.regionalNewClosingRate ? (
+                                    <span className="text-[10px] font-bold text-emerald-600 bg-emerald-50 px-2 py-1 rounded-lg flex items-center gap-1 border border-emerald-100"><ArrowUp size={12}/> 領先</span>
+                                ) : (
+                                    <span className="text-[10px] font-bold text-rose-600 bg-rose-50 px-2 py-1 rounded-lg flex items-center gap-1 border border-rose-100"><ArrowDown size={12}/> 落後</span>
+                                )}
+                            </div>
+                        </div>
+                     </div>
+
+                     {/* Col 3: 戰隊異常與亮點 */}
+                     <div className="flex flex-col gap-3">
+                        <div className="bg-amber-50/80 p-3.5 rounded-2xl border border-amber-200/60 flex flex-col gap-1 shadow-sm">
+                            <p className="text-[10px] font-extrabold text-amber-700 uppercase flex items-center gap-1.5 mb-1"><Flame size={14}/> 本月戰神 (MVP)</p>
+                            {myTeamStats.mvp ? (
+                                <div className="flex items-center justify-between">
+                                    <span className="font-extrabold text-[15px] text-stone-800">{myTeamStats.mvp.name}</span>
+                                    <span className="font-mono font-black text-amber-600 text-lg">{fmtMoney(myTeamStats.mvp.totalRevenue)}</span>
+                                </div>
+                            ) : (
+                                <span className="text-xs text-stone-500 font-bold">尚無資料</span>
+                            )}
+                        </div>
+                        <div className="bg-rose-50/80 p-3.5 rounded-2xl border border-rose-200/60 flex flex-col gap-2 flex-1 shadow-sm relative overflow-hidden">
+                            <div className="absolute top-0 right-0 p-2 opacity-10 text-rose-600 pointer-events-none"><AlertTriangle size={40}/></div>
+                            <p className="text-[10px] font-extrabold text-rose-700 uppercase flex items-center gap-1.5 relative z-10"><AlertTriangle size={14}/> 締結警訊 ({myTeamStats.warnings.length}人)</p>
+                            <div className="flex flex-wrap gap-1.5 mt-1 relative z-10">
+                                {myTeamStats.warnings.length > 0 ? myTeamStats.warnings.map(w => (
+                                    <span key={w.id} className="text-[10px] font-bold bg-white text-rose-600 px-2 py-0.5 rounded-md shadow-[0_1px_2px_rgba(0,0,0,0.05)] border border-rose-100">{w.name} ({w.newClosingRate.toFixed(0)}%)</span>
+                                )) : (
+                                    <span className="text-xs font-bold text-emerald-600 flex items-center gap-1"><CheckCircle size={14}/> 全員表現健康</span>
+                                )}
+                            </div>
+                            <p className="text-[9px] font-bold text-rose-400/80 mt-auto pt-1 relative z-10 tracking-wider">低於全區平均締結率</p>
+                        </div>
+                     </div>
+                 </div>
+             </div>
+        </div>
+      )}
+
+      {/* ============================================================================== */}
+      {/* ★ [視角 3] 高階總監視角 (Director/Master - 維持原版全區三拼)                   */}
+      {/* ============================================================================== */}
+      {isManagerial && (!myTeamStats || myTeamStats.teamMembers.length === 0) && (
+        <div className="grid grid-cols-1 lg:grid-cols-12 gap-4 lg:gap-5 mb-8">
              {/* 輕量通透版：本月全區 TOP 5 看板 (5/12) */}
              <div className="lg:col-span-12 xl:col-span-5 bg-white rounded-3xl border border-stone-200 shadow-sm relative overflow-hidden flex flex-col h-full min-h-[320px]">
                 <div className="absolute top-0 right-0 p-4 opacity-[0.03] text-amber-900 pointer-events-none"><Trophy size={180} /></div> 
@@ -472,7 +682,6 @@ const TherapistPerformanceView = ({ therapistStats, brandInfo }) => {
                             <div className="flex-1 flex flex-col justify-center w-full mt-2">
                                <GaugeChart progress={teamProgress} color="#10b981" />
                             </div>
-                            {/* ★ 巧妙整合：將全區總業績放入雷達底部，取代舊版小卡 ★ */}
                             <div className="text-center mt-6 w-full bg-white p-4 rounded-2xl border border-stone-100 shadow-sm flex justify-around items-center">
                                <div className="flex flex-col items-center">
                                   <p className="text-[10px] font-bold text-stone-400 mb-1">全區總業績</p>
@@ -494,96 +703,111 @@ const TherapistPerformanceView = ({ therapistStats, brandInfo }) => {
                    })()}
                 </div>
              </div>
-          </div>
+        </div>
+      )}
 
-          {/* --- 主管底部即時戰況 (只顯示今日與昨日Top3，各佔一半，讓版面更穩重) --- */}
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-4 lg:gap-5 mb-8">
-            {/* 今日即時戰神 */}
-            <div className="bg-white rounded-3xl border border-stone-200 shadow-sm overflow-hidden flex flex-col relative group">
-              <div className="absolute top-0 right-0 p-4 opacity-5 text-rose-500"><Flame size={80} /></div>
-              <div className="bg-rose-50/80 px-5 py-4 text-rose-900 flex items-center justify-between border-b border-rose-100/60">
-                <div className="flex items-center gap-2"><Flame size={18} strokeWidth={2.5} className="text-rose-500 animate-pulse"/><h3 className="text-sm font-extrabold tracking-wide">今日即時戰神</h3></div>
-                <span className="relative flex h-2 w-2"><span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-rose-400 opacity-75"></span><span className="relative inline-flex rounded-full h-2 w-2 bg-rose-500"></span></span>
-              </div>
-              <div className="p-5 space-y-4 flex-1 bg-stone-50/30 flex flex-col justify-center relative z-10">
-                {therapistStats.todayTop3?.length > 0 ? therapistStats.todayTop3.map((t, i) => {
-                  const matchedInfo = therapistStats.rankings.find(r => r.id === t.id);
-                  const displayStore = matchedInfo?.storeDisplay || t.storeDisplay || "未知店";
-                  return (
-                    <div key={t.id} className="flex justify-between items-center bg-white p-3 md:p-4 rounded-2xl border border-stone-100 shadow-[0_2px_8px_-4px_rgba(0,0,0,0.05)]">
-                      <div className="flex items-center gap-4 text-sm font-bold text-stone-700 flex-1 min-w-0 pr-2">
-                        <span className={`shrink-0 w-8 h-8 flex items-center justify-center rounded-full text-xs font-black shadow-inner ${i===0?'bg-gradient-to-br from-rose-400 to-red-600 text-white':i===1?'bg-gradient-to-br from-stone-200 to-stone-400 text-white':'bg-gradient-to-br from-orange-200 to-orange-400 text-white'}`}>{i+1}</span>
-                        <div className="flex flex-wrap items-center gap-x-2 gap-y-0.5 whitespace-nowrap overflow-hidden">
-                            <span className="truncate text-stone-800 text-[15px]">{t.name}</span>
-                            <span className="shrink-0 text-[10px] text-stone-500 bg-stone-100/80 px-1.5 py-0.5 rounded font-medium border border-stone-200/50 tracking-wider">{displayStore}</span>
-                        </div>
-                      </div>
-                      <span className={`shrink-0 font-mono font-black text-lg text-rose-600`}>{fmtMoney(t.revenue)}</span>
-                    </div>
-                  );
-                }) : <div className="text-sm font-bold text-stone-400 text-center py-8 bg-stone-50 rounded-2xl border border-dashed border-stone-200">今日戰火尚未點燃</div>}
-              </div>
+      {/* ============================================================================== */}
+      {/* ★ 共通底部即時戰況 (今日與昨日Top3)                                            */}
+      {/* ============================================================================== */}
+      {isManagerial && (
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-4 lg:gap-5 mb-8">
+          {/* 今日即時戰神 */}
+          <div className="bg-white rounded-3xl border border-stone-200 shadow-sm overflow-hidden flex flex-col relative group">
+            <div className="absolute top-0 right-0 p-4 opacity-5 text-rose-500"><Flame size={80} /></div>
+            <div className="bg-rose-50/80 px-5 py-4 text-rose-900 flex items-center justify-between border-b border-rose-100/60">
+              <div className="flex items-center gap-2"><Flame size={18} strokeWidth={2.5} className="text-rose-500 animate-pulse"/><h3 className="text-sm font-extrabold tracking-wide">今日即時戰神</h3></div>
+              <span className="relative flex h-2 w-2"><span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-rose-400 opacity-75"></span><span className="relative inline-flex rounded-full h-2 w-2 bg-rose-500"></span></span>
             </div>
-
-            {/* 昨日戰績 */}
-            <div className="bg-white rounded-3xl border border-stone-200 shadow-sm overflow-hidden flex flex-col">
-              <div className="bg-amber-50/80 px-5 py-4 text-amber-900 flex items-center gap-2 border-b border-amber-100/60">
-                <Crown size={18} strokeWidth={2.5} className="text-amber-500"/>
-                <h3 className="text-sm font-extrabold tracking-wide">昨日戰績 (Top 3)</h3>
-              </div>
-              <div className="p-5 space-y-4 flex-1 bg-stone-50/30 flex flex-col justify-center">
-                {therapistStats.yesterdayTop3?.length > 0 ? therapistStats.yesterdayTop3.map((t, i) => {
-                  const matchedInfo = therapistStats.rankings.find(r => r.id === t.id);
-                  const displayStore = matchedInfo?.storeDisplay || t.storeDisplay || "未知店";
-                  return (
-                    <div key={t.id} className="flex justify-between items-center bg-white p-3 md:p-4 rounded-2xl border border-stone-100 shadow-[0_2px_8px_-4px_rgba(0,0,0,0.05)]">
-                      <div className="flex items-center gap-4 text-sm font-bold text-stone-700 flex-1 min-w-0 pr-2">
-                        <span className={`shrink-0 w-8 h-8 flex items-center justify-center rounded-full text-xs font-black shadow-inner ${i===0?'bg-gradient-to-br from-yellow-300 to-amber-500 text-white':i===1?'bg-gradient-to-br from-stone-200 to-stone-400 text-white':'bg-gradient-to-br from-orange-200 to-orange-400 text-white'}`}>{i+1}</span>
-                        <div className="flex flex-wrap items-center gap-x-2 gap-y-0.5 whitespace-nowrap overflow-hidden">
-                            <span className="truncate text-stone-800 text-[15px]">{t.name}</span>
-                            <span className="shrink-0 text-[10px] text-stone-500 bg-stone-100/80 px-1.5 py-0.5 rounded font-medium border border-stone-200/50 tracking-wider">{displayStore}</span>
-                        </div>
+            <div className="p-5 space-y-4 flex-1 bg-stone-50/30 flex flex-col justify-center relative z-10">
+              {therapistStats.todayTop3?.length > 0 ? therapistStats.todayTop3.map((t, i) => {
+                const matchedInfo = therapistStats.rankings.find(r => r.id === t.id);
+                const displayStore = matchedInfo?.storeDisplay || t.storeDisplay || "未知店";
+                return (
+                  <div key={t.id} className="flex justify-between items-center bg-white p-3 md:p-4 rounded-2xl border border-stone-100 shadow-[0_2px_8px_-4px_rgba(0,0,0,0.05)] hover:shadow-md transition-shadow">
+                    <div className="flex items-center gap-4 text-sm font-bold text-stone-700 flex-1 min-w-0 pr-2">
+                      <span className={`shrink-0 w-8 h-8 flex items-center justify-center rounded-full text-xs font-black shadow-inner ${i===0?'bg-gradient-to-br from-rose-400 to-red-600 text-white':i===1?'bg-gradient-to-br from-stone-200 to-stone-400 text-white':'bg-gradient-to-br from-orange-200 to-orange-400 text-white'}`}>{i+1}</span>
+                      <div className="flex flex-wrap items-center gap-x-2 gap-y-0.5 whitespace-nowrap overflow-hidden">
+                          <span className="truncate text-stone-800 text-[15px]">{t.name}</span>
+                          <span className="shrink-0 text-[10px] text-stone-500 bg-stone-100/80 px-1.5 py-0.5 rounded font-medium border border-stone-200/50 tracking-wider">{displayStore}</span>
                       </div>
-                      <span className={`shrink-0 font-mono font-black text-lg text-stone-700`}>{fmtMoney(t.revenue)}</span>
                     </div>
-                  );
-                }) : <div className="text-sm font-bold text-stone-400 text-center py-8 bg-stone-50 rounded-2xl border border-dashed border-stone-200">昨日無業績紀錄</div>}
-              </div>
+                    <span className={`shrink-0 font-mono font-black text-lg text-rose-600`}>{fmtMoney(t.revenue)}</span>
+                  </div>
+                );
+              }) : <div className="text-sm font-bold text-stone-400 text-center py-8 bg-stone-50 rounded-2xl border border-dashed border-stone-200">今日戰火尚未點燃</div>}
             </div>
           </div>
-        </>
+
+          {/* 昨日戰績 */}
+          <div className="bg-white rounded-3xl border border-stone-200 shadow-sm overflow-hidden flex flex-col">
+            <div className="bg-amber-50/80 px-5 py-4 text-amber-900 flex items-center gap-2 border-b border-amber-100/60">
+              <Crown size={18} strokeWidth={2.5} className="text-amber-500"/>
+              <h3 className="text-sm font-extrabold tracking-wide">昨日戰績 (Top 3)</h3>
+            </div>
+            <div className="p-5 space-y-4 flex-1 bg-stone-50/30 flex flex-col justify-center">
+              {therapistStats.yesterdayTop3?.length > 0 ? therapistStats.yesterdayTop3.map((t, i) => {
+                const matchedInfo = therapistStats.rankings.find(r => r.id === t.id);
+                const displayStore = matchedInfo?.storeDisplay || t.storeDisplay || "未知店";
+                return (
+                  <div key={t.id} className="flex justify-between items-center bg-white p-3 md:p-4 rounded-2xl border border-stone-100 shadow-[0_2px_8px_-4px_rgba(0,0,0,0.05)] hover:shadow-md transition-shadow">
+                    <div className="flex items-center gap-4 text-sm font-bold text-stone-700 flex-1 min-w-0 pr-2">
+                      <span className={`shrink-0 w-8 h-8 flex items-center justify-center rounded-full text-xs font-black shadow-inner ${i===0?'bg-gradient-to-br from-yellow-300 to-amber-500 text-white':i===1?'bg-gradient-to-br from-stone-200 to-stone-400 text-white':'bg-gradient-to-br from-orange-200 to-orange-400 text-white'}`}>{i+1}</span>
+                      <div className="flex flex-wrap items-center gap-x-2 gap-y-0.5 whitespace-nowrap overflow-hidden">
+                          <span className="truncate text-stone-800 text-[15px]">{t.name}</span>
+                          <span className="shrink-0 text-[10px] text-stone-500 bg-stone-100/80 px-1.5 py-0.5 rounded font-medium border border-stone-200/50 tracking-wider">{displayStore}</span>
+                      </div>
+                    </div>
+                    <span className={`shrink-0 font-mono font-black text-lg text-stone-700`}>{fmtMoney(t.revenue)}</span>
+                  </div>
+                );
+              }) : <div className="text-sm font-bold text-stone-400 text-center py-8 bg-stone-50 rounded-2xl border border-dashed border-stone-200">昨日無業績紀錄</div>}
+            </div>
+          </div>
+        </div>
       )}
 
       {/* ========================================================= */}
-      {/* ★ 共通底部表格：全區排行榜 ★                                   */}
+      {/* ★ 共通底部表格：全區大排行 (結合店長大魚缸高光機制) ★              */}
       {/* ========================================================= */}
-      <Card title="管理師績效排行榜" subtitle="依本月個人總業績排序 (即時更新)">
+      <Card title="管理師績效排行榜" subtitle="依本月個人總業績排序 (全區視角)">
         <div className="grid grid-cols-1 w-full">
           <div className="flex justify-end mb-4"><button onClick={handleExportCSV} className="flex items-center gap-2 px-4 py-2 bg-emerald-50 text-emerald-600 rounded-xl text-sm font-bold hover:bg-emerald-100 transition-colors border border-emerald-100"><Download size={16} /> 匯出 CSV</button></div>
           <div className="overflow-x-auto w-full pb-2">
             <table className="w-full text-left border-collapse min-w-[1200px] whitespace-nowrap">
               <thead><tr className="text-xs font-bold text-stone-400 border-b border-stone-100 bg-stone-50/50"><th className="p-3 md:p-4 w-16 text-center">排名</th><th className="p-3 md:p-4">姓名</th><th className="p-3 md:p-4">所屬店家</th><th className="p-3 md:p-4 text-right">個人總業績</th><th className="p-3 md:p-4 text-right">新客業績</th><th className="p-3 md:p-4 text-right">舊客業績</th><th className="p-3 md:p-4 text-center">新舊客佔比</th><th className="p-3 md:p-4 text-right">新客締結率</th><th className="p-3 md:p-4 text-right">新客人數</th><th className="p-3 md:p-4 text-right">新客留單數</th><th className="p-3 md:p-4 text-right">新客平均業績</th><th className="p-3 md:p-4 text-right">舊客平均業績</th></tr></thead>
               <tbody className="text-sm">
-                {therapistStats.rankings.filter(t => !(!isManagerial && t.id !== currentUser?.id)).map((t, idx) => (
-                  <tr key={t.id} className={`border-b border-stone-50 hover:bg-stone-50 transition-colors ${currentUser?.id === t.id ? "bg-indigo-50" : ""}`}>
-                    <td className="p-3 md:p-4 text-center"><span className={`inline-flex items-center justify-center w-8 h-8 rounded-full text-xs font-bold ${t.rank <= 3 ? "bg-amber-100 text-amber-700 ring-4 ring-amber-50" : t.status === "DANGER" ? "bg-rose-100 text-rose-700 ring-4 ring-rose-50" : "bg-stone-100 text-stone-500"}`}>{t.rank}</span></td>
-                    <td className="p-3 md:p-4 font-bold text-stone-700 flex flex-wrap items-center gap-2">
-                      {t.name}
-                      {currentUser?.id === t.id && <span className="px-2 py-0.5 bg-indigo-200 text-indigo-700 text-[10px] rounded-full">ME</span>}
-                      {t.status === "DANGER" && <span className="text-[10px] bg-rose-100 text-rose-600 px-1.5 py-0.5 rounded font-bold">加油</span>}
-                    </td>
-                    <td className="p-3 md:p-4 text-stone-500">{t.storeDisplay}</td>
-                    <td className="p-3 md:p-4 text-right font-mono font-bold text-indigo-600">{fmtMoney(t.totalRevenue)}</td>
-                    <td className="p-3 md:p-4 text-right font-mono text-stone-600">{fmtMoney(t.newCustomerRevenue)}</td>
-                    <td className="p-3 md:p-4 text-right font-mono text-stone-600">{fmtMoney(t.oldCustomerRevenue)}</td>
-                    <td className="p-3 md:p-4 text-center font-mono text-xs text-stone-400">{t.revenueMix}</td>
-                    <td className="p-3 md:p-4 text-right font-mono font-bold text-stone-700">{t.newClosingRate.toFixed(0)}%</td>
-                    <td className="p-3 md:p-4 text-right font-mono text-stone-600">{fmtNum(t.newCustomerCount)}</td>
-                    <td className="p-3 md:p-4 text-right font-mono text-stone-600">{fmtNum(t.newCustomerClosings)}</td>
-                    <td className="p-3 md:p-4 text-right font-mono text-stone-600">{fmtNum(Math.round(t.newAsp))}</td>
-                    <td className="p-3 md:p-4 text-right font-mono text-stone-600">{fmtNum(Math.round(t.oldAsp))}</td>
-                  </tr>
-                ))}
+                {therapistStats.rankings.filter(t => !(!isManagerial && t.id !== currentUser?.id)).map((t, idx) => {
+                  // ★ 判斷是否為「我的團隊成員」(給予高光標示)
+                  const isMyOwnTeam = myTeamStats && myTeamStats.isMyTeam(t.storeDisplay);
+                  const rowClass = currentUser?.id === t.id 
+                      ? "bg-indigo-50 border-indigo-100" 
+                      : isMyOwnTeam 
+                          ? "bg-amber-50/60 border-amber-100/50 hover:bg-amber-50/80" 
+                          : "border-stone-50 hover:bg-stone-50";
+
+                  return (
+                    <tr key={t.id} className={`border-b transition-colors ${rowClass}`}>
+                      <td className="p-3 md:p-4 text-center"><span className={`inline-flex items-center justify-center w-8 h-8 rounded-full text-xs font-bold ${t.rank <= 3 ? "bg-amber-100 text-amber-700 ring-4 ring-amber-50" : t.status === "DANGER" ? "bg-rose-100 text-rose-700 ring-4 ring-rose-50" : "bg-stone-100 text-stone-500"}`}>{t.rank}</span></td>
+                      <td className="p-3 md:p-4 font-bold text-stone-700 flex flex-wrap items-center gap-2">
+                        <span className={isMyOwnTeam ? "text-amber-900 font-extrabold" : ""}>{t.name}</span>
+                        {currentUser?.id === t.id && <span className="px-2 py-0.5 bg-indigo-200 text-indigo-700 text-[10px] rounded-full">ME</span>}
+                        {t.status === "DANGER" && <span className="text-[10px] bg-rose-100 text-rose-600 px-1.5 py-0.5 rounded font-bold">加油</span>}
+                      </td>
+                      <td className="p-3 md:p-4">
+                        <span className={`text-[11px] px-2 py-0.5 rounded font-medium border ${isMyOwnTeam ? "bg-amber-100/80 text-amber-700 border-amber-200/50" : "text-stone-500 bg-stone-100/80 border-stone-200/50"}`}>{t.storeDisplay}</span>
+                      </td>
+                      <td className={`p-3 md:p-4 text-right font-mono font-bold ${isMyOwnTeam ? "text-amber-600" : "text-indigo-600"}`}>{fmtMoney(t.totalRevenue)}</td>
+                      <td className="p-3 md:p-4 text-right font-mono text-stone-600">{fmtMoney(t.newCustomerRevenue)}</td>
+                      <td className="p-3 md:p-4 text-right font-mono text-stone-600">{fmtMoney(t.oldCustomerRevenue)}</td>
+                      <td className="p-3 md:p-4 text-center font-mono text-xs text-stone-400">{t.revenueMix}</td>
+                      <td className="p-3 md:p-4 text-right font-mono font-bold text-stone-700">{t.newClosingRate.toFixed(0)}%</td>
+                      <td className="p-3 md:p-4 text-right font-mono text-stone-600">{fmtNum(t.newCustomerCount)}</td>
+                      <td className="p-3 md:p-4 text-right font-mono text-stone-600">{fmtNum(t.newCustomerClosings)}</td>
+                      <td className="p-3 md:p-4 text-right font-mono text-stone-600">{fmtNum(Math.round(t.newAsp))}</td>
+                      <td className="p-3 md:p-4 text-right font-mono text-stone-600">{fmtNum(Math.round(t.oldAsp))}</td>
+                    </tr>
+                  )
+                })}
               </tbody>
             </table>
           </div>
