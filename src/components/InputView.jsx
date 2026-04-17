@@ -5,7 +5,7 @@ import {
   FileText, Upload, DollarSign,
   RotateCcw, Activity, AlertCircle, X, CheckCircle, User, Star, Bug,
   Layers, Users, TrendingDown, Calendar, AlertTriangle, Calculator,
-  WifiOff // ★ 新增 WifiOff 圖示
+  WifiOff 
 } from "lucide-react";
 import { 
   collection, addDoc, setDoc, doc, serverTimestamp, getDocFromServer 
@@ -16,15 +16,13 @@ import { parseNumber, formatNumber, toStandardDateFormat } from "../utils/helper
 import { AppContext } from "../AppContext";
 import { ViewWrapper, Card } from "./SharedUI";
 import SmartDatePicker from "./SmartDatePicker";
+import { sendTelegramAlert } from "../utils/telegramBot";
 
-// ★ 營業日換日線邏輯：如果現在是凌晨 00:00 ~ 02:59，則自動將日期退回「昨天」
 const getLocalTodayString = () => {
   const now = new Date();
-  
   if (now.getHours() < 4) {
     now.setDate(now.getDate() - 1);
   }
-  
   const year = now.getFullYear();
   const month = String(now.getMonth() + 1).padStart(2, '0');
   const day = String(now.getDate()).padStart(2, '0');
@@ -37,9 +35,7 @@ const getLocalTodayString = () => {
 const StoreInputView = () => {
   const {
     currentUser, userRole, managers, inputDate, setInputDate, showToast, logActivity, rawData,
-    getCollectionPath, 
-    currentBrand,
-    isOnline // ★ 從 Context 中解構出網路狀態
+    getCollectionPath, currentBrand, isOnline 
   } = useContext(AppContext);
 
   const [selectedManager, setSelectedManager] = useState("");
@@ -66,7 +62,6 @@ const StoreInputView = () => {
   const brandPrefix = useMemo(() => {
     if (!currentBrand) return "CYJ";
     const bId = typeof currentBrand === 'string' ? currentBrand : currentBrand.id;
-    
     switch(bId) {
       case 'anniu': return '安妞';
       case 'yibo': return '伊啵';
@@ -93,7 +88,6 @@ const StoreInputView = () => {
       if (document.visibilityState === "visible" || document.hasFocus()) {
         const realToday = getLocalTodayString(); 
         const isFormEmpty = Object.values(formData).every(val => val === "");
-        
         if (inputDate !== realToday && isFormEmpty) {
            setInputDate(realToday);
         }
@@ -247,11 +241,36 @@ const StoreInputView = () => {
 
       await setDoc(doc(getCollectionPath("daily_reports"), targetDocId), payload);
 
+      const actionType = existingReportId ? "更新" : "完成";
+
       if (existingReportId) {
         logActivity(userRole, currentUser?.name, "更新日報(覆蓋)", `${selectedStore} ${safeDate}`);
       } else {
         logActivity(userRole, currentUser?.name, "提交日報", `${selectedStore} ${safeDate}`);
       }
+
+      // ==========================================
+      // ★ 觸發 Telegram 門市戰報推播 (加入權責業績)
+      // ==========================================
+      try {
+        const msgCash = formData.cash || "0";
+        const msgAccrual = formData.accrual || "0"; // 新增權責業績
+        const msgTraffic = formData.traffic || "0";
+        const msgNewCus = formData.newCustomers || "0";
+        
+        const cashValue = parseNumber(formData.cash);
+        let icon = "📊";
+        if (cashValue >= 100000) icon = "🔥";
+        else if (cashValue >= 50000) icon = "🌟";
+
+        const telegramMessage = `${icon} *【即時戰報】${selectedStore} ${actionType}日報結算*\n\n💰 今日現金業績：$${msgCash}\n💳 今日權責業績：$${msgAccrual}\n👥 課程操作人數：${msgTraffic} 人\n✨ 新客體驗數：${msgNewCus} 人\n\n大家繼續保持火力，沒打算讓！💪`;
+        
+        // 帶入 brandId 來進行多品牌路由分發
+        sendTelegramAlert(telegramMessage, brandId);
+      } catch (tgError) {
+        console.error("Telegram 推播發生例外錯誤", tgError);
+      }
+      // ==========================================
 
       setFormData(defaultFormData);
       localStorage.removeItem(`input_draft_${brandId}`);
@@ -363,7 +382,6 @@ const StoreInputView = () => {
         <div className="flex gap-4 pt-4 border-t border-stone-100">
           <button onClick={handleReset} className="px-6 py-4 bg-stone-100 text-stone-500 rounded-xl hover:bg-stone-200 transition-colors"><RotateCcw size={20} /></button>
           
-          {/* ★ 網路狀態判斷防呆按鈕 */}
           <button 
             onClick={handlePreSubmit} 
             disabled={isSubmitting || !isOnline} 
@@ -423,7 +441,7 @@ const TherapistInputView = () => {
   const { 
     currentUser, inputDate, setInputDate, showToast, logActivity,
     getCollectionPath, currentBrand,
-    isOnline // ★ 從 Context 中解構出網路狀態
+    isOnline 
   } = useContext(AppContext);
   
   const defaultPersonalData = {
@@ -512,7 +530,7 @@ const TherapistInputView = () => {
 
   useEffect(() => {
     const checkSubmission = async () => {
-      if (!currentUser?.id || !isOnline) return; // 離線時不發送無效請求
+      if (!currentUser?.id || !isOnline) return; 
       try {
         const normalizedDate = toStandardDateFormat(inputDate);
         const safeDate = normalizedDate.replace(/\//g, "-");
@@ -602,6 +620,23 @@ const TherapistInputView = () => {
       const verifySnap = await getDocFromServer(docRef);
       if (verifySnap.exists()) {
         logActivity("therapist", currentUser.name, "個人日報提交", `${safeDate} 業績`);
+        
+        // ==========================================
+        // ★ 觸發 Telegram 管理師戰報推播
+        // ==========================================
+        try {
+          const personalRev = formData.totalRevenue || "0";
+          const newRev = formData.newCustomerRevenue || "0";
+          const actionType = hasSubmittedToday ? "更新" : "完成";
+          
+          const telegramMessage = `🌟 *【個人戰報】${currentUser.store || "未知"}店 - ${currentUser.name} ${actionType}日報* 🌟\n💰 今日總業績：$${personalRev}\n✨ 新客業績：$${newRev}\n繼續突破，締造佳績！🚀`;
+          
+          sendTelegramAlert(telegramMessage, brandId);
+        } catch (tgError) {
+          console.error("Telegram 推播發生例外錯誤", tgError);
+        }
+        // ==========================================
+
         showToast("提交成功！", "success");
         setHasSubmittedToday(true);
         setFormData(defaultPersonalData);
@@ -618,8 +653,6 @@ const TherapistInputView = () => {
       setIsSubmitting(false);
     }
   };
-
-  const totalCalculated = parseNumber(formData.newCustomerRevenue) + parseNumber(formData.oldCustomerRevenue) - parseNumber(formData.returnRevenue);
 
   return (
     <div className="max-w-xl mx-auto space-y-6 pb-20">
@@ -695,7 +728,6 @@ const TherapistInputView = () => {
              <input type="text" value={formData.returnRevenue} onChange={(e) => handleNumberChange("returnRevenue", e.target.value)} placeholder="0" className="w-full border-2 p-3 rounded-xl font-bold text-rose-600 border-rose-100 focus:border-rose-400 outline-none mb-4" inputMode="numeric" pattern="[0-9]*"/>
           </div>
 
-          {/* ★ 網路狀態判斷防呆按鈕 */}
           <button 
             onClick={handlePreSubmit} 
             disabled={isSubmitting || !isOnline} 

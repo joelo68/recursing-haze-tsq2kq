@@ -4,6 +4,7 @@ import { XAxis, YAxis, CartesianGrid, Tooltip as RechartsTooltip, ResponsiveCont
 import { AlertTriangle, Trophy, Medal, Star, Activity, Target, DollarSign, CreditCard, ShoppingBag, Users, TrendingUp, Sparkles, CheckSquare, Award, PieChart, Crown, Map as MapIcon, Flame } from "lucide-react";
 import { AppContext } from "../AppContext";
 import { Card } from "./SharedUI";
+import DailyTelegramTrigger from "./DailyTelegramTrigger"; // ★ 引入隱形推播觸發器
 
 const StorePerformanceView = ({ dashboardStats, myStoreRankings, brandInfo }) => {
   const { fmtMoney, fmtNum, targets, userRole } = useContext(AppContext);
@@ -29,6 +30,10 @@ const StorePerformanceView = ({ dashboardStats, myStoreRankings, brandInfo }) =>
 
   return (
     <div className="space-y-8 animate-in fade-in slide-in-from-bottom-4 duration-500 w-full min-w-0">
+      
+      {/* ★ 裝上隱形推播觸發器 (沒有畫面，只會在背景判定時間與發送) */}
+      <DailyTelegramTrigger />
+
       {/* 我的店家戰情卡 (僅店經理顯示) */}
       {userRole === 'store' && myStoreRankings.length > 0 && (
         <div className="grid grid-cols-1 md:grid-cols-2 gap-6">{myStoreRankings.map((storeRank) => ( 
