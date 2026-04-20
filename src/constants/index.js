@@ -13,6 +13,7 @@ import {
   Target, 
   UserCog, 
   CalendarOff,
+  Bell // 🔔 新增引入推播圖示
 } from "lucide-react";
 
 // pathType: 'legacy' 代表舊路徑(CYJ), 'standard' 代表新架構(新品牌)
@@ -44,6 +45,7 @@ export const ALL_MENU_ITEMS = [
   { id: "history", label: "數據修正", icon: FileText },
   { id: "input", label: "日報輸入", icon: Upload },
   { id: "logs", label: "系統監控", icon: Activity },
+  { id: "notification", label: "推播排程管理", icon: Bell, roles: ["director", "master"] }, // 🔔 新增的推播控制中心選單
   { id: "t-targets", label: "管理師目標", icon: UserCog }, 
   { id: "t-schedule", label: "管理師排休", icon: CalendarOff },
   { id: "settings", label: "參數設定", icon: Settings },

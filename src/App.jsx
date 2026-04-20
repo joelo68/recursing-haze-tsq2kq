@@ -88,6 +88,7 @@ const AnnualView = lazyWithRetry(() => import("./components/AnnualView"));
 const TargetView = lazyWithRetry(() => import("./components/TargetView"));
 const TherapistTargetView = lazyWithRetry(() => import("./components/TherapistTargetView"));
 const TherapistScheduleView = lazyWithRetry(() => import("./components/TherapistScheduleView"));
+const NotificationManager = lazyWithRetry(() => import("./components/NotificationManager"));
 
 const BRANDS = [
   { id: 'cyj', label: 'CYJ', icon: Sparkles, pathType: 'legacy', color: 'amber', gradient: 'from-amber-500 to-orange-600', bg: 'bg-amber-50', text: 'text-amber-600' },
@@ -629,6 +630,7 @@ export default function App() {
           {activeView === "targets" && <TargetView />}
           {activeView === "t-targets" && <TherapistTargetView />}
           {activeView === "t-schedule" && <TherapistScheduleView />}
+          {activeView === "notification" && <NotificationManager />}
         </Suspense>
       </main>
     );
