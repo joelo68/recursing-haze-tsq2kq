@@ -54,13 +54,12 @@ exports.aggregateBrandReports = functions.firestore
   .onWrite(async (change, context) => updateMonthlyAggregation(change, `brands/${context.params.brandId}/monthly_aggregated`));
 
 // ==========================================
-// ★ Telegram 動態推播巡邏員 (支援多品牌獨立發送)
+// ★ Telegram 動態推播巡邏員 (完整多品牌 + 管理師支援)
 // ==========================================
 const TELEGRAM_BOT_TOKEN = '8787208059:AAF0AiGfUaV69YouI_b_0MuMcXpwu9EK0RA';
 const TARGET_CHAT_ID_MAIN = '-4991191955'; 
 const TARGET_CHAT_ID_MANAGER = '-4991191955'; 
 
-// 定義系統內的三大品牌
 const BRANDS = [
     { id: 'cyj', name: 'CYJ' },
     { id: 'anniu', name: '安妞' },
@@ -68,7 +67,7 @@ const BRANDS = [
 ];
 
 exports.notificationPatrol = onSchedule({
-    schedule: "* * * * *", // 每 1 分鐘執行一次
+    schedule: "* * * * *", 
     timeZone: "Asia/Taipei"
 }, async (event) => {
     const now = new Date();
@@ -90,9 +89,9 @@ exports.notificationPatrol = onSchedule({
             .get();
 
         if (rulesSnapshot.empty) return;
-        console.log(`[${timeString}] 偵測到排程，開始進行多品牌結算...`);
+        console.log(`[${timeString}] 偵測到排程，開始進行資料結算...`);
 
-        // 1. 抓取昨天的所有日報，並依照品牌自動分組
+        // 1. 抓取昨天的【店家】日報 (分品牌)
         const dailySnap = await db.collectionGroup('daily_reports').where('date', '==', yesterdayStr).get();
         const reportsByBrand = { cyj: [], anniu: [], yibo: [] };
         const submittedStoresByBrand = { cyj: new Set(), anniu: new Set(), yibo: new Set() };
@@ -108,7 +107,21 @@ exports.notificationPatrol = onSchedule({
             if(data.storeName) submittedStoresByBrand[bId].add(data.storeName.trim());
         });
 
-        // 2. 智慧名單：抓取過去 14 天的資料，自動建構「各品牌營業中門市名單」
+        // 2. 抓取昨天的【管理師】個人日報 (分品牌) ★ 新增這段！
+        const therapistSnap = await db.collectionGroup('therapist_daily_reports').where('date', '==', yesterdayStr).get();
+        const therapistReportsByBrand = { cyj: [], anniu: [], yibo: [] };
+        
+        therapistSnap.forEach(doc => {
+            const data = doc.data();
+            let bId = data.brandId || 'cyj';
+            if (bId.includes('anniu') || bId.includes('anew')) bId = 'anniu';
+            else if (bId.includes('yibo')) bId = 'yibo';
+            else bId = 'cyj';
+            
+            therapistReportsByBrand[bId].push(data);
+        });
+
+        // 3. 智慧名單：過去 14 天有營業的店家
         const past14Days = new Date(now);
         past14Days.setDate(past14Days.getDate() - 14);
         const past14Str = `${past14Days.getFullYear()}-${String(past14Days.getMonth() + 1).padStart(2, '0')}-${String(past14Days.getDate()).padStart(2, '0')}`;
@@ -126,13 +139,12 @@ exports.notificationPatrol = onSchedule({
             if(data.storeName) activeRosterByBrand[bId].add(data.storeName.trim());
         });
 
-        // 3. 處理每一個推播任務
+        // 4. 處理每一個推播任務
         for (const ruleDoc of rulesSnapshot.docs) {
             const rule = ruleDoc.data();
             const chatId = rule.targetGroup === 'manager' ? TARGET_CHAT_ID_MANAGER : TARGET_CHAT_ID_MAIN;
             const url = `https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage`;
 
-            // ★ 對三個品牌分別執行，各自發送一則推播
             for (const brand of BRANDS) {
                 let finalMessage = rule.template || "";
                 finalMessage = finalMessage.replace(/{date}/g, yesterdayStr);
@@ -144,7 +156,6 @@ exports.notificationPatrol = onSchedule({
                 if (rule.source === "top5_stores") {
                     const brandReports = reportsByBrand[brand.id];
                     const storeMap = {};
-                    
                     brandReports.forEach(data => {
                         const sName = String(data.storeName || '').replace(/店$/, '').trim() + '店';
                         if (!storeMap[sName]) storeMap[sName] = 0;
@@ -154,7 +165,8 @@ exports.notificationPatrol = onSchedule({
                     const top5 = Object.entries(storeMap)
                         .map(([name, rev]) => ({ name, rev }))
                         .sort((a, b) => b.rev - a.rev)
-                        .slice(0, 5);
+                        .slice(0, 5)
+                        .filter(s => s.rev > 0);
 
                     if (top5.length > 0) {
                         shouldSend = true;
@@ -163,7 +175,6 @@ exports.notificationPatrol = onSchedule({
                         top5.forEach((store, idx) => {
                             top5Text += `${badges[idx]} ${store.name} ($${store.rev.toLocaleString()})\n`;
                         });
-                        
                         finalMessage = finalMessage.replace(/{top5Stores}/g, top5Text);
                         finalMessage = `🏢 *【${brand.name} 專屬戰報】*\n` + finalMessage;
                     }
@@ -177,7 +188,7 @@ exports.notificationPatrol = onSchedule({
                     const submittedStores = submittedStoresByBrand[brand.id];
                     const missing = expectedStores.filter(store => !submittedStores.has(store));
                     
-                    if (expectedStores.length > 0) { // 只有當該品牌有店面營業時才發送
+                    if (expectedStores.length > 0) { 
                         shouldSend = true;
                         if (missing.length > 0) {
                             let missingText = missing.map(s => `• ${s}`).join('\n');
@@ -192,7 +203,33 @@ exports.notificationPatrol = onSchedule({
                     }
                 }
 
-                // 如果該品牌有產生資料，就單獨發送給群組
+                // ----------------------------------------
+                // 邏輯 C：TOP 5 管理師 (★ 補上這段邏輯！)
+                // ----------------------------------------
+                if (rule.source === "top5_therapists") {
+                    const brandTReports = therapistReportsByBrand[brand.id];
+                    
+                    // 根據個人日報的「今日總業績 (totalRevenue)」進行大到小排序
+                    const top5T = brandTReports
+                        .sort((a, b) => (Number(b.totalRevenue) || 0) - (Number(a.totalRevenue) || 0))
+                        .slice(0, 5)
+                        .filter(t => (Number(t.totalRevenue) || 0) > 0); // 排除 0 元的
+
+                    if (top5T.length > 0) {
+                        shouldSend = true;
+                        let top5Text = "";
+                        const badges = ["🥇", "🥈", "🥉", "4.", "5."];
+                        top5T.forEach((t, idx) => {
+                            const storeName = String(t.storeName || '').replace(/店$/, '').trim() + '店';
+                            const rev = Number(t.totalRevenue) || 0;
+                            top5Text += `${badges[idx]} ${t.therapistName} (${storeName}) - $${rev.toLocaleString()}\n`;
+                        });
+                        
+                        finalMessage = finalMessage.replace(/{top5Therapists}/g, top5Text);
+                        finalMessage = `🌟 *【${brand.name} 個人榮耀】*\n` + finalMessage;
+                    }
+                }
+
                 if (shouldSend) {
                     await axios.post(url, {
                         chat_id: chatId,
@@ -200,7 +237,7 @@ exports.notificationPatrol = onSchedule({
                         parse_mode: 'Markdown'
                     });
                 }
-            } // end of BRANDS loop
+            }
         }
     } catch (error) {
         console.error("❌ 巡邏員執行錯誤：", error);
