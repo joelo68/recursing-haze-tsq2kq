@@ -36,7 +36,7 @@ import LoginView from "./components/LoginView";
 // ==========================================
 // ★ 系統核心版本號 (終極動態快取版)
 // ==========================================
-const CURRENT_APP_VERSION = "2.6.9"; 
+const CURRENT_APP_VERSION = "2.7.0"; 
 
 const isNewerVersion = (local, remote) => {
   if (!remote) return true;
@@ -517,12 +517,27 @@ export default function App() {
   }, [user, currentBrand, selectedYear, selectedMonth, getCollectionPath]);
 
 
-  const handleLogin = useCallback((roleId, userInfo = null) => {
+ const handleLogin = useCallback((roleId, userInfo = null) => {
     let finalUser = userInfo;
-    if (roleId === 'therapist' && userInfo?.name) { const foundTherapist = therapists.find(t => t.name === userInfo.name); if (foundTherapist) { finalUser = { ...userInfo, ...foundTherapist, id: foundTherapist.id || userInfo.id }; } }
-    setUserRole(roleId); if (finalUser) setCurrentUser(finalUser);
+    
+    if (roleId === 'therapist' && userInfo?.name) { 
+      // ★ 升級防撞機制：同時比對「姓名」與「店家」，避免同名同姓抓錯 ID
+      const foundTherapist = therapists.find(t => 
+        t.name === userInfo.name && 
+        (t.store === userInfo.store || t.storeName === userInfo.store || t.store === userInfo.storeName)
+      ); 
+      
+      if (foundTherapist) { 
+        finalUser = { ...userInfo, ...foundTherapist, id: foundTherapist.id || userInfo.id }; 
+      } 
+    }
+    
+    setUserRole(roleId); 
+    if (finalUser) setCurrentUser(finalUser);
+    
     const userName = finalUser?.name || (roleId === "director" ? "高階主管" : (roleId === "trainer" ? "教專" : "未知"));
-    logActivity(roleId, userName, "登入系統", "登入成功"); setActiveView("dashboard");
+    logActivity(roleId, userName, "登入系統", "登入成功"); 
+    setActiveView("dashboard");
   }, [therapists, logActivity]);
 
   const showToast = useCallback((message, type = "info") => setToast({ message, type }), []);
