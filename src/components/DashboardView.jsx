@@ -1,6 +1,7 @@
 // src/components/DashboardView.jsx
 import React, { useContext } from "react";
-import { Loader2 } from "lucide-react";
+// 👇 已經幫您在這裡補上 CheckCircle 了！
+import { Loader2, CheckCircle } from "lucide-react";
 import { ViewWrapper } from "./SharedUI";
 import { AppContext } from "../AppContext";
 

@@ -1,6 +1,6 @@
 // src/components/TherapistPerformanceView.jsx
 import React, { useContext, useMemo } from "react";
-import { Flame, Crown, AlertTriangle, Zap, Frown, DollarSign, Sparkles, TrendingUp, Activity, FileWarning, Download, ArrowLeft, ArrowRight, Store, ArrowUp, ArrowDown, Target, Users, Receipt, Award, UsersRound, Trophy } from "lucide-react";
+import { Flame, Crown, AlertTriangle, Zap, Frown, DollarSign, Sparkles, TrendingUp, Activity, FileWarning, Download, ArrowLeft, ArrowRight, Store, ArrowUp, ArrowDown, Target, Users, Receipt, Award, UsersRound, Trophy, CheckCircle } from "lucide-react";
 import { AppContext } from "../AppContext";
 import { Card } from "./SharedUI";
 
