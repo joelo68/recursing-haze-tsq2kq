@@ -16,7 +16,6 @@ import { parseNumber, formatNumber, toStandardDateFormat } from "../utils/helper
 import { AppContext } from "../AppContext";
 import { ViewWrapper, Card } from "./SharedUI";
 import SmartDatePicker from "./SmartDatePicker";
-import { sendTelegramAlert } from "../utils/telegramBot";
 
 const getLocalTodayString = () => {
   const now = new Date();
@@ -241,36 +240,11 @@ const StoreInputView = () => {
 
       await setDoc(doc(getCollectionPath("daily_reports"), targetDocId), payload);
 
-      const actionType = existingReportId ? "更新" : "完成";
-
       if (existingReportId) {
         logActivity(userRole, currentUser?.name, "更新日報(覆蓋)", `${selectedStore} ${safeDate}`);
       } else {
         logActivity(userRole, currentUser?.name, "提交日報", `${selectedStore} ${safeDate}`);
       }
-
-      // ==========================================
-      // ★ 觸發 Telegram 門市戰報推播 (加入權責業績)
-      // ==========================================
-      try {
-        const msgCash = formData.cash || "0";
-        const msgAccrual = formData.accrual || "0"; // 新增權責業績
-        const msgTraffic = formData.traffic || "0";
-        const msgNewCus = formData.newCustomers || "0";
-        
-        const cashValue = parseNumber(formData.cash);
-        let icon = "📊";
-        if (cashValue >= 100000) icon = "🔥";
-        else if (cashValue >= 50000) icon = "🌟";
-
-        const telegramMessage = `${icon} *【即時戰報】${selectedStore} ${actionType}日報結算*\n\n💰 今日現金業績：$${msgCash}\n💳 今日權責業績：$${msgAccrual}\n👥 課程操作人數：${msgTraffic} 人\n✨ 新客體驗數：${msgNewCus} 人\n\n大家繼續保持火力，沒打算讓！💪`;
-        
-        // 帶入 brandId 來進行多品牌路由分發
-        sendTelegramAlert(telegramMessage, brandId);
-      } catch (tgError) {
-        console.error("Telegram 推播發生例外錯誤", tgError);
-      }
-      // ==========================================
 
       setFormData(defaultFormData);
       localStorage.removeItem(`input_draft_${brandId}`);
@@ -620,22 +594,6 @@ const TherapistInputView = () => {
       const verifySnap = await getDocFromServer(docRef);
       if (verifySnap.exists()) {
         logActivity("therapist", currentUser.name, "個人日報提交", `${safeDate} 業績`);
-        
-        // ==========================================
-        // ★ 觸發 Telegram 管理師戰報推播
-        // ==========================================
-        try {
-          const personalRev = formData.totalRevenue || "0";
-          const newRev = formData.newCustomerRevenue || "0";
-          const actionType = hasSubmittedToday ? "更新" : "完成";
-          
-          const telegramMessage = `🌟 *【個人戰報】${currentUser.store || "未知"}店 - ${currentUser.name} ${actionType}日報* 🌟\n💰 今日總業績：$${personalRev}\n✨ 新客業績：$${newRev}\n繼續突破，締造佳績！🚀`;
-          
-          sendTelegramAlert(telegramMessage, brandId);
-        } catch (tgError) {
-          console.error("Telegram 推播發生例外錯誤", tgError);
-        }
-        // ==========================================
 
         showToast("提交成功！", "success");
         setHasSubmittedToday(true);
