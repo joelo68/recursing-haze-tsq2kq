@@ -8,7 +8,7 @@ import {
   WifiOff 
 } from "lucide-react";
 import { 
-  collection, addDoc, setDoc, doc, serverTimestamp, getDocFromServer 
+  addDoc, setDoc, doc, serverTimestamp, getDocFromServer 
 } from "firebase/firestore";
 
 import { db, appId } from "../config/firebase"; 
@@ -185,10 +185,7 @@ const StoreInputView = () => {
 
   const handlePreSubmit = (e) => {
     e.preventDefault();
-    if (!isOnline) {
-      showToast("目前處於離線狀態，無法送出日報", "error");
-      return;
-    }
+    if (!isOnline) return showToast("目前處於離線狀態，無法送出日報", "error");
     if (!selectedStore) return showToast("請選擇店家", "error");
     if (inputDate > today) return showToast("不可提交未來日期", "error"); 
 
@@ -238,22 +235,30 @@ const StoreInputView = () => {
          targetDocId = `${safeDate}_${selectedStore}`; 
       }
 
-      await setDoc(doc(getCollectionPath("daily_reports"), targetDocId), payload);
+      const docRef = doc(getCollectionPath("daily_reports"), targetDocId);
+      await setDoc(docRef, payload);
 
-      if (existingReportId) {
-        logActivity(userRole, currentUser?.name, "更新日報(覆蓋)", `${selectedStore} ${safeDate}`);
+      // ★ 絕對關鍵：強制向伺服器要資料，確保沒有被防火牆阻擋
+      const verifySnap = await getDocFromServer(docRef);
+      if (verifySnap.exists()) {
+        if (existingReportId) {
+          logActivity(userRole, currentUser?.name, "更新日報(覆蓋)", `${selectedStore} ${safeDate}`);
+        } else {
+          logActivity(userRole, currentUser?.name, "提交日報", `${selectedStore} ${safeDate}`);
+        }
+
+        setFormData(defaultFormData);
+        localStorage.removeItem(`input_draft_${brandId}`);
+        setShowConfirmModal(false);
+        setExistingReportId(null);
+        showToast("提交成功", "success");
       } else {
-        logActivity(userRole, currentUser?.name, "提交日報", `${selectedStore} ${safeDate}`);
+        throw new Error("寫入失敗，雲端查無資料。");
       }
-
-      setFormData(defaultFormData);
-      localStorage.removeItem(`input_draft_${brandId}`);
-      setShowConfirmModal(false);
-      setExistingReportId(null);
-      showToast("提交成功", "success");
     } catch (err) {
       console.error(err);
-      showToast("提交失敗: " + err.message, "error");
+      // 如果權限不足，這裡就會明確顯示出來
+      showToast("提交失敗: 資料庫權限阻擋或網路異常", "error");
     } finally {
       setIsSubmitting(false);
     }
@@ -289,7 +294,8 @@ const StoreInputView = () => {
 
   return (
     <div className="space-y-6">
-      <div className="flex items-center gap-2 text-xs text-amber-600 bg-amber-50 p-2 rounded-lg justify-center">
+      
+      <div className="flex items-center gap-2 text-xs text-amber-600 bg-amber-50 p-2 rounded-lg justify-center border border-amber-100">
          <CheckCircle size={14} /> 店務日報：輸入內容將自動暫存 ({brandPrefix})
       </div>
 
@@ -366,7 +372,7 @@ const StoreInputView = () => {
             {!isOnline ? (
               <><WifiOff className="animate-pulse" size={20}/> 離線鎖定中</>
             ) : isSubmitting ? (
-              <><Activity className="animate-spin" size={20}/> 提交中...</>
+              <><Activity className="animate-spin" size={20}/> 強制驗證與提交中...</>
             ) : (
               "提交日報"
             )}
@@ -429,7 +435,6 @@ const TherapistInputView = () => {
 
   const [showConfirmModal, setShowConfirmModal] = useState(false); 
   const [showDateWarningModal, setShowDateWarningModal] = useState(false); 
-  const [debugInfo, setDebugInfo] = useState(null);
 
   const LABELS = {
     totalRevenue: "今日總業績 (新客+舊客-退費)", newCustomerRevenue: "新客業績", newCustomerCount: "新客人數",
@@ -537,10 +542,7 @@ const TherapistInputView = () => {
   };
 
   const handlePreSubmit = () => {
-    if (!isOnline) {
-      showToast("目前處於離線狀態，無法送出日報", "error");
-      return;
-    }
+    if (!isOnline) return showToast("目前處於離線狀態，無法送出日報", "error");
     if (inputDate > today) return showToast("不可提交未來日期", "error");
     const hasData = formData.newCustomerRevenue || formData.oldCustomerRevenue || formData.newCustomerCount || formData.oldCustomerCount || formData.returnRevenue;
     if (!hasData) return showToast("請至少輸入一項業績或人數數據", "error");
@@ -560,7 +562,6 @@ const TherapistInputView = () => {
   const handleFinalSubmit = async () => {
     if (isSubmitting || !isOnline) return;
     setIsSubmitting(true);
-    setDebugInfo(null); 
 
     try {
       if (!currentUser || !currentUser.id) throw new Error("目前使用者 ID 無法辨識，請重新登入！");
@@ -591,6 +592,7 @@ const TherapistInputView = () => {
       const docRef = doc(getCollectionPath("therapist_daily_reports"), docId);
       await setDoc(docRef, payload);
       
+      // ★ 絕對關鍵：強制向伺服器要資料，確保沒有被防火牆阻擋
       const verifySnap = await getDocFromServer(docRef);
       if (verifySnap.exists()) {
         logActivity("therapist", currentUser.name, "個人日報提交", `${safeDate} 業績`);
@@ -605,8 +607,8 @@ const TherapistInputView = () => {
       }
     } catch (e) {
       console.error("提交過程發生錯誤:", e);
-      setDebugInfo({ error: e.message, code: e.code || "unknown", path: `brands/.../therapist_daily_reports` });
-      showToast("提交失敗", "error");
+      // 如果權限不足，這裡就會明確顯示出來
+      showToast("提交失敗: 資料庫權限阻擋或網路異常", "error");
     } finally {
       setIsSubmitting(false);
     }
@@ -642,13 +644,6 @@ const TherapistInputView = () => {
       {hasSubmittedToday && (
         <div className="bg-emerald-50 text-emerald-600 p-3 rounded-xl text-sm font-bold flex items-center gap-2 border border-emerald-100">
           <CheckCircle size={16}/> 您已完成今日 ({inputDate}) 的回報。
-        </div>
-      )}
-
-      {debugInfo && (
-        <div className="bg-rose-50 border-l-4 border-rose-500 p-4 rounded-r-xl space-y-2 animate-in slide-in-from-top-2">
-          <h3 className="text-rose-800 font-bold flex items-center gap-2"><Bug/> 提交失敗</h3>
-          <p className="text-rose-700 text-sm font-bold">{debugInfo.error}</p>
         </div>
       )}
 
