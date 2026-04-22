@@ -36,7 +36,7 @@ import LoginView from "./components/LoginView";
 // ==========================================
 // ★ 系統核心版本號 (終極動態快取版)
 // ==========================================
-const CURRENT_APP_VERSION = "2.7.1"; 
+const CURRENT_APP_VERSION = "2.7.2"; 
 
 const isNewerVersion = (local, remote) => {
   if (!remote) return true;
@@ -219,7 +219,23 @@ export default function App() {
 
     const checkAndExecuteUpdate = (remoteVersion) => {
       if (remoteVersion && isOlderVersion(CURRENT_APP_VERSION, remoteVersion)) {
+        
+        // ★ 新增防爆鎖：利用 sessionStorage 紀錄重整次數
+        const updateAttempts = parseInt(sessionStorage.getItem('cyj_update_attempts') || '0');
+        
+        if (updateAttempts >= 3) {
+            // 如果已經自動重整 3 次還是舊版，代表快取卡死。停止無限迴圈，凍結畫面。
+            setIsUpdating(true);
+            // 可以在這裡加入一段特殊 UI 狀態，但在 App.jsx 現有架構下，
+            // 只要我們 `return` 不執行 window.location.replace，就能阻止無窮讀取。
+            console.error("快取清除失敗，請手動強制重新整理網頁");
+            return; 
+        }
+
+        // 紀錄重整次數 +1
+        sessionStorage.setItem('cyj_update_attempts', (updateAttempts + 1).toString());
         setIsUpdating(true);
+
         localStorage.removeItem("cyj_input_draft");
         localStorage.removeItem("cyj_input_draft_v2");
         localStorage.removeItem("cyj_input_draft_v3");
@@ -237,6 +253,9 @@ export default function App() {
           const newUrl = `${currentUrl}?v=${new Date().getTime()}`;
           window.location.replace(newUrl);
         }, 3000);
+      } else {
+        // 如果版本已經正確，清除重整計數器
+        sessionStorage.removeItem('cyj_update_attempts');
       }
     };
 
@@ -653,13 +672,23 @@ export default function App() {
 
   if (loading) return <div className="min-h-screen flex flex-col items-center justify-center bg-[#F9F8F6]"><Loader2 className="w-16 h-16 animate-spin text-stone-400 mb-4" /><p className="animate-pulse text-stone-500 font-bold tracking-wider">Loading DRCYJ Cloud...</p></div>;
   
-  if (isUpdating) {
+if (isUpdating) {
+    const updateAttempts = parseInt(sessionStorage.getItem('cyj_update_attempts') || '0');
     return (
       <div className="fixed inset-0 z-[99999] flex flex-col items-center justify-center bg-stone-900 text-white animate-in fade-in duration-300">
         <Loader2 className="w-16 h-16 animate-spin text-amber-500 mb-6" />
         <h2 className="text-3xl font-bold mb-2 tracking-widest">系統強制更新中</h2>
         <p className="text-stone-400 font-mono">正在為您同步最新版本 (v{CURRENT_APP_VERSION} ➡️ 新版)</p>
-        <p className="text-stone-500 text-sm mt-4 animate-pulse">請稍候，畫面即將自動重新載入...</p>
+        
+        {updateAttempts >= 3 ? (
+          <div className="mt-8 p-6 bg-rose-500/20 border border-rose-500/50 rounded-2xl max-w-md text-center">
+            <AlertCircle className="w-10 h-10 text-rose-400 mx-auto mb-3" />
+            <p className="text-rose-300 font-bold mb-2">設備快取過於頑固，自動更新失敗</p>
+            <p className="text-stone-300 text-sm">請手動將此網頁/APP「完全關閉後重新開啟」，或在電腦上按下 Ctrl + F5 強制重整。</p>
+          </div>
+        ) : (
+          <p className="text-stone-500 text-sm mt-4 animate-pulse">請稍候，畫面即將自動重新載入...</p>
+        )}
       </div>
     );
   }
