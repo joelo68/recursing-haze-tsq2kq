@@ -12,7 +12,7 @@ const db = admin.firestore();
 const GEMINI_API_KEY = defineSecret('GEMINI_API_KEY');
 
 // ==========================================
-// ★ 1. 核心資料結算邏輯
+// ★ 1. 核心資料結算邏輯 (完美保留您的原始設定)
 // ==========================================
 async function updateMonthlyAggregation(change, basePath) {
   const beforeData = change.before.data() || {};
@@ -20,11 +20,9 @@ async function updateMonthlyAggregation(change, basePath) {
   const storeName = afterData.storeName || beforeData.storeName;
   const date = afterData.date || beforeData.date;
   if (!storeName || !date) return null;
-
   const yearMonth = date.substring(0, 7); 
   const year = date.substring(0, 4);      
   const key = `${yearMonth}_${storeName}`;
-
   const diff = {
     cash: (Number(afterData.cash) || 0) - (Number(beforeData.cash) || 0),
     refund: (Number(afterData.refund) || 0) - (Number(beforeData.refund) || 0),
@@ -32,7 +30,6 @@ async function updateMonthlyAggregation(change, basePath) {
     operationalAccrual: (Number(afterData.operationalAccrual) || 0) - (Number(beforeData.operationalAccrual) || 0),
     traffic: (Number(afterData.traffic) || 0) - (Number(beforeData.traffic) || 0),
   };
-
   const aggRef = db.collection(basePath).doc(key);
   const updates = { id: key, yearMonth, year, storeName };
   let hasChanges = false;
@@ -41,7 +38,6 @@ async function updateMonthlyAggregation(change, basePath) {
   }
   return hasChanges ? aggRef.set(updates, { merge: true }) : null;
 }
-
 exports.aggregateLegacyReports = functions.firestore.document("artifacts/{appId}/public/data/daily_reports/{reportId}").onWrite(async (change, context) => updateMonthlyAggregation(change, `artifacts/${context.params.appId}/public/data/monthly_aggregated`));
 exports.aggregateBrandReports = functions.firestore.document("brands/{brandId}/daily_reports/{reportId}").onWrite(async (change, context) => updateMonthlyAggregation(change, `brands/${context.params.brandId}/monthly_aggregated`));
 
@@ -54,7 +50,206 @@ const TARGET_CHAT_ID_MANAGER = '-4991191955';
 const BRANDS = [{ id: 'cyj', name: 'CYJ' }, { id: 'anniu', name: '安妞' }, { id: 'yibo', name: '伊啵' }];
 
 // ==========================================
-// ★ 2. Webhook 雙向對話接收器
+// ★ 2. 終極精準：全知查詢工具 (加入前端公式與去重複防護)
+// ==========================================
+async function getStorePerformance(startDate, endDate, storeName = null, brandName = null) {
+    const snap = await db.collectionGroup('daily_reports').where('date', '>=', startDate).where('date', '<=', endDate).get();
+    let storeMap = {};
+    let processed = new Set(); // ★ 去重複防護罩
+    let overall = { cash: 0, accrual: 0, skincare: 0, traffic: 0, newRev: 0, newCount: 0, newClosings: 0, oldRev: 0, oldCount: 0 };
+
+    snap.forEach(doc => {
+        const data = doc.data();
+        if(!data.storeName || !data.date) return;
+        const sName = data.storeName.trim();
+        
+        // 確保同一天同一間店只算一次！
+        const uniqueKey = `${data.date}_${sName}`;
+        if (processed.has(uniqueKey)) return;
+        processed.add(uniqueKey);
+
+        let bId = 'CYJ';
+        const path = doc.ref.path.toLowerCase();
+        if (path.includes('anniu') || path.includes('anew')) bId = '安妞';
+        else if (path.includes('yibo')) bId = '伊啵';
+
+        if (brandName && !bId.toUpperCase().includes(brandName.toUpperCase()) && !brandName.toUpperCase().includes(bId.toUpperCase())) return;
+        if (storeName && !sName.includes(storeName)) return;
+
+        if (!storeMap[sName]) {
+            storeMap[sName] = { storeName: sName, brand: bId, cash: 0, accrual: 0, skincare: 0, traffic: 0, newRev: 0, newCount: 0, newClosings: 0, oldRev: 0, oldCount: 0 };
+        }
+        
+        const cash = (Number(data.cash) || 0) - (Number(data.refund) || 0);
+        const accrual = (bId === '安妞') ? (Number(data.operationalAccrual) || 0) : (Number(data.accrual) || 0);
+        const skincare = (Number(data.skincareSales) || 0) - (Number(data.skincareRefund) || 0);
+        const traffic = Number(data.traffic) || 0;
+        
+        const newRev = Number(data.newCustomerSales) || Number(data.newCustomerRevenue) || 0;
+        // ★ 自動導出舊客業績 (網頁前端的公式)
+        const oldRev = Number(data.oldCustomerRevenue) || (cash - newRev > 0 ? cash - newRev : 0);
+        
+        const newCount = Number(data.newCustomers) || Number(data.newCustomerCount) || 0;
+        const newClosings = Number(data.newCustomerClosings) || 0;
+        // ★ 自動導出舊客數
+        const oldCount = Number(data.oldCustomerCount) || (traffic - newCount > 0 ? traffic - newCount : 0);
+
+        storeMap[sName].cash += cash;
+        storeMap[sName].accrual += accrual;
+        storeMap[sName].skincare += skincare;
+        storeMap[sName].traffic += traffic;
+        storeMap[sName].newRev += newRev;
+        storeMap[sName].newCount += newCount;
+        storeMap[sName].newClosings += newClosings;
+        storeMap[sName].oldRev += oldRev;
+        storeMap[sName].oldCount += oldCount;
+
+        overall.cash += cash;
+        overall.accrual += accrual;
+        overall.skincare += skincare;
+        overall.traffic += traffic;
+        overall.newRev += newRev;
+        overall.newCount += newCount;
+        overall.newClosings += newClosings;
+        overall.oldRev += oldRev;
+        overall.oldCount += oldCount;
+    });
+
+    Object.values(storeMap).forEach(s => {
+        s.newAvg = s.newCount > 0 ? Math.round(s.newRev / s.newCount) : 0;
+        s.oldAvg = s.oldCount > 0 ? Math.round(s.oldRev / s.oldCount) : 0;
+        s.newClosingRate = s.newCount > 0 ? Number(((s.newClosings / s.newCount) * 100).toFixed(1)) : 0; 
+    });
+
+    overall.newAvg = overall.newCount > 0 ? Math.round(overall.newRev / overall.newCount) : 0;
+    overall.oldAvg = overall.oldCount > 0 ? Math.round(overall.oldRev / overall.oldCount) : 0;
+    overall.newClosingRate = overall.newCount > 0 ? Number(((overall.newClosings / overall.newCount) * 100).toFixed(1)) : 0;
+
+    return { overall_summary: overall, stores_details: Object.values(storeMap) }; 
+}
+
+async function getTherapistPerformance(startDate, endDate, personName = null, storeName = null, brandName = null) {
+    const snap = await db.collectionGroup('therapist_daily_reports').where('date', '>=', startDate).where('date', '<=', endDate).get();
+    let pMap = {};
+    let processed = new Set();
+    let overall = { revenue: 0, newRev: 0, newCount: 0, newClosings: 0, oldRev: 0, oldCount: 0 };
+
+    snap.forEach(doc => {
+        const data = doc.data();
+        const tName = data.therapistName || "未知";
+        const sName = data.storeName ? data.storeName.trim().replace(/店$/, '') : "未知";
+        if (!data.date || tName === "未知") return;
+        
+        // 確保同人同天同店只算一次
+        const uniqueKey = `${data.date}_${sName}_${tName}`;
+        if (processed.has(uniqueKey)) return;
+        processed.add(uniqueKey);
+
+        let bId = data.brandId || 'CYJ';
+        const path = doc.ref.path.toLowerCase();
+        if (path.includes('anniu') || path.includes('anew')) bId = '安妞';
+        else if (path.includes('yibo')) bId = '伊啵';
+        else bId = 'CYJ';
+
+        if (brandName && !bId.toUpperCase().includes(brandName.toUpperCase()) && !brandName.toUpperCase().includes(bId.toUpperCase())) return;
+        if (storeName && !sName.includes(storeName)) return;
+        if (personName && !tName.toLowerCase().includes(personName.toLowerCase())) return;
+
+        const key = `${bId}_${sName}_${tName}`;
+        if (!pMap[key]) {
+            pMap[key] = { brand: bId, storeName: sName, personName: tName, revenue: 0, newRev: 0, newCount: 0, newClosings: 0, oldRev: 0, oldCount: 0 };
+        }
+        
+        const rev = Number(data.totalRevenue) || 0;
+        const newRev = Number(data.newCustomerRevenue) || 0;
+        const oldRev = Number(data.oldCustomerRevenue) || (rev - newRev > 0 ? rev - newRev : 0);
+        const newCount = Number(data.newCustomerCount) || 0;
+        const newClosings = Number(data.newCustomerClosings) || 0;
+        const traffic = Number(data.traffic) || Number(data.customerCount) || 0;
+        const oldCount = Number(data.oldCustomerCount) || (traffic - newCount > 0 ? traffic - newCount : 0);
+
+        pMap[key].revenue += rev;
+        pMap[key].newRev += newRev;
+        pMap[key].oldRev += oldRev;
+        pMap[key].newCount += newCount;
+        pMap[key].oldCount += oldCount;
+        pMap[key].newClosings += newClosings;
+
+        overall.revenue += rev;
+        overall.newRev += newRev;
+        overall.oldRev += oldRev;
+        overall.newCount += newCount;
+        overall.oldCount += oldCount;
+        overall.newClosings += newClosings;
+    });
+
+    Object.values(pMap).forEach(p => {
+        p.newAvg = p.newCount > 0 ? Math.round(p.newRev / p.newCount) : 0;
+        p.oldAvg = p.oldCount > 0 ? Math.round(p.oldRev / p.oldCount) : 0;
+        p.newClosingRate = p.newCount > 0 ? Number(((p.newClosings / p.newCount) * 100).toFixed(1)) : 0; 
+    });
+
+    overall.newAvg = overall.newCount > 0 ? Math.round(overall.newRev / overall.newCount) : 0;
+    overall.oldAvg = overall.oldCount > 0 ? Math.round(overall.oldRev / overall.oldCount) : 0;
+    overall.newClosingRate = overall.newCount > 0 ? Number(((overall.newClosings / overall.newCount) * 100).toFixed(1)) : 0;
+
+    return { overall_summary: overall, therapists_details: Object.values(pMap).sort((a,b) => b.revenue - a.revenue) };
+}
+
+async function getMissingReports(startDate, endDate) {
+    const past14Days = new Date(startDate);
+    past14Days.setDate(past14Days.getDate() - 14);
+    const past14Str = past14Days.toISOString().split('T')[0];
+    const rosterSnap = await db.collectionGroup('daily_reports').where('date', '>=', past14Str).get();
+    const activeStores = { cyj: new Set(), anniu: new Set(), yibo: new Set() };
+    rosterSnap.forEach(doc => {
+        let bId = doc.data().brandId || 'cyj';
+        if (bId.includes('anniu') || bId.includes('anew')) bId = 'anniu';
+        else if (bId.includes('yibo')) bId = 'yibo';
+        else bId = 'cyj';
+        if(doc.data().storeName) activeStores[bId].add(doc.data().storeName.trim());
+    });
+    const submittedSnap = await db.collectionGroup('daily_reports').where('date', '>=', startDate).where('date', '<=', endDate).get();
+    const submittedStores = { cyj: new Set(), anniu: new Set(), yibo: new Set() };
+    submittedSnap.forEach(doc => {
+        let bId = doc.data().brandId || 'cyj';
+        if (bId.includes('anniu') || bId.includes('anew')) bId = 'anniu';
+        else if (bId.includes('yibo')) bId = 'yibo';
+        else bId = 'cyj';
+        if(doc.data().storeName) submittedStores[bId].add(doc.data().storeName.trim());
+    });
+    let results = [];
+    BRANDS.forEach(brand => {
+        const expected = Array.from(activeStores[brand.id]);
+        const submitted = submittedStores[brand.id];
+        const missing = expected.filter(store => !submitted.has(store));
+        if (expected.length > 0) results.push({ brand: brand.name, missingCount: missing.length, missingStores: missing });
+    });
+    return results;
+}
+
+const aiTools = {
+    functionDeclarations: [
+        {
+            name: "getStorePerformance",
+            description: "查詢店鋪/品牌的營運狀況，包含現金、權責、保養品、客單價、締結率。",
+            parameters: { type: "OBJECT", properties: { startDate: { type: "STRING", description: "選填" }, endDate: { type: "STRING", description: "選填" }, storeName: { type: "STRING" }, brandName: { type: "STRING" } } }
+        },
+        {
+            name: "getTherapistPerformance",
+            description: "查詢人員/諮詢師的個人業績、客單價與締結率。",
+            parameters: { type: "OBJECT", properties: { startDate: { type: "STRING", description: "選填" }, endDate: { type: "STRING", description: "選填" }, personName: { type: "STRING" }, storeName: { type: "STRING" }, brandName: { type: "STRING" } } }
+        },
+        {
+            name: "getMissingReports",
+            description: "查詢未交日報名單。",
+            parameters: { type: "OBJECT", properties: { startDate: { type: "STRING" }, endDate: { type: "STRING" } } }
+        }
+    ]
+};
+
+// ==========================================
+// ★ 3. Webhook: AI Agent 對話總機 (完美防彈+精準版)
 // ==========================================
 exports.telegramWebhook = onRequest({ secrets: [GEMINI_API_KEY] }, async (req, res) => {
     if (!req.body || !req.body.message || !req.body.message.text) return res.sendStatus(200);
@@ -69,219 +264,111 @@ exports.telegramWebhook = onRequest({ secrets: [GEMINI_API_KEY] }, async (req, r
     const currentYearMonth = todayStr.substring(0, 7);
 
     try {
-        let reply = "";
-        let nlp = { intent: "unknown", storeName: null, personName: null, dateRange: [currentYearMonth + "-01", todayStr] };
+        const genAI = new GoogleGenerativeAI(GEMINI_API_KEY.value());
+        // ★ 換上最高階聰明的付費大腦
+        const model = genAI.getGenerativeModel({ 
+            model: "gemini-2.5-flash",
+            tools: [aiTools],
+            systemInstruction: `你是一位醫美集團的高階戰情分析秘書。現在日期是 ${todayStr}。
+【最高防偽與精準原則】
+1. 絕對禁止捏造數據！
+2. 當你需要回答「整體概況」時，【絕對禁止你自己計算】，必須直接讀取工具回傳的 'overall_summary' 裡的數字。
+3. 【嚴格套用公司專用術語】：
+   - cash ➔ 「現金業績」
+   - accrual ➔ 「實作業績/權責業績」
+   - skincare ➔ 「保養品業績」(嚴禁說成美膚)
+   - newRev ➔ 「新客業績」
+   - newAvg / oldAvg ➔ 「客單價」
+   - newClosingRate ➔ 「新客締結率」
+4. 收到指令後，【最多只能呼叫一個工具】。拿到資料後請立刻分析，絕對不准因為貪心而等待呼叫第二個工具！
+5. 【輸出排版極度嚴格 - 避免 Telegram 當機】：
+   - 輸出環境為純文字，絕對禁止使用任何 Markdown 排版符號（例如禁止使用 **、#、_、[] 等符號）。
+   - 請多使用 Emoji (如 📊, 🏢, 💰, 💡, ⚠️) 搭配換行來美化。
+   - 強制使用「繁體中文」，所有金額加上千分位逗號。`
+        });
+
+        const aiChat = model.startChat();
+        const result = await aiChat.sendMessage(command);
         
-        if (/(你好|安安|嗨|help|\/help)/.test(command)) {
-            nlp.intent = "help";
-        } else {
+        const calls = result.response.functionCalls ? result.response.functionCalls() : null;
+        const functionCall = (calls && calls.length > 0) ? calls[0] : null;
+
+        let finalReply = "";
+
+        if (functionCall) {
+            const { name, args } = functionCall;
+            // 防呆：AI 偷懶不填日期時，自動幫他填好本月區間
+            const safeStartDate = args.startDate || `${currentYearMonth}-01`;
+            const safeEndDate = args.endDate || todayStr;
+
+            let apiData = [];
+
+            if (name === "getStorePerformance") apiData = await getStorePerformance(safeStartDate, safeEndDate, args.storeName, args.brandName);
+            else if (name === "getTherapistPerformance") apiData = await getTherapistPerformance(safeStartDate, safeEndDate, args.personName, args.storeName, args.brandName);
+            else if (name === "getMissingReports") apiData = await getMissingReports(safeStartDate, safeEndDate);
+
             try {
-                const genAI = new GoogleGenerativeAI(GEMINI_API_KEY.value());
-                const model = genAI.getGenerativeModel({ model: "gemini-2.5-flash" });
-                
-                // ★★★ 加入 "missing" (未交名單) 的認知 ★★★
-                const prompt = `你是一位高階戰情分析秘書。
-今天的日期是：${todayStr}
-使用者說：「${command}」
-
-請將這句話解析為 JSON 查詢條件。
-【JSON 格式】
-{"intent": "分類意圖", "storeName": "店名", "personName": "人名", "dateRange": ["YYYY-MM-DD", "YYYY-MM-DD"]}
-
-【分類意圖 (intent) 判斷順序】(嚴格遵守)
-1. 若語句包含「沒交、未交、沒回報、沒填」，intent 必填 "missing"。
-2. 若語句包含「特定員工/管理師的名字」，intent 必填 "person"，並將名字填入 personName。若同時有店名，將店名填入 storeName (去掉"店"字)。
-3. 若只提到「特定店名」沒提人名，intent 必填 "store"，並將店名填入 storeName (去掉"店"字)。
-4. 若以上皆非，只是問全區、總業績，intent 必填 "progress"。
-
-【時間規則】
-1. 前天：精準計算為前天的日期。
-2. 昨天：計算為昨天的日期。
-3. 若沒提時間：預設為 ["${currentYearMonth}-01", "${todayStr}"]。
-
-請只輸出純 JSON，嚴禁包含任何解釋。`;
-
-                const result = await model.generateContent(prompt);
-                const jsonMatch = result.response.text().match(/\{[\s\S]*\}/);
-                if (!jsonMatch) throw new Error("AI 回傳了非 JSON 格式的廢話");
-                nlp = JSON.parse(jsonMatch[0]);
-
-            } catch (aiError) {
-                console.error("AI 翻譯失敗:", aiError);
-                throw new Error("AI 解析失敗 (" + aiError.message + ")");
+                const secondResult = await aiChat.sendMessage([{
+                    functionResponse: { name: name, response: { result: apiData } }
+                }]);
+                finalReply = secondResult.response.text();
+            } catch (innerError) {
+                console.error("AI 產生報告時崩潰:", innerError);
+                finalReply = "🤖 秘書已成功撈取數據，但您要求的分析範圍過大。請試著將問題縮小，例如只查詢特定單店。";
             }
+        } else {
+            finalReply = result.response.text();
         }
 
-        const [startDate, endDate] = nlp.dateRange || [currentYearMonth + "-01", todayStr];
-
-        // ------------------------------------------------
-        // 📤 數據查詢邏輯
-        // ------------------------------------------------
-        
-        // ★ 新增：未回報名單查詢邏輯 ★
-        if (nlp.intent === "missing") {
-            const past14Days = new Date(startDate);
-            past14Days.setDate(past14Days.getDate() - 14);
-            const past14Str = past14Days.toISOString().split('T')[0];
-
-            // 抓活躍名單
-            const rosterSnap = await db.collectionGroup('daily_reports').where('date', '>=', past14Str).get();
-            const activeRosterByBrand = { cyj: new Set(), anniu: new Set(), yibo: new Set() };
-            rosterSnap.forEach(doc => {
-                const data = doc.data();
-                let bId = data.brandId || 'cyj';
-                if (bId.includes('anniu') || bId.includes('anew')) bId = 'anniu';
-                else if (bId.includes('yibo')) bId = 'yibo';
-                else bId = 'cyj';
-                if(data.storeName) activeRosterByBrand[bId].add(data.storeName.trim());
-            });
-
-            // 抓區間內有交的名單
-            const submittedSnap = await db.collectionGroup('daily_reports').where('date', '>=', startDate).where('date', '<=', endDate).get();
-            const submittedStoresByBrand = { cyj: new Set(), anniu: new Set(), yibo: new Set() };
-            submittedSnap.forEach(doc => {
-                const data = doc.data();
-                let bId = data.brandId || 'cyj';
-                if (bId.includes('anniu') || bId.includes('anew')) bId = 'anniu';
-                else if (bId.includes('yibo')) bId = 'yibo';
-                else bId = 'cyj';
-                if(data.storeName) submittedStoresByBrand[bId].add(data.storeName.trim());
-            });
-
-            const dateStr = startDate === endDate ? startDate : `${startDate} ~ ${endDate}`;
-            reply = `🚨 *【未回報名單查詢】*\n📅 查詢日期：${dateStr}\n\n`;
-            let allClear = true;
-
-            BRANDS.forEach(brand => {
-                const expectedStores = Array.from(activeRosterByBrand[brand.id]);
-                const submittedStores = submittedStoresByBrand[brand.id];
-                const missing = expectedStores.filter(store => !submittedStores.has(store));
-                
-                if (expectedStores.length > 0 && missing.length > 0) { 
-                    allClear = false;
-                    reply += `*${brand.name}* (${missing.length} 間未交):\n${missing.map(s => `• ${s}`).join('\n')}\n\n`;
-                }
-            });
-
-            if (allClear) {
-                reply += "✅ 表現優異，這段期間全區皆已完成回報！";
-            }
-        }
-        else if (nlp.intent === "store" && nlp.storeName) {
-            const snap = await db.collectionGroup('daily_reports').where('date', '>=', startDate).where('date', '<=', endDate).get();
-            let storeMap = {};
-            snap.forEach(doc => {
-                const data = doc.data();
-                if (data.storeName && data.storeName.includes(nlp.storeName)) {
-                    const sName = data.storeName.trim();
-                    if (!storeMap[sName]) storeMap[sName] = { cash: 0, accrual: 0, bId: 'CYJ' };
-                    let bId = 'CYJ';
-                    const path = doc.ref.path.toLowerCase();
-                    if (path.includes('anniu') || path.includes('anew')) bId = '安妞';
-                    else if (path.includes('yibo')) bId = '伊啵';
-                    storeMap[sName].bId = bId;
-                    storeMap[sName].cash += (Number(data.cash) || 0) - (Number(data.refund) || 0);
-                    storeMap[sName].accrual += (bId === '安妞') ? (Number(data.operationalAccrual) || 0) : (Number(data.accrual) || 0);
-                }
-            });
-
-            let found = Object.keys(storeMap).map(key => `🏢 *${key}* (${storeMap[key].bId})\n▫️ 區間現金：$${storeMap[key].cash.toLocaleString()}\n▫️ 區間權責：$${storeMap[key].accrual.toLocaleString()}`);
-            const dateStr = startDate === endDate ? startDate : `${startDate} ~ ${endDate}`;
-            reply = found.length > 0 ? `📍 *【店家表現查詢】*\n📅 ${dateStr}\n\n${found.join("\n\n")}` : `找不到「${nlp.storeName}」在該時段的數據。`;
-        }
-        else if (nlp.intent === "person" && nlp.personName) {
-            const tSnap = await db.collectionGroup('therapist_daily_reports').where('date', '>=', startDate).where('date', '<=', endDate).get();
-            let personMap = {}; 
-            tSnap.forEach(doc => {
-                const data = doc.data();
-                const tName = data.therapistName || "";
-                const sName = data.storeName ? data.storeName.trim().replace(/店$/, '') + '店' : "未知店";
-                if (tName.toLowerCase().includes(nlp.personName.toLowerCase()) && (!nlp.storeName || sName.includes(nlp.storeName))) {
-                    const mapKey = `${sName}_${tName}`;
-                    if (!personMap[mapKey]) personMap[mapKey] = { name: tName, store: sName, revenue: 0, count: 0 };
-                    personMap[mapKey].revenue += (Number(data.totalRevenue) || 0);
-                    personMap[mapKey].count++;
-                }
-            });
-
-            const persons = Object.values(personMap);
-            const dateStr = startDate === endDate ? startDate : `${startDate} ~ ${endDate}`;
-            if (persons.length === 0) reply = `找不到「${nlp.personName}」在 ${dateStr} 的紀錄。`;
-            else {
-                reply = `🌟 *【管理師個人戰績】*\n📅 ${dateStr}\n\n`;
-                persons.sort((a,b) => b.revenue - a.revenue).forEach(p => {
-                    reply += `👤 *${p.name}* (${p.store})\n💰 區間業績：*$${p.revenue.toLocaleString()}*\n📅 回報天數：${p.count} 天\n\n`;
-                });
-            }
-        }
-        else if (nlp.intent === "progress") {
-            const snap = await db.collectionGroup('daily_reports').where('date', '>=', startDate).where('date', '<=', endDate).get();
-            let pMap = { cyj: { name: 'CYJ', cash: 0, accrual: 0 }, anniu: { name: '安妞', cash: 0, accrual: 0 }, yibo: { name: '伊啵', cash: 0, accrual: 0 } };
-            snap.forEach(doc => {
-                const data = doc.data();
-                let bId = data.brandId || 'cyj';
-                const path = doc.ref.path.toLowerCase();
-                if (path.includes('anniu') || path.includes('anew') || bId.includes('anniu')) bId = 'anniu';
-                else if (path.includes('yibo') || bId.includes('yibo')) bId = 'yibo';
-                else bId = 'cyj';
-                pMap[bId].cash += (Number(data.cash) || 0) - (Number(data.refund) || 0);
-                pMap[bId].accrual += (bId === '安妞') ? (Number(data.operationalAccrual) || 0) : (Number(data.accrual) || 0);
-            });
-            const dateStr = startDate === endDate ? startDate : `${startDate} ~ ${endDate}`;
-            reply = `📊 *【即時進度查詢】*\n📅 ${dateStr}\n\n` + Object.values(pMap).filter(b=>b.cash>0||b.accrual>0).map(b=>`*${b.name}*\n▫️ 現金：$${b.cash.toLocaleString()}\n▫️ 權責：$${b.accrual.toLocaleString()}`).join("\n\n");
-        } 
-        else if (nlp.intent === "help") {
-            reply = "🤖 您好！我是您的戰情小助手。\n您可以這樣直接跟我說話：\n\n🔹 「這個月的進度」\n🔹 「安平店昨天的業績」\n🔹 「昨天有誰沒交報表？」";
+        if (!finalReply || finalReply.trim() === "") {
+            finalReply = "🤖 秘書目前無法總結這個數據，請換個具體一點的方式問問看。";
         }
 
-        if (reply === "") {
-            reply = "🤖 抱歉，我不太懂您的意思。您可以試著說：「昨天沒回報業績的店家」。";
+        // ★ 暴力清洗所有會讓 Telegram 報 400 錯誤的排版符號
+        finalReply = finalReply.replace(/[*#`_\[\]]/g, '');
+        // ★ 自動截斷過長的萬字報告，保護傳送安全
+        if (finalReply.length > 3800) {
+            finalReply = finalReply.substring(0, 3800) + "\n\n... (字數已達通訊軟體上限，後續洞察報告已自動截斷)。";
         }
 
-        await axios.post(`https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage`, { chat_id: chatId, text: reply, parse_mode: 'Markdown' });
-
-    } catch (error) {
-        console.error("Webhook 嚴重錯誤:", error);
+        // ★ 拔除 parse_mode: 'Markdown'，改用純文字模式強勢通關
         await axios.post(`https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage`, { 
             chat_id: chatId, 
-            text: `❌ 機器人腦部異常：\n\`${error.message}\`` 
+            text: finalReply 
+        });
+
+    } catch (error) {
+        console.error("Agent 嚴重錯誤:", error);
+        await axios.post(`https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage`, { 
+            chat_id: chatId, 
+            text: `❌ 戰情秘書暫時失聯：\n${error.message}` 
         });
     }
     res.sendStatus(200);
 });
 
 // ==========================================
-// ★ 3. Telegram 動態定時推播巡邏員
+// ★ 4. Telegram 動態定時推播巡邏員 (完美保留原始設定)
 // ==========================================
-exports.notificationPatrol = onSchedule({
-    schedule: "* * * * *", 
-    timeZone: "Asia/Taipei"
-}, async (event) => {
+exports.notificationPatrol = onSchedule({ schedule: "* * * * *", timeZone: "Asia/Taipei" }, async (event) => {
     const now = new Date();
     const utcHours = now.getUTCHours();
     now.setHours(utcHours + 8); 
-    
     const currentHour = String(now.getHours()).padStart(2, '0');
     const currentMin = String(now.getMinutes()).padStart(2, '0');
     const timeString = `${currentHour}:${currentMin}`; 
-
     const targetDate = new Date(now);
     targetDate.setDate(targetDate.getDate() - 1);
     const yesterdayStr = `${targetDate.getFullYear()}-${String(targetDate.getMonth() + 1).padStart(2, '0')}-${String(targetDate.getDate()).padStart(2, '0')}`;
     const currentYearMonth = yesterdayStr.substring(0, 7); 
 
     try {
-        const rulesSnapshot = await db.collection("notification_rules")
-            .where("isActive", "==", true)
-            .where("time", "==", timeString)
-            .get();
-
+        const rulesSnapshot = await db.collection("notification_rules").where("isActive", "==", true).where("time", "==", timeString).get();
         if (rulesSnapshot.empty) return;
 
         const dailySnap = await db.collectionGroup('daily_reports').where('date', '==', yesterdayStr).get();
         const reportsByBrand = { cyj: [], anniu: [], yibo: [] };
         const submittedStoresByBrand = { cyj: new Set(), anniu: new Set(), yibo: new Set() };
-        
         dailySnap.forEach(doc => {
             const data = doc.data();
             let bId = data.brandId || 'cyj';
