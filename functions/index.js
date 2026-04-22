@@ -6,9 +6,6 @@ const admin = require("firebase-admin");
 if (!admin.apps.length) admin.initializeApp();
 const db = admin.firestore();
 
-/**
- * 共用的核心邏輯：計算差額並更新總帳卡
- */
 async function updateMonthlyAggregation(change, basePath) {
   const beforeData = change.before.data() || {};
   const afterData = change.after.data() || {};
@@ -44,7 +41,6 @@ async function updateMonthlyAggregation(change, basePath) {
   return aggRef.set(updates, { merge: true });
 }
 
-// 監聽器 1 & 2
 exports.aggregateLegacyReports = functions.firestore
   .document("artifacts/{appId}/public/data/daily_reports/{reportId}")
   .onWrite(async (change, context) => updateMonthlyAggregation(change, `artifacts/${context.params.appId}/public/data/monthly_aggregated`));
@@ -54,7 +50,7 @@ exports.aggregateBrandReports = functions.firestore
   .onWrite(async (change, context) => updateMonthlyAggregation(change, `brands/${context.params.brandId}/monthly_aggregated`));
 
 // ==========================================
-// ★ Telegram 動態推播巡邏員 (完整多品牌 + 管理師支援)
+// ★ Telegram 動態推播巡邏員 (完全體 - 業績精準校正版)
 // ==========================================
 const TELEGRAM_BOT_TOKEN = '8787208059:AAF0AiGfUaV69YouI_b_0MuMcXpwu9EK0RA';
 const TARGET_CHAT_ID_MAIN = '-4991191955'; 
@@ -81,6 +77,7 @@ exports.notificationPatrol = onSchedule({
     const targetDate = new Date(now);
     targetDate.setDate(targetDate.getDate() - 1);
     const yesterdayStr = `${targetDate.getFullYear()}-${String(targetDate.getMonth() + 1).padStart(2, '0')}-${String(targetDate.getDate()).padStart(2, '0')}`;
+    const currentYearMonth = yesterdayStr.substring(0, 7); 
 
     try {
         const rulesSnapshot = await db.collection("notification_rules")
@@ -89,9 +86,8 @@ exports.notificationPatrol = onSchedule({
             .get();
 
         if (rulesSnapshot.empty) return;
-        console.log(`[${timeString}] 偵測到排程，開始進行資料結算...`);
 
-        // 1. 抓取昨天的【店家】日報 (分品牌)
+        // 1. 抓取昨天的【店家】日報
         const dailySnap = await db.collectionGroup('daily_reports').where('date', '==', yesterdayStr).get();
         const reportsByBrand = { cyj: [], anniu: [], yibo: [] };
         const submittedStoresByBrand = { cyj: new Set(), anniu: new Set(), yibo: new Set() };
@@ -107,7 +103,7 @@ exports.notificationPatrol = onSchedule({
             if(data.storeName) submittedStoresByBrand[bId].add(data.storeName.trim());
         });
 
-        // 2. 抓取昨天的【管理師】個人日報 (分品牌) ★ 新增這段！
+        // 2. 抓取昨天的【管理師】日報
         const therapistSnap = await db.collectionGroup('therapist_daily_reports').where('date', '==', yesterdayStr).get();
         const therapistReportsByBrand = { cyj: [], anniu: [], yibo: [] };
         
@@ -121,7 +117,7 @@ exports.notificationPatrol = onSchedule({
             therapistReportsByBrand[bId].push(data);
         });
 
-        // 3. 智慧名單：過去 14 天有營業的店家
+        // 3. 智慧名單：過去 14 天有營業的活躍店家 (作為校正基準)
         const past14Days = new Date(now);
         past14Days.setDate(past14Days.getDate() - 14);
         const past14Str = `${past14Days.getFullYear()}-${String(past14Days.getMonth() + 1).padStart(2, '0')}-${String(past14Days.getDate()).padStart(2, '0')}`;
@@ -139,7 +135,56 @@ exports.notificationPatrol = onSchedule({
             if(data.storeName) activeRosterByBrand[bId].add(data.storeName.trim());
         });
 
-        // 4. 處理每一個推播任務
+        // 4. 預先抓取本月總帳卡 (加入防重複鎖)
+        const aggSnap = await db.collectionGroup('monthly_aggregated').where('yearMonth', '==', currentYearMonth).get();
+        const monthlyAggByBrand = { cyj: [], anniu: [], yibo: [] };
+        const processedAggStores = { cyj: new Set(), anniu: new Set(), yibo: new Set() };
+
+        aggSnap.forEach(doc => {
+            const data = doc.data();
+            const path = doc.ref.path.toLowerCase();
+            let bId = 'cyj';
+            if (path.includes('anniu') || path.includes('anew')) bId = 'anniu';
+            else if (path.includes('yibo')) bId = 'yibo';
+            
+            const storeName = data.storeName ? data.storeName.trim() : null;
+            // 確保同一個店家在同一個月只被計算一次 (避開新舊路徑雙胞胎)
+            if (storeName && !processedAggStores[bId].has(storeName)) {
+                monthlyAggByBrand[bId].push(data);
+                processedAggStores[bId].add(storeName);
+            }
+        });
+
+        // 5. 預先抓取本月目標 (加入防重複鎖 + 活躍店家過濾)
+        const currentYearStr = targetDate.getFullYear().toString();
+        const currentMonthStr = (targetDate.getMonth() + 1).toString();
+        const budgetSuffix = `_${currentYearStr}_${currentMonthStr}`;
+
+        const targetsSnap = await db.collectionGroup('monthly_targets').get();
+        const monthlyBudgetsByBrand = { cyj: { cash: 0, accrual: 0 }, anniu: { cash: 0, accrual: 0 }, yibo: { cash: 0, accrual: 0 } };
+        const processedBudgetStores = { cyj: new Set(), anniu: new Set(), yibo: new Set() };
+
+        targetsSnap.forEach(doc => {
+            if (doc.id.endsWith(budgetSuffix)) {
+                const docStoreName = doc.id.replace(budgetSuffix, ''); // 抽出店名
+                const data = doc.data();
+                const path = doc.ref.path.toLowerCase();
+                const lowerId = doc.id.toLowerCase();
+                
+                let bId = 'cyj';
+                if (path.includes('anniu') || path.includes('anew') || lowerId.includes('anniu') || lowerId.includes('anew')) bId = 'anniu';
+                else if (path.includes('yibo') || lowerId.includes('yibo')) bId = 'yibo';
+
+                // ★ 關鍵：只有在「活躍名單內」且「還沒被算過」的目標，才能加進分母
+                if (activeRosterByBrand[bId].has(docStoreName) && !processedBudgetStores[bId].has(docStoreName)) {
+                    monthlyBudgetsByBrand[bId].cash += (Number(data.cashTarget) || 0);
+                    monthlyBudgetsByBrand[bId].accrual += (Number(data.accrualTarget) || 0);
+                    processedBudgetStores[bId].add(docStoreName);
+                }
+            }
+        });
+
+        // 6. 處理每一個推播任務
         for (const ruleDoc of rulesSnapshot.docs) {
             const rule = ruleDoc.data();
             const chatId = rule.targetGroup === 'manager' ? TARGET_CHAT_ID_MANAGER : TARGET_CHAT_ID_MAIN;
@@ -150,9 +195,7 @@ exports.notificationPatrol = onSchedule({
                 finalMessage = finalMessage.replace(/{date}/g, yesterdayStr);
                 let shouldSend = false;
 
-                // ----------------------------------------
-                // 邏輯 A：TOP 5 店家
-                // ----------------------------------------
+                // A：TOP 5 店家
                 if (rule.source === "top5_stores") {
                     const brandReports = reportsByBrand[brand.id];
                     const storeMap = {};
@@ -180,9 +223,7 @@ exports.notificationPatrol = onSchedule({
                     }
                 }
 
-                // ----------------------------------------
-                // 邏輯 B：未回報檢核
-                // ----------------------------------------
+                // B：未回報檢核
                 if (rule.source === "unreported") {
                     const expectedStores = Array.from(activeRosterByBrand[brand.id]);
                     const submittedStores = submittedStoresByBrand[brand.id];
@@ -203,17 +244,13 @@ exports.notificationPatrol = onSchedule({
                     }
                 }
 
-                // ----------------------------------------
-                // 邏輯 C：TOP 5 管理師 (★ 補上這段邏輯！)
-                // ----------------------------------------
+                // C：TOP 5 管理師
                 if (rule.source === "top5_therapists") {
                     const brandTReports = therapistReportsByBrand[brand.id];
-                    
-                    // 根據個人日報的「今日總業績 (totalRevenue)」進行大到小排序
                     const top5T = brandTReports
                         .sort((a, b) => (Number(b.totalRevenue) || 0) - (Number(a.totalRevenue) || 0))
                         .slice(0, 5)
-                        .filter(t => (Number(t.totalRevenue) || 0) > 0); // 排除 0 元的
+                        .filter(t => (Number(t.totalRevenue) || 0) > 0);
 
                     if (top5T.length > 0) {
                         shouldSend = true;
@@ -227,6 +264,40 @@ exports.notificationPatrol = onSchedule({
                         
                         finalMessage = finalMessage.replace(/{top5Therapists}/g, top5Text);
                         finalMessage = `🌟 *【${brand.name} 個人榮耀】*\n` + finalMessage;
+                    }
+                }
+
+                // D：本月現金、權責進度 (★ 已經完全校正對齊前端系統)
+                if (rule.source === "progress") {
+                    const aggData = monthlyAggByBrand[brand.id];
+                    let cashTotal = 0;
+                    let accrualTotal = 0;
+
+                    aggData.forEach(data => {
+                        // ★ 修復 1：現金扣除退費 (精準對齊前端的 4386 萬)
+                        cashTotal += (Number(data.cash) || 0) - (Number(data.refund) || 0);
+                        
+                        // 安妞專屬權責邏輯
+                        if (brand.id === 'anniu') {
+                            accrualTotal += (Number(data.operationalAccrual) || 0);
+                        } else {
+                            accrualTotal += (Number(data.accrual) || 0);
+                        }
+                    });
+
+                    // ★ 修復 2：採用防重複後的正確分母 (精準對齊前端的 88%)
+                    const brandBudget = monthlyBudgetsByBrand[brand.id];
+                    const cashRate = brandBudget.cash > 0 ? ((cashTotal / brandBudget.cash) * 100).toFixed(1) : "0.0";
+                    const accrualRate = brandBudget.accrual > 0 ? ((accrualTotal / brandBudget.accrual) * 100).toFixed(1) : "0.0";
+
+                    if (cashTotal > 0 || accrualTotal > 0) {
+                        shouldSend = true;
+                        finalMessage = finalMessage.replace(/{cashTotal}/g, cashTotal.toLocaleString());
+                        finalMessage = finalMessage.replace(/{accrualTotal}/g, accrualTotal.toLocaleString());
+                        finalMessage = finalMessage.replace(/{cashRate}/g, cashRate);
+                        finalMessage = finalMessage.replace(/{accrualRate}/g, accrualRate);
+
+                        finalMessage = `📊 *【${brand.name} 本月累積進度】*\n` + finalMessage;
                     }
                 }
 
