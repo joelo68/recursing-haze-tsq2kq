@@ -100,46 +100,65 @@ export const useAnalytics = (rawData, managers, budgets, selectedYear, selectedM
       const budgetKey = `${s.name}_${targetYear}_${monthInt}`;
       const budget = budgets[budgetKey] || { cashTarget: 0, accrualTarget: 0 };
 
-      // ★★★ 核心升級：雙引擎推估邏輯 (自動基準線分離法) ★★★
+      // ★★★ 核心升級：星期權重 (Day-of-Week) + 全局中位數過濾 ★★★
       let projection = 0;
       if (currentDayNum > 0) {
         if (currentDayNum <= 5) {
           // 引擎 A：1~5 號樣本太少，走傳統線性平均
           projection = Math.round((cashTotal / currentDayNum) * daysInMonth);
         } else {
-          // 引擎 B：6 號開始，啟動異常值過濾
-          // 1. 抓出這家店這幾天的「每日淨業績」陣列
+          // 引擎 B：6 號開始，啟動 DOW + 中位數雙重過濾
           const dailyCashArray = [];
+          const dailyCashMap = {};
+
+          // 先整理出每一天的淨業績
           for (let i = 1; i <= currentDayNum; i++) {
             const dayStr = String(i).padStart(2, '0');
             const dateTarget = `${targetYear}/${String(monthInt).padStart(2, '0')}/${dayStr}`;
             const dayRecs = storeRecs.filter(r => toStandardDateFormat(r.date) === dateTarget);
             const dayCash = dayRecs.reduce((a, b) => a + (b.cash || 0) - (b.refund || 0), 0);
             dailyCashArray.push(dayCash);
+            dailyCashMap[i] = dayCash;
           }
 
-          // 2. 計算中位數
+          // 1. 抓全局中位數與門檻 (避免單一星期樣本太少)
           const sortedCash = [...dailyCashArray].sort((a, b) => a - b);
           const mid = Math.floor(sortedCash.length / 2);
           const median = sortedCash.length % 2 !== 0 ? sortedCash[mid] : (sortedCash[mid - 1] + sortedCash[mid]) / 2;
+          const threshold = median * 2; // 維持原本的 2 倍設定，完美防禦感恩茶會
 
-          // 3. 過濾 2 倍以上的茶會/極端值，算出「純淨常態日均」
-          const threshold = median * 2;
+          // 2. 將「過濾後的正常日子」分發到對應的星期籃子裡 (0=日, 1=一... 6=六)
+          const dowData = { 0:[], 1:[], 2:[], 3:[], 4:[], 5:[], 6:[] };
           let normalCashSum = 0;
           let normalDaysCount = 0;
 
-          dailyCashArray.forEach(cash => {
-            if (cash <= threshold) {
-              normalCashSum += cash;
-              normalDaysCount++;
+          for (let i = 1; i <= currentDayNum; i++) {
+            const cash = dailyCashMap[i];
+            if (cash <= threshold || median === 0) {
+               const dObj = new Date(targetYear, monthInt - 1, i);
+               dowData[dObj.getDay()].push(cash);
+               normalCashSum += cash;
+               normalDaysCount++;
             }
-          });
+          }
 
-          const normalDailyAvg = normalDaysCount > 0 ? (normalCashSum / normalDaysCount) : 0;
-          const remainingDays = daysInMonth - currentDayNum;
-          
-          // 4. 精準預測：已經入袋的總業績 + (純淨日均 * 剩下天數)
-          projection = Math.round(cashTotal + (normalDailyAvg * remainingDays));
+          // 3. 計算各星期的平均業績 (若某星期還沒遇到或全被剔除了，用全局純淨日均補上)
+          const fallbackAvg = normalDaysCount > 0 ? (normalCashSum / normalDaysCount) : 0;
+          const dowAvg = {};
+          for (let i = 0; i < 7; i++) {
+             dowAvg[i] = dowData[i].length > 0 
+                 ? dowData[i].reduce((a,b) => a+b, 0) / dowData[i].length 
+                 : fallbackAvg; 
+          }
+
+          // 4. 計算未來日子的精準推估：依據剩下的每一天是「星期幾」，疊加上對應的星期業績
+          let projectedRemaining = 0;
+          for (let d = currentDayNum + 1; d <= daysInMonth; d++) {
+             const futureDate = new Date(targetYear, monthInt - 1, d);
+             projectedRemaining += dowAvg[futureDate.getDay()];
+          }
+
+          projection = Math.round(cashTotal + projectedRemaining);
         }
       }
       
@@ -157,7 +176,7 @@ export const useAnalytics = (rawData, managers, budgets, selectedYear, selectedM
         refundTotal,
         cashBudget: budget.cashTarget,
         accrualBudget: budget.accrualTarget,
-        projection, // 替換為新引擎算出的數值
+        projection, // 升級為星期權重引擎算出的數值
         achievement: budget.cashTarget > 0 ? (cashTotal / budget.cashTarget) * 100 : 0,
         trafficASP: trafficTotal > 0 ? Math.round(operationalAccrualTotal / trafficTotal) : 0,
         newCustomerASP: newCustomersTotal > 0 ? Math.round(newCustomerSalesTotal / newCustomersTotal) : 0,

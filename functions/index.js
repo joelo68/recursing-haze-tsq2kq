@@ -12,7 +12,7 @@ const db = admin.firestore();
 const GEMINI_API_KEY = defineSecret('GEMINI_API_KEY');
 
 // ==========================================
-// ★ 1. 核心資料結算邏輯 (完美保留您的原始設定)
+// ★ 1. 核心資料結算邏輯
 // ==========================================
 async function updateMonthlyAggregation(change, basePath) {
   const beforeData = change.before.data() || {};
@@ -50,20 +50,87 @@ const TARGET_CHAT_ID_MANAGER = '-4991191955';
 const BRANDS = [{ id: 'cyj', name: 'CYJ' }, { id: 'anniu', name: '安妞' }, { id: 'yibo', name: '伊啵' }];
 
 // ==========================================
-// ★ 2. 終極精準：全知查詢工具 (加入前端公式與去重複防護)
+// ★ 2. 終極精準：100% 同步網頁前端推估邏輯 (已換上星期權重引擎)
 // ==========================================
+
+// ★ 嚴格對齊前端 useAnalytics.js 的「中位數過濾 ＋ 星期權重(Day-of-Week)」
+function calculateExactFrontendProjection(dailyCashMap, year, month, currentDayNum) {
+    const daysInMonth = new Date(year, month, 0).getDate();
+    let cashTotal = 0;
+    const dailyCashArray = [];
+    
+    // 將日期 Key 統一轉換格式
+    const normalizedMap = {};
+    for(let [k, v] of Object.entries(dailyCashMap)) {
+        const normK = k.replace(/\//g, '-');
+        normalizedMap[normK] = (normalizedMap[normK] || 0) + v;
+    }
+
+    // 前端是從 1 號跑到 currentDayNum，沒業績的日子補 0
+    for (let i = 1; i <= currentDayNum; i++) {
+        const dayStr = String(i).padStart(2, '0');
+        const dateTarget = `${year}-${String(month).padStart(2, '0')}-${dayStr}`;
+        const cash = normalizedMap[dateTarget] || 0;
+        dailyCashArray.push(cash);
+        cashTotal += cash;
+    }
+
+    // 引擎 A：1~5號樣本太少，線性推估
+    if (currentDayNum <= 5) {
+        return currentDayNum > 0 ? Math.round((cashTotal / currentDayNum) * daysInMonth) : 0;
+    }
+
+    // 引擎 B：中位數 * 2 過濾法 + 星期權重 (Day-of-Week)
+    const sortedCash = [...dailyCashArray].sort((a, b) => a - b);
+    const mid = Math.floor(sortedCash.length / 2);
+    const median = sortedCash.length % 2 !== 0 ? sortedCash[mid] : (sortedCash[mid - 1] + sortedCash[mid]) / 2;
+
+    const threshold = median * 2; // 維持原本的 2 倍設定，完美防禦感恩茶會
+    
+    const dowData = { 0:[], 1:[], 2:[], 3:[], 4:[], 5:[], 6:[] };
+    let normalCashSum = 0;
+    let normalDaysCount = 0;
+
+    // 將「過濾後的正常日子」分發到對應的星期籃子裡 (0=日, 1=一... 6=六)
+    for (let i = 1; i <= currentDayNum; i++) {
+        const cash = dailyCashArray[i - 1]; // 對應陣列裡的第 i 天
+        if (cash <= threshold || median === 0) {
+           const dObj = new Date(year, month - 1, i);
+           dowData[dObj.getDay()].push(cash);
+           normalCashSum += cash;
+           normalDaysCount++;
+        }
+    }
+
+    // 計算各星期的平均業績 (若某星期還沒遇到或全被剔除了，用全局純淨日均補上)
+    const fallbackAvg = normalDaysCount > 0 ? (normalCashSum / normalDaysCount) : 0;
+    const dowAvg = {};
+    for (let i = 0; i < 7; i++) {
+       dowAvg[i] = dowData[i].length > 0 
+           ? dowData[i].reduce((a,b) => a+b, 0) / dowData[i].length 
+           : fallbackAvg; 
+    }
+
+    // 計算未來日子的精準推估：依據剩下的每一天是「星期幾」，疊加上對應的星期業績
+    let projectedRemaining = 0;
+    for (let d = currentDayNum + 1; d <= daysInMonth; d++) {
+       const futureDate = new Date(year, month - 1, d);
+       projectedRemaining += dowAvg[futureDate.getDay()];
+    }
+
+    return Math.round(cashTotal + projectedRemaining);
+}
+
 async function getStorePerformance(startDate, endDate, storeName = null, brandName = null) {
     const snap = await db.collectionGroup('daily_reports').where('date', '>=', startDate).where('date', '<=', endDate).get();
     let storeMap = {};
-    let processed = new Set(); // ★ 去重複防護罩
-    let overall = { cash: 0, accrual: 0, skincare: 0, traffic: 0, newRev: 0, newCount: 0, newClosings: 0, oldRev: 0, oldCount: 0 };
+    let processed = new Set();
+    let overall = { cash: 0, accrual: 0, skincare: 0, traffic: 0, newRev: 0, newCount: 0, newClosings: 0, oldRev: 0, oldCount: 0, dailyCash: {} };
 
     snap.forEach(doc => {
         const data = doc.data();
         if(!data.storeName || !data.date) return;
         const sName = data.storeName.trim();
-        
-        // 確保同一天同一間店只算一次！
         const uniqueKey = `${data.date}_${sName}`;
         if (processed.has(uniqueKey)) return;
         processed.add(uniqueKey);
@@ -76,54 +143,58 @@ async function getStorePerformance(startDate, endDate, storeName = null, brandNa
         if (brandName && !bId.toUpperCase().includes(brandName.toUpperCase()) && !brandName.toUpperCase().includes(bId.toUpperCase())) return;
         if (storeName && !sName.includes(storeName)) return;
 
-        if (!storeMap[sName]) {
-            storeMap[sName] = { storeName: sName, brand: bId, cash: 0, accrual: 0, skincare: 0, traffic: 0, newRev: 0, newCount: 0, newClosings: 0, oldRev: 0, oldCount: 0 };
-        }
+        if (!storeMap[sName]) storeMap[sName] = { storeName: sName, brand: bId, cash: 0, accrual: 0, skincare: 0, traffic: 0, newRev: 0, newCount: 0, newClosings: 0, oldRev: 0, oldCount: 0, dailyCash: {} };
         
         const cash = (Number(data.cash) || 0) - (Number(data.refund) || 0);
         const accrual = (bId === '安妞') ? (Number(data.operationalAccrual) || 0) : (Number(data.accrual) || 0);
         const skincare = (Number(data.skincareSales) || 0) - (Number(data.skincareRefund) || 0);
         const traffic = Number(data.traffic) || 0;
-        
         const newRev = Number(data.newCustomerSales) || Number(data.newCustomerRevenue) || 0;
-        // ★ 自動導出舊客業績 (網頁前端的公式)
         const oldRev = Number(data.oldCustomerRevenue) || (cash - newRev > 0 ? cash - newRev : 0);
-        
         const newCount = Number(data.newCustomers) || Number(data.newCustomerCount) || 0;
         const newClosings = Number(data.newCustomerClosings) || 0;
-        // ★ 自動導出舊客數
         const oldCount = Number(data.oldCustomerCount) || (traffic - newCount > 0 ? traffic - newCount : 0);
 
-        storeMap[sName].cash += cash;
-        storeMap[sName].accrual += accrual;
-        storeMap[sName].skincare += skincare;
-        storeMap[sName].traffic += traffic;
-        storeMap[sName].newRev += newRev;
-        storeMap[sName].newCount += newCount;
-        storeMap[sName].newClosings += newClosings;
-        storeMap[sName].oldRev += oldRev;
-        storeMap[sName].oldCount += oldCount;
+        storeMap[sName].cash += cash; storeMap[sName].accrual += accrual; storeMap[sName].skincare += skincare; storeMap[sName].traffic += traffic;
+        storeMap[sName].newRev += newRev; storeMap[sName].newCount += newCount; storeMap[sName].newClosings += newClosings; storeMap[sName].oldRev += oldRev; storeMap[sName].oldCount += oldCount;
+        storeMap[sName].dailyCash[data.date] = (storeMap[sName].dailyCash[data.date] || 0) + cash;
 
-        overall.cash += cash;
-        overall.accrual += accrual;
-        overall.skincare += skincare;
-        overall.traffic += traffic;
-        overall.newRev += newRev;
-        overall.newCount += newCount;
-        overall.newClosings += newClosings;
-        overall.oldRev += oldRev;
-        overall.oldCount += oldCount;
+        overall.cash += cash; overall.accrual += accrual; overall.skincare += skincare; overall.traffic += traffic;
+        overall.newRev += newRev; overall.newCount += newCount; overall.newClosings += newClosings; overall.oldRev += oldRev; overall.oldCount += oldCount;
+        overall.dailyCash[data.date] = (overall.dailyCash[data.date] || 0) + cash;
     });
+
+    const year = parseInt(startDate.split('-')[0], 10);
+    const month = parseInt(startDate.split('-')[1], 10);
+
+    // 找出已過天數 (currentDayNum)
+    let maxDayInMap = 1;
+    Object.keys(overall.dailyCash).forEach(dateStr => {
+        const dayNum = parseInt(dateStr.replace(/\//g, '-').split('-')[2], 10);
+        if (dayNum > maxDayInMap) maxDayInMap = dayNum;
+    });
+    const currentDayNum = maxDayInMap;
+
+    overall.projection = 0; // 歸零，準備繼承各店推估加總
 
     Object.values(storeMap).forEach(s => {
         s.newAvg = s.newCount > 0 ? Math.round(s.newRev / s.newCount) : 0;
         s.oldAvg = s.oldCount > 0 ? Math.round(s.oldRev / s.oldCount) : 0;
         s.newClosingRate = s.newCount > 0 ? Number(((s.newClosings / s.newCount) * 100).toFixed(1)) : 0; 
+        
+        // ★ 呼叫前端同款公式 (中位數 + 星期權重)
+        s.projection = calculateExactFrontendProjection(s.dailyCash, year, month, currentDayNum);
+        
+        // ★ 總推估自動繼承各店的精準推估加總 (100% 對齊前端)
+        overall.projection += s.projection;
+        
+        delete s.dailyCash;
     });
 
     overall.newAvg = overall.newCount > 0 ? Math.round(overall.newRev / overall.newCount) : 0;
     overall.oldAvg = overall.oldCount > 0 ? Math.round(overall.oldRev / overall.oldCount) : 0;
     overall.newClosingRate = overall.newCount > 0 ? Number(((overall.newClosings / overall.newCount) * 100).toFixed(1)) : 0;
+    delete overall.dailyCash;
 
     return { overall_summary: overall, stores_details: Object.values(storeMap) }; 
 }
@@ -132,7 +203,7 @@ async function getTherapistPerformance(startDate, endDate, personName = null, st
     const snap = await db.collectionGroup('therapist_daily_reports').where('date', '>=', startDate).where('date', '<=', endDate).get();
     let pMap = {};
     let processed = new Set();
-    let overall = { revenue: 0, newRev: 0, newCount: 0, newClosings: 0, oldRev: 0, oldCount: 0 };
+    let overall = { revenue: 0, newRev: 0, newCount: 0, newClosings: 0, oldRev: 0, oldCount: 0, dailyCash: {} };
 
     snap.forEach(doc => {
         const data = doc.data();
@@ -140,7 +211,6 @@ async function getTherapistPerformance(startDate, endDate, personName = null, st
         const sName = data.storeName ? data.storeName.trim().replace(/店$/, '') : "未知";
         if (!data.date || tName === "未知") return;
         
-        // 確保同人同天同店只算一次
         const uniqueKey = `${data.date}_${sName}_${tName}`;
         if (processed.has(uniqueKey)) return;
         processed.add(uniqueKey);
@@ -156,9 +226,7 @@ async function getTherapistPerformance(startDate, endDate, personName = null, st
         if (personName && !tName.toLowerCase().includes(personName.toLowerCase())) return;
 
         const key = `${bId}_${sName}_${tName}`;
-        if (!pMap[key]) {
-            pMap[key] = { brand: bId, storeName: sName, personName: tName, revenue: 0, newRev: 0, newCount: 0, newClosings: 0, oldRev: 0, oldCount: 0 };
-        }
+        if (!pMap[key]) pMap[key] = { brand: bId, storeName: sName, personName: tName, revenue: 0, newRev: 0, newCount: 0, newClosings: 0, oldRev: 0, oldCount: 0, dailyCash: {} };
         
         const rev = Number(data.totalRevenue) || 0;
         const newRev = Number(data.newCustomerRevenue) || 0;
@@ -168,30 +236,39 @@ async function getTherapistPerformance(startDate, endDate, personName = null, st
         const traffic = Number(data.traffic) || Number(data.customerCount) || 0;
         const oldCount = Number(data.oldCustomerCount) || (traffic - newCount > 0 ? traffic - newCount : 0);
 
-        pMap[key].revenue += rev;
-        pMap[key].newRev += newRev;
-        pMap[key].oldRev += oldRev;
-        pMap[key].newCount += newCount;
-        pMap[key].oldCount += oldCount;
-        pMap[key].newClosings += newClosings;
+        pMap[key].revenue += rev; pMap[key].newRev += newRev; pMap[key].oldRev += oldRev;
+        pMap[key].newCount += newCount; pMap[key].oldCount += oldCount; pMap[key].newClosings += newClosings;
+        pMap[key].dailyCash[data.date] = (pMap[key].dailyCash[data.date] || 0) + rev;
 
-        overall.revenue += rev;
-        overall.newRev += newRev;
-        overall.oldRev += oldRev;
-        overall.newCount += newCount;
-        overall.oldCount += oldCount;
-        overall.newClosings += newClosings;
+        overall.revenue += rev; overall.newRev += newRev; overall.oldRev += oldRev;
+        overall.newCount += newCount; overall.oldCount += oldCount; overall.newClosings += newClosings;
+        overall.dailyCash[data.date] = (overall.dailyCash[data.date] || 0) + rev;
     });
 
+    const year = parseInt(startDate.split('-')[0], 10);
+    const month = parseInt(startDate.split('-')[1], 10);
+
+    let maxDayInMap = 1;
+    Object.keys(overall.dailyCash).forEach(dateStr => {
+        const dayNum = parseInt(dateStr.replace(/\//g, '-').split('-')[2], 10);
+        if (dayNum > maxDayInMap) maxDayInMap = dayNum;
+    });
+    const currentDayNum = maxDayInMap;
+
+    overall.projection = 0;
     Object.values(pMap).forEach(p => {
         p.newAvg = p.newCount > 0 ? Math.round(p.newRev / p.newCount) : 0;
         p.oldAvg = p.oldCount > 0 ? Math.round(p.oldRev / p.oldCount) : 0;
         p.newClosingRate = p.newCount > 0 ? Number(((p.newClosings / p.newCount) * 100).toFixed(1)) : 0; 
+        p.projection = calculateExactFrontendProjection(p.dailyCash, year, month, currentDayNum);
+        overall.projection += p.projection;
+        delete p.dailyCash;
     });
 
     overall.newAvg = overall.newCount > 0 ? Math.round(overall.newRev / overall.newCount) : 0;
     overall.oldAvg = overall.oldCount > 0 ? Math.round(overall.oldRev / overall.oldCount) : 0;
     overall.newClosingRate = overall.newCount > 0 ? Number(((overall.newClosings / overall.newCount) * 100).toFixed(1)) : 0;
+    delete overall.dailyCash;
 
     return { overall_summary: overall, therapists_details: Object.values(pMap).sort((a,b) => b.revenue - a.revenue) };
 }
@@ -232,24 +309,24 @@ const aiTools = {
     functionDeclarations: [
         {
             name: "getStorePerformance",
-            description: "查詢店鋪/品牌的營運狀況，包含現金、權責、保養品、客單價、締結率。",
-            parameters: { type: "OBJECT", properties: { startDate: { type: "STRING", description: "選填" }, endDate: { type: "STRING", description: "選填" }, storeName: { type: "STRING" }, brandName: { type: "STRING" } } }
+            description: "查詢店鋪/品牌的營運狀況，包含現金、權責、保養品、客單價、締結率與【月底推估業績(projection)】。",
+            parameters: { type: "OBJECT", properties: { startDate: { type: "STRING", description: "選填，必須為 YYYY-MM-DD" }, endDate: { type: "STRING", description: "選填，必須為 YYYY-MM-DD" }, storeName: { type: "STRING" }, brandName: { type: "STRING" } } }
         },
         {
             name: "getTherapistPerformance",
-            description: "查詢人員/諮詢師的個人業績、客單價與締結率。",
-            parameters: { type: "OBJECT", properties: { startDate: { type: "STRING", description: "選填" }, endDate: { type: "STRING", description: "選填" }, personName: { type: "STRING" }, storeName: { type: "STRING" }, brandName: { type: "STRING" } } }
+            description: "查詢人員/諮詢師的個人業績、新舊客、客單價、締結率與【月底推估業績(projection)】。",
+            parameters: { type: "OBJECT", properties: { startDate: { type: "STRING", description: "選填，必須為 YYYY-MM-DD" }, endDate: { type: "STRING", description: "選填，必須為 YYYY-MM-DD" }, personName: { type: "STRING" }, storeName: { type: "STRING" }, brandName: { type: "STRING" } } }
         },
         {
             name: "getMissingReports",
             description: "查詢未交日報名單。",
-            parameters: { type: "OBJECT", properties: { startDate: { type: "STRING" }, endDate: { type: "STRING" } } }
+            parameters: { type: "OBJECT", properties: { startDate: { type: "STRING", description: "必須為 YYYY-MM-DD" }, endDate: { type: "STRING", description: "必須為 YYYY-MM-DD" } } }
         }
     ]
 };
 
 // ==========================================
-// ★ 3. Webhook: AI Agent 對話總機 (完美防彈+精準版)
+// ★ 3. Webhook: AI Agent 對話總機 
 // ==========================================
 exports.telegramWebhook = onRequest({ secrets: [GEMINI_API_KEY] }, async (req, res) => {
     if (!req.body || !req.body.message || !req.body.message.text) return res.sendStatus(200);
@@ -265,14 +342,13 @@ exports.telegramWebhook = onRequest({ secrets: [GEMINI_API_KEY] }, async (req, r
 
     try {
         const genAI = new GoogleGenerativeAI(GEMINI_API_KEY.value());
-        // ★ 換上最高階聰明的付費大腦
         const model = genAI.getGenerativeModel({ 
             model: "gemini-2.5-flash",
             tools: [aiTools],
             systemInstruction: `你是一位醫美集團的高階戰情分析秘書。現在日期是 ${todayStr}。
 【最高防偽與精準原則】
 1. 絕對禁止捏造數據！
-2. 當你需要回答「整體概況」時，【絕對禁止你自己計算】，必須直接讀取工具回傳的 'overall_summary' 裡的數字。
+2. 當你需要回答「整體概況」時，【絕對禁止你自己計算】，必須直接讀取 'overall_summary' 裡的數字。
 3. 【嚴格套用公司專用術語】：
    - cash ➔ 「現金業績」
    - accrual ➔ 「實作業績/權責業績」
@@ -280,10 +356,11 @@ exports.telegramWebhook = onRequest({ secrets: [GEMINI_API_KEY] }, async (req, r
    - newRev ➔ 「新客業績」
    - newAvg / oldAvg ➔ 「客單價」
    - newClosingRate ➔ 「新客締結率」
-4. 收到指令後，【最多只能呼叫一個工具】。拿到資料後請立刻分析，絕對不准因為貪心而等待呼叫第二個工具！
-5. 【輸出排版極度嚴格 - 避免 Telegram 當機】：
+   - projection ➔ 「月底推估業績」(這非常重要，請直接提取數值回答)
+4. 呼叫工具時，startDate 與 endDate 若不確定確切日期請留空，絕對禁止填寫「本月」、「4月」等相對詞彙！
+5. 【輸出排版極度嚴格 - 避免通訊軟體崩潰】：
    - 輸出環境為純文字，絕對禁止使用任何 Markdown 排版符號（例如禁止使用 **、#、_、[] 等符號）。
-   - 請多使用 Emoji (如 📊, 🏢, 💰, 💡, ⚠️) 搭配換行來美化。
+   - 請多使用 Emoji (如 📊, 🏢, 💰) 搭配換行來美化。
    - 強制使用「繁體中文」，所有金額加上千分位逗號。`
         });
 
@@ -297,9 +374,21 @@ exports.telegramWebhook = onRequest({ secrets: [GEMINI_API_KEY] }, async (req, r
 
         if (functionCall) {
             const { name, args } = functionCall;
-            // 防呆：AI 偷懶不填日期時，自動幫他填好本月區間
-            const safeStartDate = args.startDate || `${currentYearMonth}-01`;
-            const safeEndDate = args.endDate || todayStr;
+            
+            const dateRegex = /^\d{4}[-/]\d{2}[-/]\d{2}$/;
+            let safeStartDate = args.startDate;
+            if (!safeStartDate || !dateRegex.test(safeStartDate)) {
+                safeStartDate = `${currentYearMonth}-01`;
+            } else {
+                safeStartDate = safeStartDate.replace(/\//g, '-');
+            }
+            
+            let safeEndDate = args.endDate;
+            if (!safeEndDate || !dateRegex.test(safeEndDate)) {
+                safeEndDate = todayStr;
+            } else {
+                safeEndDate = safeEndDate.replace(/\//g, '-');
+            }
 
             let apiData = [];
 
@@ -314,7 +403,7 @@ exports.telegramWebhook = onRequest({ secrets: [GEMINI_API_KEY] }, async (req, r
                 finalReply = secondResult.response.text();
             } catch (innerError) {
                 console.error("AI 產生報告時崩潰:", innerError);
-                finalReply = "🤖 秘書已成功撈取數據，但您要求的分析範圍過大。請試著將問題縮小，例如只查詢特定單店。";
+                finalReply = "🤖 秘書已成功撈取數據，但分析範圍過大。請試著將問題縮小，例如只查詢特定單店。";
             }
         } else {
             finalReply = result.response.text();
@@ -324,14 +413,11 @@ exports.telegramWebhook = onRequest({ secrets: [GEMINI_API_KEY] }, async (req, r
             finalReply = "🤖 秘書目前無法總結這個數據，請換個具體一點的方式問問看。";
         }
 
-        // ★ 暴力清洗所有會讓 Telegram 報 400 錯誤的排版符號
         finalReply = finalReply.replace(/[*#`_\[\]]/g, '');
-        // ★ 自動截斷過長的萬字報告，保護傳送安全
         if (finalReply.length > 3800) {
-            finalReply = finalReply.substring(0, 3800) + "\n\n... (字數已達通訊軟體上限，後續洞察報告已自動截斷)。";
+            finalReply = finalReply.substring(0, 3800) + "\n\n... (字數已達通訊軟體上限，後續洞察報告自動截斷)。";
         }
 
-        // ★ 拔除 parse_mode: 'Markdown'，改用純文字模式強勢通關
         await axios.post(`https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage`, { 
             chat_id: chatId, 
             text: finalReply 
@@ -348,7 +434,7 @@ exports.telegramWebhook = onRequest({ secrets: [GEMINI_API_KEY] }, async (req, r
 });
 
 // ==========================================
-// ★ 4. Telegram 動態定時推播巡邏員 (完美保留原始設定)
+// ★ 4. Telegram 動態定時推播巡邏員 (保留原狀)
 // ==========================================
 exports.notificationPatrol = onSchedule({ schedule: "* * * * *", timeZone: "Asia/Taipei" }, async (event) => {
     const now = new Date();
