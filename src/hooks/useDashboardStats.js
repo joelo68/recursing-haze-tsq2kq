@@ -261,8 +261,50 @@ export function useDashboardStats() {
     const challengeAchievement = stats.challengeBudget > 0 ? (stats.cash / stats.challengeBudget) * 100 : 0;
     const challengeAccrualAchievement = stats.challengeAccrualBudget > 0 ? (stats.accrual / stats.challengeAccrualBudget) * 100 : 0;
 
-    const projection = daysPassed > 0 ? Math.round((stats.cash / daysPassed) * daysInMonth) : 0;
+    // ============================================================================
+    // ★ 星期權重推估 (取代原本的線性推估)
+    // ============================================================================
+    let projection = 0;
+    if (daysPassed > 0) {
+        if (daysPassed <= 5) {
+            projection = Math.round((stats.cash / daysPassed) * daysInMonth);
+        } else {
+            const validDailyCash = stats.dailyData.slice(0, daysPassed).map(d => d.cash);
+            const sortedCash = [...validDailyCash].sort((a,b) => a-b);
+            const mid = Math.floor(sortedCash.length / 2);
+            const median = sortedCash.length % 2 !== 0 ? sortedCash[mid] : (sortedCash[mid-1] + sortedCash[mid]) / 2;
+            const threshold = median * 2;
+
+            const dowData = { 0:[], 1:[], 2:[], 3:[], 4:[], 5:[], 6:[] };
+            let normalCashSum = 0;
+            let normalDaysCount = 0;
+
+            for (let i = 1; i <= daysPassed; i++) {
+                const cash = validDailyCash[i - 1];
+                if (cash <= threshold || median === 0) {
+                    const dObj = new Date(y, m - 1, i);
+                    dowData[dObj.getDay()].push(cash);
+                    normalCashSum += cash;
+                    normalDaysCount++;
+                }
+            }
+
+            const fallbackAvg = normalDaysCount > 0 ? (normalCashSum / normalDaysCount) : 0;
+            const dowAvg = {};
+            for (let i = 0; i < 7; i++) {
+                dowAvg[i] = dowData[i].length > 0 ? dowData[i].reduce((a,b)=>a+b,0)/dowData[i].length : fallbackAvg;
+            }
+
+            let projectedRemaining = 0;
+            for (let d = daysPassed + 1; d <= daysInMonth; d++) {
+                const futureDate = new Date(y, m - 1, d);
+                projectedRemaining += dowAvg[futureDate.getDay()];
+            }
+            projection = Math.round(stats.cash + projectedRemaining);
+        }
+    }
     const accrualProjection = daysPassed > 0 ? Math.round((stats.accrual / daysPassed) * daysInMonth) : 0;
+    // ============================================================================
 
     const avgTrafficASP = stats.traffic > 0 ? Math.round(stats.operationalAccrual / stats.traffic) : 0;
     const avgNewCustomerASP = stats.newCustomers > 0 ? Math.round(stats.newCustomerSales / stats.newCustomers) : 0;

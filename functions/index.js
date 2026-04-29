@@ -50,23 +50,19 @@ const TARGET_CHAT_ID_MANAGER = '-4991191955';
 const BRANDS = [{ id: 'cyj', name: 'CYJ' }, { id: 'anniu', name: '安妞' }, { id: 'yibo', name: '伊啵' }];
 
 // ==========================================
-// ★ 2. 終極精準：100% 同步網頁前端推估邏輯 (已換上星期權重引擎)
+// ★ 2. 終極精準：100% 同步網頁前端推估邏輯
 // ==========================================
-
-// ★ 嚴格對齊前端 useAnalytics.js 的「中位數過濾 ＋ 星期權重(Day-of-Week)」
 function calculateExactFrontendProjection(dailyCashMap, year, month, currentDayNum) {
     const daysInMonth = new Date(year, month, 0).getDate();
     let cashTotal = 0;
     const dailyCashArray = [];
     
-    // 將日期 Key 統一轉換格式
     const normalizedMap = {};
     for(let [k, v] of Object.entries(dailyCashMap)) {
         const normK = k.replace(/\//g, '-');
         normalizedMap[normK] = (normalizedMap[normK] || 0) + v;
     }
 
-    // 前端是從 1 號跑到 currentDayNum，沒業績的日子補 0
     for (let i = 1; i <= currentDayNum; i++) {
         const dayStr = String(i).padStart(2, '0');
         const dateTarget = `${year}-${String(month).padStart(2, '0')}-${dayStr}`;
@@ -75,25 +71,21 @@ function calculateExactFrontendProjection(dailyCashMap, year, month, currentDayN
         cashTotal += cash;
     }
 
-    // 引擎 A：1~5號樣本太少，線性推估
     if (currentDayNum <= 5) {
         return currentDayNum > 0 ? Math.round((cashTotal / currentDayNum) * daysInMonth) : 0;
     }
 
-    // 引擎 B：中位數 * 2 過濾法 + 星期權重 (Day-of-Week)
     const sortedCash = [...dailyCashArray].sort((a, b) => a - b);
     const mid = Math.floor(sortedCash.length / 2);
     const median = sortedCash.length % 2 !== 0 ? sortedCash[mid] : (sortedCash[mid - 1] + sortedCash[mid]) / 2;
-
-    const threshold = median * 2; // 維持原本的 2 倍設定，完美防禦感恩茶會
+    const threshold = median * 2;
     
     const dowData = { 0:[], 1:[], 2:[], 3:[], 4:[], 5:[], 6:[] };
     let normalCashSum = 0;
     let normalDaysCount = 0;
 
-    // 將「過濾後的正常日子」分發到對應的星期籃子裡 (0=日, 1=一... 6=六)
     for (let i = 1; i <= currentDayNum; i++) {
-        const cash = dailyCashArray[i - 1]; // 對應陣列裡的第 i 天
+        const cash = dailyCashArray[i - 1]; 
         if (cash <= threshold || median === 0) {
            const dObj = new Date(year, month - 1, i);
            dowData[dObj.getDay()].push(cash);
@@ -102,7 +94,6 @@ function calculateExactFrontendProjection(dailyCashMap, year, month, currentDayN
         }
     }
 
-    // 計算各星期的平均業績 (若某星期還沒遇到或全被剔除了，用全局純淨日均補上)
     const fallbackAvg = normalDaysCount > 0 ? (normalCashSum / normalDaysCount) : 0;
     const dowAvg = {};
     for (let i = 0; i < 7; i++) {
@@ -111,7 +102,6 @@ function calculateExactFrontendProjection(dailyCashMap, year, month, currentDayN
            : fallbackAvg; 
     }
 
-    // 計算未來日子的精準推估：依據剩下的每一天是「星期幾」，疊加上對應的星期業績
     let projectedRemaining = 0;
     for (let d = currentDayNum + 1; d <= daysInMonth; d++) {
        const futureDate = new Date(year, month - 1, d);
@@ -167,7 +157,6 @@ async function getStorePerformance(startDate, endDate, storeName = null, brandNa
     const year = parseInt(startDate.split('-')[0], 10);
     const month = parseInt(startDate.split('-')[1], 10);
 
-    // 找出已過天數 (currentDayNum)
     let maxDayInMap = 1;
     Object.keys(overall.dailyCash).forEach(dateStr => {
         const dayNum = parseInt(dateStr.replace(/\//g, '-').split('-')[2], 10);
@@ -175,19 +164,14 @@ async function getStorePerformance(startDate, endDate, storeName = null, brandNa
     });
     const currentDayNum = maxDayInMap;
 
-    overall.projection = 0; // 歸零，準備繼承各店推估加總
+    // ★ 同步：總推估直接用全局陣列算 (對齊 useDashboardStats)
+    overall.projection = calculateExactFrontendProjection(overall.dailyCash, year, month, currentDayNum);
 
     Object.values(storeMap).forEach(s => {
         s.newAvg = s.newCount > 0 ? Math.round(s.newRev / s.newCount) : 0;
         s.oldAvg = s.oldCount > 0 ? Math.round(s.oldRev / s.oldCount) : 0;
         s.newClosingRate = s.newCount > 0 ? Number(((s.newClosings / s.newCount) * 100).toFixed(1)) : 0; 
-        
-        // ★ 呼叫前端同款公式 (中位數 + 星期權重)
         s.projection = calculateExactFrontendProjection(s.dailyCash, year, month, currentDayNum);
-        
-        // ★ 總推估自動繼承各店的精準推估加總 (100% 對齊前端)
-        overall.projection += s.projection;
-        
         delete s.dailyCash;
     });
 
@@ -255,13 +239,13 @@ async function getTherapistPerformance(startDate, endDate, personName = null, st
     });
     const currentDayNum = maxDayInMap;
 
-    overall.projection = 0;
+    overall.projection = calculateExactFrontendProjection(overall.dailyCash, year, month, currentDayNum);
+
     Object.values(pMap).forEach(p => {
         p.newAvg = p.newCount > 0 ? Math.round(p.newRev / p.newCount) : 0;
         p.oldAvg = p.oldCount > 0 ? Math.round(p.oldRev / p.oldCount) : 0;
         p.newClosingRate = p.newCount > 0 ? Number(((p.newClosings / p.newCount) * 100).toFixed(1)) : 0; 
         p.projection = calculateExactFrontendProjection(p.dailyCash, year, month, currentDayNum);
-        overall.projection += p.projection;
         delete p.dailyCash;
     });
 
@@ -437,6 +421,7 @@ exports.telegramWebhook = onRequest({ secrets: [GEMINI_API_KEY] }, async (req, r
 // ★ 4. Telegram 動態定時推播巡邏員 (保留原狀)
 // ==========================================
 exports.notificationPatrol = onSchedule({ schedule: "* * * * *", timeZone: "Asia/Taipei" }, async (event) => {
+    // ...(推播程式碼皆維持不變，已自動包含)
     const now = new Date();
     const utcHours = now.getUTCHours();
     now.setHours(utcHours + 8); 
