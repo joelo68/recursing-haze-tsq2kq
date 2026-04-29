@@ -111,7 +111,42 @@ function calculateExactFrontendProjection(dailyCashMap, year, month, currentDayN
     return Math.round(cashTotal + projectedRemaining);
 }
 
+function getClampedDaysPassed(overallDailyCash, year, month) {
+    const daysInMonth = new Date(year, month, 0).getDate();
+    const now = new Date();
+    now.setHours(now.getUTCHours() + 8); 
+    
+    let daysPassed = daysInMonth;
+    const isCurrentMonth = (year === now.getFullYear() && month === (now.getMonth() + 1));
+    
+    if (isCurrentMonth) {
+        daysPassed = Math.max(0, now.getDate() - 1);
+    }
+    
+    let maxDataDay = 0;
+    Object.keys(overallDailyCash).forEach(dateStr => {
+        const dayNum = parseInt(dateStr.replace(/\//g, '-').split('-')[2], 10);
+        if (dayNum > maxDataDay) maxDataDay = dayNum;
+    });
+
+    if (isCurrentMonth) {
+        if (maxDataDay > daysPassed) daysPassed = maxDataDay;
+        if (daysPassed > now.getDate()) daysPassed = now.getDate(); 
+    } else {
+        daysPassed = maxDataDay > 0 ? maxDataDay : daysInMonth;
+    }
+    return daysPassed;
+}
+
 async function getStorePerformance(startDate, endDate, storeName = null, brandName = null) {
+    if (storeName && !brandName) {
+        const sUpper = storeName.toUpperCase();
+        if (sUpper === 'CYJ' || sUpper.includes('安妞') || sUpper.includes('伊啵')) {
+            brandName = storeName;
+            storeName = null;
+        }
+    }
+
     const snap = await db.collectionGroup('daily_reports').where('date', '>=', startDate).where('date', '<=', endDate).get();
     let storeMap = {};
     let processed = new Set();
@@ -157,14 +192,9 @@ async function getStorePerformance(startDate, endDate, storeName = null, brandNa
     const year = parseInt(startDate.split('-')[0], 10);
     const month = parseInt(startDate.split('-')[1], 10);
 
-    let maxDayInMap = 1;
-    Object.keys(overall.dailyCash).forEach(dateStr => {
-        const dayNum = parseInt(dateStr.replace(/\//g, '-').split('-')[2], 10);
-        if (dayNum > maxDayInMap) maxDayInMap = dayNum;
-    });
-    const currentDayNum = maxDayInMap;
+    const currentDayNum = getClampedDaysPassed(overall.dailyCash, year, month);
 
-    // ★ 同步：總推估直接用全局陣列算 (對齊 useDashboardStats)
+    // ★ 修正核心：直接對「全區大包包」算推估，絕不單店加總！
     overall.projection = calculateExactFrontendProjection(overall.dailyCash, year, month, currentDayNum);
 
     Object.values(storeMap).forEach(s => {
@@ -184,6 +214,14 @@ async function getStorePerformance(startDate, endDate, storeName = null, brandNa
 }
 
 async function getTherapistPerformance(startDate, endDate, personName = null, storeName = null, brandName = null) {
+    if (storeName && !brandName) {
+        const sUpper = storeName.toUpperCase();
+        if (sUpper === 'CYJ' || sUpper.includes('安妞') || sUpper.includes('伊啵')) {
+            brandName = storeName;
+            storeName = null;
+        }
+    }
+
     const snap = await db.collectionGroup('therapist_daily_reports').where('date', '>=', startDate).where('date', '<=', endDate).get();
     let pMap = {};
     let processed = new Set();
@@ -232,13 +270,9 @@ async function getTherapistPerformance(startDate, endDate, personName = null, st
     const year = parseInt(startDate.split('-')[0], 10);
     const month = parseInt(startDate.split('-')[1], 10);
 
-    let maxDayInMap = 1;
-    Object.keys(overall.dailyCash).forEach(dateStr => {
-        const dayNum = parseInt(dateStr.replace(/\//g, '-').split('-')[2], 10);
-        if (dayNum > maxDayInMap) maxDayInMap = dayNum;
-    });
-    const currentDayNum = maxDayInMap;
+    const currentDayNum = getClampedDaysPassed(overall.dailyCash, year, month);
 
+    // ★ 修正核心：直接對「全區大包包」算推估
     overall.projection = calculateExactFrontendProjection(overall.dailyCash, year, month, currentDayNum);
 
     Object.values(pMap).forEach(p => {
@@ -294,12 +328,29 @@ const aiTools = {
         {
             name: "getStorePerformance",
             description: "查詢店鋪/品牌的營運狀況，包含現金、權責、保養品、客單價、締結率與【月底推估業績(projection)】。",
-            parameters: { type: "OBJECT", properties: { startDate: { type: "STRING", description: "選填，必須為 YYYY-MM-DD" }, endDate: { type: "STRING", description: "選填，必須為 YYYY-MM-DD" }, storeName: { type: "STRING" }, brandName: { type: "STRING" } } }
+            parameters: { 
+                type: "OBJECT", 
+                properties: { 
+                    startDate: { type: "STRING", description: "選填，必須為 YYYY-MM-DD" }, 
+                    endDate: { type: "STRING", description: "選填，必須為 YYYY-MM-DD" }, 
+                    storeName: { type: "STRING", description: "單一店鋪名稱（請勿填入品牌名），例如：復北, 左營" }, 
+                    brandName: { type: "STRING", description: "品牌名稱，例如：CYJ, 安妞, 伊啵" } 
+                } 
+            }
         },
         {
             name: "getTherapistPerformance",
             description: "查詢人員/諮詢師的個人業績、新舊客、客單價、締結率與【月底推估業績(projection)】。",
-            parameters: { type: "OBJECT", properties: { startDate: { type: "STRING", description: "選填，必須為 YYYY-MM-DD" }, endDate: { type: "STRING", description: "選填，必須為 YYYY-MM-DD" }, personName: { type: "STRING" }, storeName: { type: "STRING" }, brandName: { type: "STRING" } } }
+            parameters: { 
+                type: "OBJECT", 
+                properties: { 
+                    startDate: { type: "STRING", description: "選填，必須為 YYYY-MM-DD" }, 
+                    endDate: { type: "STRING", description: "選填，必須為 YYYY-MM-DD" }, 
+                    personName: { type: "STRING" }, 
+                    storeName: { type: "STRING", description: "單一店鋪名稱（請勿填入品牌名），例如：復北, 左營" }, 
+                    brandName: { type: "STRING", description: "品牌名稱，例如：CYJ, 安妞, 伊啵" } 
+                } 
+            }
         },
         {
             name: "getMissingReports",
@@ -332,20 +383,21 @@ exports.telegramWebhook = onRequest({ secrets: [GEMINI_API_KEY] }, async (req, r
             systemInstruction: `你是一位醫美集團的高階戰情分析秘書。現在日期是 ${todayStr}。
 【最高防偽與精準原則】
 1. 絕對禁止捏造數據！
-2. 當你需要回答「整體概況」時，【絕對禁止你自己計算】，必須直接讀取 'overall_summary' 裡的數字。
-3. 【嚴格套用公司專用術語】：
-   - cash ➔ 「現金業績」
-   - accrual ➔ 「實作業績/權責業績」
-   - skincare ➔ 「保養品業績」(嚴禁說成美膚)
-   - newRev ➔ 「新客業績」
-   - newAvg / oldAvg ➔ 「客單價」
-   - newClosingRate ➔ 「新客締結率」
-   - projection ➔ 「月底推估業績」(這非常重要，請直接提取數值回答)
-4. 呼叫工具時，startDate 與 endDate 若不確定確切日期請留空，絕對禁止填寫「本月」、「4月」等相對詞彙！
-5. 【輸出排版極度嚴格 - 避免通訊軟體崩潰】：
-   - 輸出環境為純文字，絕對禁止使用任何 Markdown 排版符號（例如禁止使用 **、#、_、[] 等符號）。
-   - 請多使用 Emoji (如 📊, 🏢, 💰) 搭配換行來美化。
-   - 強制使用「繁體中文」，所有金額加上千分位逗號。`
+2. 當你需要回答「整體概況」時，必須直接讀取 'overall_summary' 裡的數字，嚴禁自己計算。
+3. 【嚴格套用公司專用術語】：cash ➔ 現金業績, accrual ➔ 實作業績, skincare ➔ 保養品業績。
+4. 【參數填寫警告】：CYJ、安妞、伊啵為「品牌名」。若使用者問「CYJ」，絕對不可填入 storeName 中！
+5. 【強制輸出格式】：當使用者查詢「品牌」或「店鋪」整體概況時，請【務必】依照以下格式條列輸出，不要自己發明排版：
+   🏢 [品牌/店鋪名稱] 營運概況
+   💰 月底推估業績: [直接填入 projection 的數值]
+   💰 現金業績: [數值]
+   💰 實作業績: [數值]
+   💲 新客業績: [數值]
+   🤝 新客締結率: [數值]%
+   🧍 客單價 (新客): [數值]
+   🧍 客單價 (舊客): [數值]
+   🧴 保養品業績: [數值]
+   (分析完畢後，可以加上簡短的一兩句建議或鼓勵)
+6. 輸出環境為純文字，絕對禁止使用 Markdown 符號（禁止使用 **、#、_、[]）。所有金額請加上千分位逗號。`
         });
 
         const aiChat = model.startChat();
@@ -421,7 +473,6 @@ exports.telegramWebhook = onRequest({ secrets: [GEMINI_API_KEY] }, async (req, r
 // ★ 4. Telegram 動態定時推播巡邏員 (保留原狀)
 // ==========================================
 exports.notificationPatrol = onSchedule({ schedule: "* * * * *", timeZone: "Asia/Taipei" }, async (event) => {
-    // ...(推播程式碼皆維持不變，已自動包含)
     const now = new Date();
     const utcHours = now.getUTCHours();
     now.setHours(utcHours + 8); 

@@ -65,6 +65,7 @@ const AuditView = () => {
     return name;
   }, [currentBrand]);
 
+  // ★ 核心優化：更強大的店名淨化器
   const cleanStoreName = useCallback((name) => {
     if (!name) return "";
     let core = String(name).replace(/^(CYJ|Anew\s*\(安妞\)|Yibo\s*\(伊啵\)|安妞|伊啵|Anew|Yibo)\s*/i, '').trim();
@@ -83,17 +84,21 @@ const AuditView = () => {
     showToast("排除名單已更新", "success");
   };
 
+  // ★ 核心優化：儲存時強制淨化店名，確保比對精準
   const toggleExclusion = (store) => {
+    const cleanS = cleanStoreName(store);
     setLocalExclusions(prev => {
-      if (prev.includes(store)) return prev.filter(s => s !== store);
-      return [...prev, store];
+      if (prev.includes(cleanS) || prev.includes(store)) {
+          return prev.filter(s => s !== store && s !== cleanS);
+      }
+      return [...prev, cleanS];
     });
   };
 
   const activeStoresForCalendar = useMemo(() => {
     const allMyStores = Object.values(managers).flat();
     return allMyStores
-      .filter(storeName => !auditExclusions.includes(storeName)) 
+      .filter(storeName => !auditExclusions.includes(storeName) && !auditExclusions.includes(cleanStoreName(storeName))) 
       .map(storeName => {
         const aliases = [
           storeName, `${storeName}店`, `${brandPrefix}${storeName}`,       
@@ -101,7 +106,7 @@ const AuditView = () => {
         ];
         return { id: storeName, name: `${storeName}店`, stores: aliases };
       });
-  }, [managers, auditExclusions, brandPrefix]);
+  }, [managers, auditExclusions, brandPrefix, cleanStoreName]);
 
   const activeTherapistsForCalendar = useMemo(() => {
     const y = parseInt(selectedYear);
@@ -177,14 +182,17 @@ const AuditView = () => {
     Object.entries(managers).forEach(([manager, stores]) => {
       const missing = [];
       stores.forEach((s) => {
-        if (auditExclusions.includes(s)) return; 
+        // ★ 核心優化：雙重驗證，避免店名髒資料導致過濾失敗
+        const cleanS = cleanStoreName(s);
+        if (auditExclusions.includes(s) || auditExclusions.includes(cleanS)) return; 
+        
         const isSubmitted = submittedRaw.some(rawName => rawName && rawName.includes(s));
         if (!isSubmitted) missing.push(`${brandPrefix}${s}店`);
       });
       if (missing.length) missingByManager[manager] = missing;
     });
     return { submitted: submittedRaw, missing: Object.values(missingByManager).flat(), missingByManager };
-  }, [checkDate, rawData, managers, auditExclusions, brandPrefix]);
+  }, [checkDate, rawData, managers, auditExclusions, brandPrefix, cleanStoreName]);
 
   const targetAuditData = useMemo(() => {
     const missingByManager = {};
@@ -193,7 +201,10 @@ const AuditView = () => {
     Object.entries(managers).forEach(([manager, stores]) => {
       const missing = [];
       stores.forEach((s) => {
-        if (auditExclusions.includes(s)) return;
+        // ★ 核心優化：雙重驗證
+        const cleanS = cleanStoreName(s);
+        if (auditExclusions.includes(s) || auditExclusions.includes(cleanS)) return;
+        
         const name = `${brandPrefix}${s}店`;
         const key = `${name}_${y}_${m}`;
         const b = budgets[key];
@@ -202,7 +213,7 @@ const AuditView = () => {
       if (missing.length) missingByManager[manager] = missing;
     });
     return { missing: Object.values(missingByManager).flat(), missingByManager };
-  }, [budgets, managers, selectedYear, selectedMonth, auditExclusions, brandPrefix]);
+  }, [budgets, managers, selectedYear, selectedMonth, auditExclusions, brandPrefix, cleanStoreName]);
 
   const therapistAuditData = useMemo(() => {
     if (!checkDate) return { missing: [], missingByManager: {} };
@@ -356,7 +367,8 @@ const AuditView = () => {
                    </div>
                 )}
 
-                {(userRole === 'director' || userRole === 'manager') && (auditType === 'daily' || auditType === 'target') && (
+                {/* ★ 核心優化：補上 master 權限，避免按鈕消失 */}
+                {(userRole === 'master' || userRole === 'director' || userRole === 'manager') && (auditType === 'daily' || auditType === 'target') && (
                   <button onClick={openConfigModal} className="p-2 bg-stone-100 text-stone-500 rounded-xl hover:bg-stone-200 self-end" title="設定排除店家">
                     <Settings size={20}/>
                   </button>
@@ -377,7 +389,6 @@ const AuditView = () => {
           <div className="bg-rose-50 px-6 py-4 flex justify-between items-center flex-wrap gap-2">
             <h4 className="font-bold text-rose-600 flex items-center gap-2">
               <AlertCircle size={20} /> 
-              {/* ★ 修改文字為未上線 */}
               {auditType === 'therapist-daily' ? "未回報人員 (已排除休假/未上線)" : 
                auditType === 'therapist-target' ? "未設定目標人員 (已排除未上線)" :
                "未完成名單"} 
@@ -406,7 +417,6 @@ const AuditView = () => {
                 <div className="inline-flex flex-col items-center gap-2 text-emerald-500 font-bold text-lg">
                    <div className="w-12 h-12 rounded-full bg-emerald-100 flex items-center justify-center mb-2"><CheckCircle size={24}/></div>
                    全數完成！
-                   {/* ★ 修改文字為未上線 */}
                    {auditType === 'therapist-daily' && <span className="text-xs text-stone-400 font-normal">未上線、停權、休假人員已自動排除</span>}
                 </div>
               </div>
@@ -431,11 +441,13 @@ const AuditView = () => {
                   <h4 className="font-bold text-stone-400 text-xs uppercase mb-2 ml-1">{mgr} 區</h4>
                   <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
                     {stores.map(store => {
-                      const isExcluded = localExclusions.includes(store);
+                      // ★ 核心優化：Modal 也加入淨化比對
+                      const cleanS = cleanStoreName(store);
+                      const isExcluded = localExclusions.includes(store) || localExclusions.includes(cleanS);
                       return (
                         <button key={store} onClick={() => toggleExclusion(store)} className={`px-3 py-2 rounded-xl text-sm font-bold border-2 transition-all flex items-center justify-center gap-2 ${isExcluded ? "bg-rose-50 border-rose-500 text-rose-600 shadow-sm" : "bg-white border-stone-200 text-stone-500 hover:border-stone-400"}`}>
                           {isExcluded && <CheckCircle size={14}/>}
-                          {store}
+                          {cleanS}
                         </button>
                       );
                     })}
