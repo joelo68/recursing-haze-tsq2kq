@@ -6,7 +6,9 @@ export function useDashboardStats() {
   const { 
     targets, userRole, currentUser, 
     allReports, budgets, managers, selectedYear, selectedMonth, therapistReports,
-    currentBrand, therapists, dailyLoginCount, yesterdayLoginCount 
+    currentBrand, therapists, dailyLoginCount, yesterdayLoginCount,
+    // ★ 1. 新增：接收從 App.jsx 傳來的管理師月結算表
+    therapistAnnualAggregatedData 
   } = useContext(AppContext);
 
   const [viewMode, setViewMode] = useState((userRole === 'therapist' || userRole === 'trainer') ? 'therapist' : 'store');
@@ -209,7 +211,6 @@ export function useDashboardStats() {
     const yesterdayObj = new Date(); yesterdayObj.setDate(yesterdayObj.getDate() - 1);
     const yStr = `${yesterdayObj.getFullYear()}-${String(yesterdayObj.getMonth()+1).padStart(2,'0')}-${String(yesterdayObj.getDate()).padStart(2,'0')}`;
 
-    // 1. 抓出最原始的排行名單
     const rawTodayTop3 = getStoreTop3Global(tStr);
     const rawYesterdayTop3 = getStoreTop3Global(yStr);
 
@@ -226,22 +227,17 @@ export function useDashboardStats() {
         .map(([name, revenue]) => ({ name, revenue }))
         .sort((a, b) => b.revenue - a.revenue)
         .slice(0, 3);
-
-    // 2. 進行動能交叉比對，產生帶有挑釁徽章的最終名單
     
-    // 【今日榜單】：如果昨天也在榜上 ➡️ 發放 [沒打算讓]
     const storeTodayTop3 = rawTodayTop3.map(s => {
         const isStreak = rawYesterdayTop3.some(yest => yest.name === s.name);
         return { ...s, streak: isStreak, badgeText: "沒打算讓" };
     });
 
-    // 【昨日榜單】：如果也是本月總榜前三 ➡️ 發放 [底氣十足]
     const storeYesterdayTop3 = rawYesterdayTop3.map(s => {
         const inMonth = rawMonthlyTop3.some(mo => mo.name === s.name);
         return { ...s, streak: inMonth, badgeText: "底氣十足" };
     });
 
-    // 【本月榜單】：看近兩天是否有在衝刺
     const storeMonthlyTop3 = rawMonthlyTop3.map(s => {
         const inToday = rawTodayTop3.some(today => today.name === s.name);
         const inYesterday = rawYesterdayTop3.some(yest => yest.name === s.name);
@@ -262,7 +258,7 @@ export function useDashboardStats() {
     const challengeAccrualAchievement = stats.challengeAccrualBudget > 0 ? (stats.accrual / stats.challengeAccrualBudget) * 100 : 0;
 
     // ============================================================================
-    // ★ 星期權重推估 (取代原本的線性推估)
+    // ★ 星期權重推估
     // ============================================================================
     let projection = 0;
     if (daysPassed > 0) {
@@ -374,7 +370,7 @@ export function useDashboardStats() {
   }, [allReports, effectiveStores, budgets, selectedYear, selectedMonth, cleanName, brandPrefix]);
 
   const therapistStats = useMemo(() => {
-    if (!therapistReports) return { rankings: [], myStats: null, grandTotal: {}, yesterdayTop3: [], todayTop3: [] };
+    if (!therapistReports) return { rankings: [], myStats: null, grandTotal: {}, yesterdayTop3: [], todayTop3: [], myYearlyTotal: 0 }; // ★ 2. 初始值補上 myYearlyTotal
     
     const currentMonthReports = therapistReports.filter(r => {
       const dStr = r.date.replace(/-/g, "/"); const d = new Date(dStr);
@@ -425,7 +421,21 @@ export function useDashboardStats() {
     });
     
     let myStats = null;
-    if (userRole === 'therapist' && currentUser) { myStats = rankings.find(r => r.id === currentUser.id); }
+    let myYearlyTotal = 0; // ★ 3. 新增：個人年度累積總業績計算
+
+    if (userRole === 'therapist' && currentUser) { 
+        myStats = rankings.find(r => r.id === currentUser.id); 
+
+        // ★ 4. 真正省流量的 YTD 算法：過去月結算 + 本月即時
+        if (therapistAnnualAggregatedData) {
+            const pastMonthsTotal = therapistAnnualAggregatedData
+                .filter(d => d.therapistId === currentUser.id && d.yearMonth !== `${selectedYear}-${String(selectedMonth).padStart(2, '0')}`)
+                .reduce((sum, d) => sum + (Number(d.totalRevenue) || 0), 0);
+            
+            const currentMonthTotal = myStats ? myStats.totalRevenue : 0;
+            myYearlyTotal = pastMonthsTotal + currentMonthTotal;
+        }
+    }
     
     const grandTotal = rankings.reduce((acc, curr) => ({ 
         totalRevenue: acc.totalRevenue + curr.totalRevenue, serviceCount: acc.serviceCount + curr.serviceCount, 
@@ -512,8 +522,10 @@ export function useDashboardStats() {
         else if (!t.storeDisplay || t.storeDisplay === "店") { t.storeDisplay = "未知店"; }
     });
 
-    return { rankings, myStats, grandTotal, yesterdayTop3, todayTop3 };
-  }, [therapistReports, selectedYear, selectedMonth, therapistEffectiveStores, allReports, cleanName, userRole, currentUser, therapists]);
+    // ★ 5. 回傳時把 myYearlyTotal 給帶出去
+    return { rankings, myStats, grandTotal, yesterdayTop3, todayTop3, myYearlyTotal };
+    // ★ 6. 依賴陣列補上 therapistAnnualAggregatedData
+  }, [therapistReports, selectedYear, selectedMonth, therapistEffectiveStores, allReports, cleanName, userRole, currentUser, therapists, therapistAnnualAggregatedData]);
 
   return {
     viewMode, setViewMode,

@@ -36,7 +36,7 @@ import LoginView from "./components/LoginView";
 // ==========================================
 // ★ 系統核心版本號 (終極動態快取版)
 // ==========================================
-const CURRENT_APP_VERSION = "2.7.4"; 
+const CURRENT_APP_VERSION = "2.7.5"; 
 
 const isNewerVersion = (local, remote) => {
   if (!remote) return true;
@@ -127,6 +127,7 @@ export default function App() {
 
   const [rawData, setRawData] = useState([]); 
   const [annualAggregatedData, setAnnualAggregatedData] = useState([]); 
+  const [therapistAnnualAggregatedData, setTherapistAnnualAggregatedData] = useState([]); // ★新增：管理師專屬結算包
   const [budgets, setBudgets] = useState({});
   const [targets, setTargets] = useState({ newASP: 3500, trafficASP: 1200 });
   const [managers, setManagers] = useState({});
@@ -449,12 +450,22 @@ export default function App() {
     if (!user) return;
     const targetYear = String(selectedYear);
 
+    // 1. 抓取店鋪結算表
     const unsubAgg = onSnapshot(
       query(getCollectionPath("monthly_aggregated"), where("year", "in", [targetYear, Number(targetYear)])),
       (s) => setAnnualAggregatedData(s.docs.map((d) => ({ id: d.id, ...d.data() })))
     );
 
-    return () => unsubAgg();
+    // ★ 2. 新增：抓取管理師結算表 (完美套用您的動態路徑)
+    const unsubTherapistAgg = onSnapshot(
+      query(getCollectionPath("therapist_monthly_aggregated"), where("year", "in", [targetYear, Number(targetYear)])),
+      (s) => setTherapistAnnualAggregatedData(s.docs.map((d) => ({ id: d.id, ...d.data() })))
+    );
+
+    return () => {
+      unsubAgg();
+      unsubTherapistAgg(); // ★ 離開時記得關閉管線
+    };
   }, [user, currentBrand, selectedYear, getCollectionPath]);
 
   useEffect(() => {
@@ -627,7 +638,7 @@ export default function App() {
 
   const publicManagers = useMemo(() => { const filtered = {}; Object.entries(managers).forEach(([mgr, stores]) => { if (!mgr.includes("未分配") && !mgr.includes("未分區")) filtered[mgr] = stores; }); return filtered; }, [managers]);
 
-  const analytics = useAnalytics(visibleRawData, visibleManagers, budgets, selectedYear, selectedMonth);
+  const analytics = useAnalytics(visibleRawData, visibleManagers, budgets, selectedYear, selectedMonth, annualAggregatedData);
   const allStoreNames = useMemo(() => { const prefix = currentBrandId === 'anniu' ? '安妞' : currentBrandId === 'yibo' ? '伊啵' : 'CYJ'; return Object.values(managers).flat().map((s) => `${prefix}${normalizeStore(s)}店`); }, [managers, currentBrandId, normalizeStore]);
 
   const fmtMoney = (val) => `$${(val || 0).toLocaleString()}`;
@@ -635,12 +646,12 @@ export default function App() {
 
   const contextValue = useMemo(() => ({
     user, loading, analytics, managers: visibleManagers, budgets, targets, rawData: visibleRawData, allReports: rawData, 
-    annualAggregatedData, 
+    annualAggregatedData, therapistAnnualAggregatedData, // ★ 把這包管理師資料交出去
     showToast, openConfirm, fmtMoney, fmtNum, inputDate, setInputDate, storeList: analytics?.storeList || [], setTargets, selectedYear, selectedMonth, permissions, storeAccounts, managerAuth, currentUser, userRole, logActivity, handleUpdateStorePassword, handleUpdateManagerPassword, handleUpdateTherapistPassword, navigateToStore, activeView, appId, 
     therapists: visibleTherapists, therapistReports: visibleTherapistReports, therapistSchedules, therapistTargets, trainerAuth, handleUpdateTrainerAuth, auditExclusions, handleUpdateAuditExclusions, currentBrand, setCurrentBrandId, getCollectionPath, getDocPath, dailyLoginCount, yesterdayLoginCount, securityConfig, isOnline,
     fetchGlobalData 
-  }), [user, loading, analytics, visibleManagers, budgets, targets, visibleRawData, rawData, annualAggregatedData, inputDate, selectedYear, selectedMonth, permissions, storeAccounts, managerAuth, currentUser, userRole, logActivity, handleUpdateStorePassword, handleUpdateManagerPassword, handleUpdateTherapistPassword, navigateToStore, activeView, appId, visibleTherapists, visibleTherapistReports, therapistSchedules, therapistTargets, trainerAuth, handleUpdateTrainerAuth, auditExclusions, handleUpdateAuditExclusions, currentBrand, setCurrentBrandId, getCollectionPath, getDocPath, dailyLoginCount, yesterdayLoginCount, securityConfig, isOnline, fetchGlobalData]);
-
+  }), [user, loading, analytics, visibleManagers, budgets, targets, visibleRawData, rawData, annualAggregatedData, therapistAnnualAggregatedData, inputDate, selectedYear, selectedMonth, permissions, storeAccounts, managerAuth, currentUser, userRole, logActivity, handleUpdateStorePassword, handleUpdateManagerPassword, handleUpdateTherapistPassword, navigateToStore, activeView, appId, visibleTherapists, visibleTherapistReports, therapistSchedules, therapistTargets, trainerAuth, handleUpdateTrainerAuth, auditExclusions, handleUpdateAuditExclusions, currentBrand, setCurrentBrandId, getCollectionPath, getDocPath, dailyLoginCount, yesterdayLoginCount, securityConfig, isOnline, fetchGlobalData]); // ★ 依賴陣列也要加
+  
   const memoizedViews = useMemo(() => {
     return (
       <main className="flex-1 p-4 md:p-8 overflow-y-auto overflow-x-hidden min-w-0 w-full relative">

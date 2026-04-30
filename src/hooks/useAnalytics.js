@@ -1,25 +1,19 @@
 import { useMemo } from 'react';
 import { toStandardDateFormat } from '../utils/helpers';
 
-export const useAnalytics = (rawData, managers, budgets, selectedYear, selectedMonth) => {
+// ★ 接收從 App.jsx 傳來的 annualAggregatedData
+export const useAnalytics = (rawData, managers, budgets, selectedYear, selectedMonth, annualAggregatedData = []) => {
   return useMemo(() => {
     const targetYear = parseInt(selectedYear);
     const monthInt = parseInt(selectedMonth);
-    const rocYear = targetYear - 1911;
 
     // ==========================================
-    // 1. 年度數據計算 (YTD - Year to Date)
+    // 1. 年度數據計算 (YTD) - 升級為省流量月結算引擎！
     // ==========================================
-    const yearlyData = rawData.filter((d) => {
-      if (!d.date) return false;
-      const dateStr = d.date.replace(/-/g, "/");
-      const [y] = dateStr.split("/").map(Number);
-      return (y === targetYear || y === rocYear);
-    });
-
-    const yearlyActual = yearlyData.reduce((acc, d) => ({
-      cash: acc.cash + (d.cash || 0) - (d.refund || 0),
-      accrual: acc.accrual + (d.accrual || 0),
+    // ★ 直接用後端算好的月結算表加總，不再撈海量日報！
+    const yearlyActual = annualAggregatedData.reduce((acc, d) => ({
+      cash: acc.cash + (Number(d.cash) || 0) - (Number(d.refund) || 0),
+      accrual: acc.accrual + (Number(d.accrual) || 0),
     }), { cash: 0, accrual: 0 });
 
     let yearlyBudget = { cash: 0, accrual: 0 };
@@ -44,13 +38,18 @@ export const useAnalytics = (rawData, managers, budgets, selectedYear, selectedM
       accrualAchievement: yearlyBudget.accrual > 0 ? (yearlyActual.accrual / yearlyBudget.accrual) * 100 : 0,
     };
 
+  
+   // ==========================================
+    // 2. 當月數據計算 
     // ==========================================
-    // 2. 當月數據計算
-    // ==========================================
-    const currentMonthData = yearlyData.filter((d) => { 
+    const rocYear = targetYear - 1911; // 補回民國年定義
+    
+    const currentMonthData = rawData.filter((d) => { 
+      if (!d.date) return false;
       const dateStr = d.date.replace(/-/g, "/");
-      const [, m] = dateStr.split("/").map(Number);
-      return m === monthInt;
+      const [y, m] = dateStr.split("/").map(Number);
+      // 直接從傳進來的 rawData 中，精準抓出今年、本月的資料
+      return (y === targetYear || y === rocYear) && m === monthInt;
     });
 
     const dates = [

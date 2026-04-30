@@ -12,7 +12,7 @@ const db = admin.firestore();
 const GEMINI_API_KEY = defineSecret('GEMINI_API_KEY');
 
 // ==========================================
-// ★ 1. 核心資料結算邏輯
+// ★ 1. 核心資料結算邏輯 (店鋪日報)
 // ==========================================
 async function updateMonthlyAggregation(change, basePath) {
   const beforeData = change.before.data() || {};
@@ -40,6 +40,50 @@ async function updateMonthlyAggregation(change, basePath) {
 }
 exports.aggregateLegacyReports = functions.firestore.document("artifacts/{appId}/public/data/daily_reports/{reportId}").onWrite(async (change, context) => updateMonthlyAggregation(change, `artifacts/${context.params.appId}/public/data/monthly_aggregated`));
 exports.aggregateBrandReports = functions.firestore.document("brands/{brandId}/daily_reports/{reportId}").onWrite(async (change, context) => updateMonthlyAggregation(change, `brands/${context.params.brandId}/monthly_aggregated`));
+
+// ==========================================
+// ★ 1.5 核心資料結算邏輯 (管理師日報) - 流量最佳化新引擎
+// ==========================================
+async function updateTherapistMonthlyAggregation(change, basePath) {
+  const beforeData = change.before.data() || {};
+  const afterData = change.after.data() || {};
+  const therapistId = afterData.therapistId || beforeData.therapistId;
+  const date = afterData.date || beforeData.date;
+  
+  if (!therapistId || !date) return null;
+  const yearMonth = date.substring(0, 7); 
+  const year = date.substring(0, 4);      
+  const key = `${yearMonth}_${therapistId}`;
+  
+  const diff = {
+    totalRevenue: (Number(afterData.totalRevenue) || 0) - (Number(beforeData.totalRevenue) || 0),
+    serviceCount: (Number(afterData.serviceCount) || 0) - (Number(beforeData.serviceCount) || 0),
+    newCustomerRevenue: (Number(afterData.newCustomerRevenue) || 0) - (Number(beforeData.newCustomerRevenue) || 0),
+    oldCustomerRevenue: (Number(afterData.oldCustomerRevenue) || 0) - (Number(beforeData.oldCustomerRevenue) || 0),
+    newCustomerCount: (Number(afterData.newCustomerCount) || 0) - (Number(beforeData.newCustomerCount) || 0),
+    oldCustomerCount: (Number(afterData.oldCustomerCount) || 0) - (Number(beforeData.oldCustomerCount) || 0),
+    newCustomerClosings: (Number(afterData.newCustomerClosings) || 0) - (Number(beforeData.newCustomerClosings) || 0),
+    returnRevenue: (Number(afterData.returnRevenue) || 0) - (Number(beforeData.returnRevenue) || 0),
+  };
+
+  const aggRef = db.collection(basePath).doc(key);
+  const updates = { 
+      id: key, 
+      yearMonth, 
+      year, 
+      therapistId,
+      therapistName: afterData.therapistName || beforeData.therapistName || "",
+      storeName: afterData.storeName || beforeData.storeName || ""
+  };
+  
+  let hasChanges = false;
+  for (const [field, val] of Object.entries(diff)) {
+    if (val !== 0) { updates[field] = admin.firestore.FieldValue.increment(val); hasChanges = true; }
+  }
+  return hasChanges ? aggRef.set(updates, { merge: true }) : null;
+}
+exports.aggregateLegacyTherapistReports = functions.firestore.document("artifacts/{appId}/public/data/therapist_daily_reports/{reportId}").onWrite(async (change, context) => updateTherapistMonthlyAggregation(change, `artifacts/${context.params.appId}/public/data/therapist_monthly_aggregated`));
+exports.aggregateBrandTherapistReports = functions.firestore.document("brands/{brandId}/therapist_daily_reports/{reportId}").onWrite(async (change, context) => updateTherapistMonthlyAggregation(change, `brands/${context.params.brandId}/therapist_monthly_aggregated`));
 
 // ==========================================
 // ★ Telegram 設定
@@ -194,7 +238,6 @@ async function getStorePerformance(startDate, endDate, storeName = null, brandNa
 
     const currentDayNum = getClampedDaysPassed(overall.dailyCash, year, month);
 
-    // ★ 修正核心：直接對「全區大包包」算推估，絕不單店加總！
     overall.projection = calculateExactFrontendProjection(overall.dailyCash, year, month, currentDayNum);
 
     Object.values(storeMap).forEach(s => {
@@ -272,7 +315,6 @@ async function getTherapistPerformance(startDate, endDate, personName = null, st
 
     const currentDayNum = getClampedDaysPassed(overall.dailyCash, year, month);
 
-    // ★ 修正核心：直接對「全區大包包」算推估
     overall.projection = calculateExactFrontendProjection(overall.dailyCash, year, month, currentDayNum);
 
     Object.values(pMap).forEach(p => {
@@ -470,7 +512,7 @@ exports.telegramWebhook = onRequest({ secrets: [GEMINI_API_KEY] }, async (req, r
 });
 
 // ==========================================
-// ★ 4. Telegram 動態定時推播巡邏員 (保留原狀)
+// ★ 4. Telegram 動態定時推播巡邏員
 // ==========================================
 exports.notificationPatrol = onSchedule({ schedule: "* * * * *", timeZone: "Asia/Taipei" }, async (event) => {
     const now = new Date();
