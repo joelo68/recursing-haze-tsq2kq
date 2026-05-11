@@ -36,7 +36,7 @@ import LoginView from "./components/LoginView";
 // ==========================================
 // ★ 系統核心版本號 (終極動態快取版)
 // ==========================================
-const CURRENT_APP_VERSION = "2.7.5"; 
+const CURRENT_APP_VERSION = "2.7.6"; 
 
 const isNewerVersion = (local, remote) => {
   if (!remote) return true;

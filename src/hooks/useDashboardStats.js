@@ -401,14 +401,30 @@ export function useDashboardStats() {
       statsMap[id].newCustomerClosings += (Number(r.newCustomerClosings) || 0); statsMap[id].returnRevenue += (Number(r.returnRevenue) || 0);
     });
 
-    const rankings = Object.values(statsMap).map(item => {
+const rankings = Object.values(statsMap).map(item => {
         const total = item.totalRevenue || 1; 
         const newMix = Math.round((item.newCustomerRevenue / total) * 100); const oldMix = Math.round((item.oldCustomerRevenue / total) * 100);
         const newCount = item.newCustomerCount || 1; const newRate = (item.newCustomerClosings / newCount) * 100;
         const oldCount = item.oldCustomerCount || 1; const newAsp = item.newCustomerRevenue / newCount; const oldAsp = item.oldCustomerRevenue / oldCount;
         const finalStoreDisplay = item.storeDisplay + '店';
-        const isSystemStaff = therapists && Array.isArray(therapists) && therapists.some(t => t.id === item.id);
-        return { ...item, storeDisplay: finalStoreDisplay, revenueMix: `${newMix}% / ${oldMix}%`, newClosingRate: newRate, newAsp, oldAsp, isSystemStaff };
+        
+        // ★ 找尋此管理師在「最新人事總表」中的資料
+        const matchedTherapist = therapists && Array.isArray(therapists) ? therapists.find(t => t.id === item.id) : null;
+        const isSystemStaff = !!matchedTherapist;
+        
+        // ★ 強制正名：如果總表有最新名字，就用最新名字覆蓋掉舊報表上的名字
+        const latestName = matchedTherapist ? matchedTherapist.name : item.name;
+
+        return { 
+            ...item, 
+            name: latestName, // ★ 輸出最新名字
+            storeDisplay: finalStoreDisplay, 
+            revenueMix: `${newMix}% / ${oldMix}%`, 
+            newClosingRate: newRate, 
+            newAsp, 
+            oldAsp, 
+            isSystemStaff 
+        };
     }).sort((a, b) => b.totalRevenue - a.totalRevenue);
 
     const totalTherapists = rankings.length;
