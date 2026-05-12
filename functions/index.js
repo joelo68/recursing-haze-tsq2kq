@@ -787,4 +787,73 @@ exports.notificationPatrol = onSchedule({ schedule: "* * * * *", timeZone: "Asia
     } catch (error) {
         console.error("❌ 巡邏員執行錯誤：", error);
     }
+}); // ⬅️ ★★★ 加上這行，幫巡邏員關門！★★★
+// ==========================================
+// ★ 5. 自動人數計數器：監控人員增減並更新公佈欄
+// ==========================================
+
+// 5.1 監控管理師名單 (Therapists)
+async function handleUserCountChange(change) {
+  const isDocCreated = !change.before.exists && change.after.exists;
+  const isDocDeleted = change.before.exists && !change.after.exists;
+
+  if (!isDocCreated && !isDocDeleted) return null; // 只是改資料，不改人數
+
+  const statsRef = db.collection("public_info").doc("stats");
+  const increment = isDocCreated ? 1 : -1;
+
+  return statsRef.set({
+    totalUsers: admin.firestore.FieldValue.increment(increment)
+  }, { merge: true });
+}
+
+// 針對舊系統路徑的監控
+exports.onLegacyTherapistChange = functions.firestore
+  .document("artifacts/{appId}/public/data/therapists/{id}")
+  .onWrite(async (change) => handleUserCountChange(change));
+
+// 針對新品牌系統路徑的監控
+exports.onBrandTherapistChange = functions.firestore
+  .document("brands/{brandId}/therapists/{id}")
+  .onWrite(async (change) => handleUserCountChange(change));
+
+// 5.2 監控店長/主管名單 (Managers)
+exports.onManagerChange = functions.firestore
+  .document("artifacts/{appId}/public/data/managers/{id}")
+  .onWrite(async (change) => handleUserCountChange(change));
+// ==========================================
+// ★ 6. 終極盤點機：一次性精準計算全系統總人數
+// ==========================================
+exports.calibrateUserCount = onRequest(async (req, res) => {
+    try {
+        let totalCount = 0;
+
+        // 1. 盤點全集團所有的管理師 (透過 collectionGroup 一次撈取所有品牌)
+        const therapistsSnap = await db.collectionGroup('therapists').get();
+        therapistsSnap.forEach(doc => {
+            // 系統預設計算所有建檔人員。
+            // 若您只想計算「在職」人員，請將下一行改為類似：if(doc.data().status === 'active') totalCount++;
+            totalCount++; 
+        });
+
+        // 2. 盤點全集團所有的店長/主管
+        const managersSnap = await db.collectionGroup('managers').get();
+        managersSnap.forEach(doc => {
+            totalCount++;
+        });
+
+        // 3. 將最精準的數字強制覆寫到公佈欄
+        await db.collection("public_info").doc("stats").set({
+            totalUsers: totalCount
+        }, { merge: true });
+
+        res.status(200).send(`
+            <h2 style="color: #4CAF50;">🎉 報告老闆：全區盤點完成！</h2>
+            <p style="font-size: 18px;">系統中目前共有 <b>${totalCount}</b> 個授權帳號。</p>
+            <p>登入畫面的數字已經為您 100% 精準校正完畢！您可以直接關閉這個網頁了。</p>
+        `);
+    } catch (error) {
+        console.error("盤點失敗:", error);
+        res.status(500).send("❌ 盤點發生錯誤: " + error.message);
+    }
 });

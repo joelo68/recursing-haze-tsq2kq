@@ -5,6 +5,7 @@ import {
   Sparkles, Crown, ArrowRight, ChevronLeft, Heart 
 } from "lucide-react";
 import { ROLES, BRANDS } from "../constants/index"; 
+import LoginCounter from './LoginCounter'; // ★ 1. 加入這行引入計數器
 
 const LoginView = ({
   appVersion = "2.2.5", 
@@ -414,6 +415,11 @@ const LoginView = ({
             </>
           )}
         </div>
+      </div>
+      
+      {/* ★ 2. 把計數器放在這裡，並加上與登入框同步的顯示/隱藏特效 ★ */}
+      <div className={`transition-all duration-500 transform ${showBrandSelector ? "opacity-0 scale-95 pointer-events-none absolute" : "opacity-100 scale-100 relative"}`}>
+        <LoginCounter />
       </div>
 
       <div className={`mt-8 text-center transition-all duration-500 transform ${showBrandSelector ? "opacity-0 scale-95 pointer-events-none absolute" : "opacity-100 scale-100 relative"}`}>
