@@ -792,12 +792,12 @@ exports.notificationPatrol = onSchedule({ schedule: "* * * * *", timeZone: "Asia
 // ★ 5. 自動人數計數器：監控人員增減並更新公佈欄
 // ==========================================
 
-// 5.1 監控管理師名單 (Therapists)
+// 共用邏輯：負責執行加減分
 async function handleUserCountChange(change) {
   const isDocCreated = !change.before.exists && change.after.exists;
   const isDocDeleted = change.before.exists && !change.after.exists;
 
-  if (!isDocCreated && !isDocDeleted) return null; // 只是改資料，不改人數
+  if (!isDocCreated && !isDocDeleted) return null; 
 
   const statsRef = db.collection("public_info").doc("stats");
   const increment = isDocCreated ? 1 : -1;
@@ -807,20 +807,63 @@ async function handleUserCountChange(change) {
   }, { merge: true });
 }
 
-// 針對舊系統路徑的監控
+// 5.1 監控管理師 (therapists)
 exports.onLegacyTherapistChange = functions.firestore
   .document("artifacts/{appId}/public/data/therapists/{id}")
   .onWrite(async (change) => handleUserCountChange(change));
 
-// 針對新品牌系統路徑的監控
 exports.onBrandTherapistChange = functions.firestore
   .document("brands/{brandId}/therapists/{id}")
   .onWrite(async (change) => handleUserCountChange(change));
 
-// 5.2 監控店長/主管名單 (Managers)
+// 5.2 監控舊版主管 (managers)
 exports.onManagerChange = functions.firestore
   .document("artifacts/{appId}/public/data/managers/{id}")
   .onWrite(async (change) => handleUserCountChange(change));
+
+exports.onBrandManagerChange = functions.firestore
+  .document("brands/{brandId}/managers/{id}")
+  .onWrite(async (change) => handleUserCountChange(change));
+
+// ★★★ 5.3 新增監視器：監控店經理名冊 (陣列變化) ★★★
+exports.onStoreAccountChange = functions.firestore
+  .document("brands/{brandId}/settings/store_account_data")
+  .onWrite(async (change) => {
+     const beforeData = change.before.data() || {};
+     const afterData = change.after.data() || {};
+     
+     // 讀取名冊內的 accounts 陣列長度
+     const beforeCount = (beforeData.accounts || []).length;
+     const afterCount = (afterData.accounts || []).length;
+     const diff = afterCount - beforeCount; // 計算新增或減少了幾人
+
+     if (diff === 0) return null; // 數量沒變就不做事
+
+     return db.collection("public_info").doc("stats").set({
+       totalUsers: admin.firestore.FieldValue.increment(diff)
+     }, { merge: true });
+  });
+
+// ★★★ 5.4 新增監視器：監控區長名冊 (物件變化) ★★★
+exports.onManagerAuthChange = functions.firestore
+  .document("brands/{brandId}/settings/manager_auth")
+  .onWrite(async (change) => {
+     const beforeData = change.before.data() || {};
+     const afterData = change.after.data() || {};
+     
+     // 讀取名冊內有幾組「名稱:密碼」的 key
+     const beforeCount = Object.keys(beforeData).length;
+     const afterCount = Object.keys(afterData).length;
+     const diff = afterCount - beforeCount;
+
+     if (diff === 0) return null;
+
+     return db.collection("public_info").doc("stats").set({
+       totalUsers: admin.firestore.FieldValue.increment(diff)
+     }, { merge: true });
+  });
+
+
 // ==========================================
 // ★ 6. 終極盤點機：一次性精準計算全系統總人數
 // ==========================================
@@ -828,21 +871,29 @@ exports.calibrateUserCount = onRequest(async (req, res) => {
     try {
         let totalCount = 0;
 
-        // 1. 盤點全集團所有的管理師 (透過 collectionGroup 一次撈取所有品牌)
+        // 1. 盤點全集團：管理師
         const therapistsSnap = await db.collectionGroup('therapists').get();
-        therapistsSnap.forEach(doc => {
-            // 系統預設計算所有建檔人員。
-            // 若您只想計算「在職」人員，請將下一行改為類似：if(doc.data().status === 'active') totalCount++;
-            totalCount++; 
-        });
+        therapistsSnap.forEach(() => { totalCount++; });
 
-        // 2. 盤點全集團所有的店長/主管
+        // 2. 盤點全集團：舊版主管 (CYJ)
         const managersSnap = await db.collectionGroup('managers').get();
-        managersSnap.forEach(doc => {
-            totalCount++;
+        managersSnap.forEach(() => { totalCount++; });
+
+        // ★★★ 3. 盤點全集團：新版店經理與區長名冊 (安妞、伊啵) ★★★
+        const settingsSnap = await db.collectionGroup('settings').get();
+        settingsSnap.forEach(doc => {
+            // 如果這份文件是店經理名冊
+            if (doc.id === 'store_account_data') {
+                const accounts = doc.data().accounts || [];
+                totalCount += accounts.length;
+            }
+            // 如果這份文件是區長名冊
+            if (doc.id === 'manager_auth') {
+                totalCount += Object.keys(doc.data() || {}).length;
+            }
         });
 
-        // 3. 將最精準的數字強制覆寫到公佈欄
+        // 寫入最終精準數字
         await db.collection("public_info").doc("stats").set({
             totalUsers: totalCount
         }, { merge: true });
@@ -850,7 +901,7 @@ exports.calibrateUserCount = onRequest(async (req, res) => {
         res.status(200).send(`
             <h2 style="color: #4CAF50;">🎉 報告老闆：全區盤點完成！</h2>
             <p style="font-size: 18px;">系統中目前共有 <b>${totalCount}</b> 個授權帳號。</p>
-            <p>登入畫面的數字已經為您 100% 精準校正完畢！您可以直接關閉這個網頁了。</p>
+            <p>安妞與伊啵的名單已全數解碼並加入計算！您可以直接關閉這個網頁了。</p>
         `);
     } catch (error) {
         console.error("盤點失敗:", error);

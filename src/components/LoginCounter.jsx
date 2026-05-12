@@ -1,31 +1,33 @@
 import React, { useState, useEffect } from 'react';
-import { doc, getDoc } from 'firebase/firestore';
+// ★ 替換點 1：將 getDoc 換成支援即時監聽的 onSnapshot
+import { doc, onSnapshot } from 'firebase/firestore'; 
 import { db } from '../config/firebase';
 
 const LoginCounter = () => {
   const [targetCount, setTargetCount] = useState(0);
   const [displayCount, setDisplayCount] = useState(0);
 
-  // 抓取人數邏輯 (保持原樣，極致省流量)
+  // ★ 替換點 2：將一次性抓取改為「即時監聽模式」
   useEffect(() => {
-    const fetchUserCount = async () => {
-      try {
-        const docRef = doc(db, "public_info", "stats");
-        const docSnap = await getDoc(docRef);
-        if (docSnap.exists()) {
-          setTargetCount(docSnap.data().totalUsers || 100);
-        } else {
-          setTargetCount(100); 
-        }
-      } catch (error) {
-        console.error("無法取得系統統計:", error);
+    const docRef = doc(db, "public_info", "stats");
+    
+    // onSnapshot 會建立一條即時連線，後端數字一變，前端立刻跟著變
+    const unsubscribe = onSnapshot(docRef, (docSnap) => {
+      if (docSnap.exists()) {
+        setTargetCount(docSnap.data().totalUsers || 100);
+      } else {
         setTargetCount(100); 
       }
-    };
-    fetchUserCount();
+    }, (error) => {
+      console.error("無法取得系統統計:", error);
+      setTargetCount(100); 
+    });
+
+    // 當離開登入畫面時，自動關閉監聽以節省效能
+    return () => unsubscribe();
   }, []);
 
-  // 數字跳動動畫 (保持原樣)
+  // 數字跳動動畫 (完全保持原樣)
   useEffect(() => {
     if (targetCount === 0) return;
     let current = 0;
@@ -44,7 +46,7 @@ const LoginCounter = () => {
 
   if (targetCount === 0) return null; 
 
-  // ★ 改造重點：全新的 UI 渲染 ★
+  // ★ 完全保留您原版的 UI 渲染與文案設計 ★
   return (
     <div className="mt-4 flex items-center justify-center animate-in fade-in duration-1000">
       <div className="inline-flex items-center gap-2.5 px-4 py-1.5 rounded-full bg-stone-200/50 border border-stone-200/60 shadow-[inset_0_1px_2px_rgba(0,0,0,0.02)] transition-all hover:bg-stone-200/80 cursor-default">
