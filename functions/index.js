@@ -908,3 +908,86 @@ exports.calibrateUserCount = onRequest(async (req, res) => {
         res.status(500).send("❌ 盤點發生錯誤: " + error.message);
     }
 });
+
+// ==========================================
+// ★ 7. 深夜精算師 5.0：純淨獨立雙軌版 (放寬濾網，保護正常大單)
+// ==========================================
+exports.calculateHistoricalProjectionCurve = onSchedule({
+    schedule: "0 3 1 * *", 
+    timeZone: "Asia/Taipei",
+    timeoutSeconds: 540,
+    memory: "1GiB"
+}, async (event) => {
+    const brands = ['cyj', 'anniu', 'yibo'];
+    const today = new Date();
+    const pastMonths = [];
+    for (let i = 1; i <= 3; i++) {
+        const d = new Date(today.getFullYear(), today.getMonth() - i, 1);
+        pastMonths.push(`${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`);
+    }
+
+    for (const brand of brands) {
+        try {
+            let storeDowData = { "BRAND_TOTAL": {} };
+            for(let i=0; i<7; i++) storeDowData["BRAND_TOTAL"][i] = { cash: [], accrual: [] };
+
+            for (const targetMonth of pastMonths) {
+                const reportsRef = db.collection("brands").doc(brand).collection("daily_reports");
+                const reportsSnap = await reportsRef.where("date", ">=", `${targetMonth}-01`).where("date", "<=", `${targetMonth}-31`).get();
+
+                reportsSnap.forEach(doc => {
+                    const data = doc.data();
+                    const store = data.storeName || data.store || "未知店";
+                    const cash = Number(data.cash) || 0;
+                    const accrual = Number(data.accrual) || 0;
+                    const dow = new Date(data.date).getDay();
+
+                    if (!storeDowData[store]) {
+                        storeDowData[store] = {};
+                        for(let i=0; i<7; i++) storeDowData[store][i] = { cash: [], accrual: [] };
+                    }
+                    storeDowData[store][dow].cash.push(cash);
+                    storeDowData[store][dow].accrual.push(accrual);
+                    storeDowData["BRAND_TOTAL"][dow].cash.push(cash);
+                    storeDowData["BRAND_TOTAL"][dow].accrual.push(accrual);
+                });
+            }
+
+            const curveRef = db.collection("brands").doc(brand).collection("settings").doc("projection_curves").collection("stores");
+            
+            // ==========================================
+            // ★ 放寬版濾網：只抓「真正的異常暴衝茶會」
+            // ==========================================
+            const processList = (list) => {
+                if (list.length > 2) {
+                    const sorted = [...list].sort((a,b)=>a-b);
+                    const mid = Math.floor(sorted.length/2);
+                    const median = sorted.length % 2 !== 0 ? sorted[mid] : (sorted[mid-1]+sorted[mid])/2;
+                    const avg = list.reduce((a,b)=>a+b,0)/list.length;
+                    
+                    // ★ 門檻大幅放寬：中位數的 4 倍，或平均值的 2.5 倍，保底 10 萬！
+                    const threshold = Math.max(median * 4, avg * 2.5, 100000); 
+                    list = list.filter(v => v <= threshold);
+                }
+                return list.length > 0 ? Math.round(list.reduce((a,b)=>a+b,0)/list.length) : 0;
+            };
+
+            for (const [storeName, dowMap] of Object.entries(storeDowData)) {
+                let cashAverages = {};
+                let accrualAverages = {};
+                for (let i = 0; i < 7; i++) {
+                    cashAverages[i] = processList(dowMap[i].cash);
+                    accrualAverages[i] = processList(dowMap[i].accrual);
+                }
+                const docId = storeName === "BRAND_TOTAL" ? "BRAND_TOTAL" : storeName.replace(/\s+/g, '').toLowerCase();
+                await curveRef.doc(docId).set({
+                    storeName, cashAverages, accrualAverages, 
+                    lastUpdated: admin.firestore.FieldValue.serverTimestamp()
+                });
+            }
+            console.log(`✅ [${brand}] 5.0 雙軌小抄 (放寬濾網) 更新完畢！`);
+        } catch (error) {
+            console.error(`❌ [${brand}] 更新失敗:`, error);
+        }
+    }
+});

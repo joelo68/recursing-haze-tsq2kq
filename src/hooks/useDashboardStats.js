@@ -1,13 +1,15 @@
 // src/hooks/useDashboardStats.js
-import { useState, useMemo, useContext } from 'react';
+import { useState, useMemo, useContext, useEffect } from 'react';
 import { AppContext } from '../AppContext';
+// ★ 新增了 collection 與 getDocs，讓我們一次把全公司的專屬小抄都抓下來
+import { doc, getDoc, collection, getDocs } from 'firebase/firestore'; 
+import { db } from '../config/firebase';
 
 export function useDashboardStats() {
   const { 
     targets, userRole, currentUser, 
     allReports, budgets, managers, selectedYear, selectedMonth, therapistReports,
     currentBrand, therapists, dailyLoginCount, yesterdayLoginCount,
-    // ★ 1. 新增：接收從 App.jsx 傳來的管理師月結算表
     therapistAnnualAggregatedData 
   } = useContext(AppContext);
 
@@ -31,6 +33,31 @@ export function useDashboardStats() {
     else { name = "CYJ"; }
     return { brandInfo: { id: normalizedId, name }, brandPrefix: name };
   }, [currentBrand]);
+  
+  // ==========================================
+  // ★ 升級版：一次抓取「全集團所有門市」的專屬推估小抄 (包含現金與權責)
+  // ==========================================
+  const [allStoreCurves, setAllStoreCurves] = useState({});
+  
+  useEffect(() => {
+      const fetchAllCurves = async () => {
+          if (!brandInfo || !brandInfo.id) return;
+          try {
+              const colRef = collection(db, "brands", brandInfo.id, "settings", "projection_curves", "stores");
+              const snap = await getDocs(colRef);
+              const dataDict = {};
+              snap.forEach(doc => {
+                  // ★ 改為存取「整包資料」，才能拿到獨立的現金與權責小抄
+                  dataDict[doc.id] = doc.data(); 
+              });
+              setAllStoreCurves(dataDict);
+          } catch (e) {
+              console.error("讀取金額小抄失敗:", e);
+          }
+      };
+      fetchAllCurves();
+  }, [brandInfo]);
+  // ==========================================
 
   const cleanName = useMemo(() => (name) => {
     if (!name) return "";
@@ -138,6 +165,9 @@ export function useDashboardStats() {
       dailyData: Array.from({ length: daysInMonth }, (_, i) => ({ date: `${m}/${i + 1}`, day: i + 1, cash: 0, traffic: 0 }))
     };
 
+    // ★ 新增：為了 Bottom-Up 推估，我們需要在這裡先把資料「按門市分類」整理好
+    const storeStatsMap = {}; 
+
     let maxDataDay = 0; 
     allReports.forEach(report => {
       const rDate = new Date(report.date);
@@ -165,6 +195,17 @@ export function useDashboardStats() {
       if (stats.dailyData[dayIndex]) {
         stats.dailyData[dayIndex].cash += cash; stats.dailyData[dayIndex].traffic += traffic;
       }
+
+      // 幫每間門市建立自己的迷你資料庫，等等才能獨立算推估
+      if (!storeStatsMap[reportStoreClean]) {
+          storeStatsMap[reportStoreClean] = {
+              cash: 0, accrual: 0, 
+              dailyData: Array.from({ length: daysInMonth }, () => ({ cash: 0 }))
+          };
+      }
+      storeStatsMap[reportStoreClean].cash += cash;
+      storeStatsMap[reportStoreClean].accrual += accrual;
+      storeStatsMap[reportStoreClean].dailyData[dayIndex].cash += cash;
     });
 
     if (isCurrentMonth) {
@@ -187,9 +228,6 @@ export function useDashboardStats() {
         }
     });
 
-    // ============================================================================
-    // ★ 正式版動能交叉比對系統 (完美維持系統秒開效能)
-    // ============================================================================
     const getStoreTop3Global = (targetDateStr) => {
         const storeMap = {};
         allReports.forEach(r => {
@@ -207,7 +245,6 @@ export function useDashboardStats() {
 
     const todayObj = new Date();
     const tStr = `${todayObj.getFullYear()}-${String(todayObj.getMonth()+1).padStart(2,'0')}-${String(todayObj.getDate()).padStart(2,'0')}`;
-    
     const yesterdayObj = new Date(); yesterdayObj.setDate(yesterdayObj.getDate() - 1);
     const yStr = `${yesterdayObj.getFullYear()}-${String(yesterdayObj.getMonth()+1).padStart(2,'0')}-${String(yesterdayObj.getDate()).padStart(2,'0')}`;
 
@@ -242,66 +279,88 @@ export function useDashboardStats() {
         const inToday = rawTodayTop3.some(today => today.name === s.name);
         const inYesterday = rawYesterdayTop3.some(yest => yest.name === s.name);
         const isStreak = inToday || inYesterday;
-        
         let txt = "穩如泰山";
         if (inToday && inYesterday) txt = "無人能擋";
         else if (inToday) txt = "火力全開";
         else if (inYesterday) txt = "緊咬不放";
-        
         return { ...s, streak: isStreak, badgeText: txt };
     });
-    // ============================================================================
 
     const achievement = stats.budget > 0 ? (stats.cash / stats.budget) * 100 : 0;
     const accrualAchievement = stats.accrualBudget > 0 ? (stats.accrual / stats.accrualBudget) * 100 : 0;
     const challengeAchievement = stats.challengeBudget > 0 ? (stats.cash / stats.challengeBudget) * 100 : 0;
     const challengeAccrualAchievement = stats.challengeAccrualBudget > 0 ? (stats.accrual / stats.challengeAccrualBudget) * 100 : 0;
 
-    // ============================================================================
-    // ★ 星期權重推估
+ // ============================================================================
+    // ★ 歷史金額填補法 (現金與權責 雙軌獨立 50/50 融合版)
     // ============================================================================
     let projection = 0;
+    let accrualProjection = 0;
+
     if (daysPassed > 0) {
-        if (daysPassed <= 5) {
-            projection = Math.round((stats.cash / daysPassed) * daysInMonth);
-        } else {
-            const validDailyCash = stats.dailyData.slice(0, daysPassed).map(d => d.cash);
-            const sortedCash = [...validDailyCash].sort((a,b) => a-b);
-            const mid = Math.floor(sortedCash.length / 2);
-            const median = sortedCash.length % 2 !== 0 ? sortedCash[mid] : (sortedCash[mid-1] + sortedCash[mid]) / 2;
-            const threshold = median * 2;
+        Object.keys(storeStatsMap).forEach(storeName => {
+            const sStats = storeStatsMap[storeName];
+            const storeId = storeName.replace(/\s+/g, '').toLowerCase();
+            
+            // 拿到這家店的整包小抄
+            const storeCurve = allStoreCurves[storeId] || allStoreCurves["BRAND_TOTAL"] || {};
+            
+            // ★ 分別拿出「現金小抄」與「權責小抄」
+            // ★ 拔除 dailyAverages 墊檔！強迫系統只讀取純現金與純權責的歷史！
+            const cashAverages = storeCurve.cashAverages || {};
+            const accrualAverages = storeCurve.accrualAverages || {};
 
-            const dowData = { 0:[], 1:[], 2:[], 3:[], 4:[], 5:[], 6:[] };
-            let normalCashSum = 0;
-            let normalDaysCount = 0;
+            // 算出這家店本月目前的「現金日均」與「權責日均」
+            const currentCashDailyAvg = sStats.cash / daysPassed;
+            const currentAccrualDailyAvg = sStats.accrual / daysPassed;
+            
+            let remainingProjectedCash = 0;
+            let remainingProjectedAccrual = 0;
 
-            for (let i = 1; i <= daysPassed; i++) {
-                const cash = validDailyCash[i - 1];
-                if (cash <= threshold || median === 0) {
-                    const dObj = new Date(y, m - 1, i);
-                    dowData[dObj.getDay()].push(cash);
-                    normalCashSum += cash;
-                    normalDaysCount++;
-                }
-            }
-
-            const fallbackAvg = normalDaysCount > 0 ? (normalCashSum / normalDaysCount) : 0;
-            const dowAvg = {};
-            for (let i = 0; i < 7; i++) {
-                dowAvg[i] = dowData[i].length > 0 ? dowData[i].reduce((a,b)=>a+b,0)/dowData[i].length : fallbackAvg;
-            }
-
-            let projectedRemaining = 0;
             for (let d = daysPassed + 1; d <= daysInMonth; d++) {
                 const futureDate = new Date(y, m - 1, d);
-                projectedRemaining += dowAvg[futureDate.getDay()];
-            }
-            projection = Math.round(stats.cash + projectedRemaining);
-        }
-    }
-    const accrualProjection = daysPassed > 0 ? Math.round((stats.accrual / daysPassed) * daysInMonth) : 0;
-    // ============================================================================
+                const dow = futureDate.getDay();
+                
+                // ----------------------------------------------------
+                // 🍏 【現金推估軌道】(保留您最滿意的 50/50 邏輯)
+                // ----------------------------------------------------
+                const historyCashValue = (cashAverages[dow] !== undefined) 
+                    ? cashAverages[dow] 
+                    : currentCashDailyAvg;
+                
+                let blendedCashValue = historyCashValue;
 
+                if (historyCashValue > currentCashDailyAvg) {
+                    blendedCashValue = (currentCashDailyAvg * 0.5) + (historyCashValue * 0.5);
+                } else {
+                    blendedCashValue = Math.max(currentCashDailyAvg, historyCashValue);
+                }
+                remainingProjectedCash += blendedCashValue;
+
+                // ----------------------------------------------------
+                // 🍊 【權責推估軌道】(完全比照辦理，獨立使用權責小抄)
+                // ----------------------------------------------------
+                const historyAccrualValue = (accrualAverages[dow] !== undefined) 
+                    ? accrualAverages[dow] 
+                    : currentAccrualDailyAvg;
+                
+                let blendedAccrualValue = historyAccrualValue;
+
+                if (historyAccrualValue > currentAccrualDailyAvg) {
+                    // 權責也享有 50/50 的動能校正！
+                    blendedAccrualValue = (currentAccrualDailyAvg * 0.5) + (historyAccrualValue * 0.5);
+                } else {
+                    blendedAccrualValue = Math.max(currentAccrualDailyAvg, historyAccrualValue);
+                }
+                remainingProjectedAccrual += blendedAccrualValue;
+            }
+
+            // 分別把推估好的未來金額，加上目前已入袋的金額
+            projection += Math.round(sStats.cash + remainingProjectedCash);
+            accrualProjection += Math.round(sStats.accrual + remainingProjectedAccrual);
+        });
+    }
+    // ===========================================================================
     const avgTrafficASP = stats.traffic > 0 ? Math.round(stats.operationalAccrual / stats.traffic) : 0;
     const avgNewCustomerASP = stats.newCustomers > 0 ? Math.round(stats.newCustomerSales / stats.newCustomers) : 0;
 
@@ -327,7 +386,8 @@ export function useDashboardStats() {
       avgTrafficASP, avgNewCustomerASP, daysPassed, daysInMonth, newRevMix, oldRevMix, newCountMix, oldCountMix,
       storeMonthlyTop3, storeTodayTop3, storeYesterdayTop3 
     };
-  }, [allReports, budgets, selectedYear, selectedMonth, effectiveStores, brandPrefix, cleanName]);
+  // ★ 監視清單換成了包含全部小抄的字典
+  }, [allReports, budgets, selectedYear, selectedMonth, effectiveStores, brandPrefix, cleanName, allStoreCurves]);
 
   const myStoreRankings = useMemo(() => {
     if (!allReports) return [];
@@ -370,7 +430,7 @@ export function useDashboardStats() {
   }, [allReports, effectiveStores, budgets, selectedYear, selectedMonth, cleanName, brandPrefix]);
 
   const therapistStats = useMemo(() => {
-    if (!therapistReports) return { rankings: [], myStats: null, grandTotal: {}, yesterdayTop3: [], todayTop3: [], myYearlyTotal: 0 }; // ★ 2. 初始值補上 myYearlyTotal
+    if (!therapistReports) return { rankings: [], myStats: null, grandTotal: {}, yesterdayTop3: [], todayTop3: [], myYearlyTotal: 0 }; 
     
     const currentMonthReports = therapistReports.filter(r => {
       const dStr = r.date.replace(/-/g, "/"); const d = new Date(dStr);
@@ -401,23 +461,20 @@ export function useDashboardStats() {
       statsMap[id].newCustomerClosings += (Number(r.newCustomerClosings) || 0); statsMap[id].returnRevenue += (Number(r.returnRevenue) || 0);
     });
 
-const rankings = Object.values(statsMap).map(item => {
+    const rankings = Object.values(statsMap).map(item => {
         const total = item.totalRevenue || 1; 
         const newMix = Math.round((item.newCustomerRevenue / total) * 100); const oldMix = Math.round((item.oldCustomerRevenue / total) * 100);
         const newCount = item.newCustomerCount || 1; const newRate = (item.newCustomerClosings / newCount) * 100;
         const oldCount = item.oldCustomerCount || 1; const newAsp = item.newCustomerRevenue / newCount; const oldAsp = item.oldCustomerRevenue / oldCount;
         const finalStoreDisplay = item.storeDisplay + '店';
         
-        // ★ 找尋此管理師在「最新人事總表」中的資料
         const matchedTherapist = therapists && Array.isArray(therapists) ? therapists.find(t => t.id === item.id) : null;
         const isSystemStaff = !!matchedTherapist;
-        
-        // ★ 強制正名：如果總表有最新名字，就用最新名字覆蓋掉舊報表上的名字
         const latestName = matchedTherapist ? matchedTherapist.name : item.name;
 
         return { 
             ...item, 
-            name: latestName, // ★ 輸出最新名字
+            name: latestName, 
             storeDisplay: finalStoreDisplay, 
             revenueMix: `${newMix}% / ${oldMix}%`, 
             newClosingRate: newRate, 
@@ -437,12 +494,11 @@ const rankings = Object.values(statsMap).map(item => {
     });
     
     let myStats = null;
-    let myYearlyTotal = 0; // ★ 3. 新增：個人年度累積總業績計算
+    let myYearlyTotal = 0; 
 
     if (userRole === 'therapist' && currentUser) { 
         myStats = rankings.find(r => r.id === currentUser.id); 
 
-        // ★ 4. 真正省流量的 YTD 算法：過去月結算 + 本月即時
         if (therapistAnnualAggregatedData) {
             const pastMonthsTotal = therapistAnnualAggregatedData
                 .filter(d => d.therapistId === currentUser.id && d.yearMonth !== `${selectedYear}-${String(selectedMonth).padStart(2, '0')}`)
@@ -538,9 +594,7 @@ const rankings = Object.values(statsMap).map(item => {
         else if (!t.storeDisplay || t.storeDisplay === "店") { t.storeDisplay = "未知店"; }
     });
 
-    // ★ 5. 回傳時把 myYearlyTotal 給帶出去
     return { rankings, myStats, grandTotal, yesterdayTop3, todayTop3, myYearlyTotal };
-    // ★ 6. 依賴陣列補上 therapistAnnualAggregatedData
   }, [therapistReports, selectedYear, selectedMonth, therapistEffectiveStores, allReports, cleanName, userRole, currentUser, therapists, therapistAnnualAggregatedData]);
 
   return {
