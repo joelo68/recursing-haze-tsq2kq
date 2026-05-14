@@ -7,6 +7,23 @@ import { formatLocalYYYYMMDD, toStandardDateFormat } from "../utils/helpers";
 import { ViewWrapper, Card } from "./SharedUI";
 import SmartDatePicker from "./SmartDatePicker";
 
+// ★ 終極翻譯蒟蒻
+const safeGetDateStr = (val) => {
+    if (!val) return "";
+    if (typeof val?.toDate === 'function') {
+        const d = val.toDate();
+        return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;
+    }
+    if (val instanceof Date) {
+        return `${val.getFullYear()}-${String(val.getMonth()+1).padStart(2,'0')}-${String(val.getDate()).padStart(2,'0')}`;
+    }
+    if (typeof val === 'string') {
+        const m = val.match(/(\d{4})[-\/](\d{1,2})[-\/](\d{1,2})/);
+        if (m) return `${m[1]}-${m[2].padStart(2,'0')}-${m[3].padStart(2,'0')}`;
+    }
+    return String(val);
+};
+
 const AuditView = () => {
   const {
     managers,      
@@ -65,12 +82,47 @@ const AuditView = () => {
     return name;
   }, [currentBrand]);
 
-  // ★ 核心優化：更強大的店名淨化器
   const cleanStoreName = useCallback((name) => {
     if (!name) return "";
     let core = String(name).replace(/^(CYJ|Anew\s*\(安妞\)|Yibo\s*\(伊啵\)|安妞|伊啵|Anew|Yibo)\s*/i, '').trim();
     if (core === "新店") return "新店"; 
     return core.replace(/店$/, '').trim();
+  }, []);
+
+  // ★ 終極雷達：上帝視角匹配
+  const isTherapistMatch = useCallback((str, t) => {
+    if (!str || !t) return false;
+    const s = String(str).toLowerCase().trim();
+    const tid = String(t.id || "").toLowerCase().trim();
+    const tname = String(t.name || "").toLowerCase().trim();
+
+    if (!s) return false;
+    if (tid && s === tid) return true;
+    if (tname && s === tname) return true;
+    if (tid.length > 5 && s.includes(tid)) return true;
+    if (s.length > 5 && tid.includes(s)) return true;
+
+    const getChi = (x) => (x.match(/[\u4e00-\u9fa5]+/g) || []).join('');
+    const sChi = getChi(s);
+    const tidChi = getChi(tid);
+    const tnameChi = getChi(tname);
+
+    if (sChi.length >= 2) {
+        if (tidChi && (sChi.includes(tidChi) || tidChi.includes(sChi))) return true;
+        if (tnameChi && (sChi.includes(tnameChi) || tnameChi.includes(sChi))) return true;
+    }
+
+    const getEng = (x) => (x.match(/[a-z]+/g) || []).join('');
+    const sEng = getEng(s);
+    const tidEng = getEng(tid);
+    const tnameEng = getEng(tname);
+
+    if (sEng.length >= 3) {
+        if (tidEng.length >= 3 && (sEng.includes(tidEng) || tidEng.includes(sEng))) return true;
+        if (tnameEng.length >= 3 && (sEng.includes(tnameEng) || tnameEng.includes(sEng))) return true;
+    }
+
+    return false;
   }, []);
 
   const openConfigModal = () => {
@@ -84,7 +136,6 @@ const AuditView = () => {
     showToast("排除名單已更新", "success");
   };
 
-  // ★ 核心優化：儲存時強制淨化店名，確保比對精準
   const toggleExclusion = (store) => {
     const cleanS = cleanStoreName(store);
     setLocalExclusions(prev => {
@@ -132,43 +183,101 @@ const AuditView = () => {
   }, [therapists, selectedYear, selectedMonth]);
 
   const normalizedRawData = useMemo(() => {
-    return rawData.map(report => {
-      const safeDate = report.date ? toStandardDateFormat(report.date) : "";
-      return { ...report, storeName: report.storeName, date: safeDate };
-    });
+    return rawData.map(report => ({
+      ...report, 
+      storeName: report.storeName, 
+      date: safeGetDateStr(report.date) 
+    }));
   }, [rawData]);
 
+  // ============================================================================
+  // ★ 行事曆大升級：強制換發標準制服，並補發所有到職/離職免死金牌
+  // ============================================================================
   const normalizedTherapistReports = useMemo(() => {
-    const realReports = therapistReports.map(report => ({
-      ...report, storeName: report.therapistId, date: report.date ? toStandardDateFormat(report.date) : ""
-    }));
+    // 1. 整理所有原始報告的日期
+    const parsedReports = (therapistReports || []).map(report => {
+      let safeDate = safeGetDateStr(report.date);
+      if (!safeDate && report.id) {
+          const match = String(report.id).match(/(\d{4}-\d{2}-\d{2})/);
+          if (match) safeDate = match[1];
+      }
+      return { ...report, parsedDate: safeDate };
+    });
+
+    // 2. 真實報告強制「標準化」：用雷達尋找真正主人，把名字換成系統行事曆看得懂的 t.id
+    const realReports = parsedReports.map(report => {
+        let standardId = report.therapistId || report.therapistName || report.id;
+        const matchedT = therapists.find(t => 
+            isTherapistMatch(report.therapistId, t) || 
+            isTherapistMatch(report.therapistName, t) || 
+            isTherapistMatch(report.id, t) ||
+            isTherapistMatch(report.storeName, t)
+        );
+        if (matchedT) standardId = matchedT.id; // 換上標準制服
+        return { ...report, storeName: standardId, date: report.parsedDate };
+    });
 
     if (auditType !== 'therapist-daily') return realReports;
 
     const ghostReports = [];
-    const y = parseInt(selectedYear);
-    const m = parseInt(selectedMonth);
+    const yStr = String(selectedYear);
+    const mNum = parseInt(selectedMonth, 10);
+    const daysInMonth = new Date(parseInt(yStr), mNum, 0).getDate();
 
     therapists.forEach(t => {
       const obDate = t.onboardDate ? new Date(t.onboardDate) : new Date("2000-01-01");
-      if (obDate > new Date(y, m, 0)) return; 
+      obDate.setHours(0,0,0,0);
       
       const isResignedStatus = t.status === 'resigned' || t.isActive === false || t.isResigned === true;
-      if (t.resignDate && new Date(t.resignDate) < new Date(y, m - 1, 1)) return;
-      if (!t.resignDate && isResignedStatus) return;
+      const rDate = t.resignDate ? new Date(t.resignDate) : null;
+      if (rDate) rDate.setHours(0,0,0,0);
 
-      const scheduleKey = `${t.id}_${y}_${m}`;
-      const schedule = therapistSchedules[scheduleKey];
-      const daysOff = schedule?.daysOff || []; 
+      if (obDate > new Date(yStr, mNum, 0)) return; 
+      if (rDate && rDate < new Date(yStr, mNum - 1, 1)) return;
+      if (!rDate && isResignedStatus) return;
 
-      daysOff.forEach(day => {
-        const dateStr = `${y}-${m.toString().padStart(2, '0')}-${day.toString().padStart(2, '0')}`;
-        ghostReports.push({ id: `ghost_${t.id}_${dateStr}`, storeName: t.id, date: dateStr, isGhost: true, revenue: 0 });
+      // 抓取本月休假陣列
+      let daysOff = [];
+      Object.entries(therapistSchedules || {}).forEach(([k, sched]) => {
+          if (isTherapistMatch(k, t) || isTherapistMatch(sched?.therapistId, t) || isTherapistMatch(sched?.therapistName, t)) {
+              const hasYear = k.includes(yStr) || String(sched?.year) === yStr;
+              const hasMonth = k.includes(`_${mNum}`) || k.includes(`_${String(mNum).padStart(2,'0')}`) || String(sched?.month) === String(mNum) || k.includes(`${yStr}-${String(mNum).padStart(2,'0')}`);
+              if (hasYear && hasMonth) {
+                  daysOff = [...new Set([...daysOff, ...(sched?.daysOff || [])])];
+              }
+          }
       });
+
+      // 3. 全月掃描：補發休假、到職前、離職後的免死金牌
+      for (let d = 1; d <= daysInMonth; d++) {
+          const currentDate = new Date(yStr, mNum - 1, d);
+          currentDate.setHours(0,0,0,0);
+          const dateStr = `${yStr}-${mNum.toString().padStart(2, '0')}-${d.toString().padStart(2, '0')}`;
+
+          let isExcused = false;
+
+          // 未到職 / 已離職
+          if (currentDate < obDate) isExcused = true;
+          if (rDate && currentDate > rDate) isExcused = true;
+          
+          // 有休假
+          if (!isExcused) {
+              const isOff = daysOff.some(offDay => {
+                  if (String(offDay).includes('-')) return String(offDay) === dateStr;
+                  return Number(offDay) === d;
+              });
+              if (isOff) isExcused = true;
+          }
+
+          if (isExcused) {
+              ghostReports.push({ id: `ghost_${t.id}_${dateStr}`, storeName: t.id, date: dateStr, isGhost: true, revenue: 0 });
+          }
+      }
     });
 
     return [...realReports, ...ghostReports];
-  }, [therapistReports, auditType, selectedYear, selectedMonth, therapists, therapistSchedules]);
+  }, [therapistReports, auditType, selectedYear, selectedMonth, therapists, therapistSchedules, isTherapistMatch]);
+  // ============================================================================
 
   const isTherapistMode = auditType === 'therapist-daily';
   const calendarStores = isTherapistMode ? activeTherapistsForCalendar : activeStoresForCalendar;
@@ -176,13 +285,12 @@ const AuditView = () => {
 
   const auditData = useMemo(() => {
     if (!checkDate) return { submitted: [], missing: [], missingByManager: {} };
-    const targetDate = toStandardDateFormat(checkDate);
-    const submittedRaw = rawData.filter((d) => toStandardDateFormat(d.date) === targetDate).map((d) => d.storeName);
+    const targetDate = safeGetDateStr(checkDate);
+    const submittedRaw = rawData.filter((d) => safeGetDateStr(d.date) === targetDate).map((d) => d.storeName);
     const missingByManager = {};
     Object.entries(managers).forEach(([manager, stores]) => {
       const missing = [];
       stores.forEach((s) => {
-        // ★ 核心優化：雙重驗證，避免店名髒資料導致過濾失敗
         const cleanS = cleanStoreName(s);
         if (auditExclusions.includes(s) || auditExclusions.includes(cleanS)) return; 
         
@@ -201,7 +309,6 @@ const AuditView = () => {
     Object.entries(managers).forEach(([manager, stores]) => {
       const missing = [];
       stores.forEach((s) => {
-        // ★ 核心優化：雙重驗證
         const cleanS = cleanStoreName(s);
         if (auditExclusions.includes(s) || auditExclusions.includes(cleanS)) return;
         
@@ -218,21 +325,15 @@ const AuditView = () => {
   const therapistAuditData = useMemo(() => {
     if (!checkDate) return { missing: [], missingByManager: {} };
     
-    const targetDateStr = toStandardDateFormat(checkDate);
-    const targetDateObj = new Date(targetDateStr);
-    targetDateObj.setHours(0,0,0,0); 
-    
-    const year = targetDateObj.getFullYear().toString();
-    const month = targetDateObj.getMonth() + 1;
-    const day = targetDateObj.getDate();
-
-    const submittedIds = new Set(
-      (therapistReports || [])
-        .filter(r => toStandardDateFormat(r.date) === targetDateStr)
-        .map(r => r.therapistId)
-    );
+    const targetDateStr = safeGetDateStr(checkDate);
+    const [yStr, mStr, dStr] = targetDateStr.split('-');
+    const year = yStr;
+    const month = parseInt(mStr, 10);
+    const day = parseInt(dStr, 10);
 
     const missingByManager = {};
+    const targetDateObj = new Date(targetDateStr);
+    targetDateObj.setHours(0,0,0,0);
     
     (therapists || []).forEach(t => {
       const obDate = t.onboardDate ? new Date(t.onboardDate) : new Date("2000-01-01");
@@ -248,12 +349,40 @@ const AuditView = () => {
         return; 
       }
 
-      const scheduleKey = `${t.id}_${year}_${month}`;
-      const schedule = therapistSchedules[scheduleKey];
-      const isOff = schedule?.daysOff?.includes(day);
+      let isOff = false;
+      Object.entries(therapistSchedules || {}).forEach(([k, sched]) => {
+          if (isTherapistMatch(k, t) || isTherapistMatch(sched?.therapistId, t) || isTherapistMatch(sched?.therapistName, t)) {
+              const hasYear = k.includes(year) || String(sched?.year) === year;
+              const hasMonth = k.includes(`_${month}`) || k.includes(`_${String(month).padStart(2,'0')}`) || String(sched?.month) === String(month) || k.includes(`${year}-${String(month).padStart(2,'0')}`);
+              if (hasYear && hasMonth) {
+                  if (sched?.daysOff?.some(d => {
+                      const dStrArg = String(d);
+                      if (dStrArg.includes('-')) return dStrArg === targetDateStr;
+                      return Number(d) === day;
+                  })) {
+                      isOff = true;
+                  }
+              }
+          }
+      });
+
       if (isOff) return; 
 
-      if (!submittedIds.has(t.id)) {
+      let hasSubmitted = false;
+      (therapistReports || []).forEach(r => {
+          const d1 = safeGetDateStr(r.date);
+          const d2 = String(r.id || "");
+          const isToday = d1 === targetDateStr || d2.includes(targetDateStr);
+
+          if (isToday) {
+              const searchPool = [r.therapistId, r.therapistName, r.id, r.storeName].filter(Boolean);
+              if (searchPool.some(val => isTherapistMatch(val, t))) {
+                  hasSubmitted = true;
+              }
+          }
+      });
+
+      if (!hasSubmitted) {
         const mgr = t.manager || "未分區";
         if (!missingByManager[mgr]) missingByManager[mgr] = [];
         missingByManager[mgr].push(`${t.name} (${t.store}店)`);
@@ -261,16 +390,16 @@ const AuditView = () => {
     });
 
     return { missing: Object.values(missingByManager).flat(), missingByManager };
-  }, [checkDate, therapists, therapistReports, therapistSchedules]);
-
+  }, [checkDate, therapists, therapistReports, therapistSchedules, isTherapistMatch]);
+   
   const therapistTargetAuditData = useMemo(() => {
     const missingByManager = {};
-    const y = parseInt(selectedYear);
-    const m = parseInt(selectedMonth);
-    const monthKey = m.toString(); 
+    const yStr = String(selectedYear);
+    const mNum = parseInt(selectedMonth, 10);
+    const monthKey = mNum.toString(); 
     
-    const monthStart = new Date(y, m - 1, 1);
-    const monthEnd = new Date(y, m, 0);
+    const monthStart = new Date(parseInt(yStr), mNum - 1, 1);
+    const monthEnd = new Date(parseInt(yStr), mNum, 0);
 
     (therapists || []).forEach(t => {
        const obDate = t.onboardDate ? new Date(t.onboardDate) : new Date("2000-01-01");
@@ -284,10 +413,18 @@ const AuditView = () => {
            return;
        }
 
-       const docId = `${t.id}_${selectedYear}`;
-       const data = therapistTargets[docId];
-       const targetVal = data?.monthlyTargets?.[monthKey];
-       const hasTarget = targetVal && parseInt(targetVal) > 0;
+       let hasTarget = false;
+       Object.entries(therapistTargets || {}).forEach(([k, targetObj]) => {
+           if (isTherapistMatch(k, t) || isTherapistMatch(targetObj?.therapistId, t) || isTherapistMatch(targetObj?.therapistName, t)) {
+               const hasYear = k.includes(yStr) || String(targetObj?.year) === yStr;
+               if (hasYear) {
+                   const targetVal = targetObj?.monthlyTargets?.[monthKey] || targetObj?.[monthKey];
+                   if (targetVal && parseInt(targetVal) > 0) {
+                       hasTarget = true;
+                   }
+               }
+           }
+       });
 
        if (!hasTarget) {
          const mgr = t.manager || "未分區";
@@ -297,7 +434,7 @@ const AuditView = () => {
     });
 
     return { missing: Object.values(missingByManager).flat(), missingByManager };
-  }, [therapists, therapistTargets, selectedYear, selectedMonth]);
+  }, [therapists, therapistTargets, selectedYear, selectedMonth, isTherapistMatch]);
 
   const activeData = 
     auditType === "daily" ? auditData : 
@@ -367,7 +504,6 @@ const AuditView = () => {
                    </div>
                 )}
 
-                {/* ★ 核心優化：補上 master 權限，避免按鈕消失 */}
                 {(userRole === 'master' || userRole === 'director' || userRole === 'manager') && (auditType === 'daily' || auditType === 'target') && (
                   <button onClick={openConfigModal} className="p-2 bg-stone-100 text-stone-500 rounded-xl hover:bg-stone-200 self-end" title="設定排除店家">
                     <Settings size={20}/>
@@ -441,7 +577,6 @@ const AuditView = () => {
                   <h4 className="font-bold text-stone-400 text-xs uppercase mb-2 ml-1">{mgr} 區</h4>
                   <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
                     {stores.map(store => {
-                      // ★ 核心優化：Modal 也加入淨化比對
                       const cleanS = cleanStoreName(store);
                       const isExcluded = localExclusions.includes(store) || localExclusions.includes(cleanS);
                       return (

@@ -991,3 +991,117 @@ exports.calculateHistoricalProjectionCurve = onSchedule({
         }
     }
 });
+// ==========================================
+// ★ 8. 系統維護工具：一鍵補欄位 X光掃描版 (V3)
+// ==========================================
+exports.healTherapistData = onRequest(async (req, res) => {
+    try {
+        let batch = db.batch();
+        let commitCount = 0;
+        let reportCount = 0, scheduleCount = 0, targetCount = 0;
+
+        const commitAndReset = async () => {
+            if (commitCount > 0) {
+                await batch.commit();
+                batch = db.batch();
+                commitCount = 0;
+            }
+        };
+
+        // ---------------------------------------------------------
+        // 1. 日報掃描
+        // ---------------------------------------------------------
+        const reportsSnap = await db.collectionGroup('therapist_daily_reports').get();
+        const reportFound = reportsSnap.size; // 紀錄總共找到幾筆
+        for (const doc of reportsSnap.docs) {
+            const data = doc.data();
+            const docId = doc.id;
+            let needsUpdate = false;
+            let updateData = {};
+
+            const dateMatch = docId.match(/(\d{4}-\d{2}-\d{2})/);
+            if (dateMatch && !data.date) { updateData.date = dateMatch[1]; needsUpdate = true; }
+
+            let extractedUid = docId.replace(/\d{4}-\d{2}-\d{2}/g, '').replace(/_/g, '').trim();
+            if (extractedUid.length > 5 && !data.therapistId) { updateData.therapistId = extractedUid; needsUpdate = true; }
+
+            if (needsUpdate) {
+                batch.update(doc.ref, updateData);
+                commitCount++; reportCount++;
+                if (commitCount >= 400) await commitAndReset();
+            }
+        }
+
+        // ---------------------------------------------------------
+        // 2. 班表掃描 (強化暴力破解檔名)
+        // ---------------------------------------------------------
+        const schedulesSnap = await db.collectionGroup('therapist_schedules').get();
+        const scheduleFound = schedulesSnap.size;
+        for (const doc of schedulesSnap.docs) {
+            const data = doc.data();
+            const docId = doc.id;
+            let needsUpdate = false;
+            let updateData = {};
+
+            const yearMatch = docId.match(/(202\d)/);
+            if (yearMatch && !data.year) { updateData.year = yearMatch[1]; needsUpdate = true; }
+
+            // 把所有非英數字元切開，找出長度大於10的亂碼當作 UID
+            const parts = docId.split(/[_ \-]/);
+            const possibleUid = parts.find(p => p.length > 10);
+            if (possibleUid && !data.therapistId) { updateData.therapistId = possibleUid; needsUpdate = true; }
+
+            if (needsUpdate) {
+                batch.update(doc.ref, updateData);
+                commitCount++; scheduleCount++;
+                if (commitCount >= 400) await commitAndReset();
+            }
+        }
+
+        // ---------------------------------------------------------
+        // 3. 目標掃描
+        // ---------------------------------------------------------
+        const targetsSnap = await db.collectionGroup('therapist_targets').get();
+        const targetFound = targetsSnap.size;
+        for (const doc of targetsSnap.docs) {
+            const data = doc.data();
+            const docId = doc.id;
+            let needsUpdate = false;
+            let updateData = {};
+
+            const yearMatch = docId.match(/(202\d)/);
+            if (yearMatch && !data.year) { updateData.year = yearMatch[1]; needsUpdate = true; }
+
+            const parts = docId.split(/[_ \-]/);
+            const possibleUid = parts.find(p => p.length > 10);
+            if (possibleUid && !data.therapistId) { updateData.therapistId = possibleUid; needsUpdate = true; }
+
+            if (needsUpdate) {
+                batch.update(doc.ref, updateData);
+                commitCount++; targetCount++;
+                if (commitCount >= 400) await commitAndReset();
+            }
+        }
+
+        await commitAndReset();
+
+        // 輸出診斷報告
+        res.status(200).send(`
+            <div style="font-family: sans-serif; padding: 30px; max-width: 600px; margin: 0 auto; background: #fff; border-radius: 12px; box-shadow: 0 4px 12px rgba(0,0,0,0.1);">
+                <h2 style="color: #10B981; border-bottom: 2px solid #ECFDF5; padding-bottom: 10px;">🩺 V3 系統 X光掃描與修復報告</h2>
+                <p style="font-size: 16px;">以下是系統實際在 Firebase 裡面看到的資料量，以及成功補齊欄位的數量：</p>
+                <div style="background: #F9FAFB; padding: 20px; border-radius: 8px; margin: 20px 0;">
+                    <ul style="font-size: 16px; line-height: 2; margin: 0; padding-left: 20px;">
+                        <li>📝 <b>日報</b>：共掃描到 <span style="color:#F59E0B; font-weight:bold;">${reportFound}</span> 筆 ➔ 補齊了 <b style="color: #3B82F6;">${reportCount}</b> 筆欄位</li>
+                        <li>📅 <b>班表</b>：共掃描到 <span style="color:#F59E0B; font-weight:bold;">${scheduleFound}</span> 筆 ➔ 補齊了 <b style="color: #3B82F6;">${scheduleCount}</b> 筆欄位</li>
+                        <li>🎯 <b>目標</b>：共掃描到 <span style="color:#F59E0B; font-weight:bold;">${targetFound}</span> 筆 ➔ 補齊了 <b style="color: #3B82F6;">${targetCount}</b> 筆欄位</li>
+                    </ul>
+                </div>
+                <p style="color: #6B7280; font-size: 14px;">※ 診斷重點：如果「掃描到」的數量為 0，代表資料表名稱不對；如果「掃描到」很多但「補齊」很少，代表您的資料早就有欄位了（問題出在前端）！</p>
+            </div>
+        `);
+    } catch (error) {
+        console.error("清洗失敗:", error);
+        res.status(500).send("❌ 清洗發生錯誤: " + error.message);
+    }
+});
