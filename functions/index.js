@@ -992,13 +992,13 @@ exports.calculateHistoricalProjectionCurve = onSchedule({
     }
 });
 // ==========================================
-// ★ 8. 系統維護工具：一鍵補欄位 X光掃描版 (V3)
+// ★ 8. 系統維護工具：V5 終極除垢清道夫 (專治逗號與陣列物件)
 // ==========================================
 exports.healTherapistData = onRequest(async (req, res) => {
     try {
         let batch = db.batch();
         let commitCount = 0;
-        let reportCount = 0, scheduleCount = 0, targetCount = 0;
+        let reportCount = 0, scheduleCount = 0;
 
         const commitAndReset = async () => {
             if (commitCount > 0) {
@@ -1009,23 +1009,31 @@ exports.healTherapistData = onRequest(async (req, res) => {
         };
 
         // ---------------------------------------------------------
-        // 1. 日報掃描
+        // 1. 日報深度洗淨：把業績裡的 $ 和 , 全拔掉，強轉數字
         // ---------------------------------------------------------
         const reportsSnap = await db.collectionGroup('therapist_daily_reports').get();
-        const reportFound = reportsSnap.size; // 紀錄總共找到幾筆
         for (const doc of reportsSnap.docs) {
             const data = doc.data();
-            const docId = doc.id;
-            let needsUpdate = false;
             let updateData = {};
+            let changed = false;
 
-            const dateMatch = docId.match(/(\d{4}-\d{2}-\d{2})/);
-            if (dateMatch && !data.date) { updateData.date = dateMatch[1]; needsUpdate = true; }
+            // 暴力萃取純數字 (對付 "1,500" 或 "$2000")
+            if (data.totalRevenue !== undefined) {
+                let cleanRev = data.totalRevenue;
+                if (typeof cleanRev === 'string') {
+                    // 拔除所有非數字與小數點的字元
+                    cleanRev = Number(cleanRev.replace(/[^0-9.-]+/g, ""));
+                }
+                const finalRev = Number(cleanRev) || 0;
+                if (data.totalRevenue !== finalRev) {
+                    updateData.totalRevenue = finalRev;
+                    // 同步修正 cash 欄位，徹底取悅日曆
+                    updateData.cash = finalRev; 
+                    changed = true;
+                }
+            }
 
-            let extractedUid = docId.replace(/\d{4}-\d{2}-\d{2}/g, '').replace(/_/g, '').trim();
-            if (extractedUid.length > 5 && !data.therapistId) { updateData.therapistId = extractedUid; needsUpdate = true; }
-
-            if (needsUpdate) {
+            if (changed) {
                 batch.update(doc.ref, updateData);
                 commitCount++; reportCount++;
                 if (commitCount >= 400) await commitAndReset();
@@ -1033,75 +1041,54 @@ exports.healTherapistData = onRequest(async (req, res) => {
         }
 
         // ---------------------------------------------------------
-        // 2. 班表掃描 (強化暴力破解檔名)
+        // 2. 班表深度洗淨：壓扁休假陣列，強轉純數字
         // ---------------------------------------------------------
         const schedulesSnap = await db.collectionGroup('therapist_schedules').get();
-        const scheduleFound = schedulesSnap.size;
         for (const doc of schedulesSnap.docs) {
             const data = doc.data();
-            const docId = doc.id;
-            let needsUpdate = false;
             let updateData = {};
+            let changed = false;
 
-            const yearMatch = docId.match(/(202\d)/);
-            if (yearMatch && !data.year) { updateData.year = yearMatch[1]; needsUpdate = true; }
+            if (data.daysOff && Array.isArray(data.daysOff)) {
+                // 強制把 [{day: 11}, "12", 13] 這種怪物全部洗成乾淨的 [11, 12, 13]
+                const cleanDaysOff = data.daysOff.map(d => {
+                    if (typeof d === 'object' && d !== null) {
+                        return Number(d.day || d.date || d.value || 0);
+                    }
+                    if (typeof d === 'string' && d.includes('-')) {
+                        return d; // 保留 YYYY-MM-DD 格式
+                    }
+                    return Number(d) || 0;
+                }).filter(d => d !== 0); // 過濾掉無效值
 
-            // 把所有非英數字元切開，找出長度大於10的亂碼當作 UID
-            const parts = docId.split(/[_ \-]/);
-            const possibleUid = parts.find(p => p.length > 10);
-            if (possibleUid && !data.therapistId) { updateData.therapistId = possibleUid; needsUpdate = true; }
+                // 檢查是否真的有變動 (轉成字串比對最準)
+                if (JSON.stringify(data.daysOff) !== JSON.stringify(cleanDaysOff)) {
+                    updateData.daysOff = cleanDaysOff;
+                    changed = true;
+                }
+            }
 
-            if (needsUpdate) {
+            if (changed) {
                 batch.update(doc.ref, updateData);
                 commitCount++; scheduleCount++;
                 if (commitCount >= 400) await commitAndReset();
             }
         }
 
-        // ---------------------------------------------------------
-        // 3. 目標掃描
-        // ---------------------------------------------------------
-        const targetsSnap = await db.collectionGroup('therapist_targets').get();
-        const targetFound = targetsSnap.size;
-        for (const doc of targetsSnap.docs) {
-            const data = doc.data();
-            const docId = doc.id;
-            let needsUpdate = false;
-            let updateData = {};
-
-            const yearMatch = docId.match(/(202\d)/);
-            if (yearMatch && !data.year) { updateData.year = yearMatch[1]; needsUpdate = true; }
-
-            const parts = docId.split(/[_ \-]/);
-            const possibleUid = parts.find(p => p.length > 10);
-            if (possibleUid && !data.therapistId) { updateData.therapistId = possibleUid; needsUpdate = true; }
-
-            if (needsUpdate) {
-                batch.update(doc.ref, updateData);
-                commitCount++; targetCount++;
-                if (commitCount >= 400) await commitAndReset();
-            }
-        }
-
         await commitAndReset();
 
-        // 輸出診斷報告
         res.status(200).send(`
             <div style="font-family: sans-serif; padding: 30px; max-width: 600px; margin: 0 auto; background: #fff; border-radius: 12px; box-shadow: 0 4px 12px rgba(0,0,0,0.1);">
-                <h2 style="color: #10B981; border-bottom: 2px solid #ECFDF5; padding-bottom: 10px;">🩺 V3 系統 X光掃描與修復報告</h2>
-                <p style="font-size: 16px;">以下是系統實際在 Firebase 裡面看到的資料量，以及成功補齊欄位的數量：</p>
-                <div style="background: #F9FAFB; padding: 20px; border-radius: 8px; margin: 20px 0;">
-                    <ul style="font-size: 16px; line-height: 2; margin: 0; padding-left: 20px;">
-                        <li>📝 <b>日報</b>：共掃描到 <span style="color:#F59E0B; font-weight:bold;">${reportFound}</span> 筆 ➔ 補齊了 <b style="color: #3B82F6;">${reportCount}</b> 筆欄位</li>
-                        <li>📅 <b>班表</b>：共掃描到 <span style="color:#F59E0B; font-weight:bold;">${scheduleFound}</span> 筆 ➔ 補齊了 <b style="color: #3B82F6;">${scheduleCount}</b> 筆欄位</li>
-                        <li>🎯 <b>目標</b>：共掃描到 <span style="color:#F59E0B; font-weight:bold;">${targetFound}</span> 筆 ➔ 補齊了 <b style="color: #3B82F6;">${targetCount}</b> 筆欄位</li>
-                    </ul>
-                </div>
-                <p style="color: #6B7280; font-size: 14px;">※ 診斷重點：如果「掃描到」的數量為 0，代表資料表名稱不對；如果「掃描到」很多但「補齊」很少，代表您的資料早就有欄位了（問題出在前端）！</p>
+                <h2 style="color: #10B981; border-bottom: 2px solid #ECFDF5; padding-bottom: 10px;">🩺 V5 終極除垢完成</h2>
+                <p>已將千分位逗號、字串業績、怪異休假物件全部洗淨為標準格式！</p>
+                <ul style="font-size: 16px; line-height: 2;">
+                    <li>📝 洗淨日報業績格式：<b>${reportCount}</b> 筆</li>
+                    <li>📅 洗淨班表休假陣列：<b>${scheduleCount}</b> 筆</li>
+                </ul>
+                <p style="color: #6B7280; font-size: 14px;">請回到前端並使用「無痕視窗」重新登入測試！</p>
             </div>
         `);
     } catch (error) {
-        console.error("清洗失敗:", error);
-        res.status(500).send("❌ 清洗發生錯誤: " + error.message);
+        res.status(500).send("❌ 錯誤: " + error.message);
     }
 });

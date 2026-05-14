@@ -1,22 +1,20 @@
 // src/components/AuditView.jsx
 import React, { useState, useMemo, useContext, useCallback, useEffect } from "react";
-import { AlertCircle, UserX, CheckCircle, Target, FileText, Settings, X, Save, Ban, HelpCircle } from "lucide-react"; 
+import { AlertCircle, UserX, CheckCircle, Target, Settings, X, Save, Ban, HelpCircle } from "lucide-react"; 
 
 import { AppContext } from "../AppContext";
-import { formatLocalYYYYMMDD, toStandardDateFormat } from "../utils/helpers";
+import { formatLocalYYYYMMDD } from "../utils/helpers";
 import { ViewWrapper, Card } from "./SharedUI";
 import SmartDatePicker from "./SmartDatePicker";
 
-// ★ 終極翻譯蒟蒻
+// ★ 終極翻譯蒟蒻：日期標準化
 const safeGetDateStr = (val) => {
     if (!val) return "";
     if (typeof val?.toDate === 'function') {
         const d = val.toDate();
         return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;
     }
-    if (val instanceof Date) {
-        return `${val.getFullYear()}-${String(val.getMonth()+1).padStart(2,'0')}-${String(val.getDate()).padStart(2,'0')}`;
-    }
+    if (val instanceof Date) return `${val.getFullYear()}-${String(val.getMonth()+1).padStart(2,'0')}-${String(val.getDate()).padStart(2,'0')}`;
     if (typeof val === 'string') {
         const m = val.match(/(\d{4})[-\/](\d{1,2})[-\/](\d{1,2})/);
         if (m) return `${m[1]}-${m[2].padStart(2,'0')}-${m[3].padStart(2,'0')}`;
@@ -26,48 +24,29 @@ const safeGetDateStr = (val) => {
 
 const AuditView = () => {
   const {
-    managers,      
-    showToast,
-    budgets,        
-    selectedYear,
-    selectedMonth,
-    rawData,        
-    therapists,
-    therapistReports,
-    therapistSchedules,
-    userRole,
-    therapistTargets,
-    auditExclusions = [], 
-    handleUpdateAuditExclusions,
-    currentBrand
+    managers, showToast, budgets, selectedYear, selectedMonth, rawData,
+    therapists, therapistReports, therapistSchedules, userRole, therapistTargets,
+    auditExclusions = [], handleUpdateAuditExclusions, currentBrand
   } = useContext(AppContext);
 
   const [checkDate, setCheckDate] = useState(formatLocalYYYYMMDD(new Date()));
   const [auditType, setAuditType] = useState(userRole === 'trainer' ? "therapist-daily" : "daily"); 
-
   const [isConfigModalOpen, setIsConfigModalOpen] = useState(false);
   const [localExclusions, setLocalExclusions] = useState([]);
 
   useEffect(() => {
     if (!checkDate || !selectedYear || !selectedMonth) return;
     const currentObj = new Date(checkDate);
-    const currentYearStr = currentObj.getFullYear().toString();
-    const currentMonthStr = (currentObj.getMonth() + 1).toString();
-    
-    if (currentYearStr !== selectedYear || currentMonthStr !== selectedMonth) {
-      const newMonth = selectedMonth.padStart(2, '0');
-      setCheckDate(`${selectedYear}-${newMonth}-01`);
+    if (currentObj.getFullYear().toString() !== selectedYear || (currentObj.getMonth() + 1).toString() !== selectedMonth) {
+      setCheckDate(`${selectedYear}-${selectedMonth.padStart(2, '0')}-01`);
     }
   }, [selectedYear, selectedMonth]);
 
   const { minBoundary, maxBoundary } = useMemo(() => {
-    const y = parseInt(selectedYear);
-    const m = parseInt(selectedMonth);
-    const maxDays = new Date(y, m, 0).getDate(); 
-    
+    const y = parseInt(selectedYear), m = parseInt(selectedMonth);
     return {
       minBoundary: `${y}-${String(m).padStart(2, '0')}-01`,
-      maxBoundary: `${y}-${String(m).padStart(2, '0')}-${maxDays}`
+      maxBoundary: `${y}-${String(m).padStart(2, '0')}-${new Date(y, m, 0).getDate()}`
     };
   }, [selectedYear, selectedMonth]);
 
@@ -84,477 +63,271 @@ const AuditView = () => {
 
   const cleanStoreName = useCallback((name) => {
     if (!name) return "";
-    let core = String(name).replace(/^(CYJ|Anew\s*\(安妞\)|Yibo\s*\(伊啵\)|安妞|伊啵|Anew|Yibo)\s*/i, '').trim();
-    if (core === "新店") return "新店"; 
-    return core.replace(/店$/, '').trim();
+    return String(name).replace(/^(CYJ|Anew\s*\(安妞\)|Yibo\s*\(伊啵\)|安妞|伊啵|Anew|Yibo)\s*/i, '').replace(/店$/, '').trim();
   }, []);
 
-  // ★ 終極雷達：上帝視角匹配
   const isTherapistMatch = useCallback((str, t) => {
     if (!str || !t) return false;
-    const s = String(str).toLowerCase().trim();
-    const tid = String(t.id || "").toLowerCase().trim();
-    const tname = String(t.name || "").toLowerCase().trim();
-
+    const s = String(str).toLowerCase().trim(), tid = String(t.id || "").toLowerCase().trim(), tname = String(t.name || "").toLowerCase().trim();
     if (!s) return false;
-    if (tid && s === tid) return true;
-    if (tname && s === tname) return true;
-    if (tid.length > 5 && s.includes(tid)) return true;
-    if (s.length > 5 && tid.includes(s)) return true;
-
+    if (tid && (s === tid || s.includes(tid) || tid.includes(s))) return true;
+    if (tname && (s === tname || s.includes(tname) || tname.includes(s))) return true;
     const getChi = (x) => (x.match(/[\u4e00-\u9fa5]+/g) || []).join('');
-    const sChi = getChi(s);
-    const tidChi = getChi(tid);
-    const tnameChi = getChi(tname);
-
-    if (sChi.length >= 2) {
-        if (tidChi && (sChi.includes(tidChi) || tidChi.includes(sChi))) return true;
-        if (tnameChi && (sChi.includes(tnameChi) || tnameChi.includes(sChi))) return true;
-    }
-
-    const getEng = (x) => (x.match(/[a-z]+/g) || []).join('');
-    const sEng = getEng(s);
-    const tidEng = getEng(tid);
-    const tnameEng = getEng(tname);
-
-    if (sEng.length >= 3) {
-        if (tidEng.length >= 3 && (sEng.includes(tidEng) || tidEng.includes(sEng))) return true;
-        if (tnameEng.length >= 3 && (sEng.includes(tnameEng) || tnameEng.includes(sEng))) return true;
-    }
-
+    const sChi = getChi(s), tidChi = getChi(tid), tnameChi = getChi(tname);
+    if (sChi.length >= 2 && ((tidChi && sChi.includes(tidChi)) || (tnameChi && sChi.includes(tnameChi)))) return true;
     return false;
   }, []);
 
-  const openConfigModal = () => {
-    setLocalExclusions(auditExclusions || []);
-    setIsConfigModalOpen(true);
-  };
-
-  const saveConfig = async () => {
-    await handleUpdateAuditExclusions(localExclusions);
-    setIsConfigModalOpen(false);
-    showToast("排除名單已更新", "success");
-  };
-
+  const openConfigModal = () => { setLocalExclusions(auditExclusions || []); setIsConfigModalOpen(true); };
+  const saveConfig = async () => { await handleUpdateAuditExclusions(localExclusions); setIsConfigModalOpen(false); showToast("排除名單已更新", "success"); };
   const toggleExclusion = (store) => {
     const cleanS = cleanStoreName(store);
-    setLocalExclusions(prev => {
-      if (prev.includes(cleanS) || prev.includes(store)) {
-          return prev.filter(s => s !== store && s !== cleanS);
-      }
-      return [...prev, cleanS];
-    });
+    setLocalExclusions(prev => prev.includes(cleanS) || prev.includes(store) ? prev.filter(s => s !== store && s !== cleanS) : [...prev, cleanS]);
   };
 
   const activeStoresForCalendar = useMemo(() => {
     const allMyStores = Object.values(managers).flat();
-    return allMyStores
-      .filter(storeName => !auditExclusions.includes(storeName) && !auditExclusions.includes(cleanStoreName(storeName))) 
-      .map(storeName => {
-        const aliases = [
-          storeName, `${storeName}店`, `${brandPrefix}${storeName}`,       
-          `${brandPrefix}${storeName}店`, `CYJ${storeName}店`                 
-        ];
-        return { id: storeName, name: `${storeName}店`, stores: aliases };
-      });
+    return allMyStores.filter(s => !auditExclusions.includes(s) && !auditExclusions.includes(cleanStoreName(s))) 
+      .map(s => ({ id: s, name: `${s}店`, stores: [s, `${s}店`, `${brandPrefix}${s}`, `${brandPrefix}${s}店`, `CYJ${s}店`] }));
   }, [managers, auditExclusions, brandPrefix, cleanStoreName]);
 
-  const activeTherapistsForCalendar = useMemo(() => {
-    const y = parseInt(selectedYear);
-    const m = parseInt(selectedMonth);
-    const monthStart = new Date(y, m - 1, 1);
-    const monthEnd = new Date(y, m, 0);
-
-    return therapists.filter(t => {
-      const obDate = t.onboardDate ? new Date(t.onboardDate) : new Date("2000-01-01");
-      if (obDate > monthEnd) return false; 
-      
-      const isResignedStatus = t.status === 'resigned' || t.isActive === false || t.isResigned === true;
-      if (t.resignDate) {
-          const rDate = new Date(t.resignDate);
-          if (rDate < monthStart) return false; 
-      } else if (isResignedStatus) {
-          return false; 
-      }
-      return true;
-    }).map(t => ({
-      id: t.id, name: t.name, stores: [t.id] 
-    }));
+  const validTherapistsForMonth = useMemo(() => {
+      const y = parseInt(selectedYear), m = parseInt(selectedMonth);
+      const start = new Date(y, m - 1, 1), end = new Date(y, m, 0, 23, 59, 59);
+      return (therapists || []).filter(t => {
+          const ob = t.onboardDate ? new Date(t.onboardDate) : new Date(2000,0,1);
+          if (ob > end) return false; 
+          if (t.resignDate && new Date(t.resignDate) < start) return false; 
+          if (!t.resignDate && (t.status === 'resigned' || t.isActive === false)) return false;
+          return true;
+      });
   }, [therapists, selectedYear, selectedMonth]);
 
-  const normalizedRawData = useMemo(() => {
-    return rawData.map(report => ({
-      ...report, 
-      storeName: report.storeName, 
-      date: safeGetDateStr(report.date) 
-    }));
-  }, [rawData]);
+  const activeTherapistsForCalendar = useMemo(() => validTherapistsForMonth.map(t => ({ id: String(t.id || t.name), name: t.name, stores: [String(t.id), t.name] })), [validTherapistsForMonth]);
 
   // ============================================================================
-  // ★ 行事曆大升級：強制換發標準制服，並補發所有到職/離職免死金牌
+  // ★ 大腦中心 (Single Source of Truth)
   // ============================================================================
-  const normalizedTherapistReports = useMemo(() => {
-    // 1. 整理所有原始報告的日期
-    const parsedReports = (therapistReports || []).map(report => {
-      let safeDate = safeGetDateStr(report.date);
-      if (!safeDate && report.id) {
-          const match = String(report.id).match(/(\d{4}-\d{2}-\d{2})/);
-          if (match) safeDate = match[1];
-      }
-      return { ...report, parsedDate: safeDate };
-    });
+  const dailyMatrix = useMemo(() => {
+      const matrix = { stores: {}, therapists: {} };
+      const yStr = String(selectedYear), mNum = parseInt(selectedMonth, 10);
+      const mStr = String(mNum).padStart(2, '0');
+      const days = new Date(parseInt(yStr), mNum, 0).getDate();
 
-    // 2. 真實報告強制「標準化」：用雷達尋找真正主人，把名字換成系統行事曆看得懂的 t.id
-    const realReports = parsedReports.map(report => {
-        let standardId = report.therapistId || report.therapistName || report.id;
-        const matchedT = therapists.find(t => 
-            isTherapistMatch(report.therapistId, t) || 
-            isTherapistMatch(report.therapistName, t) || 
-            isTherapistMatch(report.id, t) ||
-            isTherapistMatch(report.storeName, t)
-        );
-        if (matchedT) standardId = matchedT.id; // 換上標準制服
-        return { ...report, storeName: standardId, date: report.parsedDate };
-    });
-
-    if (auditType !== 'therapist-daily') return realReports;
-
-    const ghostReports = [];
-    const yStr = String(selectedYear);
-    const mNum = parseInt(selectedMonth, 10);
-    const daysInMonth = new Date(parseInt(yStr), mNum, 0).getDate();
-
-    therapists.forEach(t => {
-      const obDate = t.onboardDate ? new Date(t.onboardDate) : new Date("2000-01-01");
-      obDate.setHours(0,0,0,0);
-      
-      const isResignedStatus = t.status === 'resigned' || t.isActive === false || t.isResigned === true;
-      const rDate = t.resignDate ? new Date(t.resignDate) : null;
-      if (rDate) rDate.setHours(0,0,0,0);
-
-      if (obDate > new Date(yStr, mNum, 0)) return; 
-      if (rDate && rDate < new Date(yStr, mNum - 1, 1)) return;
-      if (!rDate && isResignedStatus) return;
-
-      // 抓取本月休假陣列
-      let daysOff = [];
-      Object.entries(therapistSchedules || {}).forEach(([k, sched]) => {
-          if (isTherapistMatch(k, t) || isTherapistMatch(sched?.therapistId, t) || isTherapistMatch(sched?.therapistName, t)) {
-              const hasYear = k.includes(yStr) || String(sched?.year) === yStr;
-              const hasMonth = k.includes(`_${mNum}`) || k.includes(`_${String(mNum).padStart(2,'0')}`) || String(sched?.month) === String(mNum) || k.includes(`${yStr}-${String(mNum).padStart(2,'0')}`);
-              if (hasYear && hasMonth) {
-                  daysOff = [...new Set([...daysOff, ...(sched?.daysOff || [])])];
-              }
-          }
-      });
-
-      // 3. 全月掃描：補發休假、到職前、離職後的免死金牌
-      for (let d = 1; d <= daysInMonth; d++) {
-          const currentDate = new Date(yStr, mNum - 1, d);
-          currentDate.setHours(0,0,0,0);
-          const dateStr = `${yStr}-${mNum.toString().padStart(2, '0')}-${d.toString().padStart(2, '0')}`;
-
-          let isExcused = false;
-
-          // 未到職 / 已離職
-          if (currentDate < obDate) isExcused = true;
-          if (rDate && currentDate > rDate) isExcused = true;
+      for (let d = 1; d <= days; d++) {
+          const dateStr = `${yStr}-${mStr}-${d.toString().padStart(2, '0')}`;
+          const dateObj = new Date(dateStr);
           
-          // 有休假
-          if (!isExcused) {
-              const isOff = daysOff.some(offDay => {
-                  if (String(offDay).includes('-')) return String(offDay) === dateStr;
-                  return Number(offDay) === d;
-              });
-              if (isOff) isExcused = true;
-          }
+          const subStores = rawData.filter(r => safeGetDateStr(r.date) === dateStr).map(r => r.storeName);
+          matrix.stores[dateStr] = activeStoresForCalendar.map(s => s.id).filter(id => !subStores.some(sub => sub && sub.includes(id))).map(id => `${brandPrefix}${id}店`);
 
-          if (isExcused) {
-              ghostReports.push({ id: `ghost_${t.id}_${dateStr}`, storeName: t.id, date: dateStr, isGhost: true, revenue: 0 });
-          }
-      }
-    });
+          const missingT = [];
+          validTherapistsForMonth.forEach(t => {
+              const ob = t.onboardDate ? new Date(t.onboardDate) : null;
+              const rs = t.resignDate ? new Date(t.resignDate) : null;
+              if (ob && dateObj < ob) return;
+              if (rs && dateObj > rs) return;
 
-    return [...realReports, ...ghostReports];
-  }, [therapistReports, auditType, selectedYear, selectedMonth, therapists, therapistSchedules, isTherapistMatch]);
-  // ============================================================================
-
-  const isTherapistMode = auditType === 'therapist-daily';
-  const calendarStores = isTherapistMode ? activeTherapistsForCalendar : activeStoresForCalendar;
-  const calendarSalesData = isTherapistMode ? normalizedTherapistReports : normalizedRawData;
-
-  const auditData = useMemo(() => {
-    if (!checkDate) return { submitted: [], missing: [], missingByManager: {} };
-    const targetDate = safeGetDateStr(checkDate);
-    const submittedRaw = rawData.filter((d) => safeGetDateStr(d.date) === targetDate).map((d) => d.storeName);
-    const missingByManager = {};
-    Object.entries(managers).forEach(([manager, stores]) => {
-      const missing = [];
-      stores.forEach((s) => {
-        const cleanS = cleanStoreName(s);
-        if (auditExclusions.includes(s) || auditExclusions.includes(cleanS)) return; 
-        
-        const isSubmitted = submittedRaw.some(rawName => rawName && rawName.includes(s));
-        if (!isSubmitted) missing.push(`${brandPrefix}${s}店`);
-      });
-      if (missing.length) missingByManager[manager] = missing;
-    });
-    return { submitted: submittedRaw, missing: Object.values(missingByManager).flat(), missingByManager };
-  }, [checkDate, rawData, managers, auditExclusions, brandPrefix, cleanStoreName]);
-
-  const targetAuditData = useMemo(() => {
-    const missingByManager = {};
-    const y = parseInt(selectedYear);
-    const m = parseInt(selectedMonth);
-    Object.entries(managers).forEach(([manager, stores]) => {
-      const missing = [];
-      stores.forEach((s) => {
-        const cleanS = cleanStoreName(s);
-        if (auditExclusions.includes(s) || auditExclusions.includes(cleanS)) return;
-        
-        const name = `${brandPrefix}${s}店`;
-        const key = `${name}_${y}_${m}`;
-        const b = budgets[key];
-        if (!b || (!b.cashTarget && !b.accrualTarget)) missing.push(name);
-      });
-      if (missing.length) missingByManager[manager] = missing;
-    });
-    return { missing: Object.values(missingByManager).flat(), missingByManager };
-  }, [budgets, managers, selectedYear, selectedMonth, auditExclusions, brandPrefix, cleanStoreName]);
-
-  const therapistAuditData = useMemo(() => {
-    if (!checkDate) return { missing: [], missingByManager: {} };
-    
-    const targetDateStr = safeGetDateStr(checkDate);
-    const [yStr, mStr, dStr] = targetDateStr.split('-');
-    const year = yStr;
-    const month = parseInt(mStr, 10);
-    const day = parseInt(dStr, 10);
-
-    const missingByManager = {};
-    const targetDateObj = new Date(targetDateStr);
-    targetDateObj.setHours(0,0,0,0);
-    
-    (therapists || []).forEach(t => {
-      const obDate = t.onboardDate ? new Date(t.onboardDate) : new Date("2000-01-01");
-      obDate.setHours(0,0,0,0);
-      if (targetDateObj < obDate) return; 
-
-      const isResignedStatus = t.status === 'resigned' || t.isActive === false || t.isResigned === true;
-      if (t.resignDate) {
-        const rDate = new Date(t.resignDate);
-        rDate.setHours(0,0,0,0);
-        if (targetDateObj > rDate) return; 
-      } else if (isResignedStatus) {
-        return; 
-      }
-
-      let isOff = false;
-      Object.entries(therapistSchedules || {}).forEach(([k, sched]) => {
-          if (isTherapistMatch(k, t) || isTherapistMatch(sched?.therapistId, t) || isTherapistMatch(sched?.therapistName, t)) {
-              const hasYear = k.includes(year) || String(sched?.year) === year;
-              const hasMonth = k.includes(`_${month}`) || k.includes(`_${String(month).padStart(2,'0')}`) || String(sched?.month) === String(month) || k.includes(`${year}-${String(month).padStart(2,'0')}`);
-              if (hasYear && hasMonth) {
-                  if (sched?.daysOff?.some(d => {
-                      const dStrArg = String(d);
-                      if (dStrArg.includes('-')) return dStrArg === targetDateStr;
-                      return Number(d) === day;
-                  })) {
-                      isOff = true;
+              let isOff = false;
+              Object.entries(therapistSchedules || {}).forEach(([k, sched]) => {
+                  if (isTherapistMatch(k, t) || isTherapistMatch(sched?.therapistId, t)) {
+                      if ((k.includes(yStr) || String(sched?.year) === yStr) && (k.includes(`_${mNum}`) || String(sched?.month) === String(mNum))) {
+                          if (sched?.daysOff?.some(off => (String(off).includes('-') ? off === dateStr : Number(off) === d))) isOff = true;
+                      }
                   }
-              }
-          }
-      });
+              });
+              if (isOff) return;
 
-      if (isOff) return; 
+              const hasSub = (therapistReports || []).some(r => {
+                  const d1 = safeGetDateStr(r.date), d2 = String(r.id || "");
+                  if (d1 === dateStr || d2.includes(dateStr)) {
+                      return isTherapistMatch(r.therapistId, t) || isTherapistMatch(r.therapistName, t) || isTherapistMatch(r.id, t) || isTherapistMatch(r.storeName, t);
+                  }
+                  return false;
+              });
 
-      let hasSubmitted = false;
-      (therapistReports || []).forEach(r => {
-          const d1 = safeGetDateStr(r.date);
-          const d2 = String(r.id || "");
-          const isToday = d1 === targetDateStr || d2.includes(targetDateStr);
-
-          if (isToday) {
-              const searchPool = [r.therapistId, r.therapistName, r.id, r.storeName].filter(Boolean);
-              if (searchPool.some(val => isTherapistMatch(val, t))) {
-                  hasSubmitted = true;
-              }
-          }
-      });
-
-      if (!hasSubmitted) {
-        const mgr = t.manager || "未分區";
-        if (!missingByManager[mgr]) missingByManager[mgr] = [];
-        missingByManager[mgr].push(`${t.name} (${t.store}店)`);
+              if (!hasSub) missingT.push(`${t.name} (${t.store}店)`);
+          });
+          matrix.therapists[dateStr] = missingT;
       }
-    });
+      return matrix;
+  }, [selectedYear, selectedMonth, rawData, activeStoresForCalendar, validTherapistsForMonth, therapistSchedules, therapistReports, isTherapistMatch, brandPrefix]);
 
-    return { missing: Object.values(missingByManager).flat(), missingByManager };
-  }, [checkDate, therapists, therapistReports, therapistSchedules, isTherapistMatch]);
-   
-  const therapistTargetAuditData = useMemo(() => {
-    const missingByManager = {};
-    const yStr = String(selectedYear);
-    const mNum = parseInt(selectedMonth, 10);
-    const monthKey = mNum.toString(); 
-    
-    const monthStart = new Date(parseInt(yStr), mNum - 1, 1);
-    const monthEnd = new Date(parseInt(yStr), mNum, 0);
+  // ============================================================================
+  // ★ 完美日曆資料：既服從大腦，又保留真實業績
+  // ============================================================================
+  const calendarSalesData = useMemo(() => {
+      const reports = [];
+      const days = new Date(parseInt(selectedYear), parseInt(selectedMonth), 0).getDate();
+      const yStr = String(selectedYear), mStr = String(selectedMonth).padStart(2, '0');
 
-    (therapists || []).forEach(t => {
-       const obDate = t.onboardDate ? new Date(t.onboardDate) : new Date("2000-01-01");
-       if (obDate > monthEnd) return; 
+      if (auditType === 'daily') {
+          const rawNorm = rawData.map(r => ({ ...r, date: safeGetDateStr(r.date) }));
+          for (let d = 1; d <= days; d++) {
+              const dateStr = `${yStr}-${mStr}-${d.toString().padStart(2, '0')}`;
+              const missingStores = dailyMatrix.stores[dateStr] || [];
 
-       const isResignedStatus = t.status === 'resigned' || t.isActive === false || t.isResigned === true;
-       if (t.resignDate) {
-           const rDate = new Date(t.resignDate);
-           if (rDate < monthStart) return; 
-       } else if (isResignedStatus) {
-           return;
-       }
+              activeStoresForCalendar.forEach(s => {
+                  const isMissing = missingStores.includes(`${brandPrefix}${s.id}店`);
+                  const real = rawNorm.find(r => r.date === dateStr && r.storeName === s.id);
 
-       let hasTarget = false;
-       Object.entries(therapistTargets || {}).forEach(([k, targetObj]) => {
-           if (isTherapistMatch(k, t) || isTherapistMatch(targetObj?.therapistId, t) || isTherapistMatch(targetObj?.therapistName, t)) {
-               const hasYear = k.includes(yStr) || String(targetObj?.year) === yStr;
-               if (hasYear) {
-                   const targetVal = targetObj?.monthlyTargets?.[monthKey] || targetObj?.[monthKey];
-                   if (targetVal && parseInt(targetVal) > 0) {
-                       hasTarget = true;
-                   }
-               }
-           }
-       });
+                  if (!isMissing) {
+                      // 沒缺漏，有真實報告就給真實報告(確保大於0)，沒報告就發幽靈綠燈
+                      if (real) reports.push({ ...real, cash: Number(real.cash) > 0 ? Number(real.cash) : 0.0001 });
+                      else reports.push({ storeName: s.id, date: dateStr, cash: 0.0001, isGhost: true });
+                  } else {
+                      // 有缺漏，如果他傳了無效報告，強制把金額壓成0，讓日曆亮紅燈
+                      if (real) reports.push({ ...real, cash: 0 });
+                  }
+              });
+          }
+      } else if (auditType === 'therapist-daily') {
+          const thNorm = (therapistReports || []).map(r => {
+              let dStr = safeGetDateStr(r.date);
+              if (!dStr && r.id) { const m = String(r.id).match(/(\d{4}-\d{2}-\d{2})/); if (m) dStr = m[1]; }
+              return { ...r, parsedDate: dStr };
+          });
 
-       if (!hasTarget) {
-         const mgr = t.manager || "未分區";
-         if (!missingByManager[mgr]) missingByManager[mgr] = [];
-         missingByManager[mgr].push(`${t.name} (${t.store}店)`);
-       }
-    });
+          for (let d = 1; d <= days; d++) {
+              const dateStr = `${yStr}-${mStr}-${d.toString().padStart(2, '0')}`;
+              const missingT = dailyMatrix.therapists[dateStr] || [];
 
-    return { missing: Object.values(missingByManager).flat(), missingByManager };
-  }, [therapists, therapistTargets, selectedYear, selectedMonth, isTherapistMatch]);
+              validTherapistsForMonth.forEach(t => {
+                  const isMissing = missingT.includes(`${t.name} (${t.store}店)`);
+                  const sid = String(t.id || t.name).trim();
+                  const real = thNorm.find(r => r.parsedDate === dateStr && (isTherapistMatch(r.therapistId, t) || isTherapistMatch(r.therapistName, t) || isTherapistMatch(r.id, t)));
 
-  const activeData = 
-    auditType === "daily" ? auditData : 
-    auditType === "target" ? targetAuditData : 
-    auditType === "therapist-daily" ? therapistAuditData :
-    therapistTargetAuditData; 
+                  if (!isMissing) {
+                      // 沒缺漏：給真實業績，若為0則墊底 0.0001 確保綠燈
+                      if (real) {
+                          const rev = Number(real.totalRevenue) || 0;
+                          reports.push({ ...real, storeName: sid, date: dateStr, cash: rev > 0 ? rev : 0.0001, revenue: rev > 0 ? rev : 0.0001 });
+                      } else {
+                          reports.push({ storeName: sid, date: dateStr, cash: 0.0001, revenue: 0.0001, isGhost: true });
+                      }
+                  } else {
+                      // 有缺漏：強壓金額為0
+                      if (real) reports.push({ ...real, storeName: sid, date: dateStr, cash: 0, revenue: 0 });
+                  }
+              });
+          }
+      }
+      return reports;
+  }, [dailyMatrix, auditType, activeStoresForCalendar, validTherapistsForMonth, selectedYear, selectedMonth, rawData, therapistReports, isTherapistMatch, brandPrefix]);
+
+  const activeData = useMemo(() => {
+      let missing = [];
+      const missingByManager = {};
+
+      if (auditType === 'daily') missing = dailyMatrix.stores[checkDate] || [];
+      else if (auditType === 'therapist-daily') missing = dailyMatrix.therapists[checkDate] || [];
+      else if (auditType === 'target') {
+          Object.entries(managers).forEach(([mgr, stores]) => {
+              stores.forEach(s => {
+                  if (auditExclusions.includes(s) || auditExclusions.includes(cleanStoreName(s))) return;
+                  const name = `${brandPrefix}${s}店`, key = `${name}_${parseInt(selectedYear)}_${parseInt(selectedMonth)}`;
+                  const b = budgets[key];
+                  if (!b || (!b.cashTarget && !b.accrualTarget)) { missing.push(name); if(!missingByManager[mgr]) missingByManager[mgr]=[]; missingByManager[mgr].push(name); }
+              });
+          });
+          return { missing, missingByManager };
+      }
+      else if (auditType === 'therapist-target') {
+          validTherapistsForMonth.forEach(t => {
+              let hasTarget = false;
+              Object.entries(therapistTargets || {}).forEach(([k, targetObj]) => {
+                  if (isTherapistMatch(k, t) || isTherapistMatch(targetObj?.therapistId, t)) {
+                      if (k.includes(selectedYear) || String(targetObj?.year) === selectedYear) {
+                          const targetVal = targetObj?.monthlyTargets?.[parseInt(selectedMonth)] || targetObj?.[parseInt(selectedMonth)];
+                          if (targetVal && parseInt(targetVal) > 0) hasTarget = true;
+                      }
+                  }
+              });
+              if (!hasTarget) {
+                  const name = `${t.name} (${t.store}店)`, mgr = t.manager || "未分區";
+                  missing.push(name); if(!missingByManager[mgr]) missingByManager[mgr]=[]; missingByManager[mgr].push(name);
+              }
+          });
+          return { missing, missingByManager };
+      }
+
+      missing.forEach(nameStr => {
+          let mgr = "未分區";
+          if (auditType === 'daily') {
+              const rawStore = nameStr.replace(/^(CYJ|安妞|伊啵)/, '').replace(/店$/, '');
+              Object.entries(managers).forEach(([m, stores]) => { if (stores.includes(rawStore)) mgr = m; });
+          } else {
+              const t = validTherapistsForMonth.find(v => nameStr.includes(v.name));
+              if (t && t.manager) mgr = t.manager;
+          }
+          if (!missingByManager[mgr]) missingByManager[mgr] = [];
+          missingByManager[mgr].push(nameStr);
+      });
+
+      return { missing, missingByManager };
+  }, [auditType, checkDate, dailyMatrix, managers, budgets, therapistTargets, selectedYear, selectedMonth, auditExclusions, brandPrefix, cleanStoreName, validTherapistsForMonth, isTherapistMatch]);
+
+  const calendarStores = auditType.includes('therapist') ? activeTherapistsForCalendar : activeStoresForCalendar;
 
   const handleCopy = () => {
-    let text = "";
-    if (auditType === 'target') text = `店家未設定目標(${selectedYear}/${selectedMonth})：\n`;
-    else if (auditType === 'therapist-target') text = `管理師未設目標(${selectedYear}/${selectedMonth})：\n`;
-    else if (auditType === 'therapist-daily') text = `管理師未回報(${checkDate})：\n`;
-    else text = `店家未回報(${checkDate})：\n`;
-
-    Object.entries(activeData.missingByManager).forEach(([mgr, list]) => {
-      const cleanList = list.map(s => {
-        if (auditType.includes('therapist')) return s;
-        return cleanStoreName(s);
-      });
-      text += `${mgr}區：${cleanList.join("、")}\n`;
-    });
-    
+    let text = `未完成名單(${checkDate})：\n`;
+    Object.entries(activeData.missingByManager).forEach(([mgr, list]) => { text += `${mgr}區：${list.join("、")}\n`; });
     navigator.clipboard.writeText(text);
-    showToast("已複製未完成名單", "success");
+    showToast("已複製", "success");
   };
 
   return (
     <ViewWrapper>
       <Card title="回報檢核中心">
         <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 mb-6">
-          
           <div className="flex flex-col sm:flex-row gap-3 w-full md:w-auto">
             <div className="bg-stone-100 p-1 rounded-xl flex shrink-0 self-start overflow-x-auto max-w-full">
               {userRole !== 'trainer' && (
                 <>
-                  <button onClick={() => setAuditType("daily")} className={`px-4 py-2 rounded-lg text-sm font-bold transition-all whitespace-nowrap ${auditType === "daily" ? "bg-white text-stone-800 shadow-sm" : "text-stone-400 hover:text-stone-600"}`}>店家日報</button>
-                  <button onClick={() => setAuditType("target")} className={`px-4 py-2 rounded-lg text-sm font-bold transition-all whitespace-nowrap ${auditType === "target" ? "bg-white text-stone-800 shadow-sm" : "text-stone-400 hover:text-stone-600"}`}>店家目標</button>
+                  <button onClick={() => setAuditType("daily")} className={`px-4 py-2 rounded-lg text-sm font-bold transition-all ${auditType === "daily" ? "bg-white text-stone-800 shadow-sm" : "text-stone-400"}`}>店家日報</button>
+                  <button onClick={() => setAuditType("target")} className={`px-4 py-2 rounded-lg text-sm font-bold transition-all ${auditType === "target" ? "bg-white text-stone-800 shadow-sm" : "text-stone-400"}`}>店家目標</button>
                 </>
               )}
-              <button onClick={() => setAuditType("therapist-daily")} className={`px-4 py-2 rounded-lg text-sm font-bold transition-all whitespace-nowrap ${auditType === "therapist-daily" ? "bg-white text-stone-800 shadow-sm" : "text-stone-400 hover:text-stone-600"}`}>管理師日報</button>
-              <button onClick={() => setAuditType("therapist-target")} className={`px-4 py-2 rounded-lg text-sm font-bold transition-all whitespace-nowrap ${auditType === "therapist-target" ? "bg-white text-stone-800 shadow-sm" : "text-stone-400 hover:text-stone-600"}`}>管理師目標</button>
+              <button onClick={() => setAuditType("therapist-daily")} className={`px-4 py-2 rounded-lg text-sm font-bold transition-all ${auditType === "therapist-daily" ? "bg-white text-stone-800 shadow-sm" : "text-stone-400"}`}>管理師日報</button>
+              <button onClick={() => setAuditType("therapist-target")} className={`px-4 py-2 rounded-lg text-sm font-bold transition-all ${auditType === "therapist-target" ? "bg-white text-stone-800 shadow-sm" : "text-stone-400"}`}>管理師目標</button>
             </div>
 
             <div className="flex gap-2 items-center w-full sm:w-auto">
                 {(auditType === "daily" || auditType === "therapist-daily") ? (
                    <div className="w-full sm:w-auto relative z-10">
-                      {activeStoresForCalendar.length === 0 ? (
-                        <div className="px-4 py-3 bg-rose-50 text-rose-600 text-sm font-bold rounded-xl border border-rose-100 flex items-center gap-2 whitespace-nowrap animate-pulse">
-                          <HelpCircle size={18} /> 尚未設定檢核店家
-                        </div>
-                      ) : (
                         <SmartDatePicker 
-                          selectedDate={checkDate}
-                          onDateSelect={setCheckDate}
-                          stores={calendarStores}       
-                          salesData={calendarSalesData} 
-                          min={minBoundary}
-                          max={maxBoundary}
-                          minDate={new Date(parseInt(selectedYear), parseInt(selectedMonth) - 1, 1)}
-                          maxDate={new Date(parseInt(selectedYear), parseInt(selectedMonth), 0)}
+                          selectedDate={checkDate} onDateSelect={setCheckDate}
+                          stores={calendarStores} salesData={calendarSalesData} 
+                          min={minBoundary} max={maxBoundary}
                         />
-                      )}
                    </div>
                 ) : (
-                   <div className="px-4 py-2 bg-indigo-50 text-indigo-600 font-bold rounded-xl text-sm border border-indigo-100 flex items-center gap-2 self-start flex-grow">
-                      <Target size={16}/> 檢核月份：{selectedYear} 年 {selectedMonth} 月
-                   </div>
+                   <div className="px-4 py-2 bg-indigo-50 text-indigo-600 font-bold rounded-xl text-sm border border-indigo-100 flex items-center gap-2"><Target size={16}/> {selectedYear} 年 {selectedMonth} 月</div>
                 )}
-
                 {(userRole === 'master' || userRole === 'director' || userRole === 'manager') && (auditType === 'daily' || auditType === 'target') && (
-                  <button onClick={openConfigModal} className="p-2 bg-stone-100 text-stone-500 rounded-xl hover:bg-stone-200 self-end" title="設定排除店家">
-                    <Settings size={20}/>
-                  </button>
+                  <button onClick={openConfigModal} className="p-2 bg-stone-100 text-stone-500 rounded-xl hover:bg-stone-200"><Settings size={20}/></button>
                 )}
             </div>
           </div>
-
-          {(auditType === "daily" || auditType === "therapist-daily") && (
-            <div className="flex items-center gap-4 text-sm font-medium text-stone-600 self-start md:self-center pl-1 hidden md:flex">
-              <div className="flex items-center gap-1.5"><span className="w-2.5 h-2.5 rounded-full bg-emerald-400 shadow-sm"></span><span className="whitespace-nowrap">全數回報</span></div>
-              <div className="flex items-center gap-1.5"><span className="w-2.5 h-2.5 rounded-full bg-rose-500 shadow-sm"></span><span className="whitespace-nowrap">回報不完全</span></div>
-            </div>
-          )}
-
         </div>
         
         <div className="border border-rose-100 rounded-3xl overflow-hidden shadow-sm mb-8">
-          <div className="bg-rose-50 px-6 py-4 flex justify-between items-center flex-wrap gap-2">
-            <h4 className="font-bold text-rose-600 flex items-center gap-2">
-              <AlertCircle size={20} /> 
-              {auditType === 'therapist-daily' ? "未回報人員 (已排除休假/未上線)" : 
-               auditType === 'therapist-target' ? "未設定目標人員 (已排除未上線)" :
-               "未完成名單"} 
-              <span className="bg-white px-2 py-0.5 rounded-full text-xs border border-rose-200 shadow-sm">{activeData.missing.length}</span>
-            </h4>
-            <button onClick={handleCopy} className="text-xs bg-white text-rose-500 px-4 py-2 rounded-xl border border-rose-200 font-bold hover:bg-rose-50 transition-colors">複製名單</button>
+          <div className="bg-rose-50 px-6 py-4 flex justify-between items-center">
+            <h4 className="font-bold text-rose-600 flex items-center gap-2"><AlertCircle size={20} /> 未完成名單 <span className="bg-white px-2 py-0.5 rounded-full text-xs border border-rose-200">{activeData.missing.length}</span></h4>
+            <button onClick={handleCopy} className="text-xs bg-white text-rose-500 px-4 py-2 rounded-xl border border-rose-200 font-bold">複製名單</button>
           </div>
           <div className="p-6 bg-white grid grid-cols-1 md:grid-cols-3 gap-4">
-            {Object.entries(activeData.missingByManager).map(
-              ([mgr, list]) => (
-                <div key={mgr} className="bg-stone-50 p-4 rounded-2xl border border-stone-100">
-                  <div className="font-bold text-stone-600 mb-2">{mgr} 區</div>
-                  <div className="flex flex-wrap gap-2">
-                    {list.map((s, idx) => (
-                      <span key={idx} className="bg-white px-2 py-1 rounded-lg text-xs border border-stone-200 text-stone-600 font-medium flex items-center gap-1">
-                        {auditType.includes('therapist') && <UserX size={10} className="text-rose-400"/>}
-                        {auditType.includes('therapist') ? s : cleanStoreName(s)}
-                      </span>
-                    ))}
-                  </div>
+            {Object.entries(activeData.missingByManager).map(([mgr, list]) => (
+              <div key={mgr} className="bg-stone-50 p-4 rounded-2xl border border-stone-100">
+                <div className="font-bold text-stone-600 mb-2">{mgr} 區</div>
+                <div className="flex flex-wrap gap-2">
+                  {list.map((s, idx) => (<span key={idx} className="bg-white px-2 py-1 rounded-lg text-xs border border-stone-200 text-stone-600 flex items-center gap-1"><UserX size={10} className="text-rose-400"/>{s}</span>))}
                 </div>
-              )
-            )}
+              </div>
+            ))}
             {activeData.missing.length === 0 && (
-              <div className="col-span-3 text-center py-10">
-                <div className="inline-flex flex-col items-center gap-2 text-emerald-500 font-bold text-lg">
-                   <div className="w-12 h-12 rounded-full bg-emerald-100 flex items-center justify-center mb-2"><CheckCircle size={24}/></div>
-                   全數完成！
-                   {auditType === 'therapist-daily' && <span className="text-xs text-stone-400 font-normal">未上線、停權、休假人員已自動排除</span>}
-                </div>
+              <div className="col-span-3 text-center py-10 text-emerald-500 font-bold text-lg">
+                <div className="w-12 h-12 rounded-full bg-emerald-100 flex items-center justify-center mx-auto mb-2"><CheckCircle size={24}/></div>全數完成！
               </div>
             )}
           </div>
@@ -562,38 +335,23 @@ const AuditView = () => {
       </Card>
 
       {isConfigModalOpen && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm p-4 animate-in fade-in duration-200">
-          <div className="bg-white w-full max-w-lg rounded-2xl shadow-2xl overflow-hidden flex flex-col max-h-[90vh]">
-            <div className="bg-stone-800 text-white p-4 font-bold text-lg flex justify-between items-center shrink-0">
-              <span className="flex items-center gap-2"><Ban size={20} className="text-rose-400"/> 設定免檢核店家</span>
-              <button onClick={() => setIsConfigModalOpen(false)} className="hover:bg-white/10 p-1 rounded-lg transition-colors"><X size={20}/></button>
-            </div>
-            <div className="p-4 bg-stone-50 border-b border-stone-200 shrink-0 text-sm text-stone-500">
-              <p>勾選的店家將 <span className="font-bold text-rose-500">不會</span> 出現在未回報名單與目標檢核中。</p>
-            </div>
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm p-4">
+          <div className="bg-white w-full max-w-lg rounded-2xl overflow-hidden flex flex-col max-h-[90vh]">
+            <div className="bg-stone-800 text-white p-4 font-bold text-lg flex justify-between items-center"><span className="flex items-center gap-2"><Ban size={20} className="text-rose-400"/> 排除店家</span><button onClick={() => setIsConfigModalOpen(false)}><X size={20}/></button></div>
             <div className="p-6 overflow-y-auto space-y-6">
               {Object.entries(managers).map(([mgr, stores]) => (
                 <div key={mgr}>
-                  <h4 className="font-bold text-stone-400 text-xs uppercase mb-2 ml-1">{mgr} 區</h4>
+                  <h4 className="font-bold text-stone-400 text-xs mb-2">{mgr} 區</h4>
                   <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
                     {stores.map(store => {
-                      const cleanS = cleanStoreName(store);
-                      const isExcluded = localExclusions.includes(store) || localExclusions.includes(cleanS);
-                      return (
-                        <button key={store} onClick={() => toggleExclusion(store)} className={`px-3 py-2 rounded-xl text-sm font-bold border-2 transition-all flex items-center justify-center gap-2 ${isExcluded ? "bg-rose-50 border-rose-500 text-rose-600 shadow-sm" : "bg-white border-stone-200 text-stone-500 hover:border-stone-400"}`}>
-                          {isExcluded && <CheckCircle size={14}/>}
-                          {cleanS}
-                        </button>
-                      );
+                      const cleanS = cleanStoreName(store), isEx = localExclusions.includes(store) || localExclusions.includes(cleanS);
+                      return <button key={store} onClick={() => toggleExclusion(store)} className={`px-3 py-2 rounded-xl text-sm font-bold border-2 flex items-center gap-2 ${isEx ? "bg-rose-50 border-rose-500 text-rose-600" : "bg-white border-stone-200 text-stone-500"}`}>{isEx && <CheckCircle size={14}/>}{cleanS}</button>;
                     })}
                   </div>
                 </div>
               ))}
             </div>
-            <div className="p-4 border-t border-stone-100 bg-white shrink-0 flex justify-end gap-3">
-              <button onClick={() => setIsConfigModalOpen(false)} className="px-6 py-2.5 rounded-xl font-bold text-stone-500 hover:bg-stone-50">取消</button>
-              <button onClick={saveConfig} className="px-6 py-2.5 rounded-xl font-bold bg-stone-800 text-white hover:bg-stone-700 shadow-lg flex items-center gap-2"><Save size={18}/> 儲存設定</button>
-            </div>
+            <div className="p-4 border-t border-stone-100 bg-white flex justify-end gap-3"><button onClick={() => setIsConfigModalOpen(false)} className="px-6 py-2.5 rounded-xl font-bold text-stone-500">取消</button><button onClick={saveConfig} className="px-6 py-2.5 rounded-xl font-bold bg-stone-800 text-white"><Save size={18}/> 儲存</button></div>
           </div>
         </div>
       )}
