@@ -5,7 +5,7 @@ import {
   Sparkles, Crown, ArrowRight, ChevronLeft, Heart 
 } from "lucide-react";
 import { ROLES, BRANDS } from "../constants/index"; 
-import LoginCounter from './LoginCounter'; // ★ 1. 加入這行引入計數器
+import LoginCounter from './LoginCounter';
 
 const LoginView = ({
   appVersion = "2.2.5", 
@@ -72,26 +72,53 @@ const LoginView = ({
     return tRegion ? (managers[tRegion] || []) : [];
   }, [tRegion, managers]);
 
-  // ★★★ 核心修正：全方位離職過濾器 (兼容所有可能的欄位名稱) ★★★
   const filteredTherapists = useMemo(() => {
     if (!tStore) return [];
-    
     return therapists.filter(t => {
-      // 1. 基本條件：必須是該店家的
       if (t.store !== tStore) return false;
-      
-      // 2. 攔截所有可能的「離職/停用」標籤
-      // 只要符合其中一個條件，就代表已離職，直接過濾掉 (return false)
-      const isResigned = 
-        t.isResigned === true || 
-        t.resigned === true || 
-        t.status === 'resigned' || 
-        t.status === '離職' || 
-        t.isActive === false;
-
-      return !isResigned; // 沒離職的人才留下
+      const isResigned = t.isResigned === true || t.resigned === true || t.status === 'resigned' || t.status === '離職' || t.isActive === false;
+      return !isResigned; 
     });
   }, [tStore, therapists]);
+
+ // ★★★ 終極全職級脫水計數器（日誌完全對齊版） ★★★
+  const totalActiveUsers = useMemo(() => {
+    let count = 0;
+    
+    // 1. 管理師 (精準脫水)
+    const activeTherapists = (therapists || []).filter(t => {
+      const isResigned = t.isResigned === true || t.resigned === true || t.status === 'resigned' || t.status === '離職' || t.isActive === false;
+      return !isResigned;
+    });
+    count += activeTherapists.length;
+
+    // 2. 店經理
+    const storeCount = (storeAccounts || []).length;
+    count += storeCount;
+
+    // 3. 區長
+    const managerCount = Object.keys(managerAuth || {}).length;
+    count += managerCount;
+
+    // 4. 高階主管
+    const directorCount = Object.keys(directorAuth || {}).length;
+    count += directorCount;
+
+    // 5. 固定系統基數 (教專 + Master)
+    count += 2;
+
+    // 🔍 修正後的日誌：把 2 位系統帳號補上，讓加總剛好等於 13
+    console.log("=== 📋 全集團授權帳號脫水點名簿 ===");
+    console.log(`總計人數：${count} 人`);
+    console.log(`➔ 🟢 現役管理師：${activeTherapists.length} 人`, activeTherapists.map(t => `${t.name}(${t.store}店)`).join(', '));
+    console.log(`➔ 🏪 活躍店經理：${storeCount} 人`, (storeAccounts || []).map(a => a.name).join(', '));
+    console.log(`➔ 🗺️ 區域負責人：${managerCount} 人`, Object.keys(managerAuth || {}).join(', '));
+    console.log(`➔ 👑 總部高階主管：${directorCount} 人`, Object.keys(directorAuth || {}).join(', '));
+    console.log(`➔ 🛠️ 系統固定帳號 (教專 + 最高管理員)：2 人`); // ★ 補上這行，帳目就完美了！
+    console.log("==================================");
+
+    return count;
+  }, [therapists, storeAccounts, managerAuth, directorAuth]);
 
   const sortedDirectorNames = useMemo(() => {
     const getTitleWeight = (name) => {
@@ -144,13 +171,7 @@ const LoginView = ({
       if (!tPersonId) { setError("請選擇姓名"); setIsLoading(false); return; }
       const therapist = therapists.find(t => t.id === tPersonId);
       
-      // ★ 雙重保險：登入時再次檢查離職狀態
-      const isUserResigned = 
-        therapist?.isResigned === true || 
-        therapist?.resigned === true || 
-        therapist?.status === 'resigned' || 
-        therapist?.status === '離職' || 
-        therapist?.isActive === false;
+      const isUserResigned = therapist?.isResigned === true || therapist?.resigned === true || therapist?.status === 'resigned' || therapist?.status === '離職' || therapist?.isActive === false;
 
       if (isUserResigned) { setError("此帳號已停用"); setIsLoading(false); return; }
       
@@ -417,9 +438,9 @@ const LoginView = ({
         </div>
       </div>
       
-      {/* ★ 2. 把計數器放在這裡，並加上與登入框同步的顯示/隱藏特效 ★ */}
+      {/* ★ 把算好的精準數字傳進去 ★ */}
       <div className={`transition-all duration-500 transform ${showBrandSelector ? "opacity-0 scale-95 pointer-events-none absolute" : "opacity-100 scale-100 relative"}`}>
-        <LoginCounter />
+        <LoginCounter totalUsers={totalActiveUsers} />
       </div>
 
       <div className={`mt-8 text-center transition-all duration-500 transform ${showBrandSelector ? "opacity-0 scale-95 pointer-events-none absolute" : "opacity-100 scale-100 relative"}`}>
