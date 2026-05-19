@@ -30,13 +30,13 @@ import { ViewWrapper, Card, Skeleton, Toast, ConfirmModal } from "./components/S
 import { Sidebar, MobileTopNav } from "./components/Navigation";
 import { AppContext } from "./AppContext";
 import { useAnalytics } from "./hooks/useAnalytics";
-
+import TherapistManagerView from "./components/TherapistManagerView";
 import LoginView from "./components/LoginView";
 
 // ==========================================
 // ★ 系統核心版本號 (終極動態快取版)
 // ==========================================
-const CURRENT_APP_VERSION = "2.8.3"; 
+const CURRENT_APP_VERSION = "2.8.5"; 
 
 const isNewerVersion = (local, remote) => {
   if (!remote) return true;
@@ -676,6 +676,7 @@ export default function App() {
           {activeView === "t-targets" && <TherapistTargetView />}
           {activeView === "t-schedule" && <TherapistScheduleView />}
           {activeView === "notification" && <NotificationManager />}
+          {activeView === "therapist-manager" && <TherapistManagerView />}
         </Suspense>
       </main>
     );
