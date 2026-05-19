@@ -238,9 +238,19 @@ const HistoryView = () => {
   };
 
   const handleExecuteQuery = () => {
-    setQueryRange({ start: startDate, end: endDate });
-    setHasQueried(true);
-  };
+  const start = new Date(startDate);
+  const end = new Date(endDate);
+  const diffTime = Math.abs(end - start);
+  const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24)); 
+  
+  if (diffDays > 93) { // 限制最多只能查 3 個月
+    showToast("為維持系統效能，查詢區間請勿超過 3 個月", "error");
+    return;
+  }
+  
+  setQueryRange({ start: startDate, end: endDate });
+  setHasQueried(true);
+};
 
   const handleResetQuery = () => {
     setStartDate(todayStr);

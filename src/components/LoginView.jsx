@@ -440,7 +440,10 @@ const LoginView = ({
       
       {/* ★ 把算好的精準數字傳進去 ★ */}
       <div className={`transition-all duration-500 transform ${showBrandSelector ? "opacity-0 scale-95 pointer-events-none absolute" : "opacity-100 scale-100 relative"}`}>
-        <LoginCounter totalUsers={totalActiveUsers} />
+        <LoginCounter 
+        totalUsers={totalActiveUsers}
+        brandName={currentBrandConfig?.label}
+        />
       </div>
 
       <div className={`mt-8 text-center transition-all duration-500 transform ${showBrandSelector ? "opacity-0 scale-95 pointer-events-none absolute" : "opacity-100 scale-100 relative"}`}>

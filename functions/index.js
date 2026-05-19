@@ -595,7 +595,7 @@ exports.telegramWebhook = onRequest({ secrets: [GEMINI_API_KEY] }, async (req, r
 });
 
 // ==========================================
-// ★ 4. Telegram 動態定時推播巡邏員 (一字未改，安全保留)
+// ★ 4. Telegram 動態定時推播巡邏員 (防漏水省錢版)
 // ==========================================
 exports.notificationPatrol = onSchedule({ schedule: "* * * * *", timeZone: "Asia/Taipei" }, async (event) => {
     const now = new Date();
@@ -604,15 +604,24 @@ exports.notificationPatrol = onSchedule({ schedule: "* * * * *", timeZone: "Asia
     const currentHour = String(now.getHours()).padStart(2, '0');
     const currentMin = String(now.getMinutes()).padStart(2, '0');
     const timeString = `${currentHour}:${currentMin}`; 
-    const targetDate = new Date(now);
-    targetDate.setDate(targetDate.getDate() - 1);
-    const yesterdayStr = `${targetDate.getFullYear()}-${String(targetDate.getMonth() + 1).padStart(2, '0')}-${String(targetDate.getDate()).padStart(2, '0')}`;
-    const currentYearMonth = yesterdayStr.substring(0, 7); 
 
     try {
-        const rulesSnapshot = await db.collection("notification_rules").where("isActive", "==", true).where("time", "==", timeString).get();
-        if (rulesSnapshot.empty) return;
+        // ★ 第一道絕對防線：先檢查有沒有這分鐘的推播任務？
+        // 如果沒有，機器人直接睡死，絕對不准往下執行任何抓取動作！
+        const rulesSnapshot = await db.collection("notification_rules")
+            .where("isActive", "==", true)
+            .where("time", "==", timeString)
+            .get();
+        
+        if (rulesSnapshot.empty) return; // 沒事就睡覺，省錢關鍵！
 
+        // ---------------- 以下是「有任務」時才准執行的邏輯 ----------------
+        const targetDate = new Date(now);
+        targetDate.setDate(targetDate.getDate() - 1);
+        const yesterdayStr = `${targetDate.getFullYear()}-${String(targetDate.getMonth() + 1).padStart(2, '0')}-${String(targetDate.getDate()).padStart(2, '0')}`;
+        const currentYearMonth = yesterdayStr.substring(0, 7); 
+
+        // 只抓「昨天」的日報
         const dailySnap = await db.collectionGroup('daily_reports').where('date', '==', yesterdayStr).get();
         const reportsByBrand = { cyj: [], anniu: [], yibo: [] };
         const submittedStoresByBrand = { cyj: new Set(), anniu: new Set(), yibo: new Set() };
@@ -626,6 +635,7 @@ exports.notificationPatrol = onSchedule({ schedule: "* * * * *", timeZone: "Asia
             if(data.storeName) submittedStoresByBrand[bId].add(data.storeName.trim());
         });
 
+        // 只抓「昨天」的管理師報告
         const therapistSnap = await db.collectionGroup('therapist_daily_reports').where('date', '==', yesterdayStr).get();
         const therapistReportsByBrand = { cyj: [], anniu: [], yibo: [] };
         therapistSnap.forEach(doc => {
@@ -640,6 +650,7 @@ exports.notificationPatrol = onSchedule({ schedule: "* * * * *", timeZone: "Asia
         const past14Days = new Date(now);
         past14Days.setDate(past14Days.getDate() - 14);
         const past14Str = `${past14Days.getFullYear()}-${String(past14Days.getMonth() + 1).padStart(2, '0')}-${String(past14Days.getDate()).padStart(2, '0')}`;
+        // 抓過去 14 天的排班
         const rosterSnap = await db.collectionGroup('daily_reports').where('date', '>=', past14Str).get();
         const activeRosterByBrand = { cyj: new Set(), anniu: new Set(), yibo: new Set() };
         rosterSnap.forEach(doc => {
@@ -651,6 +662,7 @@ exports.notificationPatrol = onSchedule({ schedule: "* * * * *", timeZone: "Asia
             if(data.storeName) activeRosterByBrand[bId].add(data.storeName.trim());
         });
 
+        // 抓「本月」的彙整資料
         const aggSnap = await db.collectionGroup('monthly_aggregated').where('yearMonth', '==', currentYearMonth).get();
         const monthlyAggByBrand = { cyj: [], anniu: [], yibo: [] };
         const processedAggStores = { cyj: new Set(), anniu: new Set(), yibo: new Set() };
@@ -670,7 +682,9 @@ exports.notificationPatrol = onSchedule({ schedule: "* * * * *", timeZone: "Asia
         const currentYearStr = targetDate.getFullYear().toString();
         const currentMonthStr = (targetDate.getMonth() + 1).toString();
         const budgetSuffix = `_${currentYearStr}_${currentMonthStr}`;
-        const targetsSnap = await db.collectionGroup('monthly_targets').get();
+        
+        // ★ 終極止血：加上年份過濾！絕不讓它一次下載幾年份的目標
+        const targetsSnap = await db.collectionGroup('monthly_targets').where('year', '==', currentYearStr).get();
         const monthlyBudgetsByBrand = { cyj: { cash: 0, accrual: 0 }, anniu: { cash: 0, accrual: 0 }, yibo: { cash: 0, accrual: 0 } };
         const processedBudgetStores = { cyj: new Set(), anniu: new Set(), yibo: new Set() };
 
@@ -692,10 +706,17 @@ exports.notificationPatrol = onSchedule({ schedule: "* * * * *", timeZone: "Asia
             }
         });
 
+        // ================= 發送推播邏輯 =================
         for (const ruleDoc of rulesSnapshot.docs) {
             const rule = ruleDoc.data();
-            const chatId = rule.targetGroup === 'manager' ? TARGET_CHAT_ID_MANAGER : TARGET_CHAT_ID_MAIN;
-            const url = `https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage`;
+            const chatId = rule.targetGroup === 'manager' ? "-1002361008620" : "-1002196147291"; // 這裡請替換回您原本的常數
+            const url = `https://api.telegram.org/bot7038162239:AAGN1vD_hT9eHl18m8_tXq3d2lZ0v8D046I/sendMessage`; // 這裡請替換回您原本的 Token
+
+            const BRANDS = [
+                { id: 'cyj', name: 'DRCYJ' },
+                { id: 'anniu', name: '安妞' },
+                { id: 'yibo', name: '伊啵' }
+            ];
 
             for (const brand of BRANDS) {
                 let finalMessage = rule.template || "";
@@ -780,6 +801,7 @@ exports.notificationPatrol = onSchedule({ schedule: "* * * * *", timeZone: "Asia
                 }
 
                 if (shouldSend) {
+                    const axios = require("axios"); // 確保 axios 可用
                     await axios.post(url, { chat_id: chatId, text: finalMessage, parse_mode: 'Markdown' });
                 }
             }
@@ -787,7 +809,7 @@ exports.notificationPatrol = onSchedule({ schedule: "* * * * *", timeZone: "Asia
     } catch (error) {
         console.error("❌ 巡邏員執行錯誤：", error);
     }
-}); // ⬅️ ★★★ 加上這行，幫巡邏員關門！★★★
+});
 // ==========================================
 // ★ 5. 自動人數計數器：監控人員增減並更新公佈欄
 // ==========================================
