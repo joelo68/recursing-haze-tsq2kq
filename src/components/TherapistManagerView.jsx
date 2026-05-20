@@ -6,6 +6,7 @@ import {
 } from "lucide-react";
 import { doc, setDoc, deleteDoc, serverTimestamp } from "firebase/firestore";
 
+// 注意：這裡即使 import 了 db，我們也不會把它塞進 doc() 裡面
 import { db } from "../config/firebase";
 import { AppContext } from "../AppContext";
 import { ViewWrapper } from "./SharedUI";
@@ -17,7 +18,8 @@ const TherapistManagerView = () => {
     therapists, 
     managers, 
     showToast, 
-    getCollectionPath 
+    getCollectionPath,
+    fetchGlobalData 
   } = useContext(AppContext);
 
   // --- 狀態控制 ---
@@ -108,7 +110,8 @@ const TherapistManagerView = () => {
     const newId = `T${Date.now().toString().slice(-6)}`;
 
     try {
-      const docRef = doc(db, getCollectionPath("therapists"), newId);
+      // 🔥 已經將多餘的 db 刪除，確保語法正確
+      const docRef = doc(getCollectionPath("therapists"), newId);
       await setDoc(docRef, {
         id: newId,
         name: formName.trim(),
@@ -116,14 +119,21 @@ const TherapistManagerView = () => {
         password: formPassword.trim(),
         onboardDate: formOnboardDate,
         resignDate: formResignDate,
+        status: "在職", // 確保人員不會隱形
         isActive: true,
         isResigned: false,
         createdAt: serverTimestamp(),
         updatedAt: serverTimestamp()
       });
+      
       showToast("新增人員成功", "success");
       setIsAddingTherapist(false);
+      
+      // 呼叫全域更新，畫面立刻重新抓取
+      if (fetchGlobalData) fetchGlobalData();
+      
     } catch (error) {
+      console.error("新增失敗:", error);
       showToast("新增失敗", "error");
     }
   };
@@ -134,7 +144,8 @@ const TherapistManagerView = () => {
       return;
     }
     try {
-      const docRef = doc(db, getCollectionPath("therapists"), editingTherapist.id);
+      // 🔥 已經將多餘的 db 刪除
+      const docRef = doc(getCollectionPath("therapists"), editingTherapist.id);
       await setDoc(docRef, {
         name: formName.trim(),
         store: formStore,
@@ -143,10 +154,16 @@ const TherapistManagerView = () => {
         resignDate: formResignDate,
         updatedAt: serverTimestamp()
       }, { merge: true });
+      
       showToast("資料更新成功", "success");
       setIsAddingTherapist(false);
       setEditingTherapist(null);
+      
+      // 修改後即時重整
+      if (fetchGlobalData) fetchGlobalData();
+      
     } catch (error) {
+      console.error("更新失敗:", error);
       showToast("更新失敗", "error");
     }
   };
@@ -158,7 +175,8 @@ const TherapistManagerView = () => {
 
     if (window.confirm(`確定要${actionName}「${t.name}」嗎？`)) {
       try {
-        const docRef = doc(db, getCollectionPath("therapists"), t.id);
+        // 🔥 已經將多餘的 db 刪除
+        const docRef = doc(getCollectionPath("therapists"), t.id);
         await setDoc(docRef, { 
           isResigned: nextResigned, 
           status: nextResigned ? "離職" : "在職",
@@ -166,8 +184,14 @@ const TherapistManagerView = () => {
           resignDate: nextResigned ? getTodayStr() : "",
           updatedAt: serverTimestamp() 
         }, { merge: true });
+        
         showToast(`已${actionName}`, "success");
+        
+        // 狀態切換後即時重整
+        if (fetchGlobalData) fetchGlobalData();
+        
       } catch (error) {
+        console.error("狀態更新失敗:", error);
         showToast("狀態更新失敗", "error");
       }
     }
@@ -176,9 +200,15 @@ const TherapistManagerView = () => {
   const handleDeleteTherapist = async (id) => {
     if (window.confirm("警告：這是永久實體刪除，將無法復原！確定刪除嗎？")) {
       try {
-        await deleteDoc(doc(db, getCollectionPath("therapists"), id));
+        // 🔥 已經將多餘的 db 刪除
+        await deleteDoc(doc(getCollectionPath("therapists"), id));
         showToast("人員已永久刪除", "success");
+        
+        // 刪除後即時重整
+        if (fetchGlobalData) fetchGlobalData();
+        
       } catch (error) {
+        console.error("刪除失敗:", error);
         showToast("刪除失敗", "error");
       }
     }

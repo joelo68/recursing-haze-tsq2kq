@@ -3,21 +3,24 @@ import React, { useState, useContext } from "react";
 import { db } from "../config/firebase";
 import { getDocs, doc, writeBatch } from "firebase/firestore"; 
 import { AppContext } from "../AppContext";
-import { Loader2, Database, Download, RefreshCw, AlertTriangle, Play, Scissors, ClipboardList, Trash2 } from "lucide-react";
+import { Loader2, Database, Download, RefreshCw, AlertTriangle, Play, Scissors, ClipboardList, Trash2, Calendar, Settings } from "lucide-react";
 
 export default function SystemMaintenance() {
   const { currentBrand, userRole, showToast, getCollectionPath } = useContext(AppContext);
   const [logs, setLogs] = useState([]);
   
-  // ★ 修正 Bug 1：將單一 boolean 改為紀錄具體執行動作的 ID
   const [loadingAction, setLoadingAction] = useState(null);
+  const [calMonth, setCalMonth] = useState(new Date().toISOString().substring(0, 7));
 
   // 權限防護
   if (userRole !== "director") {
     return (
-      <div className="p-8 text-center text-stone-400 bg-stone-50 rounded-2xl border border-stone-200 animate-in fade-in duration-300">
-        <AlertTriangle className="mx-auto mb-2 w-8 h-8 text-stone-300" />
-        <p className="font-semibold">此區域僅限總監存取</p>
+      <div className="p-8 text-center text-stone-400 bg-stone-50 rounded-3xl border border-stone-200 animate-in fade-in duration-300 flex flex-col items-center justify-center min-h-[300px]">
+        <div className="w-16 h-16 bg-white rounded-full shadow-sm flex items-center justify-center mb-4">
+          <AlertTriangle className="w-8 h-8 text-stone-300" />
+        </div>
+        <p className="font-bold text-lg text-stone-600">系統維護區塊</p>
+        <p className="text-sm mt-1">此區域僅限集團總監存取</p>
       </div>
     );
   }
@@ -55,28 +58,21 @@ export default function SystemMaintenance() {
             let origDate = String(data.date).trim();
             let newDate = origDate;
 
-            // ★ 修正 Bug 2：強化版日期格式捕捉器 (處理 YYYYMMDD, YYYY.MM.DD, 年月日 等各種奇葩格式)
             if (/^\d{8}$/.test(origDate)) {
-                // 處理連續數字無符號: 20260327
                 newDate = `${origDate.substring(0,4)}-${origDate.substring(4,6)}-${origDate.substring(6,8)}`;
             } else {
-                // 將 / . 年 月 統一替換成 -，並移除 日
                 let cleanStr = origDate.replace(/[\/\.年月]/g, '-').replace(/日/g, '').replace(/-+/g, '-').trim();
-                cleanStr = cleanStr.replace(/^-+|-+$/g, ''); // 移除頭尾可能多餘的 -
+                cleanStr = cleanStr.replace(/^-+|-+$/g, ''); 
                 
                 const parts = cleanStr.split('-');
                 if (parts.length === 3) {
                   const y = parts[0];
                   const m = String(parseInt(parts[1], 10)).padStart(2, '0');
                   const d = String(parseInt(parts[2], 10)).padStart(2, '0');
-                  
-                  if (!isNaN(y) && !isNaN(m) && !isNaN(d)) {
-                    newDate = `${y}-${m}-${d}`;
-                  }
+                  if (!isNaN(y) && !isNaN(m) && !isNaN(d)) newDate = `${y}-${m}-${d}`;
                 }
             }
 
-            // 如果格式被修正了，就寫入資料庫並記錄 Log
             if (newDate !== origDate) {
               const storeDisplay = data.storeName || data.store || "未知店家";
               const personDisplay = data.therapistName ? ` - ${data.therapistName}` : "";
@@ -85,7 +81,6 @@ export default function SystemMaintenance() {
               batch.update(doc(getCollectionPath(colName), docSnap.id), { date: newDate });
               colFixedCount++; totalFixedCount++; operationCount++;
 
-              // Firestore 批次寫入上限是 500
               if (operationCount === 490) {
                 await batch.commit(); 
                 batch = writeBatch(db); 
@@ -94,7 +89,6 @@ export default function SystemMaintenance() {
             }
           }
         }
-        // ★ 新增：明確印出掃描總數，證明系統有去檢查其他品牌的資料庫
         addLog(`✅ [${colName}] 掃描完畢，共檢查 ${snapshot.size} 筆，發現 ${colFixedCount} 筆需修正。`);
       }
 
@@ -244,86 +238,161 @@ export default function SystemMaintenance() {
     window.location.reload(true); 
   };
 
+  // ==========================================
+  // 工具 5: 數據一致性校準器
+  // ==========================================
+  const handleCalibrateData = async () => {
+    const brandId = currentBrand?.id || 'cyj';
+    if (!window.confirm(`確定要校準【${brandId}】在 ${calMonth} 的數據嗎？\n此操作將重新掃描當月所有日報並強制修正彙整表與達成率。`)) return;
+
+    setLoadingAction('calibrate');
+    setLogs([]); 
+    addLog(`🔄 啟動數據校準引擎... 目標: ${brandId}, 月份: ${calMonth}`);
+
+    try {
+      const functionUrl = "https://recalculatemonthlydata-hyhcwrnyaa-uc.a.run.app"; 
+      const response = await fetch(`${functionUrl}?brandId=${brandId}&yearMonth=${calMonth}`);
+      
+      if (!response.ok) throw new Error("伺服器回應異常");
+      
+      const result = await response.text();
+      addLog(result);
+      showToast("數據校準完成", "success");
+    } catch (err) {
+      addLog(`❌ 校準失敗: ${err.message}`);
+      showToast("校準失敗", "error");
+    } finally {
+      setLoadingAction(null);
+    }
+  };
+
+  // ============================================================================
+  // ★ 全新 UI 設計：優雅條列式面板 (List View)
+  // ============================================================================
   return (
-    <div className="space-y-8 animate-in fade-in slide-in-from-bottom-4 duration-500">
-      <div className="flex items-center gap-3">
-        <div className="w-1.5 h-8 bg-amber-500 rounded-full shadow-sm shadow-amber-200"></div>
-        <h1 className="text-3xl font-extrabold text-stone-900 tracking-tighter">系統維護控制台</h1>
+    <div className="space-y-8 animate-in fade-in slide-in-from-bottom-4 duration-700 max-w-5xl mx-auto">
+      
+      {/* 標題區 */}
+      <div className="flex items-center gap-4 bg-white p-6 rounded-3xl border border-stone-100 shadow-sm">
+        <div className="w-12 h-12 bg-amber-50 rounded-2xl border border-amber-100 flex items-center justify-center">
+          <Settings className="text-amber-600" size={24} strokeWidth={1.5} />
+        </div>
+        <div>
+          <h1 className="text-2xl font-extrabold text-stone-800 tracking-tight">系統維護控制台</h1>
+          <p className="text-sm text-stone-500 mt-1">執行核心資料庫的清理、備份與效能校準作業。</p>
+        </div>
       </div>
 
-      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
+      {/* 條列式工具區 */}
+      <div className="space-y-4">
         {[
-          { id: 'fixDates', icon: Database, bg: 'bg-amber-50', text: 'text-amber-600', border: 'border-amber-100', title: '格式標準化', desc: '批次統一混亂日期格式，修正為 YYYY-MM-DD。', action: handleFixDateFormats, btnTxt: '執行清洗' },
-          { id: 'removeDups', icon: Scissors, bg: 'bg-purple-50', text: 'text-purple-600', border: 'border-purple-100', title: '重複清道夫', desc: '掃描同天同人重複送出紀錄，刪除多餘垃圾。', action: handleRemoveDuplicates, btnTxt: '掃描清除' },
-          { id: 'backup', icon: Download, bg: 'bg-blue-50', text: 'text-blue-600', border: 'border-blue-100', title: '全量數據備份', desc: '下載品牌所有歷史日報為 JSON 供備份使用。', action: handleBackupData, btnTxt: '下載備份' },
-          { id: 'reset', icon: RefreshCw, bg: 'bg-rose-50', text: 'text-rose-600', border: 'border-rose-100', title: '強制系統重置', desc: '若遇畫面異常或卡頓，可清除快取並重載。', action: handleHardReset, btnTxt: '強制重置', danger: true },
+          { id: 'fixDates', icon: Database, iconBg: 'bg-indigo-50 text-indigo-600 border-indigo-100', title: '格式標準化', desc: '自動掃描資料庫，並批次統一所有混亂的日期格式為標準的 YYYY-MM-DD。', action: handleFixDateFormats, btnTxt: '執行清洗' },
+          { id: 'removeDups', icon: Scissors, iconBg: 'bg-purple-50 text-purple-600 border-purple-100', title: '重複清道夫', desc: '偵測同一天、同店、同人的異常重複報表，並自動保留最新紀錄以清除垃圾數據。', action: handleRemoveDuplicates, btnTxt: '掃描清除' },
+          { id: 'backup', icon: Download, iconBg: 'bg-blue-50 text-blue-600 border-blue-100', title: '全量數據備份', desc: '將當前品牌的所有歷史日報完整匯出為 JSON 檔案，提供離線備份使用。', action: handleBackupData, btnTxt: '下載備份' },
+          { id: 'reset', icon: RefreshCw, iconBg: 'bg-rose-50 text-rose-600 border-rose-100', title: '強制系統重置', desc: '當系統畫面發生異常或長時間未更新時，點擊此按鈕清除本地快取並強制重載。', action: handleHardReset, btnTxt: '重置快取', danger: true },
+          { id: 'calibrate', icon: Play, iconBg: 'bg-emerald-50 text-emerald-600 border-emerald-100', title: '數據一致性校準', desc: '當儀表板與日報數字出現落差時，可針對指定月份啟動強制重新盤點與校正。', action: handleCalibrateData, btnTxt: '啟動校準', highlight: true },
         ].map((tool, i) => {
           const Icon = tool.icon;
-          // ★ 修改：透過比對 loadingAction 來決定要不要禁用按鈕
           const isThisLoading = loadingAction === tool.id;
           const isAnyLoading = loadingAction !== null;
 
           return (
-            <div key={i} className="bg-white p-7 rounded-3xl border border-stone-100 shadow-sm shadow-stone-100/70 hover:shadow-xl hover:shadow-amber-950/5 hover:-translate-y-1 hover:border-amber-100 transition-all duration-300 flex flex-col group">
-              <div className={`w-14 h-14 ${tool.bg} ${tool.border} rounded-2xl flex items-center justify-center ${tool.text} mb-6 border shadow-inner transition-colors duration-300 group-hover:bg-white group-hover:shadow-none`}>
-                <Icon size={28} strokeWidth={1.5} />
+            <div key={i} className={`group bg-white p-5 rounded-2xl border transition-all duration-300 flex flex-col md:flex-row items-start md:items-center gap-5 ${tool.highlight ? 'border-amber-200 shadow-sm' : 'border-stone-200 hover:border-amber-300 hover:shadow-md'}`}>
+              
+              {/* 圖示區 */}
+              <div className={`w-14 h-14 shrink-0 rounded-2xl flex items-center justify-center border ${tool.iconBg} shadow-inner`}>
+                <Icon size={26} strokeWidth={1.5} />
               </div>
-              <h3 className="text-xl font-bold text-stone-800 mb-1.5 tracking-tight">{tool.title}</h3>
-              <p className="text-sm text-stone-500 mb-6 flex-1 leading-relaxed">{tool.desc}</p>
-              {tool.danger ? (
-                <button onClick={tool.action} disabled={isAnyLoading} className="w-full py-3 bg-rose-50 text-rose-600 border border-rose-100 rounded-xl text-sm font-semibold hover:bg-rose-100 disabled:opacity-40 disabled:cursor-not-allowed transition-colors flex items-center justify-center gap-2 active:scale-95 shadow-sm shadow-rose-100/50">
-                  <Icon size={16}/> {tool.btnTxt}
-                </button>
-              ) : (
-                <button onClick={tool.action} disabled={isAnyLoading} className="w-full py-3 bg-white text-stone-700 border border-stone-200 rounded-xl text-sm font-semibold hover:bg-stone-50 hover:border-stone-300 disabled:opacity-40 disabled:cursor-not-allowed transition-colors flex items-center justify-center gap-2 active:scale-95 group-hover:bg-amber-50 group-hover:text-amber-700 group-hover:border-amber-100 shadow-sm">
-                  {/* ★ 修正 Bug 1：只有被按下的那顆按鈕才會轉圈圈 */}
-                  {isThisLoading ? <Loader2 className="animate-spin text-amber-600" size={16}/> : <Icon size={16} className="fill-current"/>}
+
+              {/* 文字說明區 */}
+              <div className="flex-1 min-w-0">
+                <div className="flex items-center gap-3 mb-1">
+                  <h3 className="text-lg font-bold text-stone-800 tracking-tight">{tool.title}</h3>
+                  {tool.danger && <span className="text-[10px] font-bold bg-rose-100 text-rose-600 px-2 py-0.5 rounded-md border border-rose-200">風險操作</span>}
+                  {tool.highlight && <span className="text-[10px] font-bold bg-amber-100 text-amber-700 px-2 py-0.5 rounded-md border border-amber-200">推薦工具</span>}
+                </div>
+                <p className="text-sm text-stone-500 leading-relaxed pr-4">{tool.desc}</p>
+
+                {/* 工具 5 專用的月份選擇器，優雅地嵌在敘述下方 */}
+                {tool.id === 'calibrate' && (
+                  <div className="mt-4 flex items-center gap-3 bg-stone-50 px-4 py-2 rounded-xl border border-stone-200 w-fit transition-colors group-hover:bg-white group-hover:border-amber-200">
+                    <Calendar size={16} className="text-stone-400" />
+                    <span className="text-sm font-bold text-stone-600">指定月份：</span>
+                    <input 
+                      type="month" 
+                      value={calMonth} 
+                      onChange={(e) => setCalMonth(e.target.value)} 
+                      className="bg-transparent font-bold text-stone-800 outline-none w-28 cursor-pointer"
+                    />
+                  </div>
+                )}
+              </div>
+
+              {/* 操作按鈕區 */}
+              <div className="w-full md:w-auto shrink-0 mt-2 md:mt-0 pt-4 md:pt-0 border-t md:border-0 border-stone-100">
+                <button 
+                  onClick={tool.action} 
+                  disabled={isAnyLoading} 
+                  className={`w-full md:w-36 py-3 rounded-xl text-sm font-bold shadow-sm transition-all flex items-center justify-center gap-2 active:scale-95 disabled:opacity-50 disabled:cursor-not-allowed
+                    ${tool.danger 
+                      ? 'bg-white border border-rose-200 text-rose-600 hover:bg-rose-50' 
+                      : tool.highlight
+                        ? 'bg-stone-800 text-white hover:bg-stone-700 hover:shadow-md'
+                        : 'bg-white border border-stone-200 text-stone-600 hover:bg-stone-50 hover:text-stone-800 hover:border-stone-300'
+                    }
+                  `}
+                >
+                  {isThisLoading ? <Loader2 className="animate-spin" size={16}/> : <Icon size={16}/>}
                   {tool.btnTxt}
                 </button>
-              )}
+              </div>
+
             </div>
           );
         })}
       </div>
 
-      <div className="bg-white rounded-3xl p-7 shadow-sm shadow-stone-100/70 border border-stone-100 transition-all hover:shadow-lg hover:border-amber-50 hover:shadow-amber-950/5">
-        <div className="flex justify-between items-center mb-5 pb-5 border-b border-stone-100">
-          <div className="flex items-center gap-3">
-             <ClipboardList className="text-stone-400" />
-             <span className="font-extrabold text-stone-900 tracking-tight text-lg">系統稽核日誌 (SYSTEM LOGS)</span>
+      {/* 稽核日誌區 (移除厚重邊框，改為無邊框內嵌設計) */}
+      <div className="bg-stone-50 rounded-3xl p-6 border border-stone-200 shadow-inner">
+        <div className="flex justify-between items-center mb-4">
+          <div className="flex items-center gap-2">
+             <ClipboardList className="text-stone-400" size={18} />
+             <span className="font-bold text-stone-700 tracking-tight text-sm">系統稽核日誌 (SYSTEM LOGS)</span>
           </div>
-          {loadingAction && <span className="text-xs text-amber-600 bg-amber-50 px-3 py-1.5 rounded-full font-semibold animate-pulse flex items-center gap-1.5"><Loader2 size={12} className="animate-spin"/> 維護中，請稍候...</span>}
-          {logs.length > 0 && !loadingAction && <button onClick={() => setLogs([])} className="text-xs text-stone-400 hover:text-stone-600 flex items-center gap-1.5 px-2 py-1 hover:bg-stone-100 rounded-md transition-colors"><Trash2 size={14}/> 清除日誌</button>}
+          {loadingAction && <span className="text-xs text-amber-600 bg-amber-100 px-3 py-1 rounded-full font-bold animate-pulse flex items-center gap-1.5"><Loader2 size={12} className="animate-spin"/> 執行中...</span>}
+          {logs.length > 0 && !loadingAction && <button onClick={() => setLogs([])} className="text-xs text-stone-500 hover:text-rose-600 flex items-center gap-1 px-3 py-1.5 bg-white border border-stone-200 hover:border-rose-200 rounded-lg transition-colors shadow-sm"><Trash2 size={12}/> 清除紀錄</button>}
         </div>
         
-        <div className="bg-gradient-to-b from-stone-50 to-white rounded-2xl p-6 font-mono text-sm h-80 overflow-y-auto shadow-inner border border-stone-100 space-y-2.5 selection:bg-amber-100">
-          {logs.length === 0 && (
-            <div className="flex h-full items-center justify-center flex-col gap-3 text-stone-300">
-              <div className="p-4 bg-white rounded-full shadow-sm border border-stone-100"><ClipboardList size={32} strokeWidth={1.5} /></div>
-              <span className="text-xs font-semibold tracking-wider text-stone-400">系統待命中，請選擇上方工具執行...</span>
+        <div className="bg-white rounded-2xl p-5 font-mono text-[13px] h-[300px] overflow-y-auto border border-stone-200/60 shadow-sm space-y-2 selection:bg-amber-100">
+          {logs.length === 0 ? (
+            <div className="flex h-full items-center justify-center flex-col gap-3 opacity-60">
+              <ClipboardList size={32} className="text-stone-300" strokeWidth={1.5} />
+              <span className="text-xs font-bold tracking-wider text-stone-400 uppercase">System Ready...</span>
             </div>
-          )}
-          {logs.map((log) => {
-            const isError = log.text.includes('❌');
-            const isFix = log.text.includes('✏️');
-            const isDel = log.text.includes('🗑️');
-            const isSuccess = log.text.includes('✅') || log.text.includes('🎉') || log.text.includes('✨');
-            
-            let textColor = 'text-stone-600';
-            if (isError) textColor = 'text-rose-500';
-            else if (isFix) textColor = 'text-amber-600';
-            else if (isDel) textColor = 'text-stone-400 line-through';
-            else if (isSuccess) textColor = 'text-stone-900 font-bold';
+          ) : (
+            logs.map((log) => {
+              const isError = log.text.includes('❌');
+              const isFix = log.text.includes('✏️');
+              const isDel = log.text.includes('🗑️');
+              const isSuccess = log.text.includes('✅') || log.text.includes('🎉') || log.text.includes('✨') || log.text.includes('🔄');
+              
+              let textColor = 'text-stone-600';
+              if (isError) textColor = 'text-rose-500';
+              else if (isFix) textColor = 'text-amber-600';
+              else if (isDel) textColor = 'text-stone-400 line-through';
+              else if (isSuccess) textColor = 'text-stone-800 font-bold';
 
-            return (
-              <div key={log.id} className="border-b border-stone-100/50 pb-2 last:border-0 hover:bg-stone-100/50 rounded px-2 -mx-2 transition-colors flex gap-2">
-                <span className="text-stone-400 shrink-0">[{log.time}]</span>
-                <span className={`${textColor} break-all`}>{log.text}</span>
-              </div>
-            );
-          })}
+              return (
+                <div key={log.id} className="border-b border-stone-100/50 pb-2 last:border-0 hover:bg-stone-50 rounded transition-colors flex gap-2">
+                  <span className="text-stone-400 shrink-0 select-none">[{log.time}]</span>
+                  <span className={`${textColor} break-all`}>{log.text}</span>
+                </div>
+              );
+            })
+          )}
         </div>
       </div>
+
     </div>
   );
 }

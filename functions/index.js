@@ -12,7 +12,7 @@ const db = admin.firestore();
 const GEMINI_API_KEY = defineSecret('GEMINI_API_KEY');
 
 // ==========================================
-// ★ 1. 核心資料結算邏輯 (店鋪日報) - 已擴充精細指標
+// ★ 1. 核心資料結算邏輯 (店鋪日報)
 // ==========================================
 async function updateMonthlyAggregation(change, basePath) {
   const beforeData = change.before.data() || {};
@@ -326,7 +326,7 @@ async function getMissingReports(startDate, endDate) {
 }
 
 // ==========================================
-// ★ 2.5 AI 戰略雙引擎：2. 宏觀大數據分析引擎 (NEW!)
+// ★ 2.5 AI 戰略雙引擎：2. 宏觀大數據分析引擎
 // ==========================================
 async function getMacroStrategicAnalysis(startMonth, endMonth, storeName = null, brandName = null) {
     if (storeName && !brandName) {
@@ -336,7 +336,6 @@ async function getMacroStrategicAnalysis(startMonth, endMonth, storeName = null,
         }
     }
 
-    // 1. 直接讀取輕量級的「月結算表」
     const aggSnap = await db.collectionGroup('monthly_aggregated')
         .where('yearMonth', '>=', startMonth)
         .where('yearMonth', '<=', endMonth)
@@ -366,18 +365,15 @@ async function getMacroStrategicAnalysis(startMonth, endMonth, storeName = null,
         const newRev = Number(data.newCustomerSales) || 0;
         const newCount = Number(data.newCustomers) || 0;
 
-        // 彙整跨月趨勢
         if(!monthlyMap[ym]) monthlyMap[ym] = { cash: 0, accrual: 0, skincare: 0, traffic: 0, newRev: 0, newCount: 0 };
         monthlyMap[ym].cash += cash; monthlyMap[ym].accrual += accrual; monthlyMap[ym].skincare += skincare;
         monthlyMap[ym].traffic += traffic; monthlyMap[ym].newRev += newRev; monthlyMap[ym].newCount += newCount;
 
-        // 彙整單店跨期總和 (用來體檢)
         if(!storeMap[sName]) storeMap[sName] = { brand: bId, cash: 0, accrual: 0, skincare: 0, traffic: 0, newRev: 0, newCount: 0 };
         storeMap[sName].cash += cash; storeMap[sName].accrual += accrual; storeMap[sName].skincare += skincare;
         storeMap[sName].traffic += traffic; storeMap[sName].newRev += newRev; storeMap[sName].newCount += newCount;
     });
 
-    // 2. 讀取「預算目標表」(抓漏與達標追蹤)
     const targetsSnap = await db.collectionGroup('monthly_targets').get();
     let targetMap = {};
     targetsSnap.forEach(doc => {
@@ -393,7 +389,6 @@ async function getMacroStrategicAnalysis(startMonth, endMonth, storeName = null,
          }
     });
 
-    // 3. 交叉比對產出「門市體檢報告」
     const storeHealth = Object.keys(storeMap).map(s => {
         const coreName = s.replace(/CYJ|安妞|伊啵|店/g, '').trim();
         const target = targetMap[coreName]?.cash || 0;
@@ -421,47 +416,46 @@ const aiTools = {
     functionDeclarations: [
         {
             name: "getStorePerformance",
-            description: "【單月內日常查詢】查詢店鋪/品牌的營運狀況，包含現金、權責、保養品、客單價、締結率與【月底推估業績(projection)】。",
+            description: "【單月內日常查詢】查詢店鋪/品牌的營運狀況。",
             parameters: { 
                 type: "OBJECT", 
                 properties: { 
-                    startDate: { type: "STRING", description: "選填，必須為 YYYY-MM-DD" }, 
-                    endDate: { type: "STRING", description: "選填，必須為 YYYY-MM-DD" }, 
-                    storeName: { type: "STRING", description: "單一店鋪名稱（請勿填入品牌名），例如：復北, 左營" }, 
-                    brandName: { type: "STRING", description: "品牌名稱，例如：CYJ, 安妞, 伊啵" } 
+                    startDate: { type: "STRING" }, 
+                    endDate: { type: "STRING" }, 
+                    storeName: { type: "STRING" }, 
+                    brandName: { type: "STRING" } 
                 } 
             }
         },
         {
             name: "getTherapistPerformance",
-            description: "【單月內日常查詢】查詢人員/諮詢師的個人業績、新舊客、客單價、締結率與【月底推估業績(projection)】。",
+            description: "【單月內日常查詢】查詢人員/諮詢師的個人業績。",
             parameters: { 
                 type: "OBJECT", 
                 properties: { 
-                    startDate: { type: "STRING", description: "選填，必須為 YYYY-MM-DD" }, 
-                    endDate: { type: "STRING", description: "選填，必須為 YYYY-MM-DD" }, 
+                    startDate: { type: "STRING" }, 
+                    endDate: { type: "STRING" }, 
                     personName: { type: "STRING" }, 
-                    storeName: { type: "STRING", description: "單一店鋪名稱（請勿填入品牌名），例如：復北, 左營" }, 
-                    brandName: { type: "STRING", description: "品牌名稱，例如：CYJ, 安妞, 伊啵" } 
+                    storeName: { type: "STRING" }, 
+                    brandName: { type: "STRING" } 
                 } 
             }
         },
         {
             name: "getMissingReports",
             description: "查詢未交日報名單。",
-            parameters: { type: "OBJECT", properties: { startDate: { type: "STRING", description: "必須為 YYYY-MM-DD" }, endDate: { type: "STRING", description: "必須為 YYYY-MM-DD" } } }
+            parameters: { type: "OBJECT", properties: { startDate: { type: "STRING" }, endDate: { type: "STRING" } } }
         },
-        // ★ 新增：大數據戰略引擎工具宣告
         {
             name: "getMacroStrategicAnalysis",
-            description: "【跨月/跨季/長區間大數據專用】查詢多個月份的宏觀趨勢、各店預算達標率預警、以及店鋪體質交叉比對(如客單價、保養品佔比)。",
+            description: "【跨月/跨季/長區間大數據專用】查詢多個月份的宏觀趨勢、各店預算達標率。",
             parameters: { 
                 type: "OBJECT", 
                 properties: { 
-                    startMonth: { type: "STRING", description: "開始月份，強制格式為 YYYY-MM，例如 2026-01" }, 
-                    endMonth: { type: "STRING", description: "結束月份，強制格式為 YYYY-MM，例如 2026-04" }, 
-                    storeName: { type: "STRING", description: "選填，單一店鋪名稱" }, 
-                    brandName: { type: "STRING", description: "選填，品牌名稱，例如：CYJ, 安妞, 伊啵" } 
+                    startMonth: { type: "STRING" }, 
+                    endMonth: { type: "STRING" }, 
+                    storeName: { type: "STRING" }, 
+                    brandName: { type: "STRING" } 
                 },
                 required: ["startMonth", "endMonth"]
             }
@@ -489,25 +483,16 @@ exports.telegramWebhook = onRequest({ secrets: [GEMINI_API_KEY] }, async (req, r
         const model = genAI.getGenerativeModel({ 
             model: "gemini-2.5-flash",
             tools: [aiTools],
-            systemInstruction: `你是一位醫美集團的高階戰情分析秘書。現在日期是 ${todayStr}。
-【最高防偽與精準原則】
+            systemInstruction: `你是一位擁有30年資歷的醫學與生活美容集團總經理特助。現在日期是 ${todayStr}。
+            【你的核心職責】：
 1. 絕對禁止捏造數據！
 2. 回答時必須直接讀取 API 提供給你的欄位數字，嚴禁自己計算。
-3. 【公司專用術語】：cash ➔ 現金業績, accrual ➔ 實作業績, skincare ➔ 保養品業績, traffic ➔ 客流/來客數。
-4. 【參數填寫警告】：CYJ、安妞、伊啵為「品牌名」。若使用者問「CYJ」，絕對不可填入 storeName 中！
-5. 【動態輸出策略】：
-   ▶ 當使用者查詢「單月內整體概況、總結」時，請依照以下格式輸出：
-      🏢 [品牌/店鋪名稱] 營運概況
-      💰 月底推估業績: [數值]
-      💰 現金業績: [數值]
-      💰 實作業績: [數值]
-      💲 新客業績: [數值]
-      🤝 新客締結率: [數值]%
-      🧍 客單價 (新客/舊客): [數值] / [數值]
-      🧴 保養品業績: [數值]
-   ▶ 當使用者查詢「單月內的週間趨勢、星期幾來客最多」時，讀取 'overall_summary.daily_trends' 給出結論，不需套用制式格式。
-   ▶ 當使用者查詢「跨月趨勢、對比不同月份/季度、各店達標率抓漏、體質對比」時，呼叫 getMacroStrategicAnalysis 工具，並以專家的口吻給出深度洞察與管理建議，不需套用制式格式。
-6. 輸出環境為純文字，絕對禁止使用 Markdown 符號（如 **、#、_、[]）。所有金額請加上千分位逗號。`
+3. 【參數填寫警告】：CYJ、安妞、伊啵為「品牌名」。若使用者問「CYJ」，絕對不可填入 storeName 中！
+4. 異常監控：不僅報出數字，當發現客單價下降或締結率異常時，必須主動標註並提出警訊。
+5. 營運診斷：使用漏斗分析法，當業績未達標時，分析是來客數(Traffic)不足還是締結率(Closing Rate)太低。
+6. 行動建議：不要只給統計結果，請根據數據給出下一步建議（例如：如果保養品業績佔比過低，建議針對新客增加保養品衛教）。
+7. 深度洞察：分析跨月趨勢，找出淡旺季的獲利邏輯，並對比CYJ、安妞、伊啵三個品牌的體質差異。
+8. 語氣限制：專業、精準、冷靜。以特助對老闆匯報的角度進行分析。`
         });
 
         const aiChat = model.startChat();
@@ -523,12 +508,9 @@ exports.telegramWebhook = onRequest({ secrets: [GEMINI_API_KEY] }, async (req, r
             let apiData = [];
             let dateWarning = "";
 
-            // ★ 根據不同引擎，進行路由分發與防護
             if (name === "getMacroStrategicAnalysis") {
-                // 大數據引擎：使用結算表，無須 31 天防爆盾限制
                 apiData = await getMacroStrategicAnalysis(args.startMonth, args.endMonth, args.storeName, args.brandName);
             } else {
-                // 日常引擎：啟動 31 天防爆盾
                 const dateRegex = /^\d{4}[-/]\d{2}[-/]\d{2}$/;
                 let safeStartDate = args.startDate;
                 if (!safeStartDate || !dateRegex.test(safeStartDate)) safeStartDate = `${currentYearMonth}-01`;
@@ -547,7 +529,7 @@ exports.telegramWebhook = onRequest({ secrets: [GEMINI_API_KEY] }, async (req, r
                     const mm = String(dStart.getMonth() + 1).padStart(2, '0');
                     const dd = String(dStart.getDate()).padStart(2, '0');
                     safeStartDate = `${dStart.getFullYear()}-${mm}-${dd}`;
-                    dateWarning = "\n\n⚠️ *(系統保護機制：您查詢的區間過長，秘書已為您自動切換為近 30 天數據。若需查詢跨月對比，請改問「比較第一季」或「分析1到4月體質」等明確大範圍指令)*";
+                    dateWarning = "\n\n⚠️ *(系統保護機制：您查詢的區間過長，秘書已為您自動切換為近 30 天數據)*";
                 }
 
                 if (name === "getStorePerformance") apiData = await getStorePerformance(safeStartDate, safeEndDate, args.storeName, args.brandName);
@@ -595,7 +577,7 @@ exports.telegramWebhook = onRequest({ secrets: [GEMINI_API_KEY] }, async (req, r
 });
 
 // ==========================================
-// ★ 4. Telegram 動態定時推播巡邏員 (防漏水省錢版)
+// ★ 4. Telegram 動態定時推播巡邏員 (★ 終極抓預算通吃版)
 // ==========================================
 exports.notificationPatrol = onSchedule({ schedule: "* * * * *", timeZone: "Asia/Taipei" }, async (event) => {
     const now = new Date();
@@ -606,14 +588,28 @@ exports.notificationPatrol = onSchedule({ schedule: "* * * * *", timeZone: "Asia
     const timeString = `${currentHour}:${currentMin}`; 
 
     try {
-        // ★ 第一道絕對防線：先檢查有沒有這分鐘的推播任務？
-        // 如果沒有，機器人直接睡死，絕對不准往下執行任何抓取動作！
-        const rulesSnapshot = await db.collection("notification_rules")
-            .where("isActive", "==", true)
-            .where("time", "==", timeString)
-            .get();
+        const allRulesSnap = await db.collectionGroup("notification_rules").get();
+        const uniqueRules = {};
         
-        if (rulesSnapshot.empty) return; // 沒事就睡覺，省錢關鍵！
+        allRulesSnap.forEach(doc => {
+            const data = doc.data();
+            if (String(data.isActive) !== "true") return;
+            
+            // ==========================================
+            // 🚨 上帝測試模式開啟中：目前已取消時間限制
+            // 測試成功後，請將下面這行開頭的 `//` 刪掉以恢復正常！
+            // ==========================================
+            if (data.time !== timeString) return; 
+            
+            uniqueRules[data.source] = data; 
+        });
+
+        const rulesList = Object.values(uniqueRules);
+        
+        if (rulesList.length === 0) {
+            console.log(`目前時間 ${timeString} 查無符合任務，機器人休眠。`);
+            return;
+        }
 
         // ---------------- 以下是「有任務」時才准執行的邏輯 ----------------
         const targetDate = new Date(now);
@@ -621,7 +617,7 @@ exports.notificationPatrol = onSchedule({ schedule: "* * * * *", timeZone: "Asia
         const yesterdayStr = `${targetDate.getFullYear()}-${String(targetDate.getMonth() + 1).padStart(2, '0')}-${String(targetDate.getDate()).padStart(2, '0')}`;
         const currentYearMonth = yesterdayStr.substring(0, 7); 
 
-        // 只抓「昨天」的日報
+        // 抓日報
         const dailySnap = await db.collectionGroup('daily_reports').where('date', '==', yesterdayStr).get();
         const reportsByBrand = { cyj: [], anniu: [], yibo: [] };
         const submittedStoresByBrand = { cyj: new Set(), anniu: new Set(), yibo: new Set() };
@@ -635,7 +631,7 @@ exports.notificationPatrol = onSchedule({ schedule: "* * * * *", timeZone: "Asia
             if(data.storeName) submittedStoresByBrand[bId].add(data.storeName.trim());
         });
 
-        // 只抓「昨天」的管理師報告
+        // 抓管理師報告
         const therapistSnap = await db.collectionGroup('therapist_daily_reports').where('date', '==', yesterdayStr).get();
         const therapistReportsByBrand = { cyj: [], anniu: [], yibo: [] };
         therapistSnap.forEach(doc => {
@@ -647,10 +643,10 @@ exports.notificationPatrol = onSchedule({ schedule: "* * * * *", timeZone: "Asia
             therapistReportsByBrand[bId].push(data);
         });
 
+        // 抓過去排班 (用來推算誰沒交)
         const past14Days = new Date(now);
         past14Days.setDate(past14Days.getDate() - 14);
         const past14Str = `${past14Days.getFullYear()}-${String(past14Days.getMonth() + 1).padStart(2, '0')}-${String(past14Days.getDate()).padStart(2, '0')}`;
-        // 抓過去 14 天的排班
         const rosterSnap = await db.collectionGroup('daily_reports').where('date', '>=', past14Str).get();
         const activeRosterByBrand = { cyj: new Set(), anniu: new Set(), yibo: new Set() };
         rosterSnap.forEach(doc => {
@@ -662,7 +658,7 @@ exports.notificationPatrol = onSchedule({ schedule: "* * * * *", timeZone: "Asia
             if(data.storeName) activeRosterByBrand[bId].add(data.storeName.trim());
         });
 
-        // 抓「本月」的彙整資料
+        // 抓本月彙整
         const aggSnap = await db.collectionGroup('monthly_aggregated').where('yearMonth', '==', currentYearMonth).get();
         const monthlyAggByBrand = { cyj: [], anniu: [], yibo: [] };
         const processedAggStores = { cyj: new Set(), anniu: new Set(), yibo: new Set() };
@@ -679,38 +675,69 @@ exports.notificationPatrol = onSchedule({ schedule: "* * * * *", timeZone: "Asia
             }
         });
 
+        // ==========================================
+        // ★ 終極修復：直接切 UID 拿年份，並且強制算入沒交日報的預算！
+        // ==========================================
         const currentYearStr = targetDate.getFullYear().toString();
-        const currentMonthStr = (targetDate.getMonth() + 1).toString();
-        const budgetSuffix = `_${currentYearStr}_${currentMonthStr}`;
+        const currentMonthNum = targetDate.getMonth() + 1;
+        const currentMonthPadded = String(currentMonthNum).padStart(2, '0'); 
         
-        // ★ 終極止血：加上年份過濾！絕不讓它一次下載幾年份的目標
-        const targetsSnap = await db.collectionGroup('monthly_targets').where('year', '==', currentYearStr).get();
+        // 直接撈所有的目標，不再依賴不穩定的內部 year 欄位
+        const allTargetsSnapshot = await db.collectionGroup('monthly_targets').get();
+
         const monthlyBudgetsByBrand = { cyj: { cash: 0, accrual: 0 }, anniu: { cash: 0, accrual: 0 }, yibo: { cash: 0, accrual: 0 } };
         const processedBudgetStores = { cyj: new Set(), anniu: new Set(), yibo: new Set() };
 
-        targetsSnap.forEach(doc => {
-            if (doc.id.endsWith(budgetSuffix)) {
-                const docStoreName = doc.id.replace(budgetSuffix, ''); 
-                const data = doc.data();
+        allTargetsSnapshot.forEach(doc => {
+            const data = doc.data();
+            const docId = doc.id;
+
+            // 統一從檔案名稱 (doc.id) 拆解，絕對不會出錯 (例如: CYJ復北_2026_05 或 復北_2026_5)
+            const parts = docId.split('_');
+            if (parts.length < 3) return;
+
+            const targetStoreName = parts[0];
+            const targetYearStr = parts[1];
+            const targetMonthStr = parts[2];
+
+            // 1. 年份與月份對齊 (補零防護通吃)
+            if (targetYearStr !== currentYearStr) return;
+            if (targetMonthStr.padStart(2, '0') !== currentMonthPadded) return;
+
+            // 2. 最強店名萃取機
+            const coreStoreName = targetStoreName.replace(/CYJ|DRCYJ|安妞|伊啵|店/ig, '').trim();
+
+            if (coreStoreName !== "") {
                 const path = doc.ref.path.toLowerCase();
-                const lowerId = doc.id.toLowerCase();
+                const lowerId = docId.toLowerCase();
                 let bId = 'cyj';
                 if (path.includes('anniu') || path.includes('anew') || lowerId.includes('anniu') || lowerId.includes('anew')) bId = 'anniu';
                 else if (path.includes('yibo') || lowerId.includes('yibo')) bId = 'yibo';
 
-                if (activeRosterByBrand[bId].has(docStoreName) && !processedBudgetStores[bId].has(docStoreName)) {
+                let actualStoreName = null;
+                for (const rosterStore of activeRosterByBrand[bId]) {
+                    const rosterCore = rosterStore.replace(/CYJ|DRCYJ|安妞|伊啵|店/ig, '').trim();
+                    if (coreStoreName === rosterCore) {
+                        actualStoreName = rosterStore;
+                        break;
+                    }
+                }
+
+                // ★ 破案關鍵：就算這家店沒交日報(不在名冊裡)，預算也必須強硬加進去算！
+                if (!actualStoreName) actualStoreName = coreStoreName;
+
+                if (!processedBudgetStores[bId].has(actualStoreName)) {
                     monthlyBudgetsByBrand[bId].cash += (Number(data.cashTarget) || 0);
                     monthlyBudgetsByBrand[bId].accrual += (Number(data.accrualTarget) || 0);
-                    processedBudgetStores[bId].add(docStoreName);
+                    processedBudgetStores[bId].add(actualStoreName);
                 }
             }
         });
 
         // ================= 發送推播邏輯 =================
-        for (const ruleDoc of rulesSnapshot.docs) {
-            const rule = ruleDoc.data();
-            const chatId = rule.targetGroup === 'manager' ? "-1002361008620" : "-1002196147291"; // 這裡請替換回您原本的常數
-            const url = `https://api.telegram.org/bot7038162239:AAGN1vD_hT9eHl18m8_tXq3d2lZ0v8D046I/sendMessage`; // 這裡請替換回您原本的 Token
+        for (const rule of rulesList) {
+            const chatId = rule.targetGroup === 'manager' ? "-1002361008620" : "-4991191955"; 
+            const url = `https://api.telegram.org/bot8787208059:AAF0AiGfUaV69YouI_b_0MuMcXpwu9EK0RA/sendMessage`; 
 
             const BRANDS = [
                 { id: 'cyj', name: 'DRCYJ' },
@@ -786,6 +813,7 @@ exports.notificationPatrol = onSchedule({ schedule: "* * * * *", timeZone: "Asia
                         if (brand.id === 'anniu') accrualTotal += (Number(data.operationalAccrual) || 0);
                         else accrualTotal += (Number(data.accrual) || 0);
                     });
+                    
                     const brandBudget = monthlyBudgetsByBrand[brand.id];
                     const cashRate = brandBudget.cash > 0 ? ((cashTotal / brandBudget.cash) * 100).toFixed(1) : "0.0";
                     const accrualRate = brandBudget.accrual > 0 ? ((accrualTotal / brandBudget.accrual) * 100).toFixed(1) : "0.0";
@@ -801,8 +829,12 @@ exports.notificationPatrol = onSchedule({ schedule: "* * * * *", timeZone: "Asia
                 }
 
                 if (shouldSend) {
-                    const axios = require("axios"); // 確保 axios 可用
-                    await axios.post(url, { chat_id: chatId, text: finalMessage, parse_mode: 'Markdown' });
+                    const axios = require("axios"); 
+                    try {
+                        await axios.post(url, { chat_id: chatId, text: finalMessage, parse_mode: 'Markdown' });
+                    } catch (err) {
+                        console.error(`❌ Telegram 發送失敗：${err.message}`);
+                    }
                 }
             }
         }
@@ -810,15 +842,14 @@ exports.notificationPatrol = onSchedule({ schedule: "* * * * *", timeZone: "Asia
         console.error("❌ 巡邏員執行錯誤：", error);
     }
 });
+
 // ==========================================
 // ★ 5. 自動人數計數器：監控人員增減並更新公佈欄
 // ==========================================
 
-// 共用邏輯：負責執行加減分
 async function handleUserCountChange(change) {
   const isDocCreated = !change.before.exists && change.after.exists;
   const isDocDeleted = change.before.exists && !change.after.exists;
-
   if (!isDocCreated && !isDocDeleted) return null; 
 
   const statsRef = db.collection("public_info").doc("stats");
@@ -829,117 +860,55 @@ async function handleUserCountChange(change) {
   }, { merge: true });
 }
 
-// 5.1 監控管理師 (therapists)
-exports.onLegacyTherapistChange = functions.firestore
-  .document("artifacts/{appId}/public/data/therapists/{id}")
-  .onWrite(async (change) => handleUserCountChange(change));
+exports.onLegacyTherapistChange = functions.firestore.document("artifacts/{appId}/public/data/therapists/{id}").onWrite(async (change) => handleUserCountChange(change));
+exports.onBrandTherapistChange = functions.firestore.document("brands/{brandId}/therapists/{id}").onWrite(async (change) => handleUserCountChange(change));
+exports.onManagerChange = functions.firestore.document("artifacts/{appId}/public/data/managers/{id}").onWrite(async (change) => handleUserCountChange(change));
+exports.onBrandManagerChange = functions.firestore.document("brands/{brandId}/managers/{id}").onWrite(async (change) => handleUserCountChange(change));
 
-exports.onBrandTherapistChange = functions.firestore
-  .document("brands/{brandId}/therapists/{id}")
-  .onWrite(async (change) => handleUserCountChange(change));
-
-// 5.2 監控舊版主管 (managers)
-exports.onManagerChange = functions.firestore
-  .document("artifacts/{appId}/public/data/managers/{id}")
-  .onWrite(async (change) => handleUserCountChange(change));
-
-exports.onBrandManagerChange = functions.firestore
-  .document("brands/{brandId}/managers/{id}")
-  .onWrite(async (change) => handleUserCountChange(change));
-
-// ★★★ 5.3 新增監視器：監控店經理名冊 (陣列變化) ★★★
-exports.onStoreAccountChange = functions.firestore
-  .document("brands/{brandId}/settings/store_account_data")
-  .onWrite(async (change) => {
+exports.onStoreAccountChange = functions.firestore.document("brands/{brandId}/settings/store_account_data").onWrite(async (change) => {
      const beforeData = change.before.data() || {};
      const afterData = change.after.data() || {};
-     
-     // 讀取名冊內的 accounts 陣列長度
      const beforeCount = (beforeData.accounts || []).length;
      const afterCount = (afterData.accounts || []).length;
-     const diff = afterCount - beforeCount; // 計算新增或減少了幾人
+     const diff = afterCount - beforeCount;
+     if (diff === 0) return null;
+     return db.collection("public_info").doc("stats").set({ totalUsers: admin.firestore.FieldValue.increment(diff) }, { merge: true });
+});
 
-     if (diff === 0) return null; // 數量沒變就不做事
-
-     return db.collection("public_info").doc("stats").set({
-       totalUsers: admin.firestore.FieldValue.increment(diff)
-     }, { merge: true });
-  });
-
-// ★★★ 5.4 新增監視器：監控區長名冊 (物件變化) ★★★
-exports.onManagerAuthChange = functions.firestore
-  .document("brands/{brandId}/settings/manager_auth")
-  .onWrite(async (change) => {
+exports.onManagerAuthChange = functions.firestore.document("brands/{brandId}/settings/manager_auth").onWrite(async (change) => {
      const beforeData = change.before.data() || {};
      const afterData = change.after.data() || {};
-     
-     // 讀取名冊內有幾組「名稱:密碼」的 key
      const beforeCount = Object.keys(beforeData).length;
      const afterCount = Object.keys(afterData).length;
      const diff = afterCount - beforeCount;
-
      if (diff === 0) return null;
-
-     return db.collection("public_info").doc("stats").set({
-       totalUsers: admin.firestore.FieldValue.increment(diff)
-     }, { merge: true });
-  });
-
+     return db.collection("public_info").doc("stats").set({ totalUsers: admin.firestore.FieldValue.increment(diff) }, { merge: true });
+});
 
 // ==========================================
-// ★ 6. 終極盤點機：一次性精準計算全系統總人數
+// ★ 6. 終極盤點機
 // ==========================================
 exports.calibrateUserCount = onRequest(async (req, res) => {
     try {
         let totalCount = 0;
-
-        // 1. 盤點全集團：管理師
         const therapistsSnap = await db.collectionGroup('therapists').get();
         therapistsSnap.forEach(() => { totalCount++; });
-
-        // 2. 盤點全集團：舊版主管 (CYJ)
         const managersSnap = await db.collectionGroup('managers').get();
         managersSnap.forEach(() => { totalCount++; });
-
-        // ★★★ 3. 盤點全集團：新版店經理與區長名冊 (安妞、伊啵) ★★★
         const settingsSnap = await db.collectionGroup('settings').get();
         settingsSnap.forEach(doc => {
-            // 如果這份文件是店經理名冊
-            if (doc.id === 'store_account_data') {
-                const accounts = doc.data().accounts || [];
-                totalCount += accounts.length;
-            }
-            // 如果這份文件是區長名冊
-            if (doc.id === 'manager_auth') {
-                totalCount += Object.keys(doc.data() || {}).length;
-            }
+            if (doc.id === 'store_account_data') { totalCount += (doc.data().accounts || []).length; }
+            if (doc.id === 'manager_auth') { totalCount += Object.keys(doc.data() || {}).length; }
         });
-
-        // 寫入最終精準數字
-        await db.collection("public_info").doc("stats").set({
-            totalUsers: totalCount
-        }, { merge: true });
-
-        res.status(200).send(`
-            <h2 style="color: #4CAF50;">🎉 報告老闆：全區盤點完成！</h2>
-            <p style="font-size: 18px;">系統中目前共有 <b>${totalCount}</b> 個授權帳號。</p>
-            <p>安妞與伊啵的名單已全數解碼並加入計算！您可以直接關閉這個網頁了。</p>
-        `);
-    } catch (error) {
-        console.error("盤點失敗:", error);
-        res.status(500).send("❌ 盤點發生錯誤: " + error.message);
-    }
+        await db.collection("public_info").doc("stats").set({ totalUsers: totalCount }, { merge: true });
+        res.status(200).send(`<h2 style="color: #4CAF50;">🎉 盤點完成！系統中共 ${totalCount} 個帳號。</h2>`);
+    } catch (error) { res.status(500).send("❌ 錯誤: " + error.message); }
 });
 
 // ==========================================
-// ★ 7. 深夜精算師 5.0：純淨獨立雙軌版 (放寬濾網，保護正常大單)
+// ★ 7. 深夜精算師 5.0
 // ==========================================
-exports.calculateHistoricalProjectionCurve = onSchedule({
-    schedule: "0 3 1 * *", 
-    timeZone: "Asia/Taipei",
-    timeoutSeconds: 540,
-    memory: "1GiB"
-}, async (event) => {
+exports.calculateHistoricalProjectionCurve = onSchedule({ schedule: "0 3 1 * *", timeZone: "Asia/Taipei", timeoutSeconds: 540, memory: "1GiB" }, async (event) => {
     const brands = ['cyj', 'anniu', 'yibo'];
     const today = new Date();
     const pastMonths = [];
@@ -947,23 +916,19 @@ exports.calculateHistoricalProjectionCurve = onSchedule({
         const d = new Date(today.getFullYear(), today.getMonth() - i, 1);
         pastMonths.push(`${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`);
     }
-
     for (const brand of brands) {
         try {
             let storeDowData = { "BRAND_TOTAL": {} };
             for(let i=0; i<7; i++) storeDowData["BRAND_TOTAL"][i] = { cash: [], accrual: [] };
-
             for (const targetMonth of pastMonths) {
                 const reportsRef = db.collection("brands").doc(brand).collection("daily_reports");
                 const reportsSnap = await reportsRef.where("date", ">=", `${targetMonth}-01`).where("date", "<=", `${targetMonth}-31`).get();
-
                 reportsSnap.forEach(doc => {
                     const data = doc.data();
                     const store = data.storeName || data.store || "未知店";
                     const cash = Number(data.cash) || 0;
                     const accrual = Number(data.accrual) || 0;
                     const dow = new Date(data.date).getDay();
-
                     if (!storeDowData[store]) {
                         storeDowData[store] = {};
                         for(let i=0; i<7; i++) storeDowData[store][i] = { cash: [], accrual: [] };
@@ -974,143 +939,127 @@ exports.calculateHistoricalProjectionCurve = onSchedule({
                     storeDowData["BRAND_TOTAL"][dow].accrual.push(accrual);
                 });
             }
-
             const curveRef = db.collection("brands").doc(brand).collection("settings").doc("projection_curves").collection("stores");
-            
-            // ==========================================
-            // ★ 放寬版濾網：只抓「真正的異常暴衝茶會」
-            // ==========================================
             const processList = (list) => {
                 if (list.length > 2) {
                     const sorted = [...list].sort((a,b)=>a-b);
                     const mid = Math.floor(sorted.length/2);
                     const median = sorted.length % 2 !== 0 ? sorted[mid] : (sorted[mid-1]+sorted[mid])/2;
                     const avg = list.reduce((a,b)=>a+b,0)/list.length;
-                    
-                    // ★ 門檻大幅放寬：中位數的 4 倍，或平均值的 2.5 倍，保底 10 萬！
                     const threshold = Math.max(median * 4, avg * 2.5, 100000); 
                     list = list.filter(v => v <= threshold);
                 }
                 return list.length > 0 ? Math.round(list.reduce((a,b)=>a+b,0)/list.length) : 0;
             };
-
             for (const [storeName, dowMap] of Object.entries(storeDowData)) {
-                let cashAverages = {};
-                let accrualAverages = {};
+                let cashAverages = {}; let accrualAverages = {};
                 for (let i = 0; i < 7; i++) {
                     cashAverages[i] = processList(dowMap[i].cash);
                     accrualAverages[i] = processList(dowMap[i].accrual);
                 }
                 const docId = storeName === "BRAND_TOTAL" ? "BRAND_TOTAL" : storeName.replace(/\s+/g, '').toLowerCase();
-                await curveRef.doc(docId).set({
-                    storeName, cashAverages, accrualAverages, 
-                    lastUpdated: admin.firestore.FieldValue.serverTimestamp()
-                });
+                await curveRef.doc(docId).set({ storeName, cashAverages, accrualAverages, lastUpdated: admin.firestore.FieldValue.serverTimestamp() });
             }
-            console.log(`✅ [${brand}] 5.0 雙軌小抄 (放寬濾網) 更新完畢！`);
-        } catch (error) {
-            console.error(`❌ [${brand}] 更新失敗:`, error);
-        }
+            console.log(`✅ [${brand}] 更新完畢！`);
+        } catch (error) { console.error(`❌ [${brand}] 更新失敗:`, error); }
     }
 });
+
 // ==========================================
-// ★ 8. 系統維護工具：V5 終極除垢清道夫 (專治逗號與陣列物件)
+// ★ 8. V5 終極除垢清道夫
 // ==========================================
 exports.healTherapistData = onRequest(async (req, res) => {
     try {
-        let batch = db.batch();
-        let commitCount = 0;
-        let reportCount = 0, scheduleCount = 0;
+        let batch = db.batch(); let commitCount = 0; let reportCount = 0, scheduleCount = 0;
+        const commitAndReset = async () => { if (commitCount > 0) { await batch.commit(); batch = db.batch(); commitCount = 0; } };
 
-        const commitAndReset = async () => {
-            if (commitCount > 0) {
-                await batch.commit();
-                batch = db.batch();
-                commitCount = 0;
-            }
-        };
-
-        // ---------------------------------------------------------
-        // 1. 日報深度洗淨：把業績裡的 $ 和 , 全拔掉，強轉數字
-        // ---------------------------------------------------------
         const reportsSnap = await db.collectionGroup('therapist_daily_reports').get();
         for (const doc of reportsSnap.docs) {
-            const data = doc.data();
-            let updateData = {};
-            let changed = false;
-
-            // 暴力萃取純數字 (對付 "1,500" 或 "$2000")
+            const data = doc.data(); let updateData = {}; let changed = false;
             if (data.totalRevenue !== undefined) {
                 let cleanRev = data.totalRevenue;
-                if (typeof cleanRev === 'string') {
-                    // 拔除所有非數字與小數點的字元
-                    cleanRev = Number(cleanRev.replace(/[^0-9.-]+/g, ""));
-                }
+                if (typeof cleanRev === 'string') cleanRev = Number(cleanRev.replace(/[^0-9.-]+/g, ""));
                 const finalRev = Number(cleanRev) || 0;
-                if (data.totalRevenue !== finalRev) {
-                    updateData.totalRevenue = finalRev;
-                    // 同步修正 cash 欄位，徹底取悅日曆
-                    updateData.cash = finalRev; 
-                    changed = true;
-                }
+                if (data.totalRevenue !== finalRev) { updateData.totalRevenue = finalRev; updateData.cash = finalRev; changed = true; }
             }
-
-            if (changed) {
-                batch.update(doc.ref, updateData);
-                commitCount++; reportCount++;
-                if (commitCount >= 400) await commitAndReset();
-            }
+            if (changed) { batch.update(doc.ref, updateData); commitCount++; reportCount++; if (commitCount >= 400) await commitAndReset(); }
         }
 
-        // ---------------------------------------------------------
-        // 2. 班表深度洗淨：壓扁休假陣列，強轉純數字
-        // ---------------------------------------------------------
         const schedulesSnap = await db.collectionGroup('therapist_schedules').get();
         for (const doc of schedulesSnap.docs) {
-            const data = doc.data();
-            let updateData = {};
-            let changed = false;
-
+            const data = doc.data(); let updateData = {}; let changed = false;
             if (data.daysOff && Array.isArray(data.daysOff)) {
-                // 強制把 [{day: 11}, "12", 13] 這種怪物全部洗成乾淨的 [11, 12, 13]
                 const cleanDaysOff = data.daysOff.map(d => {
-                    if (typeof d === 'object' && d !== null) {
-                        return Number(d.day || d.date || d.value || 0);
-                    }
-                    if (typeof d === 'string' && d.includes('-')) {
-                        return d; // 保留 YYYY-MM-DD 格式
-                    }
+                    if (typeof d === 'object' && d !== null) return Number(d.day || d.date || d.value || 0);
+                    if (typeof d === 'string' && d.includes('-')) return d; 
                     return Number(d) || 0;
-                }).filter(d => d !== 0); // 過濾掉無效值
-
-                // 檢查是否真的有變動 (轉成字串比對最準)
-                if (JSON.stringify(data.daysOff) !== JSON.stringify(cleanDaysOff)) {
-                    updateData.daysOff = cleanDaysOff;
-                    changed = true;
-                }
+                }).filter(d => d !== 0); 
+                if (JSON.stringify(data.daysOff) !== JSON.stringify(cleanDaysOff)) { updateData.daysOff = cleanDaysOff; changed = true; }
             }
+            if (changed) { batch.update(doc.ref, updateData); commitCount++; scheduleCount++; if (commitCount >= 400) await commitAndReset(); }
+        }
+        await commitAndReset();
+        res.status(200).send(`<h2>✅ 格式洗淨完成</h2><p>日報: ${reportCount}, 班表: ${scheduleCount}</p>`);
+    } catch (error) { res.status(500).send("❌ 錯誤: " + error.message); }
+});
+// ★ 9. 全局數據校準器 (支援 CYJ 與各品牌)
+exports.recalculateMonthlyData = onRequest({ cors: true }, async (req, res) => {
+    // ... 下面都不要動，維持原本的程式碼
+    const brandId = req.query.brandId || 'cyj'; // 預設撈 cyj
+    const yearMonth = req.query.yearMonth || '2026-04';
+    
+    try {
+        let dailyReportsRef;
+        let aggRef;
 
-            if (changed) {
-                batch.update(doc.ref, updateData);
-                commitCount++; scheduleCount++;
-                if (commitCount >= 400) await commitAndReset();
-            }
+        // ★ 邏輯分流：自動辨識是 CYJ 還是其他品牌
+        if (brandId === 'cyj' || brandId === 'default-app-id') {
+            dailyReportsRef = db.collection('artifacts/default-app-id/public/data/daily_reports');
+            aggRef = db.collection('artifacts/default-app-id/public/data/monthly_aggregated');
+        } else {
+            dailyReportsRef = db.collection('brands').doc(brandId).collection('daily_reports');
+            aggRef = db.collection('brands').doc(brandId).collection('monthly_aggregated');
         }
 
-        await commitAndReset();
+        // 1. 取得該路徑下該月份所有日報
+        const reportsSnap = await dailyReportsRef
+            .where('date', '>=', `${yearMonth}-01`).where('date', '<=', `${yearMonth}-31`).get();
+            
+        // 2. 累加邏輯
+        let storeTotals = {};
+        reportsSnap.forEach(doc => {
+            const data = doc.data();
+            const sName = data.storeName;
+            if (!sName) return;
+            
+            if (!storeTotals[sName]) {
+                storeTotals[sName] = { newCustomers: 0, cash: 0, accrual: 0, count: 0 };
+            }
+            storeTotals[sName].newCustomers += (Number(data.newCustomers) || 0);
+            storeTotals[sName].cash += (Number(data.cash) || 0) - (Number(data.refund) || 0);
+            storeTotals[sName].accrual += (Number(data.accrual) || 0);
+            storeTotals[sName].count += 1;
+        });
 
-        res.status(200).send(`
-            <div style="font-family: sans-serif; padding: 30px; max-width: 600px; margin: 0 auto; background: #fff; border-radius: 12px; box-shadow: 0 4px 12px rgba(0,0,0,0.1);">
-                <h2 style="color: #10B981; border-bottom: 2px solid #ECFDF5; padding-bottom: 10px;">🩺 V5 終極除垢完成</h2>
-                <p>已將千分位逗號、字串業績、怪異休假物件全部洗淨為標準格式！</p>
-                <ul style="font-size: 16px; line-height: 2;">
-                    <li>📝 洗淨日報業績格式：<b>${reportCount}</b> 筆</li>
-                    <li>📅 洗淨班表休假陣列：<b>${scheduleCount}</b> 筆</li>
-                </ul>
-                <p style="color: #6B7280; font-size: 14px;">請回到前端並使用「無痕視窗」重新登入測試！</p>
-            </div>
-        `);
-    } catch (error) {
-        res.status(500).send("❌ 錯誤: " + error.message);
-    }
+        // 3. 寫入目標路徑
+        let batch = db.batch();
+        let updateCount = 0;
+        for (const [sName, totals] of Object.entries(storeTotals)) {
+            const key = `${yearMonth}_${sName}`;
+            batch.set(aggRef.doc(key), {
+                id: key,
+                yearMonth: yearMonth,
+                storeName: sName,
+                newCustomers: totals.newCustomers,
+                cash: totals.cash,
+                accrual: totals.accrual,
+                recordCount: totals.count,
+                lastCalibrated: admin.firestore.FieldValue.serverTimestamp()
+            }, { merge: true });
+            updateCount++;
+        }
+        await batch.commit();
+
+        res.send(`✅ 校準完成！[${brandId}] ${yearMonth}，共更新 ${updateCount} 家店鋪數據。`);
+    } catch (err) { res.status(500).send("❌ 錯誤: " + err.message); }
 });
