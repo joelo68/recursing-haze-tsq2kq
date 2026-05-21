@@ -127,12 +127,12 @@ const SettingsView = () => {
     const myPerms = permissions?.[userRole] || [];
     const allTabsDefinition = [
       { id: "kpi", label: "KPI 參數", isAdminOnly: true, icon: Target },
-      { id: "health", label: "體質診斷", isAdminOnly: true, icon: Activity },
-      { id: "permissions", label: "權限與資安", isAdminOnly: true, icon: Shield },
+      { id: "health", label: "標準設定", isAdminOnly: true, icon: Activity },
+      { id: "permissions", label: "權限資安", isAdminOnly: true, icon: Shield },
       { id: "trainer-account", label: "教專帳號", isAdminOnly: true, icon: Users }, 
       { id: "shops", label: "店家管理", isAdminOnly: true, icon: Store },
-      { id: "stores", label: "店經理帳號", isAdminOnly: true, icon: UserCheck },
-      { id: "managers", label: "組織架構", isAdminOnly: true, icon: LayoutGrid },
+      { id: "stores", label: "店經帳號", isAdminOnly: true, icon: UserCheck },
+      { id: "managers", label: "區長架構", isAdminOnly: true, icon: LayoutGrid },
       //{ id: "therapists", label: "人員帳號", isAdminOnly: true, icon: User },
       { id: "maintenance", label: "系統維護", isAdminOnly: true, icon: Database }
     ];

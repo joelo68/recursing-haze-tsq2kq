@@ -3,27 +3,20 @@ import React, { useState, useContext } from "react";
 import { db } from "../config/firebase";
 import { getDocs, doc, writeBatch } from "firebase/firestore"; 
 import { AppContext } from "../AppContext";
-import { Loader2, Database, Download, RefreshCw, AlertTriangle, Play, Scissors, ClipboardList, Trash2, Calendar, Settings } from "lucide-react";
+import { 
+  Database, Download, RefreshCw, AlertTriangle, Play, 
+  Scissors, ClipboardList, Trash2, Calendar, Settings, Loader2
+} from "lucide-react";
+import { ViewWrapper } from "./SharedUI";
 
 export default function SystemMaintenance() {
   const { currentBrand, userRole, showToast, getCollectionPath } = useContext(AppContext);
   const [logs, setLogs] = useState([]);
-  
   const [loadingAction, setLoadingAction] = useState(null);
   const [calMonth, setCalMonth] = useState(new Date().toISOString().substring(0, 7));
 
   // 權限防護
-  if (userRole !== "director") {
-    return (
-      <div className="p-8 text-center text-stone-400 bg-stone-50 rounded-3xl border border-stone-200 animate-in fade-in duration-300 flex flex-col items-center justify-center min-h-[300px]">
-        <div className="w-16 h-16 bg-white rounded-full shadow-sm flex items-center justify-center mb-4">
-          <AlertTriangle className="w-8 h-8 text-stone-300" />
-        </div>
-        <p className="font-bold text-lg text-stone-600">系統維護區塊</p>
-        <p className="text-sm mt-1">此區域僅限集團總監存取</p>
-      </div>
-    );
-  }
+  if (userRole !== "director") return null;
 
   const addLog = (msg) => {
     const timeStr = new Date().toLocaleTimeString('zh-TW', { hour12: false });
@@ -69,7 +62,10 @@ export default function SystemMaintenance() {
                   const y = parts[0];
                   const m = String(parseInt(parts[1], 10)).padStart(2, '0');
                   const d = String(parseInt(parts[2], 10)).padStart(2, '0');
-                  if (!isNaN(y) && !isNaN(m) && !isNaN(d)) newDate = `${y}-${m}-${d}`;
+                  
+                  if (!isNaN(y) && !isNaN(m) && !isNaN(d)) {
+                    newDate = `${y}-${m}-${d}`;
+                  }
                 }
             }
 
@@ -243,11 +239,11 @@ export default function SystemMaintenance() {
   // ==========================================
   const handleCalibrateData = async () => {
     const brandId = currentBrand?.id || 'cyj';
-    if (!window.confirm(`確定要校準【${brandId}】在 ${calMonth} 的數據嗎？\n此操作將重新掃描當月所有日報並強制修正彙整表與達成率。`)) return;
+    if (!window.confirm(`確定要針對【${brandId}】在 ${calMonth} 的數據執行校準嗎？\n此操作將重新掃描當月所有日報並強制修正彙整表與達成率。`)) return;
 
     setLoadingAction('calibrate');
-    setLogs([]); 
-    addLog(`🔄 啟動數據校準引擎... 目標: ${brandId}, 月份: ${calMonth}`);
+    setLogs([]);
+    addLog(`🔄 啟動數據盤點與校準... 目標: ${brandId}, 月份: ${calMonth}`);
 
     try {
       const functionUrl = "https://recalculatemonthlydata-hyhcwrnyaa-uc.a.run.app"; 
@@ -257,7 +253,7 @@ export default function SystemMaintenance() {
       
       const result = await response.text();
       addLog(result);
-      showToast("數據校準完成", "success");
+      showToast("校準完成", "success");
     } catch (err) {
       addLog(`❌ 校準失敗: ${err.message}`);
       showToast("校準失敗", "error");
@@ -267,132 +263,128 @@ export default function SystemMaintenance() {
   };
 
   // ============================================================================
-  // ★ 全新 UI 設計：優雅條列式面板 (List View)
+  // ★ UI 渲染區 (極簡質感設計、條列式清單、淺色優雅日誌框)
   // ============================================================================
   return (
-    <div className="space-y-8 animate-in fade-in slide-in-from-bottom-4 duration-700 max-w-5xl mx-auto">
-      
-      {/* 標題區 */}
-      <div className="flex items-center gap-4 bg-white p-6 rounded-3xl border border-stone-100 shadow-sm">
-        <div className="w-12 h-12 bg-amber-50 rounded-2xl border border-amber-100 flex items-center justify-center">
-          <Settings className="text-amber-600" size={24} strokeWidth={1.5} />
+    <ViewWrapper>
+      <div className="max-w-4xl mx-auto space-y-8 animate-in fade-in duration-500 pb-10">
+        
+        {/* 精緻頁面表頭 */}
+        <div className="mb-8 border-b border-stone-100 pb-6">
+            <h1 className="text-2xl font-bold text-stone-800 tracking-tight flex items-center gap-3">
+                <Settings className="text-amber-500" size={26} strokeWidth={2} /> 系統維護控制台
+            </h1>
+            <p className="text-stone-400 mt-2 text-sm">數據結構優化、離線備份與效能重整作業。</p>
         </div>
-        <div>
-          <h1 className="text-2xl font-extrabold text-stone-800 tracking-tight">系統維護控制台</h1>
-          <p className="text-sm text-stone-500 mt-1">執行核心資料庫的清理、備份與效能校準作業。</p>
-        </div>
-      </div>
 
-      {/* 條列式工具區 */}
-      <div className="space-y-4">
-        {[
-          { id: 'fixDates', icon: Database, iconBg: 'bg-indigo-50 text-indigo-600 border-indigo-100', title: '格式標準化', desc: '自動掃描資料庫，並批次統一所有混亂的日期格式為標準的 YYYY-MM-DD。', action: handleFixDateFormats, btnTxt: '執行清洗' },
-          { id: 'removeDups', icon: Scissors, iconBg: 'bg-purple-50 text-purple-600 border-purple-100', title: '重複清道夫', desc: '偵測同一天、同店、同人的異常重複報表，並自動保留最新紀錄以清除垃圾數據。', action: handleRemoveDuplicates, btnTxt: '掃描清除' },
-          { id: 'backup', icon: Download, iconBg: 'bg-blue-50 text-blue-600 border-blue-100', title: '全量數據備份', desc: '將當前品牌的所有歷史日報完整匯出為 JSON 檔案，提供離線備份使用。', action: handleBackupData, btnTxt: '下載備份' },
-          { id: 'reset', icon: RefreshCw, iconBg: 'bg-rose-50 text-rose-600 border-rose-100', title: '強制系統重置', desc: '當系統畫面發生異常或長時間未更新時，點擊此按鈕清除本地快取並強制重載。', action: handleHardReset, btnTxt: '重置快取', danger: true },
-          { id: 'calibrate', icon: Play, iconBg: 'bg-emerald-50 text-emerald-600 border-emerald-100', title: '數據一致性校準', desc: '當儀表板與日報數字出現落差時，可針對指定月份啟動強制重新盤點與校正。', action: handleCalibrateData, btnTxt: '啟動校準', highlight: true },
-        ].map((tool, i) => {
-          const Icon = tool.icon;
-          const isThisLoading = loadingAction === tool.id;
-          const isAnyLoading = loadingAction !== null;
-
-          return (
-            <div key={i} className={`group bg-white p-5 rounded-2xl border transition-all duration-300 flex flex-col md:flex-row items-start md:items-center gap-5 ${tool.highlight ? 'border-amber-200 shadow-sm' : 'border-stone-200 hover:border-amber-300 hover:shadow-md'}`}>
+        {/* 工具清單 */}
+        <div className="grid gap-3">
+          {[
+            { id: 'fixDates', icon: Database, title: '資料格式清洗', desc: '統一全庫日期為 YYYY-MM-DD 格式，修正輸入異常。', action: handleFixDateFormats, btnTxt: '執行清洗' },
+            { id: 'removeDups', icon: Scissors, title: '重複數據過濾', desc: '移除同天、同店、同人的重複報表，保留最新紀錄。', action: handleRemoveDuplicates, btnTxt: '掃描清除' },
+            { id: 'backup', icon: Download, title: '數據完整匯出', desc: '將當前品牌所有日報資料匯出為 JSON 離線備份。', action: handleBackupData, btnTxt: '下載備份' },
+            { id: 'reset', icon: RefreshCw, title: '強制系統重置', desc: '若發生畫面異常或卡頓，清除快取並重啟服務。', action: handleHardReset, btnTxt: '重置快取', danger: true },
+            { id: 'calibrate', icon: Play, title: '數據一致性校準', desc: '針對指定月份重新掃描並計算達標數據，修復對帳落差。', action: handleCalibrateData, btnTxt: '啟動校準', highlight: true },
+          ].map((tool) => (
+            <div key={tool.id} className={`bg-white p-5 rounded-2xl border transition-all duration-300 flex flex-col md:flex-row items-start md:items-center gap-5 ${tool.highlight ? 'border-amber-200 shadow-sm' : 'border-stone-100 hover:border-stone-200 shadow-[0_2px_4px_-1px_rgba(0,0,0,0.02)]'}`}>
               
-              {/* 圖示區 */}
-              <div className={`w-14 h-14 shrink-0 rounded-2xl flex items-center justify-center border ${tool.iconBg} shadow-inner`}>
-                <Icon size={26} strokeWidth={1.5} />
+              <div className={`w-12 h-12 shrink-0 rounded-xl flex items-center justify-center ${tool.danger ? 'bg-rose-50 text-rose-500' : tool.highlight ? 'bg-emerald-50 text-emerald-500' : 'bg-stone-50 text-stone-500'}`}>
+                <tool.icon size={20} strokeWidth={1.5} />
               </div>
-
-              {/* 文字說明區 */}
-              <div className="flex-1 min-w-0">
-                <div className="flex items-center gap-3 mb-1">
-                  <h3 className="text-lg font-bold text-stone-800 tracking-tight">{tool.title}</h3>
-                  {tool.danger && <span className="text-[10px] font-bold bg-rose-100 text-rose-600 px-2 py-0.5 rounded-md border border-rose-200">風險操作</span>}
-                  {tool.highlight && <span className="text-[10px] font-bold bg-amber-100 text-amber-700 px-2 py-0.5 rounded-md border border-amber-200">推薦工具</span>}
+              
+              <div className="flex-1 min-w-0 w-full">
+                <div className="flex items-center gap-2 mb-1">
+                  <h3 className="text-sm font-bold text-stone-800">{tool.title}</h3>
+                  {tool.danger && <span className="text-[10px] font-bold bg-rose-50 text-rose-600 px-1.5 py-0.5 rounded border border-rose-100">風險操作</span>}
+                  {tool.highlight && <span className="text-[10px] font-bold bg-amber-50 text-amber-600 px-1.5 py-0.5 rounded border border-amber-100">推薦工具</span>}
                 </div>
-                <p className="text-sm text-stone-500 leading-relaxed pr-4">{tool.desc}</p>
+                <p className="text-xs text-stone-400 mt-0.5 truncate">{tool.desc}</p>
 
-                {/* 工具 5 專用的月份選擇器，優雅地嵌在敘述下方 */}
+                {/* 校準工具專用的月份選擇器 */}
                 {tool.id === 'calibrate' && (
-                  <div className="mt-4 flex items-center gap-3 bg-stone-50 px-4 py-2 rounded-xl border border-stone-200 w-fit transition-colors group-hover:bg-white group-hover:border-amber-200">
-                    <Calendar size={16} className="text-stone-400" />
-                    <span className="text-sm font-bold text-stone-600">指定月份：</span>
-                    <input 
-                      type="month" 
-                      value={calMonth} 
-                      onChange={(e) => setCalMonth(e.target.value)} 
-                      className="bg-transparent font-bold text-stone-800 outline-none w-28 cursor-pointer"
-                    />
+                  <div className="mt-3 flex items-center gap-2 bg-stone-50 px-3 py-1.5 rounded-lg border border-stone-100 w-fit">
+                      <Calendar size={14} className="text-stone-400" />
+                      <span className="text-xs font-bold text-stone-500">指定月份：</span>
+                      <input 
+                        type="month" 
+                        value={calMonth} 
+                        onChange={(e) => setCalMonth(e.target.value)} 
+                        className="bg-transparent text-xs font-bold text-stone-800 outline-none w-24 cursor-pointer" 
+                      />
                   </div>
                 )}
               </div>
-
-              {/* 操作按鈕區 */}
-              <div className="w-full md:w-auto shrink-0 mt-2 md:mt-0 pt-4 md:pt-0 border-t md:border-0 border-stone-100">
+              
+              <div className="w-full md:w-auto mt-2 md:mt-0 pt-3 md:pt-0 border-t md:border-0 border-stone-50 shrink-0">
                 <button 
                   onClick={tool.action} 
-                  disabled={isAnyLoading} 
-                  className={`w-full md:w-36 py-3 rounded-xl text-sm font-bold shadow-sm transition-all flex items-center justify-center gap-2 active:scale-95 disabled:opacity-50 disabled:cursor-not-allowed
-                    ${tool.danger 
-                      ? 'bg-white border border-rose-200 text-rose-600 hover:bg-rose-50' 
-                      : tool.highlight
-                        ? 'bg-stone-800 text-white hover:bg-stone-700 hover:shadow-md'
-                        : 'bg-white border border-stone-200 text-stone-600 hover:bg-stone-50 hover:text-stone-800 hover:border-stone-300'
-                    }
-                  `}
+                  disabled={loadingAction !== null}
+                  className={`w-full md:w-auto text-xs font-bold px-6 py-2.5 rounded-xl transition-all flex items-center justify-center gap-2 disabled:opacity-40 disabled:cursor-not-allowed
+                    ${tool.danger ? 'bg-white border border-rose-200 text-rose-600 hover:bg-rose-50' : 
+                      tool.highlight ? 'bg-stone-800 text-white hover:bg-stone-700 shadow-md' : 
+                      'bg-white border border-stone-200 text-stone-600 hover:bg-stone-50'}`}
                 >
-                  {isThisLoading ? <Loader2 className="animate-spin" size={16}/> : <Icon size={16}/>}
+                  {loadingAction === tool.id ? <Loader2 className="animate-spin text-current" size={14}/> : <tool.icon size={14}/>}
                   {tool.btnTxt}
                 </button>
               </div>
 
             </div>
-          );
-        })}
-      </div>
-
-      {/* 稽核日誌區 (移除厚重邊框，改為無邊框內嵌設計) */}
-      <div className="bg-stone-50 rounded-3xl p-6 border border-stone-200 shadow-inner">
-        <div className="flex justify-between items-center mb-4">
-          <div className="flex items-center gap-2">
-             <ClipboardList className="text-stone-400" size={18} />
-             <span className="font-bold text-stone-700 tracking-tight text-sm">系統稽核日誌 (SYSTEM LOGS)</span>
-          </div>
-          {loadingAction && <span className="text-xs text-amber-600 bg-amber-100 px-3 py-1 rounded-full font-bold animate-pulse flex items-center gap-1.5"><Loader2 size={12} className="animate-spin"/> 執行中...</span>}
-          {logs.length > 0 && !loadingAction && <button onClick={() => setLogs([])} className="text-xs text-stone-500 hover:text-rose-600 flex items-center gap-1 px-3 py-1.5 bg-white border border-stone-200 hover:border-rose-200 rounded-lg transition-colors shadow-sm"><Trash2 size={12}/> 清除紀錄</button>}
+          ))}
         </div>
-        
-        <div className="bg-white rounded-2xl p-5 font-mono text-[13px] h-[300px] overflow-y-auto border border-stone-200/60 shadow-sm space-y-2 selection:bg-amber-100">
-          {logs.length === 0 ? (
-            <div className="flex h-full items-center justify-center flex-col gap-3 opacity-60">
-              <ClipboardList size={32} className="text-stone-300" strokeWidth={1.5} />
-              <span className="text-xs font-bold tracking-wider text-stone-400 uppercase">System Ready...</span>
+
+        {/* 稽核日誌區 (淺色、乾淨、高級感設計，完全符合截圖風格) */}
+        <div className="bg-stone-50/50 rounded-3xl p-6 border border-stone-100 shadow-[inset_0_2px_10px_rgba(0,0,0,0.01)] mt-8">
+          <div className="flex justify-between items-center mb-4">
+            <div className="flex items-center gap-2 text-stone-600">
+               <ClipboardList size={18} strokeWidth={2} className="text-stone-400" />
+               <span className="font-bold tracking-tight text-sm">系統稽核日誌 (SYSTEM LOGS)</span>
             </div>
-          ) : (
-            logs.map((log) => {
-              const isError = log.text.includes('❌');
-              const isFix = log.text.includes('✏️');
-              const isDel = log.text.includes('🗑️');
-              const isSuccess = log.text.includes('✅') || log.text.includes('🎉') || log.text.includes('✨') || log.text.includes('🔄');
-              
-              let textColor = 'text-stone-600';
-              if (isError) textColor = 'text-rose-500';
-              else if (isFix) textColor = 'text-amber-600';
-              else if (isDel) textColor = 'text-stone-400 line-through';
-              else if (isSuccess) textColor = 'text-stone-800 font-bold';
+            <div className="flex items-center gap-3">
+                {loadingAction && (
+                  <span className="text-xs text-amber-600 bg-amber-50 px-3 py-1.5 rounded-lg font-bold animate-pulse flex items-center gap-1.5 border border-amber-100/50">
+                    <Loader2 size={14} className="animate-spin"/> 執行中...
+                  </span>
+                )}
+                {logs.length > 0 && !loadingAction && (
+                  <button onClick={() => setLogs([])} className="text-xs font-bold text-stone-400 hover:text-rose-500 transition-colors flex items-center gap-1 px-2 py-1">
+                    <Trash2 size={14}/> 清除
+                  </button>
+                )}
+            </div>
+          </div>
+          
+          <div className="bg-white rounded-2xl p-5 font-mono text-[13px] h-[280px] overflow-y-auto border border-stone-200/50 shadow-sm space-y-2 selection:bg-amber-100">
+            {logs.length === 0 ? (
+              <div className="flex h-full items-center justify-center flex-col gap-3 opacity-50">
+                <ClipboardList size={36} className="text-stone-300" strokeWidth={1.5} />
+                <span className="text-xs font-bold tracking-widest text-stone-400 uppercase">System Ready...</span>
+              </div>
+            ) : (
+              logs.map((log) => {
+                const isError = log.text.includes('❌');
+                const isFix = log.text.includes('✏️');
+                const isDel = log.text.includes('🗑️');
+                const isSuccess = log.text.includes('✅') || log.text.includes('🎉') || log.text.includes('✨') || log.text.includes('🔄');
+                
+                let textColor = 'text-stone-500';
+                if (isError) textColor = 'text-rose-500 font-bold';
+                else if (isFix) textColor = 'text-amber-600';
+                else if (isDel) textColor = 'text-stone-400 line-through';
+                else if (isSuccess) textColor = 'text-stone-800 font-bold';
 
-              return (
-                <div key={log.id} className="border-b border-stone-100/50 pb-2 last:border-0 hover:bg-stone-50 rounded transition-colors flex gap-2">
-                  <span className="text-stone-400 shrink-0 select-none">[{log.time}]</span>
-                  <span className={`${textColor} break-all`}>{log.text}</span>
-                </div>
-              );
-            })
-          )}
+                return (
+                  <div key={log.id} className="border-b border-stone-50 pb-2.5 last:border-0 hover:bg-stone-50 rounded px-2 -mx-2 transition-colors flex items-start gap-3">
+                    <span className="text-stone-400 shrink-0 select-none pt-0.5">[{log.time}]</span>
+                    <span className={`${textColor} break-all leading-relaxed`}>{log.text}</span>
+                  </div>
+                );
+              })
+            )}
+          </div>
         </div>
-      </div>
 
-    </div>
+      </div>
+    </ViewWrapper>
   );
 }

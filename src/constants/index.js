@@ -36,21 +36,21 @@ export const ROLES = {
 
 export const ALL_MENU_ITEMS = [
   { id: "dashboard", label: "營運總覽", icon: LayoutDashboard },
-  { id: "daily", label: "每日戰情", icon: Calendar, roles: ["director", "trainer", "manager"] },
+  { id: "daily", label: "每日分析", icon: Calendar, roles: ["director", "trainer", "manager"] },
   { id: "annual", label: "年度分析", icon: Calendar },
-  { id: "targets", label: "年度目標設定", icon: Target }, 
+  { id: "targets", label: "年度設定", icon: Target }, 
   { id: "regional", label: "區域分析", icon: MapIcon },
   { id: "store-analysis", label: "單店分析", icon: Store },
   { id: "ranking", label: "詳細報表", icon: TrendingUp },
   { id: "audit", label: "回報檢核", icon: ClipboardCheck },
-  { id: "history", label: "數據修正", icon: FileText },
+  { id: "history", label: "業績修正", icon: FileText },
   { id: "input", label: "日報輸入", icon: Upload },
-  { id: "logs", label: "系統監控", icon: Activity },
-  { id: "notification", label: "推播排程管理", icon: Bell, roles: ["director", "master"] }, // 🔔 新增的推播控制中心選單
-  { id: "t-targets", label: "管理師目標", icon: UserCog }, 
-  { id: "t-schedule", label: "管理師排休", icon: CalendarOff },
-  { id: "therapist-manager", label: "管師帳號管理", icon: Users, roles: ["director", "manager"] },
-  { id: "settings", label: "參數設定", icon: Settings },
+  { id: "logs", label: "登入監控", icon: Activity },
+  { id: "notification", label: "推播管理", icon: Bell, roles: ["director", "master"] }, // 🔔 新增的推播控制中心選單
+  { id: "t-targets", label: "管師目標", icon: UserCog }, 
+  { id: "t-schedule", label: "管師排休", icon: CalendarOff },
+  { id: "therapist-manager", label: "管師帳號", icon: Users, roles: ["director", "manager"] },
+  { id: "settings", label: "系統設定", icon: Settings },
 ];
 
 export const DEFAULT_REGIONAL_MANAGERS = {
