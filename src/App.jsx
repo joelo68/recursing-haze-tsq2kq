@@ -32,11 +32,12 @@ import { AppContext } from "./AppContext";
 import { useAnalytics } from "./hooks/useAnalytics";
 import TherapistManagerView from "./components/TherapistManagerView";
 import LoginView from "./components/LoginView";
+import { trackSnapshotRead, trackReadSource, flushReadTrackerToFirestore, setReadTrackerMode } from "./utils/readTracker";
 
 // ==========================================
 // ★ 系統核心版本號 (終極動態快取版)
 // ==========================================
-const CURRENT_APP_VERSION = "2.8.7"; 
+const CURRENT_APP_VERSION = "2.8.8"; 
 
 const isNewerVersion = (local, remote) => {
   if (!remote) return true;
@@ -115,6 +116,14 @@ export default function App() {
   const [isOnline, setIsOnline] = useState(navigator.onLine);
 
   const currentBrand = useMemo(() => BRANDS.find(b => b.id === currentBrandId) || BRANDS[0], [currentBrandId]);
+
+  const getReadMeta = useCallback((label = "") => ({
+    label,
+    role: userRole || "guest",
+    brand: currentBrandId,
+    view: activeView,
+    userName: currentUser?.name || userRole || "unknown",
+  }), [userRole, currentBrandId, activeView, currentUser]);
   const handleSwitchBrand = (brandId) => { setCurrentBrandId(brandId); setHasSelectedBrand(true); };
 
   const getCollectionPath = useCallback((collectionName) => {
@@ -376,6 +385,9 @@ export default function App() {
         getDoc(getDocPath("master_auth"))
       ]);
 
+      trackReadSource("fetchGlobalData_core_docs", 9, getReadMeta("fetchGlobalData_core_docs"));
+      trackReadSource("fetchGlobalData_therapists", thSnap.docs.length, getReadMeta("fetchGlobalData_therapists"));
+
       if (orgSnap.exists()) {
         const rawManagers = orgSnap.data().managers || {};
         const filteredManagers = {};
@@ -407,7 +419,23 @@ export default function App() {
     } catch (error) {
       console.error("Fetch Global Data Error:", error);
     }
-  }, [user, currentBrand, getDocPath, getCollectionPath]);
+  }, [user, currentBrand, getDocPath, getCollectionPath, getReadMeta]);
+
+  useEffect(() => {
+    if (!user) return;
+
+    const unsubReadTrackerConfig = onSnapshot(getDocPath("read_tracker_config"), (s) => {
+      trackReadSource("read_tracker_config", s.exists() ? 1 : 0, getReadMeta("read_tracker_config"));
+      const remoteMode = s.exists() ? s.data().mode : "off";
+      if (["off", "local", "global"].includes(remoteMode)) {
+        setReadTrackerMode(remoteMode);
+      }
+    }, (error) => {
+      console.warn("read tracker config sync failed", error);
+    });
+
+    return () => unsubReadTrackerConfig();
+  }, [user, getDocPath, getReadMeta]);
 
   useEffect(() => {
     if (!user) return;
@@ -418,30 +446,48 @@ export default function App() {
 
     fetchGlobalData();
 
-    const unsubBudgets = onSnapshot(getCollectionPath("monthly_targets"), (s) => { const b = {}; s.docs.forEach((d) => (b[d.id] = d.data())); setBudgets(b); });
-    const unsubTargets = onSnapshot(getDocPath("kpi_targets"), (s) => { if (s.exists()) setTargets(s.data()); else setTargets({ newASP: 3500, trafficASP: 1200 }); });
+    const unsubBudgets = onSnapshot(getCollectionPath("monthly_targets"), (s) => { 
+      trackSnapshotRead("monthly_targets", s, getReadMeta("monthly_targets"));
+      const b = {}; s.docs.forEach((d) => (b[d.id] = d.data())); setBudgets(b); 
+    });
+    const unsubTargets = onSnapshot(getDocPath("kpi_targets"), (s) => { 
+      trackReadSource("kpi_targets", s.exists() ? 1 : 0, getReadMeta("kpi_targets"));
+      if (s.exists()) setTargets(s.data()); else setTargets({ newASP: 3500, trafficASP: 1200 }); 
+    });
     
     const unsubTherapistSchedules = onSnapshot(
       query(getCollectionPath("therapist_schedules"), where("year", "==", targetYearStr)), 
-      (s) => { const schedules = {}; s.docs.forEach((d) => (schedules[d.id] = d.data())); setTherapistSchedules(schedules); }
+      (s) => { 
+        trackSnapshotRead("therapist_schedules_year", s, getReadMeta("therapist_schedules_year"));
+        const schedules = {}; s.docs.forEach((d) => (schedules[d.id] = d.data())); setTherapistSchedules(schedules); 
+      }
     );
     
     const unsubTherapistTargets = onSnapshot(
       query(getCollectionPath("therapist_targets"), where("year", "==", targetYearStr)), 
-      (s) => { const t = {}; s.docs.forEach((d) => (t[d.id] = d.data())); setTherapistTargets(t); }
+      (s) => { 
+        trackSnapshotRead("therapist_targets_year", s, getReadMeta("therapist_targets_year"));
+        const t = {}; s.docs.forEach((d) => (t[d.id] = d.data())); setTherapistTargets(t); 
+      }
     );
 
     const todayStr = formatLocalYYYYMMDD(new Date());
     const d = new Date(); d.setDate(d.getDate() - 1);
     const yesterdayStr = formatLocalYYYYMMDD(d);
 
-    const unsubStatsToday = onSnapshot(doc(getCollectionPath("system_stats"), todayStr), (s) => { if (s.exists()) setDailyLoginCount(s.data().count || 0); else setDailyLoginCount(0); });
-    const unsubStatsYesterday = onSnapshot(doc(getCollectionPath("system_stats"), yesterdayStr), (s) => { if (s.exists()) setYesterdayLoginCount(s.data().count || 0); else setYesterdayLoginCount(0); });
+    const unsubStatsToday = onSnapshot(doc(getCollectionPath("system_stats"), todayStr), (s) => { 
+      trackReadSource("system_stats_today", s.exists() ? 1 : 0, getReadMeta("system_stats_today"));
+      if (s.exists()) setDailyLoginCount(s.data().count || 0); else setDailyLoginCount(0); 
+    });
+    const unsubStatsYesterday = onSnapshot(doc(getCollectionPath("system_stats"), yesterdayStr), (s) => { 
+      trackReadSource("system_stats_yesterday", s.exists() ? 1 : 0, getReadMeta("system_stats_yesterday"));
+      if (s.exists()) setYesterdayLoginCount(s.data().count || 0); else setYesterdayLoginCount(0); 
+    });
 
     return () => { 
       unsubBudgets(); unsubTargets(); unsubTherapistSchedules(); unsubTherapistTargets(); unsubStatsToday(); unsubStatsYesterday(); 
     };
-  }, [user, currentBrand, getCollectionPath, getDocPath, selectedYear, fetchGlobalData]); 
+  }, [user, currentBrand, getCollectionPath, getDocPath, selectedYear, fetchGlobalData, getReadMeta]); 
 
 
   const monthCacheRef = useRef({});
@@ -453,20 +499,26 @@ export default function App() {
     // 1. 抓取店鋪結算表
     const unsubAgg = onSnapshot(
       query(getCollectionPath("monthly_aggregated"), where("year", "in", [targetYear, Number(targetYear)])),
-      (s) => setAnnualAggregatedData(s.docs.map((d) => ({ id: d.id, ...d.data() })))
+      (s) => {
+        trackSnapshotRead("monthly_aggregated_year", s, getReadMeta("monthly_aggregated_year"));
+        setAnnualAggregatedData(s.docs.map((d) => ({ id: d.id, ...d.data() })));
+      }
     );
 
     // ★ 2. 新增：抓取管理師結算表 (完美套用您的動態路徑)
     const unsubTherapistAgg = onSnapshot(
       query(getCollectionPath("therapist_monthly_aggregated"), where("year", "in", [targetYear, Number(targetYear)])),
-      (s) => setTherapistAnnualAggregatedData(s.docs.map((d) => ({ id: d.id, ...d.data() })))
+      (s) => {
+        trackSnapshotRead("therapist_monthly_aggregated_year", s, getReadMeta("therapist_monthly_aggregated_year"));
+        setTherapistAnnualAggregatedData(s.docs.map((d) => ({ id: d.id, ...d.data() })));
+      }
     );
 
     return () => {
       unsubAgg();
       unsubTherapistAgg(); // ★ 離開時記得關閉管線
     };
-  }, [user, currentBrand, selectedYear, getCollectionPath]);
+  }, [user, currentBrand, selectedYear, getCollectionPath, getReadMeta]);
 
   useEffect(() => {
     if (!user) return;
@@ -489,12 +541,18 @@ export default function App() {
 
       const unsubReports = onSnapshot(
         query(getCollectionPath("daily_reports"), where("date", ">=", startDate), where("date", "<=", endDate), orderBy("date", "desc")),
-        (s) => setRawData(s.docs.map((d) => ({ id: d.id, ...d.data() })))
+        (s) => {
+          trackSnapshotRead("daily_reports_current_month", s, getReadMeta("daily_reports_current_month"));
+          setRawData(s.docs.map((d) => ({ id: d.id, ...d.data() })));
+        }
       );
 
       const unsubTherapistReports = onSnapshot(
         query(getCollectionPath("therapist_daily_reports"), where("date", ">=", startDate), where("date", "<=", endDate), orderBy("date", "desc")),
-        (s) => setTherapistReports(s.docs.map((d) => ({ id: d.id, ...d.data() })))
+        (s) => {
+          trackSnapshotRead("therapist_daily_reports_current_month", s, getReadMeta("therapist_daily_reports_current_month"));
+          setTherapistReports(s.docs.map((d) => ({ id: d.id, ...d.data() })));
+        }
       );
 
       return () => {
@@ -520,6 +578,9 @@ export default function App() {
             getDocs(query(getCollectionPath("therapist_daily_reports"), where("date", ">=", startDate), where("date", "<=", endDate), orderBy("date", "desc")))
           ]);
 
+          trackReadSource("daily_reports_past_month_getDocs", reportsSnap.docs.length, getReadMeta("daily_reports_past_month_getDocs"));
+          trackReadSource("therapist_daily_reports_past_month_getDocs", tReportsSnap.docs.length, getReadMeta("therapist_daily_reports_past_month_getDocs"));
+
           if (!isMounted) return;
 
           const reportsData = reportsSnap.docs.map(d => ({ id: d.id, ...d.data() }));
@@ -544,7 +605,7 @@ export default function App() {
         isMounted = false; 
       };
     }
-  }, [user, currentBrand, selectedYear, selectedMonth, getCollectionPath]);
+  }, [user, currentBrand, selectedYear, selectedMonth, getCollectionPath, getReadMeta]);
 
 
  const handleLogin = useCallback((roleId, userInfo = null) => {
@@ -643,6 +704,25 @@ export default function App() {
 
   const fmtMoney = (val) => `$${(val || 0).toLocaleString()}`;
   const fmtNum = (val) => (val || 0).toLocaleString();
+
+  useEffect(() => {
+    if (!userRole) return;
+
+    const timer = setInterval(() => {
+      flushReadTrackerToFirestore({
+        db,
+        brandId: currentBrandId,
+        brandLabel: currentBrand?.label || currentBrandId,
+        userRole,
+        userName: currentUser?.name || (userRole === "director" ? "高階主管" : userRole),
+        activeView,
+      }).catch((error) => {
+        console.warn("read tracker flush failed", error);
+      });
+    }, 60 * 1000);
+
+    return () => clearInterval(timer);
+  }, [userRole, currentUser, currentBrandId, currentBrand, activeView]);
 
   const contextValue = useMemo(() => ({
     user, loading, analytics, managers: visibleManagers, budgets, targets, rawData: visibleRawData, allReports: rawData, 

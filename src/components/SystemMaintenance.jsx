@@ -1,19 +1,153 @@
 // src/components/SystemMaintenance.jsx
-import React, { useState, useContext } from "react";
+import React, { useState, useContext, useEffect, useMemo } from "react";
 import { db } from "../config/firebase";
-import { getDocs, doc, writeBatch } from "firebase/firestore"; 
+import { getDocs, doc, writeBatch, collection, query, where, orderBy, limit, setDoc, serverTimestamp } from "firebase/firestore"; 
 import { AppContext } from "../AppContext";
 import { 
   Database, Download, RefreshCw, AlertTriangle, Play, 
-  Scissors, ClipboardList, Trash2, Calendar, Settings, Loader2
+  Scissors, ClipboardList, Trash2, Calendar, Settings, Loader2,
+  Radio, BarChart3, Activity, Eye, Power, Globe2, Monitor
 } from "lucide-react";
 import { ViewWrapper } from "./SharedUI";
+import {
+  getReadTrackerMode,
+  setReadTrackerMode,
+  getReadTrackerStats,
+  clearReadTrackerStats,
+  flushReadTrackerToFirestore,
+} from "../utils/readTracker";
 
 export default function SystemMaintenance() {
-  const { currentBrand, userRole, showToast, getCollectionPath } = useContext(AppContext);
+  const { currentBrand, userRole, showToast, getCollectionPath, getDocPath, currentUser } = useContext(AppContext);
   const [logs, setLogs] = useState([]);
   const [loadingAction, setLoadingAction] = useState(null);
   const [calMonth, setCalMonth] = useState(new Date().toISOString().substring(0, 7));
+
+  const [readTrackerMode, setReadTrackerModeState] = useState(getReadTrackerMode());
+  const [localReadStats, setLocalReadStats] = useState({});
+  const [globalReadStats, setGlobalReadStats] = useState([]);
+  const [loadingReadStats, setLoadingReadStats] = useState(false);
+
+  useEffect(() => {
+    const refreshLocalStats = () => setLocalReadStats(getReadTrackerStats());
+    refreshLocalStats();
+    const timer = setInterval(refreshLocalStats, 3000);
+    return () => clearInterval(timer);
+  }, []);
+
+  const readStatsRows = useMemo(() => {
+    return Object.entries(localReadStats || {})
+      .map(([label, item]) => ({
+        label,
+        docs: item.docs || 0,
+        triggers: item.triggers || 0,
+        avg: item.triggers ? Math.round((item.docs || 0) / item.triggers) : 0,
+        lastAt: item.lastAt || "-",
+      }))
+      .sort((a, b) => b.docs - a.docs);
+  }, [localReadStats]);
+
+  const handleChangeReadTrackerMode = async (mode) => {
+    setReadTrackerMode(mode);
+    setReadTrackerModeState(mode);
+
+    try {
+      await setDoc(getDocPath("read_tracker_config"), {
+        mode,
+        updatedAt: serverTimestamp(),
+        updatedAtText: new Date().toISOString(),
+        updatedBy: currentUser?.name || "director",
+      }, { merge: true });
+
+      if (mode === "off") showToast("讀取來源追蹤已全域關閉", "info");
+      else if (mode === "local") showToast("已全域啟用本機讀取追蹤", "success");
+      else if (mode === "global") showToast("已全域啟用上報模式，每 5 分鐘彙整一次", "success");
+    } catch (error) {
+      console.error(error);
+      showToast("追蹤模式儲存失敗，請檢查資料庫權限", "error");
+    }
+  };
+
+  const handleClearReadTracker = () => {
+    if (!window.confirm("確定要清除目前這台裝置的讀取追蹤統計嗎？")) return;
+    clearReadTrackerStats();
+    setLocalReadStats({});
+    showToast("本機讀取統計已清除", "success");
+  };
+
+  const handleManualFlushReadTracker = async () => {
+    setLoadingReadStats(true);
+
+    try {
+      const result = await flushReadTrackerToFirestore({
+        db,
+        brandId: currentBrand?.id || "unknown",
+        brandLabel: currentBrand?.label || "unknown",
+        userRole,
+        userName: "maintenance_user",
+        activeView: "system_maintenance",
+        force: true,
+      });
+
+      if (result.skipped) showToast(`未上報：${result.reason}`, "info");
+      else {
+        showToast(`已上報 ${result.totalReadDocs.toLocaleString()} docs`, "success");
+        setLocalReadStats(getReadTrackerStats());
+      }
+    } catch (error) {
+      console.error(error);
+      showToast("手動上報失敗", "error");
+    } finally {
+      setLoadingReadStats(false);
+    }
+  };
+
+  const handleLoadGlobalReadStats = async () => {
+    setLoadingReadStats(true);
+
+    try {
+      const today = new Date().toISOString().slice(0, 10);
+      const q = query(
+        collection(db, "read_debug_sessions"),
+        where("date", "==", today),
+        orderBy("updatedAtText", "desc"),
+        limit(100)
+      );
+
+      const snap = await getDocs(q);
+      const rows = snap.docs.map((d) => ({ id: d.id, ...d.data() }));
+      const sourceSummary = {};
+
+      rows.forEach((row) => {
+        const sources = row.sources || {};
+        Object.entries(sources).forEach(([label, item]) => {
+          if (!sourceSummary[label]) {
+            sourceSummary[label] = { label, docs: 0, triggers: 0, users: new Set(), lastAt: "" };
+          }
+
+          sourceSummary[label].docs += item.docs || 0;
+          sourceSummary[label].triggers += item.triggers || 0;
+          sourceSummary[label].users.add(row.userName || row.userRole || "unknown");
+
+          if (!sourceSummary[label].lastAt || item.lastAt > sourceSummary[label].lastAt) {
+            sourceSummary[label].lastAt = item.lastAt;
+          }
+        });
+      });
+
+      const summaryRows = Object.values(sourceSummary)
+        .map((item) => ({ ...item, users: item.users.size, avg: item.triggers ? Math.round(item.docs / item.triggers) : 0 }))
+        .sort((a, b) => b.docs - a.docs);
+
+      setGlobalReadStats(summaryRows);
+      showToast(`已載入今日全域讀取追蹤，共 ${summaryRows.length} 個來源`, "success");
+    } catch (error) {
+      console.error(error);
+      showToast("讀取全域追蹤失敗，可能需要建立 Firestore index", "error");
+    } finally {
+      setLoadingReadStats(false);
+    }
+  };
 
   // 權限防護
   if (userRole !== "director") return null;
@@ -331,6 +465,165 @@ export default function SystemMaintenance() {
 
             </div>
           ))}
+        </div>
+
+        {/* 讀取來源追蹤 */}
+        <div className="bg-white rounded-3xl border border-stone-100 shadow-sm overflow-hidden">
+          <div className="p-6 border-b border-stone-100 flex flex-col lg:flex-row lg:items-center lg:justify-between gap-4">
+            <div>
+              <h2 className="text-lg font-black text-stone-800 flex items-center gap-2">
+                <Radio className="text-amber-500" size={22} />
+                讀取來源追蹤
+              </h2>
+              <p className="text-xs text-stone-400 mt-1 font-bold">
+                用來判斷晚間讀取暴增是由哪一個資料來源、頁面或角色造成。
+              </p>
+            </div>
+
+            <div className="flex flex-wrap gap-2">
+              {[
+                { id: "off", label: "關閉", icon: Power },
+                { id: "local", label: "本機模式", icon: Monitor },
+                { id: "global", label: "全域上報", icon: Globe2 },
+              ].map((mode) => (
+                <button
+                  key={mode.id}
+                  onClick={() => handleChangeReadTrackerMode(mode.id)}
+                  className={`px-4 py-2 rounded-xl text-xs font-black border flex items-center gap-2 transition-all ${
+                    readTrackerMode === mode.id
+                      ? "bg-stone-900 text-white border-stone-900 shadow-md"
+                      : "bg-white text-stone-500 border-stone-200 hover:bg-stone-50"
+                  }`}
+                >
+                  <mode.icon size={14} />
+                  {mode.label}
+                </button>
+              ))}
+            </div>
+          </div>
+
+          <div className="p-6 grid grid-cols-1 xl:grid-cols-2 gap-6">
+            {/* 本機統計 */}
+            <div className="rounded-2xl border border-stone-100 bg-stone-50/50 overflow-hidden">
+              <div className="px-4 py-3 border-b border-stone-100 bg-white flex items-center justify-between">
+                <div className="flex items-center gap-2">
+                  <Activity size={16} className="text-emerald-500" />
+                  <span className="text-sm font-black text-stone-700">目前裝置統計</span>
+                </div>
+
+                <div className="flex items-center gap-2">
+                  <button
+                    onClick={handleManualFlushReadTracker}
+                    disabled={loadingReadStats || readTrackerMode !== "global"}
+                    className="text-[11px] font-black px-3 py-1.5 rounded-lg border border-stone-200 text-stone-500 hover:bg-stone-50 disabled:opacity-40"
+                  >
+                    手動上報
+                  </button>
+
+                  <button
+                    onClick={handleClearReadTracker}
+                    className="text-[11px] font-black px-3 py-1.5 rounded-lg border border-rose-100 text-rose-500 hover:bg-rose-50"
+                  >
+                    清除
+                  </button>
+                </div>
+              </div>
+
+              <div className="p-4">
+                {readStatsRows.length === 0 ? (
+                  <div className="h-48 flex flex-col items-center justify-center text-stone-300 gap-2">
+                    <BarChart3 size={32} />
+                    <p className="text-xs font-black tracking-widest">尚無本機讀取追蹤資料</p>
+                  </div>
+                ) : (
+                  <div className="space-y-2 max-h-[320px] overflow-y-auto pr-1">
+                    {readStatsRows.slice(0, 12).map((row, index) => (
+                      <div
+                        key={row.label}
+                        className="bg-white rounded-xl border border-stone-100 p-3 flex items-center justify-between gap-3"
+                      >
+                        <div className="min-w-0">
+                          <div className="flex items-center gap-2">
+                            <span className="w-6 h-6 rounded-lg bg-stone-100 text-stone-500 text-[11px] font-black flex items-center justify-center">
+                              {index + 1}
+                            </span>
+                            <p className="text-xs font-black text-stone-700 truncate">{row.label}</p>
+                          </div>
+                          <p className="text-[10px] text-stone-400 mt-1 ml-8">
+                            觸發 {row.triggers.toLocaleString()} 次｜平均 {row.avg.toLocaleString()} docs / 次
+                          </p>
+                        </div>
+
+                        <div className="text-right shrink-0">
+                          <p className="text-sm font-black text-amber-600">{row.docs.toLocaleString()}</p>
+                          <p className="text-[10px] text-stone-400">docs</p>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            </div>
+
+            {/* 全域統計 */}
+            <div className="rounded-2xl border border-stone-100 bg-stone-50/50 overflow-hidden">
+              <div className="px-4 py-3 border-b border-stone-100 bg-white flex items-center justify-between">
+                <div className="flex items-center gap-2">
+                  <Globe2 size={16} className="text-blue-500" />
+                  <span className="text-sm font-black text-stone-700">今日全域排行</span>
+                </div>
+
+                <button
+                  onClick={handleLoadGlobalReadStats}
+                  disabled={loadingReadStats}
+                  className="text-[11px] font-black px-3 py-1.5 rounded-lg bg-stone-900 text-white hover:bg-stone-800 disabled:opacity-40 flex items-center gap-1.5"
+                >
+                  {loadingReadStats ? <Loader2 size={13} className="animate-spin" /> : <Eye size={13} />}
+                  載入排行
+                </button>
+              </div>
+
+              <div className="p-4">
+                {globalReadStats.length === 0 ? (
+                  <div className="h-48 flex flex-col items-center justify-center text-stone-300 gap-2">
+                    <Globe2 size={32} />
+                    <p className="text-xs font-black tracking-widest">尚未載入全域讀取排行</p>
+                    <p className="text-[11px] text-stone-400">需開啟全域上報並累積一段時間</p>
+                  </div>
+                ) : (
+                  <div className="space-y-2 max-h-[320px] overflow-y-auto pr-1">
+                    {globalReadStats.slice(0, 12).map((row, index) => (
+                      <div
+                        key={row.label}
+                        className="bg-white rounded-xl border border-stone-100 p-3 flex items-center justify-between gap-3"
+                      >
+                        <div className="min-w-0">
+                          <div className="flex items-center gap-2">
+                            <span className="w-6 h-6 rounded-lg bg-stone-100 text-stone-500 text-[11px] font-black flex items-center justify-center">
+                              {index + 1}
+                            </span>
+                            <p className="text-xs font-black text-stone-700 truncate">{row.label}</p>
+                          </div>
+                          <p className="text-[10px] text-stone-400 mt-1 ml-8">
+                            觸發 {row.triggers.toLocaleString()} 次｜裝置/使用者 {row.users}
+                          </p>
+                        </div>
+
+                        <div className="text-right shrink-0">
+                          <p className="text-sm font-black text-blue-600">{row.docs.toLocaleString()}</p>
+                          <p className="text-[10px] text-stone-400">docs</p>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            </div>
+          </div>
+
+          <div className="px-6 py-4 bg-amber-50/50 border-t border-amber-100/60 text-xs text-amber-700 font-bold leading-relaxed">
+            建議只在晚間尖峰或短期診斷期間開啟「全域上報」。此功能採本機累積、低頻彙整，不會每次讀取都寫入資料庫。
+          </div>
         </div>
 
         {/* 稽核日誌區 (淺色、乾淨、高級感設計，完全符合截圖風格) */}
