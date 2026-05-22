@@ -198,8 +198,21 @@ const SettingsView = () => {
       const autoLogoutMinutes = Math.max(1, Number(localSecurityConfig.autoLogoutMinutes || localSecurityConfig.timeoutMinutes || 240));
       const logoutWarningSeconds = Math.max(5, Number(localSecurityConfig.logoutWarningSeconds || localSecurityConfig.warningSeconds || 60));
 
-      if (localSecurityConfig.lowPowerEnabled && localSecurityConfig.autoLogoutEnabled && lowPowerIdleMinutes >= autoLogoutMinutes) {
-        showToast("省流量待機時間必須小於自動登出時間", "error");
+      // 省流量待機與自動登出為兩套獨立邏輯：
+      // 主管可豁免自動登出，但仍需要依省流時間進入待機；
+      // 因此不再強制要求「省流量時間」必須小於「自動登出時間」。
+      if (!Number.isFinite(lowPowerIdleMinutes) || lowPowerIdleMinutes < 1) {
+        showToast("省流量待機時間至少需為 1 分鐘", "error");
+        return;
+      }
+
+      if (!Number.isFinite(autoLogoutMinutes) || autoLogoutMinutes < 1) {
+        showToast("自動登出時間至少需為 1 分鐘", "error");
+        return;
+      }
+
+      if (!Number.isFinite(logoutWarningSeconds) || logoutWarningSeconds < 5) {
+        showToast("登出前倒數提醒至少需為 5 秒", "error");
         return;
       }
 
@@ -571,7 +584,7 @@ const SettingsView = () => {
                 </div>
 
                 <div className="rounded-2xl bg-[#FFF7DF]/70 border border-[#F3DFB8] p-4 text-xs text-[#8A632E] font-bold leading-relaxed">
-                  建議設定：30 分鐘進入省流量、240 分鐘自動登出、登出前 60 秒提醒。主管可豁免登出，但仍會進入省流量待機，避免 Dashboard 掛機造成讀取放大。
+                  省流量與自動登出可分別設定。若某職務豁免自動登出，仍會依省流量時間進入待機；因此省流時間可以大於或小於自動登出時間。建議可依角色管理策略設定，例如一般人員較快登出，高階主管保留登入但進入省流。
                 </div>
 
                 <div className="flex justify-end pt-4 border-t border-[#EFE7DA]">
