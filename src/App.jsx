@@ -37,7 +37,7 @@ import { trackSnapshotRead, trackReadSource, flushReadTrackerToFirestore, setRea
 // ==========================================
 // ★ 系統核心版本號 (終極動態快取版)
 // ==========================================
-const CURRENT_APP_VERSION = "2.8.8"; 
+const CURRENT_APP_VERSION = "2.8.9"; 
 
 const isNewerVersion = (local, remote) => {
   if (!remote) return true;
@@ -439,55 +439,90 @@ export default function App() {
 
   useEffect(() => {
     if (!user) return;
-    setBudgets({}); setManagers({}); setStoreAccounts([]); setManagerAuth({}); setTherapists([]); setTherapistSchedules({}); setTherapistTargets({}); setPermissions(DEFAULT_PERMISSIONS); setTargets({ newASP: 3500, trafficASP: 1200 });
+
+    setBudgets({});
+    setManagers({});
+    setStoreAccounts([]);
+    setManagerAuth({});
+    setTherapists([]);
+    setTherapistSchedules({});
+    setTherapistTargets({});
+    setPermissions(DEFAULT_PERMISSIONS);
+    setTargets({ newASP: 3500, trafficASP: 1200 });
     setSecurityConfig({ enabled: true, timeoutMinutes: 3, warningSeconds: 15, exemptRoles: ["director", "master"] });
 
     const targetYearStr = String(selectedYear);
+    let isMounted = true;
 
     fetchGlobalData();
 
-    const unsubBudgets = onSnapshot(getCollectionPath("monthly_targets"), (s) => { 
-      trackSnapshotRead("monthly_targets", s, getReadMeta("monthly_targets"));
-      const b = {}; s.docs.forEach((d) => (b[d.id] = d.data())); setBudgets(b); 
-    });
-    const unsubTargets = onSnapshot(getDocPath("kpi_targets"), (s) => { 
-      trackReadSource("kpi_targets", s.exists() ? 1 : 0, getReadMeta("kpi_targets"));
-      if (s.exists()) setTargets(s.data()); else setTargets({ newASP: 3500, trafficASP: 1200 }); 
-    });
-    
-    const unsubTherapistSchedules = onSnapshot(
-      query(getCollectionPath("therapist_schedules"), where("year", "==", targetYearStr)), 
-      (s) => { 
-        trackSnapshotRead("therapist_schedules_year", s, getReadMeta("therapist_schedules_year"));
-        const schedules = {}; s.docs.forEach((d) => (schedules[d.id] = d.data())); setTherapistSchedules(schedules); 
+    // ==========================================
+    // ★ 階段一節流：低變動設定資料改為一次性讀取
+    // monthly_targets / therapist_schedules / therapist_targets / kpi_targets
+    // 這些資料不像日報需要秒級即時，因此不再長時間 onSnapshot。
+    // 目的：保留前線日報即時體感，同時降低晚間靜態資料被重複推送的 reads。
+    // ==========================================
+    const fetchLowFrequencyData = async () => {
+      try {
+        const [budgetSnap, kpiSnap, scheduleSnap, tTargetSnap] = await Promise.all([
+          getDocs(getCollectionPath("monthly_targets")),
+          getDoc(getDocPath("kpi_targets")),
+          getDocs(query(getCollectionPath("therapist_schedules"), where("year", "==", targetYearStr))),
+          getDocs(query(getCollectionPath("therapist_targets"), where("year", "==", targetYearStr))),
+        ]);
+
+        trackReadSource("monthly_targets", budgetSnap.docs.length, getReadMeta("monthly_targets_once"));
+        trackReadSource("kpi_targets", kpiSnap.exists() ? 1 : 0, getReadMeta("kpi_targets_once"));
+        trackReadSource("therapist_schedules_year", scheduleSnap.docs.length, getReadMeta("therapist_schedules_year_once"));
+        trackReadSource("therapist_targets_year", tTargetSnap.docs.length, getReadMeta("therapist_targets_year_once"));
+
+        if (!isMounted) return;
+
+        const b = {};
+        budgetSnap.docs.forEach((d) => (b[d.id] = d.data()));
+        setBudgets(b);
+
+        if (kpiSnap.exists()) setTargets(kpiSnap.data());
+        else setTargets({ newASP: 3500, trafficASP: 1200 });
+
+        const schedules = {};
+        scheduleSnap.docs.forEach((d) => (schedules[d.id] = d.data()));
+        setTherapistSchedules(schedules);
+
+        const t = {};
+        tTargetSnap.docs.forEach((d) => (t[d.id] = d.data()));
+        setTherapistTargets(t);
+      } catch (error) {
+        console.error("Fetch low frequency data error:", error);
       }
-    );
-    
-    const unsubTherapistTargets = onSnapshot(
-      query(getCollectionPath("therapist_targets"), where("year", "==", targetYearStr)), 
-      (s) => { 
-        trackSnapshotRead("therapist_targets_year", s, getReadMeta("therapist_targets_year"));
-        const t = {}; s.docs.forEach((d) => (t[d.id] = d.data())); setTherapistTargets(t); 
-      }
-    );
+    };
+
+    fetchLowFrequencyData();
 
     const todayStr = formatLocalYYYYMMDD(new Date());
-    const d = new Date(); d.setDate(d.getDate() - 1);
+    const d = new Date();
+    d.setDate(d.getDate() - 1);
     const yesterdayStr = formatLocalYYYYMMDD(d);
 
-    const unsubStatsToday = onSnapshot(doc(getCollectionPath("system_stats"), todayStr), (s) => { 
+    // 登入數字很小，保留即時監聽即可。
+    const unsubStatsToday = onSnapshot(doc(getCollectionPath("system_stats"), todayStr), (s) => {
       trackReadSource("system_stats_today", s.exists() ? 1 : 0, getReadMeta("system_stats_today"));
-      if (s.exists()) setDailyLoginCount(s.data().count || 0); else setDailyLoginCount(0); 
-    });
-    const unsubStatsYesterday = onSnapshot(doc(getCollectionPath("system_stats"), yesterdayStr), (s) => { 
-      trackReadSource("system_stats_yesterday", s.exists() ? 1 : 0, getReadMeta("system_stats_yesterday"));
-      if (s.exists()) setYesterdayLoginCount(s.data().count || 0); else setYesterdayLoginCount(0); 
+      if (s.exists()) setDailyLoginCount(s.data().count || 0);
+      else setDailyLoginCount(0);
     });
 
-    return () => { 
-      unsubBudgets(); unsubTargets(); unsubTherapistSchedules(); unsubTherapistTargets(); unsubStatsToday(); unsubStatsYesterday(); 
+    const unsubStatsYesterday = onSnapshot(doc(getCollectionPath("system_stats"), yesterdayStr), (s) => {
+      trackReadSource("system_stats_yesterday", s.exists() ? 1 : 0, getReadMeta("system_stats_yesterday"));
+      if (s.exists()) setYesterdayLoginCount(s.data().count || 0);
+      else setYesterdayLoginCount(0);
+    });
+
+    return () => {
+      isMounted = false;
+      unsubStatsToday();
+      unsubStatsYesterday();
     };
-  }, [user, currentBrand, getCollectionPath, getDocPath, selectedYear, fetchGlobalData, getReadMeta]); 
+  }, [user, currentBrand, getCollectionPath, getDocPath, selectedYear, fetchGlobalData, getReadMeta]);
 
 
   const monthCacheRef = useRef({});
