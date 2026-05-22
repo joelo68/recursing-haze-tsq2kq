@@ -32,12 +32,19 @@ import { AppContext } from "./AppContext";
 import { useAnalytics } from "./hooks/useAnalytics";
 import TherapistManagerView from "./components/TherapistManagerView";
 import LoginView from "./components/LoginView";
-import { trackSnapshotRead, trackReadSource, flushReadTrackerToFirestore, setReadTrackerMode } from "./utils/readTracker";
+import {
+  trackSnapshotRead,
+  trackReadSource,
+  flushReadTrackerToFirestore,
+  setReadTrackerMode,
+  resolveReadTrackerModeFromConfig,
+  getReadTrackerScheduleStatus,
+} from "./utils/readTracker";
 
 // ==========================================
 // ★ 系統核心版本號 (終極動態快取版)
 // ==========================================
-const CURRENT_APP_VERSION = "2.8.9"; 
+const CURRENT_APP_VERSION = "2.8.8"; 
 
 const isNewerVersion = (local, remote) => {
   if (!remote) return true;
@@ -426,9 +433,22 @@ export default function App() {
 
     const unsubReadTrackerConfig = onSnapshot(getDocPath("read_tracker_config"), (s) => {
       trackReadSource("read_tracker_config", s.exists() ? 1 : 0, getReadMeta("read_tracker_config"));
-      const remoteMode = s.exists() ? s.data().mode : "off";
-      if (["off", "local", "global"].includes(remoteMode)) {
-        setReadTrackerMode(remoteMode);
+      const remoteConfig = s.exists() ? s.data() : { mode: "off" };
+      const effectiveMode = resolveReadTrackerModeFromConfig(remoteConfig);
+      const scheduleStatus = getReadTrackerScheduleStatus(remoteConfig);
+
+      if (["off", "local", "global"].includes(effectiveMode)) {
+        setReadTrackerMode(effectiveMode);
+      }
+
+      if (remoteConfig.scheduleEnabled) {
+        console.info("[READ TRACKER SCHEDULE]", {
+          effectiveMode,
+          status: scheduleStatus.label,
+          nowTime: scheduleStatus.nowTime,
+          startTime: scheduleStatus.startTime,
+          endTime: scheduleStatus.endTime,
+        });
       }
     }, (error) => {
       console.warn("read tracker config sync failed", error);
