@@ -44,7 +44,7 @@ import {
 // ==========================================
 // ★ 系統核心版本號 (終極動態快取版)
 // ==========================================
-const CURRENT_APP_VERSION = "2.9.0"; 
+const CURRENT_APP_VERSION = "2.9.1"; 
 
 const isNewerVersion = (local, remote) => {
   if (!remote) return true;
@@ -104,6 +104,32 @@ const BRANDS = [
   { id: 'yibo', label: '伊啵', icon: Music, pathType: 'new', color: 'sky', gradient: 'from-sky-400 to-indigo-600', bg: 'bg-sky-50', text: 'text-sky-600' }
 ];
 
+const DEFAULT_SECURITY_CONFIG = {
+  enabled: true,
+  timeoutMinutes: 240,
+  warningSeconds: 60,
+  exemptRoles: ["director", "master"],
+  lowPowerEnabled: true,
+  lowPowerIdleMinutes: 30,
+  autoLogoutEnabled: true,
+  autoLogoutMinutes: 240,
+  logoutWarningSeconds: 60,
+};
+
+const normalizeSecurityConfig = (config = {}) => ({
+  ...DEFAULT_SECURITY_CONFIG,
+  ...config,
+  autoLogoutEnabled: config.autoLogoutEnabled ?? config.enabled ?? DEFAULT_SECURITY_CONFIG.autoLogoutEnabled,
+  autoLogoutMinutes: Number(config.autoLogoutMinutes ?? config.timeoutMinutes ?? DEFAULT_SECURITY_CONFIG.autoLogoutMinutes),
+  logoutWarningSeconds: Number(config.logoutWarningSeconds ?? config.warningSeconds ?? DEFAULT_SECURITY_CONFIG.logoutWarningSeconds),
+  lowPowerEnabled: config.lowPowerEnabled ?? DEFAULT_SECURITY_CONFIG.lowPowerEnabled,
+  lowPowerIdleMinutes: Number(config.lowPowerIdleMinutes ?? DEFAULT_SECURITY_CONFIG.lowPowerIdleMinutes),
+  enabled: config.enabled ?? config.autoLogoutEnabled ?? DEFAULT_SECURITY_CONFIG.enabled,
+  timeoutMinutes: Number(config.timeoutMinutes ?? config.autoLogoutMinutes ?? DEFAULT_SECURITY_CONFIG.timeoutMinutes),
+  warningSeconds: Number(config.warningSeconds ?? config.logoutWarningSeconds ?? DEFAULT_SECURITY_CONFIG.warningSeconds),
+  exemptRoles: config.exemptRoles || DEFAULT_SECURITY_CONFIG.exemptRoles,
+});
+
 export default function App() {
   const [user, setUser] = useState(null);
   const [userRole, setUserRole] = useState(null);
@@ -159,18 +185,18 @@ export default function App() {
   const [therapistTargets, setTherapistTargets] = useState({}); 
   const [auditExclusions, setAuditExclusions] = useState([]);
 
-  const [securityConfig, setSecurityConfig] = useState({
-    enabled: true, timeoutMinutes: 3, warningSeconds: 15, exemptRoles: ["director", "master"]
-  });
+  const [securityConfig, setSecurityConfig] = useState(DEFAULT_SECURITY_CONFIG);
 
   const [selectedYear, setSelectedYear] = useState(new Date().getFullYear().toString());
   const [selectedMonth, setSelectedMonth] = useState((new Date().getMonth() + 1).toString());
   const [inputDate, setInputDate] = useState(() => formatLocalYYYYMMDD(new Date()));
 
   const [showIdleWarning, setShowIdleWarning] = useState(false);
-  const [countdown, setCountdown] = useState(15);
+  const [countdown, setCountdown] = useState(60);
+  const [isLowPowerMode, setIsLowPowerMode] = useState(false);
   const lastActivityTimeRef = useRef(Date.now()); 
   const isWarningShowingRef = useRef(false);
+  const lowPowerToastShownRef = useRef(false);
 
   useEffect(() => {
     const handleOnline = () => setIsOnline(true);
@@ -189,14 +215,20 @@ export default function App() {
     lastActivityTimeRef.current = Date.now();
     isWarningShowingRef.current = false; 
     setShowIdleWarning(false);           
-    setCountdown(securityConfig.warningSeconds || 15);
+    setCountdown(securityConfig.logoutWarningSeconds || securityConfig.warningSeconds || 60);
   }, [securityConfig]);
 
   const handleUserActivity = useCallback(() => {
     if (!userRole) return;
-    if (isWarningShowingRef.current) return; 
+
+    if (isLowPowerMode) {
+      setIsLowPowerMode(false);
+      trackReadSource("low_power_resume_by_activity", 0, getReadMeta("low_power_resume_by_activity"));
+    }
+
+    if (isWarningShowingRef.current) return;
     lastActivityTimeRef.current = Date.now();
-  }, [userRole]); 
+  }, [userRole, isLowPowerMode, getReadMeta]); 
 
   const logActivity = useCallback(async (role, user, action, details) => {
     if (!isOnline) return; 
@@ -222,7 +254,7 @@ export default function App() {
     
     isWarningShowingRef.current = false; 
     setShowIdleWarning(false); 
-    setCountdown(securityConfig.warningSeconds || 15); 
+    setCountdown(securityConfig.logoutWarningSeconds || securityConfig.warningSeconds || 60); 
     lastActivityTimeRef.current = Date.now(); 
     
     localStorage.removeItem("cyj_input_draft"); localStorage.removeItem("cyj_input_draft_v2"); localStorage.removeItem("cyj_input_draft_v3"); 
@@ -312,39 +344,55 @@ export default function App() {
 
   useEffect(() => {
     let intervalId = null;
-    if (userRole) {
-      const isExempt = securityConfig.exemptRoles?.includes(userRole) || userRole === 'director' || userRole === 'master';
-      if (!securityConfig.enabled || isExempt) return; 
 
+    if (userRole) {
       intervalId = setInterval(() => {
         const now = Date.now();
-        const elapsed = now - lastActivityTimeRef.current; 
-        
-        const LOGOUT_THRESHOLD = (securityConfig.timeoutMinutes || 3) * 60 * 1000;  
-        const WARNING_THRESHOLD = LOGOUT_THRESHOLD - ((securityConfig.warningSeconds || 15) * 1000);
-        
-        if (elapsed > LOGOUT_THRESHOLD) { 
-          clearInterval(intervalId); 
-          handleLogout(`閒置超過 ${securityConfig.timeoutMinutes} 分鐘自動登出`); 
-        } 
-        else if (elapsed > WARNING_THRESHOLD) { 
+        const elapsed = now - lastActivityTimeRef.current;
+
+        const lowPowerEnabled = securityConfig.lowPowerEnabled !== false;
+        const lowPowerThreshold = Math.max(1, Number(securityConfig.lowPowerIdleMinutes || 30)) * 60 * 1000;
+
+        if (lowPowerEnabled && !isLowPowerMode && elapsed > lowPowerThreshold) {
+          setIsLowPowerMode(true);
+          trackReadSource("low_power_mode_enter", 0, {
+            ...getReadMeta("low_power_mode_enter"),
+            idleMinutes: securityConfig.lowPowerIdleMinutes || 30,
+          });
+        }
+
+        const autoLogoutEnabled = securityConfig.autoLogoutEnabled ?? securityConfig.enabled ?? true;
+        const isExempt = securityConfig.exemptRoles?.includes(userRole) || userRole === 'director' || userRole === 'master';
+
+        if (!autoLogoutEnabled || isExempt) return;
+
+        const logoutMinutes = Math.max(1, Number(securityConfig.autoLogoutMinutes || securityConfig.timeoutMinutes || 240));
+        const warningSeconds = Math.max(5, Number(securityConfig.logoutWarningSeconds || securityConfig.warningSeconds || 60));
+
+        const LOGOUT_THRESHOLD = logoutMinutes * 60 * 1000;
+        const WARNING_THRESHOLD = LOGOUT_THRESHOLD - (warningSeconds * 1000);
+
+        if (elapsed > LOGOUT_THRESHOLD) {
+          clearInterval(intervalId);
+          handleLogout(`閒置超過 ${logoutMinutes} 分鐘自動登出`);
+        } else if (elapsed > WARNING_THRESHOLD) {
           if (!isWarningShowingRef.current) {
-            isWarningShowingRef.current = true; 
-            setShowIdleWarning(true); 
+            isWarningShowingRef.current = true;
+            setShowIdleWarning(true);
           }
-          const remaining = Math.ceil((LOGOUT_THRESHOLD - elapsed) / 1000); 
-          setCountdown(remaining > 0 ? remaining : 0); 
-        } 
-        else { 
+          const remaining = Math.ceil((LOGOUT_THRESHOLD - elapsed) / 1000);
+          setCountdown(remaining > 0 ? remaining : 0);
+        } else {
           if (isWarningShowingRef.current) {
             isWarningShowingRef.current = false;
-            setShowIdleWarning(false); 
+            setShowIdleWarning(false);
           }
         }
-      }, 1000); 
+      }, 1000);
     }
+
     return () => { if (intervalId) clearInterval(intervalId); };
-  }, [userRole, handleLogout, securityConfig]); 
+  }, [userRole, handleLogout, securityConfig, isLowPowerMode, getReadMeta]);
 
   useEffect(() => {
     if (userRole) {
@@ -410,7 +458,7 @@ export default function App() {
       setTherapists(thSnap.docs.map((d) => ({ id: d.id, ...d.data() })));
       setTrainerAuth(trAuthSnap.exists() ? trAuthSnap.data() : { password: "0000" });
       setAuditExclusions(audSnap.exists() ? (audSnap.data().stores || []) : []);
-      setSecurityConfig(secSnap.exists() ? secSnap.data() : { enabled: true, timeoutMinutes: 3, warningSeconds: 15, exemptRoles: ["director", "master"] });
+      setSecurityConfig(secSnap.exists() ? normalizeSecurityConfig(secSnap.data()) : DEFAULT_SECURITY_CONFIG);
 
       if (dAuthSnap.exists()) {
          let data = { ...dAuthSnap.data() };
@@ -469,7 +517,7 @@ export default function App() {
     setTherapistTargets({});
     setPermissions(DEFAULT_PERMISSIONS);
     setTargets({ newASP: 3500, trafficASP: 1200 });
-    setSecurityConfig({ enabled: true, timeoutMinutes: 3, warningSeconds: 15, exemptRoles: ["director", "master"] });
+    setSecurityConfig(DEFAULT_SECURITY_CONFIG);
 
     const targetYearStr = String(selectedYear);
     let isMounted = true;
@@ -548,7 +596,7 @@ export default function App() {
   const monthCacheRef = useRef({});
 
   useEffect(() => {
-    if (!user) return;
+    if (!user || isLowPowerMode) return;
     const targetYear = String(selectedYear);
 
     // 1. 抓取店鋪結算表
@@ -573,10 +621,10 @@ export default function App() {
       unsubAgg();
       unsubTherapistAgg(); // ★ 離開時記得關閉管線
     };
-  }, [user, currentBrand, selectedYear, getCollectionPath, getReadMeta]);
+  }, [user, currentBrand, selectedYear, getCollectionPath, getReadMeta, isLowPowerMode]);
 
   useEffect(() => {
-    if (!user) return;
+    if (!user || isLowPowerMode) return;
 
     const targetYear = String(selectedYear);
     const targetMonth = String(selectedMonth).padStart(2, '0');
@@ -687,6 +735,23 @@ export default function App() {
   }, [therapists, logActivity]);
 
   const showToast = useCallback((message, type = "info") => setToast({ message, type }), []);
+
+  // ==========================================
+  // ★ 省流量待機提示：進入 / 恢復時通知使用者
+  // ==========================================
+  useEffect(() => {
+    if (!userRole) return;
+
+    if (isLowPowerMode && !lowPowerToastShownRef.current) {
+      showToast("已進入省流量待機，即時資料同步已暫停", "info");
+      lowPowerToastShownRef.current = true;
+    }
+
+    if (!isLowPowerMode && lowPowerToastShownRef.current) {
+      showToast("已恢復即時同步，系統正在更新最新資料", "success");
+      lowPowerToastShownRef.current = false;
+    }
+  }, [isLowPowerMode, userRole, showToast]);
   const openConfirm = useCallback((title, message, onConfirm) => setConfirmModal({ isOpen: true, title, message, onConfirm: () => { onConfirm(); setConfirmModal((p) => ({ ...p, isOpen: false })); }, }), []);
   const closeConfirmModal = useCallback(() => setConfirmModal((p) => ({ ...p, isOpen: false })), []);
 
@@ -783,9 +848,9 @@ export default function App() {
     user, loading, analytics, managers: visibleManagers, budgets, targets, rawData: visibleRawData, allReports: rawData, 
     annualAggregatedData, therapistAnnualAggregatedData, // ★ 把這包管理師資料交出去
     showToast, openConfirm, fmtMoney, fmtNum, inputDate, setInputDate, storeList: analytics?.storeList || [], setTargets, selectedYear, selectedMonth, permissions, storeAccounts, managerAuth, currentUser, userRole, logActivity, handleUpdateStorePassword, handleUpdateManagerPassword, handleUpdateTherapistPassword, navigateToStore, activeView, appId, 
-    therapists: visibleTherapists, therapistReports: visibleTherapistReports, therapistSchedules, therapistTargets, trainerAuth, handleUpdateTrainerAuth, auditExclusions, handleUpdateAuditExclusions, currentBrand, setCurrentBrandId, getCollectionPath, getDocPath, dailyLoginCount, yesterdayLoginCount, securityConfig, isOnline,
+    therapists: visibleTherapists, therapistReports: visibleTherapistReports, therapistSchedules, therapistTargets, trainerAuth, handleUpdateTrainerAuth, auditExclusions, handleUpdateAuditExclusions, currentBrand, setCurrentBrandId, getCollectionPath, getDocPath, dailyLoginCount, yesterdayLoginCount, securityConfig, isOnline, isLowPowerMode,
     fetchGlobalData 
-  }), [user, loading, analytics, visibleManagers, budgets, targets, visibleRawData, rawData, annualAggregatedData, therapistAnnualAggregatedData, inputDate, selectedYear, selectedMonth, permissions, storeAccounts, managerAuth, currentUser, userRole, logActivity, handleUpdateStorePassword, handleUpdateManagerPassword, handleUpdateTherapistPassword, navigateToStore, activeView, appId, visibleTherapists, visibleTherapistReports, therapistSchedules, therapistTargets, trainerAuth, handleUpdateTrainerAuth, auditExclusions, handleUpdateAuditExclusions, currentBrand, setCurrentBrandId, getCollectionPath, getDocPath, dailyLoginCount, yesterdayLoginCount, securityConfig, isOnline, fetchGlobalData]); // ★ 依賴陣列也要加
+  }), [user, loading, analytics, visibleManagers, budgets, targets, visibleRawData, rawData, annualAggregatedData, therapistAnnualAggregatedData, inputDate, selectedYear, selectedMonth, permissions, storeAccounts, managerAuth, currentUser, userRole, logActivity, handleUpdateStorePassword, handleUpdateManagerPassword, handleUpdateTherapistPassword, navigateToStore, activeView, appId, visibleTherapists, visibleTherapistReports, therapistSchedules, therapistTargets, trainerAuth, handleUpdateTrainerAuth, auditExclusions, handleUpdateAuditExclusions, currentBrand, setCurrentBrandId, getCollectionPath, getDocPath, dailyLoginCount, yesterdayLoginCount, securityConfig, isOnline, isLowPowerMode, fetchGlobalData]); // ★ 依賴陣列也要加
   
   const memoizedViews = useMemo(() => {
     return (
@@ -859,7 +924,7 @@ if (isUpdating) {
         </div>
       )}
 
-      <div className={`flex min-h-screen bg-[#F9F8F6] text-stone-600 font-sans selection:bg-stone-200 selection:text-stone-800 overflow-x-hidden transition-all duration-300 ${!isOnline ? 'mt-9' : 'mt-0'}`}>
+      <div className={`flex min-h-screen bg-[#F9F8F6] text-stone-600 font-sans selection:bg-stone-200 selection:text-stone-800 overflow-x-hidden transition-all duration-300 ${!isOnline ? 'mt-9' : 'mt-0'} ${isLowPowerMode ? 'pb-24' : ''}`}>
         <Sidebar activeView={activeView} setActiveView={setActiveView} isSidebarOpen={isSidebarOpen} setSidebarOpen={setSidebarOpen} user={user} userRole={userRole} onLogout={() => handleLogout()} permissions={permissions} currentUser={currentUser} />
         <div className={`flex-1 flex flex-col transition-all duration-500 w-full max-w-full ${isSidebarOpen ? "md:ml-64" : "md:ml-20"} ml-0`}>
           <header className="h-20 bg-white/80 backdrop-blur-md border-b border-stone-200 sticky top-0 z-40 px-4 md:px-8 flex items-center justify-between shadow-sm shadow-stone-200/50 shrink-0 transition-all">
@@ -895,33 +960,121 @@ if (isUpdating) {
           {memoizedViews}
           
         </div>
+
+        {isLowPowerMode && (
+          <div className="fixed bottom-5 left-1/2 -translate-x-1/2 z-[9998] w-[calc(100%-2rem)] max-w-2xl animate-in fade-in slide-in-from-bottom-3 duration-300">
+            <div className="relative overflow-hidden rounded-[1.65rem] border border-amber-100/80 bg-[#FFFCF7]/95 px-4 py-3.5 shadow-[0_18px_50px_rgba(120,95,55,0.16)] backdrop-blur-xl">
+              <div className="absolute -left-12 -top-12 h-28 w-28 rounded-full bg-amber-100/60 blur-3xl pointer-events-none" />
+              <div className="absolute -right-10 bottom-0 h-24 w-24 rounded-full bg-stone-100/80 blur-2xl pointer-events-none" />
+
+              <div className="relative flex flex-col sm:flex-row sm:items-center gap-3 sm:gap-4">
+                <div className="flex items-center gap-3 min-w-0 flex-1">
+                  <div className="w-11 h-11 rounded-2xl bg-gradient-to-br from-[#FFF7DF] via-[#FFFDF7] to-[#F1E7D6] border border-amber-100 text-[#B7863D] flex items-center justify-center shrink-0 shadow-[0_8px_22px_rgba(190,145,70,0.12)]">
+                    <Activity size={20} strokeWidth={1.9} />
+                  </div>
+                  <div className="min-w-0">
+                    <p className="text-sm font-black tracking-tight text-stone-800">系統已進入省流量待機</p>
+                    <p className="text-xs text-stone-500 mt-0.5 font-bold leading-relaxed">已暫停高流量即時監聽；移動滑鼠、點擊或觸控即可恢復。</p>
+                  </div>
+                </div>
+
+                <button
+                  onClick={handleUserActivity}
+                  className="h-10 px-4 rounded-2xl border border-amber-200 bg-gradient-to-r from-[#FFF7DF] via-[#F7E8C6] to-[#EACB86] text-[#5A4225] text-xs font-black shadow-[0_8px_20px_rgba(190,145,70,0.16)] hover:brightness-[1.02] active:scale-[0.98] transition-all shrink-0"
+                >
+                  立即恢復
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
+
         {toast && (<Toast message={toast.message} type={toast.type} onClose={() => setToast(null)} />)}
         <ConfirmModal isOpen={confirmModal.isOpen} title={confirmModal.title} message={confirmModal.message} onConfirm={confirmModal.onConfirm} onCancel={closeConfirmModal} />
         
         {showIdleWarning && (
-          <div className="fixed inset-0 z-[9999] flex items-center justify-center bg-stone-900/40 backdrop-blur-md animate-in fade-in duration-300 p-4">
-            <div className="bg-white p-8 md:p-10 rounded-[2rem] shadow-2xl shadow-stone-900/20 max-w-sm w-full text-center animate-in zoom-in-95 slide-in-from-bottom-4 duration-500 border border-white/60 relative overflow-hidden">
-              <div className="absolute top-0 left-0 right-0 h-1.5 bg-gradient-to-r from-amber-300 via-amber-500 to-amber-300"></div>
-              <div className="w-24 h-24 bg-amber-50 text-amber-500 rounded-full flex items-center justify-center mx-auto mb-6 relative">
-                <div className="absolute inset-0 rounded-full border-4 border-amber-100 animate-ping opacity-30 duration-1000"></div>
-                <Clock size={40} className="animate-pulse" strokeWidth={1.5} />
-              </div>
-              <div className="mb-8">
-                <h3 className="text-2xl font-extrabold text-stone-800 mb-3 tracking-tight">系統閒置提醒</h3>
-                <p className="text-stone-500 font-medium text-sm leading-relaxed mb-6">
-                  為了保護您的營業數據安全，系統偵測到您已閒置一段時間。系統將於倒數結束後自動登出。
+          <div className="fixed inset-0 z-[9999] flex items-center justify-center p-4 bg-stone-900/35 backdrop-blur-md animate-in fade-in duration-300">
+            <div className="relative w-full max-w-[430px] overflow-hidden rounded-[2rem] border border-white/70 bg-[#FFFCF7]/95 shadow-[0_24px_80px_rgba(80,65,45,0.18)] animate-in zoom-in-95 slide-in-from-bottom-3 duration-500">
+              <div className="absolute -top-24 left-1/2 h-48 w-48 -translate-x-1/2 rounded-full bg-amber-100/60 blur-3xl pointer-events-none" />
+              <div className="absolute -right-20 bottom-10 h-40 w-40 rounded-full bg-stone-100/80 blur-3xl pointer-events-none" />
+              <div className="absolute inset-x-10 top-0 h-px bg-gradient-to-r from-transparent via-amber-200 to-transparent" />
+
+              <div className="relative px-7 pt-8 pb-7 md:px-8 md:pt-9 md:pb-8 text-center">
+                <div className="mx-auto mb-5 flex h-16 w-16 items-center justify-center rounded-[1.4rem] border border-amber-100 bg-gradient-to-br from-[#FFF8E8] via-[#FFFDF7] to-[#F6EFE2] text-[#B7863D] shadow-[0_10px_30px_rgba(190,145,70,0.14)]">
+                  <Shield size={28} strokeWidth={1.8} />
+                </div>
+
+                <div className="mb-3 flex items-center justify-center gap-2">
+                  <span className="h-px w-8 bg-amber-200/80" />
+                  <span className="text-[11px] font-black tracking-[0.28em] text-[#B7863D]">
+                    資料安全提醒
+                  </span>
+                  <span className="h-px w-8 bg-amber-200/80" />
+                </div>
+
+                <h3 className="mb-3 text-2xl font-black tracking-tight text-stone-800">
+                  為您保護營運資料安全
+                </h3>
+
+                <p className="mx-auto mb-6 max-w-[330px] text-sm font-bold leading-7 text-stone-500">
+                  系統偵測到您已暫時離開。為避免營運資料停留於公開畫面，將於倒數結束後自動登出。
                 </p>
-                <div className="bg-rose-50 text-rose-600 inline-flex flex-col items-center justify-center rounded-2xl px-8 py-3.5 border border-rose-100/50 shadow-sm shadow-rose-100/50">
-                   <span className="text-[10px] font-black text-rose-400 mb-1 tracking-[0.2em] uppercase">Auto Logout</span>
-                   <div className="flex items-baseline gap-1.5">
-                     <span className="text-5xl font-black font-mono tracking-tighter tabular-nums">{countdown}</span>
-                     <span className="text-sm font-bold">秒</span>
-                   </div>
+
+                <div className="mb-6 rounded-[1.5rem] border border-stone-100 bg-white/70 px-5 py-5 shadow-[inset_0_1px_0_rgba(255,255,255,0.9),0_10px_30px_rgba(120,100,70,0.06)]">
+                  <div className="flex items-end justify-center gap-2">
+                    <span className="text-6xl md:text-7xl font-black leading-none tracking-tight text-[#5A4A3A] tabular-nums">
+                      {countdown}
+                    </span>
+                    <span className="mb-2 text-sm font-black text-[#B7863D]">秒</span>
+                  </div>
+
+                  <p className="mt-2 text-xs font-bold text-stone-400">
+                    倒數結束後將自動登出
+                  </p>
+
+                  <div className="mt-4 h-2 overflow-hidden rounded-full bg-stone-100">
+                    <div
+                      className="h-full rounded-full bg-gradient-to-r from-[#E8C77A] via-[#D6A84F] to-[#B7863D] transition-all duration-1000 ease-linear"
+                      style={{
+                        width: `${Math.max(
+                          4,
+                          Math.min(
+                            100,
+                            (countdown /
+                              Math.max(
+                                1,
+                                Number(
+                                  securityConfig?.logoutWarningSeconds ||
+                                    securityConfig?.warningSeconds ||
+                                    60
+                                )
+                              )) *
+                              100
+                          )
+                        )}%`,
+                      }}
+                    />
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                  <button
+                    onClick={() => handleLogout('使用者於閒置提醒中手動登出')}
+                    className="order-2 sm:order-1 h-12 rounded-2xl border border-stone-200 bg-white/80 px-5 text-sm font-black text-stone-500 transition-all hover:bg-stone-50 hover:text-stone-700 active:scale-[0.98] flex items-center justify-center gap-2"
+                  >
+                    <LogOut size={16} strokeWidth={2.2} />
+                    立即登出
+                  </button>
+
+                  <button
+                    onClick={handleStayLoggedIn}
+                    className="order-1 sm:order-2 h-12 rounded-2xl border border-amber-200 bg-gradient-to-r from-[#FFF7DF] via-[#F7E8C6] to-[#EACB86] px-5 text-sm font-black text-[#5A4225] shadow-[0_10px_24px_rgba(190,145,70,0.18)] transition-all hover:brightness-[1.02] active:scale-[0.98] flex items-center justify-center gap-2"
+                  >
+                    <CheckCircle size={17} strokeWidth={2.4} />
+                    繼續使用
+                  </button>
                 </div>
               </div>
-              <button onClick={handleStayLoggedIn} className="w-full py-4 bg-stone-900 text-white rounded-2xl font-bold tracking-wide hover:bg-stone-800 hover:shadow-xl hover:shadow-stone-900/10 active:scale-[0.97] transition-all flex items-center justify-center gap-2">
-                <Shield size={18} strokeWidth={2} /> 確認並保持登入
-              </button>
             </div>
           </div>
         )}

@@ -141,6 +141,25 @@ const TherapistManagerView = () => {
     );
   }, [formManager, managers]);
 
+  const hasActiveFilter = useMemo(() => {
+    return (
+      searchTerm.trim().length > 0 ||
+      selectedManagerFilter !== "all" ||
+      selectedStoreFilter !== "all"
+    );
+  }, [searchTerm, selectedManagerFilter, selectedStoreFilter]);
+
+  const activeFilterLabel = useMemo(() => {
+    if (!hasActiveFilter) return "尚未篩選";
+
+    const parts = [];
+    if (selectedManagerFilter !== "all") parts.push(`${selectedManagerFilter}區`);
+    if (selectedStoreFilter !== "all") parts.push(formatStoreName(selectedStoreFilter));
+    if (searchTerm.trim()) parts.push(`搜尋「${searchTerm.trim()}」`);
+
+    return parts.join(" / ");
+  }, [hasActiveFilter, selectedManagerFilter, selectedStoreFilter, searchTerm]);
+
   const stats = useMemo(() => {
     const list = therapists || [];
     const active = list.filter((t) => !isTherapistArchived(t));
@@ -161,6 +180,8 @@ const TherapistManagerView = () => {
   }, [therapists]);
 
   const filteredTherapists = useMemo(() => {
+    if (!hasActiveFilter) return [];
+
     let list = therapists || [];
 
     list = list.filter((t) => {
@@ -211,10 +232,17 @@ const TherapistManagerView = () => {
     selectedManagerFilter,
     selectedStoreFilter,
     managers,
+    hasActiveFilter,
   ]);
 
   useEffect(() => {
     if (isCreating) return;
+
+    if (!hasActiveFilter) {
+      setSelectedTherapist(null);
+      setIsDrawerOpen(false);
+      return;
+    }
 
     if (!selectedTherapist && filteredTherapists.length > 0) {
       setSelectedTherapist(filteredTherapists[0]);
@@ -234,7 +262,7 @@ const TherapistManagerView = () => {
     }
 
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [filteredTherapists, isCreating]);
+  }, [filteredTherapists, isCreating, hasActiveFilter]);
 
   const handleSelectTherapist = (t) => {
     setIsCreating(false);
@@ -254,7 +282,7 @@ const TherapistManagerView = () => {
     setIsDrawerOpen(false);
     setIsCreating(false);
 
-    if (filteredTherapists.length > 0) {
+    if (hasActiveFilter && filteredTherapists.length > 0) {
       setSelectedTherapist(filteredTherapists[0]);
       loadTherapistToForm(filteredTherapists[0]);
     } else {
@@ -407,6 +435,14 @@ const TherapistManagerView = () => {
 
     setFormPassword(cleaned);
     showToast("密碼已暫存，請按「儲存修改」才會寫入", "info");
+  };
+
+  const clearFilters = () => {
+    setSearchTerm("");
+    setSelectedManagerFilter("all");
+    setSelectedStoreFilter("all");
+    setSelectedTherapist(null);
+    setIsDrawerOpen(false);
   };
 
   const StatCard = ({ icon: Icon, label, value, active, tone = "stone" }) => {
@@ -772,7 +808,10 @@ const TherapistManagerView = () => {
                   <input
                     type="text"
                     value={searchTerm}
-                    onChange={(e) => setSearchTerm(e.target.value)}
+                    onChange={(e) => {
+                      setSearchTerm(e.target.value);
+                      setSelectedTherapist(null);
+                    }}
                     placeholder="搜尋姓名、店家或帳號..."
                     className="w-full h-10 pl-9 pr-3 rounded-xl bg-stone-50 border border-stone-100 text-xs font-bold text-stone-700 placeholder-stone-400 outline-none focus:bg-white focus:border-amber-300 focus:ring-4 focus:ring-amber-50 transition-all"
                   />
@@ -783,6 +822,7 @@ const TherapistManagerView = () => {
                   onChange={(e) => {
                     setSelectedManagerFilter(e.target.value);
                     setSelectedStoreFilter("all");
+                    setSelectedTherapist(null);
                   }}
                   className="md:w-36"
                 >
@@ -796,7 +836,10 @@ const TherapistManagerView = () => {
 
                 <SelectBox
                   value={selectedStoreFilter}
-                  onChange={(e) => setSelectedStoreFilter(e.target.value)}
+                  onChange={(e) => {
+                    setSelectedStoreFilter(e.target.value);
+                    setSelectedTherapist(null);
+                  }}
                   className="md:w-36"
                 >
                   <option value="all">店家：全部</option>
@@ -816,6 +859,31 @@ const TherapistManagerView = () => {
                 </button>
               </div>
             </div>
+
+            <div className="mt-3 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2 rounded-2xl border border-amber-100 bg-amber-50/40 px-4 py-3">
+              <div className="flex items-start gap-2 min-w-0">
+                <Search size={15} className="text-amber-600 mt-0.5 shrink-0" />
+                <div className="min-w-0">
+                  <p className="text-xs font-black text-amber-800">
+                    {hasActiveFilter ? "目前篩選條件" : "請先篩選後查看名單"}
+                  </p>
+                  <p className="text-[11px] font-bold text-amber-700/80 truncate">
+                    {hasActiveFilter
+                      ? activeFilterLabel
+                      : "選擇區域、店家，或輸入姓名 / 帳號後，系統才會顯示符合條件的人員。"}
+                  </p>
+                </div>
+              </div>
+
+              {hasActiveFilter && (
+                <button
+                  onClick={clearFilters}
+                  className="h-8 px-3 rounded-xl bg-white/80 border border-amber-100 text-[11px] font-black text-amber-700 hover:bg-white transition-all shrink-0"
+                >
+                  清除條件
+                </button>
+              )}
+            </div>
           </div>
 
           {/* 
@@ -827,15 +895,25 @@ const TherapistManagerView = () => {
             <div className="min-w-0 border-r border-stone-100 bg-white overflow-hidden">
               {filteredTherapists.length === 0 ? (
                 <div className="h-full min-h-[480px] flex items-center justify-center p-8">
-                  <div className="text-center">
+                  <div className="text-center max-w-sm">
                     <div className="w-16 h-16 rounded-full bg-stone-100 flex items-center justify-center mx-auto mb-4">
-                      <UserX size={28} className="text-stone-300" />
+                      {hasActiveFilter ? (
+                        <UserX size={28} className="text-stone-300" />
+                      ) : (
+                        <Search size={28} className="text-amber-400" />
+                      )}
                     </div>
                     <h3 className="text-base font-black text-stone-700 mb-1">
-                      {showResigned ? "查無封存人員" : "查無在職人員"}
+                      {hasActiveFilter
+                        ? showResigned
+                          ? "查無符合條件的封存人員"
+                          : "查無符合條件的在職人員"
+                        : "請先篩選或搜尋管理師"}
                     </h3>
-                    <p className="text-xs text-stone-400">
-                      請調整搜尋條件，或新增一位管理師。
+                    <p className="text-xs text-stone-400 leading-relaxed">
+                      {hasActiveFilter
+                        ? "請調整區域、店家或搜尋條件；也可以直接新增一位管理師。"
+                        : "為了讓畫面更簡潔，此頁不會預設展開完整名單。請選擇區域、店家，或輸入姓名 / 帳號後查看結果。"}
                     </p>
                   </div>
                 </div>
@@ -973,7 +1051,7 @@ const TherapistManagerView = () => {
 
                   <div className="px-4 py-3 bg-white flex items-center justify-between text-xs text-stone-400">
                     <div className="font-black">
-                      顯示 {filteredTherapists.length} 筆，共 {stats.total} 筆
+                      目前結果 {filteredTherapists.length} 筆｜全體帳號 {stats.total} 筆
                     </div>
 
                     <div className="hidden xl:flex items-center gap-2 text-[11px] font-bold">
@@ -987,7 +1065,7 @@ const TherapistManagerView = () => {
 
             {/* 大螢幕才固定右側面板 */}
             <div className="hidden 2xl:block">
-              {renderDetailPanel("inline")}
+              {renderDetailPanel({ mode: "inline" })}
             </div>
           </div>
         </div>
@@ -1001,7 +1079,7 @@ const TherapistManagerView = () => {
             />
 
             <div className="absolute right-0 top-0 h-full w-full sm:w-[390px] max-w-full bg-white animate-in slide-in-from-right duration-300">
-              {renderDetailPanel("drawer")}
+              {renderDetailPanel({ mode: "drawer" })}
             </div>
           </div>
         )}
