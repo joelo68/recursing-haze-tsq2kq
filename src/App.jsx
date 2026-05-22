@@ -44,7 +44,7 @@ import {
 // ==========================================
 // ★ 系統核心版本號 (終極動態快取版)
 // ==========================================
-const CURRENT_APP_VERSION = "2.9.2"; 
+const CURRENT_APP_VERSION = "2.9.3"; 
 
 const isNewerVersion = (local, remote) => {
   if (!remote) return true;
@@ -445,9 +445,11 @@ export default function App() {
 
       if (orgSnap.exists()) {
         const rawManagers = orgSnap.data().managers || {};
-        const filteredManagers = {};
-        Object.keys(rawManagers).forEach(key => { if (!key.includes("未分配") && !key.includes("未分區")) filteredManagers[key] = rawManagers[key]; });
-        setManagers(filteredManagers);
+        // 保留「未分配」在全域 managers state 中。
+        // 原本這裡會把「未分配 / 未分區」過濾掉，導致 SettingsView 儲存後重新 fetchGlobalData 時，
+        // 已移入未分配的店家從前端狀態消失，進而讓營運總覽排除這些店家。
+        // 登入頁需要隱藏未分配時，統一交給 publicManagers 過濾。
+        setManagers(rawManagers);
       } else {
         setManagers(currentBrand.id === 'cyj' ? DEFAULT_REGIONAL_MANAGERS : {}); 
       }
@@ -806,21 +808,38 @@ export default function App() {
     else if (userRole === ROLES.STORE.id && currentUser) {
       const myCores = (currentUser.stores || (currentUser.storeName ? [currentUser.storeName] : [])).map(normalizeStore);
       const filteredManagers = {};
-      Object.entries(managers).forEach(([mgr, stores]) => { const intersectingStores = stores.filter((s) => myCores.includes(normalizeStore(s))); if (intersectingStores.length > 0) filteredManagers[mgr] = intersectingStores; });
+      Object.entries(managers || {}).forEach(([mgr, stores]) => { const storeList = Array.isArray(stores) ? stores : []; const intersectingStores = storeList.filter((s) => myCores.includes(normalizeStore(s))); if (intersectingStores.length > 0) filteredManagers[mgr] = intersectingStores; });
       result = filteredManagers;
     }
-    if (activeView !== 'settings') {
+    // 設定頁必須看得到「未分配」。
+    // director / master 的營運總覽也保留「未分配」店家，避免店家從區長轄區移除後，營運總覽數字跟著消失。
+    // 其他角色維持原本邏輯，不主動顯示未分配區塊。
+    if (activeView !== 'settings' && userRole !== 'director' && userRole !== 'master') {
        const filtered = {};
-       Object.entries(result).forEach(([mgr, stores]) => { if (!mgr.includes("未分配") && !mgr.includes("未分區")) filtered[mgr] = stores; });
+       Object.entries(result || {}).forEach(([mgr, stores]) => { if (!String(mgr).includes("未分配") && !String(mgr).includes("未分區")) filtered[mgr] = Array.isArray(stores) ? stores : []; });
        return filtered;
     }
     return result;
   }, [managers, userRole, currentUser, activeView, normalizeStore]);
 
-  const publicManagers = useMemo(() => { const filtered = {}; Object.entries(managers).forEach(([mgr, stores]) => { if (!mgr.includes("未分配") && !mgr.includes("未分區")) filtered[mgr] = stores; }); return filtered; }, [managers]);
+  const publicManagers = useMemo(() => {
+    const filtered = {};
+    Object.entries(managers || {}).forEach(([mgr, stores]) => {
+      if (!String(mgr).includes("未分配") && !String(mgr).includes("未分區")) {
+        filtered[mgr] = Array.isArray(stores) ? stores : [];
+      }
+    });
+    return filtered;
+  }, [managers]);
 
   const analytics = useAnalytics(visibleRawData, visibleManagers, budgets, selectedYear, selectedMonth, annualAggregatedData);
-  const allStoreNames = useMemo(() => { const prefix = currentBrandId === 'anniu' ? '安妞' : currentBrandId === 'yibo' ? '伊啵' : 'CYJ'; return Object.values(managers).flat().map((s) => `${prefix}${normalizeStore(s)}店`); }, [managers, currentBrandId, normalizeStore]);
+  const allStoreNames = useMemo(() => {
+    const prefix = currentBrandId === 'anniu' ? '安妞' : currentBrandId === 'yibo' ? '伊啵' : 'CYJ';
+    return Object.values(managers || {})
+      .flatMap((stores) => Array.isArray(stores) ? stores : [])
+      .filter(Boolean)
+      .map((s) => `${prefix}${normalizeStore(s)}店`);
+  }, [managers, currentBrandId, normalizeStore]);
 
   const fmtMoney = (val) => `$${(val || 0).toLocaleString()}`;
   const fmtNum = (val) => (val || 0).toLocaleString();
