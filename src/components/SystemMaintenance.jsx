@@ -76,6 +76,7 @@ export default function SystemMaintenance() {
   const [recalcQueueTotal, setRecalcQueueTotal] = useState(0);
   const [summaryBuildReport, setSummaryBuildReport] = useState(null);
   const [summaryCompareReport, setSummaryCompareReport] = useState(null);
+  const [summaryStatusReport, setSummaryStatusReport] = useState(null);
   const [archiveFilterMonth, setArchiveFilterMonth] = useState(todayMonth());
 
   const [readTrackerMode, setReadTrackerModeState] = useState(getReadTrackerMode());
@@ -496,6 +497,11 @@ export default function SystemMaintenance() {
     };
     loadReadTrackerConfig();
   }, [currentBrand?.id, getDocPath]);
+
+  useEffect(() => {
+    loadDashboardSummaryStatus(calMonth, true);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [currentBrand?.id, calMonth]);
 
   const scheduleStatus = useMemo(() => getReadTrackerScheduleStatus({ ...readTrackerConfig, ...scheduleForm, scheduleMode: "global" }), [readTrackerConfig, scheduleForm]);
 
@@ -1316,6 +1322,93 @@ export default function SystemMaintenance() {
     return { dashboardSummary, therapistSummary, rankingsSummary };
   };
 
+
+  const getSummaryStatusMeta = (statusKey) => {
+    const map = {
+      missing: { label: "尚未建立", tone: "rose", hint: "此品牌月份尚未建立完整 Summary，Dashboard 會使用原本明細計算。" },
+      dirty: { label: "需重建", tone: "amber", hint: "此月份有新的日報提交、業績修正或刪除，建議重建並重新比對。" },
+      mismatch: { label: "比對有差異", tone: "rose", hint: "Summary 與原始明細重算結果不一致，請先檢查差異再上線使用。" },
+      unverified: { label: "已建立，尚未比對", tone: "amber", hint: "三份 Summary 已存在，但尚未完成比對驗證。" },
+      verified: { label: "已建立且比對通過", tone: "emerald", hint: "Summary 已建立、無待重算異動，且最近一次比對通過。" },
+      ready: { label: "已建立", tone: "emerald", hint: "三份 Summary 已存在。建議仍執行比對確認。" },
+    };
+    return map[statusKey] || map.ready;
+  };
+
+  const loadDashboardSummaryStatus = async (targetMonth = calMonth, silent = false) => {
+    if (!/^\d{4}-\d{2}$/.test(String(targetMonth || ""))) {
+      if (!silent) showToast("請先選擇正確月份", "error");
+      return null;
+    }
+    if (!silent) setLoadingAction("summaryStatus");
+    try {
+      const [dashboardSnap, therapistSnap, rankingsSnap, queueSnap, logsSnap] = await Promise.all([
+        getDoc(doc(getCollectionPath("dashboard_summary"), targetMonth)),
+        getDoc(doc(getCollectionPath("therapist_summary"), targetMonth)),
+        getDoc(doc(getCollectionPath("rankings_summary"), targetMonth)),
+        getDocs(query(getCollectionPath("recalc_queue"), where("status", "==", "pending"), limit(500))),
+        getDocs(query(getCollectionPath("maintenance_logs"), where("month", "==", targetMonth), limit(120))),
+      ]);
+
+      const summaryDocs = {
+        dashboard: dashboardSnap.exists(),
+        therapist: therapistSnap.exists(),
+        rankings: rankingsSnap.exists(),
+      };
+      const allSummaryExists = summaryDocs.dashboard && summaryDocs.therapist && summaryDocs.rankings;
+      const dashboardData = dashboardSnap.exists() ? dashboardSnap.data() || {} : {};
+      const therapistData = therapistSnap.exists() ? therapistSnap.data() || {} : {};
+      const rankingsData = rankingsSnap.exists() ? rankingsSnap.data() || {} : {};
+      const updatedAtText = dashboardData.lastUpdatedAtText || therapistData.lastUpdatedAtText || rankingsData.lastUpdatedAtText || "";
+      const summaryUpdatedMs = updatedAtText ? new Date(updatedAtText).getTime() : 0;
+
+      const pendingRows = queueSnap.docs
+        .map((d) => ({ id: d.id, ...d.data() }))
+        .filter((row) => getQueueYearMonth(row) === targetMonth);
+
+      const compareLogs = logsSnap.docs
+        .map((d) => ({ id: d.id, ...d.data() }))
+        .filter((row) => row.type === "dashboard_summary" && row.action === "compare_summary_with_raw")
+        .sort((a, b) => new Date(b.createdAtText || 0).getTime() - new Date(a.createdAtText || 0).getTime());
+      const latestCompare = compareLogs[0] || null;
+      const latestCompareMs = latestCompare?.createdAtText ? new Date(latestCompare.createdAtText).getTime() : 0;
+      const compareAfterBuild = latestCompare && (!summaryUpdatedMs || latestCompareMs >= summaryUpdatedMs - 1000);
+
+      let statusKey = "ready";
+      if (!allSummaryExists) statusKey = "missing";
+      else if (pendingRows.length > 0) statusKey = "dirty";
+      else if (!latestCompare || !compareAfterBuild) statusKey = "unverified";
+      else if (latestCompare.status === "matched") statusKey = "verified";
+      else statusKey = "mismatch";
+
+      const statusMeta = getSummaryStatusMeta(statusKey);
+      const report = {
+        month: targetMonth,
+        statusKey,
+        ...statusMeta,
+        summaryDocs,
+        updatedAtText: updatedAtText ? new Date(updatedAtText).toLocaleString("zh-TW", { hour12: false }) : "-",
+        lastUpdatedAtText: updatedAtText || "",
+        pendingCount: pendingRows.length,
+        pendingSources: [...new Set(pendingRows.map((row) => row.sourceType || row.source || "unknown"))],
+        latestPendingAt: pendingRows.map((row) => row.createdAtText || row.updatedAtText || "").filter(Boolean).sort().pop() || "-",
+        lastCompareAt: latestCompare?.createdAtText ? new Date(latestCompare.createdAtText).toLocaleString("zh-TW", { hour12: false }) : "-",
+        lastCompareStatus: latestCompare?.status || "-",
+        lastCompareMismatchCount: latestCompare?.mismatchCount ?? 0,
+        checkedAt: new Date().toLocaleString("zh-TW", { hour12: false }),
+      };
+      setSummaryStatusReport(report);
+      if (!silent) showToast(`Summary 狀態：${report.label}`, statusKey === "verified" || statusKey === "ready" ? "success" : statusKey === "missing" || statusKey === "mismatch" ? "error" : "info");
+      return report;
+    } catch (error) {
+      console.error(error);
+      if (!silent) showToast("Summary 狀態檢查失敗", "error");
+      return null;
+    } finally {
+      if (!silent) setLoadingAction(null);
+    }
+  };
+
   const handleRebuildDashboardSummary = async () => {
     if (!/^\d{4}-\d{2}$/.test(String(calMonth || ""))) return showToast("請先選擇正確月份", "error");
     if (!window.confirm(`確定要重建 ${calMonth} 的 Dashboard Summary 嗎？\n\n這不會改動原始日報，只會產生 dashboard_summary / therapist_summary / rankings_summary。`)) return;
@@ -1362,6 +1455,7 @@ export default function SystemMaintenance() {
       });
       await addMaintenanceLog({ type: "dashboard_summary", action: "finish_rebuild_summary", month: calMonth, status: "success", result: report });
       showToast(`${calMonth} Dashboard Summary 已重建`, "success");
+      await loadDashboardSummaryStatus(calMonth, true);
     } catch (error) {
       console.error(error);
       addLog(`❌ Dashboard Summary 重建失敗：${error.message}`);
@@ -1443,6 +1537,7 @@ export default function SystemMaintenance() {
         result: report,
       });
       showToast(isMatched ? "Summary 比對一致" : `Summary 比對發現 ${mismatchRows.length} 項差異`, isMatched ? "success" : "error");
+      await loadDashboardSummaryStatus(calMonth, true);
     } catch (error) {
       console.error(error);
       addLog(`❌ Dashboard Summary 比對失敗：${error.message}`);
@@ -1908,6 +2003,43 @@ export default function SystemMaintenance() {
                     </div>
                   ))}
                 </div>
+              </div>
+            )}
+            {summaryStatusReport && (
+              <div className={`rounded-[1.75rem] border p-5 shadow-[0_16px_50px_rgba(120,90,40,0.04)] ${summaryStatusReport.tone === "emerald" ? "border-emerald-100 bg-emerald-50/30" : summaryStatusReport.tone === "rose" ? "border-rose-100 bg-rose-50/30" : "border-amber-100 bg-amber-50/30"}`}>
+                <div className="flex flex-col xl:flex-row xl:items-center xl:justify-between gap-4">
+                  <div className="min-w-0">
+                    <div className="flex items-center gap-2 flex-wrap">
+                      <p className="text-base font-black text-stone-800">{summaryStatusReport.month} Summary 狀態</p>
+                      <span className={`px-3 py-1.5 rounded-full bg-white border text-[11px] font-black ${summaryStatusReport.tone === "emerald" ? "text-emerald-700 border-emerald-100" : summaryStatusReport.tone === "rose" ? "text-rose-600 border-rose-100" : "text-[#B7863D] border-amber-100"}`}>{summaryStatusReport.label}</span>
+                    </div>
+                    <p className="mt-1 text-xs font-bold text-stone-400 leading-relaxed">{summaryStatusReport.hint}</p>
+                  </div>
+                  <BeautyButton onClick={() => loadDashboardSummaryStatus(calMonth)} disabled={loadingAction !== null} variant="soft" className="shrink-0">
+                    {loadingAction === "summaryStatus" ? <Loader2 size={14} className="animate-spin" /> : <Eye size={14} />}
+                    重新檢查狀態
+                  </BeautyButton>
+                </div>
+                <div className="grid grid-cols-2 md:grid-cols-4 xl:grid-cols-6 gap-2 mt-4">
+                  {[
+                    ["dashboard_summary", summaryStatusReport.summaryDocs?.dashboard ? "已建立" : "尚未建立"],
+                    ["therapist_summary", summaryStatusReport.summaryDocs?.therapist ? "已建立" : "尚未建立"],
+                    ["rankings_summary", summaryStatusReport.summaryDocs?.rankings ? "已建立" : "尚未建立"],
+                    ["待重算異動", `${Number(summaryStatusReport.pendingCount || 0).toLocaleString()} 筆`],
+                    ["最後重建", summaryStatusReport.updatedAtText || "-"],
+                    ["最後比對", summaryStatusReport.lastCompareAt || "-"],
+                  ].map(([label, value]) => (
+                    <div key={label} className="rounded-2xl border border-stone-100 bg-white/90 p-3 min-w-0">
+                      <p className="text-[10px] font-black text-stone-400 truncate">{label}</p>
+                      <p className="mt-1 text-xs font-black text-stone-700 truncate">{value}</p>
+                    </div>
+                  ))}
+                </div>
+                {summaryStatusReport.pendingCount > 0 && (
+                  <div className="mt-3 rounded-2xl border border-amber-100 bg-white/80 p-3 text-[11px] font-bold text-[#B7863D] leading-relaxed">
+                    此月份仍有 {Number(summaryStatusReport.pendingCount || 0).toLocaleString()} 筆 pending 異動，來源：{summaryStatusReport.pendingSources?.join("、") || "-"}。建議先執行「校準此月份」或重新建立 Summary 後再比對。
+                  </div>
+                )}
               </div>
             )}
             <ToolRow icon={Database} title="Dashboard Summary 重建" desc="依指定月份讀取店務日報、管理師日報、目標與組織架構，產生 dashboard_summary / therapist_summary / rankings_summary。暫不改動現有 Dashboard 顯示邏輯。" badge="Summary v1" tone="emerald">
