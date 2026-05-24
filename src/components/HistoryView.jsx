@@ -13,7 +13,9 @@ import {
   query,
   where,
   getDocs,
-  orderBy
+  orderBy,
+  addDoc,
+  serverTimestamp
 } from "firebase/firestore";
 
 import { db, appId } from "../config/firebase";
@@ -67,6 +69,11 @@ const HistoryView = () => {
     return name;
   }, [currentBrand]);
 
+  const brandId = useMemo(() => {
+    if (!currentBrand) return "unknown";
+    return typeof currentBrand === "string" ? currentBrand : (currentBrand.id || "unknown");
+  }, [currentBrand]);
+
   const cleanStoreName = useCallback((name) => {
     if (!name) return "";
     let core = String(name).replace(/^(CYJ|Anew\s*\(安妞\)|Yibo\s*\(伊啵\)|安妞|伊啵|Anew|Yibo)\s*/i, '').trim();
@@ -95,6 +102,63 @@ const HistoryView = () => {
   }, [allStores]);
 
   const getStoreName = (row) => row?.storeName || row?.store || "未註記";
+
+  const normalizeDateForQueue = (value) => String(value || "").replace(/\//g, "-").slice(0, 10);
+  const getYearMonthForQueue = (value) => normalizeDateForQueue(value).slice(0, 7);
+
+  const addRecalcQueueItem = async ({ sourceType, sourceId, sourceRow, affectedDate, reason }) => {
+    const safeDate = normalizeDateForQueue(affectedDate || sourceRow?.date);
+    const affectedYearMonth = getYearMonthForQueue(safeDate);
+    if (!safeDate || !affectedYearMonth || affectedYearMonth.length !== 7) return;
+
+    const isTherapistSource = sourceType === "therapist_daily_reports";
+    const affectedStore = getStoreName(sourceRow);
+
+    await addDoc(getCollectionPath("recalc_queue"), {
+      brandId,
+      yearMonth: affectedYearMonth,
+      affectedYearMonth,
+      affectedDate: safeDate,
+      sourceType,
+      sourceId,
+      sourceView: "HistoryView",
+      affectedStore,
+      affectedStoreCore: cleanStoreName(affectedStore),
+      affectedTherapist: isTherapistSource ? (sourceRow?.therapistName || sourceRow?.name || "") : "",
+      affectedTherapistId: isTherapistSource ? (sourceRow?.therapistId || "") : "",
+      reason,
+      status: "pending",
+      createdBy: currentUser?.name || "unknown",
+      createdByRole: userRole || "unknown",
+      createdAt: serverTimestamp(),
+      createdAtText: new Date().toISOString(),
+      summaryTargets: isTherapistSource
+        ? ["therapist_summary", "rankings_summary"]
+        : ["dashboard_summary", "rankings_summary"],
+    });
+  };
+
+  const enqueueRecalcForChange = async ({ sourceType, sourceId, beforeData, afterData, reason }) => {
+    try {
+      const dates = new Set([
+        normalizeDateForQueue(beforeData?.date),
+        normalizeDateForQueue(afterData?.date),
+      ].filter(Boolean));
+
+      for (const affectedDate of dates) {
+        await addRecalcQueueItem({
+          sourceType,
+          sourceId,
+          sourceRow: afterData || beforeData || {},
+          affectedDate,
+          reason,
+        });
+      }
+    } catch (error) {
+      // recalc_queue 是 Dashboard Summary 的追蹤機制；寫入失敗不阻擋使用者修正資料。
+      console.warn("建立 recalc_queue 失敗：", error);
+    }
+  };
 
   const STORE_FIELDS = [
     { key: "cash", label: "現金", width: "min-w-[100px]" },
@@ -218,7 +282,17 @@ const HistoryView = () => {
       const finalSafeDate = String(editForm.date || "").replace(/\//g, "-");
       cleanData = { ...editForm, ...cleanData, date: finalSafeDate };
 
+      const originalRow = (activeTab === "store" ? storeRawData : therapistRawData).find((item) => item.id === editId);
+
       await updateDoc(docRef, cleanData);
+      await enqueueRecalcForChange({
+        sourceType: collectionName,
+        sourceId: editId,
+        beforeData: originalRow,
+        afterData: cleanData,
+        reason: "history_report_updated",
+      });
+
       showToast("更新成功", "success");
       const updateState = activeTab === "store" ? setStoreRawData : setTherapistRawData;
       updateState(prev => prev.map(item => item.id === editId ? { ...item, ...cleanData } : item));
@@ -230,7 +304,17 @@ const HistoryView = () => {
     if (!confirm("確定刪除?")) return;
     try {
       const collectionName = activeTab === "store" ? "daily_reports" : "therapist_daily_reports";
+      const sourceData = (activeTab === "store" ? storeRawData : therapistRawData).find((item) => item.id === id);
+
       await deleteDoc(doc(getCollectionPath(collectionName), id));
+      await enqueueRecalcForChange({
+        sourceType: collectionName,
+        sourceId: id,
+        beforeData: sourceData,
+        afterData: null,
+        reason: "history_report_deleted",
+      });
+
       showToast("已刪除", "success");
       const updateState = activeTab === "store" ? setStoreRawData : setTherapistRawData;
       updateState(prev => prev.filter(p => p.id !== id)); 

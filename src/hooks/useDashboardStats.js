@@ -10,7 +10,7 @@ export function useDashboardStats() {
     targets, userRole, currentUser, 
     allReports, budgets, managers, selectedYear, selectedMonth, therapistReports,
     currentBrand, therapists, dailyLoginCount, yesterdayLoginCount,
-    therapistAnnualAggregatedData 
+    therapistAnnualAggregatedData, getCollectionPath 
   } = useContext(AppContext);
 
   const [viewMode, setViewMode] = useState((userRole === 'therapist' || userRole === 'trainer') ? 'therapist' : 'store');
@@ -57,7 +57,6 @@ export function useDashboardStats() {
       };
       fetchAllCurves();
   }, [brandInfo]);
-  // ==========================================
 
   const cleanName = useMemo(() => (name) => {
     if (!name) return "";
@@ -146,7 +145,303 @@ export function useDashboardStats() {
     return allCompanyStores; 
   }, [selectedDashboardStore, selectedDashboardManager, managers, allCompanyStores, cleanName]);
 
-  const dashboardStats = useMemo(() => {
+  // ==========================================
+  // ★ Dashboard Summary v1：安全過渡版 summary-first
+  // 先嘗試讀取維護中心建立好的 summary；若不存在或不適用，仍會 fallback 原本明細計算。
+  // ==========================================
+  const [dashboardSummaryBundle, setDashboardSummaryBundle] = useState({
+    dashboard: null,
+    therapist: null,
+    rankings: null,
+    ready: false,
+    error: null,
+  });
+
+  const selectedYearMonth = useMemo(() => {
+    const y = String(selectedYear || "");
+    const m = String(selectedMonth || "").padStart(2, "0");
+    return y && m ? `${y}-${m}` : "";
+  }, [selectedYear, selectedMonth]);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    const fetchDashboardSummaries = async () => {
+      if (!getCollectionPath || !selectedYearMonth) {
+        if (!cancelled) setDashboardSummaryBundle({ dashboard: null, therapist: null, rankings: null, ready: true, error: null });
+        return;
+      }
+
+      try {
+        const [dashboardSnap, therapistSnap, rankingsSnap] = await Promise.all([
+          getDoc(doc(getCollectionPath("dashboard_summary"), selectedYearMonth)),
+          getDoc(doc(getCollectionPath("therapist_summary"), selectedYearMonth)),
+          getDoc(doc(getCollectionPath("rankings_summary"), selectedYearMonth)),
+        ]);
+
+        if (cancelled) return;
+
+        setDashboardSummaryBundle({
+          dashboard: dashboardSnap.exists() ? { id: dashboardSnap.id, ...dashboardSnap.data() } : null,
+          therapist: therapistSnap.exists() ? { id: therapistSnap.id, ...therapistSnap.data() } : null,
+          rankings: rankingsSnap.exists() ? { id: rankingsSnap.id, ...rankingsSnap.data() } : null,
+          ready: true,
+          error: null,
+        });
+      } catch (error) {
+        console.warn("Dashboard Summary 讀取失敗，將使用明細計算 fallback：", error);
+        if (!cancelled) setDashboardSummaryBundle({ dashboard: null, therapist: null, rankings: null, ready: true, error });
+      }
+    };
+
+    setDashboardSummaryBundle(prev => ({ ...prev, ready: false, error: null }));
+    fetchDashboardSummaries();
+
+    return () => { cancelled = true; };
+  }, [getCollectionPath, selectedYearMonth]);
+
+  const isFullBrandDashboardView = useMemo(() => {
+    if (selectedDashboardManager || selectedDashboardStore) return false;
+    if (!dashboardSummaryBundle.dashboard?.stores) return false;
+
+    // Summary v1 的 dailyTotals 目前是全品牌日線，尚未儲存「各店每日日線」。
+    // 因此第一版只在全品牌視角使用 summary，避免區長/店經理篩選時圖表不一致。
+    if (!(userRole === "director" || userRole === "master" || userRole === "trainer" || userRole === "therapist")) return false;
+
+    return true;
+  }, [selectedDashboardManager, selectedDashboardStore, dashboardSummaryBundle.dashboard, userRole]);
+
+  const buildProjectionFromSummaryStores = useMemo(() => (stores = [], daysPassed = 0, daysInMonth = 0) => {
+    if (!daysPassed || !daysInMonth || !Array.isArray(stores)) return { projection: 0, accrualProjection: 0 };
+    const y = parseInt(selectedYear, 10);
+    const m = parseInt(selectedMonth, 10);
+    let projection = 0;
+    let accrualProjection = 0;
+
+    stores.forEach((store) => {
+      const storeCore = cleanName(store.store || store.displayName || "");
+      const storeId = storeCore.replace(/\s+/g, "").toLowerCase();
+      const storeCurve = allStoreCurves[storeId] || allStoreCurves["BRAND_TOTAL"] || {};
+      const cashAverages = storeCurve.cashAverages || {};
+      const accrualAverages = storeCurve.accrualAverages || {};
+
+      const currentCash = Number(store.cash) || 0;
+      const currentAccrual = Number(store.accrual) || 0;
+      const currentCashDailyAvg = currentCash / daysPassed;
+      const currentAccrualDailyAvg = currentAccrual / daysPassed;
+
+      let remainingProjectedCash = 0;
+      let remainingProjectedAccrual = 0;
+
+      for (let d = daysPassed + 1; d <= daysInMonth; d++) {
+        const futureDate = new Date(y, m - 1, d);
+        const dow = futureDate.getDay();
+
+        const historyCashValue = cashAverages[dow] !== undefined ? cashAverages[dow] : currentCashDailyAvg;
+        const blendedCashValue = historyCashValue > currentCashDailyAvg
+          ? (currentCashDailyAvg * 0.5) + (historyCashValue * 0.5)
+          : Math.max(currentCashDailyAvg, historyCashValue);
+        remainingProjectedCash += blendedCashValue;
+
+        const historyAccrualValue = accrualAverages[dow] !== undefined ? accrualAverages[dow] : currentAccrualDailyAvg;
+        const blendedAccrualValue = historyAccrualValue > currentAccrualDailyAvg
+          ? (currentAccrualDailyAvg * 0.5) + (historyAccrualValue * 0.5)
+          : Math.max(currentAccrualDailyAvg, historyAccrualValue);
+        remainingProjectedAccrual += blendedAccrualValue;
+      }
+
+      projection += Math.round(currentCash + remainingProjectedCash);
+      accrualProjection += Math.round(currentAccrual + remainingProjectedAccrual);
+    });
+
+    return { projection, accrualProjection };
+  }, [selectedYear, selectedMonth, cleanName, allStoreCurves]);
+
+  const summaryDashboardStats = useMemo(() => {
+    const summary = dashboardSummaryBundle.dashboard;
+    if (!summary || !isFullBrandDashboardView) return null;
+
+    const y = parseInt(selectedYear, 10);
+    const m = parseInt(selectedMonth, 10);
+    const daysInMonth = new Date(y, m, 0).getDate();
+    const now = new Date();
+    let daysPassed = daysInMonth;
+    let isCurrentMonth = false;
+
+    if (now.getFullYear() === y && (now.getMonth() + 1) === m) {
+      daysPassed = Math.max(1, now.getDate());
+      isCurrentMonth = true;
+    } else if (now < new Date(y, m - 1, 1)) {
+      daysPassed = 0;
+    }
+
+    const stores = Object.values(summary.stores || {});
+    const grand = { ...(summary.grandTotal || {}) };
+    const projectionPayload = buildProjectionFromSummaryStores(stores, daysPassed, daysInMonth);
+
+    grand.hasChallengeCash = Number(grand.challengeBudget || 0) > Number(grand.budget || 0);
+    grand.hasChallengeAccrual = Number(grand.challengeAccrualBudget || 0) > Number(grand.accrualBudget || 0);
+    grand.projection = projectionPayload.projection || Number(grand.projection || 0);
+    grand.accrualProjection = projectionPayload.accrualProjection || Number(grand.accrualProjection || 0);
+
+    const totalAchievement = Number(grand.budget || 0) > 0 ? (Number(grand.cash || 0) / Number(grand.budget || 0)) * 100 : 0;
+    const totalAccrualAchievement = Number(grand.accrualBudget || 0) > 0 ? (Number(grand.accrual || 0) / Number(grand.accrualBudget || 0)) * 100 : 0;
+    const challengeAchievement = Number(grand.challengeBudget || 0) > 0 ? (Number(grand.cash || 0) / Number(grand.challengeBudget || 0)) * 100 : 0;
+    const challengeAccrualAchievement = Number(grand.challengeAccrualBudget || 0) > 0 ? (Number(grand.accrual || 0) / Number(grand.challengeAccrualBudget || 0)) * 100 : 0;
+
+    const avgTrafficASP = Number(grand.traffic || 0) > 0 ? Math.round(Number(grand.operationalAccrual || 0) / Number(grand.traffic || 0)) : 0;
+    const avgNewCustomerASP = Number(grand.newCustomers || 0) > 0 ? Math.round(Number(grand.newCustomerSales || 0) / Number(grand.newCustomers || 0)) : 0;
+    const newRevMix = Number(grand.cash || 0) > 0 ? Math.round((Number(grand.newCustomerSales || 0) / Number(grand.cash || 0)) * 100) : 0;
+    const oldRevMix = Number(grand.cash || 0) > 0 ? Math.max(0, 100 - newRevMix) : 0;
+    const newCountMix = Number(grand.traffic || 0) > 0 ? Math.round((Number(grand.newCustomers || 0) / Number(grand.traffic || 0)) * 100) : 0;
+    const oldCountMix = Number(grand.traffic || 0) > 0 ? Math.max(0, 100 - newCountMix) : 0;
+
+    let chartDays = daysInMonth;
+    if (isCurrentMonth) chartDays = Math.max(1, daysPassed);
+    else if (daysPassed === 0) chartDays = 0;
+
+    const dailyTotals = (summary.dailyTotals || []).slice(0, chartDays);
+
+    const mapStoreTop = (rows = []) => rows.map((item) => ({
+      name: item.name || item.displayName || (item.store ? `${item.store}店` : ""),
+      revenue: Number(item.revenue ?? item.cash ?? 0),
+      streak: false,
+      badgeText: "",
+    }));
+
+    return {
+      grandTotal: grand,
+      dailyTotals,
+      totalAchievement,
+      totalAccrualAchievement,
+      challengeAchievement,
+      challengeAccrualAchievement,
+      avgTrafficASP,
+      avgNewCustomerASP,
+      daysPassed,
+      daysInMonth,
+      newRevMix,
+      oldRevMix,
+      newCountMix,
+      oldCountMix,
+      storeMonthlyTop3: mapStoreTop(summary.storeTop3?.monthly),
+      storeTodayTop3: mapStoreTop(summary.storeTop3?.today),
+      storeYesterdayTop3: mapStoreTop(summary.storeTop3?.yesterday),
+      source: "summary",
+      summaryLastUpdatedAtText: summary.lastUpdatedAtText || "",
+    };
+  }, [dashboardSummaryBundle.dashboard, isFullBrandDashboardView, selectedYear, selectedMonth, buildProjectionFromSummaryStores]);
+
+  const summaryMyStoreRankings = useMemo(() => {
+    const summary = dashboardSummaryBundle.dashboard;
+    if (!summary || userRole !== "store" || !currentUser) return null;
+
+    const rawStores = currentUser.stores || [currentUser.storeName];
+    const myCores = rawStores.map(cleanName).filter(Boolean);
+    const allRanks = Array.isArray(summary.storeRankings) ? summary.storeRankings : Object.values(summary.stores || []);
+
+    return allRanks
+      .filter((s) => myCores.includes(cleanName(s.store || s.displayName || "")))
+      .map((s) => {
+        const actual = Number(s.cash || 0);
+        const target = Number(s.budget || 0);
+        const challengeTarget = Number(s.challengeBudget || 0) || target;
+        const hasChallenge = challengeTarget > target;
+        const rate = target > 0 ? (actual / target) * 100 : 0;
+        const challengeRate = challengeTarget > 0 ? (actual / challengeTarget) * 100 : 0;
+        return {
+          storeName: s.displayName || `${cleanName(s.store)}店`,
+          rank: s.rank || 0,
+          totalStores: allRanks.length,
+          actual,
+          target,
+          rate,
+          challengeTarget,
+          hasChallenge,
+          challengeRate,
+          passedChallenge: hasChallenge && challengeRate >= 100,
+          isBottom5: s.rank > Math.max(0, allRanks.length - 5),
+        };
+      });
+  }, [dashboardSummaryBundle.dashboard, userRole, currentUser, cleanName]);
+
+  const summaryTherapistStats = useMemo(() => {
+    const summary = dashboardSummaryBundle.therapist;
+    if (!summary) return null;
+
+    const normalizeStoreDisplay = (value) => cleanName(value || "").replace(/店$/, "") + "店";
+    const selectedStores = new Set((therapistEffectiveStores || []).map(cleanName).filter(Boolean));
+    const useFilter = selectedDashboardManager || selectedDashboardStore;
+
+    let rankings = Array.isArray(summary.rankings) ? summary.rankings.map((item) => ({ ...item })) : [];
+    if (useFilter && selectedStores.size > 0) {
+      rankings = rankings.filter((item) => selectedStores.has(cleanName(item.store || item.storeDisplay || "")));
+    }
+
+    rankings = rankings
+      .sort((a, b) => Number(b.totalRevenue || 0) - Number(a.totalRevenue || 0))
+      .map((item, index, arr) => ({
+        ...item,
+        storeDisplay: item.storeDisplay || normalizeStoreDisplay(item.store),
+        rank: index + 1,
+        totalPeers: arr.length,
+        revenueMix: item.revenueMix || `${Number(item.newCustomerRevenue || 0)} / ${Number(item.oldCustomerRevenue || 0)}`,
+        newClosingRate: Number(item.newClosingRate || 0),
+        newAsp: Number(item.newAsp || 0),
+        oldAsp: Number(item.oldAsp || 0),
+        status: index < 3 ? "TOP" : index >= Math.max(0, arr.length - 10) ? "DANGER" : "NORMAL",
+      }));
+
+    const myStats = userRole === "therapist"
+      ? rankings.find((item) => item.id === currentUser?.id || item.name === currentUser?.name) || null
+      : null;
+
+    const grandTotal = rankings.reduce((acc, item) => {
+      acc.totalRevenue += Number(item.totalRevenue || 0);
+      acc.serviceCount += Number(item.serviceCount || 0);
+      acc.newCustomerRevenue += Number(item.newCustomerRevenue || 0);
+      acc.oldCustomerRevenue += Number(item.oldCustomerRevenue || 0);
+      acc.newCustomerCount += Number(item.newCustomerCount || 0);
+      acc.oldCustomerCount += Number(item.oldCustomerCount || 0);
+      acc.newCustomerClosings += Number(item.newCustomerClosings || 0);
+      acc.returnRevenue += Number(item.returnRevenue || 0);
+      return acc;
+    }, { totalRevenue: 0, serviceCount: 0, newCustomerRevenue: 0, oldCustomerRevenue: 0, newCustomerCount: 0, oldCustomerCount: 0, newCustomerClosings: 0, returnRevenue: 0, count: rankings.length });
+
+    grandTotal.regionalNewClosingRate = grandTotal.newCustomerCount > 0 ? (grandTotal.newCustomerClosings / grandTotal.newCustomerCount) * 100 : 0;
+    grandTotal.regionalNewAsp = grandTotal.newCustomerCount > 0 ? grandTotal.newCustomerRevenue / grandTotal.newCustomerCount : 0;
+
+    const filterTopRows = (rows = []) => {
+      const list = Array.isArray(rows) ? rows : [];
+      if (!useFilter || selectedStores.size === 0) return list;
+      return list.filter((item) => selectedStores.has(cleanName(item.store || item.storeDisplay || "")));
+    };
+
+    let myYearlyTotal = 0;
+    if (userRole === 'therapist' && currentUser && therapistAnnualAggregatedData && Array.isArray(therapistAnnualAggregatedData)) {
+      const myYearData = therapistAnnualAggregatedData.find(d => d.therapistId === currentUser.id || d.therapistName === currentUser.name);
+      if (myYearData) {
+        myYearlyTotal = Object.keys(myYearData).reduce((sum, key) => {
+          if (/^\d{1,2}$/.test(key) || key.startsWith('month_')) return sum + (Number(myYearData[key]) || 0);
+          return sum;
+        }, 0);
+      }
+    }
+
+    return {
+      rankings,
+      myStats,
+      grandTotal,
+      yesterdayTop3: filterTopRows(summary.yesterdayTop3),
+      todayTop3: filterTopRows(summary.todayTop3),
+      myYearlyTotal,
+      source: "summary",
+      summaryLastUpdatedAtText: summary.lastUpdatedAtText || "",
+    };
+  }, [dashboardSummaryBundle.therapist, therapistEffectiveStores, selectedDashboardManager, selectedDashboardStore, cleanName, userRole, currentUser, therapistAnnualAggregatedData]);
+
+
+  const detailDashboardStats = useMemo(() => {
     if (!allReports) return null;
     const y = parseInt(selectedYear); const m = parseInt(selectedMonth);
     const daysInMonth = new Date(y, m, 0).getDate();
@@ -389,7 +684,7 @@ export function useDashboardStats() {
   // ★ 監視清單換成了包含全部小抄的字典
   }, [allReports, budgets, selectedYear, selectedMonth, effectiveStores, brandPrefix, cleanName, allStoreCurves]);
 
-  const myStoreRankings = useMemo(() => {
+  const detailMyStoreRankings = useMemo(() => {
     if (!allReports) return [];
     const storeStats = {}; const y = parseInt(selectedYear); const m = parseInt(selectedMonth);
 
@@ -429,7 +724,7 @@ export function useDashboardStats() {
     });
   }, [allReports, effectiveStores, budgets, selectedYear, selectedMonth, cleanName, brandPrefix]);
 
-  const therapistStats = useMemo(() => {
+  const detailTherapistStats = useMemo(() => {
     if (!therapistReports) return { rankings: [], myStats: null, grandTotal: {}, yesterdayTop3: [], todayTop3: [], myYearlyTotal: 0 }; 
     
     const currentMonthReports = therapistReports.filter(r => {
@@ -597,12 +892,23 @@ export function useDashboardStats() {
     return { rankings, myStats, grandTotal, yesterdayTop3, todayTop3, myYearlyTotal };
   }, [therapistReports, selectedYear, selectedMonth, therapistEffectiveStores, allReports, cleanName, userRole, currentUser, therapists, therapistAnnualAggregatedData]);
 
+  const dashboardStats = summaryDashboardStats || detailDashboardStats;
+  const myStoreRankings = summaryMyStoreRankings || detailMyStoreRankings;
+  const therapistStats = summaryTherapistStats || detailTherapistStats;
+
   return {
     viewMode, setViewMode,
     selectedDashboardManager, setSelectedDashboardManager,
     selectedDashboardStore, setSelectedDashboardStore,
     brandInfo, brandPrefix,
     dashboardStats, myStoreRankings, therapistStats,
+    dashboardSummaryStatus: {
+      ready: dashboardSummaryBundle.ready,
+      usingDashboardSummary: Boolean(summaryDashboardStats),
+      usingTherapistSummary: Boolean(summaryTherapistStats),
+      error: dashboardSummaryBundle.error,
+      yearMonth: selectedYearMonth,
+    },
     dailyLoginCount, yesterdayLoginCount,
     groupedStoresForFilter, availableStoresForDropdown
   };
