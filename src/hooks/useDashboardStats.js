@@ -200,7 +200,15 @@ export function useDashboardStats() {
     return () => { cancelled = true; };
   }, [getCollectionPath, selectedYearMonth]);
 
+  const isSelectedCurrentMonth = useMemo(() => {
+    const now = new Date();
+    return Number(selectedYear) === now.getFullYear() && Number(selectedMonth) === now.getMonth() + 1;
+  }, [selectedYear, selectedMonth]);
+
   const isFullBrandDashboardView = useMemo(() => {
+    // ★ 即時戰情保護：當月仍使用明細計算，避免晚上陸續回報時，Summary 尚未重建而造成今日排行榜/走勢/營運節奏不更新。
+    // Summary 先用於歷史月份與已結算月份；當月即時 Dashboard 等 App.jsx 載入分流完成後再進入下一階段。
+    if (isSelectedCurrentMonth) return false;
     if (selectedDashboardManager || selectedDashboardStore) return false;
     if (!dashboardSummaryBundle.dashboard?.stores) return false;
 
@@ -209,7 +217,7 @@ export function useDashboardStats() {
     if (!(userRole === "director" || userRole === "master" || userRole === "trainer" || userRole === "therapist")) return false;
 
     return true;
-  }, [selectedDashboardManager, selectedDashboardStore, dashboardSummaryBundle.dashboard, userRole]);
+  }, [isSelectedCurrentMonth, selectedDashboardManager, selectedDashboardStore, dashboardSummaryBundle.dashboard, userRole]);
 
   const buildProjectionFromSummaryStores = useMemo(() => (stores = [], daysPassed = 0, daysInMonth = 0) => {
     if (!daysPassed || !daysInMonth || !Array.isArray(stores)) return { projection: 0, accrualProjection: 0 };
@@ -385,6 +393,8 @@ export function useDashboardStats() {
   }, [dashboardSummaryBundle.dashboard, userRole, currentUser, cleanName]);
 
   const summaryTherapistStats = useMemo(() => {
+    // ★ 即時戰情保護：當月人員績效仍用明細計算，避免管理師晚上陸續回報後，今日戰神/排行榜不即時更新。
+    if (isSelectedCurrentMonth) return null;
     const summary = dashboardSummaryBundle.therapist;
     if (!summary) return null;
 
