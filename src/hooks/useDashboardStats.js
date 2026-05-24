@@ -268,9 +268,28 @@ export function useDashboardStats() {
     let daysPassed = daysInMonth;
     let isCurrentMonth = false;
 
+    // ★ 營運節奏維持原本邏輯：
+    // 當月預設用「系統日 - 1 天」，避免主管白天查看時，把尚未結束營業的今天算進應達進度。
+    // 只有當 summary.dailyTotals 偵測到今日已經有有效回報數據時，才推進到系統日。
+    const rawDailyTotals = Array.isArray(summary.dailyTotals) ? summary.dailyTotals : [];
+    const getDailyDayNumber = (row, index) => Number(row?.day || index + 1);
+    const hasMeaningfulDailyData = (row) => {
+      if (!row || typeof row !== "object") return false;
+      return Object.entries(row).some(([key, value]) => {
+        if (["day", "date", "label"].includes(key)) return false;
+        return typeof value === "number" && value !== 0;
+      });
+    };
+    const maxDataDay = rawDailyTotals.reduce((max, row, index) => {
+      const day = getDailyDayNumber(row, index);
+      return hasMeaningfulDailyData(row) && day > max ? day : max;
+    }, 0);
+
     if (now.getFullYear() === y && (now.getMonth() + 1) === m) {
-      daysPassed = Math.max(1, now.getDate());
+      daysPassed = Math.max(0, now.getDate() - 1);
       isCurrentMonth = true;
+      if (maxDataDay > daysPassed) daysPassed = maxDataDay;
+      if (daysPassed > now.getDate()) daysPassed = now.getDate();
     } else if (now < new Date(y, m - 1, 1)) {
       daysPassed = 0;
     }
