@@ -360,6 +360,8 @@ export function useDashboardStats() {
   }, [dashboardSummaryBundle.dashboard, isFullBrandDashboardView, selectedYear, selectedMonth, buildProjectionFromSummaryStores]);
 
   const summaryMyStoreRankings = useMemo(() => {
+    // ★ 當月門市排行也必須即時，避免主管或店長看到未更新的 Summary 排名。
+    if (isSelectedCurrentMonth) return null;
     const summary = dashboardSummaryBundle.dashboard;
     if (!summary || userRole !== "store" || !currentUser) return null;
 
@@ -390,7 +392,7 @@ export function useDashboardStats() {
           isBottom5: s.rank > Math.max(0, allRanks.length - 5),
         };
       });
-  }, [dashboardSummaryBundle.dashboard, userRole, currentUser, cleanName]);
+  }, [dashboardSummaryBundle.dashboard, userRole, currentUser, cleanName, isSelectedCurrentMonth]);
 
   const summaryTherapistStats = useMemo(() => {
     // ★ 即時戰情保護：當月人員績效仍用明細計算，避免管理師晚上陸續回報後，今日戰神/排行榜不即時更新。

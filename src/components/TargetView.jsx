@@ -3,7 +3,7 @@ import React, { useState, useContext, useEffect, useMemo } from "react";
 import { 
   Save, Calendar, Store, DollarSign, CreditCard, TrendingUp, Lock, Unlock, CheckCircle, Star, X 
 } from "lucide-react";
-import { doc, writeBatch, setDoc } from "firebase/firestore";
+import { doc, writeBatch, setDoc, serverTimestamp } from "firebase/firestore";
 
 import { db, appId } from "../config/firebase";
 import { AppContext } from "../AppContext";
@@ -259,6 +259,21 @@ const TargetView = () => {
              updatedAt: new Date().toISOString(),
              updatedBy: currentUser?.name || "unknown"
            }, { merge: true });
+
+           // ★ 目標調整也會影響歷史 Summary / 月結資料，需留下待整理紀錄。
+           // 當月 Dashboard 仍走即時目標，不需要立刻校準；月結前再一次處理即可。
+           batch.set(doc(getCollectionPath("recalc_queue")), {
+             status: "pending",
+             affectedYearMonth: `${selectedYear}-${String(item.month).padStart(2, "0")}`,
+             sourceType: "monthly_targets",
+             sourceId: key,
+             storeName: selectedStore,
+             reason: "monthly_target_updated",
+             createdAt: serverTimestamp(),
+             createdAtText: new Date().toISOString(),
+             createdBy: currentUser?.name || "unknown",
+             createdByRole: userRole || "unknown",
+           });
            hasData = true;
         }
       });

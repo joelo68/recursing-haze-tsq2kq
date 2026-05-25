@@ -674,7 +674,10 @@ const TherapistPerformanceView = ({ therapistStats, brandInfo }) => {
                 </div>
                 <div className="p-5 flex-1 bg-stone-50/30 flex flex-col items-center justify-between">
                    {(() => {
-                      const reachedCount = therapistStats.rankings.filter(t => t.totalRevenue >= 800000).length;
+                      const reachedCount = therapistStats.rankings.filter(t => {
+                         const personalTarget = resolveTherapistTarget(t.id, t.name);
+                         return Number(t.totalRevenue || 0) >= personalTarget;
+                      }).length;
                       const totalCount = therapistStats.rankings.length || 1;
                       const teamProgress = Math.round((reachedCount / totalCount) * 100);
                       return (

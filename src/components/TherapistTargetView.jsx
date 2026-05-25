@@ -1,7 +1,7 @@
 // src/components/TherapistTargetView.jsx
 import React, { useState, useContext, useEffect, useMemo } from "react";
 import { Save, DollarSign, Target, MapPin, Store, User } from "lucide-react";
-import { doc, setDoc, serverTimestamp } from "firebase/firestore";
+import { doc, setDoc, writeBatch, serverTimestamp } from "firebase/firestore";
 import { db, appId } from "../config/firebase";
 import { AppContext } from "../AppContext";
 import { ViewWrapper, Card } from "./SharedUI";
@@ -136,12 +136,34 @@ const TherapistTargetView = () => {
       const docId = `${tTargetTherapist}_${tTargetYear}`;
       
       // ★★★ 3. 使用動態路徑 getCollectionPath ★★★
-      await setDoc(doc(getCollectionPath("therapist_targets"), docId), {
+      const batch = writeBatch(db);
+      batch.set(doc(getCollectionPath("therapist_targets"), docId), {
         therapistId: tTargetTherapist,
         year: tTargetYear,
         monthlyTargets: tLocalTargets,
         updatedAt: serverTimestamp()
       }, { merge: true });
+
+      Object.entries(tLocalTargets || {}).forEach(([monthKey, value]) => {
+        const monthNumber = Number(monthKey);
+        if (!monthNumber || monthNumber < 1 || monthNumber > 12) return;
+        batch.set(doc(getCollectionPath("recalc_queue")), {
+          status: "pending",
+          affectedYearMonth: `${tTargetYear}-${String(monthNumber).padStart(2, "0")}`,
+          sourceType: "therapist_targets",
+          sourceId: docId,
+          therapistId: tTargetTherapist,
+          therapistName: availableTherapists.find((t) => t.id === tTargetTherapist)?.name || "",
+          storeName: selectedStore,
+          reason: "therapist_target_updated",
+          createdAt: serverTimestamp(),
+          createdAtText: new Date().toISOString(),
+          createdBy: currentUser?.name || "unknown",
+          createdByRole: userRole || "unknown",
+        });
+      });
+
+      await batch.commit();
       
       showToast("目標已儲存", "success");
     } catch (e) {

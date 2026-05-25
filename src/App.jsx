@@ -44,7 +44,7 @@ import {
 // ==========================================
 // ★ 系統核心版本號 (終極動態快取版)
 // ==========================================
-const CURRENT_APP_VERSION = "2.9.9"; 
+const CURRENT_APP_VERSION = "3.0.0"; 
 
 const isNewerVersion = (local, remote) => {
   if (!remote) return true;
@@ -525,6 +525,7 @@ export default function App() {
 
     const targetYearStr = String(selectedYear);
     let isMounted = true;
+    const lowFrequencyUnsubs = [];
 
     fetchGlobalData();
 
@@ -541,73 +542,31 @@ export default function App() {
     const fetchLowFrequencyData = async () => {
       try {
         const cacheTtlMs = 10 * 60 * 1000;
-        const cacheKey = `${currentBrand.id}_${targetYearStr}_low_frequency_v2`;
         const nowMs = Date.now();
 
-        const applyBudgetCache = (cached) => {
-          if (!cached) return false;
-          if (cached.expiresAt && cached.expiresAt < nowMs) return false;
+        // ★ 當月即時性保護：目標資料會直接影響達成率、預算差距、月底推估。
+        // 因此 monthly_targets / kpi_targets 不再使用 10 分鐘快取，改為即時監聽。
+        const unsubBudgetTargets = onSnapshot(
+          getCollectionPath("monthly_targets"),
+          (budgetSnap) => {
+            trackSnapshotRead("monthly_targets_live", budgetSnap, getReadMeta("monthly_targets_live"));
+            const b = {};
+            budgetSnap.docs.forEach((d) => (b[d.id] = d.data()));
+            setBudgets(b);
+          },
+          (error) => console.error("monthly_targets 即時監聽失敗:", error)
+        );
+        lowFrequencyUnsubs.push(unsubBudgetTargets);
 
-          if (cached.budgets) setBudgets(cached.budgets);
-          if (cached.targets) setTargets(cached.targets);
-          else setTargets({ newASP: 3500, trafficASP: 1200 });
-
-          trackReadSource("monthly_targets_cache_hit", 0, getReadMeta("monthly_targets_cache_hit"));
-          trackReadSource("kpi_targets_cache_hit", 0, getReadMeta("kpi_targets_cache_hit"));
-          return true;
-        };
-
-        let usedBudgetCache = false;
-
-        if (lowFrequencyCacheRef.current[cacheKey]) {
-          usedBudgetCache = applyBudgetCache(lowFrequencyCacheRef.current[cacheKey]);
-        }
-
-        if (!usedBudgetCache && typeof localStorage !== "undefined") {
-          try {
-            const localCached = JSON.parse(localStorage.getItem(`cyj_${cacheKey}`) || "null");
-            usedBudgetCache = applyBudgetCache(localCached);
-            if (usedBudgetCache) lowFrequencyCacheRef.current[cacheKey] = localCached;
-          } catch {
-            // localStorage 快取解析失敗時，直接回到 Firestore 讀取。
-          }
-        }
-
-        if (!usedBudgetCache) {
-          const [budgetSnap, kpiSnap] = await Promise.all([
-            getDocs(getCollectionPath("monthly_targets")),
-            getDoc(getDocPath("kpi_targets")),
-          ]);
-
-          trackReadSource("monthly_targets", budgetSnap.docs.length, getReadMeta("monthly_targets_once_cached"));
-          trackReadSource("kpi_targets", kpiSnap.exists() ? 1 : 0, getReadMeta("kpi_targets_once_cached"));
-
-          if (!isMounted) return;
-
-          const b = {};
-          budgetSnap.docs.forEach((d) => (b[d.id] = d.data()));
-          const kpiTargets = kpiSnap.exists() ? kpiSnap.data() : { newASP: 3500, trafficASP: 1200 };
-
-          setBudgets(b);
-          setTargets(kpiTargets);
-
-          const cachedPayload = {
-            budgets: b,
-            targets: kpiTargets,
-            expiresAt: nowMs + cacheTtlMs,
-            cachedAt: nowMs,
-          };
-
-          lowFrequencyCacheRef.current[cacheKey] = cachedPayload;
-
-          if (typeof localStorage !== "undefined") {
-            try {
-              localStorage.setItem(`cyj_${cacheKey}`, JSON.stringify(cachedPayload));
-            } catch {
-              // 快取容量不足不影響系統運作。
-            }
-          }
-        }
+        const unsubKpiTargets = onSnapshot(
+          getDocPath("kpi_targets"),
+          (kpiSnap) => {
+            trackReadSource("kpi_targets_live", kpiSnap.exists() ? 1 : 0, getReadMeta("kpi_targets_live"));
+            setTargets(kpiSnap.exists() ? kpiSnap.data() : { newASP: 3500, trafficASP: 1200 });
+          },
+          (error) => console.error("kpi_targets 即時監聽失敗:", error)
+        );
+        lowFrequencyUnsubs.push(unsubKpiTargets);
 
         const shouldLoadSchedules = activeView === "t-schedule";
         const shouldLoadTherapistTargets = activeView === "dashboard" || activeView === "t-targets";
@@ -638,26 +597,18 @@ export default function App() {
         }
 
         if (shouldLoadTherapistTargets) {
-          const tTargetCacheKey = `${currentBrand.id}_${targetYearStr}_therapist_targets_v2`;
-          const tTargetCached = lowFrequencyCacheRef.current[tTargetCacheKey];
-
-          if (tTargetCached && tTargetCached.expiresAt > nowMs) {
-            setTherapistTargets(tTargetCached.data || {});
-            trackReadSource("therapist_targets_year_cache_hit", 0, getReadMeta("therapist_targets_year_cache_hit"));
-          } else {
-            const tTargetSnap = await getDocs(query(getCollectionPath("therapist_targets"), where("year", "==", targetYearStr)));
-            trackReadSource("therapist_targets_year", tTargetSnap.docs.length, getReadMeta("therapist_targets_year_lazy"));
-
-            if (!isMounted) return;
-
-            const t = {};
-            tTargetSnap.docs.forEach((d) => (t[d.id] = d.data()));
-            setTherapistTargets(t);
-            lowFrequencyCacheRef.current[tTargetCacheKey] = {
-              data: t,
-              expiresAt: nowMs + cacheTtlMs,
-            };
-          }
+          // ★ 管理師目標同樣影響當月人員績效達成率；Dashboard / 管師目標頁維持即時監聽。
+          const unsubTherapistTargets = onSnapshot(
+            query(getCollectionPath("therapist_targets"), where("year", "==", targetYearStr)),
+            (tTargetSnap) => {
+              trackSnapshotRead("therapist_targets_year_live", tTargetSnap, getReadMeta("therapist_targets_year_live"));
+              const t = {};
+              tTargetSnap.docs.forEach((d) => (t[d.id] = d.data()));
+              setTherapistTargets(t);
+            },
+            (error) => console.error("therapist_targets 即時監聽失敗:", error)
+          );
+          lowFrequencyUnsubs.push(unsubTherapistTargets);
         } else {
           setTherapistTargets({});
         }
@@ -690,6 +641,9 @@ export default function App() {
       isMounted = false;
       unsubStatsToday();
       unsubStatsYesterday();
+      lowFrequencyUnsubs.forEach((unsubscribe) => {
+        try { unsubscribe && unsubscribe(); } catch (error) { console.warn("low frequency unsubscribe failed", error); }
+      });
     };
   }, [user, currentBrand, getCollectionPath, getDocPath, selectedYear, activeView, fetchGlobalData, getReadMeta]);
 
