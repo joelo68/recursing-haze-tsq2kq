@@ -1,12 +1,41 @@
 // src/components/StorePerformanceView.jsx
-import React, { useContext } from "react";
+import React, { useContext, useEffect, useState } from "react";
 import { XAxis, YAxis, CartesianGrid, Tooltip as RechartsTooltip, ResponsiveContainer, Line, ComposedChart, Area } from "recharts";
-import { AlertTriangle, Trophy, Medal, Star, Activity, Target, DollarSign, CreditCard, ShoppingBag, Users, TrendingUp, Sparkles, CheckSquare, Award, PieChart, Crown, Map as MapIcon, Flame } from "lucide-react";
+import { AlertTriangle, Trophy, Medal, Star, Activity, Target, DollarSign, CreditCard, ShoppingBag, Users, TrendingUp, Sparkles, CheckSquare, Award, PieChart, Crown, Map as MapIcon, Flame, Info, X } from "lucide-react";
 import { AppContext } from "../AppContext";
 import { Card } from "./SharedUI";
 
 const StorePerformanceView = ({ dashboardStats, myStoreRankings, brandInfo }) => {
   const { fmtMoney, fmtNum, targets, userRole } = useContext(AppContext);
+  const [isProjectionDrawerMounted, setProjectionDrawerMounted] = useState(false);
+  const [isProjectionDrawerClosing, setProjectionDrawerClosing] = useState(false);
+
+  const openProjectionDrawer = () => {
+    setProjectionDrawerClosing(false);
+    setProjectionDrawerMounted(true);
+  };
+
+  const closeProjectionDrawer = () => {
+    if (!isProjectionDrawerMounted || isProjectionDrawerClosing) return;
+    setProjectionDrawerClosing(true);
+    window.setTimeout(() => {
+      setProjectionDrawerMounted(false);
+      setProjectionDrawerClosing(false);
+    }, 340);
+  };
+
+  useEffect(() => {
+    if (!isProjectionDrawerMounted) return;
+
+    const handleEscClose = (event) => {
+      if (event.key === "Escape") {
+        closeProjectionDrawer();
+      }
+    };
+
+    window.addEventListener("keydown", handleEscClose);
+    return () => window.removeEventListener("keydown", handleEscClose);
+  }, [isProjectionDrawerMounted, isProjectionDrawerClosing]);
 
   if (!dashboardStats) return null;
 
@@ -27,8 +56,127 @@ const StorePerformanceView = ({ dashboardStats, myStoreRankings, brandInfo }) =>
     </div>
   );
 
+  const projectionRange = storeGrandTotal.projectionRange || {};
+  const projectionProfile = projectionRange.profile || null;
+  const projectionWeightText = projectionProfile
+    ? `${projectionProfile.label || "標準推估"}｜本月 ${Math.round((projectionProfile.currentWeight || 0) * 100)}% / 歷史節奏 ${Math.round((projectionProfile.historyWeight || 0) * 100)}%`
+    : "依本月營運表現與歷史節奏推估";
+
+  const formatProjectionValue = (value) => {
+    const numeric = Number(value || 0);
+    if (!numeric) return "尚無資料";
+    return fmtMoney(numeric);
+  };
+
+  const ProjectionScenarioColumn = ({ title, value, desc, active = false, tone = "amber" }) => (
+    <div className={`rounded-2xl border px-3.5 py-3 ${active ? (tone === "indigo" ? "border-indigo-100 bg-indigo-50/70" : "border-amber-100 bg-amber-50/70") : "border-stone-100 bg-white/90"}`}>
+      <div className="flex items-center justify-between gap-2">
+        <p className={`text-[11px] font-black ${active ? (tone === "indigo" ? "text-indigo-600" : "text-amber-700") : "text-stone-400"}`}>{title}</p>
+        {active && <span className="rounded-full bg-white/70 px-2 py-0.5 text-[10px] font-black text-stone-400">主畫面</span>}
+      </div>
+      <p className={`mt-1.5 whitespace-nowrap font-mono text-lg font-black tracking-tight ${active ? (tone === "indigo" ? "text-indigo-600" : "text-amber-700") : "text-stone-600"}`}>{formatProjectionValue(value)}</p>
+      <p className="mt-1.5 text-[11px] font-bold leading-4 text-stone-400">{desc}</p>
+    </div>
+  );
+
+  const ProjectionDrawerGroup = ({ title, type, tone = "amber", icon: Icon }) => {
+    const range = projectionRange?.[type];
+    const toneClasses = tone === "indigo"
+      ? { icon: "bg-indigo-50 text-indigo-600 border-indigo-100", label: "text-indigo-600", dot: "bg-indigo-500" }
+      : { icon: "bg-amber-50 text-amber-700 border-amber-100", label: "text-amber-700", dot: "bg-amber-500" };
+
+    return (
+      <section className="rounded-[1.45rem] border border-stone-100 bg-white/85 p-3.5 shadow-sm">
+        <div className="mb-3 flex items-center gap-2.5">
+          <div className={`flex h-9 w-9 items-center justify-center rounded-2xl border ${toneClasses.icon}`}>
+            <Icon size={17} />
+          </div>
+          <div>
+            <div className="flex items-center gap-2 text-[10px] font-black tracking-widest text-stone-400">
+              <span className={`h-1.5 w-1.5 rounded-full ${toneClasses.dot}`} />
+              推估情境
+            </div>
+            <h4 className="mt-0.5 text-base font-black text-stone-700">{title}</h4>
+          </div>
+        </div>
+
+        {range ? (
+          <div className="grid grid-cols-1 gap-2.5 sm:grid-cols-3">
+            <ProjectionScenarioColumn title="偏穩" value={range.conservative} desc="後續維持穩定服務與成交時，月底較保守的可能落點。" tone={tone} />
+            <ProjectionScenarioColumn title="主推估" value={range.standard} desc="目前主畫面採用的推估值，適合日常追蹤與會議判讀。" active tone={tone} />
+            <ProjectionScenarioColumn title="衝刺" value={range.aggressive} desc="若活動、回購與成交動能拉升，月底可能觸及的上緣。" tone={tone} />
+          </div>
+        ) : (
+          <div className="rounded-2xl border border-stone-100 bg-stone-50/70 px-4 py-5 text-center text-xs font-bold text-stone-400">
+            目前資料量還不足以拆出更多情境，主畫面會先以主要推估金額作為營運參考。
+          </div>
+        )}
+      </section>
+    );
+  };
+
+  const ProjectionInfoDrawer = () => {
+    if (!isProjectionDrawerMounted) return null;
+
+    return (
+      <div
+        className={`fixed inset-0 z-[9999] flex justify-end bg-stone-900/20 backdrop-blur-[2px] ${isProjectionDrawerClosing ? "animate-out fade-out duration-300" : "animate-in fade-in duration-300"}`}
+      >
+        <button
+          type="button"
+          aria-label="關閉推估說明背景"
+          onClick={closeProjectionDrawer}
+          className="absolute inset-0 h-full w-full cursor-default"
+        />
+
+        <aside
+          className={`relative z-10 flex h-full w-full max-w-[660px] flex-col overflow-hidden border-l border-stone-100 bg-[#FFFCF7] shadow-[-22px_0_70px_rgba(80,65,45,0.16)] ${isProjectionDrawerClosing ? "animate-out slide-out-to-right duration-300 ease-in" : "animate-in slide-in-from-right duration-300 ease-out"}`}
+        >
+          <div className="flex items-start justify-between gap-4 border-b border-stone-100 bg-white/90 px-5 py-4 backdrop-blur">
+            <div>
+              <div className="mb-2 inline-flex items-center gap-1.5 rounded-full border border-stone-100 bg-stone-50 px-2.5 py-1 text-[10px] font-black text-stone-500">
+                <Info size={11} />
+                月底推估說明
+              </div>
+              <h3 className="text-xl font-black text-stone-700">月底推估怎麼看？</h3>
+              <p className="mt-1 max-w-xl text-[11px] font-bold leading-5 text-stone-400">
+                主畫面保留最需要追蹤的推估數字；這裡補充現金與權責在不同營運情境下的可能落點，方便主管判斷後續衝刺空間。
+              </p>
+            </div>
+            <button
+              type="button"
+              onClick={closeProjectionDrawer}
+              className="rounded-2xl border border-stone-100 bg-white p-2 text-stone-400 transition-colors hover:bg-stone-50 hover:text-stone-600"
+              aria-label="關閉推估說明"
+            >
+              <X size={17} />
+            </button>
+          </div>
+
+          <div className="flex-1 overflow-y-auto px-5 py-4">
+            <div className="space-y-3">
+              <ProjectionDrawerGroup title="現金推估" type="cash" tone="amber" icon={DollarSign} />
+              <ProjectionDrawerGroup title="權責推估" type="accrual" tone="indigo" icon={CreditCard} />
+            </div>
+
+            <div className="mt-4 rounded-[1.35rem] border border-stone-100 bg-white/90 px-4 py-3 shadow-sm">
+              <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+                <p className="text-[11px] font-black text-stone-500">目前推估口徑</p>
+                <span className="w-fit rounded-full border border-stone-100 bg-stone-50 px-2.5 py-1 text-[10px] font-black text-stone-500">{projectionWeightText}</span>
+              </div>
+              <p className="mt-2 text-[11px] font-bold leading-5 text-stone-500">
+                系統會參考本月已回報業績，也會納入過去相似營業日的表現節奏。越接近月底，推估會越貼近本月實際狀況；實際結果仍以月底結算為準。
+              </p>
+            </div>
+          </div>
+        </aside>
+      </div>
+    );
+  };
+
   return (
     <div className="space-y-8 animate-in fade-in slide-in-from-bottom-4 duration-500 w-full min-w-0">
+      <ProjectionInfoDrawer />
       
 
       {/* 我的店家戰情卡 (僅店經理顯示) */}
@@ -140,9 +288,19 @@ const StorePerformanceView = ({ dashboardStats, myStoreRankings, brandInfo }) =>
 
         <div className="bg-white rounded-3xl p-6 border border-stone-100 shadow-lg shadow-stone-100 flex flex-col relative overflow-hidden group h-full">
           <div className="relative z-10 flex flex-col h-full">
-            <p className="text-emerald-600/70 text-xs font-bold uppercase tracking-wider mb-4 flex items-center gap-1 shrink-0">
-              <Target size={14} /> 月底推估
-            </p>
+            <div className="mb-4 flex items-center justify-between gap-3 shrink-0">
+              <p className="text-emerald-600/70 text-xs font-bold uppercase tracking-wider flex items-center gap-1">
+                <Target size={14} /> 月底推估
+              </p>
+              <button
+                type="button"
+                onClick={openProjectionDrawer}
+                className="inline-flex items-center gap-1.5 rounded-lg border border-stone-200 bg-white px-2.5 py-1 text-[11px] font-bold text-stone-500 transition-colors hover:bg-stone-50 hover:text-stone-700"
+              >
+                <Info size={12} />
+                推估說明
+              </button>
+            </div>
             <div className="flex flex-col gap-5 flex-1 justify-center">
               <div className="bg-stone-50/50 rounded-2xl p-4 border border-stone-100">
                 <div className="flex items-center justify-between mb-2">

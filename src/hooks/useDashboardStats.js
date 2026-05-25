@@ -5,6 +5,59 @@ import { AppContext } from '../AppContext';
 import { doc, getDoc, collection, getDocs } from 'firebase/firestore'; 
 import { db } from '../config/firebase';
 
+const safeNumber = (value) => Number.isFinite(Number(value)) ? Number(value) : 0;
+
+const getProjectionBlendProfile = (daysPassed = 0, daysInMonth = 0) => {
+  if (!daysPassed || !daysInMonth) {
+    return { currentWeight: 0.5, historyWeight: 0.5, label: "資料不足" };
+  }
+
+  const progress = daysPassed / daysInMonth;
+
+  if (daysPassed <= 5 || progress <= 0.18) {
+    return { currentWeight: 0.3, historyWeight: 0.7, label: "月初：偏歷史節奏" };
+  }
+
+  if (progress <= 0.5) {
+    return { currentWeight: 0.5, historyWeight: 0.5, label: "月中：本月與歷史均衡" };
+  }
+
+  if (progress <= 0.8) {
+    return { currentWeight: 0.7, historyWeight: 0.3, label: "月中後：偏本月實際" };
+  }
+
+  return { currentWeight: 0.85, historyWeight: 0.15, label: "月底：高度依本月實際" };
+};
+
+const blendByWeights = (currentValue, historyValue, currentWeight, historyWeight) => {
+  const current = safeNumber(currentValue);
+  const history = safeNumber(historyValue);
+  return (current * currentWeight) + (history * historyWeight);
+};
+
+const buildProjectionRangePayload = ({ currentTotal = 0, remainingConservative = 0, remainingStandard = 0, remainingAggressive = 0 }) => {
+  const rawConservative = Math.round(safeNumber(currentTotal) + safeNumber(remainingConservative));
+  const standard = Math.round(safeNumber(currentTotal) + safeNumber(remainingStandard));
+  const rawAggressive = Math.round(safeNumber(currentTotal) + safeNumber(remainingAggressive));
+
+  // 保守 / 標準 / 積極是給主管看的「判讀區間」，必須維持語意順序。
+  // 這版把保守改成較低節奏、積極改成較高節奏；若遇到極端資料，仍用下緣 / 上緣保護顯示。
+  const conservative = Math.min(rawConservative, standard, rawAggressive);
+  const aggressive = Math.max(rawConservative, standard, rawAggressive);
+
+  return {
+    conservative,
+    standard,
+    aggressive,
+    min: conservative,
+    max: aggressive,
+    rawConservative,
+    rawAggressive,
+  };
+};
+
+
+
 export function useDashboardStats() {
   const { 
     targets, userRole, currentUser, 
@@ -220,11 +273,23 @@ export function useDashboardStats() {
   }, [isSelectedCurrentMonth, selectedDashboardManager, selectedDashboardStore, dashboardSummaryBundle.dashboard, userRole]);
 
   const buildProjectionFromSummaryStores = useMemo(() => (stores = [], daysPassed = 0, daysInMonth = 0) => {
-    if (!daysPassed || !daysInMonth || !Array.isArray(stores)) return { projection: 0, accrualProjection: 0 };
+    const emptyRange = {
+      cash: { conservative: 0, standard: 0, aggressive: 0, min: 0, max: 0 },
+      accrual: { conservative: 0, standard: 0, aggressive: 0, min: 0, max: 0 },
+      profile: getProjectionBlendProfile(daysPassed, daysInMonth),
+    };
+    if (!daysPassed || !daysInMonth || !Array.isArray(stores)) {
+      return { projection: 0, accrualProjection: 0, projectionRange: emptyRange };
+    }
+
     const y = parseInt(selectedYear, 10);
     const m = parseInt(selectedMonth, 10);
-    let projection = 0;
-    let accrualProjection = 0;
+    const profile = getProjectionBlendProfile(daysPassed, daysInMonth);
+
+    const totals = {
+      cash: { current: 0, conservative: 0, standard: 0, aggressive: 0 },
+      accrual: { current: 0, conservative: 0, standard: 0, aggressive: 0 },
+    };
 
     stores.forEach((store) => {
       const storeCore = cleanName(store.store || store.displayName || "");
@@ -238,31 +303,47 @@ export function useDashboardStats() {
       const currentCashDailyAvg = currentCash / daysPassed;
       const currentAccrualDailyAvg = currentAccrual / daysPassed;
 
-      let remainingProjectedCash = 0;
-      let remainingProjectedAccrual = 0;
+      totals.cash.current += currentCash;
+      totals.accrual.current += currentAccrual;
 
       for (let d = daysPassed + 1; d <= daysInMonth; d++) {
         const futureDate = new Date(y, m - 1, d);
         const dow = futureDate.getDay();
 
         const historyCashValue = cashAverages[dow] !== undefined ? cashAverages[dow] : currentCashDailyAvg;
-        const blendedCashValue = historyCashValue > currentCashDailyAvg
-          ? (currentCashDailyAvg * 0.5) + (historyCashValue * 0.5)
-          : Math.max(currentCashDailyAvg, historyCashValue);
-        remainingProjectedCash += blendedCashValue;
+        totals.cash.conservative += Math.min(currentCashDailyAvg, historyCashValue);
+        totals.cash.standard += blendByWeights(currentCashDailyAvg, historyCashValue, profile.currentWeight, profile.historyWeight);
+        totals.cash.aggressive += Math.max(currentCashDailyAvg, historyCashValue);
 
         const historyAccrualValue = accrualAverages[dow] !== undefined ? accrualAverages[dow] : currentAccrualDailyAvg;
-        const blendedAccrualValue = historyAccrualValue > currentAccrualDailyAvg
-          ? (currentAccrualDailyAvg * 0.5) + (historyAccrualValue * 0.5)
-          : Math.max(currentAccrualDailyAvg, historyAccrualValue);
-        remainingProjectedAccrual += blendedAccrualValue;
+        totals.accrual.conservative += Math.min(currentAccrualDailyAvg, historyAccrualValue);
+        totals.accrual.standard += blendByWeights(currentAccrualDailyAvg, historyAccrualValue, profile.currentWeight, profile.historyWeight);
+        totals.accrual.aggressive += Math.max(currentAccrualDailyAvg, historyAccrualValue);
       }
-
-      projection += Math.round(currentCash + remainingProjectedCash);
-      accrualProjection += Math.round(currentAccrual + remainingProjectedAccrual);
     });
 
-    return { projection, accrualProjection };
+    const cashRange = buildProjectionRangePayload({
+      currentTotal: totals.cash.current,
+      remainingConservative: totals.cash.conservative,
+      remainingStandard: totals.cash.standard,
+      remainingAggressive: totals.cash.aggressive,
+    });
+    const accrualRange = buildProjectionRangePayload({
+      currentTotal: totals.accrual.current,
+      remainingConservative: totals.accrual.conservative,
+      remainingStandard: totals.accrual.standard,
+      remainingAggressive: totals.accrual.aggressive,
+    });
+
+    return {
+      projection: cashRange.standard,
+      accrualProjection: accrualRange.standard,
+      projectionRange: {
+        cash: cashRange,
+        accrual: accrualRange,
+        profile,
+      },
+    };
   }, [selectedYear, selectedMonth, cleanName, allStoreCurves]);
 
   const summaryDashboardStats = useMemo(() => {
@@ -310,6 +391,7 @@ export function useDashboardStats() {
     grand.hasChallengeAccrual = Number(grand.challengeAccrualBudget || 0) > Number(grand.accrualBudget || 0);
     grand.projection = projectionPayload.projection || Number(grand.projection || 0);
     grand.accrualProjection = projectionPayload.accrualProjection || Number(grand.accrualProjection || 0);
+    grand.projectionRange = projectionPayload.projectionRange || grand.projectionRange || null;
 
     const totalAchievement = Number(grand.budget || 0) > 0 ? (Number(grand.cash || 0) / Number(grand.budget || 0)) * 100 : 0;
     const totalAccrualAchievement = Number(grand.accrualBudget || 0) > 0 ? (Number(grand.accrual || 0) / Number(grand.accrualBudget || 0)) * 100 : 0;
@@ -618,73 +700,77 @@ export function useDashboardStats() {
     const challengeAccrualAchievement = stats.challengeAccrualBudget > 0 ? (stats.accrual / stats.challengeAccrualBudget) * 100 : 0;
 
  // ============================================================================
-    // ★ 歷史金額填補法 (現金與權責 雙軌獨立 50/50 融合版)
+    // ★ 月底推估：動態權重 + 保守 / 標準 / 積極區間
+    //    - 保守：偏本月實際節奏
+    //    - 標準：依月份進度動態調整本月與歷史權重
+    //    - 積極：保留歷史高節奏與月底衝刺可能
     // ============================================================================
     let projection = 0;
     let accrualProjection = 0;
+    let projectionRange = {
+      cash: { conservative: 0, standard: 0, aggressive: 0, min: 0, max: 0 },
+      accrual: { conservative: 0, standard: 0, aggressive: 0, min: 0, max: 0 },
+      profile: getProjectionBlendProfile(daysPassed, daysInMonth),
+    };
 
     if (daysPassed > 0) {
+        const profile = getProjectionBlendProfile(daysPassed, daysInMonth);
+        const totals = {
+          cash: { current: 0, conservative: 0, standard: 0, aggressive: 0 },
+          accrual: { current: 0, conservative: 0, standard: 0, aggressive: 0 },
+        };
+
         Object.keys(storeStatsMap).forEach(storeName => {
             const sStats = storeStatsMap[storeName];
             const storeId = storeName.replace(/\s+/g, '').toLowerCase();
-            
-            // 拿到這家店的整包小抄
             const storeCurve = allStoreCurves[storeId] || allStoreCurves["BRAND_TOTAL"] || {};
-            
-            // ★ 分別拿出「現金小抄」與「權責小抄」
-            // ★ 拔除 dailyAverages 墊檔！強迫系統只讀取純現金與純權責的歷史！
             const cashAverages = storeCurve.cashAverages || {};
             const accrualAverages = storeCurve.accrualAverages || {};
 
-            // 算出這家店本月目前的「現金日均」與「權責日均」
             const currentCashDailyAvg = sStats.cash / daysPassed;
             const currentAccrualDailyAvg = sStats.accrual / daysPassed;
-            
-            let remainingProjectedCash = 0;
-            let remainingProjectedAccrual = 0;
+
+            totals.cash.current += sStats.cash;
+            totals.accrual.current += sStats.accrual;
 
             for (let d = daysPassed + 1; d <= daysInMonth; d++) {
                 const futureDate = new Date(y, m - 1, d);
                 const dow = futureDate.getDay();
-                
-                // ----------------------------------------------------
-                // 🍏 【現金推估軌道】(保留您最滿意的 50/50 邏輯)
-                // ----------------------------------------------------
-                const historyCashValue = (cashAverages[dow] !== undefined) 
-                    ? cashAverages[dow] 
+
+                const historyCashValue = (cashAverages[dow] !== undefined)
+                    ? cashAverages[dow]
                     : currentCashDailyAvg;
-                
-                let blendedCashValue = historyCashValue;
 
-                if (historyCashValue > currentCashDailyAvg) {
-                    blendedCashValue = (currentCashDailyAvg * 0.5) + (historyCashValue * 0.5);
-                } else {
-                    blendedCashValue = Math.max(currentCashDailyAvg, historyCashValue);
-                }
-                remainingProjectedCash += blendedCashValue;
+                totals.cash.conservative += Math.min(currentCashDailyAvg, historyCashValue);
+                totals.cash.standard += blendByWeights(currentCashDailyAvg, historyCashValue, profile.currentWeight, profile.historyWeight);
+                totals.cash.aggressive += Math.max(currentCashDailyAvg, historyCashValue);
 
-                // ----------------------------------------------------
-                // 🍊 【權責推估軌道】(完全比照辦理，獨立使用權責小抄)
-                // ----------------------------------------------------
-                const historyAccrualValue = (accrualAverages[dow] !== undefined) 
-                    ? accrualAverages[dow] 
+                const historyAccrualValue = (accrualAverages[dow] !== undefined)
+                    ? accrualAverages[dow]
                     : currentAccrualDailyAvg;
-                
-                let blendedAccrualValue = historyAccrualValue;
 
-                if (historyAccrualValue > currentAccrualDailyAvg) {
-                    // 權責也享有 50/50 的動能校正！
-                    blendedAccrualValue = (currentAccrualDailyAvg * 0.5) + (historyAccrualValue * 0.5);
-                } else {
-                    blendedAccrualValue = Math.max(currentAccrualDailyAvg, historyAccrualValue);
-                }
-                remainingProjectedAccrual += blendedAccrualValue;
+                totals.accrual.conservative += Math.min(currentAccrualDailyAvg, historyAccrualValue);
+                totals.accrual.standard += blendByWeights(currentAccrualDailyAvg, historyAccrualValue, profile.currentWeight, profile.historyWeight);
+                totals.accrual.aggressive += Math.max(currentAccrualDailyAvg, historyAccrualValue);
             }
-
-            // 分別把推估好的未來金額，加上目前已入袋的金額
-            projection += Math.round(sStats.cash + remainingProjectedCash);
-            accrualProjection += Math.round(sStats.accrual + remainingProjectedAccrual);
         });
+
+        const cashRange = buildProjectionRangePayload({
+          currentTotal: totals.cash.current,
+          remainingConservative: totals.cash.conservative,
+          remainingStandard: totals.cash.standard,
+          remainingAggressive: totals.cash.aggressive,
+        });
+        const accrualRange = buildProjectionRangePayload({
+          currentTotal: totals.accrual.current,
+          remainingConservative: totals.accrual.conservative,
+          remainingStandard: totals.accrual.standard,
+          remainingAggressive: totals.accrual.aggressive,
+        });
+
+        projection = cashRange.standard;
+        accrualProjection = accrualRange.standard;
+        projectionRange = { cash: cashRange, accrual: accrualRange, profile };
     }
     // ===========================================================================
     const avgTrafficASP = stats.traffic > 0 ? Math.round(stats.operationalAccrual / stats.traffic) : 0;
@@ -705,7 +791,7 @@ export function useDashboardStats() {
         cash: stats.cash, accrual: stats.accrual, operationalAccrual: stats.operationalAccrual, skincareSales: stats.skincareSales, traffic: stats.traffic,
         newCustomers: stats.newCustomers, newCustomerClosings: stats.newCustomerClosings, newCustomerSales: stats.newCustomerSales,
         budget: stats.budget, accrualBudget: stats.accrualBudget, challengeBudget: stats.challengeBudget, challengeAccrualBudget: stats.challengeAccrualBudget, 
-        hasChallengeCash: stats.hasChallengeCash, hasChallengeAccrual: stats.hasChallengeAccrual, projection, accrualProjection   
+        hasChallengeCash: stats.hasChallengeCash, hasChallengeAccrual: stats.hasChallengeAccrual, projection, accrualProjection, projectionRange   
       },
       dailyTotals: slicedDailyTotals,
       totalAchievement: achievement, totalAccrualAchievement: accrualAchievement, challengeAchievement, challengeAccrualAchievement, 
