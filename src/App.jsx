@@ -44,7 +44,7 @@ import {
 // ==========================================
 // ★ 系統核心版本號 (終極動態快取版)
 // ==========================================
-const CURRENT_APP_VERSION = "3.0.0"; 
+const CURRENT_APP_VERSION = "3.0.1"; 
 
 const isNewerVersion = (local, remote) => {
   if (!remote) return true;
@@ -958,21 +958,81 @@ export default function App() {
   
 if (isUpdating) {
     const updateAttempts = parseInt(sessionStorage.getItem('cyj_update_attempts') || '0');
+    const hasUpdateFailed = updateAttempts >= 3;
+    const handleManualHardRefresh = () => {
+      try {
+        sessionStorage.removeItem('cyj_update_attempts');
+        if ('serviceWorker' in navigator) {
+          navigator.serviceWorker.getRegistrations?.().then((registrations) => {
+            registrations.forEach((registration) => registration.unregister());
+          });
+        }
+      } catch (error) {
+        console.warn('manual refresh cleanup failed', error);
+      }
+      const currentUrl = window.location.href.split('?')[0];
+      window.location.replace(`${currentUrl}?v=${new Date().getTime()}`);
+    };
+
     return (
-      <div className="fixed inset-0 z-[99999] flex flex-col items-center justify-center bg-stone-900 text-white animate-in fade-in duration-300">
-        <Loader2 className="w-16 h-16 animate-spin text-amber-500 mb-6" />
-        <h2 className="text-3xl font-bold mb-2 tracking-widest">系統強制更新中</h2>
-        <p className="text-stone-400 font-mono">正在為您同步最新版本 (v{CURRENT_APP_VERSION} ➡️ 新版)</p>
-        
-        {updateAttempts >= 3 ? (
-          <div className="mt-8 p-6 bg-rose-500/20 border border-rose-500/50 rounded-2xl max-w-md text-center">
-            <AlertCircle className="w-10 h-10 text-rose-400 mx-auto mb-3" />
-            <p className="text-rose-300 font-bold mb-2">設備快取過於頑固，自動更新失敗</p>
-            <p className="text-stone-300 text-sm">請手動將此網頁/APP「完全關閉後重新開啟」，或在電腦上按下 Ctrl + F5 強制重整。</p>
+      <div className="fixed inset-0 z-[99999] flex items-center justify-center bg-[linear-gradient(135deg,#FBF7F1_0%,#F8F1E8_45%,#FDFBF8_100%)] px-5 animate-in fade-in duration-300">
+        <div className="w-full max-w-[460px] rounded-[2rem] border border-[#E8DDD0] bg-white/92 p-7 text-center shadow-[0_24px_80px_rgba(154,118,84,0.14)] backdrop-blur">
+          <div className="mx-auto mb-5 flex h-16 w-16 items-center justify-center rounded-[1.35rem] border border-[#F0DDBB] bg-[#FFF6E4] text-[#B7863D] shadow-[0_14px_30px_rgba(183,134,61,0.16)]">
+            {hasUpdateFailed ? (
+              <AlertCircle className="h-8 w-8 text-[#B66A79]" />
+            ) : (
+              <Loader2 className="h-8 w-8 animate-spin" />
+            )}
           </div>
-        ) : (
-          <p className="text-stone-500 text-sm mt-4 animate-pulse">請稍候，畫面即將自動重新載入...</p>
-        )}
+
+          <div className="mb-3 inline-flex items-center rounded-full border border-[#EADCC9] bg-[#FDF8EF] px-3 py-1 text-[11px] font-black tracking-[0.16em] text-[#A77732]">
+            SYSTEM UPDATE
+          </div>
+
+          <h2 className="text-2xl font-black tracking-tight text-[#4F3F33]">
+            {hasUpdateFailed ? '更新尚未完成' : '正在同步最新版本'}
+          </h2>
+
+          <p className="mt-3 text-sm font-bold leading-7 text-[#7D6753]">
+            {hasUpdateFailed
+              ? '系統已嘗試自動更新，但此裝置可能仍讀到舊快取。請使用下方按鈕重新整理，或完全關閉系統後再重新開啟。'
+              : '我們正在為您更新系統內容，讓畫面與資料邏輯保持在最新狀態。請稍候片刻。'}
+          </p>
+
+          <div className="mt-5 rounded-2xl border border-[#EFE5DA] bg-[#FBF7F1] px-4 py-3 text-xs font-bold text-[#8A7868]">
+            目前版本：<span className="font-black text-[#B7863D]">v{CURRENT_APP_VERSION}</span>
+            <span className="mx-2 text-[#CDBEAE]">｜</span>
+            更新嘗試：<span className="font-black text-[#B7863D]">{updateAttempts}</span> / 3
+          </div>
+
+          {hasUpdateFailed ? (
+            <div className="mt-6 space-y-3">
+              <button
+                type="button"
+                onClick={handleManualHardRefresh}
+                className="w-full rounded-2xl bg-gradient-to-r from-[#DAB98B] to-[#C89F68] px-5 py-3 text-sm font-black text-white shadow-[0_12px_28px_rgba(200,159,104,0.24)] transition hover:brightness-[1.03] active:scale-[0.98]"
+              >
+                清除快取並重新整理
+              </button>
+              <p className="text-xs font-bold leading-6 text-[#9A8978]">
+                手機 / 平板若仍無法更新，請將瀏覽器或 APP 完全關閉後重新開啟。電腦可使用 Ctrl + F5 或 Cmd + Shift + R。
+              </p>
+            </div>
+          ) : (
+            <div className="mt-6 space-y-3">
+              <div className="h-2 overflow-hidden rounded-full bg-[#EFE5DA]">
+                <div className="h-full w-2/3 animate-pulse rounded-full bg-gradient-to-r from-[#E9C98E] to-[#C89F68]" />
+              </div>
+              <button
+                type="button"
+                onClick={handleManualHardRefresh}
+                className="rounded-2xl border border-[#E6DDD4] bg-white px-5 py-2.5 text-xs font-black text-[#8B7056] transition hover:bg-[#FAF7F2] active:scale-[0.98]"
+              >
+                立即同步新版
+              </button>
+            </div>
+          )}
+        </div>
       </div>
     );
   }
