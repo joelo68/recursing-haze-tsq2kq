@@ -44,7 +44,7 @@ import {
 // ==========================================
 // ★ 系統核心版本號 (終極動態快取版)
 // ==========================================
-const CURRENT_APP_VERSION = "3.0.1"; 
+const CURRENT_APP_VERSION = "3.0.2"; 
 
 const isNewerVersion = (local, remote) => {
   if (!remote) return true;
@@ -157,6 +157,31 @@ export default function App() {
     view: activeView,
     userName: currentUser?.name || userRole || "unknown",
   }), [userRole, currentBrandId, activeView, currentUser]);
+
+  // ★ 穩定版讀取追蹤資訊：
+  // 高流量的即時監聽不應該因為 activeView 切換而重新建立。
+  // 這個 ref 讓監聽 callback 仍可取得最新畫面資訊，但不把 activeView 放進監聽依賴。
+  const readMetaRef = useRef({
+    role: userRole || "guest",
+    brand: currentBrandId,
+    view: activeView,
+    userName: currentUser?.name || userRole || "unknown",
+  });
+
+  useEffect(() => {
+    readMetaRef.current = {
+      role: userRole || "guest",
+      brand: currentBrandId,
+      view: activeView,
+      userName: currentUser?.name || userRole || "unknown",
+    };
+  }, [userRole, currentBrandId, activeView, currentUser]);
+
+  const getStableReadMeta = useCallback((label = "") => ({
+    label,
+    ...readMetaRef.current,
+  }), []);
+
   const handleSwitchBrand = (brandId) => { setCurrentBrandId(brandId); setHasSelectedBrand(true); };
 
   const getCollectionPath = useCallback((collectionName) => {
@@ -658,7 +683,7 @@ export default function App() {
     const unsubAgg = onSnapshot(
       query(getCollectionPath("monthly_aggregated"), where("year", "in", [targetYear, Number(targetYear)])),
       (s) => {
-        trackSnapshotRead("monthly_aggregated_year", s, getReadMeta("monthly_aggregated_year"));
+        trackSnapshotRead("monthly_aggregated_year", s, getStableReadMeta("monthly_aggregated_year"));
         setAnnualAggregatedData(s.docs.map((d) => ({ id: d.id, ...d.data() })));
       }
     );
@@ -667,7 +692,7 @@ export default function App() {
     const unsubTherapistAgg = onSnapshot(
       query(getCollectionPath("therapist_monthly_aggregated"), where("year", "in", [targetYear, Number(targetYear)])),
       (s) => {
-        trackSnapshotRead("therapist_monthly_aggregated_year", s, getReadMeta("therapist_monthly_aggregated_year"));
+        trackSnapshotRead("therapist_monthly_aggregated_year", s, getStableReadMeta("therapist_monthly_aggregated_year"));
         setTherapistAnnualAggregatedData(s.docs.map((d) => ({ id: d.id, ...d.data() })));
       }
     );
@@ -676,7 +701,7 @@ export default function App() {
       unsubAgg();
       unsubTherapistAgg(); // ★ 離開時記得關閉管線
     };
-  }, [user, currentBrand, selectedYear, getCollectionPath, getReadMeta, isLowPowerMode]);
+  }, [user, currentBrand, selectedYear, getCollectionPath, getStableReadMeta, isLowPowerMode]);
 
   useEffect(() => {
     if (!user || isLowPowerMode) return;
@@ -700,7 +725,7 @@ export default function App() {
       const unsubReports = onSnapshot(
         query(getCollectionPath("daily_reports"), where("date", ">=", startDate), where("date", "<=", endDate), orderBy("date", "desc")),
         (s) => {
-          trackSnapshotRead("daily_reports_current_month", s, getReadMeta("daily_reports_current_month"));
+          trackSnapshotRead("daily_reports_current_month", s, getStableReadMeta("daily_reports_current_month"));
           setRawData(s.docs.map((d) => ({ id: d.id, ...d.data() })));
         }
       );
@@ -708,7 +733,7 @@ export default function App() {
       const unsubTherapistReports = onSnapshot(
         query(getCollectionPath("therapist_daily_reports"), where("date", ">=", startDate), where("date", "<=", endDate), orderBy("date", "desc")),
         (s) => {
-          trackSnapshotRead("therapist_daily_reports_current_month", s, getReadMeta("therapist_daily_reports_current_month"));
+          trackSnapshotRead("therapist_daily_reports_current_month", s, getStableReadMeta("therapist_daily_reports_current_month"));
           setTherapistReports(s.docs.map((d) => ({ id: d.id, ...d.data() })));
         }
       );
@@ -736,8 +761,8 @@ export default function App() {
             getDocs(query(getCollectionPath("therapist_daily_reports"), where("date", ">=", startDate), where("date", "<=", endDate), orderBy("date", "desc")))
           ]);
 
-          trackReadSource("daily_reports_past_month_getDocs", reportsSnap.docs.length, getReadMeta("daily_reports_past_month_getDocs"));
-          trackReadSource("therapist_daily_reports_past_month_getDocs", tReportsSnap.docs.length, getReadMeta("therapist_daily_reports_past_month_getDocs"));
+          trackReadSource("daily_reports_past_month_getDocs", reportsSnap.docs.length, getStableReadMeta("daily_reports_past_month_getDocs"));
+          trackReadSource("therapist_daily_reports_past_month_getDocs", tReportsSnap.docs.length, getStableReadMeta("therapist_daily_reports_past_month_getDocs"));
 
           if (!isMounted) return;
 
@@ -763,7 +788,7 @@ export default function App() {
         isMounted = false; 
       };
     }
-  }, [user, currentBrand, selectedYear, selectedMonth, getCollectionPath, getReadMeta]);
+  }, [user, currentBrand, selectedYear, selectedMonth, getCollectionPath, getStableReadMeta, isLowPowerMode]);
 
 
  const handleLogin = useCallback((roleId, userInfo = null) => {
