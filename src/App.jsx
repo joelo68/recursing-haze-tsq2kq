@@ -44,7 +44,7 @@ import {
 // ==========================================
 // ★ 系統核心版本號 (終極動態快取版)
 // ==========================================
-const CURRENT_APP_VERSION = "3.0.3"; 
+const CURRENT_APP_VERSION = "3.0.4"; 
 
 const isNewerVersion = (local, remote) => {
   if (!remote) return true;

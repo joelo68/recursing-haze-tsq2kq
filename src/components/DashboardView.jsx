@@ -20,6 +20,7 @@ const DashboardView = () => {
     selectedDashboardStore, setSelectedDashboardStore,
     brandInfo, brandPrefix,
     dashboardStats, myStoreRankings, therapistStats,
+    dashboardSummaryStatus,
     dailyLoginCount, yesterdayLoginCount,
     groupedStoresForFilter, availableStoresForDropdown
   } = useDashboardStats();
@@ -44,6 +45,7 @@ const DashboardView = () => {
            brandInfo={brandInfo}
            dailyLoginCount={dailyLoginCount}
            yesterdayLoginCount={yesterdayLoginCount}
+           dashboardSummaryStatus={dashboardSummaryStatus}
            viewMode={viewMode}
            setViewMode={setViewMode}
            selectedDashboardManager={selectedDashboardManager}

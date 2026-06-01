@@ -358,6 +358,32 @@ export default function SystemMaintenance() {
     return updated;
   };
 
+  const markSummaryRecalcFlagCompleted = async (month, payload = {}) => {
+    if (!/^\d{4}-\d{2}$/.test(String(month || ""))) return;
+    try {
+      await setDoc(doc(getCollectionPath("summary_recalc_flags"), month), {
+        brandId,
+        brandLabel,
+        yearMonth: month,
+        affectedYearMonth: month,
+        status: payload.status || "verified",
+        dirty: false,
+        pendingCount: 0,
+        lastCompletedAt: serverTimestamp(),
+        lastCompletedAtText: new Date().toISOString(),
+        lastCompletedBy: currentUser?.name || "director",
+        lastCompletedByRole: userRole || "director",
+        lastResult: payload.result || "month_report_finalized",
+        lastMismatchCount: Number(payload.mismatchCount || 0),
+        completedQueueCount: Number(payload.completedQueueCount || 0),
+        updatedAt: serverTimestamp(),
+        updatedAtText: new Date().toISOString(),
+      }, { merge: true });
+    } catch (error) {
+      console.warn("summary_recalc_flags completed update failed", error);
+    }
+  };
+
   const handleCalibrateRecalcMonth = async (group) => {
     const month = group?.month;
     if (!month || month === "未知月份") return showToast("此月份格式異常，無法校準", "error");
@@ -1022,6 +1048,19 @@ export default function SystemMaintenance() {
       ? "此月份尚未建立完整歷史報表整理資料。若該月份資料已確認完成，可以執行月份報表整理。"
       : "系統正在或尚未完成此月份整理狀態判斷，請重新檢查狀態。";
 
+    const shouldShowMonthReportAssistant = !isCurrent && selectedSummaryStatus && ["missing", "dirty", "unverified", "mismatch"].includes(selectedSummaryStatus.statusKey);
+    const monthReportAssistantTone = selectedSummaryStatus?.statusKey === "mismatch" ? "rose" : selectedSummaryStatus?.statusKey === "missing" ? "amber" : "amber";
+    const monthReportAssistantTitle = selectedSummaryStatus?.statusKey === "mismatch"
+      ? `${calMonth} 報表比對異常，建議重新整理後再確認`
+      : selectedSummaryStatus?.statusKey === "missing"
+      ? `${calMonth} 尚未建立歷史報表整理資料`
+      : `${calMonth} 有 ${Number(selectedSummaryStatus?.pendingCount || 0).toLocaleString()} 筆資料待整理`;
+    const monthReportAssistantBody = selectedSummaryStatus?.statusKey === "mismatch"
+      ? "Dashboard 目前會先以明細暫代，避免主管看到不一致的 Summary。建議重新整理此月份報表，完成後系統會再次比對。"
+      : selectedSummaryStatus?.statusKey === "missing"
+      ? "此月份還沒有可供 Dashboard 安心使用的歷史報表資料。整理完成後，歷史月份可切回 Summary，減少長期明細讀取。"
+      : "Dashboard 目前已改用明細暫代顯示，主管看到的數字仍以明細為準。整理完成並比對正常後，系統會重新切回已整理 Summary。";
+
 
     const statusCards = [
       {
@@ -1137,6 +1176,41 @@ export default function SystemMaintenance() {
           </div>
         </div>
 
+        {shouldShowMonthReportAssistant && (
+          <div className={`rounded-[1.65rem] border p-4 shadow-[0_14px_34px_rgba(154,118,84,0.06)] ${monthReportAssistantTone === "rose" ? "border-rose-100 bg-rose-50/35" : "border-amber-100 bg-amber-50/35"}`}>
+            <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
+              <div className="flex items-start gap-3 min-w-0">
+                <div className={`w-11 h-11 rounded-[1.15rem] border flex items-center justify-center shrink-0 ${monthReportAssistantTone === "rose" ? "border-rose-100 bg-white text-rose-500" : "border-amber-100 bg-white text-[#B7863D]"}`}>
+                  <Calendar size={19} strokeWidth={1.8} />
+                </div>
+                <div className="min-w-0">
+                  <div className="flex flex-wrap items-center gap-2">
+                    <span className={`px-3 py-1 rounded-full border bg-white text-[11px] font-black ${monthReportAssistantTone === "rose" ? "border-rose-100 text-rose-600" : "border-amber-100 text-[#B7863D]"}`}>月份報表整理助手</span>
+                    <span className="px-3 py-1 rounded-full border border-stone-100 bg-white/80 text-[11px] font-black text-stone-500">Dashboard 目前明細暫代</span>
+                  </div>
+                  <h3 className="mt-2 text-lg font-black text-[#4F3F33] tracking-tight">{monthReportAssistantTitle}</h3>
+                  <p className="mt-1 text-xs font-bold leading-5 text-[#7D6753] max-w-3xl">{monthReportAssistantBody}</p>
+                  <div className="mt-3 flex flex-wrap gap-2 text-[11px] font-black text-stone-500">
+                    <span className="rounded-full border border-stone-100 bg-white/80 px-3 py-1">待整理：{Number(selectedSummaryStatus?.pendingCount || 0).toLocaleString()} 筆</span>
+                    <span className="rounded-full border border-stone-100 bg-white/80 px-3 py-1">最近異動：{formatSummaryTime(selectedSummaryStatus?.latestPendingAt || selectedSummaryStatus?.lastDirtyAtText)}</span>
+                    <span className="rounded-full border border-stone-100 bg-white/80 px-3 py-1">最後比對：{formatSummaryTime(selectedSummaryStatus?.lastCompareAt)}</span>
+                  </div>
+                </div>
+              </div>
+              <div className="flex flex-col gap-2 sm:flex-row lg:flex-col lg:items-stretch shrink-0">
+                <BeautyButton onClick={handleMonthEndDashboardSummaryCalibration} disabled={loadingAction !== null} variant="primary" className="min-w-[170px]">
+                  {loadingAction === "monthEndSummaryCalibration" ? <Loader2 size={14} className="animate-spin" /> : <CheckCircle2 size={14} />}
+                  立即整理 {calMonth}
+                </BeautyButton>
+                <BeautyButton onClick={() => loadDashboardSummaryStatus(calMonth)} disabled={loadingAction !== null} variant="soft" className="min-w-[170px]">
+                  {loadingAction === "summaryStatus" ? <Loader2 size={14} className="animate-spin" /> : <Eye size={14} />}
+                  重新檢查
+                </BeautyButton>
+              </div>
+            </div>
+          </div>
+        )}
+
         <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-2.5 auto-rows-fr">
           {statusCards.map((card) => {
             const tone = tonePalette[getStatusKey(card.status)];
@@ -1197,9 +1271,14 @@ export default function SystemMaintenance() {
               </div>
 
               <div className="mt-4 flex flex-col gap-2 sm:flex-row lg:flex-col">
-                <BeautyButton onClick={() => handleRunGuidedFlow(activeCard.scenarioId)} disabled={guidedFlowRunning || loadingAction !== null} variant="primary" className="h-10 flex-1">
-                  {guidedFlowRunning ? <Loader2 size={16} className="animate-spin" /> : <Play size={16} />}
-                  {guidedFlowRunning ? "檢查中..." : activeCard.scenarioId === "closing" ? (isCurrent ? "查看整理時機" : `整理 ${calMonth} 報表`) : activeCard.scenarioId === "daily" ? "開始本月檢查" : activeCard.action}
+                <BeautyButton
+                  onClick={() => activeCard.scenarioId === "closing" && !isCurrent ? handleMonthEndDashboardSummaryCalibration() : handleRunGuidedFlow(activeCard.scenarioId)}
+                  disabled={guidedFlowRunning || loadingAction !== null}
+                  variant="primary"
+                  className="h-10 flex-1"
+                >
+                  {guidedFlowRunning || loadingAction === "monthEndSummaryCalibration" ? <Loader2 size={16} className="animate-spin" /> : activeCard.scenarioId === "closing" && !isCurrent ? <CheckCircle2 size={16} /> : <Play size={16} />}
+                  {guidedFlowRunning ? "檢查中..." : loadingAction === "monthEndSummaryCalibration" ? "整理中..." : activeCard.scenarioId === "closing" ? (isCurrent ? "查看整理時機" : `立即整理 ${calMonth}`) : activeCard.scenarioId === "daily" ? "開始本月檢查" : activeCard.action}
                 </BeautyButton>
                 <BeautyButton onClick={() => setShowCoreTools(true)} variant="soft" className="h-10 flex-1">
                   <Settings size={16} /> 打開進階工具
@@ -2037,12 +2116,13 @@ export default function SystemMaintenance() {
     }
     if (!silent) setLoadingAction("summaryStatus");
     try {
-      const [dashboardSnap, therapistSnap, rankingsSnap, queueSnap, logsSnap] = await Promise.all([
+      const [dashboardSnap, therapistSnap, rankingsSnap, queueSnap, logsSnap, recalcFlagSnap] = await Promise.all([
         getDoc(doc(getCollectionPath("dashboard_summary"), targetMonth)),
         getDoc(doc(getCollectionPath("therapist_summary"), targetMonth)),
         getDoc(doc(getCollectionPath("rankings_summary"), targetMonth)),
         getDocs(query(getCollectionPath("recalc_queue"), where("status", "==", "pending"), limit(500))),
         getDocs(query(getCollectionPath("maintenance_logs"), where("month", "==", targetMonth), limit(120))),
+        getDoc(doc(getCollectionPath("summary_recalc_flags"), targetMonth)),
       ]);
 
       const summaryDocs = {
@@ -2061,6 +2141,11 @@ export default function SystemMaintenance() {
         .map((d) => ({ id: d.id, ...d.data() }))
         .filter((row) => getQueueYearMonth(row) === targetMonth);
 
+      const recalcFlag = recalcFlagSnap.exists() ? { id: recalcFlagSnap.id, ...recalcFlagSnap.data() } : null;
+      const recalcFlagStatus = String(recalcFlag?.status || "");
+      const flagDirty = Boolean(recalcFlag) && !["completed", "verified", "idle"].includes(recalcFlagStatus);
+      const effectivePendingCount = Math.max(pendingRows.length, Number(recalcFlag?.pendingCount || 0));
+
       const compareLogs = logsSnap.docs
         .map((d) => ({ id: d.id, ...d.data() }))
         .filter((row) => row.type === "dashboard_summary" && row.action === "compare_summary_with_raw")
@@ -2071,8 +2156,8 @@ export default function SystemMaintenance() {
 
       let statusKey = "ready";
       if (!allSummaryExists) statusKey = "missing";
-      else if (pendingRows.length > 0 && isSelectedCurrentMonth(targetMonth)) statusKey = "current_dirty";
-      else if (pendingRows.length > 0) statusKey = "dirty";
+      else if ((effectivePendingCount > 0 || flagDirty) && isSelectedCurrentMonth(targetMonth)) statusKey = "current_dirty";
+      else if (effectivePendingCount > 0 || flagDirty) statusKey = "dirty";
       else if (!latestCompare || !compareAfterBuild) statusKey = "unverified";
       else if (latestCompare.status === "matched") statusKey = "verified";
       else statusKey = "mismatch";
@@ -2085,9 +2170,14 @@ export default function SystemMaintenance() {
         summaryDocs,
         updatedAtText: updatedAtText ? new Date(updatedAtText).toLocaleString("zh-TW", { hour12: false }) : "-",
         lastUpdatedAtText: updatedAtText || "",
-        pendingCount: pendingRows.length,
-        pendingSources: [...new Set(pendingRows.map((row) => row.sourceType || row.source || "unknown"))],
-        latestPendingAt: pendingRows.map((row) => row.createdAtText || row.updatedAtText || "").filter(Boolean).sort().pop() || "-",
+        pendingCount: effectivePendingCount,
+        pendingQueueCount: pendingRows.length,
+        pendingSources: [...new Set(pendingRows.map((row) => row.sourceType || row.source || recalcFlag?.latestSourceType || "unknown"))],
+        latestPendingAt: pendingRows.map((row) => row.createdAtText || row.updatedAtText || "").filter(Boolean).sort().pop() || recalcFlag?.lastDirtyAtText || "-",
+        recalcFlag,
+        recalcFlagStatus: recalcFlagStatus || "none",
+        recalcFlagRebuildAfterAtText: recalcFlag?.rebuildAfterAtText || "",
+        lastDirtyAtText: recalcFlag?.lastDirtyAtText || "",
         lastCompareAt: latestCompare?.createdAtText ? new Date(latestCompare.createdAtText).toLocaleString("zh-TW", { hour12: false }) : "-",
         lastCompareStatus: latestCompare?.status || "-",
         lastCompareMismatchCount: latestCompare?.mismatchCount ?? 0,
@@ -2218,7 +2308,22 @@ export default function SystemMaintenance() {
         createdAt: serverTimestamp(),
         createdAtText: new Date().toISOString(),
       });
+      await addMaintenanceLog({
+        type: "dashboard_summary",
+        action: "compare_summary_with_raw",
+        month: calMonth,
+        status: isMatched ? "matched" : "mismatch",
+        mismatchCount: mismatchRows.length,
+        result: compareReport,
+        source: "month_report_assistant",
+      });
       await addMaintenanceLog({ type: "dashboard_summary", action: "month_end_summary_calibration", month: calMonth, status: isMatched ? "matched" : "mismatch", mismatchCount: mismatchRows.length, completedQueueCount: completedCount });
+      await markSummaryRecalcFlagCompleted(calMonth, {
+        status: isMatched ? "verified" : "mismatch",
+        result: isMatched ? "month_report_finalized" : "month_report_mismatch",
+        mismatchCount: mismatchRows.length,
+        completedQueueCount: completedCount,
+      });
       addLog(`✅ Summary 已重建並比對：${isMatched ? "全部一致" : `${mismatchRows.length} 項差異`}。`);
       addLog(`✅ ${completedCount.toLocaleString()} 筆 ${calMonth} pending queue 已標記完成。`);
       await loadDashboardSummaryStatus(calMonth, true);
@@ -2889,7 +2994,7 @@ export default function SystemMaintenance() {
                 月結前校準
               </BeautyButton>
             </ToolRow>
-            <ToolRow icon={Database} title="Dashboard Summary 重建" desc="依指定月份讀取店務日報、管理師日報、目標與組織架構，產生 dashboard_summary / therapist_summary / rankings_summary。暫不改動現有 Dashboard 顯示邏輯。" badge="Summary v1" tone="emerald">
+            <ToolRow icon={Database} title="進階：重建歷史報表" desc="一般情況請使用上方月份報表整理助手；此工具保留給需要單獨重建資料的人員使用。" badge="進階工具" tone="emerald">
               <div className="flex items-center gap-2 rounded-2xl border border-stone-100 bg-white/70 px-3 h-11"><Calendar size={14} className="text-stone-400" /><input type="month" value={calMonth} onChange={(e) => setCalMonth(e.target.value)} className="bg-transparent text-xs font-black text-stone-700 outline-none w-28" /></div>
               <BeautyButton onClick={handleRebuildDashboardSummary} disabled={loadingAction !== null} variant="primary">
                 {loadingAction === "rebuildSummary" ? <Loader2 size={14} className="animate-spin" /> : <Database size={14} />}
@@ -2924,7 +3029,7 @@ export default function SystemMaintenance() {
                 </div>
               </div>
             )}
-            <ToolRow icon={CheckCircle2} title="Dashboard Summary 比對" desc="讀取已建立的 summary，並用同月份原始明細即時計算一次，確認 summary 與明細結果是否一致。建議在 summary-first 上線前使用。" badge="驗證工具" tone="emerald">
+            <ToolRow icon={CheckCircle2} title="進階：歷史報表比對" desc="一般情況月份報表整理會自動比對；此工具保留給需要單獨確認數字一致性的人員使用。" badge="進階工具" tone="emerald">
               <div className="flex items-center gap-2 rounded-2xl border border-stone-100 bg-white/70 px-3 h-11"><Calendar size={14} className="text-stone-400" /><input type="month" value={calMonth} onChange={(e) => setCalMonth(e.target.value)} className="bg-transparent text-xs font-black text-stone-700 outline-none w-28" /></div>
               <BeautyButton onClick={handleCompareDashboardSummary} disabled={loadingAction !== null} variant="primary">
                 {loadingAction === "compareSummary" ? <Loader2 size={14} className="animate-spin" /> : <CheckCircle2 size={14} />}

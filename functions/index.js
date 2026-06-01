@@ -1063,3 +1063,941 @@ exports.recalculateMonthlyData = onRequest({ cors: true }, async (req, res) => {
         res.send(`✅ 校準完成！[${brandId}] ${yearMonth}，共更新 ${updateCount} 家店鋪數據。`);
     } catch (err) { res.status(500).send("❌ 錯誤: " + err.message); }
 });
+
+
+// ==========================================
+// ★ 10. Dashboard Summary 自動修復 Worker
+// 目的：處理 summary_recalc_flags 裡已到時間的 dirty 月份。
+// 手動測試入口：repairDirtySummaryNow?brandId=cyj&yearMonth=2026-05
+// 自動排程：每 5 分鐘巡檢一次。
+// ==========================================
+
+const SUMMARY_REPAIR_BRANDS = ["cyj", "anniu", "yibo"];
+
+function normalizeSummaryCoreName(value) {
+  const raw = String(value || "")
+    .trim()
+    .replace(/[　\s]+/g, "")
+    .replace(/[（）()]/g, "");
+  if (!raw) return "";
+  return raw
+    .replace(/^(CYJ|DRCYJ|Anew安妞|Yibo伊啵|Anew|Yibo|安妞|伊啵)/i, "")
+    .replace(/店/g, "")
+    .replace(/臺/g, "台")
+    .trim();
+}
+
+function normalizeSummaryPersonName(value) {
+  return String(value || "")
+    .trim()
+    .replace(/[　\s]+/g, "")
+    .replace(/[（）()]/g, "");
+}
+
+function getSummaryMonthRange(yearMonth) {
+  const [year, month] = String(yearMonth || "").split("-").map(Number);
+  if (!year || !month) return null;
+  const lastDay = new Date(year, month, 0).getDate();
+  return {
+    year,
+    month,
+    start: `${year}-${String(month).padStart(2, "0")}-01`,
+    end: `${year}-${String(month).padStart(2, "0")}-${String(lastDay).padStart(2, "0")}`,
+    daysInMonth: lastDay,
+  };
+}
+
+
+function getTaipeiYearMonthForAutoRepair() {
+  const now = new Date();
+  const taipei = new Date(now.getTime() + 8 * 60 * 60 * 1000);
+  return `${taipei.getUTCFullYear()}-${String(taipei.getUTCMonth() + 1).padStart(2, "0")}`;
+}
+
+function isHistoricalYearMonthForAutoRepair(yearMonth) {
+  const ym = String(yearMonth || "");
+  if (!/^\d{4}-\d{2}$/.test(ym)) return false;
+  return ym < getTaipeiYearMonthForAutoRepair();
+}
+
+function getSummaryBrandPrefix(brandId, brandLabel = "") {
+  const id = String(brandId || "").toLowerCase();
+  if (id.includes("anniu") || id.includes("anew") || brandLabel === "安妞") return "安妞";
+  if (id.includes("yibo") || brandLabel === "伊啵") return "伊啵";
+  return "CYJ";
+}
+
+function isLegacyCyjBrand(brandId) {
+  const id = String(brandId || "").toLowerCase();
+  return id === "cyj" || id === "default-app-id" || id === "default";
+}
+
+function getBrandRootRef(brandId) {
+  return db.collection("brands").doc(String(brandId || "cyj"));
+}
+
+// Summary / flags / settings 目前仍寫在 brands/{brandId} 底下，讓前端 Dashboard 可直接讀取。
+function getSummaryCollection(brandId, collectionName) {
+  return getBrandRootRef(brandId).collection(collectionName);
+}
+
+// 原 CYJ 日報仍在 artifacts/default-app-id/public/data；其他品牌在 brands/{brandId}。
+// 自動整理 Summary 時，輸出仍寫回 brands/cyj，但原始明細必須從 legacy path 讀取。
+function getSummarySourceCollection(brandId, collectionName) {
+  if (isLegacyCyjBrand(brandId) && ["daily_reports", "therapist_daily_reports", "therapists"].includes(collectionName)) {
+    return db.collection("artifacts").doc("default-app-id").collection("public").doc("data").collection(collectionName);
+  }
+  return getSummaryCollection(brandId, collectionName);
+}
+
+async function getSummaryBrandLabel(brandId) {
+  try {
+    const snap = await getBrandRootRef(brandId).get();
+    const data = snap.exists ? snap.data() || {} : {};
+    return data.label || data.name || getSummaryBrandPrefix(brandId);
+  } catch (error) {
+    return getSummaryBrandPrefix(brandId);
+  }
+}
+
+async function getAutoOrgStructureProfile(brandId) {
+  const snap = await getBrandRootRef(brandId).collection("settings").doc("org_structure").get();
+  const managers = snap.exists ? snap.data()?.managers || {} : {};
+  const storeOwner = {};
+  const duplicateStores = [];
+
+  Object.entries(managers || {}).forEach(([managerName, stores]) => {
+    (Array.isArray(stores) ? stores : []).filter(Boolean).forEach((store) => {
+      const core = normalizeSummaryCoreName(store);
+      if (!core) return;
+      if (storeOwner[core] && storeOwner[core] !== managerName) {
+        duplicateStores.push({ store: core, owners: [storeOwner[core], managerName] });
+      }
+      storeOwner[core] = managerName;
+    });
+  });
+
+  return {
+    managers,
+    stores: Object.keys(storeOwner),
+    storeSet: new Set(Object.keys(storeOwner)),
+    duplicateStores,
+    unassignedStores: (Array.isArray(managers["未分配"]) ? managers["未分配"] : []).map(normalizeSummaryCoreName).filter(Boolean),
+  };
+}
+
+function extractAutoTargetYearMonth(docId, data = {}) {
+  if (data.yearMonth && /^\d{4}-\d{2}$/.test(String(data.yearMonth))) return String(data.yearMonth);
+  const y = data.year || data.targetYear;
+  const m = data.month || data.targetMonth;
+  if (y && m) return `${y}-${String(m).padStart(2, "0")}`;
+  const id = String(docId || "");
+  const match = id.match(/(20\d{2})[-_](\d{1,2})/);
+  if (match) return `${match[1]}-${String(match[2]).padStart(2, "0")}`;
+  return "";
+}
+
+function extractAutoTargetStore(docId, data = {}, yearMonth = "") {
+  const raw = data.storeName || data.store || data.storeId || data.shopName || data.shop || data.name || "";
+  if (raw) return normalizeSummaryCoreName(raw);
+  let id = String(docId || "");
+  const [year, month] = String(yearMonth || "").split("-");
+  if (year && month) {
+    id = id
+      .replace(new RegExp(`[_-]?${year}[_-]?${Number(month)}$`), "")
+      .replace(new RegExp(`[_-]?${year}[_-]?${month}$`), "");
+  }
+  return normalizeSummaryCoreName(id);
+}
+
+async function loadAutoMonthlyTargetMap(brandId, yearMonth) {
+  const snap = await getSummaryCollection(brandId, "monthly_targets").get();
+  const targetMap = {};
+  snap.docs.forEach((docSnap) => {
+    const data = docSnap.data() || {};
+    const targetMonth = extractAutoTargetYearMonth(docSnap.id, data);
+    if (targetMonth && targetMonth !== yearMonth) return;
+    const storeCore = extractAutoTargetStore(docSnap.id, data, yearMonth);
+    if (!storeCore) return;
+    targetMap[storeCore] = {
+      id: docSnap.id,
+      cashTarget: Number(data.cashTarget || data.cash || data.budget || data.target || 0),
+      accrualTarget: Number(data.accrualTarget || data.accrual || data.accrualBudget || 0),
+      challengeCashTarget: Number(data.challengeCashTarget || data.challengeCash || data.challengeTarget || 0),
+      challengeAccrualTarget: Number(data.challengeAccrualTarget || data.challengeAccrual || 0),
+    };
+  });
+  return targetMap;
+}
+
+async function buildAutoDashboardSummaryPayloads(brandId, yearMonth) {
+  const brandLabel = await getSummaryBrandLabel(brandId);
+  const range = getSummaryMonthRange(yearMonth);
+  if (!range) throw new Error("月份格式錯誤");
+
+  const orgProfile = await getAutoOrgStructureProfile(brandId);
+  const targets = await loadAutoMonthlyTargetMap(brandId, yearMonth);
+  const storeOwner = {};
+  Object.entries(orgProfile.managers || {}).forEach(([managerName, stores]) => {
+    (Array.isArray(stores) ? stores : []).forEach((store) => {
+      const core = normalizeSummaryCoreName(store);
+      if (core) storeOwner[core] = managerName;
+    });
+  });
+
+  const [dailySnap, therapistSnap, therapistListSnap] = await Promise.all([
+    getSummarySourceCollection(brandId, "daily_reports").where("date", ">=", range.start).where("date", "<=", range.end).get(),
+    getSummarySourceCollection(brandId, "therapist_daily_reports").where("date", ">=", range.start).where("date", "<=", range.end).get(),
+    getSummarySourceCollection(brandId, "therapists").get(),
+  ]);
+
+  const dailyRows = dailySnap.docs
+    .map((d) => ({ id: d.id, ...d.data() }))
+    .filter((row) => row.isArchivedDuplicate !== true);
+  const therapistRows = therapistSnap.docs
+    .map((d) => ({ id: d.id, ...d.data() }))
+    .filter((row) => row.isArchivedDuplicate !== true);
+
+  // 安全防護：若此月份有店家架構或目標，但原始日報讀到 0 筆，通常代表讀錯來源路徑。
+  // 這時不可寫出「0 業績 verified Summary」，避免 Dashboard 被錯誤 Summary 誤導。
+  if (dailyRows.length === 0 && (orgProfile.stores.length > 0 || Object.keys(targets).length > 0)) {
+    throw new Error(`自動整理中止：${brandId} ${yearMonth} 原始店日報為 0 筆，但已有店家或目標資料，請確認來源路徑。`);
+  }
+
+  const brandPrefix = getSummaryBrandPrefix(brandId, brandLabel);
+
+  const dailyTotals = Array.from({ length: range.daysInMonth }, (_, i) => ({
+    day: i + 1,
+    date: `${range.month}/${i + 1}`,
+    cash: 0,
+    traffic: 0,
+  }));
+
+  const storeMap = {};
+  const managerMap = {};
+  const ensureStore = (storeCore) => {
+    if (!storeMap[storeCore]) {
+      const manager = storeOwner[storeCore] || "未分配";
+      storeMap[storeCore] = {
+        store: storeCore,
+        displayName: `${brandPrefix}${storeCore}店`,
+        manager,
+        cash: 0,
+        accrual: 0,
+        operationalAccrual: 0,
+        skincareSales: 0,
+        traffic: 0,
+        newCustomers: 0,
+        newCustomerClosings: 0,
+        newCustomerSales: 0,
+        refund: 0,
+        skincareRefund: 0,
+        budget: 0,
+        accrualBudget: 0,
+        challengeBudget: 0,
+        challengeAccrualBudget: 0,
+        achievement: 0,
+        rank: 0,
+      };
+    }
+    return storeMap[storeCore];
+  };
+
+  const grand = {
+    cash: 0,
+    accrual: 0,
+    operationalAccrual: 0,
+    skincareSales: 0,
+    traffic: 0,
+    newCustomers: 0,
+    newCustomerClosings: 0,
+    newCustomerSales: 0,
+    refund: 0,
+    skincareRefund: 0,
+    budget: 0,
+    accrualBudget: 0,
+    challengeBudget: 0,
+    challengeAccrualBudget: 0,
+    totalAchievement: 0,
+    totalAccrualAchievement: 0,
+    challengeAchievement: 0,
+    challengeAccrualAchievement: 0,
+    projection: 0,
+    accrualProjection: 0,
+  };
+
+  dailyRows.forEach((row) => {
+    const storeCore = normalizeSummaryCoreName(row.storeName || row.store || row.storeId || "");
+    if (!storeCore) return;
+    const store = ensureStore(storeCore);
+    const cash = (Number(row.cash) || 0) - (Number(row.refund) || 0);
+    const operationalAccrual = Number(row.operationalAccrual) || 0;
+    const skincareSales = Number(row.skincareSales) || 0;
+    const accrual = brandPrefix === "安妞" ? operationalAccrual : Number(row.accrual) || 0;
+    const traffic = Number(row.traffic) || 0;
+    const newCustomers = Number(row.newCustomers) || 0;
+    const newCustomerClosings = Number(row.newCustomerClosings) || 0;
+    const newCustomerSales = Number(row.newCustomerSales) || 0;
+    const refund = Number(row.refund) || 0;
+    const skincareRefund = Number(row.skincareRefund) || 0;
+
+    store.cash += cash;
+    store.accrual += accrual;
+    store.operationalAccrual += operationalAccrual;
+    store.skincareSales += skincareSales;
+    store.traffic += traffic;
+    store.newCustomers += newCustomers;
+    store.newCustomerClosings += newCustomerClosings;
+    store.newCustomerSales += newCustomerSales;
+    store.refund += refund;
+    store.skincareRefund += skincareRefund;
+
+    grand.cash += cash;
+    grand.accrual += accrual;
+    grand.operationalAccrual += operationalAccrual;
+    grand.skincareSales += skincareSales;
+    grand.traffic += traffic;
+    grand.newCustomers += newCustomers;
+    grand.newCustomerClosings += newCustomerClosings;
+    grand.newCustomerSales += newCustomerSales;
+    grand.refund += refund;
+    grand.skincareRefund += skincareRefund;
+
+    const day = Number(String(row.date || "").slice(8, 10));
+    if (day && dailyTotals[day - 1]) {
+      dailyTotals[day - 1].cash += cash;
+      dailyTotals[day - 1].traffic += traffic;
+    }
+  });
+
+  Object.keys({ ...storeOwner, ...storeMap, ...targets }).forEach((storeCore) => {
+    if (!storeCore) return;
+    const store = ensureStore(storeCore);
+    const target = targets[storeCore];
+    if (target) {
+      store.budget = Number(target.cashTarget || 0);
+      store.accrualBudget = Number(target.accrualTarget || 0);
+      store.challengeBudget = Number(target.challengeCashTarget || 0) || store.budget;
+      store.challengeAccrualBudget = Number(target.challengeAccrualTarget || 0) || store.accrualBudget;
+    }
+    store.achievement = store.budget > 0 ? (store.cash / store.budget) * 100 : 0;
+    grand.budget += store.budget;
+    grand.accrualBudget += store.accrualBudget;
+    grand.challengeBudget += store.challengeBudget;
+    grand.challengeAccrualBudget += store.challengeAccrualBudget;
+  });
+
+  grand.totalAchievement = grand.budget > 0 ? (grand.cash / grand.budget) * 100 : 0;
+  grand.totalAccrualAchievement = grand.accrualBudget > 0 ? (grand.accrual / grand.accrualBudget) * 100 : 0;
+  grand.challengeAchievement = grand.challengeBudget > 0 ? (grand.cash / grand.challengeBudget) * 100 : 0;
+  grand.challengeAccrualAchievement = grand.challengeAccrualBudget > 0 ? (grand.accrual / grand.challengeAccrualBudget) * 100 : 0;
+
+  const storeRanking = Object.values(storeMap).sort((a, b) => b.cash - a.cash).map((store, index) => ({ ...store, rank: index + 1 }));
+  storeRanking.forEach((store) => { storeMap[store.store].rank = store.rank; });
+
+  Object.entries(orgProfile.managers || {}).forEach(([managerName, stores]) => {
+    if (managerName === "未分配") return;
+    managerMap[managerName] = {
+      manager: managerName,
+      stores: (Array.isArray(stores) ? stores : []).map(normalizeSummaryCoreName).filter(Boolean),
+      cash: 0,
+      accrual: 0,
+      budget: 0,
+      achievement: 0,
+      rank: 0,
+    };
+  });
+  Object.values(storeMap).forEach((store) => {
+    const managerName = store.manager || "未分配";
+    if (!managerMap[managerName]) managerMap[managerName] = { manager: managerName, stores: [], cash: 0, accrual: 0, budget: 0, achievement: 0, rank: 0 };
+    if (!managerMap[managerName].stores.includes(store.store)) managerMap[managerName].stores.push(store.store);
+    managerMap[managerName].cash += store.cash;
+    managerMap[managerName].accrual += store.accrual;
+    managerMap[managerName].budget += store.budget;
+  });
+  Object.values(managerMap).forEach((manager) => { manager.achievement = manager.budget > 0 ? (manager.cash / manager.budget) * 100 : 0; });
+  Object.values(managerMap).sort((a, b) => b.cash - a.cash).forEach((manager, index) => { manager.rank = index + 1; });
+
+  const storeRevenueByDate = (date) => Object.values(dailyRows.reduce((acc, row) => {
+    if (row.date !== date) return acc;
+    const storeCore = normalizeSummaryCoreName(row.storeName || row.store || row.storeId || "");
+    if (!storeCore) return acc;
+    if (!acc[storeCore]) acc[storeCore] = { store: storeCore, name: `${brandPrefix}${storeCore}店`, revenue: 0, manager: storeOwner[storeCore] || "未分配" };
+    acc[storeCore].revenue += (Number(row.cash) || 0) - (Number(row.refund) || 0);
+    return acc;
+  }, {})).sort((a, b) => b.revenue - a.revenue).slice(0, 3);
+
+  const today = new Date();
+  const todayStr = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, "0")}-${String(today.getDate()).padStart(2, "0")}`;
+  const yesterday = new Date(today); yesterday.setDate(yesterday.getDate() - 1);
+  const yesterdayStr = `${yesterday.getFullYear()}-${String(yesterday.getMonth() + 1).padStart(2, "0")}-${String(yesterday.getDate()).padStart(2, "0")}`;
+
+  const therapistMaster = {};
+  therapistListSnap.docs.forEach((d) => {
+    const data = d.data() || {};
+    therapistMaster[d.id] = { id: d.id, name: data.name || "", store: normalizeSummaryCoreName(data.store || data.storeName || ""), status: data.status || "" };
+  });
+
+  const therapistMap = {};
+  therapistRows.forEach((row) => {
+    const id = row.therapistId || row.id || normalizeSummaryPersonName(row.therapistName);
+    if (!id) return;
+    const storeCore = normalizeSummaryCoreName(row.storeName || row.store || row.storeId || "");
+    if (!therapistMap[id]) {
+      therapistMap[id] = {
+        id,
+        name: therapistMaster[id]?.name || row.therapistName || "未命名",
+        store: storeCore,
+        storeDisplay: storeCore ? `${storeCore}店` : "未知店",
+        manager: storeOwner[storeCore] || "未分配",
+        totalRevenue: 0,
+        serviceCount: 0,
+        newCustomerRevenue: 0,
+        oldCustomerRevenue: 0,
+        newCustomerCount: 0,
+        oldCustomerCount: 0,
+        newCustomerClosings: 0,
+        returnRevenue: 0,
+        newClosingRate: 0,
+        newAsp: 0,
+        oldAsp: 0,
+        rank: 0,
+        status: "NORMAL",
+      };
+    }
+    const t = therapistMap[id];
+    t.totalRevenue += Number(row.totalRevenue) || 0;
+    t.serviceCount += Number(row.serviceCount) || 0;
+    t.newCustomerRevenue += Number(row.newCustomerRevenue) || 0;
+    t.oldCustomerRevenue += Number(row.oldCustomerRevenue) || 0;
+    t.newCustomerCount += Number(row.newCustomerCount) || 0;
+    t.oldCustomerCount += Number(row.oldCustomerCount) || 0;
+    t.newCustomerClosings += Number(row.newCustomerClosings) || 0;
+    t.returnRevenue += Number(row.returnRevenue) || 0;
+  });
+
+  const therapistRankings = Object.values(therapistMap).sort((a, b) => b.totalRevenue - a.totalRevenue);
+  therapistRankings.forEach((item, index) => {
+    item.rank = index + 1;
+    item.totalPeers = therapistRankings.length;
+    item.status = item.rank <= 3 ? "TOP" : item.rank > therapistRankings.length - 10 ? "DANGER" : "NORMAL";
+    item.newClosingRate = item.newCustomerCount > 0 ? (item.newCustomerClosings / item.newCustomerCount) * 100 : 0;
+    item.newAsp = item.newCustomerCount > 0 ? item.newCustomerRevenue / item.newCustomerCount : 0;
+    item.oldAsp = item.oldCustomerCount > 0 ? item.oldCustomerRevenue / item.oldCustomerCount : 0;
+  });
+
+  const therapistGrand = therapistRankings.reduce((acc, item) => {
+    acc.totalRevenue += item.totalRevenue;
+    acc.serviceCount += item.serviceCount;
+    acc.newCustomerRevenue += item.newCustomerRevenue;
+    acc.oldCustomerRevenue += item.oldCustomerRevenue;
+    acc.newCustomerCount += item.newCustomerCount;
+    acc.oldCustomerCount += item.oldCustomerCount;
+    acc.newCustomerClosings += item.newCustomerClosings;
+    acc.returnRevenue += item.returnRevenue;
+    return acc;
+  }, { totalRevenue: 0, serviceCount: 0, newCustomerRevenue: 0, oldCustomerRevenue: 0, newCustomerCount: 0, oldCustomerCount: 0, newCustomerClosings: 0, returnRevenue: 0, count: therapistRankings.length });
+  therapistGrand.regionalNewClosingRate = therapistGrand.newCustomerCount > 0 ? (therapistGrand.newCustomerClosings / therapistGrand.newCustomerCount) * 100 : 0;
+  therapistGrand.regionalNewAsp = therapistGrand.newCustomerCount > 0 ? therapistGrand.newCustomerRevenue / therapistGrand.newCustomerCount : 0;
+
+  const topTherapistsByDate = (date) => Object.values(therapistRows.reduce((acc, row) => {
+    if (row.date !== date) return acc;
+    const id = row.therapistId || normalizeSummaryPersonName(row.therapistName);
+    if (!id) return acc;
+    if (!acc[id]) acc[id] = { id, name: therapistMaster[id]?.name || row.therapistName || "未命名", storeDisplay: `${normalizeSummaryCoreName(row.storeName || row.store || row.storeId || "")}店`, revenue: 0 };
+    acc[id].revenue += Number(row.totalRevenue) || 0;
+    return acc;
+  }, {})).sort((a, b) => b.revenue - a.revenue).slice(0, 3);
+
+  const nowIso = new Date().toISOString();
+  const nowTimestamp = admin.firestore.FieldValue.serverTimestamp();
+
+  const dashboardSummary = {
+    brandId,
+    brandLabel,
+    brandPrefix,
+    yearMonth,
+    monthStart: range.start,
+    monthEnd: range.end,
+    grandTotal: grand,
+    stores: storeMap,
+    storeRankings: storeRanking,
+    managers: managerMap,
+    dailyTotals,
+    storeTop3: {
+      today: storeRevenueByDate(todayStr),
+      yesterday: storeRevenueByDate(yesterdayStr),
+      monthly: storeRanking.slice(0, 3).map((s) => ({ name: s.displayName, store: s.store, revenue: s.cash, manager: s.manager })),
+    },
+    sourceCounts: { dailyReports: dailyRows.length, targetStores: Object.keys(targets).length, stores: Object.keys(storeMap).length },
+    lastUpdatedAt: nowTimestamp,
+    lastUpdatedAtText: nowIso,
+    source: "auto_summary_repair",
+    version: "dashboard-summary-v1",
+  };
+
+  const therapistSummary = {
+    brandId,
+    brandLabel,
+    yearMonth,
+    monthStart: range.start,
+    monthEnd: range.end,
+    grandTotal: therapistGrand,
+    rankings: therapistRankings,
+    todayTop3: topTherapistsByDate(todayStr),
+    yesterdayTop3: topTherapistsByDate(yesterdayStr),
+    monthlyTop5: therapistRankings.slice(0, 5),
+    sourceCounts: { therapistReports: therapistRows.length, therapists: therapistRankings.length },
+    lastUpdatedAt: nowTimestamp,
+    lastUpdatedAtText: nowIso,
+    source: "auto_summary_repair",
+    version: "therapist-summary-v1",
+  };
+
+  const rankingsSummary = {
+    brandId,
+    brandLabel,
+    yearMonth,
+    storeTop3: dashboardSummary.storeTop3,
+    storeRankings: storeRanking.map((s) => ({ store: s.store, displayName: s.displayName, manager: s.manager, cash: s.cash, budget: s.budget, achievement: s.achievement, rank: s.rank })),
+    therapistTop3: { today: therapistSummary.todayTop3, yesterday: therapistSummary.yesterdayTop3, monthly: therapistSummary.monthlyTop5.slice(0, 3) },
+    therapistRankings: therapistRankings.map((t) => ({ id: t.id, name: t.name, storeDisplay: t.storeDisplay, manager: t.manager, totalRevenue: t.totalRevenue, rank: t.rank, status: t.status })),
+    lastUpdatedAt: nowTimestamp,
+    lastUpdatedAtText: nowIso,
+    source: "auto_summary_repair",
+    version: "rankings-summary-v1",
+  };
+
+  return { dashboardSummary, therapistSummary, rankingsSummary, brandLabel };
+}
+
+function getAutoMetricValue(obj, path) {
+  return path.split(".").reduce((acc, key) => (acc && acc[key] !== undefined ? acc[key] : 0), obj || {});
+}
+
+function makeAutoSummaryCompareRows({ storedDashboard, storedTherapist, freshDashboard, freshTherapist }) {
+  const rows = [
+    { label: "現金業績", stored: getAutoMetricValue(storedDashboard, "grandTotal.cash"), fresh: getAutoMetricValue(freshDashboard, "grandTotal.cash"), type: "money" },
+    { label: "權責業績", stored: getAutoMetricValue(storedDashboard, "grandTotal.accrual"), fresh: getAutoMetricValue(freshDashboard, "grandTotal.accrual"), type: "money" },
+    { label: "人員業績", stored: getAutoMetricValue(storedTherapist, "grandTotal.totalRevenue"), fresh: getAutoMetricValue(freshTherapist, "grandTotal.totalRevenue"), type: "money" },
+    { label: "店日報筆數", stored: getAutoMetricValue(storedDashboard, "sourceCounts.dailyReports"), fresh: getAutoMetricValue(freshDashboard, "sourceCounts.dailyReports"), type: "count" },
+    { label: "管理師日報筆數", stored: getAutoMetricValue(storedTherapist, "sourceCounts.therapistReports"), fresh: getAutoMetricValue(freshTherapist, "sourceCounts.therapistReports"), type: "count" },
+    { label: "店家數", stored: getAutoMetricValue(storedDashboard, "sourceCounts.stores"), fresh: getAutoMetricValue(freshDashboard, "sourceCounts.stores"), type: "count" },
+    { label: "管理師數", stored: getAutoMetricValue(storedTherapist, "sourceCounts.therapists"), fresh: getAutoMetricValue(freshTherapist, "sourceCounts.therapists"), type: "count" },
+    { label: "目標店數", stored: getAutoMetricValue(storedDashboard, "sourceCounts.targetStores"), fresh: getAutoMetricValue(freshDashboard, "sourceCounts.targetStores"), type: "count" },
+  ];
+
+  return rows.map((row) => {
+    const diff = Number(row.stored || 0) - Number(row.fresh || 0);
+    const diffRate = Number(row.fresh || 0) !== 0 ? (diff / Number(row.fresh || 0)) * 100 : (diff === 0 ? 0 : 100);
+    return { ...row, diff, diffRate, matched: Math.abs(diff) < 0.0001 };
+  });
+}
+
+async function loadPendingQueueRowsForAutoRepair(brandId, yearMonth) {
+  const snap = await getSummaryCollection(brandId, "recalc_queue")
+    .where("status", "==", "pending")
+    .limit(500)
+    .get();
+
+  return snap.docs
+    .map((d) => ({ id: d.id, ...d.data() }))
+    .filter((row) => {
+      const raw = row.affectedYearMonth || row.yearMonth || String(row.date || row.sourceDate || "").slice(0, 7);
+      return raw === yearMonth;
+    });
+}
+
+async function markAutoRecalcQueueCompleted(brandId, yearMonth, rows = [], resultText = "") {
+  if (!rows.length) return 0;
+
+  let batch = db.batch();
+  let pendingWrites = 0;
+  let updated = 0;
+  const nowIso = new Date().toISOString();
+
+  for (const row of rows) {
+    if (!row.id) continue;
+    batch.update(getSummaryCollection(brandId, "recalc_queue").doc(row.id), {
+      status: "completed",
+      completedAt: admin.firestore.FieldValue.serverTimestamp(),
+      completedAtText: nowIso,
+      completedBy: "auto_summary_repair_worker",
+      completedByRole: "system",
+      calibrationResult: resultText ? String(resultText).slice(0, 500) : "auto_completed",
+    });
+    pendingWrites += 1;
+    updated += 1;
+    if (pendingWrites >= 450) {
+      await batch.commit();
+      batch = db.batch();
+      pendingWrites = 0;
+    }
+  }
+
+  if (pendingWrites > 0) await batch.commit();
+  return updated;
+}
+
+async function writeAutoMaintenanceLog(brandId, payload) {
+  const brandLabel = payload.brandLabel || await getSummaryBrandLabel(brandId);
+  return getSummaryCollection(brandId, "maintenance_logs").add({
+    brandId,
+    brandLabel,
+    operator: "auto_summary_repair_worker",
+    operatorRole: "system",
+    createdAt: admin.firestore.FieldValue.serverTimestamp(),
+    createdAtText: new Date().toISOString(),
+    ...payload,
+  });
+}
+
+async function finalizeMonthReportAuto({ brandId, yearMonth, trigger = "auto_worker", force = false }) {
+  if (!brandId || !/^\d{4}-\d{2}$/.test(String(yearMonth || ""))) {
+    throw new Error("brandId 或 yearMonth 格式錯誤");
+  }
+
+  const flagRef = getSummaryCollection(brandId, "summary_recalc_flags").doc(yearMonth);
+  const flagSnap = await flagRef.get();
+  const flagData = flagSnap.exists ? flagSnap.data() || {} : {};
+
+  if (!force && !isHistoricalYearMonthForAutoRepair(yearMonth)) {
+    return { skipped: true, reason: "not_historical_month", brandId, yearMonth, currentMonth: getTaipeiYearMonthForAutoRepair() };
+  }
+
+  const hasQueueFallback = Number(arguments?.[0]?.pendingCount || 0) > 0 && Array.isArray(arguments?.[0]?.sources) && arguments[0].sources.includes("recalc_queue");
+
+  if (!force) {
+    const status = String(flagData.status || "");
+    // 若 recalc_queue 仍有 pending，即使 flag 已是 verified，也要允許重跑一次並把 queue 清乾淨。
+    if (!hasQueueFallback && status && status !== "dirty" && status !== "mismatch" && status !== "pending") {
+      return { skipped: true, reason: `status_is_${status}`, brandId, yearMonth };
+    }
+    if (flagData.rebuildAfterAtText && !hasQueueFallback) {
+      const rebuildAt = new Date(flagData.rebuildAfterAtText);
+      if (!Number.isNaN(rebuildAt.getTime()) && rebuildAt.getTime() > Date.now()) {
+        return { skipped: true, reason: "debounce_not_ready", brandId, yearMonth, rebuildAfterAtText: flagData.rebuildAfterAtText };
+      }
+    }
+  }
+
+  const lockId = `auto_${Date.now()}`;
+  const lockUntil = new Date(Date.now() + 10 * 60 * 1000).toISOString();
+  await db.runTransaction(async (tx) => {
+    const latestSnap = await tx.get(flagRef);
+    const latest = latestSnap.exists ? latestSnap.data() || {} : {};
+    const latestStatus = String(latest.status || "");
+    const latestLockUntil = latest.lockUntilText ? new Date(latest.lockUntilText).getTime() : 0;
+
+    if (!force && latestStatus === "rebuilding" && latestLockUntil > Date.now()) {
+      throw new Error(`此月份正在整理中，鎖定到 ${latest.lockUntilText}`);
+    }
+
+    if (!force && latest.rebuildAfterAtText && !hasQueueFallback) {
+      const rebuildAt = new Date(latest.rebuildAfterAtText);
+      if (!Number.isNaN(rebuildAt.getTime()) && rebuildAt.getTime() > Date.now()) {
+        throw new Error(`尚未到整理時間：${latest.rebuildAfterAtText}`);
+      }
+    }
+
+    tx.set(flagRef, {
+      brandId,
+      yearMonth,
+      affectedYearMonth: yearMonth,
+      status: "rebuilding",
+      dirty: true,
+      lockedBy: "auto_summary_repair_worker",
+      lockId,
+      lockedAt: admin.firestore.FieldValue.serverTimestamp(),
+      lockedAtText: new Date().toISOString(),
+      lockUntilText: lockUntil,
+      updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+      updatedAtText: new Date().toISOString(),
+    }, { merge: true });
+  });
+
+  let isMatched = false;
+  let mismatchRows = [];
+  let completedCount = 0;
+  let buildReport = null;
+  let compareReport = null;
+  let brandLabel = await getSummaryBrandLabel(brandId);
+
+  try {
+    await writeAutoMaintenanceLog(brandId, { type: "dashboard_summary", action: "start_auto_month_report_finalize", month: yearMonth, status: "started", trigger, lockId, brandLabel });
+
+    const { dashboardSummary, therapistSummary, rankingsSummary } = await buildAutoDashboardSummaryPayloads(brandId, yearMonth);
+    brandLabel = dashboardSummary.brandLabel || brandLabel;
+
+    const batch = db.batch();
+    batch.set(getSummaryCollection(brandId, "dashboard_summary").doc(yearMonth), dashboardSummary);
+    batch.set(getSummaryCollection(brandId, "therapist_summary").doc(yearMonth), therapistSummary);
+    batch.set(getSummaryCollection(brandId, "rankings_summary").doc(yearMonth), rankingsSummary);
+    await batch.commit();
+
+    const rows = makeAutoSummaryCompareRows({ storedDashboard: dashboardSummary, storedTherapist: therapistSummary, freshDashboard: dashboardSummary, freshTherapist: therapistSummary });
+    mismatchRows = rows.filter((row) => !row.matched);
+    isMatched = mismatchRows.length === 0;
+
+    const pendingRows = await loadPendingQueueRowsForAutoRepair(brandId, yearMonth);
+    completedCount = await markAutoRecalcQueueCompleted(brandId, yearMonth, pendingRows, isMatched ? "auto_month_report_finalized" : "auto_month_report_mismatch");
+
+    buildReport = {
+      month: yearMonth,
+      dailyReports: dashboardSummary.sourceCounts.dailyReports,
+      therapistReports: therapistSummary.sourceCounts.therapistReports,
+      stores: dashboardSummary.sourceCounts.stores,
+      therapists: therapistSummary.sourceCounts.therapists,
+      cash: dashboardSummary.grandTotal.cash,
+      accrual: dashboardSummary.grandTotal.accrual,
+      therapistRevenue: therapistSummary.grandTotal.totalRevenue,
+      targetStores: dashboardSummary.sourceCounts.targetStores,
+      writtenDocs: 3,
+      createdAt: new Date().toLocaleString("zh-TW", { hour12: false }),
+      source: "auto_summary_repair_worker",
+    };
+
+    compareReport = {
+      month: yearMonth,
+      matched: isMatched,
+      status: isMatched ? "全部一致" : "發現差異",
+      mismatchCount: mismatchRows.length,
+      rows,
+      storedUpdatedAt: new Date().toLocaleString("zh-TW", { hour12: false }),
+      comparedAt: new Date().toLocaleString("zh-TW", { hour12: false }),
+      source: "auto_summary_repair_worker",
+    };
+
+    await getSummaryCollection(brandId, "calibration_logs").add({
+      brandId,
+      brandLabel,
+      month: yearMonth,
+      status: isMatched ? "success" : "mismatch",
+      source: "auto_month_report_finalize",
+      result: { buildReport, mismatchCount: mismatchRows.length, completedQueueCount: completedCount },
+      operator: "auto_summary_repair_worker",
+      createdAt: admin.firestore.FieldValue.serverTimestamp(),
+      createdAtText: new Date().toISOString(),
+    });
+
+    await writeAutoMaintenanceLog(brandId, {
+      type: "dashboard_summary",
+      action: "compare_summary_with_raw",
+      month: yearMonth,
+      status: isMatched ? "matched" : "mismatch",
+      mismatchCount: mismatchRows.length,
+      result: compareReport,
+      source: "auto_summary_repair_worker",
+      brandLabel,
+    });
+
+    await writeAutoMaintenanceLog(brandId, {
+      type: "dashboard_summary",
+      action: "auto_month_report_finalize",
+      month: yearMonth,
+      status: isMatched ? "matched" : "mismatch",
+      mismatchCount: mismatchRows.length,
+      completedQueueCount: completedCount,
+      trigger,
+      lockId,
+      brandLabel,
+    });
+
+    await flagRef.set({
+      brandId,
+      brandLabel,
+      yearMonth,
+      affectedYearMonth: yearMonth,
+      status: isMatched ? "verified" : "mismatch",
+      dirty: !isMatched,
+      pendingCount: isMatched ? 0 : completedCount,
+      lastCompletedAt: admin.firestore.FieldValue.serverTimestamp(),
+      lastCompletedAtText: new Date().toISOString(),
+      lastCompletedBy: "auto_summary_repair_worker",
+      lastCompletedByRole: "system",
+      lastResult: isMatched ? "auto_month_report_finalized" : "auto_month_report_mismatch",
+      lastMismatchCount: mismatchRows.length,
+      completedQueueCount: completedCount,
+      lockedBy: admin.firestore.FieldValue.delete(),
+      lockId: admin.firestore.FieldValue.delete(),
+      lockUntilText: admin.firestore.FieldValue.delete(),
+      updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+      updatedAtText: new Date().toISOString(),
+    }, { merge: true });
+
+    return { brandId, yearMonth, matched: isMatched, mismatchCount: mismatchRows.length, completedQueueCount: completedCount, buildReport, compareReport };
+  } catch (error) {
+    await flagRef.set({
+      brandId,
+      brandLabel,
+      yearMonth,
+      affectedYearMonth: yearMonth,
+      status: "dirty",
+      dirty: true,
+      lastError: error.message,
+      lastErrorAt: admin.firestore.FieldValue.serverTimestamp(),
+      lastErrorAtText: new Date().toISOString(),
+      lockedBy: admin.firestore.FieldValue.delete(),
+      lockId: admin.firestore.FieldValue.delete(),
+      lockUntilText: admin.firestore.FieldValue.delete(),
+      updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+      updatedAtText: new Date().toISOString(),
+    }, { merge: true });
+
+    await writeAutoMaintenanceLog(brandId, {
+      type: "dashboard_summary",
+      action: "fail_auto_month_report_finalize",
+      month: yearMonth,
+      status: "failed",
+      errorMessage: error.message,
+      trigger,
+      lockId,
+      brandLabel,
+    });
+    throw error;
+  }
+}
+
+async function collectReadyDirtySummaryFlags() {
+  const jobs = [];
+  const jobMap = new Map();
+  const now = Date.now();
+
+  const addJob = (job) => {
+    const brandId = String(job.brandId || "").trim();
+    const yearMonth = String(job.yearMonth || "").trim();
+    if (!brandId || !/^\d{4}-\d{2}$/.test(yearMonth)) return;
+    const key = `${brandId}_${yearMonth}`;
+    const existing = jobMap.get(key);
+    if (existing) {
+      jobMap.set(key, {
+        ...existing,
+        ...job,
+        pendingCount: Math.max(Number(existing.pendingCount || 0), Number(job.pendingCount || 0)),
+        sources: Array.from(new Set([...(existing.sources || []), ...(job.sources || [])])),
+      });
+      return;
+    }
+    jobMap.set(key, { ...job, brandId, yearMonth, sources: job.sources || [] });
+  };
+
+  const getQueueMonth = (row = {}) => {
+    const raw = row.affectedYearMonth || row.yearMonth || String(row.date || row.sourceDate || "").slice(0, 7);
+    return /^\d{4}-\d{2}$/.test(String(raw || "")) ? String(raw) : "";
+  };
+
+  for (const brandId of SUMMARY_REPAIR_BRANDS) {
+    // 來源 A：summary_recalc_flags。這是最理想的 dirty 標記來源。
+    try {
+      const flagSnap = await getSummaryCollection(brandId, "summary_recalc_flags")
+        .where("status", "in", ["dirty", "mismatch", "pending"])
+        .limit(20)
+        .get();
+
+      flagSnap.docs.forEach((docSnap) => {
+        const data = docSnap.data() || {};
+        const yearMonth = data.affectedYearMonth || data.yearMonth || docSnap.id;
+        if (!/^\d{4}-\d{2}$/.test(String(yearMonth || ""))) return;
+        // 當月與未來月份仍屬即時營運期，不應交給 Summary 自動修復處理。
+        if (!isHistoricalYearMonthForAutoRepair(yearMonth)) return;
+
+        const rebuildAtText = data.rebuildAfterAtText || data.updatedAtText || data.lastDirtyAtText || "";
+        if (rebuildAtText) {
+          const t = new Date(rebuildAtText).getTime();
+          if (!Number.isNaN(t) && t > now) return;
+        }
+
+        addJob({
+          brandId,
+          yearMonth,
+          status: data.status || "dirty",
+          pendingCount: Number(data.pendingCount || 0),
+          rebuildAfterAtText: data.rebuildAfterAtText || "",
+          sources: ["summary_recalc_flags"],
+        });
+      });
+    } catch (error) {
+      console.warn(`⚠️ Summary 自動修復：讀取 flags 失敗 ${brandId}`, error.message);
+    }
+
+    // 來源 B：recalc_queue pending。
+    // 防止某些歷史修改只寫入 recalc_queue，卻沒有建立 summary_recalc_flags，造成排程永遠掃不到。
+    try {
+      const queueSnap = await getSummaryCollection(brandId, "recalc_queue")
+        .where("status", "==", "pending")
+        .limit(500)
+        .get();
+
+      const queueGroups = {};
+      queueSnap.docs.forEach((docSnap) => {
+        const data = docSnap.data() || {};
+        const yearMonth = getQueueMonth(data);
+        if (!yearMonth) return;
+        // 只自動整理已成為歷史的月份；本月與未來月份不處理，避免 0 日報或預先目標造成錯誤重建。
+        if (!isHistoricalYearMonthForAutoRepair(yearMonth)) return;
+        if (!queueGroups[yearMonth]) {
+          queueGroups[yearMonth] = { count: 0, latestAt: "" };
+        }
+        queueGroups[yearMonth].count += 1;
+        const t = data.updatedAtText || data.createdAtText || data.date || data.sourceDate || "";
+        if (!queueGroups[yearMonth].latestAt || String(t) > String(queueGroups[yearMonth].latestAt)) {
+          queueGroups[yearMonth].latestAt = String(t);
+        }
+      });
+
+      Object.entries(queueGroups).forEach(([yearMonth, group]) => {
+        // recalc_queue 沒有 rebuildAfterAtText 時，代表 flag 可能漏寫。
+        // 為避免待整理月份卡住，排程看到 pending queue 就允許處理。
+        addJob({
+          brandId,
+          yearMonth,
+          status: "pending_queue",
+          pendingCount: Number(group.count || 0),
+          latestPendingAt: group.latestAt || "",
+          sources: ["recalc_queue"],
+        });
+      });
+    } catch (error) {
+      console.warn(`⚠️ Summary 自動修復：讀取 recalc_queue 失敗 ${brandId}`, error.message);
+    }
+  }
+
+  jobs.push(...Array.from(jobMap.values()).sort((a, b) => `${a.brandId}_${a.yearMonth}`.localeCompare(`${b.brandId}_${b.yearMonth}`)));
+  return jobs;
+}
+exports.repairDirtySummaryNow = onRequest({ cors: true, timeoutSeconds: 540, memory: "1GiB" }, async (req, res) => {
+  const brandId = String(req.query.brandId || "cyj").trim();
+  const yearMonth = String(req.query.yearMonth || "").trim();
+  const force = String(req.query.force || "false") === "true";
+
+  try {
+    const result = await finalizeMonthReportAuto({ brandId, yearMonth, trigger: "manual_http", force });
+    res.status(200).json({ ok: true, result });
+  } catch (error) {
+    console.error("repairDirtySummaryNow failed", error);
+    res.status(500).json({ ok: false, error: error.message });
+  }
+});
+
+exports.repairDirtySummaries = onSchedule({ schedule: "every 5 minutes", timeZone: "Asia/Taipei", timeoutSeconds: 540, memory: "1GiB" }, async () => {
+  const jobs = await collectReadyDirtySummaryFlags();
+  if (!jobs.length) {
+    console.log("✅ Summary 自動修復：目前沒有到期的 dirty / pending 月份。");
+    return;
+  }
+
+  console.log(`🧾 Summary 自動修復：本次找到 ${jobs.length} 個待處理月份：${jobs.map((j) => `${j.brandId}/${j.yearMonth}/${(j.sources || []).join('+') || j.status}/${j.pendingCount || 0}`).join(', ')}`);
+
+  for (const job of jobs) {
+    try {
+      const result = await finalizeMonthReportAuto({ ...job, trigger: "scheduled_worker", force: false });
+      if (result?.skipped) {
+        console.log(`⏭️ Summary 自動修復略過：${job.brandId}｜${job.yearMonth}｜${result.reason}`);
+      } else {
+        console.log(`✅ Summary 自動修復完成：${job.brandId}｜${job.yearMonth}｜matched=${result.matched}｜completed=${result.completedQueueCount}`);
+      }
+    } catch (error) {
+      console.error(`❌ Summary 自動修復失敗：${job.brandId}｜${job.yearMonth}`, error);
+    }
+  }
+});

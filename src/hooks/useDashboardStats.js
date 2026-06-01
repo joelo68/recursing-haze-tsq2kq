@@ -2,7 +2,7 @@
 import { useState, useMemo, useContext, useEffect } from 'react';
 import { AppContext } from '../AppContext';
 // ★ 新增了 collection 與 getDocs，讓我們一次把全公司的專屬小抄都抓下來
-import { doc, getDoc, collection, getDocs } from 'firebase/firestore'; 
+import { doc, getDoc, collection, getDocs, query, where, limit, onSnapshot } from 'firebase/firestore'; 
 import { db } from '../config/firebase';
 
 const safeNumber = (value) => Number.isFinite(Number(value)) ? Number(value) : 0;
@@ -206,6 +206,7 @@ export function useDashboardStats() {
     dashboard: null,
     therapist: null,
     rankings: null,
+    trustStatus: null,
     ready: false,
     error: null,
   });
@@ -216,61 +217,262 @@ export function useDashboardStats() {
     return y && m ? `${y}-${m}` : "";
   }, [selectedYear, selectedMonth]);
 
-  useEffect(() => {
-    let cancelled = false;
-
-    const fetchDashboardSummaries = async () => {
-      if (!getCollectionPath || !selectedYearMonth) {
-        if (!cancelled) setDashboardSummaryBundle({ dashboard: null, therapist: null, rankings: null, ready: true, error: null });
-        return;
-      }
-
-      try {
-        const [dashboardSnap, therapistSnap, rankingsSnap] = await Promise.all([
-          getDoc(doc(getCollectionPath("dashboard_summary"), selectedYearMonth)),
-          getDoc(doc(getCollectionPath("therapist_summary"), selectedYearMonth)),
-          getDoc(doc(getCollectionPath("rankings_summary"), selectedYearMonth)),
-        ]);
-
-        if (cancelled) return;
-
-        setDashboardSummaryBundle({
-          dashboard: dashboardSnap.exists() ? { id: dashboardSnap.id, ...dashboardSnap.data() } : null,
-          therapist: therapistSnap.exists() ? { id: therapistSnap.id, ...therapistSnap.data() } : null,
-          rankings: rankingsSnap.exists() ? { id: rankingsSnap.id, ...rankingsSnap.data() } : null,
-          ready: true,
-          error: null,
-        });
-      } catch (error) {
-        console.warn("Dashboard Summary 讀取失敗，將使用明細計算 fallback：", error);
-        if (!cancelled) setDashboardSummaryBundle({ dashboard: null, therapist: null, rankings: null, ready: true, error });
-      }
-    };
-
-    setDashboardSummaryBundle(prev => ({ ...prev, ready: false, error: null }));
-    fetchDashboardSummaries();
-
-    return () => { cancelled = true; };
-  }, [getCollectionPath, selectedYearMonth]);
-
   const isSelectedCurrentMonth = useMemo(() => {
     const now = new Date();
     return Number(selectedYear) === now.getFullYear() && Number(selectedMonth) === now.getMonth() + 1;
   }, [selectedYear, selectedMonth]);
 
-  const isFullBrandDashboardView = useMemo(() => {
-    // ★ 即時戰情保護：當月仍使用明細計算，避免晚上陸續回報時，Summary 尚未重建而造成今日排行榜/走勢/營運節奏不更新。
-    // Summary 先用於歷史月份與已結算月份；當月即時 Dashboard 等 App.jsx 載入分流完成後再進入下一階段。
+  const getSummaryQueueYearMonth = (row = {}) => {
+    const raw = row.affectedYearMonth || row.yearMonth || String(row.date || row.sourceDate || "").slice(0, 7);
+    return /^\d{4}-\d{2}$/.test(String(raw || "")) ? String(raw) : "未知月份";
+  };
+
+  const getDashboardSummaryTrustMeta = (statusKey) => {
+    const map = {
+      loading: {
+        label: "檢查中",
+        tone: "stone",
+        hint: "正在確認此月份 Summary 是否可作為 Dashboard 資料來源。",
+      },
+      missing: {
+        label: "尚未建立 Summary",
+        tone: "rose",
+        hint: "此月份尚未建立完整 Summary，Dashboard 會改用明細資料，避免顯示舊數字。",
+      },
+      dirty: {
+        label: "Summary 需重新整理",
+        tone: "amber",
+        hint: "此月份有待重算異動，Dashboard 暫時改用明細資料，避免舊 Summary 誤導判斷。",
+      },
+      current_dirty: {
+        label: "本月即時資料",
+        tone: "amber",
+        hint: "本月仍以即時明細為準，Summary 不作為 Dashboard 主要來源。",
+      },
+      unverified: {
+        label: "Summary 尚未比對",
+        tone: "amber",
+        hint: "Summary 已建立但尚未完成比對，Dashboard 暫時改用明細資料。",
+      },
+      mismatch: {
+        label: "Summary 比對異常",
+        tone: "rose",
+        hint: "Summary 與明細重算結果不一致，Dashboard 暫時改用明細資料。",
+      },
+      verified: {
+        label: "Summary 已驗證",
+        tone: "emerald",
+        hint: "Summary 已建立、無待重算異動，且最近一次比對通過。",
+      },
+      error: {
+        label: "Summary 狀態檢查失敗",
+        tone: "rose",
+        hint: "無法確認 Summary 可信度，Dashboard 會改用明細資料。",
+      },
+    };
+    return map[statusKey] || map.unverified;
+  };
+
+  useEffect(() => {
+    let cancelled = false;
+    const unsubscribers = [];
+
+    const buildTrustStatus = ({ dashboardData = {}, therapistData = {}, rankingsData = {}, summaryDocs = {}, queueRows = [], logRows = [], recalcFlag = null }) => {
+      const allSummaryExists = Boolean(summaryDocs.dashboard && summaryDocs.therapist && summaryDocs.rankings);
+      const updatedAtText = dashboardData.lastUpdatedAtText || therapistData.lastUpdatedAtText || rankingsData.lastUpdatedAtText || "";
+      const summaryUpdatedMs = updatedAtText ? new Date(updatedAtText).getTime() : 0;
+
+      const pendingRows = (queueRows || []).filter((row) => getSummaryQueueYearMonth(row) === selectedYearMonth);
+      const flagStatus = String(recalcFlag?.status || "");
+      const flagDirty = Boolean(recalcFlag) && !["completed", "verified", "idle"].includes(flagStatus);
+      const compareLogs = (logRows || [])
+        .filter((row) => row.type === "dashboard_summary" && row.action === "compare_summary_with_raw")
+        .sort((a, b) => new Date(b.createdAtText || 0).getTime() - new Date(a.createdAtText || 0).getTime());
+      const latestCompare = compareLogs[0] || null;
+      const latestCompareMs = latestCompare?.createdAtText ? new Date(latestCompare.createdAtText).getTime() : 0;
+      const compareAfterBuild = latestCompare && (!summaryUpdatedMs || latestCompareMs >= summaryUpdatedMs - 1000);
+
+      let statusKey = "unverified";
+      if (!allSummaryExists) statusKey = "missing";
+      else if ((pendingRows.length > 0 || flagDirty) && isSelectedCurrentMonth) statusKey = "current_dirty";
+      else if (pendingRows.length > 0 || flagDirty) statusKey = "dirty";
+      else if (!latestCompare || !compareAfterBuild) statusKey = "unverified";
+      else if (latestCompare.status === "matched") statusKey = "verified";
+      else statusKey = "mismatch";
+
+      const meta = getDashboardSummaryTrustMeta(statusKey);
+      return {
+        yearMonth: selectedYearMonth,
+        statusKey,
+        ...meta,
+        isTrusted: statusKey === "verified",
+        summaryDocs,
+        pendingCount: pendingRows.length,
+        pendingSources: [...new Set(pendingRows.map((row) => row.sourceType || row.source || "unknown"))],
+        recalcFlag: recalcFlag || null,
+        recalcFlagStatus: flagStatus || "none",
+        recalcFlagRebuildAfterAtText: recalcFlag?.rebuildAfterAtText || "",
+        lastDirtyAtText: recalcFlag?.lastDirtyAtText || "",
+        lastUpdatedAtText: updatedAtText,
+        lastCompareAtText: latestCompare?.createdAtText || "",
+        lastCompareStatus: latestCompare?.status || "-",
+        lastCompareMismatchCount: latestCompare?.mismatchCount ?? 0,
+        checkedAtText: new Date().toISOString(),
+      };
+    };
+
+    if (!getCollectionPath || !selectedYearMonth) {
+      setDashboardSummaryBundle({ dashboard: null, therapist: null, rankings: null, trustStatus: null, ready: true, error: null });
+      return () => { cancelled = true; };
+    }
+
+    setDashboardSummaryBundle(prev => ({
+      ...prev,
+      trustStatus: {
+        yearMonth: selectedYearMonth,
+        statusKey: "loading",
+        ...getDashboardSummaryTrustMeta("loading"),
+        isTrusted: false,
+        checkedAtText: new Date().toISOString(),
+      },
+      ready: false,
+      error: null,
+    }));
+
+    const liveState = {
+      dashboard: null,
+      therapist: null,
+      rankings: null,
+      summaryDocs: { dashboard: false, therapist: false, rankings: false },
+      queueRows: [],
+      logRows: [],
+      recalcFlag: null,
+      loaded: {
+        dashboard: false,
+        therapist: false,
+        rankings: false,
+        queue: false,
+        logs: false,
+        flag: false,
+      },
+    };
+
+    const publishIfReady = () => {
+      if (cancelled) return;
+      const isReady = Object.values(liveState.loaded).every(Boolean);
+      if (!isReady) return;
+
+      const trustStatus = buildTrustStatus({
+        dashboardData: liveState.dashboard || {},
+        therapistData: liveState.therapist || {},
+        rankingsData: liveState.rankings || {},
+        summaryDocs: liveState.summaryDocs,
+        queueRows: liveState.queueRows,
+        logRows: liveState.logRows,
+        recalcFlag: liveState.recalcFlag,
+      });
+
+      setDashboardSummaryBundle({
+        dashboard: liveState.dashboard,
+        therapist: liveState.therapist,
+        rankings: liveState.rankings,
+        trustStatus,
+        ready: true,
+        error: null,
+      });
+    };
+
+    const handleLiveError = (error) => {
+      console.warn("Dashboard Summary 即時狀態監聽失敗，將使用明細計算 fallback：", error);
+      if (cancelled) return;
+      setDashboardSummaryBundle({
+        dashboard: null,
+        therapist: null,
+        rankings: null,
+        trustStatus: {
+          yearMonth: selectedYearMonth,
+          statusKey: "error",
+          ...getDashboardSummaryTrustMeta("error"),
+          isTrusted: false,
+          pendingCount: 0,
+          summaryDocs: { dashboard: false, therapist: false, rankings: false },
+          checkedAtText: new Date().toISOString(),
+        },
+        ready: true,
+        error,
+      });
+    };
+
+    try {
+      unsubscribers.push(onSnapshot(doc(getCollectionPath("dashboard_summary"), selectedYearMonth), (snap) => {
+        liveState.dashboard = snap.exists() ? { id: snap.id, ...snap.data() } : null;
+        liveState.summaryDocs.dashboard = snap.exists();
+        liveState.loaded.dashboard = true;
+        publishIfReady();
+      }, handleLiveError));
+
+      unsubscribers.push(onSnapshot(doc(getCollectionPath("therapist_summary"), selectedYearMonth), (snap) => {
+        liveState.therapist = snap.exists() ? { id: snap.id, ...snap.data() } : null;
+        liveState.summaryDocs.therapist = snap.exists();
+        liveState.loaded.therapist = true;
+        publishIfReady();
+      }, handleLiveError));
+
+      unsubscribers.push(onSnapshot(doc(getCollectionPath("rankings_summary"), selectedYearMonth), (snap) => {
+        liveState.rankings = snap.exists() ? { id: snap.id, ...snap.data() } : null;
+        liveState.summaryDocs.rankings = snap.exists();
+        liveState.loaded.rankings = true;
+        publishIfReady();
+      }, handleLiveError));
+
+      unsubscribers.push(onSnapshot(query(getCollectionPath("recalc_queue"), where("status", "==", "pending"), limit(500)), (snap) => {
+        liveState.queueRows = snap.docs.map((d) => ({ id: d.id, ...d.data() }));
+        liveState.loaded.queue = true;
+        publishIfReady();
+      }, handleLiveError));
+
+      unsubscribers.push(onSnapshot(query(getCollectionPath("maintenance_logs"), where("month", "==", selectedYearMonth), limit(120)), (snap) => {
+        liveState.logRows = snap.docs.map((d) => ({ id: d.id, ...d.data() }));
+        liveState.loaded.logs = true;
+        publishIfReady();
+      }, handleLiveError));
+
+      unsubscribers.push(onSnapshot(doc(getCollectionPath("summary_recalc_flags"), selectedYearMonth), (snap) => {
+        liveState.recalcFlag = snap.exists() ? { id: snap.id, ...snap.data() } : null;
+        liveState.loaded.flag = true;
+        publishIfReady();
+      }, handleLiveError));
+    } catch (error) {
+      handleLiveError(error);
+    }
+
+    return () => {
+      cancelled = true;
+      unsubscribers.forEach((unsubscribe) => {
+        try { unsubscribe && unsubscribe(); } catch (error) { console.warn("Dashboard Summary listener cleanup failed", error); }
+      });
+    };
+  }, [getCollectionPath, selectedYearMonth, isSelectedCurrentMonth]);
+
+  const isSummaryTrustedForDashboard = useMemo(() => {
     if (isSelectedCurrentMonth) return false;
-    if (selectedDashboardManager || selectedDashboardStore) return false;
+    return dashboardSummaryBundle.trustStatus?.isTrusted === true;
+  }, [isSelectedCurrentMonth, dashboardSummaryBundle.trustStatus]);
+
+  const isSummaryDashboardView = useMemo(() => {
+    // ★ 即時戰情保護：本月仍使用明細計算，避免晚上陸續回報時 Dashboard 不更新。
+    if (isSelectedCurrentMonth) return false;
+    if (!isSummaryTrustedForDashboard) return false;
     if (!dashboardSummaryBundle.dashboard?.stores) return false;
 
-    // Summary v1 的 dailyTotals 目前是全品牌日線，尚未儲存「各店每日日線」。
-    // 因此第一版只在全品牌視角使用 summary，避免區長/店經理篩選時圖表不一致。
-    if (!(userRole === "director" || userRole === "master" || userRole === "trainer" || userRole === "therapist")) return false;
+    // ★ Summary v2 過渡版：
+    // verified Summary 不只支援全品牌，也支援區長 / 單店篩選。
+    // 這樣歷史月份整理完成後，切換單店或區域時也會用同一份可信 Summary，
+    // 避免回到未同步的歷史明細 fallback。
+    if (!(userRole === "director" || userRole === "master" || userRole === "trainer" || userRole === "manager" || userRole === "store" || userRole === "therapist")) return false;
 
     return true;
-  }, [isSelectedCurrentMonth, selectedDashboardManager, selectedDashboardStore, dashboardSummaryBundle.dashboard, userRole]);
+  }, [isSelectedCurrentMonth, isSummaryTrustedForDashboard, dashboardSummaryBundle.dashboard, userRole]);
 
   const buildProjectionFromSummaryStores = useMemo(() => (stores = [], daysPassed = 0, daysInMonth = 0) => {
     const emptyRange = {
@@ -348,7 +550,7 @@ export function useDashboardStats() {
 
   const summaryDashboardStats = useMemo(() => {
     const summary = dashboardSummaryBundle.dashboard;
-    if (!summary || !isFullBrandDashboardView) return null;
+    if (!summary || !isSummaryDashboardView) return null;
 
     const y = parseInt(selectedYear, 10);
     const m = parseInt(selectedMonth, 10);
@@ -357,9 +559,51 @@ export function useDashboardStats() {
     let daysPassed = daysInMonth;
     let isCurrentMonth = false;
 
+    const allSummaryStores = Object.values(summary.stores || {});
+    const effectiveStoreSet = new Set((effectiveStores || []).map(cleanName).filter(Boolean));
+    const shouldFilterSummaryStores = Boolean(
+      selectedDashboardManager ||
+      selectedDashboardStore ||
+      userRole === "manager" ||
+      userRole === "store"
+    );
+
+    const stores = shouldFilterSummaryStores && effectiveStoreSet.size > 0
+      ? allSummaryStores.filter((store) => effectiveStoreSet.has(cleanName(store.store || store.displayName || "")))
+      : allSummaryStores;
+
+    const sumFields = [
+      "cash", "accrual", "operationalAccrual", "skincareSales", "traffic",
+      "newCustomers", "newCustomerClosings", "newCustomerSales", "refund", "skincareRefund",
+      "budget", "accrualBudget", "challengeBudget", "challengeAccrualBudget"
+    ];
+
+    const aggregateGrandFromStores = (rows = []) => {
+      const acc = sumFields.reduce((obj, key) => ({ ...obj, [key]: 0 }), {});
+      rows.forEach((store) => {
+        sumFields.forEach((key) => { acc[key] += Number(store?.[key] || 0); });
+      });
+      acc.totalAchievement = acc.budget > 0 ? (acc.cash / acc.budget) * 100 : 0;
+      acc.totalAccrualAchievement = acc.accrualBudget > 0 ? (acc.accrual / acc.accrualBudget) * 100 : 0;
+      acc.challengeAchievement = acc.challengeBudget > 0 ? (acc.cash / acc.challengeBudget) * 100 : 0;
+      acc.challengeAccrualAchievement = acc.challengeAccrualBudget > 0 ? (acc.accrual / acc.challengeAccrualBudget) * 100 : 0;
+      return acc;
+    };
+
+    const isFilteredSummaryView = shouldFilterSummaryStores && effectiveStoreSet.size > 0;
+    const summaryGrand = summary.grandTotal || {};
+    const grand = isFilteredSummaryView ? aggregateGrandFromStores(stores) : { ...summaryGrand };
+    const projectionPayload = buildProjectionFromSummaryStores(stores, daysPassed, daysInMonth);
+
+    grand.hasChallengeCash = Number(grand.challengeBudget || 0) > Number(grand.budget || 0);
+    grand.hasChallengeAccrual = Number(grand.challengeAccrualBudget || 0) > Number(grand.accrualBudget || 0);
+    grand.projection = projectionPayload.projection || Number(grand.projection || 0);
+    grand.accrualProjection = projectionPayload.accrualProjection || Number(grand.accrualProjection || 0);
+    grand.projectionRange = projectionPayload.projectionRange || grand.projectionRange || null;
+
     // ★ 營運節奏維持原本邏輯：
     // 當月預設用「系統日 - 1 天」，避免主管白天查看時，把尚未結束營業的今天算進應達進度。
-    // 只有當 summary.dailyTotals 偵測到今日已經有有效回報數據時，才推進到系統日。
+    // 歷史月份則以完整月份呈現。
     const rawDailyTotals = Array.isArray(summary.dailyTotals) ? summary.dailyTotals : [];
     const getDailyDayNumber = (row, index) => Number(row?.day || index + 1);
     const hasMeaningfulDailyData = (row) => {
@@ -383,16 +627,6 @@ export function useDashboardStats() {
       daysPassed = 0;
     }
 
-    const stores = Object.values(summary.stores || {});
-    const grand = { ...(summary.grandTotal || {}) };
-    const projectionPayload = buildProjectionFromSummaryStores(stores, daysPassed, daysInMonth);
-
-    grand.hasChallengeCash = Number(grand.challengeBudget || 0) > Number(grand.budget || 0);
-    grand.hasChallengeAccrual = Number(grand.challengeAccrualBudget || 0) > Number(grand.accrualBudget || 0);
-    grand.projection = projectionPayload.projection || Number(grand.projection || 0);
-    grand.accrualProjection = projectionPayload.accrualProjection || Number(grand.accrualProjection || 0);
-    grand.projectionRange = projectionPayload.projectionRange || grand.projectionRange || null;
-
     const totalAchievement = Number(grand.budget || 0) > 0 ? (Number(grand.cash || 0) / Number(grand.budget || 0)) * 100 : 0;
     const totalAccrualAchievement = Number(grand.accrualBudget || 0) > 0 ? (Number(grand.accrual || 0) / Number(grand.accrualBudget || 0)) * 100 : 0;
     const challengeAchievement = Number(grand.challengeBudget || 0) > 0 ? (Number(grand.cash || 0) / Number(grand.challengeBudget || 0)) * 100 : 0;
@@ -409,14 +643,37 @@ export function useDashboardStats() {
     if (isCurrentMonth) chartDays = Math.max(1, daysPassed);
     else if (daysPassed === 0) chartDays = 0;
 
-    const dailyTotals = (summary.dailyTotals || []).slice(0, chartDays);
-
-    const mapStoreTop = (rows = []) => rows.map((item) => ({
-      name: item.name || item.displayName || (item.store ? `${item.store}店` : ""),
-      revenue: Number(item.revenue ?? item.cash ?? 0),
-      streak: false,
-      badgeText: "",
+    // Summary v1 尚未存「各店每日曲線」。
+    // 若是區長 / 單店視角，先用全品牌 dailyTotals 依金額與人流占比縮放，
+    // 讓圖表總量與本次篩選的 Summary 金額一致；後續可升級為 Summary v2 儲存 storeDailyTotals。
+    const fullCash = Number(summaryGrand.cash || 0);
+    const fullTraffic = Number(summaryGrand.traffic || 0);
+    const cashRatio = isFilteredSummaryView && fullCash > 0 ? Number(grand.cash || 0) / fullCash : 1;
+    const trafficRatio = isFilteredSummaryView && fullTraffic > 0 ? Number(grand.traffic || 0) / fullTraffic : 1;
+    const dailyTotals = rawDailyTotals.slice(0, chartDays).map((row) => ({
+      ...row,
+      cash: isFilteredSummaryView ? Math.round(Number(row.cash || 0) * cashRatio) : Number(row.cash || 0),
+      traffic: isFilteredSummaryView ? Math.round(Number(row.traffic || 0) * trafficRatio) : Number(row.traffic || 0),
     }));
+
+    const selectedStoreSet = new Set(stores.map((item) => cleanName(item.store || item.displayName || "")).filter(Boolean));
+    const mapStoreTop = (rows = []) => {
+      const list = Array.isArray(rows) ? rows : [];
+      const filtered = isFilteredSummaryView && selectedStoreSet.size > 0
+        ? list.filter((item) => selectedStoreSet.has(cleanName(item.store || item.name || item.displayName || "")))
+        : list;
+      return filtered.map((item) => ({
+        name: item.name || item.displayName || (item.store ? `${item.store}店` : ""),
+        revenue: Number(item.revenue ?? item.cash ?? 0),
+        streak: false,
+        badgeText: "",
+      }));
+    };
+
+    const filteredMonthlyTop = [...stores]
+      .sort((a, b) => Number(b.cash || 0) - Number(a.cash || 0))
+      .slice(0, 3)
+      .map((item) => ({ name: item.displayName || `${cleanName(item.store)}店`, revenue: Number(item.cash || 0), streak: false, badgeText: "" }));
 
     return {
       grandTotal: grand,
@@ -433,17 +690,18 @@ export function useDashboardStats() {
       oldRevMix,
       newCountMix,
       oldCountMix,
-      storeMonthlyTop3: mapStoreTop(summary.storeTop3?.monthly),
+      storeMonthlyTop3: isFilteredSummaryView ? filteredMonthlyTop : mapStoreTop(summary.storeTop3?.monthly),
       storeTodayTop3: mapStoreTop(summary.storeTop3?.today),
       storeYesterdayTop3: mapStoreTop(summary.storeTop3?.yesterday),
-      source: "summary",
+      source: isFilteredSummaryView ? "summary_filtered" : "summary",
       summaryLastUpdatedAtText: summary.lastUpdatedAtText || "",
+      summaryFilterMode: isFilteredSummaryView ? (selectedDashboardStore ? "store" : "manager") : "brand",
     };
-  }, [dashboardSummaryBundle.dashboard, isFullBrandDashboardView, selectedYear, selectedMonth, buildProjectionFromSummaryStores]);
+  }, [dashboardSummaryBundle.dashboard, isSummaryDashboardView, selectedYear, selectedMonth, buildProjectionFromSummaryStores, effectiveStores, selectedDashboardManager, selectedDashboardStore, cleanName, userRole]);
 
   const summaryMyStoreRankings = useMemo(() => {
     // ★ 當月門市排行也必須即時，避免主管或店長看到未更新的 Summary 排名。
-    if (isSelectedCurrentMonth) return null;
+    if (isSelectedCurrentMonth || !isSummaryTrustedForDashboard) return null;
     const summary = dashboardSummaryBundle.dashboard;
     if (!summary || userRole !== "store" || !currentUser) return null;
 
@@ -474,11 +732,11 @@ export function useDashboardStats() {
           isBottom5: s.rank > Math.max(0, allRanks.length - 5),
         };
       });
-  }, [dashboardSummaryBundle.dashboard, userRole, currentUser, cleanName, isSelectedCurrentMonth]);
+  }, [dashboardSummaryBundle.dashboard, userRole, currentUser, cleanName, isSelectedCurrentMonth, isSummaryTrustedForDashboard]);
 
   const summaryTherapistStats = useMemo(() => {
     // ★ 即時戰情保護：當月人員績效仍用明細計算，避免管理師晚上陸續回報後，今日戰神/排行榜不即時更新。
-    if (isSelectedCurrentMonth) return null;
+    if (isSelectedCurrentMonth || !isSummaryTrustedForDashboard) return null;
     const summary = dashboardSummaryBundle.therapist;
     if (!summary) return null;
 
@@ -551,7 +809,7 @@ export function useDashboardStats() {
       source: "summary",
       summaryLastUpdatedAtText: summary.lastUpdatedAtText || "",
     };
-  }, [dashboardSummaryBundle.therapist, therapistEffectiveStores, selectedDashboardManager, selectedDashboardStore, cleanName, userRole, currentUser, therapistAnnualAggregatedData]);
+  }, [dashboardSummaryBundle.therapist, therapistEffectiveStores, selectedDashboardManager, selectedDashboardStore, cleanName, userRole, currentUser, therapistAnnualAggregatedData, isSelectedCurrentMonth, isSummaryTrustedForDashboard]);
 
 
   const detailDashboardStats = useMemo(() => {
@@ -1023,8 +1281,27 @@ export function useDashboardStats() {
       ready: dashboardSummaryBundle.ready,
       usingDashboardSummary: Boolean(summaryDashboardStats),
       usingTherapistSummary: Boolean(summaryTherapistStats),
+      usingDetailFallback: !isSelectedCurrentMonth && Boolean(dashboardSummaryBundle.ready) && !Boolean(summaryDashboardStats),
       error: dashboardSummaryBundle.error,
       yearMonth: selectedYearMonth,
+      trustStatus: dashboardSummaryBundle.trustStatus,
+      statusKey: dashboardSummaryBundle.trustStatus?.statusKey || (isSelectedCurrentMonth ? "current" : "unknown"),
+      statusLabel: isSelectedCurrentMonth ? "本月即時資料" : (dashboardSummaryBundle.trustStatus?.label || "Summary 狀態未知"),
+      statusHint: isSelectedCurrentMonth ? "本月 Dashboard 以即時明細為準。" : (dashboardSummaryBundle.trustStatus?.hint || "尚未完成 Summary 狀態判斷。"),
+      isTrustedSummary: dashboardSummaryBundle.trustStatus?.isTrusted === true,
+      dataSourceMode: isSelectedCurrentMonth
+        ? "live"
+        : summaryDashboardStats
+        ? "verified_summary"
+        : "detail_fallback",
+      dataSourceLabel: isSelectedCurrentMonth
+        ? "即時明細"
+        : summaryDashboardStats
+        ? "已整理 Summary"
+        : "明細暫代",
+      lastUpdatedAtText: dashboardSummaryBundle.trustStatus?.lastUpdatedAtText || "",
+      lastCompareAtText: dashboardSummaryBundle.trustStatus?.lastCompareAtText || "",
+      pendingCount: dashboardSummaryBundle.trustStatus?.pendingCount || 0,
     },
     dailyLoginCount, yesterdayLoginCount,
     groupedStoresForFilter, availableStoresForDropdown

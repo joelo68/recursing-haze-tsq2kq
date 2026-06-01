@@ -15,6 +15,7 @@ import {
   getDocs,
   orderBy,
   addDoc,
+  setDoc,
   serverTimestamp
 } from "firebase/firestore";
 
@@ -106,6 +107,35 @@ const HistoryView = () => {
   const normalizeDateForQueue = (value) => String(value || "").replace(/\//g, "-").slice(0, 10);
   const getYearMonthForQueue = (value) => normalizeDateForQueue(value).slice(0, 7);
 
+
+  const markSummaryRecalcFlag = async ({ affectedYearMonth, sourceType, sourceId, reason, delayMinutes = 10 }) => {
+    if (!affectedYearMonth || affectedYearMonth.length !== 7) return;
+
+    const now = new Date();
+    const rebuildAfter = new Date(now.getTime() + delayMinutes * 60 * 1000);
+
+    await setDoc(doc(getCollectionPath("summary_recalc_flags"), affectedYearMonth), {
+      brandId,
+      yearMonth: affectedYearMonth,
+      affectedYearMonth,
+      status: "dirty",
+      dirty: true,
+      reason: reason || "history_report_changed",
+      latestSourceType: sourceType || "unknown",
+      latestSourceId: sourceId || "",
+      lastDirtyAt: serverTimestamp(),
+      lastDirtyAtText: now.toISOString(),
+      rebuildAfterAtText: rebuildAfter.toISOString(),
+      debounceMinutes: delayMinutes,
+      updatedAt: serverTimestamp(),
+      updatedAtText: now.toISOString(),
+      updatedBy: currentUser?.name || "unknown",
+      updatedByRole: userRole || "unknown",
+      sourceView: "HistoryView",
+      summaryTargets: ["dashboard_summary", "therapist_summary", "rankings_summary"],
+    }, { merge: true });
+  };
+
   const addRecalcQueueItem = async ({ sourceType, sourceId, sourceRow, affectedDate, reason }) => {
     const safeDate = normalizeDateForQueue(affectedDate || sourceRow?.date);
     const affectedYearMonth = getYearMonthForQueue(safeDate);
@@ -135,6 +165,16 @@ const HistoryView = () => {
       summaryTargets: isTherapistSource
         ? ["therapist_summary", "rankings_summary"]
         : ["dashboard_summary", "rankings_summary"],
+    });
+
+    // ★ 歷史資料只要被修正，就立即標記該月份 Summary 需要重新整理。
+    // Dashboard 會先顯示明細暫代，避免主管看到舊 Summary。
+    await markSummaryRecalcFlag({
+      affectedYearMonth,
+      sourceType,
+      sourceId,
+      reason,
+      delayMinutes: 10,
     });
   };
 

@@ -1,15 +1,64 @@
 // src/components/DashboardHeader.jsx
 import React, { useContext } from "react";
-import { Store as StoreIcon, User } from "lucide-react";
+import { Store as StoreIcon, User, CheckCircle2, AlertTriangle, Clock3, Database, Radio } from "lucide-react";
 import { AppContext } from "../AppContext";
 
 const DashboardHeader = ({
-  brandInfo, dailyLoginCount, yesterdayLoginCount, viewMode, setViewMode,
+  brandInfo, dailyLoginCount, yesterdayLoginCount, dashboardSummaryStatus, viewMode, setViewMode,
   selectedDashboardManager, setSelectedDashboardManager,
   selectedDashboardStore, setSelectedDashboardStore,
   groupedStoresForFilter, availableStoresForDropdown
 }) => {
   const { userRole } = useContext(AppContext);
+
+
+  const summaryStatus = dashboardSummaryStatus || {};
+  const statusKey = summaryStatus.statusKey || "unknown";
+  const dataSourceMode = summaryStatus.dataSourceMode || "unknown";
+  const isUsingSummary = dataSourceMode === "verified_summary";
+  const isLive = dataSourceMode === "live" || statusKey === "current";
+  const isLoading = statusKey === "loading" || summaryStatus.ready === false;
+  const isWarning = !isLive && !isUsingSummary && !isLoading;
+
+  const statusTheme = isLive
+    ? {
+        wrap: "border-emerald-100 bg-emerald-50/70 text-emerald-700",
+        icon: Radio,
+        dot: "bg-emerald-400",
+        label: "本月即時明細",
+      }
+    : isUsingSummary
+    ? {
+        wrap: "border-emerald-100 bg-emerald-50/70 text-emerald-700",
+        icon: CheckCircle2,
+        dot: "bg-emerald-400",
+        label: "已整理 Summary",
+      }
+    : isLoading
+    ? {
+        wrap: "border-stone-100 bg-stone-50 text-stone-500",
+        icon: Clock3,
+        dot: "bg-stone-300",
+        label: "資料來源檢查中",
+      }
+    : {
+        wrap: "border-amber-100 bg-amber-50/80 text-amber-700",
+        icon: AlertTriangle,
+        dot: "bg-amber-400",
+        label: "明細暫代顯示",
+      };
+
+  const StatusIcon = statusTheme.icon;
+  const formatStatusTime = (value) => {
+    if (!value) return "";
+    const date = new Date(value);
+    if (Number.isNaN(date.getTime())) return "";
+    return `${String(date.getMonth() + 1).padStart(2, "0")}/${String(date.getDate()).padStart(2, "0")} ${String(date.getHours()).padStart(2, "0")}:${String(date.getMinutes()).padStart(2, "0")}`;
+  };
+
+  const statusTime = isUsingSummary
+    ? formatStatusTime(summaryStatus.lastCompareAtText || summaryStatus.lastUpdatedAtText)
+    : "";
 
   return (
     <div className="bg-white p-4 md:p-5 rounded-3xl border border-stone-200 shadow-sm animate-in fade-in slide-in-from-top-2 mb-6">
@@ -39,7 +88,26 @@ const DashboardHeader = ({
                   </div>
                 )}
               </div>
-              <p className="text-[11px] md:text-xs text-stone-400 font-bold tracking-wider uppercase mt-0.5">Dashboard</p>
+              <div className="mt-1 flex flex-wrap items-center gap-2">
+                <p className="text-[11px] md:text-xs text-stone-400 font-bold tracking-wider uppercase">Dashboard</p>
+                <div
+                  title={summaryStatus.statusHint || "Dashboard 資料來源狀態"}
+                  className={`inline-flex max-w-full items-center gap-1.5 rounded-full border px-2.5 py-1 text-[10px] font-black ${statusTheme.wrap}`}
+                >
+                  <span className={`h-1.5 w-1.5 rounded-full ${statusTheme.dot}`} />
+                  <StatusIcon size={11} strokeWidth={2.2} />
+                  <span className="whitespace-nowrap">{statusTheme.label}</span>
+                  {summaryStatus.yearMonth && !isLive && (
+                    <span className="hidden text-[10px] font-bold opacity-70 sm:inline">{summaryStatus.yearMonth}</span>
+                  )}
+                  {statusTime && (
+                    <span className="hidden text-[10px] font-bold opacity-70 md:inline">{statusTime}</span>
+                  )}
+                  {isWarning && summaryStatus.pendingCount > 0 && (
+                    <span className="rounded-full bg-white/70 px-1.5 py-0.5 text-[9px] font-black opacity-80">待整理 {summaryStatus.pendingCount}</span>
+                  )}
+                </div>
+              </div>
             </div>
           </div>
 
