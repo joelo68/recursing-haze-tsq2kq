@@ -611,10 +611,46 @@ export function useDashboardStats() {
     grand.accrualProjection = projectionPayload.accrualProjection || Number(grand.accrualProjection || 0);
     grand.projectionRange = projectionPayload.projectionRange || grand.projectionRange || null;
 
+    const selectedStoreSet = new Set(stores.map((item) => cleanName(item.store || item.displayName || "")).filter(Boolean));
+
     // ★ 營運節奏維持原本邏輯：
     // 當月預設用「系統日 - 1 天」，避免主管白天查看時，把尚未結束營業的今天算進應達進度。
     // 歷史月份則以完整月份呈現。
     const rawDailyTotals = Array.isArray(summary.dailyTotals) ? summary.dailyTotals : [];
+    const storeDailyTotalsMap = summary.storeDailyTotals && typeof summary.storeDailyTotals === "object" ? summary.storeDailyTotals : null;
+    const hasPreciseStoreDailyTotals = Boolean(isFilteredSummaryView && storeDailyTotalsMap && selectedStoreSet.size > 0);
+    const buildPreciseFilteredDailyTotals = () => {
+      const baseRows = Array.from({ length: daysInMonth }, (_, index) => ({
+        day: index + 1,
+        date: `${m}/${index + 1}`,
+        cash: 0,
+        accrual: 0,
+        operationalAccrual: 0,
+        skincareSales: 0,
+        traffic: 0,
+        newCustomers: 0,
+        newCustomerClosings: 0,
+        newCustomerSales: 0,
+        refund: 0,
+        skincareRefund: 0,
+      }));
+      if (!hasPreciseStoreDailyTotals) return null;
+      Object.entries(storeDailyTotalsMap || {}).forEach(([storeKey, rows]) => {
+        const storeCore = cleanName(storeKey);
+        if (!selectedStoreSet.has(storeCore) || !Array.isArray(rows)) return;
+        rows.forEach((row, index) => {
+          const day = Number(row?.day || index + 1);
+          if (!day || day < 1 || day > daysInMonth) return;
+          const target = baseRows[day - 1];
+          ["cash", "accrual", "operationalAccrual", "skincareSales", "traffic", "newCustomers", "newCustomerClosings", "newCustomerSales", "refund", "skincareRefund"].forEach((key) => {
+            target[key] += Number(row?.[key] || 0);
+          });
+        });
+      });
+      return baseRows;
+    };
+    const preciseFilteredDailyTotals = buildPreciseFilteredDailyTotals();
+    const dailyTotalsForDataDayCheck = preciseFilteredDailyTotals || rawDailyTotals;
     const getDailyDayNumber = (row, index) => Number(row?.day || index + 1);
     const hasMeaningfulDailyData = (row) => {
       if (!row || typeof row !== "object") return false;
@@ -623,7 +659,7 @@ export function useDashboardStats() {
         return typeof value === "number" && value !== 0;
       });
     };
-    const maxDataDay = rawDailyTotals.reduce((max, row, index) => {
+    const maxDataDay = dailyTotalsForDataDayCheck.reduce((max, row, index) => {
       const day = getDailyDayNumber(row, index);
       return hasMeaningfulDailyData(row) && day > max ? day : max;
     }, 0);
@@ -653,20 +689,20 @@ export function useDashboardStats() {
     if (isCurrentMonth) chartDays = Math.max(1, daysPassed);
     else if (daysPassed === 0) chartDays = 0;
 
-    // Summary v1 尚未存「各店每日曲線」。
-    // 若是區長 / 單店視角，先用全品牌 dailyTotals 依金額與人流占比縮放，
-    // 讓圖表總量與本次篩選的 Summary 金額一致；後續可升級為 Summary v2 儲存 storeDailyTotals。
+    // Summary v2：若後端已提供 storeDailyTotals，區長 / 單店歷史日趨勢改用精準每日加總。
+    // Summary v1 舊月份沒有 storeDailyTotals 時，保留原本比例縮放 fallback，避免破壞已建立的歷史報表。
     const fullCash = Number(summaryGrand.cash || 0);
     const fullTraffic = Number(summaryGrand.traffic || 0);
     const cashRatio = isFilteredSummaryView && fullCash > 0 ? Number(grand.cash || 0) / fullCash : 1;
     const trafficRatio = isFilteredSummaryView && fullTraffic > 0 ? Number(grand.traffic || 0) / fullTraffic : 1;
-    const dailyTotals = rawDailyTotals.slice(0, chartDays).map((row) => ({
-      ...row,
-      cash: isFilteredSummaryView ? Math.round(Number(row.cash || 0) * cashRatio) : Number(row.cash || 0),
-      traffic: isFilteredSummaryView ? Math.round(Number(row.traffic || 0) * trafficRatio) : Number(row.traffic || 0),
-    }));
+    const dailyTotals = preciseFilteredDailyTotals
+      ? preciseFilteredDailyTotals.slice(0, chartDays)
+      : rawDailyTotals.slice(0, chartDays).map((row) => ({
+          ...row,
+          cash: isFilteredSummaryView ? Math.round(Number(row.cash || 0) * cashRatio) : Number(row.cash || 0),
+          traffic: isFilteredSummaryView ? Math.round(Number(row.traffic || 0) * trafficRatio) : Number(row.traffic || 0),
+        }));
 
-    const selectedStoreSet = new Set(stores.map((item) => cleanName(item.store || item.displayName || "")).filter(Boolean));
     const mapStoreTop = (rows = []) => {
       const list = Array.isArray(rows) ? rows : [];
       const filtered = isFilteredSummaryView && selectedStoreSet.size > 0
@@ -703,7 +739,7 @@ export function useDashboardStats() {
       storeMonthlyTop3: isFilteredSummaryView ? filteredMonthlyTop : mapStoreTop(summary.storeTop3?.monthly),
       storeTodayTop3: mapStoreTop(summary.storeTop3?.today),
       storeYesterdayTop3: mapStoreTop(summary.storeTop3?.yesterday),
-      source: isFilteredSummaryView ? "summary_filtered" : "summary",
+      source: preciseFilteredDailyTotals ? "summary_store_daily" : isFilteredSummaryView ? "summary_filtered" : "summary",
       summaryLastUpdatedAtText: summary.lastUpdatedAtText || "",
       summaryFilterMode: isFilteredSummaryView ? (selectedDashboardStore ? "store" : "manager") : "brand",
     };

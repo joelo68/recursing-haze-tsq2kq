@@ -22,7 +22,7 @@ const safeGetDateStr = (val) => {
     return String(val);
 };
 
-const AuditView = () => {
+const AuditView = ({ auditType: controlledAuditType, setAuditType: setControlledAuditType } = {}) => {
   const {
     managers, showToast, budgets, selectedYear, selectedMonth, rawData,
     therapists, therapistReports, therapistSchedules, userRole, therapistTargets,
@@ -30,9 +30,18 @@ const AuditView = () => {
   } = useContext(AppContext);
 
   const [checkDate, setCheckDate] = useState(formatLocalYYYYMMDD(new Date()));
-  const [auditType, setAuditType] = useState(userRole === 'trainer' ? "therapist-daily" : "daily"); 
+  const [localAuditType, setLocalAuditType] = useState(userRole === 'trainer' ? "therapist-daily" : "daily");
+  const auditType = controlledAuditType || localAuditType;
+  const setAuditType = setControlledAuditType || setLocalAuditType; 
   const [isConfigModalOpen, setIsConfigModalOpen] = useState(false);
   const [localExclusions, setLocalExclusions] = useState([]);
+
+  // trainer 角色只能使用管理師檢核；auditType 由 App 控制時也要保留原本預設行為。
+  useEffect(() => {
+    if (userRole === 'trainer' && auditType !== 'therapist-daily' && auditType !== 'therapist-target') {
+      setAuditType('therapist-daily');
+    }
+  }, [userRole, auditType, setAuditType]);
 
   useEffect(() => {
     if (!checkDate || !selectedYear || !selectedMonth) return;

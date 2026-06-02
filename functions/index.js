@@ -1477,6 +1477,29 @@ async function buildAutoDashboardSummaryPayloads(brandId, yearMonth) {
     traffic: 0,
   }));
 
+  // Summary v2：保留每間店每日曲線，讓歷史月份切「區長 / 單店」時不必再用比例縮放。
+  // 這是向下相容欄位；舊前端會忽略，新前端會優先使用。原本 dailyTotals / stores / rankings 皆不改動。
+  const makeEmptyStoreDailyRows = () => Array.from({ length: range.daysInMonth }, (_, i) => ({
+    day: i + 1,
+    date: `${range.month}/${i + 1}`,
+    fullDate: `${yearMonth}-${String(i + 1).padStart(2, "0")}`,
+    cash: 0,
+    accrual: 0,
+    operationalAccrual: 0,
+    skincareSales: 0,
+    traffic: 0,
+    newCustomers: 0,
+    newCustomerClosings: 0,
+    newCustomerSales: 0,
+    refund: 0,
+    skincareRefund: 0,
+  }));
+  const storeDailyTotals = {};
+  const ensureStoreDailyRows = (storeCore) => {
+    if (!storeDailyTotals[storeCore]) storeDailyTotals[storeCore] = makeEmptyStoreDailyRows();
+    return storeDailyTotals[storeCore];
+  };
+
   const storeMap = {};
   const managerMap = {};
   const ensureStore = (storeCore) => {
@@ -1572,6 +1595,19 @@ async function buildAutoDashboardSummaryPayloads(brandId, yearMonth) {
       dailyTotals[day - 1].cash += cash;
       dailyTotals[day - 1].traffic += traffic;
     }
+    if (day && day >= 1 && day <= range.daysInMonth) {
+      const storeDailyRow = ensureStoreDailyRows(storeCore)[day - 1];
+      storeDailyRow.cash += cash;
+      storeDailyRow.accrual += accrual;
+      storeDailyRow.operationalAccrual += operationalAccrual;
+      storeDailyRow.skincareSales += skincareSales;
+      storeDailyRow.traffic += traffic;
+      storeDailyRow.newCustomers += newCustomers;
+      storeDailyRow.newCustomerClosings += newCustomerClosings;
+      storeDailyRow.newCustomerSales += newCustomerSales;
+      storeDailyRow.refund += refund;
+      storeDailyRow.skincareRefund += skincareRefund;
+    }
   });
 
   Object.keys({ ...storeOwner, ...storeMap, ...targets }).forEach((storeCore) => {
@@ -1585,6 +1621,7 @@ async function buildAutoDashboardSummaryPayloads(brandId, yearMonth) {
       store.challengeAccrualBudget = Number(target.challengeAccrualTarget || 0) || store.accrualBudget;
     }
     store.achievement = store.budget > 0 ? (store.cash / store.budget) * 100 : 0;
+    ensureStoreDailyRows(storeCore);
     grand.budget += store.budget;
     grand.accrualBudget += store.accrualBudget;
     grand.challengeBudget += store.challengeBudget;
@@ -1728,6 +1765,7 @@ async function buildAutoDashboardSummaryPayloads(brandId, yearMonth) {
     storeRankings: storeRanking,
     managers: managerMap,
     dailyTotals,
+    storeDailyTotals,
     storeTop3: {
       today: storeRevenueByDate(todayStr),
       yesterday: storeRevenueByDate(yesterdayStr),
@@ -1737,7 +1775,7 @@ async function buildAutoDashboardSummaryPayloads(brandId, yearMonth) {
     lastUpdatedAt: nowTimestamp,
     lastUpdatedAtText: nowIso,
     source: "auto_summary_repair",
-    version: "dashboard-summary-v1",
+    version: "dashboard-summary-v2",
   };
 
   const therapistSummary = {

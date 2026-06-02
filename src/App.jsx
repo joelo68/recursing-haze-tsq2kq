@@ -44,7 +44,7 @@ import {
 // ==========================================
 // ★ 系統核心版本號 (終極動態快取版)
 // ==========================================
-const CURRENT_APP_VERSION = "3.0.5"; 
+const CURRENT_APP_VERSION = "3.0.9"; 
 
 const isNewerVersion = (local, remote) => {
   if (!remote) return true;
@@ -116,6 +116,37 @@ const DEFAULT_SECURITY_CONFIG = {
   logoutWarningSeconds: 60,
 };
 
+const VIEW_ACTIVITY_LABELS = {
+  dashboard: "營運總覽",
+  daily: "每日總覽",
+  regional: "區域總覽",
+  ranking: "排行榜",
+  "store-analysis": "店家分析",
+  audit: "回報檢核",
+  history: "數據修正中心",
+  input: "日報輸入",
+  logs: "登入監控 / 操作日誌",
+  settings: "系統設定",
+  annual: "年度分析",
+  targets: "年度目標設定",
+  "t-targets": "管理師目標",
+  "t-schedule": "管理師排休",
+  notification: "通知管理",
+  "therapist-manager": "管理師管理",
+};
+
+const IMPORTANT_PAGE_VIEW_SET = new Set([
+  "dashboard",
+  "input",
+  "history",
+  "audit",
+  "targets",
+  "t-targets",
+  "settings",
+  "logs",
+  "annual",
+]);
+
 const normalizeSecurityConfig = (config = {}) => ({
   ...DEFAULT_SECURITY_CONFIG,
   ...config,
@@ -136,6 +167,7 @@ export default function App() {
   const [currentUser, setCurrentUser] = useState(null);
   const [loading, setLoading] = useState(true);
   const [activeView, setActiveView] = useState("dashboard");
+  const [auditType, setAuditType] = useState("daily");
   const [isSidebarOpen, setSidebarOpen] = useState(true);
   const [toast, setToast] = useState(null);
   const [confirmModal, setConfirmModal] = useState({ isOpen: false, title: "", message: "", onConfirm: null });
@@ -224,6 +256,7 @@ export default function App() {
   const lastActivityTimeRef = useRef(Date.now()); 
   const isWarningShowingRef = useRef(false);
   const lowPowerToastShownRef = useRef(false);
+  const pageViewLogThrottleRef = useRef({});
 
   useEffect(() => {
     const handleOnline = () => setIsOnline(true);
@@ -266,14 +299,60 @@ export default function App() {
       else if (ua.includes("iphone")||ua.includes("ipad")) device = "iOS";
       else if (ua.includes("mobile")) device = "Mobile";
     }
+
+    const detailPayload = details && typeof details === "object" && !Array.isArray(details) ? details : { message: details || "" };
+    const activityType = detailPayload.activityType || detailPayload.type || (
+      action === "登入系統" ? "auth.login" :
+      action === "登出系統" ? "auth.logout" :
+      action.includes("查詢") ? "query" :
+      action.includes("修改") || action.includes("更新") || action.includes("刪除") || action.includes("封存") || action.includes("還原") ? "data.change" :
+      "general"
+    );
+
     try { 
-      await addDoc(getCollectionPath("system_logs"), { timestamp: serverTimestamp(), role, user, action, details, device, brand: currentBrandId }); 
+      await addDoc(getCollectionPath("system_logs"), {
+        timestamp: serverTimestamp(),
+        createdAtText: new Date().toISOString(),
+        role,
+        user,
+        action,
+        details: detailPayload,
+        activityType,
+        view: detailPayload.view || activeView || "",
+        device,
+        brand: currentBrandId,
+        brandLabel: currentBrand?.label || currentBrandId,
+      }); 
       if (action === "登入系統") {
         const todayStr = formatLocalYYYYMMDD(new Date());
         await setDoc(doc(getCollectionPath("system_stats"), todayStr), { count: increment(1), updatedAt: serverTimestamp() }, { merge: true });
       }
     } catch (e) { console.error("Failed to log activity", e); }
-  }, [getCollectionPath, currentBrandId, isOnline]);
+  }, [getCollectionPath, currentBrandId, currentBrand, activeView, isOnline]);
+
+  useEffect(() => {
+    if (!userRole || !currentUser || !activeView) return;
+    if (!IMPORTANT_PAGE_VIEW_SET.has(activeView)) return;
+
+    const userName = currentUser?.name || (userRole === "director" ? "高階主管" : (userRole === "trainer" ? "教專" : userRole));
+    const throttleKey = `${currentBrandId}_${userRole}_${userName}_${activeView}`;
+    const now = Date.now();
+    const lastAt = Number(pageViewLogThrottleRef.current[throttleKey] || 0);
+
+    // 同一使用者、同品牌、同頁面 5 分鐘內只記一次，避免頁面切換或重整造成 system_logs 爆量。
+    if (now - lastAt < 5 * 60 * 1000) return;
+    pageViewLogThrottleRef.current[throttleKey] = now;
+
+    logActivity(userRole, userName, "頁面瀏覽", {
+      activityType: "page.view",
+      view: activeView,
+      viewLabel: VIEW_ACTIVITY_LABELS[activeView] || activeView,
+      brandId: currentBrandId,
+      brandLabel: currentBrand?.label || currentBrandId,
+      path: typeof window !== "undefined" ? window.location.pathname : "",
+    });
+  }, [activeView, userRole, currentUser, currentBrandId, currentBrand, logActivity]);
+
 
   const handleLogout = useCallback(async (reason = "使用者手動登出") => {
     const userName = currentUser?.name || (userRole === "director" ? "高階主管" : (userRole === "trainer" ? "教專" : "未知"));
@@ -536,10 +615,41 @@ export default function App() {
 
   const lowFrequencyCacheRef = useRef({});
 
+  // ★ monthly_targets / kpi_targets 穩定監聽：
+  // 這兩包資料仍維持 onSnapshot 即時更新，但只跟「登入 / 品牌」有關，避免切換頁面時反覆重建整包監聽。
+  // 注意：這裡只負責 budgets / targets；org_structure、therapists 等全域資料仍由原本 fetchGlobalData 流程處理，避免 Dashboard 店家清單被清空。
   useEffect(() => {
     if (!user) return;
 
-    setBudgets({});
+    const unsubBudgetTargets = onSnapshot(
+      getCollectionPath("monthly_targets"),
+      (budgetSnap) => {
+        trackSnapshotRead("monthly_targets_live", budgetSnap, getStableReadMeta("monthly_targets_live"));
+        const b = {};
+        budgetSnap.docs.forEach((d) => (b[d.id] = d.data()));
+        setBudgets(b);
+      },
+      (error) => console.error("monthly_targets 即時監聽失敗:", error)
+    );
+
+    const unsubKpiTargets = onSnapshot(
+      getDocPath("kpi_targets"),
+      (kpiSnap) => {
+        trackReadSource("kpi_targets_live", kpiSnap.exists() ? 1 : 0, getStableReadMeta("kpi_targets_live"));
+        setTargets(kpiSnap.exists() ? kpiSnap.data() : { newASP: 3500, trafficASP: 1200 });
+      },
+      (error) => console.error("kpi_targets 即時監聽失敗:", error)
+    );
+
+    return () => {
+      try { unsubBudgetTargets && unsubBudgetTargets(); } catch (error) { console.warn("monthly_targets unsubscribe failed", error); }
+      try { unsubKpiTargets && unsubKpiTargets(); } catch (error) { console.warn("kpi_targets unsubscribe failed", error); }
+    };
+  }, [user, currentBrand?.id, getCollectionPath, getDocPath, getStableReadMeta]);
+
+  useEffect(() => {
+    if (!user) return;
+
     setManagers({});
     setStoreAccounts([]);
     setManagerAuth({});
@@ -547,7 +657,6 @@ export default function App() {
     setTherapistSchedules({});
     setTherapistTargets({});
     setPermissions(DEFAULT_PERMISSIONS);
-    setTargets({ newASP: 3500, trafficASP: 1200 });
     setSecurityConfig(DEFAULT_SECURITY_CONFIG);
 
     const targetYearStr = String(selectedYear);
@@ -563,40 +672,18 @@ export default function App() {
     // 因此這裡不可改成不明確的 where 查詢，否則營運總覽會歸零。
     // 做法：
     // 1. monthly_targets + kpi_targets 保留完整結構，但加入 10 分鐘快取。
-    // 2. therapist_schedules 只有進入「管師排休 / 回報檢核」才讀。
-    // 3. therapist_targets 在 Dashboard / 管師目標頁 / 回報檢核才讀，避免人員績效與管理師目標檢核缺資料。
+    // 2. therapist_schedules 只有進入「管師排休」或「回報檢核 > 管理師日報」才讀。
+    // 3. therapist_targets 在 Dashboard / 管師目標頁 /「回報檢核 > 管理師目標」才讀，避免不必要低頻讀取。
     // ==========================================
     const fetchLowFrequencyData = async () => {
       try {
         const cacheTtlMs = 10 * 60 * 1000;
         const nowMs = Date.now();
 
-        // ★ 當月即時性保護：目標資料會直接影響達成率、預算差距、月底推估。
-        // 因此 monthly_targets / kpi_targets 不再使用 10 分鐘快取，改為即時監聽。
-        const unsubBudgetTargets = onSnapshot(
-          getCollectionPath("monthly_targets"),
-          (budgetSnap) => {
-            trackSnapshotRead("monthly_targets_live", budgetSnap, getReadMeta("monthly_targets_live"));
-            const b = {};
-            budgetSnap.docs.forEach((d) => (b[d.id] = d.data()));
-            setBudgets(b);
-          },
-          (error) => console.error("monthly_targets 即時監聽失敗:", error)
-        );
-        lowFrequencyUnsubs.push(unsubBudgetTargets);
+        // monthly_targets / kpi_targets 已改由品牌層級穩定監聽，這裡只處理按頁面載入的低頻管理師資料。
 
-        const unsubKpiTargets = onSnapshot(
-          getDocPath("kpi_targets"),
-          (kpiSnap) => {
-            trackReadSource("kpi_targets_live", kpiSnap.exists() ? 1 : 0, getReadMeta("kpi_targets_live"));
-            setTargets(kpiSnap.exists() ? kpiSnap.data() : { newASP: 3500, trafficASP: 1200 });
-          },
-          (error) => console.error("kpi_targets 即時監聽失敗:", error)
-        );
-        lowFrequencyUnsubs.push(unsubKpiTargets);
-
-        const shouldLoadSchedules = activeView === "t-schedule" || activeView === "audit";
-        const shouldLoadTherapistTargets = activeView === "dashboard" || activeView === "t-targets" || activeView === "audit";
+        const shouldLoadSchedules = activeView === "t-schedule" || (activeView === "audit" && auditType === "therapist-daily");
+        const shouldLoadTherapistTargets = activeView === "dashboard" || activeView === "t-targets" || (activeView === "audit" && auditType === "therapist-target");
 
         if (shouldLoadSchedules) {
           const scheduleCacheKey = `${currentBrand.id}_${targetYearStr}_therapist_schedules_v2`;
@@ -672,7 +759,7 @@ export default function App() {
         try { unsubscribe && unsubscribe(); } catch (error) { console.warn("low frequency unsubscribe failed", error); }
       });
     };
-  }, [user, currentBrand, getCollectionPath, getDocPath, selectedYear, activeView, fetchGlobalData, getReadMeta]);
+  }, [user, currentBrand, getCollectionPath, getDocPath, selectedYear, activeView, auditType, fetchGlobalData, getReadMeta]);
 
 
   const monthCacheRef = useRef({});
@@ -996,7 +1083,7 @@ export default function App() {
           {activeView === "regional" && <RegionalView />}
           {activeView === "ranking" && <RankingView />}
           {activeView === "store-analysis" && <StoreAnalysisView />}
-          {activeView === "audit" && <AuditView />}
+          {activeView === "audit" && <AuditView auditType={auditType} setAuditType={setAuditType} />}
           {activeView === "history" && <HistoryView />}
           {activeView === "input" && <InputView />}
           {activeView === "logs" && <SystemMonitor />}
@@ -1010,7 +1097,7 @@ export default function App() {
         </Suspense>
       </main>
     );
-  }, [activeView]);
+  }, [activeView, auditType]);
 
   if (loading) return <div className="min-h-screen flex flex-col items-center justify-center bg-[#F9F8F6]"><Loader2 className="w-16 h-16 animate-spin text-stone-400 mb-4" /><p className="animate-pulse text-stone-500 font-bold tracking-wider">Loading DRCYJ Cloud...</p></div>;
   

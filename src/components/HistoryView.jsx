@@ -27,7 +27,7 @@ import { formatLocalYYYYMMDD, toStandardDateFormat } from "../utils/helpers";
 
 const HistoryView = () => {
   const { 
-    showToast, managers, userRole, currentUser, 
+    showToast, managers, userRole, currentUser, logActivity, 
     getCollectionPath, getDocPath, currentBrand 
   } = useContext(AppContext);
   
@@ -74,6 +74,24 @@ const HistoryView = () => {
     if (!currentBrand) return "unknown";
     return typeof currentBrand === "string" ? currentBrand : (currentBrand.id || "unknown");
   }, [currentBrand]);
+
+
+  const getOperatorName = () => currentUser?.name || (userRole === "director" ? "高階主管" : (userRole === "trainer" ? "教專" : userRole || "unknown"));
+
+  const pickChangedFields = (beforeData = {}, afterData = {}, fields = []) => {
+    const changes = {};
+    fields.forEach((field) => {
+      const beforeValue = beforeData?.[field] ?? 0;
+      const afterValue = afterData?.[field] ?? 0;
+      if (String(beforeValue) !== String(afterValue)) {
+        changes[field] = { before: beforeValue, after: afterValue };
+      }
+    });
+    if (String(beforeData?.date || "") !== String(afterData?.date || "")) {
+      changes.date = { before: beforeData?.date || "", after: afterData?.date || "" };
+    }
+    return changes;
+  };
 
   const cleanStoreName = useCallback((name) => {
     if (!name) return "";
@@ -333,6 +351,22 @@ const HistoryView = () => {
         reason: "history_report_updated",
       });
 
+      const changedFields = pickChangedFields(originalRow || {}, cleanData || {}, fields);
+      logActivity?.(userRole, getOperatorName(), "修改歷史日報", {
+        activityType: "data.update_report",
+        view: "history",
+        sourceType: collectionName,
+        sourceId: editId,
+        affectedYearMonth: getYearMonthForQueue(cleanData.date),
+        affectedDate: cleanData.date,
+        storeName: getStoreName(cleanData),
+        therapistName: cleanData.therapistName || cleanData.name || "",
+        changedFields,
+        beforeData: originalRow || null,
+        afterData: cleanData,
+        summaryMarkedDirty: true,
+      });
+
       showToast("更新成功", "success");
       const updateState = activeTab === "store" ? setStoreRawData : setTherapistRawData;
       updateState(prev => prev.map(item => item.id === editId ? { ...item, ...cleanData } : item));
@@ -355,6 +389,20 @@ const HistoryView = () => {
         reason: "history_report_deleted",
       });
 
+      logActivity?.(userRole, getOperatorName(), "刪除歷史日報", {
+        activityType: "data.delete_report",
+        view: "history",
+        sourceType: collectionName,
+        sourceId: id,
+        affectedYearMonth: getYearMonthForQueue(sourceData?.date),
+        affectedDate: sourceData?.date || "",
+        storeName: getStoreName(sourceData),
+        therapistName: sourceData?.therapistName || sourceData?.name || "",
+        beforeData: sourceData || null,
+        afterData: null,
+        summaryMarkedDirty: true,
+      });
+
       showToast("已刪除", "success");
       const updateState = activeTab === "store" ? setStoreRawData : setTherapistRawData;
       updateState(prev => prev.filter(p => p.id !== id)); 
@@ -372,6 +420,17 @@ const HistoryView = () => {
     return;
   }
   
+  logActivity?.(userRole, getOperatorName(), "查詢歷史資料", {
+    activityType: "query.history_reports",
+    view: "history",
+    tab: activeTab,
+    tabLabel: activeTab === "store" ? "店務日報" : "管理師日報",
+    startDate,
+    endDate,
+    filterStore: filterStore || "全部店家",
+    brandId,
+    brandLabel: brandPrefix,
+  });
   setQueryRange({ start: startDate, end: endDate });
   setHasQueried(true);
 };
