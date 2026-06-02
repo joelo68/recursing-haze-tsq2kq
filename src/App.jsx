@@ -44,7 +44,7 @@ import {
 // ==========================================
 // ★ 系統核心版本號 (終極動態快取版)
 // ==========================================
-const CURRENT_APP_VERSION = "3.0.9"; 
+const CURRENT_APP_VERSION = "3.1.0"; 
 
 const isNewerVersion = (local, remote) => {
   if (!remote) return true;
@@ -930,7 +930,17 @@ export default function App() {
     if (finalUser) setCurrentUser(finalUser);
     
     const userName = finalUser?.name || (roleId === "director" ? "高階主管" : (roleId === "trainer" ? "教專" : "未知"));
-    logActivity(roleId, userName, "登入系統", "登入成功"); 
+    logActivity(roleId, userName, "登入系統", finalUser?.passwordUpdatedOnFirstLogin ? {
+      activityType: "auth.login",
+      message: "登入成功，已完成首次安全更新",
+      passwordUpdatedOnFirstLogin: true,
+    } : "登入成功"); 
+    if (finalUser?.passwordUpdatedOnFirstLogin) {
+      logActivity(roleId, userName, "首次安全更新", {
+        activityType: "auth.password_update",
+        message: "使用初始密碼登入後，已完成密碼更新",
+      });
+    }
     setActiveView("dashboard");
   }, [therapists, logActivity]);
 

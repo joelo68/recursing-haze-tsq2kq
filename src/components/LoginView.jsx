@@ -34,6 +34,9 @@ const LoginView = ({
   const [error, setError] = useState("");
   const [isLoading, setIsLoading] = useState(false);
   const [isResetting, setIsResetting] = useState(false);
+  const [forcePasswordUpdate, setForcePasswordUpdate] = useState(null);
+  const [forceNewPassword, setForceNewPassword] = useState("");
+  const [forceConfirmPassword, setForceConfirmPassword] = useState("");
   
   const [oldPassword, setOldPassword] = useState("");
   const [newPassword, setNewPassword] = useState("");
@@ -65,6 +68,7 @@ const LoginView = ({
   useEffect(() => {
     setTRegion(""); setTStore(""); setTPersonId(""); 
     setError(""); setPassword(""); setSelectedUser(""); setIsResetting(false);
+    setForcePasswordUpdate(null); setForceNewPassword(""); setForceConfirmPassword("");
     setOldPassword(""); setNewPassword(""); setNewDirectorName(""); setDirectorManageMode("edit-pass");
   }, [role, currentBrandId]);
 
@@ -139,28 +143,143 @@ const LoginView = ({
 
   const currentMasterKey = masterAuth?.password || "BOSS888";
 
+  const getInitialPasswordsForRole = (roleId) => {
+    if (roleId === "director") {
+      if (currentBrandId === "anniu") return ["8888", "0000"];
+      if (currentBrandId === "yibo") return ["9999", "0000"];
+      return ["16500", "0000"];
+    }
+    if (["manager", "store", "therapist", "trainer"].includes(roleId)) return ["0000"];
+    return ["0000"];
+  };
+
+  const isInitialPasswordLogin = (roleId, enteredPassword, correctPassword, options = {}) => {
+    // Master Key 是最高管理備援，不納入首次密碼更新判斷，避免最高權限被鎖住。
+    if (options.isMasterLogin) return false;
+    if (!enteredPassword || enteredPassword !== correctPassword) return false;
+    return getInitialPasswordsForRole(roleId).includes(String(enteredPassword));
+  };
+
+  const isWeakNewPassword = (value) => {
+    const text = String(value || "").trim();
+    if (text.length < 4) return true;
+    return ["0000", "1111", "1234", "8888", "9999", "password", "PASSWORD"].includes(text);
+  };
+
+  const openForcePasswordUpdate = ({ roleId, accountId, userInfo, currentPassword, displayName }) => {
+    setForcePasswordUpdate({ roleId, accountId, userInfo, currentPassword, displayName });
+    setForceNewPassword("");
+    setForceConfirmPassword("");
+    setError("");
+  };
+
+  const handleForcePasswordUpdate = async () => {
+    if (!forcePasswordUpdate) return;
+    const nextPass = String(forceNewPassword || "").trim();
+    const confirmPass = String(forceConfirmPassword || "").trim();
+
+    if (!nextPass || !confirmPass) {
+      setError("請輸入新密碼並再次確認");
+      return;
+    }
+    if (nextPass !== confirmPass) {
+      setError("兩次輸入的新密碼不一致");
+      return;
+    }
+    if (nextPass === String(forcePasswordUpdate.currentPassword || "")) {
+      setError("新密碼不可與初始密碼相同");
+      return;
+    }
+    if (isWeakNewPassword(nextPass)) {
+      setError("請設定至少 4 碼，並避免使用 0000、1234、8888、9999 等簡易密碼");
+      return;
+    }
+
+    setIsLoading(true);
+    setError("");
+    try {
+      let success = false;
+      const { roleId, accountId } = forcePasswordUpdate;
+      if (roleId === "store") success = await onUpdatePassword(accountId, nextPass);
+      else if (roleId === "manager") success = await onUpdateManagerPassword(accountId, nextPass);
+      else if (roleId === "therapist") success = await onUpdateTherapistPassword(accountId, nextPass);
+      else if (roleId === "trainer") success = await handleUpdateTrainerAuth(nextPass);
+      else if (roleId === "director") success = await handleUpdateDirectorAuth("update", accountId, nextPass);
+
+      if (!success) {
+        setError("密碼更新失敗，請確認網路後再試一次");
+        return;
+      }
+
+      const loginPayload = {
+        ...(forcePasswordUpdate.userInfo || {}),
+        passwordUpdatedOnFirstLogin: true,
+      };
+      const loginRole = forcePasswordUpdate.roleId;
+
+      setForcePasswordUpdate(null);
+      setForceNewPassword("");
+      setForceConfirmPassword("");
+      setPassword("");
+      setTPassword("");
+      onLogin(loginRole, loginPayload);
+    } catch (e) {
+      console.error("首次密碼更新失敗:", e);
+      setError("密碼更新失敗，請稍後再試");
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
   const handleAuth = async () => {
     setError(""); setIsLoading(true); await new Promise((r) => setTimeout(r, 600));
     try {
       if (role === "director") {
         if (!selectedUser) { setError("請選擇高管帳號"); setIsLoading(false); return; }
         const correctPass = directorAuth[selectedUser] || "0000";
-        if (password === correctPass || password === currentMasterKey) {
-           onLogin("director", { name: selectedUser }); 
+        const isMasterLogin = password === currentMasterKey;
+        if (password === correctPass || isMasterLogin) {
+           const userInfo = { name: selectedUser };
+           if (isInitialPasswordLogin("director", password, correctPass, { isMasterLogin })) {
+             openForcePasswordUpdate({ roleId: "director", accountId: selectedUser, userInfo, currentPassword: password, displayName: selectedUser });
+           } else {
+             onLogin("director", userInfo);
+           }
         } else {
            setError("密碼錯誤");
         }
       } else if (role === "trainer") {
         const correctPass = trainerAuth?.password || "0000";
-        if (password === correctPass) onLogin("trainer", { name: "教專" }); else setError("密碼錯誤");
+        if (password === correctPass) {
+          const userInfo = { name: "教專" };
+          if (isInitialPasswordLogin("trainer", password, correctPass)) {
+            openForcePasswordUpdate({ roleId: "trainer", accountId: "trainer", userInfo, currentPassword: password, displayName: "教專" });
+          } else {
+            onLogin("trainer", userInfo);
+          }
+        } else setError("密碼錯誤");
       } else if (role === "manager") {
         if (!selectedUser) { setError("請選擇區長"); setIsLoading(false); return; }
         const correctPass = managerAuth[selectedUser] || "0000";
-        if (password === correctPass) onLogin("manager", { name: selectedUser }); else setError("密碼錯誤");
+        if (password === correctPass) {
+          const userInfo = { name: selectedUser };
+          if (isInitialPasswordLogin("manager", password, correctPass)) {
+            openForcePasswordUpdate({ roleId: "manager", accountId: selectedUser, userInfo, currentPassword: password, displayName: selectedUser });
+          } else {
+            onLogin("manager", userInfo);
+          }
+        } else setError("密碼錯誤");
       } else if (role === "store") {
         if (!selectedUser) { setError("請選擇帳號"); setIsLoading(false); return; }
         const account = storeAccounts.find((a) => a.id === selectedUser);
-        if (account && account.password === password) onLogin("store", { name: account.name, storeName: account.stores?.[0] || account.storeName, stores: account.stores }); else setError("密碼錯誤");
+        if (account && account.password === password) {
+          const userInfo = { name: account.name, storeName: account.stores?.[0] || account.storeName, stores: account.stores };
+          if (isInitialPasswordLogin("store", password, account.password)) {
+            openForcePasswordUpdate({ roleId: "store", accountId: selectedUser, userInfo, currentPassword: password, displayName: account.name });
+          } else {
+            onLogin("store", userInfo);
+          }
+        } else setError("密碼錯誤");
       }
     } catch (e) { setError("登入發生錯誤"); } finally { setIsLoading(false); }
   };
@@ -175,7 +294,13 @@ const LoginView = ({
 
       if (isUserResigned) { setError("此帳號已停用"); setIsLoading(false); return; }
       
-      if (therapist && therapist.password === tPassword) onLogin("therapist", therapist); else setError("密碼錯誤 (預設 0000)");
+      if (therapist && therapist.password === tPassword) {
+        if (isInitialPasswordLogin("therapist", tPassword, therapist.password)) {
+          openForcePasswordUpdate({ roleId: "therapist", accountId: therapist.id, userInfo: therapist, currentPassword: tPassword, displayName: therapist.name });
+        } else {
+          onLogin("therapist", therapist);
+        }
+      } else setError("密碼錯誤 (預設 0000)");
     } catch (e) { setError("登入發生錯誤"); } finally { setIsLoading(false); }
   };
 
@@ -289,6 +414,59 @@ const LoginView = ({
         </div>
 
         <div className="space-y-4">
+          {forcePasswordUpdate ? (
+            <div className="space-y-5 animate-in fade-in duration-300">
+              <div className="rounded-2xl border border-amber-100 bg-amber-50/60 p-4 text-left">
+                <div className="flex items-start gap-3">
+                  <div className="mt-0.5 rounded-full bg-white p-2 text-amber-600 shadow-sm">
+                    <Lock size={18} />
+                  </div>
+                  <div>
+                    <h3 className="text-sm font-black text-stone-800">首次安全更新</h3>
+                    <p className="mt-1 text-xs font-medium leading-relaxed text-stone-500">
+                      為保護您的個人業績與門市資料，首次登入請先更新密碼。完成後即可進入系統。
+                    </p>
+                    <p className="mt-2 text-[11px] font-bold text-stone-500">
+                      帳號：{forcePasswordUpdate.displayName || forcePasswordUpdate.userInfo?.name || "目前帳號"}
+                    </p>
+                  </div>
+                </div>
+              </div>
+
+              <div className="space-y-3">
+                <input
+                  type="password"
+                  value={forceNewPassword}
+                  onChange={(e) => setForceNewPassword(e.target.value)}
+                  placeholder="設定新密碼"
+                  className={inputClass}
+                  autoFocus
+                />
+                <input
+                  type="password"
+                  value={forceConfirmPassword}
+                  onChange={(e) => setForceConfirmPassword(e.target.value)}
+                  placeholder="再次輸入新密碼"
+                  className={inputClass}
+                  onKeyDown={(e) => e.key === "Enter" && handleForcePasswordUpdate()}
+                />
+                <p className="text-[11px] leading-relaxed text-stone-400">
+                  請避免使用 0000、1234、8888、9999，或與姓名相同的簡易密碼。
+                </p>
+              </div>
+
+              {error && <div className="text-rose-500 text-sm font-medium flex items-center justify-center gap-2 py-1"><AlertCircle size={14} /> {error}</div>}
+
+              <button
+                onClick={handleForcePasswordUpdate}
+                disabled={isLoading}
+                className={`w-full py-3.5 text-white rounded-lg font-bold shadow-sm transition-all disabled:opacity-50 disabled:cursor-not-allowed ${themeColors.accent}`}
+              >
+                {isLoading ? <Loader2 className="animate-spin mx-auto" /> : "完成更新並進入系統"}
+              </button>
+            </div>
+          ) : (
+            <>
           {role === "therapist" ? (
             <>
               {!isResetting ? (
@@ -433,6 +611,8 @@ const LoginView = ({
               )}
 
               <button onClick={() => { setIsResetting(!isResetting); setError(""); }} className="w-full text-center text-xs text-stone-400 hover:text-stone-600 py-2 transition-colors">{isResetting ? "返回登入" : "管理帳號密碼?"}</button>
+            </>
+          )}
             </>
           )}
         </div>
