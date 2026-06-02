@@ -386,12 +386,12 @@ const SystemMonitor = () => {
                   <table className="w-full text-left border-collapse table-fixed">
                     <thead className="bg-stone-50/70 text-stone-400 font-bold text-xs tracking-wider border-b border-stone-100">
                       <tr>
-                        <th className="px-3 py-4 w-[9%] whitespace-nowrap">時間</th>
-                        <th className="px-2 py-4 w-[8%] whitespace-nowrap">裝置</th>
+                        <th className="px-3 py-4 w-[11%] whitespace-nowrap">時間</th>
+                        <th className="px-2 py-4 w-[7%] whitespace-nowrap">裝置</th>
                         <th className="px-2 py-4 w-[8%] whitespace-nowrap">身份</th>
                         <th className="px-3 py-4 w-[13%] whitespace-nowrap">使用者</th>
                         <th className="px-2 py-4 w-[10%] whitespace-nowrap">類型</th>
-                        <th className="px-3 py-4 w-[14%] whitespace-nowrap">動作</th>
+                        <th className="px-3 py-4 w-[13%] whitespace-nowrap">動作</th>
                         <th className="px-3 py-4 w-[38%] whitespace-nowrap">詳細內容</th>
                       </tr>
                     </thead>
@@ -403,7 +403,7 @@ const SystemMonitor = () => {
                         return (
                           <React.Fragment key={log.id}>
                             <tr onClick={() => setExpandedLogId(isExpanded ? null : log.id)} className="hover:bg-stone-50/80 transition-colors cursor-pointer">
-                              <td className="px-3 py-4 font-mono text-stone-400 text-xs whitespace-nowrap truncate">{formatTime(log.timestamp)}</td>
+                              <td className="px-3 py-4 font-mono text-stone-400 text-xs whitespace-nowrap">{formatTime(log.timestamp)}</td>
                               <td className="px-2 py-4 whitespace-nowrap overflow-hidden">{getDeviceIcon(log.device)}</td>
                               <td className="px-2 py-4 whitespace-nowrap overflow-hidden">{getRoleBadge(log.role)}</td>
                               <td className="px-3 py-4 font-bold text-stone-700 whitespace-nowrap truncate" title={log.user}>{log.user}</td>
