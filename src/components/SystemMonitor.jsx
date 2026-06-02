@@ -45,21 +45,21 @@ const SystemMonitor = () => {
     const action = String(log.action || "");
 
     if (type.startsWith("auth.") || action.includes("登入") || action.includes("登出")) {
-      return { key: "auth", label: action.includes("登出") ? "登出" : "登入", badge: "bg-emerald-100 text-emerald-700" };
+      return { key: "auth", label: action.includes("登出") ? "登出" : "登入", badge: "bg-emerald-50 text-emerald-700 border border-emerald-100" };
     }
     if (type === "page.view" || action.includes("頁面瀏覽")) {
-      return { key: "page", label: "頁面瀏覽", badge: "bg-blue-100 text-blue-700" };
+      return { key: "page", label: "頁面瀏覽", badge: "bg-sky-50 text-sky-700 border border-sky-100" };
     }
     if (type.startsWith("query") || action.includes("查詢")) {
-      return { key: "query", label: "查詢", badge: "bg-amber-100 text-amber-700" };
+      return { key: "query", label: "查詢", badge: "bg-amber-50 text-amber-700 border border-amber-100" };
     }
     if (type.startsWith("data.") || action.includes("修改") || action.includes("更新") || action.includes("刪除")) {
-      return { key: "data", label: action.includes("刪除") ? "資料刪除" : "資料異動", badge: "bg-rose-100 text-rose-700" };
+      return { key: "data", label: action.includes("刪除") ? "資料刪除" : "資料異動", badge: "bg-rose-50 text-rose-700 border border-rose-100" };
     }
     if (type.startsWith("summary") || action.includes("Summary") || action.includes("整理") || action.includes("校準")) {
-      return { key: "system", label: "系統維護", badge: "bg-purple-100 text-purple-700" };
+      return { key: "system", label: "系統維護", badge: "bg-violet-50 text-violet-700 border border-violet-100" };
     }
-    return { key: "general", label: "一般操作", badge: "bg-stone-100 text-stone-600" };
+    return { key: "general", label: "一般操作", badge: "bg-stone-50 text-stone-600 border border-stone-100" };
   };
 
   const describeLog = (log = {}) => {
@@ -163,25 +163,25 @@ const SystemMonitor = () => {
   const getRoleBadge = (role) => {
     switch (role) {
       case "director":
-        return <span className="bg-rose-100 text-rose-600 px-2 py-0.5 rounded text-xs font-bold">高階</span>;
+        return <span className="inline-flex bg-rose-50 text-rose-600 px-2.5 py-1 rounded-lg text-xs font-bold whitespace-nowrap">高階</span>;
       case "manager":
-        return <span className="bg-teal-100 text-teal-600 px-2 py-0.5 rounded text-xs font-bold">區長</span>;
+        return <span className="inline-flex bg-teal-50 text-teal-600 px-2.5 py-1 rounded-lg text-xs font-bold whitespace-nowrap">區長</span>;
       case "store":
-        return <span className="bg-amber-100 text-amber-600 px-2 py-0.5 rounded text-xs font-bold">店經理</span>;
+        return <span className="inline-flex bg-amber-50 text-amber-600 px-2.5 py-1 rounded-lg text-xs font-bold whitespace-nowrap">店經理</span>;
       case "therapist":
-        return <span className="bg-indigo-100 text-indigo-600 px-2 py-0.5 rounded text-xs font-bold">管理師</span>;
+        return <span className="inline-flex bg-indigo-50 text-indigo-600 px-2.5 py-1 rounded-lg text-xs font-bold whitespace-nowrap">管理師</span>;
       default:
-        return <span className="bg-stone-100 text-stone-500 px-2 py-0.5 rounded text-xs">未知</span>;
+        return <span className="inline-flex bg-stone-50 text-stone-500 px-2.5 py-1 rounded-lg text-xs whitespace-nowrap">未知</span>;
     }
   };
 
   const getDeviceIcon = (device) =>
     device === "iOS" || device === "Android" || device === "Mobile" ? (
-      <div className="flex items-center gap-1 text-stone-500 bg-stone-50 px-2 py-1 rounded text-xs w-max">
+      <div className="inline-flex items-center gap-1 text-stone-500 bg-stone-50 px-2 py-1 rounded-lg text-xs whitespace-nowrap">
         <Smartphone size={12} /> {device}
       </div>
     ) : (
-      <div className="flex items-center gap-1 text-stone-400 bg-stone-50 px-2 py-1 rounded text-xs w-max">
+      <div className="inline-flex items-center gap-1 text-stone-400 bg-stone-50 px-2 py-1 rounded-lg text-xs whitespace-nowrap">
         <Monitor size={12} /> PC
       </div>
     );
@@ -208,19 +208,19 @@ const SystemMonitor = () => {
 
   return (
     <ViewWrapper>
-      <div className="space-y-6 pb-20">
-        <Card className="!overflow-visible z-30 relative">
-          <div className="flex flex-col lg:flex-row justify-between items-start lg:items-center mb-6 gap-4">
+      <div className="space-y-6 pb-20 w-full max-w-full min-w-0 overflow-x-hidden">
+        <Card className="!overflow-visible z-30 relative w-full max-w-full min-w-0">
+          <div className="flex flex-col xl:flex-row justify-between items-start xl:items-center mb-6 gap-4 w-full max-w-full min-w-0">
             <div>
               <h3 className="text-lg font-bold text-stone-700">系統操作日誌 ({currentBrand.label})</h3>
               <p className="text-xs text-stone-400">追蹤系統內的所有操作紀錄</p>
             </div>
             
-            <div className="flex flex-wrap items-center gap-2 bg-stone-50 p-2 rounded-xl border border-stone-200 relative z-50 w-full lg:w-auto">
+            <div className="flex flex-col md:flex-row md:flex-wrap items-stretch md:items-center gap-2 bg-stone-50 p-2 rounded-xl border border-stone-200 relative z-50 w-full xl:w-auto max-w-full min-w-0">
               <div className="flex items-center gap-2">
                 <Calendar size={14} className="text-stone-400" />
                 <div className="flex items-center gap-2">
-                  <div className="relative w-32 sm:w-36">
+                  <div className="relative w-full sm:w-36 min-w-0">
                     <SmartDatePicker 
                       selectedDate={uiDateRange.start}
                       onDateSelect={(val) => setUiDateRange(prev => {
@@ -231,7 +231,7 @@ const SystemMonitor = () => {
                     />
                   </div>
                   <span className="text-stone-300">~</span>
-                  <div className="relative w-32 sm:w-36">
+                  <div className="relative w-full sm:w-36 min-w-0">
                     <SmartDatePicker 
                       selectedDate={uiDateRange.end}
                       onDateSelect={(val) => setUiDateRange(prev => ({ ...prev, end: val }))}
@@ -243,7 +243,7 @@ const SystemMonitor = () => {
                 </div>
               </div>
               
-              <div className="flex items-center gap-2 w-full sm:w-auto mt-2 sm:mt-0 lg:ml-2">
+              <div className="flex items-center gap-2 w-full md:w-auto mt-2 md:mt-0 xl:ml-2 min-w-0">
                 <button 
                   onClick={handleExecuteQuery} 
                   className="flex-1 sm:flex-none px-4 py-2 bg-stone-800 text-white rounded-lg text-sm font-bold flex gap-2 hover:bg-stone-900 transition-colors shadow-sm items-center justify-center whitespace-nowrap active:scale-95"
@@ -263,29 +263,37 @@ const SystemMonitor = () => {
 
 
           {hasQueried && (
-            <div className="mb-4 grid grid-cols-1 lg:grid-cols-4 gap-3">
-              <div className="rounded-2xl border border-emerald-100 bg-emerald-50/60 p-4">
-                <p className="text-[11px] font-black text-emerald-700 tracking-widest">登入人數 / 次數</p>
-                <p className="mt-1 text-xl font-black text-emerald-700">{summary.loginUsers} / {summary.loginCount}</p>
+            <div className="mb-4 grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-2.5 w-full max-w-full min-w-0">
+              <div className="rounded-2xl border border-emerald-100 bg-emerald-50/55 px-4 py-3 min-w-0">
+                <div className="flex items-center justify-between gap-3 min-w-0">
+                  <p className="text-xs font-black text-emerald-700 whitespace-nowrap truncate">登入人數 / 次數</p>
+                  <p className="text-2xl xl:text-[26px] leading-none font-black text-emerald-700 whitespace-nowrap">{summary.loginUsers} / {summary.loginCount}</p>
+                </div>
               </div>
-              <div className="rounded-2xl border border-blue-100 bg-blue-50/60 p-4">
-                <p className="text-[11px] font-black text-blue-700 tracking-widest">頁面瀏覽</p>
-                <p className="mt-1 text-xl font-black text-blue-700">{summary.pageCount}</p>
+              <div className="rounded-2xl border border-sky-100 bg-sky-50/55 px-4 py-3 min-w-0">
+                <div className="flex items-center justify-between gap-3 min-w-0">
+                  <p className="text-xs font-black text-sky-700 whitespace-nowrap truncate">頁面瀏覽</p>
+                  <p className="text-2xl xl:text-[26px] leading-none font-black text-sky-700 whitespace-nowrap">{summary.pageCount}</p>
+                </div>
               </div>
-              <div className="rounded-2xl border border-amber-100 bg-amber-50/60 p-4">
-                <p className="text-[11px] font-black text-amber-700 tracking-widest">查詢行為</p>
-                <p className="mt-1 text-xl font-black text-amber-700">{summary.queryCount}</p>
+              <div className="rounded-2xl border border-amber-100 bg-amber-50/55 px-4 py-3 min-w-0">
+                <div className="flex items-center justify-between gap-3 min-w-0">
+                  <p className="text-xs font-black text-amber-700 whitespace-nowrap truncate">查詢行為</p>
+                  <p className="text-2xl xl:text-[26px] leading-none font-black text-amber-700 whitespace-nowrap">{summary.queryCount}</p>
+                </div>
               </div>
-              <div className="rounded-2xl border border-rose-100 bg-rose-50/60 p-4">
-                <p className="text-[11px] font-black text-rose-700 tracking-widest">資料異動</p>
-                <p className="mt-1 text-xl font-black text-rose-700">{summary.dataCount}</p>
+              <div className="rounded-2xl border border-rose-100 bg-rose-50/55 px-4 py-3 min-w-0">
+                <div className="flex items-center justify-between gap-3 min-w-0">
+                  <p className="text-xs font-black text-rose-700 whitespace-nowrap truncate">資料異動</p>
+                  <p className="text-2xl xl:text-[26px] leading-none font-black text-rose-700 whitespace-nowrap">{summary.dataCount}</p>
+                </div>
               </div>
             </div>
           )}
 
           {hasQueried && (
-            <div className="mb-4 flex flex-col lg:flex-row gap-3 lg:items-center justify-between rounded-2xl border border-stone-100 bg-stone-50/70 p-3">
-              <div className="flex flex-wrap gap-2">
+            <div className="mb-4 flex flex-col xl:flex-row gap-3 xl:items-center justify-between rounded-2xl border border-stone-100 bg-stone-50/70 p-3 w-full max-w-full min-w-0 overflow-hidden">
+              <div className="flex flex-wrap gap-2 min-w-0">
                 {[
                   ["all", "全部"],
                   ["auth", "登入 / 登出"],
@@ -294,11 +302,11 @@ const SystemMonitor = () => {
                   ["data", "資料異動"],
                   ["system", "系統維護"],
                 ].map(([key, label]) => (
-                  <button key={key} type="button" onClick={() => { setActivityFilter(key); setCurrentPage(1); }} className={`px-3 py-1.5 rounded-xl text-xs font-black border transition-all ${activityFilter === key ? "bg-stone-800 text-white border-stone-800" : "bg-white text-stone-500 border-stone-200 hover:bg-stone-100"}`}>{label}</button>
+                  <button key={key} type="button" onClick={() => { setActivityFilter(key); setCurrentPage(1); }} className={`shrink-0 px-3 py-1.5 rounded-xl text-xs font-black border transition-all whitespace-nowrap ${activityFilter === key ? "bg-stone-800 text-white border-stone-800" : "bg-white text-stone-500 border-stone-200 hover:bg-stone-100"}`}>{label}</button>
                 ))}
               </div>
               <div className="flex items-center gap-2">
-                <input value={keyword} onChange={(e) => { setKeyword(e.target.value); setCurrentPage(1); }} placeholder="搜尋使用者、動作、店家..." className="h-9 w-full lg:w-64 rounded-xl border border-stone-200 bg-white px-3 text-sm font-bold text-stone-600 outline-none focus:border-amber-300" />
+                <input value={keyword} onChange={(e) => { setKeyword(e.target.value); setCurrentPage(1); }} placeholder="搜尋使用者、動作、店家..." className="h-9 w-full xl:w-64 rounded-xl border border-stone-200 bg-white px-3 text-sm font-bold text-stone-600 outline-none focus:border-amber-300 min-w-0" />
                 {lastQueryInfo && <span className="hidden xl:inline text-[11px] font-bold text-stone-400 whitespace-nowrap">本次讀取 {lastQueryInfo.count || 0} 筆｜{lastQueryInfo.queriedAt}</span>}
               </div>
             </div>
@@ -321,62 +329,119 @@ const SystemMonitor = () => {
             </div>
           ) : (
             <>
-              <div className="overflow-x-auto min-h-[400px] rounded-2xl border border-stone-100 relative z-10">
-                <table className="w-full text-left border-collapse min-w-[600px]">
-                  <thead className="bg-stone-50/50 text-stone-400 font-bold text-xs uppercase tracking-wider border-b border-stone-100">
-                    <tr>
-                      <th className="p-4 w-32">時間</th>
-                      <th className="p-4 w-24">裝置</th>
-                      <th className="p-4 w-24">身份</th>
-                      <th className="p-4 w-32">使用者</th>
-                      <th className="p-4 w-28">類型</th>
-                      <th className="p-4 w-32">動作</th>
-                      <th className="p-4">詳細內容</th>
-                    </tr>
-                  </thead>
-                  <tbody className="divide-y divide-stone-50 text-sm bg-white">
-                    {currentData.map((log) => {
-                      const meta = getActivityMeta(log);
-                      const desc = describeLog(log);
-                      const isExpanded = expandedLogId === log.id;
-                      return (
-                        <React.Fragment key={log.id}>
-                          <tr onClick={() => setExpandedLogId(isExpanded ? null : log.id)} className="hover:bg-stone-50 transition-colors cursor-pointer">
-                            <td className="p-4 font-mono text-stone-400 text-xs">{formatTime(log.timestamp)}</td>
-                            <td className="p-4">{getDeviceIcon(log.device)}</td>
-                            <td className="p-4">{getRoleBadge(log.role)}</td>
-                            <td className="p-4 font-bold text-stone-700">{log.user}</td>
-                            <td className="p-4"><span className={`px-2 py-1 rounded text-xs font-black ${meta.badge}`}>{meta.label}</span></td>
-                            <td className="p-4 font-medium text-stone-600">{log.action}</td>
-                            <td className="p-4 text-stone-500 text-xs max-w-sm truncate" title={desc}>{desc}</td>
-                          </tr>
-                          {isExpanded && (
-                            <tr className="bg-stone-50/80">
-                              <td colSpan="7" className="p-4 border-t border-stone-100">
-                                <div className="rounded-2xl bg-white border border-stone-100 p-4 text-xs text-stone-600 leading-relaxed overflow-x-auto">
-                                  <div className="grid grid-cols-1 md:grid-cols-3 gap-3 mb-3">
-                                    <div><span className="font-black text-stone-400">來源頁面：</span>{log.details?.viewLabel || log.details?.view || log.view || "-"}</div>
-                                    <div><span className="font-black text-stone-400">品牌：</span>{log.brandLabel || log.brand || "-"}</div>
-                                    <div><span className="font-black text-stone-400">事件：</span>{log.activityType || log.details?.activityType || "-"}</div>
-                                  </div>
-                                  <pre className="whitespace-pre-wrap break-words rounded-xl bg-stone-50 border border-stone-100 p-3 text-[11px]">{JSON.stringify(log.details || {}, null, 2)}</pre>
-                                </div>
-                              </td>
-                            </tr>
-                          )}
-                        </React.Fragment>
-                      );
-                    })}
-                    {currentData.length === 0 && (
+              <div className="w-full max-w-full min-w-0 relative z-10">
+                {/* 手機：卡片式；避免小螢幕硬塞表格 */}
+                <div className="md:hidden space-y-3">
+                  {currentData.map((log) => {
+                    const meta = getActivityMeta(log);
+                    const desc = describeLog(log);
+                    const isExpanded = expandedLogId === log.id;
+                    return (
+                      <div
+                        key={log.id}
+                        onClick={() => setExpandedLogId(isExpanded ? null : log.id)}
+                        className="rounded-2xl border border-stone-100 bg-white p-4 shadow-sm active:scale-[0.99] transition-all max-w-full min-w-0"
+                      >
+                        <div className="flex items-start justify-between gap-3 min-w-0">
+                          <div className="min-w-0 flex-1">
+                            <div className="flex items-center gap-2 flex-wrap">
+                              <span className="font-mono text-xs text-stone-400 whitespace-nowrap">{formatTime(log.timestamp)}</span>
+                              {getDeviceIcon(log.device)}
+                              {getRoleBadge(log.role)}
+                            </div>
+                            <p className="mt-2 font-black text-stone-700 truncate">{log.user}</p>
+                          </div>
+                          <span className={`shrink-0 inline-flex items-center px-2.5 py-1 rounded-lg text-xs font-bold whitespace-nowrap ${meta.badge}`}>
+                            {meta.label}
+                          </span>
+                        </div>
+
+                        <div className="mt-3 rounded-xl bg-stone-50/70 px-3 py-2 min-w-0">
+                          <p className="text-sm font-black text-stone-700 truncate">{log.action}</p>
+                          <p className="mt-1 text-xs text-stone-500 break-words">{desc}</p>
+                        </div>
+
+                        {isExpanded && (
+                          <div className="mt-3 rounded-2xl bg-white border border-stone-100 p-3 text-xs text-stone-600 leading-relaxed min-w-0">
+                            <div className="grid grid-cols-1 gap-2 mb-3">
+                              <div><span className="font-black text-stone-400">來源頁面：</span>{log.details?.viewLabel || log.details?.view || log.view || "-"}</div>
+                              <div><span className="font-black text-stone-400">品牌：</span>{log.brandLabel || log.brand || "-"}</div>
+                              <div><span className="font-black text-stone-400">事件：</span>{log.activityType || log.details?.activityType || "-"}</div>
+                            </div>
+                            <pre className="whitespace-pre-wrap break-words rounded-xl bg-stone-50 border border-stone-100 p-3 text-[11px] max-h-64 overflow-auto max-w-full">{JSON.stringify(log.details || {}, null, 2)}</pre>
+                          </div>
+                        )}
+                      </div>
+                    );
+                  })}
+                  {currentData.length === 0 && (
+                    <div className="p-10 text-center text-stone-400 font-bold rounded-2xl border border-stone-100 bg-white">
+                      在此日期範圍內無相關紀錄
+                    </div>
+                  )}
+                </div>
+
+                {/* 平板 / 桌機：維持表格呈現，不用超大 min-width，避免撐出瀏覽器 */}
+                <div className="hidden md:block w-full max-w-full min-w-0 overflow-hidden rounded-2xl border border-stone-100 bg-white">
+                  <table className="w-full text-left border-collapse table-fixed">
+                    <thead className="bg-stone-50/70 text-stone-400 font-bold text-xs tracking-wider border-b border-stone-100">
                       <tr>
-                        <td colSpan="7" className="p-10 text-center text-stone-400 font-bold">在此日期範圍內無相關紀錄</td>
+                        <th className="px-3 py-4 w-[9%] whitespace-nowrap">時間</th>
+                        <th className="px-2 py-4 w-[8%] whitespace-nowrap">裝置</th>
+                        <th className="px-2 py-4 w-[8%] whitespace-nowrap">身份</th>
+                        <th className="px-3 py-4 w-[13%] whitespace-nowrap">使用者</th>
+                        <th className="px-2 py-4 w-[10%] whitespace-nowrap">類型</th>
+                        <th className="px-3 py-4 w-[14%] whitespace-nowrap">動作</th>
+                        <th className="px-3 py-4 w-[38%] whitespace-nowrap">詳細內容</th>
                       </tr>
-                    )}
-                  </tbody>
-                </table>
+                    </thead>
+                    <tbody className="divide-y divide-stone-50 text-sm bg-white">
+                      {currentData.map((log) => {
+                        const meta = getActivityMeta(log);
+                        const desc = describeLog(log);
+                        const isExpanded = expandedLogId === log.id;
+                        return (
+                          <React.Fragment key={log.id}>
+                            <tr onClick={() => setExpandedLogId(isExpanded ? null : log.id)} className="hover:bg-stone-50/80 transition-colors cursor-pointer">
+                              <td className="px-3 py-4 font-mono text-stone-400 text-xs whitespace-nowrap truncate">{formatTime(log.timestamp)}</td>
+                              <td className="px-2 py-4 whitespace-nowrap overflow-hidden">{getDeviceIcon(log.device)}</td>
+                              <td className="px-2 py-4 whitespace-nowrap overflow-hidden">{getRoleBadge(log.role)}</td>
+                              <td className="px-3 py-4 font-bold text-stone-700 whitespace-nowrap truncate" title={log.user}>{log.user}</td>
+                              <td className="px-2 py-4 whitespace-nowrap overflow-hidden">
+                                <span className={`inline-flex items-center px-2 py-1 rounded-lg text-xs font-bold whitespace-nowrap max-w-full ${meta.badge}`}>{meta.label}</span>
+                              </td>
+                              <td className="px-3 py-4 font-bold text-stone-700 whitespace-nowrap truncate" title={log.action}>{log.action}</td>
+                              <td className="px-3 py-4 text-stone-500 text-xs truncate" title={desc}>{desc}</td>
+                            </tr>
+                            {isExpanded && (
+                              <tr className="bg-stone-50/70">
+                                <td colSpan="7" className="p-4 border-t border-stone-100">
+                                  <div className="rounded-2xl bg-white border border-stone-100 p-4 text-xs text-stone-600 leading-relaxed overflow-hidden">
+                                    <div className="grid grid-cols-1 md:grid-cols-3 gap-3 mb-3">
+                                      <div><span className="font-black text-stone-400">來源頁面：</span>{log.details?.viewLabel || log.details?.view || log.view || "-"}</div>
+                                      <div><span className="font-black text-stone-400">品牌：</span>{log.brandLabel || log.brand || "-"}</div>
+                                      <div><span className="font-black text-stone-400">事件：</span>{log.activityType || log.details?.activityType || "-"}</div>
+                                    </div>
+                                    <pre className="whitespace-pre-wrap break-words rounded-xl bg-stone-50 border border-stone-100 p-3 text-[11px] max-w-full overflow-auto">{JSON.stringify(log.details || {}, null, 2)}</pre>
+                                  </div>
+                                </td>
+                              </tr>
+                            )}
+                          </React.Fragment>
+                        );
+                      })}
+                      {currentData.length === 0 && (
+                        <tr>
+                          <td colSpan="7" className="p-10 text-center text-stone-400 font-bold">在此日期範圍內無相關紀錄</td>
+                        </tr>
+                      )}
+                    </tbody>
+                  </table>
+                </div>
               </div>
+
               {totalPages > 1 && (
-                <div className="flex justify-between items-center mt-4 pt-2 px-2">
+                <div className="flex flex-col sm:flex-row sm:justify-between sm:items-center gap-3 mt-4 pt-2 px-2 w-full max-w-full">
                   <span className="text-sm text-stone-400 font-medium">頁次 {currentPage} / {totalPages}</span>
                   <div className="flex gap-2">
                     <button onClick={() => setCurrentPage((p) => Math.max(1, p - 1))} disabled={currentPage === 1} className="p-2 border-2 border-stone-100 rounded-xl hover:bg-stone-50 disabled:opacity-50 text-stone-500"><ChevronLeft size={18} /></button>
