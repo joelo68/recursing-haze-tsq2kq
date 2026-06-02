@@ -283,8 +283,12 @@ export function useDashboardStats() {
       const summaryUpdatedMs = updatedAtText ? new Date(updatedAtText).getTime() : 0;
 
       const pendingRows = (queueRows || []).filter((row) => getSummaryQueueYearMonth(row) === selectedYearMonth);
-      const flagStatus = String(recalcFlag?.status || "");
-      const flagDirty = Boolean(recalcFlag) && !["completed", "verified", "idle"].includes(flagStatus);
+      const flagStatus = String(recalcFlag?.status || "").toLowerCase();
+      const flagMismatchCount = Number(recalcFlag?.lastMismatchCount ?? recalcFlag?.mismatchCount ?? 0);
+      const flagCompletedAtText = recalcFlag?.lastCompletedAtText || recalcFlag?.completedAtText || "";
+      const flagIsCompleteStatus = ["completed", "verified", "idle"].includes(flagStatus);
+      const flagVerified = Boolean(recalcFlag) && ["completed", "verified"].includes(flagStatus) && recalcFlag?.dirty !== true && flagMismatchCount === 0;
+      const flagDirty = Boolean(recalcFlag) && (recalcFlag?.dirty === true || !flagIsCompleteStatus);
       const compareLogs = (logRows || [])
         .filter((row) => row.type === "dashboard_summary" && row.action === "compare_summary_with_raw")
         .sort((a, b) => new Date(b.createdAtText || 0).getTime() - new Date(a.createdAtText || 0).getTime());
@@ -296,6 +300,12 @@ export function useDashboardStats() {
       if (!allSummaryExists) statusKey = "missing";
       else if ((pendingRows.length > 0 || flagDirty) && isSelectedCurrentMonth) statusKey = "current_dirty";
       else if (pendingRows.length > 0 || flagDirty) statusKey = "dirty";
+      // ★ 關鍵修正：
+      // 後端 auto repair worker 會把 summary_recalc_flags/{yearMonth} 寫回 verified。
+      // 只要 flag 已 verified、dirty=false、mismatch=0，就應視為可用 Summary；
+      // 不再強制依賴 maintenance_logs 的 compare_summary_with_raw 時間。
+      // 否則後端已整理成功時，Dashboard 仍可能因舊 compare log 而卡在「明細暫代顯示」。
+      else if (flagVerified) statusKey = "verified";
       else if (!latestCompare || !compareAfterBuild) statusKey = "unverified";
       else if (latestCompare.status === "matched") statusKey = "verified";
       else statusKey = "mismatch";
@@ -314,9 +324,9 @@ export function useDashboardStats() {
         recalcFlagRebuildAfterAtText: recalcFlag?.rebuildAfterAtText || "",
         lastDirtyAtText: recalcFlag?.lastDirtyAtText || "",
         lastUpdatedAtText: updatedAtText,
-        lastCompareAtText: latestCompare?.createdAtText || "",
-        lastCompareStatus: latestCompare?.status || "-",
-        lastCompareMismatchCount: latestCompare?.mismatchCount ?? 0,
+        lastCompareAtText: latestCompare?.createdAtText || flagCompletedAtText || "",
+        lastCompareStatus: latestCompare?.status || (flagVerified ? "matched" : "-"),
+        lastCompareMismatchCount: latestCompare?.mismatchCount ?? flagMismatchCount,
         checkedAtText: new Date().toISOString(),
       };
     };

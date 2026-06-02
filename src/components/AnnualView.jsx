@@ -49,7 +49,9 @@ const CustomLegend = () => {
 
 const AnnualView = () => {
   const { 
-    annualAggregatedData, // ★ 接收從 App.jsx 傳來的高效能總帳卡
+    annualAggregatedData, // monthly_aggregated：本月 / 未整理月份備援
+    annualDashboardSummaries = [], // ★ 歷史月份可信口徑：dashboard_summary
+    annualSummaryStatusMap = {}, // ★ Summary 狀態：避免 dirty / mismatch 仍被使用
     budgets, 
     managers, 
     fmtMoney, 
@@ -240,9 +242,86 @@ const AnnualView = () => {
       current.setMonth(current.getMonth() + 1);
     }
 
-    const statsMap = monthList.map(item => ({ ...item, cash: 0, accrual: 0, traffic: 0, budget: 0, accrualBudget: 0 }));
+    const statsMap = monthList.map(item => ({ ...item, cash: 0, accrual: 0, traffic: 0, budget: 0, accrualBudget: 0, source: "aggregated" }));
 
-    // ★ 核心切換：改由讀取 monthly_aggregated 總帳卡
+    const now = new Date();
+    const currentYearMonth = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}`;
+    const summaryByMonth = {};
+    (annualDashboardSummaries || []).forEach((summary) => {
+      const ym = String(summary?.yearMonth || summary?.id || "");
+      if (ym) summaryByMonth[ym] = summary;
+    });
+
+    const isSummaryTrusted = (yearMonth) => {
+      const flag = annualSummaryStatusMap?.[yearMonth];
+      if (!flag) return true; // 舊月份若已存在 Summary 但尚未建立 flag，先允許使用，避免回到舊 monthly_aggregated 口徑。
+      const status = String(flag.status || "").toLowerCase();
+      if (flag.dirty === true) return false;
+      if (Number(flag.pendingCount || 0) > 0) return false;
+      if (["dirty", "mismatch", "unverified", "missing", "pending", "rebuilding"].includes(status)) return false;
+      return ["verified", "ready", "completed"].includes(status) || !status;
+    };
+
+    const pickNumber = (row, keys = []) => keys.reduce((value, key) => {
+      if (value !== null && value !== undefined) return value;
+      const raw = row?.[key];
+      return raw === null || raw === undefined ? null : Number(raw) || 0;
+    }, null) || 0;
+
+    // ★ 與營運總覽保持同一口徑：
+    // 全品牌 / 全區視角直接使用 dashboard_summary.grandTotal。
+    // 只有區長、單店或非 director/trainer 權限需要篩選時，才從 stores 重新加總。
+    // 先前版本即使是「全區」也用 managers/effectiveStores 篩 stores，會漏掉未分配或不在架構內但已回報的店，
+    // 造成年度分析 Q2 與營運總覽單月數字對不上。
+    const shouldFilterSummaryStores = Boolean(
+      selectedAnnualManager ||
+      selectedAnnualStore ||
+      userRole === "manager" ||
+      userRole === "store"
+    );
+
+    const sumFieldsFromStores = (summary, targetStat) => {
+      if (!shouldFilterSummaryStores) {
+        const grand = summary?.grandTotal || {};
+        targetStat.cash = pickNumber(grand, ["cash", "cashTotal", "totalCash"]);
+        targetStat.accrual = pickNumber(grand, ["accrual", "accrualTotal", "totalAccrual"]);
+        targetStat.traffic = pickNumber(grand, ["traffic", "trafficTotal", "totalTraffic"]);
+        targetStat.budget = pickNumber(grand, ["budget", "cashBudget", "cashTarget", "targetCash"]);
+        targetStat.accrualBudget = pickNumber(grand, ["accrualBudget", "accrualTarget", "targetAccrual"]);
+        targetStat.source = "summary";
+        return;
+      }
+
+      const allStores = Object.values(summary?.stores || {});
+      const stores = allStores.filter((store) => {
+        const core = cleanName(store.store || store.displayName || store.name || store.storeName);
+        if (!core) return false;
+        return effectiveStores.includes(core);
+      });
+
+      targetStat.cash = stores.reduce((sum, store) => sum + pickNumber(store, ["cash", "cashTotal", "totalCash"]), 0);
+      targetStat.accrual = stores.reduce((sum, store) => sum + pickNumber(store, ["accrual", "accrualTotal", "totalAccrual"]), 0);
+      targetStat.traffic = stores.reduce((sum, store) => sum + pickNumber(store, ["traffic", "trafficTotal", "totalTraffic"]), 0);
+      targetStat.budget = stores.reduce((sum, store) => sum + pickNumber(store, ["budget", "cashBudget", "cashTarget", "targetCash"]), 0);
+      targetStat.accrualBudget = stores.reduce((sum, store) => sum + pickNumber(store, ["accrualBudget", "accrualTarget", "targetAccrual"]), 0);
+      targetStat.source = "summary";
+    };
+
+    const summaryAppliedMonths = new Set();
+
+    // ★ 歷史月份優先採用 verified dashboard_summary。
+    // 這是與營運總覽一致的可信口徑，避免年度分析 Q2 / 年度累積與單月 Dashboard 對不上。
+    statsMap.forEach((stat) => {
+      const yearMonth = `${stat.y}-${String(stat.m).padStart(2, "0")}`;
+      const isHistoricalMonth = yearMonth < currentYearMonth;
+      const summary = summaryByMonth[yearMonth];
+      if (isHistoricalMonth && summary && isSummaryTrusted(yearMonth)) {
+        sumFieldsFromStores(summary, stat);
+        summaryAppliedMonths.add(yearMonth);
+      }
+    });
+
+    // monthly_aggregated 僅作為本月 / 未整理月份備援。
     annualAggregatedData.forEach(d => {
       const rawStoreName = cleanName(d.storeName);
       
@@ -250,15 +329,16 @@ const AnnualView = () => {
       if (auditExclusions.includes(rawStoreName)) return;
       if (!effectiveStores.includes(rawStoreName)) return;
 
-      if (!d.yearMonth) return; // ★ 從 d.date 變成 d.yearMonth (例如 "2024-03")
+      if (!d.yearMonth) return;
       const parts = d.yearMonth.split("-");
       const y = parseInt(parts[0]);
       const m = parseInt(parts[1]);
       const realYear = y < 1911 ? y + 1911 : y;
+      const yearMonth = `${realYear}-${String(m).padStart(2, "0")}`;
+      if (summaryAppliedMonths.has(yearMonth)) return;
       
       const targetStat = statsMap.find(s => s.y === realYear && s.m === m);
       if (targetStat) {
-        // ★ 因為結算腳本已經把現金和退費都分開加總了，所以直接相減即可
         targetStat.cash += (Number(d.cash) || 0) - (Number(d.refund) || 0);
         
         let currentAccrual = Number(d.accrual) || 0;
@@ -273,13 +353,16 @@ const AnnualView = () => {
     let totalCash = 0; let totalBudget = 0; let totalAccrual = 0; let totalAccrualBudget = 0; let totalTraffic = 0;
 
     statsMap.forEach(stat => {
-      targetStoreNames.forEach(storeName => {
-        const key = `${storeName}_${stat.y}_${stat.m}`;
-        if (budgets[key]) {
-          stat.budget += (Number(budgets[key].cashTarget) || 0);
-          stat.accrualBudget += (Number(budgets[key].accrualTarget) || 0);
-        }
-      });
+      // Summary 內已包含該月、該篩選條件的目標值；只有備援 monthly_aggregated 口徑才從 budgets 補目標。
+      if (stat.source !== "summary") {
+        targetStoreNames.forEach(storeName => {
+          const key = `${storeName}_${stat.y}_${stat.m}`;
+          if (budgets[key]) {
+            stat.budget += (Number(budgets[key].cashTarget) || 0);
+            stat.accrualBudget += (Number(budgets[key].accrualTarget) || 0);
+          }
+        });
+      }
 
       stat.achievement = stat.budget > 0 ? (stat.cash / stat.budget) * 100 : 0;
       stat.accrualAchievement = stat.accrualBudget > 0 ? (stat.accrual / stat.accrualBudget) * 100 : 0;
@@ -299,7 +382,7 @@ const AnnualView = () => {
         traffic: totalTraffic,
       }
     };
-  }, [annualAggregatedData, budgets, startMonthStr, endMonthStr, auditExclusions, brandPrefix, effectiveStores, cleanName]); // ★ 依賴陣列換成 annualAggregatedData
+  }, [annualAggregatedData, annualDashboardSummaries, annualSummaryStatusMap, budgets, startMonthStr, endMonthStr, auditExclusions, brandPrefix, effectiveStores, cleanName, selectedAnnualManager, selectedAnnualStore, userRole]); // ★ Summary-first 口徑需跟著篩選與權限更新
 
   const { monthlyStats, totals } = annualData;
 

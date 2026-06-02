@@ -63,20 +63,147 @@ const AuditView = () => {
 
   const cleanStoreName = useCallback((name) => {
     if (!name) return "";
-    return String(name).replace(/^(CYJ|Anew\s*\(安妞\)|Yibo\s*\(伊啵\)|安妞|伊啵|Anew|Yibo)\s*/i, '').replace(/店$/, '').trim();
+    return String(name)
+      .replace(/^(DRCYJ|DR\.CYJ|CYJ|Anew\s*\(安妞\)|Yibo\s*\(伊啵\)|安妞|伊啵|Anew|Yibo)\s*/i, '')
+      .replace(/店$/i, '')
+      .replace(/[　\s]+/g, '')
+      .trim();
   }, []);
+
+  const normalizeText = useCallback((value) => {
+    return String(value || "")
+      .toLowerCase()
+      .replace(/[　\s\-_/()（）.]/g, "")
+      .trim();
+  }, []);
+
+  const getChineseText = useCallback((value) => {
+    return (String(value || "").match(/[\u4e00-\u9fa5]+/g) || []).join("");
+  }, []);
+
+  const getTherapistStore = useCallback((t = {}) => {
+    return cleanStoreName(
+      t.storeName || t.store || t.homeStore || t.branch || t.branchName || t.primaryStore || t.currentStore || ""
+    );
+  }, [cleanStoreName]);
+
+  const getTherapistDisplayName = useCallback((t = {}) => {
+    return t.name || t.therapistName || t.displayName || String(t.id || "未命名");
+  }, []);
+
+  const getTherapistManager = useCallback((t = {}) => {
+    if (t.manager || t.managerName || t.areaManager) return t.manager || t.managerName || t.areaManager;
+    const storeCore = getTherapistStore(t);
+    if (!storeCore) return "未分區";
+    const found = Object.entries(managers || {}).find(([, stores]) =>
+      (stores || []).some((s) => cleanStoreName(s) === storeCore)
+    );
+    return found?.[0] || "未分區";
+  }, [managers, cleanStoreName, getTherapistStore]);
 
   const isTherapistMatch = useCallback((str, t) => {
     if (!str || !t) return false;
-    const s = String(str).toLowerCase().trim(), tid = String(t.id || "").toLowerCase().trim(), tname = String(t.name || "").toLowerCase().trim();
-    if (!s) return false;
-    if (tid && (s === tid || s.includes(tid) || tid.includes(s))) return true;
-    if (tname && (s === tname || s.includes(tname) || tname.includes(s))) return true;
-    const getChi = (x) => (x.match(/[\u4e00-\u9fa5]+/g) || []).join('');
-    const sChi = getChi(s), tidChi = getChi(tid), tnameChi = getChi(tname);
-    if (sChi.length >= 2 && ((tidChi && sChi.includes(tidChi)) || (tnameChi && sChi.includes(tnameChi)))) return true;
+
+    const source = normalizeText(str);
+    if (!source) return false;
+
+    const candidates = [
+      t.id,
+      t.uid,
+      t.therapistId,
+      t.employeeId,
+      t.name,
+      t.therapistName,
+      t.displayName,
+    ].map(normalizeText).filter(Boolean);
+
+    if (candidates.some((candidate) =>
+      source === candidate ||
+      source.includes(candidate) ||
+      (candidate.length >= 2 && candidate.includes(source))
+    )) return true;
+
+    const sourceChinese = getChineseText(str);
+    if (sourceChinese.length >= 2) {
+      const chineseCandidates = [
+        t.name,
+        t.therapistName,
+        t.displayName,
+      ].map(getChineseText).filter((v) => v.length >= 2);
+
+      if (chineseCandidates.some((candidate) =>
+        sourceChinese === candidate ||
+        sourceChinese.includes(candidate) ||
+        candidate.includes(sourceChinese)
+      )) return true;
+    }
+
     return false;
+  }, [normalizeText, getChineseText]);
+
+  const isTargetInSelectedMonth = useCallback((key, targetObj = {}) => {
+    const y = String(selectedYear);
+    const m = String(parseInt(selectedMonth, 10));
+    const mm = m.padStart(2, "0");
+    const keyText = String(key || "");
+
+    if (String(targetObj.yearMonth || targetObj.monthKey || "") === `${y}-${mm}`) return true;
+    if (String(targetObj.year || targetObj.targetYear || "") === y && String(targetObj.month || targetObj.targetMonth || "").padStart(2, "0") === mm) return true;
+    if (keyText.includes(`${y}_${m}`) || keyText.includes(`${y}_${mm}`) || keyText.includes(`${y}-${mm}`)) return true;
+    if (keyText.includes(y) && (keyText.includes(`_${m}`) || keyText.includes(`_${mm}`) || keyText.includes(`-${mm}`))) return true;
+
+    return false;
+  }, [selectedYear, selectedMonth]);
+
+  const readTargetNumber = useCallback((value) => {
+    if (value == null) return 0;
+    if (typeof value === "number" || typeof value === "string") return Number(value) || 0;
+    if (typeof value === "object") {
+      return Number(
+        value.target ??
+        value.revenueTarget ??
+        value.targetRevenue ??
+        value.totalRevenueTarget ??
+        value.performanceTarget ??
+        value.cashTarget ??
+        value.accrualTarget ??
+        value.goal ??
+        value.value ??
+        0
+      ) || 0;
+    }
+    return 0;
   }, []);
+
+  const getTherapistMonthlyTarget = useCallback((targetObj = {}) => {
+    const m = String(parseInt(selectedMonth, 10));
+    const mm = m.padStart(2, "0");
+    const monthlyTargets = targetObj.monthlyTargets || targetObj.targets || targetObj.monthTargets || null;
+
+    if (Array.isArray(monthlyTargets)) {
+      return readTargetNumber(monthlyTargets[parseInt(m, 10) - 1] ?? monthlyTargets[parseInt(m, 10)]);
+    }
+
+    if (monthlyTargets && typeof monthlyTargets === "object") {
+      const candidate = monthlyTargets[m] ?? monthlyTargets[mm] ?? monthlyTargets[`month_${m}`] ?? monthlyTargets[`month_${mm}`] ?? monthlyTargets[`m${m}`] ?? monthlyTargets[`m${mm}`];
+      const value = readTargetNumber(candidate);
+      if (value > 0) return value;
+    }
+
+    return readTargetNumber(
+      targetObj[m] ??
+      targetObj[mm] ??
+      targetObj[`month_${m}`] ??
+      targetObj[`month_${mm}`] ??
+      targetObj[`m${m}`] ??
+      targetObj[`m${mm}`] ??
+      targetObj.target ??
+      targetObj.revenueTarget ??
+      targetObj.targetRevenue ??
+      targetObj.totalRevenueTarget ??
+      targetObj.performanceTarget
+    );
+  }, [selectedMonth, readTargetNumber]);
 
   const openConfigModal = () => { setLocalExclusions(auditExclusions || []); setIsConfigModalOpen(true); };
   const saveConfig = async () => { await handleUpdateAuditExclusions(localExclusions); setIsConfigModalOpen(false); showToast("排除名單已更新", "success"); };
@@ -94,16 +221,31 @@ const AuditView = () => {
   const validTherapistsForMonth = useMemo(() => {
       const y = parseInt(selectedYear), m = parseInt(selectedMonth);
       const start = new Date(y, m - 1, 1), end = new Date(y, m, 0, 23, 59, 59);
+      const activeStoreSet = new Set(activeStoresForCalendar.map((s) => cleanStoreName(s.id)).filter(Boolean));
+
       return (therapists || []).filter(t => {
           const ob = t.onboardDate ? new Date(t.onboardDate) : new Date(2000,0,1);
           if (ob > end) return false; 
           if (t.resignDate && new Date(t.resignDate) < start) return false; 
           if (!t.resignDate && (t.status === 'resigned' || t.isActive === false)) return false;
+
+          // 管理師檢核必須跟目前品牌 / 區長架構的店家範圍一致；
+          // 避免 Summary 改版後 therapists 來源變成全集團時，把其他品牌或離群資料算進來。
+          const therapistStore = getTherapistStore(t);
+          if (therapistStore && activeStoreSet.size > 0 && !activeStoreSet.has(therapistStore)) return false;
+
           return true;
       });
-  }, [therapists, selectedYear, selectedMonth]);
+  }, [therapists, selectedYear, selectedMonth, activeStoresForCalendar, cleanStoreName, getTherapistStore]);
 
-  const activeTherapistsForCalendar = useMemo(() => validTherapistsForMonth.map(t => ({ id: String(t.id || t.name), name: t.name, stores: [String(t.id), t.name] })), [validTherapistsForMonth]);
+  const activeTherapistsForCalendar = useMemo(() => validTherapistsForMonth.map(t => {
+      const displayName = getTherapistDisplayName(t);
+      return {
+        id: String(t.id || t.therapistId || displayName),
+        name: displayName,
+        stores: [String(t.id || ""), String(t.therapistId || ""), displayName].filter(Boolean)
+      };
+  }), [validTherapistsForMonth, getTherapistDisplayName]);
 
   // ============================================================================
   // ★ 大腦中心 (Single Source of Truth)
@@ -130,28 +272,48 @@ const AuditView = () => {
 
               let isOff = false;
               Object.entries(therapistSchedules || {}).forEach(([k, sched]) => {
-                  if (isTherapistMatch(k, t) || isTherapistMatch(sched?.therapistId, t)) {
-                      if ((k.includes(yStr) || String(sched?.year) === yStr) && (k.includes(`_${mNum}`) || String(sched?.month) === String(mNum))) {
-                          if (sched?.daysOff?.some(off => (String(off).includes('-') ? off === dateStr : Number(off) === d))) isOff = true;
-                      }
-                  }
+                  const matchedTherapist = isTherapistMatch(k, t) || isTherapistMatch(sched?.therapistId, t) || isTherapistMatch(sched?.therapistName, t) || isTherapistMatch(sched?.name, t);
+                  if (!matchedTherapist) return;
+
+                  const scheduleYearMonth = String(sched?.yearMonth || sched?.monthKey || "");
+                  const sameMonth =
+                      scheduleYearMonth === `${yStr}-${mStr}` ||
+                      (String(sched?.year) === yStr && String(sched?.month).padStart(2, "0") === mStr) ||
+                      (String(k).includes(yStr) && (String(k).includes(`_${mNum}`) || String(k).includes(`_${mStr}`) || String(k).includes(`-${mStr}`)));
+
+                  if (!sameMonth) return;
+
+                  if ((sched?.daysOff || []).some(off => {
+                      const offDate = typeof off === "object" && off !== null ? (off.date || off.day || off.value) : off;
+                      return String(offDate).includes("-") ? safeGetDateStr(offDate) === dateStr : Number(offDate) === d;
+                  })) isOff = true;
               });
               if (isOff) return;
 
               const hasSub = (therapistReports || []).some(r => {
-                  const d1 = safeGetDateStr(r.date), d2 = String(r.id || "");
-                  if (d1 === dateStr || d2.includes(dateStr)) {
-                      return isTherapistMatch(r.therapistId, t) || isTherapistMatch(r.therapistName, t) || isTherapistMatch(r.id, t) || isTherapistMatch(r.storeName, t);
-                  }
-                  return false;
+                  const reportDate = safeGetDateStr(r.date || r.reportDate || r.sourceDate);
+                  const reportId = String(r.id || "");
+                  if (reportDate !== dateStr && !reportId.includes(dateStr)) return false;
+
+                  return (
+                    isTherapistMatch(r.therapistId, t) ||
+                    isTherapistMatch(r.therapistName, t) ||
+                    isTherapistMatch(r.name, t) ||
+                    isTherapistMatch(r.personName, t) ||
+                    isTherapistMatch(reportId, t)
+                  );
               });
 
-              if (!hasSub) missingT.push(`${t.name} (${t.store}店)`);
+              if (!hasSub) {
+                  const displayName = getTherapistDisplayName(t);
+                  const storeName = getTherapistStore(t);
+                  missingT.push(`${displayName}${storeName ? ` (${storeName}店)` : ""}`);
+              }
           });
           matrix.therapists[dateStr] = missingT;
       }
       return matrix;
-  }, [selectedYear, selectedMonth, rawData, activeStoresForCalendar, validTherapistsForMonth, therapistSchedules, therapistReports, isTherapistMatch, brandPrefix]);
+  }, [selectedYear, selectedMonth, rawData, activeStoresForCalendar, validTherapistsForMonth, therapistSchedules, therapistReports, isTherapistMatch, brandPrefix, getTherapistDisplayName, getTherapistStore]);
 
   // ============================================================================
   // ★ 完美日曆資料：既服從大腦，又保留真實業績
@@ -193,9 +355,12 @@ const AuditView = () => {
               const missingT = dailyMatrix.therapists[dateStr] || [];
 
               validTherapistsForMonth.forEach(t => {
-                  const isMissing = missingT.includes(`${t.name} (${t.store}店)`);
-                  const sid = String(t.id || t.name).trim();
-                  const real = thNorm.find(r => r.parsedDate === dateStr && (isTherapistMatch(r.therapistId, t) || isTherapistMatch(r.therapistName, t) || isTherapistMatch(r.id, t)));
+                  const displayName = getTherapistDisplayName(t);
+                  const storeName = getTherapistStore(t);
+                  const missingName = `${displayName}${storeName ? ` (${storeName}店)` : ""}`;
+                  const isMissing = missingT.includes(missingName);
+                  const sid = String(t.id || t.therapistId || displayName).trim();
+                  const real = thNorm.find(r => r.parsedDate === dateStr && (isTherapistMatch(r.therapistId, t) || isTherapistMatch(r.therapistName, t) || isTherapistMatch(r.name, t) || isTherapistMatch(r.id, t)));
 
                   if (!isMissing) {
                       // 沒缺漏：給真實業績，若為0則墊底 0.0001 確保綠燈
@@ -213,7 +378,7 @@ const AuditView = () => {
           }
       }
       return reports;
-  }, [dailyMatrix, auditType, activeStoresForCalendar, validTherapistsForMonth, selectedYear, selectedMonth, rawData, therapistReports, isTherapistMatch, brandPrefix]);
+  }, [dailyMatrix, auditType, activeStoresForCalendar, validTherapistsForMonth, selectedYear, selectedMonth, rawData, therapistReports, isTherapistMatch, brandPrefix, getTherapistDisplayName, getTherapistStore]);
 
   const activeData = useMemo(() => {
       let missing = [];
@@ -235,16 +400,32 @@ const AuditView = () => {
       else if (auditType === 'therapist-target') {
           validTherapistsForMonth.forEach(t => {
               let hasTarget = false;
+
               Object.entries(therapistTargets || {}).forEach(([k, targetObj]) => {
-                  if (isTherapistMatch(k, t) || isTherapistMatch(targetObj?.therapistId, t)) {
-                      if (k.includes(selectedYear) || String(targetObj?.year) === selectedYear) {
-                          const targetVal = targetObj?.monthlyTargets?.[parseInt(selectedMonth)] || targetObj?.[parseInt(selectedMonth)];
-                          if (targetVal && parseInt(targetVal) > 0) hasTarget = true;
-                      }
+                  const matchedTherapist =
+                    isTherapistMatch(k, t) ||
+                    isTherapistMatch(targetObj?.therapistId, t) ||
+                    isTherapistMatch(targetObj?.therapistName, t) ||
+                    isTherapistMatch(targetObj?.name, t);
+
+                  if (!matchedTherapist) return;
+
+                  const sameMonth = isTargetInSelectedMonth(k, targetObj);
+                  const targetVal = getTherapistMonthlyTarget(targetObj);
+
+                  // 兼容兩種格式：
+                  // 1. 一人一份全年目標：monthlyTargets[5] / monthlyTargets["05"]
+                  // 2. 一人一月一份目標：docId 或欄位直接帶 year/month/yearMonth + target
+                  if (sameMonth || targetObj?.monthlyTargets || targetObj?.targets || targetObj?.monthTargets) {
+                      if (targetVal > 0) hasTarget = true;
                   }
               });
+
               if (!hasTarget) {
-                  const name = `${t.name} (${t.store}店)`, mgr = t.manager || "未分區";
+                  const displayName = getTherapistDisplayName(t);
+                  const storeName = getTherapistStore(t);
+                  const name = `${displayName}${storeName ? ` (${storeName}店)` : ""}`;
+                  const mgr = getTherapistManager(t);
                   missing.push(name); if(!missingByManager[mgr]) missingByManager[mgr]=[]; missingByManager[mgr].push(name);
               }
           });
@@ -257,15 +438,15 @@ const AuditView = () => {
               const rawStore = nameStr.replace(/^(CYJ|安妞|伊啵)/, '').replace(/店$/, '');
               Object.entries(managers).forEach(([m, stores]) => { if (stores.includes(rawStore)) mgr = m; });
           } else {
-              const t = validTherapistsForMonth.find(v => nameStr.includes(v.name));
-              if (t && t.manager) mgr = t.manager;
+              const t = validTherapistsForMonth.find(v => nameStr.includes(getTherapistDisplayName(v)));
+              if (t) mgr = getTherapistManager(t);
           }
           if (!missingByManager[mgr]) missingByManager[mgr] = [];
           missingByManager[mgr].push(nameStr);
       });
 
       return { missing, missingByManager };
-  }, [auditType, checkDate, dailyMatrix, managers, budgets, therapistTargets, selectedYear, selectedMonth, auditExclusions, brandPrefix, cleanStoreName, validTherapistsForMonth, isTherapistMatch]);
+  }, [auditType, checkDate, dailyMatrix, managers, budgets, therapistTargets, selectedYear, selectedMonth, auditExclusions, brandPrefix, cleanStoreName, validTherapistsForMonth, isTherapistMatch, isTargetInSelectedMonth, getTherapistMonthlyTarget, getTherapistDisplayName, getTherapistStore, getTherapistManager]);
 
   const calendarStores = auditType.includes('therapist') ? activeTherapistsForCalendar : activeStoresForCalendar;
 

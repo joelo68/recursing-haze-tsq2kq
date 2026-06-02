@@ -44,7 +44,7 @@ import {
 // ==========================================
 // ★ 系統核心版本號 (終極動態快取版)
 // ==========================================
-const CURRENT_APP_VERSION = "3.0.4"; 
+const CURRENT_APP_VERSION = "3.0.5"; 
 
 const isNewerVersion = (local, remote) => {
   if (!remote) return true;
@@ -194,6 +194,8 @@ export default function App() {
 
   const [rawData, setRawData] = useState([]); 
   const [annualAggregatedData, setAnnualAggregatedData] = useState([]); 
+  const [annualDashboardSummaries, setAnnualDashboardSummaries] = useState([]);
+  const [annualSummaryStatusMap, setAnnualSummaryStatusMap] = useState({});
   const [therapistAnnualAggregatedData, setTherapistAnnualAggregatedData] = useState([]); // ★新增：管理師專屬結算包
   const [budgets, setBudgets] = useState({});
   const [targets, setTargets] = useState({ newASP: 3500, trafficASP: 1200 });
@@ -561,8 +563,8 @@ export default function App() {
     // 因此這裡不可改成不明確的 where 查詢，否則營運總覽會歸零。
     // 做法：
     // 1. monthly_targets + kpi_targets 保留完整結構，但加入 10 分鐘快取。
-    // 2. therapist_schedules 只有進入「管師排休」才讀。
-    // 3. therapist_targets 在 Dashboard / 管師目標頁才讀，避免人員績效缺目標。
+    // 2. therapist_schedules 只有進入「管師排休 / 回報檢核」才讀。
+    // 3. therapist_targets 在 Dashboard / 管師目標頁 / 回報檢核才讀，避免人員績效與管理師目標檢核缺資料。
     // ==========================================
     const fetchLowFrequencyData = async () => {
       try {
@@ -593,8 +595,8 @@ export default function App() {
         );
         lowFrequencyUnsubs.push(unsubKpiTargets);
 
-        const shouldLoadSchedules = activeView === "t-schedule";
-        const shouldLoadTherapistTargets = activeView === "dashboard" || activeView === "t-targets";
+        const shouldLoadSchedules = activeView === "t-schedule" || activeView === "audit";
+        const shouldLoadTherapistTargets = activeView === "dashboard" || activeView === "t-targets" || activeView === "audit";
 
         if (shouldLoadSchedules) {
           const scheduleCacheKey = `${currentBrand.id}_${targetYearStr}_therapist_schedules_v2`;
@@ -679,12 +681,41 @@ export default function App() {
     if (!user || isLowPowerMode) return;
     const targetYear = String(selectedYear);
 
-    // 1. 抓取店鋪結算表
+    // 1. 抓取店鋪結算表：保留作為本月 / 未整理月份備援資料源
     const unsubAgg = onSnapshot(
       query(getCollectionPath("monthly_aggregated"), where("year", "in", [targetYear, Number(targetYear)])),
       (s) => {
         trackSnapshotRead("monthly_aggregated_year", s, getStableReadMeta("monthly_aggregated_year"));
         setAnnualAggregatedData(s.docs.map((d) => ({ id: d.id, ...d.data() })));
+      }
+    );
+
+    // ★ 年度分析歷史月份 Summary-first：
+    // Dashboard 已改用 verified Summary 作為歷史月份可信口徑，年度分析也必須讀同一批 Summary，
+    // 避免 Q2 / 年度表格與單月營運總覽出現不同金額。
+    const unsubDashboardSummary = onSnapshot(
+      getCollectionPath("dashboard_summary"),
+      (s) => {
+        trackSnapshotRead("dashboard_summary_year_for_annual", s, getStableReadMeta("dashboard_summary_year_for_annual"));
+        setAnnualDashboardSummaries(
+          s.docs
+            .map((d) => ({ id: d.id, ...d.data() }))
+            .filter((row) => String(row.yearMonth || row.id || "").startsWith(`${targetYear}-`))
+        );
+      }
+    );
+
+    const unsubSummaryFlags = onSnapshot(
+      getCollectionPath("summary_recalc_flags"),
+      (s) => {
+        trackSnapshotRead("summary_recalc_flags_year_for_annual", s, getStableReadMeta("summary_recalc_flags_year_for_annual"));
+        const map = {};
+        s.docs.forEach((d) => {
+          const data = { id: d.id, ...d.data() };
+          const ym = String(data.affectedYearMonth || data.yearMonth || d.id || "");
+          if (ym.startsWith(`${targetYear}-`)) map[ym] = data;
+        });
+        setAnnualSummaryStatusMap(map);
       }
     );
 
@@ -699,6 +730,8 @@ export default function App() {
 
     return () => {
       unsubAgg();
+      unsubDashboardSummary();
+      unsubSummaryFlags();
       unsubTherapistAgg(); // ★ 離開時記得關閉管線
     };
   }, [user, currentBrand, selectedYear, getCollectionPath, getStableReadMeta, isLowPowerMode]);
@@ -943,11 +976,11 @@ export default function App() {
 
   const contextValue = useMemo(() => ({
     user, loading, analytics, managers: visibleManagers, budgets, targets, rawData: visibleRawData, allReports: rawData, 
-    annualAggregatedData, therapistAnnualAggregatedData, // ★ 把這包管理師資料交出去
+    annualAggregatedData, annualDashboardSummaries, annualSummaryStatusMap, therapistAnnualAggregatedData, // ★ 把年度 Summary 與管理師資料交出去
     showToast, openConfirm, fmtMoney, fmtNum, inputDate, setInputDate, storeList: analytics?.storeList || [], setTargets, selectedYear, selectedMonth, permissions, storeAccounts, managerAuth, currentUser, userRole, logActivity, handleUpdateStorePassword, handleUpdateManagerPassword, handleUpdateTherapistPassword, navigateToStore, activeView, appId, 
     therapists: visibleTherapists, therapistReports: visibleTherapistReports, therapistSchedules, therapistTargets, trainerAuth, handleUpdateTrainerAuth, auditExclusions, handleUpdateAuditExclusions, currentBrand, setCurrentBrandId, getCollectionPath, getDocPath, dailyLoginCount, yesterdayLoginCount, securityConfig, isOnline, isLowPowerMode,
     fetchGlobalData 
-  }), [user, loading, analytics, visibleManagers, budgets, targets, visibleRawData, rawData, annualAggregatedData, therapistAnnualAggregatedData, inputDate, selectedYear, selectedMonth, permissions, storeAccounts, managerAuth, currentUser, userRole, logActivity, handleUpdateStorePassword, handleUpdateManagerPassword, handleUpdateTherapistPassword, navigateToStore, activeView, appId, visibleTherapists, visibleTherapistReports, therapistSchedules, therapistTargets, trainerAuth, handleUpdateTrainerAuth, auditExclusions, handleUpdateAuditExclusions, currentBrand, setCurrentBrandId, getCollectionPath, getDocPath, dailyLoginCount, yesterdayLoginCount, securityConfig, isOnline, isLowPowerMode, fetchGlobalData]); // ★ 依賴陣列也要加
+  }), [user, loading, analytics, visibleManagers, budgets, targets, visibleRawData, rawData, annualAggregatedData, annualDashboardSummaries, annualSummaryStatusMap, therapistAnnualAggregatedData, inputDate, selectedYear, selectedMonth, permissions, storeAccounts, managerAuth, currentUser, userRole, logActivity, handleUpdateStorePassword, handleUpdateManagerPassword, handleUpdateTherapistPassword, navigateToStore, activeView, appId, visibleTherapists, visibleTherapistReports, therapistSchedules, therapistTargets, trainerAuth, handleUpdateTrainerAuth, auditExclusions, handleUpdateAuditExclusions, currentBrand, setCurrentBrandId, getCollectionPath, getDocPath, dailyLoginCount, yesterdayLoginCount, securityConfig, isOnline, isLowPowerMode, fetchGlobalData]); // ★ 依賴陣列也要加
   
   const memoizedViews = useMemo(() => {
     return (

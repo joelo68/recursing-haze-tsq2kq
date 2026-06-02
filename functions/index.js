@@ -12,6 +12,169 @@ const db = admin.firestore();
 const GEMINI_API_KEY = defineSecret('GEMINI_API_KEY');
 
 // ==========================================
+// ★ 0.5 Summary 後端保底：歷史日報異動後自動標記 dirty
+// 目的：避免歷史月份明細已被改動，但 dashboard_summary / therapist_summary / rankings_summary 仍維持 verified，導致自動修復略過。
+// ==========================================
+const SUMMARY_DIRTY_DEBOUNCE_MINUTES = 1;
+
+function getBackendDirtyBrandId(rawBrandId) {
+  const id = String(rawBrandId || "").trim();
+  if (!id || id === "default-app-id" || id === "default") return "cyj";
+  return id;
+}
+
+function getYearMonthFromReportDate(value) {
+  const dateText = String(value || "").replace(/\//g, "-").trim();
+  return /^\d{4}-\d{2}-\d{2}/.test(dateText) ? dateText.slice(0, 7) : "";
+}
+
+function getDirtyQueueOperation(change) {
+  if (!change.before.exists && change.after.exists) return "create";
+  if (change.before.exists && !change.after.exists) return "delete";
+  return "update";
+}
+
+function hasMeaningfulReportChange(beforeData = {}, afterData = {}, fields = []) {
+  if (!beforeData || !afterData) return true;
+  return fields.some((field) => {
+    const beforeValue = beforeData[field];
+    const afterValue = afterData[field];
+    return JSON.stringify(beforeValue ?? null) !== JSON.stringify(afterValue ?? null);
+  });
+}
+
+function getSummaryDirtyRebuildAfterText() {
+  return new Date(Date.now() + SUMMARY_DIRTY_DEBOUNCE_MINUTES * 60 * 1000).toISOString();
+}
+
+async function markSummaryDirtyFromDailyWrite(change, context, options = {}) {
+  const beforeData = change.before.exists ? (change.before.data() || {}) : {};
+  const afterData = change.after.exists ? (change.after.data() || {}) : {};
+  const operation = getDirtyQueueOperation(change);
+
+  const {
+    brandId: rawBrandId,
+    reportId,
+    sourceCollection,
+    sourceType,
+    watchedFields,
+  } = options;
+
+  if (!hasMeaningfulReportChange(beforeData, afterData, watchedFields || [])) {
+    return null;
+  }
+
+  const brandId = getBackendDirtyBrandId(rawBrandId);
+  const sourceReportId = String(reportId || context?.params?.reportId || change.after.id || change.before.id || "unknown").replace(/[\/#?\[\]]/g, "_");
+
+  const affectedMonths = new Set();
+  const beforeYearMonth = getYearMonthFromReportDate(beforeData.date);
+  const afterYearMonth = getYearMonthFromReportDate(afterData.date);
+  if (beforeYearMonth) affectedMonths.add(beforeYearMonth);
+  if (afterYearMonth) affectedMonths.add(afterYearMonth);
+
+  if (!affectedMonths.size) return null;
+
+  const nowText = new Date().toISOString();
+  const rebuildAfterAtText = getSummaryDirtyRebuildAfterText();
+  const promises = [];
+
+  affectedMonths.forEach((yearMonth) => {
+    // Summary 自動修復只處理歷史月份；當月仍由前端即時明細讀取，不寫 dirty，避免每日日報造成不必要重建。
+    if (typeof isHistoricalYearMonthForAutoRepair === "function" && !isHistoricalYearMonthForAutoRepair(yearMonth)) {
+      return;
+    }
+
+    const flagRef = getSummaryCollection(brandId, "summary_recalc_flags").doc(yearMonth);
+    const queueId = `${sourceType || sourceCollection || "daily_report"}_${yearMonth}_${sourceReportId}`;
+    const queueRef = getSummaryCollection(brandId, "recalc_queue").doc(queueId);
+
+    const displayStoreName = afterData.storeName || beforeData.storeName || "";
+    const displayTherapistName = afterData.therapistName || beforeData.therapistName || "";
+    const sourceDate = afterData.date || beforeData.date || "";
+
+    promises.push(flagRef.set({
+      brandId,
+      yearMonth,
+      affectedYearMonth: yearMonth,
+      status: "dirty",
+      dirtyReason: "backend_daily_report_changed",
+      dirtySources: admin.firestore.FieldValue.arrayUnion(sourceCollection || "daily_reports"),
+      pendingCount: admin.firestore.FieldValue.increment(1),
+      lastDirtyAt: admin.firestore.FieldValue.serverTimestamp(),
+      lastDirtyAtText: nowText,
+      rebuildAfterAtText,
+      updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+      updatedAtText: nowText,
+      updatedBy: "backend_onwrite_guard",
+      updatedByRole: "system",
+    }, { merge: true }));
+
+    promises.push(queueRef.set({
+      id: queueId,
+      brandId,
+      yearMonth,
+      affectedYearMonth: yearMonth,
+      status: "pending",
+      source: sourceCollection || "daily_reports",
+      sourceType: sourceType || sourceCollection || "daily_report",
+      sourceReportId,
+      sourceDate,
+      operation,
+      storeName: displayStoreName,
+      therapistName: displayTherapistName,
+      reason: "backend_daily_report_changed",
+      createdAt: admin.firestore.FieldValue.serverTimestamp(),
+      createdAtText: nowText,
+      updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+      updatedAtText: nowText,
+      createdBy: "backend_onwrite_guard",
+      createdByRole: "system",
+    }, { merge: true }));
+  });
+
+  return promises.length ? Promise.all(promises) : null;
+}
+
+const STORE_DAILY_REPORT_DIRTY_FIELDS = [
+  "date",
+  "storeName",
+  "cash",
+  "refund",
+  "accrual",
+  "operationalAccrual",
+  "traffic",
+  "skincareSales",
+  "skincareRefund",
+  "newCustomers",
+  "newCustomerClosings",
+  "newCustomerSales",
+  "newCustomerRevenue",
+  "oldCustomerRevenue",
+  "oldCustomerCount",
+];
+
+const THERAPIST_DAILY_REPORT_DIRTY_FIELDS = [
+  "date",
+  "therapistId",
+  "therapistName",
+  "storeName",
+  "totalRevenue",
+  "cash",
+  "serviceCount",
+  "newCustomerRevenue",
+  "oldCustomerRevenue",
+  "newCustomerCount",
+  "oldCustomerCount",
+  "newCustomerClosings",
+  "returnRevenue",
+  "traffic",
+  "customerCount",
+];
+
+
+
+// ==========================================
 // ★ 1. 核心資料結算邏輯 (店鋪日報)
 // ==========================================
 async function updateMonthlyAggregation(change, basePath) {
@@ -45,8 +208,26 @@ async function updateMonthlyAggregation(change, basePath) {
   }
   return hasChanges ? aggRef.set(updates, { merge: true }) : null;
 }
-exports.aggregateLegacyReports = functions.firestore.document("artifacts/{appId}/public/data/daily_reports/{reportId}").onWrite(async (change, context) => updateMonthlyAggregation(change, `artifacts/${context.params.appId}/public/data/monthly_aggregated`));
-exports.aggregateBrandReports = functions.firestore.document("brands/{brandId}/daily_reports/{reportId}").onWrite(async (change, context) => updateMonthlyAggregation(change, `brands/${context.params.brandId}/monthly_aggregated`));
+exports.aggregateLegacyReports = functions.firestore.document("artifacts/{appId}/public/data/daily_reports/{reportId}").onWrite(async (change, context) => Promise.all([
+  updateMonthlyAggregation(change, `artifacts/${context.params.appId}/public/data/monthly_aggregated`),
+  markSummaryDirtyFromDailyWrite(change, context, {
+    brandId: getBackendDirtyBrandId(context.params.appId),
+    reportId: context.params.reportId,
+    sourceCollection: "daily_reports",
+    sourceType: "store_daily_report",
+    watchedFields: STORE_DAILY_REPORT_DIRTY_FIELDS,
+  }),
+]));
+exports.aggregateBrandReports = functions.firestore.document("brands/{brandId}/daily_reports/{reportId}").onWrite(async (change, context) => Promise.all([
+  updateMonthlyAggregation(change, `brands/${context.params.brandId}/monthly_aggregated`),
+  markSummaryDirtyFromDailyWrite(change, context, {
+    brandId: context.params.brandId,
+    reportId: context.params.reportId,
+    sourceCollection: "daily_reports",
+    sourceType: "store_daily_report",
+    watchedFields: STORE_DAILY_REPORT_DIRTY_FIELDS,
+  }),
+]));
 
 // ==========================================
 // ★ 1.5 核心資料結算邏輯 (管理師日報)
@@ -81,8 +262,26 @@ async function updateTherapistMonthlyAggregation(change, basePath) {
   }
   return hasChanges ? aggRef.set(updates, { merge: true }) : null;
 }
-exports.aggregateLegacyTherapistReports = functions.firestore.document("artifacts/{appId}/public/data/therapist_daily_reports/{reportId}").onWrite(async (change, context) => updateTherapistMonthlyAggregation(change, `artifacts/${context.params.appId}/public/data/therapist_monthly_aggregated`));
-exports.aggregateBrandTherapistReports = functions.firestore.document("brands/{brandId}/therapist_daily_reports/{reportId}").onWrite(async (change, context) => updateTherapistMonthlyAggregation(change, `brands/${context.params.brandId}/therapist_monthly_aggregated`));
+exports.aggregateLegacyTherapistReports = functions.firestore.document("artifacts/{appId}/public/data/therapist_daily_reports/{reportId}").onWrite(async (change, context) => Promise.all([
+  updateTherapistMonthlyAggregation(change, `artifacts/${context.params.appId}/public/data/therapist_monthly_aggregated`),
+  markSummaryDirtyFromDailyWrite(change, context, {
+    brandId: getBackendDirtyBrandId(context.params.appId),
+    reportId: context.params.reportId,
+    sourceCollection: "therapist_daily_reports",
+    sourceType: "therapist_daily_report",
+    watchedFields: THERAPIST_DAILY_REPORT_DIRTY_FIELDS,
+  }),
+]));
+exports.aggregateBrandTherapistReports = functions.firestore.document("brands/{brandId}/therapist_daily_reports/{reportId}").onWrite(async (change, context) => Promise.all([
+  updateTherapistMonthlyAggregation(change, `brands/${context.params.brandId}/therapist_monthly_aggregated`),
+  markSummaryDirtyFromDailyWrite(change, context, {
+    brandId: context.params.brandId,
+    reportId: context.params.reportId,
+    sourceCollection: "therapist_daily_reports",
+    sourceType: "therapist_daily_report",
+    watchedFields: THERAPIST_DAILY_REPORT_DIRTY_FIELDS,
+  }),
+]));
 
 // ==========================================
 // ★ Telegram 設定
@@ -1136,17 +1335,22 @@ function getBrandRootRef(brandId) {
   return db.collection("brands").doc(String(brandId || "cyj"));
 }
 
-// Summary / flags / settings 目前仍寫在 brands/{brandId} 底下，讓前端 Dashboard 可直接讀取。
+function getLegacyCyjDataRootRef() {
+  return db.collection("artifacts").doc("default-app-id").collection("public").doc("data");
+}
+
+// CYJ 仍使用 legacy app data path：artifacts/default-app-id/public/data。
+// 安妞 / 伊啵等品牌則使用 brands/{brandId}。
+// 這裡必須跟前端維護中心讀取路徑一致，否則會出現後端已重建成功，但後台仍顯示 dirty。
 function getSummaryCollection(brandId, collectionName) {
+  if (isLegacyCyjBrand(brandId)) {
+    return getLegacyCyjDataRootRef().collection(collectionName);
+  }
   return getBrandRootRef(brandId).collection(collectionName);
 }
 
-// 原 CYJ 日報仍在 artifacts/default-app-id/public/data；其他品牌在 brands/{brandId}。
-// 自動整理 Summary 時，輸出仍寫回 brands/cyj，但原始明細必須從 legacy path 讀取。
+// 原 CYJ 日報與 Summary 都在 artifacts/default-app-id/public/data；其他品牌在 brands/{brandId}。
 function getSummarySourceCollection(brandId, collectionName) {
-  if (isLegacyCyjBrand(brandId) && ["daily_reports", "therapist_daily_reports", "therapists"].includes(collectionName)) {
-    return db.collection("artifacts").doc("default-app-id").collection("public").doc("data").collection(collectionName);
-  }
   return getSummaryCollection(brandId, collectionName);
 }
 
