@@ -355,6 +355,11 @@ const TherapistManagerView = () => {
 
       showToast("資料更新成功", "success");
 
+      // 儲存成功後關閉 2xl 以下的浮動抽屜，並保留目前篩選結果。
+      // 大螢幕右側固定面板不受影響；資料列表會由 fetchGlobalData 更新。
+      setIsDrawerOpen(false);
+      setIsCreating(false);
+
       if (fetchGlobalData) fetchGlobalData();
     } catch (error) {
       console.error("更新失敗:", error);
