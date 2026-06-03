@@ -323,6 +323,8 @@ export default function App() {
   const [isSidebarOpen, setSidebarOpen] = useState(true);
   const [toast, setToast] = useState(null);
   const [loginSecurityNotice, setLoginSecurityNotice] = useState(null);
+  const [emergencyMasterPassword, setEmergencyMasterPassword] = useState("");
+  const [isEmergencyUnlocking, setIsEmergencyUnlocking] = useState(false);
   const [confirmModal, setConfirmModal] = useState({ isOpen: false, title: "", message: "", onConfirm: null });
   const [globalSearchTerm, setGlobalSearchTerm] = useState("");
   const [currentBrandId, setCurrentBrandId] = useState("cyj");
@@ -542,7 +544,8 @@ export default function App() {
   }, [securityConfig]);
 
   const handleUserActivity = useCallback(() => {
-    if (!userRole) return;
+
+  if (!userRole) return;
 
     if (isLowPowerMode) {
       setIsLowPowerMode(false);
@@ -1521,6 +1524,10 @@ useEffect(() => {
 
  const handleLogin = useCallback(async (roleId, userInfo = null) => {
     setLoginSecurityNotice(null);
+    setToast((prev) => {
+      if (String(prev?.message || "").includes("裝置已被封鎖")) return null;
+      return prev;
+    });
     let finalUser = userInfo;
     
     if (roleId === 'therapist' && userInfo?.name) { 
@@ -1588,12 +1595,41 @@ useEffect(() => {
             ? "此裝置已被主管設定為全品牌封鎖，無法登入任何品牌。請聯繫主管確認裝置權限。"
             : "請聯繫主管確認裝置權限，或改用已信任的常用裝置登入。",
           deviceShort: deviceSecurity?.deviceInfo?.deviceShort || immediateDeviceInfo.deviceShort,
+          deviceInfo: deviceSecurity?.deviceInfo || immediateDeviceInfo,
+          roleId,
+          accountId: sanitizeSecurityKey(finalUser?.id || finalUser?.accountId || finalUser?.name || roleId),
+          userName,
+          globalBlocked: Boolean(deviceSecurity?.globalBlocked),
+          blockedData: deviceSecurity?.existingDevice || null,
         });
         setToast({ message: deviceSecurity?.globalBlocked ? "此裝置已被全品牌封鎖，請聯繫主管。" : "此裝置已被封鎖，請聯繫主管。", type: "error" });
         setUserRole(null);
         setCurrentUser(null);
         setActiveView("dashboard");
         return;
+      }
+
+      let shouldShowUnblockSuccess = false;
+      try {
+        const rawUnblockNotice = localStorage.getItem("cyj_device_unblock_success_notice");
+        if (rawUnblockNotice) {
+          const unblockNotice = JSON.parse(rawUnblockNotice);
+          const sameDevice =
+            unblockNotice?.deviceId === (deviceSecurity?.deviceInfo?.deviceId || immediateDeviceInfo.deviceId) ||
+            unblockNotice?.deviceShort === (deviceSecurity?.deviceInfo?.deviceShort || immediateDeviceInfo.deviceShort);
+          const isFresh = Date.now() - Number(unblockNotice?.at || 0) < 10 * 60 * 1000;
+
+          if (sameDevice && isFresh) {
+            shouldShowUnblockSuccess = true;
+          }
+          localStorage.removeItem("cyj_device_unblock_success_notice");
+        }
+      } catch (storageError) {
+        console.warn("解除封鎖成功提示讀取失敗:", storageError);
+      }
+
+      if (shouldShowUnblockSuccess) {
+        setToast({ message: "裝置已解除封鎖，可正常登入。", type: "success" });
       }
 
       const isNewOrUntrusted = Boolean(deviceSecurity?.isNewDevice && deviceSecurity?.deviceTrusted === false);
@@ -1947,6 +1983,124 @@ if (isUpdating) {
       </div>
     );
   }
+  const handleEmergencyUnblockCurrentDevice = async () => {
+    if (!loginSecurityNotice || loginSecurityNotice.type !== "blocked") return;
+
+    const inputPassword = String(emergencyMasterPassword || "").trim();
+    const validMasterPassword = String(masterAuth?.password || "BOSS888").trim();
+
+    if (!inputPassword) {
+      setToast({ message: "請輸入 master 密碼。", type: "error" });
+      return;
+    }
+
+    if (inputPassword !== validMasterPassword) {
+      setToast({ message: "master 密碼不正確，無法解除封鎖。", type: "error" });
+      return;
+    }
+
+    const deviceInfo = loginSecurityNotice.deviceInfo || getClientDeviceInfo();
+    const roleId = loginSecurityNotice.roleId || "unknown";
+    const accountId = sanitizeSecurityKey(loginSecurityNotice.accountId || loginSecurityNotice.userName || roleId);
+    const accountKey = sanitizeSecurityKey(`${currentBrandId}_${roleId}_${accountId}`);
+    const globalBlockKey = sanitizeSecurityKey(`${roleId}_${accountId}_${deviceInfo.deviceId}`);
+    const nowText = new Date().toISOString();
+    const masterName = "最高管理者救援";
+
+    setIsEmergencyUnlocking(true);
+
+    try {
+      const deviceProfileRef = doc(getCollectionPath("account_devices"), accountKey);
+      const globalBlockRef = doc(db, "artifacts", appId, "public", "data", "global_blocked_devices", globalBlockKey);
+
+      await setDoc(deviceProfileRef, {
+        updatedAt: serverTimestamp(),
+        updatedAtText: nowText,
+        devices: {
+          [deviceInfo.deviceId]: {
+            ...(loginSecurityNotice.blockedData || {}),
+            deviceId: deviceInfo.deviceId,
+            deviceShort: deviceInfo.deviceShort,
+            device: deviceInfo.device,
+            browser: deviceInfo.browser,
+            os: deviceInfo.os,
+            trusted: true,
+            status: "trusted",
+            source: "emergency_master_unblocked",
+            reviewedBy: masterName,
+            reviewedRole: "master",
+            reviewedAtText: nowText,
+            emergencyUnblocked: true,
+            emergencyUnblockedAtText: nowText,
+          },
+        },
+      }, { merge: true });
+
+      await setDoc(globalBlockRef, {
+        active: false,
+        status: "resolved",
+        source: "emergency_master_unblocked",
+        resolvedBy: masterName,
+        resolvedRole: "master",
+        resolvedAtText: nowText,
+        updatedAtText: nowText,
+      }, { merge: true });
+
+      try {
+        await addDoc(getCollectionPath("system_logs"), {
+          timestamp: serverTimestamp(),
+          createdAtText: nowText,
+          role: "master",
+          user: masterName,
+          action: "最高管理者救援解除裝置封鎖",
+          activityType: "security.emergency_unblock",
+          view: "login",
+          device: deviceInfo.device,
+          browser: deviceInfo.browser,
+          os: deviceInfo.os,
+          deviceId: deviceInfo.deviceId,
+          deviceShort: deviceInfo.deviceShort,
+          details: removeUndefinedDeep({
+            message: "登入頁救援解除封鎖",
+            targetRole: roleId,
+            targetAccountId: accountId,
+            targetUserName: loginSecurityNotice.userName,
+            globalBlocked: loginSecurityNotice.globalBlocked,
+          }),
+        });
+      } catch (logError) {
+        console.warn("救援解除封鎖紀錄寫入失敗:", logError);
+      }
+
+      try {
+        localStorage.setItem("cyj_device_unblock_success_notice", JSON.stringify({
+          deviceId: deviceInfo.deviceId,
+          deviceShort: deviceInfo.deviceShort,
+          at: Date.now(),
+        }));
+      } catch (storageError) {
+        console.warn("解除封鎖成功提示暫存失敗:", storageError);
+      }
+
+      setLoginSecurityNotice({
+        type: "unblocked",
+        title: "裝置封鎖已解除",
+        message: "此裝置已由最高管理者救援解除封鎖，請重新登入。",
+        deviceShort: deviceInfo.deviceShort,
+      });
+      setEmergencyMasterPassword("");
+      setToast({ message: "裝置已解除封鎖，請重新登入。", type: "success" });
+    } catch (error) {
+      console.error("最高管理者救援解除封鎖失敗:", error);
+      setToast({ message: "解除封鎖失敗：" + error.message, type: "error" });
+    } finally {
+      setIsEmergencyUnlocking(false);
+    }
+  };
+
+
+
+
 
   if (!userRole) return (
     <>
@@ -1976,6 +2130,61 @@ if (isUpdating) {
                   裝置碼 #{loginSecurityNotice.deviceShort}
                 </div>
               )}
+
+              <div className="mt-3 rounded-2xl border border-stone-100 bg-stone-50/80 p-3">
+                <div className="text-[11px] font-black text-stone-500 mb-2">
+                  最高管理者救援解除
+                </div>
+                <div className="text-[11px] font-bold leading-5 text-stone-400 mb-2">
+                  僅供誤封鎖時使用。輸入 master 密碼後，只會解除此裝置封鎖，不會直接進入系統。
+                </div>
+                <div className="flex gap-2">
+                  <input
+                    type="password"
+                    value={emergencyMasterPassword}
+                    onChange={(e) => setEmergencyMasterPassword(e.target.value)}
+                    placeholder="輸入 master 密碼"
+                    className="min-w-0 flex-1 rounded-xl border border-stone-200 bg-white px-3 py-2 text-xs font-bold text-stone-600 outline-none focus:border-amber-300"
+                  />
+                  <button
+                    type="button"
+                    disabled={isEmergencyUnlocking}
+                    onClick={handleEmergencyUnblockCurrentDevice}
+                    className="shrink-0 rounded-xl bg-stone-800 px-3 py-2 text-xs font-black text-white disabled:opacity-50 active:scale-95"
+                  >
+                    {isEmergencyUnlocking ? "處理中" : "救援解除"}
+                  </button>
+                </div>
+              </div>
+            </div>
+            <button
+              type="button"
+              onClick={() => {
+                setLoginSecurityNotice(null);
+                setEmergencyMasterPassword("");
+              }}
+              className="rounded-full px-2 py-1 text-xs font-black text-stone-300 hover:bg-stone-100 hover:text-stone-500"
+              aria-label="關閉提示"
+            >
+              ×
+            </button>
+          </div>
+        </div>
+      )}
+
+      {loginSecurityNotice?.type === "unblocked" && (
+        <div className="fixed left-1/2 top-5 z-[999999] w-[calc(100%-32px)] max-w-md -translate-x-1/2 rounded-2xl border border-emerald-100 bg-white/95 p-4 shadow-2xl shadow-emerald-100/70 backdrop-blur-md animate-in fade-in slide-in-from-top-3">
+          <div className="flex items-start gap-3">
+            <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-2xl bg-emerald-50 text-lg">
+              🛡
+            </div>
+            <div className="min-w-0 flex-1">
+              <div className="text-sm font-black text-emerald-700">
+                {loginSecurityNotice.title || "裝置封鎖已解除"}
+              </div>
+              <div className="mt-1 text-xs font-bold leading-5 text-stone-500">
+                {loginSecurityNotice.message || "請重新登入。"}
+              </div>
             </div>
             <button
               type="button"
