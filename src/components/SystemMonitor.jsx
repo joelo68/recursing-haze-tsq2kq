@@ -5,7 +5,7 @@ import {
   Calendar, Search, RotateCcw, ShieldAlert, ShieldCheck, Laptop
 } from "lucide-react";
 import { 
-  query, limit, where, Timestamp, getDocs, orderBy, doc, setDoc 
+  query, limit, where, Timestamp, getDocs, orderBy, doc, setDoc, increment 
 } from "firebase/firestore";
 
 import { AppContext } from "../AppContext";
@@ -162,7 +162,7 @@ const SystemMonitor = () => {
         });
 
         const trustedCount = deviceList.filter((d) => d.trusted !== false && d.status !== "new").length;
-        const newCount = deviceList.filter((d) => d.trusted === false || d.status === "new" || d.status === "suspicious").length;
+        const newCount = deviceList.filter((d) => d.trusted === false || d.status === "new" || d.status === "suspicious" || d.status === "blocked").length;
         const lastSeenText = deviceList
           .map((d) => d.lastSeenAtText || d.firstSeenAtText || "")
           .filter(Boolean)
@@ -242,6 +242,12 @@ const SystemMonitor = () => {
   };
 
   const getDeviceTrustMeta = (device = {}) => {
+    if (device.status === "blocked" || device.source === "manual_blocked") {
+      return {
+        label: "已封鎖",
+        className: "bg-stone-100 text-stone-700 border-stone-200",
+      };
+    }
     if (device.status === "suspicious" || device.source === "manual_suspicious") {
       return {
         label: "可疑裝置",
@@ -269,16 +275,21 @@ const SystemMonitor = () => {
     const nowText = new Date().toISOString();
     const reviewerName = currentUser?.name || (userRole === "director" ? "高階主管" : "系統管理者");
     const isTrusted = nextStatus === "trusted";
+    const isBlocked = nextStatus === "blocked";
 
     const nextDevice = {
       ...device,
       trusted: isTrusted,
-      status: isTrusted ? "trusted" : "suspicious",
-      source: isTrusted ? "manual_trusted" : "manual_suspicious",
+      status: isTrusted ? "trusted" : (isBlocked ? "blocked" : "suspicious"),
+      source: isTrusted ? "manual_trusted" : (isBlocked ? "manual_blocked" : "manual_suspicious"),
       reviewedBy: reviewerName,
       reviewedRole: userRole || "",
       reviewedAtText: nowText,
       updatedAtText: nowText,
+      ...(isBlocked ? {
+        blockedBy: reviewerName,
+        blockedAtText: nowText,
+      } : {}),
     };
 
     try {
@@ -288,6 +299,18 @@ const SystemMonitor = () => {
         },
         updatedAtText: nowText,
       }, { merge: true });
+
+      const wasPendingDevice = device.trusted === false || device.status === "new" || device.status === "suspicious" || device.status === "blocked";
+      if (isTrusted && wasPendingDevice) {
+        await setDoc(doc(getCollectionPath("security_summary"), "device_alerts"), {
+          pendingNewDeviceCount: increment(-1),
+          lastResolvedDeviceShort: nextDevice.deviceShort,
+          lastResolvedUserName: profile.userName || profile.accountId || profile.id,
+          lastResolvedBy: reviewerName,
+          lastResolvedAtText: nowText,
+          updatedAtText: nowText,
+        }, { merge: true });
+      }
 
       setDeviceProfiles((prev) => prev.map((item) => {
         if (item.id !== profile.id) return item;
@@ -299,8 +322,8 @@ const SystemMonitor = () => {
         return {
           ...item,
           deviceList,
-          trustedCount: deviceList.filter((d) => d.trusted !== false && d.status !== "new" && d.status !== "suspicious").length,
-          newCount: deviceList.filter((d) => d.trusted === false || d.status === "new" || d.status === "suspicious").length,
+          trustedCount: deviceList.filter((d) => d.trusted === true && d.status !== "blocked").length,
+          newCount: deviceList.filter((d) => d.trusted === false || d.status === "new" || d.status === "suspicious" || d.status === "blocked").length,
         };
       }));
 
@@ -314,6 +337,7 @@ const SystemMonitor = () => {
             source: nextDevice.source,
             reviewedBy: nextDevice.reviewedBy,
             reviewedAtText: nextDevice.reviewedAtText,
+            resolvedPending: isTrusted && wasPendingDevice,
           },
         }));
       } catch (eventError) {
@@ -817,17 +841,10 @@ const SystemMonitor = () => {
                 <div className="flex flex-col items-center justify-center py-16 px-4 text-center bg-white rounded-2xl border-2 border-dashed border-stone-200">
                   <Laptop size={44} className="text-stone-300 mb-4" />
                   <h4 className="text-stone-600 font-black text-lg mb-2">裝置資料尚未載入</h4>
-                  <p className="text-stone-400 text-sm max-w-sm leading-6 mb-5">
-                    為節省 reads，切換到裝置管理時不會自動讀取 account_devices。預設只查詢今日資料；需要擴大範圍時，再調整時段與讀取筆數。
+                  <p className="text-stone-400 text-sm max-w-sm leading-6">
+                    為節省 reads，切換到裝置管理時不會自動讀取 account_devices。請使用上方篩選列設定區間與筆數後，再點擊右側「載入資料」。
                   </p>
-                  <button
-                    type="button"
-                    onClick={fetchDeviceProfiles}
-                    className="h-11 px-5 rounded-xl bg-stone-800 text-white text-sm font-black flex items-center justify-center gap-2 active:scale-95"
-                  >
-                    <RefreshCw size={16} />
-                    載入裝置資料
-                  </button>
+
                 </div>
               ) : deviceLoading ? (
                 <div className="py-20 text-center text-stone-400 font-black">
@@ -912,17 +929,17 @@ const SystemMonitor = () => {
                                   </div>
 
                                   <div className="mt-3 flex flex-col sm:flex-row gap-2 justify-end">
-                                    {(device.trusted === false || device.status === "new" || device.status === "suspicious") && (
+                                    {(device.trusted === false || device.status === "new" || device.status === "suspicious" || device.status === "blocked") && (
                                       <button
                                         type="button"
                                         disabled={deviceActionKey === `${profile.id}_${device.deviceId}_trusted`}
                                         onClick={() => updateDeviceTrust(profile, device, "trusted")}
                                         className="px-3 py-2 rounded-xl bg-emerald-50 text-emerald-700 border border-emerald-100 text-xs font-black hover:bg-emerald-100 disabled:opacity-60 active:scale-95"
                                       >
-                                        {deviceActionKey === `${profile.id}_${device.deviceId}_trusted` ? "處理中..." : "設為信任"}
+                                        {deviceActionKey === `${profile.id}_${device.deviceId}_trusted` ? "處理中..." : (device.status === "blocked" ? "解除封鎖並信任" : "設為信任")}
                                       </button>
                                     )}
-                                    {!(device.status === "suspicious" || device.source === "manual_suspicious") && (
+                                    {!(device.status === "suspicious" || device.source === "manual_suspicious" || device.status === "blocked" || device.source === "manual_blocked") && (
                                       <button
                                         type="button"
                                         disabled={deviceActionKey === `${profile.id}_${device.deviceId}_suspicious`}
@@ -930,6 +947,20 @@ const SystemMonitor = () => {
                                         className="px-3 py-2 rounded-xl bg-rose-50 text-rose-600 border border-rose-100 text-xs font-black hover:bg-rose-100 disabled:opacity-60 active:scale-95"
                                       >
                                         {deviceActionKey === `${profile.id}_${device.deviceId}_suspicious` ? "處理中..." : "標記可疑"}
+                                      </button>
+                                    )}
+                                    {!(device.status === "blocked" || device.source === "manual_blocked") && (
+                                      <button
+                                        type="button"
+                                        disabled={deviceActionKey === `${profile.id}_${device.deviceId}_blocked`}
+                                        onClick={() => {
+                                          if (window.confirm("確定要封鎖這台裝置嗎？封鎖後此瀏覽器環境將無法登入。")) {
+                                            updateDeviceTrust(profile, device, "blocked");
+                                          }
+                                        }}
+                                        className="px-3 py-2 rounded-xl bg-stone-100 text-stone-700 border border-stone-200 text-xs font-black hover:bg-stone-200 disabled:opacity-60 active:scale-95"
+                                      >
+                                        {deviceActionKey === `${profile.id}_${device.deviceId}_blocked` ? "處理中..." : "封鎖裝置"}
                                       </button>
                                     )}
                                   </div>

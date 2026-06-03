@@ -15,7 +15,7 @@ import React, {
 } from "react";
 
 import {
-  app, auth, db, appId } from "./config/firebase"; import { onAuthStateChanged, signInAnonymously, signInWithCustomToken } from "firebase/auth"; import { collection, addDoc, deleteDoc, updateDoc, doc, getDoc, onSnapshot, serverTimestamp, setDoc, query, orderBy, limit, deleteField, where, increment, getDocs } from "firebase/firestore"; import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip as RechartsTooltip, Legend, ResponsiveContainer, LineChart, Line, ComposedChart, Area, Cell, PieChart, Pie } from "recharts"; import {    LayoutDashboard, Upload, TrendingUp, Map as MapIcon, Settings, ClipboardCheck, Menu, Search, Filter, Trash2, Save, Plus, DollarSign, Target, Users, Award, Loader2, FileText, AlertCircle, CheckCircle, User, Store, Lock, LogOut, FileWarning, Edit2, CheckSquare, X, Download, ChevronLeft, ChevronRight, Activity, Sparkles, ChevronDown, Heart, Coffee, Shield, WifiOff, ShoppingBag, CreditCard, Smartphone, Monitor, Bell, Clock, Music, ShieldAlert
+  app, auth, db, appId } from "./config/firebase"; import { onAuthStateChanged, signInAnonymously, signInWithCustomToken } from "firebase/auth"; import { collection, addDoc, deleteDoc, updateDoc, doc, getDoc, onSnapshot, serverTimestamp, setDoc, query, orderBy, limit, deleteField, where, increment, getDocs } from "firebase/firestore"; import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip as RechartsTooltip, Legend, ResponsiveContainer, LineChart, Line, ComposedChart, Area, Cell, PieChart, Pie } from "recharts"; import {    LayoutDashboard, Upload, TrendingUp, Map as MapIcon, Settings, ClipboardCheck, Menu, Search, Filter, Trash2, Save, Plus, DollarSign, Target, Users, Award, Loader2, FileText, AlertCircle, CheckCircle, User, Store, Lock, LogOut, FileWarning, Edit2, CheckSquare, X, Download, ChevronLeft, ChevronRight, Activity, Sparkles, ChevronDown, Heart, Coffee, Shield, WifiOff, ShoppingBag, CreditCard, Smartphone, Monitor, Bell, Clock, Music, ShieldAlert, Calendar
 } from "lucide-react";
 
 import { ROLES, ALL_MENU_ITEMS, DEFAULT_REGIONAL_MANAGERS, DEFAULT_PERMISSIONS } from "./constants/index";
@@ -38,7 +38,7 @@ import {
 // ==========================================
 // ★ 系統核心版本號 (終極動態快取版)
 // ==========================================
-const CURRENT_APP_VERSION = "3.1.5"; 
+const CURRENT_APP_VERSION = "3.1.6"; 
 
 const isNewerVersion = (local, remote) => {
   if (!remote) return true;
@@ -447,6 +447,13 @@ export default function App() {
       const detail = event?.detail || {};
       if (!detail.deviceShort && !detail.deviceId) return;
 
+      if (detail.resolvedPending && (detail.status === "trusted" || detail.trusted === true)) {
+        setDeviceAlertSummary((prev) => ({
+          ...prev,
+          pendingNewDeviceCount: Math.max(0, Number(prev.pendingNewDeviceCount || 0) - 1),
+        }));
+      }
+
       setCurrentDeviceTrust((prev) => {
         const isSameDevice =
           (detail.deviceId && prev.deviceId && detail.deviceId === prev.deviceId) ||
@@ -454,11 +461,12 @@ export default function App() {
 
         if (!isSameDevice) return prev;
 
+        const isBlocked = detail.status === "blocked" || detail.source === "manual_blocked";
         const isTrusted = detail.status === "trusted" || detail.trusted === true;
         return {
           ...prev,
-          status: isTrusted ? "trusted" : "new",
-          label: isTrusted ? "🛡 目前裝置已信任" : "⚠ 新裝置待觀察",
+          status: isBlocked ? "blocked" : (isTrusted ? "trusted" : "new"),
+          label: isBlocked ? "⛔ 裝置已封鎖" : (isTrusted ? "🛡 目前裝置已信任" : "⚠ 新裝置待觀察"),
           deviceShort: detail.deviceShort || prev.deviceShort,
           deviceId: detail.deviceId || prev.deviceId,
         };
@@ -666,6 +674,25 @@ export default function App() {
       const profileData = profileSnap.exists() ? profileSnap.data() : {};
       const devices = profileData.devices || {};
       const existingDevice = devices[deviceInfo.deviceId];
+
+      if (existingDevice?.status === "blocked" || existingDevice?.source === "manual_blocked") {
+        const result = {
+          allowed: false,
+          blocked: true,
+          reason: "device_blocked",
+          message: "此裝置已被封鎖，請聯繫主管。",
+          deviceInfo,
+          existingDevice,
+          isNewDevice: false,
+          deviceTrusted: false,
+          autoTrusted: false,
+          alertCreated: false,
+          riskTags: ["裝置已封鎖"],
+          deviceStatus: "blocked",
+        };
+        logDeviceCheckResult(roleId, userName, result, deviceInfo);
+        return result;
+      }
 
       if (existingDevice) {
         const updatedDevice = {
@@ -1497,6 +1524,34 @@ useEffect(() => {
     });
 
     registerAccountDevice(roleId, finalUser || { name: userName }).then((deviceSecurity) => {
+      if (deviceSecurity?.blocked || deviceSecurity?.allowed === false || deviceSecurity?.deviceStatus === "blocked") {
+        setCurrentDeviceTrust({
+          status: "blocked",
+          label: "⛔ 裝置已封鎖",
+          deviceShort: deviceSecurity?.deviceInfo?.deviceShort || immediateDeviceInfo.deviceShort,
+          deviceId: deviceSecurity?.deviceInfo?.deviceId || immediateDeviceInfo.deviceId,
+        });
+
+        try {
+          logActivity(roleId, userName, "封鎖裝置嘗試登入", {
+            activityType: "auth.blocked_device",
+            message: "此裝置已被封鎖，系統已拒絕登入",
+            deviceInfo: immediateDeviceInfo,
+            deviceShort: immediateDeviceInfo.deviceShort,
+            riskTags: ["裝置已封鎖"],
+            deviceStatus: "blocked",
+          });
+        } catch (logError) {
+          console.warn("封鎖裝置登入紀錄寫入失敗:", logError);
+        }
+
+        setToast({ message: "此裝置已被封鎖，請聯繫主管。", type: "error" });
+        setUserRole(null);
+        setCurrentUser(null);
+        setActiveView("dashboard");
+        return;
+      }
+
       const isNewOrUntrusted = Boolean(deviceSecurity?.isNewDevice && deviceSecurity?.deviceTrusted === false);
       setCurrentDeviceTrust({
         status: isNewOrUntrusted ? "new" : "trusted",
@@ -1871,70 +1926,187 @@ if (isUpdating) {
       <div className={`flex min-h-screen bg-[#F9F8F6] text-stone-600 font-sans selection:bg-stone-200 selection:text-stone-800 overflow-x-hidden transition-all duration-300 ${!isOnline ? 'mt-9' : 'mt-0'} ${isLowPowerMode ? 'pb-24' : ''}`}>
         <Sidebar activeView={activeView} setActiveView={setActiveView} isSidebarOpen={isSidebarOpen} setSidebarOpen={setSidebarOpen} user={user} userRole={userRole} onLogout={() => handleLogout()} permissions={permissions} currentUser={currentUser} />
         <div className={`flex-1 flex flex-col transition-all duration-500 w-full max-w-full ${isSidebarOpen ? "md:ml-64" : "md:ml-20"} ml-0`}>
-          <header className="h-20 bg-white/80 backdrop-blur-md border-b border-stone-200 sticky top-0 z-40 px-4 md:px-8 flex items-center justify-between shadow-sm shadow-stone-200/50 shrink-0 transition-all">
-            <div className="flex items-center gap-4">
-              <button onClick={() => setSidebarOpen(!isSidebarOpen)} className="p-2.5 hover:bg-stone-100 rounded-xl text-stone-400 hidden md:block transition-colors"><Menu size={24} /></button>
-              
-              <h1 className="text-xl md:text-2xl font-extrabold text-stone-800 tracking-tight truncate hidden sm:flex items-center gap-2">
-                <span className="text-amber-600">●</span> 
-                {ALL_MENU_ITEMS.find((i) => i.id === activeView)?.label || (activeView === 'targets' ? '年度目標設定' : 'DRCYJ System')}
-                <span className="ml-2 text-[11px] font-mono bg-stone-100 text-stone-400 px-2 py-0.5 rounded-md border border-stone-200/60 shadow-inner select-all" title="系統當前版本">
-                  v{CURRENT_APP_VERSION}
-                </span>
-              </h1>
-              
-              <h1 className="text-lg font-bold text-stone-800 tracking-tight truncate md:hidden flex items-center gap-2">
-                <Coffee size={20} className="text-amber-600" /> DRCYJ Cloud
-                <span className="ml-1 text-[10px] font-mono bg-stone-100 text-stone-400 px-1.5 py-0.5 rounded-md border border-stone-200/60 shadow-inner select-all">
-                  v{CURRENT_APP_VERSION}
-                </span>
-              </h1>
-            </div>
-            <div className="flex items-center gap-3 md:gap-5 flex-1 justify-end">
-              <div className="relative hidden md:block w-56 lg:w-72 group"><Search className="absolute left-3 top-2.5 text-stone-400 group-focus-within:text-stone-600 transition-colors" size={18} /><input type="text" placeholder="搜尋店名..." value={globalSearchTerm} onChange={(e) => setGlobalSearchTerm(e.target.value)} className="w-full pl-10 pr-4 py-2 bg-white border border-stone-200 rounded-full text-sm focus:ring-4 focus:ring-stone-100 focus:border-stone-300 transition-all outline-none shadow-sm text-stone-600 placeholder-stone-300" />{globalSearchTerm && (<div className="absolute top-full left-0 right-0 mt-2 bg-white border border-stone-200 rounded-2xl shadow-xl z-50 max-h-60 overflow-y-auto animate-in fade-in slide-in-from-top-2">{allStoreNames.filter((s) => s.includes(globalSearchTerm)).length > 0 ? (allStoreNames.filter((s) => s.includes(globalSearchTerm)).map((s) => (<button key={s} onClick={() => { navigateToStore(s); setGlobalSearchTerm(""); }} className="w-full text-left px-4 py-3 hover:bg-stone-50 text-sm font-medium text-stone-600 flex items-center gap-2 transition-colors"><Store size={16} className="text-stone-400" /> {s}</button>))) : (<div className="px-4 py-3 text-xs text-stone-400 text-center">無相符店家</div>)}</div>)}</div>
-              {currentDeviceTrust.deviceShort && (
-                <div
-                  className={`hidden lg:flex items-center gap-2 rounded-full border px-3 py-2 text-xs font-black shadow-sm ${
-                    currentDeviceTrust.status === "new"
-                      ? "border-rose-100 bg-rose-50 text-rose-600"
-                      : currentDeviceTrust.status === "trusted"
-                        ? "border-emerald-100 bg-emerald-50 text-emerald-700"
-                        : "border-stone-100 bg-stone-50 text-stone-500"
-                  }`}
-                  title={currentDeviceTrust.deviceShort ? `裝置碼：${currentDeviceTrust.deviceShort}` : "目前裝置狀態"}
-                >
-                  <span>{currentDeviceTrust.label}</span>
-                </div>
-              )}
-              {["director", "master"].includes(userRole) && deviceAlertSummary.pendingNewDeviceCount > 0 && (
-                <button
-                  type="button"
-                  onClick={goToDeviceManagement}
-                  className="hidden md:flex items-center gap-2 rounded-full border border-rose-100 bg-rose-50 px-3 py-2 text-xs font-black text-rose-600 shadow-sm hover:bg-rose-100 active:scale-95 transition-all"
-                  title={deviceAlertSummary.latestUserName ? `最新：${deviceAlertSummary.latestUserName}｜${deviceAlertSummary.latestDevice}` : "有新裝置待確認"}
-                >
-                  <ShieldAlert size={16} />
-                  新裝置 {deviceAlertSummary.pendingNewDeviceCount}
+          <header className="bg-white/80 backdrop-blur-md border-b border-stone-200 sticky top-0 z-40 px-4 md:px-8 py-3 md:h-20 shadow-sm shadow-stone-200/50 shrink-0 transition-all">
+            {/* Desktop Header */}
+            <div className="hidden md:flex items-center justify-between gap-4 h-full">
+              <div className="flex items-center gap-4 min-w-0">
+                <button onClick={() => setSidebarOpen(!isSidebarOpen)} className="p-2.5 hover:bg-stone-100 rounded-xl text-stone-400 hidden md:block transition-colors">
+                  <Menu size={24} />
                 </button>
-              )}
-              {currentDeviceTrust.deviceShort && (
-                <div
-                  className={`flex lg:hidden items-center justify-center rounded-full border px-2.5 py-1.5 text-[11px] font-black shadow-sm whitespace-nowrap ${
-                    currentDeviceTrust.status === "new"
-                      ? "border-rose-100 bg-rose-50 text-rose-600"
-                      : currentDeviceTrust.status === "trusted"
-                        ? "border-emerald-100 bg-emerald-50 text-emerald-700"
-                        : "border-stone-100 bg-stone-50 text-stone-500"
-                  }`}
-                  title={currentDeviceTrust.deviceShort ? `裝置碼：${currentDeviceTrust.deviceShort}` : "目前裝置狀態"}
-                >
-                  {currentDeviceTrust.status === "new" ? "⚠ 新裝置" : currentDeviceTrust.status === "trusted" ? "🛡 已信任" : "裝置確認中"}
+
+                <h1 className="text-xl md:text-2xl font-extrabold text-stone-800 tracking-tight truncate hidden sm:flex items-center gap-2 min-w-0">
+                  <span className="text-amber-600">●</span>
+                  {ALL_MENU_ITEMS.find((i) => i.id === activeView)?.label || (activeView === "targets" ? "年度目標設定" : "DRCYJ System")}
+                  <span className="ml-2 text-[11px] font-mono bg-stone-100 text-stone-400 px-2 py-0.5 rounded-md border border-stone-200/60 shadow-inner select-all" title="系統當前版本">
+                    v{CURRENT_APP_VERSION}
+                  </span>
+                </h1>
+              </div>
+
+              <div className="flex items-center gap-2 lg:gap-3 flex-1 justify-end min-w-0 overflow-hidden">
+                <div className="relative hidden md:block w-40 lg:w-48 xl:w-56 2xl:w-64 shrink min-w-0 group">
+                  <Search className="absolute left-3 top-2.5 text-stone-400 group-focus-within:text-stone-600 transition-colors" size={18} />
+                  <input
+                    type="text"
+                    placeholder="搜尋店名..."
+                    value={globalSearchTerm}
+                    onChange={(e) => setGlobalSearchTerm(e.target.value)}
+                    className="w-full pl-10 pr-4 py-2 bg-white border border-stone-200 rounded-full text-sm focus:ring-4 focus:ring-stone-100 focus:border-stone-300 transition-all outline-none shadow-sm text-stone-600 placeholder-stone-300"
+                  />
+                  {globalSearchTerm && (
+                    <div className="absolute top-full left-0 right-0 mt-2 bg-white border border-stone-200 rounded-2xl shadow-xl z-50 max-h-60 overflow-y-auto animate-in fade-in slide-in-from-top-2">
+                      {allStoreNames.filter((s) => s.includes(globalSearchTerm)).length > 0 ? (
+                        allStoreNames.filter((s) => s.includes(globalSearchTerm)).map((s) => (
+                          <button
+                            key={s}
+                            onClick={() => {
+                              navigateToStore(s);
+                              setGlobalSearchTerm("");
+                            }}
+                            className="w-full text-left px-4 py-3 hover:bg-stone-50 text-sm font-medium text-stone-600 flex items-center gap-2 transition-colors"
+                          >
+                            <Store size={16} className="text-stone-400" /> {s}
+                          </button>
+                        ))
+                      ) : (
+                        <div className="px-4 py-3 text-xs text-stone-400 text-center">無相符店家</div>
+                      )}
+                    </div>
+                  )}
                 </div>
-              )}
-              <div className="flex items-center gap-2 bg-stone-100 px-2 py-1 md:px-3 md:py-1.5 rounded-lg border border-stone-200">
-                <Filter size={16} className="text-stone-400 hidden sm:block" />
-                <select value={selectedYear} onChange={(e) => setSelectedYear(e.target.value)} className="bg-transparent text-sm font-bold text-stone-600 outline-none border-r border-stone-200 pr-2 mr-2 cursor-pointer hover:text-stone-800 transition-colors">{[2025, 2026, 2027].map((y) => (<option key={y} value={y}>{y}</option>))}</select>
-                <select value={selectedMonth} onChange={(e) => setSelectedMonth(e.target.value)} className="bg-transparent text-sm font-bold text-stone-600 outline-none cursor-pointer hover:text-stone-800 transition-colors">{Array.from({ length: 12 }, (_, i) => i + 1).map((m) => (<option key={m} value={m}>{m}月</option>))}</select>
+
+                {currentDeviceTrust.deviceShort && (
+                  <div
+                    className={`hidden md:flex items-center justify-center rounded-full border px-2 lg:px-2.5 2xl:px-3 py-2 text-[11px] lg:text-xs font-black shadow-sm whitespace-nowrap shrink-0 max-w-[92px] lg:max-w-[112px] 2xl:max-w-none overflow-hidden ${
+                      currentDeviceTrust.status === "blocked"
+                        ? "border-stone-200 bg-stone-100 text-stone-700"
+                        : currentDeviceTrust.status === "new"
+                          ? "border-rose-100 bg-rose-50 text-rose-600"
+                          : currentDeviceTrust.status === "trusted"
+                            ? "border-emerald-100 bg-emerald-50 text-emerald-700"
+                            : "border-stone-100 bg-stone-50 text-stone-500"
+                    }`}
+                    title={currentDeviceTrust.deviceShort ? `裝置碼：${currentDeviceTrust.deviceShort}` : "目前裝置狀態"}
+                  >
+                    <span className="2xl:hidden truncate">
+                      {currentDeviceTrust.status === "blocked" ? "⛔ 已封鎖" : currentDeviceTrust.status === "new" ? "⚠ 待觀察" : currentDeviceTrust.status === "trusted" ? "🛡 已信任" : "確認中"}
+                    </span>
+                    <span className="hidden 2xl:inline">{currentDeviceTrust.label}</span>
+                  </div>
+                )}
+
+                {["director", "master"].includes(userRole) && deviceAlertSummary.pendingNewDeviceCount > 0 && (
+                  <button
+                    type="button"
+                    onClick={goToDeviceManagement}
+                    className="hidden lg:flex items-center gap-1.5 2xl:gap-2 rounded-full border border-rose-100 bg-rose-50 px-2.5 2xl:px-3 py-2 text-xs font-black text-rose-600 shadow-sm hover:bg-rose-100 active:scale-95 transition-all whitespace-nowrap shrink-0"
+                    title={deviceAlertSummary.latestUserName ? `最新：${deviceAlertSummary.latestUserName}｜${deviceAlertSummary.latestDevice}` : "有新裝置待確認"}
+                  >
+                    <ShieldAlert size={16} />
+                    <span className="2xl:hidden">{deviceAlertSummary.pendingNewDeviceCount}</span>
+                    <span className="hidden 2xl:inline">新裝置 {deviceAlertSummary.pendingNewDeviceCount}</span>
+                  </button>
+                )}
+
+                <div className="flex items-center gap-2 bg-stone-100 px-2 py-1 md:px-3 md:py-1.5 rounded-lg border border-stone-200 shrink-0 min-w-fit">
+                  <Filter size={16} className="text-stone-400 hidden sm:block" />
+                  <select
+                    value={selectedYear}
+                    onChange={(e) => setSelectedYear(e.target.value)}
+                    className="bg-transparent text-sm font-bold text-stone-600 outline-none border-r border-stone-200 pr-2 mr-2 cursor-pointer hover:text-stone-800 transition-colors"
+                  >
+                    {[2025, 2026, 2027].map((y) => (
+                      <option key={y} value={y}>{y}</option>
+                    ))}
+                  </select>
+                  <select
+                    value={selectedMonth}
+                    onChange={(e) => setSelectedMonth(e.target.value)}
+                    className="bg-transparent text-sm font-bold text-stone-600 outline-none cursor-pointer hover:text-stone-800 transition-colors"
+                  >
+                    {Array.from({ length: 12 }, (_, i) => i + 1).map((m) => (
+                      <option key={m} value={m}>{m}月</option>
+                    ))}
+                  </select>
+                </div>
+              </div>
+            </div>
+
+            {/* Mobile Header：精緻版，不讓信任膠囊擠壓年/月篩選器 */}
+            <div className="md:hidden space-y-3">
+              <div className="flex items-center justify-between gap-2">
+                <div className="min-w-0 flex items-center gap-2">
+                  <h1 className="text-lg font-bold text-stone-800 tracking-tight truncate flex items-center gap-2 min-w-0">
+                    <Coffee size={20} className="text-amber-600 shrink-0" />
+                    <span className="truncate">DRCYJ Cloud</span>
+                  </h1>
+                  <span className="text-[10px] font-mono bg-stone-100 text-stone-400 px-1.5 py-0.5 rounded-md border border-stone-200/60 shadow-inner select-all shrink-0">
+                    v{CURRENT_APP_VERSION}
+                  </span>
+                </div>
+
+                <div className="flex items-center gap-1.5 shrink-0">
+                  {currentDeviceTrust.deviceShort && (
+                    <div
+                      className={`flex items-center justify-center rounded-full border px-2.5 py-1.5 text-[11px] font-black shadow-sm whitespace-nowrap ${
+                        currentDeviceTrust.status === "new"
+                          ? "border-rose-100 bg-rose-50 text-rose-600"
+                          : currentDeviceTrust.status === "trusted"
+                            ? "border-emerald-100 bg-emerald-50 text-emerald-700"
+                            : "border-stone-100 bg-stone-50 text-stone-500"
+                      }`}
+                      title={currentDeviceTrust.deviceShort ? `裝置碼：${currentDeviceTrust.deviceShort}` : "目前裝置狀態"}
+                    >
+                      {currentDeviceTrust.status === "blocked"
+                        ? "⛔ 已封鎖"
+                        : currentDeviceTrust.status === "new"
+                          ? "⚠ 待觀察"
+                          : currentDeviceTrust.status === "trusted"
+                            ? "🛡 已信任"
+                            : "確認中"}
+                    </div>
+                  )}
+
+                  {["director", "master"].includes(userRole) && deviceAlertSummary.pendingNewDeviceCount > 0 && (
+                    <button
+                      type="button"
+                      onClick={goToDeviceManagement}
+                      className="flex items-center justify-center rounded-full border border-rose-100 bg-rose-50 px-2.5 py-1.5 text-[11px] font-black text-rose-600 shadow-sm whitespace-nowrap"
+                      title={deviceAlertSummary.latestUserName ? `最新：${deviceAlertSummary.latestUserName}｜${deviceAlertSummary.latestDevice}` : "有新裝置待確認"}
+                    >
+                      <ShieldAlert size={13} />
+                      {deviceAlertSummary.pendingNewDeviceCount}
+                    </button>
+                  )}
+                </div>
+              </div>
+
+              <div className="grid grid-cols-2 gap-2">
+                <div className="flex items-center gap-2 bg-white px-3 py-2.5 rounded-2xl border border-stone-200 shadow-sm min-w-0">
+                  <Calendar size={17} className="text-stone-400 shrink-0" />
+                  <select
+                    value={selectedYear}
+                    onChange={(e) => setSelectedYear(e.target.value)}
+                    className="w-full min-w-0 bg-transparent text-sm font-black text-stone-700 outline-none cursor-pointer"
+                  >
+                    {[2025, 2026, 2027].map((y) => (
+                      <option key={y} value={y}>{y} 年</option>
+                    ))}
+                  </select>
+                </div>
+
+                <div className="flex items-center gap-2 bg-white px-3 py-2.5 rounded-2xl border border-stone-200 shadow-sm min-w-0">
+                  <Calendar size={17} className="text-stone-400 shrink-0" />
+                  <select
+                    value={selectedMonth}
+                    onChange={(e) => setSelectedMonth(e.target.value)}
+                    className="w-full min-w-0 bg-transparent text-sm font-black text-stone-700 outline-none cursor-pointer"
+                  >
+                    {Array.from({ length: 12 }, (_, i) => i + 1).map((m) => (
+                      <option key={m} value={m}>{m} 月</option>
+                    ))}
+                  </select>
+                </div>
               </div>
             </div>
           </header>

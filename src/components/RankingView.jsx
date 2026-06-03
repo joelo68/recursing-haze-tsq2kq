@@ -9,7 +9,12 @@ const RankingView = () => {
     allReports,
     fmtMoney, 
     fmtNum, 
-    budgets, 
+    budgets,
+    monthlyTargetsSummary,
+    monthlyTargetSummaries,
+    monthly_targets_summary,
+    targetSummary,
+    targetSummaries,
     selectedYear, 
     selectedMonth,
     managers,
@@ -45,6 +50,182 @@ const RankingView = () => {
     let core = String(fullName).replace(new RegExp(`^(${brandPrefix}|CYJ|安妞|伊啵|Anew|Yibo)`, 'i'), '').trim();
     if (core === "新店") return "新店"; // 防止「新店」被誤刪
     return core.replace(/店$/, '').trim();
+  };
+
+  const normalizeStoreKey = (value) => {
+    return String(value || "")
+      .replace(/\s+/g, "")
+      .replace(/^(CYJ|安妞|伊啵|Anew|Yibo)/i, "")
+      .replace(/店$/g, "")
+      .trim();
+  };
+
+  const pickNumber = (...values) => {
+    for (const value of values) {
+      const num = Number(value);
+      if (!Number.isNaN(num) && num > 0) return num;
+    }
+    return 0;
+  };
+
+  const readTargetFields = (item) => {
+    if (!item) return { cashTarget: 0, accrualTarget: 0 };
+
+    const cashTarget = pickNumber(
+      item.cashTarget,
+      item.targetCash,
+      item.cashBudget,
+      item.monthlyCashTarget,
+      item.cash,
+      item.cashGoal,
+      item.target_cash,
+      item.cash_target
+    );
+
+    const accrualTarget = pickNumber(
+      item.accrualTarget,
+      item.targetAccrual,
+      item.accrualBudget,
+      item.monthlyAccrualTarget,
+      item.accrual,
+      item.accrualGoal,
+      item.target_accrual,
+      item.accrual_target
+    );
+
+    return { cashTarget, accrualTarget };
+  };
+
+  const findNestedTargetByStore = (source, store) => {
+    if (!source) return null;
+
+    const storeKeys = [
+      store.name,
+      store.displayName,
+      `${store.displayName}店`,
+      `${brandPrefix}${store.displayName}店`,
+      normalizeStoreKey(store.name),
+      normalizeStoreKey(store.displayName),
+    ].filter(Boolean);
+
+    const normalizedCandidates = new Set(storeKeys.map(normalizeStoreKey));
+
+    // 直接 key 對應
+    for (const key of storeKeys) {
+      if (source[key]) return source[key];
+    }
+
+    // 常見資料包裝層
+    const containers = [
+      source.stores,
+      source.storeTargets,
+      source.targets,
+      source.items,
+      source.data,
+      source.byStore,
+      source.storeMap,
+    ].filter(Boolean);
+
+    for (const container of containers) {
+      if (Array.isArray(container)) {
+        const found = container.find((item) => {
+          const name = item?.storeName || item?.name || item?.displayName || item?.store;
+          return normalizedCandidates.has(normalizeStoreKey(name));
+        });
+        if (found) return found;
+      }
+
+      if (typeof container === "object") {
+        for (const [key, value] of Object.entries(container)) {
+          const name = value?.storeName || value?.name || value?.displayName || key;
+          if (normalizedCandidates.has(normalizeStoreKey(name))) return value;
+        }
+      }
+    }
+
+    // 最後掃描物件第一層
+    if (typeof source === "object" && !Array.isArray(source)) {
+      for (const [key, value] of Object.entries(source)) {
+        if (normalizedCandidates.has(normalizeStoreKey(key))) return value;
+        const name = value?.storeName || value?.name || value?.displayName || value?.store;
+        if (normalizedCandidates.has(normalizeStoreKey(name))) return value;
+      }
+    }
+
+    return null;
+  };
+
+  const resolveStoreTarget = (store, year, month) => {
+    const monthNum = Number(month);
+    const monthPadded = String(monthNum).padStart(2, "0");
+    const yearMonth = `${year}-${monthPadded}`;
+    const core = store.displayName;
+    const full = store.name;
+    const coreWithStore = `${core}店`;
+    const brandFull = `${brandPrefix}${core}店`;
+
+    const summarySources = [
+      monthlyTargetsSummary,
+      monthlyTargetSummaries,
+      monthly_targets_summary,
+      targetSummary,
+      targetSummaries,
+    ].filter(Boolean);
+
+    const summaryKeys = [
+      yearMonth,
+      `${year}_${monthNum}`,
+      `${year}_${monthPadded}`,
+      `${currentBrand?.id || currentBrand}_${yearMonth}`,
+      `${currentBrand?.id || currentBrand}_${year}_${monthNum}`,
+      "current",
+      "latest",
+    ];
+
+    // 1. 優先讀 monthly_targets_summary / target summary 類資料
+    for (const source of summarySources) {
+      for (const key of summaryKeys) {
+        const container = source?.[key];
+        const target = findNestedTargetByStore(container, store);
+        const fields = readTargetFields(target);
+        if (fields.cashTarget > 0 || fields.accrualTarget > 0) return fields;
+      }
+
+      const target = findNestedTargetByStore(source, store);
+      const fields = readTargetFields(target);
+      if (fields.cashTarget > 0 || fields.accrualTarget > 0) return fields;
+    }
+
+    // 2. fallback：原本 budgets / monthly_targets 物件
+    const budgetKeys = [
+      `${full}_${year}_${monthNum}`,
+      `${full}_${year}_${monthPadded}`,
+      `${brandFull}_${year}_${monthNum}`,
+      `${brandFull}_${year}_${monthPadded}`,
+      `${core}_${year}_${monthNum}`,
+      `${core}_${year}_${monthPadded}`,
+      `${coreWithStore}_${year}_${monthNum}`,
+      `${coreWithStore}_${year}_${monthPadded}`,
+      `${yearMonth}_${full}`,
+      `${yearMonth}_${brandFull}`,
+      `${yearMonth}_${core}`,
+      `${yearMonth}_${coreWithStore}`,
+      `${full}_${yearMonth}`,
+      `${brandFull}_${yearMonth}`,
+      `${core}_${yearMonth}`,
+      `${coreWithStore}_${yearMonth}`,
+    ];
+
+    for (const key of budgetKeys) {
+      const fields = readTargetFields(budgets?.[key]);
+      if (fields.cashTarget > 0 || fields.accrualTarget > 0) return fields;
+    }
+
+    const nestedBudgetTarget = findNestedTargetByStore(budgets?.[yearMonth], store) || findNestedTargetByStore(budgets, store);
+    const nestedFields = readTargetFields(nestedBudgetTarget);
+    if (nestedFields.cashTarget > 0 || nestedFields.accrualTarget > 0) return nestedFields;
+
+    return { cashTarget: 0, accrualTarget: 0 };
   };
 
   // --- 設定視窗函式 ---
@@ -132,11 +313,8 @@ const RankingView = () => {
       const netCash = store.cashTotal - store.refundTotal;
       store.cashTotal = netCash; 
 
-      // 讀取目標
-      const budgetKey = `${store.name}_${targetYear}_${targetMonth}`;
-      const budgetData = budgets[budgetKey];
-      const cashTarget = budgetData ? Number(budgetData.cashTarget || 0) : 0;
-      const accrualTarget = budgetData ? Number(budgetData.accrualTarget || 0) : 0;
+      // 讀取目標：優先使用 monthly_targets_summary，找不到才 fallback 到 budgets / monthly_targets
+      const { cashTarget, accrualTarget } = resolveStoreTarget(store, targetYear, targetMonth);
 
       return {
         ...store,
@@ -152,7 +330,21 @@ const RankingView = () => {
     results = results.filter(store => !(auditExclusions || []).includes(store.displayName));
 
     return results;
-  }, [allReports, budgets, selectedYear, selectedMonth, auditExclusions, managers, brandPrefix]); 
+  }, [
+    allReports,
+    budgets,
+    monthlyTargetsSummary,
+    monthlyTargetSummaries,
+    monthly_targets_summary,
+    targetSummary,
+    targetSummaries,
+    selectedYear,
+    selectedMonth,
+    auditExclusions,
+    managers,
+    brandPrefix,
+    currentBrand
+  ]); 
 
   // --- 排序邏輯 ---
   const sortedData = useMemo(() => {
