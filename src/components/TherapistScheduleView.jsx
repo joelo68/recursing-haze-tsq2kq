@@ -4,7 +4,7 @@ import { Save, Calendar, MapPin, Store, User } from "lucide-react";
 import { doc, setDoc, serverTimestamp } from "firebase/firestore";
 import { db, appId } from "../config/firebase";
 import { AppContext } from "../AppContext";
-import { sortManagerNames, sortStoreNames, sortTherapistsByStoreThenName, sortManagersByOrgOrder, sortStoresByOrgOrder } from "../utils/helpers";
+import { sortManagerNames, sortStoreNames, sortTherapistsByStoreThenName, sortManagersByOrgOrder, sortStoresByOrgOrder, normalizeStoreCoreName } from "../utils/helpers";
 import { ViewWrapper, Card } from "./SharedUI";
 
 const TherapistScheduleView = () => {
@@ -115,10 +115,24 @@ const TherapistScheduleView = () => {
   // 3. 計算可用的管理師列表 (依據店家)
   const availableTherapists = useMemo(() => {
     if (!selectedStore) return [];
-    // Therapists 資料庫裡的 store 欄位通常存的是 "簡稱" (例如 "中山")
-    // 所以這裡 selectedStore 也必須是簡稱
-    const list = therapists
-      .filter(t => t.status === 'active' && t.store === selectedStore);
+
+    const selectedStoreCore = normalizeStoreCoreName(selectedStore);
+
+    // 管師帳號新增資料目前會寫入 status: "在職"、isActive: true、isResigned: false。
+    // 這裡不能只判斷 status === "active"，否則新建立的在職管理師會被排除。
+    const list = (therapists || []).filter((t) => {
+      const therapistStoreCore = normalizeStoreCoreName(t?.store || t?.storeName || "");
+      const isArchived =
+        t?.isResigned === true ||
+        t?.resigned === true ||
+        t?.status === "resigned" ||
+        t?.status === "離職" ||
+        t?.status === "封存" ||
+        t?.isActive === false;
+
+      return !isArchived && therapistStoreCore === selectedStoreCore;
+    });
+
     return sortTherapistsByStoreThenName(list, managers, brandPrefix, managerOrder);
   }, [selectedStore, therapists, managers, brandPrefix, managerOrder]);
 
