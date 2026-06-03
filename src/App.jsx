@@ -322,6 +322,7 @@ export default function App() {
   const [auditType, setAuditType] = useState("daily");
   const [isSidebarOpen, setSidebarOpen] = useState(true);
   const [toast, setToast] = useState(null);
+  const [loginSecurityNotice, setLoginSecurityNotice] = useState(null);
   const [confirmModal, setConfirmModal] = useState({ isOpen: false, title: "", message: "", onConfirm: null });
   const [globalSearchTerm, setGlobalSearchTerm] = useState("");
   const [currentBrandId, setCurrentBrandId] = useState("cyj");
@@ -1485,6 +1486,7 @@ useEffect(() => {
 
 
  const handleLogin = useCallback(async (roleId, userInfo = null) => {
+    setLoginSecurityNotice(null);
     let finalUser = userInfo;
     
     if (roleId === 'therapist' && userInfo?.name) { 
@@ -1545,6 +1547,12 @@ useEffect(() => {
           console.warn("封鎖裝置登入紀錄寫入失敗:", logError);
         }
 
+        setLoginSecurityNotice({
+          type: "blocked",
+          title: "此裝置已被封鎖",
+          message: "請聯繫主管確認裝置權限，或改用已信任的常用裝置登入。",
+          deviceShort: deviceSecurity?.deviceInfo?.deviceShort || immediateDeviceInfo.deviceShort,
+        });
         setToast({ message: "此裝置已被封鎖，請聯繫主管。", type: "error" });
         setUserRole(null);
         setCurrentUser(null);
@@ -1905,13 +1913,46 @@ if (isUpdating) {
   }
 
   if (!userRole) return (
-    <LoginView 
-      appVersion={CURRENT_APP_VERSION}
-      onLogin={handleLogin} storeAccounts={storeAccounts} managers={publicManagers} managerOrder={managerOrder} managerAuth={managerAuth} therapists={therapists} 
-      onUpdatePassword={handleUpdateStorePassword} onUpdateManagerPassword={handleUpdateManagerPassword} onUpdateTherapistPassword={handleUpdateTherapistPassword} 
-      trainerAuth={trainerAuth} handleUpdateTrainerAuth={handleUpdateTrainerAuth} directorAuth={directorAuth} handleUpdateDirectorAuth={handleUpdateDirectorAuth} masterAuth={masterAuth}
-      currentBrandId={currentBrandId} onSwitchBrand={handleSwitchBrand} hasSelectedBrand={hasSelectedBrand}
-    />
+    <>
+      <LoginView 
+        appVersion={CURRENT_APP_VERSION}
+        onLogin={handleLogin} storeAccounts={storeAccounts} managers={publicManagers} managerOrder={managerOrder} managerAuth={managerAuth} therapists={therapists} 
+        onUpdatePassword={handleUpdateStorePassword} onUpdateManagerPassword={handleUpdateManagerPassword} onUpdateTherapistPassword={handleUpdateTherapistPassword} 
+        trainerAuth={trainerAuth} handleUpdateTrainerAuth={handleUpdateTrainerAuth} directorAuth={directorAuth} handleUpdateDirectorAuth={handleUpdateDirectorAuth} masterAuth={masterAuth}
+        currentBrandId={currentBrandId} onSwitchBrand={handleSwitchBrand} hasSelectedBrand={hasSelectedBrand}
+      />
+
+      {loginSecurityNotice?.type === "blocked" && (
+        <div className="fixed left-1/2 top-5 z-[999999] w-[calc(100%-32px)] max-w-md -translate-x-1/2 rounded-2xl border border-rose-100 bg-white/95 p-4 shadow-2xl shadow-rose-100/70 backdrop-blur-md animate-in fade-in slide-in-from-top-3">
+          <div className="flex items-start gap-3">
+            <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-2xl bg-rose-50 text-lg">
+              ⛔
+            </div>
+            <div className="min-w-0 flex-1">
+              <div className="text-sm font-black text-rose-600">
+                {loginSecurityNotice.title || "此裝置已被封鎖"}
+              </div>
+              <div className="mt-1 text-xs font-bold leading-5 text-stone-500">
+                {loginSecurityNotice.message || "請聯繫主管確認裝置權限。"}
+              </div>
+              {loginSecurityNotice.deviceShort && (
+                <div className="mt-2 inline-flex rounded-full bg-stone-100 px-2.5 py-1 text-[11px] font-black text-stone-400">
+                  裝置碼 #{loginSecurityNotice.deviceShort}
+                </div>
+              )}
+            </div>
+            <button
+              type="button"
+              onClick={() => setLoginSecurityNotice(null)}
+              className="rounded-full px-2 py-1 text-xs font-black text-stone-300 hover:bg-stone-100 hover:text-stone-500"
+              aria-label="關閉提示"
+            >
+              ×
+            </button>
+          </div>
+        </div>
+      )}
+    </>
   );
 
   return (

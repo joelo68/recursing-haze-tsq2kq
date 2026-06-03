@@ -10,6 +10,7 @@ const RankingView = () => {
     fmtMoney, 
     fmtNum, 
     budgets,
+    monthlyTargetSummary,
     monthlyTargetsSummary,
     monthlyTargetSummaries,
     monthly_targets_summary,
@@ -76,8 +77,11 @@ const RankingView = () => {
       item.targetCash,
       item.cashBudget,
       item.monthlyCashTarget,
-      item.cash,
+      item.cashTargetTotal,
+      item.totalCashTarget,
+      item.cashTotalTarget,
       item.cashGoal,
+      item.cash,
       item.target_cash,
       item.cash_target
     );
@@ -87,8 +91,11 @@ const RankingView = () => {
       item.targetAccrual,
       item.accrualBudget,
       item.monthlyAccrualTarget,
-      item.accrual,
+      item.accrualTargetTotal,
+      item.totalAccrualTarget,
+      item.accrualTotalTarget,
       item.accrualGoal,
+      item.accrual,
       item.target_accrual,
       item.accrual_target
     );
@@ -119,11 +126,17 @@ const RankingView = () => {
     const containers = [
       source.stores,
       source.storeTargets,
+      source.storeTargetMap,
+      source.monthlyTargets,
       source.targets,
+      source.targetStores,
       source.items,
       source.data,
       source.byStore,
       source.storeMap,
+      source.storesMap,
+      source.summaryByStore,
+      source.storeSummaries,
     ].filter(Boolean);
 
     for (const container of containers) {
@@ -165,6 +178,7 @@ const RankingView = () => {
     const brandFull = `${brandPrefix}${core}店`;
 
     const summarySources = [
+      monthlyTargetSummary,
       monthlyTargetsSummary,
       monthlyTargetSummaries,
       monthly_targets_summary,
@@ -184,6 +198,13 @@ const RankingView = () => {
 
     // 1. 優先讀 monthly_targets_summary / target summary 類資料
     for (const source of summarySources) {
+      const sourceYearMonth = String(source?.yearMonth || source?.id || source?.affectedYearMonth || "");
+      if (!sourceYearMonth || sourceYearMonth === yearMonth) {
+        const directTarget = findNestedTargetByStore(source, store);
+        const directFields = readTargetFields(directTarget);
+        if (directFields.cashTarget > 0 || directFields.accrualTarget > 0) return directFields;
+      }
+
       for (const key of summaryKeys) {
         const container = source?.[key];
         const target = findNestedTargetByStore(container, store);
@@ -247,7 +268,20 @@ const RankingView = () => {
     });
   };
 
+  const targetSourceDebug = useMemo(() => {
+    return {
+      hasMonthlyTargetSummary: Boolean(monthlyTargetSummary),
+      hasMonthlyTargetsSummary: Boolean(monthlyTargetsSummary),
+      hasMonthlyTargetSummaries: Boolean(monthlyTargetSummaries),
+      hasMonthlyTargetsSnake: Boolean(monthly_targets_summary),
+      budgetCount: budgets ? Object.keys(budgets).length : 0,
+    };
+  }, [monthlyTargetSummary, monthlyTargetsSummary, monthlyTargetSummaries, monthly_targets_summary, budgets]);
+
   const processedData = useMemo(() => {
+    if (typeof window !== "undefined" && window?.location?.hostname === "localhost") {
+      console.info("[RankingView target source]", targetSourceDebug);
+    }
     if (!allReports) return [];
 
     const targetYear = parseInt(selectedYear);
@@ -333,6 +367,7 @@ const RankingView = () => {
   }, [
     allReports,
     budgets,
+    monthlyTargetSummary,
     monthlyTargetsSummary,
     monthlyTargetSummaries,
     monthly_targets_summary,
@@ -343,7 +378,8 @@ const RankingView = () => {
     auditExclusions,
     managers,
     brandPrefix,
-    currentBrand
+    currentBrand,
+    targetSourceDebug
   ]); 
 
   // --- 排序邏輯 ---
