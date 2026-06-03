@@ -11,6 +11,7 @@ import {
 import { AppContext } from "../AppContext";
 import { ViewWrapper, Card } from "./SharedUI";
 import SmartDatePicker from "./SmartDatePicker";
+import { db, appId } from "../config/firebase";
 import { formatLocalYYYYMMDD } from "../utils/helpers";
 
 const SystemMonitor = () => {
@@ -162,7 +163,7 @@ const SystemMonitor = () => {
         });
 
         const trustedCount = deviceList.filter((d) => d.trusted !== false && d.status !== "new").length;
-        const newCount = deviceList.filter((d) => d.trusted === false || d.status === "new" || d.status === "suspicious" || d.status === "blocked").length;
+        const newCount = deviceList.filter((d) => d.trusted === false || d.status === "new" || d.status === "suspicious" || d.status === "blocked" || d.status === "global_blocked").length;
         const lastSeenText = deviceList
           .map((d) => d.lastSeenAtText || d.firstSeenAtText || "")
           .filter(Boolean)
@@ -241,7 +242,28 @@ const SystemMonitor = () => {
     }
   };
 
+  const sanitizeSecurityKey = (value) => {
+    return String(value || "unknown")
+      .replace(/[\/.#$\[\]]/g, "_")
+      .replace(/\s+/g, "_")
+      .trim();
+  };
+
+  const getGlobalBlockedDeviceRef = (profile, device) => {
+    const role = profile?.role || "unknown";
+    const accountId = profile?.accountId || profile?.userName || profile?.id || "unknown";
+    const deviceId = device?.deviceId || "unknown_device";
+    const globalKey = sanitizeSecurityKey(`${role}_${accountId}_${deviceId}`);
+    return doc(db, "artifacts", appId, "public", "data", "global_blocked_devices", globalKey);
+  };
+
   const getDeviceTrustMeta = (device = {}) => {
+    if (device.source === "manual_global_blocked" || device.status === "global_blocked") {
+      return {
+        label: "全品牌封鎖",
+        className: "bg-stone-100 text-stone-800 border-stone-300",
+      };
+    }
     if (device.status === "blocked" || device.source === "manual_blocked") {
       return {
         label: "已封鎖",
@@ -275,13 +297,14 @@ const SystemMonitor = () => {
     const nowText = new Date().toISOString();
     const reviewerName = currentUser?.name || (userRole === "director" ? "高階主管" : "系統管理者");
     const isTrusted = nextStatus === "trusted";
-    const isBlocked = nextStatus === "blocked";
+    const isGlobalBlocked = nextStatus === "global_blocked";
+    const isBlocked = nextStatus === "blocked" || isGlobalBlocked;
 
     const nextDevice = {
       ...device,
       trusted: isTrusted,
-      status: isTrusted ? "trusted" : (isBlocked ? "blocked" : "suspicious"),
-      source: isTrusted ? "manual_trusted" : (isBlocked ? "manual_blocked" : "manual_suspicious"),
+      status: isTrusted ? "trusted" : (isGlobalBlocked ? "global_blocked" : (isBlocked ? "blocked" : "suspicious")),
+      source: isTrusted ? "manual_trusted" : (isGlobalBlocked ? "manual_global_blocked" : (isBlocked ? "manual_blocked" : "manual_suspicious")),
       reviewedBy: reviewerName,
       reviewedRole: userRole || "",
       reviewedAtText: nowText,
@@ -289,6 +312,7 @@ const SystemMonitor = () => {
       ...(isBlocked ? {
         blockedBy: reviewerName,
         blockedAtText: nowText,
+        blockScope: isGlobalBlocked ? "all_brands" : "current_brand",
       } : {}),
     };
 
@@ -300,7 +324,41 @@ const SystemMonitor = () => {
         updatedAtText: nowText,
       }, { merge: true });
 
-      const wasPendingDevice = device.trusted === false || device.status === "new" || device.status === "suspicious" || device.status === "blocked";
+      const globalBlockRef = getGlobalBlockedDeviceRef(profile, device);
+      if (isGlobalBlocked) {
+        await setDoc(globalBlockRef, {
+          active: true,
+          status: "global_blocked",
+          source: "manual_global_blocked",
+          scope: "all_brands",
+          role: profile?.role || "",
+          accountId: profile?.accountId || "",
+          userName: profile?.userName || profile?.accountId || profile?.id || "",
+          deviceId: nextDevice.deviceId,
+          deviceShort: nextDevice.deviceShort,
+          device: nextDevice.device,
+          browser: nextDevice.browser,
+          os: nextDevice.os,
+          blockedBy: reviewerName,
+          blockedRole: userRole || "",
+          blockedAtText: nowText,
+          updatedAtText: nowText,
+        }, { merge: true });
+      }
+
+      if (isTrusted) {
+        await setDoc(globalBlockRef, {
+          active: false,
+          status: "resolved",
+          source: "manual_trusted",
+          resolvedBy: reviewerName,
+          resolvedRole: userRole || "",
+          resolvedAtText: nowText,
+          updatedAtText: nowText,
+        }, { merge: true });
+      }
+
+      const wasPendingDevice = device.trusted === false || device.status === "new" || device.status === "suspicious" || device.status === "blocked" || device.status === "global_blocked";
       if (isTrusted && wasPendingDevice) {
         await setDoc(doc(getCollectionPath("security_summary"), "device_alerts"), {
           pendingNewDeviceCount: increment(-1),
@@ -323,7 +381,7 @@ const SystemMonitor = () => {
           ...item,
           deviceList,
           trustedCount: deviceList.filter((d) => d.trusted === true && d.status !== "blocked").length,
-          newCount: deviceList.filter((d) => d.trusted === false || d.status === "new" || d.status === "suspicious" || d.status === "blocked").length,
+          newCount: deviceList.filter((d) => d.trusted === false || d.status === "new" || d.status === "suspicious" || d.status === "blocked" || d.status === "global_blocked").length,
         };
       }));
 
@@ -338,6 +396,8 @@ const SystemMonitor = () => {
             reviewedBy: nextDevice.reviewedBy,
             reviewedAtText: nextDevice.reviewedAtText,
             resolvedPending: isTrusted && wasPendingDevice,
+            globalBlocked: isGlobalBlocked,
+            blockScope: isGlobalBlocked ? "all_brands" : (isBlocked ? "current_brand" : ""),
           },
         }));
       } catch (eventError) {
@@ -929,14 +989,14 @@ const SystemMonitor = () => {
                                   </div>
 
                                   <div className="mt-3 flex flex-col sm:flex-row gap-2 justify-end">
-                                    {(device.trusted === false || device.status === "new" || device.status === "suspicious" || device.status === "blocked") && (
+                                    {(device.trusted === false || device.status === "new" || device.status === "suspicious" || device.status === "blocked" || device.status === "global_blocked") && (
                                       <button
                                         type="button"
                                         disabled={deviceActionKey === `${profile.id}_${device.deviceId}_trusted`}
                                         onClick={() => updateDeviceTrust(profile, device, "trusted")}
                                         className="px-3 py-2 rounded-xl bg-emerald-50 text-emerald-700 border border-emerald-100 text-xs font-black hover:bg-emerald-100 disabled:opacity-60 active:scale-95"
                                       >
-                                        {deviceActionKey === `${profile.id}_${device.deviceId}_trusted` ? "處理中..." : (device.status === "blocked" ? "解除封鎖並信任" : "設為信任")}
+                                        {deviceActionKey === `${profile.id}_${device.deviceId}_trusted` ? "處理中..." : (device.status === "blocked" || device.status === "global_blocked" ? "解除封鎖並信任" : "設為信任")}
                                       </button>
                                     )}
                                     {!(device.status === "suspicious" || device.source === "manual_suspicious" || device.status === "blocked" || device.source === "manual_blocked") && (
@@ -949,18 +1009,32 @@ const SystemMonitor = () => {
                                         {deviceActionKey === `${profile.id}_${device.deviceId}_suspicious` ? "處理中..." : "標記可疑"}
                                       </button>
                                     )}
-                                    {!(device.status === "blocked" || device.source === "manual_blocked") && (
+                                    {!(device.status === "blocked" || device.source === "manual_blocked" || device.status === "global_blocked" || device.source === "manual_global_blocked") && (
                                       <button
                                         type="button"
                                         disabled={deviceActionKey === `${profile.id}_${device.deviceId}_blocked`}
                                         onClick={() => {
-                                          if (window.confirm("確定要封鎖這台裝置嗎？封鎖後此瀏覽器環境將無法登入。")) {
+                                          if (window.confirm("確定要封鎖這台裝置嗎？封鎖後此瀏覽器環境將無法登入目前品牌。")) {
                                             updateDeviceTrust(profile, device, "blocked");
                                           }
                                         }}
                                         className="px-3 py-2 rounded-xl bg-stone-100 text-stone-700 border border-stone-200 text-xs font-black hover:bg-stone-200 disabled:opacity-60 active:scale-95"
                                       >
                                         {deviceActionKey === `${profile.id}_${device.deviceId}_blocked` ? "處理中..." : "封鎖裝置"}
+                                      </button>
+                                    )}
+                                    {!(device.status === "global_blocked" || device.source === "manual_global_blocked") && (
+                                      <button
+                                        type="button"
+                                        disabled={deviceActionKey === `${profile.id}_${device.deviceId}_global_blocked`}
+                                        onClick={() => {
+                                          if (window.confirm("確定要全品牌封鎖這台裝置嗎？封鎖後此帳號在所有品牌使用此瀏覽器環境都無法登入。")) {
+                                            updateDeviceTrust(profile, device, "global_blocked");
+                                          }
+                                        }}
+                                        className="px-3 py-2 rounded-xl bg-rose-100 text-rose-700 border border-rose-200 text-xs font-black hover:bg-rose-200 disabled:opacity-60 active:scale-95"
+                                      >
+                                        {deviceActionKey === `${profile.id}_${device.deviceId}_global_blocked` ? "處理中..." : "全品牌封鎖"}
                                       </button>
                                     )}
                                   </div>

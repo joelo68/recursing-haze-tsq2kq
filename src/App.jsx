@@ -671,7 +671,40 @@ export default function App() {
 
     try {
       const deviceProfileRef = doc(getCollectionPath("account_devices"), accountKey);
-      const profileSnap = await getDoc(deviceProfileRef);
+      const globalBlockKey = sanitizeSecurityKey(`${roleId}_${accountId}_${deviceInfo.deviceId}`);
+      const globalBlockRef = doc(db, "artifacts", appId, "public", "data", "global_blocked_devices", globalBlockKey);
+      const [profileSnap, globalBlockSnap] = await Promise.all([
+        getDoc(deviceProfileRef),
+        getDoc(globalBlockRef),
+      ]);
+
+      if (globalBlockSnap.exists()) {
+        const globalBlockData = globalBlockSnap.data() || {};
+        const isGlobalBlockActive =
+          globalBlockData.active !== false &&
+          ["blocked", "global_blocked", "manual_global_blocked"].includes(String(globalBlockData.status || globalBlockData.source || ""));
+
+        if (isGlobalBlockActive) {
+          const result = {
+            allowed: false,
+            blocked: true,
+            globalBlocked: true,
+            reason: "global_device_blocked",
+            message: "此裝置已被全品牌封鎖，請聯繫主管。",
+            deviceInfo,
+            existingDevice: globalBlockData,
+            isNewDevice: false,
+            deviceTrusted: false,
+            autoTrusted: false,
+            alertCreated: false,
+            riskTags: ["全品牌裝置封鎖"],
+            deviceStatus: "blocked",
+          };
+          logDeviceCheckResult(roleId, userName, result, deviceInfo);
+          return result;
+        }
+      }
+
       const profileData = profileSnap.exists() ? profileSnap.data() : {};
       const devices = profileData.devices || {};
       const existingDevice = devices[deviceInfo.deviceId];
@@ -680,6 +713,7 @@ export default function App() {
         const result = {
           allowed: false,
           blocked: true,
+          globalBlocked: false,
           reason: "device_blocked",
           message: "此裝置已被封鎖，請聯繫主管。",
           deviceInfo,
@@ -1549,11 +1583,13 @@ useEffect(() => {
 
         setLoginSecurityNotice({
           type: "blocked",
-          title: "此裝置已被封鎖",
-          message: "請聯繫主管確認裝置權限，或改用已信任的常用裝置登入。",
+          title: deviceSecurity?.globalBlocked ? "此裝置已被全品牌封鎖" : "此裝置已被封鎖",
+          message: deviceSecurity?.globalBlocked
+            ? "此裝置已被主管設定為全品牌封鎖，無法登入任何品牌。請聯繫主管確認裝置權限。"
+            : "請聯繫主管確認裝置權限，或改用已信任的常用裝置登入。",
           deviceShort: deviceSecurity?.deviceInfo?.deviceShort || immediateDeviceInfo.deviceShort,
         });
-        setToast({ message: "此裝置已被封鎖，請聯繫主管。", type: "error" });
+        setToast({ message: deviceSecurity?.globalBlocked ? "此裝置已被全品牌封鎖，請聯繫主管。" : "此裝置已被封鎖，請聯繫主管。", type: "error" });
         setUserRole(null);
         setCurrentUser(null);
         setActiveView("dashboard");
