@@ -242,6 +242,103 @@ const SystemMonitor = () => {
     }
   };
 
+  const getDeviceDisplayName = (device = {}) => {
+    const rawDevice = String(device.device || "").trim();
+    const os = String(device.os || "").toLowerCase();
+    const ua = String(device.userAgent || device.ua || "").toLowerCase();
+    const rawLower = rawDevice.toLowerCase();
+
+    const isIPad =
+      os.includes("ipados") ||
+      ua.includes("ipad") ||
+      rawLower.includes("ipad");
+
+    const isIPhone =
+      ua.includes("iphone") ||
+      rawLower.includes("iphone") ||
+      (os.includes("ios") && !isIPad);
+
+    const isAndroid = os.includes("android") || ua.includes("android");
+    const isAndroidTablet =
+      isAndroid &&
+      (
+        rawLower.includes("tablet") ||
+        ua.includes("tablet") ||
+        !ua.includes("mobile")
+      );
+
+    const isAndroidPhone =
+      isAndroid &&
+      (
+        rawLower.includes("mobile") ||
+        ua.includes("mobile") ||
+        !isAndroidTablet
+      );
+
+    // iPadOS 13+ 有時會偽裝成 Macintosh，但通常仍可從 UA / 裝置名稱辨識 iPad。
+    if (isIPad) return "iPad";
+    if (isIPhone) return "iPhone";
+
+    if (os.includes("mac") || ua.includes("macintosh")) return "MAC";
+
+    if (isAndroidTablet) return "Android 平板";
+    if (isAndroidPhone) return "Android 手機";
+
+    if (os.includes("windows") || ua.includes("windows")) return "PC";
+    if (os.includes("chrome os") || os.includes("cros") || ua.includes("cros")) return "Chromebook";
+    if (os.includes("linux") || ua.includes("linux")) return "Linux";
+
+    if (rawDevice === "PC") return "PC";
+    if (rawDevice === "Mobile") return "手機";
+    if (rawDevice === "Tablet") return "平板";
+
+    return rawDevice || "裝置";
+  };
+
+  const getLogDeviceDisplayName = (log = {}) => {
+    return getDeviceDisplayName({
+      device: log.device || log.details?.deviceInfo?.device || log.details?.device || "",
+      os: log.os || log.details?.deviceInfo?.os || log.details?.os || "",
+      browser: log.browser || log.details?.deviceInfo?.browser || log.details?.browser || "",
+      userAgent: log.userAgent || log.details?.deviceInfo?.userAgent || log.details?.userAgent || "",
+    });
+  };
+
+  const getLogDeviceShortLabel = (displayName = "") => {
+    if (displayName === "Android 手機") return "Android";
+    if (displayName === "Android 平板") return "平板";
+    if (displayName === "Chromebook") return "ChromeOS";
+    return displayName || "裝置";
+  };
+
+  const getLogDeviceIcon = (log = {}) => {
+    const displayName = getLogDeviceDisplayName(log);
+    const shortLabel = getLogDeviceShortLabel(displayName);
+
+    const isMobile =
+      displayName === "iPhone" ||
+      displayName === "Android 手機" ||
+      displayName === "手機";
+
+    const isTablet =
+      displayName === "iPad" ||
+      displayName === "Android 平板" ||
+      displayName === "平板";
+
+    const Icon = isMobile || isTablet ? Smartphone : Monitor;
+    const toneClass = isMobile || isTablet ? "text-stone-500" : "text-stone-400";
+
+    return (
+      <div
+        className={`inline-flex items-center gap-1 ${toneClass} bg-stone-50 px-1.5 lg:px-2 py-1 rounded-lg text-xs whitespace-nowrap max-w-[82px] overflow-hidden`}
+        title={displayName}
+      >
+        <Icon size={12} className="shrink-0" />
+        <span className="truncate min-w-0">{shortLabel}</span>
+      </div>
+    );
+  };
+
   const sanitizeSecurityKey = (value) => {
     return String(value || "unknown")
       .replace(/[\/.#$\[\]]/g, "_")
@@ -684,7 +781,7 @@ const SystemMonitor = () => {
                           <div className="min-w-0 flex-1">
                             <div className="flex items-center gap-2 flex-wrap">
                               <span className="font-mono text-xs text-stone-400 whitespace-nowrap">{formatTime(log.timestamp)}</span>
-                              {getDeviceIcon(log.device)}
+                              {getLogDeviceIcon(log)}
                               {getRoleBadge(log.role)}
                               {securityBadges.map((badge) => (
                                 <span key={badge.key} className={`inline-flex items-center gap-1 px-2 py-1 rounded-lg text-xs font-bold whitespace-nowrap ${badge.className}`}>
@@ -710,7 +807,7 @@ const SystemMonitor = () => {
                               <div><span className="font-black text-stone-400">來源頁面：</span>{log.details?.viewLabel || log.details?.view || log.view || "-"}</div>
                               <div><span className="font-black text-stone-400">品牌：</span>{log.brandLabel || log.brand || "-"}</div>
                               <div><span className="font-black text-stone-400">事件：</span>{log.activityType || log.details?.activityType || "-"}</div>
-                              <div><span className="font-black text-stone-400">裝置：</span>{[log.device, log.browser, log.os].filter(Boolean).join(" / ") || "-"}</div>
+                              <div><span className="font-black text-stone-400">裝置：</span>{[getLogDeviceDisplayName(log), log.browser, log.os].filter(Boolean).join(" / ") || "-"}</div>
                               <div><span className="font-black text-stone-400">裝置碼：</span>{log.deviceShort || log.details?.deviceShort || "-"}</div>
                             </div>
                             <pre className="whitespace-pre-wrap break-words rounded-xl bg-stone-50 border border-stone-100 p-3 text-[11px] max-h-64 overflow-auto max-w-full">{JSON.stringify(log.details || {}, null, 2)}</pre>
@@ -732,12 +829,12 @@ const SystemMonitor = () => {
                     <thead className="bg-stone-50/70 text-stone-400 font-bold text-xs tracking-wider border-b border-stone-100">
                       <tr>
                         <th className="px-3 py-4 w-[11%] whitespace-nowrap">時間</th>
-                        <th className="px-2 py-4 w-[7%] whitespace-nowrap">裝置</th>
+                        <th className="px-2 py-4 w-[9%] whitespace-nowrap">裝置</th>
                         <th className="px-2 py-4 w-[8%] whitespace-nowrap">身份</th>
                         <th className="px-3 py-4 w-[13%] whitespace-nowrap">使用者</th>
                         <th className="px-2 py-4 w-[10%] whitespace-nowrap">類型</th>
                         <th className="px-3 py-4 w-[13%] whitespace-nowrap">動作</th>
-                        <th className="px-3 py-4 w-[38%] whitespace-nowrap">詳細內容</th>
+                        <th className="px-3 py-4 w-[36%] whitespace-nowrap">詳細內容</th>
                       </tr>
                     </thead>
                     <tbody className="divide-y divide-stone-50 text-sm bg-white">
@@ -750,7 +847,7 @@ const SystemMonitor = () => {
                           <React.Fragment key={log.id}>
                             <tr onClick={() => setExpandedLogId(isExpanded ? null : log.id)} className="hover:bg-stone-50/80 transition-colors cursor-pointer">
                               <td className="px-3 py-4 font-mono text-stone-400 text-xs whitespace-nowrap">{formatTime(log.timestamp)}</td>
-                              <td className="px-2 py-4 whitespace-nowrap overflow-hidden">{getDeviceIcon(log.device)}</td>
+                              <td className="px-2 py-4 whitespace-nowrap overflow-hidden">{getLogDeviceIcon(log)}</td>
                               <td className="px-2 py-4 whitespace-nowrap overflow-hidden">{getRoleBadge(log.role)}</td>
                               <td className="px-3 py-4 font-bold text-stone-700 whitespace-nowrap truncate" title={log.user}>{log.user}</td>
                               <td className="px-2 py-4 whitespace-nowrap overflow-hidden">
@@ -776,7 +873,7 @@ const SystemMonitor = () => {
                                       <div><span className="font-black text-stone-400">來源頁面：</span>{log.details?.viewLabel || log.details?.view || log.view || "-"}</div>
                                       <div><span className="font-black text-stone-400">品牌：</span>{log.brandLabel || log.brand || "-"}</div>
                                       <div><span className="font-black text-stone-400">事件：</span>{log.activityType || log.details?.activityType || "-"}</div>
-                                      <div><span className="font-black text-stone-400">裝置：</span>{[log.device, log.browser, log.os].filter(Boolean).join(" / ") || "-"}</div>
+                                      <div><span className="font-black text-stone-400">裝置：</span>{[getLogDeviceDisplayName(log), log.browser, log.os].filter(Boolean).join(" / ") || "-"}</div>
                                       <div><span className="font-black text-stone-400">裝置碼：</span>{log.deviceShort || log.details?.deviceShort || "-"}</div>
                                     </div>
                                     <pre className="whitespace-pre-wrap break-words rounded-xl bg-stone-50 border border-stone-100 p-3 text-[11px] max-w-full overflow-auto">{JSON.stringify(log.details || {}, null, 2)}</pre>
@@ -961,7 +1058,7 @@ const SystemMonitor = () => {
                                     <div className="min-w-0">
                                       <div className="flex items-center gap-2 flex-wrap">
                                         {getDeviceIcon(device.device)}
-                                        <span className="font-black text-stone-700">{device.browser || "-"} / {device.os || "-"}</span>
+                                        <span className="font-black text-stone-700">{getDeviceDisplayName(device)} / {device.browser || "-"} / {device.os || "-"}</span>
                                       </div>
                                       <p className="mt-2 text-xs font-mono text-stone-400 break-all">裝置碼：{device.deviceShort || "-"}</p>
                                     </div>
@@ -981,6 +1078,10 @@ const SystemMonitor = () => {
                                     <div className="rounded-xl bg-stone-50 p-2">
                                       <span className="block text-stone-400 font-black">登入次數</span>
                                       {device.loginCount || 1}
+                                    </div>
+                                    <div className="rounded-xl bg-stone-50 p-2">
+                                      <span className="block text-stone-400 font-black">裝置類型</span>
+                                      {getDeviceDisplayName(device)}
                                     </div>
                                     <div className="rounded-xl bg-stone-50 p-2">
                                       <span className="block text-stone-400 font-black">來源</span>
