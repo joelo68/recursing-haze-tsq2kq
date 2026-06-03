@@ -7,6 +7,7 @@ import {
 import { Target, TrendingUp, DollarSign, Activity, Calendar, Award, Filter, ArrowRight, Settings, X, Ban, CheckCircle, Save } from "lucide-react";
 
 import { AppContext } from "../AppContext";
+import { sortManagerNames, sortStoreNames, sortManagersByOrgOrder, sortStoresByOrgOrder } from "../utils/helpers";
 import { ViewWrapper, Card } from "./SharedUI";
 
 // ★★★ 自定義圖例元件：完全控制順序與樣式 ★★★
@@ -53,7 +54,7 @@ const AnnualView = () => {
     annualDashboardSummaries = [], // ★ 歷史月份可信口徑：dashboard_summary
     annualSummaryStatusMap = {}, // ★ Summary 狀態：避免 dirty / mismatch 仍被使用
     budgets, 
-    managers, 
+    managers, managerOrder, 
     fmtMoney, 
     fmtNum, 
     selectedYear,
@@ -119,18 +120,19 @@ const AnnualView = () => {
       return rawStores.map(cleanName).filter(Boolean);
     }
     return []; 
-  }, [userRole, currentUser, managers, cleanName]);
+  }, [userRole, currentUser, managers, managerOrder, cleanName]);
 
   const availableStoresForFilter = useMemo(() => {
     const uniqueStores = [...new Set(baseVisibleStores)];
-    return uniqueStores.sort().map(s => `${brandPrefix}${s}店`);
-  }, [baseVisibleStores, brandPrefix]);
+    return sortStoresByOrgOrder(managers, uniqueStores.map(s => `${brandPrefix}${s}店`), brandPrefix, managerOrder);
+  }, [baseVisibleStores, brandPrefix, managers, managerOrder]);
 
   const groupedStoresForFilter = useMemo(() => {
     const groups = {};
     const availableSet = new Set(availableStoresForFilter);
 
-    Object.entries(managers || {}).forEach(([mgrName, rawStores]) => {
+    sortManagersByOrgOrder(managers, null, managerOrder).forEach((mgrName) => {
+        const rawStores = managers?.[mgrName] || [];
         const mgrValidStores = [];
         (rawStores || []).forEach(rs => {
             const core = cleanName(rs);
@@ -140,28 +142,28 @@ const AnnualView = () => {
             }
         });
         if (mgrValidStores.length > 0) {
-            groups[mgrName] = mgrValidStores.sort();
+            groups[mgrName] = sortStoresByOrgOrder(managers, mgrValidStores, brandPrefix, managerOrder);
         }
     });
 
     const inGroups = new Set(Object.values(groups).flat());
     const orphans = availableStoresForFilter.filter(s => !inGroups.has(s));
     if (orphans.length > 0) {
-        groups['其他'] = orphans.sort();
+        groups['其他'] = sortStoresByOrgOrder(managers, orphans, brandPrefix, managerOrder);
     }
 
     return groups;
-  }, [managers, availableStoresForFilter, cleanName, brandPrefix]);
+  }, [managers, managerOrder, availableStoresForFilter, cleanName, brandPrefix]);
 
   const availableStoresForDropdown = useMemo(() => {
     if (userRole === 'manager' && currentUser) {
-         return groupedStoresForFilter[currentUser.name] || Object.values(groupedStoresForFilter).flat().sort();
+         return groupedStoresForFilter[currentUser.name] || sortStoresByOrgOrder(managers, Object.values(groupedStoresForFilter).flat(), brandPrefix, managerOrder);
     }
     if (selectedAnnualManager && groupedStoresForFilter[selectedAnnualManager]) {
         return groupedStoresForFilter[selectedAnnualManager];
     }
-    return Object.values(groupedStoresForFilter).flat().sort();
-  }, [selectedAnnualManager, groupedStoresForFilter, userRole, currentUser]);
+    return sortStoresByOrgOrder(managers, Object.values(groupedStoresForFilter).flat(), brandPrefix, managerOrder);
+  }, [selectedAnnualManager, groupedStoresForFilter, userRole, currentUser, managers, brandPrefix, managerOrder]);
 
   const effectiveStores = useMemo(() => {
     if (selectedAnnualStore) {
@@ -172,7 +174,7 @@ const AnnualView = () => {
       return stores.map(cleanName).filter(Boolean);
     }
     return baseVisibleStores;
-  }, [baseVisibleStores, selectedAnnualStore, selectedAnnualManager, managers, cleanName]);
+  }, [baseVisibleStores, selectedAnnualStore, selectedAnnualManager, managers, managerOrder, cleanName]);
 
 
   // ==========================================
@@ -445,7 +447,7 @@ const AnnualView = () => {
                             className="px-3 py-2 border border-stone-200 rounded-xl text-sm font-bold text-stone-600 outline-none focus:border-amber-400 bg-stone-50 shadow-sm cursor-pointer min-w-[120px] hover:border-stone-300 transition-colors"
                         >
                             <option value="">全品牌</option>
-                            {Object.keys(groupedStoresForFilter).map(m => (
+                            {sortManagersByOrgOrder(managers, Object.keys(groupedStoresForFilter), managerOrder).map(m => (
                                 <option key={m} value={m}>{m}區</option>
                             ))}
                         </select>

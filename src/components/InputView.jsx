@@ -12,7 +12,7 @@ import {
 } from "firebase/firestore";
 
 import { db, appId } from "../config/firebase"; 
-import { parseNumber, formatNumber, toStandardDateFormat } from "../utils/helpers";
+import { parseNumber, formatNumber, toStandardDateFormat, sortManagerNames, sortStoreNames, sortManagersByOrgOrder, sortStoresByOrgOrder } from "../utils/helpers";
 import { AppContext } from "../AppContext";
 import { ViewWrapper, Card } from "./SharedUI";
 import SmartDatePicker from "./SmartDatePicker";
@@ -129,7 +129,7 @@ const enqueueRecalcQueue = async ({
 // ============================================================================
 const StoreInputView = () => {
   const {
-    currentUser, userRole, managers, inputDate, setInputDate, showToast, logActivity, rawData,
+    currentUser, userRole, managers, managerOrder, inputDate, setInputDate, showToast, logActivity, rawData,
     getCollectionPath, currentBrand, isOnline 
   } = useContext(AppContext);
 
@@ -249,12 +249,12 @@ const StoreInputView = () => {
   const availableStores = useMemo(() => {
     if (!selectedManager) {
       if (userRole === "store" && currentUser) {
-        return (currentUser.stores || [currentUser.storeName]).map((s) => `${brandPrefix}${getCoreStoreName(s)}店`);
+        return sortStoresByOrgOrder(managers, (currentUser.stores || [currentUser.storeName]).map((s) => `${brandPrefix}${getCoreStoreName(s)}店`), brandPrefix, managerOrder);
       }
       return [];
     }
-    return (managers[selectedManager] || []).map((s) => `${brandPrefix}${getCoreStoreName(s)}店`);
-  }, [selectedManager, managers, userRole, currentUser, brandPrefix, getCoreStoreName]);
+    return sortStoresByOrgOrder(managers, (managers[selectedManager] || []).map((s) => `${brandPrefix}${getCoreStoreName(s)}店`), brandPrefix, managerOrder);
+  }, [selectedManager, managers, managerOrder, userRole, currentUser, brandPrefix, getCoreStoreName]);
 
   useEffect(() => {
     if (!selectedStore && userRole === "store" && currentUser) {
@@ -268,7 +268,7 @@ const StoreInputView = () => {
     } else if (!selectedManager && userRole === "manager" && currentUser) {
       setSelectedManager(currentUser.name);
     }
-  }, [userRole, currentUser, managers, brandPrefix, selectedStore, getCoreStoreName]);
+  }, [userRole, currentUser, managers, managerOrder, brandPrefix, selectedStore, getCoreStoreName]);
 
   const handleReset = () => {
     if (confirm("確定要重置嗎？")) {
@@ -428,7 +428,7 @@ const StoreInputView = () => {
             <div className="relative">
               <select value={selectedManager} onChange={(e) => { setSelectedManager(e.target.value); setSelectedStore(""); }} disabled={userRole !== "director"} className="w-full border-2 border-stone-100 p-3 rounded-xl font-bold text-stone-700 bg-white disabled:bg-stone-50 outline-none focus:border-amber-400 appearance-none">
                 <option value="">請選擇...</option>
-                {Object.keys(managers).map((m) => <option key={m} value={m}>{m}區</option>)}
+                {sortManagersByOrgOrder(managers, null, managerOrder).map((m) => <option key={m} value={m}>{m}區</option>)}
               </select>
             </div>
           </div>

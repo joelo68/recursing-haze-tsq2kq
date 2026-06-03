@@ -25,12 +25,12 @@ import { doc, setDoc, deleteDoc, serverTimestamp } from "firebase/firestore";
 import { AppContext } from "../AppContext";
 import { ViewWrapper } from "./SharedUI";
 import SmartDatePicker from "./SmartDatePicker";
-import { formatLocalYYYYMMDD } from "../utils/helpers";
+import { formatLocalYYYYMMDD, sortManagerNames, sortStoreNames, sortTherapistsByStoreThenName, sortManagersByOrgOrder, sortStoresByOrgOrder } from "../utils/helpers";
 
 const TherapistManagerView = () => {
   const {
     therapists,
-    managers,
+    managers, managerOrder,
     showToast,
     getCollectionPath,
     fetchGlobalData,
@@ -111,10 +111,10 @@ const TherapistManagerView = () => {
   };
 
   const allManagers = useMemo(() => {
-    return Object.keys(managers || {}).filter(
+    return sortManagersByOrgOrder(managers, Object.keys(managers || {}).filter(
       (m) => !m.includes("未分配") && !m.includes("未分區")
-    );
-  }, [managers]);
+    ), managerOrder);
+  }, [managers, managerOrder]);
 
   const allStores = useMemo(() => {
     const stores = Object.values(managers || {})
@@ -122,24 +122,24 @@ const TherapistManagerView = () => {
       .filter(Boolean)
       .map((s) => String(s).replace(/店$/, ""));
 
-    return [...new Set(stores)].sort((a, b) => a.localeCompare(b, "zh-Hant"));
-  }, [managers]);
+    return sortStoresByOrgOrder(managers, [...new Set(stores)], '', managerOrder);
+  }, [managers, managerOrder]);
 
   const storesForManagerFilter = useMemo(() => {
     if (selectedManagerFilter === "all") return allStores;
 
-    return (managers?.[selectedManagerFilter] || []).map((s) =>
+    return sortStoresByOrgOrder(managers, (managers?.[selectedManagerFilter] || []).map((s) =>
       String(s).replace(/店$/, "")
-    );
-  }, [selectedManagerFilter, allStores, managers]);
+    ), '', managerOrder);
+  }, [selectedManagerFilter, allStores, managers, managerOrder]);
 
   const availableStoresForForm = useMemo(() => {
     if (!formManager || !managers) return [];
 
-    return (managers[formManager] || []).map((s) =>
+    return sortStoresByOrgOrder(managers, (managers[formManager] || []).map((s) =>
       String(s).replace(/店$/, "")
-    );
-  }, [formManager, managers]);
+    ), '', managerOrder);
+  }, [formManager, managers, managerOrder]);
 
   const hasActiveFilter = useMemo(() => {
     return (
@@ -231,7 +231,7 @@ const TherapistManagerView = () => {
     searchTerm,
     selectedManagerFilter,
     selectedStoreFilter,
-    managers,
+    managers, managerOrder,
     hasActiveFilter,
   ]);
 

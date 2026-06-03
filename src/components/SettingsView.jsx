@@ -16,7 +16,7 @@ import { db, appId } from "../config/firebase";
 import { AppContext } from "../AppContext";
 import { ViewWrapper, Card } from "./SharedUI";
 import { DEFAULT_PERMISSIONS, ALL_MENU_ITEMS } from "../constants/index";
-import { generateUUID } from "../utils/helpers";
+import { generateUUID, normalizeManagerOrder, sortManagersByOrgOrder, sortStoresByOrgOrder } from "../utils/helpers";
 import SystemMaintenance from "./SystemMaintenance";
 
 // ★ 引入自訂日曆元件
@@ -54,7 +54,7 @@ const BENCHMARK_CATEGORIES = [
 
 const SettingsView = () => {
   const {
-    targets, setTargets, showToast, managers, storeAccounts,
+    targets, setTargets, showToast, managers, managerOrder, storeAccounts,
     managerAuth, userRole, permissions, currentUser,
     therapists, therapistTargets, therapistSchedules,
     trainerAuth, handleUpdateTrainerAuth,
@@ -72,6 +72,7 @@ const SettingsView = () => {
   const [localTargets, setLocalTargets] = useState(targets || {});
   const [localPermissions, setLocalPermissions] = useState(permissions || DEFAULT_PERMISSIONS);
   const [localManagers, setLocalManagers] = useState(managers || {});
+  const [localManagerOrder, setLocalManagerOrder] = useState(normalizeManagerOrder(managers || {}, managerOrder));
   
   const DEFAULT_SECURITY_CONFIG = {
     // 舊版相容：enabled / timeoutMinutes 仍保留，避免舊程式讀不到
@@ -103,7 +104,12 @@ const SettingsView = () => {
     return { brandKey: key, brandLabel: label };
   }, [currentBrand]);
 
-  useEffect(() => { if (managers) setLocalManagers(managers); }, [managers]);
+  useEffect(() => {
+    if (managers) {
+      setLocalManagers(managers);
+      setLocalManagerOrder(normalizeManagerOrder(managers || {}, managerOrder));
+    }
+  }, [managers, managerOrder, managerOrder]);
   useEffect(() => { if (permissions) setLocalPermissions(permissions); }, [permissions]);
   useEffect(() => { 
     if (targets) { setLocalTargets(prev => ({ ...prev, ...targets, benchmarks: targets.benchmarks || DEFAULT_BENCHMARKS_INIT })); }
@@ -180,6 +186,19 @@ const SettingsView = () => {
 
   const normalizeStoreList = (stores = []) => [...new Set((stores || []).filter(Boolean))];
 
+  const buildStableManagerOrder = (nextManagers = localManagers, preferredOrder = localManagerOrder) => {
+    return normalizeManagerOrder(nextManagers || {}, preferredOrder || []);
+  };
+
+  const saveOrgStructure = async (docRef, nextManagers, preferredOrder = localManagerOrder, useUpdate = false) => {
+    const nextManagerOrder = buildStableManagerOrder(nextManagers, preferredOrder);
+    const payload = { managers: nextManagers, managerOrder: nextManagerOrder };
+    if (useUpdate) await updateDoc(docRef, payload);
+    else await setDoc(docRef, payload);
+    setLocalManagers(nextManagers);
+    setLocalManagerOrder(nextManagerOrder);
+  };
+
   const createOrgStructureSnapshot = async (action, beforeManagers, extra = {}) => {
     try {
       await addDoc(getCollectionPath("org_structure_snapshots"), {
@@ -188,6 +207,7 @@ const SettingsView = () => {
         action,
         managers: JSON.parse(JSON.stringify(beforeManagers || {})),
         managerKeys: Object.keys(beforeManagers || {}),
+        managerOrder: buildStableManagerOrder(beforeManagers || {}),
         storeCount: Object.values(beforeManagers || {}).flat().filter(Boolean).length,
         operator: currentUser?.name || userRole || "director",
         operatorRole: userRole || "unknown",
@@ -239,12 +259,16 @@ const SettingsView = () => {
     const entries = Object.entries(currentManagers);
     const hasUnassigned = entries.some(([key]) => key === UNASSIGNED_KEY);
     if (!hasUnassigned) entries.push([UNASSIGNED_KEY, []]);
+
+    const orderedKeys = normalizeManagerOrder(currentManagers, localManagerOrder);
+    const rank = new Map(orderedKeys.map((key, index) => [key, index]));
     return entries.sort((a, b) => {
-      if (a[0] === UNASSIGNED_KEY) return 1; 
-      if (b[0] === UNASSIGNED_KEY) return -1;
-      return a[0].localeCompare(b[0]);
+      const ar = rank.has(a[0]) ? rank.get(a[0]) : 9999;
+      const br = rank.has(b[0]) ? rank.get(b[0]) : 9999;
+      if (ar !== br) return ar - br;
+      return a[0].localeCompare(b[0], "zh-Hant");
     });
-  }, [localManagers, editingManager, editingManagerStores, editingReleasedStores]);
+  }, [localManagers, localManagerOrder, editingManager, editingManagerStores, editingReleasedStores]);
 
   const handleUpdateTrainer = async () => { if (!newTrainerPass) return showToast("請輸入新密碼", "error"); const success = await handleUpdateTrainerAuth(newTrainerPass); if (success) { showToast("教專密碼已更新", "success"); setNewTrainerPass(""); if (fetchGlobalData) fetchGlobalData(); } else { showToast("更新失敗", "error"); } };
   const handleSaveTargets = async () => { try { await setDoc(getDocPath("kpi_targets"), localTargets); setTargets(localTargets); showToast("設定已儲存", "success"); } catch (e) { showToast("儲存失敗", "error"); } };
@@ -339,8 +363,7 @@ const SettingsView = () => {
       newManagers[targetManager] = normalizeStoreList([...newManagers[targetManager], storeName]);
       if (!Array.isArray(newManagers[UNASSIGNED_KEY])) newManagers[UNASSIGNED_KEY] = [];
 
-      await updateDoc(docRef, { managers: newManagers });
-      setLocalManagers(newManagers);
+      await saveOrgStructure(docRef, newManagers, localManagerOrder, true);
       setNewShop({ name: "", manager: "" });
       showToast("已新增，並建立修改前快照", "success");
       if (fetchGlobalData) fetchGlobalData();
@@ -375,8 +398,7 @@ const SettingsView = () => {
         if (!newManagers[UNASSIGNED_KEY].includes(storeName)) newManagers[UNASSIGNED_KEY].push(storeName);
       }
 
-      await setDoc(docRef, { managers: newManagers });
-      setLocalManagers(newManagers);
+      await saveOrgStructure(docRef, newManagers, localManagerOrder);
       showToast(isPermanentDelete ? "已永久刪除，並建立快照" : "已移至未分配，並建立快照", "success");
       if (fetchGlobalData) fetchGlobalData();
     } catch (e) {
@@ -464,14 +486,14 @@ const SettingsView = () => {
       // Firestore 對巢狀 map 進行 merge 時，會保留 managers 裡沒有被傳入的舊 key，
       // 造成「改名」時舊區長 key 沒被移除，畫面看起來像複製出一位新區長。
       // 使用 updateDoc({ managers: finalManagers }) 才會把整個 managers map 正確替換。
-      await updateDoc(docRef, { managers: finalManagers });
+      const renamedManagerOrder = normalizeManagerOrder(finalManagers, localManagerOrder.map((item) => item === name ? nextName : item));
+      await saveOrgStructure(docRef, finalManagers, renamedManagerOrder, true);
 
       // 同步更新區長登入資料；若有改名，移除舊 key，避免留下無效帳號。
       const authPayload = { [nextName]: editingManagerPassword || managerAuth?.[name] || "" };
       if (nextName !== name) authPayload[name] = deleteField();
       await setDoc(getDocPath("manager_auth"), authPayload, { merge: true });
 
-      setLocalManagers(finalManagers);
       cancelEditManager();
       showToast(
         removedStores.length > 0
@@ -485,12 +507,12 @@ const SettingsView = () => {
       showToast("更新失敗", "error");
     }
   };
-  const availableUnassignedStores = useMemo(() => { const all = Object.values(localManagers || {}).flat(); const assigned = storeAccounts.flatMap(a=>a.stores||[]); return all.filter(s=>!assigned.includes(s)).sort(); }, [localManagers, storeAccounts]);
+  const availableUnassignedStores = useMemo(() => { const all = Object.values(localManagers || {}).flat(); const assigned = storeAccounts.flatMap(a=>a.stores||[]); return sortStoresByOrgOrder(localManagers, all.filter(s=>!assigned.includes(s)), "", localManagerOrder); }, [localManagers, localManagerOrder, storeAccounts]);
   const availableStoresForManagerEdit = useMemo(() => {
     const base = localManagers && localManagers[UNASSIGNED_KEY] ? localManagers[UNASSIGNED_KEY] : [];
-    return normalizeStoreList([...base, ...editingReleasedStores]).sort((a, b) => a.localeCompare(b, "zh-Hant"));
+    return sortStoresByOrgOrder(localManagers, normalizeStoreList([...base, ...editingReleasedStores]), "", localManagerOrder);
   }, [localManagers, editingReleasedStores]);
-  const availableStoresForEditing = useMemo(() => { const all = Object.values(localManagers || {}).flat(); const assigned = storeAccounts.filter(a=>a.id!==editingStoreAccount?.id).flatMap(a=>a.stores||[]); return all.filter(s=>!assigned.includes(s) && !editStoreForm.stores.includes(s)).sort(); }, [localManagers, storeAccounts, editingStoreAccount, editStoreForm]);
+  const availableStoresForEditing = useMemo(() => { const all = Object.values(localManagers || {}).flat(); const assigned = storeAccounts.filter(a=>a.id!==editingStoreAccount?.id).flatMap(a=>a.stores||[]); return sortStoresByOrgOrder(localManagers, all.filter(s=>!assigned.includes(s) && !editStoreForm.stores.includes(s)), "", localManagerOrder); }, [localManagers, localManagerOrder, storeAccounts, editingStoreAccount, editStoreForm]);
   const handleAddStoreAccount = async () => { if(!newStoreAccount.name || !newStoreAccount.password) return showToast("請輸入完整", "error"); const newAcc = { id: generateUUID(), ...newStoreAccount, stores: newStoreAccount.stores?[newStoreAccount.stores]:[] }; try { await setDoc(getDocPath("store_account_data"), { accounts: [...storeAccounts, newAcc] }); setNewStoreAccount({name:"", password:"", stores:""}); showToast("已新增", "success"); if (fetchGlobalData) fetchGlobalData(); } catch(e){ showToast("失敗", "error"); } };
   const openEditStoreAccount = (account) => { setEditingStoreAccount(account); setEditStoreForm({ name: account.name, password: account.password, stores: account.stores || [] }); };
   const handleAddStoreToEditForm = (storeName) => { if (storeName && !editStoreForm.stores.includes(storeName)) { setEditStoreForm({ ...editStoreForm, stores: [...editStoreForm.stores, storeName] }); } };
@@ -518,8 +540,12 @@ const SettingsView = () => {
       newManagers[newManager.name] = [];
       if (!Array.isArray(newManagers[UNASSIGNED_KEY])) newManagers[UNASSIGNED_KEY] = [];
 
-      await setDoc(docRef, { managers: newManagers });
-      setLocalManagers(newManagers);
+      const nextManagerOrder = normalizeManagerOrder(newManagers, [
+        ...localManagerOrder.filter((name) => name !== UNASSIGNED_KEY),
+        newManager.name,
+        UNASSIGNED_KEY,
+      ]);
+      await saveOrgStructure(docRef, newManagers, nextManagerOrder);
       await setDoc(getDocPath("manager_auth"), { [newManager.name]: newManager.password }, { merge: true });
       setNewManager({ name: "", password: "" });
       showToast("已新增區長，並建立快照", "success");
@@ -644,7 +670,7 @@ const SettingsView = () => {
     setFormResignDate("");
   };
 
-  const availableStoresForTherapist = useMemo(() => formManager ? (localManagers && localManagers[formManager]?localManagers[formManager]:[]) : [], [formManager, localManagers]);
+  const availableStoresForTherapist = useMemo(() => formManager ? sortStoresByOrgOrder(localManagers, (localManagers && localManagers[formManager]?localManagers[formManager]:[]), "", localManagerOrder) : [], [formManager, localManagers, localManagerOrder]);
   
   const filteredTherapists = useMemo(() => { 
     return therapists.filter(t => {
@@ -909,7 +935,7 @@ const SettingsView = () => {
         )}
         
         {activeTab === "trainer-account" && (<Card title="教專帳號管理"><div className="max-w-md w-full space-y-6 min-w-0"><div className="bg-[#FAF7F1] p-4 rounded-xl border border-[#E8DDCC]"><p className="text-xs font-bold text-[#A69C91] uppercase mb-1">目前設定</p><div className="flex justify-between items-center"><span className="font-bold text-[#4D4338]">教專 (Trainer)</span><span className="font-mono bg-[#FFFCF7] px-3 py-1 rounded border text-[#7C7063]">{trainerAuth?.password || "0000"}</span></div></div><div><label className="block text-sm font-bold text-[#7C7063] mb-2">設定新密碼</label><input type="text" value={newTrainerPass} onChange={(e) => setNewTrainerPass(e.target.value)} placeholder="輸入新密碼" className="w-full px-4 py-3 border-2 border-[#EFE7DA] rounded-xl outline-none focus:border-[#D6A84F] font-bold"/></div><button onClick={handleUpdateTrainer} className="w-full bg-gradient-to-r from-[#FFF7DF] via-[#F7E8C6] to-[#EACB86] text-[#5A4225] border border-[#E8C77A] py-3 rounded-xl font-bold hover:bg-[#B7863D] shadow-lg">更新密碼</button></div></Card>)}
-        {activeTab === "shops" && ( <div className="space-y-6 w-full max-w-full min-w-0"><Card title="新增營運店家"><div className="flex flex-col md:flex-row gap-4 items-end"><div className="flex-1 w-full"><label className="block text-xs font-bold text-[#A69C91] mb-1">分店簡稱</label><input type="text" value={newShop.name} onChange={(e) => setNewShop({ ...newShop, name: e.target.value })} placeholder="例如: 中山" className="w-full px-4 py-2 border-2 border-[#EFE7DA] rounded-xl outline-none focus:border-[#D6A84F] font-bold"/></div><div className="flex-1 w-full"><label className="block text-xs font-bold text-[#A69C91] mb-1">所屬區域</label><div className="relative"><select value={newShop.manager} onChange={(e) => setNewShop({ ...newShop, manager: e.target.value })} className="w-full px-4 py-2 border-2 border-[#EFE7DA] rounded-xl outline-none focus:border-[#D6A84F] font-bold appearance-none bg-[#FFFCF7] text-[#4D4338]"><option value="">請選擇...</option>{Object.keys(localManagers).map((m) => (<option key={m} value={m}>{m} 區</option>))}</select><ChevronDown size={16} className="absolute right-3 top-3 text-[#A69C91] pointer-events-none"/></div></div><button onClick={handleAddGlobalStore} className="w-full md:w-auto bg-gradient-to-r from-[#FFF7DF] via-[#F7E8C6] to-[#EACB86] text-[#5A4225] border border-[#E8C77A] px-6 py-2.5 rounded-xl font-bold hover:brightness-[1.02] shadow-sm flex items-center justify-center gap-2"><Plus size={18} /> 新增</button></div></Card><Card title="全域店家列表"><div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">{managerEntries.map(([mgr, stores]) => (<div key={mgr} className={`bg-[#FAF7F1] rounded-2xl p-4 border ${mgr === UNASSIGNED_KEY ? "border-stone-300 shadow-inner" : "border-[#EFE7DA]"}`}><div className="flex items-center gap-2 mb-3 border-b border-[#E8DDCC] pb-2"><span className={`font-bold ${mgr === UNASSIGNED_KEY ? "text-[#7C7063]" : "text-[#4D4338]"}`}>{mgr} {mgr!==UNASSIGNED_KEY && "區"}</span><span className="text-xs text-[#A69C91] ml-auto">{stores.length} 間</span></div><div className="flex flex-wrap gap-2">{stores.map((store) => (<div key={store} className="group relative flex items-center"><span className={`px-3 py-1.5 border rounded-lg text-xs font-bold shadow-sm pr-7 ${mgr === UNASSIGNED_KEY ? "bg-[#FFFCF7] text-[#7C7063] border-[#E8DDCC]" : "bg-[#FFFCF7] text-[#675B4E] border-[#E8DDCC]"}`}>{store}</span><button onClick={() => handleDeleteGlobalStore(store, mgr)} className="absolute right-1 p-1 text-stone-300 hover:text-rose-500 transition-colors"><X size={12} /></button></div>))}</div></div>))}</div></Card></div> )}
+        {activeTab === "shops" && ( <div className="space-y-6 w-full max-w-full min-w-0"><Card title="新增營運店家"><div className="flex flex-col md:flex-row gap-4 items-end"><div className="flex-1 w-full"><label className="block text-xs font-bold text-[#A69C91] mb-1">分店簡稱</label><input type="text" value={newShop.name} onChange={(e) => setNewShop({ ...newShop, name: e.target.value })} placeholder="例如: 中山" className="w-full px-4 py-2 border-2 border-[#EFE7DA] rounded-xl outline-none focus:border-[#D6A84F] font-bold"/></div><div className="flex-1 w-full"><label className="block text-xs font-bold text-[#A69C91] mb-1">所屬區域</label><div className="relative"><select value={newShop.manager} onChange={(e) => setNewShop({ ...newShop, manager: e.target.value })} className="w-full px-4 py-2 border-2 border-[#EFE7DA] rounded-xl outline-none focus:border-[#D6A84F] font-bold appearance-none bg-[#FFFCF7] text-[#4D4338]"><option value="">請選擇...</option>{sortManagersByOrgOrder(localManagers, null, localManagerOrder).map((m) => (<option key={m} value={m}>{m} 區</option>))}</select><ChevronDown size={16} className="absolute right-3 top-3 text-[#A69C91] pointer-events-none"/></div></div><button onClick={handleAddGlobalStore} className="w-full md:w-auto bg-gradient-to-r from-[#FFF7DF] via-[#F7E8C6] to-[#EACB86] text-[#5A4225] border border-[#E8C77A] px-6 py-2.5 rounded-xl font-bold hover:brightness-[1.02] shadow-sm flex items-center justify-center gap-2"><Plus size={18} /> 新增</button></div></Card><Card title="全域店家列表"><div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">{managerEntries.map(([mgr, stores]) => (<div key={mgr} className={`bg-[#FAF7F1] rounded-2xl p-4 border ${mgr === UNASSIGNED_KEY ? "border-stone-300 shadow-inner" : "border-[#EFE7DA]"}`}><div className="flex items-center gap-2 mb-3 border-b border-[#E8DDCC] pb-2"><span className={`font-bold ${mgr === UNASSIGNED_KEY ? "text-[#7C7063]" : "text-[#4D4338]"}`}>{mgr} {mgr!==UNASSIGNED_KEY && "區"}</span><span className="text-xs text-[#A69C91] ml-auto">{stores.length} 間</span></div><div className="flex flex-wrap gap-2">{stores.map((store) => (<div key={store} className="group relative flex items-center"><span className={`px-3 py-1.5 border rounded-lg text-xs font-bold shadow-sm pr-7 ${mgr === UNASSIGNED_KEY ? "bg-[#FFFCF7] text-[#7C7063] border-[#E8DDCC]" : "bg-[#FFFCF7] text-[#675B4E] border-[#E8DDCC]"}`}>{store}</span><button onClick={() => handleDeleteGlobalStore(store, mgr)} className="absolute right-1 p-1 text-stone-300 hover:text-rose-500 transition-colors"><X size={12} /></button></div>))}</div></div>))}</div></Card></div> )}
         {activeTab === "stores" && ( <div className="space-y-6 w-full max-w-full min-w-0"><Card title="新增店經理帳號"><div className="grid grid-cols-1 md:grid-cols-4 gap-4 items-end"><div><label className="block text-xs font-bold text-[#A69C91] mb-1">姓名 / 帳號</label><input type="text" value={newStoreAccount.name} onChange={(e) => setNewStoreAccount({ ...newStoreAccount, name: e.target.value })} placeholder="例如: 王小明" className="w-full px-4 py-2 border-2 border-[#EFE7DA] rounded-xl outline-none focus:border-[#D6A84F] font-bold"/></div><div><label className="block text-xs font-bold text-[#A69C91] mb-1">登入密碼</label><input type="text" value={newStoreAccount.password} onChange={(e) => setNewStoreAccount({ ...newStoreAccount, password: e.target.value })} placeholder="設定密碼" className="w-full px-4 py-2 border-2 border-[#EFE7DA] rounded-xl outline-none focus:border-[#D6A84F] font-bold"/></div><div className="md:col-span-2"><label className="block text-xs font-bold text-[#A69C91] mb-1">分配管理店家</label><div className="flex gap-2"><div className="relative w-full"><Store size={16} className="absolute left-3 top-3 text-[#A69C91] pointer-events-none"/><select value={newStoreAccount.stores} onChange={(e) => setNewStoreAccount({ ...newStoreAccount, stores: e.target.value })} className="w-full pl-10 pr-4 py-2 border-2 border-[#EFE7DA] rounded-xl outline-none focus:border-[#D6A84F] font-bold appearance-none bg-[#FFFCF7] text-[#4D4338]"><option value="">請選擇未分配店家...</option>{availableUnassignedStores.map((s) => (<option key={s} value={s}>{s}</option>))}</select><ChevronDown size={16} className="absolute right-3 top-3 text-[#A69C91] pointer-events-none"/></div><button onClick={handleAddStoreAccount} className="bg-gradient-to-r from-[#FFF7DF] via-[#F7E8C6] to-[#EACB86] text-[#5A4225] border border-[#E8C77A] px-4 rounded-xl font-bold shrink-0 hover:brightness-[1.02]"><Plus size={20} /></button></div></div></div></Card><Card title="現有店經理列表"><div className="overflow-x-auto w-full pb-2"><div className="min-w-[600px]"><table className="w-full text-left text-sm"><thead className="bg-[#FAF7F1] font-bold text-[#7C7063] uppercase"><tr><th className="p-4 rounded-tl-xl">姓名</th><th className="p-4">密碼</th><th className="p-4">負責店家</th><th className="p-4 rounded-tr-xl text-right">操作</th></tr></thead><tbody className="divide-y divide-stone-100">{storeAccounts.map((account) => (<tr key={account.id} className="hover:bg-[#FAF7F1]"><td className="p-4 font-bold text-[#4D4338]">{account.name}</td><td className="p-4 font-mono text-[#7C7063]">{account.password}</td><td className="p-4"><div className="flex flex-wrap gap-1">{account.stores && account.stores.map((s) => (<span key={s} className="px-2 py-1 bg-[#F3EEE6] rounded text-xs font-bold text-[#675B4E]">{s}</span>))}</div></td><td className="p-4 text-right flex justify-end gap-1"><button onClick={() => openEditStoreAccount(account)} className="text-[#A69C91] hover:text-[#675B4E] hover:bg-[#F3EEE6] p-2 rounded-lg transition-colors"><Edit2 size={18} /></button><button onClick={() => handleDeleteStoreAccount(account.id)} className="text-rose-400 hover:text-rose-600 hover:bg-rose-50 p-2 rounded-lg transition-colors"><Trash2 size={18} /></button></td></tr>))}</tbody></table></div></div></Card>{editingStoreAccount && (<div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-stone-900/30 backdrop-blur-sm"><div className="bg-[#FFFCF7] w-full max-w-md rounded-2xl shadow-2xl overflow-hidden animate-in zoom-in-95"><div className="bg-[#FFFCF7] border-b border-[#F3DFB8] p-4 font-bold text-[#5A4225] flex justify-between items-center"><span>編輯店經理帳號</span><button onClick={() => setEditingStoreAccount(null)}><X size={20}/></button></div><div className="p-6 space-y-4"><div><label className="text-xs font-bold text-[#A69C91] block mb-1">姓名 / 帳號</label><input type="text" value={editStoreForm.name} onChange={(e) => setEditStoreForm({...editStoreForm, name: e.target.value})} className="w-full p-2 border rounded-lg font-bold"/></div><div><label className="text-xs font-bold text-[#A69C91] block mb-1">密碼</label><input type="text" value={editStoreForm.password} onChange={(e) => setEditStoreForm({...editStoreForm, password: e.target.value})} className="w-full p-2 border rounded-lg font-mono"/></div><div><label className="text-xs font-bold text-[#A69C91] block mb-1">管理店家 (可多選)</label><div className="flex flex-wrap gap-2 mb-2 p-2 bg-[#FAF7F1] rounded-lg min-h-[40px]">{editStoreForm.stores.map(s => (<span key={s} className="px-2 py-1 bg-[#FFFCF7] border border-[#E8DDCC] rounded text-xs font-bold text-[#675B4E] shadow-sm flex items-center gap-1">{s} <button onClick={() => handleRemoveStoreFromEditForm(s)} className="text-stone-300 hover:text-rose-500"><X size={12}/></button></span>))}</div><div className="relative"><select onChange={(e) => { handleAddStoreToEditForm(e.target.value); e.target.value = ""; }} className="w-full p-2 border rounded-lg font-bold bg-[#FFFCF7]"><option value="">+ 加入負責店家</option>{availableStoresForEditing.map(s => <option key={s} value={s}>{s}</option>)}</select></div></div><div className="pt-4 flex gap-3"><button onClick={() => setEditingStoreAccount(null)} className="flex-1 py-3 bg-[#F3EEE6] text-[#7C7063] rounded-xl font-bold">取消</button><button onClick={handleUpdateStoreAccount} className="flex-1 py-3 bg-gradient-to-r from-[#FFF7DF] via-[#F7E8C6] to-[#EACB86] text-[#5A4225] border border-[#E8C77A] rounded-xl font-bold">儲存變更</button></div></div></div></div>)}</div> )}
         {activeTab === "managers" && ( <div className="space-y-6 w-full max-w-full min-w-0"><Card title="新增區長"><div className="flex flex-col md:flex-row gap-4 items-end"><div className="flex-1 w-full"><label className="block text-xs font-bold text-[#A69C91] mb-1">區長姓名</label><input type="text" value={newManager.name} onChange={(e) => setNewManager({ ...newManager, name: e.target.value })} placeholder="例如: Jonas" className="w-full px-4 py-2 border-2 border-[#EFE7DA] rounded-xl outline-none focus:border-[#D6A84F] font-bold" /></div><div className="flex-1 w-full"><label className="block text-xs font-bold text-[#A69C91] mb-1">預設密碼</label><input type="text" value={newManager.password} onChange={(e) => setNewManager({ ...newManager, password: e.target.value })} placeholder="設定密碼" className="w-full px-4 py-2 border-2 border-[#EFE7DA] rounded-xl outline-none focus:border-[#D6A84F] font-bold" /></div><button onClick={handleAddManager} className="w-full md:w-auto bg-gradient-to-r from-[#FFF7DF] via-[#F7E8C6] to-[#EACB86] text-[#5A4225] border border-[#E8C77A] px-6 py-2.5 rounded-xl font-bold hover:brightness-[1.02] shadow-sm flex items-center justify-center gap-2"><Plus size={18} /> 新增區長</button></div></Card><div className="grid grid-cols-1 md:grid-cols-2 gap-6">{managerEntries.map(([managerName, stores]) => (<Card key={managerName} className={`border ${managerName === UNASSIGNED_KEY ? "border-stone-300 bg-[#FAF7F1]" : "border-[#E8DDCC]"}`}><div className="flex flex-wrap justify-between items-start gap-3 mb-4"><div><h3 className={`text-lg font-bold flex items-center gap-2 ${managerName === UNASSIGNED_KEY ? "text-[#7C7063]" : "text-[#4D4338]"}`}>{managerName === UNASSIGNED_KEY ? <LayoutGrid size={20} /> : <User size={20} className="text-[#B7863D]" />}{managerName} {managerName !== UNASSIGNED_KEY && "區"}</h3>{managerName !== UNASSIGNED_KEY && <p className="text-xs text-[#A69C91] mt-1 font-mono">密碼: {managerAuth[managerName] || "未設定"}</p>}</div>{managerName !== UNASSIGNED_KEY && (<div className="flex gap-2"><button onClick={() => openEditManager(managerName, stores)} className="text-xs bg-[#F3EEE6] text-[#675B4E] px-3 py-1.5 rounded-lg hover:bg-stone-200 font-bold whitespace-nowrap">編輯轄區</button><button onClick={() => handleDeleteManager(managerName)} className="text-rose-400 hover:bg-rose-50 p-1.5 rounded-lg"><Trash2 size={16} /></button></div>)}</div>{editingManager === managerName ? (<div className="mt-4 animate-in fade-in bg-[#FAF7F1] p-4 rounded-xl border border-[#E8DDCC]">
   <div className="grid grid-cols-1 md:grid-cols-2 gap-3 mb-4">
@@ -998,7 +1024,7 @@ const SettingsView = () => {
                         <label className="text-xs font-bold text-[#A69C91] block mb-1.5 uppercase tracking-wider">所屬區域</label>
                         <select value={formManager} onChange={(e) => { setFormManager(e.target.value); setFormStore(""); }} className="w-full px-4 py-3 border border-[#E8DDCC] rounded-xl font-bold bg-[#FAF7F1] outline-none focus:border-[#D6A84F] focus:bg-[#FFFCF7] transition-colors appearance-none">
                           <option value="">選擇區域</option>
-                          {Object.keys(localManagers).map(m => <option key={m} value={m}>{m}區</option>)}
+                          {sortManagersByOrgOrder(localManagers, null, localManagerOrder).map(m => <option key={m} value={m}>{m}區</option>)}
                         </select>
                       </div>
                       <div>

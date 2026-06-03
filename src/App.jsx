@@ -25,7 +25,7 @@ import {
 } from "lucide-react";
 
 import { ROLES, ALL_MENU_ITEMS, DEFAULT_REGIONAL_MANAGERS, DEFAULT_PERMISSIONS } from "./constants/index";
-import { generateUUID, formatLocalYYYYMMDD, toStandardDateFormat, formatNumber, parseNumber } from "./utils/helpers";
+import { generateUUID, formatLocalYYYYMMDD, toStandardDateFormat, formatNumber, parseNumber, normalizeManagerOrder } from "./utils/helpers";
 import { ViewWrapper, Card, Skeleton, Toast, ConfirmModal } from "./components/SharedUI";
 import { Sidebar, MobileTopNav } from "./components/Navigation";
 import { AppContext } from "./AppContext";
@@ -44,7 +44,7 @@ import {
 // ==========================================
 // ★ 系統核心版本號 (終極動態快取版)
 // ==========================================
-const CURRENT_APP_VERSION = "3.1.1"; 
+const CURRENT_APP_VERSION = "3.1.2"; 
 
 const isNewerVersion = (local, remote) => {
   if (!remote) return true;
@@ -233,6 +233,7 @@ export default function App() {
   const [monthlyTargetSummary, setMonthlyTargetSummary] = useState(null); // ★ monthly_targets_summary/{yearMonth}：Dashboard 目標資料輕量即時來源
   const [targets, setTargets] = useState({ newASP: 3500, trafficASP: 1200 });
   const [managers, setManagers] = useState({});
+  const [managerOrder, setManagerOrder] = useState([]); // ★ 穩定區長排序來源：org_structure.managerOrder
   const [storeAccounts, setStoreAccounts] = useState([]);
   const [managerAuth, setManagerAuth] = useState({});
   const [permissions, setPermissions] = useState(DEFAULT_PERMISSIONS);
@@ -558,14 +559,25 @@ export default function App() {
       trackReadSource("fetchGlobalData_therapists", thSnap.docs.length, getReadMeta("fetchGlobalData_therapists"));
 
       if (orgSnap.exists()) {
-        const rawManagers = orgSnap.data().managers || {};
+        const orgData = orgSnap.data() || {};
+        const rawManagers = orgData.managers || {};
+        const rawManagerOrder = Array.isArray(orgData.managerOrder) ? orgData.managerOrder : [];
         // 保留「未分配」在全域 managers state 中。
-        // 原本這裡會把「未分配 / 未分區」過濾掉，導致 SettingsView 儲存後重新 fetchGlobalData 時，
-        // 已移入未分配的店家從前端狀態消失，進而讓營運總覽排除這些店家。
-        // 登入頁需要隱藏未分配時，統一交給 publicManagers 過濾。
+        // managerOrder 是穩定排序來源，避免 Firestore map / object key 順序造成每次登入排序不同。
+        const normalizedManagerOrder = normalizeManagerOrder(rawManagers, rawManagerOrder);
         setManagers(rawManagers);
+        setManagerOrder(normalizedManagerOrder);
+
+        // 首次導入 v3 時，如果舊 org_structure 沒有 managerOrder，補上一份穩定排序來源。
+        // 後續區長架構修改會由 SettingsView 持續維護此欄位。
+        if (rawManagerOrder.length === 0 && (userRole === "director" || userRole === "master")) {
+          setDoc(getDocPath("org_structure"), { managers: rawManagers, managerOrder: normalizedManagerOrder }, { merge: true })
+            .catch((error) => console.warn("managerOrder backfill failed:", error));
+        }
       } else {
-        setManagers(currentBrand.id === 'cyj' ? DEFAULT_REGIONAL_MANAGERS : {}); 
+        const fallbackManagers = currentBrand.id === 'cyj' ? DEFAULT_REGIONAL_MANAGERS : {};
+        setManagers(fallbackManagers);
+        setManagerOrder(normalizeManagerOrder(fallbackManagers));
       }
 
       setStoreAccounts(accSnap.exists() ? accSnap.data().accounts : []);
@@ -1091,6 +1103,11 @@ useEffect(() => {
     return result;
   }, [managers, userRole, currentUser, activeView, normalizeStore]);
 
+  const visibleManagerOrder = useMemo(() => {
+    const visibleKeys = Object.keys(visibleManagers || {});
+    return normalizeManagerOrder(visibleManagers || {}, managerOrder).filter((name) => visibleKeys.includes(name));
+  }, [visibleManagers, managerOrder]);
+
   const publicManagers = useMemo(() => {
     const filtered = {};
     Object.entries(managers || {}).forEach(([mgr, stores]) => {
@@ -1133,12 +1150,12 @@ useEffect(() => {
   }, [userRole, currentUser, currentBrandId, currentBrand, activeView]);
 
   const contextValue = useMemo(() => ({
-    user, loading, analytics, managers: visibleManagers, budgets, monthlyTargetSummary, targets, rawData: visibleRawData, allReports: rawData, 
+    user, loading, analytics, managers: visibleManagers, managerOrder: visibleManagerOrder, budgets, monthlyTargetSummary, targets, rawData: visibleRawData, allReports: rawData, 
     annualAggregatedData, annualDashboardSummaries, annualSummaryStatusMap, therapistAnnualAggregatedData, // ★ 把年度 Summary 與管理師資料交出去
     showToast, openConfirm, fmtMoney, fmtNum, inputDate, setInputDate, storeList: analytics?.storeList || [], setTargets, selectedYear, selectedMonth, permissions, storeAccounts, managerAuth, currentUser, userRole, logActivity, handleUpdateStorePassword, handleUpdateManagerPassword, handleUpdateTherapistPassword, navigateToStore, activeView, appId, 
     therapists: visibleTherapists, therapistReports: visibleTherapistReports, therapistSchedules, therapistTargets, trainerAuth, handleUpdateTrainerAuth, auditExclusions, handleUpdateAuditExclusions, currentBrand, setCurrentBrandId, getCollectionPath, getDocPath, dailyLoginCount, yesterdayLoginCount, securityConfig, isOnline, isLowPowerMode,
     fetchGlobalData 
-  }), [user, loading, analytics, visibleManagers, budgets, monthlyTargetSummary, targets, visibleRawData, rawData, annualAggregatedData, annualDashboardSummaries, annualSummaryStatusMap, therapistAnnualAggregatedData, inputDate, selectedYear, selectedMonth, permissions, storeAccounts, managerAuth, currentUser, userRole, logActivity, handleUpdateStorePassword, handleUpdateManagerPassword, handleUpdateTherapistPassword, navigateToStore, activeView, appId, visibleTherapists, visibleTherapistReports, therapistSchedules, therapistTargets, trainerAuth, handleUpdateTrainerAuth, auditExclusions, handleUpdateAuditExclusions, currentBrand, setCurrentBrandId, getCollectionPath, getDocPath, dailyLoginCount, yesterdayLoginCount, securityConfig, isOnline, isLowPowerMode, fetchGlobalData]); // ★ 依賴陣列也要加
+  }), [user, loading, analytics, visibleManagers, visibleManagerOrder, budgets, monthlyTargetSummary, targets, visibleRawData, rawData, annualAggregatedData, annualDashboardSummaries, annualSummaryStatusMap, therapistAnnualAggregatedData, inputDate, selectedYear, selectedMonth, permissions, storeAccounts, managerAuth, currentUser, userRole, logActivity, handleUpdateStorePassword, handleUpdateManagerPassword, handleUpdateTherapistPassword, navigateToStore, activeView, appId, visibleTherapists, visibleTherapistReports, therapistSchedules, therapistTargets, trainerAuth, handleUpdateTrainerAuth, auditExclusions, handleUpdateAuditExclusions, currentBrand, setCurrentBrandId, getCollectionPath, getDocPath, dailyLoginCount, yesterdayLoginCount, securityConfig, isOnline, isLowPowerMode, fetchGlobalData]); // ★ 依賴陣列也要加
   
   const memoizedViews = useMemo(() => {
     return (
@@ -1256,7 +1273,7 @@ if (isUpdating) {
   if (!userRole) return (
     <LoginView 
       appVersion={CURRENT_APP_VERSION}
-      onLogin={handleLogin} storeAccounts={storeAccounts} managers={publicManagers} managerAuth={managerAuth} therapists={therapists} 
+      onLogin={handleLogin} storeAccounts={storeAccounts} managers={publicManagers} managerOrder={managerOrder} managerAuth={managerAuth} therapists={therapists} 
       onUpdatePassword={handleUpdateStorePassword} onUpdateManagerPassword={handleUpdateManagerPassword} onUpdateTherapistPassword={handleUpdateTherapistPassword} 
       trainerAuth={trainerAuth} handleUpdateTrainerAuth={handleUpdateTrainerAuth} directorAuth={directorAuth} handleUpdateDirectorAuth={handleUpdateDirectorAuth} masterAuth={masterAuth}
       currentBrandId={currentBrandId} onSwitchBrand={handleSwitchBrand} hasSelectedBrand={hasSelectedBrand}

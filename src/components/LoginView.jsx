@@ -5,6 +5,7 @@ import {
   Sparkles, Crown, ArrowRight, ChevronLeft, Heart 
 } from "lucide-react";
 import { ROLES, BRANDS } from "../constants/index"; 
+import { sortManagersByOrgOrder, sortStoresByOrgOrder, sortTherapistsByStoreThenName, normalizeStoreCoreName, zhCompare } from "../utils/helpers";
 import LoginCounter from './LoginCounter';
 
 const LoginView = ({
@@ -12,6 +13,7 @@ const LoginView = ({
   onLogin,
   storeAccounts,
   managers,
+  managerOrder = [],
   managerAuth,
   onUpdatePassword,
   onUpdateManagerPassword,
@@ -60,6 +62,41 @@ const LoginView = ({
     }
   }, [currentBrandId]);
 
+
+  const visibleManagerNames = useMemo(() => {
+    return sortManagersByOrgOrder(
+      managers || {},
+      Object.keys(managers || {}).filter((name) => {
+        const text = String(name || "");
+        return !text.includes("未分配") && !text.includes("未分區") && !text.includes("其他");
+      }),
+      managerOrder
+    );
+  }, [managers, managerOrder]);
+
+  const sortedStoreAccounts = useMemo(() => {
+    const storeRankMap = new Map();
+    sortStoresByOrgOrder(
+      managers || {},
+      Object.values(managers || {}).flat(),
+      "",
+      managerOrder
+    ).forEach((storeName, index) => {
+      const core = normalizeStoreCoreName(storeName);
+      if (core && !storeRankMap.has(core)) storeRankMap.set(core, index);
+    });
+
+    return [...(storeAccounts || [])].sort((a, b) => {
+      const aStore = normalizeStoreCoreName((a?.stores || [a?.storeName || ""])[0]);
+      const bStore = normalizeStoreCoreName((b?.stores || [b?.storeName || ""])[0]);
+      const ar = storeRankMap.has(aStore) ? storeRankMap.get(aStore) : 9999;
+      const br = storeRankMap.has(bStore) ? storeRankMap.get(bStore) : 9999;
+      if (ar !== br) return ar - br;
+      return zhCompare(a?.name || "", b?.name || "");
+    });
+  }, [storeAccounts, managers, managerOrder]);
+
+
   const handleInitialBrandSelect = (brandId) => {
     if (onSwitchBrand) onSwitchBrand(brandId);
     setTimeout(() => { setShowBrandSelector(false); }, 150);
@@ -73,17 +110,18 @@ const LoginView = ({
   }, [role, currentBrandId]);
 
   const filteredStores = useMemo(() => {
-    return tRegion ? (managers[tRegion] || []) : [];
-  }, [tRegion, managers]);
+    return tRegion ? sortStoresByOrgOrder(managers || {}, (managers?.[tRegion] || []), "", managerOrder) : [];
+  }, [tRegion, managers, managerOrder]);
 
   const filteredTherapists = useMemo(() => {
     if (!tStore) return [];
-    return therapists.filter(t => {
+    const list = therapists.filter(t => {
       if (t.store !== tStore) return false;
       const isResigned = t.isResigned === true || t.resigned === true || t.status === 'resigned' || t.status === '離職' || t.isActive === false;
       return !isResigned; 
     });
-  }, [tStore, therapists]);
+    return sortTherapistsByStoreThenName(list, managers || {}, "", managerOrder);
+  }, [tStore, therapists, managers, managerOrder]);
 
  // ★★★ 終極全職級脫水計數器（日誌完全對齊版） ★★★
   const totalActiveUsers = useMemo(() => {
@@ -472,7 +510,7 @@ const LoginView = ({
               {!isResetting ? (
                 <>
                   <div className="relative"><MapPin className="absolute left-4 top-3.5 text-stone-400" size={18} />
-                    <select value={tRegion} onChange={(e) => { setTRegion(e.target.value); setTStore(""); setTPersonId(""); }} className={`${selectClass} pl-12`}><option value="">選擇區域</option>{Object.keys(managers).map((m) => (<option key={m} value={m}>{m}區</option>))}</select>
+                    <select value={tRegion} onChange={(e) => { setTRegion(e.target.value); setTStore(""); setTPersonId(""); }} className={`${selectClass} pl-12`}><option value="">選擇區域</option>{visibleManagerNames.map((m) => (<option key={m} value={m}>{m}區</option>))}</select>
                   </div>
                   <div className="relative"><Store className="absolute left-4 top-3.5 text-stone-400" size={18} />
                     <select value={tStore} onChange={(e) => { setTStore(e.target.value); setTPersonId(""); }} disabled={!tRegion} className={`${selectClass} pl-12`}><option value="">選擇店家</option>{filteredStores.map((s) => (<option key={s} value={s}>{s}</option>))}</select>
@@ -514,10 +552,10 @@ const LoginView = ({
                 </div>
               )}
               {role === "manager" && !isResetting && (
-                <div className="relative"><select value={selectedUser} onChange={(e) => setSelectedUser(e.target.value)} className={selectClass}><option value="">選擇區長</option>{Object.keys(managers).map((m) => (<option key={m} value={m}>{m}</option>))}</select></div>
+                <div className="relative"><select value={selectedUser} onChange={(e) => setSelectedUser(e.target.value)} className={selectClass}><option value="">選擇區長</option>{visibleManagerNames.map((m) => (<option key={m} value={m}>{m}</option>))}</select></div>
               )}
               {role === "store" && !isResetting && (
-                <div className="relative"><select value={selectedUser} onChange={(e) => setSelectedUser(e.target.value)} className={selectClass}><option value="">選擇店經理</option>{storeAccounts.map((a) => (<option key={a.id} value={a.id}>{a.name}</option>))}</select></div>
+                <div className="relative"><select value={selectedUser} onChange={(e) => setSelectedUser(e.target.value)} className={selectClass}><option value="">選擇店經理</option>{sortedStoreAccounts.map((a) => (<option key={a.id} value={a.id}>{a.name}</option>))}</select></div>
               )}
 
               {!isResetting ? (

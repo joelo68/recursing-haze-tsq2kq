@@ -12,7 +12,7 @@ import {
 } from "lucide-react";
 
 import { AppContext } from "../AppContext";
-import { toStandardDateFormat, formatNumber } from "../utils/helpers";
+import { toStandardDateFormat, formatNumber, sortManagerNames, sortStoreNames, sortManagersByOrgOrder, sortStoresByOrgOrder } from "../utils/helpers";
 import { ViewWrapper, Card } from "./SharedUI";
 
 // 預設值
@@ -45,7 +45,7 @@ const StoreAnalysisView = () => {
     rawData,
     allReports,
     budgets,
-    managers,
+    managers, managerOrder,
     targets, 
     selectedYear,
     selectedMonth,
@@ -118,11 +118,11 @@ const StoreAnalysisView = () => {
     const safeManagers = managers || {}; 
     
     if (brandId === 'default') {
-        return Object.keys(safeManagers).filter(mgr => {
+        return sortManagersByOrgOrder(safeManagers, Object.keys(safeManagers).filter(mgr => {
              const stores = safeManagers[mgr] || [];
              const isSideBrand = stores.some(s => /安妞|Anew|伊啵|Yibo/i.test(String(s || "")));
              return !isSideBrand;
-        });
+        }), managerOrder);
     }
 
     const detectedManagers = new Set();
@@ -154,11 +154,11 @@ const StoreAnalysisView = () => {
     }
 
     if (detectedManagers.size === 0) {
-        return Object.keys(safeManagers);
+        return sortManagersByOrgOrder(safeManagers, null, managerOrder);
     }
 
-    return Array.from(detectedManagers);
-  }, [managers, brandId, rawData, cleanStoreName]);
+    return sortManagersByOrgOrder(safeManagers, Array.from(detectedManagers), managerOrder);
+  }, [managers, managerOrder, brandId, rawData, cleanStoreName]);
 
   useEffect(() => {
     if (activeView === "store-analysis") {
@@ -190,21 +190,21 @@ const StoreAnalysisView = () => {
     };
 
     if (userRole === "director" || userRole === "trainer") {
-        if (selectedManager) return (safeManagers[selectedManager] || []).map(formatStoreName).filter(Boolean);
+        if (selectedManager) return sortStoresByOrgOrder(safeManagers, (safeManagers[selectedManager] || []).map(formatStoreName).filter(Boolean), brandPrefix, managerOrder);
         const allStores = targetBrandManagers.flatMap(mgr => safeManagers[mgr] || []);
-        return allStores.map(formatStoreName).filter(Boolean);
+        return sortStoresByOrgOrder(safeManagers, allStores.map(formatStoreName).filter(Boolean), brandPrefix, managerOrder);
     }
         
     if (userRole === "manager")
-      return Object.values(safeManagers).flat().map(formatStoreName).filter(Boolean);
+      return sortStoresByOrgOrder(safeManagers, Object.values(safeManagers).flat().map(formatStoreName).filter(Boolean), brandPrefix, managerOrder);
         
     if (userRole === "store" && currentUser) {
       const myStores = currentUser.stores || (currentUser.storeName ? [currentUser.storeName] : []);
-      return myStores.map((s) => formatStoreName(s)).filter(Boolean);
+      return sortStoresByOrgOrder(safeManagers, myStores.map((s) => formatStoreName(s)).filter(Boolean), brandPrefix, managerOrder);
     }
       
     return [];
-  }, [selectedManager, managers, currentUser, userRole, brandPrefix, targetBrandManagers, cleanStoreName]);
+  }, [selectedManager, managers, managerOrder, currentUser, userRole, brandPrefix, targetBrandManagers, cleanStoreName]);
 
   useEffect(() => {
     if (userRole === "store" && currentUser && availableStores.length > 0) {
@@ -386,7 +386,7 @@ const StoreAnalysisView = () => {
 
     const regionStores = (managers[targetManager] || []).map(cleanStoreName);
     return getAggregateData(regionStores);
-  }, [isManagementRole, selectedManager, userRole, currentUser, allReports, managers, cleanStoreName, getAggregateData]);
+  }, [isManagementRole, selectedManager, userRole, currentUser, allReports, managers, managerOrder, cleanStoreName, getAggregateData]);
 
   const storeMetrics = useMemo(() => {
     if (!selectedStore || !rawData) return null;
@@ -653,7 +653,7 @@ const StoreAnalysisView = () => {
 
     return { financialRisks, retentionRisks, salesRisks };
 
-  }, [rawData, userRole, currentUser, managers, isManagementRole, targets, currentBenchmarks, targetBrandManagers, selectedYear, selectedMonth, cleanStoreName, brandId]);
+  }, [rawData, userRole, currentUser, managers, managerOrder, isManagementRole, targets, currentBenchmarks, targetBrandManagers, selectedYear, selectedMonth, cleanStoreName, brandId]);
 
   const AlertItem = ({ store, value, label, type, onClick, fmtMoney }) => (
     <div 

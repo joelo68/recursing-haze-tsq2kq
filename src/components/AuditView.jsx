@@ -3,7 +3,7 @@ import React, { useState, useMemo, useContext, useCallback, useEffect } from "re
 import { AlertCircle, UserX, CheckCircle, Target, Settings, X, Save, Ban, HelpCircle } from "lucide-react"; 
 
 import { AppContext } from "../AppContext";
-import { formatLocalYYYYMMDD } from "../utils/helpers";
+import { formatLocalYYYYMMDD, sortManagerNames, sortStoreNames, sortManagersByOrgOrder, sortStoresByOrgOrder } from "../utils/helpers";
 import { ViewWrapper, Card } from "./SharedUI";
 import SmartDatePicker from "./SmartDatePicker";
 
@@ -24,7 +24,7 @@ const safeGetDateStr = (val) => {
 
 const AuditView = ({ auditType: controlledAuditType, setAuditType: setControlledAuditType } = {}) => {
   const {
-    managers, showToast, budgets, selectedYear, selectedMonth, rawData,
+    managers, managerOrder, showToast, budgets, selectedYear, selectedMonth, rawData,
     therapists, therapistReports, therapistSchedules, userRole, therapistTargets,
     auditExclusions = [], handleUpdateAuditExclusions, currentBrand
   } = useContext(AppContext);
@@ -108,7 +108,7 @@ const AuditView = ({ auditType: controlledAuditType, setAuditType: setControlled
       (stores || []).some((s) => cleanStoreName(s) === storeCore)
     );
     return found?.[0] || "未分區";
-  }, [managers, cleanStoreName, getTherapistStore]);
+  }, [managers, managerOrder, cleanStoreName, getTherapistStore]);
 
   const isTherapistMatch = useCallback((str, t) => {
     if (!str || !t) return false;
@@ -222,10 +222,10 @@ const AuditView = ({ auditType: controlledAuditType, setAuditType: setControlled
   };
 
   const activeStoresForCalendar = useMemo(() => {
-    const allMyStores = Object.values(managers).flat();
+    const allMyStores = sortStoresByOrgOrder(managers, Object.values(managers).flat(), brandPrefix, managerOrder);
     return allMyStores.filter(s => !auditExclusions.includes(s) && !auditExclusions.includes(cleanStoreName(s))) 
       .map(s => ({ id: s, name: `${s}店`, stores: [s, `${s}店`, `${brandPrefix}${s}`, `${brandPrefix}${s}店`, `CYJ${s}店`] }));
-  }, [managers, auditExclusions, brandPrefix, cleanStoreName]);
+  }, [managers, managerOrder, auditExclusions, brandPrefix, cleanStoreName]);
 
   const validTherapistsForMonth = useMemo(() => {
       const y = parseInt(selectedYear), m = parseInt(selectedMonth);
@@ -455,7 +455,7 @@ const AuditView = ({ auditType: controlledAuditType, setAuditType: setControlled
       });
 
       return { missing, missingByManager };
-  }, [auditType, checkDate, dailyMatrix, managers, budgets, therapistTargets, selectedYear, selectedMonth, auditExclusions, brandPrefix, cleanStoreName, validTherapistsForMonth, isTherapistMatch, isTargetInSelectedMonth, getTherapistMonthlyTarget, getTherapistDisplayName, getTherapistStore, getTherapistManager]);
+  }, [auditType, checkDate, dailyMatrix, managers, managerOrder, budgets, therapistTargets, selectedYear, selectedMonth, auditExclusions, brandPrefix, cleanStoreName, validTherapistsForMonth, isTherapistMatch, isTargetInSelectedMonth, getTherapistMonthlyTarget, getTherapistDisplayName, getTherapistStore, getTherapistManager]);
 
   const calendarStores = auditType.includes('therapist') ? activeTherapistsForCalendar : activeStoresForCalendar;
 
@@ -529,7 +529,9 @@ const AuditView = ({ auditType: controlledAuditType, setAuditType: setControlled
           <div className="bg-white w-full max-w-lg rounded-2xl overflow-hidden flex flex-col max-h-[90vh]">
             <div className="bg-stone-800 text-white p-4 font-bold text-lg flex justify-between items-center"><span className="flex items-center gap-2"><Ban size={20} className="text-rose-400"/> 排除店家</span><button onClick={() => setIsConfigModalOpen(false)}><X size={20}/></button></div>
             <div className="p-6 overflow-y-auto space-y-6">
-              {Object.entries(managers).map(([mgr, stores]) => (
+              {sortManagersByOrgOrder(managers, null, managerOrder).map((mgr) => {
+                const stores = sortStoresByOrgOrder(managers, managers?.[mgr] || [], brandPrefix, managerOrder);
+                return (
                 <div key={mgr}>
                   <h4 className="font-bold text-stone-400 text-xs mb-2">{mgr} 區</h4>
                   <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
@@ -539,7 +541,8 @@ const AuditView = ({ auditType: controlledAuditType, setAuditType: setControlled
                     })}
                   </div>
                 </div>
-              ))}
+              );
+              })}
             </div>
             <div className="p-4 border-t border-stone-100 bg-white flex justify-end gap-3"><button onClick={() => setIsConfigModalOpen(false)} className="px-6 py-2.5 rounded-xl font-bold text-stone-500">取消</button><button onClick={saveConfig} className="px-6 py-2.5 rounded-xl font-bold bg-stone-800 text-white"><Save size={18}/> 儲存</button></div>
           </div>

@@ -8,12 +8,13 @@ import {
 import { query, where, onSnapshot } from "firebase/firestore";
 import { ViewWrapper, Card } from "./SharedUI";
 import { AppContext } from "../AppContext";
+import { sortManagerNames, sortStoreNames, sortManagersByOrgOrder, sortStoresByOrgOrder } from "../utils/helpers";
 import SmartDatePicker from "./SmartDatePicker";
 
 const DailyView = () => {
   const { 
     fmtMoney, fmtNum, userRole, currentUser, 
-    managers, currentBrand,
+    managers, managerOrder, currentBrand,
     auditExclusions, handleUpdateAuditExclusions, showToast,
     therapists, getCollectionPath
   } = useContext(AppContext);
@@ -106,32 +107,33 @@ const DailyView = () => {
     if (userRole === 'manager' && currentUser) return (managers[currentUser.name] || []).map(cleanName).filter(Boolean);
     if (userRole === 'store' && currentUser) return (currentUser.stores || [currentUser.storeName]).map(cleanName).filter(Boolean);
     return []; 
-  }, [userRole, currentUser, managers, cleanName]);
+  }, [userRole, currentUser, managers, managerOrder, cleanName]);
 
   const groupedStoresForFilter = useMemo(() => {
     const groups = {};
     const availableSet = new Set(baseVisibleStores.map(s => `${brandPrefix}${s}店`));
-    Object.entries(managers || {}).forEach(([mgrName, rawStores]) => {
+    sortManagersByOrgOrder(managers, null, managerOrder).forEach((mgrName) => {
+        const rawStores = managers?.[mgrName] || [];
         const mgrValidStores = [];
         (rawStores || []).forEach(rs => {
             const fullName = `${brandPrefix}${cleanName(rs)}店`;
             if (availableSet.has(fullName) && !mgrValidStores.includes(fullName)) mgrValidStores.push(fullName);
         });
-        if (mgrValidStores.length > 0) groups[mgrName] = mgrValidStores.sort();
+        if (mgrValidStores.length > 0) groups[mgrName] = sortStoresByOrgOrder(managers, mgrValidStores, brandPrefix, managerOrder);
     });
     return groups;
-  }, [managers, baseVisibleStores, cleanName, brandPrefix]);
+  }, [managers, managerOrder, baseVisibleStores, cleanName, brandPrefix]);
 
   const availableStoresForDropdown = useMemo(() => {
     if (selectedManager && groupedStoresForFilter[selectedManager]) return groupedStoresForFilter[selectedManager];
-    return Object.values(groupedStoresForFilter).flat().sort();
-  }, [selectedManager, groupedStoresForFilter]);
+    return sortStoresByOrgOrder(managers, Object.values(groupedStoresForFilter).flat(), brandPrefix, managerOrder);
+  }, [selectedManager, groupedStoresForFilter, managers, brandPrefix, managerOrder]);
 
   const effectiveStores = useMemo(() => {
     if (selectedStore) return [cleanName(selectedStore)];
     if (selectedManager) return (managers[selectedManager] || []).map(cleanName).filter(Boolean);
     return baseVisibleStores;
-  }, [baseVisibleStores, selectedStore, selectedManager, managers, cleanName]);
+  }, [baseVisibleStores, selectedStore, selectedManager, managers, managerOrder, cleanName]);
 
   const dailyData = useMemo(() => {
     const storeDataMap = {};
@@ -297,12 +299,22 @@ const DailyView = () => {
                   {(userRole === 'director' || userRole === 'trainer') && (
                     <select value={selectedManager} onChange={(e) => { setSelectedManager(e.target.value); setSelectedStore(""); }} className="flex-1 sm:flex-none px-4 py-2.5 border border-stone-200 rounded-xl text-sm font-bold text-stone-600 outline-none focus:border-amber-400 focus:ring-2 focus:ring-amber-100 bg-stone-50 hover:bg-white transition-all cursor-pointer min-w-[110px]">
                       <option value="">全區</option>
-                      {Object.keys(groupedStoresForFilter).map(m => <option key={m} value={m}>{m}區</option>)}
+                      {sortManagersByOrgOrder(managers, Object.keys(groupedStoresForFilter), managerOrder).map(m => <option key={m} value={m}>{m}區</option>)}
                     </select>
                   )}
                   <select value={selectedStore} onChange={(e) => setSelectedStore(e.target.value)} className="flex-1 sm:flex-none px-4 py-2.5 border border-stone-200 rounded-xl text-sm font-bold text-stone-600 outline-none focus:border-amber-400 focus:ring-2 focus:ring-amber-100 bg-stone-50 hover:bg-white transition-all cursor-pointer min-w-[130px]">
                     <option value="">{selectedManager || userRole === 'manager' ? "全區店家" : "顯示全區"}</option>
-                    {availableStoresForDropdown.map(s => <option key={s} value={s} className="font-medium text-stone-700">{s}</option>)}
+                    {(!selectedManager && userRole !== 'manager') ? (
+                      Object.entries(groupedStoresForFilter).map(([mgrName, stores]) => (
+                        <optgroup key={mgrName} label={`${mgrName} 區`} className="font-bold text-stone-400 bg-stone-50">
+                          {stores.map(s => (
+                            <option key={s} value={s} className="font-medium text-stone-700 bg-white">{s}</option>
+                          ))}
+                        </optgroup>
+                      ))
+                    ) : (
+                      availableStoresForDropdown.map(s => <option key={s} value={s} className="font-medium text-stone-700">{s}</option>)
+                    )}
                   </select>
                   
                   <button 

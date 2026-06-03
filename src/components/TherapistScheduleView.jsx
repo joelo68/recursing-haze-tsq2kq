@@ -4,6 +4,7 @@ import { Save, Calendar, MapPin, Store, User } from "lucide-react";
 import { doc, setDoc, serverTimestamp } from "firebase/firestore";
 import { db, appId } from "../config/firebase";
 import { AppContext } from "../AppContext";
+import { sortManagerNames, sortStoreNames, sortTherapistsByStoreThenName, sortManagersByOrgOrder, sortStoresByOrgOrder } from "../utils/helpers";
 import { ViewWrapper, Card } from "./SharedUI";
 
 const TherapistScheduleView = () => {
@@ -13,7 +14,7 @@ const TherapistScheduleView = () => {
     therapistSchedules,
     userRole,
     currentUser,
-    managers,
+    managers, managerOrder,
     // ★★★ 1. 引入動態路徑與品牌資訊 ★★★
     getCollectionPath,
     currentBrand
@@ -92,7 +93,7 @@ const TherapistScheduleView = () => {
       // 區長：鎖定區域為自己
       setSelectedRegion(currentUser.name);
     }
-  }, [userRole, currentUser, managers, brandPrefix, currentBrand]);
+  }, [userRole, currentUser, managers, managerOrder, brandPrefix, currentBrand]);
 
   // 2. 計算可用的店家列表 (依據區域)
   const availableStores = useMemo(() => {
@@ -108,18 +109,18 @@ const TherapistScheduleView = () => {
       return regionStores.filter(s => myStoresClean.includes(s));
     }
     
-    return regionStores;
-  }, [selectedRegion, managers, userRole, currentUser]);
+    return sortStoresByOrgOrder(managers, regionStores, brandPrefix, managerOrder);
+  }, [selectedRegion, managers, managerOrder, userRole, currentUser]);
 
   // 3. 計算可用的管理師列表 (依據店家)
   const availableTherapists = useMemo(() => {
     if (!selectedStore) return [];
     // Therapists 資料庫裡的 store 欄位通常存的是 "簡稱" (例如 "中山")
     // 所以這裡 selectedStore 也必須是簡稱
-    return therapists
-      .filter(t => t.status === 'active' && t.store === selectedStore)
-      .sort((a, b) => a.name.localeCompare(b.name));
-  }, [selectedStore, therapists]);
+    const list = therapists
+      .filter(t => t.status === 'active' && t.store === selectedStore);
+    return sortTherapistsByStoreThenName(list, managers, brandPrefix, managerOrder);
+  }, [selectedStore, therapists, managers, brandPrefix, managerOrder]);
 
   // 4. 讀取排休資料
   useEffect(() => {
@@ -186,7 +187,7 @@ const TherapistScheduleView = () => {
                 className="w-full px-4 py-2 border-2 border-stone-200 rounded-xl outline-none focus:border-amber-400 font-bold bg-white disabled:bg-stone-100 disabled:text-stone-500"
               >
                 <option value="">請選擇區域...</option>
-                {Object.keys(managers).map(mgr => (
+                {sortManagersByOrgOrder(managers, null, managerOrder).map(mgr => (
                   <option key={mgr} value={mgr}>{mgr}區</option>
                 ))}
               </select>

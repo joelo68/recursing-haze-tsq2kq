@@ -8,12 +8,12 @@ import { doc, writeBatch, setDoc, serverTimestamp } from "firebase/firestore";
 import { db, appId } from "../config/firebase";
 import { AppContext } from "../AppContext";
 import { ViewWrapper, Card } from "./SharedUI";
-import { formatNumber, parseNumber } from "../utils/helpers";
+import { formatNumber, parseNumber, sortManagerNames, sortStoreNames, sortManagersByOrgOrder, sortStoresByOrgOrder } from "../utils/helpers";
 
 const TargetView = () => {
   const { 
     userRole, 
-    managers, 
+    managers, managerOrder, 
     currentUser, 
     budgets, 
     showToast, 
@@ -85,25 +85,25 @@ const TargetView = () => {
 
   const availableStores = useMemo(() => {
     const formatStoreName = (s) => {
-      const coreName = s.replace(/CYJ|安妞|伊啵|Anew|Yibo|店/gi, "").trim();
+      const coreName = String(s || "").replace(/CYJ|安妞|伊啵|Anew|Yibo|店/gi, "").trim();
       return `${brandPrefix}${coreName}店`;
     };
 
     if (userRole === "director" || userRole === "trainer") 
       return selectedManager
-        ? (managers[selectedManager] || []).map(formatStoreName)
+        ? sortStoresByOrgOrder(managers, (managers[selectedManager] || []).map(formatStoreName), brandPrefix, managerOrder)
         : [];
-        
+
     if (userRole === "manager")
-      return Object.values(managers)
+      return sortStoresByOrgOrder(managers, Object.values(managers)
         .flat()
-        .map(formatStoreName);
-        
+        .map(formatStoreName), brandPrefix, managerOrder);
+
     if (userRole === "store" && currentUser)
-      return (currentUser.stores || [currentUser.storeName]).map(formatStoreName);
-      
+      return sortStoresByOrgOrder(managers, (currentUser.stores || [currentUser.storeName]).map(formatStoreName), brandPrefix, managerOrder);
+
     return [];
-  }, [selectedManager, managers, currentUser, userRole, brandPrefix]);
+  }, [selectedManager, managers, managerOrder, currentUser, userRole, brandPrefix]);
 
   useEffect(() => {
     if (selectedStore && !availableStores.includes(selectedStore)) {
@@ -127,7 +127,7 @@ const TargetView = () => {
     } else if (userRole === "manager" && currentUser) {
       setSelectedManager(currentUser.name);
     }
-  }, [userRole, currentUser, managers, brandPrefix, availableStores]); 
+  }, [userRole, currentUser, managers, managerOrder, brandPrefix, availableStores]); 
 
   useEffect(() => {
     if (!selectedStore) {
@@ -398,7 +398,7 @@ const TargetView = () => {
                     className="w-full pl-3 pr-8 py-3 md:py-2 bg-stone-50 border border-stone-200 rounded-xl font-bold text-stone-700 outline-none focus:border-indigo-400 disabled:opacity-50"
                   >
                     <option value="">選擇區域...</option>
-                    {Object.keys(managers).map((m) => (
+                    {sortManagersByOrgOrder(managers, null, managerOrder).map((m) => (
                       <option key={m} value={m}>{m}區</option>
                     ))}
                   </select>

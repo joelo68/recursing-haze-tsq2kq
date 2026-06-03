@@ -1,6 +1,7 @@
 // src/hooks/useDashboardStats.js
 import { useState, useMemo, useContext, useEffect } from 'react';
 import { AppContext } from '../AppContext';
+import { sortManagerNames, sortStoreNames, sortManagersByOrgOrder, sortStoresByOrgOrder } from "../utils/helpers";
 // ★ 新增了 collection 與 getDocs，讓我們一次把全公司的專屬小抄都抓下來
 import { doc, getDoc, collection, getDocs, query, where, limit, onSnapshot } from 'firebase/firestore'; 
 import { db } from '../config/firebase';
@@ -61,7 +62,7 @@ const buildProjectionRangePayload = ({ currentTotal = 0, remainingConservative =
 export function useDashboardStats() {
   const { 
     targets, userRole, currentUser, 
-    allReports, budgets, monthlyTargetSummary, managers, selectedYear, selectedMonth, therapistReports,
+    allReports, budgets, monthlyTargetSummary, managers, managerOrder = [], selectedYear, selectedMonth, therapistReports,
     currentBrand, therapists, dailyLoginCount, yesterdayLoginCount,
     therapistAnnualAggregatedData, getCollectionPath 
   } = useContext(AppContext);
@@ -154,14 +155,15 @@ export function useDashboardStats() {
 
   const availableStoresForFilter = useMemo(() => {
     const uniqueStores = [...new Set(baseVisibleStores)];
-    return uniqueStores.sort().map(s => `${brandPrefix}${s}店`);
-  }, [baseVisibleStores, brandPrefix]);
+    return sortStoresByOrgOrder(managers, uniqueStores.map(s => `${brandPrefix}${s}店`), brandPrefix, managerOrder);
+  }, [baseVisibleStores, brandPrefix, managers, managerOrder]);
 
   const groupedStoresForFilter = useMemo(() => {
     const groups = {};
     const availableSet = new Set(availableStoresForFilter);
 
-    Object.entries(managers || {}).forEach(([mgrName, rawStores]) => {
+    sortManagersByOrgOrder(managers, null, managerOrder).forEach((mgrName) => {
+        const rawStores = managers?.[mgrName] || [];
         const mgrValidStores = [];
         (rawStores || []).forEach(rs => {
             const core = cleanName(rs);
@@ -171,27 +173,27 @@ export function useDashboardStats() {
             }
         });
         if (mgrValidStores.length > 0) {
-            groups[mgrName] = mgrValidStores.sort();
+            groups[mgrName] = sortStoresByOrgOrder(managers, mgrValidStores, brandPrefix, managerOrder);
         }
     });
 
     const inGroups = new Set(Object.values(groups).flat());
     const orphans = availableStoresForFilter.filter(s => !inGroups.has(s));
     if (orphans.length > 0) {
-        groups['其他'] = orphans.sort();
+        groups['其他'] = sortStoresByOrgOrder(managers, orphans, brandPrefix, managerOrder);
     }
     return groups;
-  }, [managers, availableStoresForFilter, cleanName, brandPrefix]);
+  }, [managers, managerOrder, availableStoresForFilter, cleanName, brandPrefix]);
 
   const availableStoresForDropdown = useMemo(() => {
     if (userRole === 'manager' && currentUser) {
-         return groupedStoresForFilter[currentUser.name] || Object.values(groupedStoresForFilter).flat().sort();
+         return groupedStoresForFilter[currentUser.name] || sortStoresByOrgOrder(managers, Object.values(groupedStoresForFilter).flat(), brandPrefix, managerOrder);
     }
     if (selectedDashboardManager && groupedStoresForFilter[selectedDashboardManager]) {
         return groupedStoresForFilter[selectedDashboardManager];
     }
-    return Object.values(groupedStoresForFilter).flat().sort();
-  }, [selectedDashboardManager, groupedStoresForFilter, userRole, currentUser]);
+    return sortStoresByOrgOrder(managers, Object.values(groupedStoresForFilter).flat(), brandPrefix, managerOrder);
+  }, [selectedDashboardManager, groupedStoresForFilter, userRole, currentUser, managers, brandPrefix, managerOrder]);
 
   const effectiveStores = useMemo(() => {
     if (selectedDashboardStore) return [cleanName(selectedDashboardStore)];

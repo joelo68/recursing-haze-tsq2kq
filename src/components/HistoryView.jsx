@@ -23,11 +23,11 @@ import { db, appId } from "../config/firebase";
 import { ViewWrapper, Card } from "./SharedUI";
 import { AppContext } from "../AppContext";
 import SmartDatePicker from "./SmartDatePicker";
-import { formatLocalYYYYMMDD, toStandardDateFormat } from "../utils/helpers";
+import { formatLocalYYYYMMDD, toStandardDateFormat, sortStoreNames, sortStoresByOrgOrder } from "../utils/helpers";
 
 const HistoryView = () => {
   const { 
-    showToast, managers, userRole, currentUser, logActivity, 
+    showToast, managers, managerOrder, userRole, currentUser, logActivity, 
     getCollectionPath, getDocPath, currentBrand 
   } = useContext(AppContext);
   
@@ -109,12 +109,12 @@ const HistoryView = () => {
     }
     if (userRole === 'therapist' && currentUser) return [currentUser.store];
     return [];
-  }, [userRole, currentUser, managers, cleanStoreName]);
+  }, [userRole, currentUser, managers, managerOrder, cleanStoreName]);
   
   const allStores = useMemo(() => {
     let baseList = (myAllowedStores !== null) ? myAllowedStores : Object.values(managers).flat();
-    return baseList.filter(s => s).map((s) => `${brandPrefix}${s}店`).sort();
-  }, [managers, myAllowedStores, brandPrefix]);
+    return sortStoresByOrgOrder(managers, baseList.filter(s => s).map((s) => `${brandPrefix}${s}店`), brandPrefix, managerOrder);
+  }, [managers, managerOrder, myAllowedStores, brandPrefix]);
 
   useEffect(() => {
     if (allStores.length === 1) setFilterStore(allStores[0]);
