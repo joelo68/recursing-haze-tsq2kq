@@ -44,7 +44,7 @@ import {
 // ==========================================
 // ★ 系統核心版本號 (終極動態快取版)
 // ==========================================
-const CURRENT_APP_VERSION = "3.1.2"; 
+const CURRENT_APP_VERSION = "3.1.3"; 
 
 const isNewerVersion = (local, remote) => {
   if (!remote) return true;
@@ -114,6 +114,87 @@ const DEFAULT_SECURITY_CONFIG = {
   autoLogoutEnabled: true,
   autoLogoutMinutes: 240,
   logoutWarningSeconds: 60,
+};
+
+
+const LEGACY_TRAINER_ID = "trainer_default";
+
+const normalizeTrainerAuthData = (data = {}) => {
+  const raw = data || {};
+  const hasAccounts = raw.accounts && typeof raw.accounts === "object";
+  const accounts = hasAccounts ? { ...raw.accounts } : {};
+  let trainerOrder = Array.isArray(raw.trainerOrder) ? [...raw.trainerOrder] : [];
+
+  // 舊版相容：原本只有 trainer_auth.password。
+  if (!hasAccounts) {
+    accounts[LEGACY_TRAINER_ID] = {
+      id: LEGACY_TRAINER_ID,
+      name: raw.name || "教專",
+      password: raw.password || "0000",
+      isActive: raw.isActive !== false,
+      isLegacyDefault: true,
+      createdAtText: raw.createdAtText || "",
+      updatedAtText: raw.updatedAtText || "",
+    };
+    trainerOrder = [LEGACY_TRAINER_ID];
+  } else if (Object.keys(accounts).length === 0) {
+    accounts[LEGACY_TRAINER_ID] = {
+      id: LEGACY_TRAINER_ID,
+      name: "教專",
+      password: raw.password || "0000",
+      isActive: true,
+      isLegacyDefault: true,
+      createdAtText: "",
+      updatedAtText: "",
+    };
+    trainerOrder = [LEGACY_TRAINER_ID];
+  }
+
+  const existingIds = Object.keys(accounts);
+  const seen = new Set();
+  const normalizedOrder = [];
+
+  trainerOrder.forEach((id) => {
+    const key = String(id || "").trim();
+    if (key && accounts[key] && !seen.has(key)) {
+      seen.add(key);
+      normalizedOrder.push(key);
+    }
+  });
+
+  existingIds
+    .filter((id) => !seen.has(id))
+    .sort((a, b) => String(accounts[a]?.name || a).localeCompare(String(accounts[b]?.name || b), "zh-Hant", { numeric: true, sensitivity: "base" }))
+    .forEach((id) => normalizedOrder.push(id));
+
+  const normalizedAccounts = {};
+  normalizedOrder.forEach((id, index) => {
+    const account = accounts[id] || {};
+    normalizedAccounts[id] = {
+      id,
+      name: account.name || (id === LEGACY_TRAINER_ID ? "教專" : "未命名教專"),
+      password: account.password || "0000",
+      isActive: account.isActive !== false,
+      sortOrder: Number.isFinite(Number(account.sortOrder)) ? Number(account.sortOrder) : index,
+      createdAtText: account.createdAtText || "",
+      updatedAtText: account.updatedAtText || "",
+      ...account,
+    };
+  });
+
+  return {
+    ...raw,
+    accounts: normalizedAccounts,
+    trainerOrder: normalizedOrder,
+    password: raw.password || normalizedAccounts[normalizedOrder[0]]?.password || "0000",
+  };
+};
+
+const getSortedTrainerAccounts = (trainerAuth = {}) => {
+  const normalized = normalizeTrainerAuthData(trainerAuth);
+  return (normalized.trainerOrder || [])
+    .map((id) => normalized.accounts?.[id])
+    .filter(Boolean);
 };
 
 const VIEW_ACTIVITY_LABELS = {
@@ -239,7 +320,7 @@ export default function App() {
   const [permissions, setPermissions] = useState(DEFAULT_PERMISSIONS);
   const [therapists, setTherapists] = useState([]);
   const [directorAuth, setDirectorAuth] = useState({});
-  const [trainerAuth, setTrainerAuth] = useState({ password: "0000" });
+  const [trainerAuth, setTrainerAuth] = useState(normalizeTrainerAuthData({ password: "0000" }));
   const [masterAuth, setMasterAuth] = useState({ password: "BOSS888" });
   const [therapistReports, setTherapistReports] = useState([]); 
   const [therapistSchedules, setTherapistSchedules] = useState({}); 
@@ -584,7 +665,7 @@ export default function App() {
       setManagerAuth(mAuthSnap.exists() ? mAuthSnap.data() : {});
       setPermissions(permSnap.exists() ? permSnap.data() : DEFAULT_PERMISSIONS);
       setTherapists(thSnap.docs.map((d) => ({ id: d.id, ...d.data() })));
-      setTrainerAuth(trAuthSnap.exists() ? trAuthSnap.data() : { password: "0000" });
+      setTrainerAuth(normalizeTrainerAuthData(trAuthSnap.exists() ? trAuthSnap.data() : { password: "0000" }));
       setAuditExclusions(audSnap.exists() ? (audSnap.data().stores || []) : []);
       setSecurityConfig(secSnap.exists() ? normalizeSecurityConfig(secSnap.data()) : DEFAULT_SECURITY_CONFIG);
 
@@ -1041,7 +1122,79 @@ useEffect(() => {
   const handleUpdateStorePassword = useCallback(async (id, newPass) => { try { const updated = storeAccounts.map((a) => a.id === id ? { ...a, password: newPass } : a); await setDoc(getDocPath("store_account_data"), { accounts: updated }); return true; } catch (e) { return false; } }, [storeAccounts, getDocPath]);
   const handleUpdateManagerPassword = useCallback(async (name, newPass) => { try { await setDoc(getDocPath("manager_auth"), { [name]: newPass }, { merge: true }); return true; } catch (e) { return false; } }, [getDocPath]);
   const handleUpdateTherapistPassword = useCallback(async (id, newPass) => { try { await updateDoc(doc(getCollectionPath("therapists"), id), { password: newPass }); return true; } catch (e) { console.error(e); return false; } }, [getCollectionPath]);
-  const handleUpdateTrainerAuth = useCallback(async (newPass) => { try { await setDoc(getDocPath("trainer_auth"), { password: newPass }); return true; } catch (e) { console.error(e); return false; } }, [getDocPath]);
+  const handleUpdateTrainerAuth = useCallback(async (actionOrPassword, trainerId = null, payload = {}) => {
+    try {
+      const current = normalizeTrainerAuthData(trainerAuth || {});
+      const nowText = new Date().toISOString();
+      let next = normalizeTrainerAuthData(current);
+
+      // 舊呼叫相容：handleUpdateTrainerAuth("1234") 代表更新第一位教專密碼。
+      if (!["add", "update", "rename", "toggle", "delete", "reorder"].includes(actionOrPassword)) {
+        const targetId = trainerId || next.trainerOrder?.[0] || LEGACY_TRAINER_ID;
+        next.accounts[targetId] = {
+          ...(next.accounts[targetId] || { id: targetId, name: "教專" }),
+          password: String(actionOrPassword || "0000"),
+          updatedAtText: nowText,
+        };
+      } else if (actionOrPassword === "add") {
+        const name = String(payload?.name || "").trim();
+        if (!name) throw new Error("請輸入教專姓名");
+        const id = payload?.id || `trainer_${Date.now().toString(36)}`;
+        next.accounts[id] = {
+          id,
+          name,
+          password: String(payload?.password || "0000").trim() || "0000",
+          isActive: payload?.isActive !== false,
+          createdAtText: nowText,
+          updatedAtText: nowText,
+        };
+        next.trainerOrder = [...(next.trainerOrder || []).filter((x) => x !== id), id];
+      } else if (actionOrPassword === "update" || actionOrPassword === "rename") {
+        const id = trainerId;
+        if (!id || !next.accounts[id]) throw new Error("找不到教專帳號");
+        next.accounts[id] = {
+          ...next.accounts[id],
+          ...payload,
+          id,
+          name: String(payload?.name ?? next.accounts[id].name ?? "").trim() || next.accounts[id].name || "教專",
+          password: String(payload?.password ?? next.accounts[id].password ?? "0000").trim() || "0000",
+          isActive: payload?.isActive ?? next.accounts[id].isActive ?? true,
+          updatedAtText: nowText,
+        };
+      } else if (actionOrPassword === "toggle") {
+        const id = trainerId;
+        if (!id || !next.accounts[id]) throw new Error("找不到教專帳號");
+        next.accounts[id] = {
+          ...next.accounts[id],
+          isActive: payload?.isActive ?? !next.accounts[id].isActive,
+          updatedAtText: nowText,
+        };
+      } else if (actionOrPassword === "delete") {
+        const id = trainerId;
+        if (!id || !next.accounts[id]) throw new Error("找不到教專帳號");
+        delete next.accounts[id];
+        next.trainerOrder = (next.trainerOrder || []).filter((x) => x !== id);
+        if (next.trainerOrder.length === 0) {
+          next = normalizeTrainerAuthData({ password: "0000" });
+        }
+      } else if (actionOrPassword === "reorder") {
+        const order = Array.isArray(payload?.trainerOrder) ? payload.trainerOrder : [];
+        const existing = new Set(Object.keys(next.accounts || {}));
+        next.trainerOrder = [
+          ...order.filter((id) => existing.has(id)),
+          ...Object.keys(next.accounts || {}).filter((id) => !order.includes(id)),
+        ];
+      }
+
+      next = normalizeTrainerAuthData(next);
+      await setDoc(getDocPath("trainer_auth"), next);
+      setTrainerAuth(next);
+      return true;
+    } catch (e) {
+      console.error(e);
+      return false;
+    }
+  }, [getDocPath, trainerAuth]);
   const handleUpdateAuditExclusions = useCallback(async (newExclusions) => { try { await setDoc(getDocPath("audit_exclusions"), { stores: newExclusions }); return true; } catch (e) { console.error(e); return false; } }, [getDocPath]);
   
   const handleUpdateDirectorAuth = useCallback(async (action, name, newPass, newName = null) => { 

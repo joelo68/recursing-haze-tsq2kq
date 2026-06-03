@@ -63,6 +63,87 @@ const LoginView = ({
   }, [currentBrandId]);
 
 
+
+  const LEGACY_TRAINER_ID = "trainer_default";
+
+  const normalizeTrainerAuthData = (data = {}) => {
+    const raw = data || {};
+    const hasAccounts = raw.accounts && typeof raw.accounts === "object";
+    const accounts = hasAccounts ? { ...raw.accounts } : {};
+    let trainerOrder = Array.isArray(raw.trainerOrder) ? [...raw.trainerOrder] : [];
+
+    // 舊版相容：原本只有 trainer_auth.password。
+    if (!hasAccounts) {
+      accounts[LEGACY_TRAINER_ID] = {
+        id: LEGACY_TRAINER_ID,
+        name: raw.name || "教專",
+        password: raw.password || "0000",
+        isActive: raw.isActive !== false,
+        isLegacyDefault: true,
+        createdAtText: raw.createdAtText || "",
+        updatedAtText: raw.updatedAtText || "",
+      };
+      trainerOrder = [LEGACY_TRAINER_ID];
+    } else if (Object.keys(accounts).length === 0) {
+      accounts[LEGACY_TRAINER_ID] = {
+        id: LEGACY_TRAINER_ID,
+        name: "教專",
+        password: raw.password || "0000",
+        isActive: true,
+        isLegacyDefault: true,
+        createdAtText: "",
+        updatedAtText: "",
+      };
+      trainerOrder = [LEGACY_TRAINER_ID];
+    }
+
+    const existingIds = Object.keys(accounts);
+    const seen = new Set();
+    const normalizedOrder = [];
+
+    trainerOrder.forEach((id) => {
+      const key = String(id || "").trim();
+      if (key && accounts[key] && !seen.has(key)) {
+        seen.add(key);
+        normalizedOrder.push(key);
+      }
+    });
+
+    existingIds
+      .filter((id) => !seen.has(id))
+      .sort((a, b) => String(accounts[a]?.name || a).localeCompare(String(accounts[b]?.name || b), "zh-Hant", { numeric: true, sensitivity: "base" }))
+      .forEach((id) => normalizedOrder.push(id));
+
+    const normalizedAccounts = {};
+    normalizedOrder.forEach((id, index) => {
+      const account = accounts[id] || {};
+      normalizedAccounts[id] = {
+        id,
+        name: account.name || (id === LEGACY_TRAINER_ID ? "教專" : "未命名教專"),
+        password: account.password || "0000",
+        isActive: account.isActive !== false,
+        sortOrder: Number.isFinite(Number(account.sortOrder)) ? Number(account.sortOrder) : index,
+        createdAtText: account.createdAtText || "",
+        updatedAtText: account.updatedAtText || "",
+        ...account,
+      };
+    });
+
+    return {
+      ...raw,
+      accounts: normalizedAccounts,
+      trainerOrder: normalizedOrder,
+      password: raw.password || normalizedAccounts[normalizedOrder[0]]?.password || "0000",
+    };
+  };
+
+  const getSortedTrainerAccounts = (trainerAuth = {}) => {
+    const normalized = normalizeTrainerAuthData(trainerAuth);
+    return (normalized.trainerOrder || [])
+      .map((id) => normalized.accounts?.[id])
+      .filter(Boolean);
+  };
+
   const visibleManagerNames = useMemo(() => {
     return sortManagersByOrgOrder(
       managers || {},
@@ -95,6 +176,18 @@ const LoginView = ({
       return zhCompare(a?.name || "", b?.name || "");
     });
   }, [storeAccounts, managers, managerOrder]);
+
+  const sortedTrainerAccounts = useMemo(() => {
+    return getSortedTrainerAccounts(trainerAuth)
+      .filter((account) => account?.isActive !== false)
+      .sort((a, b) => {
+        const order = normalizeTrainerAuthData(trainerAuth).trainerOrder || [];
+        const ar = order.indexOf(a.id);
+        const br = order.indexOf(b.id);
+        if (ar !== br) return ar - br;
+        return zhCompare(a?.name || "", b?.name || "");
+      });
+  }, [trainerAuth]);
 
 
   const handleInitialBrandSelect = (brandId) => {
@@ -146,21 +239,22 @@ const LoginView = ({
     const directorCount = Object.keys(directorAuth || {}).length;
     count += directorCount;
 
-    // 5. 固定系統基數 (教專 + Master)
-    count += 2;
+    // 5. 教專帳號 + 最高管理員
+    const trainerCount = getSortedTrainerAccounts(trainerAuth).filter(a => a?.isActive !== false).length;
+    count += trainerCount + 1;
 
-    // 🔍 修正後的日誌：把 2 位系統帳號補上，讓加總剛好等於 13
+    // 🔍 修正後的日誌：把系統帳號補上，讓加總符合目前帳號設定
     console.log("=== 📋 全集團授權帳號脫水點名簿 ===");
     console.log(`總計人數：${count} 人`);
     console.log(`➔ 🟢 現役管理師：${activeTherapists.length} 人`, activeTherapists.map(t => `${t.name}(${t.store}店)`).join(', '));
     console.log(`➔ 🏪 活躍店經理：${storeCount} 人`, (storeAccounts || []).map(a => a.name).join(', '));
     console.log(`➔ 🗺️ 區域負責人：${managerCount} 人`, Object.keys(managerAuth || {}).join(', '));
     console.log(`➔ 👑 總部高階主管：${directorCount} 人`, Object.keys(directorAuth || {}).join(', '));
-    console.log(`➔ 🛠️ 系統固定帳號 (教專 + 最高管理員)：2 人`); // ★ 補上這行，帳目就完美了！
+    console.log(`➔ 🛠️ 系統固定帳號 (教專 ${trainerCount} 人 + 最高管理員)：${trainerCount + 1} 人`);
     console.log("==================================");
 
     return count;
-  }, [therapists, storeAccounts, managerAuth, directorAuth]);
+  }, [therapists, storeAccounts, managerAuth, directorAuth, trainerAuth]);
 
   const sortedDirectorNames = useMemo(() => {
     const getTitleWeight = (name) => {
@@ -241,7 +335,7 @@ const LoginView = ({
       if (roleId === "store") success = await onUpdatePassword(accountId, nextPass);
       else if (roleId === "manager") success = await onUpdateManagerPassword(accountId, nextPass);
       else if (roleId === "therapist") success = await onUpdateTherapistPassword(accountId, nextPass);
-      else if (roleId === "trainer") success = await handleUpdateTrainerAuth(nextPass);
+      else if (roleId === "trainer") success = await handleUpdateTrainerAuth("update", accountId, { password: nextPass });
       else if (roleId === "director") success = await handleUpdateDirectorAuth("update", accountId, nextPass);
 
       if (!success) {
@@ -287,11 +381,15 @@ const LoginView = ({
            setError("密碼錯誤");
         }
       } else if (role === "trainer") {
-        const correctPass = trainerAuth?.password || "0000";
+        if (!selectedUser) { setError("請選擇教專人員"); setIsLoading(false); return; }
+        const account = sortedTrainerAccounts.find((a) => a.id === selectedUser);
+        if (!account || account.isActive === false) { setError("此教專帳號已停用"); setIsLoading(false); return; }
+
+        const correctPass = account.password || "0000";
         if (password === correctPass) {
-          const userInfo = { name: "教專" };
+          const userInfo = { id: account.id, name: account.name || "教專" };
           if (isInitialPasswordLogin("trainer", password, correctPass)) {
-            openForcePasswordUpdate({ roleId: "trainer", accountId: "trainer", userInfo, currentPassword: password, displayName: "教專" });
+            openForcePasswordUpdate({ roleId: "trainer", accountId: account.id, userInfo, currentPassword: password, displayName: account.name || "教專" });
           } else {
             onLogin("trainer", userInfo);
           }
@@ -400,7 +498,11 @@ const LoginView = ({
     if (role === "store" && selectedUser) { const account = storeAccounts.find((a) => a.id === selectedUser); if (account && account.password === oldPassword) isVerified = true; } 
     else if (role === "manager" && selectedUser) { const correctPass = managerAuth[selectedUser] || "0000"; if (correctPass === oldPassword) isVerified = true; } 
     else if (role === "therapist" && tPersonId) { const therapist = therapists.find(t => t.id === tPersonId); if (therapist && therapist.password === oldPassword) isVerified = true; } 
-    else if (role === "trainer") { const correctPass = trainerAuth?.password || "0000"; if (correctPass === oldPassword) isVerified = true; }
+    else if (role === "trainer" && selectedUser) {
+      const account = sortedTrainerAccounts.find((a) => a.id === selectedUser);
+      const correctPass = account?.password || "0000";
+      if (correctPass === oldPassword) isVerified = true;
+    }
 
     if (!isVerified) { setError("舊密碼錯誤"); setIsLoading(false); return; }
     
@@ -408,7 +510,7 @@ const LoginView = ({
     if (role === "store" && selectedUser) { success = await onUpdatePassword(selectedUser, newPassword); } 
     else if (role === "manager" && selectedUser) { success = await onUpdateManagerPassword(selectedUser, newPassword); } 
     else if (role === "therapist" && tPersonId) { success = await onUpdateTherapistPassword(tPersonId, newPassword); }
-    else if (role === "trainer") { success = await handleUpdateTrainerAuth(newPassword); }
+    else if (role === "trainer" && selectedUser) { success = await handleUpdateTrainerAuth("update", selectedUser, { password: newPassword }); }
 
     if (success) { 
       alert("密碼更新成功，請重新登入"); 
@@ -554,6 +656,9 @@ const LoginView = ({
               {role === "manager" && !isResetting && (
                 <div className="relative"><select value={selectedUser} onChange={(e) => setSelectedUser(e.target.value)} className={selectClass}><option value="">選擇區長</option>{visibleManagerNames.map((m) => (<option key={m} value={m}>{m}</option>))}</select></div>
               )}
+              {role === "trainer" && !isResetting && (
+                <div className="relative"><select value={selectedUser} onChange={(e) => setSelectedUser(e.target.value)} className={selectClass}><option value="">選擇教專人員</option>{sortedTrainerAccounts.map((a) => (<option key={a.id} value={a.id}>{a.name}</option>))}</select></div>
+              )}
               {role === "store" && !isResetting && (
                 <div className="relative"><select value={selectedUser} onChange={(e) => setSelectedUser(e.target.value)} className={selectClass}><option value="">選擇店經理</option>{sortedStoreAccounts.map((a) => (<option key={a.id} value={a.id}>{a.name}</option>))}</select></div>
               )}
@@ -633,6 +738,12 @@ const LoginView = ({
                     </>
                   ) : (
                     <>
+                      {role === "trainer" && (
+                        <select value={selectedUser} onChange={(e) => setSelectedUser(e.target.value)} className={selectClass}>
+                          <option value="">選擇教專人員</option>
+                          {sortedTrainerAccounts.map((a) => (<option key={a.id} value={a.id}>{a.name}</option>))}
+                        </select>
+                      )}
                       <input type="password" value={oldPassword} onChange={(e) => setOldPassword(e.target.value)} placeholder="舊密碼" className={inputClass} />
                       <input type="text" value={newPassword} onChange={(e) => setNewPassword(e.target.value)} placeholder="新密碼" className={inputClass} />
                     </>
