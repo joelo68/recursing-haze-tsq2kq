@@ -5,7 +5,7 @@ import {
   Calendar, Search, RotateCcw, ShieldAlert, ShieldCheck, Laptop
 } from "lucide-react";
 import { 
-  query, limit, where, Timestamp, getDocs, orderBy 
+  query, limit, where, Timestamp, getDocs, orderBy, doc, setDoc 
 } from "firebase/firestore";
 
 import { AppContext } from "../AppContext";
@@ -14,7 +14,7 @@ import SmartDatePicker from "./SmartDatePicker";
 import { formatLocalYYYYMMDD } from "../utils/helpers";
 
 const SystemMonitor = () => {
-  const { getCollectionPath, currentBrand } = useContext(AppContext);
+  const { getCollectionPath, currentBrand, currentUser, userRole } = useContext(AppContext);
   
   const [logs, setLogs] = useState([]);
   const [loading, setLoading] = useState(false);
@@ -41,6 +41,7 @@ const SystemMonitor = () => {
     };
   });
   const [deviceLimitCount, setDeviceLimitCount] = useState(50);
+  const [deviceActionKey, setDeviceActionKey] = useState("");
 
   useEffect(() => {
     const handler = () => {
@@ -161,7 +162,7 @@ const SystemMonitor = () => {
         });
 
         const trustedCount = deviceList.filter((d) => d.trusted !== false && d.status !== "new").length;
-        const newCount = deviceList.filter((d) => d.trusted === false || d.status === "new").length;
+        const newCount = deviceList.filter((d) => d.trusted === false || d.status === "new" || d.status === "suspicious").length;
         const lastSeenText = deviceList
           .map((d) => d.lastSeenAtText || d.firstSeenAtText || "")
           .filter(Boolean)
@@ -237,6 +238,92 @@ const SystemMonitor = () => {
       });
     } catch {
       return value;
+    }
+  };
+
+  const getDeviceTrustMeta = (device = {}) => {
+    if (device.status === "suspicious" || device.source === "manual_suspicious") {
+      return {
+        label: "可疑裝置",
+        className: "bg-rose-50 text-rose-700 border-rose-100",
+      };
+    }
+    if (device.trusted === false || device.status === "new") {
+      return {
+        label: "新裝置",
+        className: "bg-rose-50 text-rose-600 border-rose-100",
+      };
+    }
+    return {
+      label: "已信任",
+      className: "bg-emerald-50 text-emerald-700 border-emerald-100",
+    };
+  };
+
+  const updateDeviceTrust = async (profile, device, nextStatus) => {
+    if (!profile?.id || !device?.deviceId) return;
+
+    const actionKey = `${profile.id}_${device.deviceId}_${nextStatus}`;
+    setDeviceActionKey(actionKey);
+
+    const nowText = new Date().toISOString();
+    const reviewerName = currentUser?.name || (userRole === "director" ? "高階主管" : "系統管理者");
+    const isTrusted = nextStatus === "trusted";
+
+    const nextDevice = {
+      ...device,
+      trusted: isTrusted,
+      status: isTrusted ? "trusted" : "suspicious",
+      source: isTrusted ? "manual_trusted" : "manual_suspicious",
+      reviewedBy: reviewerName,
+      reviewedRole: userRole || "",
+      reviewedAtText: nowText,
+      updatedAtText: nowText,
+    };
+
+    try {
+      await setDoc(doc(getCollectionPath("account_devices"), profile.id), {
+        devices: {
+          [device.deviceId]: nextDevice,
+        },
+        updatedAtText: nowText,
+      }, { merge: true });
+
+      setDeviceProfiles((prev) => prev.map((item) => {
+        if (item.id !== profile.id) return item;
+
+        const deviceList = (item.deviceList || []).map((d) =>
+          d.deviceId === device.deviceId ? nextDevice : d
+        );
+
+        return {
+          ...item,
+          deviceList,
+          trustedCount: deviceList.filter((d) => d.trusted !== false && d.status !== "new" && d.status !== "suspicious").length,
+          newCount: deviceList.filter((d) => d.trusted === false || d.status === "new" || d.status === "suspicious").length,
+        };
+      }));
+
+      try {
+        window.dispatchEvent(new CustomEvent("cyj_device_trust_updated", {
+          detail: {
+            deviceId: nextDevice.deviceId,
+            deviceShort: nextDevice.deviceShort,
+            trusted: nextDevice.trusted,
+            status: nextDevice.status,
+            source: nextDevice.source,
+            reviewedBy: nextDevice.reviewedBy,
+            reviewedAtText: nextDevice.reviewedAtText,
+          },
+        }));
+      } catch (eventError) {
+        console.warn("裝置信任狀態同步事件發送失敗:", eventError);
+      }
+    } catch (error) {
+      console.error("更新裝置信任狀態失敗:", error);
+      alert("更新裝置信任狀態失敗：" + error.message);
+    } finally {
+      setDeviceActionKey("");
     }
   };
 
@@ -801,8 +888,8 @@ const SystemMonitor = () => {
                                       </div>
                                       <p className="mt-2 text-xs font-mono text-stone-400 break-all">裝置碼：{device.deviceShort || "-"}</p>
                                     </div>
-                                    <span className={`shrink-0 px-2.5 py-1 rounded-lg text-xs font-black border ${device.trusted === false || device.status === "new" ? "bg-rose-50 text-rose-600 border-rose-100" : "bg-emerald-50 text-emerald-700 border-emerald-100"}`}>
-                                      {device.trusted === false || device.status === "new" ? "新裝置" : "已信任"}
+                                    <span className={`shrink-0 px-2.5 py-1 rounded-lg text-xs font-black border ${getDeviceTrustMeta(device).className}`}>
+                                      {getDeviceTrustMeta(device).label}
                                     </span>
                                   </div>
                                   <div className="mt-3 grid grid-cols-2 gap-2 text-xs font-bold text-stone-500">
@@ -822,6 +909,29 @@ const SystemMonitor = () => {
                                       <span className="block text-stone-400 font-black">來源</span>
                                       {device.source || device.status || "-"}
                                     </div>
+                                  </div>
+
+                                  <div className="mt-3 flex flex-col sm:flex-row gap-2 justify-end">
+                                    {(device.trusted === false || device.status === "new" || device.status === "suspicious") && (
+                                      <button
+                                        type="button"
+                                        disabled={deviceActionKey === `${profile.id}_${device.deviceId}_trusted`}
+                                        onClick={() => updateDeviceTrust(profile, device, "trusted")}
+                                        className="px-3 py-2 rounded-xl bg-emerald-50 text-emerald-700 border border-emerald-100 text-xs font-black hover:bg-emerald-100 disabled:opacity-60 active:scale-95"
+                                      >
+                                        {deviceActionKey === `${profile.id}_${device.deviceId}_trusted` ? "處理中..." : "設為信任"}
+                                      </button>
+                                    )}
+                                    {!(device.status === "suspicious" || device.source === "manual_suspicious") && (
+                                      <button
+                                        type="button"
+                                        disabled={deviceActionKey === `${profile.id}_${device.deviceId}_suspicious`}
+                                        onClick={() => updateDeviceTrust(profile, device, "suspicious")}
+                                        className="px-3 py-2 rounded-xl bg-rose-50 text-rose-600 border border-rose-100 text-xs font-black hover:bg-rose-100 disabled:opacity-60 active:scale-95"
+                                      >
+                                        {deviceActionKey === `${profile.id}_${device.deviceId}_suspicious` ? "處理中..." : "標記可疑"}
+                                      </button>
+                                    )}
                                   </div>
                                 </div>
                               ))}

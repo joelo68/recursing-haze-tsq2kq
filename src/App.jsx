@@ -14,14 +14,8 @@ import React, {
   Suspense
 } from "react";
 
-import { app, auth, db, appId } from "./config/firebase";
-import { onAuthStateChanged, signInAnonymously, signInWithCustomToken } from "firebase/auth";
-import { collection, addDoc, deleteDoc, updateDoc, doc, getDoc, onSnapshot, serverTimestamp, setDoc, query, orderBy, limit, deleteField, where, increment, getDocs } from "firebase/firestore";
-import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip as RechartsTooltip, Legend, ResponsiveContainer, LineChart, Line, ComposedChart, Area, Cell, PieChart, Pie } from "recharts";
-import { 
-  LayoutDashboard, Upload, TrendingUp, Map as MapIcon, Settings, ClipboardCheck, Menu, Search, Filter, Trash2, Save, Plus, DollarSign, Target, Users, Award, Loader2, FileText, AlertCircle, CheckCircle, User, Store, Lock, LogOut, FileWarning, Edit2, CheckSquare, X, Download, ChevronLeft, ChevronRight, Activity, Sparkles, ChevronDown, 
-  Heart, Coffee, Shield, WifiOff,
-  ShoppingBag, CreditCard, Smartphone, Monitor, Bell, Clock, Music 
+import {
+  app, auth, db, appId } from "./config/firebase"; import { onAuthStateChanged, signInAnonymously, signInWithCustomToken } from "firebase/auth"; import { collection, addDoc, deleteDoc, updateDoc, doc, getDoc, onSnapshot, serverTimestamp, setDoc, query, orderBy, limit, deleteField, where, increment, getDocs } from "firebase/firestore"; import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip as RechartsTooltip, Legend, ResponsiveContainer, LineChart, Line, ComposedChart, Area, Cell, PieChart, Pie } from "recharts"; import {    LayoutDashboard, Upload, TrendingUp, Map as MapIcon, Settings, ClipboardCheck, Menu, Search, Filter, Trash2, Save, Plus, DollarSign, Target, Users, Award, Loader2, FileText, AlertCircle, CheckCircle, User, Store, Lock, LogOut, FileWarning, Edit2, CheckSquare, X, Download, ChevronLeft, ChevronRight, Activity, Sparkles, ChevronDown, Heart, Coffee, Shield, WifiOff, ShoppingBag, CreditCard, Smartphone, Monitor, Bell, Clock, Music, ShieldAlert
 } from "lucide-react";
 
 import { ROLES, ALL_MENU_ITEMS, DEFAULT_REGIONAL_MANAGERS, DEFAULT_PERMISSIONS } from "./constants/index";
@@ -44,7 +38,7 @@ import {
 // ==========================================
 // ★ 系統核心版本號 (終極動態快取版)
 // ==========================================
-const CURRENT_APP_VERSION = "3.1.4"; 
+const CURRENT_APP_VERSION = "3.1.5"; 
 
 const isNewerVersion = (local, remote) => {
   if (!remote) return true;
@@ -97,6 +91,23 @@ const TargetView = lazyWithRetry(() => import("./components/TargetView"));
 const TherapistTargetView = lazyWithRetry(() => import("./components/TherapistTargetView"));
 const TherapistScheduleView = lazyWithRetry(() => import("./components/TherapistScheduleView"));
 const NotificationManager = lazyWithRetry(() => import("./components/NotificationManager"));
+
+
+const removeUndefinedDeep = (value) => {
+  if (Array.isArray(value)) {
+    return value.map(removeUndefinedDeep).filter((item) => item !== undefined);
+  }
+  if (value && typeof value === "object" && !(value instanceof Date)) {
+    return Object.entries(value).reduce((acc, [key, item]) => {
+      if (item !== undefined) {
+        acc[key] = removeUndefinedDeep(item);
+      }
+      return acc;
+    }, {});
+  }
+  return value;
+};
+
 
 const BRANDS = [
   { id: 'cyj', label: 'CYJ', icon: Sparkles, pathType: 'legacy', color: 'amber', gradient: 'from-amber-500 to-orange-600', bg: 'bg-amber-50', text: 'text-amber-600' },
@@ -327,6 +338,7 @@ export default function App() {
     status: "checking",
     label: "裝置狀態確認中",
     deviceShort: "",
+    deviceId: "",
   });
 
   const [isUpdating, setIsUpdating] = useState(false);
@@ -430,6 +442,33 @@ export default function App() {
     }, 120);
   }, []);
 
+  useEffect(() => {
+    const handler = (event) => {
+      const detail = event?.detail || {};
+      if (!detail.deviceShort && !detail.deviceId) return;
+
+      setCurrentDeviceTrust((prev) => {
+        const isSameDevice =
+          (detail.deviceId && prev.deviceId && detail.deviceId === prev.deviceId) ||
+          (detail.deviceShort && prev.deviceShort && detail.deviceShort === prev.deviceShort);
+
+        if (!isSameDevice) return prev;
+
+        const isTrusted = detail.status === "trusted" || detail.trusted === true;
+        return {
+          ...prev,
+          status: isTrusted ? "trusted" : "new",
+          label: isTrusted ? "🛡 目前裝置已信任" : "⚠ 新裝置待觀察",
+          deviceShort: detail.deviceShort || prev.deviceShort,
+          deviceId: detail.deviceId || prev.deviceId,
+        };
+      });
+    };
+
+    window.addEventListener("cyj_device_trust_updated", handler);
+    return () => window.removeEventListener("cyj_device_trust_updated", handler);
+  }, []);
+
   const [rawData, setRawData] = useState([]); 
   const [annualAggregatedData, setAnnualAggregatedData] = useState([]); 
   const [annualDashboardSummaries, setAnnualDashboardSummaries] = useState([]);
@@ -531,7 +570,7 @@ export default function App() {
         role,
         user,
         action,
-        details: detailPayload,
+        details: removeUndefinedDeep(detailPayload),
         activityType,
         view: detailPayload.view || activeView || "",
         device,
@@ -579,7 +618,7 @@ export default function App() {
       riskTags: deviceSecurity.riskTags || [],
       deviceStatus: deviceSecurity.deviceStatus || (isFailed ? "check_failed" : "checked"),
       deviceShort: info?.deviceShort,
-      trustedDeviceCountBefore: deviceSecurity.trustedDeviceCountBefore,
+      trustedDeviceCountBefore: deviceSecurity.trustedDeviceCountBefore ?? null,
       ...(deviceSecurity.error ? { error: deviceSecurity.error } : {}),
     };
 
@@ -590,7 +629,7 @@ export default function App() {
         role: roleId,
         user: userName,
         action: "裝置安全檢查",
-        details: detailPayload,
+        details: removeUndefinedDeep(detailPayload),
         activityType,
         view: activeView || "",
         device: info.device,
@@ -807,6 +846,7 @@ export default function App() {
       status: "checking",
       label: "裝置狀態確認中",
       deviceShort: "",
+      deviceId: "",
     });
     setUserRole(null); setCurrentUser(null); setActiveView("dashboard");
   }, [currentUser, userRole, logActivity, securityConfig]);
@@ -1441,6 +1481,7 @@ useEffect(() => {
       status: "checking",
       label: "裝置狀態確認中",
       deviceShort: immediateDeviceInfo.deviceShort,
+      deviceId: immediateDeviceInfo.deviceId,
     });
 
     // v1.5 穩定版：登入紀錄一定先寫入，不等待裝置檢查。
@@ -1461,6 +1502,7 @@ useEffect(() => {
         status: isNewOrUntrusted ? "new" : "trusted",
         label: isNewOrUntrusted ? "⚠ 新裝置待觀察" : "🛡 目前裝置已信任",
         deviceShort: deviceSecurity?.deviceInfo?.deviceShort || immediateDeviceInfo.deviceShort,
+        deviceId: deviceSecurity?.deviceInfo?.deviceId || immediateDeviceInfo.deviceId,
       });
     }).catch((error) => {
       // 背景裝置檢查失敗不影響登入紀錄；registerAccountDevice 內部會盡量補記失敗紀錄。
@@ -1469,6 +1511,7 @@ useEffect(() => {
         status: "unknown",
         label: "裝置狀態未確認",
         deviceShort: immediateDeviceInfo.deviceShort,
+        deviceId: immediateDeviceInfo.deviceId,
       });
     });
 
