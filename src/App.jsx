@@ -44,7 +44,7 @@ import {
 // ==========================================
 // ★ 系統核心版本號 (終極動態快取版)
 // ==========================================
-const CURRENT_APP_VERSION = "3.1.3"; 
+const CURRENT_APP_VERSION = "3.1.4"; 
 
 const isNewerVersion = (local, remote) => {
   if (!remote) return true;
@@ -242,6 +242,66 @@ const normalizeSecurityConfig = (config = {}) => ({
   exemptRoles: config.exemptRoles || DEFAULT_SECURITY_CONFIG.exemptRoles,
 });
 
+
+const getClientDeviceInfo = () => {
+  const ua = typeof navigator !== "undefined" ? navigator.userAgent : "";
+  const lowerUa = ua.toLowerCase();
+
+  let device = "PC";
+  if (lowerUa.includes("android")) device = "Android";
+  else if (lowerUa.includes("iphone") || lowerUa.includes("ipad")) device = "iOS";
+  else if (lowerUa.includes("mobile")) device = "Mobile";
+
+  let browser = "Browser";
+  if (lowerUa.includes("edg/")) browser = "Edge";
+  else if (lowerUa.includes("chrome/") && !lowerUa.includes("edg/")) browser = "Chrome";
+  else if (lowerUa.includes("safari/") && !lowerUa.includes("chrome/")) browser = "Safari";
+  else if (lowerUa.includes("firefox/")) browser = "Firefox";
+
+  let os = "Unknown";
+  if (lowerUa.includes("mac os")) os = "macOS";
+  else if (lowerUa.includes("windows")) os = "Windows";
+  else if (lowerUa.includes("iphone") || lowerUa.includes("ipad")) os = "iOS";
+  else if (lowerUa.includes("android")) os = "Android";
+
+  let deviceId = "";
+  try {
+    const storageKey = "cyj_device_id_v1";
+    deviceId = localStorage.getItem(storageKey);
+    if (!deviceId) {
+      const randomPart = typeof crypto !== "undefined" && crypto.randomUUID
+        ? crypto.randomUUID()
+        : `${Date.now()}_${Math.random().toString(36).slice(2, 12)}`;
+      deviceId = `dev_${randomPart}`;
+      localStorage.setItem(storageKey, deviceId);
+    }
+  } catch (error) {
+    deviceId = `dev_session_${Date.now()}_${Math.random().toString(36).slice(2, 10)}`;
+  }
+
+  return {
+    device,
+    browser,
+    os,
+    deviceId,
+    deviceShort: String(deviceId || "").replace(/^dev_/, "").slice(-8),
+    userAgent: ua,
+  };
+};
+
+const sanitizeSecurityKey = (value = "") => {
+  return String(value || "")
+    .trim()
+    .replace(/[\/.#$\[\]\s]+/g, "_")
+    .slice(0, 120) || "unknown";
+};
+
+const SECURITY_DEVICE_CONFIG = {
+  autoTrustLimit: 2,
+  alertRoles: ["director", "trainer", "manager", "store"],
+};
+
+
 export default function App() {
   const [user, setUser] = useState(null);
   const [userRole, setUserRole] = useState(null);
@@ -257,6 +317,17 @@ export default function App() {
   const [hasSelectedBrand, setHasSelectedBrand] = useState(false);
   const [dailyLoginCount, setDailyLoginCount] = useState(0);
   const [yesterdayLoginCount, setYesterdayLoginCount] = useState(0);
+  const [deviceAlertSummary, setDeviceAlertSummary] = useState({
+    pendingNewDeviceCount: 0,
+    latestUserName: "",
+    latestDevice: "",
+    latestAtText: "",
+  });
+  const [currentDeviceTrust, setCurrentDeviceTrust] = useState({
+    status: "checking",
+    label: "裝置狀態確認中",
+    deviceShort: "",
+  });
 
   const [isUpdating, setIsUpdating] = useState(false);
   const [isOnline, setIsOnline] = useState(navigator.onLine);
@@ -304,6 +375,60 @@ export default function App() {
   const getDocPath = useCallback((docName) => {
     return currentBrand.pathType === 'legacy' ? doc(db, "artifacts", appId, "public", "data", "global_settings", docName) : doc(db, "brands", currentBrand.id, "settings", docName);
   }, [currentBrand]);
+
+  const getSecuritySummaryDocPath = useCallback((docName = "device_alerts") => {
+    return currentBrand.pathType === "legacy"
+      ? doc(db, "artifacts", appId, "public", "data", "security_summary", docName)
+      : doc(db, "brands", currentBrand.id, "security_summary", docName);
+  }, [currentBrand]);
+
+  const refreshDeviceAlertSummary = useCallback(async () => {
+    if (!user || !["director", "master"].includes(userRole)) {
+      setDeviceAlertSummary({
+        pendingNewDeviceCount: 0,
+        latestUserName: "",
+        latestDevice: "",
+        latestAtText: "",
+      });
+      return;
+    }
+
+    try {
+      const snap = await getDoc(getSecuritySummaryDocPath("device_alerts"));
+      if (snap.exists()) {
+        setDeviceAlertSummary({
+          pendingNewDeviceCount: Number(snap.data()?.pendingNewDeviceCount || 0),
+          latestUserName: snap.data()?.latestUserName || "",
+          latestDevice: snap.data()?.latestDevice || "",
+          latestAtText: snap.data()?.latestAtText || snap.data()?.updatedAtText || "",
+        });
+      } else {
+        setDeviceAlertSummary({
+          pendingNewDeviceCount: 0,
+          latestUserName: "",
+          latestDevice: "",
+          latestAtText: "",
+        });
+      }
+    } catch (error) {
+      console.warn("讀取新裝置提醒摘要失敗:", error);
+    }
+  }, [user, userRole, getSecuritySummaryDocPath]);
+
+  useEffect(() => {
+    refreshDeviceAlertSummary();
+  }, [refreshDeviceAlertSummary, activeView, currentBrandId]);
+
+  const goToDeviceManagement = useCallback(() => {
+    setActiveView("logs");
+    setTimeout(() => {
+      try {
+        window.dispatchEvent(new CustomEvent("cyj_open_device_management"));
+      } catch (error) {
+        console.warn("open device management event failed", error);
+      }
+    }, 120);
+  }, []);
 
   const [rawData, setRawData] = useState([]); 
   const [annualAggregatedData, setAnnualAggregatedData] = useState([]); 
@@ -382,15 +507,15 @@ export default function App() {
 
   const logActivity = useCallback(async (role, user, action, details) => {
     if (!isOnline) return; 
-    let device = "PC";
-    if (typeof navigator !== "undefined") {
-      const ua = navigator.userAgent.toLowerCase();
-      if (ua.includes("android")) device = "Android";
-      else if (ua.includes("iphone")||ua.includes("ipad")) device = "iOS";
-      else if (ua.includes("mobile")) device = "Mobile";
-    }
 
     const detailPayload = details && typeof details === "object" && !Array.isArray(details) ? details : { message: details || "" };
+    const clientDeviceInfo = getClientDeviceInfo();
+
+    const device = detailPayload?.deviceInfo?.device || clientDeviceInfo.device;
+    const browser = detailPayload?.deviceInfo?.browser || clientDeviceInfo.browser;
+    const os = detailPayload?.deviceInfo?.os || clientDeviceInfo.os;
+    const deviceId = detailPayload?.deviceInfo?.deviceId || clientDeviceInfo.deviceId;
+    const deviceShort = detailPayload?.deviceInfo?.deviceShort || clientDeviceInfo.deviceShort;
     const activityType = detailPayload.activityType || detailPayload.type || (
       action === "登入系統" ? "auth.login" :
       action === "登出系統" ? "auth.logout" :
@@ -400,7 +525,7 @@ export default function App() {
     );
 
     try { 
-      await addDoc(getCollectionPath("system_logs"), {
+      const logRef = await addDoc(getCollectionPath("system_logs"), {
         timestamp: serverTimestamp(),
         createdAtText: new Date().toISOString(),
         role,
@@ -410,6 +535,13 @@ export default function App() {
         activityType,
         view: detailPayload.view || activeView || "",
         device,
+        browser,
+        os,
+        deviceId,
+        deviceShort,
+        isNewDevice: Boolean(detailPayload.isNewDevice),
+        deviceTrusted: detailPayload.deviceTrusted ?? null,
+        riskTags: detailPayload.riskTags || [],
         brand: currentBrandId,
         brandLabel: currentBrand?.label || currentBrandId,
       }); 
@@ -417,8 +549,223 @@ export default function App() {
         const todayStr = formatLocalYYYYMMDD(new Date());
         await setDoc(doc(getCollectionPath("system_stats"), todayStr), { count: increment(1), updatedAt: serverTimestamp() }, { merge: true });
       }
-    } catch (e) { console.error("Failed to log activity", e); }
+      return logRef;
+    } catch (e) {
+      console.error("Failed to log activity", e);
+      return null;
+    }
   }, [getCollectionPath, currentBrandId, currentBrand, activeView, isOnline]);
+
+  const logDeviceCheckResult = useCallback(async (roleId, userName, deviceSecurity = {}, fallbackDeviceInfo = null) => {
+    if (!isOnline) return;
+
+    const info = deviceSecurity.deviceInfo || fallbackDeviceInfo || getClientDeviceInfo();
+    const isFailed = deviceSecurity.deviceStatus === "check_failed" || deviceSecurity.error;
+    const activityType = isFailed ? "auth.device_check_failed" : "auth.device_check";
+    const message = isFailed
+      ? "裝置檢查失敗，但登入紀錄已保留"
+      : deviceSecurity.isNewDevice
+        ? (deviceSecurity.autoTrusted ? "初始信任裝置已建立" : "偵測到新裝置登入")
+        : "已辨識信任裝置";
+
+    const detailPayload = {
+      activityType,
+      message,
+      deviceInfo: info,
+      isNewDevice: Boolean(deviceSecurity.isNewDevice),
+      deviceTrusted: deviceSecurity.deviceTrusted ?? null,
+      autoTrusted: Boolean(deviceSecurity.autoTrusted),
+      alertCreated: Boolean(deviceSecurity.alertCreated),
+      riskTags: deviceSecurity.riskTags || [],
+      deviceStatus: deviceSecurity.deviceStatus || (isFailed ? "check_failed" : "checked"),
+      deviceShort: info?.deviceShort,
+      trustedDeviceCountBefore: deviceSecurity.trustedDeviceCountBefore,
+      ...(deviceSecurity.error ? { error: deviceSecurity.error } : {}),
+    };
+
+    try {
+      await addDoc(getCollectionPath("system_logs"), {
+        timestamp: serverTimestamp(),
+        createdAtText: new Date().toISOString(),
+        role: roleId,
+        user: userName,
+        action: "裝置安全檢查",
+        details: detailPayload,
+        activityType,
+        view: activeView || "",
+        device: info.device,
+        browser: info.browser,
+        os: info.os,
+        deviceId: info.deviceId,
+        deviceShort: info.deviceShort,
+        isNewDevice: Boolean(deviceSecurity.isNewDevice),
+        deviceTrusted: deviceSecurity.deviceTrusted ?? null,
+        riskTags: deviceSecurity.riskTags || [],
+        brand: currentBrandId,
+        brandLabel: currentBrand?.label || currentBrandId,
+      });
+    } catch (error) {
+      console.warn("裝置安全檢查紀錄寫入失敗:", error);
+    }
+  }, [isOnline, getCollectionPath, currentBrandId, currentBrand, activeView]);
+
+
+  const registerAccountDevice = useCallback(async (roleId, userInfo = {}) => {
+    if (!isOnline || !roleId) {
+      return { deviceInfo: getClientDeviceInfo(), isNewDevice: false, riskTags: [] };
+    }
+
+    const deviceInfo = getClientDeviceInfo();
+    const accountId = sanitizeSecurityKey(userInfo?.id || userInfo?.accountId || userInfo?.name || roleId);
+    const userName = userInfo?.name || (roleId === "director" ? "高階主管" : (roleId === "trainer" ? "教專" : "未知"));
+    const accountKey = sanitizeSecurityKey(`${currentBrandId}_${roleId}_${accountId}`);
+    const nowText = new Date().toISOString();
+
+    try {
+      const deviceProfileRef = doc(getCollectionPath("account_devices"), accountKey);
+      const profileSnap = await getDoc(deviceProfileRef);
+      const profileData = profileSnap.exists() ? profileSnap.data() : {};
+      const devices = profileData.devices || {};
+      const existingDevice = devices[deviceInfo.deviceId];
+
+      if (existingDevice) {
+        const updatedDevice = {
+          ...existingDevice,
+          device: deviceInfo.device,
+          browser: deviceInfo.browser,
+          os: deviceInfo.os,
+          deviceShort: deviceInfo.deviceShort,
+          lastSeenAt: serverTimestamp(),
+          lastSeenAtText: nowText,
+          loginCount: Number(existingDevice.loginCount || 0) + 1,
+        };
+
+        await setDoc(deviceProfileRef, {
+          brandId: currentBrandId,
+          brandLabel: currentBrand?.label || currentBrandId,
+          role: roleId,
+          accountId,
+          userName,
+          updatedAt: serverTimestamp(),
+          updatedAtText: nowText,
+          devices: {
+            ...devices,
+            [deviceInfo.deviceId]: updatedDevice,
+          },
+        }, { merge: true });
+
+        const result = {
+          deviceInfo,
+          isNewDevice: false,
+          deviceTrusted: existingDevice.trusted !== false,
+          autoTrusted: false,
+          alertCreated: false,
+          riskTags: [],
+          deviceStatus: existingDevice.status || (existingDevice.trusted === false ? "new" : "trusted"),
+        };
+        logDeviceCheckResult(roleId, userName, result, deviceInfo);
+        return result;
+      }
+
+      const trustedDeviceCount = Object.values(devices || {}).filter((item) => item?.trusted !== false && item?.status !== "new").length;
+      const autoTrusted = trustedDeviceCount < SECURITY_DEVICE_CONFIG.autoTrustLimit;
+      const shouldAlert = !autoTrusted && SECURITY_DEVICE_CONFIG.alertRoles.includes(roleId);
+      const riskTags = autoTrusted ? ["初始信任裝置"] : ["新裝置"];
+
+      const newDeviceRecord = {
+        deviceId: deviceInfo.deviceId,
+        deviceShort: deviceInfo.deviceShort,
+        device: deviceInfo.device,
+        browser: deviceInfo.browser,
+        os: deviceInfo.os,
+        trusted: autoTrusted,
+        status: autoTrusted ? "trusted" : "new",
+        source: autoTrusted ? "auto_trust_first_two_devices" : "new_device_detected",
+        firstSeenAt: serverTimestamp(),
+        firstSeenAtText: nowText,
+        lastSeenAt: serverTimestamp(),
+        lastSeenAtText: nowText,
+        loginCount: 1,
+      };
+
+      await setDoc(deviceProfileRef, {
+        brandId: currentBrandId,
+        brandLabel: currentBrand?.label || currentBrandId,
+        role: roleId,
+        accountId,
+        userName,
+        updatedAt: serverTimestamp(),
+        updatedAtText: nowText,
+        devices: {
+          ...devices,
+          [deviceInfo.deviceId]: newDeviceRecord,
+        },
+      }, { merge: true });
+
+      if (shouldAlert) {
+        await addDoc(getCollectionPath("security_alerts"), {
+          type: "new_device_login",
+          severity: roleId === "director" ? "high" : "medium",
+          status: "unread",
+          brandId: currentBrandId,
+          brandLabel: currentBrand?.label || currentBrandId,
+          role: roleId,
+          accountId,
+          userName,
+          deviceId: deviceInfo.deviceId,
+          deviceShort: deviceInfo.deviceShort,
+          device: deviceInfo.device,
+          browser: deviceInfo.browser,
+          os: deviceInfo.os,
+          trustedDeviceCountBefore: trustedDeviceCount,
+          message: `${userName} 出現新裝置登入`,
+          createdAt: serverTimestamp(),
+          createdAtText: nowText,
+        });
+
+        await setDoc(getSecuritySummaryDocPath("device_alerts"), {
+          pendingNewDeviceCount: increment(1),
+          latestUserName: userName,
+          latestRole: roleId,
+          latestDevice: `${deviceInfo.device} / ${deviceInfo.browser || "-"}`,
+          latestDeviceShort: deviceInfo.deviceShort,
+          latestAt: serverTimestamp(),
+          latestAtText: nowText,
+          updatedAt: serverTimestamp(),
+          updatedAtText: nowText,
+          brandId: currentBrandId,
+          brandLabel: currentBrand?.label || currentBrandId,
+        }, { merge: true });
+      }
+
+      const result = {
+        deviceInfo,
+        isNewDevice: true,
+        deviceTrusted: autoTrusted,
+        autoTrusted,
+        alertCreated: shouldAlert,
+        trustedDeviceCountBefore: trustedDeviceCount,
+        riskTags,
+        deviceStatus: autoTrusted ? "trusted" : "new",
+      };
+      logDeviceCheckResult(roleId, userName, result, deviceInfo);
+      return result;
+    } catch (error) {
+      console.warn("registerAccountDevice failed:", error);
+      const result = {
+        deviceInfo,
+        isNewDevice: false,
+        deviceTrusted: null,
+        autoTrusted: false,
+        alertCreated: false,
+        riskTags: ["裝置檢查失敗"],
+        deviceStatus: "check_failed",
+        error: error.message,
+      };
+      logDeviceCheckResult(roleId, userName, result, deviceInfo);
+      return result;
+    }
+  }, [isOnline, currentBrandId, currentBrand, getCollectionPath, getSecuritySummaryDocPath, logDeviceCheckResult]);
 
   useEffect(() => {
     if (!userRole || !currentUser || !activeView) return;
@@ -456,6 +803,11 @@ export default function App() {
     localStorage.removeItem("cyj_input_draft"); localStorage.removeItem("cyj_input_draft_v2"); localStorage.removeItem("cyj_input_draft_v3"); 
     localStorage.removeItem("cyj_therapist_draft"); localStorage.removeItem("cyj_therapist_draft_v2");
     
+    setCurrentDeviceTrust({
+      status: "checking",
+      label: "裝置狀態確認中",
+      deviceShort: "",
+    });
     setUserRole(null); setCurrentUser(null); setActiveView("dashboard");
   }, [currentUser, userRole, logActivity, securityConfig]);
 
@@ -1065,7 +1417,7 @@ useEffect(() => {
   }, [user, currentBrand, selectedYear, selectedMonth, getCollectionPath, getStableReadMeta, isLowPowerMode]);
 
 
- const handleLogin = useCallback((roleId, userInfo = null) => {
+ const handleLogin = useCallback(async (roleId, userInfo = null) => {
     let finalUser = userInfo;
     
     if (roleId === 'therapist' && userInfo?.name) { 
@@ -1084,11 +1436,42 @@ useEffect(() => {
     if (finalUser) setCurrentUser(finalUser);
     
     const userName = finalUser?.name || (roleId === "director" ? "高階主管" : (roleId === "trainer" ? "教專" : "未知"));
-    logActivity(roleId, userName, "登入系統", finalUser?.passwordUpdatedOnFirstLogin ? {
+    const immediateDeviceInfo = getClientDeviceInfo();
+    setCurrentDeviceTrust({
+      status: "checking",
+      label: "裝置狀態確認中",
+      deviceShort: immediateDeviceInfo.deviceShort,
+    });
+
+    // v1.5 穩定版：登入紀錄一定先寫入，不等待裝置檢查。
+    // 新裝置檢查只做背景處理，不能影響登入監控的「登入系統」紀錄。
+    logActivity(roleId, userName, "登入系統", {
       activityType: "auth.login",
-      message: "登入成功，已完成首次安全更新",
-      passwordUpdatedOnFirstLogin: true,
-    } : "登入成功"); 
+      message: finalUser?.passwordUpdatedOnFirstLogin ? "登入成功，已完成首次安全更新" : "登入成功",
+      passwordUpdatedOnFirstLogin: Boolean(finalUser?.passwordUpdatedOnFirstLogin),
+      deviceInfo: immediateDeviceInfo,
+      deviceShort: immediateDeviceInfo.deviceShort,
+      riskTags: [],
+      deviceStatus: "login_recorded",
+    });
+
+    registerAccountDevice(roleId, finalUser || { name: userName }).then((deviceSecurity) => {
+      const isNewOrUntrusted = Boolean(deviceSecurity?.isNewDevice && deviceSecurity?.deviceTrusted === false);
+      setCurrentDeviceTrust({
+        status: isNewOrUntrusted ? "new" : "trusted",
+        label: isNewOrUntrusted ? "⚠ 新裝置待觀察" : "🛡 目前裝置已信任",
+        deviceShort: deviceSecurity?.deviceInfo?.deviceShort || immediateDeviceInfo.deviceShort,
+      });
+    }).catch((error) => {
+      // 背景裝置檢查失敗不影響登入紀錄；registerAccountDevice 內部會盡量補記失敗紀錄。
+      console.warn("背景裝置檢查失敗，登入紀錄已保留:", error);
+      setCurrentDeviceTrust({
+        status: "unknown",
+        label: "裝置狀態未確認",
+        deviceShort: immediateDeviceInfo.deviceShort,
+      });
+    });
+
     if (finalUser?.passwordUpdatedOnFirstLogin) {
       logActivity(roleId, userName, "首次安全更新", {
         activityType: "auth.password_update",
@@ -1096,7 +1479,7 @@ useEffect(() => {
       });
     }
     setActiveView("dashboard");
-  }, [therapists, logActivity]);
+  }, [therapists, logActivity, registerAccountDevice]);
 
   const showToast = useCallback((message, type = "info") => setToast({ message, type }), []);
 
@@ -1466,6 +1849,45 @@ if (isUpdating) {
             </div>
             <div className="flex items-center gap-3 md:gap-5 flex-1 justify-end">
               <div className="relative hidden md:block w-56 lg:w-72 group"><Search className="absolute left-3 top-2.5 text-stone-400 group-focus-within:text-stone-600 transition-colors" size={18} /><input type="text" placeholder="搜尋店名..." value={globalSearchTerm} onChange={(e) => setGlobalSearchTerm(e.target.value)} className="w-full pl-10 pr-4 py-2 bg-white border border-stone-200 rounded-full text-sm focus:ring-4 focus:ring-stone-100 focus:border-stone-300 transition-all outline-none shadow-sm text-stone-600 placeholder-stone-300" />{globalSearchTerm && (<div className="absolute top-full left-0 right-0 mt-2 bg-white border border-stone-200 rounded-2xl shadow-xl z-50 max-h-60 overflow-y-auto animate-in fade-in slide-in-from-top-2">{allStoreNames.filter((s) => s.includes(globalSearchTerm)).length > 0 ? (allStoreNames.filter((s) => s.includes(globalSearchTerm)).map((s) => (<button key={s} onClick={() => { navigateToStore(s); setGlobalSearchTerm(""); }} className="w-full text-left px-4 py-3 hover:bg-stone-50 text-sm font-medium text-stone-600 flex items-center gap-2 transition-colors"><Store size={16} className="text-stone-400" /> {s}</button>))) : (<div className="px-4 py-3 text-xs text-stone-400 text-center">無相符店家</div>)}</div>)}</div>
+              {currentDeviceTrust.deviceShort && (
+                <div
+                  className={`hidden lg:flex items-center gap-2 rounded-full border px-3 py-2 text-xs font-black shadow-sm ${
+                    currentDeviceTrust.status === "new"
+                      ? "border-rose-100 bg-rose-50 text-rose-600"
+                      : currentDeviceTrust.status === "trusted"
+                        ? "border-emerald-100 bg-emerald-50 text-emerald-700"
+                        : "border-stone-100 bg-stone-50 text-stone-500"
+                  }`}
+                  title={currentDeviceTrust.deviceShort ? `裝置碼：${currentDeviceTrust.deviceShort}` : "目前裝置狀態"}
+                >
+                  <span>{currentDeviceTrust.label}</span>
+                </div>
+              )}
+              {["director", "master"].includes(userRole) && deviceAlertSummary.pendingNewDeviceCount > 0 && (
+                <button
+                  type="button"
+                  onClick={goToDeviceManagement}
+                  className="hidden md:flex items-center gap-2 rounded-full border border-rose-100 bg-rose-50 px-3 py-2 text-xs font-black text-rose-600 shadow-sm hover:bg-rose-100 active:scale-95 transition-all"
+                  title={deviceAlertSummary.latestUserName ? `最新：${deviceAlertSummary.latestUserName}｜${deviceAlertSummary.latestDevice}` : "有新裝置待確認"}
+                >
+                  <ShieldAlert size={16} />
+                  新裝置 {deviceAlertSummary.pendingNewDeviceCount}
+                </button>
+              )}
+              {currentDeviceTrust.deviceShort && (
+                <div
+                  className={`flex lg:hidden items-center justify-center rounded-full border px-2.5 py-1.5 text-[11px] font-black shadow-sm whitespace-nowrap ${
+                    currentDeviceTrust.status === "new"
+                      ? "border-rose-100 bg-rose-50 text-rose-600"
+                      : currentDeviceTrust.status === "trusted"
+                        ? "border-emerald-100 bg-emerald-50 text-emerald-700"
+                        : "border-stone-100 bg-stone-50 text-stone-500"
+                  }`}
+                  title={currentDeviceTrust.deviceShort ? `裝置碼：${currentDeviceTrust.deviceShort}` : "目前裝置狀態"}
+                >
+                  {currentDeviceTrust.status === "new" ? "⚠ 新裝置" : currentDeviceTrust.status === "trusted" ? "🛡 已信任" : "裝置確認中"}
+                </div>
+              )}
               <div className="flex items-center gap-2 bg-stone-100 px-2 py-1 md:px-3 md:py-1.5 rounded-lg border border-stone-200">
                 <Filter size={16} className="text-stone-400 hidden sm:block" />
                 <select value={selectedYear} onChange={(e) => setSelectedYear(e.target.value)} className="bg-transparent text-sm font-bold text-stone-600 outline-none border-r border-stone-200 pr-2 mr-2 cursor-pointer hover:text-stone-800 transition-colors">{[2025, 2026, 2027].map((y) => (<option key={y} value={y}>{y}</option>))}</select>

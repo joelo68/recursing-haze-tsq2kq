@@ -1,8 +1,8 @@
 // src/components/SystemMonitor.jsx
-import React, { useState, useMemo, useContext } from "react";
+import React, { useState, useMemo, useContext, useEffect } from "react";
 import {
   Smartphone, Monitor, ChevronLeft, ChevronRight, RefreshCw,
-  Calendar, Search, RotateCcw, ShieldAlert
+  Calendar, Search, RotateCcw, ShieldAlert, ShieldCheck, Laptop
 } from "lucide-react";
 import { 
   query, limit, where, Timestamp, getDocs, orderBy 
@@ -27,6 +27,28 @@ const SystemMonitor = () => {
   const [keyword, setKeyword] = useState("");
   const [expandedLogId, setExpandedLogId] = useState(null);
   const [lastQueryInfo, setLastQueryInfo] = useState(null);
+  const [monitorMode, setMonitorMode] = useState("logs");
+  const [deviceProfiles, setDeviceProfiles] = useState([]);
+  const [deviceLoading, setDeviceLoading] = useState(false);
+  const [deviceHasLoaded, setDeviceHasLoaded] = useState(false);
+  const [deviceKeyword, setDeviceKeyword] = useState("");
+  const [expandedDeviceId, setExpandedDeviceId] = useState(null);
+  const [deviceDateRange, setDeviceDateRange] = useState(() => {
+    const today = formatLocalYYYYMMDD(new Date());
+    return {
+      start: today,
+      end: today,
+    };
+  });
+  const [deviceLimitCount, setDeviceLimitCount] = useState(50);
+
+  useEffect(() => {
+    const handler = () => {
+      setMonitorMode("devices");
+    };
+    window.addEventListener("cyj_open_device_management", handler);
+    return () => window.removeEventListener("cyj_open_device_management", handler);
+  }, []);
 
   const todayStr = formatLocalYYYYMMDD(new Date());
 
@@ -44,6 +66,9 @@ const SystemMonitor = () => {
     const type = String(log.activityType || log.details?.activityType || "");
     const action = String(log.action || "");
 
+    if (type === "auth.device_check" || type === "auth.device_check_failed" || action.includes("裝置安全檢查")) {
+      return { key: "auth", label: "裝置檢查", badge: "bg-violet-50 text-violet-700 border border-violet-100" };
+    }
     if (type.startsWith("auth.") || action.includes("登入") || action.includes("登出")) {
       return { key: "auth", label: action.includes("登出") ? "登出" : "登入", badge: "bg-emerald-50 text-emerald-700 border border-emerald-100" };
     }
@@ -111,13 +136,117 @@ const SystemMonitor = () => {
     }
   };
 
+
+  const fetchDeviceProfiles = async () => {
+    setDeviceLoading(true);
+    setExpandedDeviceId(null);
+    try {
+      const q = query(getCollectionPath("account_devices"), limit(Number(deviceLimitCount) || 50));
+      const snapshot = await getDocs(q);
+      const startTime = new Date(`${deviceDateRange.start}T00:00:00`).getTime();
+      const endTime = new Date(`${deviceDateRange.end}T23:59:59`).getTime();
+
+      const profiles = snapshot.docs.map((docSnap) => {
+        const data = docSnap.data() || {};
+        const rawDeviceList = Object.values(data.devices || {}).map((device) => ({
+          ...device,
+          deviceShort: device.deviceShort || String(device.deviceId || "").replace(/^dev_/, "").slice(-8),
+        }));
+
+        const deviceList = rawDeviceList.filter((device) => {
+          const timeText = device.lastSeenAtText || device.firstSeenAtText || "";
+          const time = timeText ? new Date(timeText).getTime() : 0;
+          if (!time || Number.isNaN(time)) return true;
+          return time >= startTime && time <= endTime;
+        });
+
+        const trustedCount = deviceList.filter((d) => d.trusted !== false && d.status !== "new").length;
+        const newCount = deviceList.filter((d) => d.trusted === false || d.status === "new").length;
+        const lastSeenText = deviceList
+          .map((d) => d.lastSeenAtText || d.firstSeenAtText || "")
+          .filter(Boolean)
+          .sort()
+          .pop() || "";
+
+        return {
+          id: docSnap.id,
+          ...data,
+          deviceList: deviceList.sort((a, b) => String(b.lastSeenAtText || b.firstSeenAtText || "").localeCompare(String(a.lastSeenAtText || a.firstSeenAtText || ""))),
+          trustedCount,
+          newCount,
+          lastSeenText,
+        };
+      }).filter((profile) => (profile.deviceList || []).length > 0);
+
+      profiles.sort((a, b) => String(b.lastSeenText || "").localeCompare(String(a.lastSeenText || "")));
+      setDeviceProfiles(profiles);
+    } catch (error) {
+      console.error("Fetch account devices error:", error);
+      alert("裝置資料讀取失敗：" + error.message);
+    } finally {
+      setDeviceHasLoaded(true);
+      setDeviceLoading(false);
+    }
+  };
+
+  const filteredDeviceProfiles = useMemo(() => {
+    const key = deviceKeyword.trim().toLowerCase();
+    if (!key) return deviceProfiles;
+
+    return deviceProfiles.filter((profile) => {
+      const text = [
+        profile.userName,
+        profile.accountId,
+        profile.role,
+        profile.brandLabel,
+        profile.id,
+        ...(profile.deviceList || []).flatMap((device) => [
+          device.device,
+          device.browser,
+          device.os,
+          device.deviceShort,
+          device.status,
+          device.source,
+        ]),
+      ].join(" ").toLowerCase();
+      return text.includes(key);
+    });
+  }, [deviceProfiles, deviceKeyword]);
+
+  const deviceSummary = useMemo(() => {
+    const totalDevices = deviceProfiles.reduce((sum, item) => sum + (item.deviceList?.length || 0), 0);
+    const newDevices = deviceProfiles.reduce((sum, item) => sum + (item.newCount || 0), 0);
+    const pcDevices = deviceProfiles.reduce((sum, item) => sum + (item.deviceList || []).filter((d) => d.device === "PC").length, 0);
+    return {
+      accounts: deviceProfiles.length,
+      totalDevices,
+      newDevices,
+      mobileDevices: totalDevices - pcDevices,
+    };
+  }, [deviceProfiles]);
+
+  const formatDeviceTime = (value) => {
+    if (!value) return "-";
+    try {
+      return new Date(value).toLocaleString("zh-TW", {
+        month: "2-digit",
+        day: "2-digit",
+        hour: "2-digit",
+        minute: "2-digit",
+        hour12: false,
+      });
+    } catch {
+      return value;
+    }
+  };
+
   const filteredLogs = useMemo(() => {
     const key = keyword.trim().toLowerCase();
     return logs.filter((log) => {
       const meta = getActivityMeta(log);
       if (activityFilter !== "all" && meta.key !== activityFilter) return false;
       if (!key) return true;
-      const text = [log.user, log.role, log.action, log.device, meta.label, describeLog(log), JSON.stringify(log.details || {})].join(" ").toLowerCase();
+      const text = [log.user, log.role, log.action, log.device, log.browser, log.os, log.deviceShort, (log.riskTags || []).join(" "), meta.label, describeLog(log), JSON.stringify(log.details || {})].join(" ").toLowerCase();
       return text.includes(key);
     });
   }, [logs, activityFilter, keyword]);
@@ -186,6 +315,35 @@ const SystemMonitor = () => {
       </div>
     );
 
+  const getSecurityBadges = (log = {}) => {
+    const details = log.details || {};
+    const tags = Array.isArray(log.riskTags) && log.riskTags.length > 0
+      ? log.riskTags
+      : (Array.isArray(details.riskTags) ? details.riskTags : []);
+
+    const badges = [];
+
+    if (log.isNewDevice || details.isNewDevice || tags.includes("新裝置")) {
+      badges.push({
+        key: "new-device",
+        label: "新裝置",
+        className: "bg-rose-50 text-rose-600 border border-rose-100",
+        icon: <ShieldAlert size={12} />,
+      });
+    }
+
+    if (tags.includes("初始信任裝置") || details.autoTrusted) {
+      badges.push({
+        key: "trusted-device",
+        label: "初始信任",
+        className: "bg-emerald-50 text-emerald-600 border border-emerald-100",
+        icon: <ShieldCheck size={12} />,
+      });
+    }
+
+    return badges;
+  };
+
   const handleExecuteQuery = () => {
     const nextRange = { ...uiDateRange };
     setCurrentPage(1); 
@@ -212,10 +370,16 @@ const SystemMonitor = () => {
         <Card className="!overflow-visible z-30 relative w-full max-w-full min-w-0">
           <div className="flex flex-col xl:flex-row justify-between items-start xl:items-center mb-6 gap-4 w-full max-w-full min-w-0">
             <div>
-              <h3 className="text-lg font-bold text-stone-700">系統操作日誌 ({currentBrand.label})</h3>
-              <p className="text-xs text-stone-400">追蹤系統內的所有操作紀錄</p>
+              <h3 className="text-lg font-bold text-stone-700">{monitorMode === "logs" ? "系統操作日誌" : "裝置登入管理"} ({currentBrand.label})</h3>
+              <p className="text-xs text-stone-400">{monitorMode === "logs" ? "追蹤系統內的所有操作紀錄" : "查看帳號已記錄的常用裝置與新裝置狀態"}</p>
             </div>
             
+            <div className="flex items-center gap-2 rounded-2xl border border-stone-100 bg-white p-1 shadow-sm">
+              <button type="button" onClick={() => setMonitorMode("logs")} className={`px-4 py-2 rounded-xl text-xs font-black transition-all ${monitorMode === "logs" ? "bg-stone-800 text-white shadow-sm" : "text-stone-500 hover:bg-stone-50"}`}>操作日誌</button>
+              <button type="button" onClick={() => setMonitorMode("devices")} className={`px-4 py-2 rounded-xl text-xs font-black transition-all ${monitorMode === "devices" ? "bg-stone-800 text-white shadow-sm" : "text-stone-500 hover:bg-stone-50"}`}>裝置管理</button>
+            </div>
+
+            {monitorMode === "logs" && (
             <div className="flex flex-col md:flex-row md:flex-wrap items-stretch md:items-center gap-2 bg-stone-50 p-2 rounded-xl border border-stone-200 relative z-50 w-full xl:w-auto max-w-full min-w-0">
               <div className="flex items-center gap-2">
                 <Calendar size={14} className="text-stone-400" />
@@ -259,10 +423,11 @@ const SystemMonitor = () => {
                 </button>
               </div>
             </div>
+            )}
           </div>
 
 
-          {hasQueried && (
+          {monitorMode === "logs" && hasQueried && (
             <div className="mb-4 grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-2.5 w-full max-w-full min-w-0">
               <div className="rounded-2xl border border-emerald-100 bg-emerald-50/55 px-4 py-3 min-w-0">
                 <div className="flex items-center justify-between gap-3 min-w-0">
@@ -291,7 +456,7 @@ const SystemMonitor = () => {
             </div>
           )}
 
-          {hasQueried && (
+          {monitorMode === "logs" && hasQueried && (
             <div className="mb-4 flex flex-col xl:flex-row gap-3 xl:items-center justify-between rounded-2xl border border-stone-100 bg-stone-50/70 p-3 w-full max-w-full min-w-0 overflow-hidden">
               <div className="flex flex-wrap gap-2 min-w-0">
                 {[
@@ -313,7 +478,8 @@ const SystemMonitor = () => {
           )}
 
           {/* ★ 畫面呈現邏輯：尚未查詢 -> 讀取中 -> 顯示表格 */}
-          {!hasQueried ? (
+          {monitorMode === "logs" && (
+            !hasQueried ? (
             <div className="flex flex-col items-center justify-center py-20 px-4 text-center bg-stone-50/50 rounded-2xl border-2 border-dashed border-stone-200">
               <ShieldAlert size={48} className="text-stone-300 mb-4" />
               <h4 className="text-stone-500 font-bold text-lg mb-2 tracking-wide">日誌查詢待命區</h4>
@@ -335,6 +501,7 @@ const SystemMonitor = () => {
                   {currentData.map((log) => {
                     const meta = getActivityMeta(log);
                     const desc = describeLog(log);
+                    const securityBadges = getSecurityBadges(log);
                     const isExpanded = expandedLogId === log.id;
                     return (
                       <div
@@ -348,6 +515,11 @@ const SystemMonitor = () => {
                               <span className="font-mono text-xs text-stone-400 whitespace-nowrap">{formatTime(log.timestamp)}</span>
                               {getDeviceIcon(log.device)}
                               {getRoleBadge(log.role)}
+                              {securityBadges.map((badge) => (
+                                <span key={badge.key} className={`inline-flex items-center gap-1 px-2 py-1 rounded-lg text-xs font-bold whitespace-nowrap ${badge.className}`}>
+                                  {badge.icon}{badge.label}
+                                </span>
+                              ))}
                             </div>
                             <p className="mt-2 font-black text-stone-700 truncate">{log.user}</p>
                           </div>
@@ -367,6 +539,8 @@ const SystemMonitor = () => {
                               <div><span className="font-black text-stone-400">來源頁面：</span>{log.details?.viewLabel || log.details?.view || log.view || "-"}</div>
                               <div><span className="font-black text-stone-400">品牌：</span>{log.brandLabel || log.brand || "-"}</div>
                               <div><span className="font-black text-stone-400">事件：</span>{log.activityType || log.details?.activityType || "-"}</div>
+                              <div><span className="font-black text-stone-400">裝置：</span>{[log.device, log.browser, log.os].filter(Boolean).join(" / ") || "-"}</div>
+                              <div><span className="font-black text-stone-400">裝置碼：</span>{log.deviceShort || log.details?.deviceShort || "-"}</div>
                             </div>
                             <pre className="whitespace-pre-wrap break-words rounded-xl bg-stone-50 border border-stone-100 p-3 text-[11px] max-h-64 overflow-auto max-w-full">{JSON.stringify(log.details || {}, null, 2)}</pre>
                           </div>
@@ -399,6 +573,7 @@ const SystemMonitor = () => {
                       {currentData.map((log) => {
                         const meta = getActivityMeta(log);
                         const desc = describeLog(log);
+                        const securityBadges = getSecurityBadges(log);
                         const isExpanded = expandedLogId === log.id;
                         return (
                           <React.Fragment key={log.id}>
@@ -410,7 +585,16 @@ const SystemMonitor = () => {
                               <td className="px-2 py-4 whitespace-nowrap overflow-hidden">
                                 <span className={`inline-flex items-center px-2 py-1 rounded-lg text-xs font-bold whitespace-nowrap max-w-full ${meta.badge}`}>{meta.label}</span>
                               </td>
-                              <td className="px-3 py-4 font-bold text-stone-700 whitespace-nowrap truncate" title={log.action}>{log.action}</td>
+                              <td className="px-3 py-4 font-bold text-stone-700 whitespace-nowrap truncate" title={log.action}>
+                                <div className="flex items-center gap-1 min-w-0">
+                                  <span className="truncate">{log.action}</span>
+                                  {securityBadges.map((badge) => (
+                                    <span key={badge.key} className={`shrink-0 inline-flex items-center gap-1 px-1.5 py-0.5 rounded-md text-[10px] font-black whitespace-nowrap ${badge.className}`}>
+                                      {badge.label}
+                                    </span>
+                                  ))}
+                                </div>
+                              </td>
                               <td className="px-3 py-4 text-stone-500 text-xs truncate" title={desc}>{desc}</td>
                             </tr>
                             {isExpanded && (
@@ -421,6 +605,8 @@ const SystemMonitor = () => {
                                       <div><span className="font-black text-stone-400">來源頁面：</span>{log.details?.viewLabel || log.details?.view || log.view || "-"}</div>
                                       <div><span className="font-black text-stone-400">品牌：</span>{log.brandLabel || log.brand || "-"}</div>
                                       <div><span className="font-black text-stone-400">事件：</span>{log.activityType || log.details?.activityType || "-"}</div>
+                                      <div><span className="font-black text-stone-400">裝置：</span>{[log.device, log.browser, log.os].filter(Boolean).join(" / ") || "-"}</div>
+                                      <div><span className="font-black text-stone-400">裝置碼：</span>{log.deviceShort || log.details?.deviceShort || "-"}</div>
                                     </div>
                                     <pre className="whitespace-pre-wrap break-words rounded-xl bg-stone-50 border border-stone-100 p-3 text-[11px] max-w-full overflow-auto">{JSON.stringify(log.details || {}, null, 2)}</pre>
                                   </div>
@@ -450,7 +636,212 @@ const SystemMonitor = () => {
                 </div>
               )}
             </>
+          )
           )}
+
+          {monitorMode === "devices" && (
+            <div className="space-y-4 w-full max-w-full min-w-0">
+              <div className="grid grid-cols-2 lg:grid-cols-4 gap-2.5">
+                <div className="rounded-2xl border border-sky-100 bg-sky-50/60 px-4 py-3">
+                  <p className="text-xs font-black text-sky-700">已記錄帳號</p>
+                  <p className="mt-1 text-2xl font-black text-sky-700">{deviceSummary.accounts}</p>
+                </div>
+                <div className="rounded-2xl border border-emerald-100 bg-emerald-50/60 px-4 py-3">
+                  <p className="text-xs font-black text-emerald-700">裝置總數</p>
+                  <p className="mt-1 text-2xl font-black text-emerald-700">{deviceSummary.totalDevices}</p>
+                </div>
+                <div className="rounded-2xl border border-rose-100 bg-rose-50/60 px-4 py-3">
+                  <p className="text-xs font-black text-rose-700">待觀察新裝置</p>
+                  <p className="mt-1 text-2xl font-black text-rose-700">{deviceSummary.newDevices}</p>
+                </div>
+                <div className="rounded-2xl border border-amber-100 bg-amber-50/60 px-4 py-3">
+                  <p className="text-xs font-black text-amber-700">行動裝置</p>
+                  <p className="mt-1 text-2xl font-black text-amber-700">{deviceSummary.mobileDevices}</p>
+                </div>
+              </div>
+
+              <div className="flex flex-col gap-3 rounded-2xl border border-stone-100 bg-stone-50/70 p-3">
+                <div className="flex items-center gap-2 text-sm font-black text-stone-600">
+                  <Laptop size={18} className="text-stone-400" />
+                  裝置信任資料直接讀取 account_devices；請先設定區間與筆數，再手動載入。
+                </div>
+
+                <div className="grid grid-cols-1 lg:grid-cols-[1fr_auto_auto_auto_auto] gap-2 items-end">
+                  <input
+                    value={deviceKeyword}
+                    onChange={(e) => setDeviceKeyword(e.target.value)}
+                    placeholder="搜尋使用者、裝置碼、瀏覽器..."
+                    className="h-10 w-full rounded-xl border border-stone-200 bg-white px-3 text-sm font-bold text-stone-600 outline-none focus:border-amber-300"
+                  />
+
+                  <div className="flex flex-col gap-1">
+                    <span className="text-[11px] font-black text-stone-400">開始</span>
+                    <div className="relative w-full lg:w-40">
+                      <SmartDatePicker
+                        selectedDate={deviceDateRange.start}
+                        onDateSelect={(val) => setDeviceDateRange((prev) => {
+                          const nextEnd = val > prev.end ? val : prev.end;
+                          return { start: val, end: nextEnd };
+                        })}
+                        maxDate={deviceDateRange.end || todayStr}
+                      />
+                    </div>
+                  </div>
+
+                  <div className="flex flex-col gap-1">
+                    <span className="text-[11px] font-black text-stone-400">結束</span>
+                    <div className="relative w-full lg:w-40">
+                      <SmartDatePicker
+                        selectedDate={deviceDateRange.end}
+                        onDateSelect={(val) => setDeviceDateRange((prev) => ({ ...prev, end: val }))}
+                        align="right"
+                        minDate={deviceDateRange.start}
+                        maxDate={todayStr}
+                      />
+                    </div>
+                  </div>
+
+                  <div className="flex flex-col gap-1">
+                    <span className="text-[11px] font-black text-stone-400">讀取筆數</span>
+                    <select
+                      value={deviceLimitCount}
+                      onChange={(e) => setDeviceLimitCount(Number(e.target.value))}
+                      className="h-10 rounded-xl border border-stone-200 bg-white px-3 text-sm font-black text-stone-600 outline-none focus:border-amber-300"
+                    >
+                      <option value={20}>20 筆</option>
+                      <option value={50}>50 筆</option>
+                      <option value={100}>100 筆</option>
+                      <option value={200}>200 筆</option>
+                    </select>
+                  </div>
+
+                  <button
+                    type="button"
+                    onClick={fetchDeviceProfiles}
+                    className="h-10 px-4 rounded-xl bg-stone-800 text-white text-sm font-black flex items-center justify-center gap-2 active:scale-95 whitespace-nowrap"
+                  >
+                    {deviceLoading ? <RefreshCw size={16} className="animate-spin" /> : <RefreshCw size={16} />}
+                    {deviceHasLoaded ? "重新載入" : "載入資料"}
+                  </button>
+                </div>
+              </div>
+
+              {!deviceHasLoaded && !deviceLoading ? (
+                <div className="flex flex-col items-center justify-center py-16 px-4 text-center bg-white rounded-2xl border-2 border-dashed border-stone-200">
+                  <Laptop size={44} className="text-stone-300 mb-4" />
+                  <h4 className="text-stone-600 font-black text-lg mb-2">裝置資料尚未載入</h4>
+                  <p className="text-stone-400 text-sm max-w-sm leading-6 mb-5">
+                    為節省 reads，切換到裝置管理時不會自動讀取 account_devices。預設只查詢今日資料；需要擴大範圍時，再調整時段與讀取筆數。
+                  </p>
+                  <button
+                    type="button"
+                    onClick={fetchDeviceProfiles}
+                    className="h-11 px-5 rounded-xl bg-stone-800 text-white text-sm font-black flex items-center justify-center gap-2 active:scale-95"
+                  >
+                    <RefreshCw size={16} />
+                    載入裝置資料
+                  </button>
+                </div>
+              ) : deviceLoading ? (
+                <div className="py-20 text-center text-stone-400 font-black">
+                  <RefreshCw className="animate-spin mx-auto mb-3" size={32} />
+                  裝置資料讀取中...
+                </div>
+              ) : (
+                <div className="space-y-3">
+                  {filteredDeviceProfiles.map((profile) => {
+                    const isExpanded = expandedDeviceId === profile.id;
+                    return (
+                      <div key={profile.id} className="rounded-2xl border border-stone-100 bg-white shadow-sm overflow-hidden">
+                        <button
+                          type="button"
+                          onClick={() => setExpandedDeviceId(isExpanded ? null : profile.id)}
+                          className="w-full p-4 text-left hover:bg-stone-50/70 transition-colors"
+                        >
+                          <div className="flex flex-col xl:flex-row xl:items-center justify-between gap-3">
+                            <div className="min-w-0">
+                              <div className="flex items-center gap-2 flex-wrap">
+                                {getRoleBadge(profile.role)}
+                                <span className="font-black text-stone-800">{profile.userName || profile.accountId || profile.id}</span>
+                                {profile.newCount > 0 && (
+                                  <span className="inline-flex items-center gap-1 px-2 py-1 rounded-lg bg-rose-50 text-rose-600 border border-rose-100 text-xs font-black">
+                                    <ShieldAlert size={12} /> {profile.newCount} 台新裝置
+                                  </span>
+                                )}
+                              </div>
+                              <p className="mt-1 text-xs font-bold text-stone-400 truncate">帳號識別：{profile.accountId || profile.id}</p>
+                            </div>
+                            <div className="grid grid-cols-3 gap-2 text-center shrink-0">
+                              <div className="rounded-xl bg-stone-50 px-3 py-2">
+                                <p className="text-[11px] font-black text-stone-400">裝置</p>
+                                <p className="text-sm font-black text-stone-700">{profile.deviceList?.length || 0}</p>
+                              </div>
+                              <div className="rounded-xl bg-emerald-50 px-3 py-2">
+                                <p className="text-[11px] font-black text-emerald-500">信任</p>
+                                <p className="text-sm font-black text-emerald-700">{profile.trustedCount}</p>
+                              </div>
+                              <div className="rounded-xl bg-stone-50 px-3 py-2">
+                                <p className="text-[11px] font-black text-stone-400">最後</p>
+                                <p className="text-xs font-black text-stone-600">{formatDeviceTime(profile.lastSeenText)}</p>
+                              </div>
+                            </div>
+                          </div>
+                        </button>
+
+                        {isExpanded && (
+                          <div className="border-t border-stone-100 p-4 bg-stone-50/40">
+                            <div className="grid grid-cols-1 xl:grid-cols-2 gap-3">
+                              {(profile.deviceList || []).map((device) => (
+                                <div key={device.deviceId} className="rounded-2xl border border-stone-100 bg-white p-4">
+                                  <div className="flex items-start justify-between gap-3">
+                                    <div className="min-w-0">
+                                      <div className="flex items-center gap-2 flex-wrap">
+                                        {getDeviceIcon(device.device)}
+                                        <span className="font-black text-stone-700">{device.browser || "-"} / {device.os || "-"}</span>
+                                      </div>
+                                      <p className="mt-2 text-xs font-mono text-stone-400 break-all">裝置碼：{device.deviceShort || "-"}</p>
+                                    </div>
+                                    <span className={`shrink-0 px-2.5 py-1 rounded-lg text-xs font-black border ${device.trusted === false || device.status === "new" ? "bg-rose-50 text-rose-600 border-rose-100" : "bg-emerald-50 text-emerald-700 border-emerald-100"}`}>
+                                      {device.trusted === false || device.status === "new" ? "新裝置" : "已信任"}
+                                    </span>
+                                  </div>
+                                  <div className="mt-3 grid grid-cols-2 gap-2 text-xs font-bold text-stone-500">
+                                    <div className="rounded-xl bg-stone-50 p-2">
+                                      <span className="block text-stone-400 font-black">首次記錄</span>
+                                      {formatDeviceTime(device.firstSeenAtText)}
+                                    </div>
+                                    <div className="rounded-xl bg-stone-50 p-2">
+                                      <span className="block text-stone-400 font-black">最後登入</span>
+                                      {formatDeviceTime(device.lastSeenAtText)}
+                                    </div>
+                                    <div className="rounded-xl bg-stone-50 p-2">
+                                      <span className="block text-stone-400 font-black">登入次數</span>
+                                      {device.loginCount || 1}
+                                    </div>
+                                    <div className="rounded-xl bg-stone-50 p-2">
+                                      <span className="block text-stone-400 font-black">來源</span>
+                                      {device.source || device.status || "-"}
+                                    </div>
+                                  </div>
+                                </div>
+                              ))}
+                            </div>
+                          </div>
+                        )}
+                      </div>
+                    );
+                  })}
+
+                  {filteredDeviceProfiles.length === 0 && (
+                    <div className="p-10 text-center text-stone-400 font-bold rounded-2xl border border-stone-100 bg-white">
+                      目前沒有符合條件的裝置資料
+                    </div>
+                  )}
+                </div>
+              )}
+            </div>
+          )}
+
         </Card>
       </div>
     </ViewWrapper>
