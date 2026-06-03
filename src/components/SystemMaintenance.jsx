@@ -31,6 +31,7 @@ import {
   Radio,
   BarChart3,
   Activity,
+  Target,
   Eye,
   Power,
   Globe2,
@@ -84,6 +85,8 @@ export default function SystemMaintenance() {
   const [summaryCompareReport, setSummaryCompareReport] = useState(null);
   const [summaryStatusReport, setSummaryStatusReport] = useState(null);
   const [archiveFilterMonth, setArchiveFilterMonth] = useState(todayMonth());
+  const [targetSummaryYear, setTargetSummaryYear] = useState(String(new Date().getFullYear()));
+  const [targetSummaryReport, setTargetSummaryReport] = useState(null);
 
   const [readTrackerMode, setReadTrackerModeState] = useState(getReadTrackerMode());
   const [localReadStats, setLocalReadStats] = useState({});
@@ -2478,6 +2481,179 @@ export default function SystemMaintenance() {
     }
   };
 
+
+  // 過渡工具：將既有 monthly_targets 一鍵補整理成全年 monthly_targets_summary。
+  // 目的只為導入 Dashboard 輕量目標資料；不改原始 monthly_targets，也不影響 TargetView 儲存邏輯。
+  const parseMonthlyTargetDocForSummary = (docId = "", data = {}, selectedYearValue = "") => {
+    const idText = String(docId || "");
+    const parts = idText.split("_");
+    let storeName = data.storeName || data.store || data.shopName || data.branchName || "";
+    let year = data.year || data.targetYear || data.selectedYear || "";
+    let month = data.month || data.targetMonth || data.selectedMonth || "";
+
+    if ((!storeName || !year || !month) && parts.length >= 3) {
+      const maybeMonth = parts[parts.length - 1];
+      const maybeYear = parts[parts.length - 2];
+      if (/^\d{4}$/.test(String(maybeYear)) && /^\d{1,2}$/.test(String(maybeMonth))) {
+        year = year || maybeYear;
+        month = month || maybeMonth;
+        storeName = storeName || parts.slice(0, -2).join("_");
+      }
+    }
+
+    const yearMonth = data.yearMonth || data.monthKey || "";
+    if ((!year || !month) && /^\d{4}-\d{2}$/.test(String(yearMonth))) {
+      year = String(yearMonth).slice(0, 4);
+      month = String(Number(String(yearMonth).slice(5, 7)));
+    }
+
+    const yearText = String(year || "");
+    const monthNum = Number(month || 0);
+    if (yearText !== String(selectedYearValue) || !monthNum || monthNum < 1 || monthNum > 12) return null;
+
+    const core = normalizeCoreName(storeName);
+    if (!core) return null;
+
+    const rawStore = String(storeName || "").trim();
+    const hasBrandPrefix = /^(CYJ|Anew|Yibo|安妞|伊啵)/i.test(rawStore);
+    const fullStoreName = hasBrandPrefix
+      ? (rawStore.endsWith("店") ? rawStore : `${rawStore}店`)
+      : `${brandLabel}${core}店`;
+
+    return {
+      year: yearText,
+      month: monthNum,
+      yearMonth: `${yearText}-${String(monthNum).padStart(2, "0")}`,
+      storeName: fullStoreName,
+      coreStoreName: core,
+      target: {
+        storeName: fullStoreName,
+        coreStoreName: core,
+        cashTarget: Number(data.cashTarget || 0),
+        accrualTarget: Number(data.accrualTarget || 0),
+        challengeCashTarget: Number(data.challengeCashTarget || 0),
+        challengeAccrualTarget: Number(data.challengeAccrualTarget || 0),
+        isUnlocked: Boolean(data.isUnlocked),
+        updatedAtText: data.updatedAtText || data.updatedAt || "",
+        updatedBy: data.updatedBy || "",
+        sourceDocId: docId,
+      },
+    };
+  };
+
+  const handleRebuildYearlyTargetSummary = async () => {
+    const year = String(targetSummaryYear || new Date().getFullYear()).trim();
+    if (!/^\d{4}$/.test(year)) return showToast("請先確認年度格式", "error");
+
+    if (!window.confirm(`確定要補整理 ${brandLabel} ${year} 年 1～12 月店家目標嗎？\n\n這是過渡工具，只會依照目前 monthly_targets 重新整理 monthly_targets_summary，不會修改原始目標。`)) return;
+
+    setLoadingAction("rebuildYearlyTargetSummary");
+    setTargetSummaryReport(null);
+    setLogs([]);
+    addLog(`🎯 開始補整理年度目標 Summary：${brandLabel}｜${year}`);
+
+    try {
+      const snap = await getDocs(getCollectionPath("monthly_targets"));
+      const monthBuckets = {};
+      const skippedDocs = [];
+
+      for (let i = 1; i <= 12; i += 1) {
+        const yearMonth = `${year}-${String(i).padStart(2, "0")}`;
+        monthBuckets[yearMonth] = { yearMonth, month: i, targets: {}, sourceDocIds: [] };
+      }
+
+      snap.docs.forEach((d) => {
+        const data = d.data() || {};
+        const parsed = parseMonthlyTargetDocForSummary(d.id, data, year);
+        if (!parsed) {
+          if (String(d.id || "").includes(year)) skippedDocs.push(d.id);
+          return;
+        }
+        monthBuckets[parsed.yearMonth].targets[parsed.storeName] = parsed.target;
+        monthBuckets[parsed.yearMonth].sourceDocIds.push(d.id);
+      });
+
+      const batch = writeBatch(db);
+      const nowText = new Date().toISOString();
+      let totalTargets = 0;
+      let writtenDocs = 0;
+      const rows = [];
+
+      Object.values(monthBuckets).forEach((bucket) => {
+        const targetEntries = Object.entries(bucket.targets || {});
+        const storeCount = targetEntries.length;
+        totalTargets += storeCount;
+
+        const cashTargetTotal = targetEntries.reduce((sum, [, item]) => sum + Number(item.cashTarget || 0), 0);
+        const accrualTargetTotal = targetEntries.reduce((sum, [, item]) => sum + Number(item.accrualTarget || 0), 0);
+
+        batch.set(doc(getCollectionPath("monthly_targets_summary"), bucket.yearMonth), {
+          brandId,
+          brandLabel,
+          year,
+          month: bucket.month,
+          yearMonth: bucket.yearMonth,
+          targets: bucket.targets,
+          storeCount,
+          targetCount: storeCount,
+          cashTargetTotal,
+          accrualTargetTotal,
+          sourceDocCount: bucket.sourceDocIds.length,
+          source: "SystemMaintenance_yearly_target_summary_rebuild",
+          rebuiltAt: serverTimestamp(),
+          rebuiltAtText: nowText,
+          rebuiltBy: currentUser?.name || "director",
+          rebuiltByRole: userRole || "director",
+        });
+
+        writtenDocs += 1;
+        rows.push({ month: bucket.yearMonth, storeCount, sourceDocCount: bucket.sourceDocIds.length, cashTargetTotal, accrualTargetTotal });
+      });
+
+      await batch.commit();
+
+      const report = {
+        brandId,
+        brandLabel,
+        year,
+        sourceDocs: snap.size,
+        writtenDocs,
+        totalTargets,
+        skippedDocs: skippedDocs.length,
+        rows,
+        createdAt: new Date().toLocaleString("zh-TW", { hour12: false }),
+      };
+
+      setTargetSummaryReport(report);
+      addLog(`✅ 年度目標 Summary 補整理完成：寫入 ${writtenDocs} 份月份資料，整理 ${totalTargets.toLocaleString()} 筆店家目標。`);
+
+      await addMaintenanceLog({
+        type: "monthly_targets_summary",
+        action: "rebuild_yearly_monthly_targets_summary",
+        status: "success",
+        year,
+        writtenDocs,
+        totalTargets,
+        sourceDocs: snap.size,
+      });
+
+      showToast(`${year} 年目標 Summary 補整理完成`, "success");
+    } catch (error) {
+      console.error(error);
+      addLog(`❌ 年度目標 Summary 補整理失敗：${error.message}`);
+      await addMaintenanceLog({
+        type: "monthly_targets_summary",
+        action: "fail_rebuild_yearly_monthly_targets_summary",
+        status: "failed",
+        year,
+        errorMessage: error.message,
+      });
+      showToast("年度目標 Summary 補整理失敗", "error");
+    } finally {
+      setLoadingAction(null);
+    }
+  };
+
   // 既有主要工具：校準與備份
   const backupCollections = { daily: ["daily_reports", "therapist_daily_reports"], settings: ["monthly_targets", "therapist_targets", "therapist_schedules", "therapists"], full: ["daily_reports", "therapist_daily_reports", "monthly_aggregated", "therapist_monthly_aggregated", "monthly_targets", "therapist_targets", "therapist_schedules", "therapists"] };
   const backupDocs = ["org_structure", "store_account_data", "manager_auth", "permissions", "trainer_auth", "audit_exclusions", "security_config", "read_tracker_config", "director_auth", "master_auth"];
@@ -2994,6 +3170,45 @@ export default function SystemMaintenance() {
                 月結前校準
               </BeautyButton>
             </ToolRow>
+            <ToolRow icon={Target} title="一鍵補整理年度目標" desc="過渡工具：將今年 1～12 月店家目標整理成輕量資料，供營運總覽後續降低讀取量使用。" badge="過渡工具" tone="amber">
+              <div className="flex items-center gap-2 rounded-2xl border border-stone-100 bg-white/70 px-3 h-11">
+                <Calendar size={14} className="text-stone-400" />
+                <input
+                  type="number"
+                  min="2020"
+                  max="2099"
+                  value={targetSummaryYear}
+                  onChange={(e) => setTargetSummaryYear(e.target.value)}
+                  className="bg-transparent text-xs font-black text-stone-700 outline-none w-20"
+                />
+              </div>
+              <BeautyButton onClick={handleRebuildYearlyTargetSummary} disabled={loadingAction !== null} variant="primary">
+                {loadingAction === "rebuildYearlyTargetSummary" ? <Loader2 size={14} className="animate-spin" /> : <Target size={14} />}
+                一鍵補整理
+              </BeautyButton>
+            </ToolRow>
+            {targetSummaryReport && (
+              <div className="rounded-[1.5rem] border border-amber-100 bg-amber-50/30 p-4 space-y-3">
+                <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-2">
+                  <div>
+                    <p className="text-sm font-black text-stone-800">{targetSummaryReport.year} 年度目標補整理完成</p>
+                    <p className="text-[11px] font-bold text-stone-400 mt-1">
+                      品牌：{targetSummaryReport.brandLabel}｜寫入 {targetSummaryReport.writtenDocs} 份月份資料｜整理 {Number(targetSummaryReport.totalTargets || 0).toLocaleString()} 筆店家目標｜來源 {Number(targetSummaryReport.sourceDocs || 0).toLocaleString()} 筆
+                    </p>
+                  </div>
+                  <span className="px-3 py-1.5 rounded-full bg-white text-[#B7863D] border border-amber-100 text-[11px] font-black">不修改原始目標</span>
+                </div>
+                <div className="grid grid-cols-2 md:grid-cols-4 xl:grid-cols-6 gap-2">
+                  {(targetSummaryReport.rows || []).map((row) => (
+                    <div key={row.month} className="rounded-2xl border border-stone-100 bg-white/90 p-3">
+                      <p className="text-[11px] font-black text-stone-400">{row.month}</p>
+                      <p className="mt-1 text-lg font-black text-[#B7863D]">{Number(row.storeCount || 0).toLocaleString()}</p>
+                      <p className="mt-0.5 text-[10px] font-bold text-stone-400">店家目標</p>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
             <ToolRow icon={Database} title="進階：重建歷史報表" desc="一般情況請使用上方月份報表整理助手；此工具保留給需要單獨重建資料的人員使用。" badge="進階工具" tone="emerald">
               <div className="flex items-center gap-2 rounded-2xl border border-stone-100 bg-white/70 px-3 h-11"><Calendar size={14} className="text-stone-400" /><input type="month" value={calMonth} onChange={(e) => setCalMonth(e.target.value)} className="bg-transparent text-xs font-black text-stone-700 outline-none w-28" /></div>
               <BeautyButton onClick={handleRebuildDashboardSummary} disabled={loadingAction !== null} variant="primary">

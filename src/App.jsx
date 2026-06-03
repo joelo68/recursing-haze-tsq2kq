@@ -44,7 +44,7 @@ import {
 // ==========================================
 // ★ 系統核心版本號 (終極動態快取版)
 // ==========================================
-const CURRENT_APP_VERSION = "3.1.0"; 
+const CURRENT_APP_VERSION = "3.1.1"; 
 
 const isNewerVersion = (local, remote) => {
   if (!remote) return true;
@@ -230,6 +230,7 @@ export default function App() {
   const [annualSummaryStatusMap, setAnnualSummaryStatusMap] = useState({});
   const [therapistAnnualAggregatedData, setTherapistAnnualAggregatedData] = useState([]); // ★新增：管理師專屬結算包
   const [budgets, setBudgets] = useState({});
+  const [monthlyTargetSummary, setMonthlyTargetSummary] = useState(null); // ★ monthly_targets_summary/{yearMonth}：Dashboard 目標資料輕量即時來源
   const [targets, setTargets] = useState({ newASP: 3500, trafficASP: 1200 });
   const [managers, setManagers] = useState({});
   const [storeAccounts, setStoreAccounts] = useState([]);
@@ -248,6 +249,13 @@ export default function App() {
 
   const [selectedYear, setSelectedYear] = useState(new Date().getFullYear().toString());
   const [selectedMonth, setSelectedMonth] = useState((new Date().getMonth() + 1).toString());
+
+  const selectedYearMonth = useMemo(() => {
+    const y = String(selectedYear || "");
+    const m = String(selectedMonth || "").padStart(2, "0");
+    return y && m ? `${y}-${m}` : "";
+  }, [selectedYear, selectedMonth]);
+
   const [inputDate, setInputDate] = useState(() => formatLocalYYYYMMDD(new Date()));
 
   const [showIdleWarning, setShowIdleWarning] = useState(false);
@@ -618,7 +626,21 @@ export default function App() {
   // ★ monthly_targets / kpi_targets 穩定監聽：
   // 這兩包資料仍維持 onSnapshot 即時更新，但只跟「登入 / 品牌」有關，避免切換頁面時反覆重建整包監聽。
   // 注意：這裡只負責 budgets / targets；org_structure、therapists 等全域資料仍由原本 fetchGlobalData 流程處理，避免 Dashboard 店家清單被清空。
-  useEffect(() => {
+  
+  // monthly_targets 第二階段節流：
+  // Dashboard 已優先使用 monthly_targets_summary/{yearMonth}。
+  // 完整 monthly_targets 只在年度目標設定、店家目標檢核、系統維護需要時才常駐監聽。
+  const shouldLoadMonthlyTargets =
+    activeView === "targets" ||
+    activeView === "settings" ||
+    activeView === "annual" ||
+    (activeView === "audit" && auditType === "target");
+
+useEffect(() => {
+    if (!shouldLoadMonthlyTargets) {
+      // Dashboard 已由 monthly_targets_summary 提供目標資料；不在非必要頁面常駐監聽完整 monthly_targets。
+      return undefined;
+    }
     if (!user) return;
 
     const unsubBudgetTargets = onSnapshot(
@@ -645,7 +667,46 @@ export default function App() {
       try { unsubBudgetTargets && unsubBudgetTargets(); } catch (error) { console.warn("monthly_targets unsubscribe failed", error); }
       try { unsubKpiTargets && unsubKpiTargets(); } catch (error) { console.warn("kpi_targets unsubscribe failed", error); }
     };
-  }, [user, currentBrand?.id, getCollectionPath, getDocPath, getStableReadMeta]);
+  }, [currentBrandId, getCollectionPath, shouldLoadMonthlyTargets]);
+
+  // ★ monthly_targets_summary 輕量即時監聽：
+  // 先建立並監聽「目前 Dashboard 月份」的目標 Summary，作為下一階段降低 monthly_targets_live reads 的安全過渡。
+  // 目前仍保留原本 monthly_targets 完整監聽作為 fallback，避免目標設定、回報檢核與 Dashboard 達成率受影響。
+  useEffect(() => {
+    if (!user || !selectedYearMonth) {
+      setMonthlyTargetSummary(null);
+      return;
+    }
+
+    const unsubMonthlyTargetSummary = onSnapshot(
+      doc(getCollectionPath("monthly_targets_summary"), selectedYearMonth),
+      (summarySnap) => {
+        trackReadSource(
+          "monthly_targets_summary_live",
+          summarySnap.exists() ? 1 : 0,
+          getStableReadMeta("monthly_targets_summary_live")
+        );
+
+        if (!summarySnap.exists()) {
+          setMonthlyTargetSummary(null);
+          return;
+        }
+
+        setMonthlyTargetSummary({
+          id: summarySnap.id,
+          ...summarySnap.data(),
+        });
+      },
+      (error) => {
+        console.error("monthly_targets_summary 即時監聽失敗:", error);
+        setMonthlyTargetSummary(null);
+      }
+    );
+
+    return () => {
+      try { unsubMonthlyTargetSummary && unsubMonthlyTargetSummary(); } catch (error) { console.warn("monthly_targets_summary unsubscribe failed", error); }
+    };
+  }, [user, selectedYearMonth, currentBrand?.id, getCollectionPath, getStableReadMeta]);
 
   useEffect(() => {
     if (!user) return;
@@ -1072,12 +1133,12 @@ export default function App() {
   }, [userRole, currentUser, currentBrandId, currentBrand, activeView]);
 
   const contextValue = useMemo(() => ({
-    user, loading, analytics, managers: visibleManagers, budgets, targets, rawData: visibleRawData, allReports: rawData, 
+    user, loading, analytics, managers: visibleManagers, budgets, monthlyTargetSummary, targets, rawData: visibleRawData, allReports: rawData, 
     annualAggregatedData, annualDashboardSummaries, annualSummaryStatusMap, therapistAnnualAggregatedData, // ★ 把年度 Summary 與管理師資料交出去
     showToast, openConfirm, fmtMoney, fmtNum, inputDate, setInputDate, storeList: analytics?.storeList || [], setTargets, selectedYear, selectedMonth, permissions, storeAccounts, managerAuth, currentUser, userRole, logActivity, handleUpdateStorePassword, handleUpdateManagerPassword, handleUpdateTherapistPassword, navigateToStore, activeView, appId, 
     therapists: visibleTherapists, therapistReports: visibleTherapistReports, therapistSchedules, therapistTargets, trainerAuth, handleUpdateTrainerAuth, auditExclusions, handleUpdateAuditExclusions, currentBrand, setCurrentBrandId, getCollectionPath, getDocPath, dailyLoginCount, yesterdayLoginCount, securityConfig, isOnline, isLowPowerMode,
     fetchGlobalData 
-  }), [user, loading, analytics, visibleManagers, budgets, targets, visibleRawData, rawData, annualAggregatedData, annualDashboardSummaries, annualSummaryStatusMap, therapistAnnualAggregatedData, inputDate, selectedYear, selectedMonth, permissions, storeAccounts, managerAuth, currentUser, userRole, logActivity, handleUpdateStorePassword, handleUpdateManagerPassword, handleUpdateTherapistPassword, navigateToStore, activeView, appId, visibleTherapists, visibleTherapistReports, therapistSchedules, therapistTargets, trainerAuth, handleUpdateTrainerAuth, auditExclusions, handleUpdateAuditExclusions, currentBrand, setCurrentBrandId, getCollectionPath, getDocPath, dailyLoginCount, yesterdayLoginCount, securityConfig, isOnline, isLowPowerMode, fetchGlobalData]); // ★ 依賴陣列也要加
+  }), [user, loading, analytics, visibleManagers, budgets, monthlyTargetSummary, targets, visibleRawData, rawData, annualAggregatedData, annualDashboardSummaries, annualSummaryStatusMap, therapistAnnualAggregatedData, inputDate, selectedYear, selectedMonth, permissions, storeAccounts, managerAuth, currentUser, userRole, logActivity, handleUpdateStorePassword, handleUpdateManagerPassword, handleUpdateTherapistPassword, navigateToStore, activeView, appId, visibleTherapists, visibleTherapistReports, therapistSchedules, therapistTargets, trainerAuth, handleUpdateTrainerAuth, auditExclusions, handleUpdateAuditExclusions, currentBrand, setCurrentBrandId, getCollectionPath, getDocPath, dailyLoginCount, yesterdayLoginCount, securityConfig, isOnline, isLowPowerMode, fetchGlobalData]); // ★ 依賴陣列也要加
   
   const memoizedViews = useMemo(() => {
     return (

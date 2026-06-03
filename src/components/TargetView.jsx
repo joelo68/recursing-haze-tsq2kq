@@ -57,6 +57,32 @@ const TargetView = () => {
     return name;
   }, [currentBrand]);
 
+  const buildMonthlyTargetSummaryPayload = (storeName, year, month, targetData = {}) => {
+    const yearMonth = `${year}-${String(month).padStart(2, "0")}`;
+    return {
+      brandId: currentBrand?.id || "unknown",
+      brandLabel: currentBrand?.label || currentBrand?.name || brandPrefix,
+      yearMonth,
+      updatedAt: serverTimestamp(),
+      updatedAtText: new Date().toISOString(),
+      updatedBy: currentUser?.name || "unknown",
+      source: "TargetView",
+      targets: {
+        [storeName]: {
+          storeName,
+          cashTarget: Number(targetData.cashTarget || 0),
+          accrualTarget: Number(targetData.accrualTarget || 0),
+          challengeCashTarget: Number(targetData.challengeCashTarget || 0),
+          challengeAccrualTarget: Number(targetData.challengeAccrualTarget || 0),
+          isUnlocked: Boolean(targetData.isUnlocked),
+          updatedAtText: new Date().toISOString(),
+          updatedBy: targetData.updatedBy || currentUser?.name || "unknown",
+        }
+      }
+    };
+  };
+
+
   const availableStores = useMemo(() => {
     const formatStoreName = (s) => {
       const coreName = s.replace(/CYJ|安妞|伊啵|Anew|Yibo|店/gi, "").trim();
@@ -159,11 +185,22 @@ const TargetView = () => {
       const key = `${selectedStore}_${selectedYear}_${month}`;
       const docRef = doc(getCollectionPath("monthly_targets"), key);
 
-      await setDoc(docRef, {
+      const unlockPayload = {
         isUnlocked: true,
         updatedAt: new Date().toISOString(),
         updatedBy: `${currentUser?.name || "主管"} (開放解鎖)`
-      }, { merge: true });
+      };
+
+      await setDoc(docRef, unlockPayload, { merge: true });
+
+      await setDoc(
+        doc(getCollectionPath("monthly_targets_summary"), `${selectedYear}-${String(month).padStart(2, "0")}`),
+        buildMonthlyTargetSummaryPayload(selectedStore, selectedYear, month, {
+          ...(budgets[key] || {}),
+          ...unlockPayload,
+        }),
+        { merge: true }
+      );
 
       setMonthTargets(prev => {
         const newData = [...prev];
@@ -250,7 +287,7 @@ const TargetView = () => {
            const key = `${selectedStore}_${selectedYear}_${item.month}`;
            const docRef = doc(getCollectionPath("monthly_targets"), key);
            
-           batch.set(docRef, {
+           const targetPayload = {
              cashTarget: cash,
              accrualTarget: accrual,
              challengeCashTarget: challengeCash,
@@ -258,7 +295,15 @@ const TargetView = () => {
              isUnlocked: false, 
              updatedAt: new Date().toISOString(),
              updatedBy: currentUser?.name || "unknown"
-           }, { merge: true });
+           };
+
+           batch.set(docRef, targetPayload, { merge: true });
+
+           batch.set(
+             doc(getCollectionPath("monthly_targets_summary"), `${selectedYear}-${String(item.month).padStart(2, "0")}`),
+             buildMonthlyTargetSummaryPayload(selectedStore, selectedYear, item.month, targetPayload),
+             { merge: true }
+           );
 
            // ★ 目標調整也會影響歷史 Summary / 月結資料，需留下待整理紀錄。
            // 當月 Dashboard 仍走即時目標，不需要立刻校準；月結前再一次處理即可。

@@ -61,7 +61,7 @@ const buildProjectionRangePayload = ({ currentTotal = 0, remainingConservative =
 export function useDashboardStats() {
   const { 
     targets, userRole, currentUser, 
-    allReports, budgets, managers, selectedYear, selectedMonth, therapistReports,
+    allReports, budgets, monthlyTargetSummary, managers, selectedYear, selectedMonth, therapistReports,
     currentBrand, therapists, dailyLoginCount, yesterdayLoginCount,
     therapistAnnualAggregatedData, getCollectionPath 
   } = useContext(AppContext);
@@ -117,6 +117,26 @@ export function useDashboardStats() {
     if (core === "新店") return "新店"; 
     return core.replace(/店$/, '').trim();
   }, [brandPrefix]);
+
+  const getBudgetDataForStore = useMemo(() => {
+    const summaryTargets = monthlyTargetSummary?.targets || {};
+    const hasUsableSummary = Boolean(
+      monthlyTargetSummary &&
+      monthlyTargetSummary.yearMonth &&
+      summaryTargets &&
+      Object.keys(summaryTargets).length > 0
+    );
+
+    return (fullStoreName, y, m) => {
+      const legacyKey = `${fullStoreName}_${y}_${m}`;
+      const legacyValue = budgets?.[legacyKey] || null;
+
+      if (!hasUsableSummary) return legacyValue;
+
+      // Summary 可能尚未完整補齊；單店找不到時必須 fallback 原本 budgets，避免達成率歸零或目標失真。
+      return summaryTargets?.[fullStoreName] || legacyValue;
+    };
+  }, [monthlyTargetSummary, budgets]);
 
   const baseVisibleStores = useMemo(() => {
     if (userRole === 'director' || userRole === 'trainer' || userRole === 'therapist' || userRole === 'master') {
@@ -927,8 +947,7 @@ export function useDashboardStats() {
 
     effectiveStores.forEach(storeName => {
         const fullName = `${brandPrefix}${storeName}店`;
-        const budgetKey = `${fullName}_${y}_${m}`;
-        const b = budgets[budgetKey];
+        const b = getBudgetDataForStore(fullName, y, m);
         if (b) {
             const baseCash = Number(b.cashTarget) || 0; const baseAccrual = Number(b.accrualTarget) || 0;
             const chalCash = Number(b.challengeCashTarget) || 0; const chalAccrual = Number(b.challengeAccrualTarget) || 0;
@@ -1103,7 +1122,7 @@ export function useDashboardStats() {
       storeMonthlyTop3, storeTodayTop3, storeYesterdayTop3 
     };
   // ★ 監視清單換成了包含全部小抄的字典
-  }, [allReports, budgets, selectedYear, selectedMonth, effectiveStores, brandPrefix, cleanName, allStoreCurves]);
+  }, [allReports, getBudgetDataForStore, selectedYear, selectedMonth, effectiveStores, brandPrefix, cleanName, allStoreCurves]);
 
   const detailMyStoreRankings = useMemo(() => {
     if (!allReports) return [];
@@ -1120,8 +1139,7 @@ export function useDashboardStats() {
     });
 
     const rankingList = Object.keys(storeStats).map(storeName => {
-      const budgetKey = `${storeName}_${y}_${m}`;
-      const budgetData = budgets[budgetKey];
+      const budgetData = getBudgetDataForStore(storeName, y, m);
       const target = budgetData ? Number(budgetData.cashTarget || 0) : 0;
       const challengeTarget = budgetData ? Number(budgetData.challengeCashTarget || 0) : 0; 
       const actual = storeStats[storeName];
@@ -1143,7 +1161,7 @@ export function useDashboardStats() {
         const cleanItemName = cleanName(item.storeName);
         return effectiveStores.includes(cleanItemName); 
     });
-  }, [allReports, effectiveStores, budgets, selectedYear, selectedMonth, cleanName, brandPrefix]);
+  }, [allReports, effectiveStores, getBudgetDataForStore, selectedYear, selectedMonth, cleanName, brandPrefix]);
 
   const detailTherapistStats = useMemo(() => {
     if (!therapistReports) return { rankings: [], myStats: null, grandTotal: {}, yesterdayTop3: [], todayTop3: [], myYearlyTotal: 0 }; 
