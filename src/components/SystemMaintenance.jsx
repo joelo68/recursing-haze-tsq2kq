@@ -90,6 +90,8 @@ export default function SystemMaintenance() {
 
   const [readTrackerMode, setReadTrackerModeState] = useState(getReadTrackerMode());
   const [localReadStats, setLocalReadStats] = useState({});
+  const [localReadClearedAt, setLocalReadClearedAt] = useState(null);
+  const [localReadLastRefreshedAt, setLocalReadLastRefreshedAt] = useState(null);
   const [globalReadStats, setGlobalReadStats] = useState([]);
   const [loadingReadStats, setLoadingReadStats] = useState(false);
   const [globalRowsCount, setGlobalRowsCount] = useState(0);
@@ -509,10 +511,15 @@ export default function SystemMaintenance() {
   };
 
 
+  const refreshLocalReadStats = () => {
+    setReadTrackerModeState(getReadTrackerMode());
+    setLocalReadStats(getReadTrackerStats());
+    setLocalReadLastRefreshedAt(new Date());
+  };
+
   useEffect(() => {
-    const refreshLocalStats = () => setLocalReadStats(getReadTrackerStats());
-    refreshLocalStats();
-    const timer = setInterval(refreshLocalStats, 3000);
+    refreshLocalReadStats();
+    const timer = setInterval(refreshLocalReadStats, 3000);
     return () => clearInterval(timer);
   }, []);
 
@@ -529,7 +536,15 @@ export default function SystemMaintenance() {
           endTime: data.endTime || "07:00",
           timezone: data.timezone || "Asia/Taipei",
         };
-        const effectiveMode = resolveReadTrackerModeFromConfig(config);
+        const scheduledMode = resolveReadTrackerModeFromConfig(config);
+        let manualLocalEnabled = false;
+        try {
+          manualLocalEnabled = localStorage.getItem("read_tracker_manual_local_enabled") === "true";
+        } catch (storageError) {
+          console.warn("讀取本機追蹤暫存狀態失敗:", storageError);
+        }
+
+        const effectiveMode = manualLocalEnabled && scheduledMode === "off" ? "local" : scheduledMode;
         setReadTrackerConfig(config);
         setScheduleForm({ scheduleEnabled: config.scheduleEnabled, startTime: config.startTime, endTime: config.endTime });
         setReadTrackerMode(effectiveMode);
@@ -551,6 +566,14 @@ export default function SystemMaintenance() {
   const readStatsRows = useMemo(() => Object.entries(localReadStats || {})
     .map(([label, item]) => ({ label, docs: item.docs || 0, triggers: item.triggers || 0, avg: item.triggers ? Math.round((item.docs || 0) / item.triggers) : 0, lastAt: item.lastAt || "-" }))
     .sort((a, b) => b.docs - a.docs), [localReadStats]);
+
+  const localReadModeLabel = readTrackerMode === "global" ? "全域上報中" : readTrackerMode === "local" ? "本機追蹤中" : "追蹤關閉";
+  const localReadModeTone = readTrackerMode === "off" ? "text-rose-600 bg-rose-50 border-rose-100" : readTrackerMode === "global" ? "text-blue-600 bg-blue-50 border-blue-100" : "text-emerald-600 bg-emerald-50 border-emerald-100";
+  const localReadEmptyText = readTrackerMode === "off"
+    ? "目前讀取追蹤已關閉，清除後不會累積新的本機統計"
+    : localReadClearedAt
+      ? "已清除，等待新的讀取紀錄"
+      : "尚無本機讀取追蹤資料";
 
   const SectionTitle = ({ eyebrow, title, desc, icon: Icon }) => (
     <div>
@@ -597,10 +620,14 @@ export default function SystemMaintenance() {
     );
   };
 
-  const renderStatList = ({ rows, emptyIcon: EmptyIcon, emptyText, valueClass = "text-[#B7863D]" }) => (
+  const renderStatList = ({ rows, emptyIcon: EmptyIcon, emptyText, emptySubText = "", valueClass = "text-[#B7863D]" }) => (
     <div className="p-4">
       {rows.length === 0 ? (
-        <div className="h-48 flex flex-col items-center justify-center text-stone-300 gap-2"><EmptyIcon size={32} /><p className="text-xs font-black tracking-widest">{emptyText}</p></div>
+        <div className="h-48 flex flex-col items-center justify-center text-stone-300 gap-2 text-center px-6">
+          <EmptyIcon size={32} />
+          <p className="text-xs font-black tracking-widest">{emptyText}</p>
+          {emptySubText && <p className="text-[11px] font-bold text-stone-300 leading-relaxed">{emptySubText}</p>}
+        </div>
       ) : (
         <div className="space-y-2 max-h-[320px] overflow-y-auto pr-1">
           {rows.slice(0, 12).map((row, index) => (
@@ -1344,13 +1371,39 @@ export default function SystemMaintenance() {
   // 讀取來源追蹤
   const handleChangeReadTrackerMode = async (mode) => {
     try {
-      const nextConfig = { ...readTrackerConfig, mode, brandId, brandLabel, updatedAt: serverTimestamp(), updatedAtText: new Date().toISOString(), updatedBy: currentUser?.name || "director" };
+      const nextConfig = {
+        ...readTrackerConfig,
+        mode,
+        brandId,
+        brandLabel,
+        updatedAt: serverTimestamp(),
+        updatedAtText: new Date().toISOString(),
+        updatedBy: currentUser?.name || "director",
+      };
       await setDoc(getDocPath("read_tracker_config"), nextConfig, { merge: true });
-      const effectiveMode = resolveReadTrackerModeFromConfig(nextConfig);
-      setReadTrackerConfig((prev) => ({ ...prev, mode }));
+
+      try {
+        if (mode === "local") localStorage.setItem("read_tracker_manual_local_enabled", "true");
+        if (mode === "off" || mode === "global") localStorage.removeItem("read_tracker_manual_local_enabled");
+      } catch (storageError) {
+        console.warn("本機追蹤模式暫存更新失敗:", storageError);
+      }
+
+      const scheduledMode = resolveReadTrackerModeFromConfig(nextConfig);
+      const manualLocalEnabled = mode === "local";
+      const effectiveMode = manualLocalEnabled ? "local" : scheduledMode;
+
+      setReadTrackerConfig(nextConfig);
       setReadTrackerMode(effectiveMode);
       setReadTrackerModeState(effectiveMode);
-      showToast(mode === "off" ? "讀取來源追蹤已切換為關閉" : mode === "local" ? "已切換為本機模式" : "已切換為全域上報模式", mode === "off" ? "info" : "success");
+      showToast(
+        mode === "off"
+          ? "讀取來源追蹤已切換為關閉；排程設定維持不變"
+          : mode === "local"
+            ? "已切換為本機模式；排程設定維持不變"
+            : "已切換為全域上報模式；排程設定維持不變",
+        mode === "off" ? "info" : "success"
+      );
     } catch (error) {
       console.error(error);
       showToast("追蹤模式儲存失敗，請檢查資料庫權限", "error");
@@ -1379,11 +1432,31 @@ export default function SystemMaintenance() {
     showToast(`已依目前時間套用排程：${effectiveMode}`, "info");
   };
 
+  const handleEnableLocalReadTracker = () => {
+    try {
+      localStorage.setItem("read_tracker_manual_local_enabled", "true");
+    } catch (storageError) {
+      console.warn("本機追蹤狀態暫存失敗:", storageError);
+    }
+
+    setReadTrackerMode("local");
+    setReadTrackerModeState("local");
+    setLocalReadClearedAt(null);
+    refreshLocalReadStats();
+    showToast("已開啟本機讀取追蹤；排程設定不受影響", "success");
+  };
+
   const handleClearReadTracker = () => {
     if (!window.confirm("確定要清除目前這台裝置的讀取追蹤統計嗎？")) return;
     clearReadTrackerStats();
     setLocalReadStats({});
-    showToast("本機讀取統計已清除", "success");
+    setLocalReadClearedAt(new Date());
+    setLocalReadLastRefreshedAt(new Date());
+    showToast("本機讀取統計已清除，等待新的讀取紀錄", "success");
+
+    window.setTimeout(() => {
+      refreshLocalReadStats();
+    }, 500);
   };
 
   const handleManualFlushReadTracker = async () => {
@@ -1391,7 +1464,7 @@ export default function SystemMaintenance() {
     try {
       const result = await flushReadTrackerToFirestore({ db, brandId, brandLabel, userRole, userName: "maintenance_user", activeView: "system_maintenance", force: true });
       if (result.skipped) showToast(`未上報：${result.reason}`, "info");
-      else { showToast(`已上報 ${result.totalReadDocs.toLocaleString()} docs`, "success"); setLocalReadStats(getReadTrackerStats()); }
+      else { showToast(`已上報 ${result.totalReadDocs.toLocaleString()} docs`, "success"); refreshLocalReadStats(); }
     } catch (error) { console.error(error); showToast("手動上報失敗", "error"); }
     finally { setLoadingReadStats(false); }
   };
@@ -3297,8 +3370,8 @@ export default function SystemMaintenance() {
             <div className="flex flex-wrap gap-2">{[{ id: "off", label: "關閉", icon: Power }, { id: "local", label: "本機模式", icon: Monitor }, { id: "global", label: "全域上報", icon: Globe2 }].map((mode)=><button key={mode.id} onClick={()=>handleChangeReadTrackerMode(mode.id)} className={`px-4 py-2 rounded-2xl text-xs font-black border flex items-center gap-2 transition-all ${readTrackerMode === mode.id ? "bg-gradient-to-r from-[#FFF7DF] via-[#F7E8C6] to-[#EACB86] text-[#5A4225] border-amber-200 shadow-[0_10px_24px_rgba(190,145,70,0.16)]" : "bg-white text-stone-500 border-stone-200 hover:bg-stone-50"}`}><mode.icon size={14} />{mode.label}</button>)}</div>
           </div>
           <div className="p-6 border-b border-[#F0E3CF] bg-[#FFFCF7]"><div className="rounded-[1.75rem] border border-[#EEDFC7] bg-white shadow-sm overflow-hidden"><div className="p-5 flex flex-col xl:flex-row xl:items-center xl:justify-between gap-4 border-b border-stone-100"><div className="min-w-0"><h3 className="text-sm font-black text-stone-800 flex items-center gap-2"><Clock size={18} className="text-[#B7863D]" />排程式全域上報</h3><p className="text-xs text-stone-400 font-bold mt-1">固定晚間診斷區間，讓每天數據可比較；支援跨日，例如 19:00～07:00。</p></div><div className={`shrink-0 inline-flex items-center gap-2 px-3 py-2 rounded-2xl text-xs font-black border ${!scheduleForm.scheduleEnabled ? "bg-stone-50 text-stone-500 border-stone-200" : scheduleStatus.isActive ? "bg-emerald-50 text-emerald-700 border-emerald-100" : "bg-amber-50 text-amber-700 border-amber-100"}`}><CheckCircle2 size={15} />{scheduleStatus.label}｜現在 {scheduleStatus.nowTime}</div></div>
-            <div className="p-5 grid grid-cols-1 lg:grid-cols-[1.1fr_1fr_1fr_auto] gap-3 items-end"><div className="rounded-2xl border border-stone-100 bg-stone-50/70 p-3 flex items-center justify-between gap-3"><div><p className="text-xs font-black text-stone-700">啟用排程</p><p className="text-[11px] text-stone-400 font-bold mt-0.5">排程時段內自動切為全域上報。</p></div><button onClick={()=>setScheduleForm((prev)=>({ ...prev, scheduleEnabled: !prev.scheduleEnabled }))} className={`w-12 h-7 rounded-full p-1 transition-all ${scheduleForm.scheduleEnabled ? "bg-[#D8B46B]" : "bg-stone-300"}`}><span className={`block w-5 h-5 rounded-full bg-white shadow transition-transform ${scheduleForm.scheduleEnabled ? "translate-x-5" : "translate-x-0"}`} /></button></div><div><label className="text-[11px] font-black text-stone-400 block mb-1.5 tracking-wider">開始時間</label><SoftInput type="time" value={scheduleForm.startTime} onChange={(e)=>setScheduleForm((prev)=>({ ...prev, startTime: e.target.value }))} /></div><div><label className="text-[11px] font-black text-stone-400 block mb-1.5 tracking-wider">結束時間</label><SoftInput type="time" value={scheduleForm.endTime} onChange={(e)=>setScheduleForm((prev)=>({ ...prev, endTime: e.target.value }))} /></div><div className="flex gap-2"><BeautyButton onClick={handleApplyScheduleNow} variant="secondary" className="whitespace-nowrap">立即套用</BeautyButton><BeautyButton onClick={handleSaveReadTrackerSchedule} variant="primary" className="whitespace-nowrap"><Save size={14} />儲存排程</BeautyButton></div></div><div className="px-5 py-3 bg-amber-50/50 border-t border-amber-100/60 text-[11px] text-amber-700 font-bold leading-relaxed">目前套用品牌：{brandLabel}。排程啟用後，非排程時段會自動關閉追蹤；排程時段內會自動啟用全域上報。</div></div></div>
-          <div className="p-6 grid grid-cols-1 xl:grid-cols-2 gap-6"><div className="rounded-[1.5rem] border border-stone-100 bg-stone-50/50 overflow-hidden"><div className="px-4 py-3 border-b border-stone-100 bg-white flex items-center justify-between"><div className="flex items-center gap-2"><Activity size={16} className="text-emerald-500" /><span className="text-sm font-black text-stone-700">目前裝置統計</span></div><div className="flex items-center gap-2"><button onClick={handleManualFlushReadTracker} disabled={loadingReadStats || readTrackerMode !== "global"} className="text-[11px] font-black px-3 py-1.5 rounded-xl border border-stone-200 text-stone-500 hover:bg-stone-50 disabled:opacity-40">手動上報</button><button onClick={handleClearReadTracker} className="text-[11px] font-black px-3 py-1.5 rounded-xl border border-rose-100 text-rose-500 hover:bg-rose-50">清除</button></div></div>{renderStatList({ rows: readStatsRows, emptyIcon: BarChart3, emptyText: "尚無本機讀取追蹤資料" })}</div><div className="rounded-[1.5rem] border border-stone-100 bg-stone-50/50 overflow-hidden"><div className="px-4 py-3 border-b border-stone-100 bg-white flex items-center justify-between"><div className="flex items-center gap-2"><Globe2 size={16} className="text-blue-500" /><span className="text-sm font-black text-stone-700">近 24 小時全域排行</span></div><button onClick={handleLoadGlobalReadStats} disabled={loadingReadStats} className="text-[11px] font-black px-3 py-1.5 rounded-xl bg-gradient-to-r from-[#FFF7DF] via-[#F7E8C6] to-[#EACB86] text-[#5A4225] border border-amber-200 disabled:opacity-40 flex items-center gap-1.5">{loadingReadStats ? <Loader2 size={13} className="animate-spin" /> : <Eye size={13} />}載入排行</button></div>{globalReadStats.length > 0 && <div className="p-4 pb-0 text-[11px] text-stone-400 font-bold">已彙整近 24 小時 {globalRowsCount.toLocaleString()} 筆上報工作階段</div>}{renderStatList({ rows: globalReadStats, emptyIcon: Globe2, emptyText: "尚未載入全域讀取排行", valueClass: "text-blue-600" })}</div></div>
+            <div className="p-5 grid grid-cols-1 lg:grid-cols-[1.1fr_1fr_1fr_auto] gap-3 items-end"><div className="rounded-2xl border border-stone-100 bg-stone-50/70 p-3 flex items-center justify-between gap-3"><div><p className="text-xs font-black text-stone-700">啟用排程</p><p className="text-[11px] text-stone-400 font-bold mt-0.5">排程時段內自動切為全域上報。</p></div><button onClick={()=>setScheduleForm((prev)=>({ ...prev, scheduleEnabled: !prev.scheduleEnabled }))} className={`w-12 h-7 rounded-full p-1 transition-all ${scheduleForm.scheduleEnabled ? "bg-[#D8B46B]" : "bg-stone-300"}`}><span className={`block w-5 h-5 rounded-full bg-white shadow transition-transform ${scheduleForm.scheduleEnabled ? "translate-x-5" : "translate-x-0"}`} /></button></div><div><label className="text-[11px] font-black text-stone-400 block mb-1.5 tracking-wider">開始時間</label><SoftInput type="time" value={scheduleForm.startTime} onChange={(e)=>setScheduleForm((prev)=>({ ...prev, startTime: e.target.value }))} /></div><div><label className="text-[11px] font-black text-stone-400 block mb-1.5 tracking-wider">結束時間</label><SoftInput type="time" value={scheduleForm.endTime} onChange={(e)=>setScheduleForm((prev)=>({ ...prev, endTime: e.target.value }))} /></div><div className="flex gap-2"><BeautyButton onClick={handleApplyScheduleNow} variant="secondary" className="whitespace-nowrap">立即套用</BeautyButton><BeautyButton onClick={handleSaveReadTrackerSchedule} variant="primary" className="whitespace-nowrap"><Save size={14} />儲存排程</BeautyButton></div></div><div className="px-5 py-3 bg-amber-50/50 border-t border-amber-100/60 text-[11px] text-amber-700 font-bold leading-relaxed">目前套用品牌：{brandLabel}。排程啟用後，排程時段內會自動啟用全域上報；白天若臨時開啟本機追蹤，不會修改晚間排程。</div></div></div>
+          <div className="p-6 grid grid-cols-1 xl:grid-cols-2 gap-6"><div className="rounded-[1.5rem] border border-stone-100 bg-stone-50/50 overflow-hidden"><div className="px-4 py-3 border-b border-stone-100 bg-white flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3"><div className="flex flex-wrap items-center gap-2"><Activity size={16} className="text-emerald-500" /><span className="text-sm font-black text-stone-700">目前裝置統計</span><span className={`px-2 py-1 rounded-full border text-[10px] font-black ${localReadModeTone}`}>{localReadModeLabel}</span>{localReadLastRefreshedAt && <span className="text-[10px] font-bold text-stone-300">更新 {localReadLastRefreshedAt.toLocaleTimeString("zh-TW", { hour12: false, hour: "2-digit", minute: "2-digit", second: "2-digit" })}</span>}</div><div className="flex flex-wrap items-center gap-2">{readTrackerMode === "off" && <button onClick={handleEnableLocalReadTracker} className="text-[11px] font-black px-3 py-1.5 rounded-xl border border-emerald-100 bg-emerald-50 text-emerald-600 hover:bg-emerald-100">開啟本機追蹤</button>}<button onClick={refreshLocalReadStats} className="text-[11px] font-black px-3 py-1.5 rounded-xl border border-stone-200 text-stone-500 hover:bg-stone-50">重新整理</button><button onClick={handleClearReadTracker} className="text-[11px] font-black px-3 py-1.5 rounded-xl border border-rose-100 text-rose-500 hover:bg-rose-50">清除</button></div></div>{renderStatList({ rows: readStatsRows, emptyIcon: BarChart3, emptyText: localReadEmptyText, emptySubText: readTrackerMode === "off" ? "可按右上「開啟本機追蹤」，或在上方模式切換為本機模式 / 全域上報後再觀察。" : "若切換頁面後仍無資料，代表目前沒有新的被追蹤讀取，或資料已由前端狀態提供。" })}</div><div className="rounded-[1.5rem] border border-stone-100 bg-stone-50/50 overflow-hidden"><div className="px-4 py-3 border-b border-stone-100 bg-white flex items-center justify-between"><div className="flex items-center gap-2"><Globe2 size={16} className="text-blue-500" /><span className="text-sm font-black text-stone-700">近 24 小時全域排行</span></div><button onClick={handleLoadGlobalReadStats} disabled={loadingReadStats} className="text-[11px] font-black px-3 py-1.5 rounded-xl bg-gradient-to-r from-[#FFF7DF] via-[#F7E8C6] to-[#EACB86] text-[#5A4225] border border-amber-200 disabled:opacity-40 flex items-center gap-1.5">{loadingReadStats ? <Loader2 size={13} className="animate-spin" /> : <Eye size={13} />}載入排行</button></div>{globalReadStats.length > 0 && <div className="p-4 pb-0 text-[11px] text-stone-400 font-bold">已彙整近 24 小時 {globalRowsCount.toLocaleString()} 筆上報工作階段</div>}{renderStatList({ rows: globalReadStats, emptyIcon: Globe2, emptyText: "尚未載入全域讀取排行", valueClass: "text-blue-600" })}</div></div>
         </section>
 
         <section className="rounded-[2rem] border border-[#EEDFC7] bg-white/95 shadow-[0_22px_70px_rgba(120,90,40,0.05)] overflow-hidden"><button onClick={()=>setShowAdvancedTools((prev)=>!prev)} className="w-full p-6 flex flex-col md:flex-row md:items-center md:justify-between gap-3 text-left"><SectionTitle eyebrow="Protected Area" title="高風險資料處理" desc="還原、封存與批次修復都集中在這裡；沒有明確異常時不建議操作。" icon={AlertTriangle} /><div className="inline-flex items-center gap-2 text-xs font-black text-stone-500 bg-stone-50 border border-stone-200 rounded-2xl px-3 py-2 w-fit">{showAdvancedTools ? "收合工具" : "展開工具"}<ChevronDown size={14} className={`transition-transform ${showAdvancedTools ? "rotate-180" : ""}`} /></div></button>
