@@ -258,12 +258,13 @@ const LoginView = ({
 
   const sortedDirectorNames = useMemo(() => {
     const getTitleWeight = (name) => {
-      if (name.includes("總經理")) return 1;
-      if (name.includes("營運長")) return 2;
-      if (name.includes("總監")) return 3;
-      if (name.includes("財務")) return 4;
-      return 5; 
-    };
+  if (name.includes("董事長")) return 1;
+  if (name.includes("總經理")) return 2;
+  if (name.includes("營運長")) return 3;
+  if (name.includes("總監")) return 4;
+  if (name.includes("財務")) return 5;
+  return 9;
+};
 
     return Object.keys(directorAuth || {}).sort((a, b) => {
       const weightA = getTitleWeight(a);
