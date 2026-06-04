@@ -150,7 +150,7 @@ const SettingsView = () => {
   }, [fetchGlobalData]);
 
   const [activeTab, setActiveTab] = useState("");
-  const [localTargets, setLocalTargets] = useState(targets || {});
+  const [localTargets, setLocalTargets] = useState(targets || { newASP: 3500, trafficASP: 1200 });
   const [localPermissions, setLocalPermissions] = useState(permissions || DEFAULT_PERMISSIONS);
   const [localManagers, setLocalManagers] = useState(managers || {});
   const [localManagerOrder, setLocalManagerOrder] = useState(normalizeManagerOrder(managers || {}, managerOrder));
@@ -193,7 +193,15 @@ const SettingsView = () => {
   }, [managers, managerOrder]);
   useEffect(() => { if (permissions) setLocalPermissions(permissions); }, [permissions]);
   useEffect(() => { 
-    if (targets) { setLocalTargets(prev => ({ ...prev, ...targets, benchmarks: targets.benchmarks || DEFAULT_BENCHMARKS_INIT })); }
+    if (targets) {
+      setLocalTargets(prev => ({
+        ...prev,
+        ...targets,
+        newASP: Number(targets?.newASP ?? 3500),
+        trafficASP: Number(targets?.trafficASP ?? 1200),
+        benchmarks: targets.benchmarks || prev.benchmarks || DEFAULT_BENCHMARKS_INIT
+      }));
+    }
   }, [targets]);
   
   useEffect(() => {
@@ -461,7 +469,23 @@ const SettingsView = () => {
   }, [localManagers, localManagerOrder, editingManager, editingManagerStores, editingReleasedStores]);
 
   
-  const handleSaveTargets = async () => { try { await setDoc(getDocPath("kpi_targets"), localTargets); setTargets(localTargets); showToast("設定已儲存", "success"); } catch (e) { showToast("儲存失敗", "error"); } };
+  const handleSaveTargets = async () => {
+    try {
+      const nextTargets = {
+        ...localTargets,
+        newASP: Number(localTargets?.newASP ?? 3500),
+        trafficASP: Number(localTargets?.trafficASP ?? 1200),
+        benchmarks: localTargets?.benchmarks || DEFAULT_BENCHMARKS_INIT,
+      };
+      await setDoc(getDocPath("kpi_targets"), nextTargets, { merge: true });
+      setTargets(nextTargets);
+      setLocalTargets(nextTargets);
+      showToast("KPI 參數已儲存", "success");
+    } catch (e) {
+      console.error("KPI 參數儲存失敗:", e);
+      showToast("儲存失敗", "error");
+    }
+  };
   const handleSavePermissions = async () => { try { await setDoc(getDocPath("permissions"), localPermissions); showToast("權限設定已更新", "success"); if (fetchGlobalData) fetchGlobalData(); } catch (e) { showToast("更新失敗", "error"); } };
   const togglePermission = (role, menuId) => { const current = localPermissions[role] || []; const updated = current.includes(menuId) ? current.filter((id) => id !== menuId) : [...current, menuId]; setLocalPermissions({ ...localPermissions, [role]: updated }); };
   
@@ -904,7 +928,7 @@ const SettingsView = () => {
           </div>
         </div>
 
-        {activeTab === "kpi" && (<Card title="KPI 目標參數"><div className="max-w-md w-full space-y-6 min-w-0"><div><label className="block text-sm font-bold text-[#7C7063] mb-2">目標新客客單</label><input type="number" value={localTargets.newASP || 3500} onChange={(e) => setLocalTargets({...localTargets, newASP: Number(e.target.value)})} className="w-full px-4 py-3 border-2 rounded-xl outline-none focus:border-[#D6A84F]"/></div><div><label className="block text-sm font-bold text-[#7C7063] mb-2">目標消耗客單</label><input type="number" value={localTargets.trafficASP || 1200} onChange={(e) => setLocalTargets({...localTargets, trafficASP: Number(e.target.value)})} className="w-full px-4 py-3 border-2 rounded-xl outline-none focus:border-[#D6A84F]"/></div><button onClick={handleSaveTargets} className="w-full bg-gradient-to-r from-[#FFF7DF] via-[#F7E8C6] to-[#EACB86] text-[#5A4225] border border-[#E8C77A] py-3 rounded-xl font-bold active:scale-95 transition-transform">儲存設定</button></div></Card>)}
+        {activeTab === "kpi" && (<Card title="KPI 目標參數"><div className="max-w-md w-full space-y-6 min-w-0"><div><label className="block text-sm font-bold text-[#7C7063] mb-2">目標新客客單</label><input type="number" value={localTargets.newASP ?? 3500} onChange={(e) => setLocalTargets({...localTargets, newASP: Number(e.target.value)})} className="w-full px-4 py-3 border-2 rounded-xl outline-none focus:border-[#D6A84F]"/></div><div><label className="block text-sm font-bold text-[#7C7063] mb-2">目標消耗客單</label><input type="number" value={localTargets.trafficASP ?? 1200} onChange={(e) => setLocalTargets({...localTargets, trafficASP: Number(e.target.value)})} className="w-full px-4 py-3 border-2 rounded-xl outline-none focus:border-[#D6A84F]"/></div><button onClick={handleSaveTargets} className="w-full bg-gradient-to-r from-[#FFF7DF] via-[#F7E8C6] to-[#EACB86] text-[#5A4225] border border-[#E8C77A] py-3 rounded-xl font-bold active:scale-95 transition-transform">儲存設定</button></div></Card>)}
         
         {activeTab === "health" && (
             <Card title="門市體質診斷標準">

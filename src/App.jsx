@@ -38,7 +38,7 @@ import {
 // ==========================================
 // ★ 系統核心版本號 (終極動態快取版)
 // ==========================================
-const CURRENT_APP_VERSION = "3.1.7"; 
+const CURRENT_APP_VERSION = "3.1.8"; 
 
 const isNewerVersion = (local, remote) => {
   if (!remote) return true;
@@ -1173,9 +1173,9 @@ export default function App() {
 
   const lowFrequencyCacheRef = useRef({});
 
-  // ★ monthly_targets / kpi_targets 穩定監聽：
-  // 這兩包資料仍維持 onSnapshot 即時更新，但只跟「登入 / 品牌」有關，避免切換頁面時反覆重建整包監聽。
-  // 注意：這裡只負責 budgets / targets；org_structure、therapists 等全域資料仍由原本 fetchGlobalData 流程處理，避免 Dashboard 店家清單被清空。
+  // ★ monthly_targets 穩定監聽：
+  // 完整 monthly_targets 只在真正需要編輯 / 檢核年度目標時讀取，避免一般頁面每次讀全年約 400+ docs。
+  // KPI 參數 kpi_targets 已拆成獨立 1-doc 常駐監聽，避免登出重登後回到預設值。
   
   // monthly_targets 第三階段節流：
   // Dashboard / Ranking / Annual 已優先使用 monthly_targets_summary 或 dashboard_summary。
@@ -1204,20 +1204,36 @@ useEffect(() => {
       (error) => console.error("monthly_targets 即時監聽失敗:", error)
     );
 
+    return () => {
+      try { unsubBudgetTargets && unsubBudgetTargets(); } catch (error) { console.warn("monthly_targets unsubscribe failed", error); }
+    };
+  }, [user, currentBrandId, getCollectionPath, shouldLoadMonthlyTargets, getStableReadMeta]);
+
+  // ★ KPI 參數獨立常駐監聽：
+  // kpi_targets 只有 1 doc，必須在登入 / 品牌切換後穩定讀回，避免登出重登後還原成預設值。
+  useEffect(() => {
+    if (!user) {
+      setTargets({ newASP: 3500, trafficASP: 1200 });
+      return undefined;
+    }
+
     const unsubKpiTargets = onSnapshot(
       getDocPath("kpi_targets"),
       (kpiSnap) => {
         trackReadSource("kpi_targets_live", kpiSnap.exists() ? 1 : 0, getStableReadMeta("kpi_targets_live"));
-        setTargets(kpiSnap.exists() ? kpiSnap.data() : { newASP: 3500, trafficASP: 1200 });
+        const data = kpiSnap.exists() ? kpiSnap.data() : {};
+        setTargets({
+          newASP: Number(data.newASP ?? 3500),
+          trafficASP: Number(data.trafficASP ?? 1200),
+        });
       },
       (error) => console.error("kpi_targets 即時監聽失敗:", error)
     );
 
     return () => {
-      try { unsubBudgetTargets && unsubBudgetTargets(); } catch (error) { console.warn("monthly_targets unsubscribe failed", error); }
       try { unsubKpiTargets && unsubKpiTargets(); } catch (error) { console.warn("kpi_targets unsubscribe failed", error); }
     };
-  }, [user, currentBrandId, getCollectionPath, shouldLoadMonthlyTargets, getStableReadMeta]);
+  }, [user, currentBrandId, getDocPath, getStableReadMeta]);
 
   // ★ monthly_targets_summary 輕量即時監聽：
   // 監聽「目前選擇月份」的目標 Summary，供 Dashboard / Ranking / Annual 等一般分析頁使用。
