@@ -387,6 +387,35 @@ const SECURITY_DEVICE_CONFIG = {
   alertRoles: ["director", "trainer", "manager", "store"],
 };
 
+const DIRECTOR_VIEW_PERMISSIONS = {
+  super_admin: { allowedViews: null, label: "最高管理者" },
+  operation_admin: {
+    allowedViews: new Set(["dashboard", "daily", "regional", "ranking", "store-analysis", "audit", "annual", "logs", "notification"]),
+    label: "營運主管",
+  },
+  finance_admin: {
+    allowedViews: new Set(["dashboard", "daily", "regional", "ranking", "store-analysis", "annual"]),
+    label: "財務主管",
+  },
+  viewer: {
+    allowedViews: new Set(["dashboard", "daily", "regional", "ranking", "store-analysis", "annual"]),
+    label: "只讀主管",
+  },
+};
+
+const DIRECTOR_RESTRICTED_VIEWS = {
+  history: "業績修正",
+  input: "日報輸入",
+  targets: "年度目標設定",
+  "t-targets": "管理師目標",
+  "t-schedule": "管理師排休",
+  settings: "系統管理中心",
+  "therapist-manager": "管理師管理",
+  logs: "登入監控 / 操作日誌",
+  audit: "回報檢核",
+  notification: "通知管理",
+};
+
 
 export default function App() {
   const [user, setUser] = useState(null);
@@ -581,6 +610,44 @@ export default function App() {
 
   const [selectedYear, setSelectedYear] = useState(new Date().getFullYear().toString());
   const [selectedMonth, setSelectedMonth] = useState((new Date().getMonth() + 1).toString());
+
+  const directorLevel = currentUser?.directorLevel || currentUser?.adminLevel || (userRole === "director" && String(currentUser?.name || "").includes("Joe") ? "super_admin" : "operation_admin");
+  const directorPermissionProfile = userRole === "director"
+    ? (DIRECTOR_VIEW_PERMISSIONS[directorLevel] || DIRECTOR_VIEW_PERMISSIONS.operation_admin)
+    : null;
+
+  const canDirectorAccessView = useCallback((viewId) => {
+    if (userRole !== "director") return true;
+    if (currentUser?.isMasterLogin === true) return true;
+    const profile = DIRECTOR_VIEW_PERMISSIONS[directorLevel] || DIRECTOR_VIEW_PERMISSIONS.operation_admin;
+    if (!profile.allowedViews) return true;
+    return profile.allowedViews.has(viewId);
+  }, [userRole, currentUser?.isMasterLogin, directorLevel]);
+
+  const handleProtectedSetActiveView = useCallback((nextView) => {
+    if (!canDirectorAccessView(nextView)) {
+      const viewLabel = DIRECTOR_RESTRICTED_VIEWS[nextView] || VIEW_ACTIVITY_LABELS[nextView] || "此功能";
+      setToast({
+        message: `${directorPermissionProfile?.label || "目前權限"}無法使用「${viewLabel}」`,
+        type: "error",
+      });
+      setActiveView("dashboard");
+      return;
+    }
+    setActiveView(nextView);
+  }, [canDirectorAccessView, directorPermissionProfile?.label]);
+
+  useEffect(() => {
+    if (!userRole || userRole !== "director") return;
+    if (canDirectorAccessView(activeView)) return;
+
+    const viewLabel = DIRECTOR_RESTRICTED_VIEWS[activeView] || VIEW_ACTIVITY_LABELS[activeView] || "此功能";
+    setToast({
+      message: `${directorPermissionProfile?.label || "目前權限"}無法使用「${viewLabel}」`,
+      type: "error",
+    });
+    setActiveView("dashboard");
+  }, [activeView, userRole, canDirectorAccessView, directorPermissionProfile?.label]);
 
   const selectedYearMonth = useMemo(() => {
     const y = String(selectedYear || "");
@@ -2011,8 +2078,12 @@ useEffect(() => {
     annualAggregatedData, annualDashboardSummaries, annualSummaryStatusMap, therapistAnnualAggregatedData, // ★ 把年度 Summary 與管理師資料交出去
     showToast, openConfirm, fmtMoney, fmtNum, inputDate, setInputDate, storeList: analytics?.storeList || [], setTargets, selectedYear, selectedMonth, permissions, storeAccounts, managerAuth, currentUser, userRole, logActivity, handleUpdateStorePassword, handleUpdateManagerPassword, handleUpdateTherapistPassword, navigateToStore, activeView, appId, 
     therapists: visibleTherapists, therapistReports: visibleTherapistReports, therapistSchedules, therapistTargets, trainerAuth, handleUpdateTrainerAuth, auditExclusions, handleUpdateAuditExclusions, currentBrand, setCurrentBrandId, getCollectionPath, getDocPath, dailyLoginCount, yesterdayLoginCount, securityConfig, isOnline, isLowPowerMode,
-    fetchGlobalData 
-  }), [user, loading, analytics, visibleManagers, visibleManagerOrder, budgets, monthlyTargetSummary, targets, visibleRawData, rawData, annualAggregatedData, annualDashboardSummaries, annualSummaryStatusMap, therapistAnnualAggregatedData, inputDate, selectedYear, selectedMonth, permissions, storeAccounts, managerAuth, currentUser, userRole, logActivity, handleUpdateStorePassword, handleUpdateManagerPassword, handleUpdateTherapistPassword, navigateToStore, activeView, appId, visibleTherapists, visibleTherapistReports, therapistSchedules, therapistTargets, trainerAuth, handleUpdateTrainerAuth, auditExclusions, handleUpdateAuditExclusions, currentBrand, setCurrentBrandId, getCollectionPath, getDocPath, dailyLoginCount, yesterdayLoginCount, securityConfig, isOnline, isLowPowerMode, fetchGlobalData]); // ★ 依賴陣列也要加
+    fetchGlobalData,
+    directorLevel,
+    directorPermissionProfile,
+    canDirectorAccessView,
+    isReadOnlyDirector: userRole === "director" && !canDirectorAccessView("history")
+  }), [user, loading, analytics, visibleManagers, visibleManagerOrder, budgets, monthlyTargetSummary, targets, visibleRawData, rawData, annualAggregatedData, annualDashboardSummaries, annualSummaryStatusMap, therapistAnnualAggregatedData, inputDate, selectedYear, selectedMonth, permissions, storeAccounts, managerAuth, currentUser, userRole, logActivity, handleUpdateStorePassword, handleUpdateManagerPassword, handleUpdateTherapistPassword, navigateToStore, activeView, appId, visibleTherapists, visibleTherapistReports, therapistSchedules, therapistTargets, trainerAuth, handleUpdateTrainerAuth, auditExclusions, handleUpdateAuditExclusions, currentBrand, setCurrentBrandId, getCollectionPath, getDocPath, dailyLoginCount, yesterdayLoginCount, securityConfig, isOnline, isLowPowerMode, fetchGlobalData, directorLevel, directorPermissionProfile, canDirectorAccessView]); // ★ 依賴陣列也要加
   
   const memoizedViews = useMemo(() => {
     return (
@@ -2029,20 +2100,20 @@ useEffect(() => {
           {activeView === "ranking" && <RankingView />}
           {activeView === "store-analysis" && <StoreAnalysisView />}
           {activeView === "audit" && <AuditView auditType={auditType} setAuditType={setAuditType} />}
-          {activeView === "history" && <HistoryView />}
-          {activeView === "input" && <InputView />}
-          {activeView === "logs" && <SystemMonitor />}
-          {activeView === "settings" && <SettingsView />}
+          {activeView === "history" && canDirectorAccessView("history") && <HistoryView />}
+          {activeView === "input" && canDirectorAccessView("input") && <InputView />}
+          {activeView === "logs" && canDirectorAccessView("logs") && <SystemMonitor />}
+          {activeView === "settings" && canDirectorAccessView("settings") && <SettingsView />}
           {activeView === "annual" && <AnnualView />}
-          {activeView === "targets" && <TargetView />}
-          {activeView === "t-targets" && <TherapistTargetView />}
-          {activeView === "t-schedule" && <TherapistScheduleView />}
-          {activeView === "notification" && <NotificationManager />}
-          {activeView === "therapist-manager" && <TherapistManagerView />}
+          {activeView === "targets" && canDirectorAccessView("targets") && <TargetView />}
+          {activeView === "t-targets" && canDirectorAccessView("t-targets") && <TherapistTargetView />}
+          {activeView === "t-schedule" && canDirectorAccessView("t-schedule") && <TherapistScheduleView />}
+          {activeView === "notification" && canDirectorAccessView("notification") && <NotificationManager />}
+          {activeView === "therapist-manager" && canDirectorAccessView("therapist-manager") && <TherapistManagerView />}
         </Suspense>
       </main>
     );
-  }, [activeView, auditType]);
+  }, [activeView, auditType, canDirectorAccessView]);
 
   if (loading) return <div className="min-h-screen flex flex-col items-center justify-center bg-[#F9F8F6]"><Loader2 className="w-16 h-16 animate-spin text-stone-400 mb-4" /><p className="animate-pulse text-stone-500 font-bold tracking-wider">Loading DRCYJ Cloud...</p></div>;
   
@@ -2353,7 +2424,7 @@ if (isUpdating) {
       )}
 
       <div className={`flex min-h-screen bg-[#F9F8F6] text-stone-600 font-sans selection:bg-stone-200 selection:text-stone-800 overflow-x-hidden transition-all duration-300 ${!isOnline ? 'mt-9' : 'mt-0'} ${isLowPowerMode ? 'pb-24' : ''}`}>
-        <Sidebar activeView={activeView} setActiveView={setActiveView} isSidebarOpen={isSidebarOpen} setSidebarOpen={setSidebarOpen} user={user} userRole={userRole} onLogout={() => handleLogout()} permissions={permissions} currentUser={currentUser} />
+        <Sidebar activeView={activeView} setActiveView={handleProtectedSetActiveView} isSidebarOpen={isSidebarOpen} setSidebarOpen={setSidebarOpen} user={user} userRole={userRole} onLogout={() => handleLogout()} permissions={permissions} currentUser={currentUser} canAccessView={canDirectorAccessView} />
         <div className={`flex-1 flex flex-col transition-all duration-500 w-full max-w-full ${isSidebarOpen ? "md:ml-64" : "md:ml-20"} ml-0`}>
           <header className="bg-white/80 backdrop-blur-md border-b border-stone-200 sticky top-0 z-40 px-4 md:px-8 py-3 md:h-20 shadow-sm shadow-stone-200/50 shrink-0 transition-all">
             {/* Desktop Header */}
@@ -2539,7 +2610,7 @@ if (isUpdating) {
               </div>
             </div>
           </header>
-          <MobileTopNav activeView={activeView} setActiveView={setActiveView} permissions={permissions} userRole={userRole} onLogout={() => handleLogout()} />
+          <MobileTopNav activeView={activeView} setActiveView={handleProtectedSetActiveView} permissions={permissions} userRole={userRole} onLogout={() => handleLogout()} canAccessView={canDirectorAccessView} />
           
           {memoizedViews}
           

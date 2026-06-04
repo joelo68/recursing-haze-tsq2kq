@@ -13,6 +13,7 @@ export const Sidebar = ({
   onLogout,
   permissions,
   currentUser,
+  canAccessView,
 }) => {
   // ★★★ 1. 引入 AppContext 取得當前品牌 ★★★
   const { currentBrand } = useContext(AppContext);
@@ -21,7 +22,7 @@ export const Sidebar = ({
   const brandConfig = useMemo(() => {
     let id = "cyj";
     let label = "CYJ";
-    
+
     if (currentBrand) {
         id = typeof currentBrand === 'string' ? currentBrand : (currentBrand.id || "cyj");
         // 優先使用標準化名稱
@@ -76,10 +77,16 @@ export const Sidebar = ({
 
   const menuItems = useMemo(() => {
     if (!userRole) return [];
-    if (userRole === "director") return ALL_MENU_ITEMS;
-    const allowed = permissions[userRole] || [];
-    return ALL_MENU_ITEMS.filter((item) => allowed.includes(item.id));
-  }, [userRole, permissions]);
+
+    const baseItems = userRole === "director"
+      ? ALL_MENU_ITEMS
+      : ALL_MENU_ITEMS.filter((item) => (permissions?.[userRole] || []).includes(item.id));
+
+    return baseItems.filter((item) => {
+      if (typeof canAccessView !== "function") return true;
+      return canAccessView(item.id);
+    });
+  }, [userRole, permissions, canAccessView]);
 
   return (
     <>
@@ -131,7 +138,7 @@ export const Sidebar = ({
             );
           })}
         </div>
-        
+
         <div className="p-4 border-t border-stone-100 shrink-0">
           <div className={`bg-stone-50 rounded-2xl p-3 flex items-center gap-3 mb-3 transition-all ${!isSidebarOpen && "justify-center"}`}>
             <div className="w-10 h-10 rounded-full bg-stone-200 flex items-center justify-center shrink-0 overflow-hidden">
@@ -154,10 +161,10 @@ export const Sidebar = ({
   );
 };
 
-export const MobileTopNav = ({ activeView, setActiveView, permissions, userRole, onLogout }) => {
+export const MobileTopNav = ({ activeView, setActiveView, permissions, userRole, onLogout, canAccessView }) => {
   // ★★★ 手機版也需要 Context 來變色 ★★★
   const { currentBrand } = useContext(AppContext);
-  
+
   const themeClass = useMemo(() => {
     const id = currentBrand?.id || 'cyj';
     if (id.includes('anniu')) return "bg-rose-600 text-white shadow-rose-200";
@@ -167,10 +174,16 @@ export const MobileTopNav = ({ activeView, setActiveView, permissions, userRole,
 
   const menuItems = useMemo(() => {
     if (!userRole) return [];
-    if (userRole === "director") return ALL_MENU_ITEMS;
-    const allowed = permissions[userRole] || [];
-    return ALL_MENU_ITEMS.filter((item) => allowed.includes(item.id));
-  }, [userRole, permissions]);
+
+    const baseItems = userRole === "director"
+      ? ALL_MENU_ITEMS
+      : ALL_MENU_ITEMS.filter((item) => (permissions?.[userRole] || []).includes(item.id));
+
+    return baseItems.filter((item) => {
+      if (typeof canAccessView !== "function") return true;
+      return canAccessView(item.id);
+    });
+  }, [userRole, permissions, canAccessView]);
 
   return (
     <div className="md:hidden bg-white border-b border-stone-200 overflow-x-auto no-scrollbar">
