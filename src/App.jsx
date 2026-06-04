@@ -38,7 +38,7 @@ import {
 // ==========================================
 // ★ 系統核心版本號 (終極動態快取版)
 // ==========================================
-const CURRENT_APP_VERSION = "3.1.6"; 
+const CURRENT_APP_VERSION = "3.1.7"; 
 
 const isNewerVersion = (local, remote) => {
   if (!remote) return true;
@@ -1177,18 +1177,18 @@ export default function App() {
   // 這兩包資料仍維持 onSnapshot 即時更新，但只跟「登入 / 品牌」有關，避免切換頁面時反覆重建整包監聽。
   // 注意：這裡只負責 budgets / targets；org_structure、therapists 等全域資料仍由原本 fetchGlobalData 流程處理，避免 Dashboard 店家清單被清空。
   
-  // monthly_targets 第二階段節流：
-  // Dashboard 已優先使用 monthly_targets_summary/{yearMonth}。
-  // 完整 monthly_targets 只在年度目標設定、店家目標檢核、系統維護需要時才常駐監聽。
+  // monthly_targets 第三階段節流：
+  // Dashboard / Ranking / Annual 已優先使用 monthly_targets_summary 或 dashboard_summary。
+  // 完整 monthly_targets 只在「年度目標設定」與「回報檢核 > 店家目標」這類必須編輯 / 核對完整目標資料的頁面才監聽。
   const shouldLoadMonthlyTargets =
     activeView === "targets" ||
-    activeView === "settings" ||
-    activeView === "annual" ||
     (activeView === "audit" && auditType === "target");
 
 useEffect(() => {
     if (!shouldLoadMonthlyTargets) {
-      // Dashboard 已由 monthly_targets_summary 提供目標資料；不在非必要頁面常駐監聽完整 monthly_targets。
+      // 非必要頁面不常駐監聽完整 monthly_targets，避免每次讀全年約 400+ docs。
+      // 清空 budgets 可避免切品牌或離開目標頁後，用到舊品牌 / 舊年份快取造成達成率失真。
+      setBudgets({});
       return undefined;
     }
     if (!user) return;
@@ -1217,11 +1217,11 @@ useEffect(() => {
       try { unsubBudgetTargets && unsubBudgetTargets(); } catch (error) { console.warn("monthly_targets unsubscribe failed", error); }
       try { unsubKpiTargets && unsubKpiTargets(); } catch (error) { console.warn("kpi_targets unsubscribe failed", error); }
     };
-  }, [currentBrandId, getCollectionPath, shouldLoadMonthlyTargets]);
+  }, [user, currentBrandId, getCollectionPath, shouldLoadMonthlyTargets, getStableReadMeta]);
 
   // ★ monthly_targets_summary 輕量即時監聽：
-  // 先建立並監聽「目前 Dashboard 月份」的目標 Summary，作為下一階段降低 monthly_targets_live reads 的安全過渡。
-  // 目前仍保留原本 monthly_targets 完整監聽作為 fallback，避免目標設定、回報檢核與 Dashboard 達成率受影響。
+  // 監聽「目前選擇月份」的目標 Summary，供 Dashboard / Ranking / Annual 等一般分析頁使用。
+  // 完整 monthly_targets 已改為必要頁面才讀，降低 monthly_targets_live 讀取量。
   useEffect(() => {
     if (!user || !selectedYearMonth) {
       setMonthlyTargetSummary(null);

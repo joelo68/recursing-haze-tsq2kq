@@ -6,6 +6,7 @@ import {
 } from "recharts";
 import { Target, TrendingUp, DollarSign, Activity, Calendar, Award, Filter, ArrowRight, Settings, X, Ban, CheckCircle, Save } from "lucide-react";
 
+import { getDoc, doc } from "firebase/firestore";
 import { AppContext } from "../AppContext";
 import { sortManagerNames, sortStoreNames, sortManagersByOrgOrder, sortStoresByOrgOrder } from "../utils/helpers";
 import { ViewWrapper, Card } from "./SharedUI";
@@ -53,6 +54,7 @@ const AnnualView = () => {
     annualAggregatedData, // monthly_aggregated：本月 / 未整理月份備援
     annualDashboardSummaries = [], // ★ 歷史月份可信口徑：dashboard_summary
     annualSummaryStatusMap = {}, // ★ Summary 狀態：避免 dirty / mismatch 仍被使用
+    monthlyTargetSummary, // ★ 當月目標輕量 Summary：避免 AnnualView 為了本月預算讀完整 monthly_targets
     budgets, 
     managers, managerOrder, 
     fmtMoney, 
@@ -63,7 +65,8 @@ const AnnualView = () => {
     userRole,
     currentUser,
     showToast,
-    currentBrand
+    currentBrand,
+    getCollectionPath
   } = useContext(AppContext);
 
   // ==========================================
@@ -77,6 +80,7 @@ const AnnualView = () => {
 
   const [isConfigModalOpen, setIsConfigModalOpen] = useState(false);
   const [localExclusions, setLocalExclusions] = useState([]);
+  const [annualMonthlyTargetSummaries, setAnnualMonthlyTargetSummaries] = useState({});
 
   // 當切換品牌或年份時，重置過濾與時間區間
   useEffect(() => {
@@ -85,6 +89,70 @@ const AnnualView = () => {
     setStartMonthStr(`${selectedYear}-01`);
     setEndMonthStr(`${selectedYear}-12`);
   }, [currentBrand, selectedYear]);
+
+  const getMonthKeysInRange = (startValue, endValue) => {
+    const start = String(startValue || `${selectedYear}-01`);
+    const end = String(endValue || `${selectedYear}-12`);
+    const startMatch = start.match(/^(\d{4})-(\d{2})$/);
+    const endMatch = end.match(/^(\d{4})-(\d{2})$/);
+    if (!startMatch || !endMatch) return [];
+
+    const startYear = Number(startMatch[1]);
+    const startMonth = Number(startMatch[2]);
+    const endYear = Number(endMatch[1]);
+    const endMonth = Number(endMatch[2]);
+    const keys = [];
+
+    let cursor = new Date(startYear, startMonth - 1, 1);
+    const endDate = new Date(endYear, endMonth - 1, 1);
+
+    while (cursor <= endDate && keys.length < 24) {
+      keys.push(`${cursor.getFullYear()}-${String(cursor.getMonth() + 1).padStart(2, "0")}`);
+      cursor.setMonth(cursor.getMonth() + 1);
+    }
+
+    return keys;
+  };
+
+  useEffect(() => {
+    let cancelled = false;
+
+    const loadAnnualMonthlyTargetSummaries = async () => {
+      if (!getCollectionPath) return;
+
+      const monthKeys = getMonthKeysInRange(startMonthStr, endMonthStr);
+      if (monthKeys.length === 0) {
+        setAnnualMonthlyTargetSummaries({});
+        return;
+      }
+
+      try {
+        const rows = await Promise.all(
+          monthKeys.map(async (yearMonth) => {
+            const snap = await getDoc(doc(getCollectionPath("monthly_targets_summary"), yearMonth));
+            return [yearMonth, snap.exists() ? { id: snap.id, ...snap.data() } : null];
+          })
+        );
+
+        if (cancelled) return;
+
+        const next = {};
+        rows.forEach(([yearMonth, data]) => {
+          if (data) next[yearMonth] = data;
+        });
+        setAnnualMonthlyTargetSummaries(next);
+      } catch (error) {
+        console.warn("AnnualView 載入 monthly_targets_summary 失敗:", error);
+        if (!cancelled) setAnnualMonthlyTargetSummaries({});
+      }
+    };
+
+    loadAnnualMonthlyTargetSummaries();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [getCollectionPath, startMonthStr, endMonthStr, selectedYear, currentBrand]);
 
   // ==========================================
   // 2. 品牌資訊與篩選引擎
@@ -225,7 +293,15 @@ const AnnualView = () => {
   // ==========================================
   // 4. 核心運算邏輯 (★ 改為讀取 annualAggregatedData)
   // ==========================================
-  const annualData = useMemo(() => {
+    const monthlyTargetSummaryByMonth = useMemo(() => {
+    const map = { ...(annualMonthlyTargetSummaries || {}) };
+    if (monthlyTargetSummary?.yearMonth) {
+      map[monthlyTargetSummary.yearMonth] = monthlyTargetSummary;
+    }
+    return map;
+  }, [annualMonthlyTargetSummaries, monthlyTargetSummary]);
+
+const annualData = useMemo(() => {
     // 目標店家 = 在有效清單中，且沒有被「排除設定」打勾的店家
     const targetStoreNames = effectiveStores
       .filter(s => !auditExclusions.includes(s))
@@ -309,6 +385,41 @@ const AnnualView = () => {
       targetStat.source = "summary";
     };
 
+    const sumTargetsFromMonthlyTargetSummary = (summary, targetStat) => {
+      if (!summary) return false;
+      const summaryYearMonth = String(summary.yearMonth || summary.id || "");
+      const targetYearMonth = `${targetStat.y}-${String(targetStat.m).padStart(2, "0")}`;
+      if (summaryYearMonth !== targetYearMonth) return false;
+
+      const targetsMap = summary.targets || summary.storeTargets || summary.data || {};
+      if (!targetsMap || typeof targetsMap !== "object") return false;
+
+      const targetStoreSet = new Set(targetStoreNames.map((name) => cleanName(name)));
+      const allTargets = Object.entries(targetsMap)
+        .map(([key, value]) => ({
+          key,
+          ...(value || {}),
+          storeName: value?.storeName || value?.name || value?.displayName || key,
+        }))
+        .filter((item) => {
+          if (!shouldFilterSummaryStores) return true;
+          const core = cleanName(item.storeName);
+          return core && targetStoreSet.has(core);
+        });
+
+      if (allTargets.length === 0) return false;
+
+      const cashBudget = allTargets.reduce((sum, item) => sum + pickNumber(item, ["cashTarget", "targetCash", "cashBudget", "monthlyCashTarget", "cash", "cash_target"]), 0);
+      const accrualBudget = allTargets.reduce((sum, item) => sum + pickNumber(item, ["accrualTarget", "targetAccrual", "accrualBudget", "monthlyAccrualTarget", "accrual", "accrual_target"]), 0);
+
+      if (cashBudget <= 0 && accrualBudget <= 0) return false;
+
+      targetStat.budget += cashBudget;
+      targetStat.accrualBudget += accrualBudget;
+      targetStat.targetSource = "monthly_targets_summary";
+      return true;
+    };
+
     const summaryAppliedMonths = new Set();
 
     // ★ 歷史月份優先採用 verified dashboard_summary。
@@ -355,15 +466,22 @@ const AnnualView = () => {
     let totalCash = 0; let totalBudget = 0; let totalAccrual = 0; let totalAccrualBudget = 0; let totalTraffic = 0;
 
     statsMap.forEach(stat => {
-      // Summary 內已包含該月、該篩選條件的目標值；只有備援 monthly_aggregated 口徑才從 budgets 補目標。
+      // Summary 內已包含該月、該篩選條件的目標值。
+      // 若是本月 / 未來月份 / 未整理月份，優先用 AnnualView 輕量讀取的 monthly_targets_summary 補目標；
+      // 只有 summary 找不到時，才 fallback 舊 budgets，讓 AnnualView 不必為了年度預算讀完整 monthly_targets。
       if (stat.source !== "summary") {
-        targetStoreNames.forEach(storeName => {
-          const key = `${storeName}_${stat.y}_${stat.m}`;
-          if (budgets[key]) {
-            stat.budget += (Number(budgets[key].cashTarget) || 0);
-            stat.accrualBudget += (Number(budgets[key].accrualTarget) || 0);
-          }
-        });
+        const statYearMonth = `${stat.y}-${String(stat.m).padStart(2, "0")}`;
+        const usedTargetSummary = sumTargetsFromMonthlyTargetSummary(monthlyTargetSummaryByMonth[statYearMonth], stat);
+
+        if (!usedTargetSummary) {
+          targetStoreNames.forEach(storeName => {
+            const key = `${storeName}_${stat.y}_${stat.m}`;
+            if (budgets[key]) {
+              stat.budget += (Number(budgets[key].cashTarget) || 0);
+              stat.accrualBudget += (Number(budgets[key].accrualTarget) || 0);
+            }
+          });
+        }
       }
 
       stat.achievement = stat.budget > 0 ? (stat.cash / stat.budget) * 100 : 0;
@@ -384,7 +502,7 @@ const AnnualView = () => {
         traffic: totalTraffic,
       }
     };
-  }, [annualAggregatedData, annualDashboardSummaries, annualSummaryStatusMap, budgets, startMonthStr, endMonthStr, auditExclusions, brandPrefix, effectiveStores, cleanName, selectedAnnualManager, selectedAnnualStore, userRole]); // ★ Summary-first 口徑需跟著篩選與權限更新
+  }, [annualAggregatedData, annualDashboardSummaries, annualSummaryStatusMap, monthlyTargetSummaryByMonth, budgets, startMonthStr, endMonthStr, auditExclusions, brandPrefix, effectiveStores, cleanName, selectedAnnualManager, selectedAnnualStore, userRole]); // ★ Summary-first 口徑需跟著篩選與權限更新
 
   const { monthlyStats, totals } = annualData;
 
