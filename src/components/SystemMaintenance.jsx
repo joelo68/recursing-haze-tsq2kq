@@ -44,6 +44,7 @@ import {
   Sparkles,
 } from "lucide-react";
 import { ViewWrapper } from "./SharedUI";
+import SmartCalendar from "./SmartCalendar";
 import {
   getReadTrackerMode,
   setReadTrackerMode,
@@ -95,6 +96,20 @@ export default function SystemMaintenance() {
   const [globalReadStats, setGlobalReadStats] = useState([]);
   const [loadingReadStats, setLoadingReadStats] = useState(false);
   const [globalRowsCount, setGlobalRowsCount] = useState(0);
+  const [globalReadScopeLabel, setGlobalReadScopeLabel] = useState("近 24 小時全域排行");
+  const [globalReadRange, setGlobalReadRange] = useState(() => {
+    const now = new Date();
+    const end = new Date(now);
+    end.setMinutes(0, 0, 0);
+    const start = new Date(end);
+    start.setHours(start.getHours() - 1);
+    const toLocalInput = (date) => {
+      const pad = (num) => String(num).padStart(2, "0");
+      return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}T${pad(date.getHours())}:${pad(date.getMinutes())}`;
+    };
+    return { start: toLocalInput(start), end: toLocalInput(end) };
+  });
+  const [globalReadCalendarTarget, setGlobalReadCalendarTarget] = useState(null);
   const [readTrackerConfig, setReadTrackerConfig] = useState({
     mode: getReadTrackerMode(),
     scheduleEnabled: false,
@@ -114,6 +129,216 @@ export default function SystemMaintenance() {
   const brandId = currentBrand?.id || "unknown";
   const brandLabel = currentBrand?.label || "目前品牌";
   const isSelectedCurrentMonth = (month = calMonth) => String(month || "") === todayMonth();
+
+  const toDateKey = (date) => {
+    if (!(date instanceof Date) || Number.isNaN(date.getTime())) return "";
+    const pad = (num) => String(num).padStart(2, "0");
+    return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}`;
+  };
+
+  const toDateTimeLocalValue = (date) => {
+    if (!(date instanceof Date) || Number.isNaN(date.getTime())) return "";
+    const pad = (num) => String(num).padStart(2, "0");
+    return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}T${pad(date.getHours())}:${pad(date.getMinutes())}`;
+  };
+
+  const makeGlobalReadRange = (preset) => {
+    const now = new Date();
+    const end = new Date(now);
+    end.setMinutes(0, 0, 0);
+    const start = new Date(end);
+
+    if (preset === "last1h") {
+      start.setHours(end.getHours() - 1);
+    } else if (preset === "overnight") {
+      const base = new Date(now);
+      if (base.getHours() < 12) base.setDate(base.getDate() - 1);
+      start.setFullYear(base.getFullYear(), base.getMonth(), base.getDate());
+      start.setHours(18, 0, 0, 0);
+      end.setFullYear(base.getFullYear(), base.getMonth(), base.getDate() + 1);
+      end.setHours(7, 0, 0, 0);
+    } else if (preset === "early4to5") {
+      const base = new Date(now);
+      if (base.getHours() < 5) base.setDate(base.getDate() - 1);
+      start.setFullYear(base.getFullYear(), base.getMonth(), base.getDate());
+      start.setHours(4, 0, 0, 0);
+      end.setFullYear(base.getFullYear(), base.getMonth(), base.getDate());
+      end.setHours(5, 0, 0, 0);
+    }
+
+    return { start: toDateTimeLocalValue(start), end: toDateTimeLocalValue(end) };
+  };
+
+  const getDateKeysAroundRange = (startDate, endDate) => {
+    const keys = new Set();
+    const cursor = new Date(startDate);
+    cursor.setHours(0, 0, 0, 0);
+    cursor.setDate(cursor.getDate() - 1);
+
+    const finalDate = new Date(endDate);
+    finalDate.setHours(0, 0, 0, 0);
+    finalDate.setDate(finalDate.getDate() + 1);
+
+    let safety = 0;
+    while (cursor <= finalDate && safety < 10) {
+      keys.add(toDateKey(cursor));
+      keys.add(cursor.toISOString().slice(0, 10));
+      cursor.setDate(cursor.getDate() + 1);
+      safety += 1;
+    }
+    return Array.from(keys).filter(Boolean);
+  };
+
+  const getReadableRangeLabel = (startValue, endValue) => {
+    const startDate = new Date(startValue);
+    const endDate = new Date(endValue);
+    if (Number.isNaN(startDate.getTime()) || Number.isNaN(endDate.getTime())) return "指定時段全域排行";
+    const fmt = (date) => date.toLocaleString("zh-TW", {
+      month: "2-digit",
+      day: "2-digit",
+      hour: "2-digit",
+      minute: "2-digit",
+      hour12: false,
+    });
+    return `${fmt(startDate)}～${fmt(endDate)} 全域排行`;
+  };
+
+  const getGlobalRangeDatePart = (value) => {
+    const text = String(value || "");
+    return text.includes("T") ? text.split("T")[0] : toDateKey(new Date());
+  };
+
+  const getGlobalRangeTimePart = (value) => {
+    const text = String(value || "");
+    return text.includes("T") ? (text.split("T")[1] || "00:00").slice(0, 5) : "00:00";
+  };
+
+  const setGlobalRangeDatePart = (key, dateValue) => {
+    setGlobalReadRange((prev) => ({
+      ...prev,
+      [key]: `${dateValue}T${getGlobalRangeTimePart(prev[key])}`,
+    }));
+    setGlobalReadCalendarTarget(null);
+  };
+
+  const setGlobalRangeTimePart = (key, timeValue) => {
+    setGlobalReadRange((prev) => ({
+      ...prev,
+      [key]: `${getGlobalRangeDatePart(prev[key])}T${timeValue}`,
+    }));
+  };
+
+  const renderGlobalReadRangePicker = (key, label) => {
+    const selectedValue = globalReadRange[key] || "";
+    const selectedDate = getGlobalRangeDatePart(selectedValue);
+    const selectedTime = getGlobalRangeTimePart(selectedValue);
+    const selectedHour = selectedTime.slice(0, 2);
+    const selectedMinute = selectedTime.slice(3, 5);
+    const hourOptions = Array.from({ length: 24 }, (_, index) => String(index).padStart(2, "0"));
+    const minuteOptions = ["00", "10", "20", "30", "40", "50"];
+
+    return (
+      <div className="relative">
+        <p className="mb-1 text-[11px] font-black text-stone-500">{label}</p>
+        <div className="rounded-2xl border border-stone-200 bg-white p-2 shadow-sm">
+          <button
+            type="button"
+            onClick={() => setGlobalReadCalendarTarget((prev) => (prev === key ? null : key))}
+            className="w-full rounded-xl border border-stone-100 bg-stone-50 px-3 py-2 text-left text-xs font-black text-stone-700 hover:bg-stone-100 flex items-center justify-between"
+          >
+            <span>{selectedDate}</span>
+            <Calendar size={14} className="text-stone-400" />
+          </button>
+
+          <div className="mt-2 grid grid-cols-[1fr_auto_1fr] items-center gap-2">
+            <select
+              value={selectedHour}
+              onChange={(e) => setGlobalRangeTimePart(key, `${e.target.value}:${selectedMinute}`)}
+              className="w-full rounded-xl border border-stone-100 bg-white px-3 py-2 text-xs font-black text-stone-700 outline-none focus:border-blue-200"
+            >
+              {hourOptions.map((hour) => <option key={hour} value={hour}>{hour} 時</option>)}
+            </select>
+            <span className="text-xs font-black text-stone-300">:</span>
+            <select
+              value={selectedMinute}
+              onChange={(e) => setGlobalRangeTimePart(key, `${selectedHour}:${e.target.value}`)}
+              className="w-full rounded-xl border border-stone-100 bg-white px-3 py-2 text-xs font-black text-stone-700 outline-none focus:border-blue-200"
+            >
+              {minuteOptions.map((minute) => <option key={minute} value={minute}>{minute} 分</option>)}
+            </select>
+          </div>
+        </div>
+
+        {globalReadCalendarTarget === key && (
+          <div className="absolute left-0 top-[104px] z-50">
+            <SmartCalendar
+              selectedDate={selectedDate}
+              onDateSelect={(dateValue) => setGlobalRangeDatePart(key, dateValue)}
+              onClose={() => setGlobalReadCalendarTarget(null)}
+            />
+          </div>
+        )}
+      </div>
+    );
+  };
+
+  const buildGlobalReadSummaryRows = (rows, options = {}) => {
+    const startMs = options.startMs ?? null;
+    const endMs = options.endMs ?? null;
+    const sourceSummary = {};
+    const scopedRows = [];
+
+    rows.forEach((row) => {
+      const rowTime = row.updatedAtText ? new Date(row.updatedAtText).getTime() : 0;
+      const isSameBrand = !brandId || !row.brandId || row.brandId === brandId;
+      if (!isSameBrand) return;
+
+      const rowSources = normalizeSourcesFromRow(row) || {};
+      let rowUsed = false;
+
+      Object.entries(rowSources).forEach(([label, item]) => {
+        const sourceTime = item?.lastAt ? new Date(item.lastAt).getTime() : rowTime;
+        if (startMs !== null && sourceTime < startMs) return;
+        if (endMs !== null && sourceTime >= endMs) return;
+
+        if (!sourceSummary[label]) {
+          sourceSummary[label] = {
+            label,
+            docs: 0,
+            triggers: 0,
+            users: new Set(),
+            roles: new Set(),
+            devices: new Set(),
+            lastAt: "",
+          };
+        }
+
+        sourceSummary[label].docs += Number(item.docs || 0);
+        sourceSummary[label].triggers += Number(item.triggers || 0);
+        sourceSummary[label].users.add(row.userName || row.userRole || "unknown");
+        sourceSummary[label].roles.add(row.userRole || "unknown");
+        sourceSummary[label].devices.add(row.device || row.deviceShort || "unknown");
+        if (!sourceSummary[label].lastAt || String(item.lastAt || row.updatedAtText || "") > sourceSummary[label].lastAt) {
+          sourceSummary[label].lastAt = item.lastAt || row.updatedAtText || "";
+        }
+        rowUsed = true;
+      });
+
+      if (rowUsed) scopedRows.push(row);
+    });
+
+    const summaryRows = Object.values(sourceSummary)
+      .map((item) => ({
+        ...item,
+        users: item.users.size,
+        roles: Array.from(item.roles),
+        devices: Array.from(item.devices),
+        avg: item.triggers ? Math.round(item.docs / item.triggers) : 0,
+      }))
+      .sort((a, b) => b.docs - a.docs);
+
+    return { summaryRows, scopedRows };
+  };
 
   const addLog = (msg) => {
     const timeStr = new Date().toLocaleTimeString("zh-TW", { hour12: false });
@@ -900,7 +1125,7 @@ export default function SystemMaintenance() {
           { label: "動作", value: "只讀取", tone: "success" },
           { label: "資料影響", value: "不修改", tone: "success" },
         ];
-        items = [makeItem("本機讀取統計", "已讀取目前裝置來源排行"), makeItem("近 24 小時全域排行", "已載入全體上報來源排行")];
+        items = [makeItem("本機讀取統計", "已讀取目前裝置來源排行"), makeItem("全域讀取排行", "已載入全體上報來源排行；也可用時段篩選追查尖峰")];
         nextActions = ["當月日報高通常代表即時戰情成本。", "年度彙總、目標、排班若高，通常是下一波節流方向。"];
       }
 
@@ -1484,42 +1709,82 @@ export default function SystemMaintenance() {
     return parsed;
   };
 
-  const handleLoadGlobalReadStats = async () => {
+  const handleLoadGlobalReadStats = async (options = {}) => {
     setLoadingReadStats(true);
     try {
-      const now = new Date();
-      const today = now.toISOString().slice(0, 10);
-      const yesterdayObj = new Date(now); yesterdayObj.setDate(yesterdayObj.getDate() - 1);
-      const yesterday = yesterdayObj.toISOString().slice(0, 10);
-      const [todaySnap, yesterdaySnap] = await Promise.all([
-        getDocs(query(collection(db, "read_debug_sessions"), where("date", "==", today), limit(300))),
-        getDocs(query(collection(db, "read_debug_sessions"), where("date", "==", yesterday), limit(300))),
-      ]);
-      const rows = [...todaySnap.docs.map((d) => ({ id: d.id, ...d.data() })), ...yesterdaySnap.docs.map((d) => ({ id: d.id, ...d.data() }))];
-      const since = Date.now() - 24 * 60 * 60 * 1000;
-      const recentRows = rows.filter((row) => {
-        const t = row.updatedAtText ? new Date(row.updatedAtText).getTime() : 0;
-        const isSameBrand = !brandId || !row.brandId || row.brandId === brandId;
-        return t >= since && isSameBrand;
-      });
-      const sourceSummary = {};
-      recentRows.forEach((row) => {
-        Object.entries(normalizeSourcesFromRow(row) || {}).forEach(([label, item]) => {
-          if (!sourceSummary[label]) sourceSummary[label] = { label, docs: 0, triggers: 0, users: new Set(), roles: new Set(), devices: new Set(), lastAt: "" };
-          sourceSummary[label].docs += Number(item.docs || 0);
-          sourceSummary[label].triggers += Number(item.triggers || 0);
-          sourceSummary[label].users.add(row.userName || row.userRole || "unknown");
-          sourceSummary[label].roles.add(row.userRole || "unknown");
-          sourceSummary[label].devices.add(row.device || "unknown");
-          if (!sourceSummary[label].lastAt || item.lastAt > sourceSummary[label].lastAt) sourceSummary[label].lastAt = item.lastAt;
-        });
-      });
-      const summaryRows = Object.values(sourceSummary).map((item) => ({ ...item, users: item.users.size, roles: Array.from(item.roles), devices: Array.from(item.devices), avg: item.triggers ? Math.round(item.docs / item.triggers) : 0 })).sort((a, b) => b.docs - a.docs);
+      const scope = options.scope || "all";
+      let rows = [];
+      let scopeLabel = "近 24 小時全域排行";
+      let startMs = null;
+      let endMs = null;
+
+      if (scope === "range") {
+        const startDate = new Date(globalReadRange.start);
+        const endDate = new Date(globalReadRange.end);
+
+        if (Number.isNaN(startDate.getTime()) || Number.isNaN(endDate.getTime())) {
+          showToast("請先選擇正確的開始與結束時間", "error");
+          return;
+        }
+
+        if (endDate <= startDate) {
+          showToast("結束時間必須晚於開始時間", "error");
+          return;
+        }
+
+        const maxRangeMs = 7 * 24 * 60 * 60 * 1000;
+        if (endDate.getTime() - startDate.getTime() > maxRangeMs) {
+          showToast("指定時段最多查詢 7 天，避免一次讀取過多追蹤資料", "error");
+          return;
+        }
+
+        startMs = startDate.getTime();
+        endMs = endDate.getTime();
+        scopeLabel = getReadableRangeLabel(globalReadRange.start, globalReadRange.end);
+
+        const dateKeys = getDateKeysAroundRange(startDate, endDate);
+        const snaps = await Promise.all(
+          dateKeys.map((dateKey) => getDocs(query(collection(db, "read_debug_sessions"), where("date", "==", dateKey), limit(600))))
+        );
+        rows = snaps.flatMap((snap) => snap.docs.map((d) => ({ id: d.id, ...d.data() })));
+      } else {
+        const now = new Date();
+        const today = now.toISOString().slice(0, 10);
+        const yesterdayObj = new Date(now);
+        yesterdayObj.setDate(yesterdayObj.getDate() - 1);
+        const yesterday = yesterdayObj.toISOString().slice(0, 10);
+
+        const [todaySnap, yesterdaySnap] = await Promise.all([
+          getDocs(query(collection(db, "read_debug_sessions"), where("date", "==", today), limit(300))),
+          getDocs(query(collection(db, "read_debug_sessions"), where("date", "==", yesterday), limit(300))),
+        ]);
+
+        rows = [
+          ...todaySnap.docs.map((d) => ({ id: d.id, ...d.data() })),
+          ...yesterdaySnap.docs.map((d) => ({ id: d.id, ...d.data() })),
+        ];
+        startMs = Date.now() - 24 * 60 * 60 * 1000;
+        endMs = null;
+        scopeLabel = "近 24 小時全域排行";
+      }
+
+      const { summaryRows, scopedRows } = buildGlobalReadSummaryRows(rows, { startMs, endMs });
       setGlobalReadStats(summaryRows);
-      setGlobalRowsCount(recentRows.length);
-      showToast(summaryRows.length === 0 ? "近 24 小時尚未找到可彙整的全域追蹤資料" : `已載入近 24 小時排行，共 ${summaryRows.length} 個來源`, summaryRows.length === 0 ? "info" : "success");
-    } catch (error) { console.error(error); showToast("讀取全域追蹤失敗，請確認 read_debug_sessions 權限或資料是否存在", "error"); }
-    finally { setLoadingReadStats(false); }
+      setGlobalRowsCount(scopedRows.length);
+      setGlobalReadScopeLabel(scopeLabel);
+
+      const emptyText = scope === "range" ? "指定時段尚未找到可彙整的全域追蹤資料" : "近 24 小時尚未找到可彙整的全域追蹤資料";
+      const successText = scope === "range"
+        ? `已載入${scopeLabel}，共 ${summaryRows.length} 個來源`
+        : `已載入近 24 小時排行，共 ${summaryRows.length} 個來源`;
+
+      showToast(summaryRows.length === 0 ? emptyText : successText, summaryRows.length === 0 ? "info" : "success");
+    } catch (error) {
+      console.error(error);
+      showToast("讀取全域追蹤失敗，請確認 read_debug_sessions 權限或資料是否存在", "error");
+    } finally {
+      setLoadingReadStats(false);
+    }
   };
 
   // 新增工具：資料健康檢查
@@ -3371,7 +3636,7 @@ export default function SystemMaintenance() {
           </div>
           <div className="p-6 border-b border-[#F0E3CF] bg-[#FFFCF7]"><div className="rounded-[1.75rem] border border-[#EEDFC7] bg-white shadow-sm overflow-hidden"><div className="p-5 flex flex-col xl:flex-row xl:items-center xl:justify-between gap-4 border-b border-stone-100"><div className="min-w-0"><h3 className="text-sm font-black text-stone-800 flex items-center gap-2"><Clock size={18} className="text-[#B7863D]" />排程式全域上報</h3><p className="text-xs text-stone-400 font-bold mt-1">固定晚間診斷區間，讓每天數據可比較；支援跨日，例如 19:00～07:00。</p></div><div className={`shrink-0 inline-flex items-center gap-2 px-3 py-2 rounded-2xl text-xs font-black border ${!scheduleForm.scheduleEnabled ? "bg-stone-50 text-stone-500 border-stone-200" : scheduleStatus.isActive ? "bg-emerald-50 text-emerald-700 border-emerald-100" : "bg-amber-50 text-amber-700 border-amber-100"}`}><CheckCircle2 size={15} />{scheduleStatus.label}｜現在 {scheduleStatus.nowTime}</div></div>
             <div className="p-5 grid grid-cols-1 lg:grid-cols-[1.1fr_1fr_1fr_auto] gap-3 items-end"><div className="rounded-2xl border border-stone-100 bg-stone-50/70 p-3 flex items-center justify-between gap-3"><div><p className="text-xs font-black text-stone-700">啟用排程</p><p className="text-[11px] text-stone-400 font-bold mt-0.5">排程時段內自動切為全域上報。</p></div><button onClick={()=>setScheduleForm((prev)=>({ ...prev, scheduleEnabled: !prev.scheduleEnabled }))} className={`w-12 h-7 rounded-full p-1 transition-all ${scheduleForm.scheduleEnabled ? "bg-[#D8B46B]" : "bg-stone-300"}`}><span className={`block w-5 h-5 rounded-full bg-white shadow transition-transform ${scheduleForm.scheduleEnabled ? "translate-x-5" : "translate-x-0"}`} /></button></div><div><label className="text-[11px] font-black text-stone-400 block mb-1.5 tracking-wider">開始時間</label><SoftInput type="time" value={scheduleForm.startTime} onChange={(e)=>setScheduleForm((prev)=>({ ...prev, startTime: e.target.value }))} /></div><div><label className="text-[11px] font-black text-stone-400 block mb-1.5 tracking-wider">結束時間</label><SoftInput type="time" value={scheduleForm.endTime} onChange={(e)=>setScheduleForm((prev)=>({ ...prev, endTime: e.target.value }))} /></div><div className="flex gap-2"><BeautyButton onClick={handleApplyScheduleNow} variant="secondary" className="whitespace-nowrap">立即套用</BeautyButton><BeautyButton onClick={handleSaveReadTrackerSchedule} variant="primary" className="whitespace-nowrap"><Save size={14} />儲存排程</BeautyButton></div></div><div className="px-5 py-3 bg-amber-50/50 border-t border-amber-100/60 text-[11px] text-amber-700 font-bold leading-relaxed">目前套用品牌：{brandLabel}。排程啟用後，排程時段內會自動啟用全域上報；白天若臨時開啟本機追蹤，不會修改晚間排程。</div></div></div>
-          <div className="p-6 grid grid-cols-1 xl:grid-cols-2 gap-6"><div className="rounded-[1.5rem] border border-stone-100 bg-stone-50/50 overflow-hidden"><div className="px-4 py-3 border-b border-stone-100 bg-white flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3"><div className="flex flex-wrap items-center gap-2"><Activity size={16} className="text-emerald-500" /><span className="text-sm font-black text-stone-700">目前裝置統計</span><span className={`px-2 py-1 rounded-full border text-[10px] font-black ${localReadModeTone}`}>{localReadModeLabel}</span>{localReadLastRefreshedAt && <span className="text-[10px] font-bold text-stone-300">更新 {localReadLastRefreshedAt.toLocaleTimeString("zh-TW", { hour12: false, hour: "2-digit", minute: "2-digit", second: "2-digit" })}</span>}</div><div className="flex flex-wrap items-center gap-2">{readTrackerMode === "off" && <button onClick={handleEnableLocalReadTracker} className="text-[11px] font-black px-3 py-1.5 rounded-xl border border-emerald-100 bg-emerald-50 text-emerald-600 hover:bg-emerald-100">開啟本機追蹤</button>}<button onClick={refreshLocalReadStats} className="text-[11px] font-black px-3 py-1.5 rounded-xl border border-stone-200 text-stone-500 hover:bg-stone-50">重新整理</button><button onClick={handleClearReadTracker} className="text-[11px] font-black px-3 py-1.5 rounded-xl border border-rose-100 text-rose-500 hover:bg-rose-50">清除</button></div></div>{renderStatList({ rows: readStatsRows, emptyIcon: BarChart3, emptyText: localReadEmptyText, emptySubText: readTrackerMode === "off" ? "可按右上「開啟本機追蹤」，或在上方模式切換為本機模式 / 全域上報後再觀察。" : "若切換頁面後仍無資料，代表目前沒有新的被追蹤讀取，或資料已由前端狀態提供。" })}</div><div className="rounded-[1.5rem] border border-stone-100 bg-stone-50/50 overflow-hidden"><div className="px-4 py-3 border-b border-stone-100 bg-white flex items-center justify-between"><div className="flex items-center gap-2"><Globe2 size={16} className="text-blue-500" /><span className="text-sm font-black text-stone-700">近 24 小時全域排行</span></div><button onClick={handleLoadGlobalReadStats} disabled={loadingReadStats} className="text-[11px] font-black px-3 py-1.5 rounded-xl bg-gradient-to-r from-[#FFF7DF] via-[#F7E8C6] to-[#EACB86] text-[#5A4225] border border-amber-200 disabled:opacity-40 flex items-center gap-1.5">{loadingReadStats ? <Loader2 size={13} className="animate-spin" /> : <Eye size={13} />}載入排行</button></div>{globalReadStats.length > 0 && <div className="p-4 pb-0 text-[11px] text-stone-400 font-bold">已彙整近 24 小時 {globalRowsCount.toLocaleString()} 筆上報工作階段</div>}{renderStatList({ rows: globalReadStats, emptyIcon: Globe2, emptyText: "尚未載入全域讀取排行", valueClass: "text-blue-600" })}</div></div>
+          <div className="p-6 grid grid-cols-1 xl:grid-cols-2 gap-6"><div className="rounded-[1.5rem] border border-stone-100 bg-stone-50/50 overflow-hidden"><div className="px-4 py-3 border-b border-stone-100 bg-white flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3"><div className="flex flex-wrap items-center gap-2"><Activity size={16} className="text-emerald-500" /><span className="text-sm font-black text-stone-700">目前裝置統計</span><span className={`px-2 py-1 rounded-full border text-[10px] font-black ${localReadModeTone}`}>{localReadModeLabel}</span>{localReadLastRefreshedAt && <span className="text-[10px] font-bold text-stone-300">更新 {localReadLastRefreshedAt.toLocaleTimeString("zh-TW", { hour12: false, hour: "2-digit", minute: "2-digit", second: "2-digit" })}</span>}</div><div className="flex flex-wrap items-center gap-2">{readTrackerMode === "off" && <button onClick={handleEnableLocalReadTracker} className="text-[11px] font-black px-3 py-1.5 rounded-xl border border-emerald-100 bg-emerald-50 text-emerald-600 hover:bg-emerald-100">開啟本機追蹤</button>}<button onClick={refreshLocalReadStats} className="text-[11px] font-black px-3 py-1.5 rounded-xl border border-stone-200 text-stone-500 hover:bg-stone-50">重新整理</button><button onClick={handleClearReadTracker} className="text-[11px] font-black px-3 py-1.5 rounded-xl border border-rose-100 text-rose-500 hover:bg-rose-50">清除</button></div></div>{renderStatList({ rows: readStatsRows, emptyIcon: BarChart3, emptyText: localReadEmptyText, emptySubText: readTrackerMode === "off" ? "可按右上「開啟本機追蹤」，或在上方模式切換為本機模式 / 全域上報後再觀察。" : "若切換頁面後仍無資料，代表目前沒有新的被追蹤讀取，或資料已由前端狀態提供。" })}</div><div className="rounded-[1.5rem] border border-stone-100 bg-stone-50/50 overflow-hidden"><div className="px-4 py-3 border-b border-stone-100 bg-white flex flex-col gap-3"><div className="flex flex-col md:flex-row md:items-center md:justify-between gap-3"><div className="flex items-center gap-2"><Globe2 size={16} className="text-blue-500" /><span className="text-sm font-black text-stone-700">全域讀取排行</span><span className="text-[10px] font-black text-blue-500 bg-blue-50 border border-blue-100 rounded-full px-2 py-0.5">可篩選時段</span></div><div className="flex flex-wrap items-center gap-2"><button onClick={() => handleLoadGlobalReadStats({ scope: "all" })} disabled={loadingReadStats} className="text-[11px] font-black px-3 py-1.5 rounded-xl bg-gradient-to-r from-[#FFF7DF] via-[#F7E8C6] to-[#EACB86] text-[#5A4225] border border-amber-200 disabled:opacity-40 flex items-center gap-1.5">{loadingReadStats ? <Loader2 size={13} className="animate-spin" /> : <Eye size={13} />}全部 / 近 24 小時</button><button onClick={() => handleLoadGlobalReadStats({ scope: "range" })} disabled={loadingReadStats} className="text-[11px] font-black px-3 py-1.5 rounded-xl border border-blue-100 bg-blue-50 text-blue-600 disabled:opacity-40 flex items-center gap-1.5">{loadingReadStats ? <Loader2 size={13} className="animate-spin" /> : <Clock size={13} />}載入時段</button></div></div><div className="rounded-2xl border border-stone-100 bg-stone-50/70 p-3 space-y-3"><div className="flex flex-wrap gap-2"><button type="button" onClick={() => setGlobalReadRange(makeGlobalReadRange("last1h"))} className="text-[10px] font-black px-2.5 py-1 rounded-full border border-stone-200 bg-white text-stone-500 hover:bg-stone-100">最近 1 小時</button><button type="button" onClick={() => setGlobalReadRange(makeGlobalReadRange("early4to5"))} className="text-[10px] font-black px-2.5 py-1 rounded-full border border-stone-200 bg-white text-stone-500 hover:bg-stone-100">凌晨 04:00～05:00</button><button type="button" onClick={() => setGlobalReadRange(makeGlobalReadRange("overnight"))} className="text-[10px] font-black px-2.5 py-1 rounded-full border border-stone-200 bg-white text-stone-500 hover:bg-stone-100">昨晚 18:00～今早 07:00</button></div><div className="grid grid-cols-1 md:grid-cols-2 gap-3">{renderGlobalReadRangePicker("start", "開始時間")}{renderGlobalReadRangePicker("end", "結束時間")}</div><p className="text-[10px] font-bold text-stone-400 leading-relaxed">「全部 / 近 24 小時」保留原本觀察方式；「載入時段」可用來查凌晨 04:00～05:00 等異常尖峰來源。指定時段最多查詢 7 天，避免一次讀取過多追蹤資料。</p></div></div>{globalReadStats.length > 0 && <div className="p-4 pb-0 text-[11px] text-stone-400 font-bold">已彙整 {globalReadScopeLabel}｜{globalRowsCount.toLocaleString()} 筆上報工作階段</div>}{renderStatList({ rows: globalReadStats, emptyIcon: Globe2, emptyText: "尚未載入全域讀取排行", valueClass: "text-blue-600" })}</div></div>
         </section>
 
         <section className="rounded-[2rem] border border-[#EEDFC7] bg-white/95 shadow-[0_22px_70px_rgba(120,90,40,0.05)] overflow-hidden"><button onClick={()=>setShowAdvancedTools((prev)=>!prev)} className="w-full p-6 flex flex-col md:flex-row md:items-center md:justify-between gap-3 text-left"><SectionTitle eyebrow="Protected Area" title="高風險資料處理" desc="還原、封存與批次修復都集中在這裡；沒有明確異常時不建議操作。" icon={AlertTriangle} /><div className="inline-flex items-center gap-2 text-xs font-black text-stone-500 bg-stone-50 border border-stone-200 rounded-2xl px-3 py-2 w-fit">{showAdvancedTools ? "收合工具" : "展開工具"}<ChevronDown size={14} className={`transition-transform ${showAdvancedTools ? "rotate-180" : ""}`} /></div></button>
