@@ -33,6 +33,7 @@ const LoginView = ({
   const [role, setRole] = useState("director");
   const [password, setPassword] = useState("");
   const [selectedUser, setSelectedUser] = useState("");
+  const [managedDirectorName, setManagedDirectorName] = useState("");
   const [error, setError] = useState("");
   const [isLoading, setIsLoading] = useState(false);
   const [isResetting, setIsResetting] = useState(false);
@@ -44,6 +45,7 @@ const LoginView = ({
   const [newPassword, setNewPassword] = useState("");
   const [directorManageMode, setDirectorManageMode] = useState("edit-pass"); 
   const [newDirectorName, setNewDirectorName] = useState("");
+  const [selectedDirectorLevel, setSelectedDirectorLevel] = useState("operation_admin");
 
   const [tRegion, setTRegion] = useState("");   
   const [tStore, setTStore] = useState("");     
@@ -189,6 +191,136 @@ const LoginView = ({
       });
   }, [trainerAuth]);
 
+  const DIRECTOR_LEVEL_OPTIONS = [
+    { value: "super_admin", label: "最高管理者", hint: "系統維護、權限、帳號、封鎖、Summary" },
+    { value: "operation_admin", label: "營運主管", hint: "全品牌營運、報表、回報檢核" },
+    { value: "finance_admin", label: "財務主管", hint: "報表、匯出、財務檢視" },
+    { value: "viewer", label: "只讀主管", hint: "Dashboard 與報表檢視" },
+  ];
+
+  const getDirectorTitleWeight = (name = "") => {
+    if (name.includes("董事長")) return 1;
+    if (name.includes("總經理")) return 2;
+    if (name.includes("營運長")) return 3;
+    if (name.includes("總監")) return 4;
+    if (name.includes("財務")) return 5;
+    return 9;
+  };
+
+  const getDefaultDirectorLevel = (name = "") => {
+    if (name.includes("董事長") || name.includes("總經理")) return "super_admin";
+    if (name.includes("財務")) return "finance_admin";
+    return "operation_admin";
+  };
+
+  const normalizeDirectorAuthData = (data = {}) => {
+    const raw = data || {};
+    const hasAccounts = raw.accounts && typeof raw.accounts === "object";
+    let accounts = {};
+    let directorOrder = Array.isArray(raw.directorOrder) ? [...raw.directorOrder] : [];
+
+    if (hasAccounts) {
+      accounts = { ...raw.accounts };
+    } else {
+      Object.entries(raw).forEach(([name, value]) => {
+        if (["accounts", "directorOrder", "password"].includes(name)) return;
+        if (value && typeof value === "object") accounts[name] = { ...value, name: value.name || name };
+        else accounts[name] = { name, password: value || "0000" };
+      });
+      if (raw.password && Object.keys(accounts).length === 0) {
+        accounts["營運總監"] = { name: "營運總監", password: raw.password };
+      }
+    }
+
+    const existingNames = Object.keys(accounts);
+    const seen = new Set();
+    const normalizedOrder = [];
+
+    directorOrder.forEach((name) => {
+      const key = String(name || "").trim();
+      if (key && accounts[key] && !seen.has(key)) {
+        seen.add(key);
+        normalizedOrder.push(key);
+      }
+    });
+
+    existingNames
+      .filter((name) => !seen.has(name))
+      .sort((a, b) => {
+        const aw = getDirectorTitleWeight(a);
+        const bw = getDirectorTitleWeight(b);
+        if (aw !== bw) return aw - bw;
+        return zhCompare(a, b);
+      })
+      .forEach((name) => normalizedOrder.push(name));
+
+    const normalizedAccounts = {};
+    normalizedOrder.forEach((name, index) => {
+      const account = accounts[name] || {};
+      normalizedAccounts[name] = {
+        id: account.id || name,
+        name: account.name || name,
+        password: account.password || (typeof account === "string" ? account : "0000"),
+        level: account.level || account.directorLevel || getDefaultDirectorLevel(name),
+        isActive: account.isActive !== false,
+        sortOrder: Number.isFinite(Number(account.sortOrder)) ? Number(account.sortOrder) : index,
+        createdAtText: account.createdAtText || "",
+        updatedAtText: account.updatedAtText || "",
+        ...account,
+      };
+    });
+
+    return { accounts: normalizedAccounts, directorOrder: normalizedOrder };
+  };
+
+  const directorAuthSignature = useMemo(() => {
+    try {
+      return JSON.stringify(directorAuth || {});
+    } catch (error) {
+      return String(Object.keys(directorAuth || {}).join("|"));
+    }
+  }, [directorAuth]);
+
+  const directorAuthData = useMemo(() => normalizeDirectorAuthData(directorAuth || {}), [directorAuthSignature]);
+
+  const allDirectorNames = useMemo(() => {
+    return (directorAuthData.directorOrder || []).filter((name) => directorAuthData.accounts?.[name]);
+  }, [directorAuthData]);
+
+  const sortedDirectorNames = useMemo(() => {
+    return allDirectorNames.filter((name) => directorAuthData.accounts?.[name]?.isActive !== false);
+  }, [allDirectorNames, directorAuthData]);
+
+  const getDirectorAccount = (name) => directorAuthData.accounts?.[name] || null;
+  const getDirectorPassword = (name) => getDirectorAccount(name)?.password || "0000";
+  const getDirectorLevelLabel = (level) => DIRECTOR_LEVEL_OPTIONS.find((item) => item.value === level)?.label || "營運主管";
+
+  const sortedDirectorOptions = useMemo(() => {
+    return sortedDirectorNames.map((dName) => ({
+      name: dName,
+      levelLabel: getDirectorLevelLabel(directorAuthData.accounts?.[dName]?.level),
+      isActive: directorAuthData.accounts?.[dName]?.isActive !== false,
+    }));
+  }, [sortedDirectorNames, directorAuthData]);
+
+  const allDirectorOptions = useMemo(() => {
+    return allDirectorNames.map((dName) => ({
+      name: dName,
+      levelLabel: getDirectorLevelLabel(directorAuthData.accounts?.[dName]?.level),
+      isActive: directorAuthData.accounts?.[dName]?.isActive !== false,
+    }));
+  }, [allDirectorNames, directorAuthData]);
+
+  const handleSelectDirectorForLevel = (value) => {
+    setManagedDirectorName(value);
+    const nextLevel = getDirectorAccount(value)?.level || getDefaultDirectorLevel(value);
+    setSelectedDirectorLevel((prev) => (prev === nextLevel ? prev : nextLevel));
+  };
+
+  const handleSelectManagedDirector = (value) => {
+    setManagedDirectorName(value);
+  };
+
 
   const handleInitialBrandSelect = (brandId) => {
     if (onSwitchBrand) onSwitchBrand(brandId);
@@ -197,9 +329,9 @@ const LoginView = ({
 
   useEffect(() => {
     setTRegion(""); setTStore(""); setTPersonId(""); 
-    setError(""); setPassword(""); setSelectedUser(""); setIsResetting(false);
+    setError(""); setPassword(""); setSelectedUser(""); setManagedDirectorName(""); setIsResetting(false);
     setForcePasswordUpdate(null); setForceNewPassword(""); setForceConfirmPassword("");
-    setOldPassword(""); setNewPassword(""); setNewDirectorName(""); setDirectorManageMode("edit-pass");
+    setOldPassword(""); setNewPassword(""); setNewDirectorName(""); setDirectorManageMode("edit-pass"); setSelectedDirectorLevel("operation_admin");
   }, [role, currentBrandId]);
 
   const filteredStores = useMemo(() => {
@@ -236,43 +368,16 @@ const LoginView = ({
     count += managerCount;
 
     // 4. 高階主管
-    const directorCount = Object.keys(directorAuth || {}).length;
+    const directorCount = sortedDirectorNames.length;
     count += directorCount;
 
     // 5. 教專帳號 + 最高管理員
     const trainerCount = getSortedTrainerAccounts(trainerAuth).filter(a => a?.isActive !== false).length;
     count += trainerCount + 1;
 
-    // 🔍 修正後的日誌：把系統帳號補上，讓加總符合目前帳號設定
-    console.log("=== 📋 全集團授權帳號脫水點名簿 ===");
-    console.log(`總計人數：${count} 人`);
-    console.log(`➔ 🟢 現役管理師：${activeTherapists.length} 人`, activeTherapists.map(t => `${t.name}(${t.store}店)`).join(', '));
-    console.log(`➔ 🏪 活躍店經理：${storeCount} 人`, (storeAccounts || []).map(a => a.name).join(', '));
-    console.log(`➔ 🗺️ 區域負責人：${managerCount} 人`, Object.keys(managerAuth || {}).join(', '));
-    console.log(`➔ 👑 總部高階主管：${directorCount} 人`, Object.keys(directorAuth || {}).join(', '));
-    console.log(`➔ 🛠️ 系統固定帳號 (教專 ${trainerCount} 人 + 最高管理員)：${trainerCount + 1} 人`);
-    console.log("==================================");
-
+    // 登入頁帳號統計只保留計算結果；避免切換主管 / 權限時大量 console log 造成畫面閃爍。
     return count;
-  }, [therapists, storeAccounts, managerAuth, directorAuth, trainerAuth]);
-
-  const sortedDirectorNames = useMemo(() => {
-    const getTitleWeight = (name) => {
-  if (name.includes("董事長")) return 1;
-  if (name.includes("總經理")) return 2;
-  if (name.includes("營運長")) return 3;
-  if (name.includes("總監")) return 4;
-  if (name.includes("財務")) return 5;
-  return 9;
-};
-
-    return Object.keys(directorAuth || {}).sort((a, b) => {
-      const weightA = getTitleWeight(a);
-      const weightB = getTitleWeight(b);
-      if (weightA !== weightB) return weightA - weightB;
-      return a.localeCompare(b);
-    });
-  }, [directorAuth]);
+  }, [therapists, storeAccounts, managerAuth, directorAuthSignature, trainerAuth]);
 
   const currentMasterKey = masterAuth?.password || "BOSS888";
 
@@ -337,7 +442,7 @@ const LoginView = ({
       else if (roleId === "manager") success = await onUpdateManagerPassword(accountId, nextPass);
       else if (roleId === "therapist") success = await onUpdateTherapistPassword(accountId, nextPass);
       else if (roleId === "trainer") success = await handleUpdateTrainerAuth("update", accountId, { password: nextPass });
-      else if (roleId === "director") success = await handleUpdateDirectorAuth("update", accountId, nextPass);
+      else if (roleId === "director") success = await handleUpdateDirectorAuth("update", accountId, { password: nextPass });
 
       if (!success) {
         setError("密碼更新失敗，請確認網路後再試一次");
@@ -369,10 +474,19 @@ const LoginView = ({
     try {
       if (role === "director") {
         if (!selectedUser) { setError("請選擇高管帳號"); setIsLoading(false); return; }
-        const correctPass = directorAuth[selectedUser] || "0000";
+        const selectedDirectorAccount = getDirectorAccount(selectedUser);
+        const correctPass = getDirectorPassword(selectedUser);
         const isMasterLogin = password === currentMasterKey;
-        if (password === correctPass || isMasterLogin) {
-           const userInfo = { name: selectedUser };
+        if (selectedDirectorAccount?.isActive === false) {
+           setError("此高階主管帳號已停用，請使用 Master Key 管理帳號");
+        } else if (password === correctPass || isMasterLogin) {
+           const userInfo = {
+             name: selectedUser,
+             directorLevel: selectedDirectorAccount?.level || getDefaultDirectorLevel(selectedUser),
+             directorLevelLabel: getDirectorLevelLabel(selectedDirectorAccount?.level || getDefaultDirectorLevel(selectedUser)),
+             isSuperAdmin: (selectedDirectorAccount?.level || getDefaultDirectorLevel(selectedUser)) === "super_admin",
+             isMasterLogin,
+           };
            if (isInitialPasswordLogin("director", password, correctPass, { isMasterLogin })) {
              openForcePasswordUpdate({ roleId: "director", accountId: selectedUser, userInfo, currentPassword: password, displayName: selectedUser });
            } else {
@@ -452,26 +566,33 @@ const LoginView = ({
        if (directorManageMode === 'add') {
            if (!isMaster) { setError("❌ 權限不足：僅最高管理員(Master Key)可新增帳號"); setIsLoading(false); return; }
            if (!newDirectorName || !newPassword) { setError("請填寫新高管名稱與密碼"); setIsLoading(false); return; }
-           if (directorAuth[newDirectorName]) { setError("此名稱已存在"); setIsLoading(false); return; }
-           success = await handleUpdateDirectorAuth('add', newDirectorName, newPassword);
+           if (directorAuthData.accounts?.[newDirectorName]) { setError("此名稱已存在"); setIsLoading(false); return; }
+           success = await handleUpdateDirectorAuth('add', newDirectorName, { password: newPassword, level: selectedDirectorLevel, isActive: true });
        
        } else if (directorManageMode === 'rename') {
            if (!isMaster) { setError("❌ 權限不足：僅最高管理員(Master Key)可修改帳號名稱"); setIsLoading(false); return; }
-           if (!selectedUser || !newDirectorName) { setError("請選擇原帳號並填寫新名稱"); setIsLoading(false); return; }
-           if (directorAuth[newDirectorName]) { setError("新名稱已存在，請更換其他名稱"); setIsLoading(false); return; }
-           const currentPass = directorAuth[selectedUser];
-           success = await handleUpdateDirectorAuth('rename', selectedUser, currentPass, newDirectorName);
+           if (!managedDirectorName || !newDirectorName) { setError("請選擇原帳號並填寫新名稱"); setIsLoading(false); return; }
+           if (directorAuthData.accounts?.[newDirectorName]) { setError("新名稱已存在，請更換其他名稱"); setIsLoading(false); return; }
+           const currentAccount = getDirectorAccount(managedDirectorName);
+           success = await handleUpdateDirectorAuth('rename', managedDirectorName, { ...currentAccount, name: newDirectorName }, newDirectorName);
        
+       } else if (directorManageMode === 'level') {
+           if (!isMaster) { setError("❌ 權限不足：僅 Master Key 可調整權限層級"); setIsLoading(false); return; }
+           if (!managedDirectorName) { setError("請選擇要調整的高管"); setIsLoading(false); return; }
+           success = await handleUpdateDirectorAuth('level', managedDirectorName, { level: selectedDirectorLevel });
+
        } else if (directorManageMode === 'delete') {
-           if (!isMaster) { setError("❌ 權限不足：僅最高管理員(Master Key)可刪除帳號"); setIsLoading(false); return; }
-           if (!selectedUser) { setError("請選擇要刪除的高管"); setIsLoading(false); return; }
-           const confirmDel = window.confirm(`確定要刪除「${selectedUser}」的登入權限嗎？`);
+           if (!isMaster) { setError("❌ 權限不足：僅 Master Key 可停用 / 啟用帳號"); setIsLoading(false); return; }
+           if (!managedDirectorName) { setError("請選擇要停用 / 啟用的高管"); setIsLoading(false); return; }
+           const currentAccount = getDirectorAccount(managedDirectorName);
+           const nextActive = currentAccount?.isActive === false;
+           const confirmDel = window.confirm(`確定要${nextActive ? "啟用" : "停用"}「${managedDirectorName}」的登入權限嗎？`);
            if (!confirmDel) { setIsLoading(false); return; }
-           success = await handleUpdateDirectorAuth('delete', selectedUser, null);
-       
+           success = await handleUpdateDirectorAuth('toggle-active', managedDirectorName, { isActive: nextActive });
+
        } else if (directorManageMode === 'edit-pass') {
            let isSelf = false;
-           if (selectedUser && directorAuth[selectedUser] === oldPassword) {
+           if (managedDirectorName && getDirectorPassword(managedDirectorName) === oldPassword) {
                isSelf = true;
            }
            if (!isMaster && !isSelf) {
@@ -479,13 +600,13 @@ const LoginView = ({
                setIsLoading(false); 
                return;
            }
-           if (!selectedUser || !newPassword) { setError("請選擇要修改的主管並填寫新密碼"); setIsLoading(false); return; }
-           success = await handleUpdateDirectorAuth('update', selectedUser, newPassword);
+           if (!managedDirectorName || !newPassword) { setError("請選擇要修改的主管並填寫新密碼"); setIsLoading(false); return; }
+           success = await handleUpdateDirectorAuth('update', managedDirectorName, { password: newPassword });
        }
 
        if (success) { 
          alert("高階主管權限更新成功！"); 
-         setIsResetting(false); setNewPassword(""); setOldPassword(""); setPassword(""); setNewDirectorName(""); setSelectedUser("");
+         setIsResetting(false); setNewPassword(""); setOldPassword(""); setPassword(""); setNewDirectorName(""); setManagedDirectorName(""); setSelectedDirectorLevel("operation_admin");
        } else { 
          setError("更新失敗，請檢查網路"); 
        }
@@ -681,12 +802,13 @@ const LoginView = ({
                       <div className="flex flex-wrap gap-2 mb-2 bg-stone-100 p-1 rounded-lg">
                         <button onClick={() => {setDirectorManageMode('edit-pass'); setError("");}} className={`flex-1 py-1.5 text-xs font-bold rounded-md ${directorManageMode === 'edit-pass' ? 'bg-white shadow-sm text-stone-800' : 'text-stone-400 hover:text-stone-600'}`}>改密碼</button>
                         <button onClick={() => {setDirectorManageMode('rename'); setError("");}} className={`flex-1 py-1.5 text-xs font-bold rounded-md ${directorManageMode === 'rename' ? 'bg-white shadow-sm text-stone-800' : 'text-stone-400 hover:text-stone-600'}`}>改名稱</button>
-                        <button onClick={() => {setDirectorManageMode('add'); setError("");}} className={`flex-1 py-1.5 text-xs font-bold rounded-md ${directorManageMode === 'add' ? 'bg-white shadow-sm text-stone-800' : 'text-stone-400 hover:text-stone-600'}`}>新增</button>
-                        <button onClick={() => {setDirectorManageMode('delete'); setError("");}} className={`flex-1 py-1.5 text-xs font-bold rounded-md ${directorManageMode === 'delete' ? 'bg-white shadow-sm text-rose-600' : 'text-stone-400 hover:text-rose-500'}`}>刪除</button>
+                        <button onClick={() => {setDirectorManageMode('add'); setError(""); setSelectedDirectorLevel("operation_admin");}} className={`flex-1 py-1.5 text-xs font-bold rounded-md ${directorManageMode === 'add' ? 'bg-white shadow-sm text-stone-800' : 'text-stone-400 hover:text-stone-600'}`}>新增</button>
+                        <button onClick={() => {setDirectorManageMode('level'); setError("");}} className={`flex-1 py-1.5 text-xs font-bold rounded-md ${directorManageMode === 'level' ? 'bg-white shadow-sm text-blue-700' : 'text-stone-400 hover:text-blue-600'}`}>權限</button>
+                        <button onClick={() => {setDirectorManageMode('delete'); setError("");}} className={`flex-1 py-1.5 text-xs font-bold rounded-md ${directorManageMode === 'delete' ? 'bg-white shadow-sm text-rose-600' : 'text-stone-400 hover:text-rose-500'}`}>停用</button>
                       </div>
                       
                       {directorManageMode !== 'edit-pass' && (
-                        <p className="text-[11px] text-rose-500 mb-2 px-1 font-medium">* 此操作僅限最高管理員 (Master Key) 執行</p>
+                        <p className="text-[11px] text-rose-500 mb-2 px-1 font-medium">* 此操作僅限 Master Key 執行；改密碼可用舊密碼或 Master Key</p>
                       )}
 
                       <input 
@@ -701,15 +823,24 @@ const LoginView = ({
                         <>
                           <input type="text" value={newDirectorName} onChange={(e) => setNewDirectorName(e.target.value)} placeholder="輸入新主管名稱" className={inputClass} />
                           <input type="text" value={newPassword} onChange={(e) => setNewPassword(e.target.value)} placeholder="設定新密碼" className={inputClass} />
+                          <select
+                            value={selectedDirectorLevel}
+                            onChange={(e) => setSelectedDirectorLevel(e.target.value)}
+                            className={`${selectClass} w-full min-w-0 min-h-[54px] py-3 pr-10 truncate overflow-hidden`}
+                          >
+                            {DIRECTOR_LEVEL_OPTIONS.map((option) => (
+                              <option key={option.value} value={option.value}>{option.label}｜{option.hint}</option>
+                            ))}
+                          </select>
                         </>
                       )}
                       
                       {directorManageMode === 'edit-pass' && (
                         <>
                           <div className="relative">
-                            <select value={selectedUser} onChange={(e) => setSelectedUser(e.target.value)} className={selectClass}>
+                            <select value={managedDirectorName} onChange={(e) => handleSelectManagedDirector(e.target.value)} className={selectClass}>
                               <option value="">選擇主管帳號</option>
-                              {sortedDirectorNames.map((dName) => (<option key={dName} value={dName}>{dName}</option>))}
+                              {allDirectorOptions.map((item) => (<option key={item.name} value={item.name}>{item.name}｜{item.levelLabel}{!item.isActive ? "｜停用" : ""}</option>))}
                             </select>
                           </div>
                           <input type="text" value={newPassword} onChange={(e) => setNewPassword(e.target.value)} placeholder="輸入新密碼" className={inputClass} />
@@ -719,20 +850,44 @@ const LoginView = ({
                       {directorManageMode === 'rename' && (
                         <>
                           <div className="relative">
-                            <select value={selectedUser} onChange={(e) => setSelectedUser(e.target.value)} className={selectClass}>
+                            <select value={managedDirectorName} onChange={(e) => handleSelectManagedDirector(e.target.value)} className={selectClass}>
                               <option value="">選擇原帳號</option>
-                              {sortedDirectorNames.map((dName) => (<option key={dName} value={dName}>{dName}</option>))}
+                              {allDirectorOptions.map((item) => (<option key={item.name} value={item.name}>{item.name}｜{item.levelLabel}{!item.isActive ? "｜停用" : ""}</option>))}
                             </select>
                           </div>
                           <input type="text" value={newDirectorName} onChange={(e) => setNewDirectorName(e.target.value)} placeholder="輸入新名稱" className={inputClass} />
                         </>
                       )}
                       
+                      {directorManageMode === 'level' && (
+                        <>
+                          <div className="relative">
+                            <select
+                              value={managedDirectorName}
+                              onChange={(e) => handleSelectDirectorForLevel(e.target.value)}
+                              className={selectClass}
+                            >
+                              <option value="">選擇要調整權限的帳號</option>
+                              {allDirectorOptions.map((item) => (<option key={item.name} value={item.name}>{item.name}｜{item.levelLabel}{!item.isActive ? "｜停用" : ""}</option>))}
+                            </select>
+                          </div>
+                          <select
+                            value={selectedDirectorLevel}
+                            onChange={(e) => setSelectedDirectorLevel(e.target.value)}
+                            className={`${selectClass} w-full min-w-0 min-h-[54px] py-3 pr-10 truncate overflow-hidden`}
+                          >
+                            {DIRECTOR_LEVEL_OPTIONS.map((option) => (
+                              <option key={option.value} value={option.value}>{option.label}｜{option.hint}</option>
+                            ))}
+                          </select>
+                        </>
+                      )}
+
                       {directorManageMode === 'delete' && (
                         <div className="relative">
-                          <select value={selectedUser} onChange={(e) => setSelectedUser(e.target.value)} className={`${selectClass} text-rose-600`}>
-                            <option value="">選擇要刪除的帳號</option>
-                            {sortedDirectorNames.map((dName) => (<option key={dName} value={dName}>{dName}</option>))}
+                          <select value={managedDirectorName} onChange={(e) => handleSelectManagedDirector(e.target.value)} className={`${selectClass} text-rose-600`}>
+                            <option value="">選擇要停用 / 啟用的帳號</option>
+                            {allDirectorOptions.map((item) => (<option key={item.name} value={item.name}>{item.name}｜{item.levelLabel}{!item.isActive ? "｜停用" : ""}</option>))}
                           </select>
                         </div>
                       )}
@@ -757,7 +912,7 @@ const LoginView = ({
               {!isResetting ? (
                 <button onClick={handleAuth} disabled={isLoading} className={`w-full py-3.5 text-white rounded-lg font-bold shadow-sm transition-all disabled:opacity-50 disabled:cursor-not-allowed ${themeColors.accent}`}>{isLoading ? <Loader2 className="animate-spin mx-auto" /> : "登入"}</button>
               ) : (
-                <button onClick={handlePasswordReset} disabled={isLoading} className={`w-full py-3.5 text-white rounded-lg font-bold shadow-sm transition-all ${role === 'director' && directorManageMode === 'delete' ? 'bg-rose-600 hover:bg-rose-700' : 'bg-stone-800 hover:bg-stone-900'}`}>{isLoading ? <Loader2 className="animate-spin mx-auto" /> : (role === 'director' && directorManageMode === 'delete' ? "確認刪除" : "確認執行")}</button>
+                <button onClick={handlePasswordReset} disabled={isLoading} className={`w-full py-3.5 text-white rounded-lg font-bold shadow-sm transition-all ${role === 'director' && directorManageMode === 'delete' ? 'bg-rose-600 hover:bg-rose-700' : 'bg-stone-800 hover:bg-stone-900'}`}>{isLoading ? <Loader2 className="animate-spin mx-auto" /> : (role === 'director' && directorManageMode === 'delete' ? "確認停用 / 啟用" : "確認執行")}</button>
               )}
 
               <button onClick={() => { setIsResetting(!isResetting); setError(""); }} className="w-full text-center text-xs text-stone-400 hover:text-stone-600 py-2 transition-colors">{isResetting ? "返回登入" : "管理帳號密碼?"}</button>

@@ -249,9 +249,18 @@ const SettingsView = () => {
 
   const UNASSIGNED_KEY = "未分配"; 
 
+  const directorLevel = currentUser?.directorLevel || currentUser?.adminLevel || (String(currentUser?.name || "").includes("Joe") ? "super_admin" : "operation_admin");
+  const isDirectorSuperAdmin = userRole !== "director" || currentUser?.isMasterLogin === true || directorLevel === "super_admin";
+
   const visibleTabs = useMemo(() => {
     const tabs = [];
     const myPerms = permissions?.[userRole] || [];
+
+    // Director Permission v1：
+    // 系統管理中心屬高風險區，第一階段只允許最高管理者 / Master 登入者進入。
+    if (userRole === "director" && !isDirectorSuperAdmin) {
+      return [];
+    }
     const allTabsDefinition = [
       { id: "kpi", label: "KPI 參數", isAdminOnly: true, icon: Target },
       { id: "health", label: "標準設定", isAdminOnly: true, icon: Activity },
@@ -268,7 +277,7 @@ const SettingsView = () => {
       else if (!tab.isAdminOnly && tab.permissionId && myPerms.includes(tab.permissionId)) tabs.push(tab);
     });
     return tabs;
-  }, [userRole, permissions]);
+  }, [userRole, permissions, isDirectorSuperAdmin]);
 
   useEffect(() => {
     if (visibleTabs.length > 0) {

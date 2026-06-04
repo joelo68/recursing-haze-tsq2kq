@@ -208,6 +208,81 @@ const getSortedTrainerAccounts = (trainerAuth = {}) => {
     .filter(Boolean);
 };
 
+const getDirectorTitleWeight = (name = "") => {
+  if (name.includes("董事長")) return 1;
+  if (name.includes("總經理")) return 2;
+  if (name.includes("營運長")) return 3;
+  if (name.includes("總監")) return 4;
+  if (name.includes("財務")) return 5;
+  return 9;
+};
+
+const getDefaultDirectorLevel = (name = "") => {
+  if (name.includes("董事長") || name.includes("總經理")) return "super_admin";
+  if (name.includes("財務")) return "finance_admin";
+  return "operation_admin";
+};
+
+const normalizeDirectorAuthData = (data = {}) => {
+  const raw = data || {};
+  const hasAccounts = raw.accounts && typeof raw.accounts === "object";
+  let accounts = {};
+  let directorOrder = Array.isArray(raw.directorOrder) ? [...raw.directorOrder] : [];
+
+  if (hasAccounts) {
+    accounts = { ...raw.accounts };
+  } else {
+    Object.entries(raw).forEach(([name, value]) => {
+      if (["accounts", "directorOrder", "password"].includes(name)) return;
+      if (value && typeof value === "object") accounts[name] = { ...value, name: value.name || name };
+      else accounts[name] = { name, password: value || "0000" };
+    });
+    if (raw.password && Object.keys(accounts).length === 0) {
+      accounts["營運總監"] = { name: "營運總監", password: raw.password };
+    }
+  }
+
+  const existingNames = Object.keys(accounts);
+  const seen = new Set();
+  const normalizedOrder = [];
+
+  directorOrder.forEach((name) => {
+    const key = String(name || "").trim();
+    if (key && accounts[key] && !seen.has(key)) {
+      seen.add(key);
+      normalizedOrder.push(key);
+    }
+  });
+
+  existingNames
+    .filter((name) => !seen.has(name))
+    .sort((a, b) => {
+      const aw = getDirectorTitleWeight(a);
+      const bw = getDirectorTitleWeight(b);
+      if (aw !== bw) return aw - bw;
+      return String(a).localeCompare(String(b), "zh-Hant", { numeric: true, sensitivity: "base" });
+    })
+    .forEach((name) => normalizedOrder.push(name));
+
+  const normalizedAccounts = {};
+  normalizedOrder.forEach((name, index) => {
+    const account = accounts[name] || {};
+    normalizedAccounts[name] = {
+      id: account.id || name,
+      name: account.name || name,
+      password: account.password || (typeof account === "string" ? account : "0000"),
+      level: account.level || account.directorLevel || getDefaultDirectorLevel(name),
+      isActive: account.isActive !== false,
+      sortOrder: Number.isFinite(Number(account.sortOrder)) ? Number(account.sortOrder) : index,
+      createdAtText: account.createdAtText || "",
+      updatedAtText: account.updatedAtText || "",
+      ...account,
+    };
+  });
+
+  return { accounts: normalizedAccounts, directorOrder: normalizedOrder };
+};
+
 const VIEW_ACTIVITY_LABELS = {
   dashboard: "營運總覽",
   daily: "每日總覽",
@@ -1127,13 +1202,15 @@ export default function App() {
       setSecurityConfig(secSnap.exists() ? normalizeSecurityConfig(secSnap.data()) : DEFAULT_SECURITY_CONFIG);
 
       if (dAuthSnap.exists()) {
-         let data = { ...dAuthSnap.data() };
-         if (data.password && Object.keys(data).length === 1) { setDirectorAuth({ "營運總監": data.password }); } 
-         else { delete data.password; if (Object.keys(data).length === 0) data = { "營運總監": "0000" }; setDirectorAuth(data); }
+         let data = normalizeDirectorAuthData(dAuthSnap.data());
+         if (Object.keys(data.accounts || {}).length === 0) {
+           data = normalizeDirectorAuthData({ "營運總監": "0000" });
+         }
+         setDirectorAuth(data);
       } else {
          let defaultPass = "0000";
          if (currentBrand.id === 'cyj') defaultPass = "16500"; if (currentBrand.id === 'anniu') defaultPass = "8888"; if (currentBrand.id === 'yibo') defaultPass = "9999";
-         setDirectorAuth({ "營運總監": defaultPass }); 
+         setDirectorAuth(normalizeDirectorAuthData({ "營運總監": defaultPass })); 
       }
 
       setMasterAuth((mastSnap.exists() && mastSnap.data().password) ? mastSnap.data() : { password: "BOSS888" });
@@ -1774,15 +1851,65 @@ useEffect(() => {
   }, [getDocPath, trainerAuth]);
   const handleUpdateAuditExclusions = useCallback(async (newExclusions) => { try { await setDoc(getDocPath("audit_exclusions"), { stores: newExclusions }); return true; } catch (e) { console.error(e); return false; } }, [getDocPath]);
   
-  const handleUpdateDirectorAuth = useCallback(async (action, name, newPass, newName = null) => { 
+  const handleUpdateDirectorAuth = useCallback(async (action, name, payload = {}, newName = null) => { 
     try { 
       const docRef = getDocPath("director_auth");
-      if (action === 'delete') { await updateDoc(docRef, { [name]: deleteField() }); } 
-      else if (action === 'rename') { await setDoc(docRef, { [newName]: newPass }, { merge: true }); await updateDoc(docRef, { [name]: deleteField() }); } 
-      else { await setDoc(docRef, { [name]: newPass }, { merge: true }); }
+      let next = normalizeDirectorAuthData(directorAuth || {});
+      const nowText = new Date().toISOString();
+
+      if (action === "add") {
+        const accountName = String(name || "").trim();
+        if (!accountName) return false;
+        next.accounts[accountName] = {
+          id: accountName,
+          name: accountName,
+          password: payload?.password || payload || "0000",
+          level: payload?.level || getDefaultDirectorLevel(accountName),
+          isActive: payload?.isActive !== false,
+          createdAtText: nowText,
+          updatedAtText: nowText,
+        };
+        next.directorOrder = [...next.directorOrder.filter((item) => item !== accountName), accountName];
+      } else if (action === "rename") {
+        const oldName = String(name || "").trim();
+        const accountName = String(newName || payload?.name || "").trim();
+        if (!oldName || !accountName || !next.accounts[oldName]) return false;
+        const oldAccount = next.accounts[oldName] || {};
+        delete next.accounts[oldName];
+        next.accounts[accountName] = {
+          ...oldAccount,
+          ...payload,
+          id: accountName,
+          name: accountName,
+          password: payload?.password || oldAccount.password || "0000",
+          level: payload?.level || oldAccount.level || getDefaultDirectorLevel(accountName),
+          updatedAtText: nowText,
+        };
+        next.directorOrder = next.directorOrder.map((item) => item === oldName ? accountName : item);
+      } else if (action === "update") {
+        if (!name || !next.accounts[name]) return false;
+        next.accounts[name] = { ...next.accounts[name], password: payload?.password || payload || "0000", updatedAtText: nowText };
+      } else if (action === "level") {
+        if (!name || !next.accounts[name]) return false;
+        next.accounts[name] = { ...next.accounts[name], level: payload?.level || "operation_admin", updatedAtText: nowText };
+      } else if (action === "toggle-active") {
+        if (!name || !next.accounts[name]) return false;
+        next.accounts[name] = { ...next.accounts[name], isActive: payload?.isActive !== false, updatedAtText: nowText };
+      } else if (action === "delete") {
+        if (!name || !next.accounts[name]) return false;
+        next.accounts[name] = { ...next.accounts[name], isActive: false, updatedAtText: nowText };
+      } else if (action === "reorder") {
+        const order = Array.isArray(payload?.directorOrder) ? payload.directorOrder : [];
+        const existing = new Set(Object.keys(next.accounts || {}));
+        next.directorOrder = [...order.filter((item) => existing.has(item)), ...Object.keys(next.accounts || {}).filter((item) => !order.includes(item))];
+      }
+
+      next = normalizeDirectorAuthData(next);
+      await setDoc(docRef, next);
+      setDirectorAuth(next);
       return true; 
     } catch (e) { console.error(e); return false; } 
-  }, [getDocPath]);
+  }, [getDocPath, directorAuth]);
 
   const navigateToStore = useCallback((storeName) => { setActiveView("store-analysis"); window.dispatchEvent(new CustomEvent("navigate-to-store", { detail: storeName })); }, []);
 
