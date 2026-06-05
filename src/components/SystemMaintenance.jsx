@@ -96,6 +96,7 @@ export default function SystemMaintenance() {
   const [globalReadStats, setGlobalReadStats] = useState([]);
   const [loadingReadStats, setLoadingReadStats] = useState(false);
   const [globalRowsCount, setGlobalRowsCount] = useState(0);
+  const [globalReadRangeUnsupportedCount, setGlobalReadRangeUnsupportedCount] = useState(0);
   const [globalReadScopeLabel, setGlobalReadScopeLabel] = useState("近 24 小時全域排行");
   const [globalReadRange, setGlobalReadRange] = useState(() => {
     const now = new Date();
@@ -201,6 +202,21 @@ export default function SystemMaintenance() {
       hour12: false,
     });
     return `${fmt(startDate)}～${fmt(endDate)} 全域排行`;
+  };
+
+  const getReadableRangeText = (startValue, endValue) => {
+    const startDate = new Date(startValue);
+    const endDate = new Date(endValue);
+    if (Number.isNaN(startDate.getTime()) || Number.isNaN(endDate.getTime())) return "目前選擇的時段";
+    const fmt = (date) => date.toLocaleString("zh-TW", {
+      year: "numeric",
+      month: "2-digit",
+      day: "2-digit",
+      hour: "2-digit",
+      minute: "2-digit",
+      hour12: false,
+    });
+    return `${fmt(startDate)}～${fmt(endDate)}`;
   };
 
   const getGlobalRangeDatePart = (value) => {
@@ -794,6 +810,22 @@ export default function SystemMaintenance() {
 
   const localReadModeLabel = readTrackerMode === "global" ? "全域上報中" : readTrackerMode === "local" ? "本機追蹤中" : "追蹤關閉";
   const localReadModeTone = readTrackerMode === "off" ? "text-rose-600 bg-rose-50 border-rose-100" : readTrackerMode === "global" ? "text-blue-600 bg-blue-50 border-blue-100" : "text-emerald-600 bg-emerald-50 border-emerald-100";
+
+  const getReadTrackerModeButtonClass = (modeId) => {
+    const isActive = readTrackerMode === modeId;
+    if (!isActive) return "bg-white text-stone-500 border-stone-200 hover:bg-stone-50";
+
+    if (modeId === "off") {
+      return "bg-rose-50 text-rose-600 border-rose-200 shadow-[0_10px_24px_rgba(244,63,94,0.10)]";
+    }
+
+    if (modeId === "local") {
+      return "bg-emerald-50 text-emerald-700 border-emerald-200 shadow-[0_10px_24px_rgba(16,185,129,0.10)]";
+    }
+
+    return "bg-blue-50 text-blue-700 border-blue-200 shadow-[0_10px_24px_rgba(59,130,246,0.10)]";
+  };
+
   const localReadEmptyText = readTrackerMode === "off"
     ? "目前讀取追蹤已關閉，清除後不會累積新的本機統計"
     : localReadClearedAt
@@ -1709,6 +1741,125 @@ export default function SystemMaintenance() {
     return parsed;
   };
 
+  const normalizeHourlyBucketsFromRow = (row) => {
+    if (row.hourlyBuckets && typeof row.hourlyBuckets === "object") return row.hourlyBuckets;
+
+    const parsed = {};
+    Object.entries(row || {}).forEach(([key, value]) => {
+      if (!key.startsWith("hourlyBuckets.")) return;
+      const parts = key.split(".");
+      // Firestore field path 會把 2026-06-05T04 中的句點避開，但仍保留這個 fallback 以相容舊寫法。
+      const hourKey = parts[1];
+      const sourceLabel = parts[3];
+      const field = parts[4];
+      if (!hourKey || !sourceLabel || !field) return;
+      if (!parsed[hourKey]) parsed[hourKey] = { sources: {} };
+      if (!parsed[hourKey].sources[sourceLabel]) parsed[hourKey].sources[sourceLabel] = {};
+      parsed[hourKey].sources[sourceLabel][field] = value;
+    });
+
+    return parsed;
+  };
+
+  const getHourKeysInRange = (startMs, endMs) => {
+    const keys = [];
+    const cursor = new Date(startMs);
+    cursor.setMinutes(0, 0, 0);
+    const endDate = new Date(endMs);
+    endDate.setMinutes(0, 0, 0);
+
+    let safety = 0;
+    while (cursor <= endDate && safety < 24 * 8) {
+      const key = `${cursor.getFullYear()}-${String(cursor.getMonth() + 1).padStart(2, "0")}-${String(cursor.getDate()).padStart(2, "0")}T${String(cursor.getHours()).padStart(2, "0")}`;
+      keys.push(key);
+      cursor.setHours(cursor.getHours() + 1);
+      safety += 1;
+    }
+
+    return keys;
+  };
+
+  const buildGlobalReadSummaryRowsFromHourlyBuckets = (rows, options = {}) => {
+    const startMs = options.startMs ?? null;
+    const endMs = options.endMs ?? null;
+    const hourKeys = startMs !== null && endMs !== null ? getHourKeysInRange(startMs, endMs) : [];
+    const sourceSummary = {};
+    const scopedRows = [];
+    let unsupportedRows = 0;
+
+    rows.forEach((row) => {
+      const isSameBrand = !brandId || !row.brandId || row.brandId === brandId;
+      if (!isSameBrand) return;
+
+      const hourlyBuckets = normalizeHourlyBucketsFromRow(row);
+      const hasBuckets = hourlyBuckets && Object.keys(hourlyBuckets).length > 0;
+      if (!hasBuckets) {
+        unsupportedRows += 1;
+        return;
+      }
+
+      let rowUsed = false;
+
+      hourKeys.forEach((hourKey) => {
+        const bucket = hourlyBuckets[hourKey];
+        if (!bucket?.sources) return;
+
+        Object.entries(bucket.sources).forEach(([label, item]) => {
+          const docs = Number(item?.docs || 0);
+          const triggers = Number(item?.triggers || 0);
+          if (!docs && !triggers) return;
+
+          if (!sourceSummary[label]) {
+            sourceSummary[label] = {
+              label,
+              docs: 0,
+              triggers: 0,
+              users: new Set(),
+              roles: new Set(),
+              devices: new Set(),
+              lastAt: "",
+            };
+          }
+
+          sourceSummary[label].docs += docs;
+          sourceSummary[label].triggers += triggers;
+          sourceSummary[label].users.add(row.userName || row.userRole || "unknown");
+          sourceSummary[label].roles.add(row.userRole || "unknown");
+          sourceSummary[label].devices.add(row.device || row.deviceShort || "unknown");
+
+          const lastAt = item?.lastAt || row.updatedAtText || "";
+          if (!sourceSummary[label].lastAt || String(lastAt) > String(sourceSummary[label].lastAt)) {
+            sourceSummary[label].lastAt = lastAt;
+          }
+
+          rowUsed = true;
+        });
+      });
+
+      if (rowUsed) scopedRows.push(row);
+    });
+
+    const summaryRows = Object.values(sourceSummary)
+      .map((item) => ({
+        ...item,
+        users: item.users.size,
+        roles: Array.from(item.roles),
+        devices: Array.from(item.devices),
+        avg: item.triggers ? Math.round(item.docs / item.triggers) : 0,
+      }))
+      .sort((a, b) => b.docs - a.docs);
+
+    return { summaryRows, scopedRows, unsupportedRows };
+  };
+
+  const handleClearGlobalReadStats = () => {
+    setGlobalReadStats([]);
+    setGlobalRowsCount(0);
+    setGlobalReadRangeUnsupportedCount(0);
+    setGlobalReadScopeLabel("尚未載入全域讀取排行");
+    showToast("已清除目前畫面上的全域排行結果；Firestore 原始上報資料未刪除", "info");
+  };
+
   const handleLoadGlobalReadStats = async (options = {}) => {
     setLoadingReadStats(true);
     try {
@@ -1768,12 +1919,23 @@ export default function SystemMaintenance() {
         scopeLabel = "近 24 小時全域排行";
       }
 
-      const { summaryRows, scopedRows } = buildGlobalReadSummaryRows(rows, { startMs, endMs });
+      const result = scope === "range"
+        ? buildGlobalReadSummaryRowsFromHourlyBuckets(rows, { startMs, endMs })
+        : buildGlobalReadSummaryRows(rows, { startMs, endMs });
+
+      const { summaryRows, scopedRows } = result;
+      const unsupportedRows = Number(result.unsupportedRows || 0);
+
       setGlobalReadStats(summaryRows);
       setGlobalRowsCount(scopedRows.length);
       setGlobalReadScopeLabel(scopeLabel);
+      setGlobalReadRangeUnsupportedCount(scope === "range" ? unsupportedRows : 0);
 
-      const emptyText = scope === "range" ? "指定時段尚未找到可彙整的全域追蹤資料" : "近 24 小時尚未找到可彙整的全域追蹤資料";
+      const selectedRangeText = getReadableRangeText(globalReadRange.start, globalReadRange.end);
+      const rangeUnsupportedText = `此時段目前沒有小時級追蹤資料。舊版全域上報只記錄整個工作階段累積值，無法還原「${selectedRangeText}」的精準來源；新版上線後下一輪全域上報即可分析。`;
+      const emptyText = scope === "range"
+        ? (unsupportedRows > 0 ? rangeUnsupportedText : `「${selectedRangeText}」尚未找到可彙整的全域追蹤資料`)
+        : "近 24 小時尚未找到可彙整的全域追蹤資料";
       const successText = scope === "range"
         ? `已載入${scopeLabel}，共 ${summaryRows.length} 個來源`
         : `已載入近 24 小時排行，共 ${summaryRows.length} 個來源`;
@@ -3632,11 +3794,11 @@ export default function SystemMaintenance() {
 
         <section className="rounded-[2rem] border border-[#EEDFC7] bg-white/95 shadow-[0_22px_70px_rgba(120,90,40,0.05)] overflow-hidden">
           <div className="p-6 border-b border-[#F0E3CF] flex flex-col lg:flex-row lg:items-center lg:justify-between gap-4"><SectionTitle eyebrow="Traffic Diagnosis" title="讀取來源追蹤" desc="用來判斷晚間讀取暴增是由哪一個資料來源、頁面或角色造成。" icon={Radio} />
-            <div className="flex flex-wrap gap-2">{[{ id: "off", label: "關閉", icon: Power }, { id: "local", label: "本機模式", icon: Monitor }, { id: "global", label: "全域上報", icon: Globe2 }].map((mode)=><button key={mode.id} onClick={()=>handleChangeReadTrackerMode(mode.id)} className={`px-4 py-2 rounded-2xl text-xs font-black border flex items-center gap-2 transition-all ${readTrackerMode === mode.id ? "bg-gradient-to-r from-[#FFF7DF] via-[#F7E8C6] to-[#EACB86] text-[#5A4225] border-amber-200 shadow-[0_10px_24px_rgba(190,145,70,0.16)]" : "bg-white text-stone-500 border-stone-200 hover:bg-stone-50"}`}><mode.icon size={14} />{mode.label}</button>)}</div>
+            <div className="flex flex-wrap gap-2">{[{ id: "off", label: "關閉", icon: Power }, { id: "local", label: "本機模式", icon: Monitor }, { id: "global", label: "全域上報", icon: Globe2 }].map((mode)=><button key={mode.id} onClick={()=>handleChangeReadTrackerMode(mode.id)} className={`px-4 py-2 rounded-2xl text-xs font-black border flex items-center gap-2 transition-all ${getReadTrackerModeButtonClass(mode.id)}`}><mode.icon size={14} />{mode.label}</button>)}</div>
           </div>
           <div className="p-6 border-b border-[#F0E3CF] bg-[#FFFCF7]"><div className="rounded-[1.75rem] border border-[#EEDFC7] bg-white shadow-sm overflow-hidden"><div className="p-5 flex flex-col xl:flex-row xl:items-center xl:justify-between gap-4 border-b border-stone-100"><div className="min-w-0"><h3 className="text-sm font-black text-stone-800 flex items-center gap-2"><Clock size={18} className="text-[#B7863D]" />排程式全域上報</h3><p className="text-xs text-stone-400 font-bold mt-1">固定晚間診斷區間，讓每天數據可比較；支援跨日，例如 19:00～07:00。</p></div><div className={`shrink-0 inline-flex items-center gap-2 px-3 py-2 rounded-2xl text-xs font-black border ${!scheduleForm.scheduleEnabled ? "bg-stone-50 text-stone-500 border-stone-200" : scheduleStatus.isActive ? "bg-emerald-50 text-emerald-700 border-emerald-100" : "bg-amber-50 text-amber-700 border-amber-100"}`}><CheckCircle2 size={15} />{scheduleStatus.label}｜現在 {scheduleStatus.nowTime}</div></div>
             <div className="p-5 grid grid-cols-1 lg:grid-cols-[1.1fr_1fr_1fr_auto] gap-3 items-end"><div className="rounded-2xl border border-stone-100 bg-stone-50/70 p-3 flex items-center justify-between gap-3"><div><p className="text-xs font-black text-stone-700">啟用排程</p><p className="text-[11px] text-stone-400 font-bold mt-0.5">排程時段內自動切為全域上報。</p></div><button onClick={()=>setScheduleForm((prev)=>({ ...prev, scheduleEnabled: !prev.scheduleEnabled }))} className={`w-12 h-7 rounded-full p-1 transition-all ${scheduleForm.scheduleEnabled ? "bg-[#D8B46B]" : "bg-stone-300"}`}><span className={`block w-5 h-5 rounded-full bg-white shadow transition-transform ${scheduleForm.scheduleEnabled ? "translate-x-5" : "translate-x-0"}`} /></button></div><div><label className="text-[11px] font-black text-stone-400 block mb-1.5 tracking-wider">開始時間</label><SoftInput type="time" value={scheduleForm.startTime} onChange={(e)=>setScheduleForm((prev)=>({ ...prev, startTime: e.target.value }))} /></div><div><label className="text-[11px] font-black text-stone-400 block mb-1.5 tracking-wider">結束時間</label><SoftInput type="time" value={scheduleForm.endTime} onChange={(e)=>setScheduleForm((prev)=>({ ...prev, endTime: e.target.value }))} /></div><div className="flex gap-2"><BeautyButton onClick={handleApplyScheduleNow} variant="secondary" className="whitespace-nowrap">立即套用</BeautyButton><BeautyButton onClick={handleSaveReadTrackerSchedule} variant="primary" className="whitespace-nowrap"><Save size={14} />儲存排程</BeautyButton></div></div><div className="px-5 py-3 bg-amber-50/50 border-t border-amber-100/60 text-[11px] text-amber-700 font-bold leading-relaxed">目前套用品牌：{brandLabel}。排程啟用後，排程時段內會自動啟用全域上報；白天若臨時開啟本機追蹤，不會修改晚間排程。</div></div></div>
-          <div className="p-6 grid grid-cols-1 xl:grid-cols-2 gap-6"><div className="rounded-[1.5rem] border border-stone-100 bg-stone-50/50 overflow-hidden"><div className="px-4 py-3 border-b border-stone-100 bg-white flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3"><div className="flex flex-wrap items-center gap-2"><Activity size={16} className="text-emerald-500" /><span className="text-sm font-black text-stone-700">目前裝置統計</span><span className={`px-2 py-1 rounded-full border text-[10px] font-black ${localReadModeTone}`}>{localReadModeLabel}</span>{localReadLastRefreshedAt && <span className="text-[10px] font-bold text-stone-300">更新 {localReadLastRefreshedAt.toLocaleTimeString("zh-TW", { hour12: false, hour: "2-digit", minute: "2-digit", second: "2-digit" })}</span>}</div><div className="flex flex-wrap items-center gap-2">{readTrackerMode === "off" && <button onClick={handleEnableLocalReadTracker} className="text-[11px] font-black px-3 py-1.5 rounded-xl border border-emerald-100 bg-emerald-50 text-emerald-600 hover:bg-emerald-100">開啟本機追蹤</button>}<button onClick={refreshLocalReadStats} className="text-[11px] font-black px-3 py-1.5 rounded-xl border border-stone-200 text-stone-500 hover:bg-stone-50">重新整理</button><button onClick={handleClearReadTracker} className="text-[11px] font-black px-3 py-1.5 rounded-xl border border-rose-100 text-rose-500 hover:bg-rose-50">清除</button></div></div>{renderStatList({ rows: readStatsRows, emptyIcon: BarChart3, emptyText: localReadEmptyText, emptySubText: readTrackerMode === "off" ? "可按右上「開啟本機追蹤」，或在上方模式切換為本機模式 / 全域上報後再觀察。" : "若切換頁面後仍無資料，代表目前沒有新的被追蹤讀取，或資料已由前端狀態提供。" })}</div><div className="rounded-[1.5rem] border border-stone-100 bg-stone-50/50 overflow-hidden"><div className="px-4 py-3 border-b border-stone-100 bg-white flex flex-col gap-3"><div className="flex flex-col md:flex-row md:items-center md:justify-between gap-3"><div className="flex items-center gap-2"><Globe2 size={16} className="text-blue-500" /><span className="text-sm font-black text-stone-700">全域讀取排行</span><span className="text-[10px] font-black text-blue-500 bg-blue-50 border border-blue-100 rounded-full px-2 py-0.5">可篩選時段</span></div><div className="flex flex-wrap items-center gap-2"><button onClick={() => handleLoadGlobalReadStats({ scope: "all" })} disabled={loadingReadStats} className="text-[11px] font-black px-3 py-1.5 rounded-xl bg-gradient-to-r from-[#FFF7DF] via-[#F7E8C6] to-[#EACB86] text-[#5A4225] border border-amber-200 disabled:opacity-40 flex items-center gap-1.5">{loadingReadStats ? <Loader2 size={13} className="animate-spin" /> : <Eye size={13} />}全部 / 近 24 小時</button><button onClick={() => handleLoadGlobalReadStats({ scope: "range" })} disabled={loadingReadStats} className="text-[11px] font-black px-3 py-1.5 rounded-xl border border-blue-100 bg-blue-50 text-blue-600 disabled:opacity-40 flex items-center gap-1.5">{loadingReadStats ? <Loader2 size={13} className="animate-spin" /> : <Clock size={13} />}載入時段</button></div></div><div className="rounded-2xl border border-stone-100 bg-stone-50/70 p-3 space-y-3"><div className="flex flex-wrap gap-2"><button type="button" onClick={() => setGlobalReadRange(makeGlobalReadRange("last1h"))} className="text-[10px] font-black px-2.5 py-1 rounded-full border border-stone-200 bg-white text-stone-500 hover:bg-stone-100">最近 1 小時</button><button type="button" onClick={() => setGlobalReadRange(makeGlobalReadRange("early4to5"))} className="text-[10px] font-black px-2.5 py-1 rounded-full border border-stone-200 bg-white text-stone-500 hover:bg-stone-100">凌晨 04:00～05:00</button><button type="button" onClick={() => setGlobalReadRange(makeGlobalReadRange("overnight"))} className="text-[10px] font-black px-2.5 py-1 rounded-full border border-stone-200 bg-white text-stone-500 hover:bg-stone-100">昨晚 18:00～今早 07:00</button></div><div className="grid grid-cols-1 md:grid-cols-2 gap-3">{renderGlobalReadRangePicker("start", "開始時間")}{renderGlobalReadRangePicker("end", "結束時間")}</div><p className="text-[10px] font-bold text-stone-400 leading-relaxed">「全部 / 近 24 小時」保留原本觀察方式；「載入時段」可用來查凌晨 04:00～05:00 等異常尖峰來源。指定時段最多查詢 7 天，避免一次讀取過多追蹤資料。</p></div></div>{globalReadStats.length > 0 && <div className="p-4 pb-0 text-[11px] text-stone-400 font-bold">已彙整 {globalReadScopeLabel}｜{globalRowsCount.toLocaleString()} 筆上報工作階段</div>}{renderStatList({ rows: globalReadStats, emptyIcon: Globe2, emptyText: "尚未載入全域讀取排行", valueClass: "text-blue-600" })}</div></div>
+          <div className="p-6 grid grid-cols-1 xl:grid-cols-2 gap-6"><div className="rounded-[1.5rem] border border-stone-100 bg-stone-50/50 overflow-hidden"><div className="px-4 py-3 border-b border-stone-100 bg-white flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3"><div className="flex flex-wrap items-center gap-2"><Activity size={16} className="text-emerald-500" /><span className="text-sm font-black text-stone-700">目前裝置統計</span><span className={`px-2 py-1 rounded-full border text-[10px] font-black ${localReadModeTone}`}>{localReadModeLabel}</span>{localReadLastRefreshedAt && <span className="text-[10px] font-bold text-stone-300">更新 {localReadLastRefreshedAt.toLocaleTimeString("zh-TW", { hour12: false, hour: "2-digit", minute: "2-digit", second: "2-digit" })}</span>}</div><div className="flex flex-wrap items-center gap-2">{readTrackerMode === "off" && <button onClick={handleEnableLocalReadTracker} className="text-[11px] font-black px-3 py-1.5 rounded-xl border border-emerald-100 bg-emerald-50 text-emerald-600 hover:bg-emerald-100">開啟本機追蹤</button>}<button onClick={refreshLocalReadStats} className="text-[11px] font-black px-3 py-1.5 rounded-xl border border-stone-200 text-stone-500 hover:bg-stone-50">重新整理</button><button onClick={handleClearReadTracker} className="text-[11px] font-black px-3 py-1.5 rounded-xl border border-rose-100 text-rose-500 hover:bg-rose-50">清除</button></div></div>{renderStatList({ rows: readStatsRows, emptyIcon: BarChart3, emptyText: localReadEmptyText, emptySubText: readTrackerMode === "off" ? "可按右上「開啟本機追蹤」，或在上方模式切換為本機模式 / 全域上報後再觀察。" : "若切換頁面後仍無資料，代表目前沒有新的被追蹤讀取，或資料已由前端狀態提供。" })}</div><div className="rounded-[1.5rem] border border-stone-100 bg-stone-50/50 overflow-hidden"><div className="px-4 py-3 border-b border-stone-100 bg-white flex flex-col gap-3"><div className="flex flex-col md:flex-row md:items-center md:justify-between gap-3"><div className="flex items-center gap-2"><Globe2 size={16} className="text-blue-500" /><span className="text-sm font-black text-stone-700">全域讀取排行</span><span className="text-[10px] font-black text-blue-500 bg-blue-50 border border-blue-100 rounded-full px-2 py-0.5">可篩選時段</span></div><div className="flex flex-wrap items-center gap-2"><button onClick={() => handleLoadGlobalReadStats({ scope: "all" })} disabled={loadingReadStats} className="text-[11px] font-black px-3 py-1.5 rounded-xl bg-gradient-to-r from-[#FFF7DF] via-[#F7E8C6] to-[#EACB86] text-[#5A4225] border border-amber-200 disabled:opacity-40 flex items-center gap-1.5">{loadingReadStats ? <Loader2 size={13} className="animate-spin" /> : <Eye size={13} />}全部 / 近 24 小時</button><button onClick={() => handleLoadGlobalReadStats({ scope: "range" })} disabled={loadingReadStats} className="text-[11px] font-black px-3 py-1.5 rounded-xl border border-blue-100 bg-blue-50 text-blue-600 disabled:opacity-40 flex items-center gap-1.5">{loadingReadStats ? <Loader2 size={13} className="animate-spin" /> : <Clock size={13} />}載入時段</button><button onClick={handleClearGlobalReadStats} disabled={loadingReadStats && globalReadStats.length === 0 && globalReadRangeUnsupportedCount === 0} className="text-[11px] font-black px-3 py-1.5 rounded-xl border border-rose-100 bg-white text-rose-500 hover:bg-rose-50 disabled:opacity-40 flex items-center gap-1.5"><Trash2 size={13} />清除</button></div></div><div className="rounded-2xl border border-stone-100 bg-stone-50/70 p-3 space-y-3"><div className="flex flex-wrap gap-2"><button type="button" onClick={() => setGlobalReadRange(makeGlobalReadRange("last1h"))} className="text-[10px] font-black px-2.5 py-1 rounded-full border border-stone-200 bg-white text-stone-500 hover:bg-stone-100">最近 1 小時</button><button type="button" onClick={() => setGlobalReadRange(makeGlobalReadRange("early4to5"))} className="text-[10px] font-black px-2.5 py-1 rounded-full border border-stone-200 bg-white text-stone-500 hover:bg-stone-100">凌晨 04:00～05:00</button><button type="button" onClick={() => setGlobalReadRange(makeGlobalReadRange("overnight"))} className="text-[10px] font-black px-2.5 py-1 rounded-full border border-stone-200 bg-white text-stone-500 hover:bg-stone-100">昨晚 18:00～今早 07:00</button></div><div className="grid grid-cols-1 md:grid-cols-2 gap-3">{renderGlobalReadRangePicker("start", "開始時間")}{renderGlobalReadRangePicker("end", "結束時間")}</div><p className="text-[10px] font-bold text-stone-400 leading-relaxed">「全部 / 近 24 小時」保留原本觀察方式；「載入時段」可用來查凌晨 04:00～05:00 等異常尖峰來源。指定時段最多查詢 7 天，避免一次讀取過多追蹤資料。</p></div></div>{globalReadStats.length > 0 && <div className="p-4 pb-0 text-[11px] text-stone-400 font-bold">已彙整 {globalReadScopeLabel}｜{globalRowsCount.toLocaleString()} 筆上報工作階段</div>}{globalReadStats.length === 0 && globalReadRangeUnsupportedCount > 0 && <div className="m-4 mb-0 rounded-2xl border border-amber-100 bg-amber-50 px-4 py-3 text-[11px] font-bold text-amber-700 leading-relaxed">此時段找到 {globalReadRangeUnsupportedCount.toLocaleString()} 筆舊版全域上報工作階段，但舊資料沒有 hourlyBuckets 小時分桶，無法還原「{getReadableRangeText(globalReadRange.start, globalReadRange.end)}」的精準來源。新版上線後，下一輪全域上報即可用目前選擇的時段正確分析。</div>}{renderStatList({ rows: globalReadStats, emptyIcon: Globe2, emptyText: "尚未載入全域讀取排行", valueClass: "text-blue-600" })}</div></div>
         </section>
 
         <section className="rounded-[2rem] border border-[#EEDFC7] bg-white/95 shadow-[0_22px_70px_rgba(120,90,40,0.05)] overflow-hidden"><button onClick={()=>setShowAdvancedTools((prev)=>!prev)} className="w-full p-6 flex flex-col md:flex-row md:items-center md:justify-between gap-3 text-left"><SectionTitle eyebrow="Protected Area" title="高風險資料處理" desc="還原、封存與批次修復都集中在這裡；沒有明確異常時不建議操作。" icon={AlertTriangle} /><div className="inline-flex items-center gap-2 text-xs font-black text-stone-500 bg-stone-50 border border-stone-200 rounded-2xl px-3 py-2 w-fit">{showAdvancedTools ? "收合工具" : "展開工具"}<ChevronDown size={14} className={`transition-transform ${showAdvancedTools ? "rotate-180" : ""}`} /></div></button>

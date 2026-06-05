@@ -28,6 +28,46 @@ const safeParse = (value, fallback) => {
   }
 };
 
+const getLocalHourKey = (date = new Date()) => {
+  const pad = (num) => String(num).padStart(2, "0");
+  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}T${pad(date.getHours())}`;
+};
+
+const sanitizeFirestoreFieldKey = (value = "") => {
+  return String(value || "unknown")
+    .replace(/[.#$/\[\]\\]/g, "_")
+    .replace(/\s+/g, "_")
+    .slice(0, 120) || "unknown";
+};
+
+const mergeHourlyBucketsForFlush = (stats = {}) => {
+  const merged = {};
+
+  Object.entries(stats || {}).forEach(([label, item]) => {
+    const safeLabel = sanitizeFirestoreFieldKey(label);
+    const buckets = item?.hourlyBuckets && typeof item.hourlyBuckets === "object"
+      ? item.hourlyBuckets
+      : {};
+
+    Object.entries(buckets).forEach(([hourKey, bucket]) => {
+      if (!hourKey) return;
+      if (!merged[hourKey]) merged[hourKey] = { sources: {} };
+      if (!merged[hourKey].sources[safeLabel]) {
+        merged[hourKey].sources[safeLabel] = { docs: 0, triggers: 0, lastAt: "" };
+      }
+
+      merged[hourKey].sources[safeLabel].docs += Number(bucket?.docs || 0);
+      merged[hourKey].sources[safeLabel].triggers += Number(bucket?.triggers || 0);
+      const lastAt = bucket?.lastAt || item?.lastAt || "";
+      if (!merged[hourKey].sources[safeLabel].lastAt || String(lastAt) > String(merged[hourKey].sources[safeLabel].lastAt)) {
+        merged[hourKey].sources[safeLabel].lastAt = lastAt;
+      }
+    });
+  });
+
+  return merged;
+};
+
 export const getReadTrackerMode = () => {
   if (typeof localStorage === "undefined") return DEFAULT_MODE;
   return localStorage.getItem(MODE_KEY) || DEFAULT_MODE;
@@ -54,15 +94,27 @@ export const trackReadSource = (label, docsCount = 0, meta = {}) => {
   if (mode === "off") return;
   if (typeof localStorage === "undefined") return;
 
-  const now = new Date().toISOString();
+  const nowDate = new Date();
+  const now = nowDate.toISOString();
+  const hourKey = getLocalHourKey(nowDate);
   const current = getReadTrackerStats();
-  const prev = current[label] || { docs: 0, triggers: 0, lastAt: null, meta: {} };
+  const prev = current[label] || { docs: 0, triggers: 0, lastAt: null, meta: {}, hourlyBuckets: {} };
+  const prevHourlyBuckets = prev.hourlyBuckets && typeof prev.hourlyBuckets === "object" ? prev.hourlyBuckets : {};
+  const prevHour = prevHourlyBuckets[hourKey] || { docs: 0, triggers: 0, lastAt: null };
 
   current[label] = {
-    docs: prev.docs + Number(docsCount || 0),
-    triggers: prev.triggers + 1,
+    docs: Number(prev.docs || 0) + Number(docsCount || 0),
+    triggers: Number(prev.triggers || 0) + 1,
     lastAt: now,
     meta: { ...prev.meta, ...meta },
+    hourlyBuckets: {
+      ...prevHourlyBuckets,
+      [hourKey]: {
+        docs: Number(prevHour.docs || 0) + Number(docsCount || 0),
+        triggers: Number(prevHour.triggers || 0) + 1,
+        lastAt: now,
+      },
+    },
   };
 
   localStorage.setItem(STORAGE_KEY, JSON.stringify(current));
@@ -142,14 +194,26 @@ export const flushReadTrackerToFirestore = async ({
     device,
     totalReadDocs: increment(totalReadDocs),
     totalTriggers: increment(totalTriggers),
+    hasHourlyBuckets: true,
+    hourlyBucketVersion: 1,
     lastUpdatedAt: serverTimestamp(),
     updatedAtText: new Date().toISOString(),
   };
 
   const sourcePayload = {};
+  const hourlyBuckets = mergeHourlyBucketsForFlush(stats);
+
+  Object.entries(hourlyBuckets).forEach(([hourKey, bucket]) => {
+    const safeHourKey = sanitizeFirestoreFieldKey(hourKey);
+    Object.entries(bucket.sources || {}).forEach(([safeLabel, item]) => {
+      sourcePayload[`hourlyBuckets.${safeHourKey}.sources.${safeLabel}.docs`] = increment(Number(item.docs || 0));
+      sourcePayload[`hourlyBuckets.${safeHourKey}.sources.${safeLabel}.triggers`] = increment(Number(item.triggers || 0));
+      sourcePayload[`hourlyBuckets.${safeHourKey}.sources.${safeLabel}.lastAt`] = item.lastAt || new Date().toISOString();
+    });
+  });
 
   sources.forEach(([label, item]) => {
-    const safeLabel = String(label).replace(/[.#$/\[\]\\]/g, "_");
+    const safeLabel = sanitizeFirestoreFieldKey(label);
     sourcePayload[`sources.${safeLabel}.docs`] = increment(item.docs || 0);
     sourcePayload[`sources.${safeLabel}.triggers`] = increment(item.triggers || 0);
     sourcePayload[`sources.${safeLabel}.lastAt`] = item.lastAt || new Date().toISOString();
@@ -223,12 +287,17 @@ export const getReadTrackerScheduleStatus = (config = {}, nowDate = new Date()) 
 };
 
 export const resolveReadTrackerModeFromConfig = (config = {}, nowDate = new Date()) => {
-  const manualMode = config.mode || "off";
+  const manualMode = ["off", "local", "global"].includes(config.mode) ? config.mode : "off";
   const status = getReadTrackerScheduleStatus(config, nowDate);
+
+  // 手動按鈕與排程分開判斷：
+  // - 手動切到 local / global 時，立即以手動模式為準，按鈕與實際追蹤狀態會同步變色。
+  // - 手動維持 off 時，才交給排程在指定時段自動切成 global；非排程時段保持 off。
+  if (manualMode === "local" || manualMode === "global") return manualMode;
 
   if (status.scheduleEnabled) {
     return status.isActive ? status.scheduleMode : "off";
   }
 
-  return ["off", "local", "global"].includes(manualMode) ? manualMode : "off";
+  return "off";
 };
