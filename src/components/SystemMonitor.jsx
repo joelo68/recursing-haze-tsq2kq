@@ -242,6 +242,31 @@ const SystemMonitor = () => {
     }
   };
 
+  const getLoginLocationDisplay = (device = {}) => {
+    const location =
+      device.lastLoginLocation ||
+      device.loginLocation ||
+      device.firstLoginLocation ||
+      device.location ||
+      null;
+
+    if (!location) return "未知位置";
+    if (typeof location === "string") return location || "未知位置";
+    return location.display || [location.countryName, location.city, location.district].filter(Boolean).join("・") || "未知位置";
+  };
+
+  const getLogLoginLocationDisplay = (log = {}) => {
+    const location =
+      log.loginLocation ||
+      log.details?.loginLocation ||
+      log.details?.deviceInfo?.loginLocation ||
+      null;
+
+    if (!location) return "未知位置";
+    if (typeof location === "string") return location || "未知位置";
+    return location.display || [location.countryName, location.city, location.district].filter(Boolean).join("・") || "未知位置";
+  };
+
   const getDeviceDisplayName = (device = {}) => {
     const rawDevice = String(device.device || "").trim();
     const os = String(device.os || "").toLowerCase();
@@ -807,6 +832,7 @@ const SystemMonitor = () => {
                               <div><span className="font-black text-stone-400">來源頁面：</span>{log.details?.viewLabel || log.details?.view || log.view || "-"}</div>
                               <div><span className="font-black text-stone-400">品牌：</span>{log.brandLabel || log.brand || "-"}</div>
                               <div><span className="font-black text-stone-400">事件：</span>{log.activityType || log.details?.activityType || "-"}</div>
+                              <div><span className="font-black text-stone-400">登入位置：</span>{getLogLoginLocationDisplay(log)}</div>
                               <div><span className="font-black text-stone-400">裝置：</span>{[getLogDeviceDisplayName(log), log.browser, log.os].filter(Boolean).join(" / ") || "-"}</div>
                               <div><span className="font-black text-stone-400">裝置碼：</span>{log.deviceShort || log.details?.deviceShort || "-"}</div>
                             </div>
@@ -873,6 +899,7 @@ const SystemMonitor = () => {
                                       <div><span className="font-black text-stone-400">來源頁面：</span>{log.details?.viewLabel || log.details?.view || log.view || "-"}</div>
                                       <div><span className="font-black text-stone-400">品牌：</span>{log.brandLabel || log.brand || "-"}</div>
                                       <div><span className="font-black text-stone-400">事件：</span>{log.activityType || log.details?.activityType || "-"}</div>
+                                      <div><span className="font-black text-stone-400">登入位置：</span>{getLogLoginLocationDisplay(log)}</div>
                                       <div><span className="font-black text-stone-400">裝置：</span>{[getLogDeviceDisplayName(log), log.browser, log.os].filter(Boolean).join(" / ") || "-"}</div>
                                       <div><span className="font-black text-stone-400">裝置碼：</span>{log.deviceShort || log.details?.deviceShort || "-"}</div>
                                     </div>
@@ -1082,6 +1109,10 @@ const SystemMonitor = () => {
                                     <div className="rounded-xl bg-stone-50 p-2">
                                       <span className="block text-stone-400 font-black">裝置類型</span>
                                       {getDeviceDisplayName(device)}
+                                    </div>
+                                    <div className="rounded-xl bg-stone-50 p-2">
+                                      <span className="block text-stone-400 font-black">登入位置</span>
+                                      {getLoginLocationDisplay(device)}
                                     </div>
                                     <div className="rounded-xl bg-stone-50 p-2">
                                       <span className="block text-stone-400 font-black">來源</span>

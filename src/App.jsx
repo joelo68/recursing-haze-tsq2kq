@@ -38,7 +38,9 @@ import {
 // ==========================================
 // ★ 系統核心版本號 (終極動態快取版)
 // ==========================================
-const CURRENT_APP_VERSION = "3.1.8"; 
+const CURRENT_APP_VERSION = "3.1.9"; 
+const LOGIN_LOCATION_ENDPOINT = "https://resolveloginlocation-hyhcwrnyaa-uc.a.run.app";
+
 
 const isNewerVersion = (local, remote) => {
   if (!remote) return true;
@@ -107,6 +109,28 @@ const removeUndefinedDeep = (value) => {
   }
   return value;
 };
+
+const normalizeLoginLocationPayload = (location = {}) => {
+  const display = String(location?.display || "").trim() || "未知位置";
+  return {
+    display,
+    countryCode: location?.countryCode || "",
+    countryName: location?.countryName || "",
+    region: location?.region || "",
+    city: location?.city || "",
+    district: location?.district || "",
+    timezone: location?.timezone || "",
+    isp: location?.isp || "",
+    ipMasked: location?.ipMasked || "",
+    source: location?.source || (display === "未知位置" ? "unknown" : "ip_geolocation"),
+    confidence: location?.confidence || "unknown",
+    isProxy: Boolean(location?.isProxy),
+    isMobileNetwork: Boolean(location?.isMobileNetwork),
+    updatedAtText: location?.updatedAtText || new Date().toISOString(),
+  };
+};
+
+const UNKNOWN_LOGIN_LOCATION = normalizeLoginLocationPayload({ display: "未知位置", source: "unknown" });
 
 
 const BRANDS = [
@@ -664,6 +688,7 @@ export default function App() {
   const isWarningShowingRef = useRef(false);
   const lowPowerToastShownRef = useRef(false);
   const pageViewLogThrottleRef = useRef({});
+  const loginSessionLocationRef = useRef(UNKNOWN_LOGIN_LOCATION);
 
   useEffect(() => {
     const handleOnline = () => setIsOnline(true);
@@ -698,11 +723,44 @@ export default function App() {
     lastActivityTimeRef.current = Date.now();
   }, [userRole, isLowPowerMode, getReadMeta]); 
 
+  const resolveLoginLocation = useCallback(async (payload = {}) => {
+    try {
+      const controller = new AbortController();
+      const timer = setTimeout(() => controller.abort(), 3500);
+      const response = await fetch(LOGIN_LOCATION_ENDPOINT, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(removeUndefinedDeep({
+          brandId: currentBrandId,
+          brandLabel: currentBrand?.label || currentBrandId,
+          role: payload.role || "",
+          userName: payload.userName || "",
+          deviceShort: payload.deviceInfo?.deviceShort || "",
+        })),
+        signal: controller.signal,
+      });
+      clearTimeout(timer);
+
+      if (!response.ok) return UNKNOWN_LOGIN_LOCATION;
+      const data = await response.json();
+      return normalizeLoginLocationPayload(data?.location || {});
+    } catch (error) {
+      console.warn("登入位置解析失敗:", error?.message || error);
+      return UNKNOWN_LOGIN_LOCATION;
+    }
+  }, [currentBrandId, currentBrand]);
+
   const logActivity = useCallback(async (role, user, action, details) => {
     if (!isOnline) return; 
 
     const detailPayload = details && typeof details === "object" && !Array.isArray(details) ? details : { message: details || "" };
     const clientDeviceInfo = getClientDeviceInfo();
+    const loginLocation = normalizeLoginLocationPayload(
+      detailPayload?.loginLocation ||
+      detailPayload?.deviceInfo?.loginLocation ||
+      loginSessionLocationRef.current ||
+      UNKNOWN_LOGIN_LOCATION
+    );
 
     const device = detailPayload?.deviceInfo?.device || clientDeviceInfo.device;
     const browser = detailPayload?.deviceInfo?.browser || clientDeviceInfo.browser;
@@ -724,7 +782,8 @@ export default function App() {
         role,
         user,
         action,
-        details: removeUndefinedDeep(detailPayload),
+        details: removeUndefinedDeep({ ...detailPayload, loginLocation }),
+        loginLocation: removeUndefinedDeep(loginLocation),
         activityType,
         view: detailPayload.view || activeView || "",
         device,
@@ -753,6 +812,7 @@ export default function App() {
     if (!isOnline) return;
 
     const info = deviceSecurity.deviceInfo || fallbackDeviceInfo || getClientDeviceInfo();
+    const loginLocation = normalizeLoginLocationPayload(deviceSecurity.loginLocation || info.loginLocation || UNKNOWN_LOGIN_LOCATION);
     const isFailed = deviceSecurity.deviceStatus === "check_failed" || deviceSecurity.error;
     const activityType = isFailed ? "auth.device_check_failed" : "auth.device_check";
     const message = isFailed
@@ -764,7 +824,8 @@ export default function App() {
     const detailPayload = {
       activityType,
       message,
-      deviceInfo: info,
+      deviceInfo: { ...info, loginLocation },
+      loginLocation,
       isNewDevice: Boolean(deviceSecurity.isNewDevice),
       deviceTrusted: deviceSecurity.deviceTrusted ?? null,
       autoTrusted: Boolean(deviceSecurity.autoTrusted),
@@ -784,6 +845,7 @@ export default function App() {
         user: userName,
         action: "裝置安全檢查",
         details: removeUndefinedDeep(detailPayload),
+        loginLocation: removeUndefinedDeep(loginLocation),
         activityType,
         view: activeView || "",
         device: info.device,
@@ -811,6 +873,9 @@ export default function App() {
     const deviceInfo = getClientDeviceInfo();
     const accountId = sanitizeSecurityKey(userInfo?.id || userInfo?.accountId || userInfo?.name || roleId);
     const userName = userInfo?.name || (roleId === "director" ? "高階主管" : (roleId === "trainer" ? "教專" : "未知"));
+    const loginLocation = await resolveLoginLocation({ role: roleId, userName, deviceInfo });
+    loginSessionLocationRef.current = loginLocation;
+    deviceInfo.loginLocation = loginLocation;
     const accountKey = sanitizeSecurityKey(`${currentBrandId}_${roleId}_${accountId}`);
     const nowText = new Date().toISOString();
 
@@ -884,6 +949,9 @@ export default function App() {
           lastSeenAt: serverTimestamp(),
           lastSeenAtText: nowText,
           loginCount: Number(existingDevice.loginCount || 0) + 1,
+          loginLocation,
+          lastLoginLocation: loginLocation,
+          locationUpdatedAtText: nowText,
         };
 
         await setDoc(deviceProfileRef, {
@@ -908,6 +976,7 @@ export default function App() {
           alertCreated: false,
           riskTags: [],
           deviceStatus: existingDevice.status || (existingDevice.trusted === false ? "new" : "trusted"),
+          loginLocation,
         };
         logDeviceCheckResult(roleId, userName, result, deviceInfo);
         return result;
@@ -932,6 +1001,10 @@ export default function App() {
         lastSeenAt: serverTimestamp(),
         lastSeenAtText: nowText,
         loginCount: 1,
+        loginLocation,
+        firstLoginLocation: loginLocation,
+        lastLoginLocation: loginLocation,
+        locationUpdatedAtText: nowText,
       };
 
       await setDoc(deviceProfileRef, {
@@ -963,6 +1036,7 @@ export default function App() {
           device: deviceInfo.device,
           browser: deviceInfo.browser,
           os: deviceInfo.os,
+          loginLocation: removeUndefinedDeep(loginLocation),
           trustedDeviceCountBefore: trustedDeviceCount,
           message: `${userName} 出現新裝置登入`,
           createdAt: serverTimestamp(),
@@ -993,6 +1067,7 @@ export default function App() {
         trustedDeviceCountBefore: trustedDeviceCount,
         riskTags,
         deviceStatus: autoTrusted ? "trusted" : "new",
+        loginLocation,
       };
       logDeviceCheckResult(roleId, userName, result, deviceInfo);
       return result;
@@ -1006,12 +1081,13 @@ export default function App() {
         alertCreated: false,
         riskTags: ["裝置檢查失敗"],
         deviceStatus: "check_failed",
+        loginLocation: UNKNOWN_LOGIN_LOCATION,
         error: error.message,
       };
       logDeviceCheckResult(roleId, userName, result, deviceInfo);
       return result;
     }
-  }, [isOnline, currentBrandId, currentBrand, getCollectionPath, getSecuritySummaryDocPath, logDeviceCheckResult]);
+  }, [isOnline, currentBrandId, currentBrand, getCollectionPath, getSecuritySummaryDocPath, logDeviceCheckResult, resolveLoginLocation]);
 
   useEffect(() => {
     if (!userRole || !currentUser || !activeView) return;
@@ -1033,13 +1109,18 @@ export default function App() {
       brandId: currentBrandId,
       brandLabel: currentBrand?.label || currentBrandId,
       path: typeof window !== "undefined" ? window.location.pathname : "",
+      loginLocation: loginSessionLocationRef.current || UNKNOWN_LOGIN_LOCATION,
     });
   }, [activeView, userRole, currentUser, currentBrandId, currentBrand, logActivity]);
 
 
   const handleLogout = useCallback(async (reason = "使用者手動登出") => {
     const userName = currentUser?.name || (userRole === "director" ? "高階主管" : (userRole === "trainer" ? "教專" : "未知"));
-    if (userRole) logActivity(userRole, userName, "登出系統", reason);
+    if (userRole) logActivity(userRole, userName, "登出系統", {
+      message: reason,
+      loginLocation: loginSessionLocationRef.current || UNKNOWN_LOGIN_LOCATION,
+    });
+    loginSessionLocationRef.current = UNKNOWN_LOGIN_LOCATION;
     
     isWarningShowingRef.current = false; 
     setShowIdleWarning(false); 

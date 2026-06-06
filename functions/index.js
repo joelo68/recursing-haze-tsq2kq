@@ -12,6 +12,211 @@ const db = admin.firestore();
 const GEMINI_API_KEY = defineSecret('GEMINI_API_KEY');
 
 // ==========================================
+// ★ Device Location v1：登入位置粗略判斷
+// 目的：以後端 request IP 進行粗略定位，供裝置安全判斷使用。
+// 注意：IP 定位可能因 VPN、行動網路、電信機房而失準；不使用 GPS，不儲存完整 IP。
+// ==========================================
+function getRequestIp(req) {
+  const forwarded = String(req.headers["x-forwarded-for"] || "").split(",")[0].trim();
+  const cfIp = String(req.headers["cf-connecting-ip"] || "").trim();
+  const fastlyIp = String(req.headers["fastly-client-ip"] || "").trim();
+  const realIp = String(req.headers["x-real-ip"] || "").trim();
+  const rawIp = forwarded || cfIp || fastlyIp || realIp || req.ip || req.socket?.remoteAddress || "";
+  return String(rawIp || "").replace(/^::ffff:/, "").trim();
+}
+
+function isPrivateOrLocalIp(ip = "") {
+  const text = String(ip || "").trim();
+  return (
+    !text ||
+    text === "::1" ||
+    text === "127.0.0.1" ||
+    text.startsWith("10.") ||
+    text.startsWith("192.168.") ||
+    /^172\.(1[6-9]|2\d|3[0-1])\./.test(text)
+  );
+}
+
+function maskIp(ip = "") {
+  const text = String(ip || "").trim();
+  if (!text) return "";
+  if (text.includes(":")) {
+    const parts = text.split(":").filter(Boolean);
+    return parts.length ? `${parts[0]}:${parts[1] || "****"}:****` : "";
+  }
+  const parts = text.split(".");
+  if (parts.length !== 4) return "";
+  return `${parts[0]}.***.***.${parts[3]}`;
+}
+
+function normalizeTaiwanLocationName(value = "") {
+  const raw = String(value || "").trim();
+  if (!raw) return "";
+
+  const map = {
+    "Taiwan": "台灣",
+    "Taiwan, Province of China": "台灣",
+    "Taipei": "台北市",
+    "Taipei City": "台北市",
+    "New Taipei": "新北市",
+    "New Taipei City": "新北市",
+    "Taoyuan": "桃園市",
+    "Taoyuan City": "桃園市",
+    "Taichung": "台中市",
+    "Taichung City": "台中市",
+    "Tainan": "台南市",
+    "Tainan City": "台南市",
+    "Kaohsiung": "高雄市",
+    "Kaohsiung City": "高雄市",
+    "Keelung": "基隆市",
+    "Hsinchu": "新竹市",
+    "Hsinchu City": "新竹市",
+    "Hsinchu County": "新竹縣",
+    "Miaoli": "苗栗縣",
+    "Miaoli County": "苗栗縣",
+    "Changhua": "彰化縣",
+    "Changhua County": "彰化縣",
+    "Nantou": "南投縣",
+    "Nantou County": "南投縣",
+    "Yunlin": "雲林縣",
+    "Yunlin County": "雲林縣",
+    "Chiayi": "嘉義市",
+    "Chiayi City": "嘉義市",
+    "Chiayi County": "嘉義縣",
+    "Pingtung": "屏東縣",
+    "Pingtung County": "屏東縣",
+    "Yilan": "宜蘭縣",
+    "Yilan County": "宜蘭縣",
+    "Hualien": "花蓮縣",
+    "Hualien County": "花蓮縣",
+    "Taitung": "台東縣",
+    "Taitung County": "台東縣",
+    "Penghu": "澎湖縣",
+    "Penghu County": "澎湖縣",
+    "Kinmen": "金門縣",
+    "Kinmen County": "金門縣",
+    "Lienchiang": "連江縣",
+    "Lienchiang County": "連江縣",
+    "Zhongzheng District": "中正區",
+    "Datong District": "大同區",
+    "Zhongshan District": "中山區",
+    "Songshan District": "松山區",
+    "Daan District": "大安區",
+    "Da’an District": "大安區",
+    "Wanhua District": "萬華區",
+    "Xinyi District": "信義區",
+    "Shilin District": "士林區",
+    "Beitou District": "北投區",
+    "Neihu District": "內湖區",
+    "Nangang District": "南港區",
+    "Wenshan District": "文山區",
+  };
+
+  return map[raw] || raw
+    .replace("Taipei County", "新北市")
+    .replace("Taipei", "台北市")
+    .replace("Taiwan", "台灣");
+}
+
+function buildLoginLocation(raw = {}, ip = "") {
+  const countryName = normalizeTaiwanLocationName(raw.country || raw.countryName || "");
+  const regionName = normalizeTaiwanLocationName(raw.regionName || raw.region || "");
+  const city = normalizeTaiwanLocationName(raw.city || "");
+  const district = normalizeTaiwanLocationName(raw.district || raw.subdivision || raw.suburb || "");
+
+  const displayParts = [];
+  if (countryName) displayParts.push(countryName);
+  const cityText = city || regionName;
+  if (cityText && cityText !== countryName) displayParts.push(cityText);
+  if (district && district !== cityText && district !== regionName) displayParts.push(district);
+
+  const display = displayParts.length ? displayParts.join("・") : "未知位置";
+
+  return {
+    display,
+    countryCode: raw.countryCode || raw.country_code || "",
+    countryName: countryName || "",
+    region: regionName || "",
+    city: cityText || "",
+    district: district || "",
+    timezone: raw.timezone || "",
+    isp: raw.isp || raw.org || "",
+    ipMasked: maskIp(ip),
+    source: display === "未知位置" ? "unknown" : "ip_geolocation",
+    confidence: district ? "medium" : (cityText ? "low" : "unknown"),
+    isProxy: Boolean(raw.proxy || raw.hosting),
+    isMobileNetwork: Boolean(raw.mobile),
+    updatedAtText: new Date().toISOString(),
+  };
+}
+
+exports.resolveLoginLocation = onRequest({ cors: true, timeoutSeconds: 10 }, async (req, res) => {
+  if (req.method === "OPTIONS") {
+    res.set("Access-Control-Allow-Origin", "*");
+    res.set("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
+    res.set("Access-Control-Allow-Headers", "Content-Type, Authorization");
+    return res.status(204).send("");
+  }
+
+  res.set("Access-Control-Allow-Origin", "*");
+
+  const ip = getRequestIp(req);
+  if (isPrivateOrLocalIp(ip)) {
+    return res.status(200).json({
+      ok: true,
+      location: {
+        display: "未知位置",
+        source: "unknown",
+        confidence: "unknown",
+        ipMasked: maskIp(ip),
+        updatedAtText: new Date().toISOString(),
+      },
+      reason: "private_or_local_ip",
+    });
+  }
+
+  try {
+    const url = `http://ip-api.com/json/${encodeURIComponent(ip)}?fields=status,message,country,countryCode,regionName,city,district,timezone,isp,org,mobile,proxy,hosting,query`;
+    const response = await axios.get(url, { timeout: 3000 });
+    const data = response.data || {};
+
+    if (data.status && data.status !== "success") {
+      return res.status(200).json({
+        ok: true,
+        location: {
+          display: "未知位置",
+          source: "unknown",
+          confidence: "unknown",
+          ipMasked: maskIp(ip),
+          updatedAtText: new Date().toISOString(),
+        },
+        reason: data.message || "ip_geolocation_failed",
+      });
+    }
+
+    return res.status(200).json({
+      ok: true,
+      location: buildLoginLocation(data, ip),
+    });
+  } catch (error) {
+    console.warn("resolveLoginLocation failed", error.message);
+    return res.status(200).json({
+      ok: true,
+      location: {
+        display: "未知位置",
+        source: "unknown",
+        confidence: "unknown",
+        ipMasked: maskIp(ip),
+        updatedAtText: new Date().toISOString(),
+      },
+      reason: "lookup_error",
+    });
+  }
+});
+
+
+
+// ==========================================
 // ★ 0.5 Summary 後端保底：歷史日報異動後自動標記 dirty
 // 目的：避免歷史月份明細已被改動，但 dashboard_summary / therapist_summary / rankings_summary 仍維持 verified，導致自動修復略過。
 // ==========================================
