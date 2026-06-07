@@ -38,7 +38,7 @@ import {
 // ==========================================
 // ★ 系統核心版本號 (終極動態快取版)
 // ==========================================
-const CURRENT_APP_VERSION = "3.1.9"; 
+const CURRENT_APP_VERSION = "3.2.0"; 
 const LOGIN_LOCATION_ENDPOINT = "https://resolveloginlocation-hyhcwrnyaa-uc.a.run.app";
 
 
@@ -493,6 +493,15 @@ export default function App() {
     brand: currentBrandId,
     view: activeView,
     userName: currentUser?.name || userRole || "unknown",
+  });
+
+  const readTrackerConfigRef = useRef({
+    mode: "off",
+    scheduleEnabled: false,
+    scheduleMode: "global",
+    startTime: "19:00",
+    endTime: "07:00",
+    timezone: "Asia/Taipei",
   });
 
   useEffect(() => {
@@ -1373,6 +1382,8 @@ export default function App() {
     const unsubReadTrackerConfig = onSnapshot(getDocPath("read_tracker_config"), (s) => {
       trackReadSource("read_tracker_config", s.exists() ? 1 : 0, getReadMeta("read_tracker_config"));
       const remoteConfig = s.exists() ? s.data() : { mode: "off" };
+      readTrackerConfigRef.current = remoteConfig;
+
       const effectiveMode = resolveReadTrackerModeFromConfig(remoteConfig);
       const scheduleStatus = getReadTrackerScheduleStatus(remoteConfig);
 
@@ -1395,6 +1406,23 @@ export default function App() {
 
     return () => unsubReadTrackerConfig();
   }, [user, getDocPath, getReadMeta]);
+
+  useEffect(() => {
+    if (!user) return;
+
+    const applyScheduledReadTrackerMode = () => {
+      const remoteConfig = readTrackerConfigRef.current || { mode: "off" };
+      const effectiveMode = resolveReadTrackerModeFromConfig(remoteConfig);
+
+      if (["off", "local", "global"].includes(effectiveMode)) {
+        setReadTrackerMode(effectiveMode);
+      }
+    };
+
+    applyScheduledReadTrackerMode();
+    const timer = setInterval(applyScheduledReadTrackerMode, 60 * 1000);
+    return () => clearInterval(timer);
+  }, [user]);
 
   const lowFrequencyCacheRef = useRef({});
 
