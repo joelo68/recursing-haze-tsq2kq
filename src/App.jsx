@@ -38,7 +38,7 @@ import {
 // ==========================================
 // ★ 系統核心版本號 (終極動態快取版)
 // ==========================================
-const CURRENT_APP_VERSION = "3.2.1"; 
+const CURRENT_APP_VERSION = "3.2.2"; 
 const LOGIN_LOCATION_ENDPOINT = "https://resolveloginlocation-hyhcwrnyaa-uc.a.run.app";
 
 
@@ -375,28 +375,105 @@ const getClientDeviceInfo = () => {
   else if (lowerUa.includes("android")) os = "Android";
 
   let deviceId = "";
+  let deviceStorageStatus = "ok";
+  let deviceStorageMigrated = false;
+
   try {
-    const storageKey = "cyj_device_id_v1";
-    deviceId = localStorage.getItem(storageKey);
+    const stableKey = "drcyj_stable_device_id_v2";
+    const legacyKey = "cyj_device_id_v1";
+    const legacyDeviceId = localStorage.getItem(legacyKey);
+    deviceId = localStorage.getItem(stableKey) || legacyDeviceId || "";
+
     if (!deviceId) {
       const randomPart = typeof crypto !== "undefined" && crypto.randomUUID
         ? crypto.randomUUID()
         : `${Date.now()}_${Math.random().toString(36).slice(2, 12)}`;
       deviceId = `dev_${randomPart}`;
-      localStorage.setItem(storageKey, deviceId);
     }
+
+    localStorage.setItem(stableKey, deviceId);
+    localStorage.setItem(legacyKey, deviceId);
+    deviceStorageMigrated = Boolean(legacyDeviceId && legacyDeviceId === deviceId);
   } catch (error) {
+    deviceStorageStatus = "session_fallback";
     deviceId = `dev_session_${Date.now()}_${Math.random().toString(36).slice(2, 10)}`;
   }
+
+  const deviceFingerprint = [device, browser, os].filter(Boolean).join("|");
 
   return {
     device,
     browser,
     os,
     deviceId,
+    stableDeviceId: deviceId,
     deviceShort: String(deviceId || "").replace(/^dev_/, "").slice(-8),
+    deviceFingerprint,
+    deviceStorageStatus,
+    deviceStorageMigrated,
     userAgent: ua,
   };
+};
+
+const persistStableClientDeviceId = (deviceId = "") => {
+  const stableId = String(deviceId || "").trim();
+  if (!stableId || stableId.startsWith("dev_session_")) return false;
+
+  try {
+    localStorage.setItem("drcyj_stable_device_id_v2", stableId);
+    localStorage.setItem("cyj_device_id_v1", stableId);
+    return true;
+  } catch (error) {
+    console.warn("persistStableClientDeviceId failed:", error);
+    return false;
+  }
+};
+
+const getLoginLocationCityText = (location = {}) => {
+  if (!location || typeof location !== "object") return "";
+  return String(location.city || location.region || location.display || "").trim();
+};
+
+const findRecoverableKnownDeviceEntry = (devices = {}, deviceInfo = {}, loginLocation = {}) => {
+  const entries = Object.entries(devices || {});
+  if (!entries.length) return null;
+
+  const currentDeviceId = String(deviceInfo?.deviceId || "");
+  const currentFingerprint = String(deviceInfo?.deviceFingerprint || [deviceInfo?.device, deviceInfo?.browser, deviceInfo?.os].filter(Boolean).join("|"));
+  const currentLocationText = getLoginLocationCityText(loginLocation);
+  const now = Date.now();
+  const maxAgeMs = 120 * 24 * 60 * 60 * 1000;
+
+  let bestMatch = null;
+
+  entries.forEach(([storedDeviceId, item = {}]) => {
+    if (!item || storedDeviceId === currentDeviceId) return;
+    if (item.status === "blocked" || item.source === "manual_blocked") return;
+
+    const storedFingerprint = String(item.deviceFingerprint || [item.device, item.browser, item.os].filter(Boolean).join("|"));
+    if (!storedFingerprint || storedFingerprint !== currentFingerprint) return;
+
+    const lastSeenText = item.lastSeenAtText || item.firstSeenAtText || "";
+    const lastSeenMs = lastSeenText ? Date.parse(lastSeenText) : 0;
+    const isRecent = !lastSeenMs || Number.isNaN(lastSeenMs) || (now - lastSeenMs <= maxAgeMs);
+    if (!isRecent) return;
+
+    const itemLocationText = getLoginLocationCityText(item.lastLoginLocation || item.loginLocation || item.firstLoginLocation || {});
+    const locationCompatible = !currentLocationText || !itemLocationText || currentLocationText === itemLocationText || currentLocationText.includes(itemLocationText) || itemLocationText.includes(currentLocationText);
+    if (!locationCompatible) return;
+
+    const score =
+      (item.trusted !== false && item.status !== "new" ? 30 : 0) +
+      (Number(item.loginCount || 0) >= 2 ? 20 : 0) +
+      (locationCompatible ? 10 : 0) +
+      (lastSeenMs || 0) / 10000000000000;
+
+    if (!bestMatch || score > bestMatch.score) {
+      bestMatch = { storedDeviceId, item, score };
+    }
+  });
+
+  return bestMatch;
 };
 
 const sanitizeSecurityKey = (value = "") => {
@@ -896,43 +973,65 @@ export default function App() {
 
     try {
       const deviceProfileRef = doc(getCollectionPath("account_devices"), accountKey);
-      const globalBlockKey = sanitizeSecurityKey(`${roleId}_${accountId}_${deviceInfo.deviceId}`);
-      const globalBlockRef = doc(db, "artifacts", appId, "public", "data", "global_blocked_devices", globalBlockKey);
-      const [profileSnap, globalBlockSnap] = await Promise.all([
-        getDoc(deviceProfileRef),
-        getDoc(globalBlockRef),
-      ]);
-
-      if (globalBlockSnap.exists()) {
-        const globalBlockData = globalBlockSnap.data() || {};
-        const isGlobalBlockActive =
-          globalBlockData.active !== false &&
-          ["blocked", "global_blocked", "manual_global_blocked"].includes(String(globalBlockData.status || globalBlockData.source || ""));
-
-        if (isGlobalBlockActive) {
-          const result = {
-            allowed: false,
-            blocked: true,
-            globalBlocked: true,
-            reason: "global_device_blocked",
-            message: "此裝置已被全品牌封鎖，請聯繫主管。",
-            deviceInfo,
-            existingDevice: globalBlockData,
-            isNewDevice: false,
-            deviceTrusted: false,
-            autoTrusted: false,
-            alertCreated: false,
-            riskTags: ["全品牌裝置封鎖"],
-            deviceStatus: "blocked",
-          };
-          logDeviceCheckResult(roleId, userName, result, deviceInfo);
-          return result;
-        }
-      }
-
+      const profileSnap = await getDoc(deviceProfileRef);
       const profileData = profileSnap.exists() ? profileSnap.data() : {};
       const devices = profileData.devices || {};
-      const existingDevice = devices[deviceInfo.deviceId];
+
+      const exactExistingDevice = devices[deviceInfo.deviceId];
+      const recoveredKnownDevice = exactExistingDevice ? null : findRecoverableKnownDeviceEntry(devices, deviceInfo, loginLocation);
+      const recoveredDeviceId = recoveredKnownDevice?.storedDeviceId || "";
+      const originalDeviceId = deviceInfo.deviceId;
+      const originalDeviceShort = deviceInfo.deviceShort;
+
+      if (recoveredDeviceId && recoveredDeviceId !== deviceInfo.deviceId) {
+        persistStableClientDeviceId(recoveredDeviceId);
+        deviceInfo.previousDeviceId = originalDeviceId;
+        deviceInfo.previousDeviceShort = originalDeviceShort;
+        deviceInfo.deviceId = recoveredDeviceId;
+        deviceInfo.stableDeviceId = recoveredDeviceId;
+        deviceInfo.deviceShort = String(recoveredDeviceId || "").replace(/^dev_/, "").slice(-8);
+        deviceInfo.recoveredKnownDevice = true;
+        deviceInfo.recoveredFromDeviceId = originalDeviceId;
+      }
+
+      const globalBlockKeys = Array.from(new Set([
+        sanitizeSecurityKey(`${roleId}_${accountId}_${originalDeviceId}`),
+        sanitizeSecurityKey(`${roleId}_${accountId}_${deviceInfo.deviceId}`),
+      ])).filter(Boolean);
+
+      const globalBlockSnaps = await Promise.all(
+        globalBlockKeys.map((key) => getDoc(doc(db, "artifacts", appId, "public", "data", "global_blocked_devices", key)))
+      );
+
+      const activeGlobalBlockSnap = globalBlockSnaps.find((snap) => {
+        if (!snap.exists()) return false;
+        const data = snap.data() || {};
+        return data.active !== false &&
+          ["blocked", "global_blocked", "manual_global_blocked"].includes(String(data.status || data.source || ""));
+      });
+
+      if (activeGlobalBlockSnap) {
+        const globalBlockData = activeGlobalBlockSnap.data() || {};
+        const result = {
+          allowed: false,
+          blocked: true,
+          globalBlocked: true,
+          reason: "global_device_blocked",
+          message: "此裝置已被全品牌封鎖，請聯繫主管。",
+          deviceInfo,
+          existingDevice: globalBlockData,
+          isNewDevice: false,
+          deviceTrusted: false,
+          autoTrusted: false,
+          alertCreated: false,
+          riskTags: ["全品牌裝置封鎖"],
+          deviceStatus: "blocked",
+        };
+        logDeviceCheckResult(roleId, userName, result, deviceInfo);
+        return result;
+      }
+
+      const existingDevice = exactExistingDevice || recoveredKnownDevice?.item || null;
 
       if (existingDevice?.status === "blocked" || existingDevice?.source === "manual_blocked") {
         const result = {
@@ -961,6 +1060,13 @@ export default function App() {
           browser: deviceInfo.browser,
           os: deviceInfo.os,
           deviceShort: deviceInfo.deviceShort,
+          stableDeviceId: deviceInfo.stableDeviceId || deviceInfo.deviceId,
+          deviceFingerprint: deviceInfo.deviceFingerprint,
+          deviceStorageStatus: deviceInfo.deviceStorageStatus,
+          recoveredKnownDevice: Boolean(deviceInfo.recoveredKnownDevice || existingDevice.recoveredKnownDevice),
+          recoveredFromDeviceIds: deviceInfo.recoveredFromDeviceId
+            ? Array.from(new Set([...(existingDevice.recoveredFromDeviceIds || []), deviceInfo.recoveredFromDeviceId]))
+            : (existingDevice.recoveredFromDeviceIds || []),
           lastSeenAt: serverTimestamp(),
           lastSeenAtText: nowText,
           loginCount: Number(existingDevice.loginCount || 0) + 1,
@@ -989,7 +1095,7 @@ export default function App() {
           deviceTrusted: existingDevice.trusted !== false,
           autoTrusted: false,
           alertCreated: false,
-          riskTags: [],
+          riskTags: deviceInfo.recoveredKnownDevice ? ["疑似原裝置已自動沿用"] : [],
           deviceStatus: existingDevice.status || (existingDevice.trusted === false ? "new" : "trusted"),
           loginLocation,
         };
@@ -1005,6 +1111,9 @@ export default function App() {
       const newDeviceRecord = {
         deviceId: deviceInfo.deviceId,
         deviceShort: deviceInfo.deviceShort,
+        stableDeviceId: deviceInfo.stableDeviceId || deviceInfo.deviceId,
+        deviceFingerprint: deviceInfo.deviceFingerprint,
+        deviceStorageStatus: deviceInfo.deviceStorageStatus,
         device: deviceInfo.device,
         browser: deviceInfo.browser,
         os: deviceInfo.os,
