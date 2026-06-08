@@ -440,6 +440,12 @@ const DIRECTOR_RESTRICTED_VIEWS = {
   notification: "通知管理",
 };
 
+// ★ 讀取節流 v1：把大型資料源限制在真正需要的頁面。
+// 年度資料只供年度分析使用；月度明細只供 Dashboard / 排行 / 區域 / 店家分析 / 檢核 / 修正使用。
+// 日報輸入、系統設定、登入監控、目標設定等頁面不應背景常駐讀整月或全年資料。
+const ANNUAL_DATA_VIEWS = new Set(["annual"]);
+const MONTHLY_REPORT_DATA_VIEWS = new Set(["dashboard", "regional", "ranking", "store-analysis", "audit", "history"]);
+
 
 export default function App() {
   const [user, setUser] = useState(null);
@@ -1325,8 +1331,8 @@ export default function App() {
         getDoc(getDocPath("master_auth"))
       ]);
 
-      trackReadSource("fetchGlobalData_core_docs", 9, getReadMeta("fetchGlobalData_core_docs"));
-      trackReadSource("fetchGlobalData_therapists", thSnap.docs.length, getReadMeta("fetchGlobalData_therapists"));
+      trackReadSource("fetchGlobalData_core_docs", 9, getStableReadMeta("fetchGlobalData_core_docs"));
+      trackReadSource("fetchGlobalData_therapists", thSnap.docs.length, getStableReadMeta("fetchGlobalData_therapists"));
 
       if (orgSnap.exists()) {
         const orgData = orgSnap.data() || {};
@@ -1374,7 +1380,7 @@ export default function App() {
     } catch (error) {
       console.error("Fetch Global Data Error:", error);
     }
-  }, [user, currentBrand, getDocPath, getCollectionPath, getReadMeta]);
+  }, [user, currentBrand, getDocPath, getCollectionPath, getStableReadMeta]);
 
   useEffect(() => {
     if (!user) return;
@@ -1539,28 +1545,20 @@ useEffect(() => {
     setPermissions(DEFAULT_PERMISSIONS);
     setSecurityConfig(DEFAULT_SECURITY_CONFIG);
 
+    fetchGlobalData();
+  }, [user, currentBrandId, fetchGlobalData]);
+
+  useEffect(() => {
+    if (!user) return;
+
     const targetYearStr = String(selectedYear);
     let isMounted = true;
     const lowFrequencyUnsubs = [];
 
-    fetchGlobalData();
-
-    // ==========================================
-    // ★ 第二階段保守節流：維持 Dashboard 所需資料完整，但降低重複讀取
-    // monthly_targets 是營運總覽預算、達成率與月底推估的核心資料。
-    // useDashboardStats 會用 `${品牌店名}_${年}_${月}` 當 key 查 budgets，
-    // 因此這裡不可改成不明確的 where 查詢，否則營運總覽會歸零。
-    // 做法：
-    // 1. monthly_targets + kpi_targets 保留完整結構，但加入 10 分鐘快取。
-    // 2. therapist_schedules 只有進入「管師排休」或「回報檢核 > 管理師日報」才讀。
-    // 3. therapist_targets 在 Dashboard / 管師目標頁 /「回報檢核 > 管理師目標」才讀，避免不必要低頻讀取。
-    // ==========================================
     const fetchLowFrequencyData = async () => {
       try {
         const cacheTtlMs = 10 * 60 * 1000;
         const nowMs = Date.now();
-
-        // monthly_targets / kpi_targets 已改由品牌層級穩定監聽，這裡只處理按頁面載入的低頻管理師資料。
 
         const shouldLoadSchedules = activeView === "t-schedule" || (activeView === "audit" && auditType === "therapist-daily");
         const shouldLoadTherapistTargets = activeView === "dashboard" || activeView === "t-targets" || (activeView === "audit" && auditType === "therapist-target");
@@ -1571,10 +1569,10 @@ useEffect(() => {
 
           if (scheduleCached && scheduleCached.expiresAt > nowMs) {
             setTherapistSchedules(scheduleCached.data || {});
-            trackReadSource("therapist_schedules_year_cache_hit", 0, getReadMeta("therapist_schedules_year_cache_hit"));
+            trackReadSource("therapist_schedules_year_cache_hit", 0, getStableReadMeta("therapist_schedules_year_cache_hit"));
           } else {
             const scheduleSnap = await getDocs(query(getCollectionPath("therapist_schedules"), where("year", "==", targetYearStr)));
-            trackReadSource("therapist_schedules_year", scheduleSnap.docs.length, getReadMeta("therapist_schedules_year_lazy"));
+            trackReadSource("therapist_schedules_year", scheduleSnap.docs.length, getStableReadMeta("therapist_schedules_year_lazy"));
 
             if (!isMounted) return;
 
@@ -1591,11 +1589,10 @@ useEffect(() => {
         }
 
         if (shouldLoadTherapistTargets) {
-          // ★ 管理師目標同樣影響當月人員績效達成率；Dashboard / 管師目標頁維持即時監聽。
           const unsubTherapistTargets = onSnapshot(
             query(getCollectionPath("therapist_targets"), where("year", "==", targetYearStr)),
             (tTargetSnap) => {
-              trackSnapshotRead("therapist_targets_year_live", tTargetSnap, getReadMeta("therapist_targets_year_live"));
+              trackSnapshotRead("therapist_targets_year_live", tTargetSnap, getStableReadMeta("therapist_targets_year_live"));
               const t = {};
               tTargetSnap.docs.forEach((d) => (t[d.id] = d.data()));
               setTherapistTargets(t);
@@ -1613,39 +1610,58 @@ useEffect(() => {
 
     fetchLowFrequencyData();
 
+    return () => {
+      isMounted = false;
+      lowFrequencyUnsubs.forEach((unsubscribe) => {
+        try { unsubscribe && unsubscribe(); } catch (error) { console.warn("low frequency unsubscribe failed", error); }
+      });
+    };
+  }, [user, currentBrandId, currentBrand, getCollectionPath, selectedYear, activeView, auditType, getStableReadMeta]);
+
+  useEffect(() => {
+    if (!user) {
+      setDailyLoginCount(0);
+      setYesterdayLoginCount(0);
+      return;
+    }
+
     const todayStr = formatLocalYYYYMMDD(new Date());
     const d = new Date();
     d.setDate(d.getDate() - 1);
     const yesterdayStr = formatLocalYYYYMMDD(d);
 
-    // 登入數字很小，保留即時監聽即可。
     const unsubStatsToday = onSnapshot(doc(getCollectionPath("system_stats"), todayStr), (s) => {
-      trackReadSource("system_stats_today", s.exists() ? 1 : 0, getReadMeta("system_stats_today"));
+      trackReadSource("system_stats_today", s.exists() ? 1 : 0, getStableReadMeta("system_stats_today"));
       if (s.exists()) setDailyLoginCount(s.data().count || 0);
       else setDailyLoginCount(0);
     });
 
     const unsubStatsYesterday = onSnapshot(doc(getCollectionPath("system_stats"), yesterdayStr), (s) => {
-      trackReadSource("system_stats_yesterday", s.exists() ? 1 : 0, getReadMeta("system_stats_yesterday"));
+      trackReadSource("system_stats_yesterday", s.exists() ? 1 : 0, getStableReadMeta("system_stats_yesterday"));
       if (s.exists()) setYesterdayLoginCount(s.data().count || 0);
       else setYesterdayLoginCount(0);
     });
 
     return () => {
-      isMounted = false;
       unsubStatsToday();
       unsubStatsYesterday();
-      lowFrequencyUnsubs.forEach((unsubscribe) => {
-        try { unsubscribe && unsubscribe(); } catch (error) { console.warn("low frequency unsubscribe failed", error); }
-      });
     };
-  }, [user, currentBrand, getCollectionPath, getDocPath, selectedYear, activeView, auditType, fetchGlobalData, getReadMeta]);
+  }, [user, currentBrandId, getCollectionPath, getStableReadMeta]);
 
 
   const monthCacheRef = useRef({});
 
   useEffect(() => {
-    if (!user || isLowPowerMode) return;
+    const shouldLoadAnnualData = ANNUAL_DATA_VIEWS.has(activeView);
+
+    if (!user || isLowPowerMode || !shouldLoadAnnualData) {
+      setAnnualAggregatedData([]);
+      setAnnualDashboardSummaries([]);
+      setAnnualSummaryStatusMap({});
+      setTherapistAnnualAggregatedData([]);
+      return;
+    }
+
     const targetYear = String(selectedYear);
 
     // 1. 抓取店鋪結算表：保留作為本月 / 未整理月份備援資料源
@@ -1701,10 +1717,16 @@ useEffect(() => {
       unsubSummaryFlags();
       unsubTherapistAgg(); // ★ 離開時記得關閉管線
     };
-  }, [user, currentBrand, selectedYear, getCollectionPath, getStableReadMeta, isLowPowerMode]);
+  }, [user, currentBrand, selectedYear, activeView, getCollectionPath, getStableReadMeta, isLowPowerMode]);
 
   useEffect(() => {
-    if (!user || isLowPowerMode) return;
+    const shouldLoadMonthlyReportData = MONTHLY_REPORT_DATA_VIEWS.has(activeView);
+
+    if (!user || isLowPowerMode || !shouldLoadMonthlyReportData) {
+      setRawData([]);
+      setTherapistReports([]);
+      return;
+    }
 
     const targetYear = String(selectedYear);
     const targetMonth = String(selectedMonth).padStart(2, '0');
@@ -1788,7 +1810,7 @@ useEffect(() => {
         isMounted = false; 
       };
     }
-  }, [user, currentBrand, selectedYear, selectedMonth, getCollectionPath, getStableReadMeta, isLowPowerMode]);
+  }, [user, currentBrand, selectedYear, selectedMonth, activeView, getCollectionPath, getStableReadMeta, isLowPowerMode]);
 
 
  const handleLogin = useCallback(async (roleId, userInfo = null) => {

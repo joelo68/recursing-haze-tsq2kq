@@ -982,8 +982,11 @@ exports.telegramWebhook = onRequest({ secrets: [GEMINI_API_KEY] }, async (req, r
 
 // ==========================================
 // ★ 4. Telegram 動態定時推播巡邏員 (★ 終極抓預算通吃版)
+// 節流 v2：只在 08:00～11:59 每分鐘巡邏。
+// 目的：保留上午推播即時性，12:00 後休眠，停止下午 / 晚上 / 凌晨固定背景 reads。
+// 若未來需要中午後或晚間推播，請同步調整 schedule。
 // ==========================================
-exports.notificationPatrol = onSchedule({ schedule: "* * * * *", timeZone: "Asia/Taipei" }, async (event) => {
+exports.notificationPatrol = onSchedule({ schedule: "* 8-11 * * *", timeZone: "Asia/Taipei" }, async (event) => {
     const now = new Date();
     const utcHours = now.getUTCHours();
     now.setHours(utcHours + 8); 
