@@ -334,18 +334,57 @@ const LoginView = ({
     setOldPassword(""); setNewPassword(""); setNewDirectorName(""); setDirectorManageMode("edit-pass"); setSelectedDirectorLevel("operation_admin");
   }, [role, currentBrandId]);
 
+  const getTherapistStoreValue = (therapist = {}) => {
+    return therapist.store || therapist.storeName || therapist.primaryStore || (Array.isArray(therapist.stores) ? therapist.stores[0] : "");
+  };
+
+  const getTherapistStoreCore = (therapist = {}) => normalizeStoreCoreName(getTherapistStoreValue(therapist));
+
+  const isDateReached = (dateValue = "") => {
+    const text = String(dateValue || "").trim();
+    if (!text) return false;
+    const target = new Date(`${text}T23:59:59`);
+    if (Number.isNaN(target.getTime())) return false;
+    return target.getTime() < Date.now();
+  };
+
+  const isTherapistInactive = (therapist = {}) => {
+    const statusText = String(therapist?.status || "").trim().toLowerCase();
+    return (
+      therapist?.isResigned === true ||
+      therapist?.resigned === true ||
+      therapist?.isActive === false ||
+      statusText === "resigned" ||
+      statusText === "inactive" ||
+      statusText === "離職" ||
+      statusText === "停用" ||
+      isDateReached(therapist?.resignDate || therapist?.inactiveDate || therapist?.offboardDate)
+    );
+  };
+
   const filteredStores = useMemo(() => {
     return tRegion ? sortStoresByOrgOrder(managers || {}, (managers?.[tRegion] || []), "", managerOrder) : [];
   }, [tRegion, managers, managerOrder]);
 
   const filteredTherapists = useMemo(() => {
     if (!tStore) return [];
-    const list = therapists.filter(t => {
-      if (t.store !== tStore) return false;
-      const isResigned = t.isResigned === true || t.resigned === true || t.status === 'resigned' || t.status === '離職' || t.isActive === false;
-      return !isResigned; 
+    const selectedStoreCore = normalizeStoreCoreName(tStore);
+    const list = (therapists || []).filter(t => {
+      const therapistStoreCore = getTherapistStoreCore(t);
+      const therapistStores = Array.isArray(t.stores) ? t.stores.map((s) => normalizeStoreCoreName(s)) : [];
+      const storeMatched = therapistStoreCore === selectedStoreCore || therapistStores.includes(selectedStoreCore);
+      if (!storeMatched) return false;
+      return !isTherapistInactive(t);
     });
-    return sortTherapistsByStoreThenName(list, managers || {}, "", managerOrder);
+    return sortTherapistsByStoreThenName(
+      list.map((t) => ({
+        ...t,
+        store: getTherapistStoreValue(t),
+      })),
+      managers || {},
+      "",
+      managerOrder
+    );
   }, [tStore, therapists, managers, managerOrder]);
 
  // ★★★ 終極全職級脫水計數器（日誌完全對齊版） ★★★
@@ -353,10 +392,7 @@ const LoginView = ({
     let count = 0;
     
     // 1. 管理師 (精準脫水)
-    const activeTherapists = (therapists || []).filter(t => {
-      const isResigned = t.isResigned === true || t.resigned === true || t.status === 'resigned' || t.status === '離職' || t.isActive === false;
-      return !isResigned;
-    });
+    const activeTherapists = (therapists || []).filter(t => !isTherapistInactive(t));
     count += activeTherapists.length;
 
     // 2. 店經理
@@ -539,9 +575,9 @@ const LoginView = ({
     setError(""); setIsLoading(true); await new Promise((r) => setTimeout(r, 600));
     try {
       if (!tPersonId) { setError("請選擇姓名"); setIsLoading(false); return; }
-      const therapist = therapists.find(t => t.id === tPersonId);
+      const therapist = (therapists || []).find(t => String(t.id) === String(tPersonId));
       
-      const isUserResigned = therapist?.isResigned === true || therapist?.resigned === true || therapist?.status === 'resigned' || therapist?.status === '離職' || therapist?.isActive === false;
+      const isUserResigned = isTherapistInactive(therapist);
 
       if (isUserResigned) { setError("此帳號已停用"); setIsLoading(false); return; }
       
@@ -619,7 +655,7 @@ const LoginView = ({
     
     if (role === "store" && selectedUser) { const account = storeAccounts.find((a) => a.id === selectedUser); if (account && account.password === oldPassword) isVerified = true; } 
     else if (role === "manager" && selectedUser) { const correctPass = managerAuth[selectedUser] || "0000"; if (correctPass === oldPassword) isVerified = true; } 
-    else if (role === "therapist" && tPersonId) { const therapist = therapists.find(t => t.id === tPersonId); if (therapist && therapist.password === oldPassword) isVerified = true; } 
+    else if (role === "therapist" && tPersonId) { const therapist = (therapists || []).find(t => String(t.id) === String(tPersonId)); if (therapist && therapist.password === oldPassword) isVerified = true; } 
     else if (role === "trainer" && selectedUser) {
       const account = sortedTrainerAccounts.find((a) => a.id === selectedUser);
       const correctPass = account?.password || "0000";

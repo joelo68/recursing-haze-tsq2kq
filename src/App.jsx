@@ -38,7 +38,7 @@ import {
 // ==========================================
 // ★ 系統核心版本號 (終極動態快取版)
 // ==========================================
-const CURRENT_APP_VERSION = "3.2.2"; 
+const CURRENT_APP_VERSION = "3.2.3"; 
 const LOGIN_LOCATION_ENDPOINT = "https://resolveloginlocation-hyhcwrnyaa-uc.a.run.app";
 
 
@@ -1468,7 +1468,20 @@ export default function App() {
       setStoreAccounts(accSnap.exists() ? accSnap.data().accounts : []);
       setManagerAuth(mAuthSnap.exists() ? mAuthSnap.data() : {});
       setPermissions(permSnap.exists() ? permSnap.data() : DEFAULT_PERMISSIONS);
-      setTherapists(thSnap.docs.map((d) => ({ id: d.id, ...d.data() })));
+      setTherapists(thSnap.docs.map((d) => {
+        const data = d.data() || {};
+        const storeName = data.store || data.storeName || data.primaryStore || (Array.isArray(data.stores) ? data.stores[0] : "");
+        const managerName = data.manager || data.managerName || data.region || data.area || "";
+        return {
+          id: d.id,
+          ...data,
+          store: storeName,
+          storeName: data.storeName || storeName,
+          manager: managerName,
+          managerName: data.managerName || managerName,
+          normalizedStoreCore: normalizeStore(storeName),
+        };
+      }));
       setTrainerAuth(normalizeTrainerAuthData(trAuthSnap.exists() ? trAuthSnap.data() : { password: "0000" }));
       setAuditExclusions(audSnap.exists() ? (audSnap.data().stores || []) : []);
       setSecurityConfig(secSnap.exists() ? normalizeSecurityConfig(secSnap.data()) : DEFAULT_SECURITY_CONFIG);
@@ -1489,7 +1502,7 @@ export default function App() {
     } catch (error) {
       console.error("Fetch Global Data Error:", error);
     }
-  }, [user, currentBrand, getDocPath, getCollectionPath, getStableReadMeta]);
+  }, [user, currentBrand, getDocPath, getCollectionPath, getStableReadMeta, normalizeStore]);
 
   useEffect(() => {
     if (!user) return;

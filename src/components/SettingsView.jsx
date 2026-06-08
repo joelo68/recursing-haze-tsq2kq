@@ -829,11 +829,21 @@ const SettingsView = () => {
     if(!formName) return showToast("請輸入姓名", "error"); 
     try { 
       await addDoc(getCollectionPath("therapists"), { 
-        name: formName, store: formStore, manager: formManager, password: formPassword, 
-        status: 'active', 
+        name: formName,
+        store: formStore,
+        storeName: formStore,
+        stores: formStore ? [formStore] : [],
+        manager: formManager,
+        managerName: formManager,
+        region: formManager,
+        password: formPassword, 
+        status: 'active',
+        isActive: true,
         onboardDate: formOnboardDate, 
         resignDate: formResignDate,   
-        createdAt: serverTimestamp() 
+        createdAt: serverTimestamp(),
+        updatedAt: serverTimestamp(),
+        updatedAtText: new Date().toISOString(),
       }); 
       setIsAddingTherapist(false); 
       setFormName(""); 
@@ -846,9 +856,18 @@ const SettingsView = () => {
     if(!editingTherapist) return; 
     const ref = doc(getCollectionPath("therapists"), editingTherapist.id); 
     await updateDoc(ref, { 
-      name: formName, store: formStore, manager: formManager, password: formPassword,
+      name: formName,
+      store: formStore,
+      storeName: formStore,
+      stores: formStore ? [formStore] : [],
+      manager: formManager,
+      managerName: formManager,
+      region: formManager,
+      password: formPassword,
       onboardDate: formOnboardDate,
-      resignDate: formResignDate
+      resignDate: formResignDate,
+      updatedAt: serverTimestamp(),
+      updatedAtText: new Date().toISOString(),
     }); 
     setEditingTherapist(null); 
     showToast("已更新", "success"); 
@@ -875,8 +894,8 @@ const SettingsView = () => {
   
   const openEdit = (t) => { 
     setEditingTherapist(t); 
-    setFormManager(t.manager || ""); 
-    setFormStore(t.store); 
+    setFormManager(t.manager || t.managerName || t.region || ""); 
+    setFormStore(t.store || t.storeName || (Array.isArray(t.stores) ? t.stores[0] : "")); 
     setFormName(t.name); 
     setFormPassword(t.password); 
     setFormOnboardDate(t.onboardDate || "");
@@ -897,7 +916,8 @@ const SettingsView = () => {
   
   const filteredTherapists = useMemo(() => { 
     return therapists.filter(t => {
-      const searchMatch = (t.name || "").includes(searchTerm) || (t.store || "").includes(searchTerm);
+      const therapistStoreName = t.store || t.storeName || (Array.isArray(t.stores) ? t.stores[0] : "");
+      const searchMatch = (t.name || "").includes(searchTerm) || therapistStoreName.includes(searchTerm);
       if (!searchMatch) return false;
 
       const isResigned = t.isResigned === true || t.resigned === true || t.status === 'resigned' || t.status === '離職' || t.isActive === false;
