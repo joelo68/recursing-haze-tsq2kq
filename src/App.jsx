@@ -38,7 +38,7 @@ import {
 // ==========================================
 // ★ 系統核心版本號 (終極動態快取版)
 // ==========================================
-const CURRENT_APP_VERSION = "3.2.3"; 
+const CURRENT_APP_VERSION = "3.2.4"; 
 const LOGIN_LOCATION_ENDPOINT = "https://resolveloginlocation-hyhcwrnyaa-uc.a.run.app";
 
 
@@ -523,6 +523,12 @@ const DIRECTOR_RESTRICTED_VIEWS = {
 const ANNUAL_DATA_VIEWS = new Set(["annual"]);
 const MONTHLY_REPORT_DATA_VIEWS = new Set(["dashboard", "regional", "ranking", "store-analysis", "audit", "history"]);
 
+// ★ 讀取節流 v2：拆開「店日報」與「管理師日報」監聽。
+// regional / ranking / store-analysis 只需要店日報，不應同步常駐讀 therapist_daily_reports。
+// Dashboard 預設店鋪模式時也先不讀管理師日報；切到人員績效才啟動。
+const MONTHLY_DAILY_REPORT_DATA_VIEWS = new Set(["dashboard", "regional", "ranking", "store-analysis", "audit", "history"]);
+const MONTHLY_THERAPIST_REPORT_DATA_VIEWS = new Set(["audit", "history"]);
+
 
 export default function App() {
   const [user, setUser] = useState(null);
@@ -530,6 +536,8 @@ export default function App() {
   const [currentUser, setCurrentUser] = useState(null);
   const [loading, setLoading] = useState(true);
   const [activeView, setActiveView] = useState("dashboard");
+  const [dashboardViewMode, setDashboardViewMode] = useState("store");
+  const [storeAnalysisSelectedStore, setStoreAnalysisSelectedStore] = useState("");
   const [auditType, setAuditType] = useState("daily");
   const [isSidebarOpen, setSidebarOpen] = useState(true);
   const [toast, setToast] = useState(null);
@@ -700,6 +708,28 @@ export default function App() {
     return () => window.removeEventListener("cyj_device_trust_updated", handler);
   }, []);
 
+  useEffect(() => {
+    const handleDashboardViewModeChanged = (event) => {
+      const nextMode = event?.detail?.viewMode;
+      if (nextMode === "store" || nextMode === "therapist") {
+        setDashboardViewMode((prev) => (prev === nextMode ? prev : nextMode));
+      }
+    };
+
+    window.addEventListener("cyj_dashboard_view_mode_changed", handleDashboardViewModeChanged);
+    return () => window.removeEventListener("cyj_dashboard_view_mode_changed", handleDashboardViewModeChanged);
+  }, []);
+
+  useEffect(() => {
+    const handleStoreAnalysisStoreChanged = (event) => {
+      const nextStore = String(event?.detail?.selectedStore || "").trim();
+      setStoreAnalysisSelectedStore((prev) => (prev === nextStore ? prev : nextStore));
+    };
+
+    window.addEventListener("cyj_store_analysis_selected_store_changed", handleStoreAnalysisStoreChanged);
+    return () => window.removeEventListener("cyj_store_analysis_selected_store_changed", handleStoreAnalysisStoreChanged);
+  }, []);
+
   const [rawData, setRawData] = useState([]); 
   const [annualAggregatedData, setAnnualAggregatedData] = useState([]); 
   const [annualDashboardSummaries, setAnnualDashboardSummaries] = useState([]);
@@ -707,6 +737,9 @@ export default function App() {
   const [therapistAnnualAggregatedData, setTherapistAnnualAggregatedData] = useState([]); // ★新增：管理師專屬結算包
   const [budgets, setBudgets] = useState({});
   const [monthlyTargetSummary, setMonthlyTargetSummary] = useState(null); // ★ monthly_targets_summary/{yearMonth}：Dashboard 目標資料輕量即時來源
+  const [currentDashboardSummary, setCurrentDashboardSummary] = useState(null); // ★ 報表 summary-first：Ranking / Regional 優先使用此資料
+  const [currentRankingsSummary, setCurrentRankingsSummary] = useState(null);
+  const [currentReportSummaryReady, setCurrentReportSummaryReady] = useState(false);
   const [targets, setTargets] = useState({ newASP: 3500, trafficASP: 1200 });
   const [managers, setManagers] = useState({});
   const [managerOrder, setManagerOrder] = useState([]); // ★ 穩定區長排序來源：org_structure.managerOrder
@@ -1655,6 +1688,66 @@ useEffect(() => {
     };
   }, [user, selectedYearMonth, currentBrand?.id, getCollectionPath, getStableReadMeta]);
 
+  // ★ 報表 summary-first v1：
+  // Ranking / Regional 優先讀 dashboard_summary / rankings_summary，不再一進頁面就讀整月 daily_reports。
+  // 若 Summary 不存在，才允許 App 回退到明細監聽，保留正式營運數字安全性。
+  useEffect(() => {
+    if (!user || !selectedYearMonth) {
+      setCurrentDashboardSummary(null);
+      setCurrentRankingsSummary(null);
+      setCurrentReportSummaryReady(false);
+      return undefined;
+    }
+
+    let dashboardLoaded = false;
+    let rankingsLoaded = false;
+
+    const publishReady = () => {
+      if (dashboardLoaded && rankingsLoaded) setCurrentReportSummaryReady(true);
+    };
+
+    setCurrentDashboardSummary(null);
+    setCurrentRankingsSummary(null);
+    setCurrentReportSummaryReady(false);
+
+    const unsubDashboardSummary = onSnapshot(
+      doc(getCollectionPath("dashboard_summary"), selectedYearMonth),
+      (snap) => {
+        trackReadSource("dashboard_summary_current_for_reports", snap.exists() ? 1 : 0, getStableReadMeta("dashboard_summary_current_for_reports"));
+        setCurrentDashboardSummary(snap.exists() ? { id: snap.id, ...snap.data() } : null);
+        dashboardLoaded = true;
+        publishReady();
+      },
+      (error) => {
+        console.error("dashboard_summary 報表輕量監聽失敗:", error);
+        setCurrentDashboardSummary(null);
+        dashboardLoaded = true;
+        publishReady();
+      }
+    );
+
+    const unsubRankingsSummary = onSnapshot(
+      doc(getCollectionPath("rankings_summary"), selectedYearMonth),
+      (snap) => {
+        trackReadSource("rankings_summary_current_for_reports", snap.exists() ? 1 : 0, getStableReadMeta("rankings_summary_current_for_reports"));
+        setCurrentRankingsSummary(snap.exists() ? { id: snap.id, ...snap.data() } : null);
+        rankingsLoaded = true;
+        publishReady();
+      },
+      (error) => {
+        console.error("rankings_summary 報表輕量監聽失敗:", error);
+        setCurrentRankingsSummary(null);
+        rankingsLoaded = true;
+        publishReady();
+      }
+    );
+
+    return () => {
+      try { unsubDashboardSummary && unsubDashboardSummary(); } catch (error) { console.warn("dashboard_summary report unsubscribe failed", error); }
+      try { unsubRankingsSummary && unsubRankingsSummary(); } catch (error) { console.warn("rankings_summary report unsubscribe failed", error); }
+    };
+  }, [user, selectedYearMonth, currentBrand?.id, getCollectionPath, getStableReadMeta]);
+
   useEffect(() => {
     if (!user) return;
 
@@ -1842,9 +1935,20 @@ useEffect(() => {
   }, [user, currentBrand, selectedYear, activeView, getCollectionPath, getStableReadMeta, isLowPowerMode]);
 
   useEffect(() => {
-    const shouldLoadMonthlyReportData = MONTHLY_REPORT_DATA_VIEWS.has(activeView);
+    const isSummaryFirstReportView = activeView === "ranking" || activeView === "regional";
+    const isStoreAnalysisScopedView = activeView === "store-analysis";
+    const hasUsableDashboardSummary = Boolean(currentDashboardSummary?.stores && Object.keys(currentDashboardSummary.stores || {}).length > 0);
 
-    if (!user || isLowPowerMode || !shouldLoadMonthlyReportData) {
+    const shouldLoadDailyReportData =
+      MONTHLY_DAILY_REPORT_DATA_VIEWS.has(activeView) &&
+      (!isStoreAnalysisScopedView || !storeAnalysisSelectedStore) &&
+      (!isSummaryFirstReportView || (currentReportSummaryReady && !hasUsableDashboardSummary));
+
+    const shouldLoadTherapistReportData =
+      MONTHLY_THERAPIST_REPORT_DATA_VIEWS.has(activeView) ||
+      (activeView === "dashboard" && (dashboardViewMode === "therapist" || userRole === "therapist" || userRole === "trainer"));
+
+    if (!user || isLowPowerMode || (!shouldLoadDailyReportData && !shouldLoadTherapistReportData)) {
       setRawData([]);
       setTherapistReports([]);
       return;
@@ -1852,7 +1956,7 @@ useEffect(() => {
 
     const targetYear = String(selectedYear);
     const targetMonth = String(selectedMonth).padStart(2, '0');
-    const cacheKey = `${currentBrand.id}_${targetYear}_${targetMonth}`;
+    const cacheKey = `${currentBrand.id}_${targetYear}_${targetMonth}_${shouldLoadDailyReportData ? "daily" : "nodaily"}_${shouldLoadTherapistReportData ? "therapist" : "notherapist"}`;
 
     const now = new Date();
     const currentRealYear = String(now.getFullYear());
@@ -1863,28 +1967,35 @@ useEffect(() => {
     const endDate = `${targetYear}-${targetMonth}-31`;
 
     if (isCurrentMonth) {
-      setRawData([]);
-      setTherapistReports([]);
+      if (!shouldLoadDailyReportData) setRawData([]);
+      if (!shouldLoadTherapistReportData) setTherapistReports([]);
 
-      const unsubReports = onSnapshot(
-        query(getCollectionPath("daily_reports"), where("date", ">=", startDate), where("date", "<=", endDate), orderBy("date", "desc")),
-        (s) => {
-          trackSnapshotRead("daily_reports_current_month", s, getStableReadMeta("daily_reports_current_month"));
-          setRawData(s.docs.map((d) => ({ id: d.id, ...d.data() })));
-        }
-      );
+      let unsubReports = null;
+      let unsubTherapistReports = null;
 
-      const unsubTherapistReports = onSnapshot(
-        query(getCollectionPath("therapist_daily_reports"), where("date", ">=", startDate), where("date", "<=", endDate), orderBy("date", "desc")),
-        (s) => {
-          trackSnapshotRead("therapist_daily_reports_current_month", s, getStableReadMeta("therapist_daily_reports_current_month"));
-          setTherapistReports(s.docs.map((d) => ({ id: d.id, ...d.data() })));
-        }
-      );
+      if (shouldLoadDailyReportData) {
+        unsubReports = onSnapshot(
+          query(getCollectionPath("daily_reports"), where("date", ">=", startDate), where("date", "<=", endDate), orderBy("date", "desc")),
+          (s) => {
+            trackSnapshotRead("daily_reports_current_month", s, getStableReadMeta("daily_reports_current_month"));
+            setRawData(s.docs.map((d) => ({ id: d.id, ...d.data() })));
+          }
+        );
+      }
+
+      if (shouldLoadTherapistReportData) {
+        unsubTherapistReports = onSnapshot(
+          query(getCollectionPath("therapist_daily_reports"), where("date", ">=", startDate), where("date", "<=", endDate), orderBy("date", "desc")),
+          (s) => {
+            trackSnapshotRead("therapist_daily_reports_current_month", s, getStableReadMeta("therapist_daily_reports_current_month"));
+            setTherapistReports(s.docs.map((d) => ({ id: d.id, ...d.data() })));
+          }
+        );
+      }
 
       return () => {
-        unsubReports();
-        unsubTherapistReports();
+        if (unsubReports) unsubReports();
+        if (unsubTherapistReports) unsubTherapistReports();
       };
 
     } else {
@@ -1901,12 +2012,20 @@ useEffect(() => {
       const fetchPastMonth = async () => {
         try {
           const [reportsSnap, tReportsSnap] = await Promise.all([
-            getDocs(query(getCollectionPath("daily_reports"), where("date", ">=", startDate), where("date", "<=", endDate), orderBy("date", "desc"))),
-            getDocs(query(getCollectionPath("therapist_daily_reports"), where("date", ">=", startDate), where("date", "<=", endDate), orderBy("date", "desc")))
+            shouldLoadDailyReportData
+              ? getDocs(query(getCollectionPath("daily_reports"), where("date", ">=", startDate), where("date", "<=", endDate), orderBy("date", "desc")))
+              : Promise.resolve({ docs: [] }),
+            shouldLoadTherapistReportData
+              ? getDocs(query(getCollectionPath("therapist_daily_reports"), where("date", ">=", startDate), where("date", "<=", endDate), orderBy("date", "desc")))
+              : Promise.resolve({ docs: [] })
           ]);
 
-          trackReadSource("daily_reports_past_month_getDocs", reportsSnap.docs.length, getStableReadMeta("daily_reports_past_month_getDocs"));
-          trackReadSource("therapist_daily_reports_past_month_getDocs", tReportsSnap.docs.length, getStableReadMeta("therapist_daily_reports_past_month_getDocs"));
+          if (shouldLoadDailyReportData) {
+            trackReadSource("daily_reports_past_month_getDocs", reportsSnap.docs.length, getStableReadMeta("daily_reports_past_month_getDocs"));
+          }
+          if (shouldLoadTherapistReportData) {
+            trackReadSource("therapist_daily_reports_past_month_getDocs", tReportsSnap.docs.length, getStableReadMeta("therapist_daily_reports_past_month_getDocs"));
+          }
 
           if (!isMounted) return;
 
@@ -1932,7 +2051,7 @@ useEffect(() => {
         isMounted = false; 
       };
     }
-  }, [user, currentBrand, selectedYear, selectedMonth, activeView, getCollectionPath, getStableReadMeta, isLowPowerMode]);
+  }, [user, currentBrand, selectedYear, selectedMonth, activeView, dashboardViewMode, storeAnalysisSelectedStore, userRole, currentDashboardSummary, currentReportSummaryReady, getCollectionPath, getStableReadMeta, isLowPowerMode]);
 
 
  const handleLogin = useCallback(async (roleId, userInfo = null) => {
@@ -2327,7 +2446,7 @@ useEffect(() => {
   }, [userRole, currentUser, currentBrandId, currentBrand, activeView]);
 
   const contextValue = useMemo(() => ({
-    user, loading, analytics, managers: visibleManagers, managerOrder: visibleManagerOrder, budgets, monthlyTargetSummary, targets, rawData: visibleRawData, allReports: rawData, 
+    user, loading, analytics, managers: visibleManagers, managerOrder: visibleManagerOrder, budgets, monthlyTargetSummary, currentDashboardSummary, currentRankingsSummary, currentReportSummaryReady, targets, rawData: visibleRawData, allReports: rawData, 
     annualAggregatedData, annualDashboardSummaries, annualSummaryStatusMap, therapistAnnualAggregatedData, // ★ 把年度 Summary 與管理師資料交出去
     showToast, openConfirm, fmtMoney, fmtNum, inputDate, setInputDate, storeList: analytics?.storeList || [], setTargets, selectedYear, selectedMonth, permissions, storeAccounts, managerAuth, currentUser, userRole, logActivity, handleUpdateStorePassword, handleUpdateManagerPassword, handleUpdateTherapistPassword, navigateToStore, activeView, appId, 
     therapists: visibleTherapists, therapistReports: visibleTherapistReports, therapistSchedules, therapistTargets, trainerAuth, handleUpdateTrainerAuth, auditExclusions, handleUpdateAuditExclusions, currentBrand, setCurrentBrandId, getCollectionPath, getDocPath, dailyLoginCount, yesterdayLoginCount, securityConfig, isOnline, isLowPowerMode,
@@ -2336,7 +2455,7 @@ useEffect(() => {
     directorPermissionProfile,
     canDirectorAccessView,
     isReadOnlyDirector: userRole === "director" && !canDirectorAccessView("history")
-  }), [user, loading, analytics, visibleManagers, visibleManagerOrder, budgets, monthlyTargetSummary, targets, visibleRawData, rawData, annualAggregatedData, annualDashboardSummaries, annualSummaryStatusMap, therapistAnnualAggregatedData, inputDate, selectedYear, selectedMonth, permissions, storeAccounts, managerAuth, currentUser, userRole, logActivity, handleUpdateStorePassword, handleUpdateManagerPassword, handleUpdateTherapistPassword, navigateToStore, activeView, appId, visibleTherapists, visibleTherapistReports, therapistSchedules, therapistTargets, trainerAuth, handleUpdateTrainerAuth, auditExclusions, handleUpdateAuditExclusions, currentBrand, setCurrentBrandId, getCollectionPath, getDocPath, dailyLoginCount, yesterdayLoginCount, securityConfig, isOnline, isLowPowerMode, fetchGlobalData, directorLevel, directorPermissionProfile, canDirectorAccessView]); // ★ 依賴陣列也要加
+  }), [user, loading, analytics, visibleManagers, visibleManagerOrder, budgets, monthlyTargetSummary, currentDashboardSummary, currentRankingsSummary, currentReportSummaryReady, targets, visibleRawData, rawData, annualAggregatedData, annualDashboardSummaries, annualSummaryStatusMap, therapistAnnualAggregatedData, inputDate, selectedYear, selectedMonth, permissions, storeAccounts, managerAuth, currentUser, userRole, logActivity, handleUpdateStorePassword, handleUpdateManagerPassword, handleUpdateTherapistPassword, navigateToStore, activeView, appId, visibleTherapists, visibleTherapistReports, therapistSchedules, therapistTargets, trainerAuth, handleUpdateTrainerAuth, auditExclusions, handleUpdateAuditExclusions, currentBrand, setCurrentBrandId, getCollectionPath, getDocPath, dailyLoginCount, yesterdayLoginCount, securityConfig, isOnline, isLowPowerMode, fetchGlobalData, directorLevel, directorPermissionProfile, canDirectorAccessView]); // ★ 依賴陣列也要加
   
   const memoizedViews = useMemo(() => {
     return (

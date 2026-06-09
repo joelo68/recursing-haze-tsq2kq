@@ -10,7 +10,7 @@ import {
 } from "recharts";
 import { AppContext } from "../AppContext";
 import { ViewWrapper, Card } from "./SharedUI";
-import { Loader2, Map } from "lucide-react";
+import { Loader2, Map as MapIcon } from "lucide-react";
 
 const RegionalView = () => {
   const { 
@@ -23,7 +23,10 @@ const RegionalView = () => {
     managers,
     budgets,
     selectedYear,
-    selectedMonth
+    selectedMonth,
+    monthlyTargetSummary,
+    currentDashboardSummary,
+    currentReportSummaryReady
   } = useContext(AppContext);
 
   // 1. 定義品牌前綴與名稱
@@ -60,14 +63,135 @@ const RegionalView = () => {
     return core.replace(/店$/, '').trim();
   };
 
+  const pickNumber = (...values) => {
+    for (const value of values) {
+      const n = Number(value);
+      if (Number.isFinite(n) && n > 0) return n;
+    }
+    return 0;
+  };
+
+  const readCashTargetFields = (item = {}) => pickNumber(
+    item?.cashTarget,
+    item?.targetCash,
+    item?.cashBudget,
+    item?.budget,
+    item?.monthlyCashTarget,
+    item?.cashTotalTarget,
+    item?.cashGoal,
+    item?.target_cash,
+    item?.cash_target
+  );
+
+  const findTargetByStore = (source, coreName, fullName) => {
+    if (!source) return null;
+
+    const candidates = [
+      coreName,
+      `${coreName}店`,
+      fullName,
+      cleanStoreName(coreName),
+      cleanStoreName(fullName),
+    ].filter(Boolean);
+
+    const normalized = new Set(candidates.map(cleanStoreName));
+
+    const scanContainer = (container) => {
+      if (!container) return null;
+
+      if (Array.isArray(container)) {
+        return container.find((item) => normalized.has(cleanStoreName(item?.storeName || item?.name || item?.displayName || item?.store)));
+      }
+
+      if (typeof container === "object") {
+        for (const [key, value] of Object.entries(container)) {
+          const name = value?.storeName || value?.name || value?.displayName || value?.store || key;
+          if (normalized.has(cleanStoreName(name))) return value;
+        }
+      }
+
+      return null;
+    };
+
+    const direct = scanContainer(source);
+    if (direct) return direct;
+
+    const containers = [
+      source?.stores,
+      source?.storeTargets,
+      source?.storeTargetMap,
+      source?.monthlyTargets,
+      source?.targets,
+      source?.targetStores,
+      source?.items,
+      source?.data,
+      source?.byStore,
+      source?.storeMap,
+      source?.storesMap,
+      source?.summaryByStore,
+      source?.storeSummaries,
+    ];
+
+    for (const container of containers) {
+      const found = scanContainer(container);
+      if (found) return found;
+    }
+
+    return null;
+  };
+
+  const resolveStoreBudget = (coreName, fullName, summaryStore = null, y, m) => {
+    const fromSummary = readCashTargetFields(summaryStore);
+    if (fromSummary > 0) return fromSummary;
+
+    const fromMonthlySummary = readCashTargetFields(findTargetByStore(monthlyTargetSummary, coreName, fullName));
+    if (fromMonthlySummary > 0) return fromMonthlySummary;
+
+    const monthPadded = String(m).padStart(2, "0");
+    const keys = [
+      `${fullName}_${y}_${m}`,
+      `${fullName}_${y}_${monthPadded}`,
+      `${brandPrefix}${coreName}店_${y}_${m}`,
+      `${brandPrefix}${coreName}店_${y}_${monthPadded}`,
+      `${coreName}_${y}_${m}`,
+      `${coreName}_${y}_${monthPadded}`,
+      `${coreName}店_${y}_${m}`,
+      `${coreName}店_${y}_${monthPadded}`,
+      `${y}-${monthPadded}_${fullName}`,
+      `${y}-${monthPadded}_${coreName}`,
+      `${fullName}_${y}-${monthPadded}`,
+      `${coreName}_${y}-${monthPadded}`,
+    ];
+
+    for (const key of keys) {
+      const target = budgets?.[key];
+      const value = readCashTargetFields(target);
+      if (value > 0) return value;
+    }
+
+    return 0;
+  };
+
   // 3. 本地即時運算區域數據
   const regionalData = useMemo(() => {
-    if (!allReports || !managers) return null;
+    if (!managers) return null;
 
     const y = parseInt(selectedYear);
     const m = parseInt(selectedMonth);
 
-    // 準備容器 (加入防呆，避免 managers 傳入 undefined 導致錯誤)
+    const summaryStoreRows = currentDashboardSummary?.stores
+      ? (Array.isArray(currentDashboardSummary.stores) ? currentDashboardSummary.stores : Object.values(currentDashboardSummary.stores || {}))
+      : [];
+
+    const summaryStoreMap = new globalThis.Map();
+    summaryStoreRows.forEach((store) => {
+      const core = cleanStoreName(store.displayName || store.store || store.storeName || store.name);
+      if (core) summaryStoreMap.set(core, store);
+    });
+
+    const useSummary = summaryStoreMap.size > 0;
+    if (!useSummary && currentReportSummaryReady && (!allReports || allReports.length === 0)) return [];
+
     const stats = Object.keys(managers || {}).map(mgr => ({
       manager: mgr || "未命名",
       stores: [],
@@ -78,68 +202,78 @@ const RegionalView = () => {
       newCustomersTotal: 0,
       newCustomerClosingsTotal: 0,
       budgetTotal: 0,
-      achievement: 0
+      achievement: 0,
+      source: useSummary ? "dashboard_summary" : "detail"
     }));
 
-    // 遍歷每個區域
     stats.forEach(region => {
       const storeList = managers[region.manager] || [];
-      
-      // 遍歷該區的每家店
-      storeList.forEach(storeName => { 
-        const fullName = `${brandPrefix}${storeName}店`; 
-        
+
+      storeList.forEach(storeName => {
+        const coreName = cleanStoreName(storeName);
+        const fullName = `${brandPrefix}${coreName}店`;
+
         const storeStat = {
           name: fullName,
-          cleanName: storeName,
+          cleanName: coreName,
           cashTotal: 0,
           accrualTotal: 0,
           budget: 0,
           achievement: 0
         };
 
-        allReports.forEach(r => {
-          const rDate = new Date(r.date);
-          if (rDate.getFullYear() !== y || (rDate.getMonth() + 1) !== m) return;
-          
-          const reportCoreName = cleanStoreName(r.storeName);
-          if (reportCoreName !== storeName) return; 
+        const summaryStore = summaryStoreMap.get(coreName);
 
-          const cash = (Number(r.cash) || 0) - (Number(r.refund) || 0);
-          const accrual = Number(r.accrual) || 0;
+        if (useSummary && summaryStore) {
+          const refund = Number(summaryStore.refund ?? summaryStore.refundTotal ?? 0);
+          const cash = Number(summaryStore.cash ?? summaryStore.cashTotal ?? 0) - refund;
+          const accrual = Number(summaryStore.accrual ?? summaryStore.accrualTotal ?? 0);
 
           storeStat.cashTotal += cash;
           storeStat.accrualTotal += accrual;
 
           region.cashTotal += cash;
           region.accrualTotal += accrual;
-          region.skincareSalesTotal += (Number(r.skincareSales) || 0);
-          region.trafficTotal += (Number(r.traffic) || 0);
-          region.newCustomersTotal += (Number(r.newCustomers) || 0);
-          region.newCustomerClosingsTotal += (Number(r.newCustomerClosings) || 0);
-        });
+          region.skincareSalesTotal += Number(summaryStore.skincareSales ?? summaryStore.skincareSalesTotal ?? 0);
+          region.trafficTotal += Number(summaryStore.traffic ?? summaryStore.trafficTotal ?? 0);
+          region.newCustomersTotal += Number(summaryStore.newCustomers ?? summaryStore.newCustomersTotal ?? 0);
+          region.newCustomerClosingsTotal += Number(summaryStore.newCustomerClosings ?? summaryStore.newCustomerClosingsTotal ?? 0);
+        } else {
+          (allReports || []).forEach(r => {
+            const rDate = new Date(r.date);
+            if (rDate.getFullYear() !== y || (rDate.getMonth() + 1) !== m) return;
 
-        // 取得目標
-        const budgetKey = `${fullName}_${y}_${m}`;
-        const b = budgets[budgetKey];
-        if (b) {
-          storeStat.budget = Number(b.cashTarget) || 0;
-          region.budgetTotal += storeStat.budget;
+            const reportCoreName = cleanStoreName(r.storeName);
+            if (reportCoreName !== coreName) return;
+
+            const cash = (Number(r.cash) || 0) - (Number(r.refund) || 0);
+            const accrual = Number(r.accrual) || 0;
+
+            storeStat.cashTotal += cash;
+            storeStat.accrualTotal += accrual;
+
+            region.cashTotal += cash;
+            region.accrualTotal += accrual;
+            region.skincareSalesTotal += (Number(r.skincareSales) || 0);
+            region.trafficTotal += (Number(r.traffic) || 0);
+            region.newCustomersTotal += (Number(r.newCustomers) || 0);
+            region.newCustomerClosingsTotal += (Number(r.newCustomerClosings) || 0);
+          });
         }
 
-        // 計算單店達成率
+        storeStat.budget = resolveStoreBudget(coreName, fullName, summaryStore, y, m);
+        region.budgetTotal += storeStat.budget || 0;
         storeStat.achievement = storeStat.budget > 0 ? (storeStat.cashTotal / storeStat.budget) * 100 : 0;
-        
+
         region.stores.push(storeStat);
       });
 
-      // 計算區域達成率
       region.achievement = region.budgetTotal > 0 ? (region.cashTotal / region.budgetTotal) * 100 : 0;
     });
 
     return stats.sort((a, b) => b.cashTotal - a.cashTotal);
 
-  }, [allReports, managers, budgets, selectedYear, selectedMonth, brandPrefix]);
+  }, [allReports, managers, budgets, selectedYear, selectedMonth, brandPrefix, currentDashboardSummary, currentReportSummaryReady, monthlyTargetSummary]);
 
   const pieData = useMemo(
     () => {
@@ -170,7 +304,7 @@ const RegionalView = () => {
         {/* 無資料時的友善提示 */}
         {regionalData.length === 0 && (
            <div className="p-16 text-center text-stone-400 bg-white rounded-3xl border border-stone-100 shadow-sm mt-6 flex flex-col items-center">
-              <Map size={48} className="mb-4 text-stone-200" />
+              <MapIcon size={48} className="mb-4 text-stone-200" />
               <p className="text-lg font-bold text-stone-600">目前無區域資料可顯示</p>
               <p className="text-sm mt-2">您的權限可能未配置相關區域，或是該區域本月尚無業績紀錄。</p>
            </div>

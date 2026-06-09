@@ -71,6 +71,14 @@ export function useDashboardStats() {
   const [selectedDashboardManager, setSelectedDashboardManager] = useState("");
   const [selectedDashboardStore, setSelectedDashboardStore] = useState("");
 
+  useEffect(() => {
+    try {
+      window.dispatchEvent(new CustomEvent("cyj_dashboard_view_mode_changed", { detail: { viewMode } }));
+    } catch (error) {
+      // 不影響 Dashboard 運算；此事件只用來讓 App 分流管理師日報監聽。
+    }
+  }, [viewMode]);
+
   const { brandInfo, brandPrefix } = useMemo(() => {
     let id = "CYJ";
     let name = "CYJ"; 
@@ -203,14 +211,18 @@ export function useDashboardStats() {
 
   const allCompanyStores = useMemo(() => {
     const stores = new Set();
+
+    Object.values(managers || {}).flat().forEach((storeName) => {
+      const core = cleanName(storeName);
+      if (core) stores.add(core);
+    });
+
     if (allReports) {
       allReports.forEach(r => { if (r.storeName) stores.add(cleanName(r.storeName)); });
     }
-    if (therapistReports) {
-      therapistReports.forEach(r => { if (r.storeName) stores.add(cleanName(r.storeName)); });
-    }
+
     return Array.from(stores).filter(Boolean);
-  }, [allReports, therapistReports, cleanName]);
+  }, [allReports, managers, cleanName]);
 
   const therapistEffectiveStores = useMemo(() => {
     if (selectedDashboardStore) return [cleanName(selectedDashboardStore)];
@@ -803,6 +815,7 @@ export function useDashboardStats() {
   }, [dashboardSummaryBundle.dashboard, userRole, currentUser, cleanName, isSelectedCurrentMonth, isSummaryTrustedForDashboard]);
 
   const summaryTherapistStats = useMemo(() => {
+    if (viewMode !== "therapist" && userRole !== "therapist" && userRole !== "trainer") return null;
     // ★ 即時戰情保護：當月人員績效仍用明細計算，避免管理師晚上陸續回報後，今日戰神/排行榜不即時更新。
     if (isSelectedCurrentMonth || !isSummaryTrustedForDashboard) return null;
     const summary = dashboardSummaryBundle.therapist;
@@ -877,7 +890,7 @@ export function useDashboardStats() {
       source: "summary",
       summaryLastUpdatedAtText: summary.lastUpdatedAtText || "",
     };
-  }, [dashboardSummaryBundle.therapist, therapistEffectiveStores, selectedDashboardManager, selectedDashboardStore, cleanName, userRole, currentUser, therapistAnnualAggregatedData, isSelectedCurrentMonth, isSummaryTrustedForDashboard]);
+  }, [dashboardSummaryBundle.therapist, therapistEffectiveStores, selectedDashboardManager, selectedDashboardStore, cleanName, userRole, currentUser, therapistAnnualAggregatedData, isSelectedCurrentMonth, isSummaryTrustedForDashboard, viewMode]);
 
 
   const detailDashboardStats = useMemo(() => {
@@ -1166,7 +1179,9 @@ export function useDashboardStats() {
   }, [allReports, effectiveStores, getBudgetDataForStore, selectedYear, selectedMonth, cleanName, brandPrefix]);
 
   const detailTherapistStats = useMemo(() => {
-    if (!therapistReports) return { rankings: [], myStats: null, grandTotal: {}, yesterdayTop3: [], todayTop3: [], myYearlyTotal: 0 }; 
+    const emptyTherapistStats = { rankings: [], myStats: null, grandTotal: {}, yesterdayTop3: [], todayTop3: [], myYearlyTotal: 0, source: "not_loaded" };
+    if (viewMode !== "therapist" && userRole !== "therapist" && userRole !== "trainer") return emptyTherapistStats;
+    if (!therapistReports) return emptyTherapistStats; 
     
     const currentMonthReports = therapistReports.filter(r => {
       const dStr = r.date.replace(/-/g, "/"); const d = new Date(dStr);
@@ -1331,7 +1346,7 @@ export function useDashboardStats() {
     });
 
     return { rankings, myStats, grandTotal, yesterdayTop3, todayTop3, myYearlyTotal };
-  }, [therapistReports, selectedYear, selectedMonth, therapistEffectiveStores, allReports, cleanName, userRole, currentUser, therapists, therapistAnnualAggregatedData]);
+  }, [therapistReports, selectedYear, selectedMonth, therapistEffectiveStores, allReports, cleanName, userRole, currentUser, therapists, therapistAnnualAggregatedData, viewMode]);
 
   const dashboardStats = summaryDashboardStats || detailDashboardStats;
   const myStoreRankings = summaryMyStoreRankings || detailMyStoreRankings;

@@ -22,7 +22,10 @@ const RankingView = () => {
     auditExclusions,
     handleUpdateAuditExclusions,
     showToast,
-    currentBrand
+    currentBrand,
+    currentDashboardSummary,
+    currentRankingsSummary,
+    currentReportSummaryReady
   } = useContext(AppContext);
 
   const [sortConfig, setSortConfig] = useState({
@@ -268,6 +271,50 @@ const RankingView = () => {
     });
   };
 
+  const normalizeSummaryStoreRows = (summary = null) => {
+    if (!summary?.stores) return [];
+
+    const rows = Array.isArray(summary.stores)
+      ? summary.stores
+      : Object.values(summary.stores || {});
+
+    return rows
+      .map((store) => {
+        const displayName = getCoreStoreName(store.displayName || store.store || store.storeName || store.name);
+        if (!displayName) return null;
+
+        const standardName = `${brandPrefix}${displayName}店`;
+        const refundTotal = Number(store.refund ?? store.refundTotal ?? 0);
+        const cashTotal = Number(store.cash ?? store.cashTotal ?? 0) - refundTotal;
+        const accrualTotal = Number(store.accrual ?? store.accrualTotal ?? 0);
+        const operationalAccrualTotal = Number(store.operationalAccrual ?? store.operationalAccrualTotal ?? accrualTotal);
+        const cashTarget = Number(store.budget ?? store.cashTarget ?? store.targetCash ?? 0);
+        const accrualTarget = Number(store.accrualBudget ?? store.accrualTarget ?? store.targetAccrual ?? 0);
+        const foundManager = Object.keys(managers || {}).find(mgr => (managers[mgr] || []).some((s) => getCoreStoreName(s) === displayName));
+
+        return {
+          name: standardName,
+          displayName,
+          manager: store.manager || foundManager || "未分配",
+          cashTotal,
+          refundTotal,
+          accrualTotal,
+          operationalAccrualTotal,
+          skincareSalesTotal: Number(store.skincareSales ?? store.skincareSalesTotal ?? 0),
+          trafficTotal: Number(store.traffic ?? store.trafficTotal ?? 0),
+          newCustomersTotal: Number(store.newCustomers ?? store.newCustomersTotal ?? 0),
+          newCustomerClosingsTotal: Number(store.newCustomerClosings ?? store.newCustomerClosingsTotal ?? 0),
+          cashTarget,
+          achievement: cashTarget > 0 ? (cashTotal / cashTarget) * 100 : 0,
+          accrualTarget,
+          accrualAchievement: accrualTarget > 0 ? (accrualTotal / accrualTarget) * 100 : 0,
+          trafficASP: Number(store.traffic ?? store.trafficTotal ?? 0) > 0 ? Math.round(operationalAccrualTotal / Number(store.traffic ?? store.trafficTotal ?? 0)) : 0,
+          source: "dashboard_summary",
+        };
+      })
+      .filter(Boolean);
+  };
+
   const targetSourceDebug = useMemo(() => {
     return {
       hasMonthlyTargetSummary: Boolean(monthlyTargetSummary),
@@ -282,6 +329,13 @@ const RankingView = () => {
     if (typeof window !== "undefined" && window?.location?.hostname === "localhost") {
       console.info("[RankingView target source]", targetSourceDebug);
     }
+
+    const summaryRows = normalizeSummaryStoreRows(currentDashboardSummary);
+    if (summaryRows.length > 0) {
+      return summaryRows.filter(store => !(auditExclusions || []).includes(store.displayName));
+    }
+
+    if (currentReportSummaryReady && (!allReports || allReports.length === 0)) return [];
     if (!allReports) return [];
 
     const targetYear = parseInt(selectedYear);
@@ -379,7 +433,10 @@ const RankingView = () => {
     managers,
     brandPrefix,
     currentBrand,
-    targetSourceDebug
+    targetSourceDebug,
+    currentDashboardSummary,
+    currentRankingsSummary,
+    currentReportSummaryReady
   ]); 
 
   // --- 排序邏輯 ---

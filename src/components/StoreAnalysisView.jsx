@@ -12,6 +12,8 @@ import {
 } from "lucide-react";
 
 import { AppContext } from "../AppContext";
+import { query, where, orderBy, onSnapshot } from "firebase/firestore";
+import { trackSnapshotRead } from "../utils/readTracker";
 import { toStandardDateFormat, formatNumber, sortManagerNames, sortStoreNames, sortManagersByOrgOrder, sortStoresByOrgOrder } from "../utils/helpers";
 import { ViewWrapper, Card } from "./SharedUI";
 
@@ -45,6 +47,8 @@ const StoreAnalysisView = () => {
     rawData,
     allReports,
     budgets,
+    monthlyTargetSummary,
+    currentDashboardSummary,
     managers, managerOrder,
     targets, 
     selectedYear,
@@ -55,11 +59,14 @@ const StoreAnalysisView = () => {
     userRole,
     activeView,
     currentBrand,
+    getCollectionPath,
   } = useContext(AppContext);
 
   const [selectedManager, setSelectedManager] = useState("");
   const [selectedStore, setSelectedStore] = useState("");
   const [showBenchmark, setShowBenchmark] = useState(true);
+  const [storeScopedReports, setStoreScopedReports] = useState([]);
+  const [storeScopedLoading, setStoreScopedLoading] = useState(false);
 
   // 1. 定義品牌前綴與識別 ID
   const { brandPrefix, brandId } = useMemo(() => {
@@ -97,6 +104,119 @@ const StoreAnalysisView = () => {
       if (bId === '伊啵') return /伊啵|Yibo/i.test(name);
       return !(/安妞|Anew|伊啵|Yibo/i.test(name)); 
   }, []);
+
+  const pickNumber = useCallback((...values) => {
+    for (const value of values) {
+      const n = Number(value);
+      if (Number.isFinite(n) && n > 0) return n;
+    }
+    return 0;
+  }, []);
+
+  const readCashTargetFields = useCallback((item = {}) => pickNumber(
+    item?.cashTarget,
+    item?.targetCash,
+    item?.cashBudget,
+    item?.budget,
+    item?.monthlyCashTarget,
+    item?.cashTotalTarget,
+    item?.cashGoal,
+    item?.target_cash,
+    item?.cash_target
+  ), [pickNumber]);
+
+  const findTargetByStore = useCallback((source, coreName, fullName) => {
+    if (!source) return null;
+
+    const normalized = new Set([
+      coreName,
+      `${coreName}店`,
+      fullName,
+      cleanStoreName(coreName),
+      cleanStoreName(fullName),
+    ].filter(Boolean).map(cleanStoreName));
+
+    const scanContainer = (container) => {
+      if (!container) return null;
+
+      if (Array.isArray(container)) {
+        return container.find((item) => normalized.has(cleanStoreName(item?.storeName || item?.name || item?.displayName || item?.store)));
+      }
+
+      if (typeof container === "object") {
+        for (const [key, value] of Object.entries(container)) {
+          const name = value?.storeName || value?.name || value?.displayName || value?.store || key;
+          if (normalized.has(cleanStoreName(name))) return value;
+        }
+      }
+
+      return null;
+    };
+
+    const direct = scanContainer(source);
+    if (direct) return direct;
+
+    const containers = [
+      source?.stores,
+      source?.storeTargets,
+      source?.storeTargetMap,
+      source?.monthlyTargets,
+      source?.targets,
+      source?.targetStores,
+      source?.items,
+      source?.data,
+      source?.byStore,
+      source?.storeMap,
+      source?.storesMap,
+      source?.summaryByStore,
+      source?.storeSummaries,
+    ];
+
+    for (const container of containers) {
+      const found = scanContainer(container);
+      if (found) return found;
+    }
+
+    return null;
+  }, [cleanStoreName]);
+
+  const findDashboardSummaryStore = useCallback((coreName, fullName) => {
+    const stores = currentDashboardSummary?.stores;
+    if (!stores) return null;
+    return findTargetByStore({ stores }, coreName, fullName);
+  }, [currentDashboardSummary, findTargetByStore]);
+
+  const resolveStoreBudget = useCallback((coreName, fullName, year, month) => {
+    const summaryStore = findDashboardSummaryStore(coreName, fullName);
+    const fromDashboardSummary = readCashTargetFields(summaryStore);
+    if (fromDashboardSummary > 0) return fromDashboardSummary;
+
+    const fromMonthlySummary = readCashTargetFields(findTargetByStore(monthlyTargetSummary, coreName, fullName));
+    if (fromMonthlySummary > 0) return fromMonthlySummary;
+
+    const monthPadded = String(month).padStart(2, "0");
+    const keys = [
+      `${fullName}_${year}_${month}`,
+      `${fullName}_${year}_${monthPadded}`,
+      `${brandPrefix}${coreName}店_${year}_${month}`,
+      `${brandPrefix}${coreName}店_${year}_${monthPadded}`,
+      `${coreName}_${year}_${month}`,
+      `${coreName}_${year}_${monthPadded}`,
+      `${coreName}店_${year}_${month}`,
+      `${coreName}店_${year}_${monthPadded}`,
+      `${year}-${monthPadded}_${fullName}`,
+      `${year}-${monthPadded}_${coreName}`,
+      `${fullName}_${year}-${monthPadded}`,
+      `${coreName}_${year}-${monthPadded}`,
+    ];
+
+    for (const key of keys) {
+      const value = readCashTargetFields(budgets?.[key]);
+      if (value > 0) return value;
+    }
+
+    return 0;
+  }, [budgets, brandPrefix, findDashboardSummaryStore, findTargetByStore, monthlyTargetSummary, readCashTargetFields]);
 
   // 2. 讀取設定
   const currentBenchmarks = useMemo(() => {
@@ -214,6 +334,192 @@ const StoreAnalysisView = () => {
     }
   }, [currentUser, availableStores, selectedStore, userRole]);
 
+  useEffect(() => {
+    try {
+      window.dispatchEvent(new CustomEvent("cyj_store_analysis_selected_store_changed", {
+        detail: { selectedStore }
+      }));
+    } catch (error) {
+      // 僅用於通知 App 是否啟動完整店日報監聽，不影響單店分析顯示。
+    }
+  }, [selectedStore]);
+
+  const selectedYearMonthRange = useMemo(() => {
+    const y = String(selectedYear || "");
+    const m = String(selectedMonth || "").padStart(2, "0");
+    return {
+      startDate: `${y}-${m}-01`,
+      endDate: `${y}-${m}-31`,
+    };
+  }, [selectedYear, selectedMonth]);
+
+  const isDateInSelectedMonth = useCallback((dateValue) => {
+    if (!dateValue) return false;
+
+    const raw = String(dateValue).trim();
+    const parts = raw.replace(/-/g, "/").split("/");
+    const y = parseInt(parts[0], 10);
+    const m = parseInt(parts[1], 10);
+
+    const targetYear = parseInt(selectedYear, 10);
+    const targetMonth = parseInt(selectedMonth, 10);
+    const rocYear = targetYear - 1911;
+
+    return (y === targetYear || y === rocYear) && m === targetMonth;
+  }, [selectedYear, selectedMonth]);
+
+  const buildStoreNameVariants = useCallback((storeName = "") => {
+    const core = cleanStoreName(storeName);
+    const variants = [
+      storeName,
+      core,
+      `${core}店`,
+      `${brandPrefix}${core}店`,
+      `${brandPrefix}${core}`,
+    ];
+
+    return Array.from(new Set(
+      variants
+        .map((v) => String(v || "").trim())
+        .filter(Boolean)
+    )).slice(0, 10);
+  }, [brandPrefix, cleanStoreName]);
+
+  const summaryReportRows = useMemo(() => {
+    const stores = currentDashboardSummary?.stores;
+    if (!stores) return [];
+
+    const rows = Array.isArray(stores) ? stores : Object.values(stores || {});
+    return rows.map((store) => {
+      const name = store?.displayName || store?.storeName || store?.store || store?.name || "";
+      const core = cleanStoreName(name);
+      const storeName = `${brandPrefix}${core}店`;
+      return {
+        id: `summary_${core}`,
+        date: selectedYearMonthRange.startDate,
+        storeName,
+        cash: Number(store?.cash ?? store?.cashTotal ?? 0),
+        refund: Number(store?.refund ?? store?.refundTotal ?? 0),
+        accrual: Number(store?.accrual ?? store?.accrualTotal ?? 0),
+        operationalAccrual: Number(store?.operationalAccrual ?? store?.operationalAccrualTotal ?? store?.accrual ?? store?.accrualTotal ?? 0),
+        skincareSales: Number(store?.skincareSales ?? store?.skincareSalesTotal ?? 0),
+        traffic: Number(store?.traffic ?? store?.trafficTotal ?? 0),
+        newCustomers: Number(store?.newCustomers ?? store?.newCustomersTotal ?? 0),
+        newCustomerSales: Number(store?.newCustomerSales ?? store?.newCustomerSalesTotal ?? 0),
+        newCustomerClosings: Number(store?.newCustomerClosings ?? store?.newCustomerClosingsTotal ?? 0),
+        source: "dashboard_summary",
+      };
+    }).filter((row) => cleanStoreName(row.storeName));
+  }, [currentDashboardSummary, brandPrefix, cleanStoreName, selectedYearMonthRange.startDate]);
+
+  const storeScopedAnalysisReports = useMemo(() => {
+    if (storeScopedReports.length > 0) return storeScopedReports;
+    if (!selectedStore) return [];
+
+    const selectedCore = cleanStoreName(selectedStore);
+    return summaryReportRows.filter((row) => cleanStoreName(row.storeName) === selectedCore);
+  }, [storeScopedReports, summaryReportRows, selectedStore, cleanStoreName]);
+
+  const analysisAllReports = useMemo(() => {
+    if (activeView === "store-analysis") {
+      if (!selectedStore) {
+        return (allReports && allReports.length > 0) ? allReports : summaryReportRows;
+      }
+      return summaryReportRows.length > 0 ? summaryReportRows : storeScopedReports;
+    }
+    return allReports || [];
+  }, [activeView, selectedStore, summaryReportRows, storeScopedReports, allReports]);
+
+  useEffect(() => {
+    if (activeView !== "store-analysis" || !selectedStore || !getCollectionPath) {
+      setStoreScopedReports([]);
+      setStoreScopedLoading(false);
+      return undefined;
+    }
+
+    const variants = buildStoreNameVariants(selectedStore);
+    if (!variants.length) {
+      setStoreScopedReports([]);
+      setStoreScopedLoading(false);
+      return undefined;
+    }
+
+    let fallbackUnsub = null;
+    let cancelled = false;
+    setStoreScopedLoading(true);
+
+    const applySnapshot = (snap, label, shouldFilterMonth = false) => {
+      trackSnapshotRead(label, snap, {
+        label,
+        view: "store-analysis",
+        storeName: selectedStore,
+      });
+
+      const docs = snap.docs.map((d) => ({ id: d.id, ...d.data() }));
+      const filtered = shouldFilterMonth
+        ? docs.filter((d) => isDateInSelectedMonth(d.date))
+        : docs;
+
+      if (!cancelled) {
+        setStoreScopedReports(filtered);
+        setStoreScopedLoading(false);
+      }
+
+      if (!shouldFilterMonth && docs.length === 0) {
+        startFallback();
+      }
+    };
+
+    const startFallback = () => {
+      try {
+        fallbackUnsub = onSnapshot(
+          query(getCollectionPath("daily_reports"), where("storeName", "in", variants)),
+          (snap) => applySnapshot(snap, "store_analysis_selected_store_reports_fallback", true),
+          (error) => {
+            console.error("單店分析 fallback 讀取失敗:", error);
+            if (!cancelled) {
+              setStoreScopedReports([]);
+              setStoreScopedLoading(false);
+            }
+          }
+        );
+      } catch (error) {
+        console.error("單店分析 fallback query 建立失敗:", error);
+        if (!cancelled) {
+          setStoreScopedReports([]);
+          setStoreScopedLoading(false);
+        }
+      }
+    };
+
+    let primaryUnsub = null;
+    try {
+      primaryUnsub = onSnapshot(
+        query(
+          getCollectionPath("daily_reports"),
+          where("storeName", "in", variants),
+          where("date", ">=", selectedYearMonthRange.startDate),
+          where("date", "<=", selectedYearMonthRange.endDate),
+          orderBy("date", "desc")
+        ),
+        (snap) => applySnapshot(snap, "store_analysis_selected_store_reports", false),
+        (error) => {
+          console.warn("單店分析精準讀取失敗，改用店名 fallback:", error);
+          if (!cancelled) startFallback();
+        }
+      );
+    } catch (error) {
+      console.warn("單店分析精準 query 建立失敗，改用店名 fallback:", error);
+      startFallback();
+    }
+
+    return () => {
+      cancelled = true;
+      try { primaryUnsub && primaryUnsub(); } catch (error) { console.warn("store analysis primary unsubscribe failed", error); }
+      try { fallbackUnsub && fallbackUnsub(); } catch (error) { console.warn("store analysis fallback unsubscribe failed", error); }
+    };
+  }, [activeView, selectedStore, selectedYearMonthRange.startDate, selectedYearMonthRange.endDate, getCollectionPath, buildStoreNameVariants, isDateInSelectedMonth]);
+
   // ==========================================
   // 單店運算與彙整運算引擎
   // ==========================================
@@ -273,7 +579,7 @@ const StoreAnalysisView = () => {
     const monthInt = parseInt(selectedMonth);
     const rocYear = targetYear - 1911;
     
-    const data = allReports.filter(d => {
+    const data = analysisAllReports.filter(d => {
         if (!d.date || !d.storeName) return false;
         const parts = String(d.date).replace(/-/g, "/").split("/");
         const y = parseInt(parts[0]);
@@ -301,10 +607,8 @@ const StoreAnalysisView = () => {
     
     let totalBudget = 0;
     storesList.forEach(core => {
-        const budgetKey = `${brandPrefix}${core}店_${targetYear}_${monthInt}`;
-        if(budgets[budgetKey]) {
-            totalBudget += Number(budgets[budgetKey].cashTarget || 0);
-        }
+        const fullName = `${brandPrefix}${core}店`;
+        totalBudget += resolveStoreBudget(core, fullName, targetYear, monthInt);
     });
 
     const health = calculateHealthMetrics(data);
@@ -320,15 +624,15 @@ const StoreAnalysisView = () => {
         achievement: totalBudget > 0 ? (cash / totalBudget) * 100 : 0,
         health
     };
-  }, [allReports, selectedYear, selectedMonth, cleanStoreName, brandPrefix, brandId, budgets, calculateHealthMetrics]);
+  }, [analysisAllReports, selectedYear, selectedMonth, cleanStoreName, brandPrefix, brandId, resolveStoreBudget, calculateHealthMetrics]);
 
   const globalMetrics = useMemo(() => {
-    if (!allReports) return null;
+    if (!analysisAllReports) return null;
     const targetYear = parseInt(selectedYear);
     const monthInt = parseInt(selectedMonth);
     const rocYear = targetYear - 1911;
 
-    const globalData = allReports.filter(d => {
+    const globalData = analysisAllReports.filter(d => {
         if (!d.date || !d.storeName) return false;
         const parts = String(d.date).replace(/-/g, "/").split("/");
         const y = parseInt(parts[0]);
@@ -348,10 +652,8 @@ const StoreAnalysisView = () => {
     const uniqueCores = new Set(globalData.map(d => cleanStoreName(d.storeName)));
     let totalBudget = 0;
     uniqueCores.forEach(core => {
-        const budgetKey = `${brandPrefix}${core}店_${targetYear}_${monthInt}`;
-        if(budgets[budgetKey]) {
-            totalBudget += Number(budgets[budgetKey].cashTarget || 0);
-        }
+        const fullName = `${brandPrefix}${core}店`;
+        totalBudget += resolveStoreBudget(core, fullName, targetYear, monthInt);
     });
 
     const cash = globalData.reduce((a, b) => a + (Number(b.cash) || 0) - (Number(b.refund) || 0), 0);
@@ -375,10 +677,10 @@ const StoreAnalysisView = () => {
         achievement: totalBudget > 0 ? (cash / totalBudget) * 100 : 0,
         health
     };
-  }, [allReports, selectedYear, selectedMonth, isBrandMatch, brandId, brandPrefix, budgets, cleanStoreName, calculateHealthMetrics]);
+  }, [analysisAllReports, selectedYear, selectedMonth, isBrandMatch, brandId, brandPrefix, resolveStoreBudget, cleanStoreName, calculateHealthMetrics]);
 
   const regionMetrics = useMemo(() => {
-    if (!isManagementRole || !allReports) return null;
+    if (!isManagementRole || !analysisAllReports) return null;
     let targetManager = selectedManager;
     if (userRole === 'manager') targetManager = currentUser.name; 
     
@@ -386,17 +688,17 @@ const StoreAnalysisView = () => {
 
     const regionStores = (managers[targetManager] || []).map(cleanStoreName);
     return getAggregateData(regionStores);
-  }, [isManagementRole, selectedManager, userRole, currentUser, allReports, managers, managerOrder, cleanStoreName, getAggregateData]);
+  }, [isManagementRole, selectedManager, userRole, currentUser, analysisAllReports, managers, managerOrder, cleanStoreName, getAggregateData]);
 
   const storeMetrics = useMemo(() => {
-    if (!selectedStore || !rawData) return null;
+    if (!selectedStore) return null;
     const targetYear = parseInt(selectedYear);
     const monthInt = parseInt(selectedMonth);
     const rocYear = targetYear - 1911;
 
     const targetCoreName = cleanStoreName(selectedStore);
 
-    const data = rawData.filter((d) => {
+    const data = storeScopedAnalysisReports.filter((d) => {
         if (!d.date || !d.storeName) return false;
         const parts = String(d.date).replace(/-/g, "/").split("/");
         const y = parseInt(parts[0]);
@@ -421,8 +723,7 @@ const StoreAnalysisView = () => {
     const totalNewCustomers = data.reduce((a, b) => a + (Number(b.newCustomers) || 0), 0);
     const totalNewCustomerSales = data.reduce((a, b) => a + (Number(b.newCustomerSales) || 0), 0);
     const totalNewCustomerClosings = data.reduce((a, b) => a + (Number(b.newCustomerClosings) || 0), 0);
-    const budgetData = budgets[`${selectedStore}_${targetYear}_${monthInt}`] || {};
-    const budget = Number(budgetData.cashTarget || 0);
+    const budget = resolveStoreBudget(targetCoreName, selectedStore, targetYear, monthInt);
 
     const health = calculateHealthMetrics(data);
 
@@ -442,15 +743,15 @@ const StoreAnalysisView = () => {
       budget,
       health
     };
-  }, [selectedStore, selectedYear, selectedMonth, rawData, budgets, cleanStoreName, calculateHealthMetrics, brandId]);
+  }, [selectedStore, selectedYear, selectedMonth, storeScopedAnalysisReports, resolveStoreBudget, cleanStoreName, calculateHealthMetrics, brandId]);
 
   const benchmarkMetrics = useMemo(() => {
-      if (!showBenchmark || !allReports) return null;
+      if (!showBenchmark || !analysisAllReports) return null;
       const targetYear = parseInt(selectedYear);
       const monthInt = parseInt(selectedMonth);
       const rocYear = targetYear - 1911;
 
-      const benchmarkData = allReports.filter(d => {
+      const benchmarkData = analysisAllReports.filter(d => {
           if (!d.date || !d.storeName) return false;
           const parts = String(d.date).replace(/-/g, "/").split("/");
           const y = parseInt(parts[0]);
@@ -471,7 +772,7 @@ const StoreAnalysisView = () => {
       });
 
       return calculateHealthMetrics(benchmarkData);
-  }, [selectedYear, selectedMonth, allReports, showBenchmark, selectedStore, cleanStoreName, isBrandMatch, brandId, calculateHealthMetrics]);
+  }, [selectedYear, selectedMonth, analysisAllReports, showBenchmark, selectedStore, cleanStoreName, isBrandMatch, brandId, calculateHealthMetrics]);
 
 
   const radarData = useMemo(() => {
