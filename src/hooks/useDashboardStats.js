@@ -122,10 +122,81 @@ export function useDashboardStats() {
 
   const cleanName = useMemo(() => (name) => {
     if (!name) return "";
-    let core = String(name).replace(new RegExp(`^(${brandPrefix}|CYJ|Anew|Yibo|安妞|伊啵)`, 'i'), '').trim();
-    if (core === "新店") return "新店"; 
+    let core = String(name)
+      .replace(new RegExp(`^(${brandPrefix}|CYJ|Anew|Yibo|安妞|伊啵)\\s*`, 'i'), '')
+      .trim();
+
+    // ★「新店」是正式店名，不是「新 + 店」；同時相容新店、新店店、CYJ新店店。
+    if (/^新店店?$/.test(core)) return "新店";
+
     return core.replace(/店$/, '').trim();
   }, [brandPrefix]);
+
+  const getSummaryStoreName = useMemo(() => (store = {}) => (
+    store.__canonicalStoreName ||
+    store.__summaryKey ||
+    store.store ||
+    store.storeName ||
+    store.displayName ||
+    store.name ||
+    store.id ||
+    ""
+  ), []);
+
+  const normalizeSummaryStores = useMemo(() => (storesMap = {}) => {
+    if (Array.isArray(storesMap)) {
+      return storesMap.map((store, index) => {
+        const source = store && typeof store === "object" ? store : {};
+        const fallbackRaw = source.store || source.storeName || source.displayName || source.name || source.id || `store_${index}`;
+        const fallbackCore = cleanName(fallbackRaw);
+        const canonicalStoreName = fallbackCore ? `${fallbackCore}店` : fallbackRaw;
+        return {
+          ...source,
+          __summaryKey: source.__summaryKey || source.id || `store_${index}`,
+          __canonicalStoreName: source.__canonicalStoreName || canonicalStoreName,
+          store: source.store || canonicalStoreName,
+          displayName: source.displayName || source.storeName || source.store || source.name || canonicalStoreName,
+        };
+      });
+    }
+
+    return Object.entries(storesMap || {}).map(([key, value]) => {
+      const source = value && typeof value === "object" ? value : {};
+      // ★ 關鍵：Summary stores 若是 map，key 通常比 value.store 更可靠。
+      // 舊資料可能把「新店」誤寫成 store: "新"，但 key 仍是「新店 / CYJ新店店」。
+      const keyCore = cleanName(key);
+      const fieldCore = cleanName(source.store || source.storeName || source.displayName || source.name || source.id || "");
+      const canonicalCore = keyCore || fieldCore;
+      const canonicalStoreName = canonicalCore ? `${canonicalCore}店` : (key || source.store || source.displayName || "");
+
+      return {
+        ...source,
+        __summaryKey: key,
+        __canonicalStoreName: canonicalStoreName,
+        store: source.store || canonicalStoreName,
+        displayName: source.displayName || source.storeName || source.store || source.name || canonicalStoreName,
+      };
+    });
+  }, [cleanName]);
+
+  const getSummaryStoreCandidates = useMemo(() => (store = {}) => {
+    const rawValues = [
+      store.__canonicalStoreName,
+      store.__summaryKey,
+      store.store,
+      store.storeName,
+      store.displayName,
+      store.name,
+      store.id,
+    ];
+
+    return Array.from(new Set(rawValues.map(cleanName).filter(Boolean)));
+  }, [cleanName]);
+
+  const summaryStoreMatchesSet = useMemo(() => (store = {}, targetSet = new Set()) => {
+    if (!targetSet || targetSet.size === 0) return false;
+    return getSummaryStoreCandidates(store).some((candidate) => targetSet.has(candidate));
+  }, [getSummaryStoreCandidates]);
 
   const getBudgetDataForStore = useMemo(() => {
     const summaryTargets = monthlyTargetSummary?.targets || {};
@@ -538,7 +609,7 @@ export function useDashboardStats() {
     };
 
     stores.forEach((store) => {
-      const storeCore = cleanName(store.store || store.displayName || "");
+      const storeCore = cleanName(getSummaryStoreName(store));
       const storeId = storeCore.replace(/\s+/g, "").toLowerCase();
       const storeCurve = allStoreCurves[storeId] || allStoreCurves["BRAND_TOTAL"] || {};
       const cashAverages = storeCurve.cashAverages || {};
@@ -590,7 +661,7 @@ export function useDashboardStats() {
         profile,
       },
     };
-  }, [selectedYear, selectedMonth, cleanName, allStoreCurves]);
+  }, [selectedYear, selectedMonth, cleanName, getSummaryStoreName, allStoreCurves]);
 
   const summaryDashboardStats = useMemo(() => {
     const summary = dashboardSummaryBundle.dashboard;
@@ -603,7 +674,7 @@ export function useDashboardStats() {
     let daysPassed = daysInMonth;
     let isCurrentMonth = false;
 
-    const allSummaryStores = Object.values(summary.stores || {});
+    const allSummaryStores = normalizeSummaryStores(summary.stores || {});
     const effectiveStoreSet = new Set((effectiveStores || []).map(cleanName).filter(Boolean));
     const shouldFilterSummaryStores = Boolean(
       selectedDashboardManager ||
@@ -613,7 +684,7 @@ export function useDashboardStats() {
     );
 
     const stores = shouldFilterSummaryStores && effectiveStoreSet.size > 0
-      ? allSummaryStores.filter((store) => effectiveStoreSet.has(cleanName(store.store || store.displayName || "")))
+      ? allSummaryStores.filter((store) => summaryStoreMatchesSet(store, effectiveStoreSet))
       : allSummaryStores;
 
     const sumFields = [
@@ -645,7 +716,7 @@ export function useDashboardStats() {
     grand.accrualProjection = projectionPayload.accrualProjection || Number(grand.accrualProjection || 0);
     grand.projectionRange = projectionPayload.projectionRange || grand.projectionRange || null;
 
-    const selectedStoreSet = new Set(stores.map((item) => cleanName(item.store || item.displayName || "")).filter(Boolean));
+    const selectedStoreSet = new Set(stores.flatMap((item) => getSummaryStoreCandidates(item)).filter(Boolean));
 
     // ★ 營運節奏維持原本邏輯：
     // 當月預設用「系統日 - 1 天」，避免主管白天查看時，把尚未結束營業的今天算進應達進度。
@@ -740,7 +811,16 @@ export function useDashboardStats() {
     const mapStoreTop = (rows = []) => {
       const list = Array.isArray(rows) ? rows : [];
       const filtered = isFilteredSummaryView && selectedStoreSet.size > 0
-        ? list.filter((item) => selectedStoreSet.has(cleanName(item.store || item.name || item.displayName || "")))
+        ? list.filter((item) => {
+            const candidates = [
+              item.store,
+              item.name,
+              item.displayName,
+              item.storeName,
+              item.id,
+            ].map(cleanName).filter(Boolean);
+            return candidates.some((candidate) => selectedStoreSet.has(candidate));
+          })
         : list;
       return filtered.map((item) => ({
         name: item.name || item.displayName || (item.store ? `${item.store}店` : ""),
@@ -753,7 +833,10 @@ export function useDashboardStats() {
     const filteredMonthlyTop = [...stores]
       .sort((a, b) => Number(b.cash || 0) - Number(a.cash || 0))
       .slice(0, 3)
-      .map((item) => ({ name: item.displayName || `${cleanName(item.store)}店`, revenue: Number(item.cash || 0), streak: false, badgeText: "" }));
+      .map((item) => {
+        const core = cleanName(getSummaryStoreName(item));
+        return { name: item.displayName || (core ? `${core}店` : ""), revenue: Number(item.cash || 0), streak: false, badgeText: "" };
+      });
 
     return {
       grandTotal: grand,
@@ -777,7 +860,7 @@ export function useDashboardStats() {
       summaryLastUpdatedAtText: summary.lastUpdatedAtText || "",
       summaryFilterMode: isFilteredSummaryView ? (selectedDashboardStore ? "store" : "manager") : "brand",
     };
-  }, [dashboardSummaryBundle.dashboard, isSummaryDashboardView, selectedYear, selectedMonth, buildProjectionFromSummaryStores, effectiveStores, selectedDashboardManager, selectedDashboardStore, cleanName, userRole]);
+  }, [dashboardSummaryBundle.dashboard, isSummaryDashboardView, selectedYear, selectedMonth, buildProjectionFromSummaryStores, effectiveStores, selectedDashboardManager, selectedDashboardStore, cleanName, getSummaryStoreName, getSummaryStoreCandidates, normalizeSummaryStores, summaryStoreMatchesSet, userRole]);
 
   const summaryMyStoreRankings = useMemo(() => {
     // ★ 當月門市排行也必須即時，避免主管或店長看到未更新的 Summary 排名。
@@ -787,10 +870,12 @@ export function useDashboardStats() {
 
     const rawStores = currentUser.stores || [currentUser.storeName];
     const myCores = rawStores.map(cleanName).filter(Boolean);
-    const allRanks = Array.isArray(summary.storeRankings) ? summary.storeRankings : Object.values(summary.stores || []);
+    const allRanks = Array.isArray(summary.storeRankings) ? summary.storeRankings : normalizeSummaryStores(summary.stores || []);
+
+    const myCoreSet = new Set(myCores);
 
     return allRanks
-      .filter((s) => myCores.includes(cleanName(s.store || s.displayName || "")))
+      .filter((s) => summaryStoreMatchesSet(s, myCoreSet))
       .map((s) => {
         const actual = Number(s.cash || 0);
         const target = Number(s.budget || 0);
@@ -799,7 +884,7 @@ export function useDashboardStats() {
         const rate = target > 0 ? (actual / target) * 100 : 0;
         const challengeRate = challengeTarget > 0 ? (actual / challengeTarget) * 100 : 0;
         return {
-          storeName: s.displayName || `${cleanName(s.store)}店`,
+          storeName: s.displayName || `${cleanName(getSummaryStoreName(s))}店`,
           rank: s.rank || 0,
           totalStores: allRanks.length,
           actual,
@@ -812,7 +897,7 @@ export function useDashboardStats() {
           isBottom5: s.rank > Math.max(0, allRanks.length - 5),
         };
       });
-  }, [dashboardSummaryBundle.dashboard, userRole, currentUser, cleanName, isSelectedCurrentMonth, isSummaryTrustedForDashboard]);
+  }, [dashboardSummaryBundle.dashboard, userRole, currentUser, cleanName, getSummaryStoreName, normalizeSummaryStores, summaryStoreMatchesSet, isSelectedCurrentMonth, isSummaryTrustedForDashboard]);
 
   const summaryTherapistStats = useMemo(() => {
     if (viewMode !== "therapist" && userRole !== "therapist" && userRole !== "trainer") return null;
