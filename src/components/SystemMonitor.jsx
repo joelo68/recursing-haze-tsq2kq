@@ -33,6 +33,7 @@ const SystemMonitor = () => {
   const [deviceLoading, setDeviceLoading] = useState(false);
   const [deviceHasLoaded, setDeviceHasLoaded] = useState(false);
   const [deviceKeyword, setDeviceKeyword] = useState("");
+  const [deviceQuickFilter, setDeviceQuickFilter] = useState("all");
   const [expandedDeviceId, setExpandedDeviceId] = useState(null);
   const [deviceDateRange, setDeviceDateRange] = useState(() => {
     const today = formatLocalYYYYMMDD(new Date());
@@ -191,39 +192,105 @@ const SystemMonitor = () => {
     }
   };
 
+  const isPendingDevice = (device = {}) => {
+    return (
+      device.trusted === false ||
+      ["new", "suspicious", "blocked", "global_blocked"].includes(device.status) ||
+      ["manual_suspicious", "manual_blocked", "manual_global_blocked"].includes(device.source)
+    );
+  };
+
+  const isMobileDevice = (device = {}) => {
+    const deviceText = String(device.device || "").toLowerCase();
+    const osText = String(device.os || "").toLowerCase();
+    const uaText = String(device.userAgent || device.ua || "").toLowerCase();
+
+    if (deviceText === "pc" || deviceText === "mac" || osText.includes("windows") || osText.includes("mac") || uaText.includes("macintosh")) return false;
+
+    return (
+      deviceText.includes("mobile") ||
+      deviceText.includes("tablet") ||
+      deviceText.includes("ios") ||
+      deviceText.includes("android") ||
+      deviceText.includes("iphone") ||
+      deviceText.includes("ipad") ||
+      osText.includes("ios") ||
+      osText.includes("android") ||
+      uaText.includes("iphone") ||
+      uaText.includes("ipad") ||
+      uaText.includes("android")
+    );
+  };
+
+  const getFilteredDeviceListByQuickFilter = (deviceList = []) => {
+    if (deviceQuickFilter === "pending") return deviceList.filter(isPendingDevice);
+    if (deviceQuickFilter === "mobile") return deviceList.filter(isMobileDevice);
+    return deviceList;
+  };
+
+  const handleDeviceQuickFilter = (nextFilter) => {
+    setDeviceQuickFilter((prev) => (prev === nextFilter ? "all" : nextFilter));
+    setExpandedDeviceId(null);
+  };
+
   const filteredDeviceProfiles = useMemo(() => {
     const key = deviceKeyword.trim().toLowerCase();
-    if (!key) return deviceProfiles;
 
-    return deviceProfiles.filter((profile) => {
-      const text = [
-        profile.userName,
-        profile.accountId,
-        profile.role,
-        profile.brandLabel,
-        profile.id,
-        ...(profile.deviceList || []).flatMap((device) => [
-          device.device,
-          device.browser,
-          device.os,
-          device.deviceShort,
-          device.status,
-          device.source,
-        ]),
-      ].join(" ").toLowerCase();
-      return text.includes(key);
-    });
-  }, [deviceProfiles, deviceKeyword]);
+    return deviceProfiles
+      .map((profile) => {
+        const filteredDeviceList = getFilteredDeviceListByQuickFilter(profile.deviceList || []);
+        if (filteredDeviceList.length === 0) return null;
+
+        const text = [
+          profile.userName,
+          profile.accountId,
+          profile.role,
+          profile.brandLabel,
+          profile.id,
+          ...(filteredDeviceList || []).flatMap((device) => [
+            device.device,
+            device.browser,
+            device.os,
+            device.deviceShort,
+            device.status,
+            device.source,
+            typeof device.lastLoginLocation === "string" ? device.lastLoginLocation : device.lastLoginLocation?.display,
+            typeof device.loginLocation === "string" ? device.loginLocation : device.loginLocation?.display,
+            typeof device.firstLoginLocation === "string" ? device.firstLoginLocation : device.firstLoginLocation?.display,
+            typeof device.location === "string" ? device.location : device.location?.display,
+          ]),
+        ].join(" ").toLowerCase();
+
+        if (key && !text.includes(key)) return null;
+
+        const trustedCount = filteredDeviceList.filter((d) => d.trusted !== false && d.status !== "new").length;
+        const newCount = filteredDeviceList.filter(isPendingDevice).length;
+        const lastSeenText = filteredDeviceList
+          .map((d) => d.lastSeenAtText || d.firstSeenAtText || "")
+          .filter(Boolean)
+          .sort()
+          .pop() || "";
+
+        return {
+          ...profile,
+          deviceList: filteredDeviceList,
+          trustedCount,
+          newCount,
+          lastSeenText,
+        };
+      })
+      .filter(Boolean);
+  }, [deviceProfiles, deviceKeyword, deviceQuickFilter]);
 
   const deviceSummary = useMemo(() => {
     const totalDevices = deviceProfiles.reduce((sum, item) => sum + (item.deviceList?.length || 0), 0);
     const newDevices = deviceProfiles.reduce((sum, item) => sum + (item.newCount || 0), 0);
-    const pcDevices = deviceProfiles.reduce((sum, item) => sum + (item.deviceList || []).filter((d) => d.device === "PC").length, 0);
+    const mobileDevices = deviceProfiles.reduce((sum, item) => sum + (item.deviceList || []).filter(isMobileDevice).length, 0);
     return {
       accounts: deviceProfiles.length,
       totalDevices,
       newDevices,
-      mobileDevices: totalDevices - pcDevices,
+      mobileDevices,
     };
   }, [deviceProfiles]);
 
@@ -937,22 +1004,53 @@ const SystemMonitor = () => {
           {monitorMode === "devices" && (
             <div className="space-y-4 w-full max-w-full min-w-0">
               <div className="grid grid-cols-2 lg:grid-cols-4 gap-2.5">
-                <div className="rounded-2xl border border-sky-100 bg-sky-50/60 px-4 py-3">
-                  <p className="text-xs font-black text-sky-700">已記錄帳號</p>
-                  <p className="mt-1 text-2xl font-black text-sky-700">{deviceSummary.accounts}</p>
-                </div>
-                <div className="rounded-2xl border border-emerald-100 bg-emerald-50/60 px-4 py-3">
-                  <p className="text-xs font-black text-emerald-700">裝置總數</p>
-                  <p className="mt-1 text-2xl font-black text-emerald-700">{deviceSummary.totalDevices}</p>
-                </div>
-                <div className="rounded-2xl border border-rose-100 bg-rose-50/60 px-4 py-3">
-                  <p className="text-xs font-black text-rose-700">待觀察新裝置</p>
-                  <p className="mt-1 text-2xl font-black text-rose-700">{deviceSummary.newDevices}</p>
-                </div>
-                <div className="rounded-2xl border border-amber-100 bg-amber-50/60 px-4 py-3">
-                  <p className="text-xs font-black text-amber-700">行動裝置</p>
-                  <p className="mt-1 text-2xl font-black text-amber-700">{deviceSummary.mobileDevices}</p>
-                </div>
+                {[
+                  {
+                    key: "all",
+                    label: "已記錄帳號",
+                    value: deviceSummary.accounts,
+                    className: "border-sky-100 bg-sky-50/60 text-sky-700",
+                    activeClassName: "ring-2 ring-sky-300 border-sky-200 bg-sky-50",
+                  },
+                  {
+                    key: "all",
+                    label: "裝置總數",
+                    value: deviceSummary.totalDevices,
+                    className: "border-emerald-100 bg-emerald-50/60 text-emerald-700",
+                    activeClassName: "ring-2 ring-emerald-300 border-emerald-200 bg-emerald-50",
+                  },
+                  {
+                    key: "pending",
+                    label: "待觀察新裝置",
+                    value: deviceSummary.newDevices,
+                    className: "border-rose-100 bg-rose-50/60 text-rose-700",
+                    activeClassName: "ring-2 ring-rose-300 border-rose-200 bg-rose-50",
+                  },
+                  {
+                    key: "mobile",
+                    label: "行動裝置",
+                    value: deviceSummary.mobileDevices,
+                    className: "border-amber-100 bg-amber-50/60 text-amber-700",
+                    activeClassName: "ring-2 ring-amber-300 border-amber-200 bg-amber-50",
+                  },
+                ].map((card) => {
+                  const active = deviceQuickFilter === card.key || (card.key === "all" && deviceQuickFilter === "all");
+                  return (
+                    <button
+                      key={`${card.label}_${card.key}`}
+                      type="button"
+                      onClick={() => handleDeviceQuickFilter(card.key)}
+                      className={`rounded-2xl border px-4 py-3 text-left transition-all active:scale-[0.98] hover:shadow-sm ${card.className} ${active ? card.activeClassName : ""}`}
+                      title={`點擊篩選：${card.label}`}
+                    >
+                      <div className="flex items-center justify-between gap-2">
+                        <p className="text-xs font-black">{card.label}</p>
+                        {active && <span className="text-[10px] font-black opacity-70">篩選中</span>}
+                      </div>
+                      <p className="mt-1 text-2xl font-black">{card.value}</p>
+                    </button>
+                  );
+                })}
               </div>
 
               <div className="flex flex-col gap-3 rounded-2xl border border-stone-100 bg-stone-50/70 p-3">
@@ -1020,6 +1118,25 @@ const SystemMonitor = () => {
                   </button>
                 </div>
               </div>
+
+              {deviceHasLoaded && deviceQuickFilter !== "all" && (
+                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 rounded-2xl border border-rose-100 bg-rose-50/50 px-4 py-3">
+                  <div className="text-sm font-black text-rose-700">
+                    目前篩選：{deviceQuickFilter === "pending" ? "待觀察新裝置" : "行動裝置"}
+                    <span className="ml-2 text-xs font-bold text-rose-400">共 {filteredDeviceProfiles.reduce((sum, profile) => sum + (profile.deviceList?.length || 0), 0)} 台</span>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setDeviceQuickFilter("all");
+                      setExpandedDeviceId(null);
+                    }}
+                    className="px-3 py-2 rounded-xl bg-white text-rose-600 border border-rose-100 text-xs font-black hover:bg-rose-50 active:scale-95"
+                  >
+                    清除篩選
+                  </button>
+                </div>
+              )}
 
               {!deviceHasLoaded && !deviceLoading ? (
                 <div className="flex flex-col items-center justify-center py-16 px-4 text-center bg-white rounded-2xl border-2 border-dashed border-stone-200">
