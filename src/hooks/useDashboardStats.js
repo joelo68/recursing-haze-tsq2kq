@@ -64,7 +64,7 @@ export function useDashboardStats() {
     targets, userRole, currentUser, 
     allReports, budgets, monthlyTargetSummary, managers, managerOrder = [], selectedYear, selectedMonth, therapistReports,
     currentBrand, therapists, dailyLoginCount, yesterdayLoginCount,
-    therapistAnnualAggregatedData, getCollectionPath 
+    therapistAnnualAggregatedData, getCollectionPath, historicalDetailRefreshState 
   } = useContext(AppContext);
 
   const [viewMode, setViewMode] = useState((userRole === 'therapist' || userRole === 'trainer') ? 'therapist' : 'store');
@@ -1433,6 +1433,18 @@ export function useDashboardStats() {
     return { rankings, myStats, grandTotal, yesterdayTop3, todayTop3, myYearlyTotal };
   }, [therapistReports, selectedYear, selectedMonth, therapistEffectiveStores, allReports, cleanName, userRole, currentUser, therapists, therapistAnnualAggregatedData, viewMode]);
 
+  const isHistoricalDetailRefreshing = useMemo(() => (
+    !isSelectedCurrentMonth &&
+    historicalDetailRefreshState?.yearMonth === selectedYearMonth &&
+    ["requested", "loading"].includes(historicalDetailRefreshState?.status)
+  ), [isSelectedCurrentMonth, historicalDetailRefreshState, selectedYearMonth]);
+
+  const hasHistoricalDetailRefreshError = useMemo(() => (
+    !isSelectedCurrentMonth &&
+    historicalDetailRefreshState?.yearMonth === selectedYearMonth &&
+    historicalDetailRefreshState?.status === "error"
+  ), [isSelectedCurrentMonth, historicalDetailRefreshState, selectedYearMonth]);
+
   const dashboardStats = summaryDashboardStats || detailDashboardStats;
   const myStoreRankings = summaryMyStoreRankings || detailMyStoreRankings;
   const therapistStats = summaryTherapistStats || detailTherapistStats;
@@ -1453,17 +1465,36 @@ export function useDashboardStats() {
       trustStatus: dashboardSummaryBundle.trustStatus,
       statusKey: dashboardSummaryBundle.trustStatus?.statusKey || (isSelectedCurrentMonth ? "current" : "unknown"),
       statusLabel: isSelectedCurrentMonth ? "本月即時資料" : (dashboardSummaryBundle.trustStatus?.label || "Summary 狀態未知"),
-      statusHint: isSelectedCurrentMonth ? "本月 Dashboard 以即時明細為準。" : (dashboardSummaryBundle.trustStatus?.hint || "尚未完成 Summary 狀態判斷。"),
+      statusHint: isSelectedCurrentMonth
+        ? "本月 Dashboard 以即時明細為準。"
+        : isHistoricalDetailRefreshing
+        ? "Summary 已失效，正在重新讀取此月份最新明細；完成前保留原畫面，避免顯示 0 或半套資料。"
+        : hasHistoricalDetailRefreshError
+        ? `最新明細載入失敗：${historicalDetailRefreshState?.error || "未知錯誤"}`
+        : (dashboardSummaryBundle.trustStatus?.hint || "尚未完成 Summary 狀態判斷。"),
       isTrustedSummary: dashboardSummaryBundle.trustStatus?.isTrusted === true,
+      detailRefreshStatus: historicalDetailRefreshState?.status || "idle",
+      detailRefreshYearMonth: historicalDetailRefreshState?.yearMonth || "",
+      detailRefreshLoadedAtText: historicalDetailRefreshState?.loadedAtText || "",
+      detailRefreshError: historicalDetailRefreshState?.error || "",
+      isDetailRefreshing: isHistoricalDetailRefreshing,
       dataSourceMode: isSelectedCurrentMonth
         ? "live"
         : summaryDashboardStats
         ? "verified_summary"
+        : isHistoricalDetailRefreshing
+        ? "detail_refreshing"
+        : hasHistoricalDetailRefreshError
+        ? "detail_refresh_error"
         : "detail_fallback",
       dataSourceLabel: isSelectedCurrentMonth
         ? "即時明細"
         : summaryDashboardStats
         ? "已整理 Summary"
+        : isHistoricalDetailRefreshing
+        ? "正在載入最新明細"
+        : hasHistoricalDetailRefreshError
+        ? "明細載入失敗"
         : "明細暫代",
       lastUpdatedAtText: dashboardSummaryBundle.trustStatus?.lastUpdatedAtText || "",
       lastCompareAtText: dashboardSummaryBundle.trustStatus?.lastCompareAtText || "",

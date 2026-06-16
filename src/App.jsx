@@ -39,7 +39,7 @@ import {
 // ==========================================
 // ★ 系統核心版本號 (終極動態快取版)
 // ==========================================
-const CURRENT_APP_VERSION = "3.2.5"; 
+const CURRENT_APP_VERSION = "3.2.6"; 
 const LOGIN_LOCATION_ENDPOINT = "https://resolveloginlocation-hyhcwrnyaa-uc.a.run.app";
 
 
@@ -742,6 +742,17 @@ export default function App() {
   const [currentDashboardSummary, setCurrentDashboardSummary] = useState(null); // ★ 報表 summary-first：Ranking / Regional 優先使用此資料
   const [currentRankingsSummary, setCurrentRankingsSummary] = useState(null);
   const [currentReportSummaryReady, setCurrentReportSummaryReady] = useState(false);
+  // ★ 歷史月份 dirty-triggered refresh：Summary 失效時只重新抓取該月份明細一次，
+  // 不恢復歷史月份長駐 onSnapshot，兼顧資料正確性與 reads。
+  const [historicalDetailRefreshToken, setHistoricalDetailRefreshToken] = useState(0);
+  const [historicalDetailRefreshState, setHistoricalDetailRefreshState] = useState({
+    yearMonth: "",
+    status: "idle", // idle | requested | loading | ready | error
+    lastDirtyAtText: "",
+    requestedAtText: "",
+    loadedAtText: "",
+    error: "",
+  });
   const [targets, setTargets] = useState({ newASP: 3500, trafficASP: 1200 });
   const [managers, setManagers] = useState({});
   const [managerOrder, setManagerOrder] = useState([]); // ★ 穩定區長排序來源：org_structure.managerOrder
@@ -1881,6 +1892,96 @@ useEffect(() => {
 
 
   const monthCacheRef = useRef({});
+  const historicalDirtyHandledRef = useRef({});
+
+  // ★ 歷史 Summary 一變 dirty，就讓目前月份的明細快取失效並觸發一次性重抓。
+  // 這個 listener 只監聽 1 個 flag doc；不會把歷史 daily_reports 改回長駐監聽。
+  useEffect(() => {
+    if (!user || !selectedYearMonth) {
+      setHistoricalDetailRefreshState({
+        yearMonth: "",
+        status: "idle",
+        lastDirtyAtText: "",
+        requestedAtText: "",
+        loadedAtText: "",
+        error: "",
+      });
+      return undefined;
+    }
+
+    const now = new Date();
+    const currentYearMonth = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}`;
+    if (selectedYearMonth >= currentYearMonth) {
+      setHistoricalDetailRefreshState((prev) => (
+        prev.yearMonth === selectedYearMonth
+          ? { ...prev, status: "idle", error: "" }
+          : prev
+      ));
+      return undefined;
+    }
+
+    const flagRef = doc(getCollectionPath("summary_recalc_flags"), selectedYearMonth);
+    const unsubscribe = onSnapshot(
+      flagRef,
+      (snap) => {
+        trackReadSource(
+          "summary_recalc_flag_history_detail_refresh",
+          snap.exists() ? 1 : 0,
+          getStableReadMeta("summary_recalc_flag_history_detail_refresh")
+        );
+
+        if (!snap.exists()) return;
+        const data = snap.data() || {};
+        const status = String(data.status || "").toLowerCase();
+        const isDirty = data.dirty === true || ["dirty", "pending", "rebuilding"].includes(status);
+        if (!isDirty) return;
+
+        const dirtyMillis =
+          data.lastDirtyAt?.toMillis?.() ||
+          data.updatedAt?.toMillis?.() ||
+          0;
+        const lastDirtyAtText = String(
+          data.lastDirtyAtText ||
+          data.updatedAtText ||
+          (dirtyMillis ? new Date(dirtyMillis).toISOString() : "") ||
+          "dirty"
+        );
+        const requestKey = `${currentBrand.id}_${selectedYearMonth}_${lastDirtyAtText}`;
+
+        if (historicalDirtyHandledRef.current[selectedYearMonth] === requestKey) return;
+        historicalDirtyHandledRef.current[selectedYearMonth] = requestKey;
+
+        // 同月份可能存在 daily / therapist 等不同 cacheKey，全部清掉，避免 fallback 取到舊快取。
+        const cachePrefix = `${currentBrand.id}_${selectedYearMonth.replace("-", "_")}_`;
+        Object.keys(monthCacheRef.current).forEach((key) => {
+          if (key.startsWith(cachePrefix)) delete monthCacheRef.current[key];
+        });
+
+        setHistoricalDetailRefreshState({
+          yearMonth: selectedYearMonth,
+          status: "requested",
+          lastDirtyAtText,
+          requestedAtText: new Date().toISOString(),
+          loadedAtText: "",
+          error: "",
+        });
+        setHistoricalDetailRefreshToken((prev) => prev + 1);
+      },
+      (error) => {
+        console.error("歷史月份 dirty flag 監聽失敗:", error);
+        setHistoricalDetailRefreshState((prev) => ({
+          ...prev,
+          yearMonth: selectedYearMonth,
+          status: "error",
+          error: error?.message || "歷史月份狀態監聽失敗",
+        }));
+      }
+    );
+
+    return () => {
+      try { unsubscribe && unsubscribe(); } catch (error) { console.warn("history detail refresh flag unsubscribe failed", error); }
+    };
+  }, [user, selectedYearMonth, currentBrand.id, getCollectionPath, getStableReadMeta]);
 
   useEffect(() => {
     const shouldLoadAnnualData = ANNUAL_DATA_VIEWS.has(activeView);
@@ -1951,14 +2052,33 @@ useEffect(() => {
   }, [user, currentBrand, selectedYear, activeView, getCollectionPath, getStableReadMeta, isLowPowerMode]);
 
   useEffect(() => {
+    const targetYear = String(selectedYear);
+    const targetMonth = String(selectedMonth).padStart(2, '0');
+    const targetYearMonth = `${targetYear}-${targetMonth}`;
+
+    const now = new Date();
+    const currentRealYear = String(now.getFullYear());
+    const currentRealMonth = String(now.getMonth() + 1).padStart(2, '0');
+    const isCurrentMonth = (targetYear === currentRealYear && targetMonth === currentRealMonth);
+
+    const isHistoricalRefreshRequested =
+      !isCurrentMonth &&
+      historicalDetailRefreshState.yearMonth === targetYearMonth &&
+      ["requested", "loading"].includes(historicalDetailRefreshState.status);
+
     const isSummaryFirstReportView = activeView === "ranking" || activeView === "regional";
     const isStoreAnalysisScopedView = activeView === "store-analysis";
     const hasUsableDashboardSummary = Boolean(currentDashboardSummary?.stores && Object.keys(currentDashboardSummary.stores || {}).length > 0);
 
     const shouldLoadDailyReportData =
       MONTHLY_DAILY_REPORT_DATA_VIEWS.has(activeView) &&
-      (!isStoreAnalysisScopedView || !storeAnalysisSelectedStore) &&
-      (!isSummaryFirstReportView || (currentReportSummaryReady && !hasUsableDashboardSummary));
+      (
+        isHistoricalRefreshRequested ||
+        (
+          (!isStoreAnalysisScopedView || !storeAnalysisSelectedStore) &&
+          (!isSummaryFirstReportView || (currentReportSummaryReady && !hasUsableDashboardSummary))
+        )
+      );
 
     const shouldLoadTherapistReportData =
       MONTHLY_THERAPIST_REPORT_DATA_VIEWS.has(activeView) ||
@@ -1970,14 +2090,7 @@ useEffect(() => {
       return;
     }
 
-    const targetYear = String(selectedYear);
-    const targetMonth = String(selectedMonth).padStart(2, '0');
     const cacheKey = `${currentBrand.id}_${targetYear}_${targetMonth}_${shouldLoadDailyReportData ? "daily" : "nodaily"}_${shouldLoadTherapistReportData ? "therapist" : "notherapist"}`;
-
-    const now = new Date();
-    const currentRealYear = String(now.getFullYear());
-    const currentRealMonth = String(now.getMonth() + 1).padStart(2, '0');
-    const isCurrentMonth = (targetYear === currentRealYear && targetMonth === currentRealMonth);
 
     const startDate = `${targetYear}-${targetMonth}-01`;
     const endDate = `${targetYear}-${targetMonth}-31`;
@@ -2018,11 +2131,32 @@ useEffect(() => {
       if (monthCacheRef.current[cacheKey]) {
         setRawData(monthCacheRef.current[cacheKey].reports);
         setTherapistReports(monthCacheRef.current[cacheKey].therapistReports);
+        setHistoricalDetailRefreshState((prev) => (
+          prev.yearMonth === targetYearMonth && ["requested", "loading"].includes(prev.status)
+            ? { ...prev, status: "ready", loadedAtText: new Date().toISOString(), error: "" }
+            : prev
+        ));
         return;
       }
 
-      setRawData([]);
-      setTherapistReports([]);
+      // dirty 後先保留原畫面，並明確標示正在抓取最新明細；
+      // 新資料完成後才一次替換，避免中途顯示 0 或半套資料。
+      const isDirtyTriggeredRefresh = isHistoricalRefreshRequested;
+      if (!isDirtyTriggeredRefresh) {
+        setRawData([]);
+        setTherapistReports([]);
+      }
+      setHistoricalDetailRefreshState((prev) => ({
+        yearMonth: targetYearMonth,
+        status: "loading",
+        lastDirtyAtText: prev.yearMonth === targetYearMonth ? prev.lastDirtyAtText : "",
+        requestedAtText: prev.yearMonth === targetYearMonth && prev.requestedAtText
+          ? prev.requestedAtText
+          : new Date().toISOString(),
+        loadedAtText: "",
+        error: "",
+      }));
+
       let isMounted = true;
 
       const fetchPastMonth = async () => {
@@ -2037,10 +2171,18 @@ useEffect(() => {
           ]);
 
           if (shouldLoadDailyReportData) {
-            trackReadSource("daily_reports_past_month_getDocs", reportsSnap.docs.length, getStableReadMeta("daily_reports_past_month_getDocs"));
+            trackReadSource(
+              isDirtyTriggeredRefresh ? "daily_reports_past_month_dirty_refresh" : "daily_reports_past_month_getDocs",
+              reportsSnap.docs.length,
+              getStableReadMeta(isDirtyTriggeredRefresh ? "daily_reports_past_month_dirty_refresh" : "daily_reports_past_month_getDocs")
+            );
           }
           if (shouldLoadTherapistReportData) {
-            trackReadSource("therapist_daily_reports_past_month_getDocs", tReportsSnap.docs.length, getStableReadMeta("therapist_daily_reports_past_month_getDocs"));
+            trackReadSource(
+              isDirtyTriggeredRefresh ? "therapist_daily_reports_past_month_dirty_refresh" : "therapist_daily_reports_past_month_getDocs",
+              tReportsSnap.docs.length,
+              getStableReadMeta(isDirtyTriggeredRefresh ? "therapist_daily_reports_past_month_dirty_refresh" : "therapist_daily_reports_past_month_getDocs")
+            );
           }
 
           if (!isMounted) return;
@@ -2050,14 +2192,30 @@ useEffect(() => {
 
           monthCacheRef.current[cacheKey] = {
             reports: reportsData,
-            therapistReports: tReportsData
+            therapistReports: tReportsData,
+            loadedAtText: new Date().toISOString(),
           };
 
           setRawData(reportsData);
           setTherapistReports(tReportsData);
+          setHistoricalDetailRefreshState((prev) => ({
+            yearMonth: targetYearMonth,
+            status: "ready",
+            lastDirtyAtText: prev.yearMonth === targetYearMonth ? prev.lastDirtyAtText : "",
+            requestedAtText: prev.yearMonth === targetYearMonth ? prev.requestedAtText : "",
+            loadedAtText: new Date().toISOString(),
+            error: "",
+          }));
 
         } catch (e) {
           console.error("單次獲取歷史月份失敗:", e);
+          if (!isMounted) return;
+          setHistoricalDetailRefreshState((prev) => ({
+            ...prev,
+            yearMonth: targetYearMonth,
+            status: "error",
+            error: e?.message || "最新歷史明細載入失敗",
+          }));
         }
       };
 
@@ -2067,7 +2225,7 @@ useEffect(() => {
         isMounted = false; 
       };
     }
-  }, [user, currentBrand, selectedYear, selectedMonth, activeView, dashboardViewMode, storeAnalysisSelectedStore, userRole, currentDashboardSummary, currentReportSummaryReady, getCollectionPath, getStableReadMeta, isLowPowerMode]);
+  }, [user, currentBrand, selectedYear, selectedMonth, activeView, dashboardViewMode, storeAnalysisSelectedStore, userRole, currentDashboardSummary, currentReportSummaryReady, getCollectionPath, getStableReadMeta, isLowPowerMode, historicalDetailRefreshToken]);
 
 
  const handleLogin = useCallback(async (roleId, userInfo = null) => {
@@ -2462,7 +2620,7 @@ useEffect(() => {
   }, [userRole, currentUser, currentBrandId, currentBrand, activeView]);
 
   const contextValue = useMemo(() => ({
-    user, loading, analytics, managers: visibleManagers, managerOrder: visibleManagerOrder, budgets, monthlyTargetSummary, currentDashboardSummary, currentRankingsSummary, currentReportSummaryReady, targets, rawData: visibleRawData, allReports: rawData, 
+    user, loading, analytics, managers: visibleManagers, managerOrder: visibleManagerOrder, budgets, monthlyTargetSummary, currentDashboardSummary, currentRankingsSummary, currentReportSummaryReady, historicalDetailRefreshState, targets, rawData: visibleRawData, allReports: rawData, 
     annualAggregatedData, annualDashboardSummaries, annualSummaryStatusMap, therapistAnnualAggregatedData, // ★ 把年度 Summary 與管理師資料交出去
     showToast, openConfirm, fmtMoney, fmtNum, inputDate, setInputDate, storeList: analytics?.storeList || [], setTargets, selectedYear, selectedMonth, permissions, storeAccounts, managerAuth, currentUser, userRole, logActivity, handleUpdateStorePassword, handleUpdateManagerPassword, handleUpdateTherapistPassword, navigateToStore, activeView, appId, 
     therapists: visibleTherapists, therapistReports: visibleTherapistReports, therapistSchedules, therapistTargets, trainerAuth, handleUpdateTrainerAuth, auditExclusions, handleUpdateAuditExclusions, currentBrand, setCurrentBrandId, getCollectionPath, getDocPath, dailyLoginCount, yesterdayLoginCount, securityConfig, isOnline, isLowPowerMode,
@@ -2471,7 +2629,7 @@ useEffect(() => {
     directorPermissionProfile,
     canDirectorAccessView,
     isReadOnlyDirector: userRole === "director" && !canDirectorAccessView("history")
-  }), [user, loading, analytics, visibleManagers, visibleManagerOrder, budgets, monthlyTargetSummary, currentDashboardSummary, currentRankingsSummary, currentReportSummaryReady, targets, visibleRawData, rawData, annualAggregatedData, annualDashboardSummaries, annualSummaryStatusMap, therapistAnnualAggregatedData, inputDate, selectedYear, selectedMonth, permissions, storeAccounts, managerAuth, currentUser, userRole, logActivity, handleUpdateStorePassword, handleUpdateManagerPassword, handleUpdateTherapistPassword, navigateToStore, activeView, appId, visibleTherapists, visibleTherapistReports, therapistSchedules, therapistTargets, trainerAuth, handleUpdateTrainerAuth, auditExclusions, handleUpdateAuditExclusions, currentBrand, setCurrentBrandId, getCollectionPath, getDocPath, dailyLoginCount, yesterdayLoginCount, securityConfig, isOnline, isLowPowerMode, fetchGlobalData, directorLevel, directorPermissionProfile, canDirectorAccessView]); // ★ 依賴陣列也要加
+  }), [user, loading, analytics, visibleManagers, visibleManagerOrder, budgets, monthlyTargetSummary, currentDashboardSummary, currentRankingsSummary, currentReportSummaryReady, historicalDetailRefreshState, targets, visibleRawData, rawData, annualAggregatedData, annualDashboardSummaries, annualSummaryStatusMap, therapistAnnualAggregatedData, inputDate, selectedYear, selectedMonth, permissions, storeAccounts, managerAuth, currentUser, userRole, logActivity, handleUpdateStorePassword, handleUpdateManagerPassword, handleUpdateTherapistPassword, navigateToStore, activeView, appId, visibleTherapists, visibleTherapistReports, therapistSchedules, therapistTargets, trainerAuth, handleUpdateTrainerAuth, auditExclusions, handleUpdateAuditExclusions, currentBrand, setCurrentBrandId, getCollectionPath, getDocPath, dailyLoginCount, yesterdayLoginCount, securityConfig, isOnline, isLowPowerMode, fetchGlobalData, directorLevel, directorPermissionProfile, canDirectorAccessView]); // ★ 依賴陣列也要加
   
   const memoizedViews = useMemo(() => {
     return (
