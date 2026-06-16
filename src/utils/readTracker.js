@@ -286,18 +286,49 @@ export const getReadTrackerScheduleStatus = (config = {}, nowDate = new Date()) 
   };
 };
 
+export const getReadTrackerNextScheduleBoundaryDelayMs = (config = {}, nowDate = new Date()) => {
+  if (!config.scheduleEnabled) return null;
+
+  const parseHHMM = (hhmm) => {
+    const [h, m] = String(hhmm || "00:00").split(":").map(Number);
+    return { h: Number.isFinite(h) ? h : 0, m: Number.isFinite(m) ? m : 0 };
+  };
+
+  const makeBoundary = (baseDate, hhmm, dayOffset = 0) => {
+    const { h, m } = parseHHMM(hhmm);
+    const target = new Date(baseDate);
+    target.setDate(target.getDate() + dayOffset);
+    target.setHours(h, m, 1, 0);
+    return target;
+  };
+
+  const startTime = config.startTime || "19:00";
+  const endTime = config.endTime || "07:00";
+  const candidates = [
+    makeBoundary(nowDate, startTime, 0),
+    makeBoundary(nowDate, endTime, 0),
+    makeBoundary(nowDate, startTime, 1),
+    makeBoundary(nowDate, endTime, 1),
+  ]
+    .map((date) => date.getTime() - nowDate.getTime())
+    .filter((delay) => delay > 1000)
+    .sort((a, b) => a - b);
+
+  return candidates.length ? candidates[0] : null;
+};
+
 export const resolveReadTrackerModeFromConfig = (config = {}, nowDate = new Date()) => {
   const manualMode = ["off", "local", "global"].includes(config.mode) ? config.mode : "off";
   const status = getReadTrackerScheduleStatus(config, nowDate);
 
-  // 手動按鈕與排程分開判斷：
-  // - 手動切到 local / global 時，立即以手動模式為準，按鈕與實際追蹤狀態會同步變色。
-  // - 手動維持 off 時，才交給排程在指定時段自動切成 global；非排程時段保持 off。
-  if (manualMode === "local" || manualMode === "global") return manualMode;
-
-  if (status.scheduleEnabled) {
-    return status.isActive ? status.scheduleMode : "off";
+  // 排程時段內應優先切為全域上報。
+  // 否則若使用者白天曾開本機追蹤，config.mode 會停在 local，晚上 19:00 就會被 local 擋住，導致全域上報沒有啟動。
+  if (status.scheduleEnabled && status.isActive) {
+    return status.scheduleMode || "global";
   }
+
+  // 非排程時段才回到手動模式。
+  if (manualMode === "local" || manualMode === "global") return manualMode;
 
   return "off";
 };

@@ -199,11 +199,18 @@ const LoginView = ({
   ];
 
   const getDirectorTitleWeight = (name = "") => {
-    if (name.includes("董事長")) return 1;
-    if (name.includes("總經理")) return 2;
-    if (name.includes("營運長")) return 3;
-    if (name.includes("總監")) return 4;
-    if (name.includes("財務")) return 5;
+    const title = String(name ?? "").trim();
+
+    if (title.includes("董事長")) return 1;
+    if (title.includes("總經理")) return 2;
+    if (title.includes("營運長")) return 3;
+
+    // 部門型職稱需先判斷，避免「財務總監／人資總監」被泛稱「總監」提前命中。
+    if (title.includes("財務")) return 5;
+    if (title.includes("人資") || title.includes("人事")) return 6;
+
+    if (title.includes("總監")) return 4;
+
     return 9;
   };
 
@@ -288,7 +295,25 @@ const LoginView = ({
   }, [directorAuthData]);
 
   const sortedDirectorNames = useMemo(() => {
-    return allDirectorNames.filter((name) => directorAuthData.accounts?.[name]?.isActive !== false);
+    const savedOrder = directorAuthData.directorOrder || [];
+
+    return allDirectorNames
+      .filter((name) => directorAuthData.accounts?.[name]?.isActive !== false)
+      .sort((a, b) => {
+        const weightA = getDirectorTitleWeight(a);
+        const weightB = getDirectorTitleWeight(b);
+
+        // 第一層：依職稱階級排序。
+        if (weightA !== weightB) return weightA - weightB;
+
+        // 第二層：同職稱維持 Firebase directorOrder 的既有順序。
+        const orderA = savedOrder.indexOf(a);
+        const orderB = savedOrder.indexOf(b);
+        if (orderA !== orderB) return orderA - orderB;
+
+        // 第三層：處理未進 directorOrder 的例外資料。
+        return zhCompare(a, b);
+      });
   }, [allDirectorNames, directorAuthData]);
 
   const getDirectorAccount = (name) => directorAuthData.accounts?.[name] || null;

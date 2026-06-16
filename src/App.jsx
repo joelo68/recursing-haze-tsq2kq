@@ -33,6 +33,7 @@ import {
   setReadTrackerMode,
   resolveReadTrackerModeFromConfig,
   getReadTrackerScheduleStatus,
+  getReadTrackerNextScheduleBoundaryDelayMs,
 } from "./utils/readTracker";
 
 // ==========================================
@@ -594,6 +595,7 @@ export default function App() {
     endTime: "07:00",
     timezone: "Asia/Taipei",
   });
+  const [readTrackerConfigState, setReadTrackerConfigState] = useState(readTrackerConfigRef.current);
 
   useEffect(() => {
     readMetaRef.current = {
@@ -1544,6 +1546,7 @@ export default function App() {
       trackReadSource("read_tracker_config", s.exists() ? 1 : 0, getReadMeta("read_tracker_config"));
       const remoteConfig = s.exists() ? s.data() : { mode: "off" };
       readTrackerConfigRef.current = remoteConfig;
+      setReadTrackerConfigState(remoteConfig);
 
       const effectiveMode = resolveReadTrackerModeFromConfig(remoteConfig);
       const scheduleStatus = getReadTrackerScheduleStatus(remoteConfig);
@@ -1571,19 +1574,32 @@ export default function App() {
   useEffect(() => {
     if (!user) return;
 
+    let timerId = null;
+    let cancelled = false;
+
     const applyScheduledReadTrackerMode = () => {
+      if (cancelled) return;
+
       const remoteConfig = readTrackerConfigRef.current || { mode: "off" };
       const effectiveMode = resolveReadTrackerModeFromConfig(remoteConfig);
 
       if (["off", "local", "global"].includes(effectiveMode)) {
         setReadTrackerMode(effectiveMode);
       }
+
+      const nextDelayMs = getReadTrackerNextScheduleBoundaryDelayMs(remoteConfig);
+      if (nextDelayMs !== null) {
+        timerId = window.setTimeout(applyScheduledReadTrackerMode, nextDelayMs);
+      }
     };
 
     applyScheduledReadTrackerMode();
-    const timer = setInterval(applyScheduledReadTrackerMode, 60 * 1000);
-    return () => clearInterval(timer);
-  }, [user]);
+
+    return () => {
+      cancelled = true;
+      if (timerId) window.clearTimeout(timerId);
+    };
+  }, [user, readTrackerConfigState]);
 
   const lowFrequencyCacheRef = useRef({});
 

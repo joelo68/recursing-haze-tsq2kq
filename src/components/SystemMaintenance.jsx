@@ -805,6 +805,74 @@ export default function SystemMaintenance() {
 
   const scheduleStatus = useMemo(() => getReadTrackerScheduleStatus({ ...readTrackerConfig, ...scheduleForm, scheduleMode: "global" }), [readTrackerConfig, scheduleForm]);
 
+  const timeSelectHours = useMemo(() => Array.from({ length: 24 }, (_, index) => String(index).padStart(2, "0")), []);
+  const timeSelectMinutes = useMemo(() => ["00", "10", "20", "30", "40", "50"], []);
+
+  const normalizeScheduleTime = (value = "", fallback = "19:00") => {
+    const text = String(value || fallback);
+    if (/^\d{2}:\d{2}$/.test(text)) return text;
+    if (/^\d{1}:\d{2}$/.test(text)) return `0${text}`;
+    return fallback;
+  };
+
+  const setScheduleTimePart = (field, part, value) => {
+    setScheduleForm((prev) => {
+      const fallback = field === "startTime" ? "19:00" : "07:00";
+      const current = normalizeScheduleTime(prev[field], fallback);
+      const [hour, minute] = current.split(":");
+      return {
+        ...prev,
+        [field]: part === "hour" ? `${value}:${minute}` : `${hour}:${value}`,
+      };
+    });
+  };
+
+  const applySchedulePreset = (startTime, endTime) => {
+    setScheduleForm((prev) => ({
+      ...prev,
+      scheduleEnabled: true,
+      startTime,
+      endTime,
+    }));
+  };
+
+  const getScheduleRangeHint = () => {
+    const start = normalizeScheduleTime(scheduleForm.startTime, "19:00");
+    const end = normalizeScheduleTime(scheduleForm.endTime, "07:00");
+    if (start === end) return "全天排程：每天 24 小時維持全域上報。";
+    return start > end
+      ? `跨日排程：每天 ${start} 開啟，隔天 ${end} 關閉。`
+      : `當日排程：每天 ${start} 開啟，${end} 關閉。`;
+  };
+
+  const renderScheduleTimeSelect = (field, label, fallback) => {
+    const value = normalizeScheduleTime(scheduleForm[field], fallback);
+    const [hour, minute] = value.split(":");
+
+    return (
+      <div className="rounded-2xl border border-stone-100 bg-white/90 p-3 shadow-sm">
+        <label className="text-[11px] font-black text-stone-400 block mb-2 tracking-wider">{label}</label>
+        <div className="grid grid-cols-[1fr_auto_1fr] items-center gap-2">
+          <select
+            value={hour}
+            onChange={(e) => setScheduleTimePart(field, "hour", e.target.value)}
+            className="h-11 rounded-xl border border-stone-200 bg-stone-50 px-3 text-base font-black text-stone-700 outline-none focus:border-amber-300 focus:ring-4 focus:ring-amber-50"
+          >
+            {timeSelectHours.map((item) => <option key={`${field}_h_${item}`} value={item}>{item} 時</option>)}
+          </select>
+          <span className="text-sm font-black text-stone-300">:</span>
+          <select
+            value={minute}
+            onChange={(e) => setScheduleTimePart(field, "minute", e.target.value)}
+            className="h-11 rounded-xl border border-stone-200 bg-stone-50 px-3 text-base font-black text-stone-700 outline-none focus:border-amber-300 focus:ring-4 focus:ring-amber-50"
+          >
+            {timeSelectMinutes.map((item) => <option key={`${field}_m_${item}`} value={item}>{item} 分</option>)}
+          </select>
+        </div>
+      </div>
+    );
+  };
+
   const readStatsRows = useMemo(() => Object.entries(localReadStats || {})
     .map(([label, item]) => ({ label, docs: item.docs || 0, triggers: item.triggers || 0, avg: item.triggers ? Math.round((item.docs || 0) / item.triggers) : 0, lastAt: item.lastAt || "-" }))
     .sort((a, b) => b.docs - a.docs), [localReadStats]);
@@ -3816,7 +3884,60 @@ export default function SystemMaintenance() {
             <div className="flex flex-wrap gap-2">{[{ id: "off", label: "關閉", icon: Power }, { id: "local", label: "本機模式", icon: Monitor }, { id: "global", label: "全域上報", icon: Globe2 }].map((mode)=><button key={mode.id} onClick={()=>handleChangeReadTrackerMode(mode.id)} className={`px-4 py-2 rounded-2xl text-xs font-black border flex items-center gap-2 transition-all ${getReadTrackerModeButtonClass(mode.id)}`}><mode.icon size={14} />{mode.label}</button>)}</div>
           </div>
           <div className="p-6 border-b border-[#F0E3CF] bg-[#FFFCF7]"><div className="rounded-[1.75rem] border border-[#EEDFC7] bg-white shadow-sm overflow-hidden"><div className="p-5 flex flex-col xl:flex-row xl:items-center xl:justify-between gap-4 border-b border-stone-100"><div className="min-w-0"><h3 className="text-sm font-black text-stone-800 flex items-center gap-2"><Clock size={18} className="text-[#B7863D]" />排程式全域上報</h3><p className="text-xs text-stone-400 font-bold mt-1">固定晚間診斷區間，讓每天數據可比較；支援跨日，例如 19:00～07:00。</p></div><div className={`shrink-0 inline-flex items-center gap-2 px-3 py-2 rounded-2xl text-xs font-black border ${!scheduleForm.scheduleEnabled ? "bg-stone-50 text-stone-500 border-stone-200" : scheduleStatus.isActive ? "bg-emerald-50 text-emerald-700 border-emerald-100" : "bg-amber-50 text-amber-700 border-amber-100"}`}><CheckCircle2 size={15} />{scheduleStatus.label}｜現在 {scheduleStatus.nowTime}</div></div>
-            <div className="p-5 grid grid-cols-1 lg:grid-cols-[1.1fr_1fr_1fr_auto] gap-3 items-end"><div className="rounded-2xl border border-stone-100 bg-stone-50/70 p-3 flex items-center justify-between gap-3"><div><p className="text-xs font-black text-stone-700">啟用排程</p><p className="text-[11px] text-stone-400 font-bold mt-0.5">排程時段內自動切為全域上報。</p></div><button onClick={()=>setScheduleForm((prev)=>({ ...prev, scheduleEnabled: !prev.scheduleEnabled }))} className={`w-12 h-7 rounded-full p-1 transition-all ${scheduleForm.scheduleEnabled ? "bg-[#D8B46B]" : "bg-stone-300"}`}><span className={`block w-5 h-5 rounded-full bg-white shadow transition-transform ${scheduleForm.scheduleEnabled ? "translate-x-5" : "translate-x-0"}`} /></button></div><div><label className="text-[11px] font-black text-stone-400 block mb-1.5 tracking-wider">開始時間</label><SoftInput type="time" value={scheduleForm.startTime} onChange={(e)=>setScheduleForm((prev)=>({ ...prev, startTime: e.target.value }))} /></div><div><label className="text-[11px] font-black text-stone-400 block mb-1.5 tracking-wider">結束時間</label><SoftInput type="time" value={scheduleForm.endTime} onChange={(e)=>setScheduleForm((prev)=>({ ...prev, endTime: e.target.value }))} /></div><div className="flex gap-2"><BeautyButton onClick={handleApplyScheduleNow} variant="secondary" className="whitespace-nowrap">立即套用</BeautyButton><BeautyButton onClick={handleSaveReadTrackerSchedule} variant="primary" className="whitespace-nowrap"><Save size={14} />儲存排程</BeautyButton></div></div><div className="px-5 py-3 bg-amber-50/50 border-t border-amber-100/60 text-[11px] text-amber-700 font-bold leading-relaxed">目前套用品牌：{brandLabel}。排程啟用後，排程時段內會自動啟用全域上報；白天若臨時開啟本機追蹤，不會修改晚間排程。</div></div></div>
+            <div className="p-5 space-y-4">
+              <div className="grid grid-cols-1 lg:grid-cols-[1.1fr_1fr_1fr_auto] gap-3 items-end">
+                <div className="rounded-2xl border border-stone-100 bg-stone-50/70 p-3 flex items-center justify-between gap-3">
+                  <div>
+                    <p className="text-xs font-black text-stone-700">啟用排程</p>
+                    <p className="text-[11px] text-stone-400 font-bold mt-0.5">排程時段內自動切為全域上報。</p>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => setScheduleForm((prev) => ({ ...prev, scheduleEnabled: !prev.scheduleEnabled }))}
+                    className={`w-12 h-7 rounded-full p-1 transition-all ${scheduleForm.scheduleEnabled ? "bg-[#D8B46B]" : "bg-stone-300"}`}
+                    aria-label="切換排程"
+                  >
+                    <span className={`block w-5 h-5 rounded-full bg-white shadow transition-transform ${scheduleForm.scheduleEnabled ? "translate-x-5" : "translate-x-0"}`} />
+                  </button>
+                </div>
+
+                {renderScheduleTimeSelect("startTime", "開始時間", "19:00")}
+                {renderScheduleTimeSelect("endTime", "結束時間", "07:00")}
+
+                <div className="flex flex-col sm:flex-row lg:flex-col xl:flex-row gap-2">
+                  <BeautyButton onClick={handleApplyScheduleNow} variant="secondary" className="whitespace-nowrap">立即套用</BeautyButton>
+                  <BeautyButton onClick={handleSaveReadTrackerSchedule} variant="primary" className="whitespace-nowrap"><Save size={14} />儲存排程</BeautyButton>
+                </div>
+              </div>
+
+              <div className="rounded-2xl border border-amber-100 bg-amber-50/50 p-3">
+                <div className="flex flex-col lg:flex-row lg:items-center lg:justify-between gap-3">
+                  <p className="text-[11px] font-black text-amber-700 leading-relaxed">{getScheduleRangeHint()}</p>
+                  <div className="flex flex-wrap gap-2">
+                    {[
+                      ["19:00", "07:00", "晚間診斷 19–07"],
+                      ["18:00", "07:00", "提早觀察 18–07"],
+                      ["20:00", "07:00", "晚班觀察 20–07"],
+                      ["09:00", "10:00", "上午測試 09–10"],
+                    ].map(([start, end, label]) => (
+                      <button
+                        key={`${start}_${end}`}
+                        type="button"
+                        onClick={() => applySchedulePreset(start, end)}
+                        className={`px-3 py-1.5 rounded-xl border text-[11px] font-black transition-all active:scale-[0.98] ${
+                          scheduleForm.startTime === start && scheduleForm.endTime === end
+                            ? "border-amber-300 bg-white text-[#8A6128] shadow-sm"
+                            : "border-amber-100 bg-white/70 text-amber-700 hover:bg-white"
+                        }`}
+                      >
+                        {label}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              </div>
+            </div>
+            <div className="px-5 py-3 bg-amber-50/50 border-t border-amber-100/60 text-[11px] text-amber-700 font-bold leading-relaxed">目前套用品牌：{brandLabel}。排程啟用後，排程時段內會自動啟用全域上報；白天若臨時開啟本機追蹤，不會修改晚間排程。</div></div></div>
           <div className="p-6 grid grid-cols-1 xl:grid-cols-2 gap-6"><div className="rounded-[1.5rem] border border-stone-100 bg-stone-50/50 overflow-hidden"><div className="px-4 py-3 border-b border-stone-100 bg-white flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3"><div className="flex flex-wrap items-center gap-2"><Activity size={16} className="text-emerald-500" /><span className="text-sm font-black text-stone-700">目前裝置統計</span><span className={`px-2 py-1 rounded-full border text-[10px] font-black ${localReadModeTone}`}>{localReadModeLabel}</span>{localReadLastRefreshedAt && <span className="text-[10px] font-bold text-stone-300">更新 {localReadLastRefreshedAt.toLocaleTimeString("zh-TW", { hour12: false, hour: "2-digit", minute: "2-digit", second: "2-digit" })}</span>}</div><div className="flex flex-wrap items-center gap-2">{readTrackerMode === "off" && <button onClick={handleEnableLocalReadTracker} className="text-[11px] font-black px-3 py-1.5 rounded-xl border border-emerald-100 bg-emerald-50 text-emerald-600 hover:bg-emerald-100">開啟本機追蹤</button>}<button onClick={refreshLocalReadStats} className="text-[11px] font-black px-3 py-1.5 rounded-xl border border-stone-200 text-stone-500 hover:bg-stone-50">重新整理</button><button onClick={handleClearReadTracker} className="text-[11px] font-black px-3 py-1.5 rounded-xl border border-rose-100 text-rose-500 hover:bg-rose-50">清除</button></div></div>{renderStatList({ rows: readStatsRows, emptyIcon: BarChart3, emptyText: localReadEmptyText, emptySubText: readTrackerMode === "off" ? "可按右上「開啟本機追蹤」，或在上方模式切換為本機模式 / 全域上報後再觀察。" : "若切換頁面後仍無資料，代表目前沒有新的被追蹤讀取，或資料已由前端狀態提供。" })}</div><div className="rounded-[1.5rem] border border-stone-100 bg-stone-50/50 overflow-hidden"><div className="px-4 py-3 border-b border-stone-100 bg-white flex flex-col gap-3"><div className="flex flex-col md:flex-row md:items-center md:justify-between gap-3"><div className="flex items-center gap-2"><Globe2 size={16} className="text-blue-500" /><span className="text-sm font-black text-stone-700">全域讀取排行</span><span className="text-[10px] font-black text-blue-500 bg-blue-50 border border-blue-100 rounded-full px-2 py-0.5">可篩選時段</span></div><div className="flex flex-wrap items-center gap-2"><button onClick={() => handleLoadGlobalReadStats({ scope: "all" })} disabled={loadingReadStats} className="text-[11px] font-black px-3 py-1.5 rounded-xl bg-gradient-to-r from-[#FFF7DF] via-[#F7E8C6] to-[#EACB86] text-[#5A4225] border border-amber-200 disabled:opacity-40 flex items-center gap-1.5">{loadingReadStats ? <Loader2 size={13} className="animate-spin" /> : <Eye size={13} />}全部 / 近 24 小時</button><button onClick={() => handleLoadGlobalReadStats({ scope: "range" })} disabled={loadingReadStats} className="text-[11px] font-black px-3 py-1.5 rounded-xl border border-blue-100 bg-blue-50 text-blue-600 disabled:opacity-40 flex items-center gap-1.5">{loadingReadStats ? <Loader2 size={13} className="animate-spin" /> : <Clock size={13} />}載入時段</button><button onClick={handleClearGlobalReadStats} disabled={loadingReadStats && globalReadStats.length === 0 && globalReadRangeUnsupportedCount === 0} className="text-[11px] font-black px-3 py-1.5 rounded-xl border border-rose-100 bg-white text-rose-500 hover:bg-rose-50 disabled:opacity-40 flex items-center gap-1.5"><Trash2 size={13} />清除</button></div></div><div className="rounded-2xl border border-stone-100 bg-stone-50/70 p-3 space-y-3"><div className="flex flex-wrap gap-2"><button type="button" onClick={() => setGlobalReadRange(makeGlobalReadRange("last1h"))} className="text-[10px] font-black px-2.5 py-1 rounded-full border border-stone-200 bg-white text-stone-500 hover:bg-stone-100">最近 1 小時</button><button type="button" onClick={() => setGlobalReadRange(makeGlobalReadRange("early4to5"))} className="text-[10px] font-black px-2.5 py-1 rounded-full border border-stone-200 bg-white text-stone-500 hover:bg-stone-100">凌晨 04:00～05:00</button><button type="button" onClick={() => setGlobalReadRange(makeGlobalReadRange("overnight"))} className="text-[10px] font-black px-2.5 py-1 rounded-full border border-stone-200 bg-white text-stone-500 hover:bg-stone-100">昨晚 18:00～今早 07:00</button></div><div className="grid grid-cols-1 md:grid-cols-2 gap-3">{renderGlobalReadRangePicker("start", "開始時間")}{renderGlobalReadRangePicker("end", "結束時間")}</div><p className="text-[10px] font-bold text-stone-400 leading-relaxed">「全部 / 近 24 小時」保留原本觀察方式；「載入時段」可用來查凌晨 04:00～05:00 等異常尖峰來源。指定時段最多查詢 7 天，避免一次讀取過多追蹤資料。</p></div></div>{globalReadStats.length > 0 && <div className="p-4 pb-0 text-[11px] text-stone-400 font-bold">已彙整 {globalReadScopeLabel}｜{globalRowsCount.toLocaleString()} 筆上報工作階段</div>}{globalReadRangeUnsupportedCount > 0 && <div className="m-4 mb-0 rounded-2xl border border-amber-100 bg-amber-50 px-4 py-3 text-[11px] font-bold text-amber-700 leading-relaxed">{globalReadRangeLegacyFallback ? <>此時段找到 {globalReadRangeUnsupportedCount.toLocaleString()} 筆舊版全域上報工作階段，但舊資料沒有 hourlyBuckets 小時分桶，已改用舊版 session 時間粗略彙整。這份排行可用來初步判斷來源，但不是「{getReadableRangeText(globalReadRange.start, globalReadRange.end)}」的精準小時分桶。</> : <>此時段找到 {globalReadRangeUnsupportedCount.toLocaleString()} 筆舊版全域上報工作階段，但舊資料沒有 hourlyBuckets 小時分桶，無法還原「{getReadableRangeText(globalReadRange.start, globalReadRange.end)}」的精準來源。新版上線後，下一輪全域上報即可用目前選擇的時段正確分析。</>}</div>}{renderStatList({ rows: globalReadStats, emptyIcon: Globe2, emptyText: "尚未載入全域讀取排行", valueClass: "text-blue-600" })}</div></div>
         </section>
 
