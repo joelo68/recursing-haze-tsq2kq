@@ -204,6 +204,7 @@ const LoginView = ({
     if (name.includes("營運長")) return 3;
     if (name.includes("總監")) return 4;
     if (name.includes("財務")) return 5;
+    if (name.includes("人資")) return 6;
     return 9;
   };
 
