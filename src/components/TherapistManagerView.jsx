@@ -75,7 +75,10 @@ const TherapistManagerView = () => {
   const formatStoreName = (name) => {
     const core = normalizeManagedStoreCore(name);
     if (!core) return "未分店";
-    return core === "新店" ? "新店" : `${core}店`;
+
+    // 「新店」是正式地名；畫面上的門市名稱仍需再加一個「店」字。
+    // 新店（地名）＋店（門市後綴）＝新店店。
+    return `${core}店`;
   };
 
   const isTherapistArchived = (t) => {
