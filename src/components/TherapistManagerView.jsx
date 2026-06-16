@@ -57,9 +57,25 @@ const TherapistManagerView = () => {
 
   const getTodayStr = () => formatLocalYYYYMMDD(new Date());
 
+  // ★ 新店相容修正：
+  // 一般店名可移除尾端「店」作為核心名稱，但「新店」本身就是正式地名，不能裁成「新」。
+  // 同時相容既有錯誤資料 store="新" 與可能出現的「CYJ新店店」。
+  const normalizeManagedStoreCore = (name = "") => {
+    const compact = String(name || "")
+      .trim()
+      .replace(/^(CYJ|DRCYJ|Anew\s*\(安妞\)|Yibo\s*\(伊啵\)|Anew|Yibo|安妞|伊啵)\s*/i, "")
+      .replace(/[　\s]+/g, "")
+      .trim();
+
+    if (!compact) return "";
+    if (compact === "新" || /^新店店?$/.test(compact)) return "新店";
+    return compact.replace(/店$/, "").trim();
+  };
+
   const formatStoreName = (name) => {
-    if (!name) return "未分店";
-    return String(name).endsWith("店") ? String(name) : `${name}店`;
+    const core = normalizeManagedStoreCore(name);
+    if (!core) return "未分店";
+    return core === "新店" ? "新店" : `${core}店`;
   };
 
   const isTherapistArchived = (t) => {
@@ -75,11 +91,11 @@ const TherapistManagerView = () => {
   const findManagerByStore = (storeName) => {
     if (!storeName || !managers) return "";
 
-    const cleanStore = String(storeName).replace(/店$/, "");
+    const cleanStore = normalizeManagedStoreCore(storeName);
 
     for (const [mgr, stores] of Object.entries(managers)) {
       const found = (stores || []).some(
-        (s) => String(s).replace(/店$/, "") === cleanStore
+        (s) => normalizeManagedStoreCore(s) === cleanStore
       );
 
       if (found) return mgr;
@@ -99,10 +115,11 @@ const TherapistManagerView = () => {
   };
 
   const loadTherapistToForm = (t) => {
-    const foundManager = findManagerByStore(t?.store);
+    const rawStore = t?.store || t?.storeName || t?.primaryStore || (Array.isArray(t?.stores) ? t.stores[0] : "");
+    const foundManager = findManagerByStore(rawStore);
 
     setFormManager(foundManager || "");
-    setFormStore(String(t?.store || "").replace(/店$/, ""));
+    setFormStore(normalizeManagedStoreCore(rawStore));
     setFormName(t?.name || "");
     setFormPassword(t?.password || "");
     setFormOnboardDate(t?.onboardDate || "");
@@ -120,7 +137,7 @@ const TherapistManagerView = () => {
     const stores = Object.values(managers || {})
       .flat()
       .filter(Boolean)
-      .map((s) => String(s).replace(/店$/, ""));
+      .map((s) => normalizeManagedStoreCore(s));
 
     return sortStoresByOrgOrder(managers, [...new Set(stores)], '', managerOrder);
   }, [managers, managerOrder]);
@@ -129,7 +146,7 @@ const TherapistManagerView = () => {
     if (selectedManagerFilter === "all") return allStores;
 
     return sortStoresByOrgOrder(managers, (managers?.[selectedManagerFilter] || []).map((s) =>
-      String(s).replace(/店$/, "")
+      normalizeManagedStoreCore(s)
     ), '', managerOrder);
   }, [selectedManagerFilter, allStores, managers, managerOrder]);
 
@@ -137,7 +154,7 @@ const TherapistManagerView = () => {
     if (!formManager || !managers) return [];
 
     return sortStoresByOrgOrder(managers, (managers[formManager] || []).map((s) =>
-      String(s).replace(/店$/, "")
+      normalizeManagedStoreCore(s)
     ), '', managerOrder);
   }, [formManager, managers, managerOrder]);
 
@@ -198,8 +215,8 @@ const TherapistManagerView = () => {
     if (selectedStoreFilter !== "all") {
       list = list.filter(
         (t) =>
-          String(t.store || "").replace(/店$/, "") ===
-          String(selectedStoreFilter).replace(/店$/, "")
+          normalizeManagedStoreCore(t.store || t.storeName || "") ===
+          normalizeManagedStoreCore(selectedStoreFilter)
       );
     }
 
@@ -297,15 +314,17 @@ const TherapistManagerView = () => {
       return;
     }
 
-    const newId = `T${Date.now().toString().slice(-6)}`;
-
     try {
-      const docRef = doc(getCollectionPath("therapists"), newId);
+      // 使用 Firestore 自動 ID，避免舊版 T+6 位時間尾碼在長期使用下重複覆寫。
+      const docRef = doc(getCollectionPath("therapists"));
+      const newId = docRef.id;
+      const canonicalStore = normalizeManagedStoreCore(formStore);
 
       await setDoc(docRef, {
         id: newId,
         name: formName.trim(),
-        store: formStore,
+        store: canonicalStore,
+        storeName: canonicalStore,
         password: formPassword.trim(),
         onboardDate: formOnboardDate || getTodayStr(),
         resignDate: formResignDate || "",
@@ -336,12 +355,14 @@ const TherapistManagerView = () => {
     try {
       const archived = Boolean(formResignDate);
       const docRef = doc(getCollectionPath("therapists"), selectedTherapist.id);
+      const canonicalStore = normalizeManagedStoreCore(formStore);
 
       await setDoc(
         docRef,
         {
           name: formName.trim(),
-          store: formStore,
+          store: canonicalStore,
+          storeName: canonicalStore,
           password: formPassword.trim(),
           onboardDate: formOnboardDate || "",
           resignDate: formResignDate || "",

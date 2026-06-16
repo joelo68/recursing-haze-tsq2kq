@@ -95,10 +95,27 @@ const HistoryView = () => {
 
   const cleanStoreName = useCallback((name) => {
     if (!name) return "";
-    let core = String(name).replace(/^(CYJ|Anew\s*\(安妞\)|Yibo\s*\(伊啵\)|安妞|伊啵|Anew|Yibo)\s*/i, '').trim();
-    if (core === "新店") return "新店";
-    return core.replace(/店$/, '').trim();
+    let core = String(name)
+      .replace(/^(CYJ|DRCYJ|Anew\s*\(安妞\)|Yibo\s*\(伊啵\)|安妞|伊啵|Anew|Yibo)\s*/i, "")
+      .replace(/[　\s]+/g, "")
+      .trim();
+
+    // 舊版管理師資料曾把正式店名「新店」裁成「新」。
+    // 查詢與權限比對時兩者統一為「新店」，既有日報不必重填即可顯示。
+    if (core === "新" || /^新店店?$/.test(core)) return "新店";
+    return core.replace(/店$/, "").trim();
   }, []);
+
+  const formatStoreDisplayName = useCallback((name) => {
+    const core = cleanStoreName(name);
+    if (!core) return "未註記";
+    return core === "新店" ? "新店" : `${core}店`;
+  }, [cleanStoreName]);
+
+  const formatStoreFilterValue = useCallback((name) => {
+    const core = cleanStoreName(name);
+    return core ? `${brandPrefix}${core}店` : "";
+  }, [brandPrefix, cleanStoreName]);
   
   const myAllowedStores = useMemo(() => {
     if (userRole === 'director' || userRole === 'trainer') return null; 
@@ -107,14 +124,28 @@ const HistoryView = () => {
       const stores = currentUser.stores || [currentUser.storeName];
       return stores.map(s => cleanStoreName(s));
     }
-    if (userRole === 'therapist' && currentUser) return [currentUser.store];
+    if (userRole === 'therapist' && currentUser) {
+      const storeValue =
+        currentUser.store ||
+        currentUser.storeName ||
+        currentUser.primaryStore ||
+        (Array.isArray(currentUser.stores) ? currentUser.stores[0] : "");
+      return [cleanStoreName(storeValue)].filter(Boolean);
+    }
     return [];
   }, [userRole, currentUser, managers, managerOrder, cleanStoreName]);
   
   const allStores = useMemo(() => {
-    let baseList = (myAllowedStores !== null) ? myAllowedStores : Object.values(managers).flat();
-    return sortStoresByOrgOrder(managers, baseList.filter(s => s).map((s) => `${brandPrefix}${s}店`), brandPrefix, managerOrder);
-  }, [managers, managerOrder, myAllowedStores, brandPrefix]);
+    const baseList = (myAllowedStores !== null) ? myAllowedStores : Object.values(managers).flat();
+    const formattedStores = Array.from(new Set(
+      baseList
+        .filter(Boolean)
+        .map((storeName) => formatStoreFilterValue(storeName))
+        .filter(Boolean)
+    ));
+
+    return sortStoresByOrgOrder(managers, formattedStores, brandPrefix, managerOrder);
+  }, [managers, managerOrder, myAllowedStores, brandPrefix, formatStoreFilterValue]);
 
   useEffect(() => {
     if (allStores.length === 1) setFilterStore(allStores[0]);
@@ -278,10 +309,55 @@ const HistoryView = () => {
     fetchData();
   }, [activeTab, queryRange, getCollectionPath, showToast, currentBrand, hasQueried]);
 
+  const normalizeTherapistName = useCallback((value = "") => (
+    String(value || "")
+      .replace(/[　\s]+/g, "")
+      .trim()
+      .toLocaleLowerCase("zh-Hant")
+  ), []);
+
+  const currentTherapistIdentity = useMemo(() => {
+    const storeValue =
+      currentUser?.store ||
+      currentUser?.storeName ||
+      currentUser?.primaryStore ||
+      (Array.isArray(currentUser?.stores) ? currentUser.stores[0] : "");
+
+    return {
+      id: String(currentUser?.id || "").trim(),
+      name: normalizeTherapistName(currentUser?.name || ""),
+      storeCore: cleanStoreName(storeValue),
+    };
+  }, [currentUser, normalizeTherapistName, cleanStoreName]);
+
+  const isCurrentTherapistReport = useCallback((row = {}) => {
+    const rowId = String(row?.therapistId || "").trim();
+    if (currentTherapistIdentity.id && rowId === currentTherapistIdentity.id) return true;
+
+    // 舊帳號曾使用不同 therapistId 時，以「同姓名＋同店家」安全銜接歷史日報。
+    // 不只用姓名，避免不同店家同名人員互相看到資料。
+    const rowName = normalizeTherapistName(row?.therapistName || row?.name || "");
+    const rowStoreCore = cleanStoreName(getStoreName(row));
+    const sameName = Boolean(currentTherapistIdentity.name) && rowName === currentTherapistIdentity.name;
+    const sameStore = Boolean(currentTherapistIdentity.storeCore) && rowStoreCore === currentTherapistIdentity.storeCore;
+    return sameName && sameStore;
+  }, [currentTherapistIdentity, normalizeTherapistName, cleanStoreName]);
+
+  const therapistLockedStoreLabel = useMemo(() => {
+    const rawStore =
+      currentUser?.store ||
+      currentUser?.storeName ||
+      currentUser?.primaryStore ||
+      (Array.isArray(currentUser?.stores) ? currentUser.stores[0] : "");
+    const core = cleanStoreName(rawStore);
+    return core ? `${brandPrefix}${core}店` : "未註記";
+  }, [currentUser, cleanStoreName, brandPrefix]);
+
   const filteredData = useMemo(() => {
     return (activeTab === "store" ? storeRawData : therapistRawData).filter((d) => {
-      if (userRole === 'therapist') { if (activeTab !== 'therapist' || d.therapistId !== currentUser?.id) return false; }
-      else if (myAllowedStores !== null) {
+      if (userRole === 'therapist') {
+        if (activeTab !== 'therapist' || !isCurrentTherapistReport(d)) return false;
+      } else if (myAllowedStores !== null) {
          const cleanRowStore = cleanStoreName(getStoreName(d));
          if (!myAllowedStores.some(allowed => cleanRowStore === cleanStoreName(allowed))) return false;
       }
@@ -292,7 +368,7 @@ const HistoryView = () => {
       }
       return true;
     });
-  }, [storeRawData, therapistRawData, filterStore, myAllowedStores, userRole, currentUser, activeTab, cleanStoreName]);
+  }, [storeRawData, therapistRawData, filterStore, myAllowedStores, userRole, activeTab, cleanStoreName, isCurrentTherapistReport]);
 
   // ==========================================
   // ★ 新增：計算分頁資料
@@ -498,11 +574,27 @@ const HistoryView = () => {
 
               <div className="flex gap-2 w-full md:w-auto shrink-0">
                 <div className="flex-grow min-w-[150px]">
-                  <label className="block text-xs font-bold text-stone-400 mb-1">篩選店家</label>
-                  <select value={filterStore} onChange={(e) => setFilterStore(e.target.value)} disabled={allStores.length === 1} className="w-full px-4 py-2 rounded-xl font-bold bg-white border border-stone-200 outline-none focus:border-amber-400 h-[46px] disabled:bg-stone-100 disabled:text-stone-500">
-                    {allStores.length > 1 && <option value="">全部店家</option>}
-                    {allStores.map((s) => <option key={s} value={s}>{s}</option>)}
-                  </select>
+                  <label className="block text-xs font-bold text-stone-400 mb-1">
+                    {userRole === "therapist" ? "所屬店家" : "篩選店家"}
+                  </label>
+                  {userRole === "therapist" ? (
+                    <div className="w-full h-[46px] px-4 rounded-xl font-bold bg-stone-100 border border-stone-200 text-stone-600 flex items-center">
+                      {therapistLockedStoreLabel}
+                    </div>
+                  ) : (
+                    <select
+                      value={filterStore}
+                      onChange={(e) => setFilterStore(e.target.value)}
+                      disabled={allStores.length === 1}
+                      style={{ colorScheme: "light" }}
+                      className="w-full px-4 py-2 rounded-xl font-bold bg-white text-stone-700 border border-stone-200 outline-none focus:border-amber-400 h-[46px] disabled:bg-stone-100 disabled:text-stone-500"
+                    >
+                      {allStores.length > 1 && <option value="">全部店家</option>}
+                      {allStores.map((s) => (
+                        <option key={s} value={s}>{s}</option>
+                      ))}
+                    </select>
+                  )}
                 </div>
                 
                 <div className="flex items-end gap-2">
@@ -554,7 +646,7 @@ const HistoryView = () => {
                         {/* ★ 改用 paginatedData 來渲染，不再一次畫幾千筆 */}
                         {!isLoading && paginatedData.map((row) => {
                           const isEditing = editId === row.id;
-                          const displayStore = cleanStoreName(getStoreName(row));
+                          const displayStore = formatStoreDisplayName(getStoreName(row));
                           return (
                             <tr key={row.id} className="group hover:bg-stone-50 transition-colors">
                               <td className="p-4 md:sticky md:left-0 bg-white group-hover:bg-stone-50 md:z-10 border-r border-stone-100">
@@ -570,7 +662,7 @@ const HistoryView = () => {
                                   ) : (
                                     <span className="font-mono font-bold text-stone-600">{row.date}</span>
                                   )}
-                                  <span className="font-bold text-stone-800">{displayStore}店</span>
+                                  <span className="font-bold text-stone-800">{displayStore}</span>
                                 </div>
                               </td>
                               {activeTab === "store" ? ( STORE_FIELDS.map(f => (<td key={f.key} className="p-4 text-right">{isEditing ? (<input type="number" value={editForm[f.key]} onChange={(e)=>handleEditChange(f.key,e.target.value)} readOnly={f.key === 'accrual'} className={`border rounded w-20 text-right px-1 outline-none focus:border-amber-400 ${f.isNegative ? "text-rose-500" : ""} ${f.key === 'accrual' ? 'bg-stone-100 text-stone-500' : ''}`}/>) : (<span className={f.isNegative ? "text-rose-500 font-bold" : ""}>{fmt(row[f.key])}</span>)}</td>)) ) : ( <> <td className="p-4 font-bold">{row.therapistName}</td>{THERAPIST_FIELDS.map(f => (<td key={f.key} className="p-4 text-right">{isEditing ? (<input type="number" value={editForm[f.key]} onChange={(e)=>handleEditChange(f.key,e.target.value)} readOnly={f.readOnly} className={`border rounded w-20 text-right px-1 outline-none focus:border-indigo-400 ${f.isNegative ? "text-rose-500" : f.isHighlight ? "font-bold text-indigo-600" : ""} ${f.readOnly ? "bg-stone-100 text-stone-500 cursor-not-allowed" : ""}`}/>) : (<span className={f.isNegative ? "text-rose-500 font-bold" : f.isHighlight ? "text-indigo-600 font-bold" : ""}>{fmt(row[f.key])}</span>)}</td>))}</> )}

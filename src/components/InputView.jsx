@@ -29,6 +29,33 @@ const getLocalTodayString = () => {
 };
 
 
+// ★ 管理師店家正規化：相容舊資料「新」，並避免正式地名「新店」被裁成「新」。
+const normalizeTherapistStoreName = (value = "") => {
+  const compact = String(value || "")
+    .trim()
+    .replace(/^(CYJ|DRCYJ|Anew\s*\(安妞\)|Yibo\s*\(伊啵\)|Anew|Yibo|安妞|伊啵)\s*/i, "")
+    .replace(/[　\s]+/g, "")
+    .trim();
+
+  if (!compact) return "";
+  if (compact === "新" || /^新店店?$/.test(compact)) return "新店";
+  return compact.replace(/店$/, "").trim();
+};
+
+const resolveTherapistStoreName = (user = {}) => normalizeTherapistStoreName(
+  user?.store ||
+  user?.storeName ||
+  user?.primaryStore ||
+  (Array.isArray(user?.stores) ? user.stores[0] : "")
+);
+
+const formatTherapistStoreLabel = (value = "") => {
+  const core = normalizeTherapistStoreName(value);
+  if (!core) return "未綁定 (請重新登入)";
+  return core === "新店" ? "新店" : `${core}店`;
+};
+
+
 const getAffectedYearMonth = (dateValue) => {
   const safeDate = String(dateValue || "").replace(/\//g, "-");
   return /^\d{4}-\d{2}/.test(safeDate) ? safeDate.slice(0, 7) : "";
@@ -567,6 +594,11 @@ const TherapistInputView = () => {
     return { brandInfo: { id: normalizedId, name } };
   }, [currentBrand]);
 
+  const resolvedTherapistStoreName = useMemo(
+    () => resolveTherapistStoreName(currentUser),
+    [currentUser]
+  );
+
   useEffect(() => {
     const handleWakeUp = () => {
       if (document.visibilityState === "visible" || document.hasFocus()) {
@@ -687,7 +719,7 @@ const TherapistInputView = () => {
         date: safeDate, 
         therapistId: currentUser.id,
         therapistName: currentUser.name,
-        storeName: currentUser.store || "未註記店家", 
+        storeName: resolvedTherapistStoreName || "未註記店家", 
         brandId: brandId, 
         
         totalRevenue: parseNumber(formData.totalRevenue),
@@ -718,7 +750,7 @@ const TherapistInputView = () => {
             sourceType: "therapist_daily_reports",
             sourceId: docId,
             date: safeDate,
-            storeName: currentUser.store || "未註記店家",
+            storeName: resolvedTherapistStoreName || "未註記店家",
             therapistId: currentUser.id,
             therapistName: currentUser.name,
             reason: hasSubmittedToday ? "therapist_report_updated" : "therapist_report_submitted",
@@ -752,7 +784,7 @@ const TherapistInputView = () => {
             <User className="text-white/80" /> {currentUser?.name} 您好
           </h2>
           <p className="text-white/80 text-sm opacity-90">
-            所屬店家：{currentUser?.store || "未綁定 (請重新登入)"}店
+            所屬店家：{formatTherapistStoreLabel(resolvedTherapistStoreName)}
           </p>
         </div>
         <div className="absolute right-0 bottom-0 opacity-10 pointer-events-none">

@@ -126,8 +126,8 @@ export function useDashboardStats() {
       .replace(new RegExp(`^(${brandPrefix}|CYJ|Anew|Yibo|安妞|伊啵)\\s*`, 'i'), '')
       .trim();
 
-    // ★「新店」是正式店名，不是「新 + 店」；同時相容新店、新店店、CYJ新店店。
-    if (/^新店店?$/.test(core)) return "新店";
+    // ★「新店」是正式店名，不是「新 + 店」；同時相容舊錯誤資料「新」、新店、新店店、CYJ新店店。
+    if (core === "新" || /^新店店?$/.test(core)) return "新店";
 
     return core.replace(/店$/, '').trim();
   }, [brandPrefix]);

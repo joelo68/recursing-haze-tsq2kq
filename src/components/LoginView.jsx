@@ -363,7 +363,41 @@ const LoginView = ({
     return therapist.store || therapist.storeName || therapist.primaryStore || (Array.isArray(therapist.stores) ? therapist.stores[0] : "");
   };
 
-  const getTherapistStoreCore = (therapist = {}) => normalizeStoreCoreName(getTherapistStoreValue(therapist));
+  // ★ 新店相容修正：
+  // 舊版曾把正式店名「新店」誤裁成「新」。登入與店家篩選時統一視為「新店」，
+  // 同時把登入後 currentUser 的 store/storeName/stores 正規化，避免日報繼續寫入「新」。
+  const normalizeTherapistStoreCore = (value = "") => {
+    const raw = String(value || "").trim();
+    const importedCore = normalizeStoreCoreName(raw);
+    const compactRaw = raw
+      .replace(/^(CYJ|DRCYJ|Anew\s*\(安妞\)|Yibo\s*\(伊啵\)|Anew|Yibo|安妞|伊啵)\s*/i, "")
+      .replace(/[　\s]+/g, "")
+      .trim();
+
+    if (importedCore === "新" || importedCore === "新店" || compactRaw === "新" || /^新店店?$/.test(compactRaw)) {
+      return "新店";
+    }
+
+    return importedCore || compactRaw.replace(/店$/, "").trim();
+  };
+
+  const getTherapistStoreCore = (therapist = {}) => normalizeTherapistStoreCore(getTherapistStoreValue(therapist));
+
+  const buildTherapistLoginPayload = (therapist = {}) => {
+    const canonicalStore = normalizeTherapistStoreCore(getTherapistStoreValue(therapist));
+    const canonicalStores = Array.from(new Set([
+      ...(Array.isArray(therapist.stores) ? therapist.stores : []),
+      canonicalStore,
+    ].map((storeName) => normalizeTherapistStoreCore(storeName)).filter(Boolean)));
+
+    return {
+      ...therapist,
+      store: canonicalStore || getTherapistStoreValue(therapist),
+      storeName: canonicalStore || therapist.storeName || getTherapistStoreValue(therapist),
+      primaryStore: canonicalStore || therapist.primaryStore || getTherapistStoreValue(therapist),
+      stores: canonicalStores.length ? canonicalStores : therapist.stores,
+    };
+  };
 
   const isDateReached = (dateValue = "") => {
     const text = String(dateValue || "").trim();
@@ -393,10 +427,10 @@ const LoginView = ({
 
   const filteredTherapists = useMemo(() => {
     if (!tStore) return [];
-    const selectedStoreCore = normalizeStoreCoreName(tStore);
+    const selectedStoreCore = normalizeTherapistStoreCore(tStore);
     const list = (therapists || []).filter(t => {
       const therapistStoreCore = getTherapistStoreCore(t);
-      const therapistStores = Array.isArray(t.stores) ? t.stores.map((s) => normalizeStoreCoreName(s)) : [];
+      const therapistStores = Array.isArray(t.stores) ? t.stores.map((s) => normalizeTherapistStoreCore(s)) : [];
       const storeMatched = therapistStoreCore === selectedStoreCore || therapistStores.includes(selectedStoreCore);
       if (!storeMatched) return false;
       return !isTherapistInactive(t);
@@ -607,10 +641,11 @@ const LoginView = ({
       if (isUserResigned) { setError("此帳號已停用"); setIsLoading(false); return; }
       
       if (therapist && therapist.password === tPassword) {
+        const normalizedTherapist = buildTherapistLoginPayload(therapist);
         if (isInitialPasswordLogin("therapist", tPassword, therapist.password)) {
-          openForcePasswordUpdate({ roleId: "therapist", accountId: therapist.id, userInfo: therapist, currentPassword: tPassword, displayName: therapist.name });
+          openForcePasswordUpdate({ roleId: "therapist", accountId: therapist.id, userInfo: normalizedTherapist, currentPassword: tPassword, displayName: therapist.name });
         } else {
-          onLogin("therapist", therapist);
+          onLogin("therapist", normalizedTherapist);
         }
       } else setError("密碼錯誤 (預設 0000)");
     } catch (e) { setError("登入發生錯誤"); } finally { setIsLoading(false); }
