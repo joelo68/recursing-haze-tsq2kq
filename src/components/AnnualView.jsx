@@ -171,9 +171,17 @@ const AnnualView = () => {
 
   const cleanName = useMemo(() => (name) => {
     if (!name) return "";
-    let core = String(name).replace(new RegExp(`^(${brandPrefix}|CYJ|Anew|Yibo|安妞|伊啵)`, 'i'), '').trim();
-    if (core === "新店") return "新店"; 
-    return core.replace(/店$/, '').trim();
+
+    let core = String(name)
+      .replace(new RegExp(`^(${brandPrefix}|CYJ|Anew|Yibo|安妞|伊啵)`, "i"), "")
+      .trim();
+
+    // 「新店」是正式地名，歷史資料曾出現：
+    // 新、 新店、 新店店、 CYJ新店、 CYJ新店店。
+    // 年度分析必須全部統一為同一個核心名稱，否則歷史 Summary 的店家資料會被篩掉。
+    if (["新", "新店", "新店店"].includes(core)) return "新店";
+
+    return core.replace(/店$/, "").trim();
   }, [brandPrefix]);
 
   const baseVisibleStores = useMemo(() => {

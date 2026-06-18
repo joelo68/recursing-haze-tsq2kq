@@ -1709,18 +1709,6 @@ function extractAutoTargetStore(docId, data = {}, yearMonth = "") {
   return normalizeSummaryCoreName(id);
 }
 
-class AutoSummaryNoSourceDataError extends Error {
-  constructor({ brandId, yearMonth, hasOrgStores = false, hasTargets = false }) {
-    super(`自動整理中止：${brandId} ${yearMonth} 原始店日報為 0 筆，但已有店家或目標資料，請確認來源路徑。`);
-    this.name = "AutoSummaryNoSourceDataError";
-    this.code = "AUTO_SUMMARY_NO_SOURCE_DATA";
-    this.brandId = brandId;
-    this.yearMonth = yearMonth;
-    this.hasOrgStores = Boolean(hasOrgStores);
-    this.hasTargets = Boolean(hasTargets);
-  }
-}
-
 async function loadAutoMonthlyTargetMap(brandId, yearMonth) {
   const snap = await getSummaryCollection(brandId, "monthly_targets").get();
   const targetMap = {};
@@ -1747,6 +1735,7 @@ async function buildAutoDashboardSummaryPayloads(brandId, yearMonth) {
   if (!range) throw new Error("月份格式錯誤");
 
   const orgProfile = await getAutoOrgStructureProfile(brandId);
+  const targets = await loadAutoMonthlyTargetMap(brandId, yearMonth);
   const storeOwner = {};
   Object.entries(orgProfile.managers || {}).forEach(([managerName, stores]) => {
     (Array.isArray(stores) ? stores : []).forEach((store) => {
@@ -1755,8 +1744,6 @@ async function buildAutoDashboardSummaryPayloads(brandId, yearMonth) {
     });
   });
 
-  // 先讀真正的原始日報，再決定是否需要讀 monthly_targets。
-  // 沒有來源日報的異常月份不應每 5 分鐘重複讀取整包目標。
   const [dailySnap, therapistSnap, therapistListSnap] = await Promise.all([
     getSummarySourceCollection(brandId, "daily_reports").where("date", ">=", range.start).where("date", "<=", range.end).get(),
     getSummarySourceCollection(brandId, "therapist_daily_reports").where("date", ">=", range.start).where("date", "<=", range.end).get(),
@@ -1770,27 +1757,10 @@ async function buildAutoDashboardSummaryPayloads(brandId, yearMonth) {
     .map((d) => ({ id: d.id, ...d.data() }))
     .filter((row) => row.isArchivedDuplicate !== true);
 
-  let targets = {};
-
-  if (dailyRows.length === 0) {
-    // 若組織已有店家，不必再讀 monthly_targets 就可確認這是「來源資料為 0」的異常月份。
-    // 若組織也沒有店家，才補讀一次 targets，避免漏掉「有目標但無日報」的錯誤路徑。
-    const hasOrgStores = Array.isArray(orgProfile.stores) && orgProfile.stores.length > 0;
-    if (!hasOrgStores) {
-      targets = await loadAutoMonthlyTargetMap(brandId, yearMonth);
-    }
-
-    if (hasOrgStores || Object.keys(targets).length > 0) {
-      throw new AutoSummaryNoSourceDataError({
-        brandId,
-        yearMonth,
-        hasOrgStores,
-        hasTargets: Object.keys(targets).length > 0,
-      });
-    }
-  } else {
-    // 只有真正要重建 Summary 時才讀取最新目標，確保正確性與即時性不變。
-    targets = await loadAutoMonthlyTargetMap(brandId, yearMonth);
+  // 安全防護：若此月份有店家架構或目標，但原始日報讀到 0 筆，通常代表讀錯來源路徑。
+  // 這時不可寫出「0 業績 verified Summary」，避免 Dashboard 被錯誤 Summary 誤導。
+  if (dailyRows.length === 0 && (orgProfile.stores.length > 0 || Object.keys(targets).length > 0)) {
+    throw new Error(`自動整理中止：${brandId} ${yearMonth} 原始店日報為 0 筆，但已有店家或目標資料，請確認來源路徑。`);
   }
 
   const brandPrefix = getSummaryBrandPrefix(brandId, brandLabel);
@@ -2176,40 +2146,6 @@ async function loadPendingQueueRowsForAutoRepair(brandId, yearMonth) {
     .filter((row) => String(row.status || "") === "pending");
 }
 
-async function markAutoRecalcQueueBlockedNoSource(brandId, yearMonth, rows = [], errorMessage = "") {
-  if (!rows.length) return 0;
-
-  let batch = db.batch();
-  let pendingWrites = 0;
-  let updated = 0;
-  const nowIso = new Date().toISOString();
-
-  for (const row of rows) {
-    if (!row.id) continue;
-    batch.update(getSummaryCollection(brandId, "recalc_queue").doc(row.id), {
-      status: "blocked_no_source_data",
-      blockedAt: admin.firestore.FieldValue.serverTimestamp(),
-      blockedAtText: nowIso,
-      blockedBy: "auto_summary_repair_worker",
-      blockedByRole: "system",
-      blockedReason: "no_source_daily_reports",
-      blockedError: String(errorMessage || "").slice(0, 500),
-      calibrationResult: "blocked_no_source_data",
-    });
-    pendingWrites += 1;
-    updated += 1;
-
-    if (pendingWrites >= 450) {
-      await batch.commit();
-      batch = db.batch();
-      pendingWrites = 0;
-    }
-  }
-
-  if (pendingWrites > 0) await batch.commit();
-  return updated;
-}
-
 async function markAutoRecalcQueueCompleted(brandId, yearMonth, rows = [], resultText = "") {
   if (!rows.length) return 0;
 
@@ -2429,66 +2365,6 @@ async function finalizeMonthReportAuto({ brandId, yearMonth, trigger = "auto_wor
 
     return { brandId, yearMonth, matched: isMatched, mismatchCount: mismatchRows.length, completedQueueCount: completedCount, buildReport, compareReport };
   } catch (error) {
-    const isNoSourceData = error?.code === "AUTO_SUMMARY_NO_SOURCE_DATA";
-
-    // 「原始日報為 0」不是短暫錯誤；Firestore 查詢具一致性，持續每 5 分鐘重試只會重複耗用。
-    // 將舊 flag / queue 安全隔離，但保留完整紀錄。
-    // 未來若真的新增或修改該月份日報，onWrite 會把同月份 flag 重新設為 dirty，
-    // 並建立新的 pending queue，該月份仍會正常恢復自動重建。
-    if (isNoSourceData && !force) {
-      const pendingRows = await loadPendingQueueRowsForAutoRepair(brandId, yearMonth);
-      const blockedQueueCount = await markAutoRecalcQueueBlockedNoSource(
-        brandId,
-        yearMonth,
-        pendingRows,
-        error.message
-      );
-
-      await flagRef.set({
-        brandId,
-        brandLabel,
-        yearMonth,
-        affectedYearMonth: yearMonth,
-        status: "blocked_no_source_data",
-        dirty: false,
-        pendingCount: 0,
-        blockedReason: "no_source_daily_reports",
-        blockedQueueCount,
-        blockedAt: admin.firestore.FieldValue.serverTimestamp(),
-        blockedAtText: new Date().toISOString(),
-        lastError: error.message,
-        lastErrorAt: admin.firestore.FieldValue.serverTimestamp(),
-        lastErrorAtText: new Date().toISOString(),
-        lastResult: "blocked_no_source_data",
-        lockedBy: admin.firestore.FieldValue.delete(),
-        lockId: admin.firestore.FieldValue.delete(),
-        lockUntilText: admin.firestore.FieldValue.delete(),
-        updatedAt: admin.firestore.FieldValue.serverTimestamp(),
-        updatedAtText: new Date().toISOString(),
-      }, { merge: true });
-
-      await writeAutoMaintenanceLog(brandId, {
-        type: "dashboard_summary",
-        action: "block_auto_month_report_no_source",
-        month: yearMonth,
-        status: "blocked_no_source_data",
-        errorMessage: error.message,
-        blockedQueueCount,
-        trigger,
-        lockId,
-        brandLabel,
-      });
-
-      return {
-        skipped: true,
-        reason: "blocked_no_source_data",
-        brandId,
-        yearMonth,
-        blockedQueueCount,
-        error: error.message,
-      };
-    }
-
     await flagRef.set({
       brandId,
       brandLabel,
