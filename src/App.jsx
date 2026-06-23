@@ -680,7 +680,9 @@ export default function App() {
       const detail = event?.detail || {};
       if (!detail.deviceShort && !detail.deviceId) return;
 
-      if (detail.resolvedPending && (detail.status === "trusted" || detail.trusted === true)) {
+      // resolvedPending 代表此裝置已從「待處理」狀態解除。
+      // 信任、封鎖、全品牌封鎖都屬於已處理；不再只限 trusted 才扣 Header 數字。
+      if (detail.resolvedPending) {
         setDeviceAlertSummary((prev) => ({
           ...prev,
           pendingNewDeviceCount: Math.max(0, Number(prev.pendingNewDeviceCount || 0) - 1),
@@ -694,7 +696,7 @@ export default function App() {
 
         if (!isSameDevice) return prev;
 
-        const isBlocked = detail.status === "blocked" || detail.source === "manual_blocked";
+        const isBlocked = ["blocked", "global_blocked"].includes(detail.status) || ["manual_blocked", "manual_global_blocked"].includes(detail.source);
         const isTrusted = detail.status === "trusted" || detail.trusted === true;
         return {
           ...prev,
@@ -708,6 +710,24 @@ export default function App() {
 
     window.addEventListener("cyj_device_trust_updated", handler);
     return () => window.removeEventListener("cyj_device_trust_updated", handler);
+  }, []);
+
+  useEffect(() => {
+    const handler = (event) => {
+      const nextCount = Number(event?.detail?.pendingNewDeviceCount);
+      if (!Number.isFinite(nextCount)) return;
+
+      setDeviceAlertSummary((prev) => ({
+        ...prev,
+        pendingNewDeviceCount: Math.max(0, nextCount),
+        latestUserName: event?.detail?.latestUserName ?? prev.latestUserName,
+        latestDevice: event?.detail?.latestDevice ?? prev.latestDevice,
+        latestAtText: event?.detail?.latestAtText ?? prev.latestAtText,
+      }));
+    };
+
+    window.addEventListener("cyj_device_alert_summary_updated", handler);
+    return () => window.removeEventListener("cyj_device_alert_summary_updated", handler);
   }, []);
 
   useEffect(() => {

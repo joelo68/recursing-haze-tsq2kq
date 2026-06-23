@@ -163,8 +163,8 @@ const SystemMonitor = () => {
           return time >= startTime && time <= endTime;
         });
 
-        const trustedCount = deviceList.filter((d) => d.trusted !== false && d.status !== "new").length;
-        const newCount = deviceList.filter((d) => d.trusted === false || d.status === "new" || d.status === "suspicious" || d.status === "blocked" || d.status === "global_blocked").length;
+        const trustedCount = deviceList.filter((d) => d.trusted === true && !isBlockedDevice(d)).length;
+        const newCount = deviceList.filter(isPendingDevice).length;
         const lastSeenText = deviceList
           .map((d) => d.lastSeenAtText || d.firstSeenAtText || "")
           .filter(Boolean)
@@ -182,6 +182,40 @@ const SystemMonitor = () => {
       }).filter((profile) => (profile.deviceList || []).length > 0);
 
       profiles.sort((a, b) => String(b.lastSeenText || "").localeCompare(String(a.lastSeenText || "")));
+
+      // 同步 Header 紅色盾牌數字：
+      // 以本次讀到的 account_devices 實際狀態重新計算「真正待處理裝置」。
+      // 目前帳號數小於預設載入上限時，可用來校正過去只信任才扣數造成的歷史累積誤差。
+      const actualPendingDeviceCount = snapshot.docs.reduce((sum, docSnap) => {
+        const data = docSnap.data() || {};
+        const allDevices = Object.values(data.devices || {});
+        return sum + allDevices.filter(isPendingDevice).length;
+      }, 0);
+
+      const recalibratedAtText = new Date().toISOString();
+
+      await setDoc(doc(getCollectionPath("security_summary"), "device_alerts"), {
+        pendingNewDeviceCount: actualPendingDeviceCount,
+        recalibratedAtText,
+        recalibratedBy: currentUser?.name || "SystemMonitor",
+        recalibratedSource: "SystemMonitor.fetchDeviceProfiles",
+        updatedAtText: recalibratedAtText,
+      }, { merge: true });
+
+      // 立即同步 Header 紅色盾牌數字。
+      // App.jsx 原本只在切換頁面/品牌時重新讀取 security_summary；
+      // 重新載入裝置資料後若不發事件，Firebase 已校正但畫面可能仍維持舊數字。
+      try {
+        window.dispatchEvent(new CustomEvent("cyj_device_alert_summary_updated", {
+          detail: {
+            pendingNewDeviceCount: actualPendingDeviceCount,
+            latestAtText: recalibratedAtText,
+          },
+        }));
+      } catch (eventError) {
+        console.warn("裝置提醒摘要同步事件發送失敗:", eventError);
+      }
+
       setDeviceProfiles(profiles);
     } catch (error) {
       console.error("Fetch account devices error:", error);
@@ -192,11 +226,22 @@ const SystemMonitor = () => {
     }
   };
 
+  const isBlockedDevice = (device = {}) => {
+    return (
+      ["blocked", "global_blocked"].includes(device.status) ||
+      ["manual_blocked", "manual_global_blocked"].includes(device.source)
+    );
+  };
+
   const isPendingDevice = (device = {}) => {
+    // 待處理 = 新裝置 / 可疑裝置。
+    // 已封鎖、全品牌封鎖、已信任都視為已處理，不再列入 Header 紅色提醒與「待觀察新裝置」。
+    if (isBlockedDevice(device)) return false;
+
     return (
       device.trusted === false ||
-      ["new", "suspicious", "blocked", "global_blocked"].includes(device.status) ||
-      ["manual_suspicious", "manual_blocked", "manual_global_blocked"].includes(device.source)
+      ["new", "suspicious"].includes(device.status) ||
+      ["manual_suspicious"].includes(device.source)
     );
   };
 
@@ -547,8 +592,10 @@ const SystemMonitor = () => {
         }, { merge: true });
       }
 
-      const wasPendingDevice = device.trusted === false || device.status === "new" || device.status === "suspicious" || device.status === "blocked" || device.status === "global_blocked";
-      if (isTrusted && wasPendingDevice) {
+      const wasPendingDevice = isPendingDevice(device);
+      const isNowResolvedPending = wasPendingDevice && !isPendingDevice(nextDevice);
+
+      if (isNowResolvedPending) {
         await setDoc(doc(getCollectionPath("security_summary"), "device_alerts"), {
           pendingNewDeviceCount: increment(-1),
           lastResolvedDeviceShort: nextDevice.deviceShort,
@@ -569,8 +616,8 @@ const SystemMonitor = () => {
         return {
           ...item,
           deviceList,
-          trustedCount: deviceList.filter((d) => d.trusted === true && d.status !== "blocked").length,
-          newCount: deviceList.filter((d) => d.trusted === false || d.status === "new" || d.status === "suspicious" || d.status === "blocked" || d.status === "global_blocked").length,
+          trustedCount: deviceList.filter((d) => d.trusted === true && !isBlockedDevice(d)).length,
+          newCount: deviceList.filter(isPendingDevice).length,
         };
       }));
 
@@ -584,7 +631,7 @@ const SystemMonitor = () => {
             source: nextDevice.source,
             reviewedBy: nextDevice.reviewedBy,
             reviewedAtText: nextDevice.reviewedAtText,
-            resolvedPending: isTrusted && wasPendingDevice,
+            resolvedPending: isNowResolvedPending,
             globalBlocked: isGlobalBlocked,
             blockScope: isGlobalBlocked ? "all_brands" : (isBlocked ? "current_brand" : ""),
           },
