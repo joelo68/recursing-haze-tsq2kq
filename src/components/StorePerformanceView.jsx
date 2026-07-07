@@ -42,6 +42,84 @@ const StorePerformanceView = ({ dashboardStats, myStoreRankings, brandInfo }) =>
   const { grandTotal: storeGrandTotal, dailyTotals, totalAchievement, daysPassed, daysInMonth } = dashboardStats;
   const timeProgress = daysInMonth > 0 ? (daysPassed / daysInMonth) * 100 : 0;
   const paceGap = totalAchievement - timeProgress;
+  const isSmallStoreRanking = myStoreRankings.length > 0 && myStoreRankings.length <= 6;
+
+  const getProgressStatusMeta = (store = {}) => {
+    const target = Number(store.target || 0);
+    const rate = Number(store.rate || 0);
+    const expectedRate = Math.min(Math.max(Number(timeProgress || 0), 0), 100);
+    const progressGap = rate - expectedRate;
+
+    if (!target || target <= 0) {
+      return {
+        key: "missing-target",
+        label: "目標缺漏",
+        className: "bg-stone-100 text-stone-500 border-stone-200",
+        barClassName: "bg-stone-300",
+        textClassName: "text-stone-500",
+      };
+    }
+
+    if (rate >= 100) {
+      return {
+        key: "achieved",
+        label: "已達標",
+        className: "bg-emerald-50 text-emerald-700 border-emerald-100",
+        barClassName: "bg-emerald-400",
+        textClassName: "text-emerald-600",
+      };
+    }
+
+    if (progressGap >= 5) {
+      return {
+        key: "ahead",
+        label: "超前進度",
+        className: "bg-emerald-50 text-emerald-700 border-emerald-100",
+        barClassName: "bg-emerald-400",
+        textClassName: "text-emerald-600",
+      };
+    }
+
+    if (progressGap >= -5) {
+      return {
+        key: "on-track",
+        label: "符合進度",
+        className: "bg-blue-50 text-blue-700 border-blue-100",
+        barClassName: "bg-blue-400",
+        textClassName: "text-blue-600",
+      };
+    }
+
+    if (progressGap >= -15) {
+      return {
+        key: "behind",
+        label: "落後進度",
+        className: "bg-amber-50 text-amber-700 border-amber-100",
+        barClassName: "bg-amber-400",
+        textClassName: "text-amber-600",
+      };
+    }
+
+    return {
+      key: "attention",
+      label: "需關注",
+      className: "bg-rose-50 text-rose-700 border-rose-100",
+      barClassName: "bg-rose-500",
+      textClassName: "text-rose-600",
+    };
+  };
+
+  const smallRankingSummary = {
+    achievedCount: myStoreRankings.filter((store) => Number(store.rate || 0) >= 100).length,
+    averageRate: myStoreRankings.length > 0
+      ? myStoreRankings.reduce((sum, store) => sum + Number(store.rate || 0), 0) / myStoreRankings.length
+      : 0,
+    totalGap: myStoreRankings.reduce((sum, store) => {
+      const actual = Number(store.actual || 0);
+      const target = Number(store.target || 0);
+      return sum + Math.max(0, target - actual);
+    }, 0),
+  };
 
   const MiniKpiCard = ({ title, value, subText, icon: Icon, color }) => (
     <div className="bg-white p-5 rounded-3xl border border-stone-100 shadow-sm hover:shadow-md transition-all group relative overflow-hidden h-full flex flex-col">
@@ -546,35 +624,183 @@ const StorePerformanceView = ({ dashboardStats, myStoreRankings, brandInfo }) =>
 
       {/* 戰情排行分析 */}
       {(userRole === 'manager' || userRole === 'director' || userRole === 'store') && myStoreRankings.length > 0 && (
-        <div className="bg-white rounded-3xl border border-stone-200 shadow-xl overflow-hidden relative"><div className="bg-gradient-to-r from-amber-500 to-orange-600 p-6 flex justify-between items-center text-white relative overflow-hidden"><div className="absolute right-0 top-0 p-4 opacity-10"><MapIcon size={100} /></div><div className="relative z-10 flex items-center gap-3"><div className="p-2 bg-white/20 rounded-xl backdrop-blur-md"><Crown size={24} className="text-white" /></div><div><h3 className="text-xl font-bold tracking-wide">戰情排行分析</h3><p className="text-amber-100 text-xs font-medium">Rankings & Performance</p></div></div><div className="relative z-10 text-right"><p className="text-xs text-amber-100 font-bold uppercase">目前顯示店家數</p><p className="text-2xl font-mono font-bold text-white">{myStoreRankings.length}</p></div></div><div className="p-0 sm:p-2 overflow-x-auto"><table className="w-full text-left border-collapse min-w-[350px]"><thead><tr className="text-xs font-bold text-stone-400 border-b border-stone-100"><th className="p-3 sm:p-4 w-16 sm:w-20 text-center">全區排名</th><th className="p-3 sm:p-4">門市名稱</th><th className="p-3 sm:p-4 text-right">目前業績</th><th className="p-3 sm:p-4 text-right hidden sm:table-cell">目標金額</th><th className="p-3 sm:p-4 text-right">達成率</th></tr></thead><tbody>{myStoreRankings.map((store) => (<tr key={store.storeName} className={`group transition-colors border-b last:border-0 border-stone-50 ${store.isBottom5 ? "bg-rose-50 hover:bg-rose-100" : "hover:bg-stone-50" }`}>
-          <td className="p-3 sm:p-4 text-center"><span className={`inline-flex items-center justify-center w-6 h-6 sm:w-8 sm:h-8 rounded-full text-xs font-bold ${store.rank === 1 ? "bg-amber-100 text-amber-700" : store.rank === 2 ? "bg-stone-200 text-stone-600" : store.rank === 3 ? "bg-orange-100 text-orange-700" : "bg-stone-50 text-stone-400"}`}>{store.rank}</span></td>
-          <td className="p-3 sm:p-4">
-            <div className="flex flex-col sm:flex-row sm:items-center gap-1 sm:gap-2">
-              <span className={`font-bold text-sm sm:text-base ${store.isBottom5 ? "text-rose-700" : "text-stone-700"}`}>{store.storeName}</span>
-              {store.isBottom5 && (<span className="w-fit text-[10px] font-bold px-1.5 py-0.5 bg-rose-200 text-rose-700 rounded flex items-center gap-1 animate-pulse"><AlertTriangle size={10} /> <span className="hidden sm:inline">需關注</span></span>)}
-              {store.passedChallenge && (
-                <span className="w-fit text-[10px] font-bold px-1.5 py-0.5 bg-gradient-to-r from-amber-400 to-orange-500 text-white rounded flex items-center gap-1 shadow-sm">
-                  <Star size={10} className="fill-current" /> <span className="hidden sm:inline">突破挑戰</span>
-                </span>
+        <div className="bg-white rounded-3xl border border-stone-200 shadow-xl overflow-hidden relative">
+          <div className="bg-gradient-to-r from-amber-500 to-orange-600 p-6 flex flex-col gap-4 sm:flex-row sm:justify-between sm:items-center text-white relative overflow-hidden">
+            <div className="absolute right-0 top-0 p-4 opacity-10"><MapIcon size={100} /></div>
+            <div className="relative z-10 flex items-center gap-3">
+              <div className="p-2 bg-white/20 rounded-xl backdrop-blur-md"><Crown size={24} className="text-white" /></div>
+              <div>
+                <h3 className="text-xl font-bold tracking-wide">{isSmallStoreRanking ? `${brandInfo?.name || "門市"} 達成進度` : "戰情排行分析"}</h3>
+                <p className="text-amber-100 text-xs font-medium">{isSmallStoreRanking ? "Progress & Ranking Status" : "Rankings & Performance"}</p>
+              </div>
+            </div>
+            <div className="relative z-10 grid grid-cols-3 gap-3 text-right sm:flex sm:items-center sm:gap-5">
+              <div>
+                <p className="text-[10px] text-amber-100 font-bold uppercase">目前顯示店家數</p>
+                <p className="text-2xl font-mono font-bold text-white">{myStoreRankings.length}</p>
+              </div>
+              {isSmallStoreRanking && (
+                <>
+                  <div>
+                    <p className="text-[10px] text-amber-100 font-bold uppercase">本月應達</p>
+                    <p className="text-2xl font-mono font-bold text-white">{timeProgress.toFixed(0)}%</p>
+                  </div>
+                  <div>
+                    <p className="text-[10px] text-amber-100 font-bold uppercase">已達標</p>
+                    <p className="text-2xl font-mono font-bold text-white">{smallRankingSummary.achievedCount}/{myStoreRankings.length}</p>
+                  </div>
+                </>
               )}
             </div>
-          </td>
-          <td className="p-3 sm:p-4 text-right font-mono font-medium text-stone-600 text-sm sm:text-base">{fmtMoney(store.actual)}</td>
-          <td className="p-3 sm:p-4 text-right font-mono text-stone-400 text-sm hidden sm:table-cell">
-             {fmtMoney(store.target)}
-             {store.hasChallenge && (
-               <div className="text-[10px] text-amber-500 mt-0.5 flex items-center justify-end gap-0.5">
-                 <Star size={8} className="fill-amber-500"/> {fmtMoney(store.challengeTarget)}
-               </div>
-             )}
-          </td>
-          <td className="p-3 sm:p-4 text-right">
-            <div className="flex flex-col items-end">
-              <span className={`text-base sm:text-lg font-bold font-mono ${store.isBottom5 ? "text-rose-600" : (store.rate >= 100 ? "text-emerald-500" : "text-stone-600")}`}>{store.rate.toFixed(0)}%</span>
-              <div className="w-16 sm:w-24 h-1 sm:h-1.5 bg-stone-100 rounded-full mt-1 overflow-hidden"><div className={`h-full rounded-full ${store.isBottom5 ? "bg-rose-500" : (store.rate >= 100 ? "bg-emerald-400" : "bg-stone-400")}`} style={{ width: `${Math.min(store.rate, 100)}%` }}></div></div>
+          </div>
+
+          {isSmallStoreRanking ? (
+            <div className="p-4 sm:p-6 bg-orange-50/20">
+              <div className="mb-4 grid grid-cols-1 gap-3 rounded-2xl border border-amber-100 bg-amber-50/60 px-4 py-3 sm:grid-cols-3">
+                <div>
+                  <p className="text-[10px] font-black uppercase text-stone-400">平均達成</p>
+                  <p className="mt-1 font-mono text-xl font-black text-stone-700">{smallRankingSummary.averageRate.toFixed(0)}%</p>
+                </div>
+                <div>
+                  <p className="text-[10px] font-black uppercase text-stone-400">本月時間進度</p>
+                  <p className="mt-1 font-mono text-xl font-black text-stone-700">{timeProgress.toFixed(0)}%</p>
+                </div>
+                <div>
+                  <p className="text-[10px] font-black uppercase text-stone-400">未達標總差距</p>
+                  <p className={`mt-1 font-mono text-xl font-black ${smallRankingSummary.totalGap > 0 ? "text-rose-600" : "text-emerald-600"}`}>
+                    {smallRankingSummary.totalGap > 0 ? fmtMoney(smallRankingSummary.totalGap) : "全數達標"}
+                  </p>
+                </div>
+              </div>
+
+              <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
+                {myStoreRankings.map((store) => {
+                  const progressMeta = getProgressStatusMeta(store);
+                  const gap = Number(store.actual || 0) - Number(store.target || 0);
+                  const isOverTarget = gap >= 0;
+
+                  return (
+                    <div key={store.storeName} className="rounded-3xl border border-stone-100 bg-white p-4 shadow-sm transition-all hover:shadow-md">
+                      <div className="mb-4 flex items-start justify-between gap-3">
+                        <div className="flex min-w-0 items-center gap-3">
+                          <span className={`inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-full text-sm font-black ${store.rank === 1 ? "bg-amber-100 text-amber-700" : store.rank === 2 ? "bg-stone-200 text-stone-600" : store.rank === 3 ? "bg-orange-100 text-orange-700" : "bg-stone-50 text-stone-400"}`}>
+                            {store.rank}
+                          </span>
+                          <div className="min-w-0">
+                            <div className="flex flex-wrap items-center gap-2">
+                              <h4 className="truncate text-base font-black text-stone-700">{store.storeName}</h4>
+                              <span className={`rounded-full border px-2 py-0.5 text-[10px] font-black ${progressMeta.className}`}>{progressMeta.label}</span>
+                              {store.isBottom5 && (
+                                <span className="rounded-full border border-rose-100 bg-rose-50 px-2 py-0.5 text-[10px] font-black text-rose-600">
+                                  排名後段
+                                </span>
+                              )}
+                              {store.passedChallenge && (
+                                <span className="rounded-full bg-gradient-to-r from-amber-400 to-orange-500 px-2 py-0.5 text-[10px] font-black text-white shadow-sm">
+                                  突破挑戰
+                                </span>
+                              )}
+                            </div>
+                            <p className="mt-1 text-[11px] font-bold text-stone-400">全區排名 No.{store.rank} / {store.totalStores || myStoreRankings.length}</p>
+                          </div>
+                        </div>
+                        <div className="text-right">
+                          <p className={`font-mono text-2xl font-black ${progressMeta.textClassName}`}>
+                            {Number(store.rate || 0).toFixed(0)}%
+                          </p>
+                        </div>
+                      </div>
+
+                      <div className="mb-4 h-2 w-full overflow-hidden rounded-full bg-stone-100">
+                        <div className={`h-full rounded-full ${progressMeta.barClassName}`} style={{ width: `${Math.min(Number(store.rate || 0), 100)}%` }} />
+                      </div>
+
+                      <div className="grid grid-cols-2 gap-3 text-sm">
+                        <div className="rounded-2xl bg-stone-50 px-3 py-2">
+                          <p className="text-[10px] font-black text-stone-400">目前業績</p>
+                          <p className="mt-1 font-mono font-black text-stone-700">{fmtMoney(store.actual)}</p>
+                        </div>
+                        <div className="rounded-2xl bg-stone-50 px-3 py-2">
+                          <p className="text-[10px] font-black text-stone-400">目標金額</p>
+                          <p className="mt-1 font-mono font-black text-stone-500">{fmtMoney(store.target)}</p>
+                        </div>
+                        <div className={`col-span-2 rounded-2xl px-3 py-2 ${isOverTarget ? "bg-emerald-50" : "bg-rose-50"}`}>
+                          <div className="flex items-center justify-between gap-3">
+                            <p className={`text-[10px] font-black ${isOverTarget ? "text-emerald-600" : "text-rose-600"}`}>{isOverTarget ? "超標金額" : "尚差金額"}</p>
+                            <p className={`font-mono font-black ${isOverTarget ? "text-emerald-700" : "text-rose-700"}`}>{fmtMoney(Math.abs(gap))}</p>
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
             </div>
-          </td>
-        </tr>))}</tbody></table></div></div>
+          ) : (
+            <div className="p-0 sm:p-2 overflow-x-auto">
+              <table className="w-full text-left border-collapse min-w-[350px]">
+                <thead>
+                  <tr className="text-xs font-bold text-stone-400 border-b border-stone-100">
+                    <th className="p-3 sm:p-4 w-16 sm:w-20 text-center">全區排名</th>
+                    <th className="p-3 sm:p-4">門市名稱</th>
+                    <th className="p-3 sm:p-4 text-right">目前業績</th>
+                    <th className="p-3 sm:p-4 text-right hidden sm:table-cell">目標金額</th>
+                    <th className="p-3 sm:p-4 text-right">達成率</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {myStoreRankings.map((store) => {
+                    const progressMeta = getProgressStatusMeta(store);
+
+                    return (
+                      <tr key={store.storeName} className={`group transition-colors border-b last:border-0 border-stone-50 ${store.isBottom5 ? "bg-rose-50 hover:bg-rose-100" : "hover:bg-stone-50" }`}>
+                        <td className="p-3 sm:p-4 text-center">
+                          <span className={`inline-flex items-center justify-center w-6 h-6 sm:w-8 sm:h-8 rounded-full text-xs font-bold ${store.rank === 1 ? "bg-amber-100 text-amber-700" : store.rank === 2 ? "bg-stone-200 text-stone-600" : store.rank === 3 ? "bg-orange-100 text-orange-700" : "bg-stone-50 text-stone-400"}`}>{store.rank}</span>
+                        </td>
+                        <td className="p-3 sm:p-4">
+                          <div className="flex flex-col sm:flex-row sm:items-center gap-1 sm:gap-2">
+                            <span className={`font-bold text-sm sm:text-base ${store.isBottom5 ? "text-rose-700" : "text-stone-700"}`}>{store.storeName}</span>
+                            <span className={`w-fit text-[10px] font-bold px-1.5 py-0.5 rounded border flex items-center gap-1 ${progressMeta.className}`}>
+                              {progressMeta.key === "attention" && <AlertTriangle size={10} />}
+                              <span className="hidden sm:inline">{progressMeta.label}</span>
+                            </span>
+                            {store.isBottom5 && (
+                              <span className="w-fit text-[10px] font-bold px-1.5 py-0.5 bg-rose-100 text-rose-600 rounded border border-rose-100 flex items-center gap-1">
+                                <AlertTriangle size={10} /> <span className="hidden sm:inline">排名後段</span>
+                              </span>
+                            )}
+                            {store.passedChallenge && (
+                              <span className="w-fit text-[10px] font-bold px-1.5 py-0.5 bg-gradient-to-r from-amber-400 to-orange-500 text-white rounded flex items-center gap-1 shadow-sm">
+                                <Star size={10} className="fill-current" /> <span className="hidden sm:inline">突破挑戰</span>
+                              </span>
+                            )}
+                          </div>
+                        </td>
+                        <td className="p-3 sm:p-4 text-right font-mono font-medium text-stone-600 text-sm sm:text-base">{fmtMoney(store.actual)}</td>
+                        <td className="p-3 sm:p-4 text-right font-mono text-stone-400 text-sm hidden sm:table-cell">
+                          {fmtMoney(store.target)}
+                          {store.hasChallenge && (
+                            <div className="text-[10px] text-amber-500 mt-0.5 flex items-center justify-end gap-0.5">
+                              <Star size={8} className="fill-amber-500"/> {fmtMoney(store.challengeTarget)}
+                            </div>
+                          )}
+                        </td>
+                        <td className="p-3 sm:p-4 text-right">
+                          <div className="flex flex-col items-end">
+                            <span className={`text-base sm:text-lg font-bold font-mono ${progressMeta.textClassName}`}>{store.rate.toFixed(0)}%</span>
+                            <div className="w-16 sm:w-24 h-1 sm:h-1.5 bg-stone-100 rounded-full mt-1 overflow-hidden">
+                              <div className={`h-full rounded-full ${progressMeta.barClassName}`} style={{ width: `${Math.min(store.rate, 100)}%` }}></div>
+                            </div>
+                          </div>
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </div>
       )}
     </div>
   );
