@@ -36,6 +36,25 @@ const blendByWeights = (currentValue, historyValue, currentWeight, historyWeight
   return (current * currentWeight) + (history * historyWeight);
 };
 
+const hasPositiveCurveValue = (averages = {}) => (
+  Object.values(averages || {}).some((value) => safeNumber(value) > 0)
+);
+
+// 推估小抄若某個星期值是 0，可能代表「店休日」，也可能代表小抄建立失敗。
+// 目前沒有完整店休日設定，所以採保守防呆：
+// 1. 有正數歷史值 → 使用歷史值。
+// 2. 星期日為 0 且該小抄其他星期有正數 → 保留 0，避免固定週日店休被高估。
+// 3. 其他 0 / 空值 / 非數字 → 回退本月目前日均，避免月底推估被拉成「到月底都沒業績」。
+const getUsableHistoryAverage = (averages = {}, dow, fallbackValue = 0) => {
+  const history = safeNumber(averages?.[dow]);
+  const fallback = safeNumber(fallbackValue);
+  const hasAnyPositiveHistory = hasPositiveCurveValue(averages);
+
+  if (history > 0) return history;
+  if (history === 0 && Number(dow) === 0 && hasAnyPositiveHistory) return 0;
+  return fallback > 0 ? fallback : 0;
+};
+
 const buildProjectionRangePayload = ({ currentTotal = 0, remainingConservative = 0, remainingStandard = 0, remainingAggressive = 0 }) => {
   const rawConservative = Math.round(safeNumber(currentTotal) + safeNumber(remainingConservative));
   const standard = Math.round(safeNumber(currentTotal) + safeNumber(remainingStandard));
@@ -108,9 +127,36 @@ export function useDashboardStats() {
               const colRef = collection(db, "brands", brandInfo.id, "settings", "projection_curves", "stores");
               const snap = await getDocs(colRef);
               const dataDict = {};
-              snap.forEach(doc => {
-                  // ★ 改為存取「整包資料」，才能拿到獨立的現金與權責小抄
-                  dataDict[doc.id] = doc.data(); 
+              const normalizeCurveKey = (value = "") => {
+                const raw = String(value || "").trim();
+                if (!raw) return "";
+                if (raw === "BRAND_TOTAL") return "BRAND_TOTAL";
+                return raw
+                  .replace(new RegExp(`^(${brandPrefix}|CYJ|Anew|Yibo|安妞|伊啵)\s*`, 'i'), '')
+                  .replace(/店$/, '')
+                  .replace(/\s+/g, '')
+                  .toLowerCase();
+              };
+
+              snap.forEach((curveDoc) => {
+                  // ★ 改為存取「整包資料」，才能拿到獨立的現金與權責小抄。
+                  // 同時建立多組 key，避免 Firestore 文件 ID 是「安妞信義店」，
+                  // 但 Dashboard 明細推估用 cleanName 後的「信義」去找，最後誤吃 BRAND_TOTAL。
+                  const data = curveDoc.data();
+                  const rawId = String(curveDoc.id || "").trim();
+                  const compactId = rawId.replace(/\s+/g, '').toLowerCase();
+                  const coreId = normalizeCurveKey(rawId);
+                  const candidateKeys = [rawId, compactId, coreId];
+
+                  if (coreId && coreId !== "BRAND_TOTAL") {
+                    candidateKeys.push(`${coreId}店`);
+                    candidateKeys.push(`${brandPrefix}${coreId}店`);
+                    candidateKeys.push(`${brandInfo.name || brandPrefix}${coreId}店`);
+                  }
+
+                  Array.from(new Set(candidateKeys.filter(Boolean))).forEach((key) => {
+                    dataDict[key] = data;
+                  });
               });
               setAllStoreCurves(dataDict);
           } catch (e) {
@@ -118,7 +164,7 @@ export function useDashboardStats() {
           }
       };
       fetchAllCurves();
-  }, [brandInfo]);
+  }, [brandInfo, brandPrefix]);
 
   const cleanName = useMemo(() => (name) => {
     if (!name) return "";
@@ -131,6 +177,31 @@ export function useDashboardStats() {
 
     return core.replace(/店$/, '').trim();
   }, [brandPrefix]);
+
+  const getProjectionCurveForStore = useMemo(() => (storeName = "") => {
+    const core = cleanName(storeName);
+    const raw = String(storeName || "").trim();
+    const compact = (value = "") => String(value || "").replace(/\s+/g, "").toLowerCase();
+
+    const candidateKeys = [
+      raw,
+      compact(raw),
+      core,
+      compact(core),
+      core ? `${core}店` : "",
+      core ? compact(`${core}店`) : "",
+      core ? `${brandPrefix}${core}店` : "",
+      core ? compact(`${brandPrefix}${core}店`) : "",
+      core ? `${brandInfo?.name || brandPrefix}${core}店` : "",
+      core ? compact(`${brandInfo?.name || brandPrefix}${core}店`) : "",
+    ];
+
+    for (const key of Array.from(new Set(candidateKeys.filter(Boolean)))) {
+      if (allStoreCurves[key]) return allStoreCurves[key];
+    }
+
+    return allStoreCurves["BRAND_TOTAL"] || allStoreCurves["brand_total"] || {};
+  }, [allStoreCurves, cleanName, brandPrefix, brandInfo]);
 
   const getSummaryStoreName = useMemo(() => (store = {}) => (
     store.__canonicalStoreName ||
@@ -610,8 +681,7 @@ export function useDashboardStats() {
 
     stores.forEach((store) => {
       const storeCore = cleanName(getSummaryStoreName(store));
-      const storeId = storeCore.replace(/\s+/g, "").toLowerCase();
-      const storeCurve = allStoreCurves[storeId] || allStoreCurves["BRAND_TOTAL"] || {};
+      const storeCurve = getProjectionCurveForStore(storeCore);
       const cashAverages = storeCurve.cashAverages || {};
       const accrualAverages = storeCurve.accrualAverages || {};
 
@@ -627,12 +697,12 @@ export function useDashboardStats() {
         const futureDate = new Date(y, m - 1, d);
         const dow = futureDate.getDay();
 
-        const historyCashValue = cashAverages[dow] !== undefined ? cashAverages[dow] : currentCashDailyAvg;
+        const historyCashValue = getUsableHistoryAverage(cashAverages, dow, currentCashDailyAvg);
         totals.cash.conservative += Math.min(currentCashDailyAvg, historyCashValue);
         totals.cash.standard += blendByWeights(currentCashDailyAvg, historyCashValue, profile.currentWeight, profile.historyWeight);
         totals.cash.aggressive += Math.max(currentCashDailyAvg, historyCashValue);
 
-        const historyAccrualValue = accrualAverages[dow] !== undefined ? accrualAverages[dow] : currentAccrualDailyAvg;
+        const historyAccrualValue = getUsableHistoryAverage(accrualAverages, dow, currentAccrualDailyAvg);
         totals.accrual.conservative += Math.min(currentAccrualDailyAvg, historyAccrualValue);
         totals.accrual.standard += blendByWeights(currentAccrualDailyAvg, historyAccrualValue, profile.currentWeight, profile.historyWeight);
         totals.accrual.aggressive += Math.max(currentAccrualDailyAvg, historyAccrualValue);
@@ -661,7 +731,7 @@ export function useDashboardStats() {
         profile,
       },
     };
-  }, [selectedYear, selectedMonth, cleanName, getSummaryStoreName, allStoreCurves]);
+  }, [selectedYear, selectedMonth, cleanName, getSummaryStoreName, getProjectionCurveForStore]);
 
   const summaryDashboardStats = useMemo(() => {
     const summary = dashboardSummaryBundle.dashboard;
@@ -1145,8 +1215,7 @@ export function useDashboardStats() {
 
         Object.keys(storeStatsMap).forEach(storeName => {
             const sStats = storeStatsMap[storeName];
-            const storeId = storeName.replace(/\s+/g, '').toLowerCase();
-            const storeCurve = allStoreCurves[storeId] || allStoreCurves["BRAND_TOTAL"] || {};
+            const storeCurve = getProjectionCurveForStore(storeName);
             const cashAverages = storeCurve.cashAverages || {};
             const accrualAverages = storeCurve.accrualAverages || {};
 
@@ -1160,17 +1229,13 @@ export function useDashboardStats() {
                 const futureDate = new Date(y, m - 1, d);
                 const dow = futureDate.getDay();
 
-                const historyCashValue = (cashAverages[dow] !== undefined)
-                    ? cashAverages[dow]
-                    : currentCashDailyAvg;
+                const historyCashValue = getUsableHistoryAverage(cashAverages, dow, currentCashDailyAvg);
 
                 totals.cash.conservative += Math.min(currentCashDailyAvg, historyCashValue);
                 totals.cash.standard += blendByWeights(currentCashDailyAvg, historyCashValue, profile.currentWeight, profile.historyWeight);
                 totals.cash.aggressive += Math.max(currentCashDailyAvg, historyCashValue);
 
-                const historyAccrualValue = (accrualAverages[dow] !== undefined)
-                    ? accrualAverages[dow]
-                    : currentAccrualDailyAvg;
+                const historyAccrualValue = getUsableHistoryAverage(accrualAverages, dow, currentAccrualDailyAvg);
 
                 totals.accrual.conservative += Math.min(currentAccrualDailyAvg, historyAccrualValue);
                 totals.accrual.standard += blendByWeights(currentAccrualDailyAvg, historyAccrualValue, profile.currentWeight, profile.historyWeight);
@@ -1222,7 +1287,7 @@ export function useDashboardStats() {
       storeMonthlyTop3, storeTodayTop3, storeYesterdayTop3 
     };
   // ★ 監視清單換成了包含全部小抄的字典
-  }, [allReports, getBudgetDataForStore, selectedYear, selectedMonth, effectiveStores, brandPrefix, cleanName, allStoreCurves]);
+  }, [allReports, getBudgetDataForStore, selectedYear, selectedMonth, effectiveStores, brandPrefix, cleanName, getProjectionCurveForStore]);
 
   const detailMyStoreRankings = useMemo(() => {
     if (!allReports) return [];
