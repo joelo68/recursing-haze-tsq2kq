@@ -1498,6 +1498,103 @@ const SUMMARY_QUEUE_FALLBACK_INTERVAL_MS = 30 * 60 * 1000;
 const SUMMARY_QUEUE_FALLBACK_CATCHUP_INTERVAL_MS = 5 * 60 * 1000;
 const SUMMARY_QUEUE_FALLBACK_STATE_DOC = "recalc_queue_fallback_scan";
 
+function getTaipeiYearForAnnualKpiSummary() {
+  const now = new Date();
+  const taipei = new Date(now.getTime() + 8 * 60 * 60 * 1000);
+  return taipei.getUTCFullYear();
+}
+
+function getAnnualKpiSummaryCandidateMonths(yearInput) {
+  const year = Number(yearInput) || getTaipeiYearForAnnualKpiSummary();
+  const now = new Date();
+  const taipei = new Date(now.getTime() + 8 * 60 * 60 * 1000);
+  const currentYear = taipei.getUTCFullYear();
+  const currentMonth = taipei.getUTCMonth() + 1;
+  const lastCompletedMonth = year === currentYear ? currentMonth - 1 : (year < currentYear ? 12 : 0);
+
+  if (lastCompletedMonth <= 0) return [];
+
+  return Array.from({ length: lastCompletedMonth }, (_, index) => {
+    const month = String(index + 1).padStart(2, "0");
+    return `${year}-${month}`;
+  });
+}
+
+async function rebuildAnnualKpiSummaryForBrand(brandId, yearInput, options = {}) {
+  const normalizedBrandId = getBackendDirtyBrandId(brandId || "cyj");
+  const year = Number(yearInput) || getTaipeiYearForAnnualKpiSummary();
+  const candidateMonths = getAnnualKpiSummaryCandidateMonths(year);
+  const dashboardSummaryRef = getSummaryCollection(normalizedBrandId, "dashboard_summary");
+  const targetRef = getSummaryCollection(normalizedBrandId, "annual_kpi_summary").doc(String(year));
+  const brandLabel = await getSummaryBrandLabel(normalizedBrandId).catch(() => getSummaryBrandPrefix(normalizedBrandId));
+
+  const totals = {
+    traffic: 0,
+    newCustomers: 0,
+    cash: 0,
+    accrual: 0,
+  };
+  const basedMonths = [];
+  const skippedMonths = [];
+
+  const snaps = await Promise.all(candidateMonths.map((yearMonth) => dashboardSummaryRef.doc(yearMonth).get()));
+
+  snaps.forEach((snap, index) => {
+    const yearMonth = candidateMonths[index];
+    if (!snap.exists) {
+      skippedMonths.push({ yearMonth, reason: "missing_dashboard_summary" });
+      return;
+    }
+
+    const data = snap.data() || {};
+    const grand = data.grandTotal || {};
+    const traffic = Number(grand.traffic || 0);
+    const newCustomers = Number(grand.newCustomers || 0);
+    const cash = Number(grand.cash || 0);
+    const accrual = Number(grand.accrual || 0);
+
+    if (traffic <= 0 && newCustomers <= 0 && cash <= 0 && accrual <= 0) {
+      skippedMonths.push({ yearMonth, reason: "empty_or_zero_summary" });
+      return;
+    }
+
+    totals.traffic += traffic;
+    totals.newCustomers += newCustomers;
+    totals.cash += cash;
+    totals.accrual += accrual;
+    basedMonths.push(yearMonth);
+  });
+
+  const basedMonthCount = basedMonths.length;
+  const payload = {
+    brandId: normalizedBrandId,
+    brandLabel,
+    year,
+    yearText: String(year),
+    source: "dashboard_summary",
+    basis: "completed_months_only",
+    trafficTotal: totals.traffic,
+    newCustomerTotal: totals.newCustomers,
+    cashTotal: totals.cash,
+    accrualTotal: totals.accrual,
+    trafficMonthlyAverage: basedMonthCount > 0 ? Math.round(totals.traffic / basedMonthCount) : 0,
+    newCustomerMonthlyAverage: basedMonthCount > 0 ? Math.round(totals.newCustomers / basedMonthCount) : 0,
+    cashMonthlyAverage: basedMonthCount > 0 ? Math.round(totals.cash / basedMonthCount) : 0,
+    accrualMonthlyAverage: basedMonthCount > 0 ? Math.round(totals.accrual / basedMonthCount) : 0,
+    basedMonths,
+    basedMonthCount,
+    skippedMonths,
+    candidateMonths,
+    trigger: options.trigger || "manual",
+    updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+    updatedAtText: new Date().toISOString(),
+  };
+
+  await targetRef.set(payload, { merge: true });
+  return payload;
+}
+
+
 function normalizeSummaryCoreName(value) {
   const raw = String(value || "")
     .trim()
@@ -2523,6 +2620,62 @@ async function collectReadyDirtySummaryFlags() {
   jobs.push(...Array.from(jobMap.values()).sort((a, b) => `${a.brandId}_${a.yearMonth}`.localeCompare(`${b.brandId}_${b.yearMonth}`)));
   return jobs;
 }
+
+exports.rebuildAnnualKpiSummaryNow = onRequest({ cors: true, timeoutSeconds: 540, memory: "512MiB" }, async (req, res) => {
+  if (req.method === "OPTIONS") {
+    res.set("Access-Control-Allow-Origin", "*");
+    res.set("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
+    res.set("Access-Control-Allow-Headers", "Content-Type, Authorization");
+    return res.status(204).send("");
+  }
+
+  res.set("Access-Control-Allow-Origin", "*");
+
+  try {
+    const body = req.body || {};
+    const rawBrandId = String(req.query.brandId || body.brandId || "all").trim().toLowerCase();
+    const year = Number(req.query.year || body.year || getTaipeiYearForAnnualKpiSummary());
+    const brands = rawBrandId === "all" ? SUMMARY_REPAIR_BRANDS : [rawBrandId || "cyj"];
+
+    const results = [];
+    for (const brandId of brands) {
+      const result = await rebuildAnnualKpiSummaryForBrand(brandId, year, { trigger: "manual_http" });
+      results.push({
+        brandId: result.brandId,
+        brandLabel: result.brandLabel,
+        year: result.year,
+        trafficMonthlyAverage: result.trafficMonthlyAverage,
+        newCustomerMonthlyAverage: result.newCustomerMonthlyAverage,
+        basedMonthCount: result.basedMonthCount,
+        basedMonths: result.basedMonths,
+      });
+    }
+
+    return res.status(200).json({ ok: true, year, results });
+  } catch (error) {
+    console.error("rebuildAnnualKpiSummaryNow failed", error);
+    return res.status(500).json({ ok: false, error: error.message || String(error) });
+  }
+});
+
+exports.rebuildAnnualKpiSummaries = onSchedule({ schedule: "20 5 * * *", timeZone: "Asia/Taipei", timeoutSeconds: 540, memory: "512MiB" }, async () => {
+  const year = getTaipeiYearForAnnualKpiSummary();
+  const results = [];
+
+  for (const brandId of SUMMARY_REPAIR_BRANDS) {
+    try {
+      const result = await rebuildAnnualKpiSummaryForBrand(brandId, year, { trigger: "daily_schedule" });
+      results.push({ brandId, year, basedMonthCount: result.basedMonthCount });
+    } catch (error) {
+      console.error(`rebuildAnnualKpiSummaries failed for ${brandId}`, error);
+      results.push({ brandId, year, error: error.message || String(error) });
+    }
+  }
+
+  console.log("rebuildAnnualKpiSummaries completed", results);
+  return null;
+});
+
 exports.repairDirtySummaryNow = onRequest({ cors: true, timeoutSeconds: 540, memory: "1GiB" }, async (req, res) => {
   const brandId = String(req.query.brandId || "cyj").trim();
   const yearMonth = String(req.query.yearMonth || "").trim();

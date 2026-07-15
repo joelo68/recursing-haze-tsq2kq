@@ -132,7 +132,7 @@ export function useDashboardStats() {
                 if (!raw) return "";
                 if (raw === "BRAND_TOTAL") return "BRAND_TOTAL";
                 return raw
-                  .replace(new RegExp(`^(${brandPrefix}|CYJ|Anew|Yibo|安妞|伊啵)\s*`, 'i'), '')
+                  .replace(new RegExp(`^(${brandPrefix}|CYJ|Anew|Yibo|安妞|伊啵)\\s*`, 'i'), '')
                   .replace(/店$/, '')
                   .replace(/\s+/g, '')
                   .toLowerCase();
@@ -165,6 +165,134 @@ export function useDashboardStats() {
       };
       fetchAllCurves();
   }, [brandInfo, brandPrefix]);
+
+
+  const [annualKpiBenchmark, setAnnualKpiBenchmark] = useState({
+    ready: false,
+    source: "idle",
+    trafficMonthlyAverage: 0,
+    newCustomerMonthlyAverage: 0,
+    basedMonthCount: 0,
+    basedMonths: [],
+    updatedAtText: "",
+    error: null,
+  });
+
+  useEffect(() => {
+    let cancelled = false;
+
+    const loadAnnualKpiBenchmark = async () => {
+      const year = String(selectedYear || "").trim();
+      const brandId = String(brandInfo?.id || "").trim() || "cyj";
+
+      if (!getCollectionPath || !year) {
+        setAnnualKpiBenchmark({
+          ready: true,
+          source: "not_available",
+          trafficMonthlyAverage: 0,
+          newCustomerMonthlyAverage: 0,
+          basedMonthCount: 0,
+          basedMonths: [],
+          updatedAtText: "",
+          error: null,
+        });
+        return;
+      }
+
+      const cacheKey = `cyj_annual_kpi_summary_${brandId}_${year}`;
+      const cacheTtlMs = 60 * 60 * 1000;
+
+      try {
+        if (typeof sessionStorage !== "undefined") {
+          const cachedRaw = sessionStorage.getItem(cacheKey);
+          if (cachedRaw) {
+            const cached = JSON.parse(cachedRaw);
+            if (cached?.cachedAt && Date.now() - Number(cached.cachedAt) < cacheTtlMs) {
+              setAnnualKpiBenchmark({
+                ready: true,
+                source: "session_cache",
+                trafficMonthlyAverage: safeNumber(cached.trafficMonthlyAverage),
+                newCustomerMonthlyAverage: safeNumber(cached.newCustomerMonthlyAverage),
+                basedMonthCount: safeNumber(cached.basedMonthCount),
+                basedMonths: Array.isArray(cached.basedMonths) ? cached.basedMonths : [],
+                updatedAtText: cached.updatedAtText || "",
+                error: null,
+              });
+              return;
+            }
+          }
+        }
+      } catch (error) {
+        // 快取失敗不影響 Dashboard，改讀 Firestore 單一年度摘要 doc。
+      }
+
+      setAnnualKpiBenchmark(prev => ({
+        ...prev,
+        ready: false,
+        source: "loading",
+        error: null,
+      }));
+
+      try {
+        const summaryRef = doc(getCollectionPath("annual_kpi_summary"), year);
+        const snap = await getDoc(summaryRef);
+        if (cancelled) return;
+
+        if (!snap.exists()) {
+          const emptyPayload = {
+            ready: true,
+            source: "missing",
+            trafficMonthlyAverage: 0,
+            newCustomerMonthlyAverage: 0,
+            basedMonthCount: 0,
+            basedMonths: [],
+            updatedAtText: "",
+            error: null,
+          };
+          setAnnualKpiBenchmark(emptyPayload);
+          return;
+        }
+
+        const data = snap.data() || {};
+        const payload = {
+          ready: true,
+          source: "annual_kpi_summary",
+          trafficMonthlyAverage: safeNumber(data.trafficMonthlyAverage),
+          newCustomerMonthlyAverage: safeNumber(data.newCustomerMonthlyAverage),
+          basedMonthCount: safeNumber(data.basedMonthCount || (Array.isArray(data.basedMonths) ? data.basedMonths.length : 0)),
+          basedMonths: Array.isArray(data.basedMonths) ? data.basedMonths : [],
+          updatedAtText: data.updatedAtText || "",
+          error: null,
+        };
+
+        setAnnualKpiBenchmark(payload);
+
+        try {
+          if (typeof sessionStorage !== "undefined") {
+            sessionStorage.setItem(cacheKey, JSON.stringify({ ...payload, cachedAt: Date.now() }));
+          }
+        } catch (error) {
+          // 快取失敗不影響顯示。
+        }
+      } catch (error) {
+        console.warn("讀取年度 KPI 摘要失敗：", error);
+        if (cancelled) return;
+        setAnnualKpiBenchmark({
+          ready: true,
+          source: "error",
+          trafficMonthlyAverage: 0,
+          newCustomerMonthlyAverage: 0,
+          basedMonthCount: 0,
+          basedMonths: [],
+          updatedAtText: "",
+          error: error?.message || String(error),
+        });
+      }
+    };
+
+    loadAnnualKpiBenchmark();
+    return () => { cancelled = true; };
+  }, [getCollectionPath, brandInfo?.id, selectedYear]);
 
   const cleanName = useMemo(() => (name) => {
     if (!name) return "";
@@ -1510,7 +1638,11 @@ export function useDashboardStats() {
     historicalDetailRefreshState?.status === "error"
   ), [isSelectedCurrentMonth, historicalDetailRefreshState, selectedYearMonth]);
 
-  const dashboardStats = summaryDashboardStats || detailDashboardStats;
+  const baseDashboardStats = summaryDashboardStats || detailDashboardStats;
+  const dashboardStats = useMemo(() => {
+    if (!baseDashboardStats) return baseDashboardStats;
+    return { ...baseDashboardStats, annualKpiBenchmark };
+  }, [baseDashboardStats, annualKpiBenchmark]);
   const myStoreRankings = summaryMyStoreRankings || detailMyStoreRankings;
   const therapistStats = summaryTherapistStats || detailTherapistStats;
 
