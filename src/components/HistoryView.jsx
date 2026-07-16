@@ -28,10 +28,12 @@ import { formatLocalYYYYMMDD, toStandardDateFormat, sortStoreNames, sortStoresBy
 const HistoryView = () => {
   const { 
     showToast, managers, managerOrder, userRole, currentUser, logActivity, 
-    getCollectionPath, getDocPath, currentBrand 
+    getCollectionPath, getDocPath, currentBrand, therapistModuleEnabled 
   } = useContext(AppContext);
+
+  const isTherapistModuleEnabled = therapistModuleEnabled !== false;
   
-  const [activeTab, setActiveTab] = useState((userRole === 'trainer' || userRole === 'therapist') ? 'therapist' : 'store');
+  const [activeTab, setActiveTab] = useState((isTherapistModuleEnabled && (userRole === 'trainer' || userRole === 'therapist')) ? 'therapist' : 'store');
   
   const [storeRawData, setStoreRawData] = useState([]);
   const [therapistRawData, setTherapistRawData] = useState([]);
@@ -150,6 +152,19 @@ const HistoryView = () => {
   useEffect(() => {
     if (allStores.length === 1) setFilterStore(allStores[0]);
   }, [allStores]);
+
+  // 品牌關閉管理師模組時，數據修正中心也同步收起管理師日報。
+  // 若使用者原本停在管理師日報，會自動切回店務日報並清空管理師查詢資料。
+  useEffect(() => {
+    if (!isTherapistModuleEnabled && activeTab === "therapist") {
+      setActiveTab("store");
+      setTherapistRawData([]);
+      setEditId(null);
+      setEditForm({});
+      setHasQueried(false);
+      setCurrentPage(1);
+    }
+  }, [isTherapistModuleEnabled, activeTab]);
 
   const getStoreName = (row) => row?.storeName || row?.store || "未註記";
 
@@ -278,6 +293,12 @@ const HistoryView = () => {
       setTherapistRawData([]);
       return;
     }
+
+    if (!isTherapistModuleEnabled && activeTab === "therapist") {
+      setTherapistRawData([]);
+      setIsLoading(false);
+      return;
+    }
     
     if (!queryRange.start || !queryRange.end) return;
     
@@ -307,7 +328,7 @@ const HistoryView = () => {
       }
     };
     fetchData();
-  }, [activeTab, queryRange, getCollectionPath, showToast, currentBrand, hasQueried]);
+  }, [activeTab, queryRange, getCollectionPath, showToast, currentBrand, hasQueried, isTherapistModuleEnabled]);
 
   const normalizeTherapistName = useCallback((value = "") => (
     String(value || "")
@@ -537,7 +558,9 @@ const HistoryView = () => {
               {userRole !== 'trainer' && userRole !== 'therapist' && (
                 <button onClick={() => {setActiveTab("store"); setFilterStore("");}} className={`flex-1 sm:flex-none px-4 py-2 rounded-lg text-sm font-bold flex justify-center items-center gap-2 transition-all ${activeTab === 'store' ? 'bg-white text-stone-800 shadow-sm' : 'text-stone-500 hover:text-stone-700'}`}><Store size={16}/> 店務日報</button>
               )}
-              <button onClick={() => {setActiveTab("therapist"); setFilterStore("");}} className={`flex-1 sm:flex-none px-4 py-2 rounded-lg text-sm font-bold flex justify-center items-center gap-2 transition-all ${activeTab === 'therapist' ? 'bg-white text-stone-800 shadow-sm' : 'text-stone-500 hover:text-stone-700'}`}><User size={16}/> 管理師日報</button>
+              {isTherapistModuleEnabled && (
+                <button onClick={() => {setActiveTab("therapist"); setFilterStore("");}} className={`flex-1 sm:flex-none px-4 py-2 rounded-lg text-sm font-bold flex justify-center items-center gap-2 transition-all ${activeTab === 'therapist' ? 'bg-white text-stone-800 shadow-sm' : 'text-stone-500 hover:text-stone-700'}`}><User size={16}/> 管理師日報</button>
+              )}
            </div>
         </div>
 
