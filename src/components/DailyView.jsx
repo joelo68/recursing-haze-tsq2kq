@@ -16,10 +16,17 @@ const DailyView = () => {
     fmtMoney, fmtNum, userRole, currentUser, 
     managers, managerOrder, currentBrand,
     auditExclusions, handleUpdateAuditExclusions, showToast,
-    therapists, getCollectionPath
+    therapists, getCollectionPath, therapistModuleEnabled
   } = useContext(AppContext);
 
-  const [viewMode, setViewMode] = useState((userRole === 'therapist' || userRole === 'trainer') ? 'therapist' : 'store');
+  const isTherapistModuleEnabled = therapistModuleEnabled !== false;
+  const [viewMode, setViewMode] = useState((isTherapistModuleEnabled && (userRole === 'therapist' || userRole === 'trainer')) ? 'therapist' : 'store');
+
+  useEffect(() => {
+    if (!isTherapistModuleEnabled && viewMode === 'therapist') {
+      setViewMode('store');
+    }
+  }, [isTherapistModuleEnabled, viewMode]);
 
   const [selectedDate, setSelectedDate] = useState(() => {
     const d = new Date();
@@ -66,22 +73,29 @@ const DailyView = () => {
       setDailyStoreReports(snapshot.docs.map(d => d.data()));
     });
 
-    // 查詢管理師日報 (精準綁定日期)
-    const therapistQuery = query(
-      getCollectionPath("therapist_daily_reports"), 
-      where("date", "==", selectedDate)
-    );
+    let unsubTherapist = null;
 
-    const unsubTherapist = onSnapshot(therapistQuery, (snapshot) => {
-      setDailyTherapistReports(snapshot.docs.map(d => d.data()));
-      setIsLoading(false); // 兩個都抓完才解除載入狀態
-    });
+    if (isTherapistModuleEnabled) {
+      // 查詢管理師日報 (精準綁定日期)
+      const therapistQuery = query(
+        getCollectionPath("therapist_daily_reports"), 
+        where("date", "==", selectedDate)
+      );
+
+      unsubTherapist = onSnapshot(therapistQuery, (snapshot) => {
+        setDailyTherapistReports(snapshot.docs.map(d => d.data()));
+        setIsLoading(false); // 兩個都抓完才解除載入狀態
+      });
+    } else {
+      setDailyTherapistReports([]);
+      setIsLoading(false);
+    }
 
     return () => {
       unsubStore();
-      unsubTherapist();
+      if (unsubTherapist) unsubTherapist();
     };
-  }, [selectedDate, currentBrand, getCollectionPath]);
+  }, [selectedDate, currentBrand, getCollectionPath, isTherapistModuleEnabled]);
 
   const { brandInfo, brandPrefix } = useMemo(() => {
     let id = "CYJ", name = "CYJ"; 
@@ -278,7 +292,7 @@ const DailyView = () => {
                 </div>
               </div>
 
-              {userRole !== 'therapist' && userRole !== 'trainer' && (
+              {userRole !== 'therapist' && userRole !== 'trainer' && isTherapistModuleEnabled && (
                 <>
                   <div className="hidden sm:block w-px h-10 bg-stone-100"></div>
                   <div className="bg-stone-100/80 p-1 rounded-2xl flex shadow-inner w-fit border border-stone-200/50">
@@ -421,7 +435,7 @@ const DailyView = () => {
             )}
 
             {/* 人員績效視圖 */}
-            {viewMode === 'therapist' && (
+            {isTherapistModuleEnabled && viewMode === 'therapist' && (
               <div className="space-y-6 animate-in fade-in slide-in-from-bottom-4 duration-500 w-full min-w-0">
                 <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-4">
                   <MiniKpiCard title="單日管理師總業績" value={fmtMoney(therapistDailyData.totals.totalRev)} icon={DollarSign} color={{bg: 'bg-indigo-50', text: 'text-indigo-600'}} />

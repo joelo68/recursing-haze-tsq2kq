@@ -1,5 +1,5 @@
 // src/components/DashboardHeader.jsx
-import React, { useContext } from "react";
+import React, { useContext, useEffect } from "react";
 import { Store as StoreIcon, User, CheckCircle2, AlertTriangle, Clock3, Database, Radio } from "lucide-react";
 import { AppContext } from "../AppContext";
 
@@ -9,7 +9,14 @@ const DashboardHeader = ({
   selectedDashboardStore, setSelectedDashboardStore,
   groupedStoresForFilter, availableStoresForDropdown
 }) => {
-  const { userRole } = useContext(AppContext);
+  const { userRole, therapistModuleEnabled } = useContext(AppContext);
+  const isTherapistModuleEnabled = therapistModuleEnabled !== false;
+
+  useEffect(() => {
+    if (!isTherapistModuleEnabled && viewMode === "therapist") {
+      setViewMode("store");
+    }
+  }, [isTherapistModuleEnabled, viewMode, setViewMode]);
 
 
   const summaryStatus = dashboardSummaryStatus || {};
@@ -111,7 +118,7 @@ const DashboardHeader = ({
             </div>
           </div>
 
-          {userRole !== 'therapist' && userRole !== 'trainer' && (
+          {userRole !== 'therapist' && userRole !== 'trainer' && isTherapistModuleEnabled && (
             <>
               <div className="hidden sm:block w-px h-10 bg-stone-100"></div>
               <div className="bg-stone-100/80 p-1 rounded-2xl flex shadow-inner w-fit border border-stone-200/50">

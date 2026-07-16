@@ -83,12 +83,20 @@ export function useDashboardStats() {
     targets, userRole, currentUser, 
     allReports, budgets, monthlyTargetSummary, managers, managerOrder = [], selectedYear, selectedMonth, therapistReports,
     currentBrand, therapists, dailyLoginCount, yesterdayLoginCount,
-    therapistAnnualAggregatedData, getCollectionPath, historicalDetailRefreshState 
+    therapistAnnualAggregatedData, getCollectionPath, historicalDetailRefreshState,
+    therapistModuleEnabled
   } = useContext(AppContext);
 
-  const [viewMode, setViewMode] = useState((userRole === 'therapist' || userRole === 'trainer') ? 'therapist' : 'store');
+  const isTherapistModuleEnabled = therapistModuleEnabled !== false;
+  const [viewMode, setViewMode] = useState((isTherapistModuleEnabled && (userRole === 'therapist' || userRole === 'trainer')) ? 'therapist' : 'store');
   const [selectedDashboardManager, setSelectedDashboardManager] = useState("");
   const [selectedDashboardStore, setSelectedDashboardStore] = useState("");
+
+  useEffect(() => {
+    if (!isTherapistModuleEnabled && viewMode === 'therapist') {
+      setViewMode('store');
+    }
+  }, [isTherapistModuleEnabled, viewMode]);
 
   useEffect(() => {
     try {
@@ -1639,6 +1647,7 @@ export function useDashboardStats() {
 
   const detailTherapistStats = useMemo(() => {
     const emptyTherapistStats = { rankings: [], myStats: null, grandTotal: {}, yesterdayTop3: [], todayTop3: [], myYearlyTotal: 0, source: "not_loaded" };
+    if (!isTherapistModuleEnabled) return emptyTherapistStats;
     if (viewMode !== "therapist" && userRole !== "therapist" && userRole !== "trainer") return emptyTherapistStats;
     if (!therapistReports) return emptyTherapistStats; 
     
@@ -1805,7 +1814,7 @@ export function useDashboardStats() {
     });
 
     return { rankings, myStats, grandTotal, yesterdayTop3, todayTop3, myYearlyTotal };
-  }, [therapistReports, selectedYear, selectedMonth, therapistEffectiveStores, allReports, cleanName, userRole, currentUser, therapists, therapistAnnualAggregatedData, viewMode]);
+  }, [therapistReports, selectedYear, selectedMonth, therapistEffectiveStores, allReports, cleanName, userRole, currentUser, therapists, therapistAnnualAggregatedData, viewMode, isTherapistModuleEnabled]);
 
   const isHistoricalDetailRefreshing = useMemo(() => (
     !isSelectedCurrentMonth &&
@@ -1825,7 +1834,7 @@ export function useDashboardStats() {
     return { ...baseDashboardStats, annualKpiBenchmark: effectiveAnnualKpiBenchmark };
   }, [baseDashboardStats, effectiveAnnualKpiBenchmark]);
   const myStoreRankings = summaryMyStoreRankings || detailMyStoreRankings;
-  const therapistStats = summaryTherapistStats || detailTherapistStats;
+  const therapistStats = isTherapistModuleEnabled ? (summaryTherapistStats || detailTherapistStats) : { rankings: [], myStats: null, grandTotal: {}, yesterdayTop3: [], todayTop3: [], myYearlyTotal: 0, source: "module_disabled" };
 
   return {
     viewMode, setViewMode,

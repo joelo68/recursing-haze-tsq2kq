@@ -140,7 +140,7 @@ const SettingsView = () => {
     therapists, therapistTargets, therapistSchedules,
     trainerAuth, handleUpdateTrainerAuth,
     getDocPath, getCollectionPath,
-    currentBrand, securityConfig,
+    currentBrand, securityConfig, featureFlags,
     fetchGlobalData // ★ 新增：提取單次抓取函數
   } = useContext(AppContext);
 
@@ -173,6 +173,10 @@ const SettingsView = () => {
   };
 
   const [localSecurityConfig, setLocalSecurityConfig] = useState(DEFAULT_SECURITY_CONFIG);
+  const [localFeatureFlags, setLocalFeatureFlags] = useState({
+    therapistModuleEnabled: true,
+  });
+
 
   const { brandKey, brandLabel } = useMemo(() => {
     let key = "default"; let label = "通用預設 (CYJ)";
@@ -217,6 +221,13 @@ const SettingsView = () => {
       });
     }
   }, [securityConfig]);
+
+  useEffect(() => {
+    setLocalFeatureFlags({
+      therapistModuleEnabled: featureFlags?.therapistModuleEnabled !== false,
+      ...(featureFlags || {}),
+    });
+  }, [featureFlags]);
 
   const [newStoreAccount, setNewStoreAccount] = useState({ name: "", password: "", stores: "" });
   const [editingStoreAccount, setEditingStoreAccount] = useState(null);
@@ -265,6 +276,7 @@ const SettingsView = () => {
       { id: "kpi", label: "KPI 參數", isAdminOnly: true, icon: Target },
       { id: "health", label: "標準設定", isAdminOnly: true, icon: Activity },
       { id: "permissions", label: "權限資安", isAdminOnly: true, icon: Shield },
+      { id: "feature-flags", label: "品牌功能", isAdminOnly: true, icon: CheckSquare },
       { id: "trainer-account", label: "教專帳號", isAdminOnly: true, icon: Users }, 
       { id: "shops", label: "店家管理", isAdminOnly: true, icon: Store },
       { id: "stores", label: "店經帳號", isAdminOnly: true, icon: UserCheck },
@@ -545,6 +557,26 @@ const SettingsView = () => {
       console.error(e);
       showToast("更新失敗", "error");
     } 
+  };
+
+  const handleSaveFeatureFlags = async () => {
+    try {
+      const payload = {
+        ...localFeatureFlags,
+        therapistModuleEnabled: localFeatureFlags.therapistModuleEnabled !== false,
+        updatedAtText: new Date().toISOString(),
+        updatedBy: currentUser?.name || userRole || "system",
+        updatedByRole: userRole || "",
+      };
+
+      await setDoc(getDocPath("feature_flags"), payload, { merge: true });
+      setLocalFeatureFlags(payload);
+      showToast("品牌功能設定已更新", "success");
+      if (fetchGlobalData) fetchGlobalData();
+    } catch (e) {
+      console.error("品牌功能設定儲存失敗:", e);
+      showToast("品牌功能設定儲存失敗", "error");
+    }
   };
 
   const handleBenchmarkChange = (categoryId, field, value, type) => {
@@ -1177,6 +1209,61 @@ const SettingsView = () => {
           </div>
         )}
         
+
+        {activeTab === "feature-flags" && (
+          <Card title="品牌功能開關">
+            <div className="space-y-5 w-full max-w-3xl">
+              <div className="rounded-2xl border border-[#EFE7DA] bg-[#FFFCF7] p-5">
+                <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
+                  <div className="min-w-0">
+                    <div className="flex items-center gap-2 text-[#4D4338] font-black">
+                      <CheckSquare size={18} className="text-[#B7863D]" />
+                      管理師模組
+                    </div>
+                    <p className="mt-2 text-sm font-bold leading-6 text-[#A69C91]">
+                      關閉後，該品牌會暫時隱藏管理師日報、管理師目標、人員績效等分頁，並停止不必要的管理師資料讀取。未來需要時可立即重新開啟。
+                    </p>
+                    <p className="mt-2 text-xs font-black text-[#B7863D]">
+                      目前品牌：{currentBrand?.label || currentBrand?.name || brandLabel}
+                    </p>
+                  </div>
+
+                  <button
+                    type="button"
+                    onClick={() => setLocalFeatureFlags((prev) => ({
+                      ...prev,
+                      therapistModuleEnabled: !(prev.therapistModuleEnabled !== false),
+                    }))}
+                    className={`shrink-0 w-20 h-10 rounded-full p-1 transition-all ${localFeatureFlags.therapistModuleEnabled !== false ? 'bg-emerald-500' : 'bg-stone-300'}`}
+                    title={localFeatureFlags.therapistModuleEnabled !== false ? "目前開啟" : "目前關閉"}
+                  >
+                    <span className={`block w-8 h-8 rounded-full bg-white shadow-md transition-transform ${localFeatureFlags.therapistModuleEnabled !== false ? 'translate-x-10' : 'translate-x-0'}`} />
+                  </button>
+                </div>
+
+                <div className={`mt-4 rounded-2xl border px-4 py-3 text-sm font-black ${localFeatureFlags.therapistModuleEnabled !== false ? "border-emerald-100 bg-emerald-50 text-emerald-700" : "border-rose-100 bg-rose-50 text-rose-700"}`}>
+                  {localFeatureFlags.therapistModuleEnabled !== false
+                    ? "目前狀態：管理師模組已開啟。"
+                    : "目前狀態：管理師模組已關閉，前台將只顯示門市營運相關功能。"}
+                </div>
+              </div>
+
+              <div className="rounded-2xl bg-[#FFF7DF]/70 border border-[#F3DFB8] p-4 text-xs text-[#8A632E] font-bold leading-relaxed">
+                這是品牌層級設定，只會影響目前選擇的品牌，不會影響其他品牌。設定儲存後會立即重新抓取全域設定。
+              </div>
+
+              <div className="flex justify-end">
+                <button
+                  onClick={handleSaveFeatureFlags}
+                  className="w-full md:w-auto bg-gradient-to-r from-[#FFF7DF] via-[#F7E8C6] to-[#EACB86] text-[#5A4225] border border-[#E8C77A] px-8 py-3 rounded-xl font-bold hover:brightness-[1.02] shadow-lg active:scale-95 transition-all flex items-center gap-2 justify-center"
+                >
+                  <Save size={18} /> 儲存品牌功能設定
+                </button>
+              </div>
+            </div>
+          </Card>
+        )}
+
         {activeTab === "trainer-account" && (
           <Card title="教專帳號管理">
             <div className="w-full space-y-6 min-w-0">

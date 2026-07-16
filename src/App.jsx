@@ -152,6 +152,16 @@ const DEFAULT_SECURITY_CONFIG = {
   logoutWarningSeconds: 60,
 };
 
+const DEFAULT_FEATURE_FLAGS = {
+  therapistModuleEnabled: true,
+};
+
+const normalizeFeatureFlags = (flags = {}) => ({
+  ...DEFAULT_FEATURE_FLAGS,
+  ...(flags || {}),
+  therapistModuleEnabled: flags?.therapistModuleEnabled !== false,
+});
+
 
 const LEGACY_TRAINER_ID = "trainer_default";
 
@@ -769,6 +779,7 @@ export default function App() {
   const [auditExclusions, setAuditExclusions] = useState([]);
 
   const [securityConfig, setSecurityConfig] = useState(DEFAULT_SECURITY_CONFIG);
+  const [featureFlags, setFeatureFlags] = useState(DEFAULT_FEATURE_FLAGS);
 
   const [selectedYear, setSelectedYear] = useState(new Date().getFullYear().toString());
   const [selectedMonth, setSelectedMonth] = useState((new Date().getMonth() + 1).toString());
@@ -785,6 +796,18 @@ export default function App() {
     if (!profile.allowedViews) return true;
     return profile.allowedViews.has(viewId);
   }, [userRole, currentUser?.isMasterLogin, directorLevel]);
+
+  const therapistModuleEnabled = featureFlags?.therapistModuleEnabled !== false;
+
+  useEffect(() => {
+    if (!therapistModuleEnabled) {
+      if (dashboardViewMode === "therapist") setDashboardViewMode("store");
+      if (auditType === "therapist-daily" || auditType === "therapist-target") setAuditType("daily");
+      if (activeView === "t-targets" || activeView === "t-schedule" || activeView === "therapist-manager") {
+        setActiveView("dashboard");
+      }
+    }
+  }, [therapistModuleEnabled, dashboardViewMode, auditType, activeView]);
 
   const handleProtectedSetActiveView = useCallback((nextView) => {
     if (!canDirectorAccessView(nextView)) {
@@ -1473,7 +1496,7 @@ export default function App() {
   const fetchGlobalData = useCallback(async () => {
     if (!user) return;
     try {
-      const [orgSnap, accSnap, mAuthSnap, permSnap, thSnap, trAuthSnap, audSnap, secSnap, dAuthSnap, mastSnap] = await Promise.all([
+      const [orgSnap, accSnap, mAuthSnap, permSnap, thSnap, trAuthSnap, audSnap, secSnap, featureSnap, dAuthSnap, mastSnap] = await Promise.all([
         getDoc(getDocPath("org_structure")),
         getDoc(getDocPath("store_account_data")),
         getDoc(getDocPath("manager_auth")),
@@ -1482,11 +1505,12 @@ export default function App() {
         getDoc(getDocPath("trainer_auth")),
         getDoc(getDocPath("audit_exclusions")),
         getDoc(getDocPath("security_config")),
+        getDoc(getDocPath("feature_flags")),
         getDoc(getDocPath("director_auth")),
         getDoc(getDocPath("master_auth"))
       ]);
 
-      trackReadSource("fetchGlobalData_core_docs", 9, getStableReadMeta("fetchGlobalData_core_docs"));
+      trackReadSource("fetchGlobalData_core_docs", 10, getStableReadMeta("fetchGlobalData_core_docs"));
       trackReadSource("fetchGlobalData_therapists", thSnap.docs.length, getStableReadMeta("fetchGlobalData_therapists"));
 
       if (orgSnap.exists()) {
@@ -1531,6 +1555,7 @@ export default function App() {
       setTrainerAuth(normalizeTrainerAuthData(trAuthSnap.exists() ? trAuthSnap.data() : { password: "0000" }));
       setAuditExclusions(audSnap.exists() ? (audSnap.data().stores || []) : []);
       setSecurityConfig(secSnap.exists() ? normalizeSecurityConfig(secSnap.data()) : DEFAULT_SECURITY_CONFIG);
+      setFeatureFlags(featureSnap.exists() ? normalizeFeatureFlags(featureSnap.data()) : DEFAULT_FEATURE_FLAGS);
 
       if (dAuthSnap.exists()) {
          let data = normalizeDirectorAuthData(dAuthSnap.data());
@@ -1786,6 +1811,7 @@ useEffect(() => {
     setTherapistTargets({});
     setPermissions(DEFAULT_PERMISSIONS);
     setSecurityConfig(DEFAULT_SECURITY_CONFIG);
+    setFeatureFlags(DEFAULT_FEATURE_FLAGS);
 
     fetchGlobalData();
   }, [user, currentBrandId, fetchGlobalData]);
@@ -1802,8 +1828,8 @@ useEffect(() => {
         const cacheTtlMs = 10 * 60 * 1000;
         const nowMs = Date.now();
 
-        const shouldLoadSchedules = activeView === "t-schedule" || (activeView === "audit" && auditType === "therapist-daily");
-        const shouldLoadTherapistTargets = activeView === "dashboard" || activeView === "t-targets" || (activeView === "audit" && auditType === "therapist-target");
+        const shouldLoadSchedules = therapistModuleEnabled && (activeView === "t-schedule" || (activeView === "audit" && auditType === "therapist-daily"));
+        const shouldLoadTherapistTargets = therapistModuleEnabled && (activeView === "dashboard" || activeView === "t-targets" || (activeView === "audit" && auditType === "therapist-target"));
 
         if (shouldLoadSchedules) {
           const scheduleCacheKey = `${currentBrand.id}_${targetYearStr}_therapist_schedules_v2`;
@@ -1858,7 +1884,7 @@ useEffect(() => {
         try { unsubscribe && unsubscribe(); } catch (error) { console.warn("low frequency unsubscribe failed", error); }
       });
     };
-  }, [user, currentBrandId, currentBrand, getCollectionPath, selectedYear, activeView, auditType, getStableReadMeta]);
+  }, [user, currentBrandId, currentBrand, getCollectionPath, selectedYear, activeView, auditType, therapistModuleEnabled, getStableReadMeta]);
 
   useEffect(() => {
     if (!user) {
@@ -2080,9 +2106,10 @@ useEffect(() => {
         )
       );
 
-    const shouldLoadTherapistReportData =
+    const shouldLoadTherapistReportData = therapistModuleEnabled && (
       MONTHLY_THERAPIST_REPORT_DATA_VIEWS.has(activeView) ||
-      (activeView === "dashboard" && (dashboardViewMode === "therapist" || userRole === "therapist" || userRole === "trainer"));
+      (activeView === "dashboard" && (dashboardViewMode === "therapist" || userRole === "therapist" || userRole === "trainer"))
+    );
 
     if (!user || isLowPowerMode || (!shouldLoadDailyReportData && !shouldLoadTherapistReportData)) {
       setRawData([]);
@@ -2225,7 +2252,7 @@ useEffect(() => {
         isMounted = false; 
       };
     }
-  }, [user, currentBrand, selectedYear, selectedMonth, activeView, dashboardViewMode, storeAnalysisSelectedStore, userRole, currentDashboardSummary, currentReportSummaryReady, getCollectionPath, getStableReadMeta, isLowPowerMode, historicalDetailRefreshToken]);
+  }, [user, currentBrand, selectedYear, selectedMonth, activeView, dashboardViewMode, storeAnalysisSelectedStore, userRole, therapistModuleEnabled, currentDashboardSummary, currentReportSummaryReady, getCollectionPath, getStableReadMeta, isLowPowerMode, historicalDetailRefreshToken]);
 
 
  const handleLogin = useCallback(async (roleId, userInfo = null) => {
@@ -2623,13 +2650,13 @@ useEffect(() => {
     user, loading, analytics, managers: visibleManagers, managerOrder: visibleManagerOrder, budgets, monthlyTargetSummary, currentDashboardSummary, currentRankingsSummary, currentReportSummaryReady, historicalDetailRefreshState, targets, rawData: visibleRawData, allReports: rawData, 
     annualAggregatedData, annualDashboardSummaries, annualSummaryStatusMap, therapistAnnualAggregatedData, // ★ 把年度 Summary 與管理師資料交出去
     showToast, openConfirm, fmtMoney, fmtNum, inputDate, setInputDate, storeList: analytics?.storeList || [], setTargets, selectedYear, selectedMonth, permissions, storeAccounts, managerAuth, currentUser, userRole, logActivity, handleUpdateStorePassword, handleUpdateManagerPassword, handleUpdateTherapistPassword, navigateToStore, activeView, appId, 
-    therapists: visibleTherapists, therapistReports: visibleTherapistReports, therapistSchedules, therapistTargets, trainerAuth, handleUpdateTrainerAuth, auditExclusions, handleUpdateAuditExclusions, currentBrand, setCurrentBrandId, getCollectionPath, getDocPath, dailyLoginCount, yesterdayLoginCount, securityConfig, isOnline, isLowPowerMode,
+    therapists: visibleTherapists, therapistReports: visibleTherapistReports, therapistSchedules, therapistTargets, trainerAuth, handleUpdateTrainerAuth, auditExclusions, handleUpdateAuditExclusions, currentBrand, setCurrentBrandId, getCollectionPath, getDocPath, dailyLoginCount, yesterdayLoginCount, securityConfig, featureFlags, therapistModuleEnabled, isOnline, isLowPowerMode,
     fetchGlobalData,
     directorLevel,
     directorPermissionProfile,
     canDirectorAccessView,
     isReadOnlyDirector: userRole === "director" && !canDirectorAccessView("history")
-  }), [user, loading, analytics, visibleManagers, visibleManagerOrder, budgets, monthlyTargetSummary, currentDashboardSummary, currentRankingsSummary, currentReportSummaryReady, historicalDetailRefreshState, targets, visibleRawData, rawData, annualAggregatedData, annualDashboardSummaries, annualSummaryStatusMap, therapistAnnualAggregatedData, inputDate, selectedYear, selectedMonth, permissions, storeAccounts, managerAuth, currentUser, userRole, logActivity, handleUpdateStorePassword, handleUpdateManagerPassword, handleUpdateTherapistPassword, navigateToStore, activeView, appId, visibleTherapists, visibleTherapistReports, therapistSchedules, therapistTargets, trainerAuth, handleUpdateTrainerAuth, auditExclusions, handleUpdateAuditExclusions, currentBrand, setCurrentBrandId, getCollectionPath, getDocPath, dailyLoginCount, yesterdayLoginCount, securityConfig, isOnline, isLowPowerMode, fetchGlobalData, directorLevel, directorPermissionProfile, canDirectorAccessView]); // ★ 依賴陣列也要加
+  }), [user, loading, analytics, visibleManagers, visibleManagerOrder, budgets, monthlyTargetSummary, currentDashboardSummary, currentRankingsSummary, currentReportSummaryReady, historicalDetailRefreshState, targets, visibleRawData, rawData, annualAggregatedData, annualDashboardSummaries, annualSummaryStatusMap, therapistAnnualAggregatedData, inputDate, selectedYear, selectedMonth, permissions, storeAccounts, managerAuth, currentUser, userRole, logActivity, handleUpdateStorePassword, handleUpdateManagerPassword, handleUpdateTherapistPassword, navigateToStore, activeView, appId, visibleTherapists, visibleTherapistReports, therapistSchedules, therapistTargets, trainerAuth, handleUpdateTrainerAuth, auditExclusions, handleUpdateAuditExclusions, currentBrand, setCurrentBrandId, getCollectionPath, getDocPath, dailyLoginCount, yesterdayLoginCount, securityConfig, featureFlags, therapistModuleEnabled, isOnline, isLowPowerMode, fetchGlobalData, directorLevel, directorPermissionProfile, canDirectorAccessView]); // ★ 依賴陣列也要加
   
   const memoizedViews = useMemo(() => {
     return (

@@ -26,8 +26,10 @@ const AuditView = ({ auditType: controlledAuditType, setAuditType: setControlled
   const {
     managers, managerOrder, showToast, budgets, selectedYear, selectedMonth, rawData,
     therapists, therapistReports, therapistSchedules, userRole, therapistTargets,
-    auditExclusions = [], handleUpdateAuditExclusions, currentBrand
+    auditExclusions = [], handleUpdateAuditExclusions, currentBrand, therapistModuleEnabled
   } = useContext(AppContext);
+
+  const isTherapistModuleEnabled = therapistModuleEnabled !== false;
 
   const [checkDate, setCheckDate] = useState(formatLocalYYYYMMDD(new Date()));
   const [localAuditType, setLocalAuditType] = useState(userRole === 'trainer' ? "therapist-daily" : "daily");
@@ -36,12 +38,16 @@ const AuditView = ({ auditType: controlledAuditType, setAuditType: setControlled
   const [isConfigModalOpen, setIsConfigModalOpen] = useState(false);
   const [localExclusions, setLocalExclusions] = useState([]);
 
-  // trainer 角色只能使用管理師檢核；auditType 由 App 控制時也要保留原本預設行為。
+  // trainer 角色預設使用管理師檢核；若品牌關閉管理師模組，則強制回到店家日報。
   useEffect(() => {
-    if (userRole === 'trainer' && auditType !== 'therapist-daily' && auditType !== 'therapist-target') {
+    if (!isTherapistModuleEnabled && (auditType === 'therapist-daily' || auditType === 'therapist-target')) {
+      setAuditType('daily');
+      return;
+    }
+    if (isTherapistModuleEnabled && userRole === 'trainer' && auditType !== 'therapist-daily' && auditType !== 'therapist-target') {
       setAuditType('therapist-daily');
     }
-  }, [userRole, auditType, setAuditType]);
+  }, [userRole, auditType, setAuditType, isTherapistModuleEnabled]);
 
   useEffect(() => {
     if (!checkDate || !selectedYear || !selectedMonth) return;
@@ -478,8 +484,12 @@ const AuditView = ({ auditType: controlledAuditType, setAuditType: setControlled
                   <button onClick={() => setAuditType("target")} className={`px-4 py-2 rounded-lg text-sm font-bold transition-all ${auditType === "target" ? "bg-white text-stone-800 shadow-sm" : "text-stone-400"}`}>店家目標</button>
                 </>
               )}
-              <button onClick={() => setAuditType("therapist-daily")} className={`px-4 py-2 rounded-lg text-sm font-bold transition-all ${auditType === "therapist-daily" ? "bg-white text-stone-800 shadow-sm" : "text-stone-400"}`}>管理師日報</button>
-              <button onClick={() => setAuditType("therapist-target")} className={`px-4 py-2 rounded-lg text-sm font-bold transition-all ${auditType === "therapist-target" ? "bg-white text-stone-800 shadow-sm" : "text-stone-400"}`}>管理師目標</button>
+              {isTherapistModuleEnabled && (
+                <>
+                  <button onClick={() => setAuditType("therapist-daily")} className={`px-4 py-2 rounded-lg text-sm font-bold transition-all ${auditType === "therapist-daily" ? "bg-white text-stone-800 shadow-sm" : "text-stone-400"}`}>管理師日報</button>
+                  <button onClick={() => setAuditType("therapist-target")} className={`px-4 py-2 rounded-lg text-sm font-bold transition-all ${auditType === "therapist-target" ? "bg-white text-stone-800 shadow-sm" : "text-stone-400"}`}>管理師目標</button>
+                </>
+              )}
             </div>
 
             <div className="flex gap-2 items-center w-full sm:w-auto">

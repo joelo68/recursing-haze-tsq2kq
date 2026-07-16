@@ -1,8 +1,20 @@
 // src/components/Navigation.jsx
-import React, { useMemo, useContext } from "react";
+import React, { useMemo, useContext, useEffect } from "react";
 import { User, LogOut, Sparkles, Coffee, Crown } from "lucide-react";
 import { ROLES, ALL_MENU_ITEMS } from "../constants";
 import { AppContext } from "../AppContext";
+
+const THERAPIST_MODULE_MENU_IDS = new Set(["t-targets", "t-schedule", "therapist-manager"]);
+
+const isTherapistModuleMenuItem = (item = {}) => (
+  item.requiresTherapistModule === true || THERAPIST_MODULE_MENU_IDS.has(item.id)
+);
+
+const filterMenuItemsByFeatureFlags = (items = [], therapistModuleEnabled = true) => {
+  if (therapistModuleEnabled !== false) return items;
+  return items.filter((item) => !isTherapistModuleMenuItem(item));
+};
+
 
 export const Sidebar = ({
   activeView,
@@ -16,7 +28,7 @@ export const Sidebar = ({
   canAccessView,
 }) => {
   // ★★★ 1. 引入 AppContext 取得當前品牌 ★★★
-  const { currentBrand } = useContext(AppContext);
+  const { currentBrand, therapistModuleEnabled } = useContext(AppContext);
 
   // ★★★ 2. 定義品牌主題與樣式 ★★★
   const brandConfig = useMemo(() => {
@@ -82,11 +94,19 @@ export const Sidebar = ({
       ? ALL_MENU_ITEMS
       : ALL_MENU_ITEMS.filter((item) => (permissions?.[userRole] || []).includes(item.id));
 
-    return baseItems.filter((item) => {
+    const featureFilteredItems = filterMenuItemsByFeatureFlags(baseItems, therapistModuleEnabled);
+
+    return featureFilteredItems.filter((item) => {
       if (typeof canAccessView !== "function") return true;
       return canAccessView(item.id);
     });
-  }, [userRole, permissions, canAccessView]);
+  }, [userRole, permissions, canAccessView, therapistModuleEnabled]);
+
+  useEffect(() => {
+    if (therapistModuleEnabled === false && THERAPIST_MODULE_MENU_IDS.has(activeView)) {
+      setActiveView("dashboard");
+    }
+  }, [therapistModuleEnabled, activeView, setActiveView]);
 
   return (
     <>
@@ -163,7 +183,7 @@ export const Sidebar = ({
 
 export const MobileTopNav = ({ activeView, setActiveView, permissions, userRole, onLogout, canAccessView }) => {
   // ★★★ 手機版也需要 Context 來變色 ★★★
-  const { currentBrand } = useContext(AppContext);
+  const { currentBrand, therapistModuleEnabled } = useContext(AppContext);
 
   const themeClass = useMemo(() => {
     const id = currentBrand?.id || 'cyj';
@@ -179,11 +199,19 @@ export const MobileTopNav = ({ activeView, setActiveView, permissions, userRole,
       ? ALL_MENU_ITEMS
       : ALL_MENU_ITEMS.filter((item) => (permissions?.[userRole] || []).includes(item.id));
 
-    return baseItems.filter((item) => {
+    const featureFilteredItems = filterMenuItemsByFeatureFlags(baseItems, therapistModuleEnabled);
+
+    return featureFilteredItems.filter((item) => {
       if (typeof canAccessView !== "function") return true;
       return canAccessView(item.id);
     });
-  }, [userRole, permissions, canAccessView]);
+  }, [userRole, permissions, canAccessView, therapistModuleEnabled]);
+
+  useEffect(() => {
+    if (therapistModuleEnabled === false && THERAPIST_MODULE_MENU_IDS.has(activeView)) {
+      setActiveView("dashboard");
+    }
+  }, [therapistModuleEnabled, activeView, setActiveView]);
 
   return (
     <div className="md:hidden bg-white border-b border-stone-200 overflow-x-auto no-scrollbar">
