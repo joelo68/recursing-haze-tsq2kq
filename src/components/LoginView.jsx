@@ -1,8 +1,8 @@
 // src/components/LoginView.jsx
-import React, { useState, useEffect, useMemo } from "react";
+import React, { useState, useEffect, useMemo, useRef, useCallback } from "react";
 import { 
   Coffee, AlertCircle, Loader2, MapPin, Store, UserCheck, Lock, 
-  Sparkles, Crown, ArrowRight, ChevronLeft, Heart 
+  Sparkles, Crown, ArrowRight, ChevronLeft, Heart, CheckCircle2, RefreshCw 
 } from "lucide-react";
 import { ROLES, BRANDS } from "../constants/index"; 
 import { sortManagersByOrgOrder, sortStoresByOrgOrder, sortTherapistsByStoreThenName, normalizeStoreCoreName, zhCompare } from "../utils/helpers";
@@ -27,9 +27,9 @@ const LoginView = ({
   onSwitchBrand,
   therapists = [],
   hasSelectedBrand = false,
-  accountDirectoryStatus = "loading",
+  accountDirectoryStatus = "ready",
   accountDirectoryError = "",
-  onRetryAccountDirectory
+  onRetryAccountDirectory = null,
 }) => {
   const [showBrandSelector, setShowBrandSelector] = useState(!hasSelectedBrand);
 
@@ -61,15 +61,92 @@ const LoginView = ({
 
   const themeColors = useMemo(() => {
     switch(currentBrandId) {
-      case 'anniu': return { text: "text-rose-900", accent: "bg-rose-600 hover:bg-rose-700", border: "focus:border-rose-400", ring: "focus:ring-rose-100" };
-      case 'yibo': return { text: "text-yellow-900", accent: "bg-yellow-500 hover:bg-yellow-600", border: "focus:border-yellow-400", ring: "focus:ring-yellow-100" };
-      default: return { text: "text-stone-800", accent: "bg-stone-800 hover:bg-stone-900", border: "focus:border-stone-400", ring: "focus:ring-stone-100" }; 
+      case 'anniu': return { text: "text-rose-900", accent: "bg-rose-600 hover:bg-rose-700", border: "focus:border-rose-400", ring: "focus:ring-rose-100", soft: "bg-rose-50/80 border-rose-100", glow: "shadow-rose-100/80", statusText: "text-rose-700", dot: "bg-rose-400" };
+      case 'yibo': return { text: "text-yellow-900", accent: "bg-yellow-500 hover:bg-yellow-600", border: "focus:border-yellow-400", ring: "focus:ring-yellow-100", soft: "bg-yellow-50/80 border-yellow-100", glow: "shadow-yellow-100/80", statusText: "text-yellow-700", dot: "bg-yellow-400" };
+      default: return { text: "text-stone-800", accent: "bg-stone-800 hover:bg-stone-900", border: "focus:border-stone-400", ring: "focus:ring-stone-100", soft: "bg-stone-100/80 border-stone-200", glow: "shadow-stone-200/70", statusText: "text-stone-600", dot: "bg-stone-400" }; 
     }
   }, [currentBrandId]);
 
-  const accountDirectoryReady =
-    accountDirectoryStatus === "ready" || accountDirectoryStatus === "refreshing";
-  const accountDirectoryFailed = accountDirectoryStatus === "error";
+  // ★ 快速網路也能清楚感受到的精緻三階段轉場：同步 → 完成 → 內容進場。
+  // 最少保留 650ms 同步辨識、完成後 280ms 開放內容，整體視覺約 1.8 秒自然收尾。
+  const [directoryVisualStage, setDirectoryVisualStage] = useState("syncing");
+  const [directoryContentVisible, setDirectoryContentVisible] = useState(false);
+  const directoryContentVisibleRef = useRef(false);
+  const directoryEntryStartedAtRef = useRef(Date.now());
+  const directoryTransitionTokenRef = useRef(0);
+
+  const publishDirectoryContentVisible = useCallback((visible) => {
+    directoryContentVisibleRef.current = visible;
+    setDirectoryContentVisible(visible);
+  }, []);
+
+  useEffect(() => {
+    // 品牌選擇畫面開啟時不在背景偷偷播完動畫；真正進入登入卡片後再開始完整轉場。
+    if (showBrandSelector) return;
+    directoryTransitionTokenRef.current += 1;
+    directoryEntryStartedAtRef.current = Date.now();
+    directoryContentVisibleRef.current = false;
+    setDirectoryContentVisible(false);
+    setDirectoryVisualStage("syncing");
+  }, [currentBrandId, showBrandSelector, publishDirectoryContentVisible]);
+
+  useEffect(() => {
+    const transitionToken = directoryTransitionTokenRef.current;
+    const timers = [];
+    const schedule = (callback, delayMs) => {
+      const timer = setTimeout(() => {
+        if (transitionToken === directoryTransitionTokenRef.current) callback();
+      }, Math.max(0, delayMs));
+      timers.push(timer);
+    };
+
+    if (showBrandSelector) return () => timers.forEach((timer) => clearTimeout(timer));
+
+    const status = accountDirectoryStatus || "loading";
+
+    if (status === "idle" || status === "loading") {
+      setDirectoryVisualStage("syncing");
+      if (!directoryContentVisibleRef.current) publishDirectoryContentVisible(false);
+    } else if (status === "refreshing") {
+      if (directoryContentVisibleRef.current) {
+        setDirectoryVisualStage("refreshing");
+      } else {
+        setDirectoryVisualStage("syncing");
+      }
+    } else if (status === "ready") {
+      if (directoryContentVisibleRef.current) {
+        setDirectoryVisualStage("complete");
+        schedule(() => setDirectoryVisualStage("settled"), 700);
+      } else {
+        const elapsedMs = Date.now() - directoryEntryStartedAtRef.current;
+        const minimumSyncRemaining = Math.max(0, 650 - elapsedMs);
+
+        // 快速載入時仍完整保留同步辨識；資料較慢時則只多等 280ms 就開放操作，
+        // 完成提示與人數動畫繼續自然播放，不讓畫面突然跳到最終狀態。
+        schedule(() => setDirectoryVisualStage("complete"), minimumSyncRemaining);
+        schedule(() => publishDirectoryContentVisible(true), minimumSyncRemaining + 280);
+        schedule(() => setDirectoryVisualStage("settled"), minimumSyncRemaining + 1150);
+      }
+    } else if (status === "error") {
+      const elapsedMs = Date.now() - directoryEntryStartedAtRef.current;
+      schedule(() => {
+        publishDirectoryContentVisible(false);
+        setDirectoryVisualStage("error");
+      }, Math.max(0, 650 - elapsedMs));
+    }
+
+    return () => timers.forEach((timer) => clearTimeout(timer));
+  }, [accountDirectoryStatus, currentBrandId, showBrandSelector, publishDirectoryContentVisible]);
+
+  const counterVisualStatus = directoryVisualStage === "syncing"
+    ? "loading"
+    : directoryVisualStage === "error"
+      ? "error"
+      : directoryVisualStage === "refreshing"
+        ? "refreshing"
+        : directoryVisualStage === "complete"
+          ? "complete"
+          : "ready";
 
   const LEGACY_TRAINER_ID = "trainer_default";
 
@@ -753,17 +830,65 @@ const LoginView = ({
       <div className={`w-full max-w-md bg-white p-8 rounded-2xl shadow-sm border border-stone-200 transition-all duration-500 transform ${showBrandSelector ? "opacity-0 scale-95 pointer-events-none absolute" : "opacity-100 scale-100 relative"}`}>
         <button onClick={() => setShowBrandSelector(true)} className="absolute top-6 left-6 text-stone-400 hover:text-stone-600 transition-colors flex items-center gap-1 text-sm font-medium"><ChevronLeft size={16}/> 切換品牌</button>
 
-        <div className="text-center mb-10 mt-2">
+        <div className="text-center mb-7 mt-2">
           <div className="flex justify-center mb-4">
-             {currentBrandId === 'yibo' ? <Sparkles size={40} className={themeColors.text} strokeWidth={1.5} /> : 
-              currentBrandId === 'anniu' ? <Heart size={40} className={themeColors.text} strokeWidth={1.5} /> :
-              <Crown size={40} className={themeColors.text} strokeWidth={1.5} />}
+            <div className={`relative flex h-16 w-16 items-center justify-center rounded-2xl border ${themeColors.soft} shadow-lg ${themeColors.glow} transition-all duration-700 ${directoryVisualStage === "syncing" ? "scale-[0.98]" : "scale-100"}`}>
+              {directoryVisualStage === "syncing" && (
+                <span className={`absolute inset-2 rounded-xl ${themeColors.dot} opacity-10 animate-ping`} />
+              )}
+              {currentBrandId === 'yibo' ? <Sparkles size={34} className={`${themeColors.text} relative z-10`} strokeWidth={1.5} /> : 
+                currentBrandId === 'anniu' ? <Heart size={34} className={`${themeColors.text} relative z-10`} strokeWidth={1.5} /> :
+                <Crown size={34} className={`${themeColors.text} relative z-10`} strokeWidth={1.5} />}
+              {directoryVisualStage === "complete" && (
+                <span className="absolute -bottom-1 -right-1 flex h-6 w-6 items-center justify-center rounded-full border-2 border-white bg-emerald-500 text-white shadow-sm animate-in zoom-in duration-500">
+                  <CheckCircle2 size={15} strokeWidth={2.5} />
+                </span>
+              )}
+            </div>
           </div>
           <h1 className={`text-2xl font-bold tracking-tight ${themeColors.text}`}>{currentBrandConfig.label} 營運管理</h1>
           <p className="text-stone-400 text-sm mt-1">請登入您的帳戶</p>
+
+          <div className="mt-3 flex h-7 items-center justify-center" aria-live="polite">
+            {directoryVisualStage === "syncing" && (
+              <div className={`inline-flex items-center gap-2 rounded-full border px-3 py-1 text-[11px] font-bold ${themeColors.soft} ${themeColors.statusText} animate-in fade-in duration-500`}>
+                <Loader2 size={12} className="animate-spin" />
+                <span>正在同步授權名單</span>
+                <span className="flex items-center gap-0.5" aria-hidden="true">
+                  {[0, 1, 2].map((index) => (
+                    <span key={index} className={`h-1 w-1 rounded-full ${themeColors.dot} animate-bounce`} style={{ animationDelay: `${index * 160}ms`, animationDuration: "1200ms" }} />
+                  ))}
+                </span>
+              </div>
+            )}
+            {directoryVisualStage === "refreshing" && (
+              <div className="inline-flex items-center gap-2 rounded-full border border-stone-200 bg-white/80 px-3 py-1 text-[11px] font-bold text-stone-500 animate-in fade-in duration-300">
+                <RefreshCw size={12} className="animate-spin" />
+                背景確認名單中
+              </div>
+            )}
+            {directoryVisualStage === "complete" && (
+              <div className="inline-flex items-center gap-1.5 rounded-full border border-emerald-100 bg-emerald-50/80 px-3 py-1 text-[11px] font-bold text-emerald-700 animate-in fade-in slide-in-from-bottom-1 duration-500">
+                <CheckCircle2 size={13} />
+                授權名單已同步
+              </div>
+            )}
+            {directoryVisualStage === "error" && (
+              <button
+                type="button"
+                onClick={() => onRetryAccountDirectory?.()}
+                className="inline-flex items-center gap-2 rounded-full border border-rose-100 bg-rose-50/80 px-3 py-1 text-[11px] font-bold text-rose-600 transition-colors hover:bg-rose-100"
+              >
+                <AlertCircle size={12} />
+                名單同步未完成・重新載入
+              </button>
+            )}
+          </div>
         </div>
 
-        <div className="flex justify-center mb-8 border-b border-stone-100 pb-1">
+        {directoryContentVisible ? (
+          <div className="animate-in fade-in slide-in-from-bottom-2 duration-700">
+        <div className="flex justify-center mb-8 border-b border-stone-100 pb-1 animate-in fade-in slide-in-from-bottom-1 duration-700" style={{ animationDelay: "120ms", animationFillMode: "both" }}>
           {Object.entries(ROLES).map(([key, r]) => (
             <button
               key={key}
@@ -776,74 +901,8 @@ const LoginView = ({
           ))}
         </div>
 
-        <div className="space-y-4">
-          {!accountDirectoryReady ? (
-            <div className="space-y-4 animate-in fade-in duration-500">
-              <div className={`rounded-2xl border p-4 ${
-                accountDirectoryFailed
-                  ? "border-rose-100 bg-rose-50/55"
-                  : "border-stone-100 bg-stone-50/75"
-              }`}>
-                <div className="flex items-start gap-3">
-                  <div className={`flex h-10 w-10 shrink-0 items-center justify-center rounded-2xl bg-white shadow-sm ${
-                    accountDirectoryFailed ? "text-rose-500" : "text-stone-500"
-                  }`}>
-                    {accountDirectoryFailed
-                      ? <AlertCircle size={18} />
-                      : <Loader2 size={18} className="animate-spin" />}
-                  </div>
-                  <div className="min-w-0 flex-1 text-left">
-                    <p className="text-sm font-black text-stone-700">
-                      {accountDirectoryFailed ? "授權名單同步未完成" : "正在同步授權名單"}
-                    </p>
-                    <p className="mt-1 text-xs font-medium leading-5 text-stone-400">
-                      {accountDirectoryFailed
-                        ? "目前不顯示暫時名單，避免誤選不完整帳號。"
-                        : "正在確認主管、區域、門市與管理師資料，完成後即可登入。"}
-                    </p>
-                    {!accountDirectoryFailed && (
-                      <div className="mt-3 flex items-center gap-1.5" aria-label="授權名單載入中">
-                        {[0, 1, 2].map((index) => (
-                          <span
-                            key={index}
-                            className="h-1.5 w-1.5 rounded-full bg-stone-300 animate-bounce"
-                            style={{ animationDelay: `${index * 140}ms` }}
-                          />
-                        ))}
-                      </div>
-                    )}
-                  </div>
-                </div>
-              </div>
-
-              {!accountDirectoryFailed ? (
-                <div className="space-y-3" aria-hidden="true">
-                  {[0, 1, 2].map((index) => (
-                    <div
-                      key={index}
-                      className="h-12 overflow-hidden rounded-lg border border-stone-100 bg-stone-100/80 animate-pulse"
-                      style={{ animationDelay: `${index * 120}ms` }}
-                    />
-                  ))}
-                  <div className="h-12 rounded-lg bg-stone-200/70 animate-pulse" />
-                </div>
-              ) : (
-                <button
-                  type="button"
-                  onClick={onRetryAccountDirectory}
-                  className="w-full rounded-lg border border-stone-200 bg-white py-3 text-sm font-black text-stone-600 shadow-sm transition-all hover:border-stone-300 hover:bg-stone-50 active:scale-[0.99]"
-                >
-                  重新載入授權名單
-                </button>
-              )}
-
-              {accountDirectoryFailed && accountDirectoryError && (
-                <p className="break-words text-center text-[10px] font-medium leading-4 text-rose-400">
-                  {accountDirectoryError}
-                </p>
-              )}
-            </div>
-          ) : forcePasswordUpdate ? (
+        <div className="space-y-4 animate-in fade-in slide-in-from-bottom-2 duration-700" style={{ animationDelay: "260ms", animationFillMode: "both" }}>
+          {forcePasswordUpdate ? (
             <div className="space-y-5 animate-in fade-in duration-300">
               <div className="rounded-2xl border border-amber-100 bg-amber-50/60 p-4 text-left">
                 <div className="flex items-start gap-3">
@@ -1088,15 +1147,68 @@ const LoginView = ({
             </>
           )}
         </div>
+          </div>
+        ) : (
+          <div className="min-h-[330px] animate-in fade-in duration-300" aria-busy={directoryVisualStage !== "error"}>
+            {directoryVisualStage === "error" ? (
+              <div className="flex min-h-[300px] flex-col items-center justify-center rounded-2xl border border-rose-100 bg-rose-50/40 px-6 text-center">
+                <div className="mb-4 flex h-12 w-12 items-center justify-center rounded-2xl bg-white text-rose-500 shadow-sm">
+                  <AlertCircle size={22} />
+                </div>
+                <h3 className="text-sm font-black text-stone-700">授權名單同步未完成</h3>
+                <p className="mt-2 max-w-xs text-xs font-medium leading-5 text-stone-400">
+                  {accountDirectoryError || "可能是行動網路切換或連線暫時不穩，既有資料不會被清除。"}
+                </p>
+                <button
+                  type="button"
+                  onClick={() => onRetryAccountDirectory?.()}
+                  className="mt-5 inline-flex items-center gap-2 rounded-full border border-rose-100 bg-white px-4 py-2 text-xs font-black text-rose-600 shadow-sm transition-all hover:-translate-y-0.5 hover:shadow-md"
+                >
+                  <RefreshCw size={14} />
+                  重新載入授權名單
+                </button>
+              </div>
+            ) : (
+              <>
+                <div className="mb-8 flex justify-center gap-3 border-b border-stone-100 pb-3">
+                  {[0, 1, 2, 3, 4].map((index) => (
+                    <div
+                      key={index}
+                      className="h-7 rounded-full bg-stone-100 animate-pulse"
+                      style={{ width: index === 0 ? 62 : 46, animationDelay: `${index * 120}ms`, animationDuration: "1500ms" }}
+                    />
+                  ))}
+                </div>
+                <div className="space-y-3">
+                  {[0, 1, 2].map((index) => (
+                    <div
+                      key={index}
+                      className="relative h-12 overflow-hidden rounded-xl border border-stone-100 bg-stone-50 animate-pulse"
+                      style={{ animationDelay: `${index * 160}ms`, animationDuration: "1500ms" }}
+                    >
+                      <div className="absolute left-4 top-1/2 h-4 w-4 -translate-y-1/2 rounded-md bg-stone-200/80" />
+                      <div className="absolute left-12 top-1/2 h-2.5 w-28 -translate-y-1/2 rounded-full bg-stone-200/70" />
+                    </div>
+                  ))}
+                  <div className="h-12 rounded-xl bg-stone-200/70 animate-pulse" style={{ animationDelay: "480ms", animationDuration: "1500ms" }} />
+                </div>
+                <div className="mt-5 flex items-center justify-center gap-2 text-[11px] font-bold tracking-wide text-stone-400">
+                  <Loader2 size={12} className="animate-spin" />
+                  名單完成後即可安全登入
+                </div>
+              </>
+            )}
+          </div>
+        )}
       </div>
       
       {/* ★ 把算好的精準數字傳進去 ★ */}
       <div className={`transition-all duration-500 transform ${showBrandSelector ? "opacity-0 scale-95 pointer-events-none absolute" : "opacity-100 scale-100 relative"}`}>
-        <LoginCounter
+        <LoginCounter 
           totalUsers={totalActiveUsers}
           brandName={currentBrandConfig?.label}
-          status={accountDirectoryStatus}
-          error={accountDirectoryError}
+          status={counterVisualStatus}
+          animationKey={currentBrandId}
           onRetry={onRetryAccountDirectory}
         />
       </div>

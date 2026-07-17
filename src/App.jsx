@@ -152,9 +152,6 @@ const DEFAULT_SECURITY_CONFIG = {
   logoutWarningSeconds: 60,
 };
 
-const ACCOUNT_DIRECTORY_RETRY_DELAYS_MS = [900, 2200, 4200];
-
-
 const DEFAULT_FEATURE_FLAGS = {
   therapistModuleEnabled: true,
   annualAverageSettings: {
@@ -599,6 +596,11 @@ export default function App() {
   const [isOnline, setIsOnline] = useState(navigator.onLine);
 
   const currentBrand = useMemo(() => BRANDS.find(b => b.id === currentBrandId) || BRANDS[0], [currentBrandId]);
+  const currentBrandIdRef = useRef(currentBrandId);
+
+  useEffect(() => {
+    currentBrandIdRef.current = currentBrandId;
+  }, [currentBrandId]);
 
   const getReadMeta = useCallback((label = "") => ({
     label,
@@ -802,29 +804,26 @@ export default function App() {
   const [securityConfig, setSecurityConfig] = useState(DEFAULT_SECURITY_CONFIG);
   const [featureFlags, setFeatureFlags] = useState(DEFAULT_FEATURE_FLAGS);
 
-  // ★ 登入帳號目錄：明確區分「載入中 / 已完成 / 背景同步 / 失敗」，
-  // 避免行動裝置在 Firestore 尚未回傳完整名單時，先顯示不完整人數與下拉選單。
+  // ★ 登入授權名單載入狀態：
+  // 名單尚未完整發布前，登入頁只顯示一致的精緻載入畫面，不顯示暫時人數。
   const [accountDirectoryState, setAccountDirectoryState] = useState({
-    brandId: currentBrandId,
-    status: "loading", // loading | ready | refreshing | error
+    status: "idle", // idle | loading | refreshing | ready | error
+    brandId: "",
+    attempt: 0,
+    reason: "",
     error: "",
-    retryAttempt: 0,
-    loadedAtText: "",
+    updatedAtText: "",
   });
   const accountDirectoryStateRef = useRef(accountDirectoryState);
   const accountDirectoryRequestRef = useRef(0);
   const accountDirectoryInFlightRef = useRef(false);
-  const accountDirectoryRetryTimerRef = useRef(null);
 
-  useEffect(() => {
-    accountDirectoryStateRef.current = accountDirectoryState;
-  }, [accountDirectoryState]);
-
-  useEffect(() => () => {
-    if (accountDirectoryRetryTimerRef.current) {
-      clearTimeout(accountDirectoryRetryTimerRef.current);
-      accountDirectoryRetryTimerRef.current = null;
-    }
+  const updateAccountDirectoryState = useCallback((updater) => {
+    setAccountDirectoryState((previous) => {
+      const next = typeof updater === "function" ? updater(previous) : updater;
+      accountDirectoryStateRef.current = next;
+      return next;
+    });
   }, []);
 
   const [selectedYear, setSelectedYear] = useState(new Date().getFullYear().toString());
@@ -1542,268 +1541,282 @@ export default function App() {
   const fetchGlobalData = useCallback(async (options = {}) => {
     if (!user) return false;
 
-    const requestBrandId = currentBrand.id;
-    const retryAttempt = Math.max(0, Number(options.retryAttempt || 0));
-    const reason = options.reason || "manual";
-    const previousState = accountDirectoryStateRef.current || {};
-    const hadReadyDirectory =
-      previousState.brandId === requestBrandId &&
-      (previousState.status === "ready" || previousState.status === "refreshing");
+    const {
+      reason = "manual",
+      preserveExisting = true,
+      force = false,
+    } = options || {};
+
+    const brandIdAtStart = currentBrand.id;
+    const previousDirectoryState = accountDirectoryStateRef.current || {};
+    const hasPublishedDirectory =
+      previousDirectoryState.brandId === brandIdAtStart &&
+      ["ready", "refreshing"].includes(previousDirectoryState.status);
+
+    if (accountDirectoryInFlightRef.current && !force) return false;
 
     const requestId = ++accountDirectoryRequestRef.current;
     accountDirectoryInFlightRef.current = true;
+    const startingStatus = preserveExisting && hasPublishedDirectory ? "refreshing" : "loading";
 
-    if (accountDirectoryRetryTimerRef.current) {
-      clearTimeout(accountDirectoryRetryTimerRef.current);
-      accountDirectoryRetryTimerRef.current = null;
-    }
-
-    setAccountDirectoryState((prev) => ({
-      ...prev,
-      brandId: requestBrandId,
-      status: hadReadyDirectory ? "refreshing" : "loading",
+    updateAccountDirectoryState({
+      status: startingStatus,
+      brandId: brandIdAtStart,
+      attempt: 1,
+      reason,
       error: "",
-      retryAttempt,
-    }));
+      updatedAtText: previousDirectoryState.updatedAtText || "",
+    });
 
-    const isStaleRequest = () => (
-      requestId !== accountDirectoryRequestRef.current ||
-      requestBrandId !== currentBrand.id
-    );
+    const retryDelays = [0, 900, 2200];
+    let lastError = null;
+
+    const withTimeout = (promise, label, timeoutMs = 12000) => new Promise((resolve, reject) => {
+      const timer = setTimeout(() => reject(new Error(`${label} 讀取逾時`)), timeoutMs);
+      Promise.resolve(promise).then(
+        (value) => {
+          clearTimeout(timer);
+          resolve(value);
+        },
+        (error) => {
+          clearTimeout(timer);
+          reject(error);
+        }
+      );
+    });
 
     try {
-      // 登入必要資料先獨立讀取。必須全部成功後才一次發布，
-      // 避免只完成部分請求時就讓登入頁出現不完整名單。
-      const coreLabels = [
-        "org_structure",
-        "store_account_data",
-        "manager_auth",
-        "therapists",
-        "trainer_auth",
-        "director_auth",
-        "master_auth",
-      ];
-      const coreResults = await Promise.allSettled([
-        getDoc(getDocPath("org_structure")),
-        getDoc(getDocPath("store_account_data")),
-        getDoc(getDocPath("manager_auth")),
-        getDocs(getCollectionPath("therapists")),
-        getDoc(getDocPath("trainer_auth")),
-        getDoc(getDocPath("director_auth")),
-        getDoc(getDocPath("master_auth")),
-      ]);
-
-      if (isStaleRequest()) return false;
-
-      const coreFailures = coreResults
-        .map((result, index) => ({ result, label: coreLabels[index] }))
-        .filter(({ result }) => result.status === "rejected");
-
-      if (coreFailures.length > 0) {
-        const failedLabels = coreFailures.map(({ label }) => label).join(", ");
-        const firstReason = coreFailures[0]?.result?.reason;
-        throw new Error(
-          `帳號目錄讀取失敗：${failedLabels}${firstReason?.message ? `（${firstReason.message}）` : ""}`
-        );
-      }
-
-      const [
-        orgSnap,
-        accSnap,
-        mAuthSnap,
-        thSnap,
-        trAuthSnap,
-        dAuthSnap,
-        mastSnap,
-      ] = coreResults.map((result) => result.value);
-
-      trackReadSource("fetchGlobalData_core_docs", 10, getStableReadMeta("fetchGlobalData_core_docs"));
-      trackReadSource("fetchGlobalData_therapists", thSnap.docs.length, getStableReadMeta("fetchGlobalData_therapists"));
-
-      let nextManagers = {};
-      let nextManagerOrder = [];
-
-      if (orgSnap.exists()) {
-        const orgData = orgSnap.data() || {};
-        const rawManagers = orgData.managers || {};
-        const rawManagerOrder = Array.isArray(orgData.managerOrder) ? orgData.managerOrder : [];
-        nextManagers = rawManagers;
-        nextManagerOrder = normalizeManagerOrder(rawManagers, rawManagerOrder);
-
-        // 首次導入 v3 時，如果舊 org_structure 沒有 managerOrder，補上一份穩定排序來源。
-        if (rawManagerOrder.length === 0 && (userRole === "director" || userRole === "master")) {
-          setDoc(
-            getDocPath("org_structure"),
-            { managers: rawManagers, managerOrder: nextManagerOrder },
-            { merge: true }
-          ).catch((error) => console.warn("managerOrder backfill failed:", error));
-        }
-      } else {
-        nextManagers = currentBrand.id === "cyj" ? DEFAULT_REGIONAL_MANAGERS : {};
-        nextManagerOrder = normalizeManagerOrder(nextManagers);
-      }
-
-      const nextStoreAccounts = accSnap.exists() && Array.isArray(accSnap.data()?.accounts)
-        ? accSnap.data().accounts
-        : [];
-      const nextManagerAuth = mAuthSnap.exists() ? (mAuthSnap.data() || {}) : {};
-      const nextTherapists = thSnap.docs.map((d) => {
-        const data = d.data() || {};
-        const storeName = data.store || data.storeName || data.primaryStore || (Array.isArray(data.stores) ? data.stores[0] : "");
-        const managerName = data.manager || data.managerName || data.region || data.area || "";
-        return {
-          id: d.id,
-          ...data,
-          store: storeName,
-          storeName: data.storeName || storeName,
-          manager: managerName,
-          managerName: data.managerName || managerName,
-          normalizedStoreCore: normalizeStore(storeName),
-        };
-      });
-      const nextTrainerAuth = normalizeTrainerAuthData(
-        trAuthSnap.exists() ? trAuthSnap.data() : { password: "0000" }
-      );
-
-      let nextDirectorAuth;
-      if (dAuthSnap.exists()) {
-        nextDirectorAuth = normalizeDirectorAuthData(dAuthSnap.data());
-        if (Object.keys(nextDirectorAuth.accounts || {}).length === 0) {
-          nextDirectorAuth = normalizeDirectorAuthData({ "營運總監": "0000" });
-        }
-      } else {
-        let defaultPass = "0000";
-        if (currentBrand.id === "cyj") defaultPass = "16500";
-        if (currentBrand.id === "anniu") defaultPass = "8888";
-        if (currentBrand.id === "yibo") defaultPass = "9999";
-        nextDirectorAuth = normalizeDirectorAuthData({ "營運總監": defaultPass });
-      }
-
-      const nextMasterAuth =
-        mastSnap.exists() && mastSnap.data()?.password
-          ? mastSnap.data()
-          : { password: "BOSS888" };
-
-      // 所有登入必要資料均成功後才一次更新畫面。
-      setManagers(nextManagers);
-      setManagerOrder(nextManagerOrder);
-      setStoreAccounts(nextStoreAccounts);
-      setManagerAuth(nextManagerAuth);
-      setTherapists(nextTherapists);
-      setTrainerAuth(nextTrainerAuth);
-      setDirectorAuth(nextDirectorAuth);
-      setMasterAuth(nextMasterAuth);
-
-      accountDirectoryInFlightRef.current = false;
-      setAccountDirectoryState({
-        brandId: requestBrandId,
-        status: "ready",
-        error: "",
-        retryAttempt: 0,
-        loadedAtText: new Date().toISOString(),
-      });
-
-      // 次要設定獨立讀取；其中任何一項失敗都不應拖垮登入帳號名單。
-      Promise.allSettled([
-        getDoc(getDocPath("permissions")),
-        getDoc(getDocPath("audit_exclusions")),
-        getDoc(getDocPath("security_config")),
-        getDoc(getDocPath("feature_flags")),
-      ]).then((optionalResults) => {
-        if (isStaleRequest()) return;
-
-        const [permResult, audResult, secResult, featureResult] = optionalResults;
-        if (permResult.status === "fulfilled") {
-          const snap = permResult.value;
-          setPermissions(snap.exists() ? snap.data() : DEFAULT_PERMISSIONS);
-        } else {
-          console.warn("permissions 載入失敗:", permResult.reason);
+      for (let attemptIndex = 0; attemptIndex < retryDelays.length; attemptIndex += 1) {
+        const delayMs = retryDelays[attemptIndex];
+        if (delayMs > 0) {
+          await new Promise((resolve) => setTimeout(resolve, delayMs));
         }
 
-        if (audResult.status === "fulfilled") {
-          const snap = audResult.value;
-          setAuditExclusions(snap.exists() ? (snap.data().stores || []) : []);
-        } else {
-          console.warn("audit_exclusions 載入失敗:", audResult.reason);
+        if (
+          requestId !== accountDirectoryRequestRef.current ||
+          currentBrandIdRef.current !== brandIdAtStart
+        ) {
+          return false;
         }
 
-        if (secResult.status === "fulfilled") {
-          const snap = secResult.value;
-          setSecurityConfig(snap.exists() ? normalizeSecurityConfig(snap.data()) : DEFAULT_SECURITY_CONFIG);
-        } else {
-          console.warn("security_config 載入失敗:", secResult.reason);
-        }
-
-        if (featureResult.status === "fulfilled") {
-          const snap = featureResult.value;
-          setFeatureFlags(snap.exists() ? normalizeFeatureFlags(snap.data()) : DEFAULT_FEATURE_FLAGS);
-        } else {
-          console.warn("feature_flags 載入失敗:", featureResult.reason);
-        }
-
-      });
-
-      return true;
-    } catch (error) {
-      if (isStaleRequest()) return false;
-
-      accountDirectoryInFlightRef.current = false;
-      const message = error?.message || "授權名單同步失敗";
-      const canRetry =
-        retryAttempt < ACCOUNT_DIRECTORY_RETRY_DELAYS_MS.length &&
-        typeof navigator !== "undefined" &&
-        navigator.onLine !== false;
-
-      console.error("Fetch Global Data Error:", {
-        brandId: requestBrandId,
-        reason,
-        retryAttempt,
-        error,
-      });
-
-      if (canRetry) {
-        const delay = ACCOUNT_DIRECTORY_RETRY_DELAYS_MS[retryAttempt];
-        const nextAttempt = retryAttempt + 1;
-
-        setAccountDirectoryState((prev) => ({
-          ...prev,
-          brandId: requestBrandId,
-          status: hadReadyDirectory ? "refreshing" : "loading",
+        updateAccountDirectoryState((previous) => ({
+          ...previous,
+          status: startingStatus,
+          brandId: brandIdAtStart,
+          attempt: attemptIndex + 1,
+          reason,
           error: "",
-          retryAttempt: nextAttempt,
         }));
 
-        accountDirectoryRetryTimerRef.current = setTimeout(() => {
-          accountDirectoryRetryTimerRef.current = null;
-          fetchGlobalData({
-            reason: "auto_retry",
-            retryAttempt: nextAttempt,
-            preserveReady: hadReadyDirectory,
+        try {
+          // 必要帳號來源與次要設定同時讀取；只有必要來源失敗才阻擋登入名單發布。
+          const tasks = [
+            { key: "org", required: true, promise: withTimeout(getDoc(getDocPath("org_structure")), "組織架構") },
+            { key: "storeAccounts", required: true, promise: withTimeout(getDoc(getDocPath("store_account_data")), "店經理帳號") },
+            { key: "managerAuth", required: true, promise: withTimeout(getDoc(getDocPath("manager_auth")), "區長帳號") },
+            { key: "permissions", required: false, promise: withTimeout(getDoc(getDocPath("permissions")), "權限設定") },
+            { key: "therapists", required: true, promise: withTimeout(getDocs(getCollectionPath("therapists")), "管理師名單") },
+            { key: "trainerAuth", required: true, promise: withTimeout(getDoc(getDocPath("trainer_auth")), "教專帳號") },
+            { key: "auditExclusions", required: false, promise: withTimeout(getDoc(getDocPath("audit_exclusions")), "回報排除設定") },
+            { key: "securityConfig", required: false, promise: withTimeout(getDoc(getDocPath("security_config")), "安全設定") },
+            { key: "featureFlags", required: false, promise: withTimeout(getDoc(getDocPath("feature_flags")), "功能設定") },
+            { key: "directorAuth", required: true, promise: withTimeout(getDoc(getDocPath("director_auth")), "高階主管帳號") },
+            { key: "masterAuth", required: true, promise: withTimeout(getDoc(getDocPath("master_auth")), "最高管理帳號") },
+          ];
+
+          const settledResults = await Promise.allSettled(tasks.map((task) => task.promise));
+          const resultMap = {};
+          settledResults.forEach((result, index) => {
+            resultMap[tasks[index].key] = result;
           });
-        }, delay);
-      } else if (hadReadyDirectory) {
-        // 背景重新同步失敗時保留上一份完整名單，不讓登入頁閃回空白。
-        setAccountDirectoryState((prev) => ({
-          ...prev,
-          brandId: requestBrandId,
-          status: "ready",
-          error: message,
-          retryAttempt,
-        }));
-      } else {
-        setAccountDirectoryState({
-          brandId: requestBrandId,
-          status: "error",
-          error: message,
-          retryAttempt,
-          loadedAtText: "",
-        });
+
+          trackReadSource("fetchGlobalData_core_docs", 10, getStableReadMeta("fetchGlobalData_core_docs"));
+          const therapistResult = resultMap.therapists;
+          trackReadSource(
+            "fetchGlobalData_therapists",
+            therapistResult?.status === "fulfilled" ? therapistResult.value.docs.length : 0,
+            getStableReadMeta("fetchGlobalData_therapists")
+          );
+
+          const failedRequiredTasks = tasks.filter((task) => (
+            task.required && resultMap[task.key]?.status !== "fulfilled"
+          ));
+
+          if (failedRequiredTasks.length > 0) {
+            const firstFailure = resultMap[failedRequiredTasks[0].key]?.reason;
+            throw new Error(
+              `${failedRequiredTasks.map((task) => task.key).join("、")} 載入失敗${firstFailure?.message ? `：${firstFailure.message}` : ""}`
+            );
+          }
+
+          if (
+            requestId !== accountDirectoryRequestRef.current ||
+            currentBrandIdRef.current !== brandIdAtStart
+          ) {
+            return false;
+          }
+
+          const orgSnap = resultMap.org.value;
+          const accSnap = resultMap.storeAccounts.value;
+          const mAuthSnap = resultMap.managerAuth.value;
+          const thSnap = resultMap.therapists.value;
+          const trAuthSnap = resultMap.trainerAuth.value;
+          const dAuthSnap = resultMap.directorAuth.value;
+          const mastSnap = resultMap.masterAuth.value;
+
+          let nextManagers = {};
+          let nextManagerOrder = [];
+          let shouldBackfillManagerOrder = false;
+
+          if (orgSnap.exists()) {
+            const orgData = orgSnap.data() || {};
+            const rawManagers = orgData.managers || {};
+            const rawManagerOrder = Array.isArray(orgData.managerOrder) ? orgData.managerOrder : [];
+            nextManagers = rawManagers;
+            nextManagerOrder = normalizeManagerOrder(rawManagers, rawManagerOrder);
+            shouldBackfillManagerOrder = rawManagerOrder.length === 0;
+          } else {
+            nextManagers = currentBrand.id === "cyj" ? DEFAULT_REGIONAL_MANAGERS : {};
+            nextManagerOrder = normalizeManagerOrder(nextManagers);
+          }
+
+          const nextStoreAccounts = accSnap.exists() && Array.isArray(accSnap.data()?.accounts)
+            ? accSnap.data().accounts
+            : [];
+          const nextManagerAuth = mAuthSnap.exists() ? (mAuthSnap.data() || {}) : {};
+          const nextTherapists = thSnap.docs.map((documentSnapshot) => {
+            const data = documentSnapshot.data() || {};
+            const storeName = data.store || data.storeName || data.primaryStore || (Array.isArray(data.stores) ? data.stores[0] : "");
+            const managerName = data.manager || data.managerName || data.region || data.area || "";
+            return {
+              id: documentSnapshot.id,
+              ...data,
+              store: storeName,
+              storeName: data.storeName || storeName,
+              manager: managerName,
+              managerName: data.managerName || managerName,
+              normalizedStoreCore: normalizeStore(storeName),
+            };
+          });
+          const nextTrainerAuth = normalizeTrainerAuthData(
+            trAuthSnap.exists() ? trAuthSnap.data() : { password: "0000" }
+          );
+
+          let nextDirectorAuth;
+          if (dAuthSnap.exists()) {
+            nextDirectorAuth = normalizeDirectorAuthData(dAuthSnap.data());
+            if (Object.keys(nextDirectorAuth.accounts || {}).length === 0) {
+              nextDirectorAuth = normalizeDirectorAuthData({ "營運總監": "0000" });
+            }
+          } else {
+            let defaultPass = "0000";
+            if (currentBrand.id === "cyj") defaultPass = "16500";
+            if (currentBrand.id === "anniu") defaultPass = "8888";
+            if (currentBrand.id === "yibo") defaultPass = "9999";
+            nextDirectorAuth = normalizeDirectorAuthData({ "營運總監": defaultPass });
+          }
+
+          const nextMasterAuth = mastSnap.exists() && mastSnap.data()?.password
+            ? mastSnap.data()
+            : { password: "BOSS888" };
+
+          // 必要帳號資料全部完成後才一次發布，避免登入頁出現半套名單或錯誤人數。
+          setManagers(nextManagers);
+          setManagerOrder(nextManagerOrder);
+          setStoreAccounts(nextStoreAccounts);
+          setManagerAuth(nextManagerAuth);
+          setTherapists(nextTherapists);
+          setTrainerAuth(nextTrainerAuth);
+          setDirectorAuth(nextDirectorAuth);
+          setMasterAuth(nextMasterAuth);
+
+          const applyOptionalDoc = (key, applyValue, fallbackLabel) => {
+            const result = resultMap[key];
+            if (result?.status === "fulfilled") {
+              applyValue(result.value);
+            } else if (result?.reason) {
+              console.warn(`${fallbackLabel}讀取失敗，沿用目前值：`, result.reason);
+            }
+          };
+
+          applyOptionalDoc("permissions", (snap) => {
+            setPermissions(snap.exists() ? snap.data() : DEFAULT_PERMISSIONS);
+          }, "permissions ");
+          applyOptionalDoc("auditExclusions", (snap) => {
+            setAuditExclusions(snap.exists() ? (snap.data().stores || []) : []);
+          }, "audit_exclusions ");
+          applyOptionalDoc("securityConfig", (snap) => {
+            setSecurityConfig(snap.exists() ? normalizeSecurityConfig(snap.data()) : DEFAULT_SECURITY_CONFIG);
+          }, "security_config ");
+          applyOptionalDoc("featureFlags", (snap) => {
+            setFeatureFlags(snap.exists() ? normalizeFeatureFlags(snap.data()) : DEFAULT_FEATURE_FLAGS);
+          }, "feature_flags ");
+
+          if (shouldBackfillManagerOrder && (userRole === "director" || userRole === "master")) {
+            setDoc(
+              getDocPath("org_structure"),
+              { managers: nextManagers, managerOrder: nextManagerOrder },
+              { merge: true }
+            ).catch((error) => console.warn("managerOrder backfill failed:", error));
+          }
+
+          updateAccountDirectoryState({
+            status: "ready",
+            brandId: brandIdAtStart,
+            attempt: attemptIndex + 1,
+            reason,
+            error: "",
+            updatedAtText: new Date().toISOString(),
+          });
+          return true;
+        } catch (error) {
+          lastError = error;
+          console.warn(`授權名單第 ${attemptIndex + 1} 次載入失敗：`, error);
+
+          if (
+            requestId !== accountDirectoryRequestRef.current ||
+            currentBrandIdRef.current !== brandIdAtStart
+          ) {
+            return false;
+          }
+        }
       }
 
-      return false;
-    }
-  }, [user, currentBrand, getDocPath, getCollectionPath, getStableReadMeta, normalizeStore]);
+      // 背景重新同步失敗時保留上一份完整名單；首次載入失敗才阻擋登入。
+      if (startingStatus === "refreshing" && hasPublishedDirectory) {
+        updateAccountDirectoryState({
+          ...previousDirectoryState,
+          status: "ready",
+          brandId: brandIdAtStart,
+          reason,
+          error: lastError?.message || "背景同步未完成",
+        });
+        return false;
+      }
 
+      updateAccountDirectoryState({
+        status: "error",
+        brandId: brandIdAtStart,
+        attempt: retryDelays.length,
+        reason,
+        error: "網路暫時不穩，授權名單尚未完整載入，請重新同步。",
+        updatedAtText: "",
+      });
+      return false;
+    } finally {
+      if (requestId === accountDirectoryRequestRef.current) {
+        accountDirectoryInFlightRef.current = false;
+      }
+    }
+  }, [
+    user,
+    currentBrand,
+    getDocPath,
+    getCollectionPath,
+    getStableReadMeta,
+    normalizeStore,
+    updateAccountDirectoryState,
+  ]);
 
   useEffect(() => {
     if (!user) return;
@@ -2033,79 +2046,67 @@ useEffect(() => {
   useEffect(() => {
     if (!user) return;
 
-    const previousDirectory = accountDirectoryStateRef.current || {};
-    const brandChanged = previousDirectory.brandId !== currentBrandId;
+    // 切換品牌時取消上一品牌尚未完成的請求，避免舊資料晚到後覆蓋新品牌。
+    accountDirectoryRequestRef.current += 1;
+    accountDirectoryInFlightRef.current = false;
 
-    if (brandChanged) {
-      // 品牌切換時不可暫時沿用上一品牌帳號；先進入精緻載入狀態，
-      // 等新品牌必要資料全部完成後再一次發布。
-      accountDirectoryRequestRef.current += 1;
-      if (accountDirectoryRetryTimerRef.current) {
-        clearTimeout(accountDirectoryRetryTimerRef.current);
-        accountDirectoryRetryTimerRef.current = null;
-      }
-      accountDirectoryInFlightRef.current = false;
+    setManagers({});
+    setManagerOrder([]);
+    setStoreAccounts([]);
+    setManagerAuth({});
+    setTherapists([]);
+    setDirectorAuth({});
+    setTrainerAuth(normalizeTrainerAuthData({ password: "0000" }));
+    setMasterAuth({ password: "BOSS888" });
+    setTherapistSchedules({});
+    setTherapistTargets({});
+    setPermissions(DEFAULT_PERMISSIONS);
+    setSecurityConfig(DEFAULT_SECURITY_CONFIG);
+    setFeatureFlags(DEFAULT_FEATURE_FLAGS);
 
-      setManagers({});
-      setManagerOrder([]);
-      setStoreAccounts([]);
-      setManagerAuth({});
-      setTherapists([]);
-      setDirectorAuth({});
-      setTrainerAuth(normalizeTrainerAuthData({ password: "0000" }));
-      setMasterAuth({ password: "BOSS888" });
-      setTherapistSchedules({});
-      setTherapistTargets({});
-      setPermissions(DEFAULT_PERMISSIONS);
-      setSecurityConfig(DEFAULT_SECURITY_CONFIG);
-      setFeatureFlags(DEFAULT_FEATURE_FLAGS);
-      setAccountDirectoryState({
-        brandId: currentBrandId,
-        status: "loading",
-        error: "",
-        retryAttempt: 0,
-        loadedAtText: "",
-      });
-    }
+    updateAccountDirectoryState({
+      status: "loading",
+      brandId: currentBrandId,
+      attempt: 1,
+      reason: "brand-switch",
+      error: "",
+      updatedAtText: "",
+    });
 
     fetchGlobalData({
-      reason: brandChanged ? "brand_change" : "initial_load",
-      retryAttempt: 0,
-      preserveReady: !brandChanged,
+      reason: "brand-switch",
+      preserveExisting: false,
+      force: true,
     });
-  }, [user, currentBrandId, fetchGlobalData]);
+  }, [user, currentBrandId, fetchGlobalData, updateAccountDirectoryState]);
 
-  // 行動裝置從背景回到前景、或網路恢復時，如果帳號目錄尚未完成，
-  // 自動補抓一次；正常 ready 狀態不會因此增加 reads。
   useEffect(() => {
-    if (!user || userRole) return;
+    if (!user) return undefined;
 
-    const recoverDirectoryIfNeeded = (reason) => {
+    const recoverIncompleteDirectory = () => {
       const state = accountDirectoryStateRef.current || {};
-      const needsRecovery =
-        state.brandId !== currentBrandId ||
-        state.status === "error" ||
-        state.status === "loading";
+      const shouldRecover = ["idle", "loading", "error"].includes(state.status);
+      if (!shouldRecover || accountDirectoryInFlightRef.current) return;
 
-      if (!needsRecovery || accountDirectoryInFlightRef.current) return;
-      fetchGlobalData({ reason, retryAttempt: 0, preserveReady: false });
+      fetchGlobalData({
+        reason: "connection-recovery",
+        preserveExisting: false,
+        force: true,
+      });
     };
 
-    const handleOnlineRecovery = () => recoverDirectoryIfNeeded("network_recovered");
-    const handleVisibilityRecovery = () => {
-      if (document.visibilityState === "visible") {
-        recoverDirectoryIfNeeded("app_foreground");
-      }
+    const handleVisibilityChange = () => {
+      if (document.visibilityState === "visible") recoverIncompleteDirectory();
     };
 
-    window.addEventListener("online", handleOnlineRecovery);
-    document.addEventListener("visibilitychange", handleVisibilityRecovery);
+    window.addEventListener("online", recoverIncompleteDirectory);
+    document.addEventListener("visibilitychange", handleVisibilityChange);
 
     return () => {
-      window.removeEventListener("online", handleOnlineRecovery);
-      document.removeEventListener("visibilitychange", handleVisibilityRecovery);
+      window.removeEventListener("online", recoverIncompleteDirectory);
+      document.removeEventListener("visibilitychange", handleVisibilityChange);
     };
-  }, [user, userRole, currentBrandId, fetchGlobalData]);
+  }, [user, fetchGlobalData]);
 
   useEffect(() => {
     if (!user) return;
@@ -3179,14 +3180,6 @@ if (isUpdating) {
 
 
 
-  const retryAccountDirectory = () => {
-    if (accountDirectoryInFlightRef.current) return;
-    fetchGlobalData({
-      reason: "manual_retry",
-      retryAttempt: 0,
-      preserveReady: accountDirectoryStateRef.current?.status === "ready",
-    });
-  };
 
   if (!userRole) return (
     <>
@@ -3198,7 +3191,7 @@ if (isUpdating) {
         currentBrandId={currentBrandId} onSwitchBrand={handleSwitchBrand} hasSelectedBrand={hasSelectedBrand}
         accountDirectoryStatus={accountDirectoryState.status}
         accountDirectoryError={accountDirectoryState.error}
-        onRetryAccountDirectory={retryAccountDirectory}
+        onRetryAccountDirectory={() => fetchGlobalData({ reason: "manual-retry", preserveExisting: false, force: true })}
       />
 
       {loginSecurityNotice?.type === "blocked" && (
