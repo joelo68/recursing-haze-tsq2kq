@@ -27,6 +27,26 @@ const getTodayStr = () => {
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
 };
 
+const ANNUAL_KPI_REBUILD_ENDPOINT = "https://us-central1-cyjsituation-analysis.cloudfunctions.net/rebuildAnnualKpiSummaryNow";
+
+const normalizeYearMonthValue = (value = "") => {
+  const text = String(value || "").trim();
+  return /^\d{4}-\d{2}$/.test(text) ? text : "";
+};
+
+const normalizeAnnualAverageStoreCore = (value = "") => {
+  let core = String(value || "")
+    .trim()
+    .replace(/[　\s]+/g, "")
+    .replace(/[（）()]/g, "")
+    .replace(/臺/g, "台")
+    .replace(/^DRCYJ/i, "CYJ")
+    .replace(/^(CYJ|Anew安妞|Yibo伊啵|Anew|Yibo|安妞|伊啵)/i, "");
+
+  if (core === "新" || /^新店店?$/.test(core)) return "新店";
+  return core.replace(/店+$/g, "").trim();
+};
+
 
 const LEGACY_TRAINER_ID = "trainer_default";
 
@@ -175,7 +195,15 @@ const SettingsView = () => {
   const [localSecurityConfig, setLocalSecurityConfig] = useState(DEFAULT_SECURITY_CONFIG);
   const [localFeatureFlags, setLocalFeatureFlags] = useState({
     therapistModuleEnabled: true,
+    annualAverageSettings: {
+      brandStartMonth: "",
+      autoDetectFirstCompleteMonth: true,
+      excludePartialFirstMonth: true,
+      storeStartMonthOverrides: {},
+    },
   });
+  const [annualOverrideStore, setAnnualOverrideStore] = useState("");
+  const [annualOverrideMonth, setAnnualOverrideMonth] = useState("");
 
 
   const { brandKey, brandLabel } = useMemo(() => {
@@ -223,9 +251,20 @@ const SettingsView = () => {
   }, [securityConfig]);
 
   useEffect(() => {
+    const rawAnnualAverageSettings = featureFlags?.annualAverageSettings || {};
     setLocalFeatureFlags({
       therapistModuleEnabled: featureFlags?.therapistModuleEnabled !== false,
       ...(featureFlags || {}),
+      annualAverageSettings: {
+        brandStartMonth: normalizeYearMonthValue(rawAnnualAverageSettings.brandStartMonth),
+        autoDetectFirstCompleteMonth: rawAnnualAverageSettings.autoDetectFirstCompleteMonth !== false,
+        excludePartialFirstMonth: rawAnnualAverageSettings.excludePartialFirstMonth !== false,
+        storeStartMonthOverrides:
+          rawAnnualAverageSettings.storeStartMonthOverrides &&
+          typeof rawAnnualAverageSettings.storeStartMonthOverrides === "object"
+            ? rawAnnualAverageSettings.storeStartMonthOverrides
+            : {},
+      },
     });
   }, [featureFlags]);
 
@@ -490,6 +529,69 @@ const SettingsView = () => {
   }, [localManagers, localManagerOrder, editingManager, editingManagerStores, editingReleasedStores]);
 
   
+  const annualAverageStoreOptions = useMemo(() => {
+    const labelByCore = new Map();
+    Object.values(localManagers || {}).flat().filter(Boolean).forEach((rawStore) => {
+      const core = normalizeAnnualAverageStoreCore(rawStore);
+      if (!core || labelByCore.has(core)) return;
+      const rawText = String(rawStore || "").trim();
+      labelByCore.set(core, rawText || `${core}店`);
+    });
+
+    return Array.from(labelByCore.entries())
+      .map(([core, label]) => ({ core, label }))
+      .sort((a, b) => a.label.localeCompare(b.label, "zh-Hant", { numeric: true, sensitivity: "base" }));
+  }, [localManagers]);
+
+  const annualAverageSettings = localFeatureFlags?.annualAverageSettings || {};
+  const annualAverageOverrides =
+    annualAverageSettings?.storeStartMonthOverrides &&
+    typeof annualAverageSettings.storeStartMonthOverrides === "object"
+      ? annualAverageSettings.storeStartMonthOverrides
+      : {};
+
+  const updateAnnualAverageSettings = (patch = {}) => {
+    setLocalFeatureFlags((prev) => ({
+      ...prev,
+      annualAverageSettings: {
+        brandStartMonth: "",
+        autoDetectFirstCompleteMonth: true,
+        excludePartialFirstMonth: true,
+        storeStartMonthOverrides: {},
+        ...(prev?.annualAverageSettings || {}),
+        ...patch,
+      },
+    }));
+  };
+
+  const handleAddAnnualAverageOverride = () => {
+    const storeCore = normalizeAnnualAverageStoreCore(annualOverrideStore);
+    const startMonth = normalizeYearMonthValue(annualOverrideMonth);
+    if (!storeCore) {
+      showToast("請先選擇例外門市", "error");
+      return;
+    }
+    if (!startMonth) {
+      showToast("請設定例外門市的起算月份", "error");
+      return;
+    }
+
+    updateAnnualAverageSettings({
+      storeStartMonthOverrides: {
+        ...annualAverageOverrides,
+        [storeCore]: startMonth,
+      },
+    });
+    setAnnualOverrideStore("");
+    setAnnualOverrideMonth("");
+  };
+
+  const handleRemoveAnnualAverageOverride = (storeCore) => {
+    const nextOverrides = { ...annualAverageOverrides };
+    delete nextOverrides[storeCore];
+    updateAnnualAverageSettings({ storeStartMonthOverrides: nextOverrides });
+  };
+
   const handleSaveTargets = async () => {
     try {
       const nextTargets = {
@@ -561,9 +663,26 @@ const SettingsView = () => {
 
   const handleSaveFeatureFlags = async () => {
     try {
+      const normalizedOverrides = Object.fromEntries(
+        Object.entries(annualAverageOverrides || {})
+          .map(([storeCore, yearMonth]) => [
+            normalizeAnnualAverageStoreCore(storeCore),
+            normalizeYearMonthValue(yearMonth),
+          ])
+          .filter(([storeCore, yearMonth]) => Boolean(storeCore && yearMonth))
+      );
+
+      const normalizedAnnualAverageSettings = {
+        brandStartMonth: normalizeYearMonthValue(annualAverageSettings.brandStartMonth),
+        autoDetectFirstCompleteMonth: annualAverageSettings.autoDetectFirstCompleteMonth !== false,
+        excludePartialFirstMonth: annualAverageSettings.excludePartialFirstMonth !== false,
+        storeStartMonthOverrides: normalizedOverrides,
+      };
+
       const payload = {
         ...localFeatureFlags,
         therapistModuleEnabled: localFeatureFlags.therapistModuleEnabled !== false,
+        annualAverageSettings: normalizedAnnualAverageSettings,
         updatedAtText: new Date().toISOString(),
         updatedBy: currentUser?.name || userRole || "system",
         updatedByRole: userRole || "",
@@ -571,8 +690,26 @@ const SettingsView = () => {
 
       await setDoc(getDocPath("feature_flags"), payload, { merge: true });
       setLocalFeatureFlags(payload);
-      showToast("品牌功能設定已更新", "success");
-      if (fetchGlobalData) fetchGlobalData();
+      if (fetchGlobalData) await fetchGlobalData();
+
+      const rawBrandId = typeof currentBrand === "string"
+        ? currentBrand
+        : (currentBrand?.id || "cyj");
+      const normalizedBrandId = String(rawBrandId || "cyj").toLowerCase();
+      const currentYear = new Date().getFullYear();
+
+      try {
+        const rebuildUrl = `${ANNUAL_KPI_REBUILD_ENDPOINT}?brandId=${encodeURIComponent(normalizedBrandId)}&year=${encodeURIComponent(currentYear)}`;
+        const response = await fetch(rebuildUrl, { method: "GET" });
+        const result = await response.json().catch(() => ({}));
+        if (!response.ok || result?.ok === false) {
+          throw new Error(result?.error || result?.message || `HTTP ${response.status}`);
+        }
+        showToast("品牌功能設定已更新，年度平均摘要已重新整理", "success");
+      } catch (rebuildError) {
+        console.warn("年度平均摘要即時重建失敗:", rebuildError);
+        showToast("設定已儲存；年度平均摘要將由每日排程更新", "success");
+      }
     } catch (e) {
       console.error("品牌功能設定儲存失敗:", e);
       showToast("品牌功能設定儲存失敗", "error");
@@ -1245,6 +1382,124 @@ const SettingsView = () => {
                   {localFeatureFlags.therapistModuleEnabled !== false
                     ? "目前狀態：管理師模組已開啟。"
                     : "目前狀態：管理師模組已關閉，前台將只顯示門市營運相關功能。"}
+                </div>
+              </div>
+
+              <div className="rounded-2xl border border-[#EFE7DA] bg-[#FFFCF7] p-5">
+                <div className="flex items-start gap-3">
+                  <div className="mt-0.5 rounded-xl bg-[#FFF7DF] p-2 text-[#B7863D]">
+                    <Calendar size={18} />
+                  </div>
+                  <div className="min-w-0">
+                    <h3 className="font-black text-[#4D4338]">年度平均起算設定</h3>
+                    <p className="mt-1 text-sm font-bold leading-6 text-[#A69C91]">
+                      系統會依各店第一個有資料的月份與首筆資料日期，自動排除導入中的不完整月份。平常只需設定品牌最早起算月份；特殊門市才需要例外覆寫。
+                    </p>
+                  </div>
+                </div>
+
+                <div className="mt-5 grid grid-cols-1 md:grid-cols-2 gap-4">
+                  <div>
+                    <label className="block text-xs font-black text-[#7C7063] mb-2">品牌最早起算月份</label>
+                    <input
+                      type="month"
+                      value={annualAverageSettings.brandStartMonth || ""}
+                      onChange={(e) => updateAnnualAverageSettings({
+                        brandStartMonth: normalizeYearMonthValue(e.target.value),
+                      })}
+                      className="w-full px-4 py-3 border-2 border-[#EFE7DA] rounded-xl outline-none focus:border-[#D6A84F] font-bold bg-white text-[#4D4338]"
+                    />
+                    <p className="mt-2 text-[11px] font-bold text-[#A69C91]">
+                      可留空交由系統自動判定；設定後，該月份以前一律不納入。
+                    </p>
+                  </div>
+
+                  <div className="rounded-2xl border border-[#EFE7DA] bg-[#FAF7F1]/60 p-4">
+                    <label className="flex items-start gap-3 cursor-pointer">
+                      <input
+                        type="checkbox"
+                        checked={annualAverageSettings.excludePartialFirstMonth !== false}
+                        onChange={(e) => updateAnnualAverageSettings({
+                          excludePartialFirstMonth: e.target.checked,
+                        })}
+                        className="mt-0.5 h-5 w-5 rounded border-[#D9CDBD] text-[#B7863D] focus:ring-[#F3DFB8]"
+                      />
+                      <span>
+                        <span className="block text-sm font-black text-[#675B4E]">自動排除不完整啟用首月</span>
+                        <span className="mt-1 block text-xs font-bold leading-5 text-[#A69C91]">
+                          若該店第一筆有效資料不是當月 1 日，年均會從下一個月開始計算。
+                        </span>
+                      </span>
+                    </label>
+                  </div>
+                </div>
+
+                <div className="mt-5 rounded-2xl border border-[#EFE7DA] bg-white p-4">
+                  <div className="flex flex-col lg:flex-row lg:items-end gap-3">
+                    <div className="flex-1 min-w-0">
+                      <label className="block text-xs font-black text-[#7C7063] mb-2">例外門市</label>
+                      <select
+                        value={annualOverrideStore}
+                        onChange={(e) => setAnnualOverrideStore(e.target.value)}
+                        className="w-full px-4 py-3 border-2 border-[#EFE7DA] rounded-xl outline-none focus:border-[#D6A84F] font-bold bg-white text-[#4D4338]"
+                      >
+                        <option value="">選擇需要手動覆寫的門市</option>
+                        {annualAverageStoreOptions.map((store) => (
+                          <option key={store.core} value={store.core}>{store.label}</option>
+                        ))}
+                      </select>
+                    </div>
+                    <div className="w-full lg:w-48">
+                      <label className="block text-xs font-black text-[#7C7063] mb-2">指定起算月份</label>
+                      <input
+                        type="month"
+                        value={annualOverrideMonth}
+                        onChange={(e) => setAnnualOverrideMonth(e.target.value)}
+                        className="w-full px-4 py-3 border-2 border-[#EFE7DA] rounded-xl outline-none focus:border-[#D6A84F] font-bold bg-white text-[#4D4338]"
+                      />
+                    </div>
+                    <button
+                      type="button"
+                      onClick={handleAddAnnualAverageOverride}
+                      className="w-full lg:w-auto px-5 py-3 rounded-xl border border-[#E8C77A] bg-[#FFF7DF] text-[#8A632E] font-black hover:brightness-[1.02] flex items-center justify-center gap-2"
+                    >
+                      <Plus size={17} /> 加入例外
+                    </button>
+                  </div>
+
+                  <div className="mt-4 space-y-2">
+                    {Object.entries(annualAverageOverrides).length === 0 ? (
+                      <div className="rounded-xl border border-dashed border-[#E8DDCC] bg-[#FAF7F1]/50 px-4 py-4 text-center text-xs font-bold text-[#A69C91]">
+                        目前沒有例外門市，全部使用系統自動判定。
+                      </div>
+                    ) : (
+                      Object.entries(annualAverageOverrides)
+                        .sort(([a], [b]) => a.localeCompare(b, "zh-Hant"))
+                        .map(([storeCore, yearMonth]) => {
+                          const storeLabel = annualAverageStoreOptions.find((item) => item.core === storeCore)?.label || `${storeCore}店`;
+                          return (
+                            <div key={storeCore} className="flex items-center justify-between gap-3 rounded-xl border border-[#EFE7DA] bg-[#FAF7F1]/60 px-4 py-3">
+                              <div className="min-w-0">
+                                <p className="truncate text-sm font-black text-[#675B4E]">{storeLabel}</p>
+                                <p className="mt-0.5 text-xs font-bold text-[#A69C91]">從 {yearMonth} 起納入年度平均</p>
+                              </div>
+                              <button
+                                type="button"
+                                onClick={() => handleRemoveAnnualAverageOverride(storeCore)}
+                                className="shrink-0 rounded-lg p-2 text-rose-400 hover:bg-rose-50 hover:text-rose-600"
+                                title="移除例外設定"
+                              >
+                                <Trash2 size={16} />
+                              </button>
+                            </div>
+                          );
+                        })
+                    )}
+                  </div>
+                </div>
+
+                <div className="mt-4 rounded-2xl border border-emerald-100 bg-emerald-50/70 px-4 py-3 text-xs font-bold leading-5 text-emerald-700">
+                  儲存後會自動重建目前品牌的年度摘要。Dashboard 仍只讀取 1 份年度摘要文件，不會增加前端明細讀取。
                 </div>
               </div>
 

@@ -211,7 +211,7 @@ export function useDashboardStats() {
         return;
       }
 
-      const cacheKey = `cyj_annual_kpi_summary_v3_${brandId}_${year}`;
+      const cacheKey = `cyj_annual_kpi_summary_v5_${brandId}_${year}`;
       const cacheTtlMs = 60 * 60 * 1000;
 
       try {
@@ -229,6 +229,11 @@ export function useDashboardStats() {
                 basedMonths: Array.isArray(cached.basedMonths) ? cached.basedMonths : [],
                 stores: cached.stores && typeof cached.stores === "object" ? cached.stores : {},
                 storeCount: safeNumber(cached.storeCount || Object.keys(cached.stores || {}).length),
+                basis: cached.basis || "",
+                annualAverageSettings:
+                  cached.annualAverageSettings && typeof cached.annualAverageSettings === "object"
+                    ? cached.annualAverageSettings
+                    : {},
                 updatedAtText: cached.updatedAtText || "",
                 error: null,
               });
@@ -280,6 +285,11 @@ export function useDashboardStats() {
           basedMonths: Array.isArray(data.basedMonths) ? data.basedMonths : [],
           stores: storeData,
           storeCount: safeNumber(data.storeCount || Object.keys(storeData).length),
+          basis: data.basis || "",
+          annualAverageSettings:
+            data.annualAverageSettings && typeof data.annualAverageSettings === "object"
+              ? data.annualAverageSettings
+              : {},
           updatedAtText: data.updatedAtText || "",
           error: null,
         };
@@ -630,12 +640,33 @@ export function useDashboardStats() {
     }
 
     const monthTotals = {};
+    const eligibleMonthSet = new Set();
+
     selectedStoreSummaries.forEach((storeSummary) => {
       const monthlyValues = storeSummary?.monthlyValues && typeof storeSummary.monthlyValues === "object"
         ? storeSummary.monthlyValues
         : {};
 
+      // basedMonths 是後端完成「首月排除」後的唯一有效月份清單。
+      // Firestore 舊版 merge 寫入可能留下已排除月份的 monthlyValues 舊 key，
+      // 因此區域／單店不得再把 monthlyValues 的所有月份無條件加回平均。
+      const hasDeclaredBasedMonths = Array.isArray(storeSummary?.basedMonths);
+      const declaredBasedMonths = hasDeclaredBasedMonths ? storeSummary.basedMonths : [];
+      const storeBasedMonths = (hasDeclaredBasedMonths
+        ? declaredBasedMonths
+        : Object.keys(monthlyValues)
+      ).filter((yearMonth) => /^\d{4}-\d{2}$/.test(String(yearMonth || "")));
+      const storeBasedMonthSet = new Set(storeBasedMonths);
+
+      storeBasedMonths.forEach((yearMonth) => {
+        eligibleMonthSet.add(yearMonth);
+        if (!monthTotals[yearMonth]) {
+          monthTotals[yearMonth] = { traffic: 0, newCustomers: 0, cash: 0, accrual: 0 };
+        }
+      });
+
       Object.entries(monthlyValues).forEach(([yearMonth, metrics]) => {
+        if (!storeBasedMonthSet.has(yearMonth)) return;
         if (!monthTotals[yearMonth]) {
           monthTotals[yearMonth] = { traffic: 0, newCustomers: 0, cash: 0, accrual: 0 };
         }
@@ -646,15 +677,7 @@ export function useDashboardStats() {
       });
     });
 
-    const basedMonths = Object.entries(monthTotals)
-      .filter(([, metrics]) => (
-        safeNumber(metrics.traffic) > 0 ||
-        safeNumber(metrics.newCustomers) > 0 ||
-        safeNumber(metrics.cash) > 0 ||
-        safeNumber(metrics.accrual) > 0
-      ))
-      .map(([yearMonth]) => yearMonth)
-      .sort();
+    const basedMonths = Array.from(eligibleMonthSet).sort();
 
     // 若重建後暫時沒有 monthlyValues，單店仍可用該店年度摘要備援，不回退全品牌。
     if (basedMonths.length === 0 && selectedStoreSummaries.length === 1) {

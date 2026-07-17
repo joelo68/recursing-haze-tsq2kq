@@ -49,6 +49,16 @@ const StorePerformanceView = ({ dashboardStats, myStoreRankings, brandInfo }) =>
   };
   const trafficMonthlyAverageText = formatAnnualBenchmark(annualKpiBenchmark.trafficMonthlyAverage);
   const newCustomerMonthlyAverageText = formatAnnualBenchmark(annualKpiBenchmark.newCustomerMonthlyAverage);
+  const annualBenchmarkMonths = Array.isArray(annualKpiBenchmark.basedMonths)
+    ? annualKpiBenchmark.basedMonths.filter(Boolean)
+    : [];
+  const annualBenchmarkMonthCount = Number(
+    annualKpiBenchmark.basedMonthCount || annualBenchmarkMonths.length || 0
+  );
+  const formatBenchmarkMonth = (yearMonth = "") => {
+    const match = String(yearMonth || "").match(/^(\d{4})-(\d{2})$/);
+    return match ? `${match[1]}/${match[2]}` : String(yearMonth || "");
+  };
   const isSmallStoreRanking = myStoreRankings.length > 0 && myStoreRankings.length <= 6;
 
   const getProgressStatusMeta = (store = {}) => {
@@ -128,24 +138,58 @@ const StorePerformanceView = ({ dashboardStats, myStoreRankings, brandInfo }) =>
     }, 0),
   };
 
-  const MiniKpiCard = ({ title, value, subText, icon: Icon, color, benchmarkText, benchmarkLabel = "年均" }) => (
-    <div className="bg-white p-5 rounded-3xl border border-stone-100 shadow-sm hover:shadow-md transition-all group relative overflow-hidden h-full flex flex-col">
-      <div className={`absolute top-0 right-0 p-3 opacity-10 group-hover:opacity-20 transition-opacity ${color}`}><Icon size={64} /></div>
-      <div className="flex flex-col h-full justify-between relative z-10">
-        <div>
-           <p className="text-stone-400 text-xs font-bold uppercase tracking-wider mb-1">{title}</p>
-           <h3 className="text-2xl font-extrabold text-stone-700 font-mono tracking-tight">{value}</h3>
+  const MiniKpiCard = ({
+    title,
+    value,
+    subText,
+    icon: Icon,
+    color,
+    benchmarkText,
+    benchmarkLabel = "年均",
+    benchmarkMonths = [],
+    benchmarkMonthCount = 0,
+  }) => {
+    const normalizedMonths = Array.isArray(benchmarkMonths) ? benchmarkMonths.filter(Boolean) : [];
+    const monthCount = Number(benchmarkMonthCount || normalizedMonths.length || 0);
+    const monthText = normalizedMonths.map(formatBenchmarkMonth).join("、");
+    const benchmarkTitle = normalizedMonths.length > 0
+      ? `納入月份：${monthText}（共 ${monthCount} 個完整月）`
+      : "";
+
+    return (
+      <div className="bg-white p-5 rounded-3xl border border-stone-100 shadow-sm hover:shadow-md transition-all group relative overflow-visible h-full flex flex-col">
+        <div className={`absolute top-0 right-0 p-3 opacity-10 group-hover:opacity-20 transition-opacity ${color}`}><Icon size={64} /></div>
+        <div className="flex flex-col h-full justify-between relative z-10">
+          <div>
+             <p className="text-stone-400 text-xs font-bold uppercase tracking-wider mb-1">{title}</p>
+             <h3 className="text-2xl font-extrabold text-stone-700 font-mono tracking-tight">{value}</h3>
+          </div>
+          {subText && <div className={`mt-3 pt-3 border-t border-stone-50 text-xs font-medium text-stone-500 flex flex-col gap-1 ${benchmarkText ? "pr-20" : ""}`}>{subText}</div>}
         </div>
-        {subText && <div className={`mt-3 pt-3 border-t border-stone-50 text-xs font-medium text-stone-500 flex flex-col gap-1 ${benchmarkText ? "pr-20" : ""}`}>{subText}</div>}
+        {benchmarkText && (
+          <div className="absolute bottom-4 right-5 z-30">
+            <div
+              className="peer flex cursor-help items-baseline gap-1 rounded-full bg-white/85 px-1.5 py-0.5 text-[10px] font-bold text-stone-400 backdrop-blur-sm"
+              title={benchmarkTitle}
+            >
+              <span>{benchmarkLabel}</span>
+              <span className="font-mono text-[11px] font-black text-stone-500">{benchmarkText}</span>
+              {normalizedMonths.length > 0 && <Info size={10} className="ml-0.5 text-stone-300" />}
+            </div>
+
+            {normalizedMonths.length > 0 && (
+              <div className="pointer-events-none absolute bottom-[calc(100%+8px)] right-0 w-max max-w-[260px] translate-y-1 rounded-xl border border-stone-200 bg-stone-800 px-3 py-2.5 text-left opacity-0 shadow-xl transition-all duration-150 peer-hover:translate-y-0 peer-hover:opacity-100">
+                <p className="text-[10px] font-black tracking-wide text-stone-300">年度平均納入月份</p>
+                <p className="mt-1 whitespace-normal text-xs font-bold leading-5 text-white">{monthText}</p>
+                <p className="mt-1 text-[10px] font-bold text-stone-300">共 {monthCount} 個完整月</p>
+                <span className="absolute -bottom-1.5 right-4 h-3 w-3 rotate-45 bg-stone-800" />
+              </div>
+            )}
+          </div>
+        )}
       </div>
-      {benchmarkText && (
-        <div className="pointer-events-none absolute bottom-4 right-5 z-20 flex items-baseline gap-1 rounded-full bg-white/75 px-1.5 py-0.5 text-[10px] font-bold text-stone-400 backdrop-blur-sm">
-          <span>{benchmarkLabel}</span>
-          <span className="font-mono text-[11px] font-black text-stone-500">{benchmarkText}</span>
-        </div>
-      )}
-    </div>
-  );
+    );
+  };
 
   const projectionRange = storeGrandTotal.projectionRange || {};
   const projectionProfile = projectionRange.profile || null;
@@ -514,9 +558,9 @@ const StorePerformanceView = ({ dashboardStats, myStoreRankings, brandInfo }) =>
       <div>
          <h3 className="text-lg font-bold text-stone-700 mb-4 flex items-center gap-2 pl-1"><div className="w-1 h-6 bg-cyan-500 rounded-full"></div>營運效率與客流</h3>
          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-6 gap-4">
-           <MiniKpiCard title="課程操作人數" value={fmtNum(storeGrandTotal.traffic)} icon={Users} color="text-blue-500" subText="本月累計操作人數" benchmarkText={trafficMonthlyAverageText} benchmarkLabel="年均" />
+           <MiniKpiCard title="課程操作人數" value={fmtNum(storeGrandTotal.traffic)} icon={Users} color="text-blue-500" subText="本月累計操作人數" benchmarkText={trafficMonthlyAverageText} benchmarkLabel="年均" benchmarkMonths={annualBenchmarkMonths} benchmarkMonthCount={annualBenchmarkMonthCount} />
            <MiniKpiCard title="平均操作權責" value={fmtMoney(dashboardStats.avgTrafficASP)} icon={TrendingUp} color="text-indigo-500" subText={<span className={dashboardStats.avgTrafficASP >= targets.trafficASP ? "text-emerald-500 font-bold" : "text-rose-500 font-bold"}>{dashboardStats.avgTrafficASP >= targets.trafficASP ? "達標" : "未達標"} (目標 {fmtNum(targets.trafficASP)})</span>} />
-           <MiniKpiCard title="總新客數" value={fmtNum(storeGrandTotal.newCustomers)} icon={Sparkles} color="text-purple-500" subText="本月新增體驗人數" benchmarkText={newCustomerMonthlyAverageText} benchmarkLabel="年均" />
+           <MiniKpiCard title="總新客數" value={fmtNum(storeGrandTotal.newCustomers)} icon={Sparkles} color="text-purple-500" subText="本月新增體驗人數" benchmarkText={newCustomerMonthlyAverageText} benchmarkLabel="年均" benchmarkMonths={annualBenchmarkMonths} benchmarkMonthCount={annualBenchmarkMonthCount} />
            <MiniKpiCard title="總新客留單" value={fmtNum(storeGrandTotal.newCustomerClosings)} icon={CheckSquare} color="text-teal-500" subText={<span>留單率 <span className="font-bold">{storeGrandTotal.newCustomers > 0 ? ((storeGrandTotal.newCustomerClosings / storeGrandTotal.newCustomers) * 100).toFixed(0) : 0}%</span></span>} />
            <MiniKpiCard 
              title="新客平均客單" 

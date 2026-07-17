@@ -154,13 +154,31 @@ const DEFAULT_SECURITY_CONFIG = {
 
 const DEFAULT_FEATURE_FLAGS = {
   therapistModuleEnabled: true,
+  annualAverageSettings: {
+    brandStartMonth: "",
+    autoDetectFirstCompleteMonth: true,
+    excludePartialFirstMonth: true,
+    storeStartMonthOverrides: {},
+  },
 };
 
-const normalizeFeatureFlags = (flags = {}) => ({
-  ...DEFAULT_FEATURE_FLAGS,
-  ...(flags || {}),
-  therapistModuleEnabled: flags?.therapistModuleEnabled !== false,
-});
+const normalizeFeatureFlags = (flags = {}) => {
+  const rawAnnualAverageSettings = flags?.annualAverageSettings || {};
+  return {
+    ...DEFAULT_FEATURE_FLAGS,
+    ...(flags || {}),
+    therapistModuleEnabled: flags?.therapistModuleEnabled !== false,
+    annualAverageSettings: {
+      ...DEFAULT_FEATURE_FLAGS.annualAverageSettings,
+      ...rawAnnualAverageSettings,
+      storeStartMonthOverrides:
+        rawAnnualAverageSettings?.storeStartMonthOverrides &&
+        typeof rawAnnualAverageSettings.storeStartMonthOverrides === "object"
+          ? rawAnnualAverageSettings.storeStartMonthOverrides
+          : {},
+    },
+  };
+};
 
 
 const LEGACY_TRAINER_ID = "trainer_default";
