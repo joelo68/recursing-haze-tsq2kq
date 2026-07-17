@@ -26,7 +26,10 @@ const LoginView = ({
   currentBrandId,
   onSwitchBrand,
   therapists = [],
-  hasSelectedBrand = false 
+  hasSelectedBrand = false,
+  accountDirectoryStatus = "loading",
+  accountDirectoryError = "",
+  onRetryAccountDirectory
 }) => {
   const [showBrandSelector, setShowBrandSelector] = useState(!hasSelectedBrand);
 
@@ -64,7 +67,9 @@ const LoginView = ({
     }
   }, [currentBrandId]);
 
-
+  const accountDirectoryReady =
+    accountDirectoryStatus === "ready" || accountDirectoryStatus === "refreshing";
+  const accountDirectoryFailed = accountDirectoryStatus === "error";
 
   const LEGACY_TRAINER_ID = "trainer_default";
 
@@ -772,7 +777,73 @@ const LoginView = ({
         </div>
 
         <div className="space-y-4">
-          {forcePasswordUpdate ? (
+          {!accountDirectoryReady ? (
+            <div className="space-y-4 animate-in fade-in duration-500">
+              <div className={`rounded-2xl border p-4 ${
+                accountDirectoryFailed
+                  ? "border-rose-100 bg-rose-50/55"
+                  : "border-stone-100 bg-stone-50/75"
+              }`}>
+                <div className="flex items-start gap-3">
+                  <div className={`flex h-10 w-10 shrink-0 items-center justify-center rounded-2xl bg-white shadow-sm ${
+                    accountDirectoryFailed ? "text-rose-500" : "text-stone-500"
+                  }`}>
+                    {accountDirectoryFailed
+                      ? <AlertCircle size={18} />
+                      : <Loader2 size={18} className="animate-spin" />}
+                  </div>
+                  <div className="min-w-0 flex-1 text-left">
+                    <p className="text-sm font-black text-stone-700">
+                      {accountDirectoryFailed ? "授權名單同步未完成" : "正在同步授權名單"}
+                    </p>
+                    <p className="mt-1 text-xs font-medium leading-5 text-stone-400">
+                      {accountDirectoryFailed
+                        ? "目前不顯示暫時名單，避免誤選不完整帳號。"
+                        : "正在確認主管、區域、門市與管理師資料，完成後即可登入。"}
+                    </p>
+                    {!accountDirectoryFailed && (
+                      <div className="mt-3 flex items-center gap-1.5" aria-label="授權名單載入中">
+                        {[0, 1, 2].map((index) => (
+                          <span
+                            key={index}
+                            className="h-1.5 w-1.5 rounded-full bg-stone-300 animate-bounce"
+                            style={{ animationDelay: `${index * 140}ms` }}
+                          />
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                </div>
+              </div>
+
+              {!accountDirectoryFailed ? (
+                <div className="space-y-3" aria-hidden="true">
+                  {[0, 1, 2].map((index) => (
+                    <div
+                      key={index}
+                      className="h-12 overflow-hidden rounded-lg border border-stone-100 bg-stone-100/80 animate-pulse"
+                      style={{ animationDelay: `${index * 120}ms` }}
+                    />
+                  ))}
+                  <div className="h-12 rounded-lg bg-stone-200/70 animate-pulse" />
+                </div>
+              ) : (
+                <button
+                  type="button"
+                  onClick={onRetryAccountDirectory}
+                  className="w-full rounded-lg border border-stone-200 bg-white py-3 text-sm font-black text-stone-600 shadow-sm transition-all hover:border-stone-300 hover:bg-stone-50 active:scale-[0.99]"
+                >
+                  重新載入授權名單
+                </button>
+              )}
+
+              {accountDirectoryFailed && accountDirectoryError && (
+                <p className="break-words text-center text-[10px] font-medium leading-4 text-rose-400">
+                  {accountDirectoryError}
+                </p>
+              )}
+            </div>
+          ) : forcePasswordUpdate ? (
             <div className="space-y-5 animate-in fade-in duration-300">
               <div className="rounded-2xl border border-amber-100 bg-amber-50/60 p-4 text-left">
                 <div className="flex items-start gap-3">
@@ -1021,9 +1092,12 @@ const LoginView = ({
       
       {/* ★ 把算好的精準數字傳進去 ★ */}
       <div className={`transition-all duration-500 transform ${showBrandSelector ? "opacity-0 scale-95 pointer-events-none absolute" : "opacity-100 scale-100 relative"}`}>
-        <LoginCounter 
-        totalUsers={totalActiveUsers}
-        brandName={currentBrandConfig?.label}
+        <LoginCounter
+          totalUsers={totalActiveUsers}
+          brandName={currentBrandConfig?.label}
+          status={accountDirectoryStatus}
+          error={accountDirectoryError}
+          onRetry={onRetryAccountDirectory}
         />
       </div>
 
