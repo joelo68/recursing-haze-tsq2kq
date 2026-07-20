@@ -126,6 +126,17 @@ const StorePerformanceView = ({ dashboardStats, myStoreRankings, brandInfo }) =>
     };
   };
 
+  const getRegionalAttentionMeta = (store = {}, progressMeta = getProgressStatusMeta(store)) => {
+    const isBottomSegment = Boolean(store.isBottomSegment ?? store.isBottom5);
+    const needsRegionalAttention = isBottomSegment && ["behind", "attention"].includes(progressMeta.key);
+
+    return {
+      isBottomSegment,
+      needsRegionalAttention,
+      label: needsRegionalAttention ? "區內待關注" : "",
+    };
+  };
+
   const smallRankingSummary = {
     achievedCount: myStoreRankings.filter((store) => Number(store.rate || 0) >= 100).length,
     averageRate: myStoreRankings.length > 0
@@ -316,48 +327,66 @@ const StorePerformanceView = ({ dashboardStats, myStoreRankings, brandInfo }) =>
 
       {/* 我的店家戰情卡 (僅店經理顯示) */}
       {userRole === 'store' && myStoreRankings.length > 0 && (
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-6">{myStoreRankings.map((storeRank) => ( 
-          <div key={storeRank.storeName} className={`rounded-3xl p-6 text-white shadow-xl relative overflow-hidden transition-all ${storeRank.isBottom5 ? "bg-gradient-to-br from-rose-500 to-red-600 shadow-rose-200" : "bg-gradient-to-br from-amber-400 to-orange-600 shadow-amber-200"}`}>
-            <div className="absolute top-0 right-0 p-4 opacity-10">{storeRank.isBottom5 ? <AlertTriangle size={120} /> : <Trophy size={120} />}</div>
-            <div className="relative z-10">
-              <div className="flex items-center gap-2 mb-4">
-                <div className="bg-white/20 p-2 rounded-lg backdrop-blur-sm">{storeRank.isBottom5 ? <Activity size={20} className="text-white" /> : <Medal size={20} className="text-yellow-100" />}</div>
-                <h3 className="font-bold text-lg tracking-wider opacity-90">{storeRank.storeName}</h3>
-                {storeRank.passedChallenge && (
-                  <span className="bg-gradient-to-r from-yellow-300 to-amber-500 text-amber-900 px-2 py-0.5 rounded text-[11px] font-bold flex items-center gap-1 shadow-sm ml-1 animate-pulse">
-                    <Star size={12} className="fill-current" /> 突破挑戰
-                  </span>
-                )}
-                {storeRank.isBottom5 && <span className="ml-auto bg-white/20 px-2 py-1 rounded text-xs font-bold flex items-center gap-1">需加強</span>}
-              </div>
-              <div className="flex items-end gap-4 mb-2">
-                <div>
-                  <p className="text-white/80 text-xs font-bold uppercase mb-1">全區排名</p>
-                  <div className="flex items-baseline gap-2">
-                    <span className="text-5xl font-extrabold font-mono text-white tracking-tighter">No.{storeRank.rank}</span>
-                    <span className="text-white/60 font-bold text-sm">/ {storeRank.totalStores}</span>
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+          {myStoreRankings.map((storeRank) => {
+            const progressMeta = getProgressStatusMeta(storeRank);
+            const regionalAttention = getRegionalAttentionMeta(storeRank, progressMeta);
+
+            return (
+              <div
+                key={storeRank.storeName}
+                className={`rounded-3xl p-6 text-white shadow-xl relative overflow-hidden transition-all ${regionalAttention.needsRegionalAttention ? "bg-gradient-to-br from-rose-500 to-red-600 shadow-rose-200" : "bg-gradient-to-br from-amber-400 to-orange-600 shadow-amber-200"}`}
+              >
+                <div className="absolute top-0 right-0 p-4 opacity-10">
+                  {regionalAttention.needsRegionalAttention ? <AlertTriangle size={120} /> : <Trophy size={120} />}
+                </div>
+                <div className="relative z-10">
+                  <div className="flex items-center gap-2 mb-4">
+                    <div className="bg-white/20 p-2 rounded-lg backdrop-blur-sm">
+                      {regionalAttention.needsRegionalAttention ? <Activity size={20} className="text-white" /> : <Medal size={20} className="text-yellow-100" />}
+                    </div>
+                    <h3 className="font-bold text-lg tracking-wider opacity-90">{storeRank.storeName}</h3>
+                    {storeRank.passedChallenge && (
+                      <span className="bg-gradient-to-r from-yellow-300 to-amber-500 text-amber-900 px-2 py-0.5 rounded text-[11px] font-bold flex items-center gap-1 shadow-sm ml-1 animate-pulse">
+                        <Star size={12} className="fill-current" /> 突破挑戰
+                      </span>
+                    )}
+                    {regionalAttention.needsRegionalAttention && (
+                      <span className="ml-auto bg-white/20 px-2 py-1 rounded text-xs font-bold flex items-center gap-1">
+                        區內待關注
+                      </span>
+                    )}
+                  </div>
+                  <div className="flex items-end gap-4 mb-2">
+                    <div>
+                      <p className="text-white/80 text-xs font-bold uppercase mb-1">全區排名</p>
+                      <div className="flex items-baseline gap-2">
+                        <span className="text-5xl font-extrabold font-mono text-white tracking-tighter">No.{storeRank.rank}</span>
+                        <span className="text-white/60 font-bold text-sm">/ {storeRank.totalStores}</span>
+                      </div>
+                    </div>
+                    <div className="flex-1 text-right">
+                      <p className="text-white/80 text-xs font-bold uppercase mb-1">預算目標達成率</p>
+                      <p className="text-3xl font-mono font-bold text-white">{storeRank.rate.toFixed(0)}%</p>
+                    </div>
+                  </div>
+                  <div className="mt-4 pt-4 border-t border-white/20 flex flex-col gap-1 text-xs font-medium text-white/90">
+                    <div className="flex justify-between">
+                      <span>目前業績: {fmtMoney(storeRank.actual)}</span>
+                      <span>預算目標: {fmtMoney(storeRank.target)}</span>
+                    </div>
+                    {storeRank.hasChallenge && (
+                      <div className="flex justify-between text-yellow-200 mt-1 pt-1 border-t border-white/10">
+                        <span>挑戰目標達成率: {storeRank.challengeRate.toFixed(0)}%</span>
+                        <span>挑戰目標: {fmtMoney(storeRank.challengeTarget)}</span>
+                      </div>
+                    )}
                   </div>
                 </div>
-                <div className="flex-1 text-right">
-                  <p className="text-white/80 text-xs font-bold uppercase mb-1">預算目標達成率</p>
-                  <p className="text-3xl font-mono font-bold text-white">{storeRank.rate.toFixed(0)}%</p>
-                </div>
               </div>
-              <div className="mt-4 pt-4 border-t border-white/20 flex flex-col gap-1 text-xs font-medium text-white/90">
-                <div className="flex justify-between">
-                   <span>目前業績: {fmtMoney(storeRank.actual)}</span>
-                   <span>預算目標: {fmtMoney(storeRank.target)}</span>
-                 </div>
-                {storeRank.hasChallenge && (
-                   <div className="flex justify-between text-yellow-200 mt-1 pt-1 border-t border-white/10">
-                     <span>挑戰目標達成率: {storeRank.challengeRate.toFixed(0)}%</span>
-                     <span>挑戰目標: {fmtMoney(storeRank.challengeTarget)}</span>
-                   </div>
-                )}
-              </div>
-            </div>
-          </div> 
-        ))}</div>
+            );
+          })}
+        </div>
       )}
       
       {/* 營運節奏監控 與 全新月底推估 */}
@@ -733,6 +762,7 @@ const StorePerformanceView = ({ dashboardStats, myStoreRankings, brandInfo }) =>
               <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
                 {myStoreRankings.map((store) => {
                   const progressMeta = getProgressStatusMeta(store);
+                  const regionalAttention = getRegionalAttentionMeta(store, progressMeta);
                   const gap = Number(store.actual || 0) - Number(store.target || 0);
                   const isOverTarget = gap >= 0;
 
@@ -747,9 +777,9 @@ const StorePerformanceView = ({ dashboardStats, myStoreRankings, brandInfo }) =>
                             <div className="flex flex-wrap items-center gap-2">
                               <h4 className="truncate text-base font-black text-stone-700">{store.storeName}</h4>
                               <span className={`rounded-full border px-2 py-0.5 text-[10px] font-black ${progressMeta.className}`}>{progressMeta.label}</span>
-                              {store.isBottom5 && (
+                              {regionalAttention.needsRegionalAttention && (
                                 <span className="rounded-full border border-rose-100 bg-rose-50 px-2 py-0.5 text-[10px] font-black text-rose-600">
-                                  排名後段
+                                  區內待關注
                                 </span>
                               )}
                               {store.passedChallenge && (
@@ -808,22 +838,23 @@ const StorePerformanceView = ({ dashboardStats, myStoreRankings, brandInfo }) =>
                 <tbody>
                   {myStoreRankings.map((store) => {
                     const progressMeta = getProgressStatusMeta(store);
+                    const regionalAttention = getRegionalAttentionMeta(store, progressMeta);
 
                     return (
-                      <tr key={store.storeName} className={`group transition-colors border-b last:border-0 border-stone-50 ${store.isBottom5 ? "bg-rose-50 hover:bg-rose-100" : "hover:bg-stone-50" }`}>
+                      <tr key={store.storeName} className={`group transition-colors border-b last:border-0 border-stone-50 ${regionalAttention.needsRegionalAttention ? "bg-rose-50 hover:bg-rose-100" : "hover:bg-stone-50" }`}>
                         <td className="p-3 sm:p-4 text-center">
                           <span className={`inline-flex items-center justify-center w-6 h-6 sm:w-8 sm:h-8 rounded-full text-xs font-bold ${store.rank === 1 ? "bg-amber-100 text-amber-700" : store.rank === 2 ? "bg-stone-200 text-stone-600" : store.rank === 3 ? "bg-orange-100 text-orange-700" : "bg-stone-50 text-stone-400"}`}>{store.rank}</span>
                         </td>
                         <td className="p-3 sm:p-4">
                           <div className="flex flex-col sm:flex-row sm:items-center gap-1 sm:gap-2">
-                            <span className={`font-bold text-sm sm:text-base ${store.isBottom5 ? "text-rose-700" : "text-stone-700"}`}>{store.storeName}</span>
+                            <span className={`font-bold text-sm sm:text-base ${regionalAttention.needsRegionalAttention ? "text-rose-700" : "text-stone-700"}`}>{store.storeName}</span>
                             <span className={`w-fit text-[10px] font-bold px-1.5 py-0.5 rounded border flex items-center gap-1 ${progressMeta.className}`}>
                               {progressMeta.key === "attention" && <AlertTriangle size={10} />}
                               <span className="hidden sm:inline">{progressMeta.label}</span>
                             </span>
-                            {store.isBottom5 && (
+                            {regionalAttention.needsRegionalAttention && (
                               <span className="w-fit text-[10px] font-bold px-1.5 py-0.5 bg-rose-100 text-rose-600 rounded border border-rose-100 flex items-center gap-1">
-                                <AlertTriangle size={10} /> <span className="hidden sm:inline">排名後段</span>
+                                <AlertTriangle size={10} /> <span className="hidden sm:inline">區內待關注</span>
                               </span>
                             )}
                             {store.passedChallenge && (

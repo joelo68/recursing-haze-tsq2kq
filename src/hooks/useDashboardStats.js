@@ -8,6 +8,23 @@ import { db } from '../config/firebase';
 
 const safeNumber = (value) => Number.isFinite(Number(value)) ? Number(value) : 0;
 
+// 門市排名後段採動態比例，避免小型品牌「全部門市都落在後五名」的失真。
+// 2～5 間：最後 1 名；6～9 間：最後 2 名；10 間以上：最後 20%。
+const getBottomRankingSegmentSize = (totalStores = 0) => {
+  const total = Math.max(0, Number(totalStores || 0));
+  if (total <= 1) return 0;
+  if (total <= 5) return 1;
+  if (total <= 9) return 2;
+  return Math.max(2, Math.ceil(total * 0.2));
+};
+
+const isInBottomRankingSegment = (rank = 0, totalStores = 0) => {
+  const total = Math.max(0, Number(totalStores || 0));
+  const normalizedRank = Math.max(0, Number(rank || 0));
+  const segmentSize = getBottomRankingSegmentSize(total);
+  return segmentSize > 0 && normalizedRank > total - segmentSize;
+};
+
 const getProjectionBlendProfile = (daysPassed = 0, daysInMonth = 0) => {
   if (!daysPassed || !daysInMonth) {
     return { currentWeight: 0.5, historyWeight: 0.5, label: "資料不足" };
@@ -1304,7 +1321,9 @@ export function useDashboardStats() {
           hasChallenge,
           challengeRate,
           passedChallenge: hasChallenge && challengeRate >= 100,
-          isBottom5: s.rank > Math.max(0, allRanks.length - 5),
+          // 保留 isBottom5 供舊畫面相容，但實際已改為動態「排名後段區間」。
+          isBottomSegment: isInBottomRankingSegment(s.rank, allRanks.length),
+          isBottom5: isInBottomRankingSegment(s.rank, allRanks.length),
         };
       });
   }, [dashboardSummaryBundle.dashboard, userRole, currentUser, cleanName, getSummaryStoreName, normalizeSummaryStores, summaryStoreMatchesSet, isSelectedCurrentMonth, isSummaryTrustedForDashboard]);
@@ -1658,9 +1677,18 @@ export function useDashboardStats() {
     });
 
     rankingList.sort((a, b) => b.rate - a.rate);
-    const fullRankedList = rankingList.map((item, index) => ({ 
-      ...item, rank: index + 1, totalStores: rankingList.length, isBottom5: (index + 1) > (rankingList.length - 5) 
-    }));
+    const fullRankedList = rankingList.map((item, index) => {
+      const rank = index + 1;
+      const isBottomSegment = isInBottomRankingSegment(rank, rankingList.length);
+      return {
+        ...item,
+        rank,
+        totalStores: rankingList.length,
+        isBottomSegment,
+        // 舊欄位相容：值已改採動態後段區間，不再固定後五名。
+        isBottom5: isBottomSegment,
+      };
+    });
     
     return fullRankedList.filter(item => {
         const cleanItemName = cleanName(item.storeName);
