@@ -1,0 +1,10 @@
+{
+  "enabled": false,
+  "brandIds": ["cyj", "anniu", "yibo"],
+  "limit": 8,
+  "sendWhenClear": false,
+  "chatIds": [
+    "YOUR_MAIN_TELEGRAM_CHAT_ID",
+    "YOUR_MANAGER_TELEGRAM_CHAT_ID"
+  ]
+}
