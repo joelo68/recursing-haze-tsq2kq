@@ -126,6 +126,7 @@ export default function SystemMaintenance() {
     endTime: "07:00",
   });
 
+
   if (userRole !== "director") return null;
 
   const brandId = currentBrand?.id || "unknown";

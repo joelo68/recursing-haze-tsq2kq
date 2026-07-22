@@ -2,17 +2,18 @@
 import React, { useState, useEffect } from "react";
 import { 
   Bell, Clock, Database, Send, Plus, Trash2, Edit3, 
-  Save, ToggleLeft, ToggleRight, PlayCircle, Activity
+  Save, ToggleLeft, ToggleRight, PlayCircle, Activity, Radio
 } from "lucide-react";
 import { collection, getDocs, addDoc, updateDoc, deleteDoc, doc } from "firebase/firestore";
 import { db } from "../config/firebase";
 import { ViewWrapper, Card } from "./SharedUI";
+import TelegramAlertControlCenter from "./TelegramAlertControlCenter";
 
 const DATA_SOURCES = {
   progress: {
     label: "目前現金、權責進度",
     vars: ["{cashTotal}", "{accrualTotal}", "{cashRate}", "{accrualRate}"],
-    defaultTemplate: "📊 *【營運進度戰報】*\n目前現金業績：${cashTotal} (達成率 {cashRate}%)\n目前總權責：${accrualTotal} (達成率 {accrualRate}%)"
+    defaultTemplate: "📊 *【營運進度戰報】*\n目前現金業績：{cashTotal} (達成率 {cashRate}%)\n目前總權責：{accrualTotal} (達成率 {accrualRate}%)"
   },
   top5_stores: {
     label: "昨日業績 TOP 5 (店家)",
@@ -41,6 +42,7 @@ const NotificationManager = () => {
   const [isLoading, setIsLoading] = useState(true);
   const [isEditing, setIsEditing] = useState(false);
   const [currentRule, setCurrentRule] = useState(null);
+  const [activeTab, setActiveTab] = useState("scheduled");
 
   const fetchRules = async () => {
     setIsLoading(true);
@@ -124,11 +126,11 @@ const NotificationManager = () => {
             <Bell className="text-amber-600" size={20} />
           </div>
           <div>
-            <h2 className="text-xl font-extrabold text-stone-800 tracking-tight">動態推播控制中心</h2>
-            <p className="text-stone-500 text-[13px] font-medium mt-0.5">自訂您的 Telegram 戰報排程與內容</p>
+            <h2 className="text-xl font-extrabold text-stone-800 tracking-tight">Telegram 推播管理中心</h2>
+            <p className="text-stone-500 text-[13px] font-medium mt-0.5">集中管理固定排程推播與智慧戰情預警</p>
           </div>
         </div>
-        {!isEditing && (
+        {activeTab === "scheduled" && !isEditing && (
           <button 
             onClick={() => {
               setCurrentRule({
@@ -144,7 +146,24 @@ const NotificationManager = () => {
         )}
       </div>
 
-      {isEditing ? (
+      <div className="mb-6 inline-flex rounded-2xl border border-stone-200 bg-white p-1 shadow-sm">
+        <button
+          type="button"
+          onClick={() => setActiveTab("scheduled")}
+          className={`flex items-center gap-1.5 rounded-xl px-4 py-2 text-xs font-black transition-all ${activeTab === "scheduled" ? "bg-stone-800 text-white shadow-sm" : "text-stone-500 hover:bg-stone-50"}`}
+        >
+          <Clock size={14} /> 固定排程推播
+        </button>
+        <button
+          type="button"
+          onClick={() => setActiveTab("alerts")}
+          className={`flex items-center gap-1.5 rounded-xl px-4 py-2 text-xs font-black transition-all ${activeTab === "alerts" ? "bg-sky-600 text-white shadow-sm" : "text-stone-500 hover:bg-stone-50"}`}
+        >
+          <Radio size={14} /> 智慧戰情預警
+        </button>
+      </div>
+
+      {activeTab === "scheduled" ? (isEditing ? (
         <div className="grid grid-cols-1 lg:grid-cols-12 gap-5 animate-in slide-in-from-bottom-4 duration-300">
           <div className="lg:col-span-7">
             <Card title="排程與文案設定" icon={<Edit3 className="text-stone-400" size={18}/>}>
@@ -269,6 +288,8 @@ const NotificationManager = () => {
             ))
           )}
         </div>
+      )) : (
+        <TelegramAlertControlCenter />
       )}
     </ViewWrapper>
   );
