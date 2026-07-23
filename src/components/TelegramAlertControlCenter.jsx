@@ -7,6 +7,9 @@ import {
   Eye,
   Loader2,
   Play,
+  Plus,
+  Copy,
+  Trash2,
   Radio,
   RefreshCw,
   Save,
@@ -43,11 +46,95 @@ const TELEGRAM_ALERT_WEEKDAYS = [
 ];
 
 const TELEGRAM_ALERT_STATUS_LABELS = {
-  sent: "已正常發送",
-  clear_not_sent: "無異常，依設定未發送",
+  sent: "各品牌已正常發送",
+  clear_not_sent: "各品牌無異常，依設定未發送",
+  partial_error: "部分品牌發送失敗",
   error: "執行失敗",
   disabled: "目前停用",
 };
+
+const TELEGRAM_BRAND_STATUS_LABELS = {
+  sent: "已發送",
+  clear_not_sent: "無異常未發送",
+  error: "發送失敗",
+  previewed: "已預覽",
+};
+
+const TELEGRAM_ALERT_BRANDS = [
+  { id: "cyj", label: "DRCYJ" },
+  { id: "anniu", label: "安妞" },
+  { id: "yibo", label: "伊啵" },
+];
+
+const TELEGRAM_ALERT_RULE_DEFINITIONS = [
+  {
+    id: "progressGap",
+    label: "現金進度差距",
+    category: "operational",
+    description: "比較現金達成率與本月時間進度，可分一般關注與重大預警。",
+  },
+  {
+    id: "cashAchievementRate",
+    label: "現金業績達成率",
+    category: "operational",
+    description: "當現金業績達成率低於設定值時列入預警。",
+  },
+  {
+    id: "closingRate",
+    label: "新客締結率",
+    category: "operational",
+    description: "新客樣本達到最低人數後，締結率低於門檻才判斷。",
+  },
+  {
+    id: "skincareRatio",
+    label: "保養品占比",
+    category: "operational",
+    description: "保養品業績占現金業績比率低於門檻時列入預警。",
+  },
+  {
+    id: "newCustomers",
+    label: "本月新客數",
+    category: "operational",
+    description: "本月累計新客數低於設定人數時列入預警。",
+  },
+  {
+    id: "traffic",
+    label: "本月來客人次",
+    category: "operational",
+    description: "本月累計來客人次低於設定值時列入預警。",
+  },
+  {
+    id: "missingReport",
+    label: "店家日報缺漏",
+    category: "data",
+    description: "正式納管店家本月沒有日報時列入資料待補。",
+  },
+  {
+    id: "missingTarget",
+    label: "現金目標缺漏",
+    category: "data",
+    description: "正式納管店家沒有本月現金目標時列入資料待補。",
+  },
+];
+
+const getTelegramAlertBrandLabel = (brandId) =>
+  TELEGRAM_ALERT_BRANDS.find((item) => item.id === brandId)?.label || brandId;
+
+const createDefaultTelegramAlertRules = () => ({
+  progressGap: { enabled: true, watchThreshold: 10, criticalThreshold: 20 },
+  cashAchievementRate: { enabled: false, threshold: 50, severity: "watch" },
+  closingRate: { enabled: true, threshold: 35, minSample: 5, severity: "watch" },
+  skincareRatio: { enabled: true, threshold: 5, severity: "watch" },
+  newCustomers: { enabled: false, threshold: 10, severity: "watch" },
+  traffic: { enabled: false, threshold: 50, severity: "watch" },
+  missingReport: { enabled: true, category: "data" },
+  missingTarget: { enabled: true, category: "data" },
+});
+
+const createDefaultTelegramBrandProfile = () => ({
+  limit: 8,
+  rules: createDefaultTelegramAlertRules(),
+});
 
 const createDefaultTelegramAlertForm = () => ({
   enabled: false,
@@ -55,47 +142,144 @@ const createDefaultTelegramAlertForm = () => ({
   weekdays: [1, 2, 3, 4, 5],
   brandIds: ["cyj", "anniu", "yibo"],
   chatTargets: ["main", "manager"],
-  limit: 8,
+  brandProfiles: {
+    cyj: createDefaultTelegramBrandProfile(),
+    anniu: createDefaultTelegramBrandProfile(),
+    yibo: createDefaultTelegramBrandProfile(),
+  },
   sendWhenClear: false,
   pausedUntil: "",
   timezone: "Asia/Taipei",
-  thresholds: {
-    watchProgressGap: 10,
-    criticalProgressGap: 20,
-    closingRate: 35,
-    skincareRatio: 5,
-    minNewCustomers: 5,
-    missingReportEnabled: true,
-    missingTargetEnabled: true,
-  },
 });
+
+const normalizeTelegramAlertRules = (raw = {}, legacy = {}) => {
+  const defaults = createDefaultTelegramAlertRules();
+  const numberOr = (value, fallback) =>
+    Number.isFinite(Number(value)) ? Number(value) : fallback;
+  const clamp = (value, fallback, min, max) =>
+    Math.min(max, Math.max(min, numberOr(value, fallback)));
+  const hasStructuredRules = Object.values(raw || {}).some(
+    (value) => value && typeof value === "object" && Object.prototype.hasOwnProperty.call(value, "enabled")
+  );
+  const progressRaw = raw.progressGap && typeof raw.progressGap === "object" ? raw.progressGap : {};
+  const closingRaw = raw.closingRate && typeof raw.closingRate === "object" ? raw.closingRate : {};
+  const skincareRaw = raw.skincareRatio && typeof raw.skincareRatio === "object" ? raw.skincareRatio : {};
+  const watchThreshold = clamp(
+    progressRaw.watchThreshold ?? legacy.watchProgressGap,
+    defaults.progressGap.watchThreshold,
+    0,
+    100
+  );
+  const criticalThreshold = Math.max(
+    watchThreshold,
+    clamp(
+      progressRaw.criticalThreshold ?? legacy.criticalProgressGap,
+      defaults.progressGap.criticalThreshold,
+      0,
+      100
+    )
+  );
+  const normalizeSingleRule = (key, fallbackThreshold, max = 100) => {
+    const source = raw[key] && typeof raw[key] === "object" ? raw[key] : {};
+    return {
+      enabled: source.enabled === true,
+      threshold: clamp(source.threshold, fallbackThreshold, 0, max),
+      severity: source.severity === "critical" ? "critical" : "watch",
+    };
+  };
+
+  return {
+    progressGap: {
+      enabled: hasStructuredRules ? progressRaw.enabled === true : true,
+      watchThreshold,
+      criticalThreshold,
+    },
+    cashAchievementRate: normalizeSingleRule(
+      "cashAchievementRate",
+      defaults.cashAchievementRate.threshold
+    ),
+    closingRate: {
+      enabled: hasStructuredRules ? closingRaw.enabled === true : true,
+      threshold: clamp(
+        closingRaw.threshold ?? legacy.closingRate,
+        defaults.closingRate.threshold,
+        0,
+        100
+      ),
+      minSample: Math.round(
+        clamp(
+          closingRaw.minSample ?? legacy.minNewCustomers,
+          defaults.closingRate.minSample,
+          0,
+          999
+        )
+      ),
+      severity: closingRaw.severity === "critical" ? "critical" : "watch",
+    },
+    skincareRatio: {
+      enabled: hasStructuredRules ? skincareRaw.enabled === true : true,
+      threshold: clamp(
+        skincareRaw.threshold ?? legacy.skincareRatio,
+        defaults.skincareRatio.threshold,
+        0,
+        100
+      ),
+      severity: skincareRaw.severity === "critical" ? "critical" : "watch",
+    },
+    newCustomers: normalizeSingleRule("newCustomers", defaults.newCustomers.threshold, 999999),
+    traffic: normalizeSingleRule("traffic", defaults.traffic.threshold, 999999),
+    missingReport: {
+      enabled: hasStructuredRules
+        ? raw.missingReport?.enabled === true
+        : legacy.missingReportEnabled !== false,
+      category: "data",
+    },
+    missingTarget: {
+      enabled: hasStructuredRules
+        ? raw.missingTarget?.enabled === true
+        : legacy.missingTargetEnabled !== false,
+      category: "data",
+    },
+  };
+};
+
+const normalizeTelegramBrandProfile = (raw = {}, legacyLimit = 8, legacyThresholds = {}) => {
+  const numberOr = (value, fallback) =>
+    Number.isFinite(Number(value)) ? Number(value) : fallback;
+  return {
+    limit: Math.max(1, Math.min(20, Math.round(numberOr(raw.limit, legacyLimit)))),
+    rules: normalizeTelegramAlertRules(
+      raw.rules && typeof raw.rules === "object" ? raw.rules : {},
+      legacyThresholds
+    ),
+  };
+};
 
 const normalizeTelegramAlertForm = (raw = {}) => {
   const defaults = createDefaultTelegramAlertForm();
-  const numberOr = (value, fallback) =>
-    Number.isFinite(Number(value)) ? Number(value) : fallback;
-
   const weekdays = Array.isArray(raw.weekdays)
     ? [...new Set(raw.weekdays.map(Number).filter((value) => Number.isInteger(value) && value >= 0 && value <= 6))]
     : defaults.weekdays;
   const brandIds = Array.isArray(raw.brandIds)
-    ? [...new Set(raw.brandIds.map(String).filter((value) => ["cyj", "anniu", "yibo"].includes(value)))]
+    ? [...new Set(raw.brandIds.map(String).filter((value) => TELEGRAM_ALERT_BRANDS.some((item) => item.id === value)))]
     : defaults.brandIds;
   const chatTargets = Array.isArray(raw.chatTargets)
     ? [...new Set(raw.chatTargets.map(String).filter((value) => ["main", "manager"].includes(value)))]
     : defaults.chatTargets;
-  const watchProgressGap = Math.max(
-    0,
-    Math.min(100, numberOr(raw.thresholds?.watchProgressGap, defaults.thresholds.watchProgressGap))
-  );
-  const criticalProgressGap = Math.max(
-    watchProgressGap,
-    Math.min(100, numberOr(raw.thresholds?.criticalProgressGap, defaults.thresholds.criticalProgressGap))
+  const legacyLimit = Number.isFinite(Number(raw.limit)) ? Number(raw.limit) : 8;
+  const legacyThresholds = raw.thresholds && typeof raw.thresholds === "object" ? raw.thresholds : {};
+  const brandProfiles = Object.fromEntries(
+    TELEGRAM_ALERT_BRANDS.map((brand) => [
+      brand.id,
+      normalizeTelegramBrandProfile(
+        raw.brandProfiles?.[brand.id] || {},
+        legacyLimit,
+        legacyThresholds
+      ),
+    ])
   );
 
   return {
-    ...defaults,
-    ...raw,
     enabled: raw.enabled === true,
     sendTime: /^\d{2}:\d{2}$/.test(String(raw.sendTime || ""))
       ? String(raw.sendTime)
@@ -103,32 +287,12 @@ const normalizeTelegramAlertForm = (raw = {}) => {
     weekdays: weekdays.length ? weekdays : defaults.weekdays,
     brandIds: brandIds.length ? brandIds : defaults.brandIds,
     chatTargets: chatTargets.length ? chatTargets : defaults.chatTargets,
-    limit: Math.max(1, Math.min(20, Math.round(numberOr(raw.limit, defaults.limit)))),
+    brandProfiles,
     sendWhenClear: raw.sendWhenClear === true,
     pausedUntil: /^\d{4}-\d{2}-\d{2}$/.test(String(raw.pausedUntil || ""))
       ? String(raw.pausedUntil)
       : "",
     timezone: "Asia/Taipei",
-    thresholds: {
-      ...defaults.thresholds,
-      ...(raw.thresholds || {}),
-      watchProgressGap,
-      criticalProgressGap,
-      closingRate: Math.max(
-        0,
-        Math.min(100, numberOr(raw.thresholds?.closingRate, defaults.thresholds.closingRate))
-      ),
-      skincareRatio: Math.max(
-        0,
-        Math.min(100, numberOr(raw.thresholds?.skincareRatio, defaults.thresholds.skincareRatio))
-      ),
-      minNewCustomers: Math.max(
-        0,
-        Math.min(999, Math.round(numberOr(raw.thresholds?.minNewCustomers, defaults.thresholds.minNewCustomers)))
-      ),
-      missingReportEnabled: raw.thresholds?.missingReportEnabled !== false,
-      missingTargetEnabled: raw.thresholds?.missingTargetEnabled !== false,
-    },
   };
 };
 
@@ -140,7 +304,7 @@ const ActionButton = ({
   className = "",
 }) => {
   const variants = {
-    primary: "bg-stone-800 text-white hover:bg-stone-900 border-stone-800",
+    primary: "bg-sky-600 text-white hover:bg-sky-700 border-sky-600",
     soft: "bg-indigo-50 text-indigo-700 hover:bg-indigo-100 border-indigo-100",
     secondary: "bg-white text-stone-600 hover:bg-stone-50 border-stone-200",
   };
@@ -157,14 +321,147 @@ const ActionButton = ({
   );
 };
 
+const TelegramRuleNumberField = ({ label, value, onChange, unit, max = 100 }) => (
+  <label className="rounded-xl border border-stone-100 bg-stone-50/80 p-3">
+    <span className="mb-1.5 block text-[10px] font-black text-stone-500">{label}</span>
+    <div className="flex items-center gap-2">
+      <input
+        type="number"
+        min="0"
+        max={max}
+        value={value}
+        onChange={(event) => onChange(event.target.value)}
+        className="w-full bg-transparent text-base font-black text-stone-700 outline-none"
+      />
+      <span className="whitespace-nowrap text-[10px] font-black text-stone-400">{unit}</span>
+    </div>
+  </label>
+);
+
+const TelegramRuleSeverityField = ({ value, onChange }) => (
+  <label className="rounded-xl border border-stone-100 bg-stone-50/80 p-3">
+    <span className="mb-1.5 block text-[10px] font-black text-stone-500">警示等級</span>
+    <select
+      value={value === "critical" ? "critical" : "watch"}
+      onChange={(event) => onChange(event.target.value)}
+      className="w-full bg-transparent text-xs font-black text-stone-700 outline-none"
+    >
+      <option value="watch">🟠 營運黃燈</option>
+      <option value="critical">🔴 營運紅燈</option>
+    </select>
+  </label>
+);
+
+const TelegramRuleEditorCard = ({ definition, rule, onChange, onRemove }) => {
+  const update = (field, value) => onChange({ ...rule, [field]: value });
+  const isDataRule = definition.category === "data";
+
+  return (
+    <article className="rounded-2xl border border-stone-100 bg-white p-4 shadow-sm">
+      <div className="flex items-start justify-between gap-3">
+        <div>
+          <div className="flex flex-wrap items-center gap-2">
+            <p className="text-xs font-black text-stone-800">{definition.label}</p>
+            <span className={`rounded-full px-2 py-0.5 text-[9px] font-black ${isDataRule ? "bg-amber-50 text-amber-600" : "bg-rose-50 text-rose-600"}`}>
+              {isDataRule ? "資料待補" : "營運判斷"}
+            </span>
+          </div>
+          <p className="mt-1 text-[10px] font-bold leading-4 text-stone-400">{definition.description}</p>
+        </div>
+        <button
+          type="button"
+          onClick={onRemove}
+          className="inline-flex shrink-0 items-center gap-1 rounded-lg border border-stone-100 bg-stone-50 px-2 py-1 text-[9px] font-black text-stone-400 transition hover:border-rose-100 hover:bg-rose-50 hover:text-rose-500"
+        >
+          <Trash2 size={11} />
+          移除
+        </button>
+      </div>
+
+      {!isDataRule && (
+        <div className="mt-3 grid grid-cols-1 gap-2 sm:grid-cols-2 lg:grid-cols-3">
+          {definition.id === "progressGap" && (
+            <>
+              <TelegramRuleNumberField
+                label="一般關注落後"
+                value={rule.watchThreshold}
+                onChange={(value) => update("watchThreshold", value)}
+                unit="百分點"
+              />
+              <TelegramRuleNumberField
+                label="重大預警落後"
+                value={rule.criticalThreshold}
+                onChange={(value) => update("criticalThreshold", value)}
+                unit="百分點"
+              />
+            </>
+          )}
+          {definition.id === "closingRate" && (
+            <>
+              <TelegramRuleNumberField
+                label="締結率低於"
+                value={rule.threshold}
+                onChange={(value) => update("threshold", value)}
+                unit="%"
+              />
+              <TelegramRuleNumberField
+                label="最低新客樣本"
+                value={rule.minSample}
+                onChange={(value) => update("minSample", value)}
+                unit="人"
+                max={999}
+              />
+              <TelegramRuleSeverityField
+                value={rule.severity}
+                onChange={(value) => update("severity", value)}
+              />
+            </>
+          )}
+          {["cashAchievementRate", "skincareRatio", "newCustomers", "traffic"].includes(definition.id) && (
+            <>
+              <TelegramRuleNumberField
+                label={
+                  definition.id === "cashAchievementRate"
+                    ? "達成率低於"
+                    : definition.id === "skincareRatio"
+                      ? "占比低於"
+                      : definition.id === "newCustomers"
+                        ? "新客少於"
+                        : "來客少於"
+                }
+                value={rule.threshold}
+                onChange={(value) => update("threshold", value)}
+                unit={
+                  ["cashAchievementRate", "skincareRatio"].includes(definition.id)
+                    ? "%"
+                    : definition.id === "traffic"
+                      ? "人次"
+                      : "人"
+                }
+                max={["newCustomers", "traffic"].includes(definition.id) ? 999999 : 100}
+              />
+              <TelegramRuleSeverityField
+                value={rule.severity}
+                onChange={(value) => update("severity", value)}
+              />
+            </>
+          )}
+        </div>
+      )}
+    </article>
+  );
+};
+
 const TelegramAlertControlCenter = () => {
   const { currentUser, userRole, showToast } = useContext(AppContext);
   const [form, setForm] = useState(createDefaultTelegramAlertForm);
   const [status, setStatus] = useState(null);
-  const [preview, setPreview] = useState("");
+  const [previewItems, setPreviewItems] = useState([]);
   const [isLoaded, setIsLoaded] = useState(false);
   const [loadingAction, setLoadingAction] = useState(null);
   const [lastMessage, setLastMessage] = useState("");
+  const [activeBrandId, setActiveBrandId] = useState("cyj");
+  const [rulePickerOpen, setRulePickerOpen] = useState(false);
 
   const configRef = doc(
     db,
@@ -246,26 +543,67 @@ const TelegramAlertControlCenter = () => {
     });
   };
 
-  const updateThreshold = (field, value) => {
-    setForm((previous) => ({
-      ...previous,
-      thresholds: {
-        ...previous.thresholds,
-        [field]: value,
+  const updateBrandProfile = (brandId, updater) => {
+    setForm((previous) => {
+      const currentProfile = previous.brandProfiles?.[brandId] || createDefaultTelegramBrandProfile();
+      const nextProfile = typeof updater === "function" ? updater(currentProfile) : updater;
+      return {
+        ...previous,
+        brandProfiles: {
+          ...previous.brandProfiles,
+          [brandId]: nextProfile,
+        },
+      };
+    });
+  };
+
+  const updateBrandRule = (brandId, ruleId, nextRule) => {
+    updateBrandProfile(brandId, (profile) => ({
+      ...profile,
+      rules: {
+        ...profile.rules,
+        [ruleId]: typeof nextRule === "function" ? nextRule(profile.rules?.[ruleId] || {}) : nextRule,
       },
     }));
+  };
+
+  const enableRule = (ruleId) => {
+    updateBrandRule(activeBrandId, ruleId, (current) => ({ ...current, enabled: true }));
+    setRulePickerOpen(false);
+  };
+
+  const disableRule = (ruleId) => {
+    updateBrandRule(activeBrandId, ruleId, (current) => ({ ...current, enabled: false }));
+  };
+
+  const copyActiveBrandProfile = (targetBrandId) => {
+    const source = form.brandProfiles?.[activeBrandId] || createDefaultTelegramBrandProfile();
+    const sourceLabel = getTelegramAlertBrandLabel(activeBrandId);
+    const targetLabel = getTelegramAlertBrandLabel(targetBrandId);
+    if (!window.confirm(`確定要用 ${sourceLabel} 的預警設定覆蓋 ${targetLabel} 嗎？`)) return;
+    updateBrandProfile(targetBrandId, JSON.parse(JSON.stringify(source)));
+    notify(`已將 ${sourceLabel} 設定複製到 ${targetLabel}，尚未儲存正式設定`, "success");
   };
 
   const validate = (normalized) => {
     if (!normalized.weekdays.length) throw new Error("請至少選擇一個推播星期");
     if (!normalized.brandIds.length) throw new Error("請至少選擇一個品牌");
     if (!normalized.chatTargets.length) throw new Error("請至少選擇一個接收群組");
-    if (
-      Number(normalized.thresholds.criticalProgressGap) <
-      Number(normalized.thresholds.watchProgressGap)
-    ) {
-      throw new Error("重大預警落後幅度不可小於一般關注門檻");
-    }
+
+    normalized.brandIds.forEach((brandId) => {
+      const profile = normalized.brandProfiles?.[brandId] || createDefaultTelegramBrandProfile();
+      const enabledRules = Object.values(profile.rules || {}).filter((rule) => rule?.enabled === true);
+      if (!enabledRules.length) {
+        throw new Error(`${getTelegramAlertBrandLabel(brandId)} 請至少啟用一個預警判斷項目`);
+      }
+      const progressRule = profile.rules?.progressGap;
+      if (
+        progressRule?.enabled &&
+        Number(progressRule.criticalThreshold) < Number(progressRule.watchThreshold)
+      ) {
+        throw new Error(`${getTelegramAlertBrandLabel(brandId)} 的重大預警落後幅度不可小於一般關注門檻`);
+      }
+    });
   };
 
   const saveConfig = async () => {
@@ -281,7 +619,7 @@ const TelegramAlertControlCenter = () => {
           updatedAtText: new Date().toISOString(),
           updatedBy: currentUser?.name || "director",
           updatedByRole: userRole || "director",
-          configVersion: "v1.6-notification-manager",
+          configVersion: "v3.0-brand-rule-profiles",
         },
         { merge: true }
       );
@@ -327,13 +665,32 @@ const TelegramAlertControlCenter = () => {
     return waitForCommand(documentRef);
   };
 
+  const normalizePreviewItems = (result = {}) => {
+    if (Array.isArray(result.brandPreviews) && result.brandPreviews.length > 0) {
+      return result.brandPreviews;
+    }
+    if (result.previewText) {
+      return [{
+        brandId: "legacy",
+        brand: "預覽",
+        previewText: result.previewText,
+        alertCount: Number(result.alertCount || 0),
+        operationalAlertCount: Number(result.operationalAlertCount || result.alertCount || 0),
+        dataIssueCount: Number(result.dataIssueCount || 0),
+        readCount: Number(result.readCount || 0),
+      }];
+    }
+    return [];
+  };
+
   const previewToday = async () => {
     try {
       setLoadingAction("preview");
       const result = await runCommand("preview");
-      setPreview(result.previewText || "目前沒有可預覽內容");
+      const items = normalizePreviewItems(result);
+      setPreviewItems(items);
       notify(
-        `已產生預警預覽：異常 ${Number(result.alertCount || 0).toLocaleString()} 項，讀取約 ${Number(result.readCount || 0).toLocaleString()} 筆`,
+        `已產生 ${items.length} 個品牌預覽：營運異常 ${Number(result.operationalAlertCount || 0).toLocaleString()} 家、資料待補 ${Number(result.dataIssueCount || 0).toLocaleString()} 家`,
         "success"
       );
       await refreshStatus({ silent: true });
@@ -348,9 +705,16 @@ const TelegramAlertControlCenter = () => {
     const targetLabels = form.chatTargets.map((value) =>
       value === "main" ? "高階主管主群" : "主管群"
     );
+    const selectedBrands = [
+      { id: "cyj", label: "DRCYJ" },
+      { id: "anniu", label: "安妞" },
+      { id: "yibo", label: "伊啵" },
+    ].filter((item) => form.brandIds.includes(item.id));
     if (
       !window.confirm(
-        `確定要將測試預警發送到：${targetLabels.join("、")}？\n\n測試不會改變正式排程的已發送狀態。`
+        `確定要將 ${selectedBrands.length} 則品牌測試預警發送到：${targetLabels.join("、")}？
+
+每個品牌會獨立發送一則，測試不會改變正式排程的已發送狀態。`
       )
     ) {
       return;
@@ -359,9 +723,10 @@ const TelegramAlertControlCenter = () => {
     try {
       setLoadingAction("test");
       const result = await runCommand("test");
-      setPreview(result.previewText || "");
+      const items = normalizePreviewItems(result);
+      setPreviewItems(items);
       notify(
-        `Telegram 測試推播完成：異常 ${Number(result.alertCount || 0).toLocaleString()} 項`,
+        `Telegram 測試推播完成：已發送 ${items.length} 則品牌訊息`,
         "success"
       );
       await refreshStatus({ silent: true });
@@ -381,7 +746,9 @@ const TelegramAlertControlCenter = () => {
       return;
     }
     setForm(createDefaultTelegramAlertForm());
-    setPreview("");
+    setActiveBrandId("cyj");
+    setRulePickerOpen(false);
+    setPreviewItems([]);
     setLastMessage("已恢復畫面建議值，尚未寫入正式設定");
   };
 
@@ -409,7 +776,7 @@ const TelegramAlertControlCenter = () => {
             </p>
             <h3 className="mt-1 text-lg font-black text-stone-800">Telegram 戰情設定中心</h3>
             <p className="mt-1 max-w-3xl text-xs font-bold leading-5 text-stone-400">
-              調整主動預警開關、時間、星期、品牌、接收群組與判斷門檻；儲存後不需重新部署 Functions。
+              每個品牌獨立設定判斷項目、門檻與顯示上限；可從既有指標庫自由加入或移除，儲存後不需重新部署 Functions。
             </p>
           </div>
         </div>
@@ -619,20 +986,39 @@ const TelegramAlertControlCenter = () => {
                     : "尚無紀錄"}
                 </p>
               </div>
-              <div className="grid grid-cols-2 gap-2">
+              <div className="grid grid-cols-1 gap-2 sm:grid-cols-3">
                 <div className="rounded-2xl bg-rose-50 p-3">
-                  <p className="text-[10px] font-black text-rose-400">異常項目</p>
+                  <p className="text-[10px] font-black text-rose-400">營運異常</p>
                   <p className="mt-1 text-lg font-black text-rose-600">
-                    {Number(status?.alertCount || status?.lastManualAlertCount || 0).toLocaleString()}
+                    {Number(status?.operationalAlertCount ?? status?.lastManualOperationalAlertCount ?? 0).toLocaleString()}
+                  </p>
+                </div>
+                <div className="rounded-2xl bg-amber-50 p-3">
+                  <p className="text-[10px] font-black text-amber-500">資料待補</p>
+                  <p className="mt-1 text-lg font-black text-amber-600">
+                    {Number(status?.dataIssueCount ?? status?.lastManualDataIssueCount ?? 0).toLocaleString()}
                   </p>
                 </div>
                 <div className="rounded-2xl bg-sky-50 p-3">
                   <p className="text-[10px] font-black text-sky-400">文件讀取</p>
                   <p className="mt-1 text-lg font-black text-sky-600">
-                    {Number(status?.readCount || status?.lastManualReadCount || 0).toLocaleString()}
+                    {Number(status?.readCount ?? status?.lastManualReadCount ?? 0).toLocaleString()}
                   </p>
                 </div>
               </div>
+              {status?.brandResults && Object.keys(status.brandResults).length > 0 && (
+                <div className="space-y-2 rounded-2xl border border-stone-100 bg-white p-3">
+                  <p className="text-[10px] font-black text-stone-400">各品牌最近結果</p>
+                  {Object.entries(status.brandResults).filter(([brandId]) => (status?.brandIds || form.brandIds).includes(brandId)).map(([brandId, item]) => (
+                    <div key={brandId} className="flex items-center justify-between gap-3 text-[11px] font-bold text-stone-600">
+                      <span>{item?.brand || brandId}</span>
+                      <span className={item?.status === "error" ? "text-rose-600" : item?.status === "sent" ? "text-emerald-600" : "text-stone-400"}>
+                        {TELEGRAM_BRAND_STATUS_LABELS[item?.status] || item?.status || "尚無紀錄"}
+                      </span>
+                    </div>
+                  ))}
+                </div>
+              )}
               {status?.lastError && (
                 <div className="rounded-2xl border border-rose-100 bg-rose-50 p-3 text-[11px] font-bold text-rose-600">
                   {status.lastError}
@@ -656,72 +1042,139 @@ const TelegramAlertControlCenter = () => {
         </div>
 
         <div className="space-y-4 rounded-[1.5rem] border border-white bg-white/90 p-5 shadow-sm">
-          <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
+          <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
             <div>
-              <p className="text-sm font-black text-stone-800">預警判斷門檻</p>
+              <p className="text-sm font-black text-stone-800">各品牌預警判斷設定</p>
               <p className="mt-1 text-[11px] font-bold text-stone-400">
-                由後端固定規則判斷，不交由 Gemini 自由猜測。
+                每個品牌有獨立規則。移除只會停用該項目，之後可從指標庫重新加入。
               </p>
             </div>
-            <label className="flex items-center gap-2 text-xs font-black text-stone-600">
-              最多顯示
-              <input
-                type="number"
-                min="1"
-                max="20"
-                value={form.limit}
-                onChange={(event) => setForm((previous) => ({ ...previous, limit: event.target.value }))}
-                className="w-16 rounded-xl border border-stone-200 bg-stone-50 px-2 py-2 text-center outline-none"
-              />
-              項
-            </label>
+            <div className="flex flex-wrap gap-2">
+              {TELEGRAM_ALERT_BRANDS.filter((brand) => brand.id !== activeBrandId).map((brand) => (
+                <button
+                  key={brand.id}
+                  type="button"
+                  onClick={() => copyActiveBrandProfile(brand.id)}
+                  className="inline-flex items-center gap-1 rounded-xl border border-stone-200 bg-white px-3 py-2 text-[10px] font-black text-stone-500 transition hover:border-indigo-200 hover:bg-indigo-50 hover:text-indigo-600"
+                >
+                  <Copy size={12} />
+                  複製到{brand.label}
+                </button>
+              ))}
+            </div>
           </div>
 
-          <div className="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-5">
-            {[
-              { key: "watchProgressGap", label: "一般關注落後", unit: "百分點", max: 100 },
-              { key: "criticalProgressGap", label: "重大預警落後", unit: "百分點", max: 100 },
-              { key: "closingRate", label: "新客締結率低於", unit: "%", max: 100 },
-              { key: "skincareRatio", label: "保養品占比低於", unit: "%", max: 100 },
-              { key: "minNewCustomers", label: "締結率最少新客數", unit: "人", max: 999 },
-            ].map((item) => (
-              <label key={item.key} className="rounded-2xl border border-stone-100 bg-stone-50/70 p-3">
-                <span className="mb-2 block text-[10px] font-black text-stone-500">{item.label}</span>
-                <div className="flex items-center gap-2">
-                  <input
-                    type="number"
-                    min="0"
-                    max={item.max}
-                    value={form.thresholds[item.key]}
-                    onChange={(event) => updateThreshold(item.key, event.target.value)}
-                    className="w-full bg-transparent text-lg font-black text-stone-700 outline-none"
-                  />
-                  <span className="text-[10px] font-black text-stone-400">{item.unit}</span>
+          <div className="grid grid-cols-3 gap-2 rounded-2xl bg-stone-50 p-1.5">
+            {TELEGRAM_ALERT_BRANDS.map((brand) => {
+              const active = activeBrandId === brand.id;
+              const included = form.brandIds.includes(brand.id);
+              const enabledCount = Object.values(form.brandProfiles?.[brand.id]?.rules || {}).filter((rule) => rule?.enabled).length;
+              return (
+                <button
+                  key={brand.id}
+                  type="button"
+                  onClick={() => {
+                    setActiveBrandId(brand.id);
+                    setRulePickerOpen(false);
+                  }}
+                  className={`rounded-xl px-3 py-2.5 text-center transition ${active ? "bg-white text-sky-700 shadow-sm" : "text-stone-400 hover:text-stone-600"}`}
+                >
+                  <span className="block text-xs font-black">{brand.label}</span>
+                  <span className="mt-0.5 block text-[9px] font-bold">
+                    {included ? `已納入｜${enabledCount} 項` : `未納入｜${enabledCount} 項`}
+                  </span>
+                </button>
+              );
+            })}
+          </div>
+
+          {(() => {
+            const activeProfile = form.brandProfiles?.[activeBrandId] || createDefaultTelegramBrandProfile();
+            const enabledDefinitions = TELEGRAM_ALERT_RULE_DEFINITIONS.filter(
+              (definition) => activeProfile.rules?.[definition.id]?.enabled === true
+            );
+            const disabledDefinitions = TELEGRAM_ALERT_RULE_DEFINITIONS.filter(
+              (definition) => activeProfile.rules?.[definition.id]?.enabled !== true
+            );
+            return (
+              <div className="space-y-4">
+                <div className="flex flex-col gap-3 rounded-2xl border border-sky-100 bg-sky-50/50 p-4 md:flex-row md:items-center md:justify-between">
+                  <div>
+                    <p className="text-xs font-black text-sky-800">
+                      {getTelegramAlertBrandLabel(activeBrandId)}｜已啟用 {enabledDefinitions.length} 項判斷
+                    </p>
+                    <p className="mt-1 text-[10px] font-bold text-sky-500">
+                      這些設定只套用到 {getTelegramAlertBrandLabel(activeBrandId)} 的獨立巡察訊息。
+                    </p>
+                  </div>
+                  <label className="flex items-center gap-2 text-xs font-black text-stone-600">
+                    最多顯示
+                    <input
+                      type="number"
+                      min="1"
+                      max="20"
+                      value={activeProfile.limit}
+                      onChange={(event) => updateBrandProfile(activeBrandId, (profile) => ({ ...profile, limit: event.target.value }))}
+                      className="w-16 rounded-xl border border-sky-100 bg-white px-2 py-2 text-center outline-none"
+                    />
+                    家
+                  </label>
                 </div>
-              </label>
-            ))}
-          </div>
 
-          <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
-            <label className="flex cursor-pointer items-center justify-between gap-3 rounded-2xl border border-stone-100 bg-stone-50/70 p-4">
-              <span className="text-xs font-black text-stone-700">日報缺漏列為重大預警</span>
-              <input
-                type="checkbox"
-                checked={form.thresholds.missingReportEnabled}
-                onChange={(event) => updateThreshold("missingReportEnabled", event.target.checked)}
-                className="h-5 w-5 rounded text-sky-500"
-              />
-            </label>
-            <label className="flex cursor-pointer items-center justify-between gap-3 rounded-2xl border border-stone-100 bg-stone-50/70 p-4">
-              <span className="text-xs font-black text-stone-700">現金目標缺漏列為關注</span>
-              <input
-                type="checkbox"
-                checked={form.thresholds.missingTargetEnabled}
-                onChange={(event) => updateThreshold("missingTargetEnabled", event.target.checked)}
-                className="h-5 w-5 rounded text-sky-500"
-              />
-            </label>
-          </div>
+                <div className="relative">
+                  <button
+                    type="button"
+                    onClick={() => setRulePickerOpen((previous) => !previous)}
+                    disabled={!disabledDefinitions.length}
+                    className="inline-flex min-h-10 items-center gap-1.5 rounded-xl border border-sky-200 bg-sky-50 px-4 py-2 text-xs font-black text-sky-700 transition hover:bg-sky-100 disabled:cursor-not-allowed disabled:opacity-40"
+                  >
+                    <Plus size={14} />
+                    {disabledDefinitions.length ? "新增判斷項目" : "所有可用項目皆已加入"}
+                  </button>
+                  {rulePickerOpen && disabledDefinitions.length > 0 && (
+                    <div className="absolute left-0 top-12 z-20 w-full max-w-xl rounded-2xl border border-stone-200 bg-white p-2 shadow-2xl">
+                      <p className="px-3 py-2 text-[10px] font-black text-stone-400">選擇要加入 {getTelegramAlertBrandLabel(activeBrandId)} 的判斷項目</p>
+                      <div className="max-h-72 space-y-1 overflow-y-auto">
+                        {disabledDefinitions.map((definition) => (
+                          <button
+                            key={definition.id}
+                            type="button"
+                            onClick={() => enableRule(definition.id)}
+                            className="flex w-full items-start justify-between gap-3 rounded-xl px-3 py-2.5 text-left transition hover:bg-sky-50"
+                          >
+                            <span>
+                              <span className="block text-xs font-black text-stone-700">{definition.label}</span>
+                              <span className="mt-0.5 block text-[10px] font-bold leading-4 text-stone-400">{definition.description}</span>
+                            </span>
+                            <Plus size={14} className="mt-0.5 shrink-0 text-sky-500" />
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+                </div>
+
+                {enabledDefinitions.length > 0 ? (
+                  <div className="grid grid-cols-1 gap-3 xl:grid-cols-2">
+                    {enabledDefinitions.map((definition) => (
+                      <TelegramRuleEditorCard
+                        key={definition.id}
+                        definition={definition}
+                        rule={activeProfile.rules[definition.id]}
+                        onChange={(nextRule) => updateBrandRule(activeBrandId, definition.id, nextRule)}
+                        onRemove={() => disableRule(definition.id)}
+                      />
+                    ))}
+                  </div>
+                ) : (
+                  <div className="rounded-2xl border border-dashed border-amber-200 bg-amber-50/60 p-8 text-center">
+                    <p className="text-xs font-black text-amber-700">此品牌尚未啟用任何判斷項目</p>
+                    <p className="mt-1 text-[10px] font-bold text-amber-500">請按「新增判斷項目」至少加入一項後再儲存。</p>
+                  </div>
+                )}
+              </div>
+            );
+          })()}
         </div>
 
         <div className="flex flex-col gap-3 border-t border-sky-100 pt-5 lg:flex-row lg:items-center lg:justify-between">
@@ -757,21 +1210,46 @@ const TelegramAlertControlCenter = () => {
           </ActionButton>
         </div>
 
-        {preview && (
+        {previewItems.length > 0 && (
           <div className="rounded-[1.5rem] border border-sky-100 bg-[#F8FCFF] p-5">
-            <div className="mb-3 flex items-center justify-between gap-2">
-              <p className="text-sm font-black text-stone-800">Telegram 預覽內容</p>
+            <div className="mb-4 flex items-center justify-between gap-2">
+              <div>
+                <p className="text-sm font-black text-stone-800">各品牌 Telegram 預覽</p>
+                <p className="mt-1 text-[10px] font-bold text-stone-400">正式排程與測試推播都會依下列卡片，一個品牌獨立發送一則。</p>
+              </div>
               <button
                 type="button"
-                onClick={() => setPreview("")}
+                onClick={() => setPreviewItems([])}
                 className="text-[10px] font-black text-stone-400 hover:text-rose-500"
               >
                 關閉預覽
               </button>
             </div>
-            <pre className="max-h-[420px] overflow-y-auto whitespace-pre-wrap break-words font-sans text-xs font-bold leading-6 text-stone-600">
-              {preview}
-            </pre>
+            <div className="grid grid-cols-1 gap-4 xl:grid-cols-3">
+              {previewItems.map((item, index) => (
+                <article key={item.brandId || `${item.brand}-${index}`} className="overflow-hidden rounded-2xl border border-sky-100 bg-white shadow-sm">
+                  <div className="flex items-center justify-between border-b border-sky-50 bg-sky-50/60 px-4 py-3">
+                    <div>
+                      <p className="text-sm font-black text-stone-800">{item.brand || "品牌預覽"}</p>
+                      <p className="mt-0.5 text-[10px] font-bold text-stone-400">
+                        營運異常 {Number(item.operationalAlertCount || 0).toLocaleString()}｜資料待補 {Number(item.dataIssueCount || 0).toLocaleString()}｜最多 {Number(item.limit || 0).toLocaleString()} 家
+                      </p>
+                      {Array.isArray(item.enabledRuleLabels) && item.enabledRuleLabels.length > 0 && (
+                        <p className="mt-1 text-[9px] font-bold text-sky-500">
+                          判斷：{item.enabledRuleLabels.join("、")}
+                        </p>
+                      )}
+                    </div>
+                    <span className="rounded-full bg-white px-2.5 py-1 text-[10px] font-black text-sky-600 shadow-sm">
+                      排除 {Number(item.excludedStoreCount || 0).toLocaleString()} 家
+                    </span>
+                  </div>
+                  <pre className="max-h-[520px] overflow-y-auto whitespace-pre-wrap break-words p-4 font-sans text-xs font-bold leading-6 text-stone-600">
+                    {item.previewText || "目前沒有可預覽內容"}
+                  </pre>
+                </article>
+              ))}
+            </div>
           </div>
         )}
       </div>

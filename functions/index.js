@@ -1106,6 +1106,42 @@ async function loadTelegramAgentOrgProfile(brandId, ctx) {
     return { managers, stores: Object.keys(storeOwner), storeOwner, sourcePath: ref.path };
 }
 
+function getAuditExclusionsDocRef(brandId) {
+    // 與前端 App.getDocPath("audit_exclusions") 完全一致。
+    if (isLegacyCyjBrand(brandId)) {
+        return getLegacyCyjDataRootRef().collection("global_settings").doc("audit_exclusions");
+    }
+    return getBrandRootRef(brandId).collection("settings").doc("audit_exclusions");
+}
+
+function normalizeTelegramAuditExclusionStores(raw = {}) {
+    let values = [];
+    if (Array.isArray(raw.stores)) values = raw.stores;
+    else if (raw.stores && typeof raw.stores === "object") {
+        values = Object.keys(raw.stores).filter((key) => raw.stores[key]);
+    } else if (Array.isArray(raw.excludedStores)) values = raw.excludedStores;
+    else if (Array.isArray(raw.storeNames)) values = raw.storeNames;
+
+    return [...new Set(values.map(normalizeSummaryCoreName).filter(Boolean))];
+}
+
+async function loadTelegramAgentAuditExclusions(brandId, ctx) {
+    const ref = getAuditExclusionsDocRef(brandId);
+    const result = await readTelegramAgentDoc(
+        ref,
+        ctx,
+        "audit_exclusions",
+        { brandId, sourcePath: ref.path },
+        300
+    );
+    const stores = result.exists ? normalizeTelegramAuditExclusionStores(result.data || {}) : [];
+    return {
+        stores,
+        storeSet: new Set(stores),
+        sourcePath: ref.path,
+    };
+}
+
 async function loadTelegramAgentTargetMap(brandId, yearMonth, ctx, dashboardData = null) {
     const summaryRef = getSummaryCollection(brandId, "monthly_targets_summary").doc(yearMonth);
     const summaryResult = await readTelegramAgentDoc(
@@ -1965,31 +2001,44 @@ async function getOperationalAlerts(yearMonth, brandName = null, limit = 10, age
     const ym = normalizeTelegramAgentYearMonth(yearMonth) || getTelegramAgentTaipeiNow().yearMonth;
     const brands = resolveTelegramAgentBrands(brandName, "");
     const expectedProgress = getTelegramAgentExpectedProgress(ym);
-    const rules = normalizeTelegramActiveAlertThresholds(alertOptions || {});
+    const rules = normalizeTelegramActiveAlertRules(alertOptions || {});
+    const enabledRuleLabels = getTelegramActiveAlertEnabledRuleLabels(rules);
     const alerts = [];
+    const dataIssues = [];
     const brandSummaries = [];
 
     for (const brandId of brands) {
-        // 依序載入以共享同一題快取；避免 loadStoreMonth 與 org/target 同時啟動造成重複讀取。
+        // 只使用正式組織架構納管且未列入 audit_exclusions 的店家。
         const loaded = await loadTelegramAgentStoreMonth(brandId, ym, ctx);
         const org = await loadTelegramAgentOrgProfile(brandId, ctx);
+        const exclusions = await loadTelegramAgentAuditExclusions(brandId, ctx);
         const targetResult = await loadTelegramAgentTargetMap(brandId, ym, ctx);
         const rowByCore = {};
         loaded.rows.forEach((row) => {
             const core = normalizeSummaryCoreName(row.storeName);
             if (core) rowByCore[core] = row;
         });
-        const storeCores = [...new Set([...org.stores, ...Object.keys(rowByCore)])];
+
+        const formalStoreCores = [...new Set((org.stores || []).map(normalizeSummaryCoreName).filter(Boolean))];
+        const formalStoreSet = new Set(formalStoreCores);
+        const activeStoreCores = formalStoreCores.filter((storeCore) => !exclusions.storeSet.has(storeCore));
+        const excludedFormalStores = formalStoreCores.filter((storeCore) => exclusions.storeSet.has(storeCore));
+        const unexpectedReportStores = Object.keys(rowByCore).filter(
+            (storeCore) => !formalStoreSet.has(storeCore) && !exclusions.storeSet.has(storeCore)
+        );
+
         let brandCash = 0;
         let brandBudget = 0;
         let reportedStoreCount = 0;
         let targetedStoreCount = 0;
         const missingReportStores = [];
         const missingTargetStores = [];
-        let criticalCount = 0;
-        let watchCount = 0;
+        const brandAlerts = [];
+        const brandDataIssues = [];
+        let operationalCriticalCount = 0;
+        let operationalWatchCount = 0;
 
-        storeCores.forEach((storeCore) => {
+        activeStoreCores.forEach((storeCore) => {
             const row = rowByCore[storeCore] || null;
             const target = targetResult.map[storeCore] || {};
             const cash = Number(row?.cash || 0);
@@ -2001,8 +2050,20 @@ async function getOperationalAlerts(yearMonth, brandName = null, limit = 10, age
             const closingRate = newCount > 0 ? Number(((newClosings / newCount) * 100).toFixed(1)) : null;
             const skincare = Number(row?.skincareGross ?? row?.skincare ?? 0);
             const skincareRatio = cash > 0 ? Number(((skincare / cash) * 100).toFixed(1)) : null;
-            const reasons = [];
+            const traffic = Number(row?.traffic || 0);
+            const operationalReasons = [];
+            const dataReasons = [];
             let severity = "normal";
+
+            const escalateSeverity = (nextSeverity) => {
+                const weight = { normal: 0, watch: 1, critical: 2 };
+                if ((weight[nextSeverity] || 0) > (weight[severity] || 0)) severity = nextSeverity;
+            };
+            const addOperationalReason = (rule, condition, reason) => {
+                if (!rule?.enabled || !condition) return;
+                operationalReasons.push(reason);
+                escalateSeverity(rule.severity === "critical" ? "critical" : "watch");
+            };
 
             brandCash += cash;
             brandBudget += budget;
@@ -2011,60 +2072,92 @@ async function getOperationalAlerts(yearMonth, brandName = null, limit = 10, age
             if (budget > 0) targetedStoreCount += 1;
             else missingTargetStores.push(storeCore);
 
-            if (!row && rules.missingReportEnabled) {
-                severity = "critical";
-                reasons.push("本月尚無日報資料");
-            }
-            if (budget <= 0) {
-                if (rules.missingTargetEnabled) {
-                    if (severity === "normal") severity = "watch";
-                    reasons.push("現金目標缺漏");
+            if (!row && rules.missingReport.enabled) dataReasons.push("本月尚無日報資料");
+            if (budget <= 0 && rules.missingTarget.enabled) dataReasons.push("現金目標缺漏");
+
+            if (rules.progressGap.enabled && budget > 0 && progressGap !== null) {
+                if (progressGap <= -rules.progressGap.criticalThreshold) {
+                    severity = "critical";
+                    operationalReasons.push(`現金進度落後 ${Math.abs(progressGap).toFixed(1)} 個百分點`);
+                } else if (progressGap <= -rules.progressGap.watchThreshold) {
+                    escalateSeverity("watch");
+                    operationalReasons.push(`現金進度落後 ${Math.abs(progressGap).toFixed(1)} 個百分點`);
                 }
-            } else if (progressGap <= -rules.criticalProgressGap) {
-                severity = "critical";
-                reasons.push(`現金進度落後 ${Math.abs(progressGap).toFixed(1)} 個百分點`);
-            } else if (progressGap <= -rules.watchProgressGap) {
-                if (severity === "normal") severity = "watch";
-                reasons.push(`現金進度落後 ${Math.abs(progressGap).toFixed(1)} 個百分點`);
-            }
-            if (newCount >= rules.minNewCustomers && closingRate !== null && closingRate < rules.closingRate) {
-                if (severity === "normal") severity = "watch";
-                reasons.push(`新客締結率 ${closingRate.toFixed(1)}%`);
-            }
-            if (cash > 0 && skincareRatio !== null && skincareRatio < rules.skincareRatio) {
-                if (severity === "normal") severity = "watch";
-                reasons.push(`保養品占比 ${skincareRatio.toFixed(1)}%`);
             }
 
-            if (severity !== "normal" || reasons.length > 0) {
-                if (severity === "critical") criticalCount += 1;
-                else if (severity === "watch") watchCount += 1;
-                alerts.push({
-                    brand: getTelegramAgentBrandLabel(brandId),
-                    brandId,
-                    storeName: storeCore,
-                    manager: org.storeOwner[storeCore] || row?.manager || "未分配",
-                    cash,
-                    budget,
-                    cashAchievementRate: achievement,
-                    achievement,
-                    expectedProgress,
-                    progressGap,
-                    traffic: Number(row?.traffic || 0),
-                    newCustomerCount: newCount,
-                    newClosingRate: closingRate,
-                    skincareRatio,
-                    severity,
-                    reasons,
-                    hasReportData: Boolean(row),
-                    hasTargetData: budget > 0,
-                    source: loaded.source,
-                });
+            addOperationalReason(
+                rules.cashAchievementRate,
+                budget > 0 && achievement !== null && achievement < rules.cashAchievementRate.threshold,
+                `現金達成率 ${achievement === null ? "無法計算" : `${achievement.toFixed(1)}%`}`
+            );
+            addOperationalReason(
+                rules.closingRate,
+                Boolean(row) && newCount >= rules.closingRate.minSample && closingRate !== null && closingRate < rules.closingRate.threshold,
+                `新客締結率 ${closingRate === null ? "無法計算" : `${closingRate.toFixed(1)}%`}`
+            );
+            addOperationalReason(
+                rules.skincareRatio,
+                Boolean(row) && cash > 0 && skincareRatio !== null && skincareRatio < rules.skincareRatio.threshold,
+                `保養品占比 ${skincareRatio === null ? "無法計算" : `${skincareRatio.toFixed(1)}%`}`
+            );
+            addOperationalReason(
+                rules.newCustomers,
+                Boolean(row) && newCount < rules.newCustomers.threshold,
+                `本月新客 ${newCount} 人`
+            );
+            addOperationalReason(
+                rules.traffic,
+                Boolean(row) && traffic < rules.traffic.threshold,
+                `本月來客 ${traffic} 人次`
+            );
+
+            const baseRow = {
+                brand: getTelegramAgentBrandLabel(brandId),
+                brandId,
+                storeName: storeCore,
+                manager: org.storeOwner[storeCore] || row?.manager || "未分配",
+                cash,
+                budget,
+                cashAchievementRate: achievement,
+                achievement,
+                expectedProgress,
+                progressGap,
+                traffic,
+                newCustomerCount: newCount,
+                newClosingRate: closingRate,
+                skincareRatio,
+                hasReportData: Boolean(row),
+                hasTargetData: budget > 0,
+                source: loaded.source,
+            };
+
+            if (severity !== "normal" && operationalReasons.length > 0) {
+                if (severity === "critical") operationalCriticalCount += 1;
+                else operationalWatchCount += 1;
+                brandAlerts.push({ ...baseRow, severity, reasons: operationalReasons });
+            }
+            if (dataReasons.length > 0) {
+                brandDataIssues.push({ ...baseRow, severity: "data", reasons: dataReasons });
             }
         });
 
+        const severityWeight = { critical: 3, watch: 1, normal: 0 };
+        brandAlerts.sort(
+            (a, b) =>
+                (severityWeight[b.severity] - severityWeight[a.severity]) ||
+                ((a.progressGap ?? 999) - (b.progressGap ?? 999))
+        );
+        brandDataIssues.sort((a, b) => {
+            const aMissingReport = a.hasReportData ? 0 : 1;
+            const bMissingReport = b.hasReportData ? 0 : 1;
+            return bMissingReport - aMissingReport || String(a.storeName).localeCompare(String(b.storeName), "zh-Hant");
+        });
+
+        alerts.push(...brandAlerts);
+        dataIssues.push(...brandDataIssues);
+
         const dataQuality = buildTelegramAgentDataQuality({
-            expectedStoreCount: org.stores.length,
+            expectedStoreCount: activeStoreCores.length,
             reportedStoreCount,
             targetedStoreCount,
             source: loaded.source,
@@ -2079,28 +2172,48 @@ async function getOperationalAlerts(yearMonth, brandName = null, limit = 10, age
             cashAchievementRate: brandBudget > 0 ? Number(((brandCash / brandBudget) * 100).toFixed(1)) : null,
             expectedProgress,
             progressGap: brandBudget > 0 ? Number((((brandCash / brandBudget) * 100) - expectedProgress).toFixed(1)) : null,
-            criticalCount,
-            watchCount,
+            operationalCriticalCount,
+            operationalWatchCount,
+            criticalCount: operationalCriticalCount,
+            watchCount: operationalWatchCount,
+            dataIssueCount: brandDataIssues.length,
+            activeStoreCount: activeStoreCores.length,
+            formalStoreCount: formalStoreCores.length,
+            excludedStoreCount: exclusions.stores.length,
+            excludedStores: exclusions.stores,
+            excludedFormalStores,
+            unexpectedReportStoreCount: unexpectedReportStores.length,
+            unexpectedReportStores,
+            rosterIssue: formalStoreCores.length === 0,
+            enabledRuleLabels,
             dataQuality,
             source: loaded.source,
             targetSource: targetResult.source,
             orgSourcePath: org.sourcePath,
+            auditExclusionsSourcePath: exclusions.sourcePath,
         });
     }
 
-    const severityWeight = { critical: 3, high: 2, watch: 1, normal: 0 };
+    const perBrandLimit = Math.min(20, Math.max(1, Number(limit) || 10));
+    const severityWeight = { critical: 3, watch: 1, normal: 0 };
     alerts.sort((a, b) => (severityWeight[b.severity] - severityWeight[a.severity]) || ((a.progressGap ?? 999) - (b.progressGap ?? 999)));
     return {
         yearMonth: ym,
         expectedProgress,
         brandSummaries,
-        alerts: alerts.slice(0, Math.min(20, Math.max(1, Number(limit) || 10))),
-        alertCount: alerts.length,
-        rule_note: `依目前設定：現金進度落後 ${rules.watchProgressGap} 個百分點以上、新客締結率低於 ${rules.closingRate}%、保養品占比低於 ${rules.skincareRatio}%${rules.missingReportEnabled ? "、日報缺漏" : ""}${rules.missingTargetEnabled ? "、現金目標缺漏" : ""}時列入提醒。`,
+        alerts: alerts.slice(0, perBrandLimit),
+        dataIssues: dataIssues.slice(0, perBrandLimit),
+        operationalAlertCount: alerts.length,
+        dataIssueCount: dataIssues.length,
+        alertCount: alerts.length + dataIssues.length,
+        perBrandLimit,
+        enabledRuleLabels,
+        rule_note: enabledRuleLabels.length
+            ? `本次依品牌設定啟用：${enabledRuleLabels.join("、")}。`
+            : "本品牌目前未啟用任何預警判斷項目。",
         metric_dictionary: getTelegramAgentMetricDictionary(["cashAchievementRate", "expectedProgress", "progressGap"]),
     };
 }
-
 async function getDataHealth(yearMonth, brandName = null, agentContext = null) {
     const ctx = agentContext;
     const ym = normalizeTelegramAgentYearMonth(yearMonth) || getTelegramAgentTaipeiNow().yearMonth;
@@ -2663,31 +2776,49 @@ exports.telegramWebhook = onRequest({
 
 
 // ==========================================
-// ★ DRCYJ Telegram 預警管理中心 v1.6
-// 使用者於 SaaS「推播管理 > 智慧戰情預警」操作；設定不再寫死於程式碼。
+// ★ DRCYJ Telegram 預警管理中心 v3.0
+// 每品牌獨立規則、可選指標庫、品牌獨立顯示上限。
 // 設定路徑：artifacts/default-app-id/public/data/global_settings/telegram_active_alerts
 // 狀態路徑：artifacts/default-app-id/public/data/global_settings/telegram_active_alert_status
-// 排程每 5 分鐘只讀設定；到達指定時間才載入營運資料並推播。
 // ==========================================
+const TELEGRAM_ALERT_BRAND_IDS = ["cyj", "anniu", "yibo"];
+const TELEGRAM_ACTIVE_ALERT_RULE_LABELS = Object.freeze({
+    progressGap: "現金進度差距",
+    cashAchievementRate: "現金業績達成率",
+    closingRate: "新客締結率",
+    skincareRatio: "保養品占比",
+    newCustomers: "本月新客數",
+    traffic: "本月來客人次",
+    missingReport: "店家日報缺漏",
+    missingTarget: "現金目標缺漏",
+});
+
+function createTelegramActiveAlertDefaultRules() {
+    return {
+        progressGap: { enabled: true, watchThreshold: 10, criticalThreshold: 20 },
+        cashAchievementRate: { enabled: false, threshold: 50, severity: "watch" },
+        closingRate: { enabled: true, threshold: 35, minSample: 5, severity: "watch" },
+        skincareRatio: { enabled: true, threshold: 5, severity: "watch" },
+        newCustomers: { enabled: false, threshold: 10, severity: "watch" },
+        traffic: { enabled: false, threshold: 50, severity: "watch" },
+        missingReport: { enabled: true, category: "data" },
+        missingTarget: { enabled: true, category: "data" },
+    };
+}
+
+function createTelegramActiveAlertDefaultBrandProfile() {
+    return { limit: 8, rules: createTelegramActiveAlertDefaultRules() };
+}
+
 const TELEGRAM_ACTIVE_ALERT_DEFAULTS = Object.freeze({
     enabled: false,
     sendTime: "09:35",
     weekdays: [1, 2, 3, 4, 5],
-    brandIds: ["cyj", "anniu", "yibo"],
+    brandIds: [...TELEGRAM_ALERT_BRAND_IDS],
     chatTargets: ["main", "manager"],
-    limit: 8,
     sendWhenClear: false,
     pausedUntil: "",
     timezone: "Asia/Taipei",
-    thresholds: {
-        watchProgressGap: 10,
-        criticalProgressGap: 20,
-        closingRate: 35,
-        skincareRatio: 5,
-        minNewCustomers: 5,
-        missingReportEnabled: true,
-        missingTargetEnabled: true,
-    },
 });
 
 const TELEGRAM_ALERT_APP_ID = "default-app-id";
@@ -2710,21 +2841,106 @@ function clampTelegramAlertNumber(value, fallback, min, max) {
     return Math.min(max, Math.max(min, num));
 }
 
-function normalizeTelegramActiveAlertThresholds(raw = {}) {
-    const defaults = TELEGRAM_ACTIVE_ALERT_DEFAULTS.thresholds;
-    const watchProgressGap = clampTelegramAlertNumber(raw.watchProgressGap, defaults.watchProgressGap, 0, 100);
-    const criticalProgressGap = Math.max(
-        watchProgressGap,
-        clampTelegramAlertNumber(raw.criticalProgressGap, defaults.criticalProgressGap, 0, 100)
+function normalizeTelegramAlertSeverity(value, fallback = "watch") {
+    return value === "critical" ? "critical" : fallback;
+}
+
+function normalizeTelegramActiveAlertRules(raw = {}) {
+    const defaults = createTelegramActiveAlertDefaultRules();
+    const legacy = raw && typeof raw === "object" ? raw : {};
+    const progressRaw = raw?.progressGap && typeof raw.progressGap === "object" ? raw.progressGap : {};
+    const watchThreshold = clampTelegramAlertNumber(
+        progressRaw.watchThreshold ?? legacy.watchProgressGap,
+        defaults.progressGap.watchThreshold,
+        0,
+        100
     );
+    const criticalThreshold = Math.max(
+        watchThreshold,
+        clampTelegramAlertNumber(
+            progressRaw.criticalThreshold ?? legacy.criticalProgressGap,
+            defaults.progressGap.criticalThreshold,
+            0,
+            100
+        )
+    );
+
+    const normalizeSingleThresholdRule = (key, fallbackThreshold, max = 100) => {
+        const source = raw?.[key] && typeof raw[key] === "object" ? raw[key] : {};
+        return {
+            enabled: source.enabled === true,
+            threshold: clampTelegramAlertNumber(source.threshold, fallbackThreshold, 0, max),
+            severity: normalizeTelegramAlertSeverity(source.severity),
+        };
+    };
+
+    const closingRaw = raw?.closingRate && typeof raw.closingRate === "object" ? raw.closingRate : {};
+    const skincareRaw = raw?.skincareRatio && typeof raw.skincareRatio === "object" ? raw.skincareRatio : {};
+    const hasStructuredRules = Object.values(raw || {}).some((value) => value && typeof value === "object" && Object.prototype.hasOwnProperty.call(value, "enabled"));
+
     return {
-        watchProgressGap,
-        criticalProgressGap,
-        closingRate: clampTelegramAlertNumber(raw.closingRate, defaults.closingRate, 0, 100),
-        skincareRatio: clampTelegramAlertNumber(raw.skincareRatio, defaults.skincareRatio, 0, 100),
-        minNewCustomers: Math.round(clampTelegramAlertNumber(raw.minNewCustomers, defaults.minNewCustomers, 0, 999)),
-        missingReportEnabled: raw.missingReportEnabled !== false,
-        missingTargetEnabled: raw.missingTargetEnabled !== false,
+        progressGap: {
+            enabled: hasStructuredRules ? progressRaw.enabled === true : true,
+            watchThreshold,
+            criticalThreshold,
+        },
+        cashAchievementRate: normalizeSingleThresholdRule("cashAchievementRate", defaults.cashAchievementRate.threshold),
+        closingRate: {
+            enabled: hasStructuredRules ? closingRaw.enabled === true : true,
+            threshold: clampTelegramAlertNumber(
+                closingRaw.threshold ?? legacy.closingRate,
+                defaults.closingRate.threshold,
+                0,
+                100
+            ),
+            minSample: Math.round(clampTelegramAlertNumber(
+                closingRaw.minSample ?? legacy.minNewCustomers,
+                defaults.closingRate.minSample,
+                0,
+                999
+            )),
+            severity: normalizeTelegramAlertSeverity(closingRaw.severity),
+        },
+        skincareRatio: {
+            enabled: hasStructuredRules ? skincareRaw.enabled === true : true,
+            threshold: clampTelegramAlertNumber(
+                skincareRaw.threshold ?? legacy.skincareRatio,
+                defaults.skincareRatio.threshold,
+                0,
+                100
+            ),
+            severity: normalizeTelegramAlertSeverity(skincareRaw.severity),
+        },
+        newCustomers: normalizeSingleThresholdRule("newCustomers", defaults.newCustomers.threshold, 999999),
+        traffic: normalizeSingleThresholdRule("traffic", defaults.traffic.threshold, 999999),
+        missingReport: {
+            enabled: hasStructuredRules
+                ? raw?.missingReport?.enabled === true
+                : legacy.missingReportEnabled !== false,
+            category: "data",
+        },
+        missingTarget: {
+            enabled: hasStructuredRules
+                ? raw?.missingTarget?.enabled === true
+                : legacy.missingTargetEnabled !== false,
+            category: "data",
+        },
+    };
+}
+
+function getTelegramActiveAlertEnabledRuleLabels(rules = {}) {
+    return Object.entries(TELEGRAM_ACTIVE_ALERT_RULE_LABELS)
+        .filter(([key]) => rules?.[key]?.enabled === true)
+        .map(([, label]) => label);
+}
+
+function normalizeTelegramActiveAlertBrandProfile(rawProfile = {}, legacyLimit = 8, legacyThresholds = {}) {
+    const fallback = createTelegramActiveAlertDefaultBrandProfile();
+    return {
+        limit: Math.round(clampTelegramAlertNumber(rawProfile?.limit, legacyLimit || fallback.limit, 1, 20)),
+        rules: normalizeTelegramActiveAlertRules(
+            rawProfile?.rules && typeof rawProfile.rules === "object" ? rawProfile.rules : legacyThresholds
+        ),
     };
 }
 
@@ -2739,17 +2955,25 @@ function normalizeTelegramActiveAlertConfig(raw = {}) {
     const chatTargets = [...new Set((Array.isArray(raw.chatTargets) ? raw.chatTargets : TELEGRAM_ACTIVE_ALERT_DEFAULTS.chatTargets)
         .map(String)
         .filter((target) => ["main", "manager"].includes(target)))];
+    const legacyLimit = Math.round(clampTelegramAlertNumber(raw.limit, 8, 1, 20));
+    const legacyThresholds = raw.thresholds && typeof raw.thresholds === "object" ? raw.thresholds : {};
+    const brandProfiles = Object.fromEntries(
+        TELEGRAM_ALERT_BRAND_IDS.map((brandId) => [
+            brandId,
+            normalizeTelegramActiveAlertBrandProfile(raw?.brandProfiles?.[brandId] || {}, legacyLimit, legacyThresholds),
+        ])
+    );
+
     return {
         enabled: raw.enabled === true,
         sendTime,
         weekdays: weekdays.length ? weekdays : [...TELEGRAM_ACTIVE_ALERT_DEFAULTS.weekdays],
         brandIds: brandIds.length ? brandIds : [...TELEGRAM_ACTIVE_ALERT_DEFAULTS.brandIds],
         chatTargets: chatTargets.length ? chatTargets : [...TELEGRAM_ACTIVE_ALERT_DEFAULTS.chatTargets],
-        limit: Math.round(clampTelegramAlertNumber(raw.limit, TELEGRAM_ACTIVE_ALERT_DEFAULTS.limit, 1, 20)),
+        brandProfiles,
         sendWhenClear: raw.sendWhenClear === true,
         pausedUntil: /^\d{4}-\d{2}-\d{2}$/.test(String(raw.pausedUntil || "")) ? String(raw.pausedUntil) : "",
         timezone: "Asia/Taipei",
-        thresholds: normalizeTelegramActiveAlertThresholds(raw.thresholds || {}),
         updatedAtText: String(raw.updatedAtText || ""),
         updatedBy: String(raw.updatedBy || ""),
     };
@@ -2784,10 +3008,6 @@ function resolveTelegramActiveAlertChatIds(config) {
     return [...new Set([...ids, ...legacyIds])].filter((id) => isTelegramChatAuthorized(id));
 }
 
-function resolveTelegramActiveAlertBrandName(config) {
-    return config.brandIds.length === 1 ? getTelegramAgentBrandLabel(config.brandIds[0]) : null;
-}
-
 function isTelegramAlertDue(config, now) {
     if (!config.enabled) return { due: false, reason: "disabled" };
     if (!config.weekdays.includes(now.weekday)) return { due: false, reason: "weekday_disabled" };
@@ -2798,46 +3018,137 @@ function isTelegramAlertDue(config, now) {
     return { due: delta >= 0 && delta < 5, reason: delta < 0 ? "not_yet" : "outside_window" };
 }
 
-function formatTelegramAgentActiveAlertMessage(result, ctx, todayStr, config = {}) {
+function formatTelegramAlertProgressGap(progressGap) {
+    if (!Number.isFinite(Number(progressGap))) return "無法計算時間進度差距";
+    const value = Number(progressGap);
+    if (value < 0) return `落後時間進度 ${Math.abs(value).toFixed(1)} 個百分點`;
+    if (value > 0) return `領先時間進度 ${value.toFixed(1)} 個百分點`;
+    return "與月份時間進度一致";
+}
+
+function formatTelegramAgentActiveAlertMessage(result, ctx, todayStr, brandProfile = {}) {
     const rows = Array.isArray(result?.alerts) ? result.alerts : [];
-    const summaries = Array.isArray(result?.brandSummaries) ? result.brandSummaries : [];
-    const lines = [`🚨 DRCYJ 主動戰情預警｜${todayStr}`, `月份時間進度：${result?.expectedProgress ?? "-"}%`];
-    summaries.forEach((row) => {
-        const rate = row.cashAchievementRate === null ? "目標缺漏" : `${row.cashAchievementRate}%`;
-        const quality = row.dataQuality?.level || "unknown";
-        lines.push(`${row.brand}：現金達成 ${rate}｜重大 ${row.criticalCount || 0}｜關注 ${row.watchCount || 0}｜資料 ${quality}`);
-    });
-    if (rows.length === 0) {
-        lines.push("目前沒有符合預警門檻的店家。");
-    } else {
-        lines.push("", "優先關注：");
-        rows.slice(0, config.limit || 8).forEach((row, index) => {
+    const dataIssues = Array.isArray(result?.dataIssues) ? result.dataIssues : [];
+    const summary = Array.isArray(result?.brandSummaries) ? result.brandSummaries[0] : null;
+    const brand = summary?.brand || rows[0]?.brand || "目前品牌";
+    const rate = summary?.cashAchievementRate === null || summary?.cashAchievementRate === undefined
+        ? "現金目標不足，無法計算"
+        : `${summary.cashAchievementRate}%`;
+    const activeStoreCount = Number(summary?.activeStoreCount || 0);
+    const excludedStoreCount = Number(summary?.excludedStoreCount || 0);
+    const criticalCount = Number(summary?.operationalCriticalCount || 0);
+    const watchCount = Number(summary?.operationalWatchCount || 0);
+    const dataIssueCount = Number(summary?.dataIssueCount || 0);
+    const limit = Math.min(20, Math.max(1, Number(brandProfile?.limit) || 8));
+    const enabledRuleLabels = Array.isArray(result?.enabledRuleLabels)
+        ? result.enabledRuleLabels
+        : getTelegramActiveAlertEnabledRuleLabels(brandProfile?.rules || {});
+    const lines = [
+        `🚨 ${brand} 主動戰情巡察｜${todayStr}`,
+        `月份時間進度：${result?.expectedProgress ?? "-"}%`,
+        `整體現金達成：${rate}｜${formatTelegramAlertProgressGap(summary?.progressGap)}`,
+        `正式納管：${activeStoreCount} 家｜已排除：${excludedStoreCount} 家`,
+        `🔴 營運紅燈 ${criticalCount} 家｜🟠 營運黃燈 ${watchCount} 家｜📋 資料待補 ${dataIssueCount} 家`,
+        `本次判斷：${enabledRuleLabels.length ? enabledRuleLabels.join("、") : "未啟用任何項目"}`,
+    ];
+
+    if (rows.length > 0) {
+        lines.push("", `優先關注（最多顯示 ${limit} 家）：`);
+        rows.slice(0, limit).forEach((row, index) => {
             const icon = row.severity === "critical" ? "🔴" : "🟠";
-            const rate = row.cashAchievementRate === null ? "無目標" : `${row.cashAchievementRate}%`;
-            lines.push(`${index + 1}. ${icon} ${row.brand}${row.storeName}店｜現金達成 ${rate}｜${(row.reasons || []).join("、")}`);
+            const storeRate = row.cashAchievementRate === null ? "無現金目標" : `${row.cashAchievementRate}%`;
+            lines.push(`${index + 1}. ${icon} ${row.storeName}店｜現金達成 ${storeRate}`);
+            lines.push(`   原因：${(row.reasons || []).join("、") || "符合目前預警規則"}`);
         });
+        if (Number(result?.operationalAlertCount || rows.length) > rows.length) {
+            lines.push(`   …另有 ${Number(result.operationalAlertCount) - rows.length} 家符合營運預警門檻`);
+        }
+    } else {
+        lines.push("", "✅ 目前沒有符合門檻的營運紅燈或黃燈店家。");
     }
+
+    if (dataIssues.length > 0) {
+        lines.push("", "📋 資料待補：");
+        dataIssues.slice(0, limit).forEach((row) => {
+            lines.push(`• ${row.storeName}店｜${(row.reasons || []).join("、")}`);
+        });
+        if (dataIssueCount > dataIssues.length) {
+            lines.push(`• 另有 ${dataIssueCount - dataIssues.length} 家資料待補`);
+        }
+    }
+
+    const reportCount = Number(summary?.dataQuality?.reportedStoreCount || 0);
+    const targetCount = Number(summary?.dataQuality?.targetedStoreCount || 0);
+    lines.push("", `資料完整度：日報 ${reportCount}/${activeStoreCount}｜現金目標 ${targetCount}/${activeStoreCount}`);
+
+    if (excludedStoreCount > 0) {
+        const names = Array.isArray(summary?.excludedStores) ? summary.excludedStores.slice(0, 6) : [];
+        lines.push(`排除規則：已排除 ${excludedStoreCount} 家${names.length ? `（${names.join("、")}${excludedStoreCount > names.length ? "…" : ""}）` : ""}`);
+    }
+    if (Number(summary?.unexpectedReportStoreCount || 0) > 0) {
+        const names = Array.isArray(summary?.unexpectedReportStores) ? summary.unexpectedReportStores.slice(0, 5) : [];
+        lines.push(`⚠️ 資料治理：${summary.unexpectedReportStoreCount} 家非正式納管店家仍有資料，已不納入巡察${names.length ? `（${names.join("、")}）` : ""}`);
+    }
+    if (summary?.rosterIssue) {
+        lines.push("⚠️ 正式組織架構沒有可納管店家，請先檢查 org_structure。");
+    }
+
     lines.push("", `查詢負載：約 ${ctx?.readCount || 0} 筆文件讀取｜固定規則引擎，未使用 Gemini`);
     return lines.join("\n").slice(0, 3900);
 }
 
-async function buildTelegramActiveAlertMessage(config, actor = "scheduled") {
+async function buildTelegramActiveAlertMessages(config, actor = "scheduled") {
     const normalized = normalizeTelegramActiveAlertConfig(config);
     const now = getTelegramAlertTaipeiClock();
-    const ctx = createTelegramAgentContext({ chatId: actor, userId: actor, question: "active alerts" });
-    const result = await getOperationalAlerts(
-        now.yearMonth,
-        resolveTelegramActiveAlertBrandName(normalized),
-        normalized.limit,
-        ctx,
-        normalized.thresholds
-    );
+    const brandMessages = [];
+
+    for (const brandId of normalized.brandIds) {
+        const brand = getTelegramAgentBrandLabel(brandId);
+        const brandProfile = normalized.brandProfiles[brandId] || createTelegramActiveAlertDefaultBrandProfile();
+        const ctx = createTelegramAgentContext({
+            chatId: `${actor}:${brandId}`,
+            userId: actor,
+            question: `active alerts:${brandId}`,
+        });
+        const result = await getOperationalAlerts(
+            now.yearMonth,
+            brand,
+            brandProfile.limit,
+            ctx,
+            brandProfile.rules
+        );
+        const summary = Array.isArray(result.brandSummaries) ? result.brandSummaries[0] : null;
+        const operationalAlertCount = Number(result.operationalAlertCount || 0);
+        const dataIssueCount = Number(result.dataIssueCount || 0);
+        const governanceIssueCount = Number(summary?.unexpectedReportStoreCount || 0) + (summary?.rosterIssue ? 1 : 0);
+        const alertCount = operationalAlertCount + dataIssueCount;
+        const enabledRuleLabels = getTelegramActiveAlertEnabledRuleLabels(brandProfile.rules);
+        brandMessages.push({
+            brandId,
+            brand,
+            brandProfile,
+            enabledRuleLabels,
+            ctx,
+            result,
+            summary,
+            operationalAlertCount,
+            dataIssueCount,
+            governanceIssueCount,
+            alertCount,
+            shouldSend: normalized.sendWhenClear || alertCount > 0 || governanceIssueCount > 0,
+            message: formatTelegramAgentActiveAlertMessage(result, ctx, now.todayStr, brandProfile),
+        });
+    }
+
     return {
         config: normalized,
         now,
-        ctx,
-        result,
-        message: formatTelegramAgentActiveAlertMessage(result, ctx, now.todayStr, normalized),
+        brandMessages,
+        alertCount: brandMessages.reduce((sum, item) => sum + item.alertCount, 0),
+        operationalAlertCount: brandMessages.reduce((sum, item) => sum + item.operationalAlertCount, 0),
+        dataIssueCount: brandMessages.reduce((sum, item) => sum + item.dataIssueCount, 0),
+        readCount: brandMessages.reduce((sum, item) => sum + Number(item.ctx?.readCount || 0), 0),
+        previewText: brandMessages.map((item) => item.message).join("\n\n━━━━━━━━━━━━━━━━\n\n"),
     };
 }
 
@@ -2857,55 +3168,111 @@ exports.telegramAgentDailyPatrol = onSchedule({
 
     const statusRef = getTelegramActiveAlertStatusRef();
     const statusSnap = await statusRef.get();
+    const previousStatus = statusSnap.exists ? (statusSnap.data() || {}) : {};
     const sentKey = `${now.todayStr}|${config.sendTime}`;
-    if (statusSnap.exists && statusSnap.data()?.lastSentKey === sentKey) return;
+    const brandSentKeys = { ...(previousStatus.brandSentKeys || {}) };
+    const pendingBrandIds = config.brandIds.filter((brandId) => brandSentKeys[brandId] !== sentKey);
+    if (pendingBrandIds.length === 0) return;
 
-    try {
-        const built = await buildTelegramActiveAlertMessage(config, "scheduled");
-        const alertCount = Number(built.result?.alertCount || 0);
-        if (alertCount === 0 && !config.sendWhenClear) {
-            await statusRef.set({
+    const chatIds = resolveTelegramActiveAlertChatIds(config);
+    if (chatIds.length === 0) throw new Error("尚未選擇有效的 Telegram 接收群組");
+
+    const built = await buildTelegramActiveAlertMessages({ ...config, brandIds: pendingBrandIds }, "scheduled");
+    const brandResults = { ...(previousStatus.brandResults || {}) };
+    const errors = [];
+    let sentAny = false;
+
+    for (const item of built.brandMessages) {
+        if (!item.shouldSend) {
+            brandSentKeys[item.brandId] = sentKey;
+            brandResults[item.brandId] = {
+                brand: item.brand,
+                runKey: sentKey,
                 status: "clear_not_sent",
-                lastSentKey: sentKey,
-                lastCheckedAtText: new Date().toISOString(),
-                lastCheckedDate: now.todayStr,
-                lastScheduledTime: config.sendTime,
-                alertCount: 0,
-                readCount: Number(built.ctx.readCount || 0),
-                updatedAt: admin.firestore.FieldValue.serverTimestamp(),
-            }, { merge: true });
-            return;
+                alertCount: item.alertCount,
+                operationalAlertCount: item.operationalAlertCount,
+                dataIssueCount: item.dataIssueCount,
+                readCount: Number(item.ctx?.readCount || 0),
+                limit: Number(item.brandProfile?.limit || 0),
+                enabledRuleLabels: item.enabledRuleLabels || [],
+                checkedAtText: new Date().toISOString(),
+            };
+            continue;
         }
 
-        const chatIds = resolveTelegramActiveAlertChatIds(config);
-        if (chatIds.length === 0) throw new Error("尚未選擇有效的 Telegram 接收群組");
-        await Promise.all(chatIds.map((id) => sendTelegramMessage(id, built.message)));
-        await statusRef.set({
-            status: "sent",
-            lastSentKey: sentKey,
-            lastSentDate: now.todayStr,
-            lastSentTime: config.sendTime,
-            lastSentAtText: new Date().toISOString(),
-            alertCount,
-            readCount: Number(built.ctx.readCount || 0),
-            chatTargets: config.chatTargets,
-            brandIds: config.brandIds,
-            messagePreview: built.message.slice(0, 500),
-            updatedAt: admin.firestore.FieldValue.serverTimestamp(),
-        }, { merge: true });
-    } catch (error) {
-        await statusRef.set({
-            status: "error",
-            lastError: error.message,
-            lastErrorAtText: new Date().toISOString(),
-            updatedAt: admin.firestore.FieldValue.serverTimestamp(),
-        }, { merge: true });
-        throw error;
+        try {
+            await Promise.all(chatIds.map((id) => sendTelegramMessage(id, item.message)));
+            sentAny = true;
+            brandSentKeys[item.brandId] = sentKey;
+            brandResults[item.brandId] = {
+                brand: item.brand,
+                runKey: sentKey,
+                status: "sent",
+                alertCount: item.alertCount,
+                operationalAlertCount: item.operationalAlertCount,
+                dataIssueCount: item.dataIssueCount,
+                readCount: Number(item.ctx?.readCount || 0),
+                limit: Number(item.brandProfile?.limit || 0),
+                enabledRuleLabels: item.enabledRuleLabels || [],
+                sentAtText: new Date().toISOString(),
+                messagePreview: item.message.slice(0, 500),
+            };
+        } catch (error) {
+            errors.push(`${item.brand}：${error.message}`);
+            brandResults[item.brandId] = {
+                brand: item.brand,
+                runKey: sentKey,
+                status: "error",
+                alertCount: item.alertCount,
+                operationalAlertCount: item.operationalAlertCount,
+                dataIssueCount: item.dataIssueCount,
+                readCount: Number(item.ctx?.readCount || 0),
+                limit: Number(item.brandProfile?.limit || 0),
+                enabledRuleLabels: item.enabledRuleLabels || [],
+                error: error.message,
+                errorAtText: new Date().toISOString(),
+            };
+        }
     }
+
+    const allComplete = config.brandIds.every((brandId) => brandSentKeys[brandId] === sentKey);
+    const currentResults = config.brandIds
+        .map((brandId) => brandResults[brandId])
+        .filter((item) => item && item.runKey === sentKey);
+    const totalAlertCount = currentResults.reduce((sum, item) => sum + Number(item.alertCount || 0), 0);
+    const totalOperationalAlertCount = currentResults.reduce((sum, item) => sum + Number(item.operationalAlertCount || 0), 0);
+    const totalDataIssueCount = currentResults.reduce((sum, item) => sum + Number(item.dataIssueCount || 0), 0);
+    const totalReadCount = currentResults.reduce((sum, item) => sum + Number(item.readCount || 0), 0);
+    const hasCurrentSent = currentResults.some((item) => item.status === "sent");
+    const status = errors.length > 0
+        ? (hasCurrentSent ? "partial_error" : "error")
+        : (hasCurrentSent ? "sent" : "clear_not_sent");
+
+    await statusRef.set({
+        status,
+        lastSentKey: allComplete ? sentKey : String(previousStatus.lastSentKey || ""),
+        brandSentKeys,
+        brandResults,
+        lastCheckedAtText: new Date().toISOString(),
+        lastCheckedDate: now.todayStr,
+        lastScheduledTime: config.sendTime,
+        ...(sentAny ? { lastSentAtText: new Date().toISOString(), lastSentDate: now.todayStr, lastSentTime: config.sendTime } : {}),
+        alertCount: totalAlertCount,
+        operationalAlertCount: totalOperationalAlertCount,
+        dataIssueCount: totalDataIssueCount,
+        readCount: totalReadCount,
+        chatTargets: config.chatTargets,
+        brandIds: config.brandIds,
+        lastError: errors.join("；"),
+        lastErrorAtText: errors.length ? new Date().toISOString() : "",
+        updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+    }, { merge: true });
+
+    if (errors.length > 0) throw new Error(errors.join("；"));
 });
 
 // SaaS 介面的「預覽」與「測試推播」透過 Firestore command document 觸發，
-// 避免使用者接觸 Firebase Console，也不需要把 Bot Token 暴露到前端。
+// 每個品牌會獨立產生一則訊息，測試推播也完全模擬正式排程。
 exports.processTelegramAlertCommand = onDocumentCreated({
     document: `artifacts/${TELEGRAM_ALERT_APP_ID}/public/data/telegram_alert_commands/{commandId}`,
     secrets: [TELEGRAM_BOT_TOKEN_SECRET],
@@ -2921,32 +3288,73 @@ exports.processTelegramAlertCommand = onDocumentCreated({
     try {
         await ref.set({ status: "processing", processingAtText: new Date().toISOString() }, { merge: true });
         const config = normalizeTelegramActiveAlertConfig(data.config || {});
-        const built = await buildTelegramActiveAlertMessage(config, `command:${event.params.commandId}`);
+        const built = await buildTelegramActiveAlertMessages(config, `command:${event.params.commandId}`);
         const action = String(data.action || "preview");
         let sentChatIds = [];
+        const brandSendResults = {};
+
         if (action === "test") {
             sentChatIds = resolveTelegramActiveAlertChatIds(config);
             if (sentChatIds.length === 0) throw new Error("尚未選擇有效的 Telegram 接收群組");
-            const testMessage = `🧪 測試推播（不影響正式排程）\n\n${built.message}`.slice(0, 3900);
-            await Promise.all(sentChatIds.map((id) => sendTelegramMessage(id, testMessage)));
+            for (const item of built.brandMessages) {
+                const testMessage = `🧪 測試推播（不影響正式排程）\n\n${item.message}`.slice(0, 3900);
+                await Promise.all(sentChatIds.map((id) => sendTelegramMessage(id, testMessage)));
+                brandSendResults[item.brandId] = { brand: item.brand, status: "sent", sentChatCount: sentChatIds.length };
+            }
         }
+
+        const brandPreviews = built.brandMessages.map((item) => ({
+            brandId: item.brandId,
+            brand: item.brand,
+            previewText: item.message,
+            alertCount: item.alertCount,
+            operationalAlertCount: item.operationalAlertCount,
+            dataIssueCount: item.dataIssueCount,
+            readCount: Number(item.ctx?.readCount || 0),
+            activeStoreCount: Number(item.summary?.activeStoreCount || 0),
+            excludedStoreCount: Number(item.summary?.excludedStoreCount || 0),
+            reportedStoreCount: Number(item.summary?.dataQuality?.reportedStoreCount || 0),
+            targetedStoreCount: Number(item.summary?.dataQuality?.targetedStoreCount || 0),
+            shouldSend: item.shouldSend,
+            limit: Number(item.brandProfile?.limit || 0),
+            enabledRuleLabels: item.enabledRuleLabels || [],
+        }));
+
         await ref.set({
             status: "completed",
             completedAtText: new Date().toISOString(),
-            previewText: built.message,
-            alertCount: Number(built.result?.alertCount || 0),
-            readCount: Number(built.ctx.readCount || 0),
+            previewText: built.previewText,
+            brandPreviews,
+            alertCount: built.alertCount,
+            operationalAlertCount: built.operationalAlertCount,
+            dataIssueCount: built.dataIssueCount,
+            readCount: built.readCount,
             sentChatIds,
+            brandSendResults,
             resultSummary: {
-                expectedProgress: built.result?.expectedProgress ?? null,
-                brandSummaries: built.result?.brandSummaries || [],
+                expectedProgress: built.now ? getTelegramAgentExpectedProgress(built.now.yearMonth) : null,
+                brandSummaries: built.brandMessages.map((item) => item.summary).filter(Boolean),
             },
         }, { merge: true });
         await getTelegramActiveAlertStatusRef().set({
             lastManualAction: action,
             lastManualActionAtText: new Date().toISOString(),
-            lastManualAlertCount: Number(built.result?.alertCount || 0),
-            lastManualReadCount: Number(built.ctx.readCount || 0),
+            lastManualAlertCount: built.alertCount,
+            lastManualOperationalAlertCount: built.operationalAlertCount,
+            lastManualDataIssueCount: built.dataIssueCount,
+            lastManualReadCount: built.readCount,
+            lastManualBrandResults: Object.fromEntries(
+                brandPreviews.map((item) => [item.brandId, {
+                    brand: item.brand,
+                    status: action === "test" ? "sent" : "previewed",
+                    alertCount: item.alertCount,
+                    operationalAlertCount: item.operationalAlertCount,
+                    dataIssueCount: item.dataIssueCount,
+                    readCount: item.readCount,
+                    limit: item.limit,
+                    enabledRuleLabels: item.enabledRuleLabels || [],
+                }])
+            ),
             lastManualOperator: String(data.operator || ""),
             updatedAt: admin.firestore.FieldValue.serverTimestamp(),
         }, { merge: true });
@@ -2959,6 +3367,7 @@ exports.processTelegramAlertCommand = onDocumentCreated({
         console.error("Telegram alert command failed:", error);
     }
 });
+
 
 // ==========================================
 // ★ 4. Telegram 動態定時推播巡邏員（規則感知節流版）
