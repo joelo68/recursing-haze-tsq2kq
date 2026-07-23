@@ -2,7 +2,6 @@ const { onSchedule } = require("firebase-functions/v2/scheduler");
 const { onRequest } = require("firebase-functions/v2/https");
 const { onDocumentCreated } = require("firebase-functions/v2/firestore");
 const { defineSecret } = require("firebase-functions/params");
-const { GoogleGenerativeAI } = require("@google/generative-ai");
 const axios = require("axios");
 const functions = require("firebase-functions/v1"); 
 const admin = require("firebase-admin");
@@ -531,7 +530,15 @@ async function sendTelegramMessage(chatId, text, extra = {}) {
 // ★ 2. DRCYJ Telegram 營運戰情 Agent v1
 // Summary-first／最多三個工具／短期記憶／查詢稽核／成本護欄
 // ==========================================
-const TELEGRAM_AGENT_VERSION = "drcyj-agent-v1.5-alert-control-center";
+const TELEGRAM_AGENT_VERSION = "drcyj-agent-v2.0-gemini-3.6-interactions";
+const TELEGRAM_AGENT_COMPATIBLE_VERSIONS = new Set([
+    "drcyj-agent-v1.5-alert-control-center",
+    TELEGRAM_AGENT_VERSION,
+]);
+const TELEGRAM_AGENT_PRIMARY_MODEL = "gemini-3.6-flash";
+const TELEGRAM_AGENT_FALLBACK_MODEL = "gemini-3.5-flash";
+const GEMINI_INTERACTIONS_API_URL = "https://generativelanguage.googleapis.com/v1beta/interactions";
+const GEMINI_INTERACTIONS_TIMEOUT_MS = 35000;
 const TELEGRAM_AGENT_MAX_TOOL_CALLS = 3;
 const TELEGRAM_AGENT_MAX_READS = 2500;
 const TELEGRAM_AGENT_MAX_DAILY_RANGE_DAYS = 31;
@@ -646,7 +653,16 @@ function createTelegramAgentContext({ chatId, userId, question }) {
         toolCalls: [],
         sources: [],
         warnings: [],
-        usage: { promptTokenCount: 0, candidatesTokenCount: 0, totalTokenCount: 0 },
+        usage: {
+            promptTokenCount: 0,
+            candidatesTokenCount: 0,
+            thoughtTokenCount: 0,
+            toolUseTokenCount: 0,
+            totalTokenCount: 0,
+        },
+        modelName: TELEGRAM_AGENT_PRIMARY_MODEL,
+        fallbackUsed: false,
+        geminiApi: "interactions-v1beta-rest",
         scopeState: {
             activeBrandId: "",
             activeYearMonth: "",
@@ -687,9 +703,34 @@ function recordTelegramAgentRead(ctx, count, source, meta = {}) {
 function recordTelegramAgentUsage(ctx, response) {
     if (!ctx || !response) return;
     const usage = response.usageMetadata || response.usage || {};
-    ctx.usage.promptTokenCount += Number(usage.promptTokenCount || usage.inputTokenCount || 0);
-    ctx.usage.candidatesTokenCount += Number(usage.candidatesTokenCount || usage.outputTokenCount || 0);
-    ctx.usage.totalTokenCount += Number(usage.totalTokenCount || 0);
+    ctx.usage.promptTokenCount += Number(
+        usage.promptTokenCount ||
+        usage.inputTokenCount ||
+        usage.total_input_tokens ||
+        0
+    );
+    ctx.usage.candidatesTokenCount += Number(
+        usage.candidatesTokenCount ||
+        usage.outputTokenCount ||
+        usage.total_output_tokens ||
+        0
+    );
+    ctx.usage.thoughtTokenCount += Number(
+        usage.thoughtTokenCount ||
+        usage.thoughtsTokenCount ||
+        usage.total_thought_tokens ||
+        0
+    );
+    ctx.usage.toolUseTokenCount += Number(
+        usage.toolUseTokenCount ||
+        usage.total_tool_use_tokens ||
+        0
+    );
+    ctx.usage.totalTokenCount += Number(
+        usage.totalTokenCount ||
+        usage.total_tokens ||
+        0
+    );
 }
 
 function getTelegramAgentCache(key) {
@@ -2407,6 +2448,31 @@ const aiTools = {
     ],
 };
 
+function normalizeTelegramInteractionSchema(value) {
+    if (Array.isArray(value)) return value.map(normalizeTelegramInteractionSchema);
+    if (!value || typeof value !== "object") return value;
+    return Object.entries(value).reduce((acc, [key, item]) => {
+        if (key === "type" && typeof item === "string") {
+            acc[key] = item.toLowerCase();
+        } else {
+            acc[key] = normalizeTelegramInteractionSchema(item);
+        }
+        return acc;
+    }, {});
+}
+
+const TELEGRAM_AGENT_INTERACTION_TOOLS = Object.freeze(
+    aiTools.functionDeclarations.map((declaration) => ({
+        type: "function",
+        name: declaration.name,
+        description: declaration.description,
+        parameters: normalizeTelegramInteractionSchema(declaration.parameters || {
+            type: "object",
+            properties: {},
+        }),
+    }))
+);
+
 function getTelegramAgentSafeDateRange(args, todayStr, currentYearMonth) {
     let startDate = normalizeTelegramAgentDate(args?.startDate) || `${currentYearMonth}-01`;
     let endDate = normalizeTelegramAgentDate(args?.endDate) || todayStr;
@@ -2491,7 +2557,7 @@ async function loadTelegramAgentMemory(chatId, userId, ctx) {
             {},
             0
         );
-        if (!result.exists || result.data?.version !== TELEGRAM_AGENT_VERSION) {
+        if (!result.exists || !TELEGRAM_AGENT_COMPATIBLE_VERSIONS.has(String(result.data?.version || ""))) {
             return { turns: [], state: sanitizeTelegramAgentScopeState({}) };
         }
         const turns = Array.isArray(result.data?.turns) ? result.data.turns : [];
@@ -2576,13 +2642,18 @@ function buildTelegramAgentSourceFooter(ctx) {
     });
     const sourceText = unique.slice(0, 6).join("、") || "一般管理知識";
     const warningText = (ctx?.warnings || []).length > 0 ? `\n⚠️ ${ctx.warnings.slice(0, 2).join("；")}` : "";
-    return `\n\n資料基準：${sourceText}\n查詢負載：約 ${ctx?.readCount || 0} 筆文件讀取｜工具 ${ctx?.toolCalls?.length || 0}/${TELEGRAM_AGENT_MAX_TOOL_CALLS}${warningText}`;
+    return `\n\n資料基準：${sourceText}\nAI 模型：${ctx?.modelName || TELEGRAM_AGENT_PRIMARY_MODEL}${ctx?.fallbackUsed ? "（備援模式）" : ""}\n查詢負載：約 ${ctx?.readCount || 0} 筆文件讀取｜工具 ${ctx?.toolCalls?.length || 0}/${TELEGRAM_AGENT_MAX_TOOL_CALLS}${warningText}`;
 }
 
 async function writeTelegramAgentAuditLog(message, ctx, finalReply, status = "success", errorMessage = "") {
     try {
         await db.collection("telegram_agent_logs").add({
             version: TELEGRAM_AGENT_VERSION,
+            geminiApi: ctx?.geminiApi || "interactions-v1beta-rest",
+            modelName: ctx?.modelName || TELEGRAM_AGENT_PRIMARY_MODEL,
+            primaryModel: TELEGRAM_AGENT_PRIMARY_MODEL,
+            fallbackModel: TELEGRAM_AGENT_FALLBACK_MODEL,
+            fallbackUsed: Boolean(ctx?.fallbackUsed),
             status,
             chatId: String(message?.chat?.id || ""),
             chatTitle: String(message?.chat?.title || ""),
@@ -2615,13 +2686,158 @@ function cleanTelegramAgentReply(text) {
     return reply;
 }
 
-async function finalizeTelegramAgentAnswer(genAI, question, memoryText, scopeText, toolOutputs, dateInfo) {
-    const finalizer = genAI.getGenerativeModel({
-        model: "gemini-2.5-flash",
-        systemInstruction: `你是 DRCYJ 集團營運戰情秘書。現在日期 ${dateInfo.todayStr}。請只根據提供的工具結果完成結論，不可再要求查資料，不可捏造。只能提及工具結果實際包含的品牌、店家、人員與區長。區長「整體表現／進度排名」只能使用 achievementRank（或相容欄位 brandRank），並明確稱為「現金業績達成率排名」；營收規模才使用 cashRank，稱為「現金總業績排名」。achievement／cashAchievementRate 的固定定義是「現金業績達成率＝現金÷現金目標」，絕對不可寫成「權責業績達成率」。權責總業績使用 accrual；安妞 operationalAccrual 只是操作權責子項。工具沒有可驗證的 accrualBudget 或 accrualAchievement 時，不得自行描述權責達成率。只有 rankingEligible=true 且名次欄位不是 null 時才能宣稱排名；rankingEligible=false 時必須說明資料缺漏，禁止自行補排名。回答需包含：結論、關鍵異常、資料可信度與優先行動。語氣專業、精準、冷靜。`,
+function getGeminiApiKey() {
+    const apiKey = String(GEMINI_API_KEY.value() || "").trim();
+    if (!apiKey) throw new Error("GEMINI_API_KEY 尚未設定");
+    return apiKey;
+}
+
+function getTelegramAgentSystemInstruction(dateInfo) {
+    return `你是 DRCYJ 全方位美學集團的營運戰情 Agent，具備資深總經理特助、營運分析師與管理顧問能力。現在日期是 ${dateInfo.todayStr}。
+
+【資料原則】
+1. 涉及本公司真實業績、目標、排行、人員、店家、區長或回報狀態時，必須呼叫工具，不得憑空回答。
+2. 一般管理觀念可以直接回答，但必須明確標示為「一般管理建議」，不可假裝是公司數據結論。
+3. CYJ／DRCYJ、安妞、伊啵是品牌；不可誤填為店名。
+4. 工具最多三次。先使用最精準、範圍最小的工具；已有資料時不要重複查詢。
+5. 可以進行多步驟分析，例如先找異常店，再查管理師或區長，但只查回答本題真正需要的資料。
+6. 所有金額、比率與排行必須以工具結果為準；可以解讀，不可捏造。
+7. 品牌範圍由後端結構化脈絡鎖定。除非使用者本題明確要求全品牌／跨品牌比較，不可把上一題 CYJ 擴張成安妞或伊啵。
+8. 「這三家店／那些店／上述店家」必須沿用結構化脈絡中的關注店家，不可改查其他店。
+9. 詢問區長時優先使用 getManagerPerformance；「整體表現／進度排名」引用 achievementRank（相容欄位 brandRank），並稱為「現金業績達成率排名」；「現金規模／營收金額排名」引用 cashRank，並稱為「現金總業績排名」。區域數字必須使用工具回傳的同口徑欄位。
+10. achievement／cashAchievementRate 固定代表「現金業績達成率＝現金÷現金目標」，不可寫成「權責業績達成率」。權責總業績固定使用 accrual；安妞 operationalAccrual 只代表操作權責子項。除非工具明確提供可驗證的 accrualBudget／accrualAchievement，否則禁止推算或敘述權責達成率。
+11. 所有名次都必須同時檢查 rankingEligible。rankingEligible=false 或名次為 null 時，禁止稱第幾名，必須先說明日報或目標缺漏。
+12. 使用者詢問「整體表現」時，至少區分現金業績達成率排名與現金總業績排名；可補充進度差距、新客、締結率及保養品占比排名，不得把單一排名包裝成綜合排名。
+13. 輸入 /today 優先使用 getDailyBattleBrief；/datahealth 優先使用 getDataHealth；/alerts 優先使用 getOperationalAlerts。
+
+【分析框架】
+- 先直接回答結論。
+- 再指出：業績進度、來客、締結率、新舊客客單、保養品占比或目標缺口中的主要問題。
+- 最後提出 1～3 個可執行且有優先順序的行動。
+- 發現資料缺漏或來源 fallback 時，必須明確提醒。
+- 語氣專業、精準、冷靜，像特助對總經理匯報。`;
+}
+
+function getTelegramAgentFinalizerInstruction(dateInfo) {
+    return `你是 DRCYJ 集團營運戰情秘書。現在日期 ${dateInfo.todayStr}。請只根據提供的工具結果完成結論，不可再要求查資料，不可捏造。只能提及工具結果實際包含的品牌、店家、人員與區長。區長「整體表現／進度排名」只能使用 achievementRank（或相容欄位 brandRank），並明確稱為「現金業績達成率排名」；營收規模才使用 cashRank，稱為「現金總業績排名」。achievement／cashAchievementRate 的固定定義是「現金業績達成率＝現金÷現金目標」，絕對不可寫成「權責業績達成率」。權責總業績使用 accrual；安妞 operationalAccrual 只是操作權責子項。工具沒有可驗證的 accrualBudget 或 accrualAchievement 時，不得自行描述權責達成率。只有 rankingEligible=true 且名次欄位不是 null 時才能宣稱排名；rankingEligible=false 時必須說明資料缺漏，禁止自行補排名。回答需包含：結論、關鍵異常、資料可信度與優先行動。語氣專業、精準、冷靜。`;
+}
+
+function serializeTelegramToolResult(value, maxLength = 50000) {
+    let raw;
+    try {
+        raw = JSON.stringify(value);
+    } catch (error) {
+        raw = JSON.stringify({ ok: false, error: `工具結果無法序列化：${error.message}` });
+    }
+    if (raw.length <= maxLength) return raw;
+    return JSON.stringify({
+        truncated: true,
+        originalLength: raw.length,
+        preview: raw.slice(0, Math.max(1000, maxLength - 200)),
     });
-    const payload = JSON.stringify(toolOutputs).slice(0, 45000);
-    const result = await finalizer.generateContent(`最近對話：
+}
+
+function getGeminiInteractionFunctionCalls(interaction) {
+    return (Array.isArray(interaction?.steps) ? interaction.steps : [])
+        .filter((step) => step?.type === "function_call" && step?.name);
+}
+
+function getGeminiInteractionText(interaction) {
+    if (typeof interaction?.output_text === "string" && interaction.output_text.trim()) {
+        return interaction.output_text.trim();
+    }
+    const chunks = [];
+    (Array.isArray(interaction?.steps) ? interaction.steps : []).forEach((step) => {
+        if (step?.type !== "model_output" || !Array.isArray(step.content)) return;
+        step.content.forEach((part) => {
+            if (part?.type === "text" && part?.text) chunks.push(String(part.text));
+        });
+    });
+    return chunks.join("\n").trim();
+}
+
+function getGeminiErrorStatus(error) {
+    return Number(
+        error?.response?.status ||
+        error?.status ||
+        error?.statusCode ||
+        0
+    );
+}
+
+function isRecoverableGeminiError(error) {
+    const status = getGeminiErrorStatus(error);
+    const code = String(error?.cause?.code || error?.code || "").toUpperCase();
+    return [404, 408, 409, 429, 500, 502, 503, 504].includes(status) ||
+        ["ECONNABORTED", "ETIMEDOUT", "ECONNRESET", "ENOTFOUND", "EAI_AGAIN"].includes(code);
+}
+
+function getGeminiErrorMessage(error) {
+    const status = getGeminiErrorStatus(error);
+    const apiMessage =
+        error?.response?.data?.error?.message ||
+        error?.response?.data?.message ||
+        error?.message ||
+        "Gemini API 未知錯誤";
+    return `${status ? `[${status}] ` : ""}${apiMessage}`;
+}
+
+async function requestGeminiInteraction({
+    model,
+    input,
+    systemInstruction,
+    tools = [],
+}) {
+    const payload = {
+        model,
+        input,
+        store: false,
+        system_instruction: String(systemInstruction || ""),
+    };
+    if (Array.isArray(tools) && tools.length > 0) payload.tools = tools;
+
+    try {
+        const response = await axios.post(
+            GEMINI_INTERACTIONS_API_URL,
+            payload,
+            {
+                headers: {
+                    "Content-Type": "application/json",
+                    "x-goog-api-key": getGeminiApiKey(),
+                },
+                timeout: GEMINI_INTERACTIONS_TIMEOUT_MS,
+            }
+        );
+        const interaction = response.data || {};
+        if (interaction.status === "failed" || interaction.status === "cancelled") {
+            const stateError = new Error(`Gemini interaction 狀態異常：${interaction.status}`);
+            stateError.status = interaction.status === "failed" ? 503 : 500;
+            throw stateError;
+        }
+        return interaction;
+    } catch (error) {
+        const wrapped = new Error(getGeminiErrorMessage(error));
+        wrapped.status = getGeminiErrorStatus(error);
+        wrapped.response = error?.response;
+        wrapped.cause = error;
+        throw wrapped;
+    }
+}
+
+async function finalizeTelegramAgentAnswer(
+    question,
+    memoryText,
+    scopeText,
+    toolOutputs,
+    dateInfo,
+    ctx,
+    modelName = TELEGRAM_AGENT_PRIMARY_MODEL
+) {
+    const payload = JSON.stringify(toolOutputs).slice(0, 120000);
+    const interaction = await requestGeminiInteraction({
+        model: modelName,
+        systemInstruction: getTelegramAgentFinalizerInstruction(dateInfo),
+        input: `最近對話：
 ${memoryText}
 
 結構化查詢範圍：
@@ -2630,12 +2846,183 @@ ${scopeText}
 本題：${question}
 
 已取得資料：
-${payload}`);
-    return result;
+${payload}`,
+    });
+    recordTelegramAgentUsage(ctx, interaction);
+    return interaction;
+}
+
+async function runTelegramAgentInteractionLoop({
+    modelName,
+    prompt,
+    command,
+    memoryText,
+    dateInfo,
+    ctx,
+}) {
+    const history = [
+        {
+            type: "user_input",
+            content: [{ type: "text", text: prompt }],
+        },
+    ];
+    const toolOutputs = [];
+    let totalToolCalls = 0;
+    let interaction;
+
+    try {
+        interaction = await requestGeminiInteraction({
+            model: modelName,
+            input: history,
+            systemInstruction: getTelegramAgentSystemInstruction(dateInfo),
+            tools: TELEGRAM_AGENT_INTERACTION_TOOLS,
+        });
+        recordTelegramAgentUsage(ctx, interaction);
+
+        for (let round = 0; round <= TELEGRAM_AGENT_MAX_TOOL_CALLS; round += 1) {
+            const steps = Array.isArray(interaction?.steps) ? interaction.steps : [];
+            history.push(...steps);
+            const calls = getGeminiInteractionFunctionCalls(interaction);
+
+            if (!calls.length) {
+                const text = getGeminiInteractionText(interaction);
+                if (text) return { finalReply: text, toolOutputs, interaction };
+                break;
+            }
+
+            const functionResults = [];
+            for (const call of calls) {
+                const callId = String(call.id || "").trim();
+                const callName = String(call.name || "").trim();
+                if (!callId) throw new Error(`Gemini function_call 缺少 call id：${callName || "unknown"}`);
+
+                if (totalToolCalls >= TELEGRAM_AGENT_MAX_TOOL_CALLS) {
+                    functionResults.push({
+                        type: "function_result",
+                        name: callName,
+                        call_id: callId,
+                        result: [{
+                            type: "text",
+                            text: JSON.stringify({
+                                ok: false,
+                                error: `本題工具呼叫上限為 ${TELEGRAM_AGENT_MAX_TOOL_CALLS} 次，請依現有資料完成回答。`,
+                            }),
+                        }],
+                    });
+                    continue;
+                }
+
+                if (ctx.readCount >= TELEGRAM_AGENT_MAX_READS) {
+                    functionResults.push({
+                        type: "function_result",
+                        name: callName,
+                        call_id: callId,
+                        result: [{
+                            type: "text",
+                            text: JSON.stringify({
+                                ok: false,
+                                error: `本題已達約 ${TELEGRAM_AGENT_MAX_READS} 筆文件讀取上限，請依現有資料完成回答。`,
+                            }),
+                        }],
+                    });
+                    continue;
+                }
+
+                totalToolCalls += 1;
+                const requestedArgs = call.arguments && typeof call.arguments === "object"
+                    ? call.arguments
+                    : {};
+
+                try {
+                    const toolExecution = await executeTelegramAgentTool(
+                        callName,
+                        requestedArgs,
+                        ctx,
+                        dateInfo
+                    );
+                    const effectiveArgs = toolExecution.effectiveArgs || requestedArgs;
+                    const toolResult = toolExecution.result;
+                    toolOutputs.push({
+                        name: callName,
+                        callId,
+                        args: effectiveArgs,
+                        result: toolResult,
+                    });
+                    functionResults.push({
+                        type: "function_result",
+                        name: callName,
+                        call_id: callId,
+                        result: [{
+                            type: "text",
+                            text: serializeTelegramToolResult({ ok: true, result: toolResult }),
+                        }],
+                    });
+                } catch (toolError) {
+                    const errorResult = { ok: false, error: toolError.message };
+                    ctx.toolCalls.push({
+                        name: callName,
+                        args: requestedArgs,
+                        ok: false,
+                        error: toolError.message,
+                        readCountAfter: ctx.readCount,
+                    });
+                    toolOutputs.push({
+                        name: callName,
+                        callId,
+                        args: requestedArgs,
+                        result: errorResult,
+                    });
+                    functionResults.push({
+                        type: "function_result",
+                        name: callName,
+                        call_id: callId,
+                        result: [{
+                            type: "text",
+                            text: serializeTelegramToolResult(errorResult),
+                        }],
+                    });
+                }
+            }
+
+            if (!functionResults.length) break;
+            history.push(...functionResults);
+            interaction = await requestGeminiInteraction({
+                model: modelName,
+                input: history,
+                systemInstruction: getTelegramAgentSystemInstruction(dateInfo),
+                tools: TELEGRAM_AGENT_INTERACTION_TOOLS,
+            });
+            recordTelegramAgentUsage(ctx, interaction);
+        }
+
+        const remainingText = getGeminiInteractionText(interaction);
+        if (remainingText && !getGeminiInteractionFunctionCalls(interaction).length) {
+            return { finalReply: remainingText, toolOutputs, interaction };
+        }
+
+        const finalInteraction = await finalizeTelegramAgentAnswer(
+            command,
+            memoryText,
+            formatTelegramAgentScopeState(ctx.scopeState),
+            toolOutputs,
+            dateInfo,
+            ctx,
+            modelName
+        );
+        return {
+            finalReply: getGeminiInteractionText(finalInteraction),
+            toolOutputs,
+            interaction: finalInteraction,
+        };
+    } catch (error) {
+        error.telegramToolOutputs = toolOutputs;
+        throw error;
+    }
 }
 
 // ==========================================
 // ★ 3. Webhook：DRCYJ Telegram 營運戰情 Agent
+// Gemini 3.6 Flash + Interactions API（store=false）
 // ==========================================
 exports.telegramWebhook = onRequest({
     secrets: [GEMINI_API_KEY, TELEGRAM_BOT_TOKEN_SECRET],
@@ -2672,86 +3059,65 @@ exports.telegramWebhook = onRequest({
         const explicitBrandId = getTelegramAgentExplicitBrandId(command);
         if (explicitBrandId) ctx.scopeState.activeBrandId = explicitBrandId;
         if (isTelegramAgentAllBrandIntent(command)) ctx.scopeState.activeBrandId = "";
+
         const memoryText = formatTelegramAgentMemory(memoryTurns);
-        const scopeText = formatTelegramAgentScopeState(ctx.scopeState);
-        const genAI = new GoogleGenerativeAI(GEMINI_API_KEY.value());
-        const model = genAI.getGenerativeModel({
-            model: "gemini-2.5-flash",
-            tools: [aiTools],
-            systemInstruction: `你是 DRCYJ 全方位美學集團的營運戰情 Agent，具備資深總經理特助、營運分析師與管理顧問能力。現在日期是 ${dateInfo.todayStr}。
+        const prompt = `以下是這位使用者最近的個人對話脈絡，只用於理解「那家店、上個月、剛才那位管理師」等追問：
+${memoryText}
 
-【資料原則】
-1. 涉及本公司真實業績、目標、排行、人員、店家、區長或回報狀態時，必須呼叫工具，不得憑空回答。
-2. 一般管理觀念可以直接回答，但必須明確標示為「一般管理建議」，不可假裝是公司數據結論。
-3. CYJ／DRCYJ、安妞、伊啵是品牌；不可誤填為店名。
-4. 工具最多三次。先使用最精準、範圍最小的工具；已有資料時不要重複查詢。
-5. 可以進行多步驟分析，例如先找異常店，再查管理師或區長，但只查回答本題真正需要的資料。
-6. 所有金額、比率與排行必須以工具結果為準；可以解讀，不可捏造。
-7. 品牌範圍由後端結構化脈絡鎖定。除非使用者本題明確要求全品牌／跨品牌比較，不可把上一題 CYJ 擴張成安妞或伊啵。
-8. 「這三家店／那些店／上述店家」必須沿用結構化脈絡中的關注店家，不可改查其他店。
-9. 詢問區長時優先使用 getManagerPerformance；「整體表現／進度排名」引用 achievementRank（相容欄位 brandRank），並稱為「現金業績達成率排名」；「現金規模／營收金額排名」引用 cashRank，並稱為「現金總業績排名」。區域數字必須使用工具回傳的同口徑欄位。
-10. achievement／cashAchievementRate 固定代表「現金業績達成率＝現金÷現金目標」，不可寫成「權責業績達成率」。權責總業績固定使用 accrual；安妞 operationalAccrual 只代表操作權責子項。除非工具明確提供可驗證的 accrualBudget／accrualAchievement，否則禁止推算或敘述權責達成率。
-11. 所有名次都必須同時檢查 rankingEligible。rankingEligible=false 或名次為 null 時，禁止稱第幾名，必須先說明日報或目標缺漏。
-12. 使用者詢問「整體表現」時，至少區分現金業績達成率排名與現金總業績排名；可補充進度差距、新客、締結率及保養品占比排名，不得把單一排名包裝成綜合排名。
-13. 輸入 /today 優先使用 getDailyBattleBrief；/datahealth 優先使用 getDataHealth；/alerts 優先使用 getOperationalAlerts。
+目前問題：${command}`;
 
-【分析框架】
-- 先直接回答結論。
-- 再指出：業績進度、來客、締結率、新舊客客單、保養品占比或目標缺口中的主要問題。
-- 最後提出 1～3 個可執行且有優先順序的行動。
-- 發現資料缺漏或來源 fallback 時，必須明確提醒。
-- 語氣專業、精準、冷靜，像特助對總經理匯報。`,
-        });
+        ctx.modelName = TELEGRAM_AGENT_PRIMARY_MODEL;
+        let agentResult;
+        try {
+            agentResult = await runTelegramAgentInteractionLoop({
+                modelName: TELEGRAM_AGENT_PRIMARY_MODEL,
+                prompt,
+                command,
+                memoryText,
+                dateInfo,
+                ctx,
+            });
+        } catch (primaryError) {
+            if (!isRecoverableGeminiError(primaryError)) throw primaryError;
 
-        const prompt = `以下是這位使用者最近的個人對話脈絡，只用於理解「那家店、上個月、剛才那位管理師」等追問：\n${memoryText}\n\n目前問題：${command}`;
-        const aiChat = model.startChat();
-        let result = await aiChat.sendMessage(prompt);
-        recordTelegramAgentUsage(ctx, result.response);
-        const toolOutputs = [];
-        let totalToolCalls = 0;
+            ctx.fallbackUsed = true;
+            ctx.modelName = TELEGRAM_AGENT_FALLBACK_MODEL;
+            ctx.warnings.push(
+                `主要模型 ${TELEGRAM_AGENT_PRIMARY_MODEL} 暫時不可用，已切換 ${TELEGRAM_AGENT_FALLBACK_MODEL}。`
+            );
 
-        for (let round = 0; round < TELEGRAM_AGENT_MAX_TOOL_CALLS; round += 1) {
-            const calls = typeof result.response.functionCalls === "function" ? (result.response.functionCalls() || []) : [];
-            if (!calls.length) {
-                finalReply = result.response.text();
-                break;
-            }
+            const partialToolOutputs = Array.isArray(primaryError.telegramToolOutputs)
+                ? primaryError.telegramToolOutputs
+                : [];
 
-            const responses = [];
-            for (const call of calls) {
-                if (totalToolCalls >= TELEGRAM_AGENT_MAX_TOOL_CALLS) break;
-                if (ctx.readCount >= TELEGRAM_AGENT_MAX_READS) break;
-                totalToolCalls += 1;
-                try {
-                    const toolExecution = await executeTelegramAgentTool(call.name, call.args || {}, ctx, dateInfo);
-                    const effectiveArgs = toolExecution.effectiveArgs || call.args || {};
-                    const toolResult = toolExecution.result;
-                    toolOutputs.push({ name: call.name, args: effectiveArgs, result: toolResult });
-                    responses.push({ functionResponse: { name: call.name, response: { result: toolResult } } });
-                } catch (toolError) {
-                    const errorResult = { ok: false, error: toolError.message };
-                    ctx.toolCalls.push({ name: call.name, args: call.args || {}, ok: false, error: toolError.message, readCountAfter: ctx.readCount });
-                    toolOutputs.push({ name: call.name, args: call.args || {}, result: errorResult });
-                    responses.push({ functionResponse: { name: call.name, response: { result: errorResult } } });
-                }
-            }
-
-            if (!responses.length) break;
-            result = await aiChat.sendMessage(responses);
-            recordTelegramAgentUsage(ctx, result.response);
-        }
-
-        if (!finalReply) {
-            const callsRemain = typeof result.response.functionCalls === "function" ? (result.response.functionCalls() || []) : [];
-            if (!callsRemain.length) finalReply = result.response.text();
-            else {
-                const finalResult = await finalizeTelegramAgentAnswer(genAI, command, memoryText, formatTelegramAgentScopeState(ctx.scopeState), toolOutputs, dateInfo);
-                recordTelegramAgentUsage(ctx, finalResult.response);
-                finalReply = finalResult.response.text();
+            if (partialToolOutputs.length > 0) {
+                const fallbackFinal = await finalizeTelegramAgentAnswer(
+                    command,
+                    memoryText,
+                    formatTelegramAgentScopeState(ctx.scopeState),
+                    partialToolOutputs,
+                    dateInfo,
+                    ctx,
+                    TELEGRAM_AGENT_FALLBACK_MODEL
+                );
+                agentResult = {
+                    finalReply: getGeminiInteractionText(fallbackFinal),
+                    toolOutputs: partialToolOutputs,
+                    interaction: fallbackFinal,
+                };
+            } else {
+                agentResult = await runTelegramAgentInteractionLoop({
+                    modelName: TELEGRAM_AGENT_FALLBACK_MODEL,
+                    prompt,
+                    command,
+                    memoryText,
+                    dateInfo,
+                    ctx,
+                });
             }
         }
 
-        finalReply = cleanTelegramAgentReply(finalReply);
+        finalReply = cleanTelegramAgentReply(agentResult?.finalReply || "");
         const replyWithFooter = `${finalReply}${buildTelegramAgentSourceFooter(ctx)}`;
         await sendTelegramMessage(chatId, replyWithFooter);
         await Promise.allSettled([
@@ -2762,7 +3128,8 @@ exports.telegramWebhook = onRequest({
         console.error("Telegram Agent 嚴重錯誤:", error);
         const errorText = error instanceof TelegramAgentBudgetError
             ? `⚠️ ${error.message}`
-            : `❌ 戰情秘書暫時失聯：\n${error.message}`;
+            : `❌ 戰情秘書暫時失聯：
+${error.message}`;
         try {
             await sendTelegramMessage(chatId, errorText);
         } catch (sendError) {
