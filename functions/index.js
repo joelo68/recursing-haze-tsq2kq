@@ -539,17 +539,18 @@ async function answerTelegramCallbackQuery(callbackQueryId, text = "") {
 // ★ 2. DRCYJ Telegram 營運戰情 Agent v1
 // Summary-first／最多三個工具／短期記憶／查詢稽核／成本護欄
 // ==========================================
-const TELEGRAM_AGENT_VERSION = "drcyj-agent-v4.2-scheduled-data-unified";
+const TELEGRAM_AGENT_VERSION = "drcyj-agent-v4.3-stable-api-schedule-query";
 const TELEGRAM_AGENT_COMPATIBLE_VERSIONS = new Set([
     "drcyj-agent-v1.5-alert-control-center",
     "drcyj-agent-v2.0-gemini-3.6-interactions",
     "drcyj-agent-v4.0-controlled-learning",
     "drcyj-agent-v4.1-cost-throttled-learning",
+    "drcyj-agent-v4.2-scheduled-data-unified",
     TELEGRAM_AGENT_VERSION,
 ]);
 const TELEGRAM_AGENT_PRIMARY_MODEL = "gemini-3.6-flash";
 const TELEGRAM_AGENT_FALLBACK_MODEL = "gemini-3.5-flash";
-const GEMINI_INTERACTIONS_API_URL = "https://generativelanguage.googleapis.com/v1beta/interactions";
+const GEMINI_INTERACTIONS_API_URL = "https://generativelanguage.googleapis.com/v1/interactions";
 const GEMINI_INTERACTIONS_TIMEOUT_MS = 35000;
 const TELEGRAM_AGENT_MAX_TOOL_CALLS = 3;
 const TELEGRAM_AGENT_MAX_READS = 2500;
@@ -1683,7 +1684,7 @@ function createTelegramAgentContext({ chatId, userId, question }) {
         },
         modelName: TELEGRAM_AGENT_PRIMARY_MODEL,
         fallbackUsed: false,
-        geminiApi: "interactions-v1beta-rest",
+        geminiApi: "interactions-v1-rest",
         policies: [],
         policyCatalog: [],
         policyCatalogMode: "",
@@ -3756,7 +3757,7 @@ async function writeTelegramAgentAuditLog(message, ctx, finalReply, status = "su
     try {
         await db.collection("telegram_agent_logs").add({
             version: TELEGRAM_AGENT_VERSION,
-            geminiApi: ctx?.geminiApi || "interactions-v1beta-rest",
+            geminiApi: ctx?.geminiApi || "interactions-v1-rest",
             modelName: ctx?.modelName || TELEGRAM_AGENT_PRIMARY_MODEL,
             primaryModel: TELEGRAM_AGENT_PRIMARY_MODEL,
             fallbackModel: TELEGRAM_AGENT_FALLBACK_MODEL,
@@ -5104,6 +5105,44 @@ function appendTelegramScheduledDataFooter(message, result, ctx) {
 資料口徑：${sourceText}${policyText}`.slice(0, 3900);
 }
 
+function isTelegramNotificationRuleActive(rule = {}) {
+    return rule.isActive === true || String(rule.isActive || "").toLowerCase() === "true";
+}
+
+function normalizeTelegramNotificationRule(docSnap) {
+    const data = docSnap?.data?.() || {};
+    return {
+        ...data,
+        id: String(docSnap?.id || ""),
+        ruleId: String(docSnap?.id || ""),
+        rulePath: String(docSnap?.ref?.path || ""),
+    };
+}
+
+async function loadTelegramNotificationRulesAtTime(timeString) {
+    const normalizedTime = /^\d{2}:\d{2}$/.test(String(timeString || ""))
+        ? String(timeString)
+        : "";
+    if (!normalizedTime) return [];
+
+    // 前端 NotificationManager 的正式路徑是根集合 notification_rules。
+    // 只查詢目前分鐘的規則，不再每分鐘掃描完整 collectionGroup。
+    // isActive 保留程式端過濾，以相容舊資料的 boolean true 與字串 "true"，
+    // 同時避免需要 time + isActive 複合索引。
+    const matchingRulesSnap = await db.collection("notification_rules")
+        .where("time", "==", normalizedTime)
+        .get();
+
+    return matchingRulesSnap.docs
+        .map(normalizeTelegramNotificationRule)
+        .filter(isTelegramNotificationRuleActive)
+        .sort((a, b) => {
+            const createdDiff = String(a.createdAt || "").localeCompare(String(b.createdAt || ""));
+            if (createdDiff !== 0) return createdDiff;
+            return String(a.ruleId || "").localeCompare(String(b.ruleId || ""));
+        });
+}
+
 exports.notificationPatrol = onSchedule({
     schedule: "* 8-11 * * *",
     timeZone: "Asia/Taipei",
@@ -5115,18 +5154,9 @@ exports.notificationPatrol = onSchedule({
     const timeString = clock.timeText;
 
     try {
-        const allRulesSnap = await db.collectionGroup("notification_rules").get();
-        const uniqueRules = {};
-
-        allRulesSnap.forEach((docSnap) => {
-            const data = docSnap.data() || {};
-            if (String(data.isActive) !== "true") return;
-            if (String(data.time || "") !== timeString) return;
-            const uniqueKey = `${String(data.source || "")}:${String(data.targetGroup || "main")}`;
-            uniqueRules[uniqueKey] = data;
-        });
-
-        const rulesList = Object.values(uniqueRules);
+        // 每一份規則文件都是獨立任務。即使 source 與 targetGroup 相同，
+        // 也不再以物件 key 覆蓋，確保不同名稱、文案或用途都會逐一執行。
+        const rulesList = await loadTelegramNotificationRulesAtTime(timeString);
         if (rulesList.length === 0) {
             console.log(`目前時間 ${timeString} 查無符合任務，機器人休眠。`);
             return;
