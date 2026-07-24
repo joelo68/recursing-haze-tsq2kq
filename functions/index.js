@@ -539,10 +539,11 @@ async function answerTelegramCallbackQuery(callbackQueryId, text = "") {
 // ★ 2. DRCYJ Telegram 營運戰情 Agent v1
 // Summary-first／最多三個工具／短期記憶／查詢稽核／成本護欄
 // ==========================================
-const TELEGRAM_AGENT_VERSION = "drcyj-agent-v4.0-controlled-learning";
+const TELEGRAM_AGENT_VERSION = "drcyj-agent-v4.1-cost-throttled-learning";
 const TELEGRAM_AGENT_COMPATIBLE_VERSIONS = new Set([
     "drcyj-agent-v1.5-alert-control-center",
     "drcyj-agent-v2.0-gemini-3.6-interactions",
+    "drcyj-agent-v4.0-controlled-learning",
     TELEGRAM_AGENT_VERSION,
 ]);
 const TELEGRAM_AGENT_PRIMARY_MODEL = "gemini-3.6-flash";
@@ -564,6 +565,12 @@ const TELEGRAM_AGENT_TOOL_CACHE = new Map();
 const TELEGRAM_AGENT_POLICY_SCHEMA_VERSION = 1;
 const TELEGRAM_AGENT_POLICY_APP_ID = "default-app-id";
 const TELEGRAM_AGENT_POLICY_PENDING_MINUTES = 30;
+const TELEGRAM_AGENT_POLICY_CACHE_TTL_MS = 90 * 1000;
+const TELEGRAM_AGENT_POLICY_RUNTIME_CACHE = {
+    permissionDoc: null,
+    activeCatalog: null,
+    allCatalog: null,
+};
 const TELEGRAM_AGENT_POLICY_SCOPES = Object.freeze([
     "telegram_analysis",
     "ranking",
@@ -604,6 +611,31 @@ function getTelegramAgentPolicyAuditsRef() {
 
 function getTelegramAgentPolicyPermissionsRef() {
     return getTelegramAgentPolicyDataRootRef().collection("global_settings").doc("telegram_agent_policy_permissions");
+}
+
+function getTelegramAgentPolicyRuntimeCache(key) {
+    const item = TELEGRAM_AGENT_POLICY_RUNTIME_CACHE[key];
+    if (!item) return null;
+    if ((Date.now() - Number(item.createdAtMs || 0)) > TELEGRAM_AGENT_POLICY_CACHE_TTL_MS) {
+        TELEGRAM_AGENT_POLICY_RUNTIME_CACHE[key] = null;
+        return null;
+    }
+    return item.value;
+}
+
+function setTelegramAgentPolicyRuntimeCache(key, value) {
+    TELEGRAM_AGENT_POLICY_RUNTIME_CACHE[key] = {
+        createdAtMs: Date.now(),
+        value,
+    };
+}
+
+function invalidateTelegramAgentPolicyRuntimeCache(options = {}) {
+    if (options.permissions !== false) TELEGRAM_AGENT_POLICY_RUNTIME_CACHE.permissionDoc = null;
+    if (options.policies !== false) {
+        TELEGRAM_AGENT_POLICY_RUNTIME_CACHE.activeCatalog = null;
+        TELEGRAM_AGENT_POLICY_RUNTIME_CACHE.allCatalog = null;
+    }
 }
 
 function normalizeTelegramPolicyDate(value = "") {
@@ -687,15 +719,26 @@ function normalizeTelegramAgentPolicy(raw = {}, id = "") {
     return policy;
 }
 
-async function loadTelegramAgentPolicyPermission(chatId, userId, ctx = null) {
-    const result = await readTelegramAgentDoc(
-        getTelegramAgentPolicyPermissionsRef(),
-        ctx,
-        "telegram_agent_policy_permissions",
-        {},
-        0
-    );
-    const data = result.exists ? (result.data || {}) : {};
+async function loadTelegramAgentPolicyPermission(chatId, userId, ctx = null, options = {}) {
+    if (ctx?.policyPermission && options.forceReload !== true) return ctx.policyPermission;
+
+    let data = null;
+    const cached = options.forceReload === true ? null : getTelegramAgentPolicyRuntimeCache("permissionDoc");
+    if (cached) {
+        data = cached;
+        recordTelegramAgentRead(ctx, 0, "telegram_agent_policy_permissions", { cacheHit: true });
+    } else {
+        const result = await readTelegramAgentDoc(
+            getTelegramAgentPolicyPermissionsRef(),
+            ctx,
+            "telegram_agent_policy_permissions",
+            {},
+            0
+        );
+        data = result.exists ? (result.data || {}) : {};
+        setTelegramAgentPolicyRuntimeCache("permissionDoc", data);
+    }
+
     const users = data.users && typeof data.users === "object" ? data.users : {};
     const configuredIds = Object.keys(users);
     const configured = users[String(userId)] || null;
@@ -719,7 +762,7 @@ async function loadTelegramAgentPolicyPermission(chatId, userId, ctx = null) {
         }
     }
 
-    return {
+    const permission = {
         role,
         brandIds: [...new Set(brandIds)],
         canManageGlobal: role === "director",
@@ -727,6 +770,8 @@ async function loadTelegramAgentPolicyPermission(chatId, userId, ctx = null) {
         canManagePersonal: role !== "viewer" || Boolean(configured?.allowPersonalPreferences),
         source,
     };
+    if (ctx) ctx.policyPermission = permission;
+    return permission;
 }
 
 function assertTelegramPolicyPermission(permission = {}, policy = {}) {
@@ -742,18 +787,47 @@ function assertTelegramPolicyPermission(permission = {}, policy = {}) {
     if (!brandId && !permission.canManageGlobal) throw new Error("只有 director 可以建立全公司規則");
 }
 
-async function loadTelegramAgentPolicyState(ctx, options = {}) {
-    if (!ctx) return { policies: [], activePolicies: [], permission: { role: "viewer", brandIds: [] } };
-    const permission = await loadTelegramAgentPolicyPermission(ctx.chatId, ctx.userId, ctx);
-    const result = await queryTelegramAgentDocs(
-        getTelegramAgentPoliciesRef(),
-        `query:${getTelegramAgentPoliciesRef().path}:all`,
-        ctx,
-        "telegram_agent_policies",
-        {},
-        0
-    );
-    const policies = result.rows.map((row) => normalizeTelegramAgentPolicy(row, row.id));
+async function loadTelegramAgentPolicyCatalog(ctx, options = {}) {
+    const includeInactive = options.includeInactive === true;
+    const requiredMode = includeInactive ? "all" : "active";
+    if (
+        Array.isArray(ctx?.policyCatalog) &&
+        options.forceReload !== true &&
+        (ctx.policyCatalogMode === "all" || ctx.policyCatalogMode === requiredMode)
+    ) {
+        return ctx.policyCatalog;
+    }
+
+    const cacheKey = includeInactive ? "allCatalog" : "activeCatalog";
+    const cached = options.forceReload === true ? null : getTelegramAgentPolicyRuntimeCache(cacheKey);
+    let policies;
+    if (cached) {
+        policies = cached;
+        recordTelegramAgentRead(ctx, 0, "telegram_agent_policies", { cacheHit: true });
+    } else {
+        const baseRef = getTelegramAgentPoliciesRef();
+        const queryRef = includeInactive ? baseRef : baseRef.where("status", "==", "active");
+        const result = await queryTelegramAgentDocs(
+            queryRef,
+            `query:${baseRef.path}:${requiredMode}`,
+            ctx,
+            "telegram_agent_policies",
+            { catalogMode: requiredMode },
+            0
+        );
+        policies = result.rows.map((row) => normalizeTelegramAgentPolicy(row, row.id));
+        setTelegramAgentPolicyRuntimeCache(cacheKey, policies);
+    }
+
+    if (ctx) {
+        ctx.policyCatalog = policies;
+        ctx.policyCatalogMode = requiredMode;
+    }
+    return policies;
+}
+
+function applyTelegramAgentPolicyState(ctx, policies = [], permission = null, options = {}) {
+    if (!ctx) return { policies: [], activePolicies: [], permission: permission || { role: "viewer", brandIds: [] } };
     const today = getTelegramPolicyToday();
     const relevant = policies.filter((policy) => {
         if (policy.ownerScope === "user" && policy.userId !== String(ctx.userId)) return false;
@@ -763,11 +837,21 @@ async function loadTelegramAgentPolicyState(ctx, options = {}) {
     const transientPolicies = Array.isArray(ctx.transientPolicies)
         ? ctx.transientPolicies.map((item, index) => normalizeTelegramAgentPolicy({ ...item, source: "one_shot" }, `one-shot-${index}`))
         : [];
-    ctx.policyPermission = permission;
+    ctx.policyPermission = permission || ctx.policyPermission || { role: "viewer", brandIds: [] };
     ctx.policies = [...transientPolicies, ...relevant];
     ctx.activePolicyIds = [];
     ctx.policyConflicts = detectTelegramPolicyConflicts(ctx.policies);
-    return { policies, activePolicies: ctx.policies, permission };
+    ctx.policyStateLoaded = true;
+    return { policies, activePolicies: ctx.policies, permission: ctx.policyPermission };
+}
+
+async function loadTelegramAgentPolicyState(ctx, options = {}) {
+    if (!ctx) return { policies: [], activePolicies: [], permission: { role: "viewer", brandIds: [] } };
+    const permission = options.skipPermission === true
+        ? (ctx.policyPermission || { role: "viewer", brandIds: [] })
+        : await loadTelegramAgentPolicyPermission(ctx.chatId, ctx.userId, ctx, options);
+    const policies = await loadTelegramAgentPolicyCatalog(ctx, options);
+    return applyTelegramAgentPolicyState(ctx, policies, permission, options);
 }
 
 function detectTelegramPolicyConflicts(policies = []) {
@@ -850,12 +934,29 @@ function getTelegramAgentPreferenceInstructions(ctx) {
         .slice(0, 12);
 }
 
-function formatTelegramAgentPolicyContext(ctx) {
-    const active = (ctx?.policies || []).filter((policy) => isTelegramPolicyActive(policy));
-    if (!active.length) return "（無長期規則）";
-    return active.slice(0, 20).map((policy) => {
+function formatTelegramAgentPolicyContext(ctx, options = {}) {
+    const command = String(options.command || ctx?.question || "");
+    const explicitBrandId = getTelegramAgentExplicitBrandId(command);
+    const activeBrandId = explicitBrandId || normalizeTelegramAgentBrandId(ctx?.scopeState?.activeBrandId || "");
+    const analysisScopes = new Set(["telegram_analysis", "ranking", "brand_totals"]);
+    const alertIntent = /(?:\/alerts|主動巡察|主動預警|預警門檻|警示規則)/i.test(command);
+    const active = (ctx?.policies || []).filter((policy) => {
+        if (!isTelegramPolicyActive(policy)) return false;
+        if (policy.type === "response_preference") return true;
+        if (activeBrandId && policy.brandId && policy.brandId !== activeBrandId) return false;
         if (policy.type === "exclude_store") {
-            const scopes = policy.scopes.map((scope) => TELEGRAM_AGENT_POLICY_SCOPE_LABELS[scope] || scope).join("、");
+            return policy.scopes.some((scope) => analysisScopes.has(scope));
+        }
+        if (policy.type === "alert_rule") return alertIntent;
+        return false;
+    });
+    if (!active.length) return "（無與本題相關的長期規則）";
+    return active.slice(0, 10).map((policy) => {
+        if (policy.type === "exclude_store") {
+            const scopes = policy.scopes
+                .filter((scope) => analysisScopes.has(scope))
+                .map((scope) => TELEGRAM_AGENT_POLICY_SCOPE_LABELS[scope] || scope)
+                .join("、");
             return `- 排除 ${getTelegramAgentBrandLabel(policy.brandId)} ${policy.storeName || policy.storeCore}店：${scopes}`;
         }
         if (policy.type === "alert_rule") {
@@ -906,12 +1007,13 @@ async function createTelegramAgentPolicy(input, actor, ctx) {
     }, policyRef.id);
     assertTelegramPolicyPermission(ctx?.policyPermission || {}, policy);
 
+    const conflictQuery = getTelegramAgentPoliciesRef().where("conflictKey", "==", policy.conflictKey);
     const existingResult = await queryTelegramAgentDocs(
-        getTelegramAgentPoliciesRef(),
-        `query:${getTelegramAgentPoliciesRef().path}:write-conflict-scan`,
+        conflictQuery,
+        `query:${getTelegramAgentPoliciesRef().path}:conflict:${policy.conflictKey}`,
         ctx,
         "telegram_agent_policies",
-        {},
+        { conflictKey: policy.conflictKey },
         0
     );
     const conflicts = existingResult.rows
@@ -936,15 +1038,29 @@ async function createTelegramAgentPolicy(input, actor, ctx) {
     });
     await batch.commit();
     if (ctx) ctx.writeCount += conflicts.length + 1;
+    invalidateTelegramAgentPolicyRuntimeCache({ permissions: false, policies: true });
+    if (ctx && Array.isArray(ctx.policyCatalog)) {
+        const conflictIds = new Set(conflicts.map((row) => row.id));
+        ctx.policyCatalog = [
+            ...ctx.policyCatalog.filter((row) => !conflictIds.has(row.id) && row.id !== policy.id),
+            policy,
+        ];
+        applyTelegramAgentPolicyState(ctx, ctx.policyCatalog, ctx.policyPermission || null);
+    }
     await writeTelegramPolicyAudit("create", policy, actor, { supersededPolicyIds: conflicts.map((row) => row.id) });
     return policy;
 }
 
 async function setTelegramAgentPolicyEnabled(policyId, enabled, actor, ctx, reason = "manual") {
     const ref = getTelegramAgentPoliciesRef().doc(String(policyId));
-    const snap = await ref.get();
-    if (!snap.exists) throw new Error("找不到指定規則");
-    const before = normalizeTelegramAgentPolicy(snap.data() || {}, snap.id);
+    let before = Array.isArray(ctx?.policyCatalog)
+        ? ctx.policyCatalog.find((row) => row.id === String(policyId)) || null
+        : null;
+    if (!before) {
+        const result = await readTelegramAgentDoc(ref, ctx, "telegram_agent_policies", { policyId: String(policyId) }, 0);
+        if (!result.exists) throw new Error("找不到指定規則");
+        before = normalizeTelegramAgentPolicy(result.data || {}, result.id);
+    }
     assertTelegramPolicyPermission(ctx?.policyPermission || {}, before);
     const nowText = new Date().toISOString();
     await ref.set({
@@ -958,25 +1074,45 @@ async function setTelegramAgentPolicyEnabled(policyId, enabled, actor, ctx, reas
     }, { merge: true });
     if (ctx) ctx.writeCount += 1;
     const after = { ...before, enabled: Boolean(enabled), status: enabled ? "active" : "inactive", updatedAtText: nowText };
+    invalidateTelegramAgentPolicyRuntimeCache({ permissions: false, policies: true });
+    if (ctx && Array.isArray(ctx.policyCatalog)) {
+        const nextCatalog = ctx.policyCatalog.filter((row) => row.id !== before.id);
+        if (enabled || ctx.policyCatalogMode === "all") nextCatalog.push(after);
+        ctx.policyCatalog = nextCatalog;
+        applyTelegramAgentPolicyState(ctx, ctx.policyCatalog, ctx.policyPermission || null, { includeInactive: ctx.policyCatalogMode === "all" });
+    }
     await writeTelegramPolicyAudit(enabled ? "reactivate" : "deactivate", after, actor, { before, reason });
     return { before, after };
 }
 
 async function findTelegramAgentPolicy(identifier, ctx, includeInactive = true) {
-    const result = await queryTelegramAgentDocs(
-        getTelegramAgentPoliciesRef(),
-        `query:${getTelegramAgentPoliciesRef().path}:find`,
-        ctx,
-        "telegram_agent_policies",
-        {},
-        0
-    );
-    const needle = String(identifier || "").trim().toLowerCase();
-    const rows = result.rows.map((row) => normalizeTelegramAgentPolicy(row, row.id));
-    return rows.find((row) =>
-        (includeInactive || isTelegramPolicyActive(row)) &&
-        [row.id, row.policyCode].some((value) => String(value || "").toLowerCase() === needle)
-    ) || null;
+    const needle = String(identifier || "").trim();
+    const lowered = needle.toLowerCase();
+    const local = Array.isArray(ctx?.policyCatalog)
+        ? ctx.policyCatalog.find((row) =>
+            (includeInactive || isTelegramPolicyActive(row)) &&
+            [row.id, row.policyCode].some((value) => String(value || "").toLowerCase() === lowered)
+        )
+        : null;
+    if (local) return local;
+
+    let result = null;
+    if (/^POL-/i.test(needle)) {
+        const snap = await getTelegramAgentPoliciesRef().where("policyCode", "==", needle).limit(1).get();
+        recordTelegramAgentRead(ctx, Math.max(1, snap.size), "telegram_agent_policies", { lookup: "policyCode" });
+        if (!snap.empty) result = normalizeTelegramAgentPolicy(snap.docs[0].data() || {}, snap.docs[0].id);
+    } else {
+        const readResult = await readTelegramAgentDoc(
+            getTelegramAgentPoliciesRef().doc(needle),
+            ctx,
+            "telegram_agent_policies",
+            { lookup: "documentId" },
+            0
+        );
+        if (readResult.exists) result = normalizeTelegramAgentPolicy(readResult.data || {}, readResult.id);
+    }
+    if (!result || (!includeInactive && !isTelegramPolicyActive(result))) return null;
+    return result;
 }
 
 async function listTelegramAgentPoliciesText(ctx, options = {}) {
@@ -1119,9 +1255,11 @@ function buildTelegramPolicyPendingMessage(action = {}) {
 }
 
 async function saveTelegramPendingPolicyAction(chatId, userId, action) {
-    const expiresAtText = new Date(Date.now() + TELEGRAM_AGENT_POLICY_PENDING_MINUTES * 60 * 1000).toISOString();
+    const expiresAtMs = Date.now() + TELEGRAM_AGENT_POLICY_PENDING_MINUTES * 60 * 1000;
+    const expiresAtText = new Date(expiresAtMs).toISOString();
     await getTelegramAgentSessionRef(chatId, userId).set({
         pendingPolicyAction: { ...action, createdAtText: new Date().toISOString(), expiresAtText },
+        pendingPolicyExpiresAtMs: expiresAtMs,
         updatedAt: admin.firestore.FieldValue.serverTimestamp(),
         updatedAtText: new Date().toISOString(),
     }, { merge: true });
@@ -1130,27 +1268,31 @@ async function saveTelegramPendingPolicyAction(chatId, userId, action) {
 async function clearTelegramPendingPolicyAction(chatId, userId) {
     await getTelegramAgentSessionRef(chatId, userId).set({
         pendingPolicyAction: admin.firestore.FieldValue.delete(),
+        pendingPolicyExpiresAtMs: admin.firestore.FieldValue.delete(),
         updatedAt: admin.firestore.FieldValue.serverTimestamp(),
         updatedAtText: new Date().toISOString(),
     }, { merge: true });
 }
 
 async function saveTelegramOneShotPolicies(chatId, userId, policies) {
+    const expiresAtMs = Date.now() + TELEGRAM_AGENT_POLICY_PENDING_MINUTES * 60 * 1000;
     await getTelegramAgentSessionRef(chatId, userId).set({
         oneShotPolicies: Array.isArray(policies) ? policies : [],
-        oneShotExpiresAtText: new Date(Date.now() + TELEGRAM_AGENT_POLICY_PENDING_MINUTES * 60 * 1000).toISOString(),
+        oneShotExpiresAtText: new Date(expiresAtMs).toISOString(),
+        oneShotExpiresAtMs: expiresAtMs,
         updatedAt: admin.firestore.FieldValue.serverTimestamp(),
         updatedAtText: new Date().toISOString(),
     }, { merge: true });
 }
 
 async function consumeTelegramOneShotPolicies(chatId, userId, memoryPayload) {
-    const expires = Date.parse(memoryPayload?.oneShotExpiresAtText || "");
+    const expires = Number(memoryPayload?.oneShotExpiresAtMs || 0) || Date.parse(memoryPayload?.oneShotExpiresAtText || "");
     const policies = expires > Date.now() && Array.isArray(memoryPayload?.oneShotPolicies) ? memoryPayload.oneShotPolicies : [];
     if (policies.length || memoryPayload?.oneShotPolicies) {
         await getTelegramAgentSessionRef(chatId, userId).set({
             oneShotPolicies: admin.firestore.FieldValue.delete(),
             oneShotExpiresAtText: admin.firestore.FieldValue.delete(),
+            oneShotExpiresAtMs: admin.firestore.FieldValue.delete(),
         }, { merge: true });
     }
     return policies;
@@ -1164,8 +1306,8 @@ async function executeTelegramPendingPolicyAction(action, actor, ctx) {
         return { message: `✅ 已建立長期規則\n${policy.policyCode}\n${action.summary || policy.sourceText || "規則已生效"}`, lastPolicyChange: { action: "create", policyId: policy.id, policyCode: policy.policyCode } };
     }
     if (action.kind === "restore_store") {
-        const state = await loadTelegramAgentPolicyState(ctx, { includeInactive: true });
-        const matches = state.policies.filter((policy) =>
+        const state = await loadTelegramAgentPolicyState(ctx);
+        const matches = state.activePolicies.filter((policy) =>
             policy.type === "exclude_store" && policy.enabled !== false && policy.brandId === action.brandId && normalizeSummaryCoreName(policy.storeCore || policy.storeName) === normalizeSummaryCoreName(action.storeCore || action.storeName)
         );
         if (!matches.length) return { message: "目前沒有符合的排除規則，不需要恢復。", lastPolicyChange: null };
@@ -1524,6 +1666,9 @@ function createTelegramAgentContext({ chatId, userId, question }) {
         fallbackUsed: false,
         geminiApi: "interactions-v1beta-rest",
         policies: [],
+        policyCatalog: [],
+        policyCatalogMode: "",
+        policyStateLoaded: false,
         activePolicyIds: [],
         transientPolicies: [],
         policyPermission: null,
@@ -3468,8 +3613,10 @@ async function loadTelegramAgentMemory(chatId, userId, ctx) {
                 turns: [],
                 state: sanitizeTelegramAgentScopeState({}),
                 pendingPolicyAction: null,
+                pendingPolicyExpiresAtMs: 0,
                 oneShotPolicies: [],
                 oneShotExpiresAtText: "",
+                oneShotExpiresAtMs: 0,
                 learningCandidates: {},
                 lastLearningSuggestion: null,
                 lastPolicyChange: null,
@@ -3480,8 +3627,10 @@ async function loadTelegramAgentMemory(chatId, userId, ctx) {
             turns: turns.slice(-TELEGRAM_AGENT_MEMORY_TURNS),
             state: sanitizeTelegramAgentScopeState(result.data?.state || {}),
             pendingPolicyAction: result.data?.pendingPolicyAction || null,
+            pendingPolicyExpiresAtMs: Number(result.data?.pendingPolicyExpiresAtMs || 0),
             oneShotPolicies: Array.isArray(result.data?.oneShotPolicies) ? result.data.oneShotPolicies : [],
             oneShotExpiresAtText: String(result.data?.oneShotExpiresAtText || ""),
+            oneShotExpiresAtMs: Number(result.data?.oneShotExpiresAtMs || 0),
             learningCandidates: result.data?.learningCandidates && typeof result.data.learningCandidates === "object" ? result.data.learningCandidates : {},
             lastLearningSuggestion: result.data?.lastLearningSuggestion || null,
             lastPolicyChange: result.data?.lastPolicyChange || null,
@@ -3492,8 +3641,10 @@ async function loadTelegramAgentMemory(chatId, userId, ctx) {
             turns: [],
             state: sanitizeTelegramAgentScopeState({}),
             pendingPolicyAction: null,
+            pendingPolicyExpiresAtMs: 0,
             oneShotPolicies: [],
             oneShotExpiresAtText: "",
+            oneShotExpiresAtMs: 0,
             learningCandidates: {},
             lastLearningSuggestion: null,
             lastPolicyChange: null,
@@ -4071,7 +4222,7 @@ exports.telegramWebhook = onRequest({
 
         const command = policyResult?.command || expandedCommand;
         const memoryText = formatTelegramAgentMemory(memoryTurns);
-        const policyContext = formatTelegramAgentPolicyContext(ctx);
+        const policyContext = formatTelegramAgentPolicyContext(ctx, { command });
         const prompt = `以下是這位使用者最近的個人對話脈絡，只用於理解「那家店、上個月、剛才那位管理師」等追問：
 ${memoryText}
 
@@ -4156,6 +4307,39 @@ ${policyContext}
 
 
 // 每日整理失效、重複規則與逾時確認，避免長期記憶累積成互相衝突的設定。
+// 成本節流：只查 active 規則與已到期 session 索引欄位，不再掃描全部歷史規則與全部 session。
+async function cleanupExpiredTelegramAgentSessions(fieldName, deleteFields, nowMs) {
+    let matchedCount = 0;
+    let writeCount = 0;
+    let rounds = 0;
+    while (rounds < 10) {
+        rounds += 1;
+        const snap = await db.collection("telegram_agent_sessions")
+            .where(fieldName, "<=", nowMs)
+            .limit(400)
+            .get();
+        if (snap.empty) break;
+
+        const batch = db.batch();
+        const nowText = new Date().toISOString();
+        snap.docs.forEach((sessionDoc) => {
+            const patch = {
+                updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+                updatedAtText: nowText,
+            };
+            deleteFields.forEach((field) => {
+                patch[field] = admin.firestore.FieldValue.delete();
+            });
+            batch.set(sessionDoc.ref, patch, { merge: true });
+        });
+        await batch.commit();
+        matchedCount += snap.size;
+        writeCount += snap.size;
+        if (snap.size < 400) break;
+    }
+    return { matchedCount, writeCount, rounds };
+}
+
 exports.cleanupTelegramAgentPolicies = onSchedule({
     schedule: "20 3 * * *",
     timeZone: "Asia/Taipei",
@@ -4163,29 +4347,37 @@ exports.cleanupTelegramAgentPolicies = onSchedule({
     memory: "256MiB",
 }, async () => {
     const today = getTelegramPolicyToday();
-    const nowText = new Date().toISOString();
-    const policySnap = await getTelegramAgentPoliciesRef().get();
-    const policies = policySnap.docs.map((snap) => normalizeTelegramAgentPolicy(snap.data() || {}, snap.id));
+    const nowMs = Date.now();
+    const nowText = new Date(nowMs).toISOString();
+
+    const policySnap = await getTelegramAgentPoliciesRef().where("status", "==", "active").get();
+    const policies = policySnap.docs
+        .map((snap) => normalizeTelegramAgentPolicy(snap.data() || {}, snap.id))
+        .filter((policy) => policy.enabled !== false);
     const activeByConflict = {};
-    policies.filter((policy) => policy.enabled !== false && policy.status === "active").forEach((policy) => {
+    policies.forEach((policy) => {
         const key = policy.conflictKey || getTelegramPolicyConflictKey(policy);
         if (!activeByConflict[key]) activeByConflict[key] = [];
         activeByConflict[key].push(policy);
     });
 
-    const updates = [];
+    const updateMap = new Map();
     policies.forEach((policy) => {
-        if (policy.enabled === false || policy.status !== "active") return;
         if (policy.effectiveUntil && policy.effectiveUntil < today) {
-            updates.push({ id: policy.id, status: "expired", reason: "effective_until_passed" });
+            updateMap.set(policy.id, { id: policy.id, status: "expired", reason: "effective_until_passed" });
         }
     });
     Object.values(activeByConflict).forEach((rows) => {
         const validRows = rows.filter((policy) => !(policy.effectiveUntil && policy.effectiveUntil < today));
         if (validRows.length <= 1) return;
         validRows.sort((a, b) => String(b.updatedAtText || b.createdAtText).localeCompare(String(a.updatedAtText || a.createdAtText)));
-        validRows.slice(1).forEach((policy) => updates.push({ id: policy.id, status: "superseded", reason: `duplicate_of:${validRows[0].id}` }));
+        validRows.slice(1).forEach((policy) => {
+            if (!updateMap.has(policy.id)) {
+                updateMap.set(policy.id, { id: policy.id, status: "superseded", reason: `duplicate_of:${validRows[0].id}` });
+            }
+        });
     });
+    const updates = [...updateMap.values()];
 
     for (let index = 0; index < updates.length; index += 400) {
         const batch = db.batch();
@@ -4200,39 +4392,33 @@ exports.cleanupTelegramAgentPolicies = onSchedule({
         });
         await batch.commit();
     }
+    if (updates.length > 0) invalidateTelegramAgentPolicyRuntimeCache({ permissions: false, policies: true });
 
-    const sessionSnap = await db.collection("telegram_agent_sessions").get();
-    const expiredSessions = sessionSnap.docs.filter((snap) => {
-        const data = snap.data() || {};
-        const pendingExpired = data.pendingPolicyAction?.expiresAtText && Date.parse(data.pendingPolicyAction.expiresAtText) <= Date.now();
-        const oneShotExpired = data.oneShotExpiresAtText && Date.parse(data.oneShotExpiresAtText) <= Date.now();
-        return pendingExpired || oneShotExpired;
-    });
-    for (let index = 0; index < expiredSessions.length; index += 400) {
-        const batch = db.batch();
-        expiredSessions.slice(index, index + 400).forEach((snap) => {
-            batch.set(snap.ref, {
-                pendingPolicyAction: admin.firestore.FieldValue.delete(),
-                oneShotPolicies: admin.firestore.FieldValue.delete(),
-                oneShotExpiresAtText: admin.firestore.FieldValue.delete(),
-                updatedAt: admin.firestore.FieldValue.serverTimestamp(),
-                updatedAtText: nowText,
-            }, { merge: true });
-        });
-        await batch.commit();
-    }
+    const pendingCleanup = await cleanupExpiredTelegramAgentSessions(
+        "pendingPolicyExpiresAtMs",
+        ["pendingPolicyAction", "pendingPolicyExpiresAtMs"],
+        nowMs
+    );
+    const oneShotCleanup = await cleanupExpiredTelegramAgentSessions(
+        "oneShotExpiresAtMs",
+        ["oneShotPolicies", "oneShotExpiresAtText", "oneShotExpiresAtMs"],
+        nowMs
+    );
 
     await getTelegramAgentPolicyDataRootRef().collection("global_settings").doc("telegram_agent_policy_cleanup_status").set({
         lastRunAt: admin.firestore.FieldValue.serverTimestamp(),
         lastRunAtText: nowText,
+        policyQueryMode: "status_active_only",
+        sessionQueryMode: "indexed_expiry_fields",
         scannedPolicyCount: policies.length,
         changedPolicyCount: updates.length,
-        scannedSessionCount: sessionSnap.size,
-        cleanedSessionCount: expiredSessions.length,
+        matchedPendingSessionCount: pendingCleanup.matchedCount,
+        matchedOneShotSessionCount: oneShotCleanup.matchedCount,
+        scannedSessionCount: pendingCleanup.matchedCount + oneShotCleanup.matchedCount,
+        cleanedSessionCount: pendingCleanup.writeCount + oneShotCleanup.writeCount,
         status: "completed",
     }, { merge: true });
 });
-
 
 // ==========================================
 // ★ DRCYJ Telegram 預警管理中心 v3.0
@@ -4561,7 +4747,14 @@ async function buildTelegramActiveAlertMessages(config, actor = "scheduled") {
     const now = getTelegramAlertTaipeiClock();
     const brandMessages = [];
 
-    for (const brandId of normalized.brandIds) {
+    const sharedPolicyCtx = createTelegramAgentContext({
+        chatId: `${actor}:shared-policy`,
+        userId: actor,
+        question: "active alerts:shared policy catalog",
+    });
+    await loadTelegramAgentPolicyState(sharedPolicyCtx, { skipPermission: true });
+
+    for (const [brandIndex, brandId] of normalized.brandIds.entries()) {
         const brand = getTelegramAgentBrandLabel(brandId);
         const brandProfile = normalized.brandProfiles[brandId] || createTelegramActiveAlertDefaultBrandProfile();
         const ctx = createTelegramAgentContext({
@@ -4569,7 +4762,16 @@ async function buildTelegramActiveAlertMessages(config, actor = "scheduled") {
             userId: actor,
             question: `active alerts:${brandId}`,
         });
-        await loadTelegramAgentPolicyState(ctx);
+        ctx.policyCatalog = sharedPolicyCtx.policyCatalog;
+        ctx.policyCatalogMode = sharedPolicyCtx.policyCatalogMode;
+        applyTelegramAgentPolicyState(ctx, sharedPolicyCtx.policyCatalog, sharedPolicyCtx.policyPermission, { includeInactive: false });
+        recordTelegramAgentRead(ctx, 0, "telegram_agent_policies", { cacheHit: true, sharedCatalog: true });
+
+        if (brandIndex === 0 && sharedPolicyCtx.readCount > 0) {
+            ctx.readCount += sharedPolicyCtx.readCount;
+            ctx.sources.unshift(...sharedPolicyCtx.sources);
+        }
+
         const result = await getOperationalAlerts(
             now.yearMonth,
             brand,
