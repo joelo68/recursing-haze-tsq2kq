@@ -539,11 +539,12 @@ async function answerTelegramCallbackQuery(callbackQueryId, text = "") {
 // ★ 2. DRCYJ Telegram 營運戰情 Agent v1
 // Summary-first／最多三個工具／短期記憶／查詢稽核／成本護欄
 // ==========================================
-const TELEGRAM_AGENT_VERSION = "drcyj-agent-v4.1-cost-throttled-learning";
+const TELEGRAM_AGENT_VERSION = "drcyj-agent-v4.2-scheduled-data-unified";
 const TELEGRAM_AGENT_COMPATIBLE_VERSIONS = new Set([
     "drcyj-agent-v1.5-alert-control-center",
     "drcyj-agent-v2.0-gemini-3.6-interactions",
     "drcyj-agent-v4.0-controlled-learning",
+    "drcyj-agent-v4.1-cost-throttled-learning",
     TELEGRAM_AGENT_VERSION,
 ]);
 const TELEGRAM_AGENT_PRIMARY_MODEL = "gemini-3.6-flash";
@@ -585,6 +586,18 @@ const TELEGRAM_AGENT_POLICY_SCOPE_LABELS = Object.freeze({
     active_alert: "主動巡察",
     data_audit: "回報與資料檢核",
 });
+const TELEGRAM_AGENT_ALL_EXCLUSION_SCOPES = Object.freeze([
+    "telegram_analysis",
+    "ranking",
+    "brand_totals",
+    "active_alert",
+    "data_audit",
+]);
+
+function isTelegramPolicyAllDataExclusionText(text = "") {
+    const command = String(text || "");
+    return /(?:任何資料|所有資料|全部資料|任何分析|所有分析|全部分析|不論.*(?:資料|分析)|一律排除|完全排除|所有營運分析)/.test(command);
+}
 const TELEGRAM_AGENT_POLICY_RULE_LABELS = Object.freeze({
     progressGap: "現金進度差距",
     cashAchievementRate: "現金業績達成率",
@@ -683,7 +696,11 @@ function normalizeTelegramAgentPolicy(raw = {}, id = "") {
     const brandId = normalizeTelegramAgentBrandId(raw.brandId || "") || "";
     const storeCore = normalizeSummaryCoreName(raw.storeCore || raw.storeName || "");
     const ownerScope = raw.ownerScope === "user" ? "user" : (raw.ownerScope === "brand" ? "brand" : "global");
-    const scopes = normalizeTelegramPolicyScopes(raw.scopes || []);
+    const sourceText = String(raw.sourceText || "").slice(0, 1200);
+    let scopes = normalizeTelegramPolicyScopes(raw.scopes || []);
+    if (type === "exclude_store" && isTelegramPolicyAllDataExclusionText(sourceText)) {
+        scopes = [...TELEGRAM_AGENT_ALL_EXCLUSION_SCOPES];
+    }
     const policy = {
         id: String(id || raw.id || ""),
         policyCode: String(raw.policyCode || ""),
@@ -694,7 +711,7 @@ function normalizeTelegramAgentPolicy(raw = {}, id = "") {
         storeCore,
         storeName: String(raw.storeName || storeCore || ""),
         scopes: scopes.length ? scopes : (type === "exclude_store" ? ["telegram_analysis"] : []),
-        excludeFromBrandTotals: raw.excludeFromBrandTotals === true,
+        excludeFromBrandTotals: raw.excludeFromBrandTotals === true || scopes.includes("brand_totals"),
         ruleId: String(raw.ruleId || ""),
         value: raw.value && typeof raw.value === "object" ? raw.value : {},
         preferenceKey: String(raw.preferenceKey || "generic"),
@@ -706,7 +723,7 @@ function normalizeTelegramAgentPolicy(raw = {}, id = "") {
         priority: Math.max(0, Math.min(999, Number(raw.priority || 100))),
         effectiveFrom: normalizeTelegramPolicyDate(raw.effectiveFrom || ""),
         effectiveUntil: normalizeTelegramPolicyDate(raw.effectiveUntil || ""),
-        sourceText: String(raw.sourceText || "").slice(0, 1200),
+        sourceText,
         source: String(raw.source || "telegram"),
         createdByUserId: String(raw.createdByUserId || raw.userId || ""),
         createdByName: String(raw.createdByName || ""),
@@ -1147,13 +1164,15 @@ function parseTelegramPolicyEffectiveUntil(text, dateInfo) {
 
 function parseTelegramPolicyScopes(text) {
     const command = String(text || "");
+    if (isTelegramPolicyAllDataExclusionText(command)) {
+        return [...TELEGRAM_AGENT_ALL_EXCLUSION_SCOPES];
+    }
     const scopes = [];
-    if (/所有分析|全部分析|所有營運分析/.test(command)) scopes.push("telegram_analysis", "ranking", "brand_totals", "active_alert");
     if (/一般分析|Telegram分析|戰情分析/.test(command)) scopes.push("telegram_analysis");
     if (/排名|排行/.test(command)) scopes.push("ranking");
     if (/品牌總計|品牌加總|總業績/.test(command)) scopes.push("brand_totals");
-    if (/主動巡察|主動預警|預警推播/.test(command)) scopes.push("active_alert");
-    if (/缺報|回報檢核|資料檢核/.test(command)) scopes.push("data_audit");
+    if (/主動巡察|主動預警|預警推播|固定排程|定時推播/.test(command)) scopes.push("active_alert");
+    if (/缺報|回報檢核|資料檢核|日報未繳交/.test(command)) scopes.push("data_audit");
     return normalizeTelegramPolicyScopes(scopes.length ? scopes : ["telegram_analysis"]);
 }
 
@@ -1444,7 +1463,7 @@ async function parseTelegramPolicyCommand(rawCommand, ctx, dateInfo, memoryPaylo
             storeCore: match.storeCore,
             storeName: match.storeName,
             scopes: parseTelegramPolicyScopes(command),
-            excludeFromBrandTotals: /品牌總計|全部分析|所有分析/.test(command),
+            excludeFromBrandTotals: /品牌總計|全部分析|所有分析|任何資料|所有資料|全部資料|一律排除/.test(command),
             effectiveFrom: dateInfo.todayStr,
             effectiveUntil: parseTelegramPolicyEffectiveUntil(command, dateInfo),
             sourceText: command,
@@ -2445,7 +2464,7 @@ async function loadTelegramAgentRawStoreRange(brandId, startDate, endDate, ctx, 
     return { rows, overall, source: "daily_reports_scoped", updatedAtText: targetResult.updatedAtText || "" };
 }
 
-async function getStorePerformance(startDate, endDate, storeName = null, brandName = null, agentContext = null) {
+async function getStorePerformance(startDate, endDate, storeName = null, brandName = null, agentContext = null, policyScopes = ["telegram_analysis", "brand_totals"]) {
     if (storeName && !brandName && normalizeTelegramAgentBrandId(storeName)) {
         brandName = storeName;
         storeName = null;
@@ -2463,7 +2482,7 @@ async function getStorePerformance(startDate, endDate, storeName = null, brandNa
         const loaded = useMonthSummary
             ? await loadTelegramAgentStoreMonth(brandId, start.slice(0, 7), ctx)
             : await loadTelegramAgentRawStoreRange(brandId, start, end, ctx);
-        const policyRows = filterTelegramAgentRowsByPolicies(loaded.rows, brandId, ctx, ["telegram_analysis", "brand_totals"]);
+        const policyRows = filterTelegramAgentRowsByPolicies(loaded.rows, brandId, ctx, policyScopes);
         policyRows.forEach((row) => allRows.push(row));
         sourceMeta.push({
             brand: getTelegramAgentBrandLabel(brandId),
@@ -2644,7 +2663,7 @@ async function loadTelegramAgentRawTherapistRange(brandId, startDate, endDate, c
     return { rows, overall: aggregateTelegramAgentTherapistRows(rows, startDate.slice(0, 7), endDate), source: "therapist_daily_reports_scoped", updatedAtText: "" };
 }
 
-async function getTherapistPerformance(startDate, endDate, personName = null, storeName = null, brandName = null, agentContext = null, storeNames = []) {
+async function getTherapistPerformance(startDate, endDate, personName = null, storeName = null, brandName = null, agentContext = null, storeNames = [], policyScopes = ["telegram_analysis", "ranking"]) {
     if (storeName && !brandName && normalizeTelegramAgentBrandId(storeName)) {
         brandName = storeName;
         storeName = null;
@@ -2660,7 +2679,7 @@ async function getTherapistPerformance(startDate, endDate, personName = null, st
         const loaded = useMonthSummary
             ? await loadTelegramAgentTherapistMonth(brandId, start.slice(0, 7), ctx)
             : await loadTelegramAgentRawTherapistRange(brandId, start, end, ctx);
-        const policyRows = filterTelegramAgentRowsByPolicies(loaded.rows, brandId, ctx, ["telegram_analysis", "ranking"]);
+        const policyRows = filterTelegramAgentRowsByPolicies(loaded.rows, brandId, ctx, policyScopes);
         policyRows.forEach((row) => allRows.push(row));
         sourceMeta.push({
             brand: getTelegramAgentBrandLabel(brandId),
@@ -2695,7 +2714,7 @@ async function getTherapistPerformance(startDate, endDate, personName = null, st
     };
 }
 
-async function getMissingReports(startDate, endDate, brandName = null, agentContext = null) {
+async function getMissingReports(startDate, endDate, brandName = null, agentContext = null, policyScopes = ["data_audit"]) {
     const ctx = agentContext;
     const brands = resolveTelegramAgentBrands(brandName, "");
     const start = normalizeTelegramAgentDate(startDate);
@@ -2721,7 +2740,7 @@ async function getMissingReports(startDate, endDate, brandName = null, agentCont
         });
         const officialStores = normalizeTelegramAgentStoreNames(org.stores || [])
             .filter((store) => !auditExclusions.storeSet.has(store));
-        const expected = filterTelegramAgentStoresByPolicies(officialStores, brandId, ctx, ["data_audit"]);
+        const expected = filterTelegramAgentStoresByPolicies(officialStores, brandId, ctx, policyScopes);
         const submittedExpectedCount = expected.filter((store) => submitted.has(store)).length;
         const missing = expected.filter((store) => !submitted.has(store));
         results.push({
@@ -5034,31 +5053,77 @@ exports.processTelegramAlertCommand = onDocumentCreated({
 
 
 // ==========================================
-// ★ 4. Telegram 動態定時推播巡邏員（規則感知節流版）
-// 只在 08:00～11:59 每分鐘檢查規則；真正符合通知時間後，
-// 再依規則類型載入必要資料，避免每次通知都掃描所有大型集合。
+// ★ 4. Telegram 動態定時推播巡邏員（統一資料口徑版）
+// 固定排程與即時詢問共用同一組品牌限定資料載入器、目標口徑與長期規則。
+// 只在 08:00～11:59 每分鐘檢查規則；真正符合通知時間後才讀取營運資料。
 // ==========================================
+function shiftTelegramAgentDate(dateText, days) {
+    const match = String(dateText || "").match(/^(\d{4})-(\d{2})-(\d{2})$/);
+    if (!match) return "";
+    const date = new Date(Date.UTC(Number(match[1]), Number(match[2]) - 1, Number(match[3])));
+    date.setUTCDate(date.getUTCDate() + Number(days || 0));
+    return date.toISOString().slice(0, 10);
+}
+
+function createTelegramNotificationPolicyContext(sharedPolicyCtx, brandId, question) {
+    const ctx = createTelegramAgentContext({
+        chatId: `notificationPatrol:${brandId}`,
+        userId: "notificationPatrol",
+        question,
+    });
+    ctx.policyCatalog = sharedPolicyCtx.policyCatalog;
+    ctx.policyCatalogMode = sharedPolicyCtx.policyCatalogMode;
+    applyTelegramAgentPolicyState(ctx, sharedPolicyCtx.policyCatalog, sharedPolicyCtx.policyPermission, { includeInactive: false });
+    recordTelegramAgentRead(ctx, 0, "telegram_agent_policies", { cacheHit: true, sharedCatalog: true });
+    return ctx;
+}
+
+function appendTelegramScheduledDataFooter(message, result, ctx) {
+    const sourceLabels = {
+        daily_reports_current_month_exact: "當月品牌限定即時店家日報",
+        daily_reports_scoped: "品牌限定店家日報",
+        daily_reports_month_fallback: "品牌限定整月日報 fallback",
+        monthly_aggregated: "月彙總 fallback",
+        verified_dashboard_summary: "已驗證歷史月結 Summary",
+        therapist_daily_reports_scoped: "品牌限定管理師日報",
+        therapist_daily_reports_current_month_exact: "當月品牌限定即時管理師日報",
+    };
+    const sourceMeta = Array.isArray(result?.source_meta) ? result.source_meta : [];
+    const sourceText = [...new Set(sourceMeta.map((row) => {
+        const raw = String(row.source || "");
+        if (!raw) return "";
+        if (sourceLabels[raw]) return sourceLabels[raw];
+        if (raw.includes("org_structure") && raw.includes("daily_reports")) return "正式組織架構＋品牌限定店家日報";
+        return raw.replace(/_/g, " ");
+    }).filter(Boolean))].join("、") || "品牌限定即時資料";
+    const policyText = Array.isArray(ctx?.activePolicyIds) && ctx.activePolicyIds.length > 0
+        ? `｜已套用長期規則 ${[...new Set(ctx.activePolicyIds)].slice(0, 4).join("、")}`
+        : "";
+    return `${String(message || "").trim()}
+
+資料口徑：${sourceText}${policyText}`.slice(0, 3900);
+}
+
 exports.notificationPatrol = onSchedule({
     schedule: "* 8-11 * * *",
     timeZone: "Asia/Taipei",
     secrets: [TELEGRAM_BOT_TOKEN_SECRET],
+    timeoutSeconds: 180,
+    memory: "512MiB",
 }, async () => {
-    const now = new Date();
-    const utcHours = now.getUTCHours();
-    now.setHours(utcHours + 8);
-    const currentHour = String(now.getHours()).padStart(2, '0');
-    const currentMin = String(now.getMinutes()).padStart(2, '0');
-    const timeString = `${currentHour}:${currentMin}`;
+    const clock = getTelegramAlertTaipeiClock();
+    const timeString = clock.timeText;
 
     try {
         const allRulesSnap = await db.collectionGroup("notification_rules").get();
         const uniqueRules = {};
 
-        allRulesSnap.forEach((doc) => {
-            const data = doc.data() || {};
+        allRulesSnap.forEach((docSnap) => {
+            const data = docSnap.data() || {};
             if (String(data.isActive) !== "true") return;
-            if (data.time !== timeString) return;
-            uniqueRules[data.source] = data;
+            if (String(data.time || "") !== timeString) return;
+            const uniqueKey = `${String(data.source || "")}:${String(data.targetGroup || "main")}`;
+            uniqueRules[uniqueKey] = data;
         });
 
         const rulesList = Object.values(uniqueRules);
@@ -5067,174 +5132,141 @@ exports.notificationPatrol = onSchedule({
             return;
         }
 
-        const sourceSet = new Set(rulesList.map((rule) => String(rule.source || '')));
-        const needsStoreReports = sourceSet.has('top5_stores') || sourceSet.has('unreported');
-        const needsTherapistReports = sourceSet.has('top5_therapists');
-        const needsRoster = sourceSet.has('unreported');
-        const needsProgress = sourceSet.has('progress');
+        const sourceSet = new Set(rulesList.map((rule) => String(rule.source || "")));
+        const yesterdayStr = shiftTelegramAgentDate(clock.todayStr, -1);
+        const monthStart = `${clock.yearMonth}-01`;
+        const scheduledScopes = ["telegram_analysis", "ranking", "brand_totals", "active_alert"];
+        const auditScopes = ["data_audit", "active_alert"];
 
-        const targetDate = new Date(now);
-        targetDate.setDate(targetDate.getDate() - 1);
-        const yesterdayStr = `${targetDate.getFullYear()}-${String(targetDate.getMonth() + 1).padStart(2, '0')}-${String(targetDate.getDate()).padStart(2, '0')}`;
-        const currentYearMonth = yesterdayStr.substring(0, 7);
+        // 所有固定排程共用一次長期規則讀取，避免每品牌、每規則重複掃描。
+        const sharedPolicyCtx = createTelegramAgentContext({
+            chatId: "notificationPatrol:shared-policy",
+            userId: "notificationPatrol",
+            question: `notification patrol ${timeString}`,
+        });
+        await loadTelegramAgentPolicyState(sharedPolicyCtx, { skipPermission: true });
 
-        const emptyBrandArrays = () => ({ cyj: [], anniu: [], yibo: [] });
-        const emptyBrandSets = () => ({ cyj: new Set(), anniu: new Set(), yibo: new Set() });
+        const brandConfigs = [
+            { id: "cyj", name: "DRCYJ" },
+            { id: "anniu", name: "安妞" },
+            { id: "yibo", name: "伊啵" },
+        ];
+        const dataByBrand = {};
 
-        const [dailySnap, therapistSnap, aggSnap, activeRosterByBrand, monthlyBudgetsByBrand] = await Promise.all([
-            needsStoreReports
-                ? db.collectionGroup('daily_reports').where('date', '==', yesterdayStr).get()
-                : Promise.resolve(null),
-            needsTherapistReports
-                ? db.collectionGroup('therapist_daily_reports').where('date', '==', yesterdayStr).get()
-                : Promise.resolve(null),
-            needsProgress
-                ? db.collectionGroup('monthly_aggregated').where('yearMonth', '==', currentYearMonth).get()
-                : Promise.resolve(null),
-            needsRoster
-                ? loadTelegramActiveRosterByBrand()
-                : Promise.resolve(emptyBrandSets()),
-            needsProgress
-                ? loadTelegramMonthlyBudgetsByBrand(currentYearMonth)
-                : Promise.resolve({
-                    cyj: { cash: 0, accrual: 0, source: 'not_required' },
-                    anniu: { cash: 0, accrual: 0, source: 'not_required' },
-                    yibo: { cash: 0, accrual: 0, source: 'not_required' },
-                }),
-        ]);
+        await Promise.all(brandConfigs.map(async (brand, index) => {
+            const ctx = createTelegramNotificationPolicyContext(sharedPolicyCtx, brand.id, `scheduled reports:${brand.id}`);
+            if (index === 0 && sharedPolicyCtx.readCount > 0) {
+                ctx.readCount += sharedPolicyCtx.readCount;
+                ctx.sources.unshift(...sharedPolicyCtx.sources);
+            }
 
-        const reportsByBrand = emptyBrandArrays();
-        const submittedStoresByBrand = emptyBrandSets();
-        if (dailySnap) {
-            dailySnap.forEach((doc) => {
-                const data = doc.data() || {};
-                const bId = resolveTelegramBrandId(data, doc.ref.path);
-                reportsByBrand[bId].push(data);
-                const storeCore = normalizeSummaryCoreName(data.storeName || data.store || '');
-                if (storeCore) submittedStoresByBrand[bId].add(storeCore);
-            });
-        }
+            const [progress, yesterdayStores, missingReports, therapists] = await Promise.all([
+                sourceSet.has("progress")
+                    ? getStorePerformance(monthStart, clock.todayStr, null, brand.name, ctx, scheduledScopes)
+                    : Promise.resolve(null),
+                sourceSet.has("top5_stores")
+                    ? getStorePerformance(yesterdayStr, yesterdayStr, null, brand.name, ctx, scheduledScopes)
+                    : Promise.resolve(null),
+                sourceSet.has("unreported")
+                    ? getMissingReports(yesterdayStr, yesterdayStr, brand.name, ctx, auditScopes)
+                    : Promise.resolve(null),
+                sourceSet.has("top5_therapists")
+                    ? getTherapistPerformance(yesterdayStr, yesterdayStr, null, null, brand.name, ctx, [], scheduledScopes)
+                    : Promise.resolve(null),
+            ]);
 
-        const therapistReportsByBrand = emptyBrandArrays();
-        if (therapistSnap) {
-            therapistSnap.forEach((doc) => {
-                const data = doc.data() || {};
-                const bId = resolveTelegramBrandId(data, doc.ref.path);
-                therapistReportsByBrand[bId].push(data);
-            });
-        }
-
-        const monthlyAggByBrand = emptyBrandArrays();
-        const processedAggStores = emptyBrandSets();
-        if (aggSnap) {
-            aggSnap.forEach((doc) => {
-                const data = doc.data() || {};
-                const bId = resolveTelegramBrandId(data, doc.ref.path);
-                const storeCore = normalizeSummaryCoreName(data.storeName || data.store || '');
-                if (storeCore && !processedAggStores[bId].has(storeCore)) {
-                    monthlyAggByBrand[bId].push(data);
-                    processedAggStores[bId].add(storeCore);
-                }
-            });
-        }
+            dataByBrand[brand.id] = { ctx, progress, yesterdayStores, missingReports, therapists };
+        }));
 
         for (const rule of rulesList) {
-            const chatId = rule.targetGroup === 'manager' ? TARGET_CHAT_ID_MANAGER : TARGET_CHAT_ID_MAIN;
+            const chatId = rule.targetGroup === "manager" ? TARGET_CHAT_ID_MANAGER : TARGET_CHAT_ID_MAIN;
 
-            for (const brand of [
-                { id: 'cyj', name: 'DRCYJ' },
-                { id: 'anniu', name: '安妞' },
-                { id: 'yibo', name: '伊啵' },
-            ]) {
-                let finalMessage = String(rule.template || '').replace(/{date}/g, yesterdayStr);
+            for (const brand of brandConfigs) {
+                const brandData = dataByBrand[brand.id] || {};
+                const ctx = brandData.ctx;
+                let finalMessage = String(rule.template || "").replace(/{date}/g, yesterdayStr);
                 let shouldSend = false;
+                let sourceResult = null;
 
-                if (rule.source === 'top5_stores') {
-                    const storeMap = {};
-                    reportsByBrand[brand.id].forEach((data) => {
-                        const sName = String(data.storeName || '').replace(/店$/, '').trim() + '店';
-                        if (!storeMap[sName]) storeMap[sName] = 0;
-                        storeMap[sName] += (Number(data.cash) || 0) - (Number(data.refund) || 0);
-                    });
-                    const top5 = Object.entries(storeMap)
-                        .map(([name, rev]) => ({ name, rev }))
+                if (rule.source === "top5_stores" && brandData.yesterdayStores) {
+                    const top5 = (brandData.yesterdayStores.stores_details || [])
+                        .map((row) => ({ name: `${normalizeSummaryCoreName(row.storeName)}店`, rev: Number(row.cash || 0) }))
                         .sort((a, b) => b.rev - a.rev)
                         .slice(0, 5)
                         .filter((store) => store.rev > 0);
                     if (top5.length > 0) {
                         shouldSend = true;
-                        const badges = ['🥇', '🥈', '🥉', '4.', '5.'];
+                        const badges = ["🥇", "🥈", "🥉", "4.", "5."];
                         const top5Text = top5
                             .map((store, idx) => `${badges[idx]} ${store.name} ($${store.rev.toLocaleString()})`)
-                            .join('\n');
+                            .join("\n");
                         finalMessage = finalMessage.replace(/{top5Stores}/g, `${top5Text}\n`);
                         finalMessage = `🏢 *【${brand.name} 專屬戰報】*\n${finalMessage}`;
+                        sourceResult = brandData.yesterdayStores;
                     }
                 }
 
-                if (rule.source === 'unreported') {
-                    const expectedStores = Array.from(activeRosterByBrand[brand.id]);
-                    const submittedStores = submittedStoresByBrand[brand.id];
-                    const missing = expectedStores.filter((store) => !submittedStores.has(store));
-                    if (expectedStores.length > 0) {
+                if (rule.source === "unreported" && brandData.missingReports) {
+                    const report = (brandData.missingReports.brands || [])[0] || null;
+                    if (report) {
                         shouldSend = true;
+                        const missing = Array.isArray(report.missingStores) ? report.missingStores : [];
                         if (missing.length > 0) {
-                            const missingText = missing.map((store) => `• ${store}`).join('\n');
+                            const missingText = missing.map((store) => `• ${store}`).join("\n");
                             finalMessage = finalMessage.replace(/{missingStores}/g, missingText);
                             finalMessage = finalMessage.replace(/{missingCount}/g, String(missing.length));
                             finalMessage = `🚨 *【${brand.name} 異常通報】*\n${finalMessage}`;
                         } else {
-                            finalMessage = finalMessage.replace(/{missingStores}/g, '✅ 表現優異，全區皆已完成回報！');
-                            finalMessage = finalMessage.replace(/{missingCount}/g, '0');
+                            finalMessage = finalMessage.replace(/{missingStores}/g, "✅ 表現優異，全區皆已完成回報！");
+                            finalMessage = finalMessage.replace(/{missingCount}/g, "0");
                             finalMessage = `✅ *【${brand.name} 回報總結】*\n${finalMessage}`;
                         }
+                        sourceResult = { source_meta: [{ source: report.source || "正式組織＋品牌限定日報" }] };
                     }
                 }
 
-                if (rule.source === 'top5_therapists') {
-                    const top5T = [...therapistReportsByBrand[brand.id]]
-                        .sort((a, b) => (Number(b.totalRevenue) || 0) - (Number(a.totalRevenue) || 0))
+                if (rule.source === "top5_therapists" && brandData.therapists) {
+                    const top5T = (brandData.therapists.therapists_details || [])
+                        .sort((a, b) => Number(b.revenue || 0) - Number(a.revenue || 0))
                         .slice(0, 5)
-                        .filter((row) => (Number(row.totalRevenue) || 0) > 0);
+                        .filter((row) => Number(row.revenue || 0) > 0);
                     if (top5T.length > 0) {
                         shouldSend = true;
-                        const badges = ['🥇', '🥈', '🥉', '4.', '5.'];
+                        const badges = ["🥇", "🥈", "🥉", "4.", "5."];
                         const top5Text = top5T.map((row, idx) => {
-                            const storeName = String(row.storeName || '').replace(/店$/, '').trim() + '店';
-                            return `${badges[idx]} ${row.therapistName} (${storeName}) - $${(Number(row.totalRevenue) || 0).toLocaleString()}`;
-                        }).join('\n');
+                            const storeName = `${normalizeSummaryCoreName(row.storeName)}店`;
+                            return `${badges[idx]} ${row.personName} (${storeName}) - $${Number(row.revenue || 0).toLocaleString()}`;
+                        }).join("\n");
                         finalMessage = finalMessage.replace(/{top5Therapists}/g, `${top5Text}\n`);
                         finalMessage = `🌟 *【${brand.name} 個人榮耀】*\n${finalMessage}`;
+                        sourceResult = brandData.therapists;
                     }
                 }
 
-                if (rule.source === 'progress') {
-                    let cashTotal = 0;
-                    let accrualTotal = 0;
-                    monthlyAggByBrand[brand.id].forEach((data) => {
-                        cashTotal += (Number(data.cash) || 0) - (Number(data.refund) || 0);
-                        accrualTotal += brand.id === 'anniu'
-                            ? (Number(data.operationalAccrual) || 0)
-                            : (Number(data.accrual) || 0);
-                    });
+                if (rule.source === "progress" && brandData.progress) {
+                    const overall = brandData.progress.overall_summary || {};
+                    const cashTotal = Number(overall.cash || 0);
+                    const accrualTotal = Number(overall.accrual || 0);
+                    const cashTarget = Number(overall.budget || 0);
+                    const accrualTarget = Number(overall.accrualBudget || 0);
+                    const cashRate = cashTarget > 0 ? ((cashTotal / cashTarget) * 100).toFixed(1) : "0.0";
+                    const accrualRate = accrualTarget > 0 ? ((accrualTotal / accrualTarget) * 100).toFixed(1) : "0.0";
 
-                    const brandBudget = monthlyBudgetsByBrand[brand.id] || { cash: 0, accrual: 0 };
-                    const cashRate = brandBudget.cash > 0 ? ((cashTotal / brandBudget.cash) * 100).toFixed(1) : '0.0';
-                    const accrualRate = brandBudget.accrual > 0 ? ((accrualTotal / brandBudget.accrual) * 100).toFixed(1) : '0.0';
-
-                    if (cashTotal > 0 || accrualTotal > 0) {
+                    if (cashTotal !== 0 || accrualTotal !== 0 || cashTarget > 0 || accrualTarget > 0) {
                         shouldSend = true;
                         finalMessage = finalMessage.replace(/{cashTotal}/g, cashTotal.toLocaleString());
                         finalMessage = finalMessage.replace(/{accrualTotal}/g, accrualTotal.toLocaleString());
                         finalMessage = finalMessage.replace(/{cashRate}/g, cashRate);
                         finalMessage = finalMessage.replace(/{accrualRate}/g, accrualRate);
                         finalMessage = `📊 *【${brand.name} 本月累積進度】*\n${finalMessage}`;
+                        sourceResult = brandData.progress;
                     }
                 }
 
                 if (shouldSend) {
                     try {
-                        await sendTelegramMessage(chatId, finalMessage, { parse_mode: 'Markdown' });
+                        const messageWithFooter = appendTelegramScheduledDataFooter(finalMessage, sourceResult, ctx);
+                        await sendTelegramMessage(chatId, messageWithFooter, { parse_mode: "Markdown" });
                     } catch (error) {
                         console.error(`❌ Telegram 發送失敗：${error.message}`);
                     }
@@ -5242,7 +5274,7 @@ exports.notificationPatrol = onSchedule({
             }
         }
     } catch (error) {
-        console.error('❌ 巡邏員執行錯誤：', error);
+        console.error("❌ 巡邏員執行錯誤：", error);
     }
 });
 
