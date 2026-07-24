@@ -13,12 +13,18 @@ import {
   Radio,
   RefreshCw,
   Save,
+  Brain,
+  ShieldCheck,
+  Settings2,
+  UserPlus,
+  XCircle,
 } from "lucide-react";
 import {
   addDoc,
   collection,
   doc,
   getDoc,
+  getDocs,
   serverTimestamp,
   setDoc,
 } from "firebase/firestore";
@@ -119,6 +125,83 @@ const TELEGRAM_ALERT_RULE_DEFINITIONS = [
 
 const getTelegramAlertBrandLabel = (brandId) =>
   TELEGRAM_ALERT_BRANDS.find((item) => item.id === brandId)?.label || brandId;
+
+const TELEGRAM_POLICY_SCOPES = [
+  { id: "telegram_analysis", label: "Telegram 營運分析" },
+  { id: "ranking", label: "排行" },
+  { id: "brand_totals", label: "品牌總計" },
+  { id: "active_alert", label: "主動巡察" },
+  { id: "data_audit", label: "回報與資料檢核" },
+];
+
+const TELEGRAM_POLICY_RULES = [
+  { id: "progressGap", label: "現金進度差距" },
+  { id: "cashAchievementRate", label: "現金業績達成率" },
+  { id: "closingRate", label: "新客締結率" },
+  { id: "skincareRatio", label: "保養品占比" },
+  { id: "newCustomers", label: "本月新客數" },
+  { id: "traffic", label: "本月來客人次" },
+  { id: "missingReport", label: "店家日報缺漏" },
+  { id: "missingTarget", label: "現金目標缺漏" },
+  { id: "limit", label: "每品牌顯示上限" },
+];
+
+const createDefaultPolicyEditor = () => ({
+  type: "exclude_store",
+  ownerScope: "brand",
+  brandId: "cyj",
+  storeName: "",
+  scopes: ["telegram_analysis", "ranking", "brand_totals", "active_alert"],
+  excludeFromBrandTotals: true,
+  ruleId: "progressGap",
+  enabledValue: true,
+  threshold: 10,
+  watchThreshold: 10,
+  criticalThreshold: 20,
+  minSample: 5,
+  severity: "watch",
+  limit: 8,
+  preferenceKey: "generic",
+  instruction: "",
+  userId: "",
+  effectiveUntil: "",
+  priority: 100,
+});
+
+const createDefaultPermissionDraft = () => ({
+  userId: "",
+  displayName: "",
+  role: "viewer",
+  brandIds: [],
+  enabled: true,
+  allowPersonalPreferences: true,
+});
+
+const normalizePolicyStoreCore = (value = "") =>
+  String(value || "")
+    .trim()
+    .replace(/^(DRCYJ|CYJ|安妞|伊啵)/i, "")
+    .replace(/店$/, "")
+    .trim();
+
+const getPolicyConflictKey = (policy = {}) => {
+  if (policy.type === "exclude_store") {
+    return `exclude_store:${policy.brandId || "global"}:${normalizePolicyStoreCore(policy.storeCore || policy.storeName)}`;
+  }
+  if (policy.type === "alert_rule") {
+    return `alert_rule:${policy.brandId || "global"}:${policy.ruleId || ""}`;
+  }
+  return `response_preference:${policy.userId || "global"}:${policy.preferenceKey || "generic"}`;
+};
+
+const isPolicyActiveNow = (policy = {}) => {
+  if (policy.enabled === false || String(policy.status || "active") !== "active") return false;
+  const today = new Date().toLocaleDateString("en-CA", { timeZone: "Asia/Taipei" });
+  if (policy.effectiveFrom && today < policy.effectiveFrom) return false;
+  if (policy.effectiveUntil && today > policy.effectiveUntil) return false;
+  return true;
+};
+
 
 const createDefaultTelegramAlertRules = () => ({
   progressGap: { enabled: true, watchThreshold: 10, criticalThreshold: 20 },
@@ -462,6 +545,12 @@ const TelegramAlertControlCenter = () => {
   const [lastMessage, setLastMessage] = useState("");
   const [activeBrandId, setActiveBrandId] = useState("cyj");
   const [rulePickerOpen, setRulePickerOpen] = useState(false);
+  const [policies, setPolicies] = useState([]);
+  const [policyEditor, setPolicyEditor] = useState(createDefaultPolicyEditor);
+  const [policyPermissions, setPolicyPermissions] = useState({ users: {} });
+  const [permissionDraft, setPermissionDraft] = useState(createDefaultPermissionDraft);
+  const [policyPanelOpen, setPolicyPanelOpen] = useState(true);
+  const canManagePolicyCenter = ["master", "director"].includes(String(userRole || ""));
 
   const configRef = doc(
     db,
@@ -480,11 +569,332 @@ const TelegramAlertControlCenter = () => {
     ...TELEGRAM_ALERT_DATA_PATH,
     "telegram_alert_commands"
   );
+  const policyCollectionRef = collection(
+    db,
+    ...TELEGRAM_ALERT_DATA_PATH,
+    "telegram_agent_policies"
+  );
+  const policyAuditCollectionRef = collection(
+    db,
+    ...TELEGRAM_ALERT_DATA_PATH,
+    "telegram_agent_policy_audits"
+  );
+  const policyPermissionsRef = doc(
+    db,
+    ...TELEGRAM_ALERT_DATA_PATH,
+    "global_settings",
+    "telegram_agent_policy_permissions"
+  );
 
   const notify = (message, type = "info") => {
     setLastMessage(message);
     if (typeof showToast === "function") showToast(message, type);
   };
+
+  const refreshPolicies = async ({ silent = false } = {}) => {
+    if (!silent) setLoadingAction("refreshPolicies");
+    try {
+      const [policySnap, permissionSnap] = await Promise.all([
+        getDocs(policyCollectionRef),
+        getDoc(policyPermissionsRef),
+      ]);
+      setPolicies(policySnap.docs.map((item) => ({ id: item.id, ...item.data() })));
+      setPolicyPermissions(permissionSnap.exists() ? permissionSnap.data() : { users: {} });
+      if (!silent) notify("長期規則與權限已更新", "success");
+    } catch (error) {
+      notify(error.message || "長期規則載入失敗", "error");
+    } finally {
+      if (!silent) setLoadingAction(null);
+    }
+  };
+
+  const writePolicyAudit = async (action, policy, details = {}) => {
+    await addDoc(policyAuditCollectionRef, {
+      action,
+      policyId: policy?.id || "",
+      policyCode: policy?.policyCode || "",
+      conflictKey: policy?.conflictKey || getPolicyConflictKey(policy),
+      policySnapshot: policy || {},
+      actor: {
+        source: "saas_control_center",
+        name: currentUser?.name || "director",
+        role: userRole || "director",
+      },
+      details,
+      createdAt: serverTimestamp(),
+      createdAtText: new Date().toISOString(),
+    });
+  };
+
+  const buildPolicyPayload = () => {
+    const editor = policyEditor;
+    const nowText = new Date().toISOString();
+    const base = {
+      schemaVersion: 1,
+      type: editor.type,
+      ownerScope: editor.type === "response_preference" ? editor.ownerScope : "brand",
+      brandId: editor.type === "response_preference" ? "" : editor.brandId,
+      enabled: true,
+      status: "active",
+      priority: Math.max(0, Math.min(999, Number(editor.priority) || 100)),
+      effectiveFrom: new Date().toLocaleDateString("en-CA", { timeZone: "Asia/Taipei" }),
+      effectiveUntil: editor.effectiveUntil || "",
+      source: "saas_control_center",
+      sourceText: "由 Telegram 戰情設定中心建立",
+      createdByName: currentUser?.name || "director",
+      createdByUserId: currentUser?.id || currentUser?.uid || "",
+      createdAtText: nowText,
+      updatedAtText: nowText,
+    };
+
+    if (editor.type === "exclude_store") {
+      const storeCore = normalizePolicyStoreCore(editor.storeName);
+      if (!storeCore) throw new Error("請輸入要排除的店家名稱");
+      const scopes = Array.isArray(editor.scopes) ? editor.scopes : [];
+      if (!scopes.length) throw new Error("請至少選擇一個排除範圍");
+      return {
+        ...base,
+        storeCore,
+        storeName: storeCore,
+        scopes,
+        excludeFromBrandTotals: scopes.includes("brand_totals"),
+      };
+    }
+
+    if (editor.type === "alert_rule") {
+      const value = {};
+      if (editor.ruleId === "progressGap") {
+        value.enabled = editor.enabledValue !== false;
+        value.watchThreshold = Number(editor.watchThreshold) || 0;
+        value.criticalThreshold = Math.max(value.watchThreshold, Number(editor.criticalThreshold) || 0);
+      } else if (editor.ruleId === "limit") {
+        value.limit = Math.max(1, Math.min(20, Math.round(Number(editor.limit) || 8)));
+      } else if (["missingReport", "missingTarget"].includes(editor.ruleId)) {
+        value.enabled = editor.enabledValue !== false;
+      } else {
+        value.enabled = editor.enabledValue !== false;
+        value.threshold = Number(editor.threshold) || 0;
+        value.severity = editor.severity === "critical" ? "critical" : "watch";
+        if (editor.ruleId === "closingRate") {
+          value.minSample = Math.max(0, Math.round(Number(editor.minSample) || 0));
+        }
+      }
+      return { ...base, ruleId: editor.ruleId, value };
+    }
+
+    const instruction = String(editor.instruction || "").trim();
+    if (!instruction) throw new Error("請輸入要記住的回答偏好");
+    if (editor.ownerScope === "user" && !String(editor.userId || "").trim()) {
+      throw new Error("個人偏好需要填寫 Telegram 使用者 ID");
+    }
+    return {
+      ...base,
+      ownerScope: editor.ownerScope === "user" ? "user" : "global",
+      userId: editor.ownerScope === "user" ? String(editor.userId).trim() : "",
+      preferenceKey: String(editor.preferenceKey || "generic").trim() || "generic",
+      instruction: instruction.slice(0, 800),
+    };
+  };
+
+  const savePolicy = async () => {
+    if (!canManagePolicyCenter) {
+      notify("只有 master／director 可以修改長期規則與權限", "error");
+      return;
+    }
+    try {
+      setLoadingAction("savePolicy");
+      const payload = buildPolicyPayload();
+      const conflictKey = getPolicyConflictKey(payload);
+      const conflicts = policies.filter(
+        (item) => item.id && isPolicyActiveNow(item) && getPolicyConflictKey(item) === conflictKey
+      );
+      const nowText = new Date().toISOString();
+      await Promise.all(
+        conflicts.map((item) =>
+          setDoc(
+            doc(policyCollectionRef, item.id),
+            {
+              enabled: false,
+              status: "superseded",
+              statusReason: "replaced_by_control_center",
+              updatedAt: serverTimestamp(),
+              updatedAtText: nowText,
+            },
+            { merge: true }
+          )
+        )
+      );
+      const documentRef = await addDoc(policyCollectionRef, {
+        ...payload,
+        conflictKey,
+        conflictsResolved: conflicts.map((item) => item.id),
+        createdAt: serverTimestamp(),
+        updatedAt: serverTimestamp(),
+      });
+      const policyCode = `POL-${payload.effectiveFrom.replace(/-/g, "")}-${documentRef.id.slice(0, 6).toUpperCase()}`;
+      await setDoc(documentRef, { policyCode }, { merge: true });
+      await writePolicyAudit("create", { id: documentRef.id, ...payload, conflictKey, policyCode }, {
+        supersededPolicyIds: conflicts.map((item) => item.id),
+      });
+      setPolicyEditor(createDefaultPolicyEditor());
+      await refreshPolicies({ silent: true });
+      notify(`已建立長期規則 ${policyCode}`, "success");
+    } catch (error) {
+      notify(error.message || "建立長期規則失敗", "error");
+    } finally {
+      setLoadingAction(null);
+    }
+  };
+
+  const togglePolicyEnabled = async (policy) => {
+    if (!canManagePolicyCenter) {
+      notify("只有 master／director 可以修改長期規則與權限", "error");
+      return;
+    }
+    try {
+      setLoadingAction(`policy:${policy.id}`);
+      const nextEnabled = !isPolicyActiveNow(policy);
+      const next = {
+        enabled: nextEnabled,
+        status: nextEnabled ? "active" : "inactive",
+        updatedAt: serverTimestamp(),
+        updatedAtText: new Date().toISOString(),
+        updatedByName: currentUser?.name || "director",
+      };
+      await setDoc(doc(policyCollectionRef, policy.id), next, { merge: true });
+      await writePolicyAudit(nextEnabled ? "reactivate" : "deactivate", { ...policy, ...next });
+      await refreshPolicies({ silent: true });
+      notify(`${policy.policyCode || policy.id} 已${nextEnabled ? "啟用" : "停用"}`, "success");
+    } catch (error) {
+      notify(error.message || "規則狀態更新失敗", "error");
+    } finally {
+      setLoadingAction(null);
+    }
+  };
+
+  const cleanupPolicyConflicts = async () => {
+    if (!canManagePolicyCenter) {
+      notify("只有 master／director 可以修改長期規則與權限", "error");
+      return;
+    }
+    try {
+      setLoadingAction("cleanupPolicies");
+      const active = policies.filter(isPolicyActiveNow);
+      const groups = active.reduce((acc, policy) => {
+        const key = getPolicyConflictKey(policy);
+        if (!acc[key]) acc[key] = [];
+        acc[key].push(policy);
+        return acc;
+      }, {});
+      const expired = policies.filter((policy) => {
+        if (!isPolicyActiveNow(policy) && policy.enabled === false) return false;
+        const today = new Date().toLocaleDateString("en-CA", { timeZone: "Asia/Taipei" });
+        return policy.effectiveUntil && policy.effectiveUntil < today;
+      });
+      const duplicates = Object.values(groups).flatMap((rows) => {
+        if (rows.length <= 1) return [];
+        const sorted = [...rows].sort((a, b) =>
+          String(b.updatedAtText || b.createdAtText || "").localeCompare(String(a.updatedAtText || a.createdAtText || ""))
+        );
+        return sorted.slice(1);
+      });
+      const targets = [...new Map([...expired, ...duplicates].map((item) => [item.id, item])).values()];
+      await Promise.all(
+        targets.map((item) =>
+          setDoc(
+            doc(policyCollectionRef, item.id),
+            {
+              enabled: false,
+              status: expired.some((row) => row.id === item.id) ? "expired" : "superseded",
+              statusReason: "manual_cleanup",
+              updatedAt: serverTimestamp(),
+              updatedAtText: new Date().toISOString(),
+            },
+            { merge: true }
+          )
+        )
+      );
+      await refreshPolicies({ silent: true });
+      notify(`規則整理完成，共處理 ${targets.length} 條`, "success");
+    } catch (error) {
+      notify(error.message || "規則整理失敗", "error");
+    } finally {
+      setLoadingAction(null);
+    }
+  };
+
+  const savePermission = async () => {
+    if (!canManagePolicyCenter) {
+      notify("只有 master／director 可以修改長期規則與權限", "error");
+      return;
+    }
+    const userId = String(permissionDraft.userId || "").trim();
+    if (!userId) {
+      notify("請輸入 Telegram 使用者 ID", "error");
+      return;
+    }
+    try {
+      setLoadingAction("savePermission");
+      const users = {
+        ...(policyPermissions.users || {}),
+        [userId]: {
+          displayName: String(permissionDraft.displayName || "").trim(),
+          role: permissionDraft.role,
+          brandIds: permissionDraft.role === "director" ? TELEGRAM_ALERT_BRANDS.map((item) => item.id) : permissionDraft.brandIds,
+          enabled: permissionDraft.enabled !== false,
+          allowPersonalPreferences: permissionDraft.allowPersonalPreferences !== false,
+          updatedAtText: new Date().toISOString(),
+        },
+      };
+      await setDoc(
+        policyPermissionsRef,
+        {
+          users,
+          updatedAt: serverTimestamp(),
+          updatedAtText: new Date().toISOString(),
+          updatedBy: currentUser?.name || "director",
+        },
+        { merge: true }
+      );
+      setPolicyPermissions((previous) => ({ ...previous, users }));
+      setPermissionDraft(createDefaultPermissionDraft());
+      notify("Telegram 規則權限已儲存", "success");
+    } catch (error) {
+      notify(error.message || "權限儲存失敗", "error");
+    } finally {
+      setLoadingAction(null);
+    }
+  };
+
+  const removePermission = async (userId) => {
+    if (!canManagePolicyCenter) {
+      notify("只有 master／director 可以修改長期規則與權限", "error");
+      return;
+    }
+    if (!window.confirm(`確定移除 Telegram 使用者 ${userId} 的規則管理權限嗎？`)) return;
+    try {
+      setLoadingAction(`permission:${userId}`);
+      const users = { ...(policyPermissions.users || {}) };
+      delete users[userId];
+      await setDoc(
+        policyPermissionsRef,
+        {
+          users,
+          updatedAt: serverTimestamp(),
+          updatedAtText: new Date().toISOString(),
+          updatedBy: currentUser?.name || "director",
+        },
+        { merge: true }
+      );
+      setPolicyPermissions((previous) => ({ ...previous, users }));
+      notify("權限已移除", "success");
+    } catch (error) {
+      notify(error.message || "權限移除失敗", "error");
+    } finally {
+      setLoadingAction(null);
+    }
+  };
+
 
   const refreshStatus = async ({ silent = false } = {}) => {
     if (!silent) setLoadingAction("refreshStatus");
@@ -509,13 +919,17 @@ const TelegramAlertControlCenter = () => {
       }
 
       try {
-        const [configSnap, statusSnap] = await Promise.all([
+        const [configSnap, statusSnap, policySnap, permissionSnap] = await Promise.all([
           getDoc(configRef),
           getDoc(statusRef),
+          getDocs(policyCollectionRef),
+          getDoc(policyPermissionsRef),
         ]);
         if (cancelled) return;
         setForm(normalizeTelegramAlertForm(configSnap.exists() ? configSnap.data() : {}));
         setStatus(statusSnap.exists() ? statusSnap.data() : null);
+        setPolicies(policySnap.docs.map((item) => ({ id: item.id, ...item.data() })));
+        setPolicyPermissions(permissionSnap.exists() ? permissionSnap.data() : { users: {} });
       } catch (error) {
         if (!cancelled) notify(error.message || "Telegram 戰情設定載入失敗", "error");
       } finally {
@@ -753,6 +1167,16 @@ const TelegramAlertControlCenter = () => {
   };
 
   const isBusy = loadingAction !== null;
+  const activePolicies = policies.filter(isPolicyActiveNow);
+  const policyConflictGroups = Object.values(
+    activePolicies.reduce((acc, policy) => {
+      const key = getPolicyConflictKey(policy);
+      if (!acc[key]) acc[key] = [];
+      acc[key].push(policy);
+      return acc;
+    }, {})
+  ).filter((rows) => rows.length > 1);
+  const permissionEntries = Object.entries(policyPermissions.users || {});
 
   if (!isLoaded) {
     return (
@@ -1176,6 +1600,452 @@ const TelegramAlertControlCenter = () => {
             );
           })()}
         </div>
+
+        <div className="space-y-4 rounded-[1.5rem] border border-violet-100 bg-white/95 p-5 shadow-sm">
+          <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
+            <div className="flex items-start gap-3">
+              <div className="rounded-2xl bg-violet-50 p-3 text-violet-600">
+                <Brain size={20} />
+              </div>
+              <div>
+                <p className="text-sm font-black text-stone-800">可控式長期記憶與營運規則</p>
+                <p className="mt-1 text-[11px] font-bold leading-5 text-stone-400">
+                  Telegram 可從自然語言建立規則，但正式生效前會要求確認；此處可直接檢視、建立、停用與整理規則。
+                </p>
+              </div>
+            </div>
+            <div className="flex flex-wrap gap-2">
+              <span className="rounded-full bg-violet-50 px-3 py-1.5 text-[10px] font-black text-violet-600">
+                生效 {activePolicies.length} 條
+              </span>
+              <span className={`rounded-full px-3 py-1.5 text-[10px] font-black ${policyConflictGroups.length ? "bg-rose-50 text-rose-600" : "bg-emerald-50 text-emerald-600"}`}>
+                衝突 {policyConflictGroups.length} 組
+              </span>
+              <button
+                type="button"
+                onClick={() => setPolicyPanelOpen((previous) => !previous)}
+                className="rounded-xl border border-stone-200 bg-white px-3 py-2 text-[10px] font-black text-stone-500"
+              >
+                {policyPanelOpen ? "收合" : "展開"}
+              </button>
+            </div>
+          </div>
+
+          {policyPanelOpen && (
+            <div className="space-y-5">
+              {!canManagePolicyCenter && (
+                <div className="rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3 text-xs font-bold leading-5 text-amber-700">
+                  目前帳號可查看規則，但只有 master／director 可以在後台新增、停用規則或調整 Telegram 權限。
+                </div>
+              )}
+              <div className="grid grid-cols-1 gap-4 xl:grid-cols-[1.1fr_1fr]">
+                <div className="space-y-4 rounded-2xl border border-violet-100 bg-violet-50/30 p-4">
+                  <div className="flex items-center gap-2">
+                    <Settings2 size={15} className="text-violet-600" />
+                    <p className="text-xs font-black text-stone-700">建立長期規則</p>
+                  </div>
+
+                  <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+                    <label className="rounded-xl border border-stone-100 bg-white p-3">
+                      <span className="mb-1.5 block text-[10px] font-black text-stone-400">規則類型</span>
+                      <select
+                        value={policyEditor.type}
+                        onChange={(event) => setPolicyEditor((previous) => ({
+                          ...createDefaultPolicyEditor(),
+                          type: event.target.value,
+                          ownerScope: event.target.value === "response_preference" ? "global" : "brand",
+                        }))}
+                        className="w-full bg-transparent text-xs font-black text-stone-700 outline-none"
+                      >
+                        <option value="exclude_store">排除／暫停店家分析</option>
+                        <option value="alert_rule">品牌預警門檻覆寫</option>
+                        <option value="response_preference">回答偏好</option>
+                      </select>
+                    </label>
+
+                    {policyEditor.type !== "response_preference" && (
+                      <label className="rounded-xl border border-stone-100 bg-white p-3">
+                        <span className="mb-1.5 block text-[10px] font-black text-stone-400">品牌</span>
+                        <select
+                          value={policyEditor.brandId}
+                          onChange={(event) => setPolicyEditor((previous) => ({ ...previous, brandId: event.target.value }))}
+                          className="w-full bg-transparent text-xs font-black text-stone-700 outline-none"
+                        >
+                          {TELEGRAM_ALERT_BRANDS.map((brand) => (
+                            <option key={brand.id} value={brand.id}>{brand.label}</option>
+                          ))}
+                        </select>
+                      </label>
+                    )}
+                  </div>
+
+                  {policyEditor.type === "exclude_store" && (
+                    <div className="space-y-3">
+                      <label className="block rounded-xl border border-stone-100 bg-white p-3">
+                        <span className="mb-1.5 block text-[10px] font-black text-stone-400">店家名稱</span>
+                        <input
+                          value={policyEditor.storeName}
+                          onChange={(event) => setPolicyEditor((previous) => ({ ...previous, storeName: event.target.value }))}
+                          placeholder="例如：中美店"
+                          className="w-full bg-transparent text-sm font-black text-stone-700 outline-none"
+                        />
+                      </label>
+                      <div className="rounded-xl border border-stone-100 bg-white p-3">
+                        <p className="mb-2 text-[10px] font-black text-stone-400">作用範圍</p>
+                        <div className="flex flex-wrap gap-2">
+                          {TELEGRAM_POLICY_SCOPES.map((scope) => {
+                            const active = policyEditor.scopes.includes(scope.id);
+                            return (
+                              <button
+                                key={scope.id}
+                                type="button"
+                                onClick={() => setPolicyEditor((previous) => ({
+                                  ...previous,
+                                  scopes: active
+                                    ? previous.scopes.filter((item) => item !== scope.id)
+                                    : [...previous.scopes, scope.id],
+                                }))}
+                                className={`rounded-xl border px-3 py-2 text-[10px] font-black transition ${active ? "border-violet-200 bg-violet-50 text-violet-700" : "border-stone-100 bg-stone-50 text-stone-400"}`}
+                              >
+                                {scope.label}
+                              </button>
+                            );
+                          })}
+                        </div>
+                      </div>
+                    </div>
+                  )}
+
+                  {policyEditor.type === "alert_rule" && (
+                    <div className="space-y-3">
+                      <label className="block rounded-xl border border-stone-100 bg-white p-3">
+                        <span className="mb-1.5 block text-[10px] font-black text-stone-400">預警項目</span>
+                        <select
+                          value={policyEditor.ruleId}
+                          onChange={(event) => setPolicyEditor((previous) => ({ ...previous, ruleId: event.target.value }))}
+                          className="w-full bg-transparent text-xs font-black text-stone-700 outline-none"
+                        >
+                          {TELEGRAM_POLICY_RULES.map((rule) => (
+                            <option key={rule.id} value={rule.id}>{rule.label}</option>
+                          ))}
+                        </select>
+                      </label>
+
+                      {policyEditor.ruleId !== "limit" && (
+                        <label className="flex items-center justify-between rounded-xl border border-stone-100 bg-white p-3 text-xs font-black text-stone-600">
+                          啟用此項判斷
+                          <input
+                            type="checkbox"
+                            checked={policyEditor.enabledValue !== false}
+                            onChange={(event) => setPolicyEditor((previous) => ({ ...previous, enabledValue: event.target.checked }))}
+                            className="h-4 w-4"
+                          />
+                        </label>
+                      )}
+
+                      {policyEditor.ruleId === "progressGap" ? (
+                        <div className="grid grid-cols-2 gap-2">
+                          <TelegramRuleNumberField
+                            label="黃燈落後"
+                            value={policyEditor.watchThreshold}
+                            onChange={(value) => setPolicyEditor((previous) => ({ ...previous, watchThreshold: value }))}
+                            unit="百分點"
+                          />
+                          <TelegramRuleNumberField
+                            label="紅燈落後"
+                            value={policyEditor.criticalThreshold}
+                            onChange={(value) => setPolicyEditor((previous) => ({ ...previous, criticalThreshold: value }))}
+                            unit="百分點"
+                          />
+                        </div>
+                      ) : policyEditor.ruleId === "limit" ? (
+                        <TelegramRuleNumberField
+                          label="每品牌最多顯示"
+                          value={policyEditor.limit}
+                          onChange={(value) => setPolicyEditor((previous) => ({ ...previous, limit: value }))}
+                          unit="家"
+                          max={20}
+                        />
+                      ) : !["missingReport", "missingTarget"].includes(policyEditor.ruleId) ? (
+                        <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
+                          <TelegramRuleNumberField
+                            label="判斷門檻"
+                            value={policyEditor.threshold}
+                            onChange={(value) => setPolicyEditor((previous) => ({ ...previous, threshold: value }))}
+                            unit={["cashAchievementRate", "closingRate", "skincareRatio"].includes(policyEditor.ruleId) ? "%" : policyEditor.ruleId === "traffic" ? "人次" : "人"}
+                            max={["newCustomers", "traffic"].includes(policyEditor.ruleId) ? 999999 : 100}
+                          />
+                          <TelegramRuleSeverityField
+                            value={policyEditor.severity}
+                            onChange={(value) => setPolicyEditor((previous) => ({ ...previous, severity: value }))}
+                          />
+                          {policyEditor.ruleId === "closingRate" && (
+                            <TelegramRuleNumberField
+                              label="最低新客樣本"
+                              value={policyEditor.minSample}
+                              onChange={(value) => setPolicyEditor((previous) => ({ ...previous, minSample: value }))}
+                              unit="人"
+                              max={999}
+                            />
+                          )}
+                        </div>
+                      ) : null}
+                    </div>
+                  )}
+
+                  {policyEditor.type === "response_preference" && (
+                    <div className="space-y-3">
+                      <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+                        <label className="rounded-xl border border-stone-100 bg-white p-3">
+                          <span className="mb-1.5 block text-[10px] font-black text-stone-400">套用對象</span>
+                          <select
+                            value={policyEditor.ownerScope}
+                            onChange={(event) => setPolicyEditor((previous) => ({ ...previous, ownerScope: event.target.value }))}
+                            className="w-full bg-transparent text-xs font-black text-stone-700 outline-none"
+                          >
+                            <option value="global">所有 Telegram 使用者</option>
+                            <option value="user">指定使用者</option>
+                          </select>
+                        </label>
+                        {policyEditor.ownerScope === "user" && (
+                          <label className="rounded-xl border border-stone-100 bg-white p-3">
+                            <span className="mb-1.5 block text-[10px] font-black text-stone-400">Telegram 使用者 ID</span>
+                            <input
+                              value={policyEditor.userId}
+                              onChange={(event) => setPolicyEditor((previous) => ({ ...previous, userId: event.target.value }))}
+                              className="w-full bg-transparent text-xs font-black text-stone-700 outline-none"
+                            />
+                          </label>
+                        )}
+                      </div>
+                      <label className="block rounded-xl border border-stone-100 bg-white p-3">
+                        <span className="mb-1.5 block text-[10px] font-black text-stone-400">偏好識別名稱</span>
+                        <input
+                          value={policyEditor.preferenceKey}
+                          onChange={(event) => setPolicyEditor((previous) => ({ ...previous, preferenceKey: event.target.value }))}
+                          placeholder="例如：conclusion_first"
+                          className="w-full bg-transparent text-xs font-black text-stone-700 outline-none"
+                        />
+                      </label>
+                      <label className="block rounded-xl border border-stone-100 bg-white p-3">
+                        <span className="mb-1.5 block text-[10px] font-black text-stone-400">回答偏好內容</span>
+                        <textarea
+                          value={policyEditor.instruction}
+                          onChange={(event) => setPolicyEditor((previous) => ({ ...previous, instruction: event.target.value }))}
+                          placeholder="例如：回答時先給結論，再列出最多三項優先行動。"
+                          rows={3}
+                          className="w-full resize-none bg-transparent text-xs font-bold leading-5 text-stone-700 outline-none"
+                        />
+                      </label>
+                    </div>
+                  )}
+
+                  <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+                    <label className="rounded-xl border border-stone-100 bg-white p-3">
+                      <span className="mb-1.5 block text-[10px] font-black text-stone-400">有效期限</span>
+                      <input
+                        type="date"
+                        value={policyEditor.effectiveUntil}
+                        onChange={(event) => setPolicyEditor((previous) => ({ ...previous, effectiveUntil: event.target.value }))}
+                        className="w-full bg-transparent text-xs font-black text-stone-700 outline-none"
+                      />
+                      <span className="mt-1 block text-[9px] font-bold text-stone-300">留空代表持續有效，直到人工撤銷。</span>
+                    </label>
+                    <TelegramRuleNumberField
+                      label="規則優先權"
+                      value={policyEditor.priority}
+                      onChange={(value) => setPolicyEditor((previous) => ({ ...previous, priority: value }))}
+                      unit="分"
+                      max={999}
+                    />
+                  </div>
+
+                  <ActionButton onClick={savePolicy} disabled={isBusy || !canManagePolicyCenter} className="w-full">
+                    {loadingAction === "savePolicy" ? <Loader2 size={14} className="animate-spin" /> : <Save size={14} />}
+                    建立長期規則
+                  </ActionButton>
+                </div>
+
+                <div className="space-y-3 rounded-2xl border border-stone-100 bg-stone-50/50 p-4">
+                  <div className="flex items-center justify-between gap-2">
+                    <div>
+                      <p className="text-xs font-black text-stone-700">目前規則</p>
+                      <p className="mt-1 text-[10px] font-bold text-stone-400">Telegram 的 /rules 會顯示生效規則；每日 03:20 自動整理過期與重複規則。</p>
+                    </div>
+                    <div className="flex gap-2">
+                      <button
+                        type="button"
+                        onClick={() => refreshPolicies()}
+                        disabled={isBusy}
+                        className="rounded-xl border border-stone-200 bg-white p-2 text-stone-500"
+                        title="重新整理"
+                      >
+                        <RefreshCw size={14} className={loadingAction === "refreshPolicies" ? "animate-spin" : ""} />
+                      </button>
+                      <button
+                        type="button"
+                        onClick={cleanupPolicyConflicts}
+                        disabled={isBusy || !canManagePolicyCenter}
+                        className="rounded-xl border border-amber-100 bg-amber-50 px-3 py-2 text-[10px] font-black text-amber-600"
+                      >
+                        整理衝突
+                      </button>
+                    </div>
+                  </div>
+
+                  <div className="max-h-[640px] space-y-2 overflow-y-auto pr-1">
+                    {policies.length ? (
+                      [...policies]
+                        .sort((a, b) => String(b.updatedAtText || b.createdAtText || "").localeCompare(String(a.updatedAtText || a.createdAtText || "")))
+                        .map((policy) => {
+                          const active = isPolicyActiveNow(policy);
+                          const isConflict = policyConflictGroups.some((rows) => rows.some((item) => item.id === policy.id));
+                          const brandLabel = policy.brandId ? getTelegramAlertBrandLabel(policy.brandId) : "全域";
+                          const title = policy.type === "exclude_store"
+                            ? `${brandLabel}｜排除 ${policy.storeName || policy.storeCore}店`
+                            : policy.type === "alert_rule"
+                              ? `${brandLabel}｜${TELEGRAM_POLICY_RULES.find((item) => item.id === policy.ruleId)?.label || policy.ruleId}`
+                              : `${policy.ownerScope === "user" ? `使用者 ${policy.userId}` : "全域"}｜回答偏好`;
+                          const detail = policy.type === "exclude_store"
+                            ? (policy.scopes || []).map((scope) => TELEGRAM_POLICY_SCOPES.find((item) => item.id === scope)?.label || scope).join("、")
+                            : policy.type === "alert_rule"
+                              ? JSON.stringify(policy.value || {})
+                              : policy.instruction;
+                          return (
+                            <article key={policy.id} className={`rounded-2xl border bg-white p-3 ${isConflict ? "border-rose-200" : active ? "border-violet-100" : "border-stone-100 opacity-60"}`}>
+                              <div className="flex items-start justify-between gap-3">
+                                <div className="min-w-0">
+                                  <div className="flex flex-wrap items-center gap-2">
+                                    <p className="text-xs font-black text-stone-700">{title}</p>
+                                    <span className={`rounded-full px-2 py-0.5 text-[9px] font-black ${active ? "bg-emerald-50 text-emerald-600" : "bg-stone-100 text-stone-400"}`}>
+                                      {active ? "生效" : policy.status || "停用"}
+                                    </span>
+                                    {isConflict && <span className="rounded-full bg-rose-50 px-2 py-0.5 text-[9px] font-black text-rose-600">衝突</span>}
+                                  </div>
+                                  <p className="mt-1 break-words text-[10px] font-bold leading-4 text-stone-400">{detail || "未提供細節"}</p>
+                                  <p className="mt-1 text-[9px] font-bold text-stone-300">
+                                    {policy.policyCode || policy.id}｜優先權 {Number(policy.priority || 100)}
+                                    {policy.effectiveUntil ? `｜至 ${policy.effectiveUntil}` : "｜無期限"}
+                                  </p>
+                                </div>
+                                <button
+                                  type="button"
+                                  onClick={() => togglePolicyEnabled(policy)}
+                                  disabled={isBusy || !canManagePolicyCenter}
+                                  className={`shrink-0 rounded-xl border px-3 py-2 text-[10px] font-black ${active ? "border-rose-100 bg-rose-50 text-rose-600" : "border-emerald-100 bg-emerald-50 text-emerald-600"}`}
+                                >
+                                  {loadingAction === `policy:${policy.id}` ? <Loader2 size={12} className="animate-spin" /> : active ? "停用" : "啟用"}
+                                </button>
+                              </div>
+                            </article>
+                          );
+                        })
+                    ) : (
+                      <div className="rounded-2xl border border-dashed border-stone-200 bg-white p-8 text-center text-xs font-black text-stone-400">
+                        尚未建立長期規則
+                      </div>
+                    )}
+                  </div>
+                </div>
+              </div>
+
+              <div className="space-y-4 rounded-2xl border border-sky-100 bg-sky-50/30 p-4">
+                <div className="flex items-center gap-2">
+                  <ShieldCheck size={16} className="text-sky-600" />
+                  <div>
+                    <p className="text-xs font-black text-stone-700">Telegram 規則修改權限</p>
+                    <p className="mt-1 text-[10px] font-bold text-stone-400">一旦建立個人權限名單，未列入名單的人會自動降為只讀。</p>
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-1 gap-3 lg:grid-cols-[1fr_1fr_1fr_auto]">
+                  <label className="rounded-xl border border-stone-100 bg-white p-3">
+                    <span className="mb-1 block text-[10px] font-black text-stone-400">Telegram 使用者 ID</span>
+                    <input
+                      value={permissionDraft.userId}
+                      onChange={(event) => setPermissionDraft((previous) => ({ ...previous, userId: event.target.value }))}
+                      className="w-full bg-transparent text-xs font-black text-stone-700 outline-none"
+                    />
+                  </label>
+                  <label className="rounded-xl border border-stone-100 bg-white p-3">
+                    <span className="mb-1 block text-[10px] font-black text-stone-400">名稱</span>
+                    <input
+                      value={permissionDraft.displayName}
+                      onChange={(event) => setPermissionDraft((previous) => ({ ...previous, displayName: event.target.value }))}
+                      className="w-full bg-transparent text-xs font-black text-stone-700 outline-none"
+                    />
+                  </label>
+                  <label className="rounded-xl border border-stone-100 bg-white p-3">
+                    <span className="mb-1 block text-[10px] font-black text-stone-400">角色</span>
+                    <select
+                      value={permissionDraft.role}
+                      onChange={(event) => setPermissionDraft((previous) => ({ ...previous, role: event.target.value }))}
+                      className="w-full bg-transparent text-xs font-black text-stone-700 outline-none"
+                    >
+                      <option value="director">Director｜全公司規則</option>
+                      <option value="brand_manager">品牌主管｜指定品牌</option>
+                      <option value="viewer">Viewer｜只讀</option>
+                    </select>
+                  </label>
+                  <ActionButton onClick={savePermission} disabled={isBusy || !canManagePolicyCenter} className="self-stretch lg:self-end">
+                    <UserPlus size={14} />
+                    儲存權限
+                  </ActionButton>
+                </div>
+
+                {permissionDraft.role === "brand_manager" && (
+                  <div className="flex flex-wrap gap-2 rounded-xl border border-stone-100 bg-white p-3">
+                    {TELEGRAM_ALERT_BRANDS.map((brand) => {
+                      const active = permissionDraft.brandIds.includes(brand.id);
+                      return (
+                        <button
+                          key={brand.id}
+                          type="button"
+                          onClick={() => setPermissionDraft((previous) => ({
+                            ...previous,
+                            brandIds: active
+                              ? previous.brandIds.filter((item) => item !== brand.id)
+                              : [...previous.brandIds, brand.id],
+                          }))}
+                          className={`rounded-xl border px-3 py-2 text-[10px] font-black ${active ? "border-sky-200 bg-sky-50 text-sky-700" : "border-stone-100 bg-stone-50 text-stone-400"}`}
+                        >
+                          {brand.label}
+                        </button>
+                      );
+                    })}
+                  </div>
+                )}
+
+                <div className="grid grid-cols-1 gap-2 md:grid-cols-2 xl:grid-cols-3">
+                  {permissionEntries.length ? permissionEntries.map(([userId, permission]) => (
+                    <div key={userId} className="flex items-center justify-between gap-3 rounded-xl border border-stone-100 bg-white p-3">
+                      <div>
+                        <p className="text-xs font-black text-stone-700">{permission.displayName || userId}</p>
+                        <p className="mt-1 text-[9px] font-bold text-stone-400">
+                          {permission.role || "viewer"}｜{(permission.brandIds || []).map(getTelegramAlertBrandLabel).join("、") || "無品牌"}
+                        </p>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => removePermission(userId)}
+                        disabled={isBusy || !canManagePolicyCenter}
+                        className="rounded-lg border border-rose-100 bg-rose-50 p-2 text-rose-500"
+                        title="移除權限"
+                      >
+                        {loadingAction === `permission:${userId}` ? <Loader2 size={12} className="animate-spin" /> : <XCircle size={13} />}
+                      </button>
+                    </div>
+                  )) : (
+                    <div className="rounded-xl border border-dashed border-amber-200 bg-amber-50 p-3 text-[10px] font-bold text-amber-700 md:col-span-2 xl:col-span-3">
+                      尚未設定個人名單：高階主管主群暫以 director、主管群暫以品牌主管預設權限運作。建立第一筆名單後，未列入的人會改為只讀。
+                    </div>
+                  )}
+                </div>
+              </div>
+            </div>
+          )}
+        </div>
+
 
         <div className="flex flex-col gap-3 border-t border-sky-100 pt-5 lg:flex-row lg:items-center lg:justify-between">
           <div className="flex flex-wrap gap-2">
