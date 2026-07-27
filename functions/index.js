@@ -539,13 +539,14 @@ async function answerTelegramCallbackQuery(callbackQueryId, text = "") {
 // ★ 2. DRCYJ Telegram 營運戰情 Agent v1
 // Summary-first／最多三個工具／短期記憶／查詢稽核／成本護欄
 // ==========================================
-const TELEGRAM_AGENT_VERSION = "drcyj-agent-v4.3-stable-api-schedule-query";
+const TELEGRAM_AGENT_VERSION = "drcyj-agent-v5.0-snapshot-schedule-task-loop";
 const TELEGRAM_AGENT_COMPATIBLE_VERSIONS = new Set([
     "drcyj-agent-v1.5-alert-control-center",
     "drcyj-agent-v2.0-gemini-3.6-interactions",
     "drcyj-agent-v4.0-controlled-learning",
     "drcyj-agent-v4.1-cost-throttled-learning",
     "drcyj-agent-v4.2-scheduled-data-unified",
+    "drcyj-agent-v4.3-stable-api-schedule-query",
     TELEGRAM_AGENT_VERSION,
 ]);
 const TELEGRAM_AGENT_PRIMARY_MODEL = "gemini-3.6-flash";
@@ -625,6 +626,846 @@ function getTelegramAgentPolicyAuditsRef() {
 
 function getTelegramAgentPolicyPermissionsRef() {
     return getTelegramAgentPolicyDataRootRef().collection("global_settings").doc("telegram_agent_policy_permissions");
+}
+
+// ==========================================
+// ★ Telegram 戰情秘書 v5：可重現報表、自然語言排程、改善任務閉環
+// ==========================================
+const TELEGRAM_V5_SCHEMA_VERSION = 1;
+const TELEGRAM_V5_METRIC_VERSION = "metric-v5.0-unified";
+const TELEGRAM_V5_PENDING_MINUTES = 30;
+const TELEGRAM_V5_DEFAULT_TASK_REMINDER_HOUR = 9;
+const TELEGRAM_V5_SCHEDULE_SOURCES = Object.freeze({
+    weekday_morning_brief: "三品牌工作日晨報",
+    progress: "品牌本月進度",
+    top5_stores: "昨日店家前五名",
+    bottom5_stores: "現金進度後五店",
+    top5_therapists: "昨日管理師前五名",
+    unreported: "昨日缺報店家",
+});
+const TELEGRAM_V5_TASK_STATUS_LABELS = Object.freeze({
+    open: "待處理",
+    in_progress: "處理中",
+    completed: "已完成",
+    cancelled: "已取消",
+    overdue: "已逾期",
+});
+
+function getTelegramReportSnapshotsRef() {
+    return getTelegramAgentPolicyDataRootRef().collection("telegram_report_snapshots");
+}
+
+function getTelegramAgentTasksRef() {
+    return getTelegramAgentPolicyDataRootRef().collection("telegram_agent_tasks");
+}
+
+function getTelegramAgentTaskAuditsRef() {
+    return getTelegramAgentPolicyDataRootRef().collection("telegram_agent_task_audits");
+}
+
+function getTelegramScheduleAuditsRef() {
+    return getTelegramAgentPolicyDataRootRef().collection("telegram_schedule_audits");
+}
+
+function getTelegramNotificationRulesRef() {
+    return db.collection("notification_rules");
+}
+
+function makeTelegramReadableCode(prefix = "ID", seed = "") {
+    const now = getTelegramAlertTaipeiClock();
+    const suffix = String(seed || Math.random().toString(36).slice(2, 8))
+        .replace(/[^a-zA-Z0-9]/g, "")
+        .slice(0, 6)
+        .toUpperCase()
+        .padEnd(6, "0");
+    return `${prefix}-${now.todayStr.replace(/-/g, "")}-${suffix}`;
+}
+
+function normalizeTelegramWeekdays(values, fallback = [1, 2, 3, 4, 5]) {
+    const source = Array.isArray(values) ? values : fallback;
+    const normalized = [...new Set(source
+        .map(Number)
+        .filter((value) => Number.isInteger(value) && value >= 0 && value <= 6))];
+    return normalized.length ? normalized.sort((a, b) => a - b) : [...fallback];
+}
+
+function parseTelegramTimeText(text = "", fallback = "") {
+    const source = String(text || "");
+    const colon = source.match(/(?:上午|早上|下午|晚上)?\s*(\d{1,2})\s*[:：]\s*(\d{1,2})/);
+    const point = source.match(/(?:上午|早上|下午|晚上)?\s*(\d{1,2})\s*點(?:\s*(\d{1,2})\s*分?)?/);
+    const match = colon || point;
+    if (!match) return fallback;
+    let hour = Number(match[1]);
+    const minute = Number(match[2] || 0);
+    const prefix = match[0];
+    if (/下午|晚上/.test(prefix) && hour < 12) hour += 12;
+    if (/上午|早上/.test(prefix) && hour === 12) hour = 0;
+    if (hour < 0 || hour > 23 || minute < 0 || minute > 59) return fallback;
+    return `${String(hour).padStart(2, "0")}:${String(minute).padStart(2, "0")}`;
+}
+
+function parseTelegramDateText(text = "", baseDate = getTelegramAlertTaipeiClock().todayStr) {
+    const source = String(text || "");
+    const iso = source.match(/(20\d{2})[-/年](\d{1,2})[-/月](\d{1,2})日?/);
+    if (iso) return `${iso[1]}-${String(Number(iso[2])).padStart(2, "0")}-${String(Number(iso[3])).padStart(2, "0")}`;
+    const md = source.match(/(\d{1,2})月(\d{1,2})日/);
+    if (md) return `${baseDate.slice(0, 4)}-${String(Number(md[1])).padStart(2, "0")}-${String(Number(md[2])).padStart(2, "0")}`;
+    if (/明天/.test(source)) return shiftTelegramAgentDate(baseDate, 1);
+    if (/後天/.test(source)) return shiftTelegramAgentDate(baseDate, 2);
+    if (/月底/.test(source)) {
+        const [year, month] = baseDate.slice(0, 7).split("-").map(Number);
+        return new Date(Date.UTC(year, month, 0)).toISOString().slice(0, 10);
+    }
+    return "";
+}
+
+function getTelegramMonthProgressAtDate(dateText = "") {
+    const match = String(dateText || "").match(/^(\d{4})-(\d{2})-(\d{2})$/);
+    if (!match) return 0;
+    const year = Number(match[1]);
+    const month = Number(match[2]);
+    const day = Number(match[3]);
+    const totalDays = new Date(Date.UTC(year, month, 0)).getUTCDate();
+    return Number(((day / totalDays) * 100).toFixed(1));
+}
+
+function normalizeTelegramScheduleRule(raw = {}, id = "") {
+    const source = Object.prototype.hasOwnProperty.call(TELEGRAM_V5_SCHEDULE_SOURCES, raw.source)
+        ? String(raw.source)
+        : "progress";
+    return {
+        id: String(id || raw.id || raw.ruleId || ""),
+        scheduleCode: String(raw.scheduleCode || ""),
+        name: String(raw.name || TELEGRAM_V5_SCHEDULE_SOURCES[source] || "Telegram 排程").trim(),
+        source,
+        reportType: String(raw.reportType || source),
+        brandIds: Array.isArray(raw.brandIds) ? [...new Set(raw.brandIds.map(normalizeTelegramAgentBrandId).filter(Boolean))] : [],
+        time: /^\d{2}:\d{2}$/.test(String(raw.time || "")) ? String(raw.time) : "10:00",
+        weekdays: normalizeTelegramWeekdays(raw.weekdays, source === "weekday_morning_brief" ? [1, 2, 3, 4, 5] : [0, 1, 2, 3, 4, 5, 6]),
+        targetGroup: ["main", "manager"].includes(String(raw.targetGroup || "")) ? String(raw.targetGroup) : "manager",
+        targetChatId: String(raw.targetChatId || ""),
+        template: String(raw.template || ""),
+        isActive: raw.isActive === true || String(raw.isActive || "").toLowerCase() === "true",
+        pausedUntil: normalizeTelegramPolicyDate(raw.pausedUntil || ""),
+        cutoffMode: raw.cutoffMode === "current"
+            ? "current"
+            : raw.cutoffMode === "yesterday"
+                ? "yesterday"
+                : source === "weekday_morning_brief" ? "yesterday" : "current",
+        topCount: Math.max(1, Math.min(10, Math.round(Number(raw.topCount || 3)))),
+        bottomCount: Math.max(1, Math.min(10, Math.round(Number(raw.bottomCount || 3)))),
+        includeMissingReports: raw.includeMissingReports !== false,
+        createdByUserId: String(raw.createdByUserId || ""),
+        createdByName: String(raw.createdByName || ""),
+        createdAtText: String(raw.createdAtText || raw.createdAt || ""),
+        updatedAtText: String(raw.updatedAtText || ""),
+        lastRunKey: String(raw.lastRunKey || ""),
+        lastSnapshotId: String(raw.lastSnapshotId || ""),
+    };
+}
+
+function isTelegramScheduleDueOnDay(rule = {}, clock = getTelegramAlertTaipeiClock()) {
+    const normalized = normalizeTelegramScheduleRule(rule, rule.id);
+    if (!normalized.isActive) return false;
+    if (normalized.pausedUntil && clock.todayStr <= normalized.pausedUntil) return false;
+    return normalized.weekdays.includes(Number(clock.weekday));
+}
+
+function resolveTelegramScheduleChatId(rule = {}) {
+    if (String(rule.targetChatId || "").trim()) return String(rule.targetChatId).trim();
+    return rule.targetGroup === "main" ? TARGET_CHAT_ID_MAIN : TARGET_CHAT_ID_MANAGER;
+}
+
+async function writeTelegramScheduleAudit(action, schedule, actor = {}, details = {}) {
+    try {
+        await getTelegramScheduleAuditsRef().add({
+            schemaVersion: TELEGRAM_V5_SCHEMA_VERSION,
+            action: String(action || ""),
+            scheduleId: String(schedule?.id || ""),
+            scheduleCode: String(schedule?.scheduleCode || ""),
+            scheduleSnapshot: schedule || {},
+            actor: {
+                source: String(actor.source || "telegram"),
+                userId: String(actor.userId || ""),
+                name: String(actor.name || ""),
+                chatId: String(actor.chatId || ""),
+            },
+            details,
+            createdAt: admin.firestore.FieldValue.serverTimestamp(),
+            createdAtText: new Date().toISOString(),
+        });
+    } catch (error) {
+        console.warn("Telegram schedule audit failed:", error.message);
+    }
+}
+
+async function writeTelegramTaskAudit(action, task, actor = {}, details = {}) {
+    try {
+        await getTelegramAgentTaskAuditsRef().add({
+            schemaVersion: TELEGRAM_V5_SCHEMA_VERSION,
+            action: String(action || ""),
+            taskId: String(task?.id || ""),
+            taskCode: String(task?.taskCode || ""),
+            taskSnapshot: task || {},
+            actor: {
+                source: String(actor.source || "telegram"),
+                userId: String(actor.userId || ""),
+                name: String(actor.name || ""),
+                chatId: String(actor.chatId || ""),
+            },
+            details,
+            createdAt: admin.firestore.FieldValue.serverTimestamp(),
+            createdAtText: new Date().toISOString(),
+        });
+    } catch (error) {
+        console.warn("Telegram task audit failed:", error.message);
+    }
+}
+
+
+function getTelegramAgentTaskDraftsRef() {
+    return getTelegramAgentPolicyDataRootRef().collection("telegram_agent_task_drafts");
+}
+
+function getTelegramV5Actor(ctx = {}, source = "telegram") {
+    return {
+        source,
+        userId: String(ctx.userId || ""),
+        name: String(ctx.userName || ""),
+        chatId: String(ctx.chatId || ""),
+    };
+}
+
+function assertTelegramSchedulePermission(permission = {}, schedule = {}) {
+    const role = String(permission.role || "viewer");
+    if (role === "director") return true;
+    if (role !== "brand_manager") throw new Error("目前權限只能查詢，無法建立或修改排程");
+    const requestedBrands = Array.isArray(schedule.brandIds) && schedule.brandIds.length
+        ? schedule.brandIds.map(normalizeTelegramAgentBrandId).filter(Boolean)
+        : [];
+    if (!requestedBrands.length) throw new Error("品牌主管只能建立指定品牌排程，不能建立三品牌或全公司排程");
+    const allowed = new Set((permission.brandIds || []).map(normalizeTelegramAgentBrandId).filter(Boolean));
+    if (requestedBrands.some((brandId) => !allowed.has(brandId))) throw new Error("排程包含超出目前權限的品牌");
+    return true;
+}
+
+function assertTelegramTaskPermission(permission = {}, task = {}) {
+    const role = String(permission.role || "viewer");
+    if (role === "director") return true;
+    if (role !== "brand_manager") throw new Error("目前權限只能查詢，無法建立或修改改善任務");
+    const brandId = normalizeTelegramAgentBrandId(task.brandId || "");
+    const allowed = new Set((permission.brandIds || []).map(normalizeTelegramAgentBrandId).filter(Boolean));
+    if (brandId && !allowed.has(brandId)) throw new Error("此任務品牌超出目前管理權限");
+    return true;
+}
+
+function normalizeTelegramTask(raw = {}, id = "") {
+    const status = Object.prototype.hasOwnProperty.call(TELEGRAM_V5_TASK_STATUS_LABELS, raw.status)
+        ? String(raw.status)
+        : "open";
+    return {
+        id: String(id || raw.id || ""),
+        taskCode: String(raw.taskCode || ""),
+        title: String(raw.title || "營運改善任務").trim().slice(0, 160),
+        description: String(raw.description || "").trim().slice(0, 1500),
+        brandId: normalizeTelegramAgentBrandId(raw.brandId || ""),
+        brand: String(raw.brand || getTelegramAgentBrandLabel(raw.brandId || "")),
+        storeCore: normalizeSummaryCoreName(raw.storeCore || raw.storeName || ""),
+        storeName: normalizeSummaryCoreName(raw.storeName || raw.storeCore || ""),
+        ownerName: String(raw.ownerName || "待指派").trim().slice(0, 100),
+        ownerUserId: String(raw.ownerUserId || ""),
+        ownerChatId: String(raw.ownerChatId || ""),
+        dueDate: normalizeTelegramPolicyDate(raw.dueDate || ""),
+        targetText: String(raw.targetText || "").trim().slice(0, 500),
+        status,
+        priority: ["low", "normal", "high", "critical"].includes(String(raw.priority || "")) ? String(raw.priority) : "normal",
+        sourceType: String(raw.sourceType || "manual"),
+        sourceAlertId: String(raw.sourceAlertId || ""),
+        sourceSnapshotId: String(raw.sourceSnapshotId || ""),
+        sourcePolicyIds: Array.isArray(raw.sourcePolicyIds) ? raw.sourcePolicyIds.map(String).slice(0, 20) : [],
+        createdByUserId: String(raw.createdByUserId || ""),
+        createdByName: String(raw.createdByName || ""),
+        createdByChatId: String(raw.createdByChatId || ""),
+        createdAtText: String(raw.createdAtText || ""),
+        updatedAtText: String(raw.updatedAtText || ""),
+        completedAtText: String(raw.completedAtText || ""),
+        resultText: String(raw.resultText || "").slice(0, 1000),
+        baseline: raw.baseline && typeof raw.baseline === "object" ? raw.baseline : null,
+        latestCheck: raw.latestCheck && typeof raw.latestCheck === "object" ? raw.latestCheck : null,
+        reminderCount: Number(raw.reminderCount || 0),
+        lastReminderAtText: String(raw.lastReminderAtText || ""),
+    };
+}
+
+async function createTelegramSchedule(scheduleInput, actor, ctx) {
+    const permission = ctx.policyPermission || await loadTelegramAgentPolicyPermission(ctx.chatId, ctx.userId, ctx);
+    const ref = getTelegramNotificationRulesRef().doc();
+    const normalized = normalizeTelegramScheduleRule({
+        ...scheduleInput,
+        id: ref.id,
+        scheduleCode: scheduleInput.scheduleCode || makeTelegramReadableCode("SCH", ref.id),
+        isActive: scheduleInput.isActive !== false,
+        createdByUserId: actor.userId,
+        createdByName: actor.name,
+        createdAtText: new Date().toISOString(),
+        updatedAtText: new Date().toISOString(),
+    }, ref.id);
+    assertTelegramSchedulePermission(permission, normalized);
+    await ref.create({
+        ...normalized,
+        createdAt: admin.firestore.FieldValue.serverTimestamp(),
+        updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+    });
+    if (ctx) ctx.writeCount += 1;
+    await writeTelegramScheduleAudit("create", normalized, actor);
+    return normalized;
+}
+
+async function loadTelegramSchedules(ctx = null, options = {}) {
+    const snap = await getTelegramNotificationRulesRef().limit(Math.max(1, Math.min(200, Number(options.limit || 100)))).get();
+    if (ctx) recordTelegramAgentRead(ctx, Math.max(1, snap.size), "telegram_schedules", {});
+    return snap.docs
+        .map((docSnap) => normalizeTelegramScheduleRule(docSnap.data() || {}, docSnap.id))
+        .filter((row) => options.includeInactive !== false || row.isActive)
+        .sort((a, b) => `${a.time}|${a.name}`.localeCompare(`${b.time}|${b.name}`));
+}
+
+async function findTelegramSchedule(reference, ctx = null, includeInactive = true) {
+    const queryText = String(reference || "").trim().toLowerCase();
+    if (!queryText) return null;
+    const schedules = await loadTelegramSchedules(ctx, { includeInactive, limit: 150 });
+    return schedules.find((row) =>
+        row.id === reference ||
+        row.scheduleCode.toLowerCase() === queryText ||
+        row.name.toLowerCase() === queryText
+    ) || schedules.find((row) => row.name.toLowerCase().includes(queryText) || queryText.includes(row.name.toLowerCase())) || null;
+}
+
+async function updateTelegramSchedule(scheduleId, patch, actor, ctx) {
+    const ref = getTelegramNotificationRulesRef().doc(String(scheduleId));
+    const snap = await ref.get();
+    if (ctx) recordTelegramAgentRead(ctx, 1, "telegram_schedules", { scheduleId });
+    if (!snap.exists) throw new Error("找不到指定排程");
+    const before = normalizeTelegramScheduleRule(snap.data() || {}, snap.id);
+    const permission = ctx.policyPermission || await loadTelegramAgentPolicyPermission(ctx.chatId, ctx.userId, ctx);
+    assertTelegramSchedulePermission(permission, before);
+    const after = normalizeTelegramScheduleRule({ ...before, ...patch, id: before.id, scheduleCode: before.scheduleCode }, before.id);
+    await ref.set({
+        ...patch,
+        updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+        updatedAtText: new Date().toISOString(),
+    }, { merge: true });
+    if (ctx) ctx.writeCount += 1;
+    await writeTelegramScheduleAudit("update", after, actor, { before });
+    return after;
+}
+
+
+async function loadTelegramReportSnapshots(ctx = null, options = {}) {
+    const snap = await getTelegramReportSnapshotsRef()
+        .orderBy("createdAtText", "desc")
+        .limit(Math.max(1, Math.min(200, Number(options.limit || 50))))
+        .get();
+    if (ctx) recordTelegramAgentRead(ctx, Math.max(1, snap.size), "telegram_report_snapshots", {});
+    return snap.docs
+        .map((docSnap) => ({ id: docSnap.id, ...(docSnap.data() || {}) }))
+        .sort((a, b) => String(b.createdAtText || "").localeCompare(String(a.createdAtText || "")));
+}
+
+async function findTelegramReportSnapshot(reference, ctx = null) {
+    const queryText = String(reference || "").trim().toLowerCase();
+    if (!queryText) return null;
+    const snapshots = await loadTelegramReportSnapshots(ctx, { limit: 100 });
+    return snapshots.find((row) => String(row.snapshotId || "").toLowerCase() === queryText || row.id === reference) || null;
+}
+
+function formatTelegramSnapshotList(snapshots = []) {
+    if (!snapshots.length) return "目前沒有報表快照。";
+    const lines = [`最近 ${Math.min(snapshots.length, 20)} 份報表快照：`, ""];
+    snapshots.slice(0, 20).forEach((row, index) => {
+        lines.push(`${index + 1}. ${row.snapshotId || row.id}｜${row.scheduleName || row.reportType}`);
+        lines.push(`   截止：${row.cutoffAtText || row.cutoffDate || "-"}｜口徑：${row.metricVersion || "-"}`);
+    });
+    return lines.join("\n");
+}
+
+async function createTelegramTask(taskInput, actor, ctx) {
+    const permission = ctx.policyPermission || await loadTelegramAgentPolicyPermission(ctx.chatId, ctx.userId, ctx);
+    assertTelegramTaskPermission(permission, taskInput || {});
+
+    const sourceAlertId = String(taskInput?.sourceAlertId || "").trim();
+    if (sourceAlertId) {
+        const duplicateSnap = await getTelegramAgentTasksRef()
+            .where("sourceAlertId", "==", sourceAlertId)
+            .limit(20)
+            .get();
+        if (ctx) recordTelegramAgentRead(ctx, Math.max(1, duplicateSnap.size), "telegram_agent_tasks_duplicate_guard", { sourceAlertId });
+        const existing = duplicateSnap.docs
+            .map((docSnap) => normalizeTelegramTask(docSnap.data() || {}, docSnap.id))
+            .find((task) => ["open", "in_progress", "overdue"].includes(task.status));
+        if (existing) return { ...existing, duplicateExisting: true };
+    }
+
+    const ref = getTelegramAgentTasksRef().doc();
+    const normalized = normalizeTelegramTask({
+        ...taskInput,
+        id: ref.id,
+        taskCode: taskInput.taskCode || makeTelegramReadableCode("TASK", ref.id),
+        createdByUserId: actor.userId,
+        createdByName: actor.name,
+        createdByChatId: actor.chatId,
+        createdAtText: new Date().toISOString(),
+        updatedAtText: new Date().toISOString(),
+    }, ref.id);
+    assertTelegramTaskPermission(permission, normalized);
+    await ref.create({
+        ...normalized,
+        createdAt: admin.firestore.FieldValue.serverTimestamp(),
+        updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+    });
+    if (ctx) ctx.writeCount += 1;
+    await writeTelegramTaskAudit("create", normalized, actor);
+    return normalized;
+}
+
+async function loadTelegramTasks(ctx = null, options = {}) {
+    const statusList = Array.isArray(options.statuses)
+        ? [...new Set(options.statuses.map(String).filter((status) => Object.prototype.hasOwnProperty.call(TELEGRAM_V5_TASK_STATUS_LABELS, status)))].slice(0, 10)
+        : [];
+    let queryRef = getTelegramAgentTasksRef();
+    if (statusList.length === 1) queryRef = queryRef.where("status", "==", statusList[0]);
+    else if (statusList.length > 1) queryRef = queryRef.where("status", "in", statusList);
+    else queryRef = queryRef.orderBy("createdAtText", "desc");
+    const snap = await queryRef.limit(Math.max(1, Math.min(300, Number(options.limit || 100)))).get();
+    if (ctx) recordTelegramAgentRead(ctx, Math.max(1, snap.size), "telegram_agent_tasks", { statuses: statusList });
+    return snap.docs
+        .map((docSnap) => normalizeTelegramTask(docSnap.data() || {}, docSnap.id))
+        .sort((a, b) => String(b.createdAtText || "").localeCompare(String(a.createdAtText || "")));
+}
+
+async function findTelegramTask(reference, ctx = null) {
+    const queryText = String(reference || "").trim().toLowerCase();
+    if (!queryText) return null;
+    const tasks = await loadTelegramTasks(ctx, { limit: 200 });
+    return tasks.find((task) => task.id === reference || task.taskCode.toLowerCase() === queryText) ||
+        tasks.find((task) => task.title.toLowerCase().includes(queryText) || queryText.includes(task.title.toLowerCase())) || null;
+}
+
+async function updateTelegramTask(taskId, patch, actor, ctx, action = "update") {
+    const ref = getTelegramAgentTasksRef().doc(String(taskId));
+    const snap = await ref.get();
+    if (ctx) recordTelegramAgentRead(ctx, 1, "telegram_agent_tasks", { taskId });
+    if (!snap.exists) throw new Error("找不到指定改善任務");
+    const before = normalizeTelegramTask(snap.data() || {}, snap.id);
+    const permission = ctx.policyPermission || await loadTelegramAgentPolicyPermission(ctx.chatId, ctx.userId, ctx);
+    assertTelegramTaskPermission(permission, before);
+    const nextPatch = {
+        ...patch,
+        updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+        updatedAtText: new Date().toISOString(),
+    };
+    if (patch.status === "completed" && !patch.completedAtText) {
+        nextPatch.completedAt = admin.firestore.FieldValue.serverTimestamp();
+        nextPatch.completedAtText = new Date().toISOString();
+    }
+    await ref.set(nextPatch, { merge: true });
+    if (ctx) ctx.writeCount += 1;
+    const after = normalizeTelegramTask({ ...before, ...nextPatch }, before.id);
+    await writeTelegramTaskAudit(action, after, actor, { before });
+    return after;
+}
+
+
+async function checkTelegramTaskOutcome(task, actor, ctx) {
+    const normalized = normalizeTelegramTask(task || {}, task?.id || "");
+    if (!normalized.brandId || !normalized.storeName) throw new Error("此任務沒有明確品牌與店家，無法自動驗證改善結果");
+    const clock = getTelegramAlertTaipeiClock();
+    const monthStart = `${clock.yearMonth}-01`;
+    const result = await getStorePerformance(
+        monthStart,
+        clock.todayStr,
+        normalized.storeName,
+        getTelegramAgentBrandLabel(normalized.brandId),
+        ctx,
+        ["telegram_analysis", "ranking", "brand_totals"]
+    );
+    const row = (result.stores_details || []).find((item) => normalizeSummaryCoreName(item.storeName) === normalizeSummaryCoreName(normalized.storeName)) || null;
+    if (!row) throw new Error("目前找不到這家店的最新營運資料");
+    const baselineRate = normalized.baseline?.cashAchievementRate === null || normalized.baseline?.cashAchievementRate === undefined
+        ? null
+        : Number(normalized.baseline.cashAchievementRate);
+    const currentRate = row.cashAchievementRate === null || row.cashAchievementRate === undefined
+        ? (Number(row.budget || 0) > 0 ? Number(((Number(row.cash || 0) / Number(row.budget)) * 100).toFixed(1)) : null)
+        : Number(row.cashAchievementRate);
+    const rateDiff = baselineRate === null || currentRate === null ? null : Number((currentRate - baselineRate).toFixed(1));
+    const latestCheck = {
+        checkedAtText: new Date().toISOString(),
+        cash: Number(row.cash || 0),
+        cashTarget: Number(row.budget || 0),
+        cashAchievementRate: currentRate,
+        baselineCashAchievementRate: baselineRate,
+        cashAchievementRateDiff: rateDiff,
+        reasons: Array.isArray(normalized.baseline?.reasons) ? normalized.baseline.reasons : [],
+    };
+    await getTelegramAgentTasksRef().doc(normalized.id).set({
+        latestCheck,
+        updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+        updatedAtText: new Date().toISOString(),
+    }, { merge: true });
+    await writeTelegramTaskAudit("outcome_check", { ...normalized, latestCheck }, actor);
+    return {
+        task: { ...normalized, latestCheck },
+        message: [
+            `📈 改善驗證｜${normalized.taskCode}`,
+            `${normalized.brand} ${normalized.storeName}店`,
+            `基準現金達成率：${baselineRate === null ? "無基準" : `${baselineRate}%`}`,
+            `目前現金達成率：${currentRate === null ? "目標缺漏" : `${currentRate}%`}`,
+            `變化：${rateDiff === null ? "無法比較" : `${rateDiff >= 0 ? "+" : ""}${rateDiff} 個百分點`}`,
+            `目前現金：$${Number(row.cash || 0).toLocaleString()}｜目標：$${Number(row.budget || 0).toLocaleString()}`,
+        ].join("\n"),
+    };
+}
+
+function formatTelegramScheduleList(schedules = []) {
+    if (!schedules.length) return "目前沒有固定排程。";
+    const weekdayLabels = ["日", "一", "二", "三", "四", "五", "六"];
+    const lines = [`目前共有 ${schedules.length} 個排程：`, ""];
+    schedules.slice(0, 30).forEach((schedule, index) => {
+        const days = schedule.weekdays.map((day) => weekdayLabels[day]).join("、");
+        const status = schedule.isActive ? (schedule.pausedUntil ? `暫停至 ${schedule.pausedUntil}` : "啟用") : "停用";
+        lines.push(`${index + 1}. ${schedule.scheduleCode || schedule.id}｜${schedule.name}`);
+        lines.push(`   週${days} ${schedule.time}｜${TELEGRAM_V5_SCHEDULE_SOURCES[schedule.source] || schedule.source}｜${status}`);
+    });
+    return lines.join("\n");
+}
+
+function formatTelegramTaskList(tasks = []) {
+    if (!tasks.length) return "目前沒有待處理或進行中的改善任務。";
+    const lines = [`目前共有 ${tasks.length} 個改善任務：`, ""];
+    tasks.slice(0, 30).forEach((task, index) => {
+        lines.push(`${index + 1}. ${task.taskCode || task.id}｜${TELEGRAM_V5_TASK_STATUS_LABELS[task.status] || task.status}｜${task.title}`);
+        lines.push(`   ${task.brand || ""}${task.storeName ? ` ${task.storeName}店` : ""}｜負責人：${task.ownerName || "待指派"}｜期限：${task.dueDate || "未設定"}`);
+    });
+    return lines.join("\n");
+}
+
+async function saveTelegramPendingV5Action(chatId, userId, action) {
+    const expiresAtMs = Date.now() + TELEGRAM_V5_PENDING_MINUTES * 60 * 1000;
+    await getTelegramAgentSessionRef(chatId, userId).set({
+        pendingV5Action: { ...action, createdAtText: new Date().toISOString(), expiresAtText: new Date(expiresAtMs).toISOString() },
+        pendingV5ExpiresAtMs: expiresAtMs,
+        updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+        updatedAtText: new Date().toISOString(),
+    }, { merge: true });
+}
+
+async function clearTelegramPendingV5Action(chatId, userId) {
+    await getTelegramAgentSessionRef(chatId, userId).set({
+        pendingV5Action: admin.firestore.FieldValue.delete(),
+        pendingV5ExpiresAtMs: admin.firestore.FieldValue.delete(),
+        updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+        updatedAtText: new Date().toISOString(),
+    }, { merge: true });
+}
+
+function buildTelegramV5PendingMessage(action = {}) {
+    const lines = ["我理解的執行內容如下：", ""];
+    if (action.kind === "create_schedule") {
+        const schedule = normalizeTelegramScheduleRule(action.schedule || {});
+        lines.push(`排程：${schedule.name}`);
+        lines.push(`時間：${schedule.time}｜星期：${schedule.weekdays.join("、")}`);
+        lines.push(`內容：${TELEGRAM_V5_SCHEDULE_SOURCES[schedule.source] || schedule.source}`);
+        lines.push(`資料截止：${schedule.cutoffMode === "yesterday" ? "前一日 23:59" : "執行當下"}`);
+        lines.push(`接收：${schedule.targetChatId ? "目前聊天室" : schedule.targetGroup === "main" ? "營運大群組" : "主管群組"}`);
+    } else if (["update_schedule", "pause_schedule", "delete_schedule"].includes(action.kind)) {
+        lines.push(`排程：${action.scheduleName || action.scheduleCode || action.scheduleId}`);
+        lines.push(`動作：${action.kind === "update_schedule" ? "修改" : action.kind === "pause_schedule" ? `暫停至 ${action.pausedUntil}` : "停用／刪除"}`);
+        if (action.patch?.time) lines.push(`新時間：${action.patch.time}`);
+    } else if (action.kind === "create_task") {
+        const task = normalizeTelegramTask(action.task || {});
+        lines.push(`任務：${task.title}`);
+        lines.push(`品牌／店家：${task.brand || "未指定"}${task.storeName ? ` ${task.storeName}店` : ""}`);
+        lines.push(`負責人：${task.ownerName || "待指派"}`);
+        lines.push(`期限：${task.dueDate || "未設定"}`);
+        if (task.targetText) lines.push(`目標：${task.targetText}`);
+    } else if (action.kind === "update_task") {
+        lines.push(`任務：${action.taskCode || action.taskId}`);
+        lines.push(`動作：更新為 ${TELEGRAM_V5_TASK_STATUS_LABELS[action.patch?.status] || action.patch?.status || "新狀態"}`);
+    }
+    lines.push("", "確認執行嗎？");
+    return lines.join("\n");
+}
+
+async function executeTelegramPendingV5Action(action, actor, ctx) {
+    if (!action || typeof action !== "object") throw new Error("目前沒有待確認的動作");
+    if (action.expiresAtText && Date.parse(action.expiresAtText) <= Date.now()) throw new Error("這筆確認已逾時，請重新下達指令");
+    if (action.kind === "create_schedule") {
+        const schedule = await createTelegramSchedule(action.schedule || {}, actor, ctx);
+        return `✅ 已建立固定排程\n${schedule.scheduleCode}\n${schedule.name}｜${schedule.time}`;
+    }
+    if (["update_schedule", "pause_schedule", "delete_schedule"].includes(action.kind)) {
+        const patch = action.kind === "delete_schedule"
+            ? { isActive: false, status: "deleted", deletedAtText: new Date().toISOString() }
+            : action.kind === "pause_schedule"
+                ? { pausedUntil: action.pausedUntil }
+                : (action.patch || {});
+        const schedule = await updateTelegramSchedule(action.scheduleId, patch, actor, ctx);
+        return `✅ 已更新排程 ${schedule.scheduleCode || schedule.id}\n${schedule.name}`;
+    }
+    if (action.kind === "create_task") {
+        const task = await createTelegramTask(action.task || {}, actor, ctx);
+        if (action.taskDraftId) {
+            try {
+                await getTelegramAgentTaskDraftsRef().doc(String(action.taskDraftId)).delete();
+            } catch (draftError) {
+                console.warn("Telegram task draft cleanup failed:", draftError.message);
+            }
+        }
+        if (task.duplicateExisting) {
+            return `ℹ️ 此巡察警示已有進行中的改善任務
+${task.taskCode}
+${task.title}
+狀態：${TELEGRAM_V5_TASK_STATUS_LABELS[task.status] || task.status}`;
+        }
+        return `✅ 已建立改善任務
+${task.taskCode}
+${task.title}
+負責人：${task.ownerName}｜期限：${task.dueDate || "未設定"}`;
+    }
+    if (action.kind === "update_task") {
+        const task = await updateTelegramTask(action.taskId, action.patch || {}, actor, ctx, "status_change");
+        return `✅ 已更新任務 ${task.taskCode || task.id}\n狀態：${TELEGRAM_V5_TASK_STATUS_LABELS[task.status] || task.status}`;
+    }
+    throw new Error(`不支援的 v5 動作：${action.kind}`);
+}
+
+function buildTelegramV5InlineKeyboard(options = {}) {
+    if (options.pending) {
+        return { inline_keyboard: [[
+            { text: "✅ 確認執行", callback_data: "v5_confirm" },
+            { text: "取消", callback_data: "v5_cancel" },
+        ]] };
+    }
+    if (options.task) {
+        const taskId = String(options.task.id || "");
+        return { inline_keyboard: [[
+            { text: "開始處理", callback_data: `task_start:${taskId}`.slice(0, 64) },
+            { text: "驗證改善", callback_data: `task_check:${taskId}`.slice(0, 64) },
+            { text: "標記完成", callback_data: `task_done:${taskId}`.slice(0, 64) },
+        ]] };
+    }
+    return null;
+}
+
+function detectTelegramScheduleSource(text = "") {
+    const source = String(text || "");
+    if (/(三個品牌|三品牌|全品牌).*(現金|權責)|(工作日晨報|三品牌晨報)/s.test(source)) return "weekday_morning_brief";
+    if (/管理師.*(?:前|TOP|排行)/i.test(source)) return "top5_therapists";
+    if (/(?:店家|門市).*(?:後|最差|最低|落後|需關注)/i.test(source)) return "bottom5_stores";
+    if (/店家.*(?:前|TOP|最好|最佳)/i.test(source)) return "top5_stores";
+    if (/缺報|未繳|未回報/.test(source)) return "unreported";
+    return "progress";
+}
+
+function detectTelegramScheduleWeekdays(text = "") {
+    const source = String(text || "");
+    if (/工作日|平日|週一至週五|星期一至星期五/.test(source)) return [1, 2, 3, 4, 5];
+    if (/每天|每日/.test(source)) return [0, 1, 2, 3, 4, 5, 6];
+    const map = { 日: 0, 天: 0, 一: 1, 二: 2, 三: 3, 四: 4, 五: 5, 六: 6 };
+    const matches = [...source.matchAll(/(?:週|星期)([日天一二三四五六])/g)].map((match) => map[match[1]]);
+    return matches.length ? [...new Set(matches)] : [1, 2, 3, 4, 5];
+}
+
+async function parseTelegramV5Command(command, ctx, memoryPayload = {}, callbackData = "") {
+    const raw = String(command || "").trim();
+    const lower = raw.toLowerCase();
+    const actor = getTelegramV5Actor(ctx);
+    const permission = ctx.policyPermission || await loadTelegramAgentPolicyPermission(ctx.chatId, ctx.userId, ctx);
+    ctx.policyPermission = permission;
+
+    if (callbackData === "v5_confirm" || (memoryPayload.pendingV5Action && /^(確認|確定|是的|套用|確認執行|確認排程|確認任務)$/i.test(raw))) {
+        const pending = memoryPayload.pendingV5Action;
+        if (!pending) return { handled: false };
+        const result = await executeTelegramPendingV5Action(pending, actor, ctx);
+        await clearTelegramPendingV5Action(ctx.chatId, ctx.userId);
+        return { handled: true, reply: result };
+    }
+    if (callbackData === "v5_cancel" || (memoryPayload.pendingV5Action && /^(取消|不要|不執行|取消執行|取消排程|取消任務)$/i.test(raw))) {
+        if (!memoryPayload.pendingV5Action) return { handled: false };
+        await clearTelegramPendingV5Action(ctx.chatId, ctx.userId);
+        return { handled: true, reply: "已取消這次排程／任務操作。" };
+    }
+    if (callbackData.startsWith("task_alert:")) {
+        const draftId = callbackData.slice("task_alert:".length);
+        const snap = await getTelegramAgentTaskDraftsRef().doc(draftId).get();
+        recordTelegramAgentRead(ctx, 1, "telegram_agent_task_drafts", { draftId });
+        if (!snap.exists) return { handled: true, reply: "這筆巡察任務草稿已不存在，請重新執行巡察。" };
+        const draft = snap.data() || {};
+        const action = { kind: "create_task", task: draft.task || {}, taskDraftId: draftId };
+        await saveTelegramPendingV5Action(ctx.chatId, ctx.userId, action);
+        return { handled: true, pending: true, reply: buildTelegramV5PendingMessage(action) };
+    }
+    if (callbackData.startsWith("task_check:")) {
+        const taskId = callbackData.split(":")[1];
+        const task = await findTelegramTask(taskId, ctx);
+        if (!task) return { handled: true, reply: "找不到這筆改善任務。" };
+        const checked = await checkTelegramTaskOutcome(task, actor, ctx);
+        return { handled: true, task: checked.task, reply: checked.message };
+    }
+    if (callbackData.startsWith("task_start:") || callbackData.startsWith("task_done:")) {
+        const isDone = callbackData.startsWith("task_done:");
+        const taskId = callbackData.split(":")[1];
+        const task = await updateTelegramTask(taskId, {
+            status: isDone ? "completed" : "in_progress",
+            ...(isDone ? { resultText: "由 Telegram 按鈕標記完成" } : {}),
+        }, actor, ctx, "callback_status_change");
+        return { handled: true, task, reply: `✅ ${task.taskCode}\n${TELEGRAM_V5_TASK_STATUS_LABELS[task.status]}` };
+    }
+
+    if (/^\/snapshots$/i.test(raw) || /查看.*快照|最近.*快照/.test(raw)) {
+        const snapshots = await loadTelegramReportSnapshots(ctx, { limit: 50 });
+        return { handled: true, reply: formatTelegramSnapshotList(snapshots) };
+    }
+    const snapshotRead = raw.match(/^\/snapshot\s+(.+)/i);
+    if (snapshotRead) {
+        const snapshot = await findTelegramReportSnapshot(snapshotRead[1], ctx);
+        if (!snapshot) return { handled: true, reply: "找不到這份報表快照。" };
+        return {
+            handled: true,
+            reply: `${snapshot.messagePreview || "此快照沒有訊息預覽"}\n\n資料截止：${snapshot.cutoffAtText || snapshot.cutoffDate || "-"}\n報表快照：${snapshot.snapshotId || snapshot.id}｜口徑：${snapshot.metricVersion || "-"}`,
+        };
+    }
+    if (/重新顯示.*(?:晨報|戰報)|今天.*(?:10點|10:00).*快照/.test(raw)) {
+        const snapshots = await loadTelegramReportSnapshots(ctx, { limit: 100 });
+        const today = getTelegramAlertTaipeiClock().todayStr;
+        const found = snapshots.find((row) => String(row.runKey || "").startsWith(today) && row.reportType === "weekday_morning_brief") || snapshots.find((row) => row.reportType === "weekday_morning_brief");
+        if (!found) return { handled: true, reply: "目前找不到工作日晨報快照。" };
+        return { handled: true, reply: `${found.messagePreview}\n\n資料截止：${found.cutoffAtText || found.cutoffDate}\n報表快照：${found.snapshotId}` };
+    }
+
+    if (/^\/(schedules|schedule)$/i.test(raw) || /查看.*排程|目前.*排程/.test(raw)) {
+        const schedules = await loadTelegramSchedules(ctx, { includeInactive: true, limit: 100 });
+        return { handled: true, reply: formatTelegramScheduleList(schedules) };
+    }
+    if (/^\/tasks$/i.test(raw) || /查看.*(?:改善)?任務|目前.*待辦/.test(raw)) {
+        const tasks = await loadTelegramTasks(ctx, { statuses: ["open", "in_progress", "overdue"], limit: 100 });
+        return { handled: true, reply: formatTelegramTaskList(tasks), tasks };
+    }
+    const taskRead = raw.match(/^\/task\s+(.+)/i);
+    if (taskRead) {
+        const task = await findTelegramTask(taskRead[1], ctx);
+        if (!task) return { handled: true, reply: "找不到這筆改善任務。" };
+        return {
+            handled: true,
+            task,
+            reply: `${task.taskCode}\n${task.title}\n狀態：${TELEGRAM_V5_TASK_STATUS_LABELS[task.status] || task.status}\n負責人：${task.ownerName}\n期限：${task.dueDate || "未設定"}\n目標：${task.targetText || "未設定"}\n${task.description || ""}`,
+        };
+    }
+    const taskCheck = raw.match(/^\/taskcheck\s+(.+)/i);
+    if (taskCheck) {
+        const task = await findTelegramTask(taskCheck[1], ctx);
+        if (!task) return { handled: true, reply: "找不到這筆改善任務。" };
+        const checked = await checkTelegramTaskOutcome(task, actor, ctx);
+        return { handled: true, task: checked.task, reply: checked.message };
+    }
+    const taskDone = raw.match(/^\/taskdone\s+(.+)/i);
+    if (taskDone) {
+        const task = await findTelegramTask(taskDone[1], ctx);
+        if (!task) return { handled: true, reply: "找不到這筆改善任務。" };
+        const action = { kind: "update_task", taskId: task.id, taskCode: task.taskCode, patch: { status: "completed", resultText: "由指令標記完成" } };
+        await saveTelegramPendingV5Action(ctx.chatId, ctx.userId, action);
+        return { handled: true, pending: true, reply: buildTelegramV5PendingMessage(action) };
+    }
+
+    const deleteSchedule = raw.match(/(?:刪除|取消|停用)(?:固定)?排程\s*[：:]?\s*(.+)/);
+    if (deleteSchedule) {
+        const schedule = await findTelegramSchedule(deleteSchedule[1], ctx, true);
+        if (!schedule) return { handled: true, reply: "找不到指定排程，請先使用 /schedules。" };
+        assertTelegramSchedulePermission(permission, schedule);
+        const action = { kind: "delete_schedule", scheduleId: schedule.id, scheduleCode: schedule.scheduleCode, scheduleName: schedule.name };
+        await saveTelegramPendingV5Action(ctx.chatId, ctx.userId, action);
+        return { handled: true, pending: true, reply: buildTelegramV5PendingMessage(action) };
+    }
+    const pauseSchedule = raw.match(/暫停(.+?)(?:排程)?(?:到|至)(.+)/);
+    if (pauseSchedule) {
+        const schedule = await findTelegramSchedule(pauseSchedule[1].replace(/排程/g, "").trim(), ctx, true);
+        if (!schedule) return { handled: true, reply: "找不到指定排程，請先使用 /schedules。" };
+        const pausedUntil = parseTelegramDateText(pauseSchedule[2]);
+        if (!pausedUntil) return { handled: true, reply: "請提供明確的暫停截止日期。" };
+        assertTelegramSchedulePermission(permission, schedule);
+        const action = { kind: "pause_schedule", scheduleId: schedule.id, scheduleCode: schedule.scheduleCode, scheduleName: schedule.name, pausedUntil };
+        await saveTelegramPendingV5Action(ctx.chatId, ctx.userId, action);
+        return { handled: true, pending: true, reply: buildTelegramV5PendingMessage(action) };
+    }
+    const updateTime = raw.match(/(?:把|將)(.+?)(?:排程)?改成\s*(.+)/);
+    if (updateTime) {
+        const schedule = await findTelegramSchedule(updateTime[1].replace(/排程/g, "").trim(), ctx, true);
+        const time = parseTelegramTimeText(updateTime[2]);
+        if (schedule && time) {
+            assertTelegramSchedulePermission(permission, schedule);
+            const action = { kind: "update_schedule", scheduleId: schedule.id, scheduleCode: schedule.scheduleCode, scheduleName: schedule.name, patch: { time } };
+            await saveTelegramPendingV5Action(ctx.chatId, ctx.userId, action);
+            return { handled: true, pending: true, reply: buildTelegramV5PendingMessage(action) };
+        }
+    }
+
+    const isScheduleCreate = /(每週|每天|每日|工作日|平日|週一|星期一).*(?:\d{1,2}\s*[:：點]|早上|上午|下午|晚上).*(提供|發送|推播|戰報|晨報)/s.test(raw);
+    if (isScheduleCreate) {
+        const source = detectTelegramScheduleSource(raw);
+        const time = parseTelegramTimeText(raw, "10:00");
+        const weekdays = detectTelegramScheduleWeekdays(raw);
+        const targetGroup = /營運大群組|全體群組|主群組/.test(raw) ? "main" : "manager";
+        const targetChatId = /提供我|傳給我|這個群組|目前群組/.test(raw) ? String(ctx.chatId) : "";
+        const name = source === "weekday_morning_brief" ? "三品牌工作日晨報" : `${TELEGRAM_V5_SCHEDULE_SOURCES[source]} ${time}`;
+        const schedule = {
+            name,
+            source,
+            reportType: source,
+            time,
+            weekdays,
+            targetGroup,
+            targetChatId,
+            isActive: true,
+            cutoffMode: source === "progress" && /即時|目前/.test(raw) ? "current" : "yesterday",
+            topCount: 3,
+            bottomCount: 3,
+            includeMissingReports: true,
+            brandIds: source === "weekday_morning_brief"
+                ? ["cyj", "anniu", "yibo"]
+                : (getTelegramAgentExplicitBrandId(raw) ? [getTelegramAgentExplicitBrandId(raw)] : []),
+        };
+        assertTelegramSchedulePermission(permission, schedule);
+        const action = { kind: "create_schedule", schedule };
+        await saveTelegramPendingV5Action(ctx.chatId, ctx.userId, action);
+        return { handled: true, pending: true, reply: buildTelegramV5PendingMessage(action) };
+    }
+
+    if (/建立(?:改善)?任務|新增(?:改善)?任務|指派任務/.test(raw)) {
+        const preferredBrandId = getTelegramAgentExplicitBrandId(raw) || ctx.scopeState?.activeBrandId || "";
+        const storeMatches = await resolveTelegramPolicyStoreMention(raw, preferredBrandId, ctx);
+        const store = storeMatches[0] || null;
+        const ownerMatch = raw.match(/負責人\s*[：:]?\s*([^，,。\n]+?)(?=期限|目標|$)/);
+        const targetMatch = raw.match(/目標\s*[：:]?\s*([^。\n]+)/);
+        const dueDate = parseTelegramDateText(raw);
+        const task = {
+            title: store ? `改善 ${getTelegramAgentBrandLabel(store.brandId)} ${store.storeName}店營運表現` : "營運改善任務",
+            description: raw,
+            brandId: store?.brandId || preferredBrandId,
+            storeName: store?.storeName || "",
+            ownerName: ownerMatch ? ownerMatch[1].trim() : "待指派",
+            dueDate,
+            targetText: targetMatch ? targetMatch[1].trim() : "",
+            status: "open",
+            priority: /重大|緊急|紅燈/.test(raw) ? "critical" : "normal",
+            sourceType: "telegram_natural_language",
+        };
+        assertTelegramTaskPermission(permission, task);
+        const action = { kind: "create_task", task };
+        await saveTelegramPendingV5Action(ctx.chatId, ctx.userId, action);
+        return { handled: true, pending: true, reply: buildTelegramV5PendingMessage(action) };
+    }
+
+    return { handled: false };
 }
 
 function getTelegramAgentPolicyRuntimeCache(key) {
@@ -3640,6 +4481,8 @@ async function loadTelegramAgentMemory(chatId, userId, ctx) {
                 learningCandidates: {},
                 lastLearningSuggestion: null,
                 lastPolicyChange: null,
+                pendingV5Action: null,
+                pendingV5ExpiresAtMs: 0,
             };
         }
         const turns = Array.isArray(result.data?.turns) ? result.data.turns : [];
@@ -3654,6 +4497,8 @@ async function loadTelegramAgentMemory(chatId, userId, ctx) {
             learningCandidates: result.data?.learningCandidates && typeof result.data.learningCandidates === "object" ? result.data.learningCandidates : {},
             lastLearningSuggestion: result.data?.lastLearningSuggestion || null,
             lastPolicyChange: result.data?.lastPolicyChange || null,
+            pendingV5Action: result.data?.pendingV5Action || null,
+            pendingV5ExpiresAtMs: Number(result.data?.pendingV5ExpiresAtMs || 0),
         };
     } catch (error) {
         console.warn("Telegram Agent 記憶讀取失敗:", error.message);
@@ -3734,6 +4579,10 @@ function buildTelegramAgentSourceFooter(ctx) {
         telegram_agent_config: "主動預警設定",
         telegram_agent_policies: "長期營運規則",
         telegram_agent_policy_permissions: "規則權限",
+        telegram_schedules: "固定排程",
+        telegram_report_snapshots: "報表快照",
+        telegram_agent_tasks: "改善任務",
+        telegram_agent_task_drafts: "巡察任務草稿",
     };
     const unique = [];
     const seen = new Set();
@@ -4204,6 +5053,24 @@ exports.telegramWebhook = onRequest({
 
         await loadTelegramAgentPolicyState(ctx);
 
+        const v5Result = await parseTelegramV5Command(
+            rawCommand,
+            ctx,
+            memoryPayload,
+            callbackQuery ? rawCommand : ""
+        );
+        if (v5Result?.handled) {
+            finalReply = cleanTelegramAgentReply(v5Result.reply || "已完成排程／任務操作。")
+                .replace(/\n\n資料基準：[\s\S]*$/, "");
+            const replyMarkup = buildTelegramV5InlineKeyboard({
+                pending: v5Result.pending,
+                task: v5Result.task,
+            });
+            await sendTelegramMessage(chatId, finalReply, replyMarkup ? { reply_markup: replyMarkup } : {});
+            await writeTelegramAgentAuditLog(auditMessage, ctx, finalReply, "v5_command");
+            return res.sendStatus(200);
+        }
+
         const policyResult = callbackQuery
             ? await handleTelegramPolicyCallbackData(rawCommand, ctx, memoryPayload)
             : await parseTelegramPolicyCommand(rawCommand, ctx, dateInfo, memoryPayload);
@@ -4424,6 +5291,23 @@ exports.cleanupTelegramAgentPolicies = onSchedule({
         ["oneShotPolicies", "oneShotExpiresAtText", "oneShotExpiresAtMs"],
         nowMs
     );
+    const v5PendingCleanup = await cleanupExpiredTelegramAgentSessions(
+        "pendingV5ExpiresAtMs",
+        ["pendingV5Action", "pendingV5ExpiresAtMs"],
+        nowMs
+    );
+
+    let expiredTaskDraftCount = 0;
+    const expiredTaskDrafts = await getTelegramAgentTaskDraftsRef()
+        .where("expiresAtMs", "<=", nowMs)
+        .limit(400)
+        .get();
+    if (!expiredTaskDrafts.empty) {
+        const batch = db.batch();
+        expiredTaskDrafts.docs.forEach((docSnap) => batch.delete(docSnap.ref));
+        await batch.commit();
+        expiredTaskDraftCount = expiredTaskDrafts.size;
+    }
 
     await getTelegramAgentPolicyDataRootRef().collection("global_settings").doc("telegram_agent_policy_cleanup_status").set({
         lastRunAt: admin.firestore.FieldValue.serverTimestamp(),
@@ -4434,8 +5318,10 @@ exports.cleanupTelegramAgentPolicies = onSchedule({
         changedPolicyCount: updates.length,
         matchedPendingSessionCount: pendingCleanup.matchedCount,
         matchedOneShotSessionCount: oneShotCleanup.matchedCount,
-        scannedSessionCount: pendingCleanup.matchedCount + oneShotCleanup.matchedCount,
-        cleanedSessionCount: pendingCleanup.writeCount + oneShotCleanup.writeCount,
+        matchedV5PendingSessionCount: v5PendingCleanup.matchedCount,
+        expiredTaskDraftCount,
+        scannedSessionCount: pendingCleanup.matchedCount + oneShotCleanup.matchedCount + v5PendingCleanup.matchedCount,
+        cleanedSessionCount: pendingCleanup.writeCount + oneShotCleanup.writeCount + v5PendingCleanup.writeCount,
         status: "completed",
     }, { merge: true });
 });
@@ -4836,6 +5722,54 @@ async function buildTelegramActiveAlertMessages(config, actor = "scheduled") {
     };
 }
 
+
+async function createTelegramAlertTaskKeyboard(item, chatId) {
+    const alerts = Array.isArray(item?.result?.alerts) ? item.result.alerts.slice(0, 3) : [];
+    if (!alerts.length) return null;
+    const rows = [];
+    for (const alert of alerts) {
+        const ref = getTelegramAgentTaskDraftsRef().doc();
+        const task = normalizeTelegramTask({
+            title: `改善 ${item.brand} ${normalizeSummaryCoreName(alert.storeName)}店營運警示`,
+            description: `巡察原因：${(alert.reasons || []).join("、") || "符合目前營運預警規則"}`,
+            brandId: item.brandId,
+            storeName: normalizeSummaryCoreName(alert.storeName),
+            ownerName: "待指派",
+            dueDate: shiftTelegramAgentDate(getTelegramAlertTaipeiClock().todayStr, 3),
+            targetText: "解除目前紅燈／黃燈原因，並回報改善措施與結果。",
+            status: "open",
+            priority: alert.severity === "critical" ? "critical" : "high",
+            sourceType: "active_alert",
+            sourceAlertId: `${item.brandId}:${normalizeSummaryCoreName(alert.storeName)}:${getTelegramAlertTaipeiClock().todayStr}`,
+            sourceSnapshotId: String(item.snapshotId || ""),
+            sourcePolicyIds: item.ctx?.activePolicyIds || [],
+            baseline: {
+                capturedAtText: new Date().toISOString(),
+                severity: String(alert.severity || "watch"),
+                cashAchievementRate: alert.cashAchievementRate === null || alert.cashAchievementRate === undefined ? null : Number(alert.cashAchievementRate),
+                cash: Number(alert.cash || 0),
+                cashTarget: Number(alert.cashTarget || alert.budget || 0),
+                reasons: Array.isArray(alert.reasons) ? alert.reasons.slice(0, 20) : [],
+            },
+            createdByUserId: "notificationPatrol",
+            createdByName: "主動巡察",
+            createdByChatId: String(chatId || ""),
+        });
+        await ref.create({
+            schemaVersion: TELEGRAM_V5_SCHEMA_VERSION,
+            task,
+            expiresAtMs: Date.now() + 7 * 24 * 60 * 60 * 1000,
+            createdAt: admin.firestore.FieldValue.serverTimestamp(),
+            createdAtText: new Date().toISOString(),
+        });
+        rows.push([{
+            text: `建立 ${task.storeName}店改善任務`.slice(0, 40),
+            callback_data: `task_alert:${ref.id}`.slice(0, 64),
+        }]);
+    }
+    return rows.length ? { inline_keyboard: rows } : null;
+}
+
 exports.telegramAgentDailyPatrol = onSchedule({
     schedule: "*/5 * * * *",
     timeZone: "Asia/Taipei",
@@ -4885,7 +5819,34 @@ exports.telegramAgentDailyPatrol = onSchedule({
         }
 
         try {
-            await Promise.all(chatIds.map((id) => sendTelegramMessage(id, item.message)));
+            const alertSnapshot = await createTelegramReportSnapshot({
+                reportType: "active_alert",
+                scheduleName: `${item.brand} 主動戰情巡察`,
+                runKey: sentKey,
+                cutoffDate: now.todayStr,
+                cutoffAtText: `${now.todayStr} ${now.timeText} Asia/Taipei`,
+                policyIds: item.ctx?.activePolicyIds || [],
+                brandPayloads: { [item.brandId]: item.summary || {} },
+                rankingPayload: {
+                    alerts: Array.isArray(item.result?.alerts) ? item.result.alerts.slice(0, 20) : [],
+                    dataIssues: Array.isArray(item.result?.dataIssues) ? item.result.dataIssues.slice(0, 20) : [],
+                },
+                messagePreview: item.message,
+                sourceMeta: item.result?.source_meta || [],
+                readCount: Number(item.ctx?.readCount || 0),
+                createdBy: "telegramAgentDailyPatrol",
+            });
+            item.snapshotId = alertSnapshot.snapshotId;
+            const alertMessage = `${String(item.message || "").slice(0, 3450)}
+
+資料截止：${alertSnapshot.cutoffAtText}
+報表快照：${alertSnapshot.snapshotId}｜口徑：${alertSnapshot.metricVersion}`.slice(0, 3900);
+            const taskKeyboard = await createTelegramAlertTaskKeyboard(item, chatIds[0]);
+            await Promise.all(chatIds.map((id) => sendTelegramMessage(
+                id,
+                alertMessage,
+                taskKeyboard ? { reply_markup: taskKeyboard } : {}
+            )));
             sentAny = true;
             brandSentKeys[item.brandId] = sentKey;
             brandResults[item.brandId] = {
@@ -4899,6 +5860,7 @@ exports.telegramAgentDailyPatrol = onSchedule({
                 limit: Number(item.brandProfile?.limit || 0),
                 enabledRuleLabels: item.enabledRuleLabels || [],
                 sentAtText: new Date().toISOString(),
+                snapshotId: item.snapshotId || "",
                 messagePreview: item.message.slice(0, 500),
             };
         } catch (error) {
@@ -5054,9 +6016,8 @@ exports.processTelegramAlertCommand = onDocumentCreated({
 
 
 // ==========================================
-// ★ 4. Telegram 動態定時推播巡邏員（統一資料口徑版）
-// 固定排程與即時詢問共用同一組品牌限定資料載入器、目標口徑與長期規則。
-// 只在 08:00～11:59 每分鐘檢查規則；真正符合通知時間後才讀取營運資料。
+// ★ 4. Telegram 動態定時推播巡邏員 v5
+// 精準讀取目前分鐘規則、工作日晨報、不可變報表快照、執行去重。
 // ==========================================
 function shiftTelegramAgentDate(dateText, days) {
     const match = String(dateText || "").match(/^(\d{4})-(\d{2})-(\d{2})$/);
@@ -5079,7 +6040,7 @@ function createTelegramNotificationPolicyContext(sharedPolicyCtx, brandId, quest
     return ctx;
 }
 
-function appendTelegramScheduledDataFooter(message, result, ctx) {
+function appendTelegramScheduledDataFooter(message, result, ctx, snapshot = null) {
     const sourceLabels = {
         daily_reports_current_month_exact: "當月品牌限定即時店家日報",
         daily_reports_scoped: "品牌限定店家日報",
@@ -5100,9 +6061,10 @@ function appendTelegramScheduledDataFooter(message, result, ctx) {
     const policyText = Array.isArray(ctx?.activePolicyIds) && ctx.activePolicyIds.length > 0
         ? `｜已套用長期規則 ${[...new Set(ctx.activePolicyIds)].slice(0, 4).join("、")}`
         : "";
-    return `${String(message || "").trim()}
-
-資料口徑：${sourceText}${policyText}`.slice(0, 3900);
+    const snapshotText = snapshot?.snapshotId
+        ? `\n資料截止：${snapshot.cutoffAtText || snapshot.cutoffDate || "-"}\n報表快照：${snapshot.snapshotId}｜口徑：${snapshot.metricVersion || TELEGRAM_V5_METRIC_VERSION}`
+        : "";
+    return `${String(message || "").trim()}\n\n資料口徑：${sourceText}${policyText}${snapshotText}`.slice(0, 3900);
 }
 
 function isTelegramNotificationRuleActive(rule = {}) {
@@ -5111,64 +6073,306 @@ function isTelegramNotificationRuleActive(rule = {}) {
 
 function normalizeTelegramNotificationRule(docSnap) {
     const data = docSnap?.data?.() || {};
-    return {
+    return normalizeTelegramScheduleRule({
         ...data,
         id: String(docSnap?.id || ""),
         ruleId: String(docSnap?.id || ""),
         rulePath: String(docSnap?.ref?.path || ""),
-    };
+    }, String(docSnap?.id || ""));
 }
 
 async function loadTelegramNotificationRulesAtTime(timeString) {
-    const normalizedTime = /^\d{2}:\d{2}$/.test(String(timeString || ""))
-        ? String(timeString)
-        : "";
+    const normalizedTime = /^\d{2}:\d{2}$/.test(String(timeString || "")) ? String(timeString) : "";
     if (!normalizedTime) return [];
-
-    // 前端 NotificationManager 的正式路徑是根集合 notification_rules。
-    // 只查詢目前分鐘的規則，不再每分鐘掃描完整 collectionGroup。
-    // isActive 保留程式端過濾，以相容舊資料的 boolean true 與字串 "true"，
-    // 同時避免需要 time + isActive 複合索引。
-    const matchingRulesSnap = await db.collection("notification_rules")
+    const matchingRulesSnap = await getTelegramNotificationRulesRef()
         .where("time", "==", normalizedTime)
         .get();
-
     return matchingRulesSnap.docs
         .map(normalizeTelegramNotificationRule)
         .filter(isTelegramNotificationRuleActive)
         .sort((a, b) => {
-            const createdDiff = String(a.createdAt || "").localeCompare(String(b.createdAt || ""));
+            const createdDiff = String(a.createdAtText || "").localeCompare(String(b.createdAtText || ""));
             if (createdDiff !== 0) return createdDiff;
-            return String(a.ruleId || "").localeCompare(String(b.ruleId || ""));
+            return String(a.id || "").localeCompare(String(b.id || ""));
         });
 }
 
+async function claimTelegramNotificationRuleRun(rule, runKey) {
+    const ref = getTelegramNotificationRulesRef().doc(String(rule.id));
+    return db.runTransaction(async (tx) => {
+        const snap = await tx.get(ref);
+        if (!snap.exists) return false;
+        const data = snap.data() || {};
+        if (String(data.lastRunKey || "") === String(runKey)) return false;
+        tx.set(ref, {
+            lastRunKey: String(runKey),
+            lastRunStatus: "running",
+            lastRunStartedAt: admin.firestore.FieldValue.serverTimestamp(),
+            lastRunStartedAtText: new Date().toISOString(),
+        }, { merge: true });
+        return true;
+    });
+}
+
+async function finalizeTelegramNotificationRuleRun(ruleId, payload = {}) {
+    await getTelegramNotificationRulesRef().doc(String(ruleId)).set({
+        ...payload,
+        lastRunCompletedAt: admin.firestore.FieldValue.serverTimestamp(),
+        lastRunCompletedAtText: new Date().toISOString(),
+        updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+        updatedAtText: new Date().toISOString(),
+    }, { merge: true });
+}
+
+async function createTelegramReportSnapshot(payload = {}) {
+    const ref = getTelegramReportSnapshotsRef().doc();
+    const clock = getTelegramAlertTaipeiClock();
+    const snapshotId = makeTelegramReadableCode("RPT", ref.id);
+    const snapshot = {
+        schemaVersion: TELEGRAM_V5_SCHEMA_VERSION,
+        snapshotId,
+        reportType: String(payload.reportType || "scheduled_report"),
+        scheduleId: String(payload.scheduleId || ""),
+        scheduleCode: String(payload.scheduleCode || ""),
+        scheduleName: String(payload.scheduleName || ""),
+        runKey: String(payload.runKey || ""),
+        cutoffDate: String(payload.cutoffDate || clock.todayStr),
+        cutoffAtText: String(payload.cutoffAtText || `${payload.cutoffDate || clock.todayStr} 23:59 Asia/Taipei`),
+        metricVersion: String(payload.metricVersion || TELEGRAM_V5_METRIC_VERSION),
+        policyIds: [...new Set((payload.policyIds || []).map(String).filter(Boolean))],
+        brandPayloads: payload.brandPayloads || {},
+        rankingPayload: payload.rankingPayload || null,
+        dataQuality: payload.dataQuality || null,
+        messagePreview: String(payload.messagePreview || "").slice(0, 3900),
+        sourceMeta: Array.isArray(payload.sourceMeta) ? payload.sourceMeta.slice(0, 100) : [],
+        readCount: Number(payload.readCount || 0),
+        createdBy: String(payload.createdBy || "notificationPatrol"),
+        createdAt: admin.firestore.FieldValue.serverTimestamp(),
+        createdAtText: new Date().toISOString(),
+        immutable: true,
+    };
+    await ref.create(snapshot);
+    return { id: ref.id, ...snapshot };
+}
+
+function buildTelegramWeekdayMorningBrief(rule, brandConfigs, dataByBrand, cutoffDate) {
+    const expectedProgress = getTelegramMonthProgressAtDate(cutoffDate);
+    const brandPayloads = {};
+    const storeRows = [];
+    const missingRows = [];
+    const lines = [
+        "📊 三品牌工作日營運晨報",
+        `統計截止：${cutoffDate} 23:59｜月份時間進度 ${expectedProgress}%`,
+        "",
+    ];
+
+    brandConfigs.forEach((brand) => {
+        const data = dataByBrand[brand.id] || {};
+        const overall = data.progressYesterday?.overall_summary || data.progress?.overall_summary || {};
+        const cash = Number(overall.cash || 0);
+        const accrual = Number(overall.accrual || 0);
+        const cashTarget = Number(overall.budget || 0);
+        const accrualTarget = Number(overall.accrualBudget || 0);
+        const cashRate = cashTarget > 0 ? Number(((cash / cashTarget) * 100).toFixed(1)) : null;
+        const accrualRate = accrualTarget > 0 ? Number(((accrual / accrualTarget) * 100).toFixed(1)) : null;
+        const cashGap = cashRate === null ? null : Number((cashRate - expectedProgress).toFixed(1));
+        const accrualGap = accrualRate === null ? null : Number((accrualRate - expectedProgress).toFixed(1));
+        const detailRows = Array.isArray(data.yesterdayStores?.stores_details) ? data.yesterdayStores.stores_details : [];
+        detailRows.forEach((row) => {
+            const value = Number(row.cash || 0);
+            if (!Number.isFinite(value)) return;
+            storeRows.push({
+                brandId: brand.id,
+                brand: brand.name,
+                storeName: normalizeSummaryCoreName(row.storeName),
+                cash: value,
+            });
+        });
+        const missingBrand = Array.isArray(data.missingReports?.brands) ? data.missingReports.brands[0] : null;
+        const missing = Array.isArray(missingBrand?.missingStores) ? missingBrand.missingStores : [];
+        missing.forEach((storeName) => missingRows.push({ brandId: brand.id, brand: brand.name, storeName: normalizeSummaryCoreName(storeName) }));
+        brandPayloads[brand.id] = {
+            brand: brand.name,
+            cash,
+            accrual,
+            cashTarget,
+            accrualTarget,
+            cashAchievementRate: cashRate,
+            accrualAchievementRate: accrualRate,
+            expectedProgress,
+            cashProgressGap: cashGap,
+            accrualProgressGap: accrualGap,
+            reportedStoreCount: detailRows.length,
+            missingStoreCount: missing.length,
+        };
+        lines.push(`【${brand.name}】`);
+        lines.push(`現金：$${cash.toLocaleString()}｜達成 ${cashRate === null ? "目標缺漏" : `${cashRate}%`}｜進度差 ${cashGap === null ? "-" : `${cashGap >= 0 ? "+" : ""}${cashGap}pp`}`);
+        lines.push(`權責：$${accrual.toLocaleString()}｜達成 ${accrualRate === null ? "目標缺漏" : `${accrualRate}%`}｜進度差 ${accrualGap === null ? "-" : `${accrualGap >= 0 ? "+" : ""}${accrualGap}pp`}`);
+        lines.push("");
+    });
+
+    const topCount = Math.max(1, Math.min(10, Number(rule.topCount || 3)));
+    const bottomCount = Math.max(1, Math.min(10, Number(rule.bottomCount || 3)));
+    const sorted = [...storeRows].sort((a, b) => b.cash - a.cash || `${a.brand}${a.storeName}`.localeCompare(`${b.brand}${b.storeName}`));
+    const top = sorted.slice(0, topCount);
+    const bottom = [...sorted].sort((a, b) => a.cash - b.cash || `${a.brand}${a.storeName}`.localeCompare(`${b.brand}${b.storeName}`)).slice(0, bottomCount);
+
+    lines.push(`🏆 昨日現金業績最佳 ${topCount} 店`);
+    top.forEach((row, index) => lines.push(`${index + 1}. ${row.brand} ${row.storeName}店｜$${row.cash.toLocaleString()}`));
+    lines.push("", `⚠️ 昨日現金業績後 ${bottomCount} 店`);
+    bottom.forEach((row, index) => lines.push(`${index + 1}. ${row.brand} ${row.storeName}店｜$${row.cash.toLocaleString()}`));
+
+    if (rule.includeMissingReports !== false) {
+        lines.push("", `資料完整度：昨日缺報 ${missingRows.length} 店`);
+        if (missingRows.length) {
+            lines.push(`缺報：${missingRows.slice(0, 12).map((row) => `${row.brand} ${row.storeName}店`).join("、")}${missingRows.length > 12 ? "…" : ""}`);
+            lines.push("未回報店家不列入最佳／最差排行。");
+        }
+    }
+
+    return {
+        message: lines.join("\n").slice(0, 3500),
+        brandPayloads,
+        rankingPayload: { top, bottom },
+        dataQuality: { missingReports: missingRows, reportedStoreCount: storeRows.length },
+    };
+}
+
+function buildTelegramScheduledBrandMessage(rule, brand, brandData, yesterdayStr) {
+    const ctx = brandData.ctx;
+    let finalMessage = String(rule.template || "").replace(/{date}/g, yesterdayStr);
+    let shouldSend = false;
+    let sourceResult = null;
+
+    if (rule.source === "top5_stores" && brandData.yesterdayStores) {
+        const top5 = (brandData.yesterdayStores.stores_details || [])
+            .map((row) => ({ name: `${normalizeSummaryCoreName(row.storeName)}店`, rev: Number(row.cash || 0) }))
+            .filter((row) => Number.isFinite(row.rev) && row.rev > 0)
+            .sort((a, b) => b.rev - a.rev)
+            .slice(0, 5);
+        if (top5.length > 0) {
+            shouldSend = true;
+            const badges = ["🥇", "🥈", "🥉", "4.", "5."];
+            const top5Text = top5.map((row, idx) => `${badges[idx]} ${row.name} ($${row.rev.toLocaleString()})`).join("\n");
+            finalMessage = (finalMessage || "{top5Stores}").replace(/{top5Stores}/g, `${top5Text}\n`);
+            finalMessage = `🏢 *【${brand.name} 專屬戰報】*\n${finalMessage}`;
+            sourceResult = brandData.yesterdayStores;
+        }
+    }
+    if (rule.source === "unreported" && brandData.missingReports) {
+        const missingBrand = Array.isArray(brandData.missingReports.brands) ? brandData.missingReports.brands[0] : null;
+        const detail = Array.isArray(missingBrand?.missingStores) ? missingBrand.missingStores : [];
+        if (detail.length > 0) {
+            shouldSend = true;
+            const missingText = detail.map((storeName) => `• ${normalizeSummaryCoreName(storeName)}店`).join("\n");
+            finalMessage = (finalMessage || "{missingStores}")
+                .replace(/{missingStores}/g, missingText)
+                .replace(/{missingCount}/g, String(detail.length));
+            finalMessage = `🚨 *【${brand.name} 異常通報】*\n${finalMessage}`;
+            sourceResult = brandData.missingReports;
+        }
+    }
+    if (rule.source === "bottom5_stores") {
+        const progressResult = rule.cutoffMode === "yesterday" ? brandData.progressYesterday : brandData.progress;
+        const expectedProgress = getTelegramMonthProgressAtDate(rule.cutoffMode === "yesterday" ? yesterdayStr : getTelegramAlertTaipeiClock().todayStr);
+        const bottom5 = (progressResult?.stores_details || [])
+            .map((row) => {
+                const cash = Number(row.cash || 0);
+                const budget = Number(row.budget || 0);
+                const rate = row.cashAchievementRate === null || row.cashAchievementRate === undefined
+                    ? (budget > 0 ? Number(((cash / budget) * 100).toFixed(1)) : null)
+                    : Number(row.cashAchievementRate);
+                return {
+                    name: `${normalizeSummaryCoreName(row.storeName)}店`,
+                    cash,
+                    budget,
+                    rate,
+                    gap: rate === null ? null : Number((rate - expectedProgress).toFixed(1)),
+                };
+            })
+            .filter((row) => row.rate !== null)
+            .sort((a, b) => a.rate - b.rate || a.cash - b.cash)
+            .slice(0, 5);
+        if (bottom5.length > 0) {
+            shouldSend = true;
+            const bottom5Text = bottom5
+                .map((row, idx) => `${idx + 1}. ${row.name}｜達成 ${row.rate.toFixed(1)}%｜進度差 ${row.gap >= 0 ? "+" : ""}${row.gap}pp｜$${row.cash.toLocaleString()}`)
+                .join("\n");
+            finalMessage = (finalMessage || "{bottom5Stores}").replace(/{bottom5Stores}/g, `${bottom5Text}\n`);
+            finalMessage = `⚠️ *【${brand.name} 現金進度關注名單】*\n${finalMessage}`;
+            sourceResult = progressResult;
+        }
+    }
+    if (rule.source === "top5_therapists" && brandData.therapists) {
+        const top5T = (brandData.therapists.therapists_details || [])
+            .map((row) => ({ ...row, revenue: Number(row.revenue || row.totalRevenue || 0) }))
+            .filter((row) => Number.isFinite(row.revenue) && row.revenue > 0)
+            .sort((a, b) => b.revenue - a.revenue)
+            .slice(0, 5);
+        if (top5T.length > 0) {
+            shouldSend = true;
+            const badges = ["🥇", "🥈", "🥉", "4.", "5."];
+            const top5Text = top5T.map((row, idx) => `${badges[idx]} ${row.personName} (${normalizeSummaryCoreName(row.storeName)}店) - $${row.revenue.toLocaleString()}`).join("\n");
+            finalMessage = (finalMessage || "{top5Therapists}").replace(/{top5Therapists}/g, `${top5Text}\n`);
+            finalMessage = `🌟 *【${brand.name} 個人榮耀】*\n${finalMessage}`;
+            sourceResult = brandData.therapists;
+        }
+    }
+    if (rule.source === "progress") {
+        const progressResult = rule.cutoffMode === "yesterday" ? brandData.progressYesterday : brandData.progress;
+        if (!progressResult) return { shouldSend, finalMessage, sourceResult, ctx };
+        const overall = progressResult.overall_summary || {};
+        const cashTotal = Number(overall.cash || 0);
+        const accrualTotal = Number(overall.accrual || 0);
+        const cashTarget = Number(overall.budget || 0);
+        const accrualTarget = Number(overall.accrualBudget || 0);
+        const cashRate = cashTarget > 0 ? ((cashTotal / cashTarget) * 100).toFixed(1) : "0.0";
+        const accrualRate = accrualTarget > 0 ? ((accrualTotal / accrualTarget) * 100).toFixed(1) : "0.0";
+        if (cashTotal !== 0 || accrualTotal !== 0 || cashTarget > 0 || accrualTarget > 0) {
+            shouldSend = true;
+            finalMessage = (finalMessage || "現金 {cashTotal}（{cashRate}%）\n權責 {accrualTotal}（{accrualRate}%）")
+                .replace(/{cashTotal}/g, cashTotal.toLocaleString())
+                .replace(/{accrualTotal}/g, accrualTotal.toLocaleString())
+                .replace(/{cashRate}/g, cashRate)
+                .replace(/{accrualRate}/g, accrualRate);
+            finalMessage = `📊 *【${brand.name} 本月累積進度】*\n${finalMessage}`;
+            sourceResult = progressResult;
+        }
+    }
+    return { shouldSend, finalMessage, sourceResult, ctx };
+}
+
 exports.notificationPatrol = onSchedule({
-    schedule: "* 8-11 * * *",
+    schedule: "* * * * *",
     timeZone: "Asia/Taipei",
     secrets: [TELEGRAM_BOT_TOKEN_SECRET],
-    timeoutSeconds: 180,
+    timeoutSeconds: 240,
     memory: "512MiB",
 }, async () => {
     const clock = getTelegramAlertTaipeiClock();
     const timeString = clock.timeText;
+    const runKey = `${clock.todayStr}|${timeString}`;
 
     try {
-        // 每一份規則文件都是獨立任務。即使 source 與 targetGroup 相同，
-        // 也不再以物件 key 覆蓋，確保不同名稱、文案或用途都會逐一執行。
-        const rulesList = await loadTelegramNotificationRulesAtTime(timeString);
+        const rulesAtTime = await loadTelegramNotificationRulesAtTime(timeString);
+        const rulesList = rulesAtTime.filter((rule) => isTelegramScheduleDueOnDay(rule, clock));
         if (rulesList.length === 0) {
-            console.log(`目前時間 ${timeString} 查無符合任務，機器人休眠。`);
+            console.log(`目前時間 ${timeString} 查無符合工作日與啟用條件的任務。`);
             return;
         }
 
-        const sourceSet = new Set(rulesList.map((rule) => String(rule.source || "")));
+        const claimedRules = [];
+        for (const rule of rulesList) {
+            if (await claimTelegramNotificationRuleRun(rule, runKey)) claimedRules.push(rule);
+        }
+        if (!claimedRules.length) return;
+
+        const sourceSet = new Set(claimedRules.map((rule) => String(rule.source || "")));
         const yesterdayStr = shiftTelegramAgentDate(clock.todayStr, -1);
-        const monthStart = `${clock.yearMonth}-01`;
+        const monthStart = `${yesterdayStr.slice(0, 7)}-01`;
         const scheduledScopes = ["telegram_analysis", "ranking", "brand_totals", "active_alert"];
         const auditScopes = ["data_audit", "active_alert"];
 
-        // 所有固定排程共用一次長期規則讀取，避免每品牌、每規則重複掃描。
         const sharedPolicyCtx = createTelegramAgentContext({
             chatId: "notificationPatrol:shared-policy",
             userId: "notificationPatrol",
@@ -5182,129 +6386,154 @@ exports.notificationPatrol = onSchedule({
             { id: "yibo", name: "伊啵" },
         ];
         const dataByBrand = {};
+        const needsBrief = sourceSet.has("weekday_morning_brief");
+        const needsProgressCurrent = claimedRules.some((rule) => ["progress", "bottom5_stores"].includes(rule.source) && rule.cutoffMode === "current");
+        const needsProgressYesterday = needsBrief || claimedRules.some((rule) => ["progress", "bottom5_stores"].includes(rule.source) && rule.cutoffMode === "yesterday");
+        const hasAllBrandRule = needsBrief || claimedRules.some((rule) => !(rule.brandIds || []).length);
+        const requestedBrandIds = new Set(claimedRules.flatMap((rule) => (rule.brandIds || []).map(normalizeTelegramAgentBrandId).filter(Boolean)));
+        const dataBrandConfigs = hasAllBrandRule
+            ? brandConfigs
+            : brandConfigs.filter((brand) => requestedBrandIds.has(brand.id));
 
-        await Promise.all(brandConfigs.map(async (brand, index) => {
+        await Promise.all(dataBrandConfigs.map(async (brand, index) => {
             const ctx = createTelegramNotificationPolicyContext(sharedPolicyCtx, brand.id, `scheduled reports:${brand.id}`);
             if (index === 0 && sharedPolicyCtx.readCount > 0) {
                 ctx.readCount += sharedPolicyCtx.readCount;
                 ctx.sources.unshift(...sharedPolicyCtx.sources);
             }
-
-            const [progress, yesterdayStores, missingReports, therapists] = await Promise.all([
-                sourceSet.has("progress")
-                    ? getStorePerformance(monthStart, clock.todayStr, null, brand.name, ctx, scheduledScopes)
-                    : Promise.resolve(null),
-                sourceSet.has("top5_stores")
-                    ? getStorePerformance(yesterdayStr, yesterdayStr, null, brand.name, ctx, scheduledScopes)
-                    : Promise.resolve(null),
-                sourceSet.has("unreported")
-                    ? getMissingReports(yesterdayStr, yesterdayStr, brand.name, ctx, auditScopes)
-                    : Promise.resolve(null),
-                sourceSet.has("top5_therapists")
-                    ? getTherapistPerformance(yesterdayStr, yesterdayStr, null, null, brand.name, ctx, [], scheduledScopes)
-                    : Promise.resolve(null),
+            const [progressCurrent, progressYesterday, yesterdayStores, missingReports, therapists] = await Promise.all([
+                needsProgressCurrent ? getStorePerformance(`${clock.yearMonth}-01`, clock.todayStr, null, brand.name, ctx, scheduledScopes) : Promise.resolve(null),
+                needsProgressYesterday ? getStorePerformance(monthStart, yesterdayStr, null, brand.name, ctx, scheduledScopes) : Promise.resolve(null),
+                (sourceSet.has("top5_stores") || needsBrief) ? getStorePerformance(yesterdayStr, yesterdayStr, null, brand.name, ctx, scheduledScopes) : Promise.resolve(null),
+                (sourceSet.has("unreported") || needsBrief) ? getMissingReports(yesterdayStr, yesterdayStr, brand.name, ctx, auditScopes) : Promise.resolve(null),
+                sourceSet.has("top5_therapists") ? getTherapistPerformance(yesterdayStr, yesterdayStr, null, null, brand.name, ctx, [], scheduledScopes) : Promise.resolve(null),
             ]);
-
-            dataByBrand[brand.id] = { ctx, progress, yesterdayStores, missingReports, therapists };
+            dataByBrand[brand.id] = { ctx, progress: progressCurrent, progressYesterday, yesterdayStores, missingReports, therapists };
         }));
 
-        for (const rule of rulesList) {
-            const chatId = rule.targetGroup === "manager" ? TARGET_CHAT_ID_MANAGER : TARGET_CHAT_ID_MAIN;
-
-            for (const brand of brandConfigs) {
-                const brandData = dataByBrand[brand.id] || {};
-                const ctx = brandData.ctx;
-                let finalMessage = String(rule.template || "").replace(/{date}/g, yesterdayStr);
-                let shouldSend = false;
-                let sourceResult = null;
-
-                if (rule.source === "top5_stores" && brandData.yesterdayStores) {
-                    const top5 = (brandData.yesterdayStores.stores_details || [])
-                        .map((row) => ({ name: `${normalizeSummaryCoreName(row.storeName)}店`, rev: Number(row.cash || 0) }))
-                        .sort((a, b) => b.rev - a.rev)
-                        .slice(0, 5)
-                        .filter((store) => store.rev > 0);
-                    if (top5.length > 0) {
-                        shouldSend = true;
-                        const badges = ["🥇", "🥈", "🥉", "4.", "5."];
-                        const top5Text = top5
-                            .map((store, idx) => `${badges[idx]} ${store.name} ($${store.rev.toLocaleString()})`)
-                            .join("\n");
-                        finalMessage = finalMessage.replace(/{top5Stores}/g, `${top5Text}\n`);
-                        finalMessage = `🏢 *【${brand.name} 專屬戰報】*\n${finalMessage}`;
-                        sourceResult = brandData.yesterdayStores;
-                    }
+        for (const rule of claimedRules) {
+            const chatId = resolveTelegramScheduleChatId(rule);
+            try {
+                if (rule.source === "weekday_morning_brief") {
+                    const built = buildTelegramWeekdayMorningBrief(rule, brandConfigs, dataByBrand, yesterdayStr);
+                    const readCount = Object.values(dataByBrand).reduce((sum, item) => sum + Number(item.ctx?.readCount || 0), 0);
+                    const policyIds = Object.values(dataByBrand).flatMap((item) => item.ctx?.activePolicyIds || []);
+                    const sourceMeta = Object.values(dataByBrand).flatMap((item) => item.progress?.source_meta || []);
+                    const snapshot = await createTelegramReportSnapshot({
+                        reportType: "weekday_morning_brief",
+                        scheduleId: rule.id,
+                        scheduleCode: rule.scheduleCode,
+                        scheduleName: rule.name,
+                        runKey,
+                        cutoffDate: yesterdayStr,
+                        cutoffAtText: `${yesterdayStr} 23:59 Asia/Taipei`,
+                        policyIds,
+                        brandPayloads: built.brandPayloads,
+                        rankingPayload: built.rankingPayload,
+                        dataQuality: built.dataQuality,
+                        messagePreview: built.message,
+                        sourceMeta,
+                        readCount,
+                    });
+                    const message = `${built.message}\n\n資料截止：${snapshot.cutoffAtText}\n報表快照：${snapshot.snapshotId}｜口徑：${snapshot.metricVersion}`.slice(0, 3900);
+                    await sendTelegramMessage(chatId, message);
+                    await finalizeTelegramNotificationRuleRun(rule.id, {
+                        lastRunStatus: "sent",
+                        lastSnapshotId: snapshot.snapshotId,
+                        lastSnapshotDocId: snapshot.id,
+                        lastMessagePreview: message.slice(0, 800),
+                    });
+                    continue;
                 }
 
-                if (rule.source === "unreported" && brandData.missingReports) {
-                    const report = (brandData.missingReports.brands || [])[0] || null;
-                    if (report) {
-                        shouldSend = true;
-                        const missing = Array.isArray(report.missingStores) ? report.missingStores : [];
-                        if (missing.length > 0) {
-                            const missingText = missing.map((store) => `• ${store}`).join("\n");
-                            finalMessage = finalMessage.replace(/{missingStores}/g, missingText);
-                            finalMessage = finalMessage.replace(/{missingCount}/g, String(missing.length));
-                            finalMessage = `🚨 *【${brand.name} 異常通報】*\n${finalMessage}`;
-                        } else {
-                            finalMessage = finalMessage.replace(/{missingStores}/g, "✅ 表現優異，全區皆已完成回報！");
-                            finalMessage = finalMessage.replace(/{missingCount}/g, "0");
-                            finalMessage = `✅ *【${brand.name} 回報總結】*\n${finalMessage}`;
-                        }
-                        sourceResult = { source_meta: [{ source: report.source || "正式組織＋品牌限定日報" }] };
-                    }
+                const ruleBrandSet = new Set((rule.brandIds || []).map(normalizeTelegramAgentBrandId).filter(Boolean));
+                const targetBrandConfigs = ruleBrandSet.size
+                    ? brandConfigs.filter((brand) => ruleBrandSet.has(brand.id))
+                    : brandConfigs;
+                const prepared = targetBrandConfigs
+                    .map((brand) => ({ brand, ...buildTelegramScheduledBrandMessage(rule, brand, dataByBrand[brand.id] || {}, yesterdayStr) }))
+                    .filter((item) => item.shouldSend);
+                const brandPayloads = Object.fromEntries(prepared.map((item) => [item.brand.id, item.sourceResult?.overall_summary || item.sourceResult || {}]));
+                const readCount = prepared.reduce((sum, item) => sum + Number(item.ctx?.readCount || 0), 0);
+                const policyIds = prepared.flatMap((item) => item.ctx?.activePolicyIds || []);
+                const snapshot = await createTelegramReportSnapshot({
+                    reportType: rule.source,
+                    scheduleId: rule.id,
+                    scheduleCode: rule.scheduleCode,
+                    scheduleName: rule.name,
+                    runKey,
+                    cutoffDate: rule.source === "progress" && rule.cutoffMode === "current" ? clock.todayStr : yesterdayStr,
+                    cutoffAtText: rule.source === "progress" && rule.cutoffMode === "current" ? `${clock.todayStr} ${timeString} Asia/Taipei` : `${yesterdayStr} 23:59 Asia/Taipei`,
+                    policyIds,
+                    brandPayloads,
+                    messagePreview: prepared.map((item) => item.finalMessage).join("\n\n"),
+                    sourceMeta: prepared.flatMap((item) => item.sourceResult?.source_meta || []),
+                    readCount,
+                });
+                for (const item of prepared) {
+                    const messageWithFooter = appendTelegramScheduledDataFooter(item.finalMessage, item.sourceResult, item.ctx, snapshot);
+                    await sendTelegramMessage(chatId, messageWithFooter, { parse_mode: "Markdown" });
                 }
-
-                if (rule.source === "top5_therapists" && brandData.therapists) {
-                    const top5T = (brandData.therapists.therapists_details || [])
-                        .sort((a, b) => Number(b.revenue || 0) - Number(a.revenue || 0))
-                        .slice(0, 5)
-                        .filter((row) => Number(row.revenue || 0) > 0);
-                    if (top5T.length > 0) {
-                        shouldSend = true;
-                        const badges = ["🥇", "🥈", "🥉", "4.", "5."];
-                        const top5Text = top5T.map((row, idx) => {
-                            const storeName = `${normalizeSummaryCoreName(row.storeName)}店`;
-                            return `${badges[idx]} ${row.personName} (${storeName}) - $${Number(row.revenue || 0).toLocaleString()}`;
-                        }).join("\n");
-                        finalMessage = finalMessage.replace(/{top5Therapists}/g, `${top5Text}\n`);
-                        finalMessage = `🌟 *【${brand.name} 個人榮耀】*\n${finalMessage}`;
-                        sourceResult = brandData.therapists;
-                    }
-                }
-
-                if (rule.source === "progress" && brandData.progress) {
-                    const overall = brandData.progress.overall_summary || {};
-                    const cashTotal = Number(overall.cash || 0);
-                    const accrualTotal = Number(overall.accrual || 0);
-                    const cashTarget = Number(overall.budget || 0);
-                    const accrualTarget = Number(overall.accrualBudget || 0);
-                    const cashRate = cashTarget > 0 ? ((cashTotal / cashTarget) * 100).toFixed(1) : "0.0";
-                    const accrualRate = accrualTarget > 0 ? ((accrualTotal / accrualTarget) * 100).toFixed(1) : "0.0";
-
-                    if (cashTotal !== 0 || accrualTotal !== 0 || cashTarget > 0 || accrualTarget > 0) {
-                        shouldSend = true;
-                        finalMessage = finalMessage.replace(/{cashTotal}/g, cashTotal.toLocaleString());
-                        finalMessage = finalMessage.replace(/{accrualTotal}/g, accrualTotal.toLocaleString());
-                        finalMessage = finalMessage.replace(/{cashRate}/g, cashRate);
-                        finalMessage = finalMessage.replace(/{accrualRate}/g, accrualRate);
-                        finalMessage = `📊 *【${brand.name} 本月累積進度】*\n${finalMessage}`;
-                        sourceResult = brandData.progress;
-                    }
-                }
-
-                if (shouldSend) {
-                    try {
-                        const messageWithFooter = appendTelegramScheduledDataFooter(finalMessage, sourceResult, ctx);
-                        await sendTelegramMessage(chatId, messageWithFooter, { parse_mode: "Markdown" });
-                    } catch (error) {
-                        console.error(`❌ Telegram 發送失敗：${error.message}`);
-                    }
-                }
+                await finalizeTelegramNotificationRuleRun(rule.id, {
+                    lastRunStatus: prepared.length ? "sent" : "clear_not_sent",
+                    lastSnapshotId: snapshot.snapshotId,
+                    lastSnapshotDocId: snapshot.id,
+                    lastMessagePreview: snapshot.messagePreview.slice(0, 800),
+                });
+            } catch (error) {
+                console.error(`❌ 排程 ${rule.name || rule.id} 執行失敗：`, error);
+                await finalizeTelegramNotificationRuleRun(rule.id, {
+                    lastRunStatus: "error",
+                    lastErrorMessage: String(error.message || error).slice(0, 1000),
+                });
             }
         }
     } catch (error) {
-        console.error("❌ 巡邏員執行錯誤：", error);
+        console.error("❌ notificationPatrol 執行錯誤：", error);
+    }
+});
+
+
+
+exports.telegramTaskFollowUp = onSchedule({
+    schedule: "0 9 * * 1-5",
+    timeZone: "Asia/Taipei",
+    secrets: [TELEGRAM_BOT_TOKEN_SECRET],
+    timeoutSeconds: 120,
+    memory: "256MiB",
+}, async () => {
+    const clock = getTelegramAlertTaipeiClock();
+    const tasks = await loadTelegramTasks(null, { statuses: ["open", "in_progress", "overdue"], limit: 300 });
+    for (const task of tasks) {
+        if (!task.dueDate || task.lastReminderAtText?.slice(0, 10) === clock.todayStr) continue;
+        const daysToDue = Math.round((Date.parse(`${task.dueDate}T00:00:00+08:00`) - Date.parse(`${clock.todayStr}T00:00:00+08:00`)) / 86400000);
+        if (daysToDue > 1) continue;
+        const isOverdue = daysToDue < 0;
+        const nextStatus = isOverdue ? "overdue" : task.status;
+        const targetChatId = task.ownerChatId || task.createdByChatId || TARGET_CHAT_ID_MANAGER;
+        const message = [
+            isOverdue ? "🚨 改善任務已逾期" : daysToDue === 0 ? "⏰ 改善任務今日到期" : "⏳ 改善任務明日到期",
+            `${task.taskCode}｜${task.title}`,
+            `${task.brand || ""}${task.storeName ? ` ${task.storeName}店` : ""}`,
+            `負責人：${task.ownerName || "待指派"}｜期限：${task.dueDate}`,
+            task.targetText ? `目標：${task.targetText}` : "",
+        ].filter(Boolean).join("\n");
+        try {
+            await sendTelegramMessage(targetChatId, message, {
+                reply_markup: buildTelegramV5InlineKeyboard({ task }),
+            });
+            await getTelegramAgentTasksRef().doc(task.id).set({
+                status: nextStatus,
+                reminderCount: admin.firestore.FieldValue.increment(1),
+                lastReminderAt: admin.firestore.FieldValue.serverTimestamp(),
+                lastReminderAtText: new Date().toISOString(),
+                updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+                updatedAtText: new Date().toISOString(),
+            }, { merge: true });
+            await writeTelegramTaskAudit(isOverdue ? "overdue_reminder" : "due_reminder", { ...task, status: nextStatus }, { source: "telegramTaskFollowUp" });
+        } catch (error) {
+            console.error(`Task reminder failed ${task.taskCode}:`, error.message);
+        }
     }
 });
 

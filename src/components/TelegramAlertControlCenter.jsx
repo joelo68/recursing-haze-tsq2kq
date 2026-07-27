@@ -18,6 +18,9 @@ import {
   Settings2,
   UserPlus,
   XCircle,
+  FileText,
+  ListChecks,
+  CheckCircle2,
 } from "lucide-react";
 import {
   addDoc,
@@ -25,6 +28,9 @@ import {
   doc,
   getDoc,
   getDocs,
+  limit,
+  orderBy,
+  query,
   serverTimestamp,
   setDoc,
 } from "firebase/firestore";
@@ -176,6 +182,31 @@ const createDefaultPermissionDraft = () => ({
   enabled: true,
   allowPersonalPreferences: true,
 });
+
+const createDefaultV5ScheduleEditor = () => ({
+  name: "三品牌工作日晨報",
+  source: "weekday_morning_brief",
+  reportType: "weekday_morning_brief",
+  time: "10:00",
+  weekdays: [1, 2, 3, 4, 5],
+  targetGroup: "manager",
+  isActive: true,
+  pausedUntil: "",
+  cutoffMode: "yesterday",
+  topCount: 3,
+  bottomCount: 3,
+  includeMissingReports: true,
+});
+
+const V5_WEEKDAY_LABELS = ["日", "一", "二", "三", "四", "五", "六"];
+
+const getV5TaskStatusLabel = (status) => ({
+  open: "待處理",
+  in_progress: "處理中",
+  completed: "已完成",
+  cancelled: "已取消",
+  overdue: "已逾期",
+}[status] || status || "未知");
 
 const normalizePolicyStoreCore = (value = "") =>
   String(value || "")
@@ -550,6 +581,11 @@ const TelegramAlertControlCenter = () => {
   const [policyPermissions, setPolicyPermissions] = useState({ users: {} });
   const [permissionDraft, setPermissionDraft] = useState(createDefaultPermissionDraft);
   const [policyPanelOpen, setPolicyPanelOpen] = useState(true);
+  const [reportSnapshots, setReportSnapshots] = useState([]);
+  const [v5Schedules, setV5Schedules] = useState([]);
+  const [improvementTasks, setImprovementTasks] = useState([]);
+  const [v5ScheduleEditor, setV5ScheduleEditor] = useState(createDefaultV5ScheduleEditor);
+  const [v5PanelOpen, setV5PanelOpen] = useState(true);
   const canManagePolicyCenter = ["master", "director"].includes(String(userRole || ""));
 
   const configRef = doc(
@@ -584,6 +620,27 @@ const TelegramAlertControlCenter = () => {
     ...TELEGRAM_ALERT_DATA_PATH,
     "global_settings",
     "telegram_agent_policy_permissions"
+  );
+  const reportSnapshotCollectionRef = collection(
+    db,
+    ...TELEGRAM_ALERT_DATA_PATH,
+    "telegram_report_snapshots"
+  );
+  const improvementTaskCollectionRef = collection(
+    db,
+    ...TELEGRAM_ALERT_DATA_PATH,
+    "telegram_agent_tasks"
+  );
+  const v5ScheduleCollectionRef = collection(db, "notification_rules");
+  const v5ScheduleAuditCollectionRef = collection(
+    db,
+    ...TELEGRAM_ALERT_DATA_PATH,
+    "telegram_schedule_audits"
+  );
+  const v5TaskAuditCollectionRef = collection(
+    db,
+    ...TELEGRAM_ALERT_DATA_PATH,
+    "telegram_agent_task_audits"
   );
 
   const notify = (message, type = "info") => {
@@ -896,6 +953,140 @@ const TelegramAlertControlCenter = () => {
   };
 
 
+
+  const refreshV5Operations = async ({ silent = false } = {}) => {
+    if (!silent) setLoadingAction("refreshV5Operations");
+    try {
+      const [snapshotSnap, scheduleSnap, taskSnap] = await Promise.all([
+        getDocs(query(reportSnapshotCollectionRef, orderBy("createdAtText", "desc"), limit(30))),
+        getDocs(query(v5ScheduleCollectionRef, orderBy("time", "asc"), limit(200))),
+        getDocs(query(improvementTaskCollectionRef, orderBy("createdAtText", "desc"), limit(100))),
+      ]);
+      setReportSnapshots(
+        snapshotSnap.docs
+          .map((item) => ({ id: item.id, ...item.data() }))
+          .sort((a, b) => String(b.createdAtText || "").localeCompare(String(a.createdAtText || "")))
+          .slice(0, 30)
+      );
+      setV5Schedules(
+        scheduleSnap.docs
+          .map((item) => ({ id: item.id, ...item.data() }))
+          .sort((a, b) => `${a.time || ""}|${a.name || ""}`.localeCompare(`${b.time || ""}|${b.name || ""}`))
+      );
+      setImprovementTasks(
+        taskSnap.docs
+          .map((item) => ({ id: item.id, ...item.data() }))
+          .sort((a, b) => String(b.createdAtText || "").localeCompare(String(a.createdAtText || "")))
+          .slice(0, 100)
+      );
+      if (!silent) notify("v5 報表快照、排程與改善任務已更新", "success");
+    } catch (error) {
+      notify(error.message || "v5 營運中樞資料載入失敗", "error");
+    } finally {
+      if (!silent) setLoadingAction(null);
+    }
+  };
+
+  const saveV5MorningBriefSchedule = async () => {
+    if (!canManagePolicyCenter) {
+      notify("只有 master／director 可以建立固定排程", "error");
+      return;
+    }
+    try {
+      setLoadingAction("saveV5Schedule");
+      const payload = {
+        ...v5ScheduleEditor,
+        weekdays: [...new Set((v5ScheduleEditor.weekdays || []).map(Number))],
+        topCount: Math.max(1, Math.min(10, Number(v5ScheduleEditor.topCount) || 3)),
+        bottomCount: Math.max(1, Math.min(10, Number(v5ScheduleEditor.bottomCount) || 3)),
+        scheduleCode: `SCH-${new Date().toLocaleDateString("en-CA", { timeZone: "Asia/Taipei" }).replace(/-/g, "")}-${Math.random().toString(36).slice(2, 8).toUpperCase()}`,
+        createdByName: currentUser?.name || "director",
+        createdByUserId: currentUser?.id || currentUser?.uid || "",
+        createdAt: serverTimestamp(),
+        createdAtText: new Date().toISOString(),
+        updatedAt: serverTimestamp(),
+        updatedAtText: new Date().toISOString(),
+      };
+      const scheduleRef = await addDoc(v5ScheduleCollectionRef, payload);
+      await addDoc(v5ScheduleAuditCollectionRef, {
+        action: "create",
+        scheduleId: scheduleRef.id,
+        scheduleCode: payload.scheduleCode,
+        scheduleSnapshot: payload,
+        actor: { source: "saas_control_center", name: currentUser?.name || "director", role: userRole || "director" },
+        createdAt: serverTimestamp(),
+        createdAtText: new Date().toISOString(),
+      });
+      await refreshV5Operations({ silent: true });
+      notify("三品牌工作日晨報排程已建立", "success");
+    } catch (error) {
+      notify(error.message || "建立工作日晨報排程失敗", "error");
+    } finally {
+      setLoadingAction(null);
+    }
+  };
+
+  const toggleV5Schedule = async (schedule) => {
+    if (!canManagePolicyCenter) return notify("目前權限無法修改排程", "error");
+    try {
+      setLoadingAction(`v5Schedule:${schedule.id}`);
+      const active = schedule.isActive === true || String(schedule.isActive).toLowerCase() === "true";
+      await setDoc(doc(v5ScheduleCollectionRef, schedule.id), {
+        isActive: !active,
+        updatedAt: serverTimestamp(),
+        updatedAtText: new Date().toISOString(),
+      }, { merge: true });
+      await addDoc(v5ScheduleAuditCollectionRef, {
+        action: active ? "deactivate" : "activate",
+        scheduleId: schedule.id,
+        scheduleCode: schedule.scheduleCode || "",
+        scheduleSnapshot: { ...schedule, isActive: !active },
+        actor: { source: "saas_control_center", name: currentUser?.name || "director", role: userRole || "director" },
+        createdAt: serverTimestamp(),
+        createdAtText: new Date().toISOString(),
+      });
+      await refreshV5Operations({ silent: true });
+      notify(active ? "排程已停用" : "排程已啟用", "success");
+    } catch (error) {
+      notify(error.message || "排程狀態更新失敗", "error");
+    } finally {
+      setLoadingAction(null);
+    }
+  };
+
+  const updateV5TaskStatus = async (task, status) => {
+    if (!canManagePolicyCenter) return notify("目前權限無法修改改善任務", "error");
+    try {
+      setLoadingAction(`v5Task:${task.id}`);
+      const taskPatch = {
+        status,
+        ...(status === "completed" ? {
+          completedAt: serverTimestamp(),
+          completedAtText: new Date().toISOString(),
+          resultText: task.resultText || "由 SaaS 營運中樞標記完成",
+        } : {}),
+        updatedAt: serverTimestamp(),
+        updatedAtText: new Date().toISOString(),
+      };
+      await setDoc(doc(improvementTaskCollectionRef, task.id), taskPatch, { merge: true });
+      await addDoc(v5TaskAuditCollectionRef, {
+        action: "status_change",
+        taskId: task.id,
+        taskCode: task.taskCode || "",
+        taskSnapshot: { ...task, status },
+        actor: { source: "saas_control_center", name: currentUser?.name || "director", role: userRole || "director" },
+        createdAt: serverTimestamp(),
+        createdAtText: new Date().toISOString(),
+      });
+      await refreshV5Operations({ silent: true });
+      notify(`任務已更新為${getV5TaskStatusLabel(status)}`, "success");
+    } catch (error) {
+      notify(error.message || "任務狀態更新失敗", "error");
+    } finally {
+      setLoadingAction(null);
+    }
+  };
+
   const refreshStatus = async ({ silent = false } = {}) => {
     if (!silent) setLoadingAction("refreshStatus");
     try {
@@ -913,23 +1104,29 @@ const TelegramAlertControlCenter = () => {
     let cancelled = false;
 
     const load = async () => {
-      if (userRole !== "director") {
+      if (!["master", "director"].includes(String(userRole || ""))) {
         if (!cancelled) setIsLoaded(true);
         return;
       }
 
       try {
-        const [configSnap, statusSnap, policySnap, permissionSnap] = await Promise.all([
+        const [configSnap, statusSnap, policySnap, permissionSnap, snapshotSnap, scheduleSnap, taskSnap] = await Promise.all([
           getDoc(configRef),
           getDoc(statusRef),
           getDocs(policyCollectionRef),
           getDoc(policyPermissionsRef),
+          getDocs(query(reportSnapshotCollectionRef, orderBy("createdAtText", "desc"), limit(30))),
+          getDocs(query(v5ScheduleCollectionRef, orderBy("time", "asc"), limit(200))),
+          getDocs(query(improvementTaskCollectionRef, orderBy("createdAtText", "desc"), limit(100))),
         ]);
         if (cancelled) return;
         setForm(normalizeTelegramAlertForm(configSnap.exists() ? configSnap.data() : {}));
         setStatus(statusSnap.exists() ? statusSnap.data() : null);
         setPolicies(policySnap.docs.map((item) => ({ id: item.id, ...item.data() })));
         setPolicyPermissions(permissionSnap.exists() ? permissionSnap.data() : { users: {} });
+        setReportSnapshots(snapshotSnap.docs.map((item) => ({ id: item.id, ...item.data() })).sort((a, b) => String(b.createdAtText || "").localeCompare(String(a.createdAtText || ""))).slice(0, 30));
+        setV5Schedules(scheduleSnap.docs.map((item) => ({ id: item.id, ...item.data() })).sort((a, b) => `${a.time || ""}|${a.name || ""}`.localeCompare(`${b.time || ""}|${b.name || ""}`)));
+        setImprovementTasks(taskSnap.docs.map((item) => ({ id: item.id, ...item.data() })).sort((a, b) => String(b.createdAtText || "").localeCompare(String(a.createdAtText || ""))).slice(0, 100));
       } catch (error) {
         if (!cancelled) notify(error.message || "Telegram 戰情設定載入失敗", "error");
       } finally {
@@ -945,7 +1142,7 @@ const TelegramAlertControlCenter = () => {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [userRole]);
 
-  if (userRole !== "director") return null;
+  if (!["master", "director"].includes(String(userRole || ""))) return null;
 
   const toggleArrayValue = (field, value) => {
     setForm((previous) => {
@@ -2041,6 +2238,181 @@ const TelegramAlertControlCenter = () => {
                     </div>
                   )}
                 </div>
+              </div>
+            </div>
+          )}
+        </div>
+
+
+
+        <div className="overflow-hidden rounded-[1.75rem] border border-indigo-100 bg-gradient-to-br from-white via-indigo-50/20 to-sky-50/40 shadow-sm">
+          <button
+            type="button"
+            onClick={() => setV5PanelOpen((previous) => !previous)}
+            className="flex w-full items-center justify-between gap-3 border-b border-indigo-100 px-5 py-4 text-left"
+          >
+            <div className="flex items-center gap-3">
+              <div className="rounded-2xl bg-indigo-100 p-2.5 text-indigo-700"><ListChecks size={18} /></div>
+              <div>
+                <p className="text-sm font-black text-stone-800">v5 營運中樞</p>
+                <p className="mt-1 text-[10px] font-bold text-stone-400">可重現報表快照、自然語言排程與改善任務閉環</p>
+              </div>
+            </div>
+            <span className="text-[10px] font-black text-indigo-600">{v5PanelOpen ? "收合" : "展開"}</span>
+          </button>
+
+          {v5PanelOpen && (
+            <div className="space-y-5 p-5">
+              <div className="flex flex-wrap items-center justify-between gap-3">
+                <div className="flex flex-wrap gap-2 text-[10px] font-black">
+                  <span className="rounded-full bg-indigo-50 px-3 py-1.5 text-indigo-700">快照 {reportSnapshots.length}</span>
+                  <span className="rounded-full bg-sky-50 px-3 py-1.5 text-sky-700">排程 {v5Schedules.length}</span>
+                  <span className="rounded-full bg-amber-50 px-3 py-1.5 text-amber-700">待辦 {improvementTasks.filter((task) => ["open", "in_progress", "overdue"].includes(task.status)).length}</span>
+                </div>
+                <ActionButton onClick={() => refreshV5Operations()} disabled={isBusy} variant="secondary">
+                  <RefreshCw size={13} className={loadingAction === "refreshV5Operations" ? "animate-spin" : ""} />
+                  更新營運中樞
+                </ActionButton>
+              </div>
+
+              <div className="rounded-2xl border border-sky-100 bg-white p-4">
+                <div className="mb-4 flex items-center gap-2">
+                  <Calendar size={16} className="text-sky-600" />
+                  <div>
+                    <p className="text-xs font-black text-stone-700">建立三品牌工作日晨報</p>
+                    <p className="mt-1 text-[10px] font-bold text-stone-400">數據固定截至昨日 23:59，包含現金、權責、進度差與跨品牌最佳／最差店家。</p>
+                  </div>
+                </div>
+                <div className="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-5">
+                  <label className="rounded-xl border border-stone-100 bg-stone-50 p-3 xl:col-span-2">
+                    <span className="mb-1 block text-[10px] font-black text-stone-400">排程名稱</span>
+                    <input
+                      value={v5ScheduleEditor.name}
+                      onChange={(event) => setV5ScheduleEditor((previous) => ({ ...previous, name: event.target.value }))}
+                      className="w-full bg-transparent text-xs font-black text-stone-700 outline-none"
+                    />
+                  </label>
+                  <label className="rounded-xl border border-stone-100 bg-stone-50 p-3">
+                    <span className="mb-1 block text-[10px] font-black text-stone-400">發送時間</span>
+                    <input
+                      type="time"
+                      value={v5ScheduleEditor.time}
+                      onChange={(event) => setV5ScheduleEditor((previous) => ({ ...previous, time: event.target.value }))}
+                      className="w-full bg-transparent text-xs font-black text-stone-700 outline-none"
+                    />
+                  </label>
+                  <label className="rounded-xl border border-stone-100 bg-stone-50 p-3">
+                    <span className="mb-1 block text-[10px] font-black text-stone-400">最佳／最差店數</span>
+                    <div className="flex gap-2">
+                      <input type="number" min="1" max="10" value={v5ScheduleEditor.topCount} onChange={(event) => setV5ScheduleEditor((previous) => ({ ...previous, topCount: event.target.value }))} className="w-1/2 bg-transparent text-xs font-black text-stone-700 outline-none" />
+                      <input type="number" min="1" max="10" value={v5ScheduleEditor.bottomCount} onChange={(event) => setV5ScheduleEditor((previous) => ({ ...previous, bottomCount: event.target.value }))} className="w-1/2 bg-transparent text-xs font-black text-stone-700 outline-none" />
+                    </div>
+                  </label>
+                  <label className="rounded-xl border border-stone-100 bg-stone-50 p-3">
+                    <span className="mb-1 block text-[10px] font-black text-stone-400">接收群組</span>
+                    <select value={v5ScheduleEditor.targetGroup} onChange={(event) => setV5ScheduleEditor((previous) => ({ ...previous, targetGroup: event.target.value }))} className="w-full bg-transparent text-xs font-black text-stone-700 outline-none">
+                      <option value="manager">主管戰情室</option>
+                      <option value="main">營運大群組</option>
+                    </select>
+                  </label>
+                </div>
+                <div className="mt-3 flex flex-wrap items-center justify-between gap-3">
+                  <div className="flex flex-wrap gap-2">
+                    {TELEGRAM_ALERT_WEEKDAYS.map((day) => {
+                      const active = v5ScheduleEditor.weekdays.includes(day.id);
+                      return (
+                        <button
+                          key={day.id}
+                          type="button"
+                          onClick={() => setV5ScheduleEditor((previous) => ({
+                            ...previous,
+                            weekdays: active ? previous.weekdays.filter((item) => item !== day.id) : [...previous.weekdays, day.id],
+                          }))}
+                          className={`h-8 w-8 rounded-lg border text-[10px] font-black ${active ? "border-sky-200 bg-sky-50 text-sky-700" : "border-stone-100 bg-white text-stone-400"}`}
+                        >
+                          {day.label}
+                        </button>
+                      );
+                    })}
+                  </div>
+                  <ActionButton onClick={saveV5MorningBriefSchedule} disabled={isBusy || !canManagePolicyCenter}>
+                    {loadingAction === "saveV5Schedule" ? <Loader2 size={13} className="animate-spin" /> : <Plus size={13} />}
+                    建立晨報排程
+                  </ActionButton>
+                </div>
+              </div>
+
+              <div className="grid grid-cols-1 gap-4 xl:grid-cols-3">
+                <section className="rounded-2xl border border-indigo-100 bg-white p-4">
+                  <div className="mb-3 flex items-center gap-2">
+                    <FileText size={15} className="text-indigo-600" />
+                    <p className="text-xs font-black text-stone-700">最近報表快照</p>
+                  </div>
+                  <div className="max-h-[420px] space-y-2 overflow-y-auto pr-1">
+                    {reportSnapshots.length ? reportSnapshots.slice(0, 20).map((snapshot) => (
+                      <article key={snapshot.id} className="rounded-xl border border-stone-100 bg-stone-50/60 p-3">
+                        <p className="text-[11px] font-black text-stone-700">{snapshot.snapshotId || snapshot.id}</p>
+                        <p className="mt-1 text-[10px] font-bold text-stone-500">{snapshot.scheduleName || snapshot.reportType || "固定報表"}</p>
+                        <p className="mt-1 text-[9px] font-bold text-stone-400">截止 {snapshot.cutoffAtText || snapshot.cutoffDate || "-"}</p>
+                        <p className="mt-1 text-[9px] font-bold text-indigo-500">{snapshot.metricVersion || "metric-v5.0-unified"}</p>
+                      </article>
+                    )) : <p className="rounded-xl border border-dashed border-stone-200 p-6 text-center text-[10px] font-black text-stone-400">尚未產生報表快照</p>}
+                  </div>
+                </section>
+
+                <section className="rounded-2xl border border-sky-100 bg-white p-4">
+                  <div className="mb-3 flex items-center gap-2">
+                    <Clock size={15} className="text-sky-600" />
+                    <p className="text-xs font-black text-stone-700">固定排程</p>
+                  </div>
+                  <div className="max-h-[420px] space-y-2 overflow-y-auto pr-1">
+                    {v5Schedules.length ? v5Schedules.map((schedule) => {
+                      const active = schedule.isActive === true || String(schedule.isActive).toLowerCase() === "true";
+                      return (
+                        <article key={schedule.id} className={`rounded-xl border p-3 ${active ? "border-sky-100 bg-sky-50/40" : "border-stone-100 bg-stone-50 opacity-60"}`}>
+                          <div className="flex items-start justify-between gap-2">
+                            <div>
+                              <p className="text-[11px] font-black text-stone-700">{schedule.name || schedule.scheduleCode || schedule.id}</p>
+                              <p className="mt-1 text-[9px] font-bold text-stone-400">週{(schedule.weekdays || []).map((day) => V5_WEEKDAY_LABELS[Number(day)]).join("、") || "每日"}｜{schedule.time || "-"}</p>
+                              <p className="mt-1 text-[9px] font-bold text-sky-600">{schedule.lastSnapshotId ? `最近快照 ${schedule.lastSnapshotId}` : schedule.source || "progress"}</p>
+                            </div>
+                            <button type="button" onClick={() => toggleV5Schedule(schedule)} disabled={isBusy || !canManagePolicyCenter} className={`rounded-lg border px-2.5 py-1.5 text-[9px] font-black ${active ? "border-rose-100 bg-rose-50 text-rose-600" : "border-emerald-100 bg-emerald-50 text-emerald-600"}`}>
+                              {loadingAction === `v5Schedule:${schedule.id}` ? <Loader2 size={11} className="animate-spin" /> : active ? "停用" : "啟用"}
+                            </button>
+                          </div>
+                        </article>
+                      );
+                    }) : <p className="rounded-xl border border-dashed border-stone-200 p-6 text-center text-[10px] font-black text-stone-400">尚未建立固定排程</p>}
+                  </div>
+                </section>
+
+                <section className="rounded-2xl border border-amber-100 bg-white p-4">
+                  <div className="mb-3 flex items-center gap-2">
+                    <ListChecks size={15} className="text-amber-600" />
+                    <p className="text-xs font-black text-stone-700">改善任務</p>
+                  </div>
+                  <div className="max-h-[420px] space-y-2 overflow-y-auto pr-1">
+                    {improvementTasks.length ? improvementTasks.slice(0, 40).map((task) => {
+                      const done = task.status === "completed";
+                      return (
+                        <article key={task.id} className={`rounded-xl border p-3 ${task.status === "overdue" ? "border-rose-200 bg-rose-50/50" : done ? "border-emerald-100 bg-emerald-50/40 opacity-70" : "border-amber-100 bg-amber-50/40"}`}>
+                          <div className="flex items-start justify-between gap-2">
+                            <div className="min-w-0">
+                              <p className="truncate text-[11px] font-black text-stone-700">{task.taskCode || task.id}｜{task.title}</p>
+                              <p className="mt-1 text-[9px] font-bold text-stone-400">{task.brand || ""}{task.storeName ? ` ${task.storeName}店` : ""}｜{task.ownerName || "待指派"}</p>
+                              <p className="mt-1 text-[9px] font-bold text-amber-600">{getV5TaskStatusLabel(task.status)}｜期限 {task.dueDate || "未設定"}</p>
+                            </div>
+                            {!done && (
+                              <button type="button" onClick={() => updateV5TaskStatus(task, "completed")} disabled={isBusy || !canManagePolicyCenter} className="rounded-lg border border-emerald-100 bg-emerald-50 p-2 text-emerald-600" title="標記完成">
+                                {loadingAction === `v5Task:${task.id}` ? <Loader2 size={12} className="animate-spin" /> : <CheckCircle2 size={13} />}
+                              </button>
+                            )}
+                          </div>
+                        </article>
+                      );
+                    }) : <p className="rounded-xl border border-dashed border-stone-200 p-6 text-center text-[10px] font-black text-stone-400">尚未建立改善任務</p>}
+                  </div>
+                </section>
               </div>
             </div>
           )}
