@@ -21,6 +21,12 @@ import {
   FileText,
   ListChecks,
   CheckCircle2,
+  LayoutDashboard,
+  CalendarClock,
+  BellRing,
+  ChevronRight,
+  AlertTriangle,
+  Users,
 } from "lucide-react";
 import {
   addDoc,
@@ -566,7 +572,7 @@ const TelegramRuleEditorCard = ({ definition, rule, onChange, onRemove }) => {
   );
 };
 
-const TelegramAlertControlCenter = () => {
+const TelegramAlertControlCenter = ({ view = "alerts", onNavigate }) => {
   const { currentUser, userRole, showToast } = useContext(AppContext);
   const [form, setForm] = useState(createDefaultTelegramAlertForm);
   const [status, setStatus] = useState(null);
@@ -586,6 +592,9 @@ const TelegramAlertControlCenter = () => {
   const [improvementTasks, setImprovementTasks] = useState([]);
   const [v5ScheduleEditor, setV5ScheduleEditor] = useState(createDefaultV5ScheduleEditor);
   const [v5PanelOpen, setV5PanelOpen] = useState(true);
+  const [alertSection, setAlertSection] = useState("basic");
+  const [taskFilter, setTaskFilter] = useState("open");
+  const [governanceTab, setGovernanceTab] = useState("rules");
   const canManagePolicyCenter = ["master", "director"].includes(String(userRole || ""));
 
   const configRef = doc(
@@ -1109,26 +1118,32 @@ const TelegramAlertControlCenter = () => {
         return;
       }
 
+      const needsAlerts = ["overview", "alerts"].includes(view);
+      const needsRules = ["overview", "governance"].includes(view);
+      const needsSnapshots = ["overview", "reportHistory"].includes(view);
+      const needsSchedules = view === "overview";
+      const needsTasks = ["overview", "tasks"].includes(view);
+
       try {
         const [configSnap, statusSnap, policySnap, permissionSnap, snapshotSnap, scheduleSnap, taskSnap] = await Promise.all([
-          getDoc(configRef),
-          getDoc(statusRef),
-          getDocs(policyCollectionRef),
-          getDoc(policyPermissionsRef),
-          getDocs(query(reportSnapshotCollectionRef, orderBy("createdAtText", "desc"), limit(30))),
-          getDocs(query(v5ScheduleCollectionRef, orderBy("time", "asc"), limit(200))),
-          getDocs(query(improvementTaskCollectionRef, orderBy("createdAtText", "desc"), limit(100))),
+          needsAlerts ? getDoc(configRef) : Promise.resolve(null),
+          needsAlerts ? getDoc(statusRef) : Promise.resolve(null),
+          needsRules ? getDocs(policyCollectionRef) : Promise.resolve(null),
+          needsRules ? getDoc(policyPermissionsRef) : Promise.resolve(null),
+          needsSnapshots ? getDocs(query(reportSnapshotCollectionRef, orderBy("createdAtText", "desc"), limit(30))) : Promise.resolve(null),
+          needsSchedules ? getDocs(query(v5ScheduleCollectionRef, orderBy("time", "asc"), limit(200))) : Promise.resolve(null),
+          needsTasks ? getDocs(query(improvementTaskCollectionRef, orderBy("createdAtText", "desc"), limit(100))) : Promise.resolve(null),
         ]);
         if (cancelled) return;
-        setForm(normalizeTelegramAlertForm(configSnap.exists() ? configSnap.data() : {}));
-        setStatus(statusSnap.exists() ? statusSnap.data() : null);
-        setPolicies(policySnap.docs.map((item) => ({ id: item.id, ...item.data() })));
-        setPolicyPermissions(permissionSnap.exists() ? permissionSnap.data() : { users: {} });
-        setReportSnapshots(snapshotSnap.docs.map((item) => ({ id: item.id, ...item.data() })).sort((a, b) => String(b.createdAtText || "").localeCompare(String(a.createdAtText || ""))).slice(0, 30));
-        setV5Schedules(scheduleSnap.docs.map((item) => ({ id: item.id, ...item.data() })).sort((a, b) => `${a.time || ""}|${a.name || ""}`.localeCompare(`${b.time || ""}|${b.name || ""}`)));
-        setImprovementTasks(taskSnap.docs.map((item) => ({ id: item.id, ...item.data() })).sort((a, b) => String(b.createdAtText || "").localeCompare(String(a.createdAtText || ""))).slice(0, 100));
+        if (configSnap) setForm(normalizeTelegramAlertForm(configSnap.exists() ? configSnap.data() : {}));
+        if (statusSnap) setStatus(statusSnap.exists() ? statusSnap.data() : null);
+        if (policySnap) setPolicies(policySnap.docs.map((item) => ({ id: item.id, ...item.data() })));
+        if (permissionSnap) setPolicyPermissions(permissionSnap.exists() ? permissionSnap.data() : { users: {} });
+        if (snapshotSnap) setReportSnapshots(snapshotSnap.docs.map((item) => ({ id: item.id, ...item.data() })).sort((a, b) => String(b.createdAtText || "").localeCompare(String(a.createdAtText || ""))).slice(0, 30));
+        if (scheduleSnap) setV5Schedules(scheduleSnap.docs.map((item) => ({ id: item.id, ...item.data() })).sort((a, b) => `${a.time || ""}|${a.name || ""}`.localeCompare(`${b.time || ""}|${b.name || ""}`)));
+        if (taskSnap) setImprovementTasks(taskSnap.docs.map((item) => ({ id: item.id, ...item.data() })).sort((a, b) => String(b.createdAtText || "").localeCompare(String(a.createdAtText || ""))).slice(0, 100));
       } catch (error) {
-        if (!cancelled) notify(error.message || "Telegram 戰情設定載入失敗", "error");
+        if (!cancelled) notify(error.message || "Telegram 營運助手載入失敗", "error");
       } finally {
         if (!cancelled) setIsLoaded(true);
       }
@@ -1138,9 +1153,9 @@ const TelegramAlertControlCenter = () => {
     return () => {
       cancelled = true;
     };
-    // 固定 legacy path；角色變更時重新判斷權限。
+    // 依目前分頁只載入必要資料，避免切換頁面時讀取不相關集合。
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [userRole]);
+  }, [userRole, view]);
 
   if (!["master", "director"].includes(String(userRole || ""))) return null;
 
@@ -1375,1126 +1390,310 @@ const TelegramAlertControlCenter = () => {
   ).filter((rows) => rows.length > 1);
   const permissionEntries = Object.entries(policyPermissions.users || {});
 
+  const taskCounts = improvementTasks.reduce((acc, task) => {
+    const key = String(task.status || "open");
+    acc[key] = (acc[key] || 0) + 1;
+    return acc;
+  }, {});
+  const activeSchedules = v5Schedules.filter((schedule) => schedule.isActive === true || String(schedule.isActive || "").toLowerCase() === "true");
+  const filteredTasks = improvementTasks.filter((task) => {
+    if (taskFilter === "all") return true;
+    if (taskFilter === "open") return ["open", "in_progress"].includes(task.status);
+    return task.status === taskFilter;
+  });
+
+  const goTo = (target) => {
+    if (typeof onNavigate === "function") onNavigate(target);
+  };
+
+  const viewCopy = {
+    overview: {
+      icon: LayoutDashboard,
+      eyebrow: "今日營運狀態",
+      title: "管理總覽",
+      description: "先看今天有沒有正常運作，再決定要處理哪一件事。",
+    },
+    alerts: {
+      icon: BellRing,
+      eyebrow: "異常時主動通知",
+      title: "主動提醒",
+      description: "設定什麼情況需要提醒主管，以及各品牌要採用的提醒條件。",
+    },
+    tasks: {
+      icon: ListChecks,
+      eyebrow: "問題處理進度",
+      title: "改善追蹤",
+      description: "追蹤被提醒的問題由誰處理、何時到期，以及是否已改善。",
+    },
+    governance: {
+      icon: ShieldCheck,
+      eyebrow: "長期規則與操作範圍",
+      title: "規則與人員權限",
+      description: "管理店家例外、長期回答偏好，以及哪些人可以修改設定。",
+    },
+    reportHistory: {
+      icon: FileText,
+      eyebrow: "當次報表紀錄",
+      title: "報表紀錄",
+      description: "查看每次正式發送時保存的數據與資料截止時間。",
+    },
+  };
+
+  const meta = viewCopy[view] || viewCopy.alerts;
+  const HeaderIcon = meta.icon;
+
+  const renderOverview = () => {
+    const overdueCount = Number(taskCounts.overdue || 0);
+    const attentionCount = Number(status?.operationalAlertCount ?? status?.lastManualOperationalAlertCount ?? 0);
+    const dataIssueCount = Number(status?.dataIssueCount ?? status?.lastManualDataIssueCount ?? 0);
+    const lastSnapshot = reportSnapshots[0];
+    const cards = [
+      {
+        id: "reports",
+        title: "定時報表",
+        value: `${activeSchedules.length} 份使用中`,
+        detail: lastSnapshot ? `最近紀錄：${lastSnapshot.scheduleName || lastSnapshot.reportType || "固定報表"}` : "尚未產生正式報表紀錄",
+        icon: CalendarClock,
+        tone: "sky",
+      },
+      {
+        id: "alerts",
+        title: "主動提醒",
+        value: form.enabled ? "目前已開啟" : "目前已停用",
+        detail: form.enabled ? `下一次依設定於 ${form.sendTime} 檢查` : "停用期間不會主動檢查店家異常",
+        icon: BellRing,
+        tone: form.enabled ? "emerald" : "stone",
+      },
+      {
+        id: "tasks",
+        title: "改善追蹤",
+        value: `${Number(taskCounts.open || 0) + Number(taskCounts.in_progress || 0)} 項待處理`,
+        detail: overdueCount ? `其中 ${overdueCount} 項已逾期` : "目前沒有逾期任務",
+        icon: ListChecks,
+        tone: overdueCount ? "rose" : "amber",
+      },
+      {
+        id: "governance",
+        title: "規則與權限",
+        value: `${activePolicies.length} 條規則生效`,
+        detail: policyConflictGroups.length ? `${policyConflictGroups.length} 組規則需要整理` : "目前沒有規則重複或矛盾",
+        icon: ShieldCheck,
+        tone: policyConflictGroups.length ? "rose" : "violet",
+      },
+    ];
+
+    const toneClass = {
+      sky: "border-sky-100 bg-sky-50/50 text-sky-700",
+      emerald: "border-emerald-100 bg-emerald-50/50 text-emerald-700",
+      amber: "border-amber-100 bg-amber-50/50 text-amber-700",
+      rose: "border-rose-100 bg-rose-50/50 text-rose-700",
+      violet: "border-violet-100 bg-violet-50/50 text-violet-700",
+      stone: "border-stone-100 bg-stone-50 text-stone-500",
+    };
+
+    return (
+      <div className="space-y-5">
+        <div className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-4">
+          {cards.map((card) => {
+            const Icon = card.icon;
+            return (
+              <button
+                key={card.id}
+                type="button"
+                onClick={() => goTo(card.id)}
+                className={`rounded-2xl border p-5 text-left transition hover:-translate-y-0.5 hover:shadow-md ${toneClass[card.tone]}`}
+              >
+                <div className="flex items-center justify-between gap-3">
+                  <div className="rounded-xl bg-white/80 p-2.5 shadow-sm"><Icon size={17} /></div>
+                  <ChevronRight size={16} className="opacity-50" />
+                </div>
+                <p className="mt-4 text-xs font-black opacity-70">{card.title}</p>
+                <p className="mt-1 text-lg font-black">{card.value}</p>
+                <p className="mt-2 text-[10px] font-bold leading-4 opacity-70">{card.detail}</p>
+              </button>
+            );
+          })}
+        </div>
+
+        <div className="grid grid-cols-1 gap-4 xl:grid-cols-[1.15fr_0.85fr]">
+          <section className="rounded-2xl border border-stone-100 bg-white p-5 shadow-sm">
+            <div className="flex items-center justify-between gap-3">
+              <div>
+                <p className="text-sm font-black text-stone-800">今天需要注意什麼？</p>
+                <p className="mt-1 text-[11px] font-bold text-stone-400">只呈現會影響下一步的狀態，不顯示技術欄位。</p>
+              </div>
+              <button type="button" onClick={() => Promise.all([refreshStatus({ silent: true }), refreshV5Operations({ silent: true }), refreshPolicies({ silent: true })])} className="rounded-xl border border-stone-200 bg-white p-2 text-stone-500"><RefreshCw size={14} /></button>
+            </div>
+            <div className="mt-4 space-y-3">
+              {attentionCount > 0 && (
+                <button type="button" onClick={() => goTo("alerts")} className="flex w-full items-center justify-between rounded-2xl border border-rose-100 bg-rose-50/60 p-4 text-left">
+                  <div className="flex items-start gap-3"><AlertTriangle size={17} className="mt-0.5 text-rose-600" /><div><p className="text-xs font-black text-rose-700">有 {attentionCount} 項營運異常需要查看</p><p className="mt-1 text-[10px] font-bold text-rose-500">前往主動提醒查看品牌與店家明細。</p></div></div><ChevronRight size={15} className="text-rose-400" />
+                </button>
+              )}
+              {dataIssueCount > 0 && (
+                <button type="button" onClick={() => goTo("alerts")} className="flex w-full items-center justify-between rounded-2xl border border-amber-100 bg-amber-50/60 p-4 text-left">
+                  <div className="flex items-start gap-3"><FileText size={17} className="mt-0.5 text-amber-600" /><div><p className="text-xs font-black text-amber-700">有 {dataIssueCount} 項資料尚未補齊</p><p className="mt-1 text-[10px] font-bold text-amber-500">可能是日報或目標尚未完成。</p></div></div><ChevronRight size={15} className="text-amber-400" />
+                </button>
+              )}
+              {overdueCount > 0 && (
+                <button type="button" onClick={() => goTo("tasks")} className="flex w-full items-center justify-between rounded-2xl border border-rose-100 bg-white p-4 text-left">
+                  <div className="flex items-start gap-3"><Clock size={17} className="mt-0.5 text-rose-600" /><div><p className="text-xs font-black text-stone-700">有 {overdueCount} 項改善任務已逾期</p><p className="mt-1 text-[10px] font-bold text-stone-400">建議確認負責人與新的完成期限。</p></div></div><ChevronRight size={15} className="text-stone-300" />
+                </button>
+              )}
+              {attentionCount === 0 && dataIssueCount === 0 && overdueCount === 0 && (
+                <div className="rounded-2xl border border-emerald-100 bg-emerald-50/50 p-5 text-center"><CheckCircle2 size={24} className="mx-auto text-emerald-600" /><p className="mt-2 text-sm font-black text-emerald-700">目前沒有需要立即處理的事項</p><p className="mt-1 text-[10px] font-bold text-emerald-500">定時報表、主動提醒與改善追蹤皆未顯示異常。</p></div>
+              )}
+            </div>
+          </section>
+
+          <section className="rounded-2xl border border-sky-100 bg-gradient-to-br from-sky-50 to-indigo-50 p-5 shadow-sm">
+            <p className="text-sm font-black text-stone-800">我現在想做什麼？</p>
+            <p className="mt-1 text-[11px] font-bold text-stone-400">直接選擇目的，不需要先理解功能名稱。</p>
+            <div className="mt-4 grid grid-cols-1 gap-2 sm:grid-cols-2 xl:grid-cols-1">
+              {[
+                ["reports", "建立或調整定時報表", CalendarClock],
+                ["alerts", "設定什麼情況要提醒", BellRing],
+                ["tasks", "查看誰正在處理問題", ListChecks],
+                ["governance", "管理排除店家與人員權限", Users],
+              ].map(([target, label, Icon]) => (
+                <button key={target} type="button" onClick={() => goTo(target)} className="flex items-center justify-between rounded-xl border border-white bg-white/80 px-4 py-3 text-left text-xs font-black text-stone-700 shadow-sm transition hover:bg-white">
+                  <span className="flex items-center gap-2"><Icon size={15} className="text-sky-600" />{label}</span><ChevronRight size={14} className="text-stone-300" />
+                </button>
+              ))}
+            </div>
+          </section>
+        </div>
+      </div>
+    );
+  };
+
+  const renderAlertBasic = () => (
+    <div className="grid grid-cols-1 gap-4 xl:grid-cols-[1.2fr_0.8fr]">
+      <section className="space-y-5 rounded-2xl border border-stone-100 bg-white p-5 shadow-sm">
+        <div className="flex items-center justify-between gap-4">
+          <div><p className="text-sm font-black text-stone-800">是否要主動提醒？</p><p className="mt-1 text-[11px] font-bold text-stone-400">開啟後，系統會在指定時間檢查店家是否需要關注。</p></div>
+          <button type="button" onClick={() => setForm((previous) => ({ ...previous, enabled: !previous.enabled }))} className={`relative h-9 w-16 rounded-full transition ${form.enabled ? "bg-emerald-500" : "bg-stone-200"}`}><span className={`absolute top-1 h-7 w-7 rounded-full bg-white shadow transition ${form.enabled ? "left-8" : "left-1"}`} /></button>
+        </div>
+
+        <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
+          <label className="rounded-2xl border border-stone-100 bg-stone-50 p-4"><span className="mb-2 block text-[10px] font-black text-stone-400">每天幾點檢查？</span><div className="flex items-center gap-2"><Clock size={15} className="text-sky-500" /><input type="time" step="300" value={form.sendTime} onChange={(event) => setForm((previous) => ({ ...previous, sendTime: event.target.value }))} className="w-full bg-transparent text-sm font-black text-stone-700 outline-none" /></div></label>
+          <label className="block rounded-2xl border border-stone-100 bg-stone-50 p-4"><span className="mb-2 block text-[10px] font-black text-stone-400">暫停到哪一天？</span><div className="flex min-h-12 min-w-0 items-center gap-2 rounded-xl border border-stone-200 bg-white px-3"><Calendar size={15} className="shrink-0 text-sky-500" /><input type="date" value={form.pausedUntil || ""} onChange={(event) => setForm((previous) => ({ ...previous, pausedUntil: event.target.value }))} className="block h-11 min-w-0 flex-1 bg-transparent px-1 text-sm font-black leading-none text-stone-700 outline-none" style={{ colorScheme: "light" }} /></div></label>
+        </div>
+
+        <div className="grid grid-cols-1 gap-4 lg:grid-cols-3">
+          <div className="rounded-2xl border border-stone-100 bg-white p-4"><p className="mb-3 text-[10px] font-black text-stone-400">哪幾天檢查？</p><div className="flex flex-wrap gap-2">{TELEGRAM_ALERT_WEEKDAYS.map((day) => { const active = form.weekdays.includes(day.id); return <button key={day.id} type="button" onClick={() => toggleArrayValue("weekdays", day.id)} className={`h-9 w-9 rounded-xl border text-[10px] font-black ${active ? "border-sky-500 bg-sky-500 text-white" : "border-stone-200 bg-white text-stone-400"}`}>{day.label}</button>; })}</div></div>
+          <div className="rounded-2xl border border-stone-100 bg-white p-4"><p className="mb-3 text-[10px] font-black text-stone-400">檢查哪些品牌？</p><div className="space-y-2">{TELEGRAM_ALERT_BRANDS.map((brand) => { const active = form.brandIds.includes(brand.id); return <button key={brand.id} type="button" onClick={() => toggleArrayValue("brandIds", brand.id)} className={`flex w-full items-center justify-between rounded-xl border px-3 py-2 text-[10px] font-black ${active ? "border-indigo-200 bg-indigo-50 text-indigo-700" : "border-stone-100 bg-stone-50 text-stone-400"}`}><span>{brand.label}</span><span>{active ? "會檢查" : "不檢查"}</span></button>; })}</div></div>
+          <div className="rounded-2xl border border-stone-100 bg-white p-4"><p className="mb-3 text-[10px] font-black text-stone-400">通知哪些群組？</p><div className="space-y-2">{[{ id: "main", label: "高階主管主群" }, { id: "manager", label: "主管群" }].map((target) => { const active = form.chatTargets.includes(target.id); return <button key={target.id} type="button" onClick={() => toggleArrayValue("chatTargets", target.id)} className={`flex w-full items-center justify-between rounded-xl border px-3 py-2 text-[10px] font-black ${active ? "border-sky-200 bg-sky-50 text-sky-700" : "border-stone-100 bg-stone-50 text-stone-400"}`}><span>{target.label}</span><span>{active ? "會收到" : "不發送"}</span></button>; })}</div></div>
+        </div>
+
+        <label className="flex items-center justify-between gap-4 rounded-2xl border border-stone-100 bg-stone-50 p-4"><div><p className="text-xs font-black text-stone-700">沒有異常時也通知「目前正常」</p><p className="mt-1 text-[10px] font-bold text-stone-400">關閉後，沒有問題就不打擾群組。</p></div><input type="checkbox" checked={form.sendWhenClear} onChange={(event) => setForm((previous) => ({ ...previous, sendWhenClear: event.target.checked }))} className="h-5 w-5" /></label>
+      </section>
+
+      <section className="rounded-2xl border border-stone-100 bg-white p-5 shadow-sm">
+        <div className="flex items-center justify-between gap-3"><div><p className="text-sm font-black text-stone-800">最近一次檢查</p><p className="mt-1 text-[11px] font-bold text-stone-400">確認提醒是否正常執行。</p></div><button type="button" onClick={() => refreshStatus()} className="rounded-xl border border-stone-200 p-2 text-stone-500"><RefreshCw size={14} className={loadingAction === "refreshStatus" ? "animate-spin" : ""} /></button></div>
+        <div className="mt-4 space-y-3">
+          <div className="rounded-2xl bg-stone-50 p-4"><p className="text-[10px] font-black text-stone-400">執行結果</p><p className="mt-1 text-sm font-black text-stone-700">{TELEGRAM_ALERT_STATUS_LABELS[status?.status] || status?.status || "尚未執行"}</p><p className="mt-1 text-[10px] font-bold text-stone-400">{status?.lastSentAtText ? new Date(status.lastSentAtText).toLocaleString("zh-TW", { hour12: false }) : "尚無發送紀錄"}</p></div>
+          <div className="grid grid-cols-2 gap-3"><div className="rounded-2xl bg-rose-50 p-4"><p className="text-[10px] font-black text-rose-400">需要關注</p><p className="mt-1 text-xl font-black text-rose-600">{Number(status?.operationalAlertCount ?? status?.lastManualOperationalAlertCount ?? 0)}</p></div><div className="rounded-2xl bg-amber-50 p-4"><p className="text-[10px] font-black text-amber-500">資料待補</p><p className="mt-1 text-xl font-black text-amber-600">{Number(status?.dataIssueCount ?? status?.lastManualDataIssueCount ?? 0)}</p></div></div>
+          {status?.brandResults && <div className="space-y-2 rounded-2xl border border-stone-100 p-4">{Object.entries(status.brandResults).filter(([brandId]) => (status?.brandIds || form.brandIds).includes(brandId)).map(([brandId, item]) => <div key={brandId} className="flex items-center justify-between text-[11px] font-bold text-stone-600"><span>{item?.brand || getTelegramAlertBrandLabel(brandId)}</span><span className={item?.status === "error" ? "text-rose-600" : item?.status === "sent" ? "text-emerald-600" : "text-stone-400"}>{TELEGRAM_BRAND_STATUS_LABELS[item?.status] || item?.status || "尚無紀錄"}</span></div>)}</div>}
+          {status?.lastError && <div className="rounded-2xl border border-rose-100 bg-rose-50 p-3 text-[11px] font-bold text-rose-600">{status.lastError}</div>}
+        </div>
+      </section>
+    </div>
+  );
+
+  const renderAlertRules = () => {
+    const activeProfile = form.brandProfiles?.[activeBrandId] || createDefaultTelegramBrandProfile();
+    const enabledDefinitions = TELEGRAM_ALERT_RULE_DEFINITIONS.filter((definition) => activeProfile.rules?.[definition.id]?.enabled === true);
+    const disabledDefinitions = TELEGRAM_ALERT_RULE_DEFINITIONS.filter((definition) => activeProfile.rules?.[definition.id]?.enabled !== true);
+    return (
+      <section className="space-y-5 rounded-2xl border border-stone-100 bg-white p-5 shadow-sm">
+        <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between"><div><p className="text-sm font-black text-stone-800">各品牌要在什麼情況提醒？</p><p className="mt-1 text-[11px] font-bold text-stone-400">每個品牌可以使用不同條件。先選品牌，再調整數值。</p></div><div className="flex flex-wrap gap-2">{TELEGRAM_ALERT_BRANDS.filter((brand) => brand.id !== activeBrandId).map((brand) => <button key={brand.id} type="button" onClick={() => copyActiveBrandProfile(brand.id)} className="inline-flex items-center gap-1 rounded-xl border border-stone-200 bg-white px-3 py-2 text-[10px] font-black text-stone-500"><Copy size={12} />套用到{brand.label}</button>)}</div></div>
+        <div className="grid grid-cols-3 gap-2 rounded-2xl bg-stone-50 p-1.5">{TELEGRAM_ALERT_BRANDS.map((brand) => { const active = activeBrandId === brand.id; const included = form.brandIds.includes(brand.id); const count = Object.values(form.brandProfiles?.[brand.id]?.rules || {}).filter((rule) => rule?.enabled).length; return <button key={brand.id} type="button" onClick={() => { setActiveBrandId(brand.id); setRulePickerOpen(false); }} className={`rounded-xl px-3 py-2.5 ${active ? "bg-white text-sky-700 shadow-sm" : "text-stone-400"}`}><span className="block text-xs font-black">{brand.label}</span><span className="mt-0.5 block text-[9px] font-bold">{included ? `${count} 項提醒` : "目前未納入"}</span></button>; })}</div>
+        <div className="flex flex-col gap-3 rounded-2xl border border-sky-100 bg-sky-50/50 p-4 md:flex-row md:items-center md:justify-between"><div><p className="text-xs font-black text-sky-800">{getTelegramAlertBrandLabel(activeBrandId)}目前使用 {enabledDefinitions.length} 項提醒條件</p><p className="mt-1 text-[10px] font-bold text-sky-500">最多列出幾家店，可以在右側調整。</p></div><label className="flex items-center gap-2 text-xs font-black text-stone-600">最多列出<input type="number" min="1" max="20" value={activeProfile.limit} onChange={(event) => updateBrandProfile(activeBrandId, (profile) => ({ ...profile, limit: event.target.value }))} className="w-16 rounded-xl border border-sky-100 bg-white px-2 py-2 text-center outline-none" />家</label></div>
+        <div className="relative"><button type="button" onClick={() => setRulePickerOpen((previous) => !previous)} disabled={!disabledDefinitions.length} className="inline-flex items-center gap-1.5 rounded-xl border border-sky-200 bg-sky-50 px-4 py-2.5 text-xs font-black text-sky-700 disabled:opacity-40"><Plus size={14} />新增提醒條件</button>{rulePickerOpen && disabledDefinitions.length > 0 && <div className="absolute left-0 top-12 z-20 w-full max-w-xl rounded-2xl border border-stone-200 bg-white p-2 shadow-2xl"><p className="px-3 py-2 text-[10px] font-black text-stone-400">選擇要加入的提醒條件</p>{disabledDefinitions.map((definition) => <button key={definition.id} type="button" onClick={() => enableRule(definition.id)} className="flex w-full items-start justify-between rounded-xl px-3 py-2.5 text-left hover:bg-sky-50"><span><span className="block text-xs font-black text-stone-700">{definition.label}</span><span className="mt-0.5 block text-[10px] font-bold leading-4 text-stone-400">{definition.description}</span></span><Plus size={14} className="mt-0.5 text-sky-500" /></button>)}</div>}</div>
+        {enabledDefinitions.length ? <div className="grid grid-cols-1 gap-3 xl:grid-cols-2">{enabledDefinitions.map((definition) => <TelegramRuleEditorCard key={definition.id} definition={definition} rule={activeProfile.rules[definition.id]} onChange={(nextRule) => updateBrandRule(activeBrandId, definition.id, nextRule)} onRemove={() => disableRule(definition.id)} />)}</div> : <div className="rounded-2xl border border-dashed border-amber-200 bg-amber-50 p-8 text-center"><p className="text-xs font-black text-amber-700">尚未設定提醒條件</p><p className="mt-1 text-[10px] font-bold text-amber-500">請至少加入一項。</p></div>}
+      </section>
+    );
+  };
+
+  const renderAlertTest = () => (
+    <div className="space-y-4">
+      <section className="rounded-2xl border border-stone-100 bg-white p-5 shadow-sm"><div><p className="text-sm font-black text-stone-800">先預覽，再正式使用</p><p className="mt-1 text-[11px] font-bold text-stone-400">預覽不會發送；測試會傳到你設定的群組。</p></div><div className="mt-4 flex flex-wrap gap-2"><ActionButton onClick={previewToday} disabled={isBusy} variant="secondary">{loadingAction === "preview" ? <Loader2 size={14} className="animate-spin" /> : <Eye size={14} />}預覽今天結果</ActionButton><ActionButton onClick={sendTest} disabled={isBusy} variant="soft">{loadingAction === "test" ? <Loader2 size={14} className="animate-spin" /> : <Play size={14} />}傳送測試訊息</ActionButton><ActionButton onClick={saveConfig} disabled={isBusy}>{loadingAction === "saveConfig" ? <Loader2 size={14} className="animate-spin" /> : <Save size={14} />}儲存主動提醒設定</ActionButton><ActionButton onClick={resetForm} disabled={isBusy} variant="secondary"><RefreshCw size={14} />恢復建議值</ActionButton></div></section>
+      {previewItems.length > 0 ? <div className="grid grid-cols-1 gap-4 xl:grid-cols-3">{previewItems.map((item, index) => <article key={item.brandId || `${item.brand}-${index}`} className="overflow-hidden rounded-2xl border border-sky-100 bg-white shadow-sm"><div className="border-b border-sky-50 bg-sky-50/60 px-4 py-3"><p className="text-sm font-black text-stone-800">{item.brand || "品牌預覽"}</p><p className="mt-1 text-[10px] font-bold text-stone-400">需要關注 {Number(item.operationalAlertCount || 0)}｜資料待補 {Number(item.dataIssueCount || 0)}</p></div><pre className="max-h-[520px] overflow-y-auto whitespace-pre-wrap break-words p-4 font-sans text-xs font-bold leading-6 text-stone-600">{item.previewText || "目前沒有內容"}</pre></article>)}</div> : <div className="rounded-2xl border border-dashed border-stone-200 bg-white p-10 text-center"><Eye size={24} className="mx-auto text-stone-300" /><p className="mt-2 text-xs font-black text-stone-500">尚未產生預覽</p></div>}
+    </div>
+  );
+
+  const renderAlerts = () => (
+    <div className="space-y-5">
+      <div className="grid grid-cols-3 gap-2 rounded-2xl border border-stone-100 bg-white p-1.5 shadow-sm">{[{ id: "basic", label: "基本設定" }, { id: "rules", label: "提醒條件" }, { id: "test", label: "測試與預覽" }].map((tab) => <button key={tab.id} type="button" onClick={() => setAlertSection(tab.id)} className={`rounded-xl px-3 py-2.5 text-xs font-black ${alertSection === tab.id ? "bg-sky-600 text-white shadow-sm" : "text-stone-400 hover:bg-stone-50"}`}>{tab.label}</button>)}</div>
+      {alertSection === "basic" ? renderAlertBasic() : alertSection === "rules" ? renderAlertRules() : renderAlertTest()}
+      {alertSection !== "test" && <div className="flex justify-end"><ActionButton onClick={saveConfig} disabled={isBusy}>{loadingAction === "saveConfig" ? <Loader2 size={14} className="animate-spin" /> : <Save size={14} />}儲存主動提醒設定</ActionButton></div>}
+    </div>
+  );
+
+  const renderTasks = () => (
+    <div className="space-y-5">
+      <div className="grid grid-cols-2 gap-3 md:grid-cols-4">{[
+        { id: "open", label: "待處理／處理中", count: Number(taskCounts.open || 0) + Number(taskCounts.in_progress || 0), activeClass: "border-amber-200 bg-amber-50" },
+        { id: "overdue", label: "已逾期", count: Number(taskCounts.overdue || 0), activeClass: "border-rose-200 bg-rose-50" },
+        { id: "completed", label: "已完成", count: Number(taskCounts.completed || 0), activeClass: "border-emerald-200 bg-emerald-50" },
+        { id: "all", label: "全部任務", count: improvementTasks.length, activeClass: "border-sky-200 bg-sky-50" },
+      ].map((item) => <button key={item.id} type="button" onClick={() => setTaskFilter(item.id)} className={`rounded-2xl border p-4 text-left ${taskFilter === item.id ? item.activeClass : "border-stone-100 bg-white"}`}><p className="text-[10px] font-black text-stone-400">{item.label}</p><p className="mt-1 text-xl font-black text-stone-700">{item.count}</p></button>)}</div>
+      <section className="rounded-2xl border border-stone-100 bg-white p-5 shadow-sm"><div className="mb-4 flex items-center justify-between gap-3"><div><p className="text-sm font-black text-stone-800">改善任務</p><p className="mt-1 text-[11px] font-bold text-stone-400">異常提醒建立任務後，會在這裡追蹤負責人、期限與結果。</p></div><button type="button" onClick={() => refreshV5Operations()} className="rounded-xl border border-stone-200 p-2 text-stone-500"><RefreshCw size={14} className={loadingAction === "refreshV5Operations" ? "animate-spin" : ""} /></button></div>
+        <div className="space-y-3">{filteredTasks.length ? filteredTasks.map((task) => { const done = task.status === "completed"; return <article key={task.id} className={`rounded-2xl border p-4 ${task.status === "overdue" ? "border-rose-200 bg-rose-50/50" : done ? "border-emerald-100 bg-emerald-50/40" : "border-amber-100 bg-amber-50/40"}`}><div className="flex flex-col gap-3 md:flex-row md:items-start md:justify-between"><div className="min-w-0"><div className="flex flex-wrap items-center gap-2"><p className="text-sm font-black text-stone-800">{task.title || "改善任務"}</p><span className={`rounded-full px-2.5 py-1 text-[9px] font-black ${task.status === "overdue" ? "bg-rose-100 text-rose-700" : done ? "bg-emerald-100 text-emerald-700" : "bg-amber-100 text-amber-700"}`}>{getV5TaskStatusLabel(task.status)}</span></div><p className="mt-2 text-[11px] font-bold text-stone-500">{task.brand || ""}{task.storeName ? `｜${task.storeName}店` : ""}｜負責人：{task.ownerName || "待指派"}</p><p className="mt-1 text-[10px] font-bold text-stone-400">期限：{task.dueDate || "未設定"}{task.taskCode ? `｜${task.taskCode}` : ""}</p>{task.reason && <p className="mt-2 rounded-xl bg-white/70 p-3 text-[10px] font-bold leading-5 text-stone-500">{task.reason}</p>}</div><div className="flex shrink-0 gap-2">{!done && task.status !== "in_progress" && <button type="button" onClick={() => updateV5TaskStatus(task, "in_progress")} disabled={isBusy || !canManagePolicyCenter} className="rounded-xl border border-sky-100 bg-sky-50 px-3 py-2 text-[10px] font-black text-sky-700">開始處理</button>}{!done && <button type="button" onClick={() => updateV5TaskStatus(task, "completed")} disabled={isBusy || !canManagePolicyCenter} className="rounded-xl border border-emerald-100 bg-emerald-50 px-3 py-2 text-[10px] font-black text-emerald-700">標記完成</button>}</div></div></article>; }) : <div className="rounded-2xl border border-dashed border-stone-200 p-10 text-center"><ListChecks size={26} className="mx-auto text-stone-300" /><p className="mt-2 text-xs font-black text-stone-500">這個分類目前沒有任務</p></div>}</div>
+      </section>
+    </div>
+  );
+
+  const renderRuleEditor = () => (
+    <div className="grid grid-cols-1 gap-4 xl:grid-cols-[1fr_1.15fr]">
+      <section className="space-y-4 rounded-2xl border border-violet-100 bg-violet-50/30 p-5">
+        <div><p className="text-sm font-black text-stone-800">新增長期規則</p><p className="mt-1 text-[11px] font-bold text-stone-400">例如永久排除店家、改變品牌提醒條件，或記住回答習慣。</p></div>
+        {!canManagePolicyCenter && <div className="rounded-xl border border-amber-200 bg-amber-50 p-3 text-[10px] font-bold text-amber-700">目前帳號只能查看，只有 master／director 可以修改。</div>}
+        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2"><label className="rounded-xl border border-stone-100 bg-white p-3"><span className="mb-1 block text-[10px] font-black text-stone-400">我想設定</span><select value={policyEditor.type} onChange={(event) => setPolicyEditor((previous) => ({ ...createDefaultPolicyEditor(), type: event.target.value, ownerScope: event.target.value === "response_preference" ? "global" : "brand" }))} className="w-full bg-transparent text-xs font-black text-stone-700 outline-none"><option value="exclude_store">哪些店家不納入</option><option value="alert_rule">品牌提醒條件例外</option><option value="response_preference">機器人的回答習慣</option></select></label>{policyEditor.type !== "response_preference" && <label className="rounded-xl border border-stone-100 bg-white p-3"><span className="mb-1 block text-[10px] font-black text-stone-400">品牌</span><select value={policyEditor.brandId} onChange={(event) => setPolicyEditor((previous) => ({ ...previous, brandId: event.target.value }))} className="w-full bg-transparent text-xs font-black text-stone-700 outline-none">{TELEGRAM_ALERT_BRANDS.map((brand) => <option key={brand.id} value={brand.id}>{brand.label}</option>)}</select></label>}</div>
+        {policyEditor.type === "exclude_store" && <div className="space-y-3"><label className="block rounded-xl border border-stone-100 bg-white p-3"><span className="mb-1 block text-[10px] font-black text-stone-400">店家名稱</span><input value={policyEditor.storeName} onChange={(event) => setPolicyEditor((previous) => ({ ...previous, storeName: event.target.value }))} placeholder="例如：中美店" className="w-full bg-transparent text-xs font-black text-stone-700 outline-none" /></label><div className="rounded-xl border border-stone-100 bg-white p-3"><p className="mb-2 text-[10px] font-black text-stone-400">不納入哪些地方？</p><div className="grid grid-cols-1 gap-2 sm:grid-cols-2">{TELEGRAM_POLICY_SCOPES.map((scope) => { const active = policyEditor.scopes.includes(scope.id); return <button key={scope.id} type="button" onClick={() => setPolicyEditor((previous) => ({ ...previous, scopes: active ? previous.scopes.filter((item) => item !== scope.id) : [...previous.scopes, scope.id] }))} className={`rounded-xl border px-3 py-2 text-left text-[10px] font-black ${active ? "border-violet-200 bg-violet-50 text-violet-700" : "border-stone-100 bg-stone-50 text-stone-400"}`}>{scope.label}</button>; })}</div></div></div>}
+        {policyEditor.type === "alert_rule" && <div className="space-y-3"><label className="block rounded-xl border border-stone-100 bg-white p-3"><span className="mb-1 block text-[10px] font-black text-stone-400">要調整的提醒</span><select value={policyEditor.ruleId} onChange={(event) => setPolicyEditor((previous) => ({ ...previous, ruleId: event.target.value }))} className="w-full bg-transparent text-xs font-black text-stone-700 outline-none">{TELEGRAM_POLICY_RULES.map((rule) => <option key={rule.id} value={rule.id}>{rule.label}</option>)}</select></label>{policyEditor.ruleId === "progressGap" ? <div className="grid grid-cols-2 gap-2"><TelegramRuleNumberField label="黃燈落後" value={policyEditor.watchThreshold} onChange={(value) => setPolicyEditor((previous) => ({ ...previous, watchThreshold: value }))} unit="百分點" /><TelegramRuleNumberField label="紅燈落後" value={policyEditor.criticalThreshold} onChange={(value) => setPolicyEditor((previous) => ({ ...previous, criticalThreshold: value }))} unit="百分點" /></div> : policyEditor.ruleId === "limit" ? <TelegramRuleNumberField label="最多顯示" value={policyEditor.limit} onChange={(value) => setPolicyEditor((previous) => ({ ...previous, limit: value }))} unit="家" max={20} /> : !["missingReport", "missingTarget"].includes(policyEditor.ruleId) ? <div className="grid grid-cols-1 gap-2 sm:grid-cols-2"><TelegramRuleNumberField label="提醒門檻" value={policyEditor.threshold} onChange={(value) => setPolicyEditor((previous) => ({ ...previous, threshold: value }))} unit={["cashAchievementRate", "closingRate", "skincareRatio"].includes(policyEditor.ruleId) ? "%" : policyEditor.ruleId === "traffic" ? "人次" : "人"} max={["newCustomers", "traffic"].includes(policyEditor.ruleId) ? 999999 : 100} /><TelegramRuleSeverityField value={policyEditor.severity} onChange={(value) => setPolicyEditor((previous) => ({ ...previous, severity: value }))} />{policyEditor.ruleId === "closingRate" && <TelegramRuleNumberField label="至少多少位新客才判斷" value={policyEditor.minSample} onChange={(value) => setPolicyEditor((previous) => ({ ...previous, minSample: value }))} unit="人" max={999} />}</div> : <label className="flex items-center justify-between rounded-xl border border-stone-100 bg-white p-3 text-xs font-black text-stone-700">要啟用這項提醒<input type="checkbox" checked={policyEditor.enabledValue !== false} onChange={(event) => setPolicyEditor((previous) => ({ ...previous, enabledValue: event.target.checked }))} className="h-4 w-4" /></label>}</div>}
+        {policyEditor.type === "response_preference" && <div className="space-y-3"><div className="grid grid-cols-1 gap-3 sm:grid-cols-2"><label className="rounded-xl border border-stone-100 bg-white p-3"><span className="mb-1 block text-[10px] font-black text-stone-400">套用對象</span><select value={policyEditor.ownerScope} onChange={(event) => setPolicyEditor((previous) => ({ ...previous, ownerScope: event.target.value }))} className="w-full bg-transparent text-xs font-black text-stone-700 outline-none"><option value="global">所有使用者</option><option value="user">指定使用者</option></select></label>{policyEditor.ownerScope === "user" && <label className="rounded-xl border border-stone-100 bg-white p-3"><span className="mb-1 block text-[10px] font-black text-stone-400">Telegram 使用者 ID</span><input value={policyEditor.userId} onChange={(event) => setPolicyEditor((previous) => ({ ...previous, userId: event.target.value }))} className="w-full bg-transparent text-xs font-black text-stone-700 outline-none" /></label>}</div><label className="block rounded-xl border border-stone-100 bg-white p-3"><span className="mb-1 block text-[10px] font-black text-stone-400">希望機器人怎麼回答？</span><textarea value={policyEditor.instruction} onChange={(event) => setPolicyEditor((previous) => ({ ...previous, instruction: event.target.value }))} placeholder="例如：回答時先給結論，再列出最多三項優先行動。" rows={4} className="w-full resize-none bg-transparent text-xs font-bold leading-5 text-stone-700 outline-none" /></label></div>}
+        <label className="block rounded-xl border border-stone-100 bg-white p-3"><span className="block text-[10px] font-black text-stone-400">有效到哪一天？</span><div className="mt-2 flex min-h-12 min-w-0 items-center rounded-xl border border-stone-200 bg-stone-50 px-3"><input type="date" value={policyEditor.effectiveUntil} onChange={(event) => setPolicyEditor((previous) => ({ ...previous, effectiveUntil: event.target.value }))} className="block h-11 min-w-0 flex-1 bg-transparent px-1 text-sm font-black leading-none text-stone-700 outline-none" style={{ colorScheme: "light" }} /></div><span className="mt-2 block text-[9px] font-bold leading-4 text-stone-300">留空代表持續有效，直到人工停用。</span></label>
+        <ActionButton onClick={savePolicy} disabled={isBusy || !canManagePolicyCenter} className="w-full">{loadingAction === "savePolicy" ? <Loader2 size={14} className="animate-spin" /> : <Save size={14} />}建立長期規則</ActionButton>
+      </section>
+
+      <section className="rounded-2xl border border-stone-100 bg-white p-5 shadow-sm"><div className="flex items-center justify-between gap-3"><div><p className="text-sm font-black text-stone-800">目前生效的規則</p><p className="mt-1 text-[11px] font-bold text-stone-400">查看哪些店家被排除、哪些條件被修改，以及回答偏好。</p></div><div className="flex gap-2"><button type="button" onClick={() => refreshPolicies()} className="rounded-xl border border-stone-200 p-2 text-stone-500"><RefreshCw size={14} className={loadingAction === "refreshPolicies" ? "animate-spin" : ""} /></button><button type="button" onClick={cleanupPolicyConflicts} disabled={isBusy || !canManagePolicyCenter} className="rounded-xl border border-amber-100 bg-amber-50 px-3 py-2 text-[10px] font-black text-amber-600">整理重複規則</button></div></div><div className="mt-4 max-h-[660px] space-y-2 overflow-y-auto pr-1">{policies.length ? [...policies].sort((a, b) => String(b.updatedAtText || b.createdAtText || "").localeCompare(String(a.updatedAtText || a.createdAtText || ""))).map((policy) => { const active = isPolicyActiveNow(policy); const isConflict = policyConflictGroups.some((rows) => rows.some((item) => item.id === policy.id)); const brandLabel = policy.brandId ? getTelegramAlertBrandLabel(policy.brandId) : "全部品牌"; const title = policy.type === "exclude_store" ? `${brandLabel}｜排除 ${policy.storeName || policy.storeCore}店` : policy.type === "alert_rule" ? `${brandLabel}｜${TELEGRAM_POLICY_RULES.find((item) => item.id === policy.ruleId)?.label || policy.ruleId}` : `${policy.ownerScope === "user" ? `指定使用者 ${policy.userId}` : "所有使用者"}｜回答偏好`; const detail = policy.type === "exclude_store" ? (policy.scopes || []).map((scope) => TELEGRAM_POLICY_SCOPES.find((item) => item.id === scope)?.label || scope).join("、") : policy.type === "alert_rule" ? JSON.stringify(policy.value || {}) : policy.instruction; return <article key={policy.id} className={`rounded-2xl border p-4 ${isConflict ? "border-rose-200 bg-rose-50/30" : active ? "border-violet-100 bg-violet-50/20" : "border-stone-100 bg-stone-50 opacity-60"}`}><div className="flex items-start justify-between gap-3"><div className="min-w-0"><div className="flex flex-wrap items-center gap-2"><p className="text-xs font-black text-stone-700">{title}</p><span className={`rounded-full px-2 py-0.5 text-[9px] font-black ${active ? "bg-emerald-50 text-emerald-600" : "bg-stone-100 text-stone-400"}`}>{active ? "生效" : "停用"}</span>{isConflict && <span className="rounded-full bg-rose-100 px-2 py-0.5 text-[9px] font-black text-rose-600">規則重複</span>}</div><p className="mt-2 break-words text-[10px] font-bold leading-4 text-stone-400">{detail || "未提供細節"}</p><p className="mt-1 text-[9px] font-bold text-stone-300">{policy.effectiveUntil ? `有效至 ${policy.effectiveUntil}` : "持續有效"}</p></div><button type="button" onClick={() => togglePolicyEnabled(policy)} disabled={isBusy || !canManagePolicyCenter} className={`shrink-0 rounded-xl border px-3 py-2 text-[10px] font-black ${active ? "border-rose-100 bg-rose-50 text-rose-600" : "border-emerald-100 bg-emerald-50 text-emerald-600"}`}>{loadingAction === `policy:${policy.id}` ? <Loader2 size={12} className="animate-spin" /> : active ? "停用" : "啟用"}</button></div></article>; }) : <div className="rounded-2xl border border-dashed border-stone-200 p-10 text-center text-xs font-black text-stone-400">尚未建立長期規則</div>}</div></section>
+    </div>
+  );
+
+  const renderPermissions = () => (
+    <section className="rounded-2xl border border-sky-100 bg-white p-5 shadow-sm"><div><p className="text-sm font-black text-stone-800">哪些人可以修改設定？</p><p className="mt-1 text-[11px] font-bold text-stone-400">新增個人名單後，未列入的人會自動改為只能查看。</p></div>{!canManagePolicyCenter && <div className="mt-4 rounded-xl border border-amber-200 bg-amber-50 p-3 text-[10px] font-bold text-amber-700">目前帳號只能查看人員權限。</div>}<div className="mt-5 grid grid-cols-1 gap-3 lg:grid-cols-[1fr_1fr_1fr_auto]"><label className="rounded-xl border border-stone-100 bg-stone-50 p-3"><span className="mb-1 block text-[10px] font-black text-stone-400">Telegram 使用者 ID</span><input value={permissionDraft.userId} onChange={(event) => setPermissionDraft((previous) => ({ ...previous, userId: event.target.value }))} className="w-full bg-transparent text-xs font-black text-stone-700 outline-none" /></label><label className="rounded-xl border border-stone-100 bg-stone-50 p-3"><span className="mb-1 block text-[10px] font-black text-stone-400">名稱</span><input value={permissionDraft.displayName} onChange={(event) => setPermissionDraft((previous) => ({ ...previous, displayName: event.target.value }))} className="w-full bg-transparent text-xs font-black text-stone-700 outline-none" /></label><label className="rounded-xl border border-stone-100 bg-stone-50 p-3"><span className="mb-1 block text-[10px] font-black text-stone-400">可以做什麼？</span><select value={permissionDraft.role} onChange={(event) => setPermissionDraft((previous) => ({ ...previous, role: event.target.value }))} className="w-full bg-transparent text-xs font-black text-stone-700 outline-none"><option value="director">管理所有品牌與設定</option><option value="brand_manager">管理指定品牌</option><option value="viewer">只能查看</option></select></label><ActionButton onClick={savePermission} disabled={isBusy || !canManagePolicyCenter} className="self-stretch lg:self-end"><UserPlus size={14} />儲存人員權限</ActionButton></div>{permissionDraft.role === "brand_manager" && <div className="mt-3 flex flex-wrap gap-2 rounded-xl border border-stone-100 bg-stone-50 p-3">{TELEGRAM_ALERT_BRANDS.map((brand) => { const active = permissionDraft.brandIds.includes(brand.id); return <button key={brand.id} type="button" onClick={() => setPermissionDraft((previous) => ({ ...previous, brandIds: active ? previous.brandIds.filter((item) => item !== brand.id) : [...previous.brandIds, brand.id] }))} className={`rounded-xl border px-3 py-2 text-[10px] font-black ${active ? "border-sky-200 bg-sky-50 text-sky-700" : "border-stone-100 bg-white text-stone-400"}`}>{brand.label}</button>; })}</div>}<div className="mt-5 grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-3">{permissionEntries.length ? permissionEntries.map(([userId, permission]) => <article key={userId} className="flex items-center justify-between gap-3 rounded-2xl border border-stone-100 bg-stone-50/50 p-4"><div><p className="text-xs font-black text-stone-700">{permission.displayName || userId}</p><p className="mt-1 text-[10px] font-bold text-stone-400">{permission.role === "director" ? "可管理全部" : permission.role === "brand_manager" ? `可管理 ${(permission.brandIds || []).map(getTelegramAlertBrandLabel).join("、") || "指定品牌"}` : "只能查看"}</p></div><button type="button" onClick={() => removePermission(userId)} disabled={isBusy || !canManagePolicyCenter} className="rounded-xl border border-rose-100 bg-rose-50 p-2 text-rose-500">{loadingAction === `permission:${userId}` ? <Loader2 size={12} className="animate-spin" /> : <XCircle size={14} />}</button></article>) : <div className="rounded-2xl border border-dashed border-amber-200 bg-amber-50 p-4 text-[10px] font-bold text-amber-700 md:col-span-2 xl:col-span-3">尚未建立個人名單。目前仍使用群組預設權限。</div>}</div></section>
+  );
+
+  const renderGovernance = () => (
+    <div className="space-y-5"><div className="grid grid-cols-2 gap-2 rounded-2xl border border-stone-100 bg-white p-1.5 shadow-sm"><button type="button" onClick={() => setGovernanceTab("rules")} className={`rounded-xl px-3 py-2.5 text-xs font-black ${governanceTab === "rules" ? "bg-violet-600 text-white" : "text-stone-400"}`}>長期規則</button><button type="button" onClick={() => setGovernanceTab("permissions")} className={`rounded-xl px-3 py-2.5 text-xs font-black ${governanceTab === "permissions" ? "bg-sky-600 text-white" : "text-stone-400"}`}>人員權限</button></div>{governanceTab === "rules" ? renderRuleEditor() : renderPermissions()}</div>
+  );
+
+  const renderReportHistory = () => (
+    <section className="rounded-2xl border border-stone-100 bg-white p-5 shadow-sm"><div className="flex items-center justify-between gap-3"><div><p className="text-sm font-black text-stone-800">每次正式發送的報表紀錄</p><p className="mt-1 text-[11px] font-bold text-stone-400">可用來確認當時的數據、資料截止時間與套用規則。</p></div><button type="button" onClick={() => refreshV5Operations()} className="rounded-xl border border-stone-200 p-2 text-stone-500"><RefreshCw size={14} className={loadingAction === "refreshV5Operations" ? "animate-spin" : ""} /></button></div><div className="mt-5 grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-3">{reportSnapshots.length ? reportSnapshots.map((snapshot) => <article key={snapshot.id} className="rounded-2xl border border-indigo-100 bg-indigo-50/30 p-4"><div className="flex items-start justify-between gap-3"><div><p className="text-xs font-black text-stone-700">{snapshot.scheduleName || snapshot.reportType || "固定報表"}</p><p className="mt-1 text-[10px] font-bold text-stone-400">{snapshot.createdAtText ? new Date(snapshot.createdAtText).toLocaleString("zh-TW", { hour12: false }) : snapshot.cutoffAtText || "時間未記錄"}</p></div><span className="rounded-full bg-white px-2.5 py-1 text-[9px] font-black text-indigo-600">已保存</span></div><div className="mt-3 rounded-xl bg-white/80 p-3"><p className="text-[10px] font-black text-stone-400">資料計算到</p><p className="mt-1 text-[11px] font-black text-stone-700">{snapshot.cutoffAtText || snapshot.cutoffDate || "未記錄"}</p></div><details className="mt-3"><summary className="cursor-pointer text-[10px] font-black text-indigo-600">查看技術詳細資料</summary><div className="mt-2 space-y-1 rounded-xl bg-white p-3 text-[9px] font-bold text-stone-400"><p>報表編號：{snapshot.snapshotId || snapshot.id}</p><p>計算方式版本：{snapshot.metricVersion || "metric-v5.0-unified"}</p><p>套用規則：{(snapshot.policyIds || []).join("、") || "無"}</p><p>資料讀取：{Number(snapshot.readCount || 0).toLocaleString()} 筆</p></div></details></article>) : <div className="rounded-2xl border border-dashed border-stone-200 p-12 text-center md:col-span-2 xl:col-span-3"><FileText size={28} className="mx-auto text-stone-300" /><p className="mt-2 text-xs font-black text-stone-500">尚未產生正式報表紀錄</p></div>}</div></section>
+  );
+
   if (!isLoaded) {
     return (
       <div className="flex items-center justify-center gap-2 rounded-3xl border border-stone-100 bg-white p-12 text-sm font-black text-stone-400">
         <Loader2 size={18} className="animate-spin" />
-        載入 Telegram 戰情設定中...
+        載入 Telegram 營運助手中...
       </div>
     );
   }
 
   return (
-    <section className="overflow-hidden rounded-[2rem] border border-sky-100 bg-gradient-to-br from-sky-50/80 via-white to-indigo-50/60 shadow-[0_22px_70px_rgba(40,110,160,0.08)]">
-      <div className="flex flex-col gap-4 border-b border-sky-100/70 p-6 lg:flex-row lg:items-start lg:justify-between">
+    <section className="rounded-[2rem] border border-sky-100 bg-gradient-to-br from-sky-50/70 via-white to-indigo-50/40 p-5 shadow-[0_18px_60px_rgba(40,110,160,0.07)] sm:p-6">
+      <div className="mb-5 flex flex-col gap-3 border-b border-sky-100 pb-5 lg:flex-row lg:items-start lg:justify-between">
         <div className="flex items-start gap-3">
-          <div className="rounded-2xl border border-sky-100 bg-white p-2.5 shadow-sm">
-            <Radio size={20} className="text-sky-600" />
-          </div>
-          <div>
-            <p className="text-[10px] font-black uppercase tracking-[0.18em] text-sky-500">
-              Telegram Agent Control
-            </p>
-            <h3 className="mt-1 text-lg font-black text-stone-800">Telegram 戰情設定中心</h3>
-            <p className="mt-1 max-w-3xl text-xs font-bold leading-5 text-stone-400">
-              每個品牌獨立設定判斷項目、門檻與顯示上限；可從既有指標庫自由加入或移除，儲存後不需重新部署 Functions。
-            </p>
-          </div>
+          <div className="rounded-2xl border border-sky-100 bg-white p-3 text-sky-600 shadow-sm"><HeaderIcon size={20} /></div>
+          <div><p className="text-[10px] font-black tracking-[0.14em] text-sky-500">{meta.eyebrow}</p><h3 className="mt-1 text-xl font-black text-stone-800">{meta.title}</h3><p className="mt-1 max-w-3xl text-xs font-bold leading-5 text-stone-400">{meta.description}</p></div>
         </div>
-        <div className="flex shrink-0 flex-wrap items-center gap-2">
-          <span
-            className={`rounded-full border px-3 py-1.5 text-[11px] font-black ${
-              form.enabled
-                ? "border-emerald-100 bg-emerald-50 text-emerald-700"
-                : "border-stone-200 bg-stone-50 text-stone-500"
-            }`}
-          >
-            {form.enabled ? "主動預警已開啟" : "主動預警已停用"}
-          </span>
-          <span className="rounded-full border border-sky-100 bg-white px-3 py-1.5 text-[11px] font-black text-sky-700">
-            台北時間
-          </span>
-        </div>
+        {view === "alerts" && <span className={`rounded-full border px-3 py-1.5 text-[10px] font-black ${form.enabled ? "border-emerald-100 bg-emerald-50 text-emerald-700" : "border-stone-200 bg-stone-50 text-stone-500"}`}>{form.enabled ? "主動提醒使用中" : "主動提醒已停用"}</span>}
       </div>
-
-      <div className="space-y-6 p-6">
-        {lastMessage && (
-          <div className="flex items-center gap-2 rounded-2xl border border-sky-100 bg-white/80 px-4 py-3 text-xs font-bold text-stone-600">
-            <Activity size={14} className="shrink-0 text-sky-500" />
-            {lastMessage}
-          </div>
-        )}
-
-        <div className="grid grid-cols-1 gap-4 xl:grid-cols-3">
-          <div className="space-y-5 rounded-[1.5rem] border border-white bg-white/90 p-5 shadow-sm xl:col-span-2">
-            <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
-              <div>
-                <p className="text-sm font-black text-stone-800">排程與開關</p>
-                <p className="mt-1 text-[11px] font-bold text-stone-400">
-                  後端每 5 分鐘確認一次設定，只有到達指定時間才載入營運資料。
-                </p>
-              </div>
-              <button
-                type="button"
-                onClick={() => setForm((previous) => ({ ...previous, enabled: !previous.enabled }))}
-                className={`relative h-9 w-16 rounded-full transition-all ${
-                  form.enabled
-                    ? "bg-emerald-500 shadow-lg shadow-emerald-100"
-                    : "bg-stone-200"
-                }`}
-                aria-label={form.enabled ? "停用主動預警" : "啟用主動預警"}
-              >
-                <span
-                  className={`absolute top-1 h-7 w-7 rounded-full bg-white shadow transition-all ${
-                    form.enabled ? "left-8" : "left-1"
-                  }`}
-                />
-              </button>
-            </div>
-
-            <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
-              <label className="space-y-2">
-                <span className="text-[11px] font-black text-stone-500">每日推播時間</span>
-                <div className="flex h-12 items-center gap-3 rounded-2xl border border-stone-200 bg-stone-50 px-4">
-                  <Clock size={16} className="text-sky-500" />
-                  <input
-                    type="time"
-                    step="300"
-                    value={form.sendTime}
-                    onChange={(event) => setForm((previous) => ({ ...previous, sendTime: event.target.value }))}
-                    className="w-full bg-transparent text-sm font-black text-stone-700 outline-none"
-                  />
-                </div>
-              </label>
-              <label className="space-y-2">
-                <span className="text-[11px] font-black text-stone-500">暫停推播至（含當日）</span>
-                <div className="flex h-12 items-center gap-3 rounded-2xl border border-stone-200 bg-stone-50 px-4">
-                  <Calendar size={16} className="text-sky-500" />
-                  <input
-                    type="date"
-                    value={form.pausedUntil || ""}
-                    onChange={(event) => setForm((previous) => ({ ...previous, pausedUntil: event.target.value }))}
-                    className="w-full bg-transparent text-sm font-black text-stone-700 outline-none"
-                  />
-                  {form.pausedUntil && (
-                    <button
-                      type="button"
-                      onClick={() => setForm((previous) => ({ ...previous, pausedUntil: "" }))}
-                      className="text-[10px] font-black text-stone-400 hover:text-rose-500"
-                    >
-                      清除
-                    </button>
-                  )}
-                </div>
-              </label>
-            </div>
-
-            <div>
-              <p className="mb-2 text-[11px] font-black text-stone-500">推播星期</p>
-              <div className="flex flex-wrap gap-2">
-                {TELEGRAM_ALERT_WEEKDAYS.map((day) => {
-                  const active = form.weekdays.includes(day.id);
-                  return (
-                    <button
-                      key={day.id}
-                      type="button"
-                      onClick={() => toggleArrayValue("weekdays", day.id)}
-                      className={`h-10 w-10 rounded-xl border text-xs font-black transition-all ${
-                        active
-                          ? "border-sky-500 bg-sky-500 text-white shadow-md shadow-sky-100"
-                          : "border-stone-200 bg-white text-stone-400"
-                      }`}
-                    >
-                      {day.label}
-                    </button>
-                  );
-                })}
-              </div>
-            </div>
-
-            <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
-              <div>
-                <p className="mb-2 text-[11px] font-black text-stone-500">納入品牌</p>
-                <div className="space-y-2">
-                  {[
-                    { id: "cyj", label: "CYJ" },
-                    { id: "anniu", label: "安妞" },
-                    { id: "yibo", label: "伊啵" },
-                  ].map((brand) => {
-                    const active = form.brandIds.includes(brand.id);
-                    return (
-                      <button
-                        key={brand.id}
-                        type="button"
-                        onClick={() => toggleArrayValue("brandIds", brand.id)}
-                        className={`flex w-full items-center justify-between rounded-2xl border px-4 py-3 text-xs font-black transition-all ${
-                          active
-                            ? "border-sky-200 bg-sky-50 text-sky-700"
-                            : "border-stone-200 bg-white text-stone-400"
-                        }`}
-                      >
-                        <span>{brand.label}</span>
-                        <span>{active ? "已納入" : "未納入"}</span>
-                      </button>
-                    );
-                  })}
-                </div>
-              </div>
-
-              <div>
-                <p className="mb-2 text-[11px] font-black text-stone-500">接收群組</p>
-                <div className="space-y-2">
-                  {[
-                    { id: "main", label: "高階主管主群" },
-                    { id: "manager", label: "主管群" },
-                  ].map((target) => {
-                    const active = form.chatTargets.includes(target.id);
-                    return (
-                      <button
-                        key={target.id}
-                        type="button"
-                        onClick={() => toggleArrayValue("chatTargets", target.id)}
-                        className={`flex w-full items-center justify-between rounded-2xl border px-4 py-3 text-xs font-black transition-all ${
-                          active
-                            ? "border-indigo-200 bg-indigo-50 text-indigo-700"
-                            : "border-stone-200 bg-white text-stone-400"
-                        }`}
-                      >
-                        <span>{target.label}</span>
-                        <span>{active ? "會收到" : "不發送"}</span>
-                      </button>
-                    );
-                  })}
-                </div>
-              </div>
-            </div>
-
-            <label className="flex cursor-pointer items-center justify-between gap-4 rounded-2xl border border-stone-100 bg-stone-50/70 p-4">
-              <div>
-                <p className="text-xs font-black text-stone-700">沒有異常時也發送正常通知</p>
-                <p className="mt-1 text-[10px] font-bold text-stone-400">
-                  關閉後，當日無異常就不打擾群組。
-                </p>
-              </div>
-              <input
-                type="checkbox"
-                checked={form.sendWhenClear}
-                onChange={(event) => setForm((previous) => ({ ...previous, sendWhenClear: event.target.checked }))}
-                className="h-5 w-5 rounded border-stone-300 text-sky-500 focus:ring-sky-200"
-              />
-            </label>
-          </div>
-
-          <div className="space-y-4 rounded-[1.5rem] border border-white bg-white/90 p-5 shadow-sm">
-            <div>
-              <p className="text-sm font-black text-stone-800">最近執行狀態</p>
-              <p className="mt-1 text-[11px] font-bold text-stone-400">
-                顯示正式排程或手動測試的最新結果。
-              </p>
-            </div>
-            <div className="space-y-3 text-xs">
-              <div className="rounded-2xl bg-stone-50 p-3">
-                <p className="text-[10px] font-black text-stone-400">正式排程狀態</p>
-                <p className="mt-1 font-black text-stone-700">
-                  {TELEGRAM_ALERT_STATUS_LABELS[status?.status] || status?.status || "尚未執行"}
-                </p>
-              </div>
-              <div className="rounded-2xl bg-stone-50 p-3">
-                <p className="text-[10px] font-black text-stone-400">最近正式發送</p>
-                <p className="mt-1 font-black text-stone-700">
-                  {status?.lastSentAtText
-                    ? new Date(status.lastSentAtText).toLocaleString("zh-TW", { hour12: false })
-                    : "尚無紀錄"}
-                </p>
-              </div>
-              <div className="grid grid-cols-1 gap-2 sm:grid-cols-3">
-                <div className="rounded-2xl bg-rose-50 p-3">
-                  <p className="text-[10px] font-black text-rose-400">營運異常</p>
-                  <p className="mt-1 text-lg font-black text-rose-600">
-                    {Number(status?.operationalAlertCount ?? status?.lastManualOperationalAlertCount ?? 0).toLocaleString()}
-                  </p>
-                </div>
-                <div className="rounded-2xl bg-amber-50 p-3">
-                  <p className="text-[10px] font-black text-amber-500">資料待補</p>
-                  <p className="mt-1 text-lg font-black text-amber-600">
-                    {Number(status?.dataIssueCount ?? status?.lastManualDataIssueCount ?? 0).toLocaleString()}
-                  </p>
-                </div>
-                <div className="rounded-2xl bg-sky-50 p-3">
-                  <p className="text-[10px] font-black text-sky-400">文件讀取</p>
-                  <p className="mt-1 text-lg font-black text-sky-600">
-                    {Number(status?.readCount ?? status?.lastManualReadCount ?? 0).toLocaleString()}
-                  </p>
-                </div>
-              </div>
-              {status?.brandResults && Object.keys(status.brandResults).length > 0 && (
-                <div className="space-y-2 rounded-2xl border border-stone-100 bg-white p-3">
-                  <p className="text-[10px] font-black text-stone-400">各品牌最近結果</p>
-                  {Object.entries(status.brandResults).filter(([brandId]) => (status?.brandIds || form.brandIds).includes(brandId)).map(([brandId, item]) => (
-                    <div key={brandId} className="flex items-center justify-between gap-3 text-[11px] font-bold text-stone-600">
-                      <span>{item?.brand || brandId}</span>
-                      <span className={item?.status === "error" ? "text-rose-600" : item?.status === "sent" ? "text-emerald-600" : "text-stone-400"}>
-                        {TELEGRAM_BRAND_STATUS_LABELS[item?.status] || item?.status || "尚無紀錄"}
-                      </span>
-                    </div>
-                  ))}
-                </div>
-              )}
-              {status?.lastError && (
-                <div className="rounded-2xl border border-rose-100 bg-rose-50 p-3 text-[11px] font-bold text-rose-600">
-                  {status.lastError}
-                </div>
-              )}
-            </div>
-            <ActionButton
-              onClick={() => refreshStatus()}
-              disabled={isBusy}
-              variant="secondary"
-              className="w-full"
-            >
-              {loadingAction === "refreshStatus" ? (
-                <Loader2 size={14} className="animate-spin" />
-              ) : (
-                <RefreshCw size={14} />
-              )}
-              更新狀態
-            </ActionButton>
-          </div>
-        </div>
-
-        <div className="space-y-4 rounded-[1.5rem] border border-white bg-white/90 p-5 shadow-sm">
-          <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
-            <div>
-              <p className="text-sm font-black text-stone-800">各品牌預警判斷設定</p>
-              <p className="mt-1 text-[11px] font-bold text-stone-400">
-                每個品牌有獨立規則。移除只會停用該項目，之後可從指標庫重新加入。
-              </p>
-            </div>
-            <div className="flex flex-wrap gap-2">
-              {TELEGRAM_ALERT_BRANDS.filter((brand) => brand.id !== activeBrandId).map((brand) => (
-                <button
-                  key={brand.id}
-                  type="button"
-                  onClick={() => copyActiveBrandProfile(brand.id)}
-                  className="inline-flex items-center gap-1 rounded-xl border border-stone-200 bg-white px-3 py-2 text-[10px] font-black text-stone-500 transition hover:border-indigo-200 hover:bg-indigo-50 hover:text-indigo-600"
-                >
-                  <Copy size={12} />
-                  複製到{brand.label}
-                </button>
-              ))}
-            </div>
-          </div>
-
-          <div className="grid grid-cols-3 gap-2 rounded-2xl bg-stone-50 p-1.5">
-            {TELEGRAM_ALERT_BRANDS.map((brand) => {
-              const active = activeBrandId === brand.id;
-              const included = form.brandIds.includes(brand.id);
-              const enabledCount = Object.values(form.brandProfiles?.[brand.id]?.rules || {}).filter((rule) => rule?.enabled).length;
-              return (
-                <button
-                  key={brand.id}
-                  type="button"
-                  onClick={() => {
-                    setActiveBrandId(brand.id);
-                    setRulePickerOpen(false);
-                  }}
-                  className={`rounded-xl px-3 py-2.5 text-center transition ${active ? "bg-white text-sky-700 shadow-sm" : "text-stone-400 hover:text-stone-600"}`}
-                >
-                  <span className="block text-xs font-black">{brand.label}</span>
-                  <span className="mt-0.5 block text-[9px] font-bold">
-                    {included ? `已納入｜${enabledCount} 項` : `未納入｜${enabledCount} 項`}
-                  </span>
-                </button>
-              );
-            })}
-          </div>
-
-          {(() => {
-            const activeProfile = form.brandProfiles?.[activeBrandId] || createDefaultTelegramBrandProfile();
-            const enabledDefinitions = TELEGRAM_ALERT_RULE_DEFINITIONS.filter(
-              (definition) => activeProfile.rules?.[definition.id]?.enabled === true
-            );
-            const disabledDefinitions = TELEGRAM_ALERT_RULE_DEFINITIONS.filter(
-              (definition) => activeProfile.rules?.[definition.id]?.enabled !== true
-            );
-            return (
-              <div className="space-y-4">
-                <div className="flex flex-col gap-3 rounded-2xl border border-sky-100 bg-sky-50/50 p-4 md:flex-row md:items-center md:justify-between">
-                  <div>
-                    <p className="text-xs font-black text-sky-800">
-                      {getTelegramAlertBrandLabel(activeBrandId)}｜已啟用 {enabledDefinitions.length} 項判斷
-                    </p>
-                    <p className="mt-1 text-[10px] font-bold text-sky-500">
-                      這些設定只套用到 {getTelegramAlertBrandLabel(activeBrandId)} 的獨立巡察訊息。
-                    </p>
-                  </div>
-                  <label className="flex items-center gap-2 text-xs font-black text-stone-600">
-                    最多顯示
-                    <input
-                      type="number"
-                      min="1"
-                      max="20"
-                      value={activeProfile.limit}
-                      onChange={(event) => updateBrandProfile(activeBrandId, (profile) => ({ ...profile, limit: event.target.value }))}
-                      className="w-16 rounded-xl border border-sky-100 bg-white px-2 py-2 text-center outline-none"
-                    />
-                    家
-                  </label>
-                </div>
-
-                <div className="relative">
-                  <button
-                    type="button"
-                    onClick={() => setRulePickerOpen((previous) => !previous)}
-                    disabled={!disabledDefinitions.length}
-                    className="inline-flex min-h-10 items-center gap-1.5 rounded-xl border border-sky-200 bg-sky-50 px-4 py-2 text-xs font-black text-sky-700 transition hover:bg-sky-100 disabled:cursor-not-allowed disabled:opacity-40"
-                  >
-                    <Plus size={14} />
-                    {disabledDefinitions.length ? "新增判斷項目" : "所有可用項目皆已加入"}
-                  </button>
-                  {rulePickerOpen && disabledDefinitions.length > 0 && (
-                    <div className="absolute left-0 top-12 z-20 w-full max-w-xl rounded-2xl border border-stone-200 bg-white p-2 shadow-2xl">
-                      <p className="px-3 py-2 text-[10px] font-black text-stone-400">選擇要加入 {getTelegramAlertBrandLabel(activeBrandId)} 的判斷項目</p>
-                      <div className="max-h-72 space-y-1 overflow-y-auto">
-                        {disabledDefinitions.map((definition) => (
-                          <button
-                            key={definition.id}
-                            type="button"
-                            onClick={() => enableRule(definition.id)}
-                            className="flex w-full items-start justify-between gap-3 rounded-xl px-3 py-2.5 text-left transition hover:bg-sky-50"
-                          >
-                            <span>
-                              <span className="block text-xs font-black text-stone-700">{definition.label}</span>
-                              <span className="mt-0.5 block text-[10px] font-bold leading-4 text-stone-400">{definition.description}</span>
-                            </span>
-                            <Plus size={14} className="mt-0.5 shrink-0 text-sky-500" />
-                          </button>
-                        ))}
-                      </div>
-                    </div>
-                  )}
-                </div>
-
-                {enabledDefinitions.length > 0 ? (
-                  <div className="grid grid-cols-1 gap-3 xl:grid-cols-2">
-                    {enabledDefinitions.map((definition) => (
-                      <TelegramRuleEditorCard
-                        key={definition.id}
-                        definition={definition}
-                        rule={activeProfile.rules[definition.id]}
-                        onChange={(nextRule) => updateBrandRule(activeBrandId, definition.id, nextRule)}
-                        onRemove={() => disableRule(definition.id)}
-                      />
-                    ))}
-                  </div>
-                ) : (
-                  <div className="rounded-2xl border border-dashed border-amber-200 bg-amber-50/60 p-8 text-center">
-                    <p className="text-xs font-black text-amber-700">此品牌尚未啟用任何判斷項目</p>
-                    <p className="mt-1 text-[10px] font-bold text-amber-500">請按「新增判斷項目」至少加入一項後再儲存。</p>
-                  </div>
-                )}
-              </div>
-            );
-          })()}
-        </div>
-
-        <div className="space-y-4 rounded-[1.5rem] border border-violet-100 bg-white/95 p-5 shadow-sm">
-          <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
-            <div className="flex items-start gap-3">
-              <div className="rounded-2xl bg-violet-50 p-3 text-violet-600">
-                <Brain size={20} />
-              </div>
-              <div>
-                <p className="text-sm font-black text-stone-800">可控式長期記憶與營運規則</p>
-                <p className="mt-1 text-[11px] font-bold leading-5 text-stone-400">
-                  Telegram 可從自然語言建立規則，但正式生效前會要求確認；此處可直接檢視、建立、停用與整理規則。
-                </p>
-              </div>
-            </div>
-            <div className="flex flex-wrap gap-2">
-              <span className="rounded-full bg-violet-50 px-3 py-1.5 text-[10px] font-black text-violet-600">
-                生效 {activePolicies.length} 條
-              </span>
-              <span className={`rounded-full px-3 py-1.5 text-[10px] font-black ${policyConflictGroups.length ? "bg-rose-50 text-rose-600" : "bg-emerald-50 text-emerald-600"}`}>
-                衝突 {policyConflictGroups.length} 組
-              </span>
-              <button
-                type="button"
-                onClick={() => setPolicyPanelOpen((previous) => !previous)}
-                className="rounded-xl border border-stone-200 bg-white px-3 py-2 text-[10px] font-black text-stone-500"
-              >
-                {policyPanelOpen ? "收合" : "展開"}
-              </button>
-            </div>
-          </div>
-
-          {policyPanelOpen && (
-            <div className="space-y-5">
-              {!canManagePolicyCenter && (
-                <div className="rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3 text-xs font-bold leading-5 text-amber-700">
-                  目前帳號可查看規則，但只有 master／director 可以在後台新增、停用規則或調整 Telegram 權限。
-                </div>
-              )}
-              <div className="grid grid-cols-1 gap-4 xl:grid-cols-[1.1fr_1fr]">
-                <div className="space-y-4 rounded-2xl border border-violet-100 bg-violet-50/30 p-4">
-                  <div className="flex items-center gap-2">
-                    <Settings2 size={15} className="text-violet-600" />
-                    <p className="text-xs font-black text-stone-700">建立長期規則</p>
-                  </div>
-
-                  <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-                    <label className="rounded-xl border border-stone-100 bg-white p-3">
-                      <span className="mb-1.5 block text-[10px] font-black text-stone-400">規則類型</span>
-                      <select
-                        value={policyEditor.type}
-                        onChange={(event) => setPolicyEditor((previous) => ({
-                          ...createDefaultPolicyEditor(),
-                          type: event.target.value,
-                          ownerScope: event.target.value === "response_preference" ? "global" : "brand",
-                        }))}
-                        className="w-full bg-transparent text-xs font-black text-stone-700 outline-none"
-                      >
-                        <option value="exclude_store">排除／暫停店家分析</option>
-                        <option value="alert_rule">品牌預警門檻覆寫</option>
-                        <option value="response_preference">回答偏好</option>
-                      </select>
-                    </label>
-
-                    {policyEditor.type !== "response_preference" && (
-                      <label className="rounded-xl border border-stone-100 bg-white p-3">
-                        <span className="mb-1.5 block text-[10px] font-black text-stone-400">品牌</span>
-                        <select
-                          value={policyEditor.brandId}
-                          onChange={(event) => setPolicyEditor((previous) => ({ ...previous, brandId: event.target.value }))}
-                          className="w-full bg-transparent text-xs font-black text-stone-700 outline-none"
-                        >
-                          {TELEGRAM_ALERT_BRANDS.map((brand) => (
-                            <option key={brand.id} value={brand.id}>{brand.label}</option>
-                          ))}
-                        </select>
-                      </label>
-                    )}
-                  </div>
-
-                  {policyEditor.type === "exclude_store" && (
-                    <div className="space-y-3">
-                      <label className="block rounded-xl border border-stone-100 bg-white p-3">
-                        <span className="mb-1.5 block text-[10px] font-black text-stone-400">店家名稱</span>
-                        <input
-                          value={policyEditor.storeName}
-                          onChange={(event) => setPolicyEditor((previous) => ({ ...previous, storeName: event.target.value }))}
-                          placeholder="例如：中美店"
-                          className="w-full bg-transparent text-sm font-black text-stone-700 outline-none"
-                        />
-                      </label>
-                      <div className="rounded-xl border border-stone-100 bg-white p-3">
-                        <p className="mb-2 text-[10px] font-black text-stone-400">作用範圍</p>
-                        <div className="flex flex-wrap gap-2">
-                          {TELEGRAM_POLICY_SCOPES.map((scope) => {
-                            const active = policyEditor.scopes.includes(scope.id);
-                            return (
-                              <button
-                                key={scope.id}
-                                type="button"
-                                onClick={() => setPolicyEditor((previous) => ({
-                                  ...previous,
-                                  scopes: active
-                                    ? previous.scopes.filter((item) => item !== scope.id)
-                                    : [...previous.scopes, scope.id],
-                                }))}
-                                className={`rounded-xl border px-3 py-2 text-[10px] font-black transition ${active ? "border-violet-200 bg-violet-50 text-violet-700" : "border-stone-100 bg-stone-50 text-stone-400"}`}
-                              >
-                                {scope.label}
-                              </button>
-                            );
-                          })}
-                        </div>
-                      </div>
-                    </div>
-                  )}
-
-                  {policyEditor.type === "alert_rule" && (
-                    <div className="space-y-3">
-                      <label className="block rounded-xl border border-stone-100 bg-white p-3">
-                        <span className="mb-1.5 block text-[10px] font-black text-stone-400">預警項目</span>
-                        <select
-                          value={policyEditor.ruleId}
-                          onChange={(event) => setPolicyEditor((previous) => ({ ...previous, ruleId: event.target.value }))}
-                          className="w-full bg-transparent text-xs font-black text-stone-700 outline-none"
-                        >
-                          {TELEGRAM_POLICY_RULES.map((rule) => (
-                            <option key={rule.id} value={rule.id}>{rule.label}</option>
-                          ))}
-                        </select>
-                      </label>
-
-                      {policyEditor.ruleId !== "limit" && (
-                        <label className="flex items-center justify-between rounded-xl border border-stone-100 bg-white p-3 text-xs font-black text-stone-600">
-                          啟用此項判斷
-                          <input
-                            type="checkbox"
-                            checked={policyEditor.enabledValue !== false}
-                            onChange={(event) => setPolicyEditor((previous) => ({ ...previous, enabledValue: event.target.checked }))}
-                            className="h-4 w-4"
-                          />
-                        </label>
-                      )}
-
-                      {policyEditor.ruleId === "progressGap" ? (
-                        <div className="grid grid-cols-2 gap-2">
-                          <TelegramRuleNumberField
-                            label="黃燈落後"
-                            value={policyEditor.watchThreshold}
-                            onChange={(value) => setPolicyEditor((previous) => ({ ...previous, watchThreshold: value }))}
-                            unit="百分點"
-                          />
-                          <TelegramRuleNumberField
-                            label="紅燈落後"
-                            value={policyEditor.criticalThreshold}
-                            onChange={(value) => setPolicyEditor((previous) => ({ ...previous, criticalThreshold: value }))}
-                            unit="百分點"
-                          />
-                        </div>
-                      ) : policyEditor.ruleId === "limit" ? (
-                        <TelegramRuleNumberField
-                          label="每品牌最多顯示"
-                          value={policyEditor.limit}
-                          onChange={(value) => setPolicyEditor((previous) => ({ ...previous, limit: value }))}
-                          unit="家"
-                          max={20}
-                        />
-                      ) : !["missingReport", "missingTarget"].includes(policyEditor.ruleId) ? (
-                        <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
-                          <TelegramRuleNumberField
-                            label="判斷門檻"
-                            value={policyEditor.threshold}
-                            onChange={(value) => setPolicyEditor((previous) => ({ ...previous, threshold: value }))}
-                            unit={["cashAchievementRate", "closingRate", "skincareRatio"].includes(policyEditor.ruleId) ? "%" : policyEditor.ruleId === "traffic" ? "人次" : "人"}
-                            max={["newCustomers", "traffic"].includes(policyEditor.ruleId) ? 999999 : 100}
-                          />
-                          <TelegramRuleSeverityField
-                            value={policyEditor.severity}
-                            onChange={(value) => setPolicyEditor((previous) => ({ ...previous, severity: value }))}
-                          />
-                          {policyEditor.ruleId === "closingRate" && (
-                            <TelegramRuleNumberField
-                              label="最低新客樣本"
-                              value={policyEditor.minSample}
-                              onChange={(value) => setPolicyEditor((previous) => ({ ...previous, minSample: value }))}
-                              unit="人"
-                              max={999}
-                            />
-                          )}
-                        </div>
-                      ) : null}
-                    </div>
-                  )}
-
-                  {policyEditor.type === "response_preference" && (
-                    <div className="space-y-3">
-                      <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-                        <label className="rounded-xl border border-stone-100 bg-white p-3">
-                          <span className="mb-1.5 block text-[10px] font-black text-stone-400">套用對象</span>
-                          <select
-                            value={policyEditor.ownerScope}
-                            onChange={(event) => setPolicyEditor((previous) => ({ ...previous, ownerScope: event.target.value }))}
-                            className="w-full bg-transparent text-xs font-black text-stone-700 outline-none"
-                          >
-                            <option value="global">所有 Telegram 使用者</option>
-                            <option value="user">指定使用者</option>
-                          </select>
-                        </label>
-                        {policyEditor.ownerScope === "user" && (
-                          <label className="rounded-xl border border-stone-100 bg-white p-3">
-                            <span className="mb-1.5 block text-[10px] font-black text-stone-400">Telegram 使用者 ID</span>
-                            <input
-                              value={policyEditor.userId}
-                              onChange={(event) => setPolicyEditor((previous) => ({ ...previous, userId: event.target.value }))}
-                              className="w-full bg-transparent text-xs font-black text-stone-700 outline-none"
-                            />
-                          </label>
-                        )}
-                      </div>
-                      <label className="block rounded-xl border border-stone-100 bg-white p-3">
-                        <span className="mb-1.5 block text-[10px] font-black text-stone-400">偏好識別名稱</span>
-                        <input
-                          value={policyEditor.preferenceKey}
-                          onChange={(event) => setPolicyEditor((previous) => ({ ...previous, preferenceKey: event.target.value }))}
-                          placeholder="例如：conclusion_first"
-                          className="w-full bg-transparent text-xs font-black text-stone-700 outline-none"
-                        />
-                      </label>
-                      <label className="block rounded-xl border border-stone-100 bg-white p-3">
-                        <span className="mb-1.5 block text-[10px] font-black text-stone-400">回答偏好內容</span>
-                        <textarea
-                          value={policyEditor.instruction}
-                          onChange={(event) => setPolicyEditor((previous) => ({ ...previous, instruction: event.target.value }))}
-                          placeholder="例如：回答時先給結論，再列出最多三項優先行動。"
-                          rows={3}
-                          className="w-full resize-none bg-transparent text-xs font-bold leading-5 text-stone-700 outline-none"
-                        />
-                      </label>
-                    </div>
-                  )}
-
-                  <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-                    <label className="rounded-xl border border-stone-100 bg-white p-3">
-                      <span className="mb-1.5 block text-[10px] font-black text-stone-400">有效期限</span>
-                      <input
-                        type="date"
-                        value={policyEditor.effectiveUntil}
-                        onChange={(event) => setPolicyEditor((previous) => ({ ...previous, effectiveUntil: event.target.value }))}
-                        className="w-full bg-transparent text-xs font-black text-stone-700 outline-none"
-                      />
-                      <span className="mt-1 block text-[9px] font-bold text-stone-300">留空代表持續有效，直到人工撤銷。</span>
-                    </label>
-                    <TelegramRuleNumberField
-                      label="規則優先權"
-                      value={policyEditor.priority}
-                      onChange={(value) => setPolicyEditor((previous) => ({ ...previous, priority: value }))}
-                      unit="分"
-                      max={999}
-                    />
-                  </div>
-
-                  <ActionButton onClick={savePolicy} disabled={isBusy || !canManagePolicyCenter} className="w-full">
-                    {loadingAction === "savePolicy" ? <Loader2 size={14} className="animate-spin" /> : <Save size={14} />}
-                    建立長期規則
-                  </ActionButton>
-                </div>
-
-                <div className="space-y-3 rounded-2xl border border-stone-100 bg-stone-50/50 p-4">
-                  <div className="flex items-center justify-between gap-2">
-                    <div>
-                      <p className="text-xs font-black text-stone-700">目前規則</p>
-                      <p className="mt-1 text-[10px] font-bold text-stone-400">Telegram 的 /rules 會顯示生效規則；每日 03:20 自動整理過期與重複規則。</p>
-                    </div>
-                    <div className="flex gap-2">
-                      <button
-                        type="button"
-                        onClick={() => refreshPolicies()}
-                        disabled={isBusy}
-                        className="rounded-xl border border-stone-200 bg-white p-2 text-stone-500"
-                        title="重新整理"
-                      >
-                        <RefreshCw size={14} className={loadingAction === "refreshPolicies" ? "animate-spin" : ""} />
-                      </button>
-                      <button
-                        type="button"
-                        onClick={cleanupPolicyConflicts}
-                        disabled={isBusy || !canManagePolicyCenter}
-                        className="rounded-xl border border-amber-100 bg-amber-50 px-3 py-2 text-[10px] font-black text-amber-600"
-                      >
-                        整理衝突
-                      </button>
-                    </div>
-                  </div>
-
-                  <div className="max-h-[640px] space-y-2 overflow-y-auto pr-1">
-                    {policies.length ? (
-                      [...policies]
-                        .sort((a, b) => String(b.updatedAtText || b.createdAtText || "").localeCompare(String(a.updatedAtText || a.createdAtText || "")))
-                        .map((policy) => {
-                          const active = isPolicyActiveNow(policy);
-                          const isConflict = policyConflictGroups.some((rows) => rows.some((item) => item.id === policy.id));
-                          const brandLabel = policy.brandId ? getTelegramAlertBrandLabel(policy.brandId) : "全域";
-                          const title = policy.type === "exclude_store"
-                            ? `${brandLabel}｜排除 ${policy.storeName || policy.storeCore}店`
-                            : policy.type === "alert_rule"
-                              ? `${brandLabel}｜${TELEGRAM_POLICY_RULES.find((item) => item.id === policy.ruleId)?.label || policy.ruleId}`
-                              : `${policy.ownerScope === "user" ? `使用者 ${policy.userId}` : "全域"}｜回答偏好`;
-                          const detail = policy.type === "exclude_store"
-                            ? (policy.scopes || []).map((scope) => TELEGRAM_POLICY_SCOPES.find((item) => item.id === scope)?.label || scope).join("、")
-                            : policy.type === "alert_rule"
-                              ? JSON.stringify(policy.value || {})
-                              : policy.instruction;
-                          return (
-                            <article key={policy.id} className={`rounded-2xl border bg-white p-3 ${isConflict ? "border-rose-200" : active ? "border-violet-100" : "border-stone-100 opacity-60"}`}>
-                              <div className="flex items-start justify-between gap-3">
-                                <div className="min-w-0">
-                                  <div className="flex flex-wrap items-center gap-2">
-                                    <p className="text-xs font-black text-stone-700">{title}</p>
-                                    <span className={`rounded-full px-2 py-0.5 text-[9px] font-black ${active ? "bg-emerald-50 text-emerald-600" : "bg-stone-100 text-stone-400"}`}>
-                                      {active ? "生效" : policy.status || "停用"}
-                                    </span>
-                                    {isConflict && <span className="rounded-full bg-rose-50 px-2 py-0.5 text-[9px] font-black text-rose-600">衝突</span>}
-                                  </div>
-                                  <p className="mt-1 break-words text-[10px] font-bold leading-4 text-stone-400">{detail || "未提供細節"}</p>
-                                  <p className="mt-1 text-[9px] font-bold text-stone-300">
-                                    {policy.policyCode || policy.id}｜優先權 {Number(policy.priority || 100)}
-                                    {policy.effectiveUntil ? `｜至 ${policy.effectiveUntil}` : "｜無期限"}
-                                  </p>
-                                </div>
-                                <button
-                                  type="button"
-                                  onClick={() => togglePolicyEnabled(policy)}
-                                  disabled={isBusy || !canManagePolicyCenter}
-                                  className={`shrink-0 rounded-xl border px-3 py-2 text-[10px] font-black ${active ? "border-rose-100 bg-rose-50 text-rose-600" : "border-emerald-100 bg-emerald-50 text-emerald-600"}`}
-                                >
-                                  {loadingAction === `policy:${policy.id}` ? <Loader2 size={12} className="animate-spin" /> : active ? "停用" : "啟用"}
-                                </button>
-                              </div>
-                            </article>
-                          );
-                        })
-                    ) : (
-                      <div className="rounded-2xl border border-dashed border-stone-200 bg-white p-8 text-center text-xs font-black text-stone-400">
-                        尚未建立長期規則
-                      </div>
-                    )}
-                  </div>
-                </div>
-              </div>
-
-              <div className="space-y-4 rounded-2xl border border-sky-100 bg-sky-50/30 p-4">
-                <div className="flex items-center gap-2">
-                  <ShieldCheck size={16} className="text-sky-600" />
-                  <div>
-                    <p className="text-xs font-black text-stone-700">Telegram 規則修改權限</p>
-                    <p className="mt-1 text-[10px] font-bold text-stone-400">一旦建立個人權限名單，未列入名單的人會自動降為只讀。</p>
-                  </div>
-                </div>
-
-                <div className="grid grid-cols-1 gap-3 lg:grid-cols-[1fr_1fr_1fr_auto]">
-                  <label className="rounded-xl border border-stone-100 bg-white p-3">
-                    <span className="mb-1 block text-[10px] font-black text-stone-400">Telegram 使用者 ID</span>
-                    <input
-                      value={permissionDraft.userId}
-                      onChange={(event) => setPermissionDraft((previous) => ({ ...previous, userId: event.target.value }))}
-                      className="w-full bg-transparent text-xs font-black text-stone-700 outline-none"
-                    />
-                  </label>
-                  <label className="rounded-xl border border-stone-100 bg-white p-3">
-                    <span className="mb-1 block text-[10px] font-black text-stone-400">名稱</span>
-                    <input
-                      value={permissionDraft.displayName}
-                      onChange={(event) => setPermissionDraft((previous) => ({ ...previous, displayName: event.target.value }))}
-                      className="w-full bg-transparent text-xs font-black text-stone-700 outline-none"
-                    />
-                  </label>
-                  <label className="rounded-xl border border-stone-100 bg-white p-3">
-                    <span className="mb-1 block text-[10px] font-black text-stone-400">角色</span>
-                    <select
-                      value={permissionDraft.role}
-                      onChange={(event) => setPermissionDraft((previous) => ({ ...previous, role: event.target.value }))}
-                      className="w-full bg-transparent text-xs font-black text-stone-700 outline-none"
-                    >
-                      <option value="director">Director｜全公司規則</option>
-                      <option value="brand_manager">品牌主管｜指定品牌</option>
-                      <option value="viewer">Viewer｜只讀</option>
-                    </select>
-                  </label>
-                  <ActionButton onClick={savePermission} disabled={isBusy || !canManagePolicyCenter} className="self-stretch lg:self-end">
-                    <UserPlus size={14} />
-                    儲存權限
-                  </ActionButton>
-                </div>
-
-                {permissionDraft.role === "brand_manager" && (
-                  <div className="flex flex-wrap gap-2 rounded-xl border border-stone-100 bg-white p-3">
-                    {TELEGRAM_ALERT_BRANDS.map((brand) => {
-                      const active = permissionDraft.brandIds.includes(brand.id);
-                      return (
-                        <button
-                          key={brand.id}
-                          type="button"
-                          onClick={() => setPermissionDraft((previous) => ({
-                            ...previous,
-                            brandIds: active
-                              ? previous.brandIds.filter((item) => item !== brand.id)
-                              : [...previous.brandIds, brand.id],
-                          }))}
-                          className={`rounded-xl border px-3 py-2 text-[10px] font-black ${active ? "border-sky-200 bg-sky-50 text-sky-700" : "border-stone-100 bg-stone-50 text-stone-400"}`}
-                        >
-                          {brand.label}
-                        </button>
-                      );
-                    })}
-                  </div>
-                )}
-
-                <div className="grid grid-cols-1 gap-2 md:grid-cols-2 xl:grid-cols-3">
-                  {permissionEntries.length ? permissionEntries.map(([userId, permission]) => (
-                    <div key={userId} className="flex items-center justify-between gap-3 rounded-xl border border-stone-100 bg-white p-3">
-                      <div>
-                        <p className="text-xs font-black text-stone-700">{permission.displayName || userId}</p>
-                        <p className="mt-1 text-[9px] font-bold text-stone-400">
-                          {permission.role || "viewer"}｜{(permission.brandIds || []).map(getTelegramAlertBrandLabel).join("、") || "無品牌"}
-                        </p>
-                      </div>
-                      <button
-                        type="button"
-                        onClick={() => removePermission(userId)}
-                        disabled={isBusy || !canManagePolicyCenter}
-                        className="rounded-lg border border-rose-100 bg-rose-50 p-2 text-rose-500"
-                        title="移除權限"
-                      >
-                        {loadingAction === `permission:${userId}` ? <Loader2 size={12} className="animate-spin" /> : <XCircle size={13} />}
-                      </button>
-                    </div>
-                  )) : (
-                    <div className="rounded-xl border border-dashed border-amber-200 bg-amber-50 p-3 text-[10px] font-bold text-amber-700 md:col-span-2 xl:col-span-3">
-                      尚未設定個人名單：高階主管主群暫以 director、主管群暫以品牌主管預設權限運作。建立第一筆名單後，未列入的人會改為只讀。
-                    </div>
-                  )}
-                </div>
-              </div>
-            </div>
-          )}
-        </div>
-
-
-
-        <div className="overflow-hidden rounded-[1.75rem] border border-indigo-100 bg-gradient-to-br from-white via-indigo-50/20 to-sky-50/40 shadow-sm">
-          <button
-            type="button"
-            onClick={() => setV5PanelOpen((previous) => !previous)}
-            className="flex w-full items-center justify-between gap-3 border-b border-indigo-100 px-5 py-4 text-left"
-          >
-            <div className="flex items-center gap-3">
-              <div className="rounded-2xl bg-indigo-100 p-2.5 text-indigo-700"><ListChecks size={18} /></div>
-              <div>
-                <p className="text-sm font-black text-stone-800">v5 營運中樞</p>
-                <p className="mt-1 text-[10px] font-bold text-stone-400">可重現報表快照、自然語言排程與改善任務閉環</p>
-              </div>
-            </div>
-            <span className="text-[10px] font-black text-indigo-600">{v5PanelOpen ? "收合" : "展開"}</span>
-          </button>
-
-          {v5PanelOpen && (
-            <div className="space-y-5 p-5">
-              <div className="flex flex-wrap items-center justify-between gap-3">
-                <div className="flex flex-wrap gap-2 text-[10px] font-black">
-                  <span className="rounded-full bg-indigo-50 px-3 py-1.5 text-indigo-700">快照 {reportSnapshots.length}</span>
-                  <span className="rounded-full bg-sky-50 px-3 py-1.5 text-sky-700">排程 {v5Schedules.length}</span>
-                  <span className="rounded-full bg-amber-50 px-3 py-1.5 text-amber-700">待辦 {improvementTasks.filter((task) => ["open", "in_progress", "overdue"].includes(task.status)).length}</span>
-                </div>
-                <ActionButton onClick={() => refreshV5Operations()} disabled={isBusy} variant="secondary">
-                  <RefreshCw size={13} className={loadingAction === "refreshV5Operations" ? "animate-spin" : ""} />
-                  更新營運中樞
-                </ActionButton>
-              </div>
-
-              <div className="rounded-2xl border border-sky-100 bg-white p-4">
-                <div className="mb-4 flex items-center gap-2">
-                  <Calendar size={16} className="text-sky-600" />
-                  <div>
-                    <p className="text-xs font-black text-stone-700">建立三品牌工作日晨報</p>
-                    <p className="mt-1 text-[10px] font-bold text-stone-400">數據固定截至昨日 23:59，包含現金、權責、進度差與跨品牌最佳／最差店家。</p>
-                  </div>
-                </div>
-                <div className="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-5">
-                  <label className="rounded-xl border border-stone-100 bg-stone-50 p-3 xl:col-span-2">
-                    <span className="mb-1 block text-[10px] font-black text-stone-400">排程名稱</span>
-                    <input
-                      value={v5ScheduleEditor.name}
-                      onChange={(event) => setV5ScheduleEditor((previous) => ({ ...previous, name: event.target.value }))}
-                      className="w-full bg-transparent text-xs font-black text-stone-700 outline-none"
-                    />
-                  </label>
-                  <label className="rounded-xl border border-stone-100 bg-stone-50 p-3">
-                    <span className="mb-1 block text-[10px] font-black text-stone-400">發送時間</span>
-                    <input
-                      type="time"
-                      value={v5ScheduleEditor.time}
-                      onChange={(event) => setV5ScheduleEditor((previous) => ({ ...previous, time: event.target.value }))}
-                      className="w-full bg-transparent text-xs font-black text-stone-700 outline-none"
-                    />
-                  </label>
-                  <label className="rounded-xl border border-stone-100 bg-stone-50 p-3">
-                    <span className="mb-1 block text-[10px] font-black text-stone-400">最佳／最差店數</span>
-                    <div className="flex gap-2">
-                      <input type="number" min="1" max="10" value={v5ScheduleEditor.topCount} onChange={(event) => setV5ScheduleEditor((previous) => ({ ...previous, topCount: event.target.value }))} className="w-1/2 bg-transparent text-xs font-black text-stone-700 outline-none" />
-                      <input type="number" min="1" max="10" value={v5ScheduleEditor.bottomCount} onChange={(event) => setV5ScheduleEditor((previous) => ({ ...previous, bottomCount: event.target.value }))} className="w-1/2 bg-transparent text-xs font-black text-stone-700 outline-none" />
-                    </div>
-                  </label>
-                  <label className="rounded-xl border border-stone-100 bg-stone-50 p-3">
-                    <span className="mb-1 block text-[10px] font-black text-stone-400">接收群組</span>
-                    <select value={v5ScheduleEditor.targetGroup} onChange={(event) => setV5ScheduleEditor((previous) => ({ ...previous, targetGroup: event.target.value }))} className="w-full bg-transparent text-xs font-black text-stone-700 outline-none">
-                      <option value="manager">主管戰情室</option>
-                      <option value="main">營運大群組</option>
-                    </select>
-                  </label>
-                </div>
-                <div className="mt-3 flex flex-wrap items-center justify-between gap-3">
-                  <div className="flex flex-wrap gap-2">
-                    {TELEGRAM_ALERT_WEEKDAYS.map((day) => {
-                      const active = v5ScheduleEditor.weekdays.includes(day.id);
-                      return (
-                        <button
-                          key={day.id}
-                          type="button"
-                          onClick={() => setV5ScheduleEditor((previous) => ({
-                            ...previous,
-                            weekdays: active ? previous.weekdays.filter((item) => item !== day.id) : [...previous.weekdays, day.id],
-                          }))}
-                          className={`h-8 w-8 rounded-lg border text-[10px] font-black ${active ? "border-sky-200 bg-sky-50 text-sky-700" : "border-stone-100 bg-white text-stone-400"}`}
-                        >
-                          {day.label}
-                        </button>
-                      );
-                    })}
-                  </div>
-                  <ActionButton onClick={saveV5MorningBriefSchedule} disabled={isBusy || !canManagePolicyCenter}>
-                    {loadingAction === "saveV5Schedule" ? <Loader2 size={13} className="animate-spin" /> : <Plus size={13} />}
-                    建立晨報排程
-                  </ActionButton>
-                </div>
-              </div>
-
-              <div className="grid grid-cols-1 gap-4 xl:grid-cols-3">
-                <section className="rounded-2xl border border-indigo-100 bg-white p-4">
-                  <div className="mb-3 flex items-center gap-2">
-                    <FileText size={15} className="text-indigo-600" />
-                    <p className="text-xs font-black text-stone-700">最近報表快照</p>
-                  </div>
-                  <div className="max-h-[420px] space-y-2 overflow-y-auto pr-1">
-                    {reportSnapshots.length ? reportSnapshots.slice(0, 20).map((snapshot) => (
-                      <article key={snapshot.id} className="rounded-xl border border-stone-100 bg-stone-50/60 p-3">
-                        <p className="text-[11px] font-black text-stone-700">{snapshot.snapshotId || snapshot.id}</p>
-                        <p className="mt-1 text-[10px] font-bold text-stone-500">{snapshot.scheduleName || snapshot.reportType || "固定報表"}</p>
-                        <p className="mt-1 text-[9px] font-bold text-stone-400">截止 {snapshot.cutoffAtText || snapshot.cutoffDate || "-"}</p>
-                        <p className="mt-1 text-[9px] font-bold text-indigo-500">{snapshot.metricVersion || "metric-v5.0-unified"}</p>
-                      </article>
-                    )) : <p className="rounded-xl border border-dashed border-stone-200 p-6 text-center text-[10px] font-black text-stone-400">尚未產生報表快照</p>}
-                  </div>
-                </section>
-
-                <section className="rounded-2xl border border-sky-100 bg-white p-4">
-                  <div className="mb-3 flex items-center gap-2">
-                    <Clock size={15} className="text-sky-600" />
-                    <p className="text-xs font-black text-stone-700">固定排程</p>
-                  </div>
-                  <div className="max-h-[420px] space-y-2 overflow-y-auto pr-1">
-                    {v5Schedules.length ? v5Schedules.map((schedule) => {
-                      const active = schedule.isActive === true || String(schedule.isActive).toLowerCase() === "true";
-                      return (
-                        <article key={schedule.id} className={`rounded-xl border p-3 ${active ? "border-sky-100 bg-sky-50/40" : "border-stone-100 bg-stone-50 opacity-60"}`}>
-                          <div className="flex items-start justify-between gap-2">
-                            <div>
-                              <p className="text-[11px] font-black text-stone-700">{schedule.name || schedule.scheduleCode || schedule.id}</p>
-                              <p className="mt-1 text-[9px] font-bold text-stone-400">週{(schedule.weekdays || []).map((day) => V5_WEEKDAY_LABELS[Number(day)]).join("、") || "每日"}｜{schedule.time || "-"}</p>
-                              <p className="mt-1 text-[9px] font-bold text-sky-600">{schedule.lastSnapshotId ? `最近快照 ${schedule.lastSnapshotId}` : schedule.source || "progress"}</p>
-                            </div>
-                            <button type="button" onClick={() => toggleV5Schedule(schedule)} disabled={isBusy || !canManagePolicyCenter} className={`rounded-lg border px-2.5 py-1.5 text-[9px] font-black ${active ? "border-rose-100 bg-rose-50 text-rose-600" : "border-emerald-100 bg-emerald-50 text-emerald-600"}`}>
-                              {loadingAction === `v5Schedule:${schedule.id}` ? <Loader2 size={11} className="animate-spin" /> : active ? "停用" : "啟用"}
-                            </button>
-                          </div>
-                        </article>
-                      );
-                    }) : <p className="rounded-xl border border-dashed border-stone-200 p-6 text-center text-[10px] font-black text-stone-400">尚未建立固定排程</p>}
-                  </div>
-                </section>
-
-                <section className="rounded-2xl border border-amber-100 bg-white p-4">
-                  <div className="mb-3 flex items-center gap-2">
-                    <ListChecks size={15} className="text-amber-600" />
-                    <p className="text-xs font-black text-stone-700">改善任務</p>
-                  </div>
-                  <div className="max-h-[420px] space-y-2 overflow-y-auto pr-1">
-                    {improvementTasks.length ? improvementTasks.slice(0, 40).map((task) => {
-                      const done = task.status === "completed";
-                      return (
-                        <article key={task.id} className={`rounded-xl border p-3 ${task.status === "overdue" ? "border-rose-200 bg-rose-50/50" : done ? "border-emerald-100 bg-emerald-50/40 opacity-70" : "border-amber-100 bg-amber-50/40"}`}>
-                          <div className="flex items-start justify-between gap-2">
-                            <div className="min-w-0">
-                              <p className="truncate text-[11px] font-black text-stone-700">{task.taskCode || task.id}｜{task.title}</p>
-                              <p className="mt-1 text-[9px] font-bold text-stone-400">{task.brand || ""}{task.storeName ? ` ${task.storeName}店` : ""}｜{task.ownerName || "待指派"}</p>
-                              <p className="mt-1 text-[9px] font-bold text-amber-600">{getV5TaskStatusLabel(task.status)}｜期限 {task.dueDate || "未設定"}</p>
-                            </div>
-                            {!done && (
-                              <button type="button" onClick={() => updateV5TaskStatus(task, "completed")} disabled={isBusy || !canManagePolicyCenter} className="rounded-lg border border-emerald-100 bg-emerald-50 p-2 text-emerald-600" title="標記完成">
-                                {loadingAction === `v5Task:${task.id}` ? <Loader2 size={12} className="animate-spin" /> : <CheckCircle2 size={13} />}
-                              </button>
-                            )}
-                          </div>
-                        </article>
-                      );
-                    }) : <p className="rounded-xl border border-dashed border-stone-200 p-6 text-center text-[10px] font-black text-stone-400">尚未建立改善任務</p>}
-                  </div>
-                </section>
-              </div>
-            </div>
-          )}
-        </div>
-
-
-        <div className="flex flex-col gap-3 border-t border-sky-100 pt-5 lg:flex-row lg:items-center lg:justify-between">
-          <div className="flex flex-wrap gap-2">
-            <ActionButton onClick={resetForm} disabled={isBusy} variant="secondary">
-              <RefreshCw size={14} />
-              恢復建議值
-            </ActionButton>
-            <ActionButton onClick={previewToday} disabled={isBusy} variant="secondary">
-              {loadingAction === "preview" ? (
-                <Loader2 size={14} className="animate-spin" />
-              ) : (
-                <Eye size={14} />
-              )}
-              預覽今日內容
-            </ActionButton>
-            <ActionButton onClick={sendTest} disabled={isBusy} variant="soft">
-              {loadingAction === "test" ? (
-                <Loader2 size={14} className="animate-spin" />
-              ) : (
-                <Play size={14} />
-              )}
-              發送測試
-            </ActionButton>
-          </div>
-          <ActionButton onClick={saveConfig} disabled={isBusy} className="lg:min-w-[180px]">
-            {loadingAction === "saveConfig" ? (
-              <Loader2 size={14} className="animate-spin" />
-            ) : (
-              <Save size={14} />
-            )}
-            儲存正式設定
-          </ActionButton>
-        </div>
-
-        {previewItems.length > 0 && (
-          <div className="rounded-[1.5rem] border border-sky-100 bg-[#F8FCFF] p-5">
-            <div className="mb-4 flex items-center justify-between gap-2">
-              <div>
-                <p className="text-sm font-black text-stone-800">各品牌 Telegram 預覽</p>
-                <p className="mt-1 text-[10px] font-bold text-stone-400">正式排程與測試推播都會依下列卡片，一個品牌獨立發送一則。</p>
-              </div>
-              <button
-                type="button"
-                onClick={() => setPreviewItems([])}
-                className="text-[10px] font-black text-stone-400 hover:text-rose-500"
-              >
-                關閉預覽
-              </button>
-            </div>
-            <div className="grid grid-cols-1 gap-4 xl:grid-cols-3">
-              {previewItems.map((item, index) => (
-                <article key={item.brandId || `${item.brand}-${index}`} className="overflow-hidden rounded-2xl border border-sky-100 bg-white shadow-sm">
-                  <div className="flex items-center justify-between border-b border-sky-50 bg-sky-50/60 px-4 py-3">
-                    <div>
-                      <p className="text-sm font-black text-stone-800">{item.brand || "品牌預覽"}</p>
-                      <p className="mt-0.5 text-[10px] font-bold text-stone-400">
-                        營運異常 {Number(item.operationalAlertCount || 0).toLocaleString()}｜資料待補 {Number(item.dataIssueCount || 0).toLocaleString()}｜最多 {Number(item.limit || 0).toLocaleString()} 家
-                      </p>
-                      {Array.isArray(item.enabledRuleLabels) && item.enabledRuleLabels.length > 0 && (
-                        <p className="mt-1 text-[9px] font-bold text-sky-500">
-                          判斷：{item.enabledRuleLabels.join("、")}
-                        </p>
-                      )}
-                    </div>
-                    <span className="rounded-full bg-white px-2.5 py-1 text-[10px] font-black text-sky-600 shadow-sm">
-                      排除 {Number(item.excludedStoreCount || 0).toLocaleString()} 家
-                    </span>
-                  </div>
-                  <pre className="max-h-[520px] overflow-y-auto whitespace-pre-wrap break-words p-4 font-sans text-xs font-bold leading-6 text-stone-600">
-                    {item.previewText || "目前沒有可預覽內容"}
-                  </pre>
-                </article>
-              ))}
-            </div>
-          </div>
-        )}
-      </div>
+      {lastMessage && <div className="mb-5 flex items-center gap-2 rounded-2xl border border-sky-100 bg-white/80 px-4 py-3 text-xs font-bold text-stone-600"><Activity size={14} className="text-sky-500" />{lastMessage}</div>}
+      {view === "overview" ? renderOverview() : view === "tasks" ? renderTasks() : view === "governance" ? renderGovernance() : view === "reportHistory" ? renderReportHistory() : renderAlerts()}
     </section>
   );
 };

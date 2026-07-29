@@ -1,58 +1,206 @@
 // src/components/NotificationManager.jsx
-import React, { useState, useEffect } from "react";
-import { 
-  Bell, Clock, Database, Send, Plus, Trash2, Edit3, 
-  Save, ToggleLeft, ToggleRight, PlayCircle, Activity, Radio
+import React, { useEffect, useMemo, useState } from "react";
+import {
+  Bell,
+  BellRing,
+  Building2,
+  CalendarClock,
+  CheckCircle2,
+  ChevronDown,
+  Clock,
+  Database,
+  Edit3,
+  FileClock,
+  LayoutDashboard,
+  ListChecks,
+  Loader2,
+  Plus,
+  Save,
+  Send,
+  ShieldCheck,
+  Sparkles,
+  ToggleLeft,
+  ToggleRight,
+  Trash2,
 } from "lucide-react";
-import { collection, getDocs, addDoc, updateDoc, deleteDoc, doc } from "firebase/firestore";
+import {
+  addDoc,
+  collection,
+  deleteDoc,
+  doc,
+  getDocs,
+  serverTimestamp,
+  setDoc,
+  updateDoc,
+} from "firebase/firestore";
 import { db } from "../config/firebase";
-import { ViewWrapper, Card } from "./SharedUI";
+import { ViewWrapper } from "./SharedUI";
 import TelegramAlertControlCenter from "./TelegramAlertControlCenter";
 
-const DATA_SOURCES = {
+const WEEKDAYS = [
+  { id: 1, label: "一" },
+  { id: 2, label: "二" },
+  { id: 3, label: "三" },
+  { id: 4, label: "四" },
+  { id: 5, label: "五" },
+  { id: 6, label: "六" },
+  { id: 0, label: "日" },
+];
+
+const BRAND_OPTIONS = [
+  { id: "cyj", label: "DRCYJ" },
+  { id: "anniu", label: "安妞" },
+  { id: "yibo", label: "伊啵" },
+];
+
+const REPORT_TYPES = {
+  weekday_morning_brief: {
+    label: "三品牌工作日晨報",
+    description: "一次收到三品牌現金、權責、達成率、進度差與昨日最佳／最差店家。",
+    icon: Sparkles,
+    defaultName: "三品牌工作日晨報",
+    defaultTime: "10:00",
+    defaultWeekdays: [1, 2, 3, 4, 5],
+    defaultTarget: "manager",
+    cutoffMode: "yesterday",
+    vars: [],
+    defaultTemplate: "",
+  },
   progress: {
-    label: "目前現金、權責進度",
+    label: "品牌營運進度",
+    description: "固定回報所選品牌的現金、權責與目標達成率。",
+    icon: Building2,
+    defaultName: "品牌營運進度",
+    defaultTime: "10:00",
+    defaultWeekdays: [1, 2, 3, 4, 5],
+    defaultTarget: "manager",
+    cutoffMode: "current",
     vars: ["{cashTotal}", "{accrualTotal}", "{cashRate}", "{accrualRate}"],
-    defaultTemplate: "📊 *【營運進度戰報】*\n目前現金業績：{cashTotal} (達成率 {cashRate}%)\n目前總權責：{accrualTotal} (達成率 {accrualRate}%)"
+    defaultTemplate: "📊 *【營運進度】*\n現金業績：{cashTotal}（達成率 {cashRate}%）\n權責業績：{accrualTotal}（達成率 {accrualRate}%）",
   },
   top5_stores: {
-    label: "昨日業績 TOP 5 (店家)",
+    label: "昨日店家排行榜",
+    description: "依昨日現金業績列出表現最好的店家。",
+    icon: Bell,
+    defaultName: "昨日店家排行榜",
+    defaultTime: "10:00",
+    defaultWeekdays: [1, 2, 3, 4, 5],
+    defaultTarget: "main",
+    cutoffMode: "yesterday",
     vars: ["{top5Stores}", "{date}"],
-    defaultTemplate: "☀️ *【晨間戰報】昨日全區 TOP 5* ☀️\n\n早安！{date} 的激烈廝殺結果出爐：\n\n{top5Stores}\n\n今日戰火已經點燃，繼續保持火力！🔥"
-  },
-  top5_therapists: {
-    label: "昨日 TOP 5 (管理師)",
-    vars: ["{top5Therapists}", "{date}"],
-    defaultTemplate: "🌟 *【個人榮耀】昨日管理師 TOP 5* 🌟\n\n{date} 個人戰績排行：\n\n{top5Therapists}\n\n締造佳績，突破自我！🚀"
+    defaultTemplate: "🏆 *【昨日店家排行榜】*\n{date}\n\n{top5Stores}",
   },
   bottom5_stores: {
-    label: "需關注 5 店家 (進度落後)",
+    label: "進度落後店家",
+    description: "依本月現金達成率列出目前最需要關注的店家。",
+    icon: BellRing,
+    defaultName: "進度落後店家",
+    defaultTime: "10:00",
+    defaultWeekdays: [1, 2, 3, 4, 5],
+    defaultTarget: "manager",
+    cutoffMode: "yesterday",
     vars: ["{bottom5Stores}", "{date}"],
-    defaultTemplate: "⚠️ *【營運關注名單】*\n\n主管們請留意，以下門市目前累積進度嚴重落後，請盡速關心支援：\n\n{bottom5Stores}\n\n目標未達，緊咬不放！"
+    defaultTemplate: "⚠️ *【營運關注名單】*\n{date}\n\n{bottom5Stores}",
+  },
+  top5_therapists: {
+    label: "昨日管理師排行榜",
+    description: "依昨日個人業績列出表現最好的管理師。",
+    icon: CheckCircle2,
+    defaultName: "昨日管理師排行榜",
+    defaultTime: "10:00",
+    defaultWeekdays: [1, 2, 3, 4, 5],
+    defaultTarget: "main",
+    cutoffMode: "yesterday",
+    vars: ["{top5Therapists}", "{date}"],
+    defaultTemplate: "🌟 *【昨日管理師排行榜】*\n{date}\n\n{top5Therapists}",
   },
   unreported: {
-    label: "未回報店家清單",
+    label: "未繳日報提醒",
+    description: "提醒主管追蹤昨天尚未完成日報的正式店家。",
+    icon: FileClock,
+    defaultName: "未繳日報提醒",
+    defaultTime: "11:30",
+    defaultWeekdays: [1, 2, 3, 4, 5],
+    defaultTarget: "manager",
+    cutoffMode: "yesterday",
     vars: ["{missingStores}", "{missingCount}", "{date}"],
-    defaultTemplate: "🚨 *【系統警報】日報未繳交* 🚨\n\n截至目前，共有 {missingCount} 間門市尚未送出 {date} 的日報：\n\n{missingStores}\n\n請區長協助追蹤回報進度！"
-  }
+    defaultTemplate: "🚨 *【日報尚未完成】*\n截至目前，共有 {missingCount} 間門市尚未送出 {date} 的日報：\n\n{missingStores}",
+  },
+};
+
+const MAIN_TABS = [
+  { id: "overview", label: "總覽", description: "今天是否正常、有什麼需要處理", icon: LayoutDashboard },
+  { id: "reports", label: "定時報表", description: "固定時間收到營運資料", icon: CalendarClock },
+  { id: "alerts", label: "主動提醒", description: "店家表現異常時通知主管", icon: BellRing },
+  { id: "tasks", label: "改善追蹤", description: "追蹤問題由誰處理及是否改善", icon: ListChecks },
+  { id: "governance", label: "規則與權限", description: "管理例外、長期規則與人員權限", icon: ShieldCheck },
+];
+
+const createDefaultRule = (source = "weekday_morning_brief") => {
+  const definition = REPORT_TYPES[source] || REPORT_TYPES.progress;
+  return {
+    id: "",
+    name: definition.defaultName,
+    source,
+    reportType: source,
+    time: definition.defaultTime,
+    weekdays: [...definition.defaultWeekdays],
+    targetGroup: definition.defaultTarget,
+    brandIds: source === "weekday_morning_brief" ? ["cyj", "anniu", "yibo"] : ["cyj", "anniu", "yibo"],
+    template: definition.defaultTemplate,
+    isActive: true,
+    pausedUntil: "",
+    cutoffMode: definition.cutoffMode,
+    topCount: 3,
+    bottomCount: 3,
+    includeMissingReports: true,
+  };
+};
+
+const normalizeRule = (rule = {}) => {
+  const source = REPORT_TYPES[rule.source] ? rule.source : "progress";
+  const defaults = createDefaultRule(source);
+  return {
+    ...defaults,
+    ...rule,
+    id: rule.id || "",
+    source,
+    reportType: rule.reportType || source,
+    weekdays: Array.isArray(rule.weekdays) && rule.weekdays.length ? rule.weekdays.map(Number) : defaults.weekdays,
+    brandIds: Array.isArray(rule.brandIds) && rule.brandIds.length ? rule.brandIds : defaults.brandIds,
+    isActive: rule.isActive === true || String(rule.isActive || "").toLowerCase() === "true",
+    topCount: Number(rule.topCount || defaults.topCount),
+    bottomCount: Number(rule.bottomCount || defaults.bottomCount),
+    includeMissingReports: rule.includeMissingReports !== false,
+  };
+};
+
+const formatScheduleDays = (rule) => {
+  const days = Array.isArray(rule.weekdays) ? rule.weekdays.map(Number) : [];
+  if (days.length === 7) return "每天";
+  if ([1, 2, 3, 4, 5].every((day) => days.includes(day)) && days.length === 5) return "週一至週五";
+  return days.length ? `週${days.map((day) => WEEKDAYS.find((item) => item.id === day)?.label).filter(Boolean).join("、")}` : "未設定星期";
 };
 
 const NotificationManager = () => {
+  const [activeTab, setActiveTab] = useState("overview");
+  const [reportTab, setReportTab] = useState("mine");
   const [rules, setRules] = useState([]);
   const [isLoading, setIsLoading] = useState(true);
-  const [isEditing, setIsEditing] = useState(false);
-  const [currentRule, setCurrentRule] = useState(null);
-  const [activeTab, setActiveTab] = useState("scheduled");
+  const [isSaving, setIsSaving] = useState(false);
+  const [currentRule, setCurrentRule] = useState(createDefaultRule());
+  const [advancedOpen, setAdvancedOpen] = useState(false);
 
   const fetchRules = async () => {
     setIsLoading(true);
     try {
-      const querySnapshot = await getDocs(collection(db, "notification_rules"));
-      const rulesData = querySnapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
-      rulesData.sort((a, b) => a.time.localeCompare(b.time));
-      setRules(rulesData);
+      const snapshot = await getDocs(collection(db, "notification_rules"));
+      const nextRules = snapshot.docs
+        .map((item) => normalizeRule({ id: item.id, ...item.data() }))
+        .sort((a, b) => String(a.time || "").localeCompare(String(b.time || "")));
+      setRules(nextRules);
     } catch (error) {
-      console.error("載入推播規則失敗:", error);
+      console.error("載入定時報表失敗:", error);
     } finally {
       setIsLoading(false);
     }
@@ -62,235 +210,351 @@ const NotificationManager = () => {
     fetchRules();
   }, []);
 
-  const handleSaveRule = async (e) => {
-    e.preventDefault();
-    try {
-      if (currentRule.id) {
-        await updateDoc(doc(db, "notification_rules", currentRule.id), currentRule);
-      } else {
-        await addDoc(collection(db, "notification_rules"), {
-          ...currentRule,
-          createdAt: new Date().toISOString()
-        });
-      }
-      setIsEditing(false);
-      setCurrentRule(null);
-      fetchRules();
-    } catch (error) {
-      alert("儲存失敗：" + error.message);
-    }
+  const activeRuleCount = useMemo(
+    () => rules.filter((rule) => rule.isActive).length,
+    [rules]
+  );
+
+  const chooseReportType = (source) => {
+    setCurrentRule(createDefaultRule(source));
+    setAdvancedOpen(false);
   };
 
-  const handleDelete = async (id) => {
-    if(window.confirm("確定要刪除這個推播任務嗎？刪除後無法復原。")) {
-      try {
-        await deleteDoc(doc(db, "notification_rules", id));
-        fetchRules();
-      } catch (error) {
-        alert("刪除失敗");
+  const editRule = (rule) => {
+    setCurrentRule(normalizeRule(rule));
+    setAdvancedOpen(false);
+    setReportTab("create");
+  };
+
+  const saveRule = async (event) => {
+    event.preventDefault();
+    const sourceDefinition = REPORT_TYPES[currentRule.source];
+    if (!sourceDefinition) return;
+    if (!currentRule.name.trim()) return window.alert("請輸入報表名稱");
+    if (!currentRule.weekdays.length) return window.alert("請至少選擇一個發送日");
+    if (!currentRule.brandIds.length) return window.alert("請至少選擇一個品牌");
+
+    const { id: ruleId, ...ruleValues } = currentRule;
+    const payload = {
+      ...ruleValues,
+      name: currentRule.name.trim(),
+      reportType: currentRule.source,
+      weekdays: [...new Set(currentRule.weekdays.map(Number))],
+      brandIds: currentRule.source === "weekday_morning_brief"
+        ? ["cyj", "anniu", "yibo"]
+        : [...new Set(currentRule.brandIds)],
+      topCount: Math.max(1, Math.min(10, Number(currentRule.topCount) || 3)),
+      bottomCount: Math.max(1, Math.min(10, Number(currentRule.bottomCount) || 3)),
+      isActive: currentRule.isActive !== false,
+      updatedAt: serverTimestamp(),
+      updatedAtText: new Date().toISOString(),
+    };
+
+    setIsSaving(true);
+    try {
+      if (ruleId) {
+        await setDoc(doc(db, "notification_rules", ruleId), payload, { merge: true });
+      } else {
+        await addDoc(collection(db, "notification_rules"), {
+          ...payload,
+          createdAt: serverTimestamp(),
+          createdAtText: new Date().toISOString(),
+        });
       }
+      await fetchRules();
+      setCurrentRule(createDefaultRule());
+      setReportTab("mine");
+    } catch (error) {
+      window.alert(`儲存失敗：${error.message}`);
+    } finally {
+      setIsSaving(false);
     }
   };
 
   const toggleActive = async (rule) => {
     try {
-      await updateDoc(doc(db, "notification_rules", rule.id), { isActive: !rule.isActive });
-      fetchRules();
+      await updateDoc(doc(db, "notification_rules", rule.id), {
+        isActive: !rule.isActive,
+        updatedAt: serverTimestamp(),
+        updatedAtText: new Date().toISOString(),
+      });
+      await fetchRules();
     } catch (error) {
-      console.error("切換狀態失敗", error);
+      window.alert(`狀態更新失敗：${error.message}`);
     }
   };
 
-  const generatePreview = (template, sourceKey) => {
-    if (!template) return "請輸入推播文案...";
-    let text = template;
-    const today = new Date().toLocaleDateString();
-    text = text.replace(/{date}/g, today);
-    text = text.replace(/{cashTotal}/g, "1,250,000");
-    text = text.replace(/{accrualTotal}/g, "1,420,000");
-    text = text.replace(/{cashRate}/g, "85");
-    text = text.replace(/{accrualRate}/g, "92");
-    text = text.replace(/{top5Stores}/g, "🥇 1. 大安店 ($150,000)\n🥈 2. 信義店 ($120,000)\n🥉 3. 中山店 ($90,000)\n4. 崇學店 ($85,000)\n5. 巨蛋店 ($80,000)");
-    text = text.replace(/{top5Therapists}/g, "🥇 1. 林小美 ($50,000)\n🥈 2. 陳大明 ($42,000)\n🥉 3. 張雅婷 ($39,000)\n4. 王大鈞 ($35,000)\n5. 吳佳玲 ($31,000)");
-    text = text.replace(/{bottom5Stores}/g, "1. 新莊店 (-15%)\n2. 蘆洲店 (-12%)\n3. 板橋店 (-10%)\n4. 桃園店 (-8%)\n5. 中壢店 (-5%)");
-    text = text.replace(/{missingStores}/g, "• 南港店\n• 內湖店");
-    text = text.replace(/{missingCount}/g, "2");
-    return text;
+  const deleteRule = async (rule) => {
+    if (!window.confirm(`確定刪除「${rule.name}」嗎？`)) return;
+    try {
+      await deleteDoc(doc(db, "notification_rules", rule.id));
+      await fetchRules();
+    } catch (error) {
+      window.alert(`刪除失敗：${error.message}`);
+    }
+  };
+
+  const toggleWeekday = (day) => {
+    setCurrentRule((previous) => ({
+      ...previous,
+      weekdays: previous.weekdays.includes(day)
+        ? previous.weekdays.filter((item) => item !== day)
+        : [...previous.weekdays, day],
+    }));
+  };
+
+  const toggleBrand = (brandId) => {
+    setCurrentRule((previous) => ({
+      ...previous,
+      brandIds: previous.brandIds.includes(brandId)
+        ? previous.brandIds.filter((item) => item !== brandId)
+        : [...previous.brandIds, brandId],
+    }));
+  };
+
+  const renderReportManager = () => {
+    const reportDefinition = REPORT_TYPES[currentRule.source] || REPORT_TYPES.progress;
+    return (
+      <section className="rounded-[2rem] border border-stone-100 bg-white shadow-sm">
+        <div className="border-b border-stone-100 p-5 sm:p-6">
+          <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
+            <div>
+              <h3 className="text-lg font-black text-stone-800">定時報表</h3>
+              <p className="mt-1 text-xs font-bold text-stone-400">設定機器人在什麼時間，固定傳送哪些營運資料。</p>
+            </div>
+            <div className="flex flex-wrap gap-2 rounded-2xl bg-stone-50 p-1.5">
+              {[
+                { id: "mine", label: "我的報表" },
+                { id: "create", label: currentRule.id ? "編輯報表" : "新增報表" },
+                { id: "history", label: "報表紀錄" },
+              ].map((tab) => (
+                <button
+                  key={tab.id}
+                  type="button"
+                  onClick={() => {
+                    if (tab.id === "create" && reportTab !== "create") setCurrentRule(createDefaultRule());
+                    setReportTab(tab.id);
+                  }}
+                  className={`rounded-xl px-4 py-2 text-xs font-black transition ${reportTab === tab.id ? "bg-white text-sky-700 shadow-sm" : "text-stone-400 hover:text-stone-600"}`}
+                >
+                  {tab.label}
+                </button>
+              ))}
+            </div>
+          </div>
+        </div>
+
+        {reportTab === "mine" && (
+          <div className="p-5 sm:p-6">
+            <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
+              <div>
+                <p className="text-sm font-black text-stone-700">已建立 {rules.length} 份報表</p>
+                <p className="mt-1 text-[11px] font-bold text-stone-400">其中 {activeRuleCount} 份目前正在使用。</p>
+              </div>
+              <button
+                type="button"
+                onClick={() => {
+                  setCurrentRule(createDefaultRule());
+                  setReportTab("create");
+                }}
+                className="inline-flex items-center gap-2 rounded-xl bg-sky-600 px-4 py-2.5 text-xs font-black text-white shadow-sm transition hover:bg-sky-700"
+              >
+                <Plus size={15} /> 新增報表
+              </button>
+            </div>
+
+            {isLoading ? (
+              <div className="flex items-center justify-center gap-2 py-16 text-sm font-black text-stone-400"><Loader2 size={18} className="animate-spin" />載入報表中...</div>
+            ) : rules.length === 0 ? (
+              <div className="rounded-3xl border border-dashed border-stone-200 bg-stone-50/50 py-16 text-center">
+                <CalendarClock className="mx-auto text-stone-300" size={30} />
+                <p className="mt-3 text-sm font-black text-stone-600">目前沒有定時報表</p>
+                <p className="mt-1 text-xs font-bold text-stone-400">建立第一份晨報後，機器人會依設定時間自動傳送。</p>
+              </div>
+            ) : (
+              <div className="grid grid-cols-1 gap-4 lg:grid-cols-2 xl:grid-cols-3">
+                {rules.map((rule) => {
+                  const definition = REPORT_TYPES[rule.source] || REPORT_TYPES.progress;
+                  const Icon = definition.icon;
+                  return (
+                    <article key={rule.id} className={`rounded-2xl border p-5 transition ${rule.isActive ? "border-sky-100 bg-sky-50/30" : "border-stone-100 bg-stone-50 opacity-65"}`}>
+                      <div className="flex items-start justify-between gap-3">
+                        <div className="flex min-w-0 items-start gap-3">
+                          <div className={`rounded-xl p-2.5 ${rule.isActive ? "bg-white text-sky-600 shadow-sm" : "bg-stone-100 text-stone-400"}`}><Icon size={17} /></div>
+                          <div className="min-w-0">
+                            <p className="truncate text-sm font-black text-stone-800">{rule.name}</p>
+                            <p className="mt-1 text-[11px] font-bold text-stone-500">{definition.label}</p>
+                          </div>
+                        </div>
+                        <button type="button" onClick={() => toggleActive(rule)} className={rule.isActive ? "text-emerald-500" : "text-stone-300"} title={rule.isActive ? "暫停" : "啟用"}>
+                          {rule.isActive ? <ToggleRight size={28} /> : <ToggleLeft size={28} />}
+                        </button>
+                      </div>
+                      <div className="mt-4 space-y-2 rounded-xl bg-white/80 p-3 text-[11px] font-bold text-stone-500">
+                        <p><Clock size={12} className="mr-1.5 inline text-sky-500" />{formatScheduleDays(rule)}，{rule.time}</p>
+                        <p><Send size={12} className="mr-1.5 inline text-indigo-500" />{rule.targetGroup === "main" ? "高階主管主群" : "主管群"}</p>
+                        <p><Building2 size={12} className="mr-1.5 inline text-amber-500" />{rule.brandIds.map((id) => BRAND_OPTIONS.find((brand) => brand.id === id)?.label).filter(Boolean).join("、") || "全部品牌"}</p>
+                      </div>
+                      <div className="mt-4 flex gap-2 border-t border-stone-100 pt-4">
+                        <button type="button" onClick={() => editRule(rule)} className="flex flex-1 items-center justify-center gap-1.5 rounded-xl bg-white px-3 py-2 text-xs font-black text-stone-600 shadow-sm"><Edit3 size={13} />編輯</button>
+                        <button type="button" onClick={() => deleteRule(rule)} className="rounded-xl bg-rose-50 px-3 py-2 text-rose-500"><Trash2 size={15} /></button>
+                      </div>
+                    </article>
+                  );
+                })}
+              </div>
+            )}
+          </div>
+        )}
+
+        {reportTab === "create" && (
+          <form onSubmit={saveRule} className="p-5 sm:p-6">
+            <div className="mx-auto max-w-5xl space-y-6">
+              <section>
+                <div className="mb-3">
+                  <span className="rounded-full bg-sky-50 px-3 py-1 text-[10px] font-black text-sky-700">第 1 步</span>
+                  <h4 className="mt-2 text-sm font-black text-stone-800">你想固定收到什麼？</h4>
+                </div>
+                <div className="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-3">
+                  {Object.entries(REPORT_TYPES).map(([source, definition]) => {
+                    const Icon = definition.icon;
+                    const active = currentRule.source === source;
+                    return (
+                      <button key={source} type="button" onClick={() => chooseReportType(source)} className={`rounded-2xl border p-4 text-left transition ${active ? "border-sky-300 bg-sky-50 shadow-sm" : "border-stone-100 bg-white hover:border-sky-100 hover:bg-sky-50/30"}`}>
+                        <div className="flex items-center gap-2"><Icon size={16} className={active ? "text-sky-600" : "text-stone-400"} /><span className="text-xs font-black text-stone-700">{definition.label}</span></div>
+                        <p className="mt-2 text-[10px] font-bold leading-4 text-stone-400">{definition.description}</p>
+                      </button>
+                    );
+                  })}
+                </div>
+              </section>
+
+              <section className="rounded-3xl border border-stone-100 bg-stone-50/50 p-5">
+                <div className="mb-4">
+                  <span className="rounded-full bg-indigo-50 px-3 py-1 text-[10px] font-black text-indigo-700">第 2 步</span>
+                  <h4 className="mt-2 text-sm font-black text-stone-800">決定時間與接收對象</h4>
+                </div>
+                <div className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-3">
+                  <label className="rounded-2xl border border-stone-100 bg-white p-4">
+                    <span className="mb-2 block text-[10px] font-black text-stone-400">報表名稱</span>
+                    <input value={currentRule.name} onChange={(event) => setCurrentRule((previous) => ({ ...previous, name: event.target.value }))} className="w-full bg-transparent text-sm font-black text-stone-700 outline-none" />
+                  </label>
+                  <label className="rounded-2xl border border-stone-100 bg-white p-4">
+                    <span className="mb-2 block text-[10px] font-black text-stone-400">發送時間</span>
+                    <input type="time" value={currentRule.time} onChange={(event) => setCurrentRule((previous) => ({ ...previous, time: event.target.value }))} className="w-full bg-transparent text-sm font-black text-stone-700 outline-none" />
+                  </label>
+                  <label className="rounded-2xl border border-stone-100 bg-white p-4">
+                    <span className="mb-2 block text-[10px] font-black text-stone-400">傳送到</span>
+                    <select value={currentRule.targetGroup} onChange={(event) => setCurrentRule((previous) => ({ ...previous, targetGroup: event.target.value }))} className="w-full bg-transparent text-sm font-black text-stone-700 outline-none">
+                      <option value="manager">主管群</option>
+                      <option value="main">高階主管主群</option>
+                    </select>
+                  </label>
+                </div>
+                <div className="mt-4 grid grid-cols-1 gap-4 lg:grid-cols-2">
+                  <div className="rounded-2xl border border-stone-100 bg-white p-4">
+                    <p className="mb-3 text-[10px] font-black text-stone-400">哪幾天發送？</p>
+                    <div className="flex flex-wrap gap-2">
+                      {WEEKDAYS.map((day) => {
+                        const active = currentRule.weekdays.includes(day.id);
+                        return <button key={day.id} type="button" onClick={() => toggleWeekday(day.id)} className={`h-9 w-9 rounded-xl border text-[11px] font-black ${active ? "border-sky-500 bg-sky-500 text-white" : "border-stone-200 bg-white text-stone-400"}`}>{day.label}</button>;
+                      })}
+                    </div>
+                  </div>
+                  <div className="rounded-2xl border border-stone-100 bg-white p-4">
+                    <p className="mb-3 text-[10px] font-black text-stone-400">要看哪些品牌？</p>
+                    {currentRule.source === "weekday_morning_brief" ? (
+                      <div className="rounded-xl border border-indigo-100 bg-indigo-50 px-3 py-3 text-[11px] font-black text-indigo-700">
+                        三品牌工作日晨報固定包含 DRCYJ、安妞與伊啵。
+                      </div>
+                    ) : (
+                      <div className="flex flex-wrap gap-2">
+                        {BRAND_OPTIONS.map((brand) => {
+                          const active = currentRule.brandIds.includes(brand.id);
+                          return <button key={brand.id} type="button" onClick={() => toggleBrand(brand.id)} className={`rounded-xl border px-4 py-2 text-xs font-black ${active ? "border-indigo-200 bg-indigo-50 text-indigo-700" : "border-stone-200 bg-white text-stone-400"}`}>{brand.label}</button>;
+                        })}
+                      </div>
+                    )}
+                  </div>
+                </div>
+              </section>
+
+              {currentRule.source === "weekday_morning_brief" && (
+                <section className="rounded-3xl border border-amber-100 bg-amber-50/40 p-5">
+                  <div className="mb-4">
+                    <span className="rounded-full bg-white px-3 py-1 text-[10px] font-black text-amber-700">第 3 步</span>
+                    <h4 className="mt-2 text-sm font-black text-stone-800">晨報要包含哪些排行？</h4>
+                  </div>
+                  <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
+                    <label className="rounded-2xl border border-amber-100 bg-white p-4"><span className="mb-2 block text-[10px] font-black text-stone-400">昨日最佳店家數</span><input type="number" min="1" max="10" value={currentRule.topCount} onChange={(event) => setCurrentRule((previous) => ({ ...previous, topCount: event.target.value }))} className="w-full bg-transparent text-sm font-black text-stone-700 outline-none" /></label>
+                    <label className="rounded-2xl border border-amber-100 bg-white p-4"><span className="mb-2 block text-[10px] font-black text-stone-400">昨日最差店家數</span><input type="number" min="1" max="10" value={currentRule.bottomCount} onChange={(event) => setCurrentRule((previous) => ({ ...previous, bottomCount: event.target.value }))} className="w-full bg-transparent text-sm font-black text-stone-700 outline-none" /></label>
+                    <label className="flex items-center justify-between rounded-2xl border border-amber-100 bg-white p-4"><span className="text-xs font-black text-stone-700">附上未繳日報名單</span><input type="checkbox" checked={currentRule.includeMissingReports} onChange={(event) => setCurrentRule((previous) => ({ ...previous, includeMissingReports: event.target.checked }))} className="h-5 w-5" /></label>
+                  </div>
+                </section>
+              )}
+
+              <section className="rounded-3xl border border-stone-100 bg-white">
+                <button type="button" onClick={() => setAdvancedOpen((previous) => !previous)} className="flex w-full items-center justify-between px-5 py-4 text-left">
+                  <div><p className="text-xs font-black text-stone-700">進階設定</p><p className="mt-1 text-[10px] font-bold text-stone-400">一般情況不需要調整；有特殊文案或資料截止需求時再展開。</p></div>
+                  <ChevronDown size={16} className={`text-stone-400 transition ${advancedOpen ? "rotate-180" : ""}`} />
+                </button>
+                {advancedOpen && (
+                  <div className="space-y-4 border-t border-stone-100 p-5">
+                    <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
+                      <label className="rounded-2xl border border-stone-100 bg-stone-50 p-4"><span className="mb-2 block text-[10px] font-black text-stone-400">資料計算到</span><select value={currentRule.cutoffMode} onChange={(event) => setCurrentRule((previous) => ({ ...previous, cutoffMode: event.target.value }))} className="w-full bg-transparent text-xs font-black text-stone-700 outline-none"><option value="yesterday">前一天結束</option><option value="current">發送當下</option></select></label>
+                      <label className="block rounded-2xl border border-stone-100 bg-stone-50 p-4"><span className="mb-2 block text-[10px] font-black text-stone-400">暫停至（含當日）</span><div className="flex min-h-12 min-w-0 items-center rounded-xl border border-stone-200 bg-white px-3"><input type="date" value={currentRule.pausedUntil || ""} onChange={(event) => setCurrentRule((previous) => ({ ...previous, pausedUntil: event.target.value }))} className="block h-11 min-w-0 flex-1 bg-transparent px-1 text-sm font-black leading-none text-stone-700 outline-none" style={{ colorScheme: "light" }} /></div></label>
+                    </div>
+                    {reportDefinition.vars.length > 0 && (
+                      <label className="block rounded-2xl border border-stone-100 bg-stone-50 p-4"><span className="mb-2 block text-[10px] font-black text-stone-400">自訂訊息內容</span><p className="mb-2 text-[10px] font-bold text-stone-400">可用欄位：{reportDefinition.vars.join("、")}</p><textarea rows={5} value={currentRule.template} onChange={(event) => setCurrentRule((previous) => ({ ...previous, template: event.target.value }))} className="w-full resize-none bg-transparent text-xs font-bold leading-5 text-stone-700 outline-none" /></label>
+                    )}
+                  </div>
+                )}
+              </section>
+
+              <div className="flex flex-col-reverse gap-3 border-t border-stone-100 pt-5 sm:flex-row sm:justify-end">
+                <button type="button" onClick={() => { setCurrentRule(createDefaultRule()); setReportTab("mine"); }} className="rounded-xl bg-stone-100 px-5 py-3 text-xs font-black text-stone-500">取消</button>
+                <button type="submit" disabled={isSaving} className="inline-flex items-center justify-center gap-2 rounded-xl bg-sky-600 px-6 py-3 text-xs font-black text-white shadow-sm disabled:opacity-60">{isSaving ? <Loader2 size={15} className="animate-spin" /> : <Save size={15} />}{currentRule.id ? "儲存修改" : "建立定時報表"}</button>
+              </div>
+            </div>
+          </form>
+        )}
+
+        {reportTab === "history" && (
+          <div className="p-5 sm:p-6"><TelegramAlertControlCenter view="reportHistory" /></div>
+        )}
+      </section>
+    );
   };
 
   return (
     <ViewWrapper>
-      <div className="flex flex-col md:flex-row justify-between items-start md:items-center mb-6 gap-4">
-        <div className="flex items-center gap-2">
-          <div className="bg-amber-50 p-2 rounded-xl border border-amber-100">
-            <Bell className="text-amber-600" size={20} />
-          </div>
+      <div className="mb-6 flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
+        <div className="flex items-start gap-3">
+          <div className="rounded-2xl border border-amber-100 bg-amber-50 p-3"><Bell className="text-amber-600" size={22} /></div>
           <div>
-            <h2 className="text-xl font-extrabold text-stone-800 tracking-tight">Telegram 推播管理中心</h2>
-            <p className="text-stone-500 text-[13px] font-medium mt-0.5">集中管理固定排程推播與智慧戰情預警</p>
+            <h2 className="text-2xl font-black tracking-tight text-stone-800">Telegram 營運助手</h2>
+            <p className="mt-1 max-w-3xl text-sm font-bold leading-6 text-stone-400">依照你現在想完成的事情分類，不需要先理解程式或系統架構。</p>
           </div>
         </div>
-        {activeTab === "scheduled" && !isEditing && (
-          <button 
-            onClick={() => {
-              setCurrentRule({
-                name: "", time: "09:00", source: "top5_stores", 
-                targetGroup: "main", template: DATA_SOURCES["top5_stores"].defaultTemplate, isActive: true
-              });
-              setIsEditing(true);
-            }}
-            className="bg-stone-800 text-white px-4 py-2 rounded-xl text-sm font-bold flex items-center gap-1.5 hover:bg-stone-900 transition-all shadow-sm active:scale-95"
-          >
-            <Plus size={16} strokeWidth={2.5} /> 新增排程
-          </button>
-        )}
+        <span className="rounded-full border border-emerald-100 bg-emerald-50 px-3 py-1.5 text-[11px] font-black text-emerald-700">任務導向介面</span>
       </div>
 
-      <div className="mb-6 inline-flex rounded-2xl border border-stone-200 bg-white p-1 shadow-sm">
-        <button
-          type="button"
-          onClick={() => setActiveTab("scheduled")}
-          className={`flex items-center gap-1.5 rounded-xl px-4 py-2 text-xs font-black transition-all ${activeTab === "scheduled" ? "bg-stone-800 text-white shadow-sm" : "text-stone-500 hover:bg-stone-50"}`}
-        >
-          <Clock size={14} /> 固定排程推播
-        </button>
-        <button
-          type="button"
-          onClick={() => setActiveTab("alerts")}
-          className={`flex items-center gap-1.5 rounded-xl px-4 py-2 text-xs font-black transition-all ${activeTab === "alerts" ? "bg-sky-600 text-white shadow-sm" : "text-stone-500 hover:bg-stone-50"}`}
-        >
-          <Radio size={14} /> 智慧戰情預警
-        </button>
-      </div>
+      <nav className="mb-6 grid grid-cols-2 gap-2 rounded-3xl border border-stone-100 bg-white p-2 shadow-sm md:grid-cols-5">
+        {MAIN_TABS.map((tab) => {
+          const Icon = tab.icon;
+          const active = activeTab === tab.id;
+          return (
+            <button key={tab.id} type="button" onClick={() => setActiveTab(tab.id)} className={`rounded-2xl px-3 py-3 text-left transition ${active ? "bg-sky-600 text-white shadow-md shadow-sky-100" : "text-stone-500 hover:bg-stone-50"}`}>
+              <div className="flex items-center gap-2"><Icon size={16} /><span className="text-xs font-black">{tab.label}</span></div>
+              <p className={`mt-1 hidden text-[9px] font-bold leading-4 xl:block ${active ? "text-sky-100" : "text-stone-400"}`}>{tab.description}</p>
+            </button>
+          );
+        })}
+      </nav>
 
-      {activeTab === "scheduled" ? (isEditing ? (
-        <div className="grid grid-cols-1 lg:grid-cols-12 gap-5 animate-in slide-in-from-bottom-4 duration-300">
-          <div className="lg:col-span-7">
-            <Card title="排程與文案設定" icon={<Edit3 className="text-stone-400" size={18}/>}>
-              <form onSubmit={handleSaveRule} className="space-y-4">
-                <div>
-                  <label className="block text-xs font-bold text-stone-500 uppercase tracking-wider mb-1.5">任務名稱</label>
-                  <input type="text" required value={currentRule.name} onChange={e => setCurrentRule({...currentRule, name: e.target.value})} className="w-full border-2 border-stone-100 p-2.5 rounded-xl outline-none focus:border-amber-400 font-bold text-stone-700 bg-stone-50 focus:bg-white text-sm" placeholder="例如：每日晨間激勵"/>
-                </div>
-                <div className="grid grid-cols-2 gap-4">
-                  <div>
-                    <label className="block text-xs font-bold text-stone-500 uppercase tracking-wider mb-1.5 flex items-center gap-1"><Clock size={12}/> 觸發時間</label>
-                    <input type="time" required value={currentRule.time} onChange={e => setCurrentRule({...currentRule, time: e.target.value})} className="w-full border-2 border-stone-100 p-2.5 rounded-xl outline-none focus:border-amber-400 font-bold text-stone-700 bg-stone-50 focus:bg-white text-sm"/>
-                  </div>
-                  <div>
-                    <label className="block text-xs font-bold text-stone-500 uppercase tracking-wider mb-1.5 flex items-center gap-1"><Send size={12}/> 發送群組</label>
-                    <select value={currentRule.targetGroup} onChange={e => setCurrentRule({...currentRule, targetGroup: e.target.value})} className="w-full border-2 border-stone-100 p-2.5 rounded-xl outline-none focus:border-amber-400 font-bold text-stone-700 bg-stone-50 focus:bg-white text-sm appearance-none cursor-pointer">
-                      <option value="main">營運大群組 (全體)</option>
-                      <option value="manager">主管戰情室 (限高階)</option>
-                    </select>
-                  </div>
-                </div>
-                <div>
-                  <label className="block text-xs font-bold text-stone-500 uppercase tracking-wider mb-1.5 flex items-center gap-1"><Database size={12}/> 資料來源</label>
-                  <select 
-                    value={currentRule.source} 
-                    onChange={e => {
-                      const newSource = e.target.value;
-                      setCurrentRule({...currentRule, source: newSource, template: DATA_SOURCES[newSource].defaultTemplate});
-                    }} 
-                    className="w-full border-2 border-stone-100 p-2.5 rounded-xl outline-none focus:border-amber-400 font-bold text-stone-700 bg-stone-50 focus:bg-white text-sm appearance-none cursor-pointer"
-                  >
-                    {Object.entries(DATA_SOURCES).map(([key, data]) => (
-                      <option key={key} value={key}>{data.label}</option>
-                    ))}
-                  </select>
-                </div>
-                <div className="pt-1">
-                  <div className="flex items-center justify-between mb-1.5">
-                    <label className="text-xs font-bold text-stone-500 uppercase tracking-wider">自訂推播文案</label>
-                    <span className="text-[10px] text-stone-400">支援 Markdown 格式</span>
-                  </div>
-                  <div className="bg-stone-50 px-2 py-1.5 rounded-lg mb-2 text-[11px] text-stone-500 font-medium flex flex-wrap gap-1 items-center border border-stone-100">
-                    <span className="font-bold text-stone-600">可用變數：</span>
-                    {DATA_SOURCES[currentRule.source].vars.map(v => (
-                      <code key={v} className="bg-white px-1.5 py-0.5 rounded shadow-sm border border-stone-200 font-mono text-indigo-600">{v}</code>
-                    ))}
-                  </div>
-                  <textarea 
-                    rows={7} 
-                    value={currentRule.template} 
-                    onChange={e => setCurrentRule({...currentRule, template: e.target.value})} 
-                    className="w-full border-2 border-stone-100 p-3 rounded-xl outline-none focus:border-amber-400 font-mono text-[13px] text-stone-700 leading-relaxed bg-stone-50 focus:bg-white resize-none"
-                  />
-                </div>
-                <div className="flex gap-3 pt-3 border-t border-stone-100">
-                  <button type="button" onClick={() => setIsEditing(false)} className="flex-1 py-2.5 bg-stone-100 text-stone-500 text-sm font-bold rounded-xl hover:bg-stone-200 transition-colors">取消</button>
-                  <button type="submit" className="flex-1 py-2.5 bg-stone-800 text-white text-sm font-bold rounded-xl hover:bg-stone-900 transition-colors flex justify-center items-center gap-1.5"><Save size={16}/> 儲存排程</button>
-                </div>
-              </form>
-            </Card>
-          </div>
-
-          <div className="lg:col-span-5 flex flex-col">
-             <h3 className="text-xs font-bold text-stone-400 uppercase tracking-wider mb-2 flex items-center gap-1.5 pl-1"><PlayCircle size={14}/> Telegram 實機預覽</h3>
-             <div className="bg-[#E4EFE9] flex-1 rounded-3xl p-4 sm:p-5 shadow-inner border-4 border-stone-200/50 flex flex-col justify-start max-h-[600px] overflow-y-auto">
-                <div className="bg-white p-4 rounded-2xl rounded-tl-sm shadow-sm max-w-[92%] whitespace-pre-wrap font-sans text-[14px] leading-relaxed text-stone-800 break-words relative">
-                  <div className="absolute -left-1.5 top-0 w-3 h-3 bg-white transform rotate-45 origin-top-right"></div>
-                  <div className="relative z-10">{generatePreview(currentRule.template, currentRule.source)}</div>
-                  <span className="block text-right text-[10px] text-stone-400 mt-1">{currentRule.time}</span>
-                </div>
-             </div>
-          </div>
-        </div>
-      ) : (
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
-          {isLoading ? (
-            <div className="col-span-full py-16 text-center text-stone-400 font-bold flex flex-col items-center gap-2"><Activity className="animate-spin text-stone-300" size={24} /> 載入中...</div>
-          ) : rules.length === 0 ? (
-            <div className="col-span-full py-16 bg-white rounded-3xl border border-dashed border-stone-200 text-center flex flex-col items-center">
-              <div className="bg-stone-50 p-3 rounded-xl mb-3"><Bell size={24} className="text-stone-300"/></div>
-              <h3 className="text-stone-600 font-bold text-base mb-1">目前沒有任何推播排程</h3>
-              <p className="text-stone-400 text-[13px]">點擊右上方「新增排程」建立</p>
-            </div>
-          ) : (
-            rules.map(rule => (
-              <div key={rule.id} className={`bg-white rounded-2xl p-5 border transition-all flex flex-col h-full ${rule.isActive ? 'border-stone-200 shadow-sm hover:shadow-md' : 'border-stone-100 opacity-60'}`}>
-                <div className="flex justify-between items-center mb-3">
-                  <div className="flex items-center gap-2">
-                    <div className={`p-1.5 rounded-lg ${rule.isActive ? 'bg-amber-50 text-amber-600' : 'bg-stone-100 text-stone-400'}`}>
-                      <Clock size={16} strokeWidth={2.5} />
-                    </div>
-                    <span className={`text-xl font-mono font-black tracking-tight ${rule.isActive ? 'text-stone-800' : 'text-stone-400'}`}>{rule.time}</span>
-                  </div>
-                  <button onClick={() => toggleActive(rule)} className={`p-1 transition-transform active:scale-95 ${rule.isActive ? 'text-emerald-500' : 'text-stone-300'}`}>
-                    {rule.isActive ? <ToggleRight size={28} strokeWidth={2.5} /> : <ToggleLeft size={28} strokeWidth={2.5} />}
-                  </button>
-                </div>
-
-                <div className="space-y-2 flex-1">
-                  <h3 className={`font-bold text-[15px] truncate ${rule.isActive ? 'text-stone-800' : 'text-stone-500'}`} title={rule.name}>{rule.name}</h3>
-                  <div className="flex flex-col gap-1.5 mt-2">
-                    <div className="flex items-center gap-1.5 text-[11px] font-bold text-stone-500">
-                      <Database size={12} className="text-stone-400 shrink-0"/>
-                      <span className="truncate">{DATA_SOURCES[rule.source]?.label || rule.source}</span>
-                    </div>
-                    <div className="flex items-center gap-1.5 text-[11px] font-bold text-stone-500">
-                      <Send size={12} className="text-stone-400 shrink-0"/>
-                      {rule.targetGroup === 'manager' ? (
-                        <span className="text-rose-600 bg-rose-50 px-1.5 py-0.5 rounded border border-rose-100">主管戰情室</span>
-                      ) : (
-                        <span className="text-indigo-600 bg-indigo-50 px-1.5 py-0.5 rounded border border-indigo-100">營運大群組</span>
-                      )}
-                    </div>
-                  </div>
-                </div>
-
-                <div className="flex gap-2 pt-4 mt-4 border-t border-stone-100">
-                  <button onClick={() => { setCurrentRule(rule); setIsEditing(true); }} className="flex-1 py-2 bg-stone-50 hover:bg-stone-100 text-stone-600 text-[13px] font-bold rounded-lg flex justify-center items-center gap-1.5 transition-colors"><Edit3 size={14}/> 編輯</button>
-                  <button onClick={() => handleDelete(rule.id)} className="px-3 py-2 bg-rose-50 hover:bg-rose-100 text-rose-500 rounded-lg transition-colors"><Trash2 size={16}/></button>
-                </div>
-              </div>
-            ))
-          )}
-        </div>
-      )) : (
-        <TelegramAlertControlCenter />
-      )}
+      {activeTab === "reports"
+        ? renderReportManager()
+        : <TelegramAlertControlCenter view={activeTab} onNavigate={setActiveTab} />}
     </ViewWrapper>
   );
 };
