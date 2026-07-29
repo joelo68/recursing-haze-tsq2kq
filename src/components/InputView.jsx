@@ -8,10 +8,9 @@ import {
   WifiOff 
 } from "lucide-react";
 import { 
-  addDoc, setDoc, doc, serverTimestamp, getDocFromServer 
+  setDoc, doc, serverTimestamp, getDocFromServer 
 } from "firebase/firestore";
 
-import { db, appId } from "../config/firebase"; 
 import { parseNumber, formatNumber, toStandardDateFormat, sortManagerNames, sortStoreNames, sortManagersByOrgOrder, sortStoresByOrgOrder } from "../utils/helpers";
 import { AppContext } from "../AppContext";
 import { ViewWrapper, Card } from "./SharedUI";
@@ -56,100 +55,8 @@ const formatTherapistStoreLabel = (value = "") => {
 };
 
 
-const getAffectedYearMonth = (dateValue) => {
-  const safeDate = String(dateValue || "").replace(/\//g, "-");
-  return /^\d{4}-\d{2}/.test(safeDate) ? safeDate.slice(0, 7) : "";
-};
-
-const markSummaryRecalcFlag = async ({
-  getCollectionPath,
-  currentBrand,
-  currentUser,
-  userRole,
-  affectedYearMonth,
-  sourceType,
-  sourceId,
-  reason,
-  delayMinutes = 10,
-}) => {
-  if (!getCollectionPath || !affectedYearMonth) return;
-
-  const now = new Date();
-  const rebuildAfter = new Date(now.getTime() + delayMinutes * 60 * 1000);
-  const brandId = typeof currentBrand === "string" ? currentBrand : currentBrand?.id || "unknown";
-
-  await setDoc(doc(getCollectionPath("summary_recalc_flags"), affectedYearMonth), {
-    brandId,
-    yearMonth: affectedYearMonth,
-    affectedYearMonth,
-    status: "dirty",
-    dirty: true,
-    reason: reason || "report_changed",
-    latestSourceType: sourceType || "unknown",
-    latestSourceId: sourceId || "",
-    lastDirtyAt: serverTimestamp(),
-    lastDirtyAtText: now.toISOString(),
-    rebuildAfterAtText: rebuildAfter.toISOString(),
-    debounceMinutes: delayMinutes,
-    updatedAt: serverTimestamp(),
-    updatedAtText: now.toISOString(),
-    updatedBy: currentUser?.name || "unknown",
-    updatedByRole: userRole || "unknown",
-    summaryTargets: ["dashboard_summary", "therapist_summary", "rankings_summary"],
-  }, { merge: true });
-};
-
-const enqueueRecalcQueue = async ({
-  getCollectionPath,
-  currentBrand,
-  currentUser,
-  userRole,
-  sourceType,
-  sourceId,
-  date,
-  storeName = "",
-  therapistId = "",
-  therapistName = "",
-  reason = "report_submitted",
-}) => {
-  if (!getCollectionPath || !date || !sourceType || !sourceId) return;
-
-  const brandId = typeof currentBrand === "string" ? currentBrand : currentBrand?.id || "unknown";
-  const affectedYearMonth = getAffectedYearMonth(date);
-  if (!affectedYearMonth) return;
-
-  await addDoc(getCollectionPath("recalc_queue"), {
-    brandId,
-    yearMonth: affectedYearMonth,
-    affectedYearMonth,
-    sourceType,
-    sourceId,
-    affectedStore: storeName || "",
-    affectedTherapist: therapistName || "",
-    affectedTherapistId: therapistId || "",
-    reason,
-    status: "pending",
-    createdAt: serverTimestamp(),
-    createdAtText: new Date().toISOString(),
-    createdBy: currentUser?.name || "unknown",
-    createdByRole: userRole || "unknown",
-    summaryTargets: ["dashboard_summary", "therapist_summary", "rankings_summary"],
-  });
-
-  // ★ 歷史月份可信度保護：只要日報異動，就立即把該月份標記為 dirty。
-  // Dashboard 會立刻停止信任舊 Summary，先改用明細暫代；後續背景任務可依 rebuildAfterAtText 做 debounce 重建。
-  await markSummaryRecalcFlag({
-    getCollectionPath,
-    currentBrand,
-    currentUser,
-    userRole,
-    affectedYearMonth,
-    sourceType,
-    sourceId,
-    reason,
-    delayMinutes: 10,
-  });
-};
+// Summary dirty 與 recalc_queue 改由後端 Firestore onWrite 統一建立。
+// 前端只負責正式日報寫入與本機草稿暫存，避免本月 Queue、重複 Queue 與背景掃描放大。
 
 // ============================================================================
 // ★★★ 子元件 A：店長專用輸入介面 (StoreInputView) ★★★
@@ -370,21 +277,7 @@ const StoreInputView = () => {
           logActivity(userRole, currentUser?.name, "提交日報", `${selectedStore} ${safeDate}`);
         }
 
-        try {
-          await enqueueRecalcQueue({
-            getCollectionPath,
-            currentBrand,
-            currentUser,
-            userRole,
-            sourceType: "daily_reports",
-            sourceId: targetDocId,
-            date: safeDate,
-            storeName: selectedStore,
-            reason: existingReportId ? "store_report_updated" : "store_report_submitted",
-          });
-        } catch (queueError) {
-          console.warn("recalc_queue 建立失敗，但日報已提交：", queueError);
-        }
+        // Summary dirty 與重算 Queue 由後端 onWrite 依歷史月份統一處理。
 
         setFormData(defaultFormData);
         localStorage.removeItem(`input_draft_${brandId}`);
@@ -741,23 +634,7 @@ const TherapistInputView = () => {
       if (verifySnap.exists()) {
         logActivity("therapist", currentUser.name, "個人日報提交", `${safeDate} 業績`);
 
-        try {
-          await enqueueRecalcQueue({
-            getCollectionPath,
-            currentBrand,
-            currentUser,
-            userRole,
-            sourceType: "therapist_daily_reports",
-            sourceId: docId,
-            date: safeDate,
-            storeName: resolvedTherapistStoreName || "未註記店家",
-            therapistId: currentUser.id,
-            therapistName: currentUser.name,
-            reason: hasSubmittedToday ? "therapist_report_updated" : "therapist_report_submitted",
-          });
-        } catch (queueError) {
-          console.warn("recalc_queue 建立失敗，但管理師日報已提交：", queueError);
-        }
+        // Summary dirty 與重算 Queue 由後端 onWrite 依歷史月份統一處理。
 
         showToast("提交成功！", "success");
         setHasSubmittedToday(true);

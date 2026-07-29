@@ -6776,6 +6776,7 @@ const SUMMARY_REPAIR_BRANDS = ["cyj", "anniu", "yibo"];
 const SUMMARY_QUEUE_FALLBACK_LIMIT = 50;
 const SUMMARY_QUEUE_FALLBACK_INTERVAL_MS = 30 * 60 * 1000;
 const SUMMARY_QUEUE_FALLBACK_CATCHUP_INTERVAL_MS = 5 * 60 * 1000;
+const SUMMARY_QUEUE_FALLBACK_NO_PROGRESS_INTERVAL_MS = 6 * 60 * 60 * 1000;
 const SUMMARY_QUEUE_FALLBACK_STATE_DOC = "recalc_queue_fallback_scan";
 
 function getTaipeiYearForAnnualKpiSummary() {
@@ -7344,14 +7345,16 @@ async function loadPendingQueueFallbackPage(brandId, nowMs = Date.now()) {
   let query = queueRef
     .where("status", "==", "pending")
     .orderBy(admin.firestore.FieldPath.documentId())
-    .limit(SUMMARY_QUEUE_FALLBACK_LIMIT);
+    // 多取 1 筆確認是否真的有下一頁，避免「剛好 50 筆」被誤判為 backlog。
+    .limit(SUMMARY_QUEUE_FALLBACK_LIMIT + 1);
 
   if (cursorDocId) query = query.startAfter(cursorDocId);
 
   const queueSnap = await query.get();
-  const hasMorePages = queueSnap.size >= SUMMARY_QUEUE_FALLBACK_LIMIT;
-  const nextCursorDocId = hasMorePages
-    ? queueSnap.docs[queueSnap.docs.length - 1].id
+  const hasMorePages = queueSnap.size > SUMMARY_QUEUE_FALLBACK_LIMIT;
+  const pageDocs = queueSnap.docs.slice(0, SUMMARY_QUEUE_FALLBACK_LIMIT);
+  const nextCursorDocId = hasMorePages && pageDocs.length
+    ? pageDocs[pageDocs.length - 1].id
     : "";
   const nextIntervalMs = hasMorePages
     ? SUMMARY_QUEUE_FALLBACK_CATCHUP_INTERVAL_MS
@@ -7368,7 +7371,8 @@ async function loadPendingQueueFallbackPage(brandId, nowMs = Date.now()) {
     scanMode: hasMorePages ? "catchup" : "steady",
     lastRunAt: admin.firestore.FieldValue.serverTimestamp(),
     lastRunAtText: nowText,
-    lastPageSize: queueSnap.size,
+    lastPageSize: pageDocs.length,
+    peekedExtraDocument: hasMorePages,
     wrappedToStart: nextCursorDocId === "",
     updatedAt: admin.firestore.FieldValue.serverTimestamp(),
     updatedAtText: nowText,
@@ -7376,10 +7380,12 @@ async function loadPendingQueueFallbackPage(brandId, nowMs = Date.now()) {
 
   return {
     due: true,
-    docs: queueSnap.docs,
+    docs: pageDocs,
     cursorDocId: nextCursorDocId,
     nextRunAfterMs,
     scanMode: hasMorePages ? "catchup" : "steady",
+    hasMorePages,
+    previousNoProgressPages: Number(state.consecutiveNoProgressPages || 0),
   };
 }
 
@@ -8357,12 +8363,44 @@ async function collectReadyDirtySummaryFlags() {
         .limit(20)
         .get();
 
+      const flagCleanupBatch = db.batch();
+      let flagCleanupCount = 0;
+      const currentYearMonth = getTaipeiYearMonthForAutoRepair();
+      const cleanupAtText = new Date(now).toISOString();
+
       flagSnap.docs.forEach((docSnap) => {
         const data = docSnap.data() || {};
         const yearMonth = data.affectedYearMonth || data.yearMonth || docSnap.id;
-        if (!/^\d{4}-\d{2}$/.test(String(yearMonth || ""))) return;
-        // 當月與未來月份仍屬即時營運期，不應交給 Summary 自動修復處理。
-        if (!isHistoricalYearMonthForAutoRepair(yearMonth)) return;
+        if (!/^\d{4}-\d{2}$/.test(String(yearMonth || ""))) {
+          flagCleanupBatch.set(docSnap.ref, {
+            status: "invalid",
+            dirty: false,
+            pendingCount: 0,
+            cleanupReason: "invalid_year_month",
+            cleanedBy: "auto_summary_repair_worker",
+            cleanedAt: admin.firestore.FieldValue.serverTimestamp(),
+            cleanedAtText: cleanupAtText,
+          }, { merge: true });
+          flagCleanupCount += 1;
+          return;
+        }
+
+        // 當月與未來月份使用即時明細，不應持續保留 dirty / pending flag。
+        if (!isHistoricalYearMonthForAutoRepair(yearMonth)) {
+          flagCleanupBatch.set(docSnap.ref, {
+            status: yearMonth === currentYearMonth ? "ignored_live_month" : "ignored_future_month",
+            dirty: false,
+            pendingCount: 0,
+            cleanupReason: yearMonth === currentYearMonth ? "live_month_uses_detail" : "future_month_not_supported",
+            cleanedBy: "auto_summary_repair_worker",
+            cleanedAt: admin.firestore.FieldValue.serverTimestamp(),
+            cleanedAtText: cleanupAtText,
+            updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+            updatedAtText: cleanupAtText,
+          }, { merge: true });
+          flagCleanupCount += 1;
+          return;
+        }
 
         const rebuildAtText = data.rebuildAfterAtText || data.updatedAtText || data.lastDirtyAtText || "";
         if (rebuildAtText) {
@@ -8379,6 +8417,8 @@ async function collectReadyDirtySummaryFlags() {
           sources: ["summary_recalc_flags"],
         });
       });
+
+      if (flagCleanupCount > 0) await flagCleanupBatch.commit();
     } catch (error) {
       console.warn(`⚠️ Summary 自動修復：讀取 flags 失敗 ${brandId}`, error.message);
     }
@@ -8392,29 +8432,67 @@ async function collectReadyDirtySummaryFlags() {
       if (!fallbackPage.due) continue;
 
       const queueGroups = {};
-      const legacyBackfillBatch = db.batch();
-      let legacyBackfillCount = 0;
+      const queueCleanupBatch = db.batch();
+      let normalizedCount = 0;
+      let ignoredLiveCount = 0;
+      let ignoredFutureCount = 0;
+      let invalidCount = 0;
+      let actionableCount = 0;
       const normalizedAtText = new Date(now).toISOString();
+      const currentYearMonth = getTaipeiYearMonthForAutoRepair();
 
       fallbackPage.docs.forEach((docSnap) => {
         const data = docSnap.data() || {};
         const yearMonth = getQueueMonth(data);
-        if (!yearMonth) return;
 
-        // 舊格式相容：早期 queue 可能只有 yearMonth / date / sourceDate。
-        // 巡檢讀到後先補齊 affectedYearMonth，讓同一次與後續重建都能使用精準月份查詢。
-        if (!/^\d{4}-\d{2}$/.test(String(data.affectedYearMonth || ""))) {
-          legacyBackfillBatch.set(docSnap.ref, {
+        if (!yearMonth) {
+          queueCleanupBatch.set(docSnap.ref, {
+            status: "invalid",
+            cleanupReason: "invalid_year_month",
+            cleanedBy: "auto_summary_queue_fallback",
+            cleanedAt: admin.firestore.FieldValue.serverTimestamp(),
+            cleanedAtText: normalizedAtText,
+          }, { merge: true });
+          invalidCount += 1;
+          return;
+        }
+
+        const needsNormalization = !/^\d{4}-\d{2}$/.test(String(data.affectedYearMonth || ""));
+
+        // 本月使用即時明細，未來月份不支援；兩者都不應永久保持 pending。
+        if (!isHistoricalYearMonthForAutoRepair(yearMonth)) {
+          const isLiveMonth = yearMonth === currentYearMonth;
+          queueCleanupBatch.set(docSnap.ref, {
+            ...(needsNormalization ? {
+              affectedYearMonth: yearMonth,
+              normalizedBy: "auto_summary_queue_fallback",
+              normalizedAt: admin.firestore.FieldValue.serverTimestamp(),
+              normalizedAtText,
+            } : {}),
+            status: isLiveMonth ? "ignored_live_month" : "ignored_future_month",
+            cleanupReason: isLiveMonth ? "live_month_uses_detail" : "future_month_not_supported",
+            cleanedBy: "auto_summary_queue_fallback",
+            cleanedAt: admin.firestore.FieldValue.serverTimestamp(),
+            cleanedAtText: normalizedAtText,
+          }, { merge: true });
+          if (needsNormalization) normalizedCount += 1;
+          if (isLiveMonth) ignoredLiveCount += 1;
+          else ignoredFutureCount += 1;
+          return;
+        }
+
+        // 舊格式相容：歷史 queue 可能只有 yearMonth / date / sourceDate。
+        if (needsNormalization) {
+          queueCleanupBatch.set(docSnap.ref, {
             affectedYearMonth: yearMonth,
             normalizedBy: "auto_summary_queue_fallback",
             normalizedAt: admin.firestore.FieldValue.serverTimestamp(),
             normalizedAtText,
           }, { merge: true });
-          legacyBackfillCount += 1;
+          normalizedCount += 1;
         }
 
-        // 只自動整理已成為歷史的月份；本月與未來月份不處理，避免 0 日報或預先目標造成錯誤重建。
-        if (!isHistoricalYearMonthForAutoRepair(yearMonth)) return;
+        actionableCount += 1;
         if (!queueGroups[yearMonth]) {
           queueGroups[yearMonth] = { count: 0, latestAt: "" };
         }
@@ -8425,8 +8503,34 @@ async function collectReadyDirtySummaryFlags() {
         }
       });
 
-      // 必須先完成舊格式補欄位，再讓本輪工作進入月份精準查詢。
-      if (legacyBackfillCount > 0) await legacyBackfillBatch.commit();
+      const cleanupCount = ignoredLiveCount + ignoredFutureCount + invalidCount;
+      if (normalizedCount + cleanupCount > 0) await queueCleanupBatch.commit();
+
+      // 防循環：連續三頁既沒有可處理月份，也沒有任何可清理／正規化資料時，暫停六小時。
+      const madeProgress = actionableCount + cleanupCount + normalizedCount > 0 || fallbackPage.docs.length === 0;
+      const consecutiveNoProgressPages = madeProgress ? 0 : Number(fallbackPage.previousNoProgressPages || 0) + 1;
+      const pauseForNoProgress = consecutiveNoProgressPages >= 3;
+      const statePatch = {
+        lastScannedCount: fallbackPage.docs.length,
+        lastActionableCount: actionableCount,
+        lastNormalizedCount: normalizedCount,
+        lastIgnoredLiveCount: ignoredLiveCount,
+        lastIgnoredFutureCount: ignoredFutureCount,
+        lastInvalidCount: invalidCount,
+        consecutiveNoProgressPages,
+        lastCleanupAtText: normalizedAtText,
+      };
+      if (pauseForNoProgress) {
+        const nextRunAfterMs = now + SUMMARY_QUEUE_FALLBACK_NO_PROGRESS_INTERVAL_MS;
+        Object.assign(statePatch, {
+          cursorDocId: "",
+          scanMode: "paused_no_progress",
+          nextRunAfterMs,
+          nextRunAfterAtText: new Date(nextRunAfterMs).toISOString(),
+          pauseReason: "three_pages_without_action_or_cleanup",
+        });
+      }
+      await getSummaryQueueFallbackStateRef(brandId).set(statePatch, { merge: true });
 
       Object.entries(queueGroups).forEach(([yearMonth, group]) => {
         // recalc_queue 沒有 rebuildAfterAtText 時，代表 flag 可能漏寫。

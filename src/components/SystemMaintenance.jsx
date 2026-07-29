@@ -10,6 +10,9 @@ import {
   query,
   where,
   limit,
+  orderBy,
+  startAfter,
+  documentId,
   setDoc,
   addDoc,
   updateDoc,
@@ -82,6 +85,7 @@ export default function SystemMaintenance() {
   const [orgStructureSnapshots, setOrgStructureSnapshots] = useState([]);
   const [recalcQueueGroups, setRecalcQueueGroups] = useState([]);
   const [recalcQueueTotal, setRecalcQueueTotal] = useState(0);
+  const [recalcQueueHealth, setRecalcQueueHealth] = useState(null);
   const [summaryBuildReport, setSummaryBuildReport] = useState(null);
   const [summaryCompareReport, setSummaryCompareReport] = useState(null);
   const [summaryStatusReport, setSummaryStatusReport] = useState(null);
@@ -539,14 +543,64 @@ export default function SystemMaintenance() {
       .sort((a, b) => String(b.month).localeCompare(String(a.month)));
   };
 
+  const buildRecalcQueueHealth = (rows = []) => {
+    const currentMonth = todayMonth();
+    const duplicateKeys = new Map();
+    const health = {
+      total: rows.length,
+      historical: 0,
+      live: 0,
+      future: 0,
+      invalid: 0,
+      duplicate: 0,
+    };
+
+    rows.forEach((row) => {
+      const month = getQueueYearMonth(row);
+      if (month === "未知月份") health.invalid += 1;
+      else if (month < currentMonth) health.historical += 1;
+      else if (month === currentMonth) health.live += 1;
+      else health.future += 1;
+
+      if (month !== "未知月份") {
+        const sourceId = row.sourceReportId || row.sourceId || row.id || "";
+        const key = `${month}|${row.sourceType || row.source || "unknown"}|${sourceId}`;
+        duplicateKeys.set(key, Number(duplicateKeys.get(key) || 0) + 1);
+      }
+    });
+
+    health.duplicate = Array.from(duplicateKeys.values()).reduce((sum, count) => sum + Math.max(0, count - 1), 0);
+    return health;
+  };
+
   const loadPendingRecalcQueueRows = async () => {
     try {
-      const q = query(getCollectionPath("recalc_queue"), where("status", "==", "pending"), limit(500));
-      const snap = await getDocs(q);
-      return snap.docs.map((d) => ({ id: d.id, ...d.data() }));
+      const rows = [];
+      let cursor = null;
+      const pageSize = 200;
+      const safetyLimit = 5000;
+
+      while (rows.length < safetyLimit) {
+        const constraints = [
+          where("status", "==", "pending"),
+          orderBy(documentId()),
+        ];
+        if (cursor) constraints.push(startAfter(cursor));
+        constraints.push(limit(pageSize));
+
+        const snap = await getDocs(query(getCollectionPath("recalc_queue"), ...constraints));
+        rows.push(...snap.docs.map((d) => ({ id: d.id, ...d.data() })));
+        if (snap.size < pageSize) break;
+        cursor = snap.docs[snap.docs.length - 1];
+      }
+
+      if (rows.length >= safetyLimit) {
+        console.warn(`recalc_queue pending 超過安全載入上限 ${safetyLimit} 筆`);
+      }
+      return rows;
     } catch (error) {
-      // 若使用者資料庫尚未建立索引或舊資料沒有 status，退回讀取前 500 筆後在前端過濾，避免功能完全失效。
-      console.warn("pending recalc_queue query failed, fallback to collection scan", error);
+      // 舊環境若查詢不支援，退回前 500 筆，避免維護工具完全失效。
+      console.warn("pending recalc_queue paged query failed, fallback to collection scan", error);
       const snap = await getDocs(query(getCollectionPath("recalc_queue"), limit(500)));
       return snap.docs
         .map((d) => ({ id: d.id, ...d.data() }))
@@ -561,16 +615,112 @@ export default function SystemMaintenance() {
     try {
       const rows = await loadPendingRecalcQueueRows();
       const groups = summarizeRecalcQueueRows(rows);
+      const health = buildRecalcQueueHealth(rows);
       setRecalcQueueGroups(groups);
       setRecalcQueueTotal(rows.length);
-      addLog(`✅ 已載入 ${rows.length.toLocaleString()} 筆待重算紀錄，彙整為 ${groups.length.toLocaleString()} 個月份。`);
+      setRecalcQueueHealth(health);
+      addLog(`✅ 已載入 ${rows.length.toLocaleString()} 筆待重算紀錄：歷史 ${health.historical.toLocaleString()}、本月 ${health.live.toLocaleString()}、未來 ${health.future.toLocaleString()}、格式異常 ${health.invalid.toLocaleString()}。`);
       showToast(groups.length ? `已載入 ${groups.length} 個待重算月份` : "目前沒有待重新校準月份", groups.length ? "success" : "info");
-      return { rows, groups, total: rows.length };
+      return { rows, groups, total: rows.length, health };
     } catch (error) {
       console.error(error);
       addLog(`❌ 載入待重算月份失敗: ${error.message}`);
       showToast("載入待重算月份失敗", "error");
-      return { rows: [], groups: [], total: 0, error };
+      return { rows: [], groups: [], total: 0, health: null, error };
+    } finally {
+      setLoadingAction(null);
+    }
+  };
+
+  const handleCleanupRecalcQueueNoise = async () => {
+    if (!window.confirm("確定整理無效待辦嗎？\n\n本月、未來月份與格式異常的 pending 將移出待重算清單；歷史月份仍會保留等待自動修復。")) return;
+
+    setLoadingAction("cleanupRecalcQueue");
+    setLogs([]);
+    addLog(`🧹 開始整理 ${brandLabel} recalc_queue...`);
+    try {
+      const rows = await loadPendingRecalcQueueRows();
+      const currentMonth = todayMonth();
+      const targets = rows.filter((row) => {
+        const month = getQueueYearMonth(row);
+        return month === "未知月份" || month >= currentMonth;
+      });
+
+      let batch = writeBatch(db);
+      let pendingWrites = 0;
+      let cleaned = 0;
+      const affectedFlagMonths = new Set();
+      const nowText = new Date().toISOString();
+
+      for (const row of targets) {
+        const month = getQueueYearMonth(row);
+        const isInvalid = month === "未知月份";
+        const isLive = month === currentMonth;
+        batch.update(doc(getCollectionPath("recalc_queue"), row.id), {
+          status: isInvalid ? "invalid" : (isLive ? "ignored_live_month" : "ignored_future_month"),
+          cleanupReason: isInvalid ? "invalid_year_month" : (isLive ? "live_month_uses_detail" : "future_month_not_supported"),
+          cleanedAt: serverTimestamp(),
+          cleanedAtText: nowText,
+          cleanedBy: currentUser?.name || "director",
+          cleanedByRole: userRole || "director",
+        });
+        if (!isInvalid) affectedFlagMonths.add(month);
+        pendingWrites += 1;
+        cleaned += 1;
+        if (pendingWrites >= 400) {
+          await batch.commit();
+          batch = writeBatch(db);
+          pendingWrites = 0;
+        }
+      }
+      if (pendingWrites > 0) await batch.commit();
+
+      if (affectedFlagMonths.size > 0) {
+        const flagBatch = writeBatch(db);
+        affectedFlagMonths.forEach((month) => {
+          flagBatch.set(doc(getCollectionPath("summary_recalc_flags"), month), {
+            brandId,
+            brandLabel,
+            yearMonth: month,
+            affectedYearMonth: month,
+            status: month === currentMonth ? "ignored_live_month" : "ignored_future_month",
+            dirty: false,
+            pendingCount: 0,
+            cleanupReason: month === currentMonth ? "live_month_uses_detail" : "future_month_not_supported",
+            cleanedAt: serverTimestamp(),
+            cleanedAtText: nowText,
+            cleanedBy: currentUser?.name || "director",
+            updatedAt: serverTimestamp(),
+            updatedAtText: nowText,
+          }, { merge: true });
+        });
+        await flagBatch.commit();
+      }
+
+      await setDoc(doc(getCollectionPath("summary_worker_state"), "recalc_queue_fallback_scan"), {
+        cursorDocId: "",
+        nextRunAfterMs: 0,
+        scanMode: "steady_after_manual_cleanup",
+        consecutiveNoProgressPages: 0,
+        lastManualCleanupCount: cleaned,
+        lastManualCleanupAt: serverTimestamp(),
+        lastManualCleanupAtText: nowText,
+      }, { merge: true });
+
+      await addMaintenanceLog({
+        type: "recalc_queue",
+        action: "cleanup_non_historical_queue",
+        status: "success",
+        cleanedCount: cleaned,
+        currentMonth,
+      });
+      addLog(`✅ 整理完成：已移出 ${cleaned.toLocaleString()} 筆本月／未來／格式異常待辦。`);
+      showToast(cleaned ? `已整理 ${cleaned.toLocaleString()} 筆無效待辦` : "沒有需要整理的無效待辦", cleaned ? "success" : "info");
+      await handleLoadRecalcQueue();
+    } catch (error) {
+      console.error(error);
+      addLog(`❌ 整理 recalc_queue 失敗：${error.message}`);
+      showToast("整理待重算清單失敗", "error");
     } finally {
       setLoadingAction(null);
     }
@@ -634,7 +784,8 @@ export default function SystemMaintenance() {
 
   const handleCalibrateRecalcMonth = async (group) => {
     const month = group?.month;
-    if (!month || month === "未知月份") return showToast("此月份格式異常，無法校準", "error");
+    if (!month || month === "未知月份") return showToast("此月份格式異常，請先整理無效待辦", "error");
+    if (month >= todayMonth()) return showToast("本月或未來月份不應校準 Summary，請使用「整理無效待辦」", "info");
     if (!window.confirm(`確定要重新校準 ${month} 嗎？\n\n將呼叫月度校準，完成後會把此月份 ${group.count.toLocaleString()} 筆 recalc_queue 標記為 completed。`)) return;
 
     setLoadingAction(`calibrateQueue_${month}`);
@@ -981,7 +1132,7 @@ export default function SystemMaintenance() {
       goal: "用來確認本月資料、排除店家、待重算狀態是否正常。",
       when: "平常巡檢、主管覺得數字怪怪、剛有人大量補報後。",
       impact: "只讀取檢查資料，不會修改原始日報。",
-      steps: ["先按資料健康檢查", "有異常再展開明細查看", "本月 pending 可先保留到月結前處理"],
+      steps: ["先按資料健康檢查", "有異常再展開明細查看", "若出現本月 pending，先整理無效待辦"],
       tone: "emerald",
     },
     {
@@ -1121,7 +1272,7 @@ export default function SystemMaintenance() {
         metrics = [
           { label: "高風險異常", value: counts.danger, tone: counts.danger ? "danger" : "success" },
           { label: "需注意提醒", value: counts.warning, tone: counts.warning ? "warning" : "success" },
-          { label: "待月底校準", value: isSelectedCurrentMonth() ? currentMonthPending : pendingTotal, tone: (isSelectedCurrentMonth() ? currentMonthPending : pendingTotal) ? "warning" : "success" },
+          { label: "本月異常待辦", value: currentMonthPending, tone: currentMonthPending ? "warning" : "success" },
           { label: "掃描資料", value: Number(health?.scanned || 0).toLocaleString(), tone: "neutral" },
         ];
 
@@ -1134,15 +1285,15 @@ export default function SystemMaintenance() {
           ? "目前沒有重大異常，也沒有需要立即處理的待辦。"
           : counts.danger > 0
           ? "偵測到高風險異常，建議先展開健康檢查明細，確認是哪一天、哪間店或哪位管理師。"
-          : "目前屬於可觀察狀態。本月補報與修正造成的 pending，可以留到月結前一次校準。";
+          : "目前屬於可觀察狀態；若清單出現本月 pending，代表舊版待辦尚未整理，請先執行「整理無效待辦」。";
         items = [
           makeItem("資料健康檢查", `高風險 ${counts.danger}｜需注意 ${counts.warning}｜提醒 ${counts.info}`),
-          makeItem("待整理異動", isSelectedCurrentMonth() ? `本月待月底校準 ${currentMonthPending} 筆` : `待校準 ${pendingTotal} 筆`),
+          makeItem("待整理異動", isSelectedCurrentMonth() ? `本月異常待辦 ${currentMonthPending} 筆` : `歷史待校準 ${pendingTotal} 筆`),
           makeItem("Dashboard 狀態", "已檢查 Summary 是否建立與是否有異動"),
         ];
         nextActions = status === "danger"
           ? ["先展開健康檢查明細，處理紅色高風險項目。", "處理完成後，再重新執行日常檢查。"]
-          : ["本月 pending 不需要每筆立刻校準，月結前一次處理即可。", "若只是排除店家或負數退款提醒，確認合理即可。"];
+          : [currentMonthPending > 0 ? "先執行「整理無效待辦」，本月資料仍以即時明細為準。" : "目前沒有本月待重算異常。", "若只是排除店家或負數退款提醒，確認合理即可。"];
       } else if (scenarioId === "closing") {
         const closing = await handleRunClosingCheck();
         const health = await handleRunDataHealthCheck();
@@ -1162,7 +1313,7 @@ export default function SystemMaintenance() {
           ? "檢查結果可進入月份報表整理與比對。"
           : status === "danger"
           ? "目前有會影響月結準確性的項目，建議先處理異常後再校準。"
-          : "可先確認提醒項目是否合理；若只是本月 pending，建議執行月份報表整理一次整理。";
+          : "可先確認提醒項目是否合理；若清單出現本月 pending，請先執行「整理無效待辦」。";
 
         metrics = [
           { label: "月結狀態", value: readiness, tone: status },
@@ -2691,7 +2842,7 @@ export default function SystemMaintenance() {
     const map = {
       missing: { label: "尚未建立", tone: "rose", hint: "此品牌月份尚未建立完整 Summary，Dashboard 會使用原本明細計算。" },
       dirty: { label: "需重建", tone: "amber", hint: "此月份有新的日報提交、業績修正或刪除，建議重建並重新比對。" },
-      current_dirty: { label: "本月即時累積中", tone: "amber", hint: "本月 Dashboard 目前以即時明細為準，pending 異動可先累積，月結前再一次校準 Summary。" },
+      current_dirty: { label: "本月待辦異常", tone: "rose", hint: "本月 Dashboard 使用即時明細，不應存在 pending Queue；請執行「整理無效待辦」。" },
       mismatch: { label: "比對有差異", tone: "rose", hint: "Summary 與原始明細重算結果不一致，請先檢查差異再上線使用。" },
       unverified: { label: "已建立，尚未比對", tone: "amber", hint: "三份 Summary 已存在，但尚未完成比對驗證。" },
       verified: { label: "已建立且比對通過", tone: "emerald", hint: "Summary 已建立、無待重算異動，且最近一次比對通過。" },
@@ -2711,7 +2862,7 @@ export default function SystemMaintenance() {
         getDoc(doc(getCollectionPath("dashboard_summary"), targetMonth)),
         getDoc(doc(getCollectionPath("therapist_summary"), targetMonth)),
         getDoc(doc(getCollectionPath("rankings_summary"), targetMonth)),
-        getDocs(query(getCollectionPath("recalc_queue"), where("status", "==", "pending"), limit(500))),
+        getDocs(query(getCollectionPath("recalc_queue"), where("affectedYearMonth", "==", targetMonth), limit(2000))),
         getDocs(query(getCollectionPath("maintenance_logs"), where("month", "==", targetMonth), limit(120))),
         getDoc(doc(getCollectionPath("summary_recalc_flags"), targetMonth)),
       ]);
@@ -2730,11 +2881,11 @@ export default function SystemMaintenance() {
 
       const pendingRows = queueSnap.docs
         .map((d) => ({ id: d.id, ...d.data() }))
-        .filter((row) => getQueueYearMonth(row) === targetMonth);
+        .filter((row) => getQueueYearMonth(row) === targetMonth && String(row.status || "") === "pending");
 
       const recalcFlag = recalcFlagSnap.exists() ? { id: recalcFlagSnap.id, ...recalcFlagSnap.data() } : null;
       const recalcFlagStatus = String(recalcFlag?.status || "");
-      const flagDirty = Boolean(recalcFlag) && !["completed", "verified", "idle"].includes(recalcFlagStatus);
+      const flagDirty = Boolean(recalcFlag) && !["completed", "verified", "idle", "ignored_live_month", "ignored_future_month", "invalid"].includes(recalcFlagStatus);
       const effectivePendingCount = Math.max(pendingRows.length, Number(recalcFlag?.pendingCount || 0));
 
       const compareLogs = logsSnap.docs
@@ -2789,17 +2940,18 @@ export default function SystemMaintenance() {
 
   const handleCalibrateAllPendingMonths = async () => {
     const rows = await loadPendingRecalcQueueRows();
-    const groups = summarizeRecalcQueueRows(rows).filter((group) => group.month && group.month !== "未知月份");
-    if (groups.length === 0) return showToast("目前沒有待重新校準月份", "info");
-    if (!window.confirm(`確定要依序校準 ${groups.length} 個月份嗎？\n\n共 ${rows.length.toLocaleString()} 筆 pending 異動會在校準成功後標記完成。`)) return;
+    const groups = summarizeRecalcQueueRows(rows).filter((group) => group.month && group.month !== "未知月份" && group.month < todayMonth());
+    if (groups.length === 0) return showToast("目前沒有需要校準的歷史月份；本月或異常待辦請先整理", "info");
+    const historicalQueueCount = groups.reduce((sum, group) => sum + Number(group.count || 0), 0);
+    if (!window.confirm(`確定要依序校準 ${groups.length} 個歷史月份嗎？\n\n共 ${historicalQueueCount.toLocaleString()} 筆歷史 pending 會在校準成功後標記完成。`)) return;
 
     setLoadingAction("calibrateAllQueues");
     setLogs([]);
-    addLog(`🔄 啟動批次校準：${brandId}｜${groups.length} 個月份｜${rows.length.toLocaleString()} 筆 pending`);
+    addLog(`🔄 啟動批次校準：${brandId}｜${groups.length} 個歷史月份｜${historicalQueueCount.toLocaleString()} 筆 pending`);
     let completedMonths = 0;
     let completedRows = 0;
     try {
-      await addMaintenanceLog({ type: "recalc_queue", action: "start_calibrate_all_pending_months", status: "started", monthCount: groups.length, queueCount: rows.length });
+      await addMaintenanceLog({ type: "recalc_queue", action: "start_calibrate_all_pending_months", status: "started", monthCount: groups.length, queueCount: historicalQueueCount });
       for (const group of groups.sort((a, b) => String(a.month).localeCompare(String(b.month)))) {
         addLog(`・校準 ${group.month} 中...`);
         const response = await fetch(`https://recalculatemonthlydata-hyhcwrnyaa-uc.a.run.app?brandId=${brandId}&yearMonth=${group.month}`);
@@ -3671,22 +3823,42 @@ export default function SystemMaintenance() {
               <div className="flex items-center gap-2 rounded-2xl border border-stone-100 bg-white/70 px-3 h-11"><Calendar size={14} className="text-stone-400" /><input type="month" value={calMonth} onChange={(e) => setCalMonth(e.target.value)} className="bg-transparent text-xs font-black text-stone-700 outline-none w-28" /></div>
               <BeautyButton onClick={handleCalibrateData} disabled={loadingAction !== null} variant="primary">{loadingAction === "calibrate" ? <Loader2 size={14} className="animate-spin" /> : <Play size={14} />}啟動校準</BeautyButton>
             </ToolRow>
-            <ToolRow icon={RefreshCw} title="待重新校準月份" desc="彙整 recalc_queue 的 pending 紀錄；當月可先累積，月結前再一次校準；歷史月份若有 pending 則建議優先重建。" badge={recalcQueueTotal ? `${recalcQueueTotal.toLocaleString()} 筆待處理` : "Summary 前置"} tone="amber">
+            <ToolRow icon={RefreshCw} title="待重新校準月份" desc="只保留需要重建的歷史月份；本月使用即時明細，不應長期累積 pending。" badge={recalcQueueTotal ? `${recalcQueueTotal.toLocaleString()} 筆待處理` : "Summary 前置"} tone="amber">
               <BeautyButton onClick={handleLoadRecalcQueue} disabled={loadingAction !== null} variant="secondary">
                 {loadingAction === "loadRecalcQueue" ? <Loader2 size={14} className="animate-spin" /> : <Eye size={14} />}
                 載入待重算
               </BeautyButton>
+              <BeautyButton onClick={handleCleanupRecalcQueueNoise} disabled={loadingAction !== null} variant="secondary">
+                {loadingAction === "cleanupRecalcQueue" ? <Loader2 size={14} className="animate-spin" /> : <Scissors size={14} />}
+                整理無效待辦
+              </BeautyButton>
               <BeautyButton onClick={handleCalibrateAllPendingMonths} disabled={loadingAction !== null || recalcQueueTotal === 0} variant="primary">
                 {loadingAction === "calibrateAllQueues" ? <Loader2 size={14} className="animate-spin" /> : <RefreshCw size={14} />}
-                校準全部待辦
+                校準全部歷史待辦
               </BeautyButton>
             </ToolRow>
+            {recalcQueueHealth && recalcQueueHealth.total > 0 && (
+              <div className="grid grid-cols-2 md:grid-cols-5 gap-2">
+                {[
+                  ["歷史待修復", recalcQueueHealth.historical, "text-amber-700"],
+                  ["本月應整理", recalcQueueHealth.live, "text-rose-600"],
+                  ["未來月份", recalcQueueHealth.future, "text-rose-600"],
+                  ["格式異常", recalcQueueHealth.invalid, "text-rose-600"],
+                  ["可能重複", recalcQueueHealth.duplicate, "text-stone-600"],
+                ].map(([label, value, tone]) => (
+                  <div key={label} className="rounded-2xl border border-stone-100 bg-white/90 p-3">
+                    <p className="text-[10px] font-black text-stone-400">{label}</p>
+                    <p className={`mt-1 text-lg font-black ${tone}`}>{Number(value || 0).toLocaleString()}</p>
+                  </div>
+                ))}
+              </div>
+            )}
             {recalcQueueGroups.length > 0 && (
               <div className="rounded-[1.5rem] border border-amber-100 bg-amber-50/30 p-4 space-y-3">
                 <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-2">
                   <div>
                     <p className="text-sm font-black text-stone-800">待重新校準月份</p>
-                    <p className="text-[11px] font-bold text-stone-400 mt-1">依 affectedYearMonth 彙整；本月 pending 可先累積，月結前再一次完成校準。</p>
+                    <p className="text-[11px] font-bold text-stone-400 mt-1">歷史月份會重建 Summary；本月、未來與格式異常資料應使用「整理無效待辦」移出清單。</p>
                   </div>
                   <p className="text-[11px] font-bold text-stone-400">共 {recalcQueueTotal.toLocaleString()} 筆 pending</p>
                 </div>
@@ -3696,17 +3868,21 @@ export default function SystemMaintenance() {
                       <div className="min-w-0">
                         <div className="flex items-center gap-2 flex-wrap">
                           <p className="text-sm font-black text-stone-800">{group.month}</p>
-                          {isSelectedCurrentMonth(group.month) && <span className="px-2 py-1 rounded-full bg-emerald-50 text-emerald-600 border border-emerald-100 text-[10px] font-black">本月可累積</span>}
+                          {isSelectedCurrentMonth(group.month) && <span className="px-2 py-1 rounded-full bg-rose-50 text-rose-600 border border-rose-100 text-[10px] font-black">本月不應待重算</span>}
                           <span className="px-2 py-1 rounded-full bg-amber-50 text-[#B7863D] border border-amber-100 text-[10px] font-black">{group.count.toLocaleString()} 筆</span>
                           {group.storeCount > 0 && <span className="px-2 py-1 rounded-full bg-stone-50 text-stone-500 border border-stone-100 text-[10px] font-black">店務 {group.storeCount.toLocaleString()}</span>}
                           {group.therapistCount > 0 && <span className="px-2 py-1 rounded-full bg-stone-50 text-stone-500 border border-stone-100 text-[10px] font-black">管理師 {group.therapistCount.toLocaleString()}</span>}
                         </div>
                         <p className="text-[10px] font-bold text-stone-400 mt-1 truncate">來源：{group.sources.join("、") || "-"}｜原因：{group.reasons.join("、") || "-"}｜最近異動：{group.latestAt || "-"}</p>
                       </div>
-                      <BeautyButton onClick={() => handleCalibrateRecalcMonth(group)} disabled={loadingAction !== null} variant="primary" className="shrink-0">
-                        {loadingAction === `calibrateQueue_${group.month}` ? <Loader2 size={14} className="animate-spin" /> : <RefreshCw size={14} />}
-                        校準此月份
-                      </BeautyButton>
+                      {group.month < todayMonth() ? (
+                        <BeautyButton onClick={() => handleCalibrateRecalcMonth(group)} disabled={loadingAction !== null} variant="primary" className="shrink-0">
+                          {loadingAction === `calibrateQueue_${group.month}` ? <Loader2 size={14} className="animate-spin" /> : <RefreshCw size={14} />}
+                          校準此月份
+                        </BeautyButton>
+                      ) : (
+                        <span className="shrink-0 px-3 py-2 rounded-xl border border-rose-100 bg-rose-50 text-rose-600 text-[10px] font-black">請整理無效待辦</span>
+                      )}
                     </div>
                   ))}
                 </div>
@@ -3745,7 +3921,7 @@ export default function SystemMaintenance() {
                 {summaryStatusReport.pendingCount > 0 && (
                   <div className="mt-3 rounded-2xl border border-amber-100 bg-white/80 p-3 text-[11px] font-bold text-[#B7863D] leading-relaxed">
                     {summaryStatusReport.statusKey === "current_dirty"
-                      ? `本月仍有 ${Number(summaryStatusReport.pendingCount || 0).toLocaleString()} 筆異動累積中，來源：${summaryStatusReport.pendingSources?.join("、") || "-"}。本月 Dashboard 以即時明細為準，不必每筆修正後都校準，可在月結前一次執行「月份報表整理」。`
+                      ? `本月仍有 ${Number(summaryStatusReport.pendingCount || 0).toLocaleString()} 筆舊版或異常待辦，來源：${summaryStatusReport.pendingSources?.join("、") || "-"}。本月 Dashboard 以即時明細為準，請先執行「整理無效待辦」。`
                       : `此月份仍有 ${Number(summaryStatusReport.pendingCount || 0).toLocaleString()} 筆 pending 異動，來源：${summaryStatusReport.pendingSources?.join("、") || "-"}。歷史月份建議先執行「校準此月份」或重新建立 Summary 後再比對。`}
                   </div>
                 )}
