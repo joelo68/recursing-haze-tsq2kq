@@ -39,7 +39,7 @@ import {
 // ==========================================
 // ★ 系統核心版本號 (終極動態快取版)
 // ==========================================
-const CURRENT_APP_VERSION = "3.3.3"; 
+const CURRENT_APP_VERSION = "3.3.4"; 
 const LOGIN_LOCATION_ENDPOINT = "https://resolveloginlocation-hyhcwrnyaa-uc.a.run.app";
 
 
@@ -594,6 +594,9 @@ export default function App() {
 
   const [isUpdating, setIsUpdating] = useState(false);
   const [isOnline, setIsOnline] = useState(navigator.onLine);
+  const [isPageVisible, setIsPageVisible] = useState(() =>
+    typeof document === "undefined" ? true : document.visibilityState !== "hidden"
+  );
 
   const currentBrand = useMemo(() => BRANDS.find(b => b.id === currentBrandId) || BRANDS[0], [currentBrandId]);
   const currentBrandIdRef = useRef(currentBrandId);
@@ -906,6 +909,30 @@ export default function App() {
     return () => {
       window.removeEventListener('online', handleOnline);
       window.removeEventListener('offline', handleOffline);
+    };
+  }, []);
+
+  // ★ 背景分頁節流：完整目標集合只在目前頁籤可見時保持即時監聽。
+  // 回到此頁籤後，Firestore onSnapshot 會重新取得最新資料，不影響目標設定正確性。
+  useEffect(() => {
+    if (typeof document === "undefined") return undefined;
+
+    const handleVisibilityChange = () => {
+      const visible = document.visibilityState !== "hidden";
+      setIsPageVisible(visible);
+
+      if (visible) {
+        // 返回系統頁籤視為使用者恢復操作，立即結束省流量待機並重新取得最新目標資料。
+        lastActivityTimeRef.current = Date.now();
+        setIsLowPowerMode(false);
+      }
+    };
+
+    handleVisibilityChange();
+    document.addEventListener("visibilitychange", handleVisibilityChange);
+
+    return () => {
+      document.removeEventListener("visibilitychange", handleVisibilityChange);
     };
   }, []);
 
@@ -1893,14 +1920,26 @@ export default function App() {
     activeView === "targets" ||
     (activeView === "audit" && auditType === "target");
 
-useEffect(() => {
-    if (!shouldLoadMonthlyTargets) {
-      // 非必要頁面不常駐監聽完整 monthly_targets，避免每次讀全年約 400+ docs。
-      // 清空 budgets 可避免切品牌或離開目標頁後，用到舊品牌 / 舊年份快取造成達成率失真。
+  // 完整目標資料屬高成本來源；只在真正需要、頁籤可見、連線正常且未進入省流量待機時保持監聽。
+  const shouldKeepMonthlyTargetsLive =
+    Boolean(user) &&
+    shouldLoadMonthlyTargets &&
+    isPageVisible &&
+    isOnline &&
+    !isLowPowerMode;
+
+  useEffect(() => {
+    if (!shouldLoadMonthlyTargets || !user) {
+      // 離開目標功能或登出時清空，避免切品牌後誤用舊品牌資料。
       setBudgets({});
       return undefined;
     }
-    if (!user) return;
+
+    if (!shouldKeepMonthlyTargetsLive) {
+      // 背景分頁、離線或省流量待機時只取消即時監聽；保留畫面中的最後資料，
+      // 回到前景或恢復操作後會重新訂閱並取得最新版本。
+      return undefined;
+    }
 
     const unsubBudgetTargets = onSnapshot(
       getCollectionPath("monthly_targets"),
@@ -1916,7 +1955,14 @@ useEffect(() => {
     return () => {
       try { unsubBudgetTargets && unsubBudgetTargets(); } catch (error) { console.warn("monthly_targets unsubscribe failed", error); }
     };
-  }, [user, currentBrandId, getCollectionPath, shouldLoadMonthlyTargets, getStableReadMeta]);
+  }, [
+    user,
+    currentBrandId,
+    getCollectionPath,
+    shouldLoadMonthlyTargets,
+    shouldKeepMonthlyTargetsLive,
+    getStableReadMeta,
+  ]);
 
   // ★ KPI 參數獨立常駐監聽：
   // kpi_targets 只有 1 doc，必須在登入 / 品牌切換後穩定讀回，避免登出重登後還原成預設值。
