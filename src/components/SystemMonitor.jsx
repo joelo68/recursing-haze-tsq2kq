@@ -2,10 +2,10 @@
 import React, { useState, useMemo, useContext, useEffect } from "react";
 import {
   Smartphone, Monitor, ChevronLeft, ChevronRight, RefreshCw,
-  Calendar, Search, RotateCcw, ShieldAlert, ShieldCheck, Laptop
+  Calendar, Search, RotateCcw, ShieldAlert, ShieldCheck, Laptop, ChevronDown
 } from "lucide-react";
 import { 
-  query, limit, where, Timestamp, getDocs, orderBy, doc, setDoc, increment 
+  query, limit, where, Timestamp, getDocs, orderBy, doc, setDoc, increment, startAfter 
 } from "firebase/firestore";
 
 import { AppContext } from "../AppContext";
@@ -64,6 +64,122 @@ const SystemMonitor = () => {
     start: todayStr,
     end: todayStr
   });
+  const [logTypeFilter, setLogTypeFilter] = useState("all");
+  const [logRoleFilter, setLogRoleFilter] = useState("all");
+  const [logUserFilter, setLogUserFilter] = useState("");
+  const [logLimitCount, setLogLimitCount] = useState(100);
+  const [logCursor, setLogCursor] = useState(null);
+  const [hasMoreLogs, setHasMoreLogs] = useState(false);
+
+  const LOG_TYPE_FILTER_LABELS = {
+    all: "全部紀錄",
+    auth: "登入 / 登出",
+    login: "只看登入",
+    logout: "只看登出",
+    device: "裝置安全",
+    page: "頁面瀏覽",
+    query: "查詢行為",
+    data: "資料異動",
+    password: "密碼更新",
+  };
+
+  const ROLE_FILTER_LABELS = {
+    all: "全部身份",
+    director: "高階主管",
+    manager: "區長",
+    store: "店經理",
+    therapist: "管理師",
+    trainer: "教專",
+    master: "最高管理者",
+  };
+
+  const normalizeLogFilterText = (value = "") => String(value || "")
+    .toLowerCase()
+    .replace(/[　\s]+/g, "")
+    .trim();
+
+  const buildLogSearchText = (log = {}) => {
+    const details = log.details || {};
+    return [
+      log.user,
+      log.userName,
+      log.role,
+      log.roleLabel,
+      log.action,
+      log.activityType,
+      log.view,
+      log.brand,
+      log.brandLabel,
+      log.device,
+      log.browser,
+      log.os,
+      log.deviceShort,
+      details.user,
+      details.userName,
+      details.targetUserName,
+      details.targetRole,
+      details.role,
+      details.roleLabel,
+      details.message,
+      details.viewLabel,
+      details.deviceShort,
+      ...(Array.isArray(log.riskTags) ? log.riskTags : []),
+      ...(Array.isArray(details.riskTags) ? details.riskTags : []),
+    ].filter(Boolean).join(" ");
+  };
+
+  const logMatchesTypeFilter = (log = {}) => {
+    if (logTypeFilter === "all") return true;
+    const type = String(log.activityType || log.details?.activityType || "");
+    const action = String(log.action || "");
+
+    if (logTypeFilter === "login") return type === "auth.login" || action.includes("登入系統");
+    if (logTypeFilter === "logout") return type === "auth.logout" || action.includes("登出系統");
+    if (logTypeFilter === "auth") return type === "auth.login" || type === "auth.logout" || action.includes("登入系統") || action.includes("登出系統");
+    if (logTypeFilter === "device") return type === "auth.device_check" || type === "auth.device_check_failed" || type === "auth.blocked_device" || action.includes("裝置安全") || action.includes("封鎖裝置");
+    if (logTypeFilter === "page") return type === "page.view" || action.includes("頁面瀏覽");
+    if (logTypeFilter === "query") return type.startsWith("query") || action.includes("查詢");
+    if (logTypeFilter === "data") return type.startsWith("data.") || action.includes("修改") || action.includes("更新") || action.includes("刪除") || action.includes("封存") || action.includes("還原");
+    if (logTypeFilter === "password") return type === "auth.password_update" || action.includes("密碼") || action.includes("安全更新");
+    return true;
+  };
+
+  const logMatchesRoleFilter = (log = {}) => {
+    if (logRoleFilter === "all") return true;
+    const roleText = normalizeLogFilterText([
+      log.role,
+      log.roleLabel,
+      log.details?.role,
+      log.details?.roleLabel,
+      log.details?.targetRole,
+      log.user,
+      log.details?.userName,
+      log.details?.targetUserName,
+    ].filter(Boolean).join(" "));
+
+    if (logRoleFilter === "director") {
+      return ["director", "master", "高階", "主管", "董事長", "總經理", "營運長", "總監", "財務"].some((token) => roleText.includes(normalizeLogFilterText(token)));
+    }
+    if (logRoleFilter === "manager") return roleText.includes("manager") || roleText.includes("區長");
+    if (logRoleFilter === "store") return roleText.includes("store") || roleText.includes("店經理") || roleText.includes("店長");
+    if (logRoleFilter === "therapist") return roleText.includes("therapist") || roleText.includes("管理師");
+    if (logRoleFilter === "trainer") return roleText.includes("trainer") || roleText.includes("教專");
+    if (logRoleFilter === "master") return roleText.includes("master") || roleText.includes("最高管理者");
+    return true;
+  };
+
+  const logMatchesUserFilter = (log = {}) => {
+    const target = normalizeLogFilterText(logUserFilter);
+    if (!target) return true;
+    const userText = normalizeLogFilterText(buildLogSearchText(log));
+    return userText.includes(target);
+  };
+
+  const applyLogQueryFilters = (items = []) => items.filter((log) => (
+    logMatchesTypeFilter(log) &&
+    logMatchesRoleFilter(log) &&
+    logMatchesUserFilter(log)
+  ));
 
   const getActivityMeta = (log = {}) => {
     const type = String(log.activityType || log.details?.activityType || "");
@@ -104,41 +220,115 @@ const SystemMonitor = () => {
     return JSON.stringify(details || {});
   };
 
-  const fetchLogs = async (rangeOverride = null) => {
+  const fetchLogs = async (rangeOverride = null, options = {}) => {
+    const append = Boolean(options.append);
     setLoading(true);
-    setLogs([]);
+    if (!append) {
+      setLogs([]);
+      setLogCursor(null);
+      setHasMoreLogs(false);
+    }
     setExpandedLogId(null);
 
     const activeRange = rangeOverride || queryDateRange;
     const startDate = new Date(`${activeRange.start}T00:00:00`);
     const endDate = new Date(`${activeRange.end}T23:59:59`);
+    const safeLimit = Math.min(Math.max(Number(logLimitCount) || 100, 20), 1000);
+
+    const runLogQuery = async ({ field = "timestamp", useCursor = true } = {}) => {
+      const isTimestampField = field === "timestamp";
+      const constraints = isTimestampField
+        ? [
+            where("timestamp", ">=", Timestamp.fromDate(startDate)),
+            where("timestamp", "<=", Timestamp.fromDate(endDate)),
+            orderBy("timestamp", "desc"),
+            limit(safeLimit),
+          ]
+        : [
+            // 舊版或少數異常紀錄可能 timestamp 尚未落地，但 createdAtText 已寫入 ISO 字串。
+            // 當 timestamp 查不到資料時，用 createdAtText 做備援，避免登入監控誤判為 0 筆。
+            where("createdAtText", ">=", startDate.toISOString()),
+            where("createdAtText", "<=", endDate.toISOString()),
+            orderBy("createdAtText", "desc"),
+            limit(safeLimit),
+          ];
+
+      if (append && useCursor && logCursor) {
+        constraints.splice(constraints.length - 1, 0, startAfter(logCursor));
+      }
+
+      const q = query(getCollectionPath("system_logs"), ...constraints);
+      const snapshot = await getDocs(q);
+      return { snapshot, sourceField: field };
+    };
 
     try {
-      const q = query(
-        getCollectionPath("system_logs"),
-        where("timestamp", ">=", Timestamp.fromDate(startDate)),
-        where("timestamp", "<=", Timestamp.fromDate(endDate)),
-        orderBy("timestamp", "desc"),
-        limit(500)
-      );
+      let result = await runLogQuery({ field: "timestamp", useCursor: true });
 
-      const snapshot = await getDocs(q);
-      const logsData = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
-      setLogs(logsData);
+      // 如果 timestamp 查詢沒有任何結果，改用 createdAtText 備援查詢。
+      // 備援只在第一頁啟用，避免 cursor 混用不同欄位造成分頁錯位。
+      if (!append && result.snapshot.empty) {
+        try {
+          const fallbackResult = await runLogQuery({ field: "createdAtText", useCursor: false });
+          if (!fallbackResult.snapshot.empty) result = fallbackResult;
+        } catch (fallbackError) {
+          console.warn("createdAtText 備援查詢失敗，維持 timestamp 查詢結果:", fallbackError?.message || fallbackError);
+        }
+      }
+
+      let snapshot = result.snapshot;
+      let logsData = snapshot.docs.map((docSnap) => ({ id: docSnap.id, ...docSnap.data() }));
+      let matchedLogsData = applyLogQueryFilters(logsData);
+
+      // 若 timestamp 有資料但條件過濾後為 0，仍嘗試 createdAtText 備援一次。
+      // 這可以相容舊紀錄 timestamp / role / user 欄位落地不一致的情況。
+      if (!append && matchedLogsData.length === 0 && result.sourceField === "timestamp") {
+        try {
+          const fallbackResult = await runLogQuery({ field: "createdAtText", useCursor: false });
+          const fallbackLogs = fallbackResult.snapshot.docs.map((docSnap) => ({ id: docSnap.id, ...docSnap.data() }));
+          const fallbackMatchedLogs = applyLogQueryFilters(fallbackLogs);
+          if (fallbackMatchedLogs.length > 0 || logsData.length === 0) {
+            result = fallbackResult;
+            snapshot = fallbackResult.snapshot;
+            logsData = fallbackLogs;
+            matchedLogsData = fallbackMatchedLogs;
+          }
+        } catch (fallbackError) {
+          console.warn("createdAtText 條件備援查詢失敗，維持 timestamp 查詢結果:", fallbackError?.message || fallbackError);
+        }
+      }
+
+      setLogs((prev) => (append ? [...prev, ...matchedLogsData] : matchedLogsData));
+      setLogCursor(snapshot.docs.length ? snapshot.docs[snapshot.docs.length - 1] : (append ? logCursor : null));
+      setHasMoreLogs(result.sourceField === "timestamp" && snapshot.docs.length >= safeLimit);
       setLastQueryInfo({
-        count: logsData.length,
+        count: matchedLogsData.length,
+        rawCount: logsData.length,
+        totalCount: append ? logs.length + matchedLogsData.length : matchedLogsData.length,
+        readLimit: safeLimit,
         start: activeRange.start,
         end: activeRange.end,
+        type: logTypeFilter,
+        typeLabel: LOG_TYPE_FILTER_LABELS[logTypeFilter] || logTypeFilter,
+        role: logRoleFilter,
+        roleLabel: ROLE_FILTER_LABELS[logRoleFilter] || logRoleFilter,
+        user: logUserFilter.trim(),
+        sourceField: result.sourceField,
+        clientFiltered: logTypeFilter !== "all" || logRoleFilter !== "all" || Boolean(logUserFilter.trim()),
+        append,
         queriedAt: new Date().toLocaleString("zh-TW", { hour12: false }),
       });
     } catch (error) {
       console.error("Fetch logs error:", error);
-      setLastQueryInfo({ count: 0, error: error.message, queriedAt: new Date().toLocaleString("zh-TW", { hour12: false }) });
+      setLastQueryInfo({
+        count: 0,
+        error: error.message,
+        queriedAt: new Date().toLocaleString("zh-TW", { hour12: false }),
+      });
     } finally {
       setLoading(false);
     }
   };
-
 
   const fetchDeviceProfiles = async () => {
     setDeviceLoading(true);
@@ -706,10 +896,16 @@ const SystemMonitor = () => {
 
   const handleExecuteQuery = () => {
     const nextRange = { ...uiDateRange };
-    setCurrentPage(1); 
+    setCurrentPage(1);
     setQueryDateRange(nextRange);
     setHasQueried(true);
-    fetchLogs(nextRange);
+    setActivityFilter("all");
+    fetchLogs(nextRange, { append: false });
+  };
+
+  const handleLoadMoreLogs = () => {
+    setCurrentPage(1);
+    fetchLogs(queryDateRange, { append: true });
   };
 
   const handleResetQuery = () => {
@@ -720,6 +916,12 @@ const SystemMonitor = () => {
     setLogs([]);
     setKeyword("");
     setActivityFilter("all");
+    setLogTypeFilter("all");
+    setLogRoleFilter("all");
+    setLogUserFilter("");
+    setLogLimitCount(100);
+    setLogCursor(null);
+    setHasMoreLogs(false);
     setExpandedLogId(null);
     setLastQueryInfo(null);
   };
@@ -740,44 +942,88 @@ const SystemMonitor = () => {
             </div>
 
             {monitorMode === "logs" && (
-            <div className="flex flex-col md:flex-row md:flex-wrap items-stretch md:items-center gap-2 bg-stone-50 p-2 rounded-xl border border-stone-200 relative z-50 w-full xl:w-auto max-w-full min-w-0">
-              <div className="flex items-center gap-2">
-                <Calendar size={14} className="text-stone-400" />
+            <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-[auto_auto_auto_auto_auto_auto] items-end gap-2 bg-stone-50 p-2 rounded-xl border border-stone-200 relative z-50 w-full xl:w-auto max-w-full min-w-0">
+              <div className="flex flex-col gap-1 sm:col-span-2 xl:col-span-1">
+                <span className="text-[11px] font-black text-stone-400 flex items-center gap-1"><Calendar size={13} /> 日期區間</span>
                 <div className="flex items-center gap-2">
                   <div className="relative w-full sm:w-36 min-w-0">
-                    <SmartDatePicker 
+                    <SmartDatePicker
                       selectedDate={uiDateRange.start}
                       onDateSelect={(val) => setUiDateRange(prev => {
                         const newEnd = val > prev.end ? val : prev.end;
                         return { start: val, end: newEnd };
                       })}
-                      maxDate={todayStr} 
+                      maxDate={todayStr}
                     />
                   </div>
                   <span className="text-stone-300">~</span>
                   <div className="relative w-full sm:w-36 min-w-0">
-                    <SmartDatePicker 
+                    <SmartDatePicker
                       selectedDate={uiDateRange.end}
                       onDateSelect={(val) => setUiDateRange(prev => ({ ...prev, end: val }))}
                       align="right"
-                      minDate={uiDateRange.start} 
-                      maxDate={todayStr}          
+                      minDate={uiDateRange.start}
+                      maxDate={todayStr}
                     />
                   </div>
                 </div>
               </div>
-              
-              <div className="flex items-center gap-2 w-full md:w-auto mt-2 md:mt-0 xl:ml-2 min-w-0">
-                <button 
-                  onClick={handleExecuteQuery} 
-                  className="flex-1 sm:flex-none px-4 py-2 bg-stone-800 text-white rounded-lg text-sm font-bold flex gap-2 hover:bg-stone-900 transition-colors shadow-sm items-center justify-center whitespace-nowrap active:scale-95"
+
+              <label className="flex flex-col gap-1 min-w-0">
+                <span className="text-[11px] font-black text-stone-400">紀錄類型</span>
+                <select value={logTypeFilter} onChange={(e) => setLogTypeFilter(e.target.value)} className="h-10 rounded-xl border border-stone-200 bg-white px-3 text-sm font-black text-stone-600 outline-none focus:border-amber-300">
+                  <option value="all">全部紀錄</option>
+                  <option value="auth">登入 / 登出</option>
+                  <option value="login">只看登入</option>
+                  <option value="logout">只看登出</option>
+                  <option value="device">裝置安全</option>
+                  <option value="page">頁面瀏覽</option>
+                  <option value="query">查詢行為</option>
+                  <option value="data">資料異動</option>
+                  <option value="password">密碼更新</option>
+                </select>
+              </label>
+
+              <label className="flex flex-col gap-1 min-w-0">
+                <span className="text-[11px] font-black text-stone-400">身份</span>
+                <select value={logRoleFilter} onChange={(e) => setLogRoleFilter(e.target.value)} className="h-10 rounded-xl border border-stone-200 bg-white px-3 text-sm font-black text-stone-600 outline-none focus:border-amber-300">
+                  <option value="all">全部身份</option>
+                  <option value="director">高階主管</option>
+                  <option value="manager">區長</option>
+                  <option value="store">店經理</option>
+                  <option value="therapist">管理師</option>
+                  <option value="trainer">教專</option>
+                  <option value="master">最高管理者</option>
+                </select>
+              </label>
+
+              <label className="flex flex-col gap-1 min-w-0">
+                <span className="text-[11px] font-black text-stone-400">特定人員</span>
+                <input value={logUserFilter} onChange={(e) => setLogUserFilter(e.target.value)} placeholder="輸入姓名或關鍵字" className="h-10 rounded-xl border border-stone-200 bg-white px-3 text-sm font-bold text-stone-600 outline-none focus:border-amber-300" />
+              </label>
+
+              <label className="flex flex-col gap-1 min-w-0">
+                <span className="text-[11px] font-black text-stone-400">讀取數量</span>
+                <select value={logLimitCount} onChange={(e) => setLogLimitCount(Number(e.target.value))} className="h-10 rounded-xl border border-stone-200 bg-white px-3 text-sm font-black text-stone-600 outline-none focus:border-amber-300">
+                  <option value={50}>50 筆</option>
+                  <option value={100}>100 筆</option>
+                  <option value={300}>300 筆</option>
+                  <option value={500}>500 筆</option>
+                  <option value={1000}>1000 筆</option>
+                </select>
+              </label>
+
+              <div className="flex items-center gap-2 min-w-0">
+                <button
+                  onClick={handleExecuteQuery}
+                  className="h-10 flex-1 sm:flex-none px-4 bg-stone-800 text-white rounded-xl text-sm font-bold flex gap-2 hover:bg-stone-900 transition-colors shadow-sm items-center justify-center whitespace-nowrap active:scale-95"
                 >
                   <Search size={16} /> 查詢
                 </button>
-                <button 
-                  onClick={handleResetQuery} 
+                <button
+                  onClick={handleResetQuery}
                   title="重置為今天"
-                  className="px-3 py-2 bg-white border border-stone-200 text-stone-500 rounded-lg hover:bg-stone-50 transition-colors shadow-sm flex items-center justify-center"
+                  className="h-10 px-3 bg-white border border-stone-200 text-stone-500 rounded-xl hover:bg-stone-50 transition-colors shadow-sm flex items-center justify-center"
                 >
                   <RotateCcw size={16} />
                 </button>
@@ -832,8 +1078,18 @@ const SystemMonitor = () => {
               </div>
               <div className="flex items-center gap-2">
                 <input value={keyword} onChange={(e) => { setKeyword(e.target.value); setCurrentPage(1); }} placeholder="搜尋使用者、動作、店家..." className="h-9 w-full xl:w-64 rounded-xl border border-stone-200 bg-white px-3 text-sm font-bold text-stone-600 outline-none focus:border-amber-300 min-w-0" />
-                {lastQueryInfo && <span className="hidden xl:inline text-[11px] font-bold text-stone-400 whitespace-nowrap">本次讀取 {lastQueryInfo.count || 0} 筆｜{lastQueryInfo.queriedAt}</span>}
+                {lastQueryInfo && <span className="hidden xl:inline text-[11px] font-bold text-stone-400 whitespace-nowrap">已載入 {logs.length || 0} 筆｜本次顯示 {lastQueryInfo.count || 0} / 讀取 {lastQueryInfo.rawCount ?? lastQueryInfo.count ?? 0} 筆｜上限 {lastQueryInfo.readLimit || logLimitCount}{lastQueryInfo.sourceField === "createdAtText" ? "｜備援欄位" : ""}｜{lastQueryInfo.queriedAt}</span>}
               </div>
+            </div>
+          )}
+
+          {monitorMode === "logs" && hasQueried && (logTypeFilter !== "all" || logRoleFilter !== "all" || logUserFilter.trim()) && (
+            <div className="mb-4 rounded-2xl border border-amber-100 bg-amber-50/50 px-4 py-3 text-xs font-bold text-amber-700">
+              已套用查詢條件：
+              {logTypeFilter !== "all" && <span className="ml-1">類型 {LOG_TYPE_FILTER_LABELS[logTypeFilter] || logTypeFilter}</span>}
+              {logRoleFilter !== "all" && <span className="ml-2">身份 {ROLE_FILTER_LABELS[logRoleFilter] || logRoleFilter}</span>}
+              {logUserFilter.trim() && <span className="ml-2">人員 {logUserFilter.trim()}</span>}
+              <span className="ml-2 text-amber-500">系統會先依日期區間讀取，再用相容條件過濾；若查不到較早紀錄，請提高讀取數量或按「載入更多」。</span>
             </div>
           )}
 
@@ -845,7 +1101,7 @@ const SystemMonitor = () => {
               <h4 className="text-stone-500 font-bold text-lg mb-2 tracking-wide">日誌查詢待命區</h4>
               <p className="text-stone-400 text-sm max-w-sm">
                 系統日誌資料量龐大，為保護系統效能與節省雲端資源，進入此頁面時不會預先載入資料。<br/><br/>
-                請在上方設定好日期範圍後，點擊「<strong className="text-stone-600">查詢</strong>」以調閱紀錄。
+                請在上方設定好日期、類型、人員與讀取數量後，點擊「<strong className="text-stone-600">查詢</strong>」以調閱紀錄。
               </p>
             </div>
           ) : loading && logs.length === 0 ? (
@@ -988,15 +1244,28 @@ const SystemMonitor = () => {
                 </div>
               </div>
 
-              {totalPages > 1 && (
-                <div className="flex flex-col sm:flex-row sm:justify-between sm:items-center gap-3 mt-4 pt-2 px-2 w-full max-w-full">
-                  <span className="text-sm text-stone-400 font-medium">頁次 {currentPage} / {totalPages}</span>
-                  <div className="flex gap-2">
-                    <button onClick={() => setCurrentPage((p) => Math.max(1, p - 1))} disabled={currentPage === 1} className="p-2 border-2 border-stone-100 rounded-xl hover:bg-stone-50 disabled:opacity-50 text-stone-500"><ChevronLeft size={18} /></button>
-                    <button onClick={() => setCurrentPage((p) => Math.min(totalPages, p + 1))} disabled={currentPage === totalPages} className="p-2 border-2 border-stone-100 rounded-xl hover:bg-stone-50 disabled:opacity-50 text-stone-500"><ChevronRight size={18} /></button>
-                  </div>
+              <div className="flex flex-col sm:flex-row sm:justify-between sm:items-center gap-3 mt-4 pt-2 px-2 w-full max-w-full">
+                <span className="text-sm text-stone-400 font-medium">頁次 {currentPage} / {totalPages}｜已載入 {logs.length} 筆{hasMoreLogs ? "｜尚可載入更多" : ""}</span>
+                <div className="flex flex-wrap gap-2 justify-end">
+                  {totalPages > 1 && (
+                    <>
+                      <button onClick={() => setCurrentPage((p) => Math.max(1, p - 1))} disabled={currentPage === 1} className="p-2 border-2 border-stone-100 rounded-xl hover:bg-stone-50 disabled:opacity-50 text-stone-500"><ChevronLeft size={18} /></button>
+                      <button onClick={() => setCurrentPage((p) => Math.min(totalPages, p + 1))} disabled={currentPage === totalPages} className="p-2 border-2 border-stone-100 rounded-xl hover:bg-stone-50 disabled:opacity-50 text-stone-500"><ChevronRight size={18} /></button>
+                    </>
+                  )}
+                  {hasMoreLogs && (
+                    <button
+                      type="button"
+                      onClick={handleLoadMoreLogs}
+                      disabled={loading}
+                      className="px-4 py-2 rounded-xl border border-stone-200 bg-white text-stone-600 text-sm font-black hover:bg-stone-50 disabled:opacity-50 flex items-center gap-2"
+                    >
+                      {loading ? <RefreshCw size={15} className="animate-spin" /> : <ChevronDown size={15} />}
+                      載入更多
+                    </button>
+                  )}
                 </div>
-              )}
+              </div>
             </>
           )
           )}
