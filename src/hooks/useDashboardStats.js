@@ -101,7 +101,9 @@ export function useDashboardStats() {
     allReports, budgets, monthlyTargetSummary, managers, managerOrder = [], selectedYear, selectedMonth, therapistReports,
     currentBrand, therapists, dailyLoginCount, yesterdayLoginCount,
     therapistAnnualAggregatedData, getCollectionPath, historicalDetailRefreshState,
-    therapistModuleEnabled
+    therapistModuleEnabled,
+    accessibleStores = [], officialStores = [], delegatedStores = [], delegationAccess = {},
+    getActiveDelegationForStore
   } = useContext(AppContext);
 
   const isTherapistModuleEnabled = therapistModuleEnabled !== false;
@@ -498,67 +500,215 @@ export function useDashboardStats() {
     };
   }, [monthlyTargetSummary, budgets]);
 
+  // ============================================================================
+  // ★ 期間式代理與托管：營運總覽可視範圍
+  // 正式組織仍由 managers / org_structure 決定；這裡只把具備 viewOperations
+  // 權限的暫時托管店家加入目前登入者的營運查看範圍。
+  // ============================================================================
+  const viewableDelegatedStores = useMemo(() => (
+    (delegatedStores || []).filter((storeName) => {
+      const core = cleanName(storeName);
+      return delegationAccess?.storePermissions?.[core]?.viewOperations === true;
+    })
+  ), [delegatedStores, delegationAccess, cleanName]);
+
+  const operationAccessibleStores = useMemo(() => (
+    [...new Set(
+      [...(officialStores || []), ...viewableDelegatedStores]
+        .map(cleanName)
+        .filter(Boolean)
+    )]
+  ), [officialStores, viewableDelegatedStores, cleanName]);
+
+  const hasDelegationAccessProfile = Boolean(
+    delegationAccess &&
+    (
+      delegationAccess.role ||
+      Array.isArray(delegationAccess.officialStores) ||
+      Array.isArray(delegationAccess.delegatedStores) ||
+      delegationAccess.storePermissions
+    )
+  );
+
   const baseVisibleStores = useMemo(() => {
     if (userRole === 'director' || userRole === 'trainer' || userRole === 'therapist' || userRole === 'master') {
-      return Object.values(managers || {}).flat().map(cleanName).filter(Boolean);
+      return [...new Set(Object.values(managers || {}).flat().map(cleanName).filter(Boolean))];
     }
-    if (userRole === 'manager' && currentUser) {
-      return (managers[currentUser.name] || []).map(cleanName).filter(Boolean);
-    }
-    if (userRole === 'store' && currentUser) {
+
+    if ((userRole === 'manager' || userRole === 'store') && currentUser) {
+      const delegatedAwareStores = (
+        hasDelegationAccessProfile
+          ? operationAccessibleStores
+          : (accessibleStores || [])
+      ).map(cleanName).filter(Boolean);
+
+      if (delegatedAwareStores.length > 0) {
+        return [...new Set(delegatedAwareStores)];
+      }
+
+      // 代理資料尚未完成載入時，保留原正式權限，避免畫面短暫變成 0。
+      if (userRole === 'manager') {
+        return [...new Set((managers[currentUser.name] || []).map(cleanName).filter(Boolean))];
+      }
+
       const rawStores = currentUser.stores || [currentUser.storeName];
-      return rawStores.map(cleanName).filter(Boolean);
+      return [...new Set((rawStores || []).map(cleanName).filter(Boolean))];
     }
-    return []; 
-  }, [userRole, currentUser, managers, cleanName]);
+
+    return [];
+  }, [
+    userRole,
+    currentUser,
+    managers,
+    accessibleStores,
+    operationAccessibleStores,
+    hasDelegationAccessProfile,
+    cleanName,
+  ]);
 
   const availableStoresForFilter = useMemo(() => {
     const uniqueStores = [...new Set(baseVisibleStores)];
-    return sortStoresByOrgOrder(managers, uniqueStores.map(s => `${brandPrefix}${s}店`), brandPrefix, managerOrder);
+    return sortStoresByOrgOrder(
+      managers,
+      uniqueStores.map((storeCore) => `${brandPrefix}${storeCore}店`),
+      brandPrefix,
+      managerOrder
+    );
   }, [baseVisibleStores, brandPrefix, managers, managerOrder]);
+
+  const officialStoreCoreSet = useMemo(
+    () => new Set((officialStores || []).map(cleanName).filter(Boolean)),
+    [officialStores, cleanName]
+  );
+
+  const delegatedStoreCoreSet = useMemo(
+    () => new Set(viewableDelegatedStores.map(cleanName).filter(Boolean)),
+    [viewableDelegatedStores, cleanName]
+  );
+
+  const officialStoresForDropdown = useMemo(
+    () => availableStoresForFilter.filter(
+      (storeName) => officialStoreCoreSet.has(cleanName(storeName))
+    ),
+    [availableStoresForFilter, officialStoreCoreSet, cleanName]
+  );
+
+  const delegatedStoresForDropdown = useMemo(
+    () => availableStoresForFilter.filter(
+      (storeName) =>
+        delegatedStoreCoreSet.has(cleanName(storeName)) &&
+        !officialStoreCoreSet.has(cleanName(storeName))
+    ),
+    [availableStoresForFilter, delegatedStoreCoreSet, officialStoreCoreSet, cleanName]
+  );
+
+  const delegatedStoreDetails = useMemo(() => {
+    const details = {};
+
+    delegatedStoresForDropdown.forEach((storeName) => {
+      const delegation = typeof getActiveDelegationForStore === 'function'
+        ? getActiveDelegationForStore(cleanName(storeName), null, 'viewOperations')
+        : null;
+
+      details[storeName] = delegation
+        ? {
+            id: delegation.id || '',
+            principalName: delegation.principalName || '',
+            delegateName: delegation.delegateName || '',
+            endDate: delegation.endDate || '',
+          }
+        : null;
+    });
+
+    return details;
+  }, [delegatedStoresForDropdown, getActiveDelegationForStore, cleanName]);
 
   const groupedStoresForFilter = useMemo(() => {
     const groups = {};
     const availableSet = new Set(availableStoresForFilter);
 
     sortManagersByOrgOrder(managers, null, managerOrder).forEach((mgrName) => {
-        const rawStores = managers?.[mgrName] || [];
-        const mgrValidStores = [];
-        (rawStores || []).forEach(rs => {
-            const core = cleanName(rs);
-            const fullName = `${brandPrefix}${core}店`;
-            if (availableSet.has(fullName) && !mgrValidStores.includes(fullName)) {
-                mgrValidStores.push(fullName);
-            }
-        });
-        if (mgrValidStores.length > 0) {
-            groups[mgrName] = sortStoresByOrgOrder(managers, mgrValidStores, brandPrefix, managerOrder);
+      const rawStores = managers?.[mgrName] || [];
+      const mgrValidStores = [];
+
+      (rawStores || []).forEach((rawStoreName) => {
+        const core = cleanName(rawStoreName);
+        const fullName = `${brandPrefix}${core}店`;
+
+        if (availableSet.has(fullName) && !mgrValidStores.includes(fullName)) {
+          mgrValidStores.push(fullName);
         }
+      });
+
+      if (mgrValidStores.length > 0) {
+        groups[mgrName] = sortStoresByOrgOrder(
+          managers,
+          mgrValidStores,
+          brandPrefix,
+          managerOrder
+        );
+      }
     });
 
     const inGroups = new Set(Object.values(groups).flat());
-    const orphans = availableStoresForFilter.filter(s => !inGroups.has(s));
+    const orphans = availableStoresForFilter.filter((storeName) => !inGroups.has(storeName));
+
     if (orphans.length > 0) {
-        groups['其他'] = sortStoresByOrgOrder(managers, orphans, brandPrefix, managerOrder);
+      groups['其他'] = sortStoresByOrgOrder(
+        managers,
+        orphans,
+        brandPrefix,
+        managerOrder
+      );
     }
+
     return groups;
   }, [managers, managerOrder, availableStoresForFilter, cleanName, brandPrefix]);
 
   const availableStoresForDropdown = useMemo(() => {
-    if (userRole === 'manager' && currentUser) {
-         return groupedStoresForFilter[currentUser.name] || sortStoresByOrgOrder(managers, Object.values(groupedStoresForFilter).flat(), brandPrefix, managerOrder);
+    // 區長／店經理必須同時看到正式店家與暫時托管店家。
+    if ((userRole === 'manager' || userRole === 'store') && currentUser) {
+      return availableStoresForFilter;
     }
+
     if (selectedDashboardManager && groupedStoresForFilter[selectedDashboardManager]) {
-        return groupedStoresForFilter[selectedDashboardManager];
+      return groupedStoresForFilter[selectedDashboardManager];
     }
-    return sortStoresByOrgOrder(managers, Object.values(groupedStoresForFilter).flat(), brandPrefix, managerOrder);
-  }, [selectedDashboardManager, groupedStoresForFilter, userRole, currentUser, managers, brandPrefix, managerOrder]);
+
+    return sortStoresByOrgOrder(
+      managers,
+      Object.values(groupedStoresForFilter).flat(),
+      brandPrefix,
+      managerOrder
+    );
+  }, [
+    selectedDashboardManager,
+    groupedStoresForFilter,
+    userRole,
+    currentUser,
+    managers,
+    brandPrefix,
+    managerOrder,
+    availableStoresForFilter,
+  ]);
 
   const effectiveStores = useMemo(() => {
     if (selectedDashboardStore) return [cleanName(selectedDashboardStore)];
-    if (selectedDashboardManager) return (managers[selectedDashboardManager] || []).map(cleanName).filter(Boolean);
+
+    if (selectedDashboardManager) {
+      return (managers[selectedDashboardManager] || [])
+        .map(cleanName)
+        .filter(Boolean);
+    }
+
     return baseVisibleStores;
-  }, [baseVisibleStores, selectedDashboardStore, selectedDashboardManager, managers, cleanName]);
+  }, [
+    baseVisibleStores,
+    selectedDashboardStore,
+    selectedDashboardManager,
+    managers,
+    cleanName,
+  ]);
 
   const allCompanyStores = useMemo(() => {
     const stores = new Set();
@@ -569,7 +719,9 @@ export function useDashboardStats() {
     });
 
     if (allReports) {
-      allReports.forEach(r => { if (r.storeName) stores.add(cleanName(r.storeName)); });
+      allReports.forEach((report) => {
+        if (report.storeName) stores.add(cleanName(report.storeName));
+      });
     }
 
     return Array.from(stores).filter(Boolean);
@@ -577,11 +729,29 @@ export function useDashboardStats() {
 
   const therapistEffectiveStores = useMemo(() => {
     if (selectedDashboardStore) return [cleanName(selectedDashboardStore)];
+
     if (selectedDashboardManager && managers[selectedDashboardManager]) {
-        return managers[selectedDashboardManager].map(cleanName).filter(Boolean);
+      return managers[selectedDashboardManager]
+        .map(cleanName)
+        .filter(Boolean);
     }
-    return allCompanyStores; 
-  }, [selectedDashboardStore, selectedDashboardManager, managers, allCompanyStores, cleanName]);
+
+    // 代理主管在「人員績效」也只能看到正式＋已授權托管範圍。
+    if ((userRole === 'manager' || userRole === 'store') && currentUser) {
+      return baseVisibleStores;
+    }
+
+    return allCompanyStores;
+  }, [
+    selectedDashboardStore,
+    selectedDashboardManager,
+    managers,
+    allCompanyStores,
+    baseVisibleStores,
+    userRole,
+    currentUser,
+    cleanName,
+  ]);
 
   const effectiveAnnualKpiBenchmark = useMemo(() => {
     const base = annualKpiBenchmark || {};
@@ -1295,8 +1465,8 @@ export function useDashboardStats() {
     const summary = dashboardSummaryBundle.dashboard;
     if (!summary || userRole !== "store" || !currentUser) return null;
 
-    const rawStores = currentUser.stores || [currentUser.storeName];
-    const myCores = rawStores.map(cleanName).filter(Boolean);
+    // 店經理代理多店時，歷史 verified Summary 排名也要依正式＋托管範圍顯示。
+    const myCores = (effectiveStores || []).map(cleanName).filter(Boolean);
     const allRanks = Array.isArray(summary.storeRankings) ? summary.storeRankings : normalizeSummaryStores(summary.stores || []);
 
     const myCoreSet = new Set(myCores);
@@ -1326,7 +1496,7 @@ export function useDashboardStats() {
           isBottom5: isInBottomRankingSegment(s.rank, allRanks.length),
         };
       });
-  }, [dashboardSummaryBundle.dashboard, userRole, currentUser, cleanName, getSummaryStoreName, normalizeSummaryStores, summaryStoreMatchesSet, isSelectedCurrentMonth, isSummaryTrustedForDashboard]);
+  }, [dashboardSummaryBundle.dashboard, userRole, currentUser, effectiveStores, cleanName, getSummaryStoreName, normalizeSummaryStores, summaryStoreMatchesSet, isSelectedCurrentMonth, isSummaryTrustedForDashboard]);
 
   const summaryTherapistStats = useMemo(() => {
     if (viewMode !== "therapist" && userRole !== "therapist" && userRole !== "trainer") return null;
@@ -1337,7 +1507,12 @@ export function useDashboardStats() {
 
     const normalizeStoreDisplay = (value) => cleanName(value || "").replace(/店$/, "") + "店";
     const selectedStores = new Set((therapistEffectiveStores || []).map(cleanName).filter(Boolean));
-    const useFilter = selectedDashboardManager || selectedDashboardStore;
+    const useFilter = Boolean(
+      selectedDashboardManager ||
+      selectedDashboardStore ||
+      userRole === "manager" ||
+      userRole === "store"
+    );
 
     let rankings = Array.isArray(summary.rankings) ? summary.rankings.map((item) => ({ ...item })) : [];
     if (useFilter && selectedStores.size > 0) {
@@ -1939,6 +2114,7 @@ export function useDashboardStats() {
       pendingCount: dashboardSummaryBundle.trustStatus?.pendingCount || 0,
     },
     dailyLoginCount, yesterdayLoginCount,
-    groupedStoresForFilter, availableStoresForDropdown
+    groupedStoresForFilter, availableStoresForDropdown,
+    officialStoresForDropdown, delegatedStoresForDropdown, delegatedStoreDetails
   };
 }

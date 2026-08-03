@@ -3,7 +3,7 @@ import React, { useContext, useMemo, useState, useEffect } from "react";
 import { 
   Calendar, Search, DollarSign, CreditCard, Users, Sparkles, 
   AlertCircle, TrendingUp, CheckCircle, Map as MapIcon, Store as StoreIcon,
-  Settings, X, Ban, Save, User, FileWarning, Loader2 
+  Settings, X, Ban, Save, User, FileWarning, Loader2, Clock 
 } from "lucide-react";
 import { query, where, onSnapshot } from "firebase/firestore";
 import { ViewWrapper, Card } from "./SharedUI";
@@ -16,17 +16,12 @@ const DailyView = () => {
     fmtMoney, fmtNum, userRole, currentUser, 
     managers, managerOrder, currentBrand,
     auditExclusions, handleUpdateAuditExclusions, showToast,
-    therapists, getCollectionPath, therapistModuleEnabled
+    therapists, getCollectionPath,
+    accessibleStores = [], officialStores = [], delegatedStores = [], delegationAccess = {},
+    getActiveDelegationForStore
   } = useContext(AppContext);
 
-  const isTherapistModuleEnabled = therapistModuleEnabled !== false;
-  const [viewMode, setViewMode] = useState((isTherapistModuleEnabled && (userRole === 'therapist' || userRole === 'trainer')) ? 'therapist' : 'store');
-
-  useEffect(() => {
-    if (!isTherapistModuleEnabled && viewMode === 'therapist') {
-      setViewMode('store');
-    }
-  }, [isTherapistModuleEnabled, viewMode]);
+  const [viewMode, setViewMode] = useState((userRole === 'therapist' || userRole === 'trainer') ? 'therapist' : 'store');
 
   const [selectedDate, setSelectedDate] = useState(() => {
     const d = new Date();
@@ -73,29 +68,22 @@ const DailyView = () => {
       setDailyStoreReports(snapshot.docs.map(d => d.data()));
     });
 
-    let unsubTherapist = null;
+    // 查詢管理師日報 (精準綁定日期)
+    const therapistQuery = query(
+      getCollectionPath("therapist_daily_reports"), 
+      where("date", "==", selectedDate)
+    );
 
-    if (isTherapistModuleEnabled) {
-      // 查詢管理師日報 (精準綁定日期)
-      const therapistQuery = query(
-        getCollectionPath("therapist_daily_reports"), 
-        where("date", "==", selectedDate)
-      );
-
-      unsubTherapist = onSnapshot(therapistQuery, (snapshot) => {
-        setDailyTherapistReports(snapshot.docs.map(d => d.data()));
-        setIsLoading(false); // 兩個都抓完才解除載入狀態
-      });
-    } else {
-      setDailyTherapistReports([]);
-      setIsLoading(false);
-    }
+    const unsubTherapist = onSnapshot(therapistQuery, (snapshot) => {
+      setDailyTherapistReports(snapshot.docs.map(d => d.data()));
+      setIsLoading(false); // 兩個都抓完才解除載入狀態
+    });
 
     return () => {
       unsubStore();
-      if (unsubTherapist) unsubTherapist();
+      unsubTherapist();
     };
-  }, [selectedDate, currentBrand, getCollectionPath, isTherapistModuleEnabled]);
+  }, [selectedDate, currentBrand, getCollectionPath]);
 
   const { brandInfo, brandPrefix } = useMemo(() => {
     let id = "CYJ", name = "CYJ"; 
@@ -116,12 +104,77 @@ const DailyView = () => {
     return core.replace(/店$/, '').trim();
   }, [brandPrefix]);
 
+  const viewableDelegatedStores = useMemo(() => (
+    (delegatedStores || []).filter((storeName) => {
+      const core = cleanName(storeName);
+      const permissions = delegationAccess?.storePermissions?.[core];
+      return permissions ? permissions.viewOperations === true : true;
+    })
+  ), [delegatedStores, delegationAccess, cleanName]);
+
+  const operationAccessibleStores = useMemo(() => (
+    [...new Set([...(officialStores || []), ...viewableDelegatedStores].map(cleanName).filter(Boolean))]
+  ), [officialStores, viewableDelegatedStores, cleanName]);
+
+  const hasDelegationAccessProfile = Boolean(
+    delegationAccess && (delegationAccess.role || delegationAccess.storePermissions || delegationAccess.accessibleStores)
+  );
+
   const baseVisibleStores = useMemo(() => {
-    if (userRole === 'director' || userRole === 'trainer' || userRole === 'therapist') return Object.values(managers).flat().map(cleanName).filter(Boolean);
-    if (userRole === 'manager' && currentUser) return (managers[currentUser.name] || []).map(cleanName).filter(Boolean);
-    if (userRole === 'store' && currentUser) return (currentUser.stores || [currentUser.storeName]).map(cleanName).filter(Boolean);
+    if (userRole === 'director' || userRole === 'trainer' || userRole === 'therapist' || userRole === 'master') {
+      return [...new Set(Object.values(managers || {}).flat().map(cleanName).filter(Boolean))];
+    }
+    if ((userRole === 'manager' || userRole === 'store') && currentUser) {
+      const delegatedAwareStores = (hasDelegationAccessProfile ? operationAccessibleStores : accessibleStores).map(cleanName).filter(Boolean);
+      if (delegatedAwareStores.length > 0) return [...new Set(delegatedAwareStores)];
+      if (userRole === 'manager') return [...new Set((managers[currentUser.name] || []).map(cleanName).filter(Boolean))];
+      return [...new Set((currentUser.stores || [currentUser.storeName]).map(cleanName).filter(Boolean))];
+    }
     return []; 
-  }, [userRole, currentUser, managers, managerOrder, cleanName]);
+  }, [userRole, currentUser, managers, accessibleStores, operationAccessibleStores, hasDelegationAccessProfile, cleanName]);
+
+  const allAccessibleStoreOptions = useMemo(() => (
+    [...new Set(baseVisibleStores)]
+      .sort((a, b) => String(a).localeCompare(String(b), 'zh-Hant', { numeric: true, sensitivity: 'base' }))
+      .map((storeCore) => `${brandPrefix}${storeCore}店`)
+  ), [baseVisibleStores, brandPrefix]);
+
+  const officialStoreCoreSet = useMemo(
+    () => new Set((officialStores || []).map(cleanName).filter(Boolean)),
+    [officialStores, cleanName]
+  );
+
+  const delegatedStoreCoreSet = useMemo(
+    () => new Set((viewableDelegatedStores || []).map(cleanName).filter(Boolean)),
+    [viewableDelegatedStores, cleanName]
+  );
+
+  const officialStoresForDropdown = useMemo(
+    () => allAccessibleStoreOptions.filter((storeName) => officialStoreCoreSet.has(cleanName(storeName))),
+    [allAccessibleStoreOptions, officialStoreCoreSet, cleanName]
+  );
+
+  const delegatedStoresForDropdown = useMemo(
+    () => allAccessibleStoreOptions.filter((storeName) => delegatedStoreCoreSet.has(cleanName(storeName))),
+    [allAccessibleStoreOptions, delegatedStoreCoreSet, cleanName]
+  );
+
+  const delegatedStoreDetailsByCore = useMemo(() => {
+    const details = {};
+    delegatedStoresForDropdown.forEach((storeName) => {
+      const core = cleanName(storeName);
+      const delegation = typeof getActiveDelegationForStore === 'function'
+        ? getActiveDelegationForStore(core, null, 'viewOperations')
+        : null;
+      details[core] = delegation ? {
+        id: delegation.id || '',
+        principalName: delegation.principalName || '',
+        delegateName: delegation.delegateName || '',
+        endDate: delegation.endDate || '',
+      } : null;
+    });
+    return details;
+  }, [delegatedStoresForDropdown, getActiveDelegationForStore, cleanName]);
 
   const groupedStoresForFilter = useMemo(() => {
     const groups = {};
@@ -139,15 +192,22 @@ const DailyView = () => {
   }, [managers, managerOrder, baseVisibleStores, cleanName, brandPrefix]);
 
   const availableStoresForDropdown = useMemo(() => {
+    if ((userRole === 'manager' || userRole === 'store') && currentUser) return allAccessibleStoreOptions;
     if (selectedManager && groupedStoresForFilter[selectedManager]) return groupedStoresForFilter[selectedManager];
     return sortStoresByOrgOrder(managers, Object.values(groupedStoresForFilter).flat(), brandPrefix, managerOrder);
-  }, [selectedManager, groupedStoresForFilter, managers, brandPrefix, managerOrder]);
+  }, [selectedManager, groupedStoresForFilter, managers, brandPrefix, managerOrder, userRole, currentUser, allAccessibleStoreOptions]);
+
+  useEffect(() => {
+    if (!selectedStore) return;
+    const allowed = new Set(availableStoresForDropdown.map(cleanName));
+    if (!allowed.has(cleanName(selectedStore))) setSelectedStore('');
+  }, [selectedStore, availableStoresForDropdown, cleanName]);
 
   const effectiveStores = useMemo(() => {
     if (selectedStore) return [cleanName(selectedStore)];
-    if (selectedManager) return (managers[selectedManager] || []).map(cleanName).filter(Boolean);
+    if (selectedManager) return (groupedStoresForFilter[selectedManager] || []).map(cleanName).filter(Boolean);
     return baseVisibleStores;
-  }, [baseVisibleStores, selectedStore, selectedManager, managers, managerOrder, cleanName]);
+  }, [baseVisibleStores, selectedStore, selectedManager, groupedStoresForFilter, cleanName]);
 
   const dailyData = useMemo(() => {
     const storeDataMap = {};
@@ -155,7 +215,14 @@ const DailyView = () => {
 
     effectiveStores.forEach(storeName => {
       if (auditExclusions.includes(storeName)) return;
-      storeDataMap[storeName] = { storeName, isReported: false, cash: 0, accrual: 0, traffic: 0, newCustomers: 0, newCustomerSales: 0, skincareSales: 0 };
+      const delegationDetail = delegatedStoreDetailsByCore[storeName] || null;
+      storeDataMap[storeName] = {
+        storeName,
+        isReported: false,
+        isDelegated: delegatedStoreCoreSet.has(storeName),
+        delegationDetail,
+        cash: 0, accrual: 0, traffic: 0, newCustomers: 0, newCustomerSales: 0, skincareSales: 0
+      };
     });
 
     // 改用精準抓取的 dailyStoreReports
@@ -171,7 +238,11 @@ const DailyView = () => {
         const newCust = Number(report.newCustomers) || 0;
         const skincare = Number(report.skincareSales) || 0;
 
-        storeDataMap[cName] = { storeName: cName, isReported: true, cash, accrual, traffic, newCustomers: newCust, skincareSales: skincare, newCustomerSales: Number(report.newCustomerSales) || 0 };
+        storeDataMap[cName] = {
+          ...storeDataMap[cName],
+          storeName: cName, isReported: true, cash, accrual, traffic, newCustomers: newCust,
+          skincareSales: skincare, newCustomerSales: Number(report.newCustomerSales) || 0
+        };
 
         totalCash += cash; totalAccrual += accrual; totalTraffic += traffic; totalNewCust += newCust; totalSkincare += skincare;
       }
@@ -193,7 +264,7 @@ const DailyView = () => {
     });
 
     return { list, totals: { cash: totalCash, accrual: totalAccrual, traffic: totalTraffic, newCustomers: totalNewCust, skincare: totalSkincare }, reportedCount: list.filter(s => s.isReported).length, totalCount: list.length };
-  }, [dailyStoreReports, effectiveStores, cleanName, brandPrefix, sortConfig, auditExclusions]);
+  }, [dailyStoreReports, effectiveStores, cleanName, brandPrefix, sortConfig, auditExclusions, delegatedStoreCoreSet, delegatedStoreDetailsByCore]);
 
   const therapistDailyData = useMemo(() => {
     let totalRev = 0, newRev = 0, oldRev = 0, returnRev = 0, newCount = 0;
@@ -259,6 +330,23 @@ const DailyView = () => {
     }
   };
 
+  const hasDelegatedStores = delegatedStoresForDropdown.length > 0;
+  const isScopedOperator = userRole === 'manager' || userRole === 'store';
+  const canChooseStore = (
+    userRole === 'director' ||
+    userRole === 'trainer' ||
+    userRole === 'manager' ||
+    (userRole === 'store' && (availableStoresForDropdown.length > 1 || hasDelegatedStores))
+  );
+
+  const formatDelegationOptionLabel = (storeName) => {
+    const detail = delegatedStoreDetailsByCore[cleanName(storeName)] || null;
+    if (!detail) return `${storeName}（暫時托管）`;
+    const owner = detail.principalName ? `原主管 ${detail.principalName}` : '暫時托管';
+    const endDate = detail.endDate ? `至 ${detail.endDate.replace(/-/g, '/')}` : '';
+    return `${storeName}（${owner}${endDate ? `・${endDate}` : ''}）`;
+  };
+
   const MiniKpiCard = ({ title, value, icon: Icon, color, subText }) => (
     <div className="bg-white p-5 rounded-3xl border border-stone-100 shadow-sm hover:shadow-md transition-all relative overflow-hidden flex flex-col justify-between group">
       <div className={`absolute top-0 right-0 p-4 opacity-5 group-hover:opacity-10 transition-opacity ${color.text}`}><Icon size={80} className="transform translate-x-4 -translate-y-4" /></div>
@@ -292,7 +380,7 @@ const DailyView = () => {
                 </div>
               </div>
 
-              {userRole !== 'therapist' && userRole !== 'trainer' && isTherapistModuleEnabled && (
+              {userRole !== 'therapist' && userRole !== 'trainer' && (
                 <>
                   <div className="hidden sm:block w-px h-10 bg-stone-100"></div>
                   <div className="bg-stone-100/80 p-1 rounded-2xl flex shadow-inner w-fit border border-stone-200/50">
@@ -308,7 +396,7 @@ const DailyView = () => {
                 <SmartDatePicker selectedDate={selectedDate} onDateSelect={setSelectedDate} maxDate={today} />
               </div>
 
-              {(userRole === 'director' || userRole === 'trainer' || userRole === 'manager') && (
+              {canChooseStore && (
                 <div className="flex items-center gap-2 w-full sm:w-auto">
                   {(userRole === 'director' || userRole === 'trainer') && (
                     <select value={selectedManager} onChange={(e) => { setSelectedManager(e.target.value); setSelectedStore(""); }} className="flex-1 sm:flex-none px-4 py-2.5 border border-stone-200 rounded-xl text-sm font-bold text-stone-600 outline-none focus:border-amber-400 focus:ring-2 focus:ring-amber-100 bg-stone-50 hover:bg-white transition-all cursor-pointer min-w-[110px]">
@@ -316,9 +404,32 @@ const DailyView = () => {
                       {sortManagersByOrgOrder(managers, Object.keys(groupedStoresForFilter), managerOrder).map(m => <option key={m} value={m}>{m}區</option>)}
                     </select>
                   )}
-                  <select value={selectedStore} onChange={(e) => setSelectedStore(e.target.value)} className="flex-1 sm:flex-none px-4 py-2.5 border border-stone-200 rounded-xl text-sm font-bold text-stone-600 outline-none focus:border-amber-400 focus:ring-2 focus:ring-amber-100 bg-stone-50 hover:bg-white transition-all cursor-pointer min-w-[130px]">
-                    <option value="">{selectedManager || userRole === 'manager' ? "全區店家" : "顯示全區"}</option>
-                    {(!selectedManager && userRole !== 'manager') ? (
+                  <select value={selectedStore} onChange={(e) => setSelectedStore(e.target.value)} className="flex-1 sm:flex-none px-4 py-2.5 border border-stone-200 rounded-xl text-sm font-bold text-stone-600 outline-none focus:border-amber-400 focus:ring-2 focus:ring-amber-100 bg-stone-50 hover:bg-white transition-all cursor-pointer min-w-[150px]">
+                    <option value="">
+                      {isScopedOperator
+                        ? (hasDelegatedStores ? "全部可管理店家" : (userRole === 'manager' ? "全區店家" : "我的店家"))
+                        : (selectedManager ? "全區店家" : "顯示全區")}
+                    </option>
+                    {isScopedOperator ? (
+                      <>
+                        {officialStoresForDropdown.length > 0 && (
+                          <optgroup label={userRole === 'manager' ? "正式轄區" : "正式店家"}>
+                            {officialStoresForDropdown.map((storeName) => (
+                              <option key={`official-${storeName}`} value={storeName}>{storeName}</option>
+                            ))}
+                          </optgroup>
+                        )}
+                        {delegatedStoresForDropdown.length > 0 && (
+                          <optgroup label="暫時托管">
+                            {delegatedStoresForDropdown.map((storeName) => (
+                              <option key={`delegated-${storeName}`} value={storeName}>
+                                {formatDelegationOptionLabel(storeName)}
+                              </option>
+                            ))}
+                          </optgroup>
+                        )}
+                      </>
+                    ) : (!selectedManager ? (
                       Object.entries(groupedStoresForFilter).map(([mgrName, stores]) => (
                         <optgroup key={mgrName} label={`${mgrName} 區`} className="font-bold text-stone-400 bg-stone-50">
                           {stores.map(s => (
@@ -328,22 +439,34 @@ const DailyView = () => {
                       ))
                     ) : (
                       availableStoresForDropdown.map(s => <option key={s} value={s} className="font-medium text-stone-700">{s}</option>)
-                    )}
+                    ))}
                   </select>
                   
-                  <button 
-                    onClick={() => { setLocalExclusions(auditExclusions || []); setIsConfigModalOpen(true); }} 
-                    className="p-2.5 bg-stone-50 text-stone-500 rounded-xl hover:bg-stone-200 hover:text-stone-700 transition-colors border border-stone-200 shadow-sm shrink-0"
-                    title="設定不計算店家"
-                  >
-                    <Settings size={18}/>
-                  </button>
+                  {(userRole === 'director' || userRole === 'trainer' || userRole === 'manager') && (
+                    <button 
+                      onClick={() => { setLocalExclusions(auditExclusions || []); setIsConfigModalOpen(true); }} 
+                      className="p-2.5 bg-stone-50 text-stone-500 rounded-xl hover:bg-stone-200 hover:text-stone-700 transition-colors border border-stone-200 shadow-sm shrink-0"
+                      title="設定不計算店家"
+                    >
+                      <Settings size={18}/>
+                    </button>
+                  )}
                 </div>
               )}
             </div>
 
           </div>
         </div>
+
+        {hasDelegatedStores && isScopedOperator && (
+          <div className="flex flex-col gap-2 rounded-2xl border border-sky-100 bg-sky-50/70 px-4 py-3 text-sky-800 sm:flex-row sm:items-center sm:justify-between">
+            <div className="flex items-center gap-2 text-sm font-black">
+              <Clock size={17} />
+              <span>目前納入 {delegatedStoresForDropdown.length} 間暫時托管店家</span>
+            </div>
+            <p className="text-xs font-bold text-sky-600">本頁數據會合併正式與托管範圍；正式區績效歸屬維持原主管。</p>
+          </div>
+        )}
 
         {/* 載入中狀態 (改為局部載入) */}
         {isLoading ? (
@@ -406,9 +529,19 @@ const DailyView = () => {
                                 </span>
                               )}
                             </td>
-                            <td className="p-4 font-bold text-stone-700 flex items-center gap-2">
-                              {brandPrefix}{store.storeName}店
-                              {!store.isReported && <span className="px-2 py-0.5 bg-rose-100 text-rose-600 text-[10px] rounded animate-pulse">未回報</span>}
+                            <td className="p-4 font-bold text-stone-700">
+                              <div className="flex flex-wrap items-center gap-2">
+                                <span>{brandPrefix}{store.storeName}店</span>
+                                {store.isDelegated && (
+                                  <span
+                                    title={`正式主管：${store.delegationDetail?.principalName || '未註記'}${store.delegationDetail?.endDate ? `｜托管至 ${store.delegationDetail.endDate}` : ''}`}
+                                    className="rounded-full border border-sky-100 bg-sky-50 px-2 py-0.5 text-[10px] font-black text-sky-700"
+                                  >
+                                    暫時托管{store.delegationDetail?.endDate ? `至 ${store.delegationDetail.endDate.slice(5).replace('-', '/')}` : ''}
+                                  </span>
+                                )}
+                                {!store.isReported && <span className="px-2 py-0.5 bg-rose-100 text-rose-600 text-[10px] rounded animate-pulse">未回報</span>}
+                              </div>
                             </td>
                             
                             {store.isReported ? (
@@ -435,7 +568,7 @@ const DailyView = () => {
             )}
 
             {/* 人員績效視圖 */}
-            {isTherapistModuleEnabled && viewMode === 'therapist' && (
+            {viewMode === 'therapist' && (
               <div className="space-y-6 animate-in fade-in slide-in-from-bottom-4 duration-500 w-full min-w-0">
                 <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-4">
                   <MiniKpiCard title="單日管理師總業績" value={fmtMoney(therapistDailyData.totals.totalRev)} icon={DollarSign} color={{bg: 'bg-indigo-50', text: 'text-indigo-600'}} />

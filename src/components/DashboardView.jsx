@@ -22,7 +22,8 @@ const DashboardView = () => {
     dashboardStats, myStoreRankings, therapistStats,
     dashboardSummaryStatus,
     dailyLoginCount, yesterdayLoginCount,
-    groupedStoresForFilter, availableStoresForDropdown
+    groupedStoresForFilter, availableStoresForDropdown,
+    officialStoresForDropdown, delegatedStoresForDropdown, delegatedStoreDetails
   } = useDashboardStats();
 
   if (!dashboardStats || !therapistStats) {
@@ -54,6 +55,9 @@ const DashboardView = () => {
            setSelectedDashboardStore={setSelectedDashboardStore}
            groupedStoresForFilter={groupedStoresForFilter}
            availableStoresForDropdown={availableStoresForDropdown}
+           officialStoresForDropdown={officialStoresForDropdown}
+           delegatedStoresForDropdown={delegatedStoresForDropdown}
+           delegatedStoreDetails={delegatedStoreDetails}
         />
 
         {/* 2. 零件二：門市營運視圖 */}

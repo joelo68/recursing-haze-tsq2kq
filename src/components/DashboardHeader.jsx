@@ -1,5 +1,5 @@
 // src/components/DashboardHeader.jsx
-import React, { useContext, useEffect } from "react";
+import React, { useContext } from "react";
 import { Store as StoreIcon, User, CheckCircle2, AlertTriangle, Clock3, Database, Radio } from "lucide-react";
 import { AppContext } from "../AppContext";
 
@@ -7,17 +7,27 @@ const DashboardHeader = ({
   brandInfo, dailyLoginCount, yesterdayLoginCount, dashboardSummaryStatus, viewMode, setViewMode,
   selectedDashboardManager, setSelectedDashboardManager,
   selectedDashboardStore, setSelectedDashboardStore,
-  groupedStoresForFilter, availableStoresForDropdown
+  groupedStoresForFilter, availableStoresForDropdown,
+  officialStoresForDropdown = [], delegatedStoresForDropdown = [], delegatedStoreDetails = {}
 }) => {
-  const { userRole, therapistModuleEnabled } = useContext(AppContext);
-  const isTherapistModuleEnabled = therapistModuleEnabled !== false;
+  const { userRole } = useContext(AppContext);
 
-  useEffect(() => {
-    if (!isTherapistModuleEnabled && viewMode === "therapist") {
-      setViewMode("store");
-    }
-  }, [isTherapistModuleEnabled, viewMode, setViewMode]);
+  const hasDelegatedStores = delegatedStoresForDropdown.length > 0;
+  const isScopedOperator = userRole === 'manager' || userRole === 'store';
+  const canChooseStore = (
+    userRole === 'director' ||
+    userRole === 'trainer' ||
+    userRole === 'manager' ||
+    (userRole === 'store' && (availableStoresForDropdown.length > 1 || hasDelegatedStores))
+  );
 
+  const formatDelegationOptionLabel = (storeName) => {
+    const detail = delegatedStoreDetails?.[storeName] || null;
+    if (!detail) return `${storeName}（暫時托管）`;
+    const owner = detail.principalName ? `原主管 ${detail.principalName}` : '暫時托管';
+    const endDate = detail.endDate ? `至 ${detail.endDate.replace(/-/g, '/')}` : '';
+    return `${storeName}（${owner}${endDate ? `・${endDate}` : ''}）`;
+  };
 
   const summaryStatus = dashboardSummaryStatus || {};
   const statusKey = summaryStatus.statusKey || "unknown";
@@ -114,11 +124,21 @@ const DashboardHeader = ({
                     <span className="rounded-full bg-white/70 px-1.5 py-0.5 text-[9px] font-black opacity-80">待整理 {summaryStatus.pendingCount}</span>
                   )}
                 </div>
+                {hasDelegatedStores && isScopedOperator && (
+                  <div
+                    title="托管店家會納入目前可查看的營運範圍，但正式組織與績效歸屬不會改變。"
+                    className="inline-flex items-center gap-1.5 rounded-full border border-sky-100 bg-sky-50/80 px-2.5 py-1 text-[10px] font-black text-sky-700"
+                  >
+                    <Clock3 size={11} strokeWidth={2.3} />
+                    <span>暫時托管 {delegatedStoresForDropdown.length} 店</span>
+                    <span className="hidden font-bold text-sky-500 md:inline">正式歸屬不變</span>
+                  </div>
+                )}
               </div>
             </div>
           </div>
 
-          {userRole !== 'therapist' && userRole !== 'trainer' && isTherapistModuleEnabled && (
+          {userRole !== 'therapist' && userRole !== 'trainer' && (
             <>
               <div className="hidden sm:block w-px h-10 bg-stone-100"></div>
               <div className="bg-stone-100/80 p-1 rounded-2xl flex shadow-inner w-fit border border-stone-200/50">
@@ -130,7 +150,7 @@ const DashboardHeader = ({
         </div>
 
         <div className="flex flex-wrap xl:flex-nowrap items-center gap-2 md:gap-3">
-          {(userRole === 'director' || userRole === 'trainer' || userRole === 'manager') && (
+          {canChooseStore && (
             <div className="flex items-center gap-2 w-full sm:w-auto">
               {(userRole === 'director' || userRole === 'trainer') && (
                 <select
@@ -151,25 +171,46 @@ const DashboardHeader = ({
               <select
                   value={selectedDashboardStore}
                   onChange={(e) => setSelectedDashboardStore(e.target.value)}
-                  className="flex-1 sm:flex-none px-4 py-2.5 border border-stone-200 rounded-xl text-sm font-bold text-stone-600 outline-none focus:border-amber-400 focus:ring-2 focus:ring-amber-100 bg-stone-50 hover:bg-white transition-all cursor-pointer min-w-[140px]"
+                  className="flex-1 sm:flex-none px-4 py-2.5 border border-stone-200 rounded-xl text-sm font-bold text-stone-600 outline-none focus:border-amber-400 focus:ring-2 focus:ring-amber-100 bg-stone-50 hover:bg-white transition-all cursor-pointer min-w-[150px]"
               >
                   <option value="" className="font-bold text-stone-800">
-                      {selectedDashboardManager || userRole === 'manager' ? "全區店家" : "顯示全區"}
+                    {isScopedOperator
+                      ? (hasDelegatedStores ? "全部可管理店家" : (userRole === 'manager' ? "全區店家" : "我的店家"))
+                      : (selectedDashboardManager ? "全區店家" : "顯示全區")}
                   </option>
-                  
-                  {(!selectedDashboardManager && userRole !== 'manager') ? (
-                      Object.entries(groupedStoresForFilter).map(([mgrName, stores]) => (
-                          <optgroup key={mgrName} label={`${mgrName} 區`} className="font-bold text-stone-400 bg-stone-50">
-                              {stores.map(s => (
-                                  <option key={s} value={s} className="font-medium text-stone-700 bg-white">{s}</option>
-                              ))}
-                          </optgroup>
-                      ))
-                  ) : (
-                      availableStoresForDropdown.map(s => (
+
+                  {isScopedOperator ? (
+                    <>
+                      {officialStoresForDropdown.length > 0 && (
+                        <optgroup label={userRole === 'manager' ? "正式轄區" : "正式店家"}>
+                          {officialStoresForDropdown.map((storeName) => (
+                            <option key={`official-${storeName}`} value={storeName}>{storeName}</option>
+                          ))}
+                        </optgroup>
+                      )}
+                      {delegatedStoresForDropdown.length > 0 && (
+                        <optgroup label="暫時托管">
+                          {delegatedStoresForDropdown.map((storeName) => (
+                            <option key={`delegated-${storeName}`} value={storeName}>
+                              {formatDelegationOptionLabel(storeName)}
+                            </option>
+                          ))}
+                        </optgroup>
+                      )}
+                    </>
+                  ) : (!selectedDashboardManager ? (
+                    Object.entries(groupedStoresForFilter).map(([mgrName, stores]) => (
+                      <optgroup key={mgrName} label={`${mgrName} 區`} className="font-bold text-stone-400 bg-stone-50">
+                        {stores.map(s => (
                           <option key={s} value={s} className="font-medium text-stone-700 bg-white">{s}</option>
-                      ))
-                  )}
+                        ))}
+                      </optgroup>
+                    ))
+                  ) : (
+                    availableStoresForDropdown.map(s => (
+                      <option key={s} value={s} className="font-medium text-stone-700 bg-white">{s}</option>
+                    ))
+                  ))}
               </select>
             </div>
           )}
