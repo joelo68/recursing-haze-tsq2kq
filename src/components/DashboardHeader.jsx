@@ -10,7 +10,8 @@ const DashboardHeader = ({
   groupedStoresForFilter, availableStoresForDropdown,
   officialStoresForDropdown = [], delegatedStoresForDropdown = [], delegatedStoreDetails = {}
 }) => {
-  const { userRole } = useContext(AppContext);
+  const { userRole, therapistModuleEnabled } = useContext(AppContext);
+  const isTherapistModuleEnabled = therapistModuleEnabled !== false;
 
   const hasDelegatedStores = delegatedStoresForDropdown.length > 0;
   const isScopedOperator = userRole === 'manager' || userRole === 'store';
@@ -138,7 +139,7 @@ const DashboardHeader = ({
             </div>
           </div>
 
-          {userRole !== 'therapist' && userRole !== 'trainer' && (
+          {isTherapistModuleEnabled && userRole !== 'therapist' && userRole !== 'trainer' && (
             <>
               <div className="hidden sm:block w-px h-10 bg-stone-100"></div>
               <div className="bg-stone-100/80 p-1 rounded-2xl flex shadow-inner w-fit border border-stone-200/50">

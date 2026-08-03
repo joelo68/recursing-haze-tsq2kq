@@ -11,7 +11,8 @@ import StorePerformanceView from "./StorePerformanceView";
 import TherapistPerformanceView from "./TherapistPerformanceView";
 
 const DashboardView = () => {
-  const { userRole } = useContext(AppContext);
+  const { userRole, therapistModuleEnabled } = useContext(AppContext);
+  const isTherapistModuleEnabled = therapistModuleEnabled !== false;
 
   // ★ 召喚完美封裝的外接大腦！
   const {
@@ -26,7 +27,7 @@ const DashboardView = () => {
     officialStoresForDropdown, delegatedStoresForDropdown, delegatedStoreDetails
   } = useDashboardStats();
 
-  if (!dashboardStats || !therapistStats) {
+  if (!dashboardStats || (isTherapistModuleEnabled && !therapistStats)) {
       return (
           <ViewWrapper>
               <div className="flex h-[50vh] items-center justify-center flex-col animate-in fade-in duration-300">
@@ -70,7 +71,7 @@ const DashboardView = () => {
         )}
         
         {/* 3. 零件三：人員績效視圖 */}
-        {viewMode === 'therapist' && (
+        {isTherapistModuleEnabled && viewMode === 'therapist' && (
            <TherapistPerformanceView 
               therapistStats={therapistStats} 
               brandInfo={brandInfo} 

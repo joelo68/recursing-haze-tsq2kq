@@ -16,12 +16,19 @@ const DailyView = () => {
     fmtMoney, fmtNum, userRole, currentUser, 
     managers, managerOrder, currentBrand,
     auditExclusions, handleUpdateAuditExclusions, showToast,
-    therapists, getCollectionPath,
+    therapists, getCollectionPath, therapistModuleEnabled,
     accessibleStores = [], officialStores = [], delegatedStores = [], delegationAccess = {},
     getActiveDelegationForStore
   } = useContext(AppContext);
 
-  const [viewMode, setViewMode] = useState((userRole === 'therapist' || userRole === 'trainer') ? 'therapist' : 'store');
+  const isTherapistModuleEnabled = therapistModuleEnabled !== false;
+  const [viewMode, setViewMode] = useState((isTherapistModuleEnabled && (userRole === 'therapist' || userRole === 'trainer')) ? 'therapist' : 'store');
+
+  useEffect(() => {
+    if (!isTherapistModuleEnabled && viewMode === 'therapist') {
+      setViewMode('store');
+    }
+  }, [isTherapistModuleEnabled, viewMode]);
 
   const [selectedDate, setSelectedDate] = useState(() => {
     const d = new Date();
@@ -54,36 +61,61 @@ const DailyView = () => {
   const [dailyTherapistReports, setDailyTherapistReports] = useState([]);
   const [isLoading, setIsLoading] = useState(false);
 
-  // ★ 核心優化：只抓取「選定日期 (selectedDate)」那一天的資料
+  // ★ 核心優化：只抓取「選定日期 (selectedDate)」那一天的資料。
+  // 品牌關閉管理師模組時，不建立 therapist_daily_reports 查詢。
   useEffect(() => {
     setIsLoading(true);
-    
-    // 查詢店務日報 (精準綁定日期)
+
+    let storeReady = false;
+    let therapistReady = !isTherapistModuleEnabled;
+    let unsubTherapist = null;
+
+    const finishLoadingIfReady = () => {
+      if (storeReady && therapistReady) setIsLoading(false);
+    };
+
     const storeQuery = query(
-      getCollectionPath("daily_reports"), 
+      getCollectionPath("daily_reports"),
       where("date", "==", selectedDate)
     );
-    
+
     const unsubStore = onSnapshot(storeQuery, (snapshot) => {
       setDailyStoreReports(snapshot.docs.map(d => d.data()));
+      storeReady = true;
+      finishLoadingIfReady();
+    }, (error) => {
+      console.error("讀取店務日報失敗:", error);
+      setDailyStoreReports([]);
+      storeReady = true;
+      finishLoadingIfReady();
     });
 
-    // 查詢管理師日報 (精準綁定日期)
-    const therapistQuery = query(
-      getCollectionPath("therapist_daily_reports"), 
-      where("date", "==", selectedDate)
-    );
+    if (isTherapistModuleEnabled) {
+      const therapistQuery = query(
+        getCollectionPath("therapist_daily_reports"),
+        where("date", "==", selectedDate)
+      );
 
-    const unsubTherapist = onSnapshot(therapistQuery, (snapshot) => {
-      setDailyTherapistReports(snapshot.docs.map(d => d.data()));
-      setIsLoading(false); // 兩個都抓完才解除載入狀態
-    });
+      unsubTherapist = onSnapshot(therapistQuery, (snapshot) => {
+        setDailyTherapistReports(snapshot.docs.map(d => d.data()));
+        therapistReady = true;
+        finishLoadingIfReady();
+      }, (error) => {
+        console.error("讀取管理師日報失敗:", error);
+        setDailyTherapistReports([]);
+        therapistReady = true;
+        finishLoadingIfReady();
+      });
+    } else {
+      setDailyTherapistReports([]);
+      finishLoadingIfReady();
+    }
 
     return () => {
       unsubStore();
-      unsubTherapist();
+      if (typeof unsubTherapist === 'function') unsubTherapist();
     };
-  }, [selectedDate, currentBrand, getCollectionPath]);
+  }, [selectedDate, currentBrand, getCollectionPath, isTherapistModuleEnabled]);
 
   const { brandInfo, brandPrefix } = useMemo(() => {
     let id = "CYJ", name = "CYJ"; 
@@ -380,7 +412,7 @@ const DailyView = () => {
                 </div>
               </div>
 
-              {userRole !== 'therapist' && userRole !== 'trainer' && (
+              {isTherapistModuleEnabled && userRole !== 'therapist' && userRole !== 'trainer' && (
                 <>
                   <div className="hidden sm:block w-px h-10 bg-stone-100"></div>
                   <div className="bg-stone-100/80 p-1 rounded-2xl flex shadow-inner w-fit border border-stone-200/50">
@@ -568,7 +600,7 @@ const DailyView = () => {
             )}
 
             {/* 人員績效視圖 */}
-            {viewMode === 'therapist' && (
+            {isTherapistModuleEnabled && viewMode === 'therapist' && (
               <div className="space-y-6 animate-in fade-in slide-in-from-bottom-4 duration-500 w-full min-w-0">
                 <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-4">
                   <MiniKpiCard title="單日管理師總業績" value={fmtMoney(therapistDailyData.totals.totalRev)} icon={DollarSign} color={{bg: 'bg-indigo-50', text: 'text-indigo-600'}} />
