@@ -25,8 +25,9 @@ const safeGetDateStr = (val) => {
 const AuditView = ({ auditType: controlledAuditType, setAuditType: setControlledAuditType } = {}) => {
   const {
     managers, managerOrder, showToast, budgets, selectedYear, selectedMonth, rawData,
-    therapists, therapistReports, therapistSchedules, userRole, therapistTargets,
-    auditExclusions = [], handleUpdateAuditExclusions, currentBrand, therapistModuleEnabled
+    therapists, therapistReports, therapistSchedules, userRole, currentUser, therapistTargets,
+    auditExclusions = [], handleUpdateAuditExclusions, currentBrand, therapistModuleEnabled,
+    getActiveDelegationForStore, delegatedStores = []
   } = useContext(AppContext);
 
   const isTherapistModuleEnabled = therapistModuleEnabled !== false;
@@ -115,6 +116,15 @@ const AuditView = ({ auditType: controlledAuditType, setAuditType: setControlled
     );
     return found?.[0] || "未分區";
   }, [managers, managerOrder, cleanStoreName, getTherapistStore]);
+
+  const getResponsibilityLabel = useCallback((officialManager = "未分區", storeName = "", date = checkDate) => {
+    const delegation = typeof getActiveDelegationForStore === "function"
+      ? getActiveDelegationForStore(storeName, date, "receiveAlerts")
+      : null;
+    return delegation?.delegateName
+      ? `${officialManager} 區｜目前代理：${delegation.delegateName}`
+      : `${officialManager} 區`;
+  }, [getActiveDelegationForStore, checkDate]);
 
   const isTherapistMatch = useCallback((str, t) => {
     if (!str || !t) return false;
@@ -407,7 +417,12 @@ const AuditView = ({ auditType: controlledAuditType, setAuditType: setControlled
                   if (auditExclusions.includes(s) || auditExclusions.includes(cleanStoreName(s))) return;
                   const name = `${brandPrefix}${s}店`, key = `${name}_${parseInt(selectedYear)}_${parseInt(selectedMonth)}`;
                   const b = budgets[key];
-                  if (!b || (!b.cashTarget && !b.accrualTarget)) { missing.push(name); if(!missingByManager[mgr]) missingByManager[mgr]=[]; missingByManager[mgr].push(name); }
+                  if (!b || (!b.cashTarget && !b.accrualTarget)) {
+                    missing.push(name);
+                    const responsibility = getResponsibilityLabel(mgr, s, `${selectedYear}-${String(selectedMonth).padStart(2, "0")}-01`);
+                    if(!missingByManager[responsibility]) missingByManager[responsibility]=[];
+                    missingByManager[responsibility].push(name);
+                  }
               });
           });
           return { missing, missingByManager };
@@ -441,7 +456,8 @@ const AuditView = ({ auditType: controlledAuditType, setAuditType: setControlled
                   const storeName = getTherapistStore(t);
                   const name = `${displayName}${storeName ? ` (${storeName}店)` : ""}`;
                   const mgr = getTherapistManager(t);
-                  missing.push(name); if(!missingByManager[mgr]) missingByManager[mgr]=[]; missingByManager[mgr].push(name);
+                  const responsibility = getResponsibilityLabel(mgr, storeName, `${selectedYear}-${String(selectedMonth).padStart(2, "0")}-01`);
+                  missing.push(name); if(!missingByManager[responsibility]) missingByManager[responsibility]=[]; missingByManager[responsibility].push(name);
               }
           });
           return { missing, missingByManager };
@@ -456,18 +472,22 @@ const AuditView = ({ auditType: controlledAuditType, setAuditType: setControlled
               const t = validTherapistsForMonth.find(v => nameStr.includes(getTherapistDisplayName(v)));
               if (t) mgr = getTherapistManager(t);
           }
-          if (!missingByManager[mgr]) missingByManager[mgr] = [];
-          missingByManager[mgr].push(nameStr);
+          const storeForDelegation = auditType === 'daily'
+            ? nameStr.replace(/^(CYJ|安妞|伊啵)/, '').replace(/店$/, '')
+            : (validTherapistsForMonth.find(v => nameStr.includes(getTherapistDisplayName(v))) ? getTherapistStore(validTherapistsForMonth.find(v => nameStr.includes(getTherapistDisplayName(v)))) : "");
+          const responsibility = getResponsibilityLabel(mgr, storeForDelegation, checkDate);
+          if (!missingByManager[responsibility]) missingByManager[responsibility] = [];
+          missingByManager[responsibility].push(nameStr);
       });
 
       return { missing, missingByManager };
-  }, [auditType, checkDate, dailyMatrix, managers, managerOrder, budgets, therapistTargets, selectedYear, selectedMonth, auditExclusions, brandPrefix, cleanStoreName, validTherapistsForMonth, isTherapistMatch, isTargetInSelectedMonth, getTherapistMonthlyTarget, getTherapistDisplayName, getTherapistStore, getTherapistManager]);
+  }, [auditType, checkDate, dailyMatrix, managers, managerOrder, budgets, therapistTargets, selectedYear, selectedMonth, auditExclusions, brandPrefix, cleanStoreName, validTherapistsForMonth, isTherapistMatch, isTargetInSelectedMonth, getTherapistMonthlyTarget, getTherapistDisplayName, getTherapistStore, getTherapistManager, getResponsibilityLabel]);
 
   const calendarStores = auditType.includes('therapist') ? activeTherapistsForCalendar : activeStoresForCalendar;
 
   const handleCopy = () => {
     let text = `未完成名單(${checkDate})：\n`;
-    Object.entries(activeData.missingByManager).forEach(([mgr, list]) => { text += `${mgr}區：${list.join("、")}\n`; });
+    Object.entries(activeData.missingByManager).forEach(([mgr, list]) => { text += `${mgr}：${list.join("、")}\n`; });
     navigator.clipboard.writeText(text);
     showToast("已複製", "success");
   };
@@ -511,6 +531,12 @@ const AuditView = ({ auditType: controlledAuditType, setAuditType: setControlled
           </div>
         </div>
         
+        {delegatedStores.length > 0 && (
+          <div className="mb-4 rounded-2xl border border-sky-100 bg-sky-50 p-4 text-sm text-sky-700">
+            <span className="font-black">代理責任已套用：</span>缺報與目標缺漏仍按正式區域分組，標題會同步標示目前代理主管。
+          </div>
+        )}
+
         <div className="border border-rose-100 rounded-3xl overflow-hidden shadow-sm mb-8">
           <div className="bg-rose-50 px-6 py-4 flex justify-between items-center">
             <h4 className="font-bold text-rose-600 flex items-center gap-2"><AlertCircle size={20} /> 未完成名單 <span className="bg-white px-2 py-0.5 rounded-full text-xs border border-rose-200">{activeData.missing.length}</span></h4>
@@ -519,7 +545,7 @@ const AuditView = ({ auditType: controlledAuditType, setAuditType: setControlled
           <div className="p-6 bg-white grid grid-cols-1 md:grid-cols-3 gap-4">
             {Object.entries(activeData.missingByManager).map(([mgr, list]) => (
               <div key={mgr} className="bg-stone-50 p-4 rounded-2xl border border-stone-100">
-                <div className="font-bold text-stone-600 mb-2">{mgr} 區</div>
+                <div className="font-bold text-stone-600 mb-2">{mgr}</div>
                 <div className="flex flex-wrap gap-2">
                   {list.map((s, idx) => (<span key={idx} className="bg-white px-2 py-1 rounded-lg text-xs border border-stone-200 text-stone-600 flex items-center gap-1"><UserX size={10} className="text-rose-400"/>{s}</span>))}
                 </div>

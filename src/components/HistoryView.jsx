@@ -24,7 +24,8 @@ import { formatLocalYYYYMMDD, toStandardDateFormat, sortStoreNames, sortStoresBy
 const HistoryView = () => {
   const { 
     showToast, managers, managerOrder, userRole, currentUser, logActivity, 
-    getCollectionPath, currentBrand, therapistModuleEnabled 
+    getCollectionPath, currentBrand, therapistModuleEnabled, accessibleStores = [],
+    delegatedStores = [], canEditStoreReport, getActiveDelegationForStore
   } = useContext(AppContext);
 
   const isTherapistModuleEnabled = therapistModuleEnabled !== false;
@@ -116,11 +117,9 @@ const HistoryView = () => {
   }, [brandPrefix, cleanStoreName]);
   
   const myAllowedStores = useMemo(() => {
-    if (userRole === 'director' || userRole === 'trainer') return null; 
-    if (userRole === 'manager' && currentUser) return (managers[currentUser.name] || []).map(s => s.trim());
-    if (userRole === 'store' && currentUser) {
-      const stores = currentUser.stores || [currentUser.storeName];
-      return stores.map(s => cleanStoreName(s));
+    if (userRole === 'director' || userRole === 'trainer' || userRole === 'master') return null;
+    if ((userRole === 'manager' || userRole === 'store') && currentUser) {
+      return (accessibleStores || []).map(cleanStoreName).filter(Boolean);
     }
     if (userRole === 'therapist' && currentUser) {
       const storeValue =
@@ -131,7 +130,7 @@ const HistoryView = () => {
       return [cleanStoreName(storeValue)].filter(Boolean);
     }
     return [];
-  }, [userRole, currentUser, managers, managerOrder, cleanStoreName]);
+  }, [userRole, currentUser, accessibleStores, cleanStoreName]);
   
   const allStores = useMemo(() => {
     const baseList = (myAllowedStores !== null) ? myAllowedStores : Object.values(managers).flat();
@@ -311,7 +310,17 @@ const HistoryView = () => {
     setCurrentPage(1);
   }, [filterStore, activeTab]);
 
+  const canModifyRow = useCallback((row, permissionKey = "editHistory") => {
+    if (activeTab === "therapist") return userRole === "therapist" ? isCurrentTherapistReport(row) : true;
+    if (typeof canEditStoreReport !== "function") return true;
+    return canEditStoreReport(getStoreName(row), permissionKey);
+  }, [activeTab, userRole, isCurrentTherapistReport, canEditStoreReport]);
+
   const startEdit = (row) => { 
+    if (!canModifyRow(row, "editHistory")) {
+      showToast("你目前沒有這筆日報的歷史修正權限", "error");
+      return;
+    }
     setEditId(row.id); 
     const safeDate = String(row.date || "").replace(/\//g, "-");
     setEditForm({ ...row, date: safeDate }); 
@@ -333,6 +342,11 @@ const HistoryView = () => {
   };
   
   const saveEdit = async () => {
+    const rowForPermission = (activeTab === "store" ? storeRawData : therapistRawData).find((item) => item.id === editId);
+    if (!canModifyRow(rowForPermission, "editHistory")) {
+      showToast("你目前沒有這筆日報的歷史修正權限", "error");
+      return;
+    }
     try {
       const collectionName = activeTab === "store" ? "daily_reports" : "therapist_daily_reports";
       const docRef = doc(getCollectionPath(collectionName), editId);
@@ -344,6 +358,15 @@ const HistoryView = () => {
       cleanData = { ...editForm, ...cleanData, date: finalSafeDate };
 
       const originalRow = (activeTab === "store" ? storeRawData : therapistRawData).find((item) => item.id === editId);
+      const rowStoreCore = cleanStoreName(getStoreName(cleanData));
+      const isDelegatedOperation = activeTab === "store" && (delegatedStores || []).map(cleanStoreName).includes(rowStoreCore);
+      const activeDelegation = isDelegatedOperation && typeof getActiveDelegationForStore === "function"
+        ? getActiveDelegationForStore(getStoreName(cleanData), null, "editHistory")
+        : null;
+      cleanData.operatedBy = getOperatorName();
+      cleanData.actingManager = activeDelegation?.delegateName || cleanData.actingManager || "";
+      cleanData.delegationId = activeDelegation?.id || cleanData.delegationId || "";
+      cleanData.managementMode = activeDelegation ? "delegated" : (cleanData.managementMode || "official");
 
       await updateDoc(docRef, cleanData);
       // 後端 onWrite 會辨識歷史月份與實際欄位變更，並以固定 ID 建立重算 Queue。
@@ -372,10 +395,14 @@ const HistoryView = () => {
   };
 
   const handleDelete = async (id) => {
+    const sourceData = (activeTab === "store" ? storeRawData : therapistRawData).find((item) => item.id === id);
+    if (!canModifyRow(sourceData, "deleteReports")) {
+      showToast("你目前沒有刪除這筆日報的權限", "error");
+      return;
+    }
     if (!confirm("確定刪除?")) return;
     try {
       const collectionName = activeTab === "store" ? "daily_reports" : "therapist_daily_reports";
-      const sourceData = (activeTab === "store" ? storeRawData : therapistRawData).find((item) => item.id === id);
 
       await deleteDoc(doc(getCollectionPath(collectionName), id));
       // 後端 onWrite 會以刪除前日期判斷歷史月份並建立唯一重算 Queue。
@@ -457,6 +484,12 @@ const HistoryView = () => {
               )}
            </div>
         </div>
+
+        {delegatedStores.length > 0 && (
+          <div className="rounded-2xl border border-sky-100 bg-sky-50/80 px-4 py-3 text-sm font-bold text-sky-800">
+            目前有 {delegatedStores.length} 間代理店家可依授權查看或修正；正式績效歸屬仍維持原主管。
+          </div>
+        )}
 
         <Card className="!overflow-visible z-30 relative flex flex-col h-full">
           <div className="space-y-4 w-full flex-1 flex flex-col">
@@ -584,7 +617,7 @@ const HistoryView = () => {
                               </td>
                               {activeTab === "store" ? ( STORE_FIELDS.map(f => (<td key={f.key} className="p-4 text-right">{isEditing ? (<input type="number" value={editForm[f.key]} onChange={(e)=>handleEditChange(f.key,e.target.value)} readOnly={f.key === 'accrual'} className={`border rounded w-20 text-right px-1 outline-none focus:border-amber-400 ${f.isNegative ? "text-rose-500" : ""} ${f.key === 'accrual' ? 'bg-stone-100 text-stone-500' : ''}`}/>) : (<span className={f.isNegative ? "text-rose-500 font-bold" : ""}>{fmt(row[f.key])}</span>)}</td>)) ) : ( <> <td className="p-4 font-bold">{row.therapistName}</td>{THERAPIST_FIELDS.map(f => (<td key={f.key} className="p-4 text-right">{isEditing ? (<input type="number" value={editForm[f.key]} onChange={(e)=>handleEditChange(f.key,e.target.value)} readOnly={f.readOnly} className={`border rounded w-20 text-right px-1 outline-none focus:border-indigo-400 ${f.isNegative ? "text-rose-500" : f.isHighlight ? "font-bold text-indigo-600" : ""} ${f.readOnly ? "bg-stone-100 text-stone-500 cursor-not-allowed" : ""}`}/>) : (<span className={f.isNegative ? "text-rose-500 font-bold" : f.isHighlight ? "text-indigo-600 font-bold" : ""}>{fmt(row[f.key])}</span>)}</td>))}</> )}
                               <td className="p-4 text-center md:sticky md:right-0 bg-white group-hover:bg-stone-50 md:z-10 border-l border-stone-100 shadow-[-4px_0_8px_-2px_rgba(0,0,0,0.05)]">
-                                {isEditing ? ( <div className="flex gap-2 justify-center"><button onClick={saveEdit} className="p-1.5 bg-emerald-100 text-emerald-600 rounded hover:bg-emerald-200"><Save size={16}/></button><button onClick={cancelEdit} className="p-1.5 bg-stone-100 text-stone-500 rounded hover:bg-stone-200"><X size={16}/></button></div> ) : ( <div className="flex gap-2 justify-center"><button onClick={()=>startEdit(row)} className="p-1.5 hover:bg-amber-50 text-amber-500 rounded transition-colors"><Edit2 size={16}/></button><button onClick={()=>handleDelete(row.id)} className="p-1.5 hover:bg-rose-50 text-rose-500 rounded transition-colors"><Trash2 size={16}/></button></div> )}
+                                {isEditing ? ( <div className="flex gap-2 justify-center"><button onClick={saveEdit} className="p-1.5 bg-emerald-100 text-emerald-600 rounded hover:bg-emerald-200"><Save size={16}/></button><button onClick={cancelEdit} className="p-1.5 bg-stone-100 text-stone-500 rounded hover:bg-stone-200"><X size={16}/></button></div> ) : ( <div className="flex gap-2 justify-center">{canModifyRow(row, "editHistory") && <button onClick={()=>startEdit(row)} className="p-1.5 hover:bg-amber-50 text-amber-500 rounded transition-colors"><Edit2 size={16}/></button>}{canModifyRow(row, "deleteReports") && <button onClick={()=>handleDelete(row.id)} className="p-1.5 hover:bg-rose-50 text-rose-500 rounded transition-colors"><Trash2 size={16}/></button>}{!canModifyRow(row, "editHistory") && !canModifyRow(row, "deleteReports") && <span className="text-xs font-bold text-stone-300">僅查看</span>}</div> )}
                               </td>
                             </tr>
                           );

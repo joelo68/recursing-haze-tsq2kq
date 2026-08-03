@@ -3006,18 +3006,140 @@ function getOrgStructureDocRef(brandId) {
     return getBrandRootRef(brandId).collection("settings").doc("org_structure");
 }
 
+function getManagementDelegationsCollectionRef(brandId) {
+    // 與前端 getCollectionPath("management_delegations") 完全一致。
+    return getSummaryCollection(brandId, "management_delegations");
+}
+
+function normalizeTelegramDelegation(raw = {}, id = "") {
+    const normalizeDate = (value) => normalizeTelegramAgentDate(value || "");
+    const storeNames = Array.isArray(raw.storeNames)
+        ? raw.storeNames
+        : (Array.isArray(raw.stores) ? raw.stores : []);
+    return {
+        ...raw,
+        id: String(id || raw.id || "").trim(),
+        type: raw.type === "store_manager" ? "store_manager" : "regional_manager",
+        principalRole: String(raw.principalRole || raw.ownerRole || "manager").trim().toLowerCase(),
+        principalId: String(raw.principalId || raw.ownerId || "").trim(),
+        principalName: String(raw.principalName || raw.ownerName || "").trim(),
+        delegateRole: String(raw.delegateRole || raw.proxyRole || raw.principalRole || "manager").trim().toLowerCase(),
+        delegateId: String(raw.delegateId || raw.proxyId || "").trim(),
+        delegateName: String(raw.delegateName || raw.proxyName || "").trim(),
+        scopeMode: raw.scopeMode === "selected_stores" ? "selected_stores" : "all_assigned_stores",
+        storeNames: [...new Set(storeNames.map(normalizeSummaryCoreName).filter(Boolean))],
+        principalStoreSnapshot: [...new Set((Array.isArray(raw.principalStoreSnapshot) ? raw.principalStoreSnapshot : []).map(normalizeSummaryCoreName).filter(Boolean))],
+        startDate: normalizeDate(raw.startDate),
+        endDate: normalizeDate(raw.endDate),
+        status: String(raw.status || "active").trim().toLowerCase(),
+        permissions: {
+            viewOperations: raw.permissions?.viewOperations !== false,
+            editReports: raw.permissions?.editReports !== false,
+            editHistory: raw.permissions?.editHistory !== false,
+            deleteReports: raw.permissions?.deleteReports === true,
+            receiveAlerts: raw.permissions?.receiveAlerts !== false,
+            manageTasks: raw.permissions?.manageTasks !== false,
+            editTargets: raw.permissions?.editTargets === true,
+            editOrganization: false,
+        },
+        endedAtText: String(raw.endedAtText || ""),
+        endedEarly: raw.endedEarly === true,
+    };
+}
+
+function isTelegramDelegationActive(item = {}, dateText = getTelegramAgentTaipeiNow().todayStr) {
+    const delegation = normalizeTelegramDelegation(item, item?.id);
+    if (!["active", "scheduled"].includes(delegation.status)) return false;
+    if (delegation.endedAtText || delegation.endedEarly) return false;
+    if (!delegation.startDate || !delegation.endDate) return false;
+    return delegation.startDate <= dateText && dateText <= delegation.endDate;
+}
+
+function resolveTelegramDelegationStores(item = {}, managers = {}) {
+    const delegation = normalizeTelegramDelegation(item, item?.id);
+    if (delegation.scopeMode === "selected_stores" && delegation.storeNames.length) {
+        return delegation.storeNames;
+    }
+    if (delegation.principalRole === "manager" || delegation.type === "regional_manager") {
+        const managerName = Object.keys(managers || {}).find(
+            (name) => normalizeTelegramAgentManagerName(name) === normalizeTelegramAgentManagerName(delegation.principalName)
+        );
+        if (managerName) {
+            const stores = (managers[managerName] || []).map(normalizeSummaryCoreName).filter(Boolean);
+            if (stores.length) return [...new Set(stores)];
+        }
+    }
+    return delegation.principalStoreSnapshot.length
+        ? delegation.principalStoreSnapshot
+        : delegation.storeNames;
+}
+
+async function loadTelegramAgentDelegations(brandId, managers, ctx) {
+    const ref = getManagementDelegationsCollectionRef(brandId);
+    const result = await queryTelegramAgentDocs(
+        ref.where("status", "in", ["active", "scheduled"]).limit(200),
+        `query:${ref.path}:status=active|scheduled`,
+        ctx,
+        "management_delegations",
+        { brandId, sourcePath: ref.path },
+        120
+    );
+    const all = (result.rows || []).map((row) => normalizeTelegramDelegation(row, row.id));
+    const active = all
+        .filter((item) => isTelegramDelegationActive(item))
+        .map((item) => ({ ...item, resolvedStores: resolveTelegramDelegationStores(item, managers) }))
+        .filter((item) => item.resolvedStores.length > 0)
+        .sort((a, b) => String(a.endDate).localeCompare(String(b.endDate)) || String(a.id).localeCompare(String(b.id)));
+    return { all, active, sourcePath: ref.path };
+}
+
 async function loadTelegramAgentOrgProfile(brandId, ctx) {
     const ref = getOrgStructureDocRef(brandId);
     const result = await readTelegramAgentDoc(ref, ctx, "org_structure", { brandId, sourcePath: ref.path }, 300);
     const managers = result.exists ? (result.data?.managers || {}) : {};
     const storeOwner = {};
+    const managementStoresByManager = {};
     Object.entries(managers).forEach(([managerName, stores]) => {
-        (Array.isArray(stores) ? stores : []).forEach((store) => {
-            const core = normalizeSummaryCoreName(store);
+        const normalizedStores = [...new Set((Array.isArray(stores) ? stores : []).map(normalizeSummaryCoreName).filter(Boolean))];
+        managementStoresByManager[managerName] = [...normalizedStores];
+        normalizedStores.forEach((core) => {
             if (core) storeOwner[core] = managerName;
         });
     });
-    return { managers, stores: Object.keys(storeOwner), storeOwner, sourcePath: ref.path };
+
+    const delegationState = await loadTelegramAgentDelegations(brandId, managers, ctx);
+    const actingManagerByStore = {};
+    const actingDelegationByStore = {};
+    const delegatedStoresByManager = {};
+    delegationState.active.forEach((delegation) => {
+        if (!delegation.delegateName) return;
+        if (!delegatedStoresByManager[delegation.delegateName]) delegatedStoresByManager[delegation.delegateName] = [];
+        if (!managementStoresByManager[delegation.delegateName]) managementStoresByManager[delegation.delegateName] = [];
+        delegation.resolvedStores.forEach((storeCore) => {
+            // 衝突資料以較早到期的安排優先，並保留正式組織歸屬不變。
+            if (!actingManagerByStore[storeCore]) {
+                actingManagerByStore[storeCore] = delegation.delegateName;
+                actingDelegationByStore[storeCore] = delegation;
+            }
+            if (delegation.permissions?.viewOperations !== false) {
+                if (!delegatedStoresByManager[delegation.delegateName].includes(storeCore)) delegatedStoresByManager[delegation.delegateName].push(storeCore);
+                if (!managementStoresByManager[delegation.delegateName].includes(storeCore)) managementStoresByManager[delegation.delegateName].push(storeCore);
+            }
+        });
+    });
+
+    return {
+        managers,
+        stores: Object.keys(storeOwner),
+        storeOwner,
+        sourcePath: ref.path,
+        activeDelegations: delegationState.active,
+        delegationSourcePath: delegationState.sourcePath,
+        actingManagerByStore,
+        actingDelegationByStore,
+        delegatedStoresByManager,
+        managementStoresByManager,
+    };
 }
 
 function getAuditExclusionsDocRef(brandId) {
@@ -3324,12 +3446,25 @@ async function getStorePerformance(startDate, endDate, storeName = null, brandNa
         const loaded = useMonthSummary
             ? await loadTelegramAgentStoreMonth(brandId, start.slice(0, 7), ctx)
             : await loadTelegramAgentRawStoreRange(brandId, start, end, ctx);
-        const policyRows = filterTelegramAgentRowsByPolicies(loaded.rows, brandId, ctx, policyScopes);
+        const org = await loadTelegramAgentOrgProfile(brandId, ctx);
+        const policyRows = filterTelegramAgentRowsByPolicies(loaded.rows, brandId, ctx, policyScopes)
+            .map((row) => {
+                const storeCore = normalizeSummaryCoreName(row.storeName);
+                const delegation = org.actingDelegationByStore?.[storeCore] || null;
+                return {
+                    ...row,
+                    manager: org.storeOwner?.[storeCore] || row.manager || "未分配",
+                    actingManager: delegation?.delegateName || "",
+                    delegationId: delegation?.id || "",
+                    delegationEndDate: delegation?.endDate || "",
+                };
+            });
         policyRows.forEach((row) => allRows.push(row));
         sourceMeta.push({
             brand: getTelegramAgentBrandLabel(brandId),
             source: loaded.source,
             updatedAtText: loaded.updatedAtText,
+            activeDelegationCount: Array.isArray(org.activeDelegations) ? org.activeDelegations.length : 0,
             policyExcludedCount: Math.max(0, loaded.rows.length - policyRows.length),
         });
     }
@@ -3585,14 +3720,27 @@ async function getMissingReports(startDate, endDate, brandName = null, agentCont
         const expected = filterTelegramAgentStoresByPolicies(officialStores, brandId, ctx, policyScopes);
         const submittedExpectedCount = expected.filter((store) => submitted.has(store)).length;
         const missing = expected.filter((store) => !submitted.has(store));
+        const missingDetails = missing.map((storeName) => {
+            const delegation = org.actingDelegationByStore?.[storeName] || null;
+            return {
+                storeName,
+                officialManager: org.storeOwner?.[storeName] || "未分配",
+                actingManager: delegation?.permissions?.receiveAlerts !== false ? (delegation?.delegateName || "") : "",
+                delegationId: delegation?.id || "",
+                delegationEndDate: delegation?.endDate || "",
+            };
+        });
         results.push({
             brand: getTelegramAgentBrandLabel(brandId),
+            brandId,
             expectedCount: expected.length,
             submittedCount: submittedExpectedCount,
             missingCount: missing.length,
             missingStores: missing,
+            missingDetails,
+            activeDelegationCount: Array.isArray(org.activeDelegations) ? org.activeDelegations.length : 0,
             excludedStoreCount: Math.max(0, normalizeTelegramAgentStoreNames(org.stores || []).length - expected.length),
-            source: "org_structure + audit_exclusions + telegram_agent_policies + daily_reports_scoped",
+            source: "org_structure + management_delegations + audit_exclusions + telegram_agent_policies + daily_reports_scoped",
         });
     }
     return { query_range: `${start} ~ ${end}`, brands: results };
@@ -3672,7 +3820,7 @@ async function getManagerPerformance(yearMonth, managerName = null, brandName = 
         for (const brand of BRANDS) {
             const org = await loadTelegramAgentOrgProfile(brand.id, ctx);
             orgCache[brand.id] = org;
-            const hasManager = Object.keys(org.managers || {}).some((name) => {
+            const hasManager = Object.keys(org.managementStoresByManager || org.managers || {}).some((name) => {
                 const normalized = normalizeTelegramAgentManagerName(name);
                 return normalized === managerQuery || normalized.includes(managerQuery) || managerQuery.includes(normalized);
             });
@@ -3682,6 +3830,7 @@ async function getManagerPerformance(yearMonth, managerName = null, brandName = 
     }
 
     const allRows = [];
+    const managementScopes = [];
     const brandQuality = [];
 
     for (const brandId of brands) {
@@ -3887,8 +4036,78 @@ async function getManagerPerformance(yearMonth, managerName = null, brandName = 
             row.rankNote = row.rankingEligible
                 ? `排名以同品牌 ${eligibleRows.length} 位資料完整區長計算。`
                 : `本區資料不完整，不提供名次：${row.dataQuality.rankingBlockedReason}`;
+            const delegatedStores = org.delegatedStoresByManager?.[row.manager] || [];
+            row.delegatedStoreNames = [...delegatedStores];
+            row.temporaryManagementActive = delegatedStores.length > 0;
             allRows.push(row);
         });
+
+        // 代理管理範圍獨立呈現，不把受託店家的績效併入正式區長排名。
+        if (managerQuery) {
+            const managementManagerName = Object.keys(org.managementStoresByManager || {}).find((name) => {
+                const normalized = normalizeTelegramAgentManagerName(name);
+                return normalized === managerQuery || normalized.includes(managerQuery) || managerQuery.includes(normalized);
+            });
+            if (managementManagerName) {
+                const officialStoreSet = new Set(
+                    ((org.managers || {})[managementManagerName] || []).map(normalizeSummaryCoreName).filter(Boolean)
+                );
+                const accessibleStores = filterTelegramAgentStoresByPolicies(
+                    org.managementStoresByManager?.[managementManagerName] || [],
+                    brandId,
+                    ctx,
+                    ["telegram_analysis", "ranking", "brand_totals"]
+                );
+                const delegatedStores = accessibleStores.filter((storeCore) => !officialStoreSet.has(storeCore));
+                if (delegatedStores.length > 0) {
+                    const storeDetails = accessibleStores.map((storeCore) => {
+                        const row = rowByCore[storeCore] || null;
+                        const target = targetResult.map[storeCore] || {};
+                        const budget = Number(row?.budget || target.cashTarget || 0);
+                        const cash = Number(row?.cash || 0);
+                        const delegation = org.actingDelegationByStore?.[storeCore] || null;
+                        return {
+                            storeName: storeCore,
+                            scopeType: officialStoreSet.has(storeCore) ? "official" : "delegated",
+                            officialManager: org.storeOwner?.[storeCore] || "未分配",
+                            actingManager: org.actingManagerByStore?.[storeCore] || "",
+                            delegationId: delegation?.id || "",
+                            delegationEndDate: delegation?.endDate || "",
+                            cash,
+                            accrual: Number(row?.accrual || 0),
+                            budget,
+                            cashAchievementRate: budget > 0 ? Number(((cash / budget) * 100).toFixed(1)) : null,
+                            hasReportData: Boolean(row),
+                            hasTargetData: budget > 0,
+                        };
+                    });
+                    const totals = storeDetails.reduce((acc, row) => {
+                        acc.cash += Number(row.cash || 0);
+                        acc.accrual += Number(row.accrual || 0);
+                        acc.budget += Number(row.budget || 0);
+                        if (row.hasReportData) acc.reportedStoreCount += 1;
+                        if (row.hasTargetData) acc.targetedStoreCount += 1;
+                        return acc;
+                    }, { cash: 0, accrual: 0, budget: 0, reportedStoreCount: 0, targetedStoreCount: 0 });
+                    managementScopes.push({
+                        manager: managementManagerName,
+                        brand: getTelegramAgentBrandLabel(brandId),
+                        brandId,
+                        scopeType: "official_plus_temporary_delegation",
+                        officialStores: [...officialStoreSet],
+                        delegatedStores,
+                        accessibleStores,
+                        storeDetails,
+                        ...totals,
+                        cashAchievementRate: totals.budget > 0 ? Number(((totals.cash / totals.budget) * 100).toFixed(1)) : null,
+                        expectedProgress,
+                        progressGap: totals.budget > 0 ? Number((((totals.cash / totals.budget) * 100) - expectedProgress).toFixed(1)) : null,
+                        rankingEligible: false,
+                        rankingNote: "代理管理範圍只供當期管理與責任追蹤，不併入正式組織排名。",
+                    });
+                }
+            }
+        }
 
         const brandExpectedStores = formalRows.reduce((sum, row) => sum + row.expectedStoreCount, 0);
         const brandReportedStores = formalRows.reduce((sum, row) => sum + row.reportedStoreCount, 0);
@@ -3923,6 +4142,10 @@ async function getManagerPerformance(yearMonth, managerName = null, brandName = 
         yearMonth: ym,
         expectedProgress,
         managers: filtered,
+        managementScopes,
+        delegation_note: managementScopes.length
+            ? "managementScopes 為正式轄區加上目前有效代理範圍；只供管理檢視，不參與正式區長排名。"
+            : "目前查詢對象沒有有效代理店家；正式排名仍依 org_structure 計算。",
         brandDataQuality: brandQuality,
         ranking_scope: "只有正式組織架構、日報與現金目標皆完整的區長才參與同品牌排名。achievementRank／brandRank=現金業績達成率排名；cashRank=現金總業績排名；另提供進度差距、新客、締結率與保養品占比排名。",
         data_quality_rule: "rankingEligible=false 時禁止宣稱第幾名，必須先說明缺少哪些店家日報或目標。",
@@ -4057,11 +4280,15 @@ async function getOperationalAlerts(yearMonth, brandName = null, limit = 10, age
                 `本月來客 ${traffic} 人次`
             );
 
+            const activeDelegation = org.actingDelegationByStore?.[storeCore] || null;
             const baseRow = {
                 brand: getTelegramAgentBrandLabel(brandId),
                 brandId,
                 storeName: storeCore,
                 manager: org.storeOwner[storeCore] || row?.manager || "未分配",
+                actingManager: activeDelegation?.permissions?.receiveAlerts !== false ? (activeDelegation?.delegateName || "") : "",
+                taskOwnerName: activeDelegation?.permissions?.manageTasks !== false ? (activeDelegation?.delegateName || "") : "",
+                delegationId: activeDelegation?.id || "",
                 cash,
                 budget,
                 cashAchievementRate: achievement,
@@ -4102,6 +4329,18 @@ async function getOperationalAlerts(yearMonth, brandName = null, limit = 10, age
         alerts.push(...brandAlerts);
         dataIssues.push(...brandDataIssues);
 
+        const todayText = getTelegramAgentTaipeiNow().todayStr;
+        const delegationsExpiringSoon = (org.activeDelegations || [])
+            .map((delegation) => ({
+                delegationId: delegation.id,
+                principalName: delegation.principalName,
+                delegateName: delegation.delegateName,
+                endDate: delegation.endDate,
+                daysRemaining: getTelegramAgentDateDiffDays(todayText, delegation.endDate),
+                storeNames: delegation.resolvedStores || [],
+            }))
+            .filter((item) => item.daysRemaining >= 0 && item.daysRemaining <= 3);
+
         const dataQuality = buildTelegramAgentDataQuality({
             expectedStoreCount: activeStoreCores.length,
             reportedStoreCount,
@@ -4138,6 +4377,11 @@ async function getOperationalAlerts(yearMonth, brandName = null, limit = 10, age
             source: loaded.source,
             targetSource: targetResult.source,
             orgSourcePath: org.sourcePath,
+            delegationSourcePath: org.delegationSourcePath || "",
+            activeDelegationCount: Array.isArray(org.activeDelegations) ? org.activeDelegations.length : 0,
+            delegatedStoreCount: Object.keys(org.actingManagerByStore || {}).length,
+            delegationExpiryReminderCount: delegationsExpiringSoon.length,
+            delegationsExpiringSoon,
             auditExclusionsSourcePath: exclusions.sourcePath,
         });
     }
@@ -5609,6 +5853,7 @@ function formatTelegramAgentActiveAlertMessage(result, ctx, todayStr, brandProfi
             const icon = row.severity === "critical" ? "🔴" : "🟠";
             const storeRate = row.cashAchievementRate === null ? "無現金目標" : `${row.cashAchievementRate}%`;
             lines.push(`${index + 1}. ${icon} ${row.storeName}店｜現金達成 ${storeRate}`);
+            if (row.actingManager) lines.push(`   目前代理：${row.actingManager}｜正式主管：${row.manager || "未分配"}`);
             lines.push(`   原因：${(row.reasons || []).join("、") || "符合目前預警規則"}`);
         });
         if (Number(result?.operationalAlertCount || rows.length) > rows.length) {
@@ -5621,11 +5866,21 @@ function formatTelegramAgentActiveAlertMessage(result, ctx, todayStr, brandProfi
     if (dataIssues.length > 0) {
         lines.push("", "📋 資料待補：");
         dataIssues.slice(0, limit).forEach((row) => {
-            lines.push(`• ${row.storeName}店｜${(row.reasons || []).join("、")}`);
+            const ownerText = row.actingManager ? `｜目前代理：${row.actingManager}` : "";
+            lines.push(`• ${row.storeName}店｜${(row.reasons || []).join("、")}${ownerText}`);
         });
         if (dataIssueCount > dataIssues.length) {
             lines.push(`• 另有 ${dataIssueCount - dataIssues.length} 家資料待補`);
         }
+    }
+
+    const expiringDelegations = Array.isArray(summary?.delegationsExpiringSoon) ? summary.delegationsExpiringSoon : [];
+    if (expiringDelegations.length > 0) {
+        lines.push("", "⏰ 代理安排即將到期：");
+        expiringDelegations.slice(0, 5).forEach((item) => {
+            const timing = item.daysRemaining === 0 ? "今天到期" : `${item.daysRemaining} 天後到期`;
+            lines.push(`• ${item.delegateName} 代理 ${item.principalName}｜${item.endDate}（${timing}）`);
+        });
     }
 
     const reportCount = Number(summary?.dataQuality?.reportedStoreCount || 0);
@@ -5688,7 +5943,9 @@ async function buildTelegramActiveAlertMessages(config, actor = "scheduled") {
         const summary = Array.isArray(result.brandSummaries) ? result.brandSummaries[0] : null;
         const operationalAlertCount = Number(result.operationalAlertCount || 0);
         const dataIssueCount = Number(result.dataIssueCount || 0);
-        const governanceIssueCount = Number(summary?.unexpectedReportStoreCount || 0) + (summary?.rosterIssue ? 1 : 0);
+        const governanceIssueCount = Number(summary?.unexpectedReportStoreCount || 0)
+            + (summary?.rosterIssue ? 1 : 0)
+            + Number(summary?.delegationExpiryReminderCount || 0);
         const alertCount = operationalAlertCount + dataIssueCount;
         const enabledRuleLabels = Array.isArray(result.enabledRuleLabels)
             ? result.enabledRuleLabels
@@ -5734,7 +5991,10 @@ async function createTelegramAlertTaskKeyboard(item, chatId) {
             description: `巡察原因：${(alert.reasons || []).join("、") || "符合目前營運預警規則"}`,
             brandId: item.brandId,
             storeName: normalizeSummaryCoreName(alert.storeName),
-            ownerName: "待指派",
+            ownerName: alert.taskOwnerName || alert.manager || "待指派",
+            officialManager: alert.manager || "",
+            actingManager: alert.actingManager || "",
+            delegationId: alert.delegationId || "",
             dueDate: shiftTelegramAgentDate(getTelegramAlertTaipeiClock().todayStr, 3),
             targetText: "解除目前紅燈／黃燈原因，並回報改善措施與結果。",
             status: "open",
@@ -6190,7 +6450,19 @@ function buildTelegramWeekdayMorningBrief(rule, brandConfigs, dataByBrand, cutof
         });
         const missingBrand = Array.isArray(data.missingReports?.brands) ? data.missingReports.brands[0] : null;
         const missing = Array.isArray(missingBrand?.missingStores) ? missingBrand.missingStores : [];
-        missing.forEach((storeName) => missingRows.push({ brandId: brand.id, brand: brand.name, storeName: normalizeSummaryCoreName(storeName) }));
+        const missingDetails = Array.isArray(missingBrand?.missingDetails) ? missingBrand.missingDetails : [];
+        if (missingDetails.length > 0) {
+            missingDetails.forEach((row) => missingRows.push({
+                brandId: brand.id,
+                brand: brand.name,
+                storeName: normalizeSummaryCoreName(row.storeName),
+                officialManager: row.officialManager || "未分配",
+                actingManager: row.actingManager || "",
+                delegationId: row.delegationId || "",
+            }));
+        } else {
+            missing.forEach((storeName) => missingRows.push({ brandId: brand.id, brand: brand.name, storeName: normalizeSummaryCoreName(storeName) }));
+        }
         brandPayloads[brand.id] = {
             brand: brand.name,
             cash,
@@ -6225,7 +6497,7 @@ function buildTelegramWeekdayMorningBrief(rule, brandConfigs, dataByBrand, cutof
     if (rule.includeMissingReports !== false) {
         lines.push("", `資料完整度：昨日缺報 ${missingRows.length} 店`);
         if (missingRows.length) {
-            lines.push(`缺報：${missingRows.slice(0, 12).map((row) => `${row.brand} ${row.storeName}店`).join("、")}${missingRows.length > 12 ? "…" : ""}`);
+            lines.push(`缺報：${missingRows.slice(0, 12).map((row) => `${row.brand} ${row.storeName}店${row.actingManager ? `（代理：${row.actingManager}）` : ""}`).join("、")}${missingRows.length > 12 ? "…" : ""}`);
             lines.push("未回報店家不列入最佳／最差排行。");
         }
     }
@@ -6262,9 +6534,12 @@ function buildTelegramScheduledBrandMessage(rule, brand, brandData, yesterdayStr
     if (rule.source === "unreported" && brandData.missingReports) {
         const missingBrand = Array.isArray(brandData.missingReports.brands) ? brandData.missingReports.brands[0] : null;
         const detail = Array.isArray(missingBrand?.missingStores) ? missingBrand.missingStores : [];
+        const detailRows = Array.isArray(missingBrand?.missingDetails) ? missingBrand.missingDetails : [];
         if (detail.length > 0) {
             shouldSend = true;
-            const missingText = detail.map((storeName) => `• ${normalizeSummaryCoreName(storeName)}店`).join("\n");
+            const missingText = (detailRows.length > 0 ? detailRows : detail.map((storeName) => ({ storeName })))
+                .map((row) => `• ${normalizeSummaryCoreName(row.storeName)}店${row.actingManager ? `｜目前代理：${row.actingManager}` : ""}`)
+                .join("\n");
             finalMessage = (finalMessage || "{missingStores}")
                 .replace(/{missingStores}/g, missingText)
                 .replace(/{missingCount}/g, String(detail.length));

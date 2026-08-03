@@ -20,6 +20,14 @@ import {
 
 import { ROLES, ALL_MENU_ITEMS, DEFAULT_REGIONAL_MANAGERS, DEFAULT_PERMISSIONS } from "./constants/index";
 import { generateUUID, formatLocalYYYYMMDD, toStandardDateFormat, formatNumber, parseNumber, normalizeManagerOrder } from "./utils/helpers";
+import {
+  buildDelegationAccessProfile,
+  canAccessStore as canAccessDelegatedStore,
+  canPerformDelegatedStoreAction,
+  getDelegationForStore as resolveDelegationForStore,
+  getLocalDateString,
+  resolveActiveDelegations,
+} from "./utils/delegationResolver";
 import { ViewWrapper, Card, Skeleton, Toast, ConfirmModal } from "./components/SharedUI";
 import { Sidebar, MobileTopNav } from "./components/Navigation";
 import { AppContext } from "./AppContext";
@@ -39,7 +47,7 @@ import {
 // ==========================================
 // ★ 系統核心版本號 (終極動態快取版)
 // ==========================================
-const CURRENT_APP_VERSION = "3.3.4"; 
+const CURRENT_APP_VERSION = "3.3.4";
 const LOGIN_LOCATION_ENDPOINT = "https://resolveloginlocation-hyhcwrnyaa-uc.a.run.app";
 
 
@@ -803,6 +811,9 @@ export default function App() {
   const [therapistSchedules, setTherapistSchedules] = useState({}); 
   const [therapistTargets, setTherapistTargets] = useState({}); 
   const [auditExclusions, setAuditExclusions] = useState([]);
+  // ★ 期間式代理與托管：獨立於正式 org_structure，不改寫正式隸屬。
+  const [delegations, setDelegations] = useState([]);
+  const [delegationDateKey, setDelegationDateKey] = useState(() => getLocalDateString());
 
   const [securityConfig, setSecurityConfig] = useState(DEFAULT_SECURITY_CONFIG);
   const [featureFlags, setFeatureFlags] = useState(DEFAULT_FEATURE_FLAGS);
@@ -1649,6 +1660,7 @@ export default function App() {
             { key: "featureFlags", required: false, promise: withTimeout(getDoc(getDocPath("feature_flags")), "功能設定") },
             { key: "directorAuth", required: true, promise: withTimeout(getDoc(getDocPath("director_auth")), "高階主管帳號") },
             { key: "masterAuth", required: true, promise: withTimeout(getDoc(getDocPath("master_auth")), "最高管理帳號") },
+            { key: "delegations", required: false, promise: withTimeout(getDocs(query(getCollectionPath("management_delegations"), where("status", "in", ["active", "scheduled"]))), "代理與托管") },
           ];
 
           const settledResults = await Promise.allSettled(tasks.map((task) => task.promise));
@@ -1658,6 +1670,12 @@ export default function App() {
           });
 
           trackReadSource("fetchGlobalData_core_docs", 10, getStableReadMeta("fetchGlobalData_core_docs"));
+          const delegationResult = resultMap.delegations;
+          trackReadSource(
+            "fetchGlobalData_delegations",
+            delegationResult?.status === "fulfilled" ? delegationResult.value.docs.length : 0,
+            getStableReadMeta("fetchGlobalData_delegations")
+          );
           const therapistResult = resultMap.therapists;
           trackReadSource(
             "fetchGlobalData_therapists",
@@ -1756,6 +1774,14 @@ export default function App() {
           setTrainerAuth(nextTrainerAuth);
           setDirectorAuth(nextDirectorAuth);
           setMasterAuth(nextMasterAuth);
+          if (delegationResult?.status === "fulfilled") {
+            setDelegations(delegationResult.value.docs.map((documentSnapshot) => ({
+              id: documentSnapshot.id,
+              ...documentSnapshot.data(),
+            })));
+          } else if (delegationResult?.reason) {
+            console.warn("management_delegations 讀取失敗，沿用目前值：", delegationResult.reason);
+          }
 
           const applyOptionalDoc = (key, applyValue, fallbackLabel) => {
             const result = resultMap[key];
@@ -2104,6 +2130,7 @@ export default function App() {
     setDirectorAuth({});
     setTrainerAuth(normalizeTrainerAuthData({ password: "0000" }));
     setMasterAuth({ password: "BOSS888" });
+    setDelegations([]);
     setTherapistSchedules({});
     setTherapistTargets({});
     setPermissions(DEFAULT_PERMISSIONS);
@@ -2751,6 +2778,26 @@ export default function App() {
   const openConfirm = useCallback((title, message, onConfirm) => setConfirmModal({ isOpen: true, title, message, onConfirm: () => { onConfirm(); setConfirmModal((p) => ({ ...p, isOpen: false })); }, }), []);
   const closeConfirmModal = useCallback(() => setConfirmModal((p) => ({ ...p, isOpen: false })), []);
 
+  const refreshDelegations = useCallback(async (options = {}) => {
+    if (!user) return [];
+    const includeHistory = options === true || options?.includeHistory === true;
+    try {
+      const collectionRef = getCollectionPath("management_delegations");
+      const sourceQuery = includeHistory
+        ? collectionRef
+        : query(collectionRef, where("status", "in", ["active", "scheduled"]));
+      const snap = await getDocs(sourceQuery);
+      const rows = snap.docs.map((documentSnapshot) => ({ id: documentSnapshot.id, ...documentSnapshot.data() }));
+      const label = includeHistory ? "management_delegations_history" : "management_delegations_active";
+      trackReadSource(label, rows.length, getStableReadMeta(label));
+      setDelegations(rows);
+      return rows;
+    } catch (error) {
+      console.error("代理與托管資料更新失敗：", error);
+      return [];
+    }
+  }, [user, getCollectionPath, getStableReadMeta]);
+
   const handleUpdateStorePassword = useCallback(async (id, newPass) => { try { const updated = storeAccounts.map((a) => a.id === id ? { ...a, password: newPass } : a); await setDoc(getDocPath("store_account_data"), { accounts: updated }); return true; } catch (e) { return false; } }, [storeAccounts, getDocPath]);
   const handleUpdateManagerPassword = useCallback(async (name, newPass) => { try { await setDoc(getDocPath("manager_auth"), { [name]: newPass }, { merge: true }); return true; } catch (e) { return false; } }, [getDocPath]);
   const handleUpdateTherapistPassword = useCallback(async (id, newPass) => { try { await updateDoc(doc(getCollectionPath("therapists"), id), { password: newPass }); return true; } catch (e) { console.error(e); return false; } }, [getCollectionPath]);
@@ -2891,12 +2938,66 @@ export default function App() {
 
   const navigateToStore = useCallback((storeName) => { setActiveView("store-analysis"); window.dispatchEvent(new CustomEvent("navigate-to-store", { detail: storeName })); }, []);
 
+  useEffect(() => {
+    const refreshDateKey = () => setDelegationDateKey((previous) => {
+      const next = getLocalDateString();
+      return previous === next ? previous : next;
+    });
+    const timer = window.setInterval(refreshDateKey, 60 * 1000);
+    window.addEventListener("focus", refreshDateKey);
+    document.addEventListener("visibilitychange", refreshDateKey);
+    return () => {
+      window.clearInterval(timer);
+      window.removeEventListener("focus", refreshDateKey);
+      document.removeEventListener("visibilitychange", refreshDateKey);
+    };
+  }, []);
+
+  const activeDelegations = useMemo(
+    () => resolveActiveDelegations(delegations, delegationDateKey),
+    [delegations, delegationDateKey]
+  );
+
+  const delegationAccess = useMemo(() => buildDelegationAccessProfile({
+    role: userRole,
+    user: currentUser || {},
+    managers,
+    storeAccounts,
+    delegations,
+    date: delegationDateKey,
+  }), [userRole, currentUser, managers, storeAccounts, delegations, delegationDateKey]);
+
+  const accessibleStores = delegationAccess.accessibleStores || [];
+  const officialStores = delegationAccess.officialStores || [];
+  const delegatedStores = delegationAccess.delegatedStores || [];
+
+  const canAccessStore = useCallback(
+    (storeName) => canAccessDelegatedStore(delegationAccess, storeName),
+    [delegationAccess]
+  );
+
+  const canEditStoreReport = useCallback(
+    (storeName, permissionKey = "editReports") => canPerformDelegatedStoreAction(delegationAccess, storeName, permissionKey),
+    [delegationAccess]
+  );
+
+  const getActiveDelegationForStore = useCallback((storeName, date = null, permissionKey = "") => resolveDelegationForStore({
+    delegations,
+    storeName,
+    managers,
+    storeAccounts,
+    date: date || delegationDateKey,
+    permissionKey,
+  }), [delegations, managers, storeAccounts, delegationDateKey]);
+
   const visibleRawData = useMemo(() => {
     if (userRole === ROLES.TRAINER.id) return []; 
-    if (userRole === ROLES.STORE.id && currentUser) { const myCores = (currentUser.stores || [currentUser.storeName] || []).map(normalizeStore).filter(Boolean); return rawData.filter((d) => myCores.includes(normalizeStore(d.storeName))); }
-    if (userRole === ROLES.MANAGER.id && currentUser) { const myCores = (managers[currentUser.name] || []).map(normalizeStore).filter(Boolean); return rawData.filter((d) => myCores.includes(normalizeStore(d.storeName))); }
+    if ((userRole === ROLES.STORE.id || userRole === ROLES.MANAGER.id) && currentUser) {
+      const allowed = new Set((accessibleStores || []).map(normalizeStore).filter(Boolean));
+      return rawData.filter((d) => allowed.has(normalizeStore(d.storeName || d.store)));
+    }
     return rawData;
-  }, [rawData, userRole, currentUser, managers, normalizeStore]);
+  }, [rawData, userRole, currentUser, accessibleStores, normalizeStore]);
 
 
   // ============================================================================
@@ -2920,23 +3021,23 @@ export default function App() {
 
   const visibleManagers = useMemo(() => {
     let result = managers; 
-    if (userRole === ROLES.MANAGER.id && currentUser) { const myStores = managers[currentUser.name] || []; result = { [currentUser.name]: myStores }; } 
-    else if (userRole === ROLES.STORE.id && currentUser) {
-      const myCores = (currentUser.stores || (currentUser.storeName ? [currentUser.storeName] : [])).map(normalizeStore);
+    if ((userRole === ROLES.MANAGER.id || userRole === ROLES.STORE.id) && currentUser) {
+      const allowed = new Set((accessibleStores || []).map(normalizeStore).filter(Boolean));
       const filteredManagers = {};
-      Object.entries(managers || {}).forEach(([mgr, stores]) => { const storeList = Array.isArray(stores) ? stores : []; const intersectingStores = storeList.filter((s) => myCores.includes(normalizeStore(s))); if (intersectingStores.length > 0) filteredManagers[mgr] = intersectingStores; });
+      Object.entries(managers || {}).forEach(([mgr, stores]) => {
+        const intersectingStores = (Array.isArray(stores) ? stores : []).filter((store) => allowed.has(normalizeStore(store)));
+        if (intersectingStores.length > 0) filteredManagers[mgr] = intersectingStores;
+      });
       result = filteredManagers;
     }
-    // 設定頁必須看得到「未分配」。
-    // director / master 的營運總覽也保留「未分配」店家，避免店家從區長轄區移除後，營運總覽數字跟著消失。
-    // 其他角色維持原本邏輯，不主動顯示未分配區塊。
+    // 正式分組不因代理而改名；代理人看得到受託店家，但店家仍列在原區長名下。
     if (activeView !== 'settings' && userRole !== 'director' && userRole !== 'master') {
        const filtered = {};
        Object.entries(result || {}).forEach(([mgr, stores]) => { if (!String(mgr).includes("未分配") && !String(mgr).includes("未分區")) filtered[mgr] = Array.isArray(stores) ? stores : []; });
        return filtered;
     }
     return result;
-  }, [managers, userRole, currentUser, activeView, normalizeStore]);
+  }, [managers, userRole, currentUser, activeView, normalizeStore, accessibleStores]);
 
   const visibleManagerOrder = useMemo(() => {
     const visibleKeys = Object.keys(visibleManagers || {});
@@ -2990,11 +3091,14 @@ export default function App() {
     showToast, openConfirm, fmtMoney, fmtNum, inputDate, setInputDate, storeList: analytics?.storeList || [], setTargets, selectedYear, selectedMonth, permissions, storeAccounts, managerAuth, currentUser, userRole, logActivity, handleUpdateStorePassword, handleUpdateManagerPassword, handleUpdateTherapistPassword, navigateToStore, activeView, appId, 
     therapists: visibleTherapists, therapistReports: visibleTherapistReports, therapistSchedules, therapistTargets, trainerAuth, handleUpdateTrainerAuth, auditExclusions, handleUpdateAuditExclusions, currentBrand, setCurrentBrandId, getCollectionPath, getDocPath, dailyLoginCount, yesterdayLoginCount, securityConfig, featureFlags, therapistModuleEnabled, isOnline, isLowPowerMode,
     fetchGlobalData,
+    officialManagers: managers,
+    delegations, activeDelegations, delegationAccess, accessibleStores, officialStores, delegatedStores,
+    refreshDelegations, canAccessStore, canEditStoreReport, getActiveDelegationForStore,
     directorLevel,
     directorPermissionProfile,
     canDirectorAccessView,
     isReadOnlyDirector: userRole === "director" && !canDirectorAccessView("history")
-  }), [user, loading, analytics, visibleManagers, visibleManagerOrder, budgets, monthlyTargetSummary, currentDashboardSummary, currentRankingsSummary, currentReportSummaryReady, historicalDetailRefreshState, targets, visibleRawData, rawData, annualAggregatedData, annualDashboardSummaries, annualSummaryStatusMap, therapistAnnualAggregatedData, inputDate, selectedYear, selectedMonth, permissions, storeAccounts, managerAuth, currentUser, userRole, logActivity, handleUpdateStorePassword, handleUpdateManagerPassword, handleUpdateTherapistPassword, navigateToStore, activeView, appId, visibleTherapists, visibleTherapistReports, therapistSchedules, therapistTargets, trainerAuth, handleUpdateTrainerAuth, auditExclusions, handleUpdateAuditExclusions, currentBrand, setCurrentBrandId, getCollectionPath, getDocPath, dailyLoginCount, yesterdayLoginCount, securityConfig, featureFlags, therapistModuleEnabled, isOnline, isLowPowerMode, fetchGlobalData, directorLevel, directorPermissionProfile, canDirectorAccessView]); // ★ 依賴陣列也要加
+  }), [user, loading, analytics, visibleManagers, visibleManagerOrder, budgets, monthlyTargetSummary, currentDashboardSummary, currentRankingsSummary, currentReportSummaryReady, historicalDetailRefreshState, targets, visibleRawData, rawData, annualAggregatedData, annualDashboardSummaries, annualSummaryStatusMap, therapistAnnualAggregatedData, inputDate, selectedYear, selectedMonth, permissions, storeAccounts, managerAuth, currentUser, userRole, logActivity, handleUpdateStorePassword, handleUpdateManagerPassword, handleUpdateTherapistPassword, navigateToStore, activeView, appId, visibleTherapists, visibleTherapistReports, therapistSchedules, therapistTargets, trainerAuth, handleUpdateTrainerAuth, auditExclusions, handleUpdateAuditExclusions, currentBrand, setCurrentBrandId, getCollectionPath, getDocPath, dailyLoginCount, yesterdayLoginCount, securityConfig, featureFlags, therapistModuleEnabled, isOnline, isLowPowerMode, fetchGlobalData, managers, delegations, activeDelegations, delegationAccess, accessibleStores, officialStores, delegatedStores, refreshDelegations, canAccessStore, canEditStoreReport, getActiveDelegationForStore, directorLevel, directorPermissionProfile, canDirectorAccessView]); // ★ 依賴陣列也要加
   
   const memoizedViews = useMemo(() => {
     return (

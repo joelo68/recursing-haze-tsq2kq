@@ -63,8 +63,9 @@ const formatTherapistStoreLabel = (value = "") => {
 // ============================================================================
 const StoreInputView = () => {
   const {
-    currentUser, userRole, managers, managerOrder, inputDate, setInputDate, showToast, logActivity, rawData,
-    getCollectionPath, currentBrand, isOnline 
+    currentUser, userRole, managers, officialManagers, managerOrder, inputDate, setInputDate, showToast, logActivity, rawData,
+    getCollectionPath, currentBrand, isOnline, accessibleStores = [], delegatedStores = [],
+    canEditStoreReport, getActiveDelegationForStore
   } = useContext(AppContext);
 
   const [selectedManager, setSelectedManager] = useState("");
@@ -181,28 +182,31 @@ const StoreInputView = () => {
   };
 
   const availableStores = useMemo(() => {
-    if (!selectedManager) {
-      if (userRole === "store" && currentUser) {
-        return sortStoresByOrgOrder(managers, (currentUser.stores || [currentUser.storeName]).map((s) => `${brandPrefix}${getCoreStoreName(s)}店`), brandPrefix, managerOrder);
-      }
-      return [];
-    }
-    return sortStoresByOrgOrder(managers, (managers[selectedManager] || []).map((s) => `${brandPrefix}${getCoreStoreName(s)}店`), brandPrefix, managerOrder);
-  }, [selectedManager, managers, managerOrder, userRole, currentUser, brandPrefix, getCoreStoreName]);
+    if (!selectedManager) return [];
+    const allowed = new Set((accessibleStores || []).map(getCoreStoreName).filter(Boolean));
+    const stores = (managers[selectedManager] || []).filter((store) => {
+      if (userRole === "director" || userRole === "master") return true;
+      return allowed.has(getCoreStoreName(store));
+    });
+    return sortStoresByOrgOrder(managers, stores.map((s) => `${brandPrefix}${getCoreStoreName(s)}店`), brandPrefix, managerOrder);
+  }, [selectedManager, managers, managerOrder, userRole, accessibleStores, brandPrefix, getCoreStoreName]);
 
   useEffect(() => {
-    if (!selectedStore && userRole === "store" && currentUser) {
-      const myStores = currentUser.stores || [currentUser.storeName];
-      if (myStores.length > 0) {
-        let coreName = getCoreStoreName(myStores[0]);
-        const foundMgr = Object.keys(managers).find((mgr) => managers[mgr].some(s => s.includes(coreName)));
-        if (foundMgr) setSelectedManager(foundMgr);
-        setSelectedStore(`${brandPrefix}${coreName}店`);
-      }
-    } else if (!selectedManager && userRole === "manager" && currentUser) {
-      setSelectedManager(currentUser.name);
-    }
-  }, [userRole, currentUser, managers, managerOrder, brandPrefix, selectedStore, getCoreStoreName]);
+    if (selectedManager && managers[selectedManager]) return;
+    const preferredCore = getCoreStoreName((accessibleStores || [])[0]);
+    const preferredManager = Object.keys(managers || {}).find((managerName) =>
+      (managers[managerName] || []).some((store) => getCoreStoreName(store) === preferredCore)
+    );
+    if (userRole === "manager" && managers[currentUser?.name]) setSelectedManager(currentUser.name);
+    else if (preferredManager) setSelectedManager(preferredManager);
+    else setSelectedManager("");
+  }, [userRole, currentUser, managers, accessibleStores, selectedManager, getCoreStoreName]);
+
+  useEffect(() => {
+    if (selectedStore && availableStores.includes(selectedStore)) return;
+    if (availableStores.length === 1) setSelectedStore(availableStores[0]);
+    else if (selectedStore && !availableStores.includes(selectedStore)) setSelectedStore("");
+  }, [availableStores, selectedStore]);
 
   const handleReset = () => {
     if (confirm("確定要重置嗎？")) {
@@ -217,6 +221,9 @@ const StoreInputView = () => {
     e.preventDefault();
     if (!isOnline) return showToast("目前處於離線狀態，無法送出日報", "error");
     if (!selectedStore) return showToast("請選擇店家", "error");
+    if (typeof canEditStoreReport === "function" && !canEditStoreReport(selectedStore, "editReports")) {
+      return showToast("你目前沒有這間店的日報填寫權限", "error");
+    }
     if (inputDate > today) return showToast("不可提交未來日期", "error"); 
 
     const formattedInputDate = toStandardDateFormat(inputDate).replace(/\//g, "-");
@@ -251,6 +258,16 @@ const StoreInputView = () => {
       const safeDate = normalizedDate.replace(/\//g, "-");
       const brandId = typeof currentBrand === 'string' ? currentBrand : currentBrand?.id || 'unknown';
       
+      const officialManagerMap = officialManagers || managers || {};
+      const storeCore = getCoreStoreName(selectedStore);
+      const officialManager = Object.entries(officialManagerMap).find(([, stores]) =>
+        (stores || []).some((store) => getCoreStoreName(store) === storeCore)
+      )?.[0] || selectedManager || "未分區";
+      const isDelegatedOperation = (delegatedStores || []).map(getCoreStoreName).includes(storeCore);
+      const activeDelegation = isDelegatedOperation && typeof getActiveDelegationForStore === "function"
+        ? getActiveDelegationForStore(selectedStore, null, "editReports")
+        : null;
+
       const payload = {
         date: safeDate, 
         storeName: selectedStore,
@@ -258,6 +275,11 @@ const StoreInputView = () => {
         ...Object.keys(formData).reduce((acc, key) => ({ ...acc, [key]: parseNumber(formData[key]) }), {}),
         timestamp: serverTimestamp(),
         submittedBy: currentUser?.name || "unknown",
+        operatedBy: currentUser?.name || "unknown",
+        officialManager,
+        actingManager: activeDelegation?.delegateName || "",
+        delegationId: activeDelegation?.id || "",
+        managementMode: activeDelegation ? "delegated" : "official",
       };
 
       let targetDocId = existingReportId;
@@ -331,6 +353,13 @@ const StoreInputView = () => {
          <CheckCircle size={14} /> 店務日報：輸入內容將自動暫存 ({brandPrefix})
       </div>
 
+      {selectedStore && delegatedStores.map(getCoreStoreName).includes(getCoreStoreName(selectedStore)) && (
+        <div className="flex items-start gap-2 text-sm text-sky-700 bg-sky-50 p-3 rounded-xl border border-sky-100">
+          <Users size={17} className="mt-0.5 shrink-0" />
+          <div><span className="font-black">代理管理店家：</span>你可在授權期間填寫此店日報；正式績效歸屬仍維持原主管。</div>
+        </div>
+      )}
+
       <div className="bg-white p-6 rounded-2xl border border-stone-100 shadow-sm space-y-4">
         <div>
           <label className="block text-xs font-bold mb-1.5 text-stone-400 uppercase">回報日期</label>
@@ -346,7 +375,7 @@ const StoreInputView = () => {
           <div>
             <label className="block text-xs font-bold mb-1.5 text-stone-400">區域</label>
             <div className="relative">
-              <select value={selectedManager} onChange={(e) => { setSelectedManager(e.target.value); setSelectedStore(""); }} disabled={userRole !== "director"} className="w-full border-2 border-stone-100 p-3 rounded-xl font-bold text-stone-700 bg-white disabled:bg-stone-50 outline-none focus:border-amber-400 appearance-none">
+              <select value={selectedManager} onChange={(e) => { setSelectedManager(e.target.value); setSelectedStore(""); }} disabled={userRole !== "director" && Object.keys(managers || {}).length <= 1} className="w-full border-2 border-stone-100 p-3 rounded-xl font-bold text-stone-700 bg-white disabled:bg-stone-50 outline-none focus:border-amber-400 appearance-none">
                 <option value="">請選擇...</option>
                 {sortManagersByOrgOrder(managers, null, managerOrder).map((m) => <option key={m} value={m}>{m}區</option>)}
               </select>

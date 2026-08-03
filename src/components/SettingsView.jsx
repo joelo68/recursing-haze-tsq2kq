@@ -1,5 +1,5 @@
 // src/components/SettingsView.jsx
-import React, { useState, useContext, useEffect, useMemo } from "react";
+import React, { useState, useContext, useEffect, useMemo, useCallback } from "react";
 import {
   Save, Plus, Trash2, Edit2, Edit, Lock, User, Store, Target,
   CheckCircle, AlertCircle, X, Shield, ChevronDown, Search,
@@ -17,6 +17,16 @@ import { AppContext } from "../AppContext";
 import { ViewWrapper, Card } from "./SharedUI";
 import { DEFAULT_PERMISSIONS, ALL_MENU_ITEMS } from "../constants/index";
 import { generateUUID, normalizeManagerOrder, sortManagersByOrgOrder, sortStoresByOrgOrder } from "../utils/helpers";
+import {
+  DEFAULT_DELEGATION_PERMISSIONS,
+  DELEGATION_PERMISSION_LABELS,
+  describeDelegationScope,
+  getDelegationStatus,
+  normalizeDelegation,
+  normalizeDelegationStoreCore,
+  resolveDelegationStores,
+  validateDelegationConflict,
+} from "../utils/delegationResolver";
 import SystemMaintenance from "./SystemMaintenance";
 
 // ★ 引入自訂日曆元件
@@ -26,6 +36,24 @@ const getTodayStr = () => {
   const d = new Date();
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
 };
+
+const shiftDateString = (dateText, days) => {
+  const value = new Date(`${dateText || getTodayStr()}T00:00:00`);
+  value.setDate(value.getDate() + Number(days || 0));
+  return `${value.getFullYear()}-${String(value.getMonth() + 1).padStart(2, "0")}-${String(value.getDate()).padStart(2, "0")}`;
+};
+
+const createEmptyDelegationForm = () => ({
+  type: "regional_manager",
+  principalKey: "",
+  delegateKey: "",
+  scopeMode: "all_assigned_stores",
+  storeNames: [],
+  startDate: getTodayStr(),
+  endDate: shiftDateString(getTodayStr(), 14),
+  reason: "",
+  permissions: { ...DEFAULT_DELEGATION_PERMISSIONS },
+});
 
 const ANNUAL_KPI_REBUILD_ENDPOINT = "https://us-central1-cyjsituation-analysis.cloudfunctions.net/rebuildAnnualKpiSummaryNow";
 
@@ -161,6 +189,7 @@ const SettingsView = () => {
     trainerAuth, handleUpdateTrainerAuth,
     getDocPath, getCollectionPath,
     currentBrand, securityConfig, featureFlags,
+    user, officialManagers, delegations = [], refreshDelegations,
     fetchGlobalData // ★ 新增：提取單次抓取函數
   } = useContext(AppContext);
 
@@ -297,6 +326,15 @@ const SettingsView = () => {
   
   const [showResigned, setShowResigned] = useState(false);
 
+  const [delegationForm, setDelegationForm] = useState(createEmptyDelegationForm);
+  const [editingDelegationId, setEditingDelegationId] = useState("");
+  const [savingDelegation, setSavingDelegation] = useState(false);
+  const [delegationListFilter, setDelegationListFilter] = useState("current");
+
+  useEffect(() => {
+    if (activeTab === "delegations") refreshDelegations?.({ includeHistory: true });
+  }, [activeTab, refreshDelegations]);
+
   const UNASSIGNED_KEY = "未分配"; 
 
   const directorLevel = currentUser?.directorLevel || currentUser?.adminLevel || (String(currentUser?.name || "").includes("Joe") ? "super_admin" : "operation_admin");
@@ -320,6 +358,7 @@ const SettingsView = () => {
       { id: "shops", label: "店家管理", isAdminOnly: true, icon: Store },
       { id: "stores", label: "店經帳號", isAdminOnly: true, icon: UserCheck },
       { id: "managers", label: "區長架構", isAdminOnly: true, icon: LayoutGrid },
+      { id: "delegations", label: "代理與托管", isAdminOnly: true, icon: Users },
       //{ id: "therapists", label: "人員帳號", isAdminOnly: true, icon: User },
       { id: "maintenance", label: "系統維護", isAdminOnly: true, icon: Database }
     ];
@@ -1094,6 +1133,231 @@ const SettingsView = () => {
       return showResigned ? isResigned : !isResigned;
     }); 
   }, [therapists, searchTerm, showResigned]);
+
+  const delegationManagers = useMemo(() => (
+    sortManagersByOrgOrder(officialManagers || localManagers || {}, null, localManagerOrder)
+      .filter((name) => name && name !== UNASSIGNED_KEY && !String(name).includes("未分區"))
+  ), [officialManagers, localManagers, localManagerOrder]);
+
+  const delegationStoreAccounts = useMemo(() => (
+    (storeAccounts || []).filter((account) => account?.id || account?.name)
+  ), [storeAccounts]);
+
+  const getDelegationAccountOption = useCallback((role, key) => {
+    if (role === "manager") {
+      const name = delegationManagers.find((managerName) => managerName === key) || "";
+      return name ? { id: name, name, role: "manager" } : null;
+    }
+    const account = delegationStoreAccounts.find((item) => String(item.id || item.name) === String(key));
+    return account ? { ...account, id: String(account.id || account.name), name: account.name || String(account.id), role: "store" } : null;
+  }, [delegationManagers, delegationStoreAccounts]);
+
+  const delegationRole = delegationForm.type === "store_manager" ? "store" : "manager";
+  const selectedDelegationPrincipal = useMemo(
+    () => getDelegationAccountOption(delegationRole, delegationForm.principalKey),
+    [delegationRole, delegationForm.principalKey, getDelegationAccountOption]
+  );
+  const selectedDelegationDelegate = useMemo(
+    () => getDelegationAccountOption(delegationRole, delegationForm.delegateKey),
+    [delegationRole, delegationForm.delegateKey, getDelegationAccountOption]
+  );
+
+  const delegationPrincipalStores = useMemo(() => {
+    if (!selectedDelegationPrincipal) return [];
+    if (delegationRole === "manager") {
+      return sortStoresByOrgOrder(
+        officialManagers || localManagers || {},
+        (officialManagers || localManagers || {})[selectedDelegationPrincipal.name] || [],
+        "",
+        localManagerOrder
+      ).map(normalizeDelegationStoreCore).filter(Boolean);
+    }
+    return [...new Set((selectedDelegationPrincipal.stores || (selectedDelegationPrincipal.storeName ? [selectedDelegationPrincipal.storeName] : []))
+      .map(normalizeDelegationStoreCore).filter(Boolean))];
+  }, [selectedDelegationPrincipal, delegationRole, officialManagers, localManagers, localManagerOrder]);
+
+  const resetDelegationForm = () => {
+    setDelegationForm(createEmptyDelegationForm());
+    setEditingDelegationId("");
+  };
+
+  const toggleDelegationStore = (storeName) => {
+    const core = normalizeDelegationStoreCore(storeName);
+    setDelegationForm((previous) => ({
+      ...previous,
+      storeNames: previous.storeNames.includes(core)
+        ? previous.storeNames.filter((store) => store !== core)
+        : [...previous.storeNames, core],
+    }));
+  };
+
+  const toggleDelegationPermission = (permissionKey) => {
+    if (permissionKey === "editOrganization") return;
+    setDelegationForm((previous) => ({
+      ...previous,
+      permissions: {
+        ...previous.permissions,
+        [permissionKey]: !previous.permissions?.[permissionKey],
+        editOrganization: false,
+      },
+    }));
+  };
+
+  const handleSaveDelegation = async () => {
+    if (savingDelegation) return;
+    const principal = selectedDelegationPrincipal;
+    const delegate = selectedDelegationDelegate;
+    if (!principal || !delegate) {
+      showToast("請選擇原主管與代理人", "error");
+      return;
+    }
+
+    const id = editingDelegationId || `DLG-${getTodayStr().replace(/-/g, "")}-${generateUUID()}`;
+    const nowText = new Date().toISOString();
+    const candidate = {
+      id,
+      schemaVersion: "delegation-v1",
+      type: delegationForm.type,
+      brandId: currentBrand?.id || "unknown",
+      brandLabel: currentBrand?.label || currentBrand?.name || currentBrand?.id || "目前品牌",
+      principalRole: delegationRole,
+      principalId: String(principal.id || principal.name),
+      principalName: principal.name,
+      delegateRole: delegationRole,
+      delegateId: String(delegate.id || delegate.name),
+      delegateName: delegate.name,
+      scopeMode: delegationForm.scopeMode,
+      storeNames: delegationForm.scopeMode === "selected_stores"
+        ? delegationForm.storeNames.map(normalizeDelegationStoreCore).filter(Boolean)
+        : [],
+      principalStoreSnapshot: delegationPrincipalStores,
+      startDate: delegationForm.startDate,
+      endDate: delegationForm.endDate,
+      status: delegationForm.startDate > getTodayStr() ? "scheduled" : "active",
+      permissions: {
+        ...DEFAULT_DELEGATION_PERMISSIONS,
+        ...(delegationForm.permissions || {}),
+        editOrganization: false,
+      },
+      reason: String(delegationForm.reason || "").trim(),
+      updatedBy: currentUser?.name || userRole || "director",
+      updatedByRole: userRole || "unknown",
+      updatedByUid: user?.uid || "",
+      updatedAtText: nowText,
+    };
+
+    const validation = validateDelegationConflict({
+      candidate,
+      existingDelegations: delegations,
+      managers: officialManagers || localManagers || {},
+      storeAccounts,
+    });
+    if (!validation.valid) {
+      showToast(validation.error || "代理安排無法儲存", "error");
+      return;
+    }
+
+    setSavingDelegation(true);
+    try {
+      const payload = {
+        ...candidate,
+        updatedAt: serverTimestamp(),
+        ...(editingDelegationId ? {} : {
+          createdBy: currentUser?.name || userRole || "director",
+          createdByRole: userRole || "unknown",
+          createdByUid: user?.uid || "",
+          createdAt: serverTimestamp(),
+          createdAtText: nowText,
+        }),
+      };
+      await setDoc(doc(getCollectionPath("management_delegations"), id), payload, { merge: true });
+      await addDoc(getCollectionPath("maintenance_logs"), {
+        type: "management_delegation",
+        action: editingDelegationId ? "update" : "create",
+        delegationId: id,
+        principalName: principal.name,
+        delegateName: delegate.name,
+        startDate: candidate.startDate,
+        endDate: candidate.endDate,
+        storeNames: resolveDelegationStores(candidate, officialManagers || localManagers || {}, storeAccounts),
+        operator: currentUser?.name || userRole || "director",
+        operatorRole: userRole || "unknown",
+        createdAt: serverTimestamp(),
+        createdAtText: nowText,
+      });
+      await refreshDelegations?.({ includeHistory: true });
+      showToast(editingDelegationId ? "代理安排已更新" : "代理安排已建立", "success");
+      resetDelegationForm();
+    } catch (error) {
+      console.error(error);
+      showToast(`代理安排儲存失敗：${error?.message || "請稍後再試"}`, "error");
+    } finally {
+      setSavingDelegation(false);
+    }
+  };
+
+  const handleEditDelegation = (raw) => {
+    const item = normalizeDelegation(raw, raw?.id);
+    setEditingDelegationId(item.id);
+    setDelegationForm({
+      type: item.type,
+      principalKey: item.principalId || item.principalName,
+      delegateKey: item.delegateId || item.delegateName,
+      scopeMode: item.scopeMode,
+      storeNames: item.storeNames || [],
+      startDate: item.startDate,
+      endDate: item.endDate,
+      reason: item.reason || "",
+      permissions: { ...DEFAULT_DELEGATION_PERMISSIONS, ...(item.permissions || {}), editOrganization: false },
+    });
+    setActiveTab("delegations");
+    window.scrollTo({ top: 0, behavior: "smooth" });
+  };
+
+  const handleEndDelegation = async (raw) => {
+    const item = normalizeDelegation(raw, raw?.id);
+    if (!item.id || !confirm(`確定立即結束「${item.delegateName} 代理 ${item.principalName}」嗎？`)) return;
+    try {
+      const nowText = new Date().toISOString();
+      await setDoc(doc(getCollectionPath("management_delegations"), item.id), {
+        status: "ended",
+        endedEarly: true,
+        endedAt: serverTimestamp(),
+        endedAtText: nowText,
+        endedBy: currentUser?.name || userRole || "director",
+        updatedAt: serverTimestamp(),
+        updatedAtText: nowText,
+      }, { merge: true });
+      await addDoc(getCollectionPath("maintenance_logs"), {
+        type: "management_delegation",
+        action: "end",
+        delegationId: item.id,
+        principalName: item.principalName,
+        delegateName: item.delegateName,
+        operator: currentUser?.name || userRole || "director",
+        operatorRole: userRole || "unknown",
+        createdAt: serverTimestamp(),
+        createdAtText: nowText,
+      });
+      await refreshDelegations?.({ includeHistory: true });
+      if (editingDelegationId === item.id) resetDelegationForm();
+      showToast("代理安排已立即結束，正式隸屬不受影響", "success");
+    } catch (error) {
+      console.error(error);
+      showToast("結束代理失敗", "error");
+    }
+  };
+
+  const delegationRows = useMemo(() => {
+    const rows = (delegations || []).map((item) => ({
+      ...normalizeDelegation(item, item?.id),
+      computedStatus: getDelegationStatus(item),
+    })).sort((a, b) => String(b.startDate).localeCompare(String(a.startDate)) || String(b.updatedAtText || "").localeCompare(String(a.updatedAtText || "")));
+    if (delegationListFilter === "all") return rows;
+    if (delegationListFilter === "history") return rows.filter((item) => ["ended", "expired", "invalid"].includes(item.computedStatus));
+    return rows.filter((item) => ["active", "scheduled"].includes(item.computedStatus));
+  }, [delegations, delegationListFilter]);
+
 
   if (visibleTabs.length === 0) return <ViewWrapper><Card title="權限不足"><div className="text-center py-10 text-[#A69C91]"><Lock size={48} className="mx-auto mb-4 opacity-50" /><p>您沒有權限存取此頁面</p></div></Card></ViewWrapper>;
 
@@ -1875,6 +2139,224 @@ const SettingsView = () => {
           </div> 
         )}
         
+        {activeTab === "delegations" && (
+          <div className="space-y-6 w-full max-w-full min-w-0">
+            <Card title={editingDelegationId ? "編輯代理安排" : "新增代理與托管"}>
+              <div className="space-y-6">
+                <div className="rounded-2xl border border-sky-100 bg-sky-50/60 p-4 text-sm text-sky-800">
+                  <p className="font-black">正式隸屬不會被改動</p>
+                  <p className="mt-1 leading-relaxed">此處只增加指定期間的管理權限。到期或提前結束後，代理權限會失效，店家仍保留在原區長或原店經理名下。</p>
+                </div>
+
+                <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                  <div>
+                    <label className="block text-xs font-bold text-[#A69C91] mb-1.5">我要安排</label>
+                    <select
+                      value={delegationForm.type}
+                      onChange={(event) => setDelegationForm({ ...createEmptyDelegationForm(), type: event.target.value })}
+                      className="w-full px-4 py-3 border-2 border-[#EFE7DA] rounded-xl bg-[#FFFCF7] font-bold text-[#4D4338] outline-none focus:border-[#D6A84F]"
+                    >
+                      <option value="regional_manager">區長代理</option>
+                      <option value="store_manager">店經理代理</option>
+                    </select>
+                  </div>
+                  <div>
+                    <label className="block text-xs font-bold text-[#A69C91] mb-1.5">原主管</label>
+                    <select
+                      value={delegationForm.principalKey}
+                      onChange={(event) => setDelegationForm((previous) => ({ ...previous, principalKey: event.target.value, storeNames: [] }))}
+                      className="w-full px-4 py-3 border-2 border-[#EFE7DA] rounded-xl bg-[#FFFCF7] font-bold text-[#4D4338] outline-none focus:border-[#D6A84F]"
+                    >
+                      <option value="">請選擇...</option>
+                      {delegationRole === "manager"
+                        ? delegationManagers.map((name) => <option key={name} value={name}>{name} 區</option>)
+                        : delegationStoreAccounts.map((account) => <option key={account.id || account.name} value={account.id || account.name}>{account.name}</option>)}
+                    </select>
+                  </div>
+                  <div>
+                    <label className="block text-xs font-bold text-[#A69C91] mb-1.5">代理人</label>
+                    <select
+                      value={delegationForm.delegateKey}
+                      onChange={(event) => setDelegationForm((previous) => ({ ...previous, delegateKey: event.target.value }))}
+                      className="w-full px-4 py-3 border-2 border-[#EFE7DA] rounded-xl bg-[#FFFCF7] font-bold text-[#4D4338] outline-none focus:border-[#D6A84F]"
+                    >
+                      <option value="">請選擇...</option>
+                      {delegationRole === "manager"
+                        ? delegationManagers.filter((name) => name !== delegationForm.principalKey).map((name) => <option key={name} value={name}>{name} 區</option>)
+                        : delegationStoreAccounts.filter((account) => String(account.id || account.name) !== String(delegationForm.principalKey)).map((account) => <option key={account.id || account.name} value={account.id || account.name}>{account.name}</option>)}
+                    </select>
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                  <div>
+                    <label className="block text-xs font-bold text-[#A69C91] mb-1.5">代理開始日</label>
+                    <SmartDatePicker selectedDate={delegationForm.startDate} onDateSelect={(value) => setDelegationForm((previous) => ({ ...previous, startDate: value }))} />
+                  </div>
+                  <div>
+                    <label className="block text-xs font-bold text-[#A69C91] mb-1.5">代理結束日</label>
+                    <SmartDatePicker selectedDate={delegationForm.endDate} onDateSelect={(value) => setDelegationForm((previous) => ({ ...previous, endDate: value }))} />
+                  </div>
+                </div>
+
+                <div>
+                  <label className="block text-xs font-bold text-[#A69C91] mb-1.5">代理範圍</label>
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                    <button
+                      type="button"
+                      onClick={() => setDelegationForm((previous) => ({ ...previous, scopeMode: "all_assigned_stores", storeNames: [] }))}
+                      className={`rounded-2xl border-2 p-4 text-left transition-all ${delegationForm.scopeMode === "all_assigned_stores" ? "border-sky-400 bg-sky-50 text-sky-800" : "border-[#EFE7DA] bg-white text-[#675B4E]"}`}
+                    >
+                      <p className="font-black">代理全部轄區</p>
+                      <p className="text-xs mt-1 opacity-75">自動涵蓋原主管目前負責的 {delegationPrincipalStores.length} 間店</p>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setDelegationForm((previous) => ({ ...previous, scopeMode: "selected_stores" }))}
+                      className={`rounded-2xl border-2 p-4 text-left transition-all ${delegationForm.scopeMode === "selected_stores" ? "border-sky-400 bg-sky-50 text-sky-800" : "border-[#EFE7DA] bg-white text-[#675B4E]"}`}
+                    >
+                      <p className="font-black">只代理指定店家</p>
+                      <p className="text-xs mt-1 opacity-75">適合分流、短期支援或部分托管</p>
+                    </button>
+                  </div>
+                  {delegationForm.scopeMode === "selected_stores" && (
+                    <div className="mt-3 rounded-2xl border border-[#EFE7DA] bg-[#FAF7F1] p-4">
+                      {!selectedDelegationPrincipal ? (
+                        <p className="text-sm font-bold text-[#A69C91]">請先選擇原主管</p>
+                      ) : delegationPrincipalStores.length === 0 ? (
+                        <p className="text-sm font-bold text-rose-500">原主管目前沒有可交付店家</p>
+                      ) : (
+                        <div className="flex flex-wrap gap-2">
+                          {delegationPrincipalStores.map((store) => {
+                            const checked = delegationForm.storeNames.includes(store);
+                            return (
+                              <button
+                                type="button"
+                                key={store}
+                                onClick={() => toggleDelegationStore(store)}
+                                className={`px-3 py-2 rounded-xl border-2 text-sm font-bold transition-all ${checked ? "bg-sky-600 border-sky-600 text-white" : "bg-white border-[#E8DDCC] text-[#675B4E]"}`}
+                              >
+                                {checked && <CheckCircle size={14} className="inline mr-1" />}{store}店
+                              </button>
+                            );
+                          })}
+                        </div>
+                      )}
+                    </div>
+                  )}
+                </div>
+
+                <div>
+                  <label className="block text-xs font-bold text-[#A69C91] mb-1.5">代理人可以做什麼？</label>
+                  <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
+                    {Object.entries(DELEGATION_PERMISSION_LABELS).filter(([key]) => key !== "editOrganization").map(([key, label]) => {
+                      const checked = Boolean(delegationForm.permissions?.[key]);
+                      return (
+                        <button
+                          type="button"
+                          key={key}
+                          onClick={() => toggleDelegationPermission(key)}
+                          className={`flex items-center gap-2 rounded-xl border-2 px-4 py-3 text-left text-sm font-bold transition-all ${checked ? "border-emerald-300 bg-emerald-50 text-emerald-700" : "border-[#EFE7DA] bg-white text-[#8A7D70]"}`}
+                        >
+                          {checked ? <CheckCircle size={17} /> : <AlertCircle size={17} className="opacity-40" />}{label}
+                        </button>
+                      );
+                    })}
+                  </div>
+                  <p className="text-xs text-[#A69C91] mt-2">代理人永遠不能修改正式組織架構；正式轉調或離職仍需到「區長架構／店經帳號」處理。</p>
+                </div>
+
+                <div>
+                  <label className="block text-xs font-bold text-[#A69C91] mb-1.5">代理原因</label>
+                  <textarea
+                    value={delegationForm.reason}
+                    onChange={(event) => setDelegationForm((previous) => ({ ...previous, reason: event.target.value }))}
+                    placeholder="例如：育嬰假、長期休假、出差、短期跨區支援"
+                    rows={3}
+                    className="w-full px-4 py-3 border-2 border-[#EFE7DA] rounded-xl bg-[#FFFCF7] font-bold text-[#4D4338] outline-none focus:border-[#D6A84F] resize-none"
+                  />
+                </div>
+
+                <div className="flex flex-col sm:flex-row gap-3 pt-2">
+                  {editingDelegationId && (
+                    <button type="button" onClick={resetDelegationForm} className="sm:w-40 py-3 rounded-xl bg-[#F3EEE6] text-[#675B4E] font-bold">取消編輯</button>
+                  )}
+                  <button
+                    type="button"
+                    onClick={handleSaveDelegation}
+                    disabled={savingDelegation}
+                    className="flex-1 py-3.5 rounded-xl bg-sky-600 hover:bg-sky-700 text-white font-black shadow-lg shadow-sky-100 disabled:opacity-50 flex items-center justify-center gap-2"
+                  >
+                    <Save size={18} />{savingDelegation ? "儲存中..." : editingDelegationId ? "儲存代理變更" : "建立代理安排"}
+                  </button>
+                </div>
+              </div>
+            </Card>
+
+            <Card title="代理安排清單">
+              <div className="space-y-4">
+                <div className="flex flex-wrap gap-2">
+                  {[
+                    ["current", "目前與即將生效"],
+                    ["history", "已結束與已到期"],
+                    ["all", "全部紀錄"],
+                  ].map(([value, label]) => (
+                    <button key={value} onClick={() => setDelegationListFilter(value)} className={`px-4 py-2 rounded-xl text-sm font-bold ${delegationListFilter === value ? "bg-stone-800 text-white" : "bg-[#F3EEE6] text-[#675B4E]"}`}>{label}</button>
+                  ))}
+                </div>
+
+                {delegationRows.length === 0 ? (
+                  <div className="rounded-2xl border-2 border-dashed border-[#E8DDCC] bg-[#FAF7F1] py-12 text-center text-[#A69C91] font-bold">目前沒有符合條件的代理安排</div>
+                ) : (
+                  <div className="grid grid-cols-1 xl:grid-cols-2 gap-4">
+                    {delegationRows.map((item) => {
+                      const statusMeta = {
+                        active: { label: "代理中", cls: "bg-emerald-50 text-emerald-700 border-emerald-200" },
+                        scheduled: { label: "即將生效", cls: "bg-sky-50 text-sky-700 border-sky-200" },
+                        expired: { label: "已到期", cls: "bg-stone-100 text-stone-500 border-stone-200" },
+                        ended: { label: "已提前結束", cls: "bg-rose-50 text-rose-600 border-rose-200" },
+                        invalid: { label: "日期異常", cls: "bg-amber-50 text-amber-700 border-amber-200" },
+                      }[item.computedStatus] || { label: item.computedStatus, cls: "bg-stone-100 text-stone-500 border-stone-200" };
+                      const stores = resolveDelegationStores(item, officialManagers || localManagers || {}, storeAccounts);
+                      return (
+                        <div key={item.id} className="rounded-2xl border border-[#EFE7DA] bg-white p-5 shadow-sm">
+                          <div className="flex flex-wrap items-start justify-between gap-3">
+                            <div>
+                              <div className="flex flex-wrap items-center gap-2">
+                                <span className={`px-2.5 py-1 rounded-full border text-xs font-black ${statusMeta.cls}`}>{statusMeta.label}</span>
+                                <span className="text-xs font-bold text-[#A69C91]">{item.type === "store_manager" ? "店經理代理" : "區長代理"}</span>
+                              </div>
+                              <p className="mt-3 text-lg font-black text-[#4D4338]">{item.delegateName} <span className="text-sky-600">代理</span> {item.principalName}</p>
+                              <p className="mt-1 text-sm font-bold text-[#8A7D70]">{item.startDate} ～ {item.endDate}</p>
+                            </div>
+                            <div className="flex gap-2">
+                              {!["ended", "expired"].includes(item.computedStatus) && <button onClick={() => handleEditDelegation(item)} className="px-3 py-2 rounded-xl bg-[#F3EEE6] text-[#675B4E] text-xs font-bold">編輯</button>}
+                              {!["ended", "expired"].includes(item.computedStatus) && <button onClick={() => handleEndDelegation(item)} className="px-3 py-2 rounded-xl bg-rose-50 text-rose-600 text-xs font-bold">立即結束</button>}
+                            </div>
+                          </div>
+                          <div className="mt-4 rounded-xl bg-[#FAF7F1] p-3">
+                            <p className="text-xs font-black text-[#7C7063]">{describeDelegationScope(item, officialManagers || localManagers || {}, storeAccounts)}</p>
+                            <div className="mt-2 flex flex-wrap gap-1.5">
+                              {stores.slice(0, 12).map((store) => <span key={store} className="px-2 py-1 rounded-lg bg-white border border-[#E8DDCC] text-xs font-bold text-[#675B4E]">{store}店</span>)}
+                              {stores.length > 12 && <span className="px-2 py-1 text-xs font-bold text-[#A69C91]">另 {stores.length - 12} 間</span>}
+                            </div>
+                          </div>
+                          {item.reason && <p className="mt-3 text-sm text-[#7C7063]"><span className="font-black">原因：</span>{item.reason}</p>}
+                          <div className="mt-3 flex flex-wrap gap-1.5">
+                            {Object.entries(item.permissions || {}).filter(([key, enabled]) => enabled && DELEGATION_PERMISSION_LABELS[key] && key !== "editOrganization").map(([key]) => (
+                              <span key={key} className="px-2 py-1 rounded-lg bg-emerald-50 text-emerald-700 text-[11px] font-bold">{DELEGATION_PERMISSION_LABELS[key]}</span>
+                            ))}
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
+              </div>
+            </Card>
+          </div>
+        )}
+
         {activeTab === "maintenance" && <SystemMaintenance />}
 
         {/* ========================================================================= */}

@@ -60,6 +60,7 @@ const StoreAnalysisView = () => {
     activeView,
     currentBrand,
     getCollectionPath,
+    accessibleStores = [], delegatedStores = [],
   } = useContext(AppContext);
 
   const [selectedManager, setSelectedManager] = useState("");
@@ -319,12 +320,14 @@ const StoreAnalysisView = () => {
       return sortStoresByOrgOrder(safeManagers, Object.values(safeManagers).flat().map(formatStoreName).filter(Boolean), brandPrefix, managerOrder);
         
     if (userRole === "store" && currentUser) {
-      const myStores = currentUser.stores || (currentUser.storeName ? [currentUser.storeName] : []);
+      const myStores = (accessibleStores || []).length
+        ? accessibleStores
+        : (currentUser.stores || (currentUser.storeName ? [currentUser.storeName] : []));
       return sortStoresByOrgOrder(safeManagers, myStores.map((s) => formatStoreName(s)).filter(Boolean), brandPrefix, managerOrder);
     }
       
     return [];
-  }, [selectedManager, managers, managerOrder, currentUser, userRole, brandPrefix, targetBrandManagers, cleanStoreName]);
+  }, [selectedManager, managers, managerOrder, currentUser, userRole, brandPrefix, targetBrandManagers, cleanStoreName, accessibleStores]);
 
   useEffect(() => {
     if (userRole === "store" && currentUser && availableStores.length > 0) {
@@ -681,14 +684,14 @@ const StoreAnalysisView = () => {
 
   const regionMetrics = useMemo(() => {
     if (!isManagementRole || !analysisAllReports) return null;
-    let targetManager = selectedManager;
-    if (userRole === 'manager') targetManager = currentUser.name; 
-    
-    if (!targetManager) return null; 
-
-    const regionStores = (managers[targetManager] || []).map(cleanStoreName);
-    return getAggregateData(regionStores);
-  }, [isManagementRole, selectedManager, userRole, currentUser, analysisAllReports, managers, managerOrder, cleanStoreName, getAggregateData]);
+    if (userRole === 'manager') {
+      const managementStores = (accessibleStores || []).map(cleanStoreName).filter(Boolean);
+      return managementStores.length ? getAggregateData(managementStores) : null;
+    }
+    const targetManager = selectedManager;
+    if (!targetManager) return null;
+    return getAggregateData((managers[targetManager] || []).map(cleanStoreName));
+  }, [isManagementRole, selectedManager, userRole, analysisAllReports, managers, cleanStoreName, getAggregateData, accessibleStores]);
 
   const storeMetrics = useMemo(() => {
     if (!selectedStore) return null;
@@ -793,7 +796,7 @@ const StoreAnalysisView = () => {
   const isManagerView = userRole === 'manager' || (userRole === 'director' && selectedManager);
   const activeManagementMetrics = (isManagerView && regionMetrics) ? regionMetrics : globalMetrics;
   const managementRadarTitle = isManagerView 
-      ? `${userRole === 'manager' ? currentUser.name : selectedManager}區 體質診斷`
+      ? `${userRole === 'manager' ? '我的管理範圍' : `${selectedManager}區`} 體質診斷`
       : `${brandPrefix} 全區體質診斷`;
       
   const managementRadarData = useMemo(() => {
@@ -864,7 +867,7 @@ const StoreAnalysisView = () => {
     let targetRawStores = [];
     
     if (userRole === 'manager' && currentUser) {
-        targetRawStores = safeManagers[currentUser.name] || [];
+        targetRawStores = accessibleStores || [];
     } else if (userRole === 'director' || userRole === 'trainer') {
         targetRawStores = targetBrandManagers.flatMap(mgr => safeManagers[mgr] || []);
     }
@@ -954,7 +957,7 @@ const StoreAnalysisView = () => {
 
     return { financialRisks, retentionRisks, salesRisks };
 
-  }, [rawData, userRole, currentUser, managers, managerOrder, isManagementRole, targets, currentBenchmarks, targetBrandManagers, selectedYear, selectedMonth, cleanStoreName, brandId]);
+  }, [rawData, userRole, currentUser, managers, managerOrder, isManagementRole, targets, currentBenchmarks, targetBrandManagers, selectedYear, selectedMonth, cleanStoreName, brandId, accessibleStores]);
 
   const AlertItem = ({ store, value, label, type, onClick, fmtMoney }) => (
     <div 
@@ -1001,6 +1004,11 @@ const StoreAnalysisView = () => {
     <ViewWrapper>
       <div className="space-y-6">
         <Card title="門市體質診斷">
+          {delegatedStores.length > 0 && (
+            <div className="mb-4 rounded-xl border border-sky-100 bg-sky-50 p-3 text-sm text-sky-700">
+              <span className="font-black">代理管理已生效：</span>下方店家選單已包含 {delegatedStores.length} 間受託店家，區域名稱仍維持正式組織歸屬。
+            </div>
+          )}
           <div className="flex flex-col sm:flex-row gap-4 justify-between items-center">
             <div className="flex gap-3 w-full sm:w-auto items-center overflow-x-auto no-scrollbar">
               
@@ -1139,7 +1147,7 @@ const StoreAnalysisView = () => {
                 <div className="mb-4 flex items-center gap-2 text-stone-500">
                     <Activity size={20} />
                     <h3 className="font-bold">
-                        {userRole === 'manager' ? `${currentUser.name}區` : brandPrefix} 體質異常監控 (本月)
+                        {userRole === 'manager' ? '我的管理範圍' : brandPrefix} 體質異常監控 (本月)
                     </h3>
                     <span className="text-xs bg-stone-100 text-stone-400 px-2 py-1 rounded-lg">
                         套用標準：{brandId === 'default' ? '預設' : brandId} (及格線 {formatThreshold(cfg.financial.min)})
