@@ -729,29 +729,11 @@ export function useDashboardStats() {
 
   const therapistEffectiveStores = useMemo(() => {
     if (selectedDashboardStore) return [cleanName(selectedDashboardStore)];
-
     if (selectedDashboardManager && managers[selectedDashboardManager]) {
-      return managers[selectedDashboardManager]
-        .map(cleanName)
-        .filter(Boolean);
+        return managers[selectedDashboardManager].map(cleanName).filter(Boolean);
     }
-
-    // 代理主管在「人員績效」也只能看到正式＋已授權托管範圍。
-    if ((userRole === 'manager' || userRole === 'store') && currentUser) {
-      return baseVisibleStores;
-    }
-
-    return allCompanyStores;
-  }, [
-    selectedDashboardStore,
-    selectedDashboardManager,
-    managers,
-    allCompanyStores,
-    baseVisibleStores,
-    userRole,
-    currentUser,
-    cleanName,
-  ]);
+    return allCompanyStores; 
+  }, [selectedDashboardStore, selectedDashboardManager, managers, allCompanyStores, cleanName]);
 
   const effectiveAnnualKpiBenchmark = useMemo(() => {
     const base = annualKpiBenchmark || {};
@@ -1507,12 +1489,9 @@ export function useDashboardStats() {
 
     const normalizeStoreDisplay = (value) => cleanName(value || "").replace(/店$/, "") + "店";
     const selectedStores = new Set((therapistEffectiveStores || []).map(cleanName).filter(Boolean));
-    const useFilter = Boolean(
-      selectedDashboardManager ||
-      selectedDashboardStore ||
-      userRole === "manager" ||
-      userRole === "store"
-    );
+    // 保留 useDashboardStats-NEW 的原始設計：區長／店經理預設觀看全品牌人員績效；
+    // 只有手動選區或選店時，才縮小人員績效範圍。
+    const useFilter = selectedDashboardManager || selectedDashboardStore;
 
     let rankings = Array.isArray(summary.rankings) ? summary.rankings.map((item) => ({ ...item })) : [];
     if (useFilter && selectedStores.size > 0) {
