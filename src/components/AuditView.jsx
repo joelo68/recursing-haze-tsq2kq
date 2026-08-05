@@ -1,9 +1,9 @@
 // src/components/AuditView.jsx
-import React, { useState, useMemo, useContext, useCallback, useEffect } from "react";
+import React, { useState, useMemo, useContext, useCallback, useEffect, useRef } from "react";
 import { AlertCircle, UserX, CheckCircle, Target, Settings, X, Save, Ban, HelpCircle } from "lucide-react"; 
 
 import { AppContext } from "../AppContext";
-import { formatLocalYYYYMMDD, sortManagerNames, sortStoreNames, sortManagersByOrgOrder, sortStoresByOrgOrder } from "../utils/helpers";
+import { sortManagerNames, sortStoreNames, sortManagersByOrgOrder, sortStoresByOrgOrder } from "../utils/helpers";
 import { ViewWrapper, Card } from "./SharedUI";
 import SmartDatePicker from "./SmartDatePicker";
 
@@ -22,9 +22,86 @@ const safeGetDateStr = (val) => {
     return String(val);
 };
 
+const TAIPEI_TIME_ZONE = "Asia/Taipei";
+const DAILY_AUDIT_CUTOFF_HOUR = 18;
+
+const getTaipeiDateTimeParts = (value = new Date()) => {
+  const parts = new Intl.DateTimeFormat("en-CA", {
+    timeZone: TAIPEI_TIME_ZONE,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    hourCycle: "h23",
+  }).formatToParts(value);
+
+  const map = {};
+  parts.forEach((part) => {
+    if (part.type !== "literal") map[part.type] = part.value;
+  });
+
+  return {
+    year: Number(map.year),
+    month: Number(map.month),
+    day: Number(map.day),
+    hour: Number(map.hour),
+  };
+};
+
+const formatCalendarDate = (year, month, day) => (
+  `${String(year).padStart(4, "0")}-${String(month).padStart(2, "0")}-${String(day).padStart(2, "0")}`
+);
+
+const shiftCalendarDate = (year, month, day, deltaDays = 0) => {
+  const utcDate = new Date(Date.UTC(year, month - 1, day));
+  utcDate.setUTCDate(utcDate.getUTCDate() + deltaDays);
+  return formatCalendarDate(
+    utcDate.getUTCFullYear(),
+    utcDate.getUTCMonth() + 1,
+    utcDate.getUTCDate()
+  );
+};
+
+const getDefaultDailyAuditDate = (value = new Date()) => {
+  const taipei = getTaipeiDateTimeParts(value);
+  if (taipei.hour < DAILY_AUDIT_CUTOFF_HOUR) {
+    return shiftCalendarDate(taipei.year, taipei.month, taipei.day, -1);
+  }
+  return formatCalendarDate(taipei.year, taipei.month, taipei.day);
+};
+
+const getMillisecondsUntilNextTaipeiCutoff = (value = new Date()) => {
+  const nowMs = value.getTime();
+  const taipei = getTaipeiDateTimeParts(value);
+
+  // 台灣固定為 UTC+8，18:00 等於 UTC 10:00。
+  let cutoffMs = Date.UTC(
+    taipei.year,
+    taipei.month - 1,
+    taipei.day,
+    DAILY_AUDIT_CUTOFF_HOUR - 8,
+    0,
+    0,
+    0
+  );
+
+  if (nowMs >= cutoffMs) cutoffMs += 24 * 60 * 60 * 1000;
+  return Math.max(1000, cutoffMs - nowMs);
+};
+
+const getDateYearMonth = (dateStr = "") => {
+  const match = String(dateStr || "").match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  if (!match) return null;
+  return {
+    year: match[1],
+    month: String(Number(match[2])),
+    yearMonth: `${match[1]}-${match[2]}`,
+  };
+};
+
 const AuditView = ({ auditType: controlledAuditType, setAuditType: setControlledAuditType } = {}) => {
   const {
-    managers, managerOrder, showToast, budgets, selectedYear, selectedMonth, rawData,
+    managers, managerOrder, showToast, budgets, selectedYear, selectedMonth, setSelectedYear, setSelectedMonth, rawData,
     therapists, therapistReports, therapistSchedules, userRole, currentUser, therapistTargets,
     auditExclusions = [], handleUpdateAuditExclusions, currentBrand, therapistModuleEnabled,
     getActiveDelegationForStore, delegatedStores = []
@@ -32,12 +109,46 @@ const AuditView = ({ auditType: controlledAuditType, setAuditType: setControlled
 
   const isTherapistModuleEnabled = therapistModuleEnabled !== false;
 
-  const [checkDate, setCheckDate] = useState(formatLocalYYYYMMDD(new Date()));
   const [localAuditType, setLocalAuditType] = useState(userRole === 'trainer' ? "therapist-daily" : "daily");
   const auditType = controlledAuditType || localAuditType;
-  const setAuditType = setControlledAuditType || setLocalAuditType; 
+  const setAuditType = setControlledAuditType || setLocalAuditType;
+  const [checkDate, setCheckDate] = useState(() => getDefaultDailyAuditDate());
   const [isConfigModalOpen, setIsConfigModalOpen] = useState(false);
   const [localExclusions, setLocalExclusions] = useState([]);
+
+  // 未手動選日期前，日報檢核會依台灣時間自動選擇：
+  // 18:00 前顯示前一天；18:00 後顯示當天。
+  const autoDailyDateModeRef = useRef(true);
+  const pendingPeriodSyncRef = useRef("");
+  const isDailyAuditType = auditType === "daily" || auditType === "therapist-daily";
+
+  const syncGlobalPeriodForDate = useCallback((dateStr) => {
+    const parsed = getDateYearMonth(dateStr);
+    if (!parsed) return;
+
+    const currentSelectedYearMonth = `${String(selectedYear || "")}-${String(selectedMonth || "").padStart(2, "0")}`;
+    if (currentSelectedYearMonth === parsed.yearMonth) {
+      pendingPeriodSyncRef.current = "";
+      return;
+    }
+
+    pendingPeriodSyncRef.current = parsed.yearMonth;
+    if (typeof setSelectedYear === "function") setSelectedYear(parsed.year);
+    if (typeof setSelectedMonth === "function") setSelectedMonth(parsed.month);
+  }, [selectedYear, selectedMonth, setSelectedYear, setSelectedMonth]);
+
+  const applyCheckDate = useCallback((nextDate, { manual = false } = {}) => {
+    const normalized = safeGetDateStr(nextDate);
+    if (!getDateYearMonth(normalized)) return;
+
+    if (manual) autoDailyDateModeRef.current = false;
+    setCheckDate(normalized);
+    syncGlobalPeriodForDate(normalized);
+  }, [syncGlobalPeriodForDate]);
+
+  const handleCheckDateSelect = useCallback((nextDate) => {
+    applyCheckDate(nextDate, { manual: true });
+  }, [applyCheckDate]);
 
   // trainer 角色預設使用管理師檢核；若品牌關閉管理師模組，則強制回到店家日報。
   useEffect(() => {
@@ -50,13 +161,57 @@ const AuditView = ({ auditType: controlledAuditType, setAuditType: setControlled
     }
   }, [userRole, auditType, setAuditType, isTherapistModuleEnabled]);
 
+  // 進入店家／管理師日報時，若操作者尚未手動選日期，就套用台灣時間預設日。
+  useEffect(() => {
+    if (!isDailyAuditType || !autoDailyDateModeRef.current) return;
+    applyCheckDate(getDefaultDailyAuditDate(), { manual: false });
+  }, [isDailyAuditType, applyCheckDate]);
+
+  // 頁面若持續開啟跨過 18:00，且操作者沒有手動選過日期，自動由昨日切換為今日。
+  useEffect(() => {
+    if (!isDailyAuditType) return undefined;
+
+    let timerId = null;
+    const scheduleNextCutoff = () => {
+      const delay = getMillisecondsUntilNextTaipeiCutoff();
+      timerId = window.setTimeout(() => {
+        if (autoDailyDateModeRef.current) {
+          applyCheckDate(getDefaultDailyAuditDate(), { manual: false });
+        }
+        scheduleNextCutoff();
+      }, delay + 250);
+    };
+
+    scheduleNextCutoff();
+    return () => {
+      if (timerId) window.clearTimeout(timerId);
+    };
+  }, [isDailyAuditType, applyCheckDate]);
+
+  // App 全域年月由本頁自動同步時，不要反向把日期改回每月 1 日；
+  // 若使用者自行操作上方年月選單，則沿用既有行為，切到該月 1 日並停止 18:00 自動覆蓋。
   useEffect(() => {
     if (!checkDate || !selectedYear || !selectedMonth) return;
-    const currentObj = new Date(checkDate);
-    if (currentObj.getFullYear().toString() !== selectedYear || (currentObj.getMonth() + 1).toString() !== selectedMonth) {
-      setCheckDate(`${selectedYear}-${selectedMonth.padStart(2, '0')}-01`);
+
+    const checkPeriod = getDateYearMonth(checkDate);
+    if (!checkPeriod) return;
+
+    const selectedYearMonth = `${String(selectedYear)}-${String(selectedMonth).padStart(2, "0")}`;
+    const pendingYearMonth = pendingPeriodSyncRef.current;
+
+    if (pendingYearMonth) {
+      if (selectedYearMonth === pendingYearMonth) {
+        pendingPeriodSyncRef.current = "";
+        return;
+      }
+      if (checkPeriod.yearMonth === pendingYearMonth) return;
     }
-  }, [selectedYear, selectedMonth]);
+
+    if (checkPeriod.yearMonth !== selectedYearMonth) {
+      autoDailyDateModeRef.current = false;
+      setCheckDate(`${selectedYearMonth}-01`);
+    }
+  }, [checkDate, selectedYear, selectedMonth]);
 
   const { minBoundary, maxBoundary } = useMemo(() => {
     const y = parseInt(selectedYear), m = parseInt(selectedMonth);
@@ -516,7 +671,7 @@ const AuditView = ({ auditType: controlledAuditType, setAuditType: setControlled
                 {(auditType === "daily" || auditType === "therapist-daily") ? (
                    <div className="w-full sm:w-auto relative z-10">
                         <SmartDatePicker 
-                          selectedDate={checkDate} onDateSelect={setCheckDate}
+                          selectedDate={checkDate} onDateSelect={handleCheckDateSelect}
                           stores={calendarStores} salesData={calendarSalesData} 
                           min={minBoundary} max={maxBoundary}
                         />
