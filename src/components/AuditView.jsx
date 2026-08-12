@@ -262,14 +262,22 @@ const AuditView = ({ auditType: controlledAuditType, setAuditType: setControlled
     return t.name || t.therapistName || t.displayName || String(t.id || "未命名");
   }, []);
 
+  // ★ 區長歸屬單一權威來源：
+  // 1. 先依「管理師目前店家 → 當前品牌 org_structure(managers)」判斷正式區長。
+  // 2. 只有正式組織架構找不到店家時，才回退到管理師文件中的舊 manager 欄位。
+  // 這樣 CYJ／安妞／伊啵在店家換區長後，都不會被 therapist 舊資料誤分到前任區長。
   const getTherapistManager = useCallback((t = {}) => {
-    if (t.manager || t.managerName || t.areaManager) return t.manager || t.managerName || t.areaManager;
     const storeCore = getTherapistStore(t);
-    if (!storeCore) return "未分區";
-    const found = Object.entries(managers || {}).find(([, stores]) =>
-      (stores || []).some((s) => cleanStoreName(s) === storeCore)
-    );
-    return found?.[0] || "未分區";
+
+    if (storeCore) {
+      const found = Object.entries(managers || {}).find(([, stores]) =>
+        (Array.isArray(stores) ? stores : []).some((s) => cleanStoreName(s) === storeCore)
+      );
+      if (found?.[0]) return found[0];
+    }
+
+    // 舊資料相容：僅在目前品牌的正式組織架構無法判斷時使用。
+    return t.manager || t.managerName || t.areaManager || t.regionManager || "未分區";
   }, [managers, managerOrder, cleanStoreName, getTherapistStore]);
 
   const getResponsibilityLabel = useCallback((officialManager = "未分區", storeName = "", date = checkDate) => {
