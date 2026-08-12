@@ -8340,16 +8340,33 @@ function makeAutoSummaryCompareRows({ storedDashboard, storedTherapist, freshDas
 async function loadPendingQueueRowsForAutoRepair(brandId, yearMonth) {
   const queueRef = getSummaryCollection(brandId, "recalc_queue");
 
-  // 指定月份重建時，只讀取該月份的 queue 文件；不再掃描其他月份的 pending。
-  // 不加 status 複合條件，避免本次修正依賴新的複合索引；取回後只保留 pending。
-  // 舊格式 pending 會由低頻 fallback 分頁巡檢時補上 affectedYearMonth，再進入同一條精準流程。
-  const exactMonthSnap = await queueRef
-    .where("affectedYearMonth", "==", yearMonth)
-    .get();
+  // 正常主流程直接由 Firestore 篩出「指定月份 + pending」，避免先讀完整月份 queue
+  // 再於 Node.js 過濾 status，降低已 completed / ignored 等歷史文件造成的 reads。
+  // 兩個條件皆為 equality (==)，不新增 orderBy / range；保留舊月份查詢作為容錯 fallback。
+  try {
+    const exactPendingSnap = await queueRef
+      .where("affectedYearMonth", "==", yearMonth)
+      .where("status", "==", "pending")
+      .get();
 
-  return exactMonthSnap.docs
-    .map((docSnap) => ({ id: docSnap.id, ...(docSnap.data() || {}) }))
-    .filter((row) => String(row.status || "") === "pending");
+    return exactPendingSnap.docs
+      .map((docSnap) => ({ id: docSnap.id, ...(docSnap.data() || {}) }));
+  } catch (error) {
+    console.warn(
+      `⚠️ Summary 自動修復：recalc_queue 精準查詢失敗，退回月份查詢 ${brandId}/${yearMonth}`,
+      error?.message || error
+    );
+
+    // 容錯：若環境索引設定或 Firestore 查詢暫時異常，維持修正前的查詢行為，
+    // 先讀指定月份再於程式端保留 pending，避免歷史 Summary 修復流程中斷。
+    const exactMonthSnap = await queueRef
+      .where("affectedYearMonth", "==", yearMonth)
+      .get();
+
+    return exactMonthSnap.docs
+      .map((docSnap) => ({ id: docSnap.id, ...(docSnap.data() || {}) }))
+      .filter((row) => String(row.status || "") === "pending");
+  }
 }
 
 async function markAutoRecalcQueueCompleted(brandId, yearMonth, rows = [], resultText = "") {
