@@ -7519,10 +7519,18 @@ function normalizeSummaryCoreName(value) {
     .replace(/[　\s]+/g, "")
     .replace(/[（）()]/g, "");
   if (!raw) return "";
-  return raw
+
+  const core = raw
     .replace(/^(CYJ|DRCYJ|Anew安妞|Yibo伊啵|Anew|Yibo|安妞|伊啵)/i, "")
-    .replace(/店/g, "")
     .replace(/臺/g, "台")
+    .trim();
+
+  // ★ 「新店」是正式地名，不是「新 + 店」。
+  // 同時相容舊 Summary 曾誤寫成「新」的資料；其他店名仍維持既有去除「店」字的規則，縮小變更範圍。
+  if (core === "新" || /^新店店?$/.test(core)) return "新店";
+
+  return core
+    .replace(/店/g, "")
     .trim();
 }
 
