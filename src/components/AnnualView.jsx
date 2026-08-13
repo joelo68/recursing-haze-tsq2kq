@@ -176,6 +176,15 @@ const AnnualView = () => {
     return core.replace(/店$/, '').trim();
   }, [brandPrefix]);
 
+  // ★ 歷史 Summary 店名相容層：只用於資料比對，不改畫面顯示名稱。
+  // 舊 Summary 曾把「新店」存成「新」；新 Summary 則為「新店」。兩者統一視為同一間店。
+  const canonicalStoreName = useMemo(() => (name) => {
+    const core = cleanName(name);
+    if (!core) return "";
+    if (core === "新" || /^新店店?$/.test(core)) return "新店";
+    return core;
+  }, [cleanName]);
+
   const baseVisibleStores = useMemo(() => {
     if (userRole === 'director' || userRole === 'trainer' || userRole === 'therapist') {
       return Object.values(managers).flat().map(cleanName).filter(Boolean);
@@ -302,9 +311,15 @@ const AnnualView = () => {
   }, [annualMonthlyTargetSummaries, monthlyTargetSummary]);
 
 const annualData = useMemo(() => {
+    const effectiveStoreSet = new Set(effectiveStores.map(canonicalStoreName).filter(Boolean));
+    const auditExclusionSet = new Set((auditExclusions || []).map(canonicalStoreName).filter(Boolean));
+
     // 目標店家 = 在有效清單中，且沒有被「排除設定」打勾的店家
     const targetStoreNames = effectiveStores
-      .filter(s => !auditExclusions.includes(s))
+      .filter((s) => {
+        const core = canonicalStoreName(s);
+        return core && !auditExclusionSet.has(core);
+      })
       .map(s => `${brandPrefix}${s}店`); 
 
     const monthList = [];
@@ -367,15 +382,33 @@ const annualData = useMemo(() => {
         targetStat.budget = pickNumber(grand, ["budget", "cashBudget", "cashTarget", "targetCash"]);
         targetStat.accrualBudget = pickNumber(grand, ["accrualBudget", "accrualTarget", "targetAccrual"]);
         targetStat.source = "summary";
-        return;
+        return true;
       }
 
-      const allStores = Object.values(summary?.stores || {});
+      // ★ 不只看 value 欄位，也保留 Summary map key；與營運總覽的多候選店名比對概念一致。
+      const allStores = Object.entries(summary?.stores || {}).map(([summaryKey, value]) => ({
+        __summaryKey: summaryKey,
+        ...(value || {}),
+      }));
+
       const stores = allStores.filter((store) => {
-        const core = cleanName(store.store || store.displayName || store.name || store.storeName);
-        if (!core) return false;
-        return effectiveStores.includes(core);
+        const candidates = [
+          store.__summaryKey,
+          store.store,
+          store.storeName,
+          store.displayName,
+          store.name,
+          store.id,
+        ]
+          .map(canonicalStoreName)
+          .filter(Boolean);
+
+        return candidates.some((core) => effectiveStoreSet.has(core) && !auditExclusionSet.has(core));
       });
+
+      // ★ 安全閥：有指定區／店但 Summary 完全比對不到時，不把此月份鎖成已套用 Summary。
+      // 讓下方 monthly_aggregated 保留備援機會，避免名稱格式異常直接把整月變成 0。
+      if (stores.length === 0) return false;
 
       targetStat.cash = stores.reduce((sum, store) => sum + pickNumber(store, ["cash", "cashTotal", "totalCash"]), 0);
       targetStat.accrual = stores.reduce((sum, store) => sum + pickNumber(store, ["accrual", "accrualTotal", "totalAccrual"]), 0);
@@ -383,6 +416,7 @@ const annualData = useMemo(() => {
       targetStat.budget = stores.reduce((sum, store) => sum + pickNumber(store, ["budget", "cashBudget", "cashTarget", "targetCash"]), 0);
       targetStat.accrualBudget = stores.reduce((sum, store) => sum + pickNumber(store, ["accrualBudget", "accrualTarget", "targetAccrual"]), 0);
       targetStat.source = "summary";
+      return true;
     };
 
     const sumTargetsFromMonthlyTargetSummary = (summary, targetStat) => {
@@ -394,7 +428,7 @@ const annualData = useMemo(() => {
       const targetsMap = summary.targets || summary.storeTargets || summary.data || {};
       if (!targetsMap || typeof targetsMap !== "object") return false;
 
-      const targetStoreSet = new Set(targetStoreNames.map((name) => cleanName(name)));
+      const targetStoreSet = new Set(targetStoreNames.map(canonicalStoreName).filter(Boolean));
       const allTargets = Object.entries(targetsMap)
         .map(([key, value]) => ({
           key,
@@ -403,7 +437,7 @@ const annualData = useMemo(() => {
         }))
         .filter((item) => {
           if (!shouldFilterSummaryStores) return true;
-          const core = cleanName(item.storeName);
+          const core = canonicalStoreName(item.storeName);
           return core && targetStoreSet.has(core);
         });
 
@@ -429,18 +463,18 @@ const annualData = useMemo(() => {
       const isHistoricalMonth = yearMonth < currentYearMonth;
       const summary = summaryByMonth[yearMonth];
       if (isHistoricalMonth && summary && isSummaryTrusted(yearMonth)) {
-        sumFieldsFromStores(summary, stat);
-        summaryAppliedMonths.add(yearMonth);
+        const applied = sumFieldsFromStores(summary, stat);
+        if (applied) summaryAppliedMonths.add(yearMonth);
       }
     });
 
     // monthly_aggregated 僅作為本月 / 未整理月份備援。
     annualAggregatedData.forEach(d => {
-      const rawStoreName = cleanName(d.storeName);
+      const rawStoreName = canonicalStoreName(d.storeName);
       
       // 雙層防護：不在篩選清單內，或是被排除設定打勾，一律不計入
-      if (auditExclusions.includes(rawStoreName)) return;
-      if (!effectiveStores.includes(rawStoreName)) return;
+      if (auditExclusionSet.has(rawStoreName)) return;
+      if (!effectiveStoreSet.has(rawStoreName)) return;
 
       if (!d.yearMonth) return;
       const parts = d.yearMonth.split("-");
@@ -502,7 +536,7 @@ const annualData = useMemo(() => {
         traffic: totalTraffic,
       }
     };
-  }, [annualAggregatedData, annualDashboardSummaries, annualSummaryStatusMap, monthlyTargetSummaryByMonth, budgets, startMonthStr, endMonthStr, auditExclusions, brandPrefix, effectiveStores, cleanName, selectedAnnualManager, selectedAnnualStore, userRole]); // ★ Summary-first 口徑需跟著篩選與權限更新
+  }, [annualAggregatedData, annualDashboardSummaries, annualSummaryStatusMap, monthlyTargetSummaryByMonth, budgets, startMonthStr, endMonthStr, auditExclusions, brandPrefix, effectiveStores, cleanName, canonicalStoreName, selectedAnnualManager, selectedAnnualStore, userRole]); // ★ Summary-first 口徑需跟著篩選與權限更新
 
   const { monthlyStats, totals } = annualData;
 
