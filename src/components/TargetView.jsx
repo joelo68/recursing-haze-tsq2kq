@@ -10,6 +10,26 @@ import { AppContext } from "../AppContext";
 import { ViewWrapper, Card } from "./SharedUI";
 import { formatNumber, parseNumber, sortManagerNames, sortStoreNames, sortManagersByOrgOrder, sortStoresByOrgOrder } from "../utils/helpers";
 
+// 年度目標頁面的店名正規化需與 App / DailyView 的既有規則一致。
+// 「新店」是地名本體，不能把最後一個「店」當成一般門市後綴移除。
+const TARGET_STORE_BRAND_PATTERN = /^(DRCYJ|DR\.CYJ|CYJ|Anew\s*\(安妞\)|Yibo\s*\(伊啵\)|安妞|伊啵|Anew|Yibo|Ann)\s*/i;
+
+const normalizeTargetStoreCore = (value = "") => {
+  let core = String(value || "")
+    .trim()
+    .replace(TARGET_STORE_BRAND_PATTERN, "")
+    .replace(/[　\s]+/g, "")
+    .trim();
+
+  if (core === "新店") return "新店";
+  return core.replace(/店$/, "").trim();
+};
+
+const formatTargetStoreName = (value, brandPrefix) => {
+  const core = normalizeTargetStoreCore(value);
+  return core ? `${brandPrefix}${core}店` : "";
+};
+
 const TargetView = () => {
   const { 
     userRole, 
@@ -84,23 +104,23 @@ const TargetView = () => {
 
 
   const availableStores = useMemo(() => {
-    const formatStoreName = (s) => {
-      const coreName = String(s || "").replace(/CYJ|安妞|伊啵|Anew|Yibo|店/gi, "").trim();
-      return `${brandPrefix}${coreName}店`;
-    };
+    // 先用 org_structure 的原始店名排序，再轉成顯示名稱。
+    // 這可避免「CYJ新店店」經共用排序 helper 正規化後改變既有 org 順序。
+    const sortThenFormat = (stores = []) =>
+      sortStoresByOrgOrder(managers, stores, brandPrefix, managerOrder)
+        .map((storeName) => formatTargetStoreName(storeName, brandPrefix))
+        .filter(Boolean);
 
-    if (userRole === "director" || userRole === "trainer") 
+    if (userRole === "director" || userRole === "trainer")
       return selectedManager
-        ? sortStoresByOrgOrder(managers, (managers[selectedManager] || []).map(formatStoreName), brandPrefix, managerOrder)
+        ? sortThenFormat(managers[selectedManager] || [])
         : [];
 
     if (userRole === "manager")
-      return sortStoresByOrgOrder(managers, Object.values(managers)
-        .flat()
-        .map(formatStoreName), brandPrefix, managerOrder);
+      return sortThenFormat(Object.values(managers).flat());
 
     if (userRole === "store" && currentUser)
-      return sortStoresByOrgOrder(managers, (currentUser.stores || [currentUser.storeName]).map(formatStoreName), brandPrefix, managerOrder);
+      return sortThenFormat(currentUser.stores || [currentUser.storeName]);
 
     return [];
   }, [selectedManager, managers, managerOrder, currentUser, userRole, brandPrefix]);
@@ -113,21 +133,35 @@ const TargetView = () => {
     if (userRole === "store" && currentUser) {
       const myStores = currentUser.stores || [currentUser.storeName];
       if (myStores.length > 0) {
-        let rawName = myStores[0];
-        rawName = rawName.replace(/CYJ|安妞|伊啵|Anew|Yibo|店/gi, "").trim();
+        const rawCore = normalizeTargetStoreCore(myStores[0]);
+        const fullName = formatTargetStoreName(myStores[0], brandPrefix);
 
         const foundMgr = Object.keys(managers).find((mgr) =>
-          managers[mgr].includes(rawName)
+          (managers[mgr] || []).some((storeName) => normalizeTargetStoreCore(storeName) === rawCore)
         );
         if (foundMgr) setSelectedManager(foundMgr);
-        
-        const fullName = `${brandPrefix}${rawName}店`;
+
         setSelectedStore(fullName);
       }
     } else if (userRole === "manager" && currentUser) {
       setSelectedManager(currentUser.name);
     }
   }, [userRole, currentUser, managers, managerOrder, brandPrefix, availableStores]); 
+
+  // 舊版 TargetView 曾把「CYJ新店店」錯寫成「CYJ新店」。
+  // 若既有 monthly_targets 已使用舊 key，先沿用原文件，避免修正店名後舊目標突然消失或重複建立。
+  // 新資料若沒有舊 key，則使用正確的「CYJ新店店」key。
+  const resolveTargetBudgetKey = (storeName, year, month) => {
+    const primaryKey = `${storeName}_${year}_${month}`;
+    if (budgets?.[primaryKey]) return primaryKey;
+
+    if (normalizeTargetStoreCore(storeName) === "新店") {
+      const legacyKey = `${brandPrefix}新店_${year}_${month}`;
+      if (budgets?.[legacyKey]) return legacyKey;
+    }
+
+    return primaryKey;
+  };
 
   useEffect(() => {
     if (!selectedStore) {
@@ -139,7 +173,7 @@ const TargetView = () => {
 
     const newTargets = Array.from({ length: 12 }, (_, i) => {
       const month = i + 1;
-      const key = `${selectedStore}_${selectedYear}_${month}`;
+      const key = resolveTargetBudgetKey(selectedStore, selectedYear, month);
       const existing = budgets[key];
       const hasChallenge = existing && (existing.challengeCashTarget > 0 || existing.challengeAccrualTarget > 0);
       
@@ -162,7 +196,7 @@ const TargetView = () => {
         return false;
     }
     const month = monthIndex + 1;
-    const key = `${selectedStore}_${selectedYear}_${month}`;
+    const key = resolveTargetBudgetKey(selectedStore, selectedYear, month);
     const existing = budgets[key];
     return !!(existing && (existing.cashTarget > 0 || existing.accrualTarget > 0));
   };
@@ -182,7 +216,7 @@ const TargetView = () => {
 
     setIsSaving(true);
     try {
-      const key = `${selectedStore}_${selectedYear}_${month}`;
+      const key = resolveTargetBudgetKey(selectedStore, selectedYear, month);
       const docRef = doc(getCollectionPath("monthly_targets"), key);
 
       const unlockPayload = {
@@ -284,7 +318,7 @@ const TargetView = () => {
         const challengeAccrual = parseNumber(item.challengeAccrualTarget);
 
         if (cash >= 0 || accrual >= 0) {
-           const key = `${selectedStore}_${selectedYear}_${item.month}`;
+           const key = resolveTargetBudgetKey(selectedStore, selectedYear, item.month);
            const docRef = doc(getCollectionPath("monthly_targets"), key);
            
            const targetPayload = {
