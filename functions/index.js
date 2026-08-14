@@ -549,9 +549,27 @@ const TELEGRAM_AGENT_COMPATIBLE_VERSIONS = new Set([
     "drcyj-agent-v4.3-stable-api-schedule-query",
     TELEGRAM_AGENT_VERSION,
 ]);
-const TELEGRAM_AGENT_PRIMARY_MODEL = "gemini-3.6-flash";
-const TELEGRAM_AGENT_FALLBACK_MODEL = "gemini-3.5-flash";
-const GEMINI_INTERACTIONS_API_URL = "https://generativelanguage.googleapis.com/v1/interactions";
+const TELEGRAM_AGENT_PRIMARY_MODEL = "gemini-3.7-flash";
+const TELEGRAM_AGENT_FALLBACK_MODEL = "gemini-3.6-flash";
+
+// Gemini 3.7 Flash 官方 REST quickstart 目前使用 v1beta/interactions；
+// 3.6 Flash 備援維持既有已驗證的 stable v1/interactions，避免同時改動兩個可用路徑。
+const GEMINI_INTERACTIONS_API_URL_V1 = "https://generativelanguage.googleapis.com/v1/interactions";
+const GEMINI_INTERACTIONS_API_URL_V1BETA = "https://generativelanguage.googleapis.com/v1beta/interactions";
+const GEMINI_INTERACTIONS_V1BETA_MODELS = new Set(["gemini-3.7-flash"]);
+
+function getGeminiInteractionsApiUrl(model = TELEGRAM_AGENT_PRIMARY_MODEL) {
+    return GEMINI_INTERACTIONS_V1BETA_MODELS.has(String(model || ""))
+        ? GEMINI_INTERACTIONS_API_URL_V1BETA
+        : GEMINI_INTERACTIONS_API_URL_V1;
+}
+
+function getGeminiInteractionsApiLabel(model = TELEGRAM_AGENT_PRIMARY_MODEL) {
+    return GEMINI_INTERACTIONS_V1BETA_MODELS.has(String(model || ""))
+        ? "interactions-v1beta-rest"
+        : "interactions-v1-rest";
+}
+
 const GEMINI_INTERACTIONS_TIMEOUT_MS = 35000;
 const TELEGRAM_AGENT_MAX_TOOL_CALLS = 3;
 const TELEGRAM_AGENT_MAX_READS = 2500;
@@ -2526,7 +2544,7 @@ function createTelegramAgentContext({ chatId, userId, question }) {
         },
         modelName: TELEGRAM_AGENT_PRIMARY_MODEL,
         fallbackUsed: false,
-        geminiApi: "interactions-v1-rest",
+        geminiApi: getGeminiInteractionsApiLabel(TELEGRAM_AGENT_PRIMARY_MODEL),
         policies: [],
         policyCatalog: [],
         policyCatalogMode: "",
@@ -4926,7 +4944,7 @@ async function writeTelegramAgentAuditLog(message, ctx, finalReply, status = "su
     try {
         await db.collection("telegram_agent_logs").add({
             version: TELEGRAM_AGENT_VERSION,
-            geminiApi: ctx?.geminiApi || "interactions-v1-rest",
+            geminiApi: ctx?.geminiApi || getGeminiInteractionsApiLabel(ctx?.modelName || TELEGRAM_AGENT_PRIMARY_MODEL),
             modelName: ctx?.modelName || TELEGRAM_AGENT_PRIMARY_MODEL,
             primaryModel: TELEGRAM_AGENT_PRIMARY_MODEL,
             fallbackModel: TELEGRAM_AGENT_FALLBACK_MODEL,
@@ -5090,7 +5108,7 @@ async function requestGeminiInteraction({
 
     try {
         const response = await axios.post(
-            GEMINI_INTERACTIONS_API_URL,
+            getGeminiInteractionsApiUrl(model),
             payload,
             {
                 headers: {
@@ -5314,7 +5332,7 @@ async function runTelegramAgentInteractionLoop({
 
 // ==========================================
 // ★ 3. Webhook：DRCYJ Telegram 營運戰情 Agent
-// Gemini 3.6 Flash + Interactions API（store=false）
+// Gemini 3.7 Flash + Interactions API（store=false）
 // ==========================================
 exports.telegramWebhook = onRequest({
     secrets: [GEMINI_API_KEY, TELEGRAM_BOT_TOKEN_SECRET],
@@ -5439,6 +5457,7 @@ ${policyContext}
 目前問題：${command}`;
 
         ctx.modelName = TELEGRAM_AGENT_PRIMARY_MODEL;
+        ctx.geminiApi = getGeminiInteractionsApiLabel(TELEGRAM_AGENT_PRIMARY_MODEL);
         let agentResult;
         try {
             agentResult = await runTelegramAgentInteractionLoop({
@@ -5454,6 +5473,7 @@ ${policyContext}
 
             ctx.fallbackUsed = true;
             ctx.modelName = TELEGRAM_AGENT_FALLBACK_MODEL;
+            ctx.geminiApi = getGeminiInteractionsApiLabel(TELEGRAM_AGENT_FALLBACK_MODEL);
             ctx.warnings.push(
                 `主要模型 ${TELEGRAM_AGENT_PRIMARY_MODEL} 暫時不可用，已切換 ${TELEGRAM_AGENT_FALLBACK_MODEL}。`
             );
