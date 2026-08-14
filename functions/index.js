@@ -1749,7 +1749,8 @@ function filterTelegramAgentRowsByPolicies(rows = [], brandId, ctx, scopes = ["t
 
 function filterTelegramAgentStoresByPolicies(stores = [], brandId, ctx, scopes = ["telegram_analysis"]) {
     const excluded = getTelegramPolicyExcludedStoreSet(ctx, brandId, scopes);
-    return normalizeTelegramAgentStoreNames(stores || []).filter((store) => !excluded.has(store));
+    // 這裡是實際營運範圍，不可套用對話 scope 的 20 家上限。
+    return normalizeTelegramAgentStoreNamesFull(stores || []).filter((store) => !excluded.has(store));
 }
 
 function applyTelegramAgentAlertPolicies(baseRules = {}, brandId, ctx) {
@@ -2478,8 +2479,8 @@ function buildTelegramAgentDataQuality({
         targetedStoreCount: targeted,
         reportCoverage,
         targetCoverage,
-        missingReportStores: normalizeTelegramAgentStoreNames(missingReportStores),
-        missingTargetStores: normalizeTelegramAgentStoreNames(missingTargetStores),
+        missingReportStores: normalizeTelegramAgentStoreNamesFull(missingReportStores),
+        missingTargetStores: normalizeTelegramAgentStoreNamesFull(missingTargetStores),
         rankingEligible,
         rankingBlockedReason: rankingEligible
             ? ""
@@ -2748,9 +2749,15 @@ function normalizeTelegramAgentManagerName(value = "") {
         .trim();
 }
 
-function normalizeTelegramAgentStoreNames(values = []) {
+function normalizeTelegramAgentStoreNamesFull(values = []) {
     const rows = Array.isArray(values) ? values : [values];
-    return [...new Set(rows.map((value) => normalizeSummaryCoreName(value)).filter(Boolean))].slice(0, 20);
+    return [...new Set(rows.map((value) => normalizeSummaryCoreName(value)).filter(Boolean))];
+}
+
+function normalizeTelegramAgentStoreNames(values = []) {
+    // 對話 scope / 短期記憶仍保留最多 20 家，避免無界限擴張；
+    // 完整營運檢核請使用 normalizeTelegramAgentStoreNamesFull()。
+    return normalizeTelegramAgentStoreNamesFull(values).slice(0, 20);
 }
 
 function sanitizeTelegramAgentScopeState(state = {}) {
@@ -3178,7 +3185,38 @@ async function loadTelegramAgentAuditExclusions(brandId, ctx) {
     };
 }
 
-async function loadTelegramAgentTargetMap(brandId, yearMonth, ctx, dashboardData = null) {
+function mergeTelegramAgentTargetMaps(baseMap = {}, supplementMap = {}) {
+    const merged = { ...(baseMap || {}) };
+    Object.entries(supplementMap || {}).forEach(([rawKey, rawValue]) => {
+        const storeCore = normalizeSummaryCoreName(rawKey || rawValue?.storeName || rawValue?.store || "");
+        if (!storeCore) return;
+        const current = merged[storeCore] || {};
+        const next = rawValue || {};
+        merged[storeCore] = {
+            ...current,
+            ...next,
+            storeName: storeCore,
+            cashTarget: Number(next.cashTarget || 0) > 0 ? Number(next.cashTarget) : Number(current.cashTarget || 0),
+            accrualTarget: Number(next.accrualTarget || 0) > 0 ? Number(next.accrualTarget) : Number(current.accrualTarget || 0),
+            challengeCashTarget: Number(next.challengeCashTarget || 0) > 0 ? Number(next.challengeCashTarget) : Number(current.challengeCashTarget || 0),
+            challengeAccrualTarget: Number(next.challengeAccrualTarget || 0) > 0 ? Number(next.challengeAccrualTarget) : Number(current.challengeAccrualTarget || 0),
+        };
+    });
+    return merged;
+}
+
+function getTelegramAgentMissingCashTargetStores(targetMap = {}, expectedStores = []) {
+    return normalizeTelegramAgentStoreNamesFull(expectedStores || []).filter((storeCore) =>
+        Number(targetMap?.[storeCore]?.cashTarget || 0) <= 0
+    );
+}
+
+async function loadTelegramAgentTargetMap(brandId, yearMonth, ctx, dashboardData = null, expectedStores = []) {
+    const normalizedExpectedStores = normalizeTelegramAgentStoreNamesFull(expectedStores || []);
+    let bestMap = {};
+    let bestSource = "";
+    let bestUpdatedAtText = "";
+
     const summaryRef = getSummaryCollection(brandId, "monthly_targets_summary").doc(yearMonth);
     const summaryResult = await readTelegramAgentDoc(
         summaryRef,
@@ -3189,14 +3227,36 @@ async function loadTelegramAgentTargetMap(brandId, yearMonth, ctx, dashboardData
     );
     if (summaryResult.exists) {
         const map = extractAutoTargetMapFromSummaryData(summaryResult.data || {}, yearMonth);
-        if (Object.keys(map).length > 0) return { map, source: "monthly_targets_summary", updatedAtText: summaryResult.updatedAtText };
+        if (Object.keys(map).length > 0) {
+            bestMap = mergeTelegramAgentTargetMaps(bestMap, map);
+            bestSource = "monthly_targets_summary";
+            bestUpdatedAtText = summaryResult.updatedAtText || "";
+            if (
+                normalizedExpectedStores.length === 0 ||
+                getTelegramAgentMissingCashTargetStores(bestMap, normalizedExpectedStores).length === 0
+            ) {
+                return { map: bestMap, source: bestSource, updatedAtText: bestUpdatedAtText };
+            }
+        }
     }
 
     if (dashboardData) {
         const map = extractAutoTargetMapFromSummaryData(dashboardData, yearMonth);
-        if (Object.keys(map).length > 0) return { map, source: "dashboard_summary_targets", updatedAtText: dashboardData.lastUpdatedAtText || "" };
+        if (Object.keys(map).length > 0) {
+            bestMap = mergeTelegramAgentTargetMaps(bestMap, map);
+            bestSource = bestSource ? `${bestSource}+dashboard_summary_targets` : "dashboard_summary_targets";
+            bestUpdatedAtText = dashboardData.lastUpdatedAtText || bestUpdatedAtText;
+            if (
+                normalizedExpectedStores.length === 0 ||
+                getTelegramAgentMissingCashTargetStores(bestMap, normalizedExpectedStores).length === 0
+            ) {
+                return { map: bestMap, source: bestSource, updatedAtText: bestUpdatedAtText };
+            }
+        }
     }
 
+    const missingBeforeFallback = getTelegramAgentMissingCashTargetStores(bestMap, normalizedExpectedStores);
+    // Summary 對正式納管店家不完整時才讀完整目標集合；完整時維持單文件 Summary-first 節流。
     assertTelegramAgentReadBudget(ctx, 200);
     const rawResult = await queryTelegramAgentDocs(
         getSummaryCollection(brandId, "monthly_targets"),
@@ -3206,13 +3266,18 @@ async function loadTelegramAgentTargetMap(brandId, yearMonth, ctx, dashboardData
         { brandId, yearMonth },
         300
     );
-    const map = {};
+    const rawMap = {};
     rawResult.rows.forEach((row) => {
         const built = buildAutoTargetRow(row.id, row, yearMonth);
-        if (built) map[built.storeCore] = built.target;
+        if (built) rawMap[built.storeCore] = built.target;
     });
-    if (ctx) ctx.warnings.push(`${getTelegramAgentBrandLabel(brandId)} ${yearMonth} 目標摘要缺漏，本題已啟用完整目標 fallback。`);
-    return { map, source: "monthly_targets_fallback", updatedAtText: "" };
+    const mergedMap = mergeTelegramAgentTargetMaps(bestMap, rawMap);
+    const fallbackSource = bestSource ? `${bestSource}+monthly_targets_fallback` : "monthly_targets_fallback";
+    if (ctx) {
+        const names = missingBeforeFallback.slice(0, 8).map((store) => `${store}店`).join("、");
+        ctx.warnings.push(`${getTelegramAgentBrandLabel(brandId)} ${yearMonth} 目標摘要對正式店家不完整${names ? `（${names}${missingBeforeFallback.length > 8 ? "…" : ""}）` : ""}，本題已啟用完整目標 fallback。`);
+    }
+    return { map: mergedMap, source: fallbackSource, updatedAtText: bestUpdatedAtText };
 }
 
 function normalizeTelegramAgentStoreRow(row = {}, brandId = "cyj", target = {}, options = {}) {
@@ -3342,10 +3407,8 @@ async function loadTelegramAgentStoreMonth(brandId, yearMonth, ctx) {
     );
 
     if (aggregatedResult.rows.length > 0) {
-        const [targetResult, org] = await Promise.all([
-            loadTelegramAgentTargetMap(brandId, yearMonth, ctx, dashboardData),
-            loadTelegramAgentOrgProfile(brandId, ctx),
-        ]);
+        const org = await loadTelegramAgentOrgProfile(brandId, ctx);
+        const targetResult = await loadTelegramAgentTargetMap(brandId, yearMonth, ctx, dashboardData, org.stores || []);
         const rows = aggregatedResult.rows.map((row) => {
             const core = normalizeSummaryCoreName(row.storeName || row.store || row.id || "");
             return normalizeTelegramAgentStoreRow({ ...row, manager: org.storeOwner[core] || row.manager || "未分配" }, brandId, targetResult.map[core] || {}, { cashIsNet: false, skincareIsNet: false });
@@ -3406,12 +3469,10 @@ async function loadTelegramAgentRawStoreRange(brandId, startDate, endDate, ctx, 
 
     const yearMonth = startDate.slice(0, 7);
     const shouldLoadTargets = options.includeTargets === true || startDate.slice(0, 7) === endDate.slice(0, 7);
-    const [org, targetResult] = await Promise.all([
-        loadTelegramAgentOrgProfile(brandId, ctx),
-        shouldLoadTargets
-            ? loadTelegramAgentTargetMap(brandId, yearMonth, ctx)
-            : Promise.resolve({ map: {}, source: "not_requested", updatedAtText: "" }),
-    ]);
+    const org = await loadTelegramAgentOrgProfile(brandId, ctx);
+    const targetResult = shouldLoadTargets
+        ? await loadTelegramAgentTargetMap(brandId, yearMonth, ctx, null, Object.keys(storeMap))
+        : { map: {}, source: "not_requested", updatedAtText: "" };
     const rows = Object.values(storeMap).map((row) => {
         const core = normalizeSummaryCoreName(row.storeName || "");
         return normalizeTelegramAgentStoreRow(
@@ -3447,16 +3508,31 @@ async function getStorePerformance(startDate, endDate, storeName = null, brandNa
             ? await loadTelegramAgentStoreMonth(brandId, start.slice(0, 7), ctx)
             : await loadTelegramAgentRawStoreRange(brandId, start, end, ctx);
         const org = await loadTelegramAgentOrgProfile(brandId, ctx);
-        const policyRows = filterTelegramAgentRowsByPolicies(loaded.rows, brandId, ctx, policyScopes)
-            .map((row) => {
+        const basePolicyRows = filterTelegramAgentRowsByPolicies(loaded.rows, brandId, ctx, policyScopes);
+        const requestedStoreCore = normalizeSummaryCoreName(storeName || "");
+        const rowsNeedingTargetRepair = basePolicyRows
+            .filter((row) => !requestedStoreCore || normalizeSummaryCoreName(row.storeName) === requestedStoreCore)
+            .filter((row) => Number(row?.budget || 0) <= 0)
+            .map((row) => normalizeSummaryCoreName(row.storeName))
+            .filter(Boolean);
+        const targetRepair = rowsNeedingTargetRepair.length > 0
+            ? await loadTelegramAgentTargetMap(brandId, start.slice(0, 7), ctx, null, rowsNeedingTargetRepair)
+            : { map: {}, source: "not_needed", updatedAtText: "" };
+        const policyRows = basePolicyRows.map((row) => {
                 const storeCore = normalizeSummaryCoreName(row.storeName);
                 const delegation = org.actingDelegationByStore?.[storeCore] || null;
+                const repairedTarget = targetRepair.map?.[storeCore] || {};
+                const budget = Number(row?.budget || repairedTarget.cashTarget || 0);
+                const accrualBudget = Number(row?.accrualBudget || repairedTarget.accrualTarget || 0);
                 return {
                     ...row,
                     manager: org.storeOwner?.[storeCore] || row.manager || "未分配",
                     actingManager: delegation?.delegateName || "",
                     delegationId: delegation?.id || "",
                     delegationEndDate: delegation?.endDate || "",
+                    budget,
+                    accrualBudget,
+                    achievement: budget > 0 ? Number(((Number(row?.cash || 0) / budget) * 100).toFixed(1)) : 0,
                 };
             });
         policyRows.forEach((row) => allRows.push(row));
@@ -3715,7 +3791,7 @@ async function getMissingReports(startDate, endDate, brandName = null, agentCont
             const core = normalizeSummaryCoreName(row.storeName || row.store || "");
             if (core) submitted.add(core);
         });
-        const officialStores = normalizeTelegramAgentStoreNames(org.stores || [])
+        const officialStores = normalizeTelegramAgentStoreNamesFull(org.stores || [])
             .filter((store) => !auditExclusions.storeSet.has(store));
         const expected = filterTelegramAgentStoresByPolicies(officialStores, brandId, ctx, policyScopes);
         const submittedExpectedCount = expected.filter((store) => submitted.has(store)).length;
@@ -3739,7 +3815,7 @@ async function getMissingReports(startDate, endDate, brandName = null, agentCont
             missingStores: missing,
             missingDetails,
             activeDelegationCount: Array.isArray(org.activeDelegations) ? org.activeDelegations.length : 0,
-            excludedStoreCount: Math.max(0, normalizeTelegramAgentStoreNames(org.stores || []).length - expected.length),
+            excludedStoreCount: Math.max(0, normalizeTelegramAgentStoreNamesFull(org.stores || []).length - expected.length),
             source: "org_structure + management_delegations + audit_exclusions + telegram_agent_policies + daily_reports_scoped",
         });
     }
@@ -3836,7 +3912,7 @@ async function getManagerPerformance(yearMonth, managerName = null, brandName = 
     for (const brandId of brands) {
         const org = orgCache[brandId] || await loadTelegramAgentOrgProfile(brandId, ctx);
         const loaded = await loadTelegramAgentStoreMonth(brandId, ym, ctx);
-        const targetResult = await loadTelegramAgentTargetMap(brandId, ym, ctx);
+        const targetResult = await loadTelegramAgentTargetMap(brandId, ym, ctx, null, org.stores || []);
 
         const rowByCore = {};
         loaded.rows.forEach((row) => {
@@ -4180,7 +4256,6 @@ async function getOperationalAlerts(yearMonth, brandName = null, limit = 10, age
         enabledRuleLabels.forEach((label) => enabledRuleLabelSet.add(label));
         const effectiveLimit = getTelegramAgentAlertLimit(limit, brandId, ctx);
         effectiveLimits.push(effectiveLimit);
-        const targetResult = await loadTelegramAgentTargetMap(brandId, ym, ctx);
         const rowByCore = {};
         loaded.rows.forEach((row) => {
             const core = normalizeSummaryCoreName(row.storeName);
@@ -4192,6 +4267,7 @@ async function getOperationalAlerts(yearMonth, brandName = null, limit = 10, age
         const combinedExcludedSet = new Set([...exclusions.storeSet, ...policyExcludedStores]);
         const activeStoreCores = formalStoreCores.filter((storeCore) => !combinedExcludedSet.has(storeCore));
         const excludedFormalStores = formalStoreCores.filter((storeCore) => combinedExcludedSet.has(storeCore));
+        const targetResult = await loadTelegramAgentTargetMap(brandId, ym, ctx, null, activeStoreCores);
         const unexpectedReportStores = Object.keys(rowByCore).filter(
             (storeCore) => !formalStoreSet.has(storeCore) && !combinedExcludedSet.has(storeCore)
         );
@@ -4417,14 +4493,14 @@ async function getDataHealth(yearMonth, brandName = null, agentContext = null) {
         // 依序載入以共享同一題快取，避免相同 org/target 被重複讀取。
         const loaded = await loadTelegramAgentStoreMonth(brandId, ym, ctx);
         const org = await loadTelegramAgentOrgProfile(brandId, ctx);
-        const targetResult = await loadTelegramAgentTargetMap(brandId, ym, ctx);
         const summaryStatus = await loadTelegramAgentSummaryStatus(brandId, ym, ctx);
         const auditExclusions = await loadTelegramAgentAuditExclusions(brandId, ctx);
         const reported = new Set(loaded.rows.map((row) => normalizeSummaryCoreName(row.storeName)).filter(Boolean));
-        const targeted = new Set(Object.entries(targetResult.map || {}).filter(([, value]) => Number(value?.cashTarget || 0) > 0).map(([key]) => key));
-        const formalStores = new Set(normalizeTelegramAgentStoreNames(org.stores || []));
+        const formalStores = new Set(normalizeTelegramAgentStoreNamesFull(org.stores || []));
         const officialStores = [...formalStores].filter((store) => !auditExclusions.storeSet.has(store));
         const expected = new Set(filterTelegramAgentStoresByPolicies(officialStores, brandId, ctx, ["data_audit"]));
+        const targetResult = await loadTelegramAgentTargetMap(brandId, ym, ctx, null, [...expected]);
+        const targeted = new Set(Object.entries(targetResult.map || {}).filter(([, value]) => Number(value?.cashTarget || 0) > 0).map(([key]) => key));
         const missingReportStores = [...expected].filter((store) => !reported.has(store));
         const missingTargetStores = [...expected].filter((store) => !targeted.has(store));
         const unexpectedReportStores = [...reported].filter((store) => !formalStores.has(store) && !auditExclusions.storeSet.has(store));

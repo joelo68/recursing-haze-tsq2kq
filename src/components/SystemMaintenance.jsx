@@ -402,12 +402,18 @@ export default function SystemMaintenance() {
       .replace(/[（）()]/g, "");
     if (!raw) return "";
 
-    // 維護中心必須與 Dashboard / 回報檢核中心使用相同思路：
-    // 將品牌前綴、括號品牌名、店字尾與空白全部排除，避免「安妞中美店」與「中美」被誤判為不同店。
-    return raw
-      .replace(/^(CYJ|Anew安妞|Yibo伊啵|Anew|Yibo|安妞|伊啵)/i, "")
-      .replace(/店/g, "")
+    // 維護中心必須與 Dashboard / Functions 使用同一套店名核心規則。
+    // 「新店」是正式地名；同時相容舊資料曾被錯誤壓成「新」的格式。
+    const core = raw
+      .replace(/^(DRCYJ|CYJ|Anew安妞|Yibo伊啵|Anew|Yibo|安妞|伊啵)/i, "")
       .replace(/臺/g, "台")
+      .trim();
+
+    if (core === "新" || /^新店店?$/.test(core)) return "新店";
+
+    // 其餘店家維持原本行為，避免擴大改動範圍。
+    return core
+      .replace(/店/g, "")
       .trim();
   };
 
@@ -3224,6 +3230,37 @@ export default function SystemMaintenance() {
 
   // 過渡工具：將既有 monthly_targets 一鍵補整理成全年 monthly_targets_summary。
   // 目的只為導入 Dashboard 輕量目標資料；不改原始 monthly_targets，也不影響 TargetView 儲存邏輯。
+  const getTargetSummaryBrandPrefix = () => {
+    const normalizedBrandId = String(brandId || "").toLowerCase();
+    if (brandLabel === "安妞" || normalizedBrandId.includes("anniu") || normalizedBrandId.includes("anew")) return "安妞";
+    if (brandLabel === "伊啵" || normalizedBrandId.includes("yibo")) return "伊啵";
+    return "CYJ";
+  };
+
+  const getTargetSummaryComparableTime = (value) => {
+    if (!value) return 0;
+    if (typeof value?.toMillis === "function") {
+      const ms = Number(value.toMillis());
+      return Number.isFinite(ms) ? ms : 0;
+    }
+    if (typeof value?.seconds === "number") {
+      return Number(value.seconds) * 1000 + Math.floor(Number(value.nanoseconds || 0) / 1000000);
+    }
+    const ms = Date.parse(String(value));
+    return Number.isFinite(ms) ? ms : 0;
+  };
+
+  const shouldReplaceTargetSummaryEntry = (currentMeta, nextMeta) => {
+    if (!currentMeta) return true;
+    const currentTime = Number(currentMeta.updatedAtMs || 0);
+    const nextTime = Number(nextMeta.updatedAtMs || 0);
+    if (currentTime !== nextTime) return nextTime > currentTime;
+    if (Boolean(currentMeta.isCanonicalStoreName) !== Boolean(nextMeta.isCanonicalStoreName)) {
+      return Boolean(nextMeta.isCanonicalStoreName);
+    }
+    return String(nextMeta.sourceDocId || "").localeCompare(String(currentMeta.sourceDocId || ""), "zh-Hant") > 0;
+  };
+
   const parseMonthlyTargetDocForSummary = (docId = "", data = {}, selectedYearValue = "") => {
     const idText = String(docId || "");
     const parts = idText.split("_");
@@ -3254,11 +3291,9 @@ export default function SystemMaintenance() {
     const core = normalizeCoreName(storeName);
     if (!core) return null;
 
-    const rawStore = String(storeName || "").trim();
-    const hasBrandPrefix = /^(CYJ|Anew|Yibo|安妞|伊啵)/i.test(rawStore);
-    const fullStoreName = hasBrandPrefix
-      ? (rawStore.endsWith("店") ? rawStore : `${rawStore}店`)
-      : `${brandLabel}${core}店`;
+    const rawStore = String(storeName || "").trim().replace(/[　\s]+/g, "");
+    const fullStoreName = `${getTargetSummaryBrandPrefix()}${core}店`;
+    const updatedAtValue = data.updatedAtText || data.updatedAt || data.modifiedAtText || data.modifiedAt || data.createdAtText || data.createdAt || "";
 
     return {
       year: yearText,
@@ -3266,6 +3301,9 @@ export default function SystemMaintenance() {
       yearMonth: `${yearText}-${String(monthNum).padStart(2, "0")}`,
       storeName: fullStoreName,
       coreStoreName: core,
+      isCanonicalStoreName: rawStore === fullStoreName,
+      updatedAtMs: getTargetSummaryComparableTime(updatedAtValue),
+      sourceDocId: docId,
       target: {
         storeName: fullStoreName,
         coreStoreName: core,
@@ -3299,7 +3337,7 @@ export default function SystemMaintenance() {
 
       for (let i = 1; i <= 12; i += 1) {
         const yearMonth = `${year}-${String(i).padStart(2, "0")}`;
-        monthBuckets[yearMonth] = { yearMonth, month: i, targets: {}, sourceDocIds: [] };
+        monthBuckets[yearMonth] = { yearMonth, month: i, targets: {}, targetMeta: {}, sourceDocIds: [] };
       }
 
       snap.docs.forEach((d) => {
@@ -3309,8 +3347,17 @@ export default function SystemMaintenance() {
           if (String(d.id || "").includes(year)) skippedDocs.push(d.id);
           return;
         }
-        monthBuckets[parsed.yearMonth].targets[parsed.storeName] = parsed.target;
-        monthBuckets[parsed.yearMonth].sourceDocIds.push(d.id);
+        const bucket = monthBuckets[parsed.yearMonth];
+        const nextMeta = {
+          sourceDocId: parsed.sourceDocId,
+          updatedAtMs: parsed.updatedAtMs,
+          isCanonicalStoreName: parsed.isCanonicalStoreName,
+        };
+        if (shouldReplaceTargetSummaryEntry(bucket.targetMeta[parsed.storeName], nextMeta)) {
+          bucket.targets[parsed.storeName] = parsed.target;
+          bucket.targetMeta[parsed.storeName] = nextMeta;
+        }
+        bucket.sourceDocIds.push(d.id);
       });
 
       const batch = writeBatch(db);
