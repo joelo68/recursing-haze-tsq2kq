@@ -3229,6 +3229,94 @@ function getTelegramAgentMissingCashTargetStores(targetMap = {}, expectedStores 
     );
 }
 
+function formatTelegramAgentStoreLabel(storeName = "") {
+    const storeCore = normalizeSummaryCoreName(storeName || "");
+    if (!storeCore) return "";
+    // 「新店」本身就是地名，不能再補一個「店」變成「新店店」。
+    return storeCore === "新店" ? "新店" : `${storeCore}店`;
+}
+
+function pushTelegramAgentWarning(ctx, warning) {
+    const text = String(warning || "").trim();
+    if (!ctx || !text) return;
+    if (!Array.isArray(ctx.warnings)) ctx.warnings = [];
+    if (!ctx.warnings.includes(text)) ctx.warnings.push(text);
+}
+
+function getTelegramAgentRawTargetDocIds(brandId, yearMonth, storeName) {
+    const storeCore = normalizeSummaryCoreName(storeName || "");
+    const match = String(yearMonth || "").match(/^(20\d{2})-(\d{2})$/);
+    if (!storeCore || !match) return [];
+
+    const year = match[1];
+    const monthPadded = match[2];
+    const monthPlain = String(Number(monthPadded));
+    const brandPrefix = getSummaryBrandPrefix(brandId);
+    const brandIdText = String(brandId || "").toLowerCase();
+    const prefixes = new Set([brandPrefix]);
+
+    // 相容舊資料曾使用的品牌前綴；只用於精準 doc-id fallback，不改正式店名。
+    if (isLegacyCyjBrand(brandId)) {
+        prefixes.add("CYJ");
+        prefixes.add("DRCYJ");
+    } else if (brandIdText.includes("anniu") || brandIdText.includes("anew")) {
+        prefixes.add("安妞");
+        prefixes.add("Anew");
+        prefixes.add("Anew安妞");
+    } else if (brandIdText.includes("yibo")) {
+        prefixes.add("伊啵");
+        prefixes.add("Yibo");
+        prefixes.add("Yibo伊啵");
+    }
+
+    const storeKeys = [];
+    prefixes.forEach((prefix) => {
+        if (!prefix) return;
+        if (storeCore === "新店") {
+            storeKeys.push(`${prefix}新店店`, `${prefix}新店`);
+        } else {
+            storeKeys.push(`${prefix}${storeCore}店`);
+        }
+    });
+
+    // 少數早期資料可能沒有品牌前綴，保留低成本相容候選。
+    if (storeCore === "新店") storeKeys.push("新店店", "新店");
+    else storeKeys.push(`${storeCore}店`, storeCore);
+
+    const ids = [];
+    [...new Set(storeKeys.filter(Boolean))].forEach((storeKey) => {
+        ids.push(`${storeKey}_${year}_${monthPlain}`);
+        if (monthPadded !== monthPlain) ids.push(`${storeKey}_${year}_${monthPadded}`);
+    });
+    return [...new Set(ids)];
+}
+
+async function loadTelegramAgentTargetedRawMap(brandId, yearMonth, ctx, stores = []) {
+    const requestedStores = normalizeTelegramAgentStoreNamesFull(stores || []).slice(0, 6);
+    const collectionRef = getSummaryCollection(brandId, "monthly_targets");
+    const rawMap = {};
+
+    for (const storeCore of requestedStores) {
+        const candidateIds = getTelegramAgentRawTargetDocIds(brandId, yearMonth, storeCore);
+        for (const candidateId of candidateIds) {
+            const docResult = await readTelegramAgentDoc(
+                collectionRef.doc(candidateId),
+                ctx,
+                "monthly_targets_targeted_fallback",
+                { brandId, yearMonth, storeName: storeCore, sourceId: candidateId },
+                yearMonth === getTelegramAgentTaipeiNow().yearMonth ? 60 : 600
+            );
+            if (!docResult.exists) continue;
+            const built = buildAutoTargetRow(candidateId, docResult.data || {}, yearMonth);
+            if (!built) continue;
+            rawMap[built.storeCore] = built.target;
+            if (Number(built.target?.cashTarget || 0) > 0 || Number(built.target?.accrualTarget || 0) > 0) break;
+        }
+    }
+
+    return rawMap;
+}
+
 async function loadTelegramAgentTargetMap(brandId, yearMonth, ctx, dashboardData = null, expectedStores = []) {
     const normalizedExpectedStores = normalizeTelegramAgentStoreNamesFull(expectedStores || []);
     let bestMap = {};
@@ -3273,8 +3361,39 @@ async function loadTelegramAgentTargetMap(brandId, yearMonth, ctx, dashboardData
         }
     }
 
-    const missingBeforeFallback = getTelegramAgentMissingCashTargetStores(bestMap, normalizedExpectedStores);
-    // Summary 對正式納管店家不完整時才讀完整目標集合；完整時維持單文件 Summary-first 節流。
+    let missingBeforeFallback = getTelegramAgentMissingCashTargetStores(bestMap, normalizedExpectedStores);
+
+    // ★ 精準 fallback：只有少數店缺目標時，只讀缺少店家的原始 doc，不再掃整個 monthly_targets。
+    if (missingBeforeFallback.length > 0 && missingBeforeFallback.length <= 6) {
+        const targetedMap = await loadTelegramAgentTargetedRawMap(
+            brandId,
+            yearMonth,
+            ctx,
+            missingBeforeFallback
+        );
+        if (Object.keys(targetedMap).length > 0) {
+            bestMap = mergeTelegramAgentTargetMaps(bestMap, targetedMap);
+            bestSource = bestSource
+                ? `${bestSource}+monthly_targets_targeted_fallback`
+                : "monthly_targets_targeted_fallback";
+
+            const missingAfterTargeted = getTelegramAgentMissingCashTargetStores(bestMap, normalizedExpectedStores);
+            const recoveredStores = missingBeforeFallback.filter((store) => !missingAfterTargeted.includes(store));
+            if (recoveredStores.length > 0) {
+                const labels = recoveredStores.slice(0, 6).map(formatTelegramAgentStoreLabel).filter(Boolean).join("、");
+                pushTelegramAgentWarning(
+                    ctx,
+                    `${getTelegramAgentBrandLabel(brandId)} ${yearMonth} 目標 Summary 缺漏${labels ? `（${labels}）` : ""}，已僅補讀缺少店家目標，不影響本題數字。`
+                );
+            }
+            if (missingAfterTargeted.length === 0) {
+                return { map: bestMap, source: bestSource, updatedAtText: bestUpdatedAtText };
+            }
+            missingBeforeFallback = missingAfterTargeted;
+        }
+    }
+
+    // 若缺漏很多，或精準候選仍找不到，才保留原本完整集合 fallback，確保資料正確性不退步。
     assertTelegramAgentReadBudget(ctx, 200);
     const rawResult = await queryTelegramAgentDocs(
         getSummaryCollection(brandId, "monthly_targets"),
@@ -3291,10 +3410,11 @@ async function loadTelegramAgentTargetMap(brandId, yearMonth, ctx, dashboardData
     });
     const mergedMap = mergeTelegramAgentTargetMaps(bestMap, rawMap);
     const fallbackSource = bestSource ? `${bestSource}+monthly_targets_fallback` : "monthly_targets_fallback";
-    if (ctx) {
-        const names = missingBeforeFallback.slice(0, 8).map((store) => `${store}店`).join("、");
-        ctx.warnings.push(`${getTelegramAgentBrandLabel(brandId)} ${yearMonth} 目標摘要對正式店家不完整${names ? `（${names}${missingBeforeFallback.length > 8 ? "…" : ""}）` : ""}，本題已啟用完整目標 fallback。`);
-    }
+    const names = missingBeforeFallback.slice(0, 8).map(formatTelegramAgentStoreLabel).filter(Boolean).join("、");
+    pushTelegramAgentWarning(
+        ctx,
+        `${getTelegramAgentBrandLabel(brandId)} ${yearMonth} 目標摘要仍有缺漏${names ? `（${names}${missingBeforeFallback.length > 8 ? "…" : ""}）` : ""}，本題才啟用完整目標 fallback。`
+    );
     return { map: mergedMap, source: fallbackSource, updatedAtText: bestUpdatedAtText };
 }
 
@@ -3366,8 +3486,10 @@ function aggregateTelegramAgentStoreRows(rows = [], yearMonth = "", endDate = ""
     return overall;
 }
 
-async function loadTelegramAgentStoreMonth(brandId, yearMonth, ctx) {
+async function loadTelegramAgentStoreMonth(brandId, yearMonth, ctx, options = {}) {
     const taipeiNow = getTelegramAgentTaipeiNow();
+    const scopedStores = normalizeTelegramAgentStoreNamesFull(options.storeNames || options.targetStores || []);
+    const scopedStoreSet = new Set(scopedStores);
     const isCurrentMonth = yearMonth === taipeiNow.yearMonth;
     let dashboardData = null;
     let summaryStatus = null;
@@ -3380,7 +3502,7 @@ async function loadTelegramAgentStoreMonth(brandId, yearMonth, ctx) {
             `${yearMonth}-01`,
             taipeiNow.todayStr,
             ctx,
-            { includeTargets: true }
+            { includeTargets: true, storeNames: scopedStores }
         );
         if (liveResult.rows.length > 0) {
             return { ...liveResult, source: "daily_reports_current_month_exact" };
@@ -3426,8 +3548,12 @@ async function loadTelegramAgentStoreMonth(brandId, yearMonth, ctx) {
 
     if (aggregatedResult.rows.length > 0) {
         const org = await loadTelegramAgentOrgProfile(brandId, ctx);
-        const targetResult = await loadTelegramAgentTargetMap(brandId, yearMonth, ctx, dashboardData, org.stores || []);
-        const rows = aggregatedResult.rows.map((row) => {
+        const targetStores = scopedStores.length > 0 ? scopedStores : (org.stores || []);
+        const targetResult = await loadTelegramAgentTargetMap(brandId, yearMonth, ctx, dashboardData, targetStores);
+        const scopedAggregatedRows = scopedStoreSet.size > 0
+            ? aggregatedResult.rows.filter((row) => scopedStoreSet.has(normalizeSummaryCoreName(row.storeName || row.store || row.id || "")))
+            : aggregatedResult.rows;
+        const rows = scopedAggregatedRows.map((row) => {
             const core = normalizeSummaryCoreName(row.storeName || row.store || row.id || "");
             return normalizeTelegramAgentStoreRow({ ...row, manager: org.storeOwner[core] || row.manager || "未分配" }, brandId, targetResult.map[core] || {}, { cashIsNet: false, skincareIsNet: false });
         });
@@ -3443,7 +3569,8 @@ async function loadTelegramAgentStoreMonth(brandId, yearMonth, ctx) {
         brandId,
         `${yearMonth}-01`,
         isCurrentMonth ? taipeiNow.todayStr : getTelegramAgentMonthEnd(yearMonth),
-        ctx
+        ctx,
+        { storeNames: scopedStores }
     );
     if (rawFallback.rows.length > 0 && ctx) {
         ctx.warnings.push(`${getTelegramAgentBrandLabel(brandId)} ${yearMonth} 月彙總缺漏，本題已改讀品牌限定日報。`);
@@ -3455,6 +3582,8 @@ async function loadTelegramAgentStoreMonth(brandId, yearMonth, ctx) {
 }
 
 async function loadTelegramAgentRawStoreRange(brandId, startDate, endDate, ctx, options = {}) {
+    const requestedStores = normalizeTelegramAgentStoreNamesFull(options.storeNames || options.targetStores || []);
+    const requestedStoreSet = new Set(requestedStores);
     const collectionRef = getSummarySourceCollection(brandId, "daily_reports");
     const result = await queryTelegramAgentDocs(
         collectionRef.where("date", ">=", startDate).where("date", "<=", endDate),
@@ -3470,6 +3599,7 @@ async function loadTelegramAgentRawStoreRange(brandId, startDate, endDate, ctx, 
         if (sourceRow.isArchivedDuplicate === true) return;
         const core = normalizeSummaryCoreName(sourceRow.storeName || sourceRow.store || sourceRow.storeId || "");
         if (!core) return;
+        if (requestedStoreSet.size > 0 && !requestedStoreSet.has(core)) return;
         if (!storeMap[core]) storeMap[core] = { storeName: core, __rawDaily: true };
         const row = storeMap[core];
         row.cash = Number(row.cash || 0) + (Number(sourceRow.cash) || 0) - (Number(sourceRow.refund) || 0);
@@ -3488,8 +3618,9 @@ async function loadTelegramAgentRawStoreRange(brandId, startDate, endDate, ctx, 
     const yearMonth = startDate.slice(0, 7);
     const shouldLoadTargets = options.includeTargets === true || startDate.slice(0, 7) === endDate.slice(0, 7);
     const org = await loadTelegramAgentOrgProfile(brandId, ctx);
+    const targetStores = requestedStores.length > 0 ? requestedStores : Object.keys(storeMap);
     const targetResult = shouldLoadTargets
-        ? await loadTelegramAgentTargetMap(brandId, yearMonth, ctx, null, Object.keys(storeMap))
+        ? await loadTelegramAgentTargetMap(brandId, yearMonth, ctx, null, targetStores)
         : { map: {}, source: "not_requested", updatedAtText: "" };
     const rows = Object.values(storeMap).map((row) => {
         const core = normalizeSummaryCoreName(row.storeName || "");
@@ -3517,17 +3648,18 @@ async function getStorePerformance(startDate, endDate, storeName = null, brandNa
     const start = normalizeTelegramAgentDate(startDate);
     const end = normalizeTelegramAgentDate(endDate);
     const useMonthSummary = isTelegramAgentMonthRange(start, end);
+    const requestedStoreCore = normalizeSummaryCoreName(storeName || "");
+    const storeScopeOptions = requestedStoreCore ? { storeNames: [requestedStoreCore] } : {};
     const allRows = [];
     const sourceMeta = [];
 
     for (const brandId of brands) {
         assertTelegramAgentReadBudget(ctx, 1);
         const loaded = useMonthSummary
-            ? await loadTelegramAgentStoreMonth(brandId, start.slice(0, 7), ctx)
-            : await loadTelegramAgentRawStoreRange(brandId, start, end, ctx);
+            ? await loadTelegramAgentStoreMonth(brandId, start.slice(0, 7), ctx, storeScopeOptions)
+            : await loadTelegramAgentRawStoreRange(brandId, start, end, ctx, storeScopeOptions);
         const org = await loadTelegramAgentOrgProfile(brandId, ctx);
         const basePolicyRows = filterTelegramAgentRowsByPolicies(loaded.rows, brandId, ctx, policyScopes);
-        const requestedStoreCore = normalizeSummaryCoreName(storeName || "");
         const rowsNeedingTargetRepair = basePolicyRows
             .filter((row) => !requestedStoreCore || normalizeSummaryCoreName(row.storeName) === requestedStoreCore)
             .filter((row) => Number(row?.budget || 0) <= 0)
@@ -3853,7 +3985,12 @@ async function getMacroStrategicAnalysis(startMonth, endMonth, storeName = null,
 
     for (const yearMonth of months) {
         for (const brandId of brands) {
-            const loaded = await loadTelegramAgentStoreMonth(brandId, yearMonth, ctx);
+            const loaded = await loadTelegramAgentStoreMonth(
+                brandId,
+                yearMonth,
+                ctx,
+                requestedStore ? { storeNames: [requestedStore] } : {}
+            );
             const policyRows = filterTelegramAgentRowsByPolicies(loaded.rows, brandId, ctx, ["telegram_analysis", "brand_totals"]);
             const rows = requestedStore
                 ? policyRows.filter((row) => normalizeSummaryCoreName(row.storeName).includes(requestedStore))
@@ -4900,6 +5037,7 @@ function buildTelegramAgentSourceFooter(ctx) {
         monthly_aggregated: "本月即時月彙總",
         monthly_targets_summary: "目標 Summary",
         monthly_targets_fallback: "完整目標 fallback",
+        monthly_targets_targeted_fallback: "缺漏店家目標精準補讀",
         daily_reports_scoped: "品牌限定店家日報",
         daily_reports_current_month_exact: "當月品牌限定即時店家日報",
         daily_reports_month_fallback: "品牌限定整月日報 fallback",
@@ -4933,7 +5071,8 @@ function buildTelegramAgentSourceFooter(ctx) {
         unique.push(`${brand ? `${brand} ` : ""}${label}`.trim());
     });
     const sourceText = unique.slice(0, 6).join("、") || "一般管理知識";
-    const warningText = (ctx?.warnings || []).length > 0 ? `\n⚠️ ${ctx.warnings.slice(0, 2).join("；")}` : "";
+    const uniqueWarnings = [...new Set((ctx?.warnings || []).map((item) => String(item || "").trim()).filter(Boolean))];
+    const warningText = uniqueWarnings.length > 0 ? `\n⚠️ ${uniqueWarnings.slice(0, 2).join("；")}` : "";
     const appliedIds = [...new Set((ctx?.activePolicyIds || []).filter(Boolean))];
     const policyText = appliedIds.length ? `\n已套用長期規則：${appliedIds.slice(0, 5).join("、")}${appliedIds.length > 5 ? "…" : ""}` : "";
     const suggestionText = ctx?.memorySuggestion ? `\n💡 你已多次提出「${ctx.memorySuggestion.instruction}」，可回覆「記住這個偏好」建立長期記憶。` : "";
@@ -4959,7 +5098,7 @@ async function writeTelegramAgentAuditLog(message, ctx, finalReply, status = "su
             answerPreview: String(finalReply || "").slice(0, 1500),
             toolCalls: ctx?.toolCalls || [],
             sources: ctx?.sources || [],
-            warnings: ctx?.warnings || [],
+            warnings: [...new Set((ctx?.warnings || []).map((item) => String(item || "").trim()).filter(Boolean))],
             activePolicyIds: [...new Set(ctx?.activePolicyIds || [])],
             policyConflicts: ctx?.policyConflicts || [],
             policyPermission: ctx?.policyPermission || null,
