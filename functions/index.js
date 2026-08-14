@@ -5821,9 +5821,57 @@ function formatTelegramAlertProgressGap(progressGap) {
     return "與月份時間進度一致";
 }
 
+function getTelegramActiveAlertDailyMissingRows(result = {}) {
+    const rows = Array.isArray(result?.dailyMissingReports) ? result.dailyMissingReports : [];
+    const seen = new Set();
+    return rows
+        .map((row) => ({
+            storeName: normalizeSummaryCoreName(row?.storeName || ""),
+            officialManager: String(row?.officialManager || "未分配").trim() || "未分配",
+            actingManager: String(row?.actingManager || "").trim(),
+            delegationId: String(row?.delegationId || "").trim(),
+            delegationEndDate: String(row?.delegationEndDate || "").trim(),
+        }))
+        .filter((row) => {
+            if (!row.storeName) return false;
+            const key = `${row.storeName}|${row.actingManager}|${row.officialManager}`;
+            if (seen.has(key)) return false;
+            seen.add(key);
+            return true;
+        });
+}
+
+function buildTelegramActiveAlertMissingReportGroups(rows = []) {
+    const groups = new Map();
+    rows.forEach((row) => {
+        const actingManager = String(row?.actingManager || "").trim();
+        const officialManager = String(row?.officialManager || "未分配").trim() || "未分配";
+        const responsibilityType = actingManager ? "delegated" : "official";
+        const responsibleManager = actingManager || officialManager;
+        const key = `${responsibilityType}|${responsibleManager}|${officialManager}`;
+        if (!groups.has(key)) {
+            groups.set(key, {
+                responsibilityType,
+                responsibleManager,
+                officialManager,
+                stores: [],
+            });
+        }
+        const group = groups.get(key);
+        if (!group.stores.includes(row.storeName)) group.stores.push(row.storeName);
+    });
+    return [...groups.values()].sort((a, b) => {
+        if (a.responsibilityType !== b.responsibilityType) return a.responsibilityType === "delegated" ? -1 : 1;
+        return a.responsibleManager.localeCompare(b.responsibleManager, "zh-Hant");
+    });
+}
+
 function formatTelegramAgentActiveAlertMessage(result, ctx, todayStr, brandProfile = {}) {
     const rows = Array.isArray(result?.alerts) ? result.alerts : [];
     const dataIssues = Array.isArray(result?.dataIssues) ? result.dataIssues : [];
+    const dailyMissingRows = getTelegramActiveAlertDailyMissingRows(result);
+    const dailyMissingReportDate = String(result?.dailyMissingReportDate || "").trim();
+    const dailyMissingReportCount = dailyMissingRows.length;
     const summary = Array.isArray(result?.brandSummaries) ? result.brandSummaries[0] : null;
     const brand = summary?.brand || rows[0]?.brand || "目前品牌";
     const rate = summary?.cashAchievementRate === null || summary?.cashAchievementRate === undefined
@@ -5844,6 +5892,7 @@ function formatTelegramAgentActiveAlertMessage(result, ctx, todayStr, brandProfi
         `整體現金達成：${rate}｜${formatTelegramAlertProgressGap(summary?.progressGap)}`,
         `正式納管：${activeStoreCount} 家｜已排除：${excludedStoreCount} 家`,
         `🔴 營運紅燈 ${criticalCount} 家｜🟠 營運黃燈 ${watchCount} 家｜📋 資料待補 ${dataIssueCount} 家`,
+        ...(dailyMissingReportCount > 0 ? [`🗓 ${dailyMissingReportDate || "昨日"} 日報未回報 ${dailyMissingReportCount} 家`] : []),
         `本次判斷：${enabledRuleLabels.length ? enabledRuleLabels.join("、") : "未啟用任何項目"}`,
     ];
 
@@ -5861,6 +5910,17 @@ function formatTelegramAgentActiveAlertMessage(result, ctx, todayStr, brandProfi
         }
     } else {
         lines.push("", "✅ 目前沒有符合門檻的營運紅燈或黃燈店家。");
+    }
+
+    if (dailyMissingReportCount > 0) {
+        lines.push("", `🗓 ${dailyMissingReportDate || "昨日"} 店家日報未回報（${dailyMissingReportCount} 家）：`);
+        buildTelegramActiveAlertMissingReportGroups(dailyMissingRows).forEach((group) => {
+            const storeText = group.stores.map((storeName) => `${storeName}店`).join("、");
+            const ownerText = group.responsibilityType === "delegated"
+                ? `${group.responsibleManager}（代理｜正式主管：${group.officialManager}）`
+                : group.responsibleManager;
+            lines.push(`• ${ownerText}：${storeText}`);
+        });
     }
 
     if (dataIssues.length > 0) {
@@ -5940,13 +6000,42 @@ async function buildTelegramActiveAlertMessages(config, actor = "scheduled") {
             ctx,
             brandProfile.rules
         );
+
+        // 每日主動巡察的「店家日報缺漏」應以已完整結束的前一日為口徑，
+        // 不能只依本月是否曾出現日報資料判斷；並沿用 getMissingReports 的職務代理責任資訊。
+        const dailyMissingReportDate = shiftTelegramAgentDate(now.todayStr, -1);
+        const shouldCheckDailyMissingReports = brandProfile.rules?.missingReport?.enabled === true;
+        const dailyMissingResult = shouldCheckDailyMissingReports
+            ? await getMissingReports(
+                dailyMissingReportDate,
+                dailyMissingReportDate,
+                brand,
+                ctx,
+                ["data_audit", "active_alert"]
+            )
+            : null;
+        const dailyMissingBrand = Array.isArray(dailyMissingResult?.brands) ? dailyMissingResult.brands[0] : null;
+        const dailyMissingDetails = Array.isArray(dailyMissingBrand?.missingDetails)
+            ? dailyMissingBrand.missingDetails
+            : [];
+        const dailyMissingStores = Array.isArray(dailyMissingBrand?.missingStores)
+            ? dailyMissingBrand.missingStores
+            : [];
+        const dailyMissingReports = dailyMissingDetails.length > 0
+            ? dailyMissingDetails
+            : dailyMissingStores.map((storeName) => ({ storeName, officialManager: "未分配", actingManager: "" }));
+        result.dailyMissingReportDate = dailyMissingReportDate;
+        result.dailyMissingReports = dailyMissingReports;
+        result.dailyMissingReportCount = dailyMissingReports.length;
+
         const summary = Array.isArray(result.brandSummaries) ? result.brandSummaries[0] : null;
         const operationalAlertCount = Number(result.operationalAlertCount || 0);
         const dataIssueCount = Number(result.dataIssueCount || 0);
+        const dailyMissingReportCount = Number(result.dailyMissingReportCount || 0);
         const governanceIssueCount = Number(summary?.unexpectedReportStoreCount || 0)
             + (summary?.rosterIssue ? 1 : 0)
             + Number(summary?.delegationExpiryReminderCount || 0);
-        const alertCount = operationalAlertCount + dataIssueCount;
+        const alertCount = operationalAlertCount + dataIssueCount + dailyMissingReportCount;
         const enabledRuleLabels = Array.isArray(result.enabledRuleLabels)
             ? result.enabledRuleLabels
             : getTelegramActiveAlertEnabledRuleLabels(brandProfile.rules);
@@ -5960,6 +6049,7 @@ async function buildTelegramActiveAlertMessages(config, actor = "scheduled") {
             summary,
             operationalAlertCount,
             dataIssueCount,
+            dailyMissingReportCount,
             governanceIssueCount,
             alertCount,
             shouldSend: normalized.sendWhenClear || alertCount > 0 || governanceIssueCount > 0,
@@ -5974,6 +6064,7 @@ async function buildTelegramActiveAlertMessages(config, actor = "scheduled") {
         alertCount: brandMessages.reduce((sum, item) => sum + item.alertCount, 0),
         operationalAlertCount: brandMessages.reduce((sum, item) => sum + item.operationalAlertCount, 0),
         dataIssueCount: brandMessages.reduce((sum, item) => sum + item.dataIssueCount, 0),
+        dailyMissingReportCount: brandMessages.reduce((sum, item) => sum + Number(item.dailyMissingReportCount || 0), 0),
         readCount: brandMessages.reduce((sum, item) => sum + Number(item.ctx?.readCount || 0), 0),
         previewText: brandMessages.map((item) => item.message).join("\n\n━━━━━━━━━━━━━━━━\n\n"),
     };
@@ -6070,6 +6161,7 @@ exports.telegramAgentDailyPatrol = onSchedule({
                 alertCount: item.alertCount,
                 operationalAlertCount: item.operationalAlertCount,
                 dataIssueCount: item.dataIssueCount,
+                dailyMissingReportCount: item.dailyMissingReportCount,
                 readCount: Number(item.ctx?.readCount || 0),
                 limit: Number(item.brandProfile?.limit || 0),
                 enabledRuleLabels: item.enabledRuleLabels || [],
@@ -6090,6 +6182,8 @@ exports.telegramAgentDailyPatrol = onSchedule({
                 rankingPayload: {
                     alerts: Array.isArray(item.result?.alerts) ? item.result.alerts.slice(0, 20) : [],
                     dataIssues: Array.isArray(item.result?.dataIssues) ? item.result.dataIssues.slice(0, 20) : [],
+                    dailyMissingReportDate: String(item.result?.dailyMissingReportDate || ""),
+                    dailyMissingReports: Array.isArray(item.result?.dailyMissingReports) ? item.result.dailyMissingReports.slice(0, 100) : [],
                 },
                 messagePreview: item.message,
                 sourceMeta: item.result?.source_meta || [],
@@ -6116,6 +6210,7 @@ exports.telegramAgentDailyPatrol = onSchedule({
                 alertCount: item.alertCount,
                 operationalAlertCount: item.operationalAlertCount,
                 dataIssueCount: item.dataIssueCount,
+                dailyMissingReportCount: item.dailyMissingReportCount,
                 readCount: Number(item.ctx?.readCount || 0),
                 limit: Number(item.brandProfile?.limit || 0),
                 enabledRuleLabels: item.enabledRuleLabels || [],
@@ -6132,6 +6227,7 @@ exports.telegramAgentDailyPatrol = onSchedule({
                 alertCount: item.alertCount,
                 operationalAlertCount: item.operationalAlertCount,
                 dataIssueCount: item.dataIssueCount,
+                dailyMissingReportCount: item.dailyMissingReportCount,
                 readCount: Number(item.ctx?.readCount || 0),
                 limit: Number(item.brandProfile?.limit || 0),
                 enabledRuleLabels: item.enabledRuleLabels || [],
@@ -6148,6 +6244,7 @@ exports.telegramAgentDailyPatrol = onSchedule({
     const totalAlertCount = currentResults.reduce((sum, item) => sum + Number(item.alertCount || 0), 0);
     const totalOperationalAlertCount = currentResults.reduce((sum, item) => sum + Number(item.operationalAlertCount || 0), 0);
     const totalDataIssueCount = currentResults.reduce((sum, item) => sum + Number(item.dataIssueCount || 0), 0);
+    const totalDailyMissingReportCount = currentResults.reduce((sum, item) => sum + Number(item.dailyMissingReportCount || 0), 0);
     const totalReadCount = currentResults.reduce((sum, item) => sum + Number(item.readCount || 0), 0);
     const hasCurrentSent = currentResults.some((item) => item.status === "sent");
     const status = errors.length > 0
@@ -6166,6 +6263,7 @@ exports.telegramAgentDailyPatrol = onSchedule({
         alertCount: totalAlertCount,
         operationalAlertCount: totalOperationalAlertCount,
         dataIssueCount: totalDataIssueCount,
+        dailyMissingReportCount: totalDailyMissingReportCount,
         readCount: totalReadCount,
         chatTargets: config.chatTargets,
         brandIds: config.brandIds,
@@ -6216,6 +6314,7 @@ exports.processTelegramAlertCommand = onDocumentCreated({
             alertCount: item.alertCount,
             operationalAlertCount: item.operationalAlertCount,
             dataIssueCount: item.dataIssueCount,
+            dailyMissingReportCount: item.dailyMissingReportCount,
             readCount: Number(item.ctx?.readCount || 0),
             activeStoreCount: Number(item.summary?.activeStoreCount || 0),
             excludedStoreCount: Number(item.summary?.excludedStoreCount || 0),
@@ -6234,6 +6333,7 @@ exports.processTelegramAlertCommand = onDocumentCreated({
             alertCount: built.alertCount,
             operationalAlertCount: built.operationalAlertCount,
             dataIssueCount: built.dataIssueCount,
+            dailyMissingReportCount: built.dailyMissingReportCount,
             readCount: built.readCount,
             sentChatIds,
             brandSendResults,
@@ -6248,6 +6348,7 @@ exports.processTelegramAlertCommand = onDocumentCreated({
             lastManualAlertCount: built.alertCount,
             lastManualOperationalAlertCount: built.operationalAlertCount,
             lastManualDataIssueCount: built.dataIssueCount,
+            lastManualDailyMissingReportCount: built.dailyMissingReportCount,
             lastManualReadCount: built.readCount,
             lastManualBrandResults: Object.fromEntries(
                 brandPreviews.map((item) => [item.brandId, {
@@ -6256,6 +6357,7 @@ exports.processTelegramAlertCommand = onDocumentCreated({
                     alertCount: item.alertCount,
                     operationalAlertCount: item.operationalAlertCount,
                     dataIssueCount: item.dataIssueCount,
+                    dailyMissingReportCount: item.dailyMissingReportCount,
                     readCount: item.readCount,
                     limit: item.limit,
                     enabledRuleLabels: item.enabledRuleLabels || [],
