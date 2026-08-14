@@ -480,25 +480,131 @@ export function useDashboardStats() {
     return getSummaryStoreCandidates(store).some((candidate) => targetSet.has(candidate));
   }, [getSummaryStoreCandidates]);
 
-  const getBudgetDataForStore = useMemo(() => {
-    const summaryTargets = monthlyTargetSummary?.targets || {};
-    const hasUsableSummary = Boolean(
-      monthlyTargetSummary &&
-      monthlyTargetSummary.yearMonth &&
-      summaryTargets &&
-      Object.keys(summaryTargets).length > 0
+  // ============================================================================
+  // ★ Dashboard 月目標安全解析
+  // 目前 monthly_targets_summary 可能存在「店名舊格式」或「該店 Summary row 存在但目標為 0」的情況。
+  // Dashboard 不再只用 summaryTargets[fullStoreName] 完全字串命中；先用 cleanName() 對齊店名，
+  // 並把「現金 / 權責目標皆為 0」視為不可用 Summary row，交由下方精準 raw fallback 補足。
+  // ============================================================================
+  const readMonthlyTargetNumber = useMemo(() => (row = {}, keys = []) => {
+    for (const key of keys) {
+      const raw = row?.[key];
+      if (raw === null || raw === undefined || raw === "") continue;
+      const num = Number(raw);
+      if (Number.isFinite(num)) return num;
+    }
+    return 0;
+  }, []);
+
+  const isUsableMonthlyTargetRow = useMemo(() => (row = null) => {
+    if (!row || typeof row !== "object") return false;
+    const cashTarget = readMonthlyTargetNumber(row, ["cashTarget", "targetCash", "cashBudget", "monthlyCashTarget", "cash", "cash_target"]);
+    const accrualTarget = readMonthlyTargetNumber(row, ["accrualTarget", "targetAccrual", "accrualBudget", "monthlyAccrualTarget", "accrual", "accrual_target"]);
+    return cashTarget > 0 || accrualTarget > 0;
+  }, [readMonthlyTargetNumber]);
+
+  const findMonthlyTargetSummaryEntry = useMemo(() => (summaryData, fullStoreName, y, m) => {
+    if (!summaryData || typeof summaryData !== "object") return null;
+
+    const targetYearMonth = `${y}-${String(m).padStart(2, "0")}`;
+    const summaryYearMonth = String(summaryData?.yearMonth || summaryData?.id || "");
+    if (summaryYearMonth && summaryYearMonth !== targetYearMonth) return null;
+
+    const summaryTargets = summaryData?.targets || summaryData?.storeTargets || summaryData?.data || {};
+    if (!summaryTargets || typeof summaryTargets !== "object") return null;
+
+    const targetCore = cleanName(fullStoreName);
+    if (!targetCore) return null;
+
+    const directKeys = Array.from(new Set([
+      fullStoreName,
+      `${brandPrefix}${targetCore}店`,
+      `${brandInfo?.name || brandPrefix}${targetCore}店`,
+      `${targetCore}店`,
+      targetCore,
+      targetCore === "新店" ? `${brandPrefix}新店` : "",
+      targetCore === "新店" ? "新店" : "",
+      targetCore === "新店" ? "新" : "",
+    ].filter(Boolean)));
+
+    for (const key of directKeys) {
+      const direct = summaryTargets?.[key];
+      if (isUsableMonthlyTargetRow(direct)) return direct;
+    }
+
+    const entries = Array.isArray(summaryTargets)
+      ? summaryTargets.map((value, index) => [String(index), value])
+      : Object.entries(summaryTargets);
+
+    for (const [key, value] of entries) {
+      if (!value || typeof value !== "object") continue;
+      const candidates = [
+        key,
+        value.storeName,
+        value.store,
+        value.displayName,
+        value.name,
+        value.id,
+        value.coreStoreName,
+      ].map(cleanName).filter(Boolean);
+
+      if (candidates.includes(targetCore) && isUsableMonthlyTargetRow(value)) return value;
+    }
+
+    return null;
+  }, [cleanName, brandPrefix, brandInfo?.name, isUsableMonthlyTargetRow]);
+
+  // 精準 raw fallback 僅在 Summary 對特定店家缺漏或目標為 0 時使用；
+  // key 為 cleanName(store)，不重新打開整包 monthly_targets。
+  const [dashboardTargetRawFallbacks, setDashboardTargetRawFallbacks] = useState({
+    yearMonth: "",
+    rows: {},
+  });
+
+  const getBudgetDataForStore = useMemo(() => (fullStoreName, y, m) => {
+    const summaryValue = findMonthlyTargetSummaryEntry(
+      monthlyTargetSummary,
+      fullStoreName,
+      y,
+      m
     );
+    if (summaryValue) return summaryValue;
 
-    return (fullStoreName, y, m) => {
-      const legacyKey = `${fullStoreName}_${y}_${m}`;
-      const legacyValue = budgets?.[legacyKey] || null;
+    const targetYearMonth = `${y}-${String(m).padStart(2, "0")}`;
+    const targetCore = cleanName(fullStoreName);
+    const rawFallback = (
+      dashboardTargetRawFallbacks?.yearMonth === targetYearMonth
+        ? dashboardTargetRawFallbacks?.rows?.[targetCore]
+        : null
+    );
+    if (isUsableMonthlyTargetRow(rawFallback)) return rawFallback;
 
-      if (!hasUsableSummary) return legacyValue;
+    // budgets 在 Dashboard 一般會被 App 節流清空；只保留舊流程相容層。
+    const monthNum = Number(m);
+    const monthPadded = String(monthNum).padStart(2, "0");
+    const legacyKeys = Array.from(new Set([
+      `${fullStoreName}_${y}_${monthNum}`,
+      `${fullStoreName}_${y}_${monthPadded}`,
+      `${brandPrefix}${targetCore}店_${y}_${monthNum}`,
+      `${brandPrefix}${targetCore}店_${y}_${monthPadded}`,
+      targetCore === "新店" ? `${brandPrefix}新店_${y}_${monthNum}` : "",
+      targetCore === "新店" ? `${brandPrefix}新店_${y}_${monthPadded}` : "",
+    ].filter(Boolean)));
 
-      // Summary 可能尚未完整補齊；單店找不到時必須 fallback 原本 budgets，避免達成率歸零或目標失真。
-      return summaryTargets?.[fullStoreName] || legacyValue;
-    };
-  }, [monthlyTargetSummary, budgets]);
+    for (const key of legacyKeys) {
+      if (isUsableMonthlyTargetRow(budgets?.[key])) return budgets[key];
+    }
+
+    return null;
+  }, [
+    monthlyTargetSummary,
+    dashboardTargetRawFallbacks,
+    findMonthlyTargetSummaryEntry,
+    isUsableMonthlyTargetRow,
+    budgets,
+    cleanName,
+    brandPrefix,
+  ]);
 
   // ============================================================================
   // ★ 期間式代理與托管：營運總覽可視範圍
@@ -708,6 +814,146 @@ export function useDashboardStats() {
     selectedDashboardManager,
     managers,
     cleanName,
+  ]);
+
+  // ============================================================================
+  // ★ Dashboard 月目標精準 raw fallback
+  // 先等待 App 的 monthly_targets_summary onSnapshot；只有目前可視店家在 Summary 中
+  // 「找不到」或「現金 / 權責目標皆為 0」時，才針對該店該月讀取原始 monthly_targets。
+  // 正常 Summary 完整時：0 額外 reads。
+  // 為避免資料異常時放大讀取，單次最多補 6 間店。
+  // ============================================================================
+  useEffect(() => {
+    let cancelled = false;
+    let timerId = null;
+
+    const y = Number(selectedYear);
+    const m = Number(selectedMonth);
+    const targetYearMonth = y && m ? `${y}-${String(m).padStart(2, "0")}` : "";
+
+    if (!getCollectionPath || !targetYearMonth) {
+      setDashboardTargetRawFallbacks({ yearMonth: "", rows: {} });
+      return () => { cancelled = true; };
+    }
+
+    const scopedStoreCores = Array.from(new Set(
+      (effectiveStores || []).map(cleanName).filter(Boolean)
+    ));
+
+    if (scopedStoreCores.length === 0) {
+      setDashboardTargetRawFallbacks({ yearMonth: targetYearMonth, rows: {} });
+      return () => { cancelled = true; };
+    }
+
+    const summaryYearMonth = String(monthlyTargetSummary?.yearMonth || monthlyTargetSummary?.id || "");
+    const summaryReadyForMonth = Boolean(
+      monthlyTargetSummary &&
+      summaryYearMonth === targetYearMonth
+    );
+
+    // Summary 還沒回來時不要立刻打 raw；先讓 App 原本 onSnapshot 完成。
+    if (!summaryReadyForMonth) {
+      setDashboardTargetRawFallbacks((prev) => (
+        prev?.yearMonth === targetYearMonth ? prev : { yearMonth: targetYearMonth, rows: {} }
+      ));
+      return () => { cancelled = true; };
+    }
+
+    const missingStoreCores = scopedStoreCores.filter((storeCore) => (
+      !findMonthlyTargetSummaryEntry(
+        monthlyTargetSummary,
+        `${brandPrefix}${storeCore}店`,
+        y,
+        m
+      )
+    ));
+
+    if (missingStoreCores.length === 0) {
+      setDashboardTargetRawFallbacks({ yearMonth: targetYearMonth, rows: {} });
+      return () => { cancelled = true; };
+    }
+
+    // 只補真正有問題的少數店家；若超過 6 間，代表 Summary 本身需先重建，避免 Dashboard 掃大量 raw。
+    const storesToRecover = missingStoreCores.slice(0, 6);
+
+    timerId = window.setTimeout(async () => {
+      try {
+        const targetCollection = getCollectionPath("monthly_targets");
+        const recoveredRows = {};
+
+        for (const storeCore of storesToRecover) {
+          if (cancelled) return;
+
+          const canonicalFullName = `${brandPrefix}${storeCore}店`;
+          const candidateIds = [
+            `${canonicalFullName}_${y}_${m}`,
+            `${canonicalFullName}_${y}_${String(m).padStart(2, "0")}`,
+          ];
+
+          // 「新店」歷史曾使用 CYJ新店_YYYY_M；保留兼容舊 key。
+          if (storeCore === "新店") {
+            candidateIds.push(
+              `${brandPrefix}新店_${y}_${m}`,
+              `${brandPrefix}新店_${y}_${String(m).padStart(2, "0")}`
+            );
+          }
+
+          let resolved = null;
+          for (const targetId of Array.from(new Set(candidateIds))) {
+            const snap = await getDoc(doc(targetCollection, targetId));
+            if (!snap.exists()) continue;
+
+            const row = {
+              ...snap.data(),
+              sourceDocId: snap.id,
+              __dashboardTargetFallback: true,
+            };
+
+            if (isUsableMonthlyTargetRow(row)) {
+              resolved = row;
+              break;
+            }
+          }
+
+          if (resolved) recoveredRows[storeCore] = resolved;
+        }
+
+        if (!cancelled) {
+          setDashboardTargetRawFallbacks({
+            yearMonth: targetYearMonth,
+            rows: recoveredRows,
+          });
+
+          if (Object.keys(recoveredRows).length > 0) {
+            console.info("[Dashboard Target Fallback]", {
+              yearMonth: targetYearMonth,
+              recoveredStores: Object.keys(recoveredRows),
+              missingSummaryStores: missingStoreCores,
+            });
+          }
+        }
+      } catch (error) {
+        if (!cancelled) {
+          console.warn("Dashboard 月目標精準 fallback 失敗：", error);
+          setDashboardTargetRawFallbacks({ yearMonth: targetYearMonth, rows: {} });
+        }
+      }
+    }, 350);
+
+    return () => {
+      cancelled = true;
+      if (timerId) window.clearTimeout(timerId);
+    };
+  }, [
+    selectedYear,
+    selectedMonth,
+    effectiveStores,
+    brandPrefix,
+    cleanName,
+    getCollectionPath,
+    monthlyTargetSummary,
+    findMonthlyTargetSummaryEntry,
+    isUsableMonthlyTargetRow,
   ]);
 
   const allCompanyStores = useMemo(() => {
