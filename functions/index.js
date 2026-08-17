@@ -5316,7 +5316,7 @@ async function writeTelegramAgentAuditLog(message, ctx, finalReply, status = "su
     try {
         await db.collection("telegram_agent_logs").add({
             version: TELEGRAM_AGENT_VERSION,
-            replyFormat: "telegram-mobile-brief-v5-hard-guard",
+            replyFormat: "telegram-mobile-brief-v6.1-beauty-tone",
             replyMode: getTelegramAgentReplyMode(ctx),
             replyGuardVersion: "deterministic-hard-guard-v1",
             replyGuardActionCount: Array.isArray(ctx?.replyGuardActions) ? ctx.replyGuardActions.length : 0,
@@ -5630,6 +5630,195 @@ function applyTelegramAgentDeterministicReplyGuard(text, ctx = null) {
         .replace(/延續近期已改善的新客諮詢與締結動能[^。\n]*新客締結動能持續維持近期改善趨勢/g, "延續近期已改善的新客諮詢與締結動能")
         .replace(/[ \t]{2,}/g, " ");
 
+
+    // ----------------------------------------------------------
+    // C. 生活美容／醫美用詞 Hard Guard：
+    // 避免軍事化、過度剛硬或不符合門市現場語境的詞彙。
+    // ----------------------------------------------------------
+    const beautyToneRules = [
+        {
+            regex: /單兵作戰/g,
+            replacement: "由單一管理師主要承接",
+            action: "beauty_tone_single_staff",
+        },
+        {
+            regex: /單兵支撐/g,
+            replacement: "由單一管理師主要承接",
+            action: "beauty_tone_single_staff",
+        },
+        {
+            regex: /單兵產能(?:成為|是)?主要營運風險/g,
+            replacement: "目前人力配置較集中，服務與諮詢量能需特別留意",
+            action: "beauty_tone_staffing_capacity",
+        },
+        {
+            regex: /單兵產能(?:極限)?/g,
+            replacement: "單一管理師服務量能",
+            action: "beauty_tone_staffing_capacity",
+        },
+        {
+            regex: /(?:由)?單兵(?:承擔|承接|支撐)/g,
+            replacement: "由單一管理師主要承接",
+            action: "beauty_tone_single_staff",
+        },
+        {
+            regex: /單兵/g,
+            replacement: "單一管理師",
+            action: "beauty_tone_single_staff",
+        },
+        {
+            regex: /進駐支援/g,
+            replacement: "到店支援",
+            action: "beauty_tone_on_site_support",
+        },
+        {
+            regex: /(?:人力)?進駐/g,
+            replacement: "安排現場支援",
+            action: "beauty_tone_on_site_support",
+        },
+        {
+            regex: /推進大單/g,
+            replacement: "提升高價值方案成交",
+            action: "beauty_tone_high_value_sale",
+        },
+        {
+            regex: /鎖定大單/g,
+            replacement: "聚焦高價值成交機會",
+            action: "beauty_tone_high_value_sale",
+        },
+        {
+            regex: /大單/g,
+            replacement: "高價值方案",
+            action: "beauty_tone_high_value_sale",
+        },
+        {
+            regex: /高強度變現節奏/g,
+            replacement: "穩定提升業績節奏",
+            action: "beauty_tone_monetization",
+        },
+        {
+            regex: /變現彈性/g,
+            replacement: "業績提升空間",
+            action: "beauty_tone_monetization",
+        },
+        {
+            regex: /變現能力/g,
+            replacement: "成交表現",
+            action: "beauty_tone_monetization",
+        },
+        {
+            regex: /變現結果/g,
+            replacement: "營收表現",
+            action: "beauty_tone_monetization",
+        },
+        {
+            regex: /變現節奏/g,
+            replacement: "業績提升節奏",
+            action: "beauty_tone_monetization",
+        },
+        {
+            regex: /變現/g,
+            replacement: "業績轉換",
+            action: "beauty_tone_monetization",
+        },
+        {
+            regex: /搶救門市/g,
+            replacement: "優先改善門市",
+            action: "beauty_tone_rescue",
+        },
+        {
+            regex: /重點搶救/g,
+            replacement: "重點改善",
+            action: "beauty_tone_rescue",
+        },
+        {
+            regex: /填補(?:百萬|目標)?缺口/g,
+            replacement: "縮小目標差距",
+            action: "beauty_tone_gap",
+        },
+        {
+            regex: /作戰/g,
+            replacement: "執行",
+            action: "beauty_tone_battle",
+        },
+        {
+            regex: /攻堅/g,
+            replacement: "重點推進",
+            action: "beauty_tone_battle",
+        },
+        {
+            regex: /火力/g,
+            replacement: "人力與執行資源",
+            action: "beauty_tone_battle",
+        },
+        {
+            regex: /戰線/g,
+            replacement: "營運面向",
+            action: "beauty_tone_battle",
+        },
+        {
+            regex: /狙擊/g,
+            replacement: "聚焦",
+            action: "beauty_tone_battle",
+        },
+        {
+            regex: /產能受限/g,
+            replacement: "服務量能受限",
+            action: "beauty_tone_capacity_wording",
+        },
+        {
+            regex: /單一人力產能/g,
+            replacement: "單一管理師服務量能",
+            action: "beauty_tone_capacity_wording",
+        },
+        {
+            regex: /鎖定(?=高潛力|即將|重點|客戶|顧客)/g,
+            replacement: "優先關注",
+            action: "beauty_tone_focus_wording",
+        },
+        {
+            regex: /主力管理師/g,
+            replacement: "主要管理師",
+            action: "beauty_tone_staff_wording",
+        },
+    ];
+
+    beautyToneRules.forEach((rule) => {
+        reply = replaceTelegramAgentGuardedPattern(
+            reply,
+            rule.regex,
+            rule.replacement,
+            ctx,
+            rule.action
+        );
+    });
+
+    // 修正常見替換後語句，避免生硬重複。
+    reply = reply
+        .replace(/目前人力配置較集中，服務與諮詢量能需特別留意，(?:可優先)?評估人力支援/g,
+            "目前人力配置較集中，建議優先評估支援安排")
+        .replace(/目前人力配置較集中，建議優先評估支援安排(?:釋放諮詢|，?增加諮詢)/g,
+            "目前人力配置較集中，建議優先評估支援安排，增加主要管理師的諮詢時間")
+        .replace(/可優先評估人力支援釋放諮詢/g,
+            "可優先評估支援安排，增加主要管理師的諮詢時間")
+        .replace(/可優先評估支援安排釋放諮詢/g,
+            "可優先評估支援安排，增加主要管理師的諮詢時間")
+        .replace(/到店支援釋放諮詢/g,
+            "到店支援，增加主要管理師的諮詢時間")
+        .replace(/全店百位來客主要由由單一管理師主要承接/g,
+            "全店百位來客主要由單一管理師承接")
+        .replace(/主要由由單一管理師主要承接/g,
+            "主要由單一管理師承接")
+        .replace(/由由單一管理師主要承接/g,
+            "由單一管理師承接")
+        .replace(/由單一管理師主要承接百位來客/g,
+            "百位來客主要由單一管理師承接")
+        .replace(/重點優先改善門市/g,
+            "重點關注門市")
+        .replace(/優先改善門市門市/g,
+            "優先改善門市")
+        .replace(/[ \t]{2,}/g, " ");
+
     return reply;
 }
 
@@ -5773,6 +5962,28 @@ function getTelegramAgentInferenceGuardInstruction() {
     ].join("\n");
 }
 
+
+function getTelegramAgentBeautyServiceToneInstruction() {
+    return [
+        "【生活美容／醫美營運語氣規格】",
+        "1. 回答對象以生活美容、頭皮管理、醫美現場主管與管理師為主；語氣要專業、清楚、柔和、服務導向，避免軍事化、過度陽剛或過度財務交易化的詞彙。",
+        "2. 系統名稱可以保留『戰情秘書／戰情簡報』，但正文不要使用戰場式比喻。",
+        "3. 禁止或優先避免下列詞彙：單兵、單兵作戰、作戰、火力、攻堅、戰線、搶救、狙擊、進駐、鎖定大單、推進大單、變現、高強度變現、填補缺口。",
+        "4. 優先改成符合生活美容／醫美現場的說法：",
+        "   - 『單兵／單兵作戰』→『單一管理師承接／目前人力較集中／單人服務負荷較高』",
+        "   - 『產能』若描述人員服務能力，優先寫『服務量能／諮詢量能／人力配置』；只有技術統計語境才保留產能。",
+        "   - 『進駐支援』→『到店支援／現場支援／安排支援人力』",
+        "   - 『鎖定』→『優先關注／優先篩選／聚焦』",
+        "   - 『大單』→『高價值方案／高價值成交／續約機會』",
+        "   - 『變現』→『業績轉換／成交表現／營收表現』",
+        "   - 『搶救門市』→『優先改善門市／重點關注門市』",
+        "   - 『填補缺口』→『縮小目標差距／改善目標落差』",
+        "5. 描述人員時避免把管理師當成『產能工具』，優先說明『目前人力配置、服務負荷、服務量能、諮詢時間與顧客服務品質』；例如不要寫『單兵產能』，改寫『目前人力較集中』。",
+        "6. 行動建議應像美容／醫美營運主管的日常管理語言，例如：『安排支援人力分擔基礎服務，讓主力管理師保留更多諮詢時間。』",
+        "7. 文字要讓門市主管與第一線人員不需要理解軍事或財務術語就能直接看懂。",
+    ].join("\n");
+}
+
 function getTelegramAgentReplyModeInstruction(ctx = null) {
     const mode = getTelegramAgentReplyMode(ctx);
     if (mode === "detailed") {
@@ -5829,6 +6040,7 @@ ${getTelegramAgentPreferenceInstructions(ctx).join("；") || "（無）"}
 ${getTelegramAgentReplyModeInstruction(ctx)}
 ${getTelegramAgentEvidenceGuardInstruction()}
 ${getTelegramAgentInferenceGuardInstruction()}
+${getTelegramAgentBeautyServiceToneInstruction()}
 
 1. 第一行直接寫「📌 品牌／店家｜日期或月份」；第二行固定用「判斷：」給一句決策結論，盡量 35 個中文字內。
 2. 禁止 Markdown 表格、ASCII 表格、程式碼區塊、###、---、**、大量括號標題；不要輸出任何 | 欄位表格。
@@ -5878,6 +6090,7 @@ function getTelegramAgentFinalizerInstruction(dateInfo, ctx = null) {
 ${getTelegramAgentReplyModeInstruction(ctx)}
 ${getTelegramAgentEvidenceGuardInstruction()}
 ${getTelegramAgentInferenceGuardInstruction()}
+${getTelegramAgentBeautyServiceToneInstruction()}
 - 第一行：「📌 品牌／店家｜日期或月份」；第二行：「判斷：一句話結論」。
 - 禁止 Markdown table、ASCII table、程式碼區塊、###、---、**，不得輸出 | 欄位表格。
 - 預設簡報版：
