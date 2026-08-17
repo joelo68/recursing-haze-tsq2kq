@@ -5316,10 +5316,10 @@ async function writeTelegramAgentAuditLog(message, ctx, finalReply, status = "su
     try {
         await db.collection("telegram_agent_logs").add({
             version: TELEGRAM_AGENT_VERSION,
-            replyFormat: "telegram-mobile-v6.5.1-semantic-consistency-final",
+            replyFormat: "telegram-mobile-v6.6-semantic-final-polish",
             replyMode: getTelegramAgentReplyMode(ctx),
             replyGuardVersion: "deterministic-hard-guard-v1",
-            replyLanguagePolishVersion: "beauty-language-quality-v2.1-semantic-consistency",
+            replyLanguagePolishVersion: "beauty-language-quality-v2.2-final-polish",
             replyGuardActionCount: Array.isArray(ctx?.replyGuardActions) ? ctx.replyGuardActions.length : 0,
             replyGuardActions: Array.isArray(ctx?.replyGuardActions) ? ctx.replyGuardActions.slice(0, 12) : [],
             geminiApi: ctx?.geminiApi || getGeminiInteractionsApiLabel(ctx?.modelName || TELEGRAM_AGENT_PRIMARY_MODEL),
@@ -5973,6 +5973,21 @@ function polishTelegramAgentNarrativeQuality(text, ctx = null) {
             replacement: "依顧客實際護理需求提供合適的居家保養建議，同時觀察產品銷售與整體客單表現。",
             action: "polish_homecare_effect_overclaim",
         },
+        {
+            regex: /月底(?:現金)?預估[^。\n]+(?:，|。)\s*下半月仍需維持(?:穩健|穩定)[^。\n]*(?:進帳|成交)[^。\n]*。/g,
+            replacement: "由目前月底預估來看，現有整月平均表現仍不足以達成目標；下半月需要進一步提升成交表現，才能持續縮小目標差距。",
+            action: "polish_forecast_progress_logic",
+        },
+        {
+            regex: /這顯示(?:主力|主要)人員在諮詢與成交上具備良好表現，但(?:現場)?實際排班與(?:操作|服務)分工(?:細節)?仍無法由現有(?:數據|資料)直接確認。/g,
+            replacement: "就目前可確認的績效結果而言，該管理師的個人業績與新客締結表現相對突出；但實際排班與服務分工仍無法由現有資料直接確認。",
+            action: "polish_staff_consulting_overclaim",
+        },
+        {
+            regex: /針對近期成交(?:之|的)新客建立主動關懷節奏，(?:維繫|提升)(?:服務|顧客)?滿意度並(?:穩定|維持)後續排約進度。/g,
+            replacement: "針對近期成交的新客持續安排服務關懷，了解後續護理狀況與回訪需求。",
+            action: "polish_customer_satisfaction_overclaim",
+        },
     ];
 
     sentenceRules.forEach((rule) => {
@@ -6027,6 +6042,11 @@ function polishTelegramAgentNarrativeQuality(text, ctx = null) {
             action: "polish_repair_wording",
         },
         {
+            regex: /轉化動能與均單顯著改善/g,
+            replacement: "新客轉化與客單表現明顯改善",
+            action: "polish_conversion_wording_final",
+        },
+        {
             regex: /深耕舊客續約機會/g,
             replacement: "關注舊客續約機會",
             action: "polish_customer_relationship_wording",
@@ -6050,6 +6070,11 @@ function polishTelegramAgentNarrativeQuality(text, ctx = null) {
             regex: /穩定新客諮詢節奏/g,
             replacement: "延續近期新客諮詢改善",
             action: "polish_new_customer_action_title",
+        },
+        {
+            regex: /分擔基礎服務操作/g,
+            replacement: "分擔部分基礎服務",
+            action: "polish_basic_service_wording",
         },
     ];
 
@@ -6076,6 +6101,12 @@ function polishTelegramAgentNarrativeQuality(text, ctx = null) {
             "現有資料無法直接確認實際排班、操作分工與其他支援人力。若實際服務人力較集中，可能壓縮主要管理師可用於完整諮詢與顧客溝通的時間；可再評估是否需要分擔部分基礎服務。")
         .replace(/現有資料無法直接確認實際排班、操作分工與其他支援人力。\s*現有資料無法直接判定個人排班與操作工時；/g,
             "現有資料無法直接確認實際排班、操作分工與其他支援人力；")
+        .replace(/下半月仍需維持穩健的進帳動能以縮小目標差距/g,
+            "下半月需要進一步提升成交表現，才能持續縮小目標差距")
+        .replace(/下半月仍需維持穩定的進帳動能以縮小目標差距/g,
+            "下半月需要進一步提升成交表現，才能持續縮小目標差距")
+        .replace(/維繫服務滿意度/g, "了解後續護理狀況與回訪需求")
+        .replace(/提升服務滿意度/g, "了解後續護理狀況與回訪需求")
         .replace(/持續維持/g, "維持")
         .replace(/持續延續/g, "延續")
         .replace(/[ \t]{2,}/g, " ")
@@ -6517,6 +6548,10 @@ function getTelegramAgentBeautyServiceToneInstruction() {
         "14. 人員業績資料不等於實際排班／操作分工。若工具只有個人業績、締結率等結果，不可直接寫『單一管理師承接多數操作與諮詢』；應寫『目前取得的人員業績資料顯示…，但實際排班與分工仍無法直接確認』。",
         "15. 避免『釋放核心諮詢量能』等抽象詞，優先寫『增加主要管理師可用於諮詢與顧客溝通的時間』。",
         "16. 避免『深耕』等偏業務術語；舊客關係管理優先寫『關注舊客續約機會／關心近期有續約需求的顧客』。",
+        "17. 當月底預估明顯低於目標時，不要寫『維持目前／穩健節奏即可縮小差距』；應明確寫『現有整月平均表現仍不足以達標，下半月需要進一步提升成交表現』。",
+        "18. 個人業績與締結率只能支持『業績／締結表現相對突出』，不能推論『諮詢表現良好』；沒有諮詢品質資料時不得直接評價諮詢能力。",
+        "19. 人力支援建議優先寫『分擔部分基礎服務』，避免『基礎服務操作』等偏機械式用語。",
+        "20. 沒有顧客滿意度調查或回饋資料時，不要寫『維繫／提升服務滿意度』；改寫為『了解後續護理狀況與回訪需求』。",
     ].join("\n");
 }
 
