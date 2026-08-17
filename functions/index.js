@@ -5316,7 +5316,7 @@ async function writeTelegramAgentAuditLog(message, ctx, finalReply, status = "su
     try {
         await db.collection("telegram_agent_logs").add({
             version: TELEGRAM_AGENT_VERSION,
-            replyFormat: "telegram-mobile-brief-v6.2-language-mobile-polish",
+            replyFormat: "telegram-mobile-v6.3-true-brief-mode",
             replyMode: getTelegramAgentReplyMode(ctx),
             replyGuardVersion: "deterministic-hard-guard-v1",
             replyGuardActionCount: Array.isArray(ctx?.replyGuardActions) ? ctx.replyGuardActions.length : 0,
@@ -5530,6 +5530,15 @@ function applyTelegramAgentDeterministicReplyGuard(text, ctx = null) {
         "持續提升新客均單表現",
         ctx,
         "remove_unsupported_ticket_target",
+        { numericTarget: true }
+    );
+
+    reply = replaceTelegramAgentGuardedPattern(
+        reply,
+        /(?:維持|穩定|保持)[^。\n]{0,28}?\d+(?:\.\d+)?\s*%\s*以上[^。\n]{0,16}?(?:締結|成交)(?:率|表現|動能)?/g,
+        "延續近期已改善的新客締結動能",
+        ctx,
+        "remove_unsupported_conversion_performance_target",
         { numericTarget: true }
     );
 
@@ -5831,6 +5840,21 @@ function applyTelegramAgentDeterministicReplyGuard(text, ctx = null) {
             replacement: "近期較有續約需求的舊客",
             action: "beauty_tone_customer_relationship",
         },
+        {
+            regex: /(?:高價值(?:護理)?方案(?:的)?推廣|推廣高價值(?:護理)?方案)(?:已)?(?:見|有)(?:初步|實質)?成效/g,
+            replacement: "近期成交與客單表現同步改善",
+            action: "beauty_tone_unverified_solution_effect",
+        },
+        {
+            regex: /(?:這)?(?:代表|顯示)?現場諮詢(?:流程)?(?:已)?能有效引導顧客選擇(?:較)?完整的(?:護理|療程)(?:規劃|方案|組合)/g,
+            replacement: "這顯示近期新客締結率與均單同步改善",
+            action: "beauty_tone_unverified_consulting_effect",
+        },
+        {
+            regex: /(?:顧客|門市顧客)具備(?:良好|高度|較高)?(?:的)?(?:消費意願|支付能力)(?:與彈性)?/g,
+            replacement: "近期成交與營收表現明顯改善",
+            action: "beauty_tone_unverified_customer_intent",
+        },
     ];
 
     beautyToneRules.forEach((rule) => {
@@ -5880,6 +5904,189 @@ function applyTelegramAgentDeterministicReplyGuard(text, ctx = null) {
     return reply;
 }
 
+
+function normalizeTelegramAgentMobileKpiLines(lines = []) {
+    const output = [];
+
+    (Array.isArray(lines) ? lines : []).forEach((rawLine) => {
+        const line = String(rawLine || "").trim();
+        if (!line) return;
+
+        let match = line.match(/^•\s*缺口[:：]\s*([^｜]+)｜月底預估\s*(.+)$/);
+        if (match) {
+            output.push(`• 缺口：${match[1].trim()}`);
+            output.push(`• 月底預估：${match[2].trim()}`);
+            return;
+        }
+
+        match = line.match(/^•\s*轉化[:：]\s*新客締結\s*([^｜]+)｜新客均單\s*([^・]+)・舊客均單\s*(.+)$/);
+        if (match) {
+            output.push(`• 新客：締結 ${match[1].trim()}｜均單 ${match[2].trim()}`);
+            output.push(`• 舊客：均單 ${match[3].trim()}`);
+            return;
+        }
+
+        match = line.match(/^•\s*人力[:：]\s*(.+?)\s*個人業績\s*([^｜]+)｜新客締結\s*(.+)$/);
+        if (match) {
+            output.push(`• 人力：${match[1].trim()}｜業績 ${match[2].trim()}`);
+            output.push(`• ${match[1].trim()}新客：締結 ${match[3].trim()}`);
+            return;
+        }
+
+        output.push(line);
+    });
+
+    return output;
+}
+
+function compactTelegramAgentBriefReply(text, ctx = null) {
+    if (getTelegramAgentReplyMode(ctx) !== "brief") return String(text || "");
+
+    const lines = String(text || "")
+        .replace(/\r/g, "")
+        .split("\n")
+        .map((line) => String(line || "").trimEnd());
+
+    const findSection = (prefix) => lines.findIndex((line) => line.trim().startsWith(prefix));
+    const idxKpi = findSection("📊");
+    const idxChange = findSection("🔎");
+    const idxAction = findSection("🎯");
+
+    // 若模型沒有產生標準區塊，不冒險重組；只讓原有長度護欄處理。
+    if (idxKpi < 0 || idxChange < 0 || idxAction < 0) return String(text || "");
+
+    const headerLines = lines.slice(0, idxKpi).filter((line) => line.trim());
+    const kpiLinesRaw = lines.slice(idxKpi + 1, idxChange).filter((line) => line.trim().startsWith("•"));
+    const kpiLines = normalizeTelegramAgentMobileKpiLines(kpiLinesRaw);
+
+    const preferredKpis = [];
+    const pickFirst = (regex) => {
+        const found = kpiLines.find((line) => regex.test(line));
+        if (found && !preferredKpis.includes(found)) preferredKpis.push(found);
+    };
+
+    // 快速摘要的預設 KPI 優先順序：現金 → 缺口/預估 → 來客 → 新客轉化。
+    pickFirst(/^•\s*現金[:：]/);
+    pickFirst(/^•\s*缺口[:：]/);
+    pickFirst(/^•\s*月底預估[:：]/);
+    pickFirst(/^•\s*來客[:：]/);
+    pickFirst(/^•\s*新客[:：]/);
+
+    // 若本題明確問權責／保養品／人力，優先納入對應 KPI。
+    const question = String(ctx?.question || "");
+    if (/權責/.test(question)) pickFirst(/^•\s*權責[:：]/);
+    if (/保養品|產品/.test(question)) {
+        const productLine = kpiLines.find((line) => /保養品/.test(line));
+        if (productLine && !preferredKpis.includes(productLine)) preferredKpis.push(productLine);
+    }
+    if (/人力|管理師|人員|排班/.test(question)) pickFirst(/^•\s*人力[:：]/);
+
+    // 補到最多 5 行，但不讓簡易回答變成 KPI 清單大全。
+    for (const line of kpiLines) {
+        if (preferredKpis.length >= 5) break;
+        if (!preferredKpis.includes(line)) preferredKpis.push(line);
+    }
+
+    // 主要變化：只保留 ↑ ↓ ⚠ 的標題摘要行，完全移除其下說明段落。
+    const changeLines = lines
+        .slice(idxChange + 1, idxAction)
+        .map((line) => line.trim())
+        .filter((line) => /^(↑|↓|⚠)\s/.test(line))
+        .slice(0, 3);
+
+    // 優先行動：最多 2 項，每項 title + 第一個短說明。
+    const actionSource = lines.slice(idxAction + 1);
+    const actionBlocks = [];
+    let current = null;
+
+    for (const raw of actionSource) {
+        const line = raw.trim();
+        if (!line) continue;
+        const titleMatch = line.match(/^(\d+[.、])\s*(.+)$/);
+        if (titleMatch) {
+            if (current) actionBlocks.push(current);
+            current = {
+                title: `${titleMatch[1]} ${titleMatch[2]}`.trim(),
+                body: "",
+            };
+            continue;
+        }
+        if (current && !current.body && !line.startsWith("────────") && !line.startsWith("資料：")) {
+            current.body = line.length > 62 ? `${line.slice(0, 61).replace(/[，、；]\s*$/, "")}。` : line;
+        }
+    }
+    if (current) actionBlocks.push(current);
+
+    const selectedActions = actionBlocks.slice(0, 2);
+
+    const output = [];
+    output.push(...headerLines);
+
+    output.push("", "📊 關鍵數字");
+    output.push(...preferredKpis.slice(0, 5));
+
+    if (changeLines.length) {
+        output.push("", "🔎 主要變化");
+        output.push(...changeLines);
+    }
+
+    if (selectedActions.length) {
+        output.push("", "🎯 優先行動");
+        selectedActions.forEach((item, index) => {
+            if (index > 0) output.push("");
+            output.push(item.title);
+            if (item.body) output.push(item.body);
+        });
+    }
+
+    const compacted = output.join("\n").replace(/\n{3,}/g, "\n\n").trim();
+
+    if (compacted && compacted !== String(text || "").trim()) {
+        recordTelegramAgentReplyGuardAction(
+            ctx,
+            "compact_brief_mobile_reply",
+            String(text || "").slice(0, 160),
+            compacted.slice(0, 160)
+        );
+    }
+
+    return compacted || String(text || "");
+}
+
+function optimizeTelegramAgentMobileLayout(text, ctx = null) {
+    let reply = String(text || "");
+
+    // 所有模式都處理最常見的 KPI 長行，詳細版也能改善手機折行。
+    const lines = reply.split("\n");
+    const output = [];
+    let insideKpi = false;
+
+    for (const rawLine of lines) {
+        const trimmed = String(rawLine || "").trim();
+        if (trimmed.startsWith("📊")) {
+            insideKpi = true;
+            output.push(rawLine);
+            continue;
+        }
+        if (/^(🔎|🎯)/.test(trimmed)) {
+            insideKpi = false;
+            output.push(rawLine);
+            continue;
+        }
+
+        if (insideKpi && trimmed.startsWith("•")) {
+            output.push(...normalizeTelegramAgentMobileKpiLines([trimmed]));
+        } else {
+            output.push(rawLine);
+        }
+    }
+
+    reply = output.join("\n").replace(/\n{3,}/g, "\n\n").trim();
+    reply = compactTelegramAgentBriefReply(reply, ctx);
+
+    return reply;
+}
+
 function formatTelegramAgentAnalysisReply(text, ctx = null) {
     let reply = String(text || "")
         .replace(/\r/g, "")
@@ -5908,9 +6115,9 @@ function formatTelegramAgentAnalysisReply(text, ctx = null) {
 
     // v2：預設戰情簡報版限制更短；明確要求詳細分析時才放寬。
     const replyMode = getTelegramAgentReplyMode(ctx);
-    const maxLength = replyMode === "detailed" ? 2400 : 1450;
-    const preferredCut = replyMode === "detailed" ? 2250 : 1350;
-    const safeFloor = replyMode === "detailed" ? 2000 : 1150;
+    const maxLength = replyMode === "detailed" ? 2200 : 950;
+    const preferredCut = replyMode === "detailed" ? 2050 : 850;
+    const safeFloor = replyMode === "detailed" ? 1800 : 700;
 
     if (reply.length > maxLength) {
         const cutAt = Math.max(
@@ -6058,7 +6265,7 @@ function getTelegramAgentReplyModeInstruction(ctx = null) {
     if (mode === "detailed") {
         return [
             "本題為「詳細分析版」。",
-            "目標約 1200～2000 個中文字；詳細不等於長篇文章，仍須維持手機可讀性。",
+            "目標約 1100～1800 個中文字；詳細不等於長篇文章，仍須維持手機可讀性。",
             "關鍵數字最多 6 行、主要變化最多 4 點、優先行動最多 4 項。",
             "每個「主要變化」固定採：數據事實 → 合理解讀 →（必要時）不確定性／管理意義；每點最多 2～3 句。",
             "每個「優先行動」固定採：動作名稱 → 一句做法／原則；不要寫成政策條文。",
@@ -6067,10 +6274,12 @@ function getTelegramAgentReplyModeInstruction(ctx = null) {
     }
 
     return [
-        "本題為「戰情簡報版」（預設）。",
-        "目標約 600～1000 個中文字；優先讓主管在 5～10 秒內掌握結論。",
-        "關鍵數字最多 4 行、主要變化最多 3 點、優先行動最多 3 項。",
-        "沒有決策價值的背景說明直接省略；同一 KPI 不要重複敘述。",
+        "本題為「快速營運摘要」（預設）。",
+        "目標約 350～650 個中文字；一般『目前狀況如何／今天如何／表現如何』只回答主管當下最需要知道的內容。",
+        "關鍵數字最多 5 行。",
+        "主要變化最多 3 點，而且每點只能有『一行摘要』，不要再接解釋段落。",
+        "優先行動最多 2 項；每項只保留短標題＋一句做法。",
+        "禁止輸出詳細背景分析、長因果解釋或逐段重述 KPI。使用者沒有明確要求詳細，就不要寫成完整分析報告。",
     ].join("\n");
 }
 
@@ -6165,10 +6374,11 @@ ${getTelegramAgentInferenceGuardInstruction()}
 ${getTelegramAgentBeautyServiceToneInstruction()}
 - 第一行：「📌 品牌／店家｜日期或月份」；第二行：「判斷：一句話結論」。
 - 禁止 Markdown table、ASCII table、程式碼區塊、###、---、**，不得輸出 | 欄位表格。
-- 預設簡報版：
-  📊 關鍵數字：最多 4 行，每行一個 KPI。
-  🔎 主要變化：最多 3 行，優先寫「↑／↓／⚠ KPI：A → B｜意義」。
-  🎯 優先行動：最多 3 項，每項「短標題」＋下一行一句做法。
+- 預設快速摘要版：
+  📊 關鍵數字：最多 5 行，每行一個短 KPI。
+  🔎 主要變化：最多 3 行，只保留「↑／↓／⚠ KPI：A → B｜意義」這一行；其下禁止再寫解釋段落。
+  🎯 優先行動：最多 2 項，每項「短標題」＋下一行一句做法。
+  使用者只問「目前狀況如何／今天如何／表現如何」時，不得輸出 detailed 等級的段落分析。
 - 詳細分析版只有在使用者明確要求「詳細／完整／展開／深入」時才使用，可增加必要解釋，但仍維持手機可讀性。
 - 詳細分析只能把「資料解讀」寫得更完整，不得把資料中不存在的價格、頻率、分鐘數、天數、KPI 門檻或強制制度寫得更具體。
 - 目前 KPI 數值只能描述「目前狀態」，不可自行變成未來目標。例如目前締結率 30.8%，不得自行寫成「維持 30% 以上」，除非 Policy／使用者／工具明確要求。
@@ -6667,6 +6877,7 @@ ${policyContext}
 
         finalReply = formatTelegramAgentAnalysisReply(agentResult?.finalReply || "", ctx);
         finalReply = applyTelegramAgentDeterministicReplyGuard(finalReply, ctx);
+        finalReply = optimizeTelegramAgentMobileLayout(finalReply, ctx);
         const replyWithFooter = `${finalReply}${buildTelegramAgentSourceFooter(ctx)}`;
         const readableHtml = renderTelegramAgentReadableHtml(replyWithFooter);
         await sendTelegramMessage(chatId, readableHtml, { parse_mode: "HTML" });
