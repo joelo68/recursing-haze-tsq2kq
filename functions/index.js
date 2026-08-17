@@ -2533,6 +2533,9 @@ function createTelegramAgentContext({ chatId, userId, question }) {
         readCount: 0,
         writeCount: 0,
         toolCalls: [],
+        toolEvidence: [],
+        crossSourceDataAwareness: [],
+        crossSourceEvidenceByScope: {},
         sources: [],
         warnings: [],
         usage: {
@@ -5108,6 +5111,234 @@ function getTelegramAgentSafeDateRange(args, todayStr, currentYearMonth) {
     return { startDate, endDate, warning };
 }
 
+
+function getTelegramAgentEvidenceNumber(value) {
+    const number = Number(value);
+    return Number.isFinite(number) ? number : 0;
+}
+
+function getTelegramAgentCrossSourceScopeKey(name, args = {}, result = {}) {
+    const brand = String(args?.brandName || "").trim().toLowerCase();
+    const store = normalizeSummaryCoreName(args?.storeName || "");
+    const range = String(result?.query_range || "").trim();
+    const person = name === "getTherapistPerformance"
+        ? normalizeSummaryPersonName(args?.personName || "").trim().toLowerCase()
+        : "";
+
+    return {
+        key: `${brand || "all"}|${store || "all"}|${range || "unknown"}`,
+        brand,
+        store,
+        range,
+        person,
+    };
+}
+
+function buildTelegramAgentToolEvidence(name, args = {}, result = {}) {
+    const scope = getTelegramAgentCrossSourceScopeKey(name, args, result);
+
+    if (name === "getStorePerformance") {
+        const overall = result?.overall_summary || {};
+        return {
+            tool: name,
+            sourceAuthority: "store_kpi",
+            sourceCollection: "daily_reports",
+            brandName: String(args?.brandName || ""),
+            storeName: String(args?.storeName || ""),
+            queryRange: scope.range,
+            scopeKey: scope.key,
+            overall: {
+                newCount: getTelegramAgentEvidenceNumber(overall?.newCount),
+                newClosings: getTelegramAgentEvidenceNumber(overall?.newClosings),
+                newClosingRate: getTelegramAgentEvidenceNumber(overall?.newClosingRate),
+                cash: getTelegramAgentEvidenceNumber(overall?.cash),
+                traffic: getTelegramAgentEvidenceNumber(overall?.traffic),
+            },
+        };
+    }
+
+    if (name === "getTherapistPerformance") {
+        const overall = result?.overall_summary || {};
+        const therapists = (Array.isArray(result?.therapists_details) ? result.therapists_details : [])
+            .slice(0, 12)
+            .map((row) => {
+                const newCount = getTelegramAgentEvidenceNumber(row?.newCount);
+                const newClosings = getTelegramAgentEvidenceNumber(row?.newClosings);
+                const newClosingRate = Number.isFinite(Number(row?.newClosingRate))
+                    ? Number(row.newClosingRate)
+                    : (newCount > 0 ? Number(((newClosings / newCount) * 100).toFixed(1)) : 0);
+
+                return {
+                    personName: String(row?.personName || ""),
+                    storeName: String(row?.storeName || ""),
+                    revenue: getTelegramAgentEvidenceNumber(row?.revenue),
+                    newCount,
+                    newClosings,
+                    newClosingRate,
+                };
+            });
+
+        return {
+            tool: name,
+            sourceAuthority: "therapist_kpi",
+            sourceCollection: "therapist_daily_reports",
+            brandName: String(args?.brandName || ""),
+            storeName: String(args?.storeName || ""),
+            personName: String(args?.personName || ""),
+            queryRange: scope.range,
+            scopeKey: scope.key,
+            isPersonFiltered: Boolean(scope.person),
+            overall: {
+                newCount: getTelegramAgentEvidenceNumber(overall?.newCount),
+                newClosings: getTelegramAgentEvidenceNumber(overall?.newClosings),
+                newClosingRate: getTelegramAgentEvidenceNumber(overall?.newClosingRate),
+                revenue: getTelegramAgentEvidenceNumber(overall?.revenue),
+            },
+            therapists,
+        };
+    }
+
+    return null;
+}
+
+function updateTelegramAgentCrossSourceDataAwareness(ctx, evidence) {
+    if (!ctx || !evidence) return null;
+    if (!Array.isArray(ctx.toolEvidence)) ctx.toolEvidence = [];
+    if (!Array.isArray(ctx.crossSourceDataAwareness)) ctx.crossSourceDataAwareness = [];
+    if (!ctx.crossSourceEvidenceByScope || typeof ctx.crossSourceEvidenceByScope !== "object") {
+        ctx.crossSourceEvidenceByScope = {};
+    }
+
+    ctx.toolEvidence.push(evidence);
+
+    // 個人篩選的人員工具不能拿來與全店日報總量直接比較。
+    if (evidence.tool === "getTherapistPerformance" && evidence.isPersonFiltered) {
+        return null;
+    }
+
+    const scopeKey = String(evidence.scopeKey || "");
+    if (!scopeKey) return null;
+
+    const slot = ctx.crossSourceEvidenceByScope[scopeKey] || {};
+    if (evidence.tool === "getStorePerformance") slot.store = evidence;
+    if (evidence.tool === "getTherapistPerformance") slot.therapist = evidence;
+    ctx.crossSourceEvidenceByScope[scopeKey] = slot;
+
+    if (!slot.store || !slot.therapist) return null;
+
+    const storeNewCount = getTelegramAgentEvidenceNumber(slot.store?.overall?.newCount);
+    const storeNewClosings = getTelegramAgentEvidenceNumber(slot.store?.overall?.newClosings);
+    const therapistNewCount = getTelegramAgentEvidenceNumber(slot.therapist?.overall?.newCount);
+    const therapistNewClosings = getTelegramAgentEvidenceNumber(slot.therapist?.overall?.newClosings);
+
+    const newCountDiff = therapistNewCount - storeNewCount;
+    const newClosingsDiff = therapistNewClosings - storeNewClosings;
+    const aligned = newCountDiff === 0 && newClosingsDiff === 0;
+
+    const awareness = {
+        scopeKey,
+        brandName: slot.store?.brandName || slot.therapist?.brandName || "",
+        storeName: slot.store?.storeName || slot.therapist?.storeName || "",
+        queryRange: slot.store?.queryRange || slot.therapist?.queryRange || "",
+        status: aligned ? "aligned" : "difference_detected",
+        differenceIsError: false,
+        possibleReasons: aligned ? [] : [
+            "店家與人員 KEY IN 時間差",
+            "其中一方缺報",
+            "其中一方資料輸入錯誤或後續修正未同步",
+            "店家日報與人員日報統計口徑差異",
+        ],
+        store: {
+            source: "daily_reports",
+            newCount: storeNewCount,
+            newClosings: storeNewClosings,
+            newClosingRate: getTelegramAgentEvidenceNumber(slot.store?.overall?.newClosingRate),
+        },
+        therapists: {
+            source: "therapist_daily_reports",
+            newCount: therapistNewCount,
+            newClosings: therapistNewClosings,
+            newClosingRate: getTelegramAgentEvidenceNumber(slot.therapist?.overall?.newClosingRate),
+        },
+        difference: {
+            newCount: newCountDiff,
+            newClosings: newClosingsDiff,
+        },
+        sourcePolicy: {
+            storeKpiSource: "daily_reports",
+            therapistKpiSource: "therapist_daily_reports",
+            crossSourceInferenceAllowed: false,
+            storeMetricsMustNotBeUsedAsTherapistDenominator: true,
+            therapistMetricsMustNotBeUsedAsStoreDenominator: true,
+        },
+    };
+
+    const index = ctx.crossSourceDataAwareness.findIndex((item) => item?.scopeKey === scopeKey);
+    if (index >= 0) ctx.crossSourceDataAwareness[index] = awareness;
+    else ctx.crossSourceDataAwareness.push(awareness);
+
+    return awareness;
+}
+
+function attachTelegramAgentSourceAuthority(name, result, awareness = null) {
+    if (!result || typeof result !== "object") return result;
+
+    if (name === "getStorePerformance") {
+        return {
+            ...result,
+            source_authority: {
+                scope: "store_kpi",
+                source: "daily_reports",
+                rule: "全店 KPI 以本工具結果為準；不得拿人員日報數字反推或覆寫全店 KPI。",
+            },
+            ...(awareness ? { cross_source_data_awareness: awareness } : {}),
+        };
+    }
+
+    if (name === "getTherapistPerformance") {
+        return {
+            ...result,
+            source_authority: {
+                scope: "therapist_kpi",
+                source: "therapist_daily_reports",
+                rule: "個人 KPI 以本工具結果為準；不得拿店家日報的新客數／締結數作為個人 KPI 的分母或分子。",
+                numerator_denominator_rule: "只有本工具同一位人員明確提供的 newCount / newClosings 才可換算或描述個人締結人數。",
+            },
+            ...(awareness ? { cross_source_data_awareness: awareness } : {}),
+        };
+    }
+
+    return result;
+}
+
+function recordTelegramAgentCrossSourceEvidence(name, args, result, ctx) {
+    if (!["getStorePerformance", "getTherapistPerformance"].includes(name)) {
+        return result;
+    }
+
+    const evidence = buildTelegramAgentToolEvidence(name, args, result);
+    const awareness = updateTelegramAgentCrossSourceDataAwareness(ctx, evidence);
+
+    // 即使另一來源尚未讀取，也先把來源權責規則送給 Gemini。
+    return attachTelegramAgentSourceAuthority(name, result, awareness);
+}
+
+function getTelegramAgentCrossSourceInstruction(ctx = null) {
+    return [
+        "【跨來源資料使用規則】",
+        "1. 店家日報與人員日報是兩套正式後端資料，可能因 KEY IN 時間差、缺報、輸入錯誤、修正未同步或統計口徑不同而暫時不一致；差異本身不代表系統錯誤。",
+        "2. 全店 KPI（全店新客數、全店締結數、全店締結率、全店營運指標）只以 getStorePerformance / daily_reports 為準。",
+        "3. 個人 KPI 只以 getTherapistPerformance / therapist_daily_reports 為準。",
+        "4. 禁止跨來源交叉反推：不得拿全店新客數乘上個人締結率推算個人締結人數；也不得拿人員合計覆寫全店締結數。",
+        "5. 只有同一個工具結果、同一統計對象明確提供 numerator / denominator 時，才可寫『X 位新客、Y 位締結』；否則只呈現工具直接提供的 KPI。",
+        "6. 若 cross_source_data_awareness.status = difference_detected：",
+        "   - 不要判定哪一方錯，也不要自行修正資料。",
+        "   - Brief 預設不要主動展開資料差異，除非使用者詢問資料正確性。",
+        "   - Detailed 若差異會影響解讀，可用一行中性提醒：『店家與人員日報部分統計存在差異；本次全店指標依店家日報、人員指標依人員日報呈現，未交叉換算。』",
+        "7. 不可把不同來源相同的數字視為同一批顧客，除非資料本身明確提供關聯。",
+    ].join("\n");
+}
+
 async function executeTelegramAgentTool(name, args, ctx, dateInfo) {
     const startedAt = Date.now();
     const effectiveArgs = resolveTelegramAgentToolArgs(name, args || {}, ctx, dateInfo);
@@ -5149,6 +5380,7 @@ async function executeTelegramAgentTool(name, args, ctx, dateInfo) {
         throw new Error(`不支援的工具：${name}`);
     }
 
+    result = recordTelegramAgentCrossSourceEvidence(name, effectiveArgs, result, ctx);
     updateTelegramAgentScopeFromToolResult(name, effectiveArgs, result, ctx);
     const toolRecord = {
         name,
@@ -5316,10 +5548,11 @@ async function writeTelegramAgentAuditLog(message, ctx, finalReply, status = "su
     try {
         await db.collection("telegram_agent_logs").add({
             version: TELEGRAM_AGENT_VERSION,
-            replyFormat: "telegram-mobile-v6.6-semantic-final-polish",
+            replyFormat: "telegram-mobile-v7.0-cross-source-awareness",
             replyMode: getTelegramAgentReplyMode(ctx),
             replyGuardVersion: "deterministic-hard-guard-v1",
             replyLanguagePolishVersion: "beauty-language-quality-v2.2-final-polish",
+            crossSourceAwarenessVersion: "cross-source-data-awareness-v1",
             replyGuardActionCount: Array.isArray(ctx?.replyGuardActions) ? ctx.replyGuardActions.length : 0,
             replyGuardActions: Array.isArray(ctx?.replyGuardActions) ? ctx.replyGuardActions.slice(0, 12) : [],
             geminiApi: ctx?.geminiApi || getGeminiInteractionsApiLabel(ctx?.modelName || TELEGRAM_AGENT_PRIMARY_MODEL),
@@ -5336,6 +5569,10 @@ async function writeTelegramAgentAuditLog(message, ctx, finalReply, status = "su
             question: String(message?.text || "").slice(0, 1200),
             answerPreview: String(finalReply || "").slice(0, 1500),
             toolCalls: ctx?.toolCalls || [],
+            toolEvidence: Array.isArray(ctx?.toolEvidence) ? ctx.toolEvidence.slice(0, 12) : [],
+            crossSourceDataAwareness: Array.isArray(ctx?.crossSourceDataAwareness)
+                ? ctx.crossSourceDataAwareness.slice(0, 6)
+                : [],
             sources: ctx?.sources || [],
             warnings: [...new Set((ctx?.warnings || []).map((item) => String(item || "").trim()).filter(Boolean))],
             activePolicyIds: [...new Set(ctx?.activePolicyIds || [])],
@@ -6338,6 +6575,56 @@ function compactTelegramAgentBriefReply(text, ctx = null) {
     return compacted || String(text || "");
 }
 
+
+function applyTelegramAgentCrossSourceReplyGuard(text, ctx = null) {
+    let reply = String(text || "");
+    const awarenessList = Array.isArray(ctx?.crossSourceDataAwareness)
+        ? ctx.crossSourceDataAwareness
+        : [];
+    const mismatch = awarenessList.find((item) => item?.status === "difference_detected");
+
+    if (!mismatch) return reply;
+
+    // 有跨來源差異時，不讓個人締結率旁出現容易被誤認為「全店同一批新客」的人數反推。
+    reply = replaceTelegramAgentGuardedPattern(
+        reply,
+        /(新客締結率(?:為|達)?\s*\d+(?:\.\d+)?\s*%)（\s*\d+\s*位新客[^）]{0,32}(?:締結|成交)\s*\d+\s*(?:位|人次)?\s*）/g,
+        "$1（人員日報口徑）",
+        ctx,
+        "cross_source_remove_ambiguous_person_count"
+    );
+
+    reply = replaceTelegramAgentGuardedPattern(
+        reply,
+        /(新客締結(?:率)?\s*\d+(?:\.\d+)?\s*%)（\s*\d+\s*位新客[^）]{0,32}(?:締結|成交)\s*\d+\s*(?:位|人次)?\s*）/g,
+        "$1（人員日報口徑）",
+        ctx,
+        "cross_source_remove_ambiguous_person_count"
+    );
+
+    // Brief 不主動顯示差異，維持快速閱讀。
+    if (getTelegramAgentReplyMode(ctx) !== "detailed") {
+        return reply;
+    }
+
+    const note = "ℹ️ 資料口徑：店家與人員日報部分統計存在差異；本次全店指標依店家日報、人員指標依人員日報呈現，未交叉換算。";
+
+    if (!reply.includes("資料口徑：") && /🎯\s*優先行動/.test(reply)) {
+        reply = reply.replace(
+            /\n\s*🎯\s*優先行動/,
+            `\n\n${note}\n\n🎯 優先行動`
+        );
+        recordTelegramAgentReplyGuardAction(
+            ctx,
+            "cross_source_add_detailed_scope_note",
+            "",
+            note
+        );
+    }
+
+    return reply;
+}
+
 function optimizeTelegramAgentMobileLayout(text, ctx = null) {
     let reply = String(text || "");
 
@@ -6614,6 +6901,7 @@ ${getTelegramAgentPreferenceInstructions(ctx).join("；") || "（無）"}
 ${getTelegramAgentReplyModeInstruction(ctx)}
 ${getTelegramAgentEvidenceGuardInstruction()}
 ${getTelegramAgentInferenceGuardInstruction()}
+${getTelegramAgentCrossSourceInstruction(ctx)}
 ${getTelegramAgentBeautyServiceToneInstruction()}
 
 1. 第一行直接寫「📌 品牌／店家｜日期或月份」；第二行固定用「判斷：」給一句決策結論，盡量 35 個中文字內。
@@ -6667,6 +6955,7 @@ function getTelegramAgentFinalizerInstruction(dateInfo, ctx = null) {
 ${getTelegramAgentReplyModeInstruction(ctx)}
 ${getTelegramAgentEvidenceGuardInstruction()}
 ${getTelegramAgentInferenceGuardInstruction()}
+${getTelegramAgentCrossSourceInstruction(ctx)}
 ${getTelegramAgentBeautyServiceToneInstruction()}
 - 第一行：「📌 品牌／店家｜日期或月份」；第二行：「判斷：一句話結論」。
 - 禁止 Markdown table、ASCII table、程式碼區塊、###、---、**，不得輸出 | 欄位表格。
@@ -7175,6 +7464,7 @@ ${policyContext}
         finalReply = formatTelegramAgentAnalysisReply(agentResult?.finalReply || "", ctx);
         finalReply = applyTelegramAgentDeterministicReplyGuard(finalReply, ctx);
         finalReply = polishTelegramAgentNarrativeQuality(finalReply, ctx);
+        finalReply = applyTelegramAgentCrossSourceReplyGuard(finalReply, ctx);
         finalReply = optimizeTelegramAgentMobileLayout(finalReply, ctx);
         const replyWithFooter = `${finalReply}${buildTelegramAgentSourceFooter(ctx)}`;
         const readableHtml = renderTelegramAgentReadableHtml(replyWithFooter);
