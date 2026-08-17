@@ -5261,60 +5261,63 @@ async function saveTelegramAgentMemory(chatId, userId, turns, question, answer, 
 }
 
 function buildTelegramAgentSourceFooter(ctx) {
-    const sourceLabels = {
-        verified_dashboard_summary: "已驗證歷史月結 Summary",
-        dashboard_summary: "歷史月結 Summary",
-        dashboard_summary_fallback: "Dashboard Summary fallback",
-        dashboard_summary_targets: "Dashboard 目標",
-        monthly_aggregated: "本月即時月彙總",
-        monthly_targets_summary: "目標 Summary",
-        monthly_targets_fallback: "完整目標 fallback",
-        monthly_targets_targeted_fallback: "缺漏店家目標精準補讀",
-        daily_reports_scoped: "品牌限定店家日報",
-        daily_reports_current_month_exact: "當月品牌限定即時店家日報",
-        daily_reports_month_fallback: "品牌限定整月日報 fallback",
-        verified_therapist_summary: "已驗證歷史人員 Summary",
-        therapist_summary: "歷史人員 Summary",
-        therapist_summary_fallback: "人員 Summary fallback",
-        therapist_monthly_aggregated: "本月人員月彙總",
-        therapist_daily_reports_scoped: "品牌限定管理師日報",
-        therapist_daily_reports_current_month_exact: "當月品牌限定即時管理師日報",
-        therapist_daily_reports_month_fallback: "品牌限定整月管理師日報 fallback",
-        org_structure: "正式組織架構",
-        daily_reports_submitted: "回報日報",
-        summary_recalc_flags: "Summary 驗證狀態",
-        telegram_agent_memory: "短期對話記憶",
-        telegram_agent_config: "主動預警設定",
-        telegram_agent_policies: "長期營運規則",
-        telegram_agent_policy_permissions: "規則權限",
-        telegram_schedules: "固定排程",
-        telegram_report_snapshots: "報表快照",
-        telegram_agent_tasks: "改善任務",
-        telegram_agent_task_drafts: "巡察任務草稿",
-    };
-    const unique = [];
-    const seen = new Set();
-    (ctx?.sources || []).forEach((item) => {
-        const key = `${item.source}:${item.brandId}:${item.yearMonth}`;
-        if (seen.has(key)) return;
-        seen.add(key);
-        const label = sourceLabels[item.source] || item.source;
-        const brand = item.brandId ? getTelegramAgentBrandLabel(item.brandId) : "";
-        unique.push(`${brand ? `${brand} ` : ""}${label}`.trim());
-    });
-    const sourceText = unique.slice(0, 6).join("、") || "一般管理知識";
-    const uniqueWarnings = [...new Set((ctx?.warnings || []).map((item) => String(item || "").trim()).filter(Boolean))];
-    const warningText = uniqueWarnings.length > 0 ? `\n⚠️ ${uniqueWarnings.slice(0, 2).join("；")}` : "";
-    const appliedIds = [...new Set((ctx?.activePolicyIds || []).filter(Boolean))];
-    const policyText = appliedIds.length ? `\n已套用長期規則：${appliedIds.slice(0, 5).join("、")}${appliedIds.length > 5 ? "…" : ""}` : "";
-    const suggestionText = ctx?.memorySuggestion ? `\n💡 你已多次提出「${ctx.memorySuggestion.instruction}」，可回覆「記住這個偏好」建立長期記憶。` : "";
-    return `\n\n資料基準：${sourceText}\nAI 模型：${ctx?.modelName || TELEGRAM_AGENT_PRIMARY_MODEL}${ctx?.fallbackUsed ? "（備援模式）" : ""}\n查詢負載：約 ${ctx?.readCount || 0} 筆文件讀取｜工具 ${ctx?.toolCalls?.length || 0}/${TELEGRAM_AGENT_MAX_TOOL_CALLS}${policyText}${warningText}${suggestionText}`;
+    const sources = Array.isArray(ctx?.sources) ? ctx.sources : [];
+    const brandIds = [...new Set(sources.map((item) => String(item?.brandId || "")).filter(Boolean))];
+    const brandText = brandIds.length > 0
+        ? brandIds.slice(0, 3).map((id) => getTelegramAgentBrandLabel(id)).join("／")
+        : "";
+
+    const sourceNames = new Set(sources.map((item) => String(item?.source || "")));
+    const hasLive = [
+        "daily_reports_scoped",
+        "daily_reports_current_month_exact",
+        "therapist_daily_reports_scoped",
+        "therapist_daily_reports_current_month_exact",
+        "monthly_aggregated",
+        "therapist_monthly_aggregated",
+    ].some((name) => sourceNames.has(name));
+    const hasHistoricalSummary = [
+        "verified_dashboard_summary",
+        "dashboard_summary",
+        "verified_therapist_summary",
+        "therapist_summary",
+    ].some((name) => sourceNames.has(name));
+    const hasStructureOrTarget = [
+        "monthly_targets_summary",
+        "monthly_targets_targeted_fallback",
+        "org_structure",
+        "management_delegations",
+    ].some((name) => sourceNames.has(name));
+
+    const basisParts = [];
+    if (hasLive) basisParts.push("即時營運資料");
+    else if (hasHistoricalSummary) basisParts.push("已驗證月結資料");
+    if (hasStructureOrTarget) basisParts.push("正式目標／組織");
+    if (!basisParts.length) basisParts.push(sources.length ? "系統資料" : "一般管理知識");
+
+    const uniqueWarnings = [...new Set(
+        (ctx?.warnings || []).map((item) => String(item || "").trim()).filter(Boolean)
+    )];
+    const warningText = uniqueWarnings.length > 0
+        ? `\n⚠️ 資料提醒：${uniqueWarnings.slice(0, 2).join("；")}`
+        : "";
+
+    const suggestionText = ctx?.memorySuggestion
+        ? `\n💡 可回覆「記住這個偏好」保存：${String(ctx.memorySuggestion.instruction || "").slice(0, 80)}`
+        : "";
+
+    const modelLabel = String(ctx?.modelName || TELEGRAM_AGENT_PRIMARY_MODEL)
+        .replace(/^gemini-/i, "Gemini ")
+        .replace(/-/g, " ");
+
+    return `\n\n────────\n資料：${brandText ? `${brandText}｜` : ""}${basisParts.join("＋")}\n系統：${modelLabel}${ctx?.fallbackUsed ? "（備援）" : ""}｜讀取 ${ctx?.readCount || 0}｜工具 ${ctx?.toolCalls?.length || 0}/${TELEGRAM_AGENT_MAX_TOOL_CALLS}${warningText}${suggestionText}`;
 }
 
 async function writeTelegramAgentAuditLog(message, ctx, finalReply, status = "success", errorMessage = "") {
     try {
         await db.collection("telegram_agent_logs").add({
             version: TELEGRAM_AGENT_VERSION,
+            replyFormat: "telegram-mobile-brief-v1",
             geminiApi: ctx?.geminiApi || getGeminiInteractionsApiLabel(ctx?.modelName || TELEGRAM_AGENT_PRIMARY_MODEL),
             modelName: ctx?.modelName || TELEGRAM_AGENT_PRIMARY_MODEL,
             primaryModel: TELEGRAM_AGENT_PRIMARY_MODEL,
@@ -5356,6 +5359,144 @@ function cleanTelegramAgentReply(text) {
     return reply;
 }
 
+
+function parseTelegramMarkdownTableRow(line = "") {
+    const trimmed = String(line || "").trim();
+    if (!trimmed.startsWith("|")) return [];
+    return trimmed
+        .replace(/^\|/, "")
+        .replace(/\|$/, "")
+        .split("|")
+        .map((cell) => cell.trim());
+}
+
+function isTelegramMarkdownTableSeparator(cells = []) {
+    return cells.length > 0 && cells.every((cell) => /^:?-{3,}:?$/.test(String(cell || "").trim()));
+}
+
+function convertTelegramMarkdownTablesToCards(text = "") {
+    const lines = String(text || "").split("\n");
+    const output = [];
+
+    for (let i = 0; i < lines.length; i += 1) {
+        const current = String(lines[i] || "");
+        if (!current.trim().startsWith("|")) {
+            output.push(current);
+            continue;
+        }
+
+        const block = [];
+        while (i < lines.length && String(lines[i] || "").trim().startsWith("|")) {
+            block.push(lines[i]);
+            i += 1;
+        }
+        i -= 1;
+
+        const parsed = block
+            .map(parseTelegramMarkdownTableRow)
+            .filter((cells) => cells.length >= 2);
+
+        if (parsed.length < 2) {
+            output.push(...block.map((line) => String(line || "").replace(/\|/g, "｜")));
+            continue;
+        }
+
+        const separatorIndex = parsed.findIndex(isTelegramMarkdownTableSeparator);
+        const headerIndex = separatorIndex > 0 ? separatorIndex - 1 : 0;
+        const headers = parsed[headerIndex];
+        const rows = parsed.filter((cells, index) =>
+            index !== headerIndex && !isTelegramMarkdownTableSeparator(cells)
+        );
+
+        if (!rows.length) continue;
+
+        rows.forEach((cells) => {
+            const title = cells[0] || headers[0] || "項目";
+            output.push(`• ${title}`);
+            for (let col = 1; col < cells.length; col += 1) {
+                if (!cells[col]) continue;
+                const label = headers[col] || `欄位 ${col}`;
+                output.push(`  ${label}：${cells[col]}`);
+            }
+        });
+    }
+
+    return output.join("\n");
+}
+
+function formatTelegramAgentAnalysisReply(text) {
+    let reply = String(text || "")
+        .replace(/\r/g, "")
+        .replace(/```[\s\S]*?```/g, (block) => block.replace(/```[a-zA-Z0-9_-]*\n?/g, "").replace(/```/g, ""))
+        .replace(/\*\*(.*?)\*\*/g, "$1")
+        .replace(/__(.*?)__/g, "$1")
+        .replace(/`([^`]+)`/g, "$1")
+        .replace(/^#{1,6}\s*/gm, "")
+        .replace(/^\s*---+\s*$/gm, "")
+        .trim();
+
+    reply = convertTelegramMarkdownTablesToCards(reply);
+
+    reply = reply
+        .replace(/^\s*[-*]\s+/gm, "• ")
+        .replace(/^一、\s*核心結論\s*$/gm, "📌 核心結論")
+        .replace(/^二、\s*.*(?:營運指標|數據|盤點|變化).*/gm, "📊 關鍵數字")
+        .replace(/^三、\s*.*(?:優先|行動|改善).*/gm, "🎯 優先行動")
+        .replace(/\n{3,}/g, "\n\n")
+        .trim();
+
+    if (!reply) {
+        reply = "🤖 戰情秘書目前無法完成這個分析，請將問題縮小到品牌、店家或月份後再試一次。";
+    }
+
+    // 行動版可讀性護欄：主回答控制在約 2,800 字內，仍保留 footer 空間。
+    if (reply.length > 2800) {
+        const cutAt = Math.max(
+            reply.lastIndexOf("\n", 2700),
+            reply.lastIndexOf("。", 2700),
+            2500
+        );
+        reply = `${reply.slice(0, cutAt > 0 ? cutAt + 1 : 2700).trim()}\n\n…（已精簡較次要說明）`;
+    }
+
+    return reply;
+}
+
+function escapeTelegramHtml(text = "") {
+    return String(text || "")
+        .replace(/&/g, "&amp;")
+        .replace(/</g, "&lt;")
+        .replace(/>/g, "&gt;");
+}
+
+function renderTelegramAgentReadableHtml(text = "") {
+    return String(text || "")
+        .split("\n")
+        .map((line) => {
+            const raw = String(line || "");
+            const trimmed = raw.trim();
+            const escaped = escapeTelegramHtml(raw);
+
+            if (/^(📌|📊|🔎|🎯)\s/.test(trimmed)) {
+                return `<b>${escaped}</b>`;
+            }
+
+            if (/^判斷[:：]/.test(trimmed)) {
+                const match = raw.match(/^(\s*判斷[:：])\s*(.*)$/);
+                if (match) {
+                    return `${escapeTelegramHtml(match[1])}<b>${escapeTelegramHtml(match[2])}</b>`;
+                }
+            }
+
+            if (/^⚠️\s*資料提醒[:：]/.test(trimmed)) {
+                return `<b>${escaped}</b>`;
+            }
+
+            return escaped;
+        })
+        .join("\n");
+}
+
 function getGeminiApiKey() {
     const apiKey = String(GEMINI_API_KEY.value() || "").trim();
     if (!apiKey) throw new Error("GEMINI_API_KEY 尚未設定");
@@ -5387,16 +5528,61 @@ ${formatTelegramAgentPolicyContext(ctx)}
 【個人回答偏好】
 ${getTelegramAgentPreferenceInstructions(ctx).join("；") || "（無）"}
 
-【分析框架】
-- 先直接回答結論。
-- 再指出：業績進度、來客、締結率、新舊客客單、保養品占比或目標缺口中的主要問題。
-- 最後提出 1～3 個可執行且有優先順序的行動。
-- 發現資料缺漏或來源 fallback 時，必須明確提醒。
-- 語氣專業、精準、冷靜，像特助對總經理匯報。`;
+【Telegram 行動版優先回答規格】
+1. 先給一句「判斷」，再給關鍵數字與行動；使用者應在 5 秒內看懂重點。
+2. 禁止 Markdown 表格、ASCII 表格、程式碼區塊、###、---、**、【大量括號標題】等格式；不要輸出任何 | 欄位表格。
+3. 一般營運分析優先使用下列結構，但只保留本題需要的區塊：
+   📌 店家／品牌｜日期或月份
+   判斷：一句話，盡量 45 個中文字內。
+
+   📊 關鍵數字
+   每行一個 KPI，最多 5 行；例如「現金：$412,961｜達成 27.5%」。
+
+   🔎 主要變化
+   最多 3 點；每點只說一個「數字變化 → 營運意義」，不要重複 KPI 全文。
+
+   🎯 優先行動
+   1～3 項；每項先寫動作，再用一句話說原因或做法。
+4. 同一個金額、比率、人數原則上只完整出現一次。需要前後比較時用「A → B」，不要在結論、數字區、行動區重複敘述三次。
+5. 每個 bullet 最多 1～2 句，不使用第二層巢狀 bullet；避免單一段落超過約 90 個中文字。
+6. 符號只用於辨識層級：📌、📊、🔎、🎯、⚠️、•、1. 2. 3.。不要混用大量破折號、方括號、直線表格符號。
+7. 一般回答目標約 1200～2200 個中文字；除非使用者明確要求完整報告，否則不要寫成長篇報告。
+8. 資料完整且無 warning 時，不必另寫「資料可信度」段落；若有 fallback、缺漏或 rankingEligible=false，才加入「⚠️ 資料提醒」。
+9. 不要自行輸出資料來源、模型名稱、工具數、規則 ID；後端會統一附上精簡 footer。
+10. 語氣專業、精準、冷靜，像特助對總經理做一頁式戰情報告。`;
 }
 
 function getTelegramAgentFinalizerInstruction(dateInfo, ctx = null) {
-    return `你是 DRCYJ 集團營運戰情秘書。現在日期 ${dateInfo.todayStr}。請只根據提供的工具結果完成結論，不可再要求查資料，不可捏造。只能提及工具結果實際包含的品牌、店家、人員與區長。區長「整體表現／進度排名」只能使用 achievementRank（或相容欄位 brandRank），並明確稱為「現金業績達成率排名」；營收規模才使用 cashRank，稱為「現金總業績排名」。achievement／cashAchievementRate 的固定定義是「現金業績達成率＝現金÷現金目標」，絕對不可寫成「權責業績達成率」。權責總業績使用 accrual；安妞 operationalAccrual 只是操作權責子項。工具沒有可驗證的 accrualBudget 或 accrualAchievement 時，不得自行描述權責達成率。只有 rankingEligible=true 且名次欄位不是 null 時才能宣稱排名；rankingEligible=false 時必須說明資料缺漏，禁止自行補排名。回答需包含：結論、關鍵異常、資料可信度與優先行動。語氣專業、精準、冷靜。
+    return `你是 DRCYJ 集團營運戰情秘書。現在日期 ${dateInfo.todayStr}。請只根據提供的工具結果完成結論，不可再要求查資料，不可捏造。只能提及工具結果實際包含的品牌、店家、人員與區長。
+
+【資料口徑】
+- 區長「整體表現／進度排名」只能使用 achievementRank（或相容欄位 brandRank），並稱為「現金業績達成率排名」。
+- 營收規模使用 cashRank，稱為「現金總業績排名」。
+- achievement／cashAchievementRate 固定是「現金業績達成率＝現金÷現金目標」，不可寫成「權責業績達成率」。
+- 權責總業績使用 accrual；安妞 operationalAccrual 只是操作權責子項。
+- 工具沒有可驗證的 accrualBudget 或 accrualAchievement 時，不得自行描述權責達成率。
+- 只有 rankingEligible=true 且名次不是 null 時才能宣稱排名；否則必須說明資料缺漏。
+
+【Telegram 行動版優先格式】
+- 禁止 Markdown table、ASCII table、程式碼區塊、###、---、**，不得輸出 | 欄位表格。
+- 使用者應在 5 秒內看到結論。一般分析以 1200～2200 個中文字為目標。
+- 優先格式：
+  📌 店家／品牌｜日期或月份
+  判斷：一句話結論
+
+  📊 關鍵數字
+  最多 5 行；每行一個 KPI。
+
+  🔎 主要變化
+  最多 3 點；每點只寫「變化 → 意義」。
+
+  🎯 優先行動
+  1～3 項；每項最多 1～2 句。
+- 同一 KPI 原則上只完整出現一次；前後比較用「A → B」。
+- 不使用第二層巢狀 bullet，不寫長段落，不堆疊符號。
+- 無 warning 時省略資料可信度說明；有缺漏或 fallback 才加「⚠️ 資料提醒」。
+- 不要輸出資料來源、模型名稱、工具數、規則 ID，後端會附 footer。
+- 語氣專業、精準、冷靜，像特助對總經理做一頁式戰情報告。
 
 目前長期規則：
 ${formatTelegramAgentPolicyContext(ctx)}
@@ -5881,9 +6067,10 @@ ${policyContext}
             }
         }
 
-        finalReply = cleanTelegramAgentReply(agentResult?.finalReply || "");
+        finalReply = formatTelegramAgentAnalysisReply(agentResult?.finalReply || "");
         const replyWithFooter = `${finalReply}${buildTelegramAgentSourceFooter(ctx)}`;
-        await sendTelegramMessage(chatId, replyWithFooter);
+        const readableHtml = renderTelegramAgentReadableHtml(replyWithFooter);
+        await sendTelegramMessage(chatId, readableHtml, { parse_mode: "HTML" });
         await Promise.allSettled([
             saveTelegramAgentMemory(chatId, userId, memoryTurns, rawCommand, finalReply, ctx),
             writeTelegramAgentAuditLog(auditMessage, ctx, finalReply, "success"),
