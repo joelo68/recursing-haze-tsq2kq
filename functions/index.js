@@ -3585,14 +3585,63 @@ async function loadTelegramAgentRawStoreRange(brandId, startDate, endDate, ctx, 
     const requestedStores = normalizeTelegramAgentStoreNamesFull(options.storeNames || options.targetStores || []);
     const requestedStoreSet = new Set(requestedStores);
     const collectionRef = getSummarySourceCollection(brandId, "daily_reports");
-    const result = await queryTelegramAgentDocs(
-        collectionRef.where("date", ">=", startDate).where("date", "<=", endDate),
-        `query:${collectionRef.path}:date=${startDate}..${endDate}`,
-        ctx,
-        "daily_reports_scoped",
-        { brandId, yearMonth: startDate.slice(0, 7) },
-        45
-    );
+
+    // ★ 單店 Firestore query-level 節流：
+    // 過去即使只問一間店，也會先把整品牌日期區間全部讀回，再在記憶體中過濾，
+    // 造成單店查詢仍產生數百筆 reads。現在只有「明確單店 scope」時才優先使用
+    // storeName + date 的精準查詢；全品牌／區長／排行／多店查詢完全保留原流程。
+    // 若正式店名格式不相容、該店查不到資料，或 Firestore 尚未建立所需複合索引，
+    // 會自動退回原本品牌日期查詢，確保資料正確性不因節流而退步。
+    let result = null;
+
+    if (requestedStores.length === 1) {
+        const storeCore = requestedStores[0];
+        const firestoreStoreName = `${getSummaryBrandPrefix(brandId)}${storeCore}店`;
+        try {
+            const exactResult = await queryTelegramAgentDocs(
+                collectionRef
+                    .where("storeName", "==", firestoreStoreName)
+                    .where("date", ">=", startDate)
+                    .where("date", "<=", endDate),
+                `query:${collectionRef.path}:storeName=${firestoreStoreName}:date=${startDate}..${endDate}`,
+                ctx,
+                "daily_reports_scoped",
+                {
+                    brandId,
+                    yearMonth: startDate.slice(0, 7),
+                    storeName: storeCore,
+                    firestoreStoreName,
+                    queryMode: "single_store_exact",
+                },
+                45
+            );
+
+            // 有命中才採用精準結果；0 筆時保留舊流程 fallback，避免歷史別名／舊格式造成漏算。
+            if (exactResult.rows.length > 0) result = exactResult;
+        } catch (error) {
+            console.warn(
+                `[Telegram Agent] daily_reports 單店精準查詢失敗，改用品牌日期 fallback: ${brandId}/${firestoreStoreName}/${startDate}..${endDate}`,
+                error?.message || error
+            );
+        }
+    }
+
+    if (!result) {
+        result = await queryTelegramAgentDocs(
+            collectionRef.where("date", ">=", startDate).where("date", "<=", endDate),
+            `query:${collectionRef.path}:date=${startDate}..${endDate}`,
+            ctx,
+            "daily_reports_scoped",
+            {
+                brandId,
+                yearMonth: startDate.slice(0, 7),
+                queryMode: requestedStores.length === 1 ? "brand_date_fallback" : "brand_date_range",
+                requestedStores,
+            },
+            45
+        );
+    }
+
     const storeMap = {};
     const dailyCash = {};
     result.rows.forEach((sourceRow) => {
@@ -3767,17 +3816,20 @@ function aggregateTelegramAgentTherapistRows(rows = [], yearMonth = "", endDate 
     return overall;
 }
 
-async function loadTelegramAgentTherapistMonth(brandId, yearMonth, ctx) {
+async function loadTelegramAgentTherapistMonth(brandId, yearMonth, ctx, options = {}) {
     const taipeiNow = getTelegramAgentTaipeiNow();
+    const scopedStores = normalizeTelegramAgentStoreNamesFull(options.storeNames || options.targetStores || []);
     const isCurrentMonth = yearMonth === taipeiNow.yearMonth;
 
     // 當月人員分析直接使用品牌限定管理師日報，避免人員月彙總尚未完整造成少算。
+    // 若上層已指定單店 scope，將 scope 往 raw loader 傳遞，讓 Firestore 可直接做單店精準查詢。
     if (isCurrentMonth) {
         const liveResult = await loadTelegramAgentRawTherapistRange(
             brandId,
             `${yearMonth}-01`,
             taipeiNow.todayStr,
-            ctx
+            ctx,
+            { storeNames: scopedStores }
         );
         if (liveResult.rows.length > 0) return { ...liveResult, source: "therapist_daily_reports_current_month_exact" };
         if (ctx) ctx.warnings.push(`${getTelegramAgentBrandLabel(brandId)} ${yearMonth} 當月管理師日報讀取為 0，已改用人員月彙總 fallback。`);
@@ -3825,7 +3877,8 @@ async function loadTelegramAgentTherapistMonth(brandId, yearMonth, ctx) {
         brandId,
         `${yearMonth}-01`,
         isCurrentMonth ? taipeiNow.todayStr : getTelegramAgentMonthEnd(yearMonth),
-        ctx
+        ctx,
+        { storeNames: scopedStores }
     );
     if (rawFallback.rows.length > 0 && ctx) {
         ctx.warnings.push(`${getTelegramAgentBrandLabel(brandId)} ${yearMonth} 人員月彙總缺漏，本題已改讀品牌限定管理師日報。`);
@@ -3836,19 +3889,71 @@ async function loadTelegramAgentTherapistMonth(brandId, yearMonth, ctx) {
     };
 }
 
-async function loadTelegramAgentRawTherapistRange(brandId, startDate, endDate, ctx) {
+async function loadTelegramAgentRawTherapistRange(brandId, startDate, endDate, ctx, options = {}) {
+    const requestedStores = normalizeTelegramAgentStoreNamesFull(options.storeNames || options.targetStores || []);
+    const requestedStoreSet = new Set(requestedStores);
     const collectionRef = getSummarySourceCollection(brandId, "therapist_daily_reports");
-    const result = await queryTelegramAgentDocs(
-        collectionRef.where("date", ">=", startDate).where("date", "<=", endDate),
-        `query:${collectionRef.path}:date=${startDate}..${endDate}`,
-        ctx,
-        "therapist_daily_reports_scoped",
-        { brandId, yearMonth: startDate.slice(0, 7) },
-        45
-    );
+
+    // ★ 單店管理師 Firestore query-level 節流：
+    // 過去即使只問一間店，也會先讀完整品牌管理師日報，再於 getTherapistPerformance 最後過濾店家。
+    // 現在只有「明確單店 scope」且問題不是要求全品牌名次時，才優先使用 storeName + date 精準查詢。
+    // 若索引未建立、正式店名格式不相容或精準查詢 0 筆，會自動退回原本品牌日期查詢。
+    const rankingRequested = /排名|排行|第幾|名次|前\s*\d+|後\s*\d+/i.test(String(ctx?.question || ""));
+    let result = null;
+
+    if (requestedStores.length === 1 && !rankingRequested) {
+        const storeCore = requestedStores[0];
+        const firestoreStoreName = `${getSummaryBrandPrefix(brandId)}${storeCore}店`;
+        try {
+            const exactResult = await queryTelegramAgentDocs(
+                collectionRef
+                    .where("storeName", "==", firestoreStoreName)
+                    .where("date", ">=", startDate)
+                    .where("date", "<=", endDate),
+                `query:${collectionRef.path}:storeName=${firestoreStoreName}:date=${startDate}..${endDate}`,
+                ctx,
+                "therapist_daily_reports_scoped",
+                {
+                    brandId,
+                    yearMonth: startDate.slice(0, 7),
+                    storeName: storeCore,
+                    firestoreStoreName,
+                    queryMode: "single_store_exact",
+                },
+                45
+            );
+            if (exactResult.rows.length > 0) result = exactResult;
+        } catch (error) {
+            console.warn(
+                `[Telegram Agent] therapist_daily_reports 單店精準查詢失敗，改用品牌日期 fallback: ${brandId}/${firestoreStoreName}/${startDate}..${endDate}`,
+                error?.message || error
+            );
+        }
+    }
+
+    if (!result) {
+        result = await queryTelegramAgentDocs(
+            collectionRef.where("date", ">=", startDate).where("date", "<=", endDate),
+            `query:${collectionRef.path}:date=${startDate}..${endDate}`,
+            ctx,
+            "therapist_daily_reports_scoped",
+            {
+                brandId,
+                yearMonth: startDate.slice(0, 7),
+                queryMode: requestedStores.length === 1 ? (rankingRequested ? "brand_date_ranking_guard" : "brand_date_fallback") : "brand_date_range",
+                requestedStores,
+            },
+            45
+        );
+    }
+
     const map = {};
     result.rows.forEach((sourceRow) => {
         if (sourceRow.isArchivedDuplicate === true) return;
+
+        const sourceStoreCore = normalizeSummaryCoreName(sourceRow.storeName || sourceRow.store || sourceRow.storeId || "");
+        if (requestedStoreSet.size > 0 && !requestedStoreSet.has(sourceStoreCore)) return;
+
         const id = sourceRow.therapistId || normalizeSummaryPersonName(sourceRow.therapistName || "");
         if (!id) return;
         if (!map[id]) map[id] = { id, therapistName: sourceRow.therapistName || "未知", storeName: sourceRow.storeName || "" };
@@ -3876,12 +3981,16 @@ async function getTherapistPerformance(startDate, endDate, personName = null, st
     const start = normalizeTelegramAgentDate(startDate);
     const end = normalizeTelegramAgentDate(endDate);
     const useMonthSummary = isTelegramAgentMonthRange(start, end);
+    const storeQuery = normalizeSummaryCoreName(storeName || "");
+    const inheritedStoreList = normalizeTelegramAgentStoreNames(storeNames || []);
+    const scopedStoreNames = storeQuery ? [storeQuery] : inheritedStoreList;
+    const therapistScopeOptions = scopedStoreNames.length > 0 ? { storeNames: scopedStoreNames } : {};
     const allRows = [];
     const sourceMeta = [];
     for (const brandId of brands) {
         const loaded = useMonthSummary
-            ? await loadTelegramAgentTherapistMonth(brandId, start.slice(0, 7), ctx)
-            : await loadTelegramAgentRawTherapistRange(brandId, start, end, ctx);
+            ? await loadTelegramAgentTherapistMonth(brandId, start.slice(0, 7), ctx, therapistScopeOptions)
+            : await loadTelegramAgentRawTherapistRange(brandId, start, end, ctx, therapistScopeOptions);
         const policyRows = filterTelegramAgentRowsByPolicies(loaded.rows, brandId, ctx, policyScopes);
         policyRows.forEach((row) => allRows.push(row));
         sourceMeta.push({
@@ -3893,8 +4002,7 @@ async function getTherapistPerformance(startDate, endDate, personName = null, st
     }
 
     const personQuery = normalizeSummaryPersonName(personName || "").toLowerCase();
-    const storeQuery = normalizeSummaryCoreName(storeName || "");
-    const inheritedStores = new Set(normalizeTelegramAgentStoreNames(storeNames || []));
+    const inheritedStores = new Set(inheritedStoreList);
     const filtered = allRows.filter((row) => {
         if (personQuery && !normalizeSummaryPersonName(row.personName).toLowerCase().includes(personQuery)) return false;
         const rowStore = normalizeSummaryCoreName(row.storeName);
