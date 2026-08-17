@@ -5316,10 +5316,10 @@ async function writeTelegramAgentAuditLog(message, ctx, finalReply, status = "su
     try {
         await db.collection("telegram_agent_logs").add({
             version: TELEGRAM_AGENT_VERSION,
-            replyFormat: "telegram-mobile-v6.4-language-quality-final",
+            replyFormat: "telegram-mobile-v6.5.1-semantic-consistency-final",
             replyMode: getTelegramAgentReplyMode(ctx),
             replyGuardVersion: "deterministic-hard-guard-v1",
-            replyLanguagePolishVersion: "beauty-language-quality-v1",
+            replyLanguagePolishVersion: "beauty-language-quality-v2.1-semantic-consistency",
             replyGuardActionCount: Array.isArray(ctx?.replyGuardActions) ? ctx.replyGuardActions.length : 0,
             replyGuardActions: Array.isArray(ctx?.replyGuardActions) ? ctx.replyGuardActions.slice(0, 12) : [],
             geminiApi: ctx?.geminiApi || getGeminiInteractionsApiLabel(ctx?.modelName || TELEGRAM_AGENT_PRIMARY_MODEL),
@@ -5918,6 +5918,61 @@ function polishTelegramAgentNarrativeQuality(text, ctx = null) {
             replacement: "持續觀察近期改善的諮詢與成交表現是否能穩定延續",
             action: "polish_membership_overclaim",
         },
+        {
+            regex: /近期新客締結率與均單同步改善；至於改善[^。\n]*現有資料無法單獨判定。\s*現有資料無法單獨判定顧客購買[^。\n]*，但[^。\n]*。/g,
+            replacement: "近期新客締結率與均單同步改善；至於改善主要來自諮詢方式、方案組合或其他因素，現有資料無法單獨判定，但整體成交表現的改善方向明確。",
+            action: "polish_duplicate_evidence_caveat",
+        },
+        {
+            regex: /目前門市主要業績與轉化高度集中於單一管理師([^（。\n]+)(（[^。\n]+）)?。/g,
+            replacement: (full, person, metrics) => `目前取得的人員業績資料顯示${String(person || "").trim()}${metrics || ""}；但現有資料無法直接確認實際排班、操作分工與其他支援人力。`,
+            action: "polish_staffing_evidence_boundary",
+        },
+        {
+            regex: /目前門市主要業績與轉化(?:較為|相對)?集中於單一管理師([^（。\n]+)(（[^。\n]+）)?。/g,
+            replacement: (full, person, metrics) => `目前取得的人員業績資料顯示${String(person || "").trim()}${metrics || ""}；但現有資料無法直接確認實際排班、操作分工與其他支援人力。`,
+            action: "polish_staffing_evidence_boundary",
+        },
+        {
+            regex: /在單一管理師承接多數諮詢與操作的情況下，[^。\n]*。/g,
+            replacement: "若實際服務人力同樣較集中，則可能壓縮主要管理師可用於完整諮詢與顧客溝通的時間。",
+            action: "polish_staffing_workload_inference",
+        },
+        {
+            regex: /(?:當)?單一管理師[^。\n]*(?:大量|多數)[^。\n]*(?:操作|諮詢)[^。\n]*，[^。\n]*(?:諮詢時間|服務量能)[^。\n]*。/g,
+            replacement: "若實際服務人力較集中，可能使主要管理師可用於完整諮詢與顧客溝通的時間受到壓縮。",
+            action: "polish_staffing_workload_inference",
+        },
+        {
+            regex: /現有資料無法直接判定個人排班與操作工時，但適度分擔基礎護理將有助於釋放核心諮詢量能。/g,
+            replacement: "現有資料無法直接判定個人排班與操作工時；若實際服務人力較集中，可評估分擔部分基礎服務，以增加主要管理師可用於諮詢與顧客溝通的時間。",
+            action: "polish_staffing_action_evidence",
+        },
+        {
+            regex: /若維持目前進度節奏，月底預估[^。\n]+。\s*下半月仍需維持穩定的成交步調。/g,
+            replacement: "由目前月底預估來看，現有整月平均表現仍不足以達成目標；下半月需要進一步提升成交表現，才能持續縮小目標差距。",
+            action: "polish_progress_logic",
+        },
+        {
+            regex: /若維持目前進度節奏，月底預估[^。\n]+，下半月仍需維持穩定的成交步調。/g,
+            replacement: "由目前月底預估來看，現有整月平均表現仍不足以達成目標；下半月需要進一步提升成交表現，才能持續縮小目標差距。",
+            action: "polish_progress_logic",
+        },
+        {
+            regex: /(?:延續|維持)近期[^。\n]*(?:新客)?諮詢[^。\n]*，確保每位到店新客[^。\n]*維持成交均單。/g,
+            replacement: "優先保留完整的顧客需求溝通時間，持續觀察近期改善的締結率與客單表現是否能穩定延續。",
+            action: "polish_new_customer_action_overclaim",
+        },
+        {
+            regex: /確保每位到店新客皆有充足諮詢時間以維持成交均單。/g,
+            replacement: "優先保留完整的顧客需求溝通時間，持續觀察近期改善的締結率與客單表現是否能穩定延續。",
+            action: "polish_new_customer_action_overclaim",
+        },
+        {
+            regex: /於護理服務中適度融入居家保養品建議，在提升顧客護理效果的同時穩健增加營收動能。/g,
+            replacement: "依顧客實際護理需求提供合適的居家保養建議，同時觀察產品銷售與整體客單表現。",
+            action: "polish_homecare_effect_overclaim",
+        },
     ];
 
     sentenceRules.forEach((rule) => {
@@ -5961,6 +6016,41 @@ function polishTelegramAgentNarrativeQuality(text, ctx = null) {
             replacement: "延續近期新客諮詢改善",
             action: "polish_rigid_wording",
         },
+        {
+            regex: /轉化動能與均單顯著修復/g,
+            replacement: "新客轉化與客單表現明顯改善",
+            action: "polish_repair_wording",
+        },
+        {
+            regex: /轉化與均單顯著修復/g,
+            replacement: "新客轉化與客單表現明顯改善",
+            action: "polish_repair_wording",
+        },
+        {
+            regex: /深耕舊客續約機會/g,
+            replacement: "關注舊客續約機會",
+            action: "polish_customer_relationship_wording",
+        },
+        {
+            regex: /釋放核心諮詢量能/g,
+            replacement: "增加主要管理師可用於諮詢與顧客溝通的時間",
+            action: "polish_consulting_capacity_phrase",
+        },
+        {
+            regex: /人力負荷較集中/g,
+            replacement: "人力配置較集中",
+            action: "polish_staffing_phrase",
+        },
+        {
+            regex: /持續推動居家保養搭配/g,
+            replacement: "持續提供居家保養建議",
+            action: "polish_homecare_wording",
+        },
+        {
+            regex: /穩定新客諮詢節奏/g,
+            replacement: "延續近期新客諮詢改善",
+            action: "polish_new_customer_action_title",
+        },
     ];
 
     safePhraseRules.forEach((rule) => {
@@ -5980,6 +6070,12 @@ function polishTelegramAgentNarrativeQuality(text, ctx = null) {
             "這顯示近期新客締結率與均單同步改善")
         .replace(/延續近期已改善的新客締結動能與高均單引導流程/g,
             "延續近期已改善的新客諮詢與成交表現")
+        .replace(/現有資料無法單獨判定。\s*現有資料無法單獨判定/g,
+            "現有資料無法單獨判定")
+        .replace(/現有資料無法直接確認實際排班、操作分工與其他支援人力。若實際服務人力同樣較集中，則可能壓縮主要管理師可用於完整諮詢與顧客溝通的時間。現有資料無法直接判定個人排班與操作工時；若實際服務人力較集中，可評估分擔部分基礎服務，以增加主要管理師可用於諮詢與顧客溝通的時間。/g,
+            "現有資料無法直接確認實際排班、操作分工與其他支援人力。若實際服務人力較集中，可能壓縮主要管理師可用於完整諮詢與顧客溝通的時間；可再評估是否需要分擔部分基礎服務。")
+        .replace(/現有資料無法直接確認實際排班、操作分工與其他支援人力。\s*現有資料無法直接判定個人排班與操作工時；/g,
+            "現有資料無法直接確認實際排班、操作分工與其他支援人力；")
         .replace(/持續維持/g, "維持")
         .replace(/持續延續/g, "延續")
         .replace(/[ \t]{2,}/g, " ")
@@ -6389,6 +6485,7 @@ function getTelegramAgentInferenceGuardInstruction() {
         "7. 詳細分析每個『主要變化』最多 2～3 句，順序固定：",
         "   第 1 句：數據事實；第 2 句：合理解讀；第 3 句（必要時）：指出仍無法判定的部分或管理意義。",
         "8. 若推論內容可能影響人員評價、獎懲、排班或銷售制度，優先保守表述，避免把模型推測當成管理事實。",
+        "9. 個人業績、締結率只能證明該人員的業績結果，不能直接證明她承接了門市多數操作、諮詢或實際工時；沒有排班／工時資料時必須保留不確定性。",
     ].join("\n");
 }
 
@@ -6416,6 +6513,10 @@ function getTelegramAgentBeautyServiceToneInstruction() {
         "10. 避免『在線』描述門市人員；改用『目前資料顯示，門市主要服務與業績集中於…』。",
         "11. 避免『持續延續、優質客單』等不自然語句；優先使用『延續近期改善、客單表現』。",
         "12. 『高潛力舊客』若沒有正式分級定義，優先改寫為『近期較有續約需求的舊客』或『近期有續約機會的舊客』。",
+        "13. 一般營運語氣優先使用『改善』而不是『修復』；例如『新客轉化與客單表現明顯改善』。",
+        "14. 人員業績資料不等於實際排班／操作分工。若工具只有個人業績、締結率等結果，不可直接寫『單一管理師承接多數操作與諮詢』；應寫『目前取得的人員業績資料顯示…，但實際排班與分工仍無法直接確認』。",
+        "15. 避免『釋放核心諮詢量能』等抽象詞，優先寫『增加主要管理師可用於諮詢與顧客溝通的時間』。",
+        "16. 避免『深耕』等偏業務術語；舊客關係管理優先寫『關注舊客續約機會／關心近期有續約需求的顧客』。",
     ].join("\n");
 }
 
@@ -6512,7 +6613,7 @@ ${getTelegramAgentBeautyServiceToneInstruction()}
 10. 不要自行輸出資料來源、模型名稱、工具數、reads、規則 ID；後端會統一附上極簡資料 footer。
 11. 同月份日期範圍優先寫成「8/1–8/17」，避免「2026-08-01 ~ 08-17」佔滿手機首行；跨年或使用者明確要求年份時才保留完整年份。
 12. 詳細版每個「主要變化」以 2 句為主：第 1 句數據事實＋解讀，第 2 句補管理意義或不確定性；只有必要時才加第 3 句。
-13. 「🎯 優先行動」每個編號項目之間保留一個空行，讓手機閱讀有明顯分隔。
+13. 「🎯 優先行動」每個編號項目之間保留一個空行，讓手機閱讀有明顯分隔；行動用語避免「確保、維持至少、深耕、固化」等過度承諾或偏業務化詞彙。
 14. 語氣專業、精準、冷靜；像特助對總經理做「一頁式、可立即決策」的戰情簡報。`;
 }
 
