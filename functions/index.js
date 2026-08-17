@@ -2536,12 +2536,20 @@ function createTelegramAgentContext({ chatId, userId, question }) {
         sources: [],
         warnings: [],
         usage: {
+            // Gemini Interactions API token usage（本題所有 model calls 加總）
             promptTokenCount: 0,
+            inputTokenCount: 0,
+            cachedTokenCount: 0,
+            nonCachedInputTokenCount: 0,
+            cacheHitRatePct: 0,
             candidatesTokenCount: 0,
+            outputTokenCount: 0,
             thoughtTokenCount: 0,
             toolUseTokenCount: 0,
             totalTokenCount: 0,
+            modelCallCount: 0,
         },
+        modelUsageSteps: [],
         modelName: TELEGRAM_AGENT_PRIMARY_MODEL,
         fallbackUsed: false,
         geminiApi: getGeminiInteractionsApiLabel(TELEGRAM_AGENT_PRIMARY_MODEL),
@@ -2592,37 +2600,83 @@ function recordTelegramAgentRead(ctx, count, source, meta = {}) {
     }
 }
 
+function getTelegramAgentUsageNumber(usage = {}, keys = []) {
+    for (const key of keys) {
+        const value = Number(usage?.[key]);
+        if (Number.isFinite(value) && value >= 0) return value;
+    }
+    return 0;
+}
+
 function recordTelegramAgentUsage(ctx, response) {
     if (!ctx || !response) return;
     const usage = response.usageMetadata || response.usage || {};
-    ctx.usage.promptTokenCount += Number(
-        usage.promptTokenCount ||
-        usage.inputTokenCount ||
-        usage.total_input_tokens ||
-        0
+
+    const inputTokens = getTelegramAgentUsageNumber(usage, [
+        "promptTokenCount",
+        "inputTokenCount",
+        "total_input_tokens",
+    ]);
+    const cachedTokens = getTelegramAgentUsageNumber(usage, [
+        "cachedTokenCount",
+        "cachedContentTokenCount",
+        "total_cached_tokens",
+    ]);
+    const outputTokens = getTelegramAgentUsageNumber(usage, [
+        "candidatesTokenCount",
+        "outputTokenCount",
+        "total_output_tokens",
+    ]);
+    const thoughtTokens = getTelegramAgentUsageNumber(usage, [
+        "thoughtTokenCount",
+        "thoughtsTokenCount",
+        "total_thought_tokens",
+    ]);
+    const toolUseTokens = getTelegramAgentUsageNumber(usage, [
+        "toolUseTokenCount",
+        "total_tool_use_tokens",
+    ]);
+    const totalTokens = getTelegramAgentUsageNumber(usage, [
+        "totalTokenCount",
+        "total_tokens",
+    ]);
+
+    ctx.usage.promptTokenCount += inputTokens;
+    ctx.usage.inputTokenCount += inputTokens;
+    ctx.usage.cachedTokenCount += cachedTokens;
+    ctx.usage.candidatesTokenCount += outputTokens;
+    ctx.usage.outputTokenCount += outputTokens;
+    ctx.usage.thoughtTokenCount += thoughtTokens;
+    ctx.usage.toolUseTokenCount += toolUseTokens;
+    ctx.usage.totalTokenCount += totalTokens;
+    ctx.usage.modelCallCount += 1;
+
+    // cached tokens 仍屬於 input tokens 的一部分；此欄只用來觀察 cache 命中情況，
+    // 不把它誤當成「免費 token」或直接等同實際帳單。
+    ctx.usage.nonCachedInputTokenCount = Math.max(
+        0,
+        Number(ctx.usage.inputTokenCount || 0) - Number(ctx.usage.cachedTokenCount || 0)
     );
-    ctx.usage.candidatesTokenCount += Number(
-        usage.candidatesTokenCount ||
-        usage.outputTokenCount ||
-        usage.total_output_tokens ||
-        0
-    );
-    ctx.usage.thoughtTokenCount += Number(
-        usage.thoughtTokenCount ||
-        usage.thoughtsTokenCount ||
-        usage.total_thought_tokens ||
-        0
-    );
-    ctx.usage.toolUseTokenCount += Number(
-        usage.toolUseTokenCount ||
-        usage.total_tool_use_tokens ||
-        0
-    );
-    ctx.usage.totalTokenCount += Number(
-        usage.totalTokenCount ||
-        usage.total_tokens ||
-        0
-    );
+    ctx.usage.cacheHitRatePct = ctx.usage.inputTokenCount > 0
+        ? Number(((ctx.usage.cachedTokenCount / ctx.usage.inputTokenCount) * 100).toFixed(1))
+        : 0;
+
+    if (!Array.isArray(ctx.modelUsageSteps)) ctx.modelUsageSteps = [];
+    ctx.modelUsageSteps.push({
+        call: ctx.usage.modelCallCount,
+        interactionId: String(response?.id || ""),
+        model: String(response?.model || ctx.modelName || TELEGRAM_AGENT_PRIMARY_MODEL),
+        inputTokenCount: inputTokens,
+        cachedTokenCount: cachedTokens,
+        nonCachedInputTokenCount: Math.max(0, inputTokens - cachedTokens),
+        cacheHitRatePct: inputTokens > 0
+            ? Number(((cachedTokens / inputTokens) * 100).toFixed(1))
+            : 0,
+        outputTokenCount: outputTokens,
+        thoughtTokenCount: thoughtTokens,
+        toolUseTokenCount: toolUseTokens,
+        totalTokenCount: totalTokens,
+    });
 }
 
 function getTelegramAgentCache(key) {
@@ -5283,6 +5337,7 @@ async function writeTelegramAgentAuditLog(message, ctx, finalReply, status = "su
             readCount: Number(ctx?.readCount || 0),
             writeCount: Number(ctx?.writeCount || 0),
             usage: ctx?.usage || {},
+            modelUsageSteps: Array.isArray(ctx?.modelUsageSteps) ? ctx.modelUsageSteps.slice(0, 10) : [],
             durationMs: Date.now() - Number(ctx?.startedAtMs || Date.now()),
             errorMessage: String(errorMessage || "").slice(0, 1000),
             createdAt: admin.firestore.FieldValue.serverTimestamp(),
