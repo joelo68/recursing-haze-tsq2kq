@@ -5316,9 +5316,10 @@ async function writeTelegramAgentAuditLog(message, ctx, finalReply, status = "su
     try {
         await db.collection("telegram_agent_logs").add({
             version: TELEGRAM_AGENT_VERSION,
-            replyFormat: "telegram-mobile-v6.3-true-brief-mode",
+            replyFormat: "telegram-mobile-v6.4-language-quality-final",
             replyMode: getTelegramAgentReplyMode(ctx),
             replyGuardVersion: "deterministic-hard-guard-v1",
+            replyLanguagePolishVersion: "beauty-language-quality-v1",
             replyGuardActionCount: Array.isArray(ctx?.replyGuardActions) ? ctx.replyGuardActions.length : 0,
             replyGuardActions: Array.isArray(ctx?.replyGuardActions) ? ctx.replyGuardActions.slice(0, 12) : [],
             geminiApi: ctx?.geminiApi || getGeminiInteractionsApiLabel(ctx?.modelName || TELEGRAM_AGENT_PRIMARY_MODEL),
@@ -5791,26 +5792,6 @@ function applyTelegramAgentDeterministicReplyGuard(text, ctx = null) {
             action: "beauty_tone_staff_wording",
         },
         {
-            regex: /(?:門市)?顧客具備(?:良好|高度|較高)?(?:的)?消費意願(?:與彈性)?/g,
-            replacement: "近期成交與營收表現明顯改善",
-            action: "beauty_tone_customer_intent",
-        },
-        {
-            regex: /(?:近期)?現場推廣高價值方案(?:已)?(?:有)?實質成效/g,
-            replacement: "近期較高客單的成交結果有所增加",
-            action: "beauty_tone_high_value_claim",
-        },
-        {
-            regex: /(?:這)?顯示現場諮詢流程能有效引導顧客選擇完整療程組合/g,
-            replacement: "這顯示近期新客締結率與均單同步改善",
-            action: "beauty_tone_consulting_claim",
-        },
-        {
-            regex: /現場諮詢流程能有效引導顧客選擇完整療程組合/g,
-            replacement: "近期新客締結率與均單同步改善",
-            action: "beauty_tone_consulting_claim",
-        },
-        {
             regex: /維持目前的成交均單與進帳節奏/g,
             replacement: "持續提升近期成交與進帳表現",
             action: "beauty_tone_goal_gap_wording",
@@ -5839,21 +5820,6 @@ function applyTelegramAgentDeterministicReplyGuard(text, ctx = null) {
             regex: /高潛力舊客/g,
             replacement: "近期較有續約需求的舊客",
             action: "beauty_tone_customer_relationship",
-        },
-        {
-            regex: /(?:高價值(?:護理)?方案(?:的)?推廣|推廣高價值(?:護理)?方案)(?:已)?(?:見|有)(?:初步|實質)?成效/g,
-            replacement: "近期成交與客單表現同步改善",
-            action: "beauty_tone_unverified_solution_effect",
-        },
-        {
-            regex: /(?:這)?(?:代表|顯示)?現場諮詢(?:流程)?(?:已)?能有效引導顧客選擇(?:較)?完整的(?:護理|療程)(?:規劃|方案|組合)/g,
-            replacement: "這顯示近期新客締結率與均單同步改善",
-            action: "beauty_tone_unverified_consulting_effect",
-        },
-        {
-            regex: /(?:顧客|門市顧客)具備(?:良好|高度|較高)?(?:的)?(?:消費意願|支付能力)(?:與彈性)?/g,
-            replacement: "近期成交與營收表現明顯改善",
-            action: "beauty_tone_unverified_customer_intent",
         },
     ];
 
@@ -5904,6 +5870,198 @@ function applyTelegramAgentDeterministicReplyGuard(text, ctx = null) {
     return reply;
 }
 
+
+
+function polishTelegramAgentNarrativeQuality(text, ctx = null) {
+    let reply = String(text || "");
+
+    const sentenceRules = [
+        {
+            regex: /(?:這)?顯示[^。\n]{0,22}(?:顧客|客群)[^。\n]{0,20}(?:消費意願|支付能力)[^。\n]*。/g,
+            replacement: "近期現金、締結與客單表現同步改善；至於改善主要來自客群、方案組合或諮詢方式，現有資料無法單獨判定。",
+            action: "polish_unverified_customer_intent_sentence",
+        },
+        {
+            regex: /[^。\n]*(?:高價值(?:護理)?方案(?:的)?推廣|推廣高價值(?:護理)?方案)[^。\n]*(?:初步|實質)?成效[^。\n]*。/g,
+            replacement: "近期成交與客單表現同步改善，但現有資料無法單獨判定是否由特定方案推廣造成。",
+            action: "polish_unverified_solution_effect_sentence",
+        },
+        {
+            regex: /[^。\n]*(?:現場)?諮詢(?:流程)?[^。\n]*(?:有效引導|成功引導)[^。\n]*(?:完整|高價值)[^。\n]*(?:護理|療程|方案|組合)[^。\n]*。/g,
+            replacement: "近期新客締結率與均單同步改善；至於改善是否主要來自諮詢方式或方案組合，現有資料無法單獨判定。",
+            action: "polish_unverified_consulting_effect_sentence",
+        },
+        {
+            regex: /[^。\n]*近期成交與營收表現明顯改善[^。\n]*(?:回購潛力|近期成交與客單表現同步改善)[^。\n]*。/g,
+            replacement: "近期現金與客單表現同步改善，顯示門市成交動能明顯回升。",
+            action: "polish_duplicate_revenue_sentence",
+        },
+        {
+            regex: /[^。\n]*舊客持續提升新客均單表現[^。\n]*。/g,
+            replacement: (sentence) => {
+                const cleaned = String(sentence || "")
+                    .replace(/，?舊客持續提升新客均單表現/g, "")
+                    .replace(/舊客持續提升新客均單表現，?/g, "")
+                    .replace(/，。/g, "。")
+                    .trim();
+                return cleaned && cleaned !== "。" ? cleaned : "";
+            },
+            action: "polish_invalid_subject_object_sentence",
+        },
+        {
+            regex: /若要實質縮小全月目標落差，下半月每日平均進帳節奏需維持在穩定高檔。/g,
+            replacement: "由目前月底預估來看，現有整月平均節奏仍不足以達成目標，下半月需要進一步提升成交表現。",
+            action: "polish_goal_gap_sentence",
+        },
+        {
+            regex: /確保進店顧客能持續轉化為長期穩定的護理會員/g,
+            replacement: "持續觀察近期改善的諮詢與成交表現是否能穩定延續",
+            action: "polish_membership_overclaim",
+        },
+    ];
+
+    sentenceRules.forEach((rule) => {
+        reply = replaceTelegramAgentGuardedPattern(
+            reply,
+            rule.regex,
+            rule.replacement,
+            ctx,
+            rule.action
+        );
+    });
+
+    const safePhraseRules = [
+        {
+            regex: /釋放諮詢量能/g,
+            replacement: "增加主要管理師的諮詢時間",
+            action: "polish_consulting_capacity_phrase",
+        },
+        {
+            regex: /人員負載/g,
+            replacement: "人員服務負荷",
+            action: "polish_staff_load_phrase",
+        },
+        {
+            regex: /人力負荷集中/g,
+            replacement: "人力配置較集中",
+            action: "polish_staffing_phrase",
+        },
+        {
+            regex: /成交體質/g,
+            replacement: "成交表現",
+            action: "polish_conversion_wording",
+        },
+        {
+            regex: /服務單價/g,
+            replacement: "客單表現",
+            action: "polish_ticket_wording",
+        },
+        {
+            regex: /固化新客諮詢節奏/g,
+            replacement: "延續近期新客諮詢改善",
+            action: "polish_rigid_wording",
+        },
+    ];
+
+    safePhraseRules.forEach((rule) => {
+        reply = replaceTelegramAgentGuardedPattern(
+            reply,
+            rule.regex,
+            rule.replacement,
+            ctx,
+            rule.action
+        );
+    });
+
+    reply = reply
+        .replace(/近期現金與客單表現同步改善，顯示門市成交動能明顯回升。現場近期成交與客單表現同步改善。/g,
+            "近期現金與客單表現同步改善，顯示門市成交動能明顯回升。")
+        .replace(/這顯示近期新客締結率與均單同步改善，成交表現與客單表現皆呈現良好修復/g,
+            "這顯示近期新客締結率與均單同步改善")
+        .replace(/延續近期已改善的新客締結動能與高均單引導流程/g,
+            "延續近期已改善的新客諮詢與成交表現")
+        .replace(/持續維持/g, "維持")
+        .replace(/持續延續/g, "延續")
+        .replace(/[ \t]{2,}/g, " ")
+        .replace(/，{2,}/g, "，")
+        .replace(/。{2,}/g, "。");
+
+    return reply;
+}
+
+function compactTelegramAgentDetailedKpis(text, ctx = null) {
+    if (getTelegramAgentReplyMode(ctx) !== "detailed") return String(text || "");
+
+    const lines = String(text || "").split("\n");
+    const idxKpi = lines.findIndex((line) => String(line || "").trim().startsWith("📊"));
+    const idxChange = lines.findIndex((line) => String(line || "").trim().startsWith("🔎"));
+
+    if (idxKpi < 0 || idxChange < 0 || idxChange <= idxKpi) {
+        return String(text || "");
+    }
+
+    const rawKpis = lines
+        .slice(idxKpi + 1, idxChange)
+        .map((line) => String(line || "").trim())
+        .filter((line) => line.startsWith("•"));
+
+    const normalized = normalizeTelegramAgentMobileKpiLines(rawKpis);
+
+    const find = (regex) => normalized.find((line) => regex.test(line)) || "";
+    const cash = find(/^•\s*現金[:：]/);
+    const gap = find(/^•\s*缺口[:：]/);
+    const forecast = find(/^•\s*月底預估[:：]/);
+    const accrual = find(/^•\s*權責[:：]/);
+    const traffic = find(/^•\s*來客[:：]/);
+    const newCustomer = find(/^•\s*新客[:：]/);
+    const staffing = find(/^•\s*(?:人力|人員)[:：]/);
+
+    const selected = [];
+
+    if (cash) selected.push(cash);
+
+    if (gap && forecast) {
+        const gapValue = gap.replace(/^•\s*缺口[:：]\s*/, "").trim();
+        const forecastValue = forecast.replace(/^•\s*月底預估[:：]\s*/, "").trim();
+        selected.push(`• 缺口：${gapValue}｜月底預估 ${forecastValue}`);
+    } else {
+        if (gap) selected.push(gap);
+        if (forecast) selected.push(forecast);
+    }
+
+    if (accrual) selected.push(accrual);
+    if (traffic) selected.push(traffic);
+    if (newCustomer) selected.push(newCustomer);
+    if (staffing) {
+        selected.push(staffing.replace(/^•\s*人員[:：]/, "• 人力："));
+    }
+
+    for (const line of normalized) {
+        if (selected.length >= 6) break;
+        if (!selected.includes(line) && !/^•\s*舊客[:：]/.test(line)) {
+            selected.push(line);
+        }
+    }
+
+    const compactedKpis = selected.slice(0, 6);
+    const output = [
+        ...lines.slice(0, idxKpi + 1),
+        ...compactedKpis,
+        "",
+        ...lines.slice(idxChange),
+    ].join("\n").replace(/\n{3,}/g, "\n\n").trim();
+
+    if (output !== String(text || "").trim()) {
+        recordTelegramAgentReplyGuardAction(
+            ctx,
+            "compact_detailed_mobile_kpis",
+            rawKpis.join(" ").slice(0, 160),
+            compactedKpis.join(" ").slice(0, 160)
+        );
+    }
+
+    return output;
+}
 
 function normalizeTelegramAgentMobileKpiLines(lines = []) {
     const output = [];
@@ -6083,6 +6241,7 @@ function optimizeTelegramAgentMobileLayout(text, ctx = null) {
 
     reply = output.join("\n").replace(/\n{3,}/g, "\n\n").trim();
     reply = compactTelegramAgentBriefReply(reply, ctx);
+    reply = compactTelegramAgentDetailedKpis(reply, ctx);
 
     return reply;
 }
@@ -6115,9 +6274,9 @@ function formatTelegramAgentAnalysisReply(text, ctx = null) {
 
     // v2：預設戰情簡報版限制更短；明確要求詳細分析時才放寬。
     const replyMode = getTelegramAgentReplyMode(ctx);
-    const maxLength = replyMode === "detailed" ? 2200 : 950;
-    const preferredCut = replyMode === "detailed" ? 2050 : 850;
-    const safeFloor = replyMode === "detailed" ? 1800 : 700;
+    const maxLength = replyMode === "detailed" ? 2000 : 950;
+    const preferredCut = replyMode === "detailed" ? 1880 : 850;
+    const safeFloor = replyMode === "detailed" ? 1650 : 700;
 
     if (reply.length > maxLength) {
         const cutAt = Math.max(
@@ -6270,6 +6429,7 @@ function getTelegramAgentReplyModeInstruction(ctx = null) {
             "每個「主要變化」固定採：數據事實 → 合理解讀 →（必要時）不確定性／管理意義；每點最多 2～3 句。",
             "每個「優先行動」固定採：動作名稱 → 一句做法／原則；不要寫成政策條文。",
             "避免把同一組 KPI 先列數字、再用一整段重述一次；詳細版重點是增加解讀，不是增加重複。",
+            "詳細版 KPI 最多 6 行；優先保留現金、缺口／月底預估、權責／產品、來客、新客、人力。舊客均單等次要 KPI 可放進『主要變化』，不要把 KPI 區變成報表。",
         ].join("\n");
     }
 
@@ -6341,8 +6501,8 @@ ${getTelegramAgentBeautyServiceToneInstruction()}
 
    🎯 優先行動
    每項拆成「短標題」＋「一句做法」：
-   1. 釋放 Abee 諮詢產能
-   Jonas／機動人力接手純操作，讓主力專注談單。
+   1. 安排現場支援人力
+   分擔基礎服務，讓主要管理師保留更多完整諮詢時間。
 4. 手機版 KPI 一行最多放 2 組重點數字，盡量控制在約 28～32 個中文字寬度；不要把目標、缺口、預估、新客、舊客多組資訊全部塞在同一行。缺口與月底預估優先拆成兩行。
 5. 同一個金額、比率、人數原則上只完整出現一次；前後比較用「A → B」，不要在結論、數字、變化、行動重複四次。
 6. 「主要變化」只寫真正改變判斷的 2～3 項；沒有決策價值的數字不要全部搬進回答。
@@ -6380,6 +6540,7 @@ ${getTelegramAgentBeautyServiceToneInstruction()}
   🎯 優先行動：最多 2 項，每項「短標題」＋下一行一句做法。
   使用者只問「目前狀況如何／今天如何／表現如何」時，不得輸出 detailed 等級的段落分析。
 - 詳細分析版只有在使用者明確要求「詳細／完整／展開／深入」時才使用，可增加必要解釋，但仍維持手機可讀性。
+- 詳細版「📊 關鍵數字」最多 6 行；優先保留現金、缺口／月底預估、權責／產品、來客、新客、人力，其餘 KPI 放到主要變化。
 - 詳細分析只能把「資料解讀」寫得更完整，不得把資料中不存在的價格、頻率、分鐘數、天數、KPI 門檻或強制制度寫得更具體。
 - 目前 KPI 數值只能描述「目前狀態」，不可自行變成未來目標。例如目前締結率 30.8%，不得自行寫成「維持 30% 以上」，除非 Policy／使用者／工具明確要求。
 - KPI 短行化；一行最多 2 組重點數字，缺口與月底預估優先拆成兩行，不要把現金、目標、缺口、預估塞在同一行。
@@ -6877,6 +7038,7 @@ ${policyContext}
 
         finalReply = formatTelegramAgentAnalysisReply(agentResult?.finalReply || "", ctx);
         finalReply = applyTelegramAgentDeterministicReplyGuard(finalReply, ctx);
+        finalReply = polishTelegramAgentNarrativeQuality(finalReply, ctx);
         finalReply = optimizeTelegramAgentMobileLayout(finalReply, ctx);
         const replyWithFooter = `${finalReply}${buildTelegramAgentSourceFooter(ctx)}`;
         const readableHtml = renderTelegramAgentReadableHtml(replyWithFooter);
