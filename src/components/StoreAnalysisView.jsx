@@ -1,5 +1,5 @@
 // src/components/StoreAnalysisView.jsx
-import React, { useState, useEffect, useMemo, useContext, useCallback } from "react";
+import React, { useState, useEffect, useMemo, useContext, useCallback, useRef } from "react";
 import {
   ComposedChart, Bar, Line, XAxis, YAxis, CartesianGrid, 
   Tooltip as RechartsTooltip, Legend, ResponsiveContainer,
@@ -12,7 +12,7 @@ import {
 } from "lucide-react";
 
 import { AppContext } from "../AppContext";
-import { query, where, orderBy, onSnapshot } from "firebase/firestore";
+import { query, where, orderBy, onSnapshot, doc, getDoc } from "firebase/firestore";
 import { trackSnapshotRead } from "../utils/readTracker";
 import { toStandardDateFormat, formatNumber, sortManagerNames, sortStoreNames, sortManagersByOrgOrder, sortStoresByOrgOrder } from "../utils/helpers";
 import { ViewWrapper, Card } from "./SharedUI";
@@ -68,6 +68,8 @@ const StoreAnalysisView = () => {
   const [showBenchmark, setShowBenchmark] = useState(true);
   const [storeScopedReports, setStoreScopedReports] = useState([]);
   const [storeScopedLoading, setStoreScopedLoading] = useState(false);
+  const [storeTargetFallbacks, setStoreTargetFallbacks] = useState({});
+  const storeTargetRecoveryAttemptedRef = useRef(new Set());
 
   // 1. 定義品牌前綴與識別 ID
   const { brandPrefix, brandId } = useMemo(() => {
@@ -98,6 +100,14 @@ const StoreAnalysisView = () => {
     if (core === "新店") return "新店"; 
     return core.replace(/店$/, '').trim();
   }, []);
+
+  // ★ 目標資料專用正規化：只在 Summary / monthly_targets 比對時，
+  //   將歷史別名「新」視為正式店名「新店」。
+  //   不修改既有 cleanStoreName，避免影響組織、代理管理、日報與其他品牌邏輯。
+  const canonicalTargetStoreName = useCallback((name) => {
+    const core = cleanStoreName(name);
+    return brandPrefix === "CYJ" && core === "新" ? "新店" : core;
+  }, [brandPrefix, cleanStoreName]);
 
   const isBrandMatch = useCallback((storeName, bId) => {
       const name = String(storeName || "");
@@ -133,21 +143,21 @@ const StoreAnalysisView = () => {
       coreName,
       `${coreName}店`,
       fullName,
-      cleanStoreName(coreName),
-      cleanStoreName(fullName),
-    ].filter(Boolean).map(cleanStoreName));
+      canonicalTargetStoreName(coreName),
+      canonicalTargetStoreName(fullName),
+    ].filter(Boolean).map(canonicalTargetStoreName));
 
     const scanContainer = (container) => {
       if (!container) return null;
 
       if (Array.isArray(container)) {
-        return container.find((item) => normalized.has(cleanStoreName(item?.storeName || item?.name || item?.displayName || item?.store)));
+        return container.find((item) => normalized.has(canonicalTargetStoreName(item?.storeName || item?.name || item?.displayName || item?.store)));
       }
 
       if (typeof container === "object") {
         for (const [key, value] of Object.entries(container)) {
           const name = value?.storeName || value?.name || value?.displayName || value?.store || key;
-          if (normalized.has(cleanStoreName(name))) return value;
+          if (normalized.has(canonicalTargetStoreName(name))) return value;
         }
       }
 
@@ -179,7 +189,7 @@ const StoreAnalysisView = () => {
     }
 
     return null;
-  }, [cleanStoreName]);
+  }, [canonicalTargetStoreName]);
 
   const findDashboardSummaryStore = useCallback((coreName, fullName) => {
     const stores = currentDashboardSummary?.stores;
@@ -187,37 +197,142 @@ const StoreAnalysisView = () => {
     return findTargetByStore({ stores }, coreName, fullName);
   }, [currentDashboardSummary, findTargetByStore]);
 
-  const resolveStoreBudget = useCallback((coreName, fullName, year, month) => {
-    const summaryStore = findDashboardSummaryStore(coreName, fullName);
+  const getStoreTargetRecoveryKey = useCallback((coreName, year, month) => {
+    const canonicalCore = canonicalTargetStoreName(coreName);
+    return `${brandPrefix}|${year}-${String(month).padStart(2, "0")}|${canonicalCore}`;
+  }, [brandPrefix, canonicalTargetStoreName]);
+
+  const resolveStoreBudgetBase = useCallback((coreName, fullName, year, month) => {
+    const canonicalCore = canonicalTargetStoreName(coreName || fullName);
+
+    const summaryStore = findDashboardSummaryStore(canonicalCore, fullName);
     const fromDashboardSummary = readCashTargetFields(summaryStore);
     if (fromDashboardSummary > 0) return fromDashboardSummary;
 
-    const fromMonthlySummary = readCashTargetFields(findTargetByStore(monthlyTargetSummary, coreName, fullName));
+    const fromMonthlySummary = readCashTargetFields(findTargetByStore(monthlyTargetSummary, canonicalCore, fullName));
     if (fromMonthlySummary > 0) return fromMonthlySummary;
 
     const monthPadded = String(month).padStart(2, "0");
-    const keys = [
-      `${fullName}_${year}_${month}`,
-      `${fullName}_${year}_${monthPadded}`,
-      `${brandPrefix}${coreName}店_${year}_${month}`,
-      `${brandPrefix}${coreName}店_${year}_${monthPadded}`,
-      `${coreName}_${year}_${month}`,
-      `${coreName}_${year}_${monthPadded}`,
-      `${coreName}店_${year}_${month}`,
-      `${coreName}店_${year}_${monthPadded}`,
-      `${year}-${monthPadded}_${fullName}`,
-      `${year}-${monthPadded}_${coreName}`,
-      `${fullName}_${year}-${monthPadded}`,
-      `${coreName}_${year}-${monthPadded}`,
-    ];
+    const storeNameCandidates = new Set([
+      fullName,
+      `${brandPrefix}${canonicalCore}店`,
+      canonicalCore,
+      `${canonicalCore}店`,
+    ].filter(Boolean));
 
-    for (const key of keys) {
+    // CYJ 新店歷史資料曾使用「CYJ新店」而非目前正式顯示的「CYJ新店店」。
+    if (brandPrefix === "CYJ" && canonicalCore === "新店") {
+      storeNameCandidates.add("CYJ新店");
+      storeNameCandidates.add("新");
+    }
+
+    const keys = [];
+    storeNameCandidates.forEach((storeName) => {
+      keys.push(
+        `${storeName}_${year}_${month}`,
+        `${storeName}_${year}_${monthPadded}`,
+        `${year}-${monthPadded}_${storeName}`,
+        `${storeName}_${year}-${monthPadded}`,
+      );
+    });
+
+    for (const key of Array.from(new Set(keys))) {
       const value = readCashTargetFields(budgets?.[key]);
       if (value > 0) return value;
     }
 
     return 0;
-  }, [budgets, brandPrefix, findDashboardSummaryStore, findTargetByStore, monthlyTargetSummary, readCashTargetFields]);
+  }, [budgets, brandPrefix, canonicalTargetStoreName, findDashboardSummaryStore, findTargetByStore, monthlyTargetSummary, readCashTargetFields]);
+
+  const resolveStoreBudget = useCallback((coreName, fullName, year, month) => {
+    const baseValue = resolveStoreBudgetBase(coreName, fullName, year, month);
+    if (baseValue > 0) return baseValue;
+
+    const recoveryKey = getStoreTargetRecoveryKey(coreName || fullName, year, month);
+    const recoveredValue = Number(storeTargetFallbacks?.[recoveryKey]?.cashTarget || 0);
+    return Number.isFinite(recoveredValue) && recoveredValue > 0 ? recoveredValue : 0;
+  }, [getStoreTargetRecoveryKey, resolveStoreBudgetBase, storeTargetFallbacks]);
+
+  // ★ Summary / Context budgets 都找不到時，只針對「目前選定店家＋目前月份」精準補讀 raw monthly_targets。
+  //   正常店家不增加 reads；也不重新開啟全年 monthly_targets 監聽。
+  useEffect(() => {
+    if (activeView !== "store-analysis" || !selectedStore || !getCollectionPath) return undefined;
+
+    const year = parseInt(selectedYear, 10);
+    const month = parseInt(selectedMonth, 10);
+    if (!Number.isFinite(year) || !Number.isFinite(month) || month < 1 || month > 12) return undefined;
+
+    const canonicalCore = canonicalTargetStoreName(selectedStore);
+    const baseValue = resolveStoreBudgetBase(canonicalCore, selectedStore, year, month);
+    if (baseValue > 0) return undefined;
+
+    const recoveryKey = getStoreTargetRecoveryKey(canonicalCore, year, month);
+    if (storeTargetRecoveryAttemptedRef.current.has(recoveryKey)) return undefined;
+    storeTargetRecoveryAttemptedRef.current.add(recoveryKey);
+
+    const monthPadded = String(month).padStart(2, "0");
+    const fullCanonicalName = `${brandPrefix}${canonicalCore}店`;
+    const docIds = [
+      `${selectedStore}_${year}_${month}`,
+      `${selectedStore}_${year}_${monthPadded}`,
+      `${fullCanonicalName}_${year}_${month}`,
+      `${fullCanonicalName}_${year}_${monthPadded}`,
+    ];
+
+    // 新店歷史相容：舊資料可能是 CYJ新店_YYYY_M，而目前正式名稱是 CYJ新店店。
+    if (brandPrefix === "CYJ" && canonicalCore === "新店") {
+      docIds.push(
+        `CYJ新店_${year}_${month}`,
+        `CYJ新店_${year}_${monthPadded}`,
+      );
+    }
+
+    let cancelled = false;
+
+    (async () => {
+      let recovered = null;
+      for (const docId of Array.from(new Set(docIds.filter(Boolean)))) {
+        try {
+          const snap = await getDoc(doc(getCollectionPath("monthly_targets"), docId));
+          if (!snap.exists()) continue;
+
+          const data = snap.data() || {};
+          const cashTarget = readCashTargetFields(data);
+          if (cashTarget > 0) {
+            recovered = { cashTarget, sourceDocId: docId };
+            break;
+          }
+        } catch (error) {
+          console.warn("單店分析目標精準 fallback 讀取失敗:", { docId, error });
+        }
+      }
+
+      if (cancelled) return;
+
+      if (recovered) {
+        setStoreTargetFallbacks((prev) => ({ ...prev, [recoveryKey]: recovered }));
+        console.info("[StoreAnalysis Target Fallback]", {
+          storeName: selectedStore,
+          yearMonth: `${year}-${monthPadded}`,
+          ...recovered,
+        });
+      } else {
+        console.warn("[StoreAnalysis Target Missing]", {
+          storeName: selectedStore,
+          yearMonth: `${year}-${monthPadded}`,
+          triedDocIds: Array.from(new Set(docIds.filter(Boolean))),
+        });
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [
+    activeView, selectedStore, selectedYear, selectedMonth, getCollectionPath,
+    brandPrefix, canonicalTargetStoreName, getStoreTargetRecoveryKey,
+    resolveStoreBudgetBase, readCashTargetFields
+  ]);
 
   // 2. 讀取設定
   const currentBenchmarks = useMemo(() => {
