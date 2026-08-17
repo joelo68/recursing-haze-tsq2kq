@@ -5316,7 +5316,7 @@ async function writeTelegramAgentAuditLog(message, ctx, finalReply, status = "su
     try {
         await db.collection("telegram_agent_logs").add({
             version: TELEGRAM_AGENT_VERSION,
-            replyFormat: "telegram-mobile-brief-v6.1-beauty-tone",
+            replyFormat: "telegram-mobile-brief-v6.2-language-mobile-polish",
             replyMode: getTelegramAgentReplyMode(ctx),
             replyGuardVersion: "deterministic-hard-guard-v1",
             replyGuardActionCount: Array.isArray(ctx?.replyGuardActions) ? ctx.replyGuardActions.length : 0,
@@ -5781,6 +5781,56 @@ function applyTelegramAgentDeterministicReplyGuard(text, ctx = null) {
             replacement: "主要管理師",
             action: "beauty_tone_staff_wording",
         },
+        {
+            regex: /(?:門市)?顧客具備(?:良好|高度|較高)?(?:的)?消費意願(?:與彈性)?/g,
+            replacement: "近期成交與營收表現明顯改善",
+            action: "beauty_tone_customer_intent",
+        },
+        {
+            regex: /(?:近期)?現場推廣高價值方案(?:已)?(?:有)?實質成效/g,
+            replacement: "近期較高客單的成交結果有所增加",
+            action: "beauty_tone_high_value_claim",
+        },
+        {
+            regex: /(?:這)?顯示現場諮詢流程能有效引導顧客選擇完整療程組合/g,
+            replacement: "這顯示近期新客締結率與均單同步改善",
+            action: "beauty_tone_consulting_claim",
+        },
+        {
+            regex: /現場諮詢流程能有效引導顧客選擇完整療程組合/g,
+            replacement: "近期新客締結率與均單同步改善",
+            action: "beauty_tone_consulting_claim",
+        },
+        {
+            regex: /維持目前的成交均單與進帳節奏/g,
+            replacement: "持續提升近期成交與進帳表現",
+            action: "beauty_tone_goal_gap_wording",
+        },
+        {
+            regex: /目前在線主要由/g,
+            replacement: "目前資料顯示，門市主要服務與業績集中於",
+            action: "beauty_tone_online_staff",
+        },
+        {
+            regex: /持續延續/g,
+            replacement: "延續",
+            action: "beauty_tone_duplicate_wording",
+        },
+        {
+            regex: /優質客單(?:表現)?/g,
+            replacement: "客單表現",
+            action: "beauty_tone_ticket_wording",
+        },
+        {
+            regex: /聚焦高潛力舊客續約/g,
+            replacement: "優先關注近期有續約需求的舊客",
+            action: "beauty_tone_customer_relationship",
+        },
+        {
+            regex: /高潛力舊客/g,
+            replacement: "近期較有續約需求的舊客",
+            action: "beauty_tone_customer_relationship",
+        },
     ];
 
     beautyToneRules.forEach((rule) => {
@@ -5817,6 +5867,14 @@ function applyTelegramAgentDeterministicReplyGuard(text, ctx = null) {
             "重點關注門市")
         .replace(/優先改善門市門市/g,
             "優先改善門市")
+        .replace(/這顯示近期新客締結率與均單同步改善，轉化品質明顯改善/g,
+            "這顯示近期新客成交品質明顯改善")
+        .replace(/近期成交與營收表現明顯改善，近期較高客單的成交結果有所增加/g,
+            "近期成交與營收表現明顯改善")
+        .replace(/延續近期已改善的新客諮詢與締結動能與客單表現/g,
+            "延續近期已改善的新客締結與客單表現")
+        .replace(/持續提升近期成交與進帳表現[^。\n]*若要達成全月目標/g,
+            "若要持續縮小目標差距，下半月仍需比目前整月平均更積極的業績表現")
         .replace(/[ \t]{2,}/g, " ");
 
     return reply;
@@ -5840,6 +5898,7 @@ function formatTelegramAgentAnalysisReply(text, ctx = null) {
         .replace(/^一、\s*核心結論\s*$/gm, "📌 核心結論")
         .replace(/^二、\s*.*(?:營運指標|數據|盤點|變化).*/gm, "📊 關鍵數字")
         .replace(/^三、\s*.*(?:優先|行動|改善).*/gm, "🎯 優先行動")
+        .replace(/\n(?=\d+[.、]\s)/g, "\n\n")
         .replace(/\n{3,}/g, "\n\n")
         .trim();
 
@@ -5892,6 +5951,11 @@ function renderTelegramAgentReadableHtml(text = "") {
             }
 
             if (/^⚠️\s*資料提醒[:：]/.test(trimmed)) {
+                return `<b>${escaped}</b>`;
+            }
+
+            // 詳細版的「主要變化」標題行加粗，手機掃讀時更容易分段。
+            if (/^(↑|↓|⚠)\s/.test(trimmed) && trimmed.length <= 96) {
                 return `<b>${escaped}</b>`;
             }
 
@@ -5981,6 +6045,11 @@ function getTelegramAgentBeautyServiceToneInstruction() {
         "5. 描述人員時避免把管理師當成『產能工具』，優先說明『目前人力配置、服務負荷、服務量能、諮詢時間與顧客服務品質』；例如不要寫『單兵產能』，改寫『目前人力較集中』。",
         "6. 行動建議應像美容／醫美營運主管的日常管理語言，例如：『安排支援人力分擔基礎服務，讓主力管理師保留更多諮詢時間。』",
         "7. 文字要讓門市主管與第一線人員不需要理解軍事或財務術語就能直接看懂。",
+        "8. 避免把顧客描述成『具備良好消費意願／支付能力／變現彈性』；若只有業績、締結率、均單資料，改寫為『近期成交與營收表現改善』。",
+        "9. 避免在沒有購買明細時寫『已有效引導顧客選擇完整療程組合／高價值方案已有實質成效』；改寫為『近期新客締結率與均單同步改善』。",
+        "10. 避免『在線』描述門市人員；改用『目前資料顯示，門市主要服務與業績集中於…』。",
+        "11. 避免『持續延續、優質客單』等不自然語句；優先使用『延續近期改善、客單表現』。",
+        "12. 『高潛力舊客』若沒有正式分級定義，優先改寫為『近期較有續約需求的舊客』或『近期有續約機會的舊客』。",
     ].join("\n");
 }
 
@@ -6065,14 +6134,17 @@ ${getTelegramAgentBeautyServiceToneInstruction()}
    每項拆成「短標題」＋「一句做法」：
    1. 釋放 Abee 諮詢產能
    Jonas／機動人力接手純操作，讓主力專注談單。
-4. 關鍵數字不要把目標、缺口、預估全部塞在同一行；一行以手機寬度容易辨識為優先。
+4. 手機版 KPI 一行最多放 2 組重點數字，盡量控制在約 28～32 個中文字寬度；不要把目標、缺口、預估、新客、舊客多組資訊全部塞在同一行。缺口與月底預估優先拆成兩行。
 5. 同一個金額、比率、人數原則上只完整出現一次；前後比較用「A → B」，不要在結論、數字、變化、行動重複四次。
 6. 「主要變化」只寫真正改變判斷的 2～3 項；沒有決策價值的數字不要全部搬進回答。
 7. 「優先行動」每項先寫動作名稱，下一行一句做法；禁止第二層 bullet 與長篇原因說明。
 8. 符號只用於視覺層級：📌、📊、🔎、🎯、⚠️、↑、↓、•、1. 2. 3.。不要堆疊破折號、括號與分隔線。
 9. 資料完整且無 warning 時，不另寫資料可信度；有 fallback、缺漏或 rankingEligible=false 才加入「⚠️ 資料提醒」。
 10. 不要自行輸出資料來源、模型名稱、工具數、reads、規則 ID；後端會統一附上極簡資料 footer。
-11. 語氣專業、精準、冷靜；像特助對總經理做「一頁式、可立即決策」的戰情簡報。`;
+11. 同月份日期範圍優先寫成「8/1–8/17」，避免「2026-08-01 ~ 08-17」佔滿手機首行；跨年或使用者明確要求年份時才保留完整年份。
+12. 詳細版每個「主要變化」以 2 句為主：第 1 句數據事實＋解讀，第 2 句補管理意義或不確定性；只有必要時才加第 3 句。
+13. 「🎯 優先行動」每個編號項目之間保留一個空行，讓手機閱讀有明顯分隔。
+14. 語氣專業、精準、冷靜；像特助對總經理做「一頁式、可立即決策」的戰情簡報。`;
 }
 
 function getTelegramAgentFinalizerInstruction(dateInfo, ctx = null) {
@@ -6100,11 +6172,14 @@ ${getTelegramAgentBeautyServiceToneInstruction()}
 - 詳細分析版只有在使用者明確要求「詳細／完整／展開／深入」時才使用，可增加必要解釋，但仍維持手機可讀性。
 - 詳細分析只能把「資料解讀」寫得更完整，不得把資料中不存在的價格、頻率、分鐘數、天數、KPI 門檻或強制制度寫得更具體。
 - 目前 KPI 數值只能描述「目前狀態」，不可自行變成未來目標。例如目前締結率 30.8%，不得自行寫成「維持 30% 以上」，除非 Policy／使用者／工具明確要求。
-- KPI 短行化；不要把現金、目標、缺口、預估塞在同一行。
+- KPI 短行化；一行最多 2 組重點數字，缺口與月底預估優先拆成兩行，不要把現金、目標、缺口、預估塞在同一行。
 - 同一 KPI 原則上只完整出現一次；比較時用「A → B」。
 - 不使用第二層巢狀 bullet，不寫長段落，不重複背景敘述。
 - 無 warning 時省略資料可信度；有缺漏或 fallback 才加「⚠️ 資料提醒」。
 - 不輸出模型、工具、reads、Policy ID 等技術資訊。
+- 同月份日期範圍優先寫「8/1–8/17」，跨年或使用者要求年份時才保留完整年份。
+- 詳細版每個主要變化以 2 句為主，最多 3 句。
+- 每個優先行動項目之間保留一個空行。
 - 語氣專業、精準、冷靜，像總經理每天看的戰情快報。
 
 目前長期規則：
