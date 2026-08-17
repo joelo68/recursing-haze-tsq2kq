@@ -2563,6 +2563,7 @@ function createTelegramAgentContext({ chatId, userId, question }) {
         policyConflicts: [],
         learningCandidates: {},
         memorySuggestion: null,
+        replyGuardActions: [],
         scopeState: {
             activeBrandId: "",
             activeYearMonth: "",
@@ -5315,8 +5316,11 @@ async function writeTelegramAgentAuditLog(message, ctx, finalReply, status = "su
     try {
         await db.collection("telegram_agent_logs").add({
             version: TELEGRAM_AGENT_VERSION,
-            replyFormat: "telegram-mobile-brief-v4-inference-guard",
+            replyFormat: "telegram-mobile-brief-v5-hard-guard",
             replyMode: getTelegramAgentReplyMode(ctx),
+            replyGuardVersion: "deterministic-hard-guard-v1",
+            replyGuardActionCount: Array.isArray(ctx?.replyGuardActions) ? ctx.replyGuardActions.length : 0,
+            replyGuardActions: Array.isArray(ctx?.replyGuardActions) ? ctx.replyGuardActions.slice(0, 12) : [],
             geminiApi: ctx?.geminiApi || getGeminiInteractionsApiLabel(ctx?.modelName || TELEGRAM_AGENT_PRIMARY_MODEL),
             modelName: ctx?.modelName || TELEGRAM_AGENT_PRIMARY_MODEL,
             primaryModel: TELEGRAM_AGENT_PRIMARY_MODEL,
@@ -5421,6 +5425,212 @@ function convertTelegramMarkdownTablesToCards(text = "") {
     }
 
     return output.join("\n");
+}
+
+
+function isTelegramAgentTargetSettingRequest(ctx = null) {
+    return /(?:幫我|請|替我)?(?:制定|設定|設計|訂定|規劃|建議).{0,12}(?:目標|KPI|門檻|標準|指標)|(?:目標|KPI|門檻|標準).{0,12}(?:訂多少|設多少|建議多少)/i
+        .test(String(ctx?.question || ""));
+}
+
+function getTelegramAgentTargetEvidenceText(ctx = null) {
+    const policyText = (ctx?.policies || []).map((policy) => [
+        policy?.instruction || "",
+        policy?.sourceText || "",
+        JSON.stringify(policy?.value || {}),
+    ].join(" ")).join("\n");
+
+    return `${String(ctx?.question || "")}\n${policyText}`;
+}
+
+function normalizeTelegramAgentEvidenceToken(value = "") {
+    return String(value || "")
+        .replace(/[,\s，]/g, "")
+        .replace(/NT\$/gi, "$")
+        .toLowerCase();
+}
+
+function hasTelegramAgentAuthorizedNumericEvidence(ctx, matchedText = "") {
+    if (isTelegramAgentTargetSettingRequest(ctx)) return true;
+
+    const evidence = normalizeTelegramAgentEvidenceToken(getTelegramAgentTargetEvidenceText(ctx));
+    const numericTokens = String(matchedText || "").match(
+        /(?:NT\$|\$)?\s*\d[\d,]*(?:\.\d+)?\s*(?:%|元|萬|千|天|日|次|分鐘|小時|堂)?/gi
+    ) || [];
+
+    return numericTokens.some((token) => {
+        const normalized = normalizeTelegramAgentEvidenceToken(token);
+        return normalized.length >= 2 && evidence.includes(normalized);
+    });
+}
+
+function recordTelegramAgentReplyGuardAction(ctx, action, beforeText = "", afterText = "") {
+    if (!ctx) return;
+    if (!Array.isArray(ctx.replyGuardActions)) ctx.replyGuardActions = [];
+
+    const key = `${action}:${String(beforeText || "").slice(0, 80)}:${String(afterText || "").slice(0, 80)}`;
+    if (ctx.replyGuardActions.some((item) => item.key === key)) return;
+
+    ctx.replyGuardActions.push({
+        key,
+        action: String(action || "rewrite"),
+        before: String(beforeText || "").slice(0, 160),
+        after: String(afterText || "").slice(0, 160),
+    });
+}
+
+function replaceTelegramAgentGuardedPattern(reply, regex, replacement, ctx, action, options = {}) {
+    return String(reply || "").replace(regex, (...args) => {
+        const fullMatch = args[0];
+        if (options.numericTarget === true && hasTelegramAgentAuthorizedNumericEvidence(ctx, fullMatch)) {
+            return fullMatch;
+        }
+
+        const next = typeof replacement === "function"
+            ? replacement(...args)
+            : String(replacement);
+
+        if (next !== fullMatch) {
+            recordTelegramAgentReplyGuardAction(ctx, action, fullMatch, next);
+        }
+        return next;
+    });
+}
+
+function applyTelegramAgentDeterministicReplyGuard(text, ctx = null) {
+    let reply = String(text || "");
+
+    // ----------------------------------------------------------
+    // A. KPI hard guard：
+    // Prompt 已要求 Gemini 不可把「目前數值」自行變成未來 KPI。
+    // 這裡再做 deterministic 防線，避免「30.8% 現況 → 維持 30%以上」漏出。
+    // 若使用者正在要求制定 KPI，或正式 Policy/使用者文字已有該數字，則保留。
+    // ----------------------------------------------------------
+    reply = replaceTelegramAgentGuardedPattern(
+        reply,
+        /維持[^。\n]{0,32}?\d+(?:\.\d+)?\s*%\s*以上(?:的)?(?:新客)?締結率/g,
+        "延續近期已改善的新客諮詢與締結動能",
+        ctx,
+        "remove_unsupported_conversion_target",
+        { numericTarget: true }
+    );
+
+    reply = replaceTelegramAgentGuardedPattern(
+        reply,
+        /(?:新客)?締結率(?:需|要|應|必須|務必)?(?:維持|穩定)?(?:在)?\s*\d+(?:\.\d+)?\s*%\s*以上/g,
+        "新客締結動能持續維持近期改善趨勢",
+        ctx,
+        "remove_unsupported_conversion_target",
+        { numericTarget: true }
+    );
+
+    reply = replaceTelegramAgentGuardedPattern(
+        reply,
+        /(?:新客)?均單[^。\n]{0,16}?(?:至少|不低於|站上|達到)\s*(?:NT\$|\$)?\s*\d[\d,]*(?:\.\d+)?(?:\s*元)?/g,
+        "持續提升新客均單表現",
+        ctx,
+        "remove_unsupported_ticket_target",
+        { numericTarget: true }
+    );
+
+    reply = replaceTelegramAgentGuardedPattern(
+        reply,
+        /(?:每日|每天)[^。\n]{0,18}?(?:最低|至少)[^。\n]{0,8}?(?:進帳|現金|業績)[^。\n]{0,10}?(?:NT\$|\$)?\s*\d[\d,]*(?:\.\d+)?(?:\s*萬|\s*元)?/g,
+        "持續追蹤每日進帳節奏",
+        ctx,
+        "remove_unsupported_daily_target",
+        { numericTarget: true }
+    );
+
+    reply = replaceTelegramAgentGuardedPattern(
+        reply,
+        /(?:每週|每周)[^。\n]{0,16}?(?:至少|固定)\s*\d+(?:\.\d+)?\s*(?:天|日|次)/g,
+        "依實際尖峰與人力狀況安排支援頻率",
+        ctx,
+        "remove_unsupported_staffing_frequency",
+        { numericTarget: true }
+    );
+
+    // ----------------------------------------------------------
+    // B. Inference hard guard：
+    // 只處理高風險、反覆出現且沒有 KPI 可以直接證實的因果／心理敘述。
+    // 不移除分析，而是改成「結果已改善／存在風險／可評估」。
+    // ----------------------------------------------------------
+    const inferenceRules = [
+        {
+            regex: /(?:印證|證明|證實)(?:了)?客群具備(?:極高|高度|良好)?(?:的)?變現彈性/g,
+            replacement: "顯示近期變現結果明顯改善",
+            action: "soften_customer_monetization_inference",
+        },
+        {
+            regex: /(?:這)?顯示門市客群具備(?:極高|高度|良好)?(?:的)?(?:消費力|支付能力)/g,
+            replacement: "這顯示近期現金與轉化結果明顯改善",
+            action: "soften_customer_spending_power_inference",
+        },
+        {
+            regex: /近期(?:現場)?促單動能(?:已)?(?:有)?實質啟動/g,
+            replacement: "近期現金與轉化結果同步改善",
+            action: "soften_sales_causality_inference",
+        },
+        {
+            regex: /這代表現場諮詢已成功切入較高價值的方案組合/g,
+            replacement: "這顯示近期新客轉化與均單同步改善",
+            action: "soften_consulting_process_inference",
+        },
+        {
+            regex: /(?:已|成功)(?:建立|形成)(?:起)?更具說服力的諮詢流程/g,
+            replacement: "近期諮詢轉化結果有所改善",
+            action: "soften_consulting_process_inference",
+        },
+        {
+            regex: /(?:成功)?引導(?:新客|顧客)[^。；\n]{0,36}(?:高價值|高單價)(?:療程|套組|方案)[^。；\n]*/g,
+            replacement: "近期較高客單的成交結果有所增加",
+            action: "soften_product_mix_inference",
+        },
+        {
+            regex: /(?:證明|印證|顯示)[^。；\n]{0,20}(?:既有|存量)?客戶[^。；\n]{0,24}(?:信任度|滿意度)[^。；\n]*/g,
+            replacement: "舊客近期產值與均單有所改善",
+            action: "soften_customer_trust_inference",
+        },
+        {
+            regex: /(?:瓶頸|核心瓶頸)(?:已)?轉移至單兵產能(?:極限)?/g,
+            replacement: "單兵產能成為主要營運風險",
+            action: "soften_staffing_bottleneck_inference",
+        },
+        {
+            regex: /(?:需|必須)進駐(?:人力|支援)/g,
+            replacement: "可優先評估人力支援",
+            action: "soften_staffing_directive",
+        },
+        {
+            regex: /(?:需|必須)進駐支援/g,
+            replacement: "可優先評估支援",
+            action: "soften_staffing_directive",
+        },
+        {
+            regex: /(?:主因|根本原因)(?:就是|是|在於)/g,
+            replacement: "可能原因之一是",
+            action: "soften_causal_claim",
+        },
+    ];
+
+    inferenceRules.forEach((rule) => {
+        reply = replaceTelegramAgentGuardedPattern(
+            reply,
+            rule.regex,
+            rule.replacement,
+            ctx,
+            rule.action
+        );
+    });
+
+    // 清掉 deterministic rewrite 可能產生的少量重複詞。
+    reply = reply
+        .replace(/近期現金與轉化結果明顯改善，近期現金與轉化結果同步改善/g, "近期現金與轉化結果同步改善")
+        .replace(/延續近期已改善的新客諮詢與締結動能[^。\n]*新客締結動能持續維持近期改善趨勢/g, "延續近期已改善的新客諮詢與締結動能")
+        .replace(/[ \t]{2,}/g, " ");
+
+    return reply;
 }
 
 function formatTelegramAgentAnalysisReply(text, ctx = null) {
@@ -6168,6 +6378,7 @@ ${policyContext}
         }
 
         finalReply = formatTelegramAgentAnalysisReply(agentResult?.finalReply || "", ctx);
+        finalReply = applyTelegramAgentDeterministicReplyGuard(finalReply, ctx);
         const replyWithFooter = `${finalReply}${buildTelegramAgentSourceFooter(ctx)}`;
         const readableHtml = renderTelegramAgentReadableHtml(replyWithFooter);
         await sendTelegramMessage(chatId, readableHtml, { parse_mode: "HTML" });
