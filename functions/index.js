@@ -5334,7 +5334,8 @@ function getTelegramAgentCrossSourceInstruction(ctx = null) {
         "6. 若 cross_source_data_awareness.status = difference_detected：",
         "   - 不要判定哪一方錯，也不要自行修正資料。",
         "   - Brief 預設不要主動展開資料差異，除非使用者詢問資料正確性。",
-        "   - Detailed 若差異會影響解讀，可用一行中性提醒：『店家與人員日報部分統計存在差異；本次全店指標依店家日報、人員指標依人員日報呈現，未交叉換算。』",
+        "   - Detailed 不要自行輸出『⚠️ 資料提醒／資料口徑』區塊；backend 會在固定位置統一加入一次中性資料口徑提醒。",
+        "   - 禁止使用『單一管理師承接多數成交／主要成交集中於單一管理師／占全店多數新客』等需要跨店家與人員來源比較才能成立的句子。",
         "7. 不可把不同來源相同的數字視為同一批顧客，除非資料本身明確提供關聯。",
     ].join("\n");
 }
@@ -5548,11 +5549,11 @@ async function writeTelegramAgentAuditLog(message, ctx, finalReply, status = "su
     try {
         await db.collection("telegram_agent_logs").add({
             version: TELEGRAM_AGENT_VERSION,
-            replyFormat: "telegram-mobile-v7.0-cross-source-awareness",
+            replyFormat: "telegram-mobile-v7.1-cross-source-final-cleanup",
             replyMode: getTelegramAgentReplyMode(ctx),
             replyGuardVersion: "deterministic-hard-guard-v1",
             replyLanguagePolishVersion: "beauty-language-quality-v2.2-final-polish",
-            crossSourceAwarenessVersion: "cross-source-data-awareness-v1",
+            crossSourceAwarenessVersion: "cross-source-data-awareness-v1.1-final-cleanup",
             replyGuardActionCount: Array.isArray(ctx?.replyGuardActions) ? ctx.replyGuardActions.length : 0,
             replyGuardActions: Array.isArray(ctx?.replyGuardActions) ? ctx.replyGuardActions.slice(0, 12) : [],
             geminiApi: ctx?.geminiApi || getGeminiInteractionsApiLabel(ctx?.modelName || TELEGRAM_AGENT_PRIMARY_MODEL),
@@ -6585,7 +6586,11 @@ function applyTelegramAgentCrossSourceReplyGuard(text, ctx = null) {
 
     if (!mismatch) return reply;
 
-    // 有跨來源差異時，不讓個人締結率旁出現容易被誤認為「全店同一批新客」的人數反推。
+    // ----------------------------------------------------------
+    // A. 禁止把「全店新客數」與「個人締結率」混成同一母體。
+    // 若個人 KPI 自己已有 numerator / denominator，仍可保留個人資料；
+    // 但移除容易讓讀者誤認為是全店同一批新客的人數括號。
+    // ----------------------------------------------------------
     reply = replaceTelegramAgentGuardedPattern(
         reply,
         /(新客締結率(?:為|達)?\s*\d+(?:\.\d+)?\s*%)（\s*\d+\s*位新客[^）]{0,32}(?:締結|成交)\s*\d+\s*(?:位|人次)?\s*）/g,
@@ -6602,14 +6607,100 @@ function applyTelegramAgentCrossSourceReplyGuard(text, ctx = null) {
         "cross_source_remove_ambiguous_person_count"
     );
 
-    // Brief 不主動顯示差異，維持快速閱讀。
+    // ----------------------------------------------------------
+    // B. 有差異時，不允許使用需要「店家總量 vs 個人數量」比較才能成立的說法。
+    // 個人的業績、締結次數、締結率仍可正常呈現，因為它們屬於人員日報自身資料。
+    // ----------------------------------------------------------
+    const crossSourceComparisonRules = [
+        {
+            regex: /⚠\s*人力配置較集中[:：]\s*單一管理師承接多數成交/g,
+            replacement: "⚠ 人員資料觀察：個人業績與新客締結表現較突出",
+            action: "cross_source_remove_majority_comparison",
+        },
+        {
+            regex: /⚠\s*(?:業績集中度|人力配置|服務量能與人力分布)[^。\n]*[:：][^。\n]*(?:單一管理師承接多數成交|主要成交集中於單一管理師)[^。\n]*/g,
+            replacement: "⚠ 人員資料觀察：個人業績與新客締結表現較突出",
+            action: "cross_source_remove_majority_comparison",
+        },
+        {
+            regex: /單一管理師承接多數成交/g,
+            replacement: "該管理師個人業績與新客締結表現相對突出",
+            action: "cross_source_remove_majority_comparison",
+        },
+        {
+            regex: /(?:主要|多數)成交集中於(?:單一|特定)管理師/g,
+            replacement: "該管理師個人業績與新客締結表現相對突出",
+            action: "cross_source_remove_majority_comparison",
+        },
+        {
+            regex: /(?:主要業績|整體業績|成交)集中於(?:單一|特定)管理師/g,
+            replacement: "該管理師個人業績表現相對突出",
+            action: "cross_source_remove_majority_comparison",
+        },
+        {
+            regex: /(?:占|佔)(?:全店)?(?:多數|大多數)[^。\n]{0,12}(?:新客|成交|締結)/g,
+            replacement: "個人新客締結表現相對突出",
+            action: "cross_source_remove_majority_comparison",
+        },
+    ];
+
+    crossSourceComparisonRules.forEach((rule) => {
+        reply = replaceTelegramAgentGuardedPattern(
+            reply,
+            rule.regex,
+            rule.replacement,
+            ctx,
+            rule.action
+        );
+    });
+
+    // ----------------------------------------------------------
+    // C. Gemini 偶爾仍會自行產生「⚠️ 資料提醒」。
+    // 先移除所有與本 Cross-source 差異相同內容的模型提醒，
+    // 再由 backend 在固定位置只插入一次 canonical note。
+    // ----------------------------------------------------------
+    const canonicalSentence = "店家與人員日報部分統計存在差異；本次全店指標依店家日報、人員指標依人員日報呈現，未交叉換算。";
+
+    const beforeDuplicateCleanup = reply;
+
+    // heading + canonical sentence
+    reply = reply.replace(
+        new RegExp(
+            `(?:\\n|^)[ \\t]*(?:⚠️?|ℹ️)?[ \\t]*(?:資料提醒|資料口徑)[:：]?[ \\t]*\\n?[ \\t]*${canonicalSentence.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}[ \\t]*(?=\\n|$)`,
+            "g"
+        ),
+        "\n"
+    );
+
+    // canonical sentence without heading
+    reply = reply.replace(
+        new RegExp(
+            `(?:\\n|^)[ \\t]*${canonicalSentence.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}[ \\t]*(?=\\n|$)`,
+            "g"
+        ),
+        "\n"
+    );
+
+    if (reply !== beforeDuplicateCleanup) {
+        recordTelegramAgentReplyGuardAction(
+            ctx,
+            "cross_source_remove_duplicate_model_note",
+            "模型自行產生資料提醒",
+            "由 backend 統一插入 canonical data-scope note"
+        );
+    }
+
+    reply = reply.replace(/\n{3,}/g, "\n\n").trim();
+
+    // Brief 不主動顯示資料差異，維持快速閱讀。
     if (getTelegramAgentReplyMode(ctx) !== "detailed") {
         return reply;
     }
 
-    const note = "ℹ️ 資料口徑：店家與人員日報部分統計存在差異；本次全店指標依店家日報、人員指標依人員日報呈現，未交叉換算。";
+    const note = `ℹ️ 資料口徑：${canonicalSentence}`;
 
-    if (!reply.includes("資料口徑：") && /🎯\s*優先行動/.test(reply)) {
+    // Detailed 固定只在「主要變化」與「優先行動」之間出現一次。
+    if (!reply.includes("ℹ️ 資料口徑：") && /🎯\s*優先行動/.test(reply)) {
         reply = reply.replace(
             /\n\s*🎯\s*優先行動/,
             `\n\n${note}\n\n🎯 優先行動`
@@ -6622,7 +6713,7 @@ function applyTelegramAgentCrossSourceReplyGuard(text, ctx = null) {
         );
     }
 
-    return reply;
+    return reply.replace(/\n{3,}/g, "\n\n").trim();
 }
 
 function optimizeTelegramAgentMobileLayout(text, ctx = null) {
