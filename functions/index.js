@@ -3889,6 +3889,53 @@ async function loadTelegramAgentTherapistMonth(brandId, yearMonth, ctx, options 
     };
 }
 
+
+function getTelegramAgentTherapistStoreQueryNames(brandId, storeName) {
+    const storeCore = normalizeSummaryCoreName(storeName || "");
+    if (!storeCore) return [];
+
+    const brandPrefix = getSummaryBrandPrefix(brandId);
+    const brandIdText = String(brandId || "").toLowerCase();
+    const prefixes = new Set([brandPrefix]);
+
+    // therapist_daily_reports 的現行前端會把店名正規化後寫入 core（例如「崇學」）。
+    // 同時保留舊版可能曾寫入的「崇學店 / CYJ崇學店 / DRCYJ崇學店」等格式，
+    // 以多個低成本精準 query 合併，避免只命中新格式卻漏掉同月份舊格式文件。
+    if (isLegacyCyjBrand(brandId)) {
+        prefixes.add("CYJ");
+        prefixes.add("DRCYJ");
+    } else if (brandIdText.includes("anniu") || brandIdText.includes("anew")) {
+        prefixes.add("安妞");
+        prefixes.add("Anew");
+        prefixes.add("Anew安妞");
+    } else if (brandIdText.includes("yibo")) {
+        prefixes.add("伊啵");
+        prefixes.add("Yibo");
+        prefixes.add("Yibo伊啵");
+    }
+
+    const names = new Set();
+    names.add(storeCore);
+
+    if (storeCore === "新店") {
+        names.add("新店店");
+        prefixes.forEach((prefix) => {
+            if (!prefix) return;
+            names.add(`${prefix}新店`);
+            names.add(`${prefix}新店店`);
+        });
+    } else {
+        names.add(`${storeCore}店`);
+        prefixes.forEach((prefix) => {
+            if (!prefix) return;
+            names.add(`${prefix}${storeCore}`);
+            names.add(`${prefix}${storeCore}店`);
+        });
+    }
+
+    return [...names].filter(Boolean);
+}
+
 async function loadTelegramAgentRawTherapistRange(brandId, startDate, endDate, ctx, options = {}) {
     const requestedStores = normalizeTelegramAgentStoreNamesFull(options.storeNames || options.targetStores || []);
     const requestedStoreSet = new Set(requestedStores);
@@ -3903,30 +3950,53 @@ async function loadTelegramAgentRawTherapistRange(brandId, startDate, endDate, c
 
     if (requestedStores.length === 1 && !rankingRequested) {
         const storeCore = requestedStores[0];
-        const firestoreStoreName = `${getSummaryBrandPrefix(brandId)}${storeCore}店`;
+        const storeNameCandidates = getTelegramAgentTherapistStoreQueryNames(brandId, storeCore);
+        const exactRowsById = new Map();
+        let exactQuerySucceeded = false;
+
         try {
-            const exactResult = await queryTelegramAgentDocs(
-                collectionRef
-                    .where("storeName", "==", firestoreStoreName)
-                    .where("date", ">=", startDate)
-                    .where("date", "<=", endDate),
-                `query:${collectionRef.path}:storeName=${firestoreStoreName}:date=${startDate}..${endDate}`,
-                ctx,
-                "therapist_daily_reports_scoped",
-                {
-                    brandId,
-                    yearMonth: startDate.slice(0, 7),
-                    storeName: storeCore,
-                    firestoreStoreName,
-                    queryMode: "single_store_exact",
-                },
-                45
-            );
-            if (exactResult.rows.length > 0) result = exactResult;
+            for (const firestoreStoreName of storeNameCandidates) {
+                const exactResult = await queryTelegramAgentDocs(
+                    collectionRef
+                        .where("storeName", "==", firestoreStoreName)
+                        .where("date", ">=", startDate)
+                        .where("date", "<=", endDate),
+                    `query:${collectionRef.path}:storeName=${firestoreStoreName}:date=${startDate}..${endDate}`,
+                    ctx,
+                    "therapist_daily_reports_scoped",
+                    {
+                        brandId,
+                        yearMonth: startDate.slice(0, 7),
+                        storeName: storeCore,
+                        firestoreStoreName,
+                        queryMode: "single_store_exact_variant",
+                    },
+                    45
+                );
+                exactQuerySucceeded = true;
+                exactResult.rows.forEach((row) => {
+                    const rowId = String(row.id || `${row.therapistId || ""}_${row.date || ""}_${firestoreStoreName}`);
+                    if (!exactRowsById.has(rowId)) exactRowsById.set(rowId, row);
+                });
+            }
+
+            if (exactRowsById.size > 0) {
+                result = {
+                    rows: [...exactRowsById.values()],
+                    size: exactRowsById.size,
+                    updatedAtText: "",
+                };
+            }
         } catch (error) {
             console.warn(
-                `[Telegram Agent] therapist_daily_reports 單店精準查詢失敗，改用品牌日期 fallback: ${brandId}/${firestoreStoreName}/${startDate}..${endDate}`,
+                `[Telegram Agent] therapist_daily_reports 單店多格式精準查詢失敗，改用品牌日期 fallback: ${brandId}/${storeCore}/${startDate}..${endDate}`,
                 error?.message || error
+            );
+        }
+
+        if (exactQuerySucceeded && exactRowsById.size === 0) {
+            console.warn(
+                `[Telegram Agent] therapist_daily_reports 單店多格式精準查詢為 0，改用品牌日期 fallback: ${brandId}/${storeCore}/${startDate}..${endDate}`
             );
         }
     }
