@@ -5315,7 +5315,7 @@ async function writeTelegramAgentAuditLog(message, ctx, finalReply, status = "su
     try {
         await db.collection("telegram_agent_logs").add({
             version: TELEGRAM_AGENT_VERSION,
-            replyFormat: "telegram-mobile-brief-v2",
+            replyFormat: "telegram-mobile-brief-v3-evidence-guard",
             replyMode: getTelegramAgentReplyMode(ctx),
             geminiApi: ctx?.geminiApi || getGeminiInteractionsApiLabel(ctx?.modelName || TELEGRAM_AGENT_PRIMARY_MODEL),
             modelName: ctx?.modelName || TELEGRAM_AGENT_PRIMARY_MODEL,
@@ -5450,9 +5450,9 @@ function formatTelegramAgentAnalysisReply(text, ctx = null) {
 
     // v2：預設戰情簡報版限制更短；明確要求詳細分析時才放寬。
     const replyMode = getTelegramAgentReplyMode(ctx);
-    const maxLength = replyMode === "detailed" ? 3000 : 1450;
-    const preferredCut = replyMode === "detailed" ? 2850 : 1350;
-    const safeFloor = replyMode === "detailed" ? 2600 : 1150;
+    const maxLength = replyMode === "detailed" ? 2400 : 1450;
+    const preferredCut = replyMode === "detailed" ? 2250 : 1350;
+    const safeFloor = replyMode === "detailed" ? 2000 : 1150;
 
     if (reply.length > maxLength) {
         const cutAt = Math.max(
@@ -5519,13 +5519,38 @@ function getTelegramAgentReplyMode(ctx = null) {
     return detailedRequested ? "detailed" : "brief";
 }
 
+
+function getTelegramAgentEvidenceGuardInstruction() {
+    return [
+        "【事實／推論／建議邊界】",
+        "1. 已知事實：只能引用工具結果、目前生效 Policy、使用者明確提供內容；數字必須可追溯到其中之一。",
+        "2. 分析判斷：可根據已知事實做合理推論，但要用「代表／顯示／推測／可能」等分析語氣，不可包裝成已確認事實。",
+        "3. 建議行動：可以提出方向、優先順序與執行原則，但不得自行創造公司未提供的制度或硬性標準。",
+        "4. 除非工具結果、Policy 或使用者明確提供，禁止自行指定：",
+        "   - 金額門檻、售價區間、套組價格",
+        "   - 每日／每週頻率、進駐天數、班表",
+        "   - 會談分鐘數、操作時數",
+        "   - 最低 KPI、成交率、均單、每日進帳目標",
+        "   - 剩餘堂數門檻、客戶分級門檻",
+        "   - 『禁止／一律／必須』類銷售政策或制度",
+        "5. 若需要具體數字但資料沒有提供，改寫成定性建議，例如：",
+        "   「優先鎖定高潛力舊客」而不是「剩餘堂數低於 3 堂」；",
+        "   「依既有療程與定價制度安排高價值續約」而不是自行指定 5～10 萬元方案；",
+        "   「由區長評估尖峰時段支援」而不是自行指定每週 2～3 天。",
+        "6. 如果使用者明確要求你『幫我制定目標／門檻』，才可以提出新數字；且必須清楚標示為『建議值』，不可冒充公司既有規則。",
+    ].join("\n");
+}
+
 function getTelegramAgentReplyModeInstruction(ctx = null) {
     const mode = getTelegramAgentReplyMode(ctx);
     if (mode === "detailed") {
         return [
             "本題為「詳細分析版」。",
-            "目標約 1400～2400 個中文字；可補充必要解釋，但仍禁止重複 KPI 與長篇鋪陳。",
+            "目標約 1200～2000 個中文字；詳細不等於長篇文章，仍須維持手機可讀性。",
             "關鍵數字最多 6 行、主要變化最多 4 點、優先行動最多 4 項。",
+            "每個「主要變化」固定採：數據變化 → 解讀 → 管理意義；每點最多約 3～5 行。",
+            "每個「優先行動」固定採：動作名稱 → 一句做法／原則；不要寫成政策條文。",
+            "避免把同一組 KPI 先列數字、再用一整段重述一次；詳細版重點是增加解讀，不是增加重複。",
         ].join("\n");
     }
 
@@ -5570,6 +5595,7 @@ ${getTelegramAgentPreferenceInstructions(ctx).join("；") || "（無）"}
 
 【Telegram 戰情簡報 v2】
 ${getTelegramAgentReplyModeInstruction(ctx)}
+${getTelegramAgentEvidenceGuardInstruction()}
 
 1. 第一行直接寫「📌 品牌／店家｜日期或月份」；第二行固定用「判斷：」給一句決策結論，盡量 35 個中文字內。
 2. 禁止 Markdown 表格、ASCII 表格、程式碼區塊、###、---、**、大量括號標題；不要輸出任何 | 欄位表格。
@@ -5617,6 +5643,7 @@ function getTelegramAgentFinalizerInstruction(dateInfo, ctx = null) {
 
 【Telegram 戰情簡報 v2】
 ${getTelegramAgentReplyModeInstruction(ctx)}
+${getTelegramAgentEvidenceGuardInstruction()}
 - 第一行：「📌 品牌／店家｜日期或月份」；第二行：「判斷：一句話結論」。
 - 禁止 Markdown table、ASCII table、程式碼區塊、###、---、**，不得輸出 | 欄位表格。
 - 預設簡報版：
@@ -5624,6 +5651,7 @@ ${getTelegramAgentReplyModeInstruction(ctx)}
   🔎 主要變化：最多 3 行，優先寫「↑／↓／⚠ KPI：A → B｜意義」。
   🎯 優先行動：最多 3 項，每項「短標題」＋下一行一句做法。
 - 詳細分析版只有在使用者明確要求「詳細／完整／展開／深入」時才使用，可增加必要解釋，但仍維持手機可讀性。
+- 詳細分析只能把「資料解讀」寫得更完整，不得把資料中不存在的價格、頻率、分鐘數、天數、KPI 門檻或強制制度寫得更具體。
 - KPI 短行化；不要把現金、目標、缺口、預估塞在同一行。
 - 同一 KPI 原則上只完整出現一次；比較時用「A → B」。
 - 不使用第二層巢狀 bullet，不寫長段落，不重複背景敘述。
