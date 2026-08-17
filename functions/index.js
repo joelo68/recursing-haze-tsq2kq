@@ -5315,7 +5315,7 @@ async function writeTelegramAgentAuditLog(message, ctx, finalReply, status = "su
     try {
         await db.collection("telegram_agent_logs").add({
             version: TELEGRAM_AGENT_VERSION,
-            replyFormat: "telegram-mobile-brief-v3-evidence-guard",
+            replyFormat: "telegram-mobile-brief-v4-inference-guard",
             replyMode: getTelegramAgentReplyMode(ctx),
             geminiApi: ctx?.geminiApi || getGeminiInteractionsApiLabel(ctx?.modelName || TELEGRAM_AGENT_PRIMARY_MODEL),
             modelName: ctx?.modelName || TELEGRAM_AGENT_PRIMARY_MODEL,
@@ -5541,6 +5541,28 @@ function getTelegramAgentEvidenceGuardInstruction() {
     ].join("\n");
 }
 
+
+function getTelegramAgentInferenceGuardInstruction() {
+    return [
+        "【推論語氣保護】",
+        "1. 數據只能證明它直接量到的事情；不可把相關性直接寫成已證實因果。",
+        "2. 下列內容若工具結果沒有直接欄位或明確文字支持，只能寫成『可能／推測／存在…風險／可合理懷疑』，不可寫成已確認事實：",
+        "   - 顧客消費意願、支付能力、信任度、滿意度",
+        "   - 現場話術、諮詢流程、促單力道是否改善",
+        "   - 顧客實際購買的是低價體驗、年度套組、特定療程或特定產品",
+        "   - 管理師實際工時、是否被操作塞滿、是否有足夠諮詢分鐘數",
+        "   - 員工心態、操作思維、執行品質",
+        "3. 若有多種合理原因，必須保留不確定性，例如：『可能與促單方式、客群結構或方案組合有關，現有資料無法單獨判定主因。』",
+        "4. 若現有資料不足以支持具體原因，直接說『現有資料無法直接判定』；不要為了讓報告完整而補一個故事。",
+        "5. 目前數值不是自動等於公司目標。除非 Policy／使用者／工具明確提供目標，禁止把現況改寫成：",
+        "   - 『維持至少 30%』、『均單站上 7,000』、『每天至少進帳 X』等 KPI 門檻。",
+        "6. 對管理建議的語氣使用『建議／可優先／可評估／可考慮』；只有正式 Policy 或使用者明確指示時，才可使用『應／必須／一律／不得』。",
+        "7. 詳細分析每個『主要變化』最多 2～3 句，順序固定：",
+        "   第 1 句：數據事實；第 2 句：合理解讀；第 3 句（必要時）：指出仍無法判定的部分或管理意義。",
+        "8. 若推論內容可能影響人員評價、獎懲、排班或銷售制度，優先保守表述，避免把模型推測當成管理事實。",
+    ].join("\n");
+}
+
 function getTelegramAgentReplyModeInstruction(ctx = null) {
     const mode = getTelegramAgentReplyMode(ctx);
     if (mode === "detailed") {
@@ -5548,7 +5570,7 @@ function getTelegramAgentReplyModeInstruction(ctx = null) {
             "本題為「詳細分析版」。",
             "目標約 1200～2000 個中文字；詳細不等於長篇文章，仍須維持手機可讀性。",
             "關鍵數字最多 6 行、主要變化最多 4 點、優先行動最多 4 項。",
-            "每個「主要變化」固定採：數據變化 → 解讀 → 管理意義；每點最多約 3～5 行。",
+            "每個「主要變化」固定採：數據事實 → 合理解讀 →（必要時）不確定性／管理意義；每點最多 2～3 句。",
             "每個「優先行動」固定採：動作名稱 → 一句做法／原則；不要寫成政策條文。",
             "避免把同一組 KPI 先列數字、再用一整段重述一次；詳細版重點是增加解讀，不是增加重複。",
         ].join("\n");
@@ -5596,6 +5618,7 @@ ${getTelegramAgentPreferenceInstructions(ctx).join("；") || "（無）"}
 【Telegram 戰情簡報 v2】
 ${getTelegramAgentReplyModeInstruction(ctx)}
 ${getTelegramAgentEvidenceGuardInstruction()}
+${getTelegramAgentInferenceGuardInstruction()}
 
 1. 第一行直接寫「📌 品牌／店家｜日期或月份」；第二行固定用「判斷：」給一句決策結論，盡量 35 個中文字內。
 2. 禁止 Markdown 表格、ASCII 表格、程式碼區塊、###、---、**、大量括號標題；不要輸出任何 | 欄位表格。
@@ -5644,6 +5667,7 @@ function getTelegramAgentFinalizerInstruction(dateInfo, ctx = null) {
 【Telegram 戰情簡報 v2】
 ${getTelegramAgentReplyModeInstruction(ctx)}
 ${getTelegramAgentEvidenceGuardInstruction()}
+${getTelegramAgentInferenceGuardInstruction()}
 - 第一行：「📌 品牌／店家｜日期或月份」；第二行：「判斷：一句話結論」。
 - 禁止 Markdown table、ASCII table、程式碼區塊、###、---、**，不得輸出 | 欄位表格。
 - 預設簡報版：
@@ -5652,6 +5676,7 @@ ${getTelegramAgentEvidenceGuardInstruction()}
   🎯 優先行動：最多 3 項，每項「短標題」＋下一行一句做法。
 - 詳細分析版只有在使用者明確要求「詳細／完整／展開／深入」時才使用，可增加必要解釋，但仍維持手機可讀性。
 - 詳細分析只能把「資料解讀」寫得更完整，不得把資料中不存在的價格、頻率、分鐘數、天數、KPI 門檻或強制制度寫得更具體。
+- 目前 KPI 數值只能描述「目前狀態」，不可自行變成未來目標。例如目前締結率 30.8%，不得自行寫成「維持 30% 以上」，除非 Policy／使用者／工具明確要求。
 - KPI 短行化；不要把現金、目標、缺口、預估塞在同一行。
 - 同一 KPI 原則上只完整出現一次；比較時用「A → B」。
 - 不使用第二層巢狀 bullet，不寫長段落，不重複背景敘述。
