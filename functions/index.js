@@ -5276,12 +5276,14 @@ function buildTelegramAgentSourceFooter(ctx) {
         "monthly_aggregated",
         "therapist_monthly_aggregated",
     ].some((name) => sourceNames.has(name));
+
     const hasHistoricalSummary = [
         "verified_dashboard_summary",
         "dashboard_summary",
         "verified_therapist_summary",
         "therapist_summary",
     ].some((name) => sourceNames.has(name));
+
     const hasStructureOrTarget = [
         "monthly_targets_summary",
         "monthly_targets_targeted_fallback",
@@ -5306,18 +5308,15 @@ function buildTelegramAgentSourceFooter(ctx) {
         ? `\n💡 可回覆「記住這個偏好」保存：${String(ctx.memorySuggestion.instruction || "").slice(0, 80)}`
         : "";
 
-    const modelLabel = String(ctx?.modelName || TELEGRAM_AGENT_PRIMARY_MODEL)
-        .replace(/^gemini-/i, "Gemini ")
-        .replace(/-/g, " ");
-
-    return `\n\n────────\n資料：${brandText ? `${brandText}｜` : ""}${basisParts.join("＋")}\n系統：${modelLabel}${ctx?.fallbackUsed ? "（備援）" : ""}｜讀取 ${ctx?.readCount || 0}｜工具 ${ctx?.toolCalls?.length || 0}/${TELEGRAM_AGENT_MAX_TOOL_CALLS}${warningText}${suggestionText}`;
+    return `\n\n────────\n資料：${brandText ? `${brandText}｜` : ""}${basisParts.join("＋")}${warningText}${suggestionText}`;
 }
 
 async function writeTelegramAgentAuditLog(message, ctx, finalReply, status = "success", errorMessage = "") {
     try {
         await db.collection("telegram_agent_logs").add({
             version: TELEGRAM_AGENT_VERSION,
-            replyFormat: "telegram-mobile-brief-v1",
+            replyFormat: "telegram-mobile-brief-v2",
+            replyMode: getTelegramAgentReplyMode(ctx),
             geminiApi: ctx?.geminiApi || getGeminiInteractionsApiLabel(ctx?.modelName || TELEGRAM_AGENT_PRIMARY_MODEL),
             modelName: ctx?.modelName || TELEGRAM_AGENT_PRIMARY_MODEL,
             primaryModel: TELEGRAM_AGENT_PRIMARY_MODEL,
@@ -5424,7 +5423,7 @@ function convertTelegramMarkdownTablesToCards(text = "") {
     return output.join("\n");
 }
 
-function formatTelegramAgentAnalysisReply(text) {
+function formatTelegramAgentAnalysisReply(text, ctx = null) {
     let reply = String(text || "")
         .replace(/\r/g, "")
         .replace(/```[\s\S]*?```/g, (block) => block.replace(/```[a-zA-Z0-9_-]*\n?/g, "").replace(/```/g, ""))
@@ -5449,14 +5448,19 @@ function formatTelegramAgentAnalysisReply(text) {
         reply = "🤖 戰情秘書目前無法完成這個分析，請將問題縮小到品牌、店家或月份後再試一次。";
     }
 
-    // 行動版可讀性護欄：主回答控制在約 2,800 字內，仍保留 footer 空間。
-    if (reply.length > 2800) {
+    // v2：預設戰情簡報版限制更短；明確要求詳細分析時才放寬。
+    const replyMode = getTelegramAgentReplyMode(ctx);
+    const maxLength = replyMode === "detailed" ? 3000 : 1450;
+    const preferredCut = replyMode === "detailed" ? 2850 : 1350;
+    const safeFloor = replyMode === "detailed" ? 2600 : 1150;
+
+    if (reply.length > maxLength) {
         const cutAt = Math.max(
-            reply.lastIndexOf("\n", 2700),
-            reply.lastIndexOf("。", 2700),
-            2500
+            reply.lastIndexOf("\n", preferredCut),
+            reply.lastIndexOf("。", preferredCut),
+            safeFloor
         );
-        reply = `${reply.slice(0, cutAt > 0 ? cutAt + 1 : 2700).trim()}\n\n…（已精簡較次要說明）`;
+        reply = `${reply.slice(0, cutAt > 0 ? cutAt + 1 : preferredCut).trim()}\n\n…（已精簡較次要說明）`;
     }
 
     return reply;
@@ -5492,9 +5496,45 @@ function renderTelegramAgentReadableHtml(text = "") {
                 return `<b>${escaped}</b>`;
             }
 
+            // KPI：只粗體行首指標名稱，避免整行變粗而失去層級。
+            const kpiMatch = raw.match(/^(\s*•\s*)([^：:]{1,14})([:：])(.*)$/);
+            if (kpiMatch) {
+                return `${escapeTelegramHtml(kpiMatch[1])}<b>${escapeTelegramHtml(kpiMatch[2])}</b>${escapeTelegramHtml(kpiMatch[3])}${escapeTelegramHtml(kpiMatch[4])}`;
+            }
+
+            // 行動標題若是短行，整行粗體；下一行做法保持正常字重。
+            if (/^\s*\d+[.、]\s*\S+/.test(raw) && trimmed.length <= 34) {
+                return `<b>${escaped}</b>`;
+            }
+
             return escaped;
         })
         .join("\n");
+}
+
+
+function getTelegramAgentReplyMode(ctx = null) {
+    const question = String(ctx?.question || "").trim();
+    const detailedRequested = /詳細|完整分析|完整報告|完整說明|展開|深入|細節|詳述|逐項|全面分析|原因分析|為什麼會|請分析原因/i.test(question);
+    return detailedRequested ? "detailed" : "brief";
+}
+
+function getTelegramAgentReplyModeInstruction(ctx = null) {
+    const mode = getTelegramAgentReplyMode(ctx);
+    if (mode === "detailed") {
+        return [
+            "本題為「詳細分析版」。",
+            "目標約 1400～2400 個中文字；可補充必要解釋，但仍禁止重複 KPI 與長篇鋪陳。",
+            "關鍵數字最多 6 行、主要變化最多 4 點、優先行動最多 4 項。",
+        ].join("\n");
+    }
+
+    return [
+        "本題為「戰情簡報版」（預設）。",
+        "目標約 600～1000 個中文字；優先讓主管在 5～10 秒內掌握結論。",
+        "關鍵數字最多 4 行、主要變化最多 3 點、優先行動最多 3 項。",
+        "沒有決策價值的背景說明直接省略；同一 KPI 不要重複敘述。",
+    ].join("\n");
 }
 
 function getGeminiApiKey() {
@@ -5528,28 +5568,40 @@ ${formatTelegramAgentPolicyContext(ctx)}
 【個人回答偏好】
 ${getTelegramAgentPreferenceInstructions(ctx).join("；") || "（無）"}
 
-【Telegram 行動版優先回答規格】
-1. 先給一句「判斷」，再給關鍵數字與行動；使用者應在 5 秒內看懂重點。
-2. 禁止 Markdown 表格、ASCII 表格、程式碼區塊、###、---、**、【大量括號標題】等格式；不要輸出任何 | 欄位表格。
-3. 一般營運分析優先使用下列結構，但只保留本題需要的區塊：
-   📌 店家／品牌｜日期或月份
-   判斷：一句話，盡量 45 個中文字內。
+【Telegram 戰情簡報 v2】
+${getTelegramAgentReplyModeInstruction(ctx)}
+
+1. 第一行直接寫「📌 品牌／店家｜日期或月份」；第二行固定用「判斷：」給一句決策結論，盡量 35 個中文字內。
+2. 禁止 Markdown 表格、ASCII 表格、程式碼區塊、###、---、**、大量括號標題；不要輸出任何 | 欄位表格。
+3. 預設簡報版使用以下順序，只保留本題真正需要的區塊：
+   📌 標題
+   判斷：一句話
 
    📊 關鍵數字
-   每行一個 KPI，最多 5 行；例如「現金：$412,961｜達成 27.5%」。
+   每行一個 KPI，短句化；例如：
+   • 現金：$412,961｜達成 27.5%
+   • 缺口：$1,087,039｜月底預估 50.2%
+   • 來客：100｜新 13・舊 87
+   • 新客：締結 30.8%｜均單 $6,746
 
    🔎 主要變化
-   最多 3 點；每點只說一個「數字變化 → 營運意義」，不要重複 KPI 全文。
+   優先使用「↑／↓／⚠ + KPI：A → B｜意義」的比較式，不寫長段落；例如：
+   ↑ 現金：10.5萬 → 41.3萬｜3天 +30.8萬
+   ↑ 締結：11.1% → 30.8%｜轉化修復
+   ⚠ 進度：27.5% vs 54.8%｜落後 27.3pt
 
    🎯 優先行動
-   1～3 項；每項先寫動作，再用一句話說原因或做法。
-4. 同一個金額、比率、人數原則上只完整出現一次。需要前後比較時用「A → B」，不要在結論、數字區、行動區重複敘述三次。
-5. 每個 bullet 最多 1～2 句，不使用第二層巢狀 bullet；避免單一段落超過約 90 個中文字。
-6. 符號只用於辨識層級：📌、📊、🔎、🎯、⚠️、•、1. 2. 3.。不要混用大量破折號、方括號、直線表格符號。
-7. 一般回答目標約 1200～2200 個中文字；除非使用者明確要求完整報告，否則不要寫成長篇報告。
-8. 資料完整且無 warning 時，不必另寫「資料可信度」段落；若有 fallback、缺漏或 rankingEligible=false，才加入「⚠️ 資料提醒」。
-9. 不要自行輸出資料來源、模型名稱、工具數、規則 ID；後端會統一附上精簡 footer。
-10. 語氣專業、精準、冷靜，像特助對總經理做一頁式戰情報告。`;
+   每項拆成「短標題」＋「一句做法」：
+   1. 釋放 Abee 諮詢產能
+   Jonas／機動人力接手純操作，讓主力專注談單。
+4. 關鍵數字不要把目標、缺口、預估全部塞在同一行；一行以手機寬度容易辨識為優先。
+5. 同一個金額、比率、人數原則上只完整出現一次；前後比較用「A → B」，不要在結論、數字、變化、行動重複四次。
+6. 「主要變化」只寫真正改變判斷的 2～3 項；沒有決策價值的數字不要全部搬進回答。
+7. 「優先行動」每項先寫動作名稱，下一行一句做法；禁止第二層 bullet 與長篇原因說明。
+8. 符號只用於視覺層級：📌、📊、🔎、🎯、⚠️、↑、↓、•、1. 2. 3.。不要堆疊破折號、括號與分隔線。
+9. 資料完整且無 warning 時，不另寫資料可信度；有 fallback、缺漏或 rankingEligible=false 才加入「⚠️ 資料提醒」。
+10. 不要自行輸出資料來源、模型名稱、工具數、reads、規則 ID；後端會統一附上極簡資料 footer。
+11. 語氣專業、精準、冷靜；像特助對總經理做「一頁式、可立即決策」的戰情簡報。`;
 }
 
 function getTelegramAgentFinalizerInstruction(dateInfo, ctx = null) {
@@ -5563,26 +5615,21 @@ function getTelegramAgentFinalizerInstruction(dateInfo, ctx = null) {
 - 工具沒有可驗證的 accrualBudget 或 accrualAchievement 時，不得自行描述權責達成率。
 - 只有 rankingEligible=true 且名次不是 null 時才能宣稱排名；否則必須說明資料缺漏。
 
-【Telegram 行動版優先格式】
+【Telegram 戰情簡報 v2】
+${getTelegramAgentReplyModeInstruction(ctx)}
+- 第一行：「📌 品牌／店家｜日期或月份」；第二行：「判斷：一句話結論」。
 - 禁止 Markdown table、ASCII table、程式碼區塊、###、---、**，不得輸出 | 欄位表格。
-- 使用者應在 5 秒內看到結論。一般分析以 1200～2200 個中文字為目標。
-- 優先格式：
-  📌 店家／品牌｜日期或月份
-  判斷：一句話結論
-
-  📊 關鍵數字
-  最多 5 行；每行一個 KPI。
-
-  🔎 主要變化
-  最多 3 點；每點只寫「變化 → 意義」。
-
-  🎯 優先行動
-  1～3 項；每項最多 1～2 句。
-- 同一 KPI 原則上只完整出現一次；前後比較用「A → B」。
-- 不使用第二層巢狀 bullet，不寫長段落，不堆疊符號。
-- 無 warning 時省略資料可信度說明；有缺漏或 fallback 才加「⚠️ 資料提醒」。
-- 不要輸出資料來源、模型名稱、工具數、規則 ID，後端會附 footer。
-- 語氣專業、精準、冷靜，像特助對總經理做一頁式戰情報告。
+- 預設簡報版：
+  📊 關鍵數字：最多 4 行，每行一個 KPI。
+  🔎 主要變化：最多 3 行，優先寫「↑／↓／⚠ KPI：A → B｜意義」。
+  🎯 優先行動：最多 3 項，每項「短標題」＋下一行一句做法。
+- 詳細分析版只有在使用者明確要求「詳細／完整／展開／深入」時才使用，可增加必要解釋，但仍維持手機可讀性。
+- KPI 短行化；不要把現金、目標、缺口、預估塞在同一行。
+- 同一 KPI 原則上只完整出現一次；比較時用「A → B」。
+- 不使用第二層巢狀 bullet，不寫長段落，不重複背景敘述。
+- 無 warning 時省略資料可信度；有缺漏或 fallback 才加「⚠️ 資料提醒」。
+- 不輸出模型、工具、reads、Policy ID 等技術資訊。
+- 語氣專業、精準、冷靜，像總經理每天看的戰情快報。
 
 目前長期規則：
 ${formatTelegramAgentPolicyContext(ctx)}
@@ -6067,7 +6114,7 @@ ${policyContext}
             }
         }
 
-        finalReply = formatTelegramAgentAnalysisReply(agentResult?.finalReply || "");
+        finalReply = formatTelegramAgentAnalysisReply(agentResult?.finalReply || "", ctx);
         const replyWithFooter = `${finalReply}${buildTelegramAgentSourceFooter(ctx)}`;
         const readableHtml = renderTelegramAgentReadableHtml(replyWithFooter);
         await sendTelegramMessage(chatId, readableHtml, { parse_mode: "HTML" });
