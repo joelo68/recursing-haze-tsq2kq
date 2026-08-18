@@ -1,0 +1,667 @@
+# DASHBOARD_SUMMARY.md
+
+> 本文件記錄目前正式 Dashboard Summary / Historical Data 信任與 fallback 架構。  
+> 建立來源：目前正式 `App.jsx`、`useDashboardStats.js`、`functions/index.js`、`SystemMaintenance.jsx`、`AnnualView.jsx`、相關 View。
+
+---
+
+# 1. 為什麼有 Summary
+
+本系統同時需要：
+
+- 當月即時性
+- 歷史月份正確性
+- 降低 Firestore reads
+- Dashboard / Telegram / Annual 共用可信的月結資料
+
+因此正式架構不是「所有月份都直接撈 daily_reports」，而是：
+
+```text
+當月
+→ 即時 Raw / detail 優先
+
+歷史月份
+→ verified Summary 優先
+→ 不可信時 fallback
+```
+
+---
+
+# 2. 主要資料元件
+
+核心 collections：
+
+```text
+daily_reports
+therapist_daily_reports
+
+monthly_aggregated
+therapist_monthly_aggregated
+
+monthly_targets
+monthly_targets_summary
+
+dashboard_summary
+rankings_summary
+therapist_summary
+
+summary_recalc_flags
+recalc_queue
+summary_worker_state
+```
+
+---
+
+# 3. 當月 Dashboard
+
+## 店家
+
+當月屬於即時戰情。
+
+設計原則：
+
+```text
+daily_reports
+→ 目前月份 detail / exact scoped data
+→ Dashboard 計算
+```
+
+不應因為存在歷史 Summary 架構，就把當月切成 stale Summary。
+
+Telegram backend 也使用相同概念：
+
+```text
+當月 daily_reports exact
+若真的讀不到 → monthly_aggregated fallback
+```
+
+---
+
+## 管理師
+
+當月人員績效同樣保留即時 detail。
+
+`useDashboardStats.js` 明確禁止當月使用 historical therapist summary，
+避免晚上陸續回報後：
+
+```text
+今日戰神
+排行榜
+人員 KPI
+```
+
+不即時更新。
+
+---
+
+# 4. 歷史月份 Dashboard
+
+歷史月份的目標是：
+
+```text
+可信 Summary
++
+低 reads
+```
+
+因此只有當 Summary 被判定為 trusted 才使用。
+
+---
+
+# 5. Summary Trust State
+
+Dashboard 會組合：
+
+```text
+dashboard_summary
+therapist_summary
+rankings_summary
+summary_recalc_flags
+recalc_queue
+maintenance compare logs
+```
+
+判斷狀態。
+
+主要 statusKey：
+
+```text
+missing
+current_dirty
+dirty
+unverified
+verified
+mismatch
+```
+
+---
+
+# 6. `summary_recalc_flags`
+
+歷史月 Summary 信任狀態的核心。
+
+目前正式前端可確認：
+
+```text
+flagStatus
+flagMismatchCount
+flagCompletedAtText
+dirty
+rebuildAfterAtText
+lastDirtyAtText
+```
+
+### Verified
+
+目前條件核心為：
+
+```text
+status = completed / verified
+dirty != true
+mismatch = 0
+```
+
+只要 backend auto repair worker 已把 flag 寫回 verified，
+Dashboard 就應恢復 Summary。
+
+### 重要設計
+
+以前 compare maintenance log 可能成為額外阻擋條件。
+
+目前正式修正已明確：
+
+> backend flag verified 足以讓 Dashboard 回到可信 Summary，  
+> 不應因為舊 maintenance compare log 時間而一直卡在 detail fallback。
+
+---
+
+# 7. Dirty 如何產生
+
+正式 backend 對：
+
+```text
+daily_reports
+therapist_daily_reports
+```
+
+的 onWrite 同時：
+
+1. 更新 monthly aggregation。
+2. 檢查是否是會影響 Summary 的 meaningful change。
+3. 標記歷史月份 dirty / 建立重算工作。
+
+HistoryView 已不再自己建立隨機 queue。
+
+---
+
+# 8. Dirty Debounce
+
+目前 backend：
+
+```text
+SUMMARY_DIRTY_DEBOUNCE_MINUTES = 1
+```
+
+目的：
+
+如果同一歷史月份短時間連續被多筆修改，
+先給一小段 debounce，再集中重建，而不是每筆修改立即完整重算。
+
+---
+
+# 9. `recalc_queue` 的角色
+
+目前正式註解明確區分：
+
+```text
+summary_recalc_flags
+= 正常歷史異動的主要修復訊號
+
+recalc_queue fallback
+= 防漏保險
+```
+
+因此看到 queue 不代表：
+
+```text
+每次 repair 都必須全掃 queue
+```
+
+---
+
+# 10. Queue Fallback 節流
+
+正式 worker：
+
+```text
+steady：
+每 30 分鐘
+每頁 50 筆 pending
+
+backlog：
+若還有下一頁
+暫時每 5 分鐘續頁
+```
+
+查詢另多取 1 筆確認是否有下一頁。
+
+Worker state：
+
+```text
+summary_worker_state/recalc_queue_fallback_scan
+```
+
+記住：
+
+```text
+cursorDocId
+nextRunAfterMs
+scanMode
+lastPageSize
+```
+
+避免每次都掃同一批前 50 筆。
+
+---
+
+# 11. Auto Repair
+
+正式 backend 有：
+
+```text
+repairDirtySummaryNow
+repairDirtySummaries
+```
+
+以及自動排程 worker。
+
+`repairDirtySummaries` 的核心工作是處理到時間的 historical dirty months。
+
+成功後：
+
+```text
+rebuild Summary
+compare / verify
+flag → verified
+dirty → false
+mismatch → 0
+```
+
+前端 Dashboard status listener 會因此重新切回 Summary。
+
+---
+
+# 12. Historical Fallback 順序
+
+概念上：
+
+```text
+歷史月份
+   │
+   ├─ summary verified?
+   │       │
+   │       YES
+   │       ▼
+   │  dashboard_summary
+   │
+   └─ NO
+           ▼
+     monthly_aggregated
+           │
+           └─ 若仍缺
+                  ▼
+             scoped raw daily_reports
+```
+
+Telegram backend 已明確實作這個安全路徑：
+
+```text
+verified_dashboard_summary
+→ monthly_aggregated + target fallback
+→ daily_reports_month_fallback
+```
+
+這個架構的意義：
+
+> 「Summary 不可信」不是畫面顯示 0，也不是硬吃 stale Summary，  
+> 而是退回較昂貴但較可信的來源。
+
+---
+
+# 13. Dashboard 前端 Summary Status
+
+`DashboardHeader` 會把資料來源轉成使用者可理解狀態。
+
+至少有：
+
+```text
+本月即時明細
+已整理 Summary
+資料來源檢查中
+fallback / warning
+```
+
+目的不是只顯示技術狀態，而是讓主管知道現在看的數字來源。
+
+---
+
+# 14. Target Summary
+
+Dashboard 不應常駐監聽全年完整 `monthly_targets`。
+
+App 已把完整 monthly targets 限制在：
+
+```text
+activeView === targets
+或
+Audit 的 target mode
+```
+
+Dashboard / Ranking / Annual 優先：
+
+```text
+monthly_targets_summary
+dashboard_summary target info
+```
+
+---
+
+# 15. Target Summary 完整性
+
+有 `monthly_targets_summary` 不代表可以直接使用。
+
+目前 backend：
+
+1. 取得正式店家 roster。
+2. 對逐店有效 target 做 coverage。
+3. coverage 完整才接受。
+4. 不完整就 fallback。
+
+若無 roster，才可能以 totals 做較弱的 fallback。
+
+---
+
+# 16. Target Fallback
+
+目前 Telegram backend target 解析順序：
+
+```text
+monthly_targets_summary stores
+   ↓ incomplete
+dashboard_summary targets
+   ↓ incomplete
+monthly_targets full fallback
+```
+
+Dashboard 前端另外有 targeted fallback，
+避免只因一、兩家缺 Summary target 就讀完整年度大量 targets。
+
+---
+
+# 17. 「0 目標」不是完整 coverage
+
+Store Identity / target consistency governance 已規定：
+
+> active store 的全 0 target 不可被當成有效 coverage。
+
+這避免曾發生的情況：
+
+```text
+canonical 有有效 target
+legacy duplicate 全 0
+```
+
+但 Summary 判斷卻把 0 duplicate 當成「這家有資料」。
+
+---
+
+# 18. Summary Store Identity
+
+`useDashboardStats.js` 對 Summary store row 的解析有額外保護：
+
+若 `stores` 是 map：
+
+```text
+map key
+```
+
+可能比 row 內：
+
+```text
+store
+storeName
+```
+
+更可靠。
+
+原因是歷史資料可能發生：
+
+```text
+key = 新店 / CYJ新店店
+row.store = 新
+```
+
+因此 Summary normalization 不能只相信單一顯示欄位。
+
+---
+
+# 19. Store Identity 與 Summary
+
+CYJ 新店：
+
+```text
+core = 新店
+canonical = CYJ新店店
+```
+
+正式寫入：
+
+```text
+monthly_targets       → canonical
+monthly_aggregated    → canonical
+monthly_targets_summary → canonical
+```
+
+歷史 Raw：
+
+```text
+daily_reports
+```
+
+不批次改名。
+
+因此 Summary build / fallback 必須 normalize aliases。
+
+---
+
+# 20. Ranking Summary
+
+歷史排名資料也屬 derived data。
+
+Backend dirty guard 的目的之一：
+
+當歷史日報變更時，不能留下：
+
+```text
+dashboard_summary verified
+therapist_summary verified
+rankings_summary verified
+```
+
+但實際 Raw 已不同。
+
+---
+
+# 21. Historical Delegation Scope
+
+歷史 verified Summary 並不代表忽略目前存取範圍。
+
+`useDashboardStats.js` 對 store manager / delegated multi-store：
+
+```text
+effectiveStores
+```
+
+仍會套用在 historical Summary ranking / display scope。
+
+---
+
+# 22. Annual Data
+
+AnnualView 使用：
+
+```text
+annualAggregatedData
+annualDashboardSummaries
+annualSummaryStatusMap
+```
+
+歷史已驗證月份以 Summary 為可信口徑。
+
+本月／未整理月份可有 aggregation fallback。
+
+---
+
+# 23. `annual_kpi_summary`
+
+與 AnnualView 年度實績不同，`annual_kpi_summary` 是年度 KPI benchmark 資料。
+
+Backend build：
+
+```text
+completed month dashboard_summary
+→ established store / averages
+→ annual_kpi_summary/{year}
+```
+
+缺少 dashboard summary 的月份會 skip，
+不會自行猜出一個月的 benchmark。
+
+---
+
+# 24. Maintenance 與 Summary
+
+SystemMaintenance 提供：
+
+```text
+Summary status
+Summary rebuild
+Summary compare
+月結前檢查
+月份報表整理
+recalc queue
+target summary rebuild
+Core Consistency Audit
+```
+
+### 月結標準思路
+
+```text
+健康檢查
+→ 缺報 / 異常確認
+→ pending / queue 確認
+→ 月份整理 / 校準
+→ Summary compare
+→ verified
+```
+
+---
+
+# 25. Core Consistency Audit
+
+它不是 Summary worker。
+
+定位是：
+
+```text
+Audit Only
+```
+
+跨來源檢查：
+
+```text
+monthly_targets
+monthly_aggregated
+daily_reports
+therapist_daily_reports
+therapist_monthly_aggregated
+therapists
+org_structure
+monthly_targets_summary
+```
+
+可跑：
+
+```text
+單月
+全年
+```
+
+全年會大量讀取，不適合高頻執行。
+
+---
+
+# 26. 當數字怪怪時的診斷順序
+
+不要直接修改 Dashboard component。
+
+先判斷：
+
+```text
+1. 目前月份還是歷史月份？
+2. DashboardHeader 顯示哪個 data source？
+3. summary_recalc_flags 狀態？
+4. pending queue 是否存在？
+5. dashboard_summary 是否存在？
+6. monthly_aggregated 是否完整？
+7. Raw daily_reports 是否正確？
+8. target Summary 是否完整？
+9. Store Identity 是否拆成 alias？
+10. 最後才檢查 useDashboardStats / view filter
+```
+
+---
+
+# 27. 禁止事項
+
+未確認根因前，不應：
+
+- 為單一店家硬寫 Summary 數字。
+- 把 dirty Summary 強制視為 verified。
+- 因為 Summary 缺一店，就永遠讀完整年度 targets。
+- 把當月 therapist Summary 當作即時人員排行榜。
+- 直接修改歷史 Raw 店名來讓 Summary 對上。
+- 看到 queue backlog 就改成高頻全表掃描。
+- 看到 aggregate split 就直接把兩份 aggregate 相加。
+
+---
+
+# 28. 修改此架構時的最低檢查
+
+如果改：
+
+```text
+useDashboardStats.js
+functions/index.js
+SystemMaintenance.jsx
+TargetView.jsx
+```
+
+至少執行：
+
+```bash
+npm run build
+node --check functions/index.js
+node --test tests/storeIdentity.test.js
+```
+
+若只改前端，backend check 可依實際變更範圍省略。
+
+重大 Summary 行為改變後，應用 Maintenance：
+
+```text
+Summary status
+Core Consistency Audit
+```
+
+做部署後驗證。
