@@ -501,8 +501,13 @@ exports.aggregateBrandTherapistReports = functions.firestore.document("brands/{b
 const TARGET_CHAT_ID_MAIN = '-4991191955';
 const TARGET_CHAT_ID_MANAGER = '-1002361008620';
 const TARGET_CHAT_ID_AGENT_TEST = '-5241604208';
+const TELEGRAM_BOT_USERNAME = 'DRCYJBot';
 const BRANDS = [{ id: 'cyj', name: 'CYJ' }, { id: 'anniu', name: '安妞' }, { id: 'yibo', name: '伊啵' }];
-const TELEGRAM_ALLOWED_CHAT_IDS = new Set([TARGET_CHAT_ID_MAIN, TARGET_CHAT_ID_MANAGER, TARGET_CHAT_ID_AGENT_TEST]);
+const TELEGRAM_ALLOWED_CHAT_IDS = new Set([
+    TARGET_CHAT_ID_MAIN,
+    TARGET_CHAT_ID_MANAGER,
+    TARGET_CHAT_ID_AGENT_TEST,
+]);
 
 function getTelegramBotToken() {
     const token = String(TELEGRAM_BOT_TOKEN_SECRET.value() || '').trim();
@@ -515,7 +520,26 @@ function getTelegramApiUrl(method = 'sendMessage') {
 }
 
 function isTelegramChatAuthorized(chatId) {
-    return TELEGRAM_ALLOWED_CHAT_IDS.has(String(chatId));
+    return TELEGRAM_ALLOWED_CHAT_IDS.has(String(chatId || "").trim());
+}
+
+function normalizeTelegramIncomingText(rawText = "") {
+    const text = String(rawText || "").trim();
+    if (!text) return "";
+    const escapedUsername = TELEGRAM_BOT_USERNAME.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    return text
+        .replace(new RegExp(`^@${escapedUsername}(?:\\s+|[,，:：]?\\s*)`, "i"), "")
+        .trim();
+}
+
+function getTelegramChatDebugMeta(message = {}) {
+    return {
+        chatId: String(message?.chat?.id || ""),
+        chatType: String(message?.chat?.type || ""),
+        chatTitle: String(message?.chat?.title || ""),
+        migrateToChatId: message?.migrate_to_chat_id ? String(message.migrate_to_chat_id) : "",
+        migrateFromChatId: message?.migrate_from_chat_id ? String(message.migrate_from_chat_id) : "",
+    };
 }
 
 async function sendTelegramMessage(chatId, text, extra = {}) {
@@ -7172,17 +7196,50 @@ exports.telegramWebhook = onRequest({
 }, async (req, res) => {
     const callbackQuery = req.body?.callback_query || null;
     const message = callbackQuery?.message || req.body?.message;
+    if (!message) return res.sendStatus(200);
+
+    const chatMeta = getTelegramChatDebugMeta(message);
+    if (chatMeta.migrateToChatId || chatMeta.migrateFromChatId) {
+        console.warn(
+            `Telegram 群組 Chat ID migration：from=${chatMeta.migrateFromChatId || chatMeta.chatId} ` +
+            `to=${chatMeta.migrateToChatId || chatMeta.chatId} title=${chatMeta.chatTitle || "-"}`
+        );
+    }
+
     const incomingText = callbackQuery?.data || message?.text;
-    if (!message || !incomingText) return res.sendStatus(200);
+    if (!incomingText) {
+        console.log(
+            `Telegram 非文字 update 已略過：chatId=${chatMeta.chatId} ` +
+            `type=${chatMeta.chatType || "-"} title=${chatMeta.chatTitle || "-"}`
+        );
+        return res.sendStatus(200);
+    }
 
     const chatId = message.chat?.id;
     const actor = callbackQuery?.from || message.from || {};
     const userId = actor?.id || "unknown";
-    const rawCommand = String(incomingText || "").trim();
+    const originalRawCommand = String(incomingText || "").trim();
+    const rawCommand = callbackQuery
+        ? originalRawCommand
+        : normalizeTelegramIncomingText(originalRawCommand);
+
+    console.log(
+        `Telegram update 收到：chatId=${chatMeta.chatId} type=${chatMeta.chatType || "-"} ` +
+        `title=${chatMeta.chatTitle || "-"} userId=${userId} text=${originalRawCommand.slice(0, 120)}`
+    );
+
     if (!isTelegramChatAuthorized(chatId)) {
-        console.warn(`Telegram 未授權聊天室已拒絕：${chatId}`);
+        console.warn(
+            `Telegram 未授權聊天室已拒絕：${chatId} ` +
+            `type=${chatMeta.chatType || "-"} title=${chatMeta.chatTitle || "-"}`
+        );
         return res.sendStatus(200);
     }
+
+    console.log(
+        `Telegram 聊天室授權通過：chatId=${chatMeta.chatId} ` +
+        `type=${chatMeta.chatType || "-"} title=${chatMeta.chatTitle || "-"}`
+    );
 
     if (callbackQuery?.id) {
         try {
@@ -7190,6 +7247,29 @@ exports.telegramWebhook = onRequest({
         } catch (callbackError) {
             console.warn("Telegram callback answer failed:", callbackError.message);
         }
+    }
+
+    // 群組連線快速診斷：不使用 Gemini、不讀 Firestore。
+    if (!callbackQuery && /^\/(?:ping|chatid)(?:@\w+)?$/i.test(originalRawCommand)) {
+        const diagnosticReply = [
+            "✅ DRCYJ Agent 已連線",
+            `群組：${chatMeta.chatTitle || "私人對話"}`,
+            `Chat ID：${chatMeta.chatId}`,
+            `類型：${chatMeta.chatType || "unknown"}`,
+            "白名單：已授權",
+        ].join("\n");
+        try {
+            await sendTelegramMessage(chatId, diagnosticReply);
+            console.log(`Telegram /ping 回覆成功：chatId=${chatMeta.chatId}`);
+        } catch (pingError) {
+            console.error(
+                `Telegram /ping 回覆失敗：chatId=${chatMeta.chatId} ` +
+                `status=${pingError?.response?.status || ""} ` +
+                `data=${JSON.stringify(pingError?.response?.data || {})} ` +
+                `message=${pingError.message}`
+            );
+        }
+        return res.sendStatus(200);
     }
 
     const expandedCommand = callbackQuery ? rawCommand : expandTelegramAgentCommand(rawCommand);
@@ -7360,7 +7440,14 @@ ${policyContext}
         try {
             await sendTelegramMessage(chatId, errorText);
         } catch (sendError) {
-            console.error("Telegram 錯誤通知發送失敗:", sendError.message);
+            console.error(
+                "Telegram 錯誤通知發送失敗:",
+                sendError.message,
+                "status=",
+                sendError?.response?.status || "",
+                "data=",
+                JSON.stringify(sendError?.response?.data || {})
+            );
         }
         await writeTelegramAgentAuditLog(auditMessage, ctx, finalReply, "error", error.message);
     }
