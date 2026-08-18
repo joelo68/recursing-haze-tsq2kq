@@ -502,7 +502,7 @@ const TARGET_CHAT_ID_MAIN = '-4991191955';
 const TARGET_CHAT_ID_MANAGER = '-1002361008620';
 const TARGET_CHAT_ID_AGENT_TEST = '-5241604208';
 const BRANDS = [{ id: 'cyj', name: 'CYJ' }, { id: 'anniu', name: '安妞' }, { id: 'yibo', name: '伊啵' }];
-const TELEGRAM_ALLOWED_CHAT_IDS = new Set([TARGET_CHAT_ID_MAIN, TARGET_CHAT_ID_MANAGER]);
+const TELEGRAM_ALLOWED_CHAT_IDS = new Set([TARGET_CHAT_ID_MAIN, TARGET_CHAT_ID_MANAGER, TARGET_CHAT_ID_AGENT_TEST]);
 
 function getTelegramBotToken() {
     const token = String(TELEGRAM_BOT_TOKEN_SECRET.value() || '').trim();
