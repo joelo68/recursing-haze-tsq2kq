@@ -3,7 +3,7 @@ import React, { useState, useContext, useEffect, useMemo } from "react";
 import { 
   Save, Calendar, Store, DollarSign, CreditCard, TrendingUp, Lock, Unlock, CheckCircle, Star, X 
 } from "lucide-react";
-import { doc, writeBatch, setDoc, serverTimestamp } from "firebase/firestore";
+import { doc, writeBatch, serverTimestamp } from "firebase/firestore";
 
 import { db, appId } from "../config/firebase";
 import { AppContext } from "../AppContext";
@@ -149,18 +149,37 @@ const TargetView = () => {
   }, [userRole, currentUser, managers, managerOrder, brandPrefix, availableStores]); 
 
   // 舊版 TargetView 曾把「CYJ新店店」錯寫成「CYJ新店」。
-  // 若既有 monthly_targets 已使用舊 key，先沿用原文件，避免修正店名後舊目標突然消失或重複建立。
-  // 新資料若沒有舊 key，則使用正確的「CYJ新店店」key。
-  const resolveTargetBudgetKey = (storeName, year, month) => {
-    const primaryKey = `${storeName}_${year}_${month}`;
-    if (budgets?.[primaryKey]) return primaryKey;
+  // 讀取時仍保留 legacy fallback，避免尚未整理的歷史年份突然看不到資料；
+  // 但任何新的解鎖 / 儲存寫入都必須使用 canonical key，禁止舊 key 再次被建立。
+  const getCanonicalTargetStoreName = (storeName = "") => {
+    const core = normalizeTargetStoreCore(storeName);
+    if (!core) return "";
 
-    if (normalizeTargetStoreCore(storeName) === "新店") {
-      const legacyKey = `${brandPrefix}新店_${year}_${month}`;
-      if (budgets?.[legacyKey]) return legacyKey;
-    }
+    // ★ CYJ「新店」的正式名稱固定為「CYJ新店店」。
+    // 其他品牌 / 其他門市維持目前既有格式，不擴大變更範圍。
+    if (brandPrefix === "CYJ" && core === "新店") return "CYJ新店店";
 
-    return primaryKey;
+    return formatTargetStoreName(storeName, brandPrefix) || String(storeName || "").trim();
+  };
+
+  const getCanonicalTargetBudgetKey = (storeName, year, month) => {
+    const canonicalStoreName = getCanonicalTargetStoreName(storeName);
+    return `${canonicalStoreName}_${year}_${month}`;
+  };
+
+  const getLegacyCyjNewStoreBudgetKey = (storeName, year, month) => {
+    if (brandPrefix !== "CYJ" || normalizeTargetStoreCore(storeName) !== "新店") return "";
+    return `CYJ新店_${year}_${month}`;
+  };
+
+  const resolveTargetBudgetReadKey = (storeName, year, month) => {
+    const canonicalKey = getCanonicalTargetBudgetKey(storeName, year, month);
+    if (budgets?.[canonicalKey]) return canonicalKey;
+
+    const legacyKey = getLegacyCyjNewStoreBudgetKey(storeName, year, month);
+    if (legacyKey && budgets?.[legacyKey]) return legacyKey;
+
+    return canonicalKey;
   };
 
   useEffect(() => {
@@ -173,7 +192,7 @@ const TargetView = () => {
 
     const newTargets = Array.from({ length: 12 }, (_, i) => {
       const month = i + 1;
-      const key = resolveTargetBudgetKey(selectedStore, selectedYear, month);
+      const key = resolveTargetBudgetReadKey(selectedStore, selectedYear, month);
       const existing = budgets[key];
       const hasChallenge = existing && (existing.challengeCashTarget > 0 || existing.challengeAccrualTarget > 0);
       
@@ -196,7 +215,7 @@ const TargetView = () => {
         return false;
     }
     const month = monthIndex + 1;
-    const key = resolveTargetBudgetKey(selectedStore, selectedYear, month);
+    const key = resolveTargetBudgetReadKey(selectedStore, selectedYear, month);
     const existing = budgets[key];
     return !!(existing && (existing.cashTarget > 0 || existing.accrualTarget > 0));
   };
@@ -211,13 +230,15 @@ const TargetView = () => {
   const handleUnlock = async (monthIndex) => {
     const month = monthIndex + 1;
     const confirmUnlock = window.confirm(`確定要「解鎖開放」 ${selectedStore} ${month} 月的目標嗎？\n\n(注意：解鎖後原數字會保留，店長可重新登入修改，存檔後將再次鎖定)`);
-    
+
     if (!confirmUnlock) return;
 
     setIsSaving(true);
     try {
-      const key = resolveTargetBudgetKey(selectedStore, selectedYear, month);
-      const docRef = doc(getCollectionPath("monthly_targets"), key);
+      const readKey = resolveTargetBudgetReadKey(selectedStore, selectedYear, month);
+      const writeKey = getCanonicalTargetBudgetKey(selectedStore, selectedYear, month);
+      const canonicalStoreName = getCanonicalTargetStoreName(selectedStore);
+      const existingTarget = budgets?.[readKey] || {};
 
       const unlockPayload = {
         isUnlocked: true,
@@ -225,16 +246,37 @@ const TargetView = () => {
         updatedBy: `${currentUser?.name || "主管"} (開放解鎖)`
       };
 
-      await setDoc(docRef, unlockPayload, { merge: true });
+      const batch = writeBatch(db);
 
-      await setDoc(
+      // 寫入端永遠使用 canonical key。
+      batch.set(
+        doc(getCollectionPath("monthly_targets"), writeKey),
+        {
+          ...existingTarget,
+          ...unlockPayload,
+        },
+        { merge: true }
+      );
+
+      // 若歷史年份仍只存在舊版 CYJ新店 key，解鎖時同步遷移：
+      // 同一個 batch 先建立 canonical，再刪 legacy，避免形成雙文件。
+      if (
+        readKey !== writeKey &&
+        readKey === getLegacyCyjNewStoreBudgetKey(selectedStore, selectedYear, month)
+      ) {
+        batch.delete(doc(getCollectionPath("monthly_targets"), readKey));
+      }
+
+      batch.set(
         doc(getCollectionPath("monthly_targets_summary"), `${selectedYear}-${String(month).padStart(2, "0")}`),
-        buildMonthlyTargetSummaryPayload(selectedStore, selectedYear, month, {
-          ...(budgets[key] || {}),
+        buildMonthlyTargetSummaryPayload(canonicalStoreName, selectedYear, month, {
+          ...existingTarget,
           ...unlockPayload,
         }),
         { merge: true }
       );
+
+      await batch.commit();
 
       setMonthTargets(prev => {
         const newData = [...prev];
@@ -243,7 +285,7 @@ const TargetView = () => {
       });
 
       showToast(`${month} 月目標已解鎖！請通知店長進行修改`, "success");
-      logActivity(userRole, currentUser?.name, "開放解鎖年度目標", `${selectedStore} ${selectedYear}年 ${month}月`);
+      logActivity(userRole, currentUser?.name, "開放解鎖年度目標", `${canonicalStoreName} ${selectedYear}年 ${month}月`);
 
     } catch (error) {
       console.error("Unlock error:", error);
@@ -308,7 +350,8 @@ const TargetView = () => {
     try {
       const batch = writeBatch(db);
       let hasData = false;
-      
+      const canonicalStoreName = getCanonicalTargetStoreName(selectedStore);
+
       monthTargets.forEach((item, index) => {
         if (isInputDisabled(index)) return;
 
@@ -318,42 +361,52 @@ const TargetView = () => {
         const challengeAccrual = parseNumber(item.challengeAccrualTarget);
 
         if (cash >= 0 || accrual >= 0) {
-           const key = resolveTargetBudgetKey(selectedStore, selectedYear, item.month);
-           const docRef = doc(getCollectionPath("monthly_targets"), key);
-           
-           const targetPayload = {
-             cashTarget: cash,
-             accrualTarget: accrual,
-             challengeCashTarget: challengeCash,
-             challengeAccrualTarget: challengeAccrual,
-             isUnlocked: false, 
-             updatedAt: new Date().toISOString(),
-             updatedBy: currentUser?.name || "unknown"
-           };
+          const readKey = resolveTargetBudgetReadKey(selectedStore, selectedYear, item.month);
+          const writeKey = getCanonicalTargetBudgetKey(selectedStore, selectedYear, item.month);
+          const docRef = doc(getCollectionPath("monthly_targets"), writeKey);
 
-           batch.set(docRef, targetPayload, { merge: true });
+          const targetPayload = {
+            cashTarget: cash,
+            accrualTarget: accrual,
+            challengeCashTarget: challengeCash,
+            challengeAccrualTarget: challengeAccrual,
+            isUnlocked: false, 
+            updatedAt: new Date().toISOString(),
+            updatedBy: currentUser?.name || "unknown"
+          };
 
-           batch.set(
-             doc(getCollectionPath("monthly_targets_summary"), `${selectedYear}-${String(item.month).padStart(2, "0")}`),
-             buildMonthlyTargetSummaryPayload(selectedStore, selectedYear, item.month, targetPayload),
-             { merge: true }
-           );
+          // 所有新寫入固定使用 canonical key。
+          batch.set(docRef, targetPayload, { merge: true });
 
-           // ★ 目標調整也會影響歷史 Summary / 月結資料，需留下待整理紀錄。
-           // 當月 Dashboard 仍走即時目標，不需要立刻校準；月結前再一次處理即可。
-           batch.set(doc(getCollectionPath("recalc_queue")), {
-             status: "pending",
-             affectedYearMonth: `${selectedYear}-${String(item.month).padStart(2, "0")}`,
-             sourceType: "monthly_targets",
-             sourceId: key,
-             storeName: selectedStore,
-             reason: "monthly_target_updated",
-             createdAt: serverTimestamp(),
-             createdAtText: new Date().toISOString(),
-             createdBy: currentUser?.name || "unknown",
-             createdByRole: userRole || "unknown",
-           });
-           hasData = true;
+          // Legacy 只允許讀取相容；重新儲存時就安全遷移並移除舊 key。
+          if (
+            readKey !== writeKey &&
+            readKey === getLegacyCyjNewStoreBudgetKey(selectedStore, selectedYear, item.month)
+          ) {
+            batch.delete(doc(getCollectionPath("monthly_targets"), readKey));
+          }
+
+          batch.set(
+            doc(getCollectionPath("monthly_targets_summary"), `${selectedYear}-${String(item.month).padStart(2, "0")}`),
+            buildMonthlyTargetSummaryPayload(canonicalStoreName, selectedYear, item.month, targetPayload),
+            { merge: true }
+          );
+
+          // ★ 目標調整也會影響歷史 Summary / 月結資料，需留下待整理紀錄。
+          // 當月 Dashboard 仍走即時目標，不需要立刻校準；月結前再一次處理即可。
+          batch.set(doc(getCollectionPath("recalc_queue")), {
+            status: "pending",
+            affectedYearMonth: `${selectedYear}-${String(item.month).padStart(2, "0")}`,
+            sourceType: "monthly_targets",
+            sourceId: writeKey,
+            storeName: canonicalStoreName,
+            reason: "monthly_target_updated",
+            createdAt: serverTimestamp(),
+            createdAtText: new Date().toISOString(),
+            createdBy: currentUser?.name || "unknown",
+            createdByRole: userRole || "unknown",
+          });
+          hasData = true;
         }
       });
 
@@ -364,11 +417,11 @@ const TargetView = () => {
       }
 
       await batch.commit();
-      
+
       setMonthTargets(prev => prev.map(item => ({ ...item, isUnlocked: false })));
 
       showToast(`${selectedYear}年度 目標更新成功`, "success");
-      logActivity(userRole, currentUser?.name, "更新年度目標", `${selectedStore} ${selectedYear}年`);
+      logActivity(userRole, currentUser?.name, "更新年度目標", `${canonicalStoreName} ${selectedYear}年`);
 
     } catch (error) {
       console.error("Save targets error:", error);

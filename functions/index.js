@@ -389,12 +389,26 @@ const THERAPIST_DAILY_REPORT_DIRTY_FIELDS = [
 // ==========================================
 // ★ 1. 核心資料結算邏輯 (店鋪日報)
 // ==========================================
+// CYJ「新店」是正式地名；歷史上曾同時出現 CYJ新店 / CYJ新店店。
+// 只針對這個已驗證案例做 canonical guard，避免再產生兩個 monthly_aggregated bucket。
+// 其他品牌、其他店名完全維持既有 key 行為，縮小風險。
+function getMonthlyAggregationCanonicalStoreName(rawStoreName = "", basePath = "") {
+  const raw = String(rawStoreName || "").trim();
+  if (!raw) return "";
+  const isCyjPath =
+    String(basePath || "").includes("artifacts/default-app-id/public/data/monthly_aggregated") ||
+    /brands\/(cyj|default-app-id)\/monthly_aggregated/i.test(String(basePath || ""));
+  if (!isCyjPath) return raw;
+  return normalizeSummaryCoreName(raw) === "新店" ? "CYJ新店店" : raw;
+}
+
 async function updateMonthlyAggregation(change, basePath) {
   const beforeData = change.before.data() || {};
   const afterData = change.after.data() || {};
-  const storeName = afterData.storeName || beforeData.storeName;
+  const rawStoreName = afterData.storeName || beforeData.storeName;
   const date = afterData.date || beforeData.date;
-  if (!storeName || !date) return null;
+  if (!rawStoreName || !date) return null;
+  const storeName = getMonthlyAggregationCanonicalStoreName(rawStoreName, basePath);
   const yearMonth = date.substring(0, 7); 
   const year = date.substring(0, 4);      
   const key = `${yearMonth}_${storeName}`;
@@ -9117,9 +9131,18 @@ exports.recalculateMonthlyData = onRequest({ cors: true }, async (req, res) => {
         let storeTotals = {};
         reportsSnap.forEach(doc => {
             const data = doc.data();
-            const sName = data.storeName;
-            if (!sName) return;
-            
+            const rawStoreName = data.storeName;
+            if (!rawStoreName) return;
+
+            // 與即時 aggregate trigger 使用同一個 CYJ 新店 canonical 規則。
+            // 其他店家不改名，避免在既有資料上製造新的 aggregate key。
+            const sName = (brandId === 'cyj' || brandId === 'default-app-id')
+                ? getMonthlyAggregationCanonicalStoreName(
+                    rawStoreName,
+                    'artifacts/default-app-id/public/data/monthly_aggregated'
+                  )
+                : rawStoreName;
+
             if (!storeTotals[sName]) {
                 storeTotals[sName] = { newCustomers: 0, cash: 0, accrual: 0, count: 0 };
             }
@@ -9866,21 +9889,95 @@ function hasOwnTargetField(value = {}) {
   ].some((key) => Object.prototype.hasOwnProperty.call(value, key));
 }
 
+function getAutoTargetComparableTime(value = {}) {
+  const raw = value?.updatedAtText || value?.updatedAt || value?.modifiedAtText || value?.modifiedAt || value?.createdAtText || value?.createdAt || "";
+  if (!raw) return 0;
+  if (typeof raw?.toMillis === "function") {
+    const ms = Number(raw.toMillis());
+    return Number.isFinite(ms) ? ms : 0;
+  }
+  if (typeof raw?.seconds === "number") {
+    return Number(raw.seconds) * 1000 + Math.floor(Number(raw.nanoseconds || 0) / 1000000);
+  }
+  const ms = Date.parse(String(raw));
+  return Number.isFinite(ms) ? ms : 0;
+}
+
+function isAutoTargetEffective(target = {}) {
+  return Number(target?.cashTarget || 0) > 0 || Number(target?.accrualTarget || 0) > 0;
+}
+
+function isAutoTargetCanonicalSource(target = {}, storeCore = "") {
+  const core = normalizeSummaryCoreName(storeCore || target?.storeName || "");
+  if (!core) return false;
+  const rawStore = String(target?.storeName || "")
+    .trim()
+    .replace(/[　\s]+/g, "");
+  let sourceBase = String(target?.sourceDocId || target?.id || "")
+    .trim()
+    .replace(/[　\s]+/g, "")
+    .replace(/[_-]20\d{2}[_-]\d{1,2}$/, "");
+  const stripPrefix = (value) => String(value || "")
+    .replace(/^(CYJ|DRCYJ|Anew安妞|Yibo伊啵|Anew|Yibo|安妞|伊啵)/i, "")
+    .trim();
+  const expectedSuffix = core === "新店" ? "新店店" : `${core}店`;
+  return [rawStore, sourceBase].filter(Boolean).some((value) => stripPrefix(value) === expectedSuffix);
+}
+
+// 目標資料可能因歷史命名差異出現同一門市多份文件。
+// 裁決順序固定為：有效正式目標 > 全 0；有效性相同時較新資料優先；最後才用 canonical 店名與文件 ID 穩定排序。
+// 不再使用「Firestore 最後讀到的文件」覆蓋，避免 0 值 duplicate 把有效目標蓋掉。
+function choosePreferredAutoTarget(currentTarget = null, nextTarget = null, storeCore = "") {
+  if (!currentTarget) return nextTarget || null;
+  if (!nextTarget) return currentTarget;
+
+  const currentEffective = isAutoTargetEffective(currentTarget);
+  const nextEffective = isAutoTargetEffective(nextTarget);
+  if (currentEffective !== nextEffective) return nextEffective ? nextTarget : currentTarget;
+
+  const currentTime = Number(currentTarget?.updatedAtMs || 0);
+  const nextTime = Number(nextTarget?.updatedAtMs || 0);
+  if (currentTime !== nextTime) return nextTime > currentTime ? nextTarget : currentTarget;
+
+  const currentCanonical = isAutoTargetCanonicalSource(currentTarget, storeCore);
+  const nextCanonical = isAutoTargetCanonicalSource(nextTarget, storeCore);
+  if (currentCanonical !== nextCanonical) return nextCanonical ? nextTarget : currentTarget;
+
+  return String(nextTarget?.sourceDocId || nextTarget?.id || "").localeCompare(
+    String(currentTarget?.sourceDocId || currentTarget?.id || ""),
+    "zh-Hant"
+  ) > 0 ? nextTarget : currentTarget;
+}
+
+function mergeAutoTargetMapEntry(targetMap = {}, row = null) {
+  if (!row?.storeCore || !row?.target) return targetMap;
+  targetMap[row.storeCore] = choosePreferredAutoTarget(
+    targetMap[row.storeCore] || null,
+    row.target,
+    row.storeCore
+  );
+  return targetMap;
+}
+
 function buildAutoTargetRow(id, value = {}, yearMonth = "") {
   if (!value || typeof value !== "object") return null;
   const targetMonth = extractAutoTargetYearMonth(id, value);
   if (targetMonth && yearMonth && targetMonth !== yearMonth) return null;
   const storeCore = extractAutoTargetStore(id, value, yearMonth);
   if (!storeCore || !hasOwnTargetField(value)) return null;
+  const updatedAtMs = getAutoTargetComparableTime(value);
   return {
     storeCore,
     target: {
       id: value.id || id,
+      sourceDocId: id,
       storeName: value.storeName || value.store || value.name || storeCore,
       cashTarget: Number(value.cashTarget || value.cash || value.budget || value.target || value.targetCash || value.cashBudget || 0),
       accrualTarget: Number(value.accrualTarget || value.accrual || value.accrualBudget || value.targetAccrual || 0),
       challengeCashTarget: Number(value.challengeCashTarget || value.challengeCash || value.challengeTarget || 0),
       challengeAccrualTarget: Number(value.challengeAccrualTarget || value.challengeAccrual || 0),
+      updatedAtText: value.updatedAtText || value.updatedAt || value.modifiedAtText || value.modifiedAt || value.createdAtText || value.createdAt || "",
+      updatedAtMs,
     },
   };
 }
@@ -9907,16 +10004,16 @@ function extractAutoTargetMapFromSummaryData(data = {}, yearMonth = "") {
     if (!container) return;
     if (Array.isArray(container)) {
       container.forEach((value, index) => {
-        const id = value?.id || value?.storeName || value?.store || value?.name || String(index);
+        const id = value?.sourceDocId || value?.id || value?.storeName || value?.store || value?.name || String(index);
         const row = buildAutoTargetRow(id, value, yearMonth);
-        if (row) targetMap[row.storeCore] = row.target;
+        if (row) mergeAutoTargetMapEntry(targetMap, row);
       });
       return;
     }
     if (typeof container === "object") {
       Object.entries(container).forEach(([id, value]) => {
-        const row = buildAutoTargetRow(id, value, yearMonth);
-        if (row) targetMap[row.storeCore] = row.target;
+        const row = buildAutoTargetRow(value?.sourceDocId || id, value, yearMonth);
+        if (row) mergeAutoTargetMapEntry(targetMap, row);
       });
     }
   };
@@ -9927,7 +10024,12 @@ function extractAutoTargetMapFromSummaryData(data = {}, yearMonth = "") {
 
 function getAutoTargetCoverage(targetMap = {}, expectedStores = []) {
   const expected = new Set((expectedStores || []).map(normalizeSummaryCoreName).filter(Boolean));
-  const actual = new Set(Object.keys(targetMap || {}).map(normalizeSummaryCoreName).filter(Boolean));
+  const actual = new Set(
+    Object.entries(targetMap || {})
+      .filter(([, target]) => isAutoTargetEffective(target))
+      .map(([store]) => normalizeSummaryCoreName(store))
+      .filter(Boolean)
+  );
   if (actual.size === 0) return 0;
   if (expected.size === 0) return 1;
   let matched = 0;
@@ -9940,7 +10042,7 @@ async function loadRawMonthlyTargetMap(brandId, yearMonth) {
   const targetMap = {};
   snap.docs.forEach((docSnap) => {
     const row = buildAutoTargetRow(docSnap.id, docSnap.data() || {}, yearMonth);
-    if (row) targetMap[row.storeCore] = row.target;
+    if (row) mergeAutoTargetMapEntry(targetMap, row);
   });
   return targetMap;
 }
@@ -9951,11 +10053,12 @@ async function loadAutoMonthlyTargetMap(brandId, yearMonth, expectedStores = [])
     if (summarySnap.exists) {
       const summaryMap = extractAutoTargetMapFromSummaryData(summarySnap.data() || {}, yearMonth);
       const coverage = getAutoTargetCoverage(summaryMap, expectedStores);
-      const minimumCoverage = (expectedStores || []).length >= 5 ? 0.9 : 0.5;
-      if (Object.keys(summaryMap).length > 0 && coverage >= minimumCoverage) {
+      const hasExpectedStores = (expectedStores || []).length > 0;
+      const isComplete = hasExpectedStores ? coverage >= 1 : Object.keys(summaryMap).length > 0;
+      if (isComplete) {
         return summaryMap;
       }
-      console.warn(`monthly_targets_summary coverage insufficient; fallback full collection: ${brandId}/${yearMonth}, coverage=${coverage.toFixed(2)}`);
+      console.warn(`monthly_targets_summary target completeness insufficient; fallback full collection: ${brandId}/${yearMonth}, coverage=${coverage.toFixed(2)}`);
     }
   } catch (error) {
     console.warn(`monthly_targets_summary read failed; fallback full collection: ${brandId}/${yearMonth}`, error.message);
@@ -10021,18 +10124,24 @@ async function loadTelegramMonthlyBudgetForBrand(brandId, yearMonth) {
     const summarySnap = await getSummaryCollection(brandId, "monthly_targets_summary").doc(yearMonth).get();
     if (summarySnap.exists) {
       const data = summarySnap.data() || {};
-      const cashTotal = pickTelegramSummaryTotal(data, ["totalCashTarget", "cashTargetTotal", "cashTotal", "cashTarget", "cashBudget"]);
-      const accrualTotal = pickTelegramSummaryTotal(data, ["totalAccrualTarget", "accrualTargetTotal", "accrualTotal", "accrualTarget", "accrualBudget"]);
-      if ((cashTotal !== null && cashTotal > 0) || (accrualTotal !== null && accrualTotal > 0)) {
-        return { cash: cashTotal || 0, accrual: accrualTotal || 0, source: "monthly_targets_summary_totals" };
-      }
-
       const summaryMap = extractAutoTargetMapFromSummaryData(data, yearMonth);
       const coverage = getAutoTargetCoverage(summaryMap, expectedStores);
-      const minimumCoverage = expectedStores.length >= 5 ? 0.9 : 0.5;
-      if (Object.keys(summaryMap).length > 0 && coverage >= minimumCoverage) {
-        return { ...sumTelegramTargetMap(summaryMap), source: "monthly_targets_summary_stores" };
+      const isComplete = expectedStores.length > 0 ? coverage >= 1 : Object.keys(summaryMap).length > 0;
+
+      // 有正式店家清單時，必須先驗證逐店目標完整，不能只因 Summary totals > 0 就接受部分總額。
+      if (isComplete) {
+        return { ...sumTelegramTargetMap(summaryMap), source: "monthly_targets_summary_stores", coverage, complete: true };
       }
+
+      if (expectedStores.length === 0) {
+        const cashTotal = pickTelegramSummaryTotal(data, ["totalCashTarget", "cashTargetTotal", "cashTotal", "cashTarget", "cashBudget"]);
+        const accrualTotal = pickTelegramSummaryTotal(data, ["totalAccrualTarget", "accrualTargetTotal", "accrualTotal", "accrualTarget", "accrualBudget"]);
+        if ((cashTotal !== null && cashTotal > 0) || (accrualTotal !== null && accrualTotal > 0)) {
+          return { cash: cashTotal || 0, accrual: accrualTotal || 0, source: "monthly_targets_summary_totals_no_roster", coverage, complete: false };
+        }
+      }
+
+      console.warn(`Telegram monthly_targets_summary target completeness insufficient: ${brandId}/${yearMonth}, coverage=${coverage.toFixed(2)}`);
     }
   } catch (error) {
     console.warn(`Telegram monthly_targets_summary read failed: ${brandId}/${yearMonth}`, error.message);
@@ -10042,8 +10151,10 @@ async function loadTelegramMonthlyBudgetForBrand(brandId, yearMonth) {
     const dashboardSnap = await getSummaryCollection(brandId, "dashboard_summary").doc(yearMonth).get();
     if (dashboardSnap.exists) {
       const dashboardMap = extractAutoTargetMapFromSummaryData(dashboardSnap.data() || {}, yearMonth);
-      if (Object.keys(dashboardMap).length > 0) {
-        return { ...sumTelegramTargetMap(dashboardMap), source: "dashboard_summary" };
+      const coverage = getAutoTargetCoverage(dashboardMap, expectedStores);
+      const isComplete = expectedStores.length > 0 ? coverage >= 1 : Object.keys(dashboardMap).length > 0;
+      if (isComplete) {
+        return { ...sumTelegramTargetMap(dashboardMap), source: "dashboard_summary", coverage, complete: true };
       }
     }
   } catch (error) {
@@ -10051,7 +10162,13 @@ async function loadTelegramMonthlyBudgetForBrand(brandId, yearMonth) {
   }
 
   const rawMap = await loadRawMonthlyTargetMap(brandId, yearMonth);
-  return { ...sumTelegramTargetMap(rawMap), source: "monthly_targets_full_fallback" };
+  const coverage = getAutoTargetCoverage(rawMap, expectedStores);
+  return {
+    ...sumTelegramTargetMap(rawMap),
+    source: "monthly_targets_full_fallback",
+    coverage,
+    complete: expectedStores.length > 0 ? coverage >= 1 : Object.keys(rawMap).length > 0,
+  };
 }
 
 async function loadTelegramMonthlyBudgetsByBrand(yearMonth) {

@@ -92,6 +92,10 @@ export default function SystemMaintenance() {
   const [archiveFilterMonth, setArchiveFilterMonth] = useState(todayMonth());
   const [targetSummaryYear, setTargetSummaryYear] = useState(String(new Date().getFullYear()));
   const [targetSummaryReport, setTargetSummaryReport] = useState(null);
+  const [consistencyReport, setConsistencyReport] = useState(null);
+  const [expandedConsistencyIssue, setExpandedConsistencyIssue] = useState("");
+  const [consistencyAuditScope, setConsistencyAuditScope] = useState("month");
+  const [consistencyAuditYear, setConsistencyAuditYear] = useState(String(new Date().getFullYear()));
 
   const [readTrackerMode, setReadTrackerModeState] = useState(getReadTrackerMode());
   const [localReadStats, setLocalReadStats] = useState({});
@@ -3250,14 +3254,34 @@ export default function SystemMaintenance() {
     return Number.isFinite(ms) ? ms : 0;
   };
 
+  const hasEffectiveTargetValues = (target = {}) =>
+    Number(target?.cashTarget || 0) > 0 || Number(target?.accrualTarget || 0) > 0;
+
+  const getTargetSummarySignature = (target = {}) => JSON.stringify({
+    cashTarget: Number(target.cashTarget || 0),
+    accrualTarget: Number(target.accrualTarget || 0),
+    challengeCashTarget: Number(target.challengeCashTarget || 0),
+    challengeAccrualTarget: Number(target.challengeAccrualTarget || 0),
+  });
+
   const shouldReplaceTargetSummaryEntry = (currentMeta, nextMeta) => {
     if (!currentMeta) return true;
+
+    // 同一門市若同時存在「全 0 舊文件」與「有效目標文件」，有效目標一定優先，
+    // 避免較新的 0 值 duplicate 把正式目標蓋掉。
+    if (Boolean(currentMeta.hasEffectiveTarget) !== Boolean(nextMeta.hasEffectiveTarget)) {
+      return Boolean(nextMeta.hasEffectiveTarget);
+    }
+
+    // 有效性相同時沿用「較新資料優先」；若時間相同，再以 canonical 店名與文件 ID 穩定排序。
     const currentTime = Number(currentMeta.updatedAtMs || 0);
     const nextTime = Number(nextMeta.updatedAtMs || 0);
     if (currentTime !== nextTime) return nextTime > currentTime;
+
     if (Boolean(currentMeta.isCanonicalStoreName) !== Boolean(nextMeta.isCanonicalStoreName)) {
       return Boolean(nextMeta.isCanonicalStoreName);
     }
+
     return String(nextMeta.sourceDocId || "").localeCompare(String(currentMeta.sourceDocId || ""), "zh-Hant") > 0;
   };
 
@@ -3316,7 +3340,663 @@ export default function SystemMaintenance() {
         updatedBy: data.updatedBy || "",
         sourceDocId: docId,
       },
+      hasEffectiveTarget: Number(data.cashTarget || 0) > 0 || Number(data.accrualTarget || 0) > 0,
+      targetSignature: getTargetSummarySignature({
+        cashTarget: Number(data.cashTarget || 0),
+        accrualTarget: Number(data.accrualTarget || 0),
+        challengeCashTarget: Number(data.challengeCashTarget || 0),
+        challengeAccrualTarget: Number(data.challengeAccrualTarget || 0),
+      }),
     };
+  };
+
+  const getCoreAuditYearMonth = (docId = "", data = {}) => {
+    const direct = String(data.yearMonth || data.monthKey || "").trim();
+    if (/^\d{4}-\d{2}$/.test(direct)) return direct;
+    const dateText = formatDateString(data.date || data.sourceDate || "");
+    if (/^\d{4}-\d{2}-\d{2}$/.test(dateText)) return dateText.slice(0, 7);
+    const match = String(docId || "").match(/(20\d{2})[-_](\d{1,2})/);
+    return match ? `${match[1]}-${String(Number(match[2])).padStart(2, "0")}` : "";
+  };
+
+  const getCoreAuditRecordTime = (data = {}) =>
+    getTargetSummaryComparableTime(
+      data.updatedAtText || data.updatedAt || data.modifiedAtText || data.modifiedAt ||
+      data.createdAtText || data.createdAt || data.timestamp || ""
+    );
+
+  const normalizeCoreAuditStoreMetrics = (data = {}) => ({
+    cash: Number(data.cash || 0),
+    refund: Number(data.refund || 0),
+    accrual: Number(data.accrual || 0),
+    operationalAccrual: Number(data.operationalAccrual || 0),
+    traffic: Number(data.traffic || 0),
+    skincareSales: Number(data.skincareSales || 0),
+    skincareRefund: Number(data.skincareRefund || 0),
+    newCustomers: Number(data.newCustomers ?? data.newCustomerCount ?? 0),
+    newCustomerClosings: Number(data.newCustomerClosings || 0),
+    newCustomerSales: Number(data.newCustomerSales ?? data.newCustomerRevenue ?? 0),
+    oldCustomerRevenue: Number(data.oldCustomerRevenue || 0),
+    oldCustomerCount: Number(data.oldCustomerCount || 0),
+  });
+
+  const normalizeCoreAuditTherapistMetrics = (data = {}) => ({
+    totalRevenue: Number(data.totalRevenue ?? data.cash ?? 0),
+    serviceCount: Number(data.serviceCount || 0),
+    newCustomerRevenue: Number(data.newCustomerRevenue || 0),
+    oldCustomerRevenue: Number(data.oldCustomerRevenue || 0),
+    newCustomerCount: Number(data.newCustomerCount || 0),
+    oldCustomerCount: Number(data.oldCustomerCount || 0),
+    newCustomerClosings: Number(data.newCustomerClosings || 0),
+    returnRevenue: Number(data.returnRevenue || 0),
+  });
+
+  const getCoreAuditTherapistIdentity = (data = {}) => {
+    const therapistId = String(data.therapistId || "").trim();
+    if (therapistId) return `id:${therapistId}`;
+    const name = normalizePersonName(getTherapistName(data));
+    const store = normalizeCoreName(getStoreName(data));
+    return name ? `name:${name}|store:${store || "-"}` : "";
+  };
+
+  const summarizeCoreAuditMetrics = (metrics = {}) => Object.entries(metrics)
+    .filter(([, value]) => Number(value || 0) !== 0)
+    .slice(0, 8)
+    .map(([key, value]) => `${key}=${Number(value || 0).toLocaleString()}`)
+    .join("｜") || "主要數值皆為 0";
+
+  const makeCoreAuditIssue = ({
+    id,
+    severity = "warning",
+    kind = "duplicate",
+    collectionName = "",
+    title = "",
+    canonicalKey = "",
+    reason = "",
+    recommendation = "",
+    records = [],
+  }) => ({
+    id,
+    severity,
+    kind,
+    collectionName,
+    title,
+    canonicalKey,
+    reason,
+    recommendation,
+    records: Array.isArray(records) ? records : [],
+  });
+
+  const extractCoreAuditSummaryTargetMap = (data = {}) => {
+    const map = {};
+    const containers = [
+      data.targets,
+      data.stores,
+      data.storeTargets,
+      data.storeTargetMap,
+      data.monthlyTargets,
+      data.targetStores,
+      data.items,
+      data.data,
+      data.byStore,
+      data.storeMap,
+      data.storesMap,
+      data.summaryByStore,
+      data.storeSummaries,
+    ];
+
+    const consume = (container) => {
+      if (!container) return;
+      const entries = Array.isArray(container)
+        ? container.map((value, index) => [value?.storeName || value?.store || value?.name || String(index), value])
+        : (typeof container === "object" ? Object.entries(container) : []);
+
+      entries.forEach(([rawKey, value]) => {
+        if (!value || typeof value !== "object") return;
+        const core = normalizeCoreName(value.storeName || value.store || value.coreStoreName || rawKey);
+        if (!core) return;
+        const candidate = {
+          storeName: value.storeName || value.store || rawKey,
+          cashTarget: Number(value.cashTarget || value.cash || value.budget || 0),
+          accrualTarget: Number(value.accrualTarget || value.accrual || value.accrualBudget || 0),
+          challengeCashTarget: Number(value.challengeCashTarget || value.challengeCash || 0),
+          challengeAccrualTarget: Number(value.challengeAccrualTarget || value.challengeAccrual || 0),
+          sourceDocId: value.sourceDocId || rawKey,
+          updatedAtMs: getCoreAuditRecordTime(value),
+          isCanonicalStoreName: String(value.storeName || value.store || rawKey).replace(/[　\s]+/g, "") === `${getTargetSummaryBrandPrefix()}${core}店`,
+        };
+        candidate.hasEffectiveTarget = hasEffectiveTargetValues(candidate);
+        const current = map[core];
+        if (!current || shouldReplaceTargetSummaryEntry(current, candidate)) map[core] = candidate;
+      });
+    };
+
+    containers.forEach(consume);
+    return map;
+  };
+
+  const handleRunCoreConsistencyAudit = async () => {
+    const isYearScope = consistencyAuditScope === "year";
+    const selectedYear = isYearScope
+      ? String(consistencyAuditYear || "").trim()
+      : String(calMonth || "").slice(0, 4);
+
+    if (!/^\d{4}$/.test(selectedYear)) {
+      showToast("請先確認健檢年度格式", "error");
+      return null;
+    }
+
+    const auditMonths = isYearScope
+      ? Array.from({ length: 12 }, (_, index) => `${selectedYear}-${String(index + 1).padStart(2, "0")}`)
+      : [calMonth];
+
+    if (!isYearScope && !/^\d{4}-\d{2}$/.test(String(calMonth || ""))) {
+      showToast("請先選擇健檢月份", "error");
+      return null;
+    }
+
+    const startDate = isYearScope ? `${selectedYear}-01-01` : monthRange(calMonth).startDate;
+    const endDate = isYearScope ? `${selectedYear}-12-31` : monthRange(calMonth).endDate;
+    const rangeLabel = isYearScope ? `${selectedYear} 全年度` : calMonth;
+
+    setLoadingAction("coreConsistencyAudit");
+    setConsistencyReport(null);
+    setExpandedConsistencyIssue("");
+    setLogs([]);
+    addLog(`🧭 啟動核心資料一致性健檢：${brandLabel}｜${rangeLabel}`);
+    if (isYearScope) {
+      addLog("ℹ️ 全年模式會讀取該年度店家／管理師日報；屬人工維護 Audit，不建議高頻執行。");
+    }
+
+    try {
+      const summaryDocPromises = auditMonths.map((yearMonth) =>
+        getDoc(doc(getCollectionPath("monthly_targets_summary"), yearMonth))
+          .then((snap) => [yearMonth, snap])
+      );
+
+      const [
+        orgProfile,
+        targetSnap,
+        monthlyAggSnap,
+        dailySnap,
+        therapistDailySnap,
+        therapistMonthlyAggSnap,
+        therapistMasterSnap,
+        targetSummaryEntries,
+      ] = await Promise.all([
+        getOrgStructureProfile(),
+        getDocs(getCollectionPath("monthly_targets")),
+        getDocs(getCollectionPath("monthly_aggregated")),
+        getDocs(query(getCollectionPath("daily_reports"), where("date", ">=", startDate), where("date", "<=", endDate))),
+        getDocs(query(getCollectionPath("therapist_daily_reports"), where("date", ">=", startDate), where("date", "<=", endDate))),
+        getDocs(getCollectionPath("therapist_monthly_aggregated")),
+        getDocs(getCollectionPath("therapists")),
+        Promise.all(summaryDocPromises),
+      ]);
+
+      const targetSummaryByMonth = Object.fromEntries(targetSummaryEntries);
+      const issues = [];
+      const sourceCounts = {
+        monthly_targets: targetSnap.size,
+        monthly_aggregated: monthlyAggSnap.size,
+        daily_reports: dailySnap.size,
+        therapist_daily_reports: therapistDailySnap.size,
+        therapist_monthly_aggregated: therapistMonthlyAggSnap.size,
+        therapists: therapistMasterSnap.size,
+        org_structure: 1,
+        monthly_targets_summary: targetSummaryEntries.filter(([, snap]) => snap.exists()).length,
+      };
+
+      const addGroupedIssues = ({
+        collectionName,
+        rows,
+        keyOf,
+        signatureOf,
+        titleOf,
+        recordOf,
+        targetMode = false,
+      }) => {
+        const grouped = new Map();
+        rows.forEach((row) => {
+          const key = keyOf(row);
+          if (!key) return;
+          if (!grouped.has(key)) grouped.set(key, []);
+          grouped.get(key).push(row);
+        });
+
+        grouped.forEach((records, canonicalKey) => {
+          if (records.length <= 1) return;
+
+          if (targetMode) {
+            const effective = records.filter((row) => row.hasEffectiveTarget);
+            const effectiveSignatures = new Set(effective.map((row) => row.targetSignature));
+            let kind = "duplicate_zero";
+            let severity = "warning";
+            let reason = "同一門市同月份存在多份全 0 目標文件。";
+            let recommendation = "先確認是否為歷史空白資料；V1 健檢不會自動修改。";
+
+            if (effective.length === 1) {
+              kind = "duplicate_safe";
+              reason = "同一門市同月份同時存在有效目標與全 0 文件。";
+              recommendation = `建議保留有效目標 ${effective[0].sourceDocId}；其餘列為待確認 duplicate。`;
+            } else if (effective.length > 1 && effectiveSignatures.size === 1) {
+              kind = "duplicate_identical";
+              reason = "同一門市同月份存在多份內容相同的有效目標。";
+              recommendation = "內容一致，可列入後續安全整理候選；V1 不自動封存。";
+            } else if (effectiveSignatures.size > 1) {
+              kind = "conflict";
+              severity = "danger";
+              reason = "同一門市同月份存在兩份以上不同的有效目標。";
+              recommendation = "禁止自動合併或相加，必須人工確認正式值。";
+            }
+
+            issues.push(makeCoreAuditIssue({
+              id: `${collectionName}:${canonicalKey}`,
+              severity,
+              kind,
+              collectionName,
+              title: titleOf(records[0], canonicalKey),
+              canonicalKey,
+              reason,
+              recommendation,
+              records: records.map(recordOf),
+            }));
+            return;
+          }
+
+          const signatures = new Set(records.map(signatureOf));
+          const identical = signatures.size === 1;
+          issues.push(makeCoreAuditIssue({
+            id: `${collectionName}:${canonicalKey}`,
+            severity: identical ? "warning" : "danger",
+            kind: identical ? "duplicate_identical" : "conflict",
+            collectionName,
+            title: titleOf(records[0], canonicalKey),
+            canonicalKey,
+            reason: identical ? "同一邏輯鍵存在多份內容相同文件。" : "同一邏輯鍵存在多份不同內容文件。",
+            recommendation: identical
+              ? "列入後續安全整理候選；V1 只標示，不修改資料。"
+              : "禁止自動封存，請先確認哪一份才是正式資料。",
+            records: records.map(recordOf),
+          }));
+        });
+      };
+
+      const targetRows = targetSnap.docs
+        .map((d) => {
+          const parsed = parseMonthlyTargetDocForSummary(d.id, d.data() || {}, selectedYear);
+          return parsed ? { ...parsed, raw: d.data() || {} } : null;
+        })
+        .filter((row) =>
+          row &&
+          (isYearScope ? row.year === selectedYear : row.yearMonth === calMonth)
+        );
+
+      addGroupedIssues({
+        collectionName: "monthly_targets",
+        rows: targetRows,
+        keyOf: (row) => `${row.yearMonth}|${row.coreStoreName}`,
+        signatureOf: (row) => row.targetSignature,
+        titleOf: (row) => `${brandLabel} ${row.coreStoreName}｜${row.yearMonth} 月目標`,
+        recordOf: (row) => ({
+          id: row.sourceDocId,
+          label: row.target.storeName,
+          summary: `現金 ${Number(row.target.cashTarget || 0).toLocaleString()}｜權責 ${Number(row.target.accrualTarget || 0).toLocaleString()}｜${row.isCanonicalStoreName ? "canonical" : "非 canonical"}`,
+          effective: row.hasEffectiveTarget,
+        }),
+        targetMode: true,
+      });
+
+      const monthlyAggRows = monthlyAggSnap.docs
+        .map((d) => ({ id: d.id, ...(d.data() || {}) }))
+        .filter((row) => {
+          const yearMonth = getCoreAuditYearMonth(row.id, row);
+          return (
+            row.isArchivedDuplicate !== true &&
+            (isYearScope ? yearMonth.startsWith(`${selectedYear}-`) : yearMonth === calMonth)
+          );
+        });
+
+      addGroupedIssues({
+        collectionName: "monthly_aggregated",
+        rows: monthlyAggRows,
+        keyOf: (row) => {
+          const yearMonth = getCoreAuditYearMonth(row.id, row);
+          const core = normalizeCoreName(getStoreName(row) || row.id);
+          return yearMonth && core ? `${yearMonth}|${core}` : "";
+        },
+        signatureOf: (row) => JSON.stringify(normalizeCoreAuditStoreMetrics(row)),
+        titleOf: (row) => {
+          const yearMonth = getCoreAuditYearMonth(row.id, row);
+          return `${brandLabel} ${normalizeCoreName(getStoreName(row) || row.id)}｜${yearMonth} 店家月彙總`;
+        },
+        recordOf: (row) => ({
+          id: row.id,
+          label: getStoreName(row) || row.id,
+          summary: summarizeCoreAuditMetrics(normalizeCoreAuditStoreMetrics(row)),
+        }),
+      });
+
+      const dailyRows = dailySnap.docs
+        .map((d) => ({ id: d.id, ...(d.data() || {}) }))
+        .filter((row) => row.isArchivedDuplicate !== true);
+
+      addGroupedIssues({
+        collectionName: "daily_reports",
+        rows: dailyRows,
+        keyOf: (row) => {
+          const date = formatDateString(row.date || "");
+          const core = normalizeCoreName(getStoreName(row));
+          return date && core ? `${date}|${core}` : "";
+        },
+        signatureOf: (row) => JSON.stringify(normalizeCoreAuditStoreMetrics(row)),
+        titleOf: (row) => `${formatDateString(row.date || "")}｜${normalizeCoreName(getStoreName(row))} 店家日報`,
+        recordOf: (row) => ({
+          id: row.id,
+          label: getStoreName(row) || "-",
+          summary: summarizeCoreAuditMetrics(normalizeCoreAuditStoreMetrics(row)),
+        }),
+      });
+
+      const therapistDailyRows = therapistDailySnap.docs
+        .map((d) => ({ id: d.id, ...(d.data() || {}) }))
+        .filter((row) => row.isArchivedDuplicate !== true);
+
+      addGroupedIssues({
+        collectionName: "therapist_daily_reports",
+        rows: therapistDailyRows,
+        keyOf: (row) => {
+          const date = formatDateString(row.date || "");
+          const identity = getCoreAuditTherapistIdentity(row);
+          return date && identity ? `${date}|${identity}` : "";
+        },
+        signatureOf: (row) => JSON.stringify(normalizeCoreAuditTherapistMetrics(row)),
+        titleOf: (row) => `${formatDateString(row.date || "")}｜${getTherapistName(row) || row.therapistId || "未知管理師"} 管理師日報`,
+        recordOf: (row) => ({
+          id: row.id,
+          label: `${getTherapistName(row) || "-"}｜${getStoreName(row) || "-"}`,
+          summary: summarizeCoreAuditMetrics(normalizeCoreAuditTherapistMetrics(row)),
+        }),
+      });
+
+      const therapistMonthlyRows = therapistMonthlyAggSnap.docs
+        .map((d) => ({ id: d.id, ...(d.data() || {}) }))
+        .filter((row) => {
+          const yearMonth = getCoreAuditYearMonth(row.id, row);
+          return (
+            row.isArchivedDuplicate !== true &&
+            (isYearScope ? yearMonth.startsWith(`${selectedYear}-`) : yearMonth === calMonth)
+          );
+        });
+
+      addGroupedIssues({
+        collectionName: "therapist_monthly_aggregated",
+        rows: therapistMonthlyRows,
+        keyOf: (row) => {
+          const yearMonth = getCoreAuditYearMonth(row.id, row);
+          const identity = getCoreAuditTherapistIdentity(row);
+          return yearMonth && identity ? `${yearMonth}|${identity}` : "";
+        },
+        signatureOf: (row) => JSON.stringify(normalizeCoreAuditTherapistMetrics(row)),
+        titleOf: (row) => {
+          const yearMonth = getCoreAuditYearMonth(row.id, row);
+          return `${getTherapistName(row) || row.therapistId || "未知管理師"}｜${yearMonth} 管理師月彙總`;
+        },
+        recordOf: (row) => ({
+          id: row.id,
+          label: `${getTherapistName(row) || "-"}｜${getStoreName(row) || "-"}`,
+          summary: summarizeCoreAuditMetrics(normalizeCoreAuditTherapistMetrics(row)),
+        }),
+      });
+
+      const therapistMasterRows = therapistMasterSnap.docs.map((d) => ({ id: d.id, ...(d.data() || {}) }));
+      const explicitIdGroups = new Map();
+      therapistMasterRows.forEach((row) => {
+        const explicitId = String(row.therapistId || "").trim();
+        if (!explicitId) return;
+        if (!explicitIdGroups.has(explicitId)) explicitIdGroups.set(explicitId, []);
+        explicitIdGroups.get(explicitId).push(row);
+      });
+
+      explicitIdGroups.forEach((records, therapistId) => {
+        if (records.length <= 1) return;
+        issues.push(makeCoreAuditIssue({
+          id: `therapists:id:${therapistId}`,
+          severity: "danger",
+          kind: "master_duplicate_id",
+          collectionName: "therapists",
+          title: `管理師主檔 ID 重複｜${therapistId}`,
+          canonicalKey: `therapistId:${therapistId}`,
+          reason: "不同主檔文件使用相同 therapistId。",
+          recommendation: "請人工確認人員主檔，不可自動合併。",
+          records: records.map((row) => ({
+            id: row.id,
+            label: `${row.name || row.therapistName || "-"}｜${row.store || row.storeName || "-"}`,
+            summary: `status=${row.status || "-"}｜isActive=${String(row.isActive ?? "-")}`,
+          })),
+        }));
+      });
+
+      const nameStoreGroups = new Map();
+      therapistMasterRows.forEach((row) => {
+        const name = normalizePersonName(row.name || row.therapistName);
+        const store = normalizeCoreName(row.store || row.storeName);
+        if (!name) return;
+        const key = `${name}|${store || "-"}`;
+        if (!nameStoreGroups.has(key)) nameStoreGroups.set(key, []);
+        nameStoreGroups.get(key).push(row);
+      });
+
+      nameStoreGroups.forEach((records, key) => {
+        if (records.length <= 1) return;
+        const ids = new Set(records.map((row) => String(row.therapistId || row.id || "")).filter(Boolean));
+        if (ids.size <= 1) return;
+        issues.push(makeCoreAuditIssue({
+          id: `therapists:name-store:${key}`,
+          severity: "warning",
+          kind: "master_possible_duplicate",
+          collectionName: "therapists",
+          title: `管理師主檔疑似重複｜${key.replace("|", "｜")}`,
+          canonicalKey: key,
+          reason: "同姓名、同店家存在不同人員 ID；也可能是真實同名人員。",
+          recommendation: "僅列為人工確認，不自動判定重複。",
+          records: records.map((row) => ({
+            id: row.id,
+            label: `${row.name || row.therapistName || "-"}｜${row.store || row.storeName || "-"}`,
+            summary: `therapistId=${row.therapistId || row.id || "-"}｜status=${row.status || "-"}`,
+          })),
+        }));
+      });
+
+      (orgProfile.duplicateStores || []).forEach((row, index) => {
+        issues.push(makeCoreAuditIssue({
+          id: `org_structure:${row.store || index}`,
+          severity: "danger",
+          kind: "org_duplicate",
+          collectionName: "org_structure",
+          title: `組織架構重複歸屬｜${row.store || "-"}`,
+          canonicalKey: normalizeCoreName(row.store || ""),
+          reason: `同一正規化店家同時出現在多個區長：${(row.owners || []).join("、")}`,
+          recommendation: "請回組織架構確認正式歸屬。",
+          records: (row.owners || []).map((owner, ownerIndex) => ({
+            id: `${row.store || "store"}_${ownerIndex}`,
+            label: owner,
+            summary: "區長歸屬",
+          })),
+        }));
+      });
+
+      // Raw 目標按「年月 + 正規化店名」裁決；全年模式不可跨月份互相覆蓋。
+      const targetGroupMap = new Map();
+      targetRows.forEach((row) => {
+        const key = `${row.yearMonth}|${row.coreStoreName}`;
+        if (!targetGroupMap.has(key)) targetGroupMap.set(key, []);
+        targetGroupMap.get(key).push(row);
+      });
+
+      const rawPreferredTargetsByMonth = {};
+      const targetConflictKeys = new Set();
+
+      targetGroupMap.forEach((records, key) => {
+        const [yearMonth, core] = key.split("|");
+        const effectiveSignatures = new Set(
+          records.filter((row) => row.hasEffectiveTarget).map((row) => row.targetSignature)
+        );
+        if (effectiveSignatures.size > 1) targetConflictKeys.add(key);
+
+        const preferred = records.reduce((current, next) => {
+          if (!current) return next;
+          return shouldReplaceTargetSummaryEntry(current, next) ? next : current;
+        }, null);
+
+        if (!rawPreferredTargetsByMonth[yearMonth]) rawPreferredTargetsByMonth[yearMonth] = {};
+        if (preferred) {
+          rawPreferredTargetsByMonth[yearMonth][core] = {
+            ...preferred.target,
+            hasEffectiveTarget: preferred.hasEffectiveTarget,
+          };
+        }
+      });
+
+      // 逐月比對 Raw / monthly_targets_summary；全年模式一次檢查 12 個月份。
+      auditMonths.forEach((yearMonth) => {
+        const targetSummarySnap = targetSummaryByMonth[yearMonth];
+        const rawPreferredTargets = rawPreferredTargetsByMonth[yearMonth] || {};
+
+        if (!targetSummarySnap?.exists()) {
+          issues.push(makeCoreAuditIssue({
+            id: `monthly_targets_summary:${yearMonth}:missing`,
+            severity: "warning",
+            kind: "summary_missing",
+            collectionName: "monthly_targets_summary",
+            title: `${yearMonth} 月目標 Summary 尚未建立`,
+            canonicalKey: yearMonth,
+            reason: "找不到 monthly_targets_summary 指定月份文件。",
+            recommendation: "先確認 raw monthly_targets 無衝突，再執行年度目標補整理。",
+            records: [],
+          }));
+          return;
+        }
+
+        const summaryTargets = extractCoreAuditSummaryTargetMap(targetSummarySnap.data() || {});
+        const expectedCores = new Set([
+          ...(orgProfile.stores || []).map(normalizeCoreName),
+          ...Object.keys(rawPreferredTargets),
+          ...Object.keys(summaryTargets),
+        ].filter(Boolean));
+
+        expectedCores.forEach((core) => {
+          if (targetConflictKeys.has(`${yearMonth}|${core}`)) return;
+
+          const rawTarget = rawPreferredTargets[core] || {};
+          const summaryTarget = summaryTargets[core] || {};
+          const rawCash = Number(rawTarget.cashTarget || 0);
+          const rawAccrual = Number(rawTarget.accrualTarget || 0);
+          const summaryCash = Number(summaryTarget.cashTarget || 0);
+          const summaryAccrual = Number(summaryTarget.accrualTarget || 0);
+
+          if (rawCash === summaryCash && rawAccrual === summaryAccrual) return;
+
+          issues.push(makeCoreAuditIssue({
+            id: `monthly_targets_summary:${yearMonth}:${core}`,
+            severity: "danger",
+            kind: "summary_mismatch",
+            collectionName: "monthly_targets_summary",
+            title: `${brandLabel} ${core}｜${yearMonth} Raw / Summary 不一致`,
+            canonicalKey: `${yearMonth}|${core}`,
+            reason: `raw 現金 ${rawCash.toLocaleString()} / 權責 ${rawAccrual.toLocaleString()}；Summary 現金 ${summaryCash.toLocaleString()} / 權責 ${summaryAccrual.toLocaleString()}`,
+            recommendation: "先處理 raw duplicate / conflict，再重建 monthly_targets_summary。",
+            records: [
+              {
+                id: rawTarget.sourceDocId || "raw_resolved",
+                label: "monthly_targets（裁決後）",
+                summary: `現金 ${rawCash.toLocaleString()}｜權責 ${rawAccrual.toLocaleString()}`,
+              },
+              {
+                id: summaryTarget.sourceDocId || yearMonth,
+                label: "monthly_targets_summary",
+                summary: `現金 ${summaryCash.toLocaleString()}｜權責 ${summaryAccrual.toLocaleString()}`,
+              },
+            ],
+          }));
+        });
+      });
+
+      const severityRank = { danger: 0, warning: 1, info: 2 };
+      issues.sort((a, b) =>
+        (severityRank[a.severity] ?? 9) - (severityRank[b.severity] ?? 9) ||
+        String(a.collectionName).localeCompare(String(b.collectionName), "zh-Hant") ||
+        String(a.title).localeCompare(String(b.title), "zh-Hant")
+      );
+
+      const conflicts = issues.filter((item) => item.severity === "danger").length;
+      const warnings = issues.filter((item) => item.severity === "warning").length;
+      const safeDuplicates = issues.filter((item) =>
+        ["duplicate_safe", "duplicate_identical", "duplicate_zero"].includes(item.kind)
+      ).length;
+      const summaryMismatches = issues.filter((item) => item.kind === "summary_mismatch").length;
+      const scanned = Object.values(sourceCounts).reduce((sum, count) => sum + Number(count || 0), 0);
+
+      const report = {
+        brandId,
+        brandLabel,
+        scope: isYearScope ? "year" : "month",
+        rangeLabel,
+        year: selectedYear,
+        month: isYearScope ? "" : calMonth,
+        auditMonths,
+        startDate,
+        endDate,
+        status: conflicts > 0 ? "danger" : (warnings > 0 ? "warning" : "pass"),
+        scanned,
+        conflicts,
+        warnings,
+        safeDuplicates,
+        summaryMismatches,
+        issueCount: issues.length,
+        issues: issues.slice(0, isYearScope ? 240 : 120),
+        truncatedIssueCount: Math.max(0, issues.length - (isYearScope ? 240 : 120)),
+        sourceCounts,
+        createdAt: new Date().toLocaleString("zh-TW", { hour12: false }),
+        auditOnly: true,
+      };
+
+      setConsistencyReport(report);
+      await addMaintenanceLog({
+        type: "core_data_consistency_audit",
+        action: isYearScope ? "run_year_audit_only" : "run_audit_only",
+        scope: report.scope,
+        year: selectedYear,
+        month: isYearScope ? "" : calMonth,
+        startDate,
+        endDate,
+        status: report.status,
+        scanned,
+        conflicts,
+        warnings,
+        safeDuplicates,
+        summaryMismatches,
+        issueCount: issues.length,
+      });
+
+      addLog(
+        `✅ 核心一致性健檢完成：${rangeLabel}｜掃描 ${scanned.toLocaleString()} docs｜衝突 ${conflicts}｜提醒 ${warnings}｜Summary 差異 ${summaryMismatches}。`
+      );
+      showToast(
+        conflicts
+          ? `健檢完成：發現 ${conflicts} 組高風險衝突`
+          : (warnings ? `健檢完成：${warnings} 組需確認` : "核心資料一致性正常"),
+        conflicts ? "error" : (warnings ? "info" : "success")
+      );
+      return report;
+    } catch (error) {
+      console.error(error);
+      addLog(`❌ 核心資料一致性健檢失敗：${error.message}`);
+      showToast("核心資料一致性健檢失敗", "error");
+      return null;
+    } finally {
+      setLoadingAction(null);
+    }
   };
 
   const handleRebuildYearlyTargetSummary = async () => {
@@ -3337,7 +4017,7 @@ export default function SystemMaintenance() {
 
       for (let i = 1; i <= 12; i += 1) {
         const yearMonth = `${year}-${String(i).padStart(2, "0")}`;
-        monthBuckets[yearMonth] = { yearMonth, month: i, targets: {}, targetMeta: {}, sourceDocIds: [] };
+        monthBuckets[yearMonth] = { yearMonth, month: i, targets: {}, targetMeta: {}, targetCandidates: {}, sourceDocIds: [] };
       }
 
       snap.docs.forEach((d) => {
@@ -3352,13 +4032,43 @@ export default function SystemMaintenance() {
           sourceDocId: parsed.sourceDocId,
           updatedAtMs: parsed.updatedAtMs,
           isCanonicalStoreName: parsed.isCanonicalStoreName,
+          hasEffectiveTarget: parsed.hasEffectiveTarget,
+          targetSignature: parsed.targetSignature,
         };
+        if (!bucket.targetCandidates[parsed.storeName]) bucket.targetCandidates[parsed.storeName] = [];
+        bucket.targetCandidates[parsed.storeName].push({ ...nextMeta, target: parsed.target });
+
         if (shouldReplaceTargetSummaryEntry(bucket.targetMeta[parsed.storeName], nextMeta)) {
           bucket.targets[parsed.storeName] = parsed.target;
           bucket.targetMeta[parsed.storeName] = nextMeta;
         }
         bucket.sourceDocIds.push(d.id);
       });
+
+      const targetConflicts = [];
+      Object.values(monthBuckets).forEach((bucket) => {
+        Object.entries(bucket.targetCandidates || {}).forEach(([storeName, candidates]) => {
+          const effectiveCandidates = candidates.filter((item) => item.hasEffectiveTarget);
+          const signatures = new Set(effectiveCandidates.map((item) => item.targetSignature));
+          if (signatures.size <= 1) return;
+          targetConflicts.push({
+            yearMonth: bucket.yearMonth,
+            storeName,
+            sourceDocIds: effectiveCandidates.map((item) => item.sourceDocId),
+          });
+        });
+      });
+
+      if (targetConflicts.length > 0) {
+        const labels = targetConflicts
+          .slice(0, 6)
+          .map((item) => `${item.yearMonth} ${item.storeName}`)
+          .join("、");
+        throw new Error(
+          `偵測到 ${targetConflicts.length} 組「同店同月不同有效目標」，已停止寫入 Summary。` +
+          `請先執行「核心資料一致性健檢」人工確認${labels ? `：${labels}${targetConflicts.length > 6 ? "…" : ""}` : ""}`
+        );
+      }
 
       const batch = writeBatch(db);
       const nowText = new Date().toISOString();
@@ -3857,6 +4567,213 @@ export default function SystemMaintenance() {
                         </div>
                       );
                     })()}
+                  </div>
+                )}
+              </div>
+            )}
+            <ToolRow
+              icon={Database}
+              title="核心資料一致性健檢"
+              desc="跨 monthly_targets、店家／管理師日報、月彙總、人員主檔與 org_structure，以正規化邏輯鍵找出重複、衝突與 Raw / Summary 不一致。可切換單月或全年；V1 僅檢查，不修改任何資料。"
+              badge="Audit Only"
+              tone="amber"
+            >
+              <div className="inline-flex items-center rounded-2xl border border-stone-100 bg-white/80 p-1 h-11">
+                {[
+                  ["month", "單月"],
+                  ["year", "全年"],
+                ].map(([scope, label]) => (
+                  <button
+                    key={scope}
+                    type="button"
+                    onClick={() => {
+                      setConsistencyAuditScope(scope);
+                      if (scope === "year" && /^\d{4}-\d{2}$/.test(String(calMonth || ""))) {
+                        setConsistencyAuditYear(String(calMonth).slice(0, 4));
+                      }
+                    }}
+                    className={`h-8 px-3 rounded-xl text-[11px] font-black transition-all ${
+                      consistencyAuditScope === scope
+                        ? "bg-[#FFF2D8] text-[#9A6A24] border border-amber-200 shadow-sm"
+                        : "text-stone-400 border border-transparent hover:text-stone-600"
+                    }`}
+                  >
+                    {label}
+                  </button>
+                ))}
+              </div>
+
+              {consistencyAuditScope === "year" ? (
+                <div className="flex items-center gap-2 rounded-2xl border border-stone-100 bg-white/70 px-3 h-11">
+                  <Calendar size={14} className="text-stone-400" />
+                  <input
+                    type="number"
+                    min="2020"
+                    max="2099"
+                    value={consistencyAuditYear}
+                    onChange={(e) => setConsistencyAuditYear(e.target.value)}
+                    className="bg-transparent text-xs font-black text-stone-700 outline-none w-20"
+                  />
+                  <span className="text-[10px] font-black text-stone-400">1–12 月</span>
+                </div>
+              ) : (
+                <div className="flex items-center gap-2 rounded-2xl border border-stone-100 bg-white/70 px-3 h-11">
+                  <Calendar size={14} className="text-stone-400" />
+                  <input
+                    type="month"
+                    value={calMonth}
+                    onChange={(e) => setCalMonth(e.target.value)}
+                    className="bg-transparent text-xs font-black text-stone-700 outline-none w-28"
+                  />
+                </div>
+              )}
+
+              <BeautyButton onClick={handleRunCoreConsistencyAudit} disabled={loadingAction !== null} variant="primary">
+                {loadingAction === "coreConsistencyAudit" ? <Loader2 size={14} className="animate-spin" /> : <Database size={14} />}
+                {consistencyAuditScope === "year" ? "執行全年健檢" : "執行一致性健檢"}
+              </BeautyButton>
+            </ToolRow>
+
+            {consistencyAuditScope === "year" && !consistencyReport && (
+              <div className="rounded-2xl border border-amber-100 bg-amber-50/40 px-4 py-3 text-[11px] font-bold text-[#9A6A24] leading-relaxed">
+                全年模式會一次讀取所選品牌該年度的店家／管理師日報，並逐月比對 12 份 monthly_targets_summary。適合資料治理或月結前人工檢查，不建議高頻執行。
+              </div>
+            )}
+
+            {consistencyReport && (
+              <div className={`rounded-[1.5rem] border p-4 space-y-3 ${
+                consistencyReport.status === "danger"
+                  ? "border-rose-100 bg-rose-50/30"
+                  : consistencyReport.status === "warning"
+                    ? "border-amber-100 bg-amber-50/30"
+                    : "border-emerald-100 bg-emerald-50/30"
+              }`}>
+                <div className="flex flex-col lg:flex-row lg:items-center lg:justify-between gap-3">
+                  <div>
+                    <div className="flex items-center gap-2 flex-wrap">
+                      <p className="text-sm font-black text-stone-800">
+                        核心資料一致性健檢｜{consistencyReport.rangeLabel || consistencyReport.month}
+                      </p>
+                      <span className="px-2.5 py-1 rounded-full bg-white border border-stone-100 text-[10px] font-black text-stone-500">唯讀 Audit</span>
+                      {consistencyReport.scope === "year" && (
+                        <span className="px-2.5 py-1 rounded-full bg-amber-50 border border-amber-100 text-[10px] font-black text-[#B7863D]">全年 12 個月</span>
+                      )}
+                    </div>
+                    <p className="text-[11px] font-bold text-stone-400 mt-1">
+                      品牌：{consistencyReport.brandLabel}｜掃描 {Number(consistencyReport.scanned || 0).toLocaleString()} docs｜{consistencyReport.createdAt}
+                    </p>
+                  </div>
+                  <span className={`px-3 py-1.5 rounded-full bg-white border text-[11px] font-black ${
+                    consistencyReport.status === "danger"
+                      ? "text-rose-600 border-rose-100"
+                      : consistencyReport.status === "warning"
+                        ? "text-[#B7863D] border-amber-100"
+                        : "text-emerald-700 border-emerald-100"
+                  }`}>
+                    {consistencyReport.status === "danger" ? "發現高風險衝突" : consistencyReport.status === "warning" ? "有資料需確認" : "一致性正常"}
+                  </span>
+                </div>
+
+                <div className="grid grid-cols-2 md:grid-cols-5 gap-2">
+                  {[
+                    ["異常群組", consistencyReport.issueCount, "text-stone-700"],
+                    ["高風險衝突", consistencyReport.conflicts, consistencyReport.conflicts ? "text-rose-600" : "text-emerald-600"],
+                    ["需確認", consistencyReport.warnings, consistencyReport.warnings ? "text-[#B7863D]" : "text-emerald-600"],
+                    ["可整理重複", consistencyReport.safeDuplicates, consistencyReport.safeDuplicates ? "text-[#B7863D]" : "text-emerald-600"],
+                    ["Summary 差異", consistencyReport.summaryMismatches, consistencyReport.summaryMismatches ? "text-rose-600" : "text-emerald-600"],
+                  ].map(([label, value, tone]) => (
+                    <div key={label} className="rounded-2xl border border-stone-100 bg-white/90 p-3">
+                      <p className="text-[10px] font-black text-stone-400">{label}</p>
+                      <p className={`mt-1 text-lg font-black ${tone}`}>{Number(value || 0).toLocaleString()}</p>
+                    </div>
+                  ))}
+                </div>
+
+                {consistencyReport.scope === "year" && (
+                  <div className="rounded-2xl border border-stone-100 bg-white/80 p-3">
+                    <div className="flex flex-wrap gap-2 text-[10px] font-black">
+                      <span className="px-2.5 py-1 rounded-full bg-stone-50 text-stone-500 border border-stone-100">
+                        日報 {Number(consistencyReport.sourceCounts?.daily_reports || 0).toLocaleString()}
+                      </span>
+                      <span className="px-2.5 py-1 rounded-full bg-stone-50 text-stone-500 border border-stone-100">
+                        管理師日報 {Number(consistencyReport.sourceCounts?.therapist_daily_reports || 0).toLocaleString()}
+                      </span>
+                      <span className="px-2.5 py-1 rounded-full bg-stone-50 text-stone-500 border border-stone-100">
+                        月目標 Summary {Number(consistencyReport.sourceCounts?.monthly_targets_summary || 0).toLocaleString()} / 12
+                      </span>
+                    </div>
+                  </div>
+                )}
+
+                {consistencyReport.issues.length === 0 ? (
+                  <div className="rounded-2xl border border-emerald-100 bg-white/90 p-4 text-xs font-black text-emerald-700">
+                    本次未發現重複、有效值衝突或目標 Summary 不一致。
+                  </div>
+                ) : (
+                  <div className="space-y-2 max-h-[620px] overflow-y-auto pr-1">
+                    {consistencyReport.issues.map((issue) => {
+                      const isExpanded = expandedConsistencyIssue === issue.id;
+                      return (
+                        <div key={issue.id} className={`rounded-2xl border bg-white/95 ${
+                          issue.severity === "danger" ? "border-rose-100" : "border-amber-100"
+                        }`}>
+                          <button
+                            type="button"
+                            onClick={() => setExpandedConsistencyIssue(isExpanded ? "" : issue.id)}
+                            className="w-full p-3 text-left flex flex-col md:flex-row md:items-center md:justify-between gap-2"
+                          >
+                            <div className="min-w-0">
+                              <div className="flex items-center gap-2 flex-wrap">
+                                <span className={`px-2 py-1 rounded-full text-[10px] font-black border ${
+                                  issue.severity === "danger"
+                                    ? "bg-rose-50 text-rose-600 border-rose-100"
+                                    : "bg-amber-50 text-[#B7863D] border-amber-100"
+                                }`}>
+                                  {issue.severity === "danger" ? "需處理" : "需確認"}
+                                </span>
+                                <span className="px-2 py-1 rounded-full text-[10px] font-black border border-stone-100 bg-stone-50 text-stone-500">
+                                  {issue.collectionName}
+                                </span>
+                                <p className="text-xs font-black text-stone-800">{issue.title}</p>
+                              </div>
+                              <p className="mt-1 text-[10px] font-bold text-stone-400 break-all">Key：{issue.canonicalKey || "-"}</p>
+                            </div>
+                            <div className="flex items-center gap-2 shrink-0">
+                              <span className="text-[10px] font-black text-stone-400">{Number(issue.records?.length || 0).toLocaleString()} 筆</span>
+                              <ChevronDown size={14} className={`text-stone-400 transition-transform ${isExpanded ? "rotate-180" : ""}`} />
+                            </div>
+                          </button>
+
+                          {isExpanded && (
+                            <div className="border-t border-stone-100 p-3 space-y-3">
+                              <div className="rounded-xl bg-stone-50/80 p-3">
+                                <p className={`text-[11px] font-black ${issue.severity === "danger" ? "text-rose-600" : "text-[#B7863D]"}`}>{issue.reason}</p>
+                                <p className="mt-1 text-[10px] font-bold text-stone-500">{issue.recommendation}</p>
+                              </div>
+
+                              {Array.isArray(issue.records) && issue.records.length > 0 && (
+                                <div className="space-y-2">
+                                  {issue.records.map((record, index) => (
+                                    <div key={`${issue.id}_${record.id || index}_${index}`} className="rounded-xl border border-stone-100 bg-white p-3">
+                                      <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-1">
+                                        <p className="text-[11px] font-black text-stone-700">{record.label || "資料文件"}</p>
+                                        <span className="text-[10px] font-black text-stone-400 break-all">ID：{record.id || "-"}</span>
+                                      </div>
+                                      {record.summary && <p className="mt-1 text-[10px] font-bold text-stone-500 break-words">{record.summary}</p>}
+                                    </div>
+                                  ))}
+                                </div>
+                              )}
+                            </div>
+                          )}
+                        </div>
+                      );
+                    })}
+                    {Number(consistencyReport.truncatedIssueCount || 0) > 0 && (
+                      <p className="text-[10px] font-black text-stone-400 text-center pt-1">
+                        另有 {Number(consistencyReport.truncatedIssueCount || 0).toLocaleString()} 組未顯示；請先處理前述高風險項目後重新掃描。
+                      </p>
+                    )}
                   </div>
                 )}
               </div>
