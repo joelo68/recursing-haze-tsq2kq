@@ -1,0 +1,47 @@
+{
+  "version": "Project Knowledge Base v3",
+  "basis": "Only user-supplied current deployed source files from 2026-08-18",
+  "files": [
+    "README.md",
+    "ARCHITECTURE.md",
+    "DEVELOPMENT_GUIDE.md",
+    "DEPLOYMENT.md",
+    "SYSTEM_SOURCE_MAP.md",
+    "DATA_IDENTITY_RULES.md",
+    "tests/storeIdentity.test.js"
+  ],
+  "repository_not_confirmed": [
+    ".firebaserc",
+    "firestore.indexes.json",
+    ".github/workflows"
+  ],
+  "notes": [
+    "README.md is intended to replace the default Vite template README documentation.",
+    "No runtime source code is modified by this package.",
+    "DATA_IDENTITY_RULES.md and tests/storeIdentity.test.js are copied from the user's currently supplied project versions."
+  ],
+  "second_layer": [
+    "docs/README.md",
+    "docs/FIREBASE_DATA_MODEL.md",
+    "docs/DASHBOARD_SUMMARY.md",
+    "docs/AUTH_AND_SECURITY.md",
+    "docs/TELEGRAM_AGENT.md",
+    "docs/MAINTENANCE_TOOLS.md",
+    "docs/DATA_FLOW.md"
+  ],
+  "second_layer_basis": "Only user-supplied current deployed source files from 2026-08-18; no old source file or remembered implementation used as source of truth.",
+  "security_redaction": "Knowledge Base intentionally omits actual passwords, API keys, bot tokens, full IPs and numeric Telegram chat IDs.",
+  "handoff_layer": [
+    "AI_START_HERE.md",
+    "CURRENT_STATE.md"
+  ],
+  "mandatory_closeout": "Every production code change requires a Knowledge Base Impact Check and CURRENT_STATE.md review/update.",
+  "source_of_truth_order": [
+    "current production source",
+    "CURRENT_STATE.md",
+    "Project Knowledge Base",
+    "regression tests",
+    "Git history / production tag",
+    "old conversations / AI memory"
+  ]
+}

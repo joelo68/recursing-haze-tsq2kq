@@ -189,3 +189,36 @@ npm run logs
 3. 不以 AI 記憶補寫無法由目前程式確認的事實。
 4. 不把一次性修復工具寫成永久架構。
 5. 程式已存在的特殊相容規則，必須記錄「目前狀態」與「未來建議」的差別。
+
+---
+
+## 第二層專門文件
+
+需要深入追查資料與功能時，閱讀：
+
+```text
+docs/README.md
+docs/FIREBASE_DATA_MODEL.md
+docs/DASHBOARD_SUMMARY.md
+docs/AUTH_AND_SECURITY.md
+docs/TELEGRAM_AGENT.md
+docs/MAINTENANCE_TOOLS.md
+docs/DATA_FLOW.md
+```
+
+第二層的目的不是增加規則數量，而是把「資料從哪裡來、誰負責、錯了先查哪裡」固定成專案知識，避免未來回到 page-level 猜測式修補。
+
+---
+
+## 新對話 / 新 AI / 新工程師請從這裡開始
+
+任何接手者在修改程式前，先讀：
+
+```text
+AI_START_HERE.md
+CURRENT_STATE.md
+```
+
+`AI_START_HERE.md` 定義接手順序與不可違反的開發規則。  
+`CURRENT_STATE.md` 記錄目前正式 source snapshot、已確認架構、未確認項目與下一次部署後應更新的 production state。
+

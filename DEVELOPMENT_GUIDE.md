@@ -369,3 +369,70 @@ node --check functions/telegram/prompts.js
 ```
 
 再依實際改動範圍部署。
+# 19. 強制收尾：Knowledge Base Impact Check
+
+每一次正式功能新增或修改完成後，都必須做一次 Knowledge Base Impact Check。
+
+固定流程：
+
+```text
+程式修改
+↓
+Syntax / Build
+↓
+Regression Test
+↓
+功能驗證
+↓
+Knowledge Base Impact Check
+↓
+更新受影響文件
+↓
+更新 CURRENT_STATE.md
+↓
+Git / Deploy
+↓
+部署後驗證
+```
+
+交付時必須明確寫其中一種：
+
+```text
+Knowledge Base Impact Check：
+本次不需更新。
+```
+
+或：
+
+```text
+Knowledge Base Impact Check：
+需更新：
+- docs/DATA_FLOW.md
+- docs/FIREBASE_DATA_MODEL.md
+```
+
+不可省略這一步。
+
+# 20. 新對話 / 新 AI 接手
+
+新的 AI 或工程師開始前，第一份文件固定為：
+
+```text
+AI_START_HERE.md
+```
+
+接著：
+
+```text
+CURRENT_STATE.md
+README.md
+ARCHITECTURE.md
+DEVELOPMENT_GUIDE.md
+SYSTEM_SOURCE_MAP.md
+```
+
+若對方無法讀 repository，
+由使用者先提供上述文件，再依本次修改範圍提供目前正式 source。
+
+不得要求使用者重新口述整段專案歷史，
+也不得用 AI 記憶取代目前正式 source。
