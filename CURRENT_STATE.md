@@ -3,19 +3,31 @@
 > 用途：記錄「目前正式環境已確認到哪個狀態」。  
 > 這不是 CHANGELOG，也不是開發歷史。  
 > 只有可由目前正式 source、使用者明確確認或實際驗證支持的資訊才能填入。  
-> 無法確認時寫「未由目前正式來源確認」，不得靠 AI 記憶補值。
+> 無法確認時寫「未由目前正式來源確認」，不得靠 AI 記憶補值。  
+> Last state update: 2026-08-21 15:09 (UTC+8)
 
 ---
 
 # 1. Production Source Snapshot
 
 ```text
-Source snapshot date:
+Baseline source snapshot:
 2026-08-18
 
+Latest verified production change:
+2026-08-21
+
 Source basis:
-使用者於本次 Project Knowledge Base 建立過程提供，
+Knowledge Base 的系統基線來自使用者於建立過程提供、
 並明確指定為「目前正常部署版本」的正式程式檔案。
+
+2026-08-21 另外由使用者重新提供當時實際上線版本：
+- src/App.jsx
+- src/components/RankingView.jsx
+- src/components/RegionalView.jsx
+
+上述三支完成「本月 Ranking / Regional 即時資料來源」修正後，
+使用者已完成正式前端部署。
 ```
 
 ---
@@ -29,7 +41,7 @@ Framework:
 React + Vite
 
 CURRENT_APP_VERSION:
-3.4.1
+3.4.2
 
 Frontend package deploy script:
 npm run deploy
@@ -41,7 +53,16 @@ npm run deploy
 
 ```text
 Production runtime health:
-本次建立 CURRENT_STATE.md 時未重新進行線上 runtime 驗證。
+2026-08-21 使用者已完成 v3.4.2 前端部署。
+
+正式驗證：
+✅ 詳細報表 / Ranking 本月資料已恢復即時更新
+✅ CYJ 士林店原先停留在舊數字的問題已排除
+✅ 士林店部署後顯示已由使用者確認正確
+
+Regional 同源修正：
+✅ 修正已隨 v3.4.2 一併部署
+⚠️ 本次尚未另外收到「區域分析」畫面數字的獨立驗證回報
 
 Git commit:
 未由目前正式來源確認。
@@ -160,8 +181,24 @@ recalc_queue = fallback / 防漏保險
 ### Runtime validation
 
 ```text
-本次文件更新未重新對 production 執行 Summary compare。
-目前只記錄正式 source 所定義的架構。
+2026-08-21 已完成前端資料來源偏差修正。
+
+問題：
+Ranking / Regional 在本月只要 dashboard_summary 存在，
+就可能優先使用 stale Summary，導致本月資料停在較早時間點。
+
+v3.4.2 修正：
+- App.jsx：本月 Ranking / Regional 強制允許 daily_reports 即時監聽
+- RankingView.jsx：本月不再使用 dashboard_summary 取代即時明細
+- RegionalView.jsx：本月不再以 dashboard_summary 作營運實績來源
+- 歷史月份仍維持 Summary-first
+
+Production verification：
+✅ Ranking / 詳細報表：CYJ 士林店已確認恢復正確即時數字
+⚠️ Regional / 區域分析：修正已部署，但本次尚未收到獨立畫面驗證回報
+
+本次未重新執行歷史月份 Summary compare，
+因修正內容是「本月即時來源選擇」，不是歷史 Summary rebuild。
 ```
 
 ---
@@ -345,75 +382,117 @@ GitHub Actions 自動部署存在
 
 # 12. Pending Changes
 
-目前：
+目前 Production code：
 
 ```text
-Project Knowledge Base v3 文件建立完成。
+v3.4.2 已部署。
+Ranking 本月即時資料修正已由使用者驗證成功。
 ```
 
-這是：
+目前仍待專案治理收尾：
 
 ```text
-docs-only change
+- 將本次更新後的 CURRENT_STATE.md commit / push 至 repository
+- 若採用 Production Tag，可在確認 commit 後建立 v3.4.2 對應 tag
+- 區域分析可於方便時再做一次畫面層確認
 ```
 
-因此：
+本次不需要：
 
 ```text
-不需要 Firebase Functions deploy
-不需要 frontend runtime deploy
-```
-
-需要做的是：
-
-```text
-將 Knowledge Base v3 放入 repository
-Git commit
-Git push
+Firebase Functions deploy
+Firestore Rules deploy
+歷史 Summary rebuild
 ```
 
 ---
 
 # 13. Known Issues
 
-目前：
+目前已確認：
 
 ```text
-沒有由本次正式 source / 使用者明確提供的新 Known Issue。
+2026-08-21「詳細報表本月停留舊 Summary」問題：
+✅ 已修復
+✅ 已部署
+✅ CYJ 士林店已由使用者驗證正確
 ```
 
-如果系統有已知未解問題，
-必須由使用者明確確認後才加入本節。
+尚未列為正式 Known Issue：
+
+```text
+Regional 同源修正已部署，但本次尚未取得獨立畫面驗證回報。
+這不代表已知仍有錯誤，只代表 runtime verification 尚未單獨完成。
+```
+
+除此之外：
+
+```text
+沒有由本次正式 source / 使用者明確提供的新未解 Known Issue。
+```
 
 ---
 
-# 14. Validation Status for This Documentation Change
+# 14. Validation Status for This Production Update
 
-本次改動只新增／更新 Markdown 與 Knowledge Base metadata。
-
-因此 runtime validation：
+本次正式功能修正：
 
 ```text
-Frontend build:
-不是本次文件變更的必要條件
+Frontend:
+v3.4.2
 
-Functions syntax:
-不是本次文件變更的必要條件
+Changed:
+- src/App.jsx
+- src/components/RankingView.jsx
+- src/components/RegionalView.jsx
 
-Firebase deploy:
-不需要
+Backend:
+未修改
 
-Frontend deploy:
-不需要
+Firestore Rules:
+未修改
 ```
 
-Knowledge Base 本身：
+驗證狀態：
 
 ```text
-✅ 文件結構建立
-✅ Manifest 更新
-✅ Security redaction scan
-✅ 內容基本完整性檢查
+✅ 修正檔語法 / 邏輯檢查已完成
+✅ Frontend 已完成正式部署
+✅ 詳細報表 CYJ 士林店數字已由使用者確認正確
+⚠️ 區域分析尚未收到獨立畫面驗證回報
+```
+
+Knowledge Base Impact Check：
+
+```text
+README.md                    不需更新
+ARCHITECTURE.md              不需更新
+SYSTEM_SOURCE_MAP.md         不需更新
+DEVELOPMENT_GUIDE.md         不需更新
+DEPLOYMENT.md                不需更新
+
+docs/FIREBASE_DATA_MODEL.md  不需更新
+docs/DASHBOARD_SUMMARY.md    不需更新
+docs/DATA_FLOW.md            不需更新
+docs/AUTH_AND_SECURITY.md    不需更新
+docs/TELEGRAM_AGENT.md       不需更新
+docs/MAINTENANCE_TOOLS.md    不需更新
+
+DATA_IDENTITY_RULES.md       不需更新
+AI_START_HERE.md             不需更新
+
+CURRENT_STATE.md             ✅ 本次已更新
+```
+
+理由：
+
+```text
+Knowledge Base 原本就定義：
+本月 → 即時 detail
+歷史 → verified Summary-first
+
+本次是把偏離此既定架構的前端程式修回正確行為，
+不是變更系統架構本身。
 ```
 
 ---
