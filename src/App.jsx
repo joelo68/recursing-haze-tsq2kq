@@ -47,7 +47,7 @@ import {
 // ==========================================
 // ★ 系統核心版本號 (終極動態快取版)
 // ==========================================
-const CURRENT_APP_VERSION = "3.3.8";
+const CURRENT_APP_VERSION = "3.4.2";
 const LOGIN_LOCATION_ENDPOINT = "https://resolveloginlocation-hyhcwrnyaa-uc.a.run.app";
 
 
@@ -2467,7 +2467,11 @@ export default function App() {
         isHistoricalRefreshRequested ||
         (
           (!isStoreAnalysisScopedView || !storeAnalysisSelectedStore) &&
-          (!isSummaryFirstReportView || (currentReportSummaryReady && !hasUsableDashboardSummary))
+          (
+            !isSummaryFirstReportView ||
+            isCurrentMonth ||
+            (currentReportSummaryReady && !hasUsableDashboardSummary)
+          )
         )
       );
 

@@ -303,6 +303,7 @@ const RankingView = () => {
           skincareSalesTotal: Number(store.skincareSales ?? store.skincareSalesTotal ?? 0),
           trafficTotal: Number(store.traffic ?? store.trafficTotal ?? 0),
           newCustomersTotal: Number(store.newCustomers ?? store.newCustomersTotal ?? 0),
+          newCustomerSalesTotal: Number(store.newCustomerSales ?? store.newCustomerRevenue ?? store.newCustomerSalesTotal ?? 0),
           newCustomerClosingsTotal: Number(store.newCustomerClosings ?? store.newCustomerClosingsTotal ?? 0),
           cashTarget,
           achievement: cashTarget > 0 ? (cashTotal / cashTarget) * 100 : 0,
@@ -330,12 +331,21 @@ const RankingView = () => {
       console.info("[RankingView target source]", targetSourceDebug);
     }
 
-    const summaryRows = normalizeSummaryStoreRows(currentDashboardSummary);
+    // ★ 本月必須使用即時 daily_reports；dashboard_summary 僅供歷史月份 Summary-first。
+    const now = new Date();
+    const isCurrentMonth =
+      Number(selectedYear) === now.getFullYear() &&
+      Number(selectedMonth) === (now.getMonth() + 1);
+
+    const summaryRows = isCurrentMonth
+      ? []
+      : normalizeSummaryStoreRows(currentDashboardSummary);
+
     if (summaryRows.length > 0) {
       return summaryRows.filter(store => !(auditExclusions || []).includes(store.displayName));
     }
 
-    if (currentReportSummaryReady && (!allReports || allReports.length === 0)) return [];
+    if (!isCurrentMonth && currentReportSummaryReady && (!allReports || allReports.length === 0)) return [];
     if (!allReports) return [];
 
     const targetYear = parseInt(selectedYear);
@@ -367,6 +377,7 @@ const RankingView = () => {
           skincareSalesTotal: 0,
           trafficTotal: 0,
           newCustomersTotal: 0,
+          newCustomerSalesTotal: 0,
           newCustomerClosingsTotal: 0
         };
       }
@@ -388,6 +399,7 @@ const RankingView = () => {
       d.skincareSalesTotal += (Number(report.skincareSales) || 0);
       d.trafficTotal += (Number(report.traffic) || 0);
       d.newCustomersTotal += (Number(report.newCustomers) || 0);
+      d.newCustomerSalesTotal += (Number(report.newCustomerSales ?? report.newCustomerRevenue) || 0);
       d.newCustomerClosingsTotal += (Number(report.newCustomerClosings) || 0);
     });
 
@@ -466,7 +478,7 @@ const RankingView = () => {
   // --- CSV 匯出 ---
   const handleExportCSV = () => {
     const headers = [
-      "排名,店名,區域,現金業績,現金達成率,權責業績,權責目標,權責達成率,保養品業績,課程操作人數,消耗客單,新客數,新客留單",
+      "排名,店名,區域,現金業績,現金達成率,權責業績,權責目標,權責達成率,保養品業績,課程操作人數,消耗客單,新客數,新客業績,新客留單",
     ];
     const rows = sortedData.map((store, index) => {
       return [
@@ -482,6 +494,7 @@ const RankingView = () => {
         store.trafficTotal || 0,
         store.trafficASP || 0,
         store.newCustomersTotal || 0,
+        store.newCustomerSalesTotal || 0,
         store.newCustomerClosingsTotal || 0,
       ].join(",");
     });
@@ -539,6 +552,17 @@ const RankingView = () => {
             </p>
           </div>
         </div>
+
+        <div className="grid grid-cols-2 gap-4 mt-4 pt-3 border-t border-stone-50">
+          <div className="space-y-1">
+            <p className="text-xs text-stone-400">新客業績</p>
+            <p className="font-mono font-bold text-amber-600">{fmtMoney(store.newCustomerSalesTotal)}</p>
+          </div>
+          <div className="space-y-1">
+            <p className="text-xs text-stone-400">留單</p>
+            <p className="font-mono font-bold text-stone-700">{fmtNum(store.newCustomerClosingsTotal)}</p>
+          </div>
+        </div>
       </div>
     );
   };
@@ -573,45 +597,47 @@ const RankingView = () => {
             <table className="w-full text-left border-collapse whitespace-nowrap">
               <thead className="bg-stone-50 font-bold text-xs text-stone-500 uppercase sticky top-0 z-10">
                 <tr>
-                  <th className="p-4 w-16 text-center">排名</th>
-                  <th className="p-4 cursor-pointer hover:text-stone-700" onClick={() => requestSort("displayName")}>店名</th>
-                  <th className="p-4 cursor-pointer text-right hover:text-stone-700" onClick={() => requestSort("cashTotal")}>現金業績</th>
-                  <th className="p-4 cursor-pointer text-right hover:text-stone-700" onClick={() => requestSort("achievement")}>現金達成</th>
+                  <th className="px-3 py-3.5 w-14 text-center">排名</th>
+                  <th className="px-3 py-3.5 cursor-pointer hover:text-stone-700" onClick={() => requestSort("displayName")}>店名</th>
+                  <th className="px-3 py-3.5 cursor-pointer text-right hover:text-stone-700" onClick={() => requestSort("cashTotal")}>現金業績</th>
+                  <th className="px-3 py-3.5 cursor-pointer text-right hover:text-stone-700" onClick={() => requestSort("achievement")}>現金達成</th>
                   
-                  <th className="p-4 cursor-pointer text-right hover:text-blue-700 text-blue-600/80" onClick={() => requestSort("accrualTotal")}>權責業績</th>
-                  <th className="p-4 cursor-pointer text-right hover:text-blue-700 text-blue-600/80" onClick={() => requestSort("accrualAchievement")}>權責達成</th>
+                  <th className="px-3 py-3.5 cursor-pointer text-right hover:text-blue-700 text-blue-600/80" onClick={() => requestSort("accrualTotal")}>權責業績</th>
+                  <th className="px-3 py-3.5 cursor-pointer text-right hover:text-blue-700 text-blue-600/80" onClick={() => requestSort("accrualAchievement")}>權責達成</th>
                   
-                  <th className="p-4 cursor-pointer text-right hover:text-stone-700" onClick={() => requestSort("trafficTotal")}>客流</th>
-                  <th className="p-4 cursor-pointer text-right hover:text-stone-700" onClick={() => requestSort("newCustomersTotal")}>新客數</th>
-                  <th className="p-4 cursor-pointer text-right hover:text-stone-700" onClick={() => requestSort("newCustomerClosingsTotal")}>留單</th>
+                  <th className="px-3 py-3.5 cursor-pointer text-right hover:text-stone-700" onClick={() => requestSort("trafficTotal")}>客流</th>
+                  <th className="px-3 py-3.5 cursor-pointer text-right hover:text-stone-700" onClick={() => requestSort("newCustomersTotal")}>新客數</th>
+                  <th className="px-3 py-3.5 cursor-pointer text-right hover:text-amber-700 text-amber-600/90" onClick={() => requestSort("newCustomerSalesTotal")}>新客業績</th>
+                  <th className="px-3 py-3.5 cursor-pointer text-right hover:text-stone-700" onClick={() => requestSort("newCustomerClosingsTotal")}>留單</th>
                 </tr>
               </thead>
               <tbody className="text-sm divide-y divide-stone-50">
                 {sortedData.map((store, index) => (
                   <tr key={store.name} className="hover:bg-stone-50 transition-colors">
-                    <td className="p-4 text-center text-stone-400 font-bold">{index + 1}</td>
-                    <td className="p-4 font-bold text-stone-700">{store.displayName}</td>
-                    <td className="p-4 text-right font-mono font-bold text-stone-700">{fmtMoney(store.cashTotal)}</td>
+                    <td className="px-3 py-3.5 text-center text-stone-400 font-bold">{index + 1}</td>
+                    <td className="px-3 py-3.5 font-bold text-stone-700">{store.displayName}</td>
+                    <td className="px-3 py-3.5 text-right font-mono font-bold text-stone-700">{fmtMoney(store.cashTotal)}</td>
                     
-                    <td className={`p-4 text-right font-mono font-bold ${store.achievement >= 100 ? "text-emerald-500" : "text-amber-500"}`}>
+                    <td className={`px-3 py-3.5 text-right font-mono font-bold ${store.achievement >= 100 ? "text-emerald-500" : "text-amber-500"}`}>
                       {store.achievement.toFixed(1)}%
                     </td>
 
-                    <td className="p-4 text-right font-mono font-bold text-blue-600">
+                    <td className="px-3 py-3.5 text-right font-mono font-bold text-blue-600">
                       {fmtMoney(store.accrualTotal)}
                     </td>
                     
-                    <td className={`p-4 text-right font-mono font-bold ${store.accrualAchievement >= 100 ? "text-emerald-500" : "text-blue-400"}`}>
+                    <td className={`px-3 py-3.5 text-right font-mono font-bold ${store.accrualAchievement >= 100 ? "text-emerald-500" : "text-blue-400"}`}>
                       {store.accrualAchievement.toFixed(1)}%
                     </td>
 
-                    <td className="p-4 text-right font-mono text-stone-600">{fmtNum(store.trafficTotal)}</td>
-                    <td className="p-4 text-right font-mono text-stone-600">{fmtNum(store.newCustomersTotal)}</td>
-                    <td className="p-4 text-right font-mono text-stone-600">{fmtNum(store.newCustomerClosingsTotal)}</td>
+                    <td className="px-3 py-3.5 text-right font-mono text-stone-600">{fmtNum(store.trafficTotal)}</td>
+                    <td className="px-3 py-3.5 text-right font-mono text-stone-600">{fmtNum(store.newCustomersTotal)}</td>
+                    <td className="px-3 py-3.5 text-right font-mono font-bold text-amber-600">{fmtMoney(store.newCustomerSalesTotal)}</td>
+                    <td className="px-3 py-3.5 text-right font-mono text-stone-600">{fmtNum(store.newCustomerClosingsTotal)}</td>
                   </tr>
                 ))}
                 {sortedData.length === 0 && (
-                  <tr><td colSpan={13} className="p-8 text-center text-stone-400">目前尚無資料</td></tr>
+                  <tr><td colSpan={10} className="p-8 text-center text-stone-400">目前尚無資料</td></tr>
                 )}
               </tbody>
             </table>

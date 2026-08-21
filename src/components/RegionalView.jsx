@@ -179,6 +179,12 @@ const RegionalView = () => {
     const y = parseInt(selectedYear);
     const m = parseInt(selectedMonth);
 
+    // ★ 本月必須使用即時 daily_reports；dashboard_summary 僅供歷史月份 Summary-first。
+    const now = new Date();
+    const isCurrentMonth =
+      y === now.getFullYear() &&
+      m === (now.getMonth() + 1);
+
     const summaryStoreRows = currentDashboardSummary?.stores
       ? (Array.isArray(currentDashboardSummary.stores) ? currentDashboardSummary.stores : Object.values(currentDashboardSummary.stores || {}))
       : [];
@@ -189,8 +195,8 @@ const RegionalView = () => {
       if (core) summaryStoreMap.set(core, store);
     });
 
-    const useSummary = summaryStoreMap.size > 0;
-    if (!useSummary && currentReportSummaryReady && (!allReports || allReports.length === 0)) return [];
+    const useSummary = !isCurrentMonth && summaryStoreMap.size > 0;
+    if (!isCurrentMonth && !useSummary && currentReportSummaryReady && (!allReports || allReports.length === 0)) return [];
 
     const stats = Object.keys(managers || {}).map(mgr => ({
       manager: mgr || "未命名",
@@ -261,7 +267,8 @@ const RegionalView = () => {
           });
         }
 
-        storeStat.budget = resolveStoreBudget(coreName, fullName, summaryStore, y, m);
+        // 本月目標也不要優先吃 stale dashboard_summary；改由 monthly_targets_summary / budgets 解析。
+        storeStat.budget = resolveStoreBudget(coreName, fullName, useSummary ? summaryStore : null, y, m);
         region.budgetTotal += storeStat.budget || 0;
         storeStat.achievement = storeStat.budget > 0 ? (storeStat.cashTotal / storeStat.budget) * 100 : 0;
 
