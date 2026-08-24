@@ -9186,6 +9186,28 @@ exports.recalculateMonthlyData = onRequest({ cors: true }, async (req, res) => {
 
 const SUMMARY_REPAIR_BRANDS = ["cyj", "anniu", "yibo"];
 
+// ★ 品牌正式進入本系統的 Summary 自動修復起始月。
+// 這不是品牌成立日期，而是「自此月份起，歷史資料才允許被自動 Summary Repair 處理」的安全下限。
+// 伊啵於 2026-01～2026-03 尚未正式使用本系統，因此這些月份若殘留舊 flag / queue，
+// 應直接結案為 pre-system month，不能每 5 分鐘反覆讀完整 monthly_targets 後再失敗。
+// 僅先鎖定已確認案例；其他品牌維持既有行為，避免擴大影響範圍。
+const SUMMARY_REPAIR_DATA_START_MONTH = Object.freeze({
+  yibo: "2026-04",
+});
+
+function getSummaryRepairDataStartMonth(brandId = "") {
+  const normalizedBrandId = getBackendDirtyBrandId(brandId);
+  const yearMonth = String(SUMMARY_REPAIR_DATA_START_MONTH[normalizedBrandId] || "").trim();
+  return /^\d{4}-\d{2}$/.test(yearMonth) ? yearMonth : "";
+}
+
+function isBeforeSummaryRepairDataStartMonth(brandId = "", yearMonth = "") {
+  const normalizedYearMonth = String(yearMonth || "").trim();
+  if (!/^\d{4}-\d{2}$/.test(normalizedYearMonth)) return false;
+  const startMonth = getSummaryRepairDataStartMonth(brandId);
+  return Boolean(startMonth && normalizedYearMonth < startMonth);
+}
+
 // Queue fallback 是「防漏保險」，不是正常主流程。
 // 正常歷史異動由 summary_recalc_flags 每 5 分鐘即時處理；
 // fallback 平時每 30 分鐘分頁巡檢 50 筆；若尚有下一頁則暫時每 5 分鐘續掃，快速消化既有 backlog。
@@ -10662,6 +10684,18 @@ async function finalizeMonthReportAuto({ brandId, yearMonth, trigger = "auto_wor
     throw new Error("brandId 或 yearMonth 格式錯誤");
   }
 
+  // 非正式使用期間不應建立 0 業績 Summary，也不應進入 monthly_targets full fallback。
+  // force=true 保留人工診斷能力；一般排程 / 非強制手動呼叫則安全略過。
+  if (!force && isBeforeSummaryRepairDataStartMonth(brandId, yearMonth)) {
+    return {
+      skipped: true,
+      reason: "before_brand_data_start_month",
+      brandId,
+      yearMonth,
+      dataStartMonth: getSummaryRepairDataStartMonth(brandId),
+    };
+  }
+
   const flagRef = getSummaryCollection(brandId, "summary_recalc_flags").doc(yearMonth);
   const flagSnap = await flagRef.get();
   const flagData = flagSnap.exists ? flagSnap.data() || {} : {};
@@ -10938,6 +10972,32 @@ async function collectReadyDirtySummaryFlags() {
           return;
         }
 
+        // 品牌正式使用本系統前的歷史月份不是「資料遺失」；
+        // 直接結案，避免舊 dirty flag 每 5 分鐘反覆觸發 Summary rebuild。
+        if (isBeforeSummaryRepairDataStartMonth(brandId, yearMonth)) {
+          flagCleanupBatch.set(docSnap.ref, {
+            status: "ignored_pre_system_month",
+            dirty: false,
+            pendingCount: 0,
+            cleanupReason: "before_brand_data_start_month",
+            dataStartMonth: getSummaryRepairDataStartMonth(brandId),
+            lastError: admin.firestore.FieldValue.delete(),
+            lastErrorAt: admin.firestore.FieldValue.delete(),
+            lastErrorAtText: admin.firestore.FieldValue.delete(),
+            rebuildAfterAtText: admin.firestore.FieldValue.delete(),
+            lockedBy: admin.firestore.FieldValue.delete(),
+            lockId: admin.firestore.FieldValue.delete(),
+            lockUntilText: admin.firestore.FieldValue.delete(),
+            cleanedBy: "auto_summary_repair_worker",
+            cleanedAt: admin.firestore.FieldValue.serverTimestamp(),
+            cleanedAtText: cleanupAtText,
+            updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+            updatedAtText: cleanupAtText,
+          }, { merge: true });
+          flagCleanupCount += 1;
+          return;
+        }
+
         const rebuildAtText = data.rebuildAfterAtText || data.updatedAtText || data.lastDirtyAtText || "";
         if (rebuildAtText) {
           const t = new Date(rebuildAtText).getTime();
@@ -10972,6 +11032,7 @@ async function collectReadyDirtySummaryFlags() {
       let normalizedCount = 0;
       let ignoredLiveCount = 0;
       let ignoredFutureCount = 0;
+      let ignoredPreSystemCount = 0;
       let invalidCount = 0;
       let actionableCount = 0;
       const normalizedAtText = new Date(now).toISOString();
@@ -11017,6 +11078,28 @@ async function collectReadyDirtySummaryFlags() {
           return;
         }
 
+        // 品牌正式使用本系統前的歷史月份不應進入 Summary repair queue。
+        // 在建立 queueGroups 前直接結案，避免 fallback 再把它重新加回 jobMap。
+        if (isBeforeSummaryRepairDataStartMonth(brandId, yearMonth)) {
+          queueCleanupBatch.set(docSnap.ref, {
+            ...(needsNormalization ? {
+              affectedYearMonth: yearMonth,
+              normalizedBy: "auto_summary_queue_fallback",
+              normalizedAt: admin.firestore.FieldValue.serverTimestamp(),
+              normalizedAtText,
+            } : {}),
+            status: "ignored_pre_system_month",
+            cleanupReason: "before_brand_data_start_month",
+            dataStartMonth: getSummaryRepairDataStartMonth(brandId),
+            cleanedBy: "auto_summary_queue_fallback",
+            cleanedAt: admin.firestore.FieldValue.serverTimestamp(),
+            cleanedAtText: normalizedAtText,
+          }, { merge: true });
+          if (needsNormalization) normalizedCount += 1;
+          ignoredPreSystemCount += 1;
+          return;
+        }
+
         // 舊格式相容：歷史 queue 可能只有 yearMonth / date / sourceDate。
         if (needsNormalization) {
           queueCleanupBatch.set(docSnap.ref, {
@@ -11039,7 +11122,7 @@ async function collectReadyDirtySummaryFlags() {
         }
       });
 
-      const cleanupCount = ignoredLiveCount + ignoredFutureCount + invalidCount;
+      const cleanupCount = ignoredLiveCount + ignoredFutureCount + ignoredPreSystemCount + invalidCount;
       if (normalizedCount + cleanupCount > 0) await queueCleanupBatch.commit();
 
       // 防循環：連續三頁既沒有可處理月份，也沒有任何可清理／正規化資料時，暫停六小時。
@@ -11052,6 +11135,7 @@ async function collectReadyDirtySummaryFlags() {
         lastNormalizedCount: normalizedCount,
         lastIgnoredLiveCount: ignoredLiveCount,
         lastIgnoredFutureCount: ignoredFutureCount,
+        lastIgnoredPreSystemCount: ignoredPreSystemCount,
         lastInvalidCount: invalidCount,
         consecutiveNoProgressPages,
         lastCleanupAtText: normalizedAtText,
