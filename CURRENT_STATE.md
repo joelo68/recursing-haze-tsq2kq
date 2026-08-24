@@ -4,7 +4,7 @@
 > 這不是 CHANGELOG，也不是開發歷史。  
 > 只有可由目前正式 source、使用者明確確認或實際驗證支持的資訊才能填入。  
 > 無法確認時寫「未由目前正式來源確認」，不得靠 AI 記憶補值。  
-> Last state update: 2026-08-21 15:09 (UTC+8)
+> Last state update: 2026-08-24 12:14 (UTC+8)
 
 ---
 
@@ -15,7 +15,7 @@ Baseline source snapshot:
 2026-08-18
 
 Latest verified production change:
-2026-08-21
+2026-08-24
 
 Source basis:
 Knowledge Base 的系統基線來自使用者於建立過程提供、
@@ -94,14 +94,28 @@ functions/telegram/prompts.js
 ### Backend Deployment State
 
 ```text
-目前程式版本：
-使用者指定為目前正常部署版本。
+2026-08-24 已部署：
+- functions:repairDirtySummaries
+- functions:repairDirtySummaryNow
+
+Production revision:
+repairdirtysummaries-00023-goc
+
+Functions runtime:
+Node.js 22
+
+正式修正：
+- Yibo Summary Repair data start month = 2026-04
+- 2026-01～03 pre-system months 不再進入自動 rebuild
+- pre-system dirty flags 會結案為 ignored_pre_system_month
+- pre-system queue rows 會在 fallback 掃描時結案
+- 正式使用月份的 Raw=0 安全中止機制仍保留
 
 最後一次 backend deploy 的 Git commit:
 未由目前正式來源確認。
 
-最後一次 backend deploy 時間:
-未由目前正式來源確認。
+Deployment time:
+2026-08-24 約 12:02 (UTC+8)
 ```
 
 ---
@@ -562,3 +576,30 @@ Knowledge Base 版本更新
 ```text
 不要寫成 production state
 ```
+
+---
+
+# Production Fix 2026-08-24：Yibo Pre-system Summary Repair Loop
+
+```text
+Incident:
+伊啵 2026-01～03 尚未正式使用系統，
+舊 dirty flags 卻讓 repairDirtySummaries 每 5 分鐘重試。
+
+Impact:
+monthly_targets full collection fallback
+→ 約 60 docs / execution
+→ 形成主要 Firestore read hotspot
+
+Root cause:
+pre-system months 被當成應修復的歷史月份。
+
+Fix:
+Yibo Summary Repair dataStartMonth = 2026-04
+
+Result:
+✅ 2026-01～03 不再進 repair job
+✅ 兩個連續 5 分鐘排程週期皆回報無到期 dirty/pending
+✅ 原本 primary retry loop 已停止
+```
+

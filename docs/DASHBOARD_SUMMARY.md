@@ -665,3 +665,132 @@ Core Consistency Audit
 ```
 
 做部署後驗證。
+
+---
+
+# Production Update 2026-08-24：品牌正式資料起始月保護
+
+## 問題
+
+`repairDirtySummaries` 會每 5 分鐘巡檢 historical dirty / pending months。
+
+已確認案例：
+
+```text
+yibo / 2026-01
+yibo / 2026-02
+yibo / 2026-03
+```
+
+伊啵在上述月份尚未正式使用本系統，因此：
+
+```text
+daily_reports = 0
+```
+
+是正常的「系統啟用前月份」，不是 Raw 資料遺失。
+
+舊流程會：
+
+```text
+dirty flag
+→ Summary repair
+→ monthly_targets_summary coverage 不完整
+→ full monthly_targets fallback
+→ daily_reports = 0
+→ 安全中止
+→ flag 回到 dirty
+→ 5 分鐘後再次重試
+```
+
+造成無效重試與大量 Firestore reads。
+
+## 正式治理規則
+
+目前自動 Summary Repair 增加品牌資料起始下限：
+
+```text
+yibo:
+dataStartMonth = 2026-04
+```
+
+意義：
+
+```text
+yearMonth < dataStartMonth
+→ ignored_pre_system_month
+→ dirty = false
+→ pendingCount = 0
+→ 不建立 0 業績 verified Summary
+→ 不進 monthly_targets full fallback
+```
+
+這不是品牌成立日期，也不是年度 KPI 平均值起算設定，而是：
+
+> Summary 自動修復可處理歷史資料的安全下限。
+
+目前只設定已由正式營運事實確認的伊啵案例；其他品牌維持既有行為。
+
+## 安全性
+
+原有 Raw=0 防護仍保留。
+
+因此：
+
+```text
+伊啵 2026-01～03
+→ pre-system month → ignore
+
+伊啵 2026-04 之後
+→ 若已有店家／目標但 daily_reports = 0
+→ 仍中止 Summary rebuild 並報錯
+```
+
+不可把所有「0 Raw」都視為正常月份。
+
+## Flag / Queue
+
+`summary_recalc_flags`：
+
+```text
+status: ignored_pre_system_month
+cleanupReason: before_brand_data_start_month
+dirty: false
+pendingCount: 0
+```
+
+`recalc_queue` fallback 掃描到相同月份時：
+
+```text
+status: ignored_pre_system_month
+```
+
+並且不再建立 repair job。
+
+`force=true` 的人工診斷入口仍可強制執行。
+
+## Production Validation
+
+2026-08-24 部署後兩個連續排程週期：
+
+```text
+12:04
+✅ 目前沒有到期的 dirty / pending 月份
+
+12:09
+✅ 目前沒有到期的 dirty / pending 月份
+```
+
+10 分鐘 Logs 期間未再觀察到：
+
+```text
+yibo/2026-01～03 repair job
+monthly_targets_summary full collection fallback
+Summary 自動修復失敗
+```
+
+因此原本每 5 分鐘重試的主要循環已停止。
+
+Queue fallback steady interval 為 30 分鐘；
+本次 10 分鐘 runtime validation 尚未單獨覆蓋到完整 queue fallback 週期。
+

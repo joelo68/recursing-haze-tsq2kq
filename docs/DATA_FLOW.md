@@ -867,3 +867,57 @@ scope 太大
 - Maintenance repair architecture
 
 純視覺調整不需要更新。
+
+---
+
+# Production Update 2026-08-24：Pre-system Month Repair Flow
+
+歷史 Summary repair 在進入 rebuild 前，新增品牌資料起始月份判斷：
+
+```text
+summary_recalc_flags / recalc_queue
+        │
+        ▼
+yearMonth 是否早於 brand dataStartMonth？
+        │
+   ┌────┴────┐
+  YES       NO
+   │         │
+   ▼         ▼
+ignored     正常 historical
+pre-system  Summary repair
+month
+   │
+   ├─ dirty = false
+   ├─ pending = 0
+   ├─ queue 不再形成 job
+   └─ 不進 monthly_targets full fallback
+```
+
+目前已確認：
+
+```text
+yibo dataStartMonth = 2026-04
+```
+
+因此：
+
+```text
+yibo 2026-01～03
+→ 系統啟用前月份
+→ 不視為資料遺失
+→ 不建立 Summary
+```
+
+但正式使用月份仍保留：
+
+```text
+daily_reports = 0
++
+已有 org / targets
+→ 中止 rebuild
+→ 報錯
+```
+
+這個安全防護不可取消。
+

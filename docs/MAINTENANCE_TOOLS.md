@@ -922,3 +922,72 @@ npm run build
 ```bash
 node --check functions/index.js
 ```
+
+---
+
+# Production Update 2026-08-24：Summary Repair 防循環治理
+
+## 背景
+
+已確認伊啵 2026-01～03 尚未正式使用本系統。
+
+舊 `summary_recalc_flags` 若殘留 dirty，
+會讓 `repairDirtySummaries` 每 5 分鐘重新嘗試，
+並在 build 前讀取完整年度 `monthly_targets` fallback。
+
+## 現行處理
+
+自動 worker 遇到品牌正式資料起始月份以前的 historical month：
+
+```text
+status = ignored_pre_system_month
+cleanupReason = before_brand_data_start_month
+dirty = false
+pendingCount = 0
+```
+
+並清除舊 repair error / lock / rebuild debounce 狀態。
+
+Queue fallback 掃描到同類 pending 文件時也會結案為：
+
+```text
+ignored_pre_system_month
+```
+
+而不是重新加入 repair job。
+
+## 操作原則
+
+看到：
+
+```text
+ignored_pre_system_month
+```
+
+不要手動重建該月份 Summary，除非已確認該品牌當時其實已有正式系統資料。
+
+人工 HTTP repair 的 `force=true` 保留作診斷能力，
+但不應用來把「尚未使用系統的月份」強制建立成 0 業績 Summary。
+
+## 流量觀察
+
+此次事故曾表現為：
+
+```text
+/brands/*/monthly_targets
+每次完整讀取約 60 docs
+```
+
+根因不是 Telegram Agent，而是歷史 Summary Repair 的 pre-system month retry loop。
+
+部署後應優先觀察：
+
+```text
+repairDirtySummaries logs
+monthly_targets Query Insights
+summary_recalc_flags
+recalc_queue
+```
+
+而不是削弱當月 `daily_reports` 即時監聽。
+
