@@ -405,6 +405,38 @@ const normalizeSecurityConfig = (config = {}) => ({
   allowTrustedDeviceSelfApproval: config.allowTrustedDeviceSelfApproval !== false,
 });
 
+const DEVICE_APPROVAL_ROLE_LABELS = {
+  director: "高階主管",
+  trainer: "教專",
+  manager: "區長",
+  store: "店經理",
+  therapist: "管理師",
+};
+
+const formatDeviceApprovalNoticeTime = (value = "") => {
+  if (!value) return "剛剛";
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return "剛剛";
+  return new Intl.DateTimeFormat("zh-TW", {
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    hour12: false,
+  }).format(date);
+};
+
+const getDeviceApprovalResolvedText = (request = {}) => {
+  const resolvedBy = String(request?.resolvedBy || "其他最高管理者").trim() || "其他最高管理者";
+  const status = String(request?.status || "");
+  if (status === "approved") return `已由 ${resolvedBy} 完成確認`;
+  if (status === "observing") return `已由 ${resolvedBy} 設為繼續觀察`;
+  if (status === "reverify_required") return `已由 ${resolvedBy} 要求重新驗證`;
+  if (status === "blocked") return `已由 ${resolvedBy} 禁止此裝置使用`;
+  if (status === "rejected") return `已由 ${resolvedBy} 完成安全處理`;
+  return `已由 ${resolvedBy} 完成處理`;
+};
+
 
 const getClientDeviceInfo = () => {
   const ua = typeof navigator !== "undefined" ? navigator.userAgent : "";
@@ -561,6 +593,12 @@ export default function App() {
   });
   const [isDeviceApprovalPanelOpen, setIsDeviceApprovalPanelOpen] = useState(false);
   const [guidedDeviceApprovalRequestId, setGuidedDeviceApprovalRequestId] = useState("");
+  // ★ 最高管理者 Security Action Card：只提醒「需要主管協助」的正式模式待確認申請。
+  const [superAdminDeviceNotice, setSuperAdminDeviceNotice] = useState(null);
+  const [superAdminApprovalFocusId, setSuperAdminApprovalFocusId] = useState("");
+  const superAdminNoticeSeenRef = useRef(new Set());
+  const superAdminNoticeLookupRef = useRef({ key: "", inFlight: false });
+  const superAdminNoticeResolveTimerRef = useRef(null);
   const [pendingDeviceLogin, setPendingDeviceLogin] = useState(null);
   const pendingDeviceLoginRef = useRef(null);
   // 僅保存在目前頁面記憶體中，供需要較高權限的裝置確認動作再次向後端驗證。
@@ -703,6 +741,8 @@ export default function App() {
   }, [userRole, currentUser, currentSecurityAccountKey, isDeviceSecuritySuperAdmin, getCollectionPath, getSecuritySummaryDocPath]);
 
   const openDeviceApprovalPanel = useCallback(() => {
+    // 從 Header Badge 手動進入時顯示完整待確認清單，不鎖定特定提醒案件。
+    setSuperAdminApprovalFocusId("");
     setIsDeviceApprovalPanelOpen(true);
   }, []);
 
@@ -1091,6 +1131,174 @@ export default function App() {
     deviceApprovalSummary?.myPendingCount,
     getCollectionPath,
   ]);
+
+  // ★ Highest-admin Security Action Card
+  // 正式模式下，最高管理者原本就透過 brandPendingCount 即時知道品牌有待確認案件。
+  // 這裡不增加 polling：只有品牌待確認摘要「真的改變」時，才做一次小型 pending 查詢，
+  // 並且只挑 selfApprovalAllowed === false（需要最高管理者協助）的案件主動提醒。
+  // 同一 requestId 在同一登入工作階段只主動出現一次；按「稍後處理」後 Badge 仍會保留。
+  useEffect(() => {
+    const pendingCount = Math.max(0, Number(deviceApprovalSummary?.brandPendingCount || 0));
+    const lookupKey = [
+      currentBrandId,
+      pendingCount,
+      deviceApprovalSummary?.latestAtText || "",
+    ].join("|");
+
+    const canNotify = Boolean(
+      isDeviceSecuritySuperAdmin &&
+      securityConfig?.deviceApprovalMode === "enforce" &&
+      currentDeviceTrust?.status === "trusted" &&
+      pendingCount > 0 &&
+      !guidedDeviceApprovalRequestId
+    );
+
+    if (!canNotify) {
+      if (pendingCount === 0 || securityConfig?.deviceApprovalMode !== "enforce" || !isDeviceSecuritySuperAdmin) {
+        superAdminNoticeLookupRef.current.key = "";
+        setSuperAdminDeviceNotice(null);
+      }
+      return undefined;
+    }
+
+    // 主管已經主動打開完整待確認 Panel 時，不再另外彈卡干擾；
+    // 同時記住目前摘要版本，避免關閉 Panel 後又補跳剛剛已經看過的案件。
+    if (isDeviceApprovalPanelOpen) {
+      superAdminNoticeLookupRef.current.key = lookupKey;
+      return undefined;
+    }
+
+    if (superAdminDeviceNotice) return undefined;
+
+    const lookupState = superAdminNoticeLookupRef.current;
+    if (lookupState.inFlight || lookupState.key === lookupKey) return undefined;
+
+    lookupState.inFlight = true;
+    lookupState.key = lookupKey;
+    let cancelled = false;
+
+    (async () => {
+      try {
+        // 只查「pending + 無法自行認證」的小集合；只有摘要改變時才執行一次。
+        // 不是常駐全清單監聽，也不是固定秒數輪詢。
+        const pendingQuery = query(
+          getCollectionPath("device_approval_requests"),
+          where("status", "==", "pending"),
+          where("selfApprovalAllowed", "==", false),
+          limit(20)
+        );
+        const snap = await getDocs(pendingQuery);
+        const now = Date.now();
+        const actionable = snap.docs
+          .map((docSnap) => ({ id: docSnap.id, ...(docSnap.data() || {}) }))
+          .filter((request) => (
+            request.status === "pending" &&
+            Number(request.expiresAtMs || 0) > now &&
+            request.selfApprovalAllowed === false &&
+            request.approvalMode === "enforce" &&
+            !superAdminNoticeSeenRef.current.has(String(request.id || ""))
+          ))
+          .sort((a, b) => String(b.requestedAtText || "").localeCompare(String(a.requestedAtText || "")))[0];
+
+        if (cancelled || !actionable?.id) return;
+        const requestId = String(actionable.id);
+        superAdminNoticeSeenRef.current.add(requestId);
+        setSuperAdminDeviceNotice({ ...actionable, id: requestId, uiStatus: "pending" });
+      } catch (error) {
+        console.warn("最高管理者待確認提醒載入失敗:", error);
+      } finally {
+        superAdminNoticeLookupRef.current.inFlight = false;
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [
+    currentBrandId,
+    isDeviceSecuritySuperAdmin,
+    securityConfig?.deviceApprovalMode,
+    currentDeviceTrust?.status,
+    deviceApprovalSummary?.brandPendingCount,
+    deviceApprovalSummary?.latestAtText,
+    guidedDeviceApprovalRequestId,
+    isDeviceApprovalPanelOpen,
+    superAdminDeviceNotice,
+    getCollectionPath,
+  ]);
+
+  // 通知卡顯示期間只監聽「這一筆 request」；如果其他最高管理者先完成，
+  // 立刻把卡片轉成「已由 XXX 完成確認」，短暫顯示後自動收起。
+  useEffect(() => {
+    const requestId = String(superAdminDeviceNotice?.id || "");
+    if (!requestId || superAdminDeviceNotice?.uiStatus === "resolved") return undefined;
+
+    const requestRef = doc(getCollectionPath("device_approval_requests"), requestId);
+    return onSnapshot(requestRef, (snap) => {
+      if (!snap.exists()) {
+        setSuperAdminDeviceNotice(null);
+        return;
+      }
+
+      const data = snap.data() || {};
+      const status = String(data.status || "pending");
+      if (status === "pending") {
+        setSuperAdminDeviceNotice((prev) => (
+          prev?.id === requestId ? { ...prev, ...data, id: requestId, uiStatus: "pending" } : prev
+        ));
+        return;
+      }
+
+      const resolvedNotice = {
+        ...data,
+        id: requestId,
+        uiStatus: "resolved",
+        resolvedText: getDeviceApprovalResolvedText(data),
+      };
+      setSuperAdminDeviceNotice(resolvedNotice);
+
+      if (superAdminNoticeResolveTimerRef.current) {
+        window.clearTimeout(superAdminNoticeResolveTimerRef.current);
+      }
+      superAdminNoticeResolveTimerRef.current = window.setTimeout(() => {
+        setSuperAdminDeviceNotice((prev) => (prev?.id === requestId ? null : prev));
+        superAdminNoticeResolveTimerRef.current = null;
+      }, 2200);
+    }, (error) => {
+      console.warn("最高管理者單筆待確認提醒同步失敗:", error);
+    });
+  }, [superAdminDeviceNotice?.id, superAdminDeviceNotice?.uiStatus, getCollectionPath]);
+
+  // 切換品牌／帳號時重新建立「本次工作階段已提醒」集合，避免跨品牌沿用狀態。
+  useEffect(() => {
+    superAdminNoticeSeenRef.current = new Set();
+    superAdminNoticeLookupRef.current = { key: "", inFlight: false };
+    setSuperAdminDeviceNotice(null);
+    setSuperAdminApprovalFocusId("");
+    if (superAdminNoticeResolveTimerRef.current) {
+      window.clearTimeout(superAdminNoticeResolveTimerRef.current);
+      superAdminNoticeResolveTimerRef.current = null;
+    }
+  }, [currentBrandId, currentSecurityAccountKey]);
+
+  // 元件卸載時清掉短暫完成提示 timer。
+  useEffect(() => () => {
+    if (superAdminNoticeResolveTimerRef.current) {
+      window.clearTimeout(superAdminNoticeResolveTimerRef.current);
+    }
+  }, []);
+
+  const handleOpenSuperAdminDeviceNotice = useCallback(() => {
+    const requestId = String(superAdminDeviceNotice?.id || "");
+    if (!requestId) return;
+    setSuperAdminApprovalFocusId(requestId);
+    setSuperAdminDeviceNotice(null);
+    setIsDeviceApprovalPanelOpen(true);
+  }, [superAdminDeviceNotice?.id]);
+
+  const handleDismissSuperAdminDeviceNotice = useCallback(() => {
+    setSuperAdminDeviceNotice(null);
+  }, []);
 
   // ★ 登入授權名單載入狀態：
   // 名單尚未完整發布前，登入頁只顯示一致的精緻載入畫面，不顯示暫時人數。
@@ -1539,6 +1747,14 @@ export default function App() {
     setPendingDeviceLogin(null);
     setIsDeviceApprovalPanelOpen(false);
     setGuidedDeviceApprovalRequestId("");
+    setSuperAdminDeviceNotice(null);
+    setSuperAdminApprovalFocusId("");
+    superAdminNoticeSeenRef.current = new Set();
+    superAdminNoticeLookupRef.current = { key: "", inFlight: false };
+    if (superAdminNoticeResolveTimerRef.current) {
+      window.clearTimeout(superAdminNoticeResolveTimerRef.current);
+      superAdminNoticeResolveTimerRef.current = null;
+    }
     
     isWarningShowingRef.current = false; 
     setShowIdleWarning(false); 
@@ -3678,6 +3894,111 @@ if (isUpdating) {
         </div>
       )}
 
+      {superAdminDeviceNotice && isDeviceSecuritySuperAdmin && !guidedDeviceApprovalRequestId && !isDeviceApprovalPanelOpen && (
+        <div
+          className={`fixed right-3 z-[99980] w-[calc(100%-1.5rem)] max-w-[410px] md:right-6 ${!isOnline ? "top-32" : "top-24"} animate-in fade-in slide-in-from-top-3 md:slide-in-from-right duration-300`}
+          role="status"
+          aria-live="polite"
+        >
+          <div className={`overflow-hidden rounded-[1.5rem] border bg-white/95 shadow-[0_20px_60px_rgba(80,62,45,0.20)] backdrop-blur-md ${
+            superAdminDeviceNotice.uiStatus === "resolved" ? "border-emerald-100" : "border-[#E8D7BF]"
+          }`}>
+            <div className={`h-1.5 w-full ${superAdminDeviceNotice.uiStatus === "resolved" ? "bg-emerald-500" : "bg-[#B7863D]"}`} />
+            <div className="p-4 sm:p-5">
+              <div className="flex items-start gap-3">
+                <div className={`flex h-11 w-11 shrink-0 items-center justify-center rounded-2xl ${
+                  superAdminDeviceNotice.uiStatus === "resolved"
+                    ? "bg-emerald-50 text-emerald-600"
+                    : "bg-[#FFF7E8] text-[#B7863D]"
+                }`}>
+                  {superAdminDeviceNotice.uiStatus === "resolved"
+                    ? <CheckCircle size={22} />
+                    : <ShieldAlert size={22} />}
+                </div>
+
+                <div className="min-w-0 flex-1">
+                  <div className={`text-base font-black ${
+                    superAdminDeviceNotice.uiStatus === "resolved" ? "text-emerald-700" : "text-[#4D4338]"
+                  }`}>
+                    {superAdminDeviceNotice.uiStatus === "resolved"
+                      ? "這筆申請已完成"
+                      : "有一筆新裝置需要確認"}
+                  </div>
+                  <div className="mt-1 text-xs font-bold text-[#9A8F83]">
+                    {superAdminDeviceNotice.uiStatus === "resolved"
+                      ? (superAdminDeviceNotice.resolvedText || getDeviceApprovalResolvedText(superAdminDeviceNotice))
+                      : `品牌目前共有 ${Math.max(1, headerDeviceApprovalCount)} 筆待確認`}
+                  </div>
+                </div>
+              </div>
+
+              <div className="mt-4 border-t border-[#EFE7DA] pt-4">
+                <div className="flex items-center justify-between gap-3">
+                  <div className="min-w-0">
+                    <div className="truncate text-base font-black text-[#4D4338]">
+                      {superAdminDeviceNotice.userName || "使用者"}
+                      <span className="ml-2 text-xs font-black text-[#A69C91]">
+                        {DEVICE_APPROVAL_ROLE_LABELS[superAdminDeviceNotice.role] || superAdminDeviceNotice.role || "帳號"}
+                      </span>
+                    </div>
+                  </div>
+                  <div className="shrink-0 rounded-full border border-[#EDE2D4] bg-[#FAF7F2] px-2.5 py-1 text-[10px] font-black text-[#8A7D70]">
+                    {formatDeviceApprovalNoticeTime(superAdminDeviceNotice.requestedAtText)}
+                  </div>
+                </div>
+
+                <div className="mt-3 grid gap-2 text-xs font-bold text-[#756A60]">
+                  <div className="flex items-center gap-2">
+                    <Smartphone size={15} className="shrink-0 text-[#B7863D]" />
+                    <span className="truncate">{superAdminDeviceNotice.device || "裝置"} / {superAdminDeviceNotice.browser || "瀏覽器"} / {superAdminDeviceNotice.os || "-"}</span>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <MapIcon size={15} className="shrink-0 text-[#B7863D]" />
+                    <span className="truncate">{superAdminDeviceNotice.loginLocation?.display || "位置未確認"}</span>
+                  </div>
+                </div>
+
+                {superAdminDeviceNotice.uiStatus !== "resolved" && (
+                  <>
+                    <div className="mt-4 rounded-xl border border-[#F0E3D1] bg-[#FFFBF4] px-3 py-2.5 text-xs font-bold leading-5 text-[#806B52]">
+                      {superAdminDeviceNotice.hasTrustedApproverDevice === false
+                        ? "此帳號目前沒有其他已信任裝置，需要最高管理者完成第一次確認。"
+                        : superAdminDeviceNotice.deviceStatus === "suspicious"
+                          ? "這次登入需要主管進一步確認，請核對使用者與裝置資訊。"
+                          : "這筆登入無法自行完成認證，需要最高管理者協助確認。"}
+                    </div>
+
+                    <div className="mt-4 grid grid-cols-[1fr_auto] gap-2">
+                      <button
+                        type="button"
+                        onClick={handleOpenSuperAdminDeviceNotice}
+                        className="rounded-xl border border-[#D8C19C] bg-gradient-to-r from-[#F8EACD] to-[#E9D0A0] px-4 py-3 text-sm font-black text-[#5A4225] shadow-sm hover:brightness-[1.02] active:scale-[0.98]"
+                      >
+                        查看並確認
+                      </button>
+                      <button
+                        type="button"
+                        onClick={handleDismissSuperAdminDeviceNotice}
+                        className="rounded-xl border border-stone-200 bg-stone-50 px-4 py-3 text-xs font-black text-stone-500 hover:bg-stone-100 active:scale-[0.98]"
+                      >
+                        稍後處理
+                      </button>
+                    </div>
+                    <div className="mt-2 text-center text-[10px] font-bold text-[#B0A59A]">稍後處理只會收起提醒，右上角待確認數量仍會保留。</div>
+                  </>
+                )}
+
+                {superAdminDeviceNotice.uiStatus === "resolved" && (
+                  <div className="mt-4 rounded-xl border border-emerald-100 bg-emerald-50/70 px-3 py-3 text-center text-xs font-black text-emerald-700">
+                    已即時同步其他最高管理者的處理結果，這張提醒即將自動收起。
+                  </div>
+                )}
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
       <div className={`flex min-h-screen bg-[#F9F8F6] text-stone-600 font-sans selection:bg-stone-200 selection:text-stone-800 overflow-x-hidden transition-all duration-300 ${!isOnline ? 'mt-9' : 'mt-0'} ${isLowPowerMode ? 'pb-24' : ''}`}>
         <Sidebar activeView={activeView} setActiveView={handleProtectedSetActiveView} isSidebarOpen={isSidebarOpen} setSidebarOpen={setSidebarOpen} user={user} userRole={userRole} onLogout={() => handleLogout()} permissions={permissions} currentUser={currentUser} canAccessView={canDirectorAccessView} />
         <div className={`flex-1 flex flex-col transition-all duration-500 w-full max-w-full ${isSidebarOpen ? "md:ml-64" : "md:ml-20"} ml-0`}>
@@ -3920,13 +4241,17 @@ if (isUpdating) {
 
         <DeviceApprovalPanel
           open={isDeviceApprovalPanelOpen}
-          onClose={() => setIsDeviceApprovalPanelOpen(false)}
+          onClose={() => {
+            setIsDeviceApprovalPanelOpen(false);
+            setSuperAdminApprovalFocusId("");
+          }}
           getCollectionPath={getCollectionPath}
           accountKey={currentSecurityAccountKey}
           currentDeviceId={currentDeviceTrust.deviceId}
           currentDeviceTrusted={currentDeviceTrust.status === "trusted"}
           isSuperAdmin={isDeviceSecuritySuperAdmin}
           onReview={reviewDeviceApprovalAction}
+          focusRequestId={superAdminApprovalFocusId}
         />
 
         {toast && (<Toast message={toast.message} type={toast.type} onClose={() => setToast(null)} />)}

@@ -32,6 +32,7 @@ const DeviceApprovalPanel = ({
   guided = false,
   guidedRequestId = "",
   onGuidedComplete,
+  focusRequestId = "",
 }) => {
   const [requests, setRequests] = useState([]);
   const [loading, setLoading] = useState(false);
@@ -49,7 +50,7 @@ const DeviceApprovalPanel = ({
       setCodes({});
       setGuidedSteps({});
     }
-  }, [open, guided, guidedRequestId]);
+  }, [open, guided, guidedRequestId, focusRequestId]);
 
   useEffect(() => {
     if (!open || !getCollectionPath) return undefined;
@@ -170,7 +171,16 @@ const DeviceApprovalPanel = ({
       ? "h-full w-full overflow-y-auto bg-[#FFFCF8] shadow-[0_24px_90px_rgba(80,62,45,0.20)] sm:h-auto sm:max-h-[92vh] sm:max-w-[560px] sm:rounded-[2rem] sm:border sm:border-[#EDE2D4]"
       : "h-full w-full max-w-[480px] overflow-y-auto border-l border-[#EDE2D4] bg-[#FFFCF8] shadow-[-18px_0_60px_rgba(80,62,45,0.12)] animate-in slide-in-from-right duration-200";
 
-  const visibleRequests = guided ? requests.slice(0, 1) : requests;
+  const visibleRequests = guided
+    ? requests.slice(0, 1)
+    : focusRequestId
+      ? [...requests].sort((a, b) => {
+          const aFocused = String(a.id || "") === String(focusRequestId || "");
+          const bFocused = String(b.id || "") === String(focusRequestId || "");
+          if (aFocused !== bFocused) return aFocused ? -1 : 1;
+          return String(a.requestedAtText || "").localeCompare(String(b.requestedAtText || ""));
+        })
+      : requests;
 
   return (
     <div
@@ -232,9 +242,22 @@ const DeviceApprovalPanel = ({
               // 最高管理者人工覆核主要用於「其他人的新裝置」或此申請本身不允許自助確認的救援情境。
               const canAdminReview = isSuperAdmin && currentDeviceTrusted && (!isMyRequest || request.selfApprovalAllowed === false);
               const guidedStep = guidedSteps[request.id] || "decision";
+              const isFocusedRequest = !guided && Boolean(focusRequestId) && String(request.id || "") === String(focusRequestId || "");
 
               return (
-                <div key={request.id} className={`rounded-[1.4rem] border bg-white p-4 shadow-sm sm:p-5 ${guided ? "border-[#E8D7BF]" : "border-[#EDE2D4]"}`}>
+                <div key={request.id} className={`rounded-[1.4rem] border bg-white p-4 shadow-sm sm:p-5 ${
+                  guided
+                    ? "border-[#E8D7BF]"
+                    : isFocusedRequest
+                      ? "border-amber-200 ring-2 ring-amber-100 shadow-[0_12px_35px_rgba(183,134,61,0.12)]"
+                      : "border-[#EDE2D4]"
+                }`}>
+                  {isFocusedRequest && (
+                    <div className="mb-3 flex items-center gap-2 rounded-xl border border-amber-100 bg-amber-50/70 px-3 py-2 text-[11px] font-black text-amber-700">
+                      <ShieldAlert size={14} className="shrink-0" />
+                      這是剛才主動提醒您的登入申請
+                    </div>
+                  )}
                   <div className="flex items-start justify-between gap-3">
                     <div className="min-w-0">
                       <div className="truncate text-base font-black text-[#4D4338]">{guided ? "您要確認的新裝置" : (request.userName || "使用者")}</div>
