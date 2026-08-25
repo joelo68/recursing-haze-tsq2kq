@@ -17,12 +17,14 @@ const monitor = read("src/components/SystemMonitor.jsx");
 const gate = read("src/components/DeviceApprovalGate.jsx");
 const panel = read("src/components/DeviceApprovalPanel.jsx");
 const rules = read("firestore.rules");
+const functionsIndex = read("functions/index.js");
+const telegramCenter = read("src/components/TelegramAlertControlCenter.jsx");
 
 test("new device protection defaults to off and covers all current roles", () => {
   assert.match(backend, /deviceApprovalMode:\s*'off'/);
   assert.match(backend, /deviceApprovalRoles:\s*\['director', 'trainer', 'manager', 'store', 'therapist'\]/);
   assert.match(backend, /deviceApprovalExpiryMinutes:\s*15/);
-  assert.match(app, /CURRENT_APP_VERSION\s*=\s*"3\.5\.2"/);
+  assert.match(app, /CURRENT_APP_VERSION\s*=\s*"3\.5\.3"/);
 });
 
 test("backend verifies Firebase request auth and application credential before device decision", () => {
@@ -67,7 +69,7 @@ test("super-admin own new device must use the six-digit self-approval flow", () 
   assert.doesNotMatch(panel, /const canSelfApprove = !isSuperAdmin && isMyRequest && currentDeviceTrusted/);
   assert.match(panel, /const canSelfApprove = isMyRequest && currentDeviceTrusted && request\.selfApprovalAllowed !== false/);
   assert.match(panel, /const canAdminReview = isSuperAdmin && currentDeviceTrusted && \(!isMyRequest \|\| request\.selfApprovalAllowed === false\)/);
-  assert.match(panel, /\{canAdminReview && \(/);
+  assert.match(panel, /\{!guided && canAdminReview && \(/);
   assert.match(panel, /runAction\(request, "approve_self"\)/);
   assert.match(backend, /actorAccountId:\s*String\(credential\.accountId \|\| accountId\)/);
   assert.match(backend, /action === 'approve_admin' && actorOwnsRequest && requestData\.selfApprovalAllowed !== false/);
@@ -190,7 +192,7 @@ test("approval UI uses non-engineering wording and requires manager help when se
   assert.match(gate, /這台裝置需要先確認/);
   assert.match(gate, /這台裝置需要由最高管理者協助確認/);
   assert.match(panel, /是我本人，允許使用/);
-  assert.match(panel, /不是我，交由最高管理者處理/);
+  assert.match(panel, /不是我，立即阻止並通知管理者|確定不是我，立即阻止/);
   assert.doesNotMatch(gate, /Device fingerprint mismatch|Pending approval request|Firestore collection|request ID|codeHash/i);
 });
 
@@ -267,5 +269,152 @@ test("device review levels separate observing, reverify, and blocked states", ()
   assert.match(monitor, /updateDeviceTrust\(profile, device, "reverify_required"\)/);
   assert.match(app, /主管要求重新驗證/);
   assert.match(app, /新裝置待觀察/);
-  assert.match(app, /CURRENT_APP_VERSION\s*=\s*"3\.5\.2"/);
+  assert.match(app, /CURRENT_APP_VERSION\s*=\s*"3\.5\.3"/);
 });
+
+test("six-digit self verification allows only three failed attempts and reports remaining attempts", () => {
+  assert.match(backend, /DEVICE_APPROVAL_MAX_FAILED_ATTEMPTS\s*=\s*3/);
+  assert.match(backend, /failedAttempts\s*>=\s*DEVICE_APPROVAL_MAX_FAILED_ATTEMPTS/);
+  assert.match(backend, /remainingAttempts\s*=\s*Math\.max\(0, DEVICE_APPROVAL_MAX_FAILED_ATTEMPTS - nextFailedAttempts\)/);
+  assert.match(backend, /確認碼不正確，請重新確認。還可嘗試 \$\{remainingAttempts\} 次。/);
+  assert.match(backend, /確認碼不正確，已達 \$\{DEVICE_APPROVAL_MAX_FAILED_ATTEMPTS\} 次上限。還可嘗試 0 次/);
+  assert.match(backend, /remainingAttempts:\s*0/);
+  assert.match(backend, /maxAttempts:\s*DEVICE_APPROVAL_MAX_FAILED_ATTEMPTS/);
+  assert.doesNotMatch(backend, /failedAttempts \|\| 0\) >= 5/);
+  assert.match(panel, /result\?\.message/);
+});
+
+
+
+test("password security telemetry alerts after three failures in ten minutes without storing submitted passwords", () => {
+  assert.match(backend, /LOGIN_SECURITY_WINDOW_MS\s*=\s*10 \* 60 \* 1000/);
+  assert.match(backend, /LOGIN_SECURITY_PASSWORD_FAIL_THRESHOLD\s*=\s*3/);
+  assert.match(backend, /telegramSecurityType:\s*'password_failed_threshold'/);
+  assert.match(backend, /const reportLoginSecurityEvent = onRequest/);
+  assert.match(backend, /eventType !== 'password_failed'/);
+  const start = backend.indexOf("async function recordFailedPasswordAttempt");
+  const end = backend.indexOf("async function verifyApplicationCredential", start);
+  const body = backend.slice(start, end > start ? end : start + 9000);
+  assert.ok(body.length > 1000);
+  assert.doesNotMatch(body, /enteredPassword|credentialPassword|password:\s*String/);
+});
+
+test("device security produces Telegram-worthy alerts only for meaningful manager or risk events", () => {
+  assert.match(backend, /telegramSecurityType:\s*securityConfig\.deviceApprovalMode === 'enforce' && !resolvedSelfApprovalAllowed \? 'manager_assistance_required' : ''/);
+  assert.match(backend, /alertType:\s*'device_code_failed_limit'/);
+  assert.match(backend, /alertType:\s*'self_reported_not_me'/);
+  assert.match(backend, /alertType:\s*'blocked_device_login'/);
+  assert.match(backend, /alertType:\s*'rapid_multi_location_login'/);
+});
+
+test("rapid multi-location detection uses a ten-minute window and suppresses same-country mobile-network city drift", () => {
+  assert.match(backend, /now - previous\.atMs <= LOGIN_SECURITY_WINDOW_MS/);
+  assert.match(backend, /if \(!withinWindow \|\| !differentLocation\) return/);
+  assert.match(backend, /if \(!a\.isMobileNetwork && !b\.isMobileNetwork && a\.area && b\.area && a\.area !== b\.area\) return true/);
+  assert.match(backend, /if \(aCountry && bCountry && aCountry !== bCountry\) return true/);
+});
+
+test("login page reports failed passwords for every supported role without blocking the UI", () => {
+  assert.match(app, /LOGIN_SECURITY_EVENT_ENDPOINT[\s\S]{0,250}reportLoginSecurityEvent/);
+  assert.match(app, /onSecurityEvent=\{reportLoginSecurityEvent\}/);
+  assert.match(login, /eventType:\s*"password_failed"/);
+  for (const role of ["director", "trainer", "manager", "store", "therapist"]) {
+    assert.match(login, new RegExp(`reportPasswordFailure\\("${role}"`));
+  }
+  assert.match(login, /Promise\.resolve\(onSecurityEvent/);
+});
+
+test("Telegram security alerts reuse the three recognized chats but remain disabled until a manager chooses targets", () => {
+  assert.match(functionsIndex, /TARGET_CHAT_ID_MAIN\s*=\s*'-4991191955'/);
+  assert.match(functionsIndex, /TARGET_CHAT_ID_MANAGER\s*=\s*'-1002361008620'/);
+  assert.match(functionsIndex, /TARGET_CHAT_ID_AGENT_TEST\s*=\s*'-5241604208'/);
+  assert.match(functionsIndex, /main:\s*\{ chatId: TARGET_CHAT_ID_MAIN, label: '高階主管主群' \}/);
+  assert.match(functionsIndex, /manager:\s*\{ chatId: TARGET_CHAT_ID_MANAGER, label: '主管群' \}/);
+  assert.match(functionsIndex, /agent_test:\s*\{ chatId: TARGET_CHAT_ID_AGENT_TEST, label: 'Agent 測試群' \}/);
+  assert.match(telegramCenter, /createDefaultTelegramSecurityForm[\s\S]{0,120}enabled:\s*false[\s\S]{0,80}chatTargets:\s*\[\]/);
+  assert.match(telegramCenter, /登入安全即時通知/);
+  assert.match(telegramCenter, /高階主管主群/);
+  assert.match(telegramCenter, /主管群/);
+  assert.match(telegramCenter, /Agent 測試群/);
+});
+
+test("security alert Firestore triggers dispatch both CYJ legacy and brand events through the selected Telegram targets", () => {
+  assert.match(functionsIndex, /exports\.onLegacySecurityAlertCreated = onDocumentCreated/);
+  assert.match(functionsIndex, /artifacts\/default-app-id\/public\/data\/security_alerts\/\{alertId\}/);
+  assert.match(functionsIndex, /exports\.onBrandSecurityAlertCreated = onDocumentCreated/);
+  assert.match(functionsIndex, /brands\/\{brandId\}\/security_alerts\/\{alertId\}/);
+  assert.match(functionsIndex, /TELEGRAM_SECURITY_CONFIG_REF/);
+  assert.match(functionsIndex, /resolveTelegramSecurityChatIds/);
+  assert.match(functionsIndex, /sendTelegramMessage\(chatId, message\)/);
+  assert.match(functionsIndex, /exports\.reportLoginSecurityEvent = deviceApprovalFunctions\.reportLoginSecurityEvent/);
+});
+
+test("login security state is backend-only and cannot be altered through broad frontend Firestore rules", () => {
+  assert.match(rules, /match \/brands\/\{brandId\}\/login_security_state\/\{document=\*\*\}[\s\S]*?allow read, write: if false;/);
+  assert.match(rules, /match \/artifacts\/\{appId\}\/public\/data\/login_security_state\/\{document=\*\*\}[\s\S]*?allow read, write: if false;/);
+  assert.match(rules, /collectionName != 'login_security_state'/);
+});
+
+test("guided self approval auto-opens only for enforce-mode trusted-device own pending requests", () => {
+  assert.match(app, /guidedDeviceApprovalRequestId/);
+  assert.match(app, /securityConfig\?\.deviceApprovalMode === "enforce"/);
+  assert.match(app, /currentDeviceTrust\?\.status === "trusted"/);
+  assert.match(app, /deviceApprovalSummary\?\.myPendingCount/);
+  assert.match(app, /where\("accountKey", "==", currentSecurityAccountKey\)/);
+  assert.match(app, /where\("status", "==", "pending"\)/);
+  assert.match(app, /request\.selfApprovalAllowed !== false/);
+  assert.match(app, /String\(request\.deviceId \|\| ""\) !== String\(currentDeviceTrust\?\.deviceId \|\| ""\)/);
+  assert.match(app, /setIsDeviceApprovalPanelOpen\(false\)/);
+  assert.match(app, /setGuidedDeviceApprovalRequestId\(String\(actionable\.id\)\)/);
+});
+
+test("guided approval UI blocks normal work until the own request is handled and does not depend on the header badge", () => {
+  assert.match(panel, /guided = false/);
+  assert.match(panel, /guidedRequestId = ""/);
+  assert.match(panel, /新裝置正在等您確認/);
+  assert.match(panel, /先完成這一筆確認，再開始使用系統/);
+  assert.match(panel, /您剛才是否正在另一台裝置登入系統/);
+  assert.match(panel, /是，我正在登入/);
+  assert.match(panel, /確定不是我，立即阻止/);
+  assert.match(panel, /輸入新裝置上的 6 位數字/);
+  assert.match(panel, /確認這台新裝置/);
+  assert.match(panel, /!embedded && !guided && event\.target === event\.currentTarget/);
+  assert.match(panel, /!embedded && !guided && <button/);
+  assert.match(panel, /onGuidedComplete\?\.\(\)/);
+});
+
+test("guided super-admin flow reads only the signed-in account instead of all brand pending requests", () => {
+  const guidedBranch = panel.slice(panel.indexOf("if (guided && accountKey)"), panel.indexOf("} else if (isSuperAdmin)"));
+  assert.match(guidedBranch, /where\("accountKey", "==", accountKey\)/);
+  assert.match(guidedBranch, /where\("status", "==", "pending"\)/);
+  assert.doesNotMatch(guidedBranch, /limit\(50\)/);
+  assert.match(panel, /if \(guidedRequestId && row\.id !== guidedRequestId\) return false/);
+  assert.match(panel, /row\.selfApprovalAllowed === false/);
+  assert.match(panel, /String\(row\.deviceId \|\| ""\) === String\(currentDeviceId \|\| ""\)/);
+});
+
+test("new device gate tells ordinary users to return to the old device and wait for automatic guidance", () => {
+  assert.match(gate, /系統會自動帶您完成確認/);
+  assert.match(gate, /系統會主動顯示「新裝置確認」/);
+  assert.match(gate, /不需要另外尋找右上角提醒/);
+  assert.doesNotMatch(gate, /點右上角「待確認」/);
+});
+
+test("self-reported not-me immediately blocks the pending attempt and keeps Telegram escalation", () => {
+  assert.match(panel, /runAction\(request, "reject_self"\)/);
+  assert.match(panel, /已阻止這次新裝置登入，並通知最高管理者/);
+  assert.match(backend, /action === 'reject_self'/);
+  assert.match(backend, /status: 'suspicious', source: 'self_reported_not_me'/);
+  assert.match(backend, /alertType: 'self_reported_not_me'/);
+  assert.match(backend, /severity: 'critical'/);
+});
+
+test("third wrong six-digit code closes the stale pending request so the trusted device is not trapped", () => {
+  assert.match(backend, /remainingAttempts === 0/);
+  assert.match(backend, /source: 'verification_failed_limit'/);
+  assert.match(backend, /nextStatus: 'expired'/);
+  assert.match(backend, /targetDevicePatch: \{ trusted: false, status: 'new', source: 'verification_failed_limit' \}/);
+  assert.match(backend, /await secretRef\.delete\(\)\.catch/);
+  assert.match(backend, /requestClosed: true/);
+});
+

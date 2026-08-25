@@ -104,7 +104,7 @@ const DeviceApprovalGate = ({
           <p className="mx-auto mt-3 max-w-md text-sm font-bold leading-7 text-[#8C8176]">
             {requiresManagerHelp
               ? "為了保護帳號與營運資料，這次需要完成安全確認後才能繼續使用。"
-              : "為了保護帳號與營運資料，請使用您原本已信任的手機或電腦完成確認。"}
+              : "為了保護帳號與營運資料，請回到您原本使用的手機或電腦登入系統；系統會自動帶您完成確認。"}
           </p>
         </div>
 
@@ -163,7 +163,7 @@ const DeviceApprovalGate = ({
                   {formatCode(approval?.verificationCode || "")}
                 </div>
                 <p className="mt-3 text-xs font-bold leading-6 text-[#8A7355]">
-                  請在原本已信任的裝置開啟系統，點右上角「待確認」，再輸入這組 6 位數確認碼。
+                  請回到原本已信任的手機或電腦登入系統。系統會主動顯示「新裝置確認」，再輸入這組 6 位數字即可，不需要另外尋找右上角提醒。
                 </p>
               </div>
             )}

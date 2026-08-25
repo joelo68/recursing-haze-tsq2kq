@@ -55,6 +55,7 @@ const DEVICE_ACCESS_ENDPOINT = "https://us-central1-cyjsituation-analysis.cloudf
 const DEVICE_APPROVAL_REVIEW_ENDPOINT = "https://us-central1-cyjsituation-analysis.cloudfunctions.net/reviewDeviceApproval";
 const DEVICE_MANAGEMENT_ENDPOINT = "https://us-central1-cyjsituation-analysis.cloudfunctions.net/manageAccountDevice";
 const DEVICE_EMERGENCY_ENDPOINT = "https://us-central1-cyjsituation-analysis.cloudfunctions.net/emergencyUnblockDevice";
+const LOGIN_SECURITY_EVENT_ENDPOINT = "https://us-central1-cyjsituation-analysis.cloudfunctions.net/reportLoginSecurityEvent";
 
 
 const isNewerVersion = (local, remote) => {
@@ -559,6 +560,7 @@ export default function App() {
     latestAtText: "",
   });
   const [isDeviceApprovalPanelOpen, setIsDeviceApprovalPanelOpen] = useState(false);
+  const [guidedDeviceApprovalRequestId, setGuidedDeviceApprovalRequestId] = useState("");
   const [pendingDeviceLogin, setPendingDeviceLogin] = useState(null);
   const pendingDeviceLoginRef = useRef(null);
   // 僅保存在目前頁面記憶體中，供需要較高權限的裝置確認動作再次向後端驗證。
@@ -1003,6 +1005,93 @@ export default function App() {
   const [securityConfig, setSecurityConfig] = useState(DEFAULT_SECURITY_CONFIG);
   const [featureFlags, setFeatureFlags] = useState(DEFAULT_FEATURE_FLAGS);
 
+  // ★ Guided Device Approval：正式模式下，只要「自己的新裝置」正在等待確認，
+  // 原本已信任的裝置會主動進入確認流程，不再要求一般使用者自己注意 Header Badge。
+  // 先透過極小的 inbox pendingCount 判斷；只有真的有待確認時，才額外查最多 10 筆自己的 pending request。
+  const guidedDeviceApprovalLookupRef = useRef({ key: "", inFlight: false });
+
+  useEffect(() => {
+    const pendingCount = Math.max(0, Number(deviceApprovalSummary?.myPendingCount || 0));
+    const canGuide = Boolean(
+      userRole &&
+      currentUser &&
+      currentSecurityAccountKey &&
+      securityConfig?.deviceApprovalMode === "enforce" &&
+      currentDeviceTrust?.status === "trusted" &&
+      pendingCount > 0
+    );
+
+    if (!canGuide) {
+      guidedDeviceApprovalLookupRef.current.key = "";
+      if (pendingCount === 0 || currentDeviceTrust?.status !== "trusted" || securityConfig?.deviceApprovalMode !== "enforce") {
+        setGuidedDeviceApprovalRequestId("");
+      }
+      return undefined;
+    }
+
+    const lookupKey = [
+      currentBrandId,
+      currentSecurityAccountKey,
+      pendingCount,
+      currentDeviceTrust?.deviceId || "",
+    ].join("|");
+    const lookupState = guidedDeviceApprovalLookupRef.current;
+    if (lookupState.inFlight || lookupState.key === lookupKey) return undefined;
+
+    lookupState.inFlight = true;
+    lookupState.key = lookupKey;
+    let cancelled = false;
+
+    (async () => {
+      try {
+        const pendingQuery = query(
+          getCollectionPath("device_approval_requests"),
+          where("accountKey", "==", currentSecurityAccountKey),
+          where("status", "==", "pending"),
+          limit(10)
+        );
+        const snap = await getDocs(pendingQuery);
+        const now = Date.now();
+        const actionable = snap.docs
+          .map((docSnap) => ({ id: docSnap.id, ...(docSnap.data() || {}) }))
+          .filter((request) => (
+            request.status === "pending" &&
+            Number(request.expiresAtMs || 0) > now &&
+            request.selfApprovalAllowed !== false &&
+            String(request.deviceId || "") !== String(currentDeviceTrust?.deviceId || "")
+          ))
+          .sort((a, b) => String(a.requestedAtText || "").localeCompare(String(b.requestedAtText || "")))[0];
+
+        if (cancelled) return;
+        if (actionable?.id) {
+          // Guided flow 優先於一般抽屜，避免同時出現兩層裝置確認 UI。
+          setIsDeviceApprovalPanelOpen(false);
+          setGuidedDeviceApprovalRequestId(String(actionable.id));
+        } else {
+          setGuidedDeviceApprovalRequestId("");
+        }
+      } catch (error) {
+        console.warn("主動新裝置確認載入失敗:", error);
+      } finally {
+        guidedDeviceApprovalLookupRef.current.inFlight = false;
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [
+    userRole,
+    currentUser,
+    currentSecurityAccountKey,
+    currentBrandId,
+    securityConfig?.deviceApprovalMode,
+    currentDeviceTrust?.status,
+    currentDeviceTrust?.deviceId,
+    deviceApprovalSummary?.myPendingCount,
+    getCollectionPath,
+  ]);
+
   // ★ 登入授權名單載入狀態：
   // 名單尚未完整發布前，登入頁只顯示一致的精緻載入畫面，不顯示暫時人數。
   const [accountDirectoryState, setAccountDirectoryState] = useState({
@@ -1314,6 +1403,28 @@ export default function App() {
     return result;
   }, []);
 
+  const reportLoginSecurityEvent = useCallback(async ({ eventType, roleId, accountId, userName = "" } = {}) => {
+    if (!isOnline || !eventType || !roleId || !accountId) return { ok: false, skipped: true };
+
+    const deviceInfo = getClientDeviceInfo();
+    const loginLocation = await resolveLoginLocation({ role: roleId, userName, deviceInfo });
+    try {
+      return await callDeviceSecurityEndpoint(LOGIN_SECURITY_EVENT_ENDPOINT, removeUndefinedDeep({
+        brandId: currentBrandId,
+        eventType,
+        roleId,
+        accountId: String(accountId),
+        userName: String(userName || accountId || roleId),
+        deviceInfo,
+        loginLocation,
+      }));
+    } catch (error) {
+      // 登入安全遙測不得阻擋正常登入流程；失敗只保留 console 診斷。
+      console.warn("登入安全事件回報失敗:", error?.message || error);
+      return { ok: false, message: error?.message || "security_event_failed" };
+    }
+  }, [isOnline, currentBrandId, resolveLoginLocation, callDeviceSecurityEndpoint]);
+
   const registerAccountDevice = useCallback(async (roleId, userInfo = {}, loginCredential = {}) => {
     const deviceInfo = getClientDeviceInfo();
     const accountId = String(loginCredential?.accountId || userInfo?.id || userInfo?.accountId || userInfo?.name || roleId).trim();
@@ -1427,6 +1538,7 @@ export default function App() {
     pendingDeviceLoginRef.current = null;
     setPendingDeviceLogin(null);
     setIsDeviceApprovalPanelOpen(false);
+    setGuidedDeviceApprovalRequestId("");
     
     isWarningShowingRef.current = false; 
     setShowIdleWarning(false); 
@@ -3454,7 +3566,9 @@ if (isUpdating) {
     <>
       <LoginView 
         appVersion={CURRENT_APP_VERSION}
-        onLogin={handleLogin} storeAccounts={storeAccounts} managers={publicManagers} managerOrder={managerOrder} managerAuth={managerAuth} therapists={therapists} 
+        onLogin={handleLogin}
+        onSecurityEvent={reportLoginSecurityEvent}
+        storeAccounts={storeAccounts} managers={publicManagers} managerOrder={managerOrder} managerAuth={managerAuth} therapists={therapists} 
         onUpdatePassword={handleUpdateStorePassword} onUpdateManagerPassword={handleUpdateManagerPassword} onUpdateTherapistPassword={handleUpdateTherapistPassword} 
         trainerAuth={trainerAuth} handleUpdateTrainerAuth={handleUpdateTrainerAuth} directorAuth={directorAuth} handleUpdateDirectorAuth={handleUpdateDirectorAuth} masterAuth={masterAuth}
         currentBrandId={currentBrandId} onSwitchBrand={handleSwitchBrand} hasSelectedBrand={hasSelectedBrand}
@@ -3792,10 +3906,24 @@ if (isUpdating) {
         )}
 
         <DeviceApprovalPanel
+          open={Boolean(guidedDeviceApprovalRequestId)}
+          guided
+          guidedRequestId={guidedDeviceApprovalRequestId}
+          currentDeviceId={currentDeviceTrust.deviceId}
+          onGuidedComplete={() => setGuidedDeviceApprovalRequestId("")}
+          getCollectionPath={getCollectionPath}
+          accountKey={currentSecurityAccountKey}
+          currentDeviceTrusted={currentDeviceTrust.status === "trusted"}
+          isSuperAdmin={isDeviceSecuritySuperAdmin}
+          onReview={reviewDeviceApprovalAction}
+        />
+
+        <DeviceApprovalPanel
           open={isDeviceApprovalPanelOpen}
           onClose={() => setIsDeviceApprovalPanelOpen(false)}
           getCollectionPath={getCollectionPath}
           accountKey={currentSecurityAccountKey}
+          currentDeviceId={currentDeviceTrust.deviceId}
           currentDeviceTrusted={currentDeviceTrust.status === "trusted"}
           isSuperAdmin={isDeviceSecuritySuperAdmin}
           onReview={reviewDeviceApprovalAction}

@@ -11,6 +11,10 @@ const DEVICE_APPROVAL_DEFAULTS = Object.freeze({
 
 const LEGACY_ALERT_ROLES = new Set(['director', 'trainer', 'manager', 'store']);
 const ACTIVE_BLOCK_STATUSES = new Set(['blocked', 'global_blocked', 'manual_global_blocked']);
+const DEVICE_APPROVAL_MAX_FAILED_ATTEMPTS = 3;
+const LOGIN_SECURITY_WINDOW_MS = 10 * 60 * 1000;
+const LOGIN_SECURITY_ALERT_COOLDOWN_MS = 30 * 60 * 1000;
+const LOGIN_SECURITY_PASSWORD_FAIL_THRESHOLD = 3;
 
 function sanitizeSecurityKey(value = '') {
   return String(value || '')
@@ -327,6 +331,231 @@ async function writeSecurityLog({ db, brandId, payload }) {
   }
 }
 
+
+function getLoginSecurityStateRef(db, brandId, accountKey) {
+  return getBrandCollection(db, brandId, 'login_security_state').doc(sanitizeSecurityKey(accountKey));
+}
+
+function getLocationComparableParts(raw = {}) {
+  const location = normalizeLocation(raw);
+  return {
+    countryCode: String(location.countryCode || '').trim().toUpperCase(),
+    countryName: String(location.countryName || '').trim(),
+    area: String(location.city || location.region || '').trim(),
+    display: String(location.display || '').trim(),
+    source: String(location.source || 'unknown').trim(),
+    isMobileNetwork: Boolean(location.isMobileNetwork),
+  };
+}
+
+function hasMeaningfullyDifferentLoginLocation(previous = {}, current = {}) {
+  const a = getLocationComparableParts(previous);
+  const b = getLocationComparableParts(current);
+  const aKnown = a.source !== 'unknown' && (a.countryCode || a.countryName || a.area);
+  const bKnown = b.source !== 'unknown' && (b.countryCode || b.countryName || b.area);
+  if (!aKnown || !bKnown) return false;
+
+  const aCountry = a.countryCode || a.countryName;
+  const bCountry = b.countryCode || b.countryName;
+  if (aCountry && bCountry && aCountry !== bCountry) return true;
+
+  // 行動網路 IP 的城市定位容易漂移；同國城市差異只有在雙方皆非行動網路時才升級警示。
+  if (!a.isMobileNetwork && !b.isMobileNetwork && a.area && b.area && a.area !== b.area) return true;
+  return false;
+}
+
+async function writeTelegramSecurityAlertWithCooldown({
+  admin,
+  db,
+  brandId,
+  accountKey,
+  alertType,
+  severity = 'high',
+  cooldownMs = LOGIN_SECURITY_ALERT_COOLDOWN_MS,
+  payload = {},
+}) {
+  const now = Date.now();
+  const nowText = new Date(now).toISOString();
+  const stateRef = getLoginSecurityStateRef(db, brandId, accountKey);
+  const alertRef = getBrandCollection(db, brandId, 'security_alerts').doc();
+  const cooldownField = `telegramAlertAtMs_${sanitizeSecurityKey(alertType)}`;
+  let created = false;
+
+  await db.runTransaction(async (transaction) => {
+    const stateSnap = await transaction.get(stateRef);
+    const state = stateSnap.exists ? (stateSnap.data() || {}) : {};
+    const lastAlertAtMs = Number(state[cooldownField] || 0);
+    if (lastAlertAtMs > 0 && now - lastAlertAtMs < cooldownMs) return;
+
+    transaction.set(stateRef, {
+      brandId: normalizeBrandId(brandId),
+      accountKey: sanitizeSecurityKey(accountKey),
+      [cooldownField]: now,
+      updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+      updatedAtText: nowText,
+    }, { merge: true });
+
+    transaction.set(alertRef, {
+      category: 'login_security',
+      type: alertType,
+      telegramSecurityType: alertType,
+      notifyTelegram: true,
+      telegramDeliveryStatus: 'pending_config',
+      severity,
+      status: 'unread',
+      brandId: normalizeBrandId(brandId),
+      brandLabel: getBrandLabel(brandId),
+      accountKey: sanitizeSecurityKey(accountKey),
+      ...payload,
+      createdAt: admin.firestore.FieldValue.serverTimestamp(),
+      createdAtText: nowText,
+    }, { merge: false });
+    created = true;
+  });
+
+  return created;
+}
+
+async function recordSuccessfulCredentialLogin({ admin, db, brandId, roleId, accountId, accountKey, userName, deviceInfo, loginLocation, existingDevices = {} }) {
+  const now = Date.now();
+  const nowText = new Date(now).toISOString();
+  const stateRef = getLoginSecurityStateRef(db, brandId, accountKey);
+
+  // 正常成功登入不額外讀取 login_security_state：直接利用 checkDeviceAccess 已讀取的
+  // account_devices 歷史判斷短時間異地登入，避免每次登入再增加一筆 Firestore read。
+  let previous = null;
+  for (const [storedDeviceId, item] of Object.entries(existingDevices || {})) {
+    if (!item || storedDeviceId === String(deviceInfo.deviceId || '')) continue;
+    const atText = String(item.lastSeenAtText || item.lastLoginAtText || item.updatedAtText || '');
+    const atMs = Date.parse(atText);
+    if (!Number.isFinite(atMs) || atMs <= 0) continue;
+    if (!previous || atMs > previous.atMs) previous = { storedDeviceId, item, atMs, atText };
+  }
+
+  await stateRef.set({
+    brandId: normalizeBrandId(brandId),
+    accountKey: sanitizeSecurityKey(accountKey),
+    role: roleId,
+    accountId: sanitizeSecurityKey(accountId),
+    userName: String(userName || accountId || roleId).slice(0, 120),
+    passwordFailedCount: 0,
+    passwordWindowStartedAtMs: 0,
+    lastSuccessfulLoginAtMs: now,
+    lastSuccessfulLoginAtText: nowText,
+    lastSuccessfulDeviceId: String(deviceInfo.deviceId || ''),
+    lastSuccessfulDeviceShort: String(deviceInfo.deviceShort || ''),
+    lastSuccessfulDevice: `${deviceInfo.device || '裝置'} / ${deviceInfo.browser || '-'}`,
+    lastSuccessfulLoginLocation: normalizeLocation(loginLocation),
+    updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+    updatedAtText: nowText,
+  }, { merge: true });
+
+  if (!previous) return;
+  const previousLocation = previous.item?.lastLoginLocation || previous.item?.loginLocation || {};
+  const withinWindow = now - previous.atMs <= LOGIN_SECURITY_WINDOW_MS;
+  const differentLocation = hasMeaningfullyDifferentLoginLocation(previousLocation, loginLocation);
+  if (!withinWindow || !differentLocation) return;
+
+  await writeTelegramSecurityAlertWithCooldown({
+    admin,
+    db,
+    brandId,
+    accountKey,
+    alertType: 'rapid_multi_location_login',
+    severity: 'high',
+    payload: {
+      role: roleId,
+      accountId: sanitizeSecurityKey(accountId),
+      userName: String(userName || accountId || roleId).slice(0, 120),
+      deviceId: String(deviceInfo.deviceId || ''),
+      deviceShort: String(deviceInfo.deviceShort || ''),
+      device: String(deviceInfo.device || ''),
+      browser: String(deviceInfo.browser || ''),
+      os: String(deviceInfo.os || ''),
+      loginLocation: normalizeLocation(loginLocation),
+      previousDeviceId: previous.storedDeviceId,
+      previousDeviceShort: String(previous.item?.deviceShort || ''),
+      previousDevice: `${previous.item?.device || '裝置'} / ${previous.item?.browser || '-'}`,
+      previousLoginLocation: normalizeLocation(previousLocation),
+      previousLoginAtText: previous.atText,
+      windowMinutes: Math.round(LOGIN_SECURITY_WINDOW_MS / 60000),
+      message: `${userName} 在短時間內由不同裝置、不同地點登入`,
+    },
+  });
+}
+
+async function recordFailedPasswordAttempt({ admin, db, brandId, roleId, accountId, userName, deviceInfo, loginLocation }) {
+  const safeAccountId = sanitizeSecurityKey(accountId || 'unknown');
+  const accountKey = sanitizeSecurityKey(`${normalizeBrandId(brandId)}_${String(roleId || 'unknown')}_${safeAccountId}`);
+  const stateRef = getLoginSecurityStateRef(db, brandId, accountKey);
+  const alertRef = getBrandCollection(db, brandId, 'security_alerts').doc();
+  const now = Date.now();
+  const nowText = new Date(now).toISOString();
+  let failedCount = 1;
+  let alerted = false;
+
+  await db.runTransaction(async (transaction) => {
+    const stateSnap = await transaction.get(stateRef);
+    const state = stateSnap.exists ? (stateSnap.data() || {}) : {};
+    const windowStartedAtMs = Number(state.passwordWindowStartedAtMs || 0);
+    const withinWindow = windowStartedAtMs > 0 && now - windowStartedAtMs <= LOGIN_SECURITY_WINDOW_MS;
+    failedCount = withinWindow ? Math.max(0, Number(state.passwordFailedCount || 0)) + 1 : 1;
+    const nextWindowStartedAtMs = withinWindow ? windowStartedAtMs : now;
+    const lastAlertAtMs = Number(state.telegramAlertAtMs_password_failed_threshold || 0);
+    const shouldAlert = failedCount >= LOGIN_SECURITY_PASSWORD_FAIL_THRESHOLD && (now - lastAlertAtMs >= LOGIN_SECURITY_ALERT_COOLDOWN_MS);
+
+    transaction.set(stateRef, {
+      brandId: normalizeBrandId(brandId),
+      accountKey,
+      role: String(roleId || ''),
+      accountId: safeAccountId,
+      userName: String(userName || accountId || roleId || '使用者').slice(0, 120),
+      passwordWindowStartedAtMs: nextWindowStartedAtMs,
+      passwordFailedCount: failedCount,
+      lastPasswordFailedAtMs: now,
+      lastPasswordFailedAtText: nowText,
+      lastPasswordFailedDeviceId: String(deviceInfo.deviceId || ''),
+      lastPasswordFailedDeviceShort: String(deviceInfo.deviceShort || ''),
+      lastPasswordFailedLoginLocation: normalizeLocation(loginLocation),
+      ...(shouldAlert ? { telegramAlertAtMs_password_failed_threshold: now } : {}),
+      updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+      updatedAtText: nowText,
+    }, { merge: true });
+
+    if (shouldAlert) {
+      alerted = true;
+      transaction.set(alertRef, {
+        category: 'login_security',
+        type: 'password_failed_threshold',
+        telegramSecurityType: 'password_failed_threshold',
+        notifyTelegram: true,
+        telegramDeliveryStatus: 'pending_config',
+        severity: 'high',
+        status: 'unread',
+        brandId: normalizeBrandId(brandId),
+        brandLabel: getBrandLabel(brandId),
+        role: String(roleId || ''),
+        accountId: safeAccountId,
+        accountKey,
+        userName: String(userName || accountId || roleId || '使用者').slice(0, 120),
+        deviceId: String(deviceInfo.deviceId || ''),
+        deviceShort: String(deviceInfo.deviceShort || ''),
+        device: String(deviceInfo.device || ''),
+        browser: String(deviceInfo.browser || ''),
+        os: String(deviceInfo.os || ''),
+        loginLocation: normalizeLocation(loginLocation),
+        failedCount,
+        windowMinutes: Math.round(LOGIN_SECURITY_WINDOW_MS / 60000),
+        message: `${userName || accountId || '使用者'} 在 ${Math.round(LOGIN_SECURITY_WINDOW_MS / 60000)} 分鐘內多次輸入錯誤密碼`,
+        createdAt: admin.firestore.FieldValue.serverTimestamp(),
+        createdAtText: nowText,
+      }, { merge: false });
+    }
+  });
+
+  return { accountKey, failedCount, alerted };
+}
+
 function adjustPendingSummariesInTransaction({ transaction, db, brandId, accountKey, delta, latest = {}, resolved = {}, inboxSnap, brandSnap }) {
   const inboxRef = getBrandCollection(db, brandId, 'device_approval_inbox').doc(accountKey);
   const brandSummaryRef = getBrandSecuritySummaryDoc(db, brandId, 'device_approvals');
@@ -509,6 +738,11 @@ async function createOrRefreshApprovalRequest({ admin, db, brandId, roleId, acco
         os: deviceInfo.os,
         loginLocation,
         message: `${userName} 有一台新裝置等待確認`,
+        category: 'login_security',
+        telegramSecurityType: securityConfig.deviceApprovalMode === 'enforce' && !resolvedSelfApprovalAllowed ? 'manager_assistance_required' : '',
+        notifyTelegram: securityConfig.deviceApprovalMode === 'enforce' && !resolvedSelfApprovalAllowed,
+        telegramDeliveryStatus: securityConfig.deviceApprovalMode === 'enforce' && !resolvedSelfApprovalAllowed ? 'pending_config' : 'not_required',
+        adminOnly: !resolvedSelfApprovalAllowed,
         createdAt: admin.firestore.FieldValue.serverTimestamp(),
         createdAtText: nowText,
       }, { merge: false });
@@ -658,6 +892,8 @@ function createDeviceApprovalFunctions({ admin, db }) {
       const securityConfig = normalizeSecurityConfig(configSnap.exists ? configSnap.data() || {} : {});
       const profile = profileSnap.exists ? profileSnap.data() || {} : {};
       const devices = profile.devices || {};
+      await recordSuccessfulCredentialLogin({ admin, db, brandId, roleId, accountId, accountKey, userName, deviceInfo, loginLocation, existingDevices: devices })
+        .catch((error) => console.warn('login security observation failed', error.message));
       const exactDevice = devices[deviceInfo.deviceId] || null;
       const recoverableDevice = exactDevice ? null : findRecoverableKnownDeviceEntry(devices, deviceInfo, loginLocation);
       const recoverableRiskDevice = exactDevice ? null : findRecoverableRiskDeviceEntry(devices, deviceInfo, loginLocation);
@@ -680,6 +916,10 @@ function createDeviceApprovalFunctions({ admin, db }) {
       });
       if (activeGlobalBlockSnap) {
         const block = activeGlobalBlockSnap.data() || {};
+        await writeTelegramSecurityAlertWithCooldown({
+          admin, db, brandId, accountKey, alertType: 'blocked_device_login', severity: 'high',
+          payload: { role: roleId, accountId, userName, deviceId: deviceInfo.deviceId, deviceShort: deviceInfo.deviceShort, device: deviceInfo.device, browser: deviceInfo.browser, os: deviceInfo.os, loginLocation, globalBlocked: true, message: `${userName} 嘗試使用已全品牌停用的裝置登入` },
+        }).catch((error) => console.warn('blocked device security alert failed', error.message));
         return res.status(200).json({
           ok: true,
           allowed: false,
@@ -707,6 +947,10 @@ function createDeviceApprovalFunctions({ admin, db }) {
 
       if (blockedDeviceMatch) {
         const blockedDevice = blockedDeviceMatch.item || {};
+        await writeTelegramSecurityAlertWithCooldown({
+          admin, db, brandId, accountKey, alertType: 'blocked_device_login', severity: 'high',
+          payload: { role: roleId, accountId, userName, deviceId: deviceInfo.deviceId, deviceShort: deviceInfo.deviceShort, device: deviceInfo.device, browser: deviceInfo.browser, os: deviceInfo.os, loginLocation, globalBlocked: blockedDevice?.status === 'global_blocked' || blockedDevice?.source === 'manual_global_blocked', message: `${userName} 嘗試使用已停用的裝置登入` },
+        }).catch((error) => console.warn('blocked device security alert failed', error.message));
         return res.status(200).json({
           ok: true,
           allowed: false,
@@ -1052,11 +1296,62 @@ function createDeviceApprovalFunctions({ admin, db }) {
           const secret = secretSnap.exists ? secretSnap.data() || {} : {};
           if (!secret.codeHash || !secret.salt) return res.status(410).json({ ok: false, message: '確認碼已失效，請重新登入申請' });
           if (Date.now() > Number(secret.expiresAtMs || 0)) return res.status(410).json({ ok: false, message: '確認時間已過，請重新登入申請' });
-          if (Number(secret.failedAttempts || 0) >= 5) return res.status(429).json({ ok: false, message: '確認碼輸入次數過多，請重新登入申請' });
+          const failedAttempts = Math.max(0, Number(secret.failedAttempts || 0));
+          if (failedAttempts >= DEVICE_APPROVAL_MAX_FAILED_ATTEMPTS) {
+            return res.status(429).json({
+              ok: false,
+              message: `確認碼輸入次數已達 ${DEVICE_APPROVAL_MAX_FAILED_ATTEMPTS} 次上限。還可嘗試 0 次，請讓新裝置重新登入申請。`,
+              remainingAttempts: 0,
+              maxAttempts: DEVICE_APPROVAL_MAX_FAILED_ATTEMPTS,
+            });
+          }
           const matched = safePasswordMatch(hashVerificationCode(code, secret.salt), secret.codeHash);
           if (!matched) {
+            const nextFailedAttempts = failedAttempts + 1;
+            const remainingAttempts = Math.max(0, DEVICE_APPROVAL_MAX_FAILED_ATTEMPTS - nextFailedAttempts);
             await secretRef.set({ failedAttempts: admin.firestore.FieldValue.increment(1), updatedAtText: new Date().toISOString() }, { merge: true });
-            return res.status(400).json({ ok: false, message: '確認碼不正確' });
+            if (remainingAttempts === 0) {
+              await writeTelegramSecurityAlertWithCooldown({
+                admin, db, brandId, accountKey: requestData.accountKey, alertType: 'device_code_failed_limit', severity: 'high',
+                payload: { role: requestData.role || actorRole, accountId: requestData.accountId || '', userName: requestData.userName || actorName, requestId, deviceId: requestData.deviceId || '', deviceShort: requestData.deviceShort || '', device: requestData.device || '', browser: requestData.browser || '', os: requestData.os || '', loginLocation: normalizeLocation(requestData.loginLocation || {}), failedCount: DEVICE_APPROVAL_MAX_FAILED_ATTEMPTS, message: `${requestData.userName || actorName} 的 6 位裝置確認碼已連續錯誤 ${DEVICE_APPROVAL_MAX_FAILED_ATTEMPTS} 次` },
+              }).catch((error) => console.warn('verification failure security alert failed', error.message));
+
+              // Guided flow 不能讓真正的舊信任裝置因一筆已失效的驗證申請被卡住。
+              // 第 3 次錯誤時直接結束這筆 pending request；新裝置仍被擋在登入外，
+              // 並必須重新登入取得新的 6 位碼。這也會同步把 Header pendingCount 減 1。
+              await db.runTransaction(async (transaction) => {
+                const freshSnap = await transaction.get(requestRef);
+                if (!freshSnap.exists || freshSnap.data()?.status !== 'pending') return;
+                await resolvePendingRequestInTransaction({
+                  admin,
+                  transaction,
+                  db,
+                  brandId,
+                  requestRef,
+                  requestData: freshSnap.data() || {},
+                  nextStatus: 'expired',
+                  actorName: '系統',
+                  actorRole: 'system',
+                  source: 'verification_failed_limit',
+                  targetDevicePatch: { trusted: false, status: 'new', source: 'verification_failed_limit' },
+                });
+              });
+              await secretRef.delete().catch(() => {});
+
+              return res.status(429).json({
+                ok: false,
+                message: `確認碼不正確，已達 ${DEVICE_APPROVAL_MAX_FAILED_ATTEMPTS} 次上限。還可嘗試 0 次，請讓新裝置重新登入申請。`,
+                remainingAttempts,
+                maxAttempts: DEVICE_APPROVAL_MAX_FAILED_ATTEMPTS,
+                requestClosed: true,
+              });
+            }
+            return res.status(400).json({
+              ok: false,
+              message: `確認碼不正確，請重新確認。還可嘗試 ${remainingAttempts} 次。`,
+              remainingAttempts,
+              maxAttempts: DEVICE_APPROVAL_MAX_FAILED_ATTEMPTS,
+            });
           }
         }
       } else {
@@ -1103,6 +1398,12 @@ function createDeviceApprovalFunctions({ admin, db }) {
         if (!freshSnap.exists || freshSnap.data()?.status !== 'pending') return;
         await resolvePendingRequestInTransaction({ admin, transaction, db, brandId, requestRef, requestData: freshSnap.data() || {}, nextStatus, actorName, actorRole, source, targetDevicePatch });
       });
+      if (action === 'reject_self') {
+        await writeTelegramSecurityAlertWithCooldown({
+          admin, db, brandId, accountKey: requestData.accountKey, alertType: 'self_reported_not_me', severity: 'critical', cooldownMs: 5 * 60 * 1000,
+          payload: { role: requestData.role || actorRole, accountId: requestData.accountId || '', userName: requestData.userName || actorName, requestId, deviceId: requestData.deviceId || '', deviceShort: requestData.deviceShort || '', device: requestData.device || '', browser: requestData.browser || '', os: requestData.os || '', loginLocation: normalizeLocation(requestData.loginLocation || {}), message: `${requestData.userName || actorName} 回報這台登入裝置不是本人使用` },
+        }).catch((error) => console.warn('self reject security alert failed', error.message));
+      }
       await secretRef.delete().catch(() => {});
       await writeSecurityLog({
         db,
@@ -1133,6 +1434,29 @@ function createDeviceApprovalFunctions({ admin, db }) {
     } catch (error) {
       console.error('reviewDeviceApproval failed', error);
       return res.status(500).json({ ok: false, message: '目前無法完成裝置確認，請稍後再試。' });
+    }
+  });
+
+  const reportLoginSecurityEvent = onRequest({ cors: true, timeoutSeconds: 15, memory: '256MiB' }, async (req, res) => {
+    if (req.method !== 'POST') return res.status(405).json({ ok: false, message: 'method_not_allowed' });
+    const requestAuth = await requireFirebaseRequestAuth(req, admin);
+    if (!requestAuth.ok) return res.status(401).json({ ok: false, message: '登入狀態已失效，請重新整理後再試' });
+    try {
+      const body = req.body || {};
+      const eventType = String(body.eventType || '').trim();
+      if (eventType !== 'password_failed') return res.status(400).json({ ok: false, message: 'unsupported_security_event' });
+      const brandId = normalizeBrandId(body.brandId);
+      const roleId = String(body.roleId || '').trim();
+      const accountId = String(body.accountId || '').trim();
+      const userName = String(body.userName || accountId || roleId || '使用者').trim().slice(0, 120);
+      const deviceInfo = normalizeDeviceInfo(body.deviceInfo || {});
+      const loginLocation = normalizeLocation(body.loginLocation || {});
+      if (!roleId || !accountId || !deviceInfo.deviceId) return res.status(400).json({ ok: false, message: 'missing_security_event_fields' });
+      const result = await recordFailedPasswordAttempt({ admin, db, brandId, roleId, accountId, userName, deviceInfo, loginLocation });
+      return res.status(200).json({ ok: true, eventType, failedCount: result.failedCount, alerted: result.alerted });
+    } catch (error) {
+      console.error('reportLoginSecurityEvent failed', error);
+      return res.status(500).json({ ok: false, message: '登入安全事件暫時無法記錄' });
     }
   });
 
@@ -1340,6 +1664,7 @@ function createDeviceApprovalFunctions({ admin, db }) {
   return {
     checkDeviceAccess,
     reviewDeviceApproval,
+    reportLoginSecurityEvent,
     manageAccountDevice,
     emergencyUnblockDevice,
     cleanupExpiredDeviceApprovals,
