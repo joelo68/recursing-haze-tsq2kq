@@ -418,3 +418,27 @@ test("third wrong six-digit code closes the stale pending request so the trusted
   assert.match(backend, /requestClosed: true/);
 });
 
+test("multi-super-admin race returns the first resolver instead of a false success", () => {
+  assert.match(backend, /function buildResolvedApprovalConflictPayload/);
+  assert.match(backend, /message = `這筆裝置申請已由 \$\{resolverLabel\} 完成確認`/);
+  assert.match(backend, /const resolutionResult = await db\.runTransaction/);
+  assert.match(backend, /if \(freshData\.status !== 'pending'\) \{[\s\S]{0,500}conflict: buildResolvedApprovalConflictPayload\(freshData\)/);
+  assert.match(backend, /if \(!resolutionResult\?\.applied\) \{/);
+  assert.match(backend, /return res\.status\(409\)\.json\(\{[\s\S]{0,450}resolutionResult\?\.conflict/);
+  assert.match(backend, /alreadyResolved:\s*true/);
+});
+
+test("lost race exits before secret deletion, Telegram side effects, and audit success logging", () => {
+  const start = backend.indexOf("const resolutionResult = await db.runTransaction");
+  const lostRace = backend.indexOf("if (!resolutionResult?.applied)", start);
+  const rejectAlert = backend.indexOf("if (action === 'reject_self')", lostRace);
+  const deleteSecret = backend.indexOf("await secretRef.delete().catch", lostRace);
+  const successLog = backend.indexOf("await writeSecurityLog({", lostRace);
+  const okResponse = backend.indexOf("return res.status(200).json({ ok: true, status: nextStatus })", lostRace);
+  assert.ok(start >= 0 && lostRace > start, "Race result must be checked immediately after the transaction.");
+  assert.ok(rejectAlert > lostRace, "Self-reject alert must only run for the winning resolver.");
+  assert.ok(deleteSecret > lostRace, "Secret deletion must only run for the winning resolver.");
+  assert.ok(successLog > lostRace, "Success audit logging must only run for the winning resolver.");
+  assert.ok(okResponse > lostRace, "Success response must only be reachable after the winning resolver path.");
+});
+

@@ -823,6 +823,38 @@ async function resolvePendingRequestInTransaction({ admin, transaction, db, bran
   return true;
 }
 
+function buildResolvedApprovalConflictPayload(requestData = {}) {
+  const status = String(requestData?.status || '').trim();
+  const resolvedBy = String(requestData?.resolvedBy || '').trim();
+  const resolvedAtText = String(requestData?.resolvedAtText || '').trim();
+  const resolverLabel = resolvedBy || (status === 'expired' ? '系統' : '其他最高管理者');
+
+  let message;
+  if (status === 'approved') {
+    message = `這筆裝置申請已由 ${resolverLabel} 完成確認`;
+  } else if (status === 'blocked') {
+    message = `這筆裝置申請已由 ${resolverLabel} 設為禁止使用`;
+  } else if (status === 'observing') {
+    message = `這筆裝置申請已由 ${resolverLabel} 設為繼續觀察`;
+  } else if (status === 'reverify_required') {
+    message = `這筆裝置申請已由 ${resolverLabel} 設為要求重新驗證`;
+  } else if (status === 'rejected') {
+    message = `這筆裝置申請已由 ${resolverLabel} 完成拒絕處理`;
+  } else if (status === 'expired') {
+    message = `這筆裝置申請已由 ${resolverLabel} 結束，請重新申請`;
+  } else {
+    message = `這筆裝置申請已由 ${resolverLabel} 完成處理`;
+  }
+
+  return {
+    status,
+    resolvedBy,
+    resolvedAtText,
+    alreadyResolved: true,
+    message,
+  };
+}
+
 async function verifyTrustedApproverDevice({ db, brandId, roleId, accountId, deviceId }) {
   const accountKey = sanitizeSecurityKey(`${normalizeBrandId(brandId)}_${roleId}_${sanitizeSecurityKey(accountId)}`);
   const snap = await getBrandCollection(db, brandId, 'account_devices').doc(accountKey).get();
@@ -1263,7 +1295,12 @@ function createDeviceApprovalFunctions({ admin, db }) {
       const requestSnap = await requestRef.get();
       if (!requestSnap.exists) return res.status(404).json({ ok: false, message: '找不到這筆裝置確認申請' });
       const requestData = requestSnap.data() || {};
-      if (requestData.status !== 'pending') return res.status(409).json({ ok: false, message: '這筆申請已經處理完成', status: requestData.status });
+      if (requestData.status !== 'pending') {
+        return res.status(409).json({
+          ok: false,
+          ...buildResolvedApprovalConflictPayload(requestData),
+        });
+      }
       if (Number(requestData.expiresAtMs || 0) > 0 && Date.now() > Number(requestData.expiresAtMs || 0)) {
         return res.status(410).json({ ok: false, message: '確認時間已過，請讓新裝置重新登入申請' });
       }
@@ -1393,11 +1430,51 @@ function createDeviceApprovalFunctions({ admin, db }) {
         return res.status(400).json({ ok: false, message: '不支援的處理方式' });
       }
 
-      await db.runTransaction(async (transaction) => {
+      const resolutionResult = await db.runTransaction(async (transaction) => {
         const freshSnap = await transaction.get(requestRef);
-        if (!freshSnap.exists || freshSnap.data()?.status !== 'pending') return;
-        await resolvePendingRequestInTransaction({ admin, transaction, db, brandId, requestRef, requestData: freshSnap.data() || {}, nextStatus, actorName, actorRole, source, targetDevicePatch });
+        if (!freshSnap.exists) {
+          return { applied: false, notFound: true };
+        }
+
+        const freshData = freshSnap.data() || {};
+        if (freshData.status !== 'pending') {
+          return {
+            applied: false,
+            notFound: false,
+            conflict: buildResolvedApprovalConflictPayload(freshData),
+          };
+        }
+
+        const applied = await resolvePendingRequestInTransaction({
+          admin,
+          transaction,
+          db,
+          brandId,
+          requestRef,
+          requestData: freshData,
+          nextStatus,
+          actorName,
+          actorRole,
+          source,
+          targetDevicePatch,
+        });
+
+        return { applied: Boolean(applied), notFound: false, status: nextStatus };
       });
+
+      if (!resolutionResult?.applied) {
+        if (resolutionResult?.notFound) {
+          return res.status(404).json({ ok: false, message: '找不到這筆裝置確認申請' });
+        }
+        return res.status(409).json({
+          ok: false,
+          ...(resolutionResult?.conflict || {
+            alreadyResolved: true,
+            message: '這筆裝置申請已由其他最高管理者完成處理',
+          }),
+        });
+      }
+
       if (action === 'reject_self') {
         await writeTelegramSecurityAlertWithCooldown({
           admin, db, brandId, accountKey: requestData.accountKey, alertType: 'self_reported_not_me', severity: 'critical', cooldownMs: 5 * 60 * 1000,
