@@ -1,46 +1,45 @@
-DRCYJ docs 安全完整覆蓋包 — 2026-08-25 18:18 (UTC+8)
+# DRCYJ docs package manifest
 
-用途：
-  以本包的 /docs 完整取代專案原有 /docs，統一 Knowledge Base、移除重複 Source Map、封存舊 release note。
+Total content files (excluding PACKAGE_MANIFEST.txt and SHA256SUMS.txt): 41
 
-Canonical Documents：
-  AI_START_HERE.md
-  CURRENT_STATE.md
-  README.md
-  ARCHITECTURE.md
-  DEVELOPMENT_GUIDE.md
-  SYSTEM_SOURCE_MAP.md
-  FIREBASE_DATA_MODEL.md
-  DATA_FLOW.md
-  AUTH_AND_SECURITY.md
-  DEPLOYMENT.md
-  DASHBOARD_SUMMARY.md
-  DATA_IDENTITY_RULES.md
-  MAINTENANCE_TOOLS.md
-  TELEGRAM_AGENT.md
-  OVERWRITE_GUIDE.md
-
-Archive：
-  archive/releases/
-    - Device Approval v3.5.0
-    - Device Approval v3.5.1
-    - Device Review v3.5.2
-    - Login Security Telegram v1
-    - Guided Device Approval v3.5.3
-    - Device Approval race-condition hardening
-    - Summary-first highest-manager notice（pending production confirmation）
-  archive/updates/
-    - 2026-08-24 Summary Repair Knowledge Base update
-
-刻意排除：
-  SYSTEM_SOURCE_MAP.md.md
-  原因：與 canonical SYSTEM_SOURCE_MAP.md 重複，不再雙軌維護。
-
-重要狀態：
-  - CURRENT_APP_VERSION canonical current state = 3.5.3。
-  - 舊 autoTrustLimit=2 / initial auto trust 不再作為目前安全架構。
-  - Summary-first 最高管理者通知在本次文件整理時仍記錄為「已完成／已驗證，但待 Production deployment confirmation」。
-  - 文件不保存實際密碼、API Key、Bot Token 或 numeric Telegram chat IDs。
-
-Runtime 影響：
-  本包只有 docs 文件。只覆蓋 /docs 不會改動 React、Functions、Rules 或 SaaS runtime，也不需要部署。
+AI_START_HERE.md
+ANCHORING_PROTOCOL.md
+ARCHITECTURE.md
+AUTH_AND_SECURITY.md
+CURRENT_STATE.md
+DASHBOARD_SUMMARY.md
+DATA_FLOW.md
+DATA_IDENTITY_RULES.md
+DEPLOYMENT.md
+DEVELOPMENT_GUIDE.md
+FIREBASE_DATA_MODEL.md
+MAINTENANCE_TOOLS.md
+OVERWRITE_GUIDE.md
+PROJECT_OPERATING_RULES.md
+PROMPT_SETUP_GUIDE.md
+README.md
+SYSTEM_SOURCE_MAP.md
+TELEGRAM_AGENT.md
+archive/releases/2026-08-24-device-approval-v3.5.0.md
+archive/releases/2026-08-25-device-approval-race-condition.md
+archive/releases/2026-08-25-device-approval-v3.5.1.md
+archive/releases/2026-08-25-device-review-three-level-v3.5.2.md
+archive/releases/2026-08-25-guided-device-approval-v3.5.3.md
+archive/releases/2026-08-25-security-telegram-alert-v1.md
+archive/releases/2026-08-25-summary-first-super-admin-notice-pending.md
+archive/releases/README.md
+archive/updates/2026-08-24-summary-repair-knowledge-base-update.md
+prompts/00_PERSISTENT_INSTRUCTIONS.md
+prompts/01_NEW_CHAT_BOOTSTRAP.md
+prompts/02_REANCHOR_MID_CHAT.md
+prompts/03_CONTEXT_LIMIT_HANDOFF.md
+prompts/04_EXTERNAL_CHANGE_AUDIT.md
+prompts/05_EMERGENCY_HOTFIX.md
+prompts/06_FULL_DOCS_AUDIT.md
+prompts/07_DEPLOYMENT_ONLY.md
+prompts/08_CODE_REVIEW_ONLY.md
+prompts/09_NEW_AI_HANDOFF.md
+prompts/10_PRODUCTION_CONFIRMATION.md
+prompts/11_SESSION_CHECKPOINT_TEMPLATE.md
+prompts/12_MINIMAL_ANCHOR_COMMANDS.md
+prompts/README.md

@@ -8,6 +8,7 @@
 
 | 文件 | 主要用途 |
 |---|---|
+| `PROJECT_OPERATING_RULES.md` | 永久不隨版本變動的 AI／工程協作規範 |
 | `AI_START_HERE.md` | 新 AI／新工程師固定接手入口 |
 | `CURRENT_STATE.md` | 目前正式環境狀態＋已完成但待部署項目 |
 | `ARCHITECTURE.md` | 高階系統架構與模組邊界 |
@@ -21,16 +22,20 @@
 | `DATA_IDENTITY_RULES.md` | Store Identity 治理，特別是 CYJ 新店 |
 | `MAINTENANCE_TOOLS.md` | SystemMaintenance 工具、風險與操作順序 |
 | `TELEGRAM_AGENT.md` | Telegram Agent／Gemini／Policy／Schedule／Snapshot／Task，以及獨立的登入安全 Telegram 流程 |
+| `PROMPT_SETUP_GUIDE.md` | Persistent Prompt、Project Rules、新 Chat、Context Limit 的設定方式 |
+| `ANCHORING_PROTOCOL.md` | 新視窗／AI 變調／外部修改／Hotfix 的重新定錨協議 |
+| `prompts/` | 可直接複製使用的情境式 Prompt Pack |
 
 # 2. 固定閱讀順序
 
 ```text
-1. docs/AI_START_HERE.md
-2. docs/CURRENT_STATE.md
-3. docs/README.md
-4. docs/ARCHITECTURE.md
-5. docs/DEVELOPMENT_GUIDE.md
-6. docs/SYSTEM_SOURCE_MAP.md
+1. docs/PROJECT_OPERATING_RULES.md
+2. docs/AI_START_HERE.md
+3. docs/CURRENT_STATE.md
+4. docs/README.md
+5. docs/ARCHITECTURE.md
+6. docs/DEVELOPMENT_GUIDE.md
+7. docs/SYSTEM_SOURCE_MAP.md
 ```
 
 之後再依功能選讀專門文件。
@@ -122,3 +127,22 @@ Git History / Production Tag
 ```
 
 若文件與目前正式 source 衝突，應修正文件，不可以為了配合舊 `.md` 而反過來修改正式程式。
+
+
+# 8. Prompt Anchoring
+
+工作方式固定由：
+
+```text
+PROJECT_OPERATING_RULES.md
+```
+
+定義，不把會過期的 App version／部署狀態寫進永久 Prompt。
+
+新視窗、重新定錨、Context Limit、外部修改與 Hotfix 使用：
+
+```text
+prompts/
+```
+
+設定方式詳見 `PROMPT_SETUP_GUIDE.md` 與 `ANCHORING_PROTOCOL.md`。

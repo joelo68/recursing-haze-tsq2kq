@@ -35,15 +35,37 @@ Git History / Production Tag
 
 # 2. 接手後第一步
 
-依序閱讀：
+任何新對話、新 AI、新工程師，先依序閱讀：
 
 ```text
-1. docs/AI_START_HERE.md
-2. docs/CURRENT_STATE.md
-3. docs/README.md
-4. docs/ARCHITECTURE.md
-5. docs/DEVELOPMENT_GUIDE.md
-6. docs/SYSTEM_SOURCE_MAP.md
+1. docs/PROJECT_OPERATING_RULES.md
+2. docs/AI_START_HERE.md
+3. docs/CURRENT_STATE.md
+4. docs/README.md
+5. docs/ARCHITECTURE.md
+6. docs/DEVELOPMENT_GUIDE.md
+7. docs/SYSTEM_SOURCE_MAP.md
+```
+
+`PROJECT_OPERATING_RULES.md` 管「永遠怎麼工作」；`CURRENT_STATE.md` 管「現在 Production 到哪裡」。
+版本與部署狀態不得寫死在永久 Prompt。
+
+新視窗可直接使用：
+
+```text
+docs/prompts/01_NEW_CHAT_BOOTSTRAP.md
+```
+
+若對話中途開始變調，使用：
+
+```text
+docs/prompts/02_REANCHOR_MID_CHAT.md
+```
+
+若對話即將達到上下文上限，先使用：
+
+```text
+docs/prompts/03_CONTEXT_LIMIT_HANDOFF.md
 ```
 
 然後依本次需求閱讀 `docs/` 內的專門文件。
@@ -590,3 +612,33 @@ SystemMaintenance 哪些是 Audit、哪些可能改資料？
 ```
 
 若這些都不清楚，不應直接進入大範圍程式修改。
+
+
+---
+
+# 19. Prompt / Anchoring
+
+本專案的工作方法不依賴單一 Chat 的記憶。
+
+固定三層：
+
+```text
+PROJECT_OPERATING_RULES
+→ CURRENT_STATE / Knowledge Base
+→ 本次最新正式 source
+```
+
+情境式 Prompt 位置：
+
+```text
+docs/prompts/
+```
+
+完整說明：
+
+```text
+docs/PROMPT_SETUP_GUIDE.md
+docs/ANCHORING_PROTOCOL.md
+```
+
+換視窗前建立 Session Checkpoint；新視窗先 bootstrap，再重新確認本次最新正式 source。

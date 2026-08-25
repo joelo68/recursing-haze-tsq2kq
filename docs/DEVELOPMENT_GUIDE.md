@@ -451,20 +451,22 @@ Knowledge Base Impact Check：
 
 # 20. 新對話 / 新 AI 接手
 
-新的 AI 或工程師開始前，第一份文件固定為：
+新的 AI 或工程師開始前，固定先讀：
 
 ```text
-AI_START_HERE.md
+PROJECT_OPERATING_RULES.md
+→ AI_START_HERE.md
+→ CURRENT_STATE.md
+→ README.md
+→ ARCHITECTURE.md
+→ DEVELOPMENT_GUIDE.md
+→ SYSTEM_SOURCE_MAP.md
 ```
 
-接著：
+如果是新對話，可先貼：
 
 ```text
-CURRENT_STATE.md
-README.md
-ARCHITECTURE.md
-DEVELOPMENT_GUIDE.md
-SYSTEM_SOURCE_MAP.md
+prompts/01_NEW_CHAT_BOOTSTRAP.md
 ```
 
 若對方無法讀 repository，
@@ -472,3 +474,23 @@ SYSTEM_SOURCE_MAP.md
 
 不得要求使用者重新口述整段專案歷史，
 也不得用 AI 記憶取代目前正式 source。
+
+
+# 21. Prompt Anchoring
+
+開發紀律不得依賴單一對話記憶。
+
+永久規則：
+
+```text
+PROJECT_OPERATING_RULES.md
+```
+
+情境式重新定錨：
+
+```text
+prompts/
+```
+
+Context Limit 前必須先產生 Session Checkpoint，再換視窗。
+若外部人員／AI 修改過 source，先做 External Change Audit，再繼續開發。
