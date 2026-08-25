@@ -442,3 +442,40 @@ test("lost race exits before secret deletion, Telegram side effects, and audit s
   assert.ok(okResponse > lostRace, "Success response must only be reachable after the winning resolver path.");
 });
 
+
+test("highest-admin action card uses the existing summary instead of an extra pending query", () => {
+  const start = app.indexOf("// ★ Highest-admin Security Action Card — Summary-first");
+  const end = app.indexOf("// 通知卡顯示期間只監聽「這一筆 request」", start);
+  assert.ok(start >= 0 && end > start);
+  const block = app.slice(start, end);
+  assert.match(block, /deviceApprovalSummary\?\.adminAssistancePendingCount/);
+  assert.match(block, /deviceApprovalSummary\?\.adminAssistancePendingItems/);
+  assert.doesNotMatch(block, /getDocs\s*\(/);
+  assert.doesNotMatch(block, /where\s*\(/);
+});
+
+test("device approval summary keeps a manager-assistance queue only for enforce admin-only requests", () => {
+  assert.match(backend, /requiresAdminAssistance = securityConfig\.deviceApprovalMode === 'enforce' && !resolvedSelfApprovalAllowed/);
+  assert.match(backend, /adminOnly:\s*requiresAdminAssistance/);
+  assert.match(backend, /adminAssistancePendingItems/);
+  assert.match(backend, /adminAssistancePendingCount = adminItems\.length/);
+  assert.match(backend, /latestAdminAssistanceRequestId/);
+});
+
+test("manager-assistance summary item is removed whenever its pending request resolves", () => {
+  assert.match(backend, /const requestRequiresAdminAssistance = Boolean/);
+  assert.match(backend, /removeAdminAssistanceRequestId:\s*requestRequiresAdminAssistance/);
+  assert.match(backend, /adminItems = adminItems\.filter/);
+});
+
+test("highest-admin card still watches only the displayed request for live resolution", () => {
+  assert.match(app, /doc\(getCollectionPath\("device_approval_requests"\), requestId\)/);
+  assert.match(app, /return onSnapshot\(requestRef/);
+  assert.match(app, /resolvedText:\s*getDeviceApprovalResolvedText\(data\)/);
+});
+
+test("summary-first manager notice preserves app version and existing focused approval panel", () => {
+  assert.match(app, /CURRENT_APP_VERSION\s*=\s*"3\.5\.3"/);
+  assert.match(app, /focusRequestId=\{superAdminApprovalFocusId\}/);
+  assert.match(panel, /這是剛才主動提醒您的登入申請/);
+});

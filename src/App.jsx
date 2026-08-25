@@ -587,6 +587,13 @@ export default function App() {
   const [deviceApprovalSummary, setDeviceApprovalSummary] = useState({
     myPendingCount: 0,
     brandPendingCount: 0,
+    adminAssistancePendingCount: 0,
+    adminAssistancePendingItems: [],
+    latestAdminAssistanceRequestId: "",
+    latestAdminAssistanceUserName: "",
+    latestAdminAssistanceRole: "",
+    latestAdminAssistanceDevice: "",
+    latestAdminAssistanceAtText: "",
     latestUserName: "",
     latestDevice: "",
     latestAtText: "",
@@ -597,7 +604,6 @@ export default function App() {
   const [superAdminDeviceNotice, setSuperAdminDeviceNotice] = useState(null);
   const [superAdminApprovalFocusId, setSuperAdminApprovalFocusId] = useState("");
   const superAdminNoticeSeenRef = useRef(new Set());
-  const superAdminNoticeLookupRef = useRef({ key: "", inFlight: false });
   const superAdminNoticeResolveTimerRef = useRef(null);
   const [pendingDeviceLogin, setPendingDeviceLogin] = useState(null);
   const pendingDeviceLoginRef = useRef(null);
@@ -708,7 +714,20 @@ export default function App() {
   // 新版 Header 只監聽極小的待確認摘要，不再為了紅色數字讀完整 account_devices。
   useEffect(() => {
     if (!userRole || !currentUser || !currentSecurityAccountKey) {
-      setDeviceApprovalSummary({ myPendingCount: 0, brandPendingCount: 0, latestUserName: "", latestDevice: "", latestAtText: "" });
+      setDeviceApprovalSummary({
+        myPendingCount: 0,
+        brandPendingCount: 0,
+        adminAssistancePendingCount: 0,
+        adminAssistancePendingItems: [],
+        latestAdminAssistanceRequestId: "",
+        latestAdminAssistanceUserName: "",
+        latestAdminAssistanceRole: "",
+        latestAdminAssistanceDevice: "",
+        latestAdminAssistanceAtText: "",
+        latestUserName: "",
+        latestDevice: "",
+        latestAtText: "",
+      });
       return undefined;
     }
 
@@ -725,16 +744,36 @@ export default function App() {
     if (isDeviceSecuritySuperAdmin) {
       unsubscribers.push(onSnapshot(getSecuritySummaryDocPath("device_approvals"), (snap) => {
         const data = snap.exists() ? snap.data() || {} : {};
+        const adminAssistancePendingItems = Array.isArray(data.adminAssistancePendingItems)
+          ? data.adminAssistancePendingItems.filter((item) => item && item.requestId).slice(0, 50)
+          : [];
         setDeviceApprovalSummary((prev) => ({
           ...prev,
           brandPendingCount: Math.max(0, Number(data.pendingCount || 0)),
+          adminAssistancePendingCount: Math.max(0, Number(data.adminAssistancePendingCount || 0)),
+          adminAssistancePendingItems,
+          latestAdminAssistanceRequestId: data.latestAdminAssistanceRequestId || "",
+          latestAdminAssistanceUserName: data.latestAdminAssistanceUserName || "",
+          latestAdminAssistanceRole: data.latestAdminAssistanceRole || "",
+          latestAdminAssistanceDevice: data.latestAdminAssistanceDevice || "",
+          latestAdminAssistanceAtText: data.latestAdminAssistanceAtText || "",
           latestUserName: data.latestUserName || "",
           latestDevice: data.latestDevice || "",
           latestAtText: data.latestAtText || data.updatedAtText || "",
         }));
       }, (error) => console.warn("讀取待確認裝置摘要失敗:", error)));
     } else {
-      setDeviceApprovalSummary((prev) => ({ ...prev, brandPendingCount: 0 }));
+      setDeviceApprovalSummary((prev) => ({
+        ...prev,
+        brandPendingCount: 0,
+        adminAssistancePendingCount: 0,
+        adminAssistancePendingItems: [],
+        latestAdminAssistanceRequestId: "",
+        latestAdminAssistanceUserName: "",
+        latestAdminAssistanceRole: "",
+        latestAdminAssistanceDevice: "",
+        latestAdminAssistanceAtText: "",
+      }));
     }
 
     return () => unsubscribers.forEach((unsubscribe) => unsubscribe?.());
@@ -1132,99 +1171,93 @@ export default function App() {
     getCollectionPath,
   ]);
 
-  // ★ Highest-admin Security Action Card
-  // 正式模式下，最高管理者原本就透過 brandPendingCount 即時知道品牌有待確認案件。
-  // 這裡不增加 polling：只有品牌待確認摘要「真的改變」時，才做一次小型 pending 查詢，
-  // 並且只挑 selfApprovalAllowed === false（需要最高管理者協助）的案件主動提醒。
+  // ★ Highest-admin Security Action Card — Summary-first
+  // 後端已把「需要最高管理者協助」的 pending 小佇列直接寫進原本的
+  // security_summary/device_approvals。最高管理者沿用既有 summary onSnapshot 即可判斷是否提醒，
+  // 不再因 brandPendingCount 變化而額外 query device_approval_requests。
   // 同一 requestId 在同一登入工作階段只主動出現一次；按「稍後處理」後 Badge 仍會保留。
   useEffect(() => {
-    const pendingCount = Math.max(0, Number(deviceApprovalSummary?.brandPendingCount || 0));
-    const lookupKey = [
-      currentBrandId,
-      pendingCount,
-      deviceApprovalSummary?.latestAtText || "",
-    ].join("|");
+    const adminPendingCount = Math.max(0, Number(deviceApprovalSummary?.adminAssistancePendingCount || 0));
+    const adminItems = Array.isArray(deviceApprovalSummary?.adminAssistancePendingItems)
+      ? deviceApprovalSummary.adminAssistancePendingItems
+      : [];
 
     const canNotify = Boolean(
       isDeviceSecuritySuperAdmin &&
       securityConfig?.deviceApprovalMode === "enforce" &&
       currentDeviceTrust?.status === "trusted" &&
-      pendingCount > 0 &&
+      adminPendingCount > 0 &&
       !guidedDeviceApprovalRequestId
     );
 
+    // 已完成狀態交由單筆 request listener 的 2.2 秒完成提示自行收尾，
+    // 不因 summary count 先歸零而提前把完成訊息吃掉。
+    if (superAdminDeviceNotice?.uiStatus === "resolved") return undefined;
+
     if (!canNotify) {
-      if (pendingCount === 0 || securityConfig?.deviceApprovalMode !== "enforce" || !isDeviceSecuritySuperAdmin) {
-        superAdminNoticeLookupRef.current.key = "";
+      if (!superAdminDeviceNotice && (
+        adminPendingCount === 0 ||
+        securityConfig?.deviceApprovalMode !== "enforce" ||
+        !isDeviceSecuritySuperAdmin
+      )) {
         setSuperAdminDeviceNotice(null);
       }
       return undefined;
     }
 
-    // 主管已經主動打開完整待確認 Panel 時，不再另外彈卡干擾；
-    // 同時記住目前摘要版本，避免關閉 Panel 後又補跳剛剛已經看過的案件。
+    // 主管正在完整 Panel 中時，視為已經看到目前這批主管待辦；
+    // 記住 requestId，避免關閉 Panel 後又補跳同一批卡片。
     if (isDeviceApprovalPanelOpen) {
-      superAdminNoticeLookupRef.current.key = lookupKey;
+      adminItems.forEach((item) => {
+        const requestId = String(item?.requestId || "");
+        if (requestId) superAdminNoticeSeenRef.current.add(requestId);
+      });
       return undefined;
     }
 
     if (superAdminDeviceNotice) return undefined;
 
-    const lookupState = superAdminNoticeLookupRef.current;
-    if (lookupState.inFlight || lookupState.key === lookupKey) return undefined;
+    const actionable = adminItems.find((item) => {
+      const requestId = String(item?.requestId || "");
+      return requestId && !superAdminNoticeSeenRef.current.has(requestId);
+    });
+    if (!actionable?.requestId) return undefined;
 
-    lookupState.inFlight = true;
-    lookupState.key = lookupKey;
-    let cancelled = false;
-
-    (async () => {
-      try {
-        // 只查「pending + 無法自行認證」的小集合；只有摘要改變時才執行一次。
-        // 不是常駐全清單監聽，也不是固定秒數輪詢。
-        const pendingQuery = query(
-          getCollectionPath("device_approval_requests"),
-          where("status", "==", "pending"),
-          where("selfApprovalAllowed", "==", false),
-          limit(20)
-        );
-        const snap = await getDocs(pendingQuery);
-        const now = Date.now();
-        const actionable = snap.docs
-          .map((docSnap) => ({ id: docSnap.id, ...(docSnap.data() || {}) }))
-          .filter((request) => (
-            request.status === "pending" &&
-            Number(request.expiresAtMs || 0) > now &&
-            request.selfApprovalAllowed === false &&
-            request.approvalMode === "enforce" &&
-            !superAdminNoticeSeenRef.current.has(String(request.id || ""))
-          ))
-          .sort((a, b) => String(b.requestedAtText || "").localeCompare(String(a.requestedAtText || "")))[0];
-
-        if (cancelled || !actionable?.id) return;
-        const requestId = String(actionable.id);
-        superAdminNoticeSeenRef.current.add(requestId);
-        setSuperAdminDeviceNotice({ ...actionable, id: requestId, uiStatus: "pending" });
-      } catch (error) {
-        console.warn("最高管理者待確認提醒載入失敗:", error);
-      } finally {
-        superAdminNoticeLookupRef.current.inFlight = false;
-      }
-    })();
-
-    return () => {
-      cancelled = true;
-    };
+    const requestId = String(actionable.requestId);
+    superAdminNoticeSeenRef.current.add(requestId);
+    setSuperAdminDeviceNotice({
+      id: requestId,
+      requestId,
+      status: "pending",
+      uiStatus: "pending",
+      userName: actionable.userName || deviceApprovalSummary?.latestAdminAssistanceUserName || "使用者",
+      role: actionable.role || deviceApprovalSummary?.latestAdminAssistanceRole || "",
+      device: actionable.device || "裝置",
+      browser: actionable.browser || "瀏覽器",
+      os: actionable.os || "-",
+      deviceShort: actionable.deviceShort || "",
+      requestedAtText: actionable.requestedAtText || deviceApprovalSummary?.latestAdminAssistanceAtText || "",
+      loginLocation: { display: actionable.loginLocationDisplay || "位置未確認" },
+      hasTrustedApproverDevice: actionable.hasTrustedApproverDevice !== false,
+      deviceStatus: actionable.deviceStatus || "new",
+      selfApprovalAllowed: false,
+      approvalMode: "enforce",
+      adminOnly: true,
+    });
+    return undefined;
   }, [
     currentBrandId,
     isDeviceSecuritySuperAdmin,
     securityConfig?.deviceApprovalMode,
     currentDeviceTrust?.status,
-    deviceApprovalSummary?.brandPendingCount,
-    deviceApprovalSummary?.latestAtText,
+    deviceApprovalSummary?.adminAssistancePendingCount,
+    deviceApprovalSummary?.adminAssistancePendingItems,
+    deviceApprovalSummary?.latestAdminAssistanceUserName,
+    deviceApprovalSummary?.latestAdminAssistanceRole,
+    deviceApprovalSummary?.latestAdminAssistanceAtText,
     guidedDeviceApprovalRequestId,
     isDeviceApprovalPanelOpen,
     superAdminDeviceNotice,
-    getCollectionPath,
   ]);
 
   // 通知卡顯示期間只監聽「這一筆 request」；如果其他最高管理者先完成，
@@ -1272,7 +1305,6 @@ export default function App() {
   // 切換品牌／帳號時重新建立「本次工作階段已提醒」集合，避免跨品牌沿用狀態。
   useEffect(() => {
     superAdminNoticeSeenRef.current = new Set();
-    superAdminNoticeLookupRef.current = { key: "", inFlight: false };
     setSuperAdminDeviceNotice(null);
     setSuperAdminApprovalFocusId("");
     if (superAdminNoticeResolveTimerRef.current) {
@@ -1750,7 +1782,6 @@ export default function App() {
     setSuperAdminDeviceNotice(null);
     setSuperAdminApprovalFocusId("");
     superAdminNoticeSeenRef.current = new Set();
-    superAdminNoticeLookupRef.current = { key: "", inFlight: false };
     if (superAdminNoticeResolveTimerRef.current) {
       window.clearTimeout(superAdminNoticeResolveTimerRef.current);
       superAdminNoticeResolveTimerRef.current = null;
@@ -3927,7 +3958,7 @@ if (isUpdating) {
                   <div className="mt-1 text-xs font-bold text-[#9A8F83]">
                     {superAdminDeviceNotice.uiStatus === "resolved"
                       ? (superAdminDeviceNotice.resolvedText || getDeviceApprovalResolvedText(superAdminDeviceNotice))
-                      : `品牌目前共有 ${Math.max(1, headerDeviceApprovalCount)} 筆待確認`}
+                      : `目前有 ${Math.max(1, Number(deviceApprovalSummary.adminAssistancePendingCount || 0))} 筆需要最高管理者處理`}
                   </div>
                 </div>
               </div>

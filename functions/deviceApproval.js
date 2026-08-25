@@ -556,12 +556,60 @@ async function recordFailedPasswordAttempt({ admin, db, brandId, roleId, account
   return { accountKey, failedCount, alerted };
 }
 
-function adjustPendingSummariesInTransaction({ transaction, db, brandId, accountKey, delta, latest = {}, resolved = {}, inboxSnap, brandSnap }) {
+function adjustPendingSummariesInTransaction({
+  transaction,
+  db,
+  brandId,
+  accountKey,
+  delta,
+  latest = {},
+  resolved = {},
+  inboxSnap,
+  brandSnap,
+  adminAssistanceItem = null,
+  removeAdminAssistanceRequestId = '',
+}) {
   const inboxRef = getBrandCollection(db, brandId, 'device_approval_inbox').doc(accountKey);
   const brandSummaryRef = getBrandSecuritySummaryDoc(db, brandId, 'device_approvals');
   const inboxCount = Math.max(0, Number(inboxSnap?.data()?.pendingCount || 0) + Number(delta || 0));
-  const brandCount = Math.max(0, Number(brandSnap?.data()?.pendingCount || 0) + Number(delta || 0));
+  const brandData = brandSnap?.data() || {};
+  const brandCount = Math.max(0, Number(brandData.pendingCount || 0) + Number(delta || 0));
   const nowText = new Date().toISOString();
+
+  // ★ Summary-first：最高管理者的主動提醒不再額外掃 pending collection。
+  // 在既有 device_approvals summary 同步維護一份極小的「需要主管協助」待辦佇列。
+  // 前端只讀原本就存在的 summary listener；真的要顯示某一筆時才監聽該 request 本身。
+  const existingAdminItems = Array.isArray(brandData.adminAssistancePendingItems)
+    ? brandData.adminAssistancePendingItems
+        .filter((item) => item && item.requestId)
+        .slice(0, 200)
+    : [];
+  let adminItems = existingAdminItems;
+  const removeRequestId = String(removeAdminAssistanceRequestId || '').trim();
+  if (removeRequestId) {
+    adminItems = adminItems.filter((item) => String(item.requestId || '') !== removeRequestId);
+  }
+  if (adminAssistanceItem?.requestId) {
+    const nextItem = {
+      requestId: String(adminAssistanceItem.requestId || ''),
+      userName: String(adminAssistanceItem.userName || ''),
+      role: String(adminAssistanceItem.role || ''),
+      device: String(adminAssistanceItem.device || ''),
+      browser: String(adminAssistanceItem.browser || ''),
+      os: String(adminAssistanceItem.os || ''),
+      deviceShort: String(adminAssistanceItem.deviceShort || ''),
+      requestedAtText: String(adminAssistanceItem.requestedAtText || nowText),
+      loginLocationDisplay: String(adminAssistanceItem.loginLocationDisplay || '位置未確認'),
+      hasTrustedApproverDevice: adminAssistanceItem.hasTrustedApproverDevice !== false,
+      deviceStatus: String(adminAssistanceItem.deviceStatus || 'new'),
+    };
+    adminItems = [nextItem, ...adminItems.filter((item) => String(item.requestId || '') !== nextItem.requestId)].slice(0, 200);
+  }
+
+  // 主管待辦數直接由同一份小佇列推導，避免計數欄位因重試／並發而漂移。
+  const adminAssistancePendingCount = adminItems.length;
+  const latestAdminItem = adminItems[0] || null;
+
   transaction.set(inboxRef, {
     accountKey,
     pendingCount: inboxCount,
@@ -573,6 +621,13 @@ function adjustPendingSummariesInTransaction({ transaction, db, brandId, account
     brandId: normalizeBrandId(brandId),
     brandLabel: getBrandLabel(brandId),
     pendingCount: brandCount,
+    adminAssistancePendingCount,
+    adminAssistancePendingItems: adminItems,
+    latestAdminAssistanceRequestId: latestAdminItem?.requestId || '',
+    latestAdminAssistanceUserName: latestAdminItem?.userName || '',
+    latestAdminAssistanceRole: latestAdminItem?.role || '',
+    latestAdminAssistanceDevice: latestAdminItem ? `${latestAdminItem.device || '裝置'} / ${latestAdminItem.browser || '-'}` : '',
+    latestAdminAssistanceAtText: latestAdminItem?.requestedAtText || '',
     updatedAtText: nowText,
     ...(Object.keys(latest).length ? latest : {}),
     ...(Object.keys(resolved).length ? resolved : {}),
@@ -588,6 +643,7 @@ async function createOrRefreshApprovalRequest({ admin, db, brandId, roleId, acco
   const existingStatus = String(existingDevice?.status || '');
   const targetStatus = ['observing', 'reverify_required', 'suspicious'].includes(existingStatus) ? existingStatus : 'new';
   const resolvedSelfApprovalAllowed = Boolean(selfApprovalAllowed) && targetStatus !== 'suspicious' && Boolean(hasTrustedApproverDevice);
+  const requiresAdminAssistance = securityConfig.deviceApprovalMode === 'enforce' && !resolvedSelfApprovalAllowed;
   const code = resolvedSelfApprovalAllowed ? makeVerificationCode() : '';
   const salt = resolvedSelfApprovalAllowed ? crypto.randomBytes(16).toString('hex') : '';
   const codeHash = resolvedSelfApprovalAllowed ? hashVerificationCode(code, salt) : '';
@@ -607,6 +663,15 @@ async function createOrRefreshApprovalRequest({ admin, db, brandId, roleId, acco
     ]);
     const existingRequest = requestSnap.exists ? requestSnap.data() || {} : {};
     const alreadyPending = existingRequest.status === 'pending';
+    const existingRequiresAdminAssistance = Boolean(
+      existingRequest.adminOnly === true ||
+      (existingRequest.approvalMode === 'enforce' && existingRequest.selfApprovalAllowed === false)
+    );
+    const existingAdminItems = Array.isArray(brandSnap?.data()?.adminAssistancePendingItems)
+      ? brandSnap.data().adminAssistancePendingItems
+      : [];
+    const summaryHasAdminItem = existingAdminItems.some((item) => String(item?.requestId || '') === requestId);
+    const shouldSyncAdminAssistance = requiresAdminAssistance ? !summaryHasAdminItem : summaryHasAdminItem;
     shouldCreateAlert = !alreadyPending;
 
     const nextDevice = {
@@ -676,6 +741,7 @@ async function createOrRefreshApprovalRequest({ admin, db, brandId, roleId, acco
       recoveredFromDeviceId: recoveredFromDeviceId || '',
       selfApprovalAllowed: resolvedSelfApprovalAllowed,
       hasTrustedApproverDevice: Boolean(hasTrustedApproverDevice),
+      adminOnly: requiresAdminAssistance,
       deviceStatus: targetStatus,
       requestedAt: admin.firestore.FieldValue.serverTimestamp(),
       requestedAtText: nowText,
@@ -702,24 +768,40 @@ async function createOrRefreshApprovalRequest({ admin, db, brandId, roleId, acco
       transaction.delete(secretRef);
     }
 
-    if (!alreadyPending) {
+    if (!alreadyPending || shouldSyncAdminAssistance) {
       adjustPendingSummariesInTransaction({
         transaction,
         db,
         brandId,
         accountKey,
-        delta: 1,
+        delta: alreadyPending ? 0 : 1,
         inboxSnap,
         brandSnap,
-        latest: {
+        adminAssistanceItem: requiresAdminAssistance ? {
+          requestId,
+          userName,
+          role: roleId,
+          device: deviceInfo.device,
+          browser: deviceInfo.browser,
+          os: deviceInfo.os,
+          deviceShort: deviceInfo.deviceShort,
+          requestedAtText: nowText,
+          loginLocationDisplay: loginLocation?.display || '位置未確認',
+          hasTrustedApproverDevice: Boolean(hasTrustedApproverDevice),
+          deviceStatus: targetStatus,
+        } : null,
+        removeAdminAssistanceRequestId: !requiresAdminAssistance && existingRequiresAdminAssistance ? requestId : '',
+        latest: !alreadyPending ? {
           latestRequestId: requestId,
           latestUserName: userName,
           latestRole: roleId,
           latestDevice: `${deviceInfo.device} / ${deviceInfo.browser || '-'}`,
           latestDeviceShort: deviceInfo.deviceShort,
           latestAtText: nowText,
-        },
+        } : {},
       });
+    }
+    if (!alreadyPending) {
       transaction.set(alertRef, {
         type: 'device_approval_pending',
         severity: roleId === 'director' ? 'high' : 'medium',
@@ -804,6 +886,10 @@ async function resolvePendingRequestInTransaction({ admin, transaction, db, bran
     expiresAtMs: admin.firestore.FieldValue.delete(),
   }, { merge: true });
 
+  const requestRequiresAdminAssistance = Boolean(
+    requestData.adminOnly === true ||
+    (requestData.approvalMode === 'enforce' && requestData.selfApprovalAllowed === false)
+  );
   adjustPendingSummariesInTransaction({
     transaction,
     db,
@@ -812,6 +898,7 @@ async function resolvePendingRequestInTransaction({ admin, transaction, db, bran
     delta: -1,
     inboxSnap,
     brandSnap,
+    removeAdminAssistanceRequestId: requestRequiresAdminAssistance ? (requestData.requestId || requestRef.id) : '',
     resolved: {
       lastResolvedRequestId: requestData.requestId || requestRef.id,
       lastResolvedDeviceShort: requestData.deviceShort || '',
