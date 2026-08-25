@@ -637,7 +637,7 @@ const LoginView = ({
       setForceConfirmPassword("");
       setPassword("");
       setTPassword("");
-      onLogin(loginRole, loginPayload);
+      await onLogin(loginRole, loginPayload, { accountId: forcePasswordUpdate.accountId, password: nextPass });
     } catch (e) {
       console.error("首次密碼更新失敗:", e);
       setError("密碼更新失敗，請稍後再試");
@@ -667,7 +667,7 @@ const LoginView = ({
            if (isInitialPasswordLogin("director", password, correctPass, { isMasterLogin })) {
              openForcePasswordUpdate({ roleId: "director", accountId: selectedUser, userInfo, currentPassword: password, displayName: selectedUser });
            } else {
-             onLogin("director", userInfo);
+             await onLogin("director", userInfo, { accountId: selectedUser, password, isMasterLogin });
            }
         } else {
            setError("密碼錯誤");
@@ -683,7 +683,7 @@ const LoginView = ({
           if (isInitialPasswordLogin("trainer", password, correctPass)) {
             openForcePasswordUpdate({ roleId: "trainer", accountId: account.id, userInfo, currentPassword: password, displayName: account.name || "教專" });
           } else {
-            onLogin("trainer", userInfo);
+            await onLogin("trainer", userInfo, { accountId: account.id, password });
           }
         } else setError("密碼錯誤");
       } else if (role === "manager") {
@@ -694,7 +694,7 @@ const LoginView = ({
           if (isInitialPasswordLogin("manager", password, correctPass)) {
             openForcePasswordUpdate({ roleId: "manager", accountId: selectedUser, userInfo, currentPassword: password, displayName: selectedUser });
           } else {
-            onLogin("manager", userInfo);
+            await onLogin("manager", userInfo, { accountId: selectedUser, password });
           }
         } else setError("密碼錯誤");
       } else if (role === "store") {
@@ -705,7 +705,7 @@ const LoginView = ({
           if (isInitialPasswordLogin("store", password, account.password)) {
             openForcePasswordUpdate({ roleId: "store", accountId: selectedUser, userInfo, currentPassword: password, displayName: account.name });
           } else {
-            onLogin("store", userInfo);
+            await onLogin("store", userInfo, { accountId: selectedUser, password });
           }
         } else setError("密碼錯誤");
       }
@@ -727,7 +727,7 @@ const LoginView = ({
         if (isInitialPasswordLogin("therapist", tPassword, therapist.password)) {
           openForcePasswordUpdate({ roleId: "therapist", accountId: therapist.id, userInfo: normalizedTherapist, currentPassword: tPassword, displayName: therapist.name });
         } else {
-          onLogin("therapist", normalizedTherapist);
+          await onLogin("therapist", normalizedTherapist, { accountId: therapist.id, password: tPassword });
         }
       } else setError("密碼錯誤 (預設 0000)");
     } catch (e) { setError("登入發生錯誤"); } finally { setIsLoading(false); }

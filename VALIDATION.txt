@@ -1,0 +1,45 @@
+Device Approval v1 validation — 2026-08-24
+
+Backend:
+- node --check functions/deviceApproval.js : PASS
+- node --check functions/index.js : PASS
+
+Frontend syntax (TypeScript transpileModule JSX parser):
+- src/App.jsx : PASS
+- src/components/LoginView.jsx : PASS
+- src/components/SystemMonitor.jsx : PASS
+- src/components/SettingsView.jsx : PASS
+- src/components/DeviceApprovalGate.jsx : PASS
+- src/components/DeviceApprovalPanel.jsx : PASS
+
+Regression:
+- node --test tests/deviceApproval.test.js : 24 / 24 PASS
+
+Static security checks included in regression:
+- approval defaults off
+- all five current roles supported
+- Firebase ID token verified by backend endpoint
+- application credential re-verified by backend
+- off / monitor do not become fail-closed because of a device-service error
+- existing trusted devices grandfathered
+- recoverable device cannot auto-inherit trust in approval mode
+- blocked/suspicious legacy match cannot bypass by changing browser storage device id
+- trusted-device self confirmation requires a different trusted device
+- first-time account without trusted approver requires manager help
+- super-admin / master checks
+- legacy director-level fallback
+- deterministic active request per account/device
+- 6-digit code hash stored only in private subdocument
+- expired request cleanup
+- Header uses small summary docs
+- full device history remains manual-load
+- protected security collections excluded from broad Firestore write rules
+- legacy frontend Known Device Recovery / auto-trust policy removed after backend takeover
+- frontend no longer directly mutates protected device-security collections
+- user-facing approval UI avoids engineering wording
+
+Not run in this environment:
+- npm run build (requires complete repository dependencies)
+- firebase rules compile/deploy (Firebase CLI unavailable here)
+
+These two checks are mandatory before deployment.

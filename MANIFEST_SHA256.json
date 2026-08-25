@@ -1,0 +1,15 @@
+{
+  "README_DEPLOYMENT.md": "33dfc5ebe1361dd5fe64eacd6937a94f0b9b1b56d9803f6f0c97b559c623e780",
+  "VALIDATION.txt": "79fb4a35239e96094d96db98f2004157bad714316224062117f81f9cebcb86ed",
+  "device-approval-v1.patch": "62055a1cba212f6d34a1efce32bc99e12f0a063f800dd406573c14fef2c10158",
+  "firestore.rules": "480ae92060b8927c8b1982d958d4b91069ab3cdbf4716eb2575bbd3314ae9438",
+  "functions/deviceApproval.js": "ec3b42344d711f8e9538beaa5ab2e7bc0a4663ea56a0efa7d1f220ca1d965c51",
+  "functions/index.js": "f926d58aaba5e8d0dc4e7e3838a9018fdef8c5a4e633d8848e615e1eea2a8cbe",
+  "src/App.jsx": "191e343ee53185f7057cf49e63335e13822662029fbaf482949eb5590ef058c1",
+  "src/components/DeviceApprovalGate.jsx": "b9aee3fff6e3d9338169c040da2fe951b97c9e7e9eb886c3e9dad7206f429735",
+  "src/components/DeviceApprovalPanel.jsx": "eb10ff8040181626ae62f8b416ace3fa9592ce1ef6448cd5f5f3b70961defb95",
+  "src/components/LoginView.jsx": "38b3482fef3c40b94dc25360a26b073831c31f1b4e07859f3e520665b7bb70aa",
+  "src/components/SettingsView.jsx": "e0e7fe88d53702206c1ec391eaa40487ccb3e94d60ef359d8a98ee8604be48ad",
+  "src/components/SystemMonitor.jsx": "4eb3b9bc7946f737e0555fdbfb52393a4daafd84e4db827b1980e5dc0f3d2bd5",
+  "tests/deviceApproval.test.js": "c79dd918a272331433cdcda7ee558aa56b03447ec5e497f3867488bd82f2702d"
+}

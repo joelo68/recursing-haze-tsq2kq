@@ -81,6 +81,8 @@ const AnnualView = () => {
   const [isConfigModalOpen, setIsConfigModalOpen] = useState(false);
   const [localExclusions, setLocalExclusions] = useState([]);
   const [annualMonthlyTargetSummaries, setAnnualMonthlyTargetSummaries] = useState({});
+  const [annualTargetSummariesLoaded, setAnnualTargetSummariesLoaded] = useState(false);
+  const [annualTargetFallbacks, setAnnualTargetFallbacks] = useState({});
 
   // 當切換品牌或年份時，重置過濾與時間區間
   useEffect(() => {
@@ -120,9 +122,11 @@ const AnnualView = () => {
     const loadAnnualMonthlyTargetSummaries = async () => {
       if (!getCollectionPath) return;
 
+      setAnnualTargetSummariesLoaded(false);
       const monthKeys = getMonthKeysInRange(startMonthStr, endMonthStr);
       if (monthKeys.length === 0) {
         setAnnualMonthlyTargetSummaries({});
+        setAnnualTargetSummariesLoaded(true);
         return;
       }
 
@@ -141,9 +145,13 @@ const AnnualView = () => {
           if (data) next[yearMonth] = data;
         });
         setAnnualMonthlyTargetSummaries(next);
+        setAnnualTargetSummariesLoaded(true);
       } catch (error) {
         console.warn("AnnualView 載入 monthly_targets_summary 失敗:", error);
-        if (!cancelled) setAnnualMonthlyTargetSummaries({});
+        if (!cancelled) {
+          setAnnualMonthlyTargetSummaries({});
+          setAnnualTargetSummariesLoaded(true);
+        }
       }
     };
 
@@ -302,13 +310,170 @@ const AnnualView = () => {
   // ==========================================
   // 4. 核心運算邏輯 (★ 改為讀取 annualAggregatedData)
   // ==========================================
-    const monthlyTargetSummaryByMonth = useMemo(() => {
+  const monthlyTargetSummaryByMonth = useMemo(() => {
     const map = { ...(annualMonthlyTargetSummaries || {}) };
+
+    // ★ 當月 AppContext 的即時 Summary 只做「合併」，不能整份覆蓋 AnnualView 剛讀到的月份 Summary。
+    // 否則即時 Summary 若暫時缺店（例如新店），會把已補整理完成的 33 店 Summary 再覆蓋成不完整版本。
     if (monthlyTargetSummary?.yearMonth) {
-      map[monthlyTargetSummary.yearMonth] = monthlyTargetSummary;
+      const yearMonth = String(monthlyTargetSummary.yearMonth);
+      const rangeSummary = map[yearMonth] || {};
+      const rangeTargets = rangeSummary.targets || rangeSummary.storeTargets || rangeSummary.data || {};
+      const liveTargets = monthlyTargetSummary.targets || monthlyTargetSummary.storeTargets || monthlyTargetSummary.data || {};
+
+      map[yearMonth] = {
+        ...rangeSummary,
+        ...monthlyTargetSummary,
+        id: monthlyTargetSummary.id || rangeSummary.id || yearMonth,
+        yearMonth,
+        targets: {
+          ...(rangeTargets && typeof rangeTargets === "object" ? rangeTargets : {}),
+          ...(liveTargets && typeof liveTargets === "object" ? liveTargets : {}),
+        },
+      };
     }
+
     return map;
   }, [annualMonthlyTargetSummaries, monthlyTargetSummary]);
+
+  // ★ Summary-first 安全備援：
+  // 只有當某月份的 monthly_targets_summary 對目前篩選店家「缺店或目標為 0」時，
+  // 才精準讀取該店該月的原始 monthly_targets 文件。正常情況仍只讀 12 份 Summary，
+  // 不重新打開全年 400+ 筆 monthly_targets 監聽。
+  useEffect(() => {
+    let cancelled = false;
+
+    const readTargetNumber = (row, keys = []) => {
+      for (const key of keys) {
+        const raw = row?.[key];
+        if (raw === null || raw === undefined || raw === "") continue;
+        const num = Number(raw);
+        if (Number.isFinite(num)) return num;
+      }
+      return 0;
+    };
+
+    const getSummaryTargetByCore = (summary, coreName) => {
+      if (!summary || !coreName) return null;
+      const targetsMap = summary.targets || summary.storeTargets || summary.data || {};
+      if (!targetsMap || typeof targetsMap !== "object") return null;
+
+      for (const [key, value] of Object.entries(targetsMap)) {
+        const candidateName = value?.storeName || value?.store || value?.name || value?.displayName || key;
+        if (canonicalStoreName(candidateName) === coreName) {
+          return value || {};
+        }
+      }
+      return null;
+    };
+
+    const loadMissingTargetFallbacks = async () => {
+      if (!annualTargetSummariesLoaded || !getCollectionPath) return;
+
+      const monthKeys = getMonthKeysInRange(startMonthStr, endMonthStr);
+      const exclusionSet = new Set((auditExclusions || []).map(canonicalStoreName).filter(Boolean));
+      const storeCores = [...new Set(
+        (effectiveStores || [])
+          .map(canonicalStoreName)
+          .filter((core) => core && !exclusionSet.has(core))
+      )];
+
+      if (monthKeys.length === 0 || storeCores.length === 0) {
+        if (!cancelled) setAnnualTargetFallbacks({});
+        return;
+      }
+
+      const missingPairs = [];
+      monthKeys.forEach((yearMonth) => {
+        const summary = monthlyTargetSummaryByMonth[yearMonth];
+        storeCores.forEach((core) => {
+          const row = getSummaryTargetByCore(summary, core);
+          const cashTarget = readTargetNumber(row, ["cashTarget", "targetCash", "cashBudget", "monthlyCashTarget", "cash", "cash_target"]);
+          const accrualTarget = readTargetNumber(row, ["accrualTarget", "targetAccrual", "accrualBudget", "monthlyAccrualTarget", "accrual", "accrual_target"]);
+          if (!row || (cashTarget <= 0 && accrualTarget <= 0)) {
+            missingPairs.push({ yearMonth, core });
+          }
+        });
+      });
+
+      if (missingPairs.length === 0) {
+        if (!cancelled) setAnnualTargetFallbacks({});
+        return;
+      }
+
+      const targetCollection = getCollectionPath("monthly_targets");
+      const nextFallbacks = {};
+
+      // 正常僅會處理少數缺漏；新店同時相容舊 key「CYJ新店_YYYY_M」與新 key「CYJ新店店_YYYY_M」。
+      for (const { yearMonth, core } of missingPairs) {
+        if (cancelled) return;
+        const [yearText, monthText] = String(yearMonth).split("-");
+        const monthNum = Number(monthText);
+        const canonicalFullName = `${brandPrefix}${core}店`;
+        const candidateIds = [
+          `${canonicalFullName}_${yearText}_${monthNum}`,
+          `${canonicalFullName}_${yearText}_${String(monthNum).padStart(2, "0")}`,
+        ];
+
+        if (core === "新店") {
+          candidateIds.push(
+            `${brandPrefix}新店_${yearText}_${monthNum}`,
+            `${brandPrefix}新店_${yearText}_${String(monthNum).padStart(2, "0")}`
+          );
+        }
+
+        const uniqueIds = [...new Set(candidateIds)];
+        let resolved = null;
+
+        for (const targetId of uniqueIds) {
+          const snap = await getDoc(doc(targetCollection, targetId));
+          if (!snap.exists()) continue;
+
+          const data = snap.data() || {};
+          const cashTarget = readTargetNumber(data, ["cashTarget", "targetCash", "cashBudget", "monthlyCashTarget", "cash", "cash_target"]);
+          const accrualTarget = readTargetNumber(data, ["accrualTarget", "targetAccrual", "accrualBudget", "monthlyAccrualTarget", "accrual", "accrual_target"]);
+          if (cashTarget > 0 || accrualTarget > 0) {
+            resolved = {
+              ...data,
+              storeName: data.storeName || data.store || canonicalFullName,
+              cashTarget,
+              accrualTarget,
+              sourceDocId: snap.id,
+            };
+            break;
+          }
+        }
+
+        if (resolved) {
+          if (!nextFallbacks[yearMonth]) nextFallbacks[yearMonth] = {};
+          nextFallbacks[yearMonth][core] = resolved;
+        }
+      }
+
+      if (!cancelled) setAnnualTargetFallbacks(nextFallbacks);
+    };
+
+    loadMissingTargetFallbacks().catch((error) => {
+      console.warn("AnnualView 精準讀取 monthly_targets fallback 失敗:", error);
+      if (!cancelled) setAnnualTargetFallbacks({});
+    });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [
+    annualTargetSummariesLoaded,
+    monthlyTargetSummaryByMonth,
+    getCollectionPath,
+    startMonthStr,
+    endMonthStr,
+    selectedYear,
+    currentBrand,
+    brandPrefix,
+    effectiveStores,
+    auditExclusions,
+    canonicalStoreName,
+  ]);
 
 const annualData = useMemo(() => {
     const effectiveStoreSet = new Set(effectiveStores.map(canonicalStoreName).filter(Boolean));
@@ -420,38 +585,79 @@ const annualData = useMemo(() => {
     };
 
     const sumTargetsFromMonthlyTargetSummary = (summary, targetStat) => {
-      if (!summary) return false;
-      const summaryYearMonth = String(summary.yearMonth || summary.id || "");
       const targetYearMonth = `${targetStat.y}-${String(targetStat.m).padStart(2, "0")}`;
-      if (summaryYearMonth !== targetYearMonth) return false;
+      const summaryYearMonth = String(summary?.yearMonth || summary?.id || targetYearMonth);
+      const targetsMap = summary?.targets || summary?.storeTargets || summary?.data || {};
+      const targetStoreCores = [...new Set(targetStoreNames.map(canonicalStoreName).filter(Boolean))];
+      const summaryTargetMap = new Map();
 
-      const targetsMap = summary.targets || summary.storeTargets || summary.data || {};
-      if (!targetsMap || typeof targetsMap !== "object") return false;
-
-      const targetStoreSet = new Set(targetStoreNames.map(canonicalStoreName).filter(Boolean));
-      const allTargets = Object.entries(targetsMap)
-        .map(([key, value]) => ({
-          key,
-          ...(value || {}),
-          storeName: value?.storeName || value?.name || value?.displayName || key,
-        }))
-        .filter((item) => {
-          if (!shouldFilterSummaryStores) return true;
+      if (summary && summaryYearMonth === targetYearMonth && targetsMap && typeof targetsMap === "object") {
+        Object.entries(targetsMap).forEach(([key, value]) => {
+          const item = {
+            key,
+            ...(value || {}),
+            storeName: value?.storeName || value?.store || value?.name || value?.displayName || key,
+          };
           const core = canonicalStoreName(item.storeName);
-          return core && targetStoreSet.has(core);
+          if (core && !summaryTargetMap.has(core)) summaryTargetMap.set(core, item);
         });
+      }
 
-      if (allTargets.length === 0) return false;
+      let foundAnyTarget = false;
+      let usedDirectFallback = false;
 
-      const cashBudget = allTargets.reduce((sum, item) => sum + pickNumber(item, ["cashTarget", "targetCash", "cashBudget", "monthlyCashTarget", "cash", "cash_target"]), 0);
-      const accrualBudget = allTargets.reduce((sum, item) => sum + pickNumber(item, ["accrualTarget", "targetAccrual", "accrualBudget", "monthlyAccrualTarget", "accrual", "accrual_target"]), 0);
+      targetStoreCores.forEach((core) => {
+        let row = summaryTargetMap.get(core) || null;
+        let cashTarget = pickNumber(row, ["cashTarget", "targetCash", "cashBudget", "monthlyCashTarget", "cash", "cash_target"]);
+        let accrualTarget = pickNumber(row, ["accrualTarget", "targetAccrual", "accrualBudget", "monthlyAccrualTarget", "accrual", "accrual_target"]);
 
-      if (cashBudget <= 0 && accrualBudget <= 0) return false;
+        // Summary 對該店缺漏時，改用上方 useEffect 精準讀到的原始 monthly_targets。
+        if (!row || (cashTarget <= 0 && accrualTarget <= 0)) {
+          const fallbackRow = annualTargetFallbacks?.[targetYearMonth]?.[core];
+          if (fallbackRow) {
+            row = fallbackRow;
+            cashTarget = pickNumber(row, ["cashTarget", "targetCash", "cashBudget", "monthlyCashTarget", "cash", "cash_target"]);
+            accrualTarget = pickNumber(row, ["accrualTarget", "targetAccrual", "accrualBudget", "monthlyAccrualTarget", "accrual", "accrual_target"]);
+            usedDirectFallback = true;
+          }
+        }
 
-      targetStat.budget += cashBudget;
-      targetStat.accrualBudget += accrualBudget;
-      targetStat.targetSource = "monthly_targets_summary";
-      return true;
+        // 最後才保留舊 budgets 相容層；AnnualView 正常情況下 budgets 會被 App 節流清空。
+        if (cashTarget <= 0 && accrualTarget <= 0) {
+          const canonicalFullName = `${brandPrefix}${core}店`;
+          const legacyFullName = core === "新店" ? `${brandPrefix}新店` : "";
+          const budgetKeys = [
+            `${canonicalFullName}_${targetStat.y}_${targetStat.m}`,
+            `${canonicalFullName}_${targetStat.y}_${String(targetStat.m).padStart(2, "0")}`,
+            legacyFullName ? `${legacyFullName}_${targetStat.y}_${targetStat.m}` : "",
+            legacyFullName ? `${legacyFullName}_${targetStat.y}_${String(targetStat.m).padStart(2, "0")}` : "",
+          ].filter(Boolean);
+
+          for (const key of budgetKeys) {
+            const budgetRow = budgets?.[key];
+            if (!budgetRow) continue;
+            const nextCash = pickNumber(budgetRow, ["cashTarget", "targetCash", "cashBudget", "monthlyCashTarget", "cash", "cash_target"]);
+            const nextAccrual = pickNumber(budgetRow, ["accrualTarget", "targetAccrual", "accrualBudget", "monthlyAccrualTarget", "accrual", "accrual_target"]);
+            if (nextCash > 0 || nextAccrual > 0) {
+              cashTarget = nextCash;
+              accrualTarget = nextAccrual;
+              break;
+            }
+          }
+        }
+
+        if (cashTarget > 0 || accrualTarget > 0) {
+          targetStat.budget += cashTarget;
+          targetStat.accrualBudget += accrualTarget;
+          foundAnyTarget = true;
+        }
+      });
+
+      if (foundAnyTarget) {
+        targetStat.targetSource = usedDirectFallback ? "monthly_targets_precise_fallback" : "monthly_targets_summary";
+      }
+
+      return foundAnyTarget;
     };
 
     const summaryAppliedMonths = new Set();
@@ -505,17 +711,7 @@ const annualData = useMemo(() => {
       // 只有 summary 找不到時，才 fallback 舊 budgets，讓 AnnualView 不必為了年度預算讀完整 monthly_targets。
       if (stat.source !== "summary") {
         const statYearMonth = `${stat.y}-${String(stat.m).padStart(2, "0")}`;
-        const usedTargetSummary = sumTargetsFromMonthlyTargetSummary(monthlyTargetSummaryByMonth[statYearMonth], stat);
-
-        if (!usedTargetSummary) {
-          targetStoreNames.forEach(storeName => {
-            const key = `${storeName}_${stat.y}_${stat.m}`;
-            if (budgets[key]) {
-              stat.budget += (Number(budgets[key].cashTarget) || 0);
-              stat.accrualBudget += (Number(budgets[key].accrualTarget) || 0);
-            }
-          });
-        }
+        sumTargetsFromMonthlyTargetSummary(monthlyTargetSummaryByMonth[statYearMonth], stat);
       }
 
       stat.achievement = stat.budget > 0 ? (stat.cash / stat.budget) * 100 : 0;
@@ -536,7 +732,7 @@ const annualData = useMemo(() => {
         traffic: totalTraffic,
       }
     };
-  }, [annualAggregatedData, annualDashboardSummaries, annualSummaryStatusMap, monthlyTargetSummaryByMonth, budgets, startMonthStr, endMonthStr, auditExclusions, brandPrefix, effectiveStores, cleanName, canonicalStoreName, selectedAnnualManager, selectedAnnualStore, userRole]); // ★ Summary-first 口徑需跟著篩選與權限更新
+  }, [annualAggregatedData, annualDashboardSummaries, annualSummaryStatusMap, monthlyTargetSummaryByMonth, annualTargetFallbacks, budgets, startMonthStr, endMonthStr, auditExclusions, brandPrefix, effectiveStores, cleanName, canonicalStoreName, selectedAnnualManager, selectedAnnualStore, userRole]); // ★ Summary-first 口徑需跟著篩選與權限更新
 
   const { monthlyStats, totals } = annualData;
 

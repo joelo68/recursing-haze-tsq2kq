@@ -1,0 +1,117 @@
+--- /mnt/data/device_approval_v1_final_20260824/src/App.jsx	2026-08-24 09:42:33.544478795 +0000
++++ /mnt/data/device_approval_v1_3_5_1_20260824/src/App.jsx	2026-08-24 09:45:54.576773421 +0000
+@@ -49,7 +49,7 @@
+ // ==========================================
+ // ★ 系統核心版本號 (終極動態快取版)
+ // ==========================================
+-const CURRENT_APP_VERSION = "3.5.0";
++const CURRENT_APP_VERSION = "3.5.1";
+ const LOGIN_LOCATION_ENDPOINT = "https://resolveloginlocation-hyhcwrnyaa-uc.a.run.app";
+ const DEVICE_ACCESS_ENDPOINT = "https://us-central1-cyjsituation-analysis.cloudfunctions.net/checkDeviceAccess";
+ const DEVICE_APPROVAL_REVIEW_ENDPOINT = "https://us-central1-cyjsituation-analysis.cloudfunctions.net/reviewDeviceApproval";
+@@ -569,6 +569,7 @@
+     label: "裝置狀態確認中",
+     deviceShort: "",
+     deviceId: "",
++    approvalRequestId: "",
+   });
+ 
+   const [isUpdating, setIsUpdating] = useState(false);
+@@ -723,6 +724,7 @@
+           label: isBlocked ? "⛔ 此裝置已停用" : (isTrusted ? "🛡 目前裝置已信任" : "⚠ 新裝置待確認"),
+           deviceShort: detail.deviceShort || prev.deviceShort,
+           deviceId: detail.deviceId || prev.deviceId,
++          approvalRequestId: isTrusted || isBlocked ? "" : prev.approvalRequestId,
+         };
+       });
+     };
+@@ -731,6 +733,49 @@
+     return () => window.removeEventListener("cyj_device_trust_updated", handler);
+   }, []);
+ 
++  // Monitor 模式下，新裝置已經能進入系統，因此要額外同步「目前這台裝置」的確認結果。
++  // 只監聽登入時 Backend 回傳的那一筆 request，不讀完整裝置歷史；核准後可即時把 Header 從「待確認」切回「已信任」。
++  useEffect(() => {
++    const requestId = String(currentDeviceTrust?.approvalRequestId || "").trim();
++    const shouldWatch = Boolean(
++      userRole &&
++      currentUser &&
++      requestId &&
++      ["new", "suspicious"].includes(currentDeviceTrust?.status)
++    );
++    if (!shouldWatch) return undefined;
++
++    const requestRef = doc(getCollectionPath("device_approval_requests"), requestId);
++    return onSnapshot(requestRef, (snap) => {
++      if (!snap.exists()) return;
++      const data = snap.data() || {};
++      const requestStatus = String(data.status || "pending");
++      if (requestStatus === "approved") {
++        setCurrentDeviceTrust((prev) => {
++          if (String(prev?.approvalRequestId || "") !== requestId) return prev;
++          return {
++            ...prev,
++            status: "trusted",
++            label: "🛡 目前裝置已信任",
++            approvalRequestId: "",
++          };
++        });
++      } else if (requestStatus === "expired") {
++        setCurrentDeviceTrust((prev) => {
++          if (String(prev?.approvalRequestId || "") !== requestId) return prev;
++          return {
++            ...prev,
++            status: prev.status === "suspicious" ? "suspicious" : "new",
++            label: prev.status === "suspicious" ? "⚠ 需要管理者確認" : "⚠ 需要重新確認",
++            approvalRequestId: "",
++          };
++        });
++      }
++    }, (error) => {
++      console.warn("同步目前裝置確認結果失敗:", error);
++    });
++  }, [userRole, currentUser, currentDeviceTrust?.approvalRequestId, currentDeviceTrust?.status, getCollectionPath]);
++
+   useEffect(() => {
+     const handleDashboardViewModeChanged = (event) => {
+       const nextMode = event?.detail?.viewMode;
+@@ -1233,6 +1278,7 @@
+       label: "裝置狀態確認中",
+       deviceShort: "",
+       deviceId: "",
++      approvalRequestId: "",
+     });
+     setUserRole(null); setCurrentUser(null); setActiveView("dashboard");
+   }, [currentUser, userRole, logActivity, securityConfig]);
+@@ -2606,6 +2652,7 @@
+       label: nextTrustLabel,
+       deviceShort: loginDeviceInfo.deviceShort,
+       deviceId: loginDeviceInfo.deviceId,
++      approvalRequestId: approvalRequired ? String(deviceSecurity?.requestId || "") : "",
+     });
+ 
+     if (approvalRequired && deviceSecurity?.approvalMode === "monitor") {
+--- /mnt/data/device_approval_v1_final_20260824/tests/deviceApproval.test.js	2026-08-24 09:42:35.024478849 +0000
++++ /mnt/data/device_approval_v1_3_5_1_20260824/tests/deviceApproval.test.js	2026-08-24 09:45:54.577009873 +0000
+@@ -22,7 +22,7 @@
+   assert.match(backend, /deviceApprovalMode:\s*'off'/);
+   assert.match(backend, /deviceApprovalRoles:\s*\['director', 'trainer', 'manager', 'store', 'therapist'\]/);
+   assert.match(backend, /deviceApprovalExpiryMinutes:\s*15/);
+-  assert.match(app, /CURRENT_APP_VERSION\s*=\s*"3\.5\.0"/);
++  assert.match(app, /CURRENT_APP_VERSION\s*=\s*"3\.5\.1"/);
+ });
+ 
+ test("backend verifies Firebase request auth and application credential before device decision", () => {
+@@ -210,3 +210,12 @@
+   }
+   assert.match(login, /await onLogin\(loginRole, loginPayload, \{ accountId: forcePasswordUpdate\.accountId, password: nextPass \}\)/);
+ });
++
++test("monitor-mode device badge becomes trusted live after approval without relogin", () => {
++  assert.match(app, /approvalRequestId:\s*approvalRequired \? String\(deviceSecurity\?\.requestId \|\| ""\) : ""/);
++  assert.match(app, /getCollectionPath\("device_approval_requests"\)/);
++  assert.match(app, /requestStatus === "approved"/);
++  assert.match(app, /status:\s*"trusted"[\s\S]{0,180}label:\s*"🛡 目前裝置已信任"/);
++  assert.match(app, /approvalRequestId:\s*""/);
++});
++

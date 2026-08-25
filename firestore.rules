@@ -91,17 +91,92 @@ service cloud.firestore {
       allow update, delete: if false;
     }
 
+    // Device Approval v1：裝置信任與核准結果一律由 Cloud Functions 寫入。
+    // 前端只保留必要讀取，避免新裝置自行把自己改成「已信任」。
+    match /brands/{brandId}/account_devices/{document=**} {
+      allow read: if signedIn();
+      allow write: if false;
+    }
+
+    match /brands/{brandId}/device_approval_requests/{requestId} {
+      allow read: if signedIn();
+      allow write: if false;
+    }
+
+    match /brands/{brandId}/device_approval_requests/{requestId}/private/{document=**} {
+      allow read, write: if false;
+    }
+
+    match /brands/{brandId}/device_approval_inbox/{document=**} {
+      allow read: if signedIn();
+      allow write: if false;
+    }
+
+    match /brands/{brandId}/security_alerts/{document=**} {
+      allow read: if signedIn();
+      allow write: if false;
+    }
+
+    match /brands/{brandId}/security_summary/{document=**} {
+      allow read: if signedIn();
+      allow write: if false;
+    }
+
+    match /artifacts/{appId}/public/data/account_devices/{document=**} {
+      allow read: if signedIn();
+      allow write: if false;
+    }
+
+    match /artifacts/{appId}/public/data/device_approval_requests/{requestId} {
+      allow read: if signedIn();
+      allow write: if false;
+    }
+
+    match /artifacts/{appId}/public/data/device_approval_requests/{requestId}/private/{document=**} {
+      allow read, write: if false;
+    }
+
+    match /artifacts/{appId}/public/data/device_approval_inbox/{document=**} {
+      allow read: if signedIn();
+      allow write: if false;
+    }
+
+    match /artifacts/{appId}/public/data/security_alerts/{document=**} {
+      allow read: if signedIn();
+      allow write: if false;
+    }
+
+    match /artifacts/{appId}/public/data/security_summary/{document=**} {
+      allow read: if signedIn();
+      allow write: if false;
+    }
+
+    match /artifacts/{appId}/public/data/global_blocked_devices/{document=**} {
+      allow read, write: if false;
+    }
+
     // 既有品牌資料維持原本登入後可讀寫；排除上方受保護集合，避免寬鬆規則覆蓋。
     match /brands/{brandId}/{collectionName}/{document=**} {
       allow read, write: if signedIn()
         && collectionName != 'management_delegations'
-        && collectionName != 'system_logs';
+        && collectionName != 'system_logs'
+        && collectionName != 'account_devices'
+        && collectionName != 'device_approval_requests'
+        && collectionName != 'device_approval_inbox'
+        && collectionName != 'security_alerts'
+        && collectionName != 'security_summary';
     }
 
     match /artifacts/{appId}/public/data/{collectionName}/{document=**} {
       allow read, write: if signedIn()
         && collectionName != 'management_delegations'
-        && collectionName != 'system_logs';
+        && collectionName != 'system_logs'
+        && collectionName != 'account_devices'
+        && collectionName != 'device_approval_requests'
+        && collectionName != 'device_approval_inbox'
+        && collectionName != 'security_alerts'
+        && collectionName != 'security_summary'
+        && collectionName != 'global_blocked_devices';
     }
 
     // 其他既有根集合維持登入後存取；brands / artifacts 已由上方專屬規則處理。

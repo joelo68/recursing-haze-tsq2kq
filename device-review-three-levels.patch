@@ -1,0 +1,688 @@
+--- a/src/App.jsx
++++ b/src/App.jsx
+@@ -718,13 +718,33 @@
+ 
+         const isBlocked = detail.status === "blocked" || detail.source === "manual_blocked";
+         const isTrusted = detail.status === "trusted" || detail.trusted === true;
++        const isObserving = detail.status === "observing" || detail.source === "manual_observing";
++        const isReverifyRequired = detail.status === "reverify_required" || detail.source === "manual_reverify_required";
++        const nextStatus = isBlocked
++          ? "blocked"
++          : isTrusted
++            ? "trusted"
++            : isReverifyRequired
++              ? "reverify_required"
++              : isObserving
++                ? "observing"
++                : "new";
++        const nextLabel = nextStatus === "blocked"
++          ? "⛔ 此裝置已停用"
++          : nextStatus === "trusted"
++            ? "🛡 目前裝置已信任"
++            : nextStatus === "reverify_required"
++              ? "⚠ 主管要求重新驗證"
++              : nextStatus === "observing"
++                ? "⚠ 新裝置待觀察"
++                : "⚠ 新裝置待確認";
+         return {
+           ...prev,
+-          status: isBlocked ? "blocked" : (isTrusted ? "trusted" : "new"),
+-          label: isBlocked ? "⛔ 此裝置已停用" : (isTrusted ? "🛡 目前裝置已信任" : "⚠ 新裝置待確認"),
++          status: nextStatus,
++          label: nextLabel,
+           deviceShort: detail.deviceShort || prev.deviceShort,
+           deviceId: detail.deviceId || prev.deviceId,
+-          approvalRequestId: isTrusted || isBlocked ? "" : prev.approvalRequestId,
++          approvalRequestId: ["trusted", "blocked", "observing", "reverify_required"].includes(nextStatus) ? "" : prev.approvalRequestId,
+         };
+       });
+     };
+@@ -760,13 +780,41 @@
+       return true;
+     }
+ 
+-    if (requestStatus === "expired") {
++    if (["observing", "reverify_required", "blocked", "rejected", "expired"].includes(requestStatus)) {
+       setCurrentDeviceTrust((prev) => {
+         if (String(prev?.approvalRequestId || "") !== String(requestId || "")) return prev;
++
++        if (requestStatus === "blocked") {
++          return {
++            ...prev,
++            status: "blocked",
++            label: "⛔ 此裝置已停用",
++            approvalRequestId: "",
++          };
++        }
++
++        if (requestStatus === "reverify_required") {
++          return {
++            ...prev,
++            status: "reverify_required",
++            label: "⚠ 主管要求重新驗證",
++            approvalRequestId: "",
++          };
++        }
++
++        if (requestStatus === "observing") {
++          return {
++            ...prev,
++            status: "observing",
++            label: "⚠ 新裝置待觀察",
++            approvalRequestId: "",
++          };
++        }
++
+         return {
+           ...prev,
+           status: prev.status === "suspicious" ? "suspicious" : "new",
+-          label: prev.status === "suspicious" ? "⚠ 需要管理者確認" : "⚠ 需要重新確認",
++          label: prev.status === "suspicious" ? "⚠ 需要管理者確認" : "⚠ 新裝置待確認",
+           approvalRequestId: "",
+         };
+       });
+@@ -2703,9 +2751,17 @@
+       };
+       pendingDeviceLoginRef.current = pending;
+       setPendingDeviceLogin(pending);
++      const pendingStatus = String(deviceSecurity?.deviceStatus || "new");
++      const pendingLabel = pendingStatus === "reverify_required"
++        ? "⚠ 主管要求重新驗證"
++        : pendingStatus === "observing"
++          ? "⚠ 新裝置待觀察"
++          : pendingStatus === "suspicious"
++            ? "⚠ 需要管理者確認"
++            : "⚠ 新裝置待確認";
+       setCurrentDeviceTrust({
+-        status: deviceSecurity?.deviceStatus === "suspicious" ? "suspicious" : "new",
+-        label: deviceSecurity?.deviceStatus === "suspicious" ? "⚠ 需要管理者確認" : "⚠ 新裝置待確認",
++        status: ["observing", "reverify_required", "suspicious"].includes(pendingStatus) ? pendingStatus : "new",
++        label: pendingLabel,
+         deviceShort: pending.deviceInfo.deviceShort,
+         deviceId: pending.deviceInfo.deviceId,
+       });
+@@ -2742,14 +2798,22 @@
+       activityType: "auth.login",
+       message: finalUser?.passwordUpdatedOnFirstLogin
+         ? "登入成功，已完成首次安全更新"
+-        : (approvalRequired ? "登入成功，新裝置仍在觀察確認中" : "登入成功"),
++        : (deviceSecurity?.deviceStatus === "reverify_required"
++          ? "登入成功，主管已要求此裝置重新驗證"
++          : deviceSecurity?.deviceStatus === "observing"
++            ? "登入成功，此裝置維持觀察狀態"
++            : (approvalRequired ? "登入成功，新裝置仍在觀察確認中" : "登入成功")),
+       passwordUpdatedOnFirstLogin: Boolean(finalUser?.passwordUpdatedOnFirstLogin),
+       deviceInfo: { ...loginDeviceInfo, loginLocation },
+       loginLocation,
+       deviceShort: loginDeviceInfo.deviceShort,
+       isNewDevice: Boolean(deviceSecurity?.isNewDevice),
+       deviceTrusted: deviceSecurity?.deviceTrusted ?? null,
+-      riskTags: approvalRequired ? ["新裝置待確認"] : [],
++      riskTags: deviceSecurity?.deviceStatus === "reverify_required"
++        ? ["主管要求重新驗證"]
++        : deviceSecurity?.deviceStatus === "observing"
++          ? ["新裝置待觀察"]
++          : (approvalRequired ? ["新裝置待確認"] : []),
+       deviceStatus: deviceSecurity?.deviceStatus || "trusted",
+     });
+ 
+@@ -2759,8 +2823,15 @@
+       nextTrustStatus = "unknown";
+       nextTrustLabel = "裝置狀態暫時未確認";
+     } else if (approvalRequired || deviceSecurity?.deviceTrusted === false) {
+-      nextTrustStatus = deviceSecurity?.deviceStatus === "suspicious" ? "suspicious" : "new";
+-      nextTrustLabel = nextTrustStatus === "suspicious" ? "⚠ 需要管理者確認" : "⚠ 新裝置待確認";
++      const returnedStatus = String(deviceSecurity?.deviceStatus || "new");
++      nextTrustStatus = ["observing", "reverify_required", "suspicious"].includes(returnedStatus) ? returnedStatus : "new";
++      nextTrustLabel = nextTrustStatus === "reverify_required"
++        ? "⚠ 主管要求重新驗證"
++        : nextTrustStatus === "observing"
++          ? "⚠ 新裝置待觀察"
++          : nextTrustStatus === "suspicious"
++            ? "⚠ 需要管理者確認"
++            : "⚠ 新裝置待確認";
+     }
+     setCurrentDeviceTrust({
+       status: nextTrustStatus,
+@@ -2770,8 +2841,14 @@
+       approvalRequestId: approvalRequired ? String(deviceSecurity?.requestId || "") : "",
+     });
+ 
+-    if (approvalRequired && deviceSecurity?.approvalMode === "monitor") {
+-      setToast({ message: "這台新裝置已列入待確認，您目前仍可正常使用系統。", type: "info" });
++    if (deviceSecurity?.approvalMode === "monitor") {
++      if (deviceSecurity?.deviceStatus === "reverify_required") {
++        setToast({ message: "主管已要求這台裝置重新驗證；目前仍可正常使用系統。", type: "info" });
++      } else if (deviceSecurity?.deviceStatus === "observing") {
++        setToast({ message: "這台裝置目前維持觀察狀態，仍可正常使用系統。", type: "info" });
++      } else if (approvalRequired) {
++        setToast({ message: "這台新裝置已列入待確認，您目前仍可正常使用系統。", type: "info" });
++      }
+     }
+ 
+     if (finalUser?.passwordUpdatedOnFirstLogin) {
+@@ -3544,7 +3621,7 @@
+                     className={`hidden md:flex items-center justify-center rounded-full border px-2 lg:px-2.5 2xl:px-3 py-2 text-[11px] lg:text-xs font-black shadow-sm whitespace-nowrap shrink-0 max-w-[92px] lg:max-w-[112px] 2xl:max-w-none overflow-hidden ${
+                       currentDeviceTrust.status === "blocked"
+                         ? "border-stone-200 bg-stone-100 text-stone-700"
+-                        : ["new", "suspicious"].includes(currentDeviceTrust.status)
++                        : ["new", "observing", "reverify_required", "suspicious"].includes(currentDeviceTrust.status)
+                           ? "border-rose-100 bg-rose-50 text-rose-600"
+                           : currentDeviceTrust.status === "trusted"
+                             ? "border-emerald-100 bg-emerald-50 text-emerald-700"
+@@ -3553,7 +3630,7 @@
+                     title={currentDeviceTrust.deviceShort ? `裝置碼：${currentDeviceTrust.deviceShort}` : "目前裝置狀態"}
+                   >
+                     <span className="2xl:hidden truncate">
+-                      {currentDeviceTrust.status === "blocked" ? "⛔ 已停用" : currentDeviceTrust.status === "suspicious" ? "⚠ 待主管確認" : currentDeviceTrust.status === "new" ? "⚠ 待確認" : currentDeviceTrust.status === "trusted" ? "🛡 已信任" : "確認中"}
++                      {currentDeviceTrust.status === "blocked" ? "⛔ 已停用" : currentDeviceTrust.status === "reverify_required" ? "⚠ 需重驗" : currentDeviceTrust.status === "observing" ? "⚠ 觀察中" : currentDeviceTrust.status === "suspicious" ? "⚠ 待主管確認" : currentDeviceTrust.status === "new" ? "⚠ 待確認" : currentDeviceTrust.status === "trusted" ? "🛡 已信任" : "確認中"}
+                     </span>
+                     <span className="hidden 2xl:inline">{currentDeviceTrust.label}</span>
+                   </div>
+@@ -3613,7 +3690,7 @@
+                   {currentDeviceTrust.deviceShort && (
+                     <div
+                       className={`flex items-center justify-center rounded-full border px-2.5 py-1.5 text-[11px] font-black shadow-sm whitespace-nowrap ${
+-                        ["new", "suspicious"].includes(currentDeviceTrust.status)
++                        ["new", "observing", "reverify_required", "suspicious"].includes(currentDeviceTrust.status)
+                           ? "border-rose-100 bg-rose-50 text-rose-600"
+                           : currentDeviceTrust.status === "trusted"
+                             ? "border-emerald-100 bg-emerald-50 text-emerald-700"
+@@ -3623,13 +3700,17 @@
+                     >
+                       {currentDeviceTrust.status === "blocked"
+                         ? "⛔ 已停用"
+-                        : currentDeviceTrust.status === "suspicious"
+-                          ? "⚠ 待主管確認"
+-                          : currentDeviceTrust.status === "new"
+-                            ? "⚠ 待確認"
+-                            : currentDeviceTrust.status === "trusted"
+-                            ? "🛡 已信任"
+-                            : "確認中"}
++                        : currentDeviceTrust.status === "reverify_required"
++                          ? "⚠ 需重驗"
++                          : currentDeviceTrust.status === "observing"
++                            ? "⚠ 觀察中"
++                            : currentDeviceTrust.status === "suspicious"
++                              ? "⚠ 待主管確認"
++                              : currentDeviceTrust.status === "new"
++                                ? "⚠ 待確認"
++                                : currentDeviceTrust.status === "trusted"
++                                  ? "🛡 已信任"
++                                  : "確認中"}
+                     </div>
+                   )}
+ 
+--- a/src/components/SystemMonitor.jsx
++++ b/src/components/SystemMonitor.jsx
+@@ -359,7 +359,7 @@
+         });
+ 
+         const trustedCount = deviceList.filter((d) => d.trusted !== false && d.status !== "new").length;
+-        const newCount = deviceList.filter((d) => d.trusted === false || d.status === "new" || d.status === "suspicious" || d.status === "blocked" || d.status === "global_blocked").length;
++        const newCount = deviceList.filter((d) => d.trusted === false || ["new", "observing", "reverify_required", "suspicious", "blocked", "global_blocked"].includes(d.status)).length;
+         const lastSeenText = deviceList
+           .map((d) => d.lastSeenAtText || d.firstSeenAtText || "")
+           .filter(Boolean)
+@@ -390,8 +390,8 @@
+   const isPendingDevice = (device = {}) => {
+     return (
+       device.trusted === false ||
+-      ["new", "suspicious", "blocked", "global_blocked"].includes(device.status) ||
+-      ["manual_suspicious", "manual_blocked", "manual_global_blocked", "self_reported_not_me"].includes(device.source)
++      ["new", "observing", "reverify_required", "suspicious", "blocked", "global_blocked"].includes(device.status) ||
++      ["manual_observing", "manual_reverify_required", "manual_suspicious", "manual_blocked", "manual_global_blocked", "self_reported_not_me"].includes(device.source)
+     );
+   };
+ 
+@@ -632,6 +632,12 @@
+     }
+     if (device.status === "blocked" || device.source === "manual_blocked") {
+       return { label: "此品牌已停用", className: "bg-stone-100 text-stone-700 border-stone-200" };
++    }
++    if (device.status === "reverify_required" || device.source === "manual_reverify_required") {
++      return { label: "要求重新驗證", className: "bg-orange-50 text-orange-700 border-orange-100" };
++    }
++    if (device.status === "observing" || device.source === "manual_observing") {
++      return { label: "繼續觀察", className: "bg-amber-50 text-amber-700 border-amber-100" };
+     }
+     if (device.status === "suspicious" || device.source === "manual_suspicious" || device.source === "self_reported_not_me") {
+       return { label: "需要主管確認", className: "bg-rose-50 text-rose-700 border-rose-100" };
+@@ -1428,7 +1434,7 @@
+                                   </div>
+ 
+                                   <div className="mt-3 flex flex-col sm:flex-row gap-2 justify-end">
+-                                    {(device.trusted === false || device.status === "new" || device.status === "suspicious" || device.status === "blocked" || device.status === "global_blocked") && (
++                                    {(device.trusted === false || ["new", "observing", "reverify_required", "suspicious", "blocked", "global_blocked"].includes(device.status)) && (
+                                       <button
+                                         type="button"
+                                         disabled={!canReviewDeviceSecurity || deviceActionKey === `${profile.id}_${device.deviceId}_trusted`}
+@@ -1438,14 +1444,26 @@
+                                         {deviceActionKey === `${profile.id}_${device.deviceId}_trusted` ? "處理中..." : (device.status === "blocked" || device.status === "global_blocked" ? "恢復並信任" : "允許使用")}
+                                       </button>
+                                     )}
+-                                    {!(device.status === "suspicious" || device.source === "manual_suspicious" || device.status === "blocked" || device.source === "manual_blocked") && (
++                                    {!(device.status === "observing" || device.source === "manual_observing" || device.status === "blocked" || device.source === "manual_blocked" || device.status === "global_blocked" || device.source === "manual_global_blocked") && (
+                                       <button
+                                         type="button"
+-                                        disabled={!canReviewDeviceSecurity || deviceActionKey === `${profile.id}_${device.deviceId}_suspicious`}
+-                                        onClick={() => updateDeviceTrust(profile, device, "suspicious")}
+-                                        className="px-3 py-2 rounded-xl bg-rose-50 text-rose-600 border border-rose-100 text-xs font-black hover:bg-rose-100 disabled:opacity-60 active:scale-95"
++                                        disabled={!canReviewDeviceSecurity || deviceActionKey === `${profile.id}_${device.deviceId}_observing`}
++                                        onClick={() => updateDeviceTrust(profile, device, "observing")}
++                                        className="px-3 py-2 rounded-xl bg-amber-50 text-amber-700 border border-amber-100 text-xs font-black hover:bg-amber-100 disabled:opacity-60 active:scale-95"
++                                        title="先不列為信任，不影響目前觀察階段的使用"
+                                       >
+-                                        {deviceActionKey === `${profile.id}_${device.deviceId}_suspicious` ? "處理中..." : "需要再確認"}
++                                        {deviceActionKey === `${profile.id}_${device.deviceId}_observing` ? "處理中..." : "繼續觀察"}
++                                      </button>
++                                    )}
++                                    {!(device.status === "reverify_required" || device.source === "manual_reverify_required" || device.status === "blocked" || device.source === "manual_blocked" || device.status === "global_blocked" || device.source === "manual_global_blocked") && (
++                                      <button
++                                        type="button"
++                                        disabled={!canReviewDeviceSecurity || deviceActionKey === `${profile.id}_${device.deviceId}_reverify_required`}
++                                        onClick={() => updateDeviceTrust(profile, device, "reverify_required")}
++                                        className="px-3 py-2 rounded-xl bg-orange-50 text-orange-700 border border-orange-100 text-xs font-black hover:bg-orange-100 disabled:opacity-60 active:scale-95"
++                                        title="保留重新驗證要求；正式啟用裝置驗證後，下次登入需完成確認"
++                                      >
++                                        {deviceActionKey === `${profile.id}_${device.deviceId}_reverify_required` ? "處理中..." : "要求重新驗證"}
+                                       </button>
+                                     )}
+                                     {!(device.status === "blocked" || device.source === "manual_blocked" || device.status === "global_blocked" || device.source === "manual_global_blocked") && (
+--- a/src/components/DeviceApprovalPanel.jsx
++++ b/src/components/DeviceApprovalPanel.jsx
+@@ -85,6 +85,9 @@
+       });
+       if (!result?.ok) setMessage(result?.message || "目前無法完成確認，請稍後再試。 ");
+       else if (action === "approve_self" || action === "approve_admin") setMessage("已允許這台裝置使用系統。 ");
++      else if (action === "observe_admin") setMessage("已保留為觀察裝置，目前不影響使用。 ");
++      else if (action === "reverify_admin") setMessage("已標記為需要重新驗證，目前觀察階段不會中斷使用。 ");
++      else if (action === "block_admin") setMessage("已禁止這台裝置繼續登入。 ");
+       else setMessage("這筆裝置申請已完成處理。 ");
+     } catch (error) {
+       setMessage("目前無法完成確認，請稍後再試。 ");
+@@ -170,10 +173,22 @@
+ 
+                   {isSuperAdmin && currentDeviceTrusted && (
+                     <div className="mt-4 grid grid-cols-1 gap-2 sm:grid-cols-2">
+-                      <button type="button" disabled={Boolean(actionKey)} onClick={() => runAction(request, "approve_admin")} className="rounded-xl border border-emerald-200 bg-emerald-50 px-3 py-2.5 text-xs font-black text-emerald-700 disabled:opacity-40 active:scale-[0.98]">允許使用</button>
+-                      <button type="button" disabled={Boolean(actionKey)} onClick={() => runAction(request, "reject_admin")} className="rounded-xl border border-amber-100 bg-amber-50 px-3 py-2.5 text-xs font-black text-amber-700 disabled:opacity-40 active:scale-[0.98]">暫不允許</button>
+-                      <button type="button" disabled={Boolean(actionKey)} onClick={() => runAction(request, "suspicious_admin")} className="rounded-xl border border-orange-100 bg-orange-50 px-3 py-2.5 text-xs font-black text-orange-700 disabled:opacity-40 active:scale-[0.98] flex items-center justify-center gap-1"><AlertTriangle size={13} /> 需要再確認</button>
+-                      <button type="button" disabled={Boolean(actionKey)} onClick={() => runAction(request, "block_admin")} className="rounded-xl border border-rose-100 bg-rose-50 px-3 py-2.5 text-xs font-black text-rose-700 disabled:opacity-40 active:scale-[0.98] flex items-center justify-center gap-1"><Ban size={13} /> 禁止此裝置</button>
++                      <button type="button" disabled={Boolean(actionKey)} onClick={() => runAction(request, "approve_admin")} className="rounded-xl border border-emerald-200 bg-emerald-50 px-3 py-2.5 text-left disabled:opacity-40 active:scale-[0.98]">
++                        <span className="block text-xs font-black text-emerald-700">允許使用</span>
++                        <span className="mt-0.5 block text-[10px] font-bold leading-4 text-emerald-700/70">確認本人裝置，正式列為信任</span>
++                      </button>
++                      <button type="button" disabled={Boolean(actionKey)} onClick={() => runAction(request, "observe_admin")} className="rounded-xl border border-amber-100 bg-amber-50 px-3 py-2.5 text-left disabled:opacity-40 active:scale-[0.98]">
++                        <span className="block text-xs font-black text-amber-700">繼續觀察</span>
++                        <span className="mt-0.5 block text-[10px] font-bold leading-4 text-amber-700/70">先不列為信任，不影響目前使用</span>
++                      </button>
++                      <button type="button" disabled={Boolean(actionKey)} onClick={() => runAction(request, "reverify_admin")} className="rounded-xl border border-orange-100 bg-orange-50 px-3 py-2.5 text-left disabled:opacity-40 active:scale-[0.98]">
++                        <span className="flex items-center gap-1 text-xs font-black text-orange-700"><AlertTriangle size={13} /> 要求重新驗證</span>
++                        <span className="mt-0.5 block text-[10px] font-bold leading-4 text-orange-700/70">保留高警示；正式啟用驗證後需重新確認</span>
++                      </button>
++                      <button type="button" disabled={Boolean(actionKey)} onClick={() => runAction(request, "block_admin")} className="rounded-xl border border-rose-100 bg-rose-50 px-3 py-2.5 text-left disabled:opacity-40 active:scale-[0.98]">
++                        <span className="flex items-center gap-1 text-xs font-black text-rose-700"><Ban size={13} /> 禁止此裝置</span>
++                        <span className="mt-0.5 block text-[10px] font-bold leading-4 text-rose-700/70">停止這台裝置再次登入系統</span>
++                      </button>
+                     </div>
+                   )}
+ 
+--- a/functions/deviceApproval.js
++++ b/functions/deviceApproval.js
+@@ -272,8 +272,8 @@
+   if (!device || typeof device !== 'object') return false;
+   const status = String(device.status || '');
+   const source = String(device.source || '');
+-  const riskyStatus = ['new', 'suspicious', 'blocked', 'global_blocked'].includes(status);
+-  const riskySource = ['manual_suspicious', 'manual_blocked', 'manual_global_blocked', 'self_reported_not_me'].includes(source);
++  const riskyStatus = ['new', 'observing', 'reverify_required', 'suspicious', 'blocked', 'global_blocked'].includes(status);
++  const riskySource = ['manual_observing', 'manual_reverify_required', 'manual_suspicious', 'manual_blocked', 'manual_global_blocked', 'self_reported_not_me'].includes(source);
+   return device.trusted !== false && !riskyStatus && !riskySource;
+ }
+ 
+@@ -286,8 +286,8 @@
+     if (!item || item.deviceFingerprint !== fingerprint) return;
+     const status = String(item.status || '');
+     const source = String(item.source || '');
+-    const isRisky = ['suspicious', 'blocked', 'global_blocked'].includes(status) ||
+-      ['manual_suspicious', 'manual_blocked', 'manual_global_blocked', 'self_reported_not_me'].includes(source);
++    const isRisky = ['observing', 'reverify_required', 'suspicious', 'blocked', 'global_blocked'].includes(status) ||
++      ['manual_observing', 'manual_reverify_required', 'manual_suspicious', 'manual_blocked', 'manual_global_blocked', 'self_reported_not_me'].includes(source);
+     if (!isRisky) return;
+     const previousLocation = item.lastLoginLocation || item.loginLocation || {};
+     const previousCity = String(previousLocation.city || previousLocation.region || '').trim();
+@@ -356,7 +356,8 @@
+   const secretRef = requestRef.collection('private').doc('verification');
+   const profileRef = getBrandCollection(db, brandId, 'account_devices').doc(accountKey);
+   const alertRef = getBrandCollection(db, brandId, 'security_alerts').doc();
+-  const targetStatus = existingDevice?.status === 'suspicious' ? 'suspicious' : 'new';
++  const existingStatus = String(existingDevice?.status || '');
++  const targetStatus = ['observing', 'reverify_required', 'suspicious'].includes(existingStatus) ? existingStatus : 'new';
+   const resolvedSelfApprovalAllowed = Boolean(selfApprovalAllowed) && targetStatus !== 'suspicious' && Boolean(hasTrustedApproverDevice);
+   const code = resolvedSelfApprovalAllowed ? makeVerificationCode() : '';
+   const salt = resolvedSelfApprovalAllowed ? crypto.randomBytes(16).toString('hex') : '';
+@@ -391,7 +392,13 @@
+       os: deviceInfo.os,
+       trusted: false,
+       status: targetStatus,
+-      source: targetStatus === 'suspicious' ? (existingDevice?.source || 'manual_suspicious') : 'device_approval_pending',
++      source: targetStatus === 'suspicious'
++        ? (existingDevice?.source || 'manual_suspicious')
++        : targetStatus === 'observing'
++          ? (existingDevice?.source || 'manual_observing')
++          : targetStatus === 'reverify_required'
++            ? (existingDevice?.source || 'manual_reverify_required')
++            : 'device_approval_pending',
+       approvalStatus: 'pending',
+       approvalRequestId: requestId,
+       firstSeenAt: existingDevice?.firstSeenAt || admin.firestore.FieldValue.serverTimestamp(),
+@@ -753,6 +760,56 @@
+           deviceInfo,
+           loginLocation,
+           approvalMode: securityConfig.deviceApprovalMode,
++        });
++      }
++
++      // 觀察模式下，最高管理者已分類的裝置不反覆建立確認碼申請。
++      // observing = 繼續觀察；reverify_required = 已要求重新驗證，但等正式驗證模式啟用後才阻擋登入。
++      const exactReviewStatus = String(exactDevice?.status || '');
++      if (modeApplies && securityConfig.deviceApprovalMode === 'monitor' && ['observing', 'reverify_required'].includes(exactReviewStatus)) {
++        const nowText = new Date().toISOString();
++        const reviewedDevice = {
++          ...exactDevice,
++          device: deviceInfo.device,
++          browser: deviceInfo.browser,
++          os: deviceInfo.os,
++          deviceFingerprint: deviceInfo.deviceFingerprint,
++          deviceStorageStatus: deviceInfo.deviceStorageStatus,
++          trusted: false,
++          status: exactReviewStatus,
++          lastSeenAt: admin.firestore.FieldValue.serverTimestamp(),
++          lastSeenAtText: nowText,
++          loginCount: Number(exactDevice.loginCount || 0) + 1,
++          loginLocation,
++          lastLoginLocation: loginLocation,
++          locationUpdatedAtText: nowText,
++          updatedAtText: nowText,
++        };
++        await getBrandCollection(db, brandId, 'account_devices').doc(accountKey).set({
++          brandId,
++          brandLabel: getBrandLabel(brandId),
++          role: roleId,
++          accountId,
++          credentialAccountId,
++          userName,
++          updatedAt: admin.firestore.FieldValue.serverTimestamp(),
++          updatedAtText: nowText,
++          devices: { [deviceInfo.deviceId]: reviewedDevice },
++        }, { merge: true });
++        return res.status(200).json({
++          ok: true,
++          allowed: true,
++          approvalRequired: false,
++          deviceTrusted: false,
++          deviceStatus: exactReviewStatus,
++          reverifyRequired: exactReviewStatus === 'reverify_required',
++          isNewDevice: false,
++          deviceInfo,
++          loginLocation,
++          approvalMode: securityConfig.deviceApprovalMode,
++          message: exactReviewStatus === 'reverify_required'
++            ? '主管已要求這台裝置重新驗證；目前為觀察階段，仍可繼續使用。'
++            : '這台裝置目前維持觀察狀態，仍可繼續使用。',
+         });
+       }
+ 
+@@ -869,12 +926,12 @@
+       }
+ 
+       const recovered = recoverableDevice;
+-      const suspiciousRecovered = recoverableRiskDevice && (
+-        String(recoverableRiskDevice.item?.status || '') === 'suspicious' ||
+-        ['manual_suspicious', 'self_reported_not_me'].includes(String(recoverableRiskDevice.item?.source || ''))
++      const reviewRecovered = recoverableRiskDevice && (
++        ['observing', 'reverify_required', 'suspicious'].includes(String(recoverableRiskDevice.item?.status || '')) ||
++        ['manual_observing', 'manual_reverify_required', 'manual_suspicious', 'self_reported_not_me'].includes(String(recoverableRiskDevice.item?.source || ''))
+       ) ? recoverableRiskDevice : null;
+-      const approvalExistingDevice = exactDevice || suspiciousRecovered?.item || null;
+-      const approvalRecoveredDeviceId = suspiciousRecovered?.storedDeviceId || recovered?.storedDeviceId || '';
++      const approvalExistingDevice = exactDevice || reviewRecovered?.item || null;
++      const approvalRecoveredDeviceId = reviewRecovered?.storedDeviceId || recovered?.storedDeviceId || '';
+       const excludedApproverIds = new Set([deviceInfo.deviceId, approvalRecoveredDeviceId].filter(Boolean));
+       const hasTrustedApproverDevice = Object.entries(devices || {}).some(([storedDeviceId, item]) => (
+         !excludedApproverIds.has(storedDeviceId) && isTrustedDeviceRecord(item)
+@@ -896,7 +953,7 @@
+         loginLocation,
+         existingDevice: approvalExistingDevice,
+         securityConfig,
+-        likelyKnownDevice: Boolean(recovered || suspiciousRecovered),
++        likelyKnownDevice: Boolean(recovered || reviewRecovered),
+         recoveredFromDeviceId: approvalRecoveredDeviceId,
+         selfApprovalAllowed,
+         hasTrustedApproverDevice,
+@@ -916,7 +973,7 @@
+           os: deviceInfo.os,
+           deviceId: deviceInfo.deviceId,
+           deviceShort: deviceInfo.deviceShort,
+-          details: { requestId: request.requestId, likelyKnownDevice: Boolean(recovered || suspiciousRecovered), approvalMode: securityConfig.deviceApprovalMode },
++          details: { requestId: request.requestId, likelyKnownDevice: Boolean(recovered || reviewRecovered), approvalMode: securityConfig.deviceApprovalMode },
+         },
+       });
+       return res.status(200).json({
+@@ -932,9 +989,9 @@
+         hasTrustedApproverDevice,
+         adminOnly: !selfApprovalAllowed,
+         deviceTrusted: false,
+-        deviceStatus: approvalExistingDevice?.status === 'suspicious' ? 'suspicious' : 'new',
++        deviceStatus: ['observing', 'reverify_required', 'suspicious'].includes(String(approvalExistingDevice?.status || '')) ? String(approvalExistingDevice.status) : 'new',
+         isNewDevice: !exactDevice,
+-        likelyKnownDevice: Boolean(recovered || suspiciousRecovered),
++        likelyKnownDevice: Boolean(recovered || reviewRecovered),
+         recoveredFromDeviceId: approvalRecoveredDeviceId,
+         deviceInfo,
+         loginLocation,
+@@ -1018,14 +1075,14 @@
+       } else if (action === 'reject_self') {
+         nextStatus = 'rejected';
+         targetDevicePatch = { trusted: false, status: 'suspicious', source: 'self_reported_not_me' };
+-      } else if (action === 'reject_admin') {
+-        nextStatus = 'rejected';
+-        targetDevicePatch = { trusted: false, status: 'new', source: 'admin_rejected' };
+-      } else if (action === 'suspicious_admin') {
+-        nextStatus = 'rejected';
+-        targetDevicePatch = { trusted: false, status: 'suspicious', source: 'manual_suspicious' };
++      } else if (action === 'observe_admin' || action === 'reject_admin') {
++        nextStatus = 'observing';
++        targetDevicePatch = { trusted: false, status: 'observing', source: 'manual_observing' };
++      } else if (action === 'reverify_admin' || action === 'suspicious_admin') {
++        nextStatus = 'reverify_required';
++        targetDevicePatch = { trusted: false, status: 'reverify_required', source: 'manual_reverify_required', reverifyRequired: true };
+       } else if (action === 'block_admin') {
+-        nextStatus = 'rejected';
++        nextStatus = 'blocked';
+         targetDevicePatch = { trusted: false, status: 'blocked', source: 'manual_blocked', blockedBy: actorName, blockedAtText: new Date().toISOString(), blockScope: 'current_brand' };
+       } else {
+         return res.status(400).json({ ok: false, message: '不支援的處理方式' });
+@@ -1043,7 +1100,15 @@
+         payload: {
+           role: actorRole,
+           user: actorName,
+-          action: nextStatus === 'approved' ? '允許新裝置使用' : '處理新裝置申請',
++          action: nextStatus === 'approved'
++            ? '允許新裝置使用'
++            : nextStatus === 'observing'
++              ? '新裝置繼續觀察'
++              : nextStatus === 'reverify_required'
++                ? '要求新裝置重新驗證'
++                : nextStatus === 'blocked'
++                  ? '禁止新裝置使用'
++                  : '處理新裝置申請',
+           activityType: nextStatus === 'approved' ? 'security.device_approved' : 'security.device_reviewed',
+           view: 'device-approval',
+           device: requestData.device,
+@@ -1072,7 +1137,7 @@
+       const deviceId = String(body.deviceId || '').trim();
+       const nextStatus = String(body.nextStatus || '').trim();
+       const actor = body.actor || {};
+-      if (!accountKey || !deviceId || !['trusted', 'suspicious', 'blocked', 'global_blocked'].includes(nextStatus)) {
++      if (!accountKey || !deviceId || !['trusted', 'observing', 'reverify_required', 'suspicious', 'blocked', 'global_blocked'].includes(nextStatus)) {
+         return res.status(400).json({ ok: false, message: '資料不完整' });
+       }
+       const adminCheck = await verifySuperAdminActor({ db, brandId, actor });
+@@ -1088,11 +1153,22 @@
+       const isTrusted = nextStatus === 'trusted';
+       const isGlobalBlocked = nextStatus === 'global_blocked';
+       const isBlocked = nextStatus === 'blocked' || isGlobalBlocked;
++      const isObserving = nextStatus === 'observing';
++      const isReverifyRequired = nextStatus === 'reverify_required' || nextStatus === 'suspicious';
+       const nextDevice = {
+         ...device,
+         trusted: isTrusted,
+-        status: nextStatus,
+-        source: isTrusted ? 'manual_trusted' : (isGlobalBlocked ? 'manual_global_blocked' : (isBlocked ? 'manual_blocked' : 'manual_suspicious')),
++        status: nextStatus === 'suspicious' ? 'reverify_required' : nextStatus,
++        source: isTrusted
++          ? 'manual_trusted'
++          : isGlobalBlocked
++            ? 'manual_global_blocked'
++            : isBlocked
++              ? 'manual_blocked'
++              : isObserving
++                ? 'manual_observing'
++                : 'manual_reverify_required',
++        ...(isReverifyRequired ? { reverifyRequired: true } : { reverifyRequired: false }),
+         reviewedBy: actorName,
+         reviewedRole: 'director',
+         reviewedAtText: nowText,
+@@ -1119,7 +1195,7 @@
+         if (!requestSnap.exists || requestSnap.data()?.status !== 'pending') return;
+         await resolvePendingRequestInTransaction({
+           admin, transaction, db, brandId, requestRef, requestData: requestSnap.data() || {},
+-          nextStatus: isTrusted ? 'approved' : 'rejected', actorName, actorRole: 'director', source: 'system_monitor',
++          nextStatus: isTrusted ? 'approved' : (isGlobalBlocked || isBlocked ? 'blocked' : (isObserving ? 'observing' : 'reverify_required')), actorName, actorRole: 'director', source: 'system_monitor',
+           targetDevicePatch: nextDevice,
+         });
+       });
+@@ -1127,7 +1203,15 @@
+       await writeSecurityLog({
+         db, brandId,
+         payload: {
+-          role: 'director', user: actorName, action: isTrusted ? '設為可使用裝置' : (isGlobalBlocked ? '禁止所有品牌使用此裝置' : (isBlocked ? '禁止此品牌使用此裝置' : '標記需要主管確認')),
++          role: 'director', user: actorName, action: isTrusted
++            ? '設為可使用裝置'
++            : isGlobalBlocked
++              ? '禁止所有品牌使用此裝置'
++              : isBlocked
++                ? '禁止此品牌使用此裝置'
++                : isObserving
++                  ? '裝置繼續觀察'
++                  : '要求裝置重新驗證',
+           activityType: 'security.device_manual_review', view: 'logs', device: device.device || '', browser: device.browser || '', os: device.os || '', deviceId, deviceShort: device.deviceShort || '',
+           details: { targetUserName: profile.userName || profile.accountId || accountKey, nextStatus },
+         },
+@@ -1229,7 +1313,13 @@
+           await resolvePendingRequestInTransaction({
+             admin, transaction, db, brandId, requestRef: docSnap.ref, requestData: fresh.data() || {},
+             nextStatus: 'expired', actorName: '系統', actorRole: 'system', source: 'approval_expired',
+-            targetDevicePatch: { trusted: false, status: fresh.data()?.deviceStatus === 'suspicious' ? 'suspicious' : 'new', source: 'device_approval_expired' },
++            targetDevicePatch: {
++              trusted: false,
++              status: ['observing', 'reverify_required', 'suspicious'].includes(String(fresh.data()?.deviceStatus || ''))
++                ? (String(fresh.data()?.deviceStatus || '') === 'suspicious' ? 'reverify_required' : String(fresh.data()?.deviceStatus || ''))
++                : 'new',
++              source: 'device_approval_expired',
++            },
+           });
+         });
+         await docSnap.ref.collection('private').doc('verification').delete().catch(() => {});
+--- a/tests/deviceApproval.test.js
++++ b/tests/deviceApproval.test.js
+@@ -40,7 +40,7 @@
+   const approvalRequestPos = backend.indexOf("const request = await createOrRefreshApprovalRequest");
+   assert.ok(exactTrustedPos >= 0 && exactTrustedPos < modeOffPos, "Exact trusted-device check must happen before approval-mode branching.");
+   assert.ok(approvalRequestPos > modeOffPos, "Approval request must occur after the legacy off-mode branch.");
+-  assert.match(backend, /likelyKnownDevice:\s*Boolean\(recovered \|\| suspiciousRecovered\)/);
++  assert.match(backend, /likelyKnownDevice:\s*Boolean\(recovered \|\| reviewRecovered\)/);
+   assert.match(backend, /approvalRequired:\s*true/);
+ });
+ 
+@@ -77,8 +77,8 @@
+ 
+ test("legacy exact devices with implicit trust stay grandfathered unless explicitly unsafe", () => {
+   assert.match(backend, /const exactDeviceIsTrusted = isTrustedDeviceRecord\(exactDevice\)/);
+-  assert.match(backend, /const riskyStatus = \['new', 'suspicious', 'blocked', 'global_blocked'\]\.includes\(status\)/);
+-  assert.match(backend, /const riskySource = \['manual_suspicious', 'manual_blocked', 'manual_global_blocked', 'self_reported_not_me'\]\.includes\(source\)/);
++  assert.match(backend, /const riskyStatus = \['new', 'observing', 'reverify_required', 'suspicious', 'blocked', 'global_blocked'\]\.includes\(status\)/);
++  assert.match(backend, /const riskySource = \['manual_observing', 'manual_reverify_required', 'manual_suspicious', 'manual_blocked', 'manual_global_blocked', 'self_reported_not_me'\]\.includes\(source\)/);
+   assert.match(backend, /return device\.trusted !== false && !riskyStatus && !riskySource/);
+ });
+ 
+@@ -96,7 +96,7 @@
+   assert.match(backend, /function findRecoverableRiskDeviceEntry/);
+   assert.match(backend, /recoverableRiskDevice\?\.storedDeviceId/);
+   assert.match(backend, /blockedDeviceMatch/);
+-  assert.match(backend, /suspiciousRecovered/);
++  assert.match(backend, /reviewRecovered/);
+   assert.match(backend, /approvalExistingDevice\?\.status !== 'suspicious'/);
+ });
+ 
+@@ -108,11 +108,15 @@
+   assert.match(backend, /Promise\.all\(globalDeviceIds\.map/);
+ });
+ 
+-test("highest manager can distinguish temporary rejection from stronger needs-review status", () => {
+-  assert.match(panel, /suspicious_admin/);
+-  assert.match(panel, /需要再確認/);
+-  assert.match(backend, /action === 'suspicious_admin'/);
+-  assert.match(backend, /status: 'suspicious', source: 'manual_suspicious'/);
++test("highest manager can distinguish observing from required re-verification", () => {
++  assert.match(panel, /observe_admin/);
++  assert.match(panel, /繼續觀察/);
++  assert.match(panel, /reverify_admin/);
++  assert.match(panel, /要求重新驗證/);
++  assert.match(backend, /action === 'observe_admin'/);
++  assert.match(backend, /status: 'observing', source: 'manual_observing'/);
++  assert.match(backend, /action === 'reverify_admin'/);
++  assert.match(backend, /status: 'reverify_required', source: 'manual_reverify_required'/);
+ });
+ 
+ test("approval codes are hashed in a private subdocument and hidden when self approval is disabled", () => {
+@@ -132,10 +136,10 @@
+   assert.match(backend, /Math\.max\(0, Number\(inboxSnap\?\.data\(\)\?\.pendingCount \|\| 0\) \+ Number\(delta \|\| 0\)\)/);
+ });
+ 
+-test("expired requests are cleaned and suspicious status is preserved", () => {
++test("expired requests preserve reviewed non-trusted status", () => {
+   assert.match(backend, /cleanupExpiredDeviceApprovals = onSchedule\(\{ schedule: 'every 15 minutes'/);
+   assert.match(backend, /deviceStatus:\s*targetStatus/);
+-  assert.match(backend, /fresh\.data\(\)\?\.deviceStatus === 'suspicious' \? 'suspicious' : 'new'/);
++  assert.match(backend, /\['observing', 'reverify_required', 'suspicious'\]\.includes/);
+   assert.match(backend, /Date\.now\(\) > Number\(requestData\.expiresAtMs \|\| 0\)/);
+ });
+ 
+@@ -231,3 +235,24 @@
+   assert.match(app, /applyCurrentDeviceApprovalResult\(requestId, snap\.data\(\) \|\| \{\}\)/);
+   assert.doesNotMatch(app, /setInterval\([\s\S]{0,500}refreshCurrentDeviceApprovalStatus/);
+ });
++
++
++test("device review levels separate observing, reverify, and blocked states", () => {
++  const backend = read("functions/deviceApproval.js");
++  const panel = read("src/components/DeviceApprovalPanel.jsx");
++  const monitor = read("src/components/SystemMonitor.jsx");
++  const app = read("src/App.jsx");
++
++  assert.match(backend, /status:\s*'observing'[\s\S]{0,100}source:\s*'manual_observing'/);
++  assert.match(backend, /status:\s*'reverify_required'[\s\S]{0,140}source:\s*'manual_reverify_required'/);
++  assert.match(backend, /deviceApprovalMode === 'monitor'[\s\S]{0,1600}\['observing', 'reverify_required'\]/);
++  assert.match(panel, /runAction\(request, "observe_admin"\)/);
++  assert.match(panel, /繼續觀察/);
++  assert.match(panel, /runAction\(request, "reverify_admin"\)/);
++  assert.match(panel, /要求重新驗證/);
++  assert.match(monitor, /updateDeviceTrust\(profile, device, "observing"\)/);
++  assert.match(monitor, /updateDeviceTrust\(profile, device, "reverify_required"\)/);
++  assert.match(app, /主管要求重新驗證/);
++  assert.match(app, /新裝置待觀察/);
++  assert.match(app, /CURRENT_APP_VERSION\s*=\s*"3\.5\.2"/);
++});

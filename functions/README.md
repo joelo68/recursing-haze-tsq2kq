@@ -1,81 +1,224 @@
-# DRCYJ Telegram 營運戰情 Agent v1.4
+# CYJ 營運系統
 
-版本：`drcyj-agent-v1.4-trust-active-alerts`
+> Project Knowledge Base v1  
+> 本文件依 2026-08-18 使用者提供的「目前正常部署版本」程式建立。  
+> 若文件與正式程式衝突，以目前正式部署程式為準，並同步更新本 Knowledge Base。
 
-## 主要升級
+## 系統定位
 
-1. 集中式營運指標字典：現金、權責、現金達成率、月份進度與各類排名由後端固定定義。
-2. 區長多維排名：現金達成率、現金金額、進度差距、新客、締結率、保養品占比。
-3. 排名可信度護欄：正式店家、日報或現金目標不完整時，`rankingEligible=false`，Agent 禁止宣稱名次。
-4. 資料健康工具：新增 `getDataHealth` 與 `/datahealth`。
-5. 每日戰情摘要：新增 `getDailyBattleBrief` 與 `/today`。
-6. 快速異常查詢：`/alerts`。
-7. 主動預警基礎版：新增 `telegramAgentDailyPatrol`，每日 09:35 檢查；預設停用，不呼叫 Gemini。
+本專案是以 React / Vite / Firebase 建置的多品牌營運管理系統，目前正式品牌包含：
 
-## 部署
+- CYJ
+- 安妞
+- 伊啵
 
-將本套件的 `index.js` 覆蓋至：
+系統涵蓋營運 Dashboard、日報、年度分析、目標、區域／單店／詳細報表、回報檢核、歷史修正、管理師模組、登入安全、裝置管理、維護中心，以及 Telegram 營運 Agent／推播管理。
+
+## 技術棧
+
+目前正式 `package.json` 可確認：
+
+- React 19
+- React DOM 19
+- Vite 7
+- Firebase Web SDK 12
+- Recharts 3
+- Tailwind CSS 3
+- Lucide React
+- vite-plugin-pwa
+- gh-pages
+
+後端 `functions/package.json` 可確認：
+
+- Node.js 22
+- firebase-admin
+- firebase-functions
+- axios
+
+## 專案入口
 
 ```text
-functions/index.js
+index.html
+  ↓
+src/main.jsx
+  ↓
+src/App.jsx
+  ↓
+AppContext.Provider
+  ↓
+Navigation + 各功能 View
 ```
 
-檢查語法：
+`src/main.jsx` 同時對整個頁面套用 `translate="no"` / `notranslate`，避免瀏覽器自動翻譯誤改姓名、店名與金額文字。
+
+## 主要功能
+
+目前正式選單包含：
+
+- 營運總覽
+- 每日分析
+- 年度分析
+- 年度設定
+- 區域分析
+- 單店分析
+- 詳細報表
+- 回報檢核
+- 業績修正
+- 日報輸入
+- 登入監控
+- 推播管理
+- 管師目標
+- 管師排休
+- 管師帳號
+- 系統設定
+
+Therapist 模組可由 feature flag 關閉；關閉後相關選單與資料讀取應同步停用。
+
+## 三品牌 Firestore 路徑
+
+### CYJ：legacy path
+
+```text
+artifacts/{appId}/public/data/{collection}
+```
+
+Global settings：
+
+```text
+artifacts/{appId}/public/data/global_settings/{doc}
+```
+
+### 安妞／伊啵：standard path
+
+```text
+brands/{brandId}/{collection}
+```
+
+Settings：
+
+```text
+brands/{brandId}/settings/{doc}
+```
+
+所有跨品牌功能在修改資料路徑前，都必須先確認是否透過 `getCollectionPath()` / `getDocPath()`。
+
+## Dashboard 架構
+
+```text
+DashboardView.jsx
+  ├─ DashboardHeader.jsx
+  ├─ StorePerformanceView.jsx
+  └─ TherapistPerformanceView.jsx
+        ↑
+  useDashboardStats.js
+```
+
+Dashboard 的大量資料整合與計算不在 `DashboardView.jsx` 本身，而在 `useDashboardStats.js`。
+
+## Store Identity
+
+CYJ「新店」目前有正式治理文件：
+
+```text
+DATA_IDENTITY_RULES.md
+tests/storeIdentity.test.js
+```
+
+核心規則：
+
+```text
+coreStoreName      = 新店
+canonicalStoreName = CYJ新店店
+```
+
+遇到新店資料問題時，不得先在單一頁面新增 workaround。先依 `DATA_IDENTITY_RULES.md` 的診斷順序確認 Raw、Summary、canonical writer 與 Store Identity layer。
+
+## 開發前先讀
+
+依修改內容閱讀：
+
+- 系統總架構：`ARCHITECTURE.md`
+- 開發規則：`DEVELOPMENT_GUIDE.md`
+- 部署：`DEPLOYMENT.md`
+- 完整來源地圖：`SYSTEM_SOURCE_MAP.md`
+- Store Identity：`DATA_IDENTITY_RULES.md`
+
+## 常用指令
 
 ```bash
-node --check functions/index.js
+npm run dev
+npm run build
+npm run lint
+npm run preview
+npm run deploy
 ```
 
-部署 Telegram Webhook 與主動預警排程：
+Store Identity regression：
 
 ```bash
-firebase deploy --only functions:telegramWebhook,functions:telegramAgentDailyPatrol
+node --test tests/storeIdentity.test.js
 ```
 
-不需要重新設定 Telegram Token，也不需要重新設定 Webhook。
+Functions：
 
-## Telegram 測試
+```bash
+cd functions
+npm run serve
+npm run deploy
+npm run logs
+```
+
+## 目前 Repository 未確認／不存在的項目
+
+目前正式來源與使用者專案檢查結果：
+
+- 未看到 `.firebaserc`
+- 未看到 `firestore.indexes.json`
+- 未看到 `.github/workflows`
+
+因此目前不得假設：
+
+- Firebase CLI project alias 已由 repository 管理
+- Composite Indexes 已由 `firestore.indexes.json` 管理
+- GitHub Actions 有自動 build / deploy workflow
+
+## 文件維護原則
+
+1. 正式程式優先於文件。
+2. 重大架構變更後同步更新相關 `.md`。
+3. 不以 AI 記憶補寫無法由目前程式確認的事實。
+4. 不把一次性修復工具寫成永久架構。
+5. 程式已存在的特殊相容規則，必須記錄「目前狀態」與「未來建議」的差別。
+
+---
+
+## 第二層專門文件
+
+需要深入追查資料與功能時，閱讀：
 
 ```text
-/reset
-/datahealth 安妞
-/today
-/alerts CYJ
-安妞 Amanda 區長本月整體表現如何？請列出所有排名與資料可信度。
+docs/README.md
+docs/FIREBASE_DATA_MODEL.md
+docs/DASHBOARD_SUMMARY.md
+docs/AUTH_AND_SECURITY.md
+docs/TELEGRAM_AGENT.md
+docs/MAINTENANCE_TOOLS.md
+docs/DATA_FLOW.md
 ```
 
-## 啟用主動預警
+第二層的目的不是增加規則數量，而是把「資料從哪裡來、誰負責、錯了先查哪裡」固定成專案知識，避免未來回到 page-level 猜測式修補。
 
-在 Firestore 建立：
+---
+
+## 新對話 / 新 AI / 新工程師請從這裡開始
+
+任何接手者在修改程式前，先讀：
 
 ```text
-telegram_agent_config/active_alerts
+AI_START_HERE.md
+CURRENT_STATE.md
 ```
 
-可使用套件內的 `active_alerts_config.example.json` 作為欄位範例。
+`AI_START_HERE.md` 定義接手順序與不可違反的開發規則。  
+`CURRENT_STATE.md` 記錄目前正式 source snapshot、已確認架構、未確認項目與下一次部署後應更新的 production state。
 
-- `enabled=false`：每天只讀取 1 筆設定，不執行營運掃描。
-- `enabled=true`：每天 09:35 執行一次固定規則異常掃描。
-- 主動預警不呼叫 Gemini，因此不產生 Gemini Token 費用。
-- `chatIds` 若省略，預設發送至程式內既有兩個授權主管群組。
-
-## 排名規則
-
-只有以下條件全部成立，區長才會參與排名：
-
-- 正式組織架構中至少有一間店。
-- 該區所有正式店家都有本月資料。
-- 該區所有正式店家都有現金目標。
-
-資料不完整時，回覆應說明缺少的日報或目標，不得自行稱為第幾名。
-
-## 驗證範圍
-
-已完成：
-
-- `node --check`
-- 明碼 Telegram Token 掃描
-- ZIP 完整性檢查
-- 排名欄位與指標名稱靜態檢查
-
-尚未連線替你執行正式 Firebase 部署或正式 Firestore 資料驗證。

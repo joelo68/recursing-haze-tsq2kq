@@ -219,6 +219,12 @@ const SettingsView = () => {
     autoLogoutEnabled: true,
     autoLogoutMinutes: 240,
     logoutWarningSeconds: 60,
+
+    // 新裝置登入保護：預設關閉，部署新版後不會突然改變既有登入行為。
+    deviceApprovalMode: "off",
+    deviceApprovalRoles: ["director", "trainer", "manager", "store", "therapist"],
+    deviceApprovalExpiryMinutes: 15,
+    allowTrustedDeviceSelfApproval: true,
   };
 
   const [localSecurityConfig, setLocalSecurityConfig] = useState(DEFAULT_SECURITY_CONFIG);
@@ -656,6 +662,20 @@ const SettingsView = () => {
       const lowPowerIdleMinutes = Math.max(1, Number(localSecurityConfig.lowPowerIdleMinutes || 30));
       const autoLogoutMinutes = Math.max(1, Number(localSecurityConfig.autoLogoutMinutes || localSecurityConfig.timeoutMinutes || 240));
       const logoutWarningSeconds = Math.max(5, Number(localSecurityConfig.logoutWarningSeconds || localSecurityConfig.warningSeconds || 60));
+      const deviceApprovalMode = ["off", "monitor", "enforce"].includes(localSecurityConfig.deviceApprovalMode)
+        ? localSecurityConfig.deviceApprovalMode
+        : "off";
+      const deviceApprovalRoles = Array.isArray(localSecurityConfig.deviceApprovalRoles) && localSecurityConfig.deviceApprovalRoles.length
+        ? [...new Set(localSecurityConfig.deviceApprovalRoles)]
+        : ["director", "trainer", "manager", "store", "therapist"];
+      const deviceApprovalExpiryMinutes = Math.max(5, Math.min(60, Number(localSecurityConfig.deviceApprovalExpiryMinutes || 15)));
+
+      if (deviceApprovalMode === "enforce" && securityConfig?.deviceApprovalMode !== "enforce") {
+        const confirmed = window.confirm(
+          "確定要正式啟用新裝置登入保護嗎？\n\n啟用後，新的手機或電腦完成確認前將無法進入系統；目前已信任的常用裝置不受影響。"
+        );
+        if (!confirmed) return;
+      }
 
       // 省流量待機與自動登出為兩套獨立邏輯：
       // 主管可豁免自動登出，但仍需要依省流時間進入待機；
@@ -682,6 +702,10 @@ const SettingsView = () => {
         autoLogoutEnabled: Boolean(localSecurityConfig.autoLogoutEnabled),
         autoLogoutMinutes,
         logoutWarningSeconds,
+        deviceApprovalMode,
+        deviceApprovalRoles,
+        deviceApprovalExpiryMinutes,
+        allowTrustedDeviceSelfApproval: localSecurityConfig.allowTrustedDeviceSelfApproval !== false,
 
         // 舊版相容欄位：App 舊邏輯或其他頁面仍可讀
         enabled: Boolean(localSecurityConfig.autoLogoutEnabled),
@@ -1445,6 +1469,118 @@ const SettingsView = () => {
 
             <Card title="資安與閒置登入控管">
               <div className="space-y-6">
+                {/* 新裝置登入保護：前端用語刻意保持生活化，避免工程術語。 */}
+                <div className="rounded-[1.5rem] border border-sky-100 bg-gradient-to-br from-sky-50/70 via-white to-[#FFF9EF] shadow-sm overflow-hidden">
+                  <div className="p-5 border-b border-sky-100/70 flex flex-col lg:flex-row lg:items-start lg:justify-between gap-4">
+                    <div className="min-w-0">
+                      <div className="flex items-center gap-2 text-sky-800 font-black">
+                        <Shield size={18} /> 新裝置登入保護
+                      </div>
+                      <p className="text-xs text-sky-800/70 font-bold mt-1 leading-relaxed max-w-2xl">
+                        當同一個帳號從新的手機或電腦登入時，可先提醒、觀察，或要求完成確認後才進入系統。已經信任的常用裝置不受影響。
+                      </p>
+                    </div>
+                    <div className="rounded-full border border-sky-100 bg-white/80 px-3 py-1.5 text-[11px] font-black text-sky-700 whitespace-nowrap">
+                      建議先「先觀察」再正式啟用
+                    </div>
+                  </div>
+
+                  <div className="p-5 space-y-5">
+                    <div>
+                      <label className="block text-xs font-black text-[#A69C91] mb-2 tracking-wider">新裝置出現時怎麼處理</label>
+                      <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+                        {[
+                          { value: "off", title: "維持目前方式", desc: "先不啟用新的確認流程。" },
+                          { value: "monitor", title: "先觀察", desc: "會提醒並建立待確認紀錄，但暫時不阻擋登入。" },
+                          { value: "enforce", title: "正式啟用", desc: "新裝置要完成確認後，才能進入系統。" },
+                        ].map((option) => {
+                          const selected = (localSecurityConfig.deviceApprovalMode || "off") === option.value;
+                          return (
+                            <button
+                              key={option.value}
+                              type="button"
+                              onClick={() => setLocalSecurityConfig({ ...localSecurityConfig, deviceApprovalMode: option.value })}
+                              className={`text-left rounded-2xl border-2 p-4 transition-all ${selected ? "border-sky-300 bg-sky-50 shadow-sm" : "border-[#EFE7DA] bg-white hover:border-sky-100"}`}
+                            >
+                              <div className={`text-sm font-black ${selected ? "text-sky-800" : "text-[#5A5047]"}`}>{option.title}</div>
+                              <div className="mt-1 text-xs font-bold leading-5 text-[#9A8E82]">{option.desc}</div>
+                            </button>
+                          );
+                        })}
+                      </div>
+                    </div>
+
+                    <div>
+                      <label className="block text-xs font-black text-[#A69C91] mb-2 tracking-wider">套用對象</label>
+                      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-2.5">
+                        {[
+                          { id: "director", label: "高階主管" },
+                          { id: "trainer", label: "教專" },
+                          { id: "manager", label: "區長" },
+                          { id: "store", label: "店經理" },
+                          { id: "therapist", label: "管理師" },
+                        ].map((role) => {
+                          const checked = (localSecurityConfig.deviceApprovalRoles || ["director", "trainer", "manager", "store", "therapist"]).includes(role.id);
+                          return (
+                            <label key={role.id} className={`flex items-center gap-2.5 rounded-xl border-2 px-3 py-3 cursor-pointer ${checked ? "border-sky-200 bg-sky-50/70" : "border-[#EFE7DA] bg-white"}`}>
+                              <input
+                                type="checkbox"
+                                checked={checked}
+                                onChange={(event) => {
+                                  const current = localSecurityConfig.deviceApprovalRoles || ["director", "trainer", "manager", "store", "therapist"];
+                                  const next = event.target.checked ? [...new Set([...current, role.id])] : current.filter((item) => item !== role.id);
+                                  setLocalSecurityConfig({ ...localSecurityConfig, deviceApprovalRoles: next });
+                                }}
+                                className="w-5 h-5 rounded border-stone-300 text-sky-600 focus:ring-sky-200"
+                              />
+                              <span className="text-sm font-black text-[#5A5047]">{role.label}</span>
+                            </label>
+                          );
+                        })}
+                      </div>
+                    </div>
+
+                    <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+                      <div className="rounded-2xl border border-[#EFE7DA] bg-white p-4">
+                        <label className="block text-xs font-black text-[#A69C91] mb-2">新裝置確認保留時間</label>
+                        <div className="relative max-w-xs">
+                          <input
+                            type="number"
+                            min="5"
+                            max="60"
+                            step="5"
+                            value={localSecurityConfig.deviceApprovalExpiryMinutes ?? 15}
+                            onChange={(event) => setLocalSecurityConfig({ ...localSecurityConfig, deviceApprovalExpiryMinutes: event.target.value })}
+                            className="w-full pr-16 pl-4 py-3 border-2 border-[#EFE7DA] rounded-xl outline-none focus:border-sky-300 focus:ring-4 focus:ring-sky-50 font-black text-[#2F2923] bg-[#FFFCF7]"
+                          />
+                          <span className="absolute right-4 top-1/2 -translate-y-1/2 text-xs font-black text-[#A69C91]">分鐘</span>
+                        </div>
+                        <p className="mt-2 text-xs font-bold leading-5 text-[#A69C91]">建議 15 分鐘。時間過後需重新登入申請。</p>
+                      </div>
+
+                      <div className="rounded-2xl border border-[#EFE7DA] bg-white p-4">
+                        <div className="flex items-start justify-between gap-4">
+                          <div>
+                            <div className="text-sm font-black text-[#5A5047]">本人可用舊裝置完成確認</div>
+                            <p className="mt-1 text-xs font-bold leading-5 text-[#A69C91]">使用原本已信任的手機或電腦，輸入新裝置上的 6 位確認碼即可。</p>
+                          </div>
+                          <button
+                            type="button"
+                            onClick={() => setLocalSecurityConfig({ ...localSecurityConfig, allowTrustedDeviceSelfApproval: localSecurityConfig.allowTrustedDeviceSelfApproval === false })}
+                            className={`w-14 h-8 rounded-full p-1 transition-all shrink-0 ${localSecurityConfig.allowTrustedDeviceSelfApproval !== false ? "bg-sky-500" : "bg-stone-200"}`}
+                          >
+                            <span className={`block w-6 h-6 rounded-full bg-white shadow-md transition-transform ${localSecurityConfig.allowTrustedDeviceSelfApproval !== false ? "translate-x-6" : "translate-x-0"}`} />
+                          </button>
+                        </div>
+                      </div>
+                    </div>
+
+                    <div className="rounded-2xl border border-amber-100 bg-amber-50/60 p-4 text-xs font-bold leading-6 text-amber-800">
+                      建議流程：先選「先觀察」使用 1～2 天，確認新裝置提醒與人員使用習慣正常後，再切換成「正式啟用」。這樣可以避免正常同仁因換手機或瀏覽器資料重設而突然無法登入。
+                    </div>
+                  </div>
+                </div>
+
                 <div className="grid grid-cols-1 xl:grid-cols-2 gap-5">
                   {/* 閒置省流量待機 */}
                   <div className="bg-[#FFFCF7] rounded-[1.5rem] border border-emerald-100 shadow-sm overflow-hidden">
