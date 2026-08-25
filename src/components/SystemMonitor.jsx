@@ -5,17 +5,21 @@ import {
   Calendar, Search, RotateCcw, ShieldAlert, ShieldCheck, Laptop, ChevronDown
 } from "lucide-react";
 import { 
-  query, limit, where, Timestamp, getDocs, orderBy, doc, setDoc, increment, startAfter 
+  query, limit, where, Timestamp, getDocs, orderBy, startAfter 
 } from "firebase/firestore";
 
 import { AppContext } from "../AppContext";
 import { ViewWrapper, Card } from "./SharedUI";
 import SmartDatePicker from "./SmartDatePicker";
-import { db, appId } from "../config/firebase";
+import DeviceApprovalPanel from "./DeviceApprovalPanel";
 import { formatLocalYYYYMMDD } from "../utils/helpers";
 
 const SystemMonitor = () => {
-  const { getCollectionPath, currentBrand, currentUser, userRole } = useContext(AppContext);
+  const {
+    getCollectionPath, currentBrand, currentUser, userRole,
+    currentDeviceTrust, currentSecurityAccountKey,
+    manageDeviceSecurityAction, reviewDeviceApprovalAction, canManageDeviceSecurity
+  } = useContext(AppContext);
   
   const [logs, setLogs] = useState([]);
   const [loading, setLoading] = useState(false);
@@ -34,6 +38,7 @@ const SystemMonitor = () => {
   const [deviceHasLoaded, setDeviceHasLoaded] = useState(false);
   const [deviceKeyword, setDeviceKeyword] = useState("");
   const [deviceQuickFilter, setDeviceQuickFilter] = useState("all");
+  const canReviewDeviceSecurity = Boolean(canManageDeviceSecurity && currentDeviceTrust?.status === "trusted");
   const [expandedDeviceId, setExpandedDeviceId] = useState(null);
   const [deviceDateRange, setDeviceDateRange] = useState(() => {
     const today = formatLocalYYYYMMDD(new Date());
@@ -136,7 +141,7 @@ const SystemMonitor = () => {
     if (logTypeFilter === "login") return type === "auth.login" || action.includes("登入系統");
     if (logTypeFilter === "logout") return type === "auth.logout" || action.includes("登出系統");
     if (logTypeFilter === "auth") return type === "auth.login" || type === "auth.logout" || action.includes("登入系統") || action.includes("登出系統");
-    if (logTypeFilter === "device") return type === "auth.device_check" || type === "auth.device_check_failed" || type === "auth.blocked_device" || action.includes("裝置安全") || action.includes("封鎖裝置");
+    if (logTypeFilter === "device") return type === "auth.device_check" || type === "auth.device_check_failed" || type === "auth.blocked_device" || action.includes("裝置安全") || action.includes("停用此品牌");
     if (logTypeFilter === "page") return type === "page.view" || action.includes("頁面瀏覽");
     if (logTypeFilter === "query") return type.startsWith("query") || action.includes("查詢");
     if (logTypeFilter === "data") return type.startsWith("data.") || action.includes("修改") || action.includes("更新") || action.includes("刪除") || action.includes("封存") || action.includes("還原");
@@ -354,7 +359,7 @@ const SystemMonitor = () => {
         });
 
         const trustedCount = deviceList.filter((d) => d.trusted !== false && d.status !== "new").length;
-        const newCount = deviceList.filter((d) => d.trusted === false || d.status === "new" || d.status === "suspicious" || d.status === "blocked" || d.status === "global_blocked").length;
+        const newCount = deviceList.filter((d) => d.trusted === false || ["new", "observing", "reverify_required", "suspicious", "blocked", "global_blocked"].includes(d.status)).length;
         const lastSeenText = deviceList
           .map((d) => d.lastSeenAtText || d.firstSeenAtText || "")
           .filter(Boolean)
@@ -385,8 +390,8 @@ const SystemMonitor = () => {
   const isPendingDevice = (device = {}) => {
     return (
       device.trusted === false ||
-      ["new", "suspicious", "blocked", "global_blocked"].includes(device.status) ||
-      ["manual_suspicious", "manual_blocked", "manual_global_blocked"].includes(device.source)
+      ["new", "observing", "reverify_required", "suspicious", "blocked", "global_blocked"].includes(device.status) ||
+      ["manual_observing", "manual_reverify_required", "manual_suspicious", "manual_blocked", "manual_global_blocked", "self_reported_not_me"].includes(device.source)
     );
   };
 
@@ -621,146 +626,49 @@ const SystemMonitor = () => {
     );
   };
 
-  const sanitizeSecurityKey = (value) => {
-    return String(value || "unknown")
-      .replace(/[\/.#$\[\]]/g, "_")
-      .replace(/\s+/g, "_")
-      .trim();
-  };
-
-  const getGlobalBlockedDeviceRef = (profile, device) => {
-    const role = profile?.role || "unknown";
-    const accountId = profile?.accountId || profile?.userName || profile?.id || "unknown";
-    const deviceId = device?.deviceId || "unknown_device";
-    const globalKey = sanitizeSecurityKey(`${role}_${accountId}_${deviceId}`);
-    return doc(db, "artifacts", appId, "public", "data", "global_blocked_devices", globalKey);
-  };
-
   const getDeviceTrustMeta = (device = {}) => {
     if (device.source === "manual_global_blocked" || device.status === "global_blocked") {
-      return {
-        label: "全品牌封鎖",
-        className: "bg-stone-100 text-stone-800 border-stone-300",
-      };
+      return { label: "所有品牌皆停用", className: "bg-stone-100 text-stone-800 border-stone-300" };
     }
     if (device.status === "blocked" || device.source === "manual_blocked") {
-      return {
-        label: "已封鎖",
-        className: "bg-stone-100 text-stone-700 border-stone-200",
-      };
+      return { label: "此品牌已停用", className: "bg-stone-100 text-stone-700 border-stone-200" };
     }
-    if (device.status === "suspicious" || device.source === "manual_suspicious") {
-      return {
-        label: "可疑裝置",
-        className: "bg-rose-50 text-rose-700 border-rose-100",
-      };
+    if (device.status === "reverify_required" || device.source === "manual_reverify_required") {
+      return { label: "要求重新驗證", className: "bg-orange-50 text-orange-700 border-orange-100" };
+    }
+    if (device.status === "observing" || device.source === "manual_observing") {
+      return { label: "繼續觀察", className: "bg-amber-50 text-amber-700 border-amber-100" };
+    }
+    if (device.status === "suspicious" || device.source === "manual_suspicious" || device.source === "self_reported_not_me") {
+      return { label: "需要主管確認", className: "bg-rose-50 text-rose-700 border-rose-100" };
     }
     if (device.trusted === false || device.status === "new") {
-      return {
-        label: "新裝置",
-        className: "bg-rose-50 text-rose-600 border-rose-100",
-      };
+      return { label: "等待確認", className: "bg-rose-50 text-rose-600 border-rose-100" };
     }
-    return {
-      label: "已信任",
-      className: "bg-emerald-50 text-emerald-700 border-emerald-100",
-    };
+    return { label: "已信任", className: "bg-emerald-50 text-emerald-700 border-emerald-100" };
   };
 
   const updateDeviceTrust = async (profile, device, nextStatus) => {
     if (!profile?.id || !device?.deviceId) return;
+    if (!canReviewDeviceSecurity) {
+      alert(canManageDeviceSecurity ? "請改用已信任的裝置進行這項操作。" : "此功能僅限最高管理者使用。");
+      return;
+    }
 
     const actionKey = `${profile.id}_${device.deviceId}_${nextStatus}`;
     setDeviceActionKey(actionKey);
-
-    const nowText = new Date().toISOString();
-    const reviewerName = currentUser?.name || (userRole === "director" ? "高階主管" : "系統管理者");
-    const isTrusted = nextStatus === "trusted";
-    const isGlobalBlocked = nextStatus === "global_blocked";
-    const isBlocked = nextStatus === "blocked" || isGlobalBlocked;
-
-    const nextDevice = {
-      ...device,
-      trusted: isTrusted,
-      status: isTrusted ? "trusted" : (isGlobalBlocked ? "global_blocked" : (isBlocked ? "blocked" : "suspicious")),
-      source: isTrusted ? "manual_trusted" : (isGlobalBlocked ? "manual_global_blocked" : (isBlocked ? "manual_blocked" : "manual_suspicious")),
-      reviewedBy: reviewerName,
-      reviewedRole: userRole || "",
-      reviewedAtText: nowText,
-      updatedAtText: nowText,
-      ...(isBlocked ? {
-        blockedBy: reviewerName,
-        blockedAtText: nowText,
-        blockScope: isGlobalBlocked ? "all_brands" : "current_brand",
-      } : {}),
-    };
-
     try {
-      await setDoc(doc(getCollectionPath("account_devices"), profile.id), {
-        devices: {
-          [device.deviceId]: nextDevice,
-        },
-        updatedAtText: nowText,
-      }, { merge: true });
-
-      const globalBlockRef = getGlobalBlockedDeviceRef(profile, device);
-      if (isGlobalBlocked) {
-        await setDoc(globalBlockRef, {
-          active: true,
-          status: "global_blocked",
-          source: "manual_global_blocked",
-          scope: "all_brands",
-          role: profile?.role || "",
-          accountId: profile?.accountId || "",
-          userName: profile?.userName || profile?.accountId || profile?.id || "",
-          deviceId: nextDevice.deviceId,
-          deviceShort: nextDevice.deviceShort,
-          device: nextDevice.device,
-          browser: nextDevice.browser,
-          os: nextDevice.os,
-          blockedBy: reviewerName,
-          blockedRole: userRole || "",
-          blockedAtText: nowText,
-          updatedAtText: nowText,
-        }, { merge: true });
-      }
-
-      if (isTrusted) {
-        await setDoc(globalBlockRef, {
-          active: false,
-          status: "resolved",
-          source: "manual_trusted",
-          resolvedBy: reviewerName,
-          resolvedRole: userRole || "",
-          resolvedAtText: nowText,
-          updatedAtText: nowText,
-        }, { merge: true });
-      }
-
-      const wasPendingDevice = device.trusted === false || device.status === "new" || device.status === "suspicious" || device.status === "blocked" || device.status === "global_blocked";
-      if (isTrusted && wasPendingDevice) {
-        await setDoc(doc(getCollectionPath("security_summary"), "device_alerts"), {
-          pendingNewDeviceCount: increment(-1),
-          lastResolvedDeviceShort: nextDevice.deviceShort,
-          lastResolvedUserName: profile.userName || profile.accountId || profile.id,
-          lastResolvedBy: reviewerName,
-          lastResolvedAtText: nowText,
-          updatedAtText: nowText,
-        }, { merge: true });
-      }
-
+      const result = await manageDeviceSecurityAction?.(profile, device, nextStatus);
+      if (!result?.ok) throw new Error(result?.message || "裝置狀態更新失敗");
+      const nextDevice = result.device || device;
       setDeviceProfiles((prev) => prev.map((item) => {
         if (item.id !== profile.id) return item;
-
-        const deviceList = (item.deviceList || []).map((d) =>
-          d.deviceId === device.deviceId ? nextDevice : d
-        );
-
+        const deviceList = (item.deviceList || []).map((row) => row.deviceId === device.deviceId ? nextDevice : row);
         return {
           ...item,
           deviceList,
-          trustedCount: deviceList.filter((d) => d.trusted === true && d.status !== "blocked").length,
-          newCount: deviceList.filter((d) => d.trusted === false || d.status === "new" || d.status === "suspicious" || d.status === "blocked" || d.status === "global_blocked").length,
+          trustedCount: deviceList.filter((row) => !isPendingDevice(row)).length,
+          newCount: deviceList.filter(isPendingDevice).length,
         };
       }));
 
@@ -774,17 +682,16 @@ const SystemMonitor = () => {
             source: nextDevice.source,
             reviewedBy: nextDevice.reviewedBy,
             reviewedAtText: nextDevice.reviewedAtText,
-            resolvedPending: isTrusted && wasPendingDevice,
-            globalBlocked: isGlobalBlocked,
-            blockScope: isGlobalBlocked ? "all_brands" : (isBlocked ? "current_brand" : ""),
+            resolvedPending: nextDevice.status === "trusted",
+            globalBlocked: nextDevice.status === "global_blocked",
           },
         }));
       } catch (eventError) {
-        console.warn("裝置信任狀態同步事件發送失敗:", eventError);
+        console.warn("裝置狀態同步事件發送失敗:", eventError);
       }
     } catch (error) {
-      console.error("更新裝置信任狀態失敗:", error);
-      alert("更新裝置信任狀態失敗：" + error.message);
+      console.error("更新裝置狀態失敗:", error);
+      alert(error.message || "裝置狀態更新失敗，請稍後再試。");
     } finally {
       setDeviceActionKey("");
     }
@@ -932,13 +839,14 @@ const SystemMonitor = () => {
         <Card className="!overflow-visible z-30 relative w-full max-w-full min-w-0">
           <div className="flex flex-col xl:flex-row justify-between items-start xl:items-center mb-6 gap-4 w-full max-w-full min-w-0">
             <div>
-              <h3 className="text-lg font-bold text-stone-700">{monitorMode === "logs" ? "系統操作日誌" : "裝置登入管理"} ({currentBrand.label})</h3>
-              <p className="text-xs text-stone-400">{monitorMode === "logs" ? "追蹤系統內的所有操作紀錄" : "查看帳號已記錄的常用裝置與新裝置狀態"}</p>
+              <h3 className="text-lg font-bold text-stone-700">{monitorMode === "logs" ? "系統操作日誌" : monitorMode === "approvals" ? "待確認裝置" : "裝置登入管理"} ({currentBrand.label})</h3>
+              <p className="text-xs text-stone-400">{monitorMode === "logs" ? "追蹤系統內的所有操作紀錄" : monitorMode === "approvals" ? "集中處理目前正在等待確認的新裝置" : "查看帳號已記錄的常用裝置與新裝置狀態"}</p>
             </div>
             
             <div className="flex items-center gap-2 rounded-2xl border border-stone-100 bg-white p-1 shadow-sm">
-              <button type="button" onClick={() => setMonitorMode("logs")} className={`px-4 py-2 rounded-xl text-xs font-black transition-all ${monitorMode === "logs" ? "bg-stone-800 text-white shadow-sm" : "text-stone-500 hover:bg-stone-50"}`}>操作日誌</button>
-              <button type="button" onClick={() => setMonitorMode("devices")} className={`px-4 py-2 rounded-xl text-xs font-black transition-all ${monitorMode === "devices" ? "bg-stone-800 text-white shadow-sm" : "text-stone-500 hover:bg-stone-50"}`}>裝置管理</button>
+              <button type="button" onClick={() => setMonitorMode("logs")} className={`px-4 py-2 rounded-xl text-xs font-black transition-all ${monitorMode === "logs" ? "bg-[#EFD399] text-[#6A4D26] shadow-sm" : "text-stone-500 hover:bg-stone-50"}`}>操作日誌</button>
+              <button type="button" onClick={() => setMonitorMode("approvals")} className={`px-4 py-2 rounded-xl text-xs font-black transition-all ${monitorMode === "approvals" ? "bg-[#EFD399] text-[#6A4D26] shadow-sm" : "text-stone-500 hover:bg-stone-50"}`}>待確認裝置</button>
+              <button type="button" onClick={() => setMonitorMode("devices")} className={`px-4 py-2 rounded-xl text-xs font-black transition-all ${monitorMode === "devices" ? "bg-[#EFD399] text-[#6A4D26] shadow-sm" : "text-stone-500 hover:bg-stone-50"}`}>裝置管理</button>
             </div>
 
             {monitorMode === "logs" && (
@@ -1270,8 +1178,27 @@ const SystemMonitor = () => {
           )
           )}
 
+          {monitorMode === "approvals" && (
+            <DeviceApprovalPanel
+              open
+              embedded
+              getCollectionPath={getCollectionPath}
+              accountKey={currentSecurityAccountKey}
+              currentDeviceTrusted={currentDeviceTrust?.status === "trusted"}
+              isSuperAdmin={Boolean(canManageDeviceSecurity)}
+              onReview={reviewDeviceApprovalAction}
+            />
+          )}
+
           {monitorMode === "devices" && (
             <div className="space-y-4 w-full max-w-full min-w-0">
+              {!canReviewDeviceSecurity && (
+                <div className="rounded-2xl border border-amber-100 bg-amber-50/60 px-4 py-3 text-xs font-bold leading-6 text-amber-800">
+                  {canManageDeviceSecurity
+                    ? "目前這台裝置尚未完成確認；請改用已信任的裝置處理允許、停用或其他安全設定。"
+                    : "您可以查看裝置紀錄；允許、停用或變更裝置狀態僅限最高管理者處理。"}
+                </div>
+              )}
               <div className="grid grid-cols-2 lg:grid-cols-4 gap-2.5">
                 {[
                   {
@@ -1290,7 +1217,7 @@ const SystemMonitor = () => {
                   },
                   {
                     key: "pending",
-                    label: "待觀察新裝置",
+                    label: "待確認裝置",
                     value: deviceSummary.newDevices,
                     className: "border-rose-100 bg-rose-50/60 text-rose-700",
                     activeClassName: "ring-2 ring-rose-300 border-rose-200 bg-rose-50",
@@ -1325,7 +1252,7 @@ const SystemMonitor = () => {
               <div className="flex flex-col gap-3 rounded-2xl border border-stone-100 bg-stone-50/70 p-3">
                 <div className="flex items-center gap-2 text-sm font-black text-stone-600">
                   <Laptop size={18} className="text-stone-400" />
-                  裝置信任資料直接讀取 account_devices；請先設定區間與筆數，再手動載入。
+                  完整裝置紀錄資料較多；請先設定日期區間與顯示數量，再手動載入。
                 </div>
 
                 <div className="grid grid-cols-1 lg:grid-cols-[1fr_auto_auto_auto_auto] gap-2 items-end">
@@ -1364,7 +1291,7 @@ const SystemMonitor = () => {
                   </div>
 
                   <div className="flex flex-col gap-1">
-                    <span className="text-[11px] font-black text-stone-400">讀取筆數</span>
+                    <span className="text-[11px] font-black text-stone-400">顯示數量</span>
                     <select
                       value={deviceLimitCount}
                       onChange={(e) => setDeviceLimitCount(Number(e.target.value))}
@@ -1391,7 +1318,7 @@ const SystemMonitor = () => {
               {deviceHasLoaded && deviceQuickFilter !== "all" && (
                 <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 rounded-2xl border border-rose-100 bg-rose-50/50 px-4 py-3">
                   <div className="text-sm font-black text-rose-700">
-                    目前篩選：{deviceQuickFilter === "pending" ? "待觀察新裝置" : "行動裝置"}
+                    目前篩選：{deviceQuickFilter === "pending" ? "待確認裝置" : "行動裝置"}
                     <span className="ml-2 text-xs font-bold text-rose-400">共 {filteredDeviceProfiles.reduce((sum, profile) => sum + (profile.deviceList?.length || 0), 0)} 台</span>
                   </div>
                   <button
@@ -1412,7 +1339,7 @@ const SystemMonitor = () => {
                   <Laptop size={44} className="text-stone-300 mb-4" />
                   <h4 className="text-stone-600 font-black text-lg mb-2">裝置資料尚未載入</h4>
                   <p className="text-stone-400 text-sm max-w-sm leading-6">
-                    為節省 reads，切換到裝置管理時不會自動讀取 account_devices。請使用上方篩選列設定區間與筆數後，再點擊右側「載入資料」。
+                    為了維持系統順暢，進入裝置管理時不會自動載入完整紀錄。請先設定日期區間與顯示數量，再點擊右側「載入資料」。
                   </p>
 
                 </div>
@@ -1501,58 +1428,70 @@ const SystemMonitor = () => {
                                       {getLoginLocationDisplay(device)}
                                     </div>
                                     <div className="rounded-xl bg-stone-50 p-2">
-                                      <span className="block text-stone-400 font-black">來源</span>
-                                      {device.source || device.status || "-"}
+                                      <span className="block text-stone-400 font-black">目前狀態</span>
+                                      {getDeviceTrustMeta(device).label}
                                     </div>
                                   </div>
 
                                   <div className="mt-3 flex flex-col sm:flex-row gap-2 justify-end">
-                                    {(device.trusted === false || device.status === "new" || device.status === "suspicious" || device.status === "blocked" || device.status === "global_blocked") && (
+                                    {(device.trusted === false || ["new", "observing", "reverify_required", "suspicious", "blocked", "global_blocked"].includes(device.status)) && (
                                       <button
                                         type="button"
-                                        disabled={deviceActionKey === `${profile.id}_${device.deviceId}_trusted`}
+                                        disabled={!canReviewDeviceSecurity || deviceActionKey === `${profile.id}_${device.deviceId}_trusted`}
                                         onClick={() => updateDeviceTrust(profile, device, "trusted")}
                                         className="px-3 py-2 rounded-xl bg-emerald-50 text-emerald-700 border border-emerald-100 text-xs font-black hover:bg-emerald-100 disabled:opacity-60 active:scale-95"
                                       >
-                                        {deviceActionKey === `${profile.id}_${device.deviceId}_trusted` ? "處理中..." : (device.status === "blocked" || device.status === "global_blocked" ? "解除封鎖並信任" : "設為信任")}
+                                        {deviceActionKey === `${profile.id}_${device.deviceId}_trusted` ? "處理中..." : (device.status === "blocked" || device.status === "global_blocked" ? "恢復並信任" : "允許使用")}
                                       </button>
                                     )}
-                                    {!(device.status === "suspicious" || device.source === "manual_suspicious" || device.status === "blocked" || device.source === "manual_blocked") && (
+                                    {!(device.status === "observing" || device.source === "manual_observing" || device.status === "blocked" || device.source === "manual_blocked" || device.status === "global_blocked" || device.source === "manual_global_blocked") && (
                                       <button
                                         type="button"
-                                        disabled={deviceActionKey === `${profile.id}_${device.deviceId}_suspicious`}
-                                        onClick={() => updateDeviceTrust(profile, device, "suspicious")}
-                                        className="px-3 py-2 rounded-xl bg-rose-50 text-rose-600 border border-rose-100 text-xs font-black hover:bg-rose-100 disabled:opacity-60 active:scale-95"
+                                        disabled={!canReviewDeviceSecurity || deviceActionKey === `${profile.id}_${device.deviceId}_observing`}
+                                        onClick={() => updateDeviceTrust(profile, device, "observing")}
+                                        className="px-3 py-2 rounded-xl bg-amber-50 text-amber-700 border border-amber-100 text-xs font-black hover:bg-amber-100 disabled:opacity-60 active:scale-95"
+                                        title="先不列為信任，不影響目前觀察階段的使用"
                                       >
-                                        {deviceActionKey === `${profile.id}_${device.deviceId}_suspicious` ? "處理中..." : "標記可疑"}
+                                        {deviceActionKey === `${profile.id}_${device.deviceId}_observing` ? "處理中..." : "繼續觀察"}
+                                      </button>
+                                    )}
+                                    {!(device.status === "reverify_required" || device.source === "manual_reverify_required" || device.status === "blocked" || device.source === "manual_blocked" || device.status === "global_blocked" || device.source === "manual_global_blocked") && (
+                                      <button
+                                        type="button"
+                                        disabled={!canReviewDeviceSecurity || deviceActionKey === `${profile.id}_${device.deviceId}_reverify_required`}
+                                        onClick={() => updateDeviceTrust(profile, device, "reverify_required")}
+                                        className="px-3 py-2 rounded-xl bg-orange-50 text-orange-700 border border-orange-100 text-xs font-black hover:bg-orange-100 disabled:opacity-60 active:scale-95"
+                                        title="保留重新驗證要求；正式啟用裝置驗證後，下次登入需完成確認"
+                                      >
+                                        {deviceActionKey === `${profile.id}_${device.deviceId}_reverify_required` ? "處理中..." : "要求重新驗證"}
                                       </button>
                                     )}
                                     {!(device.status === "blocked" || device.source === "manual_blocked" || device.status === "global_blocked" || device.source === "manual_global_blocked") && (
                                       <button
                                         type="button"
-                                        disabled={deviceActionKey === `${profile.id}_${device.deviceId}_blocked`}
+                                        disabled={!canReviewDeviceSecurity || deviceActionKey === `${profile.id}_${device.deviceId}_blocked`}
                                         onClick={() => {
-                                          if (window.confirm("確定要封鎖這台裝置嗎？封鎖後此瀏覽器環境將無法登入目前品牌。")) {
+                                          if (window.confirm("確定要停用這台裝置嗎？停用後，這個帳號將無法再用這台裝置進入目前品牌。")) {
                                             updateDeviceTrust(profile, device, "blocked");
                                           }
                                         }}
                                         className="px-3 py-2 rounded-xl bg-stone-100 text-stone-700 border border-stone-200 text-xs font-black hover:bg-stone-200 disabled:opacity-60 active:scale-95"
                                       >
-                                        {deviceActionKey === `${profile.id}_${device.deviceId}_blocked` ? "處理中..." : "封鎖裝置"}
+                                        {deviceActionKey === `${profile.id}_${device.deviceId}_blocked` ? "處理中..." : "停用此裝置"}
                                       </button>
                                     )}
                                     {!(device.status === "global_blocked" || device.source === "manual_global_blocked") && (
                                       <button
                                         type="button"
-                                        disabled={deviceActionKey === `${profile.id}_${device.deviceId}_global_blocked`}
+                                        disabled={!canReviewDeviceSecurity || deviceActionKey === `${profile.id}_${device.deviceId}_global_blocked`}
                                         onClick={() => {
-                                          if (window.confirm("確定要全品牌封鎖這台裝置嗎？封鎖後此帳號在所有品牌使用此瀏覽器環境都無法登入。")) {
+                                          if (window.confirm("確定要停止這台裝置使用所有品牌嗎？完成後，這個帳號將無法再用這台裝置進入任何品牌。")) {
                                             updateDeviceTrust(profile, device, "global_blocked");
                                           }
                                         }}
                                         className="px-3 py-2 rounded-xl bg-rose-100 text-rose-700 border border-rose-200 text-xs font-black hover:bg-rose-200 disabled:opacity-60 active:scale-95"
                                       >
-                                        {deviceActionKey === `${profile.id}_${device.deviceId}_global_blocked` ? "處理中..." : "全品牌封鎖"}
+                                        {deviceActionKey === `${profile.id}_${device.deviceId}_global_blocked` ? "處理中..." : "所有品牌停用"}
                                       </button>
                                     )}
                                   </div>

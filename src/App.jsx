@@ -34,6 +34,8 @@ import { AppContext } from "./AppContext";
 import { useAnalytics } from "./hooks/useAnalytics";
 import TherapistManagerView from "./components/TherapistManagerView";
 import LoginView from "./components/LoginView";
+import DeviceApprovalGate from "./components/DeviceApprovalGate";
+import DeviceApprovalPanel from "./components/DeviceApprovalPanel";
 import {
   trackSnapshotRead,
   trackReadSource,
@@ -47,8 +49,12 @@ import {
 // ==========================================
 // ★ 系統核心版本號 (終極動態快取版)
 // ==========================================
-const CURRENT_APP_VERSION = "3.4.2";
+const CURRENT_APP_VERSION = "3.5.2";
 const LOGIN_LOCATION_ENDPOINT = "https://resolveloginlocation-hyhcwrnyaa-uc.a.run.app";
+const DEVICE_ACCESS_ENDPOINT = "https://us-central1-cyjsituation-analysis.cloudfunctions.net/checkDeviceAccess";
+const DEVICE_APPROVAL_REVIEW_ENDPOINT = "https://us-central1-cyjsituation-analysis.cloudfunctions.net/reviewDeviceApproval";
+const DEVICE_MANAGEMENT_ENDPOINT = "https://us-central1-cyjsituation-analysis.cloudfunctions.net/manageAccountDevice";
+const DEVICE_EMERGENCY_ENDPOINT = "https://us-central1-cyjsituation-analysis.cloudfunctions.net/emergencyUnblockDevice";
 
 
 const isNewerVersion = (local, remote) => {
@@ -158,6 +164,11 @@ const DEFAULT_SECURITY_CONFIG = {
   autoLogoutEnabled: true,
   autoLogoutMinutes: 240,
   logoutWarningSeconds: 60,
+  // 新裝置登入保護預設關閉：新版部署不會突然改變既有登入行為。
+  deviceApprovalMode: "off",
+  deviceApprovalRoles: ["director", "trainer", "manager", "store", "therapist"],
+  deviceApprovalExpiryMinutes: 15,
+  allowTrustedDeviceSelfApproval: true,
 };
 
 const DEFAULT_FEATURE_FLAGS = {
@@ -387,6 +398,10 @@ const normalizeSecurityConfig = (config = {}) => ({
   timeoutMinutes: Number(config.timeoutMinutes ?? config.autoLogoutMinutes ?? DEFAULT_SECURITY_CONFIG.timeoutMinutes),
   warningSeconds: Number(config.warningSeconds ?? config.logoutWarningSeconds ?? DEFAULT_SECURITY_CONFIG.warningSeconds),
   exemptRoles: config.exemptRoles || DEFAULT_SECURITY_CONFIG.exemptRoles,
+  deviceApprovalMode: ["off", "monitor", "enforce"].includes(config.deviceApprovalMode) ? config.deviceApprovalMode : DEFAULT_SECURITY_CONFIG.deviceApprovalMode,
+  deviceApprovalRoles: Array.isArray(config.deviceApprovalRoles) && config.deviceApprovalRoles.length ? config.deviceApprovalRoles : DEFAULT_SECURITY_CONFIG.deviceApprovalRoles,
+  deviceApprovalExpiryMinutes: Math.max(5, Math.min(60, Number(config.deviceApprovalExpiryMinutes ?? DEFAULT_SECURITY_CONFIG.deviceApprovalExpiryMinutes))),
+  allowTrustedDeviceSelfApproval: config.allowTrustedDeviceSelfApproval !== false,
 });
 
 
@@ -466,53 +481,6 @@ const persistStableClientDeviceId = (deviceId = "") => {
   }
 };
 
-const getLoginLocationCityText = (location = {}) => {
-  if (!location || typeof location !== "object") return "";
-  return String(location.city || location.region || location.display || "").trim();
-};
-
-const findRecoverableKnownDeviceEntry = (devices = {}, deviceInfo = {}, loginLocation = {}) => {
-  const entries = Object.entries(devices || {});
-  if (!entries.length) return null;
-
-  const currentDeviceId = String(deviceInfo?.deviceId || "");
-  const currentFingerprint = String(deviceInfo?.deviceFingerprint || [deviceInfo?.device, deviceInfo?.browser, deviceInfo?.os].filter(Boolean).join("|"));
-  const currentLocationText = getLoginLocationCityText(loginLocation);
-  const now = Date.now();
-  const maxAgeMs = 120 * 24 * 60 * 60 * 1000;
-
-  let bestMatch = null;
-
-  entries.forEach(([storedDeviceId, item = {}]) => {
-    if (!item || storedDeviceId === currentDeviceId) return;
-    if (item.status === "blocked" || item.source === "manual_blocked") return;
-
-    const storedFingerprint = String(item.deviceFingerprint || [item.device, item.browser, item.os].filter(Boolean).join("|"));
-    if (!storedFingerprint || storedFingerprint !== currentFingerprint) return;
-
-    const lastSeenText = item.lastSeenAtText || item.firstSeenAtText || "";
-    const lastSeenMs = lastSeenText ? Date.parse(lastSeenText) : 0;
-    const isRecent = !lastSeenMs || Number.isNaN(lastSeenMs) || (now - lastSeenMs <= maxAgeMs);
-    if (!isRecent) return;
-
-    const itemLocationText = getLoginLocationCityText(item.lastLoginLocation || item.loginLocation || item.firstLoginLocation || {});
-    const locationCompatible = !currentLocationText || !itemLocationText || currentLocationText === itemLocationText || currentLocationText.includes(itemLocationText) || itemLocationText.includes(currentLocationText);
-    if (!locationCompatible) return;
-
-    const score =
-      (item.trusted !== false && item.status !== "new" ? 30 : 0) +
-      (Number(item.loginCount || 0) >= 2 ? 20 : 0) +
-      (locationCompatible ? 10 : 0) +
-      (lastSeenMs || 0) / 10000000000000;
-
-    if (!bestMatch || score > bestMatch.score) {
-      bestMatch = { storedDeviceId, item, score };
-    }
-  });
-
-  return bestMatch;
-};
-
 const sanitizeSecurityKey = (value = "") => {
   return String(value || "")
     .trim()
@@ -520,10 +488,6 @@ const sanitizeSecurityKey = (value = "") => {
     .slice(0, 120) || "unknown";
 };
 
-const SECURITY_DEVICE_CONFIG = {
-  autoTrustLimit: 2,
-  alertRoles: ["director", "trainer", "manager", "store"],
-};
 
 const DIRECTOR_VIEW_PERMISSIONS = {
   super_admin: { allowedViews: null, label: "最高管理者" },
@@ -587,17 +551,25 @@ export default function App() {
   const [hasSelectedBrand, setHasSelectedBrand] = useState(false);
   const [dailyLoginCount, setDailyLoginCount] = useState(0);
   const [yesterdayLoginCount, setYesterdayLoginCount] = useState(0);
-  const [deviceAlertSummary, setDeviceAlertSummary] = useState({
-    pendingNewDeviceCount: 0,
+  const [deviceApprovalSummary, setDeviceApprovalSummary] = useState({
+    myPendingCount: 0,
+    brandPendingCount: 0,
     latestUserName: "",
     latestDevice: "",
     latestAtText: "",
   });
+  const [isDeviceApprovalPanelOpen, setIsDeviceApprovalPanelOpen] = useState(false);
+  const [pendingDeviceLogin, setPendingDeviceLogin] = useState(null);
+  const pendingDeviceLoginRef = useRef(null);
+  // 僅保存在目前頁面記憶體中，供需要較高權限的裝置確認動作再次向後端驗證。
+  // 不寫入 Firestore / localStorage / sessionStorage。
+  const securitySessionCredentialRef = useRef("");
   const [currentDeviceTrust, setCurrentDeviceTrust] = useState({
     status: "checking",
     label: "裝置狀態確認中",
     deviceShort: "",
     deviceId: "",
+    approvalRequestId: "",
   });
 
   const [isUpdating, setIsUpdating] = useState(false);
@@ -671,65 +643,71 @@ export default function App() {
       : doc(db, "brands", currentBrand.id, "security_summary", docName);
   }, [currentBrand]);
 
-  const refreshDeviceAlertSummary = useCallback(async () => {
-    if (!user || !["director", "master"].includes(userRole)) {
-      setDeviceAlertSummary({
-        pendingNewDeviceCount: 0,
-        latestUserName: "",
-        latestDevice: "",
-        latestAtText: "",
-      });
-      return;
-    }
+  const currentSecurityAccountRawId = useMemo(() => (
+    String(currentUser?.securityAccountId || currentUser?.id || currentUser?.accountId || currentUser?.name || userRole || "").trim()
+  ), [currentUser, userRole]);
 
-    try {
-      const snap = await getDoc(getSecuritySummaryDocPath("device_alerts"));
-      if (snap.exists()) {
-        setDeviceAlertSummary({
-          pendingNewDeviceCount: Number(snap.data()?.pendingNewDeviceCount || 0),
-          latestUserName: snap.data()?.latestUserName || "",
-          latestDevice: snap.data()?.latestDevice || "",
-          latestAtText: snap.data()?.latestAtText || snap.data()?.updatedAtText || "",
-        });
-      } else {
-        setDeviceAlertSummary({
-          pendingNewDeviceCount: 0,
-          latestUserName: "",
-          latestDevice: "",
-          latestAtText: "",
-        });
-      }
-    } catch (error) {
-      console.warn("讀取新裝置提醒摘要失敗:", error);
-    }
-  }, [user, userRole, getSecuritySummaryDocPath]);
+  const currentSecurityAccountId = useMemo(() => (
+    sanitizeSecurityKey(currentSecurityAccountRawId)
+  ), [currentSecurityAccountRawId]);
 
+  const currentSecurityAccountKey = useMemo(() => (
+    userRole && currentSecurityAccountId
+      ? sanitizeSecurityKey(`${currentBrandId}_${userRole}_${currentSecurityAccountId}`)
+      : ""
+  ), [currentBrandId, userRole, currentSecurityAccountId]);
+
+  const isDeviceSecuritySuperAdmin = Boolean(
+    userRole === "director" && (
+      currentUser?.directorLevel === "super_admin" ||
+      currentUser?.isSuperAdmin === true ||
+      currentUser?.isMasterLogin === true
+    )
+  );
+
+  // 新版 Header 只監聽極小的待確認摘要，不再為了紅色數字讀完整 account_devices。
   useEffect(() => {
-    refreshDeviceAlertSummary();
-  }, [refreshDeviceAlertSummary, activeView, currentBrandId]);
+    if (!userRole || !currentUser || !currentSecurityAccountKey) {
+      setDeviceApprovalSummary({ myPendingCount: 0, brandPendingCount: 0, latestUserName: "", latestDevice: "", latestAtText: "" });
+      return undefined;
+    }
 
-  const goToDeviceManagement = useCallback(() => {
-    setActiveView("logs");
-    setTimeout(() => {
-      try {
-        window.dispatchEvent(new CustomEvent("cyj_open_device_management"));
-      } catch (error) {
-        console.warn("open device management event failed", error);
-      }
-    }, 120);
+    const unsubscribers = [];
+    const myInboxRef = doc(getCollectionPath("device_approval_inbox"), currentSecurityAccountKey);
+    unsubscribers.push(onSnapshot(myInboxRef, (snap) => {
+      const data = snap.exists() ? snap.data() || {} : {};
+      setDeviceApprovalSummary((prev) => ({
+        ...prev,
+        myPendingCount: Math.max(0, Number(data.pendingCount || 0)),
+      }));
+    }, (error) => console.warn("讀取我的新裝置提醒失敗:", error)));
+
+    if (isDeviceSecuritySuperAdmin) {
+      unsubscribers.push(onSnapshot(getSecuritySummaryDocPath("device_approvals"), (snap) => {
+        const data = snap.exists() ? snap.data() || {} : {};
+        setDeviceApprovalSummary((prev) => ({
+          ...prev,
+          brandPendingCount: Math.max(0, Number(data.pendingCount || 0)),
+          latestUserName: data.latestUserName || "",
+          latestDevice: data.latestDevice || "",
+          latestAtText: data.latestAtText || data.updatedAtText || "",
+        }));
+      }, (error) => console.warn("讀取待確認裝置摘要失敗:", error)));
+    } else {
+      setDeviceApprovalSummary((prev) => ({ ...prev, brandPendingCount: 0 }));
+    }
+
+    return () => unsubscribers.forEach((unsubscribe) => unsubscribe?.());
+  }, [userRole, currentUser, currentSecurityAccountKey, isDeviceSecuritySuperAdmin, getCollectionPath, getSecuritySummaryDocPath]);
+
+  const openDeviceApprovalPanel = useCallback(() => {
+    setIsDeviceApprovalPanelOpen(true);
   }, []);
 
   useEffect(() => {
     const handler = (event) => {
       const detail = event?.detail || {};
       if (!detail.deviceShort && !detail.deviceId) return;
-
-      if (detail.resolvedPending && (detail.status === "trusted" || detail.trusted === true)) {
-        setDeviceAlertSummary((prev) => ({
-          ...prev,
-          pendingNewDeviceCount: Math.max(0, Number(prev.pendingNewDeviceCount || 0) - 1),
-        }));
-      }
 
       setCurrentDeviceTrust((prev) => {
         const isSameDevice =
@@ -740,12 +718,33 @@ export default function App() {
 
         const isBlocked = detail.status === "blocked" || detail.source === "manual_blocked";
         const isTrusted = detail.status === "trusted" || detail.trusted === true;
+        const isObserving = detail.status === "observing" || detail.source === "manual_observing";
+        const isReverifyRequired = detail.status === "reverify_required" || detail.source === "manual_reverify_required";
+        const nextStatus = isBlocked
+          ? "blocked"
+          : isTrusted
+            ? "trusted"
+            : isReverifyRequired
+              ? "reverify_required"
+              : isObserving
+                ? "observing"
+                : "new";
+        const nextLabel = nextStatus === "blocked"
+          ? "⛔ 此裝置已停用"
+          : nextStatus === "trusted"
+            ? "🛡 目前裝置已信任"
+            : nextStatus === "reverify_required"
+              ? "⚠ 主管要求重新驗證"
+              : nextStatus === "observing"
+                ? "⚠ 新裝置待觀察"
+                : "⚠ 新裝置待確認";
         return {
           ...prev,
-          status: isBlocked ? "blocked" : (isTrusted ? "trusted" : "new"),
-          label: isBlocked ? "⛔ 裝置已封鎖" : (isTrusted ? "🛡 目前裝置已信任" : "⚠ 新裝置待觀察"),
+          status: nextStatus,
+          label: nextLabel,
           deviceShort: detail.deviceShort || prev.deviceShort,
           deviceId: detail.deviceId || prev.deviceId,
+          approvalRequestId: ["trusted", "blocked", "observing", "reverify_required"].includes(nextStatus) ? "" : prev.approvalRequestId,
         };
       });
     };
@@ -753,6 +752,192 @@ export default function App() {
     window.addEventListener("cyj_device_trust_updated", handler);
     return () => window.removeEventListener("cyj_device_trust_updated", handler);
   }, []);
+
+  // Monitor 模式下，新裝置已經能進入系統，因此要額外同步「目前這台裝置」的確認結果。
+  // iPhone / Safari 私密瀏覽可能暫停背景 request listener；因此採三層同步：
+  // 1. request 即時監聽；2. 我的待確認數歸零時主動確認一次；3. 回到前景時再確認一次。
+  // 全程只讀目前這一筆 request，不讀完整裝置歷史，也不做固定秒數輪詢。
+  const deviceApprovalReconcileRef = useRef({
+    inFlight: false,
+    lastRequestId: "",
+    lastCheckedAt: 0,
+  });
+  const previousMyPendingCountRef = useRef(0);
+
+  const applyCurrentDeviceApprovalResult = useCallback((requestId, data = {}) => {
+    const requestStatus = String(data?.status || "pending");
+
+    if (requestStatus === "approved") {
+      setCurrentDeviceTrust((prev) => {
+        if (String(prev?.approvalRequestId || "") !== String(requestId || "")) return prev;
+        return {
+          ...prev,
+          status: "trusted",
+          label: "🛡 目前裝置已信任",
+          approvalRequestId: "",
+        };
+      });
+      return true;
+    }
+
+    if (["observing", "reverify_required", "blocked", "rejected", "expired"].includes(requestStatus)) {
+      setCurrentDeviceTrust((prev) => {
+        if (String(prev?.approvalRequestId || "") !== String(requestId || "")) return prev;
+
+        if (requestStatus === "blocked") {
+          return {
+            ...prev,
+            status: "blocked",
+            label: "⛔ 此裝置已停用",
+            approvalRequestId: "",
+          };
+        }
+
+        if (requestStatus === "reverify_required") {
+          return {
+            ...prev,
+            status: "reverify_required",
+            label: "⚠ 主管要求重新驗證",
+            approvalRequestId: "",
+          };
+        }
+
+        if (requestStatus === "observing") {
+          return {
+            ...prev,
+            status: "observing",
+            label: "⚠ 新裝置待觀察",
+            approvalRequestId: "",
+          };
+        }
+
+        return {
+          ...prev,
+          status: prev.status === "suspicious" ? "suspicious" : "new",
+          label: prev.status === "suspicious" ? "⚠ 需要管理者確認" : "⚠ 新裝置待確認",
+          approvalRequestId: "",
+        };
+      });
+      return true;
+    }
+
+    return false;
+  }, []);
+
+  const refreshCurrentDeviceApprovalStatus = useCallback(async (reason = "foreground") => {
+    const requestId = String(currentDeviceTrust?.approvalRequestId || "").trim();
+    const shouldRefresh = Boolean(
+      userRole &&
+      currentUser &&
+      requestId &&
+      ["new", "suspicious"].includes(currentDeviceTrust?.status)
+    );
+    if (!shouldRefresh) return false;
+
+    const state = deviceApprovalReconcileRef.current;
+    const now = Date.now();
+
+    // visibilitychange + focus + pageshow 可能在極短時間內連續觸發，只允許一次小型確認讀取。
+    if (state.inFlight) return false;
+    if (state.lastRequestId === requestId && now - Number(state.lastCheckedAt || 0) < 1200) return false;
+
+    state.inFlight = true;
+    state.lastRequestId = requestId;
+    state.lastCheckedAt = now;
+
+    try {
+      const requestRef = doc(getCollectionPath("device_approval_requests"), requestId);
+      const snap = await getDoc(requestRef);
+      if (!snap.exists()) return false;
+      return applyCurrentDeviceApprovalResult(requestId, snap.data() || {});
+    } catch (error) {
+      console.warn(`重新確認目前裝置狀態失敗 (${reason}):`, error);
+      return false;
+    } finally {
+      state.inFlight = false;
+    }
+  }, [
+    userRole,
+    currentUser,
+    currentDeviceTrust?.approvalRequestId,
+    currentDeviceTrust?.status,
+    getCollectionPath,
+    applyCurrentDeviceApprovalResult,
+  ]);
+
+  useEffect(() => {
+    const requestId = String(currentDeviceTrust?.approvalRequestId || "").trim();
+    const shouldWatch = Boolean(
+      userRole &&
+      currentUser &&
+      requestId &&
+      ["new", "suspicious"].includes(currentDeviceTrust?.status)
+    );
+    if (!shouldWatch) return undefined;
+
+    const requestRef = doc(getCollectionPath("device_approval_requests"), requestId);
+    return onSnapshot(requestRef, (snap) => {
+      if (!snap.exists()) return;
+      applyCurrentDeviceApprovalResult(requestId, snap.data() || {});
+    }, (error) => {
+      console.warn("同步目前裝置確認結果失敗:", error);
+    });
+  }, [
+    userRole,
+    currentUser,
+    currentDeviceTrust?.approvalRequestId,
+    currentDeviceTrust?.status,
+    getCollectionPath,
+    applyCurrentDeviceApprovalResult,
+  ]);
+
+  // 實測上 iPhone 私密瀏覽的「待確認數」會先即時歸零，因此把 1 -> 0 當成一次性 reconciliation 訊號。
+  // 這不是輪詢，只在真的有待確認紀錄被處理完成時多讀目前 request 一次。
+  useEffect(() => {
+    const nextCount = Math.max(0, Number(deviceApprovalSummary?.myPendingCount || 0));
+    const previousCount = Math.max(0, Number(previousMyPendingCountRef.current || 0));
+    previousMyPendingCountRef.current = nextCount;
+
+    const currentRequestId = String(currentDeviceTrust?.approvalRequestId || "").trim();
+    const stillWaiting = Boolean(
+      currentRequestId &&
+      ["new", "suspicious"].includes(currentDeviceTrust?.status)
+    );
+
+    if (previousCount > 0 && nextCount === 0 && stillWaiting) {
+      refreshCurrentDeviceApprovalStatus("pending-count-cleared");
+    }
+  }, [
+    deviceApprovalSummary?.myPendingCount,
+    currentDeviceTrust?.approvalRequestId,
+    currentDeviceTrust?.status,
+    refreshCurrentDeviceApprovalStatus,
+  ]);
+
+  // 手機瀏覽器從背景回到前景時主動確認目前這一筆 request。
+  // Safari / PWA 可能以 visibilitychange、focus 或 pageshow 任一事件恢復，因此三者都接，內部已有 1.2 秒去重。
+  useEffect(() => {
+    if (typeof window === "undefined" || typeof document === "undefined") return undefined;
+
+    const refreshIfVisible = () => {
+      if (document.visibilityState === "hidden") return;
+      refreshCurrentDeviceApprovalStatus("foreground");
+    };
+
+    const handleVisibilityChange = () => {
+      if (document.visibilityState === "visible") refreshIfVisible();
+    };
+
+    document.addEventListener("visibilitychange", handleVisibilityChange);
+    window.addEventListener("focus", refreshIfVisible);
+    window.addEventListener("pageshow", refreshIfVisible);
+
+    return () => {
+      document.removeEventListener("visibilitychange", handleVisibilityChange);
+      window.removeEventListener("focus", refreshIfVisible);
+      window.removeEventListener("pageshow", refreshIfVisible);
+    };
+  }, [refreshCurrentDeviceApprovalStatus]);
 
   useEffect(() => {
     const handleDashboardViewModeChanged = (event) => {
@@ -1109,261 +1294,102 @@ export default function App() {
   }, [isOnline, getCollectionPath, currentBrandId, currentBrand, activeView]);
 
 
-  const registerAccountDevice = useCallback(async (roleId, userInfo = {}) => {
+  const callDeviceSecurityEndpoint = useCallback(async (endpoint, payload = {}) => {
+    const idToken = await auth.currentUser?.getIdToken?.().catch(() => "");
+    const response = await fetch(endpoint, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        ...(idToken ? { Authorization: `Bearer ${idToken}` } : {}),
+      },
+      body: JSON.stringify(payload),
+    });
+    const result = await response.json().catch(() => ({}));
+    if (!response.ok || result?.ok === false) {
+      const error = new Error(result?.message || `HTTP ${response.status}`);
+      error.result = result;
+      error.status = response.status;
+      throw error;
+    }
+    return result;
+  }, []);
+
+  const registerAccountDevice = useCallback(async (roleId, userInfo = {}, loginCredential = {}) => {
+    const deviceInfo = getClientDeviceInfo();
+    const accountId = String(loginCredential?.accountId || userInfo?.id || userInfo?.accountId || userInfo?.name || roleId).trim();
+    const userName = userInfo?.name || (roleId === "director" ? "高階主管" : (roleId === "trainer" ? "教專" : "使用者"));
+    const mode = securityConfig?.deviceApprovalMode || "off";
+    const protectedRoles = Array.isArray(securityConfig?.deviceApprovalRoles)
+      ? securityConfig.deviceApprovalRoles
+      : DEFAULT_SECURITY_CONFIG.deviceApprovalRoles;
+    const shouldFailClosed = mode === "enforce" && protectedRoles.includes(roleId);
+
     if (!isOnline || !roleId) {
-      return { deviceInfo: getClientDeviceInfo(), isNewDevice: false, riskTags: [] };
+      return {
+        ok: !shouldFailClosed,
+        allowed: !shouldFailClosed,
+        deviceInfo,
+        isNewDevice: false,
+        riskTags: ["裝置確認服務暫時無法使用"],
+        deviceStatus: "check_failed",
+        approvalMode: mode,
+        message: shouldFailClosed ? "目前無法完成裝置確認，請確認網路後再試一次。" : "裝置狀態暫時未確認",
+      };
     }
 
-    const deviceInfo = getClientDeviceInfo();
-    const accountId = sanitizeSecurityKey(userInfo?.id || userInfo?.accountId || userInfo?.name || roleId);
-    const userName = userInfo?.name || (roleId === "director" ? "高階主管" : (roleId === "trainer" ? "教專" : "未知"));
     const loginLocation = await resolveLoginLocation({ role: roleId, userName, deviceInfo });
     loginSessionLocationRef.current = loginLocation;
     deviceInfo.loginLocation = loginLocation;
-    const accountKey = sanitizeSecurityKey(`${currentBrandId}_${roleId}_${accountId}`);
-    const nowText = new Date().toISOString();
 
     try {
-      const deviceProfileRef = doc(getCollectionPath("account_devices"), accountKey);
-      const profileSnap = await getDoc(deviceProfileRef);
-      const profileData = profileSnap.exists() ? profileSnap.data() : {};
-      const devices = profileData.devices || {};
-
-      const exactExistingDevice = devices[deviceInfo.deviceId];
-      const recoveredKnownDevice = exactExistingDevice ? null : findRecoverableKnownDeviceEntry(devices, deviceInfo, loginLocation);
-      const recoveredDeviceId = recoveredKnownDevice?.storedDeviceId || "";
-      const originalDeviceId = deviceInfo.deviceId;
-      const originalDeviceShort = deviceInfo.deviceShort;
-
-      if (recoveredDeviceId && recoveredDeviceId !== deviceInfo.deviceId) {
-        persistStableClientDeviceId(recoveredDeviceId);
-        deviceInfo.previousDeviceId = originalDeviceId;
-        deviceInfo.previousDeviceShort = originalDeviceShort;
-        deviceInfo.deviceId = recoveredDeviceId;
-        deviceInfo.stableDeviceId = recoveredDeviceId;
-        deviceInfo.deviceShort = String(recoveredDeviceId || "").replace(/^dev_/, "").slice(-8);
-        deviceInfo.recoveredKnownDevice = true;
-        deviceInfo.recoveredFromDeviceId = originalDeviceId;
-      }
-
-      const globalBlockKeys = Array.from(new Set([
-        sanitizeSecurityKey(`${roleId}_${accountId}_${originalDeviceId}`),
-        sanitizeSecurityKey(`${roleId}_${accountId}_${deviceInfo.deviceId}`),
-      ])).filter(Boolean);
-
-      const globalBlockSnaps = await Promise.all(
-        globalBlockKeys.map((key) => getDoc(doc(db, "artifacts", appId, "public", "data", "global_blocked_devices", key)))
-      );
-
-      const activeGlobalBlockSnap = globalBlockSnaps.find((snap) => {
-        if (!snap.exists()) return false;
-        const data = snap.data() || {};
-        return data.active !== false &&
-          ["blocked", "global_blocked", "manual_global_blocked"].includes(String(data.status || data.source || ""));
-      });
-
-      if (activeGlobalBlockSnap) {
-        const globalBlockData = activeGlobalBlockSnap.data() || {};
-        const result = {
-          allowed: false,
-          blocked: true,
-          globalBlocked: true,
-          reason: "global_device_blocked",
-          message: "此裝置已被全品牌封鎖，請聯繫主管。",
-          deviceInfo,
-          existingDevice: globalBlockData,
-          isNewDevice: false,
-          deviceTrusted: false,
-          autoTrusted: false,
-          alertCreated: false,
-          riskTags: ["全品牌裝置封鎖"],
-          deviceStatus: "blocked",
-        };
-        logDeviceCheckResult(roleId, userName, result, deviceInfo);
-        return result;
-      }
-
-      const existingDevice = exactExistingDevice || recoveredKnownDevice?.item || null;
-
-      if (existingDevice?.status === "blocked" || existingDevice?.source === "manual_blocked") {
-        const result = {
-          allowed: false,
-          blocked: true,
-          globalBlocked: false,
-          reason: "device_blocked",
-          message: "此裝置已被封鎖，請聯繫主管。",
-          deviceInfo,
-          existingDevice,
-          isNewDevice: false,
-          deviceTrusted: false,
-          autoTrusted: false,
-          alertCreated: false,
-          riskTags: ["裝置已封鎖"],
-          deviceStatus: "blocked",
-        };
-        logDeviceCheckResult(roleId, userName, result, deviceInfo);
-        return result;
-      }
-
-      if (existingDevice) {
-        const updatedDevice = {
-          ...existingDevice,
-          device: deviceInfo.device,
-          browser: deviceInfo.browser,
-          os: deviceInfo.os,
-          deviceShort: deviceInfo.deviceShort,
-          stableDeviceId: deviceInfo.stableDeviceId || deviceInfo.deviceId,
-          deviceFingerprint: deviceInfo.deviceFingerprint,
-          deviceStorageStatus: deviceInfo.deviceStorageStatus,
-          recoveredKnownDevice: Boolean(deviceInfo.recoveredKnownDevice || existingDevice.recoveredKnownDevice),
-          recoveredFromDeviceIds: deviceInfo.recoveredFromDeviceId
-            ? Array.from(new Set([...(existingDevice.recoveredFromDeviceIds || []), deviceInfo.recoveredFromDeviceId]))
-            : (existingDevice.recoveredFromDeviceIds || []),
-          lastSeenAt: serverTimestamp(),
-          lastSeenAtText: nowText,
-          loginCount: Number(existingDevice.loginCount || 0) + 1,
-          loginLocation,
-          lastLoginLocation: loginLocation,
-          locationUpdatedAtText: nowText,
-        };
-
-        await setDoc(deviceProfileRef, {
-          brandId: currentBrandId,
-          brandLabel: currentBrand?.label || currentBrandId,
-          role: roleId,
-          accountId,
-          userName,
-          updatedAt: serverTimestamp(),
-          updatedAtText: nowText,
-          devices: {
-            ...devices,
-            [deviceInfo.deviceId]: updatedDevice,
-          },
-        }, { merge: true });
-
-        const result = {
-          deviceInfo,
-          isNewDevice: false,
-          deviceTrusted: existingDevice.trusted !== false,
-          autoTrusted: false,
-          alertCreated: false,
-          riskTags: deviceInfo.recoveredKnownDevice ? ["疑似原裝置已自動沿用"] : [],
-          deviceStatus: existingDevice.status || (existingDevice.trusted === false ? "new" : "trusted"),
-          loginLocation,
-        };
-        logDeviceCheckResult(roleId, userName, result, deviceInfo);
-        return result;
-      }
-
-      const trustedDeviceCount = Object.values(devices || {}).filter((item) => item?.trusted !== false && item?.status !== "new").length;
-      const autoTrusted = trustedDeviceCount < SECURITY_DEVICE_CONFIG.autoTrustLimit;
-      const shouldAlert = !autoTrusted && SECURITY_DEVICE_CONFIG.alertRoles.includes(roleId);
-      const riskTags = autoTrusted ? ["初始信任裝置"] : ["新裝置"];
-
-      const newDeviceRecord = {
-        deviceId: deviceInfo.deviceId,
-        deviceShort: deviceInfo.deviceShort,
-        stableDeviceId: deviceInfo.stableDeviceId || deviceInfo.deviceId,
-        deviceFingerprint: deviceInfo.deviceFingerprint,
-        deviceStorageStatus: deviceInfo.deviceStorageStatus,
-        device: deviceInfo.device,
-        browser: deviceInfo.browser,
-        os: deviceInfo.os,
-        trusted: autoTrusted,
-        status: autoTrusted ? "trusted" : "new",
-        source: autoTrusted ? "auto_trust_first_two_devices" : "new_device_detected",
-        firstSeenAt: serverTimestamp(),
-        firstSeenAtText: nowText,
-        lastSeenAt: serverTimestamp(),
-        lastSeenAtText: nowText,
-        loginCount: 1,
-        loginLocation,
-        firstLoginLocation: loginLocation,
-        lastLoginLocation: loginLocation,
-        locationUpdatedAtText: nowText,
-      };
-
-      await setDoc(deviceProfileRef, {
+      const result = await callDeviceSecurityEndpoint(DEVICE_ACCESS_ENDPOINT, {
         brandId: currentBrandId,
-        brandLabel: currentBrand?.label || currentBrandId,
-        role: roleId,
+        roleId,
         accountId,
         userName,
-        updatedAt: serverTimestamp(),
-        updatedAtText: nowText,
-        devices: {
-          ...devices,
-          [deviceInfo.deviceId]: newDeviceRecord,
-        },
-      }, { merge: true });
+        password: String(loginCredential?.password || ""),
+        deviceInfo,
+        loginLocation: removeUndefinedDeep(loginLocation),
+      });
 
-      if (shouldAlert) {
-        await addDoc(getCollectionPath("security_alerts"), {
-          type: "new_device_login",
-          severity: roleId === "director" ? "high" : "medium",
-          status: "unread",
-          brandId: currentBrandId,
-          brandLabel: currentBrand?.label || currentBrandId,
-          role: roleId,
-          accountId,
-          userName,
-          deviceId: deviceInfo.deviceId,
-          deviceShort: deviceInfo.deviceShort,
-          device: deviceInfo.device,
-          browser: deviceInfo.browser,
-          os: deviceInfo.os,
-          loginLocation: removeUndefinedDeep(loginLocation),
-          trustedDeviceCountBefore: trustedDeviceCount,
-          message: `${userName} 出現新裝置登入`,
-          createdAt: serverTimestamp(),
-          createdAtText: nowText,
-        });
-
-        await setDoc(getSecuritySummaryDocPath("device_alerts"), {
-          pendingNewDeviceCount: increment(1),
-          latestUserName: userName,
-          latestRole: roleId,
-          latestDevice: `${deviceInfo.device} / ${deviceInfo.browser || "-"}`,
-          latestDeviceShort: deviceInfo.deviceShort,
-          latestAt: serverTimestamp(),
-          latestAtText: nowText,
-          updatedAt: serverTimestamp(),
-          updatedAtText: nowText,
-          brandId: currentBrandId,
-          brandLabel: currentBrand?.label || currentBrandId,
-        }, { merge: true });
+      if (result?.recoveredDeviceId && result.recoveredDeviceId !== deviceInfo.deviceId) {
+        persistStableClientDeviceId(result.recoveredDeviceId);
       }
 
-      const result = {
-        deviceInfo,
-        isNewDevice: true,
-        deviceTrusted: autoTrusted,
-        autoTrusted,
-        alertCreated: shouldAlert,
-        trustedDeviceCountBefore: trustedDeviceCount,
-        riskTags,
-        deviceStatus: autoTrusted ? "trusted" : "new",
-        loginLocation,
+      const normalizedResult = {
+        ...result,
+        deviceInfo: result?.deviceInfo || deviceInfo,
+        loginLocation: normalizeLoginLocationPayload(result?.loginLocation || loginLocation),
       };
-      logDeviceCheckResult(roleId, userName, result, deviceInfo);
-      return result;
+      logDeviceCheckResult(roleId, userName, normalizedResult, deviceInfo);
+      return normalizedResult;
     } catch (error) {
-      console.warn("registerAccountDevice failed:", error);
+      console.warn("裝置確認服務暫時無法完成:", error);
+      const credentialRejected = error?.status === 401;
+      // 「維持目前方式 / 先觀察」都不能因後端裝置確認暫時失敗而改變既有登入結果。
+      // 只有正式啟用 enforce 的受保護角色才採 fail-closed。
+      const mustBlock = shouldFailClosed;
       const result = {
+        ok: !mustBlock,
+        allowed: !mustBlock,
         deviceInfo,
         isNewDevice: false,
         deviceTrusted: null,
         autoTrusted: false,
         alertCreated: false,
-        riskTags: ["裝置檢查失敗"],
+        riskTags: ["裝置確認服務暫時無法使用"],
         deviceStatus: "check_failed",
-        loginLocation: UNKNOWN_LOGIN_LOCATION,
+        approvalMode: mode,
+        loginLocation,
         error: error.message,
+        message: shouldFailClosed && credentialRejected
+          ? "帳號資訊需要重新確認，請返回登入頁重新輸入帳號密碼。"
+          : (shouldFailClosed ? "目前無法完成裝置確認，請稍後再試一次。" : "裝置狀態暫時未確認"),
       };
       logDeviceCheckResult(roleId, userName, result, deviceInfo);
       return result;
     }
-  }, [isOnline, currentBrandId, currentBrand, getCollectionPath, getSecuritySummaryDocPath, logDeviceCheckResult, resolveLoginLocation]);
+  }, [isOnline, currentBrandId, securityConfig, resolveLoginLocation, callDeviceSecurityEndpoint, logDeviceCheckResult]);
 
   useEffect(() => {
     if (!userRole || !currentUser || !activeView) return;
@@ -1397,6 +1423,10 @@ export default function App() {
       loginLocation: loginSessionLocationRef.current || UNKNOWN_LOGIN_LOCATION,
     });
     loginSessionLocationRef.current = UNKNOWN_LOGIN_LOCATION;
+    securitySessionCredentialRef.current = "";
+    pendingDeviceLoginRef.current = null;
+    setPendingDeviceLogin(null);
+    setIsDeviceApprovalPanelOpen(false);
     
     isWarningShowingRef.current = false; 
     setShowIdleWarning(false); 
@@ -1411,6 +1441,7 @@ export default function App() {
       label: "裝置狀態確認中",
       deviceShort: "",
       deviceId: "",
+      approvalRequestId: "",
     });
     setUserRole(null); setCurrentUser(null); setActiveView("dashboard");
   }, [currentUser, userRole, logActivity, securityConfig]);
@@ -2624,133 +2655,201 @@ export default function App() {
   }, [user, currentBrand, selectedYear, selectedMonth, activeView, dashboardViewMode, storeAnalysisSelectedStore, userRole, therapistModuleEnabled, currentDashboardSummary, currentReportSummaryReady, getCollectionPath, getStableReadMeta, isLowPowerMode, historicalDetailRefreshToken]);
 
 
- const handleLogin = useCallback(async (roleId, userInfo = null) => {
+ const handleLogin = useCallback(async (roleId, userInfo = null, loginCredential = {}) => {
     setLoginSecurityNotice(null);
     setToast((prev) => {
-      if (String(prev?.message || "").includes("裝置已被封鎖")) return null;
+      if (String(prev?.message || "").includes("裝置") || String(prev?.message || "").includes("登入")) return null;
       return prev;
     });
+
     let finalUser = userInfo;
-    
-    if (roleId === 'therapist' && userInfo?.name) { 
-      // ★ 升級防撞機制：同時比對「姓名」與「店家」，避免同名同姓抓錯 ID
-      const foundTherapist = therapists.find(t => 
-        t.name === userInfo.name && 
+    if (roleId === "therapist" && userInfo?.name) {
+      // 同名人員仍以「姓名 + 店家」做既有防撞，避免改動人員身份邏輯。
+      const foundTherapist = therapists.find((t) =>
+        t.name === userInfo.name &&
         (t.store === userInfo.store || t.storeName === userInfo.store || t.store === userInfo.storeName)
-      ); 
-      
-      if (foundTherapist) { 
-        finalUser = { ...userInfo, ...foundTherapist, id: foundTherapist.id || userInfo.id }; 
-      } 
+      );
+      if (foundTherapist) {
+        finalUser = { ...userInfo, ...foundTherapist, id: foundTherapist.id || userInfo.id };
+      }
     }
-    
-    setUserRole(roleId); 
-    if (finalUser) setCurrentUser(finalUser);
-    
-    const userName = finalUser?.name || (roleId === "director" ? "高階主管" : (roleId === "trainer" ? "教專" : "未知"));
+
+    const loginAccountId = String(
+      loginCredential?.accountId || finalUser?.id || finalUser?.accountId || finalUser?.name || roleId
+    ).trim();
+    if (finalUser && loginAccountId) {
+      finalUser = { ...finalUser, securityAccountId: loginAccountId };
+    }
+
+    const userName = finalUser?.name || (roleId === "director" ? "高階主管" : (roleId === "trainer" ? "教專" : "使用者"));
     const immediateDeviceInfo = getClientDeviceInfo();
     setCurrentDeviceTrust({
       status: "checking",
-      label: "裝置狀態確認中",
+      label: "正在確認目前裝置",
       deviceShort: immediateDeviceInfo.deviceShort,
       deviceId: immediateDeviceInfo.deviceId,
     });
 
-    // v1.5 穩定版：登入紀錄一定先寫入，不等待裝置檢查。
-    // 新裝置檢查只做背景處理，不能影響登入監控的「登入系統」紀錄。
-    logActivity(roleId, userName, "登入系統", {
-      activityType: "auth.login",
-      message: finalUser?.passwordUpdatedOnFirstLogin ? "登入成功，已完成首次安全更新" : "登入成功",
-      passwordUpdatedOnFirstLogin: Boolean(finalUser?.passwordUpdatedOnFirstLogin),
-      deviceInfo: immediateDeviceInfo,
-      deviceShort: immediateDeviceInfo.deviceShort,
-      riskTags: [],
-      deviceStatus: "login_recorded",
-    });
+    const deviceSecurity = await registerAccountDevice(roleId, finalUser || { name: userName }, loginCredential);
 
-    registerAccountDevice(roleId, finalUser || { name: userName }).then((deviceSecurity) => {
-      if (deviceSecurity?.blocked || deviceSecurity?.allowed === false || deviceSecurity?.deviceStatus === "blocked") {
-        setCurrentDeviceTrust({
-          status: "blocked",
-          label: "⛔ 裝置已封鎖",
-          deviceShort: deviceSecurity?.deviceInfo?.deviceShort || immediateDeviceInfo.deviceShort,
-          deviceId: deviceSecurity?.deviceInfo?.deviceId || immediateDeviceInfo.deviceId,
-        });
-
-        try {
-          logActivity(roleId, userName, "封鎖裝置嘗試登入", {
-            activityType: "auth.blocked_device",
-            message: "此裝置已被封鎖，系統已拒絕登入",
-            deviceInfo: immediateDeviceInfo,
-            deviceShort: immediateDeviceInfo.deviceShort,
-            riskTags: ["裝置已封鎖"],
-            deviceStatus: "blocked",
-          });
-        } catch (logError) {
-          console.warn("封鎖裝置登入紀錄寫入失敗:", logError);
-        }
-
-        setLoginSecurityNotice({
-          type: "blocked",
-          title: deviceSecurity?.globalBlocked ? "此裝置已被全品牌封鎖" : "此裝置已被封鎖",
-          message: deviceSecurity?.globalBlocked
-            ? "此裝置已被主管設定為全品牌封鎖，無法登入任何品牌。請聯繫主管確認裝置權限。"
-            : "請聯繫主管確認裝置權限，或改用已信任的常用裝置登入。",
-          deviceShort: deviceSecurity?.deviceInfo?.deviceShort || immediateDeviceInfo.deviceShort,
-          deviceInfo: deviceSecurity?.deviceInfo || immediateDeviceInfo,
-          roleId,
-          accountId: sanitizeSecurityKey(finalUser?.id || finalUser?.accountId || finalUser?.name || roleId),
-          userName,
-          globalBlocked: Boolean(deviceSecurity?.globalBlocked),
-          blockedData: deviceSecurity?.existingDevice || null,
-        });
-        setToast({ message: deviceSecurity?.globalBlocked ? "此裝置已被全品牌封鎖，請聯繫主管。" : "此裝置已被封鎖，請聯繫主管。", type: "error" });
-        setUserRole(null);
-        setCurrentUser(null);
-        setActiveView("dashboard");
-        return;
-      }
-
-      let shouldShowUnblockSuccess = false;
-      try {
-        const rawUnblockNotice = localStorage.getItem("cyj_device_unblock_success_notice");
-        if (rawUnblockNotice) {
-          const unblockNotice = JSON.parse(rawUnblockNotice);
-          const sameDevice =
-            unblockNotice?.deviceId === (deviceSecurity?.deviceInfo?.deviceId || immediateDeviceInfo.deviceId) ||
-            unblockNotice?.deviceShort === (deviceSecurity?.deviceInfo?.deviceShort || immediateDeviceInfo.deviceShort);
-          const isFresh = Date.now() - Number(unblockNotice?.at || 0) < 10 * 60 * 1000;
-
-          if (sameDevice && isFresh) {
-            shouldShowUnblockSuccess = true;
-          }
-          localStorage.removeItem("cyj_device_unblock_success_notice");
-        }
-      } catch (storageError) {
-        console.warn("解除封鎖成功提示讀取失敗:", storageError);
-      }
-
-      if (shouldShowUnblockSuccess) {
-        setToast({ message: "裝置已解除封鎖，可正常登入。", type: "success" });
-      }
-
-      const isNewOrUntrusted = Boolean(deviceSecurity?.isNewDevice && deviceSecurity?.deviceTrusted === false);
+    if (deviceSecurity?.blocked || (deviceSecurity?.allowed === false && deviceSecurity?.deviceStatus === "blocked")) {
       setCurrentDeviceTrust({
-        status: isNewOrUntrusted ? "new" : "trusted",
-        label: isNewOrUntrusted ? "⚠ 新裝置待觀察" : "🛡 目前裝置已信任",
+        status: "blocked",
+        label: "⛔ 此裝置已停用",
         deviceShort: deviceSecurity?.deviceInfo?.deviceShort || immediateDeviceInfo.deviceShort,
         deviceId: deviceSecurity?.deviceInfo?.deviceId || immediateDeviceInfo.deviceId,
       });
-    }).catch((error) => {
-      // 背景裝置檢查失敗不影響登入紀錄；registerAccountDevice 內部會盡量補記失敗紀錄。
-      console.warn("背景裝置檢查失敗，登入紀錄已保留:", error);
+
+      logActivity(roleId, userName, "停用裝置嘗試登入", {
+        activityType: "auth.blocked_device",
+        message: "此裝置目前無法使用系統",
+        deviceInfo: deviceSecurity?.deviceInfo || immediateDeviceInfo,
+        deviceShort: deviceSecurity?.deviceInfo?.deviceShort || immediateDeviceInfo.deviceShort,
+        riskTags: ["裝置已停用"],
+        deviceStatus: "blocked",
+      });
+
+      setLoginSecurityNotice({
+        type: "blocked",
+        title: deviceSecurity?.globalBlocked ? "這台裝置已停止所有品牌使用" : "這台裝置目前無法使用系統",
+        message: "請聯繫最高管理者確認裝置使用權限，或改用原本已信任的常用裝置登入。",
+        deviceShort: deviceSecurity?.deviceInfo?.deviceShort || immediateDeviceInfo.deviceShort,
+        deviceInfo: deviceSecurity?.deviceInfo || immediateDeviceInfo,
+        roleId,
+        accountId: sanitizeSecurityKey(loginCredential?.accountId || finalUser?.id || finalUser?.accountId || finalUser?.name || roleId),
+        userName,
+        globalBlocked: Boolean(deviceSecurity?.globalBlocked),
+        blockedData: deviceSecurity?.existingDevice || null,
+        blockedDeviceId: deviceSecurity?.blockedDeviceId || deviceSecurity?.existingDevice?.deviceId || "",
+      });
+      setToast({ message: "這台裝置目前無法使用系統，請聯繫最高管理者。", type: "error" });
+      setUserRole(null);
+      setCurrentUser(null);
+      setActiveView("dashboard");
+      return { ok: false, blocked: true };
+    }
+
+    const approvalRequired = Boolean(deviceSecurity?.approvalRequired);
+    const enforceApproval = approvalRequired && deviceSecurity?.approvalMode === "enforce" && deviceSecurity?.allowed === false;
+
+    if (enforceApproval) {
+      const pending = {
+        roleId,
+        finalUser,
+        loginCredential: { ...loginCredential },
+        requestId: deviceSecurity.requestId,
+        verificationCode: deviceSecurity.verificationCode,
+        expiresAtMs: deviceSecurity.expiresAtMs,
+        expiresAtText: deviceSecurity.expiresAtText,
+        deviceInfo: deviceSecurity.deviceInfo || immediateDeviceInfo,
+        loginLocation: deviceSecurity.loginLocation || UNKNOWN_LOGIN_LOCATION,
+        likelyKnownDevice: Boolean(deviceSecurity.likelyKnownDevice),
+        adminOnly: Boolean(deviceSecurity.adminOnly),
+        selfApprovalAllowed: deviceSecurity.selfApprovalAllowed !== false,
+        hasTrustedApproverDevice: deviceSecurity.hasTrustedApproverDevice !== false,
+        deviceStatus: deviceSecurity.deviceStatus || "new",
+      };
+      pendingDeviceLoginRef.current = pending;
+      setPendingDeviceLogin(pending);
+      const pendingStatus = String(deviceSecurity?.deviceStatus || "new");
+      const pendingLabel = pendingStatus === "reverify_required"
+        ? "⚠ 主管要求重新驗證"
+        : pendingStatus === "observing"
+          ? "⚠ 新裝置待觀察"
+          : pendingStatus === "suspicious"
+            ? "⚠ 需要管理者確認"
+            : "⚠ 新裝置待確認";
+      setCurrentDeviceTrust({
+        status: ["observing", "reverify_required", "suspicious"].includes(pendingStatus) ? pendingStatus : "new",
+        label: pendingLabel,
+        deviceShort: pending.deviceInfo.deviceShort,
+        deviceId: pending.deviceInfo.deviceId,
+      });
+      setUserRole(null);
+      setCurrentUser(null);
+      return { ok: false, pending: true };
+    }
+
+    if (deviceSecurity?.allowed === false) {
       setCurrentDeviceTrust({
         status: "unknown",
-        label: "裝置狀態未確認",
-        deviceShort: immediateDeviceInfo.deviceShort,
-        deviceId: immediateDeviceInfo.deviceId,
+        label: "裝置確認暫時無法完成",
+        deviceShort: deviceSecurity?.deviceInfo?.deviceShort || immediateDeviceInfo.deviceShort,
+        deviceId: deviceSecurity?.deviceInfo?.deviceId || immediateDeviceInfo.deviceId,
       });
+      setToast({ message: deviceSecurity?.message || "目前無法完成裝置確認，請稍後再試一次。", type: "error" });
+      setUserRole(null);
+      setCurrentUser(null);
+      return { ok: false, unavailable: true };
+    }
+
+    pendingDeviceLoginRef.current = null;
+    setPendingDeviceLogin(null);
+    setUserRole(roleId);
+    if (finalUser) setCurrentUser(finalUser);
+    securitySessionCredentialRef.current = String(loginCredential?.password || "");
+
+    const loginDeviceInfo = deviceSecurity?.deviceInfo || immediateDeviceInfo;
+    const loginLocation = normalizeLoginLocationPayload(deviceSecurity?.loginLocation || UNKNOWN_LOGIN_LOCATION);
+    loginSessionLocationRef.current = loginLocation;
+
+    // 真正進入系統後才記為「登入系統」，被新裝置確認擋住的嘗試不計入今日登入。
+    logActivity(roleId, userName, "登入系統", {
+      activityType: "auth.login",
+      message: finalUser?.passwordUpdatedOnFirstLogin
+        ? "登入成功，已完成首次安全更新"
+        : (deviceSecurity?.deviceStatus === "reverify_required"
+          ? "登入成功，主管已要求此裝置重新驗證"
+          : deviceSecurity?.deviceStatus === "observing"
+            ? "登入成功，此裝置維持觀察狀態"
+            : (approvalRequired ? "登入成功，新裝置仍在觀察確認中" : "登入成功")),
+      passwordUpdatedOnFirstLogin: Boolean(finalUser?.passwordUpdatedOnFirstLogin),
+      deviceInfo: { ...loginDeviceInfo, loginLocation },
+      loginLocation,
+      deviceShort: loginDeviceInfo.deviceShort,
+      isNewDevice: Boolean(deviceSecurity?.isNewDevice),
+      deviceTrusted: deviceSecurity?.deviceTrusted ?? null,
+      riskTags: deviceSecurity?.deviceStatus === "reverify_required"
+        ? ["主管要求重新驗證"]
+        : deviceSecurity?.deviceStatus === "observing"
+          ? ["新裝置待觀察"]
+          : (approvalRequired ? ["新裝置待確認"] : []),
+      deviceStatus: deviceSecurity?.deviceStatus || "trusted",
     });
+
+    let nextTrustStatus = "trusted";
+    let nextTrustLabel = "🛡 目前裝置已信任";
+    if (deviceSecurity?.deviceStatus === "check_failed") {
+      nextTrustStatus = "unknown";
+      nextTrustLabel = "裝置狀態暫時未確認";
+    } else if (approvalRequired || deviceSecurity?.deviceTrusted === false) {
+      const returnedStatus = String(deviceSecurity?.deviceStatus || "new");
+      nextTrustStatus = ["observing", "reverify_required", "suspicious"].includes(returnedStatus) ? returnedStatus : "new";
+      nextTrustLabel = nextTrustStatus === "reverify_required"
+        ? "⚠ 主管要求重新驗證"
+        : nextTrustStatus === "observing"
+          ? "⚠ 新裝置待觀察"
+          : nextTrustStatus === "suspicious"
+            ? "⚠ 需要管理者確認"
+            : "⚠ 新裝置待確認";
+    }
+    setCurrentDeviceTrust({
+      status: nextTrustStatus,
+      label: nextTrustLabel,
+      deviceShort: loginDeviceInfo.deviceShort,
+      deviceId: loginDeviceInfo.deviceId,
+      approvalRequestId: approvalRequired ? String(deviceSecurity?.requestId || "") : "",
+    });
+
+    if (deviceSecurity?.approvalMode === "monitor") {
+      if (deviceSecurity?.deviceStatus === "reverify_required") {
+        setToast({ message: "主管已要求這台裝置重新驗證；目前仍可正常使用系統。", type: "info" });
+      } else if (deviceSecurity?.deviceStatus === "observing") {
+        setToast({ message: "這台裝置目前維持觀察狀態，仍可正常使用系統。", type: "info" });
+      } else if (approvalRequired) {
+        setToast({ message: "這台新裝置已列入待確認，您目前仍可正常使用系統。", type: "info" });
+      }
+    }
 
     if (finalUser?.passwordUpdatedOnFirstLogin) {
       logActivity(roleId, userName, "首次安全更新", {
@@ -2759,7 +2858,84 @@ export default function App() {
       });
     }
     setActiveView("dashboard");
+    return { ok: true };
   }, [therapists, logActivity, registerAccountDevice]);
+
+  const resumePendingDeviceLogin = useCallback(async () => {
+    const pending = pendingDeviceLoginRef.current;
+    if (!pending) return;
+    setPendingDeviceLogin(null);
+    pendingDeviceLoginRef.current = null;
+    await handleLogin(pending.roleId, pending.finalUser, pending.loginCredential);
+  }, [handleLogin]);
+
+  const cancelPendingDeviceLogin = useCallback(() => {
+    pendingDeviceLoginRef.current = null;
+    setPendingDeviceLogin(null);
+    setLoginSecurityNotice(null);
+    setCurrentDeviceTrust({ status: "checking", label: "裝置狀態確認中", deviceShort: "", deviceId: "" });
+  }, []);
+
+  const buildDeviceSecurityActor = useCallback(() => ({
+    roleId: userRole || "",
+    accountId: currentSecurityAccountRawId,
+    accountKey: currentSecurityAccountKey,
+    userName: currentUser?.name || userRole || "",
+    deviceId: currentDeviceTrust?.deviceId || getClientDeviceInfo().deviceId,
+    // 僅傳給 Device Security backend 做當次再驗證，不寫入任何前端儲存空間。
+    credentialPassword: securitySessionCredentialRef.current || "",
+  }), [userRole, currentSecurityAccountRawId, currentSecurityAccountKey, currentUser, currentDeviceTrust]);
+
+  const reviewDeviceApprovalAction = useCallback(async ({ request, action, verificationCode = "" }) => {
+    try {
+      return await callDeviceSecurityEndpoint(DEVICE_APPROVAL_REVIEW_ENDPOINT, {
+        brandId: currentBrandId,
+        requestId: request?.requestId || request?.id,
+        action,
+        verificationCode,
+        actor: buildDeviceSecurityActor(),
+      });
+    } catch (error) {
+      return { ok: false, message: error?.result?.message || error.message || "目前無法完成裝置確認" };
+    }
+  }, [callDeviceSecurityEndpoint, currentBrandId, buildDeviceSecurityActor]);
+
+  const manageDeviceSecurityAction = useCallback(async (profile, device, nextStatus) => {
+    try {
+      return await callDeviceSecurityEndpoint(DEVICE_MANAGEMENT_ENDPOINT, {
+        brandId: currentBrandId,
+        accountKey: profile?.id,
+        deviceId: device?.deviceId,
+        nextStatus,
+        actor: buildDeviceSecurityActor(),
+      });
+    } catch (error) {
+      return { ok: false, message: error?.result?.message || error.message || "裝置狀態更新失敗" };
+    }
+  }, [callDeviceSecurityEndpoint, currentBrandId, buildDeviceSecurityActor]);
+
+  const emergencyRecoverDevice = useCallback(async ({ masterPassword, target = null } = {}) => {
+    const pending = target || pendingDeviceLoginRef.current || loginSecurityNotice;
+    if (!pending) return { ok: false, message: "目前沒有需要協助的裝置" };
+    const roleId = pending.roleId || "unknown";
+    const accountId = sanitizeSecurityKey(pending.loginCredential?.accountId || pending.accountId || pending.finalUser?.id || pending.finalUser?.accountId || pending.finalUser?.name || pending.userName || roleId);
+    const userName = pending.finalUser?.name || pending.userName || accountId;
+    const deviceInfo = pending.deviceInfo || getClientDeviceInfo();
+    try {
+      return await callDeviceSecurityEndpoint(DEVICE_EMERGENCY_ENDPOINT, {
+        brandId: currentBrandId,
+        masterPassword,
+        roleId,
+        accountId,
+        userName,
+        deviceInfo,
+        loginLocation: pending.loginLocation || pending.blockedData?.loginLocation || UNKNOWN_LOGIN_LOCATION,
+        blockedDeviceId: pending.blockedDeviceId || pending.blockedData?.deviceId || pending.recoveredFromDeviceId || "",
+      });
+    } catch (error) {
+      return { ok: false, message: error?.result?.message || error.message || "目前無法完成協助" };
+    }
+  }, [callDeviceSecurityEndpoint, currentBrandId, loginSecurityNotice]);
 
   const showToast = useCallback((message, type = "info") => setToast({ message, type }), []);
 
@@ -3094,6 +3270,7 @@ export default function App() {
     annualAggregatedData, annualDashboardSummaries, annualSummaryStatusMap, therapistAnnualAggregatedData, // ★ 把年度 Summary 與管理師資料交出去
     showToast, openConfirm, fmtMoney, fmtNum, inputDate, setInputDate, storeList: analytics?.storeList || [], setTargets, selectedYear, selectedMonth, setSelectedYear, setSelectedMonth, permissions, storeAccounts, managerAuth, currentUser, userRole, logActivity, handleUpdateStorePassword, handleUpdateManagerPassword, handleUpdateTherapistPassword, navigateToStore, activeView, appId, 
     therapists: visibleTherapists, therapistReports: visibleTherapistReports, therapistSchedules, therapistTargets, trainerAuth, handleUpdateTrainerAuth, auditExclusions, handleUpdateAuditExclusions, currentBrand, setCurrentBrandId, getCollectionPath, getDocPath, dailyLoginCount, yesterdayLoginCount, securityConfig, featureFlags, therapistModuleEnabled, isOnline, isLowPowerMode,
+    currentDeviceTrust, currentSecurityAccountKey, manageDeviceSecurityAction, reviewDeviceApprovalAction, canManageDeviceSecurity: isDeviceSecuritySuperAdmin, openDeviceApprovalPanel,
     fetchGlobalData,
     officialManagers: managers,
     delegations, activeDelegations, delegationAccess, accessibleStores, officialStores, delegatedStores,
@@ -3102,7 +3279,7 @@ export default function App() {
     directorPermissionProfile,
     canDirectorAccessView,
     isReadOnlyDirector: userRole === "director" && !canDirectorAccessView("history")
-  }), [user, loading, analytics, visibleManagers, visibleManagerOrder, budgets, monthlyTargetSummary, currentDashboardSummary, currentRankingsSummary, currentReportSummaryReady, historicalDetailRefreshState, targets, visibleRawData, rawData, annualAggregatedData, annualDashboardSummaries, annualSummaryStatusMap, therapistAnnualAggregatedData, inputDate, selectedYear, selectedMonth, permissions, storeAccounts, managerAuth, currentUser, userRole, logActivity, handleUpdateStorePassword, handleUpdateManagerPassword, handleUpdateTherapistPassword, navigateToStore, activeView, appId, visibleTherapists, visibleTherapistReports, therapistSchedules, therapistTargets, trainerAuth, handleUpdateTrainerAuth, auditExclusions, handleUpdateAuditExclusions, currentBrand, setCurrentBrandId, getCollectionPath, getDocPath, dailyLoginCount, yesterdayLoginCount, securityConfig, featureFlags, therapistModuleEnabled, isOnline, isLowPowerMode, fetchGlobalData, managers, delegations, activeDelegations, delegationAccess, accessibleStores, officialStores, delegatedStores, refreshDelegations, canAccessStore, canEditStoreReport, getActiveDelegationForStore, directorLevel, directorPermissionProfile, canDirectorAccessView]); // ★ 依賴陣列也要加
+  }), [user, loading, analytics, visibleManagers, visibleManagerOrder, budgets, monthlyTargetSummary, currentDashboardSummary, currentRankingsSummary, currentReportSummaryReady, historicalDetailRefreshState, targets, visibleRawData, rawData, annualAggregatedData, annualDashboardSummaries, annualSummaryStatusMap, therapistAnnualAggregatedData, inputDate, selectedYear, selectedMonth, permissions, storeAccounts, managerAuth, currentUser, userRole, logActivity, handleUpdateStorePassword, handleUpdateManagerPassword, handleUpdateTherapistPassword, navigateToStore, activeView, appId, visibleTherapists, visibleTherapistReports, therapistSchedules, therapistTargets, trainerAuth, handleUpdateTrainerAuth, auditExclusions, handleUpdateAuditExclusions, currentBrand, setCurrentBrandId, getCollectionPath, getDocPath, dailyLoginCount, yesterdayLoginCount, securityConfig, featureFlags, therapistModuleEnabled, isOnline, isLowPowerMode, currentDeviceTrust, currentSecurityAccountKey, manageDeviceSecurityAction, reviewDeviceApprovalAction, isDeviceSecuritySuperAdmin, openDeviceApprovalPanel, fetchGlobalData, managers, delegations, activeDelegations, delegationAccess, accessibleStores, officialStores, delegatedStores, refreshDelegations, canAccessStore, canEditStoreReport, getActiveDelegationForStore, directorLevel, directorPermissionProfile, canDirectorAccessView]); // ★ 依賴陣列也要加
   
   const memoizedViews = useMemo(() => {
     return (
@@ -3218,114 +3395,39 @@ if (isUpdating) {
   }
   const handleEmergencyUnblockCurrentDevice = async () => {
     if (!loginSecurityNotice || loginSecurityNotice.type !== "blocked") return;
-
     const inputPassword = String(emergencyMasterPassword || "").trim();
-    const validMasterPassword = String(masterAuth?.password || "BOSS888").trim();
-
     if (!inputPassword) {
-      setToast({ message: "請輸入 master 密碼。", type: "error" });
+      setToast({ message: "請輸入最高管理者密碼。", type: "error" });
       return;
     }
-
-    if (inputPassword !== validMasterPassword) {
-      setToast({ message: "master 密碼不正確，無法解除封鎖。", type: "error" });
-      return;
-    }
-
-    const deviceInfo = loginSecurityNotice.deviceInfo || getClientDeviceInfo();
-    const roleId = loginSecurityNotice.roleId || "unknown";
-    const accountId = sanitizeSecurityKey(loginSecurityNotice.accountId || loginSecurityNotice.userName || roleId);
-    const accountKey = sanitizeSecurityKey(`${currentBrandId}_${roleId}_${accountId}`);
-    const globalBlockKey = sanitizeSecurityKey(`${roleId}_${accountId}_${deviceInfo.deviceId}`);
-    const nowText = new Date().toISOString();
-    const masterName = "最高管理者救援";
 
     setIsEmergencyUnlocking(true);
-
     try {
-      const deviceProfileRef = doc(getCollectionPath("account_devices"), accountKey);
-      const globalBlockRef = doc(db, "artifacts", appId, "public", "data", "global_blocked_devices", globalBlockKey);
-
-      await setDoc(deviceProfileRef, {
-        updatedAt: serverTimestamp(),
-        updatedAtText: nowText,
-        devices: {
-          [deviceInfo.deviceId]: {
-            ...(loginSecurityNotice.blockedData || {}),
-            deviceId: deviceInfo.deviceId,
-            deviceShort: deviceInfo.deviceShort,
-            device: deviceInfo.device,
-            browser: deviceInfo.browser,
-            os: deviceInfo.os,
-            trusted: true,
-            status: "trusted",
-            source: "emergency_master_unblocked",
-            reviewedBy: masterName,
-            reviewedRole: "master",
-            reviewedAtText: nowText,
-            emergencyUnblocked: true,
-            emergencyUnblockedAtText: nowText,
-          },
-        },
-      }, { merge: true });
-
-      await setDoc(globalBlockRef, {
-        active: false,
-        status: "resolved",
-        source: "emergency_master_unblocked",
-        resolvedBy: masterName,
-        resolvedRole: "master",
-        resolvedAtText: nowText,
-        updatedAtText: nowText,
-      }, { merge: true });
-
-      try {
-        await addDoc(getCollectionPath("system_logs"), {
-          timestamp: serverTimestamp(),
-          createdAtText: nowText,
-          role: "master",
-          user: masterName,
-          action: "最高管理者救援解除裝置封鎖",
-          activityType: "security.emergency_unblock",
-          view: "login",
-          device: deviceInfo.device,
-          browser: deviceInfo.browser,
-          os: deviceInfo.os,
-          deviceId: deviceInfo.deviceId,
-          deviceShort: deviceInfo.deviceShort,
-          details: removeUndefinedDeep({
-            message: "登入頁救援解除封鎖",
-            targetRole: roleId,
-            targetAccountId: accountId,
-            targetUserName: loginSecurityNotice.userName,
-            globalBlocked: loginSecurityNotice.globalBlocked,
-          }),
-        });
-      } catch (logError) {
-        console.warn("救援解除封鎖紀錄寫入失敗:", logError);
+      const result = await emergencyRecoverDevice({ masterPassword: inputPassword, target: loginSecurityNotice });
+      if (!result?.ok) {
+        setToast({ message: result?.message || "目前無法完成協助。", type: "error" });
+        return;
       }
-
       try {
         localStorage.setItem("cyj_device_unblock_success_notice", JSON.stringify({
-          deviceId: deviceInfo.deviceId,
-          deviceShort: deviceInfo.deviceShort,
+          deviceId: loginSecurityNotice?.deviceInfo?.deviceId || "",
+          deviceShort: loginSecurityNotice?.deviceShort || "",
           at: Date.now(),
         }));
       } catch (storageError) {
-        console.warn("解除封鎖成功提示暫存失敗:", storageError);
+        console.warn("裝置恢復提示暫存失敗:", storageError);
       }
-
       setLoginSecurityNotice({
         type: "unblocked",
-        title: "裝置封鎖已解除",
-        message: "此裝置已由最高管理者救援解除封鎖，請重新登入。",
-        deviceShort: deviceInfo.deviceShort,
+        title: "這台裝置已恢復使用",
+        message: "已由最高管理者完成協助，請重新登入。",
+        deviceShort: loginSecurityNotice?.deviceShort || "",
       });
       setEmergencyMasterPassword("");
-      setToast({ message: "裝置已解除封鎖，請重新登入。", type: "success" });
+      setToast({ message: "這台裝置已恢復使用，請重新登入。", type: "success" });
     } catch (error) {
-      console.error("最高管理者救援解除封鎖失敗:", error);
-      setToast({ message: "解除封鎖失敗：" + error.message, type: "error" });
+      console.error("最高管理者協助失敗:", error);
+      setToast({ message: "目前無法完成協助，請稍後再試。", type: "error" });
     } finally {
       setIsEmergencyUnlocking(false);
     }
@@ -3334,6 +3436,19 @@ if (isUpdating) {
 
 
 
+
+  if (pendingDeviceLogin) {
+    const approvalRequestRef = doc(getCollectionPath("device_approval_requests"), pendingDeviceLogin.requestId);
+    return (
+      <DeviceApprovalGate
+        approval={pendingDeviceLogin}
+        requestRef={approvalRequestRef}
+        onApproved={resumePendingDeviceLogin}
+        onCancel={cancelPendingDeviceLogin}
+        onEmergencyRecovery={(masterPassword) => emergencyRecoverDevice({ masterPassword, target: pendingDeviceLogin })}
+      />
+    );
+  }
 
   if (!userRole) return (
     <>
@@ -3369,26 +3484,26 @@ if (isUpdating) {
 
               <div className="mt-3 rounded-2xl border border-stone-100 bg-stone-50/80 p-3">
                 <div className="text-[11px] font-black text-stone-500 mb-2">
-                  最高管理者救援解除
+                  最高管理者協助
                 </div>
                 <div className="text-[11px] font-bold leading-5 text-stone-400 mb-2">
-                  僅供誤封鎖時使用。輸入 master 密碼後，只會解除此裝置封鎖，不會直接進入系統。
+                  僅供裝置誤停用時使用。輸入最高管理者密碼後，只會恢復這台裝置的使用權限，完成後仍需重新登入。
                 </div>
                 <div className="flex gap-2">
                   <input
                     type="password"
                     value={emergencyMasterPassword}
                     onChange={(e) => setEmergencyMasterPassword(e.target.value)}
-                    placeholder="輸入 master 密碼"
+                    placeholder="輸入最高管理者密碼"
                     className="min-w-0 flex-1 rounded-xl border border-stone-200 bg-white px-3 py-2 text-xs font-bold text-stone-600 outline-none focus:border-amber-300"
                   />
                   <button
                     type="button"
                     disabled={isEmergencyUnlocking}
                     onClick={handleEmergencyUnblockCurrentDevice}
-                    className="shrink-0 rounded-xl bg-stone-800 px-3 py-2 text-xs font-black text-white disabled:opacity-50 active:scale-95"
+                    className="shrink-0 rounded-xl border border-[#E8C77A] bg-gradient-to-r from-[#FFF4D8] to-[#EFD399] px-3 py-2 text-xs font-black text-[#6A4D26] disabled:opacity-50 active:scale-95"
                   >
-                    {isEmergencyUnlocking ? "處理中" : "救援解除"}
+                    {isEmergencyUnlocking ? "處理中" : "協助恢復"}
                   </button>
                 </div>
               </div>
@@ -3416,7 +3531,7 @@ if (isUpdating) {
             </div>
             <div className="min-w-0 flex-1">
               <div className="text-sm font-black text-emerald-700">
-                {loginSecurityNotice.title || "裝置封鎖已解除"}
+                {loginSecurityNotice.title || "這台裝置已恢復使用"}
               </div>
               <div className="mt-1 text-xs font-bold leading-5 text-stone-500">
                 {loginSecurityNotice.message || "請重新登入。"}
@@ -3435,6 +3550,10 @@ if (isUpdating) {
       )}
     </>
   );
+
+  const headerDeviceApprovalCount = isDeviceSecuritySuperAdmin
+    ? Number(deviceApprovalSummary.brandPendingCount || 0)
+    : Number(deviceApprovalSummary.myPendingCount || 0);
 
   return (
     <AppContext.Provider value={contextValue}>
@@ -3502,7 +3621,7 @@ if (isUpdating) {
                     className={`hidden md:flex items-center justify-center rounded-full border px-2 lg:px-2.5 2xl:px-3 py-2 text-[11px] lg:text-xs font-black shadow-sm whitespace-nowrap shrink-0 max-w-[92px] lg:max-w-[112px] 2xl:max-w-none overflow-hidden ${
                       currentDeviceTrust.status === "blocked"
                         ? "border-stone-200 bg-stone-100 text-stone-700"
-                        : currentDeviceTrust.status === "new"
+                        : ["new", "observing", "reverify_required", "suspicious"].includes(currentDeviceTrust.status)
                           ? "border-rose-100 bg-rose-50 text-rose-600"
                           : currentDeviceTrust.status === "trusted"
                             ? "border-emerald-100 bg-emerald-50 text-emerald-700"
@@ -3511,22 +3630,22 @@ if (isUpdating) {
                     title={currentDeviceTrust.deviceShort ? `裝置碼：${currentDeviceTrust.deviceShort}` : "目前裝置狀態"}
                   >
                     <span className="2xl:hidden truncate">
-                      {currentDeviceTrust.status === "blocked" ? "⛔ 已封鎖" : currentDeviceTrust.status === "new" ? "⚠ 待觀察" : currentDeviceTrust.status === "trusted" ? "🛡 已信任" : "確認中"}
+                      {currentDeviceTrust.status === "blocked" ? "⛔ 已停用" : currentDeviceTrust.status === "reverify_required" ? "⚠ 需重驗" : currentDeviceTrust.status === "observing" ? "⚠ 觀察中" : currentDeviceTrust.status === "suspicious" ? "⚠ 待主管確認" : currentDeviceTrust.status === "new" ? "⚠ 待確認" : currentDeviceTrust.status === "trusted" ? "🛡 已信任" : "確認中"}
                     </span>
                     <span className="hidden 2xl:inline">{currentDeviceTrust.label}</span>
                   </div>
                 )}
 
-                {["director", "master"].includes(userRole) && deviceAlertSummary.pendingNewDeviceCount > 0 && (
+                {headerDeviceApprovalCount > 0 && (
                   <button
                     type="button"
-                    onClick={goToDeviceManagement}
+                    onClick={openDeviceApprovalPanel}
                     className="hidden lg:flex items-center gap-1.5 2xl:gap-2 rounded-full border border-rose-100 bg-rose-50 px-2.5 2xl:px-3 py-2 text-xs font-black text-rose-600 shadow-sm hover:bg-rose-100 active:scale-95 transition-all whitespace-nowrap shrink-0"
-                    title={deviceAlertSummary.latestUserName ? `最新：${deviceAlertSummary.latestUserName}｜${deviceAlertSummary.latestDevice}` : "有新裝置待確認"}
+                    title={isDeviceSecuritySuperAdmin && deviceApprovalSummary.latestUserName ? `最新：${deviceApprovalSummary.latestUserName}｜${deviceApprovalSummary.latestDevice}` : "有新裝置等待確認"}
                   >
                     <ShieldAlert size={16} />
-                    <span className="2xl:hidden">{deviceAlertSummary.pendingNewDeviceCount}</span>
-                    <span className="hidden 2xl:inline">新裝置 {deviceAlertSummary.pendingNewDeviceCount}</span>
+                    <span className="2xl:hidden">{headerDeviceApprovalCount}</span>
+                    <span className="hidden 2xl:inline">待確認 {headerDeviceApprovalCount}</span>
                   </button>
                 )}
 
@@ -3571,7 +3690,7 @@ if (isUpdating) {
                   {currentDeviceTrust.deviceShort && (
                     <div
                       className={`flex items-center justify-center rounded-full border px-2.5 py-1.5 text-[11px] font-black shadow-sm whitespace-nowrap ${
-                        currentDeviceTrust.status === "new"
+                        ["new", "observing", "reverify_required", "suspicious"].includes(currentDeviceTrust.status)
                           ? "border-rose-100 bg-rose-50 text-rose-600"
                           : currentDeviceTrust.status === "trusted"
                             ? "border-emerald-100 bg-emerald-50 text-emerald-700"
@@ -3580,24 +3699,30 @@ if (isUpdating) {
                       title={currentDeviceTrust.deviceShort ? `裝置碼：${currentDeviceTrust.deviceShort}` : "目前裝置狀態"}
                     >
                       {currentDeviceTrust.status === "blocked"
-                        ? "⛔ 已封鎖"
-                        : currentDeviceTrust.status === "new"
-                          ? "⚠ 待觀察"
-                          : currentDeviceTrust.status === "trusted"
-                            ? "🛡 已信任"
-                            : "確認中"}
+                        ? "⛔ 已停用"
+                        : currentDeviceTrust.status === "reverify_required"
+                          ? "⚠ 需重驗"
+                          : currentDeviceTrust.status === "observing"
+                            ? "⚠ 觀察中"
+                            : currentDeviceTrust.status === "suspicious"
+                              ? "⚠ 待主管確認"
+                              : currentDeviceTrust.status === "new"
+                                ? "⚠ 待確認"
+                                : currentDeviceTrust.status === "trusted"
+                                  ? "🛡 已信任"
+                                  : "確認中"}
                     </div>
                   )}
 
-                  {["director", "master"].includes(userRole) && deviceAlertSummary.pendingNewDeviceCount > 0 && (
+                  {headerDeviceApprovalCount > 0 && (
                     <button
                       type="button"
-                      onClick={goToDeviceManagement}
-                      className="flex items-center justify-center rounded-full border border-rose-100 bg-rose-50 px-2.5 py-1.5 text-[11px] font-black text-rose-600 shadow-sm whitespace-nowrap"
-                      title={deviceAlertSummary.latestUserName ? `最新：${deviceAlertSummary.latestUserName}｜${deviceAlertSummary.latestDevice}` : "有新裝置待確認"}
+                      onClick={openDeviceApprovalPanel}
+                      className="flex items-center justify-center gap-1 rounded-full border border-rose-100 bg-rose-50 px-2.5 py-1.5 text-[11px] font-black text-rose-600 shadow-sm whitespace-nowrap"
+                      title="有新裝置等待確認"
                     >
                       <ShieldAlert size={13} />
-                      {deviceAlertSummary.pendingNewDeviceCount}
+                      {headerDeviceApprovalCount}
                     </button>
                   )}
                 </div>
@@ -3665,6 +3790,16 @@ if (isUpdating) {
             </div>
           </div>
         )}
+
+        <DeviceApprovalPanel
+          open={isDeviceApprovalPanelOpen}
+          onClose={() => setIsDeviceApprovalPanelOpen(false)}
+          getCollectionPath={getCollectionPath}
+          accountKey={currentSecurityAccountKey}
+          currentDeviceTrusted={currentDeviceTrust.status === "trusted"}
+          isSuperAdmin={isDeviceSecuritySuperAdmin}
+          onReview={reviewDeviceApprovalAction}
+        />
 
         {toast && (<Toast message={toast.message} type={toast.type} onClose={() => setToast(null)} />)}
         <ConfirmModal isOpen={confirmModal.isOpen} title={confirmModal.title} message={confirmModal.message} onConfirm={confirmModal.onConfirm} onCancel={closeConfirmModal} />
