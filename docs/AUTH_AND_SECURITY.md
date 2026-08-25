@@ -30,7 +30,7 @@ Rules 註解也指出，若日後改用 Custom Claims，
 
 # 2. 正式角色
 
-目前前端正式角色：
+目前一般前端角色：
 
 ```text
 director   高階主管
@@ -40,15 +40,13 @@ store      店經理
 therapist  管理師
 ```
 
-程式內另有：
+「最高管理者」不是另一個一般 role id，而是在 `director` 之下解析，例如：
 
 ```text
-master
+directorLevel = super_admin
 ```
 
-作最高管理者。
-
----
+程式另外保留 master credential／master login 類型的緊急或高權限驗證路徑。不要把 `master` 當成與 `director` 並列的一般員工角色。
 
 # 3. 帳號資料來源
 
@@ -250,7 +248,7 @@ system_stats/{YYYY-MM-DD}
 
 # 11. Default Security Config
 
-App 目前 fallback：
+App fallback 同時包含 Session 保護與 Device Approval 設定：
 
 ```text
 enabled = true
@@ -260,20 +258,24 @@ lowPowerIdleMinutes = 30
 
 autoLogoutEnabled = true
 autoLogoutMinutes = 240
-
 logoutWarningSeconds = 60
 
 exemptRoles = director, master
+
+deviceApprovalMode = off
+deviceApprovalRoles = director, trainer, manager, store, therapist
+deviceApprovalExpiryMinutes = 15
+allowTrustedDeviceSelfApproval = true
 ```
 
-另保留 legacy-compatible：
+仍保留 legacy compatible normalization：
 
 ```text
 timeoutMinutes
 warningSeconds
 ```
 
----
+`deviceApprovalMode = off` 是安全預設；部署 Device Approval 程式碼本身，不代表系統會立刻把所有現有使用者切到 enforce。
 
 # 12. Low Power Mode
 
@@ -349,281 +351,339 @@ os
 
 ---
 
-# 15. Device Auto Trust
+# 15. Device Approval Model
 
-目前正式：
+舊 Knowledge Base 的：
 
 ```text
 autoTrustLimit = 2
 ```
 
-也就是帳號前幾台符合條件的裝置可以建立初始信任，
-之後的新裝置才進入更明確的 pending / alert 流程。
+已退役，不再代表目前架構。
 
-Alert role：
+目前模式：
+
+```text
+off      → Device Approval 不介入正常登入
+monitor  → 記錄／分類新裝置，但依 monitor policy 允許使用
+enforce  → 未信任新裝置完成核准後才能進入
+```
+
+目前 App 預設納入：
 
 ```text
 director
 trainer
 manager
 store
+therapist
 ```
-
-目前不包含 therapist。
 
 ---
 
 # 16. `account_devices`
 
-每個帳號 profile 下保存 devices map。
+每個帳號 profile 內保存 devices map。
 
-Device 狀態目前可看到：
+常見 logical fields：
+
+```text
+brandId
+brandLabel
+role
+accountId
+userName
+updatedAt / updatedAtText
+
+devices.{deviceId}:
+  deviceId / deviceShort
+  stableDeviceId
+  deviceFingerprint
+  deviceStorageStatus
+  device / browser / os
+  trusted
+  status
+  source
+  firstSeenAt / firstSeenAtText
+  lastSeenAt / lastSeenAtText
+  loginCount
+  loginLocation
+  firstLoginLocation
+  lastLoginLocation
+  review metadata
+```
+
+目前裝置狀態可能包含：
 
 ```text
 trusted
 new
+observing
+reverify_required
 suspicious
 blocked
 global_blocked
 ```
 
-資料還會記：
+---
+
+# 17. 新裝置登入／Approval Decision
+
+Application credential 驗證成功後，Backend Device Security 會讀 `security_config` 與 `account_devices` 進行判斷。
+
+在 enforce 模式：
 
 ```text
-firstSeen
-lastSeen
-loginCount
+新裝置且尚未 Trusted
+↓
+是否還有可使用的 Trusted approver device？
+├─ 有
+│  → selfApprovalAllowed = true
+│  → 建立／刷新 pending request
+│  → 新裝置顯示 6 位碼
+│  → 原 Trusted Device 完成自我認證
+│
+└─ 沒有
+   → selfApprovalAllowed = false
+   → adminOnly
+   → 由最高管理者建立第一台 Trusted Device
+```
+
+第一次登入的新帳號，不會只因為密碼正確就自動把第一台裝置設為 Trusted。
+
+---
+
+# 18. Guided Trusted-device Self Approval
+
+在 enforce 模式，原 Trusted Device 可以在「自己的另一台裝置」有 pending request 時，被系統主動帶入確認流程。
+
+目前正式前端使用：
+
+```text
+device_approval_inbox/{accountKey} pendingCount
+→ account-scoped pending lookup
+→ guided DeviceApprovalPanel
+```
+
+Guided UI 會問：
+
+```text
+您剛才是否正在另一台裝置登入系統？
+```
+
+若是本人，才輸入新裝置顯示的 6 位碼。
+
+若選「不是我」，可拒絕／阻止該次新裝置登入，並交由登入安全 Telegram pipeline 通知最高管理者。
+
+Guided Flow 不會因為使用者剛好是最高管理者，就把其他人的 pending request 自動塞進自己的引導畫面。
+
+---
+
+# 19. 6 位碼安全限制
+
+目前已驗證 Backend 會限制：
+
+```text
+最多錯誤 3 次
+```
+
+達上限時 pending request 會被結束／expired，新裝置必須重新登入取得新的申請。
+
+確認碼驗證資料放在 request 的 private verification 路徑／hash 流程，不應當成一般可讀 request 欄位公開。
+
+---
+
+# 20. `device_approval_requests`
+
+品牌範圍內的 Device Approval workflow collection。
+
+常見 logical fields：
+
+```text
+requestId
+brandId
+accountKey
+role
+accountId
+userName
+deviceId / deviceShort
+device / browser / os
 loginLocation
-browser / os / device
-source
-review metadata
+status
+approvalMode
+selfApprovalAllowed
+hasTrustedApproverDevice
+likelyKnownDevice
+requestedAtText
+expiresAtMs / expiresAtText
+resolvedBy / resolvedAtText
 ```
+
+verification secret 另外放 private subcollection／document。
 
 ---
 
-# 17. 新裝置登入
+# 21. `device_approval_inbox`
 
-如果是未知 device：
+每個帳號一份很小的 pending summary。
 
-```text
-trusted device count < autoTrustLimit
-→ auto-trust
-```
-
-否則：
+用途：
 
 ```text
-status = new
-trusted = false
+我的 pending count
+→ Header Badge / Guided Flow trigger
 ```
 
-若 role 在 alertRoles：
-
-```text
-security_alerts
-```
-
-新增 `new_device_login` alert。
+目的就是不要為了知道「有沒有待確認」而載入完整裝置歷史。
 
 ---
 
-# 18. Known Device Recovery
+# 22. 最高管理者人工覆核
 
-App 有「疑似原裝置」recover 機制。
+最高管理者前端資格通常來自 `director`＋`super_admin`；但 Backend 不可只相信前端，仍要重新驗證 actor 權限、目前 Trusted Device、必要 credential。
 
-會參考：
-
-```text
-fingerprint
-location
-known device history
-```
-
-找到可恢復舊 device identity 時，
-避免瀏覽器 storage 改變就無限制創造「全新裝置」。
-
-這是 compatibility / stability 邏輯，
-不可只因看到 deviceId 不同就直接刪除。
-
----
-
-# 19. Login Location
-
-App 使用 backend endpoint：
+人工覆核包含：
 
 ```text
-resolveLoginLocation
+允許／Trusted
+繼續觀察
+要求重新驗證
+禁止裝置
 ```
 
-回傳 normalize 後至少包含：
+目前 `DeviceApprovalPanel.jsx` 明確把 self approval 與最高管理者人工覆核分開。
 
-```text
-display
-countryCode
-countryName
-region
-city
-district
-timezone
-isp
-ipMasked
-source
-confidence
-isProxy
-isMobileNetwork
-updatedAtText
-```
+最新已完成的 Backend race hardening 採 first-resolver-wins：第二位較晚處理同一筆 request 的最高管理者，會收到「這筆已由誰完成」而不是 false success。
 
-如果定位服務失敗：
-
-```text
-ok = true
-location = 未知位置
-source = unknown
-```
-
-也就是：
-
-> 定位失敗不是登入失敗條件。
-
----
-
-# 20. IP Privacy
-
-Backend 回傳的是：
-
-```text
-ipMasked
-```
-
-而不是要求前端保存完整 IP 作 UI 展示。
-
-知識文件不保存使用者實際 IP。
-
----
-
-# 21. SystemMonitor
-
-主要兩種模式：
-
-```text
-logs
-devices
-```
-
-Log filters：
-
-```text
-登入 / 登出
-只看登入
-只看登出
-裝置安全
-頁面瀏覽
-查詢行為
-資料異動
-密碼更新
-```
-
-Role filters：
-
-```text
-高階主管
-區長
-店經理
-管理師
-教專
-最高管理者
-```
-
----
-
-# 22. Device Management Actions
-
-SystemMonitor 可執行：
-
-```text
-設為信任
-標記可疑
-封鎖目前品牌
-全品牌封鎖
-解除封鎖並信任
-```
-
-這些不是只改 UI state，而會寫回 Firestore。
+最新 race／Summary-first 是否已正式部署，必須以 `CURRENT_STATE.md` 為準。
 
 ---
 
 # 23. Brand Block vs Global Block
 
-## Brand block
+品牌內 block 主要反映在該品牌的 `account_devices`。
 
-主要更新：
+Global block 則是跨品牌的 hard block record，用來避免只切換品牌就繞過被封鎖的裝置。
 
-```text
-account_devices
-```
-
-目前品牌 device status。
-
-## Global block
-
-SystemMonitor 另取得 global block ref，
-寫入：
-
-```text
-active
-status = global_blocked
-scope = all_brands
-account
-device
-blockedBy
-blockedAtText
-...
-```
-
-因此「全品牌封鎖」不等同於普通品牌 device flag。
+兩者不可以只用一個前端 flag 混在一起。
 
 ---
 
 # 24. `security_summary`
 
-SystemMonitor 在 pending device 被正式處理為 trusted 時，
-會更新：
+Device Approval 使用專門的小型 Summary：
 
 ```text
-security_summary/device_alerts
+security_summary/device_approvals
 ```
 
-例如降低：
+目前正式 App 已經即時監聽這份 document，取得最高管理者品牌待確認數量。
+
+最新已驗證的 Summary-first 主管提醒版本另外準備：
 
 ```text
-pendingNewDeviceCount
+adminAssistancePendingCount
+adminAssistancePendingItems
+latestAdminAssistanceRequestId
+latestAdminAssistanceUserName
+latestAdminAssistanceRole
+latestAdminAssistanceDevice
+latestAdminAssistanceAtText
 ```
 
-並記錄最後處理者。
+只有 enforce 且 `selfApprovalAllowed = false` 的 request 才進主管協助 summary queue。
+
+這樣最高管理者要不要滑出通知卡，可以直接由既有 summary listener 判斷，不需要再 query 一次 pending collection。
+
+在部署確認以前，上述新增欄位只可寫成「已完成／已驗證」，不可寫「已正式上線」。
+
+舊 `security_summary/device_alerts` 可能仍存在於較早裝置安全統計用途，不要和新的 `device_approvals` summary 混淆。
 
 ---
 
-# 25. Security Alert 與 Login Log 是兩條資料
+# 25. Security Alert、Telegram、Login Log 是不同資料流
 
-登入：
+登入／頁面／稽核活動：
 
 ```text
 system_logs
 ```
 
-裝置異常：
+Device Approval／裝置狀態：
+
+```text
+account_devices
+device_approval_requests
+device_approval_inbox
+security_summary/device_approvals
+```
+
+登入安全事件：
 
 ```text
 security_alerts
-account_devices
-security_summary
 ```
 
-因此未來除錯不能只看 security_alerts
-就判斷「這次有沒有登入」。
+Security Telegram：
+
+```text
+security_alerts onCreate
+→ telegram security config
+→ Telegram API
+```
+
+Backend-only failure／cooldown state：
+
+```text
+login_security_state
+```
+
+因此「有登入」、「有 pending approval」、「有發 Telegram」不能只看同一個 collection 就下結論。
 
 ---
+
+# 25A. Known Device Recovery
+
+Known Device Recovery 仍是 compatibility／stability layer，可利用 device fingerprint、歷史裝置資訊與 location signal 協助辨識曾使用過的裝置。
+
+Recovery 不能被當成 permission bypass；blocked／global-blocked／suspicious 仍必須經過各自安全判斷。
+
+---
+
+# 25B. Login Location / IP Privacy
+
+`resolveLoginLocation` 提供的是安全 signal，normalize 後可包含：
+
+```text
+display
+countryCode / countryName
+region / city / district
+timezone
+isp
+ipMasked
+source / confidence
+isProxy
+isMobileNetwork
+updatedAtText
+```
+
+定位失敗本身不是登入失敗條件。Knowledge Base 不保存完整實際 IP。
+
+---
+
+# 25C. SystemMonitor / Device Management
+
+SystemMonitor 仍是裝置管理操作面，但分類應使用目前三階 review 模型，不再使用舊的單一「標記可疑」思維：
+
+```text
+Trusted
+Observe
+Require re-verification
+Block
+Global block / recovery（依權限）
+```
+
+這些動作會寫回 Backend／Firestore，不是純 UI state。
 
 # 26. Delegation Security
 

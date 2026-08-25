@@ -1,58 +1,124 @@
 # docs/README.md
 
-# 第二層專門文件索引
+> Project Knowledge Base 正式索引。  
+> 最後整併更新：2026-08-25（UTC+8）。  
+> 任何情況下，「目前正式部署 source」都高於本文件；`CURRENT_STATE.md` 專門區分「已確認正式上線」與「已完成但尚待正式部署確認」。
 
-第二層把第一層的「總架構」拆成可以直接拿來除錯、交接與維護的專門文件。
+# 1. 正式文件清單
 
 | 文件 | 主要用途 |
 |---|---|
-| `FIREBASE_DATA_MODEL.md` | Firestore logical collections、path、Raw / Derived / Settings 關係 |
-| `DASHBOARD_SUMMARY.md` | 當月即時、歷史 verified Summary、dirty / queue / repair / fallback |
-| `AUTH_AND_SECURITY.md` | Login、初始密碼、low power、自動登出、device trust、Rules |
-| `TELEGRAM_AGENT.md` | Gemini、tool、memory、policy、schedule、snapshot、task、source authority |
-| `MAINTENANCE_TOOLS.md` | 維護中心工具用途、風險、正確操作順序 |
-| `DATA_FLOW.md` | 從 Input / Raw 到 Summary / Dashboard / Telegram 的完整資料流 |
+| `AI_START_HERE.md` | 新 AI／新工程師固定接手入口 |
+| `CURRENT_STATE.md` | 目前正式環境狀態＋已完成但待部署項目 |
+| `ARCHITECTURE.md` | 高階系統架構與模組邊界 |
+| `DEVELOPMENT_GUIDE.md` | 修改正式系統時不可破壞的開發規則 |
+| `SYSTEM_SOURCE_MAP.md` | 每個功能實際由哪些 source files 負責 |
+| `FIREBASE_DATA_MODEL.md` | Firestore logical model、path、Raw／Derived／Settings／Security |
+| `DATA_FLOW.md` | 報表、Summary、登入、裝置安全、Telegram 的完整資料流 |
+| `AUTH_AND_SECURITY.md` | Login、角色、強制改密碼、Low Power、自動登出、Trusted Device、Device Approval、Security Telegram |
+| `DEPLOYMENT.md` | Build、GitHub Pages、Firebase Functions／Hosting／Rules 的部署邊界 |
+| `DASHBOARD_SUMMARY.md` | 當月即時、歷史 verified Summary、repair、fallback |
+| `DATA_IDENTITY_RULES.md` | Store Identity 治理，特別是 CYJ 新店 |
+| `MAINTENANCE_TOOLS.md` | SystemMaintenance 工具、風險與操作順序 |
+| `TELEGRAM_AGENT.md` | Telegram Agent／Gemini／Policy／Schedule／Snapshot／Task，以及獨立的登入安全 Telegram 流程 |
 
-## 閱讀順序
-
-一般接手：
-
-```text
-../README.md
-→ ../ARCHITECTURE.md
-→ ../DEVELOPMENT_GUIDE.md
-→ DATA_FLOW.md
-```
-
-資料錯誤：
+# 2. 固定閱讀順序
 
 ```text
-FIREBASE_DATA_MODEL.md
-→ DATA_FLOW.md
-→ DASHBOARD_SUMMARY.md
-→ ../DATA_IDENTITY_RULES.md
+1. docs/AI_START_HERE.md
+2. docs/CURRENT_STATE.md
+3. docs/README.md
+4. docs/ARCHITECTURE.md
+5. docs/DEVELOPMENT_GUIDE.md
+6. docs/SYSTEM_SOURCE_MAP.md
 ```
 
-登入／安全：
+之後再依功能選讀專門文件。
+
+# 3. 功能閱讀路徑
+
+Dashboard／歷史 Summary：
 
 ```text
-AUTH_AND_SECURITY.md
+docs/DASHBOARD_SUMMARY.md
+→ docs/DATA_FLOW.md
+→ docs/FIREBASE_DATA_MODEL.md
 ```
 
-Telegram：
+登入／權限／裝置／安全：
 
 ```text
-TELEGRAM_AGENT.md
+docs/AUTH_AND_SECURITY.md
+→ docs/DATA_FLOW.md
+→ docs/FIREBASE_DATA_MODEL.md
+→ docs/SYSTEM_SOURCE_MAP.md
 ```
 
-維護中心：
+Telegram Agent／營運主動預警：
 
 ```text
-MAINTENANCE_TOOLS.md
+docs/TELEGRAM_AGENT.md
 ```
 
-## Source-of-truth
+Store Identity：
 
-這些文件只根據使用者提供的 2026-08-18 目前正常部署版本建立。
+```text
+docs/DATA_IDENTITY_RULES.md
+→ tests/storeIdentity.test.js
+```
 
-未從正式 source 確認的 schema / function behavior，不應靠 AI 補寫。
+維護／修復／Reads：
+
+```text
+docs/MAINTENANCE_TOOLS.md
+```
+
+# 4. Archive 原則
+
+`docs/archive/` 保存歷史 release note 與一次性的 Knowledge Base 更新紀錄。這些檔案**不應為了追最新版本而改寫舊版號**，因為它們的價值就是保留「那一次 release 當時改了什麼」。
+
+```text
+docs/archive/releases/
+docs/archive/updates/
+```
+
+Archive 不可拿來取代目前正式架構文件。
+
+# 5. 重複文件治理
+
+只維護一份正式的：
+
+```text
+SYSTEM_SOURCE_MAP.md
+```
+
+舊的重複檔 `SYSTEM_SOURCE_MAP.md.md` 已刻意不放入本整理包，避免未來雙軌維護。
+
+# 6. 目前 Security 文件邊界
+
+截至 2026-08-25 整併：
+
+- 使用者提供的目前上線 `App.jsx` 可確認 `CURRENT_APP_VERSION = 3.5.3`。
+- 目前上線前端 source 已包含 Guided Trusted-Device self approval。
+- Security Telegram v1 與 Device Approval backend 皆有實作與 regression coverage。
+- 最新 **Summary-first 最高管理者 Security Action Card** 套件目前在文件中標示為「已完成／已驗證，但尚待正式部署確認」。
+
+未先讀 `CURRENT_STATE.md`，不得直接把「已完成程式」寫成「正式環境已啟用」。
+
+# 7. Source of Truth
+
+```text
+目前正式部署 source
+↓
+CURRENT_STATE.md
+↓
+Project Knowledge Base
+↓
+Regression Tests
+↓
+Git History / Production Tag
+↓
+舊對話 / AI 記憶
+```
+
+若文件與目前正式 source 衝突，應修正文件，不可以為了配合舊 `.md` 而反過來修改正式程式。

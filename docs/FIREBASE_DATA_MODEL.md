@@ -1,7 +1,7 @@
 # FIREBASE_DATA_MODEL.md
 
 > Project Knowledge Base / 第二層文件  
-> 建立依據：2026-08-18 使用者提供的目前正常部署版本。  
+> 由原 2026-08-18 Data Model 基線，加上截至 2026-08-25 已正式確認／已驗證的 Security sources 整併。  
 > 本文件描述「目前程式實際讀寫到的 Firestore logical model」，不是 Firebase Console 的完整 schema 匯出。  
 > 若某欄位未被目前正式程式讀寫，本文件不自行猜測。
 
@@ -818,7 +818,7 @@ Daily / Audit / Ranking 等功能會依需求讀取或套用。
 
 **類型：Settings Doc**
 
-App 有 default fallback：
+App normalization currently recognizes session / low-power keys plus Device Approval policy:
 
 ```text
 enabled
@@ -830,11 +830,23 @@ lowPowerIdleMinutes
 autoLogoutEnabled
 autoLogoutMinutes
 logoutWarningSeconds
+
+deviceApprovalMode
+deviceApprovalRoles
+deviceApprovalExpiryMinutes
+allowTrustedDeviceSelfApproval
 ```
 
-正式 default 數字另見 `AUTH_AND_SECURITY.md`。
+目前 App 預設 Device Approval values：
 
----
+```text
+deviceApprovalMode = off
+deviceApprovalRoles = director, trainer, manager, store, therapist
+deviceApprovalExpiryMinutes = 15
+allowTrustedDeviceSelfApproval = true
+```
+
+See `AUTH_AND_SECURITY.md` for behavior and deployment safety boundaries.
 
 ## 13.3 `feature_flags`
 
@@ -858,11 +870,9 @@ annualAverageSettings:
 
 ## 14.1 `account_devices`
 
-**類型：Collection**
+**類型：品牌範圍 Collection**
 
-一個 account profile 內保存多個 devices。
-
-目前可觀察欄位概念：
+每個 account profile 保存一份 devices map，常見 logical fields：
 
 ```text
 brandId
@@ -870,66 +880,185 @@ brandLabel
 role
 accountId
 userName
-updatedAt
-updatedAtText
+updatedAt / updatedAtText
 
 devices.{deviceId}:
-  deviceId
-  deviceShort
-  stableDeviceId
-  deviceFingerprint
-  deviceStorageStatus
-  device
-  browser
-  os
+  deviceId / deviceShort / stableDeviceId
+  deviceFingerprint / deviceStorageStatus
+  device / browser / os
   trusted
   status
   source
-  firstSeenAt
-  firstSeenAtText
-  lastSeenAt
-  lastSeenAtText
+  firstSeenAt / firstSeenAtText
+  lastSeenAt / lastSeenAtText
   loginCount
   loginLocation
   firstLoginLocation
   lastLoginLocation
+  review metadata
 ```
+
+可能的 Security state 包含 `trusted`、`new`、`observing`、`reverify_required`、`suspicious`、`blocked` 與 global-block 相關狀態。
 
 ---
 
-## 14.2 `security_alerts`
+## 14.2 `device_approval_requests`
 
-**類型：Collection**
+**類型：品牌範圍 Collection / Security Workflow**
 
-至少可確認事件：
+用途：
 
 ```text
-new_device_login
+one account + one target device
+→ pending / resolved Device Approval request
 ```
 
-是否建立 alert 由 device auto-trust 與 role 條件共同決定。
-
----
-
-## 14.3 `security_summary`
-
-**類型：Collection**
-
-至少使用 document：
+常見 logical fields：
 
 ```text
-device_alerts
+requestId
+brandId
+accountKey
+role
+accountId / credentialAccountId
+userName
+deviceId / deviceShort
+device / browser / os
+loginLocation
+status
+approvalMode
+selfApprovalAllowed
+hasTrustedApproverDevice
+likelyKnownDevice
+requestedAtText
+lastAttemptAtText
+expiresAtMs / expiresAtText
+resolvedBy / resolvedRole / resolvedAtText
 ```
 
-用於累積／更新待處理裝置安全摘要，例如 pending device count。
+Private verification material is stored beneath the request in a private verification document/subcollection and is not a normal public workflow field.
 
 ---
 
-## 14.4 `system_logs`
+## 14.3 `device_approval_inbox`
 
-**類型：Collection / Immutable-ish Audit Log**
+**類型：品牌範圍 Collection / 每帳號小型 Summary**
 
-App 寫入欄位至少包括：
+Document id:
+
+```text
+{accountKey}
+```
+
+用途：
+
+```text
+small pending count for the signed-in account
+→ Header Badge / Guided Device Approval trigger
+```
+
+目的就是避免只為了知道「是否有待確認」而讀完整 device history。
+
+---
+
+## 14.4 `security_summary`
+
+**類型：品牌範圍 Collection / 小型 Summary Documents**
+
+重要 documents：
+
+```text
+device_approvals
+device_alerts   (legacy / earlier alert summary use)
+```
+
+`device_approvals` is the realtime brand summary used by the v3.5.3 App for highest-manager pending count.
+
+已驗證的 Summary-first 套件新增最高管理者協助欄位：
+
+```text
+adminAssistancePendingCount
+adminAssistancePendingItems
+latestAdminAssistanceRequestId
+latestAdminAssistanceUserName
+latestAdminAssistanceRole
+latestAdminAssistanceDevice
+latestAdminAssistanceAtText
+```
+
+These additional fields are implemented / validated but must not be labeled production-active until `CURRENT_STATE.md` confirms deployment.
+
+---
+
+## 14.5 `security_alerts`
+
+**類型：品牌範圍 Collection / Security Event**
+
+目前已驗證的 Login Security event 類型：
+
+```text
+password_failed_threshold
+device_code_failed_limit
+manager_assistance_required
+self_reported_not_me
+rapid_multi_location_login
+blocked_device_login
+```
+
+Security-alert documents may request Telegram delivery using event metadata such as:
+
+```text
+telegramSecurityType
+notifyTelegram
+telegramDeliveryStatus
+severity
+status
+brandId / brandLabel
+accountKey
+user / role / device / location context
+```
+
+正常 Trusted login 與正常成功 self-verification 不需要建立 Telegram Security Alert。
+
+---
+
+## 14.6 `login_security_state`
+
+**類型：品牌範圍 Collection / Backend-only Security State**
+
+用途：
+
+```text
+password-failure window / counters
+successful-login security observation
+Telegram alert cooldown timestamps
+```
+
+Frontend broad read/write should not be allowed for this collection.
+
+Successful-login location risk logic reuses the already-read `account_devices` profile where possible instead of adding an extra Firestore read solely for location comparison.
+
+---
+
+## 14.7 `global_blocked_devices`
+
+**類型：跨品牌 Security Collection**
+
+用途：
+
+```text
+hard block a device identity across brands
+```
+
+這與 `account_devices` 裡的品牌內 blocked state 刻意分開。
+
+---
+
+## 14.8 `system_logs`
+
+**類型：Collection / 近似不可變更 Audit Log**
+
+App writes fields such as:
 
 ```text
 timestamp
@@ -960,21 +1089,21 @@ create/read  → signedIn
 update/delete → forbidden
 ```
 
-因此若未來要修正 audit log，不能設計成前端直接 update 舊 log。
+Do not design an audit correction that requires clients to rewrite old log entries.
 
 ---
 
-## 14.5 `system_stats`
+## 14.9 `system_stats`
 
 **類型：Collection**
 
-目前登入時會對：
+Login activity can increment:
 
 ```text
 system_stats/{YYYY-MM-DD}
 ```
 
-做 login count increment。
+這是統計資料，不是 Device Approval authority。
 
 ---
 
@@ -1239,6 +1368,27 @@ overdue
 ## 16.14 `telegram_schedule_audits`
 
 排程變更／執行相關 audit。
+
+---
+
+## 16.15 `global_settings/telegram_security_alerts`
+
+**Type: Security Telegram Settings Doc**
+
+此設定與一般營運 Telegram Agent／Alert 設定分離。
+
+常見 logical fields：
+
+```text
+enabled
+chatTargets
+configVersion
+updatedAtText
+```
+
+只有真的有 `security_alerts` 要求 Telegram delivery 時才讀這份 config；正常成功登入不需要每次都讀。
+
+Security delivery is handled by Firestore creation triggers for both the CYJ legacy security-alert path and standard-brand security-alert path.
 
 ---
 

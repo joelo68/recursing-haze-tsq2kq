@@ -1,0 +1,46 @@
+DRCYJ docs 安全完整覆蓋包 — 2026-08-25 18:18 (UTC+8)
+
+用途：
+  以本包的 /docs 完整取代專案原有 /docs，統一 Knowledge Base、移除重複 Source Map、封存舊 release note。
+
+Canonical Documents：
+  AI_START_HERE.md
+  CURRENT_STATE.md
+  README.md
+  ARCHITECTURE.md
+  DEVELOPMENT_GUIDE.md
+  SYSTEM_SOURCE_MAP.md
+  FIREBASE_DATA_MODEL.md
+  DATA_FLOW.md
+  AUTH_AND_SECURITY.md
+  DEPLOYMENT.md
+  DASHBOARD_SUMMARY.md
+  DATA_IDENTITY_RULES.md
+  MAINTENANCE_TOOLS.md
+  TELEGRAM_AGENT.md
+  OVERWRITE_GUIDE.md
+
+Archive：
+  archive/releases/
+    - Device Approval v3.5.0
+    - Device Approval v3.5.1
+    - Device Review v3.5.2
+    - Login Security Telegram v1
+    - Guided Device Approval v3.5.3
+    - Device Approval race-condition hardening
+    - Summary-first highest-manager notice（pending production confirmation）
+  archive/updates/
+    - 2026-08-24 Summary Repair Knowledge Base update
+
+刻意排除：
+  SYSTEM_SOURCE_MAP.md.md
+  原因：與 canonical SYSTEM_SOURCE_MAP.md 重複，不再雙軌維護。
+
+重要狀態：
+  - CURRENT_APP_VERSION canonical current state = 3.5.3。
+  - 舊 autoTrustLimit=2 / initial auto trust 不再作為目前安全架構。
+  - Summary-first 最高管理者通知在本次文件整理時仍記錄為「已完成／已驗證，但待 Production deployment confirmation」。
+  - 文件不保存實際密碼、API Key、Bot Token 或 numeric Telegram chat IDs。
+
+Runtime 影響：
+  本包只有 docs 文件。只覆蓋 /docs 不會改動 React、Functions、Rules 或 SaaS runtime，也不需要部署。

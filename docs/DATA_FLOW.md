@@ -493,26 +493,97 @@ App.handleLogin
 # 23. Device Flow
 
 ```text
-getClientDeviceInfo
+LoginView / App Login
    │
    ▼
-account_devices
+checkDeviceAccess
    │
-   ├─ known trusted
-   ├─ initial auto trust
-   └─ new / suspicious / blocked
+   ├─ application credential verification
+   ├─ security_config
+   ├─ account_devices
+   └─ login location / security observation
    │
-   ├────────► security_alerts
-   └────────► security_summary
+   ▼
+Device decision
+   │
+   ├─ Trusted
+   │    └─ allow
+   │
+   ├─ blocked / global_blocked
+   │    └─ deny + security event（需要時）
+   │
+   └─ untrusted new / review state
+        │
+        ▼
+   device_approval_requests
+        │
+        ├─ device_approval_inbox/{accountKey}
+        └─ security_summary/device_approvals
+                │
+                ▼
+          enforce approval
+                │
+       ┌────────┴────────┐
+       │                 │
+有其他 Trusted       沒有 Trusted
+approver device      approver device
+       │                 │
+selfApprovalAllowed   adminOnly
+       │                 │
+6 位碼 Guided         最高管理者
+Self Approval         人工覆核
+       │                 │
+       └────────┬────────┘
+                ▼
+       reviewDeviceApproval
+                │
+                ▼
+ account_devices / request status / summary 更新
 ```
 
-SystemMonitor：
+Realtime UI 刻意使用小型 summary document／單筆 request listener，不把完整 device history 常駐監聽。
+
+### 最高管理者 Security Action Card — Summary-first 待部署版本
+
+2026-08-25 已完成／已驗證：
 
 ```text
-review / trust / suspicious / block / global block
+security_summary/device_approvals
+  adminAssistancePendingCount
+  adminAssistancePendingItems
+  latestAdminAssistanceRequestId
+  ...
+        │
+        ▼
+最高管理者既有 onSnapshot
+        │
+        ▼
+非阻斷式 Security Action Card
+        │
+        ├─ 稍後處理 → 卡片收起，Header pending 保留
+        └─ 查看並確認 → 打開既有 DeviceApprovalPanel
 ```
 
----
+只有需要最高管理者協助的 request 才進這個 Summary queue，所以判斷是否滑出提醒不再需要額外 query pending collection。
+
+是否已正式部署，以 `CURRENT_STATE.md` 為準。
+
+### Login Security Telegram Side Flow
+
+```text
+Security Event
+   │
+   ▼
+security_alerts
+   │ Firestore onCreate
+   ▼
+telegram_security_alerts config
+   │
+   ▼
+Telegram API
+```
+
+這條流程與 Gemini Telegram Agent 的 question/tool flow 分開，而且不是固定秒數 polling。
 
 # 24. Login Location Flow
 
@@ -584,6 +655,8 @@ readTracker.js
 ---
 
 # 27. Telegram Question Flow
+
+> 本節是 Gemini／Agent 問答路徑。登入安全 Telegram Alert 使用 Device Flow 與 `AUTH_AND_SECURITY.md` 記錄的 event-driven security path，不進入 Agent question/tool pipeline。
 
 ```text
 Telegram message
@@ -920,4 +993,3 @@ daily_reports = 0
 ```
 
 這個安全防護不可取消。
-

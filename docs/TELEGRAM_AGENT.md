@@ -1,6 +1,6 @@
 # TELEGRAM_AGENT.md
 
-> 本文件記錄目前正式 DRCYJ Telegram 營運戰情 Agent、主動預警、排程、Policy、報表快照與改善任務架構。  
+> 本文件記錄 DRCYJ Telegram 營運戰情 Agent、主動預警、排程、Policy、報表快照與改善任務架構，並明確區分獨立的登入安全 Telegram event pipeline。  
 > 不記錄 Bot Token、Gemini API Key 等 secrets。
 
 ---
@@ -877,7 +877,66 @@ Agent 可依 tool sources 顯示資料基礎：
 
 ---
 
+# 43A. Login Security Telegram — 與 Agent 分離
+
+登入安全 Telegram **不是 Gemini Agent tool flow**。
+
+流程：
+
+```text
+Login / Device Security Event
+   │
+   ▼
+functions/deviceApproval.js
+   │ 寫入
+   ▼
+security_alerts
+   │ Firestore onCreate
+   ▼
+functions/index.js Security Alert Trigger
+   │ 只有需要 delivery 時才讀
+   ▼
+global_settings/telegram_security_alerts
+   │
+   ▼
+已授權且已選定的 Telegram 群組
+```
+
+目前已驗證 event type：
+
+```text
+password_failed_threshold
+device_code_failed_limit
+manager_assistance_required
+self_reported_not_me
+rapid_multi_location_login
+blocked_device_login
+```
+
+降噪規則：
+
+```text
+account + event type cooldown
+正常 Trusted login → 不發 Security Telegram
+正常成功 self verification → 不發 Security Telegram
+同國行動網路城市漂移 → 不直接升級為異地登入警示
+```
+
+Read 行為：
+
+- rapid-location 比對可沿用 `checkDeviceAccess` 已讀取的 `account_devices`；
+- 正常成功登入不需要為了 location comparison 再額外 read 一次 `login_security_state`；
+- 只有真的建立需要 Telegram delivery 的 security alert，才讀 Security Telegram config；
+- 沒有固定 Firestore polling loop。
+
+不要只為了格式化登入安全通知，就把 Agent 的 KPI source authority、Gemini prompt 或大量 tool read 接進這條 pipeline。
+
+---
+
 # 44. 修改 Telegram 前的診斷順序
+
+第一步先判斷本次修改屬於「營運／Gemini Agent」或「Login Security Event Alert」；兩者的 source files 與 read-cost profile 不同。
+
 
 遇到回答問題：
 
