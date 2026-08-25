@@ -617,10 +617,10 @@ async function verifySuperAdminActor({ db, brandId, actor }) {
   });
   if (!credential.ok) return { ok: false };
   if (credential.isMasterCredential) {
-    return { ok: true, actorName: String(actor.userName || credential.userName || '最高管理者'), actorRole: 'master' };
+    return { ok: true, actorName: String(actor.userName || credential.userName || '最高管理者'), actorRole: 'master', actorAccountId: String(credential.accountId || accountId), isMasterCredential: true };
   }
   if (String(credential.directorLevel || '') !== 'super_admin') return { ok: false };
-  return { ok: true, actorName: String(credential.userName || actor.userName || accountId), actorRole: 'director' };
+  return { ok: true, actorName: String(credential.userName || actor.userName || accountId), actorRole: 'director', actorAccountId: String(credential.accountId || accountId), isMasterCredential: false };
 }
 
 async function verifyMasterPassword({ db, brandId, password }) {
@@ -1064,6 +1064,16 @@ function createDeviceApprovalFunctions({ admin, db }) {
         if (!adminCheck.ok) return res.status(403).json({ ok: false, message: '此操作僅限最高管理者使用' });
         actorName = adminCheck.actorName;
         actorRole = adminCheck.actorRole;
+
+        // 最高管理者處理「自己的」新裝置時，只要這筆申請允許由既有信任裝置自助確認，
+        // 就不得透過 approve_admin 繞過 6 位確認碼。這項限制必須放在後端，不能只靠前端隱藏按鈕。
+        const actorOwnsRequest =
+          String(requestData.role || '') === 'director' &&
+          sanitizeSecurityKey(adminCheck.actorAccountId || '') === sanitizeSecurityKey(requestData.accountId || '');
+        if (action === 'approve_admin' && actorOwnsRequest && requestData.selfApprovalAllowed !== false) {
+          return res.status(409).json({ ok: false, message: '自己的新裝置請使用原本已信任的裝置輸入 6 位確認碼完成驗證' });
+        }
+
         source = 'super_admin_review';
       }
 

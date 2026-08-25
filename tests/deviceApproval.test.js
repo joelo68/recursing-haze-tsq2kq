@@ -61,6 +61,19 @@ test("manual approval is limited to trusted super-admin or master credential", (
   assert.match(panel, /isSuperAdmin && currentDeviceTrusted/);
 });
 
+
+
+test("super-admin own new device must use the six-digit self-approval flow", () => {
+  assert.doesNotMatch(panel, /const canSelfApprove = !isSuperAdmin && isMyRequest && currentDeviceTrusted/);
+  assert.match(panel, /const canSelfApprove = isMyRequest && currentDeviceTrusted && request\.selfApprovalAllowed !== false/);
+  assert.match(panel, /const canAdminReview = isSuperAdmin && currentDeviceTrusted && \(!isMyRequest \|\| request\.selfApprovalAllowed === false\)/);
+  assert.match(panel, /\{canAdminReview && \(/);
+  assert.match(panel, /runAction\(request, "approve_self"\)/);
+  assert.match(backend, /actorAccountId:\s*String\(credential\.accountId \|\| accountId\)/);
+  assert.match(backend, /action === 'approve_admin' && actorOwnsRequest && requestData\.selfApprovalAllowed !== false/);
+  assert.match(backend, /自己的新裝置請使用原本已信任的裝置輸入 6 位確認碼完成驗證/);
+});
+
 test("backend mirrors current director-level fallback so legacy top executives keep super-admin approval rights", () => {
   assert.match(backend, /function getDefaultDirectorLevel\(name = ''\)/);
   assert.match(backend, /text\.includes\('董事長'\) \|\| text\.includes\('總經理'\)/);
