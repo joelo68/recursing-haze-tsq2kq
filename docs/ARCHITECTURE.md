@@ -2,7 +2,7 @@
 
 > 本文件描述目前正式部署版本的系統架構。  
 > 已整併至 2026-08-25；目前正式部署 source 仍高於本文件。
-> `CURRENT_STATE.md` 專門區分「已正式確認」與「已完成／已驗證但尚待正式部署確認」的 Security 工作。
+> `CURRENT_STATE.md` 專門區分「已正式確認」、「待部署」與「Production 觀察中」的 Security 工作。
 
 # 1. 高階架構
 
@@ -481,11 +481,11 @@ security_summary/device_approvals
 
 目的就是避免為了 Badge／approval 狀態而常駐監聽完整 `account_devices`。
 
-### Summary-first 最高管理者通知（已完成／待正式部署確認）
+### Summary-first 最高管理者通知（Production）
 
-2026-08-25 已驗證版本新增非阻斷式 Security Action Card，並把需要主管協助的摘要直接寫入 `security_summary/device_approvals`，移除「為了判斷要不要跳提醒而再 query 一次 pending collection」的額外讀取。
+2026-08-25 正式版本新增非阻斷式 Security Action Card，並把需要主管協助的摘要直接寫入 `security_summary/device_approvals`，移除「為了判斷要不要跳提醒而再 query 一次 pending collection」的額外讀取。
 
-是否已正式上線，以 `CURRENT_STATE.md` 為準。
+使用者已確認正式部署完成且初步 Production 測試成功；`CURRENT_APP_VERSION` 維持 3.5.3，目前持續觀察可能的 Bug／邊界案例。
 
 # 12. Maintenance
 

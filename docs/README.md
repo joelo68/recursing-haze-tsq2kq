@@ -2,7 +2,7 @@
 
 > Project Knowledge Base 正式索引。  
 > 最後整併更新：2026-08-25（UTC+8）。  
-> 任何情況下，「目前正式部署 source」都高於本文件；`CURRENT_STATE.md` 專門區分「已確認正式上線」與「已完成但尚待正式部署確認」。
+> 任何情況下，「目前正式部署 source」都高於本文件；`CURRENT_STATE.md` 專門區分「已確認正式上線」、「已完成但尚待部署」與「正式上線後觀察中」。
 
 # 1. 正式文件清單
 
@@ -10,7 +10,7 @@
 |---|---|
 | `PROJECT_OPERATING_RULES.md` | 永久不隨版本變動的 AI／工程協作規範 |
 | `AI_START_HERE.md` | 新 AI／新工程師固定接手入口 |
-| `CURRENT_STATE.md` | 目前正式環境狀態＋已完成但待部署項目 |
+| `CURRENT_STATE.md` | 目前正式環境狀態＋已完成／待部署／觀察中項目 |
 | `ARCHITECTURE.md` | 高階系統架構與模組邊界 |
 | `DEVELOPMENT_GUIDE.md` | 修改正式系統時不可破壞的開發規則 |
 | `SYSTEM_SOURCE_MAP.md` | 每個功能實際由哪些 source files 負責 |
@@ -103,12 +103,12 @@ SYSTEM_SOURCE_MAP.md
 
 截至 2026-08-25 整併：
 
-- 使用者提供的目前上線 `App.jsx` 可確認 `CURRENT_APP_VERSION = 3.5.3`。
+- 最近可直接檢視的 Production `App.jsx` snapshot 可確認 `CURRENT_APP_VERSION = 3.5.3`；2026-08-25 晚間部署後版本仍由使用者確認維持 3.5.3，但最新完整 source 尚需在下一次修改前重新取得。
 - 目前上線前端 source 已包含 Guided Trusted-Device self approval。
 - Security Telegram v1 與 Device Approval backend 皆有實作與 regression coverage。
-- 最新 **Summary-first 最高管理者 Security Action Card** 套件目前在文件中標示為「已完成／已驗證，但尚待正式部署確認」。
+- 最新 **Summary-first 最高管理者 Security Action Card** 已於 2026-08-25 完成正式部署，初步 Production 測試成功；`CURRENT_APP_VERSION` 維持 3.5.3，目前進入觀察期。
 
-未先讀 `CURRENT_STATE.md`，不得直接把「已完成程式」寫成「正式環境已啟用」。
+未先讀 `CURRENT_STATE.md`，不得自行推定功能是否仍待部署、已正式上線或正在 Production 觀察中。
 
 # 7. Source of Truth
 

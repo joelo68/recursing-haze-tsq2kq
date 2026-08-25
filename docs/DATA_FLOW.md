@@ -543,9 +543,9 @@ Self Approval         人工覆核
 
 Realtime UI 刻意使用小型 summary document／單筆 request listener，不把完整 device history 常駐監聽。
 
-### 最高管理者 Security Action Card — Summary-first 待部署版本
+### 最高管理者 Security Action Card — Summary-first 正式流程
 
-2026-08-25 已完成／已驗證：
+2026-08-25 已完成、驗證並正式部署：
 
 ```text
 security_summary/device_approvals
@@ -566,7 +566,7 @@ security_summary/device_approvals
 
 只有需要最高管理者協助的 request 才進這個 Summary queue，所以判斷是否滑出提醒不再需要額外 query pending collection。
 
-是否已正式部署，以 `CURRENT_STATE.md` 為準。
+使用者已確認正式部署完成且初步 Production 測試成功；後續是否有觀察中的 Bug／邊界案例，以 `CURRENT_STATE.md` 為準。
 
 ### Login Security Telegram Side Flow
 

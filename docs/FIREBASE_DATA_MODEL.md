@@ -974,7 +974,7 @@ device_alerts   (legacy / earlier alert summary use)
 
 `device_approvals` is the realtime brand summary used by the v3.5.3 App for highest-manager pending count.
 
-已驗證的 Summary-first 套件新增最高管理者協助欄位：
+目前正式 Summary-first 套件使用最高管理者協助欄位：
 
 ```text
 adminAssistancePendingCount
@@ -986,7 +986,7 @@ latestAdminAssistanceDevice
 latestAdminAssistanceAtText
 ```
 
-These additional fields are implemented / validated but must not be labeled production-active until `CURRENT_STATE.md` confirms deployment.
+上述欄位已於 2026-08-25 隨 Summary-first 最高管理者通知正式部署，初步 Production 測試成功。後續觀察狀態與任何 schema 變更仍必須以 `CURRENT_STATE.md` 與最新正式 source 為準。
 
 ---
 

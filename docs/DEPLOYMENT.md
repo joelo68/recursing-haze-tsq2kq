@@ -274,11 +274,11 @@ firebase deploy --only hosting
 
 因此除非先確認目前 `package.json` 的 `deploy` script 已改成 Firebase Hosting，否則不能直接把「不用 Hosting」等同於「不用 npm run deploy」。
 
-## Summary-first 最高管理者提醒待部署版本
+## Summary-first 最高管理者提醒 — 2026-08-25 已部署基線
 
-2026-08-25 已驗證版本同時修改 Frontend 與 `functions/deviceApproval.js` 的 pending lifecycle。
+2026-08-25 版本同時修改 Frontend 與 `functions/deviceApproval.js` 的 pending lifecycle，使用者已確認完成正式部署且初步 Production 測試成功。`CURRENT_APP_VERSION` 維持 3.5.3。
 
-正式 repository 建議先跑：
+未來若再次修改這條流程，正式 repository 仍應先跑：
 
 ```bash
 node --check functions/deviceApproval.js
@@ -286,13 +286,13 @@ node --test tests/deviceApproval.test.js tests/superAdminDeviceNotice.test.js
 npm run build
 ```
 
-再先部署會建立／結束 pending request 的 Functions：
+若未來再次變更相同 frontend/backend contract，仍建議先部署會建立／結束 pending request 的 Functions：
 
 ```bash
 firebase deploy --only "functions:checkDeviceAccess,functions:reviewDeviceApproval,functions:manageAccountDevice,functions:emergencyUnblockDevice,functions:cleanupExpiredDeviceApprovals"
 ```
 
-最後才部署實際正式使用的 Frontend target。
+再部署實際正式使用的 Frontend target。
 
 如果正式前端是 Firebase Hosting：
 
@@ -302,7 +302,7 @@ firebase deploy --only hosting
 
 如果正式前端是 GitHub Pages，則使用已確認的 root package deploy script。
 
-本次 Summary-first 欄位本身沒有要求 Rules 變更；只有 `firestore.rules` 實際有改時才部署 Rules。
+2026-08-25 這次 Summary-first 欄位本身沒有要求 Rules 變更。未來也只有 `firestore.rules` 實際有改時才部署 Rules；不得因為 Security 功能相關就機械式重部署 Rules。
 
 # 11. PWA 版本注意事項
 

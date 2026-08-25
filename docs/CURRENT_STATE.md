@@ -2,13 +2,13 @@
 
 > 用途：記錄「目前正式環境已確認到哪個狀態」。這不是 CHANGELOG。  
 > 優先順序：使用者提供的目前正式部署 source > 本檔案 > 其他 Knowledge Base 文件。  
-> 最後整併更新：**2026-08-25 18:10（UTC+8）**。
+> 最後整併更新：**2026-08-25 22:17（UTC+8）**。
 
 # 1. Production Source Snapshot
 
-## Frontend — 已確認目前上線
+## Frontend — Production 狀態與最近可直接檢視的 source snapshot
 
-使用者於 2026-08-25 明確提供兩支「目前上線」檔案：
+使用者於 2026-08-25 稍早曾明確提供兩支當時「目前上線」檔案：
 
 ```text
 src/App.jsx
@@ -18,7 +18,7 @@ src/components/DeviceApprovalPanel.jsx
 → DeviceApprovalPanel(5).jsx
 ```
 
-目前 `App.jsx` 可直接確認：
+該批 `App.jsx` 可直接確認：
 
 ```text
 Framework: React + Vite
@@ -26,21 +26,33 @@ CURRENT_APP_VERSION = 3.5.3
 Firebase project endpoint: cyjsituation-analysis
 ```
 
-因此 App／Header／Guided Device Approval 的目前正式前端行為，以這兩支 source 為準。
+2026-08-25 晚間，使用者已在上述正式基線與 race-condition backend 基礎上完成 Summary-first 最高管理者通知整合、測試與正式部署；`CURRENT_APP_VERSION` 仍維持 3.5.3。
+
+因此：
+
+```text
+目前 Production 功能狀態 → 可由使用者部署／runtime 確認支持
+最近可直接檢視的 source snapshot → 上述兩支部署前正式檔案
+最新部署後完整 source snapshot → 尚未重新附回本對話
+```
+
+未來再修改這條 Security 流程前，必須重新取得部署後最新正式 source；不得把上述兩支舊 snapshot 直接當成目前最新可修改版本。
 
 ## Backend — 正式部署確認邊界
 
-本次整理文件時，沒有再由使用者同時提供「目前實際部署中的 `functions/deviceApproval.js`」作為最新 Production snapshot。
+2026-08-25 晚間，使用者已明確確認最新 Summary-first 最高管理者 Security Action Card 套件已完成正式發布部署，且初步 Production 測試成功。該套件整合上一輪已完成 race-condition hardening 的 Device Approval backend，`CURRENT_APP_VERSION` 維持 3.5.3。
 
-因此後續 Backend 狀態必須分成：
+目前本 Knowledge Base 可把此功能標記為：
 
 ```text
-已由 Production source／使用者實測確認
-vs
-程式已完成＋Regression 已通過，但尚待正式部署確認
+IMPLEMENTED
+VALIDATED
+DEPLOYED
+PRODUCTION CONFIRMED（初步）
+OBSERVATION（持續觀察可能 Bug）
 ```
 
-不可把後者默認寫成已上線。
+但本輪部署完成後的最新 `functions/deviceApproval.js`／`App.jsx`／`DeviceApprovalPanel.jsx` 尚未重新作為 source snapshot 附回本對話，因此未來若要再次修改相關功能，仍必須重新取得「目前正式上線 source」，不得直接拿部署前附件修改。
 
 # 2. 目前正式前端 Security State
 
@@ -125,7 +137,7 @@ Security Telegram 是事件驅動，不是固定週期輪詢 Firestore。
 
 此功能先前已在專案工作流程中完成實際推播測試；未來只要再次修改相關 Functions／Rules／前端設定，仍需重新做部署後驗證。
 
-# 6. 已完成且 Regression 通過，但尚待正式部署確認
+# 6. Summary-first 最高管理者 Security Action Card — 已正式部署
 
 最新整合套件：
 
@@ -133,7 +145,7 @@ Security Telegram 是事件驅動，不是固定週期輪詢 Firestore。
 summary-first-super-admin-notice-20260825
 ```
 
-App version 維持 3.5.3，新增「最高管理者 admin-only first-device approval」的非阻斷式 Security Action Card。
+App version 維持 3.5.3，正式啟用「最高管理者 admin-only first-device approval」的非阻斷式 Security Action Card。
 
 ## Summary-first 設計
 
@@ -189,7 +201,18 @@ App.jsx JSX parser diagnostics：0
 DeviceApprovalPanel.jsx JSX parser diagnostics：0
 ```
 
-**正式部署與 runtime 測試完成前，不得把本章移到 Production-confirmed。**
+## Production Confirmation
+
+2026-08-25 晚間使用者已確認：
+
+```text
+正式發布部署：完成
+初步 Production 測試：成功
+CURRENT_APP_VERSION：3.5.3（未提高）
+目前狀態：持續觀察是否出現 Bug／邊界案例
+```
+
+因此本功能已可標記為 `DEPLOYED` 與初步 `PRODUCTION CONFIRMED`；後續若觀察到異常，應以最新正式 source 重新診斷，不回退使用本次部署前附件。
 
 # 7. Dashboard / Summary State
 
@@ -234,19 +257,22 @@ firebase deploy --only hosting
 
 Device Security 修改應依實際改動範圍，只部署必要 Functions／Hosting／Rules。詳細見 `DEPLOYMENT.md`。
 
-# 10. 目前待完成的 Production 動作
+# 10. 目前 Production 觀察事項
 
-在把 Summary-first 最高管理者提醒寫成「已上線」以前，應在正式 repository 執行：
+Summary-first 最高管理者提醒已完成正式部署與初步 Production 測試，目前不再有「待部署」動作。
 
-```bash
-node --check functions/deviceApproval.js
-node --test tests/deviceApproval.test.js tests/superAdminDeviceNotice.test.js
-npm run build
+後續觀察重點：
+
+```text
+Security Action Card 是否只在 admin assistance pending 時出現
+「稍後處理」後 Header pending 是否仍保留
+request resolved 後 Card／Summary 是否正確清除
+多位最高管理者同時操作時是否維持 first-resolver-wins
+是否出現重複通知、殘留 pending 或錯誤成功狀態
+Firestore reads 是否維持 Summary-first 設計，沒有重新引入 pending collection 常駐 query
 ```
 
-然後先部署會建立／結束 pending request 的 Device Approval Functions，再部署會讀取新 summary 欄位的前端。
-
-部署後實測確認正常，再更新本檔，把該功能移入 Production-confirmed。
+若後續要修正任何觀察到的 Bug，開工前必須重新取得部署後的最新正式 `App.jsx`、`DeviceApprovalPanel.jsx`、`functions/deviceApproval.js`，以及實際受影響的其他 source。
 
 # 11. 本次文件整理已完成的清理
 

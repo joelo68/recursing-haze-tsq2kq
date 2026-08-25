@@ -1,7 +1,7 @@
 # SYSTEM_SOURCE_MAP.md
 
 > 狀態：Project Knowledge Base / Source Map v0.1  
-> 已整併至 2026-08-25。目前正式部署 source 仍是最高依據；`CURRENT_STATE.md` 會區分「已上線」與「已驗證待部署」。  
+> 已整併至 2026-08-25。目前正式部署 source 仍是最高依據；`CURRENT_STATE.md` 會區分「已上線」、「已驗證待部署」與「Production 觀察中」。  
 > 禁止以舊對話、舊版檔案、AI 記憶或未提供的檔案補足事實。  
 > 無法由目前正式程式確認的內容，必須標記為「未由目前正式來源確認」。
 
@@ -648,14 +648,14 @@ Firestore Rules 對 `management_delegations` 有獨立 schema validation，
 - Guided Trusted-device 6 位碼 self approval
 - 最高管理者人工覆核
 - Backend actor re-verification
-- 多最高管理者同時處理 request 的 race hardening（最新待部署 Backend）
+- 多最高管理者同時處理 request 的 race hardening（已正式部署）
 - login security event／cooldown state
 - Security Telegram delivery trigger
 - system audit logs
 
 `LoginCounter.jsx` 只負責授權名單同步狀態與人數呈現，不是 authentication engine。
 
-最新 Summary-first 主管通知是否已正式部署，不可從 Source Map 自行推定，必須讀 `CURRENT_STATE.md`。
+Summary-first 主管通知已由使用者確認於 2026-08-25 正式部署、初步 Production 測試成功；後續最新觀察狀態仍必須讀 `CURRENT_STATE.md`。
 
 # 15. Maintenance / Data Governance
 
