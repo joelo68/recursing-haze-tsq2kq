@@ -1450,11 +1450,11 @@ therapist_daily_reports
 
 ---
 
-# 19. Store Lifecycle v1 — Batch 1 Implementation Package（NOT DEPLOYED）
+# 19. Store Lifecycle v1 — Batch 1 Production Foundation / Batch 1.1 Boundary Correction
 
-> 2026-08-27 Batch 1 已完成程式實作與本地 regression 驗證；本節描述「待部署套件」的 runtime contract。正式 Production 是否啟用仍以 `CURRENT_STATE.md` 與部署確認為準。
+> 2026-08-27：Batch 1 Store Lifecycle Foundation 已完成部署與正式操作確認。Batch 1.1「Existing Store Lifecycle Boundary Fix」已完成 source implementation / isolated regression，但在實際 Functions + Frontend 部署及 production confirmation 前，不得標記為 production-active。
 
-Store Lifecycle 是獨立於 `org_structure` 的品牌層級 Master，用來保存正式門市 KPI eligibility 邊界；Batch 1 尚未讓 Dashboard / Ranking / Annual / Regional / Projection / Telegram consumer 讀取它。
+Store Lifecycle 是獨立於 `org_structure` 的品牌層級 Master，用來保存正式門市 KPI eligibility 與實際營運日期邊界；目前 Dashboard / Ranking / Annual / Regional / Projection / Telegram consumer 仍未切換讀取它。
 
 Physical path：
 
@@ -1512,6 +1512,7 @@ closeDate
 entryStatus
   INCOMPLETE
   COMPLETE
+  INVALID
 
 revision
 createdAtText
@@ -1530,6 +1531,42 @@ Month: YYYY-MM
 Date:  YYYY-MM-DD
 Business timezone: Asia/Taipei
 ```
+
+### Lifecycle boundary semantics
+
+Batch 1.1 將兩個時間 authority 明確分開：
+
+```text
+openDate
+= 門市真實開始營運日期
+
+firstEligibleMonth
+= 本 SaaS 正式開始把該門市納入 KPI cohort 的月份
+```
+
+因此既有門市允許：
+
+```text
+month(openDate) < firstEligibleMonth
+```
+
+但不得出現尚未開店就先納入 KPI：
+
+```text
+month(openDate) > firstEligibleMonth  => INVALID
+```
+
+新開門市通常 `month(openDate) == firstEligibleMonth`。永久結束仍維持 `closeDate` 必須落在 `lastEligibleMonth`，且最後月份仍 eligible。
+
+未來 Daily expected-report resolver 必須同時套用 monthly eligibility 與實際日期 boundary：
+
+```text
+monthlyEligible(date.yearMonth)
+AND date >= openDate
+AND (closeDate is null OR date <= closeDate)
+```
+
+因此真實 `openDate` 早於 SaaS 起算月，不會讓 `firstEligibleMonth` 以前的歷史日期變成漏報。
 
 Store Identity：Lifecycle 延續既有 canonical Store Identity；例如 CYJ `新店 / CYJ新店 / CYJ新店店 / DRCYJ新店店` 均歸一為：
 
@@ -1556,4 +1593,6 @@ datasetStatus READY
 != KPI consumer cutover
 ```
 
-Batch 1 不修改任何既有 Raw、Target、Summary、Queue 或 org_structure 資料。Consumer 切換屬後續 Batch。
+Batch 1 / 1.1 不修改任何既有 Raw、Target、Summary、Queue 或 `org_structure` 資料。Boundary Fix 只修正 Lifecycle validation / derived `entryStatus` 語意；Consumer 切換仍屬後續 Batch。
+
+`entryStatus` 是由 Lifecycle 欄位與當前規則衍生的狀態，不應被當成獨立人工 authority；讀取 normalization 應依當前規則重新計算，避免舊版 validation 留下過時的 `INVALID` / `COMPLETE` 狀態。

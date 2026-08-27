@@ -289,7 +289,7 @@ CYJ新店店_2026_M
 
 ---
 
-# Store Lifecycle Identity Extension — Batch 1（NOT DEPLOYED）
+# Store Lifecycle Identity Extension — Batch 1（PRODUCTION FOUNDATION）
 
 Store Lifecycle 不建立新的 Store Identity 系統；它必須沿用本文件既有 canonical store contract。
 
@@ -317,4 +317,6 @@ DRCYJ新店店
 
 `store_lifecycle` 若遇到未知品牌 ID 必須拒絕操作，不得把未知品牌 fallback 到 CYJ；這是品牌隔離的一部分。
 
-Batch 1 尚未把 Store Lifecycle 接到 KPI consumers，因此新增 Master 不會改寫既有 Raw / Target / Summary / Ranking / Annual 資料。
+Batch 1 已建立並正式確認 Lifecycle Master / writer，但尚未把 Store Lifecycle 接到 KPI consumers，因此新增 Master 不會改寫既有 Raw / Target / Summary / Ranking / Annual 資料。
+
+Batch 1.1 的 Existing Store Boundary Fix 只調整 `openDate` 與 `firstEligibleMonth` 的時間語意與 validation，**不修改 Store Identity**：`brandId + coreStoreName` namespace、canonical name、legacy alias、Firestore physical path 與跨品牌拒寫規則全部維持不變。
