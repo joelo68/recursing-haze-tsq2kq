@@ -7,8 +7,10 @@ import {
   Loader2,
   RefreshCw,
   Save,
+  Search,
   ShieldCheck,
   Store,
+  KeyRound,
   X,
 } from "lucide-react";
 import { doc, getDoc } from "firebase/firestore";
@@ -70,8 +72,11 @@ const StoreLifecycleManager = ({
   const [selectedKey, setSelectedKey] = useState("");
   const [draft, setDraft] = useState(() => createEmptyEntry("", brandId));
   const [customStoreName, setCustomStoreName] = useState("");
+  const [storeSearch, setStoreSearch] = useState("");
+  const [storeFilter, setStoreFilter] = useState("all");
   const [exemptMonthInput, setExemptMonthInput] = useState("");
   const [credentialPassword, setCredentialPassword] = useState("");
+  const [credentialDialog, setCredentialDialog] = useState(null);
   const [saving, setSaving] = useState(false);
   const [statusChanging, setStatusChanging] = useState(false);
   const loadSequenceRef = useRef(0);
@@ -111,8 +116,11 @@ const StoreLifecycleManager = ({
     setSelectedKey("");
     setDraft(createEmptyEntry("", brandId));
     setCustomStoreName("");
+    setStoreSearch("");
+    setStoreFilter("all");
     setExemptMonthInput("");
     setCredentialPassword("");
+    setCredentialDialog(null);
     loadMaster();
   }, [brandId, loadMaster]);
 
@@ -150,6 +158,33 @@ const StoreLifecycleManager = ({
     return [...map.values()].sort((a, b) => String(a.canonicalStoreName || a.key).localeCompare(String(b.canonicalStoreName || b.key), "zh-Hant", { numeric: true, sensitivity: "base" }));
   }, [brandId, master.stores, orgStoreNames]);
 
+  const lifecycleRows = useMemo(() => allStores.map((row) => {
+    const status = row.entry?.entryStatus || "INCOMPLETE";
+    return { ...row, lifecycleStatus: status };
+  }), [allStores]);
+
+  const storeCounts = useMemo(() => lifecycleRows.reduce((counts, row) => {
+    counts.all += 1;
+    if (row.lifecycleStatus === "COMPLETE") counts.complete += 1;
+    else if (row.lifecycleStatus === "INVALID") counts.invalid += 1;
+    else counts.incomplete += 1;
+    return counts;
+  }, { all: 0, incomplete: 0, complete: 0, invalid: 0 }), [lifecycleRows]);
+
+  const filteredStores = useMemo(() => {
+    const keyword = String(storeSearch || "").trim().toLocaleLowerCase("zh-Hant");
+    return lifecycleRows.filter((row) => {
+      const statusMatch =
+        storeFilter === "all"
+        || (storeFilter === "complete" && row.lifecycleStatus === "COMPLETE")
+        || (storeFilter === "invalid" && row.lifecycleStatus === "INVALID")
+        || (storeFilter === "incomplete" && !["COMPLETE", "INVALID"].includes(row.lifecycleStatus));
+      if (!statusMatch) return false;
+      if (!keyword) return true;
+      return `${row.canonicalStoreName || ""} ${row.key || ""}`.toLocaleLowerCase("zh-Hant").includes(keyword);
+    });
+  }, [lifecycleRows, storeFilter, storeSearch]);
+
   const selectedRow = useMemo(() => allStores.find((row) => row.key === selectedKey) || null, [allStores, selectedKey]);
 
   const selectStore = useCallback((row) => {
@@ -161,6 +196,25 @@ const StoreLifecycleManager = ({
     setDraft(next);
     setExemptMonthInput("");
   }, [brandId]);
+
+  const selectNextIncompleteStore = useCallback(() => {
+    const pendingRows = lifecycleRows.filter((row) => !["COMPLETE", "INVALID"].includes(row.lifecycleStatus));
+    if (pendingRows.length === 0) {
+      notify("目前沒有待補資料的門市", "success");
+      return;
+    }
+    const currentIndex = pendingRows.findIndex((row) => row.key === selectedKey);
+    const nextRow = pendingRows[currentIndex >= 0 ? (currentIndex + 1) % pendingRows.length : 0];
+    setStoreFilter("incomplete");
+    setStoreSearch("");
+    selectStore(nextRow);
+  }, [lifecycleRows, notify, selectStore, selectedKey]);
+
+  const closeCredentialDialog = useCallback(() => {
+    if (saving || statusChanging) return;
+    setCredentialPassword("");
+    setCredentialDialog(null);
+  }, [saving, statusChanging]);
 
   const addCustomStore = () => {
     if (!lifecycleStoreBrandMatches(customStoreName, brandId)) {
@@ -234,29 +288,14 @@ const StoreLifecycleManager = ({
     return result;
   }, [brandId, currentDeviceTrust?.deviceId, currentUser]);
 
-  const handleSave = async () => {
-    if (!draft?.storeKey && !draft?.canonicalStoreName) {
-      notify("請先選擇門市", "error");
-      return;
-    }
-    if (currentDeviceTrust?.status !== "trusted") {
-      notify("請改用已信任的裝置修改門市生命週期", "error");
-      return;
-    }
-    if (!credentialPassword.trim()) {
-      notify("請輸入目前最高管理者密碼完成本次確認", "error");
-      return;
-    }
-
+  const performSave = async (password) => {
     const check = validateLifecycleEntryDraft(draft);
     if (!check.valid) {
       notify(check.errors[0] || "門市生命週期資料格式有誤", "error");
-      return;
+      return false;
     }
 
     setSaving(true);
-    const password = credentialPassword;
-    setCredentialPassword("");
     try {
       const result = await callLifecycleEndpoint({
         action: "upsert_store",
@@ -270,12 +309,13 @@ const StoreLifecycleManager = ({
           exemptMonths: check.normalized.exemptMonths,
         },
       }, password);
-      if (activeBrandRef.current !== brandId) return;
+      if (activeBrandRef.current !== brandId) return false;
       notify(`${result?.entry?.canonicalStoreName || draft.canonicalStoreName} 生命週期已儲存`, "success");
       await loadMaster({ silent: true });
       const nextEntry = normalizeLifecycleEntry(result?.entry || {}, draft.canonicalStoreName, brandId);
       setSelectedKey(nextEntry.storeKey);
       setDraft(nextEntry);
+      return true;
     } catch (error) {
       if (error?.status === 409) {
         notify(error.message || "資料已被其他管理者更新，請重新載入", "error");
@@ -285,44 +325,90 @@ const StoreLifecycleManager = ({
       } else {
         notify(error.message || "門市生命週期儲存失敗", "error");
       }
+      return false;
     } finally {
       setSaving(false);
     }
   };
 
-  const handleDatasetStatus = async (nextStatus) => {
+  const handleSave = () => {
+    if (!draft?.storeKey && !draft?.canonicalStoreName) {
+      notify("請先選擇門市", "error");
+      return;
+    }
     if (currentDeviceTrust?.status !== "trusted") {
-      notify("請改用已信任的裝置變更資料集狀態", "error");
+      notify("請改用已信任的裝置修改門市生命週期", "error");
       return;
     }
-    if (!credentialPassword.trim()) {
-      notify("請輸入目前最高管理者密碼完成本次確認", "error");
-      return;
-    }
-    const message = nextStatus === "READY"
-      ? "確定要標記為「已完成確認」嗎？系統會再次檢查目前組織架構中的所有門市是否都有完整生命週期。Batch 1 尚不會切換任何 KPI 計算。"
-      : "確定要把生命週期資料集改回「建置中」嗎？Batch 1 目前仍不會影響任何 KPI 計算。";
-    if (!window.confirm(message)) return;
 
-    setStatusChanging(true);
-    const password = credentialPassword;
+    const check = validateLifecycleEntryDraft(draft);
+    if (!check.valid) {
+      notify(check.errors[0] || "門市生命週期資料格式有誤", "error");
+      return;
+    }
+
     setCredentialPassword("");
+    setCredentialDialog({
+      type: "save",
+      title: "確認儲存門市生命週期",
+      description: `即將儲存「${draft.canonicalStoreName || selectedRow?.canonicalStoreName || selectedKey}」的生命週期資料。`,
+    });
+  };
+
+  const performDatasetStatus = async (nextStatus, password) => {
+    setStatusChanging(true);
     try {
       const result = await callLifecycleEndpoint({
         action: "set_dataset_status",
         datasetStatus: nextStatus,
         expectedMasterRevision: Number(master.revision || 0),
       }, password);
-      if (activeBrandRef.current !== brandId) return;
+      if (activeBrandRef.current !== brandId) return false;
       notify(nextStatus === "READY" ? "門市生命週期資料已完成確認" : "門市生命週期資料已改回建置中", "success");
       setMaster((prev) => ({ ...prev, datasetStatus: result.datasetStatus, revision: result.masterRevision }));
       await loadMaster({ silent: true });
+      return true;
     } catch (error) {
       if (error?.status === 409) await loadMaster({ silent: true });
       notify(error.message || "資料集狀態更新失敗", "error");
+      return false;
     } finally {
       setStatusChanging(false);
     }
+  };
+
+  const handleDatasetStatus = (nextStatus) => {
+    if (currentDeviceTrust?.status !== "trusted") {
+      notify("請改用已信任的裝置變更資料集狀態", "error");
+      return;
+    }
+
+    setCredentialPassword("");
+    setCredentialDialog({
+      type: "dataset",
+      nextStatus,
+      title: nextStatus === "READY" ? "完成整個品牌資料確認" : "改回建置中",
+      description: nextStatus === "READY"
+        ? "系統會再次檢查目前組織架構中的所有門市是否都有完整生命週期。Batch 1 仍不會切換任何 KPI 計算。"
+        : "將資料集改回建置中不會刪除已建立的門市生命週期，也不會影響目前 KPI。",
+    });
+  };
+
+  const confirmCredentialAction = async () => {
+    const password = String(credentialPassword || "").trim();
+    if (!password) {
+      notify("請輸入目前最高管理者密碼", "error");
+      return;
+    }
+    const dialog = credentialDialog;
+    if (!dialog) return;
+
+    const ok = dialog.type === "save"
+      ? await performSave(password)
+      : await performDatasetStatus(dialog.nextStatus, password);
+
+    setCredentialPassword("");
+    if (ok) setCredentialDialog(null);
   };
 
   const completedCount = Object.values(master.stores || {}).filter((entry) => entry?.entryStatus === "COMPLETE").length;
@@ -382,15 +468,8 @@ const StoreLifecycleManager = ({
               <div className="flex-1 min-w-0">
                 <div className="font-black text-[#4D4338]">高風險資料寫入保護</div>
                 <p className="mt-1 text-xs font-bold leading-5 text-[#8C8176]">每次儲存都會由 Backend 重新驗證 Firebase 登入、目前可信裝置與最高管理者密碼。密碼只用於本次驗證，不會寫入 Lifecycle、log 或瀏覽器儲存空間。</p>
-                <div className="mt-3 flex flex-col gap-2 md:flex-row md:items-center">
-                  <input
-                    type="password"
-                    value={credentialPassword}
-                    onChange={(event) => setCredentialPassword(event.target.value)}
-                    placeholder="輸入目前最高管理者密碼"
-                    className="min-w-0 flex-1 rounded-xl border border-[#E8DDD0] bg-white px-3 py-2.5 text-sm font-bold text-[#5A5047] outline-none focus:border-amber-300"
-                  />
-                  <div className={`inline-flex items-center justify-center rounded-xl border px-3 py-2.5 text-xs font-black ${currentDeviceTrust?.status === "trusted" ? "border-emerald-100 bg-emerald-50 text-emerald-700" : "border-rose-100 bg-rose-50 text-rose-700"}`}>
+                <div className="mt-3 flex flex-col gap-2 md:flex-row md:items-center md:justify-between">
+                  <div className={`inline-flex w-fit items-center justify-center rounded-xl border px-3 py-2.5 text-xs font-black ${currentDeviceTrust?.status === "trusted" ? "border-emerald-100 bg-emerald-50 text-emerald-700" : "border-rose-100 bg-rose-50 text-rose-700"}`}>
                     {currentDeviceTrust?.status === "trusted" ? "🛡 目前裝置已信任" : "⚠ 請改用已信任裝置"}
                   </div>
                   <button
@@ -403,6 +482,9 @@ const StoreLifecycleManager = ({
                     {master.datasetStatus === "READY" ? "改回建置中" : "完成資料確認"}
                   </button>
                 </div>
+                <p className="mt-2 text-[11px] font-bold leading-5 text-[#9A8E82]">
+                  不需要先在頁面上尋找密碼欄位；按「儲存這間門市」或「完成資料確認」後，系統會直接跳出最高管理者確認視窗。
+                </p>
               </div>
             </div>
           </div>
@@ -412,6 +494,60 @@ const StoreLifecycleManager = ({
       <div className="grid grid-cols-1 gap-6 xl:grid-cols-[minmax(280px,0.8fr)_minmax(0,1.5fr)]">
         <Card title="門市清單">
           <div className="space-y-3">
+            <div className="rounded-2xl border border-[#EFE7DA] bg-[#FFFCF8] p-3">
+              <div className="flex flex-col gap-2 sm:flex-row">
+                <div className="relative min-w-0 flex-1">
+                  <Search size={16} className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-[#B0A59A]" />
+                  <input
+                    type="search"
+                    value={storeSearch}
+                    onChange={(event) => setStoreSearch(event.target.value)}
+                    placeholder="搜尋門市，例如：八德、新店"
+                    className="w-full rounded-xl border border-[#E8DDD0] bg-white py-2.5 pl-9 pr-9 text-sm font-bold text-[#5A5047] outline-none focus:border-amber-300"
+                  />
+                  {storeSearch && (
+                    <button
+                      type="button"
+                      onClick={() => setStoreSearch("")}
+                      className="absolute right-2 top-1/2 -translate-y-1/2 rounded-lg p-1 text-[#B0A59A] hover:bg-[#FAF7F1] hover:text-[#6E6257]"
+                      title="清除搜尋"
+                    >
+                      <X size={14} />
+                    </button>
+                  )}
+                </div>
+                <button
+                  type="button"
+                  onClick={selectNextIncompleteStore}
+                  className="shrink-0 rounded-xl border border-[#E8C77A] bg-[#FFF7DF] px-3 py-2.5 text-xs font-black text-[#6A4D26]"
+                >
+                  下一間待補
+                </button>
+              </div>
+
+              <div className="mt-3 flex flex-wrap gap-2">
+                {[
+                  ["all", "全部", storeCounts.all],
+                  ["incomplete", "待補", storeCounts.incomplete],
+                  ["complete", "完整", storeCounts.complete],
+                  ["invalid", "有誤", storeCounts.invalid],
+                ].map(([value, label, count]) => (
+                  <button
+                    type="button"
+                    key={value}
+                    onClick={() => setStoreFilter(value)}
+                    className={`rounded-full border px-3 py-1.5 text-[11px] font-black transition-all ${
+                      storeFilter === value
+                        ? "border-[#E8C77A] bg-[#FFF4D8] text-[#7A5727]"
+                        : "border-[#E8DDD0] bg-white text-[#8C8176] hover:bg-[#FAF7F1]"
+                    }`}
+                  >
+                    {label} {count}
+                  </button>
+                ))}
+              </div>
+            </div>
+
             <div className="flex gap-2">
               <input
                 type="text"
@@ -424,32 +560,50 @@ const StoreLifecycleManager = ({
             </div>
             <p className="text-[11px] font-bold leading-5 text-[#A69C91]">加入歷史門市只建立 Lifecycle 草稿，不會新增 org_structure、帳號、日報或 KPI 資料。</p>
 
-            <div className="max-h-[520px] space-y-2 overflow-y-auto pr-1">
-              {allStores.map((row) => {
-                const entry = row.entry;
-                const meta = getStatusMeta(entry?.entryStatus || "INCOMPLETE");
-                return (
-                  <button
-                    type="button"
-                    key={row.key}
-                    onClick={() => selectStore(row)}
-                    className={`w-full rounded-2xl border p-3 text-left transition-all ${selectedKey === row.key ? "border-[#E8C77A] bg-[#FFF8E7] shadow-sm" : "border-[#EFE7DA] bg-white hover:bg-[#FFFCF7]"}`}
-                  >
-                    <div className="flex items-start justify-between gap-2">
-                      <div className="min-w-0">
-                        <div className="flex items-center gap-2"><Store size={15} className="shrink-0 text-[#B7863D]" /><span className="truncate text-sm font-black text-[#4D4338]">{row.canonicalStoreName || row.key}</span></div>
-                        <div className="mt-1 text-[10px] font-bold text-[#A69C91]">{row.source === "lifecycle" ? "歷史 Lifecycle" : row.source === "org+lifecycle" ? "目前組織＋Lifecycle" : "目前組織・尚未建立"}</div>
+            <div className="max-h-[470px] overflow-y-auto pr-1">
+              <div className="grid grid-cols-2 gap-2">
+                {filteredStores.map((row) => {
+                  const meta = getStatusMeta(row.lifecycleStatus);
+                  return (
+                    <button
+                      type="button"
+                      key={row.key}
+                      onClick={() => selectStore(row)}
+                      className={`min-w-0 rounded-xl border px-3 py-2.5 text-left transition-all ${
+                        selectedKey === row.key
+                          ? "border-[#E8C77A] bg-[#FFF8E7] shadow-sm ring-1 ring-[#F3DFB8]"
+                          : "border-[#EFE7DA] bg-white hover:bg-[#FFFCF7]"
+                      }`}
+                    >
+                      <div className="flex min-w-0 items-center gap-2">
+                        <Store size={14} className="shrink-0 text-[#B7863D]" />
+                        <span className="min-w-0 flex-1 truncate text-xs font-black text-[#4D4338]">{row.canonicalStoreName || row.key}</span>
+                        <span
+                          className={`h-2 w-2 shrink-0 rounded-full ${
+                            row.lifecycleStatus === "COMPLETE"
+                              ? "bg-emerald-400"
+                              : row.lifecycleStatus === "INVALID"
+                                ? "bg-rose-400"
+                                : "bg-amber-400"
+                          }`}
+                          title={meta.label}
+                        />
                       </div>
-                      <span className={`shrink-0 rounded-full border px-2 py-0.5 text-[10px] font-black ${meta.className}`}>{meta.label}</span>
-                    </div>
-                  </button>
-                );
-              })}
-              {allStores.length === 0 && <div className="rounded-2xl border-2 border-dashed border-[#EDE2D4] py-10 text-center text-sm font-bold text-[#A69C91]">目前沒有可顯示的門市</div>}
+                      <div className="mt-1 truncate text-[9px] font-bold text-[#B0A59A]">
+                        {row.source === "lifecycle" ? "歷史門市" : row.source === "org+lifecycle" ? "已建立 Lifecycle" : "尚未建立"}
+                      </div>
+                    </button>
+                  );
+                })}
+              </div>
+              {filteredStores.length === 0 && (
+                <div className="mt-2 rounded-2xl border-2 border-dashed border-[#EDE2D4] py-10 text-center text-sm font-bold text-[#A69C91]">
+                  找不到符合條件的門市
+                </div>
+              )}
             </div>
           </div>
         </Card>
-
         <Card title="門市生命週期設定">
           {!selectedKey ? (
             <div className="flex flex-col items-center justify-center rounded-2xl border-2 border-dashed border-[#EDE2D4] bg-[#FFFCF8] px-5 py-16 text-center">
@@ -530,6 +684,90 @@ const StoreLifecycleManager = ({
           )}
         </Card>
       </div>
+
+      {credentialDialog && (
+        <div
+          className="fixed inset-0 z-[99995] flex items-center justify-center bg-stone-900/35 p-4 backdrop-blur-sm"
+          onMouseDown={(event) => {
+            if (event.target === event.currentTarget) closeCredentialDialog();
+          }}
+        >
+          <div className="w-full max-w-md overflow-hidden rounded-[1.75rem] border border-[#E8DDD0] bg-[#FFFCF8] shadow-[0_24px_80px_rgba(80,62,45,0.22)]">
+            <div className="border-b border-[#EFE7DA] bg-gradient-to-br from-[#FFF9EC] via-white to-[#FFF4DC] px-5 py-4">
+              <div className="flex items-start justify-between gap-3">
+                <div className="flex min-w-0 items-start gap-3">
+                  <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-2xl bg-white text-[#B7863D] shadow-sm">
+                    <KeyRound size={19} />
+                  </div>
+                  <div className="min-w-0">
+                    <div className="text-base font-black text-[#4D4338]">{credentialDialog.title}</div>
+                    <p className="mt-1 text-xs font-bold leading-5 text-[#8C8176]">{credentialDialog.description}</p>
+                  </div>
+                </div>
+                <button
+                  type="button"
+                  onClick={closeCredentialDialog}
+                  disabled={saving || statusChanging}
+                  className="rounded-full p-2 text-[#A69C91] hover:bg-white disabled:opacity-40"
+                >
+                  <X size={18} />
+                </button>
+              </div>
+            </div>
+
+            <div className="space-y-4 p-5">
+              <div className={`rounded-xl border px-3 py-2.5 text-xs font-black ${currentDeviceTrust?.status === "trusted" ? "border-emerald-100 bg-emerald-50 text-emerald-700" : "border-rose-100 bg-rose-50 text-rose-700"}`}>
+                {currentDeviceTrust?.status === "trusted" ? "🛡 目前裝置已信任" : "⚠ 目前裝置尚未信任，無法執行高風險寫入"}
+              </div>
+
+              <label className="block">
+                <span className="mb-2 block text-xs font-black text-[#7C7063]">最高管理者密碼</span>
+                <input
+                  autoFocus
+                  type="password"
+                  value={credentialPassword}
+                  onChange={(event) => setCredentialPassword(event.target.value)}
+                  onKeyDown={(event) => {
+                    if (event.key === "Enter" && !saving && !statusChanging) confirmCredentialAction();
+                  }}
+                  placeholder="輸入目前登入的最高管理者密碼"
+                  autoComplete="current-password"
+                  className="w-full rounded-xl border-2 border-[#E8DDD0] bg-white px-4 py-3 text-sm font-bold text-[#4D4338] outline-none focus:border-amber-300 focus:ring-4 focus:ring-amber-50"
+                />
+                <span className="mt-2 block text-[10px] font-bold leading-5 text-[#A69C91]">
+                  密碼只會送到 Backend 做本次重新驗證；成功或失敗後都會從畫面狀態清除，不寫入 Firestore、Lifecycle 或瀏覽器儲存空間。
+                </span>
+              </label>
+
+              {credentialDialog.type === "dataset" && credentialDialog.nextStatus === "READY" && (
+                <div className="rounded-xl border border-amber-100 bg-amber-50/70 px-3 py-2.5 text-xs font-bold leading-5 text-amber-800">
+                  READY 只代表 Lifecycle Master 已完成確認；Batch 1 仍不會讓 Dashboard、Ranking、Annual 或 Telegram 改讀這份資料。
+                </div>
+              )}
+
+              <div className="grid grid-cols-2 gap-2 pt-1">
+                <button
+                  type="button"
+                  onClick={closeCredentialDialog}
+                  disabled={saving || statusChanging}
+                  className="rounded-xl border border-[#E8DDD0] bg-white px-4 py-3 text-sm font-black text-[#7C7063] disabled:opacity-40"
+                >
+                  取消
+                </button>
+                <button
+                  type="button"
+                  onClick={confirmCredentialAction}
+                  disabled={!credentialPassword.trim() || saving || statusChanging || currentDeviceTrust?.status !== "trusted"}
+                  className="inline-flex items-center justify-center gap-2 rounded-xl border border-[#E8C77A] bg-gradient-to-r from-[#FFF7DF] via-[#F7E8C6] to-[#EACB86] px-4 py-3 text-sm font-black text-[#5A4225] disabled:opacity-45"
+                >
+                  {(saving || statusChanging) ? <Loader2 size={16} className="animate-spin" /> : <ShieldCheck size={16} />}
+                  {(saving || statusChanging) ? "驗證並處理中…" : "確認並繼續"}
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 };
