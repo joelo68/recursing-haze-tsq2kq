@@ -46,27 +46,37 @@ test("same core store remains brand-isolated by physical master and canonical la
   assert.match(backend, /getBrandCollection\(db, brandId, 'store_lifecycle'\)\.doc\('master'\)/);
 });
 
-test("draft validation preserves incomplete drafts but rejects contradictory dates", () => {
+test("draft validation separates actual openDate from SaaS firstEligibleMonth boundary", () => {
   const incomplete = validateLifecycleEntryDraft({ firstEligibleMonth: "2026-08" });
   assert.equal(incomplete.valid, true);
   assert.equal(getLifecycleEntryCompleteness(incomplete.normalized), "INCOMPLETE");
 
-  const complete = validateLifecycleEntryDraft({
+  // Existing store: actual opening can predate the SaaS KPI eligibility boundary.
+  const existingStore = validateLifecycleEntryDraft({
+    firstEligibleMonth: "2026-08",
+    openDate: "2022-06-15",
+  });
+  assert.equal(existingStore.valid, true);
+  assert.equal(getLifecycleEntryCompleteness(existingStore.normalized), "COMPLETE");
+
+  // New store: actual opening can be inside the first eligible month.
+  const newStore = validateLifecycleEntryDraft({
     firstEligibleMonth: "2026-08",
     openDate: "2026-08-12",
     lastEligibleMonth: "2026-10",
     closeDate: "2026-10-31",
     exemptMonths: ["2026-09"],
   });
-  assert.equal(complete.valid, true);
-  assert.equal(getLifecycleEntryCompleteness(complete.normalized), "COMPLETE");
+  assert.equal(newStore.valid, true);
+  assert.equal(getLifecycleEntryCompleteness(newStore.normalized), "COMPLETE");
 
+  // A store cannot be KPI-eligible before it actually starts operating.
   const invalid = validateLifecycleEntryDraft({
     firstEligibleMonth: "2026-08",
-    openDate: "2026-07-31",
+    openDate: "2026-09-01",
   });
   assert.equal(invalid.valid, false);
-  assert.match(invalid.errors.join("|"), /開始日期必須落在納入月份內/);
+  assert.match(invalid.errors.join("|"), /實際開始營運日期不可晚於首次正式納管月份/);
 });
 
 test("invalid exemption values are rejected instead of silently dropped", () => {
@@ -116,6 +126,28 @@ test("master normalization is defensive and does not coerce missing lifecycle fi
   assert.equal(normalized.stores["新店"].openDate, "");
   assert.deepEqual(normalized.stores["新店"].exemptMonths, []);
   assert.equal(normalized.stores["新店"].entryStatus, "INCOMPLETE");
+});
+
+test("frontend recomputes derived entryStatus under current Lifecycle rules instead of trusting stale persisted status", () => {
+  const normalized = normalizeLifecycleMaster({
+    stores: {
+      "CYJ八德店": {
+        firstEligibleMonth: "2026-01",
+        openDate: "2022-06-15",
+        entryStatus: "INVALID",
+      },
+    },
+  }, "cyj");
+
+  assert.equal(normalized.stores["八德"].entryStatus, "COMPLETE");
+});
+
+test("frontend and backend both enforce openDate month <= firstEligibleMonth while keeping closure month contract", () => {
+  assert.match(manager, /batchCommonOpenDate\.slice\(0, 7\) > batchCommonFirstMonth/);
+  assert.match(manager, /共用實際開始營運日期不可晚於共用首次正式納管月份/);
+  assert.match(backend, /openDate\.slice\(0, 7\) > firstEligibleMonth/);
+  assert.match(backend, /實際開始營運日期不可晚於首次正式納管月份/);
+  assert.match(backend, /closeDate\.slice\(0, 7\) !== lastEligibleMonth/);
 });
 
 test("backend rejects unknown brand ids instead of silently falling back to CYJ", () => {

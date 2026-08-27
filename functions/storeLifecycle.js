@@ -95,8 +95,8 @@ function validateLifecycleDraft(raw = {}) {
   if (lastRaw && !lastEligibleMonth) errors.push('永久結束月份格式需為 YYYY-MM');
   if (closeRaw && !closeDate) errors.push('永久結束日期格式需為 YYYY-MM-DD');
 
-  if (firstEligibleMonth && openDate && openDate.slice(0, 7) !== firstEligibleMonth) {
-    errors.push('開始日期必須落在納入月份內');
+  if (firstEligibleMonth && openDate && openDate.slice(0, 7) > firstEligibleMonth) {
+    errors.push('實際開始營運日期不可晚於首次正式納管月份');
   }
   if (lastEligibleMonth && closeDate && closeDate.slice(0, 7) !== lastEligibleMonth) {
     errors.push('永久結束日期必須落在永久結束月份內');

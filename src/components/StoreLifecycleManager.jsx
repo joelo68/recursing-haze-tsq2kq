@@ -332,8 +332,8 @@ const StoreLifecycleManager = ({
       notify("請至少設定一個共用欄位", "error");
       return;
     }
-    if (batchCommonFirstMonth && batchCommonOpenDate && batchCommonOpenDate.slice(0, 7) !== batchCommonFirstMonth) {
-      notify("共用開始日期必須落在共用納管月份內", "error");
+    if (batchCommonFirstMonth && batchCommonOpenDate && batchCommonOpenDate.slice(0, 7) > batchCommonFirstMonth) {
+      notify("共用實際開始營運日期不可晚於共用首次正式納管月份", "error");
       return;
     }
 
@@ -838,7 +838,7 @@ const StoreLifecycleManager = ({
                 <div>
                   <div className="text-sm font-black text-[#4D4338]">共用欄位</div>
                   <p className="mt-1 text-[11px] font-bold leading-5 text-[#A69C91]">
-                    系統不會自行推論日期。只有你實際輸入的共用值才會套用；預設只補空白欄位。
+                    系統不會自行推論日期。首次正式納管月份是 SaaS KPI 邊界；實際開始營運日期是門市真實開店邊界，可以更早。只有你實際輸入的共用值才會套用；預設只補空白欄位。
                   </p>
                 </div>
 
@@ -863,7 +863,7 @@ const StoreLifecycleManager = ({
                     className="w-full rounded-xl border border-[#E8DDD0] bg-white px-3 py-2.5 text-sm font-bold outline-none focus:border-amber-300 disabled:opacity-50"
                   />
                   <span className="mt-1.5 block text-[10px] font-bold leading-5 text-[#A69C91]">
-                    不確定時請留空，之後再逐店補；不要為了完成批次而猜日期。
+                    這裡填門市真正開始營運的日期，可以早於首次正式納管月份；不可晚於納管月份。不確定時請留空，不要為了完成批次而猜日期。
                   </span>
                 </label>
 
@@ -1155,12 +1155,12 @@ const StoreLifecycleManager = ({
                 <label className="space-y-1.5">
                   <span className="flex items-center gap-1 text-xs font-black text-[#7C7063]"><CalendarDays size={14} /> 首次正式納管月份</span>
                   <input type="month" value={draft.firstEligibleMonth || ""} onChange={(event) => setDraft((prev) => ({ ...prev, firstEligibleMonth: event.target.value }))} className="w-full rounded-xl border border-[#E8DDD0] bg-white px-3 py-2.5 text-sm font-bold outline-none focus:border-amber-300" />
-                  <span className="text-[10px] font-bold text-[#A69C91]">Opening month 仍是正式 KPI 納管月份，不自動按日數折算目標。</span>
+                  <span className="text-[10px] font-bold text-[#A69C91]">這是本 SaaS KPI 正式開始納管該店的月份；可晚於門市真正開始營運的日期，且不自動按日數折算目標。</span>
                 </label>
                 <label className="space-y-1.5">
                   <span className="flex items-center gap-1 text-xs font-black text-[#7C7063]"><CalendarDays size={14} /> 實際開始營運日期</span>
                   <input type="date" value={draft.openDate || ""} onChange={(event) => setDraft((prev) => ({ ...prev, openDate: event.target.value }))} className="w-full rounded-xl border border-[#E8DDD0] bg-white px-3 py-2.5 text-sm font-bold outline-none focus:border-amber-300" />
-                  <span className="text-[10px] font-bold text-[#A69C91]">未來用於 Daily expected-report boundary；目前 Batch 1 尚未接入日報檢核。</span>
+                  <span className="text-[10px] font-bold text-[#A69C91]">填門市真正開始營運日期，可早於首次正式納管月份；未來用於 Daily expected-report boundary，目前 Batch 1 尚未接入日報檢核。</span>
                 </label>
                 <label className="space-y-1.5">
                   <span className="text-xs font-black text-[#7C7063]">永久結束月份（仍納管）</span>
