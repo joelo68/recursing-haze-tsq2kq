@@ -79,6 +79,16 @@ const StoreLifecycleManager = ({
   const [credentialDialog, setCredentialDialog] = useState(null);
   const [saving, setSaving] = useState(false);
   const [statusChanging, setStatusChanging] = useState(false);
+  const [batchOpen, setBatchOpen] = useState(false);
+  const [batchSearch, setBatchSearch] = useState("");
+  const [batchSelectedKeys, setBatchSelectedKeys] = useState([]);
+  const [batchDrafts, setBatchDrafts] = useState({});
+  const [batchCommonFirstMonth, setBatchCommonFirstMonth] = useState("");
+  const [batchCommonOpenDate, setBatchCommonOpenDate] = useState("");
+  const [batchFillBlanksOnly, setBatchFillBlanksOnly] = useState(true);
+  const [batchSaving, setBatchSaving] = useState(false);
+  const [batchProgress, setBatchProgress] = useState({ current: 0, total: 0 });
+  const [batchResults, setBatchResults] = useState([]);
   const loadSequenceRef = useRef(0);
   const activeBrandRef = useRef(brandId);
 
@@ -121,6 +131,16 @@ const StoreLifecycleManager = ({
     setExemptMonthInput("");
     setCredentialPassword("");
     setCredentialDialog(null);
+    setBatchOpen(false);
+    setBatchSearch("");
+    setBatchSelectedKeys([]);
+    setBatchDrafts({});
+    setBatchCommonFirstMonth("");
+    setBatchCommonOpenDate("");
+    setBatchFillBlanksOnly(true);
+    setBatchSaving(false);
+    setBatchProgress({ current: 0, total: 0 });
+    setBatchResults([]);
     loadMaster();
   }, [brandId, loadMaster]);
 
@@ -185,6 +205,23 @@ const StoreLifecycleManager = ({
     });
   }, [lifecycleRows, storeFilter, storeSearch]);
 
+  const batchRows = useMemo(() => lifecycleRows.filter((row) => row.source !== "lifecycle"), [lifecycleRows]);
+
+  const filteredBatchRows = useMemo(() => {
+    const keyword = String(batchSearch || "").trim().toLocaleLowerCase("zh-Hant");
+    if (!keyword) return batchRows;
+    return batchRows.filter((row) => `${row.canonicalStoreName || ""} ${row.key || ""}`.toLocaleLowerCase("zh-Hant").includes(keyword));
+  }, [batchRows, batchSearch]);
+
+  const batchSelectedSet = useMemo(() => new Set(batchSelectedKeys), [batchSelectedKeys]);
+
+  const batchResultSummary = useMemo(() => batchResults.reduce((summary, item) => {
+    if (item.ok) summary.success += 1;
+    else summary.failed += 1;
+    if (item.conflict) summary.conflict += 1;
+    return summary;
+  }, { success: 0, failed: 0, conflict: 0 }), [batchResults]);
+
   const selectedRow = useMemo(() => allStores.find((row) => row.key === selectedKey) || null, [allStores, selectedKey]);
 
   const selectStore = useCallback((row) => {
@@ -211,10 +248,115 @@ const StoreLifecycleManager = ({
   }, [lifecycleRows, notify, selectStore, selectedKey]);
 
   const closeCredentialDialog = useCallback(() => {
-    if (saving || statusChanging) return;
+    if (saving || statusChanging || batchSaving) return;
     setCredentialPassword("");
     setCredentialDialog(null);
-  }, [saving, statusChanging]);
+  }, [saving, statusChanging, batchSaving]);
+
+  const buildBatchDraft = useCallback((row) => (
+    row?.entry
+      ? normalizeLifecycleEntry(row.entry, row.canonicalStoreName || row.key, brandId)
+      : createEmptyEntry(row?.canonicalStoreName || row?.key || "", brandId)
+  ), [brandId]);
+
+  const openBatchInitializer = () => {
+    if (master.datasetStatus === "READY") {
+      notify("目前 Lifecycle 已標記 READY；若要重新批次初始化，請先改回「建置中」", "error");
+      return;
+    }
+    if (batchRows.length === 0) {
+      notify("目前品牌沒有可批次初始化的組織架構門市", "error");
+      return;
+    }
+
+    const drafts = {};
+    batchRows.forEach((row) => {
+      drafts[row.key] = buildBatchDraft(row);
+    });
+    const pendingKeys = batchRows
+      .filter((row) => row.lifecycleStatus !== "COMPLETE")
+      .map((row) => row.key);
+
+    setBatchDrafts(drafts);
+    setBatchSelectedKeys(pendingKeys);
+    setBatchSearch("");
+    setBatchCommonFirstMonth("");
+    setBatchCommonOpenDate("");
+    setBatchFillBlanksOnly(true);
+    setBatchProgress({ current: 0, total: 0 });
+    setBatchResults([]);
+    setBatchOpen(true);
+  };
+
+  const closeBatchInitializer = () => {
+    if (batchSaving) return;
+    setBatchOpen(false);
+    setBatchSearch("");
+    setBatchSelectedKeys([]);
+    setBatchDrafts({});
+    setBatchCommonFirstMonth("");
+    setBatchCommonOpenDate("");
+    setBatchProgress({ current: 0, total: 0 });
+    setBatchResults([]);
+  };
+
+  const toggleBatchStore = (row) => {
+    if (!row?.key || row.lifecycleStatus === "COMPLETE" || batchSaving) return;
+    setBatchSelectedKeys((prev) => prev.includes(row.key) ? prev.filter((key) => key !== row.key) : [...prev, row.key]);
+    setBatchDrafts((prev) => ({
+      ...prev,
+      [row.key]: prev[row.key] || buildBatchDraft(row),
+    }));
+  };
+
+  const selectAllBatchPending = () => {
+    const keys = batchRows.filter((row) => row.lifecycleStatus !== "COMPLETE").map((row) => row.key);
+    setBatchSelectedKeys(keys);
+  };
+
+  const updateBatchDraft = (storeKey, patch) => {
+    const row = batchRows.find((item) => item.key === storeKey);
+    if (!row || row.lifecycleStatus === "COMPLETE") return;
+    setBatchDrafts((prev) => ({
+      ...prev,
+      [storeKey]: { ...(prev[storeKey] || buildBatchDraft(row)), ...patch },
+    }));
+  };
+
+  const applyBatchCommonValues = () => {
+    if (batchSelectedKeys.length === 0) {
+      notify("請先勾選要套用的門市", "error");
+      return;
+    }
+    if (!batchCommonFirstMonth && !batchCommonOpenDate) {
+      notify("請至少設定一個共用欄位", "error");
+      return;
+    }
+    if (batchCommonFirstMonth && batchCommonOpenDate && batchCommonOpenDate.slice(0, 7) !== batchCommonFirstMonth) {
+      notify("共用開始日期必須落在共用納管月份內", "error");
+      return;
+    }
+
+    setBatchDrafts((prev) => {
+      const next = { ...prev };
+      batchSelectedKeys.forEach((storeKey) => {
+        const row = batchRows.find((item) => item.key === storeKey);
+        if (!row || row.lifecycleStatus === "COMPLETE") return;
+        const current = next[storeKey] || buildBatchDraft(row);
+        next[storeKey] = {
+          ...current,
+          firstEligibleMonth: batchCommonFirstMonth && (!batchFillBlanksOnly || !current.firstEligibleMonth)
+            ? batchCommonFirstMonth
+            : current.firstEligibleMonth,
+          openDate: batchCommonOpenDate && (!batchFillBlanksOnly || !current.openDate)
+            ? batchCommonOpenDate
+            : current.openDate,
+        };
+      });
+      return next;
+    });
+    notify(`已將共用設定套用到 ${batchSelectedKeys.length} 間門市${batchFillBlanksOnly ? "的空白欄位" : ""}`, "success");
+  };
 
   const addCustomStore = () => {
     if (!lifecycleStoreBrandMatches(customStoreName, brandId)) {
@@ -355,6 +497,175 @@ const StoreLifecycleManager = ({
     });
   };
 
+  const performBatchSave = async (password) => {
+    const selectedRows = batchSelectedKeys
+      .map((storeKey) => batchRows.find((row) => row.key === storeKey))
+      .filter(Boolean)
+      .filter((row) => row.lifecycleStatus !== "COMPLETE");
+
+    if (selectedRows.length === 0) {
+      notify("目前沒有可批次儲存的門市", "error");
+      return false;
+    }
+
+    const prepared = selectedRows.map((row) => {
+      const entry = batchDrafts[row.key] || buildBatchDraft(row);
+      const check = validateLifecycleEntryDraft(entry);
+      return { row, entry, check };
+    });
+    const invalidRows = prepared.filter((item) => !item.check.valid);
+    if (invalidRows.length > 0) {
+      notify(`有 ${invalidRows.length} 間門市資料格式互相矛盾，請先修正紅色項目再批次儲存`, "error");
+      return false;
+    }
+
+    setBatchSaving(true);
+    setBatchProgress({ current: 0, total: prepared.length });
+    setBatchResults([]);
+    const operationBrandId = brandId;
+    const results = [];
+    let authAborted = false;
+
+    try {
+      for (let index = 0; index < prepared.length; index += 1) {
+        const item = prepared[index];
+        if (activeBrandRef.current !== operationBrandId) {
+          prepared.slice(index).forEach((remaining) => {
+            results.push({
+              key: remaining.row.key,
+              name: remaining.row.canonicalStoreName || remaining.row.key,
+              ok: false,
+              notRun: true,
+              message: "品牌已切換，本次批次作業已停止，這間門市尚未執行",
+            });
+          });
+          break;
+        }
+
+        setBatchProgress({ current: index + 1, total: prepared.length });
+        try {
+          const result = await callLifecycleEndpoint({
+            action: "upsert_store",
+            storeName: item.entry.canonicalStoreName || item.row.canonicalStoreName || item.row.key,
+            expectedStoreRevision: Number(item.entry.revision || 0),
+            entry: {
+              firstEligibleMonth: item.check.normalized.firstEligibleMonth,
+              openDate: item.check.normalized.openDate,
+              lastEligibleMonth: item.check.normalized.lastEligibleMonth,
+              closeDate: item.check.normalized.closeDate,
+              exemptMonths: item.check.normalized.exemptMonths,
+            },
+          }, password);
+          results.push({
+            key: item.row.key,
+            name: result?.entry?.canonicalStoreName || item.row.canonicalStoreName || item.row.key,
+            ok: true,
+            revision: result?.entry?.revision,
+          });
+        } catch (error) {
+          const isConflict = error?.status === 409;
+          results.push({
+            key: item.row.key,
+            name: item.row.canonicalStoreName || item.row.key,
+            ok: false,
+            conflict: isConflict,
+            status: error?.status || 0,
+            message: error?.message || "批次儲存失敗",
+          });
+
+          // 驗證失敗時不要用同一組 credential 連續打剩餘門市；其餘單店錯誤則繼續，避免一店卡住整批。
+          if ([401, 403].includes(Number(error?.status || 0))) {
+            authAborted = true;
+            prepared.slice(index + 1).forEach((remaining) => {
+              results.push({
+                key: remaining.row.key,
+                name: remaining.row.canonicalStoreName || remaining.row.key,
+                ok: false,
+                notRun: true,
+                message: "因最高管理者驗證未通過，本次尚未執行",
+              });
+            });
+            break;
+          }
+        }
+      }
+
+      // 品牌切換後，舊批次結果不可回寫到新品牌 UI state。舊品牌已完成的 Backend transaction 仍保持原品牌隔離。
+      if (activeBrandRef.current !== operationBrandId) return false;
+
+      setBatchResults(results);
+      const fresh = await loadMaster({ silent: true });
+      if (fresh && activeBrandRef.current === operationBrandId) {
+        setBatchDrafts((prev) => {
+          const next = { ...prev };
+          batchRows.forEach((row) => {
+            const freshEntry = fresh?.stores?.[row.key];
+            if (freshEntry) next[row.key] = normalizeLifecycleEntry(freshEntry, row.canonicalStoreName || row.key, brandId);
+          });
+          return next;
+        });
+      }
+
+      const failedKeys = results.filter((item) => !item.ok).map((item) => item.key);
+      setBatchSelectedKeys(failedKeys);
+      const successCount = results.filter((item) => item.ok).length;
+      const failedCount = results.filter((item) => !item.ok).length;
+
+      if (authAborted) {
+        notify("最高管理者驗證未通過，批次作業已立即停止；已成功的門市不會回滾", "error");
+        return false;
+      }
+      if (failedCount > 0) {
+        notify(`批次完成：${successCount} 間成功、${failedCount} 間需重新確認`, "error");
+      } else {
+        notify(`批次完成：${successCount} 間門市已儲存`, "success");
+      }
+      return true;
+    } finally {
+      if (activeBrandRef.current === operationBrandId) {
+        setBatchSaving(false);
+        setBatchProgress({
+          current: results.filter((item) => !item.notRun).length,
+          total: prepared.length,
+        });
+      }
+    }
+  };
+
+  const handleBatchSave = () => {
+    if (master.datasetStatus === "READY") {
+      notify("Lifecycle 已是 READY，批次初始化只允許在 BUILDING 狀態執行", "error");
+      return;
+    }
+    if (currentDeviceTrust?.status !== "trusted") {
+      notify("請改用已信任的裝置執行批次初始化", "error");
+      return;
+    }
+    if (batchSelectedKeys.length === 0) {
+      notify("請先勾選要批次儲存的門市", "error");
+      return;
+    }
+
+    const selectedRows = batchSelectedKeys
+      .map((storeKey) => batchRows.find((row) => row.key === storeKey))
+      .filter(Boolean);
+    const invalidRows = selectedRows.filter((row) => {
+      const check = validateLifecycleEntryDraft(batchDrafts[row.key] || buildBatchDraft(row));
+      return !check.valid;
+    });
+    if (invalidRows.length > 0) {
+      notify(`有 ${invalidRows.length} 間門市資料格式有誤，請先修正後再儲存`, "error");
+      return;
+    }
+
+    setCredentialPassword("");
+    setCredentialDialog({
+      type: "batch",
+      title: "確認批次初始化門市生命週期",
+      description: `本次將依序儲存 ${selectedRows.length} 間 ${brandMeta.label} 門市。Backend 仍會逐店重新驗證、transaction 寫入與 revision 衝突檢查。`,
+    });
+  };
+
   const performDatasetStatus = async (nextStatus, password) => {
     setStatusChanging(true);
     try {
@@ -403,9 +714,10 @@ const StoreLifecycleManager = ({
     const dialog = credentialDialog;
     if (!dialog) return;
 
-    const ok = dialog.type === "save"
-      ? await performSave(password)
-      : await performDatasetStatus(dialog.nextStatus, password);
+    let ok = false;
+    if (dialog.type === "save") ok = await performSave(password);
+    else if (dialog.type === "batch") ok = await performBatchSave(password);
+    else ok = await performDatasetStatus(dialog.nextStatus, password);
 
     setCredentialPassword("");
     if (ok) setCredentialDialog(null);
@@ -472,15 +784,25 @@ const StoreLifecycleManager = ({
                   <div className={`inline-flex w-fit items-center justify-center rounded-xl border px-3 py-2.5 text-xs font-black ${currentDeviceTrust?.status === "trusted" ? "border-emerald-100 bg-emerald-50 text-emerald-700" : "border-rose-100 bg-rose-50 text-rose-700"}`}>
                     {currentDeviceTrust?.status === "trusted" ? "🛡 目前裝置已信任" : "⚠ 請改用已信任裝置"}
                   </div>
-                  <button
-                    type="button"
-                    disabled={statusChanging}
-                    onClick={() => handleDatasetStatus(master.datasetStatus === "READY" ? "BUILDING" : "READY")}
-                    className="inline-flex items-center justify-center gap-2 rounded-xl border border-[#E8C77A] bg-gradient-to-r from-[#FFF4D8] to-[#EFD399] px-4 py-2.5 text-xs font-black text-[#6A4D26] disabled:opacity-50"
-                  >
-                    {statusChanging ? <Loader2 size={15} className="animate-spin" /> : <CheckCircle2 size={15} />}
-                    {master.datasetStatus === "READY" ? "改回建置中" : "完成資料確認"}
-                  </button>
+                  <div className="flex flex-col gap-2 sm:flex-row">
+                    <button
+                      type="button"
+                      disabled={batchSaving || master.datasetStatus === "READY"}
+                      onClick={openBatchInitializer}
+                      className="inline-flex items-center justify-center gap-2 rounded-xl border border-sky-200 bg-sky-50 px-4 py-2.5 text-xs font-black text-sky-700 disabled:opacity-45"
+                    >
+                      <Building2 size={15} /> 批次初始化
+                    </button>
+                    <button
+                      type="button"
+                      disabled={statusChanging || batchSaving}
+                      onClick={() => handleDatasetStatus(master.datasetStatus === "READY" ? "BUILDING" : "READY")}
+                      className="inline-flex items-center justify-center gap-2 rounded-xl border border-[#E8C77A] bg-gradient-to-r from-[#FFF4D8] to-[#EFD399] px-4 py-2.5 text-xs font-black text-[#6A4D26] disabled:opacity-50"
+                    >
+                      {statusChanging ? <Loader2 size={15} className="animate-spin" /> : <CheckCircle2 size={15} />}
+                      {master.datasetStatus === "READY" ? "改回建置中" : "完成資料確認"}
+                    </button>
+                  </div>
                 </div>
                 <p className="mt-2 text-[11px] font-bold leading-5 text-[#9A8E82]">
                   不需要先在頁面上尋找密碼欄位；按「儲存這間門市」或「完成資料確認」後，系統會直接跳出最高管理者確認視窗。
@@ -490,6 +812,213 @@ const StoreLifecycleManager = ({
           </div>
         </div>
       </Card>
+
+      {batchOpen && (
+        <Card title="門市批次初始化">
+          <div className="space-y-5">
+            <div className="flex flex-col gap-3 rounded-2xl border border-sky-100 bg-sky-50/60 p-4 lg:flex-row lg:items-start lg:justify-between">
+              <div className="min-w-0">
+                <div className="font-black text-sky-800">第一次大量建置用；正式例外仍回到單店精修</div>
+                <p className="mt-1 text-xs font-bold leading-5 text-sky-800/75">
+                  只列出目前 {brandMeta.label} 組織架構中的門市。已完整門市在批次模式中鎖定，不會被覆寫；永久結束、整月暫停等特殊資料仍由右側單店編輯處理。
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={closeBatchInitializer}
+                disabled={batchSaving}
+                className="shrink-0 rounded-xl border border-sky-100 bg-white px-3 py-2 text-xs font-black text-sky-700 disabled:opacity-40"
+              >
+                關閉批次初始化
+              </button>
+            </div>
+
+            <div className="grid grid-cols-1 gap-4 xl:grid-cols-[minmax(0,0.9fr)_minmax(0,1.4fr)]">
+              <div className="space-y-4 rounded-2xl border border-[#EFE7DA] bg-[#FFFCF8] p-4">
+                <div>
+                  <div className="text-sm font-black text-[#4D4338]">共用欄位</div>
+                  <p className="mt-1 text-[11px] font-bold leading-5 text-[#A69C91]">
+                    系統不會自行推論日期。只有你實際輸入的共用值才會套用；預設只補空白欄位。
+                  </p>
+                </div>
+
+                <label className="block">
+                  <span className="mb-1.5 block text-xs font-black text-[#7C7063]">共用首次正式納管月份</span>
+                  <input
+                    type="month"
+                    value={batchCommonFirstMonth}
+                    onChange={(event) => setBatchCommonFirstMonth(event.target.value)}
+                    disabled={batchSaving}
+                    className="w-full rounded-xl border border-[#E8DDD0] bg-white px-3 py-2.5 text-sm font-bold outline-none focus:border-amber-300 disabled:opacity-50"
+                  />
+                </label>
+
+                <label className="block">
+                  <span className="mb-1.5 block text-xs font-black text-[#7C7063]">共用實際開始營運日期（選填）</span>
+                  <input
+                    type="date"
+                    value={batchCommonOpenDate}
+                    onChange={(event) => setBatchCommonOpenDate(event.target.value)}
+                    disabled={batchSaving}
+                    className="w-full rounded-xl border border-[#E8DDD0] bg-white px-3 py-2.5 text-sm font-bold outline-none focus:border-amber-300 disabled:opacity-50"
+                  />
+                  <span className="mt-1.5 block text-[10px] font-bold leading-5 text-[#A69C91]">
+                    不確定時請留空，之後再逐店補；不要為了完成批次而猜日期。
+                  </span>
+                </label>
+
+                <label className="flex cursor-pointer items-start gap-2.5 rounded-xl border border-[#EFE7DA] bg-white p-3">
+                  <input
+                    type="checkbox"
+                    checked={batchFillBlanksOnly}
+                    onChange={(event) => setBatchFillBlanksOnly(event.target.checked)}
+                    disabled={batchSaving}
+                    className="mt-0.5 h-4 w-4 rounded border-stone-300"
+                  />
+                  <span>
+                    <span className="block text-xs font-black text-[#675B4E]">只補目前空白欄位（建議）</span>
+                    <span className="mt-0.5 block text-[10px] font-bold text-[#A69C91]">避免共用設定蓋掉已經逐店確認過的月份或日期。</span>
+                  </span>
+                </label>
+
+                <button
+                  type="button"
+                  onClick={applyBatchCommonValues}
+                  disabled={batchSaving || batchSelectedKeys.length === 0}
+                  className="w-full rounded-xl border border-[#E8C77A] bg-[#FFF7DF] px-4 py-3 text-sm font-black text-[#6A4D26] disabled:opacity-45"
+                >
+                  套用到已勾選的 {batchSelectedKeys.length} 間門市
+                </button>
+
+                <div className="rounded-xl border border-amber-100 bg-amber-50/70 p-3 text-[11px] font-bold leading-5 text-amber-800">
+                  批次模式不提供「永久結束月份／日期」與 Exempt Months 共用填寫，避免把特殊營運事件誤套到多間店。
+                </div>
+              </div>
+
+              <div className="min-w-0 space-y-3 rounded-2xl border border-[#EFE7DA] bg-white p-4">
+                <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+                  <div>
+                    <div className="text-sm font-black text-[#4D4338]">目前品牌門市</div>
+                    <div className="mt-0.5 text-[11px] font-bold text-[#A69C91]">
+                      共 {batchRows.length} 間｜已勾選 {batchSelectedKeys.length} 間｜完整門市自動保護
+                    </div>
+                  </div>
+                  <div className="flex flex-wrap gap-2">
+                    <button type="button" onClick={selectAllBatchPending} disabled={batchSaving} className="rounded-lg border border-[#E8DDD0] bg-[#FAF7F1] px-3 py-1.5 text-[11px] font-black text-[#7C7063] disabled:opacity-40">勾選全部待補</button>
+                    <button type="button" onClick={() => setBatchSelectedKeys([])} disabled={batchSaving} className="rounded-lg border border-[#E8DDD0] bg-white px-3 py-1.5 text-[11px] font-black text-[#7C7063] disabled:opacity-40">清除勾選</button>
+                  </div>
+                </div>
+
+                <div className="relative">
+                  <Search size={16} className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-[#B0A59A]" />
+                  <input
+                    type="search"
+                    value={batchSearch}
+                    onChange={(event) => setBatchSearch(event.target.value)}
+                    placeholder="搜尋批次門市"
+                    disabled={batchSaving}
+                    className="w-full rounded-xl border border-[#E8DDD0] bg-[#FFFCF8] py-2.5 pl-9 pr-3 text-sm font-bold outline-none focus:border-amber-300 disabled:opacity-50"
+                  />
+                </div>
+
+                <div className="max-h-[620px] overflow-y-auto pr-1">
+                  <div className="grid grid-cols-1 gap-2 2xl:grid-cols-2">
+                    {filteredBatchRows.map((row) => {
+                      const isComplete = row.lifecycleStatus === "COMPLETE";
+                      const checked = batchSelectedSet.has(row.key);
+                      const rowDraft = batchDrafts[row.key] || buildBatchDraft(row);
+                      const rowCheck = validateLifecycleEntryDraft(rowDraft);
+                      const rowComputedStatus = rowCheck.valid ? getLifecycleEntryCompleteness(rowCheck.normalized) : "INVALID";
+                      const rowMeta = getStatusMeta(rowComputedStatus);
+                      return (
+                        <div key={row.key} className={`rounded-xl border p-3 ${isComplete ? "border-emerald-100 bg-emerald-50/40" : checked ? "border-[#E8C77A] bg-[#FFF9EC]" : "border-[#EFE7DA] bg-[#FFFCF8]"}`}>
+                          <div className="flex items-start gap-2.5">
+                            <input
+                              type="checkbox"
+                              checked={checked}
+                              disabled={isComplete || batchSaving}
+                              onChange={() => toggleBatchStore(row)}
+                              className="mt-1 h-4 w-4 shrink-0 rounded border-stone-300 disabled:opacity-40"
+                            />
+                            <div className="min-w-0 flex-1">
+                              <div className="flex flex-wrap items-center justify-between gap-2">
+                                <span className="truncate text-xs font-black text-[#4D4338]">{row.canonicalStoreName || row.key}</span>
+                                <span className={`rounded-full border px-2 py-0.5 text-[9px] font-black ${rowMeta.className}`}>{isComplete ? "已完整・保護" : rowMeta.label}</span>
+                              </div>
+                              <div className="mt-2 grid grid-cols-1 gap-2 sm:grid-cols-2">
+                                <label>
+                                  <span className="mb-1 block text-[9px] font-black text-[#9A8E82]">納管月份</span>
+                                  <input
+                                    type="month"
+                                    value={rowDraft.firstEligibleMonth || ""}
+                                    disabled={!checked || isComplete || batchSaving}
+                                    onChange={(event) => updateBatchDraft(row.key, { firstEligibleMonth: event.target.value })}
+                                    className="w-full rounded-lg border border-[#E8DDD0] bg-white px-2 py-2 text-xs font-bold outline-none focus:border-amber-300 disabled:bg-stone-50 disabled:text-stone-400"
+                                  />
+                                </label>
+                                <label>
+                                  <span className="mb-1 block text-[9px] font-black text-[#9A8E82]">開始日期</span>
+                                  <input
+                                    type="date"
+                                    value={rowDraft.openDate || ""}
+                                    disabled={!checked || isComplete || batchSaving}
+                                    onChange={(event) => updateBatchDraft(row.key, { openDate: event.target.value })}
+                                    className="w-full rounded-lg border border-[#E8DDD0] bg-white px-2 py-2 text-xs font-bold outline-none focus:border-amber-300 disabled:bg-stone-50 disabled:text-stone-400"
+                                  />
+                                </label>
+                              </div>
+                              {!rowCheck.valid && (
+                                <div className="mt-2 rounded-lg bg-rose-50 px-2 py-1.5 text-[9px] font-bold leading-4 text-rose-600">{rowCheck.errors[0]}</div>
+                              )}
+                            </div>
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                  {filteredBatchRows.length === 0 && <div className="py-10 text-center text-xs font-bold text-[#A69C91]">找不到符合條件的門市</div>}
+                </div>
+              </div>
+            </div>
+
+            {batchResults.length > 0 && (
+              <div className="rounded-2xl border border-[#EFE7DA] bg-[#FAF7F1] p-4">
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <div className="text-sm font-black text-[#4D4338]">上一次批次結果</div>
+                  <div className="text-[11px] font-black text-[#7C7063]">
+                    成功 {batchResultSummary.success}｜失敗 {batchResultSummary.failed}{batchResultSummary.conflict > 0 ? `｜衝突 ${batchResultSummary.conflict}` : ""}
+                  </div>
+                </div>
+                <div className="mt-3 grid grid-cols-1 gap-2 md:grid-cols-2 xl:grid-cols-3">
+                  {batchResults.map((item) => (
+                    <div key={`${item.key}-${item.ok ? "ok" : "fail"}`} className={`rounded-xl border px-3 py-2 text-xs font-bold ${item.ok ? "border-emerald-100 bg-emerald-50 text-emerald-700" : "border-rose-100 bg-rose-50 text-rose-700"}`}>
+                      <div className="font-black">{item.ok ? "✓" : "!"} {item.name}</div>
+                      {!item.ok && <div className="mt-1 text-[10px] leading-4 opacity-85">{item.conflict ? "其他管理者已更新：" : ""}{item.message}</div>}
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            <div className="flex flex-col gap-3 rounded-2xl border border-[#EFE7DA] bg-[#FFFCF8] p-4 sm:flex-row sm:items-center sm:justify-between">
+              <div className="text-xs font-bold leading-5 text-[#7C7063]">
+                {batchSaving
+                  ? `正在逐店儲存 ${batchProgress.current} / ${batchProgress.total}；請勿切換品牌或關閉頁面。`
+                  : `準備儲存 ${batchSelectedKeys.length} 間。每間仍使用既有 Backend transaction 與 revision 保護；單店 409 不會覆蓋其他管理者資料。`}
+              </div>
+              <button
+                type="button"
+                onClick={handleBatchSave}
+                disabled={batchSaving || batchSelectedKeys.length === 0 || currentDeviceTrust?.status !== "trusted"}
+                className="inline-flex shrink-0 items-center justify-center gap-2 rounded-xl border border-[#E8C77A] bg-gradient-to-r from-[#FFF7DF] via-[#F7E8C6] to-[#EACB86] px-5 py-3 text-sm font-black text-[#5A4225] disabled:opacity-45"
+              >
+                {batchSaving ? <Loader2 size={17} className="animate-spin" /> : <Save size={17} />}
+                {batchSaving ? `批次儲存中 ${batchProgress.current}/${batchProgress.total}` : `批次儲存 ${batchSelectedKeys.length} 間`}
+              </button>
+            </div>
+          </div>
+        </Card>
+      )}
 
       <div className="grid grid-cols-1 gap-6 xl:grid-cols-[minmax(280px,0.8fr)_minmax(0,1.5fr)]">
         <Card title="門市清單">
@@ -707,7 +1236,7 @@ const StoreLifecycleManager = ({
                 <button
                   type="button"
                   onClick={closeCredentialDialog}
-                  disabled={saving || statusChanging}
+                  disabled={saving || statusChanging || batchSaving}
                   className="rounded-full p-2 text-[#A69C91] hover:bg-white disabled:opacity-40"
                 >
                   <X size={18} />
@@ -728,7 +1257,7 @@ const StoreLifecycleManager = ({
                   value={credentialPassword}
                   onChange={(event) => setCredentialPassword(event.target.value)}
                   onKeyDown={(event) => {
-                    if (event.key === "Enter" && !saving && !statusChanging) confirmCredentialAction();
+                    if (event.key === "Enter" && !saving && !statusChanging && !batchSaving) confirmCredentialAction();
                   }}
                   placeholder="輸入目前登入的最高管理者密碼"
                   autoComplete="current-password"
@@ -738,6 +1267,12 @@ const StoreLifecycleManager = ({
                   密碼只會送到 Backend 做本次重新驗證；成功或失敗後都會從畫面狀態清除，不寫入 Firestore、Lifecycle 或瀏覽器儲存空間。
                 </span>
               </label>
+
+              {credentialDialog.type === "batch" && (
+                <div className="rounded-xl border border-sky-100 bg-sky-50/70 px-3 py-2.5 text-xs font-bold leading-5 text-sky-800">
+                  這組密碼只用於本次批次操作。Frontend 會依序呼叫既有單店 Endpoint；Backend 對每一間門市仍重新驗證 trusted device、最高管理者權限與 revision。
+                </div>
+              )}
 
               {credentialDialog.type === "dataset" && credentialDialog.nextStatus === "READY" && (
                 <div className="rounded-xl border border-amber-100 bg-amber-50/70 px-3 py-2.5 text-xs font-bold leading-5 text-amber-800">
@@ -749,7 +1284,7 @@ const StoreLifecycleManager = ({
                 <button
                   type="button"
                   onClick={closeCredentialDialog}
-                  disabled={saving || statusChanging}
+                  disabled={saving || statusChanging || batchSaving}
                   className="rounded-xl border border-[#E8DDD0] bg-white px-4 py-3 text-sm font-black text-[#7C7063] disabled:opacity-40"
                 >
                   取消
@@ -757,11 +1292,11 @@ const StoreLifecycleManager = ({
                 <button
                   type="button"
                   onClick={confirmCredentialAction}
-                  disabled={!credentialPassword.trim() || saving || statusChanging || currentDeviceTrust?.status !== "trusted"}
+                  disabled={!credentialPassword.trim() || saving || statusChanging || batchSaving || currentDeviceTrust?.status !== "trusted"}
                   className="inline-flex items-center justify-center gap-2 rounded-xl border border-[#E8C77A] bg-gradient-to-r from-[#FFF7DF] via-[#F7E8C6] to-[#EACB86] px-4 py-3 text-sm font-black text-[#5A4225] disabled:opacity-45"
                 >
-                  {(saving || statusChanging) ? <Loader2 size={16} className="animate-spin" /> : <ShieldCheck size={16} />}
-                  {(saving || statusChanging) ? "驗證並處理中…" : "確認並繼續"}
+                  {(saving || statusChanging || batchSaving) ? <Loader2 size={16} className="animate-spin" /> : <ShieldCheck size={16} />}
+                  {(saving || statusChanging || batchSaving) ? "驗證並處理中…" : "確認並繼續"}
                 </button>
               </div>
             </div>
