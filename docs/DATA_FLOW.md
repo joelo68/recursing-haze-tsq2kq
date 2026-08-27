@@ -543,9 +543,9 @@ Self Approval         人工覆核
 
 Realtime UI 刻意使用小型 summary document／單筆 request listener，不把完整 device history 常駐監聽。
 
-### 最高管理者 Security Action Card — Summary-first 正式流程
+### 最高管理者 Security Action Card — Summary-first 待部署版本
 
-2026-08-25 已完成、驗證並正式部署：
+2026-08-25 已完成／已驗證：
 
 ```text
 security_summary/device_approvals
@@ -566,7 +566,7 @@ security_summary/device_approvals
 
 只有需要最高管理者協助的 request 才進這個 Summary queue，所以判斷是否滑出提醒不再需要額外 query pending collection。
 
-使用者已確認正式部署完成且初步 Production 測試成功；後續是否有觀察中的 Bug／邊界案例，以 `CURRENT_STATE.md` 為準。
+是否已正式部署，以 `CURRENT_STATE.md` 為準。
 
 ### Login Security Telegram Side Flow
 
@@ -993,3 +993,76 @@ daily_reports = 0
 ```
 
 這個安全防護不可取消。
+
+---
+
+# 39. Store Lifecycle Foundation Flow — Batch 1（NOT DEPLOYED）
+
+> 2026-08-27 實作套件已完成並通過本地 regression；尚未部署前不可描述為 Production active。
+
+```text
+System Settings
+  ↓ 使用者真正開啟「門市生命週期」
+getDoc(store_lifecycle/master)
+  ↓
+顯示目前 org_structure 店家 + 已存在的歷史 Lifecycle 店家
+  ↓
+最高管理者編輯
+  ↓
+再次輸入 current credential
+  ↓
+HTTPS manageStoreLifecycle
+  ↓
+Firebase ID Token 驗證
+  ↓
+Trusted Device + Super Admin / Master 再驗證
+  ↓
+Schema / Store Identity / date boundary validation
+  ↓
+Firestore transaction
+  ↓
+store_lifecycle/master
+  ↓
+maintenance_logs audit
+```
+
+Multi-admin：
+
+```text
+不同店同時修改
+→ transaction retry 後保留雙方修改
+
+同一店同時修改
+→ expectedStoreRevision mismatch
+→ HTTP 409 LIFECYCLE_CONFLICT
+→ 第二位管理者重新載入，不 silent overwrite
+```
+
+READY certification：
+
+```text
+set_dataset_status = READY
+  ↓
+transaction read store_lifecycle/master + current org_structure
+  ↓
+檢查所有 Lifecycle entry COMPLETE
+  ↓
+檢查目前 org_structure 每間店均已有 Lifecycle
+  ↓
+通過才 READY
+```
+
+重要隔離：
+
+```text
+Batch 1 不接入
+Dashboard
+Ranking
+Annual
+Regional
+Daily/Audit completeness
+Projection
+Telegram
+```
+
+因此 Lifecycle 建置不會改變現行 KPI 數字；正式 consumer cutover 必須在後續 Batch 重新驗證後才進行。

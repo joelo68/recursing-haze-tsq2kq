@@ -1838,4 +1838,11 @@ function createDeviceApprovalFunctions({ admin, db }) {
 module.exports = {
   createDeviceApprovalFunctions,
   DEVICE_APPROVAL_DEFAULTS,
+  // Store Lifecycle 與其他高風險 administrative writers 共用既有正式安全邊界。
+  // 僅 export 既有 helper，不改變 Device Approval 本身行為。
+  normalizeBrandId,
+  getBrandCollection,
+  getBrandSettingDoc,
+  requireFirebaseRequestAuth,
+  verifySuperAdminActor,
 };

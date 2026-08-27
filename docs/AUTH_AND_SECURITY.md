@@ -553,9 +553,9 @@ verification secret 另外放 private subcollection／document。
 
 目前 `DeviceApprovalPanel.jsx` 明確把 self approval 與最高管理者人工覆核分開。
 
-最新正式 Backend race hardening 採 first-resolver-wins：第二位較晚處理同一筆 request 的最高管理者，會收到「這筆已由誰完成」而不是 false success。
+最新已完成的 Backend race hardening 採 first-resolver-wins：第二位較晚處理同一筆 request 的最高管理者，會收到「這筆已由誰完成」而不是 false success。
 
-2026-08-25 使用者已確認此 race hardening 與 Summary-first 最高管理者通知整合版完成正式部署，初步 Production 測試成功；後續狀態仍以 `CURRENT_STATE.md` 為準。
+最新 race／Summary-first 是否已正式部署，必須以 `CURRENT_STATE.md` 為準。
 
 ---
 
@@ -579,7 +579,7 @@ security_summary/device_approvals
 
 目前正式 App 已經即時監聽這份 document，取得最高管理者品牌待確認數量。
 
-目前正式 Summary-first 主管提醒使用：
+最新已驗證的 Summary-first 主管提醒版本另外準備：
 
 ```text
 adminAssistancePendingCount
@@ -595,7 +595,7 @@ latestAdminAssistanceAtText
 
 這樣最高管理者要不要滑出通知卡，可以直接由既有 summary listener 判斷，不需要再 query 一次 pending collection。
 
-上述欄位已隨 2026-08-25 Summary-first 最高管理者 Security Action Card 正式部署；目前初步 Production 測試成功，仍持續觀察可能的 Bug／邊界案例。
+在部署確認以前，上述新增欄位只可寫成「已完成／已驗證」，不可寫「已正式上線」。
 
 舊 `security_summary/device_alerts` 可能仍存在於較早裝置安全統計用途，不要和新的 `device_approvals` summary 混淆。
 
@@ -810,3 +810,48 @@ firestore.rules
 □ low-power 與 auto-logout 沒有互相覆蓋
 □ director/master exemption 符合 securityConfig
 ```
+
+---
+
+# 31. Store Lifecycle Administrative Security — Batch 1（NOT DEPLOYED）
+
+Store Lifecycle 會決定未來正式 KPI eligibility，因此 writer 採與 Device Approval 高權限操作一致的 server-side authority，不以 Frontend `userRole` 當作唯一安全依據。
+
+待部署 `manageStoreLifecycle` security chain：
+
+```text
+POST only
+↓
+Firebase Bearer ID Token verify
+↓
+strict brand id allowlist
+↓
+actor.roleId = director
+↓
+目前裝置仍為 trusted device
+↓
+Backend 再驗 current application credential
+↓
+Super Admin level 或 Master credential
+↓
+Lifecycle validation
+↓
+Firestore transaction
+```
+
+Credential 僅供本次 Backend re-verification；Lifecycle payload / audit log 不保存 submitted credential。
+
+Firestore Rules：
+
+```text
+brands/{brandId}/store_lifecycle/**
+artifacts/{appId}/public/data/store_lifecycle/**
+
+signed-in read  = allow
+frontend write  = deny
+Admin SDK write = Backend authority
+```
+
+Race safety：同一 store entry 使用 `revision` optimistic token；同店 lost-race 回 409，不回假成功。不同店 transaction retry 後保留彼此修改。
+
+Batch 1 沒有修改既有 Device Approval 決策、6 位碼、自助驗證、global block 或 Telegram security alert 行為；`deviceApproval.js` 僅額外 export 已存在的 authentication helpers 供 Lifecycle writer 共用。

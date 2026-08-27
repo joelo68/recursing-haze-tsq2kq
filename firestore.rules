@@ -122,6 +122,10 @@ service cloud.firestore {
       allow write: if false;
     }
 
+    match /brands/{brandId}/login_security_state/{document=**} {
+      allow read, write: if false;
+    }
+
     match /artifacts/{appId}/public/data/account_devices/{document=**} {
       allow read: if signedIn();
       allow write: if false;
@@ -151,8 +155,24 @@ service cloud.firestore {
       allow write: if false;
     }
 
+    match /artifacts/{appId}/public/data/login_security_state/{document=**} {
+      allow read, write: if false;
+    }
+
     match /artifacts/{appId}/public/data/global_blocked_devices/{document=**} {
       allow read, write: if false;
+    }
+
+    // Store Lifecycle v1：正式 KPI eligibility Master。
+    // 前端只允許登入後讀取；所有寫入必須經過 Backend 的最高管理者再驗證與 transaction。
+    match /brands/{brandId}/store_lifecycle/{document=**} {
+      allow read: if signedIn();
+      allow write: if false;
+    }
+
+    match /artifacts/{appId}/public/data/store_lifecycle/{document=**} {
+      allow read: if signedIn();
+      allow write: if false;
     }
 
     // 既有品牌資料維持原本登入後可讀寫；排除上方受保護集合，避免寬鬆規則覆蓋。
@@ -164,7 +184,9 @@ service cloud.firestore {
         && collectionName != 'device_approval_requests'
         && collectionName != 'device_approval_inbox'
         && collectionName != 'security_alerts'
-        && collectionName != 'security_summary';
+        && collectionName != 'security_summary'
+        && collectionName != 'login_security_state'
+        && collectionName != 'store_lifecycle';
     }
 
     match /artifacts/{appId}/public/data/{collectionName}/{document=**} {
@@ -176,7 +198,9 @@ service cloud.firestore {
         && collectionName != 'device_approval_inbox'
         && collectionName != 'security_alerts'
         && collectionName != 'security_summary'
-        && collectionName != 'global_blocked_devices';
+        && collectionName != 'login_security_state'
+        && collectionName != 'global_blocked_devices'
+        && collectionName != 'store_lifecycle';
     }
 
     // 其他既有根集合維持登入後存取；brands / artifacts 已由上方專屬規則處理。

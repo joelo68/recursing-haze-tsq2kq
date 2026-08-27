@@ -9,11 +9,14 @@
 // 執行：
 //   node --test tests/storeIdentity.test.js
 
-const test = require("node:test");
-const assert = require("node:assert/strict");
-const fs = require("node:fs");
-const path = require("node:path");
+import test from "node:test";
+import assert from "node:assert/strict";
+import fs from "node:fs";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
 
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
 const projectRoot = path.resolve(__dirname, "..");
 
 function readProjectFile(relativePath) {
@@ -168,7 +171,10 @@ test("SystemMaintenance：Core Consistency Audit 必須保留且正式版不可�
 });
 
 test("治理文件必須存在並明確禁止 page-level workaround", () => {
-  const source = readProjectFile("DATA_IDENTITY_RULES.md");
+  const candidatePaths = ["docs/DATA_IDENTITY_RULES.md", "DATA_IDENTITY_RULES.md"];
+  const relativePath = candidatePaths.find((candidate) => fs.existsSync(path.join(projectRoot, candidate)));
+  assert.ok(relativePath, "找不到 DATA_IDENTITY_RULES.md（docs/ 或專案根目錄）");
+  const source = readProjectFile(relativePath);
 
   assert.match(source, /Store Identity 是資料層規則，不是頁面顯示 workaround/);
   assert.match(source, /禁止一開始就修改出問題的頁面/);

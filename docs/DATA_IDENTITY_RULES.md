@@ -286,3 +286,35 @@ CYJ新店店_2026_M
 
 當某頁抓不到資料時，先追資料鏈與 identity layer，
 不要再回到「哪個頁面壞就在哪個頁面補一個新店特例」的維護方式。
+
+---
+
+# Store Lifecycle Identity Extension — Batch 1（NOT DEPLOYED）
+
+Store Lifecycle 不建立新的 Store Identity 系統；它必須沿用本文件既有 canonical store contract。
+
+Lifecycle 每個品牌各有獨立 Master，因此 identity namespace 為：
+
+```text
+brandId + coreStoreName
+```
+
+例如 CYJ：
+
+```text
+新店
+CYJ新店
+CYJ新店店
+DRCYJ新店
+DRCYJ新店店
+
+→ coreStoreName = 新店
+→ storeKey = 新店
+→ canonicalStoreName = CYJ新店店
+```
+
+禁止因 Lifecycle 管理頁、Firestore map key 或新 Backend writer 再建立另一套 alias 規則。
+
+`store_lifecycle` 若遇到未知品牌 ID 必須拒絕操作，不得把未知品牌 fallback 到 CYJ；這是品牌隔離的一部分。
+
+Batch 1 尚未把 Store Lifecycle 接到 KPI consumers，因此新增 Master 不會改寫既有 Raw / Target / Summary / Ranking / Annual 資料。

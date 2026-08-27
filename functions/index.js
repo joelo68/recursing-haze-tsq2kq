@@ -21,6 +21,15 @@ exports.reviewDeviceApproval = deviceApprovalFunctions.reviewDeviceApproval;
 exports.manageAccountDevice = deviceApprovalFunctions.manageAccountDevice;
 exports.emergencyUnblockDevice = deviceApprovalFunctions.emergencyUnblockDevice;
 exports.cleanupExpiredDeviceApprovals = deviceApprovalFunctions.cleanupExpiredDeviceApprovals;
+exports.reportLoginSecurityEvent = deviceApprovalFunctions.reportLoginSecurityEvent;
+
+// ==========================================
+// ★ Store Lifecycle v1：門市生命週期 Master administrative writer
+// 僅建立上游 authority；Batch 1 不切換 Dashboard / Ranking / Annual / Telegram consumer。
+// ==========================================
+const { createStoreLifecycleFunctions } = require("./storeLifecycle");
+const storeLifecycleFunctions = createStoreLifecycleFunctions({ admin, db });
+exports.manageStoreLifecycle = storeLifecycleFunctions.manageStoreLifecycle;
 
 const GEMINI_API_KEY = defineSecret('GEMINI_API_KEY');
 const TELEGRAM_BOT_TOKEN_SECRET = defineSecret('TELEGRAM_BOT_TOKEN');
@@ -575,6 +584,167 @@ async function sendTelegramMessage(chatId, text, extra = {}) {
         ...extra,
     });
 }
+
+
+// ==========================================
+// ★ Login Security Telegram Alert v1
+// 安全事件與營運預警分流：預設關閉、預設不指定群組。
+// 先保存 security_alerts，只有管理者在 SaaS 選定 Telegram 群組後才主動推播。
+// ==========================================
+const TELEGRAM_SECURITY_TARGETS = Object.freeze({
+    main: { chatId: TARGET_CHAT_ID_MAIN, label: '高階主管主群' },
+    manager: { chatId: TARGET_CHAT_ID_MANAGER, label: '主管群' },
+    agent_test: { chatId: TARGET_CHAT_ID_AGENT_TEST, label: 'Agent 測試群' },
+});
+const TELEGRAM_SECURITY_CONFIG_REF = db
+    .collection('artifacts').doc('default-app-id')
+    .collection('public').doc('data')
+    .collection('global_settings').doc('telegram_security_alerts');
+
+function normalizeTelegramSecurityConfig(raw = {}) {
+    const chatTargets = [...new Set((Array.isArray(raw.chatTargets) ? raw.chatTargets : [])
+        .map(String)
+        .filter((target) => Object.prototype.hasOwnProperty.call(TELEGRAM_SECURITY_TARGETS, target)))];
+    return {
+        enabled: raw.enabled === true,
+        chatTargets,
+        configVersion: String(raw.configVersion || 'security-alert-v1'),
+        updatedAtText: String(raw.updatedAtText || ''),
+    };
+}
+
+function resolveTelegramSecurityChatIds(config = {}) {
+    return [...new Set((config.chatTargets || [])
+        .map((target) => TELEGRAM_SECURITY_TARGETS[target]?.chatId || '')
+        .filter((chatId) => chatId && isTelegramChatAuthorized(chatId)))];
+}
+
+function getLoginSecurityEventLabel(type = '') {
+    return ({
+        password_failed_threshold: '密碼重複輸入錯誤',
+        device_code_failed_limit: '6 位裝置確認失敗',
+        manager_assistance_required: '裝置需要最高管理者協助',
+        self_reported_not_me: '使用者回報非本人裝置',
+        rapid_multi_location_login: '疑似異地短時間登入',
+        blocked_device_login: '已停用裝置再次嘗試登入',
+    })[String(type || '')] || '登入安全事件';
+}
+
+function getSecuritySeverityIcon(severity = '') {
+    if (String(severity) === 'critical') return '🚨';
+    if (String(severity) === 'high') return '🔴';
+    return '🟠';
+}
+
+function formatTelegramSecurityLocation(raw = {}) {
+    const value = raw && typeof raw === 'object' ? raw : {};
+    return String(value.display || [value.countryName, value.region, value.city].filter(Boolean).join('・') || '未知位置').trim();
+}
+
+function buildTelegramSecurityAlertMessage(data = {}) {
+    const type = String(data.telegramSecurityType || data.type || '');
+    const lines = [
+        `${getSecuritySeverityIcon(data.severity)} SaaS 登入安全提醒`,
+        '',
+        `事件：${getLoginSecurityEventLabel(type)}`,
+        `品牌：${String(data.brandLabel || data.brandId || '-').trim()}`,
+        `帳號：${String(data.userName || data.accountId || '-').trim()}${data.role ? `（${String(data.role)}）` : ''}`,
+    ];
+
+    const deviceText = [data.device, data.browser, data.os].map((item) => String(item || '').trim()).filter(Boolean).join(' / ');
+    if (deviceText) lines.push(`裝置：${deviceText}`);
+    if (data.deviceShort) lines.push(`裝置碼：${String(data.deviceShort)}`);
+    lines.push(`位置：${formatTelegramSecurityLocation(data.loginLocation)}`);
+
+    if (type === 'password_failed_threshold') {
+        lines.push(`狀況：${Number(data.failedCount || 0)} 次錯誤密碼／${Number(data.windowMinutes || 10)} 分鐘`);
+    } else if (type === 'device_code_failed_limit') {
+        lines.push(`狀況：6 位確認碼已達 ${Number(data.failedAttempts || 3)} 次錯誤上限`);
+    } else if (type === 'rapid_multi_location_login') {
+        lines.push(`前次位置：${formatTelegramSecurityLocation(data.previousLoginLocation)}`);
+        if (data.previousLoginAtText) lines.push(`前次登入：${String(data.previousLoginAtText)}`);
+        lines.push(`狀況：${Number(data.windowMinutes || 10)} 分鐘內由不同裝置、不同位置登入`);
+    } else if (type === 'manager_assistance_required') {
+        lines.push('狀況：沒有可用的既有信任裝置，需由最高管理者協助確認');
+    } else if (type === 'self_reported_not_me') {
+        lines.push('狀況：使用者已在原信任裝置回報「不是我」');
+    } else if (type === 'blocked_device_login') {
+        lines.push('狀況：已停用的裝置再次嘗試登入');
+    } else if (data.message) {
+        lines.push(`狀況：${String(data.message).slice(0, 240)}`);
+    }
+
+    lines.push('', '請至 SaaS「登入監控／裝置管理」查看完整紀錄。');
+    return lines.join('\n').slice(0, 3900);
+}
+
+async function dispatchTelegramSecurityAlert(event) {
+    const snap = event.data;
+    if (!snap) return;
+    const data = snap.data() || {};
+    if (data.notifyTelegram !== true || !String(data.telegramSecurityType || '').trim()) return;
+
+    try {
+        const configSnap = await TELEGRAM_SECURITY_CONFIG_REF.get();
+        const config = normalizeTelegramSecurityConfig(configSnap.exists ? (configSnap.data() || {}) : {});
+        if (!config.enabled) {
+            await snap.ref.set({
+                telegramDeliveryStatus: 'disabled',
+                telegramDeliveryUpdatedAtText: new Date().toISOString(),
+            }, { merge: true });
+            return;
+        }
+
+        const chatIds = resolveTelegramSecurityChatIds(config);
+        if (!chatIds.length) {
+            await snap.ref.set({
+                telegramDeliveryStatus: 'waiting_target',
+                telegramDeliveryUpdatedAtText: new Date().toISOString(),
+            }, { merge: true });
+            return;
+        }
+
+        const message = buildTelegramSecurityAlertMessage(data);
+        const settled = await Promise.allSettled(chatIds.map((chatId) => sendTelegramMessage(chatId, message)));
+        const sentChatIds = settled
+            .map((result, index) => result.status === 'fulfilled' ? chatIds[index] : '')
+            .filter(Boolean);
+        const errors = settled
+            .map((result) => result.status === 'rejected' ? String(result.reason?.message || result.reason || 'send_failed') : '')
+            .filter(Boolean);
+
+        await snap.ref.set({
+            telegramDeliveryStatus: errors.length ? (sentChatIds.length ? 'partial' : 'error') : 'sent',
+            telegramSentChatCount: sentChatIds.length,
+            telegramSentChatIds: sentChatIds,
+            telegramDeliveryError: errors.join('；').slice(0, 1000),
+            telegramSentAt: sentChatIds.length ? admin.firestore.FieldValue.serverTimestamp() : null,
+            telegramSentAtText: sentChatIds.length ? new Date().toISOString() : '',
+            telegramDeliveryUpdatedAtText: new Date().toISOString(),
+        }, { merge: true });
+    } catch (error) {
+        console.error('Login Security Telegram 推播失敗:', error);
+        await snap.ref.set({
+            telegramDeliveryStatus: 'error',
+            telegramDeliveryError: String(error?.message || error || 'unknown').slice(0, 1000),
+            telegramDeliveryUpdatedAtText: new Date().toISOString(),
+        }, { merge: true }).catch(() => {});
+    }
+}
+
+exports.onLegacySecurityAlertCreated = onDocumentCreated({
+    document: 'artifacts/default-app-id/public/data/security_alerts/{alertId}',
+    secrets: [TELEGRAM_BOT_TOKEN_SECRET],
+    timeoutSeconds: 30,
+    memory: '256MiB',
+}, dispatchTelegramSecurityAlert);
+
+exports.onBrandSecurityAlertCreated = onDocumentCreated({
+    document: 'brands/{brandId}/security_alerts/{alertId}',
+    secrets: [TELEGRAM_BOT_TOKEN_SECRET],
+    timeoutSeconds: 30,
+    memory: '256MiB',
+}, dispatchTelegramSecurityAlert);
 
 async function answerTelegramCallbackQuery(callbackQueryId, text = "") {
     if (!callbackQueryId) return null;

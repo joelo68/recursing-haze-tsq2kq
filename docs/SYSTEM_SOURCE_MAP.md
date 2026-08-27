@@ -1,8 +1,8 @@
 # SYSTEM_SOURCE_MAP.md
 
-> 狀態：Project Knowledge Base / Source Map v0.1  
-> 已整併至 2026-08-25。目前正式部署 source 仍是最高依據；`CURRENT_STATE.md` 會區分「已上線」、「已驗證待部署」與「Production 觀察中」。  
-> 禁止以舊對話、舊版檔案、AI 記憶或未提供的檔案補足事實。  
+> 狀態：Project Knowledge Base / Source Map v0.1
+> 已整併至 2026-08-25。目前正式部署 source 仍是最高依據；`CURRENT_STATE.md` 會區分「已上線」與「已驗證待部署」。
+> 禁止以舊對話、舊版檔案、AI 記憶或未提供的檔案補足事實。
 > 無法由目前正式程式確認的內容，必須標記為「未由目前正式來源確認」。
 
 ---
@@ -648,14 +648,14 @@ Firestore Rules 對 `management_delegations` 有獨立 schema validation，
 - Guided Trusted-device 6 位碼 self approval
 - 最高管理者人工覆核
 - Backend actor re-verification
-- 多最高管理者同時處理 request 的 race hardening（已正式部署）
+- 多最高管理者同時處理 request 的 race hardening（最新待部署 Backend）
 - login security event／cooldown state
 - Security Telegram delivery trigger
 - system audit logs
 
 `LoginCounter.jsx` 只負責授權名單同步狀態與人數呈現，不是 authentication engine。
 
-Summary-first 主管通知已由使用者確認於 2026-08-25 正式部署、初步 Production 測試成功；後續最新觀察狀態仍必須讀 `CURRENT_STATE.md`。
+最新 Summary-first 主管通知是否已正式部署，不可從 Source Map 自行推定，必須讀 `CURRENT_STATE.md`。
 
 # 15. Maintenance / Data Governance
 
@@ -946,19 +946,23 @@ request.auth != null
 
 ---
 
-# 20. 尚未由目前正式來源確認的項目
+# 20. Source-control confirmation status
 
 以下不是「不存在」，而是目前 Source Batch 尚無可追溯檔案：
 
-## `.firebaserc`
+## `.firebaserc` — 2026-08-27 已重新確認
 
-使用者確認目前專案目錄未看到。
+最新正式 source 已確認專案根目錄存在 `.firebaserc`：
 
-因此 Knowledge Base 目前只記：
+```json
+{
+  "projects": {
+    "default": "cyjsituation-analysis"
+  }
+}
+```
 
-> Firebase project alias 未由 source-controlled `.firebaserc` 確認。
-
-不得自行建立 alias 或宣稱 deploy CLI 一定使用哪個 alias。
+因此 Firebase CLI default alias 已由目前 source 確認為 `cyjsituation-analysis`。實際部署仍建議明確加上 `--project cyjsituation-analysis`。
 
 ## `firestore.indexes.json`
 
@@ -1186,3 +1190,70 @@ find .github -maxdepth 2 -type f 2>/dev/null
 ```text
 未發現 .github/workflows
 ```
+
+---
+
+# 25. Store Lifecycle v1 — Batch 1 Implementation Package（NOT DEPLOYED）
+
+2026-08-27 Gate 0 已以最新 Production source 重新定錨後完成 Batch 1 實作。
+
+新增 owner：
+
+```text
+src/components/StoreLifecycleManager.jsx
+  → Lifecycle 管理 UI / view-scoped single-doc read
+
+src/utils/storeLifecycle.js
+  → Frontend Store Identity / lifecycle normalization / defensive validation
+
+functions/storeLifecycle.js
+  → High-impact Lifecycle Backend writer / READY certification / race control
+
+tests/storeLifecycle.test.js
+  → Lifecycle identity / validation / rules / no-polling / no-existing-KPI-write regression
+```
+
+既有 owner 小幅整合：
+
+```text
+src/components/SettingsView.jsx
+  → 新增「門市生命週期」管理分頁
+
+functions/deviceApproval.js
+  → 只 export 既有 requireFirebaseRequestAuth / verifySuperAdminActor / brand path helpers
+
+functions/index.js
+  → export manageStoreLifecycle
+
+firestore.rules
+  → store_lifecycle signed-in read / direct frontend write deny
+```
+
+本 Batch 明確沒有修改：
+
+```text
+App.jsx
+useDashboardStats.js
+DashboardView.jsx
+RankingView.jsx
+AnnualView.jsx
+RegionalView.jsx
+DailyView.jsx
+AuditView.jsx
+TargetView.jsx
+InputView.jsx
+```
+
+因此 Batch 1 不進行 KPI consumer cutover。
+
+`.firebaserc` 最新正式 source 已於 2026-08-27 重新確認存在：
+
+```json
+{
+  "projects": {
+    "default": "cyjsituation-analysis"
+  }
+}
+```
+
+之後 Firebase deploy 仍建議明確使用 `--project cyjsituation-analysis` 降低操作錯專案風險。

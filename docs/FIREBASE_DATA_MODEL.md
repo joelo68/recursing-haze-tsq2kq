@@ -974,7 +974,7 @@ device_alerts   (legacy / earlier alert summary use)
 
 `device_approvals` is the realtime brand summary used by the v3.5.3 App for highest-manager pending count.
 
-目前正式 Summary-first 套件使用最高管理者協助欄位：
+已驗證的 Summary-first 套件新增最高管理者協助欄位：
 
 ```text
 adminAssistancePendingCount
@@ -986,7 +986,7 @@ latestAdminAssistanceDevice
 latestAdminAssistanceAtText
 ```
 
-上述欄位已於 2026-08-25 隨 Summary-first 最高管理者通知正式部署，初步 Production 測試成功。後續觀察狀態與任何 schema 變更仍必須以 `CURRENT_STATE.md` 與最新正式 source 為準。
+These additional fields are implemented / validated but must not be labeled production-active until `CURRENT_STATE.md` confirms deployment.
 
 ---
 
@@ -1447,3 +1447,113 @@ therapist_daily_reports
 5. 若是 Audit Log，寫明能否 update/delete。
 6. Schema 改變後同步更新本文件。
 7. 不把 Firebase Console 中未提供給專案的欄位靠 AI 猜進文件。
+
+---
+
+# 19. Store Lifecycle v1 — Batch 1 Implementation Package（NOT DEPLOYED）
+
+> 2026-08-27 Batch 1 已完成程式實作與本地 regression 驗證；本節描述「待部署套件」的 runtime contract。正式 Production 是否啟用仍以 `CURRENT_STATE.md` 與部署確認為準。
+
+Store Lifecycle 是獨立於 `org_structure` 的品牌層級 Master，用來保存正式門市 KPI eligibility 邊界；Batch 1 尚未讓 Dashboard / Ranking / Annual / Regional / Projection / Telegram consumer 讀取它。
+
+Physical path：
+
+```text
+CYJ
+artifacts/default-app-id/public/data/store_lifecycle/master
+
+安妞
+brands/anniu/store_lifecycle/master
+
+伊啵
+brands/yibo/store_lifecycle/master
+```
+
+Master schema：
+
+```text
+schemaVersion = store-lifecycle-v1
+brandId
+
+datasetStatus
+  BUILDING
+  READY
+
+revision
+stores.{storeKey}
+
+updatedAt
+updatedAtText
+updatedBy
+updatedByRole
+updatedByAccountId
+
+READY 時另有：
+certifiedAt
+certifiedAtText
+certifiedBy
+certifiedByRole
+certifiedByAccountId
+```
+
+Store entry：
+
+```text
+storeKey
+coreStoreName
+canonicalStoreName
+
+firstEligibleMonth
+lastEligibleMonth
+exemptMonths[]
+openDate
+closeDate
+
+entryStatus
+  INCOMPLETE
+  COMPLETE
+
+revision
+createdAtText
+createdBy
+createdByAccountId
+updatedAtText
+updatedBy
+updatedByRole
+updatedByAccountId
+```
+
+日期 canonical format：
+
+```text
+Month: YYYY-MM
+Date:  YYYY-MM-DD
+Business timezone: Asia/Taipei
+```
+
+Store Identity：Lifecycle 延續既有 canonical Store Identity；例如 CYJ `新店 / CYJ新店 / CYJ新店店 / DRCYJ新店店` 均歸一為：
+
+```text
+storeKey = 新店
+coreStoreName = 新店
+canonicalStoreName = CYJ新店店
+```
+
+Security：
+
+- Frontend signed-in read allowed。
+- Frontend direct write denied by Firestore Rules。
+- Write authority = `manageStoreLifecycle` Backend endpoint。
+- Backend 再驗證 Firebase ID Token + Trusted Device + current Super Admin / Master credential。
+- Backend 使用 Firestore transaction + per-store revision 防止同店 multi-admin silent overwrite。
+
+Read cost：Batch 1 Lifecycle UI 只在使用者開啟該管理分頁時 `getDoc()` 一份 `master`；不新增 polling、per-store listener 或 App-level persistent listener。
+
+Compatibility / Safety：
+
+```text
+datasetStatus READY
+!= KPI consumer cutover
+```
+
+Batch 1 不修改任何既有 Raw、Target、Summary、Queue 或 org_structure 資料。Consumer 切換屬後續 Batch。
