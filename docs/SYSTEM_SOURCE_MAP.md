@@ -241,6 +241,55 @@ global
 
 ---
 
+## 5.4 Canonical KPI Contracts — Batch 2
+
+Batch 2 已建立 formal KPI 的純函式 contract owner，但目前尚未切換任何正式 runtime consumer。
+
+Owner：
+
+```text
+src/utils/kpiContracts.js
+  → Frontend formal KPI / validity pure contract
+
+functions/kpiContracts.js
+  → Backend CommonJS mirror of the same pure contract
+
+tests/kpiContracts.test.js
+  → Frontend ↔ Backend parity + edge-semantics regression
+```
+
+目前 contract 固定的核心語意：
+
+```text
+formalNetCash = cash - refund - skincareRefund
+
+formalAccrual
+  CYJ / 伊啵 → accrual
+  安妞       → operationalAccrual
+
+VALID_ZERO != FIELD_MISSING != DATA_INVALID
+base target: blank / null / 0 => TARGET_NOT_SET
+ratio denominator = 0 => N/A
+```
+
+架構邊界：
+
+- `src/utils/kpiContracts.js` 與 `functions/kpiContracts.js` 都是 pure module，不直接讀寫 Firestore。
+- Root Frontend 為 ESM、`functions/` 為 Node 22 CommonJS，因此目前採「雙端 mirror + parity regression」，避免為了共用單一 runtime module 改變既有 module boundary。
+- `src/utils/helpers.js` 的 `parseNumber()` 仍是一般 UI / 輸入 parsing 工具；它會把空值轉為 `0`，**不得**被當成 formal target validity authority。
+- Dashboard、Summary Writer、Ranking、Annual、Telegram 等 consumer 在各自 Batch 切換前，現有 runtime 公式仍可能與 formal contract 不一致；不得把「contract 已建立」誤寫成「全系統已完成 KPI migration」。
+
+Batch 2 建立 contract 本身：
+
+```text
+Firestore Reads      +0
+Firestore Writes     +0
+Persistent Listener  +0
+Cloud Function export +0
+```
+
+---
+
 # 6. UI 共用元件
 
 ## `SharedUI.jsx`
@@ -811,6 +860,14 @@ User count / projections
 Firestore change listeners
 ```
 
+Batch 2 另新增：
+
+```text
+functions/kpiContracts.js
+```
+
+它目前是 Backend pure contract module，**不是 Cloud Function export**，且尚未被既有 runtime consumer import；因此單獨新增此檔不需要 Functions deploy。之後只有在某個正式 Backend consumer 開始 import 它時，才依該 consumer 的實際 export 精準部署。
+
 ---
 
 
@@ -1257,3 +1314,36 @@ InputView.jsx
 ```
 
 之後 Firebase deploy 仍建議明確使用 `--project cyjsituation-analysis` 降低操作錯專案風險。
+
+---
+
+# 26. Canonical KPI Contracts — Batch 2（VALIDATED / NO RUNTIME CONSUMER）
+
+2026-08-27 Batch 2 Gate 0 以最新正式 source 重新定錨後，已建立 Frontend / Backend Canonical KPI pure contracts。
+
+新增 source owner：
+
+```text
+src/utils/kpiContracts.js
+functions/kpiContracts.js
+tests/kpiContracts.test.js
+```
+
+本批實際驗證狀態：
+
+```text
+KPI contract regression  15 / 15 PASS
+npm run build             PASS（使用者於正式 repo 執行確認）
+```
+
+目前沒有任何正式 runtime consumer import 這兩個 contract module，因此：
+
+```text
+IMPLEMENTED          YES
+VALIDATED            YES
+DEPLOY REQUIRED      NO
+PRODUCTION CONSUMER  NOT YET
+```
+
+下一批 Target / Settings / Coverage、後續 Summary Writer 與各 consumer migration 時，必須優先引用這份 contract（或在 Backend 走 parity-protected mirror），不得重新在頁面或 writer 發明不同的 formal net cash / formal accrual / validity semantics。
+

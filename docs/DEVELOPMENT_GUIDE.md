@@ -152,6 +152,71 @@ Summary
 
 Store Identity 文件已明確規定 CYJ 新店的歷史 raw 保留策略。
 
+# 6.5 Canonical KPI Contracts / Validity Semantics
+
+Formal KPI 公式與 validity 不得再由各頁面、Summary Writer、Telegram 或 Annual 各自定義。
+
+Batch 2 的正式 contract owner：
+
+```text
+Frontend
+src/utils/kpiContracts.js
+
+Backend
+functions/kpiContracts.js
+
+Parity / Regression
+tests/kpiContracts.test.js
+```
+
+目前 Frontend 是 ESM，`functions/` 是 Node 22 CommonJS，因此採：
+
+```text
+Frontend pure contract
++
+Backend pure contract mirror
++
+parity regression
+```
+
+任何一端修改 formal KPI contract，都必須同步另一端並讓 parity regression 通過；禁止只有 Frontend 或只有 Backend 偷改公式。
+
+目前正式核心 contract 至少包括：
+
+```text
+formalNetCash = cash - refund - skincareRefund
+
+formalAccrual
+  CYJ / 伊啵 → accrual
+  安妞       → operationalAccrual
+
+VALID_ZERO != FIELD_MISSING != DATA_INVALID
+blank / null / 0 base target => TARGET_NOT_SET
+ratio denominator = 0 => N/A
+```
+
+特別注意：
+
+`helpers.js` 的 `parseNumber()` 是一般 parsing utility，空值會得到 `0`。因此它**不能單獨作為 Target 是否已設定的 business authority**。Target Writer / Coverage 必須透過 formal target validity contract 判斷。
+
+Batch 2 contract module 本身不得：
+
+- 直接讀寫 Firestore；
+- 新增 listener / polling；
+- import UI component；
+- 為了兼容 consumer 而偷偷改變 raw value。
+
+修改 contract 最低驗證：
+
+```bash
+node --check src/utils/kpiContracts.js
+npx -y node@22 --check functions/kpiContracts.js
+node --test tests/kpiContracts.test.js
+npm run build
+```
+
+若正式 consumer 開始 import contract，還要再跑該 consumer 所屬 Batch 的 regression，並依實際改動精準部署。
+
 # 7. InputView
 
 `InputView.jsx` 目前設計原則：
