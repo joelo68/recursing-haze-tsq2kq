@@ -1346,4 +1346,3 @@ PRODUCTION CONSUMER  NOT YET
 ```
 
 下一批 Target / Settings / Coverage、後續 Summary Writer 與各 consumer migration 時，必須優先引用這份 contract（或在 Backend 走 parity-protected mirror），不得重新在頁面或 writer 發明不同的 formal net cash / formal accrual / validity semantics。
-
