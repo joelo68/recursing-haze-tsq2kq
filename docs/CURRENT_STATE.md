@@ -486,7 +486,401 @@ docs/DEVELOPMENT_GUIDE.md
 CURRENT_STATE.md
 ```
 
-# 13. 本文件更新原則
+# 13. Summary Writer Semantic Migration — Batch 4 已正式確認
+
+2026-08-28 完成 Batch 4「Summary Writer Semantic Migration」正式部署與 Production 驗證。
+
+本 Batch 的核心目的不是切換 Dashboard consumer，而是先讓 Historical Summary Writer 具備可稽核、可比較、可逐步遷移的正式 KPI semantics，同時維持既有 legacy fields / consumers 相容。
+
+## Source / Commit
+
+本次正式部署來源：
+
+```text
+Git commit = 7ab92f1
+branch = main
+origin/main = 7ab92f1
+```
+
+部署前另以 exact commit 建立 clean worktree：
+
+```text
+/Users/joelo/cyj-batch4-7ab92f1
+```
+
+並在該 clean worktree 重新完成 validation，避免原主要 working tree 中其他未提交的 Login / Telegram 變更混入本次 Build / Deploy。
+
+`CURRENT_APP_VERSION` 維持：
+
+```text
+3.5.3
+```
+
+未提高版本號。
+
+## Implemented Semantics
+
+Batch 4 新增 additive formal KPI semantics；既有 legacy Summary numeric fields 不原地改義。
+
+正式現金語意：
+
+```text
+grossCash
+= Σ Raw cash
+
+formalNetCash
+= grossCash
+- refund
+- skincareRefund
+```
+
+真實 `0` 與負值維持有效值；missing / invalid 不得被默認轉成 `0`。
+
+正式權責語意：
+
+```text
+CYJ / 伊啵
+totalAccrual  = Σ accrual
+formalAccrual = Σ accrual
+
+安妞
+totalAccrual  = Σ accrual
+formalAccrual = Σ operationalAccrual
+```
+
+Historical Summary 新增／確認的 formal metadata / structures 包含：
+
+```text
+version = dashboard-summary-v2
+semanticVersion = summary-semantics-v1
+kpiContractVersion = kpi-contract-v1
+
+storeDailyTotals
+formalStoreRankings
+formalTargetAuthority
+targetCoverage
+lifecycleSnapshot
+```
+
+Formal Ranking 以 canonical formal cash achievement 為基礎，並尊重 Lifecycle eligibility、target validity 與 missing-data semantics。
+
+## Persisted Trust Verification
+
+Batch 4 已將 Historical Summary trust verification 改為 persisted readback：
+
+```text
+Raw rebuild
+↓
+write dashboard_summary
+write therapist_summary
+write rankings_summary
+↓
+重新從 Firestore 讀回 3 份 persisted Summary documents
+↓
+compare semantic fields / signatures
+↓
+只有 matched 才可通過
+```
+
+不再以 freshly-built object 自我比較作為 verified 證據。
+
+## Validation
+
+正式 repository / exact-commit validation：
+
+```text
+KPI Contracts                15 / 15 PASS
+Store Identity                7 / 7 PASS
+Store Lifecycle              22 / 22 PASS
+Target Authority             13 / 13 PASS
+Summary Repair Pre-System     3 / 3 PASS
+Summary Semantics            21 / 21 PASS
+-----------------------------------------
+Total                        81 / 81 PASS
+
+npm run build                PASS
+```
+
+Batch 4 regression 亦確認：
+
+```text
+Frontend / Backend Summary Semantics parity = PASS
+Batch 4 source wiring additive              = PASS
+Summary-first / store-level comparable      = PASS
+新增 polling                                = 0
+Backend call graph 僅改 Summary repair path = PASS
+```
+
+## Production Deploy
+
+Backend 精準部署：
+
+```text
+functions:repairDirtySummaryNow
+functions:repairDirtySummaries
+```
+
+兩支 Node.js 22 / 2nd Gen Functions 均 Successful update。
+
+Frontend：
+
+```text
+npm run deploy
+→ build PASS
+→ GitHub Pages Published
+```
+
+Firestore Rules、Target Coverage Functions、Security Functions、Telegram Functions 均未因 Batch 4 額外部署。
+
+## Production Confirmation — 三品牌代表月份
+
+### CYJ / 2026-07
+
+Rebuild 前 Core Consistency Audit：
+
+```text
+異常群組       0
+高風險衝突     0
+需確認         0
+可整理重複     0
+Summary 差異   0
+```
+
+代表月包含一般退款與生活美容退款，Production rebuild：
+
+```text
+Gross Cash       = 38,650,243
+General Refund   =    244,776
+Skincare Refund  =     18,770
+Formal Net Cash  = 38,386,697
+```
+
+符合：
+
+```text
+38,650,243 - 244,776 - 18,770
+= 38,386,697
+```
+
+同時 legacy Dashboard 仍顯示：
+
+```text
+現金業績 = 38,405,467
+權責業績 = 38,725,138
+```
+
+證明 Batch 4 為 additive writer migration，尚未提前切換 Batch 5 consumer。
+
+Production persisted compare：
+
+```text
+matched = true
+mismatchCount = 0
+writtenDocs = 3
+```
+
+Store-level Formal Signature 與 Formal Ranking Signature 均 persisted `stored == fresh`。
+
+### 安妞 / 2026-06
+
+Rebuild 前 Core Consistency Audit：
+
+```text
+異常群組       0
+高風險衝突     0
+需確認         0
+可整理重複     0
+Summary 差異   0
+```
+
+Production 正式驗證安妞 brand-specific accrual semantics：
+
+```text
+totalAccrual  = 30,633,603
+formalAccrual = 30,436,598
+```
+
+並確認代表店家「文心」：
+
+```text
+totalAccrual       = 2,760,573
+operationalAccrual = 2,748,793
+formalAccrual      = 2,748,793
+```
+
+因此：
+
+```text
+formalAccrual == operationalAccrual
+formalAccrual != totalAccrual
+```
+
+Production persisted compare：
+
+```text
+matched = true
+mismatchCount = 0
+writtenDocs = 3
+```
+
+### 伊啵 / 2026-06
+
+本月位於伊啵正式系統起始月 `2026-04` 之後，未觸碰 `2026-01～03` pre-system months。
+
+Rebuild 前 Core Consistency Audit：
+
+```text
+異常群組       0
+高風險衝突     0
+需確認         0
+可整理重複     0
+Summary 差異   0
+```
+
+Production 正式驗證：
+
+```text
+totalAccrual  = 1,445,218
+formalAccrual = 1,445,218
+```
+
+符合伊啵 formal accrual 使用 `accrual` 的品牌規則。
+
+Lifecycle / Ranking 亦確認：
+
+```text
+stores = 5
+eligibleStoreCount = 4
+formalRankEligibleStoreCount = 4
+```
+
+非 eligible 店不進 Formal Ranking。
+
+Production persisted compare：
+
+```text
+matched = true
+mismatchCount = 0
+writtenDocs = 3
+```
+
+## Dashboard Compatibility
+
+三個代表月份均完成正式 Dashboard smoke test。
+
+全品牌歷史 Dashboard：
+
+```text
+CYJ   2026-07 → 正常
+安妞  2026-06 → 正常
+伊啵  2026-06 → 正常
+```
+
+舊 consumer 仍使用 legacy display semantics，未因 Batch 4 自動切換 Formal KPI。
+
+單店 historical UI：
+
+```text
+CYJ新莊店  → 日營運走勢 / 達成進度 / 排名正常
+安妞文心店 → 日營運走勢 / 達成進度 / 排名正常
+伊啵園區店 → 日營運走勢 / 達成進度 / 排名正常
+```
+
+均未出現白畫面、資料不存在或已知 JS runtime failure。
+
+## Scheduled Repair Runtime
+
+Batch 4 Backend 部署後，`repairDirtySummaries` 新 revision：
+
+```text
+repairdirtysummaries-00024-nuc
+```
+
+成功啟動，STARTUP TCP probe 正常。
+
+部署後觀察約 `05:14Z～07:19Z`：
+
+```text
+排程持續每 5 分鐘正常執行
+目前沒有到期 dirty / pending 月份
+Summary repair failure = 0（觀察期間未發現）
+mismatch failure       = 0（觀察期間未發現）
+ERROR / CRITICAL       = 0（觀察期間未發現）
+```
+
+部署前 `00:14Z` 曾處理 7 個安妞 recalc_queue 月份，均 `matched=true`；因時間早於 Batch 4 Backend deploy，不作為 Batch 4 新 writer 的 Production 證據。
+
+## Target Coverage Compatibility / Pre-Batch-5 Gate
+
+三個代表歷史月份均觀察到：
+
+```text
+monthly_targets_summary missing Target Coverage v1 metadata;
+compatibility raw fallback
+```
+
+原因是部分 historical `monthly_targets_summary` 仍為 Batch 3 以前的 legacy schema，缺 `target-coverage-v1` 所需的 coverage contract metadata。
+
+Batch 4 對這種 legacy historical month 的正確行為是：
+
+```text
+coverage authority 不可信
+→ targetCoverage.available = false
+→ aggregate achievement fail-closed
+→ TARGET_INCOMPLETE
+```
+
+不得因 target totals 看似存在，就自行宣稱 coverage complete。
+
+本 Batch 不修改 `functions/targetCoverage.js`，也不以 Dashboard workaround 掩蓋此 migration gap。
+
+**Pre-Batch-5 Gate：**
+
+在 Batch 5 正式 consumer cutover 前，必須先確認 historical `monthly_targets_summary` 的 Target Coverage migration / backfill 策略，避免大量舊月份長期依賴 compatibility raw fallback。
+
+此項目前是 migration follow-up，不構成 Batch 4 Production failure。
+
+## Observation
+
+安妞 `2026-06` Dashboard Header 的 Summary badge 曾顯示較舊 timestamp，但：
+
+```text
+Firestore persisted Summary 已為本次新 rebuild
+Dashboard legacy totals 正確
+persisted compare mismatchCount = 0
+```
+
+因此目前記為非阻斷 Observation；Batch 4 不以單頁 UI workaround 處理。若後續持續出現或影響資料判讀，應以當時最新正式 Dashboard source 重新追查 timestamp metadata owner。
+
+## Final Status
+
+Batch 4 可正式標記：
+
+```text
+IMPLEMENTED
+VALIDATED
+DEPLOYED
+PRODUCTION CONFIRMED
+```
+
+三品牌代表驗證：
+
+```text
+CYJ   2026-07  PASS
+安妞  2026-06  PASS
+伊啵  2026-06  PASS
+```
+
+`CURRENT_APP_VERSION`：
+
+```text
+3.5.3
+```
+
+未提高。
+
+
+# 14. 本文件更新原則
 
 只有目前正式 source、使用者明確確認、或部署後 runtime 驗證可以支持「已部署／已正式啟用」。
 
