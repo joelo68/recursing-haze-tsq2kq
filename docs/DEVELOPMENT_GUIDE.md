@@ -695,3 +695,104 @@ prompts/
 
 Context Limit 前必須先產生 Session Checkpoint，再換視窗。
 若外部人員／AI 修改過 source，先做 External Change Audit，再繼續開發。
+
+
+# 22. Summary Writer Semantic Contract — Batch 4
+
+歷史 Summary 的 formal KPI 不得再由 Backend 與 Maintenance 各自寫公式。
+
+Owner：
+
+```text
+Frontend ESM    src/utils/summarySemantics.js
+Backend CJS     functions/summarySemantics.js
+Parity test     tests/summarySemantics.test.js
+```
+
+兩端只能透過既有 canonical KPI contracts 定義：
+
+```text
+formalNetCash
+formalAccrual
+validBaseTarget
+validRatio
+```
+
+## Additive migration
+
+Batch 4 必須保留 legacy field semantic，不可把 `cash` 或 `accrual` 原地換意思：
+
+```text
+legacy fields retained
++
+summary-semantics-v1 explicit fields/status
+```
+
+安妞必須同時保留 `totalAccrual` 與 `formalAccrual=operationalAccrual`。
+
+## Target Coverage / Lifecycle
+
+Historical Summary scope target authority 必須來自：
+
+```text
+monthly_targets_summary/{YYYY-MM}
++
+store_lifecycle/master READY cohort
+```
+
+Cash / Accrual coverage 獨立。合法 incomplete coverage 必須輸出 `TARGET_INCOMPLETE` / null achievement，不得為了得到數字而 full-scan raw target 或縮小 denominator。
+
+若 Target Summary 缺失或根本沒有 `target-coverage-v1` metadata，才允許 compatibility raw fallback；fallback 是 authority/schema recovery，不是 incomplete business-state recovery。
+
+## Ranking
+
+Legacy ranking 暫留。Formal ranking：
+
+```text
+formalNetCash / valid cashTarget
+```
+
+只有 valid target + valid KPI + Lifecycle eligible Store 進 rank denominator；true zero / negative net cash 仍 eligible。
+
+## Trust compare
+
+禁止：
+
+```text
+freshPayload vs freshPayload
+```
+
+正確：
+
+```text
+write 3 Summary docs
+→ read persisted dashboard / therapist / rankings
+→ compare against Raw-calculated payload
+```
+
+Compare 要覆蓋 store-level semantics 與 formal ranking signature，避免 grand total 一樣但 store distribution 不一致仍被 verified。
+
+## Document-size guard
+
+不要把每個 formal field 複製到每店×每日 `storeDailyTotals`。Batch 4 只在 store / grand / top-level 建 authority；daily semantic expansion 要有獨立 document-size / consumer need 評估。
+
+## Minimum Batch 4 validation
+
+```bash
+node --check functions/index.js
+node --check functions/summarySemantics.js
+node --check src/utils/summarySemantics.js
+
+node --test tests/kpiContracts.test.js
+node --test tests/storeIdentity.test.js
+node --test tests/storeLifecycle.test.js
+node --test tests/targetAuthority.test.js
+node --test tests/summaryRepairPreSystem.test.js
+node --test tests/summarySemantics.test.js
+
+npm run build
+```
+
+只有完整正式 repo 執行過的 checks 才能標 PASS。
+
+部署後先選代表 historical months 做 Raw → rebuilt Summary compare，再擴大 rebuild；不得直接全歷史批量重建。

@@ -27,7 +27,10 @@ exports.reportLoginSecurityEvent = deviceApprovalFunctions.reportLoginSecurityEv
 // ★ Store Lifecycle v1：門市生命週期 Master administrative writer
 // 僅建立上游 authority；Batch 1 不切換 Dashboard / Ranking / Annual / Telegram consumer。
 // ==========================================
-const { createStoreLifecycleFunctions } = require("./storeLifecycle");
+const {
+  createStoreLifecycleFunctions,
+  getLifecycleEligibleStoreEntries,
+} = require("./storeLifecycle");
 const storeLifecycleFunctions = createStoreLifecycleFunctions({ admin, db });
 exports.manageStoreLifecycle = storeLifecycleFunctions.manageStoreLifecycle;
 
@@ -45,6 +48,23 @@ exports.onLegacyMonthlyTargetSummaryChange = targetCoverageFunctions.onLegacyMon
 exports.onBrandMonthlyTargetSummaryChange = targetCoverageFunctions.onBrandMonthlyTargetSummaryChange;
 exports.onLegacyStoreLifecycleCoverageChange = targetCoverageFunctions.onLegacyStoreLifecycleCoverageChange;
 exports.onBrandStoreLifecycleCoverageChange = targetCoverageFunctions.onBrandStoreLifecycleCoverageChange;
+
+
+// ==========================================
+// ★ Summary Semantics v1：Batch 4 additive semantic contract
+// 只新增 explicit formal fields / coverage snapshot / formal ranking；舊 Summary 欄位暫時保留給 Batch 5 前 consumer。
+// ==========================================
+const {
+  SUMMARY_SEMANTIC_VERSION,
+  aggregateFormalMetrics,
+  extractTargetCoverageMetadata,
+  buildSummaryTargetAuthoritySnapshot,
+  buildScopeFormalAchievement,
+  buildFormalStoreRanking,
+  buildSummaryStoreSemanticSignature,
+  buildFormalRankingSignature,
+} = require("./summarySemantics");
+
 
 const GEMINI_API_KEY = defineSecret('GEMINI_API_KEY');
 const TELEGRAM_BOT_TOKEN_SECRET = defineSecret('TELEGRAM_BOT_TOKEN');
@@ -10266,23 +10286,45 @@ async function loadRawMonthlyTargetMap(brandId, yearMonth) {
   return targetMap;
 }
 
-async function loadAutoMonthlyTargetMap(brandId, yearMonth, expectedStores = []) {
+async function loadAutoMonthlyTargetAuthority(brandId, yearMonth, expectedStores = []) {
   try {
     const summarySnap = await getSummaryCollection(brandId, "monthly_targets_summary").doc(yearMonth).get();
     if (summarySnap.exists) {
-      const summaryMap = extractAutoTargetMapFromSummaryData(summarySnap.data() || {}, yearMonth);
-      const coverage = getAutoTargetCoverage(summaryMap, expectedStores);
-      const hasExpectedStores = (expectedStores || []).length > 0;
-      const isComplete = hasExpectedStores ? coverage >= 1 : Object.keys(summaryMap).length > 0;
-      if (isComplete) {
-        return summaryMap;
+      const summaryData = summarySnap.data() || {};
+      const summaryMap = extractAutoTargetMapFromSummaryData(summaryData, yearMonth);
+      const targetCoverage = extractTargetCoverageMetadata(summaryData);
+
+      if (targetCoverage.available) {
+        return {
+          targets: summaryMap,
+          targetCoverage,
+          source: "monthly_targets_summary",
+          usedRawFallback: false,
+        };
       }
-      console.warn(`monthly_targets_summary target completeness insufficient; fallback full collection: ${brandId}/${yearMonth}, coverage=${coverage.toFixed(2)}`);
+
+      // 舊 target Summary 若尚未具備 Batch 3 coverage contract，不可假裝是可信任 authority。
+      // 這種 schema/authority 缺失才允許 compatibility raw fallback；合法的 incomplete coverage 本身不會 fallback。
+      console.warn(`monthly_targets_summary missing Target Coverage v1 metadata; compatibility raw fallback: ${brandId}/${yearMonth}`);
     }
   } catch (error) {
-    console.warn(`monthly_targets_summary read failed; fallback full collection: ${brandId}/${yearMonth}`, error.message);
+    console.warn(`monthly_targets_summary read failed; fallback full collection only because Summary is unavailable: ${brandId}/${yearMonth}`, error.message);
   }
-  return loadRawMonthlyTargetMap(brandId, yearMonth);
+
+  // Compatibility safety: only a missing/unreadable Summary may fall back to raw.
+  // Cash/Accrual coverage incomplete is a valid business state and must NOT trigger a full monthly_targets scan.
+  const rawMap = await loadRawMonthlyTargetMap(brandId, yearMonth);
+  return {
+    targets: rawMap,
+    targetCoverage: extractTargetCoverageMetadata({}),
+    source: "monthly_targets_full_fallback_missing_summary",
+    usedRawFallback: true,
+    expectedStoreCount: Array.isArray(expectedStores) ? expectedStores.length : 0,
+  };
+}
+
+async function loadAutoMonthlyTargetMap(brandId, yearMonth, expectedStores = []) {
+  return (await loadAutoMonthlyTargetAuthority(brandId, yearMonth, expectedStores)).targets;
 }
 
 function resolveTelegramBrandId(data = {}, path = "") {
@@ -10404,7 +10446,23 @@ async function buildAutoDashboardSummaryPayloads(brandId, yearMonth) {
   if (!range) throw new Error("月份格式錯誤");
 
   const orgProfile = await getAutoOrgStructureProfile(brandId);
-  const targets = await loadAutoMonthlyTargetMap(brandId, yearMonth, orgProfile.stores);
+  const [targetAuthority, lifecycleSnap] = await Promise.all([
+    loadAutoMonthlyTargetAuthority(brandId, yearMonth, orgProfile.stores),
+    getSummaryCollection(brandId, "store_lifecycle").doc("master").get(),
+  ]);
+  const targets = targetAuthority.targets || {};
+  const targetCoverage = targetAuthority.targetCoverage || extractTargetCoverageMetadata({});
+  const lifecycleMaster = lifecycleSnap.exists ? (lifecycleSnap.data() || {}) : { datasetStatus: "BUILDING", stores: {} };
+  const lifecycleReady = String(lifecycleMaster.datasetStatus || "") === "READY";
+  const lifecycleEligibleEntries = getLifecycleEligibleStoreEntries(lifecycleMaster, yearMonth, { brandId, requireReady: true });
+  const lifecycleEligibleStoreKeys = lifecycleEligibleEntries.map((entry) => String(entry.storeKey || entry.coreStoreName || "").trim()).filter(Boolean);
+  const lifecycleEligibleStoreSet = new Set(lifecycleEligibleStoreKeys);
+  const formalTargetAuthority = buildSummaryTargetAuthoritySnapshot({
+    targetMap: targets,
+    eligibleStoreKeys: lifecycleEligibleStoreKeys,
+    lifecycleReady,
+    targetCoverage,
+  });
   const storeOwner = {};
   Object.entries(orgProfile.managers || {}).forEach(([managerName, stores]) => {
     (Array.isArray(stores) ? stores : []).forEach((store) => {
@@ -10574,6 +10632,15 @@ async function buildAutoDashboardSummaryPayloads(brandId, yearMonth) {
     }
   });
 
+  // Batch 4 additive semantics：舊 cash/accrual 欄位不改語意；formal fields 另由 canonical KPI contract 計算。
+  const semanticRowsByStore = {};
+  dailyRows.forEach((row) => {
+    const storeCore = normalizeSummaryCoreName(row.storeName || row.store || row.storeId || "");
+    if (!storeCore) return;
+    if (!semanticRowsByStore[storeCore]) semanticRowsByStore[storeCore] = [];
+    semanticRowsByStore[storeCore].push(row);
+  });
+
   Object.keys({ ...storeOwner, ...storeMap, ...targets }).forEach((storeCore) => {
     if (!storeCore) return;
     const store = ensureStore(storeCore);
@@ -10590,6 +10657,42 @@ async function buildAutoDashboardSummaryPayloads(brandId, yearMonth) {
     grand.accrualBudget += store.accrualBudget;
     grand.challengeBudget += store.challengeBudget;
     grand.challengeAccrualBudget += store.challengeAccrualBudget;
+  });
+
+  Object.values(storeMap).forEach((store) => {
+    Object.assign(store, aggregateFormalMetrics(brandId, semanticRowsByStore[store.store] || []));
+    store.formalLifecycleEligible = lifecycleEligibleStoreSet.has(store.store);
+  });
+  const formalScopeDailyRows = lifecycleReady
+    ? dailyRows.filter((row) => lifecycleEligibleStoreSet.has(normalizeSummaryCoreName(row.storeName || row.store || row.storeId || "")))
+    : [];
+  Object.assign(grand, aggregateFormalMetrics(brandId, formalScopeDailyRows));
+
+  // Batch 4 不擴張 storeDailyTotals 的每店×每日 schema，避免把 dashboard_summary 單文件推近 Firestore 1 MiB 上限。
+  // Store / brand monthly formal authority 先以 explicit store + grandTotal fields 建立；daily semantic cutover 留給後續 consumer/projection Batch。
+
+  const formalCashAchievement = buildScopeFormalAchievement({
+    actualValue: grand.formalNetCash,
+    actualStatus: grand.formalNetCashStatus,
+    targetValue: formalTargetAuthority.cashTargetTotal,
+    coverageComplete: formalTargetAuthority.cashCoverageTrusted,
+  });
+  const formalAccrualAchievement = buildScopeFormalAchievement({
+    actualValue: grand.formalAccrual,
+    actualStatus: grand.formalAccrualStatus,
+    targetValue: formalTargetAuthority.accrualTargetTotal,
+    coverageComplete: formalTargetAuthority.accrualCoverageTrusted,
+  });
+  grand.formalCashTarget = formalTargetAuthority.cashTargetTotal;
+  grand.formalAccrualTarget = formalTargetAuthority.accrualTargetTotal;
+  grand.formalCashAchievement = formalCashAchievement.value;
+  grand.formalCashAchievementStatus = formalCashAchievement.status;
+  grand.formalAccrualAchievement = formalAccrualAchievement.value;
+  grand.formalAccrualAchievementStatus = formalAccrualAchievement.status;
+
+  const formalStoreRanking = buildFormalStoreRanking(storeMap, targets, { eligibleStoreKeys: lifecycleEligibleStoreKeys });
+  Object.entries(formalStoreRanking.byStore || {}).forEach(([storeCore, metadata]) => {
+    if (storeMap[storeCore]) Object.assign(storeMap[storeCore], metadata);
   });
 
   grand.totalAchievement = grand.budget > 0 ? (grand.cash / grand.budget) * 100 : 0;
@@ -10724,9 +10827,23 @@ async function buildAutoDashboardSummaryPayloads(brandId, yearMonth) {
     yearMonth,
     monthStart: range.start,
     monthEnd: range.end,
+    semanticVersion: SUMMARY_SEMANTIC_VERSION,
+    kpiContractVersion: grand.kpiContractVersion || targetCoverage.kpiContractVersion || "",
+    targetAuthoritySource: targetAuthority.source || "",
+    targetCoverage,
+    formalTargetAuthority,
+    lifecycleSnapshot: {
+      schemaVersion: String(lifecycleMaster.schemaVersion || ""),
+      datasetStatus: String(lifecycleMaster.datasetStatus || "BUILDING"),
+      revision: Number(lifecycleMaster.revision || 0),
+      eligibleStoreCount: lifecycleEligibleStoreKeys.length,
+      eligibleStoreKeys: lifecycleEligibleStoreKeys,
+    },
     grandTotal: grand,
     stores: storeMap,
     storeRankings: storeRanking,
+    formalStoreRankings: formalStoreRanking.rankings,
+    formalRankEligibleStoreCount: formalStoreRanking.rankEligibleStoreCount,
     managers: managerMap,
     dailyTotals,
     storeDailyTotals,
@@ -10764,8 +10881,25 @@ async function buildAutoDashboardSummaryPayloads(brandId, yearMonth) {
     brandId,
     brandLabel,
     yearMonth,
+    semanticVersion: SUMMARY_SEMANTIC_VERSION,
+    kpiContractVersion: grand.kpiContractVersion || targetCoverage.kpiContractVersion || "",
+    targetCoverage,
+    formalTargetAuthority,
+    lifecycleSnapshot: dashboardSummary.lifecycleSnapshot,
     storeTop3: dashboardSummary.storeTop3,
     storeRankings: storeRanking.map((s) => ({ store: s.store, displayName: s.displayName, manager: s.manager, cash: s.cash, budget: s.budget, achievement: s.achievement, rank: s.rank })),
+    formalRankEligibleStoreCount: formalStoreRanking.rankEligibleStoreCount,
+    formalStoreRankings: formalStoreRanking.rankings.map((s) => ({
+      store: s.store,
+      displayName: s.displayName,
+      manager: s.manager,
+      formalNetCash: s.formalNetCash,
+      formalCashTarget: s.formalCashTarget,
+      formalCashAchievement: s.formalCashAchievement,
+      formalCashAchievementStatus: s.formalCashAchievementStatus,
+      formalCashAchievementRank: s.formalCashAchievementRank,
+      formalRankEligible: s.formalRankEligible,
+    })),
     therapistTop3: { today: therapistSummary.todayTop3, yesterday: therapistSummary.yesterdayTop3, monthly: therapistSummary.monthlyTop5.slice(0, 3) },
     therapistRankings: therapistRankings.map((t) => ({ id: t.id, name: t.name, storeDisplay: t.storeDisplay, manager: t.manager, totalRevenue: t.totalRevenue, rank: t.rank, status: t.status })),
     lastUpdatedAt: nowTimestamp,
@@ -10777,14 +10911,45 @@ async function buildAutoDashboardSummaryPayloads(brandId, yearMonth) {
   return { dashboardSummary, therapistSummary, rankingsSummary, brandLabel };
 }
 
-function getAutoMetricValue(obj, path) {
-  return path.split(".").reduce((acc, key) => (acc && acc[key] !== undefined ? acc[key] : 0), obj || {});
+function getAutoMetricValue(obj, path, fallback = 0) {
+  return path.split(".").reduce((acc, key) => (
+    acc !== null && acc !== undefined && acc[key] !== undefined ? acc[key] : fallback
+  ), obj || {});
 }
 
-function makeAutoSummaryCompareRows({ storedDashboard, storedTherapist, freshDashboard, freshTherapist }) {
+function makeAutoSummaryCompareRows({ storedDashboard, storedTherapist, storedRankings, freshDashboard, freshTherapist, freshRankings }) {
   const rows = [
-    { label: "現金業績", stored: getAutoMetricValue(storedDashboard, "grandTotal.cash"), fresh: getAutoMetricValue(freshDashboard, "grandTotal.cash"), type: "money" },
-    { label: "權責業績", stored: getAutoMetricValue(storedDashboard, "grandTotal.accrual"), fresh: getAutoMetricValue(freshDashboard, "grandTotal.accrual"), type: "money" },
+    { label: "現金業績（legacy）", stored: getAutoMetricValue(storedDashboard, "grandTotal.cash"), fresh: getAutoMetricValue(freshDashboard, "grandTotal.cash"), type: "money" },
+    { label: "權責業績（legacy）", stored: getAutoMetricValue(storedDashboard, "grandTotal.accrual"), fresh: getAutoMetricValue(freshDashboard, "grandTotal.accrual"), type: "money" },
+    { label: "Gross Cash", stored: getAutoMetricValue(storedDashboard, "grandTotal.grossCash", null), fresh: getAutoMetricValue(freshDashboard, "grandTotal.grossCash", null), type: "money", exactNull: true },
+    { label: "General Refund", stored: getAutoMetricValue(storedDashboard, "grandTotal.refund", null), fresh: getAutoMetricValue(freshDashboard, "grandTotal.refund", null), type: "money", exactNull: true },
+    { label: "Skincare Refund", stored: getAutoMetricValue(storedDashboard, "grandTotal.skincareRefund", null), fresh: getAutoMetricValue(freshDashboard, "grandTotal.skincareRefund", null), type: "money", exactNull: true },
+    { label: "Formal 淨現金", stored: getAutoMetricValue(storedDashboard, "grandTotal.formalNetCash", null), fresh: getAutoMetricValue(freshDashboard, "grandTotal.formalNetCash", null), type: "money", exactNull: true },
+    { label: "總權責", stored: getAutoMetricValue(storedDashboard, "grandTotal.totalAccrual", null), fresh: getAutoMetricValue(freshDashboard, "grandTotal.totalAccrual", null), type: "money", exactNull: true },
+    { label: "Formal 權責", stored: getAutoMetricValue(storedDashboard, "grandTotal.formalAccrual", null), fresh: getAutoMetricValue(freshDashboard, "grandTotal.formalAccrual", null), type: "money", exactNull: true },
+    { label: "Gross Cash 狀態", stored: getAutoMetricValue(storedDashboard, "grandTotal.grossCashStatus", ""), fresh: getAutoMetricValue(freshDashboard, "grandTotal.grossCashStatus", ""), type: "text", exact: true },
+    { label: "General Refund 狀態", stored: getAutoMetricValue(storedDashboard, "grandTotal.refundStatus", ""), fresh: getAutoMetricValue(freshDashboard, "grandTotal.refundStatus", ""), type: "text", exact: true },
+    { label: "Skincare Refund 狀態", stored: getAutoMetricValue(storedDashboard, "grandTotal.skincareRefundStatus", ""), fresh: getAutoMetricValue(freshDashboard, "grandTotal.skincareRefundStatus", ""), type: "text", exact: true },
+    { label: "Formal 淨現金狀態", stored: getAutoMetricValue(storedDashboard, "grandTotal.formalNetCashStatus", ""), fresh: getAutoMetricValue(freshDashboard, "grandTotal.formalNetCashStatus", ""), type: "text", exact: true },
+    { label: "總權責狀態", stored: getAutoMetricValue(storedDashboard, "grandTotal.totalAccrualStatus", ""), fresh: getAutoMetricValue(freshDashboard, "grandTotal.totalAccrualStatus", ""), type: "text", exact: true },
+    { label: "Formal 權責狀態", stored: getAutoMetricValue(storedDashboard, "grandTotal.formalAccrualStatus", ""), fresh: getAutoMetricValue(freshDashboard, "grandTotal.formalAccrualStatus", ""), type: "text", exact: true },
+    { label: "Formal 現金目標", stored: getAutoMetricValue(storedDashboard, "grandTotal.formalCashTarget", null), fresh: getAutoMetricValue(freshDashboard, "grandTotal.formalCashTarget", null), type: "money", exactNull: true },
+    { label: "Formal 權責目標", stored: getAutoMetricValue(storedDashboard, "grandTotal.formalAccrualTarget", null), fresh: getAutoMetricValue(freshDashboard, "grandTotal.formalAccrualTarget", null), type: "money", exactNull: true },
+    { label: "Formal 現金達成狀態", stored: getAutoMetricValue(storedDashboard, "grandTotal.formalCashAchievementStatus", ""), fresh: getAutoMetricValue(freshDashboard, "grandTotal.formalCashAchievementStatus", ""), type: "text", exact: true },
+    { label: "Formal 權責達成狀態", stored: getAutoMetricValue(storedDashboard, "grandTotal.formalAccrualAchievementStatus", ""), fresh: getAutoMetricValue(freshDashboard, "grandTotal.formalAccrualAchievementStatus", ""), type: "text", exact: true },
+    { label: "Cash Coverage", stored: getAutoMetricValue(storedDashboard, "targetCoverage.cashCoverageComplete", null), fresh: getAutoMetricValue(freshDashboard, "targetCoverage.cashCoverageComplete", null), type: "boolean", exact: true },
+    { label: "Accrual Coverage", stored: getAutoMetricValue(storedDashboard, "targetCoverage.accrualCoverageComplete", null), fresh: getAutoMetricValue(freshDashboard, "targetCoverage.accrualCoverageComplete", null), type: "boolean", exact: true },
+    { label: "Eligible Store Count", stored: getAutoMetricValue(storedDashboard, "formalTargetAuthority.eligibleStoreCount", null), fresh: getAutoMetricValue(freshDashboard, "formalTargetAuthority.eligibleStoreCount", null), type: "count", exactNull: true },
+    { label: "Formal Cash Target Total", stored: getAutoMetricValue(storedDashboard, "formalTargetAuthority.cashTargetTotal", null), fresh: getAutoMetricValue(freshDashboard, "formalTargetAuthority.cashTargetTotal", null), type: "money", exactNull: true },
+    { label: "Formal Accrual Target Total", stored: getAutoMetricValue(storedDashboard, "formalTargetAuthority.accrualTargetTotal", null), fresh: getAutoMetricValue(freshDashboard, "formalTargetAuthority.accrualTargetTotal", null), type: "money", exactNull: true },
+    { label: "Formal Target Coverage Consistent", stored: getAutoMetricValue(storedDashboard, "formalTargetAuthority.coverageConsistent", null), fresh: getAutoMetricValue(freshDashboard, "formalTargetAuthority.coverageConsistent", null), type: "boolean", exact: true },
+    { label: "Lifecycle Ready", stored: getAutoMetricValue(storedDashboard, "formalTargetAuthority.lifecycleReady", null), fresh: getAutoMetricValue(freshDashboard, "formalTargetAuthority.lifecycleReady", null), type: "boolean", exact: true },
+    { label: "Formal Rank Eligible Count", stored: getAutoMetricValue(storedDashboard, "formalRankEligibleStoreCount", null), fresh: getAutoMetricValue(freshDashboard, "formalRankEligibleStoreCount", null), type: "count", exactNull: true },
+    { label: "Summary Semantic Version", stored: getAutoMetricValue(storedDashboard, "semanticVersion", ""), fresh: getAutoMetricValue(freshDashboard, "semanticVersion", ""), type: "text", exact: true },
+    { label: "Store-level Formal Signature", stored: buildSummaryStoreSemanticSignature(storedDashboard), fresh: buildSummaryStoreSemanticSignature(freshDashboard), type: "text", exact: true },
+    { label: "Ranking Semantic Version", stored: getAutoMetricValue(storedRankings, "semanticVersion", ""), fresh: getAutoMetricValue(freshRankings, "semanticVersion", ""), type: "text", exact: true },
+    { label: "Formal Ranking Eligible Count", stored: getAutoMetricValue(storedRankings, "formalRankEligibleStoreCount", null), fresh: getAutoMetricValue(freshRankings, "formalRankEligibleStoreCount", null), type: "count", exactNull: true },
+    { label: "Formal Ranking Signature", stored: buildFormalRankingSignature(storedRankings), fresh: buildFormalRankingSignature(freshRankings), type: "text", exact: true },
     { label: "人員業績", stored: getAutoMetricValue(storedTherapist, "grandTotal.totalRevenue"), fresh: getAutoMetricValue(freshTherapist, "grandTotal.totalRevenue"), type: "money" },
     { label: "店日報筆數", stored: getAutoMetricValue(storedDashboard, "sourceCounts.dailyReports"), fresh: getAutoMetricValue(freshDashboard, "sourceCounts.dailyReports"), type: "count" },
     { label: "管理師日報筆數", stored: getAutoMetricValue(storedTherapist, "sourceCounts.therapistReports"), fresh: getAutoMetricValue(freshTherapist, "sourceCounts.therapistReports"), type: "count" },
@@ -10794,9 +10959,32 @@ function makeAutoSummaryCompareRows({ storedDashboard, storedTherapist, freshDas
   ];
 
   return rows.map((row) => {
-    const diff = Number(row.stored || 0) - Number(row.fresh || 0);
-    const diffRate = Number(row.fresh || 0) !== 0 ? (diff / Number(row.fresh || 0)) * 100 : (diff === 0 ? 0 : 100);
-    return { ...row, diff, diffRate, matched: Math.abs(diff) < 0.0001 };
+    if (row.exact === true || row.type === "text" || row.type === "boolean") {
+      return {
+        ...row,
+        diff: null,
+        diffRate: null,
+        matched: Object.is(row.stored, row.fresh),
+      };
+    }
+
+    if (row.exactNull === true && (row.stored === null || row.fresh === null)) {
+      return {
+        ...row,
+        diff: null,
+        diffRate: null,
+        matched: row.stored === row.fresh,
+      };
+    }
+
+    const storedNumber = Number(row.stored);
+    const freshNumber = Number(row.fresh);
+    const bothFinite = Number.isFinite(storedNumber) && Number.isFinite(freshNumber);
+    const diff = bothFinite ? storedNumber - freshNumber : null;
+    const diffRate = bothFinite
+      ? (freshNumber !== 0 ? (diff / freshNumber) * 100 : (diff === 0 ? 0 : 100))
+      : null;
+    return { ...row, diff, diffRate, matched: bothFinite && Math.abs(diff) < 0.0001 };
   });
 }
 
@@ -10971,7 +11159,24 @@ async function finalizeMonthReportAuto({ brandId, yearMonth, trigger = "auto_wor
     batch.set(getSummaryCollection(brandId, "rankings_summary").doc(yearMonth), rankingsSummary);
     await batch.commit();
 
-    const rows = makeAutoSummaryCompareRows({ storedDashboard: dashboardSummary, storedTherapist: therapistSummary, freshDashboard: dashboardSummary, freshTherapist: therapistSummary });
+    // Trust fix：寫入後重新讀取 Firestore persisted Summary，再與同次 Raw rebuild payload 比對。
+    // 不再用剛 build 的 object 自己跟自己比，避免 false verified。
+    const [storedDashboardSnap, storedTherapistSnap, storedRankingsSnap] = await Promise.all([
+      getSummaryCollection(brandId, "dashboard_summary").doc(yearMonth).get(),
+      getSummaryCollection(brandId, "therapist_summary").doc(yearMonth).get(),
+      getSummaryCollection(brandId, "rankings_summary").doc(yearMonth).get(),
+    ]);
+    if (!storedDashboardSnap.exists || !storedTherapistSnap.exists || !storedRankingsSnap.exists) {
+      throw new Error("Summary 寫入後讀回失敗，無法完成 Raw ↔ persisted Summary 驗證");
+    }
+    const rows = makeAutoSummaryCompareRows({
+      storedDashboard: storedDashboardSnap.data() || {},
+      storedTherapist: storedTherapistSnap.data() || {},
+      storedRankings: storedRankingsSnap.data() || {},
+      freshDashboard: dashboardSummary,
+      freshTherapist: therapistSummary,
+      freshRankings: rankingsSummary,
+    });
     mismatchRows = rows.filter((row) => !row.matched);
     isMatched = mismatchRows.length === 0;
 

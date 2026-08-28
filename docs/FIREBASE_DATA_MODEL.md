@@ -1665,7 +1665,7 @@ Batch 1 / 1.1 不修改任何既有 Raw、Target、Summary、Queue 或 `org_stru
 
 `entryStatus` 是由 Lifecycle 欄位與當前規則衍生的狀態，不應被當成獨立人工 authority；讀取 normalization 應依當前規則重新計算，避免舊版 validation 留下過時的 `INVALID` / `COMPLETE` 狀態。
 
-# 20. Target Authority / Coverage — Batch 3（IMPLEMENTED / TARGETED VALIDATED / NOT DEPLOYED）
+# 20. Target Authority / Coverage — Batch 3（PRODUCTION CONFIRMED）
 
 新增 Backend derived owner：
 
@@ -1689,3 +1689,118 @@ Steady-state normal Target write cost：每個受影響 Store×Month 主要為 `
 Lifecycle `BUILDING → BUILDING` 的大量初始化不掃 Target Summary；只有 READY 進出或 READY 期間 Lifecycle cohort 改變時，才低頻掃描既有 `monthly_targets_summary` documents 重新計算 coverage metadata。
 
 此 Batch 不修改 Firestore Rules，Admin SDK derived writer 沿用既有品牌實體 root。
+
+2026-08-28 已完成 6 支 Target Coverage Functions 與 Frontend 正式部署，Production smoke test 已確認 blank target 不寫 numeric `0`、Cash / Accrual coverage 可獨立 complete/incomplete、清空 target 會反向更新 coverage、challenge 必須大於 base。詳細 runtime 狀態以 `CURRENT_STATE.md` 為準。
+
+
+---
+
+# 21. Summary Semantics v1 — Batch 4（IMPLEMENTED / ISOLATED VALIDATED / NOT DEPLOYED）
+
+Batch 4 對 `dashboard_summary` / `rankings_summary` 採 **additive semantic migration**。既有 legacy 欄位暫時保留給 Batch 5 前 consumer，不把舊欄位原地換成新語意。
+
+新增 pure semantic owner：
+
+```text
+Frontend  src/utils/summarySemantics.js
+Backend   functions/summarySemantics.js
+Regression tests/summarySemantics.test.js
+```
+
+`dashboard_summary/{YYYY-MM}` 新增的 top-level semantic metadata：
+
+```text
+semanticVersion = summary-semantics-v1
+kpiContractVersion
+targetAuthoritySource
+targetCoverage
+formalTargetAuthority
+lifecycleSnapshot
+formalStoreRankings
+formalRankEligibleStoreCount
+```
+
+`stores.{store}` 與 `grandTotal` 在保留既有 `cash / accrual / refund / skincareRefund / operationalAccrual` 的前提下，新增 explicit fields / status：
+
+```text
+grossCash
+grossCashStatus
+refundStatus
+skincareRefundStatus
+formalNetCash
+formalNetCashStatus
+
+totalAccrual
+totalAccrualStatus
+operationalAccrualStatus
+formalAccrual
+formalAccrualStatus
+formalAccrualSource
+
+formalCashTarget
+formalCashTargetStatus
+formalCashAchievement
+formalCashAchievementStatus
+formalAccrualTarget
+formalAccrualTargetStatus
+formalAccrualAchievement
+formalAccrualAchievementStatus
+formalLifecycleEligible
+formalRankEligible
+formalCashAchievementRank
+```
+
+語意：
+
+```text
+grossCash = Raw cash
+formalNetCash = cash - refund - skincareRefund
+
+安妞：
+  totalAccrual  = Raw accrual（總權責業績）
+  formalAccrual = operationalAccrual（權責業績）
+
+CYJ / 伊啵：
+  totalAccrual  = Raw accrual
+  formalAccrual = Raw accrual
+```
+
+Formal brand/scope achievement 只在對應 KPI 的 Batch 3 coverage 經 `kpi-contract-v1` + Lifecycle READY cohort 驗證一致時成立；Cash / Accrual 各自獨立。Coverage incomplete 是正式 business state，**不會因 incomplete 本身而 full-scan `monthly_targets`**。
+
+`rankings_summary/{YYYY-MM}` 保留 legacy cash-amount rank，同時新增 `formalStoreRankings`，正式排序依：
+
+```text
+formalNetCash / valid cashTarget
+```
+
+缺目標、KPI invalid、Lifecycle 非 eligible 不進 formal rank；真實 0 與負數 net cash 仍可 rank-eligible。
+
+### Summary document size boundary
+
+Batch 4 **不把 explicit semantic fields 複製到每店 × 每日 `storeDailyTotals` row**。既有 `dashboard-summary-v2` 的 `storeDailyTotals` legacy shape 保留，避免單一 Summary document 因 store×day 欄位膨脹接近 Firestore 1 MiB 上限。
+
+### Writer / Trust
+
+正式上存在兩個 writer：
+
+```text
+Backend auto repair
+functions/index.js
+
+Frontend Maintenance manual rebuild
+src/components/SystemMaintenance.jsx
+```
+
+兩者都必須使用同一組 parity-protected Summary Semantics contract。Maintenance manual writer 保留 `dashboard-summary-v2` / `storeDailyTotals`，不得用較舊 payload 覆蓋掉 Backend v2 curve。
+
+Batch 4 compare 改為 Summary 三文件寫入後重新讀取 persisted：
+
+```text
+dashboard_summary
+therapist_summary
+rankings_summary
+```
+
+再與同次 Raw rebuild payload 比較。不可用 freshly-built object 自己跟自己比後標 verified。
+
+本 Batch 不修改 Firestore Rules、不新增 collection、不修改 Raw schema。

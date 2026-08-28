@@ -1112,7 +1112,7 @@ Telegram
 
 因此 Lifecycle 建置不會改變現行 KPI 數字；正式 consumer cutover 必須在後續 Batch 重新驗證後才進行。
 
-# 40. Target Coverage Self-healing Flow — Batch 3（IMPLEMENTED / NOT DEPLOYED）
+# 40. Target Coverage Self-healing Flow — Batch 3（PRODUCTION CONFIRMED）
 
 正常 Target 修改：
 
@@ -1159,3 +1159,82 @@ READY 進入 / 離開
 ```
 
 這不是 polling，也不在 Dashboard render 時掃 Raw Targets。
+
+
+---
+
+# 41. Summary Semantic Writer Flow — Batch 4（IMPLEMENTED / ISOLATED VALIDATED / NOT DEPLOYED）
+
+```text
+daily_reports（Raw）
+   │
+   ├─ legacy Summary aggregation（相容欄位不改語意）
+   │
+   └─ summarySemantics
+        ├─ grossCash
+        ├─ formalNetCash = cash - refund - skincareRefund
+        ├─ totalAccrual
+        ├─ formalAccrual（安妞 = operationalAccrual）
+        └─ validity status
+```
+
+Target / Lifecycle authority：
+
+```text
+monthly_targets_summary/{YYYY-MM}
+        +
+store_lifecycle/master
+        │
+        ▼
+formalTargetAuthority
+        ├─ Lifecycle READY eligible cohort
+        ├─ Cash coverage trusted independently
+        ├─ Accrual coverage trusted independently
+        └─ scope target totals / achievement validity
+```
+
+合法的 `cashCoverageComplete=false` 或 `accrualCoverageComplete=false` 是正式狀態，不是 Target Summary 讀取失敗；不得因 incomplete 自動 full-scan `monthly_targets`。
+
+Writer topology：
+
+```text
+Backend repairDirtySummaryNow / repairDirtySummaries
+        │
+        └─ functions/index.js
+
+SystemMaintenance manual rebuild
+        │
+        └─ src/components/SystemMaintenance.jsx
+
+兩者
+        ↓
+parity-protected Summary Semantics
+        ↓
+dashboard_summary
+therapist_summary
+rankings_summary
+```
+
+`dashboard_summary` 保存 additive `formalStoreRankings`，legacy ranking 暫時保留。正式 ranking metric = formal net cash / valid cash target。
+
+Trust flow：
+
+```text
+Raw rebuild payload
+        │
+        ├─ write dashboard_summary
+        ├─ write therapist_summary
+        └─ write rankings_summary
+                 │
+                 ▼
+        read back persisted 3 docs
+                 │
+                 ▼
+      semantic/signature compare
+                 │
+          match  ┴ mismatch
+```
+
+不再 freshly-built self-compare。
+
+Batch 4 不切換 Dashboard / Regional / Ranking UI consumer；consumer cutover 屬 Batch 5。

@@ -771,26 +771,116 @@ status: ignored_pre_system_month
 
 ## Production Validation
 
-2026-08-24 部署後兩個連續排程週期：
+2026-08-24 已完成較長時間 Production observation：
 
 ```text
-12:04
-✅ 目前沒有到期的 dirty / pending 月份
-
-12:09
-✅ 目前沒有到期的 dirty / pending 月份
+12:12～13:30（UTC+8）
+約 77 分 54 秒
+16 個連續 repairDirtySummaries 週期
+16 / 16 無到期 dirty / pending
+16 / 16 HTTP 200
+2026-01～03 不再進 repair job
+monthly_targets full fallback warning = 0
+Summary repair failure = 0
+ERROR / CRITICAL = 0
 ```
 
-10 分鐘 Logs 期間未再觀察到：
+觀察時間已超過兩個 30 分鐘 queue fallback steady interval，未觀察到 queue fallback 將 pre-system months 重新帶回 repair loop。
+
+Final status：
 
 ```text
-yibo/2026-01～03 repair job
-monthly_targets_summary full collection fallback
-Summary 自動修復失敗
+PRODUCTION VERIFIED
+INCIDENT CLOSED
 ```
 
-因此原本每 5 分鐘重試的主要循環已停止。
 
-Queue fallback steady interval 為 30 分鐘；
-本次 10 分鐘 runtime validation 尚未單獨覆蓋到完整 queue fallback 週期。
 
+---
+
+# 29. Summary Semantics v1 — Batch 4
+
+Batch 4 的責任是先把歷史 Summary authority 寫出明確 formal semantics，**不是在本 Batch 就切換 Dashboard consumer**。因此採 additive migration：
+
+```text
+legacy Summary fields retained
++
+semanticVersion = summary-semantics-v1
++
+explicit formal fields/status
+```
+
+## Writer parity
+
+目前 `dashboard_summary / therapist_summary / rankings_summary` 同時可能由：
+
+```text
+Backend auto repair
+SystemMaintenance manual rebuild
+```
+
+寫入。兩條路徑都必須套用 `summarySemantics` contract；Maintenance rebuild 亦維持 `dashboard-summary-v2` 的 `storeDailyTotals`，避免手動工具把 Backend v2 欄位覆蓋掉。
+
+## Target authority
+
+Summary rebuild 先讀：
+
+```text
+monthly_targets_summary/{YYYY-MM}   1 doc
+store_lifecycle/master              1 doc
+```
+
+只要 Target Summary 已具備 Batch 3 `target-coverage-v1` metadata，即使 Cash 或 Accrual coverage 為 incomplete，也把它視為有效的「不完整狀態」，不因 incomplete 而掃完整 `monthly_targets`。
+
+只有 Target Summary 缺失、不可讀或缺舊 schema compatibility 所需的 coverage contract 時，才允許 raw target compatibility fallback。
+
+## Formal fields
+
+Brand / Store Summary 額外保存：
+
+```text
+grossCash
+formalNetCash
+formalNetCashStatus
+
+totalAccrual
+formalAccrual
+formalAccrualStatus
+formalAccrualSource
+
+formalCashTarget / formalCashAchievement
+formalAccrualTarget / formalAccrualAchievement
+```
+
+安妞的 `totalAccrual` 與 `formalAccrual=operationalAccrual` 不再共用一個 ambiguous field。
+
+## Ranking
+
+Legacy `storeRankings` 暫時不變；新增 `formalStoreRankings` 依 formal cash achievement 排序。Batch 5 consumer 才切換讀取。
+
+## Trust compare
+
+Summary rebuild 後必須：
+
+```text
+write dashboard + therapist + rankings Summary
+↓
+read back all 3 persisted docs
+↓
+compare with Raw-calculated fresh payload
+↓
+match 才可 verified
+```
+
+Compare 至少涵蓋 scope formal metrics/status、Lifecycle/target coverage、store-level semantic signature、formal ranking signature 與既有 source counts；不可 freshly-built self-compare。
+
+## Read cost
+
+不新增 listener / polling。每次低頻歷史 rebuild 新增的正常小型 point reads 主要是：
+
+```text
++1 store_lifecycle/master
++3 persisted Summary readback for trust compare
+```
+
+Target normal path由可能的 full `monthly_targets` scan 改為 1-doc Target Summary；因此合法 target-incomplete month 不再產生全 Target collection fallback reads。

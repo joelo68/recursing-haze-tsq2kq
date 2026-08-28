@@ -1,7 +1,7 @@
 # SYSTEM_SOURCE_MAP.md
 
 > 狀態：Project Knowledge Base / Source Map v0.1
-> 已整併至 2026-08-25。目前正式部署 source 仍是最高依據；`CURRENT_STATE.md` 會區分「已上線」與「已驗證待部署」。
+> 已整併至 2026-08-28。目前正式部署 source 仍是最高依據；`CURRENT_STATE.md` 會區分「已上線」與「已驗證待部署」。
 > 禁止以舊對話、舊版檔案、AI 記憶或未提供的檔案補足事實。
 > 無法由目前正式程式確認的內容，必須標記為「未由目前正式來源確認」。
 
@@ -1452,7 +1452,7 @@ PRODUCTION CONSUMER              NOT YET CONFIRMED
 
 後續 Summary Writer 與各 consumer migration 必須繼續引用這份 contract（或 parity-protected mirror），不得重新在頁面或 writer 發明不同的 formal net cash / formal accrual / validity semantics。
 
-# 27. Target Writer / KPI Settings / Coverage Authority — Batch 3（IMPLEMENTED / TARGETED VALIDATED / NOT DEPLOYED）
+# 27. Target Writer / KPI Settings / Coverage Authority — Batch 3（PRODUCTION CONFIRMED）
 
 最新 owner：
 
@@ -1500,14 +1500,107 @@ or READY cohort change
   scoped low-frequency monthly_targets_summary scan
 ```
 
-截至 package validation：
+正式狀態（2026-08-28）：
 
 ```text
-KPI + Store Identity + Lifecycle + Target Authority targeted regression: 57 / 57 PASS
-Frontend JSX syntax parse: PASS
-Backend / pure JS syntax: PASS
-Full production-repo npm run build: pending user repo execution
-DEPLOYED: NO
-PRODUCTION CONFIRMED: NO
+KPI + Store Identity + Lifecycle + Target Authority regression: 57 / 57 PASS
+Full production-repo npm run build: PASS
+6 scoped Target Coverage Functions: DEPLOYED
+Frontend GitHub Pages: Published
+Production smoke test: PASS
+PRODUCTION CONFIRMED: YES
 CURRENT_APP_VERSION: 3.5.3 unchanged
 ```
+
+
+---
+
+# 28. Summary Writer Semantic Migration — Batch 4（IMPLEMENTED / ISOLATED VALIDATED / NOT DEPLOYED）
+
+新增 pure owners：
+
+```text
+src/utils/summarySemantics.js
+  → Frontend Maintenance Summary semantic contract（ESM）
+
+functions/summarySemantics.js
+  → Backend Summary semantic contract（CommonJS mirror）
+
+tests/summarySemantics.test.js
+  → Frontend ↔ Backend parity / semantics / wiring / call-graph regression
+```
+
+Runtime owners：
+
+```text
+functions/index.js
+  → Backend historical Summary builder / repair / persisted trust compare
+
+src/components/SystemMaintenance.jsx
+  → Manual Summary builder / compare; must mirror Backend Summary contract
+```
+
+Batch 4 明確不修改：
+
+```text
+src/hooks/useDashboardStats.js runtime read contract
+Dashboard / Regional / Ranking / Annual consumer cutover
+functions/targetCoverage.js
+src/utils/kpiContracts.js
+functions/kpiContracts.js
+src/utils/storeLifecycle.js
+functions/storeLifecycle.js
+Firestore Rules
+CURRENT_APP_VERSION
+```
+
+Summary semantic contract：
+
+```text
+semanticVersion = summary-semantics-v1
+formalNetCash = cash - refund - skincareRefund
+
+安妞：
+  totalAccrual = accrual
+  formalAccrual = operationalAccrual
+
+CYJ / 伊啵：
+  totalAccrual = accrual
+  formalAccrual = accrual
+```
+
+Legacy `cash / accrual / rank` 等欄位暫時保留；Batch 4 不原地重新定義它們。新 formal ranking 以 cash achievement 排序，寫入 additive `formalStoreRankings`。
+
+Target authority 使用 Batch 3 `monthly_targets_summary` + Lifecycle READY cohort。Coverage incomplete 不等於 Summary failure，也不會因此掃完整 `monthly_targets`。
+
+Trust compare 在 Backend auto repair 與 Maintenance manual rebuild 都改成寫入後重新讀取：
+
+```text
+dashboard_summary
+therapist_summary
+rankings_summary
+```
+
+再與同次 Raw rebuild payload 比對；store-level semantic signature 與 ranking signature 也納入 compare。
+
+Backend call graph 目前只有：
+
+```text
+repairDirtySummaryNow
+repairDirtySummaries
+```
+
+會走修改後的 Summary builder，因此 Batch 4 Backend deploy scope 應只包含這兩支 Functions。`summarySemantics.js` 是 dependency module，不是新的 Function export。
+
+Read/write impact：
+
+```text
+Persistent listeners  +0
+Polling               +0
+Summary writes        仍為每次 rebuild 3 docs
+Lifecycle read        +1 single master doc / rebuild
+Persisted trust read  +3 point reads / rebuild
+Target normal path    1 target-summary doc；incomplete 不 full-scan raw targets
+```
+
+為控制 Firestore document size，formal semantic fields 只加在 store / grand / top-level authority，不擴張每店×每日 `storeDailyTotals` row schema；Maintenance 仍保留既有 `dashboard-summary-v2` `storeDailyTotals`。

@@ -991,3 +991,69 @@ recalc_queue
 
 而不是削弱當月 `daily_reports` 即時監聽。
 
+
+
+---
+
+# 43. Summary Build / Compare — Batch 4 Semantic Migration
+
+Batch 4 後，SystemMaintenance 的 Summary rebuild 不再是獨立公式實作；它與 Backend repair 共用 parity-protected `summarySemantics` contract。
+
+Manual rebuild Target source：
+
+```text
+monthly_targets_summary/{YYYY-MM}
++
+store_lifecycle/master
+```
+
+若 Target Summary 已有 `target-coverage-v1`，Cash / Accrual incomplete 會原樣保留為正式不完整狀態，**不因 incomplete 而掃完整 `monthly_targets`**。只有 Summary 缺失／不可讀／缺 coverage schema 時才 compatibility raw fallback。
+
+Maintenance writer 必須保留：
+
+```text
+version = dashboard-summary-v2
+storeDailyTotals
+legacy cash / accrual / rank
+```
+
+同時 additive 新增：
+
+```text
+semanticVersion = summary-semantics-v1
+formal metrics/status
+formalTargetAuthority
+lifecycleSnapshot
+formalStoreRankings
+```
+
+避免手動重建把 Backend v2 的每店每日 curve 刪掉。
+
+## Persisted compare
+
+「月份報表整理」與手動 Summary compare 都必須讀回 persisted 三文件：
+
+```text
+dashboard_summary/{YYYY-MM}
+therapist_summary/{YYYY-MM}
+rankings_summary/{YYYY-MM}
+```
+
+再與新的 Raw rebuild payload 比對；禁止 freshly-built object self-compare。
+
+Compare 需涵蓋：
+
+```text
+legacy totals / source counts
+formal net cash / total & formal accrual + status
+formal target totals / independent coverage trust
+Lifecycle snapshot
+store-level semantic signature
+formal ranking signature
+```
+
+## Risk / reads
+
+仍屬中風險 Derived Data tool。沒有新增 polling 或 persistent listener。
+
+每次 manual rebuild 相較舊流程，正常增加少量 point reads：Lifecycle master 1 doc + persisted 3 Summary readback；而 Target normal path 從 full target collection scan 改為單一 Target Summary doc。大量歷史重建仍應離峰、逐 brand/month 控制執行。
