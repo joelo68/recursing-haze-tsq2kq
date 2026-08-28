@@ -2,7 +2,7 @@
 
 > 用途：記錄「目前正式環境已確認到哪個狀態」。這不是 CHANGELOG。  
 > 優先順序：使用者提供的目前正式部署 source > 本檔案 > 其他 Knowledge Base 文件。  
-> 最後整併更新：**2026-08-25 22:17（UTC+8）**。
+> 最後整併更新：**2026-08-28（UTC+8）**。
 
 # 1. Production Source Snapshot
 
@@ -37,6 +37,68 @@ Firebase project endpoint: cyjsituation-analysis
 ```
 
 未來再修改這條 Security 流程前，必須重新取得部署後最新正式 source；不得把上述兩支舊 snapshot 直接當成目前最新可修改版本。
+
+
+## Frontend / Target Authority — 2026-08-28 Production 補充
+
+2026-08-28，使用者以本次最新正式 source 完成 Batch 3「Target Authority / Lifecycle-aware Coverage」整合、正式 repo regression、production build、GitHub Pages 發布與 Production smoke test。
+
+本次可由正式 source／deploy log／runtime 驗證確認：
+
+```text
+CURRENT_APP_VERSION = 3.5.3（未提高）
+
+Target Writer：
+- blank / missing / 0 base target 不再被當成已設定目標
+- 未設定欄位在 monthly_targets Raw document 中不建立 numeric 0
+- challenge target 必須大於 valid base target
+
+Target Coverage：
+- cash / accrual coverage 獨立計算
+- eligibility 由 READY Store Lifecycle monthly cohort 提供
+- 正常 monthly_targets 異動採 event-driven scoped rebuild
+- 不新增前端大型 listener / polling
+```
+
+已正式確認的 Production case（CYJ / 2026-09）：
+
+```text
+eligibleStoreCount = 33
+
+cashConfiguredStoreCount = 33
+cashCoverageComplete = true
+
+accrualConfiguredStoreCount = 32
+accrualCoverageComplete = false
+accrualMissingStores = ["CYJ北大店"]
+```
+
+將該店 cash target 清空後，Production Summary 正確變更為：
+
+```text
+cashConfiguredStoreCount = 32
+cashCoverageComplete = false
+cashMissingStores 包含 CYJ北大店
+```
+
+Challenge validity 也已完成正式測試：
+
+```text
+challenge == base  → 拒絕
+challenge < base   → 拒絕
+challenge > base   → 允許
+```
+
+因此 Batch 3 runtime 狀態可標記為：
+
+```text
+IMPLEMENTED
+VALIDATED
+DEPLOYED
+PRODUCTION CONFIRMED
+```
+
+未來若再次修改 Target / Coverage / Lifecycle consumer，仍必須重新取得當時最新正式 source，不得直接沿用本次部署前附件。
 
 ## Backend — 正式部署確認邊界
 
@@ -226,6 +288,41 @@ CURRENT_APP_VERSION：3.5.3（未提高）
 - Summary Repair 維持 backend-driven
 - 2026-08-24 Yibo pre-system month 防循環修正仍由 `DASHBOARD_SUMMARY.md`、`MAINTENANCE_TOOLS.md` 記錄
 
+
+## 7.1 Pre-system Month Repair — Production Verification Closed
+
+2026-08-24 針對 Summary Repair 的 pre-system month 防循環修正完成正式 Production 長時間驗證。
+
+Production validation：
+
+```text
+觀察時間：2026-08-24 12:12～13:30（UTC+8）
+總觀察：約 77 分 54 秒
+```
+
+Result：
+
+```text
+✅ 16 個連續 repairDirtySummaries 週期
+✅ 16 / 16 皆回報沒有到期 dirty / pending
+✅ 16 / 16 HTTP 200
+✅ 2026-01～03 不再進 repair job
+✅ monthly_targets full fallback warning = 0
+✅ Summary repair failure = 0
+✅ ERROR / CRITICAL = 0
+✅ 觀察時間已超過兩個 30 分鐘尺度
+✅ 未觀察到 queue fallback 將 pre-system months 重新帶回 repair loop
+```
+
+Final status：
+
+```text
+PRODUCTION VERIFIED
+INCIDENT CLOSED
+```
+
+這項結論只適用於已完成驗證的 pre-system month repair incident；未來若 Summary Repair source 再有修改，仍需重新依最新正式 source 與 runtime observation 驗證。
+
 # 8. Store Identity State
 
 `DATA_IDENTITY_RULES.md` 仍是 CYJ 新店正式規則：
@@ -283,7 +380,113 @@ Firestore reads 是否維持 Summary-first 設計，沒有重新引入 pending c
 - v3.5.0／v3.5.1／v3.5.2 舊 release note 保持原內容，移入 `docs/archive/`。
 - 重複的 `SYSTEM_SOURCE_MAP.md.md` 不再列入正式維護文件。
 
-# 12. 本文件更新原則
+
+# 12. Target Authority / Lifecycle-aware Coverage — Batch 3 已正式確認
+
+2026-08-28 完成 Batch 3 正式部署與 Production smoke test。
+
+## Source / Architecture
+
+主要 runtime owner：
+
+```text
+src/components/TargetView.jsx
+src/components/SettingsView.jsx
+src/App.jsx
+src/utils/storeLifecycle.js
+
+functions/storeLifecycle.js
+functions/targetCoverage.js
+functions/index.js
+```
+
+Regression：
+
+```text
+tests/kpiContracts.test.js
+tests/storeIdentity.test.js
+tests/storeLifecycle.test.js
+tests/targetAuthority.test.js
+```
+
+## Validation
+
+正式 repository 實際完成：
+
+```text
+KPI Contracts       15 / 15 PASS
+Store Identity       7 / 7 PASS
+Store Lifecycle     22 / 22 PASS
+Target Authority    13 / 13 PASS
+--------------------------------
+Total               57 / 57 PASS
+
+npm run build        PASS
+```
+
+Production deploy：
+
+```text
+Backend:
+6 scoped Target Coverage Functions deployed successfully
+
+Frontend:
+GitHub Pages deployment → Published
+```
+
+正式 Production runtime 已確認：
+
+```text
+Raw blank target
+→ monthly_targets 不建立 numeric 0 欄位
+
+Derived missing target
+→ monthly_targets_summary 使用 null / missing semantics
+→ 不與 real zero 混淆
+
+Cash Coverage
+!=
+Accrual Coverage
+
+Store Lifecycle datasetStatus = READY
+→ monthly eligible cohort 才可作 coverage authority
+```
+
+## Deployed Functions
+
+```text
+onLegacyMonthlyTargetChange
+onBrandMonthlyTargetChange
+
+onLegacyMonthlyTargetSummaryChange
+onBrandMonthlyTargetSummaryChange
+
+onLegacyStoreLifecycleCoverageChange
+onBrandStoreLifecycleCoverageChange
+```
+
+本 Batch：
+
+```text
+CURRENT_APP_VERSION = 3.5.3（未提高）
+Firestore Rules      = unchanged
+Frontend polling     = +0
+Frontend broad listener = +0
+```
+
+## Documentation Impact
+
+本 Batch 已同步更新：
+
+```text
+docs/FIREBASE_DATA_MODEL.md
+docs/DATA_FLOW.md
+docs/SYSTEM_SOURCE_MAP.md
+docs/DEVELOPMENT_GUIDE.md
+CURRENT_STATE.md
+```
+
+# 13. 本文件更新原則
 
 只有目前正式 source、使用者明確確認、或部署後 runtime 驗證可以支持「已部署／已正式啟用」。
 
