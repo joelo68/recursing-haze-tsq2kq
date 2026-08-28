@@ -145,6 +145,51 @@ function validateLifecycleDraft(raw = {}) {
   };
 }
 
+
+// Batch 3 Target Coverage authority：monthly cohort 必須共用 Lifecycle owner，禁止在 Target/Summary writer 另寫一套日期規則。
+function isLifecycleEntryEligibleForMonth(entry = {}, yearMonth = '') {
+  const normalizedYearMonth = normalizeYearMonth(yearMonth);
+  if (!normalizedYearMonth) return false;
+
+  const check = validateLifecycleDraft(entry || {});
+  if (!check.valid || check.entryStatus !== 'COMPLETE') return false;
+
+  const firstEligibleMonth = check.normalized.firstEligibleMonth;
+  const lastEligibleMonth = check.normalized.lastEligibleMonth;
+  const exemptMonths = check.normalized.exemptMonths;
+
+  if (!firstEligibleMonth || normalizedYearMonth < firstEligibleMonth) return false;
+  if (lastEligibleMonth && normalizedYearMonth > lastEligibleMonth) return false;
+  if (exemptMonths.includes(normalizedYearMonth)) return false;
+  return true;
+}
+
+function getLifecycleEligibleStoreEntries(master = {}, yearMonth = '', options = {}) {
+  const normalizedYearMonth = normalizeYearMonth(yearMonth);
+  if (!normalizedYearMonth) return [];
+  const requireReady = options.requireReady !== false;
+  if (requireReady && String(master?.datasetStatus || '') !== 'READY') return [];
+
+  const brandId = normalizeBrandId(master?.brandId || options.brandId || 'cyj');
+  const stores = master?.stores && typeof master.stores === 'object' && !Array.isArray(master.stores)
+    ? master.stores
+    : {};
+
+  return Object.entries(stores)
+    .map(([storeKey, value]) => {
+      const entry = value || {};
+      const coreStoreName = normalizeStoreLifecycleCore(entry.coreStoreName || entry.storeKey || storeKey);
+      return {
+        ...entry,
+        storeKey: coreStoreName,
+        coreStoreName,
+        canonicalStoreName: getCanonicalStoreName(entry.canonicalStoreName || coreStoreName, brandId),
+      };
+    })
+    .filter((entry) => isLifecycleEntryEligibleForMonth(entry, normalizedYearMonth))
+    .sort((a, b) => String(a.canonicalStoreName || a.storeKey).localeCompare(String(b.canonicalStoreName || b.storeKey), 'zh-Hant'));
+}
+
 function buildLifecycleEntry({ raw = {}, storeName = '', brandId, previous = {}, actor }) {
   const storeKey = normalizeStoreLifecycleCore(storeName || raw.storeKey || raw.canonicalStoreName || previous.storeKey || previous.canonicalStoreName);
   if (!storeKey) {
@@ -448,5 +493,7 @@ module.exports = {
   normalizeStoreLifecycleCore,
   getCanonicalStoreName,
   validateLifecycleDraft,
+  isLifecycleEntryEligibleForMonth,
+  getLifecycleEligibleStoreEntries,
   buildReadyValidation,
 };

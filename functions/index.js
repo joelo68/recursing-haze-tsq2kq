@@ -31,6 +31,21 @@ const { createStoreLifecycleFunctions } = require("./storeLifecycle");
 const storeLifecycleFunctions = createStoreLifecycleFunctions({ admin, db });
 exports.manageStoreLifecycle = storeLifecycleFunctions.manageStoreLifecycle;
 
+
+// ==========================================
+// ★ Target Coverage v1：Target Summary event-driven authority
+// monthly_targets → monthly_targets_summary，並由 Store Lifecycle READY cohort 獨立計算 cash/accrual coverage。
+// 不新增 Dashboard listener、不 polling、不在每次 target write 掃完整 monthly_targets collection。
+// ==========================================
+const { createTargetCoverageFunctions } = require("./targetCoverage");
+const targetCoverageFunctions = createTargetCoverageFunctions({ admin, db });
+exports.onLegacyMonthlyTargetChange = targetCoverageFunctions.onLegacyMonthlyTargetChange;
+exports.onBrandMonthlyTargetChange = targetCoverageFunctions.onBrandMonthlyTargetChange;
+exports.onLegacyMonthlyTargetSummaryChange = targetCoverageFunctions.onLegacyMonthlyTargetSummaryChange;
+exports.onBrandMonthlyTargetSummaryChange = targetCoverageFunctions.onBrandMonthlyTargetSummaryChange;
+exports.onLegacyStoreLifecycleCoverageChange = targetCoverageFunctions.onLegacyStoreLifecycleCoverageChange;
+exports.onBrandStoreLifecycleCoverageChange = targetCoverageFunctions.onBrandStoreLifecycleCoverageChange;
+
 const GEMINI_API_KEY = defineSecret('GEMINI_API_KEY');
 const TELEGRAM_BOT_TOKEN_SECRET = defineSecret('TELEGRAM_BOT_TOKEN');
 

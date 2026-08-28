@@ -180,6 +180,42 @@ export const validateLifecycleEntryDraft = (entry = {}) => {
   };
 };
 
+
+// Batch 3 Target Coverage authority：Lifecycle 是「某月份是否屬於正式 KPI cohort」的單一來源。
+// 不使用 openDate 推導 monthly eligibility；openDate / closeDate 是 daily boundary，月度 cohort 由 first/last/exempt 決定。
+export const isLifecycleEntryEligibleForMonth = (entry = {}, yearMonth = "") => {
+  const normalizedYearMonth = normalizeYearMonth(yearMonth);
+  if (!normalizedYearMonth) return false;
+  if (getLifecycleEntryCompleteness(entry) !== "COMPLETE") return false;
+
+  const firstEligibleMonth = normalizeYearMonth(entry.firstEligibleMonth);
+  const lastEligibleMonth = normalizeYearMonth(entry.lastEligibleMonth);
+  const exemptMonths = normalizeExemptMonths(entry.exemptMonths);
+
+  if (!firstEligibleMonth || normalizedYearMonth < firstEligibleMonth) return false;
+  if (lastEligibleMonth && normalizedYearMonth > lastEligibleMonth) return false;
+  if (exemptMonths.includes(normalizedYearMonth)) return false;
+  return true;
+};
+
+export const getLifecycleEligibleStoreEntries = (master = {}, yearMonth = "", options = {}) => {
+  const normalizedYearMonth = normalizeYearMonth(yearMonth);
+  if (!normalizedYearMonth) return [];
+
+  const requireReady = options.requireReady !== false;
+  if (requireReady && String(master?.datasetStatus || "") !== "READY") return [];
+
+  const brandId = normalizeLifecycleBrandId(master?.brandId || options.brandId || "cyj");
+  const rawStores = master?.stores && typeof master.stores === "object" && !Array.isArray(master.stores)
+    ? master.stores
+    : {};
+
+  return Object.entries(rawStores)
+    .map(([key, value]) => normalizeLifecycleEntry(value || {}, key, brandId))
+    .filter((entry) => isLifecycleEntryEligibleForMonth(entry, normalizedYearMonth))
+    .sort((a, b) => String(a.canonicalStoreName || a.storeKey).localeCompare(String(b.canonicalStoreName || b.storeKey), "zh-Hant"));
+};
+
 export const normalizeLifecycleEntry = (raw = {}, fallbackStoreName = "", brandId = "cyj") => {
   const canonicalStoreName = getCanonicalLifecycleStoreName(
     raw.canonicalStoreName || raw.storeName || fallbackStoreName,

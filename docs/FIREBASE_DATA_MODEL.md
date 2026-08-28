@@ -266,6 +266,9 @@ Document ID 主要由：
 - 讀取：canonical 優先、legacy fallback
 - 寫入：只寫 canonical
 - 若讀到特定 legacy CYJ 新店 key，重新儲存時安全遷移
+- Batch 3 起，base target 的 blank / missing / `0` 代表「目標未設定」；Frontend 寫 raw 時移除該欄位，不再把空白轉成 numeric `0`
+- challenge target 為 optional；有設定時必須大於同類型 base target，否則 Frontend 阻止寫入
+- Frontend 不再直接維護 `monthly_targets_summary`；Derived Target Summary 改由 Backend event-driven writer 生成／修復
 
 ### 主要 target fields
 
@@ -302,7 +305,7 @@ Document ID：
 YYYY-MM
 ```
 
-目前 TargetView 寫入的 row 至少包含：
+Batch 3 Backend Derived writer 維護的 target row 至少包含：
 
 ```text
 brandId
@@ -320,29 +323,67 @@ targets.{storeName}.challengeAccrualTarget
 targets.{storeName}.isUnlocked
 ```
 
-### 完整性規則
+### Batch 3 Derived Target Coverage contract
 
-正式 backend 在使用 target Summary 前會檢查正式店家 coverage。
+`monthly_targets_summary` 自 Batch 3 起由 Backend `functions/targetCoverage.js` 作為 Derived writer authority。正常 Target 修改事件不掃完整 `monthly_targets` collection，而是只處理受影響月份的單一 Summary document，並讀取單一 `store_lifecycle/master` 判斷該月正式 KPI cohort。
 
-有正式店家 roster 時：
-
-```text
-逐店有效目標完整
-```
-
-才可視為 complete。
-
-全 0 active-store target 不應被誤判成完整有效 coverage。
-
-若不足：
+每月 Summary 新增／維護的 coverage metadata 至少包括：
 
 ```text
-monthly_targets_summary
-  ↓ fallback
-dashboard_summary target map
-  ↓ fallback
-monthly_targets raw
+targetCoverageVersion = target-coverage-v1
+kpiContractVersion
+lifecycleReady
+eligibleStoreCount
+cashConfiguredStoreCount
+accrualConfiguredStoreCount
+cashCoverageComplete
+accrualCoverageComplete
+cashMissingStores[]
+accrualMissingStores[]
+targetAudit
+coverageSource
+coverageUpdatedAt / coverageUpdatedAtText
 ```
+
+為避免尚未切換的新舊 consumer 讀到 stale top-level totals，Backend 每次 canonical target-map 更新時也同步重算既有相容欄位：
+
+```text
+brandLabel
+year / month
+storeCount / targetCount
+cashTargetTotal
+accrualTargetTotal
+sourceDocCount
+```
+
+Cash 與 Accrual coverage **獨立判斷**：某店 Cash target 已設定但 Accrual target 未設定時，只能得到 Cash complete / Accrual incomplete，不得合併成一個「有目標就算完整」狀態。
+
+Coverage cohort 來源：
+
+```text
+store_lifecycle/master
+  datasetStatus = READY
+  firstEligibleMonth <= yearMonth
+  lastEligibleMonth null OR yearMonth <= lastEligibleMonth
+  yearMonth not in exemptMonths
+```
+
+Lifecycle 尚未 `READY` 時，coverage metadata 不得被標記為 complete。
+
+`targetAudit` 只報告既有可疑資料，不自動改寫歷史/admin 設定，包含例如：
+
+```text
+base target = 0
+malformed base target
+challenge exists without valid base
+challenge <= base
+```
+
+若舊維護工具或其他 phased writer 改寫 `monthly_targets_summary` 的 target map，Backend Summary onWrite 會重新套用 Lifecycle-aware coverage metadata；自己的 derived write 會避免 recursion。
+
+Challenge aggregate semantics 仍遵守正式 KPI contract：某 eligible store 有合法 challenge 時使用 challenge，未設定 challenge 時回退該店 base target；若 challenge 已設定但不合法，不能偷偷當成「未設定」回退 base，需由 `targetAudit` 顯示並人工修正。
+
+目前既有 Dashboard / Ranking / Annual / Telegram consumer 尚未全部切換直接信任上述新 metadata；consumer migration 依後續 Batch 進行。
 
 ---
 
@@ -350,10 +391,32 @@ monthly_targets raw
 
 **類型：Settings / KPI parameter**
 
-App 註解顯示 `kpi_targets` 已拆成低成本、獨立常駐 1-doc 類型讀取，
-目的為避免完整 monthly target listener 為了 KPI 參數常駐。
+`kpi_targets` 維持低成本、品牌隔離的單一 Settings document；App 以既有 1-doc realtime listener 載入，不新增第二條 listener。
 
-目前本批正式來源未提供完整欄位 schema，因此不在本文件自行列欄位。
+目前正式欄位至少包括：
+
+```text
+newASP
+trafficASP
+benchmarks
+```
+
+Batch 3 authority rules：
+
+```text
+newASP
+  > 0                  → valid runtime setting
+  blank / missing / 0  → 目標未設定（不以 3500 fallback 寫回 Firestore）
+
+benchmarks.{brandKey}.{category}
+  min / max 使用 decimal ratio 儲存
+  min finite && min > 0
+  max finite && max > min
+  invalid → Settings 阻止寫入
+  both missing → 該 benchmark 未設定
+```
+
+`benchmarks` 必須由 App 的同一份 `kpi_targets` listener 傳入 runtime `targets` state；不得只在 Settings 寫入後由各 consumer 使用不同 hardcoded defaults。
 
 ---
 
@@ -1414,10 +1477,15 @@ monthly_aggregated         │
                 ├─ Telegram historical
                 └─ annual_kpi_summary
 
+store_lifecycle/master
+     │ READY monthly cohort
+     ▼
 monthly_targets
-     │
+     │ Backend onWrite
      ├─► monthly_targets_summary
-     │
+     │      ├─ cash coverage
+     │      ├─ accrual coverage
+     │      └─ target audit metadata
      └─► recalc_queue
               │
 daily history change
@@ -1452,7 +1520,7 @@ therapist_daily_reports
 
 # 19. Store Lifecycle v1 — Batch 1 Production Foundation / Batch 1.1 Boundary Correction
 
-> 2026-08-27：Batch 1 Store Lifecycle Foundation 已完成部署與正式操作確認。Batch 1.1「Existing Store Lifecycle Boundary Fix」已完成 source implementation / isolated regression，但在實際 Functions + Frontend 部署及 production confirmation 前，不得標記為 production-active。
+> 2026-08-27：Batch 1 Store Lifecycle Foundation 與 Batch 1.1「Existing Store Lifecycle Boundary Fix」均已完成部署與 production confirmation。Batch 3 開始只把 Lifecycle `READY` monthly cohort 接入 Target Coverage authority；Dashboard / Ranking / Annual / Regional / Projection / Telegram 等其他 KPI consumer 仍依後續 Batch 分階段切換。
 
 Store Lifecycle 是獨立於 `org_structure` 的品牌層級 Master，用來保存正式門市 KPI eligibility 與實際營運日期邊界；目前 Dashboard / Ranking / Annual / Regional / Projection / Telegram consumer 仍未切換讀取它。
 
@@ -1596,3 +1664,28 @@ datasetStatus READY
 Batch 1 / 1.1 不修改任何既有 Raw、Target、Summary、Queue 或 `org_structure` 資料。Boundary Fix 只修正 Lifecycle validation / derived `entryStatus` 語意；Consumer 切換仍屬後續 Batch。
 
 `entryStatus` 是由 Lifecycle 欄位與當前規則衍生的狀態，不應被當成獨立人工 authority；讀取 normalization 應依當前規則重新計算，避免舊版 validation 留下過時的 `INVALID` / `COMPLETE` 狀態。
+
+# 20. Target Authority / Coverage — Batch 3（IMPLEMENTED / TARGETED VALIDATED / NOT DEPLOYED）
+
+新增 Backend derived owner：
+
+```text
+functions/targetCoverage.js
+```
+
+新增 Firestore event handlers（由 `functions/index.js` export）：
+
+```text
+onLegacyMonthlyTargetChange
+onBrandMonthlyTargetChange
+onLegacyMonthlyTargetSummaryChange
+onBrandMonthlyTargetSummaryChange
+onLegacyStoreLifecycleCoverageChange
+onBrandStoreLifecycleCoverageChange
+```
+
+Steady-state normal Target write cost：每個受影響 Store×Month 主要為 `monthly_targets_summary/{yearMonth}` + `store_lifecycle/master` 的小範圍讀取，再寫回單一 Target Summary；legacy alias migration 才可能額外 point-read canonical target。沒有新增 Frontend persistent listener、polling 或每次正常 Target write 的 full `monthly_targets` collection scan。
+
+Lifecycle `BUILDING → BUILDING` 的大量初始化不掃 Target Summary；只有 READY 進出或 READY 期間 Lifecycle cohort 改變時，才低頻掃描既有 `monthly_targets_summary` documents 重新計算 coverage metadata。
+
+此 Batch 不修改 Firestore Rules，Admin SDK derived writer 沿用既有品牌實體 root。

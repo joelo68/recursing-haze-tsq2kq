@@ -3,12 +3,13 @@ import React, { useState, useContext, useEffect, useMemo } from "react";
 import { 
   Save, Calendar, Store, DollarSign, CreditCard, TrendingUp, Lock, Unlock, CheckCircle, Star, X 
 } from "lucide-react";
-import { doc, writeBatch, serverTimestamp } from "firebase/firestore";
+import { doc, writeBatch, serverTimestamp, deleteField } from "firebase/firestore";
 
 import { db, appId } from "../config/firebase";
 import { AppContext } from "../AppContext";
 import { ViewWrapper, Card } from "./SharedUI";
-import { formatNumber, parseNumber, sortManagerNames, sortStoreNames, sortManagersByOrgOrder, sortStoresByOrgOrder } from "../utils/helpers";
+import { formatNumber, sortManagerNames, sortStoreNames, sortManagersByOrgOrder, sortStoresByOrgOrder } from "../utils/helpers";
+import { KPI_VALUE_STATUS, validBaseTarget, validChallengeTarget } from "../utils/kpiContracts";
 
 // 年度目標頁面的店名正規化需與 App / DailyView 的既有規則一致。
 // 「新店」是地名本體，不能把最後一個「店」當成一般門市後綴移除。
@@ -56,7 +57,8 @@ const TargetView = () => {
       challengeCashTarget: "",
       challengeAccrualTarget: "",
       isUnlocked: false,
-      isChallengeExpanded: false 
+      isChallengeExpanded: false,
+      isDirty: false,
     }))
   );
 
@@ -76,31 +78,6 @@ const TargetView = () => {
     }
     return name;
   }, [currentBrand]);
-
-  const buildMonthlyTargetSummaryPayload = (storeName, year, month, targetData = {}) => {
-    const yearMonth = `${year}-${String(month).padStart(2, "0")}`;
-    return {
-      brandId: currentBrand?.id || "unknown",
-      brandLabel: currentBrand?.label || currentBrand?.name || brandPrefix,
-      yearMonth,
-      updatedAt: serverTimestamp(),
-      updatedAtText: new Date().toISOString(),
-      updatedBy: currentUser?.name || "unknown",
-      source: "TargetView",
-      targets: {
-        [storeName]: {
-          storeName,
-          cashTarget: Number(targetData.cashTarget || 0),
-          accrualTarget: Number(targetData.accrualTarget || 0),
-          challengeCashTarget: Number(targetData.challengeCashTarget || 0),
-          challengeAccrualTarget: Number(targetData.challengeAccrualTarget || 0),
-          isUnlocked: Boolean(targetData.isUnlocked),
-          updatedAtText: new Date().toISOString(),
-          updatedBy: targetData.updatedBy || currentUser?.name || "unknown",
-        }
-      }
-    };
-  };
 
 
   const availableStores = useMemo(() => {
@@ -185,7 +162,7 @@ const TargetView = () => {
   useEffect(() => {
     if (!selectedStore) {
       setMonthTargets(Array.from({ length: 12 }, (_, i) => ({ 
-        month: i + 1, cashTarget: "", accrualTarget: "", challengeCashTarget: "", challengeAccrualTarget: "", isUnlocked: false, isChallengeExpanded: false 
+        month: i + 1, cashTarget: "", accrualTarget: "", challengeCashTarget: "", challengeAccrualTarget: "", isUnlocked: false, isChallengeExpanded: false, isDirty: false
       })));
       return;
     }
@@ -203,7 +180,8 @@ const TargetView = () => {
         challengeCashTarget: existing && existing.challengeCashTarget > 0 ? formatNumber(existing.challengeCashTarget) : "",
         challengeAccrualTarget: existing && existing.challengeAccrualTarget > 0 ? formatNumber(existing.challengeAccrualTarget) : "",
         isUnlocked: existing ? !!existing.isUnlocked : false,
-        isChallengeExpanded: !!hasChallenge 
+        isChallengeExpanded: !!hasChallenge,
+        isDirty: false,
       };
     });
     
@@ -267,15 +245,6 @@ const TargetView = () => {
         batch.delete(doc(getCollectionPath("monthly_targets"), readKey));
       }
 
-      batch.set(
-        doc(getCollectionPath("monthly_targets_summary"), `${selectedYear}-${String(month).padStart(2, "0")}`),
-        buildMonthlyTargetSummaryPayload(canonicalStoreName, selectedYear, month, {
-          ...existingTarget,
-          ...unlockPayload,
-        }),
-        { merge: true }
-      );
-
       await batch.commit();
 
       setMonthTargets(prev => {
@@ -302,7 +271,7 @@ const TargetView = () => {
 
     setMonthTargets(prev => {
       const newData = [...prev];
-      newData[index] = { ...newData[index], [field]: formatNumber(rawValue) };
+      newData[index] = { ...newData[index], [field]: formatNumber(rawValue), isDirty: true };
       return newData;
     });
   };
@@ -327,13 +296,15 @@ const TargetView = () => {
                ...currentItem,
                challengeCashTarget: "",
                challengeAccrualTarget: "",
-               isChallengeExpanded: false
+               isChallengeExpanded: false,
+               isDirty: true,
             };
          }
       } else {
          newData[index] = {
             ...currentItem,
-            isChallengeExpanded: isExpanding
+            isChallengeExpanded: isExpanding,
+            isDirty: true,
          };
       }
       return newData;
@@ -346,79 +317,120 @@ const TargetView = () => {
       return;
     }
 
-    setIsSaving(true);
-    try {
-      const batch = writeBatch(db);
-      let hasData = false;
-      const canonicalStoreName = getCanonicalTargetStoreName(selectedStore);
+    const editableChanges = monthTargets
+      .map((item, index) => ({ item, index }))
+      .filter(({ item, index }) => item.isDirty && !isInputDisabled(index));
 
-      monthTargets.forEach((item, index) => {
-        if (isInputDisabled(index)) return;
+    if (!editableChanges.length) {
+      showToast("沒有需要儲存的目標異動", "info");
+      return;
+    }
 
-        const cash = parseNumber(item.cashTarget);
-        const accrual = parseNumber(item.accrualTarget);
-        const challengeCash = parseNumber(item.challengeCashTarget);
-        const challengeAccrual = parseNumber(item.challengeAccrualTarget);
+    // Batch 3：目標 validity 由 canonical KPI contract 判斷。
+    // blank / 0 代表「未設定」，寫入 raw monthly_targets 時移除欄位，不再用 parseNumber("") -> 0。
+    const normalizedChanges = [];
+    for (const { item, index } of editableChanges) {
+      const cashResult = validBaseTarget(item.cashTarget);
+      const accrualResult = validBaseTarget(item.accrualTarget);
+      const challengeCashResult = validChallengeTarget(item.cashTarget, item.challengeCashTarget);
+      const challengeAccrualResult = validChallengeTarget(item.accrualTarget, item.challengeAccrualTarget);
 
-        if (cash >= 0 || accrual >= 0) {
-          const readKey = resolveTargetBudgetReadKey(selectedStore, selectedYear, item.month);
-          const writeKey = getCanonicalTargetBudgetKey(selectedStore, selectedYear, item.month);
-          const docRef = doc(getCollectionPath("monthly_targets"), writeKey);
+      const baseInvalid = [
+        ["現金目標", cashResult],
+        ["權責目標", accrualResult],
+      ].find(([, result]) => result.status === KPI_VALUE_STATUS.DATA_INVALID);
 
-          const targetPayload = {
-            cashTarget: cash,
-            accrualTarget: accrual,
-            challengeCashTarget: challengeCash,
-            challengeAccrualTarget: challengeAccrual,
-            isUnlocked: false, 
-            updatedAt: new Date().toISOString(),
-            updatedBy: currentUser?.name || "unknown"
-          };
-
-          // 所有新寫入固定使用 canonical key。
-          batch.set(docRef, targetPayload, { merge: true });
-
-          // Legacy 只允許讀取相容；重新儲存時就安全遷移並移除舊 key。
-          if (
-            readKey !== writeKey &&
-            readKey === getLegacyCyjNewStoreBudgetKey(selectedStore, selectedYear, item.month)
-          ) {
-            batch.delete(doc(getCollectionPath("monthly_targets"), readKey));
-          }
-
-          batch.set(
-            doc(getCollectionPath("monthly_targets_summary"), `${selectedYear}-${String(item.month).padStart(2, "0")}`),
-            buildMonthlyTargetSummaryPayload(canonicalStoreName, selectedYear, item.month, targetPayload),
-            { merge: true }
-          );
-
-          // ★ 目標調整也會影響歷史 Summary / 月結資料，需留下待整理紀錄。
-          // 當月 Dashboard 仍走即時目標，不需要立刻校準；月結前再一次處理即可。
-          batch.set(doc(getCollectionPath("recalc_queue")), {
-            status: "pending",
-            affectedYearMonth: `${selectedYear}-${String(item.month).padStart(2, "0")}`,
-            sourceType: "monthly_targets",
-            sourceId: writeKey,
-            storeName: canonicalStoreName,
-            reason: "monthly_target_updated",
-            createdAt: serverTimestamp(),
-            createdAtText: new Date().toISOString(),
-            createdBy: currentUser?.name || "unknown",
-            createdByRole: userRole || "unknown",
-          });
-          hasData = true;
-        }
-      });
-
-      if (!hasData) {
-        showToast("沒有新增任何可儲存的目標數據", "info");
-        setIsSaving(false);
+      if (baseInvalid) {
+        showToast(`${item.month} 月${baseInvalid[0]}格式不正確`, "error");
         return;
       }
 
+      const challengeInvalid = [
+        ["挑戰現金目標", challengeCashResult],
+        ["挑戰權責目標", challengeAccrualResult],
+      ].find(([, result]) => result.status === KPI_VALUE_STATUS.DATA_INVALID);
+
+      if (challengeInvalid) {
+        showToast(`${item.month} 月${challengeInvalid[0]}必須大於同類型基本目標`, "error");
+        return;
+      }
+
+      normalizedChanges.push({
+        item,
+        index,
+        cashResult,
+        accrualResult,
+        challengeCashResult,
+        challengeAccrualResult,
+      });
+    }
+
+    setIsSaving(true);
+    try {
+      const batch = writeBatch(db);
+      const canonicalStoreName = getCanonicalTargetStoreName(selectedStore);
+      const normalizedBrandId = currentBrand?.id || "cyj";
+
+      normalizedChanges.forEach(({
+        item,
+        cashResult,
+        accrualResult,
+        challengeCashResult,
+        challengeAccrualResult,
+      }) => {
+        const readKey = resolveTargetBudgetReadKey(selectedStore, selectedYear, item.month);
+        const writeKey = getCanonicalTargetBudgetKey(selectedStore, selectedYear, item.month);
+        const yearMonth = `${selectedYear}-${String(item.month).padStart(2, "0")}`;
+        const docRef = doc(getCollectionPath("monthly_targets"), writeKey);
+
+        const targetPayload = {
+          brandId: normalizedBrandId,
+          yearMonth,
+          storeName: canonicalStoreName,
+          cashTarget: cashResult.valid ? cashResult.value : deleteField(),
+          accrualTarget: accrualResult.valid ? accrualResult.value : deleteField(),
+          challengeCashTarget: challengeCashResult.valid ? challengeCashResult.value : deleteField(),
+          challengeAccrualTarget: challengeAccrualResult.valid ? challengeAccrualResult.value : deleteField(),
+          isUnlocked: false,
+          updatedAt: new Date().toISOString(),
+          updatedBy: currentUser?.name || "unknown"
+        };
+
+        // Raw target 寫入固定 canonical key；未設定欄位使用 deleteField，避免把 blank/0 物化成有效-looking target。
+        batch.set(docRef, targetPayload, { merge: true });
+
+        // Legacy 只允許讀取相容；重新儲存時就安全遷移並移除舊 key。
+        if (
+          readKey !== writeKey &&
+          readKey === getLegacyCyjNewStoreBudgetKey(selectedStore, selectedYear, item.month)
+        ) {
+          batch.delete(doc(getCollectionPath("monthly_targets"), readKey));
+        }
+
+        // monthly_targets_summary 自 Batch 3 起由 Backend event-driven writer 維護。
+        // Frontend 不再直接寫 Derived Target Summary，避免 writer semantic 漂移。
+
+        // 目標調整仍會影響歷史 Summary / 月結資料，保留既有 recalc queue。
+        batch.set(doc(getCollectionPath("recalc_queue")), {
+          status: "pending",
+          affectedYearMonth: yearMonth,
+          sourceType: "monthly_targets",
+          sourceId: writeKey,
+          storeName: canonicalStoreName,
+          reason: "monthly_target_updated",
+          createdAt: serverTimestamp(),
+          createdAtText: new Date().toISOString(),
+          createdBy: currentUser?.name || "unknown",
+          createdByRole: userRole || "unknown",
+        });
+      });
+
       await batch.commit();
 
-      setMonthTargets(prev => prev.map(item => ({ ...item, isUnlocked: false })));
+      setMonthTargets(prev => prev.map((item, index) => {
+        const changed = normalizedChanges.some((entry) => entry.index === index);
+        return changed ? { ...item, isUnlocked: false, isDirty: false } : item;
+      }));
 
       showToast(`${selectedYear}年度 目標更新成功`, "success");
       logActivity(userRole, currentUser?.name, "更新年度目標", `${canonicalStoreName} ${selectedYear}年`);

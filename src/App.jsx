@@ -20,6 +20,7 @@ import {
 
 import { ROLES, ALL_MENU_ITEMS, DEFAULT_REGIONAL_MANAGERS, DEFAULT_PERMISSIONS } from "./constants/index";
 import { generateUUID, formatLocalYYYYMMDD, toStandardDateFormat, formatNumber, parseNumber, normalizeManagerOrder } from "./utils/helpers";
+import { validBaseTarget } from "./utils/kpiContracts";
 import {
   buildDelegationAccessProfile,
   canAccessStore as canAccessDelegatedStore,
@@ -1063,7 +1064,7 @@ export default function App() {
     loadedAtText: "",
     error: "",
   });
-  const [targets, setTargets] = useState({ newASP: 3500, trafficASP: 1200 });
+  const [targets, setTargets] = useState({ newASP: null, trafficASP: 1200, benchmarks: {} });
   const [managers, setManagers] = useState({});
   const [managerOrder, setManagerOrder] = useState([]); // ★ 穩定區長排序來源：org_structure.managerOrder
   const [storeAccounts, setStoreAccounts] = useState([]);
@@ -2384,7 +2385,7 @@ export default function App() {
   // kpi_targets 只有 1 doc，必須在登入 / 品牌切換後穩定讀回，避免登出重登後還原成預設值。
   useEffect(() => {
     if (!user) {
-      setTargets({ newASP: 3500, trafficASP: 1200 });
+      setTargets({ newASP: null, trafficASP: 1200, benchmarks: {} });
       return undefined;
     }
 
@@ -2393,9 +2394,12 @@ export default function App() {
       (kpiSnap) => {
         trackReadSource("kpi_targets_live", kpiSnap.exists() ? 1 : 0, getStableReadMeta("kpi_targets_live"));
         const data = kpiSnap.exists() ? kpiSnap.data() : {};
+        const newAspResult = validBaseTarget(data.newASP);
         setTargets({
-          newASP: Number(data.newASP ?? 3500),
+          ...data,
+          newASP: newAspResult.valid ? newAspResult.value : null,
           trafficASP: Number(data.trafficASP ?? 1200),
+          benchmarks: data?.benchmarks && typeof data.benchmarks === "object" ? data.benchmarks : {},
         });
       },
       (error) => console.error("kpi_targets 即時監聽失敗:", error)

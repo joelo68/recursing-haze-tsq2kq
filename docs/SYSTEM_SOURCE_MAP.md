@@ -483,16 +483,21 @@ DashboardView.jsx
 主要資料：
 
 - `monthly_targets`
-- `monthly_targets_summary`
 - `recalc_queue`
 
-目前正式版本已具有：
+`monthly_targets_summary` 自 Batch 3 起改由 Backend event-driven writer 維護，Frontend 不再直接寫 Derived Target Summary。
+
+目前 Batch 3 source 已具有：
 
 - canonical target store name
 - canonical target document key
 - legacy CYJ 新店 read fallback
 - canonical write
 - legacy key migration on write / unlock
+- `validBaseTarget()` / `validChallengeTarget()` canonical validity
+- blank / 0 base target → 未設定欄位，不再經 `parseNumber("")` 寫成 numeric 0
+- challenge 有設定時必須 > 同類型 base target
+- dirty-month scoped write，未修改月份不因「儲存全部」被重寫
 
 ## `DATA_IDENTITY_RULES.md`
 
@@ -547,6 +552,68 @@ Regression guard 不連 Firebase、不修改正式資料。
 > 但前端各模組 normalization 尚未全面重構為單一共用 Store Identity module。」
 
 ---
+
+
+## `functions/targetCoverage.js` — Batch 3
+
+定位：
+
+> Store Target Derived Summary / independent coverage 的 Backend authority。
+
+責任：
+
+```text
+monthly_targets onWrite
+  → canonical target row
+  → Lifecycle READY monthly cohort
+  → monthly_targets_summary/{yearMonth}
+
+monthly_targets_summary onWrite
+  → phased / legacy writer target-map change
+  → coverage self-heal
+
+store_lifecycle/master onWrite
+  → only READY enter/leave or READY cohort change
+  → low-frequency target-summary coverage refresh
+```
+
+正式 metadata：
+
+```text
+targetCoverageVersion
+kpiContractVersion
+lifecycleReady
+eligibleStoreCount
+cashConfiguredStoreCount
+accrualConfiguredStoreCount
+cashCoverageComplete
+accrualCoverageComplete
+cashMissingStores
+accrualMissingStores
+targetAudit
+coverageSource
+coverageUpdatedAtText
+```
+
+Compatibility fields are recomputed from the canonical target map on every derived update so old consumers do not retain stale totals:
+
+```text
+brandLabel
+year / month
+storeCount / targetCount
+cashTargetTotal / accrualTargetTotal
+sourceDocCount
+```
+
+Target Coverage runtime 必須引用 `functions/storeLifecycle.js` 的 monthly eligibility / identity owner，不得在 Target writer 複製 first/last/exempt 規則。
+
+Challenge aggregate helper 以 canonical KPI contract 判定合法 challenge；部分店未設定 challenge 時逐店回退 base target，既有非法 challenge 不會被靜默當成未設定。未知品牌 ID 會拒絕／跳過，禁止 fallback 到 CYJ path。
+
+Regression owner：
+
+```text
+tests/targetAuthority.test.js
+```
 
 # 11. 年度 / 區域 / 單店 / 詳細報表
 
@@ -631,6 +698,13 @@ Therapist module 可以由 feature flag 關閉。
 # 13. Settings / Organization / Delegation
 
 ## `SettingsView.jsx`
+
+Batch 3 KPI Settings authority：
+
+- `newASP` blank / 0 = 未設定，不再把 3500 hardcoded fallback 寫回 `kpi_targets`
+- Store Health benchmark 需 `min > 0`、`max > min`，canonical storage 使用 decimal ratio
+- benchmark invalid 時阻止寫入；兩端都空白代表未設定
+- 只更新目前 brand benchmark field path，避免跨品牌覆寫其他品牌設定
 
 目前正式來源可確認管理：
 
@@ -866,7 +940,26 @@ Batch 2 另新增：
 functions/kpiContracts.js
 ```
 
-它目前是 Backend pure contract module，**不是 Cloud Function export**，且尚未被既有 runtime consumer import；因此單獨新增此檔不需要 Functions deploy。之後只有在某個正式 Backend consumer 開始 import 它時，才依該 consumer 的實際 export 精準部署。
+Batch 3 起，`functions/kpiContracts.js` 已被 Target authority runtime 使用，因此不再是 unused-only module。
+
+Batch 3 新增：
+
+```text
+functions/targetCoverage.js
+```
+
+以及 `functions/index.js` exports：
+
+```text
+onLegacyMonthlyTargetChange
+onBrandMonthlyTargetChange
+onLegacyMonthlyTargetSummaryChange
+onBrandMonthlyTargetSummaryChange
+onLegacyStoreLifecycleCoverageChange
+onBrandStoreLifecycleCoverageChange
+```
+
+這 6 支是 Target / Target Summary / Lifecycle 的 scoped Firestore event handlers；沒有新增 polling 或 Dashboard persistent listener。
 
 ---
 
@@ -1075,14 +1168,26 @@ tests/storeIdentity.test.js
 helpers.js
 ```
 
-## 修改 Target
+## 修改 Target / Target Coverage / KPI Settings
 
 ```text
 TargetView.jsx
+SettingsView.jsx
+App.jsx
+src/utils/kpiContracts.js
+src/utils/storeLifecycle.js
+functions/kpiContracts.js
+functions/storeLifecycle.js
+functions/targetCoverage.js
+functions/index.js
 DATA_IDENTITY_RULES.md
 tests/storeIdentity.test.js
-functions/index.js
+tests/storeLifecycle.test.js
+tests/kpiContracts.test.js
+tests/targetAuthority.test.js
 ```
+
+若修改 coverage writer，先確認三品牌 physical path 與 Lifecycle `READY` semantics；禁止直接在 Dashboard / Ranking / Annual 補 combined coverage workaround。
 
 ## 修改 Organization / 區長代理
 
@@ -1250,9 +1355,9 @@ find .github -maxdepth 2 -type f 2>/dev/null
 
 ---
 
-# 25. Store Lifecycle v1 — Batch 1 Implementation Package（NOT DEPLOYED）
+# 25. Store Lifecycle v1 — Batch 1 / 1.1（PRODUCTION CONFIRMED）
 
-2026-08-27 Gate 0 已以最新 Production source 重新定錨後完成 Batch 1 實作。
+2026-08-27 Batch 1 Foundation 與 Batch 1.1 boundary fix 已完成部署及 production confirmation。Batch 3 開始只讓 Target Coverage 使用 READY monthly cohort；其他 KPI consumer 仍依後續 Batch 分批切換。
 
 新增 owner：
 
@@ -1336,13 +1441,73 @@ KPI contract regression  15 / 15 PASS
 npm run build             PASS（使用者於正式 repo 執行確認）
 ```
 
-目前沒有任何正式 runtime consumer import 這兩個 contract module，因此：
+Batch 2 完成當下沒有 runtime consumer，因此當時不需要 deployment。Batch 3 implementation package 已開始讓 `TargetView`、`SettingsView`、`App.jsx` 與 `functions/targetCoverage.js` 引用這份 contract；在 Batch 3 尚未部署／production confirmation 前，不可描述為 production-active consumer。
 
 ```text
-IMPLEMENTED          YES
-VALIDATED            YES
-DEPLOY REQUIRED      NO
-PRODUCTION CONSUMER  NOT YET
+BATCH 2 IMPLEMENTED / VALIDATED  YES
+BATCH 2 STANDALONE DEPLOY        NOT REQUIRED
+BATCH 3 RUNTIME IMPORT           IMPLEMENTED / NOT DEPLOYED
+PRODUCTION CONSUMER              NOT YET CONFIRMED
 ```
 
-下一批 Target / Settings / Coverage、後續 Summary Writer 與各 consumer migration 時，必須優先引用這份 contract（或在 Backend 走 parity-protected mirror），不得重新在頁面或 writer 發明不同的 formal net cash / formal accrual / validity semantics。
+後續 Summary Writer 與各 consumer migration 必須繼續引用這份 contract（或 parity-protected mirror），不得重新在頁面或 writer 發明不同的 formal net cash / formal accrual / validity semantics。
+
+# 27. Target Writer / KPI Settings / Coverage Authority — Batch 3（IMPLEMENTED / TARGETED VALIDATED / NOT DEPLOYED）
+
+最新 owner：
+
+```text
+src/components/TargetView.jsx
+  → Raw monthly target writer；canonical validity；dirty-month scoped write
+
+src/components/SettingsView.jsx
+  → newASP / Store Health benchmark validation
+
+src/App.jsx
+  → existing kpi_targets 1-doc listener propagates newASP + benchmarks
+
+src/utils/storeLifecycle.js
+functions/storeLifecycle.js
+  → monthly Lifecycle eligibility resolver owner
+
+functions/targetCoverage.js
+  → Derived monthly_targets_summary / independent cash-accrual coverage
+
+tests/targetAuthority.test.js
+  → Batch 3 authority / reads / brand-path / writer regression
+```
+
+Target Summary normal write flow：
+
+```text
+monthly_targets/{targetId}
+  → event-driven Backend
+  → read one monthly_targets_summary/{yearMonth}
+  → read one store_lifecycle/master
+  → write one monthly_targets_summary/{yearMonth}
+```
+
+Legacy CYJ target migration event may add one canonical-target point read；正常 Target write 不做 full `monthly_targets` scan。
+
+Lifecycle rebuild rule：
+
+```text
+BUILDING → BUILDING
+  no summary scan
+
+READY enter / leave
+or READY cohort change
+  scoped low-frequency monthly_targets_summary scan
+```
+
+截至 package validation：
+
+```text
+KPI + Store Identity + Lifecycle + Target Authority targeted regression: 57 / 57 PASS
+Frontend JSX syntax parse: PASS
+Backend / pure JS syntax: PASS
+Full production-repo npm run build: pending user repo execution
+DEPLOYED: NO
+PRODUCTION CONFIRMED: NO
+CURRENT_APP_VERSION: 3.5.3 unchanged
+```

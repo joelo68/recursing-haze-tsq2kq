@@ -212,50 +212,95 @@ HistoryView 不再額外隨機建立 recalc queue。
 
 # 10. Store Target Flow
 
+Batch 3 起，Raw Target 與 Derived Target Summary writer 分離：
+
 ```text
 TargetView
    │
    ├─ canonical read/write resolver
+   ├─ validBaseTarget / validChallengeTarget
+   ├─ blank / 0 base => 未設定（delete field）
    ├─ lock/unlock
    └─ writeBatch
    │
    ├────────► monthly_targets
-   │
-   ├────────► monthly_targets_summary
+   │             │ Firestore onWrite
+   │             ▼
+   │      functions/targetCoverage.js
+   │             │
+   │             ├─ read store_lifecycle/master
+   │             ├─ resolve eligible Store × YearMonth
+   │             ├─ cash / accrual coverage independently
+   │             ├─ challenge aggregate: configured challenge / otherwise base fallback
+   │             ├─ resync legacy-compatible storeCount / target totals
+   │             └─ target audit metadata
+   │                    │
+   │                    ▼
+   │             monthly_targets_summary/{YYYY-MM}
    │
    └────────► recalc_queue
 ```
 
+Frontend 不再直接寫 `monthly_targets_summary`，避免 Raw writer 與 Derived writer 各自維護不同 target semantics。
+
 CYJ 新店：
 
 ```text
-write canonical only
-CYJ新店店
+read legacy fallback allowed
+write canonical only = CYJ新店店
+Backend derived writer 也沿用 Lifecycle / Store Identity canonical owner
 ```
 
 ---
 
 # 11. Target Read Flow
 
-普通 Dashboard / Ranking / Annual：
+Batch 3 Target Summary 已新增 Lifecycle-aware independent coverage metadata：
 
 ```text
-monthly_targets_summary
-   │
-   ├─ complete?
-   │    YES → use
-   │
-   └─ NO
-       → targeted/raw fallback when needed
+monthly_targets_summary/{YYYY-MM}
+   ├─ eligibleStoreCount
+   ├─ cashCoverageComplete
+   ├─ accrualCoverageComplete
+   ├─ cashMissingStores[]
+   ├─ accrualMissingStores[]
+   └─ targetAudit
 ```
 
-完整 monthly_targets listener：
+Cash / Accrual 不再共用一個 combined coverage 判斷。Lifecycle 尚未 READY 時不得把 coverage 標為 complete。
 
-```text
-只在真正編輯／完整檢核目標時啟動
-```
+目前普通 Dashboard / Ranking / Annual / Telegram 等既有 consumer **尚未全部切換**使用此新 metadata；後續 consumer Batch 才正式 cutover。Batch 3 的目的先把上游 authority 寫正。
+
+完整 `monthly_targets` listener 仍只在真正編輯／完整檢核目標時啟動；Batch 3 沒有新增 all-target persistent listener。
 
 ---
+
+
+# 11.5 KPI Settings Flow
+
+```text
+SettingsView
+   │
+   ├─ newASP validity
+   │    >0 → valid
+   │    blank / 0 → 未設定
+   │
+   ├─ Store Health benchmark validation
+   │    min > 0
+   │    max > min
+   │    decimal ratio storage
+   │
+   ▼
+kpi_targets (single settings doc)
+   │ existing 1-doc onSnapshot
+   ▼
+App.targets
+   ├─ newASP (missing stays null / not configured)
+   ├─ trafficASP
+   └─ benchmarks
+```
+
+不新增第二條 KPI settings listener；Settings 不再把 hardcoded `newASP=3500` 或 benchmark default 寫成 authoritative Firestore data。
 
 # 12. Dashboard Current Month
 
@@ -996,9 +1041,9 @@ daily_reports = 0
 
 ---
 
-# 39. Store Lifecycle Foundation Flow — Batch 1（NOT DEPLOYED）
+# 39. Store Lifecycle Foundation Flow — Batch 1 / 1.1（PRODUCTION CONFIRMED）
 
-> 2026-08-27 實作套件已完成並通過本地 regression；尚未部署前不可描述為 Production active。
+> Batch 1 Foundation 與 Batch 1.1 boundary fix 已完成部署與 production confirmation。Batch 3 僅先讓 Target Coverage 使用 READY monthly cohort；其他 KPI consumer 仍依後續 Batch 切換。
 
 ```text
 System Settings
@@ -1066,3 +1111,51 @@ Telegram
 ```
 
 因此 Lifecycle 建置不會改變現行 KPI 數字；正式 consumer cutover 必須在後續 Batch 重新驗證後才進行。
+
+# 40. Target Coverage Self-healing Flow — Batch 3（IMPLEMENTED / NOT DEPLOYED）
+
+正常 Target 修改：
+
+```text
+monthly_targets/{targetId} onWrite
+   ↓
+point-resolve canonical target（legacy alias migration 才需要額外 point read）
+   ↓
+transaction read
+  monthly_targets_summary/{yearMonth}
+  store_lifecycle/master
+   ↓
+write same monthly_targets_summary/{yearMonth}
+  targets map
+  cashCoverageComplete
+  accrualCoverageComplete
+  missing-store lists
+  targetAudit
+```
+
+舊 Summary writer / 維護工具改寫 target map：
+
+```text
+monthly_targets_summary/{yearMonth} onWrite
+   ↓
+若不是 target_coverage_event_v1 自己的 derived write
+且 target map 真正改變
+   ↓
+read store_lifecycle/master
+   ↓
+重新套用 coverage metadata
+```
+
+Lifecycle 變更：
+
+```text
+BUILDING → BUILDING
+  → 不掃 Summary
+
+READY 進入 / 離開
+或 READY 期間 cohort 改變
+  → 低頻掃 existing monthly_targets_summary docs
+  → 重算 coverage metadata
+```
+
+這不是 polling，也不在 Dashboard render 時掃 Raw Targets。

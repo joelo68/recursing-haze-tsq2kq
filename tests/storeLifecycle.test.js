@@ -6,7 +6,9 @@ import { fileURLToPath } from "node:url";
 import {
   getCanonicalLifecycleStoreName,
   getLifecycleEntryCompleteness,
+  getLifecycleEligibleStoreEntries,
   getStoreLifecycleKey,
+  isLifecycleEntryEligibleForMonth,
   lifecycleStoreBrandMatches,
   normalizeLifecycleMaster,
   validateLifecycleEntryDraft,
@@ -238,4 +240,41 @@ test("Settings Lifecycle UI is view-loaded and does not add polling or persisten
 test("Functions index exports only the new lifecycle endpoint without changing app version", () => {
   assert.match(functionsIndex, /createStoreLifecycleFunctions/);
   assert.match(functionsIndex, /exports\.manageStoreLifecycle = storeLifecycleFunctions\.manageStoreLifecycle/);
+});
+
+test("monthly Lifecycle eligibility uses first/last/exempt boundaries and preserves existing-store openDate semantics", () => {
+  const entry = {
+    firstEligibleMonth: "2026-08",
+    openDate: "2022-06-15",
+    lastEligibleMonth: "2026-10",
+    closeDate: "2026-10-31",
+    exemptMonths: ["2026-09"],
+  };
+
+  assert.equal(isLifecycleEntryEligibleForMonth(entry, "2026-07"), false);
+  assert.equal(isLifecycleEntryEligibleForMonth(entry, "2026-08"), true);
+  assert.equal(isLifecycleEntryEligibleForMonth(entry, "2026-09"), false);
+  assert.equal(isLifecycleEntryEligibleForMonth(entry, "2026-10"), true);
+  assert.equal(isLifecycleEntryEligibleForMonth(entry, "2026-11"), false);
+});
+
+test("Lifecycle eligible-store resolver requires READY by default and keeps brand-canonical store names", () => {
+  const master = {
+    brandId: "cyj",
+    datasetStatus: "READY",
+    stores: {
+      "新店": { firstEligibleMonth: "2026-01", openDate: "2022-01-01" },
+      "八德": { firstEligibleMonth: "2026-02", openDate: "2020-01-01", exemptMonths: ["2026-08"] },
+    },
+  };
+
+  assert.deepEqual(
+    getLifecycleEligibleStoreEntries(master, "2026-08").map((entry) => entry.canonicalStoreName),
+    ["CYJ新店店"]
+  );
+  assert.deepEqual(getLifecycleEligibleStoreEntries({ ...master, datasetStatus: "BUILDING" }, "2026-08"), []);
+  assert.equal(getLifecycleEligibleStoreEntries({ ...master, datasetStatus: "BUILDING" }, "2026-08", { requireReady: false }).length, 1);
+
+  assert.match(backend, /function isLifecycleEntryEligibleForMonth/);
+  assert.match(backend, /function getLifecycleEligibleStoreEntries/);
 });

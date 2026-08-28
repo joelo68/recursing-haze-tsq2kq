@@ -217,6 +217,139 @@ npm run build
 
 若正式 consumer 開始 import contract，還要再跑該 consumer 所屬 Batch 的 regression，並依實際改動精準部署。
 
+
+# 6.6 Target Writer / KPI Settings / Coverage Authority
+
+Batch 3 把 Target authority 分成三層：
+
+```text
+Raw target writer
+  src/components/TargetView.jsx
+        ↓
+monthly_targets
+        ↓ Firestore onWrite
+Derived target authority
+  functions/targetCoverage.js
+        ↓
+monthly_targets_summary
+        ↑
+Lifecycle monthly cohort
+  src/utils/storeLifecycle.js
+  functions/storeLifecycle.js
+```
+
+## Store Target Writer rules
+
+必須使用 canonical KPI target validity：
+
+```text
+blank / missing / 0 base target
+→ TARGET_NOT_SET
+→ raw monthly_targets 不保留 numeric 0 欄位
+
+valid base target
+→ > 0
+
+challenge blank / 0
+→ CHALLENGE_NOT_SET
+
+challenge configured
+→ 必須 > 同類型 base target
+```
+
+禁止重新使用：
+
+```js
+parseNumber("") === 0
+```
+
+來判斷「目標已設定」。`parseNumber()` 仍只是一個一般 UI parsing helper。
+
+TargetView 只寫有實際異動的月份，不應在按一次「儲存」時重寫未修改 12 個月份。
+
+## Derived Target Summary rules
+
+`monthly_targets_summary` 是 Derived Data，Batch 3 起正常 writer authority 在：
+
+```text
+functions/targetCoverage.js
+```
+
+Frontend 不直接寫這份 Summary。
+
+Coverage 必須：
+
+- 以 `store_lifecycle/master` 且 `datasetStatus=READY` 的 monthly eligible cohort 為分母；
+- Cash / Accrual 獨立；
+- 保留 `cashMissingStores` / `accrualMissingStores`；
+- Lifecycle 未 READY 不得標 complete；
+- 舊 Summary writer 改 target map 時重新套用 coverage metadata；
+- derived writer 必須有 recursion guard；
+- target map 變更時必須同步重算既有相容 `storeCount / cashTargetTotal / accrualTargetTotal`，不可留下 stale totals 給尚未切換 consumer；
+- 正常 Target event 不得 full-scan `monthly_targets` collection；
+- 不新增 polling / Dashboard broad listener。
+
+Lifecycle eligibility 規則不得在 `targetCoverage.js` 另寫 first/last/exempt 判斷；正式 runtime 必須呼叫 `functions/storeLifecycle.js` owner。
+
+Challenge aggregate 必須逐 eligible store 處理：合法 challenge 優先，未設定 challenge 才回退 base target；若存在已設定但非法的 challenge，不可靜默 fallback。未知品牌也不可 fallback 到 CYJ physical path。
+
+## Existing invalid target data
+
+Batch 3 不批次修歷史 Raw。Derived `targetAudit` 只報告：
+
+```text
+base target = 0
+invalid base target
+challenge without valid base
+challenge <= base
+```
+
+有歧義的既有設定需人工確認後才修。
+
+## KPI Settings rules
+
+`kpi_targets` 繼續使用既有單一 Settings doc listener。
+
+```text
+newASP
+  > 0                 valid
+  blank / missing / 0 未設定
+```
+
+不得把 `3500` hardcoded fallback 存成 authority。
+
+Store Health benchmark：
+
+```text
+min finite && min > 0
+max finite && max > min
+storage = decimal ratio
+```
+
+兩者都空白代表該 benchmark 未設定；只有一端空白或 range invalid 必須阻止寫入。
+
+Settings 更新 benchmark 時只改目前品牌 field path，不能用整份 map overwrite 偷改其他品牌。
+
+## App propagation
+
+Settings 寫入 `benchmarks` 後，App 既有 `kpi_targets` 1-doc listener 必須把它帶入 runtime `targets` state；不可要求 StoreAnalysis / Dashboard 各自再補 hardcoded benchmark。
+
+## Batch 3 minimum regression
+
+```bash
+node --test tests/kpiContracts.test.js
+node --test tests/storeIdentity.test.js
+node --test tests/storeLifecycle.test.js
+node --test tests/targetAuthority.test.js
+
+node --check functions/targetCoverage.js
+node --check functions/storeLifecycle.js
+node --check functions/index.js
+npm run build
+```
+
+若只完成 isolated regression 而未在最新正式 repo 執行 `npm run build`，不可標記 FULL BUILD PASS。
+
 # 7. InputView
 
 `InputView.jsx` 目前設計原則：
@@ -451,10 +584,13 @@ Frontend：
 npm run build
 ```
 
-Store Identity：
+Store Identity / Lifecycle / Target Authority：
 
 ```bash
 node --test tests/storeIdentity.test.js
+node --test tests/storeLifecycle.test.js
+node --test tests/kpiContracts.test.js
+node --test tests/targetAuthority.test.js
 ```
 
 Backend：

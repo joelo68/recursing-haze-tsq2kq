@@ -17,6 +17,7 @@ import { AppContext } from "../AppContext";
 import { ViewWrapper, Card } from "./SharedUI";
 import { DEFAULT_PERMISSIONS, ALL_MENU_ITEMS } from "../constants/index";
 import { generateUUID, normalizeManagerOrder, sortManagersByOrgOrder, sortStoresByOrgOrder } from "../utils/helpers";
+import { KPI_VALUE_STATUS, validBaseTarget, validateStoreHealthBenchmark } from "../utils/kpiContracts";
 import {
   DEFAULT_DELEGATION_PERMISSIONS,
   DELEGATION_PERMISSION_LABELS,
@@ -157,23 +158,6 @@ const getSortedTrainerAccounts = (trainerAuth = {}) => {
     .filter(Boolean);
 };
 
-const DEFAULT_BENCHMARKS_INIT = {
-  default: {
-    financial: { min: 0.8, max: 1.2, label: "現權責比" }, 
-    sales:     { min: 0.1, max: 0.45, label: "產品佔比" },
-    loyalty:   { min: 0.5, max: 0.8, label: "舊客佔比" },
-    mining:    { min: 0.8, max: 1.2, label: "舊客強度" },
-    acquisition: { min: 0.8, max: 1.2, label: "新客含金" }
-  },
-  "伊啵": {
-    financial: { min: 0.7, max: 1.1, label: "現權責比" },
-    sales:     { min: 0.1, max: 0.40, label: "產品佔比" }, 
-    loyalty:   { min: 0.3, max: 0.6, label: "舊客佔比" },
-    mining:    { min: 0.8, max: 1.2, label: "舊客強度" },
-    acquisition: { min: 0.8, max: 1.2, label: "新客含金" }
-  }
-};
-
 const BENCHMARK_CATEGORIES = [
   { id: 'financial', title: '財務健康 (回收率)', sub: '現金佔權責比例 (建議 80% 以上)', type: 'percent', suffix: '%', step: 5 },
   { id: 'sales', title: '銷售結構 (產品比)', sub: '產品業績佔比 (建議 10%-45%)', type: 'percent', suffix: '%', step: 1 },
@@ -201,7 +185,7 @@ const SettingsView = () => {
   }, [fetchGlobalData]);
 
   const [activeTab, setActiveTab] = useState("");
-  const [localTargets, setLocalTargets] = useState(targets || { newASP: 3500, trafficASP: 1200 });
+  const [localTargets, setLocalTargets] = useState(targets || { newASP: "", trafficASP: 1200, benchmarks: {} });
   const [localPermissions, setLocalPermissions] = useState(permissions || DEFAULT_PERMISSIONS);
   const [localManagers, setLocalManagers] = useState(managers || {});
   const [localManagerOrder, setLocalManagerOrder] = useState(normalizeManagerOrder(managers || {}, managerOrder));
@@ -263,12 +247,13 @@ const SettingsView = () => {
   useEffect(() => { if (permissions) setLocalPermissions(permissions); }, [permissions]);
   useEffect(() => { 
     if (targets) {
+      const newAspResult = validBaseTarget(targets?.newASP);
       setLocalTargets(prev => ({
         ...prev,
         ...targets,
-        newASP: Number(targets?.newASP ?? 3500),
+        newASP: newAspResult.valid ? String(newAspResult.value) : "",
         trafficASP: Number(targets?.trafficASP ?? 1200),
-        benchmarks: targets.benchmarks || prev.benchmarks || DEFAULT_BENCHMARKS_INIT
+        benchmarks: targets?.benchmarks && typeof targets.benchmarks === "object" ? targets.benchmarks : {}
       }));
     }
   }, [targets]);
@@ -642,15 +627,81 @@ const SettingsView = () => {
 
   const handleSaveTargets = async () => {
     try {
+      const newAspResult = validBaseTarget(localTargets?.newASP);
+      if (newAspResult.status === KPI_VALUE_STATUS.DATA_INVALID) {
+        showToast("目標新客客單必須是大於 0 的有效數字；若不設定請留白", "error");
+        return;
+      }
+
+      const currentBrandBenchmarks = localTargets?.benchmarks?.[brandKey] && typeof localTargets.benchmarks[brandKey] === "object"
+        ? localTargets.benchmarks[brandKey]
+        : {};
+      const nextBrandBenchmarks = { ...currentBrandBenchmarks };
+      const benchmarkFieldUpdates = {};
+
+      for (const category of BENCHMARK_CATEGORIES) {
+        const raw = currentBrandBenchmarks?.[category.id] || {};
+        const minMissing = raw.min === "" || raw.min === null || raw.min === undefined;
+        const maxMissing = raw.max === "" || raw.max === null || raw.max === undefined;
+        const fieldPath = `benchmarks.${brandKey}.${category.id}`;
+
+        if (minMissing && maxMissing) {
+          delete nextBrandBenchmarks[category.id];
+          benchmarkFieldUpdates[fieldPath] = deleteField();
+          continue;
+        }
+
+        if (minMissing || maxMissing) {
+          showToast(`${category.title}需同時設定「及格」與「滿分」，或兩者都留白`, "error");
+          return;
+        }
+
+        const validation = validateStoreHealthBenchmark(raw.min, raw.max);
+        if (!validation.valid) {
+          showToast(`${category.title}設定無效：及格需 > 0，且滿分必須大於及格`, "error");
+          return;
+        }
+
+        const normalized = { ...raw, min: validation.min, max: validation.max, label: raw.label || category.title };
+        nextBrandBenchmarks[category.id] = normalized;
+        benchmarkFieldUpdates[fieldPath] = normalized;
+      }
+
+      const trafficASP = Number(localTargets?.trafficASP ?? 1200);
       const nextTargets = {
         ...localTargets,
-        newASP: Number(localTargets?.newASP ?? 3500),
-        trafficASP: Number(localTargets?.trafficASP ?? 1200),
-        benchmarks: localTargets?.benchmarks || DEFAULT_BENCHMARKS_INIT,
+        newASP: newAspResult.valid ? newAspResult.value : null,
+        trafficASP: Number.isFinite(trafficASP) ? trafficASP : 1200,
+        benchmarks: {
+          ...(localTargets?.benchmarks || {}),
+          [brandKey]: nextBrandBenchmarks,
+        },
       };
-      await setDoc(getDocPath("kpi_targets"), nextTargets, { merge: true });
+
+      const docRef = getDocPath("kpi_targets");
+      const docSnap = await getDoc(docRef);
+
+      // newASP blank/0 = 未設定。既有文件用 deleteField 移除，不把 hardcoded fallback 寫成 authority。
+      if (docSnap.exists()) {
+        await updateDoc(docRef, {
+          newASP: newAspResult.valid ? newAspResult.value : deleteField(),
+          trafficASP: nextTargets.trafficASP,
+          ...benchmarkFieldUpdates,
+        });
+      } else {
+        const createPayload = {
+          trafficASP: nextTargets.trafficASP,
+          benchmarks: { [brandKey]: nextBrandBenchmarks },
+        };
+        if (newAspResult.valid) createPayload.newASP = newAspResult.value;
+        await setDoc(docRef, createPayload, { merge: true });
+      }
+
       setTargets(nextTargets);
-      setLocalTargets(nextTargets);
+      setLocalTargets({
+        ...nextTargets,
+        newASP: newAspResult.valid ? String(newAspResult.value) : "",
+      });
       showToast("KPI 參數已儲存", "success");
     } catch (e) {
       console.error("KPI 參數儲存失敗:", e);
@@ -783,10 +834,32 @@ const SettingsView = () => {
   };
 
   const handleBenchmarkChange = (categoryId, field, value, type) => {
-    let numValue = parseFloat(value);
-    if (isNaN(numValue)) numValue = 0;
-    if (type === 'percent') numValue = numValue / 100;
-    setLocalTargets(prev => ({ ...prev, benchmarks: { ...prev.benchmarks, [brandKey]: { ...(prev.benchmarks?.[brandKey] || DEFAULT_BENCHMARKS_INIT["default"]), [categoryId]: { ...(prev.benchmarks?.[brandKey]?.[categoryId] || DEFAULT_BENCHMARKS_INIT["default"][categoryId]), [field]: numValue } } } }));
+    const text = String(value ?? "").trim();
+    setLocalTargets(prev => {
+      const currentBrandBenchmarks = prev?.benchmarks?.[brandKey] || {};
+      const currentCategory = currentBrandBenchmarks?.[categoryId] || {};
+      const nextCategory = { ...currentCategory };
+
+      if (!text) {
+        delete nextCategory[field];
+      } else {
+        const parsed = Number(text);
+        nextCategory[field] = Number.isFinite(parsed)
+          ? (type === 'percent' ? parsed / 100 : parsed)
+          : text;
+      }
+
+      return {
+        ...prev,
+        benchmarks: {
+          ...(prev?.benchmarks || {}),
+          [brandKey]: {
+            ...currentBrandBenchmarks,
+            [categoryId]: nextCategory,
+          },
+        },
+      };
+    });
   };
 
   const handleAddGlobalStore = async () => {
@@ -1417,7 +1490,7 @@ const SettingsView = () => {
           </div>
         </div>
 
-        {activeTab === "kpi" && (<Card title="KPI 目標參數"><div className="max-w-md w-full space-y-6 min-w-0"><div><label className="block text-sm font-bold text-[#7C7063] mb-2">目標新客客單</label><input type="number" value={localTargets.newASP ?? 3500} onChange={(e) => setLocalTargets({...localTargets, newASP: Number(e.target.value)})} className="w-full px-4 py-3 border-2 rounded-xl outline-none focus:border-[#D6A84F]"/></div><div><label className="block text-sm font-bold text-[#7C7063] mb-2">目標消耗客單</label><input type="number" value={localTargets.trafficASP ?? 1200} onChange={(e) => setLocalTargets({...localTargets, trafficASP: Number(e.target.value)})} className="w-full px-4 py-3 border-2 rounded-xl outline-none focus:border-[#D6A84F]"/></div><button onClick={handleSaveTargets} className="w-full bg-gradient-to-r from-[#FFF7DF] via-[#F7E8C6] to-[#EACB86] text-[#5A4225] border border-[#E8C77A] py-3 rounded-xl font-bold active:scale-95 transition-transform">儲存設定</button></div></Card>)}
+        {activeTab === "kpi" && (<Card title="KPI 目標參數"><div className="max-w-md w-full space-y-6 min-w-0"><div><label className="block text-sm font-bold text-[#7C7063] mb-2">目標新客客單</label><input type="number" min="0" value={localTargets.newASP ?? ""} onChange={(e) => setLocalTargets({...localTargets, newASP: e.target.value})} placeholder="未設定" className="w-full px-4 py-3 border-2 rounded-xl outline-none focus:border-[#D6A84F]"/><p className="mt-1 text-[11px] font-bold text-[#A69C91]">留白或 0 代表「目標未設定」，系統不會自動寫入預設值。</p></div><div><label className="block text-sm font-bold text-[#7C7063] mb-2">目標消耗客單</label><input type="number" value={localTargets.trafficASP ?? 1200} onChange={(e) => setLocalTargets({...localTargets, trafficASP: Number(e.target.value)})} className="w-full px-4 py-3 border-2 rounded-xl outline-none focus:border-[#D6A84F]"/></div><button onClick={handleSaveTargets} className="w-full bg-gradient-to-r from-[#FFF7DF] via-[#F7E8C6] to-[#EACB86] text-[#5A4225] border border-[#E8C77A] py-3 rounded-xl font-bold active:scale-95 transition-transform">儲存設定</button></div></Card>)}
         
         {activeTab === "health" && (
             <Card title="門市體質診斷標準">
@@ -1425,15 +1498,21 @@ const SettingsView = () => {
                     <div className="bg-[#FAF7F1] p-4 rounded-xl border border-[#E8DDCC] flex items-center gap-2"><Lock size={18} className="text-[#B7863D]" /><span className="text-sm font-bold text-[#675B4E]">當前設定品牌：</span><span className="text-lg font-bold text-[#B7863D]">{brandLabel}</span></div>
                     <div className="grid grid-cols-1 md:grid-cols-2 2xl:grid-cols-3 gap-4">
                         {BENCHMARK_CATEGORIES.map(cat => {
-                            const currentVal = localTargets.benchmarks?.[brandKey]?.[cat.id] || DEFAULT_BENCHMARKS_INIT[brandKey]?.[cat.id] || DEFAULT_BENCHMARKS_INIT["default"][cat.id];
-                            const displayMin = (currentVal.min * 100).toFixed(0);
-                            const displayMax = (currentVal.max * 100).toFixed(0);
+                            const currentVal = localTargets.benchmarks?.[brandKey]?.[cat.id] || {};
+                            const minNumber = Number(currentVal.min);
+                            const maxNumber = Number(currentVal.max);
+                            const hasMin = currentVal.min !== "" && currentVal.min !== null && currentVal.min !== undefined;
+                            const hasMax = currentVal.max !== "" && currentVal.max !== null && currentVal.max !== undefined;
+                            const displayMin = hasMin && Number.isFinite(minNumber) ? (minNumber * 100).toFixed(0) : "";
+                            const displayMax = hasMax && Number.isFinite(maxNumber) ? (maxNumber * 100).toFixed(0) : "";
+                            const benchmarkCheck = displayMin && displayMax ? validateStoreHealthBenchmark(currentVal.min, currentVal.max) : null;
+                            const standardLabel = benchmarkCheck?.valid ? `${displayMin}% - ${displayMax}%` : "未設定";
                             return (
                                 <div key={cat.id} className="bg-[#FAF7F1] border border-[#E8DDCC] rounded-xl p-4 hover:shadow-sm transition-shadow">
-                                    <div className="mb-3 flex justify-between items-start"><div><h4 className="font-bold text-[#4D4338]">{cat.title}</h4><p className="text-[10px] text-[#A69C91] mt-0.5">{cat.sub}</p></div><span className="text-[10px] font-bold text-[#A69C91] bg-[#FFFCF7] px-2 py-1 rounded border border-[#EFE7DA] ml-2 whitespace-nowrap">標準: {displayMin}% - {displayMax}%</span></div>
+                                    <div className="mb-3 flex justify-between items-start"><div><h4 className="font-bold text-[#4D4338]">{cat.title}</h4><p className="text-[10px] text-[#A69C91] mt-0.5">{cat.sub}</p></div><span className="text-[10px] font-bold text-[#A69C91] bg-[#FFFCF7] px-2 py-1 rounded border border-[#EFE7DA] ml-2 whitespace-nowrap">標準: {standardLabel}</span></div>
                                     <div className="grid grid-cols-2 gap-3">
-                                        <div><label className="block text-[10px] font-bold text-[#A69C91] mb-1">及格 ({cat.suffix})</label><div className="relative"><input type="number" step={cat.step} value={displayMin} onChange={(e) => handleBenchmarkChange(cat.id, 'min', e.target.value, cat.type)} className="w-full pl-3 pr-8 py-2 border rounded-lg font-mono font-bold text-[#4D4338] focus:border-[#D6A84F] outline-none text-center bg-[#FFFCF7]"/><span className="absolute right-3 top-2 text-xs font-bold text-[#A69C91] pointer-events-none">{cat.suffix}</span></div></div>
-                                        <div><label className="block text-[10px] font-bold text-[#A69C91] mb-1">滿分 ({cat.suffix})</label><div className="relative"><input type="number" step={cat.step} value={displayMax} onChange={(e) => handleBenchmarkChange(cat.id, 'max', e.target.value, cat.type)} className="w-full pl-3 pr-8 py-2 border rounded-lg font-mono font-bold text-[#4D4338] focus:border-[#D6A84F] outline-none text-center bg-[#FFFCF7]"/><span className="absolute right-3 top-2 text-xs font-bold text-[#A69C91] pointer-events-none">{cat.suffix}</span></div></div>
+                                        <div><label className="block text-[10px] font-bold text-[#A69C91] mb-1">及格 ({cat.suffix})</label><div className="relative"><input type="number" step={cat.step} value={displayMin} placeholder="未設定" onChange={(e) => handleBenchmarkChange(cat.id, 'min', e.target.value, cat.type)} className="w-full pl-3 pr-8 py-2 border rounded-lg font-mono font-bold text-[#4D4338] focus:border-[#D6A84F] outline-none text-center bg-[#FFFCF7]"/><span className="absolute right-3 top-2 text-xs font-bold text-[#A69C91] pointer-events-none">{cat.suffix}</span></div></div>
+                                        <div><label className="block text-[10px] font-bold text-[#A69C91] mb-1">滿分 ({cat.suffix})</label><div className="relative"><input type="number" step={cat.step} value={displayMax} placeholder="未設定" onChange={(e) => handleBenchmarkChange(cat.id, 'max', e.target.value, cat.type)} className="w-full pl-3 pr-8 py-2 border rounded-lg font-mono font-bold text-[#4D4338] focus:border-[#D6A84F] outline-none text-center bg-[#FFFCF7]"/><span className="absolute right-3 top-2 text-xs font-bold text-[#A69C91] pointer-events-none">{cat.suffix}</span></div></div>
                                     </div>
                                 </div>
                             );
