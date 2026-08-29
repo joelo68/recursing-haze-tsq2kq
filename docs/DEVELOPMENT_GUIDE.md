@@ -1245,3 +1245,129 @@ Production regression PASS
 historical high-cost raw sources not observed
 CURRENT_APP_VERSION = 3.5.3
 ```
+# 25. Regional / Ranking Formal Consumer Contract — Batch 5B-1
+
+Batch 5B-1 已於 2026-08-29 Production Confirmed。後續維護 `RegionalView` / `RankingView` 時，不得重新在 View 內用 legacy `cash / refund / accrual / budget` 拼出一套與 Summary writer 不同的 KPI semantics。
+
+## Regional historical contract
+
+verified historical Regional 應由共用 consumer authority解讀：
+
+```text
+Lifecycle eligible stores
++
+formalNetCash
+formalAccrual
+formalCashTarget / formalCashAchievement
+formalAccrualTarget / formalAccrualAchievement
+Target Coverage v1
+```
+
+scope aggregation 規則：
+
+```text
+selected eligible store rows
+→ aggregate Formal actuals
+→ aggregate Formal target authority
+→ coverage complete 才計算 achievement
+```
+
+若 selected scope coverage incomplete：
+
+```text
+achievement = N/A / TARGET_INCOMPLETE semantics
+```
+
+禁止只加總有 target 的店後繼續算百分比。
+
+## Ranking historical contract
+
+Historical verified Ranking authority：
+
+```text
+formalStoreRankings
+formalRankEligibleStoreCount
+```
+
+Ranking View 不得把 legacy store cash / target 前端重算後仍稱為 Formal ranking。
+
+必須保留：
+
+```text
+Lifecycle eligibility
+missing / invalid status semantics
+Formal target validity / coverage
+Formal cash achievement rank authority
+```
+
+既有明確 ranking exclusion 設定可作 operational / presentation filter；若套用 exclusion 後重新編號 display rank，不得覆寫或偽造 persisted Formal rank authority。
+
+## Read policy
+
+Batch 5A-2 的 historical read policy適用於 Dashboard / Ranking / Regional：
+
+```text
+verified historical
+→ Summary-first
+→ normal daily_reports full-month load = 0
+
+trust loading
+→ 先等 Summary / flags，不搶先讀 Raw
+
+dirty / missing / unverified / incompatible contract
+→ detail fallback allowed
+
+current month
+→ existing live/detail flow
+```
+
+新增 Regional / Ranking consumer 不得重新掛大型常駐 query，也不得重新引入 `recalc_queue` / `maintenance_logs` 作 normal historical trust authority。
+
+## Regression minimum
+
+修改 Regional / Ranking Formal consumer 時至少覆蓋：
+
+```bash
+node --check src/utils/reportFormalConsumer.js
+
+node --test tests/kpiContracts.test.js tests/storeIdentity.test.js tests/storeLifecycle.test.js tests/targetAuthority.test.js tests/summaryRepairPreSystem.test.js tests/summarySemantics.test.js tests/targetCoverageAudit.test.js tests/targetCoverageMigration.test.js tests/dashboardFormalConsumer.test.js tests/dashboardHistoricalReads.test.js tests/reportFormalConsumer.test.js
+
+npm run build
+```
+
+Production smoke 至少確認：
+
+```text
+CYJ historical Ranking / Regional
+安妞 historical Ranking / Regional
+伊啵 historical Ranking / Regional
+不同區域／月份切換
+current-month Ranking / Regional regression
+normal verified historical read tracker
+```
+
+2026-08-29 Batch 5B-1 closeout：
+
+```text
+140 / 140 tests PASS
+npm run build PASS
+Frontend Published
+Production regression PASS
+historical high-cost raw sources not observed
+CURRENT_APP_VERSION = 3.5.3
+Runtime main = 5d3d370a9d4cb045f718020ddd390050a3d0b9aa
+```
+
+## Annual boundary
+
+Batch 5B-1 不包含 Annual。Annual 必須獨立處理：
+
+```text
+12-month Summary trust
+month-by-month Target Coverage
+current / future month semantics
+manager / store annual scope aggregation
+historical raw target fallback removal
+```
+
+未完成 Batch 5B-2 前，不得把 Annual 描述成已完成 Formal consumer cutover。

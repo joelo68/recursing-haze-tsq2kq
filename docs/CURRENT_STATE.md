@@ -1128,6 +1128,99 @@ DEPLOYED
 PRODUCTION CONFIRMED
 ```
 
+
+### Batch 5B-1 Regional + Ranking Formal Consumer Cutover — Production Confirmed
+
+Batch 5B-1 已於 2026-08-29 完成 `RegionalView` 與 `RankingView` 的 historical Formal consumer cutover。此階段延續 Batch 5A 的 Formal KPI / verified Summary authority，不修改 Backend writer、Firestore Rules 或 current-month live/detail contract。
+
+正式 Runtime source scope：
+
+```text
+src/App.jsx
+src/components/RegionalView.jsx
+src/components/RankingView.jsx
+src/utils/reportFormalConsumer.js
+tests/reportFormalConsumer.test.js
+```
+
+Historical verified Regional 現在以 Lifecycle eligible store rows 與 persisted Formal fields 作為 authority：
+
+```text
+formalNetCash
+formalAccrual
+formalCashTarget / formalCashAchievement
+formalAccrualTarget / formalAccrualAchievement
+Target Coverage v1
+Lifecycle eligibility
+```
+
+若 selected regional scope 的 target coverage 不完整，achievement 必須 fail-closed 為 `N/A` / incomplete semantics；不得只加總有 target 的店而縮小 denominator。
+
+Historical verified Ranking 現在以：
+
+```text
+formalStoreRankings
+formalRankEligibleStoreCount
+```
+
+作為排名 authority，並合併 store-level Formal KPI / target / achievement semantics。Lifecycle 非 eligible store 不應進 Formal ranking denominator；missing / invalid 不得再被壓成合法 `0`。既有明確 ranking exclusion 設定仍屬 presentation / operational filtering，不改 Backend persisted Formal ranking contract。
+
+Batch 5A-2 的 historical reads policy 同步延伸到 Ranking / Regional：
+
+```text
+verified historical
+→ Summary-first
+→ 不正常載入整月 daily_reports
+
+missing / dirty / unverified / Formal contract incompatible
+→ fail-closed
+→ 允許 detail fallback
+
+current month
+→ 維持既有 live/detail flow
+```
+
+沒有新增 Firestore listener、query、polling、Functions deploy 或 Rules deploy；品牌 Firestore path / isolation 維持既有 resolver。
+
+Validation：
+
+```text
+140 / 140 tests PASS
+npm run build PASS
+Frontend Published
+CURRENT_APP_VERSION = 3.5.3（未提高）
+```
+
+Production regression：
+
+```text
+CYJ historical Ranking / Regional     PASS
+安妞 historical Ranking / Regional    PASS
+伊啵 historical Ranking / Regional    PASS
+區域／月份切換                        PASS
+current-month regression              PASS
+```
+
+Production read tracker 未觀察到 historical `daily_reports` 大量讀取、raw `monthly_targets`、`recalc_queue` large query 或 `maintenance_logs` large query 回歸。當次 tracker 可見 `read_tracker_config` 2 docs、`system_stats_today` 1 doc；此結果只證明高成本 historical Raw / large-query sources 未被觸發，不代表整頁僅有 3 個 Firestore reads。
+
+正式 Runtime / main：
+
+```text
+HEAD = origin/main
+5d3d370a9d4cb045f718020ddd390050a3d0b9aa
+```
+
+Batch 5B-1 狀態：
+
+```text
+IMPLEMENTED
+VALIDATED
+DEPLOYED
+PRODUCTION CONFIRMED
+```
+
+Batch 5B-2 Annual Formal Consumer 尚未開始。Annual 必須獨立處理 12-month Summary trust、month-by-month Target Coverage、current/future month 與 scope-aware annual aggregation，不得把 Batch 5B-1 的單月 consumer contract直接套用後宣稱完成。
+
 ## Observation
 
 安妞 `2026-06` Dashboard Header 的 Summary badge 曾顯示較舊 timestamp，但：

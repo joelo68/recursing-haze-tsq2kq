@@ -2001,4 +2001,132 @@ DEPLOYED
 PRODUCTION CONFIRMED
 ```
 
-下一階段若進 Batch 5B（Regional / Ranking / Annual consumer），必須重新取得當時最新正式 source；不得從 5A-2 artifact 跨版本直接修改。
+Batch 5B-1 Regional / Ranking Formal Consumer 已於 2026-08-29完成並 Production Confirmed；Annual 仍留待獨立 Batch 5B-2。
+# 31. Batch 5B-1 Regional / Ranking Formal Consumer（PRODUCTION CONFIRMED）
+
+Batch 5B-1 runtime owners：
+
+```text
+src/App.jsx
+  → Ranking / Regional historical Formal trust integration
+  → Batch 5A-2 historical read policy 延伸
+
+src/utils/reportFormalConsumer.js
+  → verified historical Regional / Ranking Formal interpreter
+  → Formal KPI / target / coverage / lifecycle / ranking authority
+
+src/components/RegionalView.jsx
+  → historical Regional Formal aggregation consumer
+
+src/components/RankingView.jsx
+  → historical Formal ranking consumer
+
+tests/reportFormalConsumer.test.js
+  → Batch 5B-1 regression contract
+```
+
+Backend persisted authority維持：
+
+```text
+functions/index.js
+functions/summarySemantics.js
+functions/kpiContracts.js
+functions/storeLifecycle.js
+functions/targetCoverage.js
+```
+
+Batch 5B-1 沒有修改 Backend writer；Frontend 只接到已 persisted 的：
+
+```text
+formalNetCash
+formalAccrual
+formalCashTarget / formalCashAchievement
+formalAccrualTarget / formalAccrualAchievement
+formalStoreRankings
+formalRankEligibleStoreCount
+Formal Target Coverage / Lifecycle authority
+```
+
+## Regional flow
+
+```text
+historical month
+→ verified dashboard_summary + trust flags
+→ reportFormalConsumer
+→ Lifecycle eligible store scope
+→ Formal actuals + Formal target authority
+→ coverage-complete achievement
+→ RegionalView
+```
+
+Coverage incomplete 時 fail-closed；不縮 denominator。
+
+## Ranking flow
+
+```text
+historical month
+→ verified Summary / ranking authority
+→ formalStoreRankings
+→ formalRankEligibleStoreCount
+→ reportFormalConsumer
+→ RankingView
+```
+
+Lifecycle non-eligible / invalid target / missing data 不得被前端壓成合法 `0` 後重新排名。既有顯式 ranking exclusion 可作 presentation / operational filter，但不重寫 persisted Formal authority。
+
+## Reads / brand isolation
+
+Batch 5A-2 historical read policy 延伸到 Dashboard / Ranking / Regional；正常 verified historical 不重新載入整月 `daily_reports`，dirty / missing / unverified 才允許 detail fallback。
+
+沒有新增：
+
+```text
+Firestore listener
+query
+polling
+Backend Function
+Rules path
+```
+
+三品牌仍沿用既有 brand-resolved Firestore path；Batch 5B-1 不跨品牌共用 Summary 或 ranking document。
+
+## Production closeout（2026-08-29）
+
+正式 Git：
+
+```text
+HEAD = origin/main
+5d3d370a9d4cb045f718020ddd390050a3d0b9aa
+```
+
+Validation：
+
+```text
+140 / 140 tests PASS
+npm run build PASS
+Frontend Published
+CURRENT_APP_VERSION 3.5.3 unchanged
+```
+
+Production：
+
+```text
+CYJ historical Ranking / Regional normal
+安妞 historical Ranking / Regional normal
+伊啵 historical Ranking / Regional normal
+區域／月份切換 normal
+current-month regression normal
+```
+
+Read tracker 未觀察到 historical `daily_reports` 大量讀取、raw `monthly_targets`、`recalc_queue` large query 或 `maintenance_logs` large query 回歸；當次可見 `read_tracker_config` 2 docs、`system_stats_today` 1 doc，但不可推論整頁只有 3 次 Firestore read。
+
+狀態：
+
+```text
+IMPLEMENTED
+VALIDATED
+DEPLOYED
+PRODUCTION CONFIRMED
+```
+
+Batch 5B-2 Annual 尚未開始；其 Source of Truth 必須以當時最新正式 main 重新取得，不得直接從 5B-1 artifact 延伸修改。

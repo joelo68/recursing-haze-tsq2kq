@@ -1382,3 +1382,59 @@ current-month PASS
 ```
 
 後續若修改 `dashboardReadPolicy.js`、`App.jsx` 或 `useDashboardStats.js`，需同時檢查 reads regression 與 dirty fallback，不得只追求 0 reads 而取消 fail-safe detail path。
+---
+
+# 47. Batch 5B-1 Regional / Ranking Cutover — 維護／觀測邊界
+
+Batch 5B-1 已於 2026-08-29 Production Confirmed。它是 Frontend historical Regional / Ranking consumer semantic cutover，不是新的 Maintenance write / migration 工具。
+
+正常 verified historical Regional / Ranking 應使用 Formal Summary authority；若畫面異常，先依 owner 排查：
+
+```text
+Regional actual / target / achievement / coverage
+→ reportFormalConsumer / RegionalView / persisted dashboard_summary
+
+Ranking order / eligible count / store KPI
+→ formalStoreRankings / formalRankEligibleStoreCount
+→ reportFormalConsumer / RankingView
+
+Summary dirty / unverified
+→ summary_recalc_flags / existing detail fallback domain
+```
+
+不得用 Pre-Batch-5 Target Coverage migration、Summary rebuild 或其他維護寫入工具去掩蓋單頁 consumer bug。
+
+Batch 5B-1 沒有新增：
+
+```text
+Maintenance write
+Backend Function
+Firestore Rules
+polling
+large resident query
+CURRENT_APP_VERSION bump
+```
+
+Production read tracker 在正常 historical Regional / Ranking 操作中未觀察到：
+
+```text
+historical daily_reports large/full-month source
+raw monthly_targets fallback
+recalc_queue large query
+maintenance_logs large query
+```
+
+當次 tracker 可見 `read_tracker_config` 2 docs 與 `system_stats_today` 1 doc；不可因此宣稱整頁只有 3 次 Firestore read。
+
+正式 regression：
+
+```text
+140 / 140 tests PASS
+npm run build PASS
+Frontend Published
+CYJ / 安妞 / 伊啵 Ranking + Regional PASS
+區域／月份切換 PASS
+current-month regression PASS
+```
+
+下一階段 Batch 5B-2 Annual 屬獨立 consumer / reads domain；不要用 5B-1 的 Maintenance 判讀或單月 semantics 直接替代年度 12-month trust / coverage 檢查。
