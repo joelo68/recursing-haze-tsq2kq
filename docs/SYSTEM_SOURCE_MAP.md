@@ -1,7 +1,7 @@
 # SYSTEM_SOURCE_MAP.md
 
 > 狀態：Project Knowledge Base / Source Map v0.1
-> 已整併至 2026-08-28。目前正式部署 source 仍是最高依據；`CURRENT_STATE.md` 會區分「已上線」與「已驗證待部署」。
+> 已整併至 2026-08-29。目前正式部署 source 仍是最高依據；`CURRENT_STATE.md` 會區分「已上線」與「已驗證待部署」。
 > 禁止以舊對話、舊版檔案、AI 記憶或未提供的檔案補足事實。
 > 無法由目前正式程式確認的內容，必須標記為「未由目前正式來源確認」。
 
@@ -1515,7 +1515,7 @@ CURRENT_APP_VERSION: 3.5.3 unchanged
 
 ---
 
-# 28. Summary Writer Semantic Migration — Batch 4（IMPLEMENTED / ISOLATED VALIDATED / NOT DEPLOYED）
+# 28. Summary Writer Semantic Migration — Batch 4（DEPLOYED / PRODUCTION CONFIRMED）
 
 新增 pure owners：
 
@@ -1604,3 +1604,176 @@ Target normal path    1 target-summary doc；incomplete 不 full-scan raw target
 ```
 
 為控制 Firestore document size，formal semantic fields 只加在 store / grand / top-level authority，不擴張每店×每日 `storeDailyTotals` row schema；Maintenance 仍保留既有 `dashboard-summary-v2` `storeDailyTotals`。
+
+Batch 4 正式狀態已由 `CURRENT_STATE.md` 的部署與 Production 驗證收斂為：
+
+```text
+IMPLEMENTED
+VALIDATED
+DEPLOYED
+PRODUCTION CONFIRMED
+CURRENT_APP_VERSION = 3.5.3
+```
+
+---
+
+# 29. Pre-Batch-5 Historical Target Coverage Audit / Metadata Migration（PRODUCTION CONFIRMED）
+
+新增／正式 owner：
+
+```text
+functions/targetCoverageAudit.js
+  → historical Target Coverage read-only classifier
+  → ALREADY_V1 / SUMMARY_BACKFILL_SAFE / RAW_RECONSTRUCTION_REQUIRED /
+    LIFECYCLE_NOT_READY / PRE_SYSTEM_SKIP
+
+functions/targetCoverageMigration.js
+  → brand-scoped atomic metadata-only historical migration
+  → persisted metadata + legacy snapshot verification
+
+functions/targetCoverage.js
+  → brand path resolver / Summary target-map authority / Coverage builder
+
+functions/storeLifecycle.js
+  → monthly Lifecycle READY cohort
+
+functions/deviceApproval.js
+  → requireFirebaseRequestAuth / verifySuperAdminActor
+
+functions/index.js
+  → exports.auditHistoricalTargetCoverage
+  → exports.migrateHistoricalTargetCoverageMetadata
+
+src/components/SystemMaintenance.jsx
+  → Phase A Audit UI
+  → Phase B Migration UI
+
+tests/targetCoverageAudit.test.js
+  → read-only / classification / pre-system / UI wiring regression
+
+tests/targetCoverageMigration.test.js
+  → metadata-only / forbidden legacy fields / atomic blocking /
+    persisted verification / endpoint wiring regression
+```
+
+## Runtime flow
+
+Phase A：
+
+```text
+SystemMaintenance
+  → auditHistoricalTargetCoverage
+  → verify Firebase Auth + highest admin + trusted device + credential
+  → resolve brand path
+  → read store_lifecycle/master
+  → scoped historical monthly_targets_summary query
+  → classify
+  → Raw monthly_targets reads = 0
+  → writes = 0
+```
+
+Phase B：
+
+```text
+SystemMaintenance
+  → latest same-brand Phase A candidates
+  → migrateHistoricalTargetCoverageMetadata
+  → verify Firebase Auth + highest admin + trusted device + credential
+  → brand-scoped Firestore transaction
+      read Lifecycle
+      read all requested Summary docs
+      reclassify all months
+      any blocked month => 0 Writes
+      safe set => merge Coverage metadata only
+  → point-read written Summary docs
+  → verify metadata matched + legacy snapshot preserved
+```
+
+## Brand paths
+
+Target Coverage resolver：
+
+```text
+CYJ
+artifacts/default-app-id/public/data
+  /monthly_targets_summary/{YYYY-MM}
+  /store_lifecycle/master
+
+安妞 / 伊啵
+brands/{brandId}
+  /monthly_targets_summary/{YYYY-MM}
+  /store_lifecycle/master
+```
+
+Phase A / B 不跨 brand collection，也不把 CYJ legacy root 套用到其他品牌。
+
+## Migration write boundary
+
+允許欄位：
+
+```text
+targetCoverageVersion
+kpiContractVersion
+lifecycleReady
+eligibleStoreCount
+cashConfiguredStoreCount
+accrualConfiguredStoreCount
+cashCoverageComplete
+accrualCoverageComplete
+cashMissingStores
+accrualMissingStores
+targetAudit
+coverageSource
+coverageUpdatedAt
+coverageUpdatedAtText
+```
+
+禁止欄位：
+
+```text
+targets / equivalent target-map containers
+storeCount
+targetCount
+sourceDocCount
+cashTargetTotal
+accrualTargetTotal
+```
+
+所以此流程是 Derived Summary metadata migration，不是 Raw Target reconstruction。
+
+## Production closeout（2026-08-29）
+
+Phase A：
+
+```text
+CYJ   7 historical months → 7 SUMMARY_BACKFILL_SAFE
+安妞  7 historical months → 7 SUMMARY_BACKFILL_SAFE
+伊啵  2026-01～03         → 3 PRE_SYSTEM_SKIP
+伊啵  2026-04～07         → 4 ALREADY_V1
+
+Raw reconstruction required = 0
+Raw Target Reads             = 0
+Writes                       = 0
+```
+
+Phase B 後 post-audit：
+
+```text
+CYJ   2026-01～07 → ALREADY_V1 7 / 7
+安妞  2026-01～07 → ALREADY_V1 7 / 7
+伊啵  2026-01～03 → PRE_SYSTEM_SKIP
+伊啵  2026-04～07 → ALREADY_V1 4 / 4
+```
+
+正式驗證／部署：
+
+```text
+Full regression: 105 / 105 PASS
+npm run build: PASS
+migrateHistoricalTargetCoverageMetadata: DEPLOYED (us-central1)
+SystemMaintenance frontend: Published
+Pre-Batch-5 Gate: CLOSED
+CURRENT_APP_VERSION: 3.5.3 unchanged
+```
+
+Batch 5 consumer cutover 尚未因本 Gate 自動完成；後續 consumer migration 必須獨立實作與驗證。

@@ -1057,3 +1057,225 @@ formal ranking signature
 仍屬中風險 Derived Data tool。沒有新增 polling 或 persistent listener。
 
 每次 manual rebuild 相較舊流程，正常增加少量 point reads：Lifecycle master 1 doc + persisted 3 Summary readback；而 Target normal path 從 full target collection scan 改為單一 Target Summary doc。大量歷史重建仍應離峰、逐 brand/month 控制執行。
+
+---
+
+# 44. Pre-Batch-5 Historical Target Coverage Audit / Metadata Migration
+
+2026-08-29 已完成 Historical Target Coverage 的 Phase A / Phase B 收斂。這組工具的用途是處理 Batch 3 以前的 legacy `monthly_targets_summary`，不是日常 Target 重建工具。
+
+## Phase A：Read-only Audit
+
+Frontend：
+
+```text
+SystemMaintenance.jsx
+→ Pre-Batch-5：歷史 Target Coverage 稽核
+```
+
+Backend：
+
+```text
+auditHistoricalTargetCoverage
+```
+
+只讀：
+
+```text
+monthly_targets_summary/{YYYY-MM}
+store_lifecycle/master
+```
+
+不讀：
+
+```text
+Raw monthly_targets
+```
+
+不寫：
+
+```text
+Firestore writes = 0
+```
+
+分類：
+
+```text
+ALREADY_V1
+SUMMARY_BACKFILL_SAFE
+RAW_RECONSTRUCTION_REQUIRED
+LIFECYCLE_NOT_READY
+PRE_SYSTEM_SKIP
+```
+
+`SUMMARY_BACKFILL_SAFE` 的必要條件包括：
+
+```text
+Lifecycle READY
+Summary target map 非空
+legacy store / target / sourceDoc counts 一致
+legacy cash / accrual target totals 與 Summary map 重算一致
+```
+
+其中任一條不成立，不得直接補 Metadata。
+
+## Phase B：Metadata-only Migration
+
+Frontend：
+
+```text
+SystemMaintenance.jsx
+→ Pre-Batch-5 Phase B：補 Historical Target Coverage Metadata
+```
+
+Backend：
+
+```text
+migrateHistoricalTargetCoverageMetadata
+```
+
+操作前必須先有同品牌最新 Phase A Audit；Frontend 只提交 `migrationCandidateMonths`，並要求明確 `confirmMetadataOnly=true`。
+
+Backend 不信任舊 Audit 結果，會在單一品牌 Firestore transaction 內重新讀：
+
+```text
+store_lifecycle/master
++
+本次指定 historical monthly_targets_summary
+```
+
+並重新跑相同分類。任一月份變成：
+
+```text
+RAW_RECONSTRUCTION_REQUIRED
+LIFECYCLE_NOT_READY
+PRE_SYSTEM_SKIP
+SUMMARY_DOCUMENT_MISSING
+```
+
+則整個品牌：
+
+```text
+0 Writes
+```
+
+已是 `ALREADY_V1` 的月份可以略過，不列入 write set。
+
+## Security Gate
+
+Audit 與 Migration 都需要：
+
+```text
+Firebase Auth
++
+最高管理者
++
+Trusted current device
++
+backend credential verification
+```
+
+Frontend password 只作高權限操作 credential re-check；Backend 最終由 `requireFirebaseRequestAuth` + `verifySuperAdminActor` 判斷。
+
+## Metadata-only write contract
+
+Migration 只允許 merge：
+
+```text
+targetCoverageVersion
+kpiContractVersion
+lifecycleReady
+eligibleStoreCount
+cashConfiguredStoreCount
+accrualConfiguredStoreCount
+cashCoverageComplete
+accrualCoverageComplete
+cashMissingStores
+accrualMissingStores
+targetAudit
+coverageSource
+coverageUpdatedAt
+coverageUpdatedAtText
+```
+
+禁止碰：
+
+```text
+targets / store target map
+storeCount
+targetCount
+sourceDocCount
+cashTargetTotal
+accrualTargetTotal
+```
+
+Migration 後必須 point-read persisted Summary，再確認：
+
+```text
+targetCoverageVersion = target-coverage-v1
+expected metadata matched
+legacy target map / counts / totals preserved
+```
+
+若 persisted verification 不是全數通過，應停止後續品牌 migration。
+
+## Brand isolation / path
+
+正式 path 由 Target Coverage authority 共用 resolver 決定：
+
+```text
+CYJ
+artifacts/default-app-id/public/data/
+  store_lifecycle/master
+  monthly_targets_summary/{YYYY-MM}
+
+安妞 / 伊啵
+brands/{brandId}/
+  store_lifecycle/master
+  monthly_targets_summary/{YYYY-MM}
+```
+
+不得跨品牌共用 Summary collection 或把 CYJ legacy root 套到其他品牌。
+
+## Reads / Writes
+
+Phase A Production Audit（三品牌各 7 historical docs）實測顯示：
+
+```text
+Estimated Reads   11
+Raw Target Reads  0
+Writes            0
+```
+
+Phase B 對 CYJ / 安妞各 7 個 candidate docs 做 metadata-only write。Transaction retry 可能增加 reads，但不會因此掃 Raw `monthly_targets`。
+
+沒有新增：
+
+```text
+persistent listener
+polling
+large resident query
+```
+
+## Production closeout（2026-08-29）
+
+```text
+CYJ
+  2026-01～07 → Coverage v1 7 / 7
+
+安妞
+  2026-01～07 → Coverage v1 7 / 7
+
+伊啵
+  2026-01～03 → PRE_SYSTEM_SKIP
+  2026-04～07 → 原本已 Coverage v1
+```
+
+正式 repo validation：
+
+```text
+105 / 105 tests PASS
+npm run build PASS
+```
+
+目前 Pre-Batch-5 Gate 已關閉。正常維運不應再重複執行 CYJ / 安妞 migration；若未來出現新的 legacy historical month，仍必須先 Audit，再依當時最新正式 source 判斷，不可直接寫 Metadata。

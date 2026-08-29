@@ -2,7 +2,7 @@
 
 > 用途：記錄「目前正式環境已確認到哪個狀態」。這不是 CHANGELOG。  
 > 優先順序：使用者提供的目前正式部署 source > 本檔案 > 其他 Knowledge Base 文件。  
-> 最後整併更新：**2026-08-28（UTC+8）**。
+> 最後整併更新：**2026-08-29（UTC+8）**。
 
 # 1. Production Source Snapshot
 
@@ -834,11 +834,91 @@ coverage authority 不可信
 
 本 Batch 不修改 `functions/targetCoverage.js`，也不以 Dashboard workaround 掩蓋此 migration gap。
 
-**Pre-Batch-5 Gate：**
+**Pre-Batch-5 Gate：CLOSED（2026-08-29）**
 
-在 Batch 5 正式 consumer cutover 前，必須先確認 historical `monthly_targets_summary` 的 Target Coverage migration / backfill 策略，避免大量舊月份長期依賴 compatibility raw fallback。
+2026-08-29 已完成兩階段 Historical Target Coverage 收斂：
 
-此項目前是 migration follow-up，不構成 Batch 4 Production failure。
+```text
+Phase A：read-only historical audit
+Phase B：metadata-only historical migration
+```
+
+Phase A `auditHistoricalTargetCoverage` 只讀：
+
+```text
+monthly_targets_summary/{YYYY-MM}
++
+store_lifecycle/master
+```
+
+分類：
+
+```text
+ALREADY_V1
+SUMMARY_BACKFILL_SAFE
+RAW_RECONSTRUCTION_REQUIRED
+LIFECYCLE_NOT_READY
+PRE_SYSTEM_SKIP
+```
+
+Production Audit 結果：
+
+```text
+CYJ
+  historical months         7
+  SUMMARY_BACKFILL_SAFE     7
+  RAW_RECONSTRUCTION        0
+
+安妞
+  historical months         7
+  SUMMARY_BACKFILL_SAFE     7
+  RAW_RECONSTRUCTION        0
+
+伊啵
+  historical months         7
+  ALREADY_V1                4（2026-04～07）
+  PRE_SYSTEM_SKIP           3（2026-01～03）
+  RAW_RECONSTRUCTION        0
+```
+
+三品牌 Phase A 均觀察到：
+
+```text
+Raw Target Reads = 0
+Writes           = 0
+```
+
+Phase B `migrateHistoricalTargetCoverageMetadata` 只處理 Phase A `SUMMARY_BACKFILL_SAFE` 月份。Backend 會在單一品牌 transaction 內重新讀取 Lifecycle + 指定 historical `monthly_targets_summary`，重新分類全部月份；任一月份不再安全時整批 `0 Writes`，不信任舊 Audit 結果。
+
+Migration 只 merge Coverage metadata；禁止改寫 legacy target map / totals / counts。寫入後另做 persisted point-read verification，確認 metadata 已落盤且 legacy snapshot 未被改動。
+
+正式 repo 驗證：
+
+```text
+Full regression  = 105 / 105 PASS
+npm run build    = PASS
+```
+
+部署：
+
+```text
+migrateHistoricalTargetCoverageMetadata(us-central1) = DEPLOYED
+SystemMaintenance frontend                           = Published
+CURRENT_APP_VERSION                                  = 3.5.3（未提高）
+```
+
+Production 最終 post-migration Audit：
+
+```text
+CYJ   2026-01～07  ALREADY_V1 = 7 / 7
+安妞  2026-01～07  ALREADY_V1 = 7 / 7
+伊啵  2026-01～03  PRE_SYSTEM_SKIP = 3
+伊啵  2026-04～07  ALREADY_V1 = 4 / 4
+
+Raw reconstruction required = 0
+```
+
+因此 Pre-Batch-5 Historical Target Coverage Gate 已正式關閉；Batch 5 consumer cutover 可在後續獨立 Batch 進行。未來 consumer 仍必須對缺失／不可信 Coverage metadata fail-closed，不得因本次歷史 migration 已完成就移除 runtime guard。
 
 ## Observation
 

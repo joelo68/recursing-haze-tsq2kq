@@ -796,3 +796,186 @@ npm run build
 只有完整正式 repo 執行過的 checks 才能標 PASS。
 
 部署後先選代表 historical months 做 Raw → rebuilt Summary compare，再擴大 rebuild；不得直接全歷史批量重建。
+
+# 23. Historical Target Coverage Migration Contract — Pre-Batch-5
+
+2026-08-29 已完成 Historical Target Coverage Gate。未來若再處理 legacy `monthly_targets_summary`，必須沿用這次建立的 Audit-first / metadata-only 原則，不得直接寫補丁。
+
+## Owner chain
+
+```text
+functions/targetCoverage.js
+  → Target Coverage path / target-map / coverage authority
+
+functions/storeLifecycle.js
+  → monthly eligible Store cohort
+
+functions/targetCoverageAudit.js
+  → historical safety classification
+
+functions/targetCoverageMigration.js
+  → atomic metadata-only migration
+
+functions/deviceApproval.js
+  → high-privilege request auth / highest-admin verification
+
+functions/index.js
+  → HTTP exports
+
+src/components/SystemMaintenance.jsx
+  → operator UI only
+```
+
+UI 不得複製 Backend classification 或自行決定某月份可寫。
+
+## Audit-first
+
+先執行：
+
+```text
+auditHistoricalTargetCoverage
+```
+
+只允許讀：
+
+```text
+monthly_targets_summary
+store_lifecycle/master
+```
+
+Phase A 不得掃 Raw `monthly_targets`，也不得有 writes。
+
+只有：
+
+```text
+SUMMARY_BACKFILL_SAFE
+```
+
+可以成為 Phase B candidate。以下狀態必須 fail-closed：
+
+```text
+RAW_RECONSTRUCTION_REQUIRED
+LIFECYCLE_NOT_READY
+PRE_SYSTEM_SKIP
+SUMMARY_DOCUMENT_MISSING
+```
+
+## Atomic revalidation
+
+Phase B 不得相信幾分鐘前的 Audit snapshot。
+
+正確：
+
+```text
+begin brand-scoped transaction
+→ read current Lifecycle
+→ read all requested Summary docs
+→ reclassify all months
+→ if any blocked: 0 Writes
+→ otherwise merge metadata
+```
+
+Firestore 因 concurrent change retry transaction 時，全部 read / classification 必須重新執行。不要用 page state、client timestamp 或先前 Audit token 代替資料 reread。
+
+## Metadata-only boundary
+
+允許寫 Coverage contract metadata；禁止改：
+
+```text
+target map
+storeCount
+targetCount
+sourceDocCount
+cashTargetTotal
+accrualTargetTotal
+```
+
+若 historical Summary 本身 totals / counts / map 不一致，該問題屬 Raw reconstruction / upstream repair，不能由 metadata migration 掩蓋。
+
+## Persisted verification
+
+Transaction 成功不等於 migration 已驗證。
+
+必須：
+
+```text
+write
+→ read persisted written Summary docs
+→ compare expected Coverage metadata
+→ compare pre/post legacy target snapshot
+```
+
+只有全部通過才可回報 `allVerified=true`。
+
+## Brand isolation
+
+Path 必須由 Target Coverage resolver 取得：
+
+```text
+CYJ
+artifacts/default-app-id/public/data/{collection}
+
+安妞 / 伊啵
+brands/{brandId}/{collection}
+```
+
+禁止自行在 migration code 拼接另一套 brand path。
+
+## Reads discipline
+
+Historical migration 不得新增 listener / polling。
+
+正常 Phase A：
+
+```text
+1 Lifecycle master
++ scoped historical monthly_targets_summary query
++ security point reads
+```
+
+正常 Phase B：
+
+```text
+security point reads
++ 1 Lifecycle master
++ N requested Summary docs
++ N-written persisted verification reads
+```
+
+Transaction retry 可增加 reads；Raw `monthly_targets` reads 必須維持 0。
+
+## Regression minimum
+
+修改 Audit / Migration / Target Coverage / Lifecycle 時，至少覆蓋：
+
+```bash
+node --check functions/index.js
+node --check functions/targetCoverageAudit.js
+node --check functions/targetCoverageMigration.js
+
+node --test tests/kpiContracts.test.js tests/storeIdentity.test.js tests/storeLifecycle.test.js tests/targetAuthority.test.js tests/summaryRepairPreSystem.test.js tests/summarySemantics.test.js tests/targetCoverageAudit.test.js tests/targetCoverageMigration.test.js
+
+npm run build
+```
+
+只有正式 repo 實跑結果才能標 PASS。2026-08-29 Phase B closeout 的正式結果為：
+
+```text
+105 / 105 tests PASS
+npm run build PASS
+```
+
+## Current production boundary
+
+截至 2026-08-29：
+
+```text
+CYJ   2026-01～07 → target-coverage-v1
+安妞  2026-01～07 → target-coverage-v1
+伊啵  2026-01～03 → pre-system skip
+伊啵  2026-04～07 → target-coverage-v1
+```
+
+這只代表已處理的 historical cohort 已收斂，不代表未來 consumer 可以移除 Coverage fail-closed guard。
+
+`CURRENT_APP_VERSION` 仍為 `3.5.3`，本次 migration 沒有提高版本。
