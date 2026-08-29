@@ -22,6 +22,7 @@ import { ROLES, ALL_MENU_ITEMS, DEFAULT_REGIONAL_MANAGERS, DEFAULT_PERMISSIONS }
 import { generateUUID, formatLocalYYYYMMDD, toStandardDateFormat, formatNumber, parseNumber, normalizeManagerOrder } from "./utils/helpers";
 import { validBaseTarget } from "./utils/kpiContracts";
 import { resolveHistoricalDashboardReadPolicy } from "./utils/dashboardReadPolicy";
+import { isFormalReportSummaryPairCompatible } from "./utils/reportFormalConsumer";
 import {
   buildDelegationAccessProfile,
   canAccessStore as canAccessDelegatedStore,
@@ -2906,10 +2907,13 @@ export default function App() {
     const rankingsSummaryYearMonth = String(currentRankingsSummary?.yearMonth || currentRankingsSummary?.id || "");
     const hasUsableDashboardSummary = Boolean(
       dashboardSummaryYearMonth === targetYearMonth &&
-      currentDashboardSummary?.stores &&
-      Object.keys(currentDashboardSummary.stores || {}).length > 0 &&
       rankingsSummaryYearMonth === targetYearMonth &&
-      currentRankingsSummary
+      isFormalReportSummaryPairCompatible({
+        dashboardSummary: currentDashboardSummary,
+        rankingsSummary: currentRankingsSummary,
+        yearMonth: targetYearMonth,
+        brandId: currentBrand?.id || "",
+      })
     );
     const reportSummaryReadyForMonth = Boolean(
       currentReportSummaryReady &&
@@ -2934,7 +2938,7 @@ export default function App() {
     const shouldLoadDailyReportData =
       MONTHLY_DAILY_REPORT_DATA_VIEWS.has(activeView) &&
       (
-        activeView === "dashboard"
+        (activeView === "dashboard" || isSummaryFirstReportView)
           ? dashboardReadPolicy.shouldLoadDailyReports
           : (
               isHistoricalRefreshRequested ||

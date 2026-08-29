@@ -11,6 +11,7 @@ import {
 import { AppContext } from "../AppContext";
 import { ViewWrapper, Card } from "./SharedUI";
 import { Loader2, Map as MapIcon } from "lucide-react";
+import { buildHistoricalFormalRegionalData, resolveHistoricalReportFormalTrust } from "../utils/reportFormalConsumer";
 
 const RegionalView = () => {
   const { 
@@ -26,7 +27,11 @@ const RegionalView = () => {
     selectedMonth,
     monthlyTargetSummary,
     currentDashboardSummary,
-    currentReportSummaryReady
+    currentRankingsSummary,
+    currentReportSummaryReady,
+    currentReportSummaryReadyYearMonth,
+    currentReportSummaryReadyBrandId,
+    currentSummaryRecalcFlagState
   } = useContext(AppContext);
 
   // 1. 定義品牌前綴與名稱
@@ -172,6 +177,38 @@ const RegionalView = () => {
     return 0;
   };
 
+  const selectedYearMonth = `${selectedYear}-${String(selectedMonth).padStart(2, "0")}`;
+  const now = new Date();
+  const isCurrentMonth =
+    Number(selectedYear) === now.getFullYear() &&
+    Number(selectedMonth) === (now.getMonth() + 1);
+
+  const reportFormalTrust = useMemo(() => resolveHistoricalReportFormalTrust({
+    isCurrentMonth,
+    yearMonth: selectedYearMonth,
+    brandId: currentBrand?.id || currentBrand || "",
+    dashboardSummary: currentDashboardSummary,
+    rankingsSummary: currentRankingsSummary,
+    reportSummaryReady: currentReportSummaryReady,
+    reportSummaryReadyYearMonth: currentReportSummaryReadyYearMonth,
+    reportSummaryReadyBrandId: currentReportSummaryReadyBrandId,
+    summaryFlagState: currentSummaryRecalcFlagState,
+  }), [
+    isCurrentMonth,
+    selectedYearMonth,
+    currentBrand,
+    currentDashboardSummary,
+    currentRankingsSummary,
+    currentReportSummaryReady,
+    currentReportSummaryReadyYearMonth,
+    currentReportSummaryReadyBrandId,
+    currentSummaryRecalcFlagState,
+  ]);
+
+  const isFiniteKpi = (value) => value !== null && value !== undefined && Number.isFinite(Number(value));
+  const formatPercentOrNA = (value, digits = 0) => isFiniteKpi(value) ? `${Number(value).toFixed(digits)}%` : "N/A";
+  const formatMoneyOrNA = (value) => isFiniteKpi(value) ? fmtMoney(Number(value)) : "N/A";
+
   // 3. 本地即時運算區域數據
   const regionalData = useMemo(() => {
     if (!managers) return null;
@@ -179,25 +216,24 @@ const RegionalView = () => {
     const y = parseInt(selectedYear);
     const m = parseInt(selectedMonth);
 
-    // ★ 本月必須使用即時 daily_reports；dashboard_summary 僅供歷史月份 Summary-first。
-    const now = new Date();
-    const isCurrentMonth =
-      y === now.getFullYear() &&
-      m === (now.getMonth() + 1);
+    // Batch 5B-1：verified historical Regional 只使用 Formal Summary contract。
+    if (!isCurrentMonth && reportFormalTrust.trusted) {
+      const formal = buildHistoricalFormalRegionalData({
+        dashboardSummary: currentDashboardSummary,
+        monthlyTargetSummary,
+        managers,
+        normalizeStoreKey: cleanStoreName,
+        getDisplayName: (row, fallbackKey) => cleanStoreName(
+          row?.displayName || row?.store || row?.storeName || row?.name || fallbackKey
+        ),
+        brandPrefix,
+      });
+      return formal.compatible ? formal.regions : null;
+    }
 
-    const summaryStoreRows = currentDashboardSummary?.stores
-      ? (Array.isArray(currentDashboardSummary.stores) ? currentDashboardSummary.stores : Object.values(currentDashboardSummary.stores || {}))
-      : [];
+    if (!isCurrentMonth && reportFormalTrust.loading && (!allReports || allReports.length === 0)) return null;
 
-    const summaryStoreMap = new globalThis.Map();
-    summaryStoreRows.forEach((store) => {
-      const core = cleanStoreName(store.displayName || store.store || store.storeName || store.name);
-      if (core) summaryStoreMap.set(core, store);
-    });
-
-    const useSummary = !isCurrentMonth && summaryStoreMap.size > 0;
-    if (!isCurrentMonth && !useSummary && currentReportSummaryReady && (!allReports || allReports.length === 0)) return [];
-
+    // Current month / fail-closed detail fallback：維持既有即時明細邏輯。
     const stats = Object.keys(managers || {}).map(mgr => ({
       manager: mgr || "未命名",
       stores: [],
@@ -209,7 +245,7 @@ const RegionalView = () => {
       newCustomerClosingsTotal: 0,
       budgetTotal: 0,
       achievement: 0,
-      source: useSummary ? "dashboard_summary" : "detail"
+      source: "detail"
     }));
 
     stats.forEach(region => {
@@ -228,47 +264,29 @@ const RegionalView = () => {
           achievement: 0
         };
 
-        const summaryStore = summaryStoreMap.get(coreName);
+        (allReports || []).forEach(r => {
+          const rDate = new Date(r.date);
+          if (rDate.getFullYear() !== y || (rDate.getMonth() + 1) !== m) return;
 
-        if (useSummary && summaryStore) {
-          const refund = Number(summaryStore.refund ?? summaryStore.refundTotal ?? 0);
-          const cash = Number(summaryStore.cash ?? summaryStore.cashTotal ?? 0) - refund;
-          const accrual = Number(summaryStore.accrual ?? summaryStore.accrualTotal ?? 0);
+          const reportCoreName = cleanStoreName(r.storeName);
+          if (reportCoreName !== coreName) return;
+
+          const cash = (Number(r.cash) || 0) - (Number(r.refund) || 0);
+          const operationalAccrual = Number(r.operationalAccrual) || 0;
+          const accrual = brandPrefix === "安妞" ? operationalAccrual : (Number(r.accrual) || 0);
 
           storeStat.cashTotal += cash;
           storeStat.accrualTotal += accrual;
 
           region.cashTotal += cash;
           region.accrualTotal += accrual;
-          region.skincareSalesTotal += Number(summaryStore.skincareSales ?? summaryStore.skincareSalesTotal ?? 0);
-          region.trafficTotal += Number(summaryStore.traffic ?? summaryStore.trafficTotal ?? 0);
-          region.newCustomersTotal += Number(summaryStore.newCustomers ?? summaryStore.newCustomersTotal ?? 0);
-          region.newCustomerClosingsTotal += Number(summaryStore.newCustomerClosings ?? summaryStore.newCustomerClosingsTotal ?? 0);
-        } else {
-          (allReports || []).forEach(r => {
-            const rDate = new Date(r.date);
-            if (rDate.getFullYear() !== y || (rDate.getMonth() + 1) !== m) return;
+          region.skincareSalesTotal += (Number(r.skincareSales) || 0);
+          region.trafficTotal += (Number(r.traffic) || 0);
+          region.newCustomersTotal += (Number(r.newCustomers) || 0);
+          region.newCustomerClosingsTotal += (Number(r.newCustomerClosings) || 0);
+        });
 
-            const reportCoreName = cleanStoreName(r.storeName);
-            if (reportCoreName !== coreName) return;
-
-            const cash = (Number(r.cash) || 0) - (Number(r.refund) || 0);
-            const accrual = Number(r.accrual) || 0;
-
-            storeStat.cashTotal += cash;
-            storeStat.accrualTotal += accrual;
-
-            region.cashTotal += cash;
-            region.accrualTotal += accrual;
-            region.skincareSalesTotal += (Number(r.skincareSales) || 0);
-            region.trafficTotal += (Number(r.traffic) || 0);
-            region.newCustomersTotal += (Number(r.newCustomers) || 0);
-            region.newCustomerClosingsTotal += (Number(r.newCustomerClosings) || 0);
-          });
-        }
-
-        // 本月目標也不要優先吃 stale dashboard_summary；改由 monthly_targets_summary / budgets 解析。
-        storeStat.budget = resolveStoreBudget(coreName, fullName, useSummary ? summaryStore : null, y, m);
+        storeStat.budget = resolveStoreBudget(coreName, fullName, null, y, m);
         region.budgetTotal += storeStat.budget || 0;
         storeStat.achievement = storeStat.budget > 0 ? (storeStat.cashTotal / storeStat.budget) * 100 : 0;
 
@@ -280,14 +298,26 @@ const RegionalView = () => {
 
     return stats.sort((a, b) => b.cashTotal - a.cashTotal);
 
-  }, [allReports, managers, budgets, selectedYear, selectedMonth, brandPrefix, currentDashboardSummary, currentReportSummaryReady, monthlyTargetSummary]);
+  }, [
+    allReports,
+    managers,
+    budgets,
+    selectedYear,
+    selectedMonth,
+    brandPrefix,
+    currentDashboardSummary,
+    monthlyTargetSummary,
+    isCurrentMonth,
+    reportFormalTrust.trusted,
+    reportFormalTrust.loading,
+  ]);
 
   const pieData = useMemo(
     () => {
       if (!regionalData) return [];
       return regionalData
         .map((r) => ({ name: r.manager, value: r.cashTotal }))
-        .filter((i) => i.value > 0);
+        .filter((i) => isFiniteKpi(i.value) && Number(i.value) > 0);
     },
     [regionalData]
   );
@@ -339,12 +369,12 @@ const RegionalView = () => {
                   <div className="text-right">
                     <div
                       className={`px-3 py-1 rounded-lg text-sm font-bold mb-1 inline-block ${
-                        region.achievement >= 100
+                        isFiniteKpi(region.achievement) && Number(region.achievement) >= 100
                           ? "bg-emerald-100 text-emerald-700"
                           : "bg-amber-50 text-amber-600"
                       }`}
                     >
-                      {(region.achievement || 0).toFixed(0)}%
+                      {formatPercentOrNA(region.achievement)}
                     </div>
                   </div>
                 </div>
@@ -352,13 +382,13 @@ const RegionalView = () => {
                   <div className="flex justify-between items-center">
                     <span className="text-stone-500 text-sm">現金總業績</span>
                     <span className="text-lg font-bold text-stone-700">
-                      {fmtMoney(region.cashTotal)}
+                      {formatMoneyOrNA(region.cashTotal)}
                     </span>
                   </div>
                   <div className="flex justify-between items-center">
                     <span className="text-stone-500 text-sm">權責總業績</span>
                     <span className="text-base font-bold text-stone-600">
-                      {fmtMoney(region.accrualTotal)}
+                      {formatMoneyOrNA(region.accrualTotal)}
                     </span>
                   </div>
                   <div className="flex justify-between items-center">
@@ -459,21 +489,21 @@ const RegionalView = () => {
                           <h4 className="font-bold text-stone-700">
                             {store.cleanName}
                           </h4>
-                          <span className={`text-sm font-bold ${(store.achievement || 0) >= 100 ? 'text-emerald-600' : 'text-amber-500'}`}>
-                            {(store.achievement || 0).toFixed(0)}%
+                          <span className={`text-sm font-bold ${isFiniteKpi(store.achievement) && Number(store.achievement) >= 100 ? 'text-emerald-600' : 'text-amber-500'}`}>
+                            {formatPercentOrNA(store.achievement)}
                           </span>
                         </div>
                         <div className="space-y-2 text-sm">
                           <div className="flex justify-between">
                             <span className="text-stone-400">現金</span>
                             <span className="font-bold">
-                              {fmtMoney(store.cashTotal)}
+                              {formatMoneyOrNA(store.cashTotal)}
                             </span>
                           </div>
                           <div className="flex justify-between">
                             <span className="text-stone-400">權責</span>
                             <span className="font-bold">
-                              {fmtMoney(store.accrualTotal)}
+                              {formatMoneyOrNA(store.accrualTotal)}
                             </span>
                           </div>
                         </div>
