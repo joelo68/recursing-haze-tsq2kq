@@ -1322,3 +1322,63 @@ Firestore Rules deploy
 ```
 
 下一階段 Batch 5A-2 若調整 historical reads / listener topology，應另外做 reads impact 記錄；不要把 reads optimization 歸入本節的 5A-1 semantic cutover。
+
+---
+
+# 46. Batch 5A-2 Historical Reads Cutover — 維護／觀測邊界
+
+Batch 5A-2 已於 2026-08-29 Production Confirmed。它是 Frontend historical Dashboard read policy / listener topology cutover，不是新的 Maintenance write 工具。
+
+正常 verified historical Store Dashboard 現在應為 Summary-first：
+
+```text
+整月 historical daily_reports        → 不正常讀取
+raw monthly_targets fallback          → 不正常讀取
+recalc_queue large resident query     → 不使用
+maintenance_logs resident query       → 不使用
+```
+
+仍保留：
+
+```text
+summary dirty / missing / unverified
+→ 一次 detail fallback
+→ 以 correctness 優先
+```
+
+因此讀取追蹤的判讀原則：
+
+```text
+正常 verified historical 操作看見 daily_reports
+→ 需要追查 read policy / trust state regression
+
+dirty / repair 過程看見一次 daily_reports fallback
+→ 可能是預期安全行為，先確認 flag / Summary status
+
+read tracker 只顯示 read_tracker_config
+→ 不能推論整個 Firestore 只有 1 read
+→ 只能確認 tracker 可觀測的高成本 source 沒有被觸發
+```
+
+Batch 5A-2 沒有新增：
+
+```text
+Maintenance write
+Backend Function
+Firestore Rules
+polling
+CURRENT_APP_VERSION bump
+```
+
+正式 regression：
+
+```text
+127 / 127 tests PASS
+npm run build PASS
+Frontend Published
+三品牌 historical Dashboard PASS
+manager / single-store / Store Performance PASS
+current-month PASS
+```
+
+後續若修改 `dashboardReadPolicy.js`、`App.jsx` 或 `useDashboardStats.js`，需同時檢查 reads regression 與 dirty fallback，不得只追求 0 reads 而取消 fail-safe detail path。

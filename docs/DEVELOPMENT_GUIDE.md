@@ -1113,19 +1113,57 @@ challengeAccrualTarget
 
 仍是 compatibility layer。若未來要 canonicalize Challenge Target，必須先從 writer / KPI contract upstream 擴充，禁止 Dashboard-only workaround。
 
-## Reads boundary
+## Historical Dashboard reads contract（Batch 5A-2）
 
-Batch 5A-1 是 semantic cutover，不是 reads cutover。
+Batch 5A-2 已完成 verified historical Store Dashboard 的 reads cutover。後續維護不得退回「Summary 已 verified 仍整月抓 Raw」的舊模式。
 
-不得因 5A-1 已 Production Confirmed，就宣稱：
+正式 read policy owner：
 
 ```text
-historical daily_reports reads = 0
-raw monthly_targets fallback = 0
-duplicate Summary listeners = removed
+src/utils/dashboardReadPolicy.js
 ```
 
-上述屬 Batch 5A-2；開始前必須以最新正式 `App.jsx`、`useDashboardStats.js` 與相關 hooks / Views 重新 audit Firestore reads。
+核心狀態：
+
+```text
+CURRENT_LIVE
+LOADING
+SUMMARY_TRUSTED
+DETAIL_FALLBACK
+DIRTY_REFRESH
+```
+
+規則：
+
+```text
+current month
+→ 維持 live/detail flow
+
+historical + trust state loading
+→ 先等 Summary / flag，不搶先 getDocs(daily_reports)
+
+historical + verified Formal Summary
+→ 不讀整月 daily_reports
+→ 不做 raw monthly_targets fallback
+
+dirty / missing / unverified / trust error
+→ 允許一次 detail fallback
+→ repair / verified 後回到 Summary-first
+```
+
+禁止用「有 summary document」單一 boolean 直接關 Raw；必須同時尊重 brand、yearMonth、verification / dirty state，避免 stale trust state 或跨品牌誤用。
+
+正常 historical Store Dashboard 不應再使用：
+
+```text
+recalc_queue status=pending limit 500
+maintenance_logs month query limit 120
+hook 內重複 dashboard_summary / rankings_summary / summary_recalc_flags listeners
+```
+
+若未來重新新增 listener / query，必須先做 reads impact；優先 single-document、event-driven、small scoped authority，不以 polling 或 large resident query 取代 `summary_recalc_flags/{yearMonth}`。
+
+Production read tracker 的 2026-08-29 驗證只證明高成本 historical sources 未被觸發，不可寫成「整個 Dashboard 只有 1 read」。
 
 ## Regression minimum
 
@@ -1159,5 +1197,51 @@ current-month regression
 npm run build PASS
 Frontend Published
 Production validation PASS
+CURRENT_APP_VERSION = 3.5.3
+```
+
+## Batch 5A-2 regression minimum
+
+修改 Historical Dashboard read policy / Summary trust / raw fallback 時，至少覆蓋：
+
+```bash
+node --check src/hooks/useDashboardStats.js
+node --check src/utils/dashboardReadPolicy.js
+
+node --test tests/kpiContracts.test.js tests/storeIdentity.test.js tests/storeLifecycle.test.js tests/targetAuthority.test.js tests/summaryRepairPreSystem.test.js tests/summarySemantics.test.js tests/targetCoverageAudit.test.js tests/targetCoverageMigration.test.js tests/dashboardFormalConsumer.test.js tests/dashboardHistoricalReads.test.js
+
+npm run build
+```
+
+Production regression 至少確認：
+
+```text
+CYJ / 安妞 / 伊啵 verified historical Dashboard
+manager filter
+single-store filter
+Store Performance
+current-month live/detail
+normal verified historical read tracker
+```
+
+正常 verified historical read tracker 應沒有：
+
+```text
+historical daily_reports full-month load
+raw monthly_targets fallback
+recalc_queue large query
+maintenance_logs query
+```
+
+dirty / unverified case 若出現一次 detail fallback 是 correctness behavior，不應誤判為 regression。
+
+2026-08-29 Batch 5A-2 closeout：
+
+```text
+127 / 127 tests PASS
+npm run build PASS
+Frontend Published
+Production regression PASS
+historical high-cost raw sources not observed
 CURRENT_APP_VERSION = 3.5.3
 ```

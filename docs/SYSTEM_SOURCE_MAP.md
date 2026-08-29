@@ -1878,17 +1878,40 @@ Batch 5A-1 未新增 `formalChallenge*` persisted fields。既有 challenge targ
 
 ## Reads impact
 
-Batch 5A-1：
+Batch 5A-1 本身沒有改 reads topology；Batch 5A-2 已於 2026-08-29 完成 verified historical Store Dashboard reads cutover。
+
+Batch 5A-2 runtime owners：
 
 ```text
-New persistent listeners = 0
-New polling              = 0
-New Firestore queries     = 0
-Backend deploy            = 0
-Rules deploy              = 0
+src/App.jsx
+  historical detail loading gate
+  Summary trust / brand-month anchoring integration
+
+src/hooks/useDashboardStats.js
+  historical Summary consumer read path
+  raw target fallback gate
+  duplicate / legacy trust listener cleanup
+
+src/utils/dashboardReadPolicy.js
+  CURRENT_LIVE / LOADING / SUMMARY_TRUSTED / DETAIL_FALLBACK / DIRTY_REFRESH
+  shouldLoadDailyReports
+  allowRawTargetFallback
+
+tests/dashboardHistoricalReads.test.js
+  historical reads regression contract
 ```
 
-此階段沒有移除既有 historical `daily_reports` reads、raw target fallback 或重複 trust listeners；這些明確留給 Batch 5A-2 Historical Reads Cutover。
+正常 verified historical Store Dashboard：
+
+```text
+historical daily_reports full-month load = 0
+raw monthly_targets fallback             = 0
+recalc_queue large query                 = 0
+maintenance_logs query                   = 0
+polling                                  = 0
+```
+
+Summary dirty / missing / unverified 時仍保留一次 detail fallback；這是 correctness path，不應移除。
 
 ## Production closeout（2026-08-29）
 
@@ -1935,4 +1958,47 @@ DEPLOYED
 PRODUCTION CONFIRMED
 ```
 
-下一步為 Batch 5A-2 Historical Reads Cutover；開始前必須重新取得當時最新正式 source，不得直接沿用 5A-1 artifact 修改。
+Batch 5A-2 已完成並 Production Confirmed。正式 Runtime commit / main：
+
+```text
+HEAD = origin/main
+a43e1d92c1c2d3d71177a7aaaa020d72e2b7ab55
+```
+
+Validation：
+
+```text
+127 / 127 tests PASS
+npm run build PASS
+Frontend Published
+CURRENT_APP_VERSION 3.5.3 unchanged
+```
+
+Production：
+
+```text
+CYJ / 安妞 / 伊啵 historical Dashboard normal
+manager filter normal
+single-store filter normal
+Store Performance normal
+2026-08 current-month normal
+
+read tracker:
+historical daily_reports not observed
+raw monthly_targets fallback not observed
+recalc_queue large query not observed
+maintenance_logs query not observed
+```
+
+上述 tracker 結果不代表整個 Dashboard 只有 1 Firestore read；Summary / config 等必要 single-document reads 仍可能存在。
+
+狀態：
+
+```text
+IMPLEMENTED
+VALIDATED
+DEPLOYED
+PRODUCTION CONFIRMED
+```
+
+下一階段若進 Batch 5B（Regional / Ranking / Annual consumer），必須重新取得當時最新正式 source；不得從 5A-2 artifact 跨版本直接修改。

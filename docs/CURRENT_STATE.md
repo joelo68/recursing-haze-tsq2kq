@@ -1035,18 +1035,98 @@ DEPLOYED
 PRODUCTION CONFIRMED
 ```
 
-### Batch 5A-2 尚未開始
+### Batch 5A-2 Historical Reads Cutover — Production Confirmed
 
-Batch 5A-1 **沒有**宣稱 Historical Reads 已完成 cutover。現有 historical data-loading topology 的成本優化屬下一階段 Batch 5A-2，包含：
+Batch 5A-2 已於 2026-08-29 完成 verified historical Store Dashboard 的 reads cutover。此階段只改 Frontend read policy / listener topology，不改 Batch 5A-1 已確認的 Formal KPI semantics。
+
+正式 Runtime source scope：
 
 ```text
-verified historical Dashboard 的整月 daily_reports reads
-trusted Formal Summary 下的 raw monthly_targets fallback
-重複 Summary / ranking / recalc trust listeners
-大型 resident trust queries
+src/App.jsx
+src/hooks/useDashboardStats.js
+src/utils/dashboardReadPolicy.js
+tests/dashboardHistoricalReads.test.js
 ```
 
-5A-2 必須以當時最新正式 source 重新做 reads audit 與 Source anchoring，不得把 5A-1 semantics cutover 視為已自動移除上述 reads。
+正常 verified historical Store Dashboard 現在採：
+
+```text
+dashboard_summary / monthly_targets_summary / summary_recalc_flags 等 small-scoped Summary authority
+→ 不再正常載入整月 daily_reports
+→ 不做 raw monthly_targets fallback
+→ 不依賴 recalc_queue 大型 resident query
+→ 不依賴 maintenance_logs resident query
+→ 不在 hook 重複掛載已由 App 提供的 Summary / ranking / recalc trust listeners
+```
+
+read policy 明確區分：
+
+```text
+CURRENT_LIVE
+LOADING
+SUMMARY_TRUSTED
+DETAIL_FALLBACK
+DIRTY_REFRESH
+```
+
+安全邊界：
+
+```text
+Summary loading
+→ 先等 trust state，不搶先讀 Raw
+
+verified historical
+→ Summary-first / raw reads 0
+
+dirty / missing / unverified
+→ 保留一次 detail fallback，優先正確性
+
+current month
+→ 維持既有 live/detail flow
+```
+
+另外以 `brandId + yearMonth` 雙重 anchoring 防止切品牌／月份時短暫沿用上一個 Summary trust state。歷史人員績效仍保留既有 therapist detail fallback；門市歷史 reads cutover 不冒充為 therapist flow 已同步完成。
+
+Validation：
+
+```text
+127 / 127 tests PASS
+npm run build PASS
+Frontend Published
+CURRENT_APP_VERSION = 3.5.3
+```
+
+Production regression：
+
+```text
+CYJ historical Dashboard      PASS
+安妞 historical Dashboard     PASS
+伊啵 historical Dashboard     PASS
+manager filter                PASS
+single-store filter           PASS
+Store Performance             PASS
+2026-08 current-month         PASS
+```
+
+Production read tracker 在正常 verified historical 操作中未觀察到：
+
+```text
+historical daily_reports
+raw monthly_targets fallback
+recalc_queue large query
+maintenance_logs query
+```
+
+此結果只代表上述高成本來源沒有被觸發；不宣稱整個 Dashboard 只有 1 次 Firestore read，必要的 Summary / config single-document reads 仍可能存在。
+
+Batch 5A-2 狀態：
+
+```text
+IMPLEMENTED
+VALIDATED
+DEPLOYED
+PRODUCTION CONFIRMED
+```
 
 ## Observation
 
