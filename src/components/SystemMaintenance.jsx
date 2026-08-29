@@ -75,6 +75,30 @@ import {
 const todayMonth = () => new Date().toISOString().substring(0, 7);
 const TARGET_COVERAGE_AUDIT_ENDPOINT = "https://us-central1-cyjsituation-analysis.cloudfunctions.net/auditHistoricalTargetCoverage";
 
+// Keep ToolRow at module scope. Defining a component inside SystemMaintenance creates a
+// new component identity on every parent state update; controlled inputs nested inside it
+// are then remounted and lose focus after each keystroke.
+const ToolRow = ({ icon: Icon, title, desc, badge, children, tone = "amber" }) => {
+  const toneClass = tone === "emerald" ? "text-emerald-600 bg-emerald-50 border-emerald-100" : tone === "rose" ? "text-rose-500 bg-rose-50 border-rose-100" : "text-[#B7863D] bg-amber-50 border-amber-100";
+  return (
+    <div className="rounded-[1.75rem] border border-[#E8DDD0] bg-white/90 p-5 shadow-[0_16px_50px_rgba(154,118,84,0.06)]">
+      <div className="flex flex-col lg:flex-row lg:items-center gap-4">
+        <div className="flex items-start gap-4 flex-1 min-w-0">
+          <div className={`w-12 h-12 rounded-2xl border flex items-center justify-center shrink-0 ${toneClass}`}><Icon size={21} strokeWidth={1.7} /></div>
+          <div className="min-w-0">
+            <div className="flex items-center gap-2 flex-wrap">
+              <h3 className="text-base font-black text-[#4F3F33] tracking-tight">{title}</h3>
+              {badge && <span className="px-2 py-1 rounded-full bg-amber-50 text-[#B7863D] border border-amber-100 text-[10px] font-black">{badge}</span>}
+            </div>
+            <p className="mt-1 text-xs font-bold text-[#9A8978] leading-relaxed">{desc}</p>
+          </div>
+        </div>
+        <div className="lg:shrink-0 flex flex-col md:flex-row gap-2 md:items-center">{children}</div>
+      </div>
+    </div>
+  );
+};
+
 export default function SystemMaintenance() {
   const { currentBrand, userRole, showToast, getCollectionPath, getDocPath, currentUser, currentDeviceTrust, directorLevel } = useContext(AppContext);
 
@@ -1201,27 +1225,6 @@ export default function SystemMaintenance() {
   };
 
   const SoftInput = ({ className = "", ...props }) => <input {...props} className={`h-11 px-3 rounded-2xl bg-white/90 border border-stone-200 text-sm font-black text-stone-700 outline-none focus:border-amber-300 focus:ring-4 focus:ring-amber-50 transition-all ${className}`} />;
-
-  const ToolRow = ({ icon: Icon, title, desc, badge, children, tone = "amber" }) => {
-    const toneClass = tone === "emerald" ? "text-emerald-600 bg-emerald-50 border-emerald-100" : tone === "rose" ? "text-rose-500 bg-rose-50 border-rose-100" : "text-[#B7863D] bg-amber-50 border-amber-100";
-    return (
-      <div className="rounded-[1.75rem] border border-[#E8DDD0] bg-white/90 p-5 shadow-[0_16px_50px_rgba(154,118,84,0.06)]">
-        <div className="flex flex-col lg:flex-row lg:items-center gap-4">
-          <div className="flex items-start gap-4 flex-1 min-w-0">
-            <div className={`w-12 h-12 rounded-2xl border flex items-center justify-center shrink-0 ${toneClass}`}><Icon size={21} strokeWidth={1.7} /></div>
-            <div className="min-w-0">
-              <div className="flex items-center gap-2 flex-wrap">
-                <h3 className="text-base font-black text-[#4F3F33] tracking-tight">{title}</h3>
-                {badge && <span className="px-2 py-1 rounded-full bg-amber-50 text-[#B7863D] border border-amber-100 text-[10px] font-black">{badge}</span>}
-              </div>
-              <p className="mt-1 text-xs font-bold text-[#9A8978] leading-relaxed">{desc}</p>
-            </div>
-          </div>
-          <div className="lg:shrink-0 flex flex-col md:flex-row gap-2 md:items-center">{children}</div>
-        </div>
-      </div>
-    );
-  };
 
   const renderStatList = ({ rows, emptyIcon: EmptyIcon, emptyText, emptySubText = "", valueClass = "text-[#B7863D]" }) => (
     <div className="p-4">

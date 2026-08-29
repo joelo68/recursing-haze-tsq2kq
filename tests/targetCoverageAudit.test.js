@@ -226,3 +226,11 @@ test('SystemMaintenance exposes Audit Only UI without listener or polling and pr
   assert.match(maintenanceSource, /核心資料一致性健檢/);
   assert.doesNotMatch(maintenanceSource, /handleExecuteCyjNewStoreRepair/);
 });
+
+test('SystemMaintenance keeps ToolRow module-scoped so controlled audit inputs retain focus across state updates', () => {
+  const componentStart = maintenanceSource.indexOf('export default function SystemMaintenance()');
+  const toolRowStart = maintenanceSource.indexOf('const ToolRow =');
+  assert.ok(componentStart > 0, 'SystemMaintenance component declaration must exist');
+  assert.ok(toolRowStart >= 0, 'ToolRow declaration must exist');
+  assert.ok(toolRowStart < componentStart, 'ToolRow must stay at module scope to avoid input remount/focus loss');
+});
