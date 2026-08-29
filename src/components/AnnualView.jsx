@@ -298,7 +298,11 @@ const AnnualView = () => {
   };
 
   const saveConfig = async () => {
-    await handleUpdateAuditExclusions(localExclusions);
+    const success = await handleUpdateAuditExclusions(localExclusions);
+    if (!success) {
+      showToast("排除名單更新失敗，請稍後再試");
+      return;
+    }
     setIsConfigModalOpen(false);
     showToast("排除名單已更新，報表已重新計算", "success");
   };

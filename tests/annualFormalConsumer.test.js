@@ -354,3 +354,26 @@ test("AnnualView and App wire readiness, fail-closed trust, Formal scope and no 
   assert.match(appSource, /dashboardReady: true/);
   assert.match(appSource, /flagsReady: true/);
 });
+
+test("audit exclusion save synchronizes AppContext state only for the same brand after Firestore succeeds", () => {
+  const appSource = fs.readFileSync(path.join(root, "src/App.jsx"), "utf8");
+
+  assert.match(appSource, /const brandIdAtStart = currentBrandId;/);
+  assert.match(appSource, /const nextExclusions = Array\.isArray\(newExclusions\) \? \[\.\.\.newExclusions\] : \[\];/);
+  assert.match(appSource, /await setDoc\(auditExclusionsDoc, \{ stores: nextExclusions \}\);/);
+  assert.match(appSource, /if \(currentBrandIdRef\.current === brandIdAtStart\) \{\s*setAuditExclusions\(nextExclusions\);\s*\}/);
+  assert.match(appSource, /\}, \[currentBrandId, getDocPath\]\);/);
+});
+
+test("AnnualView only closes the exclusion modal and shows success after the write succeeds", () => {
+  const annualSource = fs.readFileSync(path.join(root, "src/components/AnnualView.jsx"), "utf8");
+
+  assert.match(annualSource, /const success = await handleUpdateAuditExclusions\(localExclusions\);/);
+  assert.match(annualSource, /if \(!success\) \{\s*showToast\("排除名單更新失敗，請稍後再試"\);\s*return;\s*\}/);
+  const successCheckIndex = annualSource.indexOf("if (!success)");
+  const closeIndex = annualSource.indexOf("setIsConfigModalOpen(false);", successCheckIndex);
+  const successToastIndex = annualSource.indexOf('showToast("排除名單已更新，報表已重新計算", "success");', successCheckIndex);
+  assert.ok(successCheckIndex >= 0);
+  assert.ok(closeIndex > successCheckIndex);
+  assert.ok(successToastIndex > closeIndex);
+});

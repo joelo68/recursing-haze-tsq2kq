@@ -3554,7 +3554,22 @@ export default function App() {
       return false;
     }
   }, [getDocPath, trainerAuth]);
-  const handleUpdateAuditExclusions = useCallback(async (newExclusions) => { try { await setDoc(getDocPath("audit_exclusions"), { stores: newExclusions }); return true; } catch (e) { console.error(e); return false; } }, [getDocPath]);
+  const handleUpdateAuditExclusions = useCallback(async (newExclusions) => {
+    const brandIdAtStart = currentBrandId;
+    const nextExclusions = Array.isArray(newExclusions) ? [...newExclusions] : [];
+    const auditExclusionsDoc = getDocPath("audit_exclusions");
+
+    try {
+      await setDoc(auditExclusionsDoc, { stores: nextExclusions });
+      if (currentBrandIdRef.current === brandIdAtStart) {
+        setAuditExclusions(nextExclusions);
+      }
+      return true;
+    } catch (e) {
+      console.error(e);
+      return false;
+    }
+  }, [currentBrandId, getDocPath]);
   
   const handleUpdateDirectorAuth = useCallback(async (action, name, payload = {}, newName = null) => { 
     try { 
