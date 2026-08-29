@@ -131,7 +131,8 @@ const AnnualView = () => {
       if (!getCollectionPath) return;
 
       setAnnualTargetSummariesLoaded(false);
-      const monthKeys = getMonthKeysInRange(startMonthStr, endMonthStr);
+      const monthKeys = getMonthKeysInRange(startMonthStr, endMonthStr)
+        .filter((yearMonth) => !isAnnualPreSystemMonth(currentBrand, yearMonth));
       if (monthKeys.length === 0) {
         setAnnualMonthlyTargetSummaries({});
         setAnnualTargetSummariesLoaded(true);
