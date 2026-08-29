@@ -6,6 +6,14 @@ const axios = require("axios");
 const functions = require("firebase-functions/v1"); 
 const admin = require("firebase-admin");
 const { createTelegramAgentPrompts } = require("./telegram/prompts");
+const {
+  isTelegramFormalPreSystemMonth,
+  inspectTelegramFormalSummaryTrust,
+  buildTelegramFormalMetricsFromCanonical,
+  buildTelegramFormalRawMetrics,
+  buildTelegramFormalSummaryMetrics,
+  aggregateTelegramFormalRows,
+} = require("./telegram/formalKpi");
 
 if (!admin.apps.length) admin.initializeApp();
 const db = admin.firestore();
@@ -2721,10 +2729,21 @@ const TELEGRAM_AGENT_METRIC_DICTIONARY = Object.freeze({
     skincareRatioRank: { label: "保養品占比排名", definition: "同品牌區長依保養品業績 ÷ 現金總業績排序", unit: "名", sourceField: "skincare / cash" },
 });
 
-function getTelegramAgentMetricDictionary(keys = []) {
+const TELEGRAM_AGENT_FORMAL_METRIC_OVERRIDES = Object.freeze({
+    cash: { label: "現金總業績", definition: "正式淨現金＝現金業績－一般退費－保養品退費", unit: "元", sourceField: "formalNetCash" },
+    accrual: { label: "權責總業績", definition: "正式權責：CYJ／伊啵使用 accrual；安妞使用 operationalAccrual", unit: "元", sourceField: "formalAccrual" },
+    operationalAccrual: { label: "操作權責", definition: "安妞品牌的正式權責來源欄位；其他品牌僅為相容欄位", unit: "元", sourceField: "operationalAccrual" },
+    cashAchievementRate: { label: "現金業績達成率", definition: "正式淨現金 ÷ 正式現金目標 × 100%；目標 Coverage 不完整時為 N/A", unit: "%", sourceField: "formalCashAchievement" },
+});
+
+function getTelegramAgentMetricDictionary(keys = [], options = {}) {
     const requested = Array.isArray(keys) && keys.length > 0 ? keys : Object.keys(TELEGRAM_AGENT_METRIC_DICTIONARY);
+    const formalMode = options.formalMode === true;
     return requested.reduce((acc, key) => {
-        if (TELEGRAM_AGENT_METRIC_DICTIONARY[key]) acc[key] = TELEGRAM_AGENT_METRIC_DICTIONARY[key];
+        const metric = formalMode && TELEGRAM_AGENT_FORMAL_METRIC_OVERRIDES[key]
+            ? TELEGRAM_AGENT_FORMAL_METRIC_OVERRIDES[key]
+            : TELEGRAM_AGENT_METRIC_DICTIONARY[key];
+        if (metric) acc[key] = metric;
         return acc;
     }, {});
 }
@@ -2752,7 +2771,7 @@ function buildTelegramAgentDataQuality({
     const reportCoverage = expected > 0 ? Number(((reported / expected) * 100).toFixed(1)) : 0;
     const targetCoverage = expected > 0 ? Number(((targeted / expected) * 100).toFixed(1)) : 0;
     const sourceText = String(source || "");
-    const sourceConfidence = /daily_reports_current_month_exact|verified_dashboard_summary/.test(sourceText)
+    const sourceConfidence = /daily_reports_current_month_exact|verified_(?:formal_)?dashboard_summary/.test(sourceText)
         ? "high"
         : /daily_reports_scoped|monthly_aggregated/.test(sourceText)
             ? "medium"
@@ -3811,8 +3830,12 @@ function aggregateTelegramAgentStoreRows(rows = [], yearMonth = "", endDate = ""
     overall.newAvg = overall.newCount > 0 ? Math.round(overall.newRev / overall.newCount) : 0;
     overall.oldAvg = overall.oldCount > 0 ? Math.round(overall.oldRev / overall.oldCount) : 0;
     overall.newClosingRate = overall.newCount > 0 ? Number(((overall.newClosings / overall.newCount) * 100).toFixed(1)) : 0;
-    overall.achievement = overall.budget > 0 ? Number(((overall.cash / overall.budget) * 100).toFixed(1)) : 0;
-    overall.projection = calculateTelegramAgentProjection(overall.cash, yearMonth, endDate);
+    if (rows.some((row) => row?.formalKpiMode)) {
+        Object.assign(overall, aggregateTelegramFormalRows(rows));
+    } else {
+        overall.achievement = overall.budget > 0 ? Number(((overall.cash / overall.budget) * 100).toFixed(1)) : 0;
+    }
+    overall.projection = Number.isFinite(Number(overall.cash)) ? calculateTelegramAgentProjection(overall.cash, yearMonth, endDate) : null;
     return overall;
 }
 
@@ -3821,21 +3844,38 @@ async function loadTelegramAgentStoreMonth(brandId, yearMonth, ctx, options = {}
     const scopedStores = normalizeTelegramAgentStoreNamesFull(options.storeNames || options.targetStores || []);
     const scopedStoreSet = new Set(scopedStores);
     const isCurrentMonth = yearMonth === taipeiNow.yearMonth;
+    const formalKpiMode = options.formalKpiMode === true;
     let dashboardData = null;
     let summaryStatus = null;
 
-    // 當月必須與前端區域分析使用的即時日報口徑一致。
-    // monthly_aggregated 可能因啟用時間或歷史補登而不完整，因此只能作為當月 fallback。
+    if (formalKpiMode && isTelegramFormalPreSystemMonth(brandId, yearMonth)) {
+        pushTelegramAgentWarning(ctx, `${getTelegramAgentBrandLabel(brandId)} ${yearMonth} 為正式系統使用前月份，不提供 0 業績推論。`);
+        return {
+            rows: [],
+            overall: null,
+            source: "pre_system_skip",
+            updatedAtText: "",
+            formalKpiMode: true,
+            preSystem: true,
+            dataStatus: "PRE_SYSTEM_SKIP",
+        };
+    }
+
+    // 當月維持即時 daily_reports source，但 Formal analytical consumer 使用同一套 canonical KPI contract。
     if (isCurrentMonth) {
         const liveResult = await loadTelegramAgentRawStoreRange(
             brandId,
             `${yearMonth}-01`,
             taipeiNow.todayStr,
             ctx,
-            { includeTargets: true, storeNames: scopedStores }
+            { includeTargets: true, storeNames: scopedStores, formalKpiMode }
         );
         if (liveResult.rows.length > 0) {
-            return { ...liveResult, source: "daily_reports_current_month_exact" };
+            return {
+                ...liveResult,
+                source: formalKpiMode ? "daily_reports_current_month_exact_formal" : "daily_reports_current_month_exact",
+                formalKpiMode,
+            };
         }
         if (ctx) ctx.warnings.push(`${getTelegramAgentBrandLabel(brandId)} ${yearMonth} 當月日報讀取為 0，已改用月彙總 fallback。`);
     }
@@ -3852,14 +3892,36 @@ async function loadTelegramAgentStoreMonth(brandId, yearMonth, ctx, options = {}
             );
             if (dashboardResult.exists && dashboardResult.data?.stores) {
                 dashboardData = dashboardResult.data;
-                const rows = (Array.isArray(dashboardData.stores) ? dashboardData.stores : Object.values(dashboardData.stores || {}))
-                    .map((row) => normalizeTelegramAgentStoreRow(row, brandId, row, { cashIsNet: true, skincareIsNet: false }));
-                return {
-                    rows,
-                    overall: aggregateTelegramAgentStoreRows(rows, yearMonth, getTelegramAgentMonthEnd(yearMonth)),
-                    source: "verified_dashboard_summary",
-                    updatedAtText: dashboardResult.updatedAtText || summaryStatus.updatedAtText,
-                };
+                if (formalKpiMode) {
+                    const trust = inspectTelegramFormalSummaryTrust({ brandId, yearMonth, summaryStatus, summaryData: dashboardData });
+                    if (trust.trusted) {
+                        const rows = (Array.isArray(dashboardData.stores) ? dashboardData.stores : Object.values(dashboardData.stores || {}))
+                            .filter((row) => row?.formalLifecycleEligible === true)
+                            .filter((row) => scopedStoreSet.size === 0 || scopedStoreSet.has(normalizeSummaryCoreName(row.store || row.storeName || row.displayName || row.id || "")))
+                            .map((row) => ({
+                                ...normalizeTelegramAgentStoreRow(row, brandId, row, { cashIsNet: true, skincareIsNet: false }),
+                                ...buildTelegramFormalSummaryMetrics(row),
+                            }));
+                        return {
+                            rows,
+                            overall: aggregateTelegramAgentStoreRows(rows, yearMonth, getTelegramAgentMonthEnd(yearMonth)),
+                            source: "verified_formal_dashboard_summary",
+                            updatedAtText: dashboardResult.updatedAtText || summaryStatus.updatedAtText,
+                            formalKpiMode: true,
+                            formalTrustReason: trust.reason,
+                        };
+                    }
+                    pushTelegramAgentWarning(ctx, `${getTelegramAgentBrandLabel(brandId)} ${yearMonth} Formal Summary 不符合信任契約（${trust.reason}），已改走 correctness fallback。`);
+                } else {
+                    const rows = (Array.isArray(dashboardData.stores) ? dashboardData.stores : Object.values(dashboardData.stores || {}))
+                        .map((row) => normalizeTelegramAgentStoreRow(row, brandId, row, { cashIsNet: true, skincareIsNet: false }));
+                    return {
+                        rows,
+                        overall: aggregateTelegramAgentStoreRows(rows, yearMonth, getTelegramAgentMonthEnd(yearMonth)),
+                        source: "verified_dashboard_summary",
+                        updatedAtText: dashboardResult.updatedAtText || summaryStatus.updatedAtText,
+                    };
+                }
             }
         } else if (ctx) {
             ctx.warnings.push(`${getTelegramAgentBrandLabel(brandId)} ${yearMonth} Summary 狀態為 ${summaryStatus.status}，已改讀月彙總避免使用可能過期資料。`);
@@ -3885,13 +3947,16 @@ async function loadTelegramAgentStoreMonth(brandId, yearMonth, ctx, options = {}
             : aggregatedResult.rows;
         const rows = scopedAggregatedRows.map((row) => {
             const core = normalizeSummaryCoreName(row.storeName || row.store || row.id || "");
-            return normalizeTelegramAgentStoreRow({ ...row, manager: org.storeOwner[core] || row.manager || "未分配" }, brandId, targetResult.map[core] || {}, { cashIsNet: false, skincareIsNet: false });
+            const target = targetResult.map[core] || {};
+            const normalized = normalizeTelegramAgentStoreRow({ ...row, manager: org.storeOwner[core] || row.manager || "未分配" }, brandId, target, { cashIsNet: false, skincareIsNet: false });
+            return formalKpiMode ? { ...normalized, ...buildTelegramFormalRawMetrics(brandId, row, target) } : normalized;
         });
         return {
             rows,
             overall: aggregateTelegramAgentStoreRows(rows, yearMonth, isCurrentMonth ? taipeiNow.todayStr : getTelegramAgentMonthEnd(yearMonth)),
-            source: `monthly_aggregated+${targetResult.source}`,
+            source: `${formalKpiMode ? "formal_" : ""}monthly_aggregated+${targetResult.source}`,
             updatedAtText: targetResult.updatedAtText || "",
+            formalKpiMode,
         };
     }
 
@@ -3900,14 +3965,15 @@ async function loadTelegramAgentStoreMonth(brandId, yearMonth, ctx, options = {}
         `${yearMonth}-01`,
         isCurrentMonth ? taipeiNow.todayStr : getTelegramAgentMonthEnd(yearMonth),
         ctx,
-        { storeNames: scopedStores }
+        { storeNames: scopedStores, formalKpiMode }
     );
     if (rawFallback.rows.length > 0 && ctx) {
         ctx.warnings.push(`${getTelegramAgentBrandLabel(brandId)} ${yearMonth} 月彙總缺漏，本題已改讀品牌限定日報。`);
     }
     return {
         ...rawFallback,
-        source: rawFallback.rows.length > 0 ? "daily_reports_month_fallback" : "no_data",
+        source: rawFallback.rows.length > 0 ? (formalKpiMode ? "daily_reports_month_fallback_formal" : "daily_reports_month_fallback") : "no_data",
+        formalKpiMode,
     };
 }
 
@@ -3979,8 +4045,11 @@ async function loadTelegramAgentRawStoreRange(brandId, startDate, endDate, ctx, 
         const core = normalizeSummaryCoreName(sourceRow.storeName || sourceRow.store || sourceRow.storeId || "");
         if (!core) return;
         if (requestedStoreSet.size > 0 && !requestedStoreSet.has(core)) return;
-        if (!storeMap[core]) storeMap[core] = { storeName: core, __rawDaily: true };
+        if (!storeMap[core]) storeMap[core] = { storeName: core, __rawDaily: true, __formalRawRows: [] };
         const row = storeMap[core];
+        if (options.formalKpiMode === true) row.__formalRawRows.push(sourceRow);
+        row.grossCash = Number(row.grossCash || 0) + (Number(sourceRow.cash) || 0);
+        row.refund = Number(row.refund || 0) + (Number(sourceRow.refund) || 0);
         row.cash = Number(row.cash || 0) + (Number(sourceRow.cash) || 0) - (Number(sourceRow.refund) || 0);
         row.accrual = Number(row.accrual || 0) + (Number(sourceRow.accrual) || 0);
         row.operationalAccrual = Number(row.operationalAccrual || 0) + (Number(sourceRow.operationalAccrual) || 0);
@@ -3991,7 +4060,7 @@ async function loadTelegramAgentRawStoreRange(brandId, startDate, endDate, ctx, 
         row.newCustomerSales = Number(row.newCustomerSales || 0) + (Number(sourceRow.newCustomerSales || sourceRow.newCustomerRevenue) || 0);
         row.newCustomers = Number(row.newCustomers || 0) + (Number(sourceRow.newCustomers || sourceRow.newCustomerCount) || 0);
         row.newCustomerClosings = Number(row.newCustomerClosings || 0) + (Number(sourceRow.newCustomerClosings) || 0);
-        dailyCash[sourceRow.date] = (dailyCash[sourceRow.date] || 0) + (Number(sourceRow.cash) || 0) - (Number(sourceRow.refund) || 0);
+        dailyCash[sourceRow.date] = (dailyCash[sourceRow.date] || 0) + (Number(sourceRow.cash) || 0) - (Number(sourceRow.refund) || 0) - (options.formalKpiMode === true ? (Number(sourceRow.skincareRefund) || 0) : 0);
     });
 
     const yearMonth = startDate.slice(0, 7);
@@ -4003,18 +4072,30 @@ async function loadTelegramAgentRawStoreRange(brandId, startDate, endDate, ctx, 
         : { map: {}, source: "not_requested", updatedAtText: "" };
     const rows = Object.values(storeMap).map((row) => {
         const core = normalizeSummaryCoreName(row.storeName || "");
-        return normalizeTelegramAgentStoreRow(
+        const target = targetResult.map[core] || {};
+        const normalized = normalizeTelegramAgentStoreRow(
             { ...row, manager: org.storeOwner[core] || "未分配" },
             brandId,
-            targetResult.map[core] || {},
+            target,
             { cashIsNet: true, skincareIsNet: false }
         );
+        if (options.formalKpiMode === true) {
+            const canonicalActual = aggregateFormalMetrics(brandId, row.__formalRawRows || []);
+            return { ...normalized, ...buildTelegramFormalMetricsFromCanonical(canonicalActual, target, "raw_canonical") };
+        }
+        return normalized;
     });
     const [year, month] = yearMonth.split("-").map(Number);
     const daysPassed = getClampedDaysPassed(dailyCash, year, month);
     const overall = aggregateTelegramAgentStoreRows(rows, yearMonth, endDate);
     overall.projection = calculateExactFrontendProjection(dailyCash, year, month, daysPassed);
-    return { rows, overall, source: "daily_reports_scoped", updatedAtText: targetResult.updatedAtText || "" };
+    return {
+        rows,
+        overall,
+        source: options.formalKpiMode === true ? "daily_reports_scoped_formal" : "daily_reports_scoped",
+        updatedAtText: targetResult.updatedAtText || "",
+        formalKpiMode: options.formalKpiMode === true,
+    };
 }
 
 async function getStorePerformance(startDate, endDate, storeName = null, brandName = null, agentContext = null, policyScopes = ["telegram_analysis", "brand_totals"]) {
@@ -4028,7 +4109,11 @@ async function getStorePerformance(startDate, endDate, storeName = null, brandNa
     const end = normalizeTelegramAgentDate(endDate);
     const useMonthSummary = isTelegramAgentMonthRange(start, end);
     const requestedStoreCore = normalizeSummaryCoreName(storeName || "");
-    const storeScopeOptions = requestedStoreCore ? { storeNames: [requestedStoreCore] } : {};
+    const analyticalFormalKpiMode = !Array.isArray(policyScopes) || !policyScopes.includes("active_alert");
+    const storeScopeOptions = {
+        ...(requestedStoreCore ? { storeNames: [requestedStoreCore] } : {}),
+        formalKpiMode: analyticalFormalKpiMode,
+    };
     const allRows = [];
     const sourceMeta = [];
 
@@ -4037,22 +4122,34 @@ async function getStorePerformance(startDate, endDate, storeName = null, brandNa
         const loaded = useMonthSummary
             ? await loadTelegramAgentStoreMonth(brandId, start.slice(0, 7), ctx, storeScopeOptions)
             : await loadTelegramAgentRawStoreRange(brandId, start, end, ctx, storeScopeOptions);
+        if (loaded.preSystem === true) {
+            sourceMeta.push({
+                brand: getTelegramAgentBrandLabel(brandId),
+                source: loaded.source,
+                updatedAtText: "",
+                dataStatus: "PRE_SYSTEM_SKIP",
+                formalKpiMode: analyticalFormalKpiMode,
+                activeDelegationCount: 0,
+                policyExcludedCount: 0,
+            });
+            continue;
+        }
         const org = await loadTelegramAgentOrgProfile(brandId, ctx);
         const basePolicyRows = filterTelegramAgentRowsByPolicies(loaded.rows, brandId, ctx, policyScopes);
-        const rowsNeedingTargetRepair = basePolicyRows
+        const rowsNeedingTargetRepair = loaded.formalKpiMode === true ? [] : basePolicyRows
             .filter((row) => !requestedStoreCore || normalizeSummaryCoreName(row.storeName) === requestedStoreCore)
             .filter((row) => Number(row?.budget || 0) <= 0)
             .map((row) => normalizeSummaryCoreName(row.storeName))
             .filter(Boolean);
         const targetRepair = rowsNeedingTargetRepair.length > 0
             ? await loadTelegramAgentTargetMap(brandId, start.slice(0, 7), ctx, null, rowsNeedingTargetRepair)
-            : { map: {}, source: "not_needed", updatedAtText: "" };
+            : { map: {}, source: loaded.formalKpiMode === true ? "formal_row_authority" : "not_needed", updatedAtText: "" };
         const policyRows = basePolicyRows.map((row) => {
                 const storeCore = normalizeSummaryCoreName(row.storeName);
                 const delegation = org.actingDelegationByStore?.[storeCore] || null;
                 const repairedTarget = targetRepair.map?.[storeCore] || {};
-                const budget = Number(row?.budget || repairedTarget.cashTarget || 0);
-                const accrualBudget = Number(row?.accrualBudget || repairedTarget.accrualTarget || 0);
+                const budget = loaded.formalKpiMode === true ? row?.budget : Number(row?.budget || repairedTarget.cashTarget || 0);
+                const accrualBudget = loaded.formalKpiMode === true ? row?.accrualBudget : Number(row?.accrualBudget || repairedTarget.accrualTarget || 0);
                 return {
                     ...row,
                     manager: org.storeOwner?.[storeCore] || row.manager || "未分配",
@@ -4061,7 +4158,10 @@ async function getStorePerformance(startDate, endDate, storeName = null, brandNa
                     delegationEndDate: delegation?.endDate || "",
                     budget,
                     accrualBudget,
-                    achievement: budget > 0 ? Number(((Number(row?.cash || 0) / budget) * 100).toFixed(1)) : 0,
+                    achievement: loaded.formalKpiMode === true
+                        ? row?.achievement ?? null
+                        : (budget > 0 ? Number(((Number(row?.cash || 0) / budget) * 100).toFixed(1)) : 0),
+                    cashAchievementRate: loaded.formalKpiMode === true ? row?.cashAchievementRate ?? row?.achievement ?? null : undefined,
                 };
             });
         policyRows.forEach((row) => allRows.push(row));
@@ -4071,6 +4171,7 @@ async function getStorePerformance(startDate, endDate, storeName = null, brandNa
             updatedAtText: loaded.updatedAtText,
             activeDelegationCount: Array.isArray(org.activeDelegations) ? org.activeDelegations.length : 0,
             policyExcludedCount: Math.max(0, loaded.rows.length - policyRows.length),
+            formalKpiMode: loaded.formalKpiMode === true,
         });
     }
 
@@ -4096,7 +4197,11 @@ async function getStorePerformance(startDate, endDate, storeName = null, brandNa
         overall_summary: overall,
         stores_details: sortedRows,
         source_meta: sourceMeta,
-        data_note: useMonthSummary ? "整月／本月查詢優先使用 Summary 或月彙總。" : "指定日期區間使用品牌限定日報。",
+        data_note: analyticalFormalKpiMode
+            ? "分析查詢使用 Formal KPI contract；歷史 verified 月優先使用 Formal Summary，本月／日期區間使用即時資料套用同一 KPI 語意。"
+            : (useMonthSummary ? "整月／本月查詢優先使用 Summary 或月彙總。" : "指定日期區間使用品牌限定日報。"),
+        formal_kpi_mode: analyticalFormalKpiMode,
+        pre_system_skips: sourceMeta.filter((row) => row.dataStatus === "PRE_SYSTEM_SKIP").map((row) => row.brand),
     };
 }
 
@@ -4497,8 +4602,17 @@ async function getMacroStrategicAnalysis(startMonth, endMonth, storeName = null,
                 brandId,
                 yearMonth,
                 ctx,
-                requestedStore ? { storeNames: [requestedStore] } : {}
+                { ...(requestedStore ? { storeNames: [requestedStore] } : {}), formalKpiMode: true }
             );
+            if (loaded.preSystem === true) {
+                monthlyTrends.push({
+                    yearMonth,
+                    brand: getTelegramAgentBrandLabel(brandId),
+                    status: "PRE_SYSTEM_SKIP",
+                    source: loaded.source,
+                });
+                continue;
+            }
             const policyRows = filterTelegramAgentRowsByPolicies(loaded.rows, brandId, ctx, ["telegram_analysis", "brand_totals"]);
             const rows = requestedStore
                 ? policyRows.filter((row) => normalizeSummaryCoreName(row.storeName).includes(requestedStore))
@@ -4514,34 +4628,45 @@ async function getMacroStrategicAnalysis(startMonth, endMonth, storeName = null,
                 newCount: overall.newCount,
                 budget: overall.budget,
                 achievement: overall.achievement,
+                cashAchievementStatus: overall.cashAchievementStatus || "",
+                accrualAchievement: overall.accrualAchievement ?? null,
+                accrualAchievementStatus: overall.accrualAchievementStatus || "",
                 source: loaded.source,
                 updatedAtText: loaded.updatedAtText,
             });
-            if (!brandTotals[brandId]) brandTotals[brandId] = { brand: getTelegramAgentBrandLabel(brandId), cash: 0, accrual: 0, traffic: 0, newRev: 0, newCount: 0, budget: 0 };
-            ["cash", "accrual", "traffic", "newRev", "newCount", "budget"].forEach((field) => { brandTotals[brandId][field] += Number(overall[field] || 0); });
+            if (!brandTotals[brandId]) brandTotals[brandId] = { brand: getTelegramAgentBrandLabel(brandId), cash: 0, accrual: 0, traffic: 0, newRev: 0, newCount: 0, budget: 0, cashTargetComplete: true };
+            ["cash", "accrual", "traffic", "newRev", "newCount"].forEach((field) => { brandTotals[brandId][field] += Number(overall[field] || 0); });
+            if (overall.budget === null || overall.budget === undefined) brandTotals[brandId].cashTargetComplete = false;
+            else brandTotals[brandId].budget += Number(overall.budget || 0);
             rows.forEach((row) => {
                 const key = `${brandId}:${row.storeName}`;
-                if (!storeTotals[key]) storeTotals[key] = { storeName: row.storeName, brand: getTelegramAgentBrandLabel(brandId), cash: 0, accrual: 0, traffic: 0, newRev: 0, newCount: 0, budget: 0 };
-                ["cash", "accrual", "traffic", "newRev", "newCount", "budget"].forEach((field) => { storeTotals[key][field] += Number(row[field] || 0); });
+                if (!storeTotals[key]) storeTotals[key] = { storeName: row.storeName, brand: getTelegramAgentBrandLabel(brandId), cash: 0, accrual: 0, traffic: 0, newRev: 0, newCount: 0, budget: 0, cashTargetComplete: true };
+                ["cash", "accrual", "traffic", "newRev", "newCount"].forEach((field) => { storeTotals[key][field] += Number(row[field] || 0); });
+                if (row.budget === null || row.budget === undefined) storeTotals[key].cashTargetComplete = false;
+                else storeTotals[key].budget += Number(row.budget || 0);
             });
         }
     }
 
     Object.values(brandTotals).forEach((row) => {
-        row.achievement = row.budget > 0 ? Number(((row.cash / row.budget) * 100).toFixed(1)) : 0;
+        row.achievement = row.cashTargetComplete && row.budget > 0 ? Number(((row.cash / row.budget) * 100).toFixed(1)) : null;
+        row.cashAchievementStatus = row.cashTargetComplete ? (row.budget > 0 ? "VALID" : "TARGET_NOT_SET") : "TARGET_INCOMPLETE";
         row.newCustomerASP = row.newCount > 0 ? Math.round(row.newRev / row.newCount) : 0;
     });
     const storeHealth = Object.values(storeTotals).map((row) => ({
         ...row,
-        achievementRate: row.budget > 0 ? Number(((row.cash / row.budget) * 100).toFixed(1)) : 0,
+        achievementRate: row.cashTargetComplete && row.budget > 0 ? Number(((row.cash / row.budget) * 100).toFixed(1)) : null,
+        cashAchievementStatus: row.cashTargetComplete ? (row.budget > 0 ? "VALID" : "TARGET_NOT_SET") : "TARGET_INCOMPLETE",
         newCustomerASP: row.newCount > 0 ? Math.round(row.newRev / row.newCount) : 0,
-    })).sort((a, b) => b.cash - a.cash).slice(0, 80);
+    })).sort((a, b) => Number(b.cash || 0) - Number(a.cash || 0)).slice(0, 80);
 
     return {
         analysis_range: `${months[0]} ~ ${months[months.length - 1]}`,
         monthly_trends: monthlyTrends,
         brand_summaries: Object.values(brandTotals),
         store_health_and_targets: storeHealth,
+        formal_kpi_mode: true,
+        pre_system_skips: monthlyTrends.filter((row) => row.status === "PRE_SYSTEM_SKIP"),
     };
 }
 
@@ -4574,8 +4699,23 @@ async function getManagerPerformance(yearMonth, managerName = null, brandName = 
 
     for (const brandId of brands) {
         const org = orgCache[brandId] || await loadTelegramAgentOrgProfile(brandId, ctx);
-        const loaded = await loadTelegramAgentStoreMonth(brandId, ym, ctx);
-        const targetResult = await loadTelegramAgentTargetMap(brandId, ym, ctx, null, org.stores || []);
+        const loaded = await loadTelegramAgentStoreMonth(brandId, ym, ctx, { formalKpiMode: true });
+        if (loaded.preSystem === true) {
+            brandQuality.push({
+                brand: getTelegramAgentBrandLabel(brandId),
+                brandId,
+                yearMonth: ym,
+                dataStatus: "PRE_SYSTEM_SKIP",
+                source: loaded.source,
+                targetSource: "pre_system_skip",
+                orgSourcePath: org.sourcePath,
+            });
+            continue;
+        }
+        const useFormalRowTargetAuthority = loaded.source === "verified_formal_dashboard_summary";
+        const targetResult = useFormalRowTargetAuthority
+            ? { map: {}, source: "formal_row_authority", updatedAtText: loaded.updatedAtText || "" }
+            : await loadTelegramAgentTargetMap(brandId, ym, ctx, null, org.stores || []);
 
         const rowByCore = {};
         loaded.rows.forEach((row) => {
@@ -4619,7 +4759,13 @@ async function getManagerPerformance(yearMonth, managerName = null, brandName = 
                 assignedStores.add(storeCore);
                 const row = rowByCore[storeCore] || null;
                 const target = targetResult.map[storeCore] || {};
-                const budget = Number(row?.budget || target.cashTarget || 0);
+                const budget = loaded.formalKpiMode === true ? (row?.budget ?? target.cashTarget ?? null) : Number(row?.budget || target.cashTarget || 0);
+                const hasReportData = loaded.formalKpiMode === true
+                    ? Boolean(row && ["VALID", "VALID_ZERO"].includes(String(row.cashStatus || "")))
+                    : Boolean(row);
+                const hasTargetData = loaded.formalKpiMode === true
+                    ? Boolean((row && String(row.cashTargetStatus || "") === "VALID") || Number(target.cashTarget || 0) > 0)
+                    : budget > 0;
                 const cash = Number(row?.cash || 0);
                 const accrual = Number(row?.accrual || 0);
                 const skincare = Number(row?.skincareGross ?? row?.skincare ?? 0);
@@ -4630,9 +4776,9 @@ async function getManagerPerformance(yearMonth, managerName = null, brandName = 
                 const targetManager = managerMap[manager];
 
                 targetManager.stores.push(storeCore);
-                if (row) targetManager.reportedStoreCount += 1;
+                if (hasReportData) targetManager.reportedStoreCount += 1;
                 else targetManager.missingReportStores.push(storeCore);
-                if (budget > 0) targetManager.targetedStoreCount += 1;
+                if (hasTargetData) targetManager.targetedStoreCount += 1;
                 else targetManager.missingTargetStores.push(storeCore);
 
                 targetManager.storeDetails.push({
@@ -4644,9 +4790,14 @@ async function getManagerPerformance(yearMonth, managerName = null, brandName = 
                     newCustomers: newCount,
                     retainedOrders: newClosings,
                     budget,
-                    cashAchievementRate: budget > 0 ? Number(((cash / budget) * 100).toFixed(1)) : null,
-                    hasReportData: Boolean(row),
-                    hasTargetData: budget > 0,
+                    cashAchievementRate: loaded.formalKpiMode === true
+                        ? row?.cashAchievementRate ?? row?.achievement ?? null
+                        : (budget > 0 ? Number(((cash / budget) * 100).toFixed(1)) : null),
+                    cashStatus: loaded.formalKpiMode === true ? row?.cashStatus || "" : "",
+                    accrualStatus: loaded.formalKpiMode === true ? row?.accrualStatus || "" : "",
+                    cashTargetStatus: loaded.formalKpiMode === true ? row?.cashTargetStatus || "" : "",
+                    hasReportData,
+                    hasTargetData,
                 });
                 targetManager.cash += cash;
                 targetManager.accrual += accrual;
@@ -4655,7 +4806,7 @@ async function getManagerPerformance(yearMonth, managerName = null, brandName = 
                 targetManager.newRev += newRev;
                 targetManager.newCount += newCount;
                 targetManager.newClosings += newClosings;
-                targetManager.budget += budget;
+                if (hasTargetData) targetManager.budget += Number(budget || 0);
             });
         });
 
@@ -4689,10 +4840,12 @@ async function getManagerPerformance(yearMonth, managerName = null, brandName = 
                 };
             }
             const target = managerMap[manager];
-            const budget = Number(row.budget || targetResult.map[storeCore]?.cashTarget || 0);
+            const budget = loaded.formalKpiMode === true ? (row?.budget ?? targetResult.map[storeCore]?.cashTarget ?? null) : Number(row.budget || targetResult.map[storeCore]?.cashTarget || 0);
+            const hasTargetData = loaded.formalKpiMode === true ? (String(row?.cashTargetStatus || "") === "VALID" || Number(targetResult.map[storeCore]?.cashTarget || 0) > 0) : budget > 0;
+            const hasReportData = loaded.formalKpiMode === true ? ["VALID", "VALID_ZERO"].includes(String(row?.cashStatus || "")) : true;
             target.stores.push(storeCore);
-            target.reportedStoreCount += 1;
-            if (budget > 0) target.targetedStoreCount += 1;
+            if (hasReportData) target.reportedStoreCount += 1;
+            if (hasTargetData) target.targetedStoreCount += 1;
             target.storeDetails.push({
                 storeName: storeCore,
                 cash: Number(row.cash || 0),
@@ -4702,9 +4855,11 @@ async function getManagerPerformance(yearMonth, managerName = null, brandName = 
                 newCustomers: Number(row.newCount || 0),
                 retainedOrders: Number(row.newClosings || 0),
                 budget,
-                cashAchievementRate: budget > 0 ? Number(((Number(row.cash || 0) / budget) * 100).toFixed(1)) : null,
-                hasReportData: true,
-                hasTargetData: budget > 0,
+                cashAchievementRate: loaded.formalKpiMode === true ? row?.cashAchievementRate ?? row?.achievement ?? null : (budget > 0 ? Number(((Number(row.cash || 0) / budget) * 100).toFixed(1)) : null),
+                cashStatus: loaded.formalKpiMode === true ? row?.cashStatus || "" : "",
+                cashTargetStatus: loaded.formalKpiMode === true ? row?.cashTargetStatus || "" : "",
+                hasReportData,
+                hasTargetData,
             });
             target.cash += Number(row.cash || 0);
             target.accrual += Number(row.accrual || 0);
@@ -4713,11 +4868,12 @@ async function getManagerPerformance(yearMonth, managerName = null, brandName = 
             target.newRev += Number(row.newRev || 0);
             target.newCount += Number(row.newCount || 0);
             target.newClosings += Number(row.newClosings || 0);
-            target.budget += budget;
+            if (hasTargetData) target.budget += Number(budget || 0);
         });
 
         const managerRows = Object.values(managerMap).map((row) => {
-            const cashAchievementRate = row.budget > 0 ? Number(((row.cash / row.budget) * 100).toFixed(1)) : null;
+            const scopeComplete = row.expectedStoreCount > 0 && row.reportedStoreCount >= row.expectedStoreCount && row.targetedStoreCount >= row.expectedStoreCount;
+            const cashAchievementRate = scopeComplete && row.budget > 0 ? Number(((row.cash / row.budget) * 100).toFixed(1)) : null;
             const newClosingRate = row.newCount > 0 ? Number(((row.newClosings / row.newCount) * 100).toFixed(1)) : null;
             const skincareRatio = row.cash > 0 ? Number(((row.skincare / row.cash) * 100).toFixed(1)) : null;
             const dataQuality = buildTelegramAgentDataQuality({
@@ -4741,6 +4897,8 @@ async function getManagerPerformance(yearMonth, managerName = null, brandName = 
                 retainedOrders: row.newClosings,
                 source: loaded.source,
                 targetSource: targetResult.source,
+                formalKpiMode: loaded.formalKpiMode === true,
+                cashAchievementStatus: cashAchievementRate === null ? (row.targetedStoreCount < row.expectedStoreCount ? "TARGET_INCOMPLETE" : "DATA_INCOMPLETE") : "VALID",
                 dataQuality,
                 rankingEligible: dataQuality.rankingEligible,
                 rankingStatus: dataQuality.rankingEligible ? "eligible" : "blocked_incomplete_data",
@@ -4802,7 +4960,9 @@ async function getManagerPerformance(yearMonth, managerName = null, brandName = 
                     const storeDetails = accessibleStores.map((storeCore) => {
                         const row = rowByCore[storeCore] || null;
                         const target = targetResult.map[storeCore] || {};
-                        const budget = Number(row?.budget || target.cashTarget || 0);
+                        const budget = loaded.formalKpiMode === true ? (row?.budget ?? target.cashTarget ?? null) : Number(row?.budget || target.cashTarget || 0);
+                        const hasReportData = loaded.formalKpiMode === true ? Boolean(row && ["VALID", "VALID_ZERO"].includes(String(row.cashStatus || ""))) : Boolean(row);
+                        const hasTargetData = loaded.formalKpiMode === true ? Boolean((row && String(row.cashTargetStatus || "") === "VALID") || Number(target.cashTarget || 0) > 0) : budget > 0;
                         const cash = Number(row?.cash || 0);
                         const delegation = org.actingDelegationByStore?.[storeCore] || null;
                         return {
@@ -4815,15 +4975,15 @@ async function getManagerPerformance(yearMonth, managerName = null, brandName = 
                             cash,
                             accrual: Number(row?.accrual || 0),
                             budget,
-                            cashAchievementRate: budget > 0 ? Number(((cash / budget) * 100).toFixed(1)) : null,
-                            hasReportData: Boolean(row),
-                            hasTargetData: budget > 0,
+                            cashAchievementRate: loaded.formalKpiMode === true ? row?.cashAchievementRate ?? row?.achievement ?? null : (budget > 0 ? Number(((cash / budget) * 100).toFixed(1)) : null),
+                            hasReportData,
+                            hasTargetData,
                         };
                     });
                     const totals = storeDetails.reduce((acc, row) => {
                         acc.cash += Number(row.cash || 0);
                         acc.accrual += Number(row.accrual || 0);
-                        acc.budget += Number(row.budget || 0);
+                        if (row.hasTargetData) acc.budget += Number(row.budget || 0);
                         if (row.hasReportData) acc.reportedStoreCount += 1;
                         if (row.hasTargetData) acc.targetedStoreCount += 1;
                         return acc;
@@ -4838,9 +4998,9 @@ async function getManagerPerformance(yearMonth, managerName = null, brandName = 
                         accessibleStores,
                         storeDetails,
                         ...totals,
-                        cashAchievementRate: totals.budget > 0 ? Number(((totals.cash / totals.budget) * 100).toFixed(1)) : null,
+                        cashAchievementRate: totals.targetedStoreCount >= accessibleStores.length && totals.reportedStoreCount >= accessibleStores.length && totals.budget > 0 ? Number(((totals.cash / totals.budget) * 100).toFixed(1)) : null,
                         expectedProgress,
-                        progressGap: totals.budget > 0 ? Number((((totals.cash / totals.budget) * 100) - expectedProgress).toFixed(1)) : null,
+                        progressGap: totals.targetedStoreCount >= accessibleStores.length && totals.reportedStoreCount >= accessibleStores.length && totals.budget > 0 ? Number((((totals.cash / totals.budget) * 100) - expectedProgress).toFixed(1)) : null,
                         rankingEligible: false,
                         rankingNote: "代理管理範圍只供當期管理與責任追蹤，不併入正式組織排名。",
                     });
@@ -4892,7 +5052,7 @@ async function getManagerPerformance(yearMonth, managerName = null, brandName = 
             "cash", "accrual", "skincare", "traffic", "newCustomers", "retainedOrders",
             "cashAchievementRate", "expectedProgress", "progressGap", "achievementRank", "cashRank",
             "closingRateRank", "newCustomerRank", "skincareRatioRank",
-        ]),
+        ], { formalMode: true }),
     };
 }
 
@@ -5154,16 +5314,34 @@ async function getDataHealth(yearMonth, brandName = null, agentContext = null) {
 
     for (const brandId of brands) {
         // 依序載入以共享同一題快取，避免相同 org/target 被重複讀取。
-        const loaded = await loadTelegramAgentStoreMonth(brandId, ym, ctx);
+        const loaded = await loadTelegramAgentStoreMonth(brandId, ym, ctx, { formalKpiMode: true });
         const org = await loadTelegramAgentOrgProfile(brandId, ctx);
+        if (loaded.preSystem === true) {
+            results.push({
+                brand: getTelegramAgentBrandLabel(brandId),
+                brandId,
+                yearMonth: ym,
+                status: "pre_system",
+                dataStatus: "PRE_SYSTEM_SKIP",
+                storeDataSource: loaded.source,
+                targetDataSource: "pre_system_skip",
+            });
+            continue;
+        }
         const summaryStatus = await loadTelegramAgentSummaryStatus(brandId, ym, ctx);
         const auditExclusions = await loadTelegramAgentAuditExclusions(brandId, ctx);
-        const reported = new Set(loaded.rows.map((row) => normalizeSummaryCoreName(row.storeName)).filter(Boolean));
+        const reported = new Set(loaded.rows.filter((row) => loaded.formalKpiMode !== true || ["VALID", "VALID_ZERO"].includes(String(row.cashStatus || ""))).map((row) => normalizeSummaryCoreName(row.storeName)).filter(Boolean));
         const formalStores = new Set(normalizeTelegramAgentStoreNamesFull(org.stores || []));
         const officialStores = [...formalStores].filter((store) => !auditExclusions.storeSet.has(store));
         const expected = new Set(filterTelegramAgentStoresByPolicies(officialStores, brandId, ctx, ["data_audit"]));
-        const targetResult = await loadTelegramAgentTargetMap(brandId, ym, ctx, null, [...expected]);
-        const targeted = new Set(Object.entries(targetResult.map || {}).filter(([, value]) => Number(value?.cashTarget || 0) > 0).map(([key]) => key));
+        const formalRowByCore = Object.fromEntries((loaded.rows || []).map((row) => [normalizeSummaryCoreName(row.storeName), row]).filter(([key]) => Boolean(key)));
+        const useFormalRowTargetAuthority = loaded.source === "verified_formal_dashboard_summary";
+        const targetResult = useFormalRowTargetAuthority
+            ? { map: {}, source: "formal_row_authority" }
+            : await loadTelegramAgentTargetMap(brandId, ym, ctx, null, [...expected]);
+        const targeted = useFormalRowTargetAuthority
+            ? new Set([...expected].filter((store) => String(formalRowByCore[store]?.cashTargetStatus || "") === "VALID"))
+            : new Set(Object.entries(targetResult.map || {}).filter(([, value]) => Number(value?.cashTarget || 0) > 0).map(([key]) => key));
         const missingReportStores = [...expected].filter((store) => !reported.has(store));
         const missingTargetStores = [...expected].filter((store) => !targeted.has(store));
         const unexpectedReportStores = [...reported].filter((store) => !formalStores.has(store) && !auditExclusions.storeSet.has(store));

@@ -146,8 +146,8 @@ function getTelegramAgentSystemInstruction(dateInfo, ctx = null) {
 7. 品牌範圍由後端結構化脈絡鎖定。除非使用者本題明確要求全品牌／跨品牌比較，不可把上一題 CYJ 擴張成安妞或伊啵。
 8. 「這三家店／那些店／上述店家」必須沿用結構化脈絡中的關注店家，不可改查其他店。
 9. 詢問區長時優先使用 getManagerPerformance；「整體表現／進度排名」引用 achievementRank（相容欄位 brandRank），並稱為「現金業績達成率排名」；「現金規模／營收金額排名」引用 cashRank，並稱為「現金總業績排名」。區域數字必須使用工具回傳的同口徑欄位。
-10. achievement／cashAchievementRate 固定代表「現金業績達成率＝現金÷現金目標」，不可寫成「權責業績達成率」。權責總業績固定使用 accrual；安妞 operationalAccrual 只代表操作權責子項。除非工具明確提供可驗證的 accrualBudget／accrualAchievement，否則禁止推算或敘述權責達成率。
-11. 所有名次都必須同時檢查 rankingEligible。rankingEligible=false 或名次為 null 時，禁止稱第幾名，必須先說明日報或目標缺漏。
+10. getStorePerformance／getMacroStrategicAnalysis／getManagerPerformance／getDataHealth 的 cash 使用 Formal Net Cash：現金業績－一般退費－保養品退費；權責使用 formal accrual：CYJ／伊啵取 accrual，安妞取 operationalAccrual。achievement／cashAchievementRate 代表正式淨現金÷正式現金目標。getOperationalAlerts／getDailyBattleBrief 的預警輸入仍以工具當次回傳口徑為準，不得用分析工具數字自行重算預警。除非工具明確提供可驗證的 accrualBudget／accrualAchievement，否則禁止自行推算權責達成率。
+11. KPI status 為 FIELD_MISSING、DATA_INVALID、TARGET_INCOMPLETE、TARGET_NOT_SET 或 PRE_SYSTEM_SKIP 時，不得把它改寫成 0；達成率為 null 時必須說 N/A／資料不足。所有名次都必須同時檢查 rankingEligible。rankingEligible=false 或名次為 null 時，禁止稱第幾名，必須先說明日報或目標缺漏。
 12. 使用者詢問「整體表現」時，至少區分現金業績達成率排名與現金總業績排名；可補充進度差距、新客、締結率及保養品占比排名，不得把單一排名包裝成綜合排名。
 13. 輸入 /today 優先使用 getDailyBattleBrief；/datahealth 優先使用 getDataHealth；/alerts 優先使用 getOperationalAlerts。
 14. 下列長期規則已由後端完成資料過濾與門檻覆寫；不得重新加入被排除店家，也不得違反個人回答偏好。
@@ -207,10 +207,11 @@ function getTelegramAgentFinalizerInstruction(dateInfo, ctx = null) {
 【資料口徑】
 - 區長「整體表現／進度排名」只能使用 achievementRank（或相容欄位 brandRank），並稱為「現金業績達成率排名」。
 - 營收規模使用 cashRank，稱為「現金總業績排名」。
-- achievement／cashAchievementRate 固定是「現金業績達成率＝現金÷現金目標」，不可寫成「權責業績達成率」。
-- 權責總業績使用 accrual；安妞 operationalAccrual 只是操作權責子項。
-- 工具沒有可驗證的 accrualBudget 或 accrualAchievement 時，不得自行描述權責達成率。
-- 只有 rankingEligible=true 且名次不是 null 時才能宣稱排名；否則必須說明資料缺漏。
+- 分析工具（getStorePerformance／getMacroStrategicAnalysis／getManagerPerformance／getDataHealth）的 cash 使用 Formal Net Cash＝現金業績－一般退費－保養品退費；achievement／cashAchievementRate 使用正式淨現金÷正式現金目標。
+- 分析工具的權責總業績使用 formal accrual：CYJ／伊啵取 accrual，安妞取 operationalAccrual。
+- getOperationalAlerts／getDailyBattleBrief 的預警輸入以工具當次回傳為準，不得拿分析工具的 Formal KPI 自行重算或改判預警。
+- 工具沒有可驗證的 accrualBudget 或 accrualAchievement 時，不得自行描述權責達成率。KPI／Target status 不完整時不得自行補 0 或縮小 denominator。
+- PRE_SYSTEM_SKIP 代表正式系統尚未使用，不可描述成 0 業績。只有 rankingEligible=true 且名次不是 null 時才能宣稱排名；否則必須說明資料缺漏。
 
 【Telegram 戰情簡報 v2】
 ${getTelegramAgentReplyModeInstruction(ctx)}
