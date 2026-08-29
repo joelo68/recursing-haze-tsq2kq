@@ -74,6 +74,7 @@ import {
 
 const todayMonth = () => new Date().toISOString().substring(0, 7);
 const TARGET_COVERAGE_AUDIT_ENDPOINT = "https://us-central1-cyjsituation-analysis.cloudfunctions.net/auditHistoricalTargetCoverage";
+const TARGET_COVERAGE_MIGRATION_ENDPOINT = "https://us-central1-cyjsituation-analysis.cloudfunctions.net/migrateHistoricalTargetCoverageMetadata";
 
 // Keep ToolRow at module scope. Defining a component inside SystemMaintenance creates a
 // new component identity on every parent state update; controlled inputs nested inside it
@@ -137,6 +138,7 @@ export default function SystemMaintenance() {
   const [consistencyAuditYear, setConsistencyAuditYear] = useState(String(new Date().getFullYear()));
   const [targetCoverageAuditPassword, setTargetCoverageAuditPassword] = useState("");
   const [targetCoverageAuditReport, setTargetCoverageAuditReport] = useState(null);
+  const [targetCoverageMigrationReport, setTargetCoverageMigrationReport] = useState(null);
 
   const [readTrackerMode, setReadTrackerModeState] = useState(getReadTrackerMode());
   const [localReadStats, setLocalReadStats] = useState({});
@@ -455,6 +457,7 @@ export default function SystemMaintenance() {
 
     setLoadingAction("targetCoverageAudit");
     setTargetCoverageAuditReport(null);
+    setTargetCoverageMigrationReport(null);
     addLog(`🔎 開始歷史 Target Coverage 只讀稽核：${brandId}`);
 
     try {
@@ -504,6 +507,107 @@ export default function SystemMaintenance() {
     } catch (error) {
       addLog(`❌ Target Coverage 稽核失敗：${error.message}`);
       showToast(error.message || "Target Coverage 稽核失敗", "error");
+    } finally {
+      setTargetCoverageAuditPassword("");
+      setLoadingAction(null);
+    }
+  };
+
+  const handleMigrateHistoricalTargetCoverageMetadata = async () => {
+    if (!canRunTargetCoverageAudit) {
+      showToast("此 Migration 僅限最高管理者使用", "error");
+      return;
+    }
+    if (!targetCoverageAuditReport || String(targetCoverageAuditReport.brandId || "") !== String(brandId || "")) {
+      showToast("請先重新執行目前品牌的只讀稽核", "error");
+      return;
+    }
+
+    const candidateMonths = Array.isArray(targetCoverageAuditReport.summary?.migrationCandidateMonths)
+      ? targetCoverageAuditReport.summary.migrationCandidateMonths.map(String).filter(Boolean)
+      : [];
+    if (!candidateMonths.length) {
+      showToast("目前沒有需要補 Coverage Metadata 的安全候選月份", "info");
+      return;
+    }
+
+    const credentialPassword = String(targetCoverageAuditPassword || "");
+    if (!credentialPassword) {
+      showToast("請輸入目前最高管理者登入密碼再執行 Migration", "error");
+      return;
+    }
+    const deviceId = String(currentDeviceTrust?.deviceId || "").trim();
+    if (!deviceId || String(currentDeviceTrust?.status || "") !== "trusted") {
+      showToast("目前裝置尚未確認為 Trusted，無法執行高權限 Migration", "error");
+      return;
+    }
+
+    const confirmed = window.confirm(
+      `確定要替 ${brandLabel} 的 ${candidateMonths.length} 個歷史月份補 Target Coverage v1 Metadata？\n\n` +
+      `本操作只寫 Coverage metadata，不掃 Raw monthly_targets，也不改目標 totals / counts / target map。\n` +
+      `Backend 會在同一個 transaction 重新驗證全部月份；任一月份不再安全時，本次 0 Writes。`
+    );
+    if (!confirmed) return;
+
+    setLoadingAction("targetCoverageMigration");
+    setTargetCoverageMigrationReport(null);
+    addLog(`🧩 開始 Historical Target Coverage Metadata migration：${brandId}｜${candidateMonths.join(", ")}`);
+
+    try {
+      const idToken = await auth.currentUser?.getIdToken?.();
+      if (!idToken) throw new Error("Firebase 登入狀態已失效，請重新登入");
+
+      const accountId = String(
+        currentUser?.securityAccountId ||
+        currentUser?.id ||
+        currentUser?.accountId ||
+        currentUser?.name ||
+        ""
+      ).trim();
+      if (!accountId) throw new Error("無法取得目前最高管理者帳號識別");
+
+      const response = await fetch(TARGET_COVERAGE_MIGRATION_ENDPOINT, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${idToken}`,
+        },
+        body: JSON.stringify({
+          brandId,
+          auditVersion: targetCoverageAuditReport.auditVersion,
+          yearMonths: candidateMonths,
+          confirmMetadataOnly: true,
+          actor: {
+            roleId: userRole,
+            accountId,
+            userName: currentUser?.name || "最高管理者",
+            deviceId,
+            credentialPassword,
+          },
+        }),
+      });
+      const result = await response.json().catch(() => ({}));
+      if (!response.ok || result?.ok === false) {
+        const blockedText = Array.isArray(result?.blocked)
+          ? result.blocked.map((row) => `${row.yearMonth}:${row.classification}`).join("、")
+          : "";
+        throw new Error(`${result?.message || `HTTP ${response.status}`}${blockedText ? `｜${blockedText}` : ""}`);
+      }
+      if (result?.metadataOnly !== true || Number(result?.rawMonthlyTargetsReads || 0) !== 0) {
+        throw new Error("後端回傳不符合 Metadata-only / Raw Reads 0 安全契約，已停止後續操作");
+      }
+      if (Number(result?.writtenCount || 0) > 0 && result?.allVerified !== true) {
+        throw new Error("Persisted readback 未完全驗證，請停止後續 Migration");
+      }
+
+      setTargetCoverageMigrationReport(result);
+      addLog(
+        `✅ Target Coverage Metadata migration 完成：${brandLabel}｜寫入 ${Number(result?.writtenCount || 0)}｜已略過 V1 ${Number(result?.skippedCount || 0)}｜Raw Reads 0｜Persisted ${result?.allVerified ? "PASS" : "N/A"}`
+      );
+      showToast("歷史 Target Coverage Metadata migration 完成；請重新執行只讀稽核確認", "success");
+    } catch (error) {
+      addLog(`❌ Target Coverage Metadata migration 失敗：${error.message}`);
+      showToast(error.message || "Target Coverage Metadata migration 失敗", "error");
     } finally {
       setTargetCoverageAuditPassword("");
       setLoadingAction(null);
@@ -5417,6 +5521,74 @@ export default function SystemMaintenance() {
                     );
                   })}
                 </div>
+              </div>
+            )}
+            {targetCoverageAuditReport &&
+              String(targetCoverageAuditReport.brandId || "") === String(brandId || "") &&
+              Number(targetCoverageAuditReport.summary?.migrationCandidateMonths?.length || 0) > 0 && (
+                <ToolRow
+                  icon={Save}
+                  title="Pre-Batch-5 Phase B：補 Historical Target Coverage Metadata"
+                  desc="只處理上方只讀 Audit 判定安全的月份。Backend 會在單品牌 atomic transaction 重新讀取 Summary + Lifecycle 並再次驗證；任一月份失去安全條件時整批 0 Writes。"
+                  badge={`${Number(targetCoverageAuditReport.summary?.migrationCandidateMonths?.length || 0)} 個月份｜Metadata Only`}
+                  tone="emerald"
+                >
+                  <div className="flex items-center gap-2 rounded-2xl border border-stone-100 bg-white/70 px-3 h-11 min-w-[220px]">
+                    <Shield size={14} className="text-stone-400 shrink-0" />
+                    <input
+                      type="password"
+                      value={targetCoverageAuditPassword}
+                      onChange={(e) => setTargetCoverageAuditPassword(e.target.value)}
+                      autoComplete="current-password"
+                      placeholder="最高管理者登入密碼"
+                      disabled={!canRunTargetCoverageAudit || loadingAction !== null}
+                      className="bg-transparent text-xs font-black text-stone-700 outline-none min-w-0 w-full placeholder:text-stone-300 disabled:opacity-50"
+                    />
+                  </div>
+                  <BeautyButton
+                    onClick={handleMigrateHistoricalTargetCoverageMetadata}
+                    disabled={loadingAction !== null || !canRunTargetCoverageAudit}
+                    variant="primary"
+                  >
+                    {loadingAction === "targetCoverageMigration" ? <Loader2 size={14} className="animate-spin" /> : <Save size={14} />}
+                    補 {Number(targetCoverageAuditReport.summary?.migrationCandidateMonths?.length || 0)} 個月 Metadata
+                  </BeautyButton>
+                </ToolRow>
+              )}
+            {targetCoverageMigrationReport && (
+              <div className="rounded-[1.75rem] border border-blue-100 bg-blue-50/25 p-5 space-y-3">
+                <div className="flex flex-col xl:flex-row xl:items-start xl:justify-between gap-3">
+                  <div>
+                    <div className="flex items-center gap-2 flex-wrap">
+                      <p className="text-sm font-black text-stone-800">{brandLabel}｜Historical Target Coverage Metadata Migration</p>
+                      <span className="px-2.5 py-1 rounded-full border border-blue-100 bg-white text-[10px] font-black text-blue-700">METADATA ONLY</span>
+                      {targetCoverageMigrationReport.allVerified === true && <span className="px-2.5 py-1 rounded-full border border-emerald-100 bg-emerald-50 text-[10px] font-black text-emerald-700">PERSISTED VERIFIED</span>}
+                    </div>
+                    <p className="mt-1 text-[11px] font-bold text-stone-400 leading-relaxed">
+                      Migration：{targetCoverageMigrationReport.migrationVersion || "-"}｜{targetCoverageMigrationReport.migratedAtText || "-"}
+                    </p>
+                  </div>
+                  <div className="rounded-2xl border border-stone-100 bg-white px-3 py-2 text-[10px] font-black text-stone-500 leading-relaxed">
+                    Minimum Reads {Number(targetCoverageMigrationReport.readEstimate?.minimumFirestoreReads || 0).toLocaleString()}｜Raw Target Reads {Number(targetCoverageMigrationReport.rawMonthlyTargetsReads || 0)}｜Writes {Number(targetCoverageMigrationReport.firestoreWrites || 0)}
+                  </div>
+                </div>
+                <div className="grid grid-cols-2 md:grid-cols-4 gap-2">
+                  {[
+                    ["Requested", targetCoverageMigrationReport.requestedMonths?.length || 0],
+                    ["Written", targetCoverageMigrationReport.writtenCount || 0],
+                    ["Already V1", targetCoverageMigrationReport.skippedCount || 0],
+                    ["Verified", (targetCoverageMigrationReport.persistedVerification || []).filter((row) => row.verified === true).length],
+                  ].map(([label, value]) => (
+                    <div key={label} className="rounded-2xl border border-stone-100 bg-white/95 p-3">
+                      <p className="text-[10px] font-black text-stone-400">{label}</p>
+                      <p className="mt-1 text-lg font-black text-stone-700">{Number(value || 0).toLocaleString()}</p>
+                    </div>
+                  ))}
+                </div>
+                <p className="text-[10px] font-bold text-stone-500 leading-relaxed">
+                  Written：{(targetCoverageMigrationReport.writtenMonths || []).join("、") || "無"}｜Skipped：{(targetCoverageMigrationReport.skippedMonths || []).join("、") || "無"}
+                </p>
+                <p className="text-[10px] font-black text-blue-700">下一步：重新執行上方 READ ONLY Audit；本次寫入月份應全部轉為「已是 Coverage v1」。</p>
               </div>
             )}
             <ToolRow icon={Database} title="進階：重建歷史報表" desc="一般情況請使用上方月份報表整理助手；此工具保留給需要單獨重建資料的人員使用。" badge="進階工具" tone="emerald">

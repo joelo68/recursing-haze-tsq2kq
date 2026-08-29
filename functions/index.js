@@ -58,6 +58,15 @@ const { createTargetCoverageAuditFunctions } = require("./targetCoverageAudit");
 const targetCoverageAuditFunctions = createTargetCoverageAuditFunctions({ admin, db });
 exports.auditHistoricalTargetCoverage = targetCoverageAuditFunctions.auditHistoricalTargetCoverage;
 
+// ==========================================
+// ★ Pre-Batch-5 Phase B：Historical Target Coverage metadata-only migration
+// 僅對 Phase A 重新驗證仍安全的歷史月份，以單品牌 atomic transaction 補 Coverage metadata。
+// 不掃 Raw monthly_targets、不改 legacy target map / totals / counts。
+// ==========================================
+const { createTargetCoverageMigrationFunctions } = require("./targetCoverageMigration");
+const targetCoverageMigrationFunctions = createTargetCoverageMigrationFunctions({ admin, db });
+exports.migrateHistoricalTargetCoverageMetadata = targetCoverageMigrationFunctions.migrateHistoricalTargetCoverageMetadata;
+
 
 // ==========================================
 // ★ Summary Semantics v1：Batch 4 additive semantic contract
