@@ -979,3 +979,185 @@ CYJ   2026-01～07 → target-coverage-v1
 這只代表已處理的 historical cohort 已收斂，不代表未來 consumer 可以移除 Coverage fail-closed guard。
 
 `CURRENT_APP_VERSION` 仍為 `3.5.3`，本次 migration 沒有提高版本。
+# 24. Historical Dashboard Formal Consumer Contract — Batch 5A-1
+
+Batch 5A-1 已於 2026-08-29 Production Confirmed。後續修改 historical Dashboard 時，Formal semantics 必須由共用 consumer authority 處理，不可在單一 View 再自行拼公式。
+
+## Owner chain
+
+```text
+dashboard_summary/{YYYY-MM}
+  → Summary writer persisted Formal contract
+
+src/utils/dashboardFormalConsumer.js
+  → historical Formal value / status / target / ranking interpretation
+
+src/hooks/useDashboardStats.js
+  → brand / manager / store scope aggregation
+
+src/components/StorePerformanceView.jsx
+  → historical Formal ranking display
+```
+
+## Historical / current-month boundary
+
+只有符合既有 verified historical Summary trust gate 的月份才能走 Formal Summary consumer。
+
+```text
+historical + verified Summary
+→ Formal consumer
+
+current month
+→ 保留既有 live/detail flow
+```
+
+不得為了共用程式而把 current-month raw/detail flow 強制改成 Historical Summary semantics。
+
+## Formal field authority
+
+Historical verified Dashboard：
+
+```text
+cash
+  = formalNetCash
+
+accrual
+  = formalAccrual
+
+base cash target
+  = formalCashTarget
+
+base accrual target
+  = formalAccrualTarget
+```
+
+品牌差異由 writer persisted contract 決定：
+
+```text
+CYJ formalNetCash
+  = gross cash - general refund - skincare refund
+
+CYJ / 伊啵 formalAccrual
+  = accrual
+
+安妞 formalAccrual
+  = operationalAccrual
+```
+
+Frontend 不得重新推導安妞 operational accrual，也不得忽略 CYJ skincare refund。
+
+## Validity / Coverage
+
+Formal status 是資料 contract 的一部分，不只是 UI 樣式。
+
+```text
+VALID / VALID_ZERO
+→ 可顯示與計算
+
+FIELD_MISSING / DATA_INVALID
+→ fail-closed
+→ 不得轉成 0
+```
+
+Target Coverage：
+
+```text
+coverage complete
+→ 可計算 achievement
+
+coverage incomplete / unavailable
+→ TARGET_INCOMPLETE / N/A
+→ denominator 不得只加總「有目標的店」
+```
+
+## Scope-aware aggregation
+
+全品牌、區長與單店 historical filter 必須使用同一套 Lifecycle / Formal target / Formal metric authority。
+
+```text
+selected eligible stores
+→ aggregate Formal store rows
+→ aggregate Formal target authority
+→ calculate scope achievement
+```
+
+不可用全品牌 grand total 乘比例估算區長／單店，也不可讓 Lifecycle 非 eligible 店進 formal ranking denominator。
+
+## Ranking
+
+歷史門市排名 authority：
+
+```text
+formalStoreRankings
+formalRankEligibleStoreCount
+```
+
+不得在 consumer 回退到 legacy `storeRankings` 後仍標示為 Formal ranking。
+
+## Challenge Target boundary
+
+Batch 5A-1 沒有新增 persisted：
+
+```text
+formalChallengeCashTarget
+formalChallengeAccrualTarget
+formalChallengeAchievement
+```
+
+因此既有：
+
+```text
+challengeCashTarget
+challengeAccrualTarget
+```
+
+仍是 compatibility layer。若未來要 canonicalize Challenge Target，必須先從 writer / KPI contract upstream 擴充，禁止 Dashboard-only workaround。
+
+## Reads boundary
+
+Batch 5A-1 是 semantic cutover，不是 reads cutover。
+
+不得因 5A-1 已 Production Confirmed，就宣稱：
+
+```text
+historical daily_reports reads = 0
+raw monthly_targets fallback = 0
+duplicate Summary listeners = removed
+```
+
+上述屬 Batch 5A-2；開始前必須以最新正式 `App.jsx`、`useDashboardStats.js` 與相關 hooks / Views 重新 audit Firestore reads。
+
+## Regression minimum
+
+修改 Historical Formal Dashboard consumer 時，至少覆蓋：
+
+```bash
+node --check src/utils/dashboardFormalConsumer.js
+node --check src/hooks/useDashboardStats.js
+
+node --test tests/kpiContracts.test.js tests/storeIdentity.test.js tests/storeLifecycle.test.js tests/targetAuthority.test.js tests/summaryRepairPreSystem.test.js tests/summarySemantics.test.js tests/targetCoverageAudit.test.js tests/targetCoverageMigration.test.js tests/dashboardFormalConsumer.test.js
+
+npm run build
+```
+
+並做 Production smoke / semantic validation：
+
+```text
+CYJ：選有 skincare refund 的 historical month
+安妞：選 formalAccrual != totalAccrual 的 historical month
+伊啵：正式系統起始月之後 historical month
+manager scope
+single-store scope
+formal store ranking
+current-month regression
+```
+
+2026-08-29 Batch 5A-1 closeout 的正式結果：
+
+```text
+115 / 115 tests PASS
+npm run build PASS
+Frontend Published
+Production validation PASS
+CURRENT_APP_VERSION = 3.5.3
+```

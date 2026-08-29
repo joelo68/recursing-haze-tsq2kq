@@ -1279,3 +1279,46 @@ npm run build PASS
 ```
 
 目前 Pre-Batch-5 Gate 已關閉。正常維運不應再重複執行 CYJ / 安妞 migration；若未來出現新的 legacy historical month，仍必須先 Audit，再依當時最新正式 source 判斷，不可直接寫 Metadata。
+---
+
+# 45. Batch 5A-1 Historical Dashboard Cutover — 維護工具操作邊界
+
+Batch 5A-1 已於 2026-08-29 Production Confirmed，但它是 Frontend historical consumer semantic cutover，**不是新的維護／migration 工具**。
+
+因此 Pre-Batch-5 工具的操作原則不變：
+
+```text
+CYJ / 安妞 Historical Target Coverage 已完成
+→ 不因 Dashboard consumer cutover 再重跑 metadata migration
+
+伊啵 2026-01～03
+→ 仍為 PRE_SYSTEM_SKIP
+
+伊啵 2026-04～07
+→ 已 Coverage v1
+```
+
+若 Historical Dashboard 顯示異常，先依 owner 判斷：
+
+```text
+Formal value / target / status / ranking 顯示錯誤
+→ 查 dashboard_summary persisted contract
+→ 查 dashboardFormalConsumer / useDashboardStats
+
+Coverage contract 缺失或 legacy historical target summary
+→ 才回到 Target Coverage Audit / Migration domain
+```
+
+不得用 Pre-Batch-5 migration 工具修補單頁 consumer bug，也不得因 5A-1 上線而把 migration endpoint 當日常 Dashboard refresh 工具。
+
+Batch 5A-1 沒有新增：
+
+```text
+Maintenance writes
+Firestore listener
+polling
+Backend Function deploy
+Firestore Rules deploy
+```
+
+下一階段 Batch 5A-2 若調整 historical reads / listener topology，應另外做 reads impact 記錄；不要把 reads optimization 歸入本節的 5A-1 semantic cutover。

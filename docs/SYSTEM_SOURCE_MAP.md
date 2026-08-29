@@ -1776,4 +1776,163 @@ Pre-Batch-5 Gate: CLOSED
 CURRENT_APP_VERSION: 3.5.3 unchanged
 ```
 
-Batch 5 consumer cutover 尚未因本 Gate 自動完成；後續 consumer migration 必須獨立實作與驗證。
+Pre-Batch-5 Gate 本身不會自動切換 consumer；其後 Batch 5A-1 Historical Dashboard Formal Consumer 已獨立完成並 Production Confirmed，詳見下一節。
+---
+
+# 30. Batch 5A-1 Historical Dashboard Formal Consumer（PRODUCTION CONFIRMED）
+
+新增／正式 owner：
+
+```text
+src/utils/dashboardFormalConsumer.js
+  → verified historical dashboard_summary 的 Formal KPI / Target / Coverage / Ranking interpreter
+
+src/hooks/useDashboardStats.js
+  → historical brand / manager / store scope Formal aggregation
+
+src/components/StorePerformanceView.jsx
+  → historical Formal store-ranking consumer
+
+tests/dashboardFormalConsumer.test.js
+  → Formal consumer contract regression
+```
+
+Backend Summary writer / Formal schema owner維持：
+
+```text
+functions/index.js
+functions/summarySemantics.js
+functions/kpiContracts.js
+functions/storeLifecycle.js
+functions/targetCoverage.js
+```
+
+Batch 5A-1 沒有修改上述 Backend writer authority，只把 Historical Dashboard consumer 接到已 persisted 的 Formal contract。
+
+## Runtime flow
+
+```text
+historical month
+  → dashboard_summary/{YYYY-MM}
+  → existing Summary verification / trust gate
+  → dashboardFormalConsumer
+      formalNetCash
+      formalAccrual
+      formal cash/accrual target authority
+      achievement/status
+      lifecycle-aware scope
+      formalStoreRankings
+  → useDashboardStats
+  → Dashboard / StorePerformanceView
+```
+
+Current month：
+
+```text
+current month
+  → existing live/detail flow
+```
+
+5A-1 不把本月切到 Historical Summary consumer。
+
+## Formal semantic authority
+
+```text
+CYJ historical cash
+  → formalNetCash
+  → gross cash - general refund - skincare refund
+
+安妞 historical accrual
+  → formalAccrual
+  → operationalAccrual
+
+伊啵 historical accrual
+  → formalAccrual
+  → accrual
+```
+
+Base target / achievement：
+
+```text
+formalCashTarget
+formalAccrualTarget
+Formal achievement/status
+```
+
+Coverage incomplete 時 fail-closed，不縮 denominator。
+
+Formal ranking：
+
+```text
+formalStoreRankings
+formalRankEligibleStoreCount
+```
+
+## Challenge compatibility
+
+Batch 5A-1 未新增 `formalChallenge*` persisted fields。既有 challenge targets 仍為 compatibility layer，不能被 consumer 當成 canonical Formal contract。
+
+## Brand isolation / Firestore path
+
+5A-1 沒有新增 Firestore path resolver 或跨品牌 query。Historical Summary 仍沿用既有 brand-resolved collections；Formal aggregation只在目前選定 brand / manager / store scope 內運作。
+
+## Reads impact
+
+Batch 5A-1：
+
+```text
+New persistent listeners = 0
+New polling              = 0
+New Firestore queries     = 0
+Backend deploy            = 0
+Rules deploy              = 0
+```
+
+此階段沒有移除既有 historical `daily_reports` reads、raw target fallback 或重複 trust listeners；這些明確留給 Batch 5A-2 Historical Reads Cutover。
+
+## Production closeout（2026-08-29）
+
+正式 Git：
+
+```text
+HEAD = origin/main
+b4f907777d60d4b7e594b83e37e1c5218bf076b1
+```
+
+Validation：
+
+```text
+Full regression 115 / 115 PASS
+npm run build PASS
+Frontend Published
+CURRENT_APP_VERSION 3.5.3 unchanged
+```
+
+Production：
+
+```text
+CYJ 2026-07
+  Dashboard historical cash = 38,386,697
+  confirmed formalNetCash authority
+
+安妞 2026-06
+  Dashboard historical accrual = 30,436,598
+  confirmed formalAccrual authority
+
+伊啵 historical KPI = normal
+manager filter = normal
+single-store filter = normal
+Store Performance ranking = normal
+current-month live/detail regression = normal
+```
+
+狀態：
+
+```text
+IMPLEMENTED
+VALIDATED
+DEPLOYED
+PRODUCTION CONFIRMED
+```
+
+下一步為 Batch 5A-2 Historical Reads Cutover；開始前必須重新取得當時最新正式 source，不得直接沿用 5A-1 artifact 修改。

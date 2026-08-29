@@ -920,6 +920,134 @@ Raw reconstruction required = 0
 
 因此 Pre-Batch-5 Historical Target Coverage Gate 已正式關閉；Batch 5 consumer cutover 可在後續獨立 Batch 進行。未來 consumer 仍必須對缺失／不可信 Coverage metadata fail-closed，不得因本次歷史 migration 已完成就移除 runtime guard。
 
+## Batch 5A-1 — Historical Dashboard Formal Consumer Cutover（PRODUCTION CONFIRMED）
+
+2026-08-29 已完成第一階段 Dashboard historical consumer cutover。此階段只切換「歷史 verified Summary」的 KPI consumer semantics；本月 live/detail flow、Backend Summary writer、Firestore Rules 與 Target Coverage migration 均未修改。
+
+正式 consumer owner：
+
+```text
+src/utils/dashboardFormalConsumer.js
+  → Historical verified Summary 的 Formal KPI / Target / Achievement / Ranking authority
+
+src/hooks/useDashboardStats.js
+  → 歷史 Dashboard scope aggregation / Summary trust integration
+
+src/components/StorePerformanceView.jsx
+  → 歷史門市績效排名使用 Formal ranking contract
+
+tests/dashboardFormalConsumer.test.js
+  → Formal cash / accrual / target / coverage / ranking / scope regression
+```
+
+Historical verified Summary 現在正式使用：
+
+```text
+現金
+  → formalNetCash
+
+權責
+  → formalAccrual
+
+Base 現金目標
+  → formalCashTarget
+
+Base 權責目標
+  → formalAccrualTarget
+
+達成率
+  → Formal achievement + status
+
+門市排名
+  → formalStoreRankings
+  → formalRankEligibleStoreCount
+```
+
+Coverage / validity fail-closed：
+
+```text
+Target Coverage incomplete
+→ TARGET_INCOMPLETE / N/A
+→ 不縮小 denominator
+
+FIELD_MISSING / DATA_INVALID
+→ 不得以 Number(x || 0) 偽裝為合法 0
+```
+
+品牌 semantics 仍由 Summary contract 決定，Frontend 不自行重建：
+
+```text
+CYJ
+formalNetCash = gross cash - general refund - skincare refund
+
+安妞
+formalAccrual = operationalAccrual
+
+伊啵
+formalAccrual = accrual
+```
+
+`challengeCashTarget` / `challengeAccrualTarget` 本階段仍屬 compatibility layer；尚未新增 `formalChallenge*` persisted contract，因此 Dashboard 不得把 challenge compatibility 欄位宣稱為 Formal authority。
+
+### Production validation
+
+正式 repo：
+
+```text
+HEAD / origin/main = b4f907777d60d4b7e594b83e37e1c5218bf076b1
+Full regression    = 115 / 115 PASS
+npm run build      = PASS
+Frontend           = Published
+CURRENT_APP_VERSION = 3.5.3（未提高）
+```
+
+代表性 Production 驗證：
+
+```text
+CYJ 2026-07
+  formalNetCash = 38,386,697
+  Dashboard historical 現金 = 38,386,697
+  legacy cash 38,405,467 不再作 Historical Formal display authority
+
+安妞 2026-06
+  formalAccrual = 30,436,598
+  Dashboard historical 權責 = 30,436,598
+```
+
+使用者已完成並確認正常：
+
+```text
+CYJ historical Formal KPI
+安妞 historical Formal KPI
+伊啵 historical KPI
+區長篩選
+單店篩選
+Store Performance 排名
+2026-08 本月 live/detail regression
+```
+
+因此 Batch 5A-1 狀態：
+
+```text
+IMPLEMENTED
+VALIDATED
+DEPLOYED
+PRODUCTION CONFIRMED
+```
+
+### Batch 5A-2 尚未開始
+
+Batch 5A-1 **沒有**宣稱 Historical Reads 已完成 cutover。現有 historical data-loading topology 的成本優化屬下一階段 Batch 5A-2，包含：
+
+```text
+verified historical Dashboard 的整月 daily_reports reads
+trusted Formal Summary 下的 raw monthly_targets fallback
+重複 Summary / ranking / recalc trust listeners
+大型 resident trust queries
+```
+
+5A-2 必須以當時最新正式 source 重新做 reads audit 與 Source anchoring，不得把 5A-1 semantics cutover 視為已自動移除上述 reads。
+
 ## Observation
 
 安妞 `2026-06` Dashboard Header 的 Summary badge 曾顯示較舊 timestamp，但：
