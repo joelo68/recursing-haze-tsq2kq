@@ -1049,6 +1049,14 @@ export default function App() {
   const [annualAggregatedData, setAnnualAggregatedData] = useState([]); 
   const [annualDashboardSummaries, setAnnualDashboardSummaries] = useState([]);
   const [annualSummaryStatusMap, setAnnualSummaryStatusMap] = useState({});
+  const [annualSummaryLoadState, setAnnualSummaryLoadState] = useState({
+    brandId: "",
+    year: "",
+    dashboardReady: false,
+    flagsReady: false,
+    dashboardError: "",
+    flagsError: "",
+  });
   const [therapistAnnualAggregatedData, setTherapistAnnualAggregatedData] = useState([]); // ★新增：管理師專屬結算包
   const [budgets, setBudgets] = useState({});
   const [monthlyTargetSummary, setMonthlyTargetSummary] = useState(null); // ★ monthly_targets_summary/{yearMonth}：Dashboard 目標資料輕量即時來源
@@ -2825,11 +2833,28 @@ export default function App() {
       setAnnualAggregatedData([]);
       setAnnualDashboardSummaries([]);
       setAnnualSummaryStatusMap({});
+      setAnnualSummaryLoadState({
+        brandId: "",
+        year: "",
+        dashboardReady: false,
+        flagsReady: false,
+        dashboardError: "",
+        flagsError: "",
+      });
       setTherapistAnnualAggregatedData([]);
       return;
     }
 
     const targetYear = String(selectedYear);
+    const annualBrandId = String(currentBrand?.id || "").toLowerCase();
+    setAnnualSummaryLoadState({
+      brandId: annualBrandId,
+      year: targetYear,
+      dashboardReady: false,
+      flagsReady: false,
+      dashboardError: "",
+      flagsError: "",
+    });
 
     // 1. 抓取店鋪結算表：保留作為本月 / 未整理月份備援資料源
     const unsubAgg = onSnapshot(
@@ -2852,6 +2877,20 @@ export default function App() {
             .map((d) => ({ id: d.id, ...d.data() }))
             .filter((row) => String(row.yearMonth || row.id || "").startsWith(`${targetYear}-`))
         );
+        setAnnualSummaryLoadState((prev) => (
+          prev.brandId === annualBrandId && prev.year === targetYear
+            ? { ...prev, dashboardReady: true, dashboardError: "" }
+            : prev
+        ));
+      },
+      (error) => {
+        console.error("年度 dashboard_summary 監聽失敗:", error);
+        setAnnualDashboardSummaries([]);
+        setAnnualSummaryLoadState((prev) => (
+          prev.brandId === annualBrandId && prev.year === targetYear
+            ? { ...prev, dashboardReady: true, dashboardError: error?.message || "dashboard_summary load failed" }
+            : prev
+        ));
       }
     );
 
@@ -2866,6 +2905,20 @@ export default function App() {
           if (ym.startsWith(`${targetYear}-`)) map[ym] = data;
         });
         setAnnualSummaryStatusMap(map);
+        setAnnualSummaryLoadState((prev) => (
+          prev.brandId === annualBrandId && prev.year === targetYear
+            ? { ...prev, flagsReady: true, flagsError: "" }
+            : prev
+        ));
+      },
+      (error) => {
+        console.error("年度 summary_recalc_flags 監聽失敗:", error);
+        setAnnualSummaryStatusMap({});
+        setAnnualSummaryLoadState((prev) => (
+          prev.brandId === annualBrandId && prev.year === targetYear
+            ? { ...prev, flagsReady: true, flagsError: error?.message || "summary_recalc_flags load failed" }
+            : prev
+        ));
       }
     );
 
@@ -3714,7 +3767,7 @@ export default function App() {
 
   const contextValue = useMemo(() => ({
     user, loading, analytics, managers: visibleManagers, managerOrder: visibleManagerOrder, budgets, monthlyTargetSummary, currentDashboardSummary, currentRankingsSummary, currentReportSummaryReady, currentReportSummaryReadyYearMonth, currentReportSummaryReadyBrandId, currentSummaryRecalcFlagState, historicalDetailRefreshState, targets, rawData: visibleRawData, allReports: rawData,
-    annualAggregatedData, annualDashboardSummaries, annualSummaryStatusMap, therapistAnnualAggregatedData, // ★ 把年度 Summary 與管理師資料交出去
+    annualAggregatedData, annualDashboardSummaries, annualSummaryStatusMap, annualSummaryLoadState, therapistAnnualAggregatedData, // ★ 把年度 Summary 與管理師資料交出去
     showToast, openConfirm, fmtMoney, fmtNum, inputDate, setInputDate, storeList: analytics?.storeList || [], setTargets, selectedYear, selectedMonth, setSelectedYear, setSelectedMonth, permissions, storeAccounts, managerAuth, currentUser, userRole, logActivity, handleUpdateStorePassword, handleUpdateManagerPassword, handleUpdateTherapistPassword, navigateToStore, activeView, appId, 
     therapists: visibleTherapists, therapistReports: visibleTherapistReports, therapistSchedules, therapistTargets, trainerAuth, handleUpdateTrainerAuth, auditExclusions, handleUpdateAuditExclusions, currentBrand, setCurrentBrandId, getCollectionPath, getDocPath, dailyLoginCount, yesterdayLoginCount, securityConfig, featureFlags, therapistModuleEnabled, isOnline, isLowPowerMode,
     currentDeviceTrust, currentSecurityAccountKey, manageDeviceSecurityAction, reviewDeviceApprovalAction, canManageDeviceSecurity: isDeviceSecuritySuperAdmin, openDeviceApprovalPanel,
@@ -3726,7 +3779,7 @@ export default function App() {
     directorPermissionProfile,
     canDirectorAccessView,
     isReadOnlyDirector: userRole === "director" && !canDirectorAccessView("history")
-  }), [user, loading, analytics, visibleManagers, visibleManagerOrder, budgets, monthlyTargetSummary, currentDashboardSummary, currentRankingsSummary, currentReportSummaryReady, currentReportSummaryReadyYearMonth, currentReportSummaryReadyBrandId, currentSummaryRecalcFlagState, historicalDetailRefreshState, targets, visibleRawData, rawData, annualAggregatedData, annualDashboardSummaries, annualSummaryStatusMap, therapistAnnualAggregatedData, inputDate, selectedYear, selectedMonth, permissions, storeAccounts, managerAuth, currentUser, userRole, logActivity, handleUpdateStorePassword, handleUpdateManagerPassword, handleUpdateTherapistPassword, navigateToStore, activeView, appId, visibleTherapists, visibleTherapistReports, therapistSchedules, therapistTargets, trainerAuth, handleUpdateTrainerAuth, auditExclusions, handleUpdateAuditExclusions, currentBrand, setCurrentBrandId, getCollectionPath, getDocPath, dailyLoginCount, yesterdayLoginCount, securityConfig, featureFlags, therapistModuleEnabled, isOnline, isLowPowerMode, currentDeviceTrust, currentSecurityAccountKey, manageDeviceSecurityAction, reviewDeviceApprovalAction, isDeviceSecuritySuperAdmin, openDeviceApprovalPanel, fetchGlobalData, managers, delegations, activeDelegations, delegationAccess, accessibleStores, officialStores, delegatedStores, refreshDelegations, canAccessStore, canEditStoreReport, getActiveDelegationForStore, directorLevel, directorPermissionProfile, canDirectorAccessView]); // ★ 依賴陣列也要加
+  }), [user, loading, analytics, visibleManagers, visibleManagerOrder, budgets, monthlyTargetSummary, currentDashboardSummary, currentRankingsSummary, currentReportSummaryReady, currentReportSummaryReadyYearMonth, currentReportSummaryReadyBrandId, currentSummaryRecalcFlagState, historicalDetailRefreshState, targets, visibleRawData, rawData, annualAggregatedData, annualDashboardSummaries, annualSummaryStatusMap, annualSummaryLoadState, therapistAnnualAggregatedData, inputDate, selectedYear, selectedMonth, permissions, storeAccounts, managerAuth, currentUser, userRole, logActivity, handleUpdateStorePassword, handleUpdateManagerPassword, handleUpdateTherapistPassword, navigateToStore, activeView, appId, visibleTherapists, visibleTherapistReports, therapistSchedules, therapistTargets, trainerAuth, handleUpdateTrainerAuth, auditExclusions, handleUpdateAuditExclusions, currentBrand, setCurrentBrandId, getCollectionPath, getDocPath, dailyLoginCount, yesterdayLoginCount, securityConfig, featureFlags, therapistModuleEnabled, isOnline, isLowPowerMode, currentDeviceTrust, currentSecurityAccountKey, manageDeviceSecurityAction, reviewDeviceApprovalAction, isDeviceSecuritySuperAdmin, openDeviceApprovalPanel, fetchGlobalData, managers, delegations, activeDelegations, delegationAccess, accessibleStores, officialStores, delegatedStores, refreshDelegations, canAccessStore, canEditStoreReport, getActiveDelegationForStore, directorLevel, directorPermissionProfile, canDirectorAccessView]); // ★ 依賴陣列也要加
   
   const memoizedViews = useMemo(() => {
     return (

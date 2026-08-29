@@ -10,6 +10,13 @@ import { getDoc, doc } from "firebase/firestore";
 import { AppContext } from "../AppContext";
 import { sortManagerNames, sortStoreNames, sortManagersByOrgOrder, sortStoresByOrgOrder } from "../utils/helpers";
 import { ViewWrapper, Card } from "./SharedUI";
+import {
+  buildAnnualFormalMonth,
+  buildAnnualIntervalTotals,
+  isAnnualPreSystemMonth,
+  resolveAnnualHistoricalFormalTrust,
+  shouldAllowAnnualRawTargetFallback,
+} from "../utils/annualFormalConsumer.js";
 
 // ★★★ 自定義圖例元件：完全控制順序與樣式 ★★★
 const CustomLegend = () => {
@@ -54,6 +61,7 @@ const AnnualView = () => {
     annualAggregatedData, // monthly_aggregated：本月 / 未整理月份備援
     annualDashboardSummaries = [], // ★ 歷史月份可信口徑：dashboard_summary
     annualSummaryStatusMap = {}, // ★ Summary 狀態：避免 dirty / mismatch 仍被使用
+    annualSummaryLoadState = {}, // ★ 年度 Summary / flag readiness + brand/year anchoring
     monthlyTargetSummary, // ★ 當月目標輕量 Summary：避免 AnnualView 為了本月預算讀完整 monthly_targets
     budgets, 
     managers, managerOrder, 
@@ -176,6 +184,25 @@ const AnnualView = () => {
     }
     return name;
   }, [currentBrand]);
+
+  const currentYearMonth = useMemo(() => {
+    const now = new Date();
+    return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}`;
+  }, []);
+
+  const annualSummaryTrustReady = useMemo(() => {
+    const brandId = typeof currentBrand === "string"
+      ? currentBrand.toLowerCase()
+      : String(currentBrand?.id || "").toLowerCase();
+    return annualSummaryLoadState?.brandId === brandId
+      && String(annualSummaryLoadState?.year || "") === String(selectedYear)
+      && annualSummaryLoadState?.dashboardReady === true
+      && annualSummaryLoadState?.flagsReady === true;
+  }, [annualSummaryLoadState, currentBrand, selectedYear]);
+
+  const annualSummaryTrustError = Boolean(
+    annualSummaryLoadState?.dashboardError || annualSummaryLoadState?.flagsError
+  );
 
   const cleanName = useMemo(() => (name) => {
     if (!name) return "";
@@ -336,6 +363,15 @@ const AnnualView = () => {
     return map;
   }, [annualMonthlyTargetSummaries, monthlyTargetSummary]);
 
+  const annualDashboardSummaryByMonth = useMemo(() => {
+    const map = {};
+    (annualDashboardSummaries || []).forEach((summary) => {
+      const yearMonth = String(summary?.yearMonth || summary?.id || "");
+      if (yearMonth) map[yearMonth] = summary;
+    });
+    return map;
+  }, [annualDashboardSummaries]);
+
   // ★ Summary-first 安全備援：
   // 只有當某月份的 monthly_targets_summary 對目前篩選店家「缺店或目標為 0」時，
   // 才精準讀取該店該月的原始 monthly_targets 文件。正常情況仍只讀 12 份 Summary，
@@ -385,6 +421,25 @@ const AnnualView = () => {
 
       const missingPairs = [];
       monthKeys.forEach((yearMonth) => {
+        const isHistoricalMonth = yearMonth < currentYearMonth;
+        const preSystemSkip = isAnnualPreSystemMonth(currentBrand, yearMonth);
+        if (preSystemSkip) return;
+
+        // 歷史月份先等 dashboard_summary + summary_recalc_flags 都完成 brand/year anchoring。
+        // 否則 target Summary 比 Formal Summary 先回來時，會在 50~100ms 的 race window 提前打 raw monthly_targets。
+        if (isHistoricalMonth && !annualSummaryTrustReady) return;
+
+        const allowRawFallback = isHistoricalMonth && annualSummaryTrustError
+          ? true
+          : shouldAllowAnnualRawTargetFallback({
+              yearMonth,
+              currentYearMonth,
+              brandId: currentBrand,
+              dashboardSummary: annualDashboardSummaryByMonth[yearMonth] || null,
+              summaryFlag: annualSummaryStatusMap?.[yearMonth] || null,
+            });
+        if (!allowRawFallback) return;
+
         const summary = monthlyTargetSummaryByMonth[yearMonth];
         storeCores.forEach((core) => {
           const row = getSummaryTargetByCore(summary, core);
@@ -464,6 +519,11 @@ const AnnualView = () => {
   }, [
     annualTargetSummariesLoaded,
     monthlyTargetSummaryByMonth,
+    annualDashboardSummaryByMonth,
+    annualSummaryStatusMap,
+    annualSummaryTrustReady,
+    annualSummaryTrustError,
+    currentYearMonth,
     getCollectionPath,
     startMonthStr,
     endMonthStr,
@@ -479,13 +539,13 @@ const annualData = useMemo(() => {
     const effectiveStoreSet = new Set(effectiveStores.map(canonicalStoreName).filter(Boolean));
     const auditExclusionSet = new Set((auditExclusions || []).map(canonicalStoreName).filter(Boolean));
 
-    // 目標店家 = 在有效清單中，且沒有被「排除設定」打勾的店家
+    // Compatibility path（本月 / unverified historical）使用目前可見店家。
     const targetStoreNames = effectiveStores
       .filter((s) => {
         const core = canonicalStoreName(s);
         return core && !auditExclusionSet.has(core);
       })
-      .map(s => `${brandPrefix}${s}店`); 
+      .map((s) => `${brandPrefix}${s}店`);
 
     const monthList = [];
     let current = new Date(`${startMonthStr}-01`);
@@ -500,25 +560,20 @@ const annualData = useMemo(() => {
       current.setMonth(current.getMonth() + 1);
     }
 
-    const statsMap = monthList.map(item => ({ ...item, cash: 0, accrual: 0, traffic: 0, budget: 0, accrualBudget: 0, source: "aggregated" }));
-
-    const now = new Date();
-    const currentYearMonth = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}`;
-    const summaryByMonth = {};
-    (annualDashboardSummaries || []).forEach((summary) => {
-      const ym = String(summary?.yearMonth || summary?.id || "");
-      if (ym) summaryByMonth[ym] = summary;
-    });
-
-    const isSummaryTrusted = (yearMonth) => {
-      const flag = annualSummaryStatusMap?.[yearMonth];
-      if (!flag) return true; // 舊月份若已存在 Summary 但尚未建立 flag，先允許使用，避免回到舊 monthly_aggregated 口徑。
-      const status = String(flag.status || "").toLowerCase();
-      if (flag.dirty === true) return false;
-      if (Number(flag.pendingCount || 0) > 0) return false;
-      if (["dirty", "mismatch", "unverified", "missing", "pending", "rebuilding"].includes(status)) return false;
-      return ["verified", "ready", "completed"].includes(status) || !status;
-    };
+    const statsMap = monthList.map((item) => ({
+      ...item,
+      cash: 0,
+      accrual: 0,
+      traffic: 0,
+      budget: 0,
+      accrualBudget: 0,
+      achievement: 0,
+      accrualAchievement: 0,
+      source: "aggregated",
+      includedInTotals: true,
+      preSystemSkip: false,
+      formalTrustReason: "",
+    }));
 
     const pickNumber = (row, keys = []) => keys.reduce((value, key) => {
       if (value !== null && value !== undefined) return value;
@@ -526,63 +581,13 @@ const annualData = useMemo(() => {
       return raw === null || raw === undefined ? null : Number(raw) || 0;
     }, null) || 0;
 
-    // ★ 與營運總覽保持同一口徑：
-    // 全品牌 / 全區視角直接使用 dashboard_summary.grandTotal。
-    // 只有區長、單店或非 director/trainer 權限需要篩選時，才從 stores 重新加總。
-    // 先前版本即使是「全區」也用 managers/effectiveStores 篩 stores，會漏掉未分配或不在架構內但已回報的店，
-    // 造成年度分析 Q2 與營運總覽單月數字對不上。
-    const shouldFilterSummaryStores = Boolean(
+    const hasExplicitAnnualScope = Boolean(
       selectedAnnualManager ||
       selectedAnnualStore ||
       userRole === "manager" ||
       userRole === "store"
     );
-
-    const sumFieldsFromStores = (summary, targetStat) => {
-      if (!shouldFilterSummaryStores) {
-        const grand = summary?.grandTotal || {};
-        targetStat.cash = pickNumber(grand, ["cash", "cashTotal", "totalCash"]);
-        targetStat.accrual = pickNumber(grand, ["accrual", "accrualTotal", "totalAccrual"]);
-        targetStat.traffic = pickNumber(grand, ["traffic", "trafficTotal", "totalTraffic"]);
-        targetStat.budget = pickNumber(grand, ["budget", "cashBudget", "cashTarget", "targetCash"]);
-        targetStat.accrualBudget = pickNumber(grand, ["accrualBudget", "accrualTarget", "targetAccrual"]);
-        targetStat.source = "summary";
-        return true;
-      }
-
-      // ★ 不只看 value 欄位，也保留 Summary map key；與營運總覽的多候選店名比對概念一致。
-      const allStores = Object.entries(summary?.stores || {}).map(([summaryKey, value]) => ({
-        __summaryKey: summaryKey,
-        ...(value || {}),
-      }));
-
-      const stores = allStores.filter((store) => {
-        const candidates = [
-          store.__summaryKey,
-          store.store,
-          store.storeName,
-          store.displayName,
-          store.name,
-          store.id,
-        ]
-          .map(canonicalStoreName)
-          .filter(Boolean);
-
-        return candidates.some((core) => effectiveStoreSet.has(core) && !auditExclusionSet.has(core));
-      });
-
-      // ★ 安全閥：有指定區／店但 Summary 完全比對不到時，不把此月份鎖成已套用 Summary。
-      // 讓下方 monthly_aggregated 保留備援機會，避免名稱格式異常直接把整月變成 0。
-      if (stores.length === 0) return false;
-
-      targetStat.cash = stores.reduce((sum, store) => sum + pickNumber(store, ["cash", "cashTotal", "totalCash"]), 0);
-      targetStat.accrual = stores.reduce((sum, store) => sum + pickNumber(store, ["accrual", "accrualTotal", "totalAccrual"]), 0);
-      targetStat.traffic = stores.reduce((sum, store) => sum + pickNumber(store, ["traffic", "trafficTotal", "totalTraffic"]), 0);
-      targetStat.budget = stores.reduce((sum, store) => sum + pickNumber(store, ["budget", "cashBudget", "cashTarget", "targetCash"]), 0);
-      targetStat.accrualBudget = stores.reduce((sum, store) => sum + pickNumber(store, ["accrualBudget", "accrualTarget", "targetAccrual"]), 0);
-      targetStat.source = "summary";
-      return true;
-    };
+    const formalScopeStoreKeys = hasExplicitAnnualScope ? [...effectiveStoreSet] : null;
 
     const sumTargetsFromMonthlyTargetSummary = (summary, targetStat) => {
       const targetYearMonth = `${targetStat.y}-${String(targetStat.m).padStart(2, "0")}`;
@@ -611,7 +616,7 @@ const annualData = useMemo(() => {
         let cashTarget = pickNumber(row, ["cashTarget", "targetCash", "cashBudget", "monthlyCashTarget", "cash", "cash_target"]);
         let accrualTarget = pickNumber(row, ["accrualTarget", "targetAccrual", "accrualBudget", "monthlyAccrualTarget", "accrual", "accrual_target"]);
 
-        // Summary 對該店缺漏時，改用上方 useEffect 精準讀到的原始 monthly_targets。
+        // Formal trusted historical 已在上方被套用，不會走到此 compatibility fallback。
         if (!row || (cashTarget <= 0 && accrualTarget <= 0)) {
           const fallbackRow = annualTargetFallbacks?.[targetYearMonth]?.[core];
           if (fallbackRow) {
@@ -622,7 +627,6 @@ const annualData = useMemo(() => {
           }
         }
 
-        // 最後才保留舊 budgets 相容層；AnnualView 正常情況下 budgets 會被 App 節流清空。
         if (cashTarget <= 0 && accrualTarget <= 0) {
           const canonicalFullName = `${brandPrefix}${core}店`;
           const legacyFullName = core === "新店" ? `${brandPrefix}新店` : "";
@@ -656,83 +660,124 @@ const annualData = useMemo(() => {
       if (foundAnyTarget) {
         targetStat.targetSource = usedDirectFallback ? "monthly_targets_precise_fallback" : "monthly_targets_summary";
       }
-
       return foundAnyTarget;
     };
 
     const summaryAppliedMonths = new Set();
 
-    // ★ 歷史月份優先採用 verified dashboard_summary。
-    // 這是與營運總覽一致的可信口徑，避免年度分析 Q2 / 年度累積與單月 Dashboard 對不上。
     statsMap.forEach((stat) => {
       const yearMonth = `${stat.y}-${String(stat.m).padStart(2, "0")}`;
-      const isHistoricalMonth = yearMonth < currentYearMonth;
-      const summary = summaryByMonth[yearMonth];
-      if (isHistoricalMonth && summary && isSummaryTrusted(yearMonth)) {
-        const applied = sumFieldsFromStores(summary, stat);
-        if (applied) summaryAppliedMonths.add(yearMonth);
+
+      if (isAnnualPreSystemMonth(currentBrand, yearMonth)) {
+        stat.cash = null;
+        stat.accrual = null;
+        stat.budget = null;
+        stat.accrualBudget = null;
+        stat.achievement = null;
+        stat.accrualAchievement = null;
+        stat.source = "pre_system";
+        stat.preSystemSkip = true;
+        stat.includedInTotals = false;
+        stat.formalTrustReason = "PRE_SYSTEM_SKIP";
+        return;
       }
+
+      if (yearMonth >= currentYearMonth || !annualSummaryTrustReady) return;
+
+      const dashboardSummary = annualDashboardSummaryByMonth[yearMonth] || null;
+      const trust = annualSummaryTrustError
+        ? { trusted: false, preSystemSkip: false, reason: "SUMMARY_LOAD_ERROR" }
+        : resolveAnnualHistoricalFormalTrust({
+            yearMonth,
+            currentYearMonth,
+            brandId: currentBrand,
+            dashboardSummary,
+            summaryFlag: annualSummaryStatusMap?.[yearMonth] || null,
+          });
+      stat.formalTrustReason = trust.reason || "";
+      if (!trust.trusted) return;
+
+      const formalMonth = buildAnnualFormalMonth({
+        dashboardSummary,
+        monthlyTargetSummary: monthlyTargetSummaryByMonth[yearMonth] || null,
+        scopeStoreKeys: formalScopeStoreKeys,
+        excludedStoreKeys: [...auditExclusionSet],
+        normalizeStoreKey: canonicalStoreName,
+      });
+      if (!formalMonth?.applied) return;
+
+      Object.assign(stat, formalMonth, {
+        source: "formal_summary",
+        preSystemSkip: false,
+      });
+      summaryAppliedMonths.add(yearMonth);
     });
 
-    // monthly_aggregated 僅作為本月 / 未整理月份備援。
-    annualAggregatedData.forEach(d => {
+    // monthly_aggregated 僅作為本月 / unverified / missing Formal Summary 的 compatibility fallback。
+    annualAggregatedData.forEach((d) => {
       const rawStoreName = canonicalStoreName(d.storeName);
-      
-      // 雙層防護：不在篩選清單內，或是被排除設定打勾，一律不計入
       if (auditExclusionSet.has(rawStoreName)) return;
       if (!effectiveStoreSet.has(rawStoreName)) return;
-
       if (!d.yearMonth) return;
+
       const parts = d.yearMonth.split("-");
       const y = parseInt(parts[0]);
       const m = parseInt(parts[1]);
       const realYear = y < 1911 ? y + 1911 : y;
       const yearMonth = `${realYear}-${String(m).padStart(2, "0")}`;
+      if (isAnnualPreSystemMonth(currentBrand, yearMonth)) return;
       if (summaryAppliedMonths.has(yearMonth)) return;
-      
-      const targetStat = statsMap.find(s => s.y === realYear && s.m === m);
+
+      const targetStat = statsMap.find((row) => row.y === realYear && row.m === m);
       if (targetStat) {
         targetStat.cash += (Number(d.cash) || 0) - (Number(d.refund) || 0);
-        
+
         let currentAccrual = Number(d.accrual) || 0;
-        if (brandPrefix === '安妞') {
-            currentAccrual = Number(d.operationalAccrual) || 0;
+        if (brandPrefix === "安妞") {
+          currentAccrual = Number(d.operationalAccrual) || 0;
         }
         targetStat.accrual += currentAccrual;
-        targetStat.traffic += (Number(d.traffic) || 0);
+        targetStat.traffic += Number(d.traffic) || 0;
       }
     });
 
-    let totalCash = 0; let totalBudget = 0; let totalAccrual = 0; let totalAccrualBudget = 0; let totalTraffic = 0;
+    statsMap.forEach((stat) => {
+      if (stat.includedInTotals === false) return;
 
-    statsMap.forEach(stat => {
-      // Summary 內已包含該月、該篩選條件的目標值。
-      // 若是本月 / 未來月份 / 未整理月份，優先用 AnnualView 輕量讀取的 monthly_targets_summary 補目標；
-      // 只有 summary 找不到時，才 fallback 舊 budgets，讓 AnnualView 不必為了年度預算讀完整 monthly_targets。
-      if (stat.source !== "summary") {
+      // Formal trusted historical 的 target / achievement 由 Coverage v1 authority 決定，禁止 raw fallback。
+      if (stat.source !== "formal_summary") {
         const statYearMonth = `${stat.y}-${String(stat.m).padStart(2, "0")}`;
         sumTargetsFromMonthlyTargetSummary(monthlyTargetSummaryByMonth[statYearMonth], stat);
+        stat.achievement = stat.budget > 0 ? (stat.cash / stat.budget) * 100 : 0;
+        stat.accrualAchievement = stat.accrualBudget > 0 ? (stat.accrual / stat.accrualBudget) * 100 : 0;
       }
-
-      stat.achievement = stat.budget > 0 ? (stat.cash / stat.budget) * 100 : 0;
-      stat.accrualAchievement = stat.accrualBudget > 0 ? (stat.accrual / stat.accrualBudget) * 100 : 0;
-      
-      totalCash += stat.cash;
-      totalBudget += stat.budget;
-      totalAccrual += stat.accrual;
-      totalAccrualBudget += stat.accrualBudget;
-      totalTraffic += stat.traffic;
     });
 
     return {
       monthlyStats: statsMap,
-      totals: {
-        cash: totalCash, budget: totalBudget, cashAch: totalBudget > 0 ? (totalCash / totalBudget) * 100 : 0,
-        accrual: totalAccrual, accrualBudget: totalAccrualBudget, accrualAch: totalAccrualBudget > 0 ? (totalAccrual / totalAccrualBudget) * 100 : 0,
-        traffic: totalTraffic,
-      }
+      totals: buildAnnualIntervalTotals(statsMap),
     };
-  }, [annualAggregatedData, annualDashboardSummaries, annualSummaryStatusMap, monthlyTargetSummaryByMonth, annualTargetFallbacks, budgets, startMonthStr, endMonthStr, auditExclusions, brandPrefix, effectiveStores, cleanName, canonicalStoreName, selectedAnnualManager, selectedAnnualStore, userRole]); // ★ Summary-first 口徑需跟著篩選與權限更新
+  }, [
+    annualAggregatedData,
+    annualDashboardSummaryByMonth,
+    annualSummaryStatusMap,
+    annualSummaryTrustReady,
+    annualSummaryTrustError,
+    monthlyTargetSummaryByMonth,
+    annualTargetFallbacks,
+    budgets,
+    startMonthStr,
+    endMonthStr,
+    auditExclusions,
+    brandPrefix,
+    currentBrand,
+    currentYearMonth,
+    effectiveStores,
+    canonicalStoreName,
+    selectedAnnualManager,
+    selectedAnnualStore,
+    userRole,
+  ]);
 
   const { monthlyStats, totals } = annualData;
 
@@ -743,7 +788,24 @@ const annualData = useMemo(() => {
       return "全區";
   }, [selectedAnnualStore, selectedAnnualManager, cleanName]);
 
-  const currentActiveStoresCount = effectiveStores.filter(s => !auditExclusions.includes(s)).length;
+  const currentActiveStoresCount = useMemo(() => {
+    const excluded = new Set((auditExclusions || []).map(canonicalStoreName).filter(Boolean));
+    return effectiveStores.filter((storeName) => !excluded.has(canonicalStoreName(storeName))).length;
+  }, [effectiveStores, auditExclusions, canonicalStoreName]);
+
+  const displayAnnualMoney = (value, preSystemSkip = false) => {
+    if (preSystemSkip) return "—";
+    return value !== null && value !== undefined && Number.isFinite(Number(value)) ? fmtMoney(Number(value)) : "N/A";
+  };
+  const displayAnnualPercent = (value, preSystemSkip = false) => {
+    if (preSystemSkip) return "—";
+    return value !== null && value !== undefined && Number.isFinite(Number(value)) ? `${Number(value).toFixed(1)}%` : "N/A";
+  };
+  const annualProgressWidth = (value) => (
+    value !== null && value !== undefined && Number.isFinite(Number(value))
+      ? Math.max(0, Math.min(Number(value), 100))
+      : 0
+  );
 
   return (
     <ViewWrapper>
@@ -889,14 +951,14 @@ const annualData = useMemo(() => {
             <div className="absolute top-0 right-0 p-4 opacity-20"><DollarSign size={100} /></div>
             <div className="relative z-10">
               <p className="text-amber-100 font-bold text-sm mb-1 flex items-center gap-1"><Target size={14}/> 區間現金達成</p>
-              <h2 className="text-4xl font-extrabold font-mono tracking-tight mb-4">{fmtMoney(totals.cash)}</h2>
+              <h2 className="text-4xl font-extrabold font-mono tracking-tight mb-4">{displayAnnualMoney(totals.cash)}</h2>
               <div className="space-y-2">
                 <div className="flex justify-between text-xs font-medium text-amber-100">
-                  <span>區間目標 {fmtMoney(totals.budget)}</span>
-                  <span>{totals.cashAch.toFixed(1)}%</span>
+                  <span>區間目標 {displayAnnualMoney(totals.budget)}</span>
+                  <span>{displayAnnualPercent(totals.cashAch)}</span>
                 </div>
                 <div className="w-full bg-black/20 h-2 rounded-full overflow-hidden">
-                  <div className="bg-white h-full rounded-full transition-all duration-1000" style={{ width: `${Math.min(totals.cashAch, 100)}%` }}></div>
+                  <div className="bg-white h-full rounded-full transition-all duration-1000" style={{ width: `${annualProgressWidth(totals.cashAch)}%` }}></div>
                 </div>
               </div>
             </div>
@@ -905,7 +967,7 @@ const annualData = useMemo(() => {
              <div className="absolute top-0 right-0 p-4 opacity-5 text-indigo-600"><Activity size={100} /></div>
              <div className="relative z-10">
               <p className="text-indigo-400 font-bold text-sm mb-1 flex items-center gap-1"><Award size={14}/> 區間權責達成</p>
-              <h2 className={`text-4xl font-extrabold font-mono tracking-tight text-stone-700 ${brandPrefix === '安妞' ? 'mb-1' : 'mb-4'}`}>{fmtMoney(totals.accrual)}</h2>
+              <h2 className={`text-4xl font-extrabold font-mono tracking-tight text-stone-700 ${brandPrefix === '安妞' ? 'mb-1' : 'mb-4'}`}>{displayAnnualMoney(totals.accrual)}</h2>
               {/* ★ 針對安妞的文字提示 */}
               {brandPrefix === '安妞' && (
                 <p className="text-[11px] text-indigo-400 mb-3 font-medium flex items-center gap-1">
@@ -914,11 +976,11 @@ const annualData = useMemo(() => {
               )}
               <div className="space-y-2">
                 <div className="flex justify-between text-xs font-medium text-stone-400">
-                  <span>區間目標 {fmtMoney(totals.accrualBudget)}</span>
-                  <span className={totals.accrualAch >= 100 ? "text-emerald-500" : "text-stone-500"}>{totals.accrualAch.toFixed(1)}%</span>
+                  <span>區間目標 {displayAnnualMoney(totals.accrualBudget)}</span>
+                  <span className={totals.accrualAch >= 100 ? "text-emerald-500" : "text-stone-500"}>{displayAnnualPercent(totals.accrualAch)}</span>
                 </div>
                 <div className="w-full bg-stone-100 h-2 rounded-full overflow-hidden">
-                  <div className="bg-indigo-500 h-full rounded-full transition-all duration-1000" style={{ width: `${Math.min(totals.accrualAch, 100)}%` }}></div>
+                  <div className="bg-indigo-500 h-full rounded-full transition-all duration-1000" style={{ width: `${annualProgressWidth(totals.accrualAch)}%` }}></div>
                 </div>
               </div>
             </div>
@@ -981,34 +1043,39 @@ const annualData = useMemo(() => {
                 <tbody className="divide-y divide-stone-50">
                   {monthlyStats.map((stat, idx) => (
                     <tr key={idx} className="group hover:bg-stone-50 transition-colors">
-                      <td className="py-4 pl-2 font-bold text-stone-700">{stat.label}</td>
-                      <td className="py-4 text-right font-mono text-stone-400 text-xs">{fmtMoney(stat.budget)}</td>
-                      <td className="py-4 text-right font-mono text-stone-700 font-bold">{fmtMoney(stat.cash)}</td>
+                      <td className="py-4 pl-2 font-bold text-stone-700">
+                        <span>{stat.label}</span>
+                        {stat.preSystemSkip && (
+                          <span className="ml-2 px-2 py-0.5 rounded-full bg-stone-100 text-stone-400 text-[10px] font-bold">Pre-system</span>
+                        )}
+                      </td>
+                      <td className="py-4 text-right font-mono text-stone-400 text-xs">{displayAnnualMoney(stat.budget, stat.preSystemSkip)}</td>
+                      <td className="py-4 text-right font-mono text-stone-700 font-bold">{displayAnnualMoney(stat.cash, stat.preSystemSkip)}</td>
                       <td className="py-4 text-right font-bold">
                          <span className={`px-2 py-1 rounded-md text-xs ${stat.achievement >= 100 ? 'bg-amber-100 text-amber-700' : 'bg-stone-100 text-stone-400'}`}>
-                           {stat.achievement.toFixed(1)}%
+                           {displayAnnualPercent(stat.achievement, stat.preSystemSkip)}
                          </span>
                       </td>
-                      <td className="py-4 text-right font-mono text-stone-400 text-xs pl-4 border-l border-dashed border-stone-100">{fmtMoney(stat.accrualBudget)}</td>
-                      <td className="py-4 text-right font-mono text-indigo-600 font-bold">{fmtMoney(stat.accrual)}</td>
+                      <td className="py-4 text-right font-mono text-stone-400 text-xs pl-4 border-l border-dashed border-stone-100">{displayAnnualMoney(stat.accrualBudget, stat.preSystemSkip)}</td>
+                      <td className="py-4 text-right font-mono text-indigo-600 font-bold">{displayAnnualMoney(stat.accrual, stat.preSystemSkip)}</td>
                       <td className="py-4 text-right font-bold">
                          <span className={`px-2 py-1 rounded-md text-xs ${stat.accrualAchievement >= 100 ? 'bg-indigo-100 text-indigo-700' : 'bg-stone-100 text-stone-400'}`}>
-                           {stat.accrualAchievement.toFixed(1)}%
+                           {displayAnnualPercent(stat.accrualAchievement, stat.preSystemSkip)}
                          </span>
                       </td>
-                      <td className="py-4 text-right font-mono text-stone-600 pl-4 border-l border-dashed border-stone-100">{fmtNum(stat.traffic)}</td>
+                      <td className="py-4 text-right font-mono text-stone-600 pl-4 border-l border-dashed border-stone-100">{stat.preSystemSkip ? "—" : fmtNum(stat.traffic)}</td>
                     </tr>
                   ))}
                 </tbody>
                 <tfoot className="bg-stone-50 font-bold text-stone-800 border-t-2 border-stone-100">
                   <tr>
                     <td className="py-4 pl-2 text-stone-500">區間總計</td>
-                    <td className="py-4 text-right font-mono text-stone-500 text-xs">{fmtMoney(totals.budget)}</td>
-                    <td className="py-4 text-right font-mono text-amber-600">{fmtMoney(totals.cash)}</td>
-                    <td className="py-4 text-right text-emerald-600">{totals.cashAch.toFixed(1)}%</td>
-                    <td className="py-4 text-right font-mono text-stone-500 text-xs pl-4 border-l border-dashed border-stone-200">{fmtMoney(totals.accrualBudget)}</td>
-                    <td className="py-4 text-right font-mono text-indigo-600">{fmtMoney(totals.accrual)}</td>
-                    <td className="py-4 text-right text-emerald-600">{totals.accrualAch.toFixed(1)}%</td>
+                    <td className="py-4 text-right font-mono text-stone-500 text-xs">{displayAnnualMoney(totals.budget)}</td>
+                    <td className="py-4 text-right font-mono text-amber-600">{displayAnnualMoney(totals.cash)}</td>
+                    <td className="py-4 text-right text-emerald-600">{displayAnnualPercent(totals.cashAch)}</td>
+                    <td className="py-4 text-right font-mono text-stone-500 text-xs pl-4 border-l border-dashed border-stone-200">{displayAnnualMoney(totals.accrualBudget)}</td>
+                    <td className="py-4 text-right font-mono text-indigo-600">{displayAnnualMoney(totals.accrual)}</td>
+                    <td className="py-4 text-right text-emerald-600">{displayAnnualPercent(totals.accrualAch)}</td>
                     <td className="py-4 text-right font-mono pl-4 border-l border-dashed border-stone-200">{fmtNum(totals.traffic)}</td>
                   </tr>
                 </tfoot>
