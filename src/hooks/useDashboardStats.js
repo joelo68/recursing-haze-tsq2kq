@@ -3,10 +3,11 @@ import { useState, useMemo, useContext, useEffect } from 'react';
 import { AppContext } from '../AppContext';
 import { sortManagerNames, sortStoreNames, sortManagersByOrgOrder, sortStoresByOrgOrder } from "../utils/helpers";
 // ★ 新增了 collection 與 getDocs，讓我們一次把全公司的專屬小抄都抓下來
-import { doc, getDoc, collection, getDocs, query, where, limit, onSnapshot } from 'firebase/firestore'; 
+import { doc, getDoc, collection, getDocs, onSnapshot } from 'firebase/firestore';
 import { db } from '../config/firebase';
 import { KPI_VALUE_STATUS } from '../utils/kpiContracts.js';
 import { buildHistoricalFormalDashboardScope, isFormalDashboardSummaryCompatible } from '../utils/dashboardFormalConsumer.js';
+import { getSummaryRecalcFlagState, resolveHistoricalDashboardReadPolicy } from '../utils/dashboardReadPolicy.js';
 
 const safeNumber = (value) => Number.isFinite(Number(value)) ? Number(value) : 0;
 
@@ -103,6 +104,8 @@ export function useDashboardStats() {
     allReports, budgets, monthlyTargetSummary, managers, managerOrder = [], selectedYear, selectedMonth, therapistReports,
     currentBrand, therapists, dailyLoginCount, yesterdayLoginCount,
     therapistAnnualAggregatedData, getCollectionPath, historicalDetailRefreshState,
+    currentDashboardSummary, currentRankingsSummary, currentReportSummaryReady,
+    currentReportSummaryReadyYearMonth, currentReportSummaryReadyBrandId, currentSummaryRecalcFlagState,
     therapistModuleEnabled,
     accessibleStores = [], officialStores = [], delegatedStores = [], delegationAccess = {},
     getActiveDelegationForStore
@@ -143,6 +146,66 @@ export function useDashboardStats() {
     else { name = "CYJ"; }
     return { brandInfo: { id: normalizedId, name }, brandPrefix: name };
   }, [currentBrand]);
+
+  // Batch 5A-2：Dashboard 歷史月份的 raw target fallback 必須與 App 的
+  // Summary trust authority 使用同一套 policy，避免 verified Formal Summary 又回頭讀 raw monthly_targets。
+  const dashboardTargetReadPolicy = useMemo(() => {
+    const y = Number(selectedYear);
+    const m = Number(selectedMonth);
+    const targetYearMonth = y && m ? `${y}-${String(m).padStart(2, "0")}` : "";
+    const now = new Date();
+    const isCurrentMonth = y === now.getFullYear() && m === now.getMonth() + 1;
+    const summaryYearMonth = String(currentDashboardSummary?.yearMonth || currentDashboardSummary?.id || "");
+    const rankingsYearMonth = String(currentRankingsSummary?.yearMonth || currentRankingsSummary?.id || "");
+    const hasUsableDashboardSummary = Boolean(
+      targetYearMonth &&
+      summaryYearMonth === targetYearMonth &&
+      currentDashboardSummary?.stores &&
+      Object.keys(currentDashboardSummary.stores || {}).length > 0 &&
+      rankingsYearMonth === targetYearMonth &&
+      currentRankingsSummary
+    );
+    const reportSummaryReadyForMonth = Boolean(
+      targetYearMonth &&
+      currentReportSummaryReady === true &&
+      currentReportSummaryReadyYearMonth === targetYearMonth &&
+      currentReportSummaryReadyBrandId === brandInfo?.id
+    );
+    const summaryFlagReadyForMonth = Boolean(
+      targetYearMonth &&
+      currentSummaryRecalcFlagState?.brandId === brandInfo?.id &&
+      currentSummaryRecalcFlagState?.yearMonth === targetYearMonth &&
+      currentSummaryRecalcFlagState?.ready === true
+    );
+    const historicalRefreshRequested = Boolean(
+      targetYearMonth &&
+      historicalDetailRefreshState?.yearMonth === targetYearMonth &&
+      ["requested", "loading"].includes(historicalDetailRefreshState?.status)
+    );
+
+    return resolveHistoricalDashboardReadPolicy({
+      isCurrentMonth,
+      historicalRefreshRequested,
+      reportSummaryReady: reportSummaryReadyForMonth,
+      hasUsableDashboardSummary,
+      summaryFlagReady: summaryFlagReadyForMonth,
+      summaryFlag: currentSummaryRecalcFlagState?.data || null,
+      summaryFlagError: currentSummaryRecalcFlagState?.error || null,
+    });
+  }, [
+    selectedYear,
+    selectedMonth,
+    currentDashboardSummary,
+    currentRankingsSummary,
+    currentReportSummaryReady,
+    currentReportSummaryReadyYearMonth,
+    currentReportSummaryReadyBrandId,
+    currentSummaryRecalcFlagState,
+    historicalDetailRefreshState,
+    brandInfo?.id,
+  ]);
+
+  const allowDashboardTargetRawFallback = dashboardTargetReadPolicy.allowRawTargetFallback === true;
   
   // ==========================================
   // ★ 升級版：一次抓取「全集團所有門市」的專屬推估小抄 (包含現金與權責)
@@ -574,6 +637,11 @@ export function useDashboardStats() {
 
     const targetYearMonth = `${y}-${String(m).padStart(2, "0")}`;
     const targetCore = cleanName(fullStoreName);
+
+    // verified historical Formal Summary 必須 fail-closed；不可使用先前殘留的 raw fallback / budgets
+    // 去偷偷補 denominator。current month 或 detail fallback 才保留相容層。
+    if (!allowDashboardTargetRawFallback) return null;
+
     const rawFallback = (
       dashboardTargetRawFallbacks?.yearMonth === targetYearMonth
         ? dashboardTargetRawFallbacks?.rows?.[targetCore]
@@ -581,7 +649,7 @@ export function useDashboardStats() {
     );
     if (isUsableMonthlyTargetRow(rawFallback)) return rawFallback;
 
-    // budgets 在 Dashboard 一般會被 App 節流清空；只保留舊流程相容層。
+    // budgets 在 Dashboard 一般會被 App 節流清空；只保留 current/detail fallback 舊流程相容層。
     const monthNum = Number(m);
     const monthPadded = String(monthNum).padStart(2, "0");
     const legacyKeys = Array.from(new Set([
@@ -606,6 +674,7 @@ export function useDashboardStats() {
     budgets,
     cleanName,
     brandPrefix,
+    allowDashboardTargetRawFallback,
   ]);
 
   // ============================================================================
@@ -838,6 +907,11 @@ export function useDashboardStats() {
       return () => { cancelled = true; };
     }
 
+    if (!allowDashboardTargetRawFallback) {
+      setDashboardTargetRawFallbacks({ yearMonth: targetYearMonth, rows: {} });
+      return () => { cancelled = true; };
+    }
+
     const scopedStoreCores = Array.from(new Set(
       (effectiveStores || []).map(cleanName).filter(Boolean)
     ));
@@ -956,6 +1030,7 @@ export function useDashboardStats() {
     monthlyTargetSummary,
     findMonthlyTargetSummaryEntry,
     isUsableMonthlyTargetRow,
+    allowDashboardTargetRawFallback,
   ]);
 
   const allCompanyStores = useMemo(() => {
@@ -1132,15 +1207,15 @@ export function useDashboardStats() {
   }, [annualKpiBenchmark, selectedDashboardStore, selectedDashboardManager, userRole, effectiveStores, cleanName, brandPrefix, brandInfo]);
 
   // ==========================================
-  // ★ Dashboard Summary v1：安全過渡版 summary-first
-  // 先嘗試讀取維護中心建立好的 summary；若不存在或不適用，仍會 fallback 原本明細計算。
+  // ★ Batch 5A-2：Dashboard Summary trust 來源收斂
+  // dashboard_summary / rankings_summary / summary_recalc_flags 由 App 單一監聽後傳入；
+  // 此 hook 不再重複監聽，也不再依賴 recalc_queue / maintenance_logs 大型 query。
+  // therapist_summary 只在人員績效歷史視圖真正需要時才監聽單一文件。
   // ==========================================
-  const [dashboardSummaryBundle, setDashboardSummaryBundle] = useState({
-    dashboard: null,
-    therapist: null,
-    rankings: null,
-    trustStatus: null,
-    ready: false,
+  const [therapistSummaryState, setTherapistSummaryState] = useState({
+    yearMonth: "",
+    data: null,
+    ready: true,
     error: null,
   });
 
@@ -1154,11 +1229,6 @@ export function useDashboardStats() {
     const now = new Date();
     return Number(selectedYear) === now.getFullYear() && Number(selectedMonth) === now.getMonth() + 1;
   }, [selectedYear, selectedMonth]);
-
-  const getSummaryQueueYearMonth = (row = {}) => {
-    const raw = row.affectedYearMonth || row.yearMonth || String(row.date || row.sourceDate || "").slice(0, 7);
-    return /^\d{4}-\d{2}$/.test(String(raw || "")) ? String(raw) : "未知月份";
-  };
 
   const getDashboardSummaryTrustMeta = (statusKey) => {
     const map = {
@@ -1207,195 +1277,169 @@ export function useDashboardStats() {
   };
 
   useEffect(() => {
-    let cancelled = false;
-    const unsubscribers = [];
+    if (
+      !getCollectionPath ||
+      !selectedYearMonth ||
+      isSelectedCurrentMonth ||
+      !isTherapistModuleEnabled ||
+      viewMode !== "therapist"
+    ) {
+      setTherapistSummaryState({
+        yearMonth: selectedYearMonth,
+        data: null,
+        ready: true,
+        error: null,
+      });
+      return undefined;
+    }
 
-    const buildTrustStatus = ({ dashboardData = {}, therapistData = {}, rankingsData = {}, summaryDocs = {}, queueRows = [], logRows = [], recalcFlag = null }) => {
-      const allSummaryExists = Boolean(summaryDocs.dashboard && summaryDocs.therapist && summaryDocs.rankings);
-      const updatedAtText = dashboardData.lastUpdatedAtText || therapistData.lastUpdatedAtText || rankingsData.lastUpdatedAtText || "";
-      const summaryUpdatedMs = updatedAtText ? new Date(updatedAtText).getTime() : 0;
+    setTherapistSummaryState({
+      yearMonth: selectedYearMonth,
+      data: null,
+      ready: false,
+      error: null,
+    });
 
-      const pendingRows = (queueRows || []).filter((row) => getSummaryQueueYearMonth(row) === selectedYearMonth);
-      const flagStatus = String(recalcFlag?.status || "").toLowerCase();
-      const flagMismatchCount = Number(recalcFlag?.lastMismatchCount ?? recalcFlag?.mismatchCount ?? 0);
-      const flagCompletedAtText = recalcFlag?.lastCompletedAtText || recalcFlag?.completedAtText || "";
-      const flagIsCompleteStatus = ["completed", "verified", "idle"].includes(flagStatus);
-      const flagVerified = Boolean(recalcFlag) && ["completed", "verified"].includes(flagStatus) && recalcFlag?.dirty !== true && flagMismatchCount === 0;
-      const flagDirty = Boolean(recalcFlag) && (recalcFlag?.dirty === true || !flagIsCompleteStatus);
-      const compareLogs = (logRows || [])
-        .filter((row) => row.type === "dashboard_summary" && row.action === "compare_summary_with_raw")
-        .sort((a, b) => new Date(b.createdAtText || 0).getTime() - new Date(a.createdAtText || 0).getTime());
-      const latestCompare = compareLogs[0] || null;
-      const latestCompareMs = latestCompare?.createdAtText ? new Date(latestCompare.createdAtText).getTime() : 0;
-      const compareAfterBuild = latestCompare && (!summaryUpdatedMs || latestCompareMs >= summaryUpdatedMs - 1000);
+    const unsubscribe = onSnapshot(
+      doc(getCollectionPath("therapist_summary"), selectedYearMonth),
+      (snap) => {
+        setTherapistSummaryState({
+          yearMonth: selectedYearMonth,
+          data: snap.exists() ? { id: snap.id, ...snap.data() } : null,
+          ready: true,
+          error: null,
+        });
+      },
+      (error) => {
+        console.warn("Dashboard therapist_summary 監聽失敗，將使用管理師明細 fallback：", error);
+        setTherapistSummaryState({
+          yearMonth: selectedYearMonth,
+          data: null,
+          ready: true,
+          error,
+        });
+      }
+    );
 
-      let statusKey = "unverified";
-      if (!allSummaryExists) statusKey = "missing";
-      else if ((pendingRows.length > 0 || flagDirty) && isSelectedCurrentMonth) statusKey = "current_dirty";
-      else if (pendingRows.length > 0 || flagDirty) statusKey = "dirty";
-      // ★ 關鍵修正：
-      // 後端 auto repair worker 會把 summary_recalc_flags/{yearMonth} 寫回 verified。
-      // 只要 flag 已 verified、dirty=false、mismatch=0，就應視為可用 Summary；
-      // 不再強制依賴 maintenance_logs 的 compare_summary_with_raw 時間。
-      // 否則後端已整理成功時，Dashboard 仍可能因舊 compare log 而卡在「明細暫代顯示」。
-      else if (flagVerified) statusKey = "verified";
-      else if (!latestCompare || !compareAfterBuild) statusKey = "unverified";
-      else if (latestCompare.status === "matched") statusKey = "verified";
-      else statusKey = "mismatch";
+    return () => {
+      try { unsubscribe && unsubscribe(); } catch (error) { console.warn("therapist_summary listener cleanup failed", error); }
+    };
+  }, [getCollectionPath, selectedYearMonth, isSelectedCurrentMonth, isTherapistModuleEnabled, viewMode]);
 
-      const meta = getDashboardSummaryTrustMeta(statusKey);
+  const dashboardSummaryBundle = useMemo(() => {
+    const dashboardYearMonth = String(currentDashboardSummary?.yearMonth || currentDashboardSummary?.id || "");
+    const rankingsYearMonth = String(currentRankingsSummary?.yearMonth || currentRankingsSummary?.id || "");
+    const dashboardMatchesMonth = Boolean(currentDashboardSummary) && dashboardYearMonth === selectedYearMonth;
+    const rankingsMatchesMonth = Boolean(currentRankingsSummary) && rankingsYearMonth === selectedYearMonth;
+    const reportReadyForMonth = Boolean(
+      currentReportSummaryReady === true &&
+      currentReportSummaryReadyYearMonth === selectedYearMonth &&
+      currentReportSummaryReadyBrandId === brandInfo?.id
+    );
+    const flagReadyForMonth = Boolean(
+      currentSummaryRecalcFlagState?.brandId === brandInfo?.id &&
+      currentSummaryRecalcFlagState?.yearMonth === selectedYearMonth &&
+      currentSummaryRecalcFlagState?.ready === true
+    );
+    const recalcFlag = flagReadyForMonth ? (currentSummaryRecalcFlagState?.data || null) : null;
+    const flagError = flagReadyForMonth ? (currentSummaryRecalcFlagState?.error || null) : null;
+    const flagState = getSummaryRecalcFlagState(recalcFlag);
+    const summaryDocs = {
+      dashboard: dashboardMatchesMonth,
+      therapist: Boolean(therapistSummaryState?.data) && therapistSummaryState?.yearMonth === selectedYearMonth,
+      rankings: rankingsMatchesMonth,
+    };
+
+    if (isSelectedCurrentMonth) {
       return {
+        dashboard: dashboardMatchesMonth ? currentDashboardSummary : null,
+        therapist: null,
+        rankings: rankingsMatchesMonth ? currentRankingsSummary : null,
+        trustStatus: {
+          yearMonth: selectedYearMonth,
+          statusKey: "current_dirty",
+          ...getDashboardSummaryTrustMeta("current_dirty"),
+          isTrusted: false,
+          summaryDocs,
+          pendingCount: 0,
+          recalcFlag: null,
+          checkedAtText: new Date().toISOString(),
+        },
+        ready: true,
+        error: null,
+      };
+    }
+
+    if (!reportReadyForMonth || !flagReadyForMonth) {
+      return {
+        dashboard: dashboardMatchesMonth ? currentDashboardSummary : null,
+        therapist: therapistSummaryState?.yearMonth === selectedYearMonth ? therapistSummaryState?.data : null,
+        rankings: rankingsMatchesMonth ? currentRankingsSummary : null,
+        trustStatus: {
+          yearMonth: selectedYearMonth,
+          statusKey: "loading",
+          ...getDashboardSummaryTrustMeta("loading"),
+          isTrusted: false,
+          summaryDocs,
+          pendingCount: 0,
+          recalcFlag: null,
+          checkedAtText: new Date().toISOString(),
+        },
+        ready: false,
+        error: null,
+      };
+    }
+
+    let statusKey = "unverified";
+    if (flagError) statusKey = "error";
+    else if (!summaryDocs.dashboard || !summaryDocs.rankings) statusKey = "missing";
+    else if (flagState.isDirty) statusKey = "dirty";
+    else if (flagState.isVerified) statusKey = "verified";
+
+    const updatedAtText =
+      currentDashboardSummary?.lastUpdatedAtText ||
+      currentRankingsSummary?.lastUpdatedAtText ||
+      "";
+    const flagCompletedAtText = recalcFlag?.lastCompletedAtText || recalcFlag?.completedAtText || "";
+    const meta = getDashboardSummaryTrustMeta(statusKey);
+
+    return {
+      dashboard: dashboardMatchesMonth ? currentDashboardSummary : null,
+      therapist: therapistSummaryState?.yearMonth === selectedYearMonth ? therapistSummaryState?.data : null,
+      rankings: rankingsMatchesMonth ? currentRankingsSummary : null,
+      trustStatus: {
         yearMonth: selectedYearMonth,
         statusKey,
         ...meta,
         isTrusted: statusKey === "verified",
         summaryDocs,
-        pendingCount: pendingRows.length,
-        pendingSources: [...new Set(pendingRows.map((row) => row.sourceType || row.source || "unknown"))],
-        recalcFlag: recalcFlag || null,
-        recalcFlagStatus: flagStatus || "none",
+        pendingCount: flagState.isDirty ? 1 : 0,
+        pendingSources: flagState.isDirty ? ["summary_recalc_flags"] : [],
+        recalcFlag,
+        recalcFlagStatus: flagState.status,
         recalcFlagRebuildAfterAtText: recalcFlag?.rebuildAfterAtText || "",
         lastDirtyAtText: recalcFlag?.lastDirtyAtText || "",
         lastUpdatedAtText: updatedAtText,
-        lastCompareAtText: latestCompare?.createdAtText || flagCompletedAtText || "",
-        lastCompareStatus: latestCompare?.status || (flagVerified ? "matched" : "-"),
-        lastCompareMismatchCount: latestCompare?.mismatchCount ?? flagMismatchCount,
-        checkedAtText: new Date().toISOString(),
-      };
-    };
-
-    if (!getCollectionPath || !selectedYearMonth) {
-      setDashboardSummaryBundle({ dashboard: null, therapist: null, rankings: null, trustStatus: null, ready: true, error: null });
-      return () => { cancelled = true; };
-    }
-
-    setDashboardSummaryBundle(prev => ({
-      ...prev,
-      trustStatus: {
-        yearMonth: selectedYearMonth,
-        statusKey: "loading",
-        ...getDashboardSummaryTrustMeta("loading"),
-        isTrusted: false,
+        lastCompareAtText: flagCompletedAtText,
+        lastCompareStatus: flagState.isVerified ? "matched" : "-",
+        lastCompareMismatchCount: flagState.mismatchCount,
         checkedAtText: new Date().toISOString(),
       },
-      ready: false,
-      error: null,
-    }));
-
-    const liveState = {
-      dashboard: null,
-      therapist: null,
-      rankings: null,
-      summaryDocs: { dashboard: false, therapist: false, rankings: false },
-      queueRows: [],
-      logRows: [],
-      recalcFlag: null,
-      loaded: {
-        dashboard: false,
-        therapist: false,
-        rankings: false,
-        queue: false,
-        logs: false,
-        flag: false,
-      },
+      ready: true,
+      error: flagError || null,
     };
-
-    const publishIfReady = () => {
-      if (cancelled) return;
-      const isReady = Object.values(liveState.loaded).every(Boolean);
-      if (!isReady) return;
-
-      const trustStatus = buildTrustStatus({
-        dashboardData: liveState.dashboard || {},
-        therapistData: liveState.therapist || {},
-        rankingsData: liveState.rankings || {},
-        summaryDocs: liveState.summaryDocs,
-        queueRows: liveState.queueRows,
-        logRows: liveState.logRows,
-        recalcFlag: liveState.recalcFlag,
-      });
-
-      setDashboardSummaryBundle({
-        dashboard: liveState.dashboard,
-        therapist: liveState.therapist,
-        rankings: liveState.rankings,
-        trustStatus,
-        ready: true,
-        error: null,
-      });
-    };
-
-    const handleLiveError = (error) => {
-      console.warn("Dashboard Summary 即時狀態監聽失敗，將使用明細計算 fallback：", error);
-      if (cancelled) return;
-      setDashboardSummaryBundle({
-        dashboard: null,
-        therapist: null,
-        rankings: null,
-        trustStatus: {
-          yearMonth: selectedYearMonth,
-          statusKey: "error",
-          ...getDashboardSummaryTrustMeta("error"),
-          isTrusted: false,
-          pendingCount: 0,
-          summaryDocs: { dashboard: false, therapist: false, rankings: false },
-          checkedAtText: new Date().toISOString(),
-        },
-        ready: true,
-        error,
-      });
-    };
-
-    try {
-      unsubscribers.push(onSnapshot(doc(getCollectionPath("dashboard_summary"), selectedYearMonth), (snap) => {
-        liveState.dashboard = snap.exists() ? { id: snap.id, ...snap.data() } : null;
-        liveState.summaryDocs.dashboard = snap.exists();
-        liveState.loaded.dashboard = true;
-        publishIfReady();
-      }, handleLiveError));
-
-      unsubscribers.push(onSnapshot(doc(getCollectionPath("therapist_summary"), selectedYearMonth), (snap) => {
-        liveState.therapist = snap.exists() ? { id: snap.id, ...snap.data() } : null;
-        liveState.summaryDocs.therapist = snap.exists();
-        liveState.loaded.therapist = true;
-        publishIfReady();
-      }, handleLiveError));
-
-      unsubscribers.push(onSnapshot(doc(getCollectionPath("rankings_summary"), selectedYearMonth), (snap) => {
-        liveState.rankings = snap.exists() ? { id: snap.id, ...snap.data() } : null;
-        liveState.summaryDocs.rankings = snap.exists();
-        liveState.loaded.rankings = true;
-        publishIfReady();
-      }, handleLiveError));
-
-      unsubscribers.push(onSnapshot(query(getCollectionPath("recalc_queue"), where("status", "==", "pending"), limit(500)), (snap) => {
-        liveState.queueRows = snap.docs.map((d) => ({ id: d.id, ...d.data() }));
-        liveState.loaded.queue = true;
-        publishIfReady();
-      }, handleLiveError));
-
-      unsubscribers.push(onSnapshot(query(getCollectionPath("maintenance_logs"), where("month", "==", selectedYearMonth), limit(120)), (snap) => {
-        liveState.logRows = snap.docs.map((d) => ({ id: d.id, ...d.data() }));
-        liveState.loaded.logs = true;
-        publishIfReady();
-      }, handleLiveError));
-
-      unsubscribers.push(onSnapshot(doc(getCollectionPath("summary_recalc_flags"), selectedYearMonth), (snap) => {
-        liveState.recalcFlag = snap.exists() ? { id: snap.id, ...snap.data() } : null;
-        liveState.loaded.flag = true;
-        publishIfReady();
-      }, handleLiveError));
-    } catch (error) {
-      handleLiveError(error);
-    }
-
-    return () => {
-      cancelled = true;
-      unsubscribers.forEach((unsubscribe) => {
-        try { unsubscribe && unsubscribe(); } catch (error) { console.warn("Dashboard Summary listener cleanup failed", error); }
-      });
-    };
-  }, [getCollectionPath, selectedYearMonth, isSelectedCurrentMonth]);
+  }, [
+    currentDashboardSummary,
+    currentRankingsSummary,
+    currentReportSummaryReady,
+    currentReportSummaryReadyYearMonth,
+    currentReportSummaryReadyBrandId,
+    currentSummaryRecalcFlagState,
+    therapistSummaryState,
+    selectedYearMonth,
+    isSelectedCurrentMonth,
+    brandInfo?.id,
+  ]);
 
   const isSummaryTrustedForDashboard = useMemo(() => {
     if (isSelectedCurrentMonth) return false;

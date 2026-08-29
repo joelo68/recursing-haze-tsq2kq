@@ -21,6 +21,7 @@ import {
 import { ROLES, ALL_MENU_ITEMS, DEFAULT_REGIONAL_MANAGERS, DEFAULT_PERMISSIONS } from "./constants/index";
 import { generateUUID, formatLocalYYYYMMDD, toStandardDateFormat, formatNumber, parseNumber, normalizeManagerOrder } from "./utils/helpers";
 import { validBaseTarget } from "./utils/kpiContracts";
+import { resolveHistoricalDashboardReadPolicy } from "./utils/dashboardReadPolicy";
 import {
   buildDelegationAccessProfile,
   canAccessStore as canAccessDelegatedStore,
@@ -1050,9 +1051,18 @@ export default function App() {
   const [therapistAnnualAggregatedData, setTherapistAnnualAggregatedData] = useState([]); // ★新增：管理師專屬結算包
   const [budgets, setBudgets] = useState({});
   const [monthlyTargetSummary, setMonthlyTargetSummary] = useState(null); // ★ monthly_targets_summary/{yearMonth}：Dashboard 目標資料輕量即時來源
-  const [currentDashboardSummary, setCurrentDashboardSummary] = useState(null); // ★ 報表 summary-first：Ranking / Regional 優先使用此資料
+  const [currentDashboardSummary, setCurrentDashboardSummary] = useState(null); // ★ 報表 summary-first：Ranking / Regional / Dashboard 共用單一來源
   const [currentRankingsSummary, setCurrentRankingsSummary] = useState(null);
   const [currentReportSummaryReady, setCurrentReportSummaryReady] = useState(false);
+  const [currentReportSummaryReadyYearMonth, setCurrentReportSummaryReadyYearMonth] = useState("");
+  const [currentReportSummaryReadyBrandId, setCurrentReportSummaryReadyBrandId] = useState("");
+  const [currentSummaryRecalcFlagState, setCurrentSummaryRecalcFlagState] = useState({
+    brandId: "",
+    yearMonth: "",
+    ready: false,
+    data: null,
+    error: null,
+  });
   // ★ 歷史月份 dirty-triggered refresh：Summary 失效時只重新抓取該月份明細一次，
   // 不恢復歷史月份長駐 onSnapshot，兼顧資料正確性與 reads。
   const [historicalDetailRefreshToken, setHistoricalDetailRefreshToken] = useState(0);
@@ -2457,6 +2467,8 @@ export default function App() {
       setCurrentDashboardSummary(null);
       setCurrentRankingsSummary(null);
       setCurrentReportSummaryReady(false);
+      setCurrentReportSummaryReadyYearMonth("");
+      setCurrentReportSummaryReadyBrandId("");
       return undefined;
     }
 
@@ -2464,12 +2476,18 @@ export default function App() {
     let rankingsLoaded = false;
 
     const publishReady = () => {
-      if (dashboardLoaded && rankingsLoaded) setCurrentReportSummaryReady(true);
+      if (dashboardLoaded && rankingsLoaded) {
+        setCurrentReportSummaryReady(true);
+        setCurrentReportSummaryReadyYearMonth(selectedYearMonth);
+        setCurrentReportSummaryReadyBrandId(currentBrand?.id || "");
+      }
     };
 
     setCurrentDashboardSummary(null);
     setCurrentRankingsSummary(null);
     setCurrentReportSummaryReady(false);
+    setCurrentReportSummaryReadyYearMonth("");
+    setCurrentReportSummaryReadyBrandId("");
 
     const unsubDashboardSummary = onSnapshot(
       doc(getCollectionPath("dashboard_summary"), selectedYearMonth),
@@ -2683,6 +2701,7 @@ export default function App() {
   // 這個 listener 只監聽 1 個 flag doc；不會把歷史 daily_reports 改回長駐監聽。
   useEffect(() => {
     if (!user || !selectedYearMonth) {
+      setCurrentSummaryRecalcFlagState({ brandId: "", yearMonth: "", ready: false, data: null, error: null });
       setHistoricalDetailRefreshState({
         yearMonth: "",
         status: "idle",
@@ -2697,6 +2716,13 @@ export default function App() {
     const now = new Date();
     const currentYearMonth = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}`;
     if (selectedYearMonth >= currentYearMonth) {
+      setCurrentSummaryRecalcFlagState({
+        brandId: currentBrand?.id || "",
+        yearMonth: selectedYearMonth,
+        ready: true,
+        data: null,
+        error: null,
+      });
       setHistoricalDetailRefreshState((prev) => (
         prev.yearMonth === selectedYearMonth
           ? { ...prev, status: "idle", error: "" }
@@ -2704,6 +2730,14 @@ export default function App() {
       ));
       return undefined;
     }
+
+    setCurrentSummaryRecalcFlagState({
+      brandId: currentBrand?.id || "",
+      yearMonth: selectedYearMonth,
+      ready: false,
+      data: null,
+      error: null,
+    });
 
     const flagRef = doc(getCollectionPath("summary_recalc_flags"), selectedYearMonth);
     const unsubscribe = onSnapshot(
@@ -2715,8 +2749,16 @@ export default function App() {
           getStableReadMeta("summary_recalc_flag_history_detail_refresh")
         );
 
-        if (!snap.exists()) return;
-        const data = snap.data() || {};
+        const data = snap.exists() ? { id: snap.id, ...snap.data() } : null;
+        setCurrentSummaryRecalcFlagState({
+          brandId: currentBrand?.id || "",
+          yearMonth: selectedYearMonth,
+          ready: true,
+          data,
+          error: null,
+        });
+
+        if (!data) return;
         const status = String(data.status || "").toLowerCase();
         const isDirty = data.dirty === true || ["dirty", "pending", "rebuilding"].includes(status);
         if (!isDirty) return;
@@ -2754,6 +2796,13 @@ export default function App() {
       },
       (error) => {
         console.error("歷史月份 dirty flag 監聽失敗:", error);
+        setCurrentSummaryRecalcFlagState({
+          brandId: currentBrand?.id || "",
+          yearMonth: selectedYearMonth,
+          ready: true,
+          data: null,
+          error,
+        });
         setHistoricalDetailRefreshState((prev) => ({
           ...prev,
           yearMonth: selectedYearMonth,
@@ -2853,20 +2902,51 @@ export default function App() {
 
     const isSummaryFirstReportView = activeView === "ranking" || activeView === "regional";
     const isStoreAnalysisScopedView = activeView === "store-analysis";
-    const hasUsableDashboardSummary = Boolean(currentDashboardSummary?.stores && Object.keys(currentDashboardSummary.stores || {}).length > 0);
+    const dashboardSummaryYearMonth = String(currentDashboardSummary?.yearMonth || currentDashboardSummary?.id || "");
+    const rankingsSummaryYearMonth = String(currentRankingsSummary?.yearMonth || currentRankingsSummary?.id || "");
+    const hasUsableDashboardSummary = Boolean(
+      dashboardSummaryYearMonth === targetYearMonth &&
+      currentDashboardSummary?.stores &&
+      Object.keys(currentDashboardSummary.stores || {}).length > 0 &&
+      rankingsSummaryYearMonth === targetYearMonth &&
+      currentRankingsSummary
+    );
+    const reportSummaryReadyForMonth = Boolean(
+      currentReportSummaryReady &&
+      currentReportSummaryReadyYearMonth === targetYearMonth &&
+      currentReportSummaryReadyBrandId === currentBrand?.id
+    );
+    const summaryFlagReadyForMonth = Boolean(
+      currentSummaryRecalcFlagState?.brandId === currentBrand?.id &&
+      currentSummaryRecalcFlagState?.yearMonth === targetYearMonth &&
+      currentSummaryRecalcFlagState?.ready === true
+    );
+    const dashboardReadPolicy = resolveHistoricalDashboardReadPolicy({
+      isCurrentMonth,
+      historicalRefreshRequested: isHistoricalRefreshRequested,
+      reportSummaryReady: reportSummaryReadyForMonth,
+      hasUsableDashboardSummary,
+      summaryFlagReady: summaryFlagReadyForMonth,
+      summaryFlag: currentSummaryRecalcFlagState?.data || null,
+      summaryFlagError: currentSummaryRecalcFlagState?.error || null,
+    });
 
     const shouldLoadDailyReportData =
       MONTHLY_DAILY_REPORT_DATA_VIEWS.has(activeView) &&
       (
-        isHistoricalRefreshRequested ||
-        (
-          (!isStoreAnalysisScopedView || !storeAnalysisSelectedStore) &&
-          (
-            !isSummaryFirstReportView ||
-            isCurrentMonth ||
-            (currentReportSummaryReady && !hasUsableDashboardSummary)
-          )
-        )
+        activeView === "dashboard"
+          ? dashboardReadPolicy.shouldLoadDailyReports
+          : (
+              isHistoricalRefreshRequested ||
+              (
+                (!isStoreAnalysisScopedView || !storeAnalysisSelectedStore) &&
+                (
+                  !isSummaryFirstReportView ||
+                  isCurrentMonth ||
+                  (currentReportSummaryReady && !hasUsableDashboardSummary)
+                )
+              )
+            )
       );
 
     const shouldLoadTherapistReportData = therapistModuleEnabled && (
@@ -3015,7 +3095,7 @@ export default function App() {
         isMounted = false; 
       };
     }
-  }, [user, currentBrand, selectedYear, selectedMonth, activeView, dashboardViewMode, storeAnalysisSelectedStore, userRole, therapistModuleEnabled, currentDashboardSummary, currentReportSummaryReady, getCollectionPath, getStableReadMeta, isLowPowerMode, historicalDetailRefreshToken]);
+  }, [user, currentBrand, selectedYear, selectedMonth, activeView, dashboardViewMode, storeAnalysisSelectedStore, userRole, therapistModuleEnabled, currentDashboardSummary, currentRankingsSummary, currentReportSummaryReady, currentReportSummaryReadyYearMonth, currentReportSummaryReadyBrandId, currentSummaryRecalcFlagState, getCollectionPath, getStableReadMeta, isLowPowerMode, historicalDetailRefreshToken]);
 
 
  const handleLogin = useCallback(async (roleId, userInfo = null, loginCredential = {}) => {
@@ -3629,7 +3709,7 @@ export default function App() {
   }, [userRole, currentUser, currentBrandId, currentBrand, activeView]);
 
   const contextValue = useMemo(() => ({
-    user, loading, analytics, managers: visibleManagers, managerOrder: visibleManagerOrder, budgets, monthlyTargetSummary, currentDashboardSummary, currentRankingsSummary, currentReportSummaryReady, historicalDetailRefreshState, targets, rawData: visibleRawData, allReports: rawData, 
+    user, loading, analytics, managers: visibleManagers, managerOrder: visibleManagerOrder, budgets, monthlyTargetSummary, currentDashboardSummary, currentRankingsSummary, currentReportSummaryReady, currentReportSummaryReadyYearMonth, currentReportSummaryReadyBrandId, currentSummaryRecalcFlagState, historicalDetailRefreshState, targets, rawData: visibleRawData, allReports: rawData,
     annualAggregatedData, annualDashboardSummaries, annualSummaryStatusMap, therapistAnnualAggregatedData, // ★ 把年度 Summary 與管理師資料交出去
     showToast, openConfirm, fmtMoney, fmtNum, inputDate, setInputDate, storeList: analytics?.storeList || [], setTargets, selectedYear, selectedMonth, setSelectedYear, setSelectedMonth, permissions, storeAccounts, managerAuth, currentUser, userRole, logActivity, handleUpdateStorePassword, handleUpdateManagerPassword, handleUpdateTherapistPassword, navigateToStore, activeView, appId, 
     therapists: visibleTherapists, therapistReports: visibleTherapistReports, therapistSchedules, therapistTargets, trainerAuth, handleUpdateTrainerAuth, auditExclusions, handleUpdateAuditExclusions, currentBrand, setCurrentBrandId, getCollectionPath, getDocPath, dailyLoginCount, yesterdayLoginCount, securityConfig, featureFlags, therapistModuleEnabled, isOnline, isLowPowerMode,
@@ -3642,7 +3722,7 @@ export default function App() {
     directorPermissionProfile,
     canDirectorAccessView,
     isReadOnlyDirector: userRole === "director" && !canDirectorAccessView("history")
-  }), [user, loading, analytics, visibleManagers, visibleManagerOrder, budgets, monthlyTargetSummary, currentDashboardSummary, currentRankingsSummary, currentReportSummaryReady, historicalDetailRefreshState, targets, visibleRawData, rawData, annualAggregatedData, annualDashboardSummaries, annualSummaryStatusMap, therapistAnnualAggregatedData, inputDate, selectedYear, selectedMonth, permissions, storeAccounts, managerAuth, currentUser, userRole, logActivity, handleUpdateStorePassword, handleUpdateManagerPassword, handleUpdateTherapistPassword, navigateToStore, activeView, appId, visibleTherapists, visibleTherapistReports, therapistSchedules, therapistTargets, trainerAuth, handleUpdateTrainerAuth, auditExclusions, handleUpdateAuditExclusions, currentBrand, setCurrentBrandId, getCollectionPath, getDocPath, dailyLoginCount, yesterdayLoginCount, securityConfig, featureFlags, therapistModuleEnabled, isOnline, isLowPowerMode, currentDeviceTrust, currentSecurityAccountKey, manageDeviceSecurityAction, reviewDeviceApprovalAction, isDeviceSecuritySuperAdmin, openDeviceApprovalPanel, fetchGlobalData, managers, delegations, activeDelegations, delegationAccess, accessibleStores, officialStores, delegatedStores, refreshDelegations, canAccessStore, canEditStoreReport, getActiveDelegationForStore, directorLevel, directorPermissionProfile, canDirectorAccessView]); // ★ 依賴陣列也要加
+  }), [user, loading, analytics, visibleManagers, visibleManagerOrder, budgets, monthlyTargetSummary, currentDashboardSummary, currentRankingsSummary, currentReportSummaryReady, currentReportSummaryReadyYearMonth, currentReportSummaryReadyBrandId, currentSummaryRecalcFlagState, historicalDetailRefreshState, targets, visibleRawData, rawData, annualAggregatedData, annualDashboardSummaries, annualSummaryStatusMap, therapistAnnualAggregatedData, inputDate, selectedYear, selectedMonth, permissions, storeAccounts, managerAuth, currentUser, userRole, logActivity, handleUpdateStorePassword, handleUpdateManagerPassword, handleUpdateTherapistPassword, navigateToStore, activeView, appId, visibleTherapists, visibleTherapistReports, therapistSchedules, therapistTargets, trainerAuth, handleUpdateTrainerAuth, auditExclusions, handleUpdateAuditExclusions, currentBrand, setCurrentBrandId, getCollectionPath, getDocPath, dailyLoginCount, yesterdayLoginCount, securityConfig, featureFlags, therapistModuleEnabled, isOnline, isLowPowerMode, currentDeviceTrust, currentSecurityAccountKey, manageDeviceSecurityAction, reviewDeviceApprovalAction, isDeviceSecuritySuperAdmin, openDeviceApprovalPanel, fetchGlobalData, managers, delegations, activeDelegations, delegationAccess, accessibleStores, officialStores, delegatedStores, refreshDelegations, canAccessStore, canEditStoreReport, getActiveDelegationForStore, directorLevel, directorPermissionProfile, canDirectorAccessView]); // ★ 依賴陣列也要加
   
   const memoizedViews = useMemo(() => {
     return (
