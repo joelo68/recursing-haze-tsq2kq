@@ -49,6 +49,15 @@ exports.onBrandMonthlyTargetSummaryChange = targetCoverageFunctions.onBrandMonth
 exports.onLegacyStoreLifecycleCoverageChange = targetCoverageFunctions.onLegacyStoreLifecycleCoverageChange;
 exports.onBrandStoreLifecycleCoverageChange = targetCoverageFunctions.onBrandStoreLifecycleCoverageChange;
 
+// ==========================================
+// ★ Pre-Batch-5：Historical Target Coverage Read-only Audit
+// 只讀 monthly_targets_summary + store_lifecycle，分類歷史月份 migration readiness。
+// 不掃 Raw monthly_targets、不寫資料、不新增 polling / listener。
+// ==========================================
+const { createTargetCoverageAuditFunctions } = require("./targetCoverageAudit");
+const targetCoverageAuditFunctions = createTargetCoverageAuditFunctions({ admin, db });
+exports.auditHistoricalTargetCoverage = targetCoverageAuditFunctions.auditHistoricalTargetCoverage;
+
 
 // ==========================================
 // ★ Summary Semantics v1：Batch 4 additive semantic contract

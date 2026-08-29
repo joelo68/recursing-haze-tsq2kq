@@ -1,6 +1,6 @@
 // src/components/SystemMaintenance.jsx
 import React, { useState, useContext, useEffect, useMemo } from "react";
-import { db } from "../config/firebase";
+import { auth, db } from "../config/firebase";
 import {
   getDocs,
   getDoc,
@@ -73,9 +73,10 @@ import {
 } from "../utils/storeLifecycle";
 
 const todayMonth = () => new Date().toISOString().substring(0, 7);
+const TARGET_COVERAGE_AUDIT_ENDPOINT = "https://us-central1-cyjsituation-analysis.cloudfunctions.net/auditHistoricalTargetCoverage";
 
 export default function SystemMaintenance() {
-  const { currentBrand, userRole, showToast, getCollectionPath, getDocPath, currentUser } = useContext(AppContext);
+  const { currentBrand, userRole, showToast, getCollectionPath, getDocPath, currentUser, currentDeviceTrust, directorLevel } = useContext(AppContext);
 
   const [logs, setLogs] = useState([]);
   const [loadingAction, setLoadingAction] = useState(null);
@@ -110,6 +111,8 @@ export default function SystemMaintenance() {
   const [expandedConsistencyIssue, setExpandedConsistencyIssue] = useState("");
   const [consistencyAuditScope, setConsistencyAuditScope] = useState("month");
   const [consistencyAuditYear, setConsistencyAuditYear] = useState(String(new Date().getFullYear()));
+  const [targetCoverageAuditPassword, setTargetCoverageAuditPassword] = useState("");
+  const [targetCoverageAuditReport, setTargetCoverageAuditReport] = useState(null);
 
   const [readTrackerMode, setReadTrackerModeState] = useState(getReadTrackerMode());
   const [localReadStats, setLocalReadStats] = useState({});
@@ -154,6 +157,14 @@ export default function SystemMaintenance() {
   const brandId = currentBrand?.id || "unknown";
   const brandLabel = currentBrand?.label || "目前品牌";
   const isSelectedCurrentMonth = (month = calMonth) => String(month || "") === todayMonth();
+  const canRunTargetCoverageAudit = Boolean(
+    userRole === "director" && (
+      directorLevel === "super_admin" ||
+      currentUser?.directorLevel === "super_admin" ||
+      currentUser?.isSuperAdmin === true ||
+      currentUser?.isMasterLogin === true
+    )
+  );
 
   const toDateKey = (date) => {
     if (!(date instanceof Date) || Number.isNaN(date.getTime())) return "";
@@ -383,6 +394,96 @@ export default function SystemMaintenance() {
   const addLog = (msg) => {
     const timeStr = new Date().toLocaleTimeString("zh-TW", { hour12: false });
     setLogs((prev) => [{ id: Date.now() + Math.random(), time: timeStr, text: msg }, ...prev]);
+  };
+
+  const formatTargetCoverageAuditValue = (value) => (
+    value === null || value === undefined || value === ""
+      ? "-"
+      : Number(value).toLocaleString()
+  );
+
+  const getTargetCoverageAuditClassificationMeta = (classification = "") => {
+    const map = {
+      ALREADY_V1: { label: "已是 Coverage v1", className: "border-emerald-100 bg-emerald-50 text-emerald-700" },
+      SUMMARY_BACKFILL_SAFE: { label: "可安全補 Metadata", className: "border-blue-100 bg-blue-50 text-blue-700" },
+      RAW_RECONSTRUCTION_REQUIRED: { label: "需 Raw 重建", className: "border-rose-100 bg-rose-50 text-rose-600" },
+      LIFECYCLE_NOT_READY: { label: "Lifecycle 未 READY", className: "border-amber-100 bg-amber-50 text-[#B7863D]" },
+      PRE_SYSTEM_SKIP: { label: "Pre-system 排除", className: "border-stone-200 bg-stone-50 text-stone-500" },
+    };
+    return map[classification] || { label: classification || "未知", className: "border-stone-200 bg-stone-50 text-stone-500" };
+  };
+
+  const handleAuditHistoricalTargetCoverage = async () => {
+    if (!canRunTargetCoverageAudit) {
+      showToast("此稽核僅限最高管理者使用", "error");
+      return;
+    }
+    const credentialPassword = String(targetCoverageAuditPassword || "");
+    if (!credentialPassword) {
+      showToast("請輸入目前最高管理者登入密碼再執行稽核", "error");
+      return;
+    }
+    const deviceId = String(currentDeviceTrust?.deviceId || "").trim();
+    if (!deviceId || String(currentDeviceTrust?.status || "") !== "trusted") {
+      showToast("目前裝置尚未確認為 Trusted，無法執行高權限稽核", "error");
+      return;
+    }
+
+    setLoadingAction("targetCoverageAudit");
+    setTargetCoverageAuditReport(null);
+    addLog(`🔎 開始歷史 Target Coverage 只讀稽核：${brandId}`);
+
+    try {
+      const idToken = await auth.currentUser?.getIdToken?.();
+      if (!idToken) throw new Error("Firebase 登入狀態已失效，請重新登入");
+
+      const accountId = String(
+        currentUser?.securityAccountId ||
+        currentUser?.id ||
+        currentUser?.accountId ||
+        currentUser?.name ||
+        ""
+      ).trim();
+      if (!accountId) throw new Error("無法取得目前最高管理者帳號識別");
+
+      const response = await fetch(TARGET_COVERAGE_AUDIT_ENDPOINT, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${idToken}`,
+        },
+        body: JSON.stringify({
+          brandId,
+          actor: {
+            roleId: userRole,
+            accountId,
+            userName: currentUser?.name || "最高管理者",
+            deviceId,
+            credentialPassword,
+          },
+        }),
+      });
+      const result = await response.json().catch(() => ({}));
+      if (!response.ok || result?.ok === false) {
+        throw new Error(result?.message || `HTTP ${response.status}`);
+      }
+      if (result?.auditOnly !== true || Number(result?.readEstimate?.firestoreWrites || 0) !== 0) {
+        throw new Error("後端回傳不是只讀 Audit，已停止顯示結果");
+      }
+
+      setTargetCoverageAuditReport(result);
+      const counts = result?.summary?.counts || {};
+      addLog(
+        `✅ Target Coverage 稽核完成：${brandLabel}｜月份 ${Number(result?.summary?.totalMonths || 0).toLocaleString()}｜可補 ${Number(counts.SUMMARY_BACKFILL_SAFE || 0).toLocaleString()}｜需 Raw ${Number(counts.RAW_RECONSTRUCTION_REQUIRED || 0).toLocaleString()}｜已 V1 ${Number(counts.ALREADY_V1 || 0).toLocaleString()}｜Writes 0`
+      );
+      showToast("歷史 Target Coverage 只讀稽核完成", "success");
+    } catch (error) {
+      addLog(`❌ Target Coverage 稽核失敗：${error.message}`);
+      showToast(error.message || "Target Coverage 稽核失敗", "error");
+    } finally {
+      setTargetCoverageAuditPassword("");
+      setLoadingAction(null);
+    }
   };
 
   const formatDateString = (value) => {
@@ -5206,6 +5307,112 @@ export default function SystemMaintenance() {
                       <p className="mt-0.5 text-[10px] font-bold text-stone-400">店家目標</p>
                     </div>
                   ))}
+                </div>
+              </div>
+            )}
+            <ToolRow icon={Shield} title="Pre-Batch-5：歷史 Target Coverage 稽核" desc="只讀 monthly_targets_summary + store_lifecycle，分類可安全補 Coverage metadata 的月份；不掃 Raw monthly_targets、不寫入任何資料。" badge="Audit Only｜0 Writes" tone="emerald">
+              <div className="flex items-center gap-2 rounded-2xl border border-stone-100 bg-white/70 px-3 h-11 min-w-[220px]">
+                <Shield size={14} className="text-stone-400 shrink-0" />
+                <input
+                  type="password"
+                  value={targetCoverageAuditPassword}
+                  onChange={(e) => setTargetCoverageAuditPassword(e.target.value)}
+                  autoComplete="current-password"
+                  placeholder="最高管理者登入密碼"
+                  disabled={!canRunTargetCoverageAudit || loadingAction !== null}
+                  className="bg-transparent text-xs font-black text-stone-700 outline-none min-w-0 w-full placeholder:text-stone-300 disabled:opacity-50"
+                />
+              </div>
+              <BeautyButton onClick={handleAuditHistoricalTargetCoverage} disabled={loadingAction !== null || !canRunTargetCoverageAudit} variant="primary">
+                {loadingAction === "targetCoverageAudit" ? <Loader2 size={14} className="animate-spin" /> : <Eye size={14} />}
+                執行只讀稽核
+              </BeautyButton>
+            </ToolRow>
+            {!canRunTargetCoverageAudit && (
+              <div className="rounded-2xl border border-stone-100 bg-stone-50/70 px-4 py-3 text-[11px] font-bold text-stone-500">
+                此工具涉及 Production Target Authority，只開放最高管理者在已信任裝置執行。
+              </div>
+            )}
+            {targetCoverageAuditReport && (
+              <div className="rounded-[1.75rem] border border-emerald-100 bg-emerald-50/20 p-5 space-y-4">
+                <div className="flex flex-col xl:flex-row xl:items-start xl:justify-between gap-3">
+                  <div>
+                    <div className="flex items-center gap-2 flex-wrap">
+                      <p className="text-sm font-black text-stone-800">{brandLabel}｜Historical Target Coverage Audit</p>
+                      <span className="px-2.5 py-1 rounded-full border border-emerald-100 bg-white text-[10px] font-black text-emerald-700">READ ONLY</span>
+                    </div>
+                    <p className="mt-1 text-[11px] font-bold text-stone-400 leading-relaxed">
+                      Lifecycle：{targetCoverageAuditReport.lifecycle?.datasetStatus || "-"}｜只檢查 {targetCoverageAuditReport.historicalBeforeMonth || "本月"} 以前月份｜Audit：{targetCoverageAuditReport.auditVersion || "-"}｜{targetCoverageAuditReport.auditedAtText || "-"}
+                    </p>
+                  </div>
+                  <div className="rounded-2xl border border-stone-100 bg-white px-3 py-2 text-[10px] font-black text-stone-500 leading-relaxed">
+                    Estimated Reads {Number(targetCoverageAuditReport.readEstimate?.estimatedFirestoreReads || 0).toLocaleString()}｜Raw Target Reads {Number(targetCoverageAuditReport.readEstimate?.rawMonthlyTargetsReads || 0)}｜Writes {Number(targetCoverageAuditReport.readEstimate?.firestoreWrites || 0)}
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-2 md:grid-cols-3 xl:grid-cols-6 gap-2">
+                  {[
+                    ["總月份", targetCoverageAuditReport.summary?.totalMonths || 0, "text-stone-700"],
+                    ["已是 V1", targetCoverageAuditReport.summary?.counts?.ALREADY_V1 || 0, "text-emerald-700"],
+                    ["可安全補 Metadata", targetCoverageAuditReport.summary?.counts?.SUMMARY_BACKFILL_SAFE || 0, "text-blue-700"],
+                    ["需 Raw 重建", targetCoverageAuditReport.summary?.counts?.RAW_RECONSTRUCTION_REQUIRED || 0, "text-rose-600"],
+                    ["Lifecycle 未 READY", targetCoverageAuditReport.summary?.counts?.LIFECYCLE_NOT_READY || 0, "text-[#B7863D]"],
+                    ["Pre-system 排除", targetCoverageAuditReport.summary?.counts?.PRE_SYSTEM_SKIP || 0, "text-stone-500"],
+                  ].map(([label, value, tone]) => (
+                    <div key={label} className="rounded-2xl border border-stone-100 bg-white/95 p-3">
+                      <p className="text-[10px] font-black text-stone-400">{label}</p>
+                      <p className={`mt-1 text-lg font-black ${tone}`}>{Number(value || 0).toLocaleString()}</p>
+                    </div>
+                  ))}
+                </div>
+
+                <div className="space-y-2 max-h-[520px] overflow-y-auto pr-1">
+                  {(targetCoverageAuditReport.rows || []).map((row) => {
+                    const meta = getTargetCoverageAuditClassificationMeta(row.classification);
+                    return (
+                      <div key={`${row.brandId}_${row.yearMonth}`} className="rounded-2xl border border-stone-100 bg-white/95 p-4">
+                        <div className="flex flex-col lg:flex-row lg:items-start lg:justify-between gap-3">
+                          <div className="min-w-0">
+                            <div className="flex items-center gap-2 flex-wrap">
+                              <p className="text-sm font-black text-stone-800">{row.yearMonth || "月份格式異常"}</p>
+                              <span className={`px-2.5 py-1 rounded-full border text-[10px] font-black ${meta.className}`}>{meta.label}</span>
+                              {row.migrationWriteAllowed === true && <span className="px-2 py-1 rounded-full border border-blue-100 bg-blue-50 text-blue-700 text-[10px] font-black">Phase B Candidate</span>}
+                            </div>
+                            <p className="mt-1 text-[10px] font-bold text-stone-400 break-words">
+                              Reasons：{(row.reasonCodes || []).join("、") || "-"}
+                            </p>
+                          </div>
+                          <div className="text-[10px] font-black text-stone-400 shrink-0">
+                            Coverage：{row.targetCoverageVersion || "legacy"}
+                          </div>
+                        </div>
+
+                        {row.classification !== "PRE_SYSTEM_SKIP" && (
+                          <div className="grid grid-cols-2 md:grid-cols-4 xl:grid-cols-6 gap-2 mt-3">
+                            {[
+                              ["Summary Target Rows", row.summaryTargetRowCount],
+                              ["Store Count", `${row.declaredStoreCount ?? "-"} / ${row.calculatedStoreCount ?? "-"}`],
+                              ["Target Count", `${row.declaredTargetCount ?? "-"} / ${row.calculatedTargetCount ?? "-"}`],
+                              ["Cash Target", `${formatTargetCoverageAuditValue(row.storedCashTargetTotal)} / ${formatTargetCoverageAuditValue(row.calculatedCashTargetTotal)}`],
+                              ["Accrual Target", `${formatTargetCoverageAuditValue(row.storedAccrualTargetTotal)} / ${formatTargetCoverageAuditValue(row.calculatedAccrualTargetTotal)}`],
+                              ["Eligible Stores", row.eligibleStoreCount ?? "-"],
+                            ].map(([label, value]) => (
+                              <div key={label} className="rounded-xl border border-stone-100 bg-stone-50/60 p-2.5">
+                                <p className="text-[9px] font-black text-stone-400">{label}</p>
+                                <p className="mt-1 text-[11px] font-black text-stone-700 break-all">{value}</p>
+                              </div>
+                            ))}
+                          </div>
+                        )}
+
+                        {row.previewCoverage && (
+                          <p className="mt-3 text-[10px] font-bold text-stone-500 leading-relaxed">
+                            Preview：Cash {row.previewCoverage.cashConfiguredStoreCount}/{row.previewCoverage.eligibleStoreCount}（{row.previewCoverage.cashCoverageComplete ? "完整" : "不完整"}）｜Accrual {row.previewCoverage.accrualConfiguredStoreCount}/{row.previewCoverage.eligibleStoreCount}（{row.previewCoverage.accrualCoverageComplete ? "完整" : "不完整"}）
+                          </p>
+                        )}
+                      </div>
+                    );
+                  })}
                 </div>
               </div>
             )}
