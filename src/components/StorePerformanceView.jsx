@@ -40,8 +40,19 @@ const StorePerformanceView = ({ dashboardStats, myStoreRankings, brandInfo }) =>
   if (!dashboardStats) return null;
 
   const { grandTotal: storeGrandTotal, dailyTotals, totalAchievement, daysPassed, daysInMonth } = dashboardStats;
+  const formalConsumerActive = dashboardStats.formalConsumerActive === true;
+  const isFiniteKpi = (value) => typeof value === "number" && Number.isFinite(value);
+  const cashAchievementAvailable = isFiniteKpi(totalAchievement);
+  const accrualAchievementAvailable = isFiniteKpi(dashboardStats.totalAccrualAchievement);
   const timeProgress = daysInMonth > 0 ? (daysPassed / daysInMonth) * 100 : 0;
-  const paceGap = totalAchievement - timeProgress;
+  const paceGap = cashAchievementAvailable ? totalAchievement - timeProgress : null;
+  const formatKpiMoney = (value) => (formalConsumerActive && !isFiniteKpi(value) ? "N/A" : fmtMoney(value));
+  const formatKpiPercent = (value) => (isFiniteKpi(value) ? `${value.toFixed(0)}%` : "N/A");
+  const formatProjectionTargetRate = (projection, target) => {
+    const targetValue = Number(target);
+    if (formalConsumerActive && (!isFiniteKpi(projection) || !isFiniteKpi(target))) return "N/A";
+    return targetValue > 0 ? `${((Number(projection || 0) / targetValue) * 100).toFixed(0)}%` : "0%";
+  };
   const annualKpiBenchmark = dashboardStats.annualKpiBenchmark || {};
   const formatAnnualBenchmark = (value) => {
     const numeric = Number(value || 0);
@@ -323,7 +334,7 @@ const StorePerformanceView = ({ dashboardStats, myStoreRankings, brandInfo }) =>
   return (
     <div className="space-y-8 animate-in fade-in slide-in-from-bottom-4 duration-500 w-full min-w-0">
       <ProjectionInfoDrawer />
-      
+
 
       {/* 我的店家戰情卡 (僅店經理顯示) */}
       {userRole === 'store' && myStoreRankings.length > 0 && (
@@ -388,12 +399,12 @@ const StorePerformanceView = ({ dashboardStats, myStoreRankings, brandInfo }) =>
           })}
         </div>
       )}
-      
+
       {/* 營運節奏監控 與 全新月底推估 */}
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
         <div className="lg:col-span-2 bg-white rounded-3xl p-6 md:p-8 border border-stone-100 shadow-xl shadow-stone-200/50 relative overflow-hidden group flex flex-col h-full">
           <div className="absolute top-0 right-0 w-64 h-64 bg-indigo-50 rounded-full blur-3xl -mr-16 -mt-16 pointer-events-none opacity-60"></div>
-          
+
           <div className="flex flex-col md:flex-row justify-between items-start md:items-center mb-6 md:mb-8 relative z-10 shrink-0">
             <div>
               <div className="flex items-center gap-2 mb-2">
@@ -402,24 +413,24 @@ const StorePerformanceView = ({ dashboardStats, myStoreRankings, brandInfo }) =>
               </div>
               <h2 className="text-3xl md:text-4xl font-extrabold font-mono tracking-tight text-stone-700">Day {daysPassed} <span className="text-lg text-stone-300 font-sans">/ {daysInMonth}</span></h2>
             </div>
-            <div className={`mt-4 md:mt-0 px-4 py-2 rounded-xl flex items-center gap-2 ${paceGap >= 0 ? "bg-emerald-50 text-emerald-600 border border-emerald-100" : "bg-rose-50 text-rose-600 border border-rose-100"}`}>
-              <span className="text-sm font-bold">{paceGap >= 0 ? "超前預算" : "落後預算"}</span>
-              <span className="text-xl font-mono font-bold">{Math.abs(paceGap).toFixed(0)}%</span>
+            <div className={`mt-4 md:mt-0 px-4 py-2 rounded-xl flex items-center gap-2 ${paceGap === null ? "bg-stone-50 text-stone-500 border border-stone-100" : paceGap >= 0 ? "bg-emerald-50 text-emerald-600 border border-emerald-100" : "bg-rose-50 text-rose-600 border border-rose-100"}`}>
+              <span className="text-sm font-bold">{paceGap === null ? "目標資料未完整" : paceGap >= 0 ? "超前預算" : "落後預算"}</span>
+              <span className="text-xl font-mono font-bold">{paceGap === null ? "N/A" : `${Math.abs(paceGap).toFixed(0)}%`}</span>
             </div>
           </div>
-          
+
           <div className="flex-1 flex flex-col relative z-10">
             <div className="flex-1 flex flex-col justify-center gap-8 pb-8">
               <div className="space-y-3">
                 <div className="flex justify-between text-sm md:text-base font-bold">
                   <span className="text-stone-500">實際達成率 (預算)</span>
-                  <span className={totalAchievement >= timeProgress ? "text-emerald-500" : "text-rose-500"}>{totalAchievement.toFixed(0)}%</span>
+                  <span className={!cashAchievementAvailable ? "text-stone-400" : totalAchievement >= timeProgress ? "text-emerald-500" : "text-rose-500"}>{formatKpiPercent(totalAchievement)}</span>
                 </div>
                 <div className="w-full bg-stone-100 h-3.5 md:h-4 rounded-full overflow-hidden shadow-inner">
-                  <div className={`h-full rounded-full transition-all duration-1000 ${totalAchievement >= 100 ? "bg-gradient-to-r from-emerald-400 to-teal-400" : totalAchievement >= timeProgress ? "bg-emerald-400" : "bg-rose-400"}`} style={{ width: `${Math.min(totalAchievement, 100)}%` }} />
+                  <div className={`h-full rounded-full transition-all duration-1000 ${!cashAchievementAvailable ? "bg-stone-300" : totalAchievement >= 100 ? "bg-gradient-to-r from-emerald-400 to-teal-400" : totalAchievement >= timeProgress ? "bg-emerald-400" : "bg-rose-400"}`} style={{ width: `${cashAchievementAvailable ? Math.min(Math.max(totalAchievement, 0), 100) : 0}%` }} />
                 </div>
               </div>
-              
+
               {storeGrandTotal.hasChallengeCash && (
                  <div className="space-y-3">
                    <div className="flex justify-between text-sm md:text-base font-bold">
@@ -429,9 +440,9 @@ const StorePerformanceView = ({ dashboardStats, myStoreRankings, brandInfo }) =>
                      </span>
                    </div>
                    <div className="w-full bg-amber-50 h-3 md:h-3.5 rounded-full overflow-hidden border border-amber-100">
-                     <div 
-                       className={`h-full rounded-full transition-all duration-1000 ${dashboardStats.challengeAchievement >= 100 ? "bg-gradient-to-r from-amber-400 to-yellow-400 shadow-[0_0_10px_rgba(251,191,36,0.8)]" : "bg-amber-300"}`} 
-                       style={{ width: `${Math.min(dashboardStats.challengeAchievement, 100)}%` }} 
+                     <div
+                       className={`h-full rounded-full transition-all duration-1000 ${dashboardStats.challengeAchievement >= 100 ? "bg-gradient-to-r from-amber-400 to-yellow-400 shadow-[0_0_10px_rgba(251,191,36,0.8)]" : "bg-amber-300"}`}
+                       style={{ width: `${Math.min(dashboardStats.challengeAchievement, 100)}%` }}
                      />
                    </div>
                  </div>
@@ -478,7 +489,7 @@ const StorePerformanceView = ({ dashboardStats, myStoreRankings, brandInfo }) =>
                 <div className="flex flex-wrap gap-2 mb-3">
                   <div className="inline-flex items-center gap-1 px-2 py-1 bg-emerald-50 text-emerald-700 rounded-md text-[11px] font-bold border border-emerald-100">
                     <span>{storeGrandTotal.hasChallengeCash ? '預算達成' : '預估達成'}</span>
-                    <span>{storeGrandTotal.budget > 0 ? ((storeGrandTotal.projection / storeGrandTotal.budget) * 100).toFixed(0) : 0}%</span>
+                    <span>{formatProjectionTargetRate(storeGrandTotal.projection, storeGrandTotal.budget)}</span>
                   </div>
                   {storeGrandTotal.hasChallengeCash && (
                     <div className="inline-flex items-center gap-1 px-2 py-1 bg-amber-50 text-amber-700 rounded-md text-[11px] font-bold border border-amber-100 shadow-sm">
@@ -491,7 +502,7 @@ const StorePerformanceView = ({ dashboardStats, myStoreRankings, brandInfo }) =>
                 <div className="space-y-1.5 pt-3 border-t border-stone-200/60">
                   <div className="flex justify-between items-center text-[11px]">
                      <span className="text-stone-400">預算目標</span>
-                     <span className="font-mono font-bold text-stone-500">{fmtMoney(storeGrandTotal.budget)}</span>
+                     <span className="font-mono font-bold text-stone-500">{formatKpiMoney(storeGrandTotal.budget)}</span>
                   </div>
                   {storeGrandTotal.hasChallengeCash && (
                      <div className="flex justify-between items-center text-[11px]">
@@ -514,7 +525,7 @@ const StorePerformanceView = ({ dashboardStats, myStoreRankings, brandInfo }) =>
                 <div className="flex flex-wrap gap-2 mb-3">
                   <div className="inline-flex items-center gap-1 px-2 py-1 bg-emerald-50 text-emerald-700 rounded-md text-[11px] font-bold border border-emerald-100">
                     <span>{storeGrandTotal.hasChallengeAccrual ? '預算達成' : '預估達成'}</span>
-                    <span>{storeGrandTotal.accrualBudget > 0 ? ((storeGrandTotal.accrualProjection / storeGrandTotal.accrualBudget) * 100).toFixed(0) : 0}%</span>
+                    <span>{formatProjectionTargetRate(storeGrandTotal.accrualProjection, storeGrandTotal.accrualBudget)}</span>
                   </div>
                   {storeGrandTotal.hasChallengeAccrual && (
                     <div className="inline-flex items-center gap-1 px-2 py-1 bg-amber-50 text-amber-700 rounded-md text-[11px] font-bold border border-amber-100 shadow-sm">
@@ -527,7 +538,7 @@ const StorePerformanceView = ({ dashboardStats, myStoreRankings, brandInfo }) =>
                 <div className="space-y-1.5 pt-3 border-t border-stone-200/60">
                   <div className="flex justify-between items-center text-[11px]">
                      <span className="text-stone-400">預算目標</span>
-                     <span className="font-mono font-bold text-stone-500">{fmtMoney(storeGrandTotal.accrualBudget)}</span>
+                     <span className="font-mono font-bold text-stone-500">{formatKpiMoney(storeGrandTotal.accrualBudget)}</span>
                   </div>
                   {storeGrandTotal.hasChallengeAccrual && (
                      <div className="flex justify-between items-center text-[11px]">
@@ -541,14 +552,14 @@ const StorePerformanceView = ({ dashboardStats, myStoreRankings, brandInfo }) =>
           </div>
         </div>
       </div>
-      
+
       {/* 財務與營運卡片 */}
       <div><h3 className="text-lg font-bold text-stone-700 mb-4 flex items-center gap-2 pl-1"><div className="w-1 h-6 bg-amber-500 rounded-full"></div>財務績效</h3>
         <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-          <MiniKpiCard title="總現金業績" value={fmtMoney(storeGrandTotal.cash)} icon={DollarSign} color="text-amber-500" 
+          <MiniKpiCard title="總現金業績" value={formatKpiMoney(storeGrandTotal.cash)} icon={DollarSign} color="text-amber-500"
             subText={
               <div className="flex flex-col gap-1 w-full">
-                <div className="flex items-center justify-between"><span className={`font-bold ${totalAchievement >= 100 ? "text-emerald-600" : "text-stone-500"}`}>預算目標達成率</span><span className={`font-bold ${totalAchievement >= 100 ? "text-emerald-600" : "text-stone-500"}`}>{totalAchievement.toFixed(0)}%</span></div>
+                <div className="flex items-center justify-between"><span className={`font-bold ${cashAchievementAvailable && totalAchievement >= 100 ? "text-emerald-600" : "text-stone-500"}`}>預算目標達成率</span><span className={`font-bold ${cashAchievementAvailable && totalAchievement >= 100 ? "text-emerald-600" : "text-stone-500"}`}>{formatKpiPercent(totalAchievement)}</span></div>
                 {storeGrandTotal.hasChallengeCash && (
                    <div className="flex items-center justify-between border-t border-stone-100 pt-1">
                      <span className={`font-bold text-[11px] ${dashboardStats.challengeAchievement >= 100 ? "text-amber-600" : "text-amber-600/60"}`}><Star size={10} className="inline mb-0.5"/> 挑戰目標達成率</span>
@@ -556,12 +567,12 @@ const StorePerformanceView = ({ dashboardStats, myStoreRankings, brandInfo }) =>
                    </div>
                 )}
               </div>
-            } 
+            }
           />
-          <MiniKpiCard title="總權責業績" value={fmtMoney(storeGrandTotal.accrual)} icon={CreditCard} color="text-cyan-500" 
+          <MiniKpiCard title="總權責業績" value={formatKpiMoney(storeGrandTotal.accrual)} icon={CreditCard} color="text-cyan-500"
             subText={
               <div className="flex flex-col gap-1 w-full">
-                <div className="flex items-center justify-between"><span className={`font-bold ${dashboardStats.totalAccrualAchievement >= 100 ? "text-emerald-600" : "text-stone-500"}`}>預算目標達成率</span><span className={`font-bold ${dashboardStats.totalAccrualAchievement >= 100 ? "text-emerald-600" : "text-stone-500"}`}>{dashboardStats.totalAccrualAchievement.toFixed(0)}%</span></div>
+                <div className="flex items-center justify-between"><span className={`font-bold ${accrualAchievementAvailable && dashboardStats.totalAccrualAchievement >= 100 ? "text-emerald-600" : "text-stone-500"}`}>預算目標達成率</span><span className={`font-bold ${accrualAchievementAvailable && dashboardStats.totalAccrualAchievement >= 100 ? "text-emerald-600" : "text-stone-500"}`}>{formatKpiPercent(dashboardStats.totalAccrualAchievement)}</span></div>
                 {storeGrandTotal.hasChallengeAccrual && (
                    <div className="flex items-center justify-between border-t border-stone-100 pt-1">
                      <span className={`font-bold text-[11px] ${dashboardStats.challengeAccrualAchievement >= 100 ? "text-amber-600" : "text-amber-600/60"}`}><Star size={10} className="inline mb-0.5"/> 挑戰目標達成率</span>
@@ -569,20 +580,20 @@ const StorePerformanceView = ({ dashboardStats, myStoreRankings, brandInfo }) =>
                    </div>
                 )}
               </div>
-            } 
+            }
           />
-          <MiniKpiCard title="總保養品業績" value={fmtMoney(storeGrandTotal.skincareSales)} icon={ShoppingBag} color="text-rose-500" 
+          <MiniKpiCard title="總保養品業績" value={fmtMoney(storeGrandTotal.skincareSales)} icon={ShoppingBag} color="text-rose-500"
             subText={
               <div className="flex items-center gap-3 w-full">
                  <span>佔現金 <span className="font-bold text-stone-700 ml-1">{storeGrandTotal.cash > 0 ? ((storeGrandTotal.skincareSales / storeGrandTotal.cash) * 100).toFixed(0) : 0}%</span></span>
                  <span className="w-px h-3 bg-stone-300"></span>
                  <span>佔權責 <span className="font-bold text-stone-700 ml-1">{storeGrandTotal.accrual > 0 ? ((storeGrandTotal.skincareSales / storeGrandTotal.accrual) * 100).toFixed(0) : 0}%</span></span>
               </div>
-            } 
+            }
           />
         </div>
       </div>
-      
+
       {/* 營運效率與客流 */}
       <div>
          <h3 className="text-lg font-bold text-stone-700 mb-4 flex items-center gap-2 pl-1"><div className="w-1 h-6 bg-cyan-500 rounded-full"></div>營運效率與客流</h3>
@@ -591,11 +602,11 @@ const StorePerformanceView = ({ dashboardStats, myStoreRankings, brandInfo }) =>
            <MiniKpiCard title="平均操作權責" value={fmtMoney(dashboardStats.avgTrafficASP)} icon={TrendingUp} color="text-indigo-500" subText={<span className={dashboardStats.avgTrafficASP >= targets.trafficASP ? "text-emerald-500 font-bold" : "text-rose-500 font-bold"}>{dashboardStats.avgTrafficASP >= targets.trafficASP ? "達標" : "未達標"} (目標 {fmtNum(targets.trafficASP)})</span>} />
            <MiniKpiCard title="總新客數" value={fmtNum(storeGrandTotal.newCustomers)} icon={Sparkles} color="text-purple-500" subText="本月新增體驗人數" benchmarkText={newCustomerMonthlyAverageText} benchmarkLabel="年均" benchmarkMonths={annualBenchmarkMonths} benchmarkMonthCount={annualBenchmarkMonthCount} />
            <MiniKpiCard title="總新客留單" value={fmtNum(storeGrandTotal.newCustomerClosings)} icon={CheckSquare} color="text-teal-500" subText={<span>留單率 <span className="font-bold">{storeGrandTotal.newCustomers > 0 ? ((storeGrandTotal.newCustomerClosings / storeGrandTotal.newCustomers) * 100).toFixed(0) : 0}%</span></span>} />
-           <MiniKpiCard 
-             title="新客平均客單" 
-             value={fmtMoney(dashboardStats.avgNewCustomerASP)} 
-             icon={Award} 
-             color="text-fuchsia-500" 
+           <MiniKpiCard
+             title="新客平均客單"
+             value={fmtMoney(dashboardStats.avgNewCustomerASP)}
+             icon={Award}
+             color="text-fuchsia-500"
              subText={
                <div className="flex items-center justify-between w-full">
                  <span className={dashboardStats.avgNewCustomerASP >= targets.newASP ? "text-emerald-500 font-bold" : "text-rose-500 font-bold"}>
@@ -605,7 +616,7 @@ const StorePerformanceView = ({ dashboardStats, myStoreRankings, brandInfo }) =>
                    總業績 <span className="text-stone-500 font-bold">{fmtMoney(storeGrandTotal.newCustomerSales)}</span>
                  </span>
                </div>
-             } 
+             }
            />
            <MiniKpiCard title="新 / 舊客 結構比" value={`${dashboardStats.newCountMix}% / ${dashboardStats.oldCountMix}%`} icon={PieChart} color="text-pink-500" subText={<span className="flex items-center gap-1 text-stone-500">業績比 <span className="font-bold text-stone-700">{dashboardStats.newRevMix}% / {dashboardStats.oldRevMix}%</span></span>} />
          </div>
@@ -615,7 +626,7 @@ const StorePerformanceView = ({ dashboardStats, myStoreRankings, brandInfo }) =>
       {/* ★ 全區門市實時戰報 (加入「戰鬥挑釁風」小方塊)                                       */}
       {/* ============================================================================== */}
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-4 lg:gap-5 mb-2 mt-4">
-        
+
         {/* 1. 本月全區門市 Top 3 */}
         <div className="bg-white rounded-3xl border border-stone-100 shadow-sm hover:shadow-md transition-all relative overflow-hidden flex flex-col h-full group">
           <div className="absolute top-0 right-0 p-4 opacity-[0.03] group-hover:opacity-10 transition-opacity text-amber-500 pointer-events-none"><Trophy size={80} /></div>
@@ -704,7 +715,7 @@ const StorePerformanceView = ({ dashboardStats, myStoreRankings, brandInfo }) =>
         </div>
 
       </div>
-      
+
       {/* 走勢圖 */}
       <Card title={`${brandInfo.name} 日營運走勢`} subtitle="現金業績 vs 課程操作人數趨勢分析"><div className="h-[300px] w-full"><ResponsiveContainer width="100%" height="100%"><ComposedChart data={dailyTotals} margin={{ top: 10, right: 10, left: 0, bottom: 0 }}><CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#f5f5f4" /><XAxis dataKey="date" stroke="#a8a29e" tick={{ fontSize: 12 }} dy={10} /><YAxis yAxisId="left" stroke="#a8a29e" tick={{ fontSize: 12 }} width={60} tickFormatter={(val) => val === 0 ? "0" : `$${(val / 1000).toFixed(0)}k`} /><YAxis yAxisId="right" orientation="right" stroke="#a8a29e" tick={{ fontSize: 12 }} tickFormatter={(val) => fmtNum(val)} /><RechartsTooltip contentStyle={{ borderRadius: "16px", border: "none", padding: "12px", boxShadow: "0 4px 6px -1px rgb(0 0 0 / 0.1)", }} cursor={{ fill: "#fafaf9" }} formatter={(value, name) => { if (name === "現金業績") return [fmtMoney(value), name]; return [fmtNum(value), name]; }} /><Area yAxisId="left" type="monotone" dataKey="cash" name="現金業績" stroke="#f59e0b" fill="#f59e0b" fillOpacity={0.2} strokeWidth={3} /><Line yAxisId="right" type="monotone" dataKey="traffic" name="課程操作人數" stroke="#0ea5e9" strokeWidth={3} /></ComposedChart></ResponsiveContainer></div></Card>
 

@@ -5,6 +5,8 @@ import { sortManagerNames, sortStoreNames, sortManagersByOrgOrder, sortStoresByO
 // ★ 新增了 collection 與 getDocs，讓我們一次把全公司的專屬小抄都抓下來
 import { doc, getDoc, collection, getDocs, query, where, limit, onSnapshot } from 'firebase/firestore'; 
 import { db } from '../config/firebase';
+import { KPI_VALUE_STATUS } from '../utils/kpiContracts.js';
+import { buildHistoricalFormalDashboardScope, isFormalDashboardSummaryCompatible } from '../utils/dashboardFormalConsumer.js';
 
 const safeNumber = (value) => Number.isFinite(Number(value)) ? Number(value) : 0;
 
@@ -1533,13 +1535,65 @@ export function useDashboardStats() {
     const isFilteredSummaryView = shouldFilterSummaryStores && effectiveStoreSet.size > 0;
     const summaryGrand = summary.grandTotal || {};
     const grand = isFilteredSummaryView ? aggregateGrandFromStores(stores) : { ...summaryGrand };
-    const projectionPayload = buildProjectionFromSummaryStores(stores, daysPassed, daysInMonth);
 
-    grand.hasChallengeCash = Number(grand.challengeBudget || 0) > Number(grand.budget || 0);
-    grand.hasChallengeAccrual = Number(grand.challengeAccrualBudget || 0) > Number(grand.accrualBudget || 0);
-    grand.projection = projectionPayload.projection || Number(grand.projection || 0);
-    grand.accrualProjection = projectionPayload.accrualProjection || Number(grand.accrualProjection || 0);
-    grand.projectionRange = projectionPayload.projectionRange || grand.projectionRange || null;
+    // Batch 5A-1：歷史 verified Summary 必須正式切到 Batch 4 Formal KPI contract。
+    // 若 Summary schema 尚未升級，直接回到既有 detail fallback，不以 legacy 欄位冒充 Formal。
+    if (!isFormalDashboardSummaryCompatible(summary)) return null;
+    const formalScope = buildHistoricalFormalDashboardScope({
+      summary,
+      stores,
+      monthlyTargetSummary,
+      normalizeStoreKey: cleanName,
+      filtered: isFilteredSummaryView,
+    });
+    if (!formalScope.compatible) return null;
+
+    const legacyGrand = {
+      cash: grand.cash,
+      accrual: grand.accrual,
+      budget: grand.budget,
+      accrualBudget: grand.accrualBudget,
+    };
+
+    // 對既有 Dashboard view-model 做 compatibility mapping：
+    // 舊畫面仍讀 cash/accrual/budget/accrualBudget，但歷史 Summary 模式下這四個欄位改承接 Formal authority。
+    // null 代表缺漏/invalid/TARGET_INCOMPLETE，不能被 Number(... || 0) 吞成合法 0。
+    grand.legacyCash = legacyGrand.cash;
+    grand.legacyAccrual = legacyGrand.accrual;
+    grand.legacyBudget = legacyGrand.budget;
+    grand.legacyAccrualBudget = legacyGrand.accrualBudget;
+    grand.cash = formalScope.cash;
+    grand.accrual = formalScope.accrual;
+    grand.budget = formalScope.cashTarget;
+    grand.accrualBudget = formalScope.accrualTarget;
+    grand.formalNetCash = formalScope.cash;
+    grand.formalNetCashStatus = formalScope.cashStatus;
+    grand.formalAccrual = formalScope.accrual;
+    grand.formalAccrualStatus = formalScope.accrualStatus;
+    grand.formalCashTarget = formalScope.cashTarget;
+    grand.formalCashTargetStatus = formalScope.cashTargetStatus;
+    grand.formalAccrualTarget = formalScope.accrualTarget;
+    grand.formalAccrualTargetStatus = formalScope.accrualTargetStatus;
+    grand.formalCashAchievement = formalScope.cashAchievement;
+    grand.formalCashAchievementStatus = formalScope.cashAchievementStatus;
+    grand.formalAccrualAchievement = formalScope.accrualAchievement;
+    grand.formalAccrualAchievementStatus = formalScope.accrualAchievementStatus;
+    grand.formalConsumerActive = true;
+
+    // Challenge 仍是 compatibility layer；不把 legacy challenge 欄位假裝成 Formal contract。
+    grand.hasChallengeCash = Number.isFinite(formalScope.cashTarget) && Number(grand.challengeBudget || 0) > formalScope.cashTarget;
+    grand.hasChallengeAccrual = Number.isFinite(formalScope.accrualTarget) && Number(grand.challengeAccrualBudget || 0) > formalScope.accrualTarget;
+
+    // 歷史月份已結算，月底推估應與 Formal 實績一致，避免卡片顯示 legacy cash/accrual。
+    const cashProjection = Number.isFinite(formalScope.cash) ? formalScope.cash : null;
+    const accrualProjection = Number.isFinite(formalScope.accrual) ? formalScope.accrual : null;
+    grand.projection = cashProjection;
+    grand.accrualProjection = accrualProjection;
+    grand.projectionRange = {
+      cash: cashProjection === null ? null : { conservative: cashProjection, standard: cashProjection, aggressive: cashProjection, min: cashProjection, max: cashProjection },
+      accrual: accrualProjection === null ? null : { conservative: accrualProjection, standard: accrualProjection, aggressive: accrualProjection, min: accrualProjection, max: accrualProjection },
+      profile: { currentWeight: 1, historyWeight: 0, label: "歷史結算：Formal 實績" },
+    };
 
     const selectedStoreSet = new Set(stores.flatMap((item) => getSummaryStoreCandidates(item)).filter(Boolean));
 
@@ -1603,10 +1657,14 @@ export function useDashboardStats() {
       daysPassed = 0;
     }
 
-    const totalAchievement = Number(grand.budget || 0) > 0 ? (Number(grand.cash || 0) / Number(grand.budget || 0)) * 100 : 0;
-    const totalAccrualAchievement = Number(grand.accrualBudget || 0) > 0 ? (Number(grand.accrual || 0) / Number(grand.accrualBudget || 0)) * 100 : 0;
-    const challengeAchievement = Number(grand.challengeBudget || 0) > 0 ? (Number(grand.cash || 0) / Number(grand.challengeBudget || 0)) * 100 : 0;
-    const challengeAccrualAchievement = Number(grand.challengeAccrualBudget || 0) > 0 ? (Number(grand.accrual || 0) / Number(grand.challengeAccrualBudget || 0)) * 100 : 0;
+    const totalAchievement = formalScope.cashAchievement;
+    const totalAccrualAchievement = formalScope.accrualAchievement;
+    const challengeAchievement = Number.isFinite(formalScope.cash) && Number(grand.challengeBudget || 0) > 0
+      ? (formalScope.cash / Number(grand.challengeBudget)) * 100
+      : 0;
+    const challengeAccrualAchievement = Number.isFinite(formalScope.accrual) && Number(grand.challengeAccrualBudget || 0) > 0
+      ? (formalScope.accrual / Number(grand.challengeAccrualBudget)) * 100
+      : 0;
 
     const avgTrafficASP = Number(grand.traffic || 0) > 0 ? Math.round(Number(grand.operationalAccrual || 0) / Number(grand.traffic || 0)) : 0;
     const avgNewCustomerASP = Number(grand.newCustomers || 0) > 0 ? Math.round(Number(grand.newCustomerSales || 0) / Number(grand.newCustomers || 0)) : 0;
@@ -1655,12 +1713,17 @@ export function useDashboardStats() {
       }));
     };
 
-    const filteredMonthlyTop = [...stores]
-      .sort((a, b) => Number(b.cash || 0) - Number(a.cash || 0))
+    const formalMonthlyTop = [...stores]
+      .filter((item) => (
+        item?.formalLifecycleEligible === true &&
+        [KPI_VALUE_STATUS.VALID, KPI_VALUE_STATUS.VALID_ZERO].includes(item?.formalNetCashStatus) &&
+        Number.isFinite(Number(item?.formalNetCash))
+      ))
+      .sort((a, b) => Number(b.formalNetCash) - Number(a.formalNetCash))
       .slice(0, 3)
       .map((item) => {
         const core = cleanName(getSummaryStoreName(item));
-        return { name: item.displayName || (core ? `${core}店` : ""), revenue: Number(item.cash || 0), streak: false, badgeText: "" };
+        return { name: item.displayName || (core ? `${core}店` : ""), revenue: Number(item.formalNetCash), streak: false, badgeText: "" };
       });
 
     return {
@@ -1678,40 +1741,66 @@ export function useDashboardStats() {
       oldRevMix,
       newCountMix,
       oldCountMix,
-      storeMonthlyTop3: isFilteredSummaryView ? filteredMonthlyTop : mapStoreTop(summary.storeTop3?.monthly),
+      storeMonthlyTop3: formalMonthlyTop,
       storeTodayTop3: mapStoreTop(summary.storeTop3?.today),
       storeYesterdayTop3: mapStoreTop(summary.storeTop3?.yesterday),
       source: preciseFilteredDailyTotals ? "summary_store_daily" : isFilteredSummaryView ? "summary_filtered" : "summary",
       summaryLastUpdatedAtText: summary.lastUpdatedAtText || "",
       summaryFilterMode: isFilteredSummaryView ? (selectedDashboardStore ? "store" : "manager") : "brand",
+      formalConsumerActive: true,
+      formalKpiStatus: {
+        cash: formalScope.cashStatus,
+        cashTarget: formalScope.cashTargetStatus,
+        cashAchievement: formalScope.cashAchievementStatus,
+        accrual: formalScope.accrualStatus,
+        accrualTarget: formalScope.accrualTargetStatus,
+        accrualAchievement: formalScope.accrualAchievementStatus,
+        cashCoverageComplete: formalScope.cashCoverageComplete,
+        accrualCoverageComplete: formalScope.accrualCoverageComplete,
+        lifecycleReady: formalScope.lifecycleReady,
+        scopeEligibleStoreCount: formalScope.scopeEligibleStoreCount,
+        targetSummaryAvailable: formalScope.targetSummaryAvailable,
+      },
     };
-  }, [dashboardSummaryBundle.dashboard, isSummaryDashboardView, selectedYear, selectedMonth, buildProjectionFromSummaryStores, effectiveStores, selectedDashboardManager, selectedDashboardStore, cleanName, getSummaryStoreName, getSummaryStoreCandidates, normalizeSummaryStores, summaryStoreMatchesSet, userRole]);
+  }, [dashboardSummaryBundle.dashboard, isSummaryDashboardView, selectedYear, selectedMonth, effectiveStores, selectedDashboardManager, selectedDashboardStore, cleanName, getSummaryStoreName, getSummaryStoreCandidates, normalizeSummaryStores, summaryStoreMatchesSet, userRole, monthlyTargetSummary]);
 
   const summaryMyStoreRankings = useMemo(() => {
     // ★ 當月門市排行也必須即時，避免主管或店長看到未更新的 Summary 排名。
     if (isSelectedCurrentMonth || !isSummaryTrustedForDashboard) return null;
     const summary = dashboardSummaryBundle.dashboard;
     if (!summary || userRole !== "store" || !currentUser) return null;
+    if (!isFormalDashboardSummaryCompatible(summary)) return null;
 
-    // 店經理代理多店時，歷史 verified Summary 排名也要依正式＋托管範圍顯示。
+    // Batch 5A-1：歷史店經理排名正式改吃 formalStoreRankings。
+    // rank denominator 只使用 formalRankEligibleStoreCount，避免 invalid/missing target 被塞進排名。
+    const formalRanks = Array.isArray(summary.formalStoreRankings) ? summary.formalStoreRankings : [];
+    const formalRankEligibleStoreCount = Number(summary.formalRankEligibleStoreCount || formalRanks.length || 0);
     const myCores = (effectiveStores || []).map(cleanName).filter(Boolean);
-    const allRanks = Array.isArray(summary.storeRankings) ? summary.storeRankings : normalizeSummaryStores(summary.stores || []);
-
     const myCoreSet = new Set(myCores);
+    const summaryStores = normalizeSummaryStores(summary.stores || {});
 
-    return allRanks
+    return formalRanks
       .filter((s) => summaryStoreMatchesSet(s, myCoreSet))
       .map((s) => {
-        const actual = Number(s.cash || 0);
-        const target = Number(s.budget || 0);
-        const challengeTarget = Number(s.challengeBudget || 0) || target;
+        const actual = Number(s.formalNetCash);
+        const target = Number(s.formalCashTarget);
+        const rate = Number(s.formalCashAchievement);
+        if (!Number.isFinite(actual) || !Number.isFinite(target) || !Number.isFinite(rate)) return null;
+
+        const sourceStore = summaryStores.find((store) => {
+          const core = cleanName(getSummaryStoreName(s));
+          return core && getSummaryStoreCandidates(store).includes(core);
+        }) || {};
+        const legacyChallengeTarget = Number(sourceStore.challengeBudget || 0);
+        const challengeTarget = legacyChallengeTarget > target ? legacyChallengeTarget : target;
         const hasChallenge = challengeTarget > target;
-        const rate = target > 0 ? (actual / target) * 100 : 0;
         const challengeRate = challengeTarget > 0 ? (actual / challengeTarget) * 100 : 0;
+        const rank = Number(s.formalCashAchievementRank || 0);
+
         return {
-          storeName: s.displayName || `${cleanName(getSummaryStoreName(s))}店`,
-          rank: s.rank || 0,
-          totalStores: allRanks.length,
+          storeName: s.displayName || sourceStore.displayName || `${cleanName(getSummaryStoreName(s))}店`,
+          rank,
+          totalStores: formalRankEligibleStoreCount,
           actual,
           target,
           rate,
@@ -1719,12 +1808,13 @@ export function useDashboardStats() {
           hasChallenge,
           challengeRate,
           passedChallenge: hasChallenge && challengeRate >= 100,
-          // 保留 isBottom5 供舊畫面相容，但實際已改為動態「排名後段區間」。
-          isBottomSegment: isInBottomRankingSegment(s.rank, allRanks.length),
-          isBottom5: isInBottomRankingSegment(s.rank, allRanks.length),
+          rankingSemantics: "formal_cash_achievement",
+          isBottomSegment: isInBottomRankingSegment(rank, formalRankEligibleStoreCount),
+          isBottom5: isInBottomRankingSegment(rank, formalRankEligibleStoreCount),
         };
-      });
-  }, [dashboardSummaryBundle.dashboard, userRole, currentUser, effectiveStores, cleanName, getSummaryStoreName, normalizeSummaryStores, summaryStoreMatchesSet, isSelectedCurrentMonth, isSummaryTrustedForDashboard]);
+      })
+      .filter(Boolean);
+  }, [dashboardSummaryBundle.dashboard, userRole, currentUser, effectiveStores, cleanName, getSummaryStoreName, getSummaryStoreCandidates, normalizeSummaryStores, summaryStoreMatchesSet, isSelectedCurrentMonth, isSummaryTrustedForDashboard]);
 
   const summaryTherapistStats = useMemo(() => {
     if (viewMode !== "therapist" && userRole !== "therapist" && userRole !== "trainer") return null;
