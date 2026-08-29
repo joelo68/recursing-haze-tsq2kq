@@ -1358,16 +1358,111 @@ CURRENT_APP_VERSION = 3.5.3
 Runtime main = 5d3d370a9d4cb045f718020ddd390050a3d0b9aa
 ```
 
-## Annual boundary
+# 26. Annual Formal Consumer Contract — Batch 5B-2A
 
-Batch 5B-1 不包含 Annual。Annual 必須獨立處理：
+Batch 5B-2A 已於 2026-08-29 Production Confirmed。後續維護 `AnnualView` 時，不得重新以 legacy `grandTotal.cash / accrual / budget / accrualBudget` 或 store legacy fields 拼出 historical annual KPI。
+
+## Historical month trust contract
+
+Annual historical month 只有在下列條件全部成立時才可進 Formal mode：
 
 ```text
-12-month Summary trust
-month-by-month Target Coverage
-current / future month semantics
-manager / store annual scope aggregation
-historical raw target fallback removal
+summary version = dashboard-summary-v2
+semanticVersion = summary-semantics-v1
+kpiContractVersion = kpi-contract-v1
+brandId / yearMonth exact match
+summary_recalc_flags verified/completed
+dirty = false
+mismatch = 0
+pending = 0
 ```
 
-未完成 Batch 5B-2 前，不得把 Annual 描述成已完成 Formal consumer cutover。
+沒有 flag、flag loading、dirty、mismatch、brand/month mismatch 或 incompatible contract 都不得自動視為 trusted。
+
+## Formal annual semantics
+
+Trusted historical month 使用：
+
+```text
+formalNetCash
+formalAccrual
+Target Coverage v1
+Lifecycle eligibility
+```
+
+Annual scope（全品牌／manager／single-store／排除店）必須先建立 eligible store set，再 aggregate Formal actuals / targets。Coverage incomplete 時：
+
+```text
+achievement = N/A / TARGET_INCOMPLETE semantics
+```
+
+禁止用「有 target 的店」縮小 denominator 後繼續算達成率。Trusted historical month 不得 raw `monthly_targets` fallback；current-month / compatibility fallback 由既有 live contract處理。
+
+## Yibo pre-system boundary
+
+```text
+Yibo 2026-01 ~ 2026-03 = PRE_SYSTEM_SKIP
+Yibo 2026-04 起 = 正式年度計算範圍
+```
+
+Pre-system month 不得進實績、目標或 interval / quarter / annual denominator。
+
+## Annual audit exclusion contract
+
+設定排除店家時，排除必須同時作用於：
+
+```text
+Cash actual
+Accrual actual
+Cash target
+Accrual target
+```
+
+存在排除店家時，不可直接採用未扣除排除店的 all-brand `grandTotal`；必須由 Formal store rows 依 eligible + exclusion scope 重算。
+
+寫入 exclusion 的 state contract：
+
+```text
+Firestore setDoc success
+→ confirm same brand
+→ update AppContext auditExclusions immediately
+→ Annual recomputes without page reload
+```
+
+若 write failure：
+
+```text
+do not close modal
+do not show success
+show failure state
+```
+
+不得用 reload / forced refetch / polling 修補 state sync。此次修正新增 Firestore reads = 0。
+
+## Regression minimum
+
+後續修改 Annual Formal semantics / exclusion state 時至少執行：
+
+```bash
+node --test tests/kpiContracts.test.js tests/storeIdentity.test.js tests/storeLifecycle.test.js tests/targetAuthority.test.js tests/summaryRepairPreSystem.test.js tests/summarySemantics.test.js tests/targetCoverageAudit.test.js tests/targetCoverageMigration.test.js tests/dashboardFormalConsumer.test.js tests/dashboardHistoricalReads.test.js tests/reportFormalConsumer.test.js tests/annualFormalConsumer.test.js
+
+npm run build
+```
+
+2026-08-29 Batch 5B-2A closeout：
+
+```text
+Initial regression 156 / 156 PASS
+Exclusion fix regression 158 / 158 PASS
+npm run build PASS
+Frontend Published
+Production Annual semantics PASS
+Exclusion immediate recalc / restore PASS
+Brand isolation regression PASS
+CURRENT_APP_VERSION = 3.5.3
+Runtime main = d0a231ca5a816b2a5ef42e2b6e38690dfc1656df
+```
+
+## Batch 5B-2B boundary
+
+Batch 5B-2A 只完成 Annual semantics / state correctness。Batch 5B-2B 才處理 reads topology，例如 year-scoped Summary / flag query、current-month aggregate scope、移除未使用 annual listeners。5B-2B 不得藉 reads optimization 改變本節已確認的 KPI、Coverage、Lifecycle、pre-system 或 exclusion semantics。

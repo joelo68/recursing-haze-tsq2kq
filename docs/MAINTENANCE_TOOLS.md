@@ -1437,4 +1437,66 @@ CYJ / 安妞 / 伊啵 Ranking + Regional PASS
 current-month regression PASS
 ```
 
-下一階段 Batch 5B-2 Annual 屬獨立 consumer / reads domain；不要用 5B-1 的 Maintenance 判讀或單月 semantics 直接替代年度 12-month trust / coverage 檢查。
+Batch 5B-2A Annual Formal semantics 已完成；下一階段只剩 Batch 5B-2B Annual reads topology。不要用 5B-1 的單月判讀替代年度 12-month trust / coverage，也不要在 5B-2B reads optimization 中改寫 5B-2A 已確認的 Annual semantics。
+
+---
+
+# 48. Batch 5B-2A Annual Formal Semantics — 維護／觀測邊界
+
+Batch 5B-2A 已於 2026-08-29 Production Confirmed。它是 Frontend Annual historical consumer / state correctness cutover，不是新的 Maintenance migration / repair 工具。
+
+Annual 畫面異常時應先依 owner 排查：
+
+```text
+Annual historical actual / target / achievement
+→ annualFormalConsumer / AnnualView / persisted dashboard_summary
+
+Summary trust
+→ summary_recalc_flags / contract version / brand-month anchoring
+
+Target completeness
+→ Target Coverage v1 / Lifecycle eligibility
+
+Annual exclusion immediately not reflected
+→ App.jsx auditExclusions state sync / AnnualView save result handling
+```
+
+不得用 Pre-Batch-5 migration、Summary rebuild、reload、forced refetch 或 polling 去掩蓋 Annual consumer / state bug。
+
+正式 Annual historical rules：
+
+```text
+verified Formal month -> Formal actuals + Coverage/Lifecycle authority
+coverage incomplete -> N/A / fail-closed
+trusted historical raw monthly_targets fallback -> 0
+Yibo 2026-01~03 -> PRE_SYSTEM_SKIP
+current month -> existing live/compatibility contract
+```
+
+Audit exclusion 必須同時扣除實績與 cash/accrual targets；write success 後 AppContext 必須立即同步，同品牌 race guard 必須保留。Write failure 不得顯示假成功。
+
+Batch 5B-2A 沒有新增：
+
+```text
+Backend Function
+Firestore Rules
+Firestore read for exclusion state refresh
+listener
+query
+polling
+CURRENT_APP_VERSION bump
+```
+
+正式 regression / Production：
+
+```text
+Initial Annual regression 156 / 156 PASS
+Exclusion fix regression 158 / 158 PASS
+npm run build PASS
+Frontend Published
+Annual Formal semantics PASS
+Exclusion immediate recalc / restore PASS
+Brand switch isolation PASS
+```
+
+Batch 5B-2B 才是 Annual reads topology domain。後續若要減少 Annual reads，應另外做 year-scoped Summary / flags、current-month fallback scope 與 unused listener audit，不得因追求低 reads 取消 dirty/unverified correctness guard。

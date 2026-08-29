@@ -1219,7 +1219,90 @@ DEPLOYED
 PRODUCTION CONFIRMED
 ```
 
-Batch 5B-2 Annual Formal Consumer 尚未開始。Annual 必須獨立處理 12-month Summary trust、month-by-month Target Coverage、current/future month 與 scope-aware annual aggregation，不得把 Batch 5B-1 的單月 consumer contract直接套用後宣稱完成。
+### Batch 5B-2A Annual Formal Semantics — Production Confirmed
+
+Batch 5B-2A 已於 2026-08-29 完成 Annual historical Formal semantics cutover，並在 Production 驗證中修正「排除店家儲存後 AppContext state 未立即同步」的既有 scope bug。最終正式 main：
+
+```text
+HEAD = origin/main
+d0a231ca5a816b2a5ef42e2b6e38690dfc1656df
+```
+
+正式 Runtime source scope：
+
+```text
+src/App.jsx
+src/components/AnnualView.jsx
+src/utils/annualFormalConsumer.js
+tests/annualFormalConsumer.test.js
+```
+
+Historical trusted month 必須同時符合：
+
+```text
+dashboard-summary-v2
+summary-semantics-v1
+kpi-contract-v1
+exact brandId / yearMonth
+summary_recalc_flags = verified/completed
+dirty = false
+mismatch = 0
+pending = 0
+```
+
+符合後 Annual 使用 persisted Formal authority：
+
+```text
+formalNetCash
+formalAccrual
+Formal Target Coverage v1
+Lifecycle eligibility
+```
+
+Coverage 不完整時 achievement fail-closed 為 `N/A` / incomplete semantics；不得只加總有 target 的店後縮小 denominator。Trusted historical month 不再用 raw `monthly_targets` 補 target。Current month / compatibility fallback 本階段維持既有 contract。
+
+伊啵 2026 年度遵守 data start boundary：
+
+```text
+2026-01 ~ 2026-03 -> PRE_SYSTEM_SKIP
+2026-04 起 -> 正式年度計算範圍
+```
+
+Annual audit exclusion scope 現在同時作用於實績與目標；若全品牌存在排除店家，不得直接使用未扣除排除店的 `grandTotal`。Production 發現的 exclusion state bug 已修正為：
+
+```text
+setDoc(audit_exclusions) success
+→ 同 brand race guard
+→ setAuditExclusions(nextExclusions)
+→ Annual 立即重新計算實績 / 現金目標 / 權責目標
+```
+
+寫入失敗時不得顯示假成功，也不得關閉設定視窗。此修正沒有新增 Firestore read、listener、query 或 polling；品牌 path 仍使用既有 resolver。
+
+Validation / Production：
+
+```text
+Initial Batch 5B-2A regression   156 / 156 PASS
+Exclusion fix regression          158 / 158 PASS
+npm run build                     PASS
+Frontend Published                PASS
+Annual Formal semantics           PASS
+Exclusion save immediate recalc   PASS
+Exclusion remove immediate restore PASS
+Brand switch isolation            PASS
+CURRENT_APP_VERSION               3.5.3（未提高）
+```
+
+Batch 5B-2A 狀態：
+
+```text
+IMPLEMENTED
+VALIDATED
+DEPLOYED
+PRODUCTION CONFIRMED
+```
+
+Batch 5B-2B Annual Reads Cutover 尚未開始。它只處理 Annual reads topology（year-scoped Summary / flags、current-month fallback scope、移除未使用 annual listeners 等），不得重新改寫本節已 Production Confirmed 的 Annual Formal semantics。
 
 ## Observation
 

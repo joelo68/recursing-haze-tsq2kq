@@ -2129,4 +2129,109 @@ DEPLOYED
 PRODUCTION CONFIRMED
 ```
 
-Batch 5B-2 Annual 尚未開始；其 Source of Truth 必須以當時最新正式 main 重新取得，不得直接從 5B-1 artifact 延伸修改。
+# 32. Batch 5B-2A Annual Formal Consumer（PRODUCTION CONFIRMED）
+
+Batch 5B-2A runtime owners：
+
+```text
+src/App.jsx
+  → Annual Summary / flag brand+year readiness anchoring
+  → auditExclusions write success state sync + same-brand race guard
+
+src/utils/annualFormalConsumer.js
+  → Annual historical Formal trust / KPI / Target Coverage / Lifecycle / pre-system interpreter
+
+src/components/AnnualView.jsx
+  → annual scope aggregation / exclusion-aware Formal consumer
+  → exclusion save success/failure UI contract
+
+tests/annualFormalConsumer.test.js
+  → Batch 5B-2A regression contract
+```
+
+Backend writer authority仍由既有正式 source 提供，Batch 5B-2A 沒有修改：
+
+```text
+functions/index.js
+functions/summarySemantics.js
+functions/kpiContracts.js
+functions/storeLifecycle.js
+functions/targetCoverage.js
+```
+
+## Annual Formal flow
+
+```text
+historical month
+→ exact brand/yearMonth Summary + flag readiness
+→ verified/completed + dirty=false + mismatch=0 + pending=0
+→ dashboard-summary-v2 + summary-semantics-v1 + kpi-contract-v1
+→ annualFormalConsumer
+→ Lifecycle eligible scope
+→ formalNetCash / formalAccrual
+→ Target Coverage v1 authority
+→ coverage-complete annual / quarter / interval aggregation
+→ AnnualView
+```
+
+Coverage incomplete 時 fail-closed，不縮 denominator。Trusted historical month 不 raw `monthly_targets` fallback。Current month 保留 existing live/compatibility flow。
+
+Yibo boundary：
+
+```text
+2026-01~03 PRE_SYSTEM_SKIP
+2026-04+ formal annual scope
+```
+
+## Annual exclusion state flow
+
+```text
+AnnualView save exclusion
+→ App.jsx setDoc brand-resolved audit_exclusions
+→ write success + same brand guard
+→ setAuditExclusions(nextExclusions)
+→ AnnualView immediate recompute actuals + cash target + accrual target
+```
+
+Write failure 不得顯示 success / 關閉 modal。此修正沒有新增 Firestore read / listener / query / polling。
+
+## Production closeout（2026-08-29）
+
+正式 Git：
+
+```text
+HEAD = origin/main
+d0a231ca5a816b2a5ef42e2b6e38690dfc1656df
+```
+
+Validation：
+
+```text
+Initial 5B-2A regression 156 / 156 PASS
+Exclusion fix regression 158 / 158 PASS
+npm run build PASS
+Frontend Published
+CURRENT_APP_VERSION 3.5.3 unchanged
+```
+
+Production：
+
+```text
+Annual Formal historical semantics normal
+Yibo pre-system guard normal
+manager / store annual scope normal
+exclusion save -> immediate actual/target recompute normal
+exclusion remove -> immediate restore normal
+brand switch isolation normal
+```
+
+狀態：
+
+```text
+IMPLEMENTED
+VALIDATED
+DEPLOYED
+PRODUCTION CONFIRMED
+```
+
+Batch 5B-2B Annual Reads Cutover 尚未開始。它必須以當時最新正式 main 重新取得 Source of Truth，並只處理 Annual reads topology，不得重寫 Batch 5B-2A 已確認的 Formal semantics。
