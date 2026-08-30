@@ -205,12 +205,60 @@ test("Formal aggregate refuses denominator shrink when any target is missing", (
   assert.equal(result.cashAchievementStatus, "TARGET_NOT_SET");
 });
 
-test("5C-1 keeps active-alert getStorePerformance on legacy input until 5C-2", () => {
-  assert.match(indexSource, /const analyticalFormalKpiMode = !Array\.isArray\(policyScopes\) \|\| !policyScopes\.includes\("active_alert"\)/);
+test("5C-2 decouples active-alert policy scope from Formal KPI authority", () => {
+  const storeStart = indexSource.indexOf("async function getStorePerformance");
+  const storeEnd = indexSource.indexOf("function normalizeTelegramAgentTherapistRow", storeStart);
+  const storeSource = indexSource.slice(storeStart, storeEnd);
+  assert.match(storeSource, /const formalKpiMode = true;/);
+  assert.doesNotMatch(storeSource, /policyScopes\.includes\("active_alert"\)/);
+  assert.match(storeSource, /formalKpiMode,/);
+});
+
+test("5C-2 Active Alert consumes Formal KPI and preserves policy scope", () => {
   const alertsStart = indexSource.indexOf("async function getOperationalAlerts");
   const alertsEnd = indexSource.indexOf("async function getDataHealth", alertsStart);
   const alertsSource = indexSource.slice(alertsStart, alertsEnd);
-  assert.doesNotMatch(alertsSource, /formalKpiMode:\s*true/);
+  assert.match(alertsSource, /loadTelegramAgentStoreMonth\(brandId, ym, ctx, \{ formalKpiMode: true \}\)/);
+  assert.match(alertsSource, /getTelegramPolicyExcludedStoreSet\(ctx, brandId, \["active_alert"\]\)/);
+  assert.match(alertsSource, /loaded\.preSystem === true/);
+  assert.match(alertsSource, /dataStatus: "PRE_SYSTEM_SKIP"/);
+  assert.match(alertsSource, /cashTargetStatus === "VALID"/);
+  assert.match(alertsSource, /isValidNumericStatus\(cashStatus\)/);
+  assert.match(alertsSource, /isValidNumericStatus\(cashAchievementStatus\)/);
+  assert.match(alertsSource, /formalKpiMode: true/);
+  assert.match(alertsSource, /formal_kpi_mode: true/);
+  assert.match(alertsSource, /getTelegramAgentMetricDictionary\(\["cashAchievementRate", "expectedProgress", "progressGap"\], \{ formalMode: true \}\)/);
+});
+
+test("5C-2 Active Alert fails closed instead of shrinking brand denominator", () => {
+  const alertsStart = indexSource.indexOf("async function getOperationalAlerts");
+  const alertsEnd = indexSource.indexOf("async function getDataHealth", alertsStart);
+  const alertsSource = indexSource.slice(alertsStart, alertsEnd);
+  assert.match(alertsSource, /const reportComplete = activeStoreCores\.length > 0 && reportedStoreCount >= activeStoreCores\.length/);
+  assert.match(alertsSource, /const targetComplete = activeStoreCores\.length > 0 && targetedStoreCount >= activeStoreCores\.length/);
+  assert.match(alertsSource, /const brandCash = reportComplete \? brandCashSum : null/);
+  assert.match(alertsSource, /const brandBudget = targetComplete \? brandBudgetSum : null/);
+  assert.match(alertsSource, /!targetComplete \? "TARGET_INCOMPLETE" : "DATA_INCOMPLETE"/);
+  assert.doesNotMatch(alertsSource, /const budget = Number\(row\?\.budget \|\| target\.cashTarget \|\| 0\)/);
+});
+
+test("5C-2 only falls back to target lookup for stores with no Formal row", () => {
+  const alertsStart = indexSource.indexOf("async function getOperationalAlerts");
+  const alertsEnd = indexSource.indexOf("async function getDataHealth", alertsStart);
+  const alertsSource = indexSource.slice(alertsStart, alertsEnd);
+  assert.match(alertsSource, /const missingRowStoreCores = activeStoreCores\.filter\(\(storeCore\) => !rowByCore\[storeCore\]\)/);
+  assert.match(alertsSource, /missingRowStoreCores\.length > 0[\s\S]*loadTelegramAgentTargetMap\(brandId, ym, ctx, null, missingRowStoreCores\)/);
+  assert.match(alertsSource, /source: "formal_row_authority"/);
+});
+
+
+test("5C-2 Active Alert presentation distinguishes target vs actual incompleteness", () => {
+  const formatterStart = indexSource.indexOf("function formatTelegramAgentActiveAlertMessage");
+  const formatterEnd = indexSource.indexOf("async function buildTelegramActiveAlertMessages", formatterStart);
+  const formatterSource = indexSource.slice(formatterStart, formatterEnd);
+  assert.match(formatterSource, /summary\?\.dataStatus === "PRE_SYSTEM_SKIP"/);
+  assert.match(formatterSource, /summary\?\.cashAchievementStatus === "TARGET_INCOMPLETE"/);
+  assert.match(formatterSource, /row\.cashTargetStatus !== "VALID" \? "現金目標資料不足" : "現金實績資料不足"/);
 });
 
 test("trusted historical analytical path does not invoke target repair", () => {

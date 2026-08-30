@@ -4109,10 +4109,11 @@ async function getStorePerformance(startDate, endDate, storeName = null, brandNa
     const end = normalizeTelegramAgentDate(endDate);
     const useMonthSummary = isTelegramAgentMonthRange(start, end);
     const requestedStoreCore = normalizeSummaryCoreName(storeName || "");
-    const analyticalFormalKpiMode = !Array.isArray(policyScopes) || !policyScopes.includes("active_alert");
+    // Batch 5C-2: policy scope only controls which stores/policies apply. It must not downgrade KPI authority.
+    const formalKpiMode = true;
     const storeScopeOptions = {
         ...(requestedStoreCore ? { storeNames: [requestedStoreCore] } : {}),
-        formalKpiMode: analyticalFormalKpiMode,
+        formalKpiMode,
     };
     const allRows = [];
     const sourceMeta = [];
@@ -4128,7 +4129,7 @@ async function getStorePerformance(startDate, endDate, storeName = null, brandNa
                 source: loaded.source,
                 updatedAtText: "",
                 dataStatus: "PRE_SYSTEM_SKIP",
-                formalKpiMode: analyticalFormalKpiMode,
+                formalKpiMode,
                 activeDelegationCount: 0,
                 policyExcludedCount: 0,
             });
@@ -4197,10 +4198,8 @@ async function getStorePerformance(startDate, endDate, storeName = null, brandNa
         overall_summary: overall,
         stores_details: sortedRows,
         source_meta: sourceMeta,
-        data_note: analyticalFormalKpiMode
-            ? "分析查詢使用 Formal KPI contract；歷史 verified 月優先使用 Formal Summary，本月／日期區間使用即時資料套用同一 KPI 語意。"
-            : (useMonthSummary ? "整月／本月查詢優先使用 Summary 或月彙總。" : "指定日期區間使用品牌限定日報。"),
-        formal_kpi_mode: analyticalFormalKpiMode,
+        data_note: "查詢使用 Formal KPI contract；policy scope 僅控制納入範圍，不改變 KPI authority。歷史 verified 月優先使用 Formal Summary，本月／日期區間使用即時資料套用同一 KPI 語意。",
+        formal_kpi_mode: formalKpiMode,
         pre_system_skips: sourceMeta.filter((row) => row.dataStatus === "PRE_SYSTEM_SKIP").map((row) => row.brand),
     };
 }
@@ -5069,16 +5068,53 @@ async function getOperationalAlerts(yearMonth, brandName = null, limit = 10, age
     const effectiveLimits = [];
 
     for (const brandId of brands) {
-        // 只使用正式組織架構納管且未列入 audit_exclusions 的店家。
-        const loaded = await loadTelegramAgentStoreMonth(brandId, ym, ctx);
-        const org = await loadTelegramAgentOrgProfile(brandId, ctx);
-        const exclusions = await loadTelegramAgentAuditExclusions(brandId, ctx);
-        const policyExcludedStores = getTelegramPolicyExcludedStoreSet(ctx, brandId, ["active_alert"]);
         const rules = applyTelegramAgentAlertPolicies(baseRules, brandId, ctx);
         const enabledRuleLabels = getTelegramActiveAlertEnabledRuleLabels(rules);
         enabledRuleLabels.forEach((label) => enabledRuleLabelSet.add(label));
         const effectiveLimit = getTelegramAgentAlertLimit(limit, brandId, ctx);
         effectiveLimits.push(effectiveLimit);
+
+        // Batch 5C-2: Active Alert always consumes Formal KPI. Policy scope only controls inclusion/exclusion.
+        const loaded = await loadTelegramAgentStoreMonth(brandId, ym, ctx, { formalKpiMode: true });
+        if (loaded.preSystem === true) {
+            brandSummaries.push({
+                brand: getTelegramAgentBrandLabel(brandId),
+                brandId,
+                yearMonth: ym,
+                dataStatus: "PRE_SYSTEM_SKIP",
+                cash: null,
+                budget: null,
+                cashAchievementRate: null,
+                expectedProgress,
+                progressGap: null,
+                operationalCriticalCount: 0,
+                operationalWatchCount: 0,
+                criticalCount: 0,
+                watchCount: 0,
+                dataIssueCount: 0,
+                activeStoreCount: 0,
+                formalStoreCount: 0,
+                excludedStoreCount: 0,
+                excludedStores: [],
+                auditExcludedStores: [],
+                policyExcludedStores: [],
+                excludedFormalStores: [],
+                unexpectedReportStoreCount: 0,
+                unexpectedReportStores: [],
+                rosterIssue: false,
+                enabledRuleLabels,
+                dataQuality: buildTelegramAgentDataQuality({ source: loaded.source }),
+                source: loaded.source,
+                targetSource: "pre_system_skip",
+                formalKpiMode: true,
+            });
+            continue;
+        }
+
+        // 保留既有 Active Alert presentation scope：正式組織架構、audit_exclusions、active_alert policy。
+        const org = await loadTelegramAgentOrgProfile(brandId, ctx);
+        const exclusions = await loadTelegramAgentAuditExclusions(brandId, ctx);
+        const policyExcludedStores = getTelegramPolicyExcludedStoreSet(ctx, brandId, ["active_alert"]);
         const rowByCore = {};
         loaded.rows.forEach((row) => {
             const core = normalizeSummaryCoreName(row.storeName);
@@ -5090,13 +5126,17 @@ async function getOperationalAlerts(yearMonth, brandName = null, limit = 10, age
         const combinedExcludedSet = new Set([...exclusions.storeSet, ...policyExcludedStores]);
         const activeStoreCores = formalStoreCores.filter((storeCore) => !combinedExcludedSet.has(storeCore));
         const excludedFormalStores = formalStoreCores.filter((storeCore) => combinedExcludedSet.has(storeCore));
-        const targetResult = await loadTelegramAgentTargetMap(brandId, ym, ctx, null, activeStoreCores);
+        const missingRowStoreCores = activeStoreCores.filter((storeCore) => !rowByCore[storeCore]);
+        // Formal rows own their target authority. Only stores with no row need a scoped target lookup for data-quality reporting.
+        const targetResult = missingRowStoreCores.length > 0
+            ? await loadTelegramAgentTargetMap(brandId, ym, ctx, null, missingRowStoreCores)
+            : { map: {}, source: "formal_row_authority", updatedAtText: loaded.updatedAtText || "" };
         const unexpectedReportStores = Object.keys(rowByCore).filter(
             (storeCore) => !formalStoreSet.has(storeCore) && !combinedExcludedSet.has(storeCore)
         );
 
-        let brandCash = 0;
-        let brandBudget = 0;
+        let brandCashSum = 0;
+        let brandBudgetSum = 0;
         let reportedStoreCount = 0;
         let targetedStoreCount = 0;
         const missingReportStores = [];
@@ -5108,16 +5148,29 @@ async function getOperationalAlerts(yearMonth, brandName = null, limit = 10, age
 
         activeStoreCores.forEach((storeCore) => {
             const row = rowByCore[storeCore] || null;
-            const target = targetResult.map[storeCore] || {};
-            const cash = Number(row?.cash || 0);
-            const budget = Number(row?.budget || target.cashTarget || 0);
-            const achievement = budget > 0 ? Number(((cash / budget) * 100).toFixed(1)) : null;
+            const fallbackTarget = targetResult.map[storeCore] || {};
+            const cashStatus = String(row?.cashStatus || "");
+            const cashTargetStatus = row
+                ? String(row?.cashTargetStatus || "")
+                : (Number(fallbackTarget.cashTarget || 0) > 0 ? "VALID" : "TARGET_NOT_SET");
+            const cashAchievementStatus = String(row?.cashAchievementStatus || "");
+            const hasReportData = Boolean(row && isValidNumericStatus(cashStatus));
+            const hasTargetData = row
+                ? cashTargetStatus === "VALID"
+                : Number(fallbackTarget.cashTarget || 0) > 0;
+            const cash = hasReportData ? Number(row.cash) : null;
+            const budget = row
+                ? (hasTargetData ? Number(row.budget) : null)
+                : (hasTargetData ? Number(fallbackTarget.cashTarget) : null);
+            const achievement = row && isValidNumericStatus(cashAchievementStatus)
+                ? Number(row?.cashAchievementRate ?? row?.achievement)
+                : null;
             const progressGap = achievement === null ? null : Number((achievement - expectedProgress).toFixed(1));
             const newCount = Number(row?.newCount || 0);
             const newClosings = Number(row?.newClosings || 0);
             const closingRate = newCount > 0 ? Number(((newClosings / newCount) * 100).toFixed(1)) : null;
             const skincare = Number(row?.skincareGross ?? row?.skincare ?? 0);
-            const skincareRatio = cash > 0 ? Number(((skincare / cash) * 100).toFixed(1)) : null;
+            const skincareRatio = hasReportData && cash > 0 ? Number(((skincare / cash) * 100).toFixed(1)) : null;
             const traffic = Number(row?.traffic || 0);
             const operationalReasons = [];
             const dataReasons = [];
@@ -5133,17 +5186,26 @@ async function getOperationalAlerts(yearMonth, brandName = null, limit = 10, age
                 escalateSeverity(rule.severity === "critical" ? "critical" : "watch");
             };
 
-            brandCash += cash;
-            brandBudget += budget;
-            if (row) reportedStoreCount += 1;
-            else missingReportStores.push(storeCore);
-            if (budget > 0) targetedStoreCount += 1;
-            else missingTargetStores.push(storeCore);
+            if (hasReportData) {
+                reportedStoreCount += 1;
+                brandCashSum += Number(cash);
+            } else {
+                missingReportStores.push(storeCore);
+            }
+            if (hasTargetData) {
+                targetedStoreCount += 1;
+                brandBudgetSum += Number(budget);
+            } else {
+                missingTargetStores.push(storeCore);
+            }
 
-            if (!row && rules.missingReport.enabled) dataReasons.push("本月尚無日報資料");
-            if (budget <= 0 && rules.missingTarget.enabled) dataReasons.push("現金目標缺漏");
+            if (rules.missingReport.enabled) {
+                if (!row) dataReasons.push("本月尚無日報資料");
+                else if (!hasReportData) dataReasons.push(`現金實績資料無效（${cashStatus || "DATA_INVALID"}）`);
+            }
+            if (!hasTargetData && rules.missingTarget.enabled) dataReasons.push("現金目標缺漏");
 
-            if (rules.progressGap.enabled && budget > 0 && progressGap !== null) {
+            if (rules.progressGap.enabled && hasReportData && hasTargetData && progressGap !== null) {
                 if (progressGap <= -rules.progressGap.criticalThreshold) {
                     severity = "critical";
                     operationalReasons.push(`現金進度落後 ${Math.abs(progressGap).toFixed(1)} 個百分點`);
@@ -5155,7 +5217,7 @@ async function getOperationalAlerts(yearMonth, brandName = null, limit = 10, age
 
             addOperationalReason(
                 rules.cashAchievementRate,
-                budget > 0 && achievement !== null && achievement < rules.cashAchievementRate.threshold,
+                hasReportData && hasTargetData && achievement !== null && achievement < rules.cashAchievementRate.threshold,
                 `現金達成率 ${achievement === null ? "無法計算" : `${achievement.toFixed(1)}%`}`
             );
             addOperationalReason(
@@ -5165,7 +5227,7 @@ async function getOperationalAlerts(yearMonth, brandName = null, limit = 10, age
             );
             addOperationalReason(
                 rules.skincareRatio,
-                Boolean(row) && cash > 0 && skincareRatio !== null && skincareRatio < rules.skincareRatio.threshold,
+                Boolean(row) && hasReportData && cash > 0 && skincareRatio !== null && skincareRatio < rules.skincareRatio.threshold,
                 `保養品占比 ${skincareRatio === null ? "無法計算" : `${skincareRatio.toFixed(1)}%`}`
             );
             addOperationalReason(
@@ -5189,7 +5251,10 @@ async function getOperationalAlerts(yearMonth, brandName = null, limit = 10, age
                 taskOwnerName: activeDelegation?.permissions?.manageTasks !== false ? (activeDelegation?.delegateName || "") : "",
                 delegationId: activeDelegation?.id || "",
                 cash,
+                cashStatus: cashStatus || (row ? "DATA_INVALID" : "FIELD_MISSING"),
                 budget,
+                cashTargetStatus,
+                cashAchievementStatus: cashAchievementStatus || (hasTargetData ? "DATA_INVALID" : "TARGET_NOT_SET"),
                 cashAchievementRate: achievement,
                 achievement,
                 expectedProgress,
@@ -5198,9 +5263,10 @@ async function getOperationalAlerts(yearMonth, brandName = null, limit = 10, age
                 newCustomerCount: newCount,
                 newClosingRate: closingRate,
                 skincareRatio,
-                hasReportData: Boolean(row),
-                hasTargetData: budget > 0,
+                hasReportData,
+                hasTargetData,
                 source: loaded.source,
+                formalKpiMode: true,
             };
 
             if (severity !== "normal" && operationalReasons.length > 0) {
@@ -5248,14 +5314,24 @@ async function getOperationalAlerts(yearMonth, brandName = null, limit = 10, age
             missingReportStores,
             missingTargetStores,
         });
+        const reportComplete = activeStoreCores.length > 0 && reportedStoreCount >= activeStoreCores.length;
+        const targetComplete = activeStoreCores.length > 0 && targetedStoreCount >= activeStoreCores.length;
+        const brandCash = reportComplete ? brandCashSum : null;
+        const brandBudget = targetComplete ? brandBudgetSum : null;
+        const brandAchievement = reportComplete && targetComplete && brandBudget > 0
+            ? Number(((brandCash / brandBudget) * 100).toFixed(1))
+            : null;
         brandSummaries.push({
             brand: getTelegramAgentBrandLabel(brandId),
             brandId,
             cash: brandCash,
             budget: brandBudget,
-            cashAchievementRate: brandBudget > 0 ? Number(((brandCash / brandBudget) * 100).toFixed(1)) : null,
+            cashAchievementRate: brandAchievement,
+            cashAchievementStatus: brandAchievement === null
+                ? (!targetComplete ? "TARGET_INCOMPLETE" : "DATA_INCOMPLETE")
+                : "VALID",
             expectedProgress,
-            progressGap: brandBudget > 0 ? Number((((brandCash / brandBudget) * 100) - expectedProgress).toFixed(1)) : null,
+            progressGap: brandAchievement === null ? null : Number((brandAchievement - expectedProgress).toFixed(1)),
             operationalCriticalCount,
             operationalWatchCount,
             criticalCount: operationalCriticalCount,
@@ -5275,6 +5351,7 @@ async function getOperationalAlerts(yearMonth, brandName = null, limit = 10, age
             dataQuality,
             source: loaded.source,
             targetSource: targetResult.source,
+            formalKpiMode: true,
             orgSourcePath: org.sourcePath,
             delegationSourcePath: org.delegationSourcePath || "",
             activeDelegationCount: Array.isArray(org.activeDelegations) ? org.activeDelegations.length : 0,
@@ -5303,7 +5380,9 @@ async function getOperationalAlerts(yearMonth, brandName = null, limit = 10, age
         rule_note: enabledRuleLabels.length
             ? `本次依品牌設定啟用：${enabledRuleLabels.join("、")}。`
             : "本品牌目前未啟用任何預警判斷項目。",
-        metric_dictionary: getTelegramAgentMetricDictionary(["cashAchievementRate", "expectedProgress", "progressGap"]),
+        metric_dictionary: getTelegramAgentMetricDictionary(["cashAchievementRate", "expectedProgress", "progressGap"], { formalMode: true }),
+        formal_kpi_mode: true,
+        data_note: "Active Alert 使用 Formal KPI contract；active_alert / audit exclusion 僅控制預警納入範圍，不改變 KPI authority。",
     };
 }
 async function getDataHealth(yearMonth, brandName = null, agentContext = null) {
@@ -8319,9 +8398,11 @@ function formatTelegramAgentActiveAlertMessage(result, ctx, todayStr, brandProfi
     const dailyMissingReportCount = dailyMissingRows.length;
     const summary = Array.isArray(result?.brandSummaries) ? result.brandSummaries[0] : null;
     const brand = summary?.brand || rows[0]?.brand || "目前品牌";
-    const rate = summary?.cashAchievementRate === null || summary?.cashAchievementRate === undefined
-        ? "現金目標不足，無法計算"
-        : `${summary.cashAchievementRate}%`;
+    const rate = summary?.dataStatus === "PRE_SYSTEM_SKIP"
+        ? "正式系統使用前月份，不計算"
+        : summary?.cashAchievementRate === null || summary?.cashAchievementRate === undefined
+            ? (summary?.cashAchievementStatus === "TARGET_INCOMPLETE" ? "現金目標資料不足，無法計算" : "現金實績資料不足，無法計算")
+            : `${summary.cashAchievementRate}%`;
     const activeStoreCount = Number(summary?.activeStoreCount || 0);
     const excludedStoreCount = Number(summary?.excludedStoreCount || 0);
     const criticalCount = Number(summary?.operationalCriticalCount || 0);
@@ -8345,7 +8426,9 @@ function formatTelegramAgentActiveAlertMessage(result, ctx, todayStr, brandProfi
         lines.push("", `優先關注（最多顯示 ${limit} 家）：`);
         rows.slice(0, limit).forEach((row, index) => {
             const icon = row.severity === "critical" ? "🔴" : "🟠";
-            const storeRate = row.cashAchievementRate === null ? "無現金目標" : `${row.cashAchievementRate}%`;
+            const storeRate = row.cashAchievementRate === null
+                ? (row.cashTargetStatus !== "VALID" ? "現金目標資料不足" : "現金實績資料不足")
+                : `${row.cashAchievementRate}%`;
             lines.push(`${index + 1}. ${icon} ${row.storeName}店｜現金達成 ${storeRate}`);
             if (row.actingManager) lines.push(`   目前代理：${row.actingManager}｜正式主管：${row.manager || "未分配"}`);
             lines.push(`   原因：${(row.reasons || []).join("、") || "符合目前預警規則"}`);
