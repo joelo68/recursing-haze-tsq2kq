@@ -4,6 +4,7 @@ import { Download, TrendingUp, DollarSign, Users, Briefcase, Settings, X, Save, 
 import { AppContext } from "../AppContext";
 import { ViewWrapper, Card } from "./SharedUI";
 import { buildHistoricalFormalRankingRows, resolveHistoricalReportFormalTrust } from "../utils/reportFormalConsumer";
+import { buildCurrentDetailFormalAuthority } from "../utils/currentDetailFormalConsumer.js";
 
 const RankingView = () => {
   const { 
@@ -29,7 +30,8 @@ const RankingView = () => {
     currentReportSummaryReady,
     currentReportSummaryReadyYearMonth,
     currentReportSummaryReadyBrandId,
-    currentSummaryRecalcFlagState
+    currentSummaryRecalcFlagState,
+    currentLifecycleMasterState
   } = useContext(AppContext);
 
   const [sortConfig, setSortConfig] = useState({
@@ -325,8 +327,27 @@ const RankingView = () => {
     brandPrefix,
   ]);
 
+  const currentDetailFormalAuthority = useMemo(() => {
+    const lifecycleStateBrand = String(currentLifecycleMasterState?.brandId || "").toLowerCase();
+    const currentBrandId = String(currentBrand?.id || currentBrand || "").toLowerCase();
+    const lifecycleMaster = (
+      currentLifecycleMasterState?.ready === true &&
+      lifecycleStateBrand === currentBrandId
+    ) ? currentLifecycleMasterState?.data : null;
+    return buildCurrentDetailFormalAuthority({
+      brandId: currentBrandId,
+      yearMonth: selectedYearMonth,
+      lifecycleMaster,
+      monthlyTargetSummary,
+      reports: allReports || [],
+      normalizeStoreKey,
+    });
+  }, [currentLifecycleMasterState, currentBrand, selectedYearMonth, monthlyTargetSummary, allReports]);
+
   const isHistoricalFormalMode = !isCurrentMonth && reportFormalTrust.trusted && historicalFormalRanking.compatible;
   const isHistoricalFormalLoading = !isCurrentMonth && reportFormalTrust.loading;
+  const isCurrentDetailFormalMode = !isHistoricalFormalMode && currentDetailFormalAuthority.compatible;
+  const isFormalRankingMode = isHistoricalFormalMode || isCurrentDetailFormalMode;
   const isFiniteKpi = (value) => value !== null && value !== undefined && Number.isFinite(Number(value));
   const formatPercentOrNA = (value, digits = 1) => isFiniteKpi(value) ? `${Number(value).toFixed(digits)}%` : "N/A";
   const formatMoneyOrNA = (value) => isFiniteKpi(value) ? fmtMoney(Number(value)) : "N/A";
@@ -349,115 +370,58 @@ const RankingView = () => {
     // Batch 5B-1：verified historical Ranking 只使用 Formal Summary contract。
     if (isHistoricalFormalMode) return historicalFormalRanking.rows;
     if (isHistoricalFormalLoading && (!allReports || allReports.length === 0)) return [];
-    if (!allReports) return [];
+    if (!currentDetailFormalAuthority.compatible) return [];
 
-    const targetYear = parseInt(selectedYear);
-    const targetMonth = parseInt(selectedMonth);
-    const storeMap = {};
-
-    allReports.forEach(report => {
-      const rDate = new Date(report.date);
-      if (rDate.getFullYear() !== targetYear || (rDate.getMonth() + 1) !== targetMonth) return;
-
-      const rawStoreName = report.storeName;
-      if (!rawStoreName) return;
-
-      const coreName = getCoreStoreName(rawStoreName);
-      if (!coreName) return;
-      
-      const standardName = `${brandPrefix}${coreName}店`; 
-
-      // 初始化店家數據容器 
-      if (!storeMap[standardName]) {
-        storeMap[standardName] = {
-          name: standardName,
-          displayName: coreName, 
-          manager: "未分配",
-          cashTotal: 0,
-          refundTotal: 0,
-          accrualTotal: 0,
-          operationalAccrualTotal: 0,
-          skincareSalesTotal: 0,
-          trafficTotal: 0,
-          newCustomersTotal: 0,
-          newCustomerSalesTotal: 0,
-          newCustomerClosingsTotal: 0
+    const excluded = new Set((auditExclusions || []).map(normalizeStoreKey).filter(Boolean));
+    return Object.values(currentDetailFormalAuthority.stores || {})
+      .filter((row) => !excluded.has(normalizeStoreKey(row.storeKey)))
+      .map((row) => {
+        const coreName = normalizeStoreKey(row.storeKey);
+        const foundManager = Object.keys(managers || {}).find((managerName) =>
+          (managers?.[managerName] || []).some((storeName) => normalizeStoreKey(storeName) === coreName)
+        );
+        const traffic = Number(row.traffic || 0);
+        const operationalAccrual = Number(row.operationalAccrual || 0);
+        return {
+          name: row.canonicalStoreName || `${brandPrefix}${coreName}店`,
+          displayName: coreName,
+          manager: foundManager || "未分配",
+          cashTotal: row.formalNetCash,
+          cashStatus: row.formalNetCashStatus,
+          accrualTotal: row.formalAccrual,
+          accrualStatus: row.formalAccrualStatus,
+          cashTarget: row.cashTarget,
+          cashTargetStatus: row.cashTargetStatus,
+          achievement: row.cashAchievement,
+          achievementStatus: row.cashAchievementStatus,
+          accrualTarget: row.accrualTarget,
+          accrualTargetStatus: row.accrualTargetStatus,
+          accrualAchievement: row.accrualAchievement,
+          accrualAchievementStatus: row.accrualAchievementStatus,
+          formalRankEligible: row.formalRankEligible === true,
+          formalCashAchievementRank: row.formalCashAchievementRank ?? null,
+          rank: row.formalCashAchievementRank ?? null,
+          reportingStatus: row.reportingStatus,
+          skincareSalesTotal: Number(row.skincareSales || 0),
+          trafficTotal: traffic,
+          newCustomersTotal: Number(row.newCustomers || 0),
+          newCustomerSalesTotal: Number(row.newCustomerSales || 0),
+          newCustomerClosingsTotal: Number(row.newCustomerClosings || 0),
+          operationalAccrualTotal: operationalAccrual,
+          trafficASP: traffic > 0 ? Math.round(operationalAccrual / traffic) : 0,
+          source: "detail_formal",
         };
-      }
-
-      // 將資料累加進同一個籃子
-      const d = storeMap[standardName];
-      const operationalAccrual = Number(report.operationalAccrual) || 0;
-      let accrual = Number(report.accrual) || 0;
-
-      // ★★★ 安妞專屬邏輯：總權責只看「操作權責 (技術)」排除保養品 ★★★
-      if (brandPrefix === '安妞') {
-         accrual = operationalAccrual;
-      }
-
-      d.cashTotal += (Number(report.cash) || 0);
-      d.refundTotal += (Number(report.refund) || 0);
-      d.accrualTotal += accrual;
-      d.operationalAccrualTotal += operationalAccrual;
-      d.skincareSalesTotal += (Number(report.skincareSales) || 0);
-      d.trafficTotal += (Number(report.traffic) || 0);
-      d.newCustomersTotal += (Number(report.newCustomers) || 0);
-      d.newCustomerSalesTotal += (Number(report.newCustomerSales ?? report.newCustomerRevenue) || 0);
-      d.newCustomerClosingsTotal += (Number(report.newCustomerClosings) || 0);
-    });
-
-    let results = Object.values(storeMap).map(store => {
-      // 補上區長資訊
-      const coreName = store.displayName;
-      const foundManager = Object.keys(managers).find(mgr => (managers[mgr] || []).includes(coreName));
-      store.manager = foundManager || "未分配";
-
-      // 計算淨現金
-      const netCash = store.cashTotal - store.refundTotal;
-      store.cashTotal = netCash; 
-
-      // 讀取目標：優先使用 monthly_targets_summary，找不到才 fallback 到 budgets / monthly_targets
-      const { cashTarget, accrualTarget } = resolveStoreTarget(store, targetYear, targetMonth);
-
-      return {
-        ...store,
-        cashTarget,
-        achievement: cashTarget > 0 ? (netCash / cashTarget) * 100 : 0,
-        accrualTarget,
-        accrualAchievement: accrualTarget > 0 ? (store.accrualTotal / accrualTarget) * 100 : 0,
-        trafficASP: store.trafficTotal > 0 ? Math.round(store.operationalAccrualTotal / store.trafficTotal) : 0
-      };
-    });
-
-    // 過濾排除名單
-    results = results.filter(store => !(auditExclusions || []).includes(store.displayName));
-
-    return results;
+      });
   }, [
+    targetSourceDebug,
+    isHistoricalFormalMode,
+    historicalFormalRanking,
+    isHistoricalFormalLoading,
     allReports,
-    budgets,
-    monthlyTargetSummary,
-    monthlyTargetsSummary,
-    monthlyTargetSummaries,
-    monthly_targets_summary,
-    targetSummary,
-    targetSummaries,
-    selectedYear,
-    selectedMonth,
+    currentDetailFormalAuthority,
     auditExclusions,
     managers,
     brandPrefix,
-    currentBrand,
-    targetSourceDebug,
-    currentDashboardSummary,
-    currentRankingsSummary,
-    currentReportSummaryReady,
-    currentReportSummaryReadyYearMonth,
-    currentReportSummaryReadyBrandId,
-    currentSummaryRecalcFlagState,
-    isHistoricalFormalMode,
-    isHistoricalFormalLoading,
-    historicalFormalRanking
   ]); 
 
   // --- 排序邏輯 ---
@@ -466,7 +430,7 @@ const RankingView = () => {
     if (!sortConfig.key) return items;
 
     items.sort((a, b) => {
-      if (isHistoricalFormalMode && sortConfig.key === "achievement") {
+      if (isFormalRankingMode && sortConfig.key === "achievement") {
         const rankA = a.rank !== null && a.rank !== undefined && Number.isFinite(Number(a.rank))
           ? Number(a.rank)
           : Number.POSITIVE_INFINITY;
@@ -494,7 +458,7 @@ const RankingView = () => {
       return sortConfig.direction === "ascending" ? numA - numB : numB - numA;
     });
     return items;
-  }, [processedData, sortConfig, isHistoricalFormalMode]);
+  }, [processedData, sortConfig, isFormalRankingMode]);
 
   const requestSort = (key) =>
     setSortConfig({
@@ -512,7 +476,7 @@ const RankingView = () => {
     ];
     const rows = sortedData.map((store, index) => {
       return [
-        isHistoricalFormalMode ? (store.rank ?? "") : (index + 1),
+        isFormalRankingMode ? (store.rank ?? "") : (index + 1),
         store.displayName,
         store.manager,
         isFiniteKpi(store.cashTotal) ? store.cashTotal : "N/A",
@@ -544,8 +508,8 @@ const RankingView = () => {
       <div className="bg-white p-4 rounded-2xl border border-stone-100 shadow-sm mb-3">
         <div className="flex justify-between items-center mb-3 pb-3 border-b border-stone-50">
           <div className="flex items-center gap-3">
-            <span className={`w-8 h-8 rounded-full flex items-center justify-center text-sm font-bold ${(isHistoricalFormalMode ? Number(store.rank || 999) <= 3 : index < 3) ? 'bg-amber-100 text-amber-700' : 'bg-stone-100 text-stone-500'}`}>
-              {isHistoricalFormalMode ? (store.rank ?? "—") : (index + 1)}
+            <span className={`w-8 h-8 rounded-full flex items-center justify-center text-sm font-bold ${(isFormalRankingMode ? Number(store.rank || 999) <= 3 : index < 3) ? 'bg-amber-100 text-amber-700' : 'bg-stone-100 text-stone-500'}`}>
+              {isFormalRankingMode ? (store.rank ?? "—") : (index + 1)}
             </span>
             <div>
               <h4 className="font-bold text-stone-700 text-lg">{store.displayName}</h4>
@@ -648,7 +612,7 @@ const RankingView = () => {
               <tbody className="text-sm divide-y divide-stone-50">
                 {sortedData.map((store, index) => (
                   <tr key={store.name} className="hover:bg-stone-50 transition-colors">
-                    <td className="px-3 py-3.5 text-center text-stone-400 font-bold">{isHistoricalFormalMode ? (store.rank ?? "—") : (index + 1)}</td>
+                    <td className="px-3 py-3.5 text-center text-stone-400 font-bold">{isFormalRankingMode ? (store.rank ?? "—") : (index + 1)}</td>
                     <td className="px-3 py-3.5 font-bold text-stone-700">{store.displayName}</td>
                     <td className="px-3 py-3.5 text-right font-mono font-bold text-stone-700">{formatMoneyOrNA(store.cashTotal)}</td>
                     

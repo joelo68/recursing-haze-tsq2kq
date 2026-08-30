@@ -5,11 +5,22 @@ import { sortManagerNames, sortStoreNames, sortManagersByOrgOrder, sortStoresByO
 // ★ 新增了 collection 與 getDocs，讓我們一次把全公司的專屬小抄都抓下來
 import { doc, getDoc, collection, getDocs, onSnapshot } from 'firebase/firestore';
 import { db } from '../config/firebase';
-import { KPI_VALUE_STATUS } from '../utils/kpiContracts.js';
+import { KPI_VALUE_STATUS, formalNetCash } from '../utils/kpiContracts.js';
+import {
+  buildCurrentDetailFormalAuthority,
+  buildCurrentDetailFormalScope,
+} from '../utils/currentDetailFormalConsumer.js';
 import { buildHistoricalFormalDashboardScope, isFormalDashboardSummaryCompatible } from '../utils/dashboardFormalConsumer.js';
 import { getSummaryRecalcFlagState, resolveHistoricalDashboardReadPolicy } from '../utils/dashboardReadPolicy.js';
 
 const safeNumber = (value) => Number.isFinite(Number(value)) ? Number(value) : 0;
+const isFiniteKpiNumber = (value) => typeof value === "number" && Number.isFinite(value);
+const getFormalNetCashValue = (row = {}) => {
+  const result = formalNetCash(row?.cash, row?.refund, row?.skincareRefund);
+  return [KPI_VALUE_STATUS.VALID, KPI_VALUE_STATUS.VALID_ZERO].includes(result.status)
+    ? result.value
+    : null;
+};
 
 // 門市排名後段採動態比例，避免小型品牌「全部門市都落在後五名」的失真。
 // 2～5 間：最後 1 名；6～9 間：最後 2 名；10 間以上：最後 20%。
@@ -101,7 +112,7 @@ const buildProjectionRangePayload = ({ currentTotal = 0, remainingConservative =
 export function useDashboardStats() {
   const { 
     targets, userRole, currentUser, 
-    allReports, budgets, monthlyTargetSummary, managers, managerOrder = [], selectedYear, selectedMonth, therapistReports,
+    allReports, monthlyTargetSummary, currentLifecycleMasterState, managers, managerOrder = [], selectedYear, selectedMonth, therapistReports,
     currentBrand, therapists, dailyLoginCount, yesterdayLoginCount,
     therapistAnnualAggregatedData, getCollectionPath, historicalDetailRefreshState,
     currentDashboardSummary, currentRankingsSummary, currentReportSummaryReady,
@@ -205,8 +216,6 @@ export function useDashboardStats() {
     brandInfo?.id,
   ]);
 
-  const allowDashboardTargetRawFallback = dashboardTargetReadPolicy.allowRawTargetFallback === true;
-  
   // ==========================================
   // ★ 升級版：一次抓取「全集團所有門市」的專屬推估小抄 (包含現金與權責)
   // ==========================================
@@ -546,138 +555,6 @@ export function useDashboardStats() {
   }, [getSummaryStoreCandidates]);
 
   // ============================================================================
-  // ★ Dashboard 月目標安全解析
-  // 目前 monthly_targets_summary 可能存在「店名舊格式」或「該店 Summary row 存在但目標為 0」的情況。
-  // Dashboard 不再只用 summaryTargets[fullStoreName] 完全字串命中；先用 cleanName() 對齊店名，
-  // 並把「現金 / 權責目標皆為 0」視為不可用 Summary row，交由下方精準 raw fallback 補足。
-  // ============================================================================
-  const readMonthlyTargetNumber = useMemo(() => (row = {}, keys = []) => {
-    for (const key of keys) {
-      const raw = row?.[key];
-      if (raw === null || raw === undefined || raw === "") continue;
-      const num = Number(raw);
-      if (Number.isFinite(num)) return num;
-    }
-    return 0;
-  }, []);
-
-  const isUsableMonthlyTargetRow = useMemo(() => (row = null) => {
-    if (!row || typeof row !== "object") return false;
-    const cashTarget = readMonthlyTargetNumber(row, ["cashTarget", "targetCash", "cashBudget", "monthlyCashTarget", "cash", "cash_target"]);
-    const accrualTarget = readMonthlyTargetNumber(row, ["accrualTarget", "targetAccrual", "accrualBudget", "monthlyAccrualTarget", "accrual", "accrual_target"]);
-    return cashTarget > 0 || accrualTarget > 0;
-  }, [readMonthlyTargetNumber]);
-
-  const findMonthlyTargetSummaryEntry = useMemo(() => (summaryData, fullStoreName, y, m) => {
-    if (!summaryData || typeof summaryData !== "object") return null;
-
-    const targetYearMonth = `${y}-${String(m).padStart(2, "0")}`;
-    const summaryYearMonth = String(summaryData?.yearMonth || summaryData?.id || "");
-    if (summaryYearMonth && summaryYearMonth !== targetYearMonth) return null;
-
-    const summaryTargets = summaryData?.targets || summaryData?.storeTargets || summaryData?.data || {};
-    if (!summaryTargets || typeof summaryTargets !== "object") return null;
-
-    const targetCore = cleanName(fullStoreName);
-    if (!targetCore) return null;
-
-    const directKeys = Array.from(new Set([
-      fullStoreName,
-      `${brandPrefix}${targetCore}店`,
-      `${brandInfo?.name || brandPrefix}${targetCore}店`,
-      `${targetCore}店`,
-      targetCore,
-      targetCore === "新店" ? `${brandPrefix}新店` : "",
-      targetCore === "新店" ? "新店" : "",
-      targetCore === "新店" ? "新" : "",
-    ].filter(Boolean)));
-
-    for (const key of directKeys) {
-      const direct = summaryTargets?.[key];
-      if (isUsableMonthlyTargetRow(direct)) return direct;
-    }
-
-    const entries = Array.isArray(summaryTargets)
-      ? summaryTargets.map((value, index) => [String(index), value])
-      : Object.entries(summaryTargets);
-
-    for (const [key, value] of entries) {
-      if (!value || typeof value !== "object") continue;
-      const candidates = [
-        key,
-        value.storeName,
-        value.store,
-        value.displayName,
-        value.name,
-        value.id,
-        value.coreStoreName,
-      ].map(cleanName).filter(Boolean);
-
-      if (candidates.includes(targetCore) && isUsableMonthlyTargetRow(value)) return value;
-    }
-
-    return null;
-  }, [cleanName, brandPrefix, brandInfo?.name, isUsableMonthlyTargetRow]);
-
-  // 精準 raw fallback 僅在 Summary 對特定店家缺漏或目標為 0 時使用；
-  // key 為 cleanName(store)，不重新打開整包 monthly_targets。
-  const [dashboardTargetRawFallbacks, setDashboardTargetRawFallbacks] = useState({
-    yearMonth: "",
-    rows: {},
-  });
-
-  const getBudgetDataForStore = useMemo(() => (fullStoreName, y, m) => {
-    const summaryValue = findMonthlyTargetSummaryEntry(
-      monthlyTargetSummary,
-      fullStoreName,
-      y,
-      m
-    );
-    if (summaryValue) return summaryValue;
-
-    const targetYearMonth = `${y}-${String(m).padStart(2, "0")}`;
-    const targetCore = cleanName(fullStoreName);
-
-    // verified historical Formal Summary 必須 fail-closed；不可使用先前殘留的 raw fallback / budgets
-    // 去偷偷補 denominator。current month 或 detail fallback 才保留相容層。
-    if (!allowDashboardTargetRawFallback) return null;
-
-    const rawFallback = (
-      dashboardTargetRawFallbacks?.yearMonth === targetYearMonth
-        ? dashboardTargetRawFallbacks?.rows?.[targetCore]
-        : null
-    );
-    if (isUsableMonthlyTargetRow(rawFallback)) return rawFallback;
-
-    // budgets 在 Dashboard 一般會被 App 節流清空；只保留 current/detail fallback 舊流程相容層。
-    const monthNum = Number(m);
-    const monthPadded = String(monthNum).padStart(2, "0");
-    const legacyKeys = Array.from(new Set([
-      `${fullStoreName}_${y}_${monthNum}`,
-      `${fullStoreName}_${y}_${monthPadded}`,
-      `${brandPrefix}${targetCore}店_${y}_${monthNum}`,
-      `${brandPrefix}${targetCore}店_${y}_${monthPadded}`,
-      targetCore === "新店" ? `${brandPrefix}新店_${y}_${monthNum}` : "",
-      targetCore === "新店" ? `${brandPrefix}新店_${y}_${monthPadded}` : "",
-    ].filter(Boolean)));
-
-    for (const key of legacyKeys) {
-      if (isUsableMonthlyTargetRow(budgets?.[key])) return budgets[key];
-    }
-
-    return null;
-  }, [
-    monthlyTargetSummary,
-    dashboardTargetRawFallbacks,
-    findMonthlyTargetSummaryEntry,
-    isUsableMonthlyTargetRow,
-    budgets,
-    cleanName,
-    brandPrefix,
-    allowDashboardTargetRawFallback,
-  ]);
-
-  // ============================================================================
   // ★ 期間式代理與托管：營運總覽可視範圍
   // 正式組織仍由 managers / org_structure 決定；這裡只把具備 viewOperations
   // 權限的暫時托管店家加入目前登入者的營運查看範圍。
@@ -887,152 +764,6 @@ export function useDashboardStats() {
     cleanName,
   ]);
 
-  // ============================================================================
-  // ★ Dashboard 月目標精準 raw fallback
-  // 先等待 App 的 monthly_targets_summary onSnapshot；只有目前可視店家在 Summary 中
-  // 「找不到」或「現金 / 權責目標皆為 0」時，才針對該店該月讀取原始 monthly_targets。
-  // 正常 Summary 完整時：0 額外 reads。
-  // 為避免資料異常時放大讀取，單次最多補 6 間店。
-  // ============================================================================
-  useEffect(() => {
-    let cancelled = false;
-    let timerId = null;
-
-    const y = Number(selectedYear);
-    const m = Number(selectedMonth);
-    const targetYearMonth = y && m ? `${y}-${String(m).padStart(2, "0")}` : "";
-
-    if (!getCollectionPath || !targetYearMonth) {
-      setDashboardTargetRawFallbacks({ yearMonth: "", rows: {} });
-      return () => { cancelled = true; };
-    }
-
-    if (!allowDashboardTargetRawFallback) {
-      setDashboardTargetRawFallbacks({ yearMonth: targetYearMonth, rows: {} });
-      return () => { cancelled = true; };
-    }
-
-    const scopedStoreCores = Array.from(new Set(
-      (effectiveStores || []).map(cleanName).filter(Boolean)
-    ));
-
-    if (scopedStoreCores.length === 0) {
-      setDashboardTargetRawFallbacks({ yearMonth: targetYearMonth, rows: {} });
-      return () => { cancelled = true; };
-    }
-
-    const summaryYearMonth = String(monthlyTargetSummary?.yearMonth || monthlyTargetSummary?.id || "");
-    const summaryReadyForMonth = Boolean(
-      monthlyTargetSummary &&
-      summaryYearMonth === targetYearMonth
-    );
-
-    // Summary 還沒回來時不要立刻打 raw；先讓 App 原本 onSnapshot 完成。
-    if (!summaryReadyForMonth) {
-      setDashboardTargetRawFallbacks((prev) => (
-        prev?.yearMonth === targetYearMonth ? prev : { yearMonth: targetYearMonth, rows: {} }
-      ));
-      return () => { cancelled = true; };
-    }
-
-    const missingStoreCores = scopedStoreCores.filter((storeCore) => (
-      !findMonthlyTargetSummaryEntry(
-        monthlyTargetSummary,
-        `${brandPrefix}${storeCore}店`,
-        y,
-        m
-      )
-    ));
-
-    if (missingStoreCores.length === 0) {
-      setDashboardTargetRawFallbacks({ yearMonth: targetYearMonth, rows: {} });
-      return () => { cancelled = true; };
-    }
-
-    // 只補真正有問題的少數店家；若超過 6 間，代表 Summary 本身需先重建，避免 Dashboard 掃大量 raw。
-    const storesToRecover = missingStoreCores.slice(0, 6);
-
-    timerId = window.setTimeout(async () => {
-      try {
-        const targetCollection = getCollectionPath("monthly_targets");
-        const recoveredRows = {};
-
-        for (const storeCore of storesToRecover) {
-          if (cancelled) return;
-
-          const canonicalFullName = `${brandPrefix}${storeCore}店`;
-          const candidateIds = [
-            `${canonicalFullName}_${y}_${m}`,
-            `${canonicalFullName}_${y}_${String(m).padStart(2, "0")}`,
-          ];
-
-          // 「新店」歷史曾使用 CYJ新店_YYYY_M；保留兼容舊 key。
-          if (storeCore === "新店") {
-            candidateIds.push(
-              `${brandPrefix}新店_${y}_${m}`,
-              `${brandPrefix}新店_${y}_${String(m).padStart(2, "0")}`
-            );
-          }
-
-          let resolved = null;
-          for (const targetId of Array.from(new Set(candidateIds))) {
-            const snap = await getDoc(doc(targetCollection, targetId));
-            if (!snap.exists()) continue;
-
-            const row = {
-              ...snap.data(),
-              sourceDocId: snap.id,
-              __dashboardTargetFallback: true,
-            };
-
-            if (isUsableMonthlyTargetRow(row)) {
-              resolved = row;
-              break;
-            }
-          }
-
-          if (resolved) recoveredRows[storeCore] = resolved;
-        }
-
-        if (!cancelled) {
-          setDashboardTargetRawFallbacks({
-            yearMonth: targetYearMonth,
-            rows: recoveredRows,
-          });
-
-          if (Object.keys(recoveredRows).length > 0) {
-            console.info("[Dashboard Target Fallback]", {
-              yearMonth: targetYearMonth,
-              recoveredStores: Object.keys(recoveredRows),
-              missingSummaryStores: missingStoreCores,
-            });
-          }
-        }
-      } catch (error) {
-        if (!cancelled) {
-          console.warn("Dashboard 月目標精準 fallback 失敗：", error);
-          setDashboardTargetRawFallbacks({ yearMonth: targetYearMonth, rows: {} });
-        }
-      }
-    }, 350);
-
-    return () => {
-      cancelled = true;
-      if (timerId) window.clearTimeout(timerId);
-    };
-  }, [
-    selectedYear,
-    selectedMonth,
-    effectiveStores,
-    brandPrefix,
-    cleanName,
-    getCollectionPath,
-    monthlyTargetSummary,
-    findMonthlyTargetSummaryEntry,
-    isUsableMonthlyTargetRow,
-    allowDashboardTargetRawFallback,
-  ]);
-
   const allCompanyStores = useMemo(() => {
     const stores = new Set();
 
@@ -1229,6 +960,37 @@ export function useDashboardStats() {
     const now = new Date();
     return Number(selectedYear) === now.getFullYear() && Number(selectedMonth) === now.getMonth() + 1;
   }, [selectedYear, selectedMonth]);
+
+  const currentDetailFormalAuthority = useMemo(() => {
+    const lifecycleStateBrand = String(currentLifecycleMasterState?.brandId || "").toLowerCase();
+    const currentBrandId = String(brandInfo?.id || "").toLowerCase();
+    const lifecycleMaster = (
+      currentLifecycleMasterState?.ready === true &&
+      lifecycleStateBrand === currentBrandId
+    ) ? currentLifecycleMasterState?.data : null;
+
+    return buildCurrentDetailFormalAuthority({
+      brandId: currentBrandId,
+      yearMonth: selectedYearMonth,
+      lifecycleMaster,
+      monthlyTargetSummary,
+      reports: allReports || [],
+      normalizeStoreKey: cleanName,
+    });
+  }, [
+    currentLifecycleMasterState,
+    brandInfo?.id,
+    selectedYearMonth,
+    monthlyTargetSummary,
+    allReports,
+    cleanName,
+  ]);
+
+  const currentDetailFormalScope = useMemo(() => buildCurrentDetailFormalScope({
+    authority: currentDetailFormalAuthority,
+    storeKeys: effectiveStores,
+    normalizeStoreKey: cleanName,
+  }), [currentDetailFormalAuthority, effectiveStores, cleanName]);
 
   const getDashboardSummaryTrustMeta = (statusKey) => {
     const map = {
@@ -1943,6 +1705,9 @@ export function useDashboardStats() {
 
   const detailDashboardStats = useMemo(() => {
     if (!allReports) return null;
+    if (!currentDetailFormalScope.compatible) return null;
+    const formalScopeStoreKeySet = new Set(currentDetailFormalScope.scopeStoreKeys || []);
+    const formalBrandStoreKeySet = new Set(currentDetailFormalAuthority.eligibleStoreKeys || []);
     const y = parseInt(selectedYear); const m = parseInt(selectedMonth);
     const daysInMonth = new Date(y, m, 0).getDate();
     const now = new Date(); let daysPassed = daysInMonth; let isCurrentMonth = false;
@@ -1970,8 +1735,9 @@ export function useDashboardStats() {
       const reportStoreClean = cleanName(report.storeName);
       
       if (!effectiveStores.includes(reportStoreClean)) return;
+      if (!formalScopeStoreKeySet.has(reportStoreClean)) return;
 
-      const cash = (Number(report.cash) || 0) - (Number(report.refund) || 0);
+      const cash = getFormalNetCashValue(report) ?? 0;
       const traffic = Number(report.traffic) || 0;
       const operationalAccrual = Number(report.operationalAccrual) || 0;
       const skincareSales = Number(report.skincareSales) || 0;
@@ -2008,27 +1774,15 @@ export function useDashboardStats() {
         if (daysPassed > now.getDate()) daysPassed = now.getDate();
     }
 
-    effectiveStores.forEach(storeName => {
-        const fullName = `${brandPrefix}${storeName}店`;
-        const b = getBudgetDataForStore(fullName, y, m);
-        if (b) {
-            const baseCash = Number(b.cashTarget) || 0; const baseAccrual = Number(b.accrualTarget) || 0;
-            const chalCash = Number(b.challengeCashTarget) || 0; const chalAccrual = Number(b.challengeAccrualTarget) || 0;
-            stats.budget += baseCash; stats.accrualBudget += baseAccrual;
-            if (chalCash > 0) stats.hasChallengeCash = true;
-            if (chalAccrual > 0) stats.hasChallengeAccrual = true;
-            stats.challengeBudget += (chalCash > 0 ? chalCash : baseCash);
-            stats.challengeAccrualBudget += (chalAccrual > 0 ? chalAccrual : baseAccrual);
-        }
-    });
-
     const getStoreTop3Global = (targetDateStr) => {
         const storeMap = {};
         allReports.forEach(r => {
             if (r.date === targetDateStr) {
-                const sName = cleanName(r.storeName) + '店';
+                const core = cleanName(r.storeName);
+                if (!formalBrandStoreKeySet.has(core)) return;
+                const sName = core + '店';
                 if (!storeMap[sName]) storeMap[sName] = 0;
-                storeMap[sName] += (Number(r.cash) || 0) - (Number(r.refund) || 0);
+                storeMap[sName] += getFormalNetCashValue(r) ?? 0;
             }
         });
         return Object.entries(storeMap)
@@ -2049,9 +1803,11 @@ export function useDashboardStats() {
     allReports.forEach(r => {
         const rDate = new Date(r.date);
         if (rDate.getFullYear() === y && (rDate.getMonth() + 1) === m) {
-            const sName = cleanName(r.storeName) + '店';
+            const core = cleanName(r.storeName);
+            if (!formalBrandStoreKeySet.has(core)) return;
+            const sName = core + '店';
             if (!storeMonthlyMap[sName]) storeMonthlyMap[sName] = 0;
-            storeMonthlyMap[sName] += (Number(r.cash) || 0) - (Number(r.refund) || 0);
+            storeMonthlyMap[sName] += getFormalNetCashValue(r) ?? 0;
         }
     });
     const rawMonthlyTop3 = Object.entries(storeMonthlyMap)
@@ -2080,10 +1836,11 @@ export function useDashboardStats() {
         return { ...s, streak: isStreak, badgeText: txt };
     });
 
-    const achievement = stats.budget > 0 ? (stats.cash / stats.budget) * 100 : 0;
-    const accrualAchievement = stats.accrualBudget > 0 ? (stats.accrual / stats.accrualBudget) * 100 : 0;
-    const challengeAchievement = stats.challengeBudget > 0 ? (stats.cash / stats.challengeBudget) * 100 : 0;
-    const challengeAccrualAchievement = stats.challengeAccrualBudget > 0 ? (stats.accrual / stats.challengeAccrualBudget) * 100 : 0;
+    // Batch 5D-2：正式達成率 authority 由 Lifecycle + reporting completeness + Target Coverage 決定。
+    const achievement = currentDetailFormalScope.cashAchievement;
+    const accrualAchievement = currentDetailFormalScope.accrualAchievement;
+    const challengeAchievement = currentDetailFormalScope.challengeCashAchievement;
+    const challengeAccrualAchievement = currentDetailFormalScope.challengeAccrualAchievement;
 
  // ============================================================================
     // ★ 月底推估：動態權重 + 保守 / 標準 / 積極區間
@@ -2167,68 +1924,116 @@ export function useDashboardStats() {
     else if (daysPassed === 0) chartDays = 0;
     const slicedDailyTotals = stats.dailyData.slice(0, chartDays);
 
+    const formalCashAvailable = isFiniteKpiNumber(currentDetailFormalScope.cash);
+    const formalAccrualAvailable = isFiniteKpiNumber(currentDetailFormalScope.accrual);
+    const formalProjection = formalCashAvailable ? projection : null;
+    const formalAccrualProjection = formalAccrualAvailable ? accrualProjection : null;
+    const formalProjectionRange = {
+      ...projectionRange,
+      cash: formalCashAvailable ? projectionRange.cash : null,
+      accrual: formalAccrualAvailable ? projectionRange.accrual : null,
+    };
+
     return {
       grandTotal: {
-        cash: stats.cash, accrual: stats.accrual, operationalAccrual: stats.operationalAccrual, skincareSales: stats.skincareSales, traffic: stats.traffic,
-        newCustomers: stats.newCustomers, newCustomerClosings: stats.newCustomerClosings, newCustomerSales: stats.newCustomerSales,
-        budget: stats.budget, accrualBudget: stats.accrualBudget, challengeBudget: stats.challengeBudget, challengeAccrualBudget: stats.challengeAccrualBudget, 
-        hasChallengeCash: stats.hasChallengeCash, hasChallengeAccrual: stats.hasChallengeAccrual, projection, accrualProjection, projectionRange   
+        cash: currentDetailFormalScope.cash,
+        accrual: currentDetailFormalScope.accrual,
+        operationalAccrual: stats.operationalAccrual,
+        skincareSales: stats.skincareSales,
+        traffic: stats.traffic,
+        newCustomers: stats.newCustomers,
+        newCustomerClosings: stats.newCustomerClosings,
+        newCustomerSales: stats.newCustomerSales,
+        budget: currentDetailFormalScope.cashTarget,
+        accrualBudget: currentDetailFormalScope.accrualTarget,
+        challengeBudget: currentDetailFormalScope.challengeCashTarget,
+        challengeAccrualBudget: currentDetailFormalScope.challengeAccrualTarget,
+        hasChallengeCash: currentDetailFormalScope.challengeCashConfigured === true,
+        hasChallengeAccrual: currentDetailFormalScope.challengeAccrualConfigured === true,
+        projection: formalProjection,
+        accrualProjection: formalAccrualProjection,
+        projectionRange: formalProjectionRange,
+        formalNetCash: currentDetailFormalScope.cash,
+        formalNetCashStatus: currentDetailFormalScope.cashStatus,
+        formalAccrual: currentDetailFormalScope.accrual,
+        formalAccrualStatus: currentDetailFormalScope.accrualStatus,
+        formalCashTarget: currentDetailFormalScope.cashTarget,
+        formalCashTargetStatus: currentDetailFormalScope.cashTargetStatus,
+        formalAccrualTarget: currentDetailFormalScope.accrualTarget,
+        formalAccrualTargetStatus: currentDetailFormalScope.accrualTargetStatus,
       },
       dailyTotals: slicedDailyTotals,
-      totalAchievement: achievement, totalAccrualAchievement: accrualAchievement, challengeAchievement, challengeAccrualAchievement, 
-      avgTrafficASP, avgNewCustomerASP, daysPassed, daysInMonth, newRevMix, oldRevMix, newCountMix, oldCountMix,
-      storeMonthlyTop3, storeTodayTop3, storeYesterdayTop3 
+      totalAchievement: achievement,
+      totalAccrualAchievement: accrualAchievement,
+      challengeAchievement,
+      challengeAccrualAchievement,
+      avgTrafficASP,
+      avgNewCustomerASP,
+      daysPassed,
+      daysInMonth,
+      newRevMix,
+      oldRevMix,
+      newCountMix,
+      oldCountMix,
+      storeMonthlyTop3,
+      storeTodayTop3,
+      storeYesterdayTop3,
+      source: "detail_formal",
+      formalConsumerActive: true,
+      formalKpiStatus: {
+        cash: currentDetailFormalScope.cashStatus,
+        cashTarget: currentDetailFormalScope.cashTargetStatus,
+        cashAchievement: currentDetailFormalScope.cashAchievementStatus,
+        accrual: currentDetailFormalScope.accrualStatus,
+        accrualTarget: currentDetailFormalScope.accrualTargetStatus,
+        accrualAchievement: currentDetailFormalScope.accrualAchievementStatus,
+        reportingStatus: currentDetailFormalScope.reportingStatus,
+        cashCoverageComplete: currentDetailFormalScope.cashCoverageComplete,
+        accrualCoverageComplete: currentDetailFormalScope.accrualCoverageComplete,
+        lifecycleReady: currentDetailFormalAuthority.lifecycleReady === true,
+        scopeEligibleStoreCount: currentDetailFormalScope.scopeEligibleStoreCount,
+        targetSummaryAvailable: currentDetailFormalScope.targetSummaryAvailable,
+      },
     };
   // ★ 監視清單換成了包含全部小抄的字典
-  }, [allReports, getBudgetDataForStore, selectedYear, selectedMonth, effectiveStores, brandPrefix, cleanName, getProjectionCurveForStore]);
+  }, [allReports, selectedYear, selectedMonth, effectiveStores, brandPrefix, cleanName, getProjectionCurveForStore, currentDetailFormalScope, currentDetailFormalAuthority]);
 
   const detailMyStoreRankings = useMemo(() => {
-    if (!allReports) return [];
-    const storeStats = {}; const y = parseInt(selectedYear); const m = parseInt(selectedMonth);
+    if (!currentDetailFormalAuthority?.compatible) return [];
+    const effectiveStoreSet = new Set((effectiveStores || []).map(cleanName).filter(Boolean));
+    const totalStores = Number(currentDetailFormalAuthority.formalRankEligibleStoreCount || 0);
 
-    allReports.forEach(report => {
-      const rDate = new Date(report.date);
-      if (rDate.getFullYear() !== y || (rDate.getMonth() + 1) !== m) return;
-      const cName = cleanName(report.storeName);
-      if (!cName) return; 
-      const standardName = `${brandPrefix}${cName}店`; 
-      if (!storeStats[standardName]) storeStats[standardName] = 0;
-      storeStats[standardName] += ((Number(report.cash) || 0) - (Number(report.refund) || 0));
-    });
+    return Object.values(currentDetailFormalAuthority.stores || {})
+      .filter((row) => row?.formalRankEligible === true && effectiveStoreSet.has(cleanName(row.storeKey)))
+      .sort((a, b) => Number(a.formalCashAchievementRank || 0) - Number(b.formalCashAchievementRank || 0))
+      .map((row) => {
+        const rank = Number(row.formalCashAchievementRank || 0);
+        const target = row.cashTarget;
+        const challengeTarget = row.challengeCashTarget;
+        const hasChallenge = row.challengeCashTargetConfigured === true;
+        const challengeRate = (
+          isFiniteKpiNumber(row.formalNetCash) &&
+          isFiniteKpiNumber(challengeTarget) &&
+          challengeTarget > 0
+        ) ? (row.formalNetCash / challengeTarget) * 100 : null;
 
-    const rankingList = Object.keys(storeStats).map(storeName => {
-      const budgetData = getBudgetDataForStore(storeName, y, m);
-      const target = budgetData ? Number(budgetData.cashTarget || 0) : 0;
-      const challengeTarget = budgetData ? Number(budgetData.challengeCashTarget || 0) : 0; 
-      const actual = storeStats[storeName];
-      const rate = target > 0 ? (actual / target) * 100 : 0;
-      const challengeRate = challengeTarget > 0 ? (actual / challengeTarget) * 100 : 0; 
-
-      return { 
-        storeName, actual, target, rate, challengeTarget, challengeRate,   
-        hasChallenge: challengeTarget > 0, passedChallenge: challengeTarget > 0 && actual >= challengeTarget 
-      };
-    });
-
-    rankingList.sort((a, b) => b.rate - a.rate);
-    const fullRankedList = rankingList.map((item, index) => {
-      const rank = index + 1;
-      const isBottomSegment = isInBottomRankingSegment(rank, rankingList.length);
-      return {
-        ...item,
-        rank,
-        totalStores: rankingList.length,
-        isBottomSegment,
-        // 舊欄位相容：值已改採動態後段區間，不再固定後五名。
-        isBottom5: isBottomSegment,
-      };
-    });
-    
-    return fullRankedList.filter(item => {
-        const cleanItemName = cleanName(item.storeName);
-        return effectiveStores.includes(cleanItemName); 
-    });
-  }, [allReports, effectiveStores, getBudgetDataForStore, selectedYear, selectedMonth, cleanName, brandPrefix]);
+        return {
+          storeName: row.canonicalStoreName || `${brandPrefix}${row.storeKey}店`,
+          rank,
+          totalStores,
+          actual: row.formalNetCash,
+          target,
+          rate: row.cashAchievement,
+          challengeTarget,
+          hasChallenge,
+          challengeRate,
+          passedChallenge: hasChallenge && isFiniteKpiNumber(challengeRate) && challengeRate >= 100,
+          rankingSemantics: "formal_cash_achievement",
+          isBottomSegment: isInBottomRankingSegment(rank, totalStores),
+          isBottom5: isInBottomRankingSegment(rank, totalStores),
+        };
+      });
+  }, [currentDetailFormalAuthority, effectiveStores, cleanName, brandPrefix]);
 
   const detailTherapistStats = useMemo(() => {
     const emptyTherapistStats = { rankings: [], myStats: null, grandTotal: {}, yesterdayTop3: [], todayTop3: [], myYearlyTotal: 0, source: "not_loaded" };

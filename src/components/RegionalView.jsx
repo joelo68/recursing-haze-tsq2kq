@@ -12,6 +12,7 @@ import { AppContext } from "../AppContext";
 import { ViewWrapper, Card } from "./SharedUI";
 import { Loader2, Map as MapIcon } from "lucide-react";
 import { buildHistoricalFormalRegionalData, resolveHistoricalReportFormalTrust } from "../utils/reportFormalConsumer";
+import { buildCurrentDetailFormalAuthority, buildCurrentDetailFormalScope } from "../utils/currentDetailFormalConsumer.js";
 
 const RegionalView = () => {
   const { 
@@ -31,7 +32,8 @@ const RegionalView = () => {
     currentReportSummaryReady,
     currentReportSummaryReadyYearMonth,
     currentReportSummaryReadyBrandId,
-    currentSummaryRecalcFlagState
+    currentSummaryRecalcFlagState,
+    currentLifecycleMasterState
   } = useContext(AppContext);
 
   // 1. 定義品牌前綴與名稱
@@ -233,70 +235,78 @@ const RegionalView = () => {
 
     if (!isCurrentMonth && reportFormalTrust.loading && (!allReports || allReports.length === 0)) return null;
 
-    // Current month / fail-closed detail fallback：維持既有即時明細邏輯。
-    const stats = Object.keys(managers || {}).map(mgr => ({
-      manager: mgr || "未命名",
-      stores: [],
-      cashTotal: 0,
-      accrualTotal: 0,
-      skincareSalesTotal: 0,
-      trafficTotal: 0,
-      newCustomersTotal: 0,
-      newCustomerClosingsTotal: 0,
-      budgetTotal: 0,
-      achievement: 0,
-      source: "detail"
-    }));
+    // Batch 5D-2：current month / detail fallback 與 historical Formal 使用同一套 KPI contract。
+    const lifecycleStateBrand = String(currentLifecycleMasterState?.brandId || "").toLowerCase();
+    const currentBrandId = String(currentBrand?.id || currentBrand || "").toLowerCase();
+    const lifecycleMaster = (
+      currentLifecycleMasterState?.ready === true &&
+      lifecycleStateBrand === currentBrandId
+    ) ? currentLifecycleMasterState?.data : null;
+    const authority = buildCurrentDetailFormalAuthority({
+      brandId: currentBrandId,
+      yearMonth: selectedYearMonth,
+      lifecycleMaster,
+      monthlyTargetSummary,
+      reports: allReports || [],
+      normalizeStoreKey: cleanStoreName,
+    });
+    if (!authority.compatible) return null;
 
-    stats.forEach(region => {
-      const storeList = managers[region.manager] || [];
-
-      storeList.forEach(storeName => {
-        const coreName = cleanStoreName(storeName);
-        const fullName = `${brandPrefix}${coreName}店`;
-
-        const storeStat = {
-          name: fullName,
-          cleanName: coreName,
-          cashTotal: 0,
-          accrualTotal: 0,
-          budget: 0,
-          achievement: 0
-        };
-
-        (allReports || []).forEach(r => {
-          const rDate = new Date(r.date);
-          if (rDate.getFullYear() !== y || (rDate.getMonth() + 1) !== m) return;
-
-          const reportCoreName = cleanStoreName(r.storeName);
-          if (reportCoreName !== coreName) return;
-
-          const cash = (Number(r.cash) || 0) - (Number(r.refund) || 0);
-          const operationalAccrual = Number(r.operationalAccrual) || 0;
-          const accrual = brandPrefix === "安妞" ? operationalAccrual : (Number(r.accrual) || 0);
-
-          storeStat.cashTotal += cash;
-          storeStat.accrualTotal += accrual;
-
-          region.cashTotal += cash;
-          region.accrualTotal += accrual;
-          region.skincareSalesTotal += (Number(r.skincareSales) || 0);
-          region.trafficTotal += (Number(r.traffic) || 0);
-          region.newCustomersTotal += (Number(r.newCustomers) || 0);
-          region.newCustomerClosingsTotal += (Number(r.newCustomerClosings) || 0);
-        });
-
-        storeStat.budget = resolveStoreBudget(coreName, fullName, null, y, m);
-        region.budgetTotal += storeStat.budget || 0;
-        storeStat.achievement = storeStat.budget > 0 ? (storeStat.cashTotal / storeStat.budget) * 100 : 0;
-
-        region.stores.push(storeStat);
+    const stats = Object.entries(managers || {}).map(([managerName, storeNames]) => {
+      const scope = buildCurrentDetailFormalScope({
+        authority,
+        storeKeys: storeNames || [],
+        normalizeStoreKey: cleanStoreName,
       });
+      const stores = scope.rows.map((row) => ({
+        name: row.canonicalStoreName || `${brandPrefix}${row.storeKey}店`,
+        cleanName: row.storeKey,
+        cashTotal: row.formalNetCash,
+        cashStatus: row.formalNetCashStatus,
+        accrualTotal: row.formalAccrual,
+        accrualStatus: row.formalAccrualStatus,
+        budget: row.cashTarget,
+        budgetStatus: row.cashTargetStatus,
+        achievement: row.cashAchievement,
+        achievementStatus: row.cashAchievementStatus,
+        accrualTarget: row.accrualTarget,
+        accrualTargetStatus: row.accrualTargetStatus,
+        accrualAchievement: row.accrualAchievement,
+        accrualAchievementStatus: row.accrualAchievementStatus,
+        reportingStatus: row.reportingStatus,
+        source: "detail_formal",
+      }));
 
-      region.achievement = region.budgetTotal > 0 ? (region.cashTotal / region.budgetTotal) * 100 : 0;
+      return {
+        manager: managerName || "未命名",
+        stores,
+        cashTotal: scope.cash,
+        cashStatus: scope.cashStatus,
+        accrualTotal: scope.accrual,
+        accrualStatus: scope.accrualStatus,
+        skincareSalesTotal: scope.skincareSales,
+        trafficTotal: scope.traffic,
+        newCustomersTotal: scope.newCustomers,
+        newCustomerClosingsTotal: scope.newCustomerClosings,
+        budgetTotal: scope.cashTarget,
+        budgetStatus: scope.cashTargetStatus,
+        achievement: scope.cashAchievement,
+        achievementStatus: scope.cashAchievementStatus,
+        cashCoverageComplete: scope.cashCoverageComplete,
+        accrualCoverageComplete: scope.accrualCoverageComplete,
+        reportingStatus: scope.reportingStatus,
+        source: "detail_formal",
+      };
     });
 
-    return stats.sort((a, b) => b.cashTotal - a.cashTotal);
+    return stats.sort((a, b) => {
+      const aValid = isFiniteKpi(a.cashTotal);
+      const bValid = isFiniteKpi(b.cashTotal);
+      if (aValid && bValid) return Number(b.cashTotal) - Number(a.cashTotal);
+      if (aValid) return -1;
+      if (bValid) return 1;
+      return String(a.manager).localeCompare(String(b.manager), "zh-Hant");
+    });
 
   }, [
     allReports,
@@ -310,6 +320,7 @@ const RegionalView = () => {
     isCurrentMonth,
     reportFormalTrust.trusted,
     reportFormalTrust.loading,
+    currentLifecycleMasterState,
   ]);
 
   const pieData = useMemo(

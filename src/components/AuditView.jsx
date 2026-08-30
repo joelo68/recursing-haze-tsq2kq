@@ -6,6 +6,11 @@ import { AppContext } from "../AppContext";
 import { sortManagerNames, sortStoreNames, sortManagersByOrgOrder, sortStoresByOrgOrder } from "../utils/helpers";
 import { ViewWrapper, Card } from "./SharedUI";
 import SmartDatePicker from "./SmartDatePicker";
+import {
+  getLifecycleEligibleStoreEntries,
+  isLifecycleEntryExpectedForDate,
+  normalizeLifecycleMaster,
+} from "../utils/storeLifecycle.js";
 
 // ★ 終極翻譯蒟蒻：日期標準化
 const safeGetDateStr = (val) => {
@@ -104,7 +109,7 @@ const AuditView = ({ auditType: controlledAuditType, setAuditType: setControlled
     managers, managerOrder, showToast, budgets, selectedYear, selectedMonth, setSelectedYear, setSelectedMonth, rawData,
     therapists, therapistReports, therapistSchedules, userRole, currentUser, therapistTargets,
     auditExclusions = [], handleUpdateAuditExclusions, currentBrand, therapistModuleEnabled,
-    getActiveDelegationForStore, delegatedStores = []
+    getActiveDelegationForStore, delegatedStores = [], currentLifecycleMasterState
   } = useContext(AppContext);
 
   const isTherapistModuleEnabled = therapistModuleEnabled !== false;
@@ -240,6 +245,46 @@ const AuditView = ({ auditType: controlledAuditType, setAuditType: setControlled
       .replace(/[　\s]+/g, '')
       .trim();
   }, []);
+
+  const selectedYearMonthKey = useMemo(() => (
+    `${String(selectedYear || "")}-${String(selectedMonth || "").padStart(2, "0")}`
+  ), [selectedYear, selectedMonth]);
+
+  const currentLifecycleBrandId = useMemo(() => {
+    const raw = typeof currentBrand === "string" ? currentBrand : (currentBrand?.id || "");
+    return String(raw || "").toLowerCase();
+  }, [currentBrand]);
+
+  const lifecycleMaster = useMemo(() => {
+    const stateBrandId = String(currentLifecycleMasterState?.brandId || "").toLowerCase();
+    if (currentLifecycleMasterState?.ready !== true) return null;
+    if (!currentLifecycleBrandId || stateBrandId !== currentLifecycleBrandId) return null;
+    if (!currentLifecycleMasterState?.data) return null;
+    return normalizeLifecycleMaster(currentLifecycleMasterState.data, currentLifecycleBrandId);
+  }, [currentLifecycleMasterState, currentLifecycleBrandId]);
+
+  const lifecycleReady = Boolean(
+    lifecycleMaster &&
+    String(lifecycleMaster?.datasetStatus || "") === "READY" &&
+    String(lifecycleMaster?.brandId || "").toLowerCase() === currentLifecycleBrandId
+  );
+
+  const lifecycleEntriesForMonth = useMemo(() => {
+    if (!lifecycleReady || !selectedYearMonthKey) return [];
+    return getLifecycleEligibleStoreEntries(lifecycleMaster, selectedYearMonthKey, {
+      brandId: currentLifecycleBrandId,
+      requireReady: true,
+    });
+  }, [lifecycleMaster, lifecycleReady, selectedYearMonthKey, currentLifecycleBrandId]);
+
+  const lifecycleEntryByCore = useMemo(() => {
+    const map = new Map();
+    lifecycleEntriesForMonth.forEach((entry) => {
+      const core = cleanStoreName(entry?.storeKey || entry?.coreStoreName || entry?.canonicalStoreName || "");
+      if (core) map.set(core, entry);
+    });
+    return map;
+  }, [lifecycleEntriesForMonth, cleanStoreName]);
 
   const normalizeText = useCallback((value) => {
     return String(value || "")
@@ -401,10 +446,26 @@ const AuditView = ({ auditType: controlledAuditType, setAuditType: setControlled
   };
 
   const activeStoresForCalendar = useMemo(() => {
-    const allMyStores = sortStoresByOrgOrder(managers, Object.values(managers).flat(), brandPrefix, managerOrder);
-    return allMyStores.filter(s => !auditExclusions.includes(s) && !auditExclusions.includes(cleanStoreName(s))) 
-      .map(s => ({ id: s, name: `${s}店`, stores: [s, `${s}店`, `${brandPrefix}${s}`, `${brandPrefix}${s}店`, `CYJ${s}店`] }));
-  }, [managers, managerOrder, auditExclusions, brandPrefix, cleanStoreName]);
+    if (!lifecycleReady) return [];
+    const allMyStores = sortStoresByOrgOrder(managers, Object.values(managers || {}).flat(), brandPrefix, managerOrder);
+    return allMyStores
+      .filter((storeName) => {
+        const core = cleanStoreName(storeName);
+        return core &&
+          lifecycleEntryByCore.has(core) &&
+          !auditExclusions.includes(storeName) &&
+          !auditExclusions.includes(core);
+      })
+      .map((storeName) => {
+        const core = cleanStoreName(storeName);
+        return {
+          id: core,
+          name: `${core}店`,
+          lifecycleEntry: lifecycleEntryByCore.get(core),
+          stores: [core, `${core}店`, `${brandPrefix}${core}`, `${brandPrefix}${core}店`, `CYJ${core}店`],
+        };
+      });
+  }, [managers, managerOrder, auditExclusions, brandPrefix, cleanStoreName, lifecycleReady, lifecycleEntryByCore]);
 
   const validTherapistsForMonth = useMemo(() => {
       const y = parseInt(selectedYear), m = parseInt(selectedMonth);
@@ -448,8 +509,19 @@ const AuditView = ({ auditType: controlledAuditType, setAuditType: setControlled
           const dateStr = `${yStr}-${mStr}-${d.toString().padStart(2, '0')}`;
           const dateObj = new Date(dateStr);
           
-          const subStores = rawData.filter(r => safeGetDateStr(r.date) === dateStr).map(r => r.storeName);
-          matrix.stores[dateStr] = activeStoresForCalendar.map(s => s.id).filter(id => !subStores.some(sub => sub && sub.includes(id))).map(id => `${brandPrefix}${id}店`);
+          const submittedStoreSet = new Set(
+            (rawData || [])
+              .filter((row) => safeGetDateStr(row?.date) === dateStr)
+              .map((row) => cleanStoreName(row?.storeName || row?.store || ""))
+              .filter(Boolean)
+          );
+          const reportingCutoffDate = getDefaultDailyAuditDate();
+          const expectedStores = dateStr <= reportingCutoffDate
+            ? activeStoresForCalendar.filter((store) => isLifecycleEntryExpectedForDate(store.lifecycleEntry, dateStr))
+            : [];
+          matrix.stores[dateStr] = expectedStores
+            .filter((store) => !submittedStoreSet.has(cleanStoreName(store.id)))
+            .map((store) => `${brandPrefix}${cleanStoreName(store.id)}店`);
 
           const missingT = [];
           validTherapistsForMonth.forEach(t => {
@@ -501,7 +573,7 @@ const AuditView = ({ auditType: controlledAuditType, setAuditType: setControlled
           matrix.therapists[dateStr] = missingT;
       }
       return matrix;
-  }, [selectedYear, selectedMonth, rawData, activeStoresForCalendar, validTherapistsForMonth, therapistSchedules, therapistReports, isTherapistMatch, brandPrefix, getTherapistDisplayName, getTherapistStore]);
+  }, [selectedYear, selectedMonth, rawData, activeStoresForCalendar, validTherapistsForMonth, therapistSchedules, therapistReports, isTherapistMatch, brandPrefix, cleanStoreName, getTherapistDisplayName, getTherapistStore]);
 
   // ============================================================================
   // ★ 完美日曆資料：既服從大腦，又保留真實業績
@@ -519,7 +591,10 @@ const AuditView = ({ auditType: controlledAuditType, setAuditType: setControlled
 
               activeStoresForCalendar.forEach(s => {
                   const isMissing = missingStores.includes(`${brandPrefix}${s.id}店`);
-                  const real = rawNorm.find(r => r.date === dateStr && r.storeName === s.id);
+                  const real = rawNorm.find((row) => (
+                    row.date === dateStr &&
+                    cleanStoreName(row?.storeName || row?.store || "") === cleanStoreName(s.id)
+                  ));
 
                   if (!isMissing) {
                       // 沒缺漏，有真實報告就給真實報告(確保大於0)，沒報告就發幽靈綠燈
@@ -566,7 +641,7 @@ const AuditView = ({ auditType: controlledAuditType, setAuditType: setControlled
           }
       }
       return reports;
-  }, [dailyMatrix, auditType, activeStoresForCalendar, validTherapistsForMonth, selectedYear, selectedMonth, rawData, therapistReports, isTherapistMatch, brandPrefix, getTherapistDisplayName, getTherapistStore]);
+  }, [dailyMatrix, auditType, activeStoresForCalendar, validTherapistsForMonth, selectedYear, selectedMonth, rawData, therapistReports, isTherapistMatch, brandPrefix, cleanStoreName, getTherapistDisplayName, getTherapistStore]);
 
   const activeData = useMemo(() => {
       let missing = [];
@@ -646,9 +721,15 @@ const AuditView = ({ auditType: controlledAuditType, setAuditType: setControlled
       return { missing, missingByManager };
   }, [auditType, checkDate, dailyMatrix, managers, managerOrder, budgets, therapistTargets, selectedYear, selectedMonth, auditExclusions, brandPrefix, cleanStoreName, validTherapistsForMonth, isTherapistMatch, isTargetInSelectedMonth, getTherapistMonthlyTarget, getTherapistDisplayName, getTherapistStore, getTherapistManager, getResponsibilityLabel]);
 
+  const isStoreDailyLifecycleBlocked = auditType === "daily" && !lifecycleReady;
   const calendarStores = auditType.includes('therapist') ? activeTherapistsForCalendar : activeStoresForCalendar;
 
   const handleCopy = () => {
+    if (isStoreDailyLifecycleBlocked) {
+      navigator.clipboard.writeText(`回報檢核(${checkDate})：Store Lifecycle 尚未就緒，暫不判定店家漏報。`);
+      showToast("Lifecycle 尚未就緒", "warning");
+      return;
+    }
     let text = `未完成名單(${checkDate})：\n`;
     Object.entries(activeData.missingByManager).forEach(([mgr, list]) => { text += `${mgr}：${list.join("、")}\n`; });
     navigator.clipboard.writeText(text);
@@ -700,6 +781,13 @@ const AuditView = ({ auditType: controlledAuditType, setAuditType: setControlled
           </div>
         )}
 
+        {isStoreDailyLifecycleBlocked && (
+          <div className="mb-4 rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm font-bold text-amber-700 flex items-start gap-2">
+            <AlertCircle size={18} className="mt-0.5 shrink-0" />
+            <span>Store Lifecycle 尚未就緒，店家日報暫不判定漏報，避免把未納管日期誤標成未完成。</span>
+          </div>
+        )}
+
         <div className="border border-rose-100 rounded-3xl overflow-hidden shadow-sm mb-8">
           <div className="bg-rose-50 px-6 py-4 flex justify-between items-center">
             <h4 className="font-bold text-rose-600 flex items-center gap-2"><AlertCircle size={20} /> 未完成名單 <span className="bg-white px-2 py-0.5 rounded-full text-xs border border-rose-200">{activeData.missing.length}</span></h4>
@@ -714,9 +802,14 @@ const AuditView = ({ auditType: controlledAuditType, setAuditType: setControlled
                 </div>
               </div>
             ))}
-            {activeData.missing.length === 0 && (
+            {activeData.missing.length === 0 && !isStoreDailyLifecycleBlocked && (
               <div className="col-span-3 text-center py-10 text-emerald-500 font-bold text-lg">
                 <div className="w-12 h-12 rounded-full bg-emerald-100 flex items-center justify-center mx-auto mb-2"><CheckCircle size={24}/></div>全數完成！
+              </div>
+            )}
+            {isStoreDailyLifecycleBlocked && (
+              <div className="col-span-3 text-center py-10 text-amber-600 font-bold text-base">
+                暫無漏報判定結果
               </div>
             )}
           </div>

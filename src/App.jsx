@@ -565,6 +565,7 @@ const MONTHLY_REPORT_DATA_VIEWS = new Set(["dashboard", "regional", "ranking", "
 // regional / ranking / store-analysis 只需要店日報，不應同步常駐讀 therapist_daily_reports。
 // Dashboard 預設店鋪模式時也先不讀管理師日報；切到人員績效才啟動。
 const MONTHLY_DAILY_REPORT_DATA_VIEWS = new Set(["dashboard", "regional", "ranking", "store-analysis", "audit", "history"]);
+const OPERATIONAL_FORMAL_LIFECYCLE_VIEWS = new Set(["dashboard", "regional", "ranking", "daily", "audit"]);
 const MONTHLY_THERAPIST_REPORT_DATA_VIEWS = new Set(["audit", "history"]);
 
 
@@ -1061,6 +1062,12 @@ export default function App() {
   const [therapistAnnualAggregatedData, setTherapistAnnualAggregatedData] = useState([]); // ★新增：管理師專屬結算包
   const [budgets, setBudgets] = useState({});
   const [monthlyTargetSummary, setMonthlyTargetSummary] = useState(null); // ★ monthly_targets_summary/{yearMonth}：Dashboard 目標資料輕量即時來源
+  const [currentLifecycleMasterState, setCurrentLifecycleMasterState] = useState({
+    brandId: "",
+    ready: false,
+    data: null,
+    error: null,
+  });
   const [currentDashboardSummary, setCurrentDashboardSummary] = useState(null); // ★ 報表 summary-first：Ranking / Regional / Dashboard 共用單一來源
   const [currentRankingsSummary, setCurrentRankingsSummary] = useState(null);
   const [currentReportSummaryReady, setCurrentReportSummaryReady] = useState(false);
@@ -2469,6 +2476,63 @@ export default function App() {
     };
   }, [user, selectedYearMonth, currentBrand?.id, getCollectionPath, getStableReadMeta]);
 
+  // Batch 5D-2：Current/detail Formal consumers 共用單一 Store Lifecycle Master listener。
+  // 只在營運 consumer views 啟用；不建立 per-store listener、query 或 polling。
+  const shouldLoadCurrentLifecycleMaster = OPERATIONAL_FORMAL_LIFECYCLE_VIEWS.has(activeView);
+  const shouldKeepCurrentLifecycleMasterLive = Boolean(user)
+    && shouldLoadCurrentLifecycleMaster
+    && isPageVisible
+    && isOnline
+    && !isLowPowerMode;
+
+  useEffect(() => {
+    const brandId = currentBrand?.id || currentBrandId || "";
+    if (!user || !shouldLoadCurrentLifecycleMaster) {
+      setCurrentLifecycleMasterState({ brandId: "", ready: false, data: null, error: null });
+      return undefined;
+    }
+
+    if (!shouldKeepCurrentLifecycleMasterLive) return undefined;
+
+    setCurrentLifecycleMasterState((prev) => (
+      prev.brandId === brandId
+        ? { ...prev, ready: false, error: null }
+        : { brandId, ready: false, data: null, error: null }
+    ));
+
+    const lifecycleRef = doc(getCollectionPath("store_lifecycle"), "master");
+    const unsubscribe = onSnapshot(
+      lifecycleRef,
+      (snap) => {
+        trackReadSource(
+          "store_lifecycle_master_operational",
+          snap.exists() ? 1 : 0,
+          getStableReadMeta("store_lifecycle_master_operational")
+        );
+        setCurrentLifecycleMasterState({
+          brandId,
+          ready: true,
+          data: snap.exists() ? { id: snap.id, ...snap.data() } : null,
+          error: snap.exists() ? null : new Error("STORE_LIFECYCLE_MASTER_MISSING"),
+        });
+      },
+      (error) => {
+        console.error("Store Lifecycle Master 即時監聽失敗:", error);
+        setCurrentLifecycleMasterState({ brandId, ready: true, data: null, error });
+      }
+    );
+
+    return () => unsubscribe();
+  }, [
+    user,
+    currentBrand?.id,
+    currentBrandId,
+    getCollectionPath,
+    getStableReadMeta,
+    shouldLoadCurrentLifecycleMaster,
+    shouldKeepCurrentLifecycleMasterLive,
+  ]);
+
   // ★ 報表 summary-first v1：
   // Ranking / Regional 優先讀 dashboard_summary / rankings_summary，不再一進頁面就讀整月 daily_reports。
   // 若 Summary 不存在，才允許 App 回退到明細監聽，保留正式營運數字安全性。
@@ -3851,7 +3915,7 @@ export default function App() {
   }, [userRole, currentUser, currentBrandId, currentBrand, activeView]);
 
   const contextValue = useMemo(() => ({
-    user, loading, analytics, managers: visibleManagers, managerOrder: visibleManagerOrder, budgets, monthlyTargetSummary, currentDashboardSummary, currentRankingsSummary, currentReportSummaryReady, currentReportSummaryReadyYearMonth, currentReportSummaryReadyBrandId, currentSummaryRecalcFlagState, historicalDetailRefreshState, targets, rawData: visibleRawData, allReports: rawData,
+    user, loading, analytics, managers: visibleManagers, managerOrder: visibleManagerOrder, budgets, monthlyTargetSummary, currentLifecycleMasterState, currentDashboardSummary, currentRankingsSummary, currentReportSummaryReady, currentReportSummaryReadyYearMonth, currentReportSummaryReadyBrandId, currentSummaryRecalcFlagState, historicalDetailRefreshState, targets, rawData: visibleRawData, allReports: rawData,
     annualAggregatedData, annualDashboardSummaries, annualSummaryStatusMap, annualSummaryLoadState, therapistAnnualAggregatedData, // ★ 把年度 Summary 與管理師資料交出去
     showToast, openConfirm, fmtMoney, fmtNum, inputDate, setInputDate, storeList: analytics?.storeList || [], setTargets, selectedYear, selectedMonth, setSelectedYear, setSelectedMonth, permissions, storeAccounts, managerAuth, currentUser, userRole, logActivity, handleUpdateStorePassword, handleUpdateManagerPassword, handleUpdateTherapistPassword, navigateToStore, activeView, appId, 
     therapists: visibleTherapists, therapistReports: visibleTherapistReports, therapistSchedules, therapistTargets, trainerAuth, handleUpdateTrainerAuth, auditExclusions, handleUpdateAuditExclusions, currentBrand, setCurrentBrandId, getCollectionPath, getDocPath, dailyLoginCount, yesterdayLoginCount, securityConfig, featureFlags, therapistModuleEnabled, isOnline, isLowPowerMode,
@@ -3864,7 +3928,7 @@ export default function App() {
     directorPermissionProfile,
     canDirectorAccessView,
     isReadOnlyDirector: userRole === "director" && !canDirectorAccessView("history")
-  }), [user, loading, analytics, visibleManagers, visibleManagerOrder, budgets, monthlyTargetSummary, currentDashboardSummary, currentRankingsSummary, currentReportSummaryReady, currentReportSummaryReadyYearMonth, currentReportSummaryReadyBrandId, currentSummaryRecalcFlagState, historicalDetailRefreshState, targets, visibleRawData, rawData, annualAggregatedData, annualDashboardSummaries, annualSummaryStatusMap, annualSummaryLoadState, therapistAnnualAggregatedData, inputDate, selectedYear, selectedMonth, permissions, storeAccounts, managerAuth, currentUser, userRole, logActivity, handleUpdateStorePassword, handleUpdateManagerPassword, handleUpdateTherapistPassword, navigateToStore, activeView, appId, visibleTherapists, visibleTherapistReports, therapistSchedules, therapistTargets, trainerAuth, handleUpdateTrainerAuth, auditExclusions, handleUpdateAuditExclusions, currentBrand, setCurrentBrandId, getCollectionPath, getDocPath, dailyLoginCount, yesterdayLoginCount, securityConfig, featureFlags, therapistModuleEnabled, isOnline, isLowPowerMode, currentDeviceTrust, currentSecurityAccountKey, manageDeviceSecurityAction, reviewDeviceApprovalAction, isDeviceSecuritySuperAdmin, openDeviceApprovalPanel, fetchGlobalData, managers, delegations, activeDelegations, delegationAccess, accessibleStores, officialStores, delegatedStores, refreshDelegations, canAccessStore, canEditStoreReport, getActiveDelegationForStore, directorLevel, directorPermissionProfile, canDirectorAccessView]); // ★ 依賴陣列也要加
+  }), [user, loading, analytics, visibleManagers, visibleManagerOrder, budgets, monthlyTargetSummary, currentLifecycleMasterState, currentDashboardSummary, currentRankingsSummary, currentReportSummaryReady, currentReportSummaryReadyYearMonth, currentReportSummaryReadyBrandId, currentSummaryRecalcFlagState, historicalDetailRefreshState, targets, visibleRawData, rawData, annualAggregatedData, annualDashboardSummaries, annualSummaryStatusMap, annualSummaryLoadState, therapistAnnualAggregatedData, inputDate, selectedYear, selectedMonth, permissions, storeAccounts, managerAuth, currentUser, userRole, logActivity, handleUpdateStorePassword, handleUpdateManagerPassword, handleUpdateTherapistPassword, navigateToStore, activeView, appId, visibleTherapists, visibleTherapistReports, therapistSchedules, therapistTargets, trainerAuth, handleUpdateTrainerAuth, auditExclusions, handleUpdateAuditExclusions, currentBrand, setCurrentBrandId, getCollectionPath, getDocPath, dailyLoginCount, yesterdayLoginCount, securityConfig, featureFlags, therapistModuleEnabled, isOnline, isLowPowerMode, currentDeviceTrust, currentSecurityAccountKey, manageDeviceSecurityAction, reviewDeviceApprovalAction, isDeviceSecuritySuperAdmin, openDeviceApprovalPanel, fetchGlobalData, managers, delegations, activeDelegations, delegationAccess, accessibleStores, officialStores, delegatedStores, refreshDelegations, canAccessStore, canEditStoreReport, getActiveDelegationForStore, directorLevel, directorPermissionProfile, canDirectorAccessView]); // ★ 依賴陣列也要加
   
   const memoizedViews = useMemo(() => {
     return (

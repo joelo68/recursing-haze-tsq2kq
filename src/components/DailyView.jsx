@@ -9,6 +9,9 @@ import { query, where, onSnapshot } from "firebase/firestore";
 import { ViewWrapper, Card } from "./SharedUI";
 import { AppContext } from "../AppContext";
 import { sortManagerNames, sortStoreNames, sortManagersByOrgOrder, sortStoresByOrgOrder } from "../utils/helpers";
+import { KPI_VALUE_STATUS } from "../utils/kpiContracts.js";
+import { aggregateFormalMetrics } from "../utils/summarySemantics.js";
+import { getLifecycleEligibleStoreEntries, isLifecycleEntryExpectedForDate, normalizeLifecycleMaster } from "../utils/storeLifecycle.js";
 import SmartDatePicker from "./SmartDatePicker";
 
 const DailyView = () => {
@@ -18,7 +21,7 @@ const DailyView = () => {
     auditExclusions, handleUpdateAuditExclusions, showToast,
     therapists, getCollectionPath, therapistModuleEnabled,
     accessibleStores = [], officialStores = [], delegatedStores = [], delegationAccess = {},
-    getActiveDelegationForStore
+    getActiveDelegationForStore, currentLifecycleMasterState
   } = useContext(AppContext);
 
   const isTherapistModuleEnabled = therapistModuleEnabled !== false;
@@ -136,6 +139,29 @@ const DailyView = () => {
     return core.replace(/店$/, '').trim();
   }, [brandPrefix]);
 
+  const selectedDateYearMonth = String(selectedDate || "").slice(0, 7);
+  const lifecycleStateBrand = String(currentLifecycleMasterState?.brandId || "").toLowerCase();
+  const lifecycleMaster = useMemo(() => {
+    if (currentLifecycleMasterState?.ready !== true) return null;
+    if (lifecycleStateBrand !== String(brandInfo.id || "").toLowerCase()) return null;
+    if (!currentLifecycleMasterState?.data) return null;
+    return normalizeLifecycleMaster(currentLifecycleMasterState.data, brandInfo.id);
+  }, [currentLifecycleMasterState, lifecycleStateBrand, brandInfo.id]);
+  const lifecycleReady = String(lifecycleMaster?.datasetStatus || "") === "READY";
+  const lifecycleStateMatchesBrand = currentLifecycleMasterState?.ready === true &&
+    lifecycleStateBrand === String(brandInfo.id || "").toLowerCase();
+  const isLifecycleMasterLoading = !lifecycleStateMatchesBrand;
+  const lifecycleExpectedStoreSet = useMemo(() => {
+    if (!lifecycleReady || !selectedDateYearMonth) return new Set();
+    return new Set(
+      getLifecycleEligibleStoreEntries(lifecycleMaster, selectedDateYearMonth, { brandId: brandInfo.id, requireReady: true })
+        .filter((entry) => isLifecycleEntryExpectedForDate(entry, selectedDate))
+        .map((entry) => cleanName(entry.storeKey || entry.coreStoreName || entry.canonicalStoreName))
+        .filter(Boolean)
+    );
+  }, [lifecycleMaster, lifecycleReady, selectedDateYearMonth, selectedDate, brandInfo.id, cleanName]);
+  const isValidFormalStatus = (status) => status === KPI_VALUE_STATUS.VALID || status === KPI_VALUE_STATUS.VALID_ZERO;
+
   const viewableDelegatedStores = useMemo(() => (
     (delegatedStores || []).filter((storeName) => {
       const core = cleanName(storeName);
@@ -242,61 +268,118 @@ const DailyView = () => {
   }, [baseVisibleStores, selectedStore, selectedManager, groupedStoresForFilter, cleanName]);
 
   const dailyData = useMemo(() => {
-    const storeDataMap = {};
-    let totalCash = 0, totalAccrual = 0, totalTraffic = 0, totalNewCust = 0, totalSkincare = 0;
+    if (!lifecycleReady) {
+      return {
+        list: [],
+        totals: { cash: null, accrual: null, traffic: null, newCustomers: null, skincare: null },
+        reportedCount: 0,
+        totalCount: 0,
+        dataComplete: false,
+        lifecycleReady: false,
+      };
+    }
 
-    effectiveStores.forEach(storeName => {
-      if (auditExclusions.includes(storeName)) return;
-      const delegationDetail = delegatedStoreDetailsByCore[storeName] || null;
-      storeDataMap[storeName] = {
-        storeName,
+    const storeDataMap = {};
+    const presentationStores = (effectiveStores || []).filter((storeName) => {
+      const core = cleanName(storeName);
+      if (!core || !lifecycleExpectedStoreSet.has(core)) return false;
+      return !auditExclusions.includes(storeName) && !auditExclusions.includes(core);
+    });
+
+    presentationStores.forEach((storeName) => {
+      const core = cleanName(storeName);
+      const delegationDetail = delegatedStoreDetailsByCore[core] || null;
+      storeDataMap[core] = {
+        storeName: core,
         isReported: false,
-        isDelegated: delegatedStoreCoreSet.has(storeName),
+        isDelegated: delegatedStoreCoreSet.has(core),
         delegationDetail,
-        cash: 0, accrual: 0, traffic: 0, newCustomers: 0, newCustomerSales: 0, skincareSales: 0
+        cash: null,
+        cashStatus: KPI_VALUE_STATUS.FIELD_MISSING,
+        accrual: null,
+        accrualStatus: KPI_VALUE_STATUS.FIELD_MISSING,
+        traffic: 0,
+        newCustomers: 0,
+        newCustomerSales: 0,
+        skincareSales: 0,
+        reports: [],
       };
     });
 
-    // 改用精準抓取的 dailyStoreReports
-    dailyStoreReports.forEach(report => {
-      const cName = cleanName(report.storeName);
-      if (auditExclusions.includes(cName)) return;
+    (dailyStoreReports || []).forEach((report) => {
+      const core = cleanName(report.storeName);
+      if (!storeDataMap[core]) return;
+      storeDataMap[core].reports.push(report);
+    });
 
-      if (storeDataMap[cName]) {
-        const cash = (Number(report.cash) || 0) - (Number(report.refund) || 0);
-        let accrual = Number(report.accrual) || 0;
-        if (brandPrefix === '安妞') accrual = Number(report.operationalAccrual) || 0;
-        const traffic = Number(report.traffic) || 0;
-        const newCust = Number(report.newCustomers) || 0;
-        const skincare = Number(report.skincareSales) || 0;
-
-        storeDataMap[cName] = {
-          ...storeDataMap[cName],
-          storeName: cName, isReported: true, cash, accrual, traffic, newCustomers: newCust,
-          skincareSales: skincare, newCustomerSales: Number(report.newCustomerSales) || 0
-        };
-
-        totalCash += cash; totalAccrual += accrual; totalTraffic += traffic; totalNewCust += newCust; totalSkincare += skincare;
-      }
+    Object.values(storeDataMap).forEach((store) => {
+      if (!store.reports.length) return;
+      const formal = aggregateFormalMetrics(brandInfo.id, store.reports);
+      store.isReported = true;
+      store.cash = formal.formalNetCash;
+      store.cashStatus = formal.formalNetCashStatus;
+      store.accrual = formal.formalAccrual;
+      store.accrualStatus = formal.formalAccrualStatus;
+      store.traffic = store.reports.reduce((sum, row) => sum + Number(row?.traffic || 0), 0);
+      store.newCustomers = store.reports.reduce((sum, row) => sum + Number(row?.newCustomers || 0), 0);
+      store.newCustomerSales = store.reports.reduce((sum, row) => sum + Number(row?.newCustomerSales ?? row?.newCustomerRevenue ?? 0), 0);
+      store.skincareSales = store.reports.reduce((sum, row) => sum + Number(row?.skincareSales || 0), 0);
     });
 
     let list = Object.values(storeDataMap);
+    const dataComplete = list.every((store) => store.isReported);
+    const cashComplete = dataComplete && list.every((store) => isValidFormalStatus(store.cashStatus));
+    const accrualComplete = dataComplete && list.every((store) => isValidFormalStatus(store.accrualStatus));
+
+    const totals = {
+      cash: cashComplete ? list.reduce((sum, store) => sum + Number(store.cash || 0), 0) : null,
+      accrual: accrualComplete ? list.reduce((sum, store) => sum + Number(store.accrual || 0), 0) : null,
+      traffic: dataComplete ? list.reduce((sum, store) => sum + Number(store.traffic || 0), 0) : null,
+      newCustomers: dataComplete ? list.reduce((sum, store) => sum + Number(store.newCustomers || 0), 0) : null,
+      skincare: dataComplete ? list.reduce((sum, store) => sum + Number(store.skincareSales || 0), 0) : null,
+    };
+
     list.sort((a, b) => {
       if (!a.isReported && b.isReported) return 1;
       if (a.isReported && !b.isReported) return -1;
-      if (sortConfig.direction === 'asc') return a[sortConfig.key] - b[sortConfig.key];
-      return b[sortConfig.key] - a[sortConfig.key];
+      const aValue = a?.[sortConfig.key];
+      const bValue = b?.[sortConfig.key];
+      const aMissing = aValue === null || aValue === undefined || !Number.isFinite(Number(aValue));
+      const bMissing = bValue === null || bValue === undefined || !Number.isFinite(Number(bValue));
+      if (aMissing || bMissing) {
+        if (aMissing && bMissing) return 0;
+        return aMissing ? 1 : -1;
+      }
+      if (sortConfig.direction === 'asc') return Number(aValue) - Number(bValue);
+      return Number(bValue) - Number(aValue);
     });
 
     let currentRank = 1;
-    list = list.map(item => {
-      if (item.isReported) item.rank = currentRank++;
-      else item.rank = "-";
-      return item;
-    });
+    list = list.map((item) => ({
+      ...item,
+      rank: item.isReported && isValidFormalStatus(item.cashStatus) ? currentRank++ : "-",
+    }));
 
-    return { list, totals: { cash: totalCash, accrual: totalAccrual, traffic: totalTraffic, newCustomers: totalNewCust, skincare: totalSkincare }, reportedCount: list.filter(s => s.isReported).length, totalCount: list.length };
-  }, [dailyStoreReports, effectiveStores, cleanName, brandPrefix, sortConfig, auditExclusions, delegatedStoreCoreSet, delegatedStoreDetailsByCore]);
+    return {
+      list,
+      totals,
+      reportedCount: list.filter((store) => store.isReported).length,
+      totalCount: list.length,
+      dataComplete,
+      lifecycleReady: true,
+    };
+  }, [
+    dailyStoreReports,
+    effectiveStores,
+    cleanName,
+    brandInfo.id,
+    sortConfig,
+    auditExclusions,
+    delegatedStoreCoreSet,
+    delegatedStoreDetailsByCore,
+    lifecycleReady,
+    lifecycleExpectedStoreSet,
+  ]);
 
   const therapistDailyData = useMemo(() => {
     let totalRev = 0, newRev = 0, oldRev = 0, returnRev = 0, newCount = 0;
@@ -346,6 +429,10 @@ const DailyView = () => {
       reportedCount: list.length
     };
   }, [dailyTherapistReports, effectiveStores, auditExclusions, cleanName, therapists, therapistSortConfig]);
+
+  const isFiniteKpi = (value) => typeof value === "number" && Number.isFinite(value);
+  const formatMoneyOrNA = (value) => isFiniteKpi(value) ? fmtMoney(value) : "N/A";
+  const formatNumberOrNA = (value) => isFiniteKpi(value) ? fmtNum(value) : "N/A";
 
   const handleSort = (key) => setSortConfig(prev => ({ key, direction: prev.key === key && prev.direction === 'desc' ? 'asc' : 'desc' }));
   const handleTherapistSort = (key) => setTherapistSortConfig(prev => ({ key, direction: prev.key === key && prev.direction === 'desc' ? 'asc' : 'desc' }));
@@ -501,7 +588,7 @@ const DailyView = () => {
         )}
 
         {/* 載入中狀態 (改為局部載入) */}
-        {isLoading ? (
+        {(isLoading || isLifecycleMasterLoading) ? (
            <div className="flex h-64 items-center justify-center bg-white rounded-3xl border border-stone-200 shadow-sm">
              <Loader2 className="h-10 w-10 animate-spin text-stone-300" />
              <span className="ml-3 text-stone-400 font-bold">調閱單日戰情中...</span>
@@ -512,10 +599,10 @@ const DailyView = () => {
             {viewMode === 'store' && (
               <div className="space-y-6 animate-in fade-in slide-in-from-bottom-4 duration-500 w-full min-w-0">
                 <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-4">
-                  <MiniKpiCard title="單日現金總額" value={fmtMoney(dailyData.totals.cash)} icon={DollarSign} color={{bg: 'bg-amber-50', text: 'text-amber-600'}} subText={`共 ${dailyData.reportedCount} 間門市產生業績`} />
-                  <MiniKpiCard title="單日權責總額" value={fmtMoney(dailyData.totals.accrual)} icon={CreditCard} color={{bg: 'bg-cyan-50', text: 'text-cyan-600'}} />
-                  <MiniKpiCard title="單日操作人次" value={fmtNum(dailyData.totals.traffic)} icon={Users} color={{bg: 'bg-blue-50', text: 'text-blue-600'}} />
-                  <MiniKpiCard title="單日新客數" value={fmtNum(dailyData.totals.newCustomers)} icon={Sparkles} color={{bg: 'bg-purple-50', text: 'text-purple-600'}} />
+                  <MiniKpiCard title="單日現金總額" value={formatMoneyOrNA(dailyData.totals.cash)} icon={DollarSign} color={{bg: 'bg-amber-50', text: 'text-amber-600'}} subText={`已回報 ${dailyData.reportedCount} / 應回報 ${dailyData.totalCount} 店`} />
+                  <MiniKpiCard title="單日權責總額" value={formatMoneyOrNA(dailyData.totals.accrual)} icon={CreditCard} color={{bg: 'bg-cyan-50', text: 'text-cyan-600'}} />
+                  <MiniKpiCard title="單日操作人次" value={formatNumberOrNA(dailyData.totals.traffic)} icon={Users} color={{bg: 'bg-blue-50', text: 'text-blue-600'}} />
+                  <MiniKpiCard title="單日新客數" value={formatNumberOrNA(dailyData.totals.newCustomers)} icon={Sparkles} color={{bg: 'bg-purple-50', text: 'text-purple-600'}} />
                 </div>
 
                 <div className="flex items-center gap-3 px-2">
@@ -578,8 +665,8 @@ const DailyView = () => {
                             
                             {store.isReported ? (
                               <>
-                                <td className="p-4 text-center font-mono font-bold text-amber-600">{fmtMoney(store.cash)}</td>
-                                <td className="p-4 text-center font-mono font-bold text-indigo-600">{fmtMoney(store.accrual)}</td>
+                                <td className="p-4 text-center font-mono font-bold text-amber-600">{formatMoneyOrNA(store.cash)}</td>
+                                <td className="p-4 text-center font-mono font-bold text-indigo-600">{formatMoneyOrNA(store.accrual)}</td>
                                 {/* ★ 修復：將操作客流與新客數改為純數字 fmtNum */}
                                 <td className="p-4 text-center font-mono text-stone-600">{fmtNum(store.traffic)}</td>
                                 <td className="p-4 text-center font-mono text-emerald-600">{fmtNum(store.newCustomers)}</td>

@@ -48,6 +48,7 @@ const DashboardView = () => {
            dailyLoginCount={dailyLoginCount}
            yesterdayLoginCount={yesterdayLoginCount}
            dashboardSummaryStatus={dashboardSummaryStatus}
+           dashboardKpiStatus={dashboardStats?.formalKpiStatus || {}}
            viewMode={viewMode}
            setViewMode={setViewMode}
            selectedDashboardManager={selectedDashboardManager}

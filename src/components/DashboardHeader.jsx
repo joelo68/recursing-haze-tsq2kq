@@ -8,7 +8,8 @@ const DashboardHeader = ({
   selectedDashboardManager, setSelectedDashboardManager,
   selectedDashboardStore, setSelectedDashboardStore,
   groupedStoresForFilter, availableStoresForDropdown,
-  officialStoresForDropdown = [], delegatedStoresForDropdown = [], delegatedStoreDetails = {}
+  officialStoresForDropdown = [], delegatedStoresForDropdown = [], delegatedStoreDetails = {},
+  dashboardKpiStatus = {}
 }) => {
   const { userRole, therapistModuleEnabled } = useContext(AppContext);
   const isTherapistModuleEnabled = therapistModuleEnabled !== false;
@@ -78,6 +79,16 @@ const DashboardHeader = ({
     ? formatStatusTime(summaryStatus.lastCompareAtText || summaryStatus.lastUpdatedAtText)
     : "";
 
+  const kpiWarnings = [];
+  const cashActualStatus = String(dashboardKpiStatus?.cash || "");
+  const accrualActualStatus = String(dashboardKpiStatus?.accrual || "");
+  const cashTargetStatus = String(dashboardKpiStatus?.cashTarget || "");
+  const accrualTargetStatus = String(dashboardKpiStatus?.accrualTarget || "");
+  if (cashActualStatus === "DATA_INCOMPLETE") kpiWarnings.push("現金實績資料不足");
+  if (cashTargetStatus === "TARGET_INCOMPLETE") kpiWarnings.push("現金目標資料不足");
+  if (accrualActualStatus === "DATA_INCOMPLETE") kpiWarnings.push("權責實績資料不足");
+  if (accrualTargetStatus === "TARGET_INCOMPLETE") kpiWarnings.push("權責目標資料不足");
+
   return (
     <div className="bg-white p-4 md:p-5 rounded-3xl border border-stone-200 shadow-sm animate-in fade-in slide-in-from-top-2 mb-6">
       <div className="flex flex-col xl:flex-row justify-between gap-5">
@@ -125,6 +136,15 @@ const DashboardHeader = ({
                     <span className="rounded-full bg-white/70 px-1.5 py-0.5 text-[9px] font-black opacity-80">待整理 {summaryStatus.pendingCount}</span>
                   )}
                 </div>
+                {kpiWarnings.map((warning) => (
+                  <div
+                    key={warning}
+                    className="inline-flex items-center gap-1.5 rounded-full border border-amber-200 bg-amber-50 px-2.5 py-1 text-[10px] font-black text-amber-700"
+                  >
+                    <AlertTriangle size={11} strokeWidth={2.3} />
+                    <span>{warning}</span>
+                  </div>
+                ))}
                 {hasDelegatedStores && isScopedOperator && (
                   <div
                     title="托管店家會納入目前可查看的營運範圍，但正式組織與績效歸屬不會改變。"

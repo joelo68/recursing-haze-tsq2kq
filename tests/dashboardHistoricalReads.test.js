@@ -128,9 +128,10 @@ test("Dashboard hook reuses App dashboard, rankings and flag sources instead of 
   assert.match(hookSource, /currentSummaryRecalcFlagState/);
 });
 
-test("trusted historical Dashboard disables raw monthly_targets recovery", () => {
-  assert.match(hookSource, /allowDashboardTargetRawFallback/);
-  assert.match(hookSource, /if \(!allowDashboardTargetRawFallback\)/);
+test("Dashboard never reopens raw monthly_targets recovery after Formal target authority cutover", () => {
+  assert.doesNotMatch(hookSource, /Dashboard 月目標精準 raw fallback/);
+  assert.doesNotMatch(hookSource, /getCollectionPath\("monthly_targets"\)/);
+  assert.doesNotMatch(hookSource, /dashboardTargetRawFallbacks/);
 });
 
 
