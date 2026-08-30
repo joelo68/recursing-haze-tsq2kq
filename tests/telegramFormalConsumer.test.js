@@ -4,6 +4,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { createRequire } from "node:module";
+import vm from "node:vm";
 
 const require = createRequire(import.meta.url);
 
@@ -212,6 +213,95 @@ test("5C-2 decouples active-alert policy scope from Formal KPI authority", () =>
   assert.match(storeSource, /const formalKpiMode = true;/);
   assert.doesNotMatch(storeSource, /policyScopes\.includes\("active_alert"\)/);
   assert.match(storeSource, /formalKpiMode,/);
+});
+
+test("5C-2 Active Alert runtime resolves Formal status helper through index import", async () => {
+  const formalImportEndMarker = '} = require("./telegram/formalKpi");';
+  const formalImportEndMarkerIndex = indexSource.indexOf(formalImportEndMarker);
+  const formalImportStart = indexSource.lastIndexOf("const {", formalImportEndMarkerIndex);
+  const formalImportEnd = formalImportEndMarkerIndex + formalImportEndMarker.length;
+  const formalImportSource = indexSource.slice(formalImportStart, formalImportEnd);
+  assert.ok(formalImportStart >= 0 && formalImportEndMarkerIndex >= 0, "formalKpi import block must be extractable");
+  assert.match(formalImportSource, /\bisValidNumericStatus\b/, "functions/index.js must import isValidNumericStatus from formalKpi");
+
+  const alertsStart = indexSource.indexOf("async function getOperationalAlerts");
+  const alertsEnd = indexSource.indexOf("async function getDataHealth", alertsStart);
+  const runtimeSource = `${indexSource.slice(formalImportStart, formalImportEnd)}\n${indexSource.slice(alertsStart, alertsEnd)}\ngetOperationalAlerts;`;
+
+  const disabledRule = { enabled: false, threshold: 0, criticalThreshold: 0, watchThreshold: 0, minSample: 0, severity: "watch" };
+  const rules = {
+    missingReport: { ...disabledRule },
+    missingTarget: { ...disabledRule },
+    progressGap: { ...disabledRule },
+    cashAchievementRate: { ...disabledRule },
+    closingRate: { ...disabledRule },
+    skincareRatio: { ...disabledRule },
+    newCustomers: { ...disabledRule },
+    traffic: { ...disabledRule },
+  };
+
+  const sandbox = {
+    require: (specifier) => {
+      assert.equal(specifier, "./telegram/formalKpi");
+      return require("../functions/telegram/formalKpi.js");
+    },
+    normalizeTelegramAgentYearMonth: (value) => value,
+    getTelegramAgentTaipeiNow: () => ({ yearMonth: "2026-07", todayStr: "2026-07-31" }),
+    resolveTelegramAgentBrands: () => ["cyj"],
+    getTelegramAgentExpectedProgress: () => 80,
+    normalizeTelegramActiveAlertRules: () => rules,
+    applyTelegramAgentAlertPolicies: (value) => value,
+    getTelegramActiveAlertEnabledRuleLabels: () => [],
+    getTelegramAgentAlertLimit: () => 10,
+    loadTelegramAgentStoreMonth: async () => ({
+      rows: [{
+        storeName: "仁愛",
+        cash: 100,
+        cashStatus: "VALID",
+        budget: 200,
+        cashTargetStatus: "VALID",
+        achievement: 50,
+        cashAchievementRate: 50,
+        cashAchievementStatus: "VALID",
+        newCount: 0,
+        newClosings: 0,
+        skincareGross: 0,
+        traffic: 0,
+        formalKpiMode: true,
+      }],
+      source: "verified_formal_dashboard_summary",
+      updatedAtText: "2026-08-30",
+      formalKpiMode: true,
+      preSystem: false,
+    }),
+    loadTelegramAgentOrgProfile: async () => ({
+      stores: ["仁愛"],
+      storeOwner: { "仁愛": "測試區長" },
+      actingDelegationByStore: {},
+      activeDelegations: [],
+      actingManagerByStore: {},
+      sourcePath: "org_structure",
+      delegationSourcePath: "",
+    }),
+    loadTelegramAgentAuditExclusions: async () => ({ storeSet: new Set(), stores: [], sourcePath: "audit_exclusions" }),
+    getTelegramPolicyExcludedStoreSet: () => new Set(),
+    normalizeSummaryCoreName: (value) => String(value || ""),
+    loadTelegramAgentTargetMap: async () => { throw new Error("Formal row should own target authority"); },
+    getTelegramAgentBrandLabel: () => "DRCYJ",
+    buildTelegramAgentDataQuality: (value) => value,
+    getTelegramAgentDateDiffDays: () => 30,
+    getTelegramAgentMetricDictionary: () => ({}),
+  };
+
+  const getOperationalAlertsRuntime = vm.runInNewContext(runtimeSource, sandbox);
+  const result = await getOperationalAlertsRuntime("2026-07", "CYJ", 10, { warnings: [] }, rules);
+
+  assert.equal(result.formal_kpi_mode, true);
+  assert.equal(result.brandSummaries.length, 1);
+  assert.equal(result.brandSummaries[0].cash, 100);
+  assert.equal(result.brandSummaries[0].budget, 200);
+  assert.equal(result.brandSummaries[0].cashAchievementRate, 50);
+  assert.equal(result.brandSummaries[0].cashAchievementStatus, "VALID");
 });
 
 test("5C-2 Active Alert consumes Formal KPI and preserves policy scope", () => {

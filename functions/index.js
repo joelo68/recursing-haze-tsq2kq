@@ -7,6 +7,7 @@ const functions = require("firebase-functions/v1");
 const admin = require("firebase-admin");
 const { createTelegramAgentPrompts } = require("./telegram/prompts");
 const {
+  isValidNumericStatus,
   isTelegramFormalPreSystemMonth,
   inspectTelegramFormalSummaryTrust,
   buildTelegramFormalMetricsFromCanonical,
