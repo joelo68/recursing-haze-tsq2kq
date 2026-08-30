@@ -1,5 +1,5 @@
 // src/components/StoreAnalysisView.jsx
-import React, { useState, useEffect, useMemo, useContext, useCallback, useRef } from "react";
+import React, { useState, useEffect, useMemo, useContext, useCallback } from "react";
 import {
   ComposedChart, Bar, Line, XAxis, YAxis, CartesianGrid, 
   Tooltip as RechartsTooltip, Legend, ResponsiveContainer,
@@ -12,10 +12,11 @@ import {
 } from "lucide-react";
 
 import { AppContext } from "../AppContext";
-import { query, where, orderBy, onSnapshot, doc, getDoc } from "firebase/firestore";
+import { query, where, orderBy, onSnapshot } from "firebase/firestore";
 import { trackSnapshotRead } from "../utils/readTracker";
 import { toStandardDateFormat, formatNumber, sortManagerNames, sortStoreNames, sortManagersByOrgOrder, sortStoresByOrgOrder } from "../utils/helpers";
 import { ViewWrapper, Card } from "./SharedUI";
+import { buildCurrentDetailFormalAuthority, buildCurrentDetailFormalScope } from "../utils/currentDetailFormalConsumer";
 
 // 預設值
 const DEFAULT_BENCHMARKS = {
@@ -46,8 +47,8 @@ const StoreAnalysisView = () => {
   const {
     rawData,
     allReports,
-    budgets,
     monthlyTargetSummary,
+    currentLifecycleMasterState,
     currentDashboardSummary,
     managers, managerOrder,
     targets, 
@@ -68,8 +69,6 @@ const StoreAnalysisView = () => {
   const [showBenchmark, setShowBenchmark] = useState(true);
   const [storeScopedReports, setStoreScopedReports] = useState([]);
   const [storeScopedLoading, setStoreScopedLoading] = useState(false);
-  const [storeTargetFallbacks, setStoreTargetFallbacks] = useState({});
-  const storeTargetRecoveryAttemptedRef = useRef(new Set());
 
   // 1. 定義品牌前綴與識別 ID
   const { brandPrefix, brandId } = useMemo(() => {
@@ -116,25 +115,23 @@ const StoreAnalysisView = () => {
       return !(/安妞|Anew|伊啵|Yibo/i.test(name)); 
   }, []);
 
-  const pickNumber = useCallback((...values) => {
-    for (const value of values) {
-      const n = Number(value);
-      if (Number.isFinite(n) && n > 0) return n;
+  // Store Analysis target presentation follows the selected-month monthly_targets_summary only.
+  // Explicit 0 is authoritative presentation data (formal target status remains TARGET_NOT_SET);
+  // missing/blank never reopens dashboard_summary, stale budgets, or raw monthly_targets fallback.
+  const readCashTargetPresentation = useCallback((item = {}) => {
+    const fields = [
+      "cashTarget", "targetCash", "cashBudget", "budget", "monthlyCashTarget",
+      "cashTotalTarget", "cashGoal", "target_cash", "cash_target",
+    ];
+    for (const field of fields) {
+      if (!Object.prototype.hasOwnProperty.call(item || {}, field)) continue;
+      const raw = item?.[field];
+      if (raw === null || raw === undefined || raw === "") continue;
+      const value = Number(raw);
+      if (Number.isFinite(value)) return { found: true, value };
     }
-    return 0;
+    return { found: false, value: null };
   }, []);
-
-  const readCashTargetFields = useCallback((item = {}) => pickNumber(
-    item?.cashTarget,
-    item?.targetCash,
-    item?.cashBudget,
-    item?.budget,
-    item?.monthlyCashTarget,
-    item?.cashTotalTarget,
-    item?.cashGoal,
-    item?.target_cash,
-    item?.cash_target
-  ), [pickNumber]);
 
   const findTargetByStore = useCallback((source, coreName, fullName) => {
     if (!source) return null;
@@ -149,190 +146,51 @@ const StoreAnalysisView = () => {
 
     const scanContainer = (container) => {
       if (!container) return null;
-
       if (Array.isArray(container)) {
         return container.find((item) => normalized.has(canonicalTargetStoreName(item?.storeName || item?.name || item?.displayName || item?.store)));
       }
-
       if (typeof container === "object") {
         for (const [key, value] of Object.entries(container)) {
           const name = value?.storeName || value?.name || value?.displayName || value?.store || key;
           if (normalized.has(canonicalTargetStoreName(name))) return value;
         }
       }
-
       return null;
     };
 
     const direct = scanContainer(source);
     if (direct) return direct;
-
     const containers = [
-      source?.stores,
-      source?.storeTargets,
-      source?.storeTargetMap,
-      source?.monthlyTargets,
-      source?.targets,
-      source?.targetStores,
-      source?.items,
-      source?.data,
-      source?.byStore,
-      source?.storeMap,
-      source?.storesMap,
-      source?.summaryByStore,
-      source?.storeSummaries,
+      source?.stores, source?.storeTargets, source?.storeTargetMap, source?.monthlyTargets,
+      source?.targets, source?.targetStores, source?.items, source?.data, source?.byStore,
+      source?.storeMap, source?.storesMap, source?.summaryByStore, source?.storeSummaries,
     ];
-
     for (const container of containers) {
       const found = scanContainer(container);
       if (found) return found;
     }
-
     return null;
   }, [canonicalTargetStoreName]);
 
-  const findDashboardSummaryStore = useCallback((coreName, fullName) => {
-    const stores = currentDashboardSummary?.stores;
-    if (!stores) return null;
-    return findTargetByStore({ stores }, coreName, fullName);
-  }, [currentDashboardSummary, findTargetByStore]);
-
-  const getStoreTargetRecoveryKey = useCallback((coreName, year, month) => {
-    const canonicalCore = canonicalTargetStoreName(coreName);
-    return `${brandPrefix}|${year}-${String(month).padStart(2, "0")}|${canonicalCore}`;
-  }, [brandPrefix, canonicalTargetStoreName]);
-
-  const resolveStoreBudgetBase = useCallback((coreName, fullName, year, month) => {
+  const resolveStoreTargetPresentation = useCallback((coreName, fullName) => {
     const canonicalCore = canonicalTargetStoreName(coreName || fullName);
+    const row = findTargetByStore(monthlyTargetSummary, canonicalCore, fullName);
+    return readCashTargetPresentation(row || {});
+  }, [canonicalTargetStoreName, findTargetByStore, monthlyTargetSummary, readCashTargetPresentation]);
 
-    const summaryStore = findDashboardSummaryStore(canonicalCore, fullName);
-    const fromDashboardSummary = readCashTargetFields(summaryStore);
-    if (fromDashboardSummary > 0) return fromDashboardSummary;
+  const resolveScopeTargetPresentation = useCallback((storesList = []) => {
+    const uniqueStoreCores = Array.from(new Set((storesList || []).map(canonicalTargetStoreName).filter(Boolean)));
+    if (uniqueStoreCores.length === 0) return { complete: false, value: null };
 
-    const fromMonthlySummary = readCashTargetFields(findTargetByStore(monthlyTargetSummary, canonicalCore, fullName));
-    if (fromMonthlySummary > 0) return fromMonthlySummary;
-
-    const monthPadded = String(month).padStart(2, "0");
-    const storeNameCandidates = new Set([
-      fullName,
-      `${brandPrefix}${canonicalCore}店`,
-      canonicalCore,
-      `${canonicalCore}店`,
-    ].filter(Boolean));
-
-    // CYJ 新店歷史資料曾使用「CYJ新店」而非目前正式顯示的「CYJ新店店」。
-    if (brandPrefix === "CYJ" && canonicalCore === "新店") {
-      storeNameCandidates.add("CYJ新店");
-      storeNameCandidates.add("新");
+    let total = 0;
+    for (const core of uniqueStoreCores) {
+      const fullName = `${brandPrefix}${core}店`;
+      const result = resolveStoreTargetPresentation(core, fullName);
+      if (!result.found) return { complete: false, value: null };
+      total += result.value;
     }
-
-    const keys = [];
-    storeNameCandidates.forEach((storeName) => {
-      keys.push(
-        `${storeName}_${year}_${month}`,
-        `${storeName}_${year}_${monthPadded}`,
-        `${year}-${monthPadded}_${storeName}`,
-        `${storeName}_${year}-${monthPadded}`,
-      );
-    });
-
-    for (const key of Array.from(new Set(keys))) {
-      const value = readCashTargetFields(budgets?.[key]);
-      if (value > 0) return value;
-    }
-
-    return 0;
-  }, [budgets, brandPrefix, canonicalTargetStoreName, findDashboardSummaryStore, findTargetByStore, monthlyTargetSummary, readCashTargetFields]);
-
-  const resolveStoreBudget = useCallback((coreName, fullName, year, month) => {
-    const baseValue = resolveStoreBudgetBase(coreName, fullName, year, month);
-    if (baseValue > 0) return baseValue;
-
-    const recoveryKey = getStoreTargetRecoveryKey(coreName || fullName, year, month);
-    const recoveredValue = Number(storeTargetFallbacks?.[recoveryKey]?.cashTarget || 0);
-    return Number.isFinite(recoveredValue) && recoveredValue > 0 ? recoveredValue : 0;
-  }, [getStoreTargetRecoveryKey, resolveStoreBudgetBase, storeTargetFallbacks]);
-
-  // ★ Summary / Context budgets 都找不到時，只針對「目前選定店家＋目前月份」精準補讀 raw monthly_targets。
-  //   正常店家不增加 reads；也不重新開啟全年 monthly_targets 監聽。
-  useEffect(() => {
-    if (activeView !== "store-analysis" || !selectedStore || !getCollectionPath) return undefined;
-
-    const year = parseInt(selectedYear, 10);
-    const month = parseInt(selectedMonth, 10);
-    if (!Number.isFinite(year) || !Number.isFinite(month) || month < 1 || month > 12) return undefined;
-
-    const canonicalCore = canonicalTargetStoreName(selectedStore);
-    const baseValue = resolveStoreBudgetBase(canonicalCore, selectedStore, year, month);
-    if (baseValue > 0) return undefined;
-
-    const recoveryKey = getStoreTargetRecoveryKey(canonicalCore, year, month);
-    if (storeTargetRecoveryAttemptedRef.current.has(recoveryKey)) return undefined;
-    storeTargetRecoveryAttemptedRef.current.add(recoveryKey);
-
-    const monthPadded = String(month).padStart(2, "0");
-    const fullCanonicalName = `${brandPrefix}${canonicalCore}店`;
-    const docIds = [
-      `${selectedStore}_${year}_${month}`,
-      `${selectedStore}_${year}_${monthPadded}`,
-      `${fullCanonicalName}_${year}_${month}`,
-      `${fullCanonicalName}_${year}_${monthPadded}`,
-    ];
-
-    // 新店歷史相容：舊資料可能是 CYJ新店_YYYY_M，而目前正式名稱是 CYJ新店店。
-    if (brandPrefix === "CYJ" && canonicalCore === "新店") {
-      docIds.push(
-        `CYJ新店_${year}_${month}`,
-        `CYJ新店_${year}_${monthPadded}`,
-      );
-    }
-
-    let cancelled = false;
-
-    (async () => {
-      let recovered = null;
-      for (const docId of Array.from(new Set(docIds.filter(Boolean)))) {
-        try {
-          const snap = await getDoc(doc(getCollectionPath("monthly_targets"), docId));
-          if (!snap.exists()) continue;
-
-          const data = snap.data() || {};
-          const cashTarget = readCashTargetFields(data);
-          if (cashTarget > 0) {
-            recovered = { cashTarget, sourceDocId: docId };
-            break;
-          }
-        } catch (error) {
-          console.warn("單店分析目標精準 fallback 讀取失敗:", { docId, error });
-        }
-      }
-
-      if (cancelled) return;
-
-      if (recovered) {
-        setStoreTargetFallbacks((prev) => ({ ...prev, [recoveryKey]: recovered }));
-        console.info("[StoreAnalysis Target Fallback]", {
-          storeName: selectedStore,
-          yearMonth: `${year}-${monthPadded}`,
-          ...recovered,
-        });
-      } else {
-        console.warn("[StoreAnalysis Target Missing]", {
-          storeName: selectedStore,
-          yearMonth: `${year}-${monthPadded}`,
-          triedDocIds: Array.from(new Set(docIds.filter(Boolean))),
-        });
-      }
-    })();
-
-    return () => {
-      cancelled = true;
-    };
-  }, [
-    activeView, selectedStore, selectedYear, selectedMonth, getCollectionPath,
-    brandPrefix, canonicalTargetStoreName, getStoreTargetRecoveryKey,
-    resolveStoreBudgetBase, readCashTargetFields
-  ]);
+    return { complete: true, value: total };
+  }, [brandPrefix, canonicalTargetStoreName, resolveStoreTargetPresentation]);
 
   // 2. 讀取設定
   const currentBenchmarks = useMemo(() => {
@@ -347,6 +205,19 @@ const StoreAnalysisView = () => {
        acquisition: { ...DEFAULT_BENCHMARKS.default.acquisition, ...config?.acquisition },
     };
   }, [brandId, targets]);
+
+  const formatMoneyOrNA = useCallback((value) => (
+    typeof value === "number" && Number.isFinite(value) ? fmtMoney(value) : "N/A"
+  ), [fmtMoney]);
+
+  const formatAchievementOrNA = useCallback((value) => (
+    typeof value === "number" && Number.isFinite(value) ? `${value.toFixed(1)}% 達成` : "N/A"
+  ), []);
+
+  const getAchievementTone = useCallback((value) => {
+    if (!(typeof value === "number" && Number.isFinite(value))) return "text-stone-400";
+    return value >= 100 ? "text-emerald-500" : "text-amber-500";
+  }, []);
 
   const isManagementRole = userRole === "director" || userRole === "trainer" || userRole === "manager";
 
@@ -518,6 +389,7 @@ const StoreAnalysisView = () => {
         storeName,
         cash: Number(store?.cash ?? store?.cashTotal ?? 0),
         refund: Number(store?.refund ?? store?.refundTotal ?? 0),
+        skincareRefund: Number(store?.skincareRefund ?? store?.skincareRefundTotal ?? 0),
         accrual: Number(store?.accrual ?? store?.accrualTotal ?? 0),
         operationalAccrual: Number(store?.operationalAccrual ?? store?.operationalAccrualTotal ?? store?.accrual ?? store?.accrualTotal ?? 0),
         skincareSales: Number(store?.skincareSales ?? store?.skincareSalesTotal ?? 0),
@@ -638,6 +510,29 @@ const StoreAnalysisView = () => {
     };
   }, [activeView, selectedStore, selectedYearMonthRange.startDate, selectedYearMonthRange.endDate, getCollectionPath, buildStoreNameVariants, isDateInSelectedMonth]);
 
+  const selectedYearMonth = useMemo(() => (
+    `${String(selectedYear || "")}-${String(selectedMonth || "").padStart(2, "0")}`
+  ), [selectedYear, selectedMonth]);
+
+  const formalReportRows = useMemo(() => (
+    selectedStore ? storeScopedAnalysisReports : analysisAllReports
+  ), [selectedStore, storeScopedAnalysisReports, analysisAllReports]);
+
+  // 5D-2 production hotfix: Store Analysis joins the shared current/detail Formal authority.
+  // Target status comes only from the selected-month monthly_targets_summary; no stale dashboard/raw fallback.
+  const currentDetailFormalAuthority = useMemo(() => buildCurrentDetailFormalAuthority({
+    brandId: currentBrand?.id || "",
+    yearMonth: selectedYearMonth,
+    lifecycleMaster: currentLifecycleMasterState?.data || null,
+    monthlyTargetSummary,
+    reports: formalReportRows,
+  }), [currentBrand?.id, selectedYearMonth, currentLifecycleMasterState?.data, monthlyTargetSummary, formalReportRows]);
+
+  const getFormalScope = useCallback((storeKeys = null) => buildCurrentDetailFormalScope({
+    authority: currentDetailFormalAuthority,
+    storeKeys,
+  }), [currentDetailFormalAuthority]);
+
   // ==========================================
   // 單店運算與彙整運算引擎
   // ==========================================
@@ -649,7 +544,10 @@ const StoreAnalysisView = () => {
 
     if (!dataList || dataList.length === 0) return defaultHealth;
 
-    const cash = dataList.reduce((a, b) => a + (Number(b.cash) || 0) - (Number(b.refund) || 0), 0);
+    const cash = dataList.reduce(
+      (a, b) => a + (Number(b.cash) || 0) - (Number(b.refund) || 0) - (Number(b.skincareRefund) || 0),
+      0
+    );
     const accrual = dataList.reduce((a, b) => a + (Number(b.accrual) || 0), 0); // 這裡的 accrual 已經過前面的攔截器處理
     const skincare = dataList.reduce((a, b) => a + (Number(b.skincareSales) || 0), 0);
     const traffic = dataList.reduce((a, b) => a + (Number(b.traffic) || 0), 0);
@@ -666,9 +564,11 @@ const StoreAnalysisView = () => {
       aspMining: (oldCust > 0 && newCust > 0 && (newSales/newCust) > 0) 
                  ? (oldSales / oldCust) / (newSales / newCust)
                  : 0,
-      acquisitionQuality: (newCust > 0 && (Number(targets?.newASP) || 3500) > 0) 
-                          ? (newSales / newCust) / (Number(targets?.newASP) || 3500)
-                          : 0
+      acquisitionQuality: (() => {
+        const configuredNewASP = Number(targets?.newASP);
+        const validNewASP = Number.isFinite(configuredNewASP) && configuredNewASP > 0 ? configuredNewASP : null;
+        return newCust > 0 && validNewASP ? (newSales / newCust) / validNewASP : 0;
+      })()
     };
 
     const normalize = (val, min, max) => {
@@ -696,53 +596,54 @@ const StoreAnalysisView = () => {
     const targetYear = parseInt(selectedYear);
     const monthInt = parseInt(selectedMonth);
     const rocYear = targetYear - 1911;
-    
+    const normalizedStores = Array.from(new Set((storesList || []).map(cleanStoreName).filter(Boolean)));
+
     const data = analysisAllReports.filter(d => {
         if (!d.date || !d.storeName) return false;
         const parts = String(d.date).replace(/-/g, "/").split("/");
         const y = parseInt(parts[0]);
         const m = parseInt(parts[1]);
         if (!((y === targetYear || y === rocYear) && m === monthInt)) return false;
-        
+
         const core = cleanStoreName(d.storeName);
-        return storesList.includes(core);
+        return normalizedStores.includes(core);
     }).map(d => {
-        // ★★★ 安妞專屬邏輯：總權責只看「操作權責 (技術)」排除保養品 ★★★
         let adjustedAccrual = Number(d.accrual) || 0;
-        if (brandId === '安妞') {
-            adjustedAccrual = Number(d.operationalAccrual) || 0;
-        }
+        if (brandId === '安妞') adjustedAccrual = Number(d.operationalAccrual) || 0;
         return { ...d, accrual: adjustedAccrual };
     });
 
-    const cash = data.reduce((a, b) => a + (Number(b.cash) || 0) - (Number(b.refund) || 0), 0);
-    const refund = data.reduce((a, b) => a + (Number(b.refund) || 0), 0);
+    const formalScope = getFormalScope(normalizedStores);
+    const targetPresentation = resolveScopeTargetPresentation(normalizedStores);
+    const totalRefund = data.reduce(
+      (a, b) => a + (Number(b.refund) || 0) + (Number(b.skincareRefund) || 0),
+      0
+    );
     const traffic = data.reduce((a, b) => a + (Number(b.traffic) || 0), 0);
     const opAccrual = data.reduce((a, b) => a + (Number(b.operationalAccrual) || 0), 0);
     const newCust = data.reduce((a, b) => a + (Number(b.newCustomers) || 0), 0);
     const newSales = data.reduce((a, b) => a + (Number(b.newCustomerSales) || 0), 0);
     const newClosings = data.reduce((a, b) => a + (Number(b.newCustomerClosings) || 0), 0);
-    
-    let totalBudget = 0;
-    storesList.forEach(core => {
-        const fullName = `${brandPrefix}${core}店`;
-        totalBudget += resolveStoreBudget(core, fullName, targetYear, monthInt);
-    });
-
     const health = calculateHealthMetrics(data);
 
     return {
-        totalCash: cash,
-        totalRefund: refund,
+        totalCash: typeof formalScope.cash === "number" && Number.isFinite(formalScope.cash) ? formalScope.cash : null,
+        cashStatus: formalScope.cashStatus,
+        totalRefund,
         totalTraffic: traffic,
         trafficASP: traffic > 0 ? Math.round(opAccrual / traffic) : 0,
         newCustomerASP: newCust > 0 ? Math.round(newSales / newCust) : 0,
         totalNewCustomerClosings: newClosings,
-        budget: totalBudget,
-        achievement: totalBudget > 0 ? (cash / totalBudget) * 100 : 0,
-        health
+        budget: targetPresentation.complete ? targetPresentation.value : null,
+        budgetStatus: formalScope.cashTargetStatus,
+        achievement: typeof formalScope.cashAchievement === "number" && Number.isFinite(formalScope.cashAchievement)
+          ? formalScope.cashAchievement
+          : null,
+        achievementStatus: formalScope.cashAchievementStatus,
+        reportingStatus: formalScope.reportingStatus,
+        health,
     };
-  }, [analysisAllReports, selectedYear, selectedMonth, cleanStoreName, brandPrefix, brandId, resolveStoreBudget, calculateHealthMetrics]);
+  }, [analysisAllReports, selectedYear, selectedMonth, cleanStoreName, brandId, getFormalScope, resolveScopeTargetPresentation, calculateHealthMetrics]);
 
   const globalMetrics = useMemo(() => {
     if (!analysisAllReports) return null;
@@ -756,46 +657,47 @@ const StoreAnalysisView = () => {
         const y = parseInt(parts[0]);
         const m = parseInt(parts[1]);
         if (!((y === targetYear || y === rocYear) && m === monthInt)) return false;
-        
         return isBrandMatch(d.storeName, brandId);
     }).map(d => {
-        // ★★★ 安妞專屬邏輯：總權責只看「操作權責 (技術)」排除保養品 ★★★
         let adjustedAccrual = Number(d.accrual) || 0;
-        if (brandId === '安妞') {
-            adjustedAccrual = Number(d.operationalAccrual) || 0;
-        }
+        if (brandId === '安妞') adjustedAccrual = Number(d.operationalAccrual) || 0;
         return { ...d, accrual: adjustedAccrual };
     });
 
-    const uniqueCores = new Set(globalData.map(d => cleanStoreName(d.storeName)));
-    let totalBudget = 0;
-    uniqueCores.forEach(core => {
-        const fullName = `${brandPrefix}${core}店`;
-        totalBudget += resolveStoreBudget(core, fullName, targetYear, monthInt);
-    });
-
-    const cash = globalData.reduce((a, b) => a + (Number(b.cash) || 0) - (Number(b.refund) || 0), 0);
-    const refund = globalData.reduce((a, b) => a + (Number(b.refund) || 0), 0);
+    const scopeStoreKeys = Array.isArray(currentDetailFormalAuthority?.eligibleStoreKeys)
+      ? currentDetailFormalAuthority.eligibleStoreKeys
+      : Array.from(new Set(globalData.map(d => cleanStoreName(d.storeName))));
+    const formalScope = getFormalScope(null);
+    const targetPresentation = resolveScopeTargetPresentation(scopeStoreKeys);
+    const totalRefund = globalData.reduce(
+      (a, b) => a + (Number(b.refund) || 0) + (Number(b.skincareRefund) || 0),
+      0
+    );
     const traffic = globalData.reduce((a, b) => a + (Number(b.traffic) || 0), 0);
     const opAccrual = globalData.reduce((a, b) => a + (Number(b.operationalAccrual) || 0), 0);
     const newCust = globalData.reduce((a, b) => a + (Number(b.newCustomers) || 0), 0);
     const newSales = globalData.reduce((a, b) => a + (Number(b.newCustomerSales) || 0), 0);
     const newClosings = globalData.reduce((a, b) => a + (Number(b.newCustomerClosings) || 0), 0);
-
     const health = calculateHealthMetrics(globalData);
 
     return {
-        totalCash: cash,
-        totalRefund: refund,
+        totalCash: typeof formalScope.cash === "number" && Number.isFinite(formalScope.cash) ? formalScope.cash : null,
+        cashStatus: formalScope.cashStatus,
+        totalRefund,
         totalTraffic: traffic,
         trafficASP: traffic > 0 ? Math.round(opAccrual / traffic) : 0,
         newCustomerASP: newCust > 0 ? Math.round(newSales / newCust) : 0,
         totalNewCustomerClosings: newClosings,
-        budget: totalBudget,
-        achievement: totalBudget > 0 ? (cash / totalBudget) * 100 : 0,
-        health
+        budget: targetPresentation.complete ? targetPresentation.value : null,
+        budgetStatus: formalScope.cashTargetStatus,
+        achievement: typeof formalScope.cashAchievement === "number" && Number.isFinite(formalScope.cashAchievement)
+          ? formalScope.cashAchievement
+          : null,
+        achievementStatus: formalScope.cashAchievementStatus,
+        reportingStatus: formalScope.reportingStatus,
+        health,
     };
-  }, [analysisAllReports, selectedYear, selectedMonth, isBrandMatch, brandId, brandPrefix, resolveStoreBudget, cleanStoreName, calculateHealthMetrics]);
+  }, [analysisAllReports, selectedYear, selectedMonth, isBrandMatch, brandId, currentDetailFormalAuthority, getFormalScope, resolveScopeTargetPresentation, cleanStoreName, calculateHealthMetrics]);
 
   const regionMetrics = useMemo(() => {
     if (!isManagementRole || !analysisAllReports) return null;
@@ -813,7 +715,6 @@ const StoreAnalysisView = () => {
     const targetYear = parseInt(selectedYear);
     const monthInt = parseInt(selectedMonth);
     const rocYear = targetYear - 1911;
-
     const targetCoreName = cleanStoreName(selectedStore);
 
     const data = storeScopedAnalysisReports.filter((d) => {
@@ -822,46 +723,49 @@ const StoreAnalysisView = () => {
         const y = parseInt(parts[0]);
         const m = parseInt(parts[1]);
         if (!((y === targetYear || y === rocYear) && m === monthInt)) return false;
-
         return cleanStoreName(d.storeName) === targetCoreName;
     }).map(d => {
-        // ★★★ 安妞專屬邏輯：總權責只看「操作權責 (技術)」排除保養品 ★★★
         let adjustedAccrual = Number(d.accrual) || 0;
-        if (brandId === '安妞') {
-            adjustedAccrual = Number(d.operationalAccrual) || 0;
-        }
+        if (brandId === '安妞') adjustedAccrual = Number(d.operationalAccrual) || 0;
         return { ...d, accrual: adjustedAccrual };
     }).sort((a, b) => toStandardDateFormat(a.date).localeCompare(toStandardDateFormat(b.date)));
 
-    const grossCash = data.reduce((a, b) => a + (Number(b.cash) || 0), 0);
-    const totalRefund = data.reduce((a, b) => a + (Number(b.refund) || 0), 0);
-    const totalCash = grossCash - totalRefund;
+    const formalScope = getFormalScope([targetCoreName]);
+    const targetPresentation = resolveStoreTargetPresentation(targetCoreName, selectedStore);
+    const totalRefund = data.reduce(
+      (a, b) => a + (Number(b.refund) || 0) + (Number(b.skincareRefund) || 0),
+      0
+    );
     const totalTraffic = data.reduce((a, b) => a + (Number(b.traffic) || 0), 0);
     const totalOpAccrual = data.reduce((a, b) => a + (Number(b.operationalAccrual) || 0), 0);
     const totalNewCustomers = data.reduce((a, b) => a + (Number(b.newCustomers) || 0), 0);
     const totalNewCustomerSales = data.reduce((a, b) => a + (Number(b.newCustomerSales) || 0), 0);
     const totalNewCustomerClosings = data.reduce((a, b) => a + (Number(b.newCustomerClosings) || 0), 0);
-    const budget = resolveStoreBudget(targetCoreName, selectedStore, targetYear, monthInt);
-
     const health = calculateHealthMetrics(data);
 
     return {
-      totalCash,
-      achievement: budget > 0 ? (totalCash / budget) * 100 : 0,
+      totalCash: typeof formalScope.cash === "number" && Number.isFinite(formalScope.cash) ? formalScope.cash : null,
+      cashStatus: formalScope.cashStatus,
+      achievement: typeof formalScope.cashAchievement === "number" && Number.isFinite(formalScope.cashAchievement)
+        ? formalScope.cashAchievement
+        : null,
+      achievementStatus: formalScope.cashAchievementStatus,
+      reportingStatus: formalScope.reportingStatus,
       trafficASP: totalTraffic > 0 ? Math.round(totalOpAccrual / totalTraffic) : 0,
       newCustomerASP: totalNewCustomers > 0 ? Math.round(totalNewCustomerSales / totalNewCustomers) : 0,
       totalNewCustomerClosings,
       totalRefund,
       dailyData: data.map((d) => ({
         date: String(toStandardDateFormat(d.date)).split("/")[2],
-        cash: (Number(d.cash) || 0) - (Number(d.refund) || 0),
-        accrual: Number(d.accrual) || 0, // 圖表的權責也已經是被攔截過濾後的版本
+        cash: (Number(d.cash) || 0) - (Number(d.refund) || 0) - (Number(d.skincareRefund) || 0),
+        accrual: Number(d.accrual) || 0,
         traffic: Number(d.traffic) || 0,
       })),
-      budget,
-      health
+      budget: targetPresentation.found ? targetPresentation.value : null,
+      budgetStatus: formalScope.cashTargetStatus,
+      health,
     };
-  }, [selectedStore, selectedYear, selectedMonth, storeScopedAnalysisReports, resolveStoreBudget, cleanStoreName, calculateHealthMetrics, brandId]);
+  }, [selectedStore, selectedYear, selectedMonth, storeScopedAnalysisReports, cleanStoreName, calculateHealthMetrics, brandId, getFormalScope, resolveStoreTargetPresentation]);
 
   const benchmarkMetrics = useMemo(() => {
       if (!showBenchmark || !analysisAllReports) return null;
@@ -1022,7 +926,7 @@ const StoreAnalysisView = () => {
         
         if (storeStats[dCore]) {
             storeStats[dCore].foundData = true;
-            storeStats[dCore].cash += (Number(d.cash) || 0) - (Number(d.refund) || 0);
+            storeStats[dCore].cash += (Number(d.cash) || 0) - (Number(d.refund) || 0) - (Number(d.skincareRefund) || 0);
             
             // ★★★ 安妞專屬邏輯：總權責只看「操作權責 (技術)」排除保養品 ★★★
             let currentAccrual = Number(d.accrual) || 0;
@@ -1049,8 +953,9 @@ const StoreAnalysisView = () => {
             const productRatio = s.cash > 0 ? s.skincare / s.cash : 0;
             const retentionRate = s.traffic > 0 ? oldCust / s.traffic : 0;
             const newCustomerASP = s.newCust > 0 ? Math.round(s.newSales / s.newCust) : 0;
-            const targetASP = Number(targets?.newASP) || 3500;
-            const acquisitionRate = targetASP > 0 ? newCustomerASP / targetASP : 0;
+            const configuredNewASP = Number(targets?.newASP);
+            const targetASP = Number.isFinite(configuredNewASP) && configuredNewASP > 0 ? configuredNewASP : null;
+            const acquisitionRate = targetASP ? newCustomerASP / targetASP : 0;
 
             return {
                 ...s,
@@ -1209,8 +1114,8 @@ const StoreAnalysisView = () => {
 
                <div className="w-full xl:w-2/3 grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4 content-start">
                   <div className="bg-white p-5 rounded-2xl border shadow-sm flex flex-col justify-between">
-                    <div><p className="text-stone-400 text-xs font-bold mb-1">彙整現金業績</p><h3 className="text-2xl font-bold text-stone-700">{fmtMoney(activeManagementMetrics.totalCash)}</h3></div>
-                    <p className={`text-sm font-bold mt-2 ${activeManagementMetrics.achievement >= 100 ? "text-emerald-500" : "text-amber-500"}`}>{activeManagementMetrics.achievement.toFixed(1)}% 達成</p>
+                    <div><p className="text-stone-400 text-xs font-bold mb-1">彙整現金業績</p><h3 className="text-2xl font-bold text-stone-700">{formatMoneyOrNA(activeManagementMetrics.totalCash)}</h3></div>
+                    <p className={`text-sm font-bold mt-2 ${getAchievementTone(activeManagementMetrics.achievement)}`}>{formatAchievementOrNA(activeManagementMetrics.achievement)}</p>
                   </div>
                   <div className="bg-white p-5 rounded-2xl border shadow-sm">
                     <p className="text-stone-400 text-xs font-bold mb-1">彙整消耗客單</p>
@@ -1218,7 +1123,7 @@ const StoreAnalysisView = () => {
                   </div>
                   <div className="bg-white p-5 rounded-2xl border shadow-sm">
                     <p className="text-stone-400 text-xs font-bold mb-1">彙整目標</p>
-                    <h3 className="text-2xl font-bold text-stone-700">{fmtMoney(activeManagementMetrics.budget)}</h3>
+                    <h3 className="text-2xl font-bold text-stone-700">{formatMoneyOrNA(activeManagementMetrics.budget)}</h3>
                   </div>
                   <div className="bg-white p-5 rounded-2xl border shadow-sm">
                     <p className="text-stone-400 text-xs font-bold mb-1">平均新客客單</p>
@@ -1439,8 +1344,8 @@ const StoreAnalysisView = () => {
 
                <div className="w-full xl:w-2/3 grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4 content-start">
                   <div className="bg-white p-5 rounded-2xl border shadow-sm flex flex-col justify-between">
-                    <div><p className="text-stone-400 text-xs font-bold mb-1">現金業績</p><h3 className="text-2xl font-bold text-stone-700">{fmtMoney(storeMetrics.totalCash)}</h3></div>
-                    <p className={`text-sm font-bold mt-2 ${storeMetrics.achievement >= 100 ? "text-emerald-500" : "text-amber-500"}`}>{storeMetrics.achievement.toFixed(1)}% 達成</p>
+                    <div><p className="text-stone-400 text-xs font-bold mb-1">現金業績</p><h3 className="text-2xl font-bold text-stone-700">{formatMoneyOrNA(storeMetrics.totalCash)}</h3></div>
+                    <p className={`text-sm font-bold mt-2 ${getAchievementTone(storeMetrics.achievement)}`}>{formatAchievementOrNA(storeMetrics.achievement)}</p>
                   </div>
                   <div className="bg-white p-5 rounded-2xl border shadow-sm">
                     <p className="text-stone-400 text-xs font-bold mb-1">平均消耗客單</p>
@@ -1448,7 +1353,7 @@ const StoreAnalysisView = () => {
                   </div>
                   <div className="bg-white p-5 rounded-2xl border shadow-sm">
                     <p className="text-stone-400 text-xs font-bold mb-1">本月目標</p>
-                    <h3 className="text-2xl font-bold text-stone-700">{fmtMoney(storeMetrics.budget)}</h3>
+                    <h3 className="text-2xl font-bold text-stone-700">{formatMoneyOrNA(storeMetrics.budget)}</h3>
                   </div>
                   <div className="bg-white p-5 rounded-2xl border shadow-sm">
                     <p className="text-stone-400 text-xs font-bold mb-1">新客平均客單</p>
