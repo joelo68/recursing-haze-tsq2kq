@@ -17,6 +17,11 @@ import { trackSnapshotRead } from "../utils/readTracker";
 import { toStandardDateFormat, formatNumber, sortManagerNames, sortStoreNames, sortManagersByOrgOrder, sortStoresByOrgOrder } from "../utils/helpers";
 import { ViewWrapper, Card } from "./SharedUI";
 import { buildCurrentDetailFormalAuthority, buildCurrentDetailFormalScope } from "../utils/currentDetailFormalConsumer";
+import {
+  buildStoreAnalysisTargetPresentationAuthority,
+  resolveStoreAnalysisCashTargetPresentation,
+  resolveStoreAnalysisCashTargetScopePresentation,
+} from "../utils/storeAnalysisTargetAuthority";
 
 // 預設值
 const DEFAULT_BENCHMARKS = {
@@ -115,82 +120,38 @@ const StoreAnalysisView = () => {
       return !(/安妞|Anew|伊啵|Yibo/i.test(name)); 
   }, []);
 
-  // Store Analysis target presentation follows the selected-month monthly_targets_summary only.
-  // Explicit 0 is authoritative presentation data (formal target status remains TARGET_NOT_SET);
-  // missing/blank never reopens dashboard_summary, stale budgets, or raw monthly_targets fallback.
-  const readCashTargetPresentation = useCallback((item = {}) => {
-    const fields = [
-      "cashTarget", "targetCash", "cashBudget", "budget", "monthlyCashTarget",
-      "cashTotalTarget", "cashGoal", "target_cash", "cash_target",
-    ];
-    for (const field of fields) {
-      if (!Object.prototype.hasOwnProperty.call(item || {}, field)) continue;
-      const raw = item?.[field];
-      if (raw === null || raw === undefined || raw === "") continue;
-      const value = Number(raw);
-      if (Number.isFinite(value)) return { found: true, value };
-    }
-    return { found: false, value: null };
-  }, []);
+  const selectedYearMonth = useMemo(() => (
+    `${String(selectedYear || "")}-${String(selectedMonth || "").padStart(2, "0")}`
+  ), [selectedYear, selectedMonth]);
 
-  const findTargetByStore = useCallback((source, coreName, fullName) => {
-    if (!source) return null;
+  // Store Analysis target presentation is Coverage-aware.
+  // target-coverage-v1 status is authoritative; stale legacy Summary containers are never scanned.
+  // The canonical `targets` map is the only value container. Missing/zero target may display $0
+  // for a single store, but aggregate scopes remain fail-closed and never shrink denominators.
+  const storeAnalysisTargetAuthority = useMemo(() => (
+    buildStoreAnalysisTargetPresentationAuthority({
+      summary: monthlyTargetSummary,
+      brandId: currentBrand?.id || "",
+      yearMonth: selectedYearMonth,
+      normalizeStoreKey: canonicalTargetStoreName,
+    })
+  ), [monthlyTargetSummary, currentBrand?.id, selectedYearMonth, canonicalTargetStoreName]);
 
-    const normalized = new Set([
-      coreName,
-      `${coreName}店`,
-      fullName,
-      canonicalTargetStoreName(coreName),
-      canonicalTargetStoreName(fullName),
-    ].filter(Boolean).map(canonicalTargetStoreName));
+  const resolveStoreTargetPresentation = useCallback((coreName, fullName) => (
+    resolveStoreAnalysisCashTargetPresentation({
+      authority: storeAnalysisTargetAuthority,
+      storeName: coreName || fullName,
+      normalizeStoreKey: canonicalTargetStoreName,
+    })
+  ), [storeAnalysisTargetAuthority, canonicalTargetStoreName]);
 
-    const scanContainer = (container) => {
-      if (!container) return null;
-      if (Array.isArray(container)) {
-        return container.find((item) => normalized.has(canonicalTargetStoreName(item?.storeName || item?.name || item?.displayName || item?.store)));
-      }
-      if (typeof container === "object") {
-        for (const [key, value] of Object.entries(container)) {
-          const name = value?.storeName || value?.name || value?.displayName || value?.store || key;
-          if (normalized.has(canonicalTargetStoreName(name))) return value;
-        }
-      }
-      return null;
-    };
-
-    const direct = scanContainer(source);
-    if (direct) return direct;
-    const containers = [
-      source?.stores, source?.storeTargets, source?.storeTargetMap, source?.monthlyTargets,
-      source?.targets, source?.targetStores, source?.items, source?.data, source?.byStore,
-      source?.storeMap, source?.storesMap, source?.summaryByStore, source?.storeSummaries,
-    ];
-    for (const container of containers) {
-      const found = scanContainer(container);
-      if (found) return found;
-    }
-    return null;
-  }, [canonicalTargetStoreName]);
-
-  const resolveStoreTargetPresentation = useCallback((coreName, fullName) => {
-    const canonicalCore = canonicalTargetStoreName(coreName || fullName);
-    const row = findTargetByStore(monthlyTargetSummary, canonicalCore, fullName);
-    return readCashTargetPresentation(row || {});
-  }, [canonicalTargetStoreName, findTargetByStore, monthlyTargetSummary, readCashTargetPresentation]);
-
-  const resolveScopeTargetPresentation = useCallback((storesList = []) => {
-    const uniqueStoreCores = Array.from(new Set((storesList || []).map(canonicalTargetStoreName).filter(Boolean)));
-    if (uniqueStoreCores.length === 0) return { complete: false, value: null };
-
-    let total = 0;
-    for (const core of uniqueStoreCores) {
-      const fullName = `${brandPrefix}${core}店`;
-      const result = resolveStoreTargetPresentation(core, fullName);
-      if (!result.found) return { complete: false, value: null };
-      total += result.value;
-    }
-    return { complete: true, value: total };
-  }, [brandPrefix, canonicalTargetStoreName, resolveStoreTargetPresentation]);
+  const resolveScopeTargetPresentation = useCallback((storesList = []) => (
+    resolveStoreAnalysisCashTargetScopePresentation({
+      authority: storeAnalysisTargetAuthority,
+      storeNames: storesList,
+      normalizeStoreKey: canonicalTargetStoreName,
+    })
+  ), [storeAnalysisTargetAuthority, canonicalTargetStoreName]);
 
   // 2. 讀取設定
   const currentBenchmarks = useMemo(() => {
@@ -509,10 +470,6 @@ const StoreAnalysisView = () => {
       try { fallbackUnsub && fallbackUnsub(); } catch (error) { console.warn("store analysis fallback unsubscribe failed", error); }
     };
   }, [activeView, selectedStore, selectedYearMonthRange.startDate, selectedYearMonthRange.endDate, getCollectionPath, buildStoreNameVariants, isDateInSelectedMonth]);
-
-  const selectedYearMonth = useMemo(() => (
-    `${String(selectedYear || "")}-${String(selectedMonth || "").padStart(2, "0")}`
-  ), [selectedYear, selectedMonth]);
 
   const formalReportRows = useMemo(() => (
     selectedStore ? storeScopedAnalysisReports : analysisAllReports

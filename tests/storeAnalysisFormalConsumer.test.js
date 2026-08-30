@@ -5,10 +5,11 @@ import fs from "node:fs";
 const storeAnalysisSource = fs.readFileSync(new URL("../src/components/StoreAnalysisView.jsx", import.meta.url), "utf8");
 const appSource = fs.readFileSync(new URL("../src/App.jsx", import.meta.url), "utf8");
 
-test("Store Analysis target presentation treats explicit zero as authoritative and removes stale target fallbacks", () => {
-  assert.match(storeAnalysisSource, /const readCashTargetPresentation = useCallback/);
-  assert.match(storeAnalysisSource, /Number\.isFinite\(value\)\) return \{ found: true, value \}/);
-  assert.match(storeAnalysisSource, /findTargetByStore\(monthlyTargetSummary/);
+test("Store Analysis target presentation follows Coverage-aware canonical authority and removes stale target fallbacks", () => {
+  assert.match(storeAnalysisSource, /buildStoreAnalysisTargetPresentationAuthority/);
+  assert.match(storeAnalysisSource, /resolveStoreAnalysisCashTargetPresentation/);
+  assert.match(storeAnalysisSource, /resolveStoreAnalysisCashTargetScopePresentation/);
+  assert.doesNotMatch(storeAnalysisSource, /findTargetByStore/);
   assert.doesNotMatch(storeAnalysisSource, /getDoc\(doc\(getCollectionPath\("monthly_targets"\)/);
   assert.doesNotMatch(storeAnalysisSource, /StoreAnalysis Target Fallback/);
   assert.doesNotMatch(storeAnalysisSource, /resolveStoreBudget/);
