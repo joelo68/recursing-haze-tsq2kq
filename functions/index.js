@@ -38,7 +38,9 @@ exports.reportLoginSecurityEvent = deviceApprovalFunctions.reportLoginSecurityEv
 // ==========================================
 const {
   createStoreLifecycleFunctions,
+  REPORTING_COMPLETENESS_SCHEMA_VERSION,
   getLifecycleEligibleStoreEntries,
+  buildLifecycleReportingCompleteness,
 } = require("./storeLifecycle");
 const storeLifecycleFunctions = createStoreLifecycleFunctions({ admin, db });
 exports.manageStoreLifecycle = storeLifecycleFunctions.manageStoreLifecycle;
@@ -10764,6 +10766,25 @@ async function buildAutoDashboardSummaryPayloads(brandId, yearMonth) {
     .map((d) => ({ id: d.id, ...d.data() }))
     .filter((row) => row.isArchivedDuplicate !== true);
 
+  // Batch 5D-1：Reporting Completeness 直接重用本次 Summary Writer 已讀取的 Lifecycle Master + dailyRows。
+  // 不新增 Firestore query/listener，也不把每店×每日 missing dates 寫入 dashboard_summary。
+  const taipeiTodayForReporting = getTelegramAgentTaipeiNow().todayStr;
+  const currentTaipeiYearMonth = taipeiTodayForReporting.slice(0, 7);
+  const reportingCutoffDate = yearMonth < currentTaipeiYearMonth
+    ? range.end
+    : yearMonth === currentTaipeiYearMonth
+      ? (taipeiTodayForReporting < range.end ? taipeiTodayForReporting : range.end)
+      : shiftTelegramAgentDate(range.start, -1);
+  const reportingCompleteness = buildLifecycleReportingCompleteness({
+    master: lifecycleMaster,
+    yearMonth,
+    reports: dailyRows,
+    brandId,
+    cutoffDate: reportingCutoffDate,
+    requireReady: true,
+    includeMissingDates: false,
+  });
+
   // 安全防護：若此月份有店家架構或目標，但原始日報讀到 0 筆，通常代表讀錯來源路徑。
   // 這時不可寫出「0 業績 verified Summary」，避免 Dashboard 被錯誤 Summary 誤導。
   if (dailyRows.length === 0 && (orgProfile.stores.length > 0 || Object.keys(targets).length > 0)) {
@@ -11119,6 +11140,10 @@ async function buildAutoDashboardSummaryPayloads(brandId, yearMonth) {
       eligibleStoreCount: lifecycleEligibleStoreKeys.length,
       eligibleStoreKeys: lifecycleEligibleStoreKeys,
     },
+    reportingCompleteness: {
+      ...reportingCompleteness,
+      schemaVersion: REPORTING_COMPLETENESS_SCHEMA_VERSION,
+    },
     grandTotal: grand,
     stores: storeMap,
     storeRankings: storeRanking,
@@ -11197,6 +11222,36 @@ function getAutoMetricValue(obj, path, fallback = 0) {
   ), obj || {});
 }
 
+function buildAutoReportingCompletenessSignature(summary = {}) {
+  const completeness = summary?.reportingCompleteness && typeof summary.reportingCompleteness === "object"
+    ? summary.reportingCompleteness
+    : {};
+  const stores = completeness?.stores && typeof completeness.stores === "object" && !Array.isArray(completeness.stores)
+    ? completeness.stores
+    : {};
+  const storeRows = Object.entries(stores)
+    .map(([storeKey, row]) => ({
+      storeKey,
+      expected: Number(row?.expectedReportDayCount || 0),
+      submitted: Number(row?.submittedReportDayCount || 0),
+      missing: Number(row?.missingReportDayCount || 0),
+      status: String(row?.reportingStatus || ""),
+      fullMonthLifecycleEligible: row?.fullMonthLifecycleEligible === true,
+    }))
+    .sort((a, b) => a.storeKey.localeCompare(b.storeKey, "zh-Hant"));
+  return JSON.stringify({
+    schemaVersion: String(completeness?.schemaVersion || ""),
+    cutoffDate: String(completeness?.cutoffDate || ""),
+    lifecycleReady: completeness?.lifecycleReady === true,
+    eligibleStoreCount: Number(completeness?.eligibleStoreCount || 0),
+    expectedStoreDayCount: Number(completeness?.expectedStoreDayCount || 0),
+    submittedStoreDayCount: Number(completeness?.submittedStoreDayCount || 0),
+    missingStoreDayCount: Number(completeness?.missingStoreDayCount || 0),
+    reportingStatus: String(completeness?.reportingStatus || ""),
+    stores: storeRows,
+  });
+}
+
 function makeAutoSummaryCompareRows({ storedDashboard, storedTherapist, storedRankings, freshDashboard, freshTherapist, freshRankings }) {
   const rows = [
     { label: "現金業績（legacy）", stored: getAutoMetricValue(storedDashboard, "grandTotal.cash"), fresh: getAutoMetricValue(freshDashboard, "grandTotal.cash"), type: "money" },
@@ -11224,6 +11279,12 @@ function makeAutoSummaryCompareRows({ storedDashboard, storedTherapist, storedRa
     { label: "Formal Accrual Target Total", stored: getAutoMetricValue(storedDashboard, "formalTargetAuthority.accrualTargetTotal", null), fresh: getAutoMetricValue(freshDashboard, "formalTargetAuthority.accrualTargetTotal", null), type: "money", exactNull: true },
     { label: "Formal Target Coverage Consistent", stored: getAutoMetricValue(storedDashboard, "formalTargetAuthority.coverageConsistent", null), fresh: getAutoMetricValue(freshDashboard, "formalTargetAuthority.coverageConsistent", null), type: "boolean", exact: true },
     { label: "Lifecycle Ready", stored: getAutoMetricValue(storedDashboard, "formalTargetAuthority.lifecycleReady", null), fresh: getAutoMetricValue(freshDashboard, "formalTargetAuthority.lifecycleReady", null), type: "boolean", exact: true },
+    { label: "Reporting Completeness Version", stored: getAutoMetricValue(storedDashboard, "reportingCompleteness.schemaVersion", ""), fresh: getAutoMetricValue(freshDashboard, "reportingCompleteness.schemaVersion", ""), type: "text", exact: true },
+    { label: "Reporting Status", stored: getAutoMetricValue(storedDashboard, "reportingCompleteness.reportingStatus", ""), fresh: getAutoMetricValue(freshDashboard, "reportingCompleteness.reportingStatus", ""), type: "text", exact: true },
+    { label: "Expected Store-Day Count", stored: getAutoMetricValue(storedDashboard, "reportingCompleteness.expectedStoreDayCount", null), fresh: getAutoMetricValue(freshDashboard, "reportingCompleteness.expectedStoreDayCount", null), type: "count", exactNull: true },
+    { label: "Submitted Store-Day Count", stored: getAutoMetricValue(storedDashboard, "reportingCompleteness.submittedStoreDayCount", null), fresh: getAutoMetricValue(freshDashboard, "reportingCompleteness.submittedStoreDayCount", null), type: "count", exactNull: true },
+    { label: "Missing Store-Day Count", stored: getAutoMetricValue(storedDashboard, "reportingCompleteness.missingStoreDayCount", null), fresh: getAutoMetricValue(freshDashboard, "reportingCompleteness.missingStoreDayCount", null), type: "count", exactNull: true },
+    { label: "Store Reporting Signature", stored: buildAutoReportingCompletenessSignature(storedDashboard), fresh: buildAutoReportingCompletenessSignature(freshDashboard), type: "text", exact: true },
     { label: "Formal Rank Eligible Count", stored: getAutoMetricValue(storedDashboard, "formalRankEligibleStoreCount", null), fresh: getAutoMetricValue(freshDashboard, "formalRankEligibleStoreCount", null), type: "count", exactNull: true },
     { label: "Summary Semantic Version", stored: getAutoMetricValue(storedDashboard, "semanticVersion", ""), fresh: getAutoMetricValue(freshDashboard, "semanticVersion", ""), type: "text", exact: true },
     { label: "Store-level Formal Signature", stored: buildSummaryStoreSemanticSignature(storedDashboard), fresh: buildSummaryStoreSemanticSignature(freshDashboard), type: "text", exact: true },
@@ -11473,6 +11534,11 @@ async function finalizeMonthReportAuto({ brandId, yearMonth, trigger = "auto_wor
       accrual: dashboardSummary.grandTotal.accrual,
       therapistRevenue: therapistSummary.grandTotal.totalRevenue,
       targetStores: dashboardSummary.sourceCounts.targetStores,
+      reportingStatus: dashboardSummary.reportingCompleteness?.reportingStatus || "",
+      expectedStoreDays: Number(dashboardSummary.reportingCompleteness?.expectedStoreDayCount || 0),
+      submittedStoreDays: Number(dashboardSummary.reportingCompleteness?.submittedStoreDayCount || 0),
+      missingStoreDays: Number(dashboardSummary.reportingCompleteness?.missingStoreDayCount || 0),
+      reportingIncompleteStores: Number(dashboardSummary.reportingCompleteness?.incompleteStoreCount || 0),
       writtenDocs: 3,
       createdAt: new Date().toLocaleString("zh-TW", { hour12: false }),
       source: "auto_summary_repair_worker",

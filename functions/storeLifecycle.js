@@ -8,6 +8,7 @@ const {
 } = require('./deviceApproval');
 
 const STORE_LIFECYCLE_SCHEMA_VERSION = 'store-lifecycle-v1';
+const REPORTING_COMPLETENESS_SCHEMA_VERSION = 'reporting-completeness-v1';
 const DATASET_STATUSES = new Set(['BUILDING', 'READY']);
 
 const BRAND_PREFIX = Object.freeze({
@@ -188,6 +189,170 @@ function getLifecycleEligibleStoreEntries(master = {}, yearMonth = '', options =
     })
     .filter((entry) => isLifecycleEntryEligibleForMonth(entry, normalizedYearMonth))
     .sort((a, b) => String(a.canonicalStoreName || a.storeKey).localeCompare(String(b.canonicalStoreName || b.storeKey), 'zh-Hant'));
+}
+
+function getLifecycleMonthBounds(yearMonth = '') {
+  const normalizedYearMonth = normalizeYearMonth(yearMonth);
+  if (!normalizedYearMonth) return null;
+  const [year, month] = normalizedYearMonth.split('-').map(Number);
+  const lastDay = new Date(Date.UTC(year, month, 0)).getUTCDate();
+  return {
+    start: `${normalizedYearMonth}-01`,
+    end: `${normalizedYearMonth}-${String(lastDay).padStart(2, '0')}`,
+    daysInMonth: lastDay,
+  };
+}
+
+function enumerateIsoDateRange(startDate = '', endDate = '') {
+  const start = normalizeIsoDate(startDate);
+  const end = normalizeIsoDate(endDate);
+  if (!start || !end || start > end) return [];
+
+  const cursor = new Date(`${start}T00:00:00Z`);
+  const finish = new Date(`${end}T00:00:00Z`);
+  const dates = [];
+  while (cursor.getTime() <= finish.getTime()) {
+    dates.push(cursor.toISOString().slice(0, 10));
+    cursor.setUTCDate(cursor.getUTCDate() + 1);
+  }
+  return dates;
+}
+
+// Batch 5D-1：Daily expected-report authority。月度 cohort 與實際 open/close 日界線必須同時成立。
+function isLifecycleEntryExpectedForDate(entry = {}, dateText = '') {
+  const date = normalizeIsoDate(dateText);
+  if (!date) return false;
+  const yearMonth = date.slice(0, 7);
+  if (!isLifecycleEntryEligibleForMonth(entry, yearMonth)) return false;
+
+  const check = validateLifecycleDraft(entry || {});
+  if (!check.valid || check.entryStatus !== 'COMPLETE') return false;
+  const openDate = check.normalized.openDate;
+  const closeDate = check.normalized.closeDate;
+  if (!openDate || date < openDate) return false;
+  if (closeDate && date > closeDate) return false;
+  return true;
+}
+
+function isLifecycleEntryFullEligibleMonth(entry = {}, yearMonth = '') {
+  const bounds = getLifecycleMonthBounds(yearMonth);
+  if (!bounds || !isLifecycleEntryEligibleForMonth(entry, yearMonth)) return false;
+  const check = validateLifecycleDraft(entry || {});
+  if (!check.valid || check.entryStatus !== 'COMPLETE') return false;
+  const openDate = check.normalized.openDate;
+  const closeDate = check.normalized.closeDate;
+  return Boolean(openDate && openDate <= bounds.start && (!closeDate || closeDate >= bounds.end));
+}
+
+function getLifecycleExpectedReportDates(entry = {}, yearMonth = '', options = {}) {
+  const bounds = getLifecycleMonthBounds(yearMonth);
+  if (!bounds || !isLifecycleEntryEligibleForMonth(entry, yearMonth)) return [];
+  const check = validateLifecycleDraft(entry || {});
+  if (!check.valid || check.entryStatus !== 'COMPLETE') return [];
+
+  const openDate = check.normalized.openDate;
+  const closeDate = check.normalized.closeDate;
+  const cutoffDate = options.cutoffDate == null || options.cutoffDate === ''
+    ? bounds.end
+    : normalizeIsoDate(options.cutoffDate);
+  if (!openDate || !cutoffDate) return [];
+
+  const start = [bounds.start, openDate].sort().at(-1);
+  const endCandidates = [bounds.end, cutoffDate, ...(closeDate ? [closeDate] : [])].sort();
+  return enumerateIsoDateRange(start, endCandidates[0]);
+}
+
+function buildLifecycleReportingCompleteness({
+  master = {},
+  yearMonth = '',
+  reports = [],
+  brandId = 'cyj',
+  cutoffDate = '',
+  requireReady = true,
+  includeMissingDates = true,
+  getReportStoreName = (row = {}) => row.storeName || row.store || row.storeId || row.storeKey || '',
+  getReportDate = (row = {}) => row.date || row.reportDate || row.sourceDate || '',
+} = {}) {
+  const normalizedYearMonth = normalizeYearMonth(yearMonth);
+  const normalizedBrandId = normalizeBrandId(master?.brandId || brandId || 'cyj');
+  const lifecycleReady = String(master?.datasetStatus || '') === 'READY';
+  const empty = {
+    schemaVersion: REPORTING_COMPLETENESS_SCHEMA_VERSION,
+    brandId: normalizedBrandId,
+    yearMonth: normalizedYearMonth,
+    cutoffDate: normalizeIsoDate(cutoffDate),
+    lifecycleReady,
+    eligibleStoreCount: 0,
+    completeStoreCount: 0,
+    incompleteStoreCount: 0,
+    expectedStoreDayCount: 0,
+    submittedStoreDayCount: 0,
+    missingStoreDayCount: 0,
+    reportingStatus: lifecycleReady ? 'DATA_COMPLETE' : 'LIFECYCLE_NOT_READY',
+    stores: {},
+  };
+  if (!normalizedYearMonth) return { ...empty, reportingStatus: 'INVALID_PERIOD' };
+  if (requireReady && !lifecycleReady) return empty;
+
+  const eligibleEntries = getLifecycleEligibleStoreEntries(master, normalizedYearMonth, {
+    brandId: normalizedBrandId,
+    requireReady,
+  });
+  const submittedDatesByStore = new Map();
+  (Array.isArray(reports) ? reports : []).forEach((row) => {
+    const storeKey = normalizeStoreLifecycleCore(getReportStoreName(row));
+    const reportDate = normalizeIsoDate(getReportDate(row));
+    if (!storeKey || !reportDate) return;
+    if (!submittedDatesByStore.has(storeKey)) submittedDatesByStore.set(storeKey, new Set());
+    submittedDatesByStore.get(storeKey).add(reportDate);
+  });
+
+  const stores = {};
+  let expectedStoreDayCount = 0;
+  let submittedStoreDayCount = 0;
+  let missingStoreDayCount = 0;
+  let completeStoreCount = 0;
+  let incompleteStoreCount = 0;
+
+  eligibleEntries.forEach((entry) => {
+    const storeKey = entry.storeKey || entry.coreStoreName;
+    if (!storeKey) return;
+    const expectedDates = getLifecycleExpectedReportDates(entry, normalizedYearMonth, { cutoffDate });
+    const submittedDates = submittedDatesByStore.get(storeKey) || new Set();
+    const submittedExpectedDates = expectedDates.filter((date) => submittedDates.has(date));
+    const missingDates = expectedDates.filter((date) => !submittedDates.has(date));
+    const reportingStatus = missingDates.length === 0 ? 'DATA_COMPLETE' : 'DATA_INCOMPLETE';
+
+    expectedStoreDayCount += expectedDates.length;
+    submittedStoreDayCount += submittedExpectedDates.length;
+    missingStoreDayCount += missingDates.length;
+    if (reportingStatus === 'DATA_COMPLETE') completeStoreCount += 1;
+    else incompleteStoreCount += 1;
+
+    stores[storeKey] = {
+      storeKey,
+      canonicalStoreName: entry.canonicalStoreName || getCanonicalStoreName(storeKey, normalizedBrandId),
+      expectedReportDayCount: expectedDates.length,
+      submittedReportDayCount: submittedExpectedDates.length,
+      missingReportDayCount: missingDates.length,
+      reportingStatus,
+      fullMonthLifecycleEligible: isLifecycleEntryFullEligibleMonth(entry, normalizedYearMonth),
+      ...(includeMissingDates ? { missingReportDates: missingDates } : {}),
+    };
+  });
+
+  return {
+    ...empty,
+    cutoffDate: normalizeIsoDate(cutoffDate) || getLifecycleMonthBounds(normalizedYearMonth)?.end || '',
+    eligibleStoreCount: eligibleEntries.length,
+    completeStoreCount,
+    incompleteStoreCount,
+    expectedStoreDayCount,
+    submittedStoreDayCount,
+    missingStoreDayCount,
+    reportingStatus: missingStoreDayCount === 0 ? 'DATA_COMPLETE' : 'DATA_INCOMPLETE',
+    stores,
+  };
 }
 
 function buildLifecycleEntry({ raw = {}, storeName = '', brandId, previous = {}, actor }) {
@@ -488,6 +653,7 @@ function createStoreLifecycleFunctions({ admin, db }) {
 module.exports = {
   createStoreLifecycleFunctions,
   STORE_LIFECYCLE_SCHEMA_VERSION,
+  REPORTING_COMPLETENESS_SCHEMA_VERSION,
   resolveRequestedBrandId,
   detectStoreBrandFromName,
   normalizeStoreLifecycleCore,
@@ -495,5 +661,9 @@ module.exports = {
   validateLifecycleDraft,
   isLifecycleEntryEligibleForMonth,
   getLifecycleEligibleStoreEntries,
+  isLifecycleEntryExpectedForDate,
+  isLifecycleEntryFullEligibleMonth,
+  getLifecycleExpectedReportDates,
+  buildLifecycleReportingCompleteness,
   buildReadyValidation,
 };

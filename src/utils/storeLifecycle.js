@@ -1,4 +1,5 @@
 export const STORE_LIFECYCLE_SCHEMA_VERSION = "store-lifecycle-v1";
+export const REPORTING_COMPLETENESS_SCHEMA_VERSION = "reporting-completeness-v1";
 export const STORE_LIFECYCLE_DATASET_STATUSES = Object.freeze(["BUILDING", "READY"]);
 
 const BRAND_META = Object.freeze({
@@ -214,6 +215,174 @@ export const getLifecycleEligibleStoreEntries = (master = {}, yearMonth = "", op
     .map(([key, value]) => normalizeLifecycleEntry(value || {}, key, brandId))
     .filter((entry) => isLifecycleEntryEligibleForMonth(entry, normalizedYearMonth))
     .sort((a, b) => String(a.canonicalStoreName || a.storeKey).localeCompare(String(b.canonicalStoreName || b.storeKey), "zh-Hant"));
+};
+
+const getLifecycleMonthBounds = (yearMonth = "") => {
+  const normalizedYearMonth = normalizeYearMonth(yearMonth);
+  if (!normalizedYearMonth) return null;
+  const [year, month] = normalizedYearMonth.split("-").map(Number);
+  const lastDay = new Date(Date.UTC(year, month, 0)).getUTCDate();
+  return {
+    start: `${normalizedYearMonth}-01`,
+    end: `${normalizedYearMonth}-${String(lastDay).padStart(2, "0")}`,
+    daysInMonth: lastDay,
+  };
+};
+
+const enumerateIsoDateRange = (startDate = "", endDate = "") => {
+  const start = normalizeIsoDate(startDate);
+  const end = normalizeIsoDate(endDate);
+  if (!start || !end || start > end) return [];
+
+  const cursor = new Date(`${start}T00:00:00Z`);
+  const finish = new Date(`${end}T00:00:00Z`);
+  const dates = [];
+  while (cursor.getTime() <= finish.getTime()) {
+    dates.push(cursor.toISOString().slice(0, 10));
+    cursor.setUTCDate(cursor.getUTCDate() + 1);
+  }
+  return dates;
+};
+
+// Batch 5D-1：Daily expected-report authority。
+// 月度 cohort 先由 Lifecycle first/last/exempt 決定，再套用真實 openDate / closeDate 日界線。
+// 不使用 report activity 推導營運日期；店休日也不在此 resolver 形成豁免。
+export const isLifecycleEntryExpectedForDate = (entry = {}, dateText = "") => {
+  const date = normalizeIsoDate(dateText);
+  if (!date) return false;
+  const yearMonth = date.slice(0, 7);
+  if (!isLifecycleEntryEligibleForMonth(entry, yearMonth)) return false;
+
+  const openDate = normalizeIsoDate(entry.openDate);
+  const closeDate = normalizeIsoDate(entry.closeDate);
+  if (!openDate || date < openDate) return false;
+  if (closeDate && date > closeDate) return false;
+  return true;
+};
+
+export const isLifecycleEntryFullEligibleMonth = (entry = {}, yearMonth = "") => {
+  const bounds = getLifecycleMonthBounds(yearMonth);
+  if (!bounds || !isLifecycleEntryEligibleForMonth(entry, yearMonth)) return false;
+  const openDate = normalizeIsoDate(entry.openDate);
+  const closeDate = normalizeIsoDate(entry.closeDate);
+  return Boolean(openDate && openDate <= bounds.start && (!closeDate || closeDate >= bounds.end));
+};
+
+export const getLifecycleExpectedReportDates = (entry = {}, yearMonth = "", options = {}) => {
+  const bounds = getLifecycleMonthBounds(yearMonth);
+  if (!bounds || !isLifecycleEntryEligibleForMonth(entry, yearMonth)) return [];
+
+  const openDate = normalizeIsoDate(entry.openDate);
+  const closeDate = normalizeIsoDate(entry.closeDate);
+  if (!openDate) return [];
+
+  const cutoffDate = options.cutoffDate == null || options.cutoffDate === ""
+    ? bounds.end
+    : normalizeIsoDate(options.cutoffDate);
+  if (!cutoffDate) return [];
+
+  const start = [bounds.start, openDate].sort().at(-1);
+  const endCandidates = [bounds.end, cutoffDate, ...(closeDate ? [closeDate] : [])].sort();
+  const end = endCandidates[0];
+  return enumerateIsoDateRange(start, end);
+};
+
+const defaultReportStoreName = (row = {}) => row.storeName || row.store || row.storeId || row.storeKey || "";
+const defaultReportDate = (row = {}) => row.date || row.reportDate || row.sourceDate || "";
+
+export const buildLifecycleReportingCompleteness = ({
+  master = {},
+  yearMonth = "",
+  reports = [],
+  brandId = "cyj",
+  cutoffDate = "",
+  requireReady = true,
+  includeMissingDates = true,
+  getReportStoreName = defaultReportStoreName,
+  getReportDate = defaultReportDate,
+} = {}) => {
+  const normalizedYearMonth = normalizeYearMonth(yearMonth);
+  const normalizedBrandId = normalizeLifecycleBrandId(master?.brandId || brandId);
+  const lifecycleReady = String(master?.datasetStatus || "") === "READY";
+  const empty = {
+    schemaVersion: REPORTING_COMPLETENESS_SCHEMA_VERSION,
+    brandId: normalizedBrandId,
+    yearMonth: normalizedYearMonth,
+    cutoffDate: normalizeIsoDate(cutoffDate),
+    lifecycleReady,
+    eligibleStoreCount: 0,
+    completeStoreCount: 0,
+    incompleteStoreCount: 0,
+    expectedStoreDayCount: 0,
+    submittedStoreDayCount: 0,
+    missingStoreDayCount: 0,
+    reportingStatus: lifecycleReady ? "DATA_COMPLETE" : "LIFECYCLE_NOT_READY",
+    stores: {},
+  };
+  if (!normalizedYearMonth) return { ...empty, reportingStatus: "INVALID_PERIOD" };
+  if (requireReady && !lifecycleReady) return empty;
+
+  const normalizedMaster = normalizeLifecycleMaster(master, normalizedBrandId);
+  const eligibleEntries = getLifecycleEligibleStoreEntries(normalizedMaster, normalizedYearMonth, {
+    brandId: normalizedBrandId,
+    requireReady,
+  });
+
+  const submittedDatesByStore = new Map();
+  (Array.isArray(reports) ? reports : []).forEach((row) => {
+    const storeKey = normalizeStoreLifecycleCore(getReportStoreName(row));
+    const reportDate = normalizeIsoDate(getReportDate(row));
+    if (!storeKey || !reportDate) return;
+    if (!submittedDatesByStore.has(storeKey)) submittedDatesByStore.set(storeKey, new Set());
+    submittedDatesByStore.get(storeKey).add(reportDate);
+  });
+
+  const stores = {};
+  let expectedStoreDayCount = 0;
+  let submittedStoreDayCount = 0;
+  let missingStoreDayCount = 0;
+  let completeStoreCount = 0;
+  let incompleteStoreCount = 0;
+
+  eligibleEntries.forEach((entry) => {
+    const storeKey = entry.storeKey || entry.coreStoreName;
+    if (!storeKey) return;
+    const expectedDates = getLifecycleExpectedReportDates(entry, normalizedYearMonth, { cutoffDate });
+    const submittedDates = submittedDatesByStore.get(storeKey) || new Set();
+    const submittedExpectedDates = expectedDates.filter((date) => submittedDates.has(date));
+    const missingDates = expectedDates.filter((date) => !submittedDates.has(date));
+    const reportingStatus = missingDates.length === 0 ? "DATA_COMPLETE" : "DATA_INCOMPLETE";
+
+    expectedStoreDayCount += expectedDates.length;
+    submittedStoreDayCount += submittedExpectedDates.length;
+    missingStoreDayCount += missingDates.length;
+    if (reportingStatus === "DATA_COMPLETE") completeStoreCount += 1;
+    else incompleteStoreCount += 1;
+
+    stores[storeKey] = {
+      storeKey,
+      canonicalStoreName: entry.canonicalStoreName || getCanonicalLifecycleStoreName(storeKey, normalizedBrandId),
+      expectedReportDayCount: expectedDates.length,
+      submittedReportDayCount: submittedExpectedDates.length,
+      missingReportDayCount: missingDates.length,
+      reportingStatus,
+      fullMonthLifecycleEligible: isLifecycleEntryFullEligibleMonth(entry, normalizedYearMonth),
+      ...(includeMissingDates ? { missingReportDates: missingDates } : {}),
+    };
+  });
+
+  return {
+    ...empty,
+    cutoffDate: normalizeIsoDate(cutoffDate) || getLifecycleMonthBounds(normalizedYearMonth)?.end || "",
+    eligibleStoreCount: eligibleEntries.length,
+    completeStoreCount,
+    incompleteStoreCount,
+    expectedStoreDayCount,
+    submittedStoreDayCount,
+    missingStoreDayCount,
+    reportingStatus: missingStoreDayCount === 0 ? "DATA_COMPLETE" : "DATA_INCOMPLETE",
+    stores,
+  };
 };
 
 export const normalizeLifecycleEntry = (raw = {}, fallbackStoreName = "", brandId = "cyj") => {
