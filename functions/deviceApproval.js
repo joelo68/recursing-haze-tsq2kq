@@ -15,6 +15,8 @@ const DEVICE_APPROVAL_MAX_FAILED_ATTEMPTS = 3;
 const LOGIN_SECURITY_WINDOW_MS = 10 * 60 * 1000;
 const LOGIN_SECURITY_ALERT_COOLDOWN_MS = 30 * 60 * 1000;
 const LOGIN_SECURITY_PASSWORD_FAIL_THRESHOLD = 3;
+const TELEGRAM_SECURITY_CONFIG_VERSION = 'security-alert-v1';
+const TELEGRAM_SECURITY_CONFIG_TARGETS = new Set(['main', 'manager', 'agent_test']);
 
 function sanitizeSecurityKey(value = '') {
   return String(value || '')
@@ -56,6 +58,21 @@ function getBrandSecuritySummaryDoc(db, brandId, docName = 'device_approvals') {
 function getGlobalBlockedRef(db, roleId, accountId, deviceId) {
   const globalKey = sanitizeSecurityKey(`${roleId}_${accountId}_${deviceId}`);
   return db.doc(`artifacts/default-app-id/public/data/global_blocked_devices/${globalKey}`);
+}
+
+function getTelegramSecurityConfigRef(db) {
+  return db.doc('artifacts/default-app-id/public/data/global_settings/telegram_security_alerts');
+}
+
+function normalizeTelegramSecurityAlertConfig(raw = {}) {
+  const chatTargets = [...new Set((Array.isArray(raw.chatTargets) ? raw.chatTargets : [])
+    .map(String)
+    .filter((value) => TELEGRAM_SECURITY_CONFIG_TARGETS.has(value)))];
+  return {
+    enabled: raw.enabled === true,
+    chatTargets,
+    configVersion: TELEGRAM_SECURITY_CONFIG_VERSION,
+  };
 }
 
 function normalizeSecurityConfig(raw = {}) {
@@ -1624,6 +1641,84 @@ function createDeviceApprovalFunctions({ admin, db }) {
     }
   });
 
+  const updateTelegramSecurityAlertConfig = onRequest({ cors: true, timeoutSeconds: 20, memory: '256MiB' }, async (req, res) => {
+    if (req.method !== 'POST') return res.status(405).json({ ok: false, message: 'method_not_allowed' });
+    const requestAuth = await requireFirebaseRequestAuth(req, admin);
+    if (!requestAuth.ok) return res.status(401).json({ ok: false, message: '登入狀態已失效，請重新登入' });
+    try {
+      const body = req.body || {};
+      const brandId = normalizeBrandId(body.brandId);
+      const actor = body.actor || {};
+      const expectedRevision = Math.max(0, Number(body.expectedRevision || 0));
+      const config = normalizeTelegramSecurityAlertConfig(body.config || {});
+      if (config.enabled && config.chatTargets.length === 0) {
+        return res.status(400).json({ ok: false, message: '啟用登入安全通知前，請至少選擇一個 Telegram 群組' });
+      }
+
+      const adminCheck = await verifySuperAdminActor({ db, brandId, actor });
+      if (!adminCheck.ok) {
+        return res.status(403).json({ ok: false, message: '此設定僅限已信任裝置上的最高管理者修改' });
+      }
+
+      const configRef = getTelegramSecurityConfigRef(db);
+      let nextRevision = 0;
+      await db.runTransaction(async (transaction) => {
+        const configSnap = await transaction.get(configRef);
+        const current = configSnap.exists ? configSnap.data() || {} : {};
+        const currentRevision = Math.max(0, Number(current.revision || 0));
+        if (expectedRevision !== currentRevision) {
+          const conflict = new Error('telegram_security_config_revision_conflict');
+          conflict.code = 'REVISION_CONFLICT';
+          conflict.currentRevision = currentRevision;
+          throw conflict;
+        }
+
+        nextRevision = currentRevision + 1;
+        transaction.set(configRef, {
+          ...config,
+          revision: nextRevision,
+          updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+          updatedAtText: new Date().toISOString(),
+          updatedBy: adminCheck.actorName,
+          updatedByRole: adminCheck.actorRole,
+          updatedByAccountId: adminCheck.actorAccountId,
+          authorityBrandId: brandId,
+        }, { merge: true });
+      });
+
+      await writeSecurityLog({
+        db,
+        brandId,
+        payload: {
+          role: adminCheck.actorRole,
+          user: adminCheck.actorName,
+          action: '更新登入安全 Telegram 設定',
+          activityType: 'security.telegram_config_update',
+          view: 'telegram_alert_control_center',
+          details: {
+            revision: nextRevision,
+            enabled: config.enabled,
+            chatTargets: config.chatTargets,
+            globalConfig: true,
+          },
+        },
+      });
+
+      return res.status(200).json({ ok: true, config, revision: nextRevision });
+    } catch (error) {
+      if (error?.code === 'REVISION_CONFLICT') {
+        return res.status(409).json({
+          ok: false,
+          message: '登入安全通知設定已被另一位管理者更新，請重新載入後再儲存',
+          reason: 'revision_conflict',
+          currentRevision: Number(error.currentRevision || 0),
+        });
+      }
+      console.error('updateTelegramSecurityAlertConfig failed', error);
+      return res.status(500).json({ ok: false, message: '登入安全通知設定目前無法更新，請稍後再試' });
+    }
+  });
+
   const manageAccountDevice = onRequest({ cors: true, timeoutSeconds: 20, memory: '256MiB' }, async (req, res) => {
     if (req.method !== 'POST') return res.status(405).json({ ok: false, message: 'method_not_allowed' });
     const requestAuth = await requireFirebaseRequestAuth(req, admin);
@@ -1829,6 +1924,7 @@ function createDeviceApprovalFunctions({ admin, db }) {
     checkDeviceAccess,
     reviewDeviceApproval,
     reportLoginSecurityEvent,
+    updateTelegramSecurityAlertConfig,
     manageAccountDevice,
     emergencyUnblockDevice,
     cleanupExpiredDeviceApprovals,

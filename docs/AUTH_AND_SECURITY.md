@@ -855,3 +855,43 @@ Admin SDK write = Backend authority
 Race safety：同一 store entry 使用 `revision` optimistic token；同店 lost-race 回 409，不回假成功。不同店 transaction retry 後保留彼此修改。
 
 Batch 1 沒有修改既有 Device Approval 決策、6 位碼、自助驗證、global block 或 Telegram security alert 行為；`deviceApproval.js` 僅額外 export 已存在的 authentication helpers 供 Lifecycle writer 共用。
+# 25. Login Security Telegram Config Authority（Reconciliation Candidate）
+
+`artifacts/default-app-id/public/data/global_settings/telegram_security_alerts` 是全品牌登入安全通知設定，不屬於一般營運設定。
+
+正式安全邊界應為：
+
+```text
+TelegramAlertControlCenter
+→ Backend updateTelegramSecurityAlertConfig
+→ Firebase ID token validation
+→ verifySuperAdminActor
+   ├─ director / master credential re-verification
+   └─ current device must be Trusted
+→ Firestore transaction
+   ├─ read current revision
+   ├─ expectedRevision must match
+   └─ write revision + 1
+```
+
+Frontend 不可再直接 `setDoc(securityConfigRef)`。Firestore Rules 對 `telegram_security_alerts` 禁止 client write；Admin SDK Backend writer 不受 client Rules 限制。
+
+多人同時修改時使用 revision first-writer-wins：第二位管理者若仍持有舊 revision，Backend 回傳 HTTP 409；Frontend 重新讀取該 single document 後要求再次確認，不做 silent overwrite。
+
+Read / write footprint（每次儲存，非 listener）：
+
+```text
+Backend point reads:
+- account_devices profile: 1
+- director_auth: 1
+- master_auth: 1
+- telegram_security_alerts transaction read: 1
+
+Writes:
+- telegram_security_alerts: 1
+- system_logs audit: 1
+```
+
+沒有新增 polling、collection listener 或大型常駐 query。設定仍是全品牌共用 legacy root；這個 hardening 不改 CYJ / 安妞 / 伊啵的營運資料 path。
+
+> 狀態：Reconciliation candidate；尚未部署／Production Confirmed。

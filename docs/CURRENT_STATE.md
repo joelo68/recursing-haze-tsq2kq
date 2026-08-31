@@ -2,7 +2,51 @@
 
 > 用途：記錄「目前正式環境已確認到哪個狀態」。這不是 CHANGELOG。  
 > 優先順序：使用者提供的目前正式部署 source > 本檔案 > 其他 Knowledge Base 文件。  
-> 最後整併更新：**2026-08-29（UTC+8）**。
+> 最後整併更新：**2026-08-31（UTC+8）**。
+
+# 0. 2026-08-31 Source Reconciliation Candidate（尚未部署）
+
+目前已完成一次 Source Rebaseline / Reconciliation：
+
+```text
+Git integrated baseline = origin/main 001ff62cce56097a2bf97b39fffb821400912ef7
+Current production gh-pages tree = a4938a074c5ee2bfb401c9c513ffa592073e7a50
+Earlier identical gh-pages commit = 378fc961fe78dc385d7e8bae98be73117d760bb9
+```
+
+`cyj-new` 中兩支未提交 Security source（`LoginView.jsx`、`TelegramAlertControlCenter.jsx`）已確認是 Batch 5 lineage 遺漏的正式 Security delta；合回 `001ff62` 的 reconciliation candidate 後，使用者本機實際驗證：
+
+```text
+Security regression = 62 / 62 PASS
+Full regression     = 285 / 285 PASS
+npm run build       = PASS
+git diff --check    = PASS
+```
+
+但 final Security review 又確認 `global_settings/telegram_security_alerts` 仍可被寬鬆 Firestore Rules 直接從 Frontend 改寫，因此本 candidate 新增「Backend-authorized Telegram Security Config Writer」：
+
+```text
+Frontend
+→ updateTelegramSecurityAlertConfig
+→ Firebase request auth
+→ Trusted Device + Super Admin credential re-verification
+→ single-document transaction + revision conflict check
+→ global_settings/telegram_security_alerts
+```
+
+Firestore Rules 同步禁止 `telegram_security_alerts` 前端直寫；其他一層 `global_settings/{settingId}` 仍維持既有登入後存取。多人同時儲存採 optimistic revision / 409 conflict，避免 last-write-wins 靜默覆蓋。
+
+此段目前狀態只能標記：
+
+```text
+IMPLEMENTED (reconciliation candidate)
+VALIDATED PARTIAL（artifact syntax + targeted regression；完整正式 worktree validation 待執行）
+DEPLOYED = NO
+PRODUCTION CONFIRMED = NO
+CURRENT_APP_VERSION = 3.5.3（未提高）
+```
+
+在完成正式 worktree full regression / build / Rules validation、commit/push 與 scoped deploy 前，不得把本段描述為已正式上線。
 
 # 1. Production Source Snapshot
 

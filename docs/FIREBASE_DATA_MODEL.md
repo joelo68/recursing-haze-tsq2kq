@@ -1446,10 +1446,22 @@ overdue
 enabled
 chatTargets
 configVersion
-updatedAtText
+revision
+updatedAt / updatedAtText
+updatedBy / updatedByRole / updatedByAccountId
+authorityBrandId
 ```
 
-只有真的有 `security_alerts` 要求 Telegram delivery 時才讀這份 config；正常成功登入不需要每次都讀。
+Writer authority（reconciliation candidate）：
+
+```text
+Frontend direct write = DENY
+Backend writer = updateTelegramSecurityAlertConfig
+Authorization = Firebase Auth + Trusted Device + Super Admin credential
+Concurrency = expectedRevision transaction / 409 conflict
+```
+
+只有真的有 `security_alerts` 要求 Telegram delivery 時才讀這份 config；正常成功登入不需要每次都讀。控制中心載入 Alerts 分頁時仍只做一筆設定 document read；儲存時 Backend transaction 只讀同一份設定 document，不新增 listener 或 polling。
 
 Security delivery is handled by Firestore creation triggers for both the CYJ legacy security-alert path and standard-brand security-alert path.
 

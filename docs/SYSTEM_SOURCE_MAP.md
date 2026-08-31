@@ -1,7 +1,7 @@
 # SYSTEM_SOURCE_MAP.md
 
 > 狀態：Project Knowledge Base / Source Map v0.1
-> 已整併至 2026-08-29。目前正式部署 source 仍是最高依據；`CURRENT_STATE.md` 會區分「已上線」與「已驗證待部署」。
+> 已整併至 2026-08-31 reconciliation candidate。目前正式部署 source 仍是最高依據；`CURRENT_STATE.md` 會區分「已上線」與「已驗證待部署」。
 > 禁止以舊對話、舊版檔案、AI 記憶或未提供的檔案補足事實。
 > 無法由目前正式程式確認的內容，必須標記為「未由目前正式來源確認」。
 
@@ -975,7 +975,21 @@ manageAccountDevice
 emergencyUnblockDevice
 cleanupExpiredDeviceApprovals
 reportLoginSecurityEvent
+updateTelegramSecurityAlertConfig   # reconciliation candidate / global Security config writer
 ```
+
+`updateTelegramSecurityAlertConfig` 的真實 owner 鏈：
+
+```text
+src/App.jsx
+→ src/components/TelegramAlertControlCenter.jsx
+→ functions/deviceApproval.js
+→ functions/index.js export
+→ firestore.rules
+→ tests/deviceApproval.test.js
+```
+
+它只寫全品牌共用 `artifacts/default-app-id/public/data/global_settings/telegram_security_alerts`，並使用 Trusted Device + Super Admin credential + single-document revision transaction。
 
 Security Telegram Firestore triggers in `functions/index.js` include legacy CYJ and standard-brand security-alert creation handlers.
 

@@ -324,7 +324,7 @@ test("login page reports failed passwords for every supported role without block
   assert.match(login, /Promise\.resolve\(onSecurityEvent/);
 });
 
-test("Telegram security alerts reuse the three recognized chats but remain disabled until a manager chooses targets", () => {
+test("Telegram security alerts reuse the three recognized chats but remain disabled until a highest manager chooses targets", () => {
   assert.match(functionsIndex, /TARGET_CHAT_ID_MAIN\s*=\s*'-4991191955'/);
   assert.match(functionsIndex, /TARGET_CHAT_ID_MANAGER\s*=\s*'-1002361008620'/);
   assert.match(functionsIndex, /TARGET_CHAT_ID_AGENT_TEST\s*=\s*'-5241604208'/);
@@ -478,4 +478,24 @@ test("summary-first manager notice preserves app version and existing focused ap
   assert.match(app, /CURRENT_APP_VERSION\s*=\s*"3\.5\.3"/);
   assert.match(app, /focusRequestId=\{superAdminApprovalFocusId\}/);
   assert.match(panel, /這是剛才主動提醒您的登入申請/);
+});
+
+
+test("Telegram security config writes are backend-authorized, race-safe, and blocked from direct frontend writes", () => {
+  assert.match(functionsIndex, /exports\.updateTelegramSecurityAlertConfig\s*=\s*deviceApprovalFunctions\.updateTelegramSecurityAlertConfig/);
+  assert.match(backend, /const updateTelegramSecurityAlertConfig = onRequest/);
+  assert.match(backend, /updateTelegramSecurityAlertConfig[\s\S]{0,1400}requireFirebaseRequestAuth\(req, admin\)/);
+  assert.match(backend, /updateTelegramSecurityAlertConfig[\s\S]{0,2200}verifySuperAdminActor\(\{ db, brandId, actor \}\)/);
+  assert.match(backend, /updateTelegramSecurityAlertConfig[\s\S]{0,3200}db\.runTransaction/);
+  assert.match(backend, /expectedRevision !== currentRevision/);
+  assert.match(backend, /reason:\s*'revision_conflict'/);
+  assert.match(app, /TELEGRAM_SECURITY_CONFIG_ENDPOINT[\s\S]{0,300}updateTelegramSecurityAlertConfig/);
+  assert.match(app, /updateTelegramSecurityAlertConfig[\s\S]{0,1300}buildDeviceSecurityActor\(\)/);
+  assert.match(telegramCenter, /canManageDeviceSecurity/);
+  assert.match(telegramCenter, /currentDeviceTrust\?\.status !== "trusted"/);
+  assert.match(telegramCenter, /expectedRevision:\s*securityAlertRevision/);
+  assert.doesNotMatch(telegramCenter, /setDoc\(\s*securityConfigRef/);
+  assert.match(rules, /match \/artifacts\/\{appId\}\/public\/data\/global_settings\/\{settingId\}/);
+  assert.match(rules, /allow write:\s*if signedIn\(\) && settingId != 'telegram_security_alerts'/);
+  assert.match(rules, /collectionName != 'global_settings'/);
 });

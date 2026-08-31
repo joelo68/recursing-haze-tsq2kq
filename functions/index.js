@@ -31,6 +31,7 @@ exports.manageAccountDevice = deviceApprovalFunctions.manageAccountDevice;
 exports.emergencyUnblockDevice = deviceApprovalFunctions.emergencyUnblockDevice;
 exports.cleanupExpiredDeviceApprovals = deviceApprovalFunctions.cleanupExpiredDeviceApprovals;
 exports.reportLoginSecurityEvent = deviceApprovalFunctions.reportLoginSecurityEvent;
+exports.updateTelegramSecurityAlertConfig = deviceApprovalFunctions.updateTelegramSecurityAlertConfig;
 
 // ==========================================
 // ★ Store Lifecycle v1：門市生命週期 Master administrative writer

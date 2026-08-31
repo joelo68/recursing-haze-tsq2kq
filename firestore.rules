@@ -175,6 +175,14 @@ service cloud.firestore {
       allow write: if false;
     }
 
+    // Login Security Telegram 設定屬全品牌 Security authority。
+    // 一般 global_settings 仍維持登入後可讀寫，但 telegram_security_alerts 禁止前端直寫；
+    // 只能由通過 Firebase Auth + Trusted Device + Super Admin 再驗證的 Backend writer 更新。
+    match /artifacts/{appId}/public/data/global_settings/{settingId} {
+      allow read: if signedIn();
+      allow write: if signedIn() && settingId != 'telegram_security_alerts';
+    }
+
     // 既有品牌資料維持原本登入後可讀寫；排除上方受保護集合，避免寬鬆規則覆蓋。
     match /brands/{brandId}/{collectionName}/{document=**} {
       allow read, write: if signedIn()
@@ -200,7 +208,8 @@ service cloud.firestore {
         && collectionName != 'security_summary'
         && collectionName != 'login_security_state'
         && collectionName != 'global_blocked_devices'
-        && collectionName != 'store_lifecycle';
+        && collectionName != 'store_lifecycle'
+        && collectionName != 'global_settings';
     }
 
     // 其他既有根集合維持登入後存取；brands / artifacts 已由上方專屬規則處理。

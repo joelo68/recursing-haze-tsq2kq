@@ -30,6 +30,7 @@ const LoginView = ({
   accountDirectoryStatus = "ready",
   accountDirectoryError = "",
   onRetryAccountDirectory = null,
+  onSecurityEvent = null,
 }) => {
   const [showBrandSelector, setShowBrandSelector] = useState(!hasSelectedBrand);
 
@@ -646,6 +647,16 @@ const LoginView = ({
     }
   };
 
+  const reportPasswordFailure = useCallback((roleId, accountId, userName = "") => {
+    if (typeof onSecurityEvent !== "function" || !roleId || !accountId) return;
+    Promise.resolve(onSecurityEvent({
+      eventType: "password_failed",
+      roleId,
+      accountId: String(accountId),
+      userName: String(userName || accountId),
+    })).catch(() => {});
+  }, [onSecurityEvent]);
+
   const handleAuth = async () => {
     setError(""); setIsLoading(true); await new Promise((r) => setTimeout(r, 600));
     try {
@@ -670,6 +681,7 @@ const LoginView = ({
              await onLogin("director", userInfo, { accountId: selectedUser, password, isMasterLogin });
            }
         } else {
+           reportPasswordFailure("director", selectedUser, selectedUser);
            setError("密碼錯誤");
         }
       } else if (role === "trainer") {
@@ -685,7 +697,10 @@ const LoginView = ({
           } else {
             await onLogin("trainer", userInfo, { accountId: account.id, password });
           }
-        } else setError("密碼錯誤");
+        } else {
+          reportPasswordFailure("trainer", account.id, account.name || "教專");
+          setError("密碼錯誤");
+        }
       } else if (role === "manager") {
         if (!selectedUser) { setError("請選擇區長"); setIsLoading(false); return; }
         const correctPass = managerAuth[selectedUser] || "0000";
@@ -696,7 +711,10 @@ const LoginView = ({
           } else {
             await onLogin("manager", userInfo, { accountId: selectedUser, password });
           }
-        } else setError("密碼錯誤");
+        } else {
+          reportPasswordFailure("manager", selectedUser, selectedUser);
+          setError("密碼錯誤");
+        }
       } else if (role === "store") {
         if (!selectedUser) { setError("請選擇帳號"); setIsLoading(false); return; }
         const account = storeAccounts.find((a) => a.id === selectedUser);
@@ -707,7 +725,10 @@ const LoginView = ({
           } else {
             await onLogin("store", userInfo, { accountId: selectedUser, password });
           }
-        } else setError("密碼錯誤");
+        } else {
+          reportPasswordFailure("store", selectedUser, account?.name || selectedUser);
+          setError("密碼錯誤");
+        }
       }
     } catch (e) { setError("登入發生錯誤"); } finally { setIsLoading(false); }
   };
@@ -729,7 +750,10 @@ const LoginView = ({
         } else {
           await onLogin("therapist", normalizedTherapist, { accountId: therapist.id, password: tPassword });
         }
-      } else setError("密碼錯誤 (預設 0000)");
+      } else {
+        reportPasswordFailure("therapist", therapist?.id || tPersonId, therapist?.name || "管理師");
+        setError("密碼錯誤 (預設 0000)");
+      }
     } catch (e) { setError("登入發生錯誤"); } finally { setIsLoading(false); }
   };
 

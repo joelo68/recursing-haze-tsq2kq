@@ -240,6 +240,24 @@ const isPolicyActiveNow = (policy = {}) => {
 };
 
 
+const TELEGRAM_SECURITY_TARGET_OPTIONS = [
+  { id: "main", label: "高階主管主群", hint: "Chat ID -4991191955｜既有正式主群" },
+  { id: "manager", label: "主管群", hint: "Chat ID -1002361008620｜既有主管群" },
+  { id: "agent_test", label: "Agent 測試群", hint: "Chat ID -5241604208｜既有測試白名單" },
+];
+
+const createDefaultTelegramSecurityForm = () => ({
+  enabled: false,
+  chatTargets: [],
+});
+
+const normalizeTelegramSecurityForm = (raw = {}) => ({
+  enabled: raw.enabled === true,
+  chatTargets: [...new Set((Array.isArray(raw.chatTargets) ? raw.chatTargets : [])
+    .map(String)
+    .filter((value) => TELEGRAM_SECURITY_TARGET_OPTIONS.some((item) => item.id === value)))],
+});
+
 const createDefaultTelegramAlertRules = () => ({
   progressGap: { enabled: true, watchThreshold: 10, criticalThreshold: 20 },
   cashAchievementRate: { enabled: false, threshold: 50, severity: "watch" },
@@ -573,8 +591,19 @@ const TelegramRuleEditorCard = ({ definition, rule, onChange, onRemove }) => {
 };
 
 const TelegramAlertControlCenter = ({ view = "alerts", onNavigate }) => {
-  const { currentUser, userRole, showToast } = useContext(AppContext);
+  const {
+    currentUser,
+    userRole,
+    showToast,
+    currentDeviceTrust,
+    canManageDeviceSecurity,
+    updateTelegramSecurityAlertConfig,
+  } = useContext(AppContext);
   const [form, setForm] = useState(createDefaultTelegramAlertForm);
+  const [securityAlertForm, setSecurityAlertForm] = useState(createDefaultTelegramSecurityForm);
+  const [securityAlertRevision, setSecurityAlertRevision] = useState(0);
+  const [securityCredentialOpen, setSecurityCredentialOpen] = useState(false);
+  const [securityCredentialPassword, setSecurityCredentialPassword] = useState("");
   const [status, setStatus] = useState(null);
   const [previewItems, setPreviewItems] = useState([]);
   const [isLoaded, setIsLoaded] = useState(false);
@@ -596,6 +625,7 @@ const TelegramAlertControlCenter = ({ view = "alerts", onNavigate }) => {
   const [taskFilter, setTaskFilter] = useState("open");
   const [governanceTab, setGovernanceTab] = useState("rules");
   const canManagePolicyCenter = ["master", "director"].includes(String(userRole || ""));
+  const canManageSecurityAlertConfig = canManageDeviceSecurity === true;
 
   const configRef = doc(
     db,
@@ -608,6 +638,12 @@ const TelegramAlertControlCenter = ({ view = "alerts", onNavigate }) => {
     ...TELEGRAM_ALERT_DATA_PATH,
     "global_settings",
     "telegram_active_alert_status"
+  );
+  const securityConfigRef = doc(
+    db,
+    ...TELEGRAM_ALERT_DATA_PATH,
+    "global_settings",
+    "telegram_security_alerts"
   );
   const commandRef = collection(
     db,
@@ -1125,8 +1161,9 @@ const TelegramAlertControlCenter = ({ view = "alerts", onNavigate }) => {
       const needsTasks = ["overview", "tasks"].includes(view);
 
       try {
-        const [configSnap, statusSnap, policySnap, permissionSnap, snapshotSnap, scheduleSnap, taskSnap] = await Promise.all([
+        const [configSnap, securityConfigSnap, statusSnap, policySnap, permissionSnap, snapshotSnap, scheduleSnap, taskSnap] = await Promise.all([
           needsAlerts ? getDoc(configRef) : Promise.resolve(null),
+          needsAlerts ? getDoc(securityConfigRef) : Promise.resolve(null),
           needsAlerts ? getDoc(statusRef) : Promise.resolve(null),
           needsRules ? getDocs(policyCollectionRef) : Promise.resolve(null),
           needsRules ? getDoc(policyPermissionsRef) : Promise.resolve(null),
@@ -1136,6 +1173,11 @@ const TelegramAlertControlCenter = ({ view = "alerts", onNavigate }) => {
         ]);
         if (cancelled) return;
         if (configSnap) setForm(normalizeTelegramAlertForm(configSnap.exists() ? configSnap.data() : {}));
+        if (securityConfigSnap) {
+          const securityConfigData = securityConfigSnap.exists() ? securityConfigSnap.data() || {} : {};
+          setSecurityAlertForm(normalizeTelegramSecurityForm(securityConfigData));
+          setSecurityAlertRevision(Math.max(0, Number(securityConfigData.revision || 0)));
+        }
         if (statusSnap) setStatus(statusSnap.exists() ? statusSnap.data() : null);
         if (policySnap) setPolicies(policySnap.docs.map((item) => ({ id: item.id, ...item.data() })));
         if (permissionSnap) setPolicyPermissions(permissionSnap.exists() ? permissionSnap.data() : { users: {} });
@@ -1230,6 +1272,81 @@ const TelegramAlertControlCenter = ({ view = "alerts", onNavigate }) => {
         throw new Error(`${getTelegramAlertBrandLabel(brandId)} 的重大預警落後幅度不可小於一般關注門檻`);
       }
     });
+  };
+
+  const toggleSecurityTarget = (targetId) => {
+    setSecurityAlertForm((previous) => {
+      const current = Array.isArray(previous.chatTargets) ? previous.chatTargets : [];
+      return {
+        ...previous,
+        chatTargets: current.includes(targetId)
+          ? current.filter((item) => item !== targetId)
+          : [...current, targetId],
+      };
+    });
+  };
+
+  const refreshSecurityAlertConfig = async () => {
+    const snap = await getDoc(securityConfigRef);
+    const data = snap.exists() ? snap.data() || {} : {};
+    setSecurityAlertForm(normalizeTelegramSecurityForm(data));
+    setSecurityAlertRevision(Math.max(0, Number(data.revision || 0)));
+  };
+
+  const requestSaveSecurityAlertConfig = () => {
+    const normalized = normalizeTelegramSecurityForm(securityAlertForm);
+    if (!canManageSecurityAlertConfig) {
+      notify("只有最高管理者可以修改登入安全通知設定", "error");
+      return;
+    }
+    if (currentDeviceTrust?.status !== "trusted") {
+      notify("目前裝置尚未完成信任確認，無法修改登入安全通知設定", "error");
+      return;
+    }
+    if (normalized.enabled && !normalized.chatTargets.length) {
+      notify("啟用登入安全通知前，請至少選擇一個 Telegram 群組", "error");
+      return;
+    }
+    setSecurityCredentialPassword("");
+    setSecurityCredentialOpen(true);
+  };
+
+  const confirmSaveSecurityAlertConfig = async () => {
+    const normalized = normalizeTelegramSecurityForm(securityAlertForm);
+    const password = String(securityCredentialPassword || "").trim();
+    if (!password) {
+      notify("請輸入目前最高管理者密碼", "error");
+      return;
+    }
+    try {
+      setLoadingAction("saveSecurityAlertConfig");
+      const result = await updateTelegramSecurityAlertConfig({
+        config: normalized,
+        expectedRevision: securityAlertRevision,
+        credentialPassword: password,
+      });
+      setSecurityAlertForm(normalizeTelegramSecurityForm(result?.config || normalized));
+      setSecurityAlertRevision(Math.max(0, Number(result?.revision || securityAlertRevision + 1)));
+      setSecurityCredentialOpen(false);
+      setSecurityCredentialPassword("");
+      notify(
+        normalized.enabled
+          ? `登入安全即時通知已啟用：${normalized.chatTargets.length} 個群組`
+          : "登入安全即時通知已停用；安全事件仍會保留在 SaaS",
+        "success"
+      );
+    } catch (error) {
+      if (Number(error?.status || 0) === 409 || error?.result?.reason === "revision_conflict") {
+        await refreshSecurityAlertConfig().catch(() => {});
+        setSecurityCredentialOpen(false);
+        setSecurityCredentialPassword("");
+        notify("設定已被另一位管理者更新，畫面已重新載入最新值，請確認後再儲存", "error");
+      } else {
+        notify(error.message || "登入安全通知設定儲存失敗", "error");
+      }
+    } finally {
+      setLoadingAction(null);
+    }
   };
 
   const saveConfig = async () => {
@@ -1598,6 +1715,38 @@ const TelegramAlertControlCenter = ({ view = "alerts", onNavigate }) => {
           {status?.lastError && <div className="rounded-2xl border border-rose-100 bg-rose-50 p-3 text-[11px] font-bold text-rose-600">{status.lastError}</div>}
         </div>
       </section>
+
+      <section className="space-y-4 rounded-2xl border border-amber-100 bg-gradient-to-br from-amber-50/70 via-white to-rose-50/30 p-5 shadow-sm xl:col-span-2">
+        <div className="flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
+          <div>
+            <div className="flex items-center gap-2"><ShieldCheck size={17} className="text-amber-600" /><p className="text-sm font-black text-stone-800">登入安全即時通知</p></div>
+            <p className="mt-1 text-[11px] font-bold leading-5 text-stone-400">只通知真正需要處理的登入安全事件；正常登入、新裝置自行驗證成功都不會推播。安全事件即使未開啟 Telegram，也會保留在 SaaS 登入監控。</p>
+          </div>
+          <button type="button" onClick={() => setSecurityAlertForm((previous) => ({ ...previous, enabled: !previous.enabled }))} disabled={!canManageSecurityAlertConfig} className={`relative h-9 w-16 shrink-0 rounded-full transition disabled:cursor-not-allowed disabled:opacity-45 ${securityAlertForm.enabled ? "bg-emerald-500" : "bg-stone-200"}`}><span className={`absolute top-1 h-7 w-7 rounded-full bg-white shadow transition ${securityAlertForm.enabled ? "left-8" : "left-1"}`} /></button>
+        </div>
+
+        <div className="grid grid-cols-1 gap-3 md:grid-cols-3">
+          {TELEGRAM_SECURITY_TARGET_OPTIONS.map((target) => {
+            const active = securityAlertForm.chatTargets.includes(target.id);
+            return <button key={target.id} type="button" onClick={() => toggleSecurityTarget(target.id)} disabled={!canManageSecurityAlertConfig} className={`rounded-2xl border p-4 text-left transition disabled:cursor-not-allowed disabled:opacity-55 ${active ? "border-amber-200 bg-white text-amber-800 shadow-sm" : "border-stone-100 bg-white/70 text-stone-400"}`}><span className="block text-xs font-black">{target.label}</span><span className="mt-1 block text-[10px] font-bold">{target.hint}</span><span className={`mt-3 inline-flex rounded-full px-2.5 py-1 text-[9px] font-black ${active ? "bg-emerald-50 text-emerald-700" : "bg-stone-100 text-stone-400"}`}>{active ? "安全事件會收到" : "目前不發送"}</span></button>;
+          })}
+        </div>
+
+        {!canManageSecurityAlertConfig && (
+          <div className="rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3 text-[10px] font-bold leading-5 text-amber-700">
+            登入安全通知屬於全品牌 Security 設定，目前帳號可查看但不可修改；只有最高管理者可從已信任裝置儲存。
+          </div>
+        )}
+        {canManageSecurityAlertConfig && currentDeviceTrust?.status !== "trusted" && (
+          <div className="rounded-2xl border border-rose-100 bg-rose-50 px-4 py-3 text-[10px] font-bold leading-5 text-rose-600">
+            目前裝置尚未完成信任確認。請先完成裝置確認後，再修改登入安全通知。
+          </div>
+        )}
+        <div className="flex flex-col gap-3 rounded-2xl border border-white bg-white/80 p-4 sm:flex-row sm:items-center sm:justify-between">
+          <div><p className="text-[11px] font-black text-stone-700">目前狀態：{securityAlertForm.enabled ? "準備主動通知" : "只記錄、不推播"}</p><p className="mt-1 text-[10px] font-bold text-stone-400">可先選群組再開啟；儲存時 Backend 會重新驗證最高管理者、已信任裝置與 revision，避免多人同時覆寫。</p></div>
+          <ActionButton onClick={requestSaveSecurityAlertConfig} disabled={isBusy || !canManageSecurityAlertConfig || currentDeviceTrust?.status !== "trusted"}>{loadingAction === "saveSecurityAlertConfig" ? <Loader2 size={14} className="animate-spin" /> : <Save size={14} />}儲存登入安全通知</ActionButton>
+        </div>
+      </section>
     </div>
   );
 
@@ -1694,6 +1843,39 @@ const TelegramAlertControlCenter = ({ view = "alerts", onNavigate }) => {
       </div>
       {lastMessage && <div className="mb-5 flex items-center gap-2 rounded-2xl border border-sky-100 bg-white/80 px-4 py-3 text-xs font-bold text-stone-600"><Activity size={14} className="text-sky-500" />{lastMessage}</div>}
       {view === "overview" ? renderOverview() : view === "tasks" ? renderTasks() : view === "governance" ? renderGovernance() : view === "reportHistory" ? renderReportHistory() : renderAlerts()}
+      {securityCredentialOpen && (
+        <div className="fixed inset-0 z-[99990] flex items-center justify-center bg-stone-900/35 p-4 backdrop-blur-[2px]">
+          <div className="w-full max-w-md rounded-3xl border border-amber-100 bg-white p-5 shadow-2xl">
+            <div className="flex items-start gap-3">
+              <div className="rounded-2xl bg-amber-50 p-3 text-amber-600"><ShieldCheck size={20} /></div>
+              <div>
+                <h4 className="text-base font-black text-stone-800">確認修改登入安全通知</h4>
+                <p className="mt-1 text-[11px] font-bold leading-5 text-stone-400">這是全品牌 Security 設定。Backend 會重新確認目前帳號、已信任裝置與最高管理者權限；密碼不會寫入 Firestore 或瀏覽器儲存空間。</p>
+              </div>
+            </div>
+            <label className="mt-5 block">
+              <span className="mb-2 block text-xs font-black text-stone-500">最高管理者密碼</span>
+              <input
+                autoFocus
+                type="password"
+                autoComplete="current-password"
+                value={securityCredentialPassword}
+                onChange={(event) => setSecurityCredentialPassword(event.target.value)}
+                onKeyDown={(event) => { if (event.key === "Enter" && loadingAction !== "saveSecurityAlertConfig") confirmSaveSecurityAlertConfig(); }}
+                placeholder="輸入目前最高管理者密碼"
+                className="w-full rounded-xl border-2 border-amber-100 bg-amber-50/30 px-4 py-3 text-sm font-bold text-stone-700 outline-none focus:border-amber-300 focus:bg-white focus:ring-4 focus:ring-amber-50"
+              />
+            </label>
+            <div className="mt-5 grid grid-cols-2 gap-3">
+              <button type="button" onClick={() => { setSecurityCredentialOpen(false); setSecurityCredentialPassword(""); }} disabled={loadingAction === "saveSecurityAlertConfig"} className="rounded-xl border border-stone-200 bg-white px-4 py-3 text-sm font-black text-stone-500 disabled:opacity-40">取消</button>
+              <button type="button" onClick={confirmSaveSecurityAlertConfig} disabled={!securityCredentialPassword.trim() || loadingAction === "saveSecurityAlertConfig"} className="inline-flex items-center justify-center gap-2 rounded-xl bg-gradient-to-r from-amber-100 via-amber-200 to-orange-100 px-4 py-3 text-sm font-black text-amber-900 shadow-sm disabled:opacity-40">
+                {loadingAction === "saveSecurityAlertConfig" ? <Loader2 size={15} className="animate-spin" /> : <ShieldCheck size={15} />}
+                {loadingAction === "saveSecurityAlertConfig" ? "驗證並儲存中…" : "確認並儲存"}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </section>
   );
 };

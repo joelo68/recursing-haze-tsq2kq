@@ -356,3 +356,25 @@ Telegram：
 - config / policy / schedule 前端讀寫正常
 - Functions log 無異常
 - 測試訊息與正式群組 routing 依當次需求驗證
+# 10. Reconciliation Security Config Hardening — Scoped Deploy Order
+
+此段只適用於 `updateTelegramSecurityAlertConfig` reconciliation candidate。它同時涉及 Backend endpoint、Firestore Rules 與 Frontend，部署不可只發其中一層。
+
+安全順序：
+
+```bash
+# 1. 先讓 Backend writer 可用
+firebase deploy --only functions:updateTelegramSecurityAlertConfig
+
+# 2. 再封鎖 telegram_security_alerts client direct write
+firebase deploy --only firestore:rules
+
+# 3. 最後發布改走 Backend 的 Frontend
+npm run deploy
+```
+
+理由：Rules 一旦先禁止 client write，而 Backend endpoint 尚未存在，新的安全設定 UI 會暫時無法儲存；反向先上 Backend 再收緊 Rules，既有 Production frontend 不會被中斷。
+
+本 hardening 沒有修改既有 Security alert Firestore triggers，因此不要機械式全量部署全部 Functions。
+
+> 在正式 validation / commit / push 前，本節只是部署邊界說明，不代表已部署。
