@@ -119,6 +119,36 @@ test("derived target summary keeps legacy-compatible totals synchronized with th
   });
 });
 
+test("Target Summary writer replaces the persisted targets map so deleted nested keys cannot survive", () => {
+  const replacement = targetCoverage.buildTargetSummaryReplacementDocument({
+    summaryData: {
+      source: "legacy_source",
+      keepMe: { value: 1 },
+      targets: {
+        "CYJA店": { cashTarget: 100, accrualTarget: 100, sourceDocId: "A" },
+        "CYJB店": { cashTarget: 200, accrualTarget: 200, sourceDocId: "B" },
+      },
+    },
+    targetMap: {
+      "CYJA店": { cashTarget: 100, accrualTarget: 100, sourceDocId: "A" },
+    },
+    brandId: "cyj",
+    yearMonth: "2026-08",
+    coveragePatch: { cashCoverageComplete: true },
+    updatedAtText: "2026-08-31T00:00:00.000Z",
+  });
+
+  assert.deepEqual(Object.keys(replacement.targets), ["CYJA店"]);
+  assert.equal(Object.prototype.hasOwnProperty.call(replacement.targets, "CYJB店"), false);
+  assert.deepEqual(replacement.keepMe, { value: 1 });
+  assert.equal(replacement.source, "legacy_source");
+  assert.equal(replacement.storeCount, 1);
+  assert.equal(replacement.targetCount, 1);
+
+  assert.match(coverageSource, /transaction\.set\(summaryRef, replacementDocument, \{ merge: false \}\)/);
+  assert.match(coverageSource, /spreading summaryData preserves unrelated top-level fields/);
+});
+
 test("unknown target coverage brands are rejected instead of silently falling back to CYJ", () => {
   assert.equal(targetCoverage.normalizeTargetCoverageBrandId("unknown"), "");
   assert.throws(() => targetCoverage.getTargetCoveragePaths("unknown"), /UNSUPPORTED_TARGET_COVERAGE_BRAND/);

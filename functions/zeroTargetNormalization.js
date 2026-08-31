@@ -1,8 +1,11 @@
 
 const {
+  TARGET_COVERAGE_SOURCE,
   normalizeTargetCoverageBrandId,
   extractTargetIdentity,
   extractSummaryTargetMap,
+  buildIndependentCoverage,
+  buildTargetSummaryReplacementDocument,
   getTargetCoveragePaths,
 } = require('./targetCoverage');
 const {
@@ -676,6 +679,166 @@ function comparePostCleanupSummary({ yearMonth = '', summaryData = {} } = {}) {
   };
 }
 
+function buildManifestAbsencePrecondition(rawManifestSnaps = []) {
+  const existingIds = sortedStrings((rawManifestSnaps || [])
+    .filter((snap) => snap?.exists)
+    .map((snap) => snap.id));
+  return {
+    safe: existingIds.length === 0 && rawManifestSnaps.length === BATCH5E1A_PLACEHOLDER_MANIFEST.length,
+    expectedCount: BATCH5E1A_PLACEHOLDER_MANIFEST.length,
+    checkedCount: rawManifestSnaps.length,
+    existingIds,
+  };
+}
+
+function inspectStaleSummaryPlaceholderRow({ yearMonth = '', entry = null, key = '', row = {} } = {}) {
+  const errors = [];
+  if (!entry) return { ok: false, errors: ['MANIFEST_ENTRY_REQUIRED'], key };
+  if (!row || typeof row !== 'object') return { ok: false, errors: ['SUMMARY_ROW_MISSING'], key };
+
+  const identity = extractTargetIdentity(row.sourceDocId || key || entry.canonicalStoreName, {
+    ...row,
+    yearMonth,
+    storeName: row.storeName || row.store || key || entry.canonicalStoreName,
+  }, BATCH5E1A_TARGET_BRAND);
+
+  if (identity.canonicalStoreName !== entry.canonicalStoreName) errors.push('SUMMARY_CANONICAL_STORE_DRIFT');
+  if (!isExplicitNumericZero(row.cashTarget)) errors.push('SUMMARY_CASH_TARGET_NOT_ZERO');
+  if (!isExplicitNumericZero(row.accrualTarget)) errors.push('SUMMARY_ACCRUAL_TARGET_NOT_ZERO');
+  if (!isExplicitNumericZero(row.challengeCashTarget)) errors.push('SUMMARY_CHALLENGE_CASH_NOT_ZERO');
+  if (!isExplicitNumericZero(row.challengeAccrualTarget)) errors.push('SUMMARY_CHALLENGE_ACCRUAL_NOT_ZERO');
+  if (row.isUnlocked === true) errors.push('SUMMARY_ROW_UNLOCKED');
+
+  return {
+    ok: errors.length === 0,
+    key: String(key || ''),
+    canonicalStoreName: identity.canonicalStoreName,
+    sourceDocId: String(row.sourceDocId || key || ''),
+    errors,
+  };
+}
+
+function buildDerivedSummaryRepairPlan({ yearMonth = '', summaryData = {} } = {}) {
+  const manifestEntries = BATCH5E1A_PLACEHOLDER_MANIFEST.filter((entry) => entry.yearMonth === yearMonth);
+  if (!manifestEntries.length) return { safe: false, yearMonth, errors: ['NO_MANIFEST_ENTRIES_FOR_MONTH'] };
+  if (!summaryData || typeof summaryData !== 'object' || Object.keys(summaryData).length === 0) {
+    return { safe: false, yearMonth, errors: ['SUMMARY_MISSING'] };
+  }
+
+  const probe = buildSummarySafetyProbe({ yearMonth, summaryData });
+  const errors = [];
+  if (probe.nonCanonicalContainerMatches.length > 0) errors.push('LEGACY_SUMMARY_CONTAINER_MATCH');
+
+  const directTargets = summaryData.targets && typeof summaryData.targets === 'object' && !Array.isArray(summaryData.targets)
+    ? summaryData.targets
+    : {};
+  const nextTargets = { ...directTargets };
+  const inspections = [];
+  const removedKeys = [];
+
+  for (const entry of manifestEntries) {
+    const directMatches = Object.entries(directTargets).filter(([key, row]) => {
+      if (!row || typeof row !== 'object') return false;
+      const identity = extractTargetIdentity(row.sourceDocId || key, {
+        ...row,
+        yearMonth,
+        storeName: row.storeName || row.store || key,
+      }, BATCH5E1A_TARGET_BRAND);
+      return identity.canonicalStoreName === entry.canonicalStoreName;
+    });
+
+    for (const [key, row] of directMatches) {
+      const inspection = inspectStaleSummaryPlaceholderRow({ yearMonth, entry, key, row });
+      inspections.push(inspection);
+      if (!inspection.ok) {
+        errors.push(...inspection.errors.map((code) => `${entry.canonicalStoreName}:${code}`));
+        continue;
+      }
+      delete nextTargets[key];
+      removedKeys.push(key);
+    }
+  }
+
+  const nextSummaryData = { ...summaryData, targets: nextTargets };
+  const nextTargetMap = extractSummaryTargetMap(nextSummaryData, BATCH5E1A_TARGET_BRAND, yearMonth);
+  const placeholderStores = new Set(manifestEntries.map((entry) => entry.canonicalStoreName));
+  const lingeringStores = Object.keys(nextTargetMap).filter((storeName) => placeholderStores.has(storeName));
+  if (lingeringStores.length > 0) errors.push('PLACEHOLDER_REMAINS_AFTER_PLANNED_REPAIR');
+
+  return {
+    safe: errors.length === 0,
+    yearMonth,
+    errors,
+    removedKeys: sortedStrings(removedKeys),
+    removedStoreCount: new Set(inspections.filter((row) => row.ok).map((row) => row.canonicalStoreName)).size,
+    inspections,
+    lingeringStores,
+    nextTargetMap,
+    probe,
+  };
+}
+
+function buildRepairCoveragePatch({ admin, yearMonth = '', lifecycleMaster = {}, lifecycleApi = {}, targetMap = {}, nowText = '' } = {}) {
+  const lifecycleReady = String(lifecycleMaster?.datasetStatus || '') === 'READY';
+  const getEligibleEntries = lifecycleApi.getLifecycleEligibleStoreEntries;
+  if (typeof getEligibleEntries !== 'function') throw new Error('LIFECYCLE_ELIGIBILITY_API_MISSING');
+  const eligibleEntries = getEligibleEntries(lifecycleMaster || {}, yearMonth, {
+    brandId: BATCH5E1A_TARGET_BRAND,
+    requireReady: true,
+  });
+  const coverage = buildIndependentCoverage({
+    targetMap,
+    eligibleEntries,
+    lifecycleReady,
+    normalizeStoreCoreFn: lifecycleApi.normalizeStoreLifecycleCore,
+  });
+  return {
+    brandId: BATCH5E1A_TARGET_BRAND,
+    yearMonth,
+    ...coverage,
+    coverageSource: TARGET_COVERAGE_SOURCE,
+    coverageUpdatedAt: admin.firestore.FieldValue.serverTimestamp(),
+    coverageUpdatedAtText: nowText || new Date().toISOString(),
+  };
+}
+
+function buildDerivedRepairCandidate({ admin, yearMonth = '', summaryData = {}, lifecycleMaster = {}, lifecycleApi = {}, nowText = '' } = {}) {
+  const plan = buildDerivedSummaryRepairPlan({ yearMonth, summaryData });
+  if (!plan.safe) return { safe: false, yearMonth, plan, errors: [...(plan.errors || [])] };
+
+  const coveragePatch = buildRepairCoveragePatch({
+    admin,
+    yearMonth,
+    lifecycleMaster,
+    lifecycleApi,
+    targetMap: plan.nextTargetMap,
+    nowText,
+  });
+  const replacementDocument = buildTargetSummaryReplacementDocument({
+    summaryData,
+    targetMap: plan.nextTargetMap,
+    brandId: BATCH5E1A_TARGET_BRAND,
+    yearMonth,
+    coveragePatch,
+    updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+    updatedAtText: nowText,
+    updatedBy: 'backend_target_coverage_repair',
+  });
+  const currentVerification = comparePostCleanupSummary({ yearMonth, summaryData });
+  const verification = comparePostCleanupSummary({ yearMonth, summaryData: replacementDocument });
+
+  return {
+    safe: verification.ok,
+    needsWrite: plan.removedKeys.length > 0 || !currentVerification.ok,
+    yearMonth,
+    plan,
+    replacementDocument,
+    currentVerification,
+    verification,
+    errors: verification.ok ? [] : verification.errors,
+  };
+}
+
 function createZeroTargetNormalizationFunctions({ admin, db }) {
   const { onRequest } = require('firebase-functions/v2/https');
   const {
@@ -762,30 +925,69 @@ function createZeroTargetNormalizationFunctions({ admin, db }) {
           lifecycleRef.get(),
           ...affectedMonths.map((yearMonth) => summaryCollection.doc(yearMonth).get()),
         ]);
+        const rawManifestSnaps = await Promise.all(
+          BATCH5E1A_PLACEHOLDER_MANIFEST.map((entry) => targetCollection.doc(entry.docId).get())
+        );
         const lifecycleMaster = lifecycleSnap.exists ? (lifecycleSnap.data() || {}) : {};
-        const precondition = buildLiveSetPrecondition({ cashZeroSnap, accrualZeroSnap, lifecycleMaster, lifecycleApi });
+        const liveZeroDocs = collectQueryDocuments(cashZeroSnap, accrualZeroSnap);
+        const deletePrecondition = buildLiveSetPrecondition({ cashZeroSnap, accrualZeroSnap, lifecycleMaster, lifecycleApi });
         const summarySafety = summarySnaps.map((snap, index) => buildSummarySafetyProbe({
           yearMonth: affectedMonths[index],
           summaryData: snap.exists ? (snap.data() || {}) : {},
         }));
         const unsafeSummaryMonths = summarySafety.filter((row) => !row.safeForExistingDeleteTrigger || !row.summaryExists);
-        const canExecute = precondition.safe && unsafeSummaryMonths.length === 0;
+
+        let executionPhase = 'raw_placeholder_delete';
+        let canExecute = deletePrecondition.safe && unsafeSummaryMonths.length === 0;
+        let repairPrecondition = null;
+        let repairCandidates = [];
+
+        if (liveZeroDocs.size === 0) {
+          executionPhase = 'derived_summary_repair';
+          repairPrecondition = buildManifestAbsencePrecondition(rawManifestSnaps);
+          const nowText = new Date().toISOString();
+          repairCandidates = summarySnaps.map((snap, index) => buildDerivedRepairCandidate({
+            admin,
+            yearMonth: affectedMonths[index],
+            summaryData: snap.exists ? (snap.data() || {}) : {},
+            lifecycleMaster,
+            lifecycleApi,
+            nowText,
+          }));
+          const lifecycleOk = String(lifecycleMaster?.datasetStatus || '') === 'READY'
+            && Number(lifecycleMaster?.revision || 0) === BATCH5E1A_EXPECTED_LIFECYCLE_REVISION;
+          canExecute = repairPrecondition.safe
+            && lifecycleOk
+            && repairCandidates.length === affectedMonths.length
+            && repairCandidates.every((row) => row.safe);
+        }
 
         return res.status(200).json({
           ok: true,
           mode,
           canExecute,
+          executionPhase,
           normalizationVersion: BATCH5E1A_NORMALIZATION_VERSION,
           brandId,
           manifestCount: BATCH5E1A_PLACEHOLDER_MANIFEST.length,
-          precondition,
+          precondition: executionPhase === 'raw_placeholder_delete' ? deletePrecondition : repairPrecondition,
           summarySafety,
           unsafeSummaryMonths,
+          repairCandidates: repairCandidates.map((row) => ({
+            safe: row.safe,
+            needsWrite: row.needsWrite,
+            yearMonth: row.yearMonth,
+            errors: row.errors,
+            removedKeys: row.plan?.removedKeys || [],
+            currentVerification: row.currentVerification || null,
+            verification: row.verification || null,
+          })),
           executionConfirmation: canExecute ? BATCH5E1A_EXECUTION_CONFIRMATION : '',
           readEstimate: {
             securityFirestoreReads: 3,
             cashZeroQueryReads: cashZeroSnap.size,
             accrualZeroQueryReads: accrualZeroSnap.size,
+            exactManifestPointReads: rawManifestSnaps.length,
             lifecycleReads: 1,
             summaryPointReads: summarySnaps.length,
             firestoreWrites: 0,
@@ -803,8 +1005,9 @@ function createZeroTargetNormalizationFunctions({ admin, db }) {
       }
 
       const transactionResult = await db.runTransaction(async (transaction) => {
-        // Query set + lifecycle are read inside the same transaction as the 27 deletes.
-        // If any target/lifecycle changes after dry-run, Firestore retries and the fail-closed checks run again.
+        // Every execution re-reads query state, exact manifest docs, Lifecycle, and all 11
+        // Summary docs inside one transaction. The post-delete recovery path is allowed
+        // only when all 27 Raw manifest docs remain absent.
         const cashZeroSnap = await transaction.get(cashZeroQuery);
         const accrualZeroSnap = await transaction.get(accrualZeroQuery);
         const lifecycleSnap = await transaction.get(lifecycleRef);
@@ -812,54 +1015,134 @@ function createZeroTargetNormalizationFunctions({ admin, db }) {
         for (const yearMonth of affectedMonths) {
           summarySnaps.push(await transaction.get(summaryCollection.doc(yearMonth)));
         }
+        const rawManifestSnaps = [];
+        for (const entry of BATCH5E1A_PLACEHOLDER_MANIFEST) {
+          rawManifestSnaps.push(await transaction.get(targetCollection.doc(entry.docId)));
+        }
 
         const lifecycleMaster = lifecycleSnap.exists ? (lifecycleSnap.data() || {}) : {};
-        const precondition = buildLiveSetPrecondition({ cashZeroSnap, accrualZeroSnap, lifecycleMaster, lifecycleApi });
-        const summarySafety = summarySnaps.map((snap, index) => buildSummarySafetyProbe({
-          yearMonth: affectedMonths[index],
-          summaryData: snap.exists ? (snap.data() || {}) : {},
-        }));
-        const unsafeSummaryMonths = summarySafety.filter((row) => !row.safeForExistingDeleteTrigger || !row.summaryExists);
+        const lifecycleOk = String(lifecycleMaster?.datasetStatus || '') === 'READY'
+          && Number(lifecycleMaster?.revision || 0) === BATCH5E1A_EXPECTED_LIFECYCLE_REVISION;
+        const liveZeroDocs = collectQueryDocuments(cashZeroSnap, accrualZeroSnap);
 
-        if (!precondition.safe || unsafeSummaryMonths.length > 0) {
-          const error = new Error('BATCH5E1A_PRECONDITION_DRIFT');
-          error.code = 'BATCH5E1A_PRECONDITION_DRIFT';
-          error.precondition = precondition;
-          error.summarySafety = summarySafety;
-          error.unsafeSummaryMonths = unsafeSummaryMonths;
+        if (liveZeroDocs.size > 0) {
+          const precondition = buildLiveSetPrecondition({ cashZeroSnap, accrualZeroSnap, lifecycleMaster, lifecycleApi });
+          const summarySafety = summarySnaps.map((snap, index) => buildSummarySafetyProbe({
+            yearMonth: affectedMonths[index],
+            summaryData: snap.exists ? (snap.data() || {}) : {},
+          }));
+          const unsafeSummaryMonths = summarySafety.filter((row) => !row.safeForExistingDeleteTrigger || !row.summaryExists);
+
+          if (!precondition.safe || unsafeSummaryMonths.length > 0) {
+            const error = new Error('BATCH5E1A_PRECONDITION_DRIFT');
+            error.code = 'BATCH5E1A_PRECONDITION_DRIFT';
+            error.precondition = precondition;
+            error.summarySafety = summarySafety;
+            error.unsafeSummaryMonths = unsafeSummaryMonths;
+            throw error;
+          }
+
+          for (const entry of BATCH5E1A_PLACEHOLDER_MANIFEST) {
+            transaction.delete(targetCollection.doc(entry.docId));
+          }
+
+          return {
+            phase: 'raw_placeholder_delete',
+            precondition,
+            summarySafety,
+            deletedDocIds: BATCH5E1A_PLACEHOLDER_MANIFEST.map((entry) => entry.docId),
+            repairedMonths: [],
+          };
+        }
+
+        const repairPrecondition = buildManifestAbsencePrecondition(rawManifestSnaps);
+        if (!repairPrecondition.safe || !lifecycleOk) {
+          const error = new Error('BATCH5E1A_REPAIR_PRECONDITION_DRIFT');
+          error.code = 'BATCH5E1A_REPAIR_PRECONDITION_DRIFT';
+          error.repairPrecondition = repairPrecondition;
+          error.lifecycle = {
+            datasetStatus: String(lifecycleMaster?.datasetStatus || 'BUILDING'),
+            revision: Number(lifecycleMaster?.revision || 0),
+            expectedRevision: BATCH5E1A_EXPECTED_LIFECYCLE_REVISION,
+          };
           throw error;
         }
 
-        for (const entry of BATCH5E1A_PLACEHOLDER_MANIFEST) {
-          transaction.delete(targetCollection.doc(entry.docId));
+        const nowText = new Date().toISOString();
+        const repairCandidates = summarySnaps.map((snap, index) => buildDerivedRepairCandidate({
+          admin,
+          yearMonth: affectedMonths[index],
+          summaryData: snap.exists ? (snap.data() || {}) : {},
+          lifecycleMaster,
+          lifecycleApi,
+          nowText,
+        }));
+        const unsafeRepairCandidates = repairCandidates.filter((row) => !row.safe);
+        if (unsafeRepairCandidates.length > 0) {
+          const error = new Error('BATCH5E1A_REPAIR_PRECONDITION_DRIFT');
+          error.code = 'BATCH5E1A_REPAIR_PRECONDITION_DRIFT';
+          error.repairPrecondition = repairPrecondition;
+          error.unsafeRepairCandidates = unsafeRepairCandidates.map((row) => ({
+            yearMonth: row.yearMonth,
+            errors: row.errors,
+            planErrors: row.plan?.errors || [],
+          }));
+          throw error;
         }
 
+        const repairIndexes = repairCandidates
+          .map((candidate, index) => ({ candidate, index }))
+          .filter(({ candidate }) => candidate.needsWrite);
+
+        repairIndexes.forEach(({ candidate, index }) => {
+          // Full-document replacement is required so stale nested targets.<store> keys
+          // are physically removed instead of recursively merged back by Firestore.
+          transaction.set(summarySnaps[index].ref, candidate.replacementDocument, { merge: false });
+        });
+
         return {
-          precondition,
-          summarySafety,
-          deletedDocIds: BATCH5E1A_PLACEHOLDER_MANIFEST.map((entry) => entry.docId),
+          phase: repairIndexes.length > 0 ? 'derived_summary_repair' : 'already_repaired',
+          repairPrecondition,
+          deletedDocIds: [],
+          repairedMonths: repairIndexes.map(({ candidate }) => candidate.yearMonth),
+          repairResults: repairCandidates.map((row) => ({
+            yearMonth: row.yearMonth,
+            needsWrite: row.needsWrite,
+            removedKeys: row.plan.removedKeys,
+            currentVerification: row.currentVerification,
+            verification: row.verification,
+          })),
         };
       });
 
       console.info(
-        `Batch 5E-1A placeholder cleanup committed: brand=${brandId} docs=${transactionResult.deletedDocIds.length} actor=${adminCheck.actorName || adminCheck.actorAccountId || 'super_admin'}`
+        `Batch 5E-1A execution committed: brand=${brandId} phase=${transactionResult.phase} deletes=${transactionResult.deletedDocIds.length} repairedMonths=${transactionResult.repairedMonths.length} actor=${adminCheck.actorName || adminCheck.actorAccountId || 'super_admin'}`
       );
 
       return res.status(200).json({
         ok: true,
         mode,
         committed: true,
+        executionPhase: transactionResult.phase,
         normalizationVersion: BATCH5E1A_NORMALIZATION_VERSION,
         brandId,
         deletedDocIds: transactionResult.deletedDocIds,
+        repairedMonths: transactionResult.repairedMonths,
+        repairResults: transactionResult.repairResults || [],
         affectedMonths,
-        expectedDerivedTriggerFanout: transactionResult.deletedDocIds.length,
-        nextStep: 'WAIT_FOR_TARGET_COVERAGE_TRIGGERS_THEN_RUN_VERIFY_ONCE',
+        expectedDerivedTriggerFanout: transactionResult.phase === 'raw_placeholder_delete'
+          ? transactionResult.deletedDocIds.length
+          : 0,
+        nextStep: transactionResult.phase === 'raw_placeholder_delete'
+          ? 'WAIT_FOR_TARGET_COVERAGE_TRIGGERS_THEN_RUN_VERIFY_ONCE'
+          : 'RUN_VERIFY_ONCE',
         writeEstimate: {
           rawTargetDeletes: transactionResult.deletedDocIds.length,
-          directSummaryWrites: 0,
+          directSummaryWrites: transactionResult.repairedMonths.length,
           directAuditLogWrites: 0,
-          expectedDerivedSummaryWrites: transactionResult.deletedDocIds.length,
+          expectedDerivedSummaryWrites: transactionResult.phase === 'raw_placeholder_delete'
+            ? transactionResult.deletedDocIds.length
+            : 0,
         },
         committedAtText: new Date().toISOString(),
       });
@@ -872,6 +1155,16 @@ function createZeroTargetNormalizationFunctions({ admin, db }) {
           precondition: error.precondition || null,
           summarySafety: error.summarySafety || null,
           unsafeSummaryMonths: error.unsafeSummaryMonths || [],
+        });
+      }
+      if (error?.code === 'BATCH5E1A_REPAIR_PRECONDITION_DRIFT') {
+        return res.status(409).json({
+          ok: false,
+          message: 'Production Raw/Lifecycle/Summary state changed; derived repair aborted with 0 writes',
+          code: error.code,
+          repairPrecondition: error.repairPrecondition || null,
+          lifecycle: error.lifecycle || null,
+          unsafeRepairCandidates: error.unsafeRepairCandidates || [],
         });
       }
       console.error('normalizeLegacyZeroTargetPlaceholders failed', error);
@@ -903,5 +1196,10 @@ module.exports = {
   buildSummarySafetyProbe,
   getCoverageSnapshot,
   comparePostCleanupSummary,
+  buildManifestAbsencePrecondition,
+  inspectStaleSummaryPlaceholderRow,
+  buildDerivedSummaryRepairPlan,
+  buildRepairCoveragePatch,
+  buildDerivedRepairCandidate,
   createZeroTargetNormalizationFunctions,
 };

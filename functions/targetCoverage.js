@@ -267,6 +267,35 @@ function buildTargetSummaryCompatibilityFields(targetMap = {}, brandId = 'cyj', 
   };
 }
 
+function buildTargetSummaryReplacementDocument({
+  summaryData = {},
+  targetMap = {},
+  brandId = 'cyj',
+  yearMonth = '',
+  coveragePatch = {},
+  updatedAt,
+  updatedAtText = '',
+  updatedBy = 'backend_target_coverage',
+} = {}) {
+  const existing = summaryData && typeof summaryData === 'object' ? summaryData : {};
+  const timestampPatch = {};
+  if (updatedAt !== undefined) timestampPatch.updatedAt = updatedAt;
+  if (updatedAtText) timestampPatch.updatedAtText = updatedAtText;
+
+  return {
+    ...existing,
+    ...buildTargetSummaryCompatibilityFields(targetMap, brandId, yearMonth),
+    source: existing.source || TARGET_COVERAGE_SOURCE,
+    // IMPORTANT: `targets` is a top-level replacement field. The caller must persist
+    // this complete document with merge:false so a deleted nested store key cannot
+    // survive Firestore map-merge semantics.
+    targets: targetMap,
+    ...timestampPatch,
+    updatedBy,
+    ...coveragePatch,
+  };
+}
+
 function buildScopeChallengeTarget({ targetMap = {}, eligibleEntries = [], metric = 'cash', lifecycleReady = false, normalizeStoreCoreFn = normalizeStoreCore } = {}) {
   const baseField = metric === 'accrual' ? 'accrualTarget' : 'cashTarget';
   const challengeField = metric === 'accrual' ? 'challengeAccrualTarget' : 'challengeCashTarget';
@@ -433,15 +462,22 @@ function createTargetCoverageFunctions({ admin, db }) {
       const coveragePatch = buildCoveragePatch({ brandId, yearMonth: identity.yearMonth, lifecycleMaster, targetMap });
       const nowText = new Date().toISOString();
 
-      transaction.set(summaryRef, {
-        ...buildTargetSummaryCompatibilityFields(targetMap, brandId, identity.yearMonth),
-        source: summaryData.source || TARGET_COVERAGE_SOURCE,
-        targets: targetMap,
+      const replacementDocument = buildTargetSummaryReplacementDocument({
+        summaryData,
+        targetMap,
+        brandId,
+        yearMonth: identity.yearMonth,
+        coveragePatch,
         updatedAt: admin.firestore.FieldValue.serverTimestamp(),
         updatedAtText: nowText,
         updatedBy: 'backend_target_coverage',
-        ...coveragePatch,
-      }, { merge: true });
+      });
+
+      // Full-document replacement is intentional here. Firestore set(..., { merge:true })
+      // recursively merges nested maps and leaves omitted targets.<store> keys behind.
+      // The transaction read above protects concurrent Summary changes and retries with
+      // fresh data, while spreading summaryData preserves unrelated top-level fields.
+      transaction.set(summaryRef, replacementDocument, { merge: false });
     });
   }
 
@@ -576,6 +612,7 @@ module.exports = {
   buildTargetAudit,
   buildIndependentCoverage,
   buildTargetSummaryCompatibilityFields,
+  buildTargetSummaryReplacementDocument,
   buildScopeChallengeTarget,
   targetMapsEqual,
   getTargetCoveragePaths,

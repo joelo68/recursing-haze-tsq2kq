@@ -47,6 +47,16 @@ const lifecycleApi = {
     if ((entry.exemptMonths || []).includes(yearMonth)) return false;
     return true;
   },
+  getLifecycleEligibleStoreEntries(master = {}, yearMonth = '') {
+    return Object.entries(master.stores || {})
+      .filter(([, entry]) => lifecycleApi.isLifecycleEntryEligibleForMonth(entry, yearMonth))
+      .map(([storeKey]) => ({
+        storeKey,
+        coreStoreName: storeKey,
+        canonicalStoreName: `伊啵${storeKey}店`,
+        brandId: 'yibo',
+      }));
+  },
 };
 
 function makeLifecycleMaster() {
@@ -81,6 +91,14 @@ function fakeSnap(docMap = new Map()) {
       id,
       data: () => data,
     })),
+  };
+}
+
+function fakeDocSnap(id, exists, data = {}) {
+  return {
+    id,
+    exists,
+    data: () => data,
   };
 }
 
@@ -217,6 +235,94 @@ test('summary safety probe blocks execute when a placeholder also exists in a le
   assert.equal(unsafe.nonCanonicalContainerMatches[0].containerName, 'stores');
 });
 
+test('derived repair plan removes only audited stale target rows and rejects semantic drift or legacy resurrection', () => {
+  const safe = normalization.buildDerivedSummaryRepairPlan({
+    yearMonth: '2026-09',
+    summaryData: {
+      targets: {
+        伊啵園區店: { storeName: '伊啵園區店', cashTarget: 400000, accrualTarget: 400000, sourceDocId: '伊啵園區店_2026_9' },
+        伊啵中山店: { storeName: '伊啵中山店', cashTarget: 0, accrualTarget: 0, challengeCashTarget: 0, challengeAccrualTarget: 0, isUnlocked: false, sourceDocId: '伊啵中山店_2026_9' },
+        伊啵天母店: { storeName: '伊啵天母店', cashTarget: 0, accrualTarget: 0, challengeCashTarget: 0, challengeAccrualTarget: 0, isUnlocked: false, sourceDocId: '伊啵天母店_2026_9' },
+        伊啵新莊店: { storeName: '伊啵新莊店', cashTarget: 0, accrualTarget: 0, challengeCashTarget: 0, challengeAccrualTarget: 0, isUnlocked: false, sourceDocId: '伊啵新莊店_2026_9' },
+        伊啵站前店: { storeName: '伊啵站前店', cashTarget: 0, accrualTarget: 0, challengeCashTarget: 0, challengeAccrualTarget: 0, isUnlocked: false, sourceDocId: '伊啵站前店' },
+      },
+    },
+  });
+  assert.equal(safe.safe, true);
+  assert.equal(safe.removedStoreCount, 4);
+  assert.deepEqual(Object.keys(safe.nextTargetMap), ['伊啵園區店']);
+
+  const drift = normalization.buildDerivedSummaryRepairPlan({
+    yearMonth: '2026-09',
+    summaryData: {
+      targets: {
+        伊啵中山店: { storeName: '伊啵中山店', cashTarget: 500000, accrualTarget: 0, challengeCashTarget: 0, challengeAccrualTarget: 0, isUnlocked: false, sourceDocId: '伊啵中山店_2026_9' },
+      },
+    },
+  });
+  assert.equal(drift.safe, false);
+  assert.ok(drift.errors.some((code) => code.includes('SUMMARY_CASH_TARGET_NOT_ZERO')));
+
+  const legacy = normalization.buildDerivedSummaryRepairPlan({
+    yearMonth: '2026-09',
+    summaryData: {
+      targets: {},
+      stores: {
+        伊啵中山店: { storeName: '伊啵中山店', cashTarget: 0, accrualTarget: 0, challengeCashTarget: 0, challengeAccrualTarget: 0, isUnlocked: false },
+      },
+    },
+  });
+  assert.equal(legacy.safe, false);
+  assert.ok(legacy.errors.includes('LEGACY_SUMMARY_CONTAINER_MATCH'));
+});
+
+test('post-delete repair precondition requires all 27 exact Raw manifest documents to remain absent', () => {
+  const absent = normalization.BATCH5E1A_PLACEHOLDER_MANIFEST.map((entry) => fakeDocSnap(entry.docId, false));
+  const good = normalization.buildManifestAbsencePrecondition(absent);
+  assert.equal(good.safe, true);
+  assert.deepEqual(good.existingIds, []);
+
+  const recreated = [...absent];
+  recreated[0] = fakeDocSnap(normalization.BATCH5E1A_PLACEHOLDER_MANIFEST[0].docId, true, { cashTarget: 500000 });
+  const blocked = normalization.buildManifestAbsencePrecondition(recreated);
+  assert.equal(blocked.safe, false);
+  assert.deepEqual(blocked.existingIds, [normalization.BATCH5E1A_PLACEHOLDER_MANIFEST[0].docId]);
+});
+
+test('derived repair candidate rebuilds Coverage and expected persisted signature before any write', () => {
+  const serverTimestamp = () => ({ __serverTimestamp: true });
+  const candidate = normalization.buildDerivedRepairCandidate({
+    admin: { firestore: { FieldValue: { serverTimestamp } } },
+    yearMonth: '2026-09',
+    lifecycleMaster: {
+      ...makeLifecycleMaster(),
+      stores: {
+        ...makeLifecycleMaster().stores,
+        園區: { firstEligibleMonth: '2026-04', openDate: '2026-04-01', exemptMonths: [] },
+      },
+    },
+    lifecycleApi,
+    nowText: '2026-08-31T00:00:00.000Z',
+    summaryData: {
+      targets: {
+        伊啵園區店: { storeName: '伊啵園區店', cashTarget: 400000, accrualTarget: 400000, sourceDocId: '伊啵園區店_2026_9' },
+        伊啵中山店: { storeName: '伊啵中山店', cashTarget: 0, accrualTarget: 0, challengeCashTarget: 0, challengeAccrualTarget: 0, isUnlocked: false, sourceDocId: '伊啵中山店_2026_9' },
+        伊啵天母店: { storeName: '伊啵天母店', cashTarget: 0, accrualTarget: 0, challengeCashTarget: 0, challengeAccrualTarget: 0, isUnlocked: false, sourceDocId: '伊啵天母店_2026_9' },
+        伊啵新莊店: { storeName: '伊啵新莊店', cashTarget: 0, accrualTarget: 0, challengeCashTarget: 0, challengeAccrualTarget: 0, isUnlocked: false, sourceDocId: '伊啵新莊店_2026_9' },
+        伊啵站前店: { storeName: '伊啵站前店', cashTarget: 0, accrualTarget: 0, challengeCashTarget: 0, challengeAccrualTarget: 0, isUnlocked: false, sourceDocId: '伊啵站前店' },
+      },
+    },
+  });
+
+  assert.equal(candidate.safe, true);
+  assert.equal(candidate.needsWrite, true);
+  assert.equal(candidate.verification.ok, true);
+  assert.deepEqual(Object.keys(candidate.replacementDocument.targets), ['伊啵園區店']);
+  assert.equal(candidate.replacementDocument.storeCount, 1);
+  assert.equal(candidate.replacementDocument.cashConfiguredStoreCount, 1);
+  assert.deepEqual(candidate.replacementDocument.cashMissingStores.sort(), ['伊啵中山店', '伊啵天母店', '伊啵新莊店', '伊啵站前店'].sort());
+});
+
 test('post-cleanup verifier requires placeholder rows gone while preserving lifecycle coverage and target totals', () => {
   const result = normalization.comparePostCleanupSummary({
     yearMonth: '2026-09',
@@ -261,7 +367,7 @@ test('current formal TargetView no longer creates numeric-zero placeholders and 
   assert.doesNotMatch(targetCoverage, /collection\(['"]monthly_targets['"]\)\.get\s*\(/);
 });
 
-test('normalization endpoint is backend secured, Yibo-only, atomic, and never writes derived summary directly', () => {
+test('normalization endpoint is backend secured, Yibo-only, atomic, and repairs only the bounded 11 derived summaries after Raw absence', () => {
   assert.match(source, /requireFirebaseRequestAuth/);
   assert.match(source, /verifySuperAdminActor/);
   assert.match(source, /brandId !== BATCH5E1A_TARGET_BRAND/);
@@ -272,7 +378,9 @@ test('normalization endpoint is backend secured, Yibo-only, atomic, and never wr
   assert.match(source, /summarySnaps\.push\(await transaction\.get\(summaryCollection\.doc\(yearMonth\)\)\)/);
   assert.match(source, /BATCH5E1A_PRECONDITION_DRIFT/);
   assert.match(source, /transaction\.delete\(targetCollection\.doc\(entry\.docId\)\)/);
-  assert.doesNotMatch(source, /transaction\.set\(summaryCollection|transaction\.update\(summaryCollection|batch\.set\(summaryCollection/);
+  assert.match(source, /rawManifestSnaps\.push\(await transaction\.get\(targetCollection\.doc\(entry\.docId\)\)\)/);
+  assert.match(source, /transaction\.set\(summarySnaps\[index\]\.ref, candidate\.replacementDocument, \{ merge: false \}\)/);
+  assert.match(source, /derived_summary_repair/);
   assert.doesNotMatch(source, /setInterval\s*\(/);
   assert.doesNotMatch(source, /onSchedule/);
 });
