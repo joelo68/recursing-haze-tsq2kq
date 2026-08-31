@@ -71,9 +71,9 @@ const targetCoverageAuditFunctions = createTargetCoverageAuditFunctions({ admin,
 exports.auditHistoricalTargetCoverage = targetCoverageAuditFunctions.auditHistoricalTargetCoverage;
 
 // ==========================================
-// ★ Batch 5E-0：Production Explicit Zero Target Read-only Inventory
+// ★ Batch 5E-0 / 5E-0.5：Production Explicit Zero Target + Lifecycle Read-only Audit
 // 只查 monthly_targets 中 cashTarget / accrualTarget == 0 的 index 命中文件，
-// 再 point-read 受影響月份 Summary；0 writes、無 polling、無 collection-wide Raw scan。
+// 再 point-read 受影響月份 Summary 與單一 store_lifecycle/master；0 writes、無 polling、無 collection-wide Raw scan。
 // ==========================================
 const { createZeroTargetInventoryFunctions } = require("./zeroTargetInventory");
 const zeroTargetInventoryFunctions = createZeroTargetInventoryFunctions({ admin, db });

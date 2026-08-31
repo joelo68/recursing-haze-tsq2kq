@@ -5,13 +5,33 @@ const {
   getTargetCoveragePaths,
 } = require('./targetCoverage');
 
-const ZERO_TARGET_INVENTORY_VERSION = 'zero-target-production-inventory-v1';
+const ZERO_TARGET_INVENTORY_VERSION = 'zero-target-production-inventory-v2';
 const CYJ_NEW_STORE_CANONICAL_NAME = 'CYJ新店店';
 const CYJ_NEW_STORE_LEGACY_NAMES = Object.freeze([
   'CYJ新店',
   'DRCYJ新店',
   'DRCYJ新店店',
 ]);
+
+const KNOWN_TARGET_FIELDS = Object.freeze(new Set([
+  'brandId',
+  'year',
+  'month',
+  'yearMonth',
+  'store',
+  'storeName',
+  'cashTarget',
+  'accrualTarget',
+  'challengeCashTarget',
+  'challengeAccrualTarget',
+  'isUnlocked',
+  'updatedAt',
+  'updatedAtText',
+  'updatedBy',
+  'createdAt',
+  'createdAtText',
+  'createdBy',
+]));
 
 function hasOwn(value = {}, key = '') {
   return Boolean(value && typeof value === 'object' && Object.prototype.hasOwnProperty.call(value, key));
@@ -34,6 +54,8 @@ function buildZeroTargetInventoryRecord({ brandId, docId, data = {} } = {}) {
   const cashExplicitZero = hasOwn(data, 'cashTarget') && isExplicitNumericZero(data.cashTarget);
   const accrualExplicitZero = hasOwn(data, 'accrualTarget') && isExplicitNumericZero(data.accrualTarget);
   const canonicalDocument = Boolean(identity.canonicalTargetId && String(docId || '') === identity.canonicalTargetId);
+  const documentFieldNames = Object.keys(data || {}).sort();
+  const extraFieldNames = documentFieldNames.filter((key) => !KNOWN_TARGET_FIELDS.has(key));
 
   return {
     brandId: normalizedBrandId,
@@ -50,8 +72,17 @@ function buildZeroTargetInventoryRecord({ brandId, docId, data = {} } = {}) {
     accrualTargetPresent: hasOwn(data, 'accrualTarget'),
     accrualTarget: hasOwn(data, 'accrualTarget') ? data.accrualTarget : null,
     accrualExplicitZero,
+    challengeCashTargetPresent: hasOwn(data, 'challengeCashTarget'),
+    challengeCashTarget: hasOwn(data, 'challengeCashTarget') ? data.challengeCashTarget : null,
+    challengeAccrualTargetPresent: hasOwn(data, 'challengeAccrualTarget'),
+    challengeAccrualTarget: hasOwn(data, 'challengeAccrualTarget') ? data.challengeAccrualTarget : null,
+    isUnlocked: data.isUnlocked === true,
     updatedAtText: normalizeAuditText(data.updatedAtText || data.updatedAt || ''),
     updatedBy: String(data.updatedBy || ''),
+    createdAtText: normalizeAuditText(data.createdAtText || data.createdAt || ''),
+    createdBy: String(data.createdBy || ''),
+    documentFieldNames,
+    extraFieldNames,
   };
 }
 
@@ -71,6 +102,11 @@ function summarizeZeroTargetInventory(records = []) {
     affectedMonths: uniqueMonths,
     affectedStoreCount: uniqueStores.length,
     affectedStores: uniqueStores,
+    docsWithChallengeFields: records.filter(
+      (row) => row.challengeCashTargetPresent || row.challengeAccrualTargetPresent
+    ).length,
+    docsUnlocked: records.filter((row) => row.isUnlocked).length,
+    docsWithExtraFields: records.filter((row) => Array.isArray(row.extraFieldNames) && row.extraFieldNames.length > 0).length,
   };
 }
 
@@ -92,8 +128,116 @@ function buildSummaryObservation(record = {}, summaryData = {}) {
     summarySourceDocId: String(row?.sourceDocId || ''),
     summaryCashTarget,
     summaryAccrualTarget,
+    summaryChallengeCashTarget: row && hasOwn(row, 'challengeCashTarget') ? row.challengeCashTarget : null,
+    summaryChallengeAccrualTarget: row && hasOwn(row, 'challengeAccrualTarget') ? row.challengeAccrualTarget : null,
+    summaryIsUnlocked: row?.isUnlocked === true,
     cashZeroPreservedInSummary: record.cashExplicitZero ? isExplicitNumericZero(summaryCashTarget) : null,
     accrualZeroPreservedInSummary: record.accrualExplicitZero ? isExplicitNumericZero(summaryAccrualTarget) : null,
+  };
+}
+
+function extractCoverageObservation(summaryData = {}) {
+  const audit = summaryData?.targetAudit && typeof summaryData.targetAudit === 'object'
+    ? summaryData.targetAudit
+    : {};
+  return {
+    targetCoverageVersion: String(summaryData.targetCoverageVersion || ''),
+    kpiContractVersion: String(summaryData.kpiContractVersion || ''),
+    lifecycleReady: summaryData.lifecycleReady === true,
+    eligibleStoreCount: Number.isFinite(Number(summaryData.eligibleStoreCount)) ? Number(summaryData.eligibleStoreCount) : null,
+    cashConfiguredStoreCount: Number.isFinite(Number(summaryData.cashConfiguredStoreCount)) ? Number(summaryData.cashConfiguredStoreCount) : null,
+    accrualConfiguredStoreCount: Number.isFinite(Number(summaryData.accrualConfiguredStoreCount)) ? Number(summaryData.accrualConfiguredStoreCount) : null,
+    cashCoverageComplete: summaryData.cashCoverageComplete === true,
+    accrualCoverageComplete: summaryData.accrualCoverageComplete === true,
+    cashMissingStores: Array.isArray(summaryData.cashMissingStores) ? summaryData.cashMissingStores.map(String) : [],
+    accrualMissingStores: Array.isArray(summaryData.accrualMissingStores) ? summaryData.accrualMissingStores.map(String) : [],
+    targetAuditIssueCount: Number.isFinite(Number(audit.issueCount)) ? Number(audit.issueCount) : null,
+    targetAuditZeroBaseTargets: Array.isArray(audit.zeroBaseTargets) ? audit.zeroBaseTargets : [],
+    coverageSource: String(summaryData.coverageSource || ''),
+    coverageUpdatedAtText: normalizeAuditText(summaryData.coverageUpdatedAtText || summaryData.coverageUpdatedAt || ''),
+    summaryUpdatedAtText: normalizeAuditText(summaryData.updatedAtText || summaryData.updatedAt || ''),
+    storeCount: Number.isFinite(Number(summaryData.storeCount)) ? Number(summaryData.storeCount) : null,
+    targetCount: Number.isFinite(Number(summaryData.targetCount)) ? Number(summaryData.targetCount) : null,
+    sourceDocCount: Number.isFinite(Number(summaryData.sourceDocCount)) ? Number(summaryData.sourceDocCount) : null,
+    cashTargetTotal: Number.isFinite(Number(summaryData.cashTargetTotal)) ? Number(summaryData.cashTargetTotal) : null,
+    accrualTargetTotal: Number.isFinite(Number(summaryData.accrualTargetTotal)) ? Number(summaryData.accrualTargetTotal) : null,
+  };
+}
+
+function findLifecycleEntry(lifecycleMaster = {}, record = {}, lifecycleApi = {}) {
+  const normalizeStoreLifecycleCore = lifecycleApi.normalizeStoreLifecycleCore || ((value = '') => String(value || '').trim());
+  const targetCore = normalizeStoreLifecycleCore(record.storeCore || record.canonicalStoreName || record.rawStoreName || '');
+  if (!targetCore) return { storeKey: '', entry: null };
+  const stores = lifecycleMaster?.stores && typeof lifecycleMaster.stores === 'object' && !Array.isArray(lifecycleMaster.stores)
+    ? lifecycleMaster.stores
+    : {};
+
+  for (const [storeKey, rawEntry] of Object.entries(stores)) {
+    const entry = rawEntry || {};
+    const core = normalizeStoreLifecycleCore(entry.coreStoreName || entry.storeKey || entry.canonicalStoreName || storeKey);
+    if (core === targetCore) return { storeKey, entry };
+  }
+  return { storeKey: '', entry: null };
+}
+
+function classifyLifecycleRelation(entry = null, yearMonth = '', lifecycleReady = false, lifecycleApi = {}) {
+  const validateLifecycleDraft = lifecycleApi.validateLifecycleDraft || (() => ({ valid: false, entryStatus: 'INCOMPLETE', errors: ['LIFECYCLE_API_MISSING'], normalized: {} }));
+  const isLifecycleEntryEligibleForMonth = lifecycleApi.isLifecycleEntryEligibleForMonth || (() => false);
+  if (!lifecycleReady) return 'LIFECYCLE_NOT_READY';
+  if (!entry) return 'STORE_NOT_IN_LIFECYCLE';
+  const check = validateLifecycleDraft(entry || {});
+  if (!check.valid) return 'LIFECYCLE_ENTRY_INVALID';
+  if (check.entryStatus !== 'COMPLETE') return 'LIFECYCLE_ENTRY_INCOMPLETE';
+  if (isLifecycleEntryEligibleForMonth(entry, yearMonth)) return 'ELIGIBLE';
+  const first = String(check.normalized.firstEligibleMonth || '');
+  const last = String(check.normalized.lastEligibleMonth || '');
+  const exempt = Array.isArray(check.normalized.exemptMonths) ? check.normalized.exemptMonths : [];
+  if (first && yearMonth < first) return 'PRE_ELIGIBLE';
+  if (last && yearMonth > last) return 'POST_ELIGIBLE';
+  if (exempt.includes(yearMonth)) return 'EXEMPT_MONTH';
+  return 'NOT_ELIGIBLE';
+}
+
+function buildLifecycleObservation(record = {}, lifecycleMaster = {}, lifecycleApi = {}) {
+  const validateLifecycleDraft = lifecycleApi.validateLifecycleDraft || (() => ({ valid: false, entryStatus: 'INCOMPLETE', errors: ['LIFECYCLE_API_MISSING'], normalized: {} }));
+  const isLifecycleEntryEligibleForMonth = lifecycleApi.isLifecycleEntryEligibleForMonth || (() => false);
+  const lifecycleReady = String(lifecycleMaster?.datasetStatus || '') === 'READY';
+  const { storeKey, entry } = findLifecycleEntry(lifecycleMaster, record, lifecycleApi);
+  const check = entry ? validateLifecycleDraft(entry) : null;
+  return {
+    lifecycleDatasetStatus: String(lifecycleMaster?.datasetStatus || 'BUILDING'),
+    lifecycleRevision: Number(lifecycleMaster?.revision || 0),
+    lifecycleReady,
+    lifecycleStoreEntryPresent: Boolean(entry),
+    lifecycleStoreKey: String(storeKey || ''),
+    lifecycleEntryStatus: String(check?.entryStatus || ''),
+    lifecycleValidationErrors: Array.isArray(check?.errors) ? check.errors : [],
+    firstEligibleMonth: String(check?.normalized?.firstEligibleMonth || ''),
+    openDate: String(check?.normalized?.openDate || ''),
+    lastEligibleMonth: String(check?.normalized?.lastEligibleMonth || ''),
+    closeDate: String(check?.normalized?.closeDate || ''),
+    exemptMonths: Array.isArray(check?.normalized?.exemptMonths) ? check.normalized.exemptMonths : [],
+    eligibleForTargetMonth: Boolean(entry && lifecycleReady && isLifecycleEntryEligibleForMonth(entry, record.yearMonth)),
+    lifecycleRelation: classifyLifecycleRelation(entry, record.yearMonth, lifecycleReady, lifecycleApi),
+  };
+}
+
+function buildMonthObservation({ brandId = '', yearMonth = '', records = [], summaryData = {}, lifecycleMaster = {}, lifecycleApi = {} } = {}) {
+  const getLifecycleEligibleStoreEntries = lifecycleApi.getLifecycleEligibleStoreEntries || (() => []);
+  const eligibleEntries = getLifecycleEligibleStoreEntries(lifecycleMaster || {}, yearMonth, {
+    brandId,
+    requireReady: true,
+  });
+  const monthRecords = records.filter((row) => row.yearMonth === yearMonth);
+  return {
+    brandId,
+    yearMonth,
+    explicitZeroDocIds: monthRecords.map((row) => row.docId).sort(),
+    explicitZeroStores: [...new Set(monthRecords.map((row) => row.canonicalStoreName).filter(Boolean))].sort(),
+    summaryExists: Boolean(summaryData && Object.keys(summaryData).length > 0),
+    coverage: extractCoverageObservation(summaryData),
+    lifecycleEligibleStoreCount: eligibleEntries.length,
+    lifecycleEligibleStores: eligibleEntries.map((entry) => String(entry.canonicalStoreName || entry.storeKey || '')).filter(Boolean),
   };
 }
 
@@ -103,6 +247,8 @@ function createZeroTargetInventoryFunctions({ admin, db }) {
     requireFirebaseRequestAuth,
     verifySuperAdminActor,
   } = require('./deviceApproval');
+
+  const lifecycleApi = require('./storeLifecycle');
 
   const auditExplicitZeroTargets = onRequest({ cors: true, timeoutSeconds: 60, memory: '256MiB' }, async (req, res) => {
     if (req.method !== 'POST') return res.status(405).json({ ok: false, message: 'method_not_allowed' });
@@ -121,7 +267,7 @@ function createZeroTargetInventoryFunctions({ admin, db }) {
       const paths = getTargetCoveragePaths(brandId);
       const targetCollection = db.collection(paths.monthlyTargets);
 
-      // 5E-0 只查 index 命中的 explicit numeric zero；不掃完整 monthly_targets。
+      // 5E-0 / 5E-0.5：只查 index 命中的 explicit numeric zero；不掃完整 monthly_targets。
       // 同一文件若 cash/accrual 都是 0，兩個 query 都會產生一次 billed read，因此 readEstimate 用兩個 snapshot size 相加。
       const [cashZeroSnap, accrualZeroSnap] = await Promise.all([
         targetCollection.where('cashTarget', '==', 0).get(),
@@ -140,7 +286,14 @@ function createZeroTargetInventoryFunctions({ admin, db }) {
 
       const affectedMonths = [...new Set(records.map((row) => row.yearMonth).filter(Boolean))].sort();
       const summaryCollection = db.collection(paths.monthlyTargetSummary);
-      const summarySnaps = await Promise.all(affectedMonths.map((yearMonth) => summaryCollection.doc(yearMonth).get()));
+      const lifecycleRef = db.doc(paths.lifecycleMaster);
+      const [lifecycleSnap, ...summarySnaps] = await Promise.all([
+        lifecycleRef.get(),
+        ...affectedMonths.map((yearMonth) => summaryCollection.doc(yearMonth).get()),
+      ]);
+      const lifecycleMaster = lifecycleSnap.exists
+        ? (lifecycleSnap.data() || {})
+        : { datasetStatus: 'BUILDING', stores: {} };
       const summaryByMonth = new Map(summarySnaps.map((snap, index) => [affectedMonths[index], snap]));
 
       records = records.map((row) => {
@@ -152,7 +305,20 @@ function createZeroTargetInventoryFunctions({ admin, db }) {
           summaryTargetCoverageVersion: String(summaryData.targetCoverageVersion || ''),
           summaryKpiContractVersion: String(summaryData.kpiContractVersion || ''),
           ...buildSummaryObservation(row, summaryData),
+          lifecycle: buildLifecycleObservation(row, lifecycleMaster, lifecycleApi),
         };
+      });
+
+      const monthObservations = affectedMonths.map((yearMonth) => {
+        const summarySnap = summaryByMonth.get(yearMonth);
+        return buildMonthObservation({
+          brandId,
+          yearMonth,
+          records,
+          summaryData: summarySnap?.exists ? (summarySnap.data() || {}) : {},
+          lifecycleMaster,
+          lifecycleApi,
+        });
       });
 
       // CYJ 新店只有一組正式已知 legacy aliases。只對 explicit-zero 新店月份做 targeted point reads，
@@ -178,14 +344,15 @@ function createZeroTargetInventoryFunctions({ admin, db }) {
         accrualZeroQueryReads: accrualZeroSnap.size,
         rawMonthlyTargetQueryReads: cashZeroSnap.size + accrualZeroSnap.size,
         uniqueRawTargetDocs: records.length,
+        lifecycleReads: 1,
         affectedMonthSummaryReads: summarySnaps.length,
         cyjNewStoreLegacyProbeReads: cyjAliasRefs.length,
         firestoreWrites: 0,
-        estimatedFirestoreReads: 3 + cashZeroSnap.size + accrualZeroSnap.size + summarySnaps.length + cyjAliasRefs.length,
+        estimatedFirestoreReads: 4 + cashZeroSnap.size + accrualZeroSnap.size + summarySnaps.length + cyjAliasRefs.length,
       };
 
       console.info(
-        `Zero Target inventory: ${brandId} | docs=${summary.uniqueTargetDocs} | metrics=${summary.explicitZeroMetricCount} | months=${summary.affectedMonths.length} | rawReads=${readEstimate.rawMonthlyTargetQueryReads} | writes=0`
+        `Zero Target inventory v2: ${brandId} | docs=${summary.uniqueTargetDocs} | metrics=${summary.explicitZeroMetricCount} | months=${summary.affectedMonths.length} | rawReads=${readEstimate.rawMonthlyTargetQueryReads} | lifecycleReads=1 | writes=0`
       );
 
       return res.status(200).json({
@@ -193,8 +360,14 @@ function createZeroTargetInventoryFunctions({ admin, db }) {
         auditOnly: true,
         inventoryVersion: ZERO_TARGET_INVENTORY_VERSION,
         brandId,
+        lifecycle: {
+          datasetStatus: String(lifecycleMaster.datasetStatus || 'BUILDING'),
+          revision: Number(lifecycleMaster.revision || 0),
+          ready: String(lifecycleMaster.datasetStatus || '') === 'READY',
+        },
         summary,
         readEstimate,
+        monthObservations,
         records,
         cyjNewStoreLegacyProbe,
         auditedAtText: new Date().toISOString(),
@@ -217,5 +390,10 @@ module.exports = {
   summarizeZeroTargetInventory,
   buildCyjNewStoreLegacyTargetIds,
   buildSummaryObservation,
+  extractCoverageObservation,
+  findLifecycleEntry,
+  classifyLifecycleRelation,
+  buildLifecycleObservation,
+  buildMonthObservation,
   createZeroTargetInventoryFunctions,
 };
