@@ -1816,3 +1816,140 @@ rankings_summary
 再與同次 Raw rebuild payload 比較。不可用 freshly-built object 自己跟自己比後標 verified。
 
 本 Batch 不修改 Firestore Rules、不新增 collection、不修改 Raw schema。
+
+# 22. Batch 5E-1A / 5E-1A.1 — Legacy Zero Placeholder + Target Summary Replacement Semantics（PRODUCTION CONFIRMED）
+
+## Raw `monthly_targets` cleanup result
+
+2026-08-31 Production read-only inventory：
+
+```text
+CYJ  numeric-zero base target docs = 0
+安妞 numeric-zero base target docs = 0
+伊啵 numeric-zero base target docs = 27
+```
+
+使用者確認伊啵 27 docs 為 legacy/unset placeholder，不是 intentional configured zero。
+
+經 fail-closed migration：
+
+```text
+伊啵 Raw placeholder docs 27 → 0
+remaining explicit-zero Raw docs = 0
+```
+
+沒有跨品牌 Raw mutation。
+
+## `monthly_targets_summary.targets` persisted-map rule
+
+Batch 5E-1A.1 修正一個 Derived writer data-model bug。
+
+錯誤模式：
+
+```text
+delete targetMap[store]
++
+set({ targets: targetMap }, { merge:true })
+```
+
+Firestore nested-map merge 可能保留舊的：
+
+```text
+targets.<store>
+```
+
+因此從 5E-1A.1 起，canonical `monthly_targets` event writer 對 Summary target map 使用：
+
+```text
+read existing Summary in transaction
+→ preserve unrelated top-level fields
+→ construct complete canonical targets map
+→ construct complete replacement Summary document
+→ set(..., { merge:false })
+```
+
+這個 full-document replacement **不是**把 Summary 其他 top-level data 丟棄；replacement document 以 transaction 讀到的 existing Summary 為底，再覆蓋由 Target Coverage authority 管理的 fields。
+
+Concurrency：
+
+```text
+transaction read Summary
+→ concurrent change before commit
+→ Firestore transaction retry
+→ rebuild from fresh Summary
+```
+
+## Production derived repair
+
+受舊 merge semantics 影響的伊啵 11 個 Summary：
+
+```text
+2026-01～07（不含 08）
+2026-09～12
+```
+
+由 secured temporary endpoint 做 bounded Derived repair。
+
+Execute：
+
+```text
+Raw target deletes     = 0
+Summary writes         = 11
+repairedMonths         = 11
+```
+
+Verify：
+
+```text
+verified                       = true
+remainingExplicitZeroDocIds    = []
+stale matchingRows             = []
+lingeringStores                = []
+targetAuditIssueCount          = 0
+targetAuditZeroBaseTargets     = []
+```
+
+2026-09～12：
+
+```text
+eligibleStoreCount          = 5
+configured cash/accrual     = 1 / 1
+coverage complete           = false / false
+missing stores              = 4
+```
+
+所以 Derived repair 沒有把尚未設定 target 的 store 改成 configured zero。
+
+## Temporary endpoint
+
+```text
+normalizeLegacyZeroTargetPlaceholders
+```
+
+角色：
+
+- 5E-1A exact 27-doc fail-closed Raw normalization；
+- 5E-1A.1 post-delete exact 11-month fail-closed Derived repair；
+- dry-run / verify 為 0 writes；
+- 不是一般營運 CRUD authority。
+
+完成 5E closeout 後應評估移除／退役，避免一次性 mutation endpoint 永久保留。
+
+## Contract boundary
+
+本段資料清理**不代表**已支援 intentional base target `$0`。
+
+目前 production runtime：
+
+```text
+base target numeric 0 → TARGET_NOT_SET
+```
+
+Batch 5E-1B 才會正式處理：
+
+```text
+field missing / blank → TARGET_NOT_SET
+explicit configured 0 → VALID_ZERO
+```
+
+在 5E-1B Production Confirmed 前，不可把 numeric zero 當成新的正式 configured-target schema。

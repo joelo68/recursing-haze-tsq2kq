@@ -1238,3 +1238,141 @@ Raw rebuild payload
 不再 freshly-built self-compare。
 
 Batch 4 不切換 Dashboard / Regional / Ranking UI consumer；consumer cutover 屬 Batch 5。
+
+# 42. Batch 5E-1A / 5E-1A.1 Target Placeholder Normalization / Map Replacement Flow（PRODUCTION CONFIRMED）
+
+## Legacy placeholder cleanup
+
+2026-08-31 Production audit 確認伊啵 27 個 historical numeric-zero target documents 是 legacy/unset placeholder，不是 intentional configured `$0` target。
+
+一次性流程：
+
+```text
+read-only explicit-zero inventory
+  ↓
+Lifecycle / Summary shape audit
+  ↓
+business authority confirms placeholder
+  ↓
+fail-closed exact 27-doc manifest
+  ↓
+Raw monthly_targets delete
+```
+
+Raw delete 完成後：
+
+```text
+remaining explicit-zero Raw = 0
+```
+
+## Persisted Summary stale-key root cause
+
+原 canonical target event writer：
+
+```text
+monthly_targets delete
+  ↓
+transaction read monthly_targets_summary
+  ↓
+delete targetMap[store]
+  ↓
+set(..., { merge:true })
+```
+
+`merge:true` 對 nested map 的語意不能代表「省略的 nested key 必須刪除」，因此 persisted：
+
+```text
+targets.<deletedStore>
+```
+
+可能殘留。
+
+## Canonical writer after 5E-1A.1
+
+```text
+monthly_targets/{targetId} onWrite
+  ↓
+resolve canonical store/month
+  ↓
+transaction read:
+  monthly_targets_summary/{yearMonth}
+  store_lifecycle/master
+  ↓
+extract current target map
+  ↓
+add / replace / delete affected canonical row in memory
+  ↓
+build coverage + compatibility fields
+  ↓
+build complete replacement Summary document
+  ↓
+transaction.set(summaryRef, replacementDocument, { merge:false })
+```
+
+重要規則：
+
+```text
+targets map deletion
+→ MUST use full-map replacement semantics
+
+不得：
+targets map omit key
++
+nested merge:true
+```
+
+Replacement document 以 transaction 讀到的 current Summary 為基礎保留 unrelated top-level fields；concurrent Summary update 由 transaction retry 處理。
+
+## 5E-1A.1 targeted derived repair
+
+第一次 Raw cleanup 後已存在的 11 個 stale Yibo Summary 不掃 Raw operational reports。
+
+```text
+27 exact Raw target docs remain absent
++
+Lifecycle READY / revision 6
++
+11 exact monthly_targets_summary point reads
++
+stale row shape / legacy-container safety
++
+expected Coverage / totals signature
+  ↓
+all safe
+  ↓
+replace only Summary docs that still need repair
+```
+
+Production：
+
+```text
+11 Summary writes
+Raw target writes = 0
+daily_reports reads = 0
+therapist_daily_reports reads = 0
+Dashboard Summary rebuild = 0
+```
+
+Post-repair verify：
+
+```text
+remaining Raw numeric-zero placeholders = 0
+stale target rows = 0
+targetAudit issues = 0
+11 / 11 affected months verified
+```
+
+2026-09～12 仍保持 5 eligible / 1 configured / 4 missing，證明未設定目標沒有因 cleanup 被轉成 configured zero。
+
+## Zero Target contract boundary
+
+本 flow 只完成 legacy placeholder normalization 與 Derived writer consistency。
+
+目前 runtime 仍是：
+
+```text
+base target 0
+→ TARGET_NOT_SET
+```
+
+「使用者明確輸入 0 = VALID_ZERO」屬 Batch 5E-1B，尚未由本段完成。

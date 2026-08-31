@@ -1466,3 +1466,156 @@ Runtime main = d0a231ca5a816b2a5ef42e2b6e38690dfc1656df
 ## Batch 5B-2B boundary
 
 Batch 5B-2A 只完成 Annual semantics / state correctness。Batch 5B-2B 才處理 reads topology，例如 year-scoped Summary / flag query、current-month aggregate scope、移除未使用 annual listeners。5B-2B 不得藉 reads optimization 改變本節已確認的 KPI、Coverage、Lifecycle、pre-system 或 exclusion semantics。
+
+# 27. Zero Target Migration Safety / Target Summary Map Replacement — Batch 5E-1A / 1A.1
+
+2026-08-31 Production incident closeout established two permanent engineering rules.
+
+## 27.1 Never infer business intent from numeric zero alone during legacy migration
+
+Production once contained 27 Yibo `monthly_targets` docs where base targets were numeric `0`, but business authority confirmed they represented **unset legacy placeholders**, not intentional `$0` targets.
+
+Therefore migration logic must distinguish:
+
+```text
+legacy stored numeric 0
++
+known historical writer / lifecycle context
++
+explicit business confirmation
+```
+
+from future canonical:
+
+```text
+user intentionally configured 0
+```
+
+Never bulk-convert every historical numeric zero to `VALID_ZERO` solely because the value is numeric zero.
+
+Before changing target-zero semantics:
+
+```text
+inventory
+→ classify source / lifecycle / document shape
+→ resolve business intent
+→ normalize legacy placeholders
+→ verify Production clean
+→ only then enable new canonical contract
+```
+
+## 27.2 Nested-map deletion must be persisted as replacement, not omission under merge
+
+If a Firestore document owns a canonical nested map such as:
+
+```text
+monthly_targets_summary.targets
+```
+
+this is unsafe for physical key deletion:
+
+```js
+delete targetMap[store];
+transaction.set(ref, { targets: targetMap }, { merge: true });
+```
+
+Omitting a nested key under map merge is not a deletion instruction.
+
+For the canonical Raw-target event writer, required pattern is:
+
+```text
+transaction read existing Summary
+→ build full canonical target map
+→ build full replacement document from existing top-level fields
+→ transaction.set(..., { merge:false })
+```
+
+If a different writer truly needs field-level deletion, use an explicit Firestore deletion mechanism with its own regression; do not assume map omission removes the key.
+
+## 27.3 Regression must validate persisted map shape, not only aggregate counts
+
+The Production bug was deceptive because metadata/counts could be recalculated from the correct in-memory map while persisted stale rows remained.
+
+Regression must cover both:
+
+```text
+aggregate metadata correct
+AND
+deleted targets.<store> key physically absent
+```
+
+`tests/targetAuthority.test.js` is the regression owner for canonical Target Summary map replacement.
+
+## 27.4 One-time repair tools are fail-closed and temporary
+
+The 5E normalization endpoint was safe because it bounded authority to:
+
+```text
+one brand
+exact document manifest
+exact affected months
+Lifecycle status/revision
+current Raw absence / shape
+current Summary shape
+expected post-repair signature
+highest-admin + Trusted Device + credential
+transaction revalidation
+```
+
+Any drift means 0 mutation.
+
+After a one-time mutation endpoint has completed its Production task:
+
+```text
+repair tool retires
+regression remains
+preventive writer fix remains
+audit evidence remains
+canonical docs remain
+```
+
+Do not turn a migration endpoint into general-purpose maintenance CRUD.
+
+## 27.5 Read-cost boundary
+
+Normal `monthly_targets` event flow must remain event-driven and small-scoped:
+
+```text
+one Summary point read
+one Lifecycle point read
+one Summary write
+```
+
+No listener, polling, or full Raw target scan was added by 5E-1A.1.
+
+One-time repair may use bounded exact point reads, but it must not scan `daily_reports`, `therapist_daily_reports`, or rebuild unrelated Dashboard Summary data without evidence that those layers are affected.
+
+## 27.6 Current Zero Target contract is still pre-5E-1B
+
+5E-1A / 1A.1 only removes ambiguity created by legacy placeholders.
+
+Until 5E-1B is implemented, validated, deployed and Production Confirmed:
+
+```text
+blank / missing / base target 0
+→ TARGET_NOT_SET
+
+newASP 0
+→ not configured / invalid
+
+challenge target 0
+→ CHALLENGE_NOT_SET
+```
+
+Future intended contract:
+
+```text
+explicit configured base target 0
+→ VALID_ZERO
+→ configured for Coverage
+→ achievement N/A because denominator is 0
+→ not achievement-rank eligible
+→ progress-gap neutral / N/A
+```
+
+Do not pre-apply this future rule to a single consumer before the shared KPI contracts, Writer, Coverage, Summary and Formal consumers are migrated coherently.

@@ -1,7 +1,7 @@
 # SYSTEM_SOURCE_MAP.md
 
 > 狀態：Project Knowledge Base / Source Map v0.1
-> 已整併至 2026-08-31 Source Reconciliation baseline `31d8ac6`；`~/cyj-new` 已重新定錨為唯一正式 Source of Truth。Production frontend 仍為 rollback tree；`CURRENT_STATE.md` 會區分「Git 已整合」與「已部署／Production Confirmed」。
+> 已整併至 2026-08-31 Batch 5E-1A / 5E-1A.1 Production closeout；docs-only closeout 前 runtime `HEAD = origin/main = fb7299c1c3cd6aadb97024d5d0dff8a0daf98e38`，`~/cyj-new` 為唯一正式 Source of Truth。各功能的部署／Production Confirmation 仍以 `CURRENT_STATE.md` 為準。
 > 禁止以舊對話、舊版檔案、AI 記憶或未提供的檔案補足事實。
 > 無法由目前正式程式確認的內容，必須標記為「未由目前正式來源確認」。
 
@@ -2249,3 +2249,137 @@ PRODUCTION CONFIRMED
 ```
 
 Batch 5B-2B Annual Reads Cutover 尚未開始。它必須以當時最新正式 main 重新取得 Source of Truth，並只處理 Annual reads topology，不得重寫 Batch 5B-2A 已確認的 Formal semantics。
+
+# 33. Batch 5E-0 → 5E-1A.1 Zero Placeholder / Target Summary Writer Owners（PRODUCTION CONFIRMED）
+
+## Owner chain
+
+```text
+functions/zeroTargetInventory.js
+  → explicit numeric-zero Production inventory
+  → Lifecycle / Summary read-only observation
+
+scripts/zeroTargetInventoryClient.mjs
+scripts/placeholderZeroLifecycleAuditClient.mjs
+  → local authenticated read-only audit clients
+
+functions/zeroTargetNormalization.js
+  → Yibo-only exact-manifest fail-closed normalization / derived repair
+
+scripts/zeroTargetPlaceholderNormalizationClient.mjs
+  → dry-run / execute / verify local operator client
+
+functions/targetCoverage.js
+  → canonical monthly_targets → monthly_targets_summary writer
+  → full targets-map replacement owner
+
+functions/index.js
+  → auditExplicitZeroTargets
+  → normalizeLegacyZeroTargetPlaceholders
+  → Target Coverage event exports
+
+tests/zeroTargetInventory.test.js
+tests/placeholderZeroLifecycleAudit.test.js
+tests/zeroTargetNormalization.test.js
+tests/targetAuthority.test.js
+  → inventory / lifecycle / fail-closed migration / persisted-map deletion regression
+```
+
+## Production history / authority boundary
+
+Production inventory found:
+
+```text
+CYJ    0 numeric-zero target docs
+安妞   0 numeric-zero target docs
+伊啵   27 numeric-zero target docs
+```
+
+Business authority confirmed the 27 Yibo docs were legacy/unset placeholders. They have been removed from Raw, and post-repair verify reports:
+
+```text
+remaining explicit-zero Raw = 0
+11 affected Summary months = verified
+stale Summary target rows = 0
+targetAudit zero issues = 0
+```
+
+Do not use these historical placeholder rows as evidence for the future intentional-zero contract.
+
+## Target Summary map replacement authority
+
+`functions/targetCoverage.js` now treats `targets` as a canonical top-level replacement map when handling Raw target events.
+
+Required persistence pattern:
+
+```text
+transaction read Summary
+→ build complete targetMap
+→ build complete replacement Summary
+→ set merge:false
+```
+
+Reason:
+
+```text
+nested map + merge:true
+```
+
+cannot express deletion by omitted key and previously left stale `targets.<store>` rows in Production.
+
+The replacement builder preserves unrelated top-level Summary fields from the transaction read; transaction retry is the race-condition protection.
+
+This applies to both physical roots:
+
+```text
+CYJ:
+artifacts/default-app-id/public/data
+
+安妞 / 伊啵:
+brands/{brandId}
+```
+
+No brand path changed.
+
+## Temporary normalization endpoint
+
+`normalizeLegacyZeroTargetPlaceholders` is a high-privilege one-time migration surface, protected by Firebase Auth + Trusted Device + highest-admin credential plus exact data preconditions.
+
+It is **not** a permanent Target CRUD owner and should be retired after the Zero Target migration series no longer needs it.
+
+## 5E-1B next owner set
+
+Legacy placeholder cleanup is complete, but the formal business contract remains unchanged until Batch 5E-1B.
+
+Before implementing explicit configured zero, re-read current versions of at least:
+
+```text
+src/utils/kpiContracts.js
+functions/kpiContracts.js
+src/components/TargetView.jsx
+src/components/SettingsView.jsx
+src/App.jsx
+functions/targetCoverage.js
+src/utils/summarySemantics.js
+functions/summarySemantics.js
+formal consumer utilities
+StorePerformanceView.jsx
+functions/telegram/formalKpi.js
+functions/index.js
+relevant regression tests
+```
+
+Current production boundary:
+
+```text
+base target 0 = TARGET_NOT_SET
+```
+
+5E-1B target boundary:
+
+```text
+missing / blank = TARGET_NOT_SET
+intentional configured 0 = VALID_ZERO
+```
+
+Do not implement the second rule page-by-page.

@@ -1405,3 +1405,240 @@ CYJ   2026-07  PASS
 ```text
 未由目前正式來源確認
 ```
+
+# 15. Batch 5E-1A / 5E-1A.1 — Legacy Zero Placeholder Cleanup + Target Summary Map Replacement（PRODUCTION CONFIRMED）
+
+2026-08-31 完成 Zero Target Canonical Contract 的前置資料清理與 Target Summary writer 修正。
+
+本次 closeout 的正式 runtime source（docs-only closeout 前）：
+
+```text
+Official repo      = ~/cyj-new
+branch             = main
+HEAD               = fb7299c1c3cd6aadb97024d5d0dff8a0daf98e38
+origin/main        = fb7299c1c3cd6aadb97024d5d0dff8a0daf98e38
+worktree           = clean
+CURRENT_APP_VERSION = 3.5.3（未提高）
+```
+
+## Production inventory / business classification
+
+Batch 5E-0 / 5E-0.5 對三品牌 Production target 做 read-only audit：
+
+```text
+CYJ    explicit numeric-zero target docs = 0
+安妞   explicit numeric-zero target docs = 0
+伊啵   explicit numeric-zero target docs = 27
+```
+
+使用者確認伊啵這 27 筆不是「管理者有意設定 0 元目標」，而是歷史初始化／開店時間／系統起始時間／未來月份尚未設定目標所留下的 legacy placeholder zero。
+
+因此：
+
+```text
+legacy placeholder zero
+!= intentional configured zero
+```
+
+這 27 筆不可作為 `0 = VALID_ZERO` 的 Production business evidence。
+
+## Batch 5E-1A Raw normalization
+
+正式 migration 僅允許伊啵已稽核的 exact 27 docs，使用 Firebase request auth + Trusted Device + 最高管理者 credential re-verification + fixed manifest + Lifecycle revision + document-shape precondition。
+
+Production execute 已完成：
+
+```text
+Raw monthly_targets placeholder docs
+27 → 0
+
+remaining explicit-zero Raw docs
+0
+
+跨品牌 Raw mutation
+0
+```
+
+## Batch 5E-1A.1 root cause
+
+第一次 Raw delete 後，11 個 `monthly_targets_summary` 仍殘留 stale `targets.<store>` rows。
+
+正式 root cause：
+
+```text
+in-memory targetMap
+delete targetMap[store]
+
+transaction.set(
+  summaryRef,
+  { targets: targetMap, ... },
+  { merge: true }
+)
+
+→ Firestore nested-map merge 保留被省略的 targets.<store> key
+```
+
+因此 metadata / counts 可以由新的 in-memory map 重算正確，但 persisted `targets` container 仍可能殘留已刪 row。
+
+正式上游修正位於：
+
+```text
+functions/targetCoverage.js
+```
+
+現在 canonical monthly-target event writer：
+
+```text
+transaction read current Summary
+→ build complete replacement document
+→ preserve unrelated top-level Summary fields
+→ replace full top-level targets map
+→ transaction.set(..., { merge: false })
+```
+
+Transaction read 保留 multi-writer race protection；若 concurrent Summary mutation 發生，Firestore transaction 會 retry 並以 fresh Summary 重建 replacement。
+
+此修正同時適用：
+
+```text
+CYJ legacy monthly target trigger
+安妞 / 伊啵 standard-brand monthly target trigger
+```
+
+品牌 Firestore path 不變。
+
+## 11-month targeted Derived repair
+
+既有 secured temporary endpoint：
+
+```text
+normalizeLegacyZeroTargetPlaceholders
+```
+
+在確認 27 個 exact Raw manifest docs 全部仍不存在後，進入：
+
+```text
+executionPhase = derived_summary_repair
+```
+
+只 repair 伊啵：
+
+```text
+2026-01
+2026-02
+2026-03
+2026-04
+2026-05
+2026-06
+2026-07
+2026-09
+2026-10
+2026-11
+2026-12
+```
+
+Production execute：
+
+```text
+committed            = true
+Raw deletes          = 0
+direct Summary writes = 11
+repairedMonths       = 11
+```
+
+Production verify：
+
+```text
+verified = true
+remainingExplicitZeroDocIds = []
+
+11 / 11 monthResults.ok = true
+11 / 11 errors = []
+11 / 11 lingeringStores = []
+11 / 11 stale container matchingRows = []
+
+targetAuditIssueCount = 0
+targetAuditZeroBaseTargets = []
+```
+
+2026-09～12 的正式 business state 仍保持：
+
+```text
+eligibleStoreCount          = 5
+cashConfiguredStoreCount    = 1
+accrualConfiguredStoreCount = 1
+
+cashCoverageComplete        = false
+accrualCoverageComplete     = false
+
+missing:
+- 伊啵中山店
+- 伊啵天母店
+- 伊啵新莊店
+- 伊啵站前店
+```
+
+因此 cleanup 沒有把「尚未設定」誤變成 `$0 已設定`。
+
+## Runtime cost / topology
+
+正常 Target event 沒有新增 listener、polling 或 Raw full scan：
+
+```text
+monthly_targets one event
+→ monthly_targets_summary/{yearMonth} point read
+→ store_lifecycle/master point read
+→ one monthly_targets_summary write
+```
+
+5E-1A.1 repair 是一次性 bounded repair：
+
+```text
+exact Raw manifest point reads = 27
+Lifecycle point read           = 1
+Summary point reads            = 11
+Security point reads           ≈ 3
+direct Summary writes          = 11
+Raw writes                     = 0
+```
+
+沒有讀 `daily_reports` / `therapist_daily_reports`，也沒有 Dashboard Summary rebuild。
+
+## Status
+
+```text
+5E-0 Production Zero Inventory         PRODUCTION CONFIRMED
+5E-0.5 Placeholder/Lifecycle Audit     PRODUCTION CONFIRMED
+5E-1A Raw Placeholder Normalization    PRODUCTION CONFIRMED
+5E-1A.1 Summary Map Writer Fix         PRODUCTION CONFIRMED
+5E-1A.1 11-month Derived Repair        PRODUCTION CONFIRMED
+```
+
+Temporary endpoint `normalizeLegacyZeroTargetPlaceholders` 已完成本次 Production 任務；它不是一般營運工具。後續 Batch 應評估退場／移除，不應讓一次性 mutation endpoint 永久成為常態操作入口。
+
+## 5E-1B boundary
+
+本 closeout **沒有**修改 canonical Zero Target business contract。
+
+截至本段 closeout：
+
+```text
+現行 runtime contract：
+blank / missing / base target numeric 0
+→ TARGET_NOT_SET
+
+下一批 5E-1B 才處理：
+explicit user-entered 0
+→ VALID_ZERO / configured
+
+actual ÷ target 0
+→ N/A
+
+zero-target row
+→ achievement ranking 不 eligible
+→ progress-gap neutral / N/A
+```
+
+因此不得把「legacy placeholder 已清完」描述成「0 元正式目標已經支援」。
+
+`newASP=0` 仍維持未設定／非法 business setting；Challenge Target `0` 仍維持未設定。
