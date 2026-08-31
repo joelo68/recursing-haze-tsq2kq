@@ -71,6 +71,15 @@ const targetCoverageAuditFunctions = createTargetCoverageAuditFunctions({ admin,
 exports.auditHistoricalTargetCoverage = targetCoverageAuditFunctions.auditHistoricalTargetCoverage;
 
 // ==========================================
+// ★ Batch 5E-0：Production Explicit Zero Target Read-only Inventory
+// 只查 monthly_targets 中 cashTarget / accrualTarget == 0 的 index 命中文件，
+// 再 point-read 受影響月份 Summary；0 writes、無 polling、無 collection-wide Raw scan。
+// ==========================================
+const { createZeroTargetInventoryFunctions } = require("./zeroTargetInventory");
+const zeroTargetInventoryFunctions = createZeroTargetInventoryFunctions({ admin, db });
+exports.auditExplicitZeroTargets = zeroTargetInventoryFunctions.auditExplicitZeroTargets;
+
+// ==========================================
 // ★ Pre-Batch-5 Phase B：Historical Target Coverage metadata-only migration
 // 僅對 Phase A 重新驗證仍安全的歷史月份，以單品牌 atomic transaction 補 Coverage metadata。
 // 不掃 Raw monthly_targets、不改 legacy target map / totals / counts。
