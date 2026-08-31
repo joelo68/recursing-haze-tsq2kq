@@ -855,7 +855,7 @@ Admin SDK write = Backend authority
 Race safety：同一 store entry 使用 `revision` optimistic token；同店 lost-race 回 409，不回假成功。不同店 transaction retry 後保留彼此修改。
 
 Batch 1 沒有修改既有 Device Approval 決策、6 位碼、自助驗證、global block 或 Telegram security alert 行為；`deviceApproval.js` 僅額外 export 已存在的 authentication helpers 供 Lifecycle writer 共用。
-# 25. Login Security Telegram Config Authority（Reconciliation Candidate）
+# 25. Login Security Telegram Config Authority（VALIDATED / Git Integrated / NOT DEPLOYED）
 
 `artifacts/default-app-id/public/data/global_settings/telegram_security_alerts` 是全品牌登入安全通知設定，不屬於一般營運設定。
 
@@ -894,4 +894,4 @@ Writes:
 
 沒有新增 polling、collection listener 或大型常駐 query。設定仍是全品牌共用 legacy root；這個 hardening 不改 CYJ / 安妞 / 伊啵的營運資料 path。
 
-> 狀態：Reconciliation candidate；尚未部署／Production Confirmed。
+> 狀態：已在 `~/cyj-new` 完成 63/63 Security regression、286/286 full regression、Functions syntax 與 frontend build；commit `31d8ac6` 已整合 `origin/main`。尚未部署／Production Confirmed。

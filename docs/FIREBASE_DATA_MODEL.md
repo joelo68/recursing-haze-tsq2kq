@@ -1452,7 +1452,7 @@ updatedBy / updatedByRole / updatedByAccountId
 authorityBrandId
 ```
 
-Writer authority（reconciliation candidate）：
+Writer authority（`31d8ac6` 已驗證／Git integrated，尚未部署）：
 
 ```text
 Frontend direct write = DENY

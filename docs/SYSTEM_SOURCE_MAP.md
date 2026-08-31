@@ -1,7 +1,7 @@
 # SYSTEM_SOURCE_MAP.md
 
 > 狀態：Project Knowledge Base / Source Map v0.1
-> 已整併至 2026-08-31 reconciliation candidate。目前正式部署 source 仍是最高依據；`CURRENT_STATE.md` 會區分「已上線」與「已驗證待部署」。
+> 已整併至 2026-08-31 Source Reconciliation baseline `31d8ac6`；`~/cyj-new` 已重新定錨為唯一正式 Source of Truth。Production frontend 仍為 rollback tree；`CURRENT_STATE.md` 會區分「Git 已整合」與「已部署／Production Confirmed」。
 > 禁止以舊對話、舊版檔案、AI 記憶或未提供的檔案補足事實。
 > 無法由目前正式程式確認的內容，必須標記為「未由目前正式來源確認」。
 
@@ -975,7 +975,7 @@ manageAccountDevice
 emergencyUnblockDevice
 cleanupExpiredDeviceApprovals
 reportLoginSecurityEvent
-updateTelegramSecurityAlertConfig   # reconciliation candidate / global Security config writer
+updateTelegramSecurityAlertConfig   # VALIDATED / Git integrated / NOT DEPLOYED global Security config writer
 ```
 
 `updateTelegramSecurityAlertConfig` 的真實 owner 鏈：

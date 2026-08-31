@@ -358,7 +358,7 @@ Telegram：
 - 測試訊息與正式群組 routing 依當次需求驗證
 # 10. Reconciliation Security Config Hardening — Scoped Deploy Order
 
-此段只適用於 `updateTelegramSecurityAlertConfig` reconciliation candidate。它同時涉及 Backend endpoint、Firestore Rules 與 Frontend，部署不可只發其中一層。
+此段適用於已驗證並 Git-integrated 的 `updateTelegramSecurityAlertConfig`（source commit `31d8ac6`）。它同時涉及 Backend endpoint、Firestore Rules 與 Frontend，部署不可只發其中一層。
 
 安全順序：
 
@@ -377,4 +377,4 @@ npm run deploy
 
 本 hardening 沒有修改既有 Security alert Firestore triggers，因此不要機械式全量部署全部 Functions。
 
-> 在正式 validation / commit / push 前，本節只是部署邊界說明，不代表已部署。
+> `31d8ac6` 已完成正式 validation / commit / push，但 Production frontend 目前仍是 rollback tree；本節仍只是待執行的 scoped deploy 順序，不代表已部署。
