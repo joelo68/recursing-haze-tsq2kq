@@ -63,6 +63,22 @@ test('read-only audit marks internally consistent legacy Summary as metadata-onl
   assert.equal(row.previewCoverage.accrualCoverageComplete, true);
 });
 
+test('current/future existing legacy Summary can be classified safe without Raw reconstruction', () => {
+  for (const yearMonth of ['2026-09', '2026-10']) {
+    const row = audit.buildHistoricalTargetCoverageAuditRow({
+      brandId: 'cyj',
+      yearMonth,
+      summaryData: legacySummary({ yearMonth }),
+      lifecycleMaster: readyLifecycle('cyj'),
+    });
+
+    assert.equal(row.classification, audit.TARGET_COVERAGE_AUDIT_CLASSIFICATION.SUMMARY_BACKFILL_SAFE);
+    assert.equal(row.migrationWriteAllowed, true);
+    assert.equal(row.previewCoverage.cashCoverageComplete, true);
+    assert.equal(row.previewCoverage.accrualCoverageComplete, true);
+  }
+});
+
 test('existing Target Coverage v1 is classified as already migrated and is not a write candidate', () => {
   const row = audit.buildHistoricalTargetCoverageAuditRow({
     brandId: 'cyj',
@@ -191,13 +207,15 @@ test('audit summary exposes migration candidates, Raw-required months, Lifecycle
   assert.deepEqual(summary.preSystemSkippedMonths, ['2026-01']);
 });
 
-test('backend endpoint is secured, Summary-first, read-only and never scans Raw monthly_targets', () => {
+test('backend endpoint audits all existing Summary months, remains secured/read-only/Summary-first, and never scans Raw monthly_targets', () => {
   assert.match(auditSource, /requireFirebaseRequestAuth/);
   assert.match(auditSource, /verifySuperAdminActor/);
   assert.match(auditSource, /db\.collection\(paths\.monthlyTargetSummary\)/);
   assert.match(auditSource, /db\.doc\(paths\.lifecycleMaster\)/);
   assert.match(auditSource, /FieldPath\.documentId\(\)/);
-  assert.match(auditSource, /endBefore\(historicalBeforeMonth\)/);
+  assert.doesNotMatch(auditSource, /\.endBefore\(/);
+  assert.match(auditSource, /auditScope:\s*TARGET_COVERAGE_AUDIT_SCOPE/);
+  assert.match(auditSource, /includesCurrentAndFuture:\s*true/);
   assert.match(auditSource, /rawMonthlyTargetsReads:\s*0/);
   assert.match(auditSource, /firestoreWrites:\s*0/);
   assert.doesNotMatch(auditSource, /db\.collection\([^\n]*monthly_targets[^_]/);
@@ -214,8 +232,9 @@ test('Functions index exports exactly one read-only Pre-Batch-5 audit endpoint',
   assert.match(functionsIndex, /exports\.auditHistoricalTargetCoverage = targetCoverageAuditFunctions\.auditHistoricalTargetCoverage/);
 });
 
-test('SystemMaintenance exposes Audit Only UI without listener or polling and preserves CURRENT_APP_VERSION outside this scope', () => {
-  assert.match(maintenanceSource, /Pre-Batch-5：歷史 Target Coverage 稽核/);
+test('SystemMaintenance exposes all-existing-month Audit Only UI without listener or polling and preserves CURRENT_APP_VERSION outside this scope', () => {
+  assert.match(maintenanceSource, /Production：Target Coverage 全現有月份稽核/);
+  assert.match(maintenanceSource, /EXISTING_SUMMARY_MONTHS/);
   assert.match(maintenanceSource, /不掃 Raw monthly_targets、不寫入任何資料/);
   assert.match(maintenanceSource, /Audit Only｜0 Writes/);
   assert.match(maintenanceSource, /TARGET_COVERAGE_AUDIT_ENDPOINT/);

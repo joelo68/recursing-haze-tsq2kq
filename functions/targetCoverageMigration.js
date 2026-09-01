@@ -14,14 +14,14 @@ const {
 } = require('./storeLifecycle');
 const {
   TARGET_COVERAGE_AUDIT_VERSION,
+  TARGET_COVERAGE_AUDIT_SCOPE,
   TARGET_COVERAGE_AUDIT_CLASSIFICATION,
   normalizeAuditYearMonth,
-  getTaipeiCurrentYearMonth,
   buildHistoricalTargetCoverageAuditRow,
 } = require('./targetCoverageAudit');
 
-const TARGET_COVERAGE_MIGRATION_VERSION = 'target-coverage-historical-metadata-backfill-v1';
-const TARGET_COVERAGE_MIGRATION_SOURCE = 'target_coverage_historical_backfill_v1';
+const TARGET_COVERAGE_MIGRATION_VERSION = 'target-coverage-existing-summary-metadata-backfill-v2';
+const TARGET_COVERAGE_MIGRATION_SOURCE = 'target_coverage_existing_summary_backfill_v2';
 const TARGET_COVERAGE_MIGRATION_MAX_MONTHS = 12;
 
 const TARGET_COVERAGE_MIGRATION_ALLOWED_FIELDS = Object.freeze([
@@ -68,7 +68,7 @@ function toComparableLegacyNumber(value) {
   return Number.isFinite(number) ? number : null;
 }
 
-function normalizeMigrationYearMonths(values = [], historicalBeforeMonth = getTaipeiCurrentYearMonth()) {
+function normalizeMigrationYearMonths(values = []) {
   if (!Array.isArray(values) || values.length === 0) {
     throw new Error('MIGRATION_MONTHS_REQUIRED');
   }
@@ -76,15 +76,11 @@ function normalizeMigrationYearMonths(values = [], historicalBeforeMonth = getTa
     throw new Error('MIGRATION_MONTH_LIMIT_EXCEEDED');
   }
 
-  const cutoff = normalizeAuditYearMonth(historicalBeforeMonth);
-  if (!cutoff) throw new Error('INVALID_HISTORICAL_CUTOFF');
-
   const normalized = [];
   const seen = new Set();
   values.forEach((value) => {
     const yearMonth = normalizeAuditYearMonth(value);
     if (!yearMonth) throw new Error(`INVALID_MIGRATION_MONTH:${String(value || '')}`);
-    if (yearMonth >= cutoff) throw new Error(`MIGRATION_MONTH_NOT_HISTORICAL:${yearMonth}`);
     if (!seen.has(yearMonth)) {
       seen.add(yearMonth);
       normalized.push(yearMonth);
@@ -240,14 +236,19 @@ function createTargetCoverageMigrationFunctions({ admin, db }) {
       if (String(body.auditVersion || '') !== TARGET_COVERAGE_AUDIT_VERSION) {
         return res.status(409).json({ ok: false, message: 'Audit 版本已變更，請重新執行只讀稽核後再補 Metadata' });
       }
+      if (String(body.auditScope || '') !== TARGET_COVERAGE_AUDIT_SCOPE) {
+        return res.status(409).json({ ok: false, message: 'Audit 範圍已變更，請重新執行全現有月份只讀稽核後再補 Metadata' });
+      }
 
       const adminCheck = await verifySuperAdminActor({ db, brandId, actor: body.actor || {} });
       if (!adminCheck.ok) return res.status(403).json({ ok: false, message: '此操作僅限最高管理者在已信任裝置執行' });
 
-      const historicalBeforeMonth = getTaipeiCurrentYearMonth();
       let yearMonths;
       try {
-        yearMonths = normalizeMigrationYearMonths(body.yearMonths, historicalBeforeMonth);
+        // Historical/current/future is intentionally allowed here.
+        // Safety comes from: explicit existing Summary point-reads + fresh
+        // in-transaction reclassification + all-or-nothing write + readback.
+        yearMonths = normalizeMigrationYearMonths(body.yearMonths);
       } catch (error) {
         return res.status(400).json({ ok: false, message: error.message || '月份範圍不正確' });
       }
@@ -341,7 +342,7 @@ function createTargetCoverageMigrationFunctions({ admin, db }) {
           atomic: true,
           migrationVersion: TARGET_COVERAGE_MIGRATION_VERSION,
           brandId,
-          historicalBeforeMonth,
+          auditScope: TARGET_COVERAGE_AUDIT_SCOPE,
           message: '資料狀態已變更；本次未寫入任何月份，請重新執行只讀稽核',
           writtenCount: 0,
           skippedCount: Number(plan.skipRows?.length || 0),
@@ -426,8 +427,8 @@ function createTargetCoverageMigrationFunctions({ admin, db }) {
         metadataOnly: true,
         migrationVersion: TARGET_COVERAGE_MIGRATION_VERSION,
         brandId,
+        auditScope: TARGET_COVERAGE_AUDIT_SCOPE,
         lifecycle: transactionResult.lifecycle,
-        historicalBeforeMonth,
         requestedMonths: yearMonths,
         writtenMonths,
         skippedMonths,
@@ -443,7 +444,7 @@ function createTargetCoverageMigrationFunctions({ admin, db }) {
       });
     } catch (error) {
       console.error('migrateHistoricalTargetCoverageMetadata failed', error);
-      return res.status(500).json({ ok: false, message: '歷史 Target Coverage Metadata migration 失敗，請停止操作並檢查後端紀錄' });
+      return res.status(500).json({ ok: false, message: 'Target Coverage Metadata migration 失敗，請停止操作並檢查後端紀錄' });
     }
   });
 

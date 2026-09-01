@@ -15,7 +15,8 @@ const {
   getCanonicalStoreName: getCanonicalLifecycleStoreName,
 } = require('./storeLifecycle');
 
-const TARGET_COVERAGE_AUDIT_VERSION = 'target-coverage-historical-audit-v1';
+const TARGET_COVERAGE_AUDIT_VERSION = 'target-coverage-existing-summary-audit-v2';
+const TARGET_COVERAGE_AUDIT_SCOPE = 'EXISTING_SUMMARY_MONTHS';
 const YIBO_DATA_START_MONTH = '2026-04';
 
 const TARGET_COVERAGE_AUDIT_CLASSIFICATION = Object.freeze({
@@ -274,13 +275,17 @@ function createTargetCoverageAuditFunctions({ admin, db }) {
       const paths = getTargetCoveragePaths(brandId);
       const lifecycleRef = db.doc(paths.lifecycleMaster);
       const summaryCollection = db.collection(paths.monthlyTargetSummary);
-      const historicalBeforeMonth = getTaipeiCurrentYearMonth();
-      const historicalSummaryQuery = summaryCollection
-        .orderBy(admin.firestore.FieldPath.documentId())
-        .endBefore(historicalBeforeMonth);
+      const currentYearMonth = getTaipeiCurrentYearMonth();
+
+      // P1 coverage-gap recovery:
+      // Audit every EXISTING Summary document for the selected brand, including
+      // historical/current/future months. This remains a tiny month-level,
+      // operator-triggered query and never scans Raw monthly_targets.
+      const existingSummaryQuery = summaryCollection
+        .orderBy(admin.firestore.FieldPath.documentId());
       const [lifecycleSnap, summarySnap] = await Promise.all([
         lifecycleRef.get(),
-        historicalSummaryQuery.get(),
+        existingSummaryQuery.get(),
       ]);
 
       const lifecycleMaster = lifecycleSnap.exists
@@ -308,13 +313,15 @@ function createTargetCoverageAuditFunctions({ admin, db }) {
       };
 
       console.info(
-        `Target Coverage historical audit: ${brandId} | months=${rows.length} | safe=${summary.counts.SUMMARY_BACKFILL_SAFE} | raw=${summary.counts.RAW_RECONSTRUCTION_REQUIRED} | already=${summary.counts.ALREADY_V1}`
+        `Target Coverage existing-summary audit: ${brandId} | months=${rows.length} | safe=${summary.counts.SUMMARY_BACKFILL_SAFE} | raw=${summary.counts.RAW_RECONSTRUCTION_REQUIRED} | already=${summary.counts.ALREADY_V1}`
       );
 
       return res.status(200).json({
         ok: true,
         auditOnly: true,
         auditVersion: TARGET_COVERAGE_AUDIT_VERSION,
+        auditScope: TARGET_COVERAGE_AUDIT_SCOPE,
+        includesCurrentAndFuture: true,
         brandId,
         lifecycle: {
           datasetStatus: String(lifecycleMaster.datasetStatus || 'BUILDING'),
@@ -323,13 +330,13 @@ function createTargetCoverageAuditFunctions({ admin, db }) {
         },
         summary,
         readEstimate,
-        historicalBeforeMonth,
+        currentYearMonth,
         rows,
         auditedAtText: new Date().toISOString(),
       });
     } catch (error) {
       console.error('auditHistoricalTargetCoverage failed', error);
-      return res.status(500).json({ ok: false, message: '歷史目標 Coverage 稽核失敗，請稍後再試' });
+      return res.status(500).json({ ok: false, message: 'Target Coverage 現有 Summary 稽核失敗，請稍後再試' });
     }
   });
 
@@ -338,6 +345,7 @@ function createTargetCoverageAuditFunctions({ admin, db }) {
 
 module.exports = {
   TARGET_COVERAGE_AUDIT_VERSION,
+  TARGET_COVERAGE_AUDIT_SCOPE,
   TARGET_COVERAGE_AUDIT_CLASSIFICATION,
   YIBO_DATA_START_MONTH,
   normalizeAuditYearMonth,

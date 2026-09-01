@@ -56,14 +56,14 @@ function safeAuditRow() {
   });
 }
 
-test('migration normalizes unique historical months and rejects current/future scope', () => {
+test('migration normalizes unique valid months and allows historical/current/future existing Summary scope', () => {
   assert.deepEqual(
-    migration.normalizeMigrationYearMonths(['2026-07', '2026-06', '2026-07'], '2026-08'),
-    ['2026-06', '2026-07']
+    migration.normalizeMigrationYearMonths(['2026-10', '2026-08', '2026-09', '2026-08']),
+    ['2026-08', '2026-09', '2026-10']
   );
   assert.throws(
-    () => migration.normalizeMigrationYearMonths(['2026-08'], '2026-08'),
-    /MIGRATION_MONTH_NOT_HISTORICAL/
+    () => migration.normalizeMigrationYearMonths(['2026-13']),
+    /INVALID_MIGRATION_MONTH/
   );
 });
 
@@ -156,10 +156,14 @@ test('legacy preservation signature detects both totals and target-map changes',
   assert.equal(migration.legacyTargetSummarySnapshotMatches(before, changedMap), false);
 });
 
-test('backend migration endpoint is secured, atomic, Summary-first, has persisted readback, and never scans Raw monthly_targets', () => {
+test('backend migration endpoint accepts fresh all-existing-month audit scope, stays secured/atomic/Summary-first, has persisted readback, and never scans Raw monthly_targets', () => {
   assert.match(migrationSource, /requireFirebaseRequestAuth/);
   assert.match(migrationSource, /verifySuperAdminActor/);
   assert.match(migrationSource, /confirmMetadataOnly/);
+  assert.match(migrationSource, /TARGET_COVERAGE_AUDIT_SCOPE/);
+  assert.match(migrationSource, /body\.auditScope/);
+  assert.doesNotMatch(migrationSource, /MIGRATION_MONTH_NOT_HISTORICAL/);
+  assert.doesNotMatch(migrationSource, /getTaipeiCurrentYearMonth/);
   assert.match(migrationSource, /db\.runTransaction/);
   assert.match(migrationSource, /transaction\.get\(lifecycleRef\)/);
   assert.match(migrationSource, /transaction\.get\(summaryRefs\[yearMonth\]\)/);
@@ -172,10 +176,11 @@ test('backend migration endpoint is secured, atomic, Summary-first, has persiste
   assert.doesNotMatch(migrationSource, /setInterval\s*\(/);
 });
 
-test('Functions index and SystemMaintenance expose one explicit Phase B metadata-only migration path', () => {
+test('Functions index and SystemMaintenance expose one explicit all-existing-month metadata-only migration path', () => {
   assert.match(functionsIndex, /createTargetCoverageMigrationFunctions/);
   assert.match(functionsIndex, /exports\.migrateHistoricalTargetCoverageMetadata = targetCoverageMigrationFunctions\.migrateHistoricalTargetCoverageMetadata/);
-  assert.match(maintenanceSource, /Pre-Batch-5 Phase B：補 Historical Target Coverage Metadata/);
+  assert.match(maintenanceSource, /Production：補 Target Coverage Metadata/);
+  assert.match(maintenanceSource, /auditScope:\s*targetCoverageAuditReport\.auditScope/);
   assert.match(maintenanceSource, /TARGET_COVERAGE_MIGRATION_ENDPOINT/);
   assert.match(maintenanceSource, /confirmMetadataOnly:\s*true/);
   assert.match(maintenanceSource, /atomic transaction/);

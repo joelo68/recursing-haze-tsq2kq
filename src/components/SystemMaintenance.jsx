@@ -458,7 +458,7 @@ export default function SystemMaintenance() {
     setLoadingAction("targetCoverageAudit");
     setTargetCoverageAuditReport(null);
     setTargetCoverageMigrationReport(null);
-    addLog(`🔎 開始歷史 Target Coverage 只讀稽核：${brandId}`);
+    addLog(`🔎 開始 Target Coverage 全現有月份只讀稽核：${brandId}`);
 
     try {
       const idToken = await auth.currentUser?.getIdToken?.();
@@ -497,13 +497,16 @@ export default function SystemMaintenance() {
       if (result?.auditOnly !== true || Number(result?.readEstimate?.firestoreWrites || 0) !== 0) {
         throw new Error("後端回傳不是只讀 Audit，已停止顯示結果");
       }
+      if (String(result?.auditScope || "") !== "EXISTING_SUMMARY_MONTHS" || result?.includesCurrentAndFuture !== true) {
+        throw new Error("後端 Audit 尚未支援當月／未來既有 Summary，已停止後續 Migration");
+      }
 
       setTargetCoverageAuditReport(result);
       const counts = result?.summary?.counts || {};
       addLog(
         `✅ Target Coverage 稽核完成：${brandLabel}｜月份 ${Number(result?.summary?.totalMonths || 0).toLocaleString()}｜可補 ${Number(counts.SUMMARY_BACKFILL_SAFE || 0).toLocaleString()}｜需 Raw ${Number(counts.RAW_RECONSTRUCTION_REQUIRED || 0).toLocaleString()}｜已 V1 ${Number(counts.ALREADY_V1 || 0).toLocaleString()}｜Writes 0`
       );
-      showToast("歷史 Target Coverage 只讀稽核完成", "success");
+      showToast("Target Coverage 全現有月份只讀稽核完成", "success");
     } catch (error) {
       addLog(`❌ Target Coverage 稽核失敗：${error.message}`);
       showToast(error.message || "Target Coverage 稽核失敗", "error");
@@ -520,6 +523,10 @@ export default function SystemMaintenance() {
     }
     if (!targetCoverageAuditReport || String(targetCoverageAuditReport.brandId || "") !== String(brandId || "")) {
       showToast("請先重新執行目前品牌的只讀稽核", "error");
+      return;
+    }
+    if (String(targetCoverageAuditReport.auditScope || "") !== "EXISTING_SUMMARY_MONTHS") {
+      showToast("目前 Audit 範圍不是全現有月份，請重新執行只讀稽核", "error");
       return;
     }
 
@@ -543,15 +550,15 @@ export default function SystemMaintenance() {
     }
 
     const confirmed = window.confirm(
-      `確定要替 ${brandLabel} 的 ${candidateMonths.length} 個歷史月份補 Target Coverage v1 Metadata？\n\n` +
-      `本操作只寫 Coverage metadata，不掃 Raw monthly_targets，也不改目標 totals / counts / target map。\n` +
+      `確定要替 ${brandLabel} 的 ${candidateMonths.length} 個既有 Summary 月份補 Target Coverage v1 Metadata？\n\n` +
+      `範圍可包含歷史、當月與未來已存在 Summary；本操作只寫 Coverage metadata，不掃 Raw monthly_targets，也不改目標 totals / counts / target map。\n` +
       `Backend 會在同一個 transaction 重新驗證全部月份；任一月份不再安全時，本次 0 Writes。`
     );
     if (!confirmed) return;
 
     setLoadingAction("targetCoverageMigration");
     setTargetCoverageMigrationReport(null);
-    addLog(`🧩 開始 Historical Target Coverage Metadata migration：${brandId}｜${candidateMonths.join(", ")}`);
+    addLog(`🧩 開始 Target Coverage Metadata migration：${brandId}｜${candidateMonths.join(", ")}`);
 
     try {
       const idToken = await auth.currentUser?.getIdToken?.();
@@ -575,6 +582,7 @@ export default function SystemMaintenance() {
         body: JSON.stringify({
           brandId,
           auditVersion: targetCoverageAuditReport.auditVersion,
+          auditScope: targetCoverageAuditReport.auditScope,
           yearMonths: candidateMonths,
           confirmMetadataOnly: true,
           actor: {
@@ -604,7 +612,7 @@ export default function SystemMaintenance() {
       addLog(
         `✅ Target Coverage Metadata migration 完成：${brandLabel}｜寫入 ${Number(result?.writtenCount || 0)}｜已略過 V1 ${Number(result?.skippedCount || 0)}｜Raw Reads 0｜Persisted ${result?.allVerified ? "PASS" : "N/A"}`
       );
-      showToast("歷史 Target Coverage Metadata migration 完成；請重新執行只讀稽核確認", "success");
+      showToast("Target Coverage Metadata migration 完成；請重新執行全現有月份只讀稽核確認", "success");
     } catch (error) {
       addLog(`❌ Target Coverage Metadata migration 失敗：${error.message}`);
       showToast(error.message || "Target Coverage Metadata migration 失敗", "error");
@@ -5417,7 +5425,7 @@ export default function SystemMaintenance() {
                 </div>
               </div>
             )}
-            <ToolRow icon={Shield} title="Pre-Batch-5：歷史 Target Coverage 稽核" desc="只讀 monthly_targets_summary + store_lifecycle，分類可安全補 Coverage metadata 的月份；不掃 Raw monthly_targets、不寫入任何資料。" badge="Audit Only｜0 Writes" tone="emerald">
+            <ToolRow icon={Shield} title="Production：Target Coverage 全現有月份稽核" desc="只讀 monthly_targets_summary + store_lifecycle，包含歷史、當月與未來已存在 Summary；分類可安全補 Coverage metadata 的月份，不掃 Raw monthly_targets、不寫入任何資料。" badge="Audit Only｜0 Writes" tone="emerald">
               <div className="flex items-center gap-2 rounded-2xl border border-stone-100 bg-white/70 px-3 h-11 min-w-[220px]">
                 <Shield size={14} className="text-stone-400 shrink-0" />
                 <input
@@ -5445,11 +5453,11 @@ export default function SystemMaintenance() {
                 <div className="flex flex-col xl:flex-row xl:items-start xl:justify-between gap-3">
                   <div>
                     <div className="flex items-center gap-2 flex-wrap">
-                      <p className="text-sm font-black text-stone-800">{brandLabel}｜Historical Target Coverage Audit</p>
+                      <p className="text-sm font-black text-stone-800">{brandLabel}｜Existing Summary Target Coverage Audit</p>
                       <span className="px-2.5 py-1 rounded-full border border-emerald-100 bg-white text-[10px] font-black text-emerald-700">READ ONLY</span>
                     </div>
                     <p className="mt-1 text-[11px] font-bold text-stone-400 leading-relaxed">
-                      Lifecycle：{targetCoverageAuditReport.lifecycle?.datasetStatus || "-"}｜只檢查 {targetCoverageAuditReport.historicalBeforeMonth || "本月"} 以前月份｜Audit：{targetCoverageAuditReport.auditVersion || "-"}｜{targetCoverageAuditReport.auditedAtText || "-"}
+                      Lifecycle：{targetCoverageAuditReport.lifecycle?.datasetStatus || "-"}｜範圍：所有已存在 Summary 月份（含當月／未來）｜Audit：{targetCoverageAuditReport.auditVersion || "-"}｜{targetCoverageAuditReport.auditedAtText || "-"}
                     </p>
                   </div>
                   <div className="rounded-2xl border border-stone-100 bg-white px-3 py-2 text-[10px] font-black text-stone-500 leading-relaxed">
@@ -5528,8 +5536,8 @@ export default function SystemMaintenance() {
               Number(targetCoverageAuditReport.summary?.migrationCandidateMonths?.length || 0) > 0 && (
                 <ToolRow
                   icon={Save}
-                  title="Pre-Batch-5 Phase B：補 Historical Target Coverage Metadata"
-                  desc="只處理上方只讀 Audit 判定安全的月份。Backend 會在單品牌 atomic transaction 重新讀取 Summary + Lifecycle 並再次驗證；任一月份失去安全條件時整批 0 Writes。"
+                  title="Production：補 Target Coverage Metadata"
+                  desc="只處理上方全現有月份 Audit 判定安全的月份（可含歷史／當月／未來既有 Summary）。Backend 會在單品牌 atomic transaction 重新讀取 Summary + Lifecycle 並再次驗證；任一月份失去安全條件時整批 0 Writes。"
                   badge={`${Number(targetCoverageAuditReport.summary?.migrationCandidateMonths?.length || 0)} 個月份｜Metadata Only`}
                   tone="emerald"
                 >
@@ -5560,7 +5568,7 @@ export default function SystemMaintenance() {
                 <div className="flex flex-col xl:flex-row xl:items-start xl:justify-between gap-3">
                   <div>
                     <div className="flex items-center gap-2 flex-wrap">
-                      <p className="text-sm font-black text-stone-800">{brandLabel}｜Historical Target Coverage Metadata Migration</p>
+                      <p className="text-sm font-black text-stone-800">{brandLabel}｜Target Coverage Metadata Migration</p>
                       <span className="px-2.5 py-1 rounded-full border border-blue-100 bg-white text-[10px] font-black text-blue-700">METADATA ONLY</span>
                       {targetCoverageMigrationReport.allVerified === true && <span className="px-2.5 py-1 rounded-full border border-emerald-100 bg-emerald-50 text-[10px] font-black text-emerald-700">PERSISTED VERIFIED</span>}
                     </div>
