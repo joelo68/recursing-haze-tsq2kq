@@ -4,6 +4,106 @@
 > 優先順序：使用者提供的目前正式部署 source > 本檔案 > 其他 Knowledge Base 文件。  
 > 最後整併更新：**2026-09-01（UTC+8）**。
 
+# Latest Production Runtime Override — 2026-09-01
+
+> 本節是目前最高優先的 Production runtime 狀態。後續較舊章節保留各自 closeout 當時的歷史狀態；若狀態標籤與本節衝突，以「最新正式 source + 本節 Production confirmation」為準。
+
+正式 runtime：
+
+```text
+Official working directory = ~/cyj-new
+branch                      = main
+HEAD                        = 957f50b25a2ca2895daf2448ed26d28a63a249a6
+origin/main                 = 957f50b25a2ca2895daf2448ed26d28a63a249a6
+CURRENT_APP_VERSION         = 3.5.3（未提高）
+```
+
+## P1 — CYJ 2026-08 Historical Dashboard nullable KPI white screen（CLOSED）
+
+2026-09-01 月份切換後，CYJ 回看 `2026-08` Historical Dashboard 曾出現整頁白畫面；同時安妞、伊啵回看 `2026-08` 正常。
+
+Browser runtime crash signature：
+
+```text
+TypeError:
+Cannot read properties of null (reading 'toFixed')
+```
+
+正式 root cause：
+
+```text
+Historical Summary / detail fallback
+→ Formal KPI / achievement 合法可能為 null / N_A / incomplete
+→ StorePerformanceView presentation path 對 nullable percentage 直接 .toFixed()
+→ React render crash
+→ 白畫面
+```
+
+月切換、歷史資料回補、dirty / unverified fallback 都可能讓 nullable state 更容易被觀察到，但它們不是「白畫面應被允許」的理由；Presentation 必須能安全承接 fail-closed `null`。
+
+正式修正：
+
+```text
+src/components/StorePerformanceView.jsx
+tests/storePerformanceNullSafety.test.js
+```
+
+核心 contract：
+
+```text
+finite KPI
+→ 正常百分比呈現
+
+null / N_A / incomplete / invalid
+→ N/A
+
+禁止：
+null → 0
+null.toFixed(...)
+```
+
+Challenge projection / nullable percentage 也維持 `N/A`，不得為避免 crash 隱性轉成 `0%`。
+
+正式驗證：
+
+```text
+P1 null-safety regression       2 / 2 PASS
+Targeted Dashboard regression  45 / 45 PASS
+Full repository regression    348 / 348 PASS
+npm run build                  PASS
+git diff --check               PASS
+```
+
+正式發布：
+
+```text
+Production commit = 957f50b25a2ca2895daf2448ed26d28a63a249a6
+Frontend          = GitHub Pages Published
+Functions deploy  = none
+Firestore Rules   = unchanged
+Firestore path    = unchanged
+new listener      = 0
+new query/polling = 0
+```
+
+Production smoke：
+
+```text
+CYJ 2026-08 Dashboard = 正常，不再白畫面
+安妞 2026-08          = 正常
+伊啵 2026-08          = 正常
+```
+
+狀態：
+
+```text
+IMPLEMENTED           = YES
+VALIDATED             = YES
+DEPLOYED              = YES
+PRODUCTION CONFIRMED  = YES
+INCIDENT              = CLOSED
+```
+
 # 0. 2026-08-31 Source Reconciliation Baseline（Git 已整合／尚未部署）
 
 Source Rebaseline / Reconciliation 已完成並收斂回正式專案目錄：

@@ -128,6 +128,71 @@ SystemMaintenance.jsx
 
 不要只改 `DashboardView.jsx` 就假設改到資料邏輯；它主要是 view composer。
 
+## 5.1 Historical / Formal nullable KPI presentation contract
+
+Historical verified Summary 與 dirty / missing / unverified 時的 detail fallback 都可能合法產生：
+
+```text
+null
+N_A
+TARGET_INCOMPLETE
+FIELD_MISSING
+DATA_INVALID
+```
+
+這些狀態是 fail-closed business semantics，不是可以任意轉成 `0` 的顯示資料。
+
+因此 Dashboard presentation layer，特別是：
+
+```text
+src/components/StorePerformanceView.jsx
+```
+
+必須先做 finite-number guard，再格式化百分比／projection。
+
+安全模式：
+
+```js
+Number.isFinite(value)
+  ? `${value.toFixed(0)}%`
+  : "N/A"
+```
+
+禁止：
+
+```js
+value.toFixed(...)
+Number(value || 0).toFixed(...)
+```
+
+直接套在可能為 nullable Formal KPI 的值上。
+
+原因：
+
+```text
+null != 0
+N_A  != 0%
+TARGET_INCOMPLETE != 0%
+```
+
+`0` 可能是真實有效值或 `VALID_ZERO` target；不能為了避免 render crash 而把 fail-closed `null` 壓成 `0`。
+
+2026-09-01 CYJ `2026-08` Historical Dashboard white-screen incident 已建立專項 regression owner：
+
+```text
+tests/storePerformanceNullSafety.test.js
+```
+
+修改 `StorePerformanceView.jsx` 的 Formal KPI / achievement / ranking / projection presentation 時，最低應加跑：
+
+```bash
+node --test tests/storePerformanceNullSafety.test.js
+node --test tests/dashboardFormalConsumer.test.js tests/dashboardHistoricalReads.test.js tests/kpiContracts.test.js
+npm run build
+```
+
+若只修改 canonical docs，則不需機械式重跑 runtime build；但必須保留先前實際執行的 runtime validation evidence，並以 `git diff --check` / exact doc scope 驗證文件 closeout。
+
 # 6. Summary / Aggregate
 
 Derived data 出現錯誤時：

@@ -328,6 +328,82 @@ verified_dashboard_summary
 
 ---
 
+## 12.1 Historical fallback nullable presentation contract
+
+Historical Dashboard 的 Summary trust / fallback 架構必須把「資料來源選擇」與「Presentation null-safety」分開處理。
+
+正常狀態：
+
+```text
+verified historical
+→ Summary-first
+
+dirty / missing / unverified
+→ detail fallback allowed
+```
+
+在 fallback、Coverage incomplete、Formal validity fail-closed 等狀態中，KPI / achievement 合法可能為：
+
+```text
+null
+N_A
+TARGET_INCOMPLETE
+FIELD_MISSING
+DATA_INVALID
+```
+
+因此：
+
+```text
+null
+→ 顯示 N/A
+→ 不得顯示 0%
+→ 不得直接 .toFixed()
+→ 不得為了 render 成功而 Number(value || 0)
+```
+
+`StorePerformanceView.jsx` 目前以 finite-number formatter 處理 nullable percentage；Formal projection 在 projection / target 非 finite 或 denominator 為 0 時同樣呈現 `N/A`。
+
+### Production incident 2026-09-01
+
+CYJ `2026-08` 在月切換後進入 Historical Dashboard 時曾觸發：
+
+```text
+Cannot read properties of null (reading 'toFixed')
+```
+
+安妞／伊啵同月正常，證明不是三品牌 Historical Summary 全面故障；真正缺陷位於 Presentation 對合法 nullable KPI 的承接。
+
+修正後：
+
+```text
+Production commit = 957f50b25a2ca2895daf2448ed26d28a63a249a6
+Full regression   = 348 / 348 PASS
+npm run build     = PASS
+Frontend          = Published
+CYJ 2026-08 smoke = PASS
+```
+
+本修正沒有新增／修改：
+
+```text
+Firestore listener
+Firestore query
+polling
+Functions
+Rules
+brand path
+Summary Writer
+KPI semantic version
+CURRENT_APP_VERSION
+```
+
+Regression owner：
+
+```text
+tests/storePerformanceNullSafety.test.js
+```
+
 # 13. Dashboard 前端 Summary Status
 
 `DashboardHeader` 會把資料來源轉成使用者可理解狀態。
