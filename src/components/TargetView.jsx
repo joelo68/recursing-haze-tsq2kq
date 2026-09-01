@@ -31,6 +31,21 @@ const formatTargetStoreName = (value, brandPrefix) => {
   return core ? `${brandPrefix}${core}店` : "";
 };
 
+// Batch 5E final acceptance:
+// Raw monthly target 的 explicit numeric 0 是已設定 VALID_ZERO，不可在重新載入時被 > 0 判斷吃掉。
+// missing/null/blank 才回到空 input；configured 0 必須回到真正的 "0" value。
+const formatBaseTargetInputValue = (row = null, field = "") => {
+  if (!row || !field || !Object.prototype.hasOwnProperty.call(row, field)) return "";
+  const result = validBaseTarget(row[field]);
+  if (!result.valid) return "";
+  return result.value === 0 ? "0" : formatNumber(result.value);
+};
+
+const hasConfiguredBaseTarget = (row = null) => {
+  if (!row || typeof row !== "object") return false;
+  return validBaseTarget(row.cashTarget).valid || validBaseTarget(row.accrualTarget).valid;
+};
+
 const TargetView = () => {
   const { 
     userRole, 
@@ -175,8 +190,8 @@ const TargetView = () => {
       
       return {
         month,
-        cashTarget: existing && existing.cashTarget > 0 ? formatNumber(existing.cashTarget) : "",
-        accrualTarget: existing && existing.accrualTarget > 0 ? formatNumber(existing.accrualTarget) : "",
+        cashTarget: formatBaseTargetInputValue(existing, "cashTarget"),
+        accrualTarget: formatBaseTargetInputValue(existing, "accrualTarget"),
         challengeCashTarget: existing && existing.challengeCashTarget > 0 ? formatNumber(existing.challengeCashTarget) : "",
         challengeAccrualTarget: existing && existing.challengeAccrualTarget > 0 ? formatNumber(existing.challengeAccrualTarget) : "",
         isUnlocked: existing ? !!existing.isUnlocked : false,
@@ -195,7 +210,7 @@ const TargetView = () => {
     const month = monthIndex + 1;
     const key = resolveTargetBudgetReadKey(selectedStore, selectedYear, month);
     const existing = budgets[key];
-    return !!(existing && (existing.cashTarget > 0 || existing.accrualTarget > 0));
+    return hasConfiguredBaseTarget(existing);
   };
 
   const isInputDisabled = (monthIndex) => {
@@ -327,7 +342,7 @@ const TargetView = () => {
     }
 
     // Batch 3：目標 validity 由 canonical KPI contract 判斷。
-    // blank / 0 代表「未設定」，寫入 raw monthly_targets 時移除欄位，不再用 parseNumber("") -> 0。
+    // blank / missing 代表「未設定」；explicit numeric 0 是 configured VALID_ZERO，必須原值寫入。
     const normalizedChanges = [];
     for (const { item, index } of editableChanges) {
       const cashResult = validBaseTarget(item.cashTarget);
@@ -396,7 +411,7 @@ const TargetView = () => {
           updatedBy: currentUser?.name || "unknown"
         };
 
-        // Raw target 寫入固定 canonical key；未設定欄位使用 deleteField，避免把 blank/0 物化成有效-looking target。
+        // Raw target 寫入固定 canonical key；只有未設定欄位使用 deleteField，explicit 0 必須保留。
         batch.set(docRef, targetPayload, { merge: true });
 
         // Legacy 只允許讀取相容；重新儲存時就安全遷移並移除舊 key。
@@ -553,7 +568,7 @@ const TargetView = () => {
                                   <DollarSign size={14} className={`absolute left-3 top-3 ${disabled ? 'text-stone-300' : 'text-stone-400'}`} />
                                   <input
                                     type="text"
-                                    placeholder={disabled ? "-" : "0"}
+                                    placeholder={disabled ? "-" : "未設定"}
                                     value={item.cashTarget}
                                     onChange={(e) => handleInputChange(idx, 'cashTarget', e.target.value)}
                                     disabled={disabled}
@@ -571,7 +586,7 @@ const TargetView = () => {
                                   <CreditCard size={14} className={`absolute left-3 top-3 ${disabled ? 'text-stone-300' : 'text-stone-400'}`} />
                                   <input
                                     type="text"
-                                    placeholder={disabled ? "-" : "0"}
+                                    placeholder={disabled ? "-" : "未設定"}
                                     value={item.accrualTarget}
                                     onChange={(e) => handleInputChange(idx, 'accrualTarget', e.target.value)}
                                     disabled={disabled}
@@ -765,7 +780,7 @@ const TargetView = () => {
                           <input
                             type="text"
                             inputMode="numeric" 
-                            placeholder={disabled ? "-" : "0"}
+                            placeholder={disabled ? "-" : "未設定"}
                             value={item.cashTarget}
                             onChange={(e) => handleInputChange(idx, 'cashTarget', e.target.value)}
                             disabled={disabled}
@@ -784,7 +799,7 @@ const TargetView = () => {
                           <input
                             type="text"
                             inputMode="numeric" 
-                            placeholder={disabled ? "-" : "0"}
+                            placeholder={disabled ? "-" : "未設定"}
                             value={item.accrualTarget}
                             onChange={(e) => handleInputChange(idx, 'accrualTarget', e.target.value)}
                             disabled={disabled}
