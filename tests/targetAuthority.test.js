@@ -372,6 +372,10 @@ test("5E-1B.3 conflicting canonical-equivalent authoritative Summary rows fail c
 
   assert.match(
     coverageSource,
-    /targetMap\[identity\.canonicalStoreName\] = choosePreferredTargetRow\(/
+    /result\[identity\.canonicalStoreName\] = choosePreferredTargetRow\(/
+  );
+  assert.match(
+    coverageSource,
+    /targetMap\[identity\.canonicalStoreName\] = chooseTargetRowForRawEvent\(/
   );
 });

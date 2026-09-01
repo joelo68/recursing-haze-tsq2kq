@@ -154,6 +154,51 @@ function choosePreferredTargetRow(current = null, next = null) {
   return String(next.sourceDocId || '').localeCompare(String(current.sourceDocId || ''), 'zh-Hant') > 0 ? next : current;
 }
 
+// Batch 5E final Production acceptance:
+// Raw onWrite 的 after row 若和 Summary 內既有 row 指向「同一個 physical canonical document」，
+// 代表同一 authority 的時間更新，不是兩個 authority 競爭。
+// 注意：此判斷只供 Raw event writer 使用；Summary container 彼此合併仍必須走
+// choosePreferredTargetRow()，以保留不同 canonical-equivalent sources 的 fail-closed conflict。
+function getPhysicalTargetSourceIds(row = {}) {
+  const conflictIds = Array.isArray(row?.conflictSourceDocIds)
+    ? row.conflictSourceDocIds.map((value) => String(value || '').trim()).filter(Boolean)
+    : [];
+  if (conflictIds.length > 0) return [...new Set(conflictIds)].sort((a, b) => a.localeCompare(b, 'zh-Hant'));
+  const sourceDocId = String(row?.sourceDocId || '').trim();
+  return sourceDocId ? [sourceDocId] : [];
+}
+
+function isSamePhysicalCanonicalTargetSource(current = null, next = null) {
+  if (!current || !next) return false;
+
+  const currentCanonicalTargetId = String(current?.canonicalTargetId || '').trim();
+  const nextCanonicalTargetId = String(next?.canonicalTargetId || '').trim();
+  if (!currentCanonicalTargetId || currentCanonicalTargetId !== nextCanonicalTargetId) return false;
+
+  const currentIds = getPhysicalTargetSourceIds(current);
+  const nextIds = getPhysicalTargetSourceIds(next);
+  if (currentIds.length !== 1 || nextIds.length !== 1) return false;
+
+  const currentSourceDocId = currentIds[0];
+  const nextSourceDocId = nextIds[0];
+  return (
+    currentSourceDocId === nextSourceDocId &&
+    nextSourceDocId === nextCanonicalTargetId
+  );
+}
+
+function chooseTargetRowForRawEvent(current = null, next = null) {
+  if (!current) return next;
+  if (!next) return current;
+
+  // Same physical canonical source: the event's after-image is the new truth.
+  // This also repairs a previously persisted false AUTHORITY_CONFLICT that contains
+  // only this same canonical source id.
+  if (isSamePhysicalCanonicalTargetSource(current, next)) return next;
+
+  return choosePreferredTargetRow(current, next);
+}
+
 function extractSummaryTargetMap(summaryData = {}, brandId = 'cyj', yearMonth = '', identityApi = {}) {
   const result = {};
   const consume = (container) => {
@@ -520,7 +565,7 @@ function createTargetCoverageFunctions({ admin, db }) {
           resolved.sourceDocId || targetId,
           identity.canonicalTargetId
         );
-        targetMap[identity.canonicalStoreName] = choosePreferredTargetRow(
+        targetMap[identity.canonicalStoreName] = chooseTargetRowForRawEvent(
           targetMap[identity.canonicalStoreName] || null,
           nextRow
         );
@@ -678,6 +723,8 @@ module.exports = {
   normalizeTargetCoverageBrandId,
   extractTargetIdentity,
   buildTargetSummaryRow,
+  isSamePhysicalCanonicalTargetSource,
+  chooseTargetRowForRawEvent,
   extractSummaryTargetMap,
   buildTargetAudit,
   buildIndependentCoverage,
