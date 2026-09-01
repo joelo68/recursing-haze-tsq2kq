@@ -379,7 +379,7 @@ const StorePerformanceView = ({ dashboardStats, myStoreRankings, brandInfo }) =>
                     </div>
                     <div className="flex-1 text-right">
                       <p className="text-white/80 text-xs font-bold uppercase mb-1">預算目標達成率</p>
-                      <p className="text-3xl font-mono font-bold text-white">{storeRank.rate.toFixed(0)}%</p>
+                      <p className="text-3xl font-mono font-bold text-white">{formatKpiPercent(storeRank.rate)}</p>
                     </div>
                   </div>
                   <div className="mt-4 pt-4 border-t border-white/20 flex flex-col gap-1 text-xs font-medium text-white/90">
@@ -389,7 +389,7 @@ const StorePerformanceView = ({ dashboardStats, myStoreRankings, brandInfo }) =>
                     </div>
                     {storeRank.hasChallenge && (
                       <div className="flex justify-between text-yellow-200 mt-1 pt-1 border-t border-white/10">
-                        <span>挑戰目標達成率: {storeRank.challengeRate.toFixed(0)}%</span>
+                        <span>挑戰目標達成率: {formatKpiPercent(storeRank.challengeRate)}</span>
                         <span>挑戰目標: {fmtMoney(storeRank.challengeTarget)}</span>
                       </div>
                     )}
@@ -437,7 +437,7 @@ const StorePerformanceView = ({ dashboardStats, myStoreRankings, brandInfo }) =>
                    <div className="flex justify-between text-sm md:text-base font-bold">
                      <span className="text-amber-600 flex items-center gap-1"><Star size={14} className="fill-amber-500"/> 挑戰目標達成率 (加碼)</span>
                      <span className={dashboardStats.challengeAchievement >= 100 ? "text-amber-500 drop-shadow-sm" : "text-amber-600/70"}>
-                       {dashboardStats.challengeAchievement.toFixed(0)}%
+                       {formatKpiPercent(dashboardStats.challengeAchievement)}
                      </span>
                    </div>
                    <div className="w-full bg-amber-50 h-3 md:h-3.5 rounded-full overflow-hidden border border-amber-100">
@@ -496,7 +496,7 @@ const StorePerformanceView = ({ dashboardStats, myStoreRankings, brandInfo }) =>
                     <div className="inline-flex items-center gap-1 px-2 py-1 bg-amber-50 text-amber-700 rounded-md text-[11px] font-bold border border-amber-100 shadow-sm">
                       <Star size={10} className="fill-amber-500 text-amber-500" />
                       <span>挑戰達成</span>
-                      <span>{storeGrandTotal.challengeBudget > 0 ? ((storeGrandTotal.projection / storeGrandTotal.challengeBudget) * 100).toFixed(0) : 0}%</span>
+                      <span>{formatProjectionTargetRate(storeGrandTotal.projection, storeGrandTotal.challengeBudget)}</span>
                     </div>
                   )}
                 </div>
@@ -532,7 +532,7 @@ const StorePerformanceView = ({ dashboardStats, myStoreRankings, brandInfo }) =>
                     <div className="inline-flex items-center gap-1 px-2 py-1 bg-amber-50 text-amber-700 rounded-md text-[11px] font-bold border border-amber-100 shadow-sm">
                       <Star size={10} className="fill-amber-500 text-amber-500" />
                       <span>挑戰達成</span>
-                      <span>{storeGrandTotal.challengeAccrualBudget > 0 ? ((storeGrandTotal.accrualProjection / storeGrandTotal.challengeAccrualBudget) * 100).toFixed(0) : 0}%</span>
+                      <span>{formatProjectionTargetRate(storeGrandTotal.accrualProjection, storeGrandTotal.challengeAccrualBudget)}</span>
                     </div>
                   )}
                 </div>
@@ -564,7 +564,7 @@ const StorePerformanceView = ({ dashboardStats, myStoreRankings, brandInfo }) =>
                 {storeGrandTotal.hasChallengeCash && (
                    <div className="flex items-center justify-between border-t border-stone-100 pt-1">
                      <span className={`font-bold text-[11px] ${dashboardStats.challengeAchievement >= 100 ? "text-amber-600" : "text-amber-600/60"}`}><Star size={10} className="inline mb-0.5"/> 挑戰目標達成率</span>
-                     <span className={`font-bold text-[11px] ${dashboardStats.challengeAchievement >= 100 ? "text-amber-600" : "text-amber-600/60"}`}>{dashboardStats.challengeAchievement.toFixed(0)}%</span>
+                     <span className={`font-bold text-[11px] ${dashboardStats.challengeAchievement >= 100 ? "text-amber-600" : "text-amber-600/60"}`}>{formatKpiPercent(dashboardStats.challengeAchievement)}</span>
                    </div>
                 )}
               </div>
@@ -577,7 +577,7 @@ const StorePerformanceView = ({ dashboardStats, myStoreRankings, brandInfo }) =>
                 {storeGrandTotal.hasChallengeAccrual && (
                    <div className="flex items-center justify-between border-t border-stone-100 pt-1">
                      <span className={`font-bold text-[11px] ${dashboardStats.challengeAccrualAchievement >= 100 ? "text-amber-600" : "text-amber-600/60"}`}><Star size={10} className="inline mb-0.5"/> 挑戰目標達成率</span>
-                     <span className={`font-bold text-[11px] ${dashboardStats.challengeAccrualAchievement >= 100 ? "text-amber-600" : "text-amber-600/60"}`}>{dashboardStats.challengeAccrualAchievement.toFixed(0)}%</span>
+                     <span className={`font-bold text-[11px] ${dashboardStats.challengeAccrualAchievement >= 100 ? "text-amber-600" : "text-amber-600/60"}`}>{formatKpiPercent(dashboardStats.challengeAccrualAchievement)}</span>
                    </div>
                 )}
               </div>
@@ -887,7 +887,7 @@ const StorePerformanceView = ({ dashboardStats, myStoreRankings, brandInfo }) =>
                         </td>
                         <td className="p-3 sm:p-4 text-right">
                           <div className="flex flex-col items-end">
-                            <span className={`text-base sm:text-lg font-bold font-mono ${progressMeta.textClassName}`}>{store.rate.toFixed(0)}%</span>
+                            <span className={`text-base sm:text-lg font-bold font-mono ${progressMeta.textClassName}`}>{formatKpiPercent(store.rate)}</span>
                             <div className="w-16 sm:w-24 h-1 sm:h-1.5 bg-stone-100 rounded-full mt-1 overflow-hidden">
                               <div className={`h-full rounded-full ${progressMeta.barClassName}`} style={{ width: `${Math.min(store.rate, 100)}%` }}></div>
                             </div>

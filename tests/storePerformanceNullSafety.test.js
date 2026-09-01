@@ -1,0 +1,41 @@
+import test from "node:test";
+import assert from "node:assert/strict";
+import fs from "node:fs";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
+const root = path.resolve(__dirname, "..");
+const source = fs.readFileSync(path.join(root, "src/components/StorePerformanceView.jsx"), "utf8");
+
+test("StorePerformanceView renders nullable formal percentages without direct toFixed", () => {
+  const unsafePatterns = [
+    /storeRank\.rate\.toFixed\(/,
+    /storeRank\.challengeRate\.toFixed\(/,
+    /dashboardStats\.challengeAchievement\.toFixed\(/,
+    /dashboardStats\.challengeAccrualAchievement\.toFixed\(/,
+    /store\.rate\.toFixed\(/,
+  ];
+
+  unsafePatterns.forEach((pattern) => {
+    assert.doesNotMatch(source, pattern);
+  });
+
+  assert.match(source, /formatKpiPercent\(storeRank\.rate\)/);
+  assert.match(source, /formatKpiPercent\(storeRank\.challengeRate\)/);
+  assert.match(source, /formatKpiPercent\(dashboardStats\.challengeAchievement\)/);
+  assert.match(source, /formatKpiPercent\(dashboardStats\.challengeAccrualAchievement\)/);
+  assert.match(source, /formatKpiPercent\(store\.rate\)/);
+});
+
+test("StorePerformanceView keeps nullable challenge projections as N/A instead of coercing null to zero", () => {
+  assert.match(
+    source,
+    /formatProjectionTargetRate\(storeGrandTotal\.projection, storeGrandTotal\.challengeBudget\)/
+  );
+  assert.match(
+    source,
+    /formatProjectionTargetRate\(storeGrandTotal\.accrualProjection, storeGrandTotal\.challengeAccrualBudget\)/
+  );
+});
