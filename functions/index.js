@@ -83,15 +83,6 @@ const zeroTargetInventoryFunctions = createZeroTargetInventoryFunctions({ admin,
 exports.auditExplicitZeroTargets = zeroTargetInventoryFunctions.auditExplicitZeroTargets;
 
 // ==========================================
-// ★ Batch 5E-1A：Legacy Placeholder Zero fail-closed normalization
-// 僅允許伊啵已稽核的 27 份 exact placeholder target documents。
-// dry_run / verify 都是 0 writes；execute 只刪 Raw monthly_targets，Derived Summary 仍由既有 Target Coverage trigger 單一 writer 維護。
-// ==========================================
-const { createZeroTargetNormalizationFunctions } = require("./zeroTargetNormalization");
-const zeroTargetNormalizationFunctions = createZeroTargetNormalizationFunctions({ admin, db });
-exports.normalizeLegacyZeroTargetPlaceholders = zeroTargetNormalizationFunctions.normalizeLegacyZeroTargetPlaceholders;
-
-// ==========================================
 // ★ Pre-Batch-5 Phase B：Historical Target Coverage metadata-only migration
 // 僅對 Phase A 重新驗證仍安全的歷史月份，以單品牌 atomic transaction 補 Coverage metadata。
 // 不掃 Raw monthly_targets、不改 legacy target map / totals / counts。
