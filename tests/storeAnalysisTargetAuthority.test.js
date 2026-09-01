@@ -137,3 +137,55 @@ test("Store Analysis wiring uses Coverage-aware authority and no legacy containe
   assert.doesNotMatch(source, /source\?\.stores|source\?\.storeTargets|source\?\.storeTargetMap|source\?\.monthlyTargets/);
   assert.doesNotMatch(source, /findTargetByStore/);
 });
+
+test("5E-1B canonical explicit zero is configured VALID_ZERO when Coverage does not declare missing", () => {
+  const authority = buildStoreAnalysisTargetPresentationAuthority({
+    summary: makeSummary({
+      cashMissingStores: [],
+      targets: { "CYJ中美店": { storeName: "CYJ中美店", cashTarget: 0 } },
+    }),
+    brandId: "cyj",
+    yearMonth: "2026-08",
+    normalizeStoreKey,
+  });
+
+  const result = resolveStoreAnalysisCashTargetPresentation({
+    authority,
+    storeName: "中美",
+    normalizeStoreKey,
+  });
+
+  assert.deepEqual(result, {
+    found: true,
+    value: 0,
+    configured: true,
+    status: STORE_ANALYSIS_TARGET_STATUS.VALID_ZERO,
+  });
+});
+
+test("5E-1B Store Analysis all-zero aggregate target remains complete with VALID_ZERO", () => {
+  const authority = buildStoreAnalysisTargetPresentationAuthority({
+    summary: makeSummary({
+      cashMissingStores: [],
+      targets: {
+        "CYJA店": { storeName: "CYJA店", cashTarget: 0 },
+        "CYJB店": { storeName: "CYJB店", cashTarget: 0 },
+      },
+    }),
+    brandId: "cyj",
+    yearMonth: "2026-08",
+    normalizeStoreKey,
+  });
+
+  const result = resolveStoreAnalysisCashTargetScopePresentation({
+    authority,
+    storeNames: ["A", "B"],
+    normalizeStoreKey,
+  });
+
+  assert.deepEqual(result, {
+    complete: true,
+    value: 0,
+    status: STORE_ANALYSIS_TARGET_STATUS.VALID_ZERO,
+  });
+});

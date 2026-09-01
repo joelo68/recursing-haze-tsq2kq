@@ -24,7 +24,7 @@ const readFormalMetric = (row = {}, valueKey, statusKey) => {
 const readFormalTarget = (row = {}, valueKey, statusKey) => {
   const status = String(row?.[statusKey] || KPI_VALUE_STATUS.TARGET_NOT_SET);
   const target = validBaseTarget(row?.[valueKey]);
-  if (!target.valid || status !== KPI_VALUE_STATUS.VALID) {
+  if (!target.valid || !isValidNumericStatus(status)) {
     return { value: null, status: target.valid ? status : target.status };
   }
   return { value: target.value, status };

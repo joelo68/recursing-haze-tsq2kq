@@ -219,7 +219,8 @@ TargetView
    │
    ├─ canonical read/write resolver
    ├─ validBaseTarget / validChallengeTarget
-   ├─ blank / 0 base => 未設定（delete field）
+   ├─ blank / missing base => 未設定（delete field）
+   ├─ explicit 0 base => VALID_ZERO（保留 numeric 0）
    ├─ lock/unlock
    └─ writeBatch
    │
@@ -252,6 +253,41 @@ Backend derived writer 也沿用 Lifecycle / Store Identity canonical owner
 ```
 
 ---
+
+## Batch 5E-1B refinement
+
+```text
+TargetView
+→ monthly_targets canonical write
+→ functions/targetCoverage.js event-driven onWrite
+→ canonical identity arbitration
+→ targetAuthorityConflict
+→ monthly_targets_summary
+```
+
+Target validity：
+
+```text
+base 0       → VALID_ZERO / configured
+base missing → TARGET_NOT_SET
+challenge 0  → CHALLENGE_NOT_SET
+newASP 0     → invalid / unset
+```
+
+Authority：
+
+```text
+canonical > legacy
+
+canonical-equivalent authoritative disagreement
+→ AUTHORITY_CONFLICT
+→ denominator null
+→ Coverage incomplete
+→ fallback terminal
+```
+
+因此 explicit 0 不再觸發 missing-target recovery；authority conflict 也不能用 raw fallback
+重新選回其中一筆。
 
 # 11. Target Read Flow
 

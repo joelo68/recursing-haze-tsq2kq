@@ -15,6 +15,9 @@ const {
   buildTelegramFormalSummaryMetrics,
   aggregateTelegramFormalRows,
 } = require("./telegram/formalKpi");
+const {
+  resolveTargetAuthorityConflict,
+} = require("./targetAuthorityConflict");
 
 if (!admin.apps.length) admin.initializeApp();
 const db = admin.firestore();
@@ -3576,28 +3579,55 @@ async function loadTelegramAgentAuditExclusions(brandId, ctx) {
 
 function mergeTelegramAgentTargetMaps(baseMap = {}, supplementMap = {}) {
     const merged = { ...(baseMap || {}) };
+    const targetFields = ["cashTarget", "accrualTarget", "challengeCashTarget", "challengeAccrualTarget"];
+    const hasPresentField = (row, field) => (
+        row
+        && Object.prototype.hasOwnProperty.call(row, field)
+        && row[field] !== null
+        && row[field] !== undefined
+        && row[field] !== ""
+    );
+
     Object.entries(supplementMap || {}).forEach(([rawKey, rawValue]) => {
         const storeCore = normalizeSummaryCoreName(rawKey || rawValue?.storeName || rawValue?.store || "");
         if (!storeCore) return;
         const current = merged[storeCore] || {};
         const next = rawValue || {};
-        merged[storeCore] = {
-            ...current,
-            ...next,
-            storeName: storeCore,
-            cashTarget: Number(next.cashTarget || 0) > 0 ? Number(next.cashTarget) : Number(current.cashTarget || 0),
-            accrualTarget: Number(next.accrualTarget || 0) > 0 ? Number(next.accrualTarget) : Number(current.accrualTarget || 0),
-            challengeCashTarget: Number(next.challengeCashTarget || 0) > 0 ? Number(next.challengeCashTarget) : Number(current.challengeCashTarget || 0),
-            challengeAccrualTarget: Number(next.challengeAccrualTarget || 0) > 0 ? Number(next.challengeAccrualTarget) : Number(current.challengeAccrualTarget || 0),
-        };
+
+        const preferred = choosePreferredAutoTarget(current, next, storeCore) || {};
+        if (preferred?.authorityConflict === true) {
+            merged[storeCore] = preferred;
+            return;
+        }
+
+        const currentCanonical = isAutoTargetCanonicalSource(current, storeCore);
+        const nextCanonical = isAutoTargetCanonicalSource(next, storeCore);
+        if (currentCanonical !== nextCanonical) {
+            merged[storeCore] = {
+                ...(nextCanonical ? next : current),
+                storeName: storeCore,
+            };
+            return;
+        }
+
+        const secondary = preferred === next ? current : next;
+        const combined = { ...secondary, ...preferred, storeName: storeCore };
+        targetFields.forEach((field) => {
+            if (hasPresentField(preferred, field)) combined[field] = preferred[field];
+            else if (hasPresentField(secondary, field)) combined[field] = secondary[field];
+            else combined[field] = null;
+        });
+        merged[storeCore] = combined;
     });
     return merged;
 }
 
 function getTelegramAgentMissingCashTargetStores(targetMap = {}, expectedStores = []) {
-    return normalizeTelegramAgentStoreNamesFull(expectedStores || []).filter((storeCore) =>
-        Number(targetMap?.[storeCore]?.cashTarget || 0) <= 0
-    );
+    return normalizeTelegramAgentStoreNamesFull(expectedStores || []).filter((storeCore) => {
+        const row = targetMap?.[storeCore] || {};
+        if (row?.authorityConflict === true || row?.status === "AUTHORITY_CONFLICT") return false;
+        return !isConfiguredAutoBaseTargetValue(row?.cashTarget);
+    });
 }
 
 function formatTelegramAgentStoreLabel(storeName = "") {
@@ -3681,7 +3711,7 @@ async function loadTelegramAgentTargetedRawMap(brandId, yearMonth, ctx, stores =
             const built = buildAutoTargetRow(candidateId, docResult.data || {}, yearMonth);
             if (!built) continue;
             rawMap[built.storeCore] = built.target;
-            if (Number(built.target?.cashTarget || 0) > 0 || Number(built.target?.accrualTarget || 0) > 0) break;
+            if (isAutoTargetCanonicalSource(built.target, built.storeCore) || isAutoTargetEffective(built.target)) break;
         }
     }
 
@@ -3777,7 +3807,7 @@ async function loadTelegramAgentTargetMap(brandId, yearMonth, ctx, dashboardData
     const rawMap = {};
     rawResult.rows.forEach((row) => {
         const built = buildAutoTargetRow(row.id, row, yearMonth);
-        if (built) rawMap[built.storeCore] = built.target;
+        if (built) mergeAutoTargetMapEntry(rawMap, built);
     });
     const mergedMap = mergeTelegramAgentTargetMaps(bestMap, rawMap);
     const fallbackSource = bestSource ? `${bestSource}+monthly_targets_fallback` : "monthly_targets_fallback";
@@ -4785,7 +4815,7 @@ async function getManagerPerformance(yearMonth, managerName = null, brandName = 
                     ? Boolean(row && ["VALID", "VALID_ZERO"].includes(String(row.cashStatus || "")))
                     : Boolean(row);
                 const hasTargetData = loaded.formalKpiMode === true
-                    ? Boolean((row && String(row.cashTargetStatus || "") === "VALID") || Number(target.cashTarget || 0) > 0)
+                    ? Boolean((row && isValidNumericStatus(String(row.cashTargetStatus || ""))) || isConfiguredAutoBaseTargetValue(target.cashTarget))
                     : budget > 0;
                 const cash = Number(row?.cash || 0);
                 const accrual = Number(row?.accrual || 0);
@@ -4862,7 +4892,7 @@ async function getManagerPerformance(yearMonth, managerName = null, brandName = 
             }
             const target = managerMap[manager];
             const budget = loaded.formalKpiMode === true ? (row?.budget ?? targetResult.map[storeCore]?.cashTarget ?? null) : Number(row.budget || targetResult.map[storeCore]?.cashTarget || 0);
-            const hasTargetData = loaded.formalKpiMode === true ? (String(row?.cashTargetStatus || "") === "VALID" || Number(targetResult.map[storeCore]?.cashTarget || 0) > 0) : budget > 0;
+            const hasTargetData = loaded.formalKpiMode === true ? (isValidNumericStatus(String(row?.cashTargetStatus || "")) || isConfiguredAutoBaseTargetValue(targetResult.map[storeCore]?.cashTarget)) : budget > 0;
             const hasReportData = loaded.formalKpiMode === true ? ["VALID", "VALID_ZERO"].includes(String(row?.cashStatus || "")) : true;
             target.stores.push(storeCore);
             if (hasReportData) target.reportedStoreCount += 1;
@@ -4983,7 +5013,7 @@ async function getManagerPerformance(yearMonth, managerName = null, brandName = 
                         const target = targetResult.map[storeCore] || {};
                         const budget = loaded.formalKpiMode === true ? (row?.budget ?? target.cashTarget ?? null) : Number(row?.budget || target.cashTarget || 0);
                         const hasReportData = loaded.formalKpiMode === true ? Boolean(row && ["VALID", "VALID_ZERO"].includes(String(row.cashStatus || ""))) : Boolean(row);
-                        const hasTargetData = loaded.formalKpiMode === true ? Boolean((row && String(row.cashTargetStatus || "") === "VALID") || Number(target.cashTarget || 0) > 0) : budget > 0;
+                        const hasTargetData = loaded.formalKpiMode === true ? Boolean((row && isValidNumericStatus(String(row.cashTargetStatus || ""))) || isConfiguredAutoBaseTargetValue(target.cashTarget)) : budget > 0;
                         const cash = Number(row?.cash || 0);
                         const delegation = org.actingDelegationByStore?.[storeCore] || null;
                         return {
@@ -5172,14 +5202,17 @@ async function getOperationalAlerts(yearMonth, brandName = null, limit = 10, age
             const row = rowByCore[storeCore] || null;
             const fallbackTarget = targetResult.map[storeCore] || {};
             const cashStatus = String(row?.cashStatus || "");
+            const fallbackCashTargetConfigured = isConfiguredAutoBaseTargetValue(fallbackTarget.cashTarget);
             const cashTargetStatus = row
                 ? String(row?.cashTargetStatus || "")
-                : (Number(fallbackTarget.cashTarget || 0) > 0 ? "VALID" : "TARGET_NOT_SET");
+                : (fallbackCashTargetConfigured
+                    ? (Number(fallbackTarget.cashTarget) === 0 ? "VALID_ZERO" : "VALID")
+                    : "TARGET_NOT_SET");
             const cashAchievementStatus = String(row?.cashAchievementStatus || "");
             const hasReportData = Boolean(row && isValidNumericStatus(cashStatus));
             const hasTargetData = row
-                ? cashTargetStatus === "VALID"
-                : Number(fallbackTarget.cashTarget || 0) > 0;
+                ? isValidNumericStatus(cashTargetStatus)
+                : fallbackCashTargetConfigured;
             const cash = hasReportData ? Number(row.cash) : null;
             const budget = row
                 ? (hasTargetData ? Number(row.budget) : null)
@@ -5343,15 +5376,20 @@ async function getOperationalAlerts(yearMonth, brandName = null, limit = 10, age
         const brandAchievement = reportComplete && targetComplete && brandBudget > 0
             ? Number(((brandCash / brandBudget) * 100).toFixed(1))
             : null;
+        const brandAchievementStatus = !targetComplete
+            ? "TARGET_INCOMPLETE"
+            : !reportComplete
+                ? "DATA_INCOMPLETE"
+                : brandBudget === 0
+                    ? "N_A"
+                    : (brandAchievement === null ? "DATA_INCOMPLETE" : "VALID");
         brandSummaries.push({
             brand: getTelegramAgentBrandLabel(brandId),
             brandId,
             cash: brandCash,
             budget: brandBudget,
             cashAchievementRate: brandAchievement,
-            cashAchievementStatus: brandAchievement === null
-                ? (!targetComplete ? "TARGET_INCOMPLETE" : "DATA_INCOMPLETE")
-                : "VALID",
+            cashAchievementStatus: brandAchievementStatus,
             expectedProgress,
             progressGap: brandAchievement === null ? null : Number((brandAchievement - expectedProgress).toFixed(1)),
             operationalCriticalCount,
@@ -5441,8 +5479,8 @@ async function getDataHealth(yearMonth, brandName = null, agentContext = null) {
             ? { map: {}, source: "formal_row_authority" }
             : await loadTelegramAgentTargetMap(brandId, ym, ctx, null, [...expected]);
         const targeted = useFormalRowTargetAuthority
-            ? new Set([...expected].filter((store) => String(formalRowByCore[store]?.cashTargetStatus || "") === "VALID"))
-            : new Set(Object.entries(targetResult.map || {}).filter(([, value]) => Number(value?.cashTarget || 0) > 0).map(([key]) => key));
+            ? new Set([...expected].filter((store) => isValidNumericStatus(String(formalRowByCore[store]?.cashTargetStatus || ""))))
+            : new Set(Object.entries(targetResult.map || {}).filter(([, value]) => isConfiguredAutoBaseTargetValue(value?.cashTarget)).map(([key]) => key));
         const missingReportStores = [...expected].filter((store) => !reported.has(store));
         const missingTargetStores = [...expected].filter((store) => !targeted.has(store));
         const unexpectedReportStores = [...reported].filter((store) => !formalStores.has(store) && !auditExclusions.storeSet.has(store));
@@ -8423,7 +8461,13 @@ function formatTelegramAgentActiveAlertMessage(result, ctx, todayStr, brandProfi
     const rate = summary?.dataStatus === "PRE_SYSTEM_SKIP"
         ? "正式系統使用前月份，不計算"
         : summary?.cashAchievementRate === null || summary?.cashAchievementRate === undefined
-            ? (summary?.cashAchievementStatus === "TARGET_INCOMPLETE" ? "現金目標資料不足，無法計算" : "現金實績資料不足，無法計算")
+            ? (
+                summary?.cashAchievementStatus === "TARGET_INCOMPLETE"
+                    ? "現金目標資料不足，無法計算"
+                    : summary?.cashAchievementStatus === "N_A"
+                        ? "N/A（目標為 0）"
+                        : "現金實績資料不足，無法計算"
+            )
             : `${summary.cashAchievementRate}%`;
     const activeStoreCount = Number(summary?.activeStoreCount || 0);
     const excludedStoreCount = Number(summary?.excludedStoreCount || 0);
@@ -8449,7 +8493,13 @@ function formatTelegramAgentActiveAlertMessage(result, ctx, todayStr, brandProfi
         rows.slice(0, limit).forEach((row, index) => {
             const icon = row.severity === "critical" ? "🔴" : "🟠";
             const storeRate = row.cashAchievementRate === null
-                ? (row.cashTargetStatus !== "VALID" ? "現金目標資料不足" : "現金實績資料不足")
+                ? (
+                    row.cashAchievementStatus === "N_A"
+                        ? "N/A（目標為 0）"
+                        : !isValidNumericStatus(String(row.cashTargetStatus || ""))
+                            ? "現金目標資料不足"
+                            : "現金實績資料不足"
+                )
                 : `${row.cashAchievementRate}%`;
             lines.push(`${index + 1}. ${icon} ${row.storeName}店｜現金達成 ${storeRate}`);
             if (row.actingManager) lines.push(`   目前代理：${row.actingManager}｜正式主管：${row.manager || "未分配"}`);
@@ -10443,25 +10493,57 @@ function getAutoTargetComparableTime(value = {}) {
   return Number.isFinite(ms) ? ms : 0;
 }
 
+function readAutoTargetAlias(value = {}, keys = []) {
+  for (const key of keys) {
+    if (!value || !Object.prototype.hasOwnProperty.call(value, key)) continue;
+    const raw = value[key];
+    if (raw === null || raw === undefined || raw === "") continue;
+    return { found: true, value: raw };
+  }
+  return { found: false, value: null };
+}
+
+function isConfiguredAutoBaseTargetValue(value) {
+  if (value === null || value === undefined || value === "") return false;
+  const number = Number(value);
+  return Number.isFinite(number) && number >= 0;
+}
+
 function isAutoTargetEffective(target = {}) {
-  return Number(target?.cashTarget || 0) > 0 || Number(target?.accrualTarget || 0) > 0;
+  if (target?.authorityConflict === true || target?.status === "AUTHORITY_CONFLICT") return false;
+  return isConfiguredAutoBaseTargetValue(target?.cashTarget)
+    || isConfiguredAutoBaseTargetValue(target?.accrualTarget);
 }
 
 function isAutoTargetCanonicalSource(target = {}, storeCore = "") {
+  if (target?.authorityConflict === true || target?.isCanonicalSource === true) return true;
+
+  const sourceDocId = String(target?.sourceDocId || target?.id || "")
+    .trim()
+    .replace(/[　\s]+/g, "");
+  const canonicalTargetId = String(target?.canonicalTargetId || "")
+    .trim()
+    .replace(/[　\s]+/g, "");
+
+  if (canonicalTargetId && sourceDocId) return sourceDocId === canonicalTargetId;
+
   const core = normalizeSummaryCoreName(storeCore || target?.storeName || "");
   if (!core) return false;
+
+  const expectedSuffix = core === "新店" ? "新店店" : `${core}店`;
+  const canonicalStoreNames = new Set([
+    `CYJ${expectedSuffix}`,
+    `安妞${expectedSuffix}`,
+    `伊啵${expectedSuffix}`,
+  ]);
+
+  const sourceBase = sourceDocId.replace(/[_-]20\d{2}[_-]\d{1,2}$/, "");
+  if (sourceBase) return canonicalStoreNames.has(sourceBase);
+
   const rawStore = String(target?.storeName || "")
     .trim()
     .replace(/[　\s]+/g, "");
-  let sourceBase = String(target?.sourceDocId || target?.id || "")
-    .trim()
-    .replace(/[　\s]+/g, "")
-    .replace(/[_-]20\d{2}[_-]\d{1,2}$/, "");
-  const stripPrefix = (value) => String(value || "")
-    .replace(/^(CYJ|DRCYJ|Anew安妞|Yibo伊啵|Anew|Yibo|安妞|伊啵)/i, "")
-    .trim();
-  const expectedSuffix = core === "新店" ? "新店店" : `${core}店`;
-  return [rawStore, sourceBase].filter(Boolean).some((value) => stripPrefix(value) === expectedSuffix);
+  return canonicalStoreNames.has(rawStore);
 }
 
 // 目標資料可能因歷史命名差異出現同一門市多份文件。
@@ -10471,6 +10553,18 @@ function choosePreferredAutoTarget(currentTarget = null, nextTarget = null, stor
   if (!currentTarget) return nextTarget || null;
   if (!nextTarget) return currentTarget;
 
+  const currentCanonical = isAutoTargetCanonicalSource(currentTarget, storeCore);
+  const nextCanonical = isAutoTargetCanonicalSource(nextTarget, storeCore);
+  const conflict = resolveTargetAuthorityConflict(currentTarget, nextTarget, {
+    currentAuthoritative: currentCanonical,
+    incomingAuthoritative: nextCanonical,
+    storeName: storeCore,
+    canonicalTargetId: currentTarget?.canonicalTargetId || nextTarget?.canonicalTargetId || "",
+  });
+  if (conflict) return conflict;
+
+  if (currentCanonical !== nextCanonical) return nextCanonical ? nextTarget : currentTarget;
+
   const currentEffective = isAutoTargetEffective(currentTarget);
   const nextEffective = isAutoTargetEffective(nextTarget);
   if (currentEffective !== nextEffective) return nextEffective ? nextTarget : currentTarget;
@@ -10478,10 +10572,6 @@ function choosePreferredAutoTarget(currentTarget = null, nextTarget = null, stor
   const currentTime = Number(currentTarget?.updatedAtMs || 0);
   const nextTime = Number(nextTarget?.updatedAtMs || 0);
   if (currentTime !== nextTime) return nextTime > currentTime ? nextTarget : currentTarget;
-
-  const currentCanonical = isAutoTargetCanonicalSource(currentTarget, storeCore);
-  const nextCanonical = isAutoTargetCanonicalSource(nextTarget, storeCore);
-  if (currentCanonical !== nextCanonical) return nextCanonical ? nextTarget : currentTarget;
 
   return String(nextTarget?.sourceDocId || nextTarget?.id || "").localeCompare(
     String(currentTarget?.sourceDocId || currentTarget?.id || ""),
@@ -10506,16 +10596,29 @@ function buildAutoTargetRow(id, value = {}, yearMonth = "") {
   const storeCore = extractAutoTargetStore(id, value, yearMonth);
   if (!storeCore || !hasOwnTargetField(value)) return null;
   const updatedAtMs = getAutoTargetComparableTime(value);
+  const authorityConflict = value?.authorityConflict === true || String(value?.status || "") === "AUTHORITY_CONFLICT";
+  const cashTarget = readAutoTargetAlias(value, ["cashTarget", "cash", "budget", "target", "targetCash", "cashBudget"]);
+  const accrualTarget = readAutoTargetAlias(value, ["accrualTarget", "accrual", "accrualBudget", "targetAccrual"]);
+  const challengeCashTarget = readAutoTargetAlias(value, ["challengeCashTarget", "challengeCash", "challengeTarget"]);
+  const challengeAccrualTarget = readAutoTargetAlias(value, ["challengeAccrualTarget", "challengeAccrual"]);
   return {
     storeCore,
     target: {
       id: value.id || id,
-      sourceDocId: id,
+      sourceDocId: value.sourceDocId || id,
       storeName: value.storeName || value.store || value.name || storeCore,
-      cashTarget: Number(value.cashTarget || value.cash || value.budget || value.target || value.targetCash || value.cashBudget || 0),
-      accrualTarget: Number(value.accrualTarget || value.accrual || value.accrualBudget || value.targetAccrual || 0),
-      challengeCashTarget: Number(value.challengeCashTarget || value.challengeCash || value.challengeTarget || 0),
-      challengeAccrualTarget: Number(value.challengeAccrualTarget || value.challengeAccrual || 0),
+      cashTarget: authorityConflict ? null : (cashTarget.found ? cashTarget.value : null),
+      accrualTarget: authorityConflict ? null : (accrualTarget.found ? accrualTarget.value : null),
+      challengeCashTarget: authorityConflict ? null : (challengeCashTarget.found ? challengeCashTarget.value : null),
+      challengeAccrualTarget: authorityConflict ? null : (challengeAccrualTarget.found ? challengeAccrualTarget.value : null),
+      canonicalTargetId: String(value.canonicalTargetId || ""),
+      isCanonicalSource: authorityConflict ? true : value.isCanonicalSource === true,
+      authorityConflict,
+      authorityStatus: authorityConflict ? "AUTHORITY_CONFLICT" : String(value.authorityStatus || ""),
+      status: authorityConflict ? "AUTHORITY_CONFLICT" : String(value.status || ""),
+      conflictSourceDocIds: authorityConflict && Array.isArray(value.conflictSourceDocIds)
+        ? [...value.conflictSourceDocIds].map((entry) => String(entry || "").trim()).filter(Boolean)
+        : [],
       updatedAtText: value.updatedAtText || value.updatedAt || value.modifiedAtText || value.modifiedAt || value.createdAtText || value.createdAt || "",
       updatedAtMs,
     },

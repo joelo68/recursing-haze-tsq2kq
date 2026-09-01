@@ -291,13 +291,13 @@ const buildStoreFormalKpiMetadata = (metrics = {}, target = {}) => {
     formalCashTarget: cashTarget.valid ? cashTarget.value : null,
     formalCashTargetStatus: cashTarget.status,
     formalCashAchievement: cashRatio?.valid ? cashRatio.value * 100 : null,
-    formalCashAchievementStatus: cashRatio?.valid
+    formalCashAchievementStatus: cashRatio
       ? cashRatio.status
       : (cashTarget.valid ? (metrics?.formalNetCashStatus || KPI_VALUE_STATUS.DATA_INVALID) : cashTarget.status),
     formalAccrualTarget: accrualTarget.valid ? accrualTarget.value : null,
     formalAccrualTargetStatus: accrualTarget.status,
     formalAccrualAchievement: accrualRatio?.valid ? accrualRatio.value * 100 : null,
-    formalAccrualAchievementStatus: accrualRatio?.valid
+    formalAccrualAchievementStatus: accrualRatio
       ? accrualRatio.status
       : (accrualTarget.valid ? (metrics?.formalAccrualStatus || KPI_VALUE_STATUS.DATA_INVALID) : accrualTarget.status),
     formalRankEligible: Boolean(cashTarget.valid && cashRatio?.valid),

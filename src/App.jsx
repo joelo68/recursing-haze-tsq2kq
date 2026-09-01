@@ -20,7 +20,7 @@ import {
 
 import { ROLES, ALL_MENU_ITEMS, DEFAULT_REGIONAL_MANAGERS, DEFAULT_PERMISSIONS } from "./constants/index";
 import { generateUUID, formatLocalYYYYMMDD, toStandardDateFormat, formatNumber, parseNumber, normalizeManagerOrder } from "./utils/helpers";
-import { validBaseTarget } from "./utils/kpiContracts";
+import { validPositiveSetting } from "./utils/kpiContracts";
 import { resolveHistoricalDashboardReadPolicy } from "./utils/dashboardReadPolicy";
 import { buildAnnualAggregateYearMonthCandidates, normalizeAnnualYearMonth, resolveAnnualReadPlan } from "./utils/annualReadPolicy";
 import { isFormalReportSummaryPairCompatible } from "./utils/reportFormalConsumer";
@@ -2422,7 +2422,7 @@ export default function App() {
       (kpiSnap) => {
         trackReadSource("kpi_targets_live", kpiSnap.exists() ? 1 : 0, getStableReadMeta("kpi_targets_live"));
         const data = kpiSnap.exists() ? kpiSnap.data() : {};
-        const newAspResult = validBaseTarget(data.newASP);
+        const newAspResult = validPositiveSetting(data.newASP);
         setTargets({
           ...data,
           newASP: newAspResult.valid ? newAspResult.value : null,

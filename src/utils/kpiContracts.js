@@ -121,6 +121,25 @@ export const formalAccrual = (brandId, accrual, operationalAccrual) => {
 
 export const validBaseTarget = (value) => {
   const result = normalizeNumericInput(value);
+  if (result.status === KPI_VALUE_STATUS.FIELD_MISSING) {
+    return { status: KPI_VALUE_STATUS.TARGET_NOT_SET, valid: false, value: null };
+  }
+  if (result.status === KPI_VALUE_STATUS.DATA_INVALID || result.value < 0) {
+    return { status: KPI_VALUE_STATUS.DATA_INVALID, valid: false, value: null };
+  }
+  return {
+    status: result.status === KPI_VALUE_STATUS.VALID_ZERO
+      ? KPI_VALUE_STATUS.VALID_ZERO
+      : KPI_VALUE_STATUS.VALID,
+    valid: true,
+    value: result.value,
+  };
+};
+
+// Non-monthly settings (for example newASP) remain positive-only.
+// This intentionally preserves the pre-5E setting semantics while monthly base target 0 becomes valid.
+export const validPositiveSetting = (value) => {
+  const result = normalizeNumericInput(value);
   if (result.status === KPI_VALUE_STATUS.FIELD_MISSING || result.status === KPI_VALUE_STATUS.VALID_ZERO) {
     return { status: KPI_VALUE_STATUS.TARGET_NOT_SET, valid: false, value: null };
   }

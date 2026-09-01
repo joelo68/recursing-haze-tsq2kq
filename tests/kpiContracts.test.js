@@ -49,10 +49,17 @@ for (const [label, api] of implementations) {
     assert.equal(api.formalAccrual("unknown", 900, 700).status, api.KPI_VALUE_STATUS.DATA_INVALID);
   });
 
-  test(`${label}: base target treats blank/missing/zero as target not set`, () => {
-    for (const value of ["", null, undefined, 0, "0"]) {
+  test(`${label}: base target distinguishes missing from explicit configured zero`, () => {
+    for (const value of ["", null, undefined]) {
       assert.equal(api.validBaseTarget(value).status, api.KPI_VALUE_STATUS.TARGET_NOT_SET);
       assert.equal(api.validBaseTarget(value).valid, false);
+    }
+    for (const value of [0, "0"]) {
+      assert.deepEqual(api.validBaseTarget(value), {
+        status: api.KPI_VALUE_STATUS.VALID_ZERO,
+        valid: true,
+        value: 0,
+      });
     }
     assert.deepEqual(api.validBaseTarget("800,000"), {
       status: api.KPI_VALUE_STATUS.VALID,
@@ -65,7 +72,12 @@ for (const [label, api] of implementations) {
   test(`${label}: challenge target is optional but must be greater than a valid base target`, () => {
     assert.equal(api.validChallengeTarget(100, "").status, api.KPI_VALUE_STATUS.CHALLENGE_NOT_SET);
     assert.equal(api.validChallengeTarget(100, 0).status, api.KPI_VALUE_STATUS.CHALLENGE_NOT_SET);
-    assert.equal(api.validChallengeTarget(0, 120).status, api.KPI_VALUE_STATUS.DATA_INVALID);
+    assert.deepEqual(api.validChallengeTarget(0, 120), {
+      status: api.KPI_VALUE_STATUS.VALID,
+      valid: true,
+      configured: true,
+      value: 120,
+    });
     assert.equal(api.validChallengeTarget(100, 100).status, api.KPI_VALUE_STATUS.DATA_INVALID);
     assert.equal(api.validChallengeTarget(100, 99).status, api.KPI_VALUE_STATUS.DATA_INVALID);
     assert.deepEqual(api.validChallengeTarget(100, 120), {
@@ -86,6 +98,19 @@ for (const [label, api] of implementations) {
     assert.equal(api.validRatio(10, -2).value, -5);
     assert.equal(api.validRatio(10, -2, { requirePositiveDenominator: true }).status, api.KPI_VALUE_STATUS.N_A);
     assert.equal(api.validRatio("", 100).status, api.KPI_VALUE_STATUS.FIELD_MISSING);
+  });
+
+  test(`${label}: positive-only setting keeps zero unset for newASP semantics`, () => {
+    assert.equal(api.validPositiveSetting("").status, api.KPI_VALUE_STATUS.TARGET_NOT_SET);
+    assert.equal(api.validPositiveSetting(null).status, api.KPI_VALUE_STATUS.TARGET_NOT_SET);
+    assert.equal(api.validPositiveSetting(0).status, api.KPI_VALUE_STATUS.TARGET_NOT_SET);
+    assert.equal(api.validPositiveSetting("0").status, api.KPI_VALUE_STATUS.TARGET_NOT_SET);
+    assert.deepEqual(api.validPositiveSetting(3500), {
+      status: api.KPI_VALUE_STATUS.VALID,
+      valid: true,
+      value: 3500,
+    });
+    assert.equal(api.validPositiveSetting(-1).status, api.KPI_VALUE_STATUS.DATA_INVALID);
   });
 
   test(`${label}: Store Health benchmark requires finite positive min and max > min`, () => {
@@ -117,6 +142,8 @@ test("frontend and backend canonical KPI contracts stay behaviorally identical",
     ["formalAccrual", ["yibo", 600, 350]],
     ["validBaseTarget", [0]],
     ["validBaseTarget", [800000]],
+    ["validPositiveSetting", [0]],
+    ["validPositiveSetting", [3500]],
     ["validChallengeTarget", [800000, 900000]],
     ["validRatio", [0, 100]],
     ["validRatio", [10, 0]],

@@ -17,7 +17,7 @@ import { AppContext } from "../AppContext";
 import { ViewWrapper, Card } from "./SharedUI";
 import { DEFAULT_PERMISSIONS, ALL_MENU_ITEMS } from "../constants/index";
 import { generateUUID, normalizeManagerOrder, sortManagersByOrgOrder, sortStoresByOrgOrder } from "../utils/helpers";
-import { KPI_VALUE_STATUS, validBaseTarget, validateStoreHealthBenchmark } from "../utils/kpiContracts";
+import { KPI_VALUE_STATUS, validPositiveSetting, validateStoreHealthBenchmark } from "../utils/kpiContracts";
 import {
   DEFAULT_DELEGATION_PERMISSIONS,
   DELEGATION_PERMISSION_LABELS,
@@ -247,7 +247,7 @@ const SettingsView = () => {
   useEffect(() => { if (permissions) setLocalPermissions(permissions); }, [permissions]);
   useEffect(() => { 
     if (targets) {
-      const newAspResult = validBaseTarget(targets?.newASP);
+      const newAspResult = validPositiveSetting(targets?.newASP);
       setLocalTargets(prev => ({
         ...prev,
         ...targets,
@@ -627,7 +627,7 @@ const SettingsView = () => {
 
   const handleSaveTargets = async () => {
     try {
-      const newAspResult = validBaseTarget(localTargets?.newASP);
+      const newAspResult = validPositiveSetting(localTargets?.newASP);
       if (newAspResult.status === KPI_VALUE_STATUS.DATA_INVALID) {
         showToast("目標新客客單必須是大於 0 的有效數字；若不設定請留白", "error");
         return;

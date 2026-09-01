@@ -268,7 +268,8 @@ formalAccrual
   安妞       → operationalAccrual
 
 VALID_ZERO != FIELD_MISSING != DATA_INVALID
-base target: blank / null / 0 => TARGET_NOT_SET
+base target: blank / null / missing => TARGET_NOT_SET
+base target: explicit 0 => VALID_ZERO / configured
 ratio denominator = 0 => N/A
 ```
 
@@ -277,7 +278,7 @@ ratio denominator = 0 => N/A
 - `src/utils/kpiContracts.js` 與 `functions/kpiContracts.js` 都是 pure module，不直接讀寫 Firestore。
 - Root Frontend 為 ESM、`functions/` 為 Node 22 CommonJS，因此目前採「雙端 mirror + parity regression」，避免為了共用單一 runtime module 改變既有 module boundary。
 - `src/utils/helpers.js` 的 `parseNumber()` 仍是一般 UI / 輸入 parsing 工具；它會把空值轉為 `0`，**不得**被當成 formal target validity authority。
-- Dashboard、Summary Writer、Ranking、Annual、Telegram 等 consumer 在各自 Batch 切換前，現有 runtime 公式仍可能與 formal contract 不一致；不得把「contract 已建立」誤寫成「全系統已完成 KPI migration」。
+- Batch 5E-1B 已把 zero-target contract 延伸到 Summary / Current Detail / Dashboard / Report / Annual / Store Analysis / StorePerformance / Telegram 等本批 owners；其他未列入本批的 KPI domain 仍不得自行推導不同 target semantics。
 
 Batch 2 建立 contract 本身：
 
@@ -2383,3 +2384,46 @@ intentional configured 0 = VALID_ZERO
 ```
 
 Do not implement the second rule page-by-page.
+
+## 5.5 Batch 5E-1B Target Authority Owners
+
+Frontend：
+
+```text
+src/utils/kpiContracts.js
+src/utils/targetAuthorityConflict.js
+src/utils/dashboardFormalConsumer.js
+src/utils/currentDetailFormalConsumer.js
+src/utils/reportFormalConsumer.js
+src/utils/storeAnalysisTargetAuthority.js
+src/components/AnnualView.jsx
+src/components/StorePerformanceView.jsx
+```
+
+Backend：
+
+```text
+functions/kpiContracts.js
+functions/targetAuthorityConflict.js
+functions/targetCoverage.js
+functions/summarySemantics.js
+functions/telegram/formalKpi.js
+functions/index.js
+```
+
+Authority contract：
+
+```text
+canonical source > legacy alias
+explicit base target 0 = VALID_ZERO
+canonical-equivalent disagreement = AUTHORITY_CONFLICT
+```
+
+`targetAuthorityConflict` 為 FE ESM / Backend CommonJS mirror pure modules，
+由 parity regression 保護；不直接讀寫 Firestore。
+
+`AUTHORITY_CONFLICT` 必須 terminal fail closed，不得由 consumer、updatedAt 或 fallback
+自行恢復 target denominator。
+
+Batch 5E-1B 沒有新增 Firestore listener/query/read primitive/polling，
+沒有 Rules、physical path 或 brand topology 變更。

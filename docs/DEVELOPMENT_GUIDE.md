@@ -243,12 +243,16 @@ Lifecycle monthly cohort
 必須使用 canonical KPI target validity：
 
 ```text
-blank / missing / 0 base target
+blank / missing / null base target
 → TARGET_NOT_SET
-→ raw monthly_targets 不保留 numeric 0 欄位
+→ raw monthly_targets 不保留該欄位
 
-valid base target
-→ > 0
+explicit numeric 0 base target
+→ VALID_ZERO / configured
+→ raw monthly_targets 必須保留 numeric 0
+
+positive base target
+→ VALID / configured
 
 challenge blank / 0
 → CHALLENGE_NOT_SET
@@ -266,6 +270,30 @@ parseNumber("") === 0
 來判斷「目標已設定」。`parseNumber()` 仍只是一個一般 UI parsing helper。
 
 TargetView 只寫有實際異動的月份，不應在按一次「儲存」時重寫未修改 12 個月份。
+
+## Batch 5E-1B authority rules
+
+Target validity 與 Identity authority 必須分開：
+
+```text
+base 0                 = VALID_ZERO / configured
+base missing           = TARGET_NOT_SET
+challenge 0            = CHALLENGE_NOT_SET
+newASP 0               = invalid / unset
+canonical > legacy
+canonical-equivalent disagreement = AUTHORITY_CONFLICT
+```
+
+`AUTHORITY_CONFLICT` 不得用 score、updatedAt、document id 或 page-level fallback 決定勝負。
+Shared FE/BE authority helper 必須維持 parity regression，conflict target denominator 必須 fail closed。
+
+zero-target denominator：
+
+```text
+achievement = N_A
+ranking eligible = false
+progress-gap eligible = false
+```
 
 ## Derived Target Summary rules
 
@@ -298,8 +326,9 @@ Challenge aggregate 必須逐 eligible store 處理：合法 challenge 優先，
 Batch 3 不批次修歷史 Raw。Derived `targetAudit` 只報告：
 
 ```text
-base target = 0
-invalid base target
+base target = 0（VALID_ZERO informational；不是 issue）
+invalid / negative base target
+canonical-equivalent authority conflict
 challenge without valid base
 challenge <= base
 ```

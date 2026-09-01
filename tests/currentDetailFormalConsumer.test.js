@@ -4,7 +4,7 @@ import {
   buildCurrentDetailFormalAuthority,
   buildCurrentDetailFormalScope,
 } from "../src/utils/currentDetailFormalConsumer.js";
-import { KPI_CONTRACT_VERSION, KPI_VALUE_STATUS } from "../src/utils/kpiContracts.js";
+import { KPI_CONTRACT_VERSION, KPI_VALUE_STATUS, validBaseTarget } from "../src/utils/kpiContracts.js";
 
 const normalizeStoreKey = (value = "") => String(value || "")
   .trim()
@@ -30,8 +30,8 @@ const lifecycleEntry = (overrides = {}) => ({
 
 const makeTargetSummary = ({ brandId = "cyj", rows = {}, cashMissing = [], accrualMissing = [] } = {}) => {
   const eligibleStoreCount = Object.keys(rows).length;
-  const cashConfiguredStoreCount = Object.values(rows).filter((row) => Number(row.cashTarget) > 0).length;
-  const accrualConfiguredStoreCount = Object.values(rows).filter((row) => Number(row.accrualTarget) > 0).length;
+  const cashConfiguredStoreCount = Object.values(rows).filter((row) => validBaseTarget(row.cashTarget).valid).length;
+  const accrualConfiguredStoreCount = Object.values(rows).filter((row) => validBaseTarget(row.accrualTarget).valid).length;
   return {
     id: "2026-08",
     yearMonth: "2026-08",
@@ -219,4 +219,58 @@ test("cross-brand or non-READY Lifecycle authority fails closed", () => {
     normalizeStoreKey,
   });
   assert.equal(building.compatible, false);
+});
+
+test("5E-1B current detail keeps configured zero target and returns denominator N_A without ranking", () => {
+  const master = makeMaster("cyj", { A: lifecycleEntry() });
+  const targetSummary = makeTargetSummary({
+    rows: { A: { cashTarget: 0, accrualTarget: 0 } },
+  });
+  const authority = buildCurrentDetailFormalAuthority({
+    brandId: "cyj",
+    yearMonth: "2026-08",
+    lifecycleMaster: master,
+    monthlyTargetSummary: targetSummary,
+    cutoffDate: "2026-08-01",
+    normalizeStoreKey,
+    reports: [{
+      storeName: "CYJA店",
+      date: "2026-08-01",
+      cash: 100,
+      refund: 0,
+      skincareRefund: 0,
+      accrual: 100,
+      operationalAccrual: 100,
+    }],
+  });
+
+  assert.equal(authority.compatible, true);
+  assert.equal(authority.targetAuthority.coverageConsistent, true);
+
+  const store = authority.stores.A;
+  assert.equal(store.cashTarget, 0);
+  assert.equal(store.cashTargetStatus, KPI_VALUE_STATUS.VALID_ZERO);
+  assert.equal(store.cashAchievement, null);
+  assert.equal(store.cashAchievementStatus, KPI_VALUE_STATUS.N_A);
+  assert.equal(store.accrualTarget, 0);
+  assert.equal(store.accrualTargetStatus, KPI_VALUE_STATUS.VALID_ZERO);
+  assert.equal(store.accrualAchievement, null);
+  assert.equal(store.accrualAchievementStatus, KPI_VALUE_STATUS.N_A);
+  assert.equal(store.formalRankEligible, false);
+
+  const scope = buildCurrentDetailFormalScope({
+    authority,
+    storeKeys: ["A"],
+    normalizeStoreKey,
+  });
+  assert.equal(scope.cashTarget, 0);
+  assert.equal(scope.cashTargetStatus, KPI_VALUE_STATUS.VALID_ZERO);
+  assert.equal(scope.cashAchievement, null);
+  assert.equal(scope.cashAchievementStatus, KPI_VALUE_STATUS.N_A);
+  assert.equal(scope.accrualTarget, 0);
+  assert.equal(scope.accrualTargetStatus, KPI_VALUE_STATUS.VALID_ZERO);
+  assert.equal(scope.accrualAchievement, null);
+  assert.equal(scope.accrualAchievementStatus, KPI_VALUE_STATUS.N_A);
+  assert.equal(scope.cashCoverageComplete, true);
+  assert.equal(scope.accrualCoverageComplete, true);
 });

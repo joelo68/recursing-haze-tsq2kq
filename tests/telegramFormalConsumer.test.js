@@ -226,7 +226,13 @@ test("5C-2 Active Alert runtime resolves Formal status helper through index impo
 
   const alertsStart = indexSource.indexOf("async function getOperationalAlerts");
   const alertsEnd = indexSource.indexOf("async function getDataHealth", alertsStart);
-  const runtimeSource = `${indexSource.slice(formalImportStart, formalImportEnd)}\n${indexSource.slice(alertsStart, alertsEnd)}\ngetOperationalAlerts;`;
+  const configuredTargetHelperStart = indexSource.indexOf("function isConfiguredAutoBaseTargetValue");
+  const configuredTargetHelperEnd = indexSource.indexOf("function isAutoTargetEffective", configuredTargetHelperStart);
+  assert.ok(
+    configuredTargetHelperStart >= 0 && configuredTargetHelperEnd > configuredTargetHelperStart,
+    "isConfiguredAutoBaseTargetValue helper must be extractable from functions/index.js",
+  );
+  const runtimeSource = `${indexSource.slice(formalImportStart, formalImportEnd)}\n${indexSource.slice(configuredTargetHelperStart, configuredTargetHelperEnd)}\n${indexSource.slice(alertsStart, alertsEnd)}\ngetOperationalAlerts;`;
 
   const disabledRule = { enabled: false, threshold: 0, criticalThreshold: 0, watchThreshold: 0, minSample: 0, severity: "watch" };
   const rules = {
@@ -312,7 +318,7 @@ test("5C-2 Active Alert consumes Formal KPI and preserves policy scope", () => {
   assert.match(alertsSource, /getTelegramPolicyExcludedStoreSet\(ctx, brandId, \["active_alert"\]\)/);
   assert.match(alertsSource, /loaded\.preSystem === true/);
   assert.match(alertsSource, /dataStatus: "PRE_SYSTEM_SKIP"/);
-  assert.match(alertsSource, /cashTargetStatus === "VALID"/);
+  assert.match(alertsSource, /isValidNumericStatus\(cashTargetStatus\)/);
   assert.match(alertsSource, /isValidNumericStatus\(cashStatus\)/);
   assert.match(alertsSource, /isValidNumericStatus\(cashAchievementStatus\)/);
   assert.match(alertsSource, /formalKpiMode: true/);
@@ -328,7 +334,7 @@ test("5C-2 Active Alert fails closed instead of shrinking brand denominator", ()
   assert.match(alertsSource, /const targetComplete = activeStoreCores\.length > 0 && targetedStoreCount >= activeStoreCores\.length/);
   assert.match(alertsSource, /const brandCash = reportComplete \? brandCashSum : null/);
   assert.match(alertsSource, /const brandBudget = targetComplete \? brandBudgetSum : null/);
-  assert.match(alertsSource, /!targetComplete \? "TARGET_INCOMPLETE" : "DATA_INCOMPLETE"/);
+  assert.match(alertsSource, /brandBudget === 0[\s\S]*\? "N_A"/);
   assert.doesNotMatch(alertsSource, /const budget = Number\(row\?\.budget \|\| target\.cashTarget \|\| 0\)/);
 });
 
@@ -348,7 +354,8 @@ test("5C-2 Active Alert presentation distinguishes target vs actual incompletene
   const formatterSource = indexSource.slice(formatterStart, formatterEnd);
   assert.match(formatterSource, /summary\?\.dataStatus === "PRE_SYSTEM_SKIP"/);
   assert.match(formatterSource, /summary\?\.cashAchievementStatus === "TARGET_INCOMPLETE"/);
-  assert.match(formatterSource, /row\.cashTargetStatus !== "VALID" \? "現金目標資料不足" : "現金實績資料不足"/);
+  assert.match(formatterSource, /row\.cashAchievementStatus === "N_A"/);
+  assert.match(formatterSource, /!isValidNumericStatus\(String\(row\.cashTargetStatus \|\| ""\)\)/);
 });
 
 test("trusted historical analytical path does not invoke target repair", () => {
@@ -363,4 +370,147 @@ test("Telegram prompts describe Formal cash and Anniu formal accrual", () => {
   assert.match(promptSource, /安妞取 operationalAccrual/);
   assert.match(promptSource, /PRE_SYSTEM_SKIP/);
   assert.doesNotMatch(promptSource, /安妞 operationalAccrual 只是操作權責子項/);
+});
+
+test("5E-1B Telegram raw explicit zero target is configured VALID_ZERO with N_A achievement", () => {
+  const result = buildTelegramFormalRawMetrics("cyj", {
+    grossCash: 1000,
+    refund: 0,
+    skincareRefund: 0,
+    accrual: 1000,
+    operationalAccrual: 0,
+  }, { cashTarget: 0, accrualTarget: 0 });
+
+  assert.equal(result.budget, 0);
+  assert.equal(result.cashTargetStatus, "VALID_ZERO");
+  assert.equal(result.achievement, null);
+  assert.equal(result.cashAchievementStatus, "N_A");
+  assert.equal(result.accrualBudget, 0);
+  assert.equal(result.accrualTargetStatus, "VALID_ZERO");
+  assert.equal(result.accrualAchievement, null);
+  assert.equal(result.accrualAchievementStatus, "N_A");
+});
+
+test("5E-1B Telegram persisted Formal zero target remains configured and non-rankable", () => {
+  const result = buildTelegramFormalSummaryMetrics({
+    formalNetCash: 1000,
+    formalNetCashStatus: "VALID",
+    formalAccrual: 1000,
+    formalAccrualStatus: "VALID",
+    formalCashTarget: 0,
+    formalCashTargetStatus: "VALID_ZERO",
+    formalCashAchievement: null,
+    formalCashAchievementStatus: "N_A",
+    formalAccrualTarget: 0,
+    formalAccrualTargetStatus: "VALID_ZERO",
+    formalAccrualAchievement: null,
+    formalAccrualAchievementStatus: "N_A",
+    formalLifecycleEligible: true,
+    formalRankEligible: false,
+  });
+
+  assert.equal(result.budget, 0);
+  assert.equal(result.cashTargetStatus, "VALID_ZERO");
+  assert.equal(result.achievement, null);
+  assert.equal(result.cashAchievementStatus, "N_A");
+  assert.equal(result.rankingEligible, false);
+});
+
+test("5E-1B Telegram aggregate all-zero targets remain complete with N_A achievement", () => {
+  const rows = [
+    { formalKpiMode: "historical_summary", cash: 100, cashStatus: "VALID", accrual: 90, accrualStatus: "VALID", budget: 0, cashTargetStatus: "VALID_ZERO", accrualBudget: 0, accrualTargetStatus: "VALID_ZERO" },
+    { formalKpiMode: "historical_summary", cash: 50, cashStatus: "VALID", accrual: 40, accrualStatus: "VALID", budget: 0, cashTargetStatus: "VALID_ZERO", accrualBudget: 0, accrualTargetStatus: "VALID_ZERO" },
+  ];
+  const result = aggregateTelegramFormalRows(rows);
+  assert.equal(result.budget, 0);
+  assert.equal(result.cashTargetStatus, "VALID_ZERO");
+  assert.equal(result.achievement, null);
+  assert.equal(result.cashAchievementStatus, "N_A");
+});
+
+test("5E-1B Telegram target loader is canonical-first and treats explicit zero as configured", () => {
+  assert.match(indexSource, /function isConfiguredAutoBaseTargetValue/);
+  const chooserStart = indexSource.indexOf("function choosePreferredAutoTarget");
+  const chooserEnd = indexSource.indexOf("function mergeAutoTargetMapEntry", chooserStart);
+  const chooser = indexSource.slice(chooserStart, chooserEnd);
+  assert.ok(chooser.indexOf("currentCanonical") < chooser.indexOf("currentEffective"));
+
+  const loaderStart = indexSource.indexOf("function buildAutoTargetRow");
+  const loaderEnd = indexSource.indexOf("function extractAutoTargetMapFromSummaryData", loaderStart);
+  const loader = indexSource.slice(loaderStart, loaderEnd);
+  assert.match(loader, /readAutoTargetAlias\(value, \["cashTarget", "cash", "budget"/);
+  assert.doesNotMatch(loader, /Number\(value\.cashTarget \|\|/);
+
+  const mergeStart = indexSource.indexOf("function mergeTelegramAgentTargetMaps");
+  const mergeEnd = indexSource.indexOf("function getTelegramAgentMissingCashTargetStores", mergeStart);
+  const mergeSource = indexSource.slice(mergeStart, mergeEnd);
+  assert.match(mergeSource, /currentCanonical !== nextCanonical/);
+  assert.doesNotMatch(mergeSource, /Number\(next\.cashTarget \|\| 0\) > 0/);
+
+  const missingStart = indexSource.indexOf("function getTelegramAgentMissingCashTargetStores");
+  const missingEnd = indexSource.indexOf("function formatTelegramAgentStoreLabel", missingStart);
+  assert.match(indexSource.slice(missingStart, missingEnd), /!isConfiguredAutoBaseTargetValue/);
+});
+
+test("5E-1B Telegram zero target does not become missing-target or progress-gap alert input", () => {
+  const alertsStart = indexSource.indexOf("async function getOperationalAlerts");
+  const alertsEnd = indexSource.indexOf("async function getDataHealth", alertsStart);
+  const alerts = indexSource.slice(alertsStart, alertsEnd);
+  assert.match(alerts, /fallbackCashTargetConfigured/);
+  assert.match(alerts, /Number\(fallbackTarget\.cashTarget\) === 0 \? "VALID_ZERO" : "VALID"/);
+  assert.match(alerts, /isValidNumericStatus\(cashTargetStatus\)/);
+  assert.match(alerts, /progressGap !== null/);
+});
+
+test("5E-1B Telegram Active Alert zero denominator is N_A in brand and store presentation", () => {
+  const alertsStart = indexSource.indexOf("async function getOperationalAlerts");
+  const alertsEnd = indexSource.indexOf("async function getDataHealth", alertsStart);
+  const alerts = indexSource.slice(alertsStart, alertsEnd);
+  assert.match(alerts, /brandBudget === 0[\s\S]*\? "N_A"/);
+  assert.match(alerts, /progressGap: brandAchievement === null \? null/);
+
+  const formatterStart = indexSource.indexOf("function formatTelegramAgentActiveAlertMessage");
+  const formatterEnd = indexSource.indexOf("async function buildTelegramActiveAlertMessages", formatterStart);
+  const formatter = indexSource.slice(formatterStart, formatterEnd);
+  assert.match(formatter, /summary\?\.cashAchievementStatus === "N_A"/);
+  assert.match(formatter, /row\.cashAchievementStatus === "N_A"/);
+  assert.match(formatter, /N\/A（目標為 0）/);
+  assert.match(formatter, /!isValidNumericStatus\(String\(row\.cashTargetStatus \|\| ""\)\)/);
+});
+
+test("5E-1B.3 Telegram target arbitration uses shared fail-closed conflict authority", () => {
+  assert.match(indexSource, /require\("\.\/targetAuthorityConflict"\)/);
+
+  const canonicalStart = indexSource.indexOf("function isAutoTargetCanonicalSource");
+  const canonicalEnd = indexSource.indexOf("function choosePreferredAutoTarget", canonicalStart);
+  const canonical = indexSource.slice(canonicalStart, canonicalEnd);
+  assert.match(canonical, /target\?\.isCanonicalSource === true/);
+  assert.match(canonical, /canonicalTargetId && sourceDocId/);
+  assert.doesNotMatch(canonical, /stripPrefix/);
+
+  const chooserStart = indexSource.indexOf("function choosePreferredAutoTarget");
+  const chooserEnd = indexSource.indexOf("function mergeAutoTargetMapEntry", chooserStart);
+  const chooser = indexSource.slice(chooserStart, chooserEnd);
+  assert.match(chooser, /resolveTargetAuthorityConflict/);
+  assert.ok(chooser.indexOf("resolveTargetAuthorityConflict") < chooser.indexOf("currentEffective"));
+
+  const loaderStart = indexSource.indexOf("function buildAutoTargetRow");
+  const loaderEnd = indexSource.indexOf("function extractAutoTargetMapFromSummaryData", loaderStart);
+  const loader = indexSource.slice(loaderStart, loaderEnd);
+  assert.match(loader, /authorityConflict/);
+  assert.match(loader, /conflictSourceDocIds/);
+
+  const mergeStart = indexSource.indexOf("function mergeTelegramAgentTargetMaps");
+  const mergeEnd = indexSource.indexOf("function getTelegramAgentMissingCashTargetStores", mergeStart);
+  const merge = indexSource.slice(mergeStart, mergeEnd);
+  assert.match(merge, /preferred\?\.authorityConflict === true/);
+
+  const missingStart = indexSource.indexOf("function getTelegramAgentMissingCashTargetStores");
+  const missingEnd = indexSource.indexOf("function formatTelegramAgentStoreLabel", missingStart);
+  const missing = indexSource.slice(missingStart, missingEnd);
+  assert.match(missing, /row\?\.authorityConflict === true/);
+
+  const rawStart = indexSource.indexOf("rawResult.rows.forEach", indexSource.indexOf("async function loadTelegramAgentTargetMap"));
+  const rawEnd = indexSource.indexOf("const mergedMap", rawStart);
+  assert.match(indexSource.slice(rawStart, rawEnd), /mergeAutoTargetMapEntry\(rawMap, built\)/);
 });

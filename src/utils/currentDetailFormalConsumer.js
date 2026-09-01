@@ -3,6 +3,7 @@ import {
   normalizeKpiBrandId,
   validBaseTarget,
   validChallengeTarget,
+  validRatio,
 } from "./kpiContracts.js";
 import {
   SUMMARY_KPI_STATUS,
@@ -127,7 +128,7 @@ const readAuxiliaryTotals = (rows = []) => (
 const buildTargetResult = (targetRow = {}, field = "cashTarget") => {
   const result = validBaseTarget(targetRow?.[field]);
   return result.valid
-    ? { value: result.value, status: KPI_VALUE_STATUS.VALID }
+    ? { value: result.value, status: result.status }
     : { value: null, status: result.status };
 };
 
@@ -137,20 +138,23 @@ const buildChallengeTargetResult = (targetRow = {}, baseField = "cashTarget", ch
   const challenge = validChallengeTarget(targetRow?.[baseField], targetRow?.[challengeField]);
   if (challenge.valid) return { value: challenge.value, status: KPI_VALUE_STATUS.VALID, configured: true };
   if (challenge.configured) return { value: null, status: challenge.status, configured: true };
-  return { value: base.value, status: KPI_VALUE_STATUS.VALID, configured: false };
+  return { value: base.value, status: base.status, configured: false };
 };
 
 const buildAchievement = ({ actual, actualStatus, target, targetStatus }) => {
   if (!isValidNumericStatus(actualStatus) || !isFiniteNumber(actual)) {
     return { value: null, status: actualStatus || CURRENT_DETAIL_KPI_STATUS.DATA_INCOMPLETE };
   }
-  if (targetStatus !== KPI_VALUE_STATUS.VALID || !isFiniteNumber(target) || target <= 0) {
+  if (!isValidNumericStatus(targetStatus) || !isFiniteNumber(target) || target < 0) {
     return { value: null, status: CURRENT_DETAIL_KPI_STATUS.TARGET_INCOMPLETE };
   }
-  const value = (actual / target) * 100;
+  const ratio = validRatio(actual, target, { requirePositiveDenominator: true });
+  if (!ratio.valid) {
+    return { value: null, status: ratio.status };
+  }
   return {
-    value,
-    status: value === 0 ? KPI_VALUE_STATUS.VALID_ZERO : KPI_VALUE_STATUS.VALID,
+    value: ratio.value * 100,
+    status: ratio.status,
   };
 };
 
@@ -175,7 +179,7 @@ const buildScopeTarget = ({ rows = [], targetAuthority = {}, targetKey = "cashTa
   if (targetAuthority?.coverageConsistent !== true || rows.length === 0) {
     return { value: null, status: CURRENT_DETAIL_KPI_STATUS.TARGET_INCOMPLETE, coverageComplete: false };
   }
-  const invalid = rows.filter((row) => row?.[targetStatusKey] !== KPI_VALUE_STATUS.VALID || !isFiniteNumber(row?.[targetKey]) || row[targetKey] <= 0);
+  const invalid = rows.filter((row) => !isValidNumericStatus(row?.[targetStatusKey]) || !isFiniteNumber(row?.[targetKey]) || row[targetKey] < 0);
   if (invalid.length > 0) {
     return {
       value: null,
@@ -185,21 +189,21 @@ const buildScopeTarget = ({ rows = [], targetAuthority = {}, targetKey = "cashTa
     };
   }
   const value = rows.reduce((sum, row) => sum + Number(row[targetKey]), 0);
-  return { value, status: KPI_VALUE_STATUS.VALID, coverageComplete: true, missingStoreKeys: [] };
+  return { value, status: value === 0 ? KPI_VALUE_STATUS.VALID_ZERO : KPI_VALUE_STATUS.VALID, coverageComplete: true, missingStoreKeys: [] };
 };
 
 const buildScopeChallengeTarget = ({ rows = [], targetAuthority = {}, targetKey, targetStatusKey }) => {
   if (targetAuthority?.coverageConsistent !== true || rows.length === 0) {
     return { value: null, status: CURRENT_DETAIL_KPI_STATUS.TARGET_INCOMPLETE, coverageComplete: false, configured: false };
   }
-  const invalid = rows.filter((row) => row?.[targetStatusKey] !== KPI_VALUE_STATUS.VALID || !isFiniteNumber(row?.[targetKey]) || row[targetKey] <= 0);
+  const invalid = rows.filter((row) => !isValidNumericStatus(row?.[targetStatusKey]) || !isFiniteNumber(row?.[targetKey]) || row[targetKey] < 0);
   if (invalid.length > 0) {
     return { value: null, status: CURRENT_DETAIL_KPI_STATUS.TARGET_INCOMPLETE, coverageComplete: false, configured: false };
   }
   const value = rows.reduce((sum, row) => sum + Number(row[targetKey]), 0);
   return {
     value,
-    status: KPI_VALUE_STATUS.VALID,
+    status: value === 0 ? KPI_VALUE_STATUS.VALID_ZERO : KPI_VALUE_STATUS.VALID,
     coverageComplete: true,
     configured: rows.some((row) => row?.[`${targetKey}Configured`] === true),
   };

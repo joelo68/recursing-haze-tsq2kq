@@ -68,10 +68,12 @@ CYJ新店店
 
 Summary arbitration 必須遵守：
 
-1. 有效非 0 目標優先於全 0 duplicate。
-2. 同月份若有兩份不同的有效非 0 目標，視為 conflict。
-3. conflict 不得自動選最新時間、不得自動覆蓋，必須人工確認。
-4. active store 的全 0 target 不可被當成「完整 coverage」。
+1. canonical authoritative source 優先於 legacy alias；Identity authority 優先於數值大小、updatedAt、score。
+2. monthly base target 明確 numeric `0` 是已設定且有效的 `VALID_ZERO`；canonical explicit zero 不得被 legacy positive 覆蓋。
+3. canonical-equivalent authoritative rows 的 KPI 語意相同時可視為同一 authority。
+4. canonical-equivalent authoritative rows 的 KPI 語意不同時，必須輸出 `AUTHORITY_CONFLICT`；不得依 updatedAt、score 或 document id 自動選一份。
+5. `AUTHORITY_CONFLICT` 必須 fail closed：base/challenge target denominator 不可用、對應 Coverage incomplete，且 conflict 不得被 fallback 清除。
+6. Lifecycle eligible store 的 explicit zero base target 可計入 configured coverage；denominator=0 時 achievement=`N_A`，且不具 achievement ranking / progress-gap eligibility。
 
 ---
 
@@ -175,8 +177,8 @@ CYJ新店店_2026_M
 
 ## Backend / index.js
 
-- target resolver：有效非 0 target 優先於全 0 duplicate。
-- Summary coverage：全 0 active-store target 不可偽裝為完整 coverage。
+- target resolver：canonical authority 優先於 legacy alias；explicit canonical 0 為 configured target。
+- Summary coverage：VALID / VALID_ZERO 都算 configured；TARGET_NOT_SET / DATA_INVALID / AUTHORITY_CONFLICT 才使對應 coverage fail closed。
 - `monthly_aggregated`：CYJ 新店統一 canonical key。
 - 手動 recalibration 與即時 aggregate trigger 必須使用同一 canonical 規則。
 
@@ -320,3 +322,21 @@ DRCYJ新店店
 Batch 1 已建立並正式確認 Lifecycle Master / writer，但尚未把 Store Lifecycle 接到 KPI consumers，因此新增 Master 不會改寫既有 Raw / Target / Summary / Ranking / Annual 資料。
 
 Batch 1.1 的 Existing Store Boundary Fix 只調整 `openDate` 與 `firstEligibleMonth` 的時間語意與 validation，**不修改 Store Identity**：`brandId + coreStoreName` namespace、canonical name、legacy alias、Firestore physical path 與跨品牌拒寫規則全部維持不變。
+
+## Batch 5E-1B Authority Conflict invariant
+
+Store Identity normalization 完成後，若兩份資料都宣稱同一 canonical authority，
+不得再使用「較新時間」或「較完整數值」決勝。
+
+```text
+same canonical authority + same KPI semantics
+→ equivalent
+
+same canonical authority + different KPI semantics
+→ AUTHORITY_CONFLICT
+→ cash/accrual/challenge denominator unavailable
+→ Coverage incomplete
+```
+
+此 conflict state 是上游 Identity / Authority 問題；任何 Dashboard、Annual、Store Analysis、
+Telegram 或其他 consumer 都不得做 page-level recovery 把其中一筆 target 復活。

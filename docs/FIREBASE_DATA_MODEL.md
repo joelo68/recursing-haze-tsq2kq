@@ -266,7 +266,7 @@ Document ID 主要由：
 - 讀取：canonical 優先、legacy fallback
 - 寫入：只寫 canonical
 - 若讀到特定 legacy CYJ 新店 key，重新儲存時安全遷移
-- Batch 3 起，base target 的 blank / missing / `0` 代表「目標未設定」；Frontend 寫 raw 時移除該欄位，不再把空白轉成 numeric `0`
+- Batch 5E-1B 起，base target 的 blank / missing / null 代表 `TARGET_NOT_SET`；明確 numeric `0` 代表 configured `VALID_ZERO`，Frontend 必須保留 0，不能用 deleteField 當成 missing
 - challenge target 為 optional；有設定時必須大於同類型 base target，否則 Frontend 阻止寫入
 - Frontend 不再直接維護 `monthly_targets_summary`；Derived Target Summary 改由 Backend event-driven writer 生成／修復
 
@@ -321,7 +321,57 @@ targets.{storeName}.accrualTarget
 targets.{storeName}.challengeCashTarget
 targets.{storeName}.challengeAccrualTarget
 targets.{storeName}.isUnlocked
+targets.{storeName}.sourceDocId
+targets.{storeName}.canonicalTargetId
+targets.{storeName}.isCanonicalSource
+targets.{storeName}.authorityConflict
+targets.{storeName}.authorityStatus
+targets.{storeName}.conflictSourceDocIds
 ```
+
+### Batch 5E-1B Base Target / Authority refinement
+
+Base target status：
+
+```text
+0                  → VALID_ZERO / configured
+positive           → VALID / configured
+blank/null/missing → TARGET_NOT_SET
+negative/malformed → DATA_INVALID
+```
+
+Challenge target：
+
+```text
+blank / 0 → CHALLENGE_NOT_SET
+positive  → only valid when > corresponding valid base target
+```
+
+`newASP` 不屬於 monthly base target；仍是 positive-only runtime setting。
+
+Coverage：
+
+```text
+VALID / VALID_ZERO → configured
+TARGET_NOT_SET      → missing
+DATA_INVALID        → invalid
+AUTHORITY_CONFLICT  → fail closed
+```
+
+若全部 eligible stores 都明確設定 0，該 metric coverage 可以 complete；
+aggregate target total = 0，achievement 必須是 `N_A`。
+
+兩份 canonical-equivalent authoritative rows 若語意衝突，Derived Target Summary 會保留：
+
+```text
+authorityConflict = true
+authorityStatus = AUTHORITY_CONFLICT
+conflictSourceDocIds[]
+canonicalTargetId
+cashTarget / accrualTarget / challenge* = null
+```
+
+這不是一般 missing target，consumer 不得以 raw fallback 自動選回其中一份。
 
 ### Batch 3 Derived Target Coverage contract
 
@@ -373,8 +423,9 @@ Lifecycle 尚未 `READY` 時，coverage metadata 不得被標記為 complete。
 `targetAudit` 只報告既有可疑資料，不自動改寫歷史/admin 設定，包含例如：
 
 ```text
-base target = 0
-malformed base target
+base target = 0（VALID_ZERO informational；不計入 issueCount）
+malformed / negative base target
+canonical-equivalent authority conflict
 challenge exists without valid base
 challenge <= base
 ```

@@ -5,6 +5,10 @@ const {
   validBaseTarget,
   validChallengeTarget,
 } = require('./kpiContracts');
+const {
+  TARGET_AUTHORITY_CONFLICT_STATUS,
+  resolveTargetAuthorityConflict,
+} = require('./targetAuthorityConflict');
 
 const TARGET_COVERAGE_VERSION = 'target-coverage-v1';
 const TARGET_COVERAGE_SOURCE = 'target_coverage_event_v1';
@@ -85,18 +89,34 @@ function hasTargetField(value = {}) {
     .some((key) => Object.prototype.hasOwnProperty.call(value, key));
 }
 
-function buildTargetSummaryRow(data = {}, canonicalStoreName = '', sourceDocId = '') {
+function buildTargetSummaryRow(data = {}, canonicalStoreName = '', sourceDocId = '', canonicalTargetId = '') {
   const row = data && typeof data === 'object' ? data : {};
+  const resolvedSourceDocId = sourceDocId || row.sourceDocId || '';
+  const resolvedCanonicalTargetId = canonicalTargetId || row.canonicalTargetId || '';
+  const authorityConflict = row.authorityConflict === true || row.status === TARGET_AUTHORITY_CONFLICT_STATUS;
+  const conflictSourceDocIds = authorityConflict
+    ? [...new Set((Array.isArray(row.conflictSourceDocIds) ? row.conflictSourceDocIds : [])
+      .map((value) => String(value || '').trim())
+      .filter(Boolean))]
+      .sort((a, b) => a.localeCompare(b, 'zh-Hant'))
+    : [];
+
   return {
     storeName: canonicalStoreName,
-    cashTarget: Object.prototype.hasOwnProperty.call(row, 'cashTarget') ? row.cashTarget : null,
-    accrualTarget: Object.prototype.hasOwnProperty.call(row, 'accrualTarget') ? row.accrualTarget : null,
-    challengeCashTarget: Object.prototype.hasOwnProperty.call(row, 'challengeCashTarget') ? row.challengeCashTarget : null,
-    challengeAccrualTarget: Object.prototype.hasOwnProperty.call(row, 'challengeAccrualTarget') ? row.challengeAccrualTarget : null,
-    isUnlocked: row.isUnlocked === true,
+    cashTarget: authorityConflict ? null : (Object.prototype.hasOwnProperty.call(row, 'cashTarget') ? row.cashTarget : null),
+    accrualTarget: authorityConflict ? null : (Object.prototype.hasOwnProperty.call(row, 'accrualTarget') ? row.accrualTarget : null),
+    challengeCashTarget: authorityConflict ? null : (Object.prototype.hasOwnProperty.call(row, 'challengeCashTarget') ? row.challengeCashTarget : null),
+    challengeAccrualTarget: authorityConflict ? null : (Object.prototype.hasOwnProperty.call(row, 'challengeAccrualTarget') ? row.challengeAccrualTarget : null),
+    isUnlocked: authorityConflict ? false : row.isUnlocked === true,
     updatedAtText: row.updatedAtText || row.updatedAt || '',
     updatedBy: row.updatedBy || '',
-    sourceDocId: sourceDocId || row.sourceDocId || '',
+    sourceDocId: resolvedSourceDocId,
+    canonicalTargetId: resolvedCanonicalTargetId,
+    isCanonicalSource: authorityConflict ? true : Boolean(resolvedCanonicalTargetId && resolvedSourceDocId === resolvedCanonicalTargetId),
+    authorityConflict,
+    authorityStatus: authorityConflict ? TARGET_AUTHORITY_CONFLICT_STATUS : '',
+    status: authorityConflict ? TARGET_AUTHORITY_CONFLICT_STATUS : String(row.status || ''),
+    conflictSourceDocIds,
   };
 }
 
@@ -112,6 +132,19 @@ function targetRowScore(row = {}) {
 function choosePreferredTargetRow(current = null, next = null) {
   if (!current) return next;
   if (!next) return current;
+
+  const currentCanonical = current.isCanonicalSource === true;
+  const nextCanonical = next.isCanonicalSource === true;
+  const conflict = resolveTargetAuthorityConflict(current, next, {
+    currentAuthoritative: currentCanonical,
+    incomingAuthoritative: nextCanonical,
+    storeName: current.storeName || next.storeName || '',
+    canonicalTargetId: current.canonicalTargetId || next.canonicalTargetId || '',
+  });
+  if (conflict) return conflict;
+
+  if (currentCanonical !== nextCanonical) return nextCanonical ? next : current;
+
   const currentScore = targetRowScore(current);
   const nextScore = targetRowScore(next);
   if (currentScore !== nextScore) return nextScore > currentScore ? next : current;
@@ -137,7 +170,7 @@ function extractSummaryTargetMap(summaryData = {}, brandId = 'cyj', yearMonth = 
         storeName: value.storeName || value.store || key,
       }, brandId, identityApi);
       if (!identity.canonicalStoreName) return;
-      const row = buildTargetSummaryRow(value, identity.canonicalStoreName, value.sourceDocId || key);
+      const row = buildTargetSummaryRow(value, identity.canonicalStoreName, value.sourceDocId || key, identity.canonicalTargetId);
       result[identity.canonicalStoreName] = choosePreferredTargetRow(result[identity.canonicalStoreName], row);
     });
   };
@@ -155,6 +188,12 @@ function stableTargetMap(targetMap = {}) {
       challengeCashTarget: row?.challengeCashTarget ?? null,
       challengeAccrualTarget: row?.challengeAccrualTarget ?? null,
       isUnlocked: row?.isUnlocked === true,
+      authorityConflict: row?.authorityConflict === true,
+      authorityStatus: String(row?.authorityStatus || row?.status || ''),
+      canonicalTargetId: String(row?.canonicalTargetId || ''),
+      conflictSourceDocIds: Array.isArray(row?.conflictSourceDocIds)
+        ? [...row.conflictSourceDocIds].map((value) => String(value || '')).sort((a, b) => a.localeCompare(b, 'zh-Hant'))
+        : [],
     }]));
 }
 
@@ -163,12 +202,25 @@ function targetMapsEqual(a = {}, b = {}) {
 }
 
 function buildTargetAudit(targetMap = {}) {
+  const authorityConflicts = [];
   const zeroBaseTargets = [];
   const invalidBaseTargets = [];
   const challengeWithoutValidBase = [];
   const challengeNotGreaterThanBase = [];
 
   Object.entries(targetMap || {}).forEach(([storeName, row = {}]) => {
+    if (row?.authorityConflict === true || row?.status === TARGET_AUTHORITY_CONFLICT_STATUS) {
+      authorityConflicts.push({
+        storeName,
+        status: TARGET_AUTHORITY_CONFLICT_STATUS,
+        canonicalTargetId: String(row?.canonicalTargetId || ''),
+        sourceDocIds: Array.isArray(row?.conflictSourceDocIds)
+          ? [...row.conflictSourceDocIds].map((value) => String(value || '')).sort((a, b) => a.localeCompare(b, 'zh-Hant'))
+          : [],
+      });
+      return;
+    }
+
     for (const metric of ['cash', 'accrual']) {
       const baseField = metric === 'cash' ? 'cashTarget' : 'accrualTarget';
       const challengeField = metric === 'cash' ? 'challengeCashTarget' : 'challengeAccrualTarget';
@@ -187,11 +239,15 @@ function buildTargetAudit(targetMap = {}) {
   });
 
   return {
+    authorityConflicts,
     zeroBaseTargets,
     invalidBaseTargets,
     challengeWithoutValidBase,
     challengeNotGreaterThanBase,
-    issueCount: zeroBaseTargets.length + invalidBaseTargets.length + challengeWithoutValidBase.length + challengeNotGreaterThanBase.length,
+    issueCount: authorityConflicts.length
+      + invalidBaseTargets.length
+      + challengeWithoutValidBase.length
+      + challengeNotGreaterThanBase.length,
   };
 }
 
@@ -251,7 +307,16 @@ function buildTargetSummaryCompatibilityFields(targetMap = {}, brandId = 'cyj', 
     const target = validBaseTarget(row.accrualTarget);
     return sum + (target.valid ? target.value : 0);
   }, 0);
-  const sourceDocIds = new Set(rows.map((row) => String(row.sourceDocId || '').trim()).filter(Boolean));
+  const sourceDocIds = new Set();
+  rows.forEach((row) => {
+    const ids = row?.authorityConflict === true && Array.isArray(row?.conflictSourceDocIds)
+      ? row.conflictSourceDocIds
+      : [row?.sourceDocId];
+    ids.forEach((value) => {
+      const id = String(value || '').trim();
+      if (id) sourceDocIds.add(id);
+    });
+  });
 
   return {
     brandId: normalizedBrandId,
@@ -449,10 +514,15 @@ function createTargetCoverageFunctions({ admin, db }) {
       const targetMap = extractSummaryTargetMap(summaryData, brandId, identity.yearMonth, lifecycleIdentityApi);
 
       if (resolved.targetData) {
-        targetMap[identity.canonicalStoreName] = buildTargetSummaryRow(
+        const nextRow = buildTargetSummaryRow(
           resolved.targetData,
           identity.canonicalStoreName,
-          resolved.sourceDocId || targetId
+          resolved.sourceDocId || targetId,
+          identity.canonicalTargetId
+        );
+        targetMap[identity.canonicalStoreName] = choosePreferredTargetRow(
+          targetMap[identity.canonicalStoreName] || null,
+          nextRow
         );
       } else {
         delete targetMap[identity.canonicalStoreName];

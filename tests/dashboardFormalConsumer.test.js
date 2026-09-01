@@ -268,3 +268,101 @@ test("Batch 5A does not add Firestore reads/listeners and keeps current month on
   assert.match(hook, /if \(isSelectedCurrentMonth\) return false;/);
   assert.match(hook, /if \(isSelectedCurrentMonth \|\| !isSummaryTrustedForDashboard\) return null;/);
 });
+
+test("5E-1B dashboard all-zero configured target scope is VALID_ZERO with N_A achievement", () => {
+  const summary = makeSummary();
+  const targets = makeTargets();
+
+  targets.cashConfiguredStoreCount = 2;
+  targets.accrualConfiguredStoreCount = 2;
+  targets.cashCoverageComplete = true;
+  targets.accrualCoverageComplete = true;
+  targets.cashMissingStores = [];
+  targets.accrualMissingStores = [];
+  targets.targets = {
+    "CYJA店": { storeName: "CYJA店", cashTarget: 0, accrualTarget: 0 },
+    "CYJB店": { storeName: "CYJB店", cashTarget: 0, accrualTarget: 0 },
+  };
+
+  const result = buildHistoricalFormalDashboardScope({
+    summary,
+    stores: Object.values(summary.stores),
+    monthlyTargetSummary: targets,
+    normalizeStoreKey,
+    filtered: false,
+  });
+
+  assert.equal(result.compatible, true);
+  assert.equal(result.targetAuthority.coverageConsistent, true);
+  assert.equal(result.cashTarget, 0);
+  assert.equal(result.cashTargetStatus, KPI_VALUE_STATUS.VALID_ZERO);
+  assert.equal(result.cashAchievement, null);
+  assert.equal(result.cashAchievementStatus, KPI_VALUE_STATUS.N_A);
+  assert.equal(result.accrualTarget, 0);
+  assert.equal(result.accrualTargetStatus, KPI_VALUE_STATUS.VALID_ZERO);
+  assert.equal(result.accrualAchievement, null);
+  assert.equal(result.accrualAchievementStatus, KPI_VALUE_STATUS.N_A);
+});
+
+test("5E-1B dashboard normalization preserves canonical explicit zero over legacy positive duplicate", () => {
+  const normalized = normalizeMonthlyTargetMap({
+    targets: {
+      legacy: {
+        storeName: "CYJ新店",
+        cashTarget: 900000,
+        accrualTarget: 800000,
+        isCanonicalSource: false,
+      },
+      canonical: {
+        storeName: "CYJ新店店",
+        cashTarget: 0,
+        accrualTarget: 0,
+        isCanonicalSource: true,
+      },
+    },
+  }, normalizeStoreKey);
+
+  assert.equal(normalized["新店"].cashTarget, 0);
+  assert.equal(normalized["新店"].accrualTarget, 0);
+  assert.equal(normalized["新店"].isCanonicalSource, true);
+});
+
+test("5E-1B Store Performance renders Formal zero-target projection as N/A and keeps pace gap neutral", () => {
+  const source = read("src/components/StorePerformanceView.jsx");
+  assert.match(source, /formalConsumerActive && targetValue === 0\) return "N\/A"/);
+  assert.match(source, /const paceGap = cashAchievementAvailable \? totalAchievement - timeProgress : null/);
+});
+
+test("5E-1B.3 Dashboard canonical-equivalent conflict is order-independent and fail-closed", () => {
+  const zeroCanonical = {
+    storeName: "CYJ新店店",
+    cashTarget: 0,
+    accrualTarget: 0,
+    isCanonicalSource: true,
+    canonicalTargetId: "CYJ新店店_2026_8",
+    sourceDocId: "CYJ新店店_2026_8",
+  };
+  const positiveCanonicalEquivalent = {
+    storeName: "DRCYJ新店店",
+    cashTarget: 900000,
+    accrualTarget: 800000,
+    isCanonicalSource: true,
+    canonicalTargetId: "CYJ新店店_2026_8",
+    sourceDocId: "DRCYJ新店店_2026_8",
+  };
+
+  const first = normalizeMonthlyTargetMap({
+    targets: { a: zeroCanonical, b: positiveCanonicalEquivalent },
+  }, normalizeStoreKey);
+  const reversed = normalizeMonthlyTargetMap({
+    targets: { b: positiveCanonicalEquivalent, a: zeroCanonical },
+  }, normalizeStoreKey);
+
+  for (const row of [first["新店"], reversed["新店"]]) {
+    assert.equal(row.authorityConflict, true);
+    assert.equal(row.status, "AUTHORITY_CONFLICT");
+    assert.equal(row.cashTarget, null);
+    assert.equal(row.accrualTarget, null);
+  }
+  assert.deepEqual(first["新店"], reversed["新店"]);
+});

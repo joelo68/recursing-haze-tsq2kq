@@ -2,7 +2,7 @@
 
 > 用途：記錄「目前正式環境已確認到哪個狀態」。這不是 CHANGELOG。  
 > 優先順序：使用者提供的目前正式部署 source > 本檔案 > 其他 Knowledge Base 文件。  
-> 最後整併更新：**2026-08-31（UTC+8）**。
+> 最後整併更新：**2026-09-01（UTC+8）**。
 
 # 0. 2026-08-31 Source Reconciliation Baseline（Git 已整合／尚未部署）
 
@@ -101,7 +101,7 @@ Firebase project endpoint: cyjsituation-analysis
 CURRENT_APP_VERSION = 3.5.3（未提高）
 
 Target Writer：
-- blank / missing / 0 base target 不再被當成已設定目標
+- blank / missing base target 仍為未設定；明確 numeric 0 自 Batch 5E-1B 起為 configured `VALID_ZERO`
 - 未設定欄位在 monthly_targets Raw document 中不建立 numeric 0
 - challenge target 必須大於 valid base target
 
@@ -1642,3 +1642,90 @@ zero-target row
 因此不得把「legacy placeholder 已清完」描述成「0 元正式目標已經支援」。
 
 `newASP=0` 仍維持未設定／非法 business setting；Challenge Target `0` 仍維持未設定。
+
+# Batch 5E-1B Zero Target Canonical Contract — Staging Validated / Pending Promotion
+
+2026-09-01 已完成獨立 Final Contract Audit V3。
+
+```text
+FULL 5E-1B VALIDATED: YES — staging
+5E-1B.1 VALIDATED: YES
+5E-1B.2A VALIDATED: YES
+5E-1B.2B VALIDATED: YES
+5E-1B.3 VALIDATED: YES
+
+OFFICIAL ~/cyj-new MODIFIED: NO
+DEPLOYED: NO
+PRODUCTION CONFIRMED: NO
+CURRENT_APP_VERSION: 3.5.3
+KPI_CONTRACT_VERSION: kpi-contract-v1
+SUMMARY_SEMANTIC_VERSION: summary-semantics-v1
+```
+
+Validated cumulative runtime artifact：
+
+```text
+DRCYJ_BATCH5E1B_CUMULATIVE_1B3_V2_a047cb6.patch
+SHA256 = 7d285ea4b24b4f8e7058d59cb0199ec6c4f1aa6139062991d2e1841fa2e3e765
+```
+
+正式 Target Contract：
+
+```text
+base target 0                  => VALID_ZERO / configured
+base target positive           => VALID / configured
+base target blank/null/missing => TARGET_NOT_SET
+base target negative/malformed => DATA_INVALID
+
+achievement denominator = 0    => N_A
+challenge blank / 0            => CHALLENGE_NOT_SET
+newASP = 0                     => invalid / unset（positive-only）
+```
+
+zero-target store：
+
+```text
+achievement ranking eligible = false
+progress-gap attention eligible = false
+```
+
+Identity authority：
+
+```text
+canonical source > legacy alias
+canonical explicit 0 cannot be replaced by legacy positive
+
+canonical-equivalent authoritative semantic disagreement
+=> AUTHORITY_CONFLICT
+=> target denominator unavailable
+=> Coverage incomplete
+=> no updatedAt / score / document-id winner
+=> conflict remains terminal across fallback
+```
+
+Validation evidence：
+
+```text
+Independent Final Audit V3     PASS
+Full repository tests          345 / 345 PASS
+Production build               PASS
+Target Coverage conflict       PASS
+FE/BE authority parity         PASS
+Telegram sticky conflict       PASS
+git diff --check               PASS
+```
+
+Read / path impact：
+
+```text
+new listener         0
+new query primitive  0
+new read primitive   0
+new polling          0
+Firestore Rules      unchanged
+Firestore paths      unchanged
+brand topology       unchanged
+```
+
+此節只記錄 staging validated truth；official promotion、部署及 Production readback 完成前，
+不得寫成 `DEPLOYED` 或 `PRODUCTION CONFIRMED`。

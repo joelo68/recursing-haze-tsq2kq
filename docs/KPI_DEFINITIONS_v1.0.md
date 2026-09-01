@@ -73,14 +73,18 @@ Any module displaying 安妞 `operationalAccrual` must label it 「權責業績�
 For an eligible, non-exempt Store × YearMonth:
 
 ```text
-cashTarget > 0    => valid cash target
-accrualTarget > 0 => valid accrual target
-blank / missing / 0 => 目標未設定
+cashTarget / accrualTarget
+
+explicit numeric 0   => VALID_ZERO / configured target
+positive             => VALID / configured target
+blank / missing/null => TARGET_NOT_SET / 目標未設定
+negative / malformed => DATA_INVALID
 ```
 
 The system must not auto-prorate opening/closing-month targets by calendar or operating days. Company explicitly sets the formal monthly target.
 
-If a month truly has no target obligation, represent it through the formal exemption mechanism, not `target = 0`.
+`target = 0` is a real configured zero target; it is not missing and it is not an exemption.
+If a Store × Month should be removed from the KPI cohort entirely, use the formal Store Lifecycle exemption mechanism instead.
 
 ### 3.2 Store achievement
 
@@ -97,6 +101,9 @@ formalAccrual = operationalAccrual  (安妞)
 ```
 
 Target missing/invalid => corresponding achievement is N/A / 「目標未設定」, not 0%.
+
+Configured target denominator = 0 (`VALID_ZERO`) => achievement is `N_A`; it is not 0%, Infinity, or TARGET_NOT_SET.
+A zero-target Store is not achievement-rank eligible and is not progress-gap attention eligible.
 
 Valid `netCash = 0` => cash achievement = 0% and is rank-eligible.
 
@@ -154,7 +161,27 @@ For Annual/custom range, coverage unit is:
 eligible Store × YearMonth
 ```
 
-Every required pair must have a valid target for the corresponding KPI.
+Every required pair must have a configured valid target for the corresponding KPI; `VALID` and `VALID_ZERO` both satisfy coverage presence.
+`TARGET_NOT_SET`, `DATA_INVALID`, or `AUTHORITY_CONFLICT` fail the corresponding coverage.
+
+Identity arbitration is canonical-first. A canonical explicit zero cannot be replaced by a legacy positive duplicate.
+If canonical-equivalent authoritative sources disagree on KPI semantics, the result is `AUTHORITY_CONFLICT`; no recency/score/document-id winner is allowed and the denominator must fail closed.
+
+---
+
+## 5.1 Authority conflict invariant
+
+Target Identity resolution is an upstream data-authority rule:
+
+```text
+canonical source > legacy alias
+same canonical authority + same semantics → equivalent
+same canonical authority + different semantics → AUTHORITY_CONFLICT
+```
+
+`AUTHORITY_CONFLICT` is terminal until the upstream authority data is corrected.
+Summary, Dashboard, Annual, Store Analysis, Telegram and other consumers must not use
+fallback logic to resurrect one of the conflicting target values.
 
 ---
 

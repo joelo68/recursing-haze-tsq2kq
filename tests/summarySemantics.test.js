@@ -310,3 +310,29 @@ test("Batch 4 only changes Summary repair exports on Backend call graph", () => 
   assert.match(functionsIndex, /exports\.repairDirtySummaryNow\s*=/);
   assert.match(functionsIndex, /exports\.repairDirtySummaries\s*=/);
 });
+
+for (const [label, api, kpi] of implementations) {
+  test(`${label}: 5E-1B zero target preserves VALID_ZERO and denominator N_A`, () => {
+    const metrics = api.buildFormalReportMetrics("cyj", {
+      cash: 100,
+      refund: 0,
+      skincareRefund: 0,
+      accrual: 100,
+      operationalAccrual: 100,
+    });
+    const meta = api.buildStoreFormalKpiMetadata(metrics, {
+      cashTarget: 0,
+      accrualTarget: 0,
+    });
+
+    assert.equal(meta.formalCashTarget, 0);
+    assert.equal(meta.formalCashTargetStatus, kpi.KPI_VALUE_STATUS.VALID_ZERO);
+    assert.equal(meta.formalCashAchievement, null);
+    assert.equal(meta.formalCashAchievementStatus, kpi.KPI_VALUE_STATUS.N_A);
+    assert.equal(meta.formalAccrualTarget, 0);
+    assert.equal(meta.formalAccrualTargetStatus, kpi.KPI_VALUE_STATUS.VALID_ZERO);
+    assert.equal(meta.formalAccrualAchievement, null);
+    assert.equal(meta.formalAccrualAchievementStatus, kpi.KPI_VALUE_STATUS.N_A);
+    assert.equal(meta.formalRankEligible, false);
+  });
+}

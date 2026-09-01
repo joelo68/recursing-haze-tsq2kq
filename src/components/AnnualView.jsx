@@ -384,14 +384,23 @@ const AnnualView = () => {
   useEffect(() => {
     let cancelled = false;
 
-    const readTargetNumber = (row, keys = []) => {
+    const readTargetValue = (row, keys = []) => {
       for (const key of keys) {
+        if (!row || !Object.prototype.hasOwnProperty.call(row, key)) continue;
         const raw = row?.[key];
         if (raw === null || raw === undefined || raw === "") continue;
         const num = Number(raw);
-        if (Number.isFinite(num)) return num;
+        if (!Number.isFinite(num) || num < 0) {
+          return { found: true, configured: false, value: null };
+        }
+        return { found: true, configured: true, value: num };
       }
-      return 0;
+      return { found: false, configured: false, value: null };
+    };
+
+    const readTargetNumber = (row, keys = []) => {
+      const result = readTargetValue(row, keys);
+      return result.configured ? result.value : 0;
     };
 
     const getSummaryTargetByCore = (summary, coreName) => {
@@ -448,9 +457,9 @@ const AnnualView = () => {
         const summary = monthlyTargetSummaryByMonth[yearMonth];
         storeCores.forEach((core) => {
           const row = getSummaryTargetByCore(summary, core);
-          const cashTarget = readTargetNumber(row, ["cashTarget", "targetCash", "cashBudget", "monthlyCashTarget", "cash", "cash_target"]);
-          const accrualTarget = readTargetNumber(row, ["accrualTarget", "targetAccrual", "accrualBudget", "monthlyAccrualTarget", "accrual", "accrual_target"]);
-          if (!row || (cashTarget <= 0 && accrualTarget <= 0)) {
+          const cashTargetResult = readTargetValue(row, ["cashTarget", "targetCash", "cashBudget", "monthlyCashTarget", "cash", "cash_target"]);
+          const accrualTargetResult = readTargetValue(row, ["accrualTarget", "targetAccrual", "accrualBudget", "monthlyAccrualTarget", "accrual", "accrual_target"]);
+          if (!row || (!cashTargetResult.found && !accrualTargetResult.found)) {
             missingPairs.push({ yearMonth, core });
           }
         });
@@ -490,14 +499,14 @@ const AnnualView = () => {
           if (!snap.exists()) continue;
 
           const data = snap.data() || {};
-          const cashTarget = readTargetNumber(data, ["cashTarget", "targetCash", "cashBudget", "monthlyCashTarget", "cash", "cash_target"]);
-          const accrualTarget = readTargetNumber(data, ["accrualTarget", "targetAccrual", "accrualBudget", "monthlyAccrualTarget", "accrual", "accrual_target"]);
-          if (cashTarget > 0 || accrualTarget > 0) {
+          const cashTargetResult = readTargetValue(data, ["cashTarget", "targetCash", "cashBudget", "monthlyCashTarget", "cash", "cash_target"]);
+          const accrualTargetResult = readTargetValue(data, ["accrualTarget", "targetAccrual", "accrualBudget", "monthlyAccrualTarget", "accrual", "accrual_target"]);
+          if (cashTargetResult.found || accrualTargetResult.found) {
             resolved = {
               ...data,
               storeName: data.storeName || data.store || canonicalFullName,
-              cashTarget,
-              accrualTarget,
+              cashTarget: cashTargetResult.configured ? cashTargetResult.value : null,
+              accrualTarget: accrualTargetResult.configured ? accrualTargetResult.value : null,
               sourceDocId: snap.id,
             };
             break;
@@ -586,6 +595,20 @@ const annualData = useMemo(() => {
       return raw === null || raw === undefined ? null : Number(raw) || 0;
     }, null) || 0;
 
+    const pickTargetValue = (row, keys = []) => {
+      for (const key of keys) {
+        if (!row || !Object.prototype.hasOwnProperty.call(row, key)) continue;
+        const raw = row?.[key];
+        if (raw === null || raw === undefined || raw === "") continue;
+        const num = Number(raw);
+        if (!Number.isFinite(num) || num < 0) {
+          return { found: true, configured: false, value: null };
+        }
+        return { found: true, configured: true, value: num };
+      }
+      return { found: false, configured: false, value: null };
+    };
+
     const hasExplicitAnnualScope = Boolean(
       selectedAnnualManager ||
       selectedAnnualStore ||
@@ -618,21 +641,22 @@ const annualData = useMemo(() => {
 
       targetStoreCores.forEach((core) => {
         let row = summaryTargetMap.get(core) || null;
-        let cashTarget = pickNumber(row, ["cashTarget", "targetCash", "cashBudget", "monthlyCashTarget", "cash", "cash_target"]);
-        let accrualTarget = pickNumber(row, ["accrualTarget", "targetAccrual", "accrualBudget", "monthlyAccrualTarget", "accrual", "accrual_target"]);
+        let cashTargetResult = pickTargetValue(row, ["cashTarget", "targetCash", "cashBudget", "monthlyCashTarget", "cash", "cash_target"]);
+        let accrualTargetResult = pickTargetValue(row, ["accrualTarget", "targetAccrual", "accrualBudget", "monthlyAccrualTarget", "accrual", "accrual_target"]);
 
         // Formal trusted historical 已在上方被套用，不會走到此 compatibility fallback。
-        if (!row || (cashTarget <= 0 && accrualTarget <= 0)) {
+        // Explicit zero / invalid present values are authoritative presence and must not resurrect legacy positives.
+        if (!row || (!cashTargetResult.found && !accrualTargetResult.found)) {
           const fallbackRow = annualTargetFallbacks?.[targetYearMonth]?.[core];
           if (fallbackRow) {
             row = fallbackRow;
-            cashTarget = pickNumber(row, ["cashTarget", "targetCash", "cashBudget", "monthlyCashTarget", "cash", "cash_target"]);
-            accrualTarget = pickNumber(row, ["accrualTarget", "targetAccrual", "accrualBudget", "monthlyAccrualTarget", "accrual", "accrual_target"]);
+            cashTargetResult = pickTargetValue(row, ["cashTarget", "targetCash", "cashBudget", "monthlyCashTarget", "cash", "cash_target"]);
+            accrualTargetResult = pickTargetValue(row, ["accrualTarget", "targetAccrual", "accrualBudget", "monthlyAccrualTarget", "accrual", "accrual_target"]);
             usedDirectFallback = true;
           }
         }
 
-        if (cashTarget <= 0 && accrualTarget <= 0) {
+        if (!cashTargetResult.found && !accrualTargetResult.found) {
           const canonicalFullName = `${brandPrefix}${core}店`;
           const legacyFullName = core === "新店" ? `${brandPrefix}新店` : "";
           const budgetKeys = [
@@ -645,19 +669,19 @@ const annualData = useMemo(() => {
           for (const key of budgetKeys) {
             const budgetRow = budgets?.[key];
             if (!budgetRow) continue;
-            const nextCash = pickNumber(budgetRow, ["cashTarget", "targetCash", "cashBudget", "monthlyCashTarget", "cash", "cash_target"]);
-            const nextAccrual = pickNumber(budgetRow, ["accrualTarget", "targetAccrual", "accrualBudget", "monthlyAccrualTarget", "accrual", "accrual_target"]);
-            if (nextCash > 0 || nextAccrual > 0) {
-              cashTarget = nextCash;
-              accrualTarget = nextAccrual;
+            const nextCashResult = pickTargetValue(budgetRow, ["cashTarget", "targetCash", "cashBudget", "monthlyCashTarget", "cash", "cash_target"]);
+            const nextAccrualResult = pickTargetValue(budgetRow, ["accrualTarget", "targetAccrual", "accrualBudget", "monthlyAccrualTarget", "accrual", "accrual_target"]);
+            if (nextCashResult.found || nextAccrualResult.found) {
+              cashTargetResult = nextCashResult;
+              accrualTargetResult = nextAccrualResult;
               break;
             }
           }
         }
 
-        if (cashTarget > 0 || accrualTarget > 0) {
-          targetStat.budget += cashTarget;
-          targetStat.accrualBudget += accrualTarget;
+        if (cashTargetResult.configured || accrualTargetResult.configured) {
+          targetStat.budget += cashTargetResult.configured ? cashTargetResult.value : 0;
+          targetStat.accrualBudget += accrualTargetResult.configured ? accrualTargetResult.value : 0;
           foundAnyTarget = true;
         }
       });

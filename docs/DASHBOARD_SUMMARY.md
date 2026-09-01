@@ -396,22 +396,51 @@ monthly_targets full fallback
 Dashboard 前端另外有 targeted fallback，
 避免只因一、兩家缺 Summary target 就讀完整年度大量 targets。
 
+`VALID_ZERO` 是 present/configured，不得因此開啟 fallback。
+`AUTHORITY_CONFLICT` 是 terminal fail-closed authority state，也不得透過 fallback 復活衝突來源。
+
 ---
 
-# 17. 「0 目標」不是完整 coverage
+# 17. 「0 目標」是 configured target；denominator=0 時 achievement=N/A
 
-Store Identity / target consistency governance 已規定：
-
-> active store 的全 0 target 不可被當成有效 coverage。
-
-這避免曾發生的情況：
+Batch 5E-1B 正式語意：
 
 ```text
-canonical 有有效 target
-legacy duplicate 全 0
+0                  → VALID_ZERO / configured
+positive           → VALID / configured
+blank/null/missing → TARGET_NOT_SET
+negative/malformed → DATA_INVALID
 ```
 
-但 Summary 判斷卻把 0 duplicate 當成「這家有資料」。
+Lifecycle eligible store 的 explicit 0 可計入 target coverage。
+若整個 selected scope 的 configured target total = 0：
+
+```text
+coverage = complete
+target total = 0 / VALID_ZERO
+achievement = N_A
+```
+
+不得顯示為 0%、Infinity 或「目標未設定」。
+
+zero-target store 不具 achievement ranking eligibility，也不進 progress-gap attention。
+
+過去 canonical / legacy duplicate 問題的根因是 Identity authority，不是「0 不能是 target」：
+
+```text
+canonical source > legacy alias
+canonical explicit 0 cannot be replaced by legacy positive
+```
+
+若兩個 canonical-equivalent authoritative sources KPI 語意衝突：
+
+```text
+AUTHORITY_CONFLICT
+→ denominator unavailable
+→ Coverage incomplete
+→ no updatedAt / score / document-id winner
+→ fallback cannot clear conflict
+```
 
 ---
 

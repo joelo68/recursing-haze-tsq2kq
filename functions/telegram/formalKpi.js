@@ -60,7 +60,7 @@ function normalizeTarget(value) {
 
 function buildAchievement(actualValue, actualStatus, targetValue, targetStatus) {
   if (!isValidNumericStatus(actualStatus)) return { value: null, status: actualStatus || KPI_VALUE_STATUS.DATA_INVALID };
-  if (targetStatus !== KPI_VALUE_STATUS.VALID) return { value: null, status: targetStatus || KPI_VALUE_STATUS.TARGET_NOT_SET };
+  if (!isValidNumericStatus(targetStatus)) return { value: null, status: targetStatus || KPI_VALUE_STATUS.TARGET_NOT_SET };
   const ratio = validRatio(actualValue, targetValue, { requirePositiveDenominator: true });
   return { value: ratio.valid ? Number((ratio.value * 100).toFixed(1)) : null, status: ratio.status };
 }
@@ -121,9 +121,9 @@ function buildTelegramFormalSummaryMetrics(row = {}) {
     cashStatus,
     accrual: isValidNumericStatus(accrualStatus) ? Number(row.formalAccrual) : null,
     accrualStatus,
-    budget: cashTargetStatus === KPI_VALUE_STATUS.VALID ? Number(row.formalCashTarget) : null,
+    budget: isValidNumericStatus(cashTargetStatus) ? Number(row.formalCashTarget) : null,
     cashTargetStatus,
-    accrualBudget: accrualTargetStatus === KPI_VALUE_STATUS.VALID ? Number(row.formalAccrualTarget) : null,
+    accrualBudget: isValidNumericStatus(accrualTargetStatus) ? Number(row.formalAccrualTarget) : null,
     accrualTargetStatus,
     achievement: isValidNumericStatus(cashAchievementStatus) ? Number(row.formalCashAchievement) : null,
     cashAchievementRate: isValidNumericStatus(cashAchievementStatus) ? Number(row.formalCashAchievement) : null,
@@ -152,10 +152,10 @@ function aggregateTelegramFormalRows(rows = []) {
   const sumTarget = (valueField, statusField) => {
     let total = 0;
     for (const row of formalRows) {
-      if (row?.[statusField] !== KPI_VALUE_STATUS.VALID) return { value: null, status: row?.[statusField] || KPI_VALUE_STATUS.TARGET_NOT_SET };
+      if (!isValidNumericStatus(row?.[statusField])) return { value: null, status: row?.[statusField] || KPI_VALUE_STATUS.TARGET_NOT_SET };
       total += Number(row?.[valueField]);
     }
-    return { value: total, status: KPI_VALUE_STATUS.VALID };
+    return { value: total, status: total === 0 ? KPI_VALUE_STATUS.VALID_ZERO : KPI_VALUE_STATUS.VALID };
   };
   const cash = sumValid("cash", "cashStatus");
   const accrual = sumValid("accrual", "accrualStatus");

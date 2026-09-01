@@ -51,6 +51,7 @@ const StorePerformanceView = ({ dashboardStats, myStoreRankings, brandInfo }) =>
   const formatProjectionTargetRate = (projection, target) => {
     const targetValue = Number(target);
     if (formalConsumerActive && (!isFiniteKpi(projection) || !isFiniteKpi(target))) return "N/A";
+    if (formalConsumerActive && targetValue === 0) return "N/A";
     return targetValue > 0 ? `${((Number(projection || 0) / targetValue) * 100).toFixed(0)}%` : "0%";
   };
   const annualKpiBenchmark = dashboardStats.annualKpiBenchmark || {};

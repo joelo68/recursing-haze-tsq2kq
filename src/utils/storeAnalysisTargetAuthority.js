@@ -2,6 +2,7 @@ export const STORE_ANALYSIS_TARGET_PRESENTATION_VERSION = "store-analysis-target
 
 export const STORE_ANALYSIS_TARGET_STATUS = Object.freeze({
   VALID: "VALID",
+  VALID_ZERO: "VALID_ZERO",
   TARGET_NOT_SET: "TARGET_NOT_SET",
   TARGET_INCOMPLETE: "TARGET_INCOMPLETE",
   TARGET_INVALID: "TARGET_INVALID",
@@ -36,7 +37,7 @@ const readCashTarget = (row = {}) => {
     return { found: false, value: null, configured: false, status: STORE_ANALYSIS_TARGET_STATUS.TARGET_INVALID };
   }
   if (value === 0) {
-    return { found: true, value: 0, configured: false, status: STORE_ANALYSIS_TARGET_STATUS.TARGET_NOT_SET };
+    return { found: true, value: 0, configured: true, status: STORE_ANALYSIS_TARGET_STATUS.VALID_ZERO };
   }
   if (value < 0) {
     return { found: false, value: null, configured: false, status: STORE_ANALYSIS_TARGET_STATUS.TARGET_INVALID };
@@ -137,11 +138,11 @@ export const resolveStoreAnalysisCashTargetScopePresentation = ({
   let total = 0;
   for (const storeKey of storeKeys) {
     const result = resolveStoreAnalysisCashTargetPresentation({ authority, storeName: storeKey, normalizeStoreKey });
-    if (result.configured !== true || result.status !== STORE_ANALYSIS_TARGET_STATUS.VALID) {
+    if (result.configured !== true || ![STORE_ANALYSIS_TARGET_STATUS.VALID, STORE_ANALYSIS_TARGET_STATUS.VALID_ZERO].includes(result.status)) {
       return { complete: false, value: null, status: result.status };
     }
     total += result.value;
   }
 
-  return { complete: true, value: total, status: STORE_ANALYSIS_TARGET_STATUS.VALID };
+  return { complete: true, value: total, status: total === 0 ? STORE_ANALYSIS_TARGET_STATUS.VALID_ZERO : STORE_ANALYSIS_TARGET_STATUS.VALID };
 };

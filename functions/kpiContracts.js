@@ -100,6 +100,23 @@ function formalAccrual(brandId, accrual, operationalAccrual) {
 
 function validBaseTarget(value) {
   const result = normalizeNumericInput(value);
+  if (result.status === KPI_VALUE_STATUS.FIELD_MISSING) {
+    return { status: KPI_VALUE_STATUS.TARGET_NOT_SET, valid: false, value: null };
+  }
+  if (result.status === KPI_VALUE_STATUS.DATA_INVALID || result.value < 0) {
+    return { status: KPI_VALUE_STATUS.DATA_INVALID, valid: false, value: null };
+  }
+  return {
+    status: result.status === KPI_VALUE_STATUS.VALID_ZERO
+      ? KPI_VALUE_STATUS.VALID_ZERO
+      : KPI_VALUE_STATUS.VALID,
+    valid: true,
+    value: result.value,
+  };
+}
+
+function validPositiveSetting(value) {
+  const result = normalizeNumericInput(value);
   if (result.status === KPI_VALUE_STATUS.FIELD_MISSING || result.status === KPI_VALUE_STATUS.VALID_ZERO) {
     return { status: KPI_VALUE_STATUS.TARGET_NOT_SET, valid: false, value: null };
   }
@@ -163,6 +180,7 @@ module.exports = {
   formalNetCash,
   formalAccrual,
   validBaseTarget,
+  validPositiveSetting,
   validChallengeTarget,
   validRatio,
   validateStoreHealthBenchmark,

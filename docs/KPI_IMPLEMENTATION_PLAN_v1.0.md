@@ -451,7 +451,7 @@ Pure-function tests should cover all confirmed edge semantics:
 - negative net cash preserved;
 - 安妞 formal accrual = operational accrual;
 - 安妞 total accrual remains distinct;
-- target blank/missing/0 invalid;
+- target blank/missing invalid; explicit base target 0 valid as VALID_ZERO;
 - true zero actual valid;
 - denominator zero => N/A where defined;
 - negative product ratio preserved at raw KPI layer;
@@ -480,12 +480,16 @@ Fix target/settings authority before Summary and consumers rely on it.
 Implement confirmed semantics:
 
 ```text
-blank / missing / 0 => 目標未設定
-valid base target   => > 0
-challenge target    => optional and > base target
+blank / missing / null => TARGET_NOT_SET / 目標未設定
+explicit base target 0 => VALID_ZERO / configured
+positive base target   => VALID / configured
+negative / malformed   => DATA_INVALID
+challenge target 0     => CHALLENGE_NOT_SET
+positive challenge     => optional and > valid base target
 ```
 
-Do not let `parseNumber("") -> 0` collapse unset into a valid-looking numeric target.
+Do not let `parseNumber("") -> 0` collapse unset into an explicit configured zero target.
+`newASP` remains a separate positive-only runtime setting; its zero semantics do not follow monthly base targets.
 
 ### Independent target coverage
 
@@ -527,10 +531,13 @@ Do not silently rewrite historical target values.
 
 Prepare an audit report for:
 
-- base target = 0;
+- malformed / negative base target;
+- canonical-equivalent authority conflict;
 - challenge <= base;
 - challenge exists without valid base;
 - malformed benchmark ranges.
+
+Explicit numeric base target 0 is not an invalid-data repair candidate by itself.
 
 Require explicit repair for ambiguous historical/admin configuration.
 
@@ -1562,3 +1569,42 @@ Firestore runtime impact     NONE from this document
 ## Documentation Impact
 
 This file is a new implementation-planning document. It does not change production runtime behavior or existing runtime documentation by itself.
+
+# 12. Batch 5E-1B Progress Update — 2026-09-01
+
+The original plan sections above remain the implementation-order record.
+The target contract has now advanced beyond the plan's original Batch-2/3 assumptions.
+
+Staging-validated 5E-1B contract：
+
+```text
+base target 0 = VALID_ZERO / configured
+denominator 0 = N_A
+challenge 0 = CHALLENGE_NOT_SET
+newASP 0 = invalid / unset
+canonical > legacy
+canonical-equivalent disagreement = AUTHORITY_CONFLICT
+```
+
+Validated owners include KPI contracts, Target Coverage, Summary semantics, Current Detail,
+Dashboard/Report, Annual, Store Analysis, StorePerformance and Telegram target authority.
+
+```text
+Full repository regression = 345 / 345 PASS
+Production build = PASS
+Independent conflict matrix = PASS
+New listener/query/read primitive/polling = 0
+CURRENT_APP_VERSION = 3.5.3
+```
+
+Status boundary：
+
+```text
+IMPLEMENTED = YES — staging
+VALIDATED = YES — staging
+OFFICIAL PROMOTION = pending
+DEPLOYED = NO
+PRODUCTION CONFIRMED = NO
+```
+
+The original plan's future-source and production-confirmation gates remain mandatory.

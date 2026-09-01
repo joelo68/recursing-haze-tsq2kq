@@ -1,4 +1,5 @@
 import { KPI_CONTRACT_VERSION, KPI_VALUE_STATUS, validBaseTarget } from "./kpiContracts.js";
+import { resolveTargetAuthorityConflict } from "./targetAuthorityConflict.js";
 import {
   SUMMARY_KPI_STATUS,
   SUMMARY_SEMANTIC_VERSION,
@@ -55,13 +56,33 @@ const aggregateStoredFormalMetric = (rows = [], valueKey, statusKey) => {
   };
 };
 
-const choosePreferredTargetRow = (current, incoming) => {
+const choosePreferredTargetRow = (current, incoming, storeKey = "") => {
   if (!current) return incoming;
+
+  const currentCanonical = current?.isCanonicalSource === true;
+  const incomingCanonical = incoming?.isCanonicalSource === true;
+  const conflict = resolveTargetAuthorityConflict(current, incoming, {
+    currentAuthoritative: currentCanonical,
+    incomingAuthoritative: incomingCanonical,
+    storeName: storeKey,
+    canonicalTargetId: current?.canonicalTargetId || incoming?.canonicalTargetId || "",
+  });
+  if (conflict) return conflict;
+
+  if (currentCanonical !== incomingCanonical) return incomingCanonical ? incoming : current;
+
   const score = (row = {}) => (
     (validBaseTarget(row.cashTarget).valid ? 1 : 0) +
     (validBaseTarget(row.accrualTarget).valid ? 1 : 0)
   );
-  return score(incoming) > score(current) ? incoming : current;
+  const currentScore = score(current);
+  const incomingScore = score(incoming);
+  if (currentScore !== incomingScore) return incomingScore > currentScore ? incoming : current;
+
+  return String(incoming?.sourceDocId || incoming?.id || "").localeCompare(
+    String(current?.sourceDocId || current?.id || ""),
+    "zh-Hant"
+  ) > 0 ? incoming : current;
 };
 
 export const normalizeMonthlyTargetMap = (targetSummary = {}, normalizeStoreKey = normalizeIdentity) => {
@@ -77,7 +98,7 @@ export const normalizeMonthlyTargetMap = (targetSummary = {}, normalizeStoreKey 
       row.storeName || row.store || row.coreStoreName || row.canonicalStoreName || key
     );
     if (!storeKey) return;
-    normalized[storeKey] = choosePreferredTargetRow(normalized[storeKey], row);
+    normalized[storeKey] = choosePreferredTargetRow(normalized[storeKey], row, storeKey);
   });
 
   return normalized;
@@ -148,7 +169,7 @@ const buildScopeTarget = ({ scopeKeys, targetMap, authority, metric }) => {
   const complete = coverageConsistent && scopeKeys.length > 0 && missing.length === 0;
   return {
     value: complete ? total : null,
-    status: complete ? KPI_VALUE_STATUS.VALID : SUMMARY_KPI_STATUS.TARGET_INCOMPLETE,
+    status: complete ? (total === 0 ? KPI_VALUE_STATUS.VALID_ZERO : KPI_VALUE_STATUS.VALID) : SUMMARY_KPI_STATUS.TARGET_INCOMPLETE,
     configuredStoreCount: configured,
     eligibleStoreCount: scopeKeys.length,
     missingStoreKeys: missing,
@@ -209,7 +230,7 @@ export const buildHistoricalFormalDashboardScope = ({
     ? buildScopeTarget({ scopeKeys, targetMap, authority, metric: "cash" })
     : {
         value: authority?.cashCoverageTrusted === true ? authority.cashTargetTotal : null,
-        status: authority?.cashCoverageTrusted === true ? KPI_VALUE_STATUS.VALID : SUMMARY_KPI_STATUS.TARGET_INCOMPLETE,
+        status: authority?.cashCoverageTrusted === true ? (Number(authority.cashTargetTotal) === 0 ? KPI_VALUE_STATUS.VALID_ZERO : KPI_VALUE_STATUS.VALID) : SUMMARY_KPI_STATUS.TARGET_INCOMPLETE,
         configuredStoreCount: authority?.cashConfiguredStoreCount || 0,
         eligibleStoreCount: authority?.eligibleStoreCount || 0,
         missingStoreKeys: authority?.cashMissingStoreKeys || [],
@@ -219,7 +240,7 @@ export const buildHistoricalFormalDashboardScope = ({
     ? buildScopeTarget({ scopeKeys, targetMap, authority, metric: "accrual" })
     : {
         value: authority?.accrualCoverageTrusted === true ? authority.accrualTargetTotal : null,
-        status: authority?.accrualCoverageTrusted === true ? KPI_VALUE_STATUS.VALID : SUMMARY_KPI_STATUS.TARGET_INCOMPLETE,
+        status: authority?.accrualCoverageTrusted === true ? (Number(authority.accrualTargetTotal) === 0 ? KPI_VALUE_STATUS.VALID_ZERO : KPI_VALUE_STATUS.VALID) : SUMMARY_KPI_STATUS.TARGET_INCOMPLETE,
         configuredStoreCount: authority?.accrualConfiguredStoreCount || 0,
         eligibleStoreCount: authority?.eligibleStoreCount || 0,
         missingStoreKeys: authority?.accrualMissingStoreKeys || [],

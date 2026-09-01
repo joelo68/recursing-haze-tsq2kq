@@ -80,17 +80,22 @@ test("coverage is not certified while Lifecycle dataset is not READY", () => {
   assert.equal(result.lifecycleReady, false);
 });
 
-test("target audit reports zero base and invalid challenge relationships without repairing them", () => {
+test("target audit keeps zero base informational while reporting only true invalid challenge relationships", () => {
   const audit = targetCoverage.buildTargetAudit({
     "CYJA店": { cashTarget: 0, challengeCashTarget: 120 },
     "CYJB店": { cashTarget: 100, challengeCashTarget: 90 },
     "CYJC店": { accrualTarget: "bad", challengeAccrualTarget: 300 },
   });
   assert.deepEqual(audit.zeroBaseTargets, [{ storeName: "CYJA店", metric: "cash" }]);
-  assert.ok(audit.challengeWithoutValidBase.some((row) => row.storeName === "CYJA店" && row.metric === "cash"));
+  assert.equal(
+    audit.challengeWithoutValidBase.some((row) => row.storeName === "CYJA店" && row.metric === "cash"),
+    false,
+    "base zero is valid, so challenge 120 is valid and must not be treated as missing-base",
+  );
   assert.ok(audit.challengeNotGreaterThanBase.some((row) => row.storeName === "CYJB店" && row.metric === "cash"));
   assert.ok(audit.invalidBaseTargets.some((row) => row.storeName === "CYJC店" && row.metric === "accrual"));
-  assert.ok(audit.issueCount >= 4);
+  assert.ok(audit.challengeWithoutValidBase.some((row) => row.storeName === "CYJC店" && row.metric === "accrual"));
+  assert.equal(audit.issueCount, 3);
 });
 
 test("target coverage physical paths preserve CYJ legacy root and standard brand roots", () => {
@@ -199,7 +204,7 @@ test("TargetView uses canonical target validity and no longer writes target Summ
 });
 
 test("KPI Settings preserves missing newASP and validates benchmark ranges before write", () => {
-  assert.match(settingsView, /validBaseTarget\(localTargets\?\.newASP\)/);
+  assert.match(settingsView, /validPositiveSetting\(localTargets\?\.newASP\)/);
   assert.match(settingsView, /validateStoreHealthBenchmark/);
   assert.match(settingsView, /newASP:\s*newAspResult\.valid \? newAspResult\.value : deleteField\(\)/);
   assert.match(settingsView, /benchmarks\.\$\{brandKey\}\.\$\{category\.id\}/);
@@ -213,11 +218,81 @@ test("KPI Settings preserves missing newASP and validates benchmark ranges befor
 });
 
 test("App propagates benchmark settings and no longer promotes missing newASP to 3500", () => {
-  assert.match(app, /import \{ validBaseTarget \} from "\.\/utils\/kpiContracts"/);
+  assert.match(app, /import \{ validPositiveSetting \} from "\.\/utils\/kpiContracts"/);
   assert.match(app, /benchmarks:\s*data\?\.benchmarks/);
   assert.match(app, /newASP:\s*newAspResult\.valid \? newAspResult\.value : null/);
   assert.match(app, /CURRENT_APP_VERSION = "3\.5\.3"/);
   assert.doesNotMatch(app, /newASP:\s*Number\(data\.newASP \?\? 3500\)/);
+});
+
+test("5E-1B.1 explicit zero is configured coverage and zero is not a target-audit issue", () => {
+  const targetMap = {
+    "CYJA店": { storeName: "CYJA店", cashTarget: 0, accrualTarget: 0 },
+  };
+  const audit = targetCoverage.buildTargetAudit(targetMap);
+  assert.equal(audit.zeroBaseTargets.length, 2, "zeroBaseTargets remains informational");
+  assert.equal(audit.issueCount, 0, "explicit configured zero must not count as an issue");
+
+  const coverage = targetCoverage.buildIndependentCoverage({
+    targetMap,
+    eligibleEntries: [{ canonicalStoreName: "CYJA店", storeKey: "A" }],
+    lifecycleReady: true,
+  });
+  assert.equal(coverage.cashConfiguredStoreCount, 1);
+  assert.equal(coverage.accrualConfiguredStoreCount, 1);
+  assert.equal(coverage.cashCoverageComplete, true);
+  assert.equal(coverage.accrualCoverageComplete, true);
+  assert.deepEqual(coverage.cashMissingStores, []);
+  assert.deepEqual(coverage.accrualMissingStores, []);
+
+  const compatibility = targetCoverage.buildTargetSummaryCompatibilityFields(targetMap, "cyj", "2026-08");
+  assert.equal(compatibility.cashTargetTotal, 0);
+  assert.equal(compatibility.accrualTargetTotal, 0);
+});
+
+test("5E-1B.1 canonical CYJ新店店 explicit zero beats newer legacy positive duplicate", () => {
+  const summary = {
+    targets: {
+      legacy: {
+        storeName: "CYJ新店",
+        sourceDocId: "CYJ新店_2026_8",
+        yearMonth: "2026-08",
+        cashTarget: 900000,
+        accrualTarget: 800000,
+        updatedAtText: "2026-08-31T23:59:59.000Z",
+      },
+      canonical: {
+        storeName: "CYJ新店店",
+        sourceDocId: "CYJ新店店_2026_8",
+        yearMonth: "2026-08",
+        cashTarget: 0,
+        accrualTarget: 0,
+        updatedAtText: "2026-08-01T00:00:00.000Z",
+      },
+    },
+  };
+  const map = targetCoverage.extractSummaryTargetMap(summary, "cyj", "2026-08");
+  assert.equal(map["CYJ新店店"].sourceDocId, "CYJ新店店_2026_8");
+  assert.equal(map["CYJ新店店"].cashTarget, 0);
+  assert.equal(map["CYJ新店店"].accrualTarget, 0);
+  assert.equal(map["CYJ新店店"].isCanonicalSource, true);
+  assert.equal(map["CYJ新店店"].canonicalTargetId, "CYJ新店店_2026_8");
+});
+
+test("5E-1B.1 event writer preserves canonical identity metadata", () => {
+  assert.match(
+    coverageSource,
+    /resolved\.sourceDocId \|\| targetId,\s*identity\.canonicalTargetId\s*\)/
+  );
+});
+
+test("5E-1B.1 TargetView remains event-driven and zero writer semantics come from validBaseTarget", () => {
+  assert.match(targetView, /cashTarget:\s*cashResult\.valid \? cashResult\.value : deleteField\(\)/);
+  assert.match(targetView, /accrualTarget:\s*accrualResult\.valid \? accrualResult\.value : deleteField\(\)/);
+  assert.doesNotMatch(targetView, /getCollectionPath\("monthly_targets_summary"\)/);
+  assert.match(app, /validPositiveSetting\(data\.newASP\)/);
+  assert.match(settingsView, /validPositiveSetting\(localTargets\?\.newASP\)/);
+  assert.match(settingsView, /validPositiveSetting\(targets\?\.newASP\)/);
 });
 
 test("Functions exports only scoped event-driven Target Coverage handlers", () => {
@@ -250,4 +325,53 @@ test("Target Coverage uses Lifecycle owner, has no polling, and does not full-sc
   assert.doesNotMatch(coverageSource, /collection\(['"]monthly_targets['"]\)\.get\s*\(/);
   assert.match(coverageSource, /getCollection\(brandId,\s*'monthly_targets_summary'\)\.get\(\)/);
   assert.match(coverageSource, /beforeStatus !== 'READY' && afterStatus !== 'READY'/);
+});
+
+test("5E-1B.3 conflicting canonical-equivalent authoritative Summary rows fail closed", () => {
+  const summary = {
+    targets: {
+      canonicalA: {
+        storeName: "CYJ新店店",
+        sourceDocId: "CYJ新店店_2026_8",
+        yearMonth: "2026-08",
+        cashTarget: 0,
+        accrualTarget: 0,
+      },
+    },
+    storeTargets: {
+      canonicalB: {
+        storeName: "CYJ新店店",
+        sourceDocId: "CYJ新店店_2026_8",
+        yearMonth: "2026-08",
+        cashTarget: 900000,
+        accrualTarget: 800000,
+      },
+    },
+  };
+
+  const map = targetCoverage.extractSummaryTargetMap(summary, "cyj", "2026-08");
+  const row = map["CYJ新店店"];
+  assert.equal(row.authorityConflict, true);
+  assert.equal(row.status, "AUTHORITY_CONFLICT");
+  assert.equal(row.cashTarget, null);
+  assert.equal(row.accrualTarget, null);
+
+  const audit = targetCoverage.buildTargetAudit(map);
+  assert.equal(audit.authorityConflicts.length, 1);
+  assert.equal(audit.issueCount, 1);
+
+  const coverage = targetCoverage.buildIndependentCoverage({
+    targetMap: map,
+    eligibleEntries: [{ storeKey: "新店", canonicalStoreName: "CYJ新店店" }],
+    lifecycleReady: true,
+  });
+  assert.equal(coverage.cashCoverageComplete, false);
+  assert.equal(coverage.accrualCoverageComplete, false);
+  assert.equal(coverage.cashConfiguredStoreCount, 0);
+  assert.equal(coverage.accrualConfiguredStoreCount, 0);
+
+  assert.match(
+    coverageSource,
+    /targetMap\[identity\.canonicalStoreName\] = choosePreferredTargetRow\(/
+  );
 });

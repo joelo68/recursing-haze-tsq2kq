@@ -339,3 +339,13 @@ test("Batch 5B-1 adds no Firestore listener/query and keeps app version unchange
   assert.doesNotMatch(regional, /firebase\/firestore|onSnapshot\s*\(|getDocs\s*\(|getDoc\s*\(/);
   assert.match(app, /CURRENT_APP_VERSION = "3\.5\.3"/);
 });
+
+test("5E-1B report Formal target reader accepts VALID_ZERO while N_A stays non-rankable", () => {
+  const source = read("src/utils/reportFormalConsumer.js");
+  const start = source.indexOf("const readFormalTarget");
+  const end = source.indexOf("const readFormalAchievement", start);
+  assert.ok(start >= 0 && end > start);
+  const targetReader = source.slice(start, end);
+  assert.match(targetReader, /if \(!target\.valid \|\| !isValidNumericStatus\(status\)\)/);
+  assert.doesNotMatch(targetReader, /status !== KPI_VALUE_STATUS\.VALID/);
+});

@@ -377,3 +377,33 @@ test("AnnualView only closes the exclusion modal and shows success after the wri
   assert.ok(closeIndex > successCheckIndex);
   assert.ok(successToastIndex > closeIndex);
 });
+
+test("5E-1B Annual Formal all-zero configured targets stay zero and achievement is N/A", () => {
+  const result = buildAnnualFormalMonth({
+    dashboardSummary: makeDashboardSummary(),
+    monthlyTargetSummary: makeTargetSummary({
+      cashA: 0,
+      cashB: 0,
+      accrualA: 0,
+      accrualB: 0,
+    }),
+    normalizeStoreKey: normalizeStore,
+  });
+
+  assert.equal(result.applied, true);
+  assert.equal(result.budget, 0);
+  assert.equal(result.accrualBudget, 0);
+  assert.equal(result.cashCoverageComplete, true);
+  assert.equal(result.accrualCoverageComplete, true);
+  assert.equal(result.achievement, null);
+  assert.equal(result.accrualAchievement, null);
+});
+
+test("5E-1B AnnualView explicit zero is presence-aware and does not reopen legacy target fallback", () => {
+  const source = fs.readFileSync(path.join(root, "src/components/AnnualView.jsx"), "utf8");
+  assert.match(source, /const readTargetValue = \(row, keys = \[\]\) =>/);
+  assert.match(source, /!cashTargetResult\.found && !accrualTargetResult\.found/);
+  assert.match(source, /cashTargetResult\.configured \|\| accrualTargetResult\.configured/);
+  assert.doesNotMatch(source, /if \(!row \|\| \(cashTarget <= 0 && accrualTarget <= 0\)\)/);
+  assert.doesNotMatch(source, /if \(cashTarget > 0 \|\| accrualTarget > 0\)/);
+});
