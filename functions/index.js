@@ -106,6 +106,12 @@ const {
   buildSummaryStoreSemanticSignature,
   buildFormalRankingSignature,
 } = require("./summarySemantics");
+const {
+  THERAPIST_KPI_SEMANTIC_VERSION,
+  applyTherapistRankingSemantics,
+  buildTherapistAggregateMetrics,
+  buildTherapistSummarySignature,
+} = require("./therapistKpi");
 
 
 const GEMINI_API_KEY = defineSecret('GEMINI_API_KEY');
@@ -11198,29 +11204,8 @@ async function buildAutoDashboardSummaryPayloads(brandId, yearMonth) {
     t.returnRevenue += Number(row.returnRevenue) || 0;
   });
 
-  const therapistRankings = Object.values(therapistMap).sort((a, b) => b.totalRevenue - a.totalRevenue);
-  therapistRankings.forEach((item, index) => {
-    item.rank = index + 1;
-    item.totalPeers = therapistRankings.length;
-    item.status = item.rank <= 3 ? "TOP" : item.rank > therapistRankings.length - 10 ? "DANGER" : "NORMAL";
-    item.newClosingRate = item.newCustomerCount > 0 ? (item.newCustomerClosings / item.newCustomerCount) * 100 : 0;
-    item.newAsp = item.newCustomerCount > 0 ? item.newCustomerRevenue / item.newCustomerCount : 0;
-    item.oldAsp = item.oldCustomerCount > 0 ? item.oldCustomerRevenue / item.oldCustomerCount : 0;
-  });
-
-  const therapistGrand = therapistRankings.reduce((acc, item) => {
-    acc.totalRevenue += item.totalRevenue;
-    acc.serviceCount += item.serviceCount;
-    acc.newCustomerRevenue += item.newCustomerRevenue;
-    acc.oldCustomerRevenue += item.oldCustomerRevenue;
-    acc.newCustomerCount += item.newCustomerCount;
-    acc.oldCustomerCount += item.oldCustomerCount;
-    acc.newCustomerClosings += item.newCustomerClosings;
-    acc.returnRevenue += item.returnRevenue;
-    return acc;
-  }, { totalRevenue: 0, serviceCount: 0, newCustomerRevenue: 0, oldCustomerRevenue: 0, newCustomerCount: 0, oldCustomerCount: 0, newCustomerClosings: 0, returnRevenue: 0, count: therapistRankings.length });
-  therapistGrand.regionalNewClosingRate = therapistGrand.newCustomerCount > 0 ? (therapistGrand.newCustomerClosings / therapistGrand.newCustomerCount) * 100 : 0;
-  therapistGrand.regionalNewAsp = therapistGrand.newCustomerCount > 0 ? therapistGrand.newCustomerRevenue / therapistGrand.newCustomerCount : 0;
+  const therapistRankings = applyTherapistRankingSemantics(Object.values(therapistMap));
+  const therapistGrand = buildTherapistAggregateMetrics(therapistRankings);
 
   const topTherapistsByDate = (date) => Object.values(therapistRows.reduce((acc, row) => {
     if (row.date !== date) return acc;
@@ -11283,6 +11268,7 @@ async function buildAutoDashboardSummaryPayloads(brandId, yearMonth) {
     yearMonth,
     monthStart: range.start,
     monthEnd: range.end,
+    therapistKpiSemanticVersion: THERAPIST_KPI_SEMANTIC_VERSION,
     grandTotal: therapistGrand,
     rankings: therapistRankings,
     todayTop3: topTherapistsByDate(todayStr),
@@ -11318,6 +11304,7 @@ async function buildAutoDashboardSummaryPayloads(brandId, yearMonth) {
       formalCashAchievementRank: s.formalCashAchievementRank,
       formalRankEligible: s.formalRankEligible,
     })),
+    therapistKpiSemanticVersion: THERAPIST_KPI_SEMANTIC_VERSION,
     therapistTop3: { today: therapistSummary.todayTop3, yesterday: therapistSummary.yesterdayTop3, monthly: therapistSummary.monthlyTop5.slice(0, 3) },
     therapistRankings: therapistRankings.map((t) => ({ id: t.id, name: t.name, storeDisplay: t.storeDisplay, manager: t.manager, totalRevenue: t.totalRevenue, rank: t.rank, status: t.status })),
     lastUpdatedAt: nowTimestamp,
@@ -11404,6 +11391,7 @@ function makeAutoSummaryCompareRows({ storedDashboard, storedTherapist, storedRa
     { label: "Ranking Semantic Version", stored: getAutoMetricValue(storedRankings, "semanticVersion", ""), fresh: getAutoMetricValue(freshRankings, "semanticVersion", ""), type: "text", exact: true },
     { label: "Formal Ranking Eligible Count", stored: getAutoMetricValue(storedRankings, "formalRankEligibleStoreCount", null), fresh: getAutoMetricValue(freshRankings, "formalRankEligibleStoreCount", null), type: "count", exactNull: true },
     { label: "Formal Ranking Signature", stored: buildFormalRankingSignature(storedRankings), fresh: buildFormalRankingSignature(freshRankings), type: "text", exact: true },
+    { label: "Therapist KPI Signature", stored: buildTherapistSummarySignature(storedTherapist), fresh: buildTherapistSummarySignature(freshTherapist), type: "text", exact: true },
     { label: "人員業績", stored: getAutoMetricValue(storedTherapist, "grandTotal.totalRevenue"), fresh: getAutoMetricValue(freshTherapist, "grandTotal.totalRevenue"), type: "money" },
     { label: "店日報筆數", stored: getAutoMetricValue(storedDashboard, "sourceCounts.dailyReports"), fresh: getAutoMetricValue(freshDashboard, "sourceCounts.dailyReports"), type: "count" },
     { label: "管理師日報筆數", stored: getAutoMetricValue(storedTherapist, "sourceCounts.therapistReports"), fresh: getAutoMetricValue(freshTherapist, "sourceCounts.therapistReports"), type: "count" },

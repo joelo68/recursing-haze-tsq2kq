@@ -11,6 +11,7 @@ import {
   buildCurrentDetailFormalScope,
 } from '../utils/currentDetailFormalConsumer.js';
 import { buildHistoricalFormalDashboardScope, isFormalDashboardSummaryCompatible } from '../utils/dashboardFormalConsumer.js';
+import { applyTherapistRankingSemantics, buildTherapistAggregateMetrics } from '../utils/therapistKpi.js';
 import { getSummaryRecalcFlagState, resolveHistoricalDashboardReadPolicy } from '../utils/dashboardReadPolicy.js';
 
 const safeNumber = (value) => Number.isFinite(Number(value)) ? Number(value) : 0;
@@ -1640,38 +1641,16 @@ export function useDashboardStats() {
       rankings = rankings.filter((item) => selectedStores.has(cleanName(item.store || item.storeDisplay || "")));
     }
 
-    rankings = rankings
-      .sort((a, b) => Number(b.totalRevenue || 0) - Number(a.totalRevenue || 0))
-      .map((item, index, arr) => ({
-        ...item,
-        storeDisplay: item.storeDisplay || normalizeStoreDisplay(item.store),
-        rank: index + 1,
-        totalPeers: arr.length,
-        revenueMix: item.revenueMix || `${Number(item.newCustomerRevenue || 0)} / ${Number(item.oldCustomerRevenue || 0)}`,
-        newClosingRate: Number(item.newClosingRate || 0),
-        newAsp: Number(item.newAsp || 0),
-        oldAsp: Number(item.oldAsp || 0),
-        status: index < 3 ? "TOP" : index >= Math.max(0, arr.length - 10) ? "DANGER" : "NORMAL",
-      }));
+    rankings = applyTherapistRankingSemantics(rankings.map((item) => ({
+      ...item,
+      storeDisplay: item.storeDisplay || normalizeStoreDisplay(item.store),
+    })));
 
     const myStats = userRole === "therapist"
       ? rankings.find((item) => item.id === currentUser?.id || item.name === currentUser?.name) || null
       : null;
 
-    const grandTotal = rankings.reduce((acc, item) => {
-      acc.totalRevenue += Number(item.totalRevenue || 0);
-      acc.serviceCount += Number(item.serviceCount || 0);
-      acc.newCustomerRevenue += Number(item.newCustomerRevenue || 0);
-      acc.oldCustomerRevenue += Number(item.oldCustomerRevenue || 0);
-      acc.newCustomerCount += Number(item.newCustomerCount || 0);
-      acc.oldCustomerCount += Number(item.oldCustomerCount || 0);
-      acc.newCustomerClosings += Number(item.newCustomerClosings || 0);
-      acc.returnRevenue += Number(item.returnRevenue || 0);
-      return acc;
-    }, { totalRevenue: 0, serviceCount: 0, newCustomerRevenue: 0, oldCustomerRevenue: 0, newCustomerCount: 0, oldCustomerCount: 0, newCustomerClosings: 0, returnRevenue: 0, count: rankings.length });
-
-    grandTotal.regionalNewClosingRate = grandTotal.newCustomerCount > 0 ? (grandTotal.newCustomerClosings / grandTotal.newCustomerCount) * 100 : 0;
-    grandTotal.regionalNewAsp = grandTotal.newCustomerCount > 0 ? grandTotal.newCustomerRevenue / grandTotal.newCustomerCount : 0;
+    const grandTotal = buildTherapistAggregateMetrics(rankings);
 
     const filterTopRows = (rows = []) => {
       const list = Array.isArray(rows) ? rows : [];
@@ -2070,37 +2049,18 @@ export function useDashboardStats() {
       statsMap[id].newCustomerClosings += (Number(r.newCustomerClosings) || 0); statsMap[id].returnRevenue += (Number(r.returnRevenue) || 0);
     });
 
-    const rankings = Object.values(statsMap).map(item => {
-        const total = item.totalRevenue || 1; 
-        const newMix = Math.round((item.newCustomerRevenue / total) * 100); const oldMix = Math.round((item.oldCustomerRevenue / total) * 100);
-        const newCount = item.newCustomerCount || 1; const newRate = (item.newCustomerClosings / newCount) * 100;
-        const oldCount = item.oldCustomerCount || 1; const newAsp = item.newCustomerRevenue / newCount; const oldAsp = item.oldCustomerRevenue / oldCount;
-        const finalStoreDisplay = item.storeDisplay + '店';
-        
-        const matchedTherapist = therapists && Array.isArray(therapists) ? therapists.find(t => t.id === item.id) : null;
-        const isSystemStaff = !!matchedTherapist;
-        const latestName = matchedTherapist ? matchedTherapist.name : item.name;
-
-        return { 
-            ...item, 
-            name: latestName, 
-            storeDisplay: finalStoreDisplay, 
-            revenueMix: `${newMix}% / ${oldMix}%`, 
-            newClosingRate: newRate, 
-            newAsp, 
-            oldAsp, 
-            isSystemStaff 
-        };
-    }).sort((a, b) => b.totalRevenue - a.totalRevenue);
-
-    const totalTherapists = rankings.length;
-    rankings.forEach((item, index) => { 
-        item.rank = index + 1; item.totalPeers = totalTherapists;
-        if (item.rank <= 3) item.status = "TOP";
-        else if (item.rank > totalTherapists - 10) item.status = "DANGER";
-        else item.status = "NORMAL";
-        item.gapToNext = index > 0 ? rankings[index - 1].totalRevenue - item.totalRevenue : 0;
+    const preparedTherapists = Object.values(statsMap).map((item) => {
+      const matchedTherapist = therapists && Array.isArray(therapists)
+        ? therapists.find((t) => t.id === item.id)
+        : null;
+      return {
+        ...item,
+        name: matchedTherapist ? matchedTherapist.name : item.name,
+        storeDisplay: `${item.storeDisplay}店`,
+        isSystemStaff: Boolean(matchedTherapist),
+      };
     });
+    const rankings = applyTherapistRankingSemantics(preparedTherapists);
     
     let myStats = null;
     let myYearlyTotal = 0; 
@@ -2118,33 +2078,7 @@ export function useDashboardStats() {
         }
     }
     
-    const grandTotal = rankings.reduce((acc, curr) => ({ 
-        totalRevenue: acc.totalRevenue + curr.totalRevenue, serviceCount: acc.serviceCount + curr.serviceCount, 
-        newCustomerRevenue: acc.newCustomerRevenue + curr.newCustomerRevenue, oldCustomerRevenue: acc.oldCustomerRevenue + curr.oldCustomerRevenue,
-        returnRevenue: acc.returnRevenue + curr.returnRevenue,
-        newCustomerCount: acc.newCustomerCount + curr.newCustomerCount,
-        newCustomerClosings: acc.newCustomerClosings + curr.newCustomerClosings
-    }), { totalRevenue: 0, serviceCount: 0, newCustomerRevenue: 0, oldCustomerRevenue: 0, returnRevenue: 0, newCustomerCount: 0, newCustomerClosings: 0 });
-    
-    let globalNewCustomerSales = 0;
-    let globalNewCustomers = 0;
-    let globalNewCustomerClosings = 0;
-    
-    if (allReports) {
-        allReports.forEach(report => {
-            const rDate = new Date(report.date);
-            if (rDate.getFullYear() === parseInt(selectedYear) && (rDate.getMonth() + 1) === parseInt(selectedMonth)) {
-                if (therapistEffectiveStores.includes(cleanName(report.storeName))) {
-                    globalNewCustomerSales += (Number(report.newCustomerSales) || 0);
-                    globalNewCustomers += (Number(report.newCustomers) || 0);
-                    globalNewCustomerClosings += (Number(report.newCustomerClosings) || 0);
-                }
-            }
-        });
-    }
-
-    grandTotal.regionalNewClosingRate = globalNewCustomers > 0 ? (globalNewCustomerClosings / globalNewCustomers) * 100 : 0;
-    grandTotal.regionalNewAsp = globalNewCustomers > 0 ? (globalNewCustomerSales / globalNewCustomers) : 0;
+    const grandTotal = buildTherapistAggregateMetrics(rankings);
 
     let systemTherapistCount = 0;
     if (therapists && Array.isArray(therapists)) {
@@ -2204,7 +2138,7 @@ export function useDashboardStats() {
     });
 
     return { rankings, myStats, grandTotal, yesterdayTop3, todayTop3, myYearlyTotal };
-  }, [therapistReports, selectedYear, selectedMonth, therapistEffectiveStores, allReports, cleanName, userRole, currentUser, therapists, therapistAnnualAggregatedData, viewMode, isTherapistModuleEnabled]);
+  }, [therapistReports, selectedYear, selectedMonth, therapistEffectiveStores, cleanName, userRole, currentUser, therapists, therapistAnnualAggregatedData, viewMode, isTherapistModuleEnabled]);
 
   const isHistoricalDetailRefreshing = useMemo(() => (
     !isSelectedCurrentMonth &&
