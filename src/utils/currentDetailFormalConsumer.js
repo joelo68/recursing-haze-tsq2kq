@@ -166,12 +166,45 @@ const mergeActualStatus = (statuses = []) => {
   return KPI_VALUE_STATUS.VALID;
 };
 
-const sumStoreMetric = (rows = [], valueKey, statusKey) => {
+const sumStoreMetric = (rows = [], valueKey, statusKey, options = {}) => {
   if (!rows.length) return { value: null, status: KPI_VALUE_STATUS.FIELD_MISSING };
+
+  const allowIncomplete = options.allowIncomplete === true;
   const statuses = rows.map((row) => row?.[statusKey] || KPI_VALUE_STATUS.FIELD_MISSING);
-  const status = mergeActualStatus(statuses);
-  if (!isValidNumericStatus(status)) return { value: null, status };
-  const value = rows.reduce((sum, row) => sum + Number(row?.[valueKey] || 0), 0);
+
+  if (!allowIncomplete) {
+    const status = mergeActualStatus(statuses);
+    if (!isValidNumericStatus(status)) return { value: null, status };
+    const value = rows.reduce((sum, row) => sum + Number(row?.[valueKey] || 0), 0);
+    return { value, status: value === 0 ? KPI_VALUE_STATUS.VALID_ZERO : KPI_VALUE_STATUS.VALID };
+  }
+
+  // Live/current partial mode:
+  // - DATA_INCOMPLETE rows represent stores that have no usable actual yet and
+  //   are omitted from the observed subtotal.
+  // - true invalid/missing/lifecycle failures remain blocking.
+  const blockingStatuses = statuses.filter(
+    (status) => status !== CURRENT_DETAIL_KPI_STATUS.DATA_INCOMPLETE
+  );
+  if (blockingStatuses.length > 0) {
+    const blockingStatus = mergeActualStatus(blockingStatuses);
+    if (!isValidNumericStatus(blockingStatus)) return { value: null, status: blockingStatus };
+  }
+
+  const numericRows = rows.filter((row) => (
+    isValidNumericStatus(row?.[statusKey]) &&
+    isFiniteNumber(row?.[valueKey])
+  ));
+  const malformedValidRow = rows.some((row) => (
+    isValidNumericStatus(row?.[statusKey]) &&
+    !isFiniteNumber(row?.[valueKey])
+  ));
+  if (malformedValidRow) return { value: null, status: KPI_VALUE_STATUS.DATA_INVALID };
+  if (numericRows.length === 0) {
+    return { value: null, status: CURRENT_DETAIL_KPI_STATUS.DATA_INCOMPLETE };
+  }
+
+  const value = numericRows.reduce((sum, row) => sum + Number(row[valueKey]), 0);
   return { value, status: value === 0 ? KPI_VALUE_STATUS.VALID_ZERO : KPI_VALUE_STATUS.VALID };
 };
 
@@ -217,9 +250,18 @@ export const buildCurrentDetailFormalAuthority = ({
   reports = [],
   cutoffDate = "",
   normalizeStoreKey = normalizeStoreLifecycleCore,
+  now = new Date(),
 } = {}) => {
   const normalizedBrandId = normalizeKpiBrandId(brandId);
   const normalizedYearMonth = normalizeYearMonth(yearMonth);
+  // Runtime stabilization:
+  // only the live/current month may expose a known partial actual while reporting
+  // completeness remains a separate DATA_INCOMPLETE status. Historical detail
+  // fallback keeps the strict fail-closed contract.
+  const allowPartialActuals = Boolean(
+    normalizedYearMonth &&
+    normalizedYearMonth === getTaipeiDate(now).slice(0, 7)
+  );
   const rawLifecycleBrandId = String(lifecycleMaster?.brandId || "").trim();
   const lifecycleBrandId = rawLifecycleBrandId ? normalizeLifecycleBrandId(rawLifecycleBrandId) : "";
   const lifecycleReady = Boolean(
@@ -253,7 +295,7 @@ export const buildCurrentDetailFormalAuthority = ({
   const eligibleStoreKeys = eligibleEntries.map((entry) => normalizeStoreKey(entry.storeKey || entry.coreStoreName)).filter(Boolean);
   const entryByStore = new Map(eligibleEntries.map((entry) => [normalizeStoreKey(entry.storeKey || entry.coreStoreName), entry]));
 
-  const effectiveCutoffDate = normalizeIsoDate(cutoffDate) || resolveCurrentDetailReportingCutoffDate(normalizedYearMonth);
+  const effectiveCutoffDate = normalizeIsoDate(cutoffDate) || resolveCurrentDetailReportingCutoffDate(normalizedYearMonth, now);
   const reporting = buildLifecycleReportingCompleteness({
     master: normalizedMaster,
     yearMonth: normalizedYearMonth,
@@ -307,15 +349,8 @@ export const buildCurrentDetailFormalAuthority = ({
       ? aggregateFormalMetrics(normalizedBrandId, storeReports)
       : zeroFormalMetrics(normalizedBrandId);
 
-    if (reportingStatus !== "DATA_COMPLETE") {
-      metrics = {
-        ...metrics,
-        formalNetCash: null,
-        formalNetCashStatus: CURRENT_DETAIL_KPI_STATUS.DATA_INCOMPLETE,
-        formalAccrual: null,
-        formalAccrualStatus: CURRENT_DETAIL_KPI_STATUS.DATA_INCOMPLETE,
-      };
-    } else if (expectedReportDayCount > 0 && storeReports.length === 0) {
+    const hasNoExpectedReportDocument = expectedReportDayCount > 0 && storeReports.length === 0;
+    if ((!allowPartialActuals && reportingStatus !== "DATA_COMPLETE") || hasNoExpectedReportDocument) {
       metrics = {
         ...metrics,
         formalNetCash: null,
@@ -373,6 +408,7 @@ export const buildCurrentDetailFormalAuthority = ({
       accrualAchievement: accrualAchievement.value,
       accrualAchievementStatus: accrualAchievement.status,
       formalRankEligible: (
+        reportingStatus === "DATA_COMPLETE" &&
         isValidNumericStatus(metrics.formalNetCashStatus) &&
         cashTarget.status === KPI_VALUE_STATUS.VALID &&
         isValidNumericStatus(cashAchievement.status)
@@ -403,6 +439,7 @@ export const buildCurrentDetailFormalAuthority = ({
     yearMonth: normalizedYearMonth,
     lifecycleReady: true,
     cutoffDate: effectiveCutoffDate,
+    allowPartialActuals,
     stores,
     eligibleStoreKeys,
     reporting,
@@ -443,8 +480,9 @@ export const buildCurrentDetailFormalScope = ({
     ? new Set(storeKeys.map(normalizeStoreKey).filter(Boolean))
     : null;
   const rows = Object.values(authority.stores || {}).filter((row) => !requested || requested.has(normalizeStoreKey(row.storeKey)));
-  const cash = sumStoreMetric(rows, "formalNetCash", "formalNetCashStatus");
-  const accrual = sumStoreMetric(rows, "formalAccrual", "formalAccrualStatus");
+  const partialActualOptions = { allowIncomplete: authority.allowPartialActuals === true };
+  const cash = sumStoreMetric(rows, "formalNetCash", "formalNetCashStatus", partialActualOptions);
+  const accrual = sumStoreMetric(rows, "formalAccrual", "formalAccrualStatus", partialActualOptions);
   const cashTarget = buildScopeTarget({ rows, targetAuthority: authority.targetAuthority, targetKey: "cashTarget", targetStatusKey: "cashTargetStatus" });
   const accrualTarget = buildScopeTarget({ rows, targetAuthority: authority.targetAuthority, targetKey: "accrualTarget", targetStatusKey: "accrualTargetStatus" });
   const challengeCashTarget = buildScopeChallengeTarget({ rows, targetAuthority: authority.targetAuthority, targetKey: "challengeCashTarget", targetStatusKey: "challengeCashTargetStatus" });

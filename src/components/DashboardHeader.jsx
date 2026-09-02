@@ -84,6 +84,10 @@ const DashboardHeader = ({
   const accrualActualStatus = String(dashboardKpiStatus?.accrual || "");
   const cashTargetStatus = String(dashboardKpiStatus?.cashTarget || "");
   const accrualTargetStatus = String(dashboardKpiStatus?.accrualTarget || "");
+  const reportingStatus = String(dashboardKpiStatus?.reportingStatus || "");
+  if (reportingStatus === "DATA_INCOMPLETE") {
+    kpiWarnings.push("回報尚未完整（目前顯示已回報累計）");
+  }
   if (cashActualStatus === "DATA_INCOMPLETE") kpiWarnings.push("現金實績資料不足");
   if (cashTargetStatus === "TARGET_INCOMPLETE") kpiWarnings.push("現金目標資料不足");
   if (accrualActualStatus === "DATA_INCOMPLETE") kpiWarnings.push("權責實績資料不足");

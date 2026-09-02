@@ -274,3 +274,84 @@ test("5E-1B current detail keeps configured zero target and returns denominator 
   assert.equal(scope.cashCoverageComplete, true);
   assert.equal(scope.accrualCoverageComplete, true);
 });
+
+test("runtime stabilization current month exposes observed partial actuals while keeping reporting incomplete", () => {
+  const master = makeMaster("cyj", {
+    A: lifecycleEntry(),
+    B: lifecycleEntry(),
+  });
+  const targetSummary = makeTargetSummary({
+    rows: {
+      A: { cashTarget: 100, accrualTarget: 100 },
+      B: { cashTarget: 100, accrualTarget: 100 },
+    },
+  });
+
+  const authority = buildCurrentDetailFormalAuthority({
+    brandId: "cyj",
+    yearMonth: "2026-08",
+    lifecycleMaster: master,
+    monthlyTargetSummary: targetSummary,
+    cutoffDate: "2026-08-02",
+    normalizeStoreKey,
+    now: new Date("2026-08-03T00:00:00Z"),
+    reports: [
+      { storeName: "A", date: "2026-08-01", cash: 50, refund: 0, skincareRefund: 0, accrual: 50, operationalAccrual: 50 },
+      { storeName: "A", date: "2026-08-02", cash: 50, refund: 0, skincareRefund: 0, accrual: 50, operationalAccrual: 50 },
+    ],
+  });
+
+  assert.equal(authority.allowPartialActuals, true);
+  assert.equal(authority.reportingStatus, "DATA_INCOMPLETE");
+  assert.equal(authority.stores.A.reportingStatus, "DATA_COMPLETE");
+  assert.equal(authority.stores.A.formalNetCash, 100);
+  assert.equal(authority.stores.B.reportingStatus, "DATA_INCOMPLETE");
+  assert.equal(authority.stores.B.formalNetCash, null);
+  assert.equal(authority.stores.B.formalRankEligible, false);
+
+  const scope = buildCurrentDetailFormalScope({ authority, normalizeStoreKey });
+  assert.equal(scope.reportingStatus, "DATA_INCOMPLETE");
+  assert.equal(scope.cash, 100);
+  assert.equal(scope.cashStatus, KPI_VALUE_STATUS.VALID);
+  assert.equal(scope.accrual, 100);
+  assert.equal(scope.cashTarget, 200);
+  assert.equal(scope.cashAchievement, 50);
+});
+
+test("runtime stabilization current month keeps a partially reported store numeric but non-rankable", () => {
+  const master = makeMaster("cyj", {
+    A: lifecycleEntry(),
+    B: lifecycleEntry(),
+  });
+  const targetSummary = makeTargetSummary({
+    rows: {
+      A: { cashTarget: 100, accrualTarget: 100 },
+      B: { cashTarget: 100, accrualTarget: 100 },
+    },
+  });
+
+  const authority = buildCurrentDetailFormalAuthority({
+    brandId: "cyj",
+    yearMonth: "2026-08",
+    lifecycleMaster: master,
+    monthlyTargetSummary: targetSummary,
+    cutoffDate: "2026-08-02",
+    normalizeStoreKey,
+    now: new Date("2026-08-03T00:00:00Z"),
+    reports: [
+      { storeName: "A", date: "2026-08-01", cash: 50, refund: 0, skincareRefund: 0, accrual: 50, operationalAccrual: 50 },
+      { storeName: "A", date: "2026-08-02", cash: 50, refund: 0, skincareRefund: 0, accrual: 50, operationalAccrual: 50 },
+      { storeName: "B", date: "2026-08-01", cash: 80, refund: 0, skincareRefund: 0, accrual: 80, operationalAccrual: 80 },
+    ],
+  });
+
+  assert.equal(authority.stores.B.reportingStatus, "DATA_INCOMPLETE");
+  assert.equal(authority.stores.B.formalNetCash, 80);
+  assert.equal(authority.stores.B.formalNetCashStatus, KPI_VALUE_STATUS.VALID);
+  assert.equal(authority.stores.B.formalRankEligible, false);
+
+  const scope = buildCurrentDetailFormalScope({ authority, normalizeStoreKey });
+  assert.equal(scope.reportingStatus, "DATA_INCOMPLETE");
+  assert.equal(scope.cash, 180);
+  assert.equal(scope.cashAchievement, 90);
+});

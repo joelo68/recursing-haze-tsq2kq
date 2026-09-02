@@ -146,3 +146,28 @@ test("Dashboard trusted read gate requires both dashboard and rankings summary f
   assert.match(appSource, /rankingsSummaryYearMonth === targetYearMonth/);
   assert.match(hookSource, /rankingsYearMonth === targetYearMonth/);
 });
+
+test("runtime stabilization historical readiness has one-shot point-read recovery without polling", () => {
+  const start = appSource.indexOf("// Runtime stabilization — Historical Summary readiness one-shot recovery.");
+  const end = appSource.indexOf("const shouldLoadAnnualData = ANNUAL_DATA_VIEWS.has(activeView);", start);
+  assert.ok(start >= 0 && end > start);
+  const recovery = appSource.slice(start, end);
+
+  assert.match(appSource, /HISTORICAL_SUMMARY_READINESS_RECOVERY_DELAY_MS = 10_000/);
+  assert.match(recovery, /selectedYearMonth >= currentYearMonth/);
+  assert.match(recovery, /currentReportSummaryReadyYearMonth === selectedYearMonth/);
+  assert.match(recovery, /currentReportSummaryReadyBrandId === brandIdAtStart/);
+  assert.match(recovery, /currentSummaryRecalcFlagState\?\.yearMonth === selectedYearMonth/);
+  assert.match(recovery, /currentSummaryRecalcFlagState\?\.brandId === brandIdAtStart/);
+
+  assert.match(recovery, /getDoc\(doc\(getCollectionPath\("dashboard_summary"\), selectedYearMonth\)\)/);
+  assert.match(recovery, /getDoc\(doc\(getCollectionPath\("rankings_summary"\), selectedYearMonth\)\)/);
+  assert.match(recovery, /getDoc\(doc\(getCollectionPath\("summary_recalc_flags"\), selectedYearMonth\)\)/);
+
+  assert.match(recovery, /setTimeout\(/);
+  assert.match(recovery, /clearTimeout\(recoveryTimer\)/);
+  assert.doesNotMatch(recovery, /setInterval\(/);
+  assert.doesNotMatch(recovery, /\bonSnapshot\s*\(/);
+  assert.doesNotMatch(recovery, /\bquery\s*\(/);
+  assert.doesNotMatch(recovery, /\bgetDocs\s*\(/);
+});

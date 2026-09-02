@@ -76,3 +76,19 @@ test("5D-2 does not change Firestore Rules or application version contract", () 
   assert.match(rules, /allow write:\s*if false/);
   assert.match(app, /3\.5\.3/);
 });
+
+test("runtime stabilization Audit delegates store identity to shared Lifecycle authority", () => {
+  const audit = read("src/components/AuditView.jsx");
+  assert.match(audit, /normalizeStoreLifecycleCore/);
+  assert.match(audit, /\(name\)\s*=>\s*normalizeStoreLifecycleCore\(name\)/);
+  assert.doesNotMatch(
+    audit,
+    /const cleanStoreName[\s\S]{0,350}\.replace\(\/店\$\/i/
+  );
+});
+
+test("runtime stabilization Dashboard separates reporting completeness from observed actual value", () => {
+  const header = read("src/components/DashboardHeader.jsx");
+  assert.match(header, /dashboardKpiStatus\?\.reportingStatus/);
+  assert.match(header, /回報尚未完整（目前顯示已回報累計）/);
+});

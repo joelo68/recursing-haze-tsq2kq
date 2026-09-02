@@ -567,6 +567,7 @@ const MONTHLY_REPORT_DATA_VIEWS = new Set(["dashboard", "regional", "ranking", "
 // Dashboard 預設店鋪模式時也先不讀管理師日報；切到人員績效才啟動。
 const MONTHLY_DAILY_REPORT_DATA_VIEWS = new Set(["dashboard", "regional", "ranking", "store-analysis", "audit", "history"]);
 const OPERATIONAL_FORMAL_LIFECYCLE_VIEWS = new Set(["dashboard", "regional", "ranking", "daily", "audit", "store-analysis"]);
+const HISTORICAL_SUMMARY_READINESS_RECOVERY_DELAY_MS = 10_000;
 const MONTHLY_THERAPIST_REPORT_DATA_VIEWS = new Set(["audit", "history"]);
 
 
@@ -2891,6 +2892,141 @@ export default function App() {
       try { unsubscribe && unsubscribe(); } catch (error) { console.warn("history detail refresh flag unsubscribe failed", error); }
     };
   }, [user, selectedYearMonth, currentBrand.id, getCollectionPath, getStableReadMeta]);
+
+  // Runtime stabilization — Historical Summary readiness one-shot recovery.
+  //
+  // Normal path: existing onSnapshot callbacks win before 10s => extra reads 0.
+  // Stall path: point-read only the unresolved authority groups, max 3 docs:
+  // dashboard_summary/{YM}, rankings_summary/{YM}, summary_recalc_flags/{YM}.
+  // This is not polling and does not reopen historical daily_reports as a listener.
+  useEffect(() => {
+    if (!user || !selectedYearMonth) return undefined;
+
+    const now = new Date();
+    const currentYearMonth = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}`;
+    if (selectedYearMonth >= currentYearMonth) return undefined;
+
+    const brandIdAtStart = currentBrand?.id || "";
+    const summaryReadyForMonth = Boolean(
+      currentReportSummaryReady &&
+      currentReportSummaryReadyYearMonth === selectedYearMonth &&
+      currentReportSummaryReadyBrandId === brandIdAtStart
+    );
+    const flagReadyForMonth = Boolean(
+      currentSummaryRecalcFlagState?.ready === true &&
+      currentSummaryRecalcFlagState?.yearMonth === selectedYearMonth &&
+      currentSummaryRecalcFlagState?.brandId === brandIdAtStart
+    );
+
+    if (summaryReadyForMonth && flagReadyForMonth) return undefined;
+
+    let cancelled = false;
+    const recoveryTimer = setTimeout(async () => {
+      const tasks = [];
+
+      if (!summaryReadyForMonth) {
+        tasks.push({
+          key: "dashboard",
+          source: "dashboard_summary_readiness_recovery",
+          promise: getDoc(doc(getCollectionPath("dashboard_summary"), selectedYearMonth)),
+        });
+        tasks.push({
+          key: "rankings",
+          source: "rankings_summary_readiness_recovery",
+          promise: getDoc(doc(getCollectionPath("rankings_summary"), selectedYearMonth)),
+        });
+      }
+
+      if (!flagReadyForMonth) {
+        tasks.push({
+          key: "flag",
+          source: "summary_recalc_flag_readiness_recovery",
+          promise: getDoc(doc(getCollectionPath("summary_recalc_flags"), selectedYearMonth)),
+        });
+      }
+
+      const settled = await Promise.all(tasks.map(async (task) => {
+        try {
+          return { ...task, snap: await task.promise, error: null };
+        } catch (error) {
+          return { ...task, snap: null, error };
+        }
+      }));
+
+      if (cancelled) return;
+
+      const byKey = Object.fromEntries(settled.map((row) => [row.key, row]));
+      settled.forEach((row) => {
+        if (!row.snap) return;
+        trackReadSource(
+          row.source,
+          row.snap.exists() ? 1 : 0,
+          getStableReadMeta(row.source)
+        );
+      });
+
+      if (!summaryReadyForMonth) {
+        const dashboardResult = byKey.dashboard || {};
+        const rankingsResult = byKey.rankings || {};
+
+        if (dashboardResult.error || rankingsResult.error) {
+          console.warn(
+            "Historical Summary readiness recovery encountered an error:",
+            dashboardResult.error || rankingsResult.error
+          );
+        }
+
+        setCurrentDashboardSummary(
+          dashboardResult.snap?.exists()
+            ? { id: dashboardResult.snap.id, ...dashboardResult.snap.data() }
+            : null
+        );
+        setCurrentRankingsSummary(
+          rankingsResult.snap?.exists()
+            ? { id: rankingsResult.snap.id, ...rankingsResult.snap.data() }
+            : null
+        );
+        // Important: even a point-read error ends the infinite LOADING state and
+        // lets the existing read policy choose the safe fallback/error path.
+        setCurrentReportSummaryReady(true);
+        setCurrentReportSummaryReadyYearMonth(selectedYearMonth);
+        setCurrentReportSummaryReadyBrandId(brandIdAtStart);
+      }
+
+      if (!flagReadyForMonth) {
+        const flagResult = byKey.flag || {};
+        if (flagResult.error) {
+          console.warn("Historical Summary flag readiness recovery failed:", flagResult.error);
+        }
+        setCurrentSummaryRecalcFlagState({
+          brandId: brandIdAtStart,
+          yearMonth: selectedYearMonth,
+          ready: true,
+          data: flagResult.snap?.exists()
+            ? { id: flagResult.snap.id, ...flagResult.snap.data() }
+            : null,
+          error: flagResult.error || null,
+        });
+      }
+    }, HISTORICAL_SUMMARY_READINESS_RECOVERY_DELAY_MS);
+
+    return () => {
+      cancelled = true;
+      clearTimeout(recoveryTimer);
+    };
+  }, [
+    user,
+    selectedYearMonth,
+    currentBrand?.id,
+    currentReportSummaryReady,
+    currentReportSummaryReadyYearMonth,
+    currentReportSummaryReadyBrandId,
+    currentSummaryRecalcFlagState?.brandId,
+    currentSummaryRecalcFlagState?.yearMonth,
+    currentSummaryRecalcFlagState?.ready,
+    getCollectionPath,
+    getStableReadMeta,
+  ]);
 
   useEffect(() => {
     const shouldLoadAnnualData = ANNUAL_DATA_VIEWS.has(activeView);

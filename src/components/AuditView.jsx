@@ -10,6 +10,7 @@ import {
   getLifecycleEligibleStoreEntries,
   isLifecycleEntryExpectedForDate,
   normalizeLifecycleMaster,
+  normalizeStoreLifecycleCore,
 } from "../utils/storeLifecycle.js";
 
 // ★ 終極翻譯蒟蒻：日期標準化
@@ -237,14 +238,12 @@ const AuditView = ({ auditType: controlledAuditType, setAuditType: setControlled
     return name;
   }, [currentBrand]);
 
-  const cleanStoreName = useCallback((name) => {
-    if (!name) return "";
-    return String(name)
-      .replace(/^(DRCYJ|DR\.CYJ|CYJ|Anew\s*\(安妞\)|Yibo\s*\(伊啵\)|安妞|伊啵|Anew|Yibo)\s*/i, '')
-      .replace(/店$/i, '')
-      .replace(/[　\s]+/g, '')
-      .trim();
-  }, []);
+  // Audit must consume the same upstream Store Lifecycle identity resolver as
+  // Lifecycle / Summary / Coverage. Do not strip the geographic "店" from 新店.
+  const cleanStoreName = useCallback(
+    (name) => normalizeStoreLifecycleCore(name),
+    []
+  );
 
   const selectedYearMonthKey = useMemo(() => (
     `${String(selectedYear || "")}-${String(selectedMonth || "").padStart(2, "0")}`
