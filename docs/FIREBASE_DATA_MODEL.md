@@ -2004,3 +2004,112 @@ explicit configured 0 → VALID_ZERO
 ```
 
 在 5E-1B Production Confirmed 前，不可把 numeric zero 當成新的正式 configured-target schema。
+
+---
+
+# Batch 5 Final Addendum — `monthly_targets_summary` Metadata Integrity
+
+`monthly_targets_summary/{YYYY-MM}` 的 `targets` map 與 Coverage contract 是同一 Derived document 中的兩種 authority surface，但完整性判斷不能只看 target map 是否變更。
+
+## Coverage metadata completeness invariant
+
+至少需維持：
+
+```text
+targetCoverageVersion = target-coverage-v1
+kpiContractVersion    = kpi-contract-v1
+brandId / yearMonth   = exact match
+lifecycleReady        = boolean
+
+eligibleStoreCount
+cashConfiguredStoreCount
+accrualConfiguredStoreCount
+→ finite non-negative
+
+cashCoverageComplete
+accrualCoverageComplete
+→ boolean
+
+cashMissingStores
+accrualMissingStores
+→ arrays
+
+targetAudit
+→ object
+
+coverageSource
+coverageUpdatedAtText
+→ non-empty
+```
+
+`coverageSource` 可以來自正常 event writer 或受控 metadata migration；只要完整 contract 與 identity/version 相容，不應因 source 名稱不同就無條件重寫。
+
+## Same-map metadata-loss self-heal
+
+若 persisted Summary：
+
+```text
+targets map unchanged
++
+Coverage metadata missing / incompatible
+```
+
+Backend `functions/targetCoverage.js` 不得 blind-return。
+
+正確 flow：
+
+```text
+Summary onWrite
+→ transaction read CURRENT Summary
+→ transaction read CURRENT store_lifecycle/master
+→ rebuild compatibility + Coverage metadata
+→ merge metadata only
+```
+
+Recovery **不得**寫 `targets`。
+
+這可避免 stale trigger event 在 concurrent writer 之後覆蓋較新的 target authority；Firestore transaction retry 負責 race protection。
+
+## Reads / writes
+
+Normal Raw target writer：
+
+```text
+額外 reads = 0
+```
+
+Exceptional metadata self-heal：
+
+```text
+2 transaction point reads
+1 Summary merge write
+```
+
+沒有新增 collection、path、listener、query、polling 或 Rules。
+
+## Physical path isolation
+
+```text
+CYJ:
+artifacts/default-app-id/public/data/
+  monthly_targets_summary/{YYYY-MM}
+  store_lifecycle/master
+
+安妞 / 伊啵:
+brands/{brandId}/
+  monthly_targets_summary/{YYYY-MM}
+  store_lifecycle/master
+```
+
+Self-heal 不跨 brand root。
+
+## Zero target final contract reminder
+
+```text
+explicit base 0 → VALID_ZERO / configured
+missing         → TARGET_NOT_SET
+denominator 0   → N_A
+AUTHORITY_CONFLICT → fail closed
+```
+
+Legacy Yibo placeholder zero cleanup 是歷史 migration evidence，不可反向把 future intentional zero 定義回「未設定」。

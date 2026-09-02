@@ -1500,3 +1500,113 @@ Brand switch isolation PASS
 ```
 
 Batch 5B-2B 才是 Annual reads topology domain。後續若要減少 Annual reads，應另外做 year-scoped Summary / flags、current-month fallback scope 與 unused listener audit，不得因追求低 reads 取消 dirty/unverified correctness guard。
+
+---
+
+# 45. Batch 5 Final — Target Summary Full Replacement / Coverage Metadata Self-Heal
+
+## Why yearly Target Summary rebuild remains full replacement
+
+SystemMaintenance yearly target-summary rebuild owns the complete target bucket for each month.
+
+Required persistence behavior remains：
+
+```text
+complete targets map
+→ full Summary document replacement
+```
+
+Do **not** change this to nested `merge:true` merely to retain metadata.
+
+Reason：
+
+```text
+nested map omission + merge:true
+→ deleted store key may survive
+→ stale targets.<store> ghost row
+```
+
+This exact class of stale-key issue was already observed during 5E-1A / 1A.1.
+
+## Coverage metadata responsibility
+
+SystemMaintenance does not need to duplicate Backend Coverage classification.
+
+After Batch 5 final self-heal：
+
+```text
+yearly full replacement
+→ monthly_targets_summary onWrite
+→ if targets changed:
+     normal Coverage recompute
+→ if targets same but Coverage metadata missing/incompatible:
+     CURRENT Summary + CURRENT Lifecycle transaction
+     → metadata-only self-heal
+```
+
+Thus responsibilities stay separated：
+
+```text
+Maintenance
+→ complete target map / yearly operator rebuild
+
+Backend targetCoverage.js
+→ canonical Coverage / compatibility metadata authority
+```
+
+## Self-heal cost
+
+Normal Raw Target write：
+
+```text
+additional reads from metadata self-heal logic = 0
+```
+
+Exceptional same-map metadata-loss：
+
+```text
+2 transaction point reads
++ 1 Summary merge write
+```
+
+No polling / new listener / new query.
+
+## Audit / migration after self-heal
+
+`auditHistoricalTargetCoverage` remains read-only and useful for governance.
+
+`migrateHistoricalTargetCoverageMetadata` remains explicit high-privilege metadata-only migration / recovery for already-existing documents that need controlled repair.
+
+They are **not** the normal future self-heal mechanism.
+
+## Production acceptance
+
+After deployment of：
+
+```text
+onLegacyMonthlyTargetSummaryChange
+onBrandMonthlyTargetSummaryChange
+```
+
+Production fault injection removed only：
+
+```text
+targetCoverageVersion
+```
+
+from otherwise valid target Summary documents.
+
+Observed：
+
+```text
+CYJ legacy path     → automatically restored
+standard brand path → automatically restored
+```
+
+Therefore Target Coverage Metadata Self-Heal is Production Confirmed.
+
+## Retired one-time mutation tool
+
+`normalizeLegacyZeroTargetPlaceholders` has completed its historical task and is retired.
+
+Do not restore the old mutation endpoint/UI/client as a general maintenance tool. Keep read-only audit and regression instead.

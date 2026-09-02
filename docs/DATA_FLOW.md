@@ -1400,15 +1400,146 @@ targetAudit issues = 0
 
 2026-09～12 仍保持 5 eligible / 1 configured / 4 missing，證明未設定目標沒有因 cleanup 被轉成 configured zero。
 
-## Zero Target contract boundary
+## Zero Target contract boundary（Historical 5E-1A / 1A.1 checkpoint）
 
-本 flow 只完成 legacy placeholder normalization 與 Derived writer consistency。
+本段只記錄 legacy placeholder normalization 當時的歷史 boundary。其後 5E-1B 已完成正式 promotion / deployment / Production confirmation。
 
-目前 runtime 仍是：
+目前 runtime：
 
 ```text
-base target 0
-→ TARGET_NOT_SET
+explicit base target 0 → VALID_ZERO / configured
+base missing           → TARGET_NOT_SET
+denominator 0          → N_A
+challenge 0            → CHALLENGE_NOT_SET
+newASP 0               → invalid / unset
 ```
 
-「使用者明確輸入 0 = VALID_ZERO」屬 Batch 5E-1B，尚未由本段完成。
+---
+
+# Batch 5 Final Runtime Flow — Reporting / Readiness / Target Coverage Self-Heal
+
+## Current-month observed actual + reporting completeness
+
+```text
+daily_reports
+→ expected-report authority from Lifecycle
+→ submitted rows produce observed Formal actual
+→ compare expected vs submitted report presence
+```
+
+Result：
+
+```text
+known submitted actual + some expected reports missing
+→ actual remains numeric
+→ reportingStatus = DATA_INCOMPLETE / provisional
+→ ranking eligibility = false
+
+no submitted report for store
+→ actual = null / N/A
+```
+
+Missing report is not synthesized as zero.
+
+## Audit Store Identity
+
+```text
+AuditView
+→ shared Store Lifecycle identity normalization
+→ coreStoreName
+→ canonicalStoreName
+```
+
+CYJ 新店：
+
+```text
+新店 / aliases
+→ core 新店
+→ canonical CYJ新店店
+```
+
+Audit 不再維護獨立 identity workaround。
+
+## Historical Summary readiness
+
+Normal：
+
+```text
+historical month
+→ wait for brand+month anchored Summary / rankings / flag readiness
+→ trusted
+→ Summary-first
+```
+
+Exceptional：
+
+```text
+readiness unresolved > 10 seconds
+→ one-shot getDoc recovery
+→ dashboard summary
+→ rankings summary
+→ summary flag
+→ <= 3 point reads once
+→ no polling
+```
+
+## `monthly_targets_summary` full replacement + metadata self-heal
+
+Maintenance yearly Target Summary rebuild：
+
+```text
+SystemMaintenance
+→ rebuild complete yearly target buckets
+→ full document replacement
+```
+
+Full replacement is retained so stale nested `targets.<store>` keys cannot survive through `merge:true`.
+
+If the replacement target map is semantically unchanged but Coverage metadata is absent：
+
+```text
+monthly_targets_summary onWrite
+→ target map same
+→ Coverage contract incomplete
+→ Backend self-heal transaction
+   read CURRENT Summary
+   read CURRENT Lifecycle
+→ merge compatibility + Coverage metadata
+→ keep CURRENT targets map untouched
+```
+
+Normal Raw Target write extra reads：
+
+```text
+0
+```
+
+Exceptional self-heal：
+
+```text
+2 transaction point reads
++ 1 Summary merge write
+```
+
+No new listener / query / polling.
+
+## Existing Audit / Migration boundary
+
+```text
+auditHistoricalTargetCoverage
+→ read-only safety classification
+
+migrateHistoricalTargetCoverageMetadata
+→ explicit high-privilege metadata-only repair
+```
+
+These remain controlled repair/governance tools. They are not required for normal future same-map metadata loss after self-heal deployment.
+
+## One-time zero normalization route
+
+```text
+normalizeLegacyZeroTargetPlaceholders
+→ retired from current runtime
+```
+
+Do not reconnect it as a normal maintenance flow.

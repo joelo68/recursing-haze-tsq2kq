@@ -1,7 +1,7 @@
 # SYSTEM_SOURCE_MAP.md
 
 > 狀態：Project Knowledge Base / Source Map v0.1
-> 已整併至 2026-08-31 Batch 5E-1A / 5E-1A.1 Production closeout；docs-only closeout 前 runtime `HEAD = origin/main = fb7299c1c3cd6aadb97024d5d0dff8a0daf98e38`，`~/cyj-new` 為唯一正式 Source of Truth。各功能的部署／Production Confirmation 仍以 `CURRENT_STATE.md` 為準。
+> 已整併至 2026-09-02 Batch 5 final runtime closeout；docs-only closeout 前 runtime `HEAD = origin/main = 7479fc290d9fae8e4654dce56a04edfdaa3fc3ae`，`~/cyj-new` 為唯一正式 Source of Truth。各功能的部署／Production Confirmation 仍以 `CURRENT_STATE.md` 為準。
 > 禁止以舊對話、舊版檔案、AI 記憶或未提供的檔案補足事實。
 > 無法由目前正式程式確認的內容，必須標記為「未由目前正式來源確認」。
 
@@ -496,7 +496,7 @@ DashboardView.jsx
 - canonical write
 - legacy key migration on write / unlock
 - `validBaseTarget()` / `validChallengeTarget()` canonical validity
-- blank / 0 base target → 未設定欄位，不再經 `parseNumber("")` 寫成 numeric 0
+- blank / missing / null base target → 未設定欄位；explicit numeric 0 → `VALID_ZERO` 並保留 numeric 0
 - challenge 有設定時必須 > 同類型 base target
 - dirty-month scoped write，未修改月份不因「儲存全部」被重寫
 
@@ -2427,3 +2427,124 @@ canonical-equivalent disagreement = AUTHORITY_CONFLICT
 
 Batch 5E-1B 沒有新增 Firestore listener/query/read primitive/polling，
 沒有 Rules、physical path 或 brand topology 變更。
+
+---
+
+# 34. Batch 5 Final Runtime Owners / Reliability Boundaries
+
+## Runtime Stabilization
+
+Current-month actual / reporting completeness：
+
+```text
+src/utils/currentDetailFormalConsumer.js
+src/App.jsx
+src/hooks/useDashboardStats.js
+tests/currentDetailFormalConsumer.test.js
+tests/currentDetailFormalWiring.test.js
+tests/reportingCompleteness.test.js
+```
+
+Audit Store Identity：
+
+```text
+src/components/AuditView.jsx
+src/utils/storeLifecycle.js
+tests/storeIdentity.test.js
+tests/currentDetailFormalWiring.test.js
+```
+
+Historical Summary readiness：
+
+```text
+src/App.jsx
+src/hooks/useDashboardStats.js
+tests/dashboardHistoricalReads.test.js
+```
+
+Owner contract：
+
+```text
+known current-month actual can remain numeric while reporting is DATA_INCOMPLETE
+missing report != numeric zero
+Audit uses shared Lifecycle identity
+historical >10s recovery is one-shot point-read only, not polling
+```
+
+## Target Coverage Metadata Self-Heal
+
+Runtime owner：
+
+```text
+functions/targetCoverage.js
+```
+
+Existing exported triggers：
+
+```text
+onLegacyMonthlyTargetSummaryChange
+onBrandMonthlyTargetSummaryChange
+```
+
+Regression owners：
+
+```text
+tests/targetCoverageEventArbitration.test.js
+tests/targetCoverageSummaryMetadataRecovery.test.js
+```
+
+Self-heal contract：
+
+```text
+same target map + complete Coverage metadata
+→ no-op
+
+same target map + missing/incompatible Coverage metadata
+→ transaction re-read CURRENT Summary + CURRENT Lifecycle
+→ metadata-only merge recovery
+→ targets map unchanged
+```
+
+Physical paths remain：
+
+```text
+CYJ
+artifacts/default-app-id/public/data/monthly_targets_summary/{YYYY-MM}
+
+安妞 / 伊啵
+brands/{brandId}/monthly_targets_summary/{YYYY-MM}
+```
+
+No new listener / query / polling.
+
+Normal Raw Target write extra reads：
+
+```text
+0
+```
+
+Exceptional same-map metadata-loss recovery：
+
+```text
+2 transaction point reads
++ 1 Summary merge write
+```
+
+## Zero normalization retirement
+
+Current runtime must not reintroduce：
+
+```text
+normalizeLegacyZeroTargetPlaceholders
+functions/zeroTargetNormalization.js
+scripts/zeroTargetPlaceholderNormalizationClient.mjs
+tests/zeroTargetNormalization.test.js
+```
+
+Permanent regression：
+
+```text
+tests/zeroTargetRetirement.test.js
+```
+
+Read-only zero audit and normal Target Coverage owners remain.

@@ -2,9 +2,196 @@
 
 > 用途：記錄「目前正式環境已確認到哪個狀態」。這不是 CHANGELOG。  
 > 優先順序：使用者提供的目前正式部署 source > 本檔案 > 其他 Knowledge Base 文件。  
-> 最後整併更新：**2026-09-01（UTC+8）**。
+> 最後整併更新：**2026-09-02（UTC+8）**。
 
-# Latest Production Runtime Override — 2026-09-01
+# Latest Production Runtime Override — 2026-09-02（Batch 5 Final Runtime Closeout）
+
+> 本節是目前最高優先 Production runtime 狀態。下方舊章節保留各子批次當時的歷史 evidence；若狀態或語意衝突，以「最新正式 source + 本節」為準。
+
+正式 source：
+
+```text
+Official working directory = ~/cyj-new
+branch                      = main
+HEAD                        = 7479fc290d9fae8e4654dce56a04edfdaa3fc3ae
+origin/main                 = 7479fc290d9fae8e4654dce56a04edfdaa3fc3ae
+worktree                    = clean（Documentation Source Gate）
+CURRENT_APP_VERSION         = 3.5.3（未提高）
+```
+
+Batch 5 最終 runtime chain：
+
+```text
+443aecf  fix: formalize zero-target and target authority semantics
+9e7ee38  fix: preserve zero targets across target view reload
+16d356b  fix: distinguish target updates from authority conflicts
+754f66f  fix: stabilize dashboard runtime reporting and summary readiness
+7479fc2  fix: self-heal target coverage metadata
+```
+
+## Zero Target / Target Authority
+
+目前正式 contract：
+
+```text
+base target 0                  → VALID_ZERO / configured
+base target positive           → VALID / configured
+base target blank/null/missing → TARGET_NOT_SET
+base target negative/malformed → DATA_INVALID
+
+achievement denominator = 0    → N_A
+challenge blank / 0            → CHALLENGE_NOT_SET
+newASP = 0                     → invalid / unset
+```
+
+Identity / authority：
+
+```text
+canonical source > legacy alias
+
+same physical canonical target 的新事件
+→ temporal replacement
+
+distinct canonical-equivalent authoritative disagreement
+→ AUTHORITY_CONFLICT
+→ denominator unavailable
+→ fail closed
+```
+
+Yibo Production zero round-trip、canonical authority repair 與 cleanup 已完成確認；一次性 `normalizeLegacyZeroTargetPlaceholders` mutation surface 已由 5E-1C 退役，不再是正式 runtime entry。
+
+## Runtime Stabilization — 754f66f
+
+正式行為：
+
+```text
+current month：
+known submitted actual
+→ 保留 numeric actual
+→ reportingStatus = DATA_INCOMPLETE / provisional when expected reports missing
+→ missing report 不得補 0
+→ incomplete store 不具 ranking eligibility
+→ completely no-report store 仍為 null / N/A
+
+Audit：
+→ CYJ 新店 identity 使用 shared Store Lifecycle identity authority
+→ canonical = CYJ新店店
+
+historical readiness：
+→ 正常 verified Summary path 維持 Summary-first
+→ unresolved readiness 超過 10 秒時，只允許一次 bounded point-read recovery
+→ 不新增 polling
+```
+
+Production confirmation boundary：
+
+```text
+current-month observed-partial-actual behavior = PRODUCTION CONFIRMED
+Audit shared CYJ新店 identity                    = PRODUCTION CONFIRMED
+normal historical Summary path                  = PRODUCTION CONFIRMED
+>10s exceptional one-shot recovery branch       = VALIDATED + DEPLOYED
+                                                   NOT deliberately Production exercised
+```
+
+不得為了把最後一項標成 Production Confirmed 而故意讓正式環境卡住；若未來自然發生 stall，再以 runtime evidence 補確認。
+
+## Target Coverage Metadata Self-Heal — 7479fc2
+
+Root cause：
+
+```text
+SystemMaintenance yearly target-summary full replacement
+→ target map 可以完全相同
+→ Coverage metadata 可能被移除
+→ 舊 Summary onWrite 因 same target map 直接 return
+→ Dashboard fail-closed N/A
+```
+
+正式修正：
+
+```text
+same target map
++
+Coverage contract missing / incompatible
+→ transaction re-read CURRENT monthly_targets_summary
+→ transaction re-read CURRENT store_lifecycle/master
+→ rebuild compatibility + Coverage metadata
+→ merge metadata back
+→ targets map 不改寫
+```
+
+正常 Raw Target writer 不增加 reads。Exceptional self-heal：
+
+```text
+2 transaction point reads
++ 1 Summary merge write
+```
+
+沒有新增：
+
+```text
+listener
+query
+polling
+Firestore path
+Rules change
+```
+
+正式 validation / promotion：
+
+```text
+Targeted regression        220 / 220 PASS
+Full repository regression 364 / 364 PASS
+npm run build               PASS
+commit                      7479fc290d9fae8e4654dce56a04edfdaa3fc3ae
+```
+
+精準部署：
+
+```text
+onLegacyMonthlyTargetSummaryChange(us-central1) = DEPLOYED
+onBrandMonthlyTargetSummaryChange(us-central1)  = DEPLOYED
+```
+
+Production fault-injection acceptance：
+
+```text
+CYJ legacy monthly_targets_summary
+→ 手動移除 targetCoverageVersion
+→ 約數秒後自動補回
+→ PRODUCTION CONFIRMED
+
+standard brand monthly_targets_summary
+→ 相同單欄位 metadata-loss test
+→ 自動補回
+→ PRODUCTION CONFIRMED
+```
+
+因此：
+
+```text
+Target Coverage Metadata Self-Heal = PRODUCTION CONFIRMED
+```
+
+## Batch 5 final status
+
+```text
+IMPLEMENTED           = YES
+VALIDATED             = YES
+DEPLOYED              = YES
+MAIN PRODUCTION PATHS = PRODUCTION CONFIRMED
+
+Known observation:
+historical readiness >10s exceptional recovery
+= VALIDATED + DEPLOYED, not deliberately Production exercised
+
+Documentation closeout:
+this canonical docs-only closeout records final Batch 5 state.
+After this docs patch is promoted / committed / pushed and final source gate is clean:
+BATCH 5 = CLOSED
+```
+
+# Historical Production Runtime Override — 2026-09-01（Superseded by 2026-09-02）
 
 > 本節是目前最高優先的 Production runtime 狀態。後續較舊章節保留各自 closeout 當時的歷史狀態；若狀態標籤與本節衝突，以「最新正式 source + 本節 Production confirmation」為準。
 
@@ -1716,34 +1903,25 @@ Raw writes                     = 0
 
 Temporary endpoint `normalizeLegacyZeroTargetPlaceholders` 已完成本次 Production 任務；它不是一般營運工具。後續 Batch 應評估退場／移除，不應讓一次性 mutation endpoint 永久成為常態操作入口。
 
-## 5E-1B boundary
+## 5E-1B boundary（Historical at 5E-1A / 1A.1 closeout）
 
-本 closeout **沒有**修改 canonical Zero Target business contract。
+本段只保留 5E-1A / 1A.1 當時的歷史 boundary。其後 5E-1B 已完成 promotion、deployment 與 Production confirmation。
 
-截至本段 closeout：
+目前 canonical contract 以本文件最上方 2026-09-02 Runtime Override 為準：
 
 ```text
-現行 runtime contract：
-blank / missing / base target numeric 0
-→ TARGET_NOT_SET
-
-下一批 5E-1B 才處理：
-explicit user-entered 0
-→ VALID_ZERO / configured
-
-actual ÷ target 0
-→ N/A
-
-zero-target row
-→ achievement ranking 不 eligible
-→ progress-gap neutral / N/A
+explicit base target 0       → VALID_ZERO / configured
+blank / missing / null       → TARGET_NOT_SET
+achievement denominator = 0  → N_A
+challenge 0                  → CHALLENGE_NOT_SET
+newASP 0                     → invalid / unset
 ```
 
-因此不得把「legacy placeholder 已清完」描述成「0 元正式目標已經支援」。
+因此本段不再代表目前 runtime。
 
-`newASP=0` 仍維持未設定／非法 business setting；Challenge Target `0` 仍維持未設定。
+# Batch 5E-1B Zero Target Canonical Contract — Historical Staging Checkpoint（Superseded）
 
-# Batch 5E-1B Zero Target Canonical Contract — Staging Validated / Pending Promotion
+> 本節保留 2026-09-01 promotion 前 staging evidence；目前正式狀態以 2026-09-02 Runtime Override 為準。
 
 2026-09-01 已完成獨立 Final Contract Audit V3。
 

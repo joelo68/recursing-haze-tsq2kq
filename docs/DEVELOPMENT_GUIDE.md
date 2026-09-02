@@ -256,7 +256,8 @@ formalAccrual
   安妞       → operationalAccrual
 
 VALID_ZERO != FIELD_MISSING != DATA_INVALID
-blank / null / 0 base target => TARGET_NOT_SET
+blank / null / missing base target => TARGET_NOT_SET
+explicit base target 0 => VALID_ZERO / configured
 ratio denominator = 0 => N/A
 ```
 
@@ -1684,32 +1685,173 @@ No listener, polling, or full Raw target scan was added by 5E-1A.1.
 
 One-time repair may use bounded exact point reads, but it must not scan `daily_reports`, `therapist_daily_reports`, or rebuild unrelated Dashboard Summary data without evidence that those layers are affected.
 
-## 27.6 Current Zero Target contract is still pre-5E-1B
+## 27.6 Current Zero Target contract — post-5E-1B
 
-5E-1A / 1A.1 only removes ambiguity created by legacy placeholders.
+5E-1B 已完成 shared KPI contracts、Writer、Coverage、Summary / Formal consumers 的 coherent migration，並完成 Production confirmation。
 
-Until 5E-1B is implemented, validated, deployed and Production Confirmed:
+目前固定規則：
 
 ```text
-blank / missing / base target 0
+blank / missing / null base target
 → TARGET_NOT_SET
 
-newASP 0
-→ not configured / invalid
+explicit numeric 0 base target
+→ VALID_ZERO / configured
+→ raw monthly_targets 保留 numeric 0
+→ Coverage 視為 configured
+→ denominator = 0 時 achievement = N_A
+→ achievement ranking 不 eligible
+→ progress-gap neutral / N/A
+
+positive base target
+→ VALID / configured
 
 challenge target 0
 → CHALLENGE_NOT_SET
+
+newASP 0
+→ not configured / invalid
 ```
 
-Future intended contract:
+Authority conflict 仍必須 terminal fail closed；不得以 updatedAt、document id 或 consumer fallback 復活衝突 denominator。
+
+---
+
+# 28. Batch 5 Runtime Stabilization / Target Coverage Metadata Self-Heal
+
+## 28.1 Current-month reporting completeness
+
+Current month 不得把「缺報」和「實績 0」混為同一件事。
 
 ```text
-explicit configured base target 0
-→ VALID_ZERO
-→ configured for Coverage
-→ achievement N/A because denominator is 0
-→ not achievement-rank eligible
-→ progress-gap neutral / N/A
+有已提交 report
+→ 已知 actual 保留 numeric value
+→ 若 expected reports 尚缺，reportingStatus = DATA_INCOMPLETE / provisional
+→ 該 store 不具正式 ranking eligibility
+
+完全沒有 report
+→ actual = null / N/A
 ```
 
-Do not pre-apply this future rule to a single consumer before the shared KPI contracts, Writer, Coverage, Summary and Formal consumers are migrated coherently.
+禁止：
+
+```text
+missing report → 0
+DATA_INCOMPLETE → actual null for entire brand when known actual exists
+```
+
+完整 business semantics 仍由 `KPI_DEFINITIONS_v1.0.md` 與 current-detail Formal authority 提供。
+
+## 28.2 Audit Store Identity
+
+Audit 不得另寫 CYJ 新店 normalization。
+
+應共用：
+
+```text
+src/utils/storeLifecycle.js
+normalizeStoreLifecycleCore
+```
+
+並維持：
+
+```text
+coreStoreName      = 新店
+canonicalStoreName = CYJ新店店
+```
+
+Identity bug 必須修 owner，不可用 Audit page-specific alias workaround。
+
+## 28.3 Historical Summary readiness recovery
+
+正常 historical path：
+
+```text
+verified Summary ready
+→ Summary-first
+→ 不增加 recovery reads
+```
+
+若 readiness 長時間 unresolved：
+
+```text
+> 10 seconds
+→ one-shot bounded recovery
+→ dashboard / rankings / flag point reads only
+→ <= 3 single-document reads once
+→ no polling
+```
+
+此 exceptional branch 目前是 `VALIDATED + DEPLOYED`；未刻意製造 Production stall 來宣稱 `PRODUCTION CONFIRMED`。
+
+## 28.4 Target Coverage metadata completeness is independent from target-map equality
+
+禁止：
+
+```text
+same target map
+→ unconditional return
+```
+
+正確：
+
+```text
+same target map
++
+complete compatible Coverage metadata
+→ no-op
+
+same target map
++
+missing / incompatible Coverage metadata
+→ metadata self-heal
+```
+
+Self-heal 必須在 Firestore transaction 內重新讀 CURRENT：
+
+```text
+monthly_targets_summary/{yearMonth}
+store_lifecycle/master
+```
+
+原因是 trigger event 可能已舊於目前 persisted Summary / Lifecycle。Transaction retry 是 multi-writer race protection。
+
+Recovery write：
+
+```text
+merge compatibility + Coverage metadata only
+targets map MUST NOT be rewritten by metadata recovery
+```
+
+Reads / writes：
+
+```text
+normal Raw Target write extra reads = 0
+exceptional self-heal = 2 transaction point reads + 1 Summary merge write
+new listener/query/polling = 0
+```
+
+CYJ legacy root 與 standard brand root 必須維持隔離。
+
+## 28.5 SystemMaintenance full replacement boundary
+
+SystemMaintenance 的 yearly `monthly_targets_summary` rebuild 仍可採 full document replacement，以避免 nested target-map ghost keys。
+
+**不要**為了保留 Coverage metadata 把 canonical `targets` map 改成 nested `merge:true`。
+
+Coverage metadata continuity 由 Backend Summary onWrite self-heal 負責；Maintenance 不應複製 Backend Coverage classification。
+
+## 28.6 One-time zero normalization mutation surface remains retired
+
+`normalizeLegacyZeroTargetPlaceholders` 已完成任務並退場。未來不得直接重新接回舊 endpoint。
+
+保留：
+
+```text
+auditExplicitZeroTargets                 → read-only governance
+Target Coverage event writers            → normal derived writer
+migrateHistoricalTargetCoverageMetadata  → controlled metadata repair
+tests/zeroTargetRetirement.test.js       → retirement regression
+```
+
+新的 mutation repair 必須重新做 exact source / scope / security / race / reads / retirement 設計。

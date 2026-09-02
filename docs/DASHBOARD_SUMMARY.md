@@ -989,3 +989,108 @@ Compare 至少涵蓋 scope formal metrics/status、Lifecycle/target coverage、s
 ```
 
 Target normal path由可能的 full `monthly_targets` scan 改為 1-doc Target Summary；因此合法 target-incomplete month 不再產生全 Target collection fallback reads。
+
+---
+
+# Batch 5 Final Addendum — Runtime Stabilization / Target Coverage Reliability
+
+## Current month: reporting incomplete does not erase known actual
+
+Current-month live/detail mode must distinguish：
+
+```text
+actual value
+vs
+reporting completeness
+```
+
+If a store already has submitted reports, known actual remains numeric even when other expected reports are missing.
+
+```text
+known actual
++
+missing expected reports
+→ DATA_INCOMPLETE / provisional
+→ display known actual
+→ do not rank as complete
+```
+
+A store with no submitted report still remains `null / N/A`; missing is never auto-filled as `0`.
+
+This preserves realtime usefulness without pretending the month is complete.
+
+## Audit identity reliability
+
+CYJ 新店 Audit scope uses shared Store Lifecycle identity authority：
+
+```text
+core = 新店
+canonical = CYJ新店店
+```
+
+Audit does not own a separate store-name workaround.
+
+## Historical Summary readiness guard
+
+Normal verified historical path：
+
+```text
+Summary / rankings / flag ready
+→ existing Summary-first path
+→ recovery extra reads = 0
+```
+
+If readiness remains unresolved for more than 10 seconds：
+
+```text
+one-shot recovery only
+→ point-read dashboard Summary
+→ point-read rankings Summary
+→ point-read summary flag
+→ <= 3 docs once
+```
+
+No `setInterval`, polling, broad query, or second persistent listener is introduced.
+
+Production status：
+
+```text
+normal historical path = PRODUCTION CONFIRMED
+>10s exceptional recovery = VALIDATED + DEPLOYED
+Production stall exercise = not deliberately performed
+```
+
+## Target Coverage metadata is part of Summary readiness
+
+A `monthly_targets_summary` target map can remain correct while Coverage metadata becomes incomplete after a full replacement writer.
+
+Therefore：
+
+```text
+same target map
+!=
+Coverage metadata automatically trustworthy
+```
+
+Backend Target Summary onWrite now checks the complete Coverage contract. Missing/incompatible metadata routes to a race-safe CURRENT-state transaction repair.
+
+This self-heal preserves `targets` and restores Coverage metadata only.
+
+Production acceptance confirmed both：
+
+```text
+CYJ legacy target-summary path
+standard brand target-summary path
+```
+
+by removing `targetCoverageVersion` from an otherwise valid Summary and observing automatic restoration within seconds.
+
+Thus the Dashboard should no longer require manual metadata migration for the same future failure mode.
+
+## Read-cost boundary
+
+```text
+normal target event extra reads from this fix = 0
+exceptional same-map metadata-loss self-heal  = 2 point reads + 1 write
+new listener/query/polling                    = 0
+```
