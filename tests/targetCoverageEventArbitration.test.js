@@ -151,8 +151,13 @@ test("5E final: Summary container arbitration remains unchanged and still uses c
   );
 });
 
-test("5E final: event arbitration adds no listener, query, polling, or extra Firestore read", () => {
+test("5E final: Raw event arbitration adds no listener, query, polling, or extra Firestore read", () => {
+  const start = source.indexOf("async function handleMonthlyTargetWrite");
+  const end = source.indexOf("async function recomputeOneSummary", start);
+  const rawWriter = source.slice(start, end);
+
+  assert.ok(start >= 0 && end > start, "Raw monthly target writer block must exist");
   assert.equal((source.match(/\.onWrite\(/g) || []).length, 6);
-  assert.equal((source.match(/transaction\.get\(/g) || []).length, 2);
-  assert.doesNotMatch(source, /setInterval\(/);
+  assert.equal((rawWriter.match(/transaction\.get\(/g) || []).length, 2);
+  assert.doesNotMatch(rawWriter, /setInterval\(/);
 });

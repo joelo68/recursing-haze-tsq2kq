@@ -246,6 +246,57 @@ function targetMapsEqual(a = {}, b = {}) {
   return JSON.stringify(stableTargetMap(a)) === JSON.stringify(stableTargetMap(b));
 }
 
+// Same target values do NOT prove that the Summary is still a valid Formal
+// Target Coverage authority. A legitimate full-replacement writer can preserve
+// the target map while removing Coverage metadata. Presence checks are zero-safe.
+function hasCompleteTargetCoverageMetadata(data = {}, brandId = '', yearMonth = '') {
+  const source = data && typeof data === 'object' ? data : {};
+  const expectedBrandId = normalizeTargetCoverageBrandId(brandId || source.brandId || '');
+  const expectedYearMonth = normalizeYearMonth(yearMonth || source.yearMonth || '');
+
+  const hasFiniteNonNegativeNumber = (field) => {
+    if (!Object.prototype.hasOwnProperty.call(source, field)) return false;
+    const raw = source[field];
+    if (raw === null || raw === undefined || raw === '') return false;
+    const value = Number(raw);
+    return Number.isFinite(value) && value >= 0;
+  };
+
+  if (!expectedBrandId || !expectedYearMonth) return false;
+  if (normalizeTargetCoverageBrandId(source.brandId || '') !== expectedBrandId) return false;
+  if (normalizeYearMonth(source.yearMonth || '') !== expectedYearMonth) return false;
+
+  return Boolean(
+    String(source.targetCoverageVersion || '') === TARGET_COVERAGE_VERSION &&
+    String(source.kpiContractVersion || '') === KPI_CONTRACT_VERSION &&
+    typeof source.lifecycleReady === 'boolean' &&
+    hasFiniteNonNegativeNumber('eligibleStoreCount') &&
+    hasFiniteNonNegativeNumber('cashConfiguredStoreCount') &&
+    hasFiniteNonNegativeNumber('accrualConfiguredStoreCount') &&
+    typeof source.cashCoverageComplete === 'boolean' &&
+    typeof source.accrualCoverageComplete === 'boolean' &&
+    Array.isArray(source.cashMissingStores) &&
+    Array.isArray(source.accrualMissingStores) &&
+    source.targetAudit &&
+    typeof source.targetAudit === 'object' &&
+    !Array.isArray(source.targetAudit) &&
+    String(source.coverageSource || '').trim().length > 0 &&
+    String(source.coverageUpdatedAtText || '').trim().length > 0
+  );
+}
+
+function shouldRecomputeTargetSummaryCoverage({
+  beforeExists = false,
+  targetMapChanged = false,
+  afterData = {},
+  brandId = '',
+  yearMonth = '',
+} = {}) {
+  if (!beforeExists) return true;
+  if (targetMapChanged) return true;
+  return !hasCompleteTargetCoverageMetadata(afterData, brandId, yearMonth);
+}
+
 function buildTargetAudit(targetMap = {}) {
   const authorityConflicts = [];
   const zeroBaseTargets = [];
@@ -605,6 +656,37 @@ function createTargetCoverageFunctions({ admin, db }) {
     }, { merge: true });
   }
 
+  async function repairCurrentSummaryCoverageMetadata({ brandId, yearMonth, summaryRef }) {
+    const lifecycleRef = getCollection(brandId, 'store_lifecycle').doc('master');
+
+    // Firestore trigger delivery order is not an authority. For metadata-loss
+    // recovery, re-read the CURRENT persisted Summary + CURRENT Lifecycle in one
+    // transaction so an older event cannot repair metadata against a stale map.
+    return db.runTransaction(async (transaction) => {
+      const [summarySnap, lifecycleSnap] = await Promise.all([
+        transaction.get(summaryRef),
+        transaction.get(lifecycleRef),
+      ]);
+      if (!summarySnap.exists) return null;
+
+      const summaryData = summarySnap.data() || {};
+      if (hasCompleteTargetCoverageMetadata(summaryData, brandId, yearMonth)) return null;
+
+      const targetMap = extractSummaryTargetMap(summaryData, brandId, yearMonth, lifecycleIdentityApi);
+      const lifecycleMaster = lifecycleSnap.exists
+        ? (lifecycleSnap.data() || {})
+        : { datasetStatus: 'BUILDING', stores: {} };
+      const patch = buildCoveragePatch({ brandId, yearMonth, lifecycleMaster, targetMap });
+
+      transaction.set(summaryRef, {
+        ...buildTargetSummaryCompatibilityFields(targetMap, brandId, yearMonth),
+        ...patch,
+      }, { merge: true });
+
+      return null;
+    });
+  }
+
   async function handleTargetSummaryWrite(change, context, brandId) {
     if (!change.after.exists) return null;
     const beforeData = change.before.exists ? (change.before.data() || {}) : {};
@@ -622,8 +704,29 @@ function createTargetCoverageFunctions({ admin, db }) {
     if (!yearMonth) return null;
     const beforeMap = extractSummaryTargetMap(beforeData, brandId, yearMonth, lifecycleIdentityApi);
     const afterMap = extractSummaryTargetMap(afterData, brandId, yearMonth, lifecycleIdentityApi);
-    if (change.before.exists && targetMapsEqual(beforeMap, afterMap)) return null;
+    const targetMapChanged = !change.before.exists || !targetMapsEqual(beforeMap, afterMap);
 
+    const shouldRecompute = shouldRecomputeTargetSummaryCoverage({
+      beforeExists: change.before.exists,
+      targetMapChanged,
+      afterData,
+      brandId,
+      yearMonth,
+    });
+    if (!shouldRecompute) return null;
+
+    // Same map + missing/incompatible Coverage contract is the exact self-heal
+    // case. Use current persisted state transactionally; do not trust stale event
+    // afterData and do not rewrite the nested targets map.
+    if (change.before.exists && !targetMapChanged) {
+      return repairCurrentSummaryCoverageMetadata({
+        brandId,
+        yearMonth,
+        summaryRef: change.after.ref,
+      });
+    }
+
+    // Existing behavior for an actual target-map change remains unchanged.
     const lifecycleSnap = await getCollection(brandId, 'store_lifecycle').doc('master').get();
     const lifecycleMaster = lifecycleSnap.exists ? (lifecycleSnap.data() || {}) : { datasetStatus: 'BUILDING', stores: {} };
     return recomputeOneSummary({
@@ -732,6 +835,8 @@ module.exports = {
   buildTargetSummaryReplacementDocument,
   buildScopeChallengeTarget,
   targetMapsEqual,
+  hasCompleteTargetCoverageMetadata,
+  shouldRecomputeTargetSummaryCoverage,
   getTargetCoveragePaths,
   createTargetCoverageFunctions,
 };
