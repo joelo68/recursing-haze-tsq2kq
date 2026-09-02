@@ -47,9 +47,33 @@ const TherapistPerformanceView = ({ therapistStats, brandInfo }) => {
   const isManagerial = userRole !== 'therapist';
   const formatNullableMoney = (value) => isFiniteTherapistMetric(value) ? fmtMoney(Math.round(value)) : "N/A";
   const formatNullablePercent = (value) => isFiniteTherapistMetric(value) ? `${value.toFixed(0)}%` : "N/A";
+  const formatNullableNumber = (value) => isFiniteTherapistMetric(value) ? fmtNum(Math.round(value)) : "N/A";
   const comparisonState = (value, benchmark) => {
     if (!isFiniteTherapistMetric(value) || !isFiniteTherapistMetric(benchmark)) return null;
     return value >= benchmark;
+  };
+  const getComparisonTone = (value, benchmark) => {
+    const state = comparisonState(value, benchmark);
+    if (state === null) return "text-stone-400";
+    return state ? "text-emerald-500" : "text-rose-500";
+  };
+  const renderComparisonArrow = (value, benchmark, size = 18) => {
+    const state = comparisonState(value, benchmark);
+    if (state === null) return null;
+    return state
+      ? <ArrowUp size={size} strokeWidth={3}/>
+      : <ArrowDown size={size} strokeWidth={3}/>;
+  };
+  const renderComparisonBadge = (value, benchmark) => {
+    const state = comparisonState(value, benchmark);
+    if (state === null) {
+      return <span className="text-[10px] font-bold text-stone-500 bg-stone-100 px-2 py-1 rounded-lg border border-stone-200">N/A</span>;
+    }
+    return state ? (
+      <span className="text-[10px] font-bold text-emerald-600 bg-emerald-50 px-2 py-1 rounded-lg flex items-center gap-1 border border-emerald-100"><ArrowUp size={12}/> 領先</span>
+    ) : (
+      <span className="text-[10px] font-bold text-rose-600 bg-rose-50 px-2 py-1 rounded-lg flex items-center gap-1 border border-rose-100"><ArrowDown size={12}/> 落後</span>
+    );
   };
 
   // ============================================================================
@@ -401,9 +425,9 @@ const TherapistPerformanceView = ({ therapistStats, brandInfo }) => {
                      </div>
                      <div className="text-right">
                        <p className="text-[10px] font-bold text-stone-400 mb-1">您的表現</p>
-                       <div className={`flex items-center gap-1 font-black text-xl font-mono ${comparisonState(therapistStats.myStats.newClosingRate, therapistStats.grandTotal.regionalNewClosingRate) === true ? 'text-emerald-500' : 'text-rose-500'}`}>
+                       <div className={`flex items-center gap-1 font-black text-xl font-mono ${getComparisonTone(therapistStats.myStats.newClosingRate, therapistStats.grandTotal.regionalNewClosingRate)}`}>
                          {formatNullablePercent(therapistStats.myStats.newClosingRate)}
-                         {comparisonState(therapistStats.myStats.newClosingRate, therapistStats.grandTotal.regionalNewClosingRate) === true ? <ArrowUp size={18} strokeWidth={3}/> : <ArrowDown size={18} strokeWidth={3}/>}
+                         {renderComparisonArrow(therapistStats.myStats.newClosingRate, therapistStats.grandTotal.regionalNewClosingRate)}
                        </div>
                      </div>
                    </div>
@@ -417,9 +441,9 @@ const TherapistPerformanceView = ({ therapistStats, brandInfo }) => {
                      </div>
                      <div className="text-right">
                        <p className="text-[10px] font-bold text-stone-400 mb-1">您的表現</p>
-                       <div className={`flex items-center justify-end gap-1 font-black text-xl font-mono ${comparisonState(therapistStats.myStats.newAsp, therapistStats.grandTotal.regionalNewAsp) === true ? 'text-emerald-500' : 'text-rose-500'}`}>
+                       <div className={`flex items-center justify-end gap-1 font-black text-xl font-mono ${getComparisonTone(therapistStats.myStats.newAsp, therapistStats.grandTotal.regionalNewAsp)}`}>
                          {formatNullableMoney(therapistStats.myStats.newAsp)}
-                         {comparisonState(therapistStats.myStats.newAsp, therapistStats.grandTotal.regionalNewAsp) === true ? <ArrowUp size={18} strokeWidth={3}/> : <ArrowDown size={18} strokeWidth={3}/>}
+                         {renderComparisonArrow(therapistStats.myStats.newAsp, therapistStats.grandTotal.regionalNewAsp)}
                        </div>
                      </div>
                    </div>
@@ -544,11 +568,7 @@ const TherapistPerformanceView = ({ therapistStats, brandInfo }) => {
                                     <span className="text-xl font-black font-mono text-stone-800 leading-none mb-1">{formatNullableMoney(myTeamStats.teamNewAsp)}</span>
                                     <span className="text-[9px] text-stone-400">全區 {formatNullableMoney(therapistStats.grandTotal.regionalNewAsp)}</span>
                                 </div>
-                                {comparisonState(myTeamStats.teamNewAsp, therapistStats.grandTotal.regionalNewAsp) === true ? (
-                                    <span className="text-[10px] font-bold text-emerald-600 bg-emerald-50 px-2 py-1 rounded-lg flex items-center gap-1 border border-emerald-100"><ArrowUp size={12}/> 領先</span>
-                                ) : (
-                                    <span className="text-[10px] font-bold text-rose-600 bg-rose-50 px-2 py-1 rounded-lg flex items-center gap-1 border border-rose-100"><ArrowDown size={12}/> 落後</span>
-                                )}
+                                {renderComparisonBadge(myTeamStats.teamNewAsp, therapistStats.grandTotal.regionalNewAsp)}
                             </div>
                         </div>
                         <div className="border-t border-stone-100 my-4 border-dashed"></div>
@@ -559,11 +579,7 @@ const TherapistPerformanceView = ({ therapistStats, brandInfo }) => {
                                     <span className="text-xl font-black font-mono text-stone-800 leading-none mb-1">{formatNullablePercent(myTeamStats.teamClosingRate)}</span>
                                     <span className="text-[9px] text-stone-400">全區 {formatNullablePercent(therapistStats.grandTotal.regionalNewClosingRate)}</span>
                                 </div>
-                                {comparisonState(myTeamStats.teamClosingRate, therapistStats.grandTotal.regionalNewClosingRate) === true ? (
-                                    <span className="text-[10px] font-bold text-emerald-600 bg-emerald-50 px-2 py-1 rounded-lg flex items-center gap-1 border border-emerald-100"><ArrowUp size={12}/> 領先</span>
-                                ) : (
-                                    <span className="text-[10px] font-bold text-rose-600 bg-rose-50 px-2 py-1 rounded-lg flex items-center gap-1 border border-rose-100"><ArrowDown size={12}/> 落後</span>
-                                )}
+                                {renderComparisonBadge(myTeamStats.teamClosingRate, therapistStats.grandTotal.regionalNewClosingRate)}
                             </div>
                         </div>
                      </div>
@@ -586,7 +602,7 @@ const TherapistPerformanceView = ({ therapistStats, brandInfo }) => {
                             <p className="text-[10px] font-extrabold text-rose-700 uppercase flex items-center gap-1.5 relative z-10"><AlertTriangle size={14}/> 締結警訊 ({myTeamStats.warnings.length}人)</p>
                             <div className="flex flex-wrap gap-1.5 mt-1 relative z-10">
                                 {myTeamStats.warnings.length > 0 ? myTeamStats.warnings.map(w => (
-                                    <span key={w.id} className="text-[10px] font-bold bg-white text-rose-600 px-2 py-0.5 rounded-md shadow-[0_1px_2px_rgba(0,0,0,0.05)] border border-rose-100">{w.name} ({w.newClosingRate.toFixed(0)}%)</span>
+                                    <span key={w.id} className="text-[10px] font-bold bg-white text-rose-600 px-2 py-0.5 rounded-md shadow-[0_1px_2px_rgba(0,0,0,0.05)] border border-rose-100">{w.name} ({formatNullablePercent(w.newClosingRate)})</span>
                                 )) : (
                                     <span className="text-xs font-bold text-emerald-600 flex items-center gap-1"><CheckCircle size={14}/> 全員表現健康</span>
                                 )}
@@ -676,16 +692,28 @@ const TherapistPerformanceView = ({ therapistStats, brandInfo }) => {
                 </div>
                 <div className="p-5 flex-1 bg-stone-50/30 flex flex-col items-center justify-between">
                    {(() => {
-                      const reachedCount = therapistStats.rankings.filter(t => {
-                         const personalTarget = resolveTherapistTarget(t.id, t.name);
-                         return Number(t.totalRevenue || 0) >= personalTarget;
-                      }).length;
-                      const totalCount = therapistStats.rankings.length || 1;
-                      const teamProgress = Math.round((reachedCount / totalCount) * 100);
+                      const targetRows = therapistStats.rankings.map((t) => ({
+                         row: t,
+                         target: resolveTherapistTarget(t.id, t.name),
+                      }));
+                      const totalCount = targetRows.length;
+                      const configuredTargetCount = targetRows.filter(({ target }) => (
+                         isFiniteTherapistMetric(target) && target > 0
+                      )).length;
+                      const targetComplete = totalCount > 0 && configuredTargetCount === totalCount;
+                      const reachedCount = targetComplete
+                        ? targetRows.filter(({ row, target }) => Number(row.totalRevenue || 0) >= target).length
+                        : 0;
+                      const teamProgress = targetComplete
+                        ? Math.round((reachedCount / totalCount) * 100)
+                        : null;
+                      const safePeerCount = totalCount || 1;
                       return (
                           <>
                             <div className="flex-1 flex flex-col justify-center w-full mt-2">
-                               <GaugeChart progress={teamProgress} color="#10b981" />
+                               {targetComplete
+                                 ? <GaugeChart progress={teamProgress} color="#10b981" />
+                                 : <div className="py-8 text-center"><p className="text-xl font-black text-stone-500">目標未完整設定</p><p className="mt-1 text-xs font-bold text-stone-400">全區管理師目標完整後才計算達標率</p></div>}
                             </div>
                             <div className="text-center mt-6 w-full bg-white p-4 rounded-2xl border border-stone-100 shadow-sm flex justify-around items-center">
                                <div className="flex flex-col items-center">
@@ -695,12 +723,12 @@ const TherapistPerformanceView = ({ therapistStats, brandInfo }) => {
                                <div className="w-px h-10 bg-stone-100"></div>
                                <div className="flex flex-col items-center">
                                   <p className="text-[10px] font-bold text-stone-400 mb-1">達標人數</p>
-                                  <p className="text-lg sm:text-xl font-black text-emerald-500 font-mono">{reachedCount} <span className="text-[10px] text-emerald-500/70">/{totalCount}</span></p>
+                                  <p className="text-lg sm:text-xl font-black text-emerald-500 font-mono">{targetComplete ? reachedCount : "—"} <span className="text-[10px] text-emerald-500/70">/{totalCount}</span></p>
                                </div>
                                <div className="w-px h-10 bg-stone-100"></div>
                                <div className="flex flex-col items-center">
                                   <p className="text-[10px] font-bold text-stone-400 mb-1">人均產值</p>
-                                  <p className="text-lg sm:text-xl font-black text-stone-800 font-mono">{fmtMoney(Math.round(therapistStats.grandTotal.totalRevenue / totalCount))}</p>
+                                  <p className="text-lg sm:text-xl font-black text-stone-800 font-mono">{fmtMoney(Math.round(therapistStats.grandTotal.totalRevenue / safePeerCount))}</p>
                                </div>
                             </div>
                           </>
@@ -805,11 +833,11 @@ const TherapistPerformanceView = ({ therapistStats, brandInfo }) => {
                       <td className="p-3 md:p-4 text-right font-mono text-stone-600">{fmtMoney(t.newCustomerRevenue)}</td>
                       <td className="p-3 md:p-4 text-right font-mono text-stone-600">{fmtMoney(t.oldCustomerRevenue)}</td>
                       <td className="p-3 md:p-4 text-center font-mono text-xs text-stone-400">{t.revenueMix}</td>
-                      <td className="p-3 md:p-4 text-right font-mono font-bold text-stone-700">{t.newClosingRate.toFixed(0)}%</td>
+                      <td className="p-3 md:p-4 text-right font-mono font-bold text-stone-700">{formatNullablePercent(t.newClosingRate)}</td>
                       <td className="p-3 md:p-4 text-right font-mono text-stone-600">{fmtNum(t.newCustomerCount)}</td>
                       <td className="p-3 md:p-4 text-right font-mono text-stone-600">{fmtNum(t.newCustomerClosings)}</td>
-                      <td className="p-3 md:p-4 text-right font-mono text-stone-600">{fmtNum(Math.round(t.newAsp))}</td>
-                      <td className="p-3 md:p-4 text-right font-mono text-stone-600">{fmtNum(Math.round(t.oldAsp))}</td>
+                      <td className="p-3 md:p-4 text-right font-mono text-stone-600">{formatNullableNumber(t.newAsp)}</td>
+                      <td className="p-3 md:p-4 text-right font-mono text-stone-600">{formatNullableNumber(t.oldAsp)}</td>
                     </tr>
                   )
                 })}

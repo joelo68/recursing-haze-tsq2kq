@@ -50,6 +50,24 @@ test("Batch 6A Therapist Performance has no fabricated targets or fake denominat
   assert.match(view, /無樣本/);
 });
 
+test("Batch 6A.1 Therapist Performance renders nullable KPI and missing targets fail-closed", () => {
+  assert.doesNotMatch(view, /\.newClosingRate\.toFixed\(/);
+  // CSV export intentionally keeps guarded raw rounded numbers; only the table renderer
+  // must never coerce nullable ASP through Math.round.
+  assert.doesNotMatch(view, /\{fmtNum\(Math\.round\(t\.newAsp\)\)\}<\/td>/);
+  assert.doesNotMatch(view, /\{fmtNum\(Math\.round\(t\.oldAsp\)\)\}<\/td>/);
+  assert.match(view, /isFiniteTherapistMetric\(t\.newAsp\) \? Math\.round\(t\.newAsp\) : "N\/A"/);
+  assert.match(view, /isFiniteTherapistMetric\(t\.oldAsp\) \? Math\.round\(t\.oldAsp\) : "N\/A"/);
+  assert.match(view, /formatNullablePercent\(t\.newClosingRate\)/);
+  assert.match(view, /formatNullableNumber\(t\.newAsp\)/);
+  assert.match(view, /formatNullableNumber\(t\.oldAsp\)/);
+  assert.match(view, /getComparisonTone/);
+  assert.match(view, /renderComparisonArrow/);
+  assert.match(view, /renderComparisonBadge/);
+  assert.match(view, /targetComplete[\s\S]*目標未完整設定/);
+  assert.doesNotMatch(view, /return Number\(t\.totalRevenue \|\| 0\) >= personalTarget/);
+});
+
 test("Batch 6A pure helpers do not add Firestore or polling", () => {
   for (const source of [fe, be]) {
     assert.doesNotMatch(source, /firebase\/firestore|firebase-admin|\.collection\(|getDocs\(|getDoc\(|onSnapshot\(|setInterval\(|onSchedule\(/);
