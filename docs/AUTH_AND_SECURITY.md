@@ -813,7 +813,7 @@ firestore.rules
 
 ---
 
-# 31. Store Lifecycle Administrative Security — Batch 1（NOT DEPLOYED）
+# 31. Store Lifecycle Administrative Security — Batch 1（PRODUCTION CONFIRMED）
 
 Store Lifecycle 會決定未來正式 KPI eligibility，因此 writer 採與 Device Approval 高權限操作一致的 server-side authority，不以 Frontend `userRole` 當作唯一安全依據。
 
@@ -855,7 +855,7 @@ Admin SDK write = Backend authority
 Race safety：同一 store entry 使用 `revision` optimistic token；同店 lost-race 回 409，不回假成功。不同店 transaction retry 後保留彼此修改。
 
 Batch 1 沒有修改既有 Device Approval 決策、6 位碼、自助驗證、global block 或 Telegram security alert 行為；`deviceApproval.js` 僅額外 export 已存在的 authentication helpers 供 Lifecycle writer 共用。
-# 25. Login Security Telegram Config Authority（VALIDATED / Git Integrated / NOT DEPLOYED）
+# 25. Login Security Telegram Config Authority（31d8ac6 HISTORICAL STATUS；current runtime see CURRENT_STATE）
 
 `artifacts/default-app-id/public/data/global_settings/telegram_security_alerts` 是全品牌登入安全通知設定，不屬於一般營運設定。
 
@@ -894,4 +894,89 @@ Writes:
 
 沒有新增 polling、collection listener 或大型常駐 query。設定仍是全品牌共用 legacy root；這個 hardening 不改 CYJ / 安妞 / 伊啵的營運資料 path。
 
-> 狀態：已在 `~/cyj-new` 完成 63/63 Security regression、286/286 full regression、Functions syntax 與 frontend build；commit `31d8ac6` 已整合 `origin/main`。尚未部署／Production Confirmed。
+> 歷史狀態註記（31d8ac6 當時）：已完成 63/63 Security regression、286/286 full regression、Functions syntax 與 frontend build，並整合 `origin/main`；當時尚未部署。現在是否已部署／Production Confirmed 必須讀最新 `CURRENT_STATE.md` 與目前正式 source，不得沿用此歷史標籤。
+
+---
+
+# 32. System Exclusion Administrative Security — A+B / Stage C
+
+`audit_exclusions` 現在是正式 System Exclusion authority；修改它會改變全系統正式營運 scope，因此不能再使用一般 Settings direct write。
+
+Backend owner：
+
+```text
+functions/systemExclusion.js
+→ manageSystemExclusions
+```
+
+## Request gate
+
+```text
+POST only
+→ Firebase Bearer ID Token verification
+→ strict brand allowlist: cyj / anniu / yibo
+→ verifySuperAdminActor
+→ Trusted Device + highest-admin actor
+→ current application credential re-verification
+→ expectedRevision OCC
+→ transaction
+```
+
+Store payload 會做：
+
+```text
+brand mismatch reject
+Store Identity normalization
+canonical core dedupe
+max 250 entries
+```
+
+提交 credential 不寫入 System Exclusion document 或 audit log。
+
+## OCC / multi-admin race
+
+`expectedRevision` 必須是 non-negative integer。
+
+```text
+current revision != expectedRevision
+→ HTTP 409 revision_conflict
+→ 回 currentSystemExclusion
+→ UI 必須要求重新確認
+```
+
+同一 revision 下若 canonical store set 完全相同：
+
+```text
+changed=false
+no revision bump
+no System Exclusion write
+no system_logs write
+```
+
+所以「重按儲存」不能被當成 trigger hack。
+
+## Firestore Rules source contract
+
+Repository Rules 對兩個 physical path都只允許 signed-in read、禁止 browser write：
+
+```text
+brands/{brandId}/settings/audit_exclusions
+artifacts/{appId}/public/data/global_settings/audit_exclusions
+```
+
+Admin SDK / Backend writer 是正式 mutation authority。
+
+**Production boundary：Stage C 本身沒有修改／重新部署 Rules；本次 closeout 沒有獨立取得 live Rules version。** 因此 source contract 可確認，live Rules deployment confirmation 不得由 Frontend smoke test代替；詳見 `CURRENT_STATE.md`。
+
+## Downstream event safety
+
+只有真正 document change 才會進：
+
+```text
+onLegacySystemExclusionChange
+onBrandSystemExclusionChange
+→ Target Coverage refresh
+→ Historical Summary reconciliation
+```
+
+no-op 不製造 revision churn，也不增加 downstream reads / writes。

@@ -1094,3 +1094,101 @@ normal target event extra reads from this fix = 0
 exceptional same-map metadata-loss self-heal  = 2 point reads + 1 write
 new listener/query/polling                    = 0
 ```
+
+---
+
+# 30. System Exclusion Revision Trust / Stage C Recovery（PRODUCTION CONFIRMED）
+
+## Historical Summary trust adds System Exclusion snapshot
+
+Historical Summary 的 verified / contract trust 現在還必須符合目前 System Exclusion authority。
+
+```text
+current System Exclusion profile
+↕ exact version / brand / revision / stores
+dashboard_summary.systemExclusionSnapshot
+rankings_summary.systemExclusionSnapshot
+monthly_targets_summary.systemExclusionSnapshot
+```
+
+Target Coverage v1 但 exclusion snapshot stale / missing，不再視為 fully current authority。
+
+安全行為：
+
+```text
+stale target snapshot
+→ target authority fail closed
+→ TARGET_INCOMPLETE / N/A
+→ 不縮 denominator
+```
+
+## Current month is not historical Summary
+
+Current month 繼續：
+
+```text
+live/detail reports
++ Lifecycle READY monthly scope
++ live System Exclusion single-doc authority
++ current monthly_targets_summary
+```
+
+因此 current month 沒有 `dashboard_summary/{YYYY-MM}` / `rankings_summary/{YYYY-MM}` 可以是正常狀態，不應為了消除 404 人工建立歷史 Summary。
+
+## Stage C metadata-only recovery
+
+Historical Target Coverage Audit 現在會額外讀目前品牌的 System Exclusion doc。
+
+```text
+ALREADY_V1
+= target-coverage-v1
++ current systemExclusionSnapshot
+```
+
+若只是 snapshot stale / missing，而 Summary target map 與 legacy totals/counts 可由既有 Summary 自證一致：
+
+```text
+SUMMARY_BACKFILL_SAFE
+→ metadata-only migration
+→ Raw monthly_targets reads = 0
+```
+
+Migration persisted verify 後再呼叫既有 historical reconciliation；stale historical Summary 透過 `summary_recalc_flags` 進原本 repair worker，不另造第二套 writer。
+
+## Production acceptance — CYJ
+
+2026-09 Target Summary：
+
+```text
+eligibleStoreCount          32
+cashConfiguredStoreCount    32
+accrualConfiguredStoreCount 32
+cashCoverageComplete        true
+accrualCoverageComplete     true
+System Exclusion            中美
+```
+
+2026-01～2026-08 historical readback：
+
+```text
+flag status        verified
+dirty              false
+pendingCount        0
+lastMismatchCount   0
+Dashboard snapshot current
+Ranking snapshot   current
+formal rank eligible 32
+```
+
+## Reads boundary
+
+Stage C Frontend System Exclusion authority：
+
+```text
+single-document onSnapshot
+initial ≈ 1 doc / login or brand switch
+subsequent = only document changes
+polling = 0
+```
+
+Stage C 沒有把 Dashboard historical path改回 full-month Raw listener。

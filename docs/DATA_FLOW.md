@@ -1543,3 +1543,174 @@ normalizeLegacyZeroTargetPlaceholders
 ```
 
 Do not reconnect it as a normal maintenance flow.
+
+---
+
+# 43. System Exclusion v1 / Stage C Recovery Flow（PRODUCTION CONFIRMED）
+
+> 本節 supersedes 早期把 `audit_exclusions` 視為單頁／Annual filter 的語意。現在它是正式營運 scope authority。
+
+## Formal scope
+
+```text
+store_lifecycle/master READY monthly cohort
+        ↓
+Lifecycle Eligible Store
+        ↓
+System Exclusion authority
+        ↓ remove excluded stores
+Formal Eligible Store scope
+```
+
+被 System Excluded 的店：
+
+```text
+Raw daily_reports / monthly_targets / audit records 保留
+正式 KPI / target / achievement / ranking / Summary / Annual consumer scope 排除
+```
+
+## Authority write flow
+
+```text
+最高管理者 UI
+→ manageSystemExclusions
+→ Firebase request auth
+→ Trusted Device + highest-admin credential re-verification
+→ expectedRevision OCC transaction
+→ brand-resolved audit_exclusions doc
+→ system_logs audit（只有真正 change）
+```
+
+相同 canonical store set：
+
+```text
+revision check 仍先做
+→ same stores
+→ changed=false
+→ no data write
+→ no revision bump
+→ no audit-log write
+```
+
+真正變更：
+
+```text
+audit_exclusions onWrite
+→ refreshTargetCoverageForSystemExclusion
+→ markHistoricalSummariesDirtyForSystemExclusion
+```
+
+沒有 polling。
+
+## Target Coverage flow after Stage C
+
+```text
+auditHistoricalTargetCoverage
+→ security point reads
+→ store_lifecycle/master                  1 doc
+→ audit_exclusions                       1 doc
+→ existing monthly_targets_summary query N docs
+→ Raw monthly_targets                     0 reads
+→ writes                                  0
+```
+
+固定估算：
+
+```text
+5 + N Summary docs
+```
+
+Migration：
+
+```text
+migrateHistoricalTargetCoverageMetadata
+→ transaction read current Lifecycle
+→ transaction read current System Exclusion
+→ transaction read requested Summary docs
+→ reclassify all requested months
+→ safe set writes Coverage metadata + systemExclusionSnapshot only
+→ persisted point-read verification
+→ historical derived Summary reconciliation
+```
+
+Migration 不改 target map / legacy counts / totals，不掃 Raw `monthly_targets`。
+
+## Historical reconciliation
+
+```text
+metadata migration verified
+→ markHistoricalSummariesDirtyForSystemExclusion
+→ scan selected brand dashboard_summary derived docs
+→ only stale HISTORICAL month
+→ write / refresh summary_recalc_flags
+→ existing repair worker
+→ dashboard_summary + rankings_summary persist current systemExclusionSnapshot
+```
+
+Current month 不屬 historical repair scope；current-month Dashboard 走 live/detail authority。
+
+## Frontend authority read flow
+
+Stage C：
+
+```text
+App.jsx
+→ brand-scoped audit_exclusions single-doc onSnapshot
+→ normalizeSystemExclusionState
+→ systemExclusionState + auditExclusions compatibility state
+```
+
+Reads：
+
+```text
+每次登入 / 切品牌 initial 1 doc
+真正 exclusion doc change → listener 1 doc
+polling                   → 0
+large collection listener → 0
+```
+
+原 `fetchGlobalData_core_docs` 不再額外 one-shot 讀 `audit_exclusions`，core point reads 由 10 降為 9；System Exclusion authority 改由上方單文件 listener 負責。
+
+## Current Detail / Daily observed flow
+
+```text
+current month reports
++ Lifecycle READY scope
++ System Exclusion current state
++ monthly_targets_summary current exclusion snapshot
+→ current/detail Formal authority
+```
+
+System Exclusion snapshot stale：
+
+```text
+actual reporting denominator 仍排除已知 System Excluded store
+Target authority fail closed
+→ TARGET_INCOMPLETE / N/A
+```
+
+Daily：
+
+```text
+formal expected rows
+→ filter System Excluded store
+→ split reportedRows vs missing rows
+→ observed numeric cumulative totals from reportedRows
+→ completeness warning independent
+```
+
+missing report 不等於 numeric zero；reported row 的 invalid Formal KPI 也不得被補 0。
+
+## Telegram layering
+
+System Exclusion 與 Telegram policy exclusion 是兩層：
+
+```text
+Formal operational scope
+= Lifecycle Eligible - System Excluded
+
+Telegram presentation / alert scope
+= Formal operational scope - applicable telegram_agent_policies exclusions
+```
+
+Telegram policy 可以再縮小某類分析／alert，但不得把 System Excluded store 重新加入正式營運數字。

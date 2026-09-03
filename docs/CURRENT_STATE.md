@@ -2,7 +2,214 @@
 
 > 用途：記錄「目前正式環境已確認到哪個狀態」。這不是 CHANGELOG。  
 > 優先順序：使用者提供的目前正式部署 source > 本檔案 > 其他 Knowledge Base 文件。  
-> 最後整併更新：**2026-09-02（UTC+8）**。
+> 最後整併更新：**2026-09-03（UTC+8）**。
+
+# Latest Production Runtime Override — 2026-09-03（System Exclusion A+B + Stage C Recovery）
+
+> 本節是目前最高優先 Production runtime 狀態。下方較舊 `audit_exclusions`／Annual exclusion 章節保留當時歷史 evidence；若與本節衝突，以最新正式 source + 本節為準。
+
+正式 source：
+
+```text
+Official working directory = ~/cyj-new
+branch                      = main
+HEAD                        = 2c9634372e689ea257c881cc0b6d202c2837e92e
+origin/main                 = 2c9634372e689ea257c881cc0b6d202c2837e92e
+CURRENT_APP_VERSION         = 3.5.3（未提高）
+```
+
+## System Exclusion v1 — current formal scope authority
+
+`audit_exclusions` 的目前正式語意已升級為 **System Exclusion v1**；不再只是回報檢核／Annual presentation filter。
+
+正式 scope：
+
+```text
+Formal Eligible Store
+= Lifecycle Eligible
+AND NOT System Excluded
+```
+
+採「全歷史排除」：被排除店家的 Raw 原始資料與 audit record 保留，但不得再進正式營運實績、Target Coverage、achievement、ranking、historical Summary、Annual、current/detail denominator 與其他正式 consumer scope。
+
+目前 CYJ Production authority：
+
+```text
+System Excluded stores = [中美]
+normalized revision    = 0（legacy stores-only document compatibility）
+Lifecycle eligible     = 33
+Formal eligible        = 32
+```
+
+三品牌 physical path：
+
+```text
+CYJ
+artifacts/default-app-id/public/data/global_settings/audit_exclusions
+
+安妞 / 伊啵
+brands/{brandId}/settings/audit_exclusions
+```
+
+## Backend authority / race safety
+
+正式 writer：
+
+```text
+functions/systemExclusion.js
+→ manageSystemExclusions
+```
+
+要求：
+
+```text
+Firebase request auth
++ strict brand allowlist
++ Trusted Device / highest-admin actor re-verification
++ current credential re-verification
++ expectedRevision OCC
+```
+
+相同 canonical store set 在 revision check 通過後視為 no-op：
+
+```text
+changed = false
+revision 不增加
+System Exclusion doc 不重寫
+system_logs 不新增 update audit
+```
+
+不同管理者同時更新時，stale revision 必須回 conflict，不得 silent last-write-wins。
+
+Repository `firestore.rules` 的正式 source contract 同時封鎖 CYJ legacy 與 standard-brand `audit_exclusions` browser direct write；**本次 Stage C closeout 沒有重新部署 Rules，live Rules version 未在本次流程獨立 readback，因此不得只靠本節宣稱 live Rules 已再次驗證。**
+
+## Target Coverage / historical Summary revision trust
+
+Stage C 把既有 Target Coverage Audit / Metadata Migration 正式接上 System Exclusion authority：
+
+```text
+monthly_targets_summary/{YYYY-MM}
+→ target-coverage-v1
+→ systemExclusionSnapshot
+```
+
+`ALREADY_V1` 現在除了 Target Coverage v1，還要求 stored `systemExclusionSnapshot` 與目前品牌／revision／stores 一致。
+
+stale / missing System Exclusion snapshot 若 Summary target map 與 legacy totals/counts 仍自洽，可以走 metadata-only repair；不掃 Raw `monthly_targets`。Migration persisted verify 完成後，沿用既有 `markHistoricalSummariesDirtyForSystemExclusion` 讓 stale historical `dashboard_summary / rankings_summary` 進既有 repair 流程。
+
+CYJ 2026-09 Production readback：
+
+```text
+targetCoverageVersion         = target-coverage-v1
+systemExclusionSnapshot       = { brandId: cyj, revision: 0, stores: [中美] }
+eligibleStoreCount            = 32
+cashConfiguredStoreCount      = 32
+accrualConfiguredStoreCount   = 32
+cashCoverageComplete          = true
+accrualCoverageComplete       = true
+```
+
+CYJ metadata migration：
+
+```text
+requested  = 12
+written    = 12
+verified   = 12
+raw target reads = 0
+post-audit = 12 / 12 ALREADY_V1
+```
+
+CYJ historical reconciliation `2026-01～2026-08`：
+
+```text
+summary_recalc_flags.status        = verified
+summary_recalc_flags.dirty         = false
+pendingCount                       = 0
+lastMismatchCount                  = 0
+dashboard_summary snapshot         = current
+rankings_summary snapshot          = current
+formalRankEligibleStoreCount       = 32
+```
+
+Cross-brand read-only regression：
+
+```text
+安妞：12 / 12 ALREADY_V1；raw reconstruction 0
+伊啵：9 ALREADY_V1 + 3 PRE_SYSTEM_SKIP；raw reconstruction 0
+Raw Target Reads = 0
+Writes           = 0
+```
+
+## Frontend current-month authority / Daily partial reporting
+
+Stage C Frontend 把 System Exclusion authority 從 optional one-shot core read 改成 **brand-scoped single-document `onSnapshot`**：
+
+```text
+登入 / 切品牌 initial ≈ 1 document read
+之後只有 audit_exclusions 真正變更時產生 listener read
+polling = 0
+large resident query = 0
+```
+
+Current month 仍走 live/detail authority，不要求建立 historical `dashboard_summary/{currentMonth}`。因此 `2026-09` 查不到 historical Dashboard / Ranking Summary 不是錯誤。
+
+`DailyView` 同時把 reporting completeness 與 observed actual 分離：
+
+```text
+部分店未回報
+→ completeness warning 保留
+→ 已回報店家的 observed cumulative actual 仍可顯示 numeric
+
+已回報 row 的 Formal KPI invalid
+→ 只讓對應 Formal metric fail closed
+
+0 個正式回報 row
+→ observed total = N/A
+```
+
+System Excluded store 不進 Daily formal denominator / presentation scope。
+
+## Stage C Production closeout
+
+正式 Git：
+
+```text
+commit = 2c9634372e689ea257c881cc0b6d202c2837e92e
+subject = fix: recover system exclusion coverage and partial daily totals
+```
+
+Validation evidence：
+
+```text
+Node 25 targeted       145 / 145 PASS
+Node 25 full repo      411 / 411 PASS
+Node 22 targeted       145 / 145 PASS
+Node 22 full repo      411 / 411 PASS
+npm run build          PASS
+CURRENT_APP_VERSION    3.5.3 unchanged
+```
+
+Stage C backend scoped deploy：
+
+```text
+manageSystemExclusions
+AUDIT: auditHistoricalTargetCoverage
+MIGRATION: migrateHistoricalTargetCoverageMetadata
+runtime = nodejs22
+```
+
+Frontend 已依正式 GitHub Pages 路徑發布；使用者已確認相關頁面 Production 驗證成功。
+
+狀態：
+
+```text
+IMPLEMENTED                    = YES
+VALIDATED                      = YES
+DEPLOYED                       = YES
+FUNCTIONAL PRODUCTION CONFIRMED= YES
+LIVE FIRESTORE RULES READBACK  = NOT independently confirmed in Stage C closeout
+CURRENT_APP_VERSION            = 3.5.3 unchanged
+```
 
 # Latest Production Runtime Override — 2026-09-02（Batch 5 Final Runtime Closeout）
 

@@ -918,13 +918,45 @@ normalizedStoreCore
 
 # 13. Audit / Feature / Security Settings
 
-## 13.1 `audit_exclusions`
+## 13.1 `audit_exclusions` / System Exclusion v1
 
-**類型：Settings Doc**
+**類型：Settings Doc / Formal Scope Authority**
 
-回報檢核排除設定。
+目前正式語意已不是單純「回報檢核排除」。它是 System Exclusion v1 的全系統正式營運 scope authority。
 
-Daily / Audit / Ranking 等功能會依需求讀取或套用。
+Physical path：
+
+```text
+CYJ
+artifacts/default-app-id/public/data/global_settings/audit_exclusions
+
+安妞 / 伊啵
+brands/{brandId}/settings/audit_exclusions
+```
+
+正式 fields：
+
+```text
+systemExclusionVersion = system-exclusion-v1
+brandId
+revision
+stores[]                 # normalized core store names
+source
+updatedAt / updatedAtText
+updatedBy / updatedByRole / updatedByAccountId
+```
+
+Legacy compatibility：舊 CYJ document 可能只有 `stores`；normalizer 會把它視為 `revision = 0` 的 legacy profile。不要為了「補欄位」人工重存同一 store set。
+
+Formal semantics：
+
+```text
+Formal Eligible Store = Lifecycle Eligible AND NOT System Excluded
+```
+
+Raw 原始資料與 audit record 保留；System Excluded store 由正式 consumer / writer scope 排除，不做歷史 Raw batch delete。
+
+正常修改必須走 Backend `manageSystemExclusions`；repository Rules source 對兩個 physical path 都是 frontend write deny。Live Rules 是否已部署，仍以 `CURRENT_STATE.md` 的 Production boundary 為準。
 
 ---
 
@@ -2113,3 +2145,68 @@ AUTHORITY_CONFLICT → fail closed
 ```
 
 Legacy Yibo placeholder zero cleanup 是歷史 migration evidence，不可反向把 future intentional zero 定義回「未設定」。
+
+---
+
+# 23. System Exclusion Snapshots in Derived Data — Stage C
+
+System Exclusion 不只存在 Settings doc；所有需要判斷「Derived Data 是否仍符合目前正式 scope」的 authority 都必須帶 versioned snapshot。
+
+Canonical snapshot：
+
+```text
+systemExclusionSnapshot:
+  version: system-exclusion-v1
+  brandId: cyj | anniu | yibo
+  revision: non-negative integer
+  stores: normalized core store names[]
+```
+
+目前正式使用點：
+
+```text
+monthly_targets_summary/{YYYY-MM}
+  → systemExclusionSnapshot
+
+dashboard_summary/{YYYY-MM}
+  → systemExclusionSnapshot
+
+rankings_summary/{YYYY-MM}
+  → systemExclusionSnapshot
+
+summary_recalc_flags/{YYYY-MM}
+  → systemExclusionRevision / requiredSystemExclusionRevision
+  → systemExclusionSnapshot（repair / trust metadata）
+```
+
+Trust 不是只比 `stores.length`；至少要比對：
+
+```text
+version
+brandId
+revision
+normalized stores
+```
+
+`monthly_targets_summary.eligibleStoreCount` 的目前正式 denominator 是：
+
+```text
+Lifecycle monthly eligible cohort
+- System Excluded stores
+```
+
+因此 System Exclusion 變更屬 authority revision change，不可讓歷史 Summary 沿用 stale snapshot。
+
+## System Exclusion audit log
+
+真正 store set 變更時 Backend 會 append `system_logs`：
+
+```text
+action       = 更新全系統排除店家
+activityType = system_exclusion.update
+brandId
+previousRevision / revision
+previousStores / stores
+```
+
+相同 store set 的 no-op 不增加 revision，也不新增此 audit event。

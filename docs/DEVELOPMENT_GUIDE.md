@@ -1502,7 +1502,7 @@ Yibo 2026-04 起 = 正式年度計算範圍
 
 Pre-system month 不得進實績、目標或 interval / quarter / annual denominator。
 
-## Annual audit exclusion contract
+## Annual System Exclusion contract（physical path name: audit_exclusions）
 
 設定排除店家時，排除必須同時作用於：
 
@@ -1518,10 +1518,11 @@ Accrual target
 寫入 exclusion 的 state contract：
 
 ```text
-Firestore setDoc success
-→ confirm same brand
-→ update AppContext auditExclusions immediately
-→ Annual recomputes without page reload
+manageSystemExclusions Backend success
+→ OCC-confirmed System Exclusion state
+→ current brand single-doc listener receives new revision
+→ AppContext System Exclusion state updates
+→ Annual / Formal consumers recompute without page reload
 ```
 
 若 write failure：
@@ -1855,3 +1856,106 @@ tests/zeroTargetRetirement.test.js       → retirement regression
 ```
 
 新的 mutation repair 必須重新做 exact source / scope / security / race / reads / retirement 設計。
+
+---
+
+# 29. System Exclusion Development Contract — A+B / Stage C
+
+`audit_exclusions` 目前是 System Exclusion authority。看到這個 collection name 時，**不得再把它理解成單純 AuditView 排除清單**。
+
+## Required owner chain
+
+修改前至少讀：
+
+```text
+src/App.jsx
+src/utils/systemExclusion.js
+src/utils/currentDetailFormalConsumer.js
+src/components/DailyView.jsx
+functions/systemExclusionContract.js
+functions/systemExclusion.js
+functions/targetCoverage.js
+functions/targetCoverageAudit.js
+functions/targetCoverageMigration.js
+functions/index.js
+firestore.rules
+```
+
+Regression：
+
+```text
+tests/systemExclusion.test.js
+tests/currentDetailFormalConsumer.test.js
+tests/currentDetailFormalWiring.test.js
+tests/dailyObservedTotals.test.js
+tests/splitRuntimeRecoveryWiring.test.js
+tests/splitRuntimeRepairSemantics.test.js
+```
+
+## Scope rule
+
+```text
+Formal Eligible = Lifecycle Eligible AND NOT System Excluded
+```
+
+System Excluded store 的 Raw 保留；不得用歷史 Raw batch delete 來「完成排除」。
+
+所有 consumer 都要沿用相同 authority，不得在 Dashboard / Daily / Annual / Telegram 各自維護不同排除清單。
+
+## Snapshot / fail-closed
+
+Target / Summary Derived Data 必須能證明自己使用的是 current System Exclusion snapshot。
+
+```text
+snapshot current
+→ authority usable
+
+snapshot stale / missing
+→ target / historical trust fail closed
+→ repair / migration domain
+```
+
+Current actual denominator 可以使用 live System Exclusion state先排除 store；但 stale Target snapshot 仍必須讓 Target authority N/A，不能為了顯示數字而把 excluded store重新納入 denominator。
+
+## Mutation security / OCC
+
+Frontend 不 direct `setDoc(audit_exclusions)`。
+
+```text
+expectedRevision required
+→ Backend transaction
+→ stale revision = conflict
+→ same canonical stores = no-op
+```
+
+禁止用「重存相同設定」製造 revision 或 trigger downstream repair。
+
+## Firestore reads
+
+System Exclusion Frontend authority只允許目前 brand 的單 doc listener。不要新增：
+
+```text
+polling
+all-brand exclusion listeners
+full collection query
+page-specific duplicate listener
+```
+
+Stage C topology：initial ≈ 1 doc / login or brand switch，之後只有 document change。
+
+## Daily partial reporting
+
+Daily business contract：
+
+```text
+reporting completeness
+!= observed actual validity
+```
+
+未回報 row 不可補 numeric 0，也不可把其他已回報 row 的 numeric actual 全部抹成 N/A。
+
+但若已回報 row 的 Formal metric 本身 invalid，對應 metric仍 fail closed。
+
+# 30. Documentation Source Path Rule
+
+Canonical Project Knowledge Base 是 `docs/*.md`。Root / `functions/` 歷史 copies 不可跨版本拼接回 canonical docs。

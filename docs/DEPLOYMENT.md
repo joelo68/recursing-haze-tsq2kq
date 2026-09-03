@@ -172,13 +172,17 @@ find .github -maxdepth 2 -type f 2>/dev/null
 
 # 7. `.firebaserc`
 
-使用者目前專案未看到 `.firebaserc`。
+目前 repository root 已確認存在 `.firebaserc`：
 
-因此：
+```json
+{
+  "projects": {
+    "default": "cyjsituation-analysis"
+  }
+}
+```
 
-- Firebase CLI project alias 未由 repository 確認
-- 不在 Knowledge Base 中硬寫 alias
-- 執行 Firebase deploy 前應由操作者自行確認目前 CLI project context
+因此 default alias 可由 source 確認；正式 deploy 仍建議明確加上 `--project cyjsituation-analysis`，避免 CLI context 誤用。
 
 # 8. `firestore.indexes.json`
 
@@ -356,7 +360,7 @@ Telegram：
 - config / policy / schedule 前端讀寫正常
 - Functions log 無異常
 - 測試訊息與正式群組 routing 依當次需求驗證
-# 10. Reconciliation Security Config Hardening — Scoped Deploy Order
+# Historical Appendix — Reconciliation Security Config Hardening（SUPERSEDED AS PENDING STATE）
 
 此段適用於已驗證並 Git-integrated 的 `updateTelegramSecurityAlertConfig`（source commit `31d8ac6`）。它同時涉及 Backend endpoint、Firestore Rules 與 Frontend，部署不可只發其中一層。
 
@@ -377,4 +381,68 @@ npm run deploy
 
 本 hardening 沒有修改既有 Security alert Firestore triggers，因此不要機械式全量部署全部 Functions。
 
-> `31d8ac6` 已完成正式 validation / commit / push，但 Production frontend 目前仍是 rollback tree；本節仍只是待執行的 scoped deploy 順序，不代表已部署。
+> 此段保留 2026-08-31 當時的 deployment-order evidence；目前 Production runtime 已高於 `31d8ac6`，不得再把它解讀成「仍待部署」。最新狀態以 `CURRENT_STATE.md` 為準。
+
+---
+
+# 13. System Exclusion Stage C — Production Deploy / Recovery Order
+
+2026-09-03 split-runtime recovery 採 Backend / data authority / Frontend 分段 gate，避免再次把 stale Target Coverage authority直接交給新 Frontend。
+
+正式順序：
+
+```text
+1. Stage C source / regression / Node 22 / build gate
+2. Git commit + push main
+3. scoped Backend deploy
+4. CYJ Target Coverage read-only audit
+5. CYJ metadata-only migration + persisted verify
+6. CYJ historical Summary reconciliation readback
+7. 安妞 / 伊啵 read-only regression
+8. Frontend GitHub Pages deploy
+9. Production UI validation
+```
+
+Stage C scoped Backend deploy：
+
+```bash
+firebase deploy \
+  --project cyjsituation-analysis \
+  --only "functions:manageSystemExclusions,functions:auditHistoricalTargetCoverage,functions:migrateHistoricalTargetCoverageMetadata"
+```
+
+這不是 blanket Functions deploy，也沒有 Stage C Rules deploy。
+
+Frontend 正式路徑：
+
+```bash
+npm run deploy
+```
+
+`npm run deploy` = Vite build + `gh-pages -d dist`；不是 Firebase Hosting。
+
+本次 rollback anchor 在 deploy gate 鎖定為：
+
+```text
+ec8681826f1e047020f7f024abcc364eb269a2bd
+```
+
+此 SHA 只代表 Stage C 前的 gh-pages rollback anchor，不代表目前新 frontend SHA。
+
+## Docs-only closeout
+
+本次 `.md` closeout：
+
+```text
+runtime source change = 0
+Functions change      = 0
+Rules change          = 0
+CURRENT_APP_VERSION   = unchanged
+runtime deploy        = NOT REQUIRED
+```
+
+只需 documentation git commit / push。
+
+## Rules deployment boundary
+
+System Exclusion repository Rules source已有 direct-write deny；Stage C 沒有修改 Rules，也沒有在本次 closeout 重新 readback live Rules version。若後續需要把 live Rules 狀態正式收斂，必須先以當時最新 `firestore.rules` Source of Truth 做 independent verification；不要因為 Frontend 已改走 Backend endpoint 就推論 live Rules 一定相同。

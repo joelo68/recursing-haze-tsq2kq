@@ -1,7 +1,7 @@
 # SYSTEM_SOURCE_MAP.md
 
 > 狀態：Project Knowledge Base / Source Map v0.1
-> 已整併至 2026-09-02 Batch 5 final runtime closeout；docs-only closeout 前 runtime `HEAD = origin/main = 7479fc290d9fae8e4654dce56a04edfdaa3fc3ae`，`~/cyj-new` 為唯一正式 Source of Truth。各功能的部署／Production Confirmation 仍以 `CURRENT_STATE.md` 為準。
+> 已整併至 2026-09-03 System Exclusion A+B + Stage C recovery closeout；runtime `HEAD = origin/main = 2c9634372e689ea257c881cc0b6d202c2837e92e`，`CURRENT_APP_VERSION = 3.5.3`，`~/cyj-new` 為唯一正式 Source of Truth。各功能的部署／Production Confirmation 仍以 `CURRENT_STATE.md` 為準。
 > 禁止以舊對話、舊版檔案、AI 記憶或未提供的檔案補足事實。
 > 無法由目前正式程式確認的內容，必須標記為「未由目前正式來源確認」。
 
@@ -44,9 +44,9 @@
 - GitHub Pages base path 為 `/recursing-haze-tsq2kq/`。
 - `package.json` 的正式前端 deploy script 使用 `gh-pages -d dist`。
 - `firebase.json` 同時保留 Firestore Rules、Functions、Firebase Hosting 與 Emulator 設定。
-- 目前正式來源未提供 `.firebaserc`。
+- 目前正式來源已確認根目錄存在 `.firebaserc`，default project = `cyjsituation-analysis`。
 - 目前正式來源未提供 `firestore.indexes.json`，且 `firebase.json` 的 Firestore 區段只明確指定 `firestore.rules`。
-- 因此目前不可從專案來源宣稱 Firebase CLI project alias 或 Firestore composite indexes 已被 source control 管理。
+- 因此 Firebase CLI default project alias 已可由 source 確認；Firestore composite indexes 仍未由 repository source file 管理／確認。
 
 ---
 
@@ -2202,10 +2202,11 @@ Yibo boundary：
 
 ```text
 AnnualView save exclusion
-→ App.jsx setDoc brand-resolved audit_exclusions
-→ write success + same brand guard
-→ setAuditExclusions(nextExclusions)
-→ AnnualView immediate recompute actuals + cash target + accrual target
+→ App.jsx handleUpdateAuditExclusions
+→ Backend manageSystemExclusions
+→ expectedRevision OCC + highest-admin re-verification
+→ live single-doc System Exclusion listener receives current state
+→ Annual / current Formal consumers recompute with System Exclusion scope
 ```
 
 Write failure 不得顯示 success / 關閉 modal。此修正沒有新增 Firestore read / listener / query / polling。
@@ -2548,3 +2549,111 @@ tests/zeroTargetRetirement.test.js
 ```
 
 Read-only zero audit and normal Target Coverage owners remain.
+
+---
+
+# 35. System Exclusion A+B + Stage C Runtime Owners（PRODUCTION CONFIRMED）
+
+## Canonical documentation path
+
+本 repository 同時存在 root / `functions/` 下的舊 Knowledge Base copies；**目前 canonical Project Knowledge Base 以 `docs/` 版本為準**。Root / `functions/docs` duplicate 不能在未確認 SHA / lineage 時當成最新 Source of Truth。
+
+## Frontend owners
+
+```text
+src/App.jsx
+  → System Exclusion brand-scoped single-doc live authority
+  → Backend manageSystemExclusions client action
+  → current/historical trust propagation
+
+src/utils/systemExclusion.js
+  → FE normalization / snapshot trust pure helpers
+
+src/utils/currentDetailFormalConsumer.js
+  → current Formal scope = Lifecycle Eligible - System Excluded
+  → target exclusion revision trust
+
+src/components/DailyView.jsx
+  → System Exclusion presentation/formal scope
+  → partial reporting observed totals
+
+src/utils/dailyObservedTotals.js
+  → reportedRows observed cumulative totals pure helper
+```
+
+## Backend owners
+
+```text
+functions/systemExclusionContract.js
+  → version / revision / normalized snapshot contract
+
+functions/systemExclusion.js
+  → manageSystemExclusions
+  → onLegacySystemExclusionChange
+  → onBrandSystemExclusionChange
+
+functions/targetCoverage.js
+  → Formal eligible cohort filters System Exclusion
+  → monthly_targets_summary.systemExclusionSnapshot
+
+functions/targetCoverageAudit.js
+  → existing Summary audit also reads System Exclusion
+  → v1 current only when exclusion snapshot current
+
+functions/targetCoverageMigration.js
+  → metadata-only System Exclusion snapshot repair
+  → persisted verification
+  → historical reconciliation callback
+
+functions/index.js
+  → markHistoricalSummariesDirtyForSystemExclusion
+  → Summary writer persists exclusion snapshots
+  → persisted trust compare includes Dashboard / Ranking snapshot
+```
+
+## Regression owners
+
+```text
+tests/systemExclusion.test.js
+tests/currentDetailFormalConsumer.test.js
+tests/currentDetailFormalWiring.test.js
+tests/dailyObservedTotals.test.js
+tests/splitRuntimeRecoveryWiring.test.js
+tests/splitRuntimeRepairSemantics.test.js
+```
+
+Stage C current source changed exactly：
+
+```text
+functions/index.js
+functions/systemExclusion.js
+functions/targetCoverageAudit.js
+functions/targetCoverageMigration.js
+src/App.jsx
+src/components/DailyView.jsx
+src/utils/dailyObservedTotals.js
+tests/dailyObservedTotals.test.js
+tests/splitRuntimeRecoveryWiring.test.js
+tests/splitRuntimeRepairSemantics.test.js
+```
+
+## Reads / writes topology
+
+```text
+Frontend System Exclusion: one brand-scoped single-doc listener; no polling
+Target Coverage Audit: 5 + N Summary docs; Raw Target reads 0; writes 0
+Metadata Migration: current Lifecycle + System Exclusion + requested Summary docs + persisted verify
+Historical reconciliation: scoped derived Summary scan; only stale historical flags written
+Daily partial totals: no new Firestore query / listener
+```
+
+## Production evidence
+
+```text
+CYJ 2026-09 Formal eligible = 32 (Lifecycle 33 - 中美 1)
+CYJ 12 / 12 target summaries = current Target Coverage v1
+CYJ 2026-01～08 historical Summary/Ranking snapshots = current / verified
+安妞 audit = 12 / 12 ALREADY_V1
+伊啵 audit = 9 ALREADY_V1 + 3 PRE_SYSTEM_SKIP
+Stage C related UI Production validation = PASS
+```

@@ -1610,3 +1610,134 @@ Therefore Target Coverage Metadata Self-Heal is Production Confirmed.
 `normalizeLegacyZeroTargetPlaceholders` has completed its historical task and is retired.
 
 Do not restore the old mutation endpoint/UI/client as a general maintenance tool. Keep read-only audit and regression instead.
+
+---
+
+# 49. Stage C Historical Target Coverage / System Exclusion Recovery Tooling（PRODUCTION CONFIRMED）
+
+Pre-Batch-5 Audit / Migration 工具仍保留，但 Stage C 後 classification authority 已擴充為：
+
+```text
+Target Coverage v1
++ Lifecycle READY cohort
++ current System Exclusion snapshot
+```
+
+## Audit Only
+
+目前 read-only audit 讀：
+
+```text
+security point reads              3
+store_lifecycle/master            1
+System Exclusion authority        1
+existing monthly_targets_summary  N
+Raw monthly_targets               0
+Writes                            0
+```
+
+Estimated Reads：
+
+```text
+5 + N
+```
+
+`ALREADY_V1` 必須同時是：
+
+```text
+targetCoverageVersion = target-coverage-v1
+AND systemExclusionSnapshot current
+```
+
+若 v1 snapshot stale / missing，會重新做 Summary consistency safety check；只有 map / legacy counts / totals 自洽才可列 `SUMMARY_BACKFILL_SAFE`。
+
+## Metadata Migration
+
+允許欄位新增：
+
+```text
+systemExclusionSnapshot
+```
+
+其他 metadata-only boundary不變。Migration transaction 現在多讀 current System Exclusion point doc，且 persisted verify後呼叫 historical reconciliation。
+
+若 Coverage metadata 已寫入且 verified，但 historical reconciliation失敗：
+
+```text
+STOP frontend publish
+回 reconciliationFailed
+不得把半完成 cutover 當成功
+```
+
+## Historical reconciliation readback
+
+Migration 後不要只看 Target Summary。至少檢查一個真正 historical month：
+
+```text
+summary_recalc_flags
+  status = verified
+  dirty = false
+  pendingCount = 0
+  lastMismatchCount = 0
+  current System Exclusion revision/snapshot
+
+dashboard_summary
+  current systemExclusionSnapshot
+
+rankings_summary
+  current systemExclusionSnapshot
+```
+
+Current month 不要求 historical Dashboard / Ranking Summary；current month 走 live/detail authority。
+
+## 2026-09-03 Production evidence
+
+CYJ Audit before migration：
+
+```text
+12 existing months
+12 SUMMARY_BACKFILL_SAFE
+raw rebuild 0
+Raw Target Reads 0
+Writes 0
+Estimated Reads 17
+```
+
+CYJ Migration：
+
+```text
+requested 12
+written 12
+persisted verified 12
+Raw Target Reads 0
+```
+
+Post-audit：
+
+```text
+12 / 12 ALREADY_V1
+```
+
+Historical `2026-01～2026-08`：
+
+```text
+verified / dirty=false / mismatch=0
+Dashboard + Ranking exclusion snapshot current
+formalRankEligibleStoreCount = 32
+```
+
+Cross-brand Audit Only：
+
+```text
+安妞 12 / 12 ALREADY_V1
+伊啵 9 ALREADY_V1 + 3 PRE_SYSTEM_SKIP
+raw rebuild 0
+Raw Target Reads 0
+Writes 0
+```
+
+## Operator warnings
+
+不要因為畫面仍是舊 Frontend denominator 就重跑 Migration。Split-runtime recovery 必須先判斷 Backend data authority 是否已 current。
+
+不要透過重存相同 System Exclusion store set來 trigger repair；Stage C writer故意把它設為 no-op。

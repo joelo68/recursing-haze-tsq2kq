@@ -424,7 +424,7 @@ active_alert
 data_audit
 ```
 
-所以「某店排除」可以只影響某一類分析，
+所以「Telegram policy 的某店排除」可以只影響某一類分析，
 不一定是全資料永久刪除。
 
 ---
@@ -1001,3 +1001,51 @@ npm run build
 □ task workflow
 □ notification patrol
 ```
+
+---
+
+# 47. System Exclusion vs Telegram Policy Exclusion
+
+`audit_exclusions` 目前正式語意已升級為 **System Exclusion v1**。Telegram 仍讀同一 brand-resolved authority，但它與 `telegram_agent_policies` 的 `exclude_store` 不再能混為同一種排除。
+
+## Formal System Exclusion
+
+```text
+Lifecycle Eligible
+- System Excluded
+= Formal operational store scope
+```
+
+此 scope 影響正式營運 actual / target / achievement / ranking / Summary 等 downstream semantics。Raw data保留，但 Telegram formal operational analysis不得重新把 System Excluded store 加回。
+
+## Telegram policy exclusion
+
+`telegram_agent_policies` 仍可依 scope 進一步縮小：
+
+```text
+telegram_analysis
+ranking
+brand_totals
+active_alert
+data_audit
+```
+
+因此正確 layering：
+
+```text
+Formal scope
+= Lifecycle Eligible - System Excluded
+
+Telegram scoped result
+= Formal scope - applicable Telegram policy exclusions
+```
+
+Telegram policy 可以只影響某類分析／alert；System Exclusion 則是全系統正式 scope authority。
+
+## Active Alert
+
+Active Alert 現有 flow 仍會把 System Exclusion set 與 `active_alert` policy exclusion 合併後再算 active stores。Policy只能再排除，不能 re-include System Excluded store。
+
+## Reads
+
+Stage C 沒有為 Telegram 增加 polling / persistent listener。Telegram backend 仍在既有 request / job scope 讀必要 brand settings；System Exclusion 的 Frontend single-doc listener是 App runtime authority，不應複製到 Telegram Agent backend。

@@ -1,7 +1,7 @@
 # ARCHITECTURE.md
 
 > 本文件描述目前正式部署版本的系統架構。  
-> 已整併至 2026-08-25；目前正式部署 source 仍高於本文件。
+> 已整併至 2026-09-03 System Exclusion A+B + Stage C recovery。
 > `CURRENT_STATE.md` 專門區分「已正式確認」、「待部署」與「Production 觀察中」的 Security 工作。
 
 # 1. 高階架構
@@ -597,7 +597,7 @@ Security event categories currently include password failure threshold, 6-digit 
 
 # 14. Firebase Functions
 
-目前正式 backend export 25 個 functions：
+早期基線列出的主要 Functions exports 如下；目前正式 source 已另包含 Device Security、Store Lifecycle、Target Coverage、System Exclusion、Audit / Migration 等 exports，完整 current list 必須回到 `functions/index.js` / `SYSTEM_SOURCE_MAP.md`，不得再用「25 個」作現在的固定總數：
 
 ```text
 resolveLoginLocation
@@ -692,16 +692,81 @@ autoprefixer
 
 # 17. 未由 Repository 確認
 
-目前使用者已確認專案中沒有看到：
+目前 repository source 已確認：
 
 ```text
-.firebaserc
-firestore.indexes.json
-.github/workflows
+.firebaserc exists
+default project = cyjsituation-analysis
+firestore.indexes.json 未提供 / 未由 firebase.json 宣告
+.github/workflows 未發現 repository workflow file
 ```
 
-因此 Architecture 文件不假設：
+因此：
 
-- Firebase CLI alias 由 repository 管理
-- Composite Index 設定已 source-controlled
-- GitHub Actions 自動部署存在
+- Firebase CLI default alias 可由 repository 確認，但 deploy 仍建議明確 `--project cyjsituation-analysis`
+- Composite Index 設定仍不可假設已 source-controlled
+- GitHub Pages publish 由 `gh-pages` branch / platform deployment完成，不等於 repository 內存在 `.github/workflows`
+
+---
+
+# 18. System Exclusion Authority Layer — A+B / Stage C
+
+System Exclusion 現在是介於 Lifecycle cohort 與所有 Formal consumer 之間的正式 scope authority：
+
+```text
+Store Lifecycle READY monthly cohort
+        ↓
+System Exclusion v1
+        ↓
+Formal Store Scope
+        ├─ Current Detail / Dashboard
+        ├─ Daily observed reporting
+        ├─ Target Coverage
+        ├─ Historical Summary / Ranking
+        ├─ Annual / Regional / Ranking / Store Analysis
+        └─ Telegram formal operational analysis
+```
+
+Physical authority：
+
+```text
+CYJ legacy
+artifacts/default-app-id/public/data/global_settings/audit_exclusions
+
+standard brands
+brands/{brandId}/settings/audit_exclusions
+```
+
+Frontend 不常駐監聽大型 exclusion collection；`App.jsx` 只維持目前 brand 的單一 Settings doc realtime authority。
+
+Derived Data 用 `systemExclusionSnapshot` 做 revision trust；Current Detail 直接使用 live authority。Historical Summary stale 時沿用既有 dirty / repair worker，不另建第二套 writer。
+
+# 19. Reporting Completeness vs Observed Actual
+
+Stage C 正式把 Daily reporting completeness 與「已觀測到的實績」拆開：
+
+```text
+missing report
+!= numeric zero
+!= 已回報 store 的 actual 無效
+```
+
+因此 partial reporting 可以同時成立：
+
+```text
+reportedCount < totalCount
+reporting = incomplete
+observed cash/accrual/traffic/new customer = numeric（若已回報 rows 本身 valid）
+```
+
+這是 business-state separation，不是 UI workaround。
+
+# 20. Documentation canonical path
+
+Project Knowledge Base 的 canonical path 是：
+
+```text
+docs/*.md
+```
+
+Root 與 `functions/` 下仍可存在歷史副本；它們不得在沒有最新 source gate 的情況下覆蓋 canonical docs。
