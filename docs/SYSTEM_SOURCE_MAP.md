@@ -1,7 +1,7 @@
 # SYSTEM_SOURCE_MAP.md
 
 > 狀態：Project Knowledge Base / Source Map v0.1
-> 已整併至 2026-09-03 System Exclusion A+B + Stage C recovery closeout；runtime `HEAD = origin/main = 2c9634372e689ea257c881cc0b6d202c2837e92e`，`CURRENT_APP_VERSION = 3.5.3`，`~/cyj-new` 為唯一正式 Source of Truth。各功能的部署／Production Confirmation 仍以 `CURRENT_STATE.md` 為準。
+> 已整併至 2026-09-03 Batch 6B Store Health Consistency closeout；runtime implementation lineage = `47a8c3fb0711c194764da36c61752be4bc8ef579`，`CURRENT_APP_VERSION = 3.5.3`，`~/cyj-new` 為唯一正式 Source of Truth。docs-only closeout commit 不改變 runtime lineage；各功能的部署／Production Confirmation 仍以 `CURRENT_STATE.md` 為準。
 > 禁止以舊對話、舊版檔案、AI 記憶或未提供的檔案補足事實。
 > 無法由目前正式程式確認的內容，必須標記為「未由目前正式來源確認」。
 
@@ -2656,4 +2656,163 @@ CYJ 2026-01～08 historical Summary/Ranking snapshots = current / verified
 安妞 audit = 12 / 12 ALREADY_V1
 伊啵 audit = 9 ALREADY_V1 + 3 PRE_SYSTEM_SKIP
 Stage C related UI Production validation = PASS
+```
+
+# 36. Batch 6B Store Health Consistency Runtime Owners（PRODUCTION CONFIRMED）
+
+## Pure Store Health owner
+
+```text
+src/utils/storeHealth.js
+```
+
+責任：
+
+```text
+Store Health v1 formal formulas
+brand-specific benchmark profile resolution
+benchmark validation / missing / invalid status
+five-dimension score normalization
+N/A / DATA_INVALID / sample validity
+ratio-of-totals aggregation
+```
+
+正式版本：
+
+```text
+STORE_HEALTH_VERSION = store-health-v1
+```
+
+Brand benchmark key：
+
+```text
+cyj   → default
+anniu → 安妞
+yibo  → 伊啵
+```
+
+不得 cross-brand fallback。
+
+## Store Analysis consumer owner
+
+```text
+src/components/StoreAnalysisView.jsx
+```
+
+Batch 6B responsibility：
+
+```text
+AppContext.systemExclusionState
+→ current/detail Formal authority
+→ Formal eligible store scope
+→ Store Health / risk / selectable store scope
+```
+
+Runtime benchmark 只來自目前品牌 `targets.benchmarks`；舊 hardcoded `DEFAULT_BENCHMARKS` 不再是 authority。
+
+Current synthetic store rows會帶 Formal KPI + Store Health feeder status/version；UI 對 invalid / N_A 使用安全呈現，不把 missing 轉成 0。
+
+## Summary semantic owners
+
+Frontend：
+
+```text
+src/utils/summarySemantics.js
+```
+
+Backend：
+
+```text
+functions/summarySemantics.js
+```
+
+Batch 6B additive metadata：
+
+```text
+STORE_HEALTH_INPUT_VERSION = store-health-input-v1
+skincareSalesStatus
+trafficStatus
+newCustomersStatus
+newCustomerSalesStatus
+```
+
+Global：
+
+```text
+SUMMARY_SEMANTIC_VERSION = summary-semantics-v1
+```
+
+保持不變；Batch 6B 不以提高 global semantic version 取代 additive migration。
+
+Store-level semantic signature 已包含上述 Store Health metadata，persisted compare 可驗證新 feeder semantics 真正落盤。
+
+## Regression owners
+
+```text
+tests/storeHealth.test.js
+  → formulas / validity / benchmark / boundary / ratio-of-totals
+
+tests/storeHealthSummarySemantics.test.js
+  → Summary feeder version/status / legacy fail-closed
+
+tests/storeAnalysisFormalConsumer.test.js
+  → Store Analysis Formal authority / System Exclusion integration
+```
+
+## Runtime scope / topology
+
+Batch 6B 正式 runtime source scope：
+
+```text
+functions/summarySemantics.js
+src/components/StoreAnalysisView.jsx
+src/utils/storeHealth.js
+src/utils/summarySemantics.js
+tests/storeAnalysisFormalConsumer.test.js
+tests/storeHealth.test.js
+tests/storeHealthSummarySemantics.test.js
+```
+
+沒有新增：
+
+```text
+Firestore path
+Firestore Rules change
+Store Analysis listener
+Store Analysis polling
+broad resident Store Health query
+Backend Function export
+```
+
+Backend deploy 只需既有 call graph 的：
+
+```text
+repairDirtySummaryNow
+repairDirtySummaries
+```
+
+Frontend production publish 仍是：
+
+```text
+npm run deploy
+→ gh-pages -d dist
+```
+
+## Production evidence
+
+```text
+Historical Store Health metadata ready = 21 / 21 months
+CYJ   2026-01～08 = 8
+安妞  2026-01～08 = 8
+伊啵  2026-04～08 = 5
+
+CYJ 2026-09 Formal eligible = 32
+System Excluded             = 中美
+CYJ Formal target exclusion arithmetic = PASS
+
+CYJ Store Health UI  = PASS
+安妞 benchmark unset = expected fail-closed / radar polygon absent / PASS
+伊啵 own benchmark   = PASS
+Brand isolation      = PASS
+Console regression   = PASS
 ```

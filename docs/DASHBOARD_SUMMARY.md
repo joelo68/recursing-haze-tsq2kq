@@ -1192,3 +1192,153 @@ polling = 0
 ```
 
 Stage C 沒有把 Dashboard historical path改回 full-month Raw listener。
+
+# 31. Batch 6B Store Health Historical Summary Trust（PRODUCTION CONFIRMED）
+
+Batch 6B 在既有 `dashboard-summary-v2` / `summary-semantics-v1` 上增加 Store Health feeder trust metadata；沒有把 current month 改成 historical Summary path。
+
+## Store-level Store Health input contract
+
+Historical `dashboard_summary.stores.{store}` 必須提供：
+
+```text
+storeHealthInputVersion = store-health-input-v1
+skincareSalesStatus
+trafficStatus
+newCustomersStatus
+newCustomerSalesStatus
+```
+
+目的：讓 Historical Store Health 能區分：
+
+```text
+真實 0
+缺欄位
+資料無效
+有效正值 / 負值
+```
+
+不得再以 legacy：
+
+```text
+Number(value || 0)
+```
+
+把 missing / invalid feeder 偽裝成合法 0。
+
+Global：
+
+```text
+SUMMARY_SEMANTIC_VERSION = summary-semantics-v1
+```
+
+保持不變；`store-health-input-v1` 是 additive feeder contract version。
+
+## Persisted compare
+
+Store-level Formal semantic signature 已包含 Store Health input version + 4 個 feeder status。
+
+Repair trust flow：
+
+```text
+Raw rebuild
+→ write dashboard_summary / therapist_summary / rankings_summary
+→ read back persisted 3 docs
+→ compare Store Health + existing Formal signatures
+→ matched 才將 summary_recalc_flags 設回 verified
+```
+
+因此「舊 Summary numeric fields 看似完整」不足以代表 Store Health historical consumer可用。
+
+## Historical reconciliation state
+
+Batch 6B controlled Production repair 已完成：
+
+```text
+CYJ   2026-01～08 = 8 / 8 READY
+安妞  2026-01～08 = 8 / 8 READY
+伊啵  2026-04～08 = 5 / 5 READY
+TOTAL             = 21 / 21 READY
+```
+
+Repair acceptance：
+
+```text
+matched = true
+mismatchCount = 0
+writtenDocs = 3 / month
+persisted readback = PASS
+flag status = verified
+dirty = false
+pendingCount = 0
+lastMismatchCount = 0
+```
+
+歷史 `DATA_INCOMPLETE` 或 feeder `FIELD_MISSING` 仍可是可信 Summary 的正式資料狀態；它們不能被修成假 `DATA_COMPLETE` / 0，只因 repair完成。
+
+## Formal Store Health scope
+
+Historical Summary 可以保存 System Excluded store row作 traceability；Store Analysis在使用前必須套：
+
+```text
+Formal Eligible Store
+= Lifecycle Eligible
+AND NOT System Excluded
+```
+
+因此：
+
+```text
+row exists
+!=
+Formal eligible
+```
+
+CYJ 2026-08 persisted Summary可保留 33 store rows，但中美不進 32-store Formal scope；其 Store Health feeder `FIELD_MISSING` 不得污染品牌 aggregate或風險判斷。
+
+## Current month boundary
+
+Current month仍走：
+
+```text
+live/detail reports
++ Lifecycle
++ live System Exclusion
++ current monthly_targets_summary
++ current brand KPI settings
+→ Store Health
+```
+
+不要求建立 current-month `dashboard_summary` 來顯示 Store Health。
+
+## Benchmark authority is not Summary authority
+
+Historical Summary只保存 Store Health input semantics；Five-Force benchmark仍來自目前品牌 runtime `kpi_targets.benchmarks`。
+
+```text
+CYJ   → default
+安妞  → 安妞
+伊啵  → 伊啵
+```
+
+Benchmark missing / invalid：
+
+```text
+→ score N/A
+→ radar polygon可以不繪製
+→ 不跨品牌 fallback
+```
+
+2026-09-03 Production smoke 已確認：安妞 benchmark 未設定時雷達 polygon 不繪製是 expected fail-closed；CYJ / 伊啵使用各自 profile 正常。
+
+## Read-cost boundary
+
+Batch 6B 沒有把 historical Dashboard / Store Analysis改回 full-month Raw resident listener：
+
+```text
+new listener = 0
+new polling  = 0
+new broad Store Health query = 0
+```
+
+正常 verified historical仍 Summary-first；dirty / missing / unverified 仍保留 correctness fallback。

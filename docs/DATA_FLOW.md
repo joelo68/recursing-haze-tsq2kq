@@ -1714,3 +1714,159 @@ Telegram presentation / alert scope
 ```
 
 Telegram policy 可以再縮小某類分析／alert，但不得把 System Excluded store 重新加入正式營運數字。
+
+# 44. Batch 6B Store Health Consistency Flow（PRODUCTION CONFIRMED）
+
+## KPI Settings / benchmark authority
+
+```text
+SettingsView
+→ kpi_targets single settings doc
+→ existing App 1-doc listener
+→ App.targets.benchmarks
+→ StoreAnalysisView
+→ src/utils/storeHealth.js
+```
+
+Brand profile resolution：
+
+```text
+CYJ   → benchmarks.default
+安妞  → benchmarks.安妞
+伊啵  → benchmarks.伊啵
+```
+
+規則：
+
+```text
+profile missing
+→ 標準未設定
+→ score N/A
+→ 不借其他品牌 benchmark
+
+profile invalid
+→ 標準設定無效
+→ fail closed
+```
+
+沒有新增第二條 KPI settings listener。
+
+## Current-month Store Health
+
+```text
+current month daily_reports / current scoped reports
++ Store Lifecycle READY authority
++ live System Exclusion state
++ current monthly_targets_summary
++ current brand KPI settings
+        ↓
+buildCurrentDetailFormalAuthority
+        ↓
+Formal Eligible Store scope
+= Lifecycle Eligible - System Excluded
+        ↓
+current synthetic Store Health input rows
+        ↓
+src/utils/storeHealth.js
+        ↓
+Five-Force metrics / scores / risk presentation
+```
+
+System Excluded Raw report / target 可以保留，但不進 Formal Store Health aggregate / risk / ranking / selectable formal scope。
+
+## Historical verified Store Health
+
+```text
+summary_recalc_flags verified
++ dashboard_summary/{YYYY-MM}
+        ↓
+store rows require
+  storeHealthInputVersion = store-health-input-v1
+  skincareSalesStatus
+  trafficStatus
+  newCustomersStatus
+  newCustomerSalesStatus
+        ↓
+System Exclusion / Lifecycle Formal scope
+        ↓
+Store Health v1
+```
+
+Missing Store Health input version / status：
+
+```text
+→ feeder FIELD_MISSING / unavailable
+→ metric / score N/A
+→ 不用 legacy Number(... || 0) 偽造 0
+```
+
+Summary row存在不等於 Formal eligible；例如 System Excluded store 可保留 traceability row，但 consumer 必須先套 Formal scope。
+
+## Five-Force formulas
+
+```text
+財務健康
+cashToAccrual = formalNetCash / formalAccrual
+
+銷售結構
+netProductSales = skincareSales - skincareRefund
+productRatio = netProductSales / formalNetCash
+
+顧客黏著
+oldCustomers = traffic - newCustomers
+retention = oldCustomers / traffic
+
+客單挖掘
+oldCustomerSales = formalNetCash - newCustomerSales
+oldCustomerASP = oldCustomerSales / oldCustomers
+newCustomerASP = newCustomerSales / newCustomers
+aspMining = oldCustomerASP / newCustomerASP
+
+新客質量
+acquisition = newCustomerASP / currentBrand.newASP
+```
+
+Invalid / denominator / sample semantics 依正式 KPI contract fail closed；`newCustomers > traffic` 是 `DATA_INVALID`，不 clamp；negative net product / old-customer sales 保留原值。
+
+Aggregation：
+
+```text
+regional / brand Five-Force
+→ ratio-of-totals
+→ NOT average-of-store-ratios
+```
+
+## Historical metadata backfill / repair
+
+2026-09-03 Production controlled repair：
+
+```text
+CYJ   2026-01～08 = 8 / 8
+安妞  2026-01～08 = 8 / 8
+伊啵  2026-04～08 = 5 / 5
+TOTAL             = 21 / 21
+```
+
+Flow：
+
+```text
+repairDirtySummaryNow(force=true, controlled migration only)
+→ rebuild dashboard_summary / therapist_summary / rankings_summary
+→ persisted point-read compare
+→ matched=true / mismatchCount=0
+→ summary_recalc_flags verified
+```
+
+這是一次性 historical semantic reconciliation；正常 future historical target/report change 仍走既有 event-driven dirty / scheduled repair flow。
+
+## Read-cost boundary
+
+Batch 6B Store Health 本身：
+
+```text
+new listener = 0
+new polling  = 0
+new broad query = 0
+```
+
+正常畫面重用既有 Settings / Summary / System Exclusion state；歷史 controlled backfill 是低頻 maintenance operation，不是 render-time read path。

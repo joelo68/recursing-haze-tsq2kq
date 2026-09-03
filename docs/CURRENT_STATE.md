@@ -4,6 +4,246 @@
 > 優先順序：使用者提供的目前正式部署 source > 本檔案 > 其他 Knowledge Base 文件。  
 > 最後整併更新：**2026-09-03（UTC+8）**。
 
+# Latest Production Runtime Override — 2026-09-03（Batch 6B Store Health Consistency）
+
+> 本節是目前最高優先的 Store Health / Store Analysis Production runtime 狀態。下方 Stage C 與較舊 Batch 章節保留各自當時的 evidence；若狀態衝突，以最新正式 source、Production readback 與本節為準。
+
+正式 runtime implementation lineage：
+
+```text
+Official working directory    = ~/cyj-new
+branch                        = main
+Runtime implementation commit = 47a8c3fb0711c194764da36c61752be4bc8ef579
+CURRENT_APP_VERSION           = 3.5.3（未提高）
+Frontend production publish   = GitHub Pages / gh-pages 806468594fd3708f9da8e93ff7d53523e954bb72
+Backend runtime               = repairDirtySummaryNow / repairDirtySummaries = ACTIVE, nodejs22
+```
+
+Documentation closeout 以 runtime commit `47a8c3f` 的 clean source gate 為基線；後續 docs-only commit 不改變上述 runtime implementation lineage。
+
+## Store Health v1 — formal runtime contract
+
+正式 pure owner：
+
+```text
+src/utils/storeHealth.js
+STORE_HEALTH_VERSION = store-health-v1
+```
+
+五個 Store Health 維度：
+
+```text
+財務健康   cashToAccrual = formalNetCash / formalAccrual
+銷售結構   productRatio  = (skincareSales - skincareRefund) / formalNetCash
+顧客黏著   retention     = (traffic - newCustomers) / traffic
+客單挖掘   aspMining     = oldCustomerASP / newCustomerASP
+新客質量   acquisition   = newCustomerASP / currentBrand.newASP
+```
+
+Validity / fail-closed：
+
+```text
+invalid / missing / no sample / denominator <= 0（依各 KPI contract）
+→ N/A
+→ score 不得偽裝成 0
+
+newCustomers > traffic
+→ DATA_INVALID
+→ 不 clamp 成合法 retention
+
+negative net product sales
+→ 保留真實負值
+→ score 可 floor 0，但 raw ratio 不改寫
+```
+
+Regional / brand Store Health aggregation 使用 ratio-of-totals，不使用 store ratio 的算術平均。
+
+## Brand benchmark authority / isolation
+
+Store Health benchmark 只接受目前品牌自己的 `kpi_targets.benchmarks` runtime parameter：
+
+```text
+CYJ   → benchmarks.default
+安妞  → benchmarks.安妞
+伊啵  → benchmarks.伊啵
+```
+
+Canonical storage 為 decimal ratio；有效 benchmark 必須：
+
+```text
+min finite
+max finite
+min > 0
+max > min
+```
+
+缺 benchmark：
+
+```text
+標準未設定
+→ Store Health score N/A
+→ 不借用其他品牌 profile
+```
+
+invalid benchmark：
+
+```text
+標準設定無效
+→ fail closed
+```
+
+Production UI 已確認：CYJ 與伊啵使用各自有效 profile；安妞 5 組 benchmark 尚未設定，因此 raw KPI 可顯示、雷達 polygon 不繪製，且沒有 fallback 到 CYJ / 伊啵。此行為為 EXPECTED / PASS。
+
+## Historical Summary Store Health input metadata
+
+Batch 6B 在既有 `summary-semantics-v1` 上採 additive metadata，不提高 global semantic version，也不覆寫 legacy numeric field ownership。
+
+Historical `dashboard_summary.stores.{store}` 目前新增／要求：
+
+```text
+storeHealthInputVersion = store-health-input-v1
+skincareSalesStatus
+trafficStatus
+newCustomersStatus
+newCustomerSalesStatus
+```
+
+這些欄位納入 persisted semantic signature。Historical Store Health consumer 若缺 `store-health-input-v1` 或缺正式 feeder status，必須 fail closed，不得以 legacy `Number(... || 0)` 推回合法 0。
+
+Production historical reconciliation 已完成：
+
+```text
+CYJ   2026-01～08 = 8 / 8 READY
+安妞  2026-01～08 = 8 / 8 READY
+伊啵  2026-04～08 = 5 / 5 READY
+TOTAL             = 21 / 21 READY
+```
+
+全部 repair 月份均經 Backend persisted compare；代表月與 bulk repair 均：
+
+```text
+HTTP 200
+matched = true
+mismatchCount = 0
+writtenDocs = 3
+summary_recalc_flags.status = verified
+summary_recalc_flags.dirty = false
+pendingCount = 0
+lastMismatchCount = 0
+```
+
+`DATA_INCOMPLETE`、`FIELD_MISSING`、`VALID_ZERO` 等狀態保留原始資料事實；它們不等同 repair failure。
+
+## System Exclusion integration
+
+Store Analysis / Store Health 正式 scope：
+
+```text
+Formal Eligible Store
+= Lifecycle Eligible
+AND NOT System Excluded
+```
+
+Batch 6B 修正 `StoreAnalysisView` 對 `systemExclusionState` 的正式 authority propagation；System Excluded store 可保留 Raw / Summary traceability row，但不得進正式 Store Health aggregate、risk、ranking、target denominator 或 selectable formal scope。
+
+CYJ Production 2026-09 read-only audit：
+
+```text
+System Exclusion revision     = 4
+System Excluded stores        = [中美]
+Lifecycle eligible            = 33
+Formal eligible               = 32
+cashConfiguredStoreCount      = 32
+accrualConfiguredStoreCount   = 32
+cashCoverageComplete          = true
+accrualCoverageComplete       = true
+
+Raw target-map cash total     = 44,976,548
+中美 cash target              = 1
+Dashboard Formal cash target  = 44,976,547
+
+Raw target-map accrual total  = 46,324,249
+中美 accrual target           = 1
+Dashboard Formal accrual target = 46,324,248
+```
+
+因此 Raw / compatibility map 可保留 System Excluded store，但正式 Dashboard / Store Health consumer 必須使用 Formal scope。
+
+## Reads / listener topology
+
+Batch 6B 沒有新增 Store Analysis Firestore listener、query primitive 或 polling；仍重用既有 Settings / Summary / System Exclusion state。
+
+```text
+new Store Health listener = 0
+new Store Health polling  = 0
+new Store Health broad query = 0
+```
+
+既有 selected-store precision query 的 broad all-history realtime fallback 屬 pre-existing read debt，未在 Batch 6B 擴張或以 workaround 改寫。
+
+## Validation / deployment / Production confirmation
+
+正式 validation：
+
+```text
+Node 22 targeted regression = 111 / 111 PASS
+Node 22 full repo regression = 438 / 438 PASS
+npm run build                = PASS
+CURRENT_APP_VERSION          = 3.5.3 unchanged
+```
+
+Batch 6B runtime source scope：
+
+```text
+M functions/summarySemantics.js
+M src/components/StoreAnalysisView.jsx
+A src/utils/storeHealth.js
+M src/utils/summarySemantics.js
+M tests/storeAnalysisFormalConsumer.test.js
+A tests/storeHealth.test.js
+A tests/storeHealthSummarySemantics.test.js
+```
+
+Backend scoped deploy：
+
+```text
+repairDirtySummaryNow = ACTIVE / nodejs22
+repairDirtySummaries  = ACTIVE / nodejs22
+```
+
+Frontend：
+
+```text
+npm run deploy
+→ GitHub Pages Published
+→ gh-pages = 806468594fd3708f9da8e93ff7d53523e954bb72
+```
+
+Production smoke：
+
+```text
+CYJ Store Health                         PASS
+安妞 Store Health / missing benchmark    PASS（fail closed, no cross-brand fallback）
+伊啵 Store Health / own benchmark         PASS
+Brand benchmark isolation                PASS
+CYJ 2026-09 System Exclusion target audit PASS
+Browser Console regression               PASS
+```
+
+Final status：
+
+```text
+IMPLEMENTED                 = YES
+VALIDATED                   = YES
+COMMITTED / PUSHED          = YES — runtime commit 47a8c3f
+BACKEND DEPLOYED            = YES
+HISTORICAL REPAIR           = PASS — 21 / 21
+FRONTEND DEPLOYED           = YES
+PRODUCTION CONFIRMED        = YES
+CURRENT_APP_VERSION         = 3.5.3 unchanged
+DOCUMENTATION IMPACT        = CLOSED by Batch 6B docs-only closeout
+```
+
 # Latest Production Runtime Override — 2026-09-03（System Exclusion A+B + Stage C Recovery）
 
 > 本節是目前最高優先 Production runtime 狀態。下方較舊 `audit_exclusions`／Annual exclusion 章節保留當時歷史 evidence；若與本節衝突，以最新正式 source + 本節為準。

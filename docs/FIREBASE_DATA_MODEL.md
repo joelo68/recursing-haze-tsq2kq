@@ -2210,3 +2210,111 @@ previousStores / stores
 ```
 
 相同 store set 的 no-op 不增加 revision，也不新增此 audit event。
+
+# 22. Batch 6B Store Health Summary Metadata（PRODUCTION CONFIRMED）
+
+Batch 6B 沒有新增 Firestore collection / physical path；採既有 `dashboard_summary/{YYYY-MM}` 的 additive semantic metadata。
+
+## `dashboard_summary.stores.{store}` Store Health feeder metadata
+
+Historical store row 新增／正式要求：
+
+```text
+storeHealthInputVersion = store-health-input-v1
+skincareSalesStatus
+trafficStatus
+newCustomersStatus
+newCustomerSalesStatus
+```
+
+Status 使用正式 KPI validity semantics，例如：
+
+```text
+VALID
+VALID_ZERO
+FIELD_MISSING
+DATA_INVALID
+```
+
+`VALID_ZERO` 與 `FIELD_MISSING` 不可互換；consumer 不得用 truthy/falsy coercion 把 missing 轉成 numeric zero。
+
+這些欄位與既有 Formal fields 並存：
+
+```text
+grossCash / formalNetCash / status
+formalAccrual / status
+formal targets / achievement / status
+formalLifecycleEligible
+formalRankEligible
+```
+
+Global Summary semantic version仍為：
+
+```text
+summary-semantics-v1
+```
+
+Batch 6B 沒有以 global version bump 取代 additive Store Health feeder version。
+
+## Persisted trust
+
+Store-level semantic signature 會納入：
+
+```text
+storeHealthInputVersion
+skincareSalesStatus
+trafficStatus
+newCustomersStatus
+newCustomerSalesStatus
+```
+
+因此 Summary rebuild 的 persisted compare 能辨認「numeric legacy row存在、但 Store Health validity metadata 尚未遷移」的情況。
+
+Historical Store Health consumer contract：
+
+```text
+storeHealthInputVersion != store-health-input-v1
+或 feeder status 缺失 / 不合法
+→ Store Health input unavailable / fail closed
+→ 不把 legacy numeric 0 當成已驗證 Store Health input
+```
+
+## System Excluded row retention
+
+System Excluded store 的 Raw / audit / Derived traceability row可保留於 Summary；「document / row 存在」不代表 Formal eligible。
+
+Formal consumer scope仍是：
+
+```text
+Lifecycle Eligible
+AND NOT System Excluded
+```
+
+因此例如 CYJ 的中美店可以保留 Summary row與 status metadata，但不得進 Store Health aggregate / risk / ranking / target denominator。
+
+## Production migration state
+
+截至 2026-09-03：
+
+```text
+CYJ dashboard_summary     2026-01～08 = Store Health metadata READY
+安妞 dashboard_summary    2026-01～08 = Store Health metadata READY
+伊啵 dashboard_summary    2026-04～08 = Store Health metadata READY
+Total historical months               = 21 / 21 READY
+```
+
+所有 migration 月份已完成 persisted Summary readback，`summary_recalc_flags` 回到 verified / clean trust state。
+
+## Path / reads impact
+
+Physical path維持既有品牌隔離：
+
+```text
+CYJ
+artifacts/{appId}/public/data/dashboard_summary/{YYYY-MM}
+
+安妞 / 伊啵
+brands/{brandId}/dashboard_summary/{YYYY-MM}
+```
+
+Batch 6B 沒有新增 Store Health collection、listener、polling 或 render-time broad query。
