@@ -22,6 +22,10 @@ import {
   normalizeStoreLifecycleCore,
   normalizeYearMonth,
 } from "./storeLifecycle.js";
+import {
+  normalizeSystemExclusionState,
+  isSystemExclusionSnapshotCurrent,
+} from "./systemExclusion.js";
 
 export const CURRENT_DETAIL_FORMAL_CONSUMER_VERSION = "current-detail-formal-v1";
 export const CURRENT_DETAIL_KPI_STATUS = Object.freeze({
@@ -249,6 +253,7 @@ export const buildCurrentDetailFormalAuthority = ({
   monthlyTargetSummary = null,
   reports = [],
   cutoffDate = "",
+  systemExclusionState = null,
   normalizeStoreKey = normalizeStoreLifecycleCore,
   now = new Date(),
 } = {}) => {
@@ -288,16 +293,41 @@ export const buildCurrentDetailFormalAuthority = ({
   }
 
   const normalizedMaster = normalizeLifecycleMaster(lifecycleMaster, normalizedBrandId);
-  const eligibleEntries = getLifecycleEligibleStoreEntries(normalizedMaster, normalizedYearMonth, {
+  const exclusionState = systemExclusionState
+    ? normalizeSystemExclusionState(systemExclusionState, normalizedBrandId, { ready: systemExclusionState.ready === true })
+    : normalizeSystemExclusionState({}, normalizedBrandId, { ready: true });
+  if (systemExclusionState && (exclusionState.ready !== true || exclusionState.brandId !== normalizedBrandId)) {
+    return {
+      version: CURRENT_DETAIL_FORMAL_CONSUMER_VERSION,
+      compatible: false,
+      reason: "SYSTEM_EXCLUSION_NOT_READY",
+      brandId: normalizedBrandId,
+      yearMonth: normalizedYearMonth,
+      lifecycleReady: true,
+      stores: {},
+      eligibleStoreKeys: [],
+      systemExcludedStoreKeys: exclusionState.stores || [],
+      reportingStatus: CURRENT_DETAIL_KPI_STATUS.DATA_INCOMPLETE,
+      targetAuthority: null,
+    };
+  }
+  const lifecycleEligibleEntries = getLifecycleEligibleStoreEntries(normalizedMaster, normalizedYearMonth, {
     brandId: normalizedBrandId,
     requireReady: true,
   });
+  const eligibleEntries = lifecycleEligibleEntries.filter((entry) => (
+    !exclusionState.storeSet.has(normalizeStoreKey(entry.storeKey || entry.coreStoreName))
+  ));
   const eligibleStoreKeys = eligibleEntries.map((entry) => normalizeStoreKey(entry.storeKey || entry.coreStoreName)).filter(Boolean);
   const entryByStore = new Map(eligibleEntries.map((entry) => [normalizeStoreKey(entry.storeKey || entry.coreStoreName), entry]));
+  const formalMaster = {
+    ...normalizedMaster,
+    stores: Object.fromEntries(eligibleEntries.map((entry) => [entry.storeKey || entry.coreStoreName, entry])),
+  };
 
   const effectiveCutoffDate = normalizeIsoDate(cutoffDate) || resolveCurrentDetailReportingCutoffDate(normalizedYearMonth, now);
   const reporting = buildLifecycleReportingCompleteness({
-    master: normalizedMaster,
+    master: formalMaster,
     yearMonth: normalizedYearMonth,
     reports,
     brandId: normalizedBrandId,
@@ -315,9 +345,17 @@ export const buildCurrentDetailFormalAuthority = ({
   const targetMap = targetSummaryMatches
     ? normalizeMonthlyTargetMap(monthlyTargetSummary, normalizeStoreKey)
     : {};
-  const targetCoverage = targetSummaryMatches
+  const rawTargetCoverage = targetSummaryMatches
     ? extractTargetCoverageMetadata(monthlyTargetSummary)
     : {};
+  const targetExclusionCurrent = isSystemExclusionSnapshotCurrent({
+    snapshot: rawTargetCoverage?.systemExclusionSnapshot || null,
+    currentState: exclusionState,
+    brandId: normalizedBrandId,
+  });
+  const targetCoverage = targetExclusionCurrent
+    ? rawTargetCoverage
+    : { ...rawTargetCoverage, available: false };
   const targetAuthority = buildSummaryTargetAuthoritySnapshot({
     targetMap,
     eligibleStoreKeys,
@@ -384,6 +422,8 @@ export const buildCurrentDetailFormalAuthority = ({
       canonicalStoreName: entry.canonicalStoreName,
       lifecycleEntry: entry,
       lifecycleEligible: true,
+      systemExcluded: false,
+      formalScopeEligible: true,
       reportingStatus,
       expectedReportDayCount,
       submittedReportDayCount: Number(reportingStore?.submittedReportDayCount || 0),
@@ -442,9 +482,13 @@ export const buildCurrentDetailFormalAuthority = ({
     allowPartialActuals,
     stores,
     eligibleStoreKeys,
+    lifecycleEligibleStoreKeys: lifecycleEligibleEntries.map((entry) => normalizeStoreKey(entry.storeKey || entry.coreStoreName)).filter(Boolean),
+    systemExcludedStoreKeys: exclusionState.stores || [],
+    systemExclusionRevision: exclusionState.revision,
     reporting,
     reportingStatus: reporting.reportingStatus,
     targetSummaryAvailable: targetSummaryMatches,
+    targetExclusionCurrent,
     targetAuthority,
     formalRankEligibleStoreCount: rankEligibleRows.length,
   };

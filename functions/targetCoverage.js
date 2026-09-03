@@ -9,6 +9,11 @@ const {
   TARGET_AUTHORITY_CONFLICT_STATUS,
   resolveTargetAuthorityConflict,
 } = require('./targetAuthorityConflict');
+const {
+  SYSTEM_EXCLUSION_VERSION,
+  normalizeStoredSystemExclusionProfile,
+  buildStoredSystemExclusionSnapshot,
+} = require('./systemExclusionContract');
 
 const TARGET_COVERAGE_VERSION = 'target-coverage-v1';
 const TARGET_COVERAGE_SOURCE = 'target_coverage_event_v1';
@@ -281,7 +286,14 @@ function hasCompleteTargetCoverageMetadata(data = {}, brandId = '', yearMonth = 
     typeof source.targetAudit === 'object' &&
     !Array.isArray(source.targetAudit) &&
     String(source.coverageSource || '').trim().length > 0 &&
-    String(source.coverageUpdatedAtText || '').trim().length > 0
+    String(source.coverageUpdatedAtText || '').trim().length > 0 &&
+    source.systemExclusionSnapshot &&
+    typeof source.systemExclusionSnapshot === 'object' &&
+    String(source.systemExclusionSnapshot.version || '') === SYSTEM_EXCLUSION_VERSION &&
+    String(source.systemExclusionSnapshot.brandId || '').trim().toLowerCase() === expectedBrandId &&
+    Number.isInteger(Number(source.systemExclusionSnapshot.revision)) &&
+    Number(source.systemExclusionSnapshot.revision) >= 0 &&
+    Array.isArray(source.systemExclusionSnapshot.stores)
   );
 }
 
@@ -524,7 +536,18 @@ function getTargetCoveragePaths(brandId = 'cyj') {
     monthlyTargets: `${dataRoot}/monthly_targets`,
     monthlyTargetSummary: `${dataRoot}/monthly_targets_summary`,
     lifecycleMaster: `${dataRoot}/store_lifecycle/master`,
+    systemExclusion: normalizedBrandId === 'cyj'
+      ? `${dataRoot}/global_settings/audit_exclusions`
+      : `${dataRoot}/settings/audit_exclusions`,
   };
+}
+
+function filterLifecycleEntriesBySystemExclusion(entries = [], exclusionData = {}, brandId = '', normalizeStoreCoreFn = normalizeStoreCore) {
+  const profile = normalizeStoredSystemExclusionProfile(exclusionData || {}, brandId, normalizeStoreCoreFn);
+  return (Array.isArray(entries) ? entries : []).filter((entry) => {
+    const key = normalizeStoreCoreFn(entry?.storeKey || entry?.coreStoreName || entry?.canonicalStoreName || '');
+    return key && !profile.storeSet.has(key);
+  });
 }
 
 function createTargetCoverageFunctions({ admin, db }) {
@@ -548,18 +571,35 @@ function createTargetCoverageFunctions({ admin, db }) {
     return db.collection('brands').doc(normalizedBrandId).collection(collectionName);
   }
 
-  function buildCoveragePatch({ brandId, yearMonth, lifecycleMaster, targetMap }) {
+  function getSystemExclusionRef(brandId) {
+    const normalizedBrandId = normalizeTargetCoverageBrandId(brandId);
+    if (!normalizedBrandId) throw new Error('UNSUPPORTED_TARGET_COVERAGE_BRAND');
+    if (normalizedBrandId === 'cyj') {
+      return db.doc('artifacts/default-app-id/public/data/global_settings/audit_exclusions');
+    }
+    return db.doc(`brands/${normalizedBrandId}/settings/audit_exclusions`);
+  }
+
+  function buildCoveragePatch({ brandId, yearMonth, lifecycleMaster, targetMap, exclusionData = {} }) {
     const lifecycleReady = String(lifecycleMaster?.datasetStatus || '') === 'READY';
-    const eligibleEntries = getLifecycleEligibleStoreEntries(lifecycleMaster || {}, yearMonth, {
+    const lifecycleEligibleEntries = getLifecycleEligibleStoreEntries(lifecycleMaster || {}, yearMonth, {
       brandId,
       requireReady: true,
     });
+    const systemExclusion = normalizeStoredSystemExclusionProfile(exclusionData || {}, brandId, normalizeStoreLifecycleCore);
+    const eligibleEntries = filterLifecycleEntriesBySystemExclusion(
+      lifecycleEligibleEntries,
+      exclusionData,
+      brandId,
+      normalizeStoreLifecycleCore
+    );
     const coverage = buildIndependentCoverage({ targetMap, eligibleEntries, lifecycleReady, normalizeStoreCoreFn: normalizeStoreLifecycleCore });
     const nowText = new Date().toISOString();
     return {
       brandId,
       yearMonth,
       ...coverage,
+      systemExclusionSnapshot: buildStoredSystemExclusionSnapshot(systemExclusion, brandId, normalizeStoreLifecycleCore),
       coverageSource: TARGET_COVERAGE_SOURCE,
       coverageUpdatedAt: admin.firestore.FieldValue.serverTimestamp(),
       coverageUpdatedAtText: nowText,
@@ -600,11 +640,13 @@ function createTargetCoverageFunctions({ admin, db }) {
 
     const summaryRef = getCollection(brandId, 'monthly_targets_summary').doc(identity.yearMonth);
     const lifecycleRef = getCollection(brandId, 'store_lifecycle').doc('master');
+    const systemExclusionRef = getSystemExclusionRef(brandId);
 
     return db.runTransaction(async (transaction) => {
-      const [summarySnap, lifecycleSnap] = await Promise.all([
+      const [summarySnap, lifecycleSnap, systemExclusionSnap] = await Promise.all([
         transaction.get(summaryRef),
         transaction.get(lifecycleRef),
+        transaction.get(systemExclusionRef),
       ]);
       const summaryData = summarySnap.exists ? (summarySnap.data() || {}) : {};
       const targetMap = extractSummaryTargetMap(summaryData, brandId, identity.yearMonth, lifecycleIdentityApi);
@@ -625,7 +667,8 @@ function createTargetCoverageFunctions({ admin, db }) {
       }
 
       const lifecycleMaster = lifecycleSnap.exists ? (lifecycleSnap.data() || {}) : { datasetStatus: 'BUILDING', stores: {} };
-      const coveragePatch = buildCoveragePatch({ brandId, yearMonth: identity.yearMonth, lifecycleMaster, targetMap });
+      const exclusionData = systemExclusionSnap.exists ? (systemExclusionSnap.data() || {}) : {};
+      const coveragePatch = buildCoveragePatch({ brandId, yearMonth: identity.yearMonth, lifecycleMaster, targetMap, exclusionData });
       const nowText = new Date().toISOString();
 
       const replacementDocument = buildTargetSummaryReplacementDocument({
@@ -647,9 +690,9 @@ function createTargetCoverageFunctions({ admin, db }) {
     });
   }
 
-  async function recomputeOneSummary({ brandId, yearMonth, summaryData, summaryRef, lifecycleMaster }) {
+  async function recomputeOneSummary({ brandId, yearMonth, summaryData, summaryRef, lifecycleMaster, exclusionData = {} }) {
     const targetMap = extractSummaryTargetMap(summaryData || {}, brandId, yearMonth, lifecycleIdentityApi);
-    const patch = buildCoveragePatch({ brandId, yearMonth, lifecycleMaster, targetMap });
+    const patch = buildCoveragePatch({ brandId, yearMonth, lifecycleMaster, targetMap, exclusionData });
     await summaryRef.set({
       ...buildTargetSummaryCompatibilityFields(targetMap, brandId, yearMonth),
       ...patch,
@@ -658,14 +701,16 @@ function createTargetCoverageFunctions({ admin, db }) {
 
   async function repairCurrentSummaryCoverageMetadata({ brandId, yearMonth, summaryRef }) {
     const lifecycleRef = getCollection(brandId, 'store_lifecycle').doc('master');
+    const systemExclusionRef = getSystemExclusionRef(brandId);
 
     // Firestore trigger delivery order is not an authority. For metadata-loss
     // recovery, re-read the CURRENT persisted Summary + CURRENT Lifecycle in one
     // transaction so an older event cannot repair metadata against a stale map.
     return db.runTransaction(async (transaction) => {
-      const [summarySnap, lifecycleSnap] = await Promise.all([
+      const [summarySnap, lifecycleSnap, systemExclusionSnap] = await Promise.all([
         transaction.get(summaryRef),
         transaction.get(lifecycleRef),
+        transaction.get(systemExclusionRef),
       ]);
       if (!summarySnap.exists) return null;
 
@@ -676,7 +721,8 @@ function createTargetCoverageFunctions({ admin, db }) {
       const lifecycleMaster = lifecycleSnap.exists
         ? (lifecycleSnap.data() || {})
         : { datasetStatus: 'BUILDING', stores: {} };
-      const patch = buildCoveragePatch({ brandId, yearMonth, lifecycleMaster, targetMap });
+      const exclusionData = systemExclusionSnap.exists ? (systemExclusionSnap.data() || {}) : {};
+      const patch = buildCoveragePatch({ brandId, yearMonth, lifecycleMaster, targetMap, exclusionData });
 
       transaction.set(summaryRef, {
         ...buildTargetSummaryCompatibilityFields(targetMap, brandId, yearMonth),
@@ -727,7 +773,10 @@ function createTargetCoverageFunctions({ admin, db }) {
     }
 
     // Existing behavior for an actual target-map change remains unchanged.
-    const lifecycleSnap = await getCollection(brandId, 'store_lifecycle').doc('master').get();
+    const [lifecycleSnap, systemExclusionSnap] = await Promise.all([
+      getCollection(brandId, 'store_lifecycle').doc('master').get(),
+      getSystemExclusionRef(brandId).get(),
+    ]);
     const lifecycleMaster = lifecycleSnap.exists ? (lifecycleSnap.data() || {}) : { datasetStatus: 'BUILDING', stores: {} };
     return recomputeOneSummary({
       brandId,
@@ -735,6 +784,7 @@ function createTargetCoverageFunctions({ admin, db }) {
       summaryData: afterData,
       summaryRef: change.after.ref,
       lifecycleMaster,
+      exclusionData: systemExclusionSnap.exists ? (systemExclusionSnap.data() || {}) : {},
     });
   }
 
@@ -752,8 +802,12 @@ function createTargetCoverageFunctions({ admin, db }) {
       JSON.stringify(beforeData.stores || {}) === JSON.stringify(afterData.stores || {})
     ) return null;
 
-    const summarySnap = await getCollection(brandId, 'monthly_targets_summary').get();
+    const [summarySnap, systemExclusionSnap] = await Promise.all([
+      getCollection(brandId, 'monthly_targets_summary').get(),
+      getSystemExclusionRef(brandId).get(),
+    ]);
     if (summarySnap.empty) return null;
+    const exclusionData = systemExclusionSnap.exists ? (systemExclusionSnap.data() || {}) : {};
 
     const docs = summarySnap.docs;
     for (let offset = 0; offset < docs.length; offset += 400) {
@@ -769,12 +823,46 @@ function createTargetCoverageFunctions({ admin, db }) {
             yearMonth,
             lifecycleMaster: afterData,
             targetMap,
+            exclusionData,
           }),
         }, { merge: true });
       });
       await batch.commit();
     }
     return null;
+  }
+
+  async function refreshTargetCoverageForSystemExclusion({ brandId, exclusionData = {} }) {
+    const normalizedBrandId = normalizeTargetCoverageBrandId(brandId);
+    if (!normalizedBrandId) return null;
+    const [lifecycleSnap, summarySnap] = await Promise.all([
+      getCollection(normalizedBrandId, 'store_lifecycle').doc('master').get(),
+      getCollection(normalizedBrandId, 'monthly_targets_summary').get(),
+    ]);
+    if (summarySnap.empty) return { refreshedCount: 0 };
+    const lifecycleMaster = lifecycleSnap.exists ? (lifecycleSnap.data() || {}) : { datasetStatus: 'BUILDING', stores: {} };
+    let refreshedCount = 0;
+    for (let offset = 0; offset < summarySnap.docs.length; offset += 400) {
+      const batch = db.batch();
+      summarySnap.docs.slice(offset, offset + 400).forEach((docSnap) => {
+        const yearMonth = normalizeYearMonth(docSnap.id || docSnap.data()?.yearMonth || '');
+        if (!yearMonth) return;
+        const targetMap = extractSummaryTargetMap(docSnap.data() || {}, normalizedBrandId, yearMonth, lifecycleIdentityApi);
+        batch.set(docSnap.ref, {
+          ...buildTargetSummaryCompatibilityFields(targetMap, normalizedBrandId, yearMonth),
+          ...buildCoveragePatch({
+            brandId: normalizedBrandId,
+            yearMonth,
+            lifecycleMaster,
+            targetMap,
+            exclusionData,
+          }),
+        }, { merge: true });
+        refreshedCount += 1;
+      });
+      await batch.commit();
+    }
+    return { refreshedCount };
   }
 
   const onLegacyMonthlyTargetChange = functions.firestore
@@ -817,6 +905,7 @@ function createTargetCoverageFunctions({ admin, db }) {
     onBrandMonthlyTargetSummaryChange,
     onLegacyStoreLifecycleCoverageChange,
     onBrandStoreLifecycleCoverageChange,
+    refreshTargetCoverageForSystemExclusion,
   };
 }
 
@@ -838,5 +927,6 @@ module.exports = {
   hasCompleteTargetCoverageMetadata,
   shouldRecomputeTargetSummaryCoverage,
   getTargetCoveragePaths,
+  filterLifecycleEntriesBySystemExclusion,
   createTargetCoverageFunctions,
 };

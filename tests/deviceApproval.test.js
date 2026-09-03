@@ -496,6 +496,6 @@ test("Telegram security config writes are backend-authorized, race-safe, and blo
   assert.match(telegramCenter, /expectedRevision:\s*securityAlertRevision/);
   assert.doesNotMatch(telegramCenter, /setDoc\(\s*securityConfigRef/);
   assert.match(rules, /match \/artifacts\/\{appId\}\/public\/data\/global_settings\/\{settingId\}/);
-  assert.match(rules, /allow write:\s*if signedIn\(\) && settingId != 'telegram_security_alerts'/);
+  assert.match(rules, /allow write:\s*if signedIn\(\)\s*&& settingId != 'telegram_security_alerts'/);
   assert.match(rules, /collectionName != 'global_settings'/);
 });

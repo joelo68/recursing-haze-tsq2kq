@@ -33,7 +33,8 @@ const RegionalView = () => {
     currentReportSummaryReadyYearMonth,
     currentReportSummaryReadyBrandId,
     currentSummaryRecalcFlagState,
-    currentLifecycleMasterState
+    currentLifecycleMasterState,
+    systemExclusionState
   } = useContext(AppContext);
 
   // 1. 定義品牌前綴與名稱
@@ -195,6 +196,7 @@ const RegionalView = () => {
     reportSummaryReadyYearMonth: currentReportSummaryReadyYearMonth,
     reportSummaryReadyBrandId: currentReportSummaryReadyBrandId,
     summaryFlagState: currentSummaryRecalcFlagState,
+    systemExclusionState,
   }), [
     isCurrentMonth,
     selectedYearMonth,
@@ -205,6 +207,7 @@ const RegionalView = () => {
     currentReportSummaryReadyYearMonth,
     currentReportSummaryReadyBrandId,
     currentSummaryRecalcFlagState,
+    systemExclusionState,
   ]);
 
   const isFiniteKpi = (value) => value !== null && value !== undefined && Number.isFinite(Number(value));
@@ -248,6 +251,7 @@ const RegionalView = () => {
       lifecycleMaster,
       monthlyTargetSummary,
       reports: allReports || [],
+      systemExclusionState,
       normalizeStoreKey: cleanStoreName,
     });
     if (!authority.compatible) return null;
@@ -321,6 +325,7 @@ const RegionalView = () => {
     reportFormalTrust.trusted,
     reportFormalTrust.loading,
     currentLifecycleMasterState,
+    systemExclusionState,
   ]);
 
   const pieData = useMemo(

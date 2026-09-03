@@ -1,6 +1,7 @@
 import { KPI_VALUE_STATUS, normalizeKpiBrandId } from "./kpiContracts.js";
 import { buildHistoricalFormalDashboardScope, isFormalDashboardSummaryCompatible } from "./dashboardFormalConsumer.js";
 import { getSummaryRecalcFlagState } from "./dashboardReadPolicy.js";
+import { inspectHistoricalSystemExclusionTrust } from "./systemExclusion.js";
 
 export const ANNUAL_FORMAL_REASON = Object.freeze({
   PRE_SYSTEM_SKIP: "PRE_SYSTEM_SKIP",
@@ -42,6 +43,7 @@ export const resolveAnnualHistoricalFormalTrust = ({
   brandId = "",
   dashboardSummary = null,
   summaryFlag = null,
+  systemExclusionState,
 } = {}) => {
   const ym = normalizeText(yearMonth);
   const currentYm = normalizeText(currentYearMonth);
@@ -82,6 +84,19 @@ export const resolveAnnualHistoricalFormalTrust = ({
   const flagBrand = normalizeKpiBrandId(summaryFlag?.brandId || expectedBrand);
   if (flagBrand !== expectedBrand) {
     return { trusted: false, preSystemSkip: false, reason: ANNUAL_FORMAL_REASON.FLAG_BRAND_MISMATCH };
+  }
+
+
+  if (systemExclusionState !== undefined) {
+    const exclusionTrust = inspectHistoricalSystemExclusionTrust({
+      currentState: systemExclusionState,
+      brandId: expectedBrand,
+      summaries: [dashboardSummary],
+      summaryFlag,
+    });
+    if (!exclusionTrust.trusted) {
+      return { trusted: false, preSystemSkip: false, reason: exclusionTrust.reason };
+    }
   }
 
   if (Number(summaryFlag?.pendingCount || 0) > 0) {
@@ -255,6 +270,7 @@ export const shouldAllowAnnualRawTargetFallback = ({
   brandId = "",
   dashboardSummary = null,
   summaryFlag = null,
+  systemExclusionState,
 } = {}) => {
   const trust = resolveAnnualHistoricalFormalTrust({
     yearMonth,
@@ -262,6 +278,7 @@ export const shouldAllowAnnualRawTargetFallback = ({
     brandId,
     dashboardSummary,
     summaryFlag,
+    systemExclusionState,
   });
   if (trust.preSystemSkip || trust.trusted) return false;
   return true;

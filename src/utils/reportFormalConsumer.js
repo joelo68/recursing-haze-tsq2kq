@@ -2,6 +2,7 @@ import { KPI_CONTRACT_VERSION, KPI_VALUE_STATUS, validBaseTarget } from "./kpiCo
 import { SUMMARY_SEMANTIC_VERSION } from "./summarySemantics.js";
 import { buildHistoricalFormalDashboardScope, isFormalDashboardSummaryCompatible } from "./dashboardFormalConsumer.js";
 import { getSummaryRecalcFlagState } from "./dashboardReadPolicy.js";
+import { inspectHistoricalSystemExclusionTrust } from "./systemExclusion.js";
 
 export const RANKINGS_SUMMARY_VERSION = "rankings-summary-v1";
 
@@ -110,6 +111,7 @@ export const resolveHistoricalReportFormalTrust = ({
   reportSummaryReadyYearMonth = "",
   reportSummaryReadyBrandId = "",
   summaryFlagState = null,
+  systemExclusionState,
 } = {}) => {
   if (isCurrentMonth) return { trusted: false, loading: false, reason: "CURRENT_MONTH_LIVE" };
 
@@ -134,6 +136,18 @@ export const resolveHistoricalReportFormalTrust = ({
   }
   if (!isFormalReportSummaryPairCompatible({ dashboardSummary, rankingsSummary, yearMonth, brandId })) {
     return { trusted: false, loading: false, reason: "FORMAL_SUMMARY_CONTRACT_MISSING" };
+  }
+
+  if (systemExclusionState !== undefined) {
+    const exclusionTrust = inspectHistoricalSystemExclusionTrust({
+      currentState: systemExclusionState,
+      brandId: expectedBrand,
+      summaries: [dashboardSummary, rankingsSummary],
+      summaryFlag: summaryFlagState?.data || null,
+    });
+    if (!exclusionTrust.trusted) {
+      return { trusted: false, loading: false, reason: exclusionTrust.reason };
+    }
   }
 
   const flag = getSummaryRecalcFlagState(summaryFlagState?.data || null);

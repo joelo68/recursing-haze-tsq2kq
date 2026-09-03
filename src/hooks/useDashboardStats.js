@@ -13,6 +13,7 @@ import {
 import { buildHistoricalFormalDashboardScope, isFormalDashboardSummaryCompatible } from '../utils/dashboardFormalConsumer.js';
 import { applyTherapistRankingSemantics, buildTherapistAggregateMetrics } from '../utils/therapistKpi.js';
 import { getSummaryRecalcFlagState, resolveHistoricalDashboardReadPolicy } from '../utils/dashboardReadPolicy.js';
+import { inspectHistoricalSystemExclusionTrust } from '../utils/systemExclusion.js';
 
 const safeNumber = (value) => Number.isFinite(Number(value)) ? Number(value) : 0;
 const isFiniteKpiNumber = (value) => typeof value === "number" && Number.isFinite(value);
@@ -118,7 +119,7 @@ export function useDashboardStats() {
     therapistAnnualAggregatedData, getCollectionPath, historicalDetailRefreshState,
     currentDashboardSummary, currentRankingsSummary, currentReportSummaryReady,
     currentReportSummaryReadyYearMonth, currentReportSummaryReadyBrandId, currentSummaryRecalcFlagState,
-    therapistModuleEnabled,
+    systemExclusionState, therapistModuleEnabled,
     accessibleStores = [], officialStores = [], delegatedStores = [], delegationAccess = {},
     getActiveDelegationForStore
   } = useContext(AppContext);
@@ -194,6 +195,12 @@ export function useDashboardStats() {
       historicalDetailRefreshState?.yearMonth === targetYearMonth &&
       ["requested", "loading"].includes(historicalDetailRefreshState?.status)
     );
+    const systemExclusionTrust = inspectHistoricalSystemExclusionTrust({
+      currentState: systemExclusionState,
+      brandId: brandInfo?.id,
+      summaries: [currentDashboardSummary, currentRankingsSummary],
+      summaryFlag: currentSummaryRecalcFlagState?.data || null,
+    });
 
     return resolveHistoricalDashboardReadPolicy({
       isCurrentMonth,
@@ -203,6 +210,8 @@ export function useDashboardStats() {
       summaryFlagReady: summaryFlagReadyForMonth,
       summaryFlag: currentSummaryRecalcFlagState?.data || null,
       summaryFlagError: currentSummaryRecalcFlagState?.error || null,
+      systemExclusionTrusted: systemExclusionTrust.trusted,
+      systemExclusionReason: systemExclusionTrust.reason,
     });
   }, [
     selectedYear,
@@ -214,6 +223,7 @@ export function useDashboardStats() {
     currentReportSummaryReadyBrandId,
     currentSummaryRecalcFlagState,
     historicalDetailRefreshState,
+    systemExclusionState,
     brandInfo?.id,
   ]);
 
@@ -783,12 +793,16 @@ export function useDashboardStats() {
   }, [allReports, managers, cleanName]);
 
   const therapistEffectiveStores = useMemo(() => {
-    if (selectedDashboardStore) return [cleanName(selectedDashboardStore)];
+    const excluded = systemExclusionState?.ready === true
+      ? new Set((systemExclusionState.stores || []).map(cleanName).filter(Boolean))
+      : new Set();
+    const filterFormalStores = (values = []) => values.map(cleanName).filter((storeCore) => storeCore && !excluded.has(storeCore));
+    if (selectedDashboardStore) return filterFormalStores([selectedDashboardStore]);
     if (selectedDashboardManager && managers[selectedDashboardManager]) {
-        return managers[selectedDashboardManager].map(cleanName).filter(Boolean);
+        return filterFormalStores(managers[selectedDashboardManager]);
     }
-    return allCompanyStores; 
-  }, [selectedDashboardStore, selectedDashboardManager, managers, allCompanyStores, cleanName]);
+    return filterFormalStores(allCompanyStores);
+  }, [selectedDashboardStore, selectedDashboardManager, managers, allCompanyStores, cleanName, systemExclusionState]);
 
   const effectiveAnnualKpiBenchmark = useMemo(() => {
     const base = annualKpiBenchmark || {};
@@ -976,6 +990,7 @@ export function useDashboardStats() {
       lifecycleMaster,
       monthlyTargetSummary,
       reports: allReports || [],
+      systemExclusionState,
       normalizeStoreKey: cleanName,
     });
   }, [
@@ -984,6 +999,7 @@ export function useDashboardStats() {
     selectedYearMonth,
     monthlyTargetSummary,
     allReports,
+    systemExclusionState,
     cleanName,
   ]);
 
@@ -1009,6 +1025,11 @@ export function useDashboardStats() {
         label: "Summary 需重新整理",
         tone: "amber",
         hint: "此月份有待重算異動，Dashboard 暫時改用明細資料，避免舊 Summary 誤導判斷。",
+      },
+      exclusion_stale: {
+        label: "排除設定已更新",
+        tone: "amber",
+        hint: "此月份 Summary 使用舊版排除設定，已暫停信任並改用明細資料等待重算。",
       },
       current_dirty: {
         label: "本月即時資料",
@@ -1112,6 +1133,15 @@ export function useDashboardStats() {
       therapist: Boolean(therapistSummaryState?.data) && therapistSummaryState?.yearMonth === selectedYearMonth,
       rankings: rankingsMatchesMonth,
     };
+    const systemExclusionTrust = inspectHistoricalSystemExclusionTrust({
+      currentState: systemExclusionState,
+      brandId: brandInfo?.id,
+      summaries: [
+        dashboardMatchesMonth ? currentDashboardSummary : null,
+        rankingsMatchesMonth ? currentRankingsSummary : null,
+      ],
+      summaryFlag: recalcFlag,
+    });
 
     if (isSelectedCurrentMonth) {
       return {
@@ -1156,6 +1186,7 @@ export function useDashboardStats() {
     let statusKey = "unverified";
     if (flagError) statusKey = "error";
     else if (!summaryDocs.dashboard || !summaryDocs.rankings) statusKey = "missing";
+    else if (!systemExclusionTrust.trusted) statusKey = "exclusion_stale";
     else if (flagState.isDirty) statusKey = "dirty";
     else if (flagState.isVerified) statusKey = "verified";
 
@@ -1181,6 +1212,7 @@ export function useDashboardStats() {
         recalcFlag,
         recalcFlagStatus: flagState.status,
         recalcFlagRebuildAfterAtText: recalcFlag?.rebuildAfterAtText || "",
+        systemExclusionTrustReason: systemExclusionTrust.reason,
         lastDirtyAtText: recalcFlag?.lastDirtyAtText || "",
         lastUpdatedAtText: updatedAtText,
         lastCompareAtText: flagCompletedAtText,
@@ -1198,6 +1230,7 @@ export function useDashboardStats() {
     currentReportSummaryReadyYearMonth,
     currentReportSummaryReadyBrandId,
     currentSummaryRecalcFlagState,
+    systemExclusionState,
     therapistSummaryState,
     selectedYearMonth,
     isSelectedCurrentMonth,

@@ -74,7 +74,8 @@ const AnnualView = () => {
     currentUser,
     showToast,
     currentBrand,
-    getCollectionPath
+    getCollectionPath,
+    systemExclusionState,
   } = useContext(AppContext);
 
   // ==========================================
@@ -198,8 +199,10 @@ const AnnualView = () => {
     return annualSummaryLoadState?.brandId === brandId
       && String(annualSummaryLoadState?.year || "") === String(selectedYear)
       && annualSummaryLoadState?.dashboardReady === true
-      && annualSummaryLoadState?.flagsReady === true;
-  }, [annualSummaryLoadState, currentBrand, selectedYear]);
+      && annualSummaryLoadState?.flagsReady === true
+      && systemExclusionState?.ready === true
+      && String(systemExclusionState?.brandId || "").toLowerCase() === brandId;
+  }, [annualSummaryLoadState, currentBrand, selectedYear, systemExclusionState]);
 
   const annualSummaryTrustError = Boolean(
     annualSummaryLoadState?.dashboardError || annualSummaryLoadState?.flagsError
@@ -421,7 +424,10 @@ const AnnualView = () => {
       if (!annualTargetSummariesLoaded || !getCollectionPath) return;
 
       const monthKeys = getMonthKeysInRange(startMonthStr, endMonthStr);
-      const exclusionSet = new Set((auditExclusions || []).map(canonicalStoreName).filter(Boolean));
+      const exclusionSet = new Set([
+        ...(auditExclusions || []).map(canonicalStoreName),
+        ...(systemExclusionState?.ready === true ? (systemExclusionState?.stores || []).map(canonicalStoreName) : []),
+      ].filter(Boolean));
       const storeCores = [...new Set(
         (effectiveStores || [])
           .map(canonicalStoreName)
@@ -451,6 +457,7 @@ const AnnualView = () => {
               brandId: currentBrand,
               dashboardSummary: annualDashboardSummaryByMonth[yearMonth] || null,
               summaryFlag: annualSummaryStatusMap?.[yearMonth] || null,
+              systemExclusionState,
             });
         if (!allowRawFallback) return;
 
@@ -546,18 +553,25 @@ const AnnualView = () => {
     brandPrefix,
     effectiveStores,
     auditExclusions,
+    systemExclusionState,
     canonicalStoreName,
   ]);
 
 const annualData = useMemo(() => {
     const effectiveStoreSet = new Set(effectiveStores.map(canonicalStoreName).filter(Boolean));
     const auditExclusionSet = new Set((auditExclusions || []).map(canonicalStoreName).filter(Boolean));
+    const systemExclusionSet = new Set(
+      systemExclusionState?.ready === true
+        ? (systemExclusionState?.stores || []).map(canonicalStoreName).filter(Boolean)
+        : []
+    );
+    const reportExclusionSet = new Set([...auditExclusionSet, ...systemExclusionSet]);
 
     // Compatibility path（本月 / unverified historical）使用目前可見店家。
     const targetStoreNames = effectiveStores
       .filter((s) => {
         const core = canonicalStoreName(s);
-        return core && !auditExclusionSet.has(core);
+        return core && !reportExclusionSet.has(core);
       })
       .map((s) => `${brandPrefix}${s}店`);
 
@@ -722,6 +736,7 @@ const annualData = useMemo(() => {
             brandId: currentBrand,
             dashboardSummary,
             summaryFlag: annualSummaryStatusMap?.[yearMonth] || null,
+            systemExclusionState,
           });
       stat.formalTrustReason = trust.reason || "";
       if (!trust.trusted) return;
@@ -730,7 +745,7 @@ const annualData = useMemo(() => {
         dashboardSummary,
         monthlyTargetSummary: monthlyTargetSummaryByMonth[yearMonth] || null,
         scopeStoreKeys: formalScopeStoreKeys,
-        excludedStoreKeys: [...auditExclusionSet],
+        excludedStoreKeys: [...reportExclusionSet],
         normalizeStoreKey: canonicalStoreName,
       });
       if (!formalMonth?.applied) return;
@@ -745,7 +760,7 @@ const annualData = useMemo(() => {
     // monthly_aggregated 僅作為本月 / unverified / missing Formal Summary 的 compatibility fallback。
     annualAggregatedData.forEach((d) => {
       const rawStoreName = canonicalStoreName(d.storeName);
-      if (auditExclusionSet.has(rawStoreName)) return;
+      if (reportExclusionSet.has(rawStoreName)) return;
       if (!effectiveStoreSet.has(rawStoreName)) return;
       if (!d.yearMonth) return;
 
@@ -798,6 +813,7 @@ const annualData = useMemo(() => {
     startMonthStr,
     endMonthStr,
     auditExclusions,
+    systemExclusionState,
     brandPrefix,
     currentBrand,
     currentYearMonth,
@@ -818,9 +834,12 @@ const annualData = useMemo(() => {
   }, [selectedAnnualStore, selectedAnnualManager, cleanName]);
 
   const currentActiveStoresCount = useMemo(() => {
-    const excluded = new Set((auditExclusions || []).map(canonicalStoreName).filter(Boolean));
+    const excluded = new Set([
+      ...(auditExclusions || []).map(canonicalStoreName),
+      ...(systemExclusionState?.ready === true ? (systemExclusionState?.stores || []).map(canonicalStoreName) : []),
+    ].filter(Boolean));
     return effectiveStores.filter((storeName) => !excluded.has(canonicalStoreName(storeName))).length;
-  }, [effectiveStores, auditExclusions, canonicalStoreName]);
+  }, [effectiveStores, auditExclusions, systemExclusionState, canonicalStoreName]);
 
   const displayAnnualMoney = (value, preSystemSkip = false) => {
     if (preSystemSkip) return "—";

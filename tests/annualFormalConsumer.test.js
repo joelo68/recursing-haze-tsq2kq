@@ -183,6 +183,33 @@ test("verified historical Formal summary is trusted", () => {
   assert.equal(result.reason, "VERIFIED_FORMAL_SUMMARY");
 });
 
+test("Annual historical Formal trust rejects stale System Exclusion snapshot and allows precise fallback", () => {
+  const currentState = { ready: true, brandId: "cyj", revision: 2, stores: ["B"] };
+  const staleSnapshot = { version: "system-exclusion-v1", brandId: "cyj", revision: 1, stores: [] };
+  const currentSnapshot = { version: "system-exclusion-v1", brandId: "cyj", revision: 2, stores: ["B"] };
+  const dashboardSummary = { ...makeDashboardSummary(), systemExclusionSnapshot: staleSnapshot };
+  const summaryFlag = { ...verifiedFlag(), systemExclusionSnapshot: currentSnapshot };
+
+  const trust = resolveAnnualHistoricalFormalTrust({
+    yearMonth: "2026-07",
+    currentYearMonth: "2026-08",
+    brandId: "cyj",
+    dashboardSummary,
+    summaryFlag,
+    systemExclusionState: currentState,
+  });
+  assert.equal(trust.trusted, false);
+  assert.equal(trust.reason, "SYSTEM_EXCLUSION_SUMMARY_REVISION_MISMATCH");
+  assert.equal(shouldAllowAnnualRawTargetFallback({
+    yearMonth: "2026-07",
+    currentYearMonth: "2026-08",
+    brandId: "cyj",
+    dashboardSummary,
+    summaryFlag,
+    systemExclusionState: currentState,
+  }), true);
+});
+
 test("current month never enters historical Formal trust", () => {
   const result = resolveAnnualHistoricalFormalTrust({
     yearMonth: "2026-08",
@@ -355,14 +382,17 @@ test("AnnualView and App wire readiness, fail-closed trust, Formal scope and no 
   assert.match(appSource, /flagsReady: true/);
 });
 
-test("audit exclusion save synchronizes AppContext state only for the same brand after Firestore succeeds", () => {
+test("System Exclusion save synchronizes AppContext only after secure Backend revisioned write succeeds", () => {
   const appSource = fs.readFileSync(path.join(root, "src/App.jsx"), "utf8");
 
   assert.match(appSource, /const brandIdAtStart = currentBrandId;/);
   assert.match(appSource, /const nextExclusions = Array\.isArray\(newExclusions\) \? \[\.\.\.newExclusions\] : \[\];/);
-  assert.match(appSource, /await setDoc\(auditExclusionsDoc, \{ stores: nextExclusions \}\);/);
-  assert.match(appSource, /if \(currentBrandIdRef\.current === brandIdAtStart\) \{\s*setAuditExclusions\(nextExclusions\);\s*\}/);
-  assert.match(appSource, /\}, \[currentBrandId, getDocPath\]\);/);
+  assert.match(appSource, /SYSTEM_EXCLUSION_ENDPOINT/);
+  assert.match(appSource, /expectedRevision/);
+  assert.match(appSource, /callDeviceSecurityEndpoint\(SYSTEM_EXCLUSION_ENDPOINT/);
+  assert.match(appSource, /buildDeviceSecurityActor\(\)/);
+  assert.match(appSource, /if \(currentBrandIdRef\.current === brandIdAtStart\) \{[\s\S]*setSystemExclusionState\(nextState\);[\s\S]*setAuditExclusions\(nextState\.stores\);/);
+  assert.doesNotMatch(appSource, /setDoc\(auditExclusionsDoc/);
 });
 
 test("AnnualView only closes the exclusion modal and shows success after the write succeeds", () => {

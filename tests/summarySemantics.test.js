@@ -140,6 +140,17 @@ for (const [label, api, kpi] of implementations) {
     assert.equal(authority.coverageVersionCompatible, true);
     assert.equal(authority.coverageConsistent, true);
 
+    const staleSystemExclusion = api.buildSummaryTargetAuthoritySnapshot({
+      targetMap,
+      eligibleStoreKeys: ["A", "B"],
+      lifecycleReady: true,
+      targetCoverage: coverage,
+      systemExclusionCurrent: false,
+    });
+    assert.equal(staleSystemExclusion.coverageSystemExclusionCurrent, false);
+    assert.equal(staleSystemExclusion.coverageConsistent, false);
+    assert.equal(staleSystemExclusion.cashCoverageTrusted, false);
+
     const staleVersion = api.buildSummaryTargetAuthoritySnapshot({
       targetMap,
       eligibleStoreKeys: ["A", "B"],

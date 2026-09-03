@@ -201,6 +201,41 @@ test("historical formal trust requires verified flag plus month/brand anchored s
   assert.equal(dirty.reason, "SUMMARY_DIRTY");
 });
 
+test("Regional/Ranking trust rejects stale ranking or flag System Exclusion revision", () => {
+  const currentState = { ready: true, brandId: "cyj", revision: 2, stores: ["B"] };
+  const currentSnapshot = { version: "system-exclusion-v1", brandId: "cyj", revision: 2, stores: ["B"] };
+  const staleSnapshot = { ...currentSnapshot, revision: 1, stores: [] };
+  const dashboardSummary = { ...makeDashboardSummary(), systemExclusionSnapshot: currentSnapshot };
+
+  const staleRankings = resolveHistoricalReportFormalTrust({
+    yearMonth: "2026-07",
+    brandId: "cyj",
+    dashboardSummary,
+    rankingsSummary: { ...makeRankingsSummary(), systemExclusionSnapshot: staleSnapshot },
+    reportSummaryReady: true,
+    reportSummaryReadyYearMonth: "2026-07",
+    reportSummaryReadyBrandId: "cyj",
+    summaryFlagState: { ...verifiedFlagState, data: { ...verifiedFlagState.data, systemExclusionSnapshot: currentSnapshot } },
+    systemExclusionState: currentState,
+  });
+  assert.equal(staleRankings.trusted, false);
+  assert.equal(staleRankings.reason, "SYSTEM_EXCLUSION_SUMMARY_REVISION_MISMATCH");
+
+  const staleFlag = resolveHistoricalReportFormalTrust({
+    yearMonth: "2026-07",
+    brandId: "cyj",
+    dashboardSummary,
+    rankingsSummary: { ...makeRankingsSummary(), systemExclusionSnapshot: currentSnapshot },
+    reportSummaryReady: true,
+    reportSummaryReadyYearMonth: "2026-07",
+    reportSummaryReadyBrandId: "cyj",
+    summaryFlagState: { ...verifiedFlagState, data: { ...verifiedFlagState.data, systemExclusionSnapshot: staleSnapshot } },
+    systemExclusionState: currentState,
+  });
+  assert.equal(staleFlag.trusted, false);
+  assert.equal(staleFlag.reason, "SYSTEM_EXCLUSION_FLAG_REVISION_MISMATCH");
+});
+
 test("current month never enters historical formal trust", () => {
   const result = resolveHistoricalReportFormalTrust({ isCurrentMonth: true });
   assert.equal(result.trusted, false);

@@ -92,3 +92,17 @@ test("runtime stabilization Dashboard separates reporting completeness from obse
   assert.match(header, /dashboardKpiStatus\?\.reportingStatus/);
   assert.match(header, /回報尚未完整（目前顯示已回報累計）/);
 });
+
+
+test("System Exclusion Stage A wires current/detail scope through shared authority without Dashboard badge workaround", () => {
+  const hook = read("src/hooks/useDashboardStats.js");
+  const currentDetail = read("src/utils/currentDetailFormalConsumer.js");
+  const app = read("src/App.jsx");
+  assert.match(hook, /systemExclusionState/);
+  assert.match(hook, /buildCurrentDetailFormalAuthority\([\s\S]*systemExclusionState/);
+  assert.match(currentDetail, /systemExcludedStoreKeys/);
+  assert.match(currentDetail, /targetExclusionCurrent/);
+  assert.match(currentDetail, /formalMaster/);
+  assert.match(app, /systemExclusionState/);
+  assert.doesNotMatch(app, /setDoc\(auditExclusionsDoc/);
+});

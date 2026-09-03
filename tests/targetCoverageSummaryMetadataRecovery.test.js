@@ -30,6 +30,7 @@ const validCoverage = (overrides = {}) => ({
   targetAudit: { issueCount: 0 },
   coverageSource: "target_coverage_event_v1",
   coverageUpdatedAtText: "2026-09-02T00:00:00.000Z",
+  systemExclusionSnapshot: { version: "system-exclusion-v1", brandId: "cyj", revision: 0, stores: [] },
   ...overrides,
 });
 
@@ -66,6 +67,10 @@ test("5E metadata self-heal: missing/incompatible Coverage authority fails close
     validCoverage({ targetAudit: null }),
     validCoverage({ coverageSource: "" }),
     validCoverage({ coverageUpdatedAtText: "" }),
+    validCoverage({ systemExclusionSnapshot: null }),
+    validCoverage({ systemExclusionSnapshot: { version: "system-exclusion-v1", brandId: "yibo", revision: 0, stores: [] } }),
+    validCoverage({ systemExclusionSnapshot: { version: "system-exclusion-v1", brandId: "cyj", revision: -1, stores: [] } }),
+    validCoverage({ systemExclusionSnapshot: { version: "system-exclusion-v1", brandId: "cyj", revision: 0 } }),
     validCoverage({ brandId: "yibo" }),
     validCoverage({ yearMonth: "2026-11" }),
   ];
@@ -134,9 +139,10 @@ test("5E metadata self-heal: same-map metadata loss routes to race-safe CURRENT 
   );
 
   assert.match(repair, /db\.runTransaction/);
-  assert.equal((repair.match(/transaction\.get\(/g) || []).length, 2);
+  assert.equal((repair.match(/transaction\.get\(/g) || []).length, 3);
   assert.match(repair, /transaction\.get\(summaryRef\)/);
   assert.match(repair, /transaction\.get\(lifecycleRef\)/);
+  assert.match(repair, /transaction\.get\(systemExclusionRef\)/);
   assert.match(repair, /hasCompleteTargetCoverageMetadata\(summaryData, brandId, yearMonth\)/);
   assert.match(repair, /extractSummaryTargetMap\(summaryData, brandId, yearMonth, lifecycleIdentityApi\)/);
   assert.match(repair, /transaction\.set\(summaryRef,/);
@@ -144,15 +150,16 @@ test("5E metadata self-heal: same-map metadata loss routes to race-safe CURRENT 
   assert.doesNotMatch(repair, /targets\s*:/);
 });
 
-test("5E metadata self-heal: normal Raw target writer stays exactly two transaction point reads", () => {
+test("System Exclusion Stage A: normal Raw target writer adds exactly one exclusion point read (3 total)", () => {
   const start = coverageSource.indexOf("async function handleMonthlyTargetWrite");
   const end = coverageSource.indexOf("async function recomputeOneSummary", start);
   const rawWriter = coverageSource.slice(start, end);
 
   assert.ok(start >= 0 && end > start);
-  assert.equal((rawWriter.match(/transaction\.get\(/g) || []).length, 2);
+  assert.equal((rawWriter.match(/transaction\.get\(/g) || []).length, 3);
   assert.match(rawWriter, /transaction\.get\(summaryRef\)/);
   assert.match(rawWriter, /transaction\.get\(lifecycleRef\)/);
+  assert.match(rawWriter, /transaction\.get\(systemExclusionRef\)/);
 });
 
 test("5E metadata self-heal: listener topology and three-brand physical paths remain unchanged", () => {

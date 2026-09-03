@@ -21,6 +21,7 @@ import {
 import { ROLES, ALL_MENU_ITEMS, DEFAULT_REGIONAL_MANAGERS, DEFAULT_PERMISSIONS } from "./constants/index";
 import { generateUUID, formatLocalYYYYMMDD, toStandardDateFormat, formatNumber, parseNumber, normalizeManagerOrder } from "./utils/helpers";
 import { validPositiveSetting } from "./utils/kpiContracts";
+import { inspectHistoricalSystemExclusionTrust, normalizeSystemExclusionState } from "./utils/systemExclusion";
 import { resolveHistoricalDashboardReadPolicy } from "./utils/dashboardReadPolicy";
 import { buildAnnualAggregateYearMonthCandidates, normalizeAnnualYearMonth, resolveAnnualReadPlan } from "./utils/annualReadPolicy";
 import { isFormalReportSummaryPairCompatible } from "./utils/reportFormalConsumer";
@@ -61,6 +62,7 @@ const DEVICE_MANAGEMENT_ENDPOINT = "https://us-central1-cyjsituation-analysis.cl
 const DEVICE_EMERGENCY_ENDPOINT = "https://us-central1-cyjsituation-analysis.cloudfunctions.net/emergencyUnblockDevice";
 const LOGIN_SECURITY_EVENT_ENDPOINT = "https://us-central1-cyjsituation-analysis.cloudfunctions.net/reportLoginSecurityEvent";
 const TELEGRAM_SECURITY_CONFIG_ENDPOINT = "https://us-central1-cyjsituation-analysis.cloudfunctions.net/updateTelegramSecurityAlertConfig";
+const SYSTEM_EXCLUSION_ENDPOINT = "https://us-central1-cyjsituation-analysis.cloudfunctions.net/manageSystemExclusions";
 
 
 const isNewerVersion = (local, remote) => {
@@ -1107,12 +1109,22 @@ export default function App() {
   const [therapistSchedules, setTherapistSchedules] = useState({}); 
   const [therapistTargets, setTherapistTargets] = useState({}); 
   const [auditExclusions, setAuditExclusions] = useState([]);
+  const [systemExclusionState, setSystemExclusionState] = useState({
+    ready: false, brandId: "", version: "system-exclusion-v1", revision: 0, stores: [], storeSet: new Set(), legacy: true,
+  });
   // ★ 期間式代理與托管：獨立於正式 org_structure，不改寫正式隸屬。
   const [delegations, setDelegations] = useState([]);
   const [delegationDateKey, setDelegationDateKey] = useState(() => getLocalDateString());
 
   const [securityConfig, setSecurityConfig] = useState(DEFAULT_SECURITY_CONFIG);
   const [featureFlags, setFeatureFlags] = useState(DEFAULT_FEATURE_FLAGS);
+
+  useEffect(() => {
+    setAuditExclusions([]);
+    setSystemExclusionState({
+      ready: false, brandId: String(currentBrandId || "").toLowerCase(), version: "system-exclusion-v1", revision: 0, stores: [], storeSet: new Set(), legacy: true,
+    });
+  }, [currentBrandId]);
 
   // ★ Guided Device Approval：正式模式下，只要「自己的新裝置」正在等待確認，
   // 原本已信任的裝置會主動進入確認流程，不再要求一般使用者自己注意 Header Badge。
@@ -2216,7 +2228,13 @@ export default function App() {
             setPermissions(snap.exists() ? snap.data() : DEFAULT_PERMISSIONS);
           }, "permissions ");
           applyOptionalDoc("auditExclusions", (snap) => {
-            setAuditExclusions(snap.exists() ? (snap.data().stores || []) : []);
+            const nextSystemExclusion = normalizeSystemExclusionState(
+              snap.exists() ? (snap.data() || {}) : {},
+              currentBrandId,
+              { ready: true }
+            );
+            setSystemExclusionState(nextSystemExclusion);
+            setAuditExclusions(nextSystemExclusion.stores);
           }, "audit_exclusions ");
           applyOptionalDoc("securityConfig", (snap) => {
             setSecurityConfig(snap.exists() ? normalizeSecurityConfig(snap.data()) : DEFAULT_SECURITY_CONFIG);
@@ -3157,6 +3175,7 @@ export default function App() {
       dashboardSummaries: annualDashboardSummaries,
       summaryStatusMap: annualSummaryStatusMap,
       summaryLoadState: annualSummaryLoadState,
+      systemExclusionState,
     });
 
     // Loading 階段先不碰 monthly_aggregated，避免 Summary/flag 晚 50~100ms 回來時
@@ -3208,6 +3227,7 @@ export default function App() {
     annualDashboardSummaries,
     annualSummaryStatusMap,
     annualSummaryLoadState,
+    systemExclusionState,
   ]);
 
   useEffect(() => {
@@ -3249,6 +3269,12 @@ export default function App() {
       currentSummaryRecalcFlagState?.yearMonth === targetYearMonth &&
       currentSummaryRecalcFlagState?.ready === true
     );
+    const systemExclusionTrust = inspectHistoricalSystemExclusionTrust({
+      currentState: systemExclusionState,
+      brandId: currentBrand?.id || "",
+      summaries: [currentDashboardSummary, currentRankingsSummary],
+      summaryFlag: currentSummaryRecalcFlagState?.data || null,
+    });
     const dashboardReadPolicy = resolveHistoricalDashboardReadPolicy({
       isCurrentMonth,
       historicalRefreshRequested: isHistoricalRefreshRequested,
@@ -3257,6 +3283,8 @@ export default function App() {
       summaryFlagReady: summaryFlagReadyForMonth,
       summaryFlag: currentSummaryRecalcFlagState?.data || null,
       summaryFlagError: currentSummaryRecalcFlagState?.error || null,
+      systemExclusionTrusted: systemExclusionTrust.trusted,
+      systemExclusionReason: systemExclusionTrust.reason,
     });
 
     const shouldLoadDailyReportData =
@@ -3423,7 +3451,7 @@ export default function App() {
         isMounted = false; 
       };
     }
-  }, [user, currentBrand, selectedYear, selectedMonth, activeView, dashboardViewMode, storeAnalysisSelectedStore, userRole, therapistModuleEnabled, currentDashboardSummary, currentRankingsSummary, currentReportSummaryReady, currentReportSummaryReadyYearMonth, currentReportSummaryReadyBrandId, currentSummaryRecalcFlagState, getCollectionPath, getStableReadMeta, isLowPowerMode, historicalDetailRefreshToken]);
+  }, [user, currentBrand, selectedYear, selectedMonth, activeView, dashboardViewMode, storeAnalysisSelectedStore, userRole, therapistModuleEnabled, currentDashboardSummary, currentRankingsSummary, currentReportSummaryReady, currentReportSummaryReadyYearMonth, currentReportSummaryReadyBrandId, currentSummaryRecalcFlagState, systemExclusionState, getCollectionPath, getStableReadMeta, isLowPowerMode, historicalDetailRefreshToken]);
 
 
  const handleLogin = useCallback(async (roleId, userInfo = null, loginCredential = {}) => {
@@ -3857,19 +3885,44 @@ export default function App() {
   const handleUpdateAuditExclusions = useCallback(async (newExclusions) => {
     const brandIdAtStart = currentBrandId;
     const nextExclusions = Array.isArray(newExclusions) ? [...newExclusions] : [];
-    const auditExclusionsDoc = getDocPath("audit_exclusions");
+    const expectedRevision = Number(systemExclusionState?.revision || 0);
 
     try {
-      await setDoc(auditExclusionsDoc, { stores: nextExclusions });
+      if (systemExclusionState?.ready !== true || String(systemExclusionState?.brandId || "") !== String(brandIdAtStart || "")) {
+        throw new Error("排除店家設定尚未載入完成，請稍後再試");
+      }
+      if (!isDeviceSecuritySuperAdmin || currentDeviceTrust?.status !== "trusted") {
+        throw new Error("此設定僅限已信任裝置上的最高管理者修改");
+      }
+      const result = await callDeviceSecurityEndpoint(SYSTEM_EXCLUSION_ENDPOINT, {
+        brandId: brandIdAtStart,
+        stores: nextExclusions,
+        expectedRevision,
+        actor: { ...buildDeviceSecurityActor(), roleId: "director" },
+      });
       if (currentBrandIdRef.current === brandIdAtStart) {
-        setAuditExclusions(nextExclusions);
+        const nextState = normalizeSystemExclusionState(result?.systemExclusion || {}, brandIdAtStart, { ready: true });
+        setSystemExclusionState(nextState);
+        setAuditExclusions(nextState.stores);
       }
       return true;
     } catch (e) {
       console.error(e);
+      if (e?.status === 409 && e?.result?.currentSystemExclusion && currentBrandIdRef.current === brandIdAtStart) {
+        const currentState = normalizeSystemExclusionState(e.result.currentSystemExclusion, brandIdAtStart, { ready: true });
+        setSystemExclusionState(currentState);
+        setAuditExclusions(currentState.stores);
+      }
       return false;
     }
-  }, [currentBrandId, getDocPath]);
+  }, [
+    currentBrandId,
+    systemExclusionState,
+    isDeviceSecuritySuperAdmin,
+    currentDeviceTrust?.status,
+    callDeviceSecurityEndpoint,
+    buildDeviceSecurityActor,
+  ]);
   
   const handleUpdateDirectorAuth = useCallback(async (action, name, payload = {}, newName = null) => { 
     try { 
@@ -4084,7 +4137,7 @@ export default function App() {
     user, loading, analytics, managers: visibleManagers, managerOrder: visibleManagerOrder, budgets, monthlyTargetSummary, currentLifecycleMasterState, currentDashboardSummary, currentRankingsSummary, currentReportSummaryReady, currentReportSummaryReadyYearMonth, currentReportSummaryReadyBrandId, currentSummaryRecalcFlagState, historicalDetailRefreshState, targets, rawData: visibleRawData, allReports: rawData,
     annualAggregatedData, annualDashboardSummaries, annualSummaryStatusMap, annualSummaryLoadState, therapistAnnualAggregatedData, // ★ 把年度 Summary 與管理師資料交出去
     showToast, openConfirm, fmtMoney, fmtNum, inputDate, setInputDate, storeList: analytics?.storeList || [], setTargets, selectedYear, selectedMonth, setSelectedYear, setSelectedMonth, permissions, storeAccounts, managerAuth, currentUser, userRole, logActivity, handleUpdateStorePassword, handleUpdateManagerPassword, handleUpdateTherapistPassword, navigateToStore, activeView, appId, 
-    therapists: visibleTherapists, therapistReports: visibleTherapistReports, therapistSchedules, therapistTargets, trainerAuth, handleUpdateTrainerAuth, auditExclusions, handleUpdateAuditExclusions, currentBrand, setCurrentBrandId, getCollectionPath, getDocPath, dailyLoginCount, yesterdayLoginCount, securityConfig, featureFlags, therapistModuleEnabled, isOnline, isLowPowerMode,
+    therapists: visibleTherapists, therapistReports: visibleTherapistReports, therapistSchedules, therapistTargets, trainerAuth, handleUpdateTrainerAuth, systemExclusionState, auditExclusions, handleUpdateAuditExclusions, currentBrand, setCurrentBrandId, getCollectionPath, getDocPath, dailyLoginCount, yesterdayLoginCount, securityConfig, featureFlags, therapistModuleEnabled, isOnline, isLowPowerMode,
     currentDeviceTrust, currentSecurityAccountKey, manageDeviceSecurityAction, reviewDeviceApprovalAction, updateTelegramSecurityAlertConfig, canManageDeviceSecurity: isDeviceSecuritySuperAdmin, openDeviceApprovalPanel,
     fetchGlobalData,
     officialManagers: managers,
@@ -4094,7 +4147,7 @@ export default function App() {
     directorPermissionProfile,
     canDirectorAccessView,
     isReadOnlyDirector: userRole === "director" && !canDirectorAccessView("history")
-  }), [user, loading, analytics, visibleManagers, visibleManagerOrder, budgets, monthlyTargetSummary, currentLifecycleMasterState, currentDashboardSummary, currentRankingsSummary, currentReportSummaryReady, currentReportSummaryReadyYearMonth, currentReportSummaryReadyBrandId, currentSummaryRecalcFlagState, historicalDetailRefreshState, targets, visibleRawData, rawData, annualAggregatedData, annualDashboardSummaries, annualSummaryStatusMap, annualSummaryLoadState, therapistAnnualAggregatedData, inputDate, selectedYear, selectedMonth, permissions, storeAccounts, managerAuth, currentUser, userRole, logActivity, handleUpdateStorePassword, handleUpdateManagerPassword, handleUpdateTherapistPassword, navigateToStore, activeView, appId, visibleTherapists, visibleTherapistReports, therapistSchedules, therapistTargets, trainerAuth, handleUpdateTrainerAuth, auditExclusions, handleUpdateAuditExclusions, currentBrand, setCurrentBrandId, getCollectionPath, getDocPath, dailyLoginCount, yesterdayLoginCount, securityConfig, featureFlags, therapistModuleEnabled, isOnline, isLowPowerMode, currentDeviceTrust, currentSecurityAccountKey, manageDeviceSecurityAction, reviewDeviceApprovalAction, updateTelegramSecurityAlertConfig, isDeviceSecuritySuperAdmin, openDeviceApprovalPanel, fetchGlobalData, managers, delegations, activeDelegations, delegationAccess, accessibleStores, officialStores, delegatedStores, refreshDelegations, canAccessStore, canEditStoreReport, getActiveDelegationForStore, directorLevel, directorPermissionProfile, canDirectorAccessView]); // ★ 依賴陣列也要加
+  }), [user, loading, analytics, visibleManagers, visibleManagerOrder, budgets, monthlyTargetSummary, currentLifecycleMasterState, currentDashboardSummary, currentRankingsSummary, currentReportSummaryReady, currentReportSummaryReadyYearMonth, currentReportSummaryReadyBrandId, currentSummaryRecalcFlagState, historicalDetailRefreshState, targets, visibleRawData, rawData, annualAggregatedData, annualDashboardSummaries, annualSummaryStatusMap, annualSummaryLoadState, therapistAnnualAggregatedData, inputDate, selectedYear, selectedMonth, permissions, storeAccounts, managerAuth, currentUser, userRole, logActivity, handleUpdateStorePassword, handleUpdateManagerPassword, handleUpdateTherapistPassword, navigateToStore, activeView, appId, visibleTherapists, visibleTherapistReports, therapistSchedules, therapistTargets, trainerAuth, handleUpdateTrainerAuth, systemExclusionState, auditExclusions, handleUpdateAuditExclusions, currentBrand, setCurrentBrandId, getCollectionPath, getDocPath, dailyLoginCount, yesterdayLoginCount, securityConfig, featureFlags, therapistModuleEnabled, isOnline, isLowPowerMode, currentDeviceTrust, currentSecurityAccountKey, manageDeviceSecurityAction, reviewDeviceApprovalAction, updateTelegramSecurityAlertConfig, isDeviceSecuritySuperAdmin, openDeviceApprovalPanel, fetchGlobalData, managers, delegations, activeDelegations, delegationAccess, accessibleStores, officialStores, delegatedStores, refreshDelegations, canAccessStore, canEditStoreReport, getActiveDelegationForStore, directorLevel, directorPermissionProfile, canDirectorAccessView]); // ★ 依賴陣列也要加
   
   const memoizedViews = useMemo(() => {
     return (

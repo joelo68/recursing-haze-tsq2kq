@@ -355,3 +355,75 @@ test("runtime stabilization current month keeps a partially reported store numer
   assert.equal(scope.cash, 180);
   assert.equal(scope.cashAchievement, 90);
 });
+
+
+test("System Exclusion removes excluded store from current reporting denominator and Formal target scope", () => {
+  const master = makeMaster("cyj", { A: lifecycleEntry(), B: lifecycleEntry() });
+  const targetSummary = {
+    ...makeTargetSummary({
+      rows: {
+        A: { cashTarget: 100, accrualTarget: 100 },
+        B: { cashTarget: 200, accrualTarget: 200 },
+      },
+    }),
+    eligibleStoreCount: 1,
+    cashConfiguredStoreCount: 1,
+    accrualConfiguredStoreCount: 1,
+    cashCoverageComplete: true,
+    accrualCoverageComplete: true,
+    cashMissingStores: [],
+    accrualMissingStores: [],
+    systemExclusionSnapshot: { version: "system-exclusion-v1", brandId: "cyj", revision: 1, stores: ["B"] },
+  };
+  const authority = buildCurrentDetailFormalAuthority({
+    brandId: "cyj",
+    yearMonth: "2026-08",
+    lifecycleMaster: master,
+    monthlyTargetSummary: targetSummary,
+    cutoffDate: "2026-08-01",
+    systemExclusionState: { ready: true, brandId: "cyj", revision: 1, stores: ["B"] },
+    normalizeStoreKey,
+    reports: [
+      { storeName: "A", date: "2026-08-01", cash: 100, refund: 0, skincareRefund: 0, accrual: 100, operationalAccrual: 100 },
+    ],
+  });
+
+  assert.equal(authority.compatible, true);
+  assert.deepEqual(authority.eligibleStoreKeys, ["A"]);
+  assert.deepEqual(authority.systemExcludedStoreKeys, ["B"]);
+  assert.equal(authority.stores.B, undefined);
+  assert.equal(authority.reportingStatus, "DATA_COMPLETE");
+  assert.equal(authority.targetAuthority.coverageConsistent, true);
+  const scope = buildCurrentDetailFormalScope({ authority, normalizeStoreKey });
+  assert.equal(scope.cash, 100);
+  assert.equal(scope.cashTarget, 100);
+  assert.equal(scope.reportingStatus, "DATA_COMPLETE");
+});
+
+test("System Exclusion revision mismatch fails target authority closed without reintroducing excluded reporting denominator", () => {
+  const master = makeMaster("cyj", { A: lifecycleEntry(), B: lifecycleEntry() });
+  const targetSummary = {
+    ...makeTargetSummary({ rows: { A: { cashTarget: 100, accrualTarget: 100 }, B: { cashTarget: 200, accrualTarget: 200 } } }),
+    eligibleStoreCount: 1,
+    cashConfiguredStoreCount: 1,
+    accrualConfiguredStoreCount: 1,
+    systemExclusionSnapshot: { version: "system-exclusion-v1", brandId: "cyj", revision: 0, stores: [] },
+  };
+  const authority = buildCurrentDetailFormalAuthority({
+    brandId: "cyj",
+    yearMonth: "2026-08",
+    lifecycleMaster: master,
+    monthlyTargetSummary: targetSummary,
+    cutoffDate: "2026-08-01",
+    systemExclusionState: { ready: true, brandId: "cyj", revision: 1, stores: ["B"] },
+    normalizeStoreKey,
+    reports: [{ storeName: "A", date: "2026-08-01", cash: 100, refund: 0, skincareRefund: 0, accrual: 100, operationalAccrual: 100 }],
+  });
+  assert.equal(authority.reportingStatus, "DATA_COMPLETE");
+  assert.equal(authority.targetExclusionCurrent, false);
+  assert.equal(authority.targetAuthority.coverageConsistent, false);
+  const scope = buildCurrentDetailFormalScope({ authority, normalizeStoreKey });
+  assert.equal(scope.cash, 100);
+  assert.equal(scope.cashTarget, null);
+  assert.equal(scope.cashTargetStatus, "TARGET_INCOMPLETE");
+});

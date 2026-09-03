@@ -166,6 +166,9 @@ export const extractTargetCoverageMetadata = (data = {}) => {
     accrualTargetTotal: numericOrNull(source.accrualTargetTotal),
     coverageSource: String(source.coverageSource || ""),
     coverageUpdatedAtText: String(source.coverageUpdatedAtText || ""),
+    systemExclusionSnapshot: source?.systemExclusionSnapshot && typeof source.systemExclusionSnapshot === "object"
+      ? { ...source.systemExclusionSnapshot }
+      : null,
   };
 };
 
@@ -174,6 +177,7 @@ export const buildSummaryTargetAuthoritySnapshot = ({
   eligibleStoreKeys = [],
   lifecycleReady = false,
   targetCoverage = {},
+  systemExclusionCurrent = true,
 } = {}) => {
   const eligibleKeys = [...new Set((eligibleStoreKeys || []).map((value) => String(value || "").trim()).filter(Boolean))].sort((a, b) => a.localeCompare(b, "zh-Hant"));
   const cashMissingStoreKeys = [];
@@ -209,6 +213,7 @@ export const buildSummaryTargetAuthoritySnapshot = ({
   const coverageVersionCompatible = String(targetCoverage?.kpiContractVersion || "") === KPI_CONTRACT_VERSION;
   const coverageConsistent = coverageAvailable
     && coverageVersionCompatible
+    && systemExclusionCurrent === true
     && Boolean(targetCoverage.lifecycleReady) === Boolean(lifecycleReady)
     && Number(targetCoverage.eligibleStoreCount || 0) === eligibleKeys.length
     && Number(targetCoverage.cashConfiguredStoreCount || 0) === cashConfiguredStoreCount
@@ -234,6 +239,7 @@ export const buildSummaryTargetAuthoritySnapshot = ({
     computedAccrualCoverageComplete,
     coverageAuthorityAvailable: coverageAvailable,
     coverageVersionCompatible,
+    coverageSystemExclusionCurrent: systemExclusionCurrent === true,
     coverageConsistent,
     cashCoverageTrusted: coverageConsistent && targetCoverage.cashCoverageComplete === true,
     accrualCoverageTrusted: coverageConsistent && targetCoverage.accrualCoverageComplete === true,

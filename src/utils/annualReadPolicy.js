@@ -62,6 +62,7 @@ export const resolveAnnualReadPlan = ({
   dashboardSummaries = [],
   summaryStatusMap = {},
   summaryLoadState = {},
+  systemExclusionState,
 } = {}) => {
   const year = normalizeYear(selectedYear);
   const currentYm = normalizeAnnualYearMonth(currentYearMonth);
@@ -70,9 +71,14 @@ export const resolveAnnualReadPlan = ({
   const loadYear = normalizeYear(summaryLoadState?.year);
 
   const anchored = Boolean(year && expectedBrand && loadBrand === expectedBrand && loadYear === year);
+  const exclusionAnchored = systemExclusionState === undefined || Boolean(
+    systemExclusionState?.ready === true
+    && String(systemExclusionState?.brandId || "").trim().toLowerCase() === expectedBrand
+  );
   const ready = anchored
     && summaryLoadState?.dashboardReady === true
-    && summaryLoadState?.flagsReady === true;
+    && summaryLoadState?.flagsReady === true
+    && exclusionAnchored;
 
   if (!ready) {
     return {
@@ -118,6 +124,7 @@ export const resolveAnnualReadPlan = ({
       brandId: expectedBrand,
       dashboardSummary: summariesByMonth[yearMonth] || null,
       summaryFlag: summaryStatusMap?.[yearMonth] || null,
+      systemExclusionState,
     });
 
     if (trust.preSystemSkip) {

@@ -156,7 +156,7 @@ test("Summary Writer persists compact reporting metadata from already-loaded Lif
   assert.match(backendLifecycle, /buildLifecycleReportingCompleteness,/);
 
   assert.match(functionsIndex, /REPORTING_COMPLETENESS_SCHEMA_VERSION/);
-  assert.match(functionsIndex, /buildLifecycleReportingCompleteness\(\{[\s\S]*?master: lifecycleMaster,[\s\S]*?reports: dailyRows,[\s\S]*?includeMissingDates: false/);
+  assert.match(functionsIndex, /buildLifecycleReportingCompleteness\(\{[\s\S]*?master: lifecycleMasterForSystemScope,[\s\S]*?reports: dailyRows,[\s\S]*?includeMissingDates: false/);
   assert.match(functionsIndex, /reportingCompleteness: \{[\s\S]*?\.\.\.reportingCompleteness,[\s\S]*?schemaVersion: REPORTING_COMPLETENESS_SCHEMA_VERSION/);
   assert.match(functionsIndex, /Store Reporting Signature/);
 });

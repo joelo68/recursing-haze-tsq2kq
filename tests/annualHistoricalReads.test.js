@@ -65,6 +65,21 @@ test("Annual loading state never eagerly reads monthly_aggregated", () => {
   assert.deepEqual(result.fallbackYearMonths, []);
 });
 
+test("Annual waits for brand-anchored System Exclusion authority before any fallback read", () => {
+  const trusted = buildTrustedMonths({ throughMonth: 7 });
+  const result = resolveAnnualReadPlan({
+    selectedYear: "2026",
+    currentYearMonth: "2026-08",
+    brandId: "cyj",
+    ...trusted,
+    summaryLoadState: makeReadyState(),
+    systemExclusionState: { ready: false, brandId: "cyj", revision: 0, stores: [] },
+  });
+  assert.equal(result.mode, ANNUAL_READ_MODE.LOADING);
+  assert.equal(result.ready, false);
+  assert.deepEqual(result.fallbackYearMonths, []);
+});
+
 test("verified current-year Annual reads only current month aggregate", () => {
   const trusted = buildTrustedMonths({ throughMonth: 7 });
   const result = resolveAnnualReadPlan({
@@ -78,6 +93,31 @@ test("verified current-year Annual reads only current month aggregate", () => {
   assert.deepEqual(result.fallbackYearMonths, ["2026-08"]);
   assert.equal(result.reasonsByMonth["2026-07"], "VERIFIED_FORMAL_SUMMARY");
   assert.equal(result.reasonsByMonth["2026-08"], "CURRENT_MONTH_FALLBACK");
+});
+
+test("stale exclusion revision adds only the stale historical month to Annual fallback", () => {
+  const trusted = buildTrustedMonths({ throughMonth: 7 });
+  const currentSnapshot = { version: "system-exclusion-v1", brandId: "cyj", revision: 2, stores: ["B"] };
+  trusted.dashboardSummaries = trusted.dashboardSummaries.map((row) => ({ ...row, systemExclusionSnapshot: currentSnapshot }));
+  Object.keys(trusted.summaryStatusMap).forEach((yearMonth) => {
+    trusted.summaryStatusMap[yearMonth] = { ...trusted.summaryStatusMap[yearMonth], systemExclusionSnapshot: currentSnapshot };
+  });
+  trusted.dashboardSummaries = trusted.dashboardSummaries.map((row) => (
+    row.yearMonth === "2026-05"
+      ? { ...row, systemExclusionSnapshot: { ...currentSnapshot, revision: 1, stores: [] } }
+      : row
+  ));
+
+  const result = resolveAnnualReadPlan({
+    selectedYear: "2026",
+    currentYearMonth: "2026-08",
+    brandId: "cyj",
+    ...trusted,
+    summaryLoadState: makeReadyState(),
+    systemExclusionState: { ready: true, brandId: "cyj", revision: 2, stores: ["B"] },
+  });
+  assert.deepEqual(result.fallbackYearMonths, ["2026-05", "2026-08"]);
+  assert.equal(result.reasonsByMonth["2026-05"], "SYSTEM_EXCLUSION_SUMMARY_REVISION_MISMATCH");
 });
 
 test("dirty historical month adds only that month plus current month", () => {
@@ -205,6 +245,14 @@ test("App uses fallback-month-only monthly_aggregated query and shared read plan
   assert.match(appSource, /buildAnnualAggregateYearMonthCandidates/);
   assert.match(appSource, /where\("yearMonth", "in", aggregateYearMonthCandidates\)/);
   assert.match(appSource, /monthly_aggregated_fallback_months/);
+  assert.match(appSource, /systemExclusionState/);
+});
+
+test("Annual consumer filters System Exclusion from formal and compatibility paths", () => {
+  assert.match(annualSource, /reportExclusionSet/);
+  assert.match(annualSource, /excludedStoreKeys: \[\.\.\.reportExclusionSet\]/);
+  assert.match(annualSource, /systemExclusionState/);
+  assert.match(annualSource, /shouldAllowAnnualRawTargetFallback\([\s\S]*systemExclusionState/);
 });
 
 test("Annual target Summary reads skip Yibo pre-system months", () => {

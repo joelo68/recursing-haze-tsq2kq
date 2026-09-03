@@ -65,6 +65,27 @@ exports.onLegacyStoreLifecycleCoverageChange = targetCoverageFunctions.onLegacyS
 exports.onBrandStoreLifecycleCoverageChange = targetCoverageFunctions.onBrandStoreLifecycleCoverageChange;
 
 // ==========================================
+// ★ System Exclusion v1：正式營運 scope authority（Stage A foundation）
+// mutation 必須走最高管理者 + Trusted Device + credential + revision OCC。
+// exclusion change 以 event-driven 方式刷新 Target Coverage；不新增 polling/listener。
+// ==========================================
+const { createSystemExclusionFunctions } = require("./systemExclusion");
+const {
+  normalizeStoredSystemExclusionProfile,
+  buildStoredSystemExclusionSnapshot,
+  isStoredSystemExclusionSnapshotCurrent,
+} = require("./systemExclusionContract");
+const systemExclusionFunctions = createSystemExclusionFunctions({
+  admin,
+  db,
+  refreshTargetCoverageForSystemExclusion: targetCoverageFunctions.refreshTargetCoverageForSystemExclusion,
+  markHistoricalSummariesDirtyForSystemExclusion,
+});
+exports.manageSystemExclusions = systemExclusionFunctions.manageSystemExclusions;
+exports.onLegacySystemExclusionChange = systemExclusionFunctions.onLegacySystemExclusionChange;
+exports.onBrandSystemExclusionChange = systemExclusionFunctions.onBrandSystemExclusionChange;
+
+// ==========================================
 // ★ Pre-Batch-5：Historical Target Coverage Read-only Audit
 // 只讀 monthly_targets_summary + store_lifecycle，分類歷史月份 migration readiness。
 // 不掃 Raw monthly_targets、不寫資料、不新增 polling / listener。
@@ -10326,6 +10347,66 @@ function getSummaryCollection(brandId, collectionName) {
   return getBrandRootRef(brandId).collection(collectionName);
 }
 
+async function markHistoricalSummariesDirtyForSystemExclusion({ brandId, exclusionData = {} } = {}) {
+  const normalizedBrandId = String(brandId || "").trim().toLowerCase();
+  if (!SUMMARY_REPAIR_BRANDS.includes(normalizedBrandId)) return { marked: 0, skipped: "unsupported_brand" };
+
+  const currentProfile = normalizeStoredSystemExclusionProfile(
+    exclusionData,
+    normalizedBrandId,
+    normalizeSummaryCoreName
+  );
+  const currentSnapshot = buildStoredSystemExclusionSnapshot(
+    currentProfile,
+    normalizedBrandId,
+    normalizeSummaryCoreName
+  );
+  const summarySnap = await getSummaryCollection(normalizedBrandId, "dashboard_summary").get();
+  const historicalMonths = summarySnap.docs
+    .map((docSnap) => ({ id: docSnap.id, data: docSnap.data() || {} }))
+    .filter(({ id }) => /^\d{4}-\d{2}$/.test(id))
+    .filter(({ id }) => isHistoricalYearMonthForAutoRepair(id))
+    .filter(({ id }) => !isBeforeSummaryRepairDataStartMonth(normalizedBrandId, id))
+    .filter(({ data }) => !isStoredSystemExclusionSnapshotCurrent({
+      snapshot: data.systemExclusionSnapshot || null,
+      currentProfile,
+      brandId: normalizedBrandId,
+      normalizeStoreKey: normalizeSummaryCoreName,
+    }));
+
+  let batch = db.batch();
+  let pendingWrites = 0;
+  let marked = 0;
+  const nowText = new Date().toISOString();
+  for (const row of historicalMonths) {
+    batch.set(getSummaryCollection(normalizedBrandId, "summary_recalc_flags").doc(row.id), {
+      brandId: normalizedBrandId,
+      yearMonth: row.id,
+      affectedYearMonth: row.id,
+      status: "dirty",
+      dirty: true,
+      dirtyReason: "system_exclusion_revision_changed",
+      requiredSystemExclusionRevision: currentSnapshot.revision,
+      systemExclusionSnapshot: currentSnapshot,
+      lastDirtyAt: admin.firestore.FieldValue.serverTimestamp(),
+      lastDirtyAtText: nowText,
+      rebuildAfterAtText: nowText,
+      updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+      updatedAtText: nowText,
+      updatedBy: "system_exclusion_event_v1",
+    }, { merge: true });
+    pendingWrites += 1;
+    marked += 1;
+    if (pendingWrites >= 400) {
+      await batch.commit();
+      batch = db.batch();
+      pendingWrites = 0;
+    }
+  }
+  if (pendingWrites > 0) await batch.commit();
+  return { marked, revision: currentSnapshot.revision, source: "dashboard_summary_derived_scan" };
+}
+
 function getSummaryQueueFallbackStateRef(brandId) {
   return getSummaryCollection(brandId, "summary_worker_state").doc(SUMMARY_QUEUE_FALLBACK_STATE_DOC);
 }
@@ -10847,22 +10928,48 @@ async function buildAutoDashboardSummaryPayloads(brandId, yearMonth) {
   if (!range) throw new Error("月份格式錯誤");
 
   const orgProfile = await getAutoOrgStructureProfile(brandId);
-  const [targetAuthority, lifecycleSnap] = await Promise.all([
+  const [targetAuthority, lifecycleSnap, systemExclusionSnap] = await Promise.all([
     loadAutoMonthlyTargetAuthority(brandId, yearMonth, orgProfile.stores),
     getSummaryCollection(brandId, "store_lifecycle").doc("master").get(),
+    getAuditExclusionsDocRef(brandId).get(),
   ]);
   const targets = targetAuthority.targets || {};
   const targetCoverage = targetAuthority.targetCoverage || extractTargetCoverageMetadata({});
   const lifecycleMaster = lifecycleSnap.exists ? (lifecycleSnap.data() || {}) : { datasetStatus: "BUILDING", stores: {} };
+  const systemExclusionProfile = normalizeStoredSystemExclusionProfile(
+    systemExclusionSnap.exists ? (systemExclusionSnap.data() || {}) : {},
+    brandId,
+    normalizeSummaryCoreName
+  );
+  const systemExclusionSnapshot = buildStoredSystemExclusionSnapshot(
+    systemExclusionProfile,
+    brandId,
+    normalizeSummaryCoreName
+  );
+  const rawLifecycleStores = lifecycleMaster?.stores && typeof lifecycleMaster.stores === "object"
+    ? lifecycleMaster.stores
+    : {};
+  const scopedLifecycleStores = Object.fromEntries(Object.entries(rawLifecycleStores).filter(([key, entry]) => {
+    const storeKey = normalizeSummaryCoreName(entry?.storeKey || entry?.coreStoreName || entry?.canonicalStoreName || key);
+    return storeKey && !systemExclusionProfile.storeSet.has(storeKey);
+  }));
+  const lifecycleMasterForSystemScope = { ...lifecycleMaster, stores: scopedLifecycleStores };
   const lifecycleReady = String(lifecycleMaster.datasetStatus || "") === "READY";
-  const lifecycleEligibleEntries = getLifecycleEligibleStoreEntries(lifecycleMaster, yearMonth, { brandId, requireReady: true });
+  const lifecycleEligibleEntries = getLifecycleEligibleStoreEntries(lifecycleMasterForSystemScope, yearMonth, { brandId, requireReady: true });
   const lifecycleEligibleStoreKeys = lifecycleEligibleEntries.map((entry) => String(entry.storeKey || entry.coreStoreName || "").trim()).filter(Boolean);
   const lifecycleEligibleStoreSet = new Set(lifecycleEligibleStoreKeys);
+  const targetCoverageSystemExclusionCurrent = isStoredSystemExclusionSnapshotCurrent({
+    snapshot: targetCoverage.systemExclusionSnapshot || null,
+    currentProfile: systemExclusionProfile,
+    brandId,
+    normalizeStoreKey: normalizeSummaryCoreName,
+  });
   const formalTargetAuthority = buildSummaryTargetAuthoritySnapshot({
     targetMap: targets,
     eligibleStoreKeys: lifecycleEligibleStoreKeys,
     lifecycleReady,
     targetCoverage,
+    systemExclusionCurrent: targetCoverageSystemExclusionCurrent,
   });
   const storeOwner = {};
   Object.entries(orgProfile.managers || {}).forEach(([managerName, stores]) => {
@@ -10895,7 +11002,7 @@ async function buildAutoDashboardSummaryPayloads(brandId, yearMonth) {
       ? (taipeiTodayForReporting < range.end ? taipeiTodayForReporting : range.end)
       : shiftTelegramAgentDate(range.start, -1);
   const reportingCompleteness = buildLifecycleReportingCompleteness({
-    master: lifecycleMaster,
+    master: lifecycleMasterForSystemScope,
     yearMonth,
     reports: dailyRows,
     brandId,
@@ -11230,11 +11337,13 @@ async function buildAutoDashboardSummaryPayloads(brandId, yearMonth) {
     kpiContractVersion: grand.kpiContractVersion || targetCoverage.kpiContractVersion || "",
     targetAuthoritySource: targetAuthority.source || "",
     targetCoverage,
+    systemExclusionSnapshot,
     formalTargetAuthority,
     lifecycleSnapshot: {
       schemaVersion: String(lifecycleMaster.schemaVersion || ""),
       datasetStatus: String(lifecycleMaster.datasetStatus || "BUILDING"),
       revision: Number(lifecycleMaster.revision || 0),
+      systemExclusionRevision: systemExclusionSnapshot.revision,
       eligibleStoreCount: lifecycleEligibleStoreKeys.length,
       eligibleStoreKeys: lifecycleEligibleStoreKeys,
     },
@@ -11288,6 +11397,7 @@ async function buildAutoDashboardSummaryPayloads(brandId, yearMonth) {
     semanticVersion: SUMMARY_SEMANTIC_VERSION,
     kpiContractVersion: grand.kpiContractVersion || targetCoverage.kpiContractVersion || "",
     targetCoverage,
+    systemExclusionSnapshot,
     formalTargetAuthority,
     lifecycleSnapshot: dashboardSummary.lifecycleSnapshot,
     storeTop3: dashboardSummary.storeTop3,
@@ -11352,6 +11462,19 @@ function buildAutoReportingCompletenessSignature(summary = {}) {
   });
 }
 
+function buildAutoSystemExclusionSnapshotSignature(summary = {}) {
+  const snapshot = summary?.systemExclusionSnapshot && typeof summary.systemExclusionSnapshot === "object"
+    ? summary.systemExclusionSnapshot
+    : {};
+  return JSON.stringify({
+    version: String(snapshot.version || snapshot.systemExclusionVersion || ""),
+    brandId: String(snapshot.brandId || "").trim().toLowerCase(),
+    revision: Number(snapshot.revision || 0),
+    stores: [...new Set((snapshot.stores || []).map(normalizeSummaryCoreName).filter(Boolean))]
+      .sort((a, b) => a.localeCompare(b, "zh-Hant")),
+  });
+}
+
 function makeAutoSummaryCompareRows({ storedDashboard, storedTherapist, storedRankings, freshDashboard, freshTherapist, freshRankings }) {
   const rows = [
     { label: "現金業績（legacy）", stored: getAutoMetricValue(storedDashboard, "grandTotal.cash"), fresh: getAutoMetricValue(freshDashboard, "grandTotal.cash"), type: "money" },
@@ -11378,6 +11501,7 @@ function makeAutoSummaryCompareRows({ storedDashboard, storedTherapist, storedRa
     { label: "Formal Cash Target Total", stored: getAutoMetricValue(storedDashboard, "formalTargetAuthority.cashTargetTotal", null), fresh: getAutoMetricValue(freshDashboard, "formalTargetAuthority.cashTargetTotal", null), type: "money", exactNull: true },
     { label: "Formal Accrual Target Total", stored: getAutoMetricValue(storedDashboard, "formalTargetAuthority.accrualTargetTotal", null), fresh: getAutoMetricValue(freshDashboard, "formalTargetAuthority.accrualTargetTotal", null), type: "money", exactNull: true },
     { label: "Formal Target Coverage Consistent", stored: getAutoMetricValue(storedDashboard, "formalTargetAuthority.coverageConsistent", null), fresh: getAutoMetricValue(freshDashboard, "formalTargetAuthority.coverageConsistent", null), type: "boolean", exact: true },
+    { label: "Target Coverage System Exclusion Current", stored: getAutoMetricValue(storedDashboard, "formalTargetAuthority.coverageSystemExclusionCurrent", null), fresh: getAutoMetricValue(freshDashboard, "formalTargetAuthority.coverageSystemExclusionCurrent", null), type: "boolean", exact: true },
     { label: "Lifecycle Ready", stored: getAutoMetricValue(storedDashboard, "formalTargetAuthority.lifecycleReady", null), fresh: getAutoMetricValue(freshDashboard, "formalTargetAuthority.lifecycleReady", null), type: "boolean", exact: true },
     { label: "Reporting Completeness Version", stored: getAutoMetricValue(storedDashboard, "reportingCompleteness.schemaVersion", ""), fresh: getAutoMetricValue(freshDashboard, "reportingCompleteness.schemaVersion", ""), type: "text", exact: true },
     { label: "Reporting Status", stored: getAutoMetricValue(storedDashboard, "reportingCompleteness.reportingStatus", ""), fresh: getAutoMetricValue(freshDashboard, "reportingCompleteness.reportingStatus", ""), type: "text", exact: true },
@@ -11387,8 +11511,10 @@ function makeAutoSummaryCompareRows({ storedDashboard, storedTherapist, storedRa
     { label: "Store Reporting Signature", stored: buildAutoReportingCompletenessSignature(storedDashboard), fresh: buildAutoReportingCompletenessSignature(freshDashboard), type: "text", exact: true },
     { label: "Formal Rank Eligible Count", stored: getAutoMetricValue(storedDashboard, "formalRankEligibleStoreCount", null), fresh: getAutoMetricValue(freshDashboard, "formalRankEligibleStoreCount", null), type: "count", exactNull: true },
     { label: "Summary Semantic Version", stored: getAutoMetricValue(storedDashboard, "semanticVersion", ""), fresh: getAutoMetricValue(freshDashboard, "semanticVersion", ""), type: "text", exact: true },
+    { label: "Dashboard System Exclusion Snapshot", stored: buildAutoSystemExclusionSnapshotSignature(storedDashboard), fresh: buildAutoSystemExclusionSnapshotSignature(freshDashboard), type: "text", exact: true },
     { label: "Store-level Formal Signature", stored: buildSummaryStoreSemanticSignature(storedDashboard), fresh: buildSummaryStoreSemanticSignature(freshDashboard), type: "text", exact: true },
     { label: "Ranking Semantic Version", stored: getAutoMetricValue(storedRankings, "semanticVersion", ""), fresh: getAutoMetricValue(freshRankings, "semanticVersion", ""), type: "text", exact: true },
+    { label: "Rankings System Exclusion Snapshot", stored: buildAutoSystemExclusionSnapshotSignature(storedRankings), fresh: buildAutoSystemExclusionSnapshotSignature(freshRankings), type: "text", exact: true },
     { label: "Formal Ranking Eligible Count", stored: getAutoMetricValue(storedRankings, "formalRankEligibleStoreCount", null), fresh: getAutoMetricValue(freshRankings, "formalRankEligibleStoreCount", null), type: "count", exactNull: true },
     { label: "Formal Ranking Signature", stored: buildFormalRankingSignature(storedRankings), fresh: buildFormalRankingSignature(freshRankings), type: "text", exact: true },
     { label: "Therapist KPI Signature", stored: buildTherapistSummarySignature(storedTherapist), fresh: buildTherapistSummarySignature(freshTherapist), type: "text", exact: true },
@@ -11699,6 +11825,8 @@ async function finalizeMonthReportAuto({ brandId, yearMonth, trigger = "auto_wor
       status: isMatched ? "verified" : "mismatch",
       dirty: !isMatched,
       pendingCount: isMatched ? 0 : completedCount,
+      systemExclusionRevision: Number(dashboardSummary.systemExclusionSnapshot?.revision || 0),
+      systemExclusionSnapshot: dashboardSummary.systemExclusionSnapshot || null,
       lastCompletedAt: admin.firestore.FieldValue.serverTimestamp(),
       lastCompletedAtText: new Date().toISOString(),
       lastCompletedBy: "auto_summary_repair_worker",

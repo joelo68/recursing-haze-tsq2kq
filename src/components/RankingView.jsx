@@ -31,7 +31,8 @@ const RankingView = () => {
     currentReportSummaryReadyYearMonth,
     currentReportSummaryReadyBrandId,
     currentSummaryRecalcFlagState,
-    currentLifecycleMasterState
+    currentLifecycleMasterState,
+    systemExclusionState
   } = useContext(AppContext);
 
   const [sortConfig, setSortConfig] = useState({
@@ -293,6 +294,7 @@ const RankingView = () => {
     reportSummaryReadyYearMonth: currentReportSummaryReadyYearMonth,
     reportSummaryReadyBrandId: currentReportSummaryReadyBrandId,
     summaryFlagState: currentSummaryRecalcFlagState,
+    systemExclusionState,
   }), [
     isCurrentMonth,
     selectedYearMonth,
@@ -303,6 +305,7 @@ const RankingView = () => {
     currentReportSummaryReadyYearMonth,
     currentReportSummaryReadyBrandId,
     currentSummaryRecalcFlagState,
+    systemExclusionState,
   ]);
 
   const historicalFormalRanking = useMemo(() => {
@@ -340,9 +343,10 @@ const RankingView = () => {
       lifecycleMaster,
       monthlyTargetSummary,
       reports: allReports || [],
+      systemExclusionState,
       normalizeStoreKey,
     });
-  }, [currentLifecycleMasterState, currentBrand, selectedYearMonth, monthlyTargetSummary, allReports]);
+  }, [currentLifecycleMasterState, currentBrand, selectedYearMonth, monthlyTargetSummary, allReports, systemExclusionState]);
 
   const isHistoricalFormalMode = !isCurrentMonth && reportFormalTrust.trusted && historicalFormalRanking.compatible;
   const isHistoricalFormalLoading = !isCurrentMonth && reportFormalTrust.loading;

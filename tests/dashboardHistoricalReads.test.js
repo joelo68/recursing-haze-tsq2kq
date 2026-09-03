@@ -36,6 +36,23 @@ test("verified historical summary suppresses daily report and raw target reads",
   assert.equal(result.summaryTrusted, true);
 });
 
+test("stale System Exclusion revision forces historical detail/raw fallback", () => {
+  const result = resolveHistoricalDashboardReadPolicy({
+    isCurrentMonth: false,
+    reportSummaryReady: true,
+    hasUsableDashboardSummary: true,
+    summaryFlagReady: true,
+    summaryFlag: verifiedFlag,
+    systemExclusionTrusted: false,
+    systemExclusionReason: "SYSTEM_EXCLUSION_SUMMARY_REVISION_MISMATCH",
+  });
+  assert.equal(result.mode, DASHBOARD_READ_MODE.DETAIL_FALLBACK);
+  assert.equal(result.shouldLoadDailyReports, true);
+  assert.equal(result.allowRawTargetFallback, true);
+  assert.equal(result.summaryTrusted, false);
+  assert.equal(result.reason, "SYSTEM_EXCLUSION_SUMMARY_REVISION_MISMATCH");
+});
+
 test("summary loading does not eagerly trigger historical raw reads", () => {
   const result = resolveHistoricalDashboardReadPolicy({
     isCurrentMonth: false,
@@ -112,6 +129,8 @@ test("App uses the shared historical read policy for Dashboard daily_reports", (
   assert.match(appSource, /resolveHistoricalDashboardReadPolicy/);
   assert.match(appSource, /dashboardReadPolicy\.shouldLoadDailyReports/);
   assert.match(appSource, /currentSummaryRecalcFlagState/);
+  assert.match(appSource, /inspectHistoricalSystemExclusionTrust/);
+  assert.match(appSource, /systemExclusionTrusted: systemExclusionTrust\.trusted/);
 });
 
 test("Dashboard hook no longer listens to recalc_queue or maintenance_logs", () => {

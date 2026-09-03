@@ -180,7 +180,21 @@ service cloud.firestore {
     // 只能由通過 Firebase Auth + Trusted Device + Super Admin 再驗證的 Backend writer 更新。
     match /artifacts/{appId}/public/data/global_settings/{settingId} {
       allow read: if signedIn();
-      allow write: if signedIn() && settingId != 'telegram_security_alerts';
+      allow write: if signedIn()
+        && settingId != 'telegram_security_alerts'
+        && settingId != 'audit_exclusions';
+    }
+
+    // System Exclusion v1：正式營運 scope authority。
+    // 前端只讀；所有修改必須經 Backend 的最高管理者、Trusted Device、credential 與 revision OCC。
+    match /brands/{brandId}/settings/audit_exclusions {
+      allow read: if signedIn();
+      allow write: if false;
+    }
+
+    match /artifacts/{appId}/public/data/global_settings/audit_exclusions {
+      allow read: if signedIn();
+      allow write: if false;
     }
 
     // 既有品牌資料維持原本登入後可讀寫；排除上方受保護集合，避免寬鬆規則覆蓋。
@@ -194,7 +208,8 @@ service cloud.firestore {
         && collectionName != 'security_alerts'
         && collectionName != 'security_summary'
         && collectionName != 'login_security_state'
-        && collectionName != 'store_lifecycle';
+        && collectionName != 'store_lifecycle'
+        && !(collectionName == 'settings' && document == 'audit_exclusions');
     }
 
     match /artifacts/{appId}/public/data/{collectionName}/{document=**} {
