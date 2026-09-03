@@ -14,6 +14,25 @@ export const normalizeSystemExclusionStoreKey = (value = "") => {
   return core.replace(/店+$/g, "").trim();
 };
 
+
+export const getSystemExcludedStoreSet = (state = {}, normalizeStoreKey = normalizeSystemExclusionStoreKey) => {
+  if (!state || state.ready !== true) return new Set();
+  return new Set(
+    (state.stores || [])
+      .map((store) => normalizeStoreKey(store))
+      .filter(Boolean)
+  );
+};
+
+export const filterSystemExcludedStoreKeys = (values = [], state = {}, normalizeStoreKey = normalizeSystemExclusionStoreKey) => {
+  const excluded = getSystemExcludedStoreSet(state, normalizeStoreKey);
+  return [...new Set(
+    (Array.isArray(values) ? values : [])
+      .map((store) => normalizeStoreKey(store))
+      .filter((storeKey) => storeKey && !excluded.has(storeKey))
+  )];
+};
+
 export const normalizeSystemExclusionRevision = (value) => {
   const revision = Number(value);
   return Number.isInteger(revision) && revision >= 0 ? revision : 0;

@@ -39,3 +39,11 @@ test("StorePerformanceView keeps nullable challenge projections as N/A instead o
     /formatProjectionTargetRate\(storeGrandTotal\.accrualProjection, storeGrandTotal\.challengeAccrualBudget\)/
   );
 });
+
+test("StorePerformanceView keeps Formal projection null as N/A while preserving a real zero", () => {
+  assert.match(source, /\{formatKpiMoney\(storeGrandTotal\.projection\)\}/);
+  assert.match(source, /\{formatKpiMoney\(storeGrandTotal\.accrualProjection\)\}/);
+  assert.doesNotMatch(source, /\{fmtMoney\(storeGrandTotal\.projection\)\}/);
+  assert.doesNotMatch(source, /\{fmtMoney\(storeGrandTotal\.accrualProjection\)\}/);
+  assert.match(source, /const formatProjectionValue = \(value\) => \{\s*if \(!isFiniteKpi\(value\)\) return "N\/A";\s*return fmtMoney\(value\);/);
+});

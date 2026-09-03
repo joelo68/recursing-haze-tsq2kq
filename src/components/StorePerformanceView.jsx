@@ -221,9 +221,8 @@ const StorePerformanceView = ({ dashboardStats, myStoreRankings, brandInfo }) =>
     : "依本月營運表現與歷史節奏推估";
 
   const formatProjectionValue = (value) => {
-    const numeric = Number(value || 0);
-    if (!numeric) return "尚無資料";
-    return fmtMoney(numeric);
+    if (!isFiniteKpi(value)) return "N/A";
+    return fmtMoney(value);
   };
 
   const ProjectionScenarioColumn = ({ title, value, desc, active = false, tone = "amber" }) => (
@@ -485,7 +484,7 @@ const StorePerformanceView = ({ dashboardStats, myStoreRankings, brandInfo }) =>
                   </div>
                 </div>
                 <h3 className="text-3xl font-extrabold text-stone-700 font-mono tracking-tight mb-3">
-                  {fmtMoney(storeGrandTotal.projection)}
+                  {formatKpiMoney(storeGrandTotal.projection)}
                 </h3>
                 <div className="flex flex-wrap gap-2 mb-3">
                   <div className="inline-flex items-center gap-1 px-2 py-1 bg-emerald-50 text-emerald-700 rounded-md text-[11px] font-bold border border-emerald-100">
@@ -521,7 +520,7 @@ const StorePerformanceView = ({ dashboardStats, myStoreRankings, brandInfo }) =>
                   </div>
                 </div>
                 <h3 className="text-3xl font-extrabold text-stone-700 font-mono tracking-tight mb-3">
-                  {fmtMoney(storeGrandTotal.accrualProjection)}
+                  {formatKpiMoney(storeGrandTotal.accrualProjection)}
                 </h3>
                 <div className="flex flex-wrap gap-2 mb-3">
                   <div className="inline-flex items-center gap-1 px-2 py-1 bg-emerald-50 text-emerald-700 rounded-md text-[11px] font-bold border border-emerald-100">

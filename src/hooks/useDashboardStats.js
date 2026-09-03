@@ -13,7 +13,7 @@ import {
 import { buildHistoricalFormalDashboardScope, isFormalDashboardSummaryCompatible } from '../utils/dashboardFormalConsumer.js';
 import { applyTherapistRankingSemantics, buildTherapistAggregateMetrics } from '../utils/therapistKpi.js';
 import { getSummaryRecalcFlagState, resolveHistoricalDashboardReadPolicy } from '../utils/dashboardReadPolicy.js';
-import { inspectHistoricalSystemExclusionTrust } from '../utils/systemExclusion.js';
+import { filterSystemExcludedStoreKeys, inspectHistoricalSystemExclusionTrust } from '../utils/systemExclusion.js';
 
 const safeNumber = (value) => Number.isFinite(Number(value)) ? Number(value) : 0;
 const isFiniteKpiNumber = (value) => typeof value === "number" && Number.isFinite(value);
@@ -596,31 +596,28 @@ export function useDashboardStats() {
   );
 
   const baseVisibleStores = useMemo(() => {
-    if (userRole === 'director' || userRole === 'trainer' || userRole === 'therapist' || userRole === 'master') {
-      return [...new Set(Object.values(managers || {}).flat().map(cleanName).filter(Boolean))];
-    }
+    let sourceStores = [];
 
-    if ((userRole === 'manager' || userRole === 'store') && currentUser) {
+    if (userRole === 'director' || userRole === 'trainer' || userRole === 'therapist' || userRole === 'master') {
+      sourceStores = Object.values(managers || {}).flat();
+    } else if ((userRole === 'manager' || userRole === 'store') && currentUser) {
       const delegatedAwareStores = (
         hasDelegationAccessProfile
           ? operationAccessibleStores
           : (accessibleStores || [])
-      ).map(cleanName).filter(Boolean);
+      );
 
       if (delegatedAwareStores.length > 0) {
-        return [...new Set(delegatedAwareStores)];
+        sourceStores = delegatedAwareStores;
+      } else if (userRole === 'manager') {
+        // 代理資料尚未完成載入時，保留原正式權限；System Exclusion 仍必須套用。
+        sourceStores = managers[currentUser.name] || [];
+      } else {
+        sourceStores = currentUser.stores || [currentUser.storeName];
       }
-
-      // 代理資料尚未完成載入時，保留原正式權限，避免畫面短暫變成 0。
-      if (userRole === 'manager') {
-        return [...new Set((managers[currentUser.name] || []).map(cleanName).filter(Boolean))];
-      }
-
-      const rawStores = currentUser.stores || [currentUser.storeName];
-      return [...new Set((rawStores || []).map(cleanName).filter(Boolean))];
     }
 
-    return [];
+    return filterSystemExcludedStoreKeys(sourceStores, systemExclusionState, cleanName);
   }, [
     userRole,
     currentUser,
@@ -628,6 +625,7 @@ export function useDashboardStats() {
     accessibleStores,
     operationAccessibleStores,
     hasDelegationAccessProfile,
+    systemExclusionState,
     cleanName,
   ]);
 
@@ -757,13 +755,30 @@ export function useDashboardStats() {
     availableStoresForFilter,
   ]);
 
+  useEffect(() => {
+    if (selectedDashboardStore && !availableStoresForFilter.includes(selectedDashboardStore)) {
+      setSelectedDashboardStore("");
+    }
+  }, [selectedDashboardStore, availableStoresForFilter]);
+
+  useEffect(() => {
+    if (selectedDashboardManager && !groupedStoresForFilter[selectedDashboardManager]) {
+      setSelectedDashboardManager("");
+      setSelectedDashboardStore("");
+    }
+  }, [selectedDashboardManager, groupedStoresForFilter]);
+
   const effectiveStores = useMemo(() => {
-    if (selectedDashboardStore) return [cleanName(selectedDashboardStore)];
+    if (selectedDashboardStore) {
+      return filterSystemExcludedStoreKeys([selectedDashboardStore], systemExclusionState, cleanName);
+    }
 
     if (selectedDashboardManager) {
-      return (managers[selectedDashboardManager] || [])
-        .map(cleanName)
-        .filter(Boolean);
+      return filterSystemExcludedStoreKeys(
+        managers[selectedDashboardManager] || [],
+        systemExclusionState,
+        cleanName
+      );
     }
 
     return baseVisibleStores;
@@ -772,6 +787,7 @@ export function useDashboardStats() {
     selectedDashboardStore,
     selectedDashboardManager,
     managers,
+    systemExclusionState,
     cleanName,
   ]);
 
@@ -1350,7 +1366,7 @@ export function useDashboardStats() {
       userRole === "store"
     );
 
-    const stores = shouldFilterSummaryStores && effectiveStoreSet.size > 0
+    const stores = shouldFilterSummaryStores
       ? allSummaryStores.filter((store) => summaryStoreMatchesSet(store, effectiveStoreSet))
       : allSummaryStores;
 
@@ -1372,7 +1388,7 @@ export function useDashboardStats() {
       return acc;
     };
 
-    const isFilteredSummaryView = shouldFilterSummaryStores && effectiveStoreSet.size > 0;
+    const isFilteredSummaryView = shouldFilterSummaryStores;
     const summaryGrand = summary.grandTotal || {};
     const grand = isFilteredSummaryView ? aggregateGrandFromStores(stores) : { ...summaryGrand };
 
@@ -1670,7 +1686,7 @@ export function useDashboardStats() {
     const useFilter = selectedDashboardManager || selectedDashboardStore;
 
     let rankings = Array.isArray(summary.rankings) ? summary.rankings.map((item) => ({ ...item })) : [];
-    if (useFilter && selectedStores.size > 0) {
+    if (useFilter) {
       rankings = rankings.filter((item) => selectedStores.has(cleanName(item.store || item.storeDisplay || "")));
     }
 
@@ -1687,7 +1703,7 @@ export function useDashboardStats() {
 
     const filterTopRows = (rows = []) => {
       const list = Array.isArray(rows) ? rows : [];
-      if (!useFilter || selectedStores.size === 0) return list;
+      if (!useFilter) return list;
       return list.filter((item) => selectedStores.has(cleanName(item.store || item.storeDisplay || "")));
     };
 

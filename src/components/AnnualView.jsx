@@ -10,6 +10,7 @@ import { getDoc, doc } from "firebase/firestore";
 import { AppContext } from "../AppContext";
 import { sortManagerNames, sortStoreNames, sortManagersByOrgOrder, sortStoresByOrgOrder } from "../utils/helpers";
 import { ViewWrapper, Card } from "./SharedUI";
+import { filterSystemExcludedStoreKeys } from "../utils/systemExclusion.js";
 import {
   buildAnnualFormalMonth,
   buildAnnualIntervalTotals,
@@ -225,18 +226,16 @@ const AnnualView = () => {
   }, [cleanName]);
 
   const baseVisibleStores = useMemo(() => {
+    let sourceStores = [];
     if (userRole === 'director' || userRole === 'trainer' || userRole === 'therapist') {
-      return Object.values(managers).flat().map(cleanName).filter(Boolean);
+      sourceStores = Object.values(managers).flat();
+    } else if (userRole === 'manager' && currentUser) {
+      sourceStores = managers[currentUser.name] || [];
+    } else if (userRole === 'store' && currentUser) {
+      sourceStores = currentUser.stores || [currentUser.storeName];
     }
-    if (userRole === 'manager' && currentUser) {
-      return (managers[currentUser.name] || []).map(cleanName).filter(Boolean);
-    }
-    if (userRole === 'store' && currentUser) {
-      const rawStores = currentUser.stores || [currentUser.storeName];
-      return rawStores.map(cleanName).filter(Boolean);
-    }
-    return []; 
-  }, [userRole, currentUser, managers, managerOrder, cleanName]);
+    return filterSystemExcludedStoreKeys(sourceStores, systemExclusionState, cleanName);
+  }, [userRole, currentUser, managers, systemExclusionState, cleanName]);
 
   const availableStoresForFilter = useMemo(() => {
     const uniqueStores = [...new Set(baseVisibleStores)];
@@ -281,16 +280,32 @@ const AnnualView = () => {
     return sortStoresByOrgOrder(managers, Object.values(groupedStoresForFilter).flat(), brandPrefix, managerOrder);
   }, [selectedAnnualManager, groupedStoresForFilter, userRole, currentUser, managers, brandPrefix, managerOrder]);
 
+  useEffect(() => {
+    if (selectedAnnualStore && !availableStoresForFilter.includes(selectedAnnualStore)) {
+      setSelectedAnnualStore("");
+    }
+  }, [selectedAnnualStore, availableStoresForFilter]);
+
+  useEffect(() => {
+    if (selectedAnnualManager && !groupedStoresForFilter[selectedAnnualManager]) {
+      setSelectedAnnualManager("");
+      setSelectedAnnualStore("");
+    }
+  }, [selectedAnnualManager, groupedStoresForFilter]);
+
   const effectiveStores = useMemo(() => {
     if (selectedAnnualStore) {
-      return [cleanName(selectedAnnualStore)];
+      return filterSystemExcludedStoreKeys([selectedAnnualStore], systemExclusionState, cleanName);
     }
     if (selectedAnnualManager) {
-      const stores = managers[selectedAnnualManager] || [];
-      return stores.map(cleanName).filter(Boolean);
+      return filterSystemExcludedStoreKeys(
+        managers[selectedAnnualManager] || [],
+        systemExclusionState,
+        cleanName
+      );
     }
     return baseVisibleStores;
-  }, [baseVisibleStores, selectedAnnualStore, selectedAnnualManager, managers, managerOrder, cleanName]);
+  }, [baseVisibleStores, selectedAnnualStore, selectedAnnualManager, managers, systemExclusionState, cleanName]);
 
 
   // ==========================================
