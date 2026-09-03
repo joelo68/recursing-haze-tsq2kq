@@ -11,6 +11,7 @@ const {
 } = require("./kpiContracts");
 
 const SUMMARY_SEMANTIC_VERSION = "summary-semantics-v1";
+const STORE_HEALTH_INPUT_VERSION = "store-health-input-v1";
 
 const SUMMARY_KPI_STATUS = Object.freeze({
   TARGET_INCOMPLETE: "TARGET_INCOMPLETE",
@@ -57,6 +58,10 @@ const buildFormalReportMetrics = (brandId, row = {}) => {
   const totalAccrual = inspectKpiNumber(row?.accrual);
   const operationalAccrual = inspectKpiNumber(row?.operationalAccrual);
   const formalAccrualResult = formalAccrual(normalizedBrandId, row?.accrual, row?.operationalAccrual);
+  const skincareSales = inspectKpiNumber(row?.skincareSales);
+  const traffic = inspectKpiNumber(row?.traffic);
+  const newCustomers = inspectKpiNumber(row?.newCustomers);
+  const newCustomerSales = inspectKpiNumber(row?.newCustomerSales);
 
   return {
     summarySemanticVersion: SUMMARY_SEMANTIC_VERSION,
@@ -77,6 +82,15 @@ const buildFormalReportMetrics = (brandId, row = {}) => {
     formalAccrual: isValidNumericStatus(formalAccrualResult.status) ? formalAccrualResult.value : null,
     formalAccrualStatus: formalAccrualResult.status,
     formalAccrualSource: formalAccrualResult.sourceField || "",
+    storeHealthInputVersion: STORE_HEALTH_INPUT_VERSION,
+    skincareSales: isValidNumericStatus(skincareSales.status) ? skincareSales.value : null,
+    skincareSalesStatus: skincareSales.status,
+    traffic: isValidNumericStatus(traffic.status) ? traffic.value : null,
+    trafficStatus: traffic.status,
+    newCustomers: isValidNumericStatus(newCustomers.status) ? newCustomers.value : null,
+    newCustomersStatus: newCustomers.status,
+    newCustomerSales: isValidNumericStatus(newCustomerSales.status) ? newCustomerSales.value : null,
+    newCustomerSalesStatus: newCustomerSales.status,
   };
 };
 
@@ -91,6 +105,10 @@ const aggregateFormalMetrics = (brandId, rows = []) => {
     ["totalAccrual", "totalAccrualStatus"],
     ["operationalAccrual", "operationalAccrualStatus"],
     ["formalAccrual", "formalAccrualStatus"],
+    ["skincareSales", "skincareSalesStatus"],
+    ["traffic", "trafficStatus"],
+    ["newCustomers", "newCustomersStatus"],
+    ["newCustomerSales", "newCustomerSalesStatus"],
   ];
 
   const acc = Object.fromEntries(fields.map(([valueKey]) => [
@@ -137,6 +155,13 @@ const aggregateFormalMetrics = (brandId, rows = []) => {
     formalAccrual: finalizedByField.formalAccrual.value,
     formalAccrualStatus: finalizedByField.formalAccrual.status,
     formalAccrualSource: normalizedBrandId === "anniu" ? "operationalAccrual" : (normalizedBrandId ? "accrual" : ""),
+    // Store Health feeder validity is additive metadata only. Legacy numeric fields
+    // remain owned by the existing Summary writer so other consumers are unchanged.
+    storeHealthInputVersion: STORE_HEALTH_INPUT_VERSION,
+    skincareSalesStatus: finalizedByField.skincareSales.status,
+    trafficStatus: finalizedByField.traffic.status,
+    newCustomersStatus: finalizedByField.newCustomers.status,
+    newCustomerSalesStatus: finalizedByField.newCustomerSales.status,
   };
 };
 
@@ -383,6 +408,11 @@ const buildSummaryStoreSemanticSignature = (summary = {}) => JSON.stringify(
     operationalAccrualStatus: String(row.operationalAccrualStatus || ""),
     formalAccrual: normalizeSignatureScalar(row.formalAccrual),
     formalAccrualStatus: String(row.formalAccrualStatus || ""),
+    storeHealthInputVersion: String(row.storeHealthInputVersion || ""),
+    skincareSalesStatus: String(row.skincareSalesStatus || ""),
+    trafficStatus: String(row.trafficStatus || ""),
+    newCustomersStatus: String(row.newCustomersStatus || ""),
+    newCustomerSalesStatus: String(row.newCustomerSalesStatus || ""),
     formalCashTarget: normalizeSignatureScalar(row.formalCashTarget),
     formalCashAchievement: normalizeSignatureScalar(row.formalCashAchievement),
     formalCashAchievementStatus: String(row.formalCashAchievementStatus || ""),
@@ -409,6 +439,7 @@ const buildFormalRankingSignature = (summary = {}) => JSON.stringify(
 
 module.exports = {
   SUMMARY_SEMANTIC_VERSION,
+  STORE_HEALTH_INPUT_VERSION,
   SUMMARY_KPI_STATUS,
   buildFormalReportMetrics,
   aggregateFormalMetrics,

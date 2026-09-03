@@ -22,31 +22,12 @@ import {
   resolveStoreAnalysisCashTargetPresentation,
   resolveStoreAnalysisCashTargetScopePresentation,
 } from "../utils/storeAnalysisTargetAuthority";
-
-// 預設值
-const DEFAULT_BENCHMARKS = {
-  default: {
-    financial: { min: 80, max: 120, label: "現權責比" }, 
-    sales:     { min: 10, max: 45, label: "產品佔比" },
-    loyalty:   { min: 50, max: 80, label: "舊客佔比" },
-    mining:    { min: 80, max: 120, label: "舊客強度" },
-    acquisition: { min: 80, max: 120, label: "新客含金" }
-  },
-  "安妞": {
-    financial: { min: 70, max: 110, label: "現權責比" },
-    sales:     { min: 10, max: 40, label: "產品佔比" }, 
-    loyalty:   { min: 30, max: 60, label: "舊客佔比" },
-    mining:    { min: 80, max: 120, label: "舊客強度" },
-    acquisition: { min: 80, max: 120, label: "新客含金" }
-  },
-  "伊啵": {
-    financial: { min: 70, max: 110, label: "現權責比" },
-    sales:     { min: 10, max: 40, label: "產品佔比" }, 
-    loyalty:   { min: 30, max: 60, label: "舊客佔比" },
-    mining:    { min: 80, max: 120, label: "舊客強度" },
-    acquisition: { min: 80, max: 120, label: "新客含金" }
-  }
-};
+import {
+  buildStoreHealthMetrics,
+  resolveStoreHealthBenchmarkProfile,
+  STORE_HEALTH_DIMENSIONS,
+} from "../utils/storeHealth.js";
+import { KPI_VALUE_STATUS } from "../utils/kpiContracts.js";
 
 const StoreAnalysisView = () => {
   const {
@@ -54,6 +35,7 @@ const StoreAnalysisView = () => {
     allReports,
     monthlyTargetSummary,
     currentLifecycleMasterState,
+    systemExclusionState,
     currentDashboardSummary,
     managers, managerOrder,
     targets, 
@@ -153,19 +135,12 @@ const StoreAnalysisView = () => {
     })
   ), [storeAnalysisTargetAuthority, canonicalTargetStoreName]);
 
-  // 2. 讀取設定
-  const currentBenchmarks = useMemo(() => {
-    const dbBenchmarks = targets?.benchmarks || {};
-    const config = dbBenchmarks[brandId] || dbBenchmarks["default"] || DEFAULT_BENCHMARKS[brandId] || DEFAULT_BENCHMARKS["default"];
-    
-    return {
-       financial: { ...DEFAULT_BENCHMARKS.default.financial, ...config?.financial },
-       sales: { ...DEFAULT_BENCHMARKS.default.sales, ...config?.sales },
-       loyalty: { ...DEFAULT_BENCHMARKS.default.loyalty, ...config?.loyalty },
-       mining: { ...DEFAULT_BENCHMARKS.default.mining, ...config?.mining },
-       acquisition: { ...DEFAULT_BENCHMARKS.default.acquisition, ...config?.acquisition },
-    };
-  }, [brandId, targets]);
+  // 2. Store Health 標準只接受目前品牌的 runtime kpi_targets.benchmarks。
+  // 不跨品牌借用 default，也不以頁面 hardcode 數值補標準。
+  const currentBenchmarks = useMemo(() => resolveStoreHealthBenchmarkProfile({
+    brandId,
+    benchmarks: targets?.benchmarks || {},
+  }), [brandId, targets?.benchmarks]);
 
   const formatMoneyOrNA = useCallback((value) => (
     typeof value === "number" && Number.isFinite(value) ? fmtMoney(value) : "N/A"
@@ -178,6 +153,41 @@ const StoreAnalysisView = () => {
   const getAchievementTone = useCallback((value) => {
     if (!(typeof value === "number" && Number.isFinite(value))) return "text-stone-400";
     return value >= 100 ? "text-emerald-500" : "text-amber-500";
+  }, []);
+
+  const formatHealthPercentOrNA = useCallback((value, digits = 1) => (
+    typeof value === "number" && Number.isFinite(value) ? `${(value * 100).toFixed(digits)}%` : "N/A"
+  ), []);
+
+  const formatScoreOrNA = useCallback((value) => (
+    typeof value === "number" && Number.isFinite(value) ? value.toFixed(0) : "N/A"
+  ), []);
+
+  const isHealthMetricBelowBenchmark = useCallback((value, benchmark, offset = 0) => (
+    typeof value === "number"
+    && Number.isFinite(value)
+    && benchmark?.valid === true
+    && typeof benchmark.min === "number"
+    && Number.isFinite(benchmark.min)
+    && value < (benchmark.min + offset)
+  ), []);
+
+  const getHealthDiagnosis = useCallback((health) => {
+    if (!health) return { text: "資料不足", tone: "neutral" };
+    const benchmarkStates = STORE_HEALTH_DIMENSIONS.map((dimension) => health?.benchmarks?.[dimension]?.status);
+    if (benchmarkStates.some((status) => status === KPI_VALUE_STATUS.DATA_INVALID)) {
+      return { text: "標準設定無效", tone: "neutral" };
+    }
+    if (benchmarkStates.some((status) => status === KPI_VALUE_STATUS.FIELD_MISSING)) {
+      return { text: "標準未設定", tone: "neutral" };
+    }
+    if (STORE_HEALTH_DIMENSIONS.some((dimension) => !(typeof health?.scores?.[dimension] === "number" && Number.isFinite(health.scores[dimension])))) {
+      return { text: "資料不足", tone: "neutral" };
+    }
+    if (health.scores.financial < 60) return { text: "需注意現金流", tone: "risk" };
+    if (health.scores.loyalty < 60) return { text: "舊客流失風險", tone: "risk" };
+    if (health.scores.sales < 60) return { text: "產品銷售偏弱", tone: "risk" };
+    return { text: "體質健康", tone: "healthy" };
   }, []);
 
   const isManagementRole = userRole === "director" || userRole === "trainer" || userRole === "manager";
@@ -249,41 +259,6 @@ const StoreAnalysisView = () => {
     return () => window.removeEventListener("navigate-to-store", handleStoreNav);
   }, []);
 
-  const availableStores = useMemo(() => {
-    const safeManagers = managers || {};
-
-    const formatStoreName = (s) => {
-      if (!s) return ""; 
-      return `${brandPrefix}${cleanStoreName(s)}店`;
-    };
-
-    if (userRole === "director" || userRole === "trainer") {
-        if (selectedManager) return sortStoresByOrgOrder(safeManagers, (safeManagers[selectedManager] || []).map(formatStoreName).filter(Boolean), brandPrefix, managerOrder);
-        const allStores = targetBrandManagers.flatMap(mgr => safeManagers[mgr] || []);
-        return sortStoresByOrgOrder(safeManagers, allStores.map(formatStoreName).filter(Boolean), brandPrefix, managerOrder);
-    }
-        
-    if (userRole === "manager")
-      return sortStoresByOrgOrder(safeManagers, Object.values(safeManagers).flat().map(formatStoreName).filter(Boolean), brandPrefix, managerOrder);
-        
-    if (userRole === "store" && currentUser) {
-      const myStores = (accessibleStores || []).length
-        ? accessibleStores
-        : (currentUser.stores || (currentUser.storeName ? [currentUser.storeName] : []));
-      return sortStoresByOrgOrder(safeManagers, myStores.map((s) => formatStoreName(s)).filter(Boolean), brandPrefix, managerOrder);
-    }
-      
-    return [];
-  }, [selectedManager, managers, managerOrder, currentUser, userRole, brandPrefix, targetBrandManagers, cleanStoreName, accessibleStores]);
-
-  useEffect(() => {
-    if (userRole === "store" && currentUser && availableStores.length > 0) {
-       if (!selectedStore || !availableStores.includes(selectedStore)) {
-          setSelectedStore(availableStores[0]);
-       }
-    }
-  }, [currentUser, availableStores, selectedStore, userRole]);
-
   useEffect(() => {
     try {
       window.dispatchEvent(new CustomEvent("cyj_store_analysis_selected_store_changed", {
@@ -351,12 +326,22 @@ const StoreAnalysisView = () => {
         cash: Number(store?.cash ?? store?.cashTotal ?? 0),
         refund: Number(store?.refund ?? store?.refundTotal ?? 0),
         skincareRefund: Number(store?.skincareRefund ?? store?.skincareRefundTotal ?? 0),
+        skincareRefundStatus: String(store?.skincareRefundStatus || ""),
+        formalNetCash: store?.formalNetCash ?? null,
+        formalNetCashStatus: String(store?.formalNetCashStatus || ""),
         accrual: Number(store?.accrual ?? store?.accrualTotal ?? 0),
         operationalAccrual: Number(store?.operationalAccrual ?? store?.operationalAccrualTotal ?? store?.accrual ?? store?.accrualTotal ?? 0),
+        formalAccrual: store?.formalAccrual ?? null,
+        formalAccrualStatus: String(store?.formalAccrualStatus || ""),
+        storeHealthInputVersion: String(store?.storeHealthInputVersion || ""),
         skincareSales: Number(store?.skincareSales ?? store?.skincareSalesTotal ?? 0),
+        skincareSalesStatus: String(store?.skincareSalesStatus || ""),
         traffic: Number(store?.traffic ?? store?.trafficTotal ?? 0),
+        trafficStatus: String(store?.trafficStatus || ""),
         newCustomers: Number(store?.newCustomers ?? store?.newCustomersTotal ?? 0),
+        newCustomersStatus: String(store?.newCustomersStatus || ""),
         newCustomerSales: Number(store?.newCustomerSales ?? store?.newCustomerSalesTotal ?? 0),
+        newCustomerSalesStatus: String(store?.newCustomerSalesStatus || ""),
         newCustomerClosings: Number(store?.newCustomerClosings ?? store?.newCustomerClosingsTotal ?? 0),
         source: "dashboard_summary",
       };
@@ -483,7 +468,8 @@ const StoreAnalysisView = () => {
     lifecycleMaster: currentLifecycleMasterState?.data || null,
     monthlyTargetSummary,
     reports: formalReportRows,
-  }), [currentBrand?.id, selectedYearMonth, currentLifecycleMasterState?.data, monthlyTargetSummary, formalReportRows]);
+    systemExclusionState,
+  }), [currentBrand?.id, selectedYearMonth, currentLifecycleMasterState?.data, monthlyTargetSummary, formalReportRows, systemExclusionState]);
 
   const getFormalScope = useCallback((storeKeys = null) => buildCurrentDetailFormalScope({
     authority: currentDetailFormalAuthority,
@@ -493,67 +479,69 @@ const StoreAnalysisView = () => {
   // ==========================================
   // 單店運算與彙整運算引擎
   // ==========================================
-  const calculateHealthMetrics = useCallback((dataList) => {
-    const defaultHealth = {
-        raw: { cashToAccrual: 0, retailRatio: 0, retention: 0, aspMining: 0, acquisitionQuality: 0 },
-        scores: { financial: 0, sales: 0, loyalty: 0, mining: 0, acquisition: 0 }
+  // Store Health formulas / validity / brand benchmark authority are owned by a pure helper.
+  const calculateHealthMetrics = useCallback((dataList) => buildStoreHealthMetrics({
+    brandId,
+    rows: dataList || [],
+    newASP: targets?.newASP,
+    benchmarks: targets?.benchmarks || {},
+  }), [brandId, targets?.newASP, targets?.benchmarks]);
+
+  const formalEligibleStoreSet = useMemo(() => new Set(
+    Array.isArray(currentDetailFormalAuthority?.eligibleStoreKeys)
+      ? currentDetailFormalAuthority.eligibleStoreKeys.map(cleanStoreName).filter(Boolean)
+      : []
+  ), [currentDetailFormalAuthority?.eligibleStoreKeys, cleanStoreName]);
+
+  const availableStores = useMemo(() => {
+    const safeManagers = managers || {};
+    const formatStoreName = (storeName) => {
+      if (!storeName) return "";
+      const core = cleanStoreName(storeName);
+      return core && formalEligibleStoreSet.has(core) ? `${brandPrefix}${core}店` : "";
     };
 
-    if (!dataList || dataList.length === 0) return defaultHealth;
+    let sourceStores = [];
+    if (userRole === "director" || userRole === "trainer") {
+      sourceStores = selectedManager
+        ? (safeManagers[selectedManager] || [])
+        : targetBrandManagers.flatMap((manager) => safeManagers[manager] || []);
+    } else if (userRole === "manager") {
+      sourceStores = accessibleStores || [];
+    } else if (userRole === "store" && currentUser) {
+      sourceStores = (accessibleStores || []).length
+        ? accessibleStores
+        : (currentUser.stores || (currentUser.storeName ? [currentUser.storeName] : []));
+    }
 
-    const cash = dataList.reduce(
-      (a, b) => a + (Number(b.cash) || 0) - (Number(b.refund) || 0) - (Number(b.skincareRefund) || 0),
-      0
+    return sortStoresByOrgOrder(
+      safeManagers,
+      sourceStores.map(formatStoreName).filter(Boolean),
+      brandPrefix,
+      managerOrder
     );
-    const accrual = dataList.reduce((a, b) => a + (Number(b.accrual) || 0), 0); // 這裡的 accrual 已經過前面的攔截器處理
-    const skincare = dataList.reduce((a, b) => a + (Number(b.skincareSales) || 0), 0);
-    const traffic = dataList.reduce((a, b) => a + (Number(b.traffic) || 0), 0);
-    const newCust = dataList.reduce((a, b) => a + (Number(b.newCustomers) || 0), 0);
-    const newSales = dataList.reduce((a, b) => a + (Number(b.newCustomerSales) || 0), 0);
-    
-    const oldCust = Math.max(0, traffic - newCust);
-    const oldSales = Math.max(0, cash - newSales);
+  }, [
+    selectedManager, managers, managerOrder, currentUser, userRole, brandPrefix,
+    targetBrandManagers, cleanStoreName, accessibleStores, formalEligibleStoreSet,
+  ]);
 
-    const rawMetrics = {
-      cashToAccrual: accrual > 0 ? cash / accrual : 0,
-      retailRatio: cash > 0 ? skincare / cash : 0,
-      retention: traffic > 0 ? oldCust / traffic : 0,
-      aspMining: (oldCust > 0 && newCust > 0 && (newSales/newCust) > 0) 
-                 ? (oldSales / oldCust) / (newSales / newCust)
-                 : 0,
-      acquisitionQuality: (() => {
-        const configuredNewASP = Number(targets?.newASP);
-        const validNewASP = Number.isFinite(configuredNewASP) && configuredNewASP > 0 ? configuredNewASP : null;
-        return newCust > 0 && validNewASP ? (newSales / newCust) / validNewASP : 0;
-      })()
-    };
-
-    const normalize = (val, min, max) => {
-      const nMin = Number(min) > 5 ? Number(min) / 100 : Number(min);
-      const nMax = Number(max) > 5 ? Number(max) / 100 : Number(max);
-      if (val <= nMin) return 60 * (val / nMin);
-      if (val >= nMax) return 100;
-      return 60 + ((val - nMin) / (nMax - nMin)) * 40;
-    };
-
-    const cfg = currentBenchmarks;
-
-    const scores = {
-      financial: normalize(rawMetrics.cashToAccrual, cfg.financial.min, cfg.financial.max),
-      sales: normalize(rawMetrics.retailRatio, cfg.sales.min, cfg.sales.max),
-      loyalty: normalize(rawMetrics.retention, cfg.loyalty.min, cfg.loyalty.max),
-      mining: normalize(rawMetrics.aspMining, cfg.mining.min, cfg.mining.max),
-      acquisition: normalize(rawMetrics.acquisitionQuality, cfg.acquisition.min, cfg.acquisition.max)
-    };
-
-    return { raw: rawMetrics, scores };
-  }, [currentBenchmarks, targets]);
+  useEffect(() => {
+    if (currentDetailFormalAuthority?.compatible !== true) return;
+    if (selectedStore && !availableStores.includes(selectedStore)) {
+      setSelectedStore("");
+      return;
+    }
+    if (userRole === "store" && currentUser && !selectedStore && availableStores.length > 0) {
+      setSelectedStore(availableStores[0]);
+    }
+  }, [currentDetailFormalAuthority?.compatible, currentUser, availableStores, selectedStore, userRole]);
 
   const getAggregateData = useCallback((storesList) => {
     const targetYear = parseInt(selectedYear);
     const monthInt = parseInt(selectedMonth);
     const rocYear = targetYear - 1911;
-    const normalizedStores = Array.from(new Set((storesList || []).map(cleanStoreName).filter(Boolean)));
+    const normalizedStores = Array.from(new Set((storesList || []).map(cleanStoreName).filter(Boolean)))
+      .filter((storeKey) => formalEligibleStoreSet.has(storeKey));
 
     const data = analysisAllReports.filter(d => {
         if (!d.date || !d.storeName) return false;
@@ -589,7 +577,7 @@ const StoreAnalysisView = () => {
         totalRefund,
         totalTraffic: traffic,
         trafficASP: traffic > 0 ? Math.round(opAccrual / traffic) : 0,
-        newCustomerASP: newCust > 0 ? Math.round(newSales / newCust) : 0,
+        newCustomerASP: typeof health.raw.newCustomerASP === "number" ? Math.round(health.raw.newCustomerASP) : null,
         totalNewCustomerClosings: newClosings,
         budget: targetPresentation.complete ? targetPresentation.value : null,
         budgetStatus: formalScope.cashTargetStatus,
@@ -600,7 +588,7 @@ const StoreAnalysisView = () => {
         reportingStatus: formalScope.reportingStatus,
         health,
     };
-  }, [analysisAllReports, selectedYear, selectedMonth, cleanStoreName, brandId, getFormalScope, resolveScopeTargetPresentation, calculateHealthMetrics]);
+  }, [analysisAllReports, selectedYear, selectedMonth, cleanStoreName, brandId, getFormalScope, resolveScopeTargetPresentation, calculateHealthMetrics, formalEligibleStoreSet]);
 
   const globalMetrics = useMemo(() => {
     if (!analysisAllReports) return null;
@@ -614,7 +602,8 @@ const StoreAnalysisView = () => {
         const y = parseInt(parts[0]);
         const m = parseInt(parts[1]);
         if (!((y === targetYear || y === rocYear) && m === monthInt)) return false;
-        return isBrandMatch(d.storeName, brandId);
+        const storeKey = cleanStoreName(d.storeName);
+        return isBrandMatch(d.storeName, brandId) && formalEligibleStoreSet.has(storeKey);
     }).map(d => {
         let adjustedAccrual = Number(d.accrual) || 0;
         if (brandId === '安妞') adjustedAccrual = Number(d.operationalAccrual) || 0;
@@ -643,7 +632,7 @@ const StoreAnalysisView = () => {
         totalRefund,
         totalTraffic: traffic,
         trafficASP: traffic > 0 ? Math.round(opAccrual / traffic) : 0,
-        newCustomerASP: newCust > 0 ? Math.round(newSales / newCust) : 0,
+        newCustomerASP: typeof health.raw.newCustomerASP === "number" ? Math.round(health.raw.newCustomerASP) : null,
         totalNewCustomerClosings: newClosings,
         budget: targetPresentation.complete ? targetPresentation.value : null,
         budgetStatus: formalScope.cashTargetStatus,
@@ -654,7 +643,7 @@ const StoreAnalysisView = () => {
         reportingStatus: formalScope.reportingStatus,
         health,
     };
-  }, [analysisAllReports, selectedYear, selectedMonth, isBrandMatch, brandId, currentDetailFormalAuthority, getFormalScope, resolveScopeTargetPresentation, cleanStoreName, calculateHealthMetrics]);
+  }, [analysisAllReports, selectedYear, selectedMonth, isBrandMatch, brandId, currentDetailFormalAuthority, getFormalScope, resolveScopeTargetPresentation, cleanStoreName, calculateHealthMetrics, formalEligibleStoreSet]);
 
   const regionMetrics = useMemo(() => {
     if (!isManagementRole || !analysisAllReports) return null;
@@ -673,9 +662,10 @@ const StoreAnalysisView = () => {
     const monthInt = parseInt(selectedMonth);
     const rocYear = targetYear - 1911;
     const targetCoreName = cleanStoreName(selectedStore);
+    const selectedStoreFormalEligible = formalEligibleStoreSet.has(targetCoreName);
 
     const data = storeScopedAnalysisReports.filter((d) => {
-        if (!d.date || !d.storeName) return false;
+        if (!selectedStoreFormalEligible || !d.date || !d.storeName) return false;
         const parts = String(d.date).replace(/-/g, "/").split("/");
         const y = parseInt(parts[0]);
         const m = parseInt(parts[1]);
@@ -709,7 +699,7 @@ const StoreAnalysisView = () => {
       achievementStatus: formalScope.cashAchievementStatus,
       reportingStatus: formalScope.reportingStatus,
       trafficASP: totalTraffic > 0 ? Math.round(totalOpAccrual / totalTraffic) : 0,
-      newCustomerASP: totalNewCustomers > 0 ? Math.round(totalNewCustomerSales / totalNewCustomers) : 0,
+      newCustomerASP: typeof health.raw.newCustomerASP === "number" ? Math.round(health.raw.newCustomerASP) : null,
       totalNewCustomerClosings,
       totalRefund,
       dailyData: data.map((d) => ({
@@ -722,7 +712,7 @@ const StoreAnalysisView = () => {
       budgetStatus: formalScope.cashTargetStatus,
       health,
     };
-  }, [selectedStore, selectedYear, selectedMonth, storeScopedAnalysisReports, cleanStoreName, calculateHealthMetrics, brandId, getFormalScope, resolveStoreTargetPresentation]);
+  }, [selectedStore, selectedYear, selectedMonth, storeScopedAnalysisReports, cleanStoreName, calculateHealthMetrics, brandId, getFormalScope, resolveStoreTargetPresentation, formalEligibleStoreSet]);
 
   const benchmarkMetrics = useMemo(() => {
       if (!showBenchmark || !analysisAllReports) return null;
@@ -738,26 +728,21 @@ const StoreAnalysisView = () => {
           if (!((y === targetYear || y === rocYear) && m === monthInt)) return false;
 
           if (!isBrandMatch(d.storeName, brandId)) return false;
-          if (cleanStoreName(d.storeName) === cleanStoreName(selectedStore)) return false;
+          const storeKey = cleanStoreName(d.storeName);
+          if (!formalEligibleStoreSet.has(storeKey)) return false;
+          if (storeKey === cleanStoreName(selectedStore)) return false;
 
           return true;
-      }).map(d => {
-          // ★★★ 安妞專屬邏輯：總權責只看「操作權責 (技術)」排除保養品 ★★★
-          let adjustedAccrual = Number(d.accrual) || 0;
-          if (brandId === '安妞') {
-              adjustedAccrual = Number(d.operationalAccrual) || 0;
-          }
-          return { ...d, accrual: adjustedAccrual };
       });
 
       return calculateHealthMetrics(benchmarkData);
-  }, [selectedYear, selectedMonth, analysisAllReports, showBenchmark, selectedStore, cleanStoreName, isBrandMatch, brandId, calculateHealthMetrics]);
+  }, [selectedYear, selectedMonth, analysisAllReports, showBenchmark, selectedStore, cleanStoreName, isBrandMatch, brandId, calculateHealthMetrics, formalEligibleStoreSet]);
 
 
   const radarData = useMemo(() => {
     if (!storeMetrics?.health) return [];
     const s = storeMetrics.health.scores;
-    const b = benchmarkMetrics?.scores || { financial:0, sales:0, loyalty:0, mining:0, acquisition:0 }; 
+    const b = benchmarkMetrics?.scores || {};
     const cfg = currentBenchmarks;
 
     return [
@@ -805,11 +790,11 @@ const StoreAnalysisView = () => {
               <div className="space-y-3 text-left">
                   <div>
                       <p className="font-bold text-emerald-600">1. {cfg.financial.label} (財務健康)</p>
-                      <p className="text-[11px] text-stone-500 mt-0.5 leading-relaxed">當月收進來的現金，夠不夠抵銷做課程消耗的成本？避免陷入「只做白工沒收錢」的窘境。</p>
+                      <p className="text-[11px] text-stone-500 mt-0.5 leading-relaxed">正式淨現金相對於正式權責業績的比例，檢視業績轉成實際現金回收的程度。</p>
                   </div>
                   <div>
                       <p className="font-bold text-blue-500">2. {cfg.sales.label} (銷售結構)</p>
-                      <p className="text-[11px] text-stone-500 mt-0.5 leading-relaxed">保養品佔總業績比例。檢視團隊在「手作課程」之外，推銷居家保養品的能力。</p>
+                      <p className="text-[11px] text-stone-500 mt-0.5 leading-relaxed">扣除保養品退費後的淨產品業績，占正式淨現金的比例；負值代表產品退費高於產品銷售。</p>
                   </div>
                   <div>
                       <p className="font-bold text-purple-600">3. {cfg.loyalty.label} (顧客黏著)</p>
@@ -837,104 +822,113 @@ const StoreAnalysisView = () => {
   // 全局異常店家清單掃描
   // ==========================================
   const exceptionLists = useMemo(() => {
-    if (!isManagementRole || !rawData) return null;
+    if (!isManagementRole || !rawData || currentDetailFormalAuthority?.compatible !== true) return null;
     const safeManagers = managers || {};
 
     let targetRawStores = [];
-    
     if (userRole === 'manager' && currentUser) {
-        targetRawStores = accessibleStores || [];
+      targetRawStores = accessibleStores || [];
     } else if (userRole === 'director' || userRole === 'trainer') {
-        targetRawStores = targetBrandManagers.flatMap(mgr => safeManagers[mgr] || []);
+      targetRawStores = targetBrandManagers.flatMap((mgr) => safeManagers[mgr] || []);
     }
 
-    if (targetRawStores.length === 0) return null;
+    const targetStores = targetRawStores
+      .map((store) => ({ id: String(store || ""), core: cleanStoreName(store) }))
+      .filter((row) => row.core && formalEligibleStoreSet.has(row.core));
+    if (!targetStores.length) return {
+      financialRisks: [], retentionRisks: [], salesRisks: [],
+      evaluation: {
+        financial: { ready: false, reason: "資料不足" },
+        retention: { ready: false, reason: "資料不足" },
+        sales: { ready: false, reason: "資料不足" },
+      },
+    };
 
     const targetYear = parseInt(selectedYear);
     const monthInt = parseInt(selectedMonth);
     const rocYear = targetYear - 1911;
+    const rowsByStore = new Map(targetStores.map((row) => [row.core, []]));
 
-    const storeStats = {};
-
-    targetRawStores.forEach(s => {
-        if (!s) return; 
-        const coreName = cleanStoreName(s);
-        let mgrName = "未分配";
-        Object.entries(safeManagers).forEach(([m, list]) => {
-            if((list || []).includes(s)) mgrName = m;
-        });
-
-        storeStats[coreName] = {
-            id: String(s),
-            name: `${coreName}店`,
-            manager: mgrName,
-            cash: 0, accrual: 0, skincare: 0, traffic: 0, newCust: 0, newSales: 0, foundData: false 
-        };
+    rawData.forEach((row) => {
+      if (!row?.date || !row?.storeName || !isBrandMatch(row.storeName, brandId)) return;
+      const parts = String(row.date).replace(/-/g, "/").split("/");
+      const y = parseInt(parts[0]);
+      const m = parseInt(parts[1]);
+      if (!((y === targetYear || y === rocYear) && m === monthInt)) return;
+      const core = cleanStoreName(row.storeName);
+      if (rowsByStore.has(core)) rowsByStore.get(core).push(row);
     });
 
-    rawData.forEach(d => {
-        if (!d.date || !d.storeName) return; 
-        const parts = String(d.date).replace(/-/g, "/").split("/");
-        const y = parseInt(parts[0]);
-        const m = parseInt(parts[1]);
-        if (!((y === targetYear || y === rocYear) && m === monthInt)) return;
-
-        const dCore = cleanStoreName(d.storeName);
-        
-        if (storeStats[dCore]) {
-            storeStats[dCore].foundData = true;
-            storeStats[dCore].cash += (Number(d.cash) || 0) - (Number(d.refund) || 0) - (Number(d.skincareRefund) || 0);
-            
-            // ★★★ 安妞專屬邏輯：總權責只看「操作權責 (技術)」排除保養品 ★★★
-            let currentAccrual = Number(d.accrual) || 0;
-            if (brandId === '安妞') {
-                currentAccrual = Number(d.operationalAccrual) || 0;
-            }
-            storeStats[dCore].accrual += currentAccrual;
-
-            storeStats[dCore].skincare += (Number(d.skincareSales) || 0);
-            storeStats[dCore].traffic += (Number(d.traffic) || 0);
-            storeStats[dCore].newCust += (Number(d.newCustomers) || 0);
-            storeStats[dCore].newSales += (Number(d.newCustomerSales) || 0);
+    const reportCards = targetStores.map((store) => {
+      const rows = rowsByStore.get(store.core) || [];
+      if (!rows.length) return null;
+      let managerName = "未分配";
+      Object.entries(safeManagers).some(([manager, list]) => {
+        if ((list || []).some((name) => cleanStoreName(name) === store.core)) {
+          managerName = manager;
+          return true;
         }
-    });
+        return false;
+      });
+      const health = calculateHealthMetrics(rows);
+      return {
+        id: store.id,
+        name: `${store.core}店`,
+        manager: managerName,
+        health,
+        cash: health.inputs.formalNetCash.value,
+        traffic: health.inputs.traffic.value,
+        newCust: health.inputs.newCustomers.value,
+        cashToAccrual: health.raw.cashToAccrual,
+        retentionRate: health.raw.retention,
+        newCustomerASP: health.raw.newCustomerASP,
+        acquisitionRate: health.raw.acquisitionQuality,
+      };
+    }).filter(Boolean);
 
-    const cfg = currentBenchmarks;
-    const getThreshold = (val) => (Number(val) > 5 ? Number(val) / 100 : Number(val)); 
+    const financialSample = reportCards.filter((store) => Number(store.cash) > 0 && typeof store.cashToAccrual === "number" && Number.isFinite(store.cashToAccrual));
+    const retentionSample = reportCards.filter((store) => Number(store.traffic) > 10 && typeof store.retentionRate === "number" && Number.isFinite(store.retentionRate));
+    const salesSample = reportCards.filter((store) => Number(store.newCust) > 0 && typeof store.acquisitionRate === "number" && Number.isFinite(store.acquisitionRate));
 
-    const reportCards = Object.values(storeStats)
-        .filter(s => s.foundData)
-        .map(s => {
-            const oldCust = Math.max(0, s.traffic - s.newCust);
-            const cashToAccrual = s.accrual > 0 ? s.cash / s.accrual : 0;
-            const productRatio = s.cash > 0 ? s.skincare / s.cash : 0;
-            const retentionRate = s.traffic > 0 ? oldCust / s.traffic : 0;
-            const newCustomerASP = s.newCust > 0 ? Math.round(s.newSales / s.newCust) : 0;
-            const configuredNewASP = Number(targets?.newASP);
-            const targetASP = Number.isFinite(configuredNewASP) && configuredNewASP > 0 ? configuredNewASP : null;
-            const acquisitionRate = targetASP ? newCustomerASP / targetASP : 0;
+    const getEvaluation = (benchmark, sample) => {
+      if (benchmark?.valid !== true) {
+        return {
+          ready: false,
+          reason: benchmark?.status === KPI_VALUE_STATUS.DATA_INVALID ? "標準設定無效" : "標準未設定",
+        };
+      }
+      if (!sample.length) return { ready: false, reason: "資料不足" };
+      return { ready: true, reason: "" };
+    };
 
-            return {
-                ...s,
-                cashToAccrual, productRatio, retentionRate, newCustomerASP, acquisitionRate
-            };
-        });
+    const evaluation = {
+      financial: getEvaluation(currentBenchmarks.financial, financialSample),
+      retention: getEvaluation(currentBenchmarks.loyalty, retentionSample),
+      sales: getEvaluation(currentBenchmarks.acquisition, salesSample),
+    };
 
-    const financialRisks = reportCards
-        .filter(s => s.cashToAccrual < getThreshold(cfg.financial.min) && s.cash > 0) 
-        .sort((a, b) => a.cashToAccrual - b.cashToAccrual); 
+    const financialRisks = evaluation.financial.ready
+      ? financialSample.filter((store) => isHealthMetricBelowBenchmark(store.cashToAccrual, currentBenchmarks.financial))
+          .sort((a, b) => a.cashToAccrual - b.cashToAccrual)
+      : [];
 
-    const retentionRisks = reportCards
-        .filter(s => s.retentionRate < (getThreshold(cfg.loyalty.min) - 0.1) && s.traffic > 10) 
-        .sort((a, b) => a.retentionRate - b.retentionRate);
+    const retentionRisks = evaluation.retention.ready
+      ? retentionSample.filter((store) => isHealthMetricBelowBenchmark(store.retentionRate, currentBenchmarks.loyalty, -0.1))
+          .sort((a, b) => a.retentionRate - b.retentionRate)
+      : [];
 
-    const salesRisks = reportCards
-        .filter(s => s.acquisitionRate < getThreshold(cfg.acquisition.min) && s.newCust > 0) 
-        .sort((a, b) => a.acquisitionRate - b.acquisitionRate); 
+    const salesRisks = evaluation.sales.ready
+      ? salesSample.filter((store) => isHealthMetricBelowBenchmark(store.acquisitionRate, currentBenchmarks.acquisition))
+          .sort((a, b) => a.acquisitionRate - b.acquisitionRate)
+      : [];
 
-    return { financialRisks, retentionRisks, salesRisks };
-
-  }, [rawData, userRole, currentUser, managers, managerOrder, isManagementRole, targets, currentBenchmarks, targetBrandManagers, selectedYear, selectedMonth, cleanStoreName, brandId, accessibleStores]);
+    return { financialRisks, retentionRisks, salesRisks, evaluation };
+  }, [
+    rawData, userRole, currentUser, managers, isManagementRole, targetBrandManagers,
+    selectedYear, selectedMonth, cleanStoreName, brandId, accessibleStores,
+    currentDetailFormalAuthority?.compatible, formalEligibleStoreSet, isBrandMatch,
+    calculateHealthMetrics, currentBenchmarks, isHealthMetricBelowBenchmark,
+  ]);
 
   const AlertItem = ({ store, value, label, type, onClick, fmtMoney }) => (
     <div 
@@ -954,7 +948,7 @@ const StoreAnalysisView = () => {
             <p className={`font-mono font-bold text-sm ${
                 type === 'danger' ? 'text-rose-500' : 'text-amber-500'
             }`}>
-                {type === 'currency' ? fmtMoney(value) : `${(Number(value) * 100).toFixed(0)}%`}
+                {type === 'currency' ? fmtMoney(value) : formatHealthPercentOrNA(value, 0)}
             </p>
             <p className="text-[10px] text-stone-400">{label}</p>
         </div>
@@ -969,11 +963,9 @@ const StoreAnalysisView = () => {
   const cfg = currentBenchmarks;
 
   const formatThreshold = (val) => {
-      const num = Number(val) > 5 ? Number(val) : Number(val) * 100;
-      return `${num.toFixed(0)}%`;
+      const num = Number(val);
+      return Number.isFinite(num) && num > 0 ? `${(num * 100).toFixed(0)}%` : "未設定";
   };
-
-  const getCalcThreshold = (val) => Number(val) > 5 ? Number(val) / 100 : Number(val);
   
   const showToggle = selectedStore || (isManagementRole && isManagerView);
 
@@ -1063,7 +1055,7 @@ const StoreAnalysisView = () => {
                             
                             <Radar name={isManagerView ? "區域平均" : "全品牌平均"} dataKey="A" stroke="#6366f1" fill="#6366f1" fillOpacity={0.4} />
                             <Legend wrapperStyle={{ fontSize: '12px', paddingTop: '10px' }}/>
-                            <RechartsTooltip contentStyle={{ borderRadius: '12px', fontSize: '12px' }} formatter={(val) => (Number(val) || 0).toFixed(0)}/>
+                            <RechartsTooltip contentStyle={{ borderRadius: '12px', fontSize: '12px' }} formatter={(val) => formatScoreOrNA(val)}/>
                         </RadarChart>
                     </ResponsiveContainer>
                   </div>
@@ -1084,7 +1076,7 @@ const StoreAnalysisView = () => {
                   </div>
                   <div className="bg-white p-5 rounded-2xl border shadow-sm">
                     <p className="text-stone-400 text-xs font-bold mb-1">平均新客客單</p>
-                    <h3 className="text-2xl font-bold text-stone-700">{fmtMoney(activeManagementMetrics.newCustomerASP)}</h3>
+                    <h3 className="text-2xl font-bold text-stone-700">{formatMoneyOrNA(activeManagementMetrics.newCustomerASP)}</h3>
                   </div>
                   <div className="bg-white p-5 rounded-2xl border shadow-sm">
                     <p className="text-stone-400 text-xs font-bold mb-1">總新客留單</p>
@@ -1097,20 +1089,20 @@ const StoreAnalysisView = () => {
                   
                   <div className="bg-stone-50 p-5 rounded-2xl border border-stone-100">
                     <p className="text-stone-400 text-xs font-bold mb-1">{cfg.financial.label} (體質)</p>
-                    <h3 className={`text-xl font-bold font-mono ${activeManagementMetrics.health.raw.cashToAccrual < getCalcThreshold(cfg.financial.min) ? 'text-rose-500' : 'text-stone-700'}`}>
-                        {(activeManagementMetrics.health.raw.cashToAccrual * 100).toFixed(0)}%
+                    <h3 className={`text-xl font-bold font-mono ${isHealthMetricBelowBenchmark(activeManagementMetrics.health.raw.cashToAccrual, cfg.financial) ? 'text-rose-500' : 'text-stone-700'}`}>
+                        {formatHealthPercentOrNA(activeManagementMetrics.health.raw.cashToAccrual, 0)}
                     </h3>
                   </div>
                   <div className="bg-stone-50 p-5 rounded-2xl border border-stone-100">
                     <p className="text-stone-400 text-xs font-bold mb-1">{cfg.sales.label} (銷售)</p>
-                    <h3 className={`text-xl font-bold font-mono ${activeManagementMetrics.health.raw.retailRatio < getCalcThreshold(cfg.sales.min) ? 'text-rose-500' : 'text-stone-700'}`}>
-                        {(activeManagementMetrics.health.raw.retailRatio * 100).toFixed(1)}%
+                    <h3 className={`text-xl font-bold font-mono ${isHealthMetricBelowBenchmark(activeManagementMetrics.health.raw.retailRatio, cfg.sales) ? 'text-rose-500' : 'text-stone-700'}`}>
+                        {formatHealthPercentOrNA(activeManagementMetrics.health.raw.retailRatio, 1)}
                     </h3>
                   </div>
                   <div className="bg-stone-50 p-5 rounded-2xl border border-stone-100">
                     <p className="text-stone-400 text-xs font-bold mb-1">{cfg.loyalty.label} (黏著)</p>
                     <h3 className="text-xl font-bold font-mono text-stone-700">
-                        {(activeManagementMetrics.health.raw.retention * 100).toFixed(1)}%
+                        {formatHealthPercentOrNA(activeManagementMetrics.health.raw.retention, 1)}
                     </h3>
                   </div>
                </div>
@@ -1127,7 +1119,7 @@ const StoreAnalysisView = () => {
                         {userRole === 'manager' ? '我的管理範圍' : brandPrefix} 體質異常監控 (本月)
                     </h3>
                     <span className="text-xs bg-stone-100 text-stone-400 px-2 py-1 rounded-lg">
-                        套用標準：{brandId === 'default' ? '預設' : brandId} (及格線 {formatThreshold(cfg.financial.min)})
+                        套用標準：{brandPrefix} (及格線 {formatThreshold(cfg.financial.min)})
                     </span>
                 </div>
 
@@ -1158,7 +1150,7 @@ const StoreAnalysisView = () => {
                             ) : (
                                 <div className="h-full flex flex-col items-center justify-center text-stone-400 opacity-50">
                                     <Award size={48} className="mb-2" />
-                                    <p className="text-sm font-bold">財務體質全數健康</p>
+                                    <p className="text-sm font-bold">{exceptionLists.evaluation?.financial?.ready ? "財務體質全數健康" : (exceptionLists.evaluation?.financial?.reason || "資料不足")}</p>
                                 </div>
                             )}
                         </div>
@@ -1193,12 +1185,12 @@ const StoreAnalysisView = () => {
                             ) : (
                                 <div className="h-full flex flex-col items-center justify-center text-stone-400 opacity-50">
                                     <Award size={48} className="mb-2" />
-                                    <p className="text-sm font-bold">顧客黏著度良好</p>
+                                    <p className="text-sm font-bold">{exceptionLists.evaluation?.retention?.ready ? "顧客黏著度良好" : (exceptionLists.evaluation?.retention?.reason || "資料不足")}</p>
                                 </div>
                             )}
                         </div>
                         <div className="p-3 bg-stone-50 text-xs text-stone-400 text-center border-t border-stone-100">
-                            篩選標準：{cfg.loyalty.label} &lt; {formatThreshold(getCalcThreshold(cfg.loyalty.min) - 0.1)}
+                            篩選標準：{cfg.loyalty.label} &lt; {cfg.loyalty.valid ? formatThreshold(cfg.loyalty.min - 0.1) : "未設定"}
                         </div>
                     </div>
 
@@ -1228,7 +1220,7 @@ const StoreAnalysisView = () => {
                             ) : (
                                 <div className="h-full flex flex-col items-center justify-center text-stone-400 opacity-50">
                                     <Award size={48} className="mb-2" />
-                                    <p className="text-sm font-bold">新客開發表現優異</p>
+                                    <p className="text-sm font-bold">{exceptionLists.evaluation?.sales?.ready ? "新客開發表現優異" : (exceptionLists.evaluation?.sales?.reason || "資料不足")}</p>
                                 </div>
                             )}
                         </div>
@@ -1253,16 +1245,20 @@ const StoreAnalysisView = () => {
                         <p className="text-xs text-stone-400">Five-Force Store Analysis</p>
                     </div>
                     <div className="flex items-center gap-2">
-                        <span className={`text-xs font-bold px-3 py-1 rounded-full border ${
-                              storeMetrics.health.scores.financial < 60 || storeMetrics.health.scores.loyalty < 60 || storeMetrics.health.scores.sales < 60
-                              ? "bg-rose-50 text-rose-600 border-rose-100" 
-                              : "bg-emerald-50 text-emerald-600 border-emerald-100"
-                        }`}>
-                             診斷：
-                             {storeMetrics.health.scores.financial < 60 ? "需注意現金流" : 
-                              storeMetrics.health.scores.loyalty < 60 ? "舊客流失風險" :
-                              storeMetrics.health.scores.sales < 60 ? "產品銷售偏弱" : "體質健康"}
-                        </span>
+                        {(() => {
+                          const diagnosis = getHealthDiagnosis(storeMetrics.health);
+                          return (
+                            <span className={`text-xs font-bold px-3 py-1 rounded-full border ${
+                              diagnosis.tone === "risk"
+                                ? "bg-rose-50 text-rose-600 border-rose-100"
+                                : diagnosis.tone === "healthy"
+                                  ? "bg-emerald-50 text-emerald-600 border-emerald-100"
+                                  : "bg-stone-50 text-stone-500 border-stone-200"
+                            }`}>
+                              診斷：{diagnosis.text}
+                            </span>
+                          );
+                        })()}
                         
                         <RadarGuideTooltip />
                     </div>
@@ -1293,7 +1289,7 @@ const StoreAnalysisView = () => {
                                 fillOpacity={0.4}
                             />
                             <Legend wrapperStyle={{ fontSize: '12px', paddingTop: '10px' }}/>
-                            <RechartsTooltip contentStyle={{ borderRadius: '12px', fontSize: '12px' }} formatter={(val) => (Number(val) || 0).toFixed(0)}/>
+                            <RechartsTooltip contentStyle={{ borderRadius: '12px', fontSize: '12px' }} formatter={(val) => formatScoreOrNA(val)}/>
                         </RadarChart>
                     </ResponsiveContainer>
                   </div>
@@ -1314,7 +1310,7 @@ const StoreAnalysisView = () => {
                   </div>
                   <div className="bg-white p-5 rounded-2xl border shadow-sm">
                     <p className="text-stone-400 text-xs font-bold mb-1">新客平均客單</p>
-                    <h3 className="text-2xl font-bold text-stone-700">{fmtMoney(storeMetrics.newCustomerASP)}</h3>
+                    <h3 className="text-2xl font-bold text-stone-700">{formatMoneyOrNA(storeMetrics.newCustomerASP)}</h3>
                   </div>
                   <div className="bg-white p-5 rounded-2xl border shadow-sm">
                     <p className="text-stone-400 text-xs font-bold mb-1">總新客留單</p>
@@ -1327,20 +1323,20 @@ const StoreAnalysisView = () => {
                   
                   <div className="bg-stone-50 p-5 rounded-2xl border border-stone-100">
                     <p className="text-stone-400 text-xs font-bold mb-1">{cfg.financial.label} (體質)</p>
-                    <h3 className={`text-xl font-bold font-mono ${storeMetrics.health.raw.cashToAccrual < getCalcThreshold(cfg.financial.min) ? 'text-rose-500' : 'text-stone-700'}`}>
-                        {(storeMetrics.health.raw.cashToAccrual * 100).toFixed(0)}%
+                    <h3 className={`text-xl font-bold font-mono ${isHealthMetricBelowBenchmark(storeMetrics.health.raw.cashToAccrual, cfg.financial) ? 'text-rose-500' : 'text-stone-700'}`}>
+                        {formatHealthPercentOrNA(storeMetrics.health.raw.cashToAccrual, 0)}
                     </h3>
                   </div>
                   <div className="bg-stone-50 p-5 rounded-2xl border border-stone-100">
                     <p className="text-stone-400 text-xs font-bold mb-1">{cfg.sales.label} (銷售)</p>
-                    <h3 className={`text-xl font-bold font-mono ${storeMetrics.health.raw.retailRatio < getCalcThreshold(cfg.sales.min) ? 'text-rose-500' : 'text-stone-700'}`}>
-                        {(storeMetrics.health.raw.retailRatio * 100).toFixed(1)}%
+                    <h3 className={`text-xl font-bold font-mono ${isHealthMetricBelowBenchmark(storeMetrics.health.raw.retailRatio, cfg.sales) ? 'text-rose-500' : 'text-stone-700'}`}>
+                        {formatHealthPercentOrNA(storeMetrics.health.raw.retailRatio, 1)}
                     </h3>
                   </div>
                   <div className="bg-stone-50 p-5 rounded-2xl border border-stone-100">
                     <p className="text-stone-400 text-xs font-bold mb-1">{cfg.loyalty.label} (黏著)</p>
                     <h3 className="text-xl font-bold font-mono text-stone-700">
-                        {(storeMetrics.health.raw.retention * 100).toFixed(1)}%
+                        {formatHealthPercentOrNA(storeMetrics.health.raw.retention, 1)}
                     </h3>
                   </div>
                </div>
