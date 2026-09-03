@@ -87,7 +87,7 @@ exports.onBrandSystemExclusionChange = systemExclusionFunctions.onBrandSystemExc
 
 // ==========================================
 // ★ Pre-Batch-5：Historical Target Coverage Read-only Audit
-// 只讀 monthly_targets_summary + store_lifecycle，分類歷史月份 migration readiness。
+// 只讀 monthly_targets_summary + store_lifecycle + brand-scoped System Exclusion，分類既有月份 migration readiness。
 // 不掃 Raw monthly_targets、不寫資料、不新增 polling / listener。
 // ==========================================
 const { createTargetCoverageAuditFunctions } = require("./targetCoverageAudit");
@@ -109,7 +109,11 @@ exports.auditExplicitZeroTargets = zeroTargetInventoryFunctions.auditExplicitZer
 // 不掃 Raw monthly_targets、不改 legacy target map / totals / counts。
 // ==========================================
 const { createTargetCoverageMigrationFunctions } = require("./targetCoverageMigration");
-const targetCoverageMigrationFunctions = createTargetCoverageMigrationFunctions({ admin, db });
+const targetCoverageMigrationFunctions = createTargetCoverageMigrationFunctions({
+  admin,
+  db,
+  markHistoricalSummariesDirtyForSystemExclusion,
+});
 exports.migrateHistoricalTargetCoverageMetadata = targetCoverageMigrationFunctions.migrateHistoricalTargetCoverageMetadata;
 
 
@@ -10404,7 +10408,7 @@ async function markHistoricalSummariesDirtyForSystemExclusion({ brandId, exclusi
     }
   }
   if (pendingWrites > 0) await batch.commit();
-  return { marked, revision: currentSnapshot.revision, source: "dashboard_summary_derived_scan" };
+  return { marked, scanned: summarySnap.size, revision: currentSnapshot.revision, source: "dashboard_summary_derived_scan" };
 }
 
 function getSummaryQueueFallbackStateRef(brandId) {

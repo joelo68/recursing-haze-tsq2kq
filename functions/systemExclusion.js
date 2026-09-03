@@ -71,6 +71,11 @@ function normalizeSystemExclusionStores(values = [], brandId = '') {
   return stores.sort((a, b) => a.localeCompare(b, 'zh-Hant'));
 }
 
+
+function systemExclusionStoresEqual(left = [], right = []) {
+  return JSON.stringify(Array.isArray(left) ? left : []) === JSON.stringify(Array.isArray(right) ? right : []);
+}
+
 function createSystemExclusionFunctions({
   admin,
   db,
@@ -97,6 +102,7 @@ function createSystemExclusionFunctions({
       const ref = getBrandSettingDoc(db, brandId, 'audit_exclusions');
       const auditRef = getBrandCollection(db, brandId, 'system_logs').doc();
       let result = null;
+      let changed = false;
 
       await db.runTransaction(async (transaction) => {
         const snap = await transaction.get(ref);
@@ -112,6 +118,12 @@ function createSystemExclusionFunctions({
           throw conflict;
         }
 
+        if (systemExclusionStoresEqual(current.stores, stores)) {
+          result = buildStoredSystemExclusionSnapshot(current, brandId, normalizeStoreLifecycleCore);
+          return;
+        }
+
+        changed = true;
         const nextRevision = current.revision + 1;
         const nowText = new Date().toISOString();
         const payload = {
@@ -146,7 +158,7 @@ function createSystemExclusionFunctions({
         result = buildStoredSystemExclusionSnapshot({ ...payload, revision: nextRevision, stores }, brandId, normalizeStoreLifecycleCore);
       });
 
-      return res.status(200).json({ ok: true, systemExclusion: { ...result, ready: true } });
+      return res.status(200).json({ ok: true, changed, systemExclusion: { ...result, ready: true } });
     } catch (error) {
       if (error?.code === 'SYSTEM_EXCLUSION_CONFLICT') {
         const current = error.current || {};
@@ -210,5 +222,6 @@ module.exports = {
   resolveStrictSystemExclusionBrandId,
   parseExpectedSystemExclusionRevision,
   normalizeSystemExclusionStores,
+  systemExclusionStoresEqual,
   createSystemExclusionFunctions,
 };

@@ -1126,6 +1126,51 @@ export default function App() {
     });
   }, [currentBrandId]);
 
+  // ★ System Exclusion authority：單文件、品牌隔離、event-driven 即時來源。
+  // 從 fetchGlobalData 的 optional point-read 拆出，避免一次非必要設定讀取失敗後
+  // current/detail Formal authority 永久停在 NOT_READY；也讓多管理者 OCC 更新能即時同步 revision。
+  // Reads：每次登入/切品牌初始 1 doc，之後只在 audit_exclusions 真正變更時增加 1 doc；無 polling。
+  useEffect(() => {
+    const brandId = String(currentBrandId || "").toLowerCase();
+    if (!user || !brandId) return undefined;
+
+    const exclusionRef = getDocPath("audit_exclusions");
+    const unsubscribe = onSnapshot(
+      exclusionRef,
+      (snap) => {
+        trackReadSource(
+          "system_exclusion_authority_live",
+          snap.exists() ? 1 : 0,
+          getStableReadMeta("system_exclusion_authority_live")
+        );
+        const nextState = normalizeSystemExclusionState(
+          snap.exists() ? (snap.data() || {}) : {},
+          brandId,
+          { ready: true }
+        );
+        setSystemExclusionState(nextState);
+        setAuditExclusions(nextState.stores);
+      },
+      (error) => {
+        console.error("System Exclusion authority 監聽失敗:", error);
+        setSystemExclusionState((prev) => ({
+          ...(String(prev?.brandId || "").toLowerCase() === brandId ? prev : {
+            brandId,
+            version: "system-exclusion-v1",
+            revision: 0,
+            stores: [],
+            storeSet: new Set(),
+            legacy: true,
+          }),
+          ready: false,
+          error,
+        }));
+      }
+    );
+
+    return () => unsubscribe();
+  }, [user, currentBrandId, getDocPath, getStableReadMeta]);
+
   // ★ Guided Device Approval：正式模式下，只要「自己的新裝置」正在等待確認，
   // 原本已信任的裝置會主動進入確認流程，不再要求一般使用者自己注意 Header Badge。
   // 先透過極小的 inbox pendingCount 判斷；只有真的有待確認時，才額外查最多 10 筆自己的 pending request。
@@ -2087,7 +2132,6 @@ export default function App() {
             { key: "permissions", required: false, promise: withTimeout(getDoc(getDocPath("permissions")), "權限設定") },
             { key: "therapists", required: true, promise: withTimeout(getDocs(getCollectionPath("therapists")), "管理師名單") },
             { key: "trainerAuth", required: true, promise: withTimeout(getDoc(getDocPath("trainer_auth")), "教專帳號") },
-            { key: "auditExclusions", required: false, promise: withTimeout(getDoc(getDocPath("audit_exclusions")), "回報排除設定") },
             { key: "securityConfig", required: false, promise: withTimeout(getDoc(getDocPath("security_config")), "安全設定") },
             { key: "featureFlags", required: false, promise: withTimeout(getDoc(getDocPath("feature_flags")), "功能設定") },
             { key: "directorAuth", required: true, promise: withTimeout(getDoc(getDocPath("director_auth")), "高階主管帳號") },
@@ -2101,7 +2145,7 @@ export default function App() {
             resultMap[tasks[index].key] = result;
           });
 
-          trackReadSource("fetchGlobalData_core_docs", 10, getStableReadMeta("fetchGlobalData_core_docs"));
+          trackReadSource("fetchGlobalData_core_docs", 9, getStableReadMeta("fetchGlobalData_core_docs"));
           const delegationResult = resultMap.delegations;
           trackReadSource(
             "fetchGlobalData_delegations",
@@ -2227,15 +2271,6 @@ export default function App() {
           applyOptionalDoc("permissions", (snap) => {
             setPermissions(snap.exists() ? snap.data() : DEFAULT_PERMISSIONS);
           }, "permissions ");
-          applyOptionalDoc("auditExclusions", (snap) => {
-            const nextSystemExclusion = normalizeSystemExclusionState(
-              snap.exists() ? (snap.data() || {}) : {},
-              currentBrandId,
-              { ready: true }
-            );
-            setSystemExclusionState(nextSystemExclusion);
-            setAuditExclusions(nextSystemExclusion.stores);
-          }, "audit_exclusions ");
           applyOptionalDoc("securityConfig", (snap) => {
             setSecurityConfig(snap.exists() ? normalizeSecurityConfig(snap.data()) : DEFAULT_SECURITY_CONFIG);
           }, "security_config ");

@@ -13,6 +13,10 @@ const {
   getCanonicalStoreName: getCanonicalLifecycleStoreName,
 } = require('./storeLifecycle');
 const {
+  normalizeStoredSystemExclusionProfile,
+  buildStoredSystemExclusionSnapshot,
+} = require('./systemExclusionContract');
+const {
   TARGET_COVERAGE_AUDIT_VERSION,
   TARGET_COVERAGE_AUDIT_SCOPE,
   TARGET_COVERAGE_AUDIT_CLASSIFICATION,
@@ -36,6 +40,7 @@ const TARGET_COVERAGE_MIGRATION_ALLOWED_FIELDS = Object.freeze([
   'cashMissingStores',
   'accrualMissingStores',
   'targetAudit',
+  'systemExclusionSnapshot',
   'coverageSource',
   'coverageUpdatedAt',
   'coverageUpdatedAtText',
@@ -138,6 +143,9 @@ function buildMetadataOnlyCoveragePatch({ auditRow = {}, coverageUpdatedAt = nul
     cashMissingStores: Array.isArray(coverage.cashMissingStores) ? coverage.cashMissingStores : [],
     accrualMissingStores: Array.isArray(coverage.accrualMissingStores) ? coverage.accrualMissingStores : [],
     targetAudit: coverage.targetAudit && typeof coverage.targetAudit === 'object' ? coverage.targetAudit : {},
+    systemExclusionSnapshot: coverage.systemExclusionSnapshot && typeof coverage.systemExclusionSnapshot === 'object'
+      ? { ...coverage.systemExclusionSnapshot }
+      : null,
     coverageSource: TARGET_COVERAGE_MIGRATION_SOURCE,
     coverageUpdatedAt,
     coverageUpdatedAtText: String(coverageUpdatedAtText || ''),
@@ -150,7 +158,7 @@ function buildMetadataOnlyCoveragePatch({ auditRow = {}, coverageUpdatedAt = nul
   return patch;
 }
 
-function buildAtomicMigrationPlan({ brandId, yearMonths = [], summariesByMonth = {}, lifecycleMaster = {} } = {}) {
+function buildAtomicMigrationPlan({ brandId, yearMonths = [], summariesByMonth = {}, lifecycleMaster = {}, systemExclusionData = {} } = {}) {
   const normalizedBrandId = normalizeTargetCoverageBrandId(brandId);
   if (!normalizedBrandId) throw new Error('UNSUPPORTED_TARGET_COVERAGE_BRAND');
 
@@ -170,6 +178,7 @@ function buildAtomicMigrationPlan({ brandId, yearMonths = [], summariesByMonth =
       yearMonth,
       summaryData: entry.data || {},
       lifecycleMaster,
+      systemExclusionData,
     });
   });
 
@@ -213,7 +222,7 @@ function persistedCoverageMatchesExpected(persisted = {}, expectedPatch = {}) {
   });
 }
 
-function createTargetCoverageMigrationFunctions({ admin, db }) {
+function createTargetCoverageMigrationFunctions({ admin, db, markHistoricalSummariesDirtyForSystemExclusion = null }) {
   const { onRequest } = require('firebase-functions/v2/https');
   const {
     requireFirebaseRequestAuth,
@@ -255,6 +264,7 @@ function createTargetCoverageMigrationFunctions({ admin, db }) {
 
       const paths = getTargetCoveragePaths(brandId);
       const lifecycleRef = db.doc(paths.lifecycleMaster);
+      const systemExclusionRef = db.doc(paths.systemExclusion);
       const summaryRefs = Object.fromEntries(yearMonths.map((yearMonth) => [
         yearMonth,
         db.doc(`${paths.monthlyTargetSummary}/${yearMonth}`),
@@ -263,11 +273,28 @@ function createTargetCoverageMigrationFunctions({ admin, db }) {
       const transactionResult = await db.runTransaction(async (transaction) => {
         // All reads occur before any write. Firestore retries the whole transaction if either
         // Lifecycle or any target Summary changes concurrently, so Phase A results are never trusted stale.
-        const lifecycleSnap = await transaction.get(lifecycleRef);
-        const summarySnaps = await Promise.all(yearMonths.map((yearMonth) => transaction.get(summaryRefs[yearMonth])));
+        const authoritySnaps = await Promise.all([
+          transaction.get(lifecycleRef),
+          transaction.get(systemExclusionRef),
+          ...yearMonths.map((yearMonth) => transaction.get(summaryRefs[yearMonth])),
+        ]);
+        const lifecycleSnap = authoritySnaps[0];
+        const systemExclusionSnap = authoritySnaps[1];
+        const summarySnaps = authoritySnaps.slice(2);
         const lifecycleMaster = lifecycleSnap.exists
           ? (lifecycleSnap.data() || {})
           : { datasetStatus: 'BUILDING', stores: {} };
+        const systemExclusionData = systemExclusionSnap.exists ? (systemExclusionSnap.data() || {}) : {};
+        const systemExclusionProfile = normalizeStoredSystemExclusionProfile(
+          systemExclusionData,
+          brandId,
+          normalizeStoreLifecycleCore
+        );
+        const currentSystemExclusionSnapshot = buildStoredSystemExclusionSnapshot(
+          systemExclusionProfile,
+          brandId,
+          normalizeStoreLifecycleCore
+        );
         const summariesByMonth = {};
         const beforeLegacyByMonth = {};
 
@@ -287,6 +314,7 @@ function createTargetCoverageMigrationFunctions({ admin, db }) {
           yearMonths,
           summariesByMonth,
           lifecycleMaster,
+          systemExclusionData,
         });
 
         if (!plan.canApply) {
@@ -298,6 +326,7 @@ function createTargetCoverageMigrationFunctions({ admin, db }) {
               datasetStatus: String(lifecycleMaster.datasetStatus || 'BUILDING'),
               revision: Number(lifecycleMaster.revision || 0),
             },
+            systemExclusion: currentSystemExclusionSnapshot,
           };
         }
 
@@ -325,6 +354,8 @@ function createTargetCoverageMigrationFunctions({ admin, db }) {
             datasetStatus: String(lifecycleMaster.datasetStatus || 'BUILDING'),
             revision: Number(lifecycleMaster.revision || 0),
           },
+          systemExclusion: currentSystemExclusionSnapshot,
+          systemExclusionData,
           coverageUpdatedAtText: nowText,
         };
       });
@@ -385,15 +416,17 @@ function createTargetCoverageMigrationFunctions({ admin, db }) {
 
       const allVerified = persistedVerification.every((row) => row.verified === true);
       const writtenCount = writtenMonths.length;
-      const minimumFirestoreReads = 3 + 1 + yearMonths.length + writtenCount;
+      const minimumFirestoreReadsBeforeReconciliation = 3 + 1 + 1 + yearMonths.length + writtenCount;
       const readEstimate = {
         firebaseAuthVerification: 0,
         securityFirestoreReads: 3,
         transactionLifecycleReads: 1,
+        transactionSystemExclusionReads: 1,
         transactionMonthlyTargetSummaryReads: yearMonths.length,
         persistedVerificationReads: writtenCount,
         rawMonthlyTargetsReads: 0,
-        minimumFirestoreReads,
+        minimumFirestoreReads: minimumFirestoreReadsBeforeReconciliation,
+        minimumFirestoreReadsBeforeReconciliation,
         transactionRetriesMayAddReads: true,
       };
 
@@ -420,6 +453,41 @@ function createTargetCoverageMigrationFunctions({ admin, db }) {
         });
       }
 
+      let historicalReconciliation = null;
+      if (typeof markHistoricalSummariesDirtyForSystemExclusion === 'function') {
+        try {
+          historicalReconciliation = await markHistoricalSummariesDirtyForSystemExclusion({
+            brandId,
+            exclusionData: transactionResult.systemExclusionData || {},
+          });
+        } catch (error) {
+          console.error('Target Coverage migration historical System Exclusion reconciliation failed', error);
+          return res.status(500).json({
+            ok: false,
+            migrationApplied: writtenCount > 0,
+            atomic: true,
+            metadataOnly: true,
+            migrationVersion: TARGET_COVERAGE_MIGRATION_VERSION,
+            brandId,
+            writtenMonths,
+            skippedMonths,
+            writtenCount,
+            skippedCount: skippedMonths.length,
+            persistedVerification,
+            allVerified: true,
+            readEstimate,
+            firestoreWrites: writtenCount,
+            systemExclusion: transactionResult.systemExclusion || null,
+            reconciliationFailed: true,
+            message: 'Target Coverage Metadata 已驗證寫入，但歷史 Summary 排除版本 reconciliation 失敗；請停止 Frontend 發布並檢查後端紀錄',
+          });
+        }
+      }
+
+      readEstimate.reconciliationDerivedSummaryReads = Number(historicalReconciliation?.scanned || 0);
+      readEstimate.reconciliationFlagWrites = Number(historicalReconciliation?.marked || 0);
+      readEstimate.minimumFirestoreReads = minimumFirestoreReadsBeforeReconciliation + readEstimate.reconciliationDerivedSummaryReads;
+
       return res.status(200).json({
         ok: true,
         migrationApplied: writtenCount > 0,
@@ -429,6 +497,8 @@ function createTargetCoverageMigrationFunctions({ admin, db }) {
         brandId,
         auditScope: TARGET_COVERAGE_AUDIT_SCOPE,
         lifecycle: transactionResult.lifecycle,
+        systemExclusion: transactionResult.systemExclusion || null,
+        historicalReconciliation,
         requestedMonths: yearMonths,
         writtenMonths,
         skippedMonths,
@@ -437,6 +507,7 @@ function createTargetCoverageMigrationFunctions({ admin, db }) {
         blockedCount: 0,
         rawMonthlyTargetsReads: 0,
         firestoreWrites: writtenCount,
+        reconciliationFlagWrites: Number(historicalReconciliation?.marked || 0),
         persistedVerification,
         allVerified: true,
         readEstimate,
