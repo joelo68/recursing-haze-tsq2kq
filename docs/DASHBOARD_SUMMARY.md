@@ -1193,6 +1193,67 @@ polling = 0
 
 Stage C 沒有把 Dashboard historical path改回 full-month Raw listener。
 
+## Excluded own-store historical self-view（2026-09-05 Production Confirmed）
+
+System Excluded store 的 persisted Summary row可保留 traceability / additive compatibility fields。2026-09-05 起，該 row另可在**店家自己的 Dashboard self-view**作為 historical input，但這不改變 Formal trust：
+
+```text
+Summary row retained
+→ can feed own-store self-view
+
+Summary row retained
+!= Formal eligible
+!= Formal ranking eligible
+```
+
+Historical self-view source：
+
+```text
+trusted dashboard_summary.stores.{store}
+  retained cash / refund / skincareRefund
+  retained accrual / operationalAccrual
++
+selected-month monthly_targets_summary
+        ↓
+src/utils/storeSelfView.js
+        ↓
+reapply canonical KPI / target semantics
+        ↓
+Dashboard self-view
+```
+
+Self-view 不直接採用 excluded row 的 persisted Formal eligibility；也不修改 `systemExclusionSnapshot`、Target Coverage denominator 或 Ranking Summary。
+
+Month trust：
+
+```text
+target Summary month matches selected month
+→ target map usable for self-view
+
+month mismatch / target incomplete
+→ TARGET_INCOMPLETE / N/A
+```
+
+Zero contract：
+
+```text
+configured base target 0 → VALID_ZERO
+achievement denominator 0 → N_A
+```
+
+Read boundary：
+
+```text
+new historical Raw read = 0
+new listener            = 0
+new query               = 0
+new point read          = 0
+new polling             = 0
+```
+
+所以 self-view visibility 不得成為重新開啟 full-month `daily_reports` / raw `monthly_targets` fallback 的理由。
+
+
 # 31. Batch 6B Store Health Historical Summary Trust（PRODUCTION CONFIRMED）
 
 Batch 6B 在既有 `dashboard-summary-v2` / `summary-semantics-v1` 上增加 Store Health feeder trust metadata；沒有把 current month 改成 historical Summary path。

@@ -1871,6 +1871,9 @@ tests/zeroTargetRetirement.test.js       → retirement regression
 src/App.jsx
 src/utils/systemExclusion.js
 src/utils/currentDetailFormalConsumer.js
+src/utils/storeSelfView.js
+src/hooks/useDashboardStats.js
+src/components/StorePerformanceView.jsx
 src/components/DailyView.jsx
 functions/systemExclusionContract.js
 functions/systemExclusion.js
@@ -1887,6 +1890,9 @@ Regression：
 tests/systemExclusion.test.js
 tests/currentDetailFormalConsumer.test.js
 tests/currentDetailFormalWiring.test.js
+tests/storeSelfView.test.js
+tests/systemExclusionPresentation.test.js
+tests/storePerformanceNullSafety.test.js
 tests/dailyObservedTotals.test.js
 tests/splitRuntimeRecoveryWiring.test.js
 tests/splitRuntimeRepairSemantics.test.js
@@ -1901,6 +1907,65 @@ Formal Eligible = Lifecycle Eligible AND NOT System Excluded
 System Excluded store 的 Raw 保留；不得用歷史 Raw batch delete 來「完成排除」。
 
 所有 consumer 都要沿用相同 authority，不得在 Dashboard / Daily / Annual / Telegram 各自維護不同排除清單。
+
+## Store Self-View exception
+
+System Exclusion 的 aggregate eligibility 與 store-account own visibility 必須分開：
+
+```text
+Formal aggregation eligibility
+!=
+Store self-view visibility
+```
+
+允許 exception 的唯一通用條件：
+
+```text
+userRole = store
++ selected / effective store belongs to officialStores
++ current brand System Exclusion authority says excluded
+```
+
+此時 Dashboard 可以進入 isolated self-view，但：
+
+```text
+formalConsumerActive = false
+excludedFromFormalScope = true
+```
+
+不得把 self-view data 再送回：
+
+```text
+company / manager aggregate
+Regional
+Ranking
+Annual
+Benchmark
+Target Coverage denominator
+Formal Store Health aggregate / risk sample
+```
+
+禁止：
+
+```text
+if (storeName === "...") ...
+if (brandId === "..." && storeName === "...") ...
+```
+
+也禁止把 delegation / temporary management 當成 own-store exception。`officialStores` 是 ownership gate；delegated excluded store 仍維持 Formal exclusion。
+
+Mixed scope 不可混算：若同一 store account 同時有一般店與 excluded own store，只有明確 excluded own-store scope可以進 self-view；不得將 excluded self-view row加入一般 Formal aggregate。
+
+Historical self-view 不得因「想看到歷史」而新增 full-month Raw query。現行 contract：
+
+```text
+trusted dashboard_summary retained row
++ selected-month monthly_targets_summary
+→ canonical self-view recalculation
+```
+
+`row exists != Formal eligible`；self-view只借用 retained row作輸入，不改 persisted Formal eligibility。
+
 
 ## Snapshot / fail-closed
 

@@ -1569,6 +1569,80 @@ Raw daily_reports / monthly_targets / audit records 保留
 正式 KPI / target / achievement / ranking / Summary / Annual consumer scope 排除
 ```
 
+## Store account self-view branch（2026-09-05 Production Confirmed）
+
+Formal exclusion 與 own-store visibility 是兩個不同 authority：
+
+```text
+current brand System Exclusion state
+        ↓
+Dashboard presentation scope
+        ├─ management / Formal consumer
+        │    → remove excluded store
+        │
+        └─ userRole = store
+             + store ∈ officialStores
+             + excluded
+             → preserve own store for self-view
+```
+
+Self-view 不改 Formal scope。
+
+Current month：
+
+```text
+existing scoped daily_reports
++ own excluded official store
++ monthly_targets_summary
+→ buildCurrentStoreSelfViewScope
+→ canonical formalNetCash / brand-specific formalAccrual / target validity
+→ Dashboard self-view
+```
+
+Historical month：
+
+```text
+trusted dashboard_summary retained store row
++ own excluded official store
++ selected-month monthly_targets_summary
+→ buildHistoricalStoreSelfViewScope
+→ reapply canonical KPI / target semantics
+→ Dashboard self-view
+```
+
+Historical retained row：
+
+```text
+row exists
+→ can be used as self-view input
+!=
+Formal eligible
+```
+
+Self-view target Summary 必須 month-anchored；月份不符或 target 不完整時 fail closed 為 `TARGET_INCOMPLETE / N/A`。Explicit base target `0` 仍是 `VALID_ZERO`，但 achievement denominator `0` 仍是 `N_A`。
+
+Scope isolation：
+
+```text
+Delegated excluded store        → no own-store exception
+Mixed self-view + Formal data   → do not blend
+Ranking / Regional / Annual     → remain Formal-only
+Target Coverage / Benchmark     → remain Formal-only
+Therapist excluded own-store    → existing own-store detail path only
+```
+
+Reads：
+
+```text
+new listener   = 0
+new query      = 0
+new point read = 0
+new polling    = 0
+```
+
+Historical self-view 使用既有 Summary-first source，不因 self-view 額外 full-scan Raw history。
+
+
 ## Authority write flow
 
 ```text

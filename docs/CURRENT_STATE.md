@@ -2,7 +2,185 @@
 
 > 用途：記錄「目前正式環境已確認到哪個狀態」。這不是 CHANGELOG。  
 > 優先順序：使用者提供的目前正式部署 source > 本檔案 > 其他 Knowledge Base 文件。  
-> 最後整併更新：**2026-09-03（UTC+8）**。
+> 最後整併更新：**2026-09-05（UTC+8）**。
+
+# Latest Production Runtime Override — 2026-09-05（System Exclusion Store Self-View）
+
+> 本節是目前最高優先的 System Exclusion / Dashboard self-view Production runtime 狀態。它補充而不取消既有「全歷史 Formal 排除」規則；下方 Batch 6B / Stage C 舊節保留當時 evidence，若語意衝突以最新正式 source、Production readback 與本節為準。
+
+正式 runtime：
+
+```text
+Official working directory    = ~/cyj-new
+branch                        = main
+Runtime implementation commit = a08cac205f0f5b000bda514afd5e58be19002566
+CURRENT_APP_VERSION           = 3.5.3（未提高）
+Frontend production publish   = GitHub Pages / gh-pages 972cb79b83505cb46c8130106d5d634cbb7ab590
+Backend / Functions           = unchanged
+Firestore Rules               = unchanged
+Firestore paths               = unchanged
+```
+
+## Formal exclusion vs store self-view visibility
+
+System Exclusion 的正式 aggregate contract 維持：
+
+```text
+Formal Eligible Store
+= Lifecycle Eligible
+AND NOT System Excluded
+```
+
+但 `System Excluded` 不再等同「該店自己的 store account 也不可查看自己店資料」。
+
+目前正式邊界：
+
+```text
+Formal aggregation eligibility
+!=
+Store self-view visibility
+```
+
+對任何品牌、任何 System Excluded store：
+
+```text
+其他管理角色 / Formal consumer
+→ excluded store 不進 company / region / ranking / Annual / Benchmark / Target Coverage / Formal aggregate
+
+該店自己的 store role account
++ store 屬於自己的 officialStores
+→ Dashboard 可以保留該 excluded store 的自店檢視
+→ 不恢復 Formal eligibility
+→ 不取得 Formal ranking authority
+```
+
+Self-view exception 依 role + ownership + current brand System Exclusion authority 動態判斷；不得以品牌名或店名 hardcode。Delegation / 托管不會把 excluded store 提升為 own-store self-view exception。
+
+若 store account 同時有一般店與 excluded own store，excluded store 只能在明確自店 scope 下走 self-view；不得把 self-view row 混入一般 Formal aggregate。
+
+## Runtime owner / data source
+
+新增 pure/self-view owner：
+
+```text
+src/utils/storeSelfView.js
+```
+
+Dashboard integration：
+
+```text
+src/hooks/useDashboardStats.js
+src/components/StorePerformanceView.jsx
+```
+
+Current month self-view：
+
+```text
+existing scoped daily_reports already loaded for Dashboard
+→ own excluded store scope
+→ reapply canonical KPI contracts
+→ current self-view
+```
+
+Historical self-view：
+
+```text
+verified / trusted dashboard_summary retained per-store row
++ selected-month monthly_targets_summary
+→ own excluded store scope
+→ reapply canonical KPI / target semantics locally
+→ historical self-view
+```
+
+Historical self-view **不把 excluded Summary row 升格為 Formal authority**。它只重用既有 retained additive / compatibility fields；Formal Summary / Ranking / Coverage eligibility 仍維持排除。
+
+Target 規則仍維持：
+
+```text
+base target 0        = VALID_ZERO / configured
+denominator 0        = N_A
+missing target       = TARGET_INCOMPLETE / N/A
+wrong-month target Summary = fail closed
+```
+
+StorePerformance presentation 對 Formal 與 self-view 都維持 nullable safety；`null / N_A / incomplete` 不得被格式化成 `$0` / `0%`。
+
+## Annual / Ranking / Regional boundary
+
+此次 enhancement 只提供 excluded **own-store Dashboard self-view**。
+
+```text
+Annual
+Regional
+Ranking
+Target Coverage
+Formal Store Health / Benchmark
+company / manager Formal scope
+```
+
+仍使用原 System Exclusion Formal authority，不因 self-view exception 重新納入 excluded store。
+
+Therapist mode 在 excluded own-store self-view 時沿用既有 own-store detail scope；不得藉此恢復 company Formal scope。
+
+## Reads / listener topology
+
+本次 runtime 沒有新增 Firestore primitive：
+
+```text
+new listener   = 0
+new query      = 0
+new point read = 0
+new polling    = 0
+```
+
+Historical self-view 優先使用既有 Summary-first 資料，不重新打開 full-month Raw historical read。
+
+## Validation / deployment / Production confirmation
+
+Detached validation：
+
+```text
+Targeted regression        = 75 / 75 PASS
+Full repository regression = 453 / 453 PASS
+npm run build               = PASS
+Read / listener guard       = PASS
+Generic store rule          = PASS
+Formal scope isolation      = PASS
+CURRENT_APP_VERSION         = 3.5.3 unchanged
+```
+
+Promotion / deployment：
+
+```text
+main / origin/main = a08cac205f0f5b000bda514afd5e58be19002566
+gh-pages           = 972cb79b83505cb46c8130106d5d634cbb7ab590
+Frontend           = DEPLOYED
+Functions          = NO DEPLOY
+Rules              = NO DEPLOY
+Firebase Hosting   = NO DEPLOY
+```
+
+Production smoke 已由使用者確認正常：
+
+```text
+excluded own-store account self-view  PASS
+management Formal exclusion remains   PASS
+normal non-excluded store regression  PASS
+cross-brand scope isolation           PASS
+no new browser runtime error          PASS
+```
+
+Final status：
+
+```text
+IMPLEMENTED          = YES
+VALIDATED            = YES
+COMMITTED / PUSHED   = YES
+FRONTEND DEPLOYED    = YES
+PRODUCTION CONFIRMED = YES
+CURRENT_APP_VERSION  = 3.5.3 unchanged
+DOCUMENTATION IMPACT = CLOSED by this docs-only closeout after promotion
+```
 
 # Latest Production Runtime Override — 2026-09-03（Batch 6B Store Health Consistency）
 

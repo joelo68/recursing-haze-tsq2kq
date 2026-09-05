@@ -1,7 +1,7 @@
 # ARCHITECTURE.md
 
 > 本文件描述目前正式部署版本的系統架構。  
-> 已整併至 2026-09-03 System Exclusion A+B + Stage C recovery。
+> 已整併至 2026-09-05 System Exclusion Store Self-View closeout。
 > `CURRENT_STATE.md` 專門區分「已正式確認」、「待部署」與「Production 觀察中」的 Security 工作。
 
 # 1. 高階架構
@@ -740,6 +740,43 @@ brands/{brandId}/settings/audit_exclusions
 Frontend 不常駐監聽大型 exclusion collection；`App.jsx` 只維持目前 brand 的單一 Settings doc realtime authority。
 
 Derived Data 用 `systemExclusionSnapshot` 做 revision trust；Current Detail 直接使用 live authority。Historical Summary stale 時沿用既有 dirty / repair worker，不另建第二套 writer。
+
+## 18.1 Store Self-View is a separate presentation authority
+
+System Exclusion 的 Formal scope 不變，但 Dashboard 另有一條受限的 own-store self-view branch：
+
+```text
+System Excluded
+        ├─ Formal consumers
+        │    → excluded
+        │
+        └─ store role + own official store
+             → Dashboard self-view only
+             → NOT Formal eligible
+```
+
+Owner：
+
+```text
+src/utils/storeSelfView.js
+src/hooks/useDashboardStats.js
+src/components/StorePerformanceView.jsx
+```
+
+Self-view 必須同時滿足：
+
+```text
+role = store
++ store ∈ officialStores
++ current brand System Exclusion authority confirms excluded
+```
+
+Delegated / temporary managed excluded store 不取得 own-store exception；brand / store name不得 hardcode。
+
+Current self-view 重用既有 scoped detail rows；historical self-view 重用 trusted `dashboard_summary` retained store row與 selected-month `monthly_targets_summary`，重新套 canonical KPI contract。這條 branch 不會把 excluded row重新標成 Formal eligible，也不把它加入 Ranking / Regional / Annual / Benchmark / Target Coverage。
+
+本次沒有新增 listener / query / point read / polling；historical self-view 維持 Summary-first，不為了自店可見性重新打開 full-month Raw historical read。
+
 
 # 19. Reporting Completeness vs Observed Actual
 

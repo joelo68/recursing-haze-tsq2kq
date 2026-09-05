@@ -1,7 +1,7 @@
 # SYSTEM_SOURCE_MAP.md
 
 > 狀態：Project Knowledge Base / Source Map v0.1
-> 已整併至 2026-09-03 Batch 6B Store Health Consistency closeout；runtime implementation lineage = `47a8c3fb0711c194764da36c61752be4bc8ef579`，`CURRENT_APP_VERSION = 3.5.3`，`~/cyj-new` 為唯一正式 Source of Truth。docs-only closeout commit 不改變 runtime lineage；各功能的部署／Production Confirmation 仍以 `CURRENT_STATE.md` 為準。
+> 已整併至 2026-09-05 System Exclusion Store Self-View closeout；latest runtime implementation lineage = `a08cac205f0f5b000bda514afd5e58be19002566`，`CURRENT_APP_VERSION = 3.5.3`，`~/cyj-new` 為唯一正式 Source of Truth。docs-only closeout commit 不改變 runtime lineage；各功能的部署／Production Confirmation 仍以 `CURRENT_STATE.md` 為準。
 > 禁止以舊對話、舊版檔案、AI 記憶或未提供的檔案補足事實。
 > 無法由目前正式程式確認的內容，必須標記為「未由目前正式來源確認」。
 
@@ -2581,6 +2581,36 @@ src/utils/dailyObservedTotals.js
   → reportedRows observed cumulative totals pure helper
 ```
 
+### Store Self-View owners（2026-09-05）
+
+```text
+src/utils/storeSelfView.js
+  → System Excluded own-store Dashboard self-view pure authority
+  → role + officialStores + System Exclusion ownership gate
+  → current detail self-view KPI / target aggregation
+  → historical retained Summary-row self-view aggregation
+
+src/hooks/useDashboardStats.js
+  → Dashboard presentation scope keeps own excluded official store for store role
+  → switches between Formal scope and isolated self-view scope
+  → explicit empty Formal scope remains fail-closed
+  → self-view never restores company Formal ranking scope
+
+src/components/StorePerformanceView.jsx
+  → self-view label / nullable KPI presentation
+  → Formal + self-view both preserve N/A vs real zero semantics
+```
+
+Self-view data authority：
+
+```text
+current  → existing scoped detail rows + monthly_targets_summary
+history  → trusted dashboard_summary retained row + monthly_targets_summary
+```
+
+It does **not** add a new Firestore source or persisted schema.
+
+
 ## Backend owners
 
 ```text
@@ -2620,6 +2650,9 @@ tests/currentDetailFormalWiring.test.js
 tests/dailyObservedTotals.test.js
 tests/splitRuntimeRecoveryWiring.test.js
 tests/splitRuntimeRepairSemantics.test.js
+tests/storeSelfView.test.js
+tests/systemExclusionPresentation.test.js
+tests/storePerformanceNullSafety.test.js
 ```
 
 Stage C current source changed exactly：
