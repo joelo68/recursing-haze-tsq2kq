@@ -41,17 +41,19 @@ const StorePerformanceView = ({ dashboardStats, myStoreRankings, brandInfo }) =>
 
   const { grandTotal: storeGrandTotal, dailyTotals, totalAchievement, daysPassed, daysInMonth } = dashboardStats;
   const formalConsumerActive = dashboardStats.formalConsumerActive === true;
+  const storeSelfViewActive = dashboardStats.storeSelfViewActive === true;
+  const strictKpiPresentation = formalConsumerActive || storeSelfViewActive;
   const isFiniteKpi = (value) => typeof value === "number" && Number.isFinite(value);
   const cashAchievementAvailable = isFiniteKpi(totalAchievement);
   const accrualAchievementAvailable = isFiniteKpi(dashboardStats.totalAccrualAchievement);
   const timeProgress = daysInMonth > 0 ? (daysPassed / daysInMonth) * 100 : 0;
   const paceGap = cashAchievementAvailable ? totalAchievement - timeProgress : null;
-  const formatKpiMoney = (value) => (formalConsumerActive && !isFiniteKpi(value) ? "N/A" : fmtMoney(value));
+  const formatKpiMoney = (value) => (strictKpiPresentation && !isFiniteKpi(value) ? "N/A" : fmtMoney(value));
   const formatKpiPercent = (value) => (isFiniteKpi(value) ? `${value.toFixed(0)}%` : "N/A");
   const formatProjectionTargetRate = (projection, target) => {
     const targetValue = Number(target);
-    if (formalConsumerActive && (!isFiniteKpi(projection) || !isFiniteKpi(target))) return "N/A";
-    if (formalConsumerActive && targetValue === 0) return "N/A";
+    if (strictKpiPresentation && (!isFiniteKpi(projection) || !isFiniteKpi(target))) return "N/A";
+    if (strictKpiPresentation && targetValue === 0) return "N/A";
     return targetValue > 0 ? `${((Number(projection || 0) / targetValue) * 100).toFixed(0)}%` : "0%";
   };
   const annualKpiBenchmark = dashboardStats.annualKpiBenchmark || {};
@@ -335,6 +337,11 @@ const StorePerformanceView = ({ dashboardStats, myStoreRankings, brandInfo }) =>
     <div className="space-y-8 animate-in fade-in slide-in-from-bottom-4 duration-500 w-full min-w-0">
       <ProjectionInfoDrawer />
 
+      {storeSelfViewActive && (
+        <div className="rounded-2xl border border-amber-100 bg-amber-50/60 px-4 py-3 text-xs font-bold leading-relaxed text-amber-800">
+          自店檢視｜本店目前不納入公司正式營運統計；此頁仍保留你自己店家的營運資料供日常查看。
+        </div>
+      )}
 
       {/* 我的店家戰情卡 (僅店經理顯示) */}
       {userRole === 'store' && myStoreRankings.length > 0 && (

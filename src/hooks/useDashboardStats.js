@@ -11,6 +11,12 @@ import {
   buildCurrentDetailFormalScope,
 } from '../utils/currentDetailFormalConsumer.js';
 import { buildHistoricalFormalDashboardScope, isFormalDashboardSummaryCompatible } from '../utils/dashboardFormalConsumer.js';
+import {
+  buildCurrentStoreSelfViewScope,
+  buildHistoricalStoreSelfViewScope,
+  buildStoreSelfViewProfile,
+  filterDashboardStorePresentationKeys,
+} from '../utils/storeSelfView.js';
 import { applyTherapistRankingSemantics, buildTherapistAggregateMetrics } from '../utils/therapistKpi.js';
 import { getSummaryRecalcFlagState, resolveHistoricalDashboardReadPolicy } from '../utils/dashboardReadPolicy.js';
 import { filterSystemExcludedStoreKeys, inspectHistoricalSystemExclusionTrust } from '../utils/systemExclusion.js';
@@ -617,12 +623,19 @@ export function useDashboardStats() {
       }
     }
 
-    return filterSystemExcludedStoreKeys(sourceStores, systemExclusionState, cleanName);
+    return filterDashboardStorePresentationKeys({
+      values: sourceStores,
+      userRole,
+      officialStores,
+      systemExclusionState,
+      normalizeStoreKey: cleanName,
+    });
   }, [
     userRole,
     currentUser,
     managers,
     accessibleStores,
+    officialStores,
     operationAccessibleStores,
     hasDelegationAccessProfile,
     systemExclusionState,
@@ -769,8 +782,16 @@ export function useDashboardStats() {
   }, [selectedDashboardManager, groupedStoresForFilter]);
 
   const effectiveStores = useMemo(() => {
+    const filterPresentationStores = (values = []) => filterDashboardStorePresentationKeys({
+      values,
+      userRole,
+      officialStores,
+      systemExclusionState,
+      normalizeStoreKey: cleanName,
+    });
+
     if (selectedDashboardStore) {
-      return filterSystemExcludedStoreKeys([selectedDashboardStore], systemExclusionState, cleanName);
+      return filterPresentationStores([selectedDashboardStore]);
     }
 
     if (selectedDashboardManager) {
@@ -781,15 +802,55 @@ export function useDashboardStats() {
       );
     }
 
+    if (userRole === "store") {
+      const normalizedOfficialStores = filterPresentationStores(officialStores);
+      const formalOfficialStores = filterSystemExcludedStoreKeys(
+        officialStores,
+        systemExclusionState,
+        cleanName
+      );
+      const formalBaseStores = filterSystemExcludedStoreKeys(
+        baseVisibleStores,
+        systemExclusionState,
+        cleanName
+      );
+      // 若此 store account 的所有正式 own stores 都已被 System Excluded，
+      // 預設仍回到 own-store self-view；暫時托管的 Formal 店家不能蓋過帳號本身的店。
+      // 若 officialStores 同時包含 Formal + excluded，則預設維持 Formal aggregate，
+      // excluded own store 仍可由下拉選單個別切入 self-view。
+      if (normalizedOfficialStores.length > 0 && formalOfficialStores.length === 0) {
+        return normalizedOfficialStores;
+      }
+      return formalBaseStores;
+    }
+
     return baseVisibleStores;
   }, [
     baseVisibleStores,
     selectedDashboardStore,
     selectedDashboardManager,
     managers,
+    userRole,
+    officialStores,
     systemExclusionState,
     cleanName,
   ]);
+
+  const storeSelfViewProfile = useMemo(() => buildStoreSelfViewProfile({
+    userRole,
+    scopeStoreKeys: effectiveStores,
+    officialStores,
+    systemExclusionState,
+    normalizeStoreKey: cleanName,
+  }), [
+    userRole,
+    effectiveStores,
+    officialStores,
+    systemExclusionState,
+    cleanName,
+  ]);
+
+  const storeSelfViewActive = storeSelfViewProfile.active === true;
 
   const allCompanyStores = useMemo(() => {
     const stores = new Set();
@@ -809,6 +870,10 @@ export function useDashboardStats() {
   }, [allReports, managers, cleanName]);
 
   const therapistEffectiveStores = useMemo(() => {
+    if (storeSelfViewActive && userRole === "store") {
+      return [...new Set((effectiveStores || []).map(cleanName).filter(Boolean))];
+    }
+
     const excluded = systemExclusionState?.ready === true
       ? new Set((systemExclusionState.stores || []).map(cleanName).filter(Boolean))
       : new Set();
@@ -818,11 +883,23 @@ export function useDashboardStats() {
         return filterFormalStores(managers[selectedDashboardManager]);
     }
     return filterFormalStores(allCompanyStores);
-  }, [selectedDashboardStore, selectedDashboardManager, managers, allCompanyStores, cleanName, systemExclusionState]);
+  }, [selectedDashboardStore, selectedDashboardManager, managers, allCompanyStores, cleanName, systemExclusionState, storeSelfViewActive, userRole, effectiveStores]);
 
   const effectiveAnnualKpiBenchmark = useMemo(() => {
     const base = annualKpiBenchmark || {};
     if (!base.ready) return base;
+
+    if (storeSelfViewActive) {
+      return {
+        ...base,
+        scope: "store_self_view_excluded",
+        trafficMonthlyAverage: 0,
+        newCustomerMonthlyAverage: 0,
+        basedMonthCount: 0,
+        basedMonths: [],
+        scopeStoreCount: storeSelfViewProfile.scopeStoreKeys.length,
+      };
+    }
 
     const shouldUseFilteredBenchmark = Boolean(
       selectedDashboardStore ||
@@ -966,7 +1043,7 @@ export function useDashboardStats() {
       basedMonths,
       scopeStoreCount: selectedStoreSummaries.length,
     };
-  }, [annualKpiBenchmark, selectedDashboardStore, selectedDashboardManager, userRole, effectiveStores, cleanName, brandPrefix, brandInfo]);
+  }, [annualKpiBenchmark, selectedDashboardStore, selectedDashboardManager, userRole, effectiveStores, cleanName, brandPrefix, brandInfo, storeSelfViewActive, storeSelfViewProfile.scopeStoreKeys]);
 
   // ==========================================
   // ★ Batch 5A-2：Dashboard Summary trust 來源收斂
@@ -1395,14 +1472,27 @@ export function useDashboardStats() {
     // Batch 5A-1：歷史 verified Summary 必須正式切到 Batch 4 Formal KPI contract。
     // 若 Summary schema 尚未升級，直接回到既有 detail fallback，不以 legacy 欄位冒充 Formal。
     if (!isFormalDashboardSummaryCompatible(summary)) return null;
-    const formalScope = buildHistoricalFormalDashboardScope({
-      summary,
-      stores,
-      monthlyTargetSummary,
-      normalizeStoreKey: cleanName,
-      filtered: isFilteredSummaryView,
-    });
-    if (!formalScope.compatible) return null;
+
+    const selfViewScope = storeSelfViewActive
+      ? buildHistoricalStoreSelfViewScope({
+          summaryRows: stores,
+          scopeStoreKeys: effectiveStores,
+          monthlyTargetSummary,
+          brandId: brandInfo?.id || "",
+          yearMonth: selectedYearMonth,
+          normalizeStoreKey: cleanName,
+        })
+      : null;
+    const formalScope = storeSelfViewActive
+      ? null
+      : buildHistoricalFormalDashboardScope({
+          summary,
+          stores,
+          monthlyTargetSummary,
+          normalizeStoreKey: cleanName,
+          filtered: isFilteredSummaryView,
+        });
+    if (!storeSelfViewActive && !formalScope?.compatible) return null;
 
     const legacyGrand = {
       cash: grand.cash,
@@ -1411,44 +1501,81 @@ export function useDashboardStats() {
       accrualBudget: grand.accrualBudget,
     };
 
-    // 對既有 Dashboard view-model 做 compatibility mapping：
-    // 舊畫面仍讀 cash/accrual/budget/accrualBudget，但歷史 Summary 模式下這四個欄位改承接 Formal authority。
-    // null 代表缺漏/invalid/TARGET_INCOMPLETE，不能被 Number(... || 0) 吞成合法 0。
+    // Store self-view 與 Formal aggregation eligibility 是兩個不同概念：
+    // 被 System Excluded 的店家自己的 store account 仍可使用 Summary 內既有 explicit KPI 欄位查看自己，
+    // 但這個 scope 不具 Formal aggregate / ranking / annual benchmark authority。
+    const activeScope = storeSelfViewActive ? {
+      cash: selfViewScope?.cash?.value ?? null,
+      cashStatus: selfViewScope?.cash?.status || KPI_VALUE_STATUS.FIELD_MISSING,
+      accrual: selfViewScope?.accrual?.value ?? null,
+      accrualStatus: selfViewScope?.accrual?.status || KPI_VALUE_STATUS.FIELD_MISSING,
+      cashTarget: selfViewScope?.cashTarget?.value ?? null,
+      cashTargetStatus: selfViewScope?.cashTarget?.status || "TARGET_INCOMPLETE",
+      accrualTarget: selfViewScope?.accrualTarget?.value ?? null,
+      accrualTargetStatus: selfViewScope?.accrualTarget?.status || "TARGET_INCOMPLETE",
+      cashAchievement: selfViewScope?.cashAchievement?.value ?? null,
+      cashAchievementStatus: selfViewScope?.cashAchievement?.status || KPI_VALUE_STATUS.N_A,
+      accrualAchievement: selfViewScope?.accrualAchievement?.value ?? null,
+      accrualAchievementStatus: selfViewScope?.accrualAchievement?.status || KPI_VALUE_STATUS.N_A,
+      challengeCashTarget: selfViewScope?.challengeCashTarget?.value ?? null,
+      challengeAccrualTarget: selfViewScope?.challengeAccrualTarget?.value ?? null,
+      challengeCashConfigured: selfViewScope?.challengeCashTarget?.configured === true,
+      challengeAccrualConfigured: selfViewScope?.challengeAccrualTarget?.configured === true,
+      challengeCashAchievement: selfViewScope?.challengeCashAchievement?.value ?? null,
+      challengeAccrualAchievement: selfViewScope?.challengeAccrualAchievement?.value ?? null,
+      reportingStatus: selfViewScope?.reportingStatus || "DATA_COMPLETE",
+      scopeEligibleStoreCount: selfViewScope?.scopeStoreKeys?.length || 0,
+      targetSummaryAvailable: selfViewScope?.targetSummaryAvailable === true,
+      lifecycleReady: true,
+    } : formalScope;
+
+    // 對既有 Dashboard view-model 做 compatibility mapping。
     grand.legacyCash = legacyGrand.cash;
     grand.legacyAccrual = legacyGrand.accrual;
     grand.legacyBudget = legacyGrand.budget;
     grand.legacyAccrualBudget = legacyGrand.accrualBudget;
-    grand.cash = formalScope.cash;
-    grand.accrual = formalScope.accrual;
-    grand.budget = formalScope.cashTarget;
-    grand.accrualBudget = formalScope.accrualTarget;
-    grand.formalNetCash = formalScope.cash;
-    grand.formalNetCashStatus = formalScope.cashStatus;
-    grand.formalAccrual = formalScope.accrual;
-    grand.formalAccrualStatus = formalScope.accrualStatus;
-    grand.formalCashTarget = formalScope.cashTarget;
-    grand.formalCashTargetStatus = formalScope.cashTargetStatus;
-    grand.formalAccrualTarget = formalScope.accrualTarget;
-    grand.formalAccrualTargetStatus = formalScope.accrualTargetStatus;
-    grand.formalCashAchievement = formalScope.cashAchievement;
-    grand.formalCashAchievementStatus = formalScope.cashAchievementStatus;
-    grand.formalAccrualAchievement = formalScope.accrualAchievement;
-    grand.formalAccrualAchievementStatus = formalScope.accrualAchievementStatus;
-    grand.formalConsumerActive = true;
+    grand.cash = activeScope.cash;
+    grand.accrual = activeScope.accrual;
+    grand.budget = activeScope.cashTarget;
+    grand.accrualBudget = activeScope.accrualTarget;
+    grand.formalNetCash = activeScope.cash;
+    grand.formalNetCashStatus = activeScope.cashStatus;
+    grand.formalAccrual = activeScope.accrual;
+    grand.formalAccrualStatus = activeScope.accrualStatus;
+    grand.formalCashTarget = activeScope.cashTarget;
+    grand.formalCashTargetStatus = activeScope.cashTargetStatus;
+    grand.formalAccrualTarget = activeScope.accrualTarget;
+    grand.formalAccrualTargetStatus = activeScope.accrualTargetStatus;
+    grand.formalCashAchievement = activeScope.cashAchievement;
+    grand.formalCashAchievementStatus = activeScope.cashAchievementStatus;
+    grand.formalAccrualAchievement = activeScope.accrualAchievement;
+    grand.formalAccrualAchievementStatus = activeScope.accrualAchievementStatus;
+    grand.formalConsumerActive = !storeSelfViewActive;
 
-    // Challenge 仍是 compatibility layer；不把 legacy challenge 欄位假裝成 Formal contract。
-    grand.hasChallengeCash = Number.isFinite(formalScope.cashTarget) && Number(grand.challengeBudget || 0) > formalScope.cashTarget;
-    grand.hasChallengeAccrual = Number.isFinite(formalScope.accrualTarget) && Number(grand.challengeAccrualBudget || 0) > formalScope.accrualTarget;
+    if (storeSelfViewActive) {
+      grand.challengeBudget = activeScope.challengeCashTarget;
+      grand.challengeAccrualBudget = activeScope.challengeAccrualTarget;
+      grand.hasChallengeCash = activeScope.challengeCashConfigured;
+      grand.hasChallengeAccrual = activeScope.challengeAccrualConfigured;
+    } else {
+      // Challenge 仍是 compatibility layer；不把 legacy challenge 欄位假裝成 Formal contract。
+      grand.hasChallengeCash = Number.isFinite(formalScope.cashTarget) && Number(grand.challengeBudget || 0) > formalScope.cashTarget;
+      grand.hasChallengeAccrual = Number.isFinite(formalScope.accrualTarget) && Number(grand.challengeAccrualBudget || 0) > formalScope.accrualTarget;
+    }
 
-    // 歷史月份已結算，月底推估應與 Formal 實績一致，避免卡片顯示 legacy cash/accrual。
-    const cashProjection = Number.isFinite(formalScope.cash) ? formalScope.cash : null;
-    const accrualProjection = Number.isFinite(formalScope.accrual) ? formalScope.accrual : null;
+    // 歷史月份已結算：Formal scope 用 Formal actual；self-view 則使用該店 canonical KPI actual。
+    const cashProjection = Number.isFinite(activeScope.cash) ? activeScope.cash : null;
+    const accrualProjection = Number.isFinite(activeScope.accrual) ? activeScope.accrual : null;
     grand.projection = cashProjection;
     grand.accrualProjection = accrualProjection;
     grand.projectionRange = {
       cash: cashProjection === null ? null : { conservative: cashProjection, standard: cashProjection, aggressive: cashProjection, min: cashProjection, max: cashProjection },
       accrual: accrualProjection === null ? null : { conservative: accrualProjection, standard: accrualProjection, aggressive: accrualProjection, min: accrualProjection, max: accrualProjection },
-      profile: { currentWeight: 1, historyWeight: 0, label: "歷史結算：Formal 實績" },
+      profile: {
+        currentWeight: 1,
+        historyWeight: 0,
+        label: storeSelfViewActive ? "歷史結算：自店檢視" : "歷史結算：Formal 實績",
+      },
     };
 
     const selectedStoreSet = new Set(stores.flatMap((item) => getSummaryStoreCandidates(item)).filter(Boolean));
@@ -1513,14 +1640,18 @@ export function useDashboardStats() {
       daysPassed = 0;
     }
 
-    const totalAchievement = formalScope.cashAchievement;
-    const totalAccrualAchievement = formalScope.accrualAchievement;
-    const challengeAchievement = Number.isFinite(formalScope.cash) && Number(grand.challengeBudget || 0) > 0
-      ? (formalScope.cash / Number(grand.challengeBudget)) * 100
-      : 0;
-    const challengeAccrualAchievement = Number.isFinite(formalScope.accrual) && Number(grand.challengeAccrualBudget || 0) > 0
-      ? (formalScope.accrual / Number(grand.challengeAccrualBudget)) * 100
-      : 0;
+    const totalAchievement = activeScope.cashAchievement;
+    const totalAccrualAchievement = activeScope.accrualAchievement;
+    const challengeAchievement = storeSelfViewActive
+      ? activeScope.challengeCashAchievement
+      : (Number.isFinite(formalScope.cash) && Number(grand.challengeBudget || 0) > 0
+          ? (formalScope.cash / Number(grand.challengeBudget)) * 100
+          : 0);
+    const challengeAccrualAchievement = storeSelfViewActive
+      ? activeScope.challengeAccrualAchievement
+      : (Number.isFinite(formalScope.accrual) && Number(grand.challengeAccrualBudget || 0) > 0
+          ? (formalScope.accrual / Number(grand.challengeAccrualBudget)) * 100
+          : 0);
 
     const avgTrafficASP = Number(grand.traffic || 0) > 0 ? Math.round(Number(grand.operationalAccrual || 0) / Number(grand.traffic || 0)) : 0;
     const avgNewCustomerASP = Number(grand.newCustomers || 0) > 0 ? Math.round(Number(grand.newCustomerSales || 0) / Number(grand.newCustomers || 0)) : 0;
@@ -1597,28 +1728,36 @@ export function useDashboardStats() {
       oldRevMix,
       newCountMix,
       oldCountMix,
-      storeMonthlyTop3: formalMonthlyTop,
-      storeTodayTop3: mapStoreTop(summary.storeTop3?.today),
-      storeYesterdayTop3: mapStoreTop(summary.storeTop3?.yesterday),
-      source: preciseFilteredDailyTotals ? "summary_store_daily" : isFilteredSummaryView ? "summary_filtered" : "summary",
+      storeMonthlyTop3: storeSelfViewActive ? [] : formalMonthlyTop,
+      storeTodayTop3: storeSelfViewActive ? [] : mapStoreTop(summary.storeTop3?.today),
+      storeYesterdayTop3: storeSelfViewActive ? [] : mapStoreTop(summary.storeTop3?.yesterday),
+      source: storeSelfViewActive
+        ? "summary_store_self_view"
+        : (preciseFilteredDailyTotals ? "summary_store_daily" : isFilteredSummaryView ? "summary_filtered" : "summary"),
       summaryLastUpdatedAtText: summary.lastUpdatedAtText || "",
-      summaryFilterMode: isFilteredSummaryView ? (selectedDashboardStore ? "store" : "manager") : "brand",
-      formalConsumerActive: true,
+      summaryFilterMode: storeSelfViewActive
+        ? "store_self_view"
+        : (isFilteredSummaryView ? (selectedDashboardStore ? "store" : "manager") : "brand"),
+      formalConsumerActive: !storeSelfViewActive,
+      storeSelfViewActive,
+      excludedFromFormalScope: storeSelfViewActive,
       formalKpiStatus: {
-        cash: formalScope.cashStatus,
-        cashTarget: formalScope.cashTargetStatus,
-        cashAchievement: formalScope.cashAchievementStatus,
-        accrual: formalScope.accrualStatus,
-        accrualTarget: formalScope.accrualTargetStatus,
-        accrualAchievement: formalScope.accrualAchievementStatus,
-        cashCoverageComplete: formalScope.cashCoverageComplete,
-        accrualCoverageComplete: formalScope.accrualCoverageComplete,
-        lifecycleReady: formalScope.lifecycleReady,
-        scopeEligibleStoreCount: formalScope.scopeEligibleStoreCount,
-        targetSummaryAvailable: formalScope.targetSummaryAvailable,
+        cash: activeScope.cashStatus,
+        cashTarget: activeScope.cashTargetStatus,
+        cashAchievement: activeScope.cashAchievementStatus,
+        accrual: activeScope.accrualStatus,
+        accrualTarget: activeScope.accrualTargetStatus,
+        accrualAchievement: activeScope.accrualAchievementStatus,
+        reportingStatus: activeScope.reportingStatus,
+        cashCoverageComplete: storeSelfViewActive ? null : formalScope.cashCoverageComplete,
+        accrualCoverageComplete: storeSelfViewActive ? null : formalScope.accrualCoverageComplete,
+        lifecycleReady: activeScope.lifecycleReady,
+        scopeEligibleStoreCount: storeSelfViewActive ? 0 : formalScope.scopeEligibleStoreCount,
+        selfViewStoreCount: storeSelfViewActive ? activeScope.scopeEligibleStoreCount : 0,
+        targetSummaryAvailable: activeScope.targetSummaryAvailable,
       },
     };
-  }, [dashboardSummaryBundle.dashboard, isSummaryDashboardView, selectedYear, selectedMonth, effectiveStores, selectedDashboardManager, selectedDashboardStore, cleanName, getSummaryStoreName, getSummaryStoreCandidates, normalizeSummaryStores, summaryStoreMatchesSet, userRole, monthlyTargetSummary]);
+  }, [dashboardSummaryBundle.dashboard, isSummaryDashboardView, selectedYear, selectedMonth, selectedYearMonth, effectiveStores, selectedDashboardManager, selectedDashboardStore, cleanName, getSummaryStoreName, getSummaryStoreCandidates, normalizeSummaryStores, summaryStoreMatchesSet, userRole, monthlyTargetSummary, storeSelfViewActive, brandInfo?.id]);
 
   const summaryMyStoreRankings = useMemo(() => {
     // ★ 當月門市排行也必須即時，避免主管或店長看到未更新的 Summary 排名。
@@ -1674,6 +1813,9 @@ export function useDashboardStats() {
 
   const summaryTherapistStats = useMemo(() => {
     if (viewMode !== "therapist" && userRole !== "therapist" && userRole !== "trainer") return null;
+    // Excluded own-store self-view 不信任 therapist_summary 的 Formal exclusion scope；
+    // Dashboard 人員模式沿用既有 therapist detail read path，只限自己的 effectiveStores。
+    if (storeSelfViewActive && userRole === "store") return null;
     // ★ 即時戰情保護：當月人員績效仍用明細計算，避免管理師晚上陸續回報後，今日戰神/排行榜不即時更新。
     if (isSelectedCurrentMonth || !isSummaryTrustedForDashboard) return null;
     const summary = dashboardSummaryBundle.therapist;
@@ -1728,7 +1870,7 @@ export function useDashboardStats() {
       source: "summary",
       summaryLastUpdatedAtText: summary.lastUpdatedAtText || "",
     };
-  }, [dashboardSummaryBundle.therapist, therapistEffectiveStores, selectedDashboardManager, selectedDashboardStore, cleanName, userRole, currentUser, therapistAnnualAggregatedData, isSelectedCurrentMonth, isSummaryTrustedForDashboard, viewMode]);
+  }, [dashboardSummaryBundle.therapist, therapistEffectiveStores, selectedDashboardManager, selectedDashboardStore, cleanName, userRole, currentUser, therapistAnnualAggregatedData, isSelectedCurrentMonth, isSummaryTrustedForDashboard, viewMode, storeSelfViewActive]);
 
 
   const detailDashboardStats = useMemo(() => {
@@ -1736,6 +1878,19 @@ export function useDashboardStats() {
     if (!currentDetailFormalScope.compatible) return null;
     const formalScopeStoreKeySet = new Set(currentDetailFormalScope.scopeStoreKeys || []);
     const formalBrandStoreKeySet = new Set(currentDetailFormalAuthority.eligibleStoreKeys || []);
+    const currentSelfViewScope = storeSelfViewActive
+      ? buildCurrentStoreSelfViewScope({
+          reports: allReports,
+          brandId: brandInfo?.id || "",
+          yearMonth: selectedYearMonth,
+          scopeStoreKeys: effectiveStores,
+          monthlyTargetSummary,
+          normalizeStoreKey: cleanName,
+        })
+      : null;
+    const calculationStoreKeySet = storeSelfViewActive
+      ? new Set((effectiveStores || []).map(cleanName).filter(Boolean))
+      : formalScopeStoreKeySet;
     const y = parseInt(selectedYear); const m = parseInt(selectedMonth);
     const daysInMonth = new Date(y, m, 0).getDate();
     const now = new Date(); let daysPassed = daysInMonth; let isCurrentMonth = false;
@@ -1763,7 +1918,7 @@ export function useDashboardStats() {
       const reportStoreClean = cleanName(report.storeName);
       
       if (!effectiveStores.includes(reportStoreClean)) return;
-      if (!formalScopeStoreKeySet.has(reportStoreClean)) return;
+      if (!calculationStoreKeySet.has(reportStoreClean)) return;
 
       const cash = getFormalNetCashValue(report) ?? 0;
       const traffic = Number(report.traffic) || 0;
@@ -1864,11 +2019,38 @@ export function useDashboardStats() {
         return { ...s, streak: isStreak, badgeText: txt };
     });
 
-    // Batch 5D-2：正式達成率 authority 由 Lifecycle + reporting completeness + Target Coverage 決定。
-    const achievement = currentDetailFormalScope.cashAchievement;
-    const accrualAchievement = currentDetailFormalScope.accrualAchievement;
-    const challengeAchievement = currentDetailFormalScope.challengeCashAchievement;
-    const challengeAccrualAchievement = currentDetailFormalScope.challengeAccrualAchievement;
+    // Formal aggregate eligibility 與 store self-view visibility 分離。
+    // store role 的 own excluded store 只在自己的 Dashboard 走 canonical KPI self-view；
+    // Ranking / Regional / Annual / Target Coverage 仍沿用既有 Formal scope。
+    const activeDetailScope = storeSelfViewActive ? {
+      cash: currentSelfViewScope?.cash?.value ?? null,
+      cashStatus: currentSelfViewScope?.cash?.status || KPI_VALUE_STATUS.FIELD_MISSING,
+      accrual: currentSelfViewScope?.accrual?.value ?? null,
+      accrualStatus: currentSelfViewScope?.accrual?.status || KPI_VALUE_STATUS.FIELD_MISSING,
+      cashTarget: currentSelfViewScope?.cashTarget?.value ?? null,
+      cashTargetStatus: currentSelfViewScope?.cashTarget?.status || "TARGET_INCOMPLETE",
+      accrualTarget: currentSelfViewScope?.accrualTarget?.value ?? null,
+      accrualTargetStatus: currentSelfViewScope?.accrualTarget?.status || "TARGET_INCOMPLETE",
+      challengeCashTarget: currentSelfViewScope?.challengeCashTarget?.value ?? null,
+      challengeAccrualTarget: currentSelfViewScope?.challengeAccrualTarget?.value ?? null,
+      challengeCashConfigured: currentSelfViewScope?.challengeCashTarget?.configured === true,
+      challengeAccrualConfigured: currentSelfViewScope?.challengeAccrualTarget?.configured === true,
+      cashAchievement: currentSelfViewScope?.cashAchievement?.value ?? null,
+      cashAchievementStatus: currentSelfViewScope?.cashAchievement?.status || KPI_VALUE_STATUS.N_A,
+      accrualAchievement: currentSelfViewScope?.accrualAchievement?.value ?? null,
+      accrualAchievementStatus: currentSelfViewScope?.accrualAchievement?.status || KPI_VALUE_STATUS.N_A,
+      challengeCashAchievement: currentSelfViewScope?.challengeCashAchievement?.value ?? null,
+      challengeAccrualAchievement: currentSelfViewScope?.challengeAccrualAchievement?.value ?? null,
+      reportingStatus: currentSelfViewScope?.reportDocumentCount > 0 ? "SELF_VIEW" : "DATA_INCOMPLETE",
+      targetSummaryAvailable: currentSelfViewScope?.targetSummaryAvailable === true,
+      lifecycleReady: true,
+      scopeEligibleStoreCount: 0,
+    } : currentDetailFormalScope;
+
+    const achievement = activeDetailScope.cashAchievement;
+    const accrualAchievement = activeDetailScope.accrualAchievement;
+    const challengeAchievement = activeDetailScope.challengeCashAchievement;
+    const challengeAccrualAchievement = activeDetailScope.challengeAccrualAchievement;
 
  // ============================================================================
     // ★ 月底推估：動態權重 + 保守 / 標準 / 積極區間
@@ -1952,43 +2134,43 @@ export function useDashboardStats() {
     else if (daysPassed === 0) chartDays = 0;
     const slicedDailyTotals = stats.dailyData.slice(0, chartDays);
 
-    const formalCashAvailable = isFiniteKpiNumber(currentDetailFormalScope.cash);
-    const formalAccrualAvailable = isFiniteKpiNumber(currentDetailFormalScope.accrual);
-    const formalProjection = formalCashAvailable ? projection : null;
-    const formalAccrualProjection = formalAccrualAvailable ? accrualProjection : null;
-    const formalProjectionRange = {
+    const activeCashAvailable = isFiniteKpiNumber(activeDetailScope.cash);
+    const activeAccrualAvailable = isFiniteKpiNumber(activeDetailScope.accrual);
+    const activeProjection = activeCashAvailable ? projection : null;
+    const activeAccrualProjection = activeAccrualAvailable ? accrualProjection : null;
+    const activeProjectionRange = {
       ...projectionRange,
-      cash: formalCashAvailable ? projectionRange.cash : null,
-      accrual: formalAccrualAvailable ? projectionRange.accrual : null,
+      cash: activeCashAvailable ? projectionRange.cash : null,
+      accrual: activeAccrualAvailable ? projectionRange.accrual : null,
     };
 
     return {
       grandTotal: {
-        cash: currentDetailFormalScope.cash,
-        accrual: currentDetailFormalScope.accrual,
+        cash: activeDetailScope.cash,
+        accrual: activeDetailScope.accrual,
         operationalAccrual: stats.operationalAccrual,
         skincareSales: stats.skincareSales,
         traffic: stats.traffic,
         newCustomers: stats.newCustomers,
         newCustomerClosings: stats.newCustomerClosings,
         newCustomerSales: stats.newCustomerSales,
-        budget: currentDetailFormalScope.cashTarget,
-        accrualBudget: currentDetailFormalScope.accrualTarget,
-        challengeBudget: currentDetailFormalScope.challengeCashTarget,
-        challengeAccrualBudget: currentDetailFormalScope.challengeAccrualTarget,
-        hasChallengeCash: currentDetailFormalScope.challengeCashConfigured === true,
-        hasChallengeAccrual: currentDetailFormalScope.challengeAccrualConfigured === true,
-        projection: formalProjection,
-        accrualProjection: formalAccrualProjection,
-        projectionRange: formalProjectionRange,
-        formalNetCash: currentDetailFormalScope.cash,
-        formalNetCashStatus: currentDetailFormalScope.cashStatus,
-        formalAccrual: currentDetailFormalScope.accrual,
-        formalAccrualStatus: currentDetailFormalScope.accrualStatus,
-        formalCashTarget: currentDetailFormalScope.cashTarget,
-        formalCashTargetStatus: currentDetailFormalScope.cashTargetStatus,
-        formalAccrualTarget: currentDetailFormalScope.accrualTarget,
-        formalAccrualTargetStatus: currentDetailFormalScope.accrualTargetStatus,
+        budget: activeDetailScope.cashTarget,
+        accrualBudget: activeDetailScope.accrualTarget,
+        challengeBudget: activeDetailScope.challengeCashTarget,
+        challengeAccrualBudget: activeDetailScope.challengeAccrualTarget,
+        hasChallengeCash: activeDetailScope.challengeCashConfigured === true,
+        hasChallengeAccrual: activeDetailScope.challengeAccrualConfigured === true,
+        projection: activeProjection,
+        accrualProjection: activeAccrualProjection,
+        projectionRange: activeProjectionRange,
+        formalNetCash: activeDetailScope.cash,
+        formalNetCashStatus: activeDetailScope.cashStatus,
+        formalAccrual: activeDetailScope.accrual,
+        formalAccrualStatus: activeDetailScope.accrualStatus,
+        formalCashTarget: activeDetailScope.cashTarget,
+        formalCashTargetStatus: activeDetailScope.cashTargetStatus,
+        formalAccrualTarget: activeDetailScope.accrualTarget,
+        formalAccrualTargetStatus: activeDetailScope.accrualTargetStatus,
       },
       dailyTotals: slicedDailyTotals,
       totalAchievement: achievement,
@@ -2003,28 +2185,31 @@ export function useDashboardStats() {
       oldRevMix,
       newCountMix,
       oldCountMix,
-      storeMonthlyTop3,
-      storeTodayTop3,
-      storeYesterdayTop3,
-      source: "detail_formal",
-      formalConsumerActive: true,
+      storeMonthlyTop3: storeSelfViewActive ? [] : storeMonthlyTop3,
+      storeTodayTop3: storeSelfViewActive ? [] : storeTodayTop3,
+      storeYesterdayTop3: storeSelfViewActive ? [] : storeYesterdayTop3,
+      source: storeSelfViewActive ? "detail_store_self_view" : "detail_formal",
+      formalConsumerActive: !storeSelfViewActive,
+      storeSelfViewActive,
+      excludedFromFormalScope: storeSelfViewActive,
       formalKpiStatus: {
-        cash: currentDetailFormalScope.cashStatus,
-        cashTarget: currentDetailFormalScope.cashTargetStatus,
-        cashAchievement: currentDetailFormalScope.cashAchievementStatus,
-        accrual: currentDetailFormalScope.accrualStatus,
-        accrualTarget: currentDetailFormalScope.accrualTargetStatus,
-        accrualAchievement: currentDetailFormalScope.accrualAchievementStatus,
-        reportingStatus: currentDetailFormalScope.reportingStatus,
-        cashCoverageComplete: currentDetailFormalScope.cashCoverageComplete,
-        accrualCoverageComplete: currentDetailFormalScope.accrualCoverageComplete,
-        lifecycleReady: currentDetailFormalAuthority.lifecycleReady === true,
-        scopeEligibleStoreCount: currentDetailFormalScope.scopeEligibleStoreCount,
-        targetSummaryAvailable: currentDetailFormalScope.targetSummaryAvailable,
+        cash: activeDetailScope.cashStatus,
+        cashTarget: activeDetailScope.cashTargetStatus,
+        cashAchievement: activeDetailScope.cashAchievementStatus,
+        accrual: activeDetailScope.accrualStatus,
+        accrualTarget: activeDetailScope.accrualTargetStatus,
+        accrualAchievement: activeDetailScope.accrualAchievementStatus,
+        reportingStatus: activeDetailScope.reportingStatus,
+        cashCoverageComplete: storeSelfViewActive ? null : currentDetailFormalScope.cashCoverageComplete,
+        accrualCoverageComplete: storeSelfViewActive ? null : currentDetailFormalScope.accrualCoverageComplete,
+        lifecycleReady: storeSelfViewActive ? true : currentDetailFormalAuthority.lifecycleReady === true,
+        scopeEligibleStoreCount: storeSelfViewActive ? 0 : currentDetailFormalScope.scopeEligibleStoreCount,
+        selfViewStoreCount: storeSelfViewActive ? storeSelfViewProfile.scopeStoreKeys.length : 0,
+        targetSummaryAvailable: activeDetailScope.targetSummaryAvailable,
       },
     };
   // ★ 監視清單換成了包含全部小抄的字典
-  }, [allReports, selectedYear, selectedMonth, effectiveStores, brandPrefix, cleanName, getProjectionCurveForStore, currentDetailFormalScope, currentDetailFormalAuthority]);
+  }, [allReports, selectedYear, selectedMonth, selectedYearMonth, effectiveStores, brandPrefix, brandInfo?.id, cleanName, getProjectionCurveForStore, currentDetailFormalScope, currentDetailFormalAuthority, monthlyTargetSummary, storeSelfViewActive, storeSelfViewProfile.scopeStoreKeys]);
 
   const detailMyStoreRankings = useMemo(() => {
     if (!currentDetailFormalAuthority?.compatible) return [];

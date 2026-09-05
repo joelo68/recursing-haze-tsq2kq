@@ -239,10 +239,13 @@ test("consumer wiring uses Formal actual/target/ranking and UI renders N/A inste
   const view = read("src/components/StorePerformanceView.jsx");
 
   assert.match(hook, /buildHistoricalFormalDashboardScope/);
-  assert.match(hook, /grand\.cash\s*=\s*formalScope\.cash/);
-  assert.match(hook, /grand\.accrual\s*=\s*formalScope\.accrual/);
-  assert.match(hook, /grand\.budget\s*=\s*formalScope\.cashTarget/);
-  assert.match(hook, /grand\.accrualBudget\s*=\s*formalScope\.accrualTarget/);
+  assert.match(hook, /const formalScope = storeSelfViewActive\s*\?\s*null\s*:\s*buildHistoricalFormalDashboardScope/);
+  assert.match(hook, /const activeScope = storeSelfViewActive \? \{[\s\S]*\} : formalScope;/);
+  assert.match(hook, /grand\.cash\s*=\s*activeScope\.cash/);
+  assert.match(hook, /grand\.accrual\s*=\s*activeScope\.accrual/);
+  assert.match(hook, /grand\.budget\s*=\s*activeScope\.cashTarget/);
+  assert.match(hook, /grand\.accrualBudget\s*=\s*activeScope\.accrualTarget/);
+  assert.match(hook, /formalConsumerActive:\s*!storeSelfViewActive/);
   assert.match(hook, /summary\.formalStoreRankings/);
   assert.match(hook, /formalRankEligibleStoreCount/);
   assert.match(view, /formatKpiPercent/);
@@ -329,7 +332,8 @@ test("5E-1B dashboard normalization preserves canonical explicit zero over legac
 
 test("5E-1B Store Performance renders Formal zero-target projection as N/A and keeps pace gap neutral", () => {
   const source = read("src/components/StorePerformanceView.jsx");
-  assert.match(source, /formalConsumerActive && targetValue === 0\) return "N\/A"/);
+  assert.match(source, /const strictKpiPresentation = formalConsumerActive \|\| storeSelfViewActive/);
+  assert.match(source, /strictKpiPresentation && targetValue === 0\) return "N\/A"/);
   assert.match(source, /const paceGap = cashAchievementAvailable \? totalAchievement - timeProgress : null/);
 });
 

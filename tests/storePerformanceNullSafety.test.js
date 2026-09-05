@@ -47,3 +47,10 @@ test("StorePerformanceView keeps Formal projection null as N/A while preserving 
   assert.doesNotMatch(source, /\{fmtMoney\(storeGrandTotal\.accrualProjection\)\}/);
   assert.match(source, /const formatProjectionValue = \(value\) => \{\s*if \(!isFiniteKpi\(value\)\) return "N\/A";\s*return fmtMoney\(value\);/);
 });
+
+
+test("StorePerformanceView keeps excluded-store self-view null-safe and labels the scope", () => {
+  assert.match(source, /const storeSelfViewActive = dashboardStats\.storeSelfViewActive === true;/);
+  assert.match(source, /const strictKpiPresentation = formalConsumerActive \|\| storeSelfViewActive;/);
+  assert.match(source, /自店檢視｜本店目前不納入公司正式營運統計/);
+});

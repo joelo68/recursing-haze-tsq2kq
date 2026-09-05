@@ -28,7 +28,9 @@ test("Dashboard current/detail uses canonical Formal authority, disables raw tar
   assert.doesNotMatch(hook, /Dashboard 月目標精準 raw fallback/);
   assert.doesNotMatch(hook, /getCollectionPath\("monthly_targets"\)/);
   assert.doesNotMatch(hook, /dashboardTargetRawFallbacks/);
-  assert.match(hook, /formalConsumerActive:\s*true/);
+  assert.match(hook, /const activeDetailScope = storeSelfViewActive \? \{[\s\S]*\} : currentDetailFormalScope;/);
+  assert.match(hook, /formalConsumerActive:\s*!storeSelfViewActive/);
+  assert.match(hook, /storeSelfViewActive,/);
   assert.match(hook, /formalKpiStatus:/);
   assert.match(header, /現金實績資料不足/);
   assert.match(header, /現金目標資料不足/);
