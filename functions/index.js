@@ -23,6 +23,15 @@ if (!admin.apps.length) admin.initializeApp();
 const db = admin.firestore();
 
 // ==========================================
+// ★ Batch 8A：Projection Model Authority
+// 單一 Backend writer；套用正式品牌 path / KPI / Lifecycle / Reporting Calendar / System Exclusion。
+// Dashboard / Telegram consumer cutover 留在 Batch 8B / 8C。
+// ==========================================
+const { createProjectionAuthorityFunctions } = require("./projectionAuthority");
+const projectionAuthorityFunctions = createProjectionAuthorityFunctions({ admin, db });
+exports.rebuildProjectionModelNow = projectionAuthorityFunctions.rebuildProjectionModelNow;
+
+// ==========================================
 // ★ Device Approval v1：新裝置確認與裝置管理後端
 // UI 使用貼近日常工作的中文；內部仍保留清楚的 security schema。
 // ==========================================
@@ -9611,64 +9620,10 @@ exports.calibrateUserCount = onRequest(async (req, res) => {
 });
 
 // ==========================================
-// ★ 7. 深夜精算師 5.0
+// ★ 7. Batch 8A Projection Model Authority
+// 保留既有 scheduled export 名稱，實作移至 projectionAuthority.js。
 // ==========================================
-exports.calculateHistoricalProjectionCurve = onSchedule({ schedule: "0 3 1 * *", timeZone: "Asia/Taipei", timeoutSeconds: 540, memory: "1GiB" }, async (event) => {
-    const brands = ['cyj', 'anniu', 'yibo'];
-    const today = new Date();
-    const pastMonths = [];
-    for (let i = 1; i <= 3; i++) {
-        const d = new Date(today.getFullYear(), today.getMonth() - i, 1);
-        pastMonths.push(`${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`);
-    }
-    for (const brand of brands) {
-        try {
-            let storeDowData = { "BRAND_TOTAL": {} };
-            for(let i=0; i<7; i++) storeDowData["BRAND_TOTAL"][i] = { cash: [], accrual: [] };
-            for (const targetMonth of pastMonths) {
-                const reportsRef = db.collection("brands").doc(brand).collection("daily_reports");
-                const reportsSnap = await reportsRef.where("date", ">=", `${targetMonth}-01`).where("date", "<=", `${targetMonth}-31`).get();
-                reportsSnap.forEach(doc => {
-                    const data = doc.data();
-                    const store = data.storeName || data.store || "未知店";
-                    const cash = Number(data.cash) || 0;
-                    const accrual = Number(data.accrual) || 0;
-                    const dow = new Date(data.date).getDay();
-                    if (!storeDowData[store]) {
-                        storeDowData[store] = {};
-                        for(let i=0; i<7; i++) storeDowData[store][i] = { cash: [], accrual: [] };
-                    }
-                    storeDowData[store][dow].cash.push(cash);
-                    storeDowData[store][dow].accrual.push(accrual);
-                    storeDowData["BRAND_TOTAL"][dow].cash.push(cash);
-                    storeDowData["BRAND_TOTAL"][dow].accrual.push(accrual);
-                });
-            }
-            const curveRef = db.collection("brands").doc(brand).collection("settings").doc("projection_curves").collection("stores");
-            const processList = (list) => {
-                if (list.length > 2) {
-                    const sorted = [...list].sort((a,b)=>a-b);
-                    const mid = Math.floor(sorted.length/2);
-                    const median = sorted.length % 2 !== 0 ? sorted[mid] : (sorted[mid-1]+sorted[mid])/2;
-                    const avg = list.reduce((a,b)=>a+b,0)/list.length;
-                    const threshold = Math.max(median * 4, avg * 2.5, 100000); 
-                    list = list.filter(v => v <= threshold);
-                }
-                return list.length > 0 ? Math.round(list.reduce((a,b)=>a+b,0)/list.length) : 0;
-            };
-            for (const [storeName, dowMap] of Object.entries(storeDowData)) {
-                let cashAverages = {}; let accrualAverages = {};
-                for (let i = 0; i < 7; i++) {
-                    cashAverages[i] = processList(dowMap[i].cash);
-                    accrualAverages[i] = processList(dowMap[i].accrual);
-                }
-                const docId = storeName === "BRAND_TOTAL" ? "BRAND_TOTAL" : storeName.replace(/\s+/g, '').toLowerCase();
-                await curveRef.doc(docId).set({ storeName, cashAverages, accrualAverages, lastUpdated: admin.firestore.FieldValue.serverTimestamp() });
-            }
-            console.log(`✅ [${brand}] 更新完畢！`);
-        } catch (error) { console.error(`❌ [${brand}] 更新失敗:`, error); }
-    }
-});
+exports.calculateHistoricalProjectionCurve = projectionAuthorityFunctions.calculateHistoricalProjectionCurve;
 
 // ==========================================
 // ★ 8. V5 終極除垢清道夫
