@@ -31,6 +31,7 @@ const SmartCalendar = ({
   selectedDates = [],
   onDateToggle,
   disabledDates = [],
+  statusHiddenDates = [],
   selectedDateLabel = "休",
   disabledDateLabel = "全休",
   embedded = false,
@@ -39,6 +40,7 @@ const SmartCalendar = ({
   const [currentDate, setCurrentDate] = useState(() => safeParseDate(selectedDate));
   const selectedDateSet = useMemo(() => new Set(normalizeDateList(selectedDates)), [selectedDates]);
   const disabledDateSet = useMemo(() => new Set(normalizeDateList(disabledDates)), [disabledDates]);
+  const statusHiddenDateSet = useMemo(() => new Set(normalizeDateList(statusHiddenDates)), [statusHiddenDates]);
 
   useEffect(() => {
     if (selectedDate) {
@@ -149,7 +151,7 @@ const SmartCalendar = ({
           const day = i + 1;
           const dateStr = `${year}-${String(month + 1).padStart(2, "0")}-${String(day).padStart(2, "0")}`;
           const isSelected = multiSelect ? selectedDateSet.has(dateStr) : dateStr === selectedDate;
-          const status = getDayStatus(day);
+          const status = statusHiddenDateSet.has(dateStr) ? "none" : getDayStatus(day);
 
           const currentDayTime = new Date(year, month, day).getTime();
           const isBeforeMin = minBoundaryTime ? currentDayTime < minBoundaryTime : false;

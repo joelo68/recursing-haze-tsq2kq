@@ -1,6 +1,6 @@
 // src/components/AuditView.jsx
 import React, { useState, useMemo, useContext, useCallback, useEffect, useRef } from "react";
-import { AlertCircle, UserX, CheckCircle, Target, Settings, X, Save, Ban, HelpCircle } from "lucide-react"; 
+import { AlertCircle, UserX, CheckCircle, Target, Settings, X, Save, Ban, HelpCircle, Clock3 } from "lucide-react";
 
 import { AppContext } from "../AppContext";
 import { sortManagerNames, sortStoreNames, sortManagersByOrgOrder, sortStoresByOrgOrder } from "../utils/helpers";
@@ -121,6 +121,7 @@ const AuditView = ({ auditType: controlledAuditType, setAuditType: setControlled
   const [checkDate, setCheckDate] = useState(() => getDefaultDailyAuditDate());
   const [isConfigModalOpen, setIsConfigModalOpen] = useState(false);
   const [localExclusions, setLocalExclusions] = useState([]);
+  const [dailyCutoffRevision, setDailyCutoffRevision] = useState(0);
 
   // 未手動選日期前，日報檢核會依台灣時間自動選擇：
   // 18:00 前顯示前一天；18:00 後顯示當天。
@@ -181,6 +182,9 @@ const AuditView = ({ auditType: controlledAuditType, setAuditType: setControlled
     const scheduleNextCutoff = () => {
       const delay = getMillisecondsUntilNextTaipeiCutoff();
       timerId = window.setTimeout(() => {
+        // 18:00 跨點時，不論是否手動選過日期，都刷新畫面上的回報狀態。
+        // 這只是既有單次 cutoff timer 的 UI refresh，不是 polling。
+        setDailyCutoffRevision((value) => value + 1);
         if (autoDailyDateModeRef.current) {
           applyCheckDate(getDefaultDailyAuditDate(), { manual: false });
         }
@@ -226,6 +230,36 @@ const AuditView = ({ auditType: controlledAuditType, setAuditType: setControlled
       maxBoundary: `${y}-${String(m).padStart(2, '0')}-${new Date(y, m, 0).getDate()}`
     };
   }, [selectedYear, selectedMonth]);
+
+  // 回報檢核的畫面語意必須區分「尚在回報中」與「真的已全數回報」。
+  // 18:00 規則仍由 AuditView 擁有；SmartCalendar 只接收要隱藏狀態點的日期，
+  // 避免把回報檢核的業務規則污染到店家排休等其他 SmartCalendar consumer。
+  const dailyAuditVisualState = useMemo(() => {
+    if (!isDailyAuditType) return { phase: "ready", statusHiddenDates: [] };
+
+    const taipei = getTaipeiDateTimeParts();
+    const todayDate = formatCalendarDate(taipei.year, taipei.month, taipei.day);
+    const isBeforeCutoff = taipei.hour < DAILY_AUDIT_CUTOFF_HOUR;
+
+    if (checkDate > todayDate) {
+      return {
+        phase: "future",
+        statusHiddenDates: isBeforeCutoff ? [todayDate] : [],
+      };
+    }
+
+    if (checkDate === todayDate && isBeforeCutoff) {
+      return {
+        phase: "in_progress",
+        statusHiddenDates: [todayDate],
+      };
+    }
+
+    return {
+      phase: "ready",
+      statusHiddenDates: isBeforeCutoff ? [todayDate] : [],
+    };
+  }, [isDailyAuditType, checkDate, dailyCutoffRevision]);
 
   const brandPrefix = useMemo(() => {
     let name = "CYJ";
@@ -762,6 +796,7 @@ const AuditView = ({ auditType: controlledAuditType, setAuditType: setControlled
                           selectedDate={checkDate} onDateSelect={handleCheckDateSelect}
                           stores={calendarStores} salesData={calendarSalesData} 
                           min={minBoundary} max={maxBoundary}
+                          statusHiddenDates={dailyAuditVisualState.statusHiddenDates}
                         />
                    </div>
                 ) : (
@@ -788,12 +823,28 @@ const AuditView = ({ auditType: controlledAuditType, setAuditType: setControlled
         )}
 
         <div className="border border-rose-100 rounded-3xl overflow-hidden shadow-sm mb-8">
-          <div className="bg-rose-50 px-6 py-4 flex justify-between items-center">
-            <h4 className="font-bold text-rose-600 flex items-center gap-2"><AlertCircle size={20} /> 未完成名單 <span className="bg-white px-2 py-0.5 rounded-full text-xs border border-rose-200">{activeData.missing.length}</span></h4>
-            <button onClick={handleCopy} className="text-xs bg-white text-rose-500 px-4 py-2 rounded-xl border border-rose-200 font-bold">複製名單</button>
+          <div className={`${dailyAuditVisualState.phase === "ready" ? "bg-rose-50" : "bg-amber-50"} px-6 py-4 flex justify-between items-center`}>
+            {dailyAuditVisualState.phase === "ready" ? (
+              <>
+                <h4 className="font-bold text-rose-600 flex items-center gap-2">
+                  <AlertCircle size={20} />
+                  {isDailyAuditType
+                    ? (activeData.missing.length > 0
+                      ? (auditType === "therapist-daily" ? "尚有管理師未回報" : "尚有店家未回報")
+                      : "回報狀態")
+                    : "未完成名單"}
+                  <span className="bg-white px-2 py-0.5 rounded-full text-xs border border-rose-200">{activeData.missing.length}</span>
+                </h4>
+                {(activeData.missing.length > 0 || !isDailyAuditType) && (
+                  <button onClick={handleCopy} className="text-xs bg-white text-rose-500 px-4 py-2 rounded-xl border border-rose-200 font-bold">複製名單</button>
+                )}
+              </>
+            ) : (
+              <h4 className="font-bold text-amber-700 flex items-center gap-2"><Clock3 size={20} /> 回報狀態</h4>
+            )}
           </div>
           <div className="p-6 bg-white grid grid-cols-1 md:grid-cols-3 gap-4">
-            {Object.entries(activeData.missingByManager).map(([mgr, list]) => (
+            {dailyAuditVisualState.phase === "ready" && Object.entries(activeData.missingByManager).map(([mgr, list]) => (
               <div key={mgr} className="bg-stone-50 p-4 rounded-2xl border border-stone-100">
                 <div className="font-bold text-stone-600 mb-2">{mgr}</div>
                 <div className="flex flex-wrap gap-2">
@@ -801,9 +852,23 @@ const AuditView = ({ auditType: controlledAuditType, setAuditType: setControlled
                 </div>
               </div>
             ))}
-            {activeData.missing.length === 0 && !isStoreDailyLifecycleBlocked && (
+            {dailyAuditVisualState.phase === "in_progress" && !isStoreDailyLifecycleBlocked && (
+              <div className="col-span-3 text-center py-10 text-amber-600 font-bold text-lg">
+                <div className="w-12 h-12 rounded-full bg-amber-100 flex items-center justify-center mx-auto mb-2"><Clock3 size={24}/></div>
+                <div>今日回報中</div>
+                <div className="mt-2 text-sm font-medium text-stone-400">18:00 後顯示今日回報完成狀態</div>
+              </div>
+            )}
+            {dailyAuditVisualState.phase === "future" && !isStoreDailyLifecycleBlocked && (
+              <div className="col-span-3 text-center py-10 text-stone-500 font-bold text-lg">
+                <div className="w-12 h-12 rounded-full bg-stone-100 flex items-center justify-center mx-auto mb-2"><Clock3 size={24}/></div>
+                <div>尚未到回報日期</div>
+                <div className="mt-2 text-sm font-medium text-stone-400">當日 18:00 後顯示回報完成狀態</div>
+              </div>
+            )}
+            {dailyAuditVisualState.phase === "ready" && activeData.missing.length === 0 && !isStoreDailyLifecycleBlocked && (
               <div className="col-span-3 text-center py-10 text-emerald-500 font-bold text-lg">
-                <div className="w-12 h-12 rounded-full bg-emerald-100 flex items-center justify-center mx-auto mb-2"><CheckCircle size={24}/></div>全數完成！
+                <div className="w-12 h-12 rounded-full bg-emerald-100 flex items-center justify-center mx-auto mb-2"><CheckCircle size={24}/></div>已全數回報
               </div>
             )}
             {isStoreDailyLifecycleBlocked && (

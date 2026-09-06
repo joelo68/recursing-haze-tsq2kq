@@ -5,7 +5,7 @@ import { Calendar as CalendarIcon, X } from "lucide-react";
 import SmartCalendar from "./SmartCalendar";
 
 // ★ 新增 minDate 參數
-const SmartDatePicker = ({ selectedDate, onDateSelect, stores, salesData, maxDate, minDate, align = "left" }) => {
+const SmartDatePicker = ({ selectedDate, onDateSelect, stores, salesData, maxDate, minDate, align = "left", statusHiddenDates = [] }) => {
   const [isOpen, setIsOpen] = useState(false);
   const containerRef = useRef(null);
   const calendarRef = useRef(null);
@@ -61,7 +61,8 @@ const SmartDatePicker = ({ selectedDate, onDateSelect, stores, salesData, maxDat
         selectedDate={selectedDate}
         onDateSelect={(date) => { onDateSelect(date); setIsOpen(false); }}
         stores={stores} salesData={salesData} onClose={() => setIsOpen(false)}
-        maxDate={maxDate} minDate={minDate} // ★ 傳遞給底層
+        maxDate={maxDate} minDate={minDate}
+              statusHiddenDates={statusHiddenDates} // ★ 傳遞給底層
       />
     </div>
   );
@@ -75,7 +76,8 @@ const SmartDatePicker = ({ selectedDate, onDateSelect, stores, salesData, maxDat
               selectedDate={selectedDate}
               onDateSelect={(date) => { onDateSelect(date); setIsOpen(false); }}
               stores={stores} salesData={salesData} onClose={() => setIsOpen(false)}
-              maxDate={maxDate} minDate={minDate} // ★ 傳遞給底層
+              maxDate={maxDate} minDate={minDate}
+              statusHiddenDates={statusHiddenDates} // ★ 傳遞給底層
             />
          </div>
       </div>
