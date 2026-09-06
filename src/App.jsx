@@ -64,6 +64,8 @@ const DEVICE_EMERGENCY_ENDPOINT = "https://us-central1-cyjsituation-analysis.clo
 const LOGIN_SECURITY_EVENT_ENDPOINT = "https://us-central1-cyjsituation-analysis.cloudfunctions.net/reportLoginSecurityEvent";
 const TELEGRAM_SECURITY_CONFIG_ENDPOINT = "https://us-central1-cyjsituation-analysis.cloudfunctions.net/updateTelegramSecurityAlertConfig";
 const SYSTEM_EXCLUSION_ENDPOINT = "https://us-central1-cyjsituation-analysis.cloudfunctions.net/manageSystemExclusions";
+const STORE_LIFECYCLE_ENDPOINT = "https://us-central1-cyjsituation-analysis.cloudfunctions.net/manageStoreLifecycle";
+const MODULE_PERMISSIONS_ENDPOINT = "https://us-central1-cyjsituation-analysis.cloudfunctions.net/manageModulePermissions";
 
 
 const isNewerVersion = (local, remote) => {
@@ -116,6 +118,7 @@ const AnnualView = lazyWithRetry(() => import("./components/AnnualView"));
 const TargetView = lazyWithRetry(() => import("./components/TargetView"));
 const TherapistTargetView = lazyWithRetry(() => import("./components/TherapistTargetView"));
 const TherapistScheduleView = lazyWithRetry(() => import("./components/TherapistScheduleView"));
+const StoreScheduleView = lazyWithRetry(() => import("./components/StoreScheduleView"));
 const NotificationManager = lazyWithRetry(() => import("./components/NotificationManager"));
 
 
@@ -379,6 +382,7 @@ const VIEW_ACTIVITY_LABELS = {
   targets: "年度目標設定",
   "t-targets": "管理師目標",
   "t-schedule": "管理師排休",
+  "store-schedule": "店家排休",
   notification: "通知管理",
   "therapist-manager": "管理師管理",
 };
@@ -552,6 +556,7 @@ const DIRECTOR_RESTRICTED_VIEWS = {
   targets: "年度目標設定",
   "t-targets": "管理師目標",
   "t-schedule": "管理師排休",
+  "store-schedule": "店家排休",
   settings: "系統管理中心",
   "therapist-manager": "管理師管理",
   logs: "登入監控 / 操作日誌",
@@ -1494,6 +1499,18 @@ export default function App() {
     });
     setActiveView("dashboard");
   }, [activeView, userRole, canDirectorAccessView, directorPermissionProfile?.label]);
+
+  const canAccessStoreScheduleView = useMemo(() => {
+    if (!userRole) return false;
+    if (userRole === "director") return canDirectorAccessView("store-schedule");
+    return Array.isArray(permissions?.[userRole]) && permissions[userRole].includes("store-schedule");
+  }, [userRole, permissions, canDirectorAccessView]);
+
+  useEffect(() => {
+    if (activeView !== "store-schedule" || canAccessStoreScheduleView) return;
+    setToast({ message: "目前角色尚未開放「店家排休」權限", type: "error" });
+    setActiveView("dashboard");
+  }, [activeView, canAccessStoreScheduleView]);
 
   const selectedYearMonth = useMemo(() => {
     const y = String(selectedYear || "");
@@ -3731,6 +3748,62 @@ export default function App() {
     credentialPassword: securitySessionCredentialRef.current || "",
   }), [userRole, currentSecurityAccountRawId, currentSecurityAccountKey, currentUser, currentDeviceTrust]);
 
+  const updateModulePermissions = useCallback(async (nextPermissions = {}) => {
+    if (!isDeviceSecuritySuperAdmin) {
+      throw new Error("只有最高管理者可以修改模組權限");
+    }
+    if (currentDeviceTrust?.status !== "trusted") {
+      throw new Error("目前裝置尚未完成信任確認，無法修改模組權限");
+    }
+
+    const result = await callDeviceSecurityEndpoint(MODULE_PERMISSIONS_ENDPOINT, {
+      brandId: currentBrandId,
+      permissions: nextPermissions,
+      expectedRevision: Math.max(0, Number(permissions?.revision || 0)),
+      actor: { ...buildDeviceSecurityActor(), roleId: "director" },
+    });
+
+    if (result?.permissions) setPermissions(result.permissions);
+    return result;
+  }, [
+    isDeviceSecuritySuperAdmin,
+    currentDeviceTrust?.status,
+    callDeviceSecurityEndpoint,
+    currentBrandId,
+    permissions?.revision,
+    buildDeviceSecurityActor,
+  ]);
+
+  const updateStoreSchedule = useCallback(async ({
+    storeKey = "",
+    yearMonth = "",
+    dates = [],
+    expectedCalendarRevision = 0,
+  } = {}) => {
+    if (!["director", "manager", "store"].includes(String(userRole || ""))) {
+      throw new Error("目前角色沒有店家排休寫入範圍");
+    }
+    if (currentDeviceTrust?.status !== "trusted") {
+      throw new Error("目前裝置尚未完成信任確認，無法修改店家排休");
+    }
+
+    return callDeviceSecurityEndpoint(STORE_LIFECYCLE_ENDPOINT, {
+      brandId: currentBrandId,
+      action: "update_store_schedule_v1",
+      storeKey,
+      yearMonth,
+      dates,
+      expectedCalendarRevision: Math.max(0, Number(expectedCalendarRevision || 0)),
+      actor: buildDeviceSecurityActor(),
+    });
+  }, [
+    userRole,
+    currentDeviceTrust?.status,
+    callDeviceSecurityEndpoint,
+    currentBrandId,
+    buildDeviceSecurityActor,
+  ]);
+
   const updateTelegramSecurityAlertConfig = useCallback(async ({ config, expectedRevision = 0, credentialPassword = "" } = {}) => {
     if (!isDeviceSecuritySuperAdmin) {
       throw new Error("只有最高管理者可以修改登入安全 Telegram 設定");
@@ -4184,7 +4257,7 @@ export default function App() {
     annualAggregatedData, annualDashboardSummaries, annualSummaryStatusMap, annualSummaryLoadState, therapistAnnualAggregatedData, // ★ 把年度 Summary 與管理師資料交出去
     showToast, openConfirm, fmtMoney, fmtNum, inputDate, setInputDate, storeList: analytics?.storeList || [], setTargets, selectedYear, selectedMonth, setSelectedYear, setSelectedMonth, permissions, storeAccounts, managerAuth, currentUser, userRole, logActivity, handleUpdateStorePassword, handleUpdateManagerPassword, handleUpdateTherapistPassword, navigateToStore, activeView, appId, 
     therapists: visibleTherapists, therapistReports: visibleTherapistReports, therapistSchedules, therapistTargets, trainerAuth, handleUpdateTrainerAuth, systemExclusionState, auditExclusions, handleUpdateAuditExclusions, currentBrand, setCurrentBrandId, getCollectionPath, getDocPath, dailyLoginCount, yesterdayLoginCount, securityConfig, featureFlags, therapistModuleEnabled, isOnline, isLowPowerMode,
-    currentDeviceTrust, currentSecurityAccountKey, manageDeviceSecurityAction, reviewDeviceApprovalAction, updateTelegramSecurityAlertConfig, canManageDeviceSecurity: isDeviceSecuritySuperAdmin, openDeviceApprovalPanel,
+    currentDeviceTrust, currentSecurityAccountKey, manageDeviceSecurityAction, reviewDeviceApprovalAction, updateTelegramSecurityAlertConfig, updateModulePermissions, updateStoreSchedule, canManageDeviceSecurity: isDeviceSecuritySuperAdmin, openDeviceApprovalPanel,
     fetchGlobalData,
     officialManagers: managers,
     delegations, activeDelegations, delegationAccess, accessibleStores, officialStores, delegatedStores,
@@ -4193,7 +4266,7 @@ export default function App() {
     directorPermissionProfile,
     canDirectorAccessView,
     isReadOnlyDirector: userRole === "director" && !canDirectorAccessView("history")
-  }), [user, loading, analytics, visibleManagers, visibleManagerOrder, budgets, monthlyTargetSummary, currentLifecycleMasterState, currentDashboardSummary, currentRankingsSummary, currentReportSummaryReady, currentReportSummaryReadyYearMonth, currentReportSummaryReadyBrandId, currentSummaryRecalcFlagState, historicalDetailRefreshState, targets, visibleRawData, rawData, annualAggregatedData, annualDashboardSummaries, annualSummaryStatusMap, annualSummaryLoadState, therapistAnnualAggregatedData, inputDate, selectedYear, selectedMonth, permissions, storeAccounts, managerAuth, currentUser, userRole, logActivity, handleUpdateStorePassword, handleUpdateManagerPassword, handleUpdateTherapistPassword, navigateToStore, activeView, appId, visibleTherapists, visibleTherapistReports, therapistSchedules, therapistTargets, trainerAuth, handleUpdateTrainerAuth, systemExclusionState, auditExclusions, handleUpdateAuditExclusions, currentBrand, setCurrentBrandId, getCollectionPath, getDocPath, dailyLoginCount, yesterdayLoginCount, securityConfig, featureFlags, therapistModuleEnabled, isOnline, isLowPowerMode, currentDeviceTrust, currentSecurityAccountKey, manageDeviceSecurityAction, reviewDeviceApprovalAction, updateTelegramSecurityAlertConfig, isDeviceSecuritySuperAdmin, openDeviceApprovalPanel, fetchGlobalData, managers, delegations, activeDelegations, delegationAccess, accessibleStores, officialStores, delegatedStores, refreshDelegations, canAccessStore, canEditStoreReport, getActiveDelegationForStore, directorLevel, directorPermissionProfile, canDirectorAccessView]); // ★ 依賴陣列也要加
+  }), [user, loading, analytics, visibleManagers, visibleManagerOrder, budgets, monthlyTargetSummary, currentLifecycleMasterState, currentDashboardSummary, currentRankingsSummary, currentReportSummaryReady, currentReportSummaryReadyYearMonth, currentReportSummaryReadyBrandId, currentSummaryRecalcFlagState, historicalDetailRefreshState, targets, visibleRawData, rawData, annualAggregatedData, annualDashboardSummaries, annualSummaryStatusMap, annualSummaryLoadState, therapistAnnualAggregatedData, inputDate, selectedYear, selectedMonth, permissions, storeAccounts, managerAuth, currentUser, userRole, logActivity, handleUpdateStorePassword, handleUpdateManagerPassword, handleUpdateTherapistPassword, navigateToStore, activeView, appId, visibleTherapists, visibleTherapistReports, therapistSchedules, therapistTargets, trainerAuth, handleUpdateTrainerAuth, systemExclusionState, auditExclusions, handleUpdateAuditExclusions, currentBrand, setCurrentBrandId, getCollectionPath, getDocPath, dailyLoginCount, yesterdayLoginCount, securityConfig, featureFlags, therapistModuleEnabled, isOnline, isLowPowerMode, currentDeviceTrust, currentSecurityAccountKey, manageDeviceSecurityAction, reviewDeviceApprovalAction, updateTelegramSecurityAlertConfig, updateModulePermissions, updateStoreSchedule, isDeviceSecuritySuperAdmin, openDeviceApprovalPanel, fetchGlobalData, managers, delegations, activeDelegations, delegationAccess, accessibleStores, officialStores, delegatedStores, refreshDelegations, canAccessStore, canEditStoreReport, getActiveDelegationForStore, directorLevel, directorPermissionProfile, canDirectorAccessView]); // ★ 依賴陣列也要加
   
   const memoizedViews = useMemo(() => {
     return (
@@ -4218,12 +4291,13 @@ export default function App() {
           {activeView === "targets" && canDirectorAccessView("targets") && <TargetView />}
           {activeView === "t-targets" && canDirectorAccessView("t-targets") && <TherapistTargetView />}
           {activeView === "t-schedule" && canDirectorAccessView("t-schedule") && <TherapistScheduleView />}
+          {activeView === "store-schedule" && canAccessStoreScheduleView && <StoreScheduleView />}
           {activeView === "notification" && canDirectorAccessView("notification") && <NotificationManager />}
           {activeView === "therapist-manager" && canDirectorAccessView("therapist-manager") && <TherapistManagerView />}
         </Suspense>
       </main>
     );
-  }, [activeView, auditType, canDirectorAccessView]);
+  }, [activeView, auditType, canDirectorAccessView, canAccessStoreScheduleView]);
 
   if (loading) return <div className="min-h-screen flex flex-col items-center justify-center bg-[#F9F8F6]"><Loader2 className="w-16 h-16 animate-spin text-stone-400 mb-4" /><p className="animate-pulse text-stone-500 font-bold tracking-wider">Loading DRCYJ Cloud...</p></div>;
   

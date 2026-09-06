@@ -37,6 +37,14 @@ exports.reportLoginSecurityEvent = deviceApprovalFunctions.reportLoginSecurityEv
 exports.updateTelegramSecurityAlertConfig = deviceApprovalFunctions.updateTelegramSecurityAlertConfig;
 
 // ==========================================
+// ★ Module Permissions v1：模組權限 Backend-only authority
+// Frontend 不再直接寫 permissions settings；由最高管理者 + Trusted Device + credential + OCC 更新。
+// ==========================================
+const { createModulePermissionsFunctions } = require("./modulePermissions");
+const modulePermissionsFunctions = createModulePermissionsFunctions({ admin, db });
+exports.manageModulePermissions = modulePermissionsFunctions.manageModulePermissions;
+
+// ==========================================
 // ★ Store Lifecycle v1：門市生命週期 Master administrative writer
 // 僅建立上游 authority；Batch 1 不切換 Dashboard / Ranking / Annual / Telegram consumer。
 // ==========================================

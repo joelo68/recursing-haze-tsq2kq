@@ -215,7 +215,14 @@ async function verifyApplicationCredential({ db, brandId, roleId, accountId, pas
     const accounts = snap.exists && Array.isArray(snap.data()?.accounts) ? snap.data().accounts : [];
     const account = accounts.find((item) => String(item?.id || '') === id) || accounts.find((item) => String(item?.name || '') === id);
     if (!account || !safePasswordMatch(inputPassword, account.password || '')) return { ok: false, reason: 'wrong_password_or_missing' };
-    return { ok: true, accountId: String(account.id || id), userName: String(account.name || id) };
+    return {
+      ok: true,
+      accountId: String(account.id || id),
+      userName: String(account.name || id),
+      stores: Array.isArray(account.stores)
+        ? [...account.stores]
+        : [account.storeName || account.store].filter(Boolean),
+    };
   }
 
   if (role === 'therapist') {
@@ -991,6 +998,37 @@ async function verifySuperAdminActor({ db, brandId, actor }) {
   }
   if (String(credential.directorLevel || '') !== 'super_admin') return { ok: false };
   return { ok: true, actorName: String(credential.userName || actor.userName || accountId), actorRole: 'director', actorAccountId: String(credential.accountId || accountId), isMasterCredential: false };
+}
+
+async function verifyTrustedApplicationActor({ db, brandId, actor, allowedRoles = [] }) {
+  const roleId = String(actor?.roleId || '').trim();
+  const accountId = String(actor?.accountId || '').trim();
+  const deviceId = String(actor?.deviceId || '').trim();
+  const credentialPassword = String(actor?.credentialPassword || '');
+  const allowed = Array.isArray(allowedRoles) ? allowedRoles.map((value) => String(value || '').trim()).filter(Boolean) : [];
+
+  if (!roleId || !accountId || !deviceId || !credentialPassword) return { ok: false };
+  if (allowed.length && !allowed.includes(roleId)) return { ok: false };
+
+  const trusted = await verifyTrustedApproverDevice({ db, brandId, roleId, accountId, deviceId });
+  if (!trusted) return { ok: false };
+
+  const credential = await verifyApplicationCredential({
+    db,
+    brandId,
+    roleId,
+    accountId,
+    password: credentialPassword,
+  });
+  if (!credential.ok) return { ok: false };
+
+  return {
+    ok: true,
+    actorName: String(credential.userName || actor?.userName || accountId),
+    actorRole: roleId,
+    actorAccountId: String(credential.accountId || accountId),
+    credential,
+  };
 }
 
 async function verifyMasterPassword({ db, brandId, password }) {
@@ -1941,4 +1979,5 @@ module.exports = {
   getBrandSettingDoc,
   requireFirebaseRequestAuth,
   verifySuperAdminActor,
+  verifyTrustedApplicationActor,
 };

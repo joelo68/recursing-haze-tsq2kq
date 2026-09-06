@@ -182,7 +182,15 @@ service cloud.firestore {
       allow read: if signedIn();
       allow write: if signedIn()
         && settingId != 'telegram_security_alerts'
-        && settingId != 'audit_exclusions';
+        && settingId != 'audit_exclusions'
+        && settingId != 'permissions';
+    }
+
+    // Module Permissions v1：模組權限為 Security authority。
+    // 前端只讀；所有修改必須經 Backend 的最高管理者、Trusted Device、credential 與 revision OCC。
+    match /brands/{brandId}/settings/permissions {
+      allow read: if signedIn();
+      allow write: if false;
     }
 
     // System Exclusion v1：正式營運 scope authority。
@@ -209,7 +217,8 @@ service cloud.firestore {
         && collectionName != 'security_summary'
         && collectionName != 'login_security_state'
         && collectionName != 'store_lifecycle'
-        && !(collectionName == 'settings' && document == 'audit_exclusions');
+        && !(collectionName == 'settings' && document == 'audit_exclusions')
+        && !(collectionName == 'settings' && document == 'permissions');
     }
 
     match /artifacts/{appId}/public/data/{collectionName}/{document=**} {

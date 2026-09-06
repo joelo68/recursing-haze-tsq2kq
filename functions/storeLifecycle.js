@@ -6,6 +6,7 @@ const {
   getBrandSettingDoc,
   requireFirebaseRequestAuth,
   verifySuperAdminActor,
+  verifyTrustedApplicationActor,
 } = require('./deviceApproval');
 
 const STORE_LIFECYCLE_SCHEMA_VERSION = 'store-lifecycle-v1';
@@ -648,6 +649,150 @@ function getTaipeiYearMonthForReportingCalendar() {
   return `${map.year}-${map.month}`;
 }
 
+
+function getTaipeiDateForStoreSchedule() {
+  const parts = new Intl.DateTimeFormat('en-CA', {
+    timeZone: 'Asia/Taipei',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+  }).formatToParts(new Date());
+  const map = Object.fromEntries(parts.map((part) => [part.type, part.value]));
+  return `${map.year}-${map.month}-${map.day}`;
+}
+
+const STORE_SCHEDULE_EVENT_PREFIX = 'store-schedule-v1';
+
+function getStoreScheduleEventId(storeName = '', yearMonth = '') {
+  const storeKey = normalizeStoreLifecycleCore(storeName);
+  const normalizedYearMonth = normalizeYearMonth(yearMonth);
+  return storeKey && normalizedYearMonth
+    ? `${STORE_SCHEDULE_EVENT_PREFIX}:${storeKey}:${normalizedYearMonth}`
+    : '';
+}
+
+function normalizeStoreScheduleDates(values = [], yearMonth = '', today = '') {
+  const normalizedYearMonth = normalizeYearMonth(yearMonth);
+  const normalizedToday = normalizeIsoDate(today);
+  const source = Array.isArray(values) ? values : [];
+  if (!normalizedYearMonth || !normalizedToday) {
+    const error = new Error('店家排休月份或目前日期無效');
+    error.code = 'INVALID_STORE_SCHEDULE';
+    throw error;
+  }
+  if (source.length > 31) {
+    const error = new Error('單月店家排休最多 31 天');
+    error.code = 'INVALID_STORE_SCHEDULE';
+    throw error;
+  }
+
+  const normalized = [...new Set(source.map(normalizeIsoDate).filter(Boolean))].sort();
+  if (normalized.length !== source.length || normalized.some((date) => !date.startsWith(`${normalizedYearMonth}-`))) {
+    const error = new Error('店家排休日期必須全部屬於所選月份，且使用 YYYY-MM-DD');
+    error.code = 'INVALID_STORE_SCHEDULE';
+    throw error;
+  }
+  if (normalized.some((date) => date <= normalizedToday)) {
+    const error = new Error('店家主管最早只能設定明天的排休；今天與歷史修正請由最高管理者處理');
+    error.code = 'STORE_SCHEDULE_HISTORY_FORBIDDEN';
+    throw error;
+  }
+  return normalized;
+}
+
+function reconcileStoreScheduleEvent({
+  current = {},
+  storeName = '',
+  yearMonth = '',
+  dates = [],
+  today = '',
+  actor = {},
+} = {}) {
+  const normalized = normalizeReportingCalendar(current);
+  const storeKey = normalizeStoreLifecycleCore(storeName);
+  const normalizedYearMonth = normalizeYearMonth(yearMonth);
+  const normalizedToday = normalizeIsoDate(today);
+  const eventId = getStoreScheduleEventId(storeKey, normalizedYearMonth);
+  const requestedDates = normalizeStoreScheduleDates(dates, normalizedYearMonth, normalizedToday);
+
+  if (!storeKey || !eventId) {
+    const error = new Error('店家排休缺少有效的店家或月份');
+    error.code = 'INVALID_STORE_SCHEDULE';
+    throw error;
+  }
+
+  const existing = normalized.storeClosureEvents.find((event) => event.id === eventId) || null;
+  if (existing) {
+    const exactStore = existing.storeKeys.length === 1 && existing.storeKeys[0] === storeKey;
+    const exactMonth = existing.dates.every((date) => date.startsWith(`${normalizedYearMonth}-`));
+    if (!exactStore || !exactMonth) {
+      const error = new Error('店家排休事件識別已被其他資料占用，請由最高管理者檢查');
+      error.code = 'STORE_SCHEDULE_EVENT_CONFLICT';
+      throw error;
+    }
+  }
+
+  const brandClosedSet = new Set(normalized.closedDates.map((row) => row.date));
+  const lockedBrandDates = requestedDates.filter((date) => brandClosedSet.has(date));
+  if (lockedBrandDates.length) {
+    const error = new Error(`所選日期已有全品牌休店：${lockedBrandDates.join('、')}`);
+    error.code = 'STORE_SCHEDULE_LOCKED_DATE';
+    error.overlapDates = lockedBrandDates;
+    throw error;
+  }
+
+  const externalOverlap = normalized.storeClosureEvents
+    .filter((event) => event.id !== eventId && event.storeKeys.includes(storeKey))
+    .flatMap((event) => event.dates.filter((date) => requestedDates.includes(date)));
+  const lockedStoreDates = [...new Set(externalOverlap)].sort();
+  if (lockedStoreDates.length) {
+    const error = new Error(`所選日期已有中央管理休店設定：${lockedStoreDates.join('、')}`);
+    error.code = 'STORE_SCHEDULE_LOCKED_DATE';
+    error.overlapDates = lockedStoreDates;
+    throw error;
+  }
+
+  const previousDates = existing ? [...existing.dates].sort() : [];
+  const preservedLockedDates = previousDates.filter((date) => date <= normalizedToday);
+  const nextDates = [...new Set([...preservedLockedDates, ...requestedDates])].sort();
+  const changedDates = [...new Set([
+    ...previousDates.filter((date) => !nextDates.includes(date)),
+    ...nextDates.filter((date) => !previousDates.includes(date)),
+  ])].sort();
+
+  if (!changedDates.length) {
+    return {
+      changed: false,
+      eventId,
+      changedDates: [],
+      storeScheduleDates: previousDates,
+      storeClosureEvents: normalized.storeClosureEvents,
+    };
+  }
+
+  const nextEvents = normalized.storeClosureEvents.filter((event) => event.id !== eventId);
+  if (nextDates.length) {
+    nextEvents.push({
+      id: eventId,
+      dates: nextDates,
+      storeKeys: [storeKey],
+      reason: '店家排休',
+      createdAtText: String(existing?.createdAtText || actor.createdAtText || ''),
+      createdBy: String(existing?.createdBy || actor.actorName || ''),
+      createdByRole: String(existing?.createdByRole || actor.actorRole || ''),
+      createdByAccountId: String(existing?.createdByAccountId || actor.actorAccountId || ''),
+    });
+  }
+
+  return {
+    changed: true,
+    eventId,
+    changedDates,
+    storeScheduleDates: nextDates,
+    storeClosureEvents: normalizeReportingCalendarStoreClosureEvents(nextEvents),
+  };
+}
+
 function applyReportingCalendarMutation({
   current = {},
   operation = 'add',
@@ -831,9 +976,12 @@ function createStoreLifecycleFunctions({ admin, db }) {
     const actor = body.actor || {};
 
     try {
-      const adminCheck = await verifySuperAdminActor({ db, brandId, actor });
-      if (!adminCheck.ok) {
-        return res.status(403).json({ ok: false, message: '此操作僅限已信任裝置上的最高管理者使用' });
+      let adminCheck = null;
+      if (action !== 'update_store_schedule_v1') {
+        adminCheck = await verifySuperAdminActor({ db, brandId, actor });
+        if (!adminCheck.ok) {
+          return res.status(403).json({ ok: false, message: '此操作僅限已信任裝置上的最高管理者使用' });
+        }
       }
 
       const lifecycleRef = getBrandCollection(db, brandId, 'store_lifecycle').doc('master');
@@ -914,6 +1062,205 @@ function createStoreLifecycleFunctions({ admin, db }) {
           }), { merge: false });
 
           result = { entry: nextEntry, masterRevision: nextMasterRevision, datasetStatus };
+        });
+
+        return res.status(200).json({ ok: true, ...result });
+      }
+
+
+      if (action === 'update_store_schedule_v1') {
+        const roleId = String(actor?.roleId || '').trim();
+        let actorCheck = null;
+
+        if (roleId === 'director') {
+          actorCheck = await verifySuperAdminActor({ db, brandId, actor });
+        } else {
+          actorCheck = await verifyTrustedApplicationActor({
+            db,
+            brandId,
+            actor,
+            allowedRoles: ['manager', 'store'],
+          });
+        }
+        if (!actorCheck?.ok) {
+          return res.status(403).json({ ok: false, code: 'STORE_SCHEDULE_ACTOR_DENIED', message: '目前帳號或裝置無法修改店家排休' });
+        }
+
+        const storeName = String(body.storeKey || body.storeName || '').trim();
+        const explicitStoreBrand = detectStoreBrandFromName(storeName);
+        if (explicitStoreBrand && explicitStoreBrand !== brandId) {
+          return res.status(400).json({ ok: false, code: 'BRAND_MISMATCH', message: '店家品牌與目前品牌不一致' });
+        }
+
+        const storeKey = normalizeStoreLifecycleCore(storeName);
+        const yearMonth = normalizeYearMonth(body.yearMonth);
+        const today = getTaipeiDateForStoreSchedule();
+        if (!storeKey || !yearMonth) {
+          return res.status(400).json({ ok: false, code: 'INVALID_STORE_SCHEDULE', message: '請指定有效的店家與月份' });
+        }
+        if (yearMonth < today.slice(0, 7)) {
+          return res.status(403).json({ ok: false, code: 'STORE_SCHEDULE_HISTORY_FORBIDDEN', message: '店家主管不能修改歷史月份排休' });
+        }
+
+        const dates = normalizeStoreScheduleDates(body.dates || [], yearMonth, today);
+        const expectedCalendarRevision = parseExpectedReportingCalendarRevision(body.expectedCalendarRevision);
+        const permissionsRef = getBrandSettingDoc(db, brandId, 'permissions');
+        const orgRef = getBrandSettingDoc(db, brandId, 'org_structure');
+        const auditRef = getBrandCollection(db, brandId, 'maintenance_logs').doc();
+        let result = null;
+
+        await db.runTransaction(async (transaction) => {
+          const lifecyclePromise = transaction.get(lifecycleRef);
+          const permissionPromise = roleId === 'director' ? Promise.resolve(null) : transaction.get(permissionsRef);
+          const orgPromise = roleId === 'manager' ? transaction.get(orgRef) : Promise.resolve(null);
+          const [lifecycleSnap, permissionsSnap, orgSnap] = await Promise.all([
+            lifecyclePromise,
+            permissionPromise,
+            orgPromise,
+          ]);
+
+          const master = lifecycleSnap.exists ? (lifecycleSnap.data() || {}) : {};
+          const currentCalendar = normalizeReportingCalendar(master.reportingCalendar || {});
+          if (currentCalendar.revision !== expectedCalendarRevision) {
+            const error = new Error('店家排休已由其他使用者更新，請重新載入後再儲存');
+            error.code = 'REPORTING_CALENDAR_CONFLICT';
+            error.currentCalendar = currentCalendar;
+            throw error;
+          }
+
+          if (roleId !== 'director') {
+            const permissionData = permissionsSnap?.exists ? (permissionsSnap.data() || {}) : {};
+            const rolePermissions = Array.isArray(permissionData[roleId]) ? permissionData[roleId] : [];
+            if (!rolePermissions.includes('store-schedule')) {
+              const error = new Error('目前角色尚未開放「店家排休」模組權限');
+              error.code = 'STORE_SCHEDULE_PERMISSION_DENIED';
+              throw error;
+            }
+          }
+
+          let allowedStoreKeys = [];
+          if (roleId === 'director') {
+            allowedStoreKeys = Object.keys(master.stores || {}).map(normalizeStoreLifecycleCore).filter(Boolean);
+          } else if (roleId === 'manager') {
+            const orgData = orgSnap?.exists ? (orgSnap.data() || {}) : {};
+            const managers = orgData.managers && typeof orgData.managers === 'object' ? orgData.managers : {};
+            const managerStores = managers[actorCheck.actorAccountId] || managers[actorCheck.actorName] || [];
+            allowedStoreKeys = normalizeReportingCalendarStoreKeys(managerStores);
+          } else if (roleId === 'store') {
+            allowedStoreKeys = normalizeReportingCalendarStoreKeys(actorCheck.credential?.stores || []);
+          }
+
+          if (!allowedStoreKeys.includes(storeKey)) {
+            const error = new Error('這間店不在目前帳號的正式管理範圍內');
+            error.code = 'STORE_SCHEDULE_SCOPE_DENIED';
+            throw error;
+          }
+
+          const lifecycleEntry = master?.stores?.[storeKey];
+          const lifecycleCheck = validateLifecycleDraft(lifecycleEntry || {});
+          if (!lifecycleEntry || !lifecycleCheck.valid || lifecycleCheck.entryStatus !== 'COMPLETE') {
+            const error = new Error('這間店尚未完成 Lifecycle，不能設定店家排休');
+            error.code = 'INVALID_REPORTING_CALENDAR_STORE';
+            error.details = [storeKey];
+            throw error;
+          }
+
+          const baselineExpectedDates = new Set(getLifecycleExpectedReportDates(lifecycleEntry, yearMonth, { closedDates: [] }));
+          const outsideLifecycleDates = dates.filter((date) => !baselineExpectedDates.has(date));
+          if (outsideLifecycleDates.length) {
+            const error = new Error(`所選日期不在店家正式營運期間：${outsideLifecycleDates.join('、')}`);
+            error.code = 'STORE_SCHEDULE_OUTSIDE_LIFECYCLE';
+            error.details = outsideLifecycleDates;
+            throw error;
+          }
+
+          const nowText = new Date().toISOString();
+          const mutation = reconcileStoreScheduleEvent({
+            current: currentCalendar,
+            storeName: storeKey,
+            yearMonth,
+            dates,
+            today,
+            actor: {
+              actorName: actorCheck.actorName,
+              actorRole: actorCheck.actorRole,
+              actorAccountId: actorCheck.actorAccountId,
+              createdAtText: nowText,
+            },
+          });
+
+          if (!mutation.changed) {
+            result = {
+              changed: false,
+              eventId: mutation.eventId,
+              storeKey,
+              yearMonth,
+              storeScheduleDates: mutation.storeScheduleDates,
+              reportingCalendar: currentCalendar,
+            };
+            return;
+          }
+
+          const nextCalendarRevision = currentCalendar.revision + 1;
+          const nextMonthRevisions = { ...(currentCalendar.monthRevisions || {}) };
+          nextMonthRevisions[yearMonth] = Math.max(0, Number(nextMonthRevisions[yearMonth] || 0)) + 1;
+          const reportingCalendar = {
+            schemaVersion: REPORTING_CALENDAR_SCHEMA_VERSION,
+            revision: nextCalendarRevision,
+            monthRevisions: nextMonthRevisions,
+            closedDates: currentCalendar.closedDates,
+            storeClosureEvents: mutation.storeClosureEvents,
+            updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+            updatedAtText: nowText,
+            updatedBy: actorCheck.actorName,
+            updatedByRole: actorCheck.actorRole,
+            updatedByAccountId: actorCheck.actorAccountId,
+          };
+
+          transaction.set(lifecycleRef, {
+            reportingCalendar,
+            updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+            updatedAtText: nowText,
+            updatedBy: actorCheck.actorName,
+            updatedByRole: actorCheck.actorRole,
+            updatedByAccountId: actorCheck.actorAccountId,
+          }, { merge: true });
+
+          transaction.set(auditRef, buildLifecycleAuditPayload({
+            admin,
+            brandId,
+            actor: actorCheck,
+            action: 'update_store_schedule',
+            details: {
+              storeKey,
+              yearMonth,
+              eventId: mutation.eventId,
+              changedDates: mutation.changedDates,
+              previousCalendarRevision: currentCalendar.revision,
+              reportingCalendarRevision: nextCalendarRevision,
+              monthRevision: nextMonthRevisions[yearMonth],
+              source: 'store_schedule_v1',
+            },
+          }), { merge: false });
+
+          result = {
+            changed: true,
+            eventId: mutation.eventId,
+            storeKey,
+            yearMonth,
+            storeScheduleDates: mutation.storeScheduleDates,
+            reportingCalendar: {
+              schemaVersion: REPORTING_CALENDAR_SCHEMA_VERSION,
+              revision: nextCalendarRevision,
+              monthRevisions: nextMonthRevisions,
+              closedDates: currentCalendar.closedDates,
+              storeClosureEvents: mutation.storeClosureEvents,
+              updatedAtText: nowText,
+              updatedBy: actorCheck.actorName,
+              updatedByRole: actorCheck.actorRole,
+              updatedByAccountId: actorCheck.actorAccountId,
+            },
+          };
         });
 
         return res.status(200).json({ ok: true, ...result });
@@ -1240,6 +1587,35 @@ if (action === 'update_reporting_calendar' || action === 'update_reporting_calen
           overlapDates: Array.isArray(error.overlapDates) ? error.overlapDates : [],
         });
       }
+      if (
+        error?.code === 'STORE_SCHEDULE_PERMISSION_DENIED'
+        || error?.code === 'STORE_SCHEDULE_SCOPE_DENIED'
+        || error?.code === 'STORE_SCHEDULE_HISTORY_FORBIDDEN'
+      ) {
+        return res.status(403).json({ ok: false, code: error.code, message: error.message });
+      }
+      if (
+        error?.code === 'STORE_SCHEDULE_LOCKED_DATE'
+        || error?.code === 'STORE_SCHEDULE_EVENT_CONFLICT'
+      ) {
+        return res.status(409).json({
+          ok: false,
+          code: error.code,
+          message: error.message,
+          overlapDates: Array.isArray(error.overlapDates) ? error.overlapDates : [],
+        });
+      }
+      if (
+        error?.code === 'INVALID_STORE_SCHEDULE'
+        || error?.code === 'STORE_SCHEDULE_OUTSIDE_LIFECYCLE'
+      ) {
+        return res.status(400).json({
+          ok: false,
+          code: error.code,
+          message: error.message,
+          details: Array.isArray(error.details) ? error.details : [],
+        });
+      }
       if (error?.code === 'LIFECYCLE_CONFLICT') {
         return res.status(409).json({
           ok: false,
@@ -1280,6 +1656,10 @@ module.exports = {
   normalizeReportingCalendarMonthRevisions,
   normalizeReportingCalendar,
   applyReportingCalendarMutation,
+  STORE_SCHEDULE_EVENT_PREFIX,
+  getStoreScheduleEventId,
+  normalizeStoreScheduleDates,
+  reconcileStoreScheduleEvent,
   resolveRequestedBrandId,
   detectStoreBrandFromName,
   normalizeStoreLifecycleCore,

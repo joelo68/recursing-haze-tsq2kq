@@ -49,6 +49,7 @@ export const ALL_MENU_ITEMS = [
   { id: "notification", label: "推播管理", icon: Bell, roles: ["director", "master"] }, // 🔔 新增的推播控制中心選單
   { id: "t-targets", label: "管師目標", icon: UserCog, requiresTherapistModule: true }, 
   { id: "t-schedule", label: "管師排休", icon: CalendarOff, requiresTherapistModule: true },
+  { id: "store-schedule", label: "店家排休", icon: Store },
   { id: "therapist-manager", label: "管師帳號", icon: Users, roles: ["director", "manager"], requiresTherapistModule: true },
   { id: "settings", label: "系統設定", icon: Settings },
 ];

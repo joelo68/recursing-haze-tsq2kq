@@ -2,6 +2,7 @@ export const STORE_LIFECYCLE_SCHEMA_VERSION = "store-lifecycle-v1";
 export const REPORTING_COMPLETENESS_SCHEMA_VERSION = "reporting-completeness-v1";
 export const REPORTING_CALENDAR_SCHEMA_VERSION = "reporting-calendar-v2";
 export const STORE_LIFECYCLE_DATASET_STATUSES = Object.freeze(["BUILDING", "READY"]);
+export const STORE_SCHEDULE_EVENT_PREFIX = "store-schedule-v1";
 
 const BRAND_META = Object.freeze({
   cyj: { id: "cyj", label: "CYJ", prefix: "CYJ" },
@@ -63,6 +64,16 @@ export const getCanonicalLifecycleStoreName = (value = "", brandId = "cyj") => {
 };
 
 export const getStoreLifecycleKey = (value = "") => normalizeStoreLifecycleCore(value);
+
+
+export const getStoreScheduleEventId = (storeName = "", yearMonth = "") => {
+  const storeKey = normalizeStoreLifecycleCore(storeName);
+  const normalizedYearMonth = normalizeYearMonth(yearMonth);
+  return storeKey && normalizedYearMonth
+    ? `${STORE_SCHEDULE_EVENT_PREFIX}:${storeKey}:${normalizedYearMonth}`
+    : "";
+};
+
 
 export const normalizeYearMonth = (value = "") => {
   const text = String(value || "").trim();

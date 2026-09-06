@@ -156,6 +156,7 @@ const SettingsView = () => {
     getDocPath, getCollectionPath,
     currentBrand, securityConfig, featureFlags,
     currentDeviceTrust,
+    updateModulePermissions,
     user, officialManagers, delegations = [], refreshDelegations,
     fetchGlobalData // ★ 新增：提取單次抓取函數
   } = useContext(AppContext);
@@ -609,7 +610,23 @@ const SettingsView = () => {
       showToast("儲存失敗", "error");
     }
   };
-  const handleSavePermissions = async () => { try { await setDoc(getDocPath("permissions"), localPermissions); showToast("權限設定已更新", "success"); if (fetchGlobalData) fetchGlobalData(); } catch (e) { showToast("更新失敗", "error"); } };
+  const handleSavePermissions = async () => {
+    try {
+      if (typeof updateModulePermissions !== "function") {
+        throw new Error("模組權限安全服務尚未就緒");
+      }
+      const result = await updateModulePermissions(localPermissions);
+      if (result?.permissions) setLocalPermissions(result.permissions);
+      showToast("權限設定已更新", "success");
+      if (fetchGlobalData) fetchGlobalData();
+    } catch (error) {
+      console.error("模組權限更新失敗:", error);
+      if (error?.status === 409 && error?.result?.currentPermissions) {
+        setLocalPermissions(error.result.currentPermissions);
+      }
+      showToast(error?.result?.message || error?.message || "更新失敗", "error");
+    }
+  };
   const togglePermission = (role, menuId) => { const current = localPermissions[role] || []; const updated = current.includes(menuId) ? current.filter((id) => id !== menuId) : [...current, menuId]; setLocalPermissions({ ...localPermissions, [role]: updated }); };
   
   const handleSaveSecurityConfig = async () => { 
