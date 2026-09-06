@@ -85,9 +85,34 @@ const StorePerformanceView = ({ dashboardStats, myStoreRankings, brandInfo }) =>
     const match = String(yearMonth || "").match(/^(\d{4})-(\d{2})$/);
     return match ? `${match[1]}/${match[2]}` : String(yearMonth || "");
   };
-  const isSmallStoreRanking = myStoreRankings.length > 0 && myStoreRankings.length <= 6;
+  const isDashboardLiveRanking = myStoreRankings.some((store) => store?.rankingSemantics === "dashboard-live-cash-achievement-v1");
+  const rankingScopeStoreCount = isDashboardLiveRanking
+    ? Math.max(0, Number(myStoreRankings[0]?.scopeStoreCount || myStoreRankings.length || 0))
+    : myStoreRankings.length;
+  const rankingEligibleRows = isDashboardLiveRanking
+    ? myStoreRankings.filter((store) => store?.dashboardLiveRankEligible === true)
+    : myStoreRankings.filter((store) => isFiniteKpi(store?.rate));
+  const rankingEligibleStoreCount = rankingEligibleRows.length;
+  const isSmallStoreRanking = rankingScopeStoreCount > 0 && rankingScopeStoreCount <= 6;
 
   const getProgressStatusMeta = (store = {}) => {
+    if (isDashboardLiveRanking && store?.dashboardLiveRankEligible !== true) {
+      const reasonMeta = {
+        TARGET_ZERO: { label: "目標為 0", key: "target-zero" },
+        TARGET_NOT_SET: { label: "目標未設定", key: "missing-target" },
+        TARGET_INVALID: { label: "目標資料待確認", key: "target-invalid" },
+        ACTUAL_UNAVAILABLE: { label: "業績資料不足", key: "actual-unavailable" },
+        ACHIEVEMENT_UNAVAILABLE: { label: "達成率無法計算", key: "achievement-unavailable" },
+      };
+      const meta = reasonMeta[store?.dashboardLiveRankReason] || { label: "暫不排名", key: "rank-unavailable" };
+      return {
+        ...meta,
+        className: "bg-stone-100 text-stone-500 border-stone-200",
+        barClassName: "bg-stone-300",
+        textClassName: "text-stone-500",
+      };
+    }
+
     const target = Number(store.target || 0);
     const rate = Number(store.rate || 0);
     const expectedRate = Math.min(Math.max(Number(timeProgress || 0), 0), 100);
@@ -164,11 +189,11 @@ const StorePerformanceView = ({ dashboardStats, myStoreRankings, brandInfo }) =>
   };
 
   const smallRankingSummary = {
-    achievedCount: myStoreRankings.filter((store) => Number(store.rate || 0) >= 100).length,
-    averageRate: myStoreRankings.length > 0
-      ? myStoreRankings.reduce((sum, store) => sum + Number(store.rate || 0), 0) / myStoreRankings.length
+    achievedCount: rankingEligibleRows.filter((store) => Number(store.rate || 0) >= 100).length,
+    averageRate: rankingEligibleRows.length > 0
+      ? rankingEligibleRows.reduce((sum, store) => sum + Number(store.rate || 0), 0) / rankingEligibleRows.length
       : 0,
-    totalGap: myStoreRankings.reduce((sum, store) => {
+    totalGap: rankingEligibleRows.reduce((sum, store) => {
       const actual = Number(store.actual || 0);
       const target = Number(store.target || 0);
       return sum + Math.max(0, target - actual);
@@ -752,8 +777,11 @@ const StorePerformanceView = ({ dashboardStats, myStoreRankings, brandInfo }) =>
             </div>
             <div className="relative z-10 grid grid-cols-3 gap-3 text-right sm:flex sm:items-center sm:gap-5">
               <div>
-                <p className="text-[10px] text-amber-100 font-bold uppercase">目前顯示店家數</p>
-                <p className="text-2xl font-mono font-bold text-white">{myStoreRankings.length}</p>
+                <p className="text-[10px] text-amber-100 font-bold uppercase">目前店家數</p>
+                <p className="text-2xl font-mono font-bold text-white">{rankingScopeStoreCount}</p>
+                {isDashboardLiveRanking && (
+                  <p className="mt-0.5 text-[9px] font-bold text-amber-100">可即時排名 {rankingEligibleStoreCount}</p>
+                )}
               </div>
               {isSmallStoreRanking && (
                 <>
@@ -763,7 +791,7 @@ const StorePerformanceView = ({ dashboardStats, myStoreRankings, brandInfo }) =>
                   </div>
                   <div>
                     <p className="text-[10px] text-amber-100 font-bold uppercase">已達標</p>
-                    <p className="text-2xl font-mono font-bold text-white">{smallRankingSummary.achievedCount}/{myStoreRankings.length}</p>
+                    <p className="text-2xl font-mono font-bold text-white">{smallRankingSummary.achievedCount}/{rankingEligibleStoreCount}</p>
                   </div>
                 </>
               )}
@@ -801,12 +829,17 @@ const StorePerformanceView = ({ dashboardStats, myStoreRankings, brandInfo }) =>
                       <div className="mb-4 flex items-start justify-between gap-3">
                         <div className="flex min-w-0 items-center gap-3">
                           <span className={`inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-full text-sm font-black ${store.rank === 1 ? "bg-amber-100 text-amber-700" : store.rank === 2 ? "bg-stone-200 text-stone-600" : store.rank === 3 ? "bg-orange-100 text-orange-700" : "bg-stone-50 text-stone-400"}`}>
-                            {store.rank}
+                            {store.dashboardLiveRankEligible === false ? "—" : store.rank}
                           </span>
                           <div className="min-w-0">
                             <div className="flex flex-wrap items-center gap-2">
                               <h4 className="truncate text-base font-black text-stone-700">{store.storeName}</h4>
                               <span className={`rounded-full border px-2 py-0.5 text-[10px] font-black ${progressMeta.className}`}>{progressMeta.label}</span>
+                              {store.reportingIncomplete && store.dashboardLiveRankEligible === true && (
+                                <span className="rounded-full border border-amber-100 bg-amber-50 px-2 py-0.5 text-[10px] font-black text-amber-700">
+                                  回報未完整
+                                </span>
+                              )}
                               {regionalAttention.needsRegionalAttention && (
                                 <span className="rounded-full border border-rose-100 bg-rose-50 px-2 py-0.5 text-[10px] font-black text-rose-600">
                                   區內待關注
@@ -818,35 +851,48 @@ const StorePerformanceView = ({ dashboardStats, myStoreRankings, brandInfo }) =>
                                 </span>
                               )}
                             </div>
-                            <p className="mt-1 text-[11px] font-bold text-stone-400">全區排名 No.{store.rank} / {store.totalStores || myStoreRankings.length}</p>
+                            <p className="mt-1 text-[11px] font-bold text-stone-400">
+                              {store.dashboardLiveRankEligible === false
+                                ? "暫不排名"
+                                : `${isDashboardLiveRanking ? "即時排名" : "全區排名"} No.${store.rank} / ${store.totalStores || rankingEligibleStoreCount}`}
+                            </p>
                           </div>
                         </div>
                         <div className="text-right">
                           <p className={`font-mono text-2xl font-black ${progressMeta.textClassName}`}>
-                            {Number(store.rate || 0).toFixed(0)}%
+                            {formatKpiPercent(store.rate)}
                           </p>
                         </div>
                       </div>
 
                       <div className="mb-4 h-2 w-full overflow-hidden rounded-full bg-stone-100">
-                        <div className={`h-full rounded-full ${progressMeta.barClassName}`} style={{ width: `${Math.min(Number(store.rate || 0), 100)}%` }} />
+                        <div className={`h-full rounded-full ${progressMeta.barClassName}`} style={{ width: `${isFiniteKpi(store.rate) ? Math.min(Math.max(store.rate, 0), 100) : 0}%` }} />
                       </div>
 
                       <div className="grid grid-cols-2 gap-3 text-sm">
                         <div className="rounded-2xl bg-stone-50 px-3 py-2">
                           <p className="text-[10px] font-black text-stone-400">目前業績</p>
-                          <p className="mt-1 font-mono font-black text-stone-700">{fmtMoney(store.actual)}</p>
+                          <p className="mt-1 font-mono font-black text-stone-700">{formatKpiMoney(store.actual)}</p>
                         </div>
                         <div className="rounded-2xl bg-stone-50 px-3 py-2">
                           <p className="text-[10px] font-black text-stone-400">目標金額</p>
-                          <p className="mt-1 font-mono font-black text-stone-500">{fmtMoney(store.target)}</p>
+                          <p className="mt-1 font-mono font-black text-stone-500">{formatKpiMoney(store.target)}</p>
                         </div>
-                        <div className={`col-span-2 rounded-2xl px-3 py-2 ${isOverTarget ? "bg-emerald-50" : "bg-rose-50"}`}>
-                          <div className="flex items-center justify-between gap-3">
-                            <p className={`text-[10px] font-black ${isOverTarget ? "text-emerald-600" : "text-rose-600"}`}>{isOverTarget ? "超標金額" : "尚差金額"}</p>
-                            <p className={`font-mono font-black ${isOverTarget ? "text-emerald-700" : "text-rose-700"}`}>{fmtMoney(Math.abs(gap))}</p>
+                        {store.dashboardLiveRankEligible === false ? (
+                          <div className="col-span-2 rounded-2xl bg-stone-50 px-3 py-2">
+                            <div className="flex items-center justify-between gap-3">
+                              <p className="text-[10px] font-black text-stone-500">排名狀態</p>
+                              <p className="text-xs font-black text-stone-500">{store.dashboardLiveRankLabel || "暫不排名"}</p>
+                            </div>
                           </div>
-                        </div>
+                        ) : (
+                          <div className={`col-span-2 rounded-2xl px-3 py-2 ${isOverTarget ? "bg-emerald-50" : "bg-rose-50"}`}>
+                            <div className="flex items-center justify-between gap-3">
+                              <p className={`text-[10px] font-black ${isOverTarget ? "text-emerald-600" : "text-rose-600"}`}>{isOverTarget ? "超標金額" : "尚差金額"}</p>
+                              <p className={`font-mono font-black ${isOverTarget ? "text-emerald-700" : "text-rose-700"}`}>{fmtMoney(Math.abs(gap))}</p>
+                            </div>
+                          </div>
+                        )}
                       </div>
                     </div>
                   );
@@ -858,7 +904,7 @@ const StorePerformanceView = ({ dashboardStats, myStoreRankings, brandInfo }) =>
               <table className="w-full text-left border-collapse min-w-[350px]">
                 <thead>
                   <tr className="text-xs font-bold text-stone-400 border-b border-stone-100">
-                    <th className="p-3 sm:p-4 w-16 sm:w-20 text-center">全區排名</th>
+                    <th className="p-3 sm:p-4 w-16 sm:w-20 text-center">{isDashboardLiveRanking ? "即時排名" : "全區排名"}</th>
                     <th className="p-3 sm:p-4">門市名稱</th>
                     <th className="p-3 sm:p-4 text-right">目前業績</th>
                     <th className="p-3 sm:p-4 text-right hidden sm:table-cell">目標金額</th>
@@ -873,7 +919,7 @@ const StorePerformanceView = ({ dashboardStats, myStoreRankings, brandInfo }) =>
                     return (
                       <tr key={store.storeName} className={`group transition-colors border-b last:border-0 border-stone-50 ${regionalAttention.needsRegionalAttention ? "bg-rose-50 hover:bg-rose-100" : "hover:bg-stone-50" }`}>
                         <td className="p-3 sm:p-4 text-center">
-                          <span className={`inline-flex items-center justify-center w-6 h-6 sm:w-8 sm:h-8 rounded-full text-xs font-bold ${store.rank === 1 ? "bg-amber-100 text-amber-700" : store.rank === 2 ? "bg-stone-200 text-stone-600" : store.rank === 3 ? "bg-orange-100 text-orange-700" : "bg-stone-50 text-stone-400"}`}>{store.rank}</span>
+                          <span className={`inline-flex items-center justify-center w-6 h-6 sm:w-8 sm:h-8 rounded-full text-xs font-bold ${store.rank === 1 ? "bg-amber-100 text-amber-700" : store.rank === 2 ? "bg-stone-200 text-stone-600" : store.rank === 3 ? "bg-orange-100 text-orange-700" : "bg-stone-50 text-stone-400"}`}>{store.dashboardLiveRankEligible === false ? "—" : store.rank}</span>
                         </td>
                         <td className="p-3 sm:p-4">
                           <div className="flex flex-col sm:flex-row sm:items-center gap-1 sm:gap-2">
@@ -882,6 +928,12 @@ const StorePerformanceView = ({ dashboardStats, myStoreRankings, brandInfo }) =>
                               {progressMeta.key === "attention" && <AlertTriangle size={10} />}
                               <span className="hidden sm:inline">{progressMeta.label}</span>
                             </span>
+                            {store.reportingIncomplete && store.dashboardLiveRankEligible === true && (
+                              <span className="w-fit text-[10px] font-bold px-1.5 py-0.5 rounded border border-amber-100 bg-amber-50 text-amber-700">
+                                <span className="sm:hidden">缺報</span>
+                                <span className="hidden sm:inline">回報未完整</span>
+                              </span>
+                            )}
                             {regionalAttention.needsRegionalAttention && (
                               <span className="w-fit text-[10px] font-bold px-1.5 py-0.5 bg-rose-100 text-rose-600 rounded border border-rose-100 flex items-center gap-1">
                                 <AlertTriangle size={10} /> <span className="hidden sm:inline">區內待關注</span>
@@ -894,9 +946,9 @@ const StorePerformanceView = ({ dashboardStats, myStoreRankings, brandInfo }) =>
                             )}
                           </div>
                         </td>
-                        <td className="p-3 sm:p-4 text-right font-mono font-medium text-stone-600 text-sm sm:text-base">{fmtMoney(store.actual)}</td>
+                        <td className="p-3 sm:p-4 text-right font-mono font-medium text-stone-600 text-sm sm:text-base">{formatKpiMoney(store.actual)}</td>
                         <td className="p-3 sm:p-4 text-right font-mono text-stone-400 text-sm hidden sm:table-cell">
-                          {fmtMoney(store.target)}
+                          {formatKpiMoney(store.target)}
                           {store.hasChallenge && (
                             <div className="text-[10px] text-amber-500 mt-0.5 flex items-center justify-end gap-0.5">
                               <Star size={8} className="fill-amber-500"/> {fmtMoney(store.challengeTarget)}
@@ -907,7 +959,7 @@ const StorePerformanceView = ({ dashboardStats, myStoreRankings, brandInfo }) =>
                           <div className="flex flex-col items-end">
                             <span className={`text-base sm:text-lg font-bold font-mono ${progressMeta.textClassName}`}>{formatKpiPercent(store.rate)}</span>
                             <div className="w-16 sm:w-24 h-1 sm:h-1.5 bg-stone-100 rounded-full mt-1 overflow-hidden">
-                              <div className={`h-full rounded-full ${progressMeta.barClassName}`} style={{ width: `${Math.min(store.rate, 100)}%` }}></div>
+                              <div className={`h-full rounded-full ${progressMeta.barClassName}`} style={{ width: `${isFiniteKpi(store.rate) ? Math.min(Math.max(store.rate, 0), 100) : 0}%` }}></div>
                             </div>
                           </div>
                         </td>

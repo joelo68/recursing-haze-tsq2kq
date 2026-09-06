@@ -7,6 +7,10 @@ import { doc, getDoc, collection, getDocs, onSnapshot } from 'firebase/firestore
 import { db } from '../config/firebase';
 import { KPI_VALUE_STATUS, formalNetCash } from '../utils/kpiContracts.js';
 import {
+  DASHBOARD_LIVE_RANKING_SEMANTICS,
+  buildDashboardLiveRanking,
+} from '../utils/dashboardLiveRanking.js';
+import {
   buildCurrentDetailFormalAuthority,
   buildCurrentDetailFormalScope,
 } from '../utils/currentDetailFormalConsumer.js';
@@ -2117,39 +2121,58 @@ export function useDashboardStats() {
 
   const detailMyStoreRankings = useMemo(() => {
     if (!currentDetailFormalAuthority?.compatible) return [];
-    const effectiveStoreSet = new Set((effectiveStores || []).map(cleanName).filter(Boolean));
-    const totalStores = Number(currentDetailFormalAuthority.formalRankEligibleStoreCount || 0);
+    const authorityRowsByStore = new Map(
+      Object.values(currentDetailFormalAuthority.stores || {})
+        .map((row) => [cleanName(row?.storeKey), row])
+        .filter(([storeKey]) => Boolean(storeKey))
+    );
+    const scopedRows = [...new Set((effectiveStores || []).map(cleanName).filter(Boolean))]
+      .map((storeKey) => authorityRowsByStore.get(storeKey))
+      .filter(Boolean);
+    const liveRanking = buildDashboardLiveRanking({
+      rows: scopedRows,
+      normalizeStoreKey: cleanName,
+    });
 
-    return Object.values(currentDetailFormalAuthority.stores || {})
-      .filter((row) => row?.formalRankEligible === true && effectiveStoreSet.has(cleanName(row.storeKey)))
-      .sort((a, b) => Number(a.formalCashAchievementRank || 0) - Number(b.formalCashAchievementRank || 0))
-      .map((row) => {
-        const rank = Number(row.formalCashAchievementRank || 0);
-        const target = row.cashTarget;
-        const challengeTarget = row.challengeCashTarget;
-        const hasChallenge = row.challengeCashTargetConfigured === true;
-        const challengeRate = (
-          isFiniteKpiNumber(row.formalNetCash) &&
-          isFiniteKpiNumber(challengeTarget) &&
-          challengeTarget > 0
-        ) ? (row.formalNetCash / challengeTarget) * 100 : null;
+    return liveRanking.rows.map((row) => {
+      const rank = Number(row.dashboardLiveCashAchievementRank || 0) || null;
+      const totalStores = Number(row.dashboardLiveRankEligibleStoreCount || liveRanking.liveRankEligibleStoreCount || 0);
+      const scopeStoreCount = Number(row.dashboardLiveScopeStoreCount || liveRanking.scopeStoreCount || 0);
+      const target = row.cashTarget;
+      const challengeTarget = row.challengeCashTarget;
+      const hasChallenge = row.challengeCashTargetConfigured === true;
+      const challengeRate = (
+        isFiniteKpiNumber(row.formalNetCash) &&
+        isFiniteKpiNumber(challengeTarget) &&
+        challengeTarget > 0
+      ) ? (row.formalNetCash / challengeTarget) * 100 : null;
 
-        return {
-          storeName: row.canonicalStoreName || `${brandPrefix}${row.storeKey}店`,
-          rank,
-          totalStores,
-          actual: row.formalNetCash,
-          target,
-          rate: row.cashAchievement,
-          challengeTarget,
-          hasChallenge,
-          challengeRate,
-          passedChallenge: hasChallenge && isFiniteKpiNumber(challengeRate) && challengeRate >= 100,
-          rankingSemantics: "formal_cash_achievement",
-          isBottomSegment: isInBottomRankingSegment(rank, totalStores),
-          isBottom5: isInBottomRankingSegment(rank, totalStores),
-        };
-      });
+      return {
+        storeName: row.canonicalStoreName || `${brandPrefix}${row.storeKey}店`,
+        rank,
+        totalStores,
+        scopeStoreCount,
+        actual: row.formalNetCash,
+        actualStatus: row.formalNetCashStatus,
+        target,
+        targetStatus: row.cashTargetStatus,
+        rate: row.cashAchievement,
+        achievementStatus: row.cashAchievementStatus,
+        reportingStatus: row.reportingStatus,
+        reportingIncomplete: row.reportingIncomplete === true,
+        dashboardLiveRankEligible: row.dashboardLiveRankEligible === true,
+        dashboardLiveRankReason: row.dashboardLiveRankReason || "",
+        dashboardLiveRankLabel: row.dashboardLiveRankLabel || "",
+        formalRankEligible: row.formalRankEligible === true,
+        challengeTarget,
+        hasChallenge,
+        challengeRate,
+        passedChallenge: hasChallenge && isFiniteKpiNumber(challengeRate) && challengeRate >= 100,
+        rankingSemantics: DASHBOARD_LIVE_RANKING_SEMANTICS,
+        isBottomSegment: row.dashboardLiveRankEligible === true && isInBottomRankingSegment(rank, totalStores),
+        isBottom5: row.dashboardLiveRankEligible === true && isInBottomRankingSegment(rank, totalStores),
+      };
+    });
   }, [currentDetailFormalAuthority, effectiveStores, cleanName, brandPrefix]);
 
   const detailTherapistStats = useMemo(() => {
