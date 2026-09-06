@@ -1,6 +1,6 @@
 export const STORE_LIFECYCLE_SCHEMA_VERSION = "store-lifecycle-v1";
 export const REPORTING_COMPLETENESS_SCHEMA_VERSION = "reporting-completeness-v1";
-export const REPORTING_CALENDAR_SCHEMA_VERSION = "reporting-calendar-v1";
+export const REPORTING_CALENDAR_SCHEMA_VERSION = "reporting-calendar-v2";
 export const STORE_LIFECYCLE_DATASET_STATUSES = Object.freeze(["BUILDING", "READY"]);
 
 const BRAND_META = Object.freeze({
@@ -98,6 +98,55 @@ export const normalizeReportingCalendarClosedDates = (values = []) => {
   return [...byDate.values()].sort((a, b) => a.date.localeCompare(b.date));
 };
 
+export const normalizeReportingCalendarStoreClosureEvents = (values = []) => {
+  const source = Array.isArray(values) ? values : [];
+  const byId = new Map();
+
+  source.forEach((value, index) => {
+    const row = value && typeof value === "object" && !Array.isArray(value) ? value : {};
+    const dates = [...new Set(
+      (Array.isArray(row.dates) ? row.dates : [row.date])
+        .map(normalizeIsoDate)
+        .filter(Boolean)
+    )].sort();
+    const storeKeys = [...new Set(
+      (Array.isArray(row.storeKeys) ? row.storeKeys : [row.storeKey])
+        .map(normalizeStoreLifecycleCore)
+        .filter(Boolean)
+    )].sort((a, b) => a.localeCompare(b, "zh-Hant"));
+    if (!dates.length || !storeKeys.length) return;
+
+    const fallbackId = `legacy-store-closure-${dates[0]}-${index + 1}`;
+    const id = String(row.id || row.eventId || fallbackId).trim() || fallbackId;
+    byId.set(id, {
+      id,
+      dates,
+      storeKeys,
+      reason: String(row.reason || "").trim(),
+      createdAtText: String(row.createdAtText || ""),
+      createdBy: String(row.createdBy || ""),
+      createdByRole: String(row.createdByRole || ""),
+      createdByAccountId: String(row.createdByAccountId || ""),
+    });
+  });
+
+  return [...byId.values()].sort((a, b) => (
+    String(a.dates?.[0] || "").localeCompare(String(b.dates?.[0] || ""))
+    || String(a.id || "").localeCompare(String(b.id || ""))
+  ));
+};
+
+export const getReportingCalendarStoreClosedDates = (calendar = {}, storeName = "") => {
+  const storeKey = normalizeStoreLifecycleCore(storeName);
+  if (!storeKey) return [];
+  const normalized = normalizeReportingCalendar(calendar);
+  return [...new Set(
+    normalized.storeClosureEvents
+      .filter((event) => event.storeKeys.includes(storeKey))
+      .flatMap((event) => event.dates)
+  )].sort();
+};
+
 export const normalizeReportingCalendarMonthRevisions = (raw = {}) => {
   const source = raw && typeof raw === "object" && !Array.isArray(raw) ? raw : {};
   return Object.fromEntries(
@@ -117,6 +166,7 @@ export const normalizeReportingCalendar = (raw = {}) => {
     revision: Math.max(0, Number(source.revision || 0)),
     monthRevisions: normalizeReportingCalendarMonthRevisions(source.monthRevisions),
     closedDates: normalizeReportingCalendarClosedDates(source.closedDates),
+    storeClosureEvents: normalizeReportingCalendarStoreClosureEvents(source.storeClosureEvents),
     updatedAtText: String(source.updatedAtText || ""),
     updatedBy: String(source.updatedBy || ""),
     updatedByRole: String(source.updatedByRole || ""),
@@ -358,16 +408,30 @@ export const getLifecycleEligibleStoreEntries = (master = {}, yearMonth = "", op
   if (requireReady && String(master?.datasetStatus || "") !== "READY") return [];
 
   const brandId = normalizeLifecycleBrandId(master?.brandId || options.brandId || "cyj");
-  const reportingCalendarClosedDates = normalizeReportingCalendar(master?.reportingCalendar || {}).closedDates;
+  const reportingCalendar = normalizeReportingCalendar(master?.reportingCalendar || {});
+  const reportingCalendarBrandClosedDates = reportingCalendar.closedDates;
   const rawStores = master?.stores && typeof master.stores === "object" && !Array.isArray(master.stores)
     ? master.stores
     : {};
 
   return Object.entries(rawStores)
-    .map(([key, value]) => ({
-      ...normalizeLifecycleEntry(value || {}, key, brandId),
-      reportingCalendarClosedDates,
-    }))
+    .map(([key, value]) => {
+      const normalizedEntry = normalizeLifecycleEntry(value || {}, key, brandId);
+      const reportingCalendarStoreClosedDates = getReportingCalendarStoreClosedDates(
+        reportingCalendar,
+        normalizedEntry.storeKey
+      );
+      const reportingCalendarClosedDates = [...new Set([
+        ...reportingCalendarBrandClosedDates.map((row) => row.date),
+        ...reportingCalendarStoreClosedDates,
+      ])].sort();
+      return {
+        ...normalizedEntry,
+        reportingCalendarBrandClosedDates,
+        reportingCalendarStoreClosedDates,
+        reportingCalendarClosedDates,
+      };
+    })
     .filter((entry) => isLifecycleEntryEligibleForMonth(entry, normalizedYearMonth))
     .sort((a, b) => String(a.canonicalStoreName || a.storeKey).localeCompare(String(b.canonicalStoreName || b.storeKey), "zh-Hant"));
 };
@@ -481,6 +545,18 @@ export const buildLifecycleReportingCompleteness = ({
       && date.startsWith(`${normalizedYearMonth}-`)
       && (!normalizedCutoffDate || date <= normalizedCutoffDate)
     ));
+  const storeClosedReportPairs = new Set();
+  reportingCalendar.storeClosureEvents.forEach((event) => {
+    event.dates
+      .filter((date) => (
+        normalizedYearMonth
+        && date.startsWith(`${normalizedYearMonth}-`)
+        && (!normalizedCutoffDate || date <= normalizedCutoffDate)
+      ))
+      .forEach((date) => {
+        event.storeKeys.forEach((storeKey) => storeClosedReportPairs.add(`${storeKey}@@${date}`));
+      });
+  });
   const empty = {
     schemaVersion: REPORTING_COMPLETENESS_SCHEMA_VERSION,
     brandId: normalizedBrandId,
@@ -492,6 +568,7 @@ export const buildLifecycleReportingCompleteness = ({
     reportingCalendarRevision,
     closedReportDateCount: closedReportDates.length,
     closedReportDates,
+    storeClosedReportDayCount: storeClosedReportPairs.size,
     eligibleStoreCount: 0,
     completeStoreCount: 0,
     incompleteStoreCount: 0,
@@ -531,7 +608,6 @@ export const buildLifecycleReportingCompleteness = ({
     if (!storeKey) return;
     const expectedDates = getLifecycleExpectedReportDates(entry, normalizedYearMonth, {
       cutoffDate,
-      closedDates: closedReportDates,
     });
     const submittedDates = submittedDatesByStore.get(storeKey) || new Set();
     const submittedExpectedDates = expectedDates.filter((date) => submittedDates.has(date));

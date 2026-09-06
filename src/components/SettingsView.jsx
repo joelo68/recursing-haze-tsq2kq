@@ -29,6 +29,7 @@ import {
   validateDelegationConflict,
 } from "../utils/delegationResolver";
 import SystemMaintenance from "./SystemMaintenance";
+import ReportingCalendarManager from "./ReportingCalendarManager";
 import StoreLifecycleManager from "./StoreLifecycleManager";
 
 // ★ 引入自訂日曆元件
@@ -311,6 +312,7 @@ const SettingsView = () => {
       { id: "feature-flags", label: "品牌功能", isAdminOnly: true, icon: CheckSquare },
       { id: "trainer-account", label: "教專帳號", isAdminOnly: true, icon: Users }, 
       { id: "shops", label: "店家管理", isAdminOnly: true, icon: Store },
+      { id: "reporting-calendar", label: "營運日曆", isAdminOnly: true, icon: Calendar },
       { id: "store-lifecycle", label: "門市生命週期", isAdminOnly: true, icon: Calendar },
       { id: "stores", label: "店經帳號", isAdminOnly: true, icon: UserCheck },
       { id: "managers", label: "區長架構", isAdminOnly: true, icon: LayoutGrid },
@@ -1898,6 +1900,17 @@ const SettingsView = () => {
           </Card>
         )}
                 {activeTab === "shops" && ( <div className="space-y-6 w-full max-w-full min-w-0"><Card title="新增營運店家"><div className="flex flex-col md:flex-row gap-4 items-end"><div className="flex-1 w-full"><label className="block text-xs font-bold text-[#A69C91] mb-1">分店簡稱</label><input type="text" value={newShop.name} onChange={(e) => setNewShop({ ...newShop, name: e.target.value })} placeholder="例如: 中山" className="w-full px-4 py-2 border-2 border-[#EFE7DA] rounded-xl outline-none focus:border-[#D6A84F] font-bold"/></div><div className="flex-1 w-full"><label className="block text-xs font-bold text-[#A69C91] mb-1">所屬區域</label><div className="relative"><select value={newShop.manager} onChange={(e) => setNewShop({ ...newShop, manager: e.target.value })} className="w-full px-4 py-2 border-2 border-[#EFE7DA] rounded-xl outline-none focus:border-[#D6A84F] font-bold appearance-none bg-[#FFFCF7] text-[#4D4338]"><option value="">請選擇...</option>{sortManagersByOrgOrder(localManagers, null, localManagerOrder).map((m) => (<option key={m} value={m}>{m} 區</option>))}</select><ChevronDown size={16} className="absolute right-3 top-3 text-[#A69C91] pointer-events-none"/></div></div><button onClick={handleAddGlobalStore} className="w-full md:w-auto bg-gradient-to-r from-[#FFF7DF] via-[#F7E8C6] to-[#EACB86] text-[#5A4225] border border-[#E8C77A] px-6 py-2.5 rounded-xl font-bold hover:brightness-[1.02] shadow-sm flex items-center justify-center gap-2"><Plus size={18} /> 新增</button></div></Card><Card title="全域店家列表"><div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">{managerEntries.map(([mgr, stores]) => (<div key={mgr} className={`bg-[#FAF7F1] rounded-2xl p-4 border ${mgr === UNASSIGNED_KEY ? "border-stone-300 shadow-inner" : "border-[#EFE7DA]"}`}><div className="flex items-center gap-2 mb-3 border-b border-[#E8DDCC] pb-2"><span className={`font-bold ${mgr === UNASSIGNED_KEY ? "text-[#7C7063]" : "text-[#4D4338]"}`}>{mgr} {mgr!==UNASSIGNED_KEY && "區"}</span><span className="text-xs text-[#A69C91] ml-auto">{stores.length} 間</span></div><div className="flex flex-wrap gap-2">{stores.map((store) => (<div key={store} className="group relative flex items-center"><span className={`px-3 py-1.5 border rounded-lg text-xs font-bold shadow-sm pr-7 ${mgr === UNASSIGNED_KEY ? "bg-[#FFFCF7] text-[#7C7063] border-[#E8DDCC]" : "bg-[#FFFCF7] text-[#675B4E] border-[#E8DDCC]"}`}>{store}</span><button onClick={() => handleDeleteGlobalStore(store, mgr)} className="absolute right-1 p-1 text-stone-300 hover:text-rose-500 transition-colors"><X size={12} /></button></div>))}</div></div>))}</div></Card></div> )}
+        {activeTab === "reporting-calendar" && (
+          <ReportingCalendarManager
+            currentBrand={currentBrand}
+            managers={localManagers}
+            managerOrder={localManagerOrder}
+            getCollectionPath={getCollectionPath}
+            currentUser={currentUser}
+            currentDeviceTrust={currentDeviceTrust}
+            showToast={showToast}
+          />
+        )}
         {activeTab === "store-lifecycle" && (
           <StoreLifecycleManager
             currentBrand={currentBrand}

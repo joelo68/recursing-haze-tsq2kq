@@ -11469,6 +11469,9 @@ async function finalizeSummaryRecalcFlagWithReportingCalendarGuard({
         )
           ? dashboardSummary.reportingCompleteness.closedReportDates
           : [],
+        storeClosedReportDayCount: Number(
+          dashboardSummary?.reportingCompleteness?.storeClosedReportDayCount || 0
+        ),
       },
       lastCompletedAt: admin.firestore.FieldValue.serverTimestamp(),
       lastCompletedAtText: nowText,
@@ -11636,6 +11639,9 @@ async function finalizeMonthReportAuto({ brandId, yearMonth, trigger = "auto_wor
       closedReportDates: Array.isArray(dashboardSummary.reportingCompleteness?.closedReportDates)
         ? dashboardSummary.reportingCompleteness.closedReportDates
         : [],
+      storeClosedReportDayCount: Number(
+        dashboardSummary.reportingCompleteness?.storeClosedReportDayCount || 0
+      ),
       writtenDocs: 3,
       createdAt: new Date().toLocaleString("zh-TW", { hour12: false }),
       source: "auto_summary_repair_worker",
@@ -11870,6 +11876,9 @@ async function collectReadyDirtySummaryFlags() {
           status: data.status || "dirty",
           pendingCount: Number(data.pendingCount || 0),
           rebuildAfterAtText: data.rebuildAfterAtText || "",
+          reportingCalendarRepairRequired:
+            Number(data.requiredReportingCalendarRevision || 0)
+            > Number(data.reportingCalendarRevision || 0),
           sources: ["summary_recalc_flags"],
         });
       });
@@ -12112,6 +12121,8 @@ exports.repairDirtySummaries = onSchedule({ schedule: "every 5 minutes", timeZon
 
   console.log(`🧾 Summary 自動修復：本次找到 ${jobs.length} 個待處理月份：${jobs.map((j) => `${j.brandId}/${j.yearMonth}/${(j.sources || []).join('+') || j.status}/${j.pendingCount || 0}`).join(', ')}`);
 
+  const reportingCalendarAnnualKeys = new Set();
+
   for (const job of jobs) {
     try {
       const result = await finalizeMonthReportAuto({ ...job, trigger: "scheduled_worker", force: false });
@@ -12119,9 +12130,30 @@ exports.repairDirtySummaries = onSchedule({ schedule: "every 5 minutes", timeZon
         console.log(`⏭️ Summary 自動修復略過：${job.brandId}｜${job.yearMonth}｜${result.reason}`);
       } else {
         console.log(`✅ Summary 自動修復完成：${job.brandId}｜${job.yearMonth}｜matched=${result.matched}｜completed=${result.completedQueueCount}`);
+        if (
+          job.reportingCalendarRepairRequired === true
+          && result?.matched === true
+          && result?.reportingCalendarRaceDetected !== true
+        ) {
+          reportingCalendarAnnualKeys.add(`${job.brandId}:${String(job.yearMonth).slice(0, 4)}`);
+        }
       }
     } catch (error) {
       console.error(`❌ Summary 自動修復失敗：${job.brandId}｜${job.yearMonth}`, error);
+    }
+  }
+
+  // Calendar-driven historical repair should converge Annual in the same worker cycle.
+  // De-duplicate by brand/year and rebuild only after the Summary race guard is verified.
+  for (const key of reportingCalendarAnnualKeys) {
+    const [brandId, yearText] = key.split(":");
+    try {
+      const annualResult = await rebuildAnnualKpiSummaryForBrand(brandId, Number(yearText), {
+        trigger: "reporting_calendar_summary_repair",
+      });
+      console.log(`✅ Reporting Calendar Annual 自動重建：${brandId}｜${yearText}｜basedMonthCount=${annualResult?.basedMonthCount ?? "?"}`);
+    } catch (error) {
+      console.error(`❌ Reporting Calendar Annual 自動重建失敗：${brandId}｜${yearText}`, error);
     }
   }
 });

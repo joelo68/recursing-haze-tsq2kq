@@ -1,3 +1,4 @@
+const { randomUUID } = require('node:crypto');
 const { onRequest } = require('firebase-functions/v2/https');
 const {
   normalizeBrandId,
@@ -9,7 +10,7 @@ const {
 
 const STORE_LIFECYCLE_SCHEMA_VERSION = 'store-lifecycle-v1';
 const REPORTING_COMPLETENESS_SCHEMA_VERSION = 'reporting-completeness-v1';
-const REPORTING_CALENDAR_SCHEMA_VERSION = 'reporting-calendar-v1';
+const REPORTING_CALENDAR_SCHEMA_VERSION = 'reporting-calendar-v2';
 const DATASET_STATUSES = new Set(['BUILDING', 'READY']);
 
 const BRAND_PREFIX = Object.freeze({
@@ -90,6 +91,61 @@ function normalizeReportingCalendarClosedDates(values = []) {
   return [...byDate.values()].sort((a, b) => a.date.localeCompare(b.date));
 }
 
+function normalizeReportingCalendarStoreClosureEvents(values = []) {
+  const source = Array.isArray(values) ? values : [];
+  const byId = new Map();
+
+  source.forEach((value, index) => {
+    const row = value && typeof value === 'object' && !Array.isArray(value) ? value : {};
+    const dates = [...new Set(
+      (Array.isArray(row.dates) ? row.dates : [row.date])
+        .map(normalizeIsoDate)
+        .filter(Boolean)
+    )].sort();
+    const storeKeys = [...new Set(
+      (Array.isArray(row.storeKeys) ? row.storeKeys : [row.storeKey])
+        .map(normalizeStoreLifecycleCore)
+        .filter(Boolean)
+    )].sort((a, b) => a.localeCompare(b, 'zh-Hant'));
+    if (!dates.length || !storeKeys.length) return;
+
+    const fallbackId = `legacy-store-closure-${dates[0]}-${index + 1}`;
+    const id = String(row.id || row.eventId || fallbackId).trim() || fallbackId;
+    byId.set(id, {
+      id,
+      dates,
+      storeKeys,
+      reason: String(row.reason || '').trim(),
+      createdAtText: String(row.createdAtText || ''),
+      createdBy: String(row.createdBy || ''),
+      createdByRole: String(row.createdByRole || ''),
+      createdByAccountId: String(row.createdByAccountId || ''),
+    });
+  });
+
+  return [...byId.values()].sort((a, b) => (
+    String(a.dates?.[0] || '').localeCompare(String(b.dates?.[0] || ''))
+    || String(a.id || '').localeCompare(String(b.id || ''))
+  ));
+}
+
+function getReportingCalendarStoreClosedDates(calendar = {}, storeName = '') {
+  const storeKey = normalizeStoreLifecycleCore(storeName);
+  if (!storeKey) return [];
+  const normalized = normalizeReportingCalendar(calendar);
+  return [...new Set(
+    normalized.storeClosureEvents
+      .filter((event) => event.storeKeys.includes(storeKey))
+      .flatMap((event) => event.dates)
+  )].sort();
+}
+
+function normalizeReportingCalendarStoreKeys(values = []) {
+  const source = Array.isArray(values) ? values : [];
+  return [...new Set(source.map(normalizeStoreLifecycleCore).filter(Boolean))]
+    .sort((a, b) => a.localeCompare(b, 'zh-Hant'));
+}
+
 function normalizeReportingCalendarMonthRevisions(raw = {}) {
   const source = raw && typeof raw === 'object' && !Array.isArray(raw) ? raw : {};
   return Object.fromEntries(
@@ -109,6 +165,7 @@ function normalizeReportingCalendar(raw = {}) {
     revision: Math.max(0, Number(source.revision || 0)),
     monthRevisions: normalizeReportingCalendarMonthRevisions(source.monthRevisions),
     closedDates: normalizeReportingCalendarClosedDates(source.closedDates),
+    storeClosureEvents: normalizeReportingCalendarStoreClosureEvents(source.storeClosureEvents),
     updatedAtText: String(source.updatedAtText || ''),
     updatedBy: String(source.updatedBy || ''),
     updatedByRole: String(source.updatedByRole || ''),
@@ -222,7 +279,8 @@ function getLifecycleEligibleStoreEntries(master = {}, yearMonth = '', options =
   if (requireReady && String(master?.datasetStatus || '') !== 'READY') return [];
 
   const brandId = normalizeBrandId(master?.brandId || options.brandId || 'cyj');
-  const reportingCalendarClosedDates = normalizeReportingCalendar(master?.reportingCalendar || {}).closedDates;
+  const reportingCalendar = normalizeReportingCalendar(master?.reportingCalendar || {});
+  const reportingCalendarBrandClosedDates = reportingCalendar.closedDates;
   const stores = master?.stores && typeof master.stores === 'object' && !Array.isArray(master.stores)
     ? master.stores
     : {};
@@ -231,11 +289,21 @@ function getLifecycleEligibleStoreEntries(master = {}, yearMonth = '', options =
     .map(([storeKey, value]) => {
       const entry = value || {};
       const coreStoreName = normalizeStoreLifecycleCore(entry.coreStoreName || entry.storeKey || storeKey);
+      const reportingCalendarStoreClosedDates = getReportingCalendarStoreClosedDates(
+        reportingCalendar,
+        coreStoreName
+      );
+      const reportingCalendarClosedDates = [...new Set([
+        ...reportingCalendarBrandClosedDates.map((row) => row.date),
+        ...reportingCalendarStoreClosedDates,
+      ])].sort();
       return {
         ...entry,
         storeKey: coreStoreName,
         coreStoreName,
         canonicalStoreName: getCanonicalStoreName(entry.canonicalStoreName || coreStoreName, brandId),
+        reportingCalendarBrandClosedDates,
+        reportingCalendarStoreClosedDates,
         reportingCalendarClosedDates,
       };
     })
@@ -350,6 +418,18 @@ function buildLifecycleReportingCompleteness({
       && date.startsWith(`${normalizedYearMonth}-`)
       && (!normalizedCutoffDate || date <= normalizedCutoffDate)
     ));
+  const storeClosedReportPairs = new Set();
+  reportingCalendar.storeClosureEvents.forEach((event) => {
+    event.dates
+      .filter((date) => (
+        normalizedYearMonth
+        && date.startsWith(`${normalizedYearMonth}-`)
+        && (!normalizedCutoffDate || date <= normalizedCutoffDate)
+      ))
+      .forEach((date) => {
+        event.storeKeys.forEach((storeKey) => storeClosedReportPairs.add(`${storeKey}@@${date}`));
+      });
+  });
   const empty = {
     schemaVersion: REPORTING_COMPLETENESS_SCHEMA_VERSION,
     brandId: normalizedBrandId,
@@ -361,6 +441,7 @@ function buildLifecycleReportingCompleteness({
     reportingCalendarRevision,
     closedReportDateCount: closedReportDates.length,
     closedReportDates,
+    storeClosedReportDayCount: storeClosedReportPairs.size,
     eligibleStoreCount: 0,
     completeStoreCount: 0,
     incompleteStoreCount: 0,
@@ -398,7 +479,6 @@ function buildLifecycleReportingCompleteness({
     if (!storeKey) return;
     const expectedDates = getLifecycleExpectedReportDates(entry, normalizedYearMonth, {
       cutoffDate,
-      closedDates: closedReportDates,
     });
     const submittedDates = submittedDatesByStore.get(storeKey) || new Set();
     const submittedExpectedDates = expectedDates.filter((date) => submittedDates.has(date));
@@ -568,45 +648,171 @@ function getTaipeiYearMonthForReportingCalendar() {
   return `${map.year}-${map.month}`;
 }
 
-function applyReportingCalendarMutation({ current = {}, operation = 'add', dates = [], reason = '' } = {}) {
+function applyReportingCalendarMutation({
+  current = {},
+  operation = 'add',
+  scope = 'brand',
+  dates = [],
+  reason = '',
+  storeKeys = [],
+  eventId = '',
+  eventMeta = {},
+} = {}) {
   const normalized = normalizeReportingCalendar(current);
   const mode = String(operation || '').trim().toLowerCase();
+  const normalizedScope = String(scope || 'brand').trim().toLowerCase() === 'stores' ? 'stores' : 'brand';
   if (!['add', 'remove'].includes(mode)) {
     const error = new Error('營業日曆操作只支援 add / remove');
     error.code = 'INVALID_REPORTING_CALENDAR';
     throw error;
   }
-  const normalizedDates = normalizeReportingCalendarMutationDates(dates);
+
   const normalizedReason = String(reason || '').trim();
   if (mode === 'add' && !normalizedReason) {
-    const error = new Error('新增公休日必須填寫原因');
+    const error = new Error('新增休店日必須填寫原因');
     error.code = 'INVALID_REPORTING_CALENDAR';
     throw error;
   }
 
-  const byDate = new Map(normalized.closedDates.map((row) => [row.date, { ...row }]));
-  const changedDates = [];
-
-  normalizedDates.forEach((date) => {
+  if (normalizedScope === 'brand') {
+    const normalizedDates = normalizeReportingCalendarMutationDates(dates);
     if (mode === 'add') {
-      const previous = byDate.get(date);
-      if (!previous || String(previous.reason || '') !== normalizedReason) {
-        byDate.set(date, { date, reason: normalizedReason });
+      const storeOverlap = normalized.storeClosureEvents.find((event) => (
+        event.dates.some((date) => normalizedDates.includes(date))
+      ));
+      if (storeOverlap) {
+        const error = new Error('選擇日期已有指定店家休店設定，請先取消該設定後再改為全品牌休店');
+        error.code = 'REPORTING_CALENDAR_SCOPE_OVERLAP';
+        error.currentEvent = storeOverlap;
+        throw error;
+      }
+    }
+
+    const byDate = new Map(normalized.closedDates.map((row) => [row.date, { ...row }]));
+    const changedDates = [];
+    normalizedDates.forEach((date) => {
+      if (mode === 'add') {
+        const previous = byDate.get(date);
+        if (!previous || String(previous.reason || '') !== normalizedReason) {
+          byDate.set(date, { date, reason: normalizedReason });
+          changedDates.push(date);
+        }
+        return;
+      }
+      if (byDate.has(date)) {
+        byDate.delete(date);
         changedDates.push(date);
       }
-      return;
-    }
+    });
 
-    if (byDate.has(date)) {
-      byDate.delete(date);
-      changedDates.push(date);
+    return {
+      scope: 'brand',
+      changed: changedDates.length > 0,
+      changedDates,
+      closedDates: [...byDate.values()].sort((a, b) => a.date.localeCompare(b.date)),
+      storeClosureEvents: normalized.storeClosureEvents,
+      eventId: '',
+    };
+  }
+
+  if (mode === 'remove') {
+    const requestedEventId = String(eventId || '').trim();
+    if (!requestedEventId) {
+      const error = new Error('取消指定店家休店設定時缺少 eventId');
+      error.code = 'INVALID_REPORTING_CALENDAR';
+      throw error;
     }
-  });
+    const existing = normalized.storeClosureEvents.find((event) => event.id === requestedEventId) || null;
+    if (!existing) {
+      return {
+        scope: 'stores',
+        changed: false,
+        changedDates: [],
+        closedDates: normalized.closedDates,
+        storeClosureEvents: normalized.storeClosureEvents,
+        eventId: requestedEventId,
+      };
+    }
+    return {
+      scope: 'stores',
+      changed: true,
+      changedDates: existing.dates,
+      closedDates: normalized.closedDates,
+      storeClosureEvents: normalized.storeClosureEvents.filter((event) => event.id !== requestedEventId),
+      eventId: requestedEventId,
+      removedEvent: existing,
+    };
+  }
+
+  const normalizedDates = normalizeReportingCalendarMutationDates(dates);
+  const normalizedStoreKeys = normalizeReportingCalendarStoreKeys(storeKeys);
+  if (!normalizedStoreKeys.length) {
+    const error = new Error('指定店家休店至少需要選擇一間門市');
+    error.code = 'INVALID_REPORTING_CALENDAR';
+    throw error;
+  }
+
+  const brandClosedDateSet = new Set(normalized.closedDates.map((row) => row.date));
+  const brandOverlapDates = normalizedDates.filter((date) => brandClosedDateSet.has(date));
+  if (brandOverlapDates.length) {
+    const error = new Error('選擇日期已設定為全品牌休店，不需要再設定指定店家');
+    error.code = 'REPORTING_CALENDAR_SCOPE_OVERLAP';
+    error.overlapDates = brandOverlapDates;
+    throw error;
+  }
+
+  const exact = normalized.storeClosureEvents.find((event) => (
+    event.reason === normalizedReason
+    && event.dates.length === normalizedDates.length
+    && event.storeKeys.length === normalizedStoreKeys.length
+    && event.dates.every((date, index) => date === normalizedDates[index])
+    && event.storeKeys.every((storeKey, index) => storeKey === normalizedStoreKeys[index])
+  ));
+  if (exact) {
+    return {
+      scope: 'stores',
+      changed: false,
+      changedDates: [],
+      closedDates: normalized.closedDates,
+      storeClosureEvents: normalized.storeClosureEvents,
+      eventId: exact.id,
+    };
+  }
+
+  const overlap = normalized.storeClosureEvents.find((event) => (
+    event.dates.some((date) => normalizedDates.includes(date))
+    && event.storeKeys.some((storeKey) => normalizedStoreKeys.includes(storeKey))
+  ));
+  if (overlap) {
+    const error = new Error('選擇的門市與日期已有休店設定，請先檢查既有休店紀錄');
+    error.code = 'REPORTING_CALENDAR_STORE_OVERLAP';
+    error.currentEvent = overlap;
+    throw error;
+  }
+
+  const nextEventId = String(eventId || '').trim() || randomUUID();
+  const nextEvent = {
+    id: nextEventId,
+    dates: normalizedDates,
+    storeKeys: normalizedStoreKeys,
+    reason: normalizedReason,
+    createdAtText: String(eventMeta.createdAtText || ''),
+    createdBy: String(eventMeta.createdBy || ''),
+    createdByRole: String(eventMeta.createdByRole || ''),
+    createdByAccountId: String(eventMeta.createdByAccountId || ''),
+  };
 
   return {
-    changed: changedDates.length > 0,
-    changedDates,
-    closedDates: [...byDate.values()].sort((a, b) => a.date.localeCompare(b.date)),
+    scope: 'stores',
+    changed: true,
+    changedDates: normalizedDates,
+    closedDates: normalized.closedDates,
+    storeClosureEvents: normalizeReportingCalendarStoreClosureEvents([
+      ...normalized.storeClosureEvents,
+      nextEvent,
+    ]),
+    eventId: nextEventId,
+    addedEvent: nextEvent,
   };
 }
 
@@ -713,10 +919,32 @@ function createStoreLifecycleFunctions({ admin, db }) {
         return res.status(200).json({ ok: true, ...result });
       }
 
-if (action === 'update_reporting_calendar') {
+if (action === 'update_reporting_calendar' || action === 'update_reporting_calendar_v2') {
+        const isReportingCalendarV2Action = action === 'update_reporting_calendar_v2';
         const operation = String(body.operation || 'add').trim().toLowerCase();
-        const dates = normalizeReportingCalendarMutationDates(body.dates || []);
+        const requestedScope = String(body.scope || 'brand').trim().toLowerCase() === 'stores' ? 'stores' : 'brand';
+        if (!isReportingCalendarV2Action && requestedScope === 'stores') {
+          return res.status(400).json({
+            ok: false,
+            code: 'REPORTING_CALENDAR_V2_ACTION_REQUIRED',
+            message: '指定店家休店必須使用 Reporting Calendar V2 action',
+          });
+        }
+        const scope = isReportingCalendarV2Action ? requestedScope : 'brand';
+        const rawStoreKeys = Array.isArray(body.storeKeys) ? body.storeKeys : [];
+        const mismatchedStoreBrand = rawStoreKeys.find((value) => {
+          const explicitStoreBrand = detectStoreBrandFromName(value);
+          return explicitStoreBrand && explicitStoreBrand !== brandId;
+        });
+        if (mismatchedStoreBrand) {
+          return res.status(400).json({ ok: false, code: 'BRAND_MISMATCH', message: '指定店家品牌與目前品牌不一致' });
+        }
+        const storeKeys = normalizeReportingCalendarStoreKeys(rawStoreKeys);
+        const dates = scope === 'stores' && operation === 'remove'
+          ? []
+          : normalizeReportingCalendarMutationDates(body.dates || []);
         const reason = String(body.reason || '').trim();
+        const eventId = String(body.eventId || '').trim();
         const expectedCalendarRevision = parseExpectedReportingCalendarRevision(body.expectedCalendarRevision);
         const auditRef = getBrandCollection(db, brandId, 'maintenance_logs').doc();
         let result = null;
@@ -733,23 +961,51 @@ if (action === 'update_reporting_calendar') {
             throw error;
           }
 
+          if (scope === 'stores' && operation === 'add') {
+            const lifecycleStores = master.stores && typeof master.stores === 'object' && !Array.isArray(master.stores)
+              ? master.stores
+              : {};
+            const invalidStoreKeys = storeKeys.filter((storeKey) => {
+              const entry = lifecycleStores[storeKey];
+              if (!entry) return true;
+              const check = validateLifecycleDraft(entry || {});
+              return !check.valid || check.entryStatus !== 'COMPLETE';
+            });
+            if (invalidStoreKeys.length) {
+              const error = new Error(`指定店家尚未完成 Lifecycle：${invalidStoreKeys.join('、')}`);
+              error.code = 'INVALID_REPORTING_CALENDAR_STORE';
+              error.details = invalidStoreKeys;
+              throw error;
+            }
+          }
+
+          const nowText = new Date().toISOString();
           const mutation = applyReportingCalendarMutation({
             current: currentCalendar,
             operation,
+            scope,
             dates,
             reason,
+            storeKeys,
+            eventId,
+            eventMeta: {
+              createdAtText: nowText,
+              createdBy: adminCheck.actorName,
+              createdByRole: adminCheck.actorRole,
+              createdByAccountId: adminCheck.actorAccountId,
+            },
           });
 
           if (!mutation.changed) {
             result = {
               changed: false,
               reportingCalendar: currentCalendar,
+              eventId: mutation.eventId || '',
               affectedHistoricalMonths: [],
             };
             return;
           }
 
-          const nowText = new Date().toISOString();
           const nextCalendarRevision = currentCalendar.revision + 1;
           const changedMonths = [...new Set(
             mutation.changedDates.map((date) => date.slice(0, 7))
@@ -766,6 +1022,7 @@ if (action === 'update_reporting_calendar') {
             revision: nextCalendarRevision,
             monthRevisions: nextMonthRevisions,
             closedDates: mutation.closedDates,
+            storeClosureEvents: mutation.storeClosureEvents,
             updatedAt: admin.firestore.FieldValue.serverTimestamp(),
             updatedAtText: nowText,
             updatedBy: adminCheck.actorName,
@@ -799,6 +1056,16 @@ if (action === 'update_reporting_calendar') {
               .filter((row) => row.date.startsWith(`${yearMonth}-`))
               .map((row) => ({ date: row.date, reason: row.reason }));
 
+            const monthStoreClosureEvents = reportingCalendar.storeClosureEvents
+              .filter((event) => event.dates.some((date) => date.startsWith(`${yearMonth}-`)));
+            const monthStoreClosedPairs = new Set();
+            monthStoreClosureEvents.forEach((event) => {
+              event.dates
+                .filter((date) => date.startsWith(`${yearMonth}-`))
+                .forEach((date) => {
+                  event.storeKeys.forEach((storeKey) => monthStoreClosedPairs.add(`${storeKey}@@${date}`));
+                });
+            });
             const nextMonthRevision = Math.max(
               0,
               Number(reportingCalendar.monthRevisions?.[yearMonth] || 0)
@@ -817,6 +1084,8 @@ if (action === 'update_reporting_calendar') {
                 masterRevision: nextCalendarRevision,
                 revision: nextMonthRevision,
                 closedDates: monthClosedDates,
+                storeClosureEventCount: monthStoreClosureEvents.length,
+                storeClosedReportDayCount: monthStoreClosedPairs.size,
               },
               lastDirtyAt: admin.firestore.FieldValue.serverTimestamp(),
               lastDirtyAtText: nowText,
@@ -835,8 +1104,11 @@ if (action === 'update_reporting_calendar') {
             action: 'update_reporting_calendar',
             details: {
               operation,
-              dates,
+              scope,
+              dates: mutation.changedDates,
               reason,
+              storeKeys: scope === 'stores' ? storeKeys : [],
+              eventId: mutation.eventId || '',
               previousCalendarRevision: currentCalendar.revision,
               reportingCalendarRevision: nextCalendarRevision,
               changedMonthRevisions: Object.fromEntries(
@@ -855,12 +1127,15 @@ if (action === 'update_reporting_calendar') {
             reportingCalendar: {
               schemaVersion: REPORTING_CALENDAR_SCHEMA_VERSION,
               revision: nextCalendarRevision,
+              monthRevisions: nextMonthRevisions,
               closedDates: mutation.closedDates,
+              storeClosureEvents: mutation.storeClosureEvents,
               updatedAtText: nowText,
               updatedBy: adminCheck.actorName,
               updatedByRole: adminCheck.actorRole,
               updatedByAccountId: adminCheck.actorAccountId,
             },
+            eventId: mutation.eventId || '',
             affectedHistoricalMonths,
           };
         });
@@ -956,6 +1231,15 @@ if (action === 'update_reporting_calendar') {
           currentReportingCalendar: error.currentCalendar || null,
         });
       }
+      if (error?.code === 'REPORTING_CALENDAR_STORE_OVERLAP' || error?.code === 'REPORTING_CALENDAR_SCOPE_OVERLAP') {
+        return res.status(409).json({
+          ok: false,
+          code: error.code,
+          message: error.message,
+          currentEvent: error.currentEvent || null,
+          overlapDates: Array.isArray(error.overlapDates) ? error.overlapDates : [],
+        });
+      }
       if (error?.code === 'LIFECYCLE_CONFLICT') {
         return res.status(409).json({
           ok: false,
@@ -970,6 +1254,7 @@ if (action === 'update_reporting_calendar') {
         || error?.code === 'INVALID_STORE_IDENTITY'
         || error?.code === 'INVALID_REPORTING_CALENDAR'
         || error?.code === 'INVALID_REPORTING_CALENDAR_REVISION'
+        || error?.code === 'INVALID_REPORTING_CALENDAR_STORE'
       ) {
         return res.status(400).json({
           ok: false,
@@ -991,6 +1276,7 @@ module.exports = {
   REPORTING_COMPLETENESS_SCHEMA_VERSION,
   REPORTING_CALENDAR_SCHEMA_VERSION,
   normalizeReportingCalendarClosedDates,
+  normalizeReportingCalendarStoreClosureEvents,
   normalizeReportingCalendarMonthRevisions,
   normalizeReportingCalendar,
   applyReportingCalendarMutation,

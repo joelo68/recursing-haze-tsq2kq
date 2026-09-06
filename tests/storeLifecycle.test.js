@@ -12,6 +12,7 @@ import {
   lifecycleStoreBrandMatches,
   normalizeLifecycleMaster,
   normalizeReportingCalendar,
+  normalizeReportingCalendarStoreClosureEvents,
   validateLifecycleEntryDraft,
 } from "../src/utils/storeLifecycle.js";
 
@@ -26,6 +27,8 @@ const deviceApproval = read("functions/deviceApproval.js");
 const rules = read("firestore.rules");
 const settings = read("src/components/SettingsView.jsx");
 const manager = read("src/components/StoreLifecycleManager.jsx");
+const reportingCalendarManager = read("src/components/ReportingCalendarManager.jsx");
+const reportingCalendarClient = read("scripts/reportingCalendarClient.mjs");
 
 test("Store Lifecycle identity preserves CYJ 新店 canonical contract", () => {
   for (const alias of ["新店", "CYJ新店", "CYJ新店店", "DRCYJ新店", "DRCYJ新店店", "新"]) {
@@ -233,7 +236,7 @@ test("Reporting Calendar is brand-scoped inside the existing Lifecycle master an
 
 test("Reporting Calendar update intentionally does not advance Lifecycle master revision", () => {
   const match = backend.match(
-    /if \(action === 'update_reporting_calendar'\) \{([\s\S]*?)if \(action === 'set_dataset_status'\) \{/
+    /if \(action === 'update_reporting_calendar' \|\| action === 'update_reporting_calendar_v2'\) \{([\s\S]*?)if \(action === 'set_dataset_status'\) \{/
   );
   assert.ok(match, "calendar action block must exist");
   const calendarBlock = match[1];
@@ -244,7 +247,7 @@ test("Reporting Calendar update intentionally does not advance Lifecycle master 
 
 test("Reporting Calendar reuses trusted super-admin security and never writes fake daily reports", () => {
   const match = backend.match(
-    /if \(action === 'update_reporting_calendar'\) \{([\s\S]*?)if \(action === 'set_dataset_status'\) \{/
+    /if \(action === 'update_reporting_calendar' \|\| action === 'update_reporting_calendar_v2'\) \{([\s\S]*?)if \(action === 'set_dataset_status'\) \{/
   );
   assert.ok(match);
   const calendarBlock = match[1];
@@ -335,4 +338,62 @@ test("Lifecycle eligible-store resolver requires READY by default and keeps bran
 
   assert.match(backend, /function isLifecycleEntryEligibleForMonth/);
   assert.match(backend, /function getLifecycleEligibleStoreEntries/);
+});
+
+test("Reporting Calendar V2 selected-store events normalize to canonical store identity", () => {
+  const events = normalizeReportingCalendarStoreClosureEvents([{
+    id: "evt-1",
+    dates: ["2026-09-18", "bad-date", "2026-09-18"],
+    storeKeys: ["CYJ新店店", "新"],
+    reason: "颱風停班",
+  }]);
+  assert.equal(events.length, 1);
+  assert.deepEqual(events[0].dates, ["2026-09-18"]);
+  assert.deepEqual(events[0].storeKeys, ["新店"]);
+  assert.match(backend, /REPORTING_CALENDAR_SCHEMA_VERSION = 'reporting-calendar-v2'/);
+  assert.match(backend, /REPORTING_CALENDAR_STORE_OVERLAP/);
+  assert.match(backend, /REPORTING_CALENDAR_SCOPE_OVERLAP/);
+  assert.match(backend, /INVALID_REPORTING_CALENDAR_STORE/);
+});
+
+test("Reporting Calendar product UI uses manager-first store selection and SmartCalendar-backed date picker", () => {
+  assert.match(settings, /id: "reporting-calendar"/);
+  assert.match(settings, /<ReportingCalendarManager/);
+  assert.match(reportingCalendarManager, /選擇區長/);
+  assert.match(reportingCalendarManager, /請先選擇區長，再顯示該區店家/);
+  assert.match(reportingCalendarManager, /切換區長後已選店家仍保留/);
+  assert.match(reportingCalendarManager, /<SmartDatePicker/);
+  assert.match(reportingCalendarManager, /getDoc\(doc\(getCollectionPath\("store_lifecycle"\), "master"\)\)/);
+  assert.doesNotMatch(reportingCalendarManager, /onSnapshot\s*\(/);
+  assert.doesNotMatch(reportingCalendarManager, /setInterval\s*\(/);
+  assert.doesNotMatch(reportingCalendarManager, /getDocs\s*\(/);
+});
+
+test("Reporting Calendar V2 CLI keeps dry-run multi-brand but enforces single-brand writes and supports store events", () => {
+  assert.match(reportingCalendarClient, /scope === "stores"/);
+  assert.match(reportingCalendarClient, /--store-keys/);
+  assert.match(reportingCalendarClient, /--event-id/);
+  assert.match(reportingCalendarClient, /正式寫入一次只允許一個品牌/);
+  assert.match(reportingCalendarClient, /deleteApp/);
+});
+
+test("Reporting Calendar V2 client action is downgrade-safe against a V1 backend", () => {
+  assert.match(backend, /action === 'update_reporting_calendar_v2'/);
+  assert.match(backend, /REPORTING_CALENDAR_V2_ACTION_REQUIRED/);
+  assert.match(reportingCalendarManager, /action: "update_reporting_calendar_v2"/);
+  assert.match(reportingCalendarClient, /action: "update_reporting_calendar_v2"/);
+});
+
+test("Reporting Calendar product UI is isolated by its own error boundary", () => {
+  assert.match(reportingCalendarManager, /class ReportingCalendarErrorBoundary extends React\.Component/);
+  assert.match(reportingCalendarManager, /static getDerivedStateFromError/);
+  assert.match(reportingCalendarManager, /其他系統設定與營運資料不受影響/);
+  assert.match(reportingCalendarManager, /<ReportingCalendarErrorBoundary>/);
+});
+
+test("Reporting Calendar CLI reuses shared Store Identity authority", () => {
+  assert.match(reportingCalendarClient, /import \{ normalizeStoreLifecycleCore \} from "\.\.\/src\/utils\/storeLifecycle\.js"/);
+  assert.doesNotMatch(reportingCalendarClient, /function\s+normalizeStoreKey\s*\(/);
+  assert.match(reportingCalendarClient, /\.map\(normalizeStoreLifecycleCore\)/);
+  assert.match(reportingCalendarClient, /dates\.length > 366/);
 });

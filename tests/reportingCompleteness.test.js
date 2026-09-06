@@ -248,7 +248,7 @@ test("brand calendar propagates through Lifecycle entries so Daily/Audit direct 
 
 test("Summary Writer persists compact reporting metadata from already-loaded Lifecycle and daily rows", () => {
   assert.match(backendLifecycle, /REPORTING_COMPLETENESS_SCHEMA_VERSION = 'reporting-completeness-v1'/);
-  assert.match(backendLifecycle, /REPORTING_CALENDAR_SCHEMA_VERSION = 'reporting-calendar-v1'/);
+  assert.match(backendLifecycle, /REPORTING_CALENDAR_SCHEMA_VERSION = 'reporting-calendar-v2'/);
   assert.match(backendLifecycle, /function normalizeReportingCalendar/);
   assert.match(backendLifecycle, /master\?\.reportingCalendar/);
   assert.match(backendLifecycle, /function isLifecycleEntryExpectedForDate/);
@@ -283,4 +283,63 @@ test("compact persisted completeness metadata does not carry per-day missing arr
   assert.equal(result.missingStoreDayCount, 54 * 31);
   assert.equal(Object.values(result.stores).some((row) => Object.hasOwn(row, "missingReportDates")), false);
   assert.ok(JSON.stringify(result).length < 30000);
+});
+
+test("selected-store closure excludes only the selected store from expected-report days", () => {
+  const master = {
+    brandId: "cyj",
+    datasetStatus: "READY",
+    reportingCalendar: {
+      schemaVersion: REPORTING_CALENDAR_SCHEMA_VERSION,
+      revision: 5,
+      monthRevisions: { "2026-09": 1 },
+      closedDates: [],
+      storeClosureEvents: [{
+        id: "evt-store-1",
+        dates: ["2026-09-18"],
+        storeKeys: ["新店"],
+        reason: "颱風停班",
+      }],
+    },
+    stores: {
+      "新店": { firstEligibleMonth: "2026-01", openDate: "2020-01-01" },
+      "板橋": { firstEligibleMonth: "2026-01", openDate: "2020-01-01" },
+    },
+  };
+
+  const entries = getLifecycleEligibleStoreEntries(master, "2026-09", { brandId: "cyj" });
+  const newTaipei = entries.find((entry) => entry.storeKey === "新店");
+  const banqiao = entries.find((entry) => entry.storeKey === "板橋");
+  assert.ok(newTaipei);
+  assert.ok(banqiao);
+  assert.equal(isLifecycleEntryExpectedForDate(newTaipei, "2026-09-18"), false);
+  assert.equal(isLifecycleEntryExpectedForDate(banqiao, "2026-09-18"), true);
+
+  const reports = [];
+  for (let day = 1; day <= 18; day += 1) {
+    const date = `2026-09-${String(day).padStart(2, "0")}`;
+    if (date !== "2026-09-18") reports.push({ storeName: "CYJ新店店", date, cash: 0 });
+    reports.push({ storeName: "CYJ板橋店", date, cash: 0 });
+  }
+
+  const result = buildLifecycleReportingCompleteness({
+    master,
+    yearMonth: "2026-09",
+    brandId: "cyj",
+    cutoffDate: "2026-09-18",
+    reports,
+  });
+  assert.equal(result.closedReportDateCount, 0);
+  assert.equal(result.storeClosedReportDayCount, 1);
+  assert.equal(result.expectedStoreDayCount, 35);
+  assert.equal(result.submittedStoreDayCount, 35);
+  assert.equal(result.missingStoreDayCount, 0);
+  assert.equal(result.reportingStatus, "DATA_COMPLETE");
+});
+
+test("calendar-driven historical repair is marked for Annual convergence only after Summary verification", () => {
+  assert.match(functionsIndex, /reportingCalendarRepairRequired/);
+  assert.match(functionsIndex, /result\?\.matched === true/);
+  assert.match(functionsIndex, /result\?\.reportingCalendarRaceDetected !== true/);
+  assert.match(functionsIndex, /trigger: "reporting_calendar_summary_repair"/);
 });
