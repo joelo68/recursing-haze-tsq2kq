@@ -19,6 +19,7 @@ import {
 } from '../utils/storeSelfView.js';
 import { applyTherapistRankingSemantics, buildTherapistAggregateMetrics } from '../utils/therapistKpi.js';
 import { getSummaryRecalcFlagState, resolveHistoricalDashboardReadPolicy } from '../utils/dashboardReadPolicy.js';
+import { inspectHistoricalReportingCalendarTrust } from '../utils/storeLifecycle.js';
 import {
   filterSystemExcludedStoreKeys,
   inspectHistoricalSystemExclusionTrust,
@@ -217,6 +218,12 @@ export function useDashboardStats() {
       summaries: [currentDashboardSummary, currentRankingsSummary],
       summaryFlag: currentSummaryRecalcFlagState?.data || null,
     });
+    const reportingCalendarTrust = inspectHistoricalReportingCalendarTrust({
+      currentLifecycleMasterState,
+      dashboardSummary: currentDashboardSummary,
+      summaryFlag: currentSummaryRecalcFlagState?.data || null,
+      brandId: brandInfo?.id,
+    });
 
     return resolveHistoricalDashboardReadPolicy({
       isCurrentMonth,
@@ -228,6 +235,8 @@ export function useDashboardStats() {
       summaryFlagError: currentSummaryRecalcFlagState?.error || null,
       systemExclusionTrusted: systemExclusionTrust.trusted,
       systemExclusionReason: systemExclusionTrust.reason,
+      reportingCalendarTrusted: reportingCalendarTrust.trusted,
+      reportingCalendarReason: reportingCalendarTrust.reason,
     });
   }, [
     selectedYear,
@@ -240,6 +249,7 @@ export function useDashboardStats() {
     currentSummaryRecalcFlagState,
     historicalDetailRefreshState,
     systemExclusionState,
+    currentLifecycleMasterState,
     brandInfo?.id,
   ]);
 
@@ -853,19 +863,41 @@ export function useDashboardStats() {
         && String(currentLifecycleMasterState?.data?.datasetStatus || "") === "READY";
       const lifecycleRevisionCurrent = lifecycleReady
         && Number(base.lifecycleRevision) === Number(currentLifecycleMasterState?.data?.revision);
+      const currentCalendarMonthRevisions = (
+        currentLifecycleMasterState?.data?.reportingCalendar?.monthRevisions
+        && typeof currentLifecycleMasterState.data.reportingCalendar.monthRevisions === "object"
+      )
+        ? currentLifecycleMasterState.data.reportingCalendar.monthRevisions
+        : {};
+      const benchmarkCalendarMonthRevisions = (
+        base.reportingCalendarMonthRevisions
+        && typeof base.reportingCalendarMonthRevisions === "object"
+      )
+        ? base.reportingCalendarMonthRevisions
+        : {};
+      const benchmarkCandidateMonths = Array.isArray(base.candidateMonths)
+        ? base.candidateMonths
+        : [];
+      const reportingCalendarRevisionCurrent = lifecycleReady
+        && benchmarkCandidateMonths.every((yearMonth) => (
+          Number(benchmarkCalendarMonthRevisions?.[yearMonth] || 0)
+          === Number(currentCalendarMonthRevisions?.[yearMonth] || 0)
+        ));
       const systemExclusionCurrent = isSystemExclusionSnapshotCurrent({
         snapshot: base.systemExclusionSnapshot || null,
         currentState: systemExclusionState,
         brandId: expectedBrandId,
       });
 
-      if (!lifecycleRevisionCurrent || !systemExclusionCurrent) {
+      if (!lifecycleRevisionCurrent || !reportingCalendarRevisionCurrent || !systemExclusionCurrent) {
         return {
           ...makeEmptyAnnualKpiBenchmark(base, "authority_stale"),
           scope: "authority_stale",
           authorityReason: !lifecycleRevisionCurrent
             ? "LIFECYCLE_REVISION_MISMATCH"
-            : "SYSTEM_EXCLUSION_REVISION_MISMATCH",
+            : (!reportingCalendarRevisionCurrent
+              ? "REPORTING_CALENDAR_REVISION_MISMATCH"
+              : "SYSTEM_EXCLUSION_REVISION_MISMATCH"),
         };
       }
     }

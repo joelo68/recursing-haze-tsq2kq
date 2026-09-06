@@ -1,5 +1,6 @@
 export const STORE_LIFECYCLE_SCHEMA_VERSION = "store-lifecycle-v1";
 export const REPORTING_COMPLETENESS_SCHEMA_VERSION = "reporting-completeness-v1";
+export const REPORTING_CALENDAR_SCHEMA_VERSION = "reporting-calendar-v1";
 export const STORE_LIFECYCLE_DATASET_STATUSES = Object.freeze(["BUILDING", "READY"]);
 
 const BRAND_META = Object.freeze({
@@ -76,6 +77,156 @@ export const normalizeIsoDate = (value = "") => {
   const [year, month, day] = text.split("-").map(Number);
   if (date.getFullYear() !== year || date.getMonth() + 1 !== month || date.getDate() !== day) return "";
   return text;
+};
+
+export const normalizeReportingCalendarClosedDates = (values = []) => {
+  const source = Array.isArray(values) ? values : [];
+  const byDate = new Map();
+
+  source.forEach((value) => {
+    const row = typeof value === "string"
+      ? { date: value }
+      : (value && typeof value === "object" ? value : {});
+    const date = normalizeIsoDate(row.date);
+    if (!date) return;
+    byDate.set(date, {
+      date,
+      reason: String(row.reason || "").trim(),
+    });
+  });
+
+  return [...byDate.values()].sort((a, b) => a.date.localeCompare(b.date));
+};
+
+export const normalizeReportingCalendarMonthRevisions = (raw = {}) => {
+  const source = raw && typeof raw === "object" && !Array.isArray(raw) ? raw : {};
+  return Object.fromEntries(
+    Object.entries(source)
+      .map(([yearMonth, value]) => [normalizeYearMonth(yearMonth), Number(value)])
+      .filter(([yearMonth, value]) => (
+        Boolean(yearMonth) && Number.isInteger(value) && value >= 0
+      ))
+      .sort(([a], [b]) => a.localeCompare(b))
+  );
+};
+
+export const normalizeReportingCalendar = (raw = {}) => {
+  const source = raw && typeof raw === "object" && !Array.isArray(raw) ? raw : {};
+  return {
+    schemaVersion: String(source.schemaVersion || REPORTING_CALENDAR_SCHEMA_VERSION),
+    revision: Math.max(0, Number(source.revision || 0)),
+    monthRevisions: normalizeReportingCalendarMonthRevisions(source.monthRevisions),
+    closedDates: normalizeReportingCalendarClosedDates(source.closedDates),
+    updatedAtText: String(source.updatedAtText || ""),
+    updatedBy: String(source.updatedBy || ""),
+    updatedByRole: String(source.updatedByRole || ""),
+    updatedByAccountId: String(source.updatedByAccountId || ""),
+  };
+};
+
+const getReportingClosedDateSet = (values = []) => new Set(
+  normalizeReportingCalendarClosedDates(values).map((row) => row.date)
+);
+
+export const REPORTING_CALENDAR_TRUST_REASON = Object.freeze({
+  TRUSTED: "REPORTING_CALENDAR_TRUSTED",
+  AUTHORITY_NOT_READY: "REPORTING_CALENDAR_AUTHORITY_NOT_READY",
+  BRAND_MISMATCH: "REPORTING_CALENDAR_BRAND_MISMATCH",
+  SUMMARY_REVISION_MISMATCH: "REPORTING_CALENDAR_SUMMARY_REVISION_MISMATCH",
+  FLAG_REVISION_MISMATCH: "REPORTING_CALENDAR_FLAG_REVISION_MISMATCH",
+});
+
+const readReportingCalendarRevision = (value, legacyValue = 0) => {
+  if (value === null || value === undefined || value === "") return legacyValue;
+  const revision = Number(value);
+  return Number.isInteger(revision) && revision >= 0 ? revision : null;
+};
+
+export const inspectHistoricalReportingCalendarTrust = ({
+  currentLifecycleMasterState,
+  dashboardSummary = null,
+  summaryFlag = null,
+  brandId = "",
+} = {}) => {
+  const state = currentLifecycleMasterState || {};
+  const master = state?.data || null;
+  const expectedBrandId = normalizeLifecycleBrandId(
+    brandId || dashboardSummary?.brandId || master?.brandId || "cyj"
+  );
+  const stateBrandId = normalizeLifecycleBrandId(state?.brandId || master?.brandId || "cyj");
+
+  if (state?.ready !== true || !master || String(master?.datasetStatus || "") !== "READY") {
+    return {
+      trusted: false,
+      reason: REPORTING_CALENDAR_TRUST_REASON.AUTHORITY_NOT_READY,
+      currentRevision: null,
+    };
+  }
+
+  if (stateBrandId !== expectedBrandId) {
+    return {
+      trusted: false,
+      reason: REPORTING_CALENDAR_TRUST_REASON.BRAND_MISMATCH,
+      currentRevision: null,
+    };
+  }
+
+  const yearMonth = normalizeYearMonth(
+    dashboardSummary?.yearMonth
+    || dashboardSummary?.id
+    || summaryFlag?.affectedYearMonth
+    || summaryFlag?.yearMonth
+    || summaryFlag?.id
+    || ""
+  );
+  const calendar = normalizeReportingCalendar(master?.reportingCalendar || {});
+  const currentRevision = Math.max(0, Number(calendar.monthRevisions?.[yearMonth] || 0));
+
+  const summaryRevision = readReportingCalendarRevision(
+    dashboardSummary?.reportingCompleteness?.reportingCalendarRevision,
+    0
+  );
+  if (summaryRevision === null || summaryRevision !== currentRevision) {
+    return {
+      trusted: false,
+      reason: REPORTING_CALENDAR_TRUST_REASON.SUMMARY_REVISION_MISMATCH,
+      yearMonth,
+      currentRevision,
+      summaryRevision,
+    };
+  }
+
+  const flagRevision = readReportingCalendarRevision(summaryFlag?.reportingCalendarRevision, 0);
+  const requiredRevision = readReportingCalendarRevision(
+    summaryFlag?.requiredReportingCalendarRevision,
+    0
+  );
+  if (
+    flagRevision === null
+    || requiredRevision === null
+    || flagRevision !== currentRevision
+    || requiredRevision > flagRevision
+  ) {
+    return {
+      trusted: false,
+      reason: REPORTING_CALENDAR_TRUST_REASON.FLAG_REVISION_MISMATCH,
+      yearMonth,
+      currentRevision,
+      summaryRevision,
+      flagRevision,
+      requiredRevision,
+    };
+  }
+
+  return {
+    trusted: true,
+    reason: REPORTING_CALENDAR_TRUST_REASON.TRUSTED,
+    yearMonth,
+    currentRevision,
+    summaryRevision,
+    flagRevision,
+    requiredRevision,
+  };
 };
 
 export const normalizeExemptMonths = (values = []) => {
@@ -207,12 +358,16 @@ export const getLifecycleEligibleStoreEntries = (master = {}, yearMonth = "", op
   if (requireReady && String(master?.datasetStatus || "") !== "READY") return [];
 
   const brandId = normalizeLifecycleBrandId(master?.brandId || options.brandId || "cyj");
+  const reportingCalendarClosedDates = normalizeReportingCalendar(master?.reportingCalendar || {}).closedDates;
   const rawStores = master?.stores && typeof master.stores === "object" && !Array.isArray(master.stores)
     ? master.stores
     : {};
 
   return Object.entries(rawStores)
-    .map(([key, value]) => normalizeLifecycleEntry(value || {}, key, brandId))
+    .map(([key, value]) => ({
+      ...normalizeLifecycleEntry(value || {}, key, brandId),
+      reportingCalendarClosedDates,
+    }))
     .filter((entry) => isLifecycleEntryEligibleForMonth(entry, normalizedYearMonth))
     .sort((a, b) => String(a.canonicalStoreName || a.storeKey).localeCompare(String(b.canonicalStoreName || b.storeKey), "zh-Hant"));
 };
@@ -247,7 +402,7 @@ const enumerateIsoDateRange = (startDate = "", endDate = "") => {
 // Batch 5D-1：Daily expected-report authority。
 // 月度 cohort 先由 Lifecycle first/last/exempt 決定，再套用真實 openDate / closeDate 日界線。
 // 不使用 report activity 推導營運日期；店休日也不在此 resolver 形成豁免。
-export const isLifecycleEntryExpectedForDate = (entry = {}, dateText = "") => {
+export const isLifecycleEntryExpectedForDate = (entry = {}, dateText = "", options = {}) => {
   const date = normalizeIsoDate(dateText);
   if (!date) return false;
   const yearMonth = date.slice(0, 7);
@@ -257,6 +412,11 @@ export const isLifecycleEntryExpectedForDate = (entry = {}, dateText = "") => {
   const closeDate = normalizeIsoDate(entry.closeDate);
   if (!openDate || date < openDate) return false;
   if (closeDate && date > closeDate) return false;
+
+  const closedDateSet = getReportingClosedDateSet(
+    options.closedDates || entry.reportingCalendarClosedDates || []
+  );
+  if (closedDateSet.has(date)) return false;
   return true;
 };
 
@@ -284,7 +444,10 @@ export const getLifecycleExpectedReportDates = (entry = {}, yearMonth = "", opti
   const start = [bounds.start, openDate].sort().at(-1);
   const endCandidates = [bounds.end, cutoffDate, ...(closeDate ? [closeDate] : [])].sort();
   const end = endCandidates[0];
-  return enumerateIsoDateRange(start, end);
+  const closedDateSet = getReportingClosedDateSet(
+    options.closedDates || entry.reportingCalendarClosedDates || []
+  );
+  return enumerateIsoDateRange(start, end).filter((date) => !closedDateSet.has(date));
 };
 
 const defaultReportStoreName = (row = {}) => row.storeName || row.store || row.storeId || row.storeKey || "";
@@ -304,12 +467,31 @@ export const buildLifecycleReportingCompleteness = ({
   const normalizedYearMonth = normalizeYearMonth(yearMonth);
   const normalizedBrandId = normalizeLifecycleBrandId(master?.brandId || brandId);
   const lifecycleReady = String(master?.datasetStatus || "") === "READY";
+  const reportingCalendar = normalizeReportingCalendar(master?.reportingCalendar || {});
+  const reportingCalendarRevision = Math.max(
+    0,
+    Number(reportingCalendar.monthRevisions?.[normalizedYearMonth] || 0)
+  );
+  const reportingBounds = getLifecycleMonthBounds(normalizedYearMonth);
+  const normalizedCutoffDate = normalizeIsoDate(cutoffDate) || reportingBounds?.end || "";
+  const closedReportDates = reportingCalendar.closedDates
+    .map((row) => row.date)
+    .filter((date) => (
+      normalizedYearMonth
+      && date.startsWith(`${normalizedYearMonth}-`)
+      && (!normalizedCutoffDate || date <= normalizedCutoffDate)
+    ));
   const empty = {
     schemaVersion: REPORTING_COMPLETENESS_SCHEMA_VERSION,
     brandId: normalizedBrandId,
     yearMonth: normalizedYearMonth,
-    cutoffDate: normalizeIsoDate(cutoffDate),
+    cutoffDate: normalizedCutoffDate,
     lifecycleReady,
+    reportingCalendarSchemaVersion: reportingCalendar.schemaVersion,
+    reportingCalendarMasterRevision: reportingCalendar.revision,
+    reportingCalendarRevision,
+    closedReportDateCount: closedReportDates.length,
+    closedReportDates,
     eligibleStoreCount: 0,
     completeStoreCount: 0,
     incompleteStoreCount: 0,
@@ -347,7 +529,10 @@ export const buildLifecycleReportingCompleteness = ({
   eligibleEntries.forEach((entry) => {
     const storeKey = entry.storeKey || entry.coreStoreName;
     if (!storeKey) return;
-    const expectedDates = getLifecycleExpectedReportDates(entry, normalizedYearMonth, { cutoffDate });
+    const expectedDates = getLifecycleExpectedReportDates(entry, normalizedYearMonth, {
+      cutoffDate,
+      closedDates: closedReportDates,
+    });
     const submittedDates = submittedDatesByStore.get(storeKey) || new Set();
     const submittedExpectedDates = expectedDates.filter((date) => submittedDates.has(date));
     const missingDates = expectedDates.filter((date) => !submittedDates.has(date));
@@ -434,6 +619,7 @@ export const normalizeLifecycleMaster = (raw = {}, brandId = "cyj") => {
       ? String(raw.datasetStatus)
       : "BUILDING",
     revision: Math.max(0, Number(raw.revision || 0)),
+    reportingCalendar: normalizeReportingCalendar(raw.reportingCalendar || {}),
     stores,
     certifiedAtText: String(raw.certifiedAtText || ""),
     certifiedBy: String(raw.certifiedBy || ""),

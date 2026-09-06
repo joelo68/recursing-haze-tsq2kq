@@ -23,6 +23,8 @@ const makeFlag = (overrides = {}) => ({
   dirty: false,
   pendingCount: 0,
   lastMismatchCount: 0,
+  reportingCalendarRevision: 0,
+  requiredReportingCalendarRevision: 0,
   ...overrides,
 });
 
@@ -37,6 +39,7 @@ const makeSummary = (overrides = {}) => ({
   },
   reportingCompleteness: {
     schemaVersion: "reporting-completeness-v1",
+    reportingCalendarRevision: 0,
     stores: {},
   },
   ...overrides,
@@ -77,6 +80,7 @@ test("Annual backend Summary trust mirrors completed/verified + clean + zero mis
     brandId: "cyj",
     expectedSummarySemanticVersion: "summary-semantics-v1",
     lifecycleRevision: 7,
+    reportingCalendarRevision: 0,
     systemExclusionCurrent: true,
   });
   assert.deepEqual(trusted, { trusted: true, reason: "VERIFIED_FORMAL_SUMMARY" });
@@ -88,6 +92,7 @@ test("Annual backend Summary trust mirrors completed/verified + clean + zero mis
     brandId: "cyj",
     expectedSummarySemanticVersion: "summary-semantics-v1",
     lifecycleRevision: 7,
+    reportingCalendarRevision: 0,
     systemExclusionCurrent: true,
   }).reason, "SUMMARY_PENDING");
 
@@ -98,8 +103,50 @@ test("Annual backend Summary trust mirrors completed/verified + clean + zero mis
     brandId: "cyj",
     expectedSummarySemanticVersion: "summary-semantics-v1",
     lifecycleRevision: 8,
+    reportingCalendarRevision: 0,
     systemExclusionCurrent: true,
   }).reason, "LIFECYCLE_SUMMARY_REVISION_MISMATCH");
+});
+
+test("Annual backend trust fails closed on Reporting Calendar Summary/flag month revision drift", () => {
+  const summaryMismatch = inspectAnnualKpiSummarySourceTrust({
+    summary: makeSummary({
+      reportingCompleteness: {
+        schemaVersion: "reporting-completeness-v1",
+        reportingCalendarRevision: 0,
+        stores: {},
+      },
+    }),
+    summaryFlag: makeFlag(),
+    yearMonth: "2026-01",
+    brandId: "cyj",
+    expectedSummarySemanticVersion: "summary-semantics-v1",
+    lifecycleRevision: 7,
+    reportingCalendarRevision: 1,
+    systemExclusionCurrent: true,
+  });
+  assert.equal(summaryMismatch.reason, "REPORTING_CALENDAR_SUMMARY_REVISION_MISMATCH");
+
+  const flagMismatch = inspectAnnualKpiSummarySourceTrust({
+    summary: makeSummary({
+      reportingCompleteness: {
+        schemaVersion: "reporting-completeness-v1",
+        reportingCalendarRevision: 1,
+        stores: {},
+      },
+    }),
+    summaryFlag: makeFlag({
+      reportingCalendarRevision: 0,
+      requiredReportingCalendarRevision: 1,
+    }),
+    yearMonth: "2026-01",
+    brandId: "cyj",
+    expectedSummarySemanticVersion: "summary-semantics-v1",
+    lifecycleRevision: 7,
+    reportingCalendarRevision: 1,
+    systemExclusionCurrent: true,
+  });
+  assert.equal(flagMismatch.reason, "REPORTING_CALENDAR_FLAG_REVISION_MISMATCH");
 });
 
 test("Annual KPI v2 preserves complete true zero and gives every KPI its own based months", () => {
@@ -109,6 +156,11 @@ test("Annual KPI v2 preserves complete true zero and gives every KPI its own bas
     year: 2026,
     candidateMonths: ["2026-01", "2026-02", "2026-03"],
     lifecycleRevision: 7,
+    reportingCalendarMonthRevisions: {
+      "2026-01": 1,
+      "2026-02": 0,
+      "2026-03": 2,
+    },
     systemExclusionSnapshot: {
       version: "system-exclusion-v1",
       brandId: "cyj",
@@ -182,6 +234,11 @@ test("Annual KPI v2 preserves complete true zero and gives every KPI its own bas
   // The top-level scope metadata is what filtered manager/store consumers use.
   assert.deepEqual(payload.benchmarkScopeByMonth["2026-01"].requiredStoreKeys, ["A", "B"]);
   assert.equal(payload.lifecycleRevision, 7);
+  assert.deepEqual(payload.reportingCalendarMonthRevisions, {
+    "2026-01": 1,
+    "2026-02": 0,
+    "2026-03": 2,
+  });
   assert.equal(payload.systemExclusionSnapshot.revision, 2);
 });
 
@@ -218,6 +275,7 @@ test("Annual KPI rebuild is Summary-first, Lifecycle/System-Exclusion anchored a
   assert.match(rebuildBlock, /dashboard_summary/);
   assert.match(rebuildBlock, /summary_recalc_flags/);
   assert.match(rebuildBlock, /store_lifecycle/);
+  assert.match(rebuildBlock, /reportingCalendarMonthRevisions/);
   assert.match(rebuildBlock, /getAuditExclusionsDocRef/);
   assert.match(rebuildBlock, /isLifecycleEntryFullEligibleMonth/);
   assert.doesNotMatch(rebuildBlock, /daily_reports/);

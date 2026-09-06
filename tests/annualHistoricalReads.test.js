@@ -302,6 +302,34 @@ test("stale Lifecycle revision fails only the affected historical Annual Summary
   assert.equal(result.reasonsByMonth["2026-05"], "LIFECYCLE_SUMMARY_REVISION_MISMATCH");
 });
 
+test("Reporting Calendar month revision stales only the affected historical Annual month", () => {
+  const trusted = buildTrustedMonths({ throughMonth: 7 });
+  const result = resolveAnnualReadPlan({
+    selectedYear: "2026",
+    currentYearMonth: "2026-08",
+    brandId: "cyj",
+    ...trusted,
+    summaryLoadState: makeReadyState(),
+    currentLifecycleMasterState: {
+      ...makeLifecycleState({ revision: 7 }),
+      data: {
+        ...makeLifecycleState({ revision: 7 }).data,
+        reportingCalendar: {
+          revision: 1,
+          monthRevisions: { "2026-05": 1 },
+          closedDates: [{ date: "2026-05-01", reason: "休假" }],
+        },
+      },
+    },
+  });
+  assert.deepEqual(result.fallbackYearMonths, ["2026-05", "2026-08"]);
+  assert.equal(
+    result.reasonsByMonth["2026-05"],
+    "REPORTING_CALENDAR_SUMMARY_REVISION_MISMATCH"
+  );
+  assert.equal(result.reasonsByMonth["2026-04"], "VERIFIED_FORMAL_SUMMARY");
+});
+
 test("App extends the existing single Lifecycle Master authority to Annual without adding a per-store listener", () => {
   assert.match(appSource, /OPERATIONAL_FORMAL_LIFECYCLE_VIEWS[\s\S]*"annual"/);
   assert.match(appSource, /resolveAnnualReadPlan\(\{[\s\S]*currentLifecycleMasterState/);

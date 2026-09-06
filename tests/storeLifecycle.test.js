@@ -11,6 +11,7 @@ import {
   isLifecycleEntryEligibleForMonth,
   lifecycleStoreBrandMatches,
   normalizeLifecycleMaster,
+  normalizeReportingCalendar,
   validateLifecycleEntryDraft,
 } from "../src/utils/storeLifecycle.js";
 
@@ -186,7 +187,7 @@ test("READY certification validates current org coverage and complete lifecycle 
   assert.match(backend, /LIFECYCLE_NOT_READY/);
 });
 
-test("Batch 1 backend cannot mutate existing KPI, raw, target, summary or queue collections", () => {
+test("Lifecycle backend cannot mutate existing KPI/raw/target/summary payload collections", () => {
   for (const forbidden of [
     "daily_reports",
     "therapist_daily_reports",
@@ -199,7 +200,6 @@ test("Batch 1 backend cannot mutate existing KPI, raw, target, summary or queue 
     "rankings_summary",
     "annual_kpi_summary",
     "therapist_summary",
-    "summary_recalc_flags",
     "recalc_queue",
     "org_structure_snapshots",
     "store_account_data",
@@ -207,6 +207,64 @@ test("Batch 1 backend cannot mutate existing KPI, raw, target, summary or queue 
   ]) {
     assert.doesNotMatch(backend, new RegExp(`getBrandCollection\\(db, brandId, ['\"]${forbidden}['\"]\\)`));
   }
+});
+
+test("Reporting Calendar is brand-scoped inside the existing Lifecycle master and keeps its own revision", () => {
+  const normalized = normalizeReportingCalendar({
+    revision: "4",
+    closedDates: [
+      { date: "2026-02-17", reason: "春節" },
+      { date: "2026-02-16", reason: "春節" },
+      { date: "bad-date", reason: "invalid" },
+      { date: "2026-02-16", reason: "春節" },
+    ],
+  });
+  assert.equal(normalized.revision, 4);
+  assert.deepEqual(normalized.monthRevisions, {});
+  assert.deepEqual(normalized.closedDates.map((row) => row.date), ["2026-02-16", "2026-02-17"]);
+
+  assert.match(backend, /action === 'update_reporting_calendar'/);
+  assert.match(backend, /expectedCalendarRevision/);
+  assert.match(backend, /REPORTING_CALENDAR_CONFLICT/);
+  assert.match(backend, /getBrandCollection\(db, brandId, 'summary_recalc_flags'\)\.doc\(yearMonth\)/);
+  assert.match(backend, /dirtyReason: 'reporting_calendar_changed'/);
+  assert.match(backend, /requiredReportingCalendarRevision: nextMonthRevision/);
+});
+
+test("Reporting Calendar update intentionally does not advance Lifecycle master revision", () => {
+  const match = backend.match(
+    /if \(action === 'update_reporting_calendar'\) \{([\s\S]*?)if \(action === 'set_dataset_status'\) \{/
+  );
+  assert.ok(match, "calendar action block must exist");
+  const calendarBlock = match[1];
+  assert.doesNotMatch(calendarBlock, /nextMasterRevision/);
+  assert.doesNotMatch(calendarBlock, /revision:\s*currentMasterRevision\s*\+/);
+  assert.match(calendarBlock, /nextCalendarRevision = currentCalendar\.revision \+ 1/);
+});
+
+test("Reporting Calendar reuses trusted super-admin security and never writes fake daily reports", () => {
+  const match = backend.match(
+    /if \(action === 'update_reporting_calendar'\) \{([\s\S]*?)if \(action === 'set_dataset_status'\) \{/
+  );
+  assert.ok(match);
+  const calendarBlock = match[1];
+  assert.doesNotMatch(calendarBlock, /daily_reports/);
+  assert.doesNotMatch(calendarBlock, /monthly_aggregated/);
+  assert.doesNotMatch(calendarBlock, /annual_kpi_summary/);
+  assert.match(backend, /verifySuperAdminActor\(\{ db, brandId, actor \}\)/);
+});
+
+test("Reporting Calendar uses month-scoped semantic revisions and a shared Summary flag OCC surface", () => {
+  const indexSource = fs.readFileSync(path.join(root, "functions/index.js"), "utf8");
+  assert.match(backend, /monthRevisions: nextMonthRevisions/);
+  assert.match(backend, /requiredReportingCalendarRevision: nextMonthRevision/);
+  assert.match(indexSource, /async function finalizeSummaryRecalcFlagWithReportingCalendarGuard/);
+  assert.match(indexSource, /const latestFlagSnap = await tx\.get\(flagRef\)/);
+  assert.match(indexSource, /builtRevision >= requiredRevision/);
+  const guardBlock = indexSource.match(
+    /async function finalizeSummaryRecalcFlagWithReportingCalendarGuard[\s\S]*?return finalState;\n\}/
+  )?.[0] || "";
+  assert.doesNotMatch(guardBlock, /store_lifecycle/);
 });
 
 test("Firestore rules make Store Lifecycle frontend-read-only on both physical roots", () => {

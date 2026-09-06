@@ -9,6 +9,7 @@ const {
 
 const STORE_LIFECYCLE_SCHEMA_VERSION = 'store-lifecycle-v1';
 const REPORTING_COMPLETENESS_SCHEMA_VERSION = 'reporting-completeness-v1';
+const REPORTING_CALENDAR_SCHEMA_VERSION = 'reporting-calendar-v1';
 const DATASET_STATUSES = new Set(['BUILDING', 'READY']);
 
 const BRAND_PREFIX = Object.freeze({
@@ -68,6 +69,55 @@ function normalizeIsoDate(value = '') {
   const [year, month, day] = text.split('-').map(Number);
   if (date.getFullYear() !== year || date.getMonth() + 1 !== month || date.getDate() !== day) return '';
   return text;
+}
+
+function normalizeReportingCalendarClosedDates(values = []) {
+  const source = Array.isArray(values) ? values : [];
+  const byDate = new Map();
+
+  source.forEach((value) => {
+    const row = typeof value === 'string'
+      ? { date: value }
+      : (value && typeof value === 'object' ? value : {});
+    const date = normalizeIsoDate(row.date);
+    if (!date) return;
+    byDate.set(date, {
+      date,
+      reason: String(row.reason || '').trim(),
+    });
+  });
+
+  return [...byDate.values()].sort((a, b) => a.date.localeCompare(b.date));
+}
+
+function normalizeReportingCalendarMonthRevisions(raw = {}) {
+  const source = raw && typeof raw === 'object' && !Array.isArray(raw) ? raw : {};
+  return Object.fromEntries(
+    Object.entries(source)
+      .map(([yearMonth, value]) => [normalizeYearMonth(yearMonth), Number(value)])
+      .filter(([yearMonth, value]) => (
+        Boolean(yearMonth) && Number.isInteger(value) && value >= 0
+      ))
+      .sort(([a], [b]) => a.localeCompare(b))
+  );
+}
+
+function normalizeReportingCalendar(raw = {}) {
+  const source = raw && typeof raw === 'object' && !Array.isArray(raw) ? raw : {};
+  return {
+    schemaVersion: String(source.schemaVersion || REPORTING_CALENDAR_SCHEMA_VERSION),
+    revision: Math.max(0, Number(source.revision || 0)),
+    monthRevisions: normalizeReportingCalendarMonthRevisions(source.monthRevisions),
+    closedDates: normalizeReportingCalendarClosedDates(source.closedDates),
+    updatedAtText: String(source.updatedAtText || ''),
+    updatedBy: String(source.updatedBy || ''),
+    updatedByRole: String(source.updatedByRole || ''),
+    updatedByAccountId: String(source.updatedByAccountId || ''),
+  };
+}
+
+function getReportingClosedDateSet(values = []) {
+  return new Set(normalizeReportingCalendarClosedDates(values).map((row) => row.date));
 }
 
 function normalizeExemptMonths(values = []) {
@@ -172,6 +222,7 @@ function getLifecycleEligibleStoreEntries(master = {}, yearMonth = '', options =
   if (requireReady && String(master?.datasetStatus || '') !== 'READY') return [];
 
   const brandId = normalizeBrandId(master?.brandId || options.brandId || 'cyj');
+  const reportingCalendarClosedDates = normalizeReportingCalendar(master?.reportingCalendar || {}).closedDates;
   const stores = master?.stores && typeof master.stores === 'object' && !Array.isArray(master.stores)
     ? master.stores
     : {};
@@ -185,6 +236,7 @@ function getLifecycleEligibleStoreEntries(master = {}, yearMonth = '', options =
         storeKey: coreStoreName,
         coreStoreName,
         canonicalStoreName: getCanonicalStoreName(entry.canonicalStoreName || coreStoreName, brandId),
+        reportingCalendarClosedDates,
       };
     })
     .filter((entry) => isLifecycleEntryEligibleForMonth(entry, normalizedYearMonth))
@@ -219,7 +271,7 @@ function enumerateIsoDateRange(startDate = '', endDate = '') {
 }
 
 // Batch 5D-1：Daily expected-report authority。月度 cohort 與實際 open/close 日界線必須同時成立。
-function isLifecycleEntryExpectedForDate(entry = {}, dateText = '') {
+function isLifecycleEntryExpectedForDate(entry = {}, dateText = '', options = {}) {
   const date = normalizeIsoDate(dateText);
   if (!date) return false;
   const yearMonth = date.slice(0, 7);
@@ -231,6 +283,11 @@ function isLifecycleEntryExpectedForDate(entry = {}, dateText = '') {
   const closeDate = check.normalized.closeDate;
   if (!openDate || date < openDate) return false;
   if (closeDate && date > closeDate) return false;
+
+  const closedDateSet = getReportingClosedDateSet(
+    options.closedDates || entry.reportingCalendarClosedDates || []
+  );
+  if (closedDateSet.has(date)) return false;
   return true;
 }
 
@@ -259,7 +316,10 @@ function getLifecycleExpectedReportDates(entry = {}, yearMonth = '', options = {
 
   const start = [bounds.start, openDate].sort().at(-1);
   const endCandidates = [bounds.end, cutoffDate, ...(closeDate ? [closeDate] : [])].sort();
-  return enumerateIsoDateRange(start, endCandidates[0]);
+  const closedDateSet = getReportingClosedDateSet(
+    options.closedDates || entry.reportingCalendarClosedDates || []
+  );
+  return enumerateIsoDateRange(start, endCandidates[0]).filter((date) => !closedDateSet.has(date));
 }
 
 function buildLifecycleReportingCompleteness({
@@ -276,12 +336,31 @@ function buildLifecycleReportingCompleteness({
   const normalizedYearMonth = normalizeYearMonth(yearMonth);
   const normalizedBrandId = normalizeBrandId(master?.brandId || brandId || 'cyj');
   const lifecycleReady = String(master?.datasetStatus || '') === 'READY';
+  const reportingCalendar = normalizeReportingCalendar(master?.reportingCalendar || {});
+  const reportingCalendarRevision = Math.max(
+    0,
+    Number(reportingCalendar.monthRevisions?.[normalizedYearMonth] || 0)
+  );
+  const reportingBounds = getLifecycleMonthBounds(normalizedYearMonth);
+  const normalizedCutoffDate = normalizeIsoDate(cutoffDate) || reportingBounds?.end || '';
+  const closedReportDates = reportingCalendar.closedDates
+    .map((row) => row.date)
+    .filter((date) => (
+      normalizedYearMonth
+      && date.startsWith(`${normalizedYearMonth}-`)
+      && (!normalizedCutoffDate || date <= normalizedCutoffDate)
+    ));
   const empty = {
     schemaVersion: REPORTING_COMPLETENESS_SCHEMA_VERSION,
     brandId: normalizedBrandId,
     yearMonth: normalizedYearMonth,
-    cutoffDate: normalizeIsoDate(cutoffDate),
+    cutoffDate: normalizedCutoffDate,
     lifecycleReady,
+    reportingCalendarSchemaVersion: reportingCalendar.schemaVersion,
+    reportingCalendarMasterRevision: reportingCalendar.revision,
+    reportingCalendarRevision,
+    closedReportDateCount: closedReportDates.length,
+    closedReportDates,
     eligibleStoreCount: 0,
     completeStoreCount: 0,
     incompleteStoreCount: 0,
@@ -317,7 +396,10 @@ function buildLifecycleReportingCompleteness({
   eligibleEntries.forEach((entry) => {
     const storeKey = entry.storeKey || entry.coreStoreName;
     if (!storeKey) return;
-    const expectedDates = getLifecycleExpectedReportDates(entry, normalizedYearMonth, { cutoffDate });
+    const expectedDates = getLifecycleExpectedReportDates(entry, normalizedYearMonth, {
+      cutoffDate,
+      closedDates: closedReportDates,
+    });
     const submittedDates = submittedDatesByStore.get(storeKey) || new Set();
     const submittedExpectedDates = expectedDates.filter((date) => submittedDates.has(date));
     const missingDates = expectedDates.filter((date) => !submittedDates.has(date));
@@ -444,6 +526,90 @@ function buildLifecycleAuditPayload({ admin, brandId, actor, action, details = {
   };
 }
 
+function parseExpectedReportingCalendarRevision(value) {
+  if (value === null || value === undefined || value === '') {
+    const error = new Error('缺少營業日曆版本，請重新讀取後再操作');
+    error.code = 'INVALID_REPORTING_CALENDAR_REVISION';
+    throw error;
+  }
+  const revision = Number(value);
+  if (!Number.isInteger(revision) || revision < 0) {
+    const error = new Error('營業日曆版本格式錯誤');
+    error.code = 'INVALID_REPORTING_CALENDAR_REVISION';
+    throw error;
+  }
+  return revision;
+}
+
+function normalizeReportingCalendarMutationDates(values = []) {
+  if (!Array.isArray(values) || values.length < 1 || values.length > 366) {
+    const error = new Error('公休日日期必須是 1～366 筆 YYYY-MM-DD 日期清單');
+    error.code = 'INVALID_REPORTING_CALENDAR';
+    throw error;
+  }
+  const invalid = values
+    .map((value) => String(value || '').trim())
+    .filter((value) => !normalizeIsoDate(value));
+  if (invalid.length) {
+    const error = new Error(`公休日日期格式錯誤：${invalid.slice(0, 5).join('、')}`);
+    error.code = 'INVALID_REPORTING_CALENDAR';
+    throw error;
+  }
+  return [...new Set(values.map(normalizeIsoDate).filter(Boolean))].sort();
+}
+
+function getTaipeiYearMonthForReportingCalendar() {
+  const parts = new Intl.DateTimeFormat('en-US', {
+    timeZone: 'Asia/Taipei',
+    year: 'numeric',
+    month: '2-digit',
+  }).formatToParts(new Date());
+  const map = Object.fromEntries(parts.map((part) => [part.type, part.value]));
+  return `${map.year}-${map.month}`;
+}
+
+function applyReportingCalendarMutation({ current = {}, operation = 'add', dates = [], reason = '' } = {}) {
+  const normalized = normalizeReportingCalendar(current);
+  const mode = String(operation || '').trim().toLowerCase();
+  if (!['add', 'remove'].includes(mode)) {
+    const error = new Error('營業日曆操作只支援 add / remove');
+    error.code = 'INVALID_REPORTING_CALENDAR';
+    throw error;
+  }
+  const normalizedDates = normalizeReportingCalendarMutationDates(dates);
+  const normalizedReason = String(reason || '').trim();
+  if (mode === 'add' && !normalizedReason) {
+    const error = new Error('新增公休日必須填寫原因');
+    error.code = 'INVALID_REPORTING_CALENDAR';
+    throw error;
+  }
+
+  const byDate = new Map(normalized.closedDates.map((row) => [row.date, { ...row }]));
+  const changedDates = [];
+
+  normalizedDates.forEach((date) => {
+    if (mode === 'add') {
+      const previous = byDate.get(date);
+      if (!previous || String(previous.reason || '') !== normalizedReason) {
+        byDate.set(date, { date, reason: normalizedReason });
+        changedDates.push(date);
+      }
+      return;
+    }
+
+    if (byDate.has(date)) {
+      byDate.delete(date);
+      changedDates.push(date);
+    }
+  });
+
+  return {
+    changed: changedDates.length > 0,
+    changedDates,
+    closedDates: [...byDate.values()].sort((a, b) => a.date.localeCompare(b.date)),
+  };
+}
+
 function createStoreLifecycleFunctions({ admin, db }) {
   const manageStoreLifecycle = onRequest({ cors: true, timeoutSeconds: 20, memory: '256MiB' }, async (req, res) => {
     if (req.method !== 'POST') return res.status(405).json({ ok: false, message: 'method_not_allowed' });
@@ -547,6 +713,161 @@ function createStoreLifecycleFunctions({ admin, db }) {
         return res.status(200).json({ ok: true, ...result });
       }
 
+if (action === 'update_reporting_calendar') {
+        const operation = String(body.operation || 'add').trim().toLowerCase();
+        const dates = normalizeReportingCalendarMutationDates(body.dates || []);
+        const reason = String(body.reason || '').trim();
+        const expectedCalendarRevision = parseExpectedReportingCalendarRevision(body.expectedCalendarRevision);
+        const auditRef = getBrandCollection(db, brandId, 'maintenance_logs').doc();
+        let result = null;
+
+        await db.runTransaction(async (transaction) => {
+          const lifecycleSnap = await transaction.get(lifecycleRef);
+          const master = lifecycleSnap.exists ? (lifecycleSnap.data() || {}) : {};
+          const currentCalendar = normalizeReportingCalendar(master.reportingCalendar || {});
+
+          if (currentCalendar.revision !== expectedCalendarRevision) {
+            const error = new Error('營業日曆已由其他管理者更新，請重新讀取後再操作');
+            error.code = 'REPORTING_CALENDAR_CONFLICT';
+            error.currentCalendar = currentCalendar;
+            throw error;
+          }
+
+          const mutation = applyReportingCalendarMutation({
+            current: currentCalendar,
+            operation,
+            dates,
+            reason,
+          });
+
+          if (!mutation.changed) {
+            result = {
+              changed: false,
+              reportingCalendar: currentCalendar,
+              affectedHistoricalMonths: [],
+            };
+            return;
+          }
+
+          const nowText = new Date().toISOString();
+          const nextCalendarRevision = currentCalendar.revision + 1;
+          const changedMonths = [...new Set(
+            mutation.changedDates.map((date) => date.slice(0, 7))
+          )].sort();
+          const nextMonthRevisions = { ...(currentCalendar.monthRevisions || {}) };
+          changedMonths.forEach((yearMonth) => {
+            nextMonthRevisions[yearMonth] = Math.max(
+              0,
+              Number(nextMonthRevisions[yearMonth] || 0)
+            ) + 1;
+          });
+          const reportingCalendar = {
+            schemaVersion: REPORTING_CALENDAR_SCHEMA_VERSION,
+            revision: nextCalendarRevision,
+            monthRevisions: nextMonthRevisions,
+            closedDates: mutation.closedDates,
+            updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+            updatedAtText: nowText,
+            updatedBy: adminCheck.actorName,
+            updatedByRole: adminCheck.actorRole,
+            updatedByAccountId: adminCheck.actorAccountId,
+          };
+
+          // Reporting Calendar uses its own revision. Do NOT advance Lifecycle master
+          // revision, otherwise every historical Summary would fail Lifecycle revision trust.
+          transaction.set(lifecycleRef, {
+            reportingCalendar,
+            updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+            updatedAtText: nowText,
+            updatedBy: adminCheck.actorName,
+            updatedByRole: adminCheck.actorRole,
+            updatedByAccountId: adminCheck.actorAccountId,
+          }, { merge: true });
+
+          const currentTaipeiYearMonth = getTaipeiYearMonthForReportingCalendar();
+          const affectedHistoricalMonths = changedMonths
+            .filter((yearMonth) => yearMonth < currentTaipeiYearMonth)
+            .filter((yearMonth) => getLifecycleEligibleStoreEntries(master, yearMonth, {
+              brandId,
+              requireReady: true,
+            }).length > 0)
+            .sort();
+
+          affectedHistoricalMonths.forEach((yearMonth) => {
+            const flagRef = getBrandCollection(db, brandId, 'summary_recalc_flags').doc(yearMonth);
+            const monthClosedDates = reportingCalendar.closedDates
+              .filter((row) => row.date.startsWith(`${yearMonth}-`))
+              .map((row) => ({ date: row.date, reason: row.reason }));
+
+            const nextMonthRevision = Math.max(
+              0,
+              Number(reportingCalendar.monthRevisions?.[yearMonth] || 0)
+            );
+
+            transaction.set(flagRef, {
+              brandId,
+              yearMonth,
+              affectedYearMonth: yearMonth,
+              status: 'dirty',
+              dirty: true,
+              dirtyReason: 'reporting_calendar_changed',
+              requiredReportingCalendarRevision: nextMonthRevision,
+              reportingCalendarSnapshot: {
+                schemaVersion: REPORTING_CALENDAR_SCHEMA_VERSION,
+                masterRevision: nextCalendarRevision,
+                revision: nextMonthRevision,
+                closedDates: monthClosedDates,
+              },
+              lastDirtyAt: admin.firestore.FieldValue.serverTimestamp(),
+              lastDirtyAtText: nowText,
+              rebuildAfterAtText: nowText,
+              updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+              updatedAtText: nowText,
+              updatedBy: 'reporting_calendar_backend_v1',
+              updatedByRole: 'system',
+            }, { merge: true });
+          });
+
+          transaction.set(auditRef, buildLifecycleAuditPayload({
+            admin,
+            brandId,
+            actor: adminCheck,
+            action: 'update_reporting_calendar',
+            details: {
+              operation,
+              dates,
+              reason,
+              previousCalendarRevision: currentCalendar.revision,
+              reportingCalendarRevision: nextCalendarRevision,
+              changedMonthRevisions: Object.fromEntries(
+                changedMonths.map((yearMonth) => [
+                  yearMonth,
+                  Number(reportingCalendar.monthRevisions?.[yearMonth] || 0),
+                ])
+              ),
+              changedDates: mutation.changedDates,
+              affectedHistoricalMonths,
+            },
+          }), { merge: false });
+
+          result = {
+            changed: true,
+            reportingCalendar: {
+              schemaVersion: REPORTING_CALENDAR_SCHEMA_VERSION,
+              revision: nextCalendarRevision,
+              closedDates: mutation.closedDates,
+              updatedAtText: nowText,
+              updatedBy: adminCheck.actorName,
+              updatedByRole: adminCheck.actorRole,
+              updatedByAccountId: adminCheck.actorAccountId,
+            },
+            affectedHistoricalMonths,
+          };
+        });
+
+        return res.status(200).json({ ok: true, ...result });
+      }
+
       if (action === 'set_dataset_status') {
         const nextStatus = String(body.datasetStatus || '').trim().toUpperCase();
         if (!DATASET_STATUSES.has(nextStatus)) {
@@ -627,6 +948,14 @@ function createStoreLifecycleFunctions({ admin, db }) {
       return res.status(400).json({ ok: false, message: '不支援的門市生命週期操作' });
     } catch (error) {
       console.error('manageStoreLifecycle failed', error);
+      if (error?.code === 'REPORTING_CALENDAR_CONFLICT') {
+        return res.status(409).json({
+          ok: false,
+          code: error.code,
+          message: error.message,
+          currentReportingCalendar: error.currentCalendar || null,
+        });
+      }
       if (error?.code === 'LIFECYCLE_CONFLICT') {
         return res.status(409).json({
           ok: false,
@@ -635,7 +964,13 @@ function createStoreLifecycleFunctions({ admin, db }) {
           currentRevision: Number(error.currentRevision || 0),
         });
       }
-      if (error?.code === 'LIFECYCLE_NOT_READY' || error?.code === 'INVALID_LIFECYCLE' || error?.code === 'INVALID_STORE_IDENTITY') {
+      if (
+        error?.code === 'LIFECYCLE_NOT_READY'
+        || error?.code === 'INVALID_LIFECYCLE'
+        || error?.code === 'INVALID_STORE_IDENTITY'
+        || error?.code === 'INVALID_REPORTING_CALENDAR'
+        || error?.code === 'INVALID_REPORTING_CALENDAR_REVISION'
+      ) {
         return res.status(400).json({
           ok: false,
           code: error.code,
@@ -654,6 +989,11 @@ module.exports = {
   createStoreLifecycleFunctions,
   STORE_LIFECYCLE_SCHEMA_VERSION,
   REPORTING_COMPLETENESS_SCHEMA_VERSION,
+  REPORTING_CALENDAR_SCHEMA_VERSION,
+  normalizeReportingCalendarClosedDates,
+  normalizeReportingCalendarMonthRevisions,
+  normalizeReportingCalendar,
+  applyReportingCalendarMutation,
   resolveRequestedBrandId,
   detectStoreBrandFromName,
   normalizeStoreLifecycleCore,

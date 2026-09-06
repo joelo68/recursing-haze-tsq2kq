@@ -1,5 +1,8 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import fs from "node:fs";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
 
 import {
   ANNUAL_KPI_SUMMARY_SCHEMA_VERSION,
@@ -8,6 +11,10 @@ import {
   isAnnualBenchmarkMetricDisplayable,
   normalizeAnnualKpiBenchmarkPayload,
 } from "../src/utils/annualKpiBenchmark.js";
+
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
+const root = path.resolve(__dirname, "..");
+const dashboardHookSource = fs.readFileSync(path.join(root, "src/hooks/useDashboardStats.js"), "utf8");
 
 const metric = (monthlyValues = {}) => {
   const basedMonths = Object.keys(monthlyValues).sort();
@@ -113,4 +120,11 @@ test("legacy Annual KPI document remains readable during staged rollout", () => 
   assert.equal(legacy.metrics.traffic.monthlyAverage, 15);
   assert.equal(legacy.metrics.newCustomers.monthlyAverage, 4);
   assert.deepEqual(legacy.metrics.traffic.basedMonths, ["2026-01", "2026-02"]);
+});
+
+test("Dashboard Annual KPI benchmark cache is anchored to candidate-month Reporting Calendar revisions", () => {
+  assert.match(dashboardHookSource, /currentCalendarMonthRevisions/);
+  assert.match(dashboardHookSource, /base\.reportingCalendarMonthRevisions/);
+  assert.match(dashboardHookSource, /benchmarkCandidateMonths\.every/);
+  assert.match(dashboardHookSource, /REPORTING_CALENDAR_REVISION_MISMATCH/);
 });

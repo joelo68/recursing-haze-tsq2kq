@@ -53,6 +53,23 @@ test("stale System Exclusion revision forces historical detail/raw fallback", ()
   assert.equal(result.reason, "SYSTEM_EXCLUSION_SUMMARY_REVISION_MISMATCH");
 });
 
+test("stale Reporting Calendar month revision forces historical detail/raw fallback", () => {
+  const result = resolveHistoricalDashboardReadPolicy({
+    isCurrentMonth: false,
+    reportSummaryReady: true,
+    hasUsableDashboardSummary: true,
+    summaryFlagReady: true,
+    summaryFlag: verifiedFlag,
+    reportingCalendarTrusted: false,
+    reportingCalendarReason: "REPORTING_CALENDAR_SUMMARY_REVISION_MISMATCH",
+  });
+  assert.equal(result.mode, DASHBOARD_READ_MODE.DETAIL_FALLBACK);
+  assert.equal(result.shouldLoadDailyReports, true);
+  assert.equal(result.allowRawTargetFallback, true);
+  assert.equal(result.summaryTrusted, false);
+  assert.equal(result.reason, "REPORTING_CALENDAR_SUMMARY_REVISION_MISMATCH");
+});
+
 test("summary loading does not eagerly trigger historical raw reads", () => {
   const result = resolveHistoricalDashboardReadPolicy({
     isCurrentMonth: false,
@@ -131,6 +148,10 @@ test("App uses the shared historical read policy for Dashboard daily_reports", (
   assert.match(appSource, /currentSummaryRecalcFlagState/);
   assert.match(appSource, /inspectHistoricalSystemExclusionTrust/);
   assert.match(appSource, /systemExclusionTrusted: systemExclusionTrust\.trusted/);
+  assert.match(appSource, /inspectHistoricalReportingCalendarTrust/);
+  assert.match(appSource, /reportingCalendarTrusted: reportingCalendarTrust\.trusted/);
+  assert.match(hookSource, /inspectHistoricalReportingCalendarTrust/);
+  assert.match(hookSource, /reportingCalendarTrusted: reportingCalendarTrust\.trusted/);
 });
 
 test("Dashboard hook no longer listens to recalc_queue or maintenance_logs", () => {

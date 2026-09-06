@@ -64,6 +64,7 @@ function inspectAnnualKpiSummarySourceTrust({
   brandId = "",
   expectedSummarySemanticVersion = "",
   lifecycleRevision = null,
+  reportingCalendarRevision = 0,
   systemExclusionCurrent = false,
 } = {}) {
   const ym = normalizeYearMonth(yearMonth);
@@ -115,6 +116,17 @@ function inspectAnnualKpiSummarySourceTrust({
     return { trusted: false, reason: "REPORTING_COMPLETENESS_UNAVAILABLE" };
   }
 
+  const currentReportingCalendarRevision = Number(reportingCalendarRevision || 0);
+  const summaryReportingCalendarRevision = Number(reporting.reportingCalendarRevision || 0);
+  if (
+    !Number.isInteger(currentReportingCalendarRevision)
+    || currentReportingCalendarRevision < 0
+    || !Number.isInteger(summaryReportingCalendarRevision)
+    || summaryReportingCalendarRevision !== currentReportingCalendarRevision
+  ) {
+    return { trusted: false, reason: "REPORTING_CALENDAR_SUMMARY_REVISION_MISMATCH" };
+  }
+
   if (systemExclusionCurrent !== true) {
     return { trusted: false, reason: "SYSTEM_EXCLUSION_SUMMARY_REVISION_MISMATCH" };
   }
@@ -133,6 +145,17 @@ function inspectAnnualKpiSummarySourceTrust({
   const flagBrand = normalizeBrandId(summaryFlag.brandId || expectedBrand);
   if (flagBrand !== expectedBrand) {
     return { trusted: false, reason: "FLAG_BRAND_MISMATCH" };
+  }
+
+  const flagReportingCalendarRevision = Number(summaryFlag.reportingCalendarRevision || 0);
+  const requiredReportingCalendarRevision = Number(summaryFlag.requiredReportingCalendarRevision || 0);
+  if (
+    !Number.isInteger(flagReportingCalendarRevision)
+    || !Number.isInteger(requiredReportingCalendarRevision)
+    || flagReportingCalendarRevision !== currentReportingCalendarRevision
+    || requiredReportingCalendarRevision > flagReportingCalendarRevision
+  ) {
+    return { trusted: false, reason: "REPORTING_CALENDAR_FLAG_REVISION_MISMATCH" };
   }
 
   const flagState = inspectAnnualSummaryFlag(summaryFlag);
@@ -223,6 +246,7 @@ function buildAnnualKpiSummaryPayload({
   candidateMonths = [],
   monthInputs = [],
   lifecycleRevision = 0,
+  reportingCalendarMonthRevisions = {},
   systemExclusionSnapshot = null,
   trigger = "manual",
   updatedAtText = "",
@@ -434,6 +458,15 @@ function buildAnnualKpiSummaryPayload({
     basis: "lifecycle_full_month_data_complete_kpi_specific",
     scopeSupport: "brand_store_manager",
     lifecycleRevision: Number(lifecycleRevision || 0),
+    reportingCalendarMonthRevisions: Object.fromEntries(
+      (Array.isArray(candidateMonths) ? candidateMonths : [])
+        .map(normalizeYearMonth)
+        .filter(Boolean)
+        .map((yearMonth) => [
+          yearMonth,
+          Math.max(0, Number(reportingCalendarMonthRevisions?.[yearMonth] || 0)),
+        ])
+    ),
     systemExclusionSnapshot: systemExclusionSnapshot && typeof systemExclusionSnapshot === "object"
       ? { ...systemExclusionSnapshot }
       : null,

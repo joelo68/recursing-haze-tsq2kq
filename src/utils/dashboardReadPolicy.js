@@ -44,6 +44,8 @@ export const resolveHistoricalDashboardReadPolicy = ({
   summaryFlagError = null,
   systemExclusionTrusted = true,
   systemExclusionReason = "",
+  reportingCalendarTrusted = true,
+  reportingCalendarReason = "",
 } = {}) => {
   if (isCurrentMonth) {
     return {
@@ -102,6 +104,16 @@ export const resolveHistoricalDashboardReadPolicy = ({
       allowRawTargetFallback: true,
       summaryTrusted: false,
       reason: systemExclusionReason || "SYSTEM_EXCLUSION_REVISION_MISMATCH",
+    };
+  }
+
+  if (reportingCalendarTrusted !== true) {
+    return {
+      mode: DASHBOARD_READ_MODE.DETAIL_FALLBACK,
+      shouldLoadDailyReports: true,
+      allowRawTargetFallback: true,
+      summaryTrusted: false,
+      reason: reportingCalendarReason || "REPORTING_CALENDAR_REVISION_MISMATCH",
     };
   }
 

@@ -23,6 +23,7 @@ import { generateUUID, formatLocalYYYYMMDD, toStandardDateFormat, formatNumber, 
 import { validPositiveSetting } from "./utils/kpiContracts";
 import { inspectHistoricalSystemExclusionTrust, normalizeSystemExclusionState } from "./utils/systemExclusion";
 import { resolveHistoricalDashboardReadPolicy } from "./utils/dashboardReadPolicy";
+import { inspectHistoricalReportingCalendarTrust } from "./utils/storeLifecycle";
 import { buildAnnualAggregateYearMonthCandidates, normalizeAnnualYearMonth, resolveAnnualReadPlan } from "./utils/annualReadPolicy";
 import { isFormalReportSummaryPairCompatible } from "./utils/reportFormalConsumer";
 import {
@@ -3312,6 +3313,12 @@ export default function App() {
       summaries: [currentDashboardSummary, currentRankingsSummary],
       summaryFlag: currentSummaryRecalcFlagState?.data || null,
     });
+    const reportingCalendarTrust = inspectHistoricalReportingCalendarTrust({
+      currentLifecycleMasterState,
+      dashboardSummary: currentDashboardSummary,
+      summaryFlag: currentSummaryRecalcFlagState?.data || null,
+      brandId: currentBrand?.id || "",
+    });
     const dashboardReadPolicy = resolveHistoricalDashboardReadPolicy({
       isCurrentMonth,
       historicalRefreshRequested: isHistoricalRefreshRequested,
@@ -3322,6 +3329,8 @@ export default function App() {
       summaryFlagError: currentSummaryRecalcFlagState?.error || null,
       systemExclusionTrusted: systemExclusionTrust.trusted,
       systemExclusionReason: systemExclusionTrust.reason,
+      reportingCalendarTrusted: reportingCalendarTrust.trusted,
+      reportingCalendarReason: reportingCalendarTrust.reason,
     });
 
     const shouldLoadDailyReportData =

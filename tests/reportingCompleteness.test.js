@@ -5,7 +5,9 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import {
   REPORTING_COMPLETENESS_SCHEMA_VERSION,
+  REPORTING_CALENDAR_SCHEMA_VERSION,
   buildLifecycleReportingCompleteness,
+  getLifecycleEligibleStoreEntries,
   getLifecycleExpectedReportDates,
   isLifecycleEntryExpectedForDate,
   isLifecycleEntryFullEligibleMonth,
@@ -148,8 +150,107 @@ test("READY lifecycle with explicit zero reports is DATA_COMPLETE; missing lifec
   assert.equal(notReady.lifecycleReady, false);
 });
 
+test("brand closed dates are not expected report days and do not require fake zero daily reports", () => {
+  const reports = Array.from({ length: 18 }, (_, index) => ({
+    storeName: "CYJA店",
+    date: `2026-02-${String(index + 1).padStart(2, "0")}`,
+    cash: 0,
+  })).filter((row) => !["2026-02-16", "2026-02-17"].includes(row.date));
+
+  const result = buildLifecycleReportingCompleteness({
+    master: {
+      brandId: "cyj",
+      datasetStatus: "READY",
+      reportingCalendar: {
+        schemaVersion: REPORTING_CALENDAR_SCHEMA_VERSION,
+        revision: 3,
+        monthRevisions: { "2026-02": 3 },
+        closedDates: [
+          { date: "2026-02-16", reason: "春節全國休假" },
+          { date: "2026-02-17", reason: "春節全國休假" },
+        ],
+      },
+      stores: {
+        "A": { firstEligibleMonth: "2026-01", openDate: "2020-01-01" },
+      },
+    },
+    yearMonth: "2026-02",
+    brandId: "cyj",
+    cutoffDate: "2026-02-18",
+    reports,
+  });
+
+  assert.equal(result.reportingCalendarSchemaVersion, REPORTING_CALENDAR_SCHEMA_VERSION);
+  assert.equal(result.reportingCalendarMasterRevision, 3);
+  assert.equal(result.reportingCalendarRevision, 3);
+  assert.deepEqual(result.closedReportDates, ["2026-02-16", "2026-02-17"]);
+  assert.equal(result.closedReportDateCount, 2);
+  assert.equal(result.expectedStoreDayCount, 16);
+  assert.equal(result.submittedStoreDayCount, 16);
+  assert.equal(result.missingStoreDayCount, 0);
+  assert.equal(result.reportingStatus, "DATA_COMPLETE");
+});
+
+test("a report accidentally present on a brand closed date does not inflate submitted expected-day counts", () => {
+  const result = buildLifecycleReportingCompleteness({
+    master: {
+      brandId: "anniu",
+      datasetStatus: "READY",
+      reportingCalendar: {
+        revision: 1,
+        closedDates: [{ date: "2026-02-16", reason: "全品牌休假" }],
+      },
+      stores: {
+        "A": { firstEligibleMonth: "2026-01", openDate: "2020-01-01" },
+      },
+    },
+    yearMonth: "2026-02",
+    brandId: "anniu",
+    cutoffDate: "2026-02-16",
+    reports: [
+      ...Array.from({ length: 15 }, (_, index) => ({
+        storeName: "安妞A店",
+        date: `2026-02-${String(index + 1).padStart(2, "0")}`,
+        cash: 0,
+      })),
+      { storeName: "安妞A店", date: "2026-02-16", cash: 999 },
+    ],
+  });
+
+  assert.equal(result.expectedStoreDayCount, 15);
+  assert.equal(result.submittedStoreDayCount, 15);
+  assert.equal(result.missingStoreDayCount, 0);
+  assert.equal(result.reportingStatus, "DATA_COMPLETE");
+});
+
+test("brand calendar propagates through Lifecycle entries so Daily/Audit direct expected-day callers exclude closed dates", () => {
+  const master = {
+    brandId: "cyj",
+    datasetStatus: "READY",
+    reportingCalendar: {
+      revision: 4,
+      monthRevisions: { "2026-02": 2 },
+      closedDates: [{ date: "2026-02-16", reason: "春節全國休假" }],
+    },
+    stores: {
+      A: { firstEligibleMonth: "2026-01", openDate: "2020-01-01" },
+    },
+  };
+  const [entry] = getLifecycleEligibleStoreEntries(master, "2026-02", {
+    brandId: "cyj",
+    requireReady: true,
+  });
+  assert.ok(entry);
+  assert.equal(isLifecycleEntryExpectedForDate(entry, "2026-02-15"), true);
+  assert.equal(isLifecycleEntryExpectedForDate(entry, "2026-02-16"), false);
+  assert.equal(isLifecycleEntryExpectedForDate(entry, "2026-02-17"), true);
+});
+
 test("Summary Writer persists compact reporting metadata from already-loaded Lifecycle and daily rows", () => {
   assert.match(backendLifecycle, /REPORTING_COMPLETENESS_SCHEMA_VERSION = 'reporting-completeness-v1'/);
+  assert.match(backendLifecycle, /REPORTING_CALENDAR_SCHEMA_VERSION = 'reporting-calendar-v1'/);
+  assert.match(backendLifecycle, /function normalizeReportingCalendar/);
+  assert.match(backendLifecycle, /master\?\.reportingCalendar/);
   assert.match(backendLifecycle, /function isLifecycleEntryExpectedForDate/);
   assert.match(backendLifecycle, /function getLifecycleExpectedReportDates/);
   assert.match(backendLifecycle, /function buildLifecycleReportingCompleteness/);
@@ -158,6 +259,9 @@ test("Summary Writer persists compact reporting metadata from already-loaded Lif
   assert.match(functionsIndex, /REPORTING_COMPLETENESS_SCHEMA_VERSION/);
   assert.match(functionsIndex, /buildLifecycleReportingCompleteness\(\{[\s\S]*?master: lifecycleMasterForSystemScope,[\s\S]*?reports: dailyRows,[\s\S]*?includeMissingDates: false/);
   assert.match(functionsIndex, /reportingCompleteness: \{[\s\S]*?\.\.\.reportingCompleteness,[\s\S]*?schemaVersion: REPORTING_COMPLETENESS_SCHEMA_VERSION/);
+  assert.match(functionsIndex, /finalizeSummaryRecalcFlagWithReportingCalendarGuard/);
+  assert.match(functionsIndex, /requiredReportingCalendarRevision/);
+  assert.match(functionsIndex, /reporting_calendar_revision_changed_during_rebuild/);
   assert.match(functionsIndex, /Store Reporting Signature/);
 });
 

@@ -9970,6 +9970,9 @@ async function rebuildAnnualKpiSummaryForBrand(brandId, yearInput, options = {})
       brandId: normalizedBrandId,
       expectedSummarySemanticVersion: SUMMARY_SEMANTIC_VERSION,
       lifecycleRevision: Number(lifecycleMaster.revision || 0),
+      reportingCalendarRevision: Number(
+        lifecycleMaster?.reportingCalendar?.monthRevisions?.[yearMonth] || 0
+      ),
       systemExclusionCurrent,
     });
 
@@ -10017,6 +10020,15 @@ async function rebuildAnnualKpiSummaryForBrand(brandId, yearInput, options = {})
     candidateMonths,
     monthInputs,
     lifecycleRevision: Number(lifecycleMaster.revision || 0),
+    reportingCalendarMonthRevisions: Object.fromEntries(
+      candidateMonths.map((yearMonth) => [
+        yearMonth,
+        Math.max(
+          0,
+          Number(lifecycleMaster?.reportingCalendar?.monthRevisions?.[yearMonth] || 0)
+        ),
+      ])
+    ),
     systemExclusionSnapshot,
     trigger: options.trigger || "manual",
     updatedAtText: nowText,
@@ -11403,6 +11415,88 @@ async function writeAutoMaintenanceLog(brandId, payload) {
   });
 }
 
+async function finalizeSummaryRecalcFlagWithReportingCalendarGuard({
+  flagRef,
+  brandId,
+  brandLabel,
+  yearMonth,
+  dashboardSummary,
+  rawMatched,
+  mismatchRows = [],
+  completedCount = 0,
+} = {}) {
+  const builtRevision = Math.max(
+    0,
+    Number(dashboardSummary?.reportingCompleteness?.reportingCalendarRevision || 0)
+  );
+  let finalState = null;
+
+  // Calendar writer and repair both transact on this exact month flag.
+  // Whichever commits second sees/creates the dirty state; no Lifecycle reread is required.
+  await db.runTransaction(async (tx) => {
+    const latestFlagSnap = await tx.get(flagRef);
+    const latestFlag = latestFlagSnap.exists ? (latestFlagSnap.data() || {}) : {};
+    const requiredRaw = Number(latestFlag.requiredReportingCalendarRevision || 0);
+    const requiredRevision = Number.isInteger(requiredRaw) && requiredRaw >= 0
+      ? requiredRaw
+      : builtRevision;
+    const calendarCurrent = builtRevision >= requiredRevision;
+    const verified = rawMatched === true && calendarCurrent;
+    const nowText = new Date().toISOString();
+
+    tx.set(flagRef, {
+      brandId,
+      brandLabel,
+      yearMonth,
+      affectedYearMonth: yearMonth,
+      status: verified ? "verified" : (rawMatched ? "dirty" : "mismatch"),
+      dirty: !verified,
+      pendingCount: verified ? 0 : completedCount,
+      systemExclusionRevision: Number(dashboardSummary?.systemExclusionSnapshot?.revision || 0),
+      systemExclusionSnapshot: dashboardSummary?.systemExclusionSnapshot || null,
+      reportingCalendarRevision: builtRevision,
+      requiredReportingCalendarRevision: Math.max(requiredRevision, builtRevision),
+      reportingCalendarSnapshot: {
+        schemaVersion: String(
+          dashboardSummary?.reportingCompleteness?.reportingCalendarSchemaVersion || ""
+        ),
+        masterRevision: Number(
+          dashboardSummary?.reportingCompleteness?.reportingCalendarMasterRevision || 0
+        ),
+        revision: builtRevision,
+        closedReportDates: Array.isArray(
+          dashboardSummary?.reportingCompleteness?.closedReportDates
+        )
+          ? dashboardSummary.reportingCompleteness.closedReportDates
+          : [],
+      },
+      lastCompletedAt: admin.firestore.FieldValue.serverTimestamp(),
+      lastCompletedAtText: nowText,
+      lastCompletedBy: "auto_summary_repair_worker",
+      lastCompletedByRole: "system",
+      lastResult: !calendarCurrent
+        ? "reporting_calendar_revision_changed_during_rebuild"
+        : (rawMatched ? "auto_month_report_finalized" : "auto_month_report_mismatch"),
+      lastMismatchCount: mismatchRows.length,
+      completedQueueCount: completedCount,
+      lockedBy: admin.firestore.FieldValue.delete(),
+      lockId: admin.firestore.FieldValue.delete(),
+      lockUntilText: admin.firestore.FieldValue.delete(),
+      updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+      updatedAtText: nowText,
+    }, { merge: true });
+
+    finalState = {
+      verified,
+      calendarCurrent,
+      builtRevision,
+      requiredRevision,
+    };
+  });
+
+  return finalState;
+}
+
 async function finalizeMonthReportAuto({ brandId, yearMonth, trigger = "auto_worker", force = false }) {
   if (!brandId || !/^\d{4}-\d{2}$/.test(String(yearMonth || ""))) {
     throw new Error("brandId 或 yearMonth 格式錯誤");
@@ -11537,6 +11631,11 @@ async function finalizeMonthReportAuto({ brandId, yearMonth, trigger = "auto_wor
       submittedStoreDays: Number(dashboardSummary.reportingCompleteness?.submittedStoreDayCount || 0),
       missingStoreDays: Number(dashboardSummary.reportingCompleteness?.missingStoreDayCount || 0),
       reportingIncompleteStores: Number(dashboardSummary.reportingCompleteness?.incompleteStoreCount || 0),
+      reportingCalendarRevision: Number(dashboardSummary.reportingCompleteness?.reportingCalendarRevision || 0),
+      reportingCalendarMasterRevision: Number(dashboardSummary.reportingCompleteness?.reportingCalendarMasterRevision || 0),
+      closedReportDates: Array.isArray(dashboardSummary.reportingCompleteness?.closedReportDates)
+        ? dashboardSummary.reportingCompleteness.closedReportDates
+        : [],
       writtenDocs: 3,
       createdAt: new Date().toLocaleString("zh-TW", { hour12: false }),
       source: "auto_summary_repair_worker",
@@ -11588,31 +11687,44 @@ async function finalizeMonthReportAuto({ brandId, yearMonth, trigger = "auto_wor
       brandLabel,
     });
 
-    await flagRef.set({
+    const finalFlagState = await finalizeSummaryRecalcFlagWithReportingCalendarGuard({
+      flagRef,
       brandId,
       brandLabel,
       yearMonth,
-      affectedYearMonth: yearMonth,
-      status: isMatched ? "verified" : "mismatch",
-      dirty: !isMatched,
-      pendingCount: isMatched ? 0 : completedCount,
-      systemExclusionRevision: Number(dashboardSummary.systemExclusionSnapshot?.revision || 0),
-      systemExclusionSnapshot: dashboardSummary.systemExclusionSnapshot || null,
-      lastCompletedAt: admin.firestore.FieldValue.serverTimestamp(),
-      lastCompletedAtText: new Date().toISOString(),
-      lastCompletedBy: "auto_summary_repair_worker",
-      lastCompletedByRole: "system",
-      lastResult: isMatched ? "auto_month_report_finalized" : "auto_month_report_mismatch",
-      lastMismatchCount: mismatchRows.length,
-      completedQueueCount: completedCount,
-      lockedBy: admin.firestore.FieldValue.delete(),
-      lockId: admin.firestore.FieldValue.delete(),
-      lockUntilText: admin.firestore.FieldValue.delete(),
-      updatedAt: admin.firestore.FieldValue.serverTimestamp(),
-      updatedAtText: new Date().toISOString(),
-    }, { merge: true });
+      dashboardSummary,
+      rawMatched: isMatched,
+      mismatchRows,
+      completedCount,
+    });
+    const reportingCalendarRaceDetected = finalFlagState?.calendarCurrent === false;
+    if (reportingCalendarRaceDetected) {
+      isMatched = false;
+      await writeAutoMaintenanceLog(brandId, {
+        type: "dashboard_summary",
+        action: "reporting_calendar_race_guard",
+        month: yearMonth,
+        status: "dirty",
+        builtReportingCalendarRevision: finalFlagState?.builtRevision ?? null,
+        requiredReportingCalendarRevision: finalFlagState?.requiredRevision ?? null,
+        trigger,
+        lockId,
+        brandLabel,
+      });
+    }
 
-    return { brandId, yearMonth, matched: isMatched, mismatchCount: mismatchRows.length, completedQueueCount: completedCount, buildReport, compareReport };
+    return {
+      brandId,
+      yearMonth,
+      matched: isMatched,
+      reportingCalendarRaceDetected,
+      reportingCalendarRevision: finalFlagState?.builtRevision ?? 0,
+      requiredReportingCalendarRevision: finalFlagState?.requiredRevision ?? 0,
+      mismatchCount: mismatchRows.length,
+      completedQueueCount: completedCount,
+      buildReport,
+      compareReport,
+    };
   } catch (error) {
     await flagRef.set({
       brandId,
