@@ -2,6 +2,7 @@ import { KPI_VALUE_STATUS, normalizeKpiBrandId } from "./kpiContracts.js";
 import { buildHistoricalFormalDashboardScope, isFormalDashboardSummaryCompatible } from "./dashboardFormalConsumer.js";
 import { getSummaryRecalcFlagState } from "./dashboardReadPolicy.js";
 import { inspectHistoricalSystemExclusionTrust } from "./systemExclusion.js";
+import { getLifecycleEligibleStoreEntries } from "./storeLifecycle.js";
 
 export const ANNUAL_FORMAL_REASON = Object.freeze({
   PRE_SYSTEM_SKIP: "PRE_SYSTEM_SKIP",
@@ -17,6 +18,9 @@ export const ANNUAL_FORMAL_REASON = Object.freeze({
   SUMMARY_DIRTY: "SUMMARY_DIRTY",
   SUMMARY_UNVERIFIED: "SUMMARY_UNVERIFIED",
   VERIFIED_FORMAL_SUMMARY: "VERIFIED_FORMAL_SUMMARY",
+  LIFECYCLE_AUTHORITY_NOT_READY: "LIFECYCLE_AUTHORITY_NOT_READY",
+  LIFECYCLE_BRAND_MISMATCH: "LIFECYCLE_BRAND_MISMATCH",
+  LIFECYCLE_SUMMARY_REVISION_MISMATCH: "LIFECYCLE_SUMMARY_REVISION_MISMATCH",
 });
 
 const DATA_START_MONTH_BY_BRAND = Object.freeze({
@@ -44,10 +48,22 @@ export const resolveAnnualHistoricalFormalTrust = ({
   dashboardSummary = null,
   summaryFlag = null,
   systemExclusionState,
+  currentLifecycleMasterState,
 } = {}) => {
   const ym = normalizeText(yearMonth);
   const currentYm = normalizeText(currentYearMonth);
   const expectedBrand = normalizeKpiBrandId(brandId);
+
+  if (currentLifecycleMasterState !== undefined) {
+    const lifecycleBrand = normalizeKpiBrandId(currentLifecycleMasterState?.brandId);
+    const lifecycleMaster = currentLifecycleMasterState?.data || null;
+    if (currentLifecycleMasterState?.ready !== true || !lifecycleMaster || String(lifecycleMaster?.datasetStatus || "") !== "READY") {
+      return { trusted: false, preSystemSkip: false, reason: ANNUAL_FORMAL_REASON.LIFECYCLE_AUTHORITY_NOT_READY };
+    }
+    if (lifecycleBrand !== expectedBrand) {
+      return { trusted: false, preSystemSkip: false, reason: ANNUAL_FORMAL_REASON.LIFECYCLE_BRAND_MISMATCH };
+    }
+  }
 
   if (isAnnualPreSystemMonth(expectedBrand, ym)) {
     return { trusted: false, preSystemSkip: true, reason: ANNUAL_FORMAL_REASON.PRE_SYSTEM_SKIP };
@@ -70,6 +86,15 @@ export const resolveAnnualHistoricalFormalTrust = ({
   const summaryBrand = normalizeKpiBrandId(dashboardSummary?.brandId);
   if (!expectedBrand || summaryBrand !== expectedBrand) {
     return { trusted: false, preSystemSkip: false, reason: ANNUAL_FORMAL_REASON.SUMMARY_BRAND_MISMATCH };
+  }
+
+  if (currentLifecycleMasterState !== undefined) {
+    const currentRevision = Number(currentLifecycleMasterState?.data?.revision);
+    const summaryRevision = Number(dashboardSummary?.lifecycleSnapshot?.revision);
+    const summaryLifecycleReady = String(dashboardSummary?.lifecycleSnapshot?.datasetStatus || "") === "READY";
+    if (!summaryLifecycleReady || !Number.isFinite(currentRevision) || !Number.isFinite(summaryRevision) || currentRevision !== summaryRevision) {
+      return { trusted: false, preSystemSkip: false, reason: ANNUAL_FORMAL_REASON.LIFECYCLE_SUMMARY_REVISION_MISMATCH };
+    }
   }
 
   if (!summaryFlag || typeof summaryFlag !== "object") {
@@ -113,6 +138,57 @@ export const resolveAnnualHistoricalFormalTrust = ({
   }
 
   return { trusted: true, preSystemSkip: false, reason: ANNUAL_FORMAL_REASON.VERIFIED_FORMAL_SUMMARY };
+};
+
+export const buildAnnualLifecycleScope = ({
+  currentLifecycleMasterState,
+  yearMonth = "",
+  brandId = "",
+  scopeStoreKeys = null,
+  excludedStoreKeys = [],
+  normalizeStoreKey = normalizeText,
+} = {}) => {
+  const expectedBrand = normalizeKpiBrandId(brandId);
+  const lifecycleBrand = normalizeKpiBrandId(currentLifecycleMasterState?.brandId);
+  const master = currentLifecycleMasterState?.data || null;
+
+  if (currentLifecycleMasterState?.ready !== true || !master || String(master?.datasetStatus || "") !== "READY") {
+    return {
+      ready: false,
+      reason: ANNUAL_FORMAL_REASON.LIFECYCLE_AUTHORITY_NOT_READY,
+      eligibleStoreKeys: [],
+    };
+  }
+  if (!expectedBrand || lifecycleBrand !== expectedBrand) {
+    return {
+      ready: false,
+      reason: ANNUAL_FORMAL_REASON.LIFECYCLE_BRAND_MISMATCH,
+      eligibleStoreKeys: [],
+    };
+  }
+
+  const explicitScope = Array.isArray(scopeStoreKeys)
+    ? new Set(scopeStoreKeys.map(normalizeStoreKey).filter(Boolean))
+    : null;
+  const excluded = new Set((excludedStoreKeys || []).map(normalizeStoreKey).filter(Boolean));
+  const entries = getLifecycleEligibleStoreEntries(master, yearMonth, {
+    brandId: expectedBrand,
+    requireReady: true,
+  });
+
+  const eligibleStoreKeys = entries
+    .map((entry) => normalizeStoreKey(entry?.storeKey || entry?.coreStoreName || entry?.canonicalStoreName || ""))
+    .filter((storeKey) => (
+      storeKey
+      && !excluded.has(storeKey)
+      && (!explicitScope || explicitScope.has(storeKey))
+    ));
+
+  return {
+    ready: true,
+    reason: "LIFECYCLE_SCOPE_READY",
+    eligibleStoreKeys: [...new Set(eligibleStoreKeys)].sort((a, b) => a.localeCompare(b, "zh-Hant")),
+  };
 };
 
 const normalizeStoreEntries = (stores = {}) => (
@@ -188,6 +264,9 @@ export const buildAnnualFormalMonth = ({
       compatible: true,
       applied: true,
       includedInTotals: false,
+      actualIncludedInTotals: false,
+      targetIncludedInTotals: false,
+      performanceStatus: "N_A",
       emptyLifecycleScope: true,
       source: "formal_dashboard_summary",
       cash: null,
@@ -215,6 +294,22 @@ export const buildAnnualFormalMonth = ({
     ? expectedScopeKeys.filter((key) => !rowsByKey.has(key))
     : [];
   const actualScopeIncomplete = missingSummaryStoreKeys.length > 0;
+  const reportingStores = dashboardSummary?.reportingCompleteness?.stores
+    && typeof dashboardSummary.reportingCompleteness.stores === "object"
+      ? dashboardSummary.reportingCompleteness.stores
+      : {};
+  const reportingByKey = new Map();
+  Object.entries(reportingStores).forEach(([fallbackKey, row]) => {
+    const key = normalizeStoreKey(row?.storeKey || row?.coreStoreName || row?.canonicalStoreName || fallbackKey);
+    if (key && !reportingByKey.has(key)) reportingByKey.set(key, row || {});
+  });
+  const reportingScopeKeys = filtered ? expectedScopeKeys : lifecycleEligibleKeys.filter((key) => !excluded.has(key));
+  const incompleteReportingStoreKeys = reportingScopeKeys.filter((key) => (
+    reportingByKey.get(key)?.reportingStatus !== "DATA_COMPLETE"
+  ));
+  const performanceStatus = incompleteReportingStoreKeys.length > 0
+    ? "DATA_INCOMPLETE"
+    : "DATA_COMPLETE";
 
   const cashMetric = actualScopeIncomplete
     ? makeUnavailableMetric(KPI_VALUE_STATUS.FIELD_MISSING)
@@ -242,6 +337,10 @@ export const buildAnnualFormalMonth = ({
     compatible: true,
     applied: true,
     includedInTotals: true,
+    actualIncludedInTotals: true,
+    targetIncludedInTotals: true,
+    performanceStatus,
+    incompleteReportingStoreKeys,
     emptyLifecycleScope: false,
     source: "formal_dashboard_summary",
     cash: cashMetric.value,
@@ -271,6 +370,7 @@ export const shouldAllowAnnualRawTargetFallback = ({
   dashboardSummary = null,
   summaryFlag = null,
   systemExclusionState,
+  currentLifecycleMasterState,
 } = {}) => {
   const trust = resolveAnnualHistoricalFormalTrust({
     yearMonth,
@@ -279,24 +379,30 @@ export const shouldAllowAnnualRawTargetFallback = ({
     dashboardSummary,
     summaryFlag,
     systemExclusionState,
+    currentLifecycleMasterState,
   });
   if (trust.preSystemSkip || trust.trusted) return false;
   return true;
 };
 
 export const buildAnnualIntervalTotals = (monthlyStats = []) => {
-  const included = (Array.isArray(monthlyStats) ? monthlyStats : []).filter((row) => row?.includedInTotals !== false);
+  const included = (Array.isArray(monthlyStats) ? monthlyStats : [])
+    .filter((row) => row?.includedInTotals !== false);
+  const actualRows = included.filter((row) => (
+    row?.actualIncludedInTotals !== false && row?.performanceStatus !== "NOT_STARTED"
+  ));
+  const targetRows = included.filter((row) => row?.targetIncludedInTotals !== false);
 
-  const sumNullableMetric = (key) => {
-    if (included.some((row) => !isFiniteValue(row?.[key]))) return null;
-    return included.reduce((sum, row) => sum + Number(row?.[key] || 0), 0);
+  const sumNullableMetric = (rows, key) => {
+    if (rows.some((row) => !isFiniteValue(row?.[key]))) return null;
+    return rows.reduce((sum, row) => sum + Number(row?.[key] || 0), 0);
   };
 
-  const totalCash = sumNullableMetric("cash");
-  const totalBudget = sumNullableMetric("budget");
-  const totalAccrual = sumNullableMetric("accrual");
-  const totalAccrualBudget = sumNullableMetric("accrualBudget");
-  const totalTraffic = included.reduce((sum, row) => sum + (isFiniteValue(row?.traffic) ? Number(row.traffic) : 0), 0);
+  const totalCash = sumNullableMetric(actualRows, "cash");
+  const totalBudget = sumNullableMetric(targetRows, "budget");
+  const totalAccrual = sumNullableMetric(actualRows, "accrual");
+  const totalAccrualBudget = sumNullableMetric(targetRows, "accrualBudget");
+  const totalTraffic = actualRows.reduce((sum, row) => sum + (isFiniteValue(row?.traffic) ? Number(row.traffic) : 0), 0);
 
   const cashAch = isFiniteValue(totalCash) && isFiniteValue(totalBudget) && Number(totalBudget) > 0
     ? (Number(totalCash) / Number(totalBudget)) * 100
@@ -304,6 +410,13 @@ export const buildAnnualIntervalTotals = (monthlyStats = []) => {
   const accrualAch = isFiniteValue(totalAccrual) && isFiniteValue(totalAccrualBudget) && Number(totalAccrualBudget) > 0
     ? (Number(totalAccrual) / Number(totalAccrualBudget)) * 100
     : null;
+
+  const includesFutureTargets = included.some((row) => (
+    row?.performanceStatus === "NOT_STARTED" && row?.targetIncludedInTotals !== false
+  ));
+  const performanceStatus = actualRows.some((row) => row?.performanceStatus === "DATA_INCOMPLETE")
+    ? "DATA_INCOMPLETE"
+    : (actualRows.some((row) => row?.performanceStatus === "PROVISIONAL") ? "PROVISIONAL" : "DATA_COMPLETE");
 
   return {
     cash: totalCash,
@@ -313,6 +426,10 @@ export const buildAnnualIntervalTotals = (monthlyStats = []) => {
     accrualBudget: totalAccrualBudget,
     accrualAch,
     traffic: totalTraffic,
+    includesFutureTargets,
+    performanceStatus,
+    actualMonthCount: actualRows.length,
+    targetMonthCount: targetRows.length,
   };
 };
 

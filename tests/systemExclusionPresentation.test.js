@@ -114,3 +114,19 @@ test("Annual selectable and effective stores exclude System Excluded stores with
   assert.match(source, /filterSystemExcludedStoreKeys\(\[selectedAnnualStore\], systemExclusionState, cleanName\)/);
   assert.doesNotMatch(source, /getCollectionPath\("monthly_targets"\)[\s\S]{0,250}systemExclusionState\.stores/);
 });
+
+
+test("Annual keeps System Exclusion Formal-only while resolving each month from Lifecycle authority", () => {
+  const source = read("src/components/AnnualView.jsx");
+  assert.match(source, /buildAnnualLifecycleScope\(\{/);
+  assert.match(source, /excludedStoreKeys: annualFormalExclusionKeys/);
+  assert.match(source, /lifecycleScope\.eligibleStoreKeys/);
+  assert.doesNotMatch(source, /storeSelfViewActive/);
+});
+
+test("Annual benchmark filtered scope never restores an excluded-store self-view exception", () => {
+  const source = read("src/hooks/useDashboardStats.js");
+  assert.match(source, /if \(storeSelfViewActive\) \{[\s\S]*makeEmptyAnnualKpiBenchmark/);
+  assert.match(source, /isSystemExclusionSnapshotCurrent/);
+  assert.match(source, /buildAnnualKpiBenchmarkScope/);
+});

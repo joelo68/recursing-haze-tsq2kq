@@ -54,3 +54,14 @@ test("StorePerformanceView keeps excluded-store self-view null-safe and labels t
   assert.match(source, /const strictKpiPresentation = formalConsumerActive \|\| storeSelfViewActive;/);
   assert.match(source, /自店檢視｜本店目前不納入公司正式營運統計/);
 });
+
+
+test("StorePerformanceView uses KPI-specific Annual benchmark metadata and preserves a real zero", () => {
+  assert.match(source, /getAnnualBenchmarkMetric\(annualKpiBenchmark, "traffic"\)/);
+  assert.match(source, /getAnnualBenchmarkMetric\(annualKpiBenchmark, "newCustomers"\)/);
+  assert.match(source, /isAnnualBenchmarkMetricDisplayable\(metric\)/);
+  assert.match(source, /trafficBenchmarkMonthCount/);
+  assert.match(source, /newCustomerBenchmarkMonthCount/);
+  assert.match(source, /getAnnualBenchmarkLabel\(trafficAnnualBenchmark\)/);
+  assert.doesNotMatch(source, /numeric > 0 \? fmtNum/);
+});

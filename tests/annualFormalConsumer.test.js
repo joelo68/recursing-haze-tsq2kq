@@ -9,6 +9,7 @@ import { SUMMARY_SEMANTIC_VERSION } from "../src/utils/summarySemantics.js";
 import {
   buildAnnualFormalMonth,
   buildAnnualIntervalTotals,
+  buildAnnualLifecycleScope,
   isAnnualPreSystemMonth,
   resolveAnnualHistoricalFormalTrust,
   shouldAllowAnnualRawTargetFallback,
@@ -432,8 +433,156 @@ test("5E-1B Annual Formal all-zero configured targets stay zero and achievement 
 test("5E-1B AnnualView explicit zero is presence-aware and does not reopen legacy target fallback", () => {
   const source = fs.readFileSync(path.join(root, "src/components/AnnualView.jsx"), "utf8");
   assert.match(source, /const readTargetValue = \(row, keys = \[\]\) =>/);
-  assert.match(source, /!cashTargetResult\.found && !accrualTargetResult\.found/);
-  assert.match(source, /cashTargetResult\.configured \|\| accrualTargetResult\.configured/);
+  assert.match(source, /Canonical Summary row presence is authoritative/);
+  assert.match(source, /if \(!row\) \{\s*missingPairs\.push/);
+  assert.match(source, /if \(cashTargetResult\.configured\)/);
+  assert.match(source, /if \(accrualTargetResult\.configured\)/);
   assert.doesNotMatch(source, /if \(!row \|\| \(cashTarget <= 0 && accrualTarget <= 0\)\)/);
   assert.doesNotMatch(source, /if \(cashTarget > 0 \|\| accrualTarget > 0\)/);
+});
+
+test("Batch 7 Annual lifecycle scope is month-specific and excludes pre-open/post-close/exempt stores", () => {
+  const lifecycleState = {
+    brandId: "cyj",
+    ready: true,
+    data: {
+      datasetStatus: "READY",
+      revision: 9,
+      stores: {
+        A: {
+          firstEligibleMonth: "2026-01",
+          openDate: "2025-01-01",
+          lastEligibleMonth: "",
+          closeDate: "",
+          exemptMonths: ["2026-03"],
+        },
+        B: {
+          firstEligibleMonth: "2026-02",
+          openDate: "2026-02-15",
+          lastEligibleMonth: "2026-04",
+          closeDate: "2026-04-20",
+          exemptMonths: [],
+        },
+      },
+    },
+  };
+
+  const jan = buildAnnualLifecycleScope({
+    currentLifecycleMasterState: lifecycleState,
+    yearMonth: "2026-01",
+    brandId: "cyj",
+    normalizeStoreKey: (value) => String(value || "").replace(/^(CYJ|DRCYJ)/, "").replace(/店$/, ""),
+  });
+  assert.deepEqual(jan.eligibleStoreKeys, ["A"]);
+
+  const mar = buildAnnualLifecycleScope({
+    currentLifecycleMasterState: lifecycleState,
+    yearMonth: "2026-03",
+    brandId: "cyj",
+    normalizeStoreKey: (value) => String(value || "").replace(/^(CYJ|DRCYJ)/, "").replace(/店$/, ""),
+  });
+  assert.deepEqual(mar.eligibleStoreKeys, ["B"]);
+
+  const may = buildAnnualLifecycleScope({
+    currentLifecycleMasterState: lifecycleState,
+    yearMonth: "2026-05",
+    brandId: "cyj",
+    normalizeStoreKey: (value) => String(value || "").replace(/^(CYJ|DRCYJ)/, "").replace(/店$/, ""),
+  });
+  assert.deepEqual(may.eligibleStoreKeys, ["A"]);
+});
+
+test("Batch 7 Annual historical trust fails closed when Lifecycle revision is stale", () => {
+  const summary = makeDashboardSummary();
+  summary.lifecycleSnapshot.revision = 7;
+  summary.reportingCompleteness = {
+    stores: {
+      A: { storeKey: "A", reportingStatus: "DATA_COMPLETE" },
+      B: { storeKey: "B", reportingStatus: "DATA_COMPLETE" },
+    },
+  };
+  const flag = {
+    id: "2026-07",
+    affectedYearMonth: "2026-07",
+    brandId: "cyj",
+    status: "verified",
+    dirty: false,
+    lastMismatchCount: 0,
+    pendingCount: 0,
+  };
+
+  const currentLifecycleMasterState = {
+    brandId: "cyj",
+    ready: true,
+    data: { datasetStatus: "READY", revision: 8, stores: {} },
+  };
+
+  const result = resolveAnnualHistoricalFormalTrust({
+    yearMonth: "2026-07",
+    currentYearMonth: "2026-08",
+    brandId: "cyj",
+    dashboardSummary: summary,
+    summaryFlag: flag,
+    currentLifecycleMasterState,
+  });
+  assert.equal(result.trusted, false);
+  assert.equal(result.reason, "LIFECYCLE_SUMMARY_REVISION_MISMATCH");
+});
+
+test("Batch 7 Annual interval keeps future targets in denominator but future actual out of numerator", () => {
+  const totals = buildAnnualIntervalTotals([
+    {
+      includedInTotals: true,
+      actualIncludedInTotals: true,
+      targetIncludedInTotals: true,
+      performanceStatus: "DATA_COMPLETE",
+      cash: 80,
+      budget: 100,
+      accrual: 90,
+      accrualBudget: 120,
+      traffic: 10,
+    },
+    {
+      includedInTotals: true,
+      actualIncludedInTotals: false,
+      targetIncludedInTotals: true,
+      performanceStatus: "NOT_STARTED",
+      cash: null,
+      budget: 100,
+      accrual: null,
+      accrualBudget: 120,
+      traffic: null,
+    },
+  ]);
+
+  assert.equal(totals.cash, 80);
+  assert.equal(totals.budget, 200);
+  assert.equal(totals.cashAch, 40);
+  assert.equal(totals.accrual, 90);
+  assert.equal(totals.accrualBudget, 240);
+  assert.equal(totals.accrualAch, 37.5);
+  assert.equal(totals.traffic, 10);
+  assert.equal(totals.includesFutureTargets, true);
+});
+
+test("Batch 7 verified Formal month propagates reporting incompleteness without dropping known actual", () => {
+  const summary = makeDashboardSummary();
+  summary.reportingCompleteness = {
+    stores: {
+      A: { storeKey: "A", reportingStatus: "DATA_COMPLETE" },
+      B: { storeKey: "B", reportingStatus: "DATA_INCOMPLETE" },
+    },
+  };
+  const result = buildAnnualFormalMonth({
+    dashboardSummary: summary,
+    monthlyTargetSummary: makeTargetSummary(),
+    scopeStoreKeys: ["A", "B"],
+    normalizeStoreKey: (value) => String(value || "").replace(/店$/, ""),
+  });
+
+  assert.equal(result.applied, true);
+  assert.equal(result.performanceStatus, "DATA_INCOMPLETE");
+  assert.deepEqual(result.incompleteReportingStoreKeys, ["B"]);
+  assert.equal(result.cash, 250);
+  assert.equal(result.actualIncludedInTotals, true);
 });

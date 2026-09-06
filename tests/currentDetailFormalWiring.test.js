@@ -9,9 +9,9 @@ const __dirname = path.dirname(__filename);
 const root = path.resolve(__dirname, "..");
 const read = (relativePath) => fs.readFileSync(path.join(root, relativePath), "utf8");
 
-test("5D-2 shares one view-scoped Store Lifecycle master listener and adds no polling/per-store query", () => {
+test("Batch 7 extends the one view-scoped Store Lifecycle master listener to Annual without polling/per-store query", () => {
   const app = read("src/App.jsx");
-  assert.match(app, /OPERATIONAL_FORMAL_LIFECYCLE_VIEWS = new Set\(\["dashboard", "regional", "ranking", "daily", "audit", "store-analysis"\]\)/);
+  assert.match(app, /OPERATIONAL_FORMAL_LIFECYCLE_VIEWS = new Set\(\["dashboard", "regional", "ranking", "daily", "audit", "store-analysis", "annual"\]\)/);
   assert.match(app, /doc\(getCollectionPath\("store_lifecycle"\), "master"\)/);
   assert.match(app, /store_lifecycle_master_operational/);
   assert.match(app, /shouldKeepCurrentLifecycleMasterLive/);

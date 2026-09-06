@@ -20,6 +20,7 @@ const makeSummary = ({ brandId = "cyj", yearMonth = "2026-07" } = {}) => ({
   version: "dashboard-summary-v2",
   semanticVersion: SUMMARY_SEMANTIC_VERSION,
   kpiContractVersion: KPI_CONTRACT_VERSION,
+  lifecycleSnapshot: { datasetStatus: "READY", revision: 7, eligibleStoreKeys: [] },
   stores: {},
 });
 
@@ -40,6 +41,13 @@ const makeReadyState = ({ brandId = "cyj", year = "2026", dashboardError = "", f
   flagsReady: true,
   dashboardError,
   flagsError,
+});
+
+
+const makeLifecycleState = ({ brandId = "cyj", revision = 7, ready = true, datasetStatus = "READY" } = {}) => ({
+  ready,
+  brandId,
+  data: { brandId, datasetStatus, revision, stores: {} },
 });
 
 const buildTrustedMonths = ({ brandId = "cyj", year = "2026", throughMonth = 7 } = {}) => {
@@ -249,12 +257,63 @@ test("App uses fallback-month-only monthly_aggregated query and shared read plan
 });
 
 test("Annual consumer filters System Exclusion from formal and compatibility paths", () => {
-  assert.match(annualSource, /reportExclusionSet/);
-  assert.match(annualSource, /excludedStoreKeys: \[\.\.\.reportExclusionSet\]/);
+  assert.match(annualSource, /annualFormalExclusionKeys/);
+  assert.match(annualSource, /excludedStoreKeys: annualFormalExclusionKeys/);
   assert.match(annualSource, /systemExclusionState/);
   assert.match(annualSource, /shouldAllowAnnualRawTargetFallback\([\s\S]*systemExclusionState/);
 });
 
 test("Annual target Summary reads skip Yibo pre-system months", () => {
   assert.match(annualSource, /filter\(\(yearMonth\) => !isAnnualPreSystemMonth\(currentBrand, yearMonth\)\)/);
+});
+
+
+test("Annual waits for brand-anchored READY Lifecycle authority when the caller provides it", () => {
+  const trusted = buildTrustedMonths({ throughMonth: 7 });
+  const result = resolveAnnualReadPlan({
+    selectedYear: "2026",
+    currentYearMonth: "2026-08",
+    brandId: "cyj",
+    ...trusted,
+    summaryLoadState: makeReadyState(),
+    currentLifecycleMasterState: makeLifecycleState({ ready: false }),
+  });
+  assert.equal(result.mode, ANNUAL_READ_MODE.LOADING);
+  assert.equal(result.ready, false);
+  assert.deepEqual(result.fallbackYearMonths, []);
+});
+
+test("stale Lifecycle revision fails only the affected historical Annual Summary month", () => {
+  const trusted = buildTrustedMonths({ throughMonth: 7 });
+  trusted.dashboardSummaries = trusted.dashboardSummaries.map((row) => (
+    row.yearMonth === "2026-05"
+      ? { ...row, lifecycleSnapshot: { ...row.lifecycleSnapshot, revision: 6 } }
+      : row
+  ));
+  const result = resolveAnnualReadPlan({
+    selectedYear: "2026",
+    currentYearMonth: "2026-08",
+    brandId: "cyj",
+    ...trusted,
+    summaryLoadState: makeReadyState(),
+    currentLifecycleMasterState: makeLifecycleState({ revision: 7 }),
+  });
+  assert.deepEqual(result.fallbackYearMonths, ["2026-05", "2026-08"]);
+  assert.equal(result.reasonsByMonth["2026-05"], "LIFECYCLE_SUMMARY_REVISION_MISMATCH");
+});
+
+test("App extends the existing single Lifecycle Master authority to Annual without adding a per-store listener", () => {
+  assert.match(appSource, /OPERATIONAL_FORMAL_LIFECYCLE_VIEWS[\s\S]*"annual"/);
+  assert.match(appSource, /resolveAnnualReadPlan\(\{[\s\S]*currentLifecycleMasterState/);
+  assert.match(annualSource, /buildAnnualLifecycleScope/);
+  assert.match(annualSource, /currentLifecycleMasterState/);
+});
+
+test("AnnualView keeps future actual as NOT_STARTED\/N\/A while target rows remain interval-eligible", () => {
+  assert.match(annualSource, /performanceStatus: notStarted \? "NOT_STARTED"/);
+  assert.match(annualSource, /actualIncludedInTotals: !notStarted/);
+  assert.match(annualSource, /targetIncludedInTotals: true/);
+  assert.match(annualSource, /Missing compatibility data is not a true zero/);
+  assert.match(annualSource, /eligibleStoreKeys\.length === 0/);
+  assert.match(annualSource, /區間目標完成進度/);
 });

@@ -19,7 +19,17 @@ import {
 } from '../utils/storeSelfView.js';
 import { applyTherapistRankingSemantics, buildTherapistAggregateMetrics } from '../utils/therapistKpi.js';
 import { getSummaryRecalcFlagState, resolveHistoricalDashboardReadPolicy } from '../utils/dashboardReadPolicy.js';
-import { filterSystemExcludedStoreKeys, inspectHistoricalSystemExclusionTrust } from '../utils/systemExclusion.js';
+import {
+  filterSystemExcludedStoreKeys,
+  inspectHistoricalSystemExclusionTrust,
+  isSystemExclusionSnapshotCurrent,
+} from '../utils/systemExclusion.js';
+import {
+  ANNUAL_KPI_SUMMARY_SCHEMA_VERSION,
+  buildAnnualKpiBenchmarkScope,
+  makeEmptyAnnualKpiBenchmark,
+  normalizeAnnualKpiBenchmarkPayload,
+} from '../utils/annualKpiBenchmark.js';
 
 const safeNumber = (value) => Number.isFinite(Number(value)) ? Number(value) : 0;
 const isFiniteKpiNumber = (value) => typeof value === "number" && Number.isFinite(value);
@@ -288,11 +298,10 @@ export function useDashboardStats() {
   const [annualKpiBenchmark, setAnnualKpiBenchmark] = useState({
     ready: false,
     source: "idle",
-    trafficMonthlyAverage: 0,
-    newCustomerMonthlyAverage: 0,
-    basedMonthCount: 0,
-    basedMonths: [],
+    schemaVersion: "",
+    metrics: {},
     stores: {},
+    benchmarkScopeByMonth: {},
     storeCount: 0,
     updatedAtText: "",
     error: null,
@@ -306,22 +315,11 @@ export function useDashboardStats() {
       const brandId = String(brandInfo?.id || "").trim() || "cyj";
 
       if (!getCollectionPath || !year) {
-        setAnnualKpiBenchmark({
-          ready: true,
-          source: "not_available",
-          trafficMonthlyAverage: 0,
-          newCustomerMonthlyAverage: 0,
-          basedMonthCount: 0,
-          basedMonths: [],
-          stores: {},
-          storeCount: 0,
-          updatedAtText: "",
-          error: null,
-        });
+        setAnnualKpiBenchmark(makeEmptyAnnualKpiBenchmark({}, "not_available"));
         return;
       }
 
-      const cacheKey = `cyj_annual_kpi_summary_v5_${brandId}_${year}`;
+      const cacheKey = `cyj_annual_kpi_summary_v6_${brandId}_${year}`;
       const cacheTtlMs = 60 * 60 * 1000;
 
       try {
@@ -331,20 +329,9 @@ export function useDashboardStats() {
             const cached = JSON.parse(cachedRaw);
             if (cached?.cachedAt && Date.now() - Number(cached.cachedAt) < cacheTtlMs) {
               setAnnualKpiBenchmark({
+                ...normalizeAnnualKpiBenchmarkPayload(cached),
                 ready: true,
                 source: "session_cache",
-                trafficMonthlyAverage: safeNumber(cached.trafficMonthlyAverage),
-                newCustomerMonthlyAverage: safeNumber(cached.newCustomerMonthlyAverage),
-                basedMonthCount: safeNumber(cached.basedMonthCount),
-                basedMonths: Array.isArray(cached.basedMonths) ? cached.basedMonths : [],
-                stores: cached.stores && typeof cached.stores === "object" ? cached.stores : {},
-                storeCount: safeNumber(cached.storeCount || Object.keys(cached.stores || {}).length),
-                basis: cached.basis || "",
-                annualAverageSettings:
-                  cached.annualAverageSettings && typeof cached.annualAverageSettings === "object"
-                    ? cached.annualAverageSettings
-                    : {},
-                updatedAtText: cached.updatedAtText || "",
                 error: null,
               });
               return;
@@ -355,7 +342,7 @@ export function useDashboardStats() {
         // 快取失敗不影響 Dashboard，改讀 Firestore 單一年度摘要 doc。
       }
 
-      setAnnualKpiBenchmark(prev => ({
+      setAnnualKpiBenchmark((prev) => ({
         ...prev,
         ready: false,
         source: "loading",
@@ -368,39 +355,15 @@ export function useDashboardStats() {
         if (cancelled) return;
 
         if (!snap.exists()) {
-          const emptyPayload = {
-            ready: true,
-            source: "missing",
-            trafficMonthlyAverage: 0,
-            newCustomerMonthlyAverage: 0,
-            basedMonthCount: 0,
-            basedMonths: [],
-            stores: {},
-            storeCount: 0,
-            updatedAtText: "",
-            error: null,
-          };
-          setAnnualKpiBenchmark(emptyPayload);
+          setAnnualKpiBenchmark(makeEmptyAnnualKpiBenchmark({}, "missing"));
           return;
         }
 
         const data = snap.data() || {};
-        const storeData = data.stores && typeof data.stores === "object" ? data.stores : {};
         const payload = {
+          ...normalizeAnnualKpiBenchmarkPayload(data),
           ready: true,
           source: "annual_kpi_summary",
-          trafficMonthlyAverage: safeNumber(data.trafficMonthlyAverage),
-          newCustomerMonthlyAverage: safeNumber(data.newCustomerMonthlyAverage),
-          basedMonthCount: safeNumber(data.basedMonthCount || (Array.isArray(data.basedMonths) ? data.basedMonths.length : 0)),
-          basedMonths: Array.isArray(data.basedMonths) ? data.basedMonths : [],
-          stores: storeData,
-          storeCount: safeNumber(data.storeCount || Object.keys(storeData).length),
-          basis: data.basis || "",
-          annualAverageSettings:
-            data.annualAverageSettings && typeof data.annualAverageSettings === "object"
-              ? data.annualAverageSettings
-              : {},
-          updatedAtText: data.updatedAtText || "",
           error: null,
         };
 
@@ -417,15 +380,7 @@ export function useDashboardStats() {
         console.warn("讀取年度 KPI 摘要失敗：", error);
         if (cancelled) return;
         setAnnualKpiBenchmark({
-          ready: true,
-          source: "error",
-          trafficMonthlyAverage: 0,
-          newCustomerMonthlyAverage: 0,
-          basedMonthCount: 0,
-          basedMonths: [],
-          stores: {},
-          storeCount: 0,
-          updatedAtText: "",
+          ...makeEmptyAnnualKpiBenchmark({}, "error"),
           error: error?.message || String(error),
         });
       }
@@ -434,6 +389,7 @@ export function useDashboardStats() {
     loadAnnualKpiBenchmark();
     return () => { cancelled = true; };
   }, [getCollectionPath, brandInfo?.id, selectedYear]);
+
 
   const cleanName = useMemo(() => (name) => {
     if (!name) return "";
@@ -889,14 +845,35 @@ export function useDashboardStats() {
     const base = annualKpiBenchmark || {};
     if (!base.ready) return base;
 
+    const expectedBrandId = String(brandInfo?.id || "").trim().toLowerCase();
+    if (base.schemaVersion === ANNUAL_KPI_SUMMARY_SCHEMA_VERSION) {
+      const lifecycleBrandId = String(currentLifecycleMasterState?.brandId || "").trim().toLowerCase();
+      const lifecycleReady = currentLifecycleMasterState?.ready === true
+        && lifecycleBrandId === expectedBrandId
+        && String(currentLifecycleMasterState?.data?.datasetStatus || "") === "READY";
+      const lifecycleRevisionCurrent = lifecycleReady
+        && Number(base.lifecycleRevision) === Number(currentLifecycleMasterState?.data?.revision);
+      const systemExclusionCurrent = isSystemExclusionSnapshotCurrent({
+        snapshot: base.systemExclusionSnapshot || null,
+        currentState: systemExclusionState,
+        brandId: expectedBrandId,
+      });
+
+      if (!lifecycleRevisionCurrent || !systemExclusionCurrent) {
+        return {
+          ...makeEmptyAnnualKpiBenchmark(base, "authority_stale"),
+          scope: "authority_stale",
+          authorityReason: !lifecycleRevisionCurrent
+            ? "LIFECYCLE_REVISION_MISMATCH"
+            : "SYSTEM_EXCLUSION_REVISION_MISMATCH",
+        };
+      }
+    }
+
     if (storeSelfViewActive) {
       return {
-        ...base,
+        ...makeEmptyAnnualKpiBenchmark(base, "store_self_view_excluded"),
         scope: "store_self_view_excluded",
-        trafficMonthlyAverage: 0,
-        newCustomerMonthlyAverage: 0,
-        basedMonthCount: 0,
-        basedMonths: [],
         scopeStoreCount: storeSelfViewProfile.scopeStoreKeys.length,
       };
     }
@@ -913,137 +890,32 @@ export function useDashboardStats() {
     }
 
     const selectedStoreCores = Array.from(new Set((effectiveStores || []).map(cleanName).filter(Boolean)));
-    const storesMap = base.stores && typeof base.stores === "object" ? base.stores : {};
-
-    // 舊年度摘要 doc 只有全品牌平均，沒有 stores 明細。此時不要在單店/區長視角顯示全品牌年均，避免誤導。
-    if (selectedStoreCores.length === 0 || Object.keys(storesMap).length === 0) {
+    if (selectedStoreCores.length === 0) {
       return {
-        ...base,
-        scope: "filtered_missing_store_data",
-        trafficMonthlyAverage: 0,
-        newCustomerMonthlyAverage: 0,
-        basedMonthCount: 0,
-        basedMonths: [],
-        scopeStoreCount: selectedStoreCores.length,
+        ...makeEmptyAnnualKpiBenchmark(base, "filtered_empty_scope"),
+        scope: "filtered_empty_scope",
+        scopeStoreCount: 0,
       };
     }
 
-    const compact = (value = "") => String(value || "").replace(/\s+/g, "").toLowerCase();
-    const storeEntries = Object.entries(storesMap);
-
-    const findStoreSummary = (core = "") => {
-      const normalizedCore = cleanName(core);
-      const candidates = Array.from(new Set([
-        normalizedCore,
-        compact(normalizedCore),
-        `${normalizedCore}店`,
-        compact(`${normalizedCore}店`),
-        `${brandPrefix}${normalizedCore}店`,
-        compact(`${brandPrefix}${normalizedCore}店`),
-        `${brandInfo?.name || brandPrefix}${normalizedCore}店`,
-        compact(`${brandInfo?.name || brandPrefix}${normalizedCore}店`),
-      ].filter(Boolean)));
-
-      for (const key of candidates) {
-        if (storesMap[key]) return storesMap[key];
-      }
-
-      return storeEntries.find(([key, value]) => (
-        cleanName(key) === normalizedCore ||
-        cleanName(value?.storeCore || value?.storeName || value?.store || value?.displayName || value?.name || "") === normalizedCore
-      ))?.[1] || null;
-    };
-
-    const selectedStoreSummaries = selectedStoreCores
-      .map(findStoreSummary)
-      .filter(Boolean);
-
-    if (selectedStoreSummaries.length === 0) {
-      return {
-        ...base,
-        scope: "filtered_missing_store_match",
-        trafficMonthlyAverage: 0,
-        newCustomerMonthlyAverage: 0,
-        basedMonthCount: 0,
-        basedMonths: [],
-        scopeStoreCount: selectedStoreCores.length,
-      };
-    }
-
-    const monthTotals = {};
-    const eligibleMonthSet = new Set();
-
-    selectedStoreSummaries.forEach((storeSummary) => {
-      const monthlyValues = storeSummary?.monthlyValues && typeof storeSummary.monthlyValues === "object"
-        ? storeSummary.monthlyValues
-        : {};
-
-      // basedMonths 是後端完成「首月排除」後的唯一有效月份清單。
-      // Firestore 舊版 merge 寫入可能留下已排除月份的 monthlyValues 舊 key，
-      // 因此區域／單店不得再把 monthlyValues 的所有月份無條件加回平均。
-      const hasDeclaredBasedMonths = Array.isArray(storeSummary?.basedMonths);
-      const declaredBasedMonths = hasDeclaredBasedMonths ? storeSummary.basedMonths : [];
-      const storeBasedMonths = (hasDeclaredBasedMonths
-        ? declaredBasedMonths
-        : Object.keys(monthlyValues)
-      ).filter((yearMonth) => /^\d{4}-\d{2}$/.test(String(yearMonth || "")));
-      const storeBasedMonthSet = new Set(storeBasedMonths);
-
-      storeBasedMonths.forEach((yearMonth) => {
-        eligibleMonthSet.add(yearMonth);
-        if (!monthTotals[yearMonth]) {
-          monthTotals[yearMonth] = { traffic: 0, newCustomers: 0, cash: 0, accrual: 0 };
-        }
-      });
-
-      Object.entries(monthlyValues).forEach(([yearMonth, metrics]) => {
-        if (!storeBasedMonthSet.has(yearMonth)) return;
-        if (!monthTotals[yearMonth]) {
-          monthTotals[yearMonth] = { traffic: 0, newCustomers: 0, cash: 0, accrual: 0 };
-        }
-        monthTotals[yearMonth].traffic += safeNumber(metrics?.traffic);
-        monthTotals[yearMonth].newCustomers += safeNumber(metrics?.newCustomers);
-        monthTotals[yearMonth].cash += safeNumber(metrics?.cash);
-        monthTotals[yearMonth].accrual += safeNumber(metrics?.accrual);
-      });
+    return buildAnnualKpiBenchmarkScope({
+      payload: base,
+      selectedStoreCores,
+      normalizeStoreKey: cleanName,
     });
-
-    const basedMonths = Array.from(eligibleMonthSet).sort();
-
-    // 若重建後暫時沒有 monthlyValues，單店仍可用該店年度摘要備援，不回退全品牌。
-    if (basedMonths.length === 0 && selectedStoreSummaries.length === 1) {
-      const onlyStore = selectedStoreSummaries[0];
-      return {
-        ...base,
-        scope: selectedDashboardStore ? "store" : "filtered",
-        trafficMonthlyAverage: safeNumber(onlyStore.trafficMonthlyAverage),
-        newCustomerMonthlyAverage: safeNumber(onlyStore.newCustomerMonthlyAverage),
-        basedMonthCount: safeNumber(onlyStore.basedMonthCount),
-        basedMonths: Array.isArray(onlyStore.basedMonths) ? onlyStore.basedMonths : [],
-        scopeStoreCount: 1,
-      };
-    }
-
-    const totals = basedMonths.reduce((acc, yearMonth) => {
-      const metrics = monthTotals[yearMonth] || {};
-      acc.traffic += safeNumber(metrics.traffic);
-      acc.newCustomers += safeNumber(metrics.newCustomers);
-      acc.cash += safeNumber(metrics.cash);
-      acc.accrual += safeNumber(metrics.accrual);
-      return acc;
-    }, { traffic: 0, newCustomers: 0, cash: 0, accrual: 0 });
-
-    const basedMonthCount = basedMonths.length;
-    return {
-      ...base,
-      scope: selectedDashboardStore ? "store" : "filtered",
-      trafficMonthlyAverage: basedMonthCount > 0 ? Math.round(totals.traffic / basedMonthCount) : 0,
-      newCustomerMonthlyAverage: basedMonthCount > 0 ? Math.round(totals.newCustomers / basedMonthCount) : 0,
-      basedMonthCount,
-      basedMonths,
-      scopeStoreCount: selectedStoreSummaries.length,
-    };
-  }, [annualKpiBenchmark, selectedDashboardStore, selectedDashboardManager, userRole, effectiveStores, cleanName, brandPrefix, brandInfo, storeSelfViewActive, storeSelfViewProfile.scopeStoreKeys]);
+  }, [
+    annualKpiBenchmark,
+    selectedDashboardStore,
+    selectedDashboardManager,
+    userRole,
+    effectiveStores,
+    cleanName,
+    brandInfo,
+    storeSelfViewActive,
+    storeSelfViewProfile.scopeStoreKeys,
+    currentLifecycleMasterState,
+    systemExclusionState,
+  ]);
 
   // ==========================================
   // ★ Batch 5A-2：Dashboard Summary trust 來源收斂

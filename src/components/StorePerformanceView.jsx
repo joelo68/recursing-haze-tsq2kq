@@ -4,6 +4,11 @@ import { XAxis, YAxis, CartesianGrid, Tooltip as RechartsTooltip, ResponsiveCont
 import { AlertTriangle, Trophy, Medal, Star, Activity, Target, DollarSign, CreditCard, ShoppingBag, Users, TrendingUp, Sparkles, CheckSquare, Award, PieChart, Crown, Map as MapIcon, Flame, Info, X } from "lucide-react";
 import { AppContext } from "../AppContext";
 import { Card } from "./SharedUI";
+import {
+  getAnnualBenchmarkLabel,
+  getAnnualBenchmarkMetric,
+  isAnnualBenchmarkMetricDisplayable,
+} from "../utils/annualKpiBenchmark.js";
 
 const StorePerformanceView = ({ dashboardStats, myStoreRankings, brandInfo }) => {
   const { fmtMoney, fmtNum, targets, userRole } = useContext(AppContext);
@@ -57,18 +62,25 @@ const StorePerformanceView = ({ dashboardStats, myStoreRankings, brandInfo }) =>
     return targetValue > 0 ? `${((Number(projection || 0) / targetValue) * 100).toFixed(0)}%` : "0%";
   };
   const annualKpiBenchmark = dashboardStats.annualKpiBenchmark || {};
-  const formatAnnualBenchmark = (value) => {
-    const numeric = Number(value || 0);
-    return numeric > 0 ? fmtNum(Math.round(numeric)) : "";
-  };
-  const trafficMonthlyAverageText = formatAnnualBenchmark(annualKpiBenchmark.trafficMonthlyAverage);
-  const newCustomerMonthlyAverageText = formatAnnualBenchmark(annualKpiBenchmark.newCustomerMonthlyAverage);
-  const annualBenchmarkMonths = Array.isArray(annualKpiBenchmark.basedMonths)
-    ? annualKpiBenchmark.basedMonths.filter(Boolean)
-    : [];
-  const annualBenchmarkMonthCount = Number(
-    annualKpiBenchmark.basedMonthCount || annualBenchmarkMonths.length || 0
+  const trafficAnnualBenchmark = getAnnualBenchmarkMetric(annualKpiBenchmark, "traffic");
+  const newCustomerAnnualBenchmark = getAnnualBenchmarkMetric(annualKpiBenchmark, "newCustomers");
+  const formatAnnualBenchmark = (metric) => (
+    isAnnualBenchmarkMetricDisplayable(metric)
+      ? fmtNum(Math.round(Number(metric.monthlyAverage)))
+      : ""
   );
+  const trafficMonthlyAverageText = formatAnnualBenchmark(trafficAnnualBenchmark);
+  const newCustomerMonthlyAverageText = formatAnnualBenchmark(newCustomerAnnualBenchmark);
+  const trafficBenchmarkMonths = Array.isArray(trafficAnnualBenchmark.basedMonths)
+    ? trafficAnnualBenchmark.basedMonths.filter(Boolean)
+    : [];
+  const newCustomerBenchmarkMonths = Array.isArray(newCustomerAnnualBenchmark.basedMonths)
+    ? newCustomerAnnualBenchmark.basedMonths.filter(Boolean)
+    : [];
+  const trafficBenchmarkMonthCount = Number(trafficAnnualBenchmark.basedMonthCount || trafficBenchmarkMonths.length || 0);
+  const newCustomerBenchmarkMonthCount = Number(newCustomerAnnualBenchmark.basedMonthCount || newCustomerBenchmarkMonths.length || 0);
+  const trafficBenchmarkLabel = getAnnualBenchmarkLabel(trafficAnnualBenchmark);
+  const newCustomerBenchmarkLabel = getAnnualBenchmarkLabel(newCustomerAnnualBenchmark);
   const formatBenchmarkMonth = (yearMonth = "") => {
     const match = String(yearMonth || "").match(/^(\d{4})-(\d{2})$/);
     return match ? `${match[1]}/${match[2]}` : String(yearMonth || "");
@@ -605,9 +617,9 @@ const StorePerformanceView = ({ dashboardStats, myStoreRankings, brandInfo }) =>
       <div>
          <h3 className="text-lg font-bold text-stone-700 mb-4 flex items-center gap-2 pl-1"><div className="w-1 h-6 bg-cyan-500 rounded-full"></div>營運效率與客流</h3>
          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-6 gap-4">
-           <MiniKpiCard title="課程操作人數" value={fmtNum(storeGrandTotal.traffic)} icon={Users} color="text-blue-500" subText="本月累計操作人數" benchmarkText={trafficMonthlyAverageText} benchmarkLabel="年均" benchmarkMonths={annualBenchmarkMonths} benchmarkMonthCount={annualBenchmarkMonthCount} />
+           <MiniKpiCard title="課程操作人數" value={fmtNum(storeGrandTotal.traffic)} icon={Users} color="text-blue-500" subText="本月累計操作人數" benchmarkText={trafficMonthlyAverageText} benchmarkLabel={trafficBenchmarkLabel} benchmarkMonths={trafficBenchmarkMonths} benchmarkMonthCount={trafficBenchmarkMonthCount} />
            <MiniKpiCard title="平均操作權責" value={fmtMoney(dashboardStats.avgTrafficASP)} icon={TrendingUp} color="text-indigo-500" subText={<span className={dashboardStats.avgTrafficASP >= targets.trafficASP ? "text-emerald-500 font-bold" : "text-rose-500 font-bold"}>{dashboardStats.avgTrafficASP >= targets.trafficASP ? "達標" : "未達標"} (目標 {fmtNum(targets.trafficASP)})</span>} />
-           <MiniKpiCard title="總新客數" value={fmtNum(storeGrandTotal.newCustomers)} icon={Sparkles} color="text-purple-500" subText="本月新增體驗人數" benchmarkText={newCustomerMonthlyAverageText} benchmarkLabel="年均" benchmarkMonths={annualBenchmarkMonths} benchmarkMonthCount={annualBenchmarkMonthCount} />
+           <MiniKpiCard title="總新客數" value={fmtNum(storeGrandTotal.newCustomers)} icon={Sparkles} color="text-purple-500" subText="本月新增體驗人數" benchmarkText={newCustomerMonthlyAverageText} benchmarkLabel={newCustomerBenchmarkLabel} benchmarkMonths={newCustomerBenchmarkMonths} benchmarkMonthCount={newCustomerBenchmarkMonthCount} />
            <MiniKpiCard title="總新客留單" value={fmtNum(storeGrandTotal.newCustomerClosings)} icon={CheckSquare} color="text-teal-500" subText={<span>留單率 <span className="font-bold">{storeGrandTotal.newCustomers > 0 ? ((storeGrandTotal.newCustomerClosings / storeGrandTotal.newCustomers) * 100).toFixed(0) : 0}%</span></span>} />
            <MiniKpiCard
              title="新客平均客單"

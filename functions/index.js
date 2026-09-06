@@ -44,6 +44,7 @@ const {
   createStoreLifecycleFunctions,
   REPORTING_COMPLETENESS_SCHEMA_VERSION,
   getLifecycleEligibleStoreEntries,
+  isLifecycleEntryFullEligibleMonth,
   buildLifecycleReportingCompleteness,
 } = require("./storeLifecycle");
 const storeLifecycleFunctions = createStoreLifecycleFunctions({ admin, db });
@@ -131,6 +132,10 @@ const {
   buildSummaryStoreSemanticSignature,
   buildFormalRankingSignature,
 } = require("./summarySemantics");
+const {
+  buildAnnualKpiSummaryPayload,
+  inspectAnnualKpiSummarySourceTrust,
+} = require("./annualKpiSummary");
 const {
   THERAPIST_KPI_SEMANTIC_VERSION,
   applyTherapistRankingSemantics,
@@ -9885,126 +9890,25 @@ function toAnnualKpiStoreRows(stores = {}, brandLabel = "") {
   }));
 }
 
-function hasAnnualKpiActivity(metrics = {}) {
-  return (
-    Number(metrics.traffic || 0) > 0 ||
-    Number(metrics.newCustomers || 0) > 0 ||
-    Number(metrics.cash || 0) > 0 ||
-    Number(metrics.accrual || 0) > 0
-  );
+function normalizeAnnualReportingStoreMap(stores = {}, brandLabel = "") {
+  const result = {};
+  Object.entries(stores && typeof stores === "object" ? stores : {}).forEach(([key, value]) => {
+    const core = normalizeAnnualKpiStoreCore(
+      value?.storeKey || value?.coreStoreName || value?.canonicalStoreName || key,
+      brandLabel
+    );
+    if (core && !result[core]) result[core] = value && typeof value === "object" ? value : {};
+  });
+  return result;
 }
 
-function normalizeAnnualAverageSettings(raw = {}) {
-  const source = raw?.annualAverageSettings && typeof raw.annualAverageSettings === "object"
-    ? raw.annualAverageSettings
-    : {};
-  const brandStartMonth = /^\d{4}-\d{2}$/.test(String(source.brandStartMonth || ""))
-    ? String(source.brandStartMonth)
-    : "";
-  const rawOverrides =
-    source.storeStartMonthOverrides && typeof source.storeStartMonthOverrides === "object"
-      ? source.storeStartMonthOverrides
-      : {};
-
-  const storeStartMonthOverrides = Object.fromEntries(
-    Object.entries(rawOverrides)
-      .map(([storeCore, yearMonth]) => [
-        normalizeAnnualKpiStoreCore(storeCore),
-        /^\d{4}-\d{2}$/.test(String(yearMonth || "")) ? String(yearMonth) : "",
-      ])
-      .filter(([storeCore, yearMonth]) => Boolean(storeCore && yearMonth))
-  );
-
-  return {
-    brandStartMonth,
-    autoDetectFirstCompleteMonth: source.autoDetectFirstCompleteMonth !== false,
-    excludePartialFirstMonth: source.excludePartialFirstMonth !== false,
-    storeStartMonthOverrides,
-  };
-}
-
-async function loadAnnualAverageSettings(brandId) {
-  try {
-    const snap = await getSummaryCollection(brandId, "settings").doc("feature_flags").get();
-    return normalizeAnnualAverageSettings(snap.exists ? (snap.data() || {}) : {});
-  } catch (error) {
-    console.warn(`loadAnnualAverageSettings failed for ${brandId}`, error.message);
-    return normalizeAnnualAverageSettings({});
-  }
-}
-
-function getNextAnnualYearMonth(yearMonth = "") {
-  const match = String(yearMonth || "").match(/^(\d{4})-(\d{2})$/);
-  if (!match) return "";
-  const year = Number(match[1]);
-  const month = Number(match[2]);
-  if (month >= 12) return `${year + 1}-01`;
-  return `${year}-${String(month + 1).padStart(2, "0")}`;
-}
-
-function getLaterAnnualYearMonth(...values) {
-  return values
-    .map((value) => String(value || ""))
-    .filter((value) => /^\d{4}-\d{2}$/.test(value))
-    .sort()
-    .pop() || "";
-}
-
-function hasAnnualKpiDailyActivity(row = {}) {
-  return (
-    Number(row.traffic || 0) > 0 ||
-    Number(row.newCustomers || 0) > 0 ||
-    Number(row.cash || 0) > 0 ||
-    Number(row.accrual || 0) > 0 ||
-    Number(row.operationalAccrual || 0) > 0 ||
-    Number(row.skincareSales || 0) > 0 ||
-    Number(row.newCustomerSales || 0) > 0 ||
-    Number(row.refund || 0) > 0 ||
-    Number(row.skincareRefund || 0) > 0
-  );
-}
-
-function getAnnualKpiFirstActivityDay(summaryData = {}, storeCore = "", brandLabel = "", store = {}) {
-  const explicitDate =
-    store?.firstReportDate ||
-    store?.firstActivityDate ||
-    store?.firstDataDate ||
-    "";
-  const explicitMatch = String(explicitDate || "").match(/^\d{4}-\d{2}-(\d{2})/);
-  if (explicitMatch) return Number(explicitMatch[1]);
-
-  const dailyMap = summaryData?.storeDailyTotals && typeof summaryData.storeDailyTotals === "object"
-    ? summaryData.storeDailyTotals
-    : {};
-
-  for (const [key, rows] of Object.entries(dailyMap)) {
-    const normalizedKey = normalizeAnnualKpiStoreCore(key, brandLabel);
-    if (normalizedKey !== storeCore || !Array.isArray(rows)) continue;
-
-    const activeDays = rows
-      .filter((row) => hasAnnualKpiDailyActivity(row))
-      .map((row) => Number(row?.day || String(row?.fullDate || "").slice(8, 10)))
-      .filter((day) => Number.isFinite(day) && day >= 1 && day <= 31);
-
-    if (activeDays.length > 0) return Math.min(...activeDays);
-  }
-
-  return null;
-}
-
-function collectAnnualKpiEstablishedStoresFromPayload(data = {}, brandLabel = "") {
-  const established = new Set();
-  const stores = data?.stores && typeof data.stores === "object" ? data.stores : {};
+function normalizeAnnualSummaryStoreMap(stores = {}, brandLabel = "") {
+  const result = {};
   toAnnualKpiStoreRows(stores, brandLabel).forEach(({ key, store }) => {
     const core = getAnnualKpiStoreCoreFromSummaryEntry(key, store, brandLabel);
-    if (!core) return;
-    const hasHistory =
-      Number(store?.basedMonthCount || 0) > 0 ||
-      (Array.isArray(store?.basedMonths) && store.basedMonths.length > 0) ||
-      hasAnnualKpiActivity(store || {});
-    if (hasHistory) established.add(core);
+    if (core && !result[core]) result[core] = store;
   });
-  return established;
+  return result;
 }
 
 async function rebuildAnnualKpiSummaryForBrand(brandId, yearInput, options = {}) {
@@ -10012,256 +9916,119 @@ async function rebuildAnnualKpiSummaryForBrand(brandId, yearInput, options = {})
   const year = Number(yearInput) || getTaipeiYearForAnnualKpiSummary();
   const candidateMonths = getAnnualKpiSummaryCandidateMonths(year);
   const dashboardSummaryRef = getSummaryCollection(normalizedBrandId, "dashboard_summary");
+  const summaryFlagRef = getSummaryCollection(normalizedBrandId, "summary_recalc_flags");
   const annualSummaryRef = getSummaryCollection(normalizedBrandId, "annual_kpi_summary");
   const targetRef = annualSummaryRef.doc(String(year));
   const brandLabel = await getSummaryBrandLabel(normalizedBrandId).catch(() => getSummaryBrandPrefix(normalizedBrandId));
 
-  const [
-    annualAverageSettings,
-    previousAnnualSnap,
-    previousDecemberSnap,
-    ...snaps
-  ] = await Promise.all([
-    loadAnnualAverageSettings(normalizedBrandId),
-    annualSummaryRef.doc(String(year - 1)).get(),
-    dashboardSummaryRef.doc(`${year - 1}-12`).get(),
-    ...candidateMonths.map((yearMonth) => dashboardSummaryRef.doc(yearMonth).get()),
+  const [lifecycleSnap, systemExclusionSnap, monthRows] = await Promise.all([
+    getSummaryCollection(normalizedBrandId, "store_lifecycle").doc("master").get(),
+    getAuditExclusionsDocRef(normalizedBrandId).get(),
+    Promise.all(candidateMonths.map(async (yearMonth) => {
+      const [summarySnap, flagSnap] = await Promise.all([
+        dashboardSummaryRef.doc(yearMonth).get(),
+        summaryFlagRef.doc(yearMonth).get(),
+      ]);
+      return { yearMonth, summarySnap, flagSnap };
+    })),
   ]);
 
-  const previousEstablishedStores = new Set();
-  if (previousAnnualSnap.exists) {
-    collectAnnualKpiEstablishedStoresFromPayload(previousAnnualSnap.data() || {}, brandLabel)
-      .forEach((core) => previousEstablishedStores.add(core));
+  if (!lifecycleSnap.exists) {
+    throw new Error(`Annual KPI rebuild aborted: ${normalizedBrandId} store_lifecycle/master missing`);
   }
-  if (previousDecemberSnap.exists) {
-    collectAnnualKpiEstablishedStoresFromPayload(previousDecemberSnap.data() || {}, brandLabel)
-      .forEach((core) => previousEstablishedStores.add(core));
+  const lifecycleMaster = lifecycleSnap.data() || {};
+  if (String(lifecycleMaster.datasetStatus || "") !== "READY") {
+    throw new Error(`Annual KPI rebuild aborted: ${normalizedBrandId} Store Lifecycle dataset is not READY`);
   }
 
-  const storeCandidates = {};
-  const legacyBrandMonths = {};
-  const skippedMonths = [];
+  const systemExclusionProfile = normalizeStoredSystemExclusionProfile(
+    systemExclusionSnap.exists ? (systemExclusionSnap.data() || {}) : {},
+    normalizedBrandId,
+    normalizeSummaryCoreName
+  );
+  const systemExclusionSnapshot = buildStoredSystemExclusionSnapshot(
+    systemExclusionProfile,
+    normalizedBrandId,
+    normalizeSummaryCoreName
+  );
 
-  snaps.forEach((snap, index) => {
-    const yearMonth = candidateMonths[index];
-    if (!snap.exists) {
-      skippedMonths.push({ yearMonth, reason: "missing_dashboard_summary" });
-      return;
-    }
-
-    const data = snap.data() || {};
-    const grand = data.grandTotal || {};
-    const grandMetrics = {
-      traffic: Number(grand.traffic || 0),
-      newCustomers: Number(grand.newCustomers || 0),
-      cash: Number(grand.cash || 0),
-      accrual: Number(grand.accrual || 0),
-    };
-    const grandHasActivity = hasAnnualKpiActivity(grandMetrics);
-    let storeActivityCount = 0;
-
-    toAnnualKpiStoreRows(data.stores || {}, brandLabel).forEach(({ key, store }) => {
-      const core = getAnnualKpiStoreCoreFromSummaryEntry(key, store, brandLabel);
-      if (!core) return;
-
-      const metrics = {
-        traffic: Number(store.traffic || 0),
-        newCustomers: Number(store.newCustomers || 0),
-        cash: Number(store.cash || 0),
-        accrual: Number(store.accrual || 0),
-      };
-      if (!hasAnnualKpiActivity(metrics)) return;
-
-      storeActivityCount += 1;
-      if (!storeCandidates[core]) {
-        storeCandidates[core] = {
-          storeCore: core,
-          storeName: `${core}店`,
-          monthlyCandidates: {},
-        };
-      }
-
-      storeCandidates[core].monthlyCandidates[yearMonth] = {
-        ...metrics,
-        firstActivityDay: getAnnualKpiFirstActivityDay(data, core, brandLabel, store),
-      };
+  const monthInputs = monthRows.map(({ yearMonth, summarySnap, flagSnap }) => {
+    const summary = summarySnap.exists ? { id: summarySnap.id, ...(summarySnap.data() || {}) } : null;
+    const summaryFlag = flagSnap.exists ? { id: flagSnap.id, ...(flagSnap.data() || {}) } : null;
+    const systemExclusionCurrent = summary
+      ? isStoredSystemExclusionSnapshotCurrent({
+          snapshot: summary.systemExclusionSnapshot || null,
+          currentProfile: systemExclusionProfile,
+          brandId: normalizedBrandId,
+          normalizeStoreKey: normalizeSummaryCoreName,
+        })
+      : false;
+    const trust = inspectAnnualKpiSummarySourceTrust({
+      summary,
+      summaryFlag,
+      yearMonth,
+      brandId: normalizedBrandId,
+      expectedSummarySemanticVersion: SUMMARY_SEMANTIC_VERSION,
+      lifecycleRevision: Number(lifecycleMaster.revision || 0),
+      systemExclusionCurrent,
     });
 
-    if (storeActivityCount === 0 && grandHasActivity) {
-      legacyBrandMonths[yearMonth] = grandMetrics;
-    }
-    if (storeActivityCount === 0 && !grandHasActivity) {
-      skippedMonths.push({ yearMonth, reason: "empty_or_zero_summary" });
-    }
-  });
-
-  const brandMonthlyTotals = {};
-  const storeSummaries = {};
-
-  Object.entries(storeCandidates).forEach(([core, item]) => {
-    const candidateEntries = Object.entries(item.monthlyCandidates || {}).sort(([a], [b]) => a.localeCompare(b));
-    const firstActiveMonth = candidateEntries[0]?.[0] || "";
-    const firstActivityDay = candidateEntries[0]?.[1]?.firstActivityDay ?? null;
-    const existedBeforeTargetYear = previousEstablishedStores.has(core);
-
-    let autoStartMonth = firstActiveMonth;
-    let startMonthSource = "auto_first_active_month";
-
-    if (
-      annualAverageSettings.autoDetectFirstCompleteMonth &&
-      annualAverageSettings.excludePartialFirstMonth &&
-      !existedBeforeTargetYear &&
-      firstActiveMonth &&
-      Number(firstActivityDay || 0) > 1
-    ) {
-      autoStartMonth = getNextAnnualYearMonth(firstActiveMonth);
-      startMonthSource = "auto_next_complete_month";
-    } else if (existedBeforeTargetYear) {
-      startMonthSource = "established_before_target_year";
-    }
-
-    let effectiveStartMonth = getLaterAnnualYearMonth(
-      autoStartMonth,
-      annualAverageSettings.brandStartMonth
-    );
-    if (annualAverageSettings.brandStartMonth && effectiveStartMonth === annualAverageSettings.brandStartMonth) {
-      startMonthSource = startMonthSource === "auto_next_complete_month"
-        ? "auto_next_complete_month_with_brand_floor"
-        : "brand_start_month_floor";
-    }
-
-    const overrideStartMonth = annualAverageSettings.storeStartMonthOverrides?.[core] || "";
-    if (overrideStartMonth) {
-      effectiveStartMonth = overrideStartMonth;
-      startMonthSource = "store_override";
-    }
-
-    const monthlyValues = {};
-    const excludedMonths = [];
-    candidateEntries.forEach(([yearMonth, metrics]) => {
-      if (effectiveStartMonth && yearMonth < effectiveStartMonth) {
-        excludedMonths.push(yearMonth);
-        return;
-      }
-      monthlyValues[yearMonth] = {
-        traffic: Number(metrics.traffic || 0),
-        newCustomers: Number(metrics.newCustomers || 0),
-        cash: Number(metrics.cash || 0),
-        accrual: Number(metrics.accrual || 0),
+    if (!summary || trust.trusted !== true) {
+      return {
+        yearMonth,
+        trust,
+        requiredStoreKeys: [],
+        storesByCore: {},
+        reportingByCore: {},
       };
-
-      if (!brandMonthlyTotals[yearMonth]) {
-        brandMonthlyTotals[yearMonth] = {
-          traffic: 0,
-          newCustomers: 0,
-          cash: 0,
-          accrual: 0,
-          eligibleStoreCount: 0,
-        };
-      }
-      brandMonthlyTotals[yearMonth].traffic += Number(metrics.traffic || 0);
-      brandMonthlyTotals[yearMonth].newCustomers += Number(metrics.newCustomers || 0);
-      brandMonthlyTotals[yearMonth].cash += Number(metrics.cash || 0);
-      brandMonthlyTotals[yearMonth].accrual += Number(metrics.accrual || 0);
-      brandMonthlyTotals[yearMonth].eligibleStoreCount += 1;
-    });
-
-    const basedMonths = Object.keys(monthlyValues).sort();
-    const totals = basedMonths.reduce((acc, yearMonth) => {
-      const metrics = monthlyValues[yearMonth] || {};
-      acc.traffic += Number(metrics.traffic || 0);
-      acc.newCustomers += Number(metrics.newCustomers || 0);
-      acc.cash += Number(metrics.cash || 0);
-      acc.accrual += Number(metrics.accrual || 0);
-      return acc;
-    }, { traffic: 0, newCustomers: 0, cash: 0, accrual: 0 });
-    const basedMonthCount = basedMonths.length;
-
-    storeSummaries[core] = {
-      storeCore: core,
-      storeName: item.storeName,
-      firstActiveMonth,
-      firstActivityDay,
-      existedBeforeTargetYear,
-      autoStartMonth,
-      effectiveStartMonth,
-      startMonthSource,
-      overrideStartMonth,
-      excludedMonths,
-      monthlyValues,
-      basedMonths,
-      basedMonthCount,
-      trafficTotal: totals.traffic,
-      newCustomerTotal: totals.newCustomers,
-      cashTotal: totals.cash,
-      accrualTotal: totals.accrual,
-      trafficMonthlyAverage: basedMonthCount > 0 ? Math.round(totals.traffic / basedMonthCount) : 0,
-      newCustomerMonthlyAverage: basedMonthCount > 0 ? Math.round(totals.newCustomers / basedMonthCount) : 0,
-      cashMonthlyAverage: basedMonthCount > 0 ? Math.round(totals.cash / basedMonthCount) : 0,
-      accrualMonthlyAverage: basedMonthCount > 0 ? Math.round(totals.accrual / basedMonthCount) : 0,
-    };
-  });
-
-  // 舊版 Summary 若只有 grandTotal、缺少 stores，仍保留全品牌年均；有 stores 時則以逐店完整月份重新加總。
-  Object.entries(legacyBrandMonths).forEach(([yearMonth, metrics]) => {
-    if (brandMonthlyTotals[yearMonth]) return;
-    if (annualAverageSettings.brandStartMonth && yearMonth < annualAverageSettings.brandStartMonth) return;
-    brandMonthlyTotals[yearMonth] = {
-      ...metrics,
-      eligibleStoreCount: 0,
-      legacyGrandTotalFallback: true,
-    };
-  });
-
-  const basedMonths = Object.keys(brandMonthlyTotals).sort();
-  const totals = basedMonths.reduce((acc, yearMonth) => {
-    const metrics = brandMonthlyTotals[yearMonth] || {};
-    acc.traffic += Number(metrics.traffic || 0);
-    acc.newCustomers += Number(metrics.newCustomers || 0);
-    acc.cash += Number(metrics.cash || 0);
-    acc.accrual += Number(metrics.accrual || 0);
-    return acc;
-  }, { traffic: 0, newCustomers: 0, cash: 0, accrual: 0 });
-  const basedMonthCount = basedMonths.length;
-
-  candidateMonths.forEach((yearMonth) => {
-    if (!brandMonthlyTotals[yearMonth] && !skippedMonths.some((item) => item.yearMonth === yearMonth)) {
-      skippedMonths.push({ yearMonth, reason: "no_eligible_complete_store_month" });
     }
+
+    const lifecycleEntries = getLifecycleEligibleStoreEntries(lifecycleMaster, yearMonth, {
+      brandId: normalizedBrandId,
+      requireReady: true,
+    });
+    const fullMonthFormalEntries = lifecycleEntries.filter((entry) => {
+      const storeKey = normalizeSummaryCoreName(entry?.storeKey || entry?.coreStoreName || entry?.canonicalStoreName || "");
+      return Boolean(
+        storeKey
+        && !systemExclusionProfile.storeSet.has(storeKey)
+        && isLifecycleEntryFullEligibleMonth(entry, yearMonth)
+      );
+    });
+    const requiredStoreKeys = fullMonthFormalEntries
+      .map((entry) => normalizeSummaryCoreName(entry?.storeKey || entry?.coreStoreName || entry?.canonicalStoreName || ""))
+      .filter(Boolean)
+      .sort((a, b) => a.localeCompare(b, "zh-Hant"));
+
+    return {
+      yearMonth,
+      trust,
+      requiredStoreKeys,
+      storesByCore: normalizeAnnualSummaryStoreMap(summary.stores || {}, brandLabel),
+      reportingByCore: normalizeAnnualReportingStoreMap(summary?.reportingCompleteness?.stores || {}, brandLabel),
+    };
   });
 
-  const payload = {
+  const nowText = new Date().toISOString();
+  const purePayload = buildAnnualKpiSummaryPayload({
     brandId: normalizedBrandId,
     brandLabel,
     year,
-    yearText: String(year),
-    source: "dashboard_summary",
-    basis: "first_complete_month_by_store",
-    scopeSupport: "brand_store_manager",
-    annualAverageSettings,
-    trafficTotal: totals.traffic,
-    newCustomerTotal: totals.newCustomers,
-    cashTotal: totals.cash,
-    accrualTotal: totals.accrual,
-    trafficMonthlyAverage: basedMonthCount > 0 ? Math.round(totals.traffic / basedMonthCount) : 0,
-    newCustomerMonthlyAverage: basedMonthCount > 0 ? Math.round(totals.newCustomers / basedMonthCount) : 0,
-    cashMonthlyAverage: basedMonthCount > 0 ? Math.round(totals.cash / basedMonthCount) : 0,
-    accrualMonthlyAverage: basedMonthCount > 0 ? Math.round(totals.accrual / basedMonthCount) : 0,
-    monthlyValues: brandMonthlyTotals,
-    stores: storeSummaries,
-    storeCount: Object.keys(storeSummaries).length,
-    basedMonths,
-    basedMonthCount,
-    skippedMonths: skippedMonths.sort((a, b) => a.yearMonth.localeCompare(b.yearMonth)),
     candidateMonths,
+    monthInputs,
+    lifecycleRevision: Number(lifecycleMaster.revision || 0),
+    systemExclusionSnapshot,
     trigger: options.trigger || "manual",
+    updatedAtText: nowText,
+  });
+
+  const payload = {
+    ...purePayload,
     updatedAt: admin.firestore.FieldValue.serverTimestamp(),
-    updatedAtText: new Date().toISOString(),
   };
 
-  // annual_kpi_summary 是完整重建產物，必須整份覆寫。
-  // 若使用 merge，已被排除的月份可能仍殘留在 stores.{店}.monthlyValues，
-  // 導致全品牌已排除，但區域／單店又把舊月份算回平均。
+  // annual_kpi_summary 是完整重建產物。V2 以 KPI-specific basedMonths / basedMonthCount
+  // 取代舊 activity-based 共用分母；Compatibility fields 暫時保留供 staged rollout。
   await targetRef.set(payload);
   return payload;
 }

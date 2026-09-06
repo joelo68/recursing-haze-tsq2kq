@@ -14,6 +14,7 @@ import { filterSystemExcludedStoreKeys } from "../utils/systemExclusion.js";
 import {
   buildAnnualFormalMonth,
   buildAnnualIntervalTotals,
+  buildAnnualLifecycleScope,
   isAnnualPreSystemMonth,
   resolveAnnualHistoricalFormalTrust,
   shouldAllowAnnualRawTargetFallback,
@@ -77,6 +78,7 @@ const AnnualView = () => {
     currentBrand,
     getCollectionPath,
     systemExclusionState,
+    currentLifecycleMasterState,
   } = useContext(AppContext);
 
   // ==========================================
@@ -202,8 +204,11 @@ const AnnualView = () => {
       && annualSummaryLoadState?.dashboardReady === true
       && annualSummaryLoadState?.flagsReady === true
       && systemExclusionState?.ready === true
-      && String(systemExclusionState?.brandId || "").toLowerCase() === brandId;
-  }, [annualSummaryLoadState, currentBrand, selectedYear, systemExclusionState]);
+      && String(systemExclusionState?.brandId || "").toLowerCase() === brandId
+      && currentLifecycleMasterState?.ready === true
+      && String(currentLifecycleMasterState?.brandId || "").toLowerCase() === brandId
+      && String(currentLifecycleMasterState?.data?.datasetStatus || "") === "READY";
+  }, [annualSummaryLoadState, currentBrand, selectedYear, systemExclusionState, currentLifecycleMasterState]);
 
   const annualSummaryTrustError = Boolean(
     annualSummaryLoadState?.dashboardError || annualSummaryLoadState?.flagsError
@@ -307,6 +312,41 @@ const AnnualView = () => {
     return baseVisibleStores;
   }, [baseVisibleStores, selectedAnnualStore, selectedAnnualManager, managers, systemExclusionState, cleanName]);
 
+  const annualHasExplicitScope = Boolean(
+    selectedAnnualManager ||
+    selectedAnnualStore ||
+    userRole === "manager" ||
+    userRole === "store"
+  );
+  const annualExplicitScopeStoreKeys = useMemo(
+    () => annualHasExplicitScope
+      ? [...new Set((effectiveStores || []).map(canonicalStoreName).filter(Boolean))]
+      : null,
+    [annualHasExplicitScope, effectiveStores, canonicalStoreName]
+  );
+  const annualFormalExclusionKeys = useMemo(() => ([
+    ...(auditExclusions || []).map(canonicalStoreName),
+    ...(systemExclusionState?.ready === true
+      ? (systemExclusionState?.stores || []).map(canonicalStoreName)
+      : []),
+  ].filter(Boolean)), [auditExclusions, systemExclusionState, canonicalStoreName]);
+  const resolveAnnualLifecycleScopeForMonth = useMemo(() => (yearMonth) => (
+    buildAnnualLifecycleScope({
+      currentLifecycleMasterState,
+      yearMonth,
+      brandId: currentBrand,
+      scopeStoreKeys: annualExplicitScopeStoreKeys,
+      excludedStoreKeys: annualFormalExclusionKeys,
+      normalizeStoreKey: canonicalStoreName,
+    })
+  ), [
+    currentLifecycleMasterState,
+    currentBrand,
+    annualExplicitScopeStoreKeys,
+    annualFormalExclusionKeys,
+    canonicalStoreName,
+  ]);
+
 
   // ==========================================
   // 3. 設定排除視窗邏輯
@@ -396,8 +436,9 @@ const AnnualView = () => {
   }, [annualDashboardSummaries]);
 
   // ★ Summary-first 安全備援：
-  // 只有當某月份的 monthly_targets_summary 對目前篩選店家「缺店或目標為 0」時，
-  // 才精準讀取該店該月的原始 monthly_targets 文件。正常情況仍只讀 12 份 Summary，
+  // 只有當某月份的 monthly_targets_summary 對該月 Lifecycle Formal scope 缺少 authoritative row 時，
+  // 才精準讀取該店該月的原始 monthly_targets 文件。Explicit target 0 是 configured，不觸發 fallback。
+  // 正常情況仍只讀 12 份 Summary，
   // 不重新打開全年 400+ 筆 monthly_targets 監聽。
   useEffect(() => {
     let cancelled = false;
@@ -439,17 +480,7 @@ const AnnualView = () => {
       if (!annualTargetSummariesLoaded || !getCollectionPath) return;
 
       const monthKeys = getMonthKeysInRange(startMonthStr, endMonthStr);
-      const exclusionSet = new Set([
-        ...(auditExclusions || []).map(canonicalStoreName),
-        ...(systemExclusionState?.ready === true ? (systemExclusionState?.stores || []).map(canonicalStoreName) : []),
-      ].filter(Boolean));
-      const storeCores = [...new Set(
-        (effectiveStores || [])
-          .map(canonicalStoreName)
-          .filter((core) => core && !exclusionSet.has(core))
-      )];
-
-      if (monthKeys.length === 0 || storeCores.length === 0) {
+      if (monthKeys.length === 0) {
         if (!cancelled) setAnnualTargetFallbacks({});
         return;
       }
@@ -464,6 +495,10 @@ const AnnualView = () => {
         // 否則 target Summary 比 Formal Summary 先回來時，會在 50~100ms 的 race window 提前打 raw monthly_targets。
         if (isHistoricalMonth && !annualSummaryTrustReady) return;
 
+        const lifecycleScope = resolveAnnualLifecycleScopeForMonth(yearMonth);
+        if (!lifecycleScope.ready || lifecycleScope.eligibleStoreKeys.length === 0) return;
+        const storeCores = lifecycleScope.eligibleStoreKeys;
+
         const allowRawFallback = isHistoricalMonth && annualSummaryTrustError
           ? true
           : shouldAllowAnnualRawTargetFallback({
@@ -473,6 +508,7 @@ const AnnualView = () => {
               dashboardSummary: annualDashboardSummaryByMonth[yearMonth] || null,
               summaryFlag: annualSummaryStatusMap?.[yearMonth] || null,
               systemExclusionState,
+              currentLifecycleMasterState,
             });
         if (!allowRawFallback) return;
 
@@ -481,7 +517,9 @@ const AnnualView = () => {
           const row = getSummaryTargetByCore(summary, core);
           const cashTargetResult = readTargetValue(row, ["cashTarget", "targetCash", "cashBudget", "monthlyCashTarget", "cash", "cash_target"]);
           const accrualTargetResult = readTargetValue(row, ["accrualTarget", "targetAccrual", "accrualBudget", "monthlyAccrualTarget", "accrual", "accrual_target"]);
-          if (!row || (!cashTargetResult.found && !accrualTargetResult.found)) {
+          // Canonical Summary row presence is authoritative. Only a missing store row may trigger
+          // precise Raw fallback; an explicit zero or explicit missing/invalid field must not reopen legacy authority.
+          if (!row) {
             missingPairs.push({ yearMonth, core });
           }
         });
@@ -569,27 +607,12 @@ const AnnualView = () => {
     effectiveStores,
     auditExclusions,
     systemExclusionState,
+    currentLifecycleMasterState,
     canonicalStoreName,
+    resolveAnnualLifecycleScopeForMonth,
   ]);
 
 const annualData = useMemo(() => {
-    const effectiveStoreSet = new Set(effectiveStores.map(canonicalStoreName).filter(Boolean));
-    const auditExclusionSet = new Set((auditExclusions || []).map(canonicalStoreName).filter(Boolean));
-    const systemExclusionSet = new Set(
-      systemExclusionState?.ready === true
-        ? (systemExclusionState?.stores || []).map(canonicalStoreName).filter(Boolean)
-        : []
-    );
-    const reportExclusionSet = new Set([...auditExclusionSet, ...systemExclusionSet]);
-
-    // Compatibility path（本月 / unverified historical）使用目前可見店家。
-    const targetStoreNames = effectiveStores
-      .filter((s) => {
-        const core = canonicalStoreName(s);
-        return core && !reportExclusionSet.has(core);
-      })
-      .map((s) => `${brandPrefix}${s}店`);
-
     const monthList = [];
     let current = new Date(`${startMonthStr}-01`);
     const end = new Date(`${endMonthStr}-01`);
@@ -603,20 +626,31 @@ const annualData = useMemo(() => {
       current.setMonth(current.getMonth() + 1);
     }
 
-    const statsMap = monthList.map((item) => ({
-      ...item,
-      cash: 0,
-      accrual: 0,
-      traffic: 0,
-      budget: 0,
-      accrualBudget: 0,
-      achievement: 0,
-      accrualAchievement: 0,
-      source: "aggregated",
-      includedInTotals: true,
-      preSystemSkip: false,
-      formalTrustReason: "",
-    }));
+    const statsMap = monthList.map((item) => {
+      const yearMonth = `${item.y}-${String(item.m).padStart(2, "0")}`;
+      const notStarted = yearMonth > currentYearMonth;
+      return {
+        ...item,
+        // Missing compatibility data is not a true zero. Initialize as unknown;
+        // an observed monthly_aggregated row (including an explicit all-zero row) turns it numeric.
+        cash: null,
+        accrual: null,
+        traffic: null,
+        budget: 0,
+        accrualBudget: 0,
+        achievement: null,
+        accrualAchievement: null,
+        source: notStarted ? "not_started" : "aggregated",
+        includedInTotals: true,
+        actualIncludedInTotals: !notStarted,
+        targetIncludedInTotals: true,
+        performanceStatus: notStarted ? "NOT_STARTED" : (yearMonth === currentYearMonth ? "PROVISIONAL" : "DATA_INCOMPLETE"),
+        preSystemSkip: false,
+        formalTrustReason: "",
+        cashCoverageComplete: false,
+        accrualCoverageComplete: false,
+      };
+    });
 
     const pickNumber = (row, keys = []) => keys.reduce((value, key) => {
       if (value !== null && value !== undefined) return value;
@@ -638,19 +672,11 @@ const annualData = useMemo(() => {
       return { found: false, configured: false, value: null };
     };
 
-    const hasExplicitAnnualScope = Boolean(
-      selectedAnnualManager ||
-      selectedAnnualStore ||
-      userRole === "manager" ||
-      userRole === "store"
-    );
-    const formalScopeStoreKeys = hasExplicitAnnualScope ? [...effectiveStoreSet] : null;
-
-    const sumTargetsFromMonthlyTargetSummary = (summary, targetStat) => {
+    const sumTargetsFromMonthlyTargetSummary = (summary, targetStat, targetStoreCores = []) => {
       const targetYearMonth = `${targetStat.y}-${String(targetStat.m).padStart(2, "0")}`;
       const summaryYearMonth = String(summary?.yearMonth || summary?.id || targetYearMonth);
       const targetsMap = summary?.targets || summary?.storeTargets || summary?.data || {};
-      const targetStoreCores = [...new Set(targetStoreNames.map(canonicalStoreName).filter(Boolean))];
+      const requiredStoreCores = [...new Set((targetStoreCores || []).map(canonicalStoreName).filter(Boolean))];
       const summaryTargetMap = new Map();
 
       if (summary && summaryYearMonth === targetYearMonth && targetsMap && typeof targetsMap === "object") {
@@ -665,17 +691,20 @@ const annualData = useMemo(() => {
         });
       }
 
-      let foundAnyTarget = false;
+      let cashTargetTotal = 0;
+      let accrualTargetTotal = 0;
+      let cashConfiguredStoreCount = 0;
+      let accrualConfiguredStoreCount = 0;
       let usedDirectFallback = false;
 
-      targetStoreCores.forEach((core) => {
+      requiredStoreCores.forEach((core) => {
         let row = summaryTargetMap.get(core) || null;
         let cashTargetResult = pickTargetValue(row, ["cashTarget", "targetCash", "cashBudget", "monthlyCashTarget", "cash", "cash_target"]);
         let accrualTargetResult = pickTargetValue(row, ["accrualTarget", "targetAccrual", "accrualBudget", "monthlyAccrualTarget", "accrual", "accrual_target"]);
 
-        // Formal trusted historical 已在上方被套用，不會走到此 compatibility fallback。
-        // Explicit zero / invalid present values are authoritative presence and must not resurrect legacy positives.
-        if (!row || (!cashTargetResult.found && !accrualTargetResult.found)) {
+        // Canonical Summary row presence is authoritative. Raw fallback is only used when
+        // the store row itself is absent, never to resurrect a legacy positive over an explicit zero/invalid.
+        if (!row) {
           const fallbackRow = annualTargetFallbacks?.[targetYearMonth]?.[core];
           if (fallbackRow) {
             row = fallbackRow;
@@ -685,7 +714,7 @@ const annualData = useMemo(() => {
           }
         }
 
-        if (!cashTargetResult.found && !accrualTargetResult.found) {
+        if (!row) {
           const canonicalFullName = `${brandPrefix}${core}店`;
           const legacyFullName = core === "新店" ? `${brandPrefix}新店` : "";
           const budgetKeys = [
@@ -698,27 +727,30 @@ const annualData = useMemo(() => {
           for (const key of budgetKeys) {
             const budgetRow = budgets?.[key];
             if (!budgetRow) continue;
-            const nextCashResult = pickTargetValue(budgetRow, ["cashTarget", "targetCash", "cashBudget", "monthlyCashTarget", "cash", "cash_target"]);
-            const nextAccrualResult = pickTargetValue(budgetRow, ["accrualTarget", "targetAccrual", "accrualBudget", "monthlyAccrualTarget", "accrual", "accrual_target"]);
-            if (nextCashResult.found || nextAccrualResult.found) {
-              cashTargetResult = nextCashResult;
-              accrualTargetResult = nextAccrualResult;
-              break;
-            }
+            row = budgetRow;
+            cashTargetResult = pickTargetValue(budgetRow, ["cashTarget", "targetCash", "cashBudget", "monthlyCashTarget", "cash", "cash_target"]);
+            accrualTargetResult = pickTargetValue(budgetRow, ["accrualTarget", "targetAccrual", "accrualBudget", "monthlyAccrualTarget", "accrual", "accrual_target"]);
+            break;
           }
         }
 
-        if (cashTargetResult.configured || accrualTargetResult.configured) {
-          targetStat.budget += cashTargetResult.configured ? cashTargetResult.value : 0;
-          targetStat.accrualBudget += accrualTargetResult.configured ? accrualTargetResult.value : 0;
-          foundAnyTarget = true;
+        if (cashTargetResult.configured) {
+          cashTargetTotal += cashTargetResult.value;
+          cashConfiguredStoreCount += 1;
+        }
+        if (accrualTargetResult.configured) {
+          accrualTargetTotal += accrualTargetResult.value;
+          accrualConfiguredStoreCount += 1;
         }
       });
 
-      if (foundAnyTarget) {
-        targetStat.targetSource = usedDirectFallback ? "monthly_targets_precise_fallback" : "monthly_targets_summary";
-      }
-      return foundAnyTarget;
+      const requiredStoreCount = requiredStoreCores.length;
+      targetStat.cashCoverageComplete = cashConfiguredStoreCount === requiredStoreCount;
+      targetStat.accrualCoverageComplete = accrualConfiguredStoreCount === requiredStoreCount;
+      targetStat.budget = targetStat.cashCoverageComplete ? cashTargetTotal : null;
+      targetStat.accrualBudget = targetStat.accrualCoverageComplete ? accrualTargetTotal : null;
+      targetStat.targetSource = usedDirectFallback ? "monthly_targets_precise_fallback" : "monthly_targets_summary";
+      return targetStat.cashCoverageComplete || targetStat.accrualCoverageComplete;
     };
 
     const summaryAppliedMonths = new Set();
@@ -736,11 +768,20 @@ const annualData = useMemo(() => {
         stat.source = "pre_system";
         stat.preSystemSkip = true;
         stat.includedInTotals = false;
+        stat.actualIncludedInTotals = false;
+        stat.targetIncludedInTotals = false;
+        stat.performanceStatus = "PRE_SYSTEM";
         stat.formalTrustReason = "PRE_SYSTEM_SKIP";
         return;
       }
 
       if (yearMonth >= currentYearMonth || !annualSummaryTrustReady) return;
+
+      const lifecycleScope = resolveAnnualLifecycleScopeForMonth(yearMonth);
+      if (!lifecycleScope.ready) {
+        stat.formalTrustReason = lifecycleScope.reason || "LIFECYCLE_AUTHORITY_NOT_READY";
+        return;
+      }
 
       const dashboardSummary = annualDashboardSummaryByMonth[yearMonth] || null;
       const trust = annualSummaryTrustError
@@ -752,6 +793,7 @@ const annualData = useMemo(() => {
             dashboardSummary,
             summaryFlag: annualSummaryStatusMap?.[yearMonth] || null,
             systemExclusionState,
+            currentLifecycleMasterState,
           });
       stat.formalTrustReason = trust.reason || "";
       if (!trust.trusted) return;
@@ -759,8 +801,8 @@ const annualData = useMemo(() => {
       const formalMonth = buildAnnualFormalMonth({
         dashboardSummary,
         monthlyTargetSummary: monthlyTargetSummaryByMonth[yearMonth] || null,
-        scopeStoreKeys: formalScopeStoreKeys,
-        excludedStoreKeys: [...reportExclusionSet],
+        scopeStoreKeys: lifecycleScope.eligibleStoreKeys,
+        excludedStoreKeys: [],
         normalizeStoreKey: canonicalStoreName,
       });
       if (!formalMonth?.applied) return;
@@ -775,8 +817,6 @@ const annualData = useMemo(() => {
     // monthly_aggregated 僅作為本月 / unverified / missing Formal Summary 的 compatibility fallback。
     annualAggregatedData.forEach((d) => {
       const rawStoreName = canonicalStoreName(d.storeName);
-      if (reportExclusionSet.has(rawStoreName)) return;
-      if (!effectiveStoreSet.has(rawStoreName)) return;
       if (!d.yearMonth) return;
 
       const parts = d.yearMonth.split("-");
@@ -787,9 +827,12 @@ const annualData = useMemo(() => {
       if (isAnnualPreSystemMonth(currentBrand, yearMonth)) return;
       if (summaryAppliedMonths.has(yearMonth)) return;
 
+      const lifecycleScope = resolveAnnualLifecycleScopeForMonth(yearMonth);
+      if (!lifecycleScope.ready || !lifecycleScope.eligibleStoreKeys.includes(rawStoreName)) return;
+
       const targetStat = statsMap.find((row) => row.y === realYear && row.m === m);
       if (targetStat) {
-        targetStat.cash += (Number(d.cash) || 0) - (Number(d.refund) || 0);
+        targetStat.cash += (Number(d.cash) || 0) - (Number(d.refund) || 0) - (Number(d.skincareRefund) || 0);
 
         let currentAccrual = Number(d.accrual) || 0;
         if (brandPrefix === "安妞") {
@@ -806,9 +849,53 @@ const annualData = useMemo(() => {
       // Formal trusted historical 的 target / achievement 由 Coverage v1 authority 決定，禁止 raw fallback。
       if (stat.source !== "formal_summary") {
         const statYearMonth = `${stat.y}-${String(stat.m).padStart(2, "0")}`;
-        sumTargetsFromMonthlyTargetSummary(monthlyTargetSummaryByMonth[statYearMonth], stat);
-        stat.achievement = stat.budget > 0 ? (stat.cash / stat.budget) * 100 : 0;
-        stat.accrualAchievement = stat.accrualBudget > 0 ? (stat.accrual / stat.accrualBudget) * 100 : 0;
+        const lifecycleScope = resolveAnnualLifecycleScopeForMonth(statYearMonth);
+        if (!lifecycleScope.ready) {
+          stat.cash = null;
+          stat.accrual = null;
+          stat.traffic = null;
+          stat.budget = null;
+          stat.accrualBudget = null;
+          stat.achievement = null;
+          stat.accrualAchievement = null;
+          stat.includedInTotals = false;
+          stat.actualIncludedInTotals = false;
+          stat.targetIncludedInTotals = false;
+          stat.performanceStatus = "LIFECYCLE_NOT_READY";
+          return;
+        }
+
+        // A month with zero Lifecycle-eligible stores is outside this Formal interval, not a true-zero month.
+        // This is especially important before a store opens and after it permanently closes.
+        if (lifecycleScope.eligibleStoreKeys.length === 0) {
+          stat.cash = null;
+          stat.accrual = null;
+          stat.traffic = null;
+          stat.budget = null;
+          stat.accrualBudget = null;
+          stat.achievement = null;
+          stat.accrualAchievement = null;
+          stat.includedInTotals = false;
+          stat.actualIncludedInTotals = false;
+          stat.targetIncludedInTotals = false;
+          stat.performanceStatus = "N_A";
+          stat.emptyLifecycleScope = true;
+          return;
+        }
+
+        sumTargetsFromMonthlyTargetSummary(
+          monthlyTargetSummaryByMonth[statYearMonth],
+          stat,
+          lifecycleScope.eligibleStoreKeys
+        );
+        const hasCashActual = stat.cash !== null && stat.cash !== undefined && stat.cash !== "" && Number.isFinite(Number(stat.cash));
+        const hasAccrualActual = stat.accrual !== null && stat.accrual !== undefined && stat.accrual !== "" && Number.isFinite(Number(stat.accrual));
+        stat.achievement = hasCashActual && stat.budget !== null && stat.budget !== undefined && Number.isFinite(Number(stat.budget)) && Number(stat.budget) > 0
+          ? (Number(stat.cash) / Number(stat.budget)) * 100
+          : null;
+        stat.accrualAchievement = hasAccrualActual && stat.accrualBudget !== null && stat.accrualBudget !== undefined && Number.isFinite(Number(stat.accrualBudget)) && Number(stat.accrualBudget) > 0
+          ? (Number(stat.accrual) / Number(stat.accrualBudget)) * 100
+          : null;
       }
     });
 
@@ -829,6 +916,7 @@ const annualData = useMemo(() => {
     endMonthStr,
     auditExclusions,
     systemExclusionState,
+    currentLifecycleMasterState,
     brandPrefix,
     currentBrand,
     currentYearMonth,
@@ -837,9 +925,11 @@ const annualData = useMemo(() => {
     selectedAnnualManager,
     selectedAnnualStore,
     userRole,
+    resolveAnnualLifecycleScopeForMonth,
   ]);
 
   const { monthlyStats, totals } = annualData;
+  const intervalAchievementLabel = totals.includesFutureTargets ? "區間目標完成進度" : "區間達成率";
 
   // 用於動態顯示上方標題的文字
   const currentViewLabel = useMemo(() => {
@@ -1013,7 +1103,7 @@ const annualData = useMemo(() => {
           <div className="bg-gradient-to-br from-amber-500 to-orange-500 rounded-2xl p-6 text-white shadow-lg relative overflow-hidden">
             <div className="absolute top-0 right-0 p-4 opacity-20"><DollarSign size={100} /></div>
             <div className="relative z-10">
-              <p className="text-amber-100 font-bold text-sm mb-1 flex items-center gap-1"><Target size={14}/> 區間現金達成</p>
+              <p className="text-amber-100 font-bold text-sm mb-1 flex items-center gap-1"><Target size={14}/> 區間現金{intervalAchievementLabel === "區間目標完成進度" ? "目標完成進度" : "達成"}</p>
               <h2 className="text-4xl font-extrabold font-mono tracking-tight mb-4">{displayAnnualMoney(totals.cash)}</h2>
               <div className="space-y-2">
                 <div className="flex justify-between text-xs font-medium text-amber-100">
@@ -1029,7 +1119,7 @@ const annualData = useMemo(() => {
           <div className="bg-white border-2 border-indigo-100 rounded-2xl p-6 shadow-sm relative overflow-hidden flex flex-col justify-center">
              <div className="absolute top-0 right-0 p-4 opacity-5 text-indigo-600"><Activity size={100} /></div>
              <div className="relative z-10">
-              <p className="text-indigo-400 font-bold text-sm mb-1 flex items-center gap-1"><Award size={14}/> 區間權責達成</p>
+              <p className="text-indigo-400 font-bold text-sm mb-1 flex items-center gap-1"><Award size={14}/> 區間權責{intervalAchievementLabel === "區間目標完成進度" ? "目標完成進度" : "達成"}</p>
               <h2 className={`text-4xl font-extrabold font-mono tracking-tight text-stone-700 ${brandPrefix === '安妞' ? 'mb-1' : 'mb-4'}`}>{displayAnnualMoney(totals.accrual)}</h2>
               {/* ★ 針對安妞的文字提示 */}
               {brandPrefix === '安妞' && (
@@ -1111,6 +1201,12 @@ const annualData = useMemo(() => {
                         {stat.preSystemSkip && (
                           <span className="ml-2 px-2 py-0.5 rounded-full bg-stone-100 text-stone-400 text-[10px] font-bold">Pre-system</span>
                         )}
+                        {stat.performanceStatus === "NOT_STARTED" && (
+                          <span className="ml-2 px-2 py-0.5 rounded-full bg-sky-50 text-sky-500 text-[10px] font-bold">未開始</span>
+                        )}
+                        {stat.performanceStatus === "DATA_INCOMPLETE" && !stat.preSystemSkip && (
+                          <span className="ml-2 px-2 py-0.5 rounded-full bg-amber-50 text-amber-600 text-[10px] font-bold">資料未完整</span>
+                        )}
                       </td>
                       <td className="py-4 text-right font-mono text-stone-400 text-xs">{displayAnnualMoney(stat.budget, stat.preSystemSkip)}</td>
                       <td className="py-4 text-right font-mono text-stone-700 font-bold">{displayAnnualMoney(stat.cash, stat.preSystemSkip)}</td>
@@ -1126,7 +1222,7 @@ const annualData = useMemo(() => {
                            {displayAnnualPercent(stat.accrualAchievement, stat.preSystemSkip)}
                          </span>
                       </td>
-                      <td className="py-4 text-right font-mono text-stone-600 pl-4 border-l border-dashed border-stone-100">{stat.preSystemSkip ? "—" : fmtNum(stat.traffic)}</td>
+                      <td className="py-4 text-right font-mono text-stone-600 pl-4 border-l border-dashed border-stone-100">{stat.preSystemSkip ? "—" : (Number.isFinite(Number(stat.traffic)) && stat.traffic !== null ? fmtNum(stat.traffic) : "N/A")}</td>
                     </tr>
                   ))}
                 </tbody>

@@ -568,7 +568,7 @@ const MONTHLY_REPORT_DATA_VIEWS = new Set(["dashboard", "regional", "ranking", "
 // regional / ranking / store-analysis 只需要店日報，不應同步常駐讀 therapist_daily_reports。
 // Dashboard 預設店鋪模式時也先不讀管理師日報；切到人員績效才啟動。
 const MONTHLY_DAILY_REPORT_DATA_VIEWS = new Set(["dashboard", "regional", "ranking", "store-analysis", "audit", "history"]);
-const OPERATIONAL_FORMAL_LIFECYCLE_VIEWS = new Set(["dashboard", "regional", "ranking", "daily", "audit", "store-analysis"]);
+const OPERATIONAL_FORMAL_LIFECYCLE_VIEWS = new Set(["dashboard", "regional", "ranking", "daily", "audit", "store-analysis", "annual"]);
 const HISTORICAL_SUMMARY_READINESS_RECOVERY_DELAY_MS = 10_000;
 const MONTHLY_THERAPIST_REPORT_DATA_VIEWS = new Set(["audit", "history"]);
 
@@ -2531,8 +2531,8 @@ export default function App() {
     };
   }, [user, selectedYearMonth, currentBrand?.id, getCollectionPath, getStableReadMeta]);
 
-  // Batch 5D-2：Current/detail Formal consumers 共用單一 Store Lifecycle Master listener。
-  // 只在營運 consumer views 啟用；不建立 per-store listener、query 或 polling。
+  // Batch 7：Current/detail + Annual Formal consumers 共用單一 Store Lifecycle Master listener。
+  // 只在正式營運 consumer views 啟用；不建立 per-store listener、query 或 polling。
   const shouldLoadCurrentLifecycleMaster = OPERATIONAL_FORMAL_LIFECYCLE_VIEWS.has(activeView);
   const shouldKeepCurrentLifecycleMasterLive = Boolean(user)
     && shouldLoadCurrentLifecycleMaster
@@ -3211,6 +3211,7 @@ export default function App() {
       summaryStatusMap: annualSummaryStatusMap,
       summaryLoadState: annualSummaryLoadState,
       systemExclusionState,
+      currentLifecycleMasterState,
     });
 
     // Loading 階段先不碰 monthly_aggregated，避免 Summary/flag 晚 50~100ms 回來時
@@ -3263,6 +3264,7 @@ export default function App() {
     annualSummaryStatusMap,
     annualSummaryLoadState,
     systemExclusionState,
+    currentLifecycleMasterState,
   ]);
 
   useEffect(() => {
