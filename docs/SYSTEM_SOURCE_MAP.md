@@ -1,7 +1,7 @@
 # SYSTEM_SOURCE_MAP.md
 
 > 狀態：Project Knowledge Base / Source Map v0.1
-> 已整併至 2026-09-07 Batch 8 Projection closeout；latest runtime implementation lineage = `4848f8e00732e614b58fe20c45e25837da5fe166`，`CURRENT_APP_VERSION = 3.5.3`，`~/cyj-new` 為唯一正式 Source of Truth。docs-only closeout commit 不改變 runtime lineage；各功能的部署／Production Confirmation 仍以 `CURRENT_STATE.md` 為準。
+> 已整併至 2026-09-07 Batch 9 + Production Incident closeout；latest runtime implementation lineage = `2c49a9f74705972d6fec44d59b71c5f79ad2afc5`，Batch 9 legacy analytics retirement = `4dabb9bbf3c45151654dc1282777c36b76ccb62c`，`CURRENT_APP_VERSION = 3.5.3`，`~/cyj-new` 為唯一正式 Source of Truth。docs-only closeout commit 不改變 runtime lineage；各功能的部署／Production Confirmation 仍以 `CURRENT_STATE.md` 為準。
 > 禁止以舊對話、舊版檔案、AI 記憶或未提供的檔案補足事實。
 > 無法由目前正式程式確認的內容，必須標記為「未由目前正式來源確認」。
 
@@ -465,6 +465,20 @@ DashboardView.jsx
 - 分頁
 - delegation edit access
 
+Store Identity boundary（2026-09-07 Incident closeout）：
+
+```text
+matching / filtering
+→ src/utils/storeLifecycle.js
+→ normalizeStoreLifecycleCore
+
+daily_reports.storeName
+→ Raw Source of Truth
+→ update / delete 不為了 display canonicalization 批次改名
+```
+
+HistoryView display 不再對 `新店` 使用「省略最後一個店」的頁面特例；matching identity 與 canonical presentation 分離。
+
 ## `AuditView.jsx`
 
 用途：
@@ -540,17 +554,23 @@ Regression guard 不連 Firebase、不修改正式資料。
 
 - TargetView
 - RegionalView
-- RankingView
 - InputView
 - SettingsView
 - TherapistManagerView
 - delegationResolver
 - helpers
 
+2026-09-07 Incident closeout 已把下列 consumer 從頁面 local Store Identity 規則收斂到 shared `normalizeStoreLifecycleCore`：
+
+```text
+RankingView
+HistoryView
+```
+
 因此現況應記載為：
 
-> 「已有 Store Identity governance 與關鍵 canonical guards；
-> 但前端各模組 normalization 尚未全面重構為單一共用 Store Identity module。」
+> 「已有 Store Identity governance 與 shared Lifecycle identity authority；
+> RankingView / HistoryView 已完成本次收斂，但其他前端模組 normalization 尚未全面重構為單一共用 Store Identity module。」
 
 ---
 
@@ -667,6 +687,16 @@ tests/targetAuthority.test.js
 - 排名
 - audit exclusion
 - Summary / raw fallback
+
+Store Identity / Formal join boundary（2026-09-07 Incident closeout）：
+
+```text
+normalizeStoreKey
+getCoreStoreName
+→ normalizeStoreLifecycleCore
+```
+
+不得重新以 `.replace(/店$/, ...)` 建立頁面自己的 Formal identity key；CYJ `新店` 必須維持 core `新店`，normalization 必須 idempotent。
 
 ---
 
@@ -2994,6 +3024,168 @@ Batch 8C Production deploy scope：
 ```text
 telegramWebhook
 notificationPatrol
+```
+
+Documentation closeout 不改 runtime source、不提高 `CURRENT_APP_VERSION`、不需 runtime deploy。
+
+# 38. Batch 9 + Production Incident Runtime Owners（PRODUCTION CONFIRMED）
+
+## Batch 9 — Legacy Analytics Compatibility Retirement
+
+正式 runtime commit：
+
+```text
+4dabb9bbf3c45151654dc1282777c36b76ccb62c
+refactor: retire legacy analytics compatibility
+```
+
+Owner change：
+
+```text
+src/App.jsx
+  → retire useAnalytics orchestration
+  → AppContext no longer exposes analytics / storeList compatibility fields
+
+src/hooks/useAnalytics.js
+  → deleted / retired
+
+tests/dashboardProjectionConsumer.test.js
+  → guards legacy analytics retirement while preserving Batch 8 Projection consumer
+```
+
+`useAnalytics.js` 在 retirement audit 中沒有 Firestore primitive；Batch 9 因此沒有新增／搬移 listener、query、polling 或 read authority。
+
+Dashboard Projection authority 仍由：
+
+```text
+src/utils/projectionModelConsumer.js
+src/hooks/useDashboardStats.js
+projection_models/current
+```
+
+提供；Batch 9 不重新引入 legacy `projection_curves` consumer。
+
+## Production Incident — Store Identity Consumers
+
+正式 incident fix commit：
+
+```text
+2c49a9f74705972d6fec44d59b71c5f79ad2afc5
+fix: unify store identity and historical ranking
+```
+
+正式 owners：
+
+```text
+src/components/RankingView.jsx
+src/components/HistoryView.jsx
+src/utils/storeLifecycle.js
+tests/productionIncidentsIdentityHistoricalRanking.test.js
+```
+
+Current Detail / History identity：
+
+```text
+normalizeStoreLifecycleCore
+→ shared core identity authority
+```
+
+CYJ 新店：
+
+```text
+aliases
+→ core 新店
+→ canonical CYJ新店店
+```
+
+`RankingView` 不再用 non-idempotent page-local suffix stripping 作 Formal join key。
+
+`HistoryView` 對 historical Raw：
+
+```text
+daily_reports.storeName
+→ 不批次 rename
+```
+
+但 matching / filtering 使用 shared core identity，display 不再使用會讓 `新店` 與 canonical presentation 不一致的頁面特例。
+
+## Production Incident — Historical Dashboard Ranking
+
+正式 consumer owner：
+
+```text
+src/hooks/useDashboardStats.js
+```
+
+Persisted authority 沒有改：
+
+```text
+dashboard_summary.formalStoreRankings
+formalRankEligibleStoreCount
+```
+
+Trusted historical flow：
+
+```text
+verified dashboard_summary
+→ formalStoreRankings
+→ effectiveStores scope
+→ StorePerformanceView
+```
+
+此 Formal ranking consumer 不再限制為 `store` role。Director / manager / store 等營運檢視仍透過既有 `effectiveStores`、role / manager / store filter、delegation 與 System Exclusion scope 收斂。
+
+正常 verified historical 保持 Summary-first；此次修正沒有以 full-month Raw fallback 掩蓋 consumer bug。
+
+## Runtime / Cost Boundary
+
+Batch 9 + incident fix 沒有新增：
+
+```text
+Firestore listener
+Firestore query
+Firestore point-read path
+polling
+Backend Function
+Firestore Rules
+Firestore physical path
+```
+
+因此 steady-state read delta：
+
+```text
+0
+```
+
+## Production evidence
+
+正式 runtime：
+
+```text
+main / origin/main = 2c49a9f74705972d6fec44d59b71c5f79ad2afc5
+gh-pages           = d501adfe2689ebc472e468754cc28aa5d5a95e06
+rollback gh-pages  = 2aa5c056af36f484791243d19f3d9563e0fc26d3
+CURRENT_APP_VERSION= 3.5.3 unchanged
+```
+
+使用者 Production smoke：
+
+```text
+CYJ 詳細報表新店 Identity / KPI     PASS
+CYJ historical Dashboard ranking     PASS
+安妞 historical Dashboard ranking    PASS
+伊啵 historical Dashboard ranking    PASS
+CYJ HistoryView 新店名稱一致性       PASS
+```
+
+Final status：
+
+```text
+Batch 9
+IMPLEMENTED / VALIDATED / COMMITTED / PUSHED / DEPLOYED / PRODUCTION CONFIRMED = YES
+
+Production Incident Fix
+IMPLEMENTED / VALIDATED / COMMITTED / PUSHED / DEPLOYED / PRODUCTION CONFIRMED = YES
 ```
 
 Documentation closeout 不改 runtime source、不提高 `CURRENT_APP_VERSION`、不需 runtime deploy。

@@ -4,6 +4,194 @@
 > 優先順序：使用者提供的目前正式部署 source > 本檔案 > 其他 Knowledge Base 文件。  
 > 最後整併更新：**2026-09-07（UTC+8）**。
 
+# Latest Production Runtime Override — 2026-09-07（Batch 9 Legacy Analytics Retirement + Store Identity / Historical Ranking Incident Closeout）
+
+> 本節是目前最高優先的 Frontend Production runtime 狀態。Batch 8 Projection Model Authority 仍維持 Production Confirmed，並未被本節取消；下方 Batch 8 與更早章節保留各自 authority / evidence。若狀態衝突，以目前正式 source、Production publish 與本節為準。
+
+正式 runtime：
+
+```text
+Official working directory    = ~/cyj-new
+branch                        = main
+HEAD / origin/main            = 2c49a9f74705972d6fec44d59b71c5f79ad2afc5
+CURRENT_APP_VERSION           = 3.5.3（未提高）
+
+Batch 9 runtime commit        = 4dabb9bbf3c45151654dc1282777c36b76ccb62c
+                                refactor: retire legacy analytics compatibility
+
+Incident fix runtime commit   = 2c49a9f74705972d6fec44d59b71c5f79ad2afc5
+                                fix: unify store identity and historical ranking
+
+Frontend Production gh-pages = d501adfe2689ebc472e468754cc28aa5d5a95e06
+Rollback gh-pages             = 2aa5c056af36f484791243d19f3d9563e0fc26d3
+
+Backend / Functions           = unchanged
+Firestore Rules               = unchanged
+Firestore paths               = unchanged
+```
+
+## Batch 9 — Legacy Analytics Compatibility Retirement
+
+Batch 8B 已完成 Dashboard Projection consumer cutover；Batch 9 把只剩相容用途、沒有 Firestore primitive 的 legacy analytics layer 正式退役。
+
+正式結果：
+
+```text
+src/hooks/useAnalytics.js
+→ retired / deleted
+
+src/App.jsx
+→ 不再建立 useAnalytics(...)
+→ AppContext 不再暴露 analytics
+→ AppContext 不再暴露 storeList compatibility field
+```
+
+Dashboard Projection authority 仍是：
+
+```text
+src/utils/projectionModelConsumer.js
++ projection_models/current
+```
+
+Batch 9 沒有新增：
+
+```text
+Firestore read
+listener
+query
+polling
+Backend Function
+Rules / path
+```
+
+## Production Incident Fix — Store Identity
+
+Production smoke 在 Batch 9 deploy 後揭露兩個既有 Store Identity consumer 問題；修正沒有建立店家 hardcode，而是讓受影響 consumer 回到 shared Store Lifecycle identity authority。
+
+正式 owners：
+
+```text
+src/components/RankingView.jsx
+src/components/HistoryView.jsx
+src/utils/storeLifecycle.js
+tests/productionIncidentsIdentityHistoricalRanking.test.js
+```
+
+正式 contract：
+
+```text
+normalizeStoreLifecycleCore(...)
+→ shared core identity
+
+CYJ:
+新 / 新店 / 新店店 / CYJ新店 / CYJ新店店 / DRCYJ新店 / DRCYJ新店店
+→ core 新店
+→ canonical CYJ新店店
+```
+
+`RankingView` 不再以 local `.replace(/店$/, ...)` 作 Formal join key；Store Identity normalization 必須 idempotent。
+
+`HistoryView`：
+
+```text
+Raw daily_reports.storeName
+→ 保留歷史值，不批次 rename
+
+matching / filtering
+→ normalizeStoreLifecycleCore
+
+display
+→ 以 normalized core 產生一致店名呈現
+```
+
+因此 canonical display 修正不改寫歷史 Raw Source of Truth。
+
+## Production Incident Fix — Historical Dashboard Ranking
+
+Root cause 位於 Frontend consumer role gate，不在 Summary Writer。
+
+正式 persisted authority 原本就包含：
+
+```text
+formalStoreRankings
+formalRankEligibleStoreCount
+```
+
+修正後：
+
+```text
+trusted historical dashboard_summary
+→ formalStoreRankings
+→ effectiveStores role / manager / store / delegation / System Exclusion scope
+→ StorePerformanceView
+```
+
+不再因 viewer 不是 `store` role 就錯誤退回 historical current-detail path。
+
+正常 verified historical 仍維持：
+
+```text
+Summary-first
+historical daily_reports full-month resident load = 0
+raw monthly_targets fallback = 0
+```
+
+沒有新增 listener、query、polling 或 steady-state Firestore read。
+
+## Validation / Deployment / Production Confirmation
+
+Incident fix official validation：
+
+```text
+exact complete patch            = PASS
+targeted incident regression    = PASS
+cross-brand / Formal regression = PASS
+full repository regression      = PASS
+npm run build                   = PASS
+CURRENT_APP_VERSION             = 3.5.3 unchanged
+```
+
+Frontend scoped deploy：
+
+```text
+main / origin/main = 2c49a9f74705972d6fec44d59b71c5f79ad2afc5
+gh-pages           = d501adfe2689ebc472e468754cc28aa5d5a95e06
+Functions          = NO DEPLOY
+Firestore Rules    = NO DEPLOY
+Firebase Hosting   = NO DEPLOY
+```
+
+Production smoke 已由使用者確認：
+
+```text
+CYJ 詳細報表新店 Identity / KPI        PASS
+CYJ historical Dashboard 戰情排行      PASS
+安妞 historical Dashboard 戰情排行     PASS
+伊啵 historical Dashboard 戰情排行     PASS
+CYJ 業績修正新店名稱一致性             PASS
+```
+
+Final runtime status：
+
+```text
+Batch 9 IMPLEMENTED / VALIDATED / COMMITTED / PUSHED / DEPLOYED / PRODUCTION CONFIRMED = YES
+Incident Fix IMPLEMENTED / VALIDATED / COMMITTED / PUSHED / DEPLOYED / PRODUCTION CONFIRMED = YES
+
+Backend / Rules delta       = 0 / 0
+New Firestore listeners     = 0
+New Firestore queries       = 0
+Steady-state read delta     = 0
+CURRENT_APP_VERSION         = 3.5.3 unchanged
+```
+
+Documentation closeout：
+
+```text
+本 canonical docs-only closeout 記錄上述 final Production state。
+完成本 docs patch promotion / commit / push 且 final source gate clean 後，
+Batch 9 + Incident Documentation Impact = CLOSED。
+```
+
 # Latest Production Runtime Override — 2026-09-07（Batch 8 Projection Model Authority / Dashboard + Telegram Consumer）
 
 > 本節是目前最高優先的 Projection Production runtime 狀態。下方 2026-09-05 與更早 Batch 章節保留各自當時 evidence；若語意衝突，以目前正式 source、Production readback 與本節為準。
