@@ -293,10 +293,9 @@ test("System Excluded own-store self-view can disable brand baseline fallback", 
   assert.ok(result.sourceStats.currentPaceFallbacks > 0);
 });
 
-test("Dashboard wiring uses one projection_models/current point read and retires legacy projection_curves reads", () => {
+test("Dashboard wiring uses one projection_models/current point read and retires legacy analytics compatibility", () => {
   const hook = read("src/hooks/useDashboardStats.js");
   const app = read("src/App.jsx");
-  const analytics = read("src/hooks/useAnalytics.js");
   const dashboardView = read("src/components/DashboardView.jsx");
 
   assert.match(hook, /doc\(getCollectionPath\("projection_models"\), PROJECTION_MODEL_DOC_ID\)/);
@@ -311,10 +310,11 @@ test("Dashboard wiring uses one projection_models/current point read and retires
   assert.match(hook, /projectionLifecycleEntryMap/);
   assert.match(hook, /allowBrandFallbackForRow/);
 
-  // Batch 8B only cuts over the Dashboard consumer. Legacy useAnalytics remains
-  // compatibility source for AppContext storeList until Batch 9 cleanup.
-  assert.match(app, /const analytics = useAnalytics\(/);
-  assert.match(app, /storeList: analytics\?\.storeList \|\| \[\]/);
-  assert.match(analytics, /projection/);
+  // Batch 9: useAnalytics was a dead AppContext compatibility layer after 8B.
+  // No consumer reads AppContext.analytics or storeList, so both are retired.
+  assert.doesNotMatch(app, /useAnalytics/);
+  assert.doesNotMatch(app, /\banalytics\b/);
+  assert.doesNotMatch(app, /\bstoreList\b/);
+  assert.equal(fs.existsSync(path.join(root, "src/hooks/useAnalytics.js")), false);
   assert.doesNotMatch(dashboardView, /\banalytics\b/);
 });
