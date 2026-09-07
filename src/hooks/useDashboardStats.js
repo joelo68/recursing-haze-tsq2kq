@@ -2,14 +2,18 @@
 import { useState, useMemo, useContext, useEffect } from 'react';
 import { AppContext } from '../AppContext';
 import { sortManagerNames, sortStoreNames, sortManagersByOrgOrder, sortStoresByOrgOrder } from "../utils/helpers";
-// ★ 新增了 collection 與 getDocs，讓我們一次把全公司的專屬小抄都抓下來
-import { doc, getDoc, collection, getDocs, onSnapshot } from 'firebase/firestore';
-import { db } from '../config/firebase';
+import { doc, getDoc, onSnapshot } from 'firebase/firestore';
 import { KPI_VALUE_STATUS, formalNetCash } from '../utils/kpiContracts.js';
 import {
   DASHBOARD_LIVE_RANKING_SEMANTICS,
   buildDashboardLiveRanking,
 } from '../utils/dashboardLiveRanking.js';
+import {
+  PROJECTION_MODEL_DOC_ID,
+  buildDashboardProjectionFromModel,
+  buildProjectionLifecycleEntryMap,
+  inspectProjectionModelTrust,
+} from '../utils/projectionModelConsumer.js';
 import {
   buildCurrentDetailFormalAuthority,
   buildCurrentDetailFormalScope,
@@ -36,7 +40,6 @@ import {
   normalizeAnnualKpiBenchmarkPayload,
 } from '../utils/annualKpiBenchmark.js';
 
-const safeNumber = (value) => Number.isFinite(Number(value)) ? Number(value) : 0;
 const isFiniteKpiNumber = (value) => typeof value === "number" && Number.isFinite(value);
 const getFormalNetCashValue = (row = {}) => {
   const result = formalNetCash(row?.cash, row?.refund, row?.skincareRefund);
@@ -61,76 +64,6 @@ const isInBottomRankingSegment = (rank = 0, totalStores = 0) => {
   const segmentSize = getBottomRankingSegmentSize(total);
   return segmentSize > 0 && normalizedRank > total - segmentSize;
 };
-
-const getProjectionBlendProfile = (daysPassed = 0, daysInMonth = 0) => {
-  if (!daysPassed || !daysInMonth) {
-    return { currentWeight: 0.5, historyWeight: 0.5, label: "資料不足" };
-  }
-
-  const progress = daysPassed / daysInMonth;
-
-  if (daysPassed <= 5 || progress <= 0.18) {
-    return { currentWeight: 0.3, historyWeight: 0.7, label: "月初：偏歷史節奏" };
-  }
-
-  if (progress <= 0.5) {
-    return { currentWeight: 0.5, historyWeight: 0.5, label: "月中：本月與歷史均衡" };
-  }
-
-  if (progress <= 0.8) {
-    return { currentWeight: 0.7, historyWeight: 0.3, label: "月中後：偏本月實際" };
-  }
-
-  return { currentWeight: 0.85, historyWeight: 0.15, label: "月底：高度依本月實際" };
-};
-
-const blendByWeights = (currentValue, historyValue, currentWeight, historyWeight) => {
-  const current = safeNumber(currentValue);
-  const history = safeNumber(historyValue);
-  return (current * currentWeight) + (history * historyWeight);
-};
-
-const hasPositiveCurveValue = (averages = {}) => (
-  Object.values(averages || {}).some((value) => safeNumber(value) > 0)
-);
-
-// 推估小抄若某個星期值是 0，可能代表「店休日」，也可能代表小抄建立失敗。
-// 目前沒有完整店休日設定，所以採保守防呆：
-// 1. 有正數歷史值 → 使用歷史值。
-// 2. 星期日為 0 且該小抄其他星期有正數 → 保留 0，避免固定週日店休被高估。
-// 3. 其他 0 / 空值 / 非數字 → 回退本月目前日均，避免月底推估被拉成「到月底都沒業績」。
-const getUsableHistoryAverage = (averages = {}, dow, fallbackValue = 0) => {
-  const history = safeNumber(averages?.[dow]);
-  const fallback = safeNumber(fallbackValue);
-  const hasAnyPositiveHistory = hasPositiveCurveValue(averages);
-
-  if (history > 0) return history;
-  if (history === 0 && Number(dow) === 0 && hasAnyPositiveHistory) return 0;
-  return fallback > 0 ? fallback : 0;
-};
-
-const buildProjectionRangePayload = ({ currentTotal = 0, remainingConservative = 0, remainingStandard = 0, remainingAggressive = 0 }) => {
-  const rawConservative = Math.round(safeNumber(currentTotal) + safeNumber(remainingConservative));
-  const standard = Math.round(safeNumber(currentTotal) + safeNumber(remainingStandard));
-  const rawAggressive = Math.round(safeNumber(currentTotal) + safeNumber(remainingAggressive));
-
-  // 保守 / 標準 / 積極是給主管看的「判讀區間」，必須維持語意順序。
-  // 這版把保守改成較低節奏、積極改成較高節奏；若遇到極端資料，仍用下緣 / 上緣保護顯示。
-  const conservative = Math.min(rawConservative, standard, rawAggressive);
-  const aggressive = Math.max(rawConservative, standard, rawAggressive);
-
-  return {
-    conservative,
-    standard,
-    aggressive,
-    min: conservative,
-    max: aggressive,
-    rawConservative,
-    rawAggressive,
-  };
-};
-
-
 
 export function useDashboardStats() {
   const { 
@@ -257,56 +190,15 @@ export function useDashboardStats() {
     brandInfo?.id,
   ]);
 
-  // ==========================================
-  // ★ 升級版：一次抓取「全集團所有門市」的專屬推估小抄 (包含現金與權責)
-  // ==========================================
-  const [allStoreCurves, setAllStoreCurves] = useState({});
-  
-  useEffect(() => {
-      const fetchAllCurves = async () => {
-          if (!brandInfo || !brandInfo.id) return;
-          try {
-              const colRef = collection(db, "brands", brandInfo.id, "settings", "projection_curves", "stores");
-              const snap = await getDocs(colRef);
-              const dataDict = {};
-              const normalizeCurveKey = (value = "") => {
-                const raw = String(value || "").trim();
-                if (!raw) return "";
-                if (raw === "BRAND_TOTAL") return "BRAND_TOTAL";
-                return raw
-                  .replace(new RegExp(`^(${brandPrefix}|CYJ|Anew|Yibo|安妞|伊啵)\\s*`, 'i'), '')
-                  .replace(/店$/, '')
-                  .replace(/\s+/g, '')
-                  .toLowerCase();
-              };
-
-              snap.forEach((curveDoc) => {
-                  // ★ 改為存取「整包資料」，才能拿到獨立的現金與權責小抄。
-                  // 同時建立多組 key，避免 Firestore 文件 ID 是「安妞信義店」，
-                  // 但 Dashboard 明細推估用 cleanName 後的「信義」去找，最後誤吃 BRAND_TOTAL。
-                  const data = curveDoc.data();
-                  const rawId = String(curveDoc.id || "").trim();
-                  const compactId = rawId.replace(/\s+/g, '').toLowerCase();
-                  const coreId = normalizeCurveKey(rawId);
-                  const candidateKeys = [rawId, compactId, coreId];
-
-                  if (coreId && coreId !== "BRAND_TOTAL") {
-                    candidateKeys.push(`${coreId}店`);
-                    candidateKeys.push(`${brandPrefix}${coreId}店`);
-                    candidateKeys.push(`${brandInfo.name || brandPrefix}${coreId}店`);
-                  }
-
-                  Array.from(new Set(candidateKeys.filter(Boolean))).forEach((key) => {
-                    dataDict[key] = data;
-                  });
-              });
-              setAllStoreCurves(dataDict);
-          } catch (e) {
-              console.error("讀取金額小抄失敗:", e);
-          }
-      };
-      fetchAllCurves();
-  }, [brandInfo, brandPrefix]);
+  // Batch 8B：Dashboard Projection 改讀 Backend-owned 單一 Projection Model authority。
+  // Current-month Dashboard 每次品牌/月份 activation 最多 1 個 point read；不新增 listener / polling。
+  const [projectionModelState, setProjectionModelState] = useState({
+    brandId: "",
+    modelMonth: "",
+    ready: false,
+    data: null,
+    error: null,
+  });
 
 
   const [annualKpiBenchmark, setAnnualKpiBenchmark] = useState({
@@ -450,30 +342,7 @@ export function useDashboardStats() {
     return core.replace(/店+$/g, '').trim();
   }, [brandPrefix, brandInfo?.name]);
 
-  const getProjectionCurveForStore = useMemo(() => (storeName = "") => {
-    const core = cleanName(storeName);
-    const raw = String(storeName || "").trim();
-    const compact = (value = "") => String(value || "").replace(/\s+/g, "").toLowerCase();
 
-    const candidateKeys = [
-      raw,
-      compact(raw),
-      core,
-      compact(core),
-      core ? `${core}店` : "",
-      core ? compact(`${core}店`) : "",
-      core ? `${brandPrefix}${core}店` : "",
-      core ? compact(`${brandPrefix}${core}店`) : "",
-      core ? `${brandInfo?.name || brandPrefix}${core}店` : "",
-      core ? compact(`${brandInfo?.name || brandPrefix}${core}店`) : "",
-    ];
-
-    for (const key of Array.from(new Set(candidateKeys.filter(Boolean)))) {
-      if (allStoreCurves[key]) return allStoreCurves[key];
-    }
-
-    return allStoreCurves["BRAND_TOTAL"] || allStoreCurves["brand_total"] || {};
-  }, [allStoreCurves, cleanName, brandPrefix, brandInfo]);
 
   const getSummaryStoreName = useMemo(() => (store = {}) => (
     store.__canonicalStoreName ||
@@ -977,6 +846,95 @@ export function useDashboardStats() {
     return Number(selectedYear) === now.getFullYear() && Number(selectedMonth) === now.getMonth() + 1;
   }, [selectedYear, selectedMonth]);
 
+  useEffect(() => {
+    const brandId = String(brandInfo?.id || "").toLowerCase();
+    if (!getCollectionPath || !selectedYearMonth || !isSelectedCurrentMonth || !brandId) {
+      setProjectionModelState({
+        brandId,
+        modelMonth: selectedYearMonth,
+        ready: true,
+        data: null,
+        error: null,
+      });
+      return undefined;
+    }
+
+    let cancelled = false;
+    setProjectionModelState({
+      brandId,
+      modelMonth: selectedYearMonth,
+      ready: false,
+      data: null,
+      error: null,
+    });
+
+    const loadProjectionModel = async () => {
+      try {
+        const modelRef = doc(getCollectionPath("projection_models"), PROJECTION_MODEL_DOC_ID);
+        const snap = await getDoc(modelRef);
+        if (cancelled) return;
+        setProjectionModelState({
+          brandId,
+          modelMonth: selectedYearMonth,
+          ready: true,
+          data: snap.exists() ? { id: snap.id, ...snap.data() } : null,
+          error: null,
+        });
+      } catch (error) {
+        if (cancelled) return;
+        console.warn("Dashboard Projection Model 讀取失敗，改用本月節奏 fallback：", error);
+        setProjectionModelState({
+          brandId,
+          modelMonth: selectedYearMonth,
+          ready: true,
+          data: null,
+          error,
+        });
+      }
+    };
+
+    loadProjectionModel();
+    return () => { cancelled = true; };
+  }, [getCollectionPath, selectedYearMonth, isSelectedCurrentMonth, brandInfo?.id]);
+
+  const projectionLifecycleMaster = useMemo(() => {
+    const brandId = String(brandInfo?.id || "").toLowerCase();
+    const lifecycleBrandId = String(currentLifecycleMasterState?.brandId || "").toLowerCase();
+    if (
+      currentLifecycleMasterState?.ready !== true ||
+      lifecycleBrandId !== brandId ||
+      !currentLifecycleMasterState?.data
+    ) {
+      return null;
+    }
+    return currentLifecycleMasterState.data;
+  }, [currentLifecycleMasterState, brandInfo?.id]);
+
+  const projectionModelTrust = useMemo(() => inspectProjectionModelTrust({
+    model: (
+      projectionModelState?.ready === true &&
+      projectionModelState?.brandId === String(brandInfo?.id || "").toLowerCase() &&
+      projectionModelState?.modelMonth === selectedYearMonth
+    ) ? projectionModelState.data : null,
+    brandId: brandInfo?.id || "",
+    modelMonth: selectedYearMonth,
+    lifecycleMaster: projectionLifecycleMaster,
+    systemExclusionState,
+  }), [
+    projectionModelState,
+    brandInfo?.id,
+    selectedYearMonth,
+    projectionLifecycleMaster,
+    systemExclusionState,
+  ]);
+
+  const projectionLifecycleEntryMap = useMemo(() => buildProjectionLifecycleEntryMap({
+    lifecycleMaster: projectionLifecycleMaster,
+    brandId: brandInfo?.id || "",
+    yearMonth: selectedYearMonth,
+    normalizeStoreKey: cleanName,
+  }), [projectionLifecycleMaster, brandInfo?.id, selectedYearMonth, cleanName]);
+
   const currentDetailFormalAuthority = useMemo(() => {
     const lifecycleStateBrand = String(currentLifecycleMasterState?.brandId || "").toLowerCase();
     const currentBrandId = String(brandInfo?.id || "").toLowerCase();
@@ -1258,78 +1216,7 @@ export function useDashboardStats() {
     return true;
   }, [isSelectedCurrentMonth, isSummaryTrustedForDashboard, dashboardSummaryBundle.dashboard, userRole]);
 
-  const buildProjectionFromSummaryStores = useMemo(() => (stores = [], daysPassed = 0, daysInMonth = 0) => {
-    const emptyRange = {
-      cash: { conservative: 0, standard: 0, aggressive: 0, min: 0, max: 0 },
-      accrual: { conservative: 0, standard: 0, aggressive: 0, min: 0, max: 0 },
-      profile: getProjectionBlendProfile(daysPassed, daysInMonth),
-    };
-    if (!daysPassed || !daysInMonth || !Array.isArray(stores)) {
-      return { projection: 0, accrualProjection: 0, projectionRange: emptyRange };
-    }
 
-    const y = parseInt(selectedYear, 10);
-    const m = parseInt(selectedMonth, 10);
-    const profile = getProjectionBlendProfile(daysPassed, daysInMonth);
-
-    const totals = {
-      cash: { current: 0, conservative: 0, standard: 0, aggressive: 0 },
-      accrual: { current: 0, conservative: 0, standard: 0, aggressive: 0 },
-    };
-
-    stores.forEach((store) => {
-      const storeCore = cleanName(getSummaryStoreName(store));
-      const storeCurve = getProjectionCurveForStore(storeCore);
-      const cashAverages = storeCurve.cashAverages || {};
-      const accrualAverages = storeCurve.accrualAverages || {};
-
-      const currentCash = Number(store.cash) || 0;
-      const currentAccrual = Number(store.accrual) || 0;
-      const currentCashDailyAvg = currentCash / daysPassed;
-      const currentAccrualDailyAvg = currentAccrual / daysPassed;
-
-      totals.cash.current += currentCash;
-      totals.accrual.current += currentAccrual;
-
-      for (let d = daysPassed + 1; d <= daysInMonth; d++) {
-        const futureDate = new Date(y, m - 1, d);
-        const dow = futureDate.getDay();
-
-        const historyCashValue = getUsableHistoryAverage(cashAverages, dow, currentCashDailyAvg);
-        totals.cash.conservative += Math.min(currentCashDailyAvg, historyCashValue);
-        totals.cash.standard += blendByWeights(currentCashDailyAvg, historyCashValue, profile.currentWeight, profile.historyWeight);
-        totals.cash.aggressive += Math.max(currentCashDailyAvg, historyCashValue);
-
-        const historyAccrualValue = getUsableHistoryAverage(accrualAverages, dow, currentAccrualDailyAvg);
-        totals.accrual.conservative += Math.min(currentAccrualDailyAvg, historyAccrualValue);
-        totals.accrual.standard += blendByWeights(currentAccrualDailyAvg, historyAccrualValue, profile.currentWeight, profile.historyWeight);
-        totals.accrual.aggressive += Math.max(currentAccrualDailyAvg, historyAccrualValue);
-      }
-    });
-
-    const cashRange = buildProjectionRangePayload({
-      currentTotal: totals.cash.current,
-      remainingConservative: totals.cash.conservative,
-      remainingStandard: totals.cash.standard,
-      remainingAggressive: totals.cash.aggressive,
-    });
-    const accrualRange = buildProjectionRangePayload({
-      currentTotal: totals.accrual.current,
-      remainingConservative: totals.accrual.conservative,
-      remainingStandard: totals.accrual.standard,
-      remainingAggressive: totals.accrual.aggressive,
-    });
-
-    return {
-      projection: cashRange.standard,
-      accrualProjection: accrualRange.standard,
-      projectionRange: {
-        cash: cashRange,
-        accrual: accrualRange,
-        profile,
-      },
-    };
-  }, [selectedYear, selectedMonth, cleanName, getSummaryStoreName, getProjectionCurveForStore]);
 
   const summaryDashboardStats = useMemo(() => {
     const summary = dashboardSummaryBundle.dashboard;
@@ -1961,73 +1848,47 @@ export function useDashboardStats() {
     const challengeAccrualAchievement = activeDetailScope.challengeAccrualAchievement;
 
  // ============================================================================
-    // ★ 月底推估：動態權重 + 保守 / 標準 / 積極區間
-    //    - 保守：偏本月實際節奏
-    //    - 標準：依月份進度動態調整本月與歷史權重
-    //    - 積極：保留歷史高節奏與月底衝刺可能
+    // ★ Batch 8B — Projection Model Authority consumer
+    //    - Historical weekday baseline only from projection_models/current.
+    //    - Current actual stays on Current Detail Formal authority.
+    //    - Store Lifecycle / Reporting Calendar decides future operating dates.
+    //    - Missing/stale model falls back to current pace; no legacy curve read.
     // ============================================================================
-    let projection = 0;
-    let accrualProjection = 0;
-    let projectionRange = {
-      cash: { conservative: 0, standard: 0, aggressive: 0, min: 0, max: 0 },
-      accrual: { conservative: 0, standard: 0, aggressive: 0, min: 0, max: 0 },
-      profile: getProjectionBlendProfile(daysPassed, daysInMonth),
+    const projectionRows = Object.keys(storeStatsMap).map((storeName) => {
+      const storeKey = cleanName(storeName);
+      const sStats = storeStatsMap[storeName] || {};
+      const formalRow = currentDetailFormalAuthority?.stores?.[storeKey] || null;
+      return {
+        storeKey,
+        cash: storeSelfViewActive ? sStats.cash : formalRow?.formalNetCash,
+        accrual: storeSelfViewActive ? sStats.accrual : formalRow?.formalAccrual,
+        lifecycleEntry: formalRow?.lifecycleEntry || projectionLifecycleEntryMap.get(storeKey) || null,
+        selfViewExcluded: storeSelfViewActive === true,
+      };
+    });
+
+    const projectionResult = buildDashboardProjectionFromModel({
+      rows: projectionRows,
+      model: projectionModelTrust.trusted ? projectionModelState.data : null,
+      modelTrusted: projectionModelTrust.trusted === true,
+      yearMonth: selectedYearMonth,
+      daysPassed,
+      daysInMonth,
+      normalizeStoreKey: cleanName,
+      // System Excluded own-store self-view may see its own actual, but must not
+      // consume brand-level historical baseline that could leak aggregate scope.
+      allowBrandFallbackForRow: (row) => row?.selfViewExcluded !== true,
+    });
+    const projection = projectionResult.projection;
+    const accrualProjection = projectionResult.accrualProjection;
+    const projectionRange = {
+      ...projectionResult.projectionRange,
+      modelTrust: {
+        trusted: projectionModelTrust.trusted === true,
+        reason: projectionModelTrust.reason || "",
+      },
     };
 
-    if (daysPassed > 0) {
-        const profile = getProjectionBlendProfile(daysPassed, daysInMonth);
-        const totals = {
-          cash: { current: 0, conservative: 0, standard: 0, aggressive: 0 },
-          accrual: { current: 0, conservative: 0, standard: 0, aggressive: 0 },
-        };
-
-        Object.keys(storeStatsMap).forEach(storeName => {
-            const sStats = storeStatsMap[storeName];
-            const storeCurve = getProjectionCurveForStore(storeName);
-            const cashAverages = storeCurve.cashAverages || {};
-            const accrualAverages = storeCurve.accrualAverages || {};
-
-            const currentCashDailyAvg = sStats.cash / daysPassed;
-            const currentAccrualDailyAvg = sStats.accrual / daysPassed;
-
-            totals.cash.current += sStats.cash;
-            totals.accrual.current += sStats.accrual;
-
-            for (let d = daysPassed + 1; d <= daysInMonth; d++) {
-                const futureDate = new Date(y, m - 1, d);
-                const dow = futureDate.getDay();
-
-                const historyCashValue = getUsableHistoryAverage(cashAverages, dow, currentCashDailyAvg);
-
-                totals.cash.conservative += Math.min(currentCashDailyAvg, historyCashValue);
-                totals.cash.standard += blendByWeights(currentCashDailyAvg, historyCashValue, profile.currentWeight, profile.historyWeight);
-                totals.cash.aggressive += Math.max(currentCashDailyAvg, historyCashValue);
-
-                const historyAccrualValue = getUsableHistoryAverage(accrualAverages, dow, currentAccrualDailyAvg);
-
-                totals.accrual.conservative += Math.min(currentAccrualDailyAvg, historyAccrualValue);
-                totals.accrual.standard += blendByWeights(currentAccrualDailyAvg, historyAccrualValue, profile.currentWeight, profile.historyWeight);
-                totals.accrual.aggressive += Math.max(currentAccrualDailyAvg, historyAccrualValue);
-            }
-        });
-
-        const cashRange = buildProjectionRangePayload({
-          currentTotal: totals.cash.current,
-          remainingConservative: totals.cash.conservative,
-          remainingStandard: totals.cash.standard,
-          remainingAggressive: totals.cash.aggressive,
-        });
-        const accrualRange = buildProjectionRangePayload({
-          currentTotal: totals.accrual.current,
-          remainingConservative: totals.accrual.conservative,
-          remainingStandard: totals.accrual.standard,
-          remainingAggressive: totals.accrual.aggressive,
-        });
-
-        projection = cashRange.standard;
-        accrualProjection = accrualRange.standard;
-        projectionRange = { cash: cashRange, accrual: accrualRange, profile };
-    }
     // ===========================================================================
     const avgTrafficASP = stats.traffic > 0 ? Math.round(stats.operationalAccrual / stats.traffic) : 0;
     const avgNewCustomerASP = stats.newCustomers > 0 ? Math.round(stats.newCustomerSales / stats.newCustomers) : 0;
@@ -2117,7 +1978,7 @@ export function useDashboardStats() {
       },
     };
   // ★ 監視清單換成了包含全部小抄的字典
-  }, [allReports, selectedYear, selectedMonth, selectedYearMonth, effectiveStores, brandPrefix, brandInfo?.id, cleanName, getProjectionCurveForStore, currentDetailFormalScope, currentDetailFormalAuthority, monthlyTargetSummary, storeSelfViewActive, storeSelfViewProfile.scopeStoreKeys]);
+  }, [allReports, selectedYear, selectedMonth, selectedYearMonth, effectiveStores, brandPrefix, brandInfo?.id, cleanName, currentDetailFormalScope, currentDetailFormalAuthority, monthlyTargetSummary, storeSelfViewActive, storeSelfViewProfile.scopeStoreKeys, projectionLifecycleEntryMap, projectionModelTrust, projectionModelState.data]);
 
   const detailMyStoreRankings = useMemo(() => {
     if (!currentDetailFormalAuthority?.compatible) return [];
