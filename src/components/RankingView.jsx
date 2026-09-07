@@ -5,6 +5,7 @@ import { AppContext } from "../AppContext";
 import { ViewWrapper, Card } from "./SharedUI";
 import { buildHistoricalFormalRankingRows, resolveHistoricalReportFormalTrust } from "../utils/reportFormalConsumer";
 import { buildCurrentDetailFormalAuthority } from "../utils/currentDetailFormalConsumer.js";
+import { normalizeStoreLifecycleCore } from "../utils/storeLifecycle.js";
 
 const RankingView = () => {
   const { 
@@ -56,20 +57,10 @@ const RankingView = () => {
     return name;
   }, [currentBrand]);
 
-  const getCoreStoreName = (fullName) => {
-    if (!fullName) return "";
-    let core = String(fullName).replace(new RegExp(`^(${brandPrefix}|CYJ|安妞|伊啵|Anew|Yibo)`, 'i'), '').trim();
-    if (core === "新店") return "新店"; // 防止「新店」被誤刪
-    return core.replace(/店$/, '').trim();
-  };
-
-  const normalizeStoreKey = (value) => {
-    return String(value || "")
-      .replace(/\s+/g, "")
-      .replace(/^(CYJ|安妞|伊啵|Anew|Yibo)/i, "")
-      .replace(/店$/g, "")
-      .trim();
-  };
+  // Store Identity is a shared data-layer authority.
+  // Do not re-strip "店" here: 新店 is the core place name and normalization must be idempotent.
+  const normalizeStoreKey = normalizeStoreLifecycleCore;
+  const getCoreStoreName = normalizeStoreLifecycleCore;
 
   const pickNumber = (...values) => {
     for (const value of values) {

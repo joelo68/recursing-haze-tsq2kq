@@ -20,6 +20,7 @@ import { ViewWrapper, Card } from "./SharedUI";
 import { AppContext } from "../AppContext";
 import SmartDatePicker from "./SmartDatePicker";
 import { formatLocalYYYYMMDD, toStandardDateFormat, sortStoreNames, sortStoresByOrgOrder } from "../utils/helpers";
+import { normalizeStoreLifecycleCore } from "../utils/storeLifecycle.js";
 
 const HistoryView = () => {
   const { 
@@ -92,23 +93,14 @@ const HistoryView = () => {
     return changes;
   };
 
-  const cleanStoreName = useCallback((name) => {
-    if (!name) return "";
-    let core = String(name)
-      .replace(/^(CYJ|DRCYJ|Anew\s*\(安妞\)|Yibo\s*\(伊啵\)|安妞|伊啵|Anew|Yibo)\s*/i, "")
-      .replace(/[　\s]+/g, "")
-      .trim();
-
-    // 舊版管理師資料曾把正式店名「新店」裁成「新」。
-    // 查詢與權限比對時兩者統一為「新店」，既有日報不必重填即可顯示。
-    if (core === "新" || /^新店店?$/.test(core)) return "新店";
-    return core.replace(/店$/, "").trim();
-  }, []);
+  // Raw daily_reports storeName remains untouched. Matching/filtering shares
+  // Store Lifecycle core identity so legacy aliases and canonical names resolve identically.
+  const cleanStoreName = normalizeStoreLifecycleCore;
 
   const formatStoreDisplayName = useCallback((name) => {
     const core = cleanStoreName(name);
     if (!core) return "未註記";
-    return core === "新店" ? "新店" : `${core}店`;
+    return `${core}店`;
   }, [cleanStoreName]);
 
   const formatStoreFilterValue = useCallback((name) => {

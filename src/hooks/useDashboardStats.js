@@ -1558,11 +1558,14 @@ export function useDashboardStats() {
     // ★ 當月門市排行也必須即時，避免主管或店長看到未更新的 Summary 排名。
     if (isSelectedCurrentMonth || !isSummaryTrustedForDashboard) return null;
     const summary = dashboardSummaryBundle.dashboard;
-    if (!summary || userRole !== "store" || !currentUser) return null;
+    if (!summary) return null;
     if (!isFormalDashboardSummaryCompatible(summary)) return null;
 
-    // Batch 5A-1：歷史店經理排名正式改吃 formalStoreRankings。
-    // rank denominator 只使用 formalRankEligibleStoreCount，避免 invalid/missing target 被塞進排名。
+    // Trusted historical ranking is Summary-first for every store-performance role.
+    // effectiveStores already applies role scope, manager/store filters, delegation presentation,
+    // and System Exclusion. Do not fall back to current-detail ranking merely because the
+    // viewer is a director/master/manager.
+    // rank denominator only uses formalRankEligibleStoreCount.
     const formalRanks = Array.isArray(summary.formalStoreRankings) ? summary.formalStoreRankings : [];
     const formalRankEligibleStoreCount = Number(summary.formalRankEligibleStoreCount || formalRanks.length || 0);
     const myCores = (effectiveStores || []).map(cleanName).filter(Boolean);
@@ -1604,7 +1607,7 @@ export function useDashboardStats() {
         };
       })
       .filter(Boolean);
-  }, [dashboardSummaryBundle.dashboard, userRole, currentUser, effectiveStores, cleanName, getSummaryStoreName, getSummaryStoreCandidates, normalizeSummaryStores, summaryStoreMatchesSet, isSelectedCurrentMonth, isSummaryTrustedForDashboard]);
+  }, [dashboardSummaryBundle.dashboard, effectiveStores, cleanName, getSummaryStoreName, getSummaryStoreCandidates, normalizeSummaryStores, summaryStoreMatchesSet, isSelectedCurrentMonth, isSummaryTrustedForDashboard]);
 
   const summaryTherapistStats = useMemo(() => {
     if (viewMode !== "therapist" && userRole !== "therapist" && userRole !== "trainer") return null;
