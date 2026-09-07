@@ -980,3 +980,81 @@ onBrandSystemExclusionChange
 ```
 
 no-op 不製造 revision churn，也不增加 downstream reads / writes。
+
+# 33. Projection Model Administrative Security — Batch 8
+
+`projection_models/current` 是 Backend-owned derived authority，不是一般 Settings。
+
+Firestore Rules：
+
+```text
+brands/{brandId}/projection_models/{document=**}
+artifacts/{appId}/public/data/projection_models/{document=**}
+
+allow read  = signedIn()
+allow write = false
+```
+
+因此 Frontend / browser 不可直接建立或覆寫 Projection Model。
+
+正式 writer：
+
+```text
+functions/projectionAuthority.js
+Admin SDK
+```
+
+## Manual rebuild
+
+```text
+rebuildProjectionModelNow
+```
+
+安全邊界：
+
+```text
+POST only
+→ requireFirebaseRequestAuth()
+→ normalize brand
+→ verifySuperAdminActor()
+→ highest admin
+→ Trusted Device / credential protection
+→ rebuild
+```
+
+未通過 Firebase request auth：
+
+```text
+401
+```
+
+未通過最高管理者安全驗證：
+
+```text
+403
+```
+
+Lifecycle authority 未 READY 或 rebuild scope / snapshot 衝突：
+
+```text
+409 / fail closed
+```
+
+## Race condition
+
+Projection Model rebuild 不是「讀完就直接寫」。
+
+正式流程：
+
+```text
+read Lifecycle + System Exclusion
+→ build bounded model
+→ transaction re-read Lifecycle + System Exclusion
+→ same authority snapshot?
+    YES → publish
+    NO  → abort stale publish
+```
+
+因此多管理者／設定變更與 scheduled rebuild 同時發生時，不應由舊 snapshot 覆蓋新 authority。
+
+Consumer trust 仍會再次核對 current Lifecycle / Reporting Calendar / System Exclusion；Rules write protection不能取代 runtime trust check。

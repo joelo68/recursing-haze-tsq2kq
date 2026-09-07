@@ -1,7 +1,7 @@
 # SYSTEM_SOURCE_MAP.md
 
 > 狀態：Project Knowledge Base / Source Map v0.1
-> 已整併至 2026-09-05 System Exclusion Store Self-View closeout；latest runtime implementation lineage = `a08cac205f0f5b000bda514afd5e58be19002566`，`CURRENT_APP_VERSION = 3.5.3`，`~/cyj-new` 為唯一正式 Source of Truth。docs-only closeout commit 不改變 runtime lineage；各功能的部署／Production Confirmation 仍以 `CURRENT_STATE.md` 為準。
+> 已整併至 2026-09-07 Batch 8 Projection closeout；latest runtime implementation lineage = `4848f8e00732e614b58fe20c45e25837da5fe166`，`CURRENT_APP_VERSION = 3.5.3`，`~/cyj-new` 為唯一正式 Source of Truth。docs-only closeout commit 不改變 runtime lineage；各功能的部署／Production Confirmation 仍以 `CURRENT_STATE.md` 為準。
 > 禁止以舊對話、舊版檔案、AI 記憶或未提供的檔案補足事實。
 > 無法由目前正式程式確認的內容，必須標記為「未由目前正式來源確認」。
 
@@ -893,7 +893,7 @@ runtime policy / preference / reply mode 由 `functions/index.js` 注入。
 
 # 17. Firebase Functions
 
-正式 `functions/index.js` 目前匯出的 functions：
+早期基線列出的主要 `functions/index.js` exports 如下；後續 Batch（含 Device Security、Lifecycle、Target Coverage、System Exclusion、Projection 等）另有新增，完整 current export list 必須以目前正式 `functions/index.js` 與本文件後續 owner sections 為準：
 
 - `resolveLoginLocation`
 - `aggregateLegacyReports`
@@ -2849,3 +2849,151 @@ CYJ Store Health UI  = PASS
 Brand isolation      = PASS
 Console regression   = PASS
 ```
+
+# 37. Batch 8 Projection Model Runtime Owners（PRODUCTION CONFIRMED）
+
+## Backend Projection Authority
+
+```text
+functions/projectionAuthority.js
+```
+
+責任：
+
+```text
+previous 3 complete months
+→ daily_reports bounded range query
+→ Formal KPI
+→ Lifecycle / Reporting Calendar / System Exclusion authority
+→ canonical Store × Date sample
+→ reliable weekday median
+→ projection_models/current
+```
+
+Backend exports：
+
+```text
+rebuildProjectionModelNow
+calculateHistoricalProjectionCurve
+```
+
+`calculateHistoricalProjectionCurve` 是保留的 scheduled export 名稱；legacy `settings/projection_curves/stores` writer 已退場。
+
+Rules owner：
+
+```text
+firestore.rules
+```
+
+`projection_models`：
+
+```text
+signed-in read
+client write = false
+Admin SDK writer only
+```
+
+Regression owner：
+
+```text
+tests/projectionAuthority.test.js
+```
+
+## Dashboard Projection Consumer
+
+```text
+src/utils/projectionModelConsumer.js
+src/hooks/useDashboardStats.js
+tests/dashboardProjectionConsumer.test.js
+```
+
+Runtime source：
+
+```text
+Current Detail Formal actual
++ projection_models/current single point read
++ existing Lifecycle / System Exclusion state
+→ trusted current-month Projection
+```
+
+禁止重新接回：
+
+```text
+Dashboard broad getDocs(projection_curves/stores)
+```
+
+Current-month activation：
+
+```text
+projection model point read = max 1
+listener = 0
+polling = 0
+```
+
+## Telegram Projection Consumer
+
+```text
+functions/telegram/projectionConsumer.js
+functions/index.js → loadTelegramAgentProjectionAuthority()
+functions/index.js → getStorePerformance()
+tests/telegramProjectionConsumer.test.js
+```
+
+Current MTD authority point docs：
+
+```text
+projection_models/current
+store_lifecycle/master
+audit_exclusions
+```
+
+讀取拓撲：
+
+```text
+db.getAll(...) RPC = 1
+billed documents    = max 3 / execution / brand
+execution cache     = yes
+listener / polling  = 0 / 0
+historical raw 3-month recompute in consumer = 0
+```
+
+Formal scope：
+
+```text
+Lifecycle Eligible
+AND NOT System Excluded
+```
+
+Explicit store lookup outside Formal scope：
+
+```text
+direct visibility may remain
+historical Projection baseline = forbidden
+fallback = current pace
+```
+
+Non-Current-MTD store range 不使用 Projection Model。
+
+Therapist owner slice 在 Batch 8C 有 SHA regression guard，維持既有 Therapist projection 行為。
+
+## Batch 8 commit lineage
+
+```text
+8A a1fef9adec31a16c439b80143ece4c8191596d02
+   feat: establish projection model authority
+
+8B 78c32b6d01ac2a6ebecab07bcf88f449ed3df4dc
+   feat: cut over dashboard projection model consumer
+
+8C 4848f8e00732e614b58fe20c45e25837da5fe166
+   feat: cut over Telegram store projection consumer
+```
+
+Batch 8C Production deploy scope：
+
+```text
+telegramWebhook
+notificationPatrol
+```
+
+Documentation closeout 不改 runtime source、不提高 `CURRENT_APP_VERSION`、不需 runtime deploy。

@@ -1049,3 +1049,170 @@ Active Alert 現有 flow 仍會把 System Exclusion set 與 `active_alert` polic
 ## Reads
 
 Stage C 沒有為 Telegram 增加 polling / persistent listener。Telegram backend 仍在既有 request / job scope 讀必要 brand settings；System Exclusion 的 Frontend single-doc listener是 App runtime authority，不應複製到 Telegram Agent backend。
+
+# 48. Batch 8C Store Projection Model Consumer（PRODUCTION CONFIRMED）
+
+Batch 8C 只切換 **Store KPI / Current MTD** 的月底 Projection consumer；不改 Therapist Projection。
+
+正式 owners：
+
+```text
+functions/telegram/projectionConsumer.js
+functions/index.js → loadTelegramAgentProjectionAuthority()
+functions/index.js → getStorePerformance()
+tests/telegramProjectionConsumer.test.js
+```
+
+## Current MTD activation
+
+Projection Model 只在：
+
+```text
+startDate = current month day 1
+endDate   = current month date <= today
+```
+
+啟用。
+
+非 Current-MTD range：
+
+```text
+projection_models/current = not applicable
+```
+
+## Actual authority remains Formal KPI
+
+Store actual / target / achievement 仍服從既有 Formal contract。
+
+```text
+actual source authority
+≠
+Projection source authority
+```
+
+Tool source metadata 明確區分：
+
+```text
+Store KPI actual      = existing Formal store source
+month-end Projection  = projection_models/current (Current MTD only)
+```
+
+不能拿 Projection 覆寫 actual。
+
+## Authority read topology
+
+Current MTD 每 execution / brand 讀：
+
+```text
+projection_models/current
+store_lifecycle/master
+audit_exclusions
+```
+
+使用：
+
+```text
+db.getAll(...)
+```
+
+所以：
+
+```text
+RPC                    = 1 BatchGet
+billed point reads     = max 3
+in-execution cache     = yes
+persistent listener    = 0
+polling                = 0
+consumer 3-month Raw scan = 0
+```
+
+## Trust / fallback
+
+Telegram 與 Dashboard Projection trust 維持 parity：
+
+```text
+projection-model-v1
+projection-semantic-v1
+KPI contract
+brand / month / source months
+Lifecycle revision
+Reporting Calendar source-month revisions
+System Exclusion snapshot
+payload completeness
+```
+
+Model stale / missing：
+
+```text
+historical weighting = disabled
+current pace only
+```
+
+## Formal scope / explicit store visibility
+
+Current-MTD aggregate scope：
+
+```text
+Lifecycle Eligible
+AND NOT System Excluded
+```
+
+Telegram policy exclusions 仍只能在 Formal scope 之上再縮小，不可 re-include System Excluded store。
+
+若 explicit store lookup 指向不在 Formal scope 的店：
+
+```text
+direct visibility可以依既有授權保留
+store / brand historical Projection baseline不可使用
+→ OUTSIDE_FORMAL_SCOPE_CURRENT_PACE
+```
+
+這與 excluded own-store self-view 的全系統規則一致。
+
+## Consumer parity
+
+Regression 明確要求同一 model + rows 下：
+
+```text
+Dashboard projection
+=
+Telegram projection
+```
+
+涵蓋：
+
+```text
+cash projection
+accrual projection
+conservative / standard / aggressive range
+blend profile
+VALID_ZERO
+Reporting Calendar closed future day
+System Exclusion authority
+```
+
+## Therapist boundary
+
+Batch 8C 沒有修改 Therapist Projection owner。
+
+Regression 使用 owner-slice SHA guard，避免未來 Store Projection refactor 默默改到 Therapist path。
+
+## Production confirmation
+
+正式 `telegramWebhook` 已以 Current-MTD query 驗證：
+
+```text
+Formal cash actual     PASS
+Formal accrual actual  PASS
+cash achievement       PASS
+month-end cash forecast PASS
+```
+
+Batch 8C targeted runtime deploy：
+
+```text
+telegramWebhook
+notificationPatrol
+```
+
+沒有因本次變更全量部署 Telegram / Functions。

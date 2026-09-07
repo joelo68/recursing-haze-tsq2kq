@@ -2024,3 +2024,139 @@ reporting completeness
 # 30. Documentation Source Path Rule
 
 Canonical Project Knowledge Base 是 `docs/*.md`。Root / `functions/` 歷史 copies 不可跨版本拼接回 canonical docs。
+
+# 31. Projection Authority Development Contract — Batch 8
+
+修改月底 Projection 前，不得只改 `useDashboardStats.js` 或 Telegram prompt。
+
+先讀：
+
+```text
+functions/projectionAuthority.js
+src/utils/projectionModelConsumer.js
+functions/telegram/projectionConsumer.js
+src/hooks/useDashboardStats.js
+functions/index.js
+functions/storeLifecycle.js
+functions/systemExclusionContract.js
+src/utils/storeLifecycle.js
+src/utils/systemExclusion.js
+firestore.rules
+```
+
+Regression owners：
+
+```text
+tests/projectionAuthority.test.js
+tests/dashboardProjectionConsumer.test.js
+tests/telegramProjectionConsumer.test.js
+```
+
+## Writer / consumer separation
+
+正式設計：
+
+```text
+previous 3-month Raw scan
+→ Backend Projection writer only
+
+Dashboard / Telegram consumers
+→ projection_models/current
+→ bounded authority point reads
+```
+
+禁止為了 consumer 正確性重新讓 Dashboard / Telegram 每次掃 previous 3 months Raw。
+
+## Legacy curve retirement
+
+Dashboard 不得重新引入：
+
+```text
+settings/projection_curves/stores
+getDocs(...)
+```
+
+`calculateHistoricalProjectionCurve` export 名稱仍存在，但現在指向 Projection Model Authority implementation；不要因名稱舊就把 legacy curve writer 拼回去。
+
+## Trust is mandatory
+
+Model 存在不等於可信。
+
+修改 trust 邏輯時至少維持：
+
+```text
+schema / semantic / KPI
+brand / month / source months
+Lifecycle revision
+Reporting Calendar month revisions
+System Exclusion snapshot
+payload completeness
+```
+
+任一 stale：
+
+```text
+current pace fail-closed
+```
+
+## VALID_ZERO
+
+可靠 weekday baseline：
+
+```text
+baseline = 0
+sampleCount >= 3
+reliable = true
+valueStatus = VALID_ZERO
+```
+
+是有效歷史訊號，不可因 `> 0` 判斷而丟掉。
+
+## System Exclusion / self-view
+
+Formal Projection scope：
+
+```text
+Lifecycle Eligible
+AND NOT System Excluded
+```
+
+Excluded own-store self-view 不得因可以看自己的 actual，就恢復 store / brand historical baseline。
+
+## Read-cost guard
+
+新增 Projection read 前，必須先回答是否破壞：
+
+```text
+Dashboard: 1 projection model point read / current brand-month activation
+Telegram : max 3 authority point docs / execution / brand + execution cache
+listener : 0
+polling  : 0
+```
+
+## Minimum validation
+
+若修改 Backend writer：
+
+```bash
+node --check functions/projectionAuthority.js
+node --check functions/index.js
+node --test tests/projectionAuthority.test.js
+```
+
+若修改 Dashboard consumer：
+
+```bash
+node --test tests/dashboardProjectionConsumer.test.js
+npm run build
+```
+
+若修改 Telegram Store Projection：
+
+```bash
+node --check functions/telegram/projectionConsumer.js
+node --check functions/index.js
+node --test tests/telegramProjectionConsumer.test.js
+```
+
+跨 writer / Dashboard / Telegram semantics 的改動，三組 regression 都要跑。

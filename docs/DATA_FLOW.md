@@ -1146,7 +1146,7 @@ Projection
 Telegram
 ```
 
-因此 Lifecycle 建置不會改變現行 KPI 數字；正式 consumer cutover 必須在後續 Batch 重新驗證後才進行。
+此段記錄的是 Lifecycle Foundation 當時的 pre-cutover 邊界。後續 consumer 已分 Batch 完成切換；Batch 8 的 Projection Model writer、Dashboard current-month Projection 與 Telegram Current-MTD Store Projection 已正式使用 Lifecycle / Reporting Calendar authority。最新流程以本文件後續 Batch addendum 與 `CURRENT_STATE.md` 為準。
 
 # 40. Target Coverage Self-healing Flow — Batch 3（PRODUCTION CONFIRMED）
 
@@ -1944,3 +1944,127 @@ new broad query = 0
 ```
 
 正常畫面重用既有 Settings / Summary / System Exclusion state；歷史 controlled backfill 是低頻 maintenance operation，不是 render-time read path。
+
+# 45. Batch 8 Projection Model Authority Flow（PRODUCTION CONFIRMED）
+
+## Historical baseline writer
+
+```text
+modelMonth
+→ previous 3 complete months
+→ bounded daily_reports range query
+→ normalize canonical Store Identity
+→ Formal net cash / Formal accrual
+→ Lifecycle eligible Store × Date
+→ Reporting Calendar operating date
+→ remove System Excluded stores
+→ duplicate canonical Store × Date fail closed
+→ weekday median (min 3 samples)
+→ projection_models/current
+```
+
+發布前 race guard：
+
+```text
+initial Lifecycle + System Exclusion snapshot
+→ build model
+→ transaction re-read current Lifecycle + System Exclusion
+→ snapshot unchanged?
+    YES → publish current
+    NO  → abort / do not publish stale model
+```
+
+這是 low-frequency Backend writer，不是 render-time polling。
+
+## Dashboard current-month flow
+
+```text
+Current Detail Formal actual
++ projection_models/current (1 point read)
++ current Lifecycle state
++ current System Exclusion state
+→ inspectProjectionModelTrust()
+    trusted
+      → store weekday baseline
+      → reliable store missing → reliable brand baseline
+      → current/history blend
+      → future operating-day projection
+    stale / missing
+      → current pace only
+```
+
+Reporting Calendar closed future dates：
+
+```text
+not expected operating date
+→ skip future projected store-day
+```
+
+System Excluded own-store self-view：
+
+```text
+own actual may remain visible
+brand historical baseline forbidden
+→ current pace only
+```
+
+Historical settled Dashboard month：
+
+```text
+trusted Summary / Formal actual
+→ final actual
+```
+
+不使用 `projection_models/current` 回推已結算月份。
+
+## Telegram Current-MTD store flow
+
+```text
+getStorePerformance()
+→ detect Current MTD
+→ load current store data using existing Formal KPI authority
+→ db.getAll(
+     projection_models/current,
+     store_lifecycle/master,
+     audit_exclusions
+   )
+→ build Formal Projection scope
+→ inspect model trust
+→ per-store Projection
+→ aggregate Projection range
+→ Telegram tool result / final answer
+```
+
+Reads：
+
+```text
+authority docs        = max 3 / execution / brand
+BatchGet RPC          = 1
+execution cache       = yes
+new listener          = 0
+new polling           = 0
+3-month raw recompute = 0
+```
+
+Formal aggregate：
+
+```text
+Lifecycle Eligible
+AND NOT System Excluded
+```
+
+Explicit excluded-store lookup：
+
+```text
+direct store visibility may remain
+historical Projection baseline = denied
+current pace fallback
+```
+
+Non-Current-MTD Telegram range：
+
+```text
+Projection Model = not applicable
+```
+
+Therapist projection 不在 Batch 8C flow 內，維持既有 owner。

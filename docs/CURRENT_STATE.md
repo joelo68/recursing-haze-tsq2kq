@@ -2,7 +2,231 @@
 
 > 用途：記錄「目前正式環境已確認到哪個狀態」。這不是 CHANGELOG。  
 > 優先順序：使用者提供的目前正式部署 source > 本檔案 > 其他 Knowledge Base 文件。  
-> 最後整併更新：**2026-09-05（UTC+8）**。
+> 最後整併更新：**2026-09-07（UTC+8）**。
+
+# Latest Production Runtime Override — 2026-09-07（Batch 8 Projection Model Authority / Dashboard + Telegram Consumer）
+
+> 本節是目前最高優先的 Projection Production runtime 狀態。下方 2026-09-05 與更早 Batch 章節保留各自當時 evidence；若語意衝突，以目前正式 source、Production readback 與本節為準。
+
+正式 runtime source：
+
+```text
+Official working directory    = ~/cyj-new
+branch                        = main
+Runtime implementation commit = 4848f8e00732e614b58fe20c45e25837da5fe166
+CURRENT_APP_VERSION           = 3.5.3（未提高）
+
+Batch 8A                      = a1fef9adec31a16c439b80143ece4c8191596d02
+                               feat: establish projection model authority
+Batch 8B                      = 78c32b6d01ac2a6ebecab07bcf88f449ed3df4dc
+                               feat: cut over dashboard projection model consumer
+Batch 8C                      = 4848f8e00732e614b58fe20c45e25837da5fe166
+                               feat: cut over Telegram store projection consumer
+```
+
+## Projection Model Authority v1
+
+正式 Backend owner：
+
+```text
+functions/projectionAuthority.js
+```
+
+正式 model contract：
+
+```text
+schemaVersion   = projection-model-v1
+semanticVersion = projection-semantic-v1
+document id     = current
+source months   = previous 3 complete calendar months
+minimum reliable weekday samples = 3
+```
+
+Physical collection 依品牌 resolver 隔離：
+
+```text
+CYJ
+artifacts/{appId}/public/data/projection_models/current
+
+安妞 / 伊啵
+brands/{brandId}/projection_models/current
+```
+
+Model writer 使用：
+
+```text
+daily_reports
++ Formal KPI contract
++ Store Lifecycle READY cohort
++ Reporting Calendar
++ System Exclusion
+→ canonical Store × Date samples
+→ weekday median baseline
+→ projection_models/current
+```
+
+同一 canonical Store × Date 若有 duplicate logical rows，Projection Model fail closed，不直接相加或任選一筆。
+
+`VALID_ZERO` 是有效數值；可靠歷史 baseline 為 0 時保留真實 0，不當成 missing。
+
+Writer 在發布前以 transaction 再讀 Lifecycle / System Exclusion authority；若 authority 在 rebuild 期間變更，本次不發布舊 snapshot。
+
+Firestore Rules：
+
+```text
+signed-in client read = allowed
+client write           = forbidden
+Backend Admin SDK      = writer authority
+```
+
+Functions：
+
+```text
+rebuildProjectionModelNow
+→ POST only
+→ Firebase request auth
+→ highest-admin / Trusted Device credential verification
+→ secure manual rebuild
+
+calculateHistoricalProjectionCurve
+→ 保留既有 export 名稱
+→ implementation 已切到 Projection Model Authority
+→ 每月 1 日 03:00 Asia/Taipei
+```
+
+## Dashboard Projection Consumer — Batch 8B
+
+正式 owners：
+
+```text
+src/utils/projectionModelConsumer.js
+src/hooks/useDashboardStats.js
+tests/dashboardProjectionConsumer.test.js
+```
+
+Current-month Dashboard：
+
+```text
+Current Detail Formal actual
++ projection_models/current
++ current Lifecycle
++ current Reporting Calendar
++ current System Exclusion
+→ current-month projection
+```
+
+讀取拓撲：
+
+```text
+projection_models/current = 1 point read / current brand-month activation
+new listener               = 0
+new polling                = 0
+legacy projection_curves Dashboard read = retired
+```
+
+Model 只有在 schema / semantic / KPI contract / brand / model month / source months /
+Lifecycle revision / Reporting Calendar month revisions / System Exclusion snapshot 全部可信時才使用。
+
+任何 trust failure：
+
+```text
+→ fail closed
+→ historyWeight = 0
+→ currentWeight = 1
+→ 只依本月 current pace
+```
+
+System Excluded own-store self-view 可以看自己的 current actual，但不得使用 brand-level historical baseline；若不在 Formal scope，Projection 只走 current pace。
+
+Historical Dashboard 已結算月份不使用 Projection Model 回推歷史預估；仍以 trusted Summary / Formal actual 為準。
+
+## Telegram Store Projection Consumer — Batch 8C
+
+正式 owners：
+
+```text
+functions/telegram/projectionConsumer.js
+functions/index.js → getStorePerformance()
+tests/telegramProjectionConsumer.test.js
+```
+
+只對 **Current MTD** store-performance range 套用 Projection Model：
+
+```text
+YYYY-MM-01 → today / current cutoff
+```
+
+Current-MTD actual 仍使用 Formal KPI authority；Projection 才使用 `projection_models/current`。
+
+Telegram 每個 execution / brand 最多新增：
+
+```text
+projection_models/current
+store_lifecycle/master
+audit_exclusions
+= 3 point documents
+```
+
+三份 authority 使用同一 `db.getAll(...)` BatchGet RPC；billed reads 仍為 3。
+同一 execution / brand-month 使用 promise cache，重複 consumer call 不再重讀三份 authority。
+
+Formal aggregate scope：
+
+```text
+Lifecycle Eligible
+AND NOT System Excluded
+```
+
+Explicit excluded own-store lookup 可以保留直接可視性，但不得使用 store / brand historical Projection baseline，只能 current pace fail-closed。
+
+非 Current-MTD range 不套用 Projection Model；Therapist Projection consumer 在 Batch 8C 明確維持不變。
+
+## Production validation / deployment / confirmation
+
+Batch 8C official promotion：
+
+```text
+Targeted regression        = 79 / 79 PASS
+Full repository regression = 536 / 536 PASS
+Functions syntax           = PASS
+npm run build              = PASS
+exact validated patch      = PASS
+CURRENT_APP_VERSION        = 3.5.3 unchanged
+```
+
+Batch 8C scoped Production deploy：
+
+```text
+telegramWebhook      = DEPLOYED / Successful update
+notificationPatrol   = DEPLOYED / Successful update
+
+Frontend / Hosting   = no Batch 8C deploy required
+Firestore Rules      = no Batch 8C redeploy required
+Projection writer    = no Batch 8C redeploy required
+```
+
+Production Telegram Current-MTD smoke 已確認：
+
+```text
+Formal cash actual       PASS
+Formal accrual actual    PASS
+cash achievement         PASS
+month-end cash projection PASS
+Current-MTD Agent routing PASS
+```
+
+Final Batch 8 status：
+
+```text
+IMPLEMENTED             = YES
+VALIDATED               = YES
+COMMITTED               = YES
+PUSHED                  = YES
+DEPLOYED                 = YES
+PRODUCTION CONFIRMED    = YES
+CURRENT_APP_VERSION     = 3.5.3 unchanged
+DOCUMENTATION IMPACT    = CLOSED by this docs-only closeout
+```
 
 # Latest Production Runtime Override — 2026-09-05（System Exclusion Store Self-View）
 

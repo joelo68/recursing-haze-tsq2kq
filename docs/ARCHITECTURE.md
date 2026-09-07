@@ -1,7 +1,7 @@
 # ARCHITECTURE.md
 
 > 本文件描述目前正式部署版本的系統架構。  
-> 已整併至 2026-09-05 System Exclusion Store Self-View closeout。
+> 已整併至 2026-09-07 Batch 8 Projection Model Authority / Dashboard + Telegram consumer closeout。
 > `CURRENT_STATE.md` 專門區分「已正式確認」、「待部署」與「Production 觀察中」的 Security 工作。
 
 # 1. 高階架構
@@ -807,3 +807,121 @@ docs/*.md
 ```
 
 Root 與 `functions/` 下仍可存在歷史副本；它們不得在沒有最新 source gate 的情況下覆蓋 canonical docs。
+
+# 21. Projection Model Authority — Batch 8
+
+Batch 8 把「月底推估」從各 consumer 自己維護歷史曲線，收斂成 Backend-owned derived authority。
+
+```text
+previous 3 complete months daily_reports
+    │
+    ├─ Formal KPI contract
+    ├─ Store Lifecycle
+    ├─ Reporting Calendar
+    └─ System Exclusion
+    ▼
+functions/projectionAuthority.js
+    ▼
+projection_models/current
+    ├─ Dashboard current-month consumer
+    └─ Telegram Current-MTD store consumer
+```
+
+## 21.1 Backend writer
+
+Owner：
+
+```text
+functions/projectionAuthority.js
+```
+
+正式 export：
+
+```text
+rebuildProjectionModelNow
+calculateHistoricalProjectionCurve
+```
+
+`calculateHistoricalProjectionCurve` 保留舊 export 名稱，但 implementation 已不再寫 legacy `settings/projection_curves/stores`。
+
+Writer 只建立 Backend derived model；Firestore client write 被 Rules 封鎖。
+
+## 21.2 Model trust boundary
+
+Consumer 不因文件存在就直接信任。
+
+至少驗證：
+
+```text
+projection-model-v1
+projection-semantic-v1
+kpi-contract-v1
+brandId
+modelMonth
+previous 3 sourceMonths
+Lifecycle READY + revision
+Reporting Calendar source-month revisions
+System Exclusion snapshot
+model payload completeness
+```
+
+任一 authority stale / missing：
+
+```text
+historical model = untrusted
+→ current pace fallback
+```
+
+這是 fail-closed correctness boundary，不是 UI fallback。
+
+## 21.3 Dashboard consumer
+
+Owners：
+
+```text
+src/utils/projectionModelConsumer.js
+src/hooks/useDashboardStats.js
+```
+
+Current-month Dashboard 只做一個 `projection_models/current` point read，不建立 listener / polling。
+目前實績仍由 Current Detail Formal authority 提供；Projection Model 只提供未來 operating days 的歷史 weekday baseline。
+
+未來日期會再經 Lifecycle / Reporting Calendar 判斷，關店日不應被當成應營運日估算。
+
+System Excluded own-store self-view 不能吃 brand historical baseline，避免 self-view 例外重新引入 Formal aggregate scope。
+
+## 21.4 Telegram consumer
+
+Owners：
+
+```text
+functions/telegram/projectionConsumer.js
+functions/index.js → getStorePerformance()
+```
+
+只在 Current MTD 套用 Projection Model。每 execution / brand 以單次 BatchGet 讀：
+
+```text
+projection_models/current
+store_lifecycle/master
+audit_exclusions
+```
+
+billed reads = 3 documents；execution cache 避免同一 brand-month 重複讀取。
+
+Store actual / target / achievement 仍服從 Formal KPI / Target authority；Projection authority 不可覆寫 actual。
+
+## 21.5 Consumer parity
+
+Dashboard 與 Telegram 有 regression contract，要求：
+
+```text
+same model trust semantics
+same current/history blend profile
+same VALID_ZERO behavior
+same Lifecycle future-day skip
+same System Exclusion fail-closed boundary
+same Projection range math
+```
+
+Therapist Projection 不在 Batch 8C 範圍內。

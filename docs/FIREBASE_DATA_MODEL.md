@@ -1615,9 +1615,9 @@ therapist_daily_reports
 
 # 19. Store Lifecycle v1 — Batch 1 Production Foundation / Batch 1.1 Boundary Correction
 
-> 2026-08-27：Batch 1 Store Lifecycle Foundation 與 Batch 1.1「Existing Store Lifecycle Boundary Fix」均已完成部署與 production confirmation。Batch 3 開始只把 Lifecycle `READY` monthly cohort 接入 Target Coverage authority；Dashboard / Ranking / Annual / Regional / Projection / Telegram 等其他 KPI consumer 仍依後續 Batch 分階段切換。
+> 2026-08-27：Batch 1 Store Lifecycle Foundation 與 Batch 1.1「Existing Store Lifecycle Boundary Fix」完成時，只有 Target Coverage 開始使用 Lifecycle `READY` monthly cohort；該段屬當時歷史狀態。後續 Batch 已逐步切入更多 Formal consumers。Batch 8 的 Projection Model writer、Dashboard Projection consumer 與 Telegram Current-MTD Store Projection consumer 已正式使用 Lifecycle / Reporting Calendar authority。
 
-Store Lifecycle 是獨立於 `org_structure` 的品牌層級 Master，用來保存正式門市 KPI eligibility 與實際營運日期邊界；目前 Dashboard / Ranking / Annual / Regional / Projection / Telegram consumer 仍未切換讀取它。
+Store Lifecycle 是獨立於 `org_structure` 的品牌層級 Master，用來保存正式門市 KPI eligibility 與實際營運日期邊界。各 consumer 的最新切換狀態必須以本文件後續 addendum、`CURRENT_STATE.md` 與目前正式 source 為準，不得沿用「Projection / Telegram 尚未切換」的舊描述。
 
 Physical path：
 
@@ -2318,3 +2318,168 @@ brands/{brandId}/dashboard_summary/{YYYY-MM}
 ```
 
 Batch 6B 沒有新增 Store Health collection、listener、polling 或 render-time broad query。
+
+# 24. `projection_models/current` — Batch 8 Projection Model Authority（PRODUCTION CONFIRMED）
+
+**類型：Derived Data / Backend-owned Projection Authority**
+
+Physical path：
+
+```text
+CYJ
+artifacts/{appId}/public/data/projection_models/current
+
+安妞 / 伊啵
+brands/{brandId}/projection_models/current
+```
+
+Writer owner：
+
+```text
+functions/projectionAuthority.js
+```
+
+Consumers：
+
+```text
+Dashboard current-month:
+src/utils/projectionModelConsumer.js
+src/hooks/useDashboardStats.js
+
+Telegram Current MTD store projection:
+functions/telegram/projectionConsumer.js
+functions/index.js
+```
+
+## Contract
+
+Top-level authority metadata 至少包括：
+
+```text
+schemaVersion
+semanticVersion
+kpiContractVersion
+brandId
+modelMonth
+sourceMonths
+sourceRange
+authority
+lifecycleEligibleStoreKeysByMonth
+excludedStoreKeys
+brand
+stores
+sourceStats
+trigger
+generatedAt / generatedAtText
+```
+
+目前固定 contract：
+
+```text
+schemaVersion   = projection-model-v1
+semanticVersion = projection-semantic-v1
+sourceMonths    = modelMonth 前 3 個完整月份
+```
+
+`authority` 至少保存：
+
+```text
+lifecycleRevision
+lifecycleDatasetStatus
+reportingCalendarSchemaVersion
+reportingCalendarMasterRevision
+reportingCalendarMonthRevisions
+systemExclusionSnapshot
+```
+
+Store payload：
+
+```text
+stores.{storeKey}.storeKey
+stores.{storeKey}.canonicalStoreName
+stores.{storeKey}.cashWeekday
+stores.{storeKey}.accrualWeekday
+```
+
+Brand fallback：
+
+```text
+brand.cashWeekday
+brand.accrualWeekday
+```
+
+Weekday point：
+
+```text
+sampleCount
+reliable
+baseline
+valueStatus
+```
+
+可靠 baseline 必須至少 3 個 samples。
+Numeric zero baseline 可以是：
+
+```text
+valueStatus = VALID_ZERO
+baseline    = 0
+reliable    = true
+```
+
+不得把它改寫成 missing。
+
+## Writer input / fail-closed
+
+Model source：
+
+```text
+bounded daily_reports range
++ Formal KPI contract
++ Lifecycle eligible cohort
++ Reporting Calendar operating dates
++ System Exclusion
+```
+
+同一 canonical Store × Date 必須只有一個 logical row；duplicate logical rows 不直接 sum / choose，該 sample fail closed。
+
+發布前 transaction 再讀 Lifecycle + System Exclusion current authority。
+若 snapshot 與 rebuild 起點不同：
+
+```text
+PROJECTION_AUTHORITY_CHANGED
+→ current model 不被舊 snapshot 覆寫
+```
+
+## Rules
+
+`firestore.rules` 明確保護兩種品牌 root：
+
+```text
+allow read: if signedIn()
+allow write: if false
+```
+
+因此 browser / frontend 只可讀；正式寫入由 Admin SDK writer 執行。
+
+## Read boundary
+
+Dashboard：
+
+```text
+projection_models/current = 1 point read / current brand-month activation
+listener = 0
+polling = 0
+```
+
+Telegram Current MTD：
+
+```text
+projection_models/current
+store_lifecycle/master
+audit_exclusions
+→ one db.getAll(...)
+→ billed max 3 docs / execution / brand
+→ in-execution brand-month cache
+```
+
+Projection consumer 不應自行重掃 previous 3 months Raw。

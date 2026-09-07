@@ -1403,3 +1403,101 @@ new broad Store Health query = 0
 ```
 
 正常 verified historical仍 Summary-first；dirty / missing / unverified 仍保留 correctness fallback。
+
+# 32. Batch 8B Current-Month Projection Authority（PRODUCTION CONFIRMED）
+
+Projection 與 Historical Summary trust 是兩個不同 authority。
+
+```text
+Historical Summary
+→ 決定已結算月份 actual / ranking / historical presentation 是否可信
+
+Projection Model
+→ 只提供 current-month 未來營運日的 historical weekday baseline
+```
+
+因此不能因為新增 `projection_models/current`，就把當月 Dashboard 改成 Summary-first actual。
+
+## Current-month actual
+
+仍是：
+
+```text
+Current Detail Formal authority
+→ current known actual
+```
+
+Projection consumer 不可覆寫 Formal actual / target / achievement。
+
+## Historical baseline
+
+Current-month Dashboard 每 brand-month activation：
+
+```text
+getDoc(projection_models/current)
+= 1 point read
+```
+
+不再：
+
+```text
+getDocs(settings/projection_curves/stores)
+```
+
+也不新增 listener / polling。
+
+## Trust
+
+Model 只有在下列 authority 同步時才使用：
+
+```text
+schema / semantic / KPI contract
+brand / model month / previous 3 source months
+Lifecycle READY + revision
+Reporting Calendar source-month revisions
+System Exclusion snapshot
+model payload
+```
+
+stale / missing：
+
+```text
+currentWeight = 1
+historyWeight = 0
+→ current pace fallback
+```
+
+不得拿不可信 model 繼續做 historical weighting。
+
+## Future operating dates
+
+Projection 逐 store future day 計算前會使用 Lifecycle / Reporting Calendar。
+
+```text
+closed future date
+→ skip
+```
+
+不需要建立 fake zero daily report 來代表店休。
+
+## System Exclusion self-view
+
+Excluded own-store store account 的 Dashboard self-view：
+
+```text
+actual visibility may remain
+Formal aggregate eligibility remains false
+brand Projection fallback remains disabled
+```
+
+因此 self-view exception 不會透過 Projection Model 洩漏／重新引入品牌 Formal aggregate scope。
+
+## Historical month boundary
+
+歷史 verified Dashboard：
+
+```text
+projection = settled Formal actual
+```
+
+Batch 8B 不使用 current Projection Model 重算歷史已結算月份。
