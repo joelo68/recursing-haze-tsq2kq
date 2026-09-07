@@ -16,6 +16,16 @@ const {
   aggregateTelegramFormalRows,
 } = require("./telegram/formalKpi");
 const {
+  PROJECTION_MODEL_DOC_ID: TELEGRAM_PROJECTION_MODEL_DOC_ID,
+  inspectTelegramProjectionModelTrust,
+  buildTelegramProjectionFromModel,
+  buildTelegramProjectionAuthorityScope,
+  isTelegramProjectionCurrentMonthToDateRange,
+  resolveTelegramProjectionDaysPassed,
+  aggregateTelegramProjectionRows,
+} = require("./telegram/projectionConsumer");
+
+const {
   resolveTargetAuthorityConflict,
 } = require("./targetAuthorityConflict");
 
@@ -3360,6 +3370,122 @@ function calculateTelegramAgentProjection(total, yearMonth, endDate = "") {
     return day > 0 ? Math.round((Number(total) || 0) / day * daysInMonth) : 0;
 }
 
+
+async function loadTelegramAgentProjectionAuthority(brandId, yearMonth, ctx) {
+    const normalizedBrandId = normalizeTelegramAgentBrandId(brandId);
+    const normalizedYearMonth = normalizeTelegramAgentYearMonth(yearMonth);
+    if (!normalizedBrandId || !normalizedYearMonth) {
+        return {
+            model: null,
+            modelTrusted: false,
+            trustReason: "INVALID_SCOPE",
+            scopeReady: false,
+            lifecycleEntryMap: new Map(),
+            formalScopeStoreSet: new Set(),
+            systemExcludedStoreSet: new Set(),
+        };
+    }
+
+    const cacheKey = `${normalizedBrandId}:${normalizedYearMonth}`;
+    let promiseMap = null;
+    if (ctx) {
+        if (!Object.prototype.hasOwnProperty.call(ctx, "_telegramProjectionAuthorityPromises")) {
+            Object.defineProperty(ctx, "_telegramProjectionAuthorityPromises", {
+                value: {},
+                enumerable: false,
+                configurable: false,
+                writable: false,
+            });
+        }
+        promiseMap = ctx._telegramProjectionAuthorityPromises;
+        if (promiseMap[cacheKey]) {
+            const cached = await promiseMap[cacheKey];
+            return { ...cached, executionCacheHit: true, pointReadsThisCall: 0 };
+        }
+    }
+
+    const loadPromise = (async () => {
+        const projectionRef = getSummaryCollection(normalizedBrandId, "projection_models").doc(TELEGRAM_PROJECTION_MODEL_DOC_ID);
+        const lifecycleRef = getSummaryCollection(normalizedBrandId, "store_lifecycle").doc("master");
+        const exclusionRef = getAuditExclusionsDocRef(normalizedBrandId);
+
+        // 三份 authority 用同一個 BatchGet RPC 取得 coherent point-in-time snapshot；
+        // billed reads 仍是 3 documents。ctx promise cache 避免同一 execution/brand 重複讀取。
+        assertTelegramAgentReadBudget(ctx, 3);
+        const [projectionSnap, lifecycleSnap, exclusionSnap] = await db.getAll(
+            projectionRef,
+            lifecycleRef,
+            exclusionRef
+        );
+        recordTelegramAgentRead(ctx, 1, "projection_models_current", {
+            brandId: normalizedBrandId,
+            yearMonth: normalizedYearMonth,
+            sourcePath: projectionRef.path,
+        });
+        recordTelegramAgentRead(ctx, 1, "store_lifecycle_projection", {
+            brandId: normalizedBrandId,
+            yearMonth: normalizedYearMonth,
+            sourcePath: lifecycleRef.path,
+        });
+        recordTelegramAgentRead(ctx, 1, "audit_exclusions_projection", {
+            brandId: normalizedBrandId,
+            yearMonth: normalizedYearMonth,
+            sourcePath: exclusionRef.path,
+        });
+
+        const model = projectionSnap.exists ? (projectionSnap.data() || {}) : null;
+        const lifecycleMaster = lifecycleSnap.exists ? (lifecycleSnap.data() || {}) : null;
+        const systemExclusionProfile = normalizeStoredSystemExclusionProfile(
+            exclusionSnap.exists ? (exclusionSnap.data() || {}) : {},
+            normalizedBrandId,
+            normalizeSummaryCoreName
+        );
+        const scope = buildTelegramProjectionAuthorityScope({
+            lifecycleMaster,
+            systemExclusionProfile,
+            brandId: normalizedBrandId,
+            yearMonth: normalizedYearMonth,
+            normalizeStoreKey: normalizeSummaryCoreName,
+        });
+        const trust = inspectTelegramProjectionModelTrust({
+            model,
+            brandId: normalizedBrandId,
+            modelMonth: normalizedYearMonth,
+            lifecycleMaster,
+            systemExclusionProfile,
+            normalizeStoreKey: normalizeSummaryCoreName,
+        });
+
+        return {
+            model: trust.trusted ? model : null,
+            rawModel: model,
+            modelTrusted: trust.trusted === true,
+            trustReason: trust.reason || "MODEL_UNTRUSTED",
+            lifecycleMaster,
+            systemExclusionProfile,
+            scopeReady: scope.scopeReady === true,
+            scopeReason: scope.reason || "",
+            lifecycleEntryMap: scope.lifecycleEntryMap,
+            formalScopeStoreSet: scope.formalScopeStoreSet,
+            systemExcludedStoreSet: scope.systemExcludedStoreSet,
+            authorityPaths: {
+                projectionModel: projectionRef.path,
+                lifecycle: lifecycleRef.path,
+                systemExclusion: exclusionRef.path,
+            },
+        };
+    })();
+
+    if (promiseMap) promiseMap[cacheKey] = loadPromise;
+    try {
+        const loaded = await loadPromise;
+        return { ...loaded, executionCacheHit: false, pointReadsThisCall: 3 };
+    } catch (error) {
+        if (promiseMap) delete promiseMap[cacheKey];
+        throw error;
+    }
+}
+
 function calculateExactFrontendProjection(dailyCashMap, year, month, currentDayNum) {
     const daysInMonth = new Date(year, month, 0).getDate();
     let cashTotal = 0;
@@ -4141,8 +4267,10 @@ async function loadTelegramAgentRawStoreRange(brandId, startDate, endDate, ctx, 
         const core = normalizeSummaryCoreName(sourceRow.storeName || sourceRow.store || sourceRow.storeId || "");
         if (!core) return;
         if (requestedStoreSet.size > 0 && !requestedStoreSet.has(core)) return;
-        if (!storeMap[core]) storeMap[core] = { storeName: core, __rawDaily: true, __formalRawRows: [] };
+        if (!storeMap[core]) storeMap[core] = { storeName: core, __rawDaily: true, __formalRawRows: [], __maxDataDay: 0 };
         const row = storeMap[core];
+        const sourceDay = Number(String(sourceRow.date || "").slice(8, 10)) || 0;
+        if (sourceDay > row.__maxDataDay) row.__maxDataDay = sourceDay;
         if (options.formalKpiMode === true) row.__formalRawRows.push(sourceRow);
         row.grossCash = Number(row.grossCash || 0) + (Number(sourceRow.cash) || 0);
         row.refund = Number(row.refund || 0) + (Number(sourceRow.refund) || 0);
@@ -4177,9 +4305,13 @@ async function loadTelegramAgentRawStoreRange(brandId, startDate, endDate, ctx, 
         );
         if (options.formalKpiMode === true) {
             const canonicalActual = aggregateFormalMetrics(brandId, row.__formalRawRows || []);
-            return { ...normalized, ...buildTelegramFormalMetricsFromCanonical(canonicalActual, target, "raw_canonical") };
+            return {
+                ...normalized,
+                ...buildTelegramFormalMetricsFromCanonical(canonicalActual, target, "raw_canonical"),
+                __maxDataDay: Number(row.__maxDataDay || 0),
+            };
         }
-        return normalized;
+        return { ...normalized, __maxDataDay: Number(row.__maxDataDay || 0) };
     });
     const [year, month] = yearMonth.split("-").map(Number);
     const daysPassed = getClampedDaysPassed(dailyCash, year, month);
@@ -4205,6 +4337,14 @@ async function getStorePerformance(startDate, endDate, storeName = null, brandNa
     const end = normalizeTelegramAgentDate(endDate);
     const useMonthSummary = isTelegramAgentMonthRange(start, end);
     const requestedStoreCore = normalizeSummaryCoreName(storeName || "");
+    const yearMonth = start.slice(0, 7);
+    const taipeiNow = getTelegramAgentTaipeiNow();
+    const projectionCurrentMtd = isTelegramProjectionCurrentMonthToDateRange({
+        startDate: start,
+        endDate: end,
+        currentYearMonth: taipeiNow.yearMonth,
+        todayStr: taipeiNow.todayStr,
+    });
     // Batch 5C-2: policy scope only controls which stores/policies apply. It must not downgrade KPI authority.
     const formalKpiMode = true;
     const storeScopeOptions = {
@@ -4217,7 +4357,7 @@ async function getStorePerformance(startDate, endDate, storeName = null, brandNa
     for (const brandId of brands) {
         assertTelegramAgentReadBudget(ctx, 1);
         const loaded = useMonthSummary
-            ? await loadTelegramAgentStoreMonth(brandId, start.slice(0, 7), ctx, storeScopeOptions)
+            ? await loadTelegramAgentStoreMonth(brandId, yearMonth, ctx, storeScopeOptions)
             : await loadTelegramAgentRawStoreRange(brandId, start, end, ctx, storeScopeOptions);
         if (loaded.preSystem === true) {
             sourceMeta.push({
@@ -4228,47 +4368,132 @@ async function getStorePerformance(startDate, endDate, storeName = null, brandNa
                 formalKpiMode,
                 activeDelegationCount: 0,
                 policyExcludedCount: 0,
+                projectionModelTrusted: false,
+                projectionModelTrustReason: "PRE_SYSTEM_SKIP",
+                projectionAuthorityPointReads: 0,
             });
             continue;
         }
         const org = await loadTelegramAgentOrgProfile(brandId, ctx);
         const basePolicyRows = filterTelegramAgentRowsByPolicies(loaded.rows, brandId, ctx, policyScopes);
-        const rowsNeedingTargetRepair = loaded.formalKpiMode === true ? [] : basePolicyRows
+        const projectionAuthority = projectionCurrentMtd && basePolicyRows.length > 0
+            ? await loadTelegramAgentProjectionAuthority(brandId, yearMonth, ctx)
+            : null;
+
+        // Current MTD brand / cross-brand aggregate must align with current Formal scope.
+        // Explicit store lookup retains direct visibility; if outside Formal scope it is current-pace-only
+        // and cannot consume store/brand historical Projection baseline.
+        const scopeFilteredRows = (
+            projectionCurrentMtd &&
+            projectionAuthority?.scopeReady === true &&
+            !requestedStoreCore
+        )
+            ? basePolicyRows.filter((row) => projectionAuthority.formalScopeStoreSet.has(normalizeSummaryCoreName(row.storeName)))
+            : basePolicyRows;
+        const formalScopeExcludedCount = Math.max(0, basePolicyRows.length - scopeFilteredRows.length);
+
+        const rowsNeedingTargetRepair = loaded.formalKpiMode === true ? [] : scopeFilteredRows
             .filter((row) => !requestedStoreCore || normalizeSummaryCoreName(row.storeName) === requestedStoreCore)
             .filter((row) => Number(row?.budget || 0) <= 0)
             .map((row) => normalizeSummaryCoreName(row.storeName))
             .filter(Boolean);
         const targetRepair = rowsNeedingTargetRepair.length > 0
-            ? await loadTelegramAgentTargetMap(brandId, start.slice(0, 7), ctx, null, rowsNeedingTargetRepair)
+            ? await loadTelegramAgentTargetMap(brandId, yearMonth, ctx, null, rowsNeedingTargetRepair)
             : { map: {}, source: loaded.formalKpiMode === true ? "formal_row_authority" : "not_needed", updatedAtText: "" };
-        const policyRows = basePolicyRows.map((row) => {
-                const storeCore = normalizeSummaryCoreName(row.storeName);
-                const delegation = org.actingDelegationByStore?.[storeCore] || null;
-                const repairedTarget = targetRepair.map?.[storeCore] || {};
-                const budget = loaded.formalKpiMode === true ? row?.budget : Number(row?.budget || repairedTarget.cashTarget || 0);
-                const accrualBudget = loaded.formalKpiMode === true ? row?.accrualBudget : Number(row?.accrualBudget || repairedTarget.accrualTarget || 0);
-                return {
-                    ...row,
-                    manager: org.storeOwner?.[storeCore] || row.manager || "未分配",
-                    actingManager: delegation?.delegateName || "",
-                    delegationId: delegation?.id || "",
-                    delegationEndDate: delegation?.endDate || "",
-                    budget,
-                    accrualBudget,
-                    achievement: loaded.formalKpiMode === true
-                        ? row?.achievement ?? null
-                        : (budget > 0 ? Number(((Number(row?.cash || 0) / budget) * 100).toFixed(1)) : 0),
-                    cashAchievementRate: loaded.formalKpiMode === true ? row?.cashAchievementRate ?? row?.achievement ?? null : undefined,
-                };
+        const projectionDaysPassed = projectionCurrentMtd
+            ? resolveTelegramProjectionDaysPassed({
+                rows: scopeFilteredRows,
+                yearMonth,
+                endDate: end,
+                todayStr: taipeiNow.todayStr,
+            })
+            : 0;
+        const [projectionYear, projectionMonth] = yearMonth.split("-").map(Number);
+        const projectionDaysInMonth = projectionYear && projectionMonth
+            ? new Date(projectionYear, projectionMonth, 0).getDate()
+            : 0;
+
+        const policyRows = scopeFilteredRows.map((row) => {
+            const storeCore = normalizeSummaryCoreName(row.storeName);
+            const delegation = org.actingDelegationByStore?.[storeCore] || null;
+            const repairedTarget = targetRepair.map?.[storeCore] || {};
+            const budget = loaded.formalKpiMode === true ? row?.budget : Number(row?.budget || repairedTarget.cashTarget || 0);
+            const accrualBudget = loaded.formalKpiMode === true ? row?.accrualBudget : Number(row?.accrualBudget || repairedTarget.accrualTarget || 0);
+            const normalized = {
+                ...row,
+                manager: org.storeOwner?.[storeCore] || row.manager || "未分配",
+                actingManager: delegation?.delegateName || "",
+                delegationId: delegation?.id || "",
+                delegationEndDate: delegation?.endDate || "",
+                budget,
+                accrualBudget,
+                achievement: loaded.formalKpiMode === true
+                    ? row?.achievement ?? null
+                    : (budget > 0 ? Number(((Number(row?.cash || 0) / budget) * 100).toFixed(1)) : 0),
+                cashAchievementRate: loaded.formalKpiMode === true ? row?.cashAchievementRate ?? row?.achievement ?? null : undefined,
+            };
+
+            if (!projectionCurrentMtd) return normalized;
+
+            const projectionFormalScopeEligible = projectionAuthority?.scopeReady === true
+                && projectionAuthority.formalScopeStoreSet.has(storeCore);
+            const cashAvailable = isValidNumericStatus(String(normalized.cashStatus || ""))
+                && typeof normalized.cash === "number" && Number.isFinite(normalized.cash);
+            const accrualAvailable = isValidNumericStatus(String(normalized.accrualStatus || ""))
+                && typeof normalized.accrual === "number" && Number.isFinite(normalized.accrual);
+            const useHistoricalModel = projectionFormalScopeEligible && projectionAuthority?.modelTrusted === true;
+            const projectionResult = buildTelegramProjectionFromModel({
+                rows: [{
+                    storeKey: storeCore,
+                    cash: cashAvailable ? normalized.cash : null,
+                    accrual: accrualAvailable ? normalized.accrual : null,
+                    lifecycleEntry: projectionAuthority?.lifecycleEntryMap?.get(storeCore) || null,
+                }],
+                model: useHistoricalModel ? projectionAuthority.model : null,
+                modelTrusted: useHistoricalModel,
+                yearMonth,
+                daysPassed: projectionDaysPassed,
+                daysInMonth: projectionDaysInMonth,
+                normalizeStoreKey: normalizeSummaryCoreName,
+                allowBrandFallbackForRow: () => projectionFormalScopeEligible,
             });
+            const trustReason = !projectionAuthority?.scopeReady
+                ? (projectionAuthority?.scopeReason || "SCOPE_AUTHORITY_UNAVAILABLE")
+                : !projectionFormalScopeEligible
+                    ? "OUTSIDE_FORMAL_SCOPE_CURRENT_PACE"
+                    : (projectionAuthority?.trustReason || "MODEL_UNTRUSTED");
+
+            return {
+                ...normalized,
+                projection: cashAvailable ? projectionResult.projection : null,
+                accrualProjection: accrualAvailable ? projectionResult.accrualProjection : null,
+                projectionRange: {
+                    ...projectionResult.projectionRange,
+                    cash: cashAvailable ? projectionResult.projectionRange.cash : null,
+                    accrual: accrualAvailable ? projectionResult.projectionRange.accrual : null,
+                },
+                projectionFormalScopeEligible,
+                projectionModelTrust: {
+                    trusted: useHistoricalModel,
+                    reason: trustReason,
+                },
+            };
+        });
         policyRows.forEach((row) => allRows.push(row));
         sourceMeta.push({
             brand: getTelegramAgentBrandLabel(brandId),
             source: loaded.source,
             updatedAtText: loaded.updatedAtText,
             activeDelegationCount: Array.isArray(org.activeDelegations) ? org.activeDelegations.length : 0,
-            policyExcludedCount: Math.max(0, loaded.rows.length - policyRows.length),
+            policyExcludedCount: Math.max(0, loaded.rows.length - basePolicyRows.length),
+            formalScopeExcludedCount,
             formalKpiMode: loaded.formalKpiMode === true,
+            projectionModelTrusted: projectionCurrentMtd ? projectionAuthority?.modelTrusted === true : false,
+            projectionModelTrustReason: projectionCurrentMtd ? (projectionAuthority?.trustReason || "MODEL_NOT_LOADED") : "NON_MTD_RANGE",
+            projectionAuthorityScopeReady: projectionCurrentMtd ? projectionAuthority?.scopeReady === true : false,
+            projectionAuthorityPointReads: projectionAuthority?.pointReadsThisCall || 0,
+            projectionAuthorityExecutionCacheHit: projectionAuthority?.executionCacheHit === true,
+            projectionAuthorityPaths: projectionAuthority?.authorityPaths || null,
         });
     }
 
@@ -4276,17 +4501,44 @@ async function getStorePerformance(startDate, endDate, storeName = null, brandNa
     const filteredRows = requestedCore
         ? allRows.filter((row) => normalizeSummaryCoreName(row.storeName).includes(requestedCore) || requestedCore.includes(normalizeSummaryCoreName(row.storeName)))
         : allRows;
-    const yearMonth = start.slice(0, 7);
-    const overall = aggregateTelegramAgentStoreRows(filteredRows, yearMonth, end);
-    const sortedRows = filteredRows
-        .map((row) => ({
-            ...row,
-            projection: calculateTelegramAgentProjection(row.cash, yearMonth, end),
+    const projectedRows = filteredRows.map((row) => {
+        const { __maxDataDay, ...publicRow } = row;
+        return {
+            ...publicRow,
+            projection: projectionCurrentMtd
+                ? (typeof row.projection === "number" && Number.isFinite(row.projection) ? row.projection : null)
+                : calculateTelegramAgentProjection(row.cash, yearMonth, end),
+            ...(projectionCurrentMtd
+                ? {
+                    accrualProjection: typeof row.accrualProjection === "number" && Number.isFinite(row.accrualProjection)
+                        ? row.accrualProjection
+                        : null,
+                }
+                : {}),
             newAvg: row.newCount > 0 ? Math.round(row.newRev / row.newCount) : 0,
             oldAvg: row.oldCount > 0 ? Math.round(row.oldRev / row.oldCount) : 0,
             newClosingRate: row.newCount > 0 ? Number(((row.newClosings / row.newCount) * 100).toFixed(1)) : 0,
-        }))
-        .sort((a, b) => b.cash - a.cash)
+        };
+    });
+    const overall = aggregateTelegramAgentStoreRows(filteredRows, yearMonth, end);
+    if (projectionCurrentMtd) {
+        const aggregateProjection = aggregateTelegramProjectionRows(projectedRows);
+        overall.projection = isValidNumericStatus(String(overall.cashStatus || ""))
+            ? (aggregateProjection.cash?.standard ?? null)
+            : null;
+        overall.accrualProjection = isValidNumericStatus(String(overall.accrualStatus || ""))
+            ? (aggregateProjection.accrual?.standard ?? null)
+            : null;
+        overall.projectionRange = {
+            cash: isValidNumericStatus(String(overall.cashStatus || "")) ? aggregateProjection.cash : null,
+            accrual: isValidNumericStatus(String(overall.accrualStatus || "")) ? aggregateProjection.accrual : null,
+            profile: aggregateProjection.profile,
+            modelTrusted: aggregateProjection.modelTrusted,
+            trustReasons: aggregateProjection.trustReasons,
+        };
+    }
+    const sortedRows = projectedRows
+        .sort((a, b) => Number(b.cash || 0) - Number(a.cash || 0))
         .slice(0, 80);
 
     return {
@@ -4294,8 +4546,11 @@ async function getStorePerformance(startDate, endDate, storeName = null, brandNa
         overall_summary: overall,
         stores_details: sortedRows,
         source_meta: sourceMeta,
-        data_note: "查詢使用 Formal KPI contract；policy scope 僅控制納入範圍，不改變 KPI authority。歷史 verified 月優先使用 Formal Summary，本月／日期區間使用即時資料套用同一 KPI 語意。",
+        data_note: projectionCurrentMtd
+            ? "查詢使用 Formal KPI contract；Current MTD 月底預估使用 projection_models/current，並以現行 Lifecycle／Reporting Calendar／System Exclusion 重新驗證。模型未就緒或單店不在 Formal scope 時只使用本月節奏 fallback。"
+            : "查詢使用 Formal KPI contract；policy scope 僅控制納入範圍，不改變 KPI authority。歷史 verified 月優先使用 Formal Summary；非 Current MTD 日期區間不套用 Projection Model。",
         formal_kpi_mode: formalKpiMode,
+        projection_model_consumer: projectionCurrentMtd ? "projection-model-v1" : "not_applicable",
         pre_system_skips: sourceMeta.filter((row) => row.dataStatus === "PRE_SYSTEM_SKIP").map((row) => row.brand),
     };
 }
@@ -5922,7 +6177,9 @@ function attachTelegramAgentSourceAuthority(name, result, awareness = null) {
             source_authority: {
                 scope: "store_kpi",
                 source: "daily_reports",
+                projectionSource: "projection_models/current (Current MTD only)",
                 rule: "全店 KPI 以本工具結果為準；不得拿人員日報數字反推或覆寫全店 KPI。",
+                projectionRule: "月底預估以 Formal current actual + Projection Model authority 計算；模型不可信時只使用本月節奏。",
             },
             ...(awareness ? { cross_source_data_awareness: awareness } : {}),
         };
