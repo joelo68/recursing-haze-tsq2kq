@@ -10,6 +10,12 @@ export const PROJECTION_MODEL_SCHEMA_VERSION = "projection-model-v1";
 export const PROJECTION_SEMANTIC_VERSION = "projection-semantic-v1";
 export const PROJECTION_MODEL_DOC_ID = "current";
 export const PROJECTION_SOURCE_MONTH_COUNT = 3;
+export const PROJECTION_MIN_PHASE_SOURCE_MONTHS = 3;
+export const PROJECTION_PHASE_MIN_DAYS_PASSED = 5;
+export const PROJECTION_STRATEGY_V1 = "projection-strategy-v1-weekday";
+export const PROJECTION_STRATEGY_V2 = "projection-strategy-v2-phase-calibrated";
+export const PROJECTION_PHASE_SCHEMA_VERSION = "projection-phase-v1";
+export const PROJECTION_V2_BRANDS = Object.freeze(["cyj", "anniu"]);
 
 const isFiniteNumber = (value) => typeof value === "number" && Number.isFinite(value);
 const safeNumber = (value) => Number.isFinite(Number(value)) ? Number(value) : 0;
@@ -70,6 +76,121 @@ export const buildProjectionRangePayload = ({
   const rawConservative = Math.round(safeNumber(currentTotal) + safeNumber(remainingConservative));
   const standard = Math.round(safeNumber(currentTotal) + safeNumber(remainingStandard));
   const rawAggressive = Math.round(safeNumber(currentTotal) + safeNumber(remainingAggressive));
+  const conservative = Math.min(rawConservative, standard, rawAggressive);
+  const aggressive = Math.max(rawConservative, standard, rawAggressive);
+
+  return {
+    conservative,
+    standard,
+    aggressive,
+    min: conservative,
+    max: aggressive,
+    rawConservative,
+    rawAggressive,
+  };
+};
+
+const getProjectionPhasePoint = (curve = {}, day = 0) => {
+  const point = curve?.points?.[day] ?? curve?.points?.[String(day)] ?? null;
+  if (!point || typeof point !== "object") return null;
+
+  const sampleCount = Math.max(0, Number(point.sampleCount || 0));
+  const cumulativeShare = point.cumulativeShare;
+  const reliable = point.reliable === true
+    && sampleCount >= PROJECTION_MIN_PHASE_SOURCE_MONTHS
+    && isFiniteNumber(cumulativeShare)
+    && Number(cumulativeShare) > 0;
+
+  return {
+    sampleCount,
+    reliable,
+    cumulativeShare: reliable ? Number(cumulativeShare) : null,
+  };
+};
+
+export const resolveProjectionPhaseCalibration = ({
+  model = null,
+  metric = "cash",
+  daysPassed = 0,
+  daysInMonth = 0,
+  scopeEligible = true,
+} = {}) => {
+  const brandId = normalizeBrandId(model?.brandId || "");
+  const normalizedMetric = metric === "accrual" ? "accrual" : "cash";
+  const calendarProgress = daysInMonth > 0
+    ? Math.max(0, Number(daysPassed || 0)) / Number(daysInMonth)
+    : 0;
+  const fail = (reason) => ({
+    applied: false,
+    reason,
+    brandId,
+    metric: normalizedMetric,
+    multiplier: 1,
+    cumulativeShare: null,
+    calendarProgress,
+    sampleCount: 0,
+  });
+
+  if (scopeEligible !== true) return fail("SCOPE_PHASE_DISABLED");
+  if (!PROJECTION_V2_BRANDS.includes(brandId)) return fail("BRAND_V1");
+  if (String(model?.strategyVersion || "") !== PROJECTION_STRATEGY_V2) return fail("STRATEGY_V1");
+  if (!daysPassed || !daysInMonth) return fail("INVALID_PROGRESS");
+  if (daysPassed < PROJECTION_PHASE_MIN_DAYS_PASSED) return fail("BEFORE_VALIDATED_CHECKPOINT");
+  if (daysPassed >= daysInMonth) return fail("MONTH_COMPLETE");
+
+  const phase = model?.brand?.phaseCalibration || null;
+  if (!phase || String(phase.schemaVersion || "") !== PROJECTION_PHASE_SCHEMA_VERSION) {
+    return fail("PHASE_MODEL_MISSING");
+  }
+  if (phase.enabled !== true) return fail("PHASE_DISABLED");
+  if (normalizeBrandId(phase.brandId) !== brandId) return fail("PHASE_BRAND_MISMATCH");
+  if (String(phase.strategyVersion || "") !== PROJECTION_STRATEGY_V2) {
+    return fail("PHASE_STRATEGY_MISMATCH");
+  }
+
+  const modelMonths = Array.isArray(model?.sourceMonths) ? model.sourceMonths : [];
+  const phaseMonths = Array.isArray(phase?.sourceMonths) ? phase.sourceMonths : [];
+  if (JSON.stringify(modelMonths) !== JSON.stringify(phaseMonths)) {
+    return fail("PHASE_SOURCE_MONTHS_MISMATCH");
+  }
+
+  const curve = phase?.[normalizedMetric] || null;
+  if (!curve || curve.reliable !== true) return fail("PHASE_CURVE_UNRELIABLE");
+  const point = getProjectionPhasePoint(curve, daysPassed);
+  if (!point?.reliable) return fail("PHASE_POINT_UNRELIABLE");
+
+  const multiplier = calendarProgress / point.cumulativeShare;
+  if (!Number.isFinite(multiplier) || multiplier <= 0) return fail("PHASE_MULTIPLIER_INVALID");
+
+  return {
+    applied: true,
+    reason: "PHASE_CALIBRATED",
+    brandId,
+    metric: normalizedMetric,
+    multiplier,
+    cumulativeShare: point.cumulativeShare,
+    calendarProgress,
+    sampleCount: point.sampleCount,
+  };
+};
+
+export const calibrateProjectionRange = ({
+  range = null,
+  currentTotal = 0,
+  multiplier = 1,
+} = {}) => {
+  if (!range || typeof range !== "object") return range;
+
+  const current = safeNumber(currentTotal);
+  const safeMultiplier = Number.isFinite(Number(multiplier)) && Number(multiplier) > 0
+    ? Number(multiplier)
+    : 1;
+  const scaleRemaining = (value) =>
+    Math.round(current + ((safeNumber(value) - current) * safeMultiplier));
+
+  const rawConservative = scaleRemaining(range.rawConservative ?? range.conservative);
+  const standard = scaleRemaining(range.standard);
+  const rawAggressive = scaleRemaining(range.rawAggressive ?? range.aggressive);
   const conservative = Math.min(rawConservative, standard, rawAggressive);
   const aggressive = Math.max(rawConservative, standard, rawAggressive);
 
@@ -363,18 +484,67 @@ export const buildDashboardProjectionFromModel = ({
     }
   });
 
-  const cashRange = buildProjectionRangePayload({
+  const shadowCashRange = buildProjectionRangePayload({
     currentTotal: totals.cash.current,
     remainingConservative: totals.cash.conservative,
     remainingStandard: totals.cash.standard,
     remainingAggressive: totals.cash.aggressive,
   });
-  const accrualRange = buildProjectionRangePayload({
+  const shadowAccrualRange = buildProjectionRangePayload({
     currentTotal: totals.accrual.current,
     remainingConservative: totals.accrual.conservative,
     remainingStandard: totals.accrual.standard,
     remainingAggressive: totals.accrual.aggressive,
   });
+
+  // Phase calibration is a brand-derived multiplier. If any row is explicitly outside
+  // Formal brand scope (for example System Excluded own-store self-view), fail closed
+  // for the entire selected scope instead of leaking brand aggregate behavior.
+  const phaseScopeEligible = safeRows.length > 0
+    && safeRows.every((row) => allowBrandFallbackForRow(row) !== false);
+  const cashPhase = modelTrusted
+    ? resolveProjectionPhaseCalibration({
+        model,
+        metric: "cash",
+        daysPassed,
+        daysInMonth,
+        scopeEligible: phaseScopeEligible,
+      })
+    : { applied: false, reason: "MODEL_UNTRUSTED", multiplier: 1 };
+  const accrualPhase = modelTrusted
+    ? resolveProjectionPhaseCalibration({
+        model,
+        metric: "accrual",
+        daysPassed,
+        daysInMonth,
+        scopeEligible: phaseScopeEligible,
+      })
+    : { applied: false, reason: "MODEL_UNTRUSTED", multiplier: 1 };
+
+  const cashRange = cashPhase.applied
+    ? calibrateProjectionRange({
+        range: shadowCashRange,
+        currentTotal: totals.cash.current,
+        multiplier: cashPhase.multiplier,
+      })
+    : shadowCashRange;
+  const accrualRange = accrualPhase.applied
+    ? calibrateProjectionRange({
+        range: shadowAccrualRange,
+        currentTotal: totals.accrual.current,
+        multiplier: accrualPhase.multiplier,
+      })
+    : shadowAccrualRange;
+
+  const phaseApplied = cashPhase.applied === true || accrualPhase.applied === true;
+  const effectiveProfile = {
+    ...profile,
+    label: phaseApplied ? `${profile.label}＋月內節奏校正` : profile.label,
+    strategyVersion: phaseApplied ? PROJECTION_STRATEGY_V2 : PROJECTION_STRATEGY_V1,
+    phaseCalibrated: phaseApplied,
+  };
+  sourceStats.phaseCalibratedCash = cashPhase.applied === true;
+  sourceStats.phaseCalibratedAccrual = accrualPhase.applied === true;
 
   return {
     projection: cashRange.standard,
@@ -382,7 +552,15 @@ export const buildDashboardProjectionFromModel = ({
     projectionRange: {
       cash: cashRange,
       accrual: accrualRange,
-      profile,
+      shadowV1: {
+        cash: shadowCashRange,
+        accrual: shadowAccrualRange,
+      },
+      profile: effectiveProfile,
+      phaseCalibration: {
+        cash: cashPhase,
+        accrual: accrualPhase,
+      },
       modelTrusted: modelTrusted === true,
       sourceStats,
     },

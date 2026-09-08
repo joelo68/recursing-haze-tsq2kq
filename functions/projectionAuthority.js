@@ -28,9 +28,13 @@ const PROJECTION_MODEL_SCHEMA_VERSION = "projection-model-v1";
 const PROJECTION_SEMANTIC_VERSION = "projection-semantic-v1";
 const PROJECTION_SOURCE_MONTH_COUNT = 3;
 const PROJECTION_MIN_WEEKDAY_SAMPLES = 3;
+const PROJECTION_MIN_PHASE_SOURCE_MONTHS = 3;
 const PROJECTION_MODEL_DOC_ID = "current";
 const PROJECTION_MODEL_COLLECTION = "projection_models";
 const PROJECTION_BRANDS = Object.freeze(["cyj", "anniu", "yibo"]);
+const PROJECTION_V2_BRANDS = Object.freeze(["cyj", "anniu"]);
+const PROJECTION_STRATEGY_V2 = "projection-strategy-v2-phase-calibrated";
+const PROJECTION_PHASE_SCHEMA_VERSION = "projection-phase-v1";
 
 function normalizeProjectionBrandId(value = "") {
   const text = String(value || "").trim().toLowerCase();
@@ -38,6 +42,10 @@ function normalizeProjectionBrandId(value = "") {
   if (["anniu", "anew", "安妞"].includes(text)) return "anniu";
   if (["yibo", "伊啵"].includes(text)) return "yibo";
   return "";
+}
+
+function isProjectionV2Brand(value = "") {
+  return PROJECTION_V2_BRANDS.includes(normalizeProjectionBrandId(value));
 }
 
 function normalizeYearMonth(value = "") {
@@ -88,6 +96,13 @@ function getMonthLastDate(yearMonth = "") {
   return `${normalized}-${String(lastDay).padStart(2, "0")}`;
 }
 
+function getMonthDayCount(yearMonth = "") {
+  const normalized = normalizeYearMonth(yearMonth);
+  if (!normalized) return 0;
+  const [year, month] = normalized.split("-").map(Number);
+  return new Date(Date.UTC(year, month, 0)).getUTCDate();
+}
+
 function getProjectionSourceRange(sourceMonths = []) {
   const months = (Array.isArray(sourceMonths) ? sourceMonths : [])
     .map(normalizeYearMonth)
@@ -135,6 +150,101 @@ function buildWeekdayCurve(samplesByWeekday = {}) {
       }];
     })
   );
+}
+
+function countExpectedStoreDates(yearMonth = "", entries = []) {
+  const daysInMonth = getMonthDayCount(yearMonth);
+  if (!daysInMonth) return 0;
+
+  let count = 0;
+  for (let day = 1; day <= daysInMonth; day += 1) {
+    const dateText = `${yearMonth}-${String(day).padStart(2, "0")}`;
+    for (const entry of Array.isArray(entries) ? entries : []) {
+      if (isLifecycleEntryExpectedForDate(entry, dateText)) count += 1;
+    }
+  }
+  return count;
+}
+
+function buildBrandPhaseCurve({ months = [], monthStats = {}, metric = "cash" } = {}) {
+  const normalizedMetric = metric === "accrual" ? "accrual" : "cash";
+  const validCountKey = normalizedMetric === "cash"
+    ? "validCashStoreDateCount"
+    : "validAccrualStoreDateCount";
+  const dailyTotalsKey = normalizedMetric === "cash"
+    ? "cashDailyTotals"
+    : "accrualDailyTotals";
+  const completeMonths = [];
+
+  for (const yearMonth of Array.isArray(months) ? months : []) {
+    const stat = monthStats?.[yearMonth] || {};
+    const expected = Math.max(0, Number(stat.expectedStoreDateCount || 0));
+    const valid = Math.max(0, Number(stat?.[validCountKey] || 0));
+    const daysInMonth = getMonthDayCount(yearMonth);
+    if (!expected || !daysInMonth || valid !== expected) continue;
+
+    const dailyTotals = stat?.[dailyTotalsKey] || {};
+    const monthTotal = Array.from({ length: daysInMonth }, (_, index) => index + 1)
+      .reduce((sum, day) => sum + Number(dailyTotals?.[day] || 0), 0);
+    if (!Number.isFinite(monthTotal) || monthTotal <= 0) continue;
+
+    let cumulative = 0;
+    const points = {};
+    for (let day = 1; day <= 31; day += 1) {
+      if (day <= daysInMonth) cumulative += Number(dailyTotals?.[day] || 0);
+      const share = day > daysInMonth ? 1 : cumulative / monthTotal;
+      points[day] = Number.isFinite(share) ? share : null;
+    }
+    completeMonths.push({ yearMonth, points });
+  }
+
+  const points = Object.fromEntries(
+    Array.from({ length: 31 }, (_, index) => {
+      const day = index + 1;
+      const values = completeMonths
+        .map((item) => item.points?.[day])
+        .filter((value) => Number.isFinite(value) && value > 0);
+      const sampleCount = values.length;
+      const cumulativeShare = sampleCount >= PROJECTION_MIN_PHASE_SOURCE_MONTHS
+        ? median(values)
+        : null;
+      const reliable = Number.isFinite(cumulativeShare) && cumulativeShare > 0;
+      return [day, {
+        sampleCount,
+        reliable,
+        cumulativeShare: reliable ? cumulativeShare : null,
+        valueStatus: reliable
+          ? KPI_VALUE_STATUS.VALID
+          : (sampleCount > 0 ? "INSUFFICIENT_SAMPLE" : "NO_SAMPLE"),
+      }];
+    })
+  );
+
+  return {
+    reliable: completeMonths.length >= PROJECTION_MIN_PHASE_SOURCE_MONTHS,
+    sourceMonthCount: completeMonths.length,
+    completeSourceMonths: completeMonths.map((item) => item.yearMonth),
+    minSourceMonths: PROJECTION_MIN_PHASE_SOURCE_MONTHS,
+    points,
+  };
+}
+
+function buildBrandPhaseCalibration({ brandId = "", months = [], monthStats = {} } = {}) {
+  const normalizedBrandId = normalizeProjectionBrandId(brandId);
+  if (!isProjectionV2Brand(normalizedBrandId)) return null;
+
+  return {
+    schemaVersion: PROJECTION_PHASE_SCHEMA_VERSION,
+    brandId: normalizedBrandId,
+    enabled: true,
+    strategyVersion: PROJECTION_STRATEGY_V2,
+    sourceMonths: (Array.isArray(months) ? months : [])
+      .map(normalizeYearMonth)
+      .filter(Boolean),
+    minSourceMonths: PROJECTION_MIN_PHASE_SOURCE_MONTHS,
+    cash: buildBrandPhaseCurve({ months, monthStats, metric: "cash" }),
+    accrual: buildBrandPhaseCurve({ months, monthStats, metric: "accrual" }),
+  };
 }
 
 function getReportStoreName(row = {}) {
@@ -265,6 +375,21 @@ function buildHistoricalProjectionModel({
       .sort((a, b) => a.localeCompare(b, "zh-Hant"));
   }
 
+  const phaseMonthStats = isProjectionV2Brand(normalizedBrandId)
+    ? Object.fromEntries(
+        months.map((yearMonth) => {
+          const entries = [...(eligibleByMonth.get(yearMonth)?.values() || [])];
+          return [yearMonth, {
+            expectedStoreDateCount: countExpectedStoreDates(yearMonth, entries),
+            validCashStoreDateCount: 0,
+            validAccrualStoreDateCount: 0,
+            cashDailyTotals: {},
+            accrualDailyTotals: {},
+          }];
+        })
+      )
+    : {};
+
   const groupedRows = new Map();
   const counters = {
     rawDocumentCount: Array.isArray(rawRows) ? rawRows.length : 0,
@@ -329,11 +454,19 @@ function buildHistoricalProjectionModel({
     if (dow === null) continue;
     const metrics = buildFormalProjectionMetrics(normalizedBrandId, row);
     const samples = ensureStoreSamples(group.storeKey);
+    const yearMonth = group.reportDate.slice(0, 7);
+    const dayOfMonth = Math.max(0, Number(group.reportDate.slice(8, 10)) || 0);
+    const phaseStat = phaseMonthStats?.[yearMonth] || null;
 
     if (isValidKpiResult(metrics.cash)) {
       samples.cash[dow].push(metrics.cash.value);
       brandSamples.cash[dow].push(metrics.cash.value);
       counters.validCashSampleCount += 1;
+      if (phaseStat && dayOfMonth) {
+        phaseStat.validCashStoreDateCount += 1;
+        phaseStat.cashDailyTotals[dayOfMonth] =
+          Number(phaseStat.cashDailyTotals[dayOfMonth] || 0) + Number(metrics.cash.value);
+      }
     } else {
       counters.invalidCashSampleCount += 1;
     }
@@ -342,6 +475,11 @@ function buildHistoricalProjectionModel({
       samples.accrual[dow].push(metrics.accrual.value);
       brandSamples.accrual[dow].push(metrics.accrual.value);
       counters.validAccrualSampleCount += 1;
+      if (phaseStat && dayOfMonth) {
+        phaseStat.validAccrualStoreDateCount += 1;
+        phaseStat.accrualDailyTotals[dayOfMonth] =
+          Number(phaseStat.accrualDailyTotals[dayOfMonth] || 0) + Number(metrics.accrual.value);
+      }
     } else {
       counters.invalidAccrualSampleCount += 1;
     }
@@ -365,9 +503,28 @@ function buildHistoricalProjectionModel({
       })
   );
 
+  const phaseCalibration = buildBrandPhaseCalibration({
+    brandId: normalizedBrandId,
+    months,
+    monthStats: phaseMonthStats,
+  });
+  if (phaseCalibration) {
+    counters.phaseCalibration = {
+      cashCompleteSourceMonths: phaseCalibration.cash.completeSourceMonths,
+      accrualCompleteSourceMonths: phaseCalibration.accrual.completeSourceMonths,
+      expectedStoreDateCountByMonth: Object.fromEntries(
+        months.map((yearMonth) => [
+          yearMonth,
+          Number(phaseMonthStats?.[yearMonth]?.expectedStoreDateCount || 0),
+        ])
+      ),
+    };
+  }
+
   return {
     schemaVersion: PROJECTION_MODEL_SCHEMA_VERSION,
     semanticVersion: PROJECTION_SEMANTIC_VERSION,
+    ...(phaseCalibration ? { strategyVersion: PROJECTION_STRATEGY_V2 } : {}),
     kpiContractVersion: KPI_CONTRACT_VERSION,
     brandId: normalizedBrandId,
     modelMonth: normalizedModelMonth,
@@ -379,6 +536,7 @@ function buildHistoricalProjectionModel({
     brand: {
       cashWeekday: buildWeekdayCurve(brandSamples.cash),
       accrualWeekday: buildWeekdayCurve(brandSamples.accrual),
+      ...(phaseCalibration ? { phaseCalibration } : {}),
     },
     stores,
     sourceStats: counters,
@@ -597,21 +755,30 @@ module.exports = {
   PROJECTION_SEMANTIC_VERSION,
   PROJECTION_SOURCE_MONTH_COUNT,
   PROJECTION_MIN_WEEKDAY_SAMPLES,
+  PROJECTION_MIN_PHASE_SOURCE_MONTHS,
   PROJECTION_MODEL_DOC_ID,
   PROJECTION_MODEL_COLLECTION,
   PROJECTION_BRANDS,
+  PROJECTION_V2_BRANDS,
+  PROJECTION_STRATEGY_V2,
+  PROJECTION_PHASE_SCHEMA_VERSION,
   normalizeProjectionBrandId,
+  isProjectionV2Brand,
   normalizeYearMonth,
   normalizeIsoDate,
   getTaipeiYearMonth,
   shiftYearMonth,
   getProjectionSourceMonths,
   getMonthLastDate,
+  getMonthDayCount,
   getProjectionSourceRange,
   median,
   isValidKpiResult,
   buildWeekdayBucket,
   buildWeekdayCurve,
+  countExpectedStoreDates,
+  buildBrandPhaseCurve,
+  buildBrandPhaseCalibration,
   getReportStoreName,
   getReportDate,
   getUtcWeekday,
