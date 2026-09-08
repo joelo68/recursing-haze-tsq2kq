@@ -4,6 +4,7 @@ import { doc, setDoc, serverTimestamp, increment } from "firebase/firestore";
 const STORAGE_KEY = "cyj_read_tracker_stats";
 const MODE_KEY = "cyj_read_tracker_mode";
 const LAST_FLUSH_KEY = "cyj_read_tracker_last_flush";
+const MANUAL_LOCAL_KEY = "read_tracker_manual_local_enabled";
 
 const DEFAULT_MODE = "off"; // off | local | global
 
@@ -76,6 +77,20 @@ export const getReadTrackerMode = () => {
 export const setReadTrackerMode = (mode) => {
   if (typeof localStorage === "undefined") return;
   localStorage.setItem(MODE_KEY, mode);
+};
+
+export const getManualLocalReadTrackerEnabled = () => {
+  if (typeof localStorage === "undefined") return false;
+  return localStorage.getItem(MANUAL_LOCAL_KEY) === "true";
+};
+
+export const setManualLocalReadTrackerEnabled = (enabled) => {
+  if (typeof localStorage === "undefined") return;
+  if (enabled) {
+    localStorage.setItem(MANUAL_LOCAL_KEY, "true");
+  } else {
+    localStorage.removeItem(MANUAL_LOCAL_KEY);
+  }
 };
 
 export const clearReadTrackerStats = () => {
@@ -321,13 +336,21 @@ export const resolveReadTrackerModeFromConfig = (config = {}, nowDate = new Date
   const manualMode = ["off", "local", "global"].includes(config.mode) ? config.mode : "off";
   const status = getReadTrackerScheduleStatus(config, nowDate);
 
-  // 排程時段內應優先切為全域上報。
-  // 否則若使用者白天曾開本機追蹤，config.mode 會停在 local，晚上 19:00 就會被 local 擋住，導致全域上報沒有啟動。
+  // 單一 Effective Mode authority：
+  // 1. 排程時段永遠優先（例如 19:00~07:00 global）。
+  // 2. 非排程時段若此裝置明確開啟 manual local，維持 local。
+  // 3. 其餘才使用 remote/manual config mode。
+  //
+  // App.jsx 與 SystemMaintenance.jsx 都必須只透過此 resolver 取得 effective mode，
+  // 避免維護頁顯示「本機追蹤中」，但 App config listener 又把底層 MODE_KEY 改回 off。
   if (status.scheduleEnabled && status.isActive) {
     return status.scheduleMode || "global";
   }
 
-  // 非排程時段才回到手動模式。
+  if (getManualLocalReadTrackerEnabled()) {
+    return "local";
+  }
+
   if (manualMode === "local" || manualMode === "global") return manualMode;
 
   return "off";

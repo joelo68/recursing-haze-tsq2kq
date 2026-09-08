@@ -51,6 +51,7 @@ import SmartCalendar from "./SmartCalendar";
 import {
   getReadTrackerMode,
   setReadTrackerMode,
+  setManualLocalReadTrackerEnabled,
   getReadTrackerStats,
   clearReadTrackerStats,
   flushReadTrackerToFirestore,
@@ -1197,15 +1198,7 @@ export default function SystemMaintenance() {
           endTime: data.endTime || "07:00",
           timezone: data.timezone || "Asia/Taipei",
         };
-        const scheduledMode = resolveReadTrackerModeFromConfig(config);
-        let manualLocalEnabled = false;
-        try {
-          manualLocalEnabled = localStorage.getItem("read_tracker_manual_local_enabled") === "true";
-        } catch (storageError) {
-          console.warn("讀取本機追蹤暫存狀態失敗:", storageError);
-        }
-
-        const effectiveMode = manualLocalEnabled && scheduledMode === "off" ? "local" : scheduledMode;
+        const effectiveMode = resolveReadTrackerModeFromConfig(config);
         setReadTrackerConfig(config);
         setScheduleForm({ scheduleEnabled: config.scheduleEnabled, startTime: config.startTime, endTime: config.endTime });
         setReadTrackerMode(effectiveMode);
@@ -2106,16 +2099,8 @@ export default function SystemMaintenance() {
       };
       await setDoc(getDocPath("read_tracker_config"), nextConfig, { merge: true });
 
-      try {
-        if (mode === "local") localStorage.setItem("read_tracker_manual_local_enabled", "true");
-        if (mode === "off" || mode === "global") localStorage.removeItem("read_tracker_manual_local_enabled");
-      } catch (storageError) {
-        console.warn("本機追蹤模式暫存更新失敗:", storageError);
-      }
-
-      const scheduledMode = resolveReadTrackerModeFromConfig(nextConfig);
-      const manualLocalEnabled = mode === "local";
-      const effectiveMode = manualLocalEnabled ? "local" : scheduledMode;
+      setManualLocalReadTrackerEnabled(mode === "local");
+      const effectiveMode = resolveReadTrackerModeFromConfig(nextConfig);
 
       setReadTrackerConfig(nextConfig);
       setReadTrackerMode(effectiveMode);
@@ -2157,14 +2142,10 @@ export default function SystemMaintenance() {
   };
 
   const handleEnableLocalReadTracker = () => {
-    try {
-      localStorage.setItem("read_tracker_manual_local_enabled", "true");
-    } catch (storageError) {
-      console.warn("本機追蹤狀態暫存失敗:", storageError);
-    }
-
-    setReadTrackerMode("local");
-    setReadTrackerModeState("local");
+    setManualLocalReadTrackerEnabled(true);
+    const effectiveMode = resolveReadTrackerModeFromConfig(readTrackerConfig);
+    setReadTrackerMode(effectiveMode);
+    setReadTrackerModeState(effectiveMode);
     setLocalReadClearedAt(null);
     refreshLocalReadStats();
     showToast("已開啟本機讀取追蹤；排程設定不受影響", "success");
