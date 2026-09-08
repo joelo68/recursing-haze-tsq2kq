@@ -571,6 +571,29 @@ function buildTelegramProjectionFromModel({
         cash: cashPhase,
         accrual: accrualPhase,
       },
+      // Exact aggregate parity authority:
+      // preserve pre-round components so multi-store Telegram aggregation can
+      // reproduce Dashboard's aggregate-first rounding order exactly.
+      aggregationBasis: {
+        cash: {
+          currentTotal: totals.cash.current,
+          remainingConservative: totals.cash.conservative,
+          remainingStandard: totals.cash.standard,
+          remainingAggressive: totals.cash.aggressive,
+          phaseScopeEligible,
+          phaseApplied: cashPhase.applied === true,
+          phaseMultiplier: cashPhase.applied === true ? cashPhase.multiplier : 1,
+        },
+        accrual: {
+          currentTotal: totals.accrual.current,
+          remainingConservative: totals.accrual.conservative,
+          remainingStandard: totals.accrual.standard,
+          remainingAggressive: totals.accrual.aggressive,
+          phaseScopeEligible,
+          phaseApplied: accrualPhase.applied === true,
+          phaseMultiplier: accrualPhase.applied === true ? accrualPhase.multiplier : 1,
+        },
+      },
       modelTrusted: modelTrusted === true,
       sourceStats,
     },
@@ -687,20 +710,101 @@ function aggregateTelegramProjectionRows(rows = []) {
   const safeRows = Array.isArray(rows) ? rows : [];
   const sumMetric = (metric) => {
     if (!safeRows.length) return null;
+
     const ranges = safeRows.map((row) => row?.projectionRange?.[metric] || null);
-    if (ranges.some((range) => !range || !["conservative", "standard", "aggressive"].every((key) => isFiniteNumber(range?.[key])))) {
+    if (ranges.some((range) =>
+      !range ||
+      !["conservative", "standard", "aggressive"].every((key) => isFiniteNumber(range?.[key]))
+    )) {
       return null;
     }
-    const conservative = Math.round(ranges.reduce((sum, range) => sum + Number(range.conservative), 0));
-    const standard = Math.round(ranges.reduce((sum, range) => sum + Number(range.standard), 0));
-    const aggressive = Math.round(ranges.reduce((sum, range) => sum + Number(range.aggressive), 0));
-    return {
-      conservative,
-      standard,
-      aggressive,
-      min: Math.min(conservative, standard, aggressive),
-      max: Math.max(conservative, standard, aggressive),
+
+    // Backward-compatible fallback for rows produced before exact-parity metadata existed.
+    const legacyRoundedSum = () => {
+      const conservative = Math.round(
+        ranges.reduce((sum, range) => sum + Number(range.conservative), 0)
+      );
+      const standard = Math.round(
+        ranges.reduce((sum, range) => sum + Number(range.standard), 0)
+      );
+      const aggressive = Math.round(
+        ranges.reduce((sum, range) => sum + Number(range.aggressive), 0)
+      );
+      return {
+        conservative,
+        standard,
+        aggressive,
+        min: Math.min(conservative, standard, aggressive),
+        max: Math.max(conservative, standard, aggressive),
+      };
     };
+
+    const bases = safeRows.map(
+      (row) => row?.projectionRange?.aggregationBasis?.[metric] || null
+    );
+    const numericFields = [
+      "currentTotal",
+      "remainingConservative",
+      "remainingStandard",
+      "remainingAggressive",
+    ];
+    const basisReady = bases.every((basis) =>
+      basis &&
+      numericFields.every((key) => isFiniteNumber(basis?.[key]))
+    );
+    if (!basisReady) return legacyRoundedSum();
+
+    const summed = bases.reduce(
+      (acc, basis) => ({
+        currentTotal: acc.currentTotal + Number(basis.currentTotal),
+        remainingConservative:
+          acc.remainingConservative + Number(basis.remainingConservative),
+        remainingStandard:
+          acc.remainingStandard + Number(basis.remainingStandard),
+        remainingAggressive:
+          acc.remainingAggressive + Number(basis.remainingAggressive),
+      }),
+      {
+        currentTotal: 0,
+        remainingConservative: 0,
+        remainingStandard: 0,
+        remainingAggressive: 0,
+      }
+    );
+
+    // Rebuild once at aggregate scope. This mirrors Dashboard's
+    // "aggregate first -> round" order.
+    const shadowRange = buildProjectionRangePayload(summed);
+
+    // If any row forbids brand phase (e.g. System Excluded own-store),
+    // disable phase for the whole mixed aggregate exactly like Dashboard.
+    if (bases.some((basis) => basis.phaseScopeEligible === false)) {
+      return shadowRange;
+    }
+
+    const phaseStates = bases.map((basis) => basis.phaseApplied === true);
+    if (phaseStates.every((value) => value === false)) {
+      return shadowRange;
+    }
+
+    // One brand/month should never contain mixed phase state or multipliers.
+    // Fall back to previous safe behavior instead of inventing a new semantic.
+    if (!phaseStates.every(Boolean)) return legacyRoundedSum();
+
+    const multipliers = bases.map((basis) => Number(basis.phaseMultiplier));
+    if (multipliers.some((value) => !Number.isFinite(value) || value <= 0)) {
+      return legacyRoundedSum();
+    }
+    const firstMultiplier = multipliers[0];
+    if (multipliers.some((value) => Math.abs(value - firstMultiplier) > 1e-12)) {
+      return legacyRoundedSum();
+    }
+
+    return calibrateProjectionRange({
+      range: shadowRange,
+      currentTotal: summed.currentTotal,
+      multiplier: firstMultiplier,
+    });
   };
 
   const profiles = safeRows
