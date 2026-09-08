@@ -1215,7 +1215,17 @@ export default function SystemMaintenance() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [currentBrand?.id, calMonth]);
 
-  const scheduleStatus = useMemo(() => getReadTrackerScheduleStatus({ ...readTrackerConfig, ...scheduleForm, scheduleMode: "global" }), [readTrackerConfig, scheduleForm]);
+  // 顯示中的「目前排程狀態」必須以已儲存的 readTrackerConfig 為唯一 authority。
+  // scheduleForm 只是尚未儲存的編輯草稿，不能拿來宣告目前是否正在排程時段。
+  const scheduleStatus = useMemo(
+    () => getReadTrackerScheduleStatus({ ...readTrackerConfig, scheduleMode: "global" }),
+    [readTrackerConfig]
+  );
+  const hasUnsavedScheduleChanges = useMemo(() => (
+    Boolean(scheduleForm.scheduleEnabled) !== Boolean(readTrackerConfig.scheduleEnabled) ||
+    String(scheduleForm.startTime || "19:00") !== String(readTrackerConfig.startTime || "19:00") ||
+    String(scheduleForm.endTime || "07:00") !== String(readTrackerConfig.endTime || "07:00")
+  ), [scheduleForm, readTrackerConfig]);
 
   const timeSelectHours = useMemo(() => Array.from({ length: 24 }, (_, index) => String(index).padStart(2, "0")), []);
   const timeSelectMinutes = useMemo(() => ["00", "10", "20", "30", "40", "50"], []);
@@ -2105,13 +2115,19 @@ export default function SystemMaintenance() {
       setReadTrackerConfig(nextConfig);
       setReadTrackerMode(effectiveMode);
       setReadTrackerModeState(effectiveMode);
+      const requestedModeLabel = mode === "off" ? "關閉" : mode === "local" ? "本機模式" : "全域上報";
+      const effectiveModeLabel = effectiveMode === "off" ? "關閉" : effectiveMode === "local" ? "本機模式" : "全域上報";
+      const scheduleOverrideActive = effectiveMode !== mode;
+
       showToast(
-        mode === "off"
-          ? "讀取來源追蹤已切換為關閉；排程設定維持不變"
-          : mode === "local"
-            ? "已切換為本機模式；排程設定維持不變"
-            : "已切換為全域上報模式；排程設定維持不變",
-        mode === "off" ? "info" : "success"
+        scheduleOverrideActive
+          ? `已儲存${requestedModeLabel}；目前排程時段優先維持${effectiveModeLabel}`
+          : mode === "off"
+            ? "讀取來源追蹤已切換為關閉；排程設定維持不變"
+            : mode === "local"
+              ? "已切換為本機模式；排程設定維持不變"
+              : "已切換為全域上報模式；排程設定維持不變",
+        mode === "off" && !scheduleOverrideActive ? "info" : "success"
       );
     } catch (error) {
       console.error(error);
@@ -5655,7 +5671,7 @@ export default function SystemMaintenance() {
           <div className="p-6 border-b border-[#F0E3CF] flex flex-col lg:flex-row lg:items-center lg:justify-between gap-4"><SectionTitle eyebrow="Traffic Diagnosis" title="讀取來源追蹤" desc="用來判斷晚間讀取暴增是由哪一個資料來源、頁面或角色造成。" icon={Radio} />
             <div className="flex flex-wrap gap-2">{[{ id: "off", label: "關閉", icon: Power }, { id: "local", label: "本機模式", icon: Monitor }, { id: "global", label: "全域上報", icon: Globe2 }].map((mode)=><button key={mode.id} onClick={()=>handleChangeReadTrackerMode(mode.id)} className={`px-4 py-2 rounded-2xl text-xs font-black border flex items-center gap-2 transition-all ${getReadTrackerModeButtonClass(mode.id)}`}><mode.icon size={14} />{mode.label}</button>)}</div>
           </div>
-          <div className="p-6 border-b border-[#F0E3CF] bg-[#FFFCF7]"><div className="rounded-[1.75rem] border border-[#EEDFC7] bg-white shadow-sm overflow-hidden"><div className="p-5 flex flex-col xl:flex-row xl:items-center xl:justify-between gap-4 border-b border-stone-100"><div className="min-w-0"><h3 className="text-sm font-black text-stone-800 flex items-center gap-2"><Clock size={18} className="text-[#B7863D]" />排程式全域上報</h3><p className="text-xs text-stone-400 font-bold mt-1">固定晚間診斷區間，讓每天數據可比較；支援跨日，例如 19:00～07:00。</p></div><div className={`shrink-0 inline-flex items-center gap-2 px-3 py-2 rounded-2xl text-xs font-black border ${!scheduleForm.scheduleEnabled ? "bg-stone-50 text-stone-500 border-stone-200" : scheduleStatus.isActive ? "bg-emerald-50 text-emerald-700 border-emerald-100" : "bg-amber-50 text-amber-700 border-amber-100"}`}><CheckCircle2 size={15} />{scheduleStatus.label}｜現在 {scheduleStatus.nowTime}</div></div>
+          <div className="p-6 border-b border-[#F0E3CF] bg-[#FFFCF7]"><div className="rounded-[1.75rem] border border-[#EEDFC7] bg-white shadow-sm overflow-hidden"><div className="p-5 flex flex-col xl:flex-row xl:items-center xl:justify-between gap-4 border-b border-stone-100"><div className="min-w-0"><h3 className="text-sm font-black text-stone-800 flex items-center gap-2"><Clock size={18} className="text-[#B7863D]" />排程式全域上報</h3><p className="text-xs text-stone-400 font-bold mt-1">固定晚間診斷區間，讓每天數據可比較；支援跨日，例如 19:00～07:00。</p></div><div className={`shrink-0 inline-flex items-center gap-2 px-3 py-2 rounded-2xl text-xs font-black border ${!scheduleStatus.scheduleEnabled ? "bg-stone-50 text-stone-500 border-stone-200" : scheduleStatus.isActive ? "bg-emerald-50 text-emerald-700 border-emerald-100" : "bg-amber-50 text-amber-700 border-amber-100"}`}><CheckCircle2 size={15} />{scheduleStatus.label}｜現在 {scheduleStatus.nowTime}{hasUnsavedScheduleChanges ? "｜排程草稿尚未儲存" : ""}</div></div>
             <div className="p-5 space-y-4">
               <div className="grid grid-cols-1 lg:grid-cols-[1.1fr_1fr_1fr_auto] gap-3 items-end">
                 <div className="rounded-2xl border border-stone-100 bg-stone-50/70 p-3 flex items-center justify-between gap-3">

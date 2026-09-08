@@ -5,6 +5,7 @@ import {
   getManualLocalReadTrackerEnabled,
   setManualLocalReadTrackerEnabled,
   resolveReadTrackerModeFromConfig,
+  getReadTrackerScheduleStatus,
 } from "../src/utils/readTracker.js";
 
 class MemoryStorage {
@@ -101,4 +102,60 @@ test("App keeps using the shared resolver for config and schedule authority", as
 
   assert.match(source, /resolveReadTrackerModeFromConfig\(remoteConfig\)/);
   assert.doesNotMatch(source, /read_tracker_manual_local_enabled/);
+});
+
+test("persisted schedule remains authority while editor draft is unsaved", async () => {
+  const now = new Date(2026, 8, 8, 9, 54, 0);
+  const persistedMorningSchedule = {
+    mode: "global",
+    scheduleEnabled: true,
+    scheduleMode: "global",
+    startTime: "09:00",
+    endTime: "10:00",
+  };
+  const unsavedEveningDraft = {
+    ...persistedMorningSchedule,
+    startTime: "19:00",
+    endTime: "07:00",
+  };
+
+  assert.equal(
+    getReadTrackerScheduleStatus(persistedMorningSchedule, now).isActive,
+    true,
+    "saved 09:00-10:00 schedule is active at 09:54"
+  );
+  assert.equal(
+    getReadTrackerScheduleStatus(unsavedEveningDraft, now).isActive,
+    false,
+    "unsaved 19:00-07:00 editor draft must not redefine actual schedule authority"
+  );
+
+  const fs = await import("node:fs/promises");
+  const source = await fs.readFile(
+    new URL("../src/components/SystemMaintenance.jsx", import.meta.url),
+    "utf8"
+  );
+
+  assert.match(
+    source,
+    /getReadTrackerScheduleStatus\(\{\s*\.\.\.readTrackerConfig,\s*scheduleMode:\s*"global"\s*\}\)/
+  );
+  assert.doesNotMatch(
+    source,
+    /getReadTrackerScheduleStatus\(\{\s*\.\.\.readTrackerConfig,\s*\.\.\.scheduleForm/
+  );
+  assert.match(source, /hasUnsavedScheduleChanges/);
+  assert.match(source, /排程草稿尚未儲存/);
+  assert.match(
+    source,
+    /!scheduleStatus\.scheduleEnabled\s*\?\s*"bg-stone-50 text-stone-500 border-stone-200"/,
+    "schedule status badge styling must use persisted schedule authority"
+  );
+  assert.doesNotMatch(
+    source,
+    /!scheduleForm\.scheduleEnabled\s*\?\s*"bg-stone-50 text-stone-500 border-stone-200"/,
+    "unsaved editor draft must not drive current schedule badge styling"
+  );
+  assert.match(source, /scheduleOverrideActive\s*=\s*effectiveMode\s*!==\s*mode/);
+  assert.match(source, /目前排程時段優先維持/);
 });
