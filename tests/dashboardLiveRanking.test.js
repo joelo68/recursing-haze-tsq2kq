@@ -137,3 +137,54 @@ test("Formal current-detail authority remains strict for trusted/formal ranking"
   assert.match(formal, /formalRankEligible: \(\s*reportingStatus === "DATA_COMPLETE"/);
   assert.match(formal, /\.filter\(\(row\) => row\.formalRankEligible\)/);
 });
+
+test("Dashboard current-month store presentation ranks against full brand authority before own-store filtering", () => {
+  const fullBrandRows = [
+    row({ storeKey: "蘆洲", formalNetCash: 940617, cashTarget: 1414880, cashAchievement: 66 }),
+    row({ storeKey: "圓區", formalNetCash: 863075, cashTarget: 1320000, cashAchievement: 65 }),
+    row({ storeKey: "大順", formalNetCash: 981639, cashTarget: 1600000, cashAchievement: 61 }),
+    row({ storeKey: "三重", formalNetCash: 599783, cashTarget: 1250000, cashAchievement: 48 }),
+  ];
+
+  const globalRanking = buildDashboardLiveRanking({ rows: fullBrandRows });
+  const storePresentation = globalRanking.rows.filter((item) => item.storeKey === "大順");
+
+  assert.equal(storePresentation.length, 1);
+  assert.equal(
+    storePresentation[0].dashboardLiveCashAchievementRank,
+    3,
+    "大順 must keep its all-brand rank even when store-role presentation only shows 大順"
+  );
+  assert.equal(
+    storePresentation[0].dashboardLiveRankEligibleStoreCount,
+    4,
+    "denominator must remain the full rank-eligible brand cohort"
+  );
+
+  const hook = read("src/hooks/useDashboardStats.js");
+  const start = hook.indexOf("const detailMyStoreRankings = useMemo(() => {");
+  const end = hook.indexOf("\n  const ", start + 10);
+  assert.ok(start >= 0 && end > start, "detailMyStoreRankings block must exist");
+  const detailRankingBlock = hook.slice(start, end);
+
+  assert.match(
+    detailRankingBlock,
+    /rows:\s*Object\.values\(currentDetailFormalAuthority\.stores\s*\|\|\s*\{\}\)/,
+    "live ranking must be built from full current-brand Formal authority"
+  );
+  assert.match(
+    detailRankingBlock,
+    /presentationStoreKeySet/,
+    "viewer/store scope must be presentation-only"
+  );
+  assert.match(
+    detailRankingBlock,
+    /\.filter\(\(row\)\s*=>\s*presentationStoreKeySet\.has\(cleanName\(row\?\.storeKey\)\)\)/,
+    "own-store filtering must happen after global rank calculation"
+  );
+  assert.doesNotMatch(
+    detailRankingBlock,
+    /rows:\s*scopedRows/,
+    "consumer must never rank only the viewer-scoped rows"
+  );
+});

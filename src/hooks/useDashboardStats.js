@@ -1985,20 +1985,22 @@ export function useDashboardStats() {
 
   const detailMyStoreRankings = useMemo(() => {
     if (!currentDetailFormalAuthority?.compatible) return [];
-    const authorityRowsByStore = new Map(
-      Object.values(currentDetailFormalAuthority.stores || {})
-        .map((row) => [cleanName(row?.storeKey), row])
-        .filter(([storeKey]) => Boolean(storeKey))
+    // Ranking authority 與 presentation scope 必須分離：
+    // 先用目前品牌完整 Formal authority 建立全區即時排名，再只顯示 viewer 可看的店家。
+    // 店經理因此看到「自己的店在全區的名次」，而不是拿自己的 1 間店與自己排名。
+    // System Excluded row 仍由 buildDashboardLiveRanking 的 formalScopeEligible guard 排除，
+    // own-store self-view 不會因此恢復 Formal ranking authority。
+    const presentationStoreKeySet = new Set(
+      (effectiveStores || []).map(cleanName).filter(Boolean)
     );
-    const scopedRows = [...new Set((effectiveStores || []).map(cleanName).filter(Boolean))]
-      .map((storeKey) => authorityRowsByStore.get(storeKey))
-      .filter(Boolean);
     const liveRanking = buildDashboardLiveRanking({
-      rows: scopedRows,
+      rows: Object.values(currentDetailFormalAuthority.stores || {}),
       normalizeStoreKey: cleanName,
     });
 
-    return liveRanking.rows.map((row) => {
+    return liveRanking.rows
+      .filter((row) => presentationStoreKeySet.has(cleanName(row?.storeKey)))
+      .map((row) => {
       const rank = Number(row.dashboardLiveCashAchievementRank || 0) || null;
       const totalStores = Number(row.dashboardLiveRankEligibleStoreCount || liveRanking.liveRankEligibleStoreCount || 0);
       const scopeStoreCount = Number(row.dashboardLiveScopeStoreCount || liveRanking.scopeStoreCount || 0);
