@@ -2,7 +2,171 @@
 
 > 用途：記錄「目前正式環境已確認到哪個狀態」。這不是 CHANGELOG。  
 > 優先順序：使用者提供的目前正式部署 source > 本檔案 > 其他 Knowledge Base 文件。  
-> 最後整併更新：**2026-09-07（UTC+8）**。
+> 最後整併更新：**2026-09-08（UTC+8）**。
+
+# Latest Production Runtime Override — 2026-09-08（Batch 5B-2B Annual Reads + Store Manager Global Ranking + Read Tracker Schedule/UI Authority Closeout）
+
+> 本節是目前最高優先的 Frontend Production runtime / Firestore read-topology 狀態。下方 Batch 9、Batch 8 與更早章節保留各自歷史 evidence；若狀態衝突，以目前正式 source、Production publish 與本節為準。
+
+正式 runtime：
+
+```text
+Official working directory    = ~/cyj-new
+branch                        = main
+Runtime implementation commit = b7928cc1f74d50cf8c8bbb5f7755dd56f1d1c812
+CURRENT_APP_VERSION           = 3.5.3（未提高）
+
+Batch 5B-2B Annual Reads      = b82bb1e2a1f727c0645be9fa21c5f47a06f8b565
+                                perf: scope annual reads to trusted fallback months
+
+Read Tracker manual-local fix = 65aeacb8420ac3a32fc20dcb80a14057fe90f074
+                                fix: preserve manual local read tracker mode
+
+Store manager global ranking  = 0aaba6e9c50a66e0b309cad108afc65328fbcfb1
+                                fix: preserve global rank for store dashboard
+
+Read Tracker UI authority     = b7928cc1f74d50cf8c8bbb5f7755dd56f1d1c812
+                                fix: align read tracker schedule UI authority
+
+Frontend Production gh-pages = 25493aab86da103ca120a3f8a7239805d4510b51
+Backend / Functions           = unchanged
+Firestore Rules               = unchanged
+Firestore paths               = unchanged
+```
+
+## Batch 5B-2B — Annual Reads Cutover / Production Acceptance
+
+Annual read topology 的正式 owner：
+
+```text
+src/App.jsx
+src/utils/annualReadPolicy.js
+src/components/AnnualView.jsx
+tests/annualHistoricalReads.test.js
+```
+
+正式 read policy：
+
+```text
+dashboard_summary
+→ selectedYear documentId range query
+
+summary_recalc_flags
+→ selectedYear documentId range query
+
+resolveAnnualReadPlan()
+→ SUMMARY_LOADING
+→ SUMMARY_TRUSTED
+→ FALLBACK_MONTHS
+
+monthly_aggregated
+→ 只讀 current month
+→ 加上 dirty / missing / stale historical fallback months
+
+therapist_monthly_aggregated
+→ whole-year Annual persistent listener retired
+```
+
+正常 trusted historical path：
+
+```text
+historical daily_reports full-year resident load = 0
+whole-year monthly_aggregated load               = 0
+whole-year therapist_monthly_aggregated load     = 0
+raw monthly_targets normal historical path       = 0
+polling                                            = 0
+```
+
+`AnnualView` 仍可對所選 interval 使用 bounded `monthly_targets_summary/{YYYY-MM}` point reads；Raw Target 只在 degraded / explicit fallback contract 允許時使用。
+
+Production acceptance evidence 已確認未出現 historical `daily_reports`、Raw `monthly_targets`、`recalc_queue` large query 或 `maintenance_logs` large query 回歸。Read Tracker 的 docs / trigger 數字是觀測證據，不應被誤解為整頁 Firestore billed reads 的精確總數。
+
+## Store Manager Dashboard — Global Rank / Local Presentation
+
+Current-month store role 正式 contract：
+
+```text
+full current-brand Formal authority rows
+→ buildDashboardLiveRanking()
+→ 先形成全品牌 rank + denominator
+→ 再以 effectiveStores 過濾 viewer presentation
+```
+
+因此店經理只看到自己可看的店，但排名仍是正式全品牌排名，不再因 viewer scope 只有一店而顯示 `No.1 / 1`。
+
+System Exclusion 仍在 Formal authority 層 fail closed；本修正沒有恢復被排除店的 Formal eligibility。
+
+Production smoke 已由使用者確認排名畫面正常。
+
+## Read Tracker — Effective Mode / Schedule UI Authority
+
+正式 effective-mode precedence：
+
+```text
+1. active persisted schedule
+2. device manual-local preference
+3. persisted config mode
+4. off
+```
+
+`read_tracker_config` 依品牌隔離：
+
+```text
+CYJ
+artifacts/{appId}/public/data/global_settings/read_tracker_config
+
+安妞 / 伊啵
+brands/{brandId}/settings/read_tracker_config
+```
+
+`SystemMaintenance.jsx` 的 UI authority：
+
+```text
+readTrackerConfig
+→ persisted schedule / current schedule status / badge styling
+
+scheduleForm
+→ editor draft only
+→ 若與 persisted config 不同，顯示「排程草稿尚未儲存」
+
+requested mode
+→ 寫入 config / local manual preference
+→ resolveReadTrackerModeFromConfig()
+→ effectiveMode
+→ button / lower status / Toast
+```
+
+如果 active schedule 仍強制 `global`，使用者點 `local` 時 Toast 不再虛假宣稱「已切換本機」；會明確回報目前排程時段仍維持真正的 effective mode。
+
+Production smoke 已由使用者確認 CYJ / 安妞 / 伊啵切換均正常。
+
+## Final closeout status
+
+```text
+Batch 5B-2B
+IMPLEMENTED / VALIDATED / COMMITTED / PUSHED / DEPLOYED = YES
+Production read acceptance = PASS
+PRODUCTION CONFIRMED       = YES
+
+Store Manager Global Ranking
+IMPLEMENTED / VALIDATED / COMMITTED / PUSHED / DEPLOYED / PRODUCTION CONFIRMED = YES
+
+Read Tracker Schedule/UI Authority
+IMPLEMENTED / VALIDATED / COMMITTED / PUSHED / DEPLOYED / PRODUCTION CONFIRMED = YES
+
+Batch 5B-2B Firestore query topology = CHANGED / SCOPED
+→ dashboard_summary selected-year documentId range query
+→ summary_recalc_flags selected-year documentId range query
+→ monthly_aggregated fallback-month query
+→ therapist_monthly_aggregated whole-year Annual listener retired
+
+Read Tracker / Ranking Firestore topology delta = 0
+Polling delta                              = 0
+Functions / Rules delta                    = 0 / 0
+CURRENT_APP_VERSION                        = 3.5.3 unchanged
+```
+
+Documentation Impact：本次 closeout 更新 `CURRENT_STATE.md`、`SYSTEM_SOURCE_MAP.md`、`MAINTENANCE_TOOLS.md`、`DATA_FLOW.md`、`DASHBOARD_SUMMARY.md`、`ARCHITECTURE.md`；其他 canonical docs = None。
 
 # Latest Production Runtime Override — 2026-09-07（Batch 9 Legacy Analytics Retirement + Store Identity / Historical Ranking Incident Closeout）
 
@@ -2678,7 +2842,7 @@ DEPLOYED
 PRODUCTION CONFIRMED
 ```
 
-Batch 5B-2B Annual Reads Cutover 尚未開始。它只處理 Annual reads topology（year-scoped Summary / flags、current-month fallback scope、移除未使用 annual listeners 等），不得重新改寫本節已 Production Confirmed 的 Annual Formal semantics。
+Batch 5B-2B Annual Reads Cutover 已於 runtime commit `b82bb1e2a1f727c0645be9fa21c5f47a06f8b565` 完成；2026-09-08 Production read acceptance 已關閉。它只改 Annual reads topology（year-scoped Summary / flags、current-month + affected-month fallback scope、移除 whole-year therapist aggregate listener），沒有重新改寫本節已 Production Confirmed 的 Annual Formal semantics。
 
 ## Observation
 

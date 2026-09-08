@@ -591,7 +591,14 @@ Maintenance 可載入封存／重複資料，
 正式 utility：
 
 ```text
-readTracker.js
+src/utils/readTracker.js
+```
+
+主要 orchestration：
+
+```text
+src/App.jsx
+src/components/SystemMaintenance.jsx
 ```
 
 模式：
@@ -600,6 +607,18 @@ readTracker.js
 off
 local
 global
+```
+
+`read_tracker_config` 是 persisted brand-scoped config；`scheduleForm` 只是維護頁尚未儲存的 editor draft。
+
+正式 path：
+
+```text
+CYJ
+artifacts/{appId}/public/data/global_settings/read_tracker_config
+
+安妞 / 伊啵
+brands/{brandId}/settings/read_tracker_config
 ```
 
 ---
@@ -637,6 +656,48 @@ Maintenance 可手動：
 ```
 
 或使用排程。
+
+## 30.1 Schedule / Effective Mode Authority
+
+正式 Effective Mode precedence：
+
+```text
+1. active persisted schedule
+2. 此裝置 manual-local preference
+3. persisted config mode
+4. off
+```
+
+排程跨日判斷例如：
+
+```text
+19:00 → 07:00
+```
+
+在 19:00 之後或 07:00 之前為 active；排程 active 時會優先使用 `scheduleMode`（目前正式為 global）。
+
+Maintenance UI 必須區分：
+
+```text
+readTrackerConfig
+→ 已儲存／目前真正生效的 schedule authority
+
+scheduleForm
+→ 尚未儲存的編輯草稿
+```
+
+因此：
+
+```text
+目前排程文字
+目前排程 badge 顏色
+→ 都由 persisted scheduleStatus 決定
+
+scheduleForm 與 persisted config 不同
+→ 顯示「排程草稿尚未儲存」
+```
+
+模式按鈕的 Toast 也必須以 `resolveReadTrackerModeFromConfig()` 後的 `effectiveMode` 為準。若使用者要求 local，但 active schedule 仍強制 global，UI 不得虛假宣稱已切成本機。
 
 ---
 

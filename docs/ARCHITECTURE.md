@@ -1,7 +1,7 @@
 # ARCHITECTURE.md
 
 > 本文件描述目前正式部署版本的系統架構。  
-> 已整併至 2026-09-07 Batch 8 Projection Model Authority / Dashboard + Telegram consumer closeout。
+> 已整併至 2026-09-08 Batch 5B-2B Annual Reads / Store Manager Global Ranking / Read Tracker Schedule/UI Authority closeout。
 > `CURRENT_STATE.md` 專門區分「已正式確認」、「待部署」與「Production 觀察中」的 Security 工作。
 
 # 1. 高階架構
@@ -244,6 +244,17 @@ global
 
 用於分析 Firestore reads 來源。
 
+Effective Mode 是共用 authority，而不是由 App / Maintenance 各自判斷：
+
+```text
+active persisted schedule
+→ manual-local device preference
+→ persisted config mode
+→ off
+```
+
+`read_tracker_config` 依既有品牌 path resolver 隔離；`SystemMaintenance.scheduleForm` 是 editor draft，不是 runtime schedule authority。
+
 # 6. Dashboard
 
 ```text
@@ -340,6 +351,27 @@ MONTHLY_THERAPIST_REPORT_DATA_VIEWS
 - Dashboard 預設店家模式不應無條件常駐讀 therapist_daily_reports
 
 這是控制 Firestore reads 的重要架構，不得在改頁面時隨意移除。
+
+### Annual Read Policy — Batch 5B-2B
+
+Annual 現在不是「進年度頁就監聽整年 aggregate」：
+
+```text
+selected-year dashboard_summary + summary_recalc_flags
+→ resolveAnnualReadPlan()
+→ trusted historical months use Summary
+→ current / dirty / missing / stale months only enter monthly_aggregated fallback
+```
+
+`therapist_monthly_aggregated` 的 whole-year Annual listener 已退休。Normal trusted path 不載入 historical `daily_reports`、whole-year `monthly_aggregated`、whole-year `therapist_monthly_aggregated` 或 Raw `monthly_targets`。
+
+Owner：
+
+```text
+src/App.jsx
+src/utils/annualReadPolicy.js
+tests/annualHistoricalReads.test.js
+```
 
 # 9. Store Identity
 

@@ -595,6 +595,30 @@ rankings_summary verified
 
 但實際 Raw 已不同。
 
+## Store role：先排名、後 presentation filter
+
+正式排名 contract 不允許 store viewer 因為只能看自己一店，就重新用一店 scope 計算 `No.1 / 1`。
+
+Current month：
+
+```text
+full current-brand Formal authority rows
+→ buildDashboardLiveRanking()
+→ 全品牌 rank / denominator
+→ effectiveStores viewer filter
+→ StorePerformanceView
+```
+
+Historical trusted Summary：
+
+```text
+formalStoreRankings persisted authority
+→ effectiveStores viewer filter
+→ StorePerformanceView
+```
+
+因此「viewer 只看自己的店」與「Formal ranking denominator」是兩個不同層次；System Exclusion 仍在 Formal eligibility 層處理。
+
 ---
 
 # 21. Historical Delegation Scope
@@ -613,17 +637,51 @@ effectiveStores
 
 # 22. Annual Data
 
-AnnualView 使用：
+Batch 5B-2B 後，Annual 的 formal consumer 與 reads topology 分開：
 
 ```text
-annualAggregatedData
 annualDashboardSummaries
 annualSummaryStatusMap
+annualSummaryLoadState
+systemExclusionState
+currentLifecycleMasterState
+   │
+   ▼
+resolveAnnualReadPlan()
 ```
 
-歷史已驗證月份以 Summary 為可信口徑。
+Read modes：
 
-本月／未整理月份可有 aggregation fallback。
+```text
+SUMMARY_LOADING
+SUMMARY_TRUSTED
+FALLBACK_MONTHS
+```
+
+歷史已驗證月份以 Summary 為可信口徑，不因進入 AnnualView 就建立 whole-year aggregate listener。
+
+`annualAggregatedData` 只服務：
+
+```text
+current month
+dirty historical month
+missing historical month
+stale / trust-failed historical month
+```
+
+等 `fallbackYearMonths`。
+
+Normal trusted path：
+
+```text
+historical daily_reports = 0 resident full-year load
+whole-year monthly_aggregated = 0
+whole-year therapist_monthly_aggregated = 0
+raw monthly_targets = 0
+polling = 0
+```
+
+AnnualView 的月份區間目標顯示可做 bounded `monthly_targets_summary` point reads；這與 whole-year Raw Target listener 是不同成本模型。
 
 ---
 

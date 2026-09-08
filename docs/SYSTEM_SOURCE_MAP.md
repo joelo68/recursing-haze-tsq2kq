@@ -1,7 +1,7 @@
 # SYSTEM_SOURCE_MAP.md
 
 > 狀態：Project Knowledge Base / Source Map v0.1
-> 已整併至 2026-09-07 Batch 9 + Production Incident closeout；latest runtime implementation lineage = `2c49a9f74705972d6fec44d59b71c5f79ad2afc5`，Batch 9 legacy analytics retirement = `4dabb9bbf3c45151654dc1282777c36b76ccb62c`，`CURRENT_APP_VERSION = 3.5.3`，`~/cyj-new` 為唯一正式 Source of Truth。docs-only closeout commit 不改變 runtime lineage；各功能的部署／Production Confirmation 仍以 `CURRENT_STATE.md` 為準。
+> 已整併至 2026-09-08 Batch 5B-2B Annual Reads / Store Manager Global Ranking / Read Tracker Schedule/UI Authority closeout；latest runtime implementation lineage = `b7928cc1f74d50cf8c8bbb5f7755dd56f1d1c812`，Annual Reads runtime ancestor = `b82bb1e2a1f727c0645be9fa21c5f47a06f8b565`，Store Manager Global Ranking = `0aaba6e9c50a66e0b309cad108afc65328fbcfb1`，`CURRENT_APP_VERSION = 3.5.3`，`~/cyj-new` 為唯一正式 Source of Truth。docs-only closeout commit 不改變 runtime lineage；各功能的部署／Production Confirmation 仍以 `CURRENT_STATE.md` 為準。
 > 禁止以舊對話、舊版檔案、AI 記憶或未提供的檔案補足事實。
 > 無法由目前正式程式確認的內容，必須標記為「未由目前正式來源確認」。
 
@@ -231,13 +231,63 @@ global
 - source docs / triggers
 - global flush
 - schedule status
+- manual-local device preference
+- Effective Mode resolver
 - Firestore-safe field key
+
+正式 Effective Mode authority：
+
+```text
+active persisted schedule
+→ manual-local device preference
+→ persisted config mode
+→ off
+```
+
+正式 config path 依品牌 resolver 隔離：
+
+```text
+CYJ
+artifacts/{appId}/public/data/global_settings/read_tracker_config
+
+安妞 / 伊啵
+brands/{brandId}/settings/read_tracker_config
+```
+
+Owner boundary：
+
+```text
+src/utils/readTracker.js
+→ schedule calculation + effective-mode pure/shared authority
+
+src/App.jsx
+→ persisted read_tracker_config listener
+→ runtime MODE_KEY / effective mode
+
+src/components/SystemMaintenance.jsx
+→ mode / schedule editor
+→ current status presentation
+→ requested mode write
+
+scheduleForm
+→ editor draft only
+→ 不得冒充目前 persisted schedule
+
+readTrackerConfig / scheduleStatus
+→ 目前排程文字 + badge styling authority
+```
 
 主要使用者：
 
 - `App.jsx`
 - `SystemMaintenance.jsx`
 - `StoreAnalysisView.jsx`
+
+Regression owner：
+
+```text
+tests/readTrackerManualLocalAuthority.test.js
+```
 
 ---
 
@@ -642,9 +692,31 @@ tests/targetAuthority.test.js
 
 主要來源：
 
-- annual aggregated data
-- historical dashboard summaries
-- monthly targets / target summaries
+- `dashboard_summary` selected-year Summary rows
+- `summary_recalc_flags` selected-year trust rows
+- `monthly_aggregated` only for `resolveAnnualReadPlan()` fallback months
+- bounded `monthly_targets_summary/{YYYY-MM}` interval point reads
+- Raw monthly target only for explicit degraded fallback contract
+
+Annual reads owners：
+
+```text
+src/App.jsx
+src/utils/annualReadPolicy.js
+src/utils/annualFormalConsumer.js
+src/components/AnnualView.jsx
+tests/annualHistoricalReads.test.js
+```
+
+`annualReadPolicy.js` modes：
+
+```text
+SUMMARY_LOADING
+SUMMARY_TRUSTED
+FALLBACK_MONTHS
+```
+
+正常 trusted historical path 不建立 whole-year `monthly_aggregated` / `therapist_monthly_aggregated` resident listener，也不回讀 historical `daily_reports`。
 
 用途：
 
@@ -652,6 +724,7 @@ tests/targetAuthority.test.js
 - 年度預算
 - 月度趨勢
 - historical Summary 優先使用
+- current month / dirty / missing / stale month 才進 scoped aggregate fallback
 
 ## `RegionalView.jsx`
 
@@ -2280,7 +2353,7 @@ DEPLOYED
 PRODUCTION CONFIRMED
 ```
 
-Batch 5B-2B Annual Reads Cutover 尚未開始。它必須以當時最新正式 main 重新取得 Source of Truth，並只處理 Annual reads topology，不得重寫 Batch 5B-2A 已確認的 Formal semantics。
+Batch 5B-2B Annual Reads Cutover 已由 runtime commit `b82bb1e2a1f727c0645be9fa21c5f47a06f8b565` 完成並通過 2026-09-08 Production read acceptance；它只處理 Annual reads topology，不重寫 Batch 5B-2A 已確認的 Formal semantics。
 
 # 33. Batch 5E-0 → 5E-1A.1 Zero Placeholder / Target Summary Writer Owners（PRODUCTION CONFIRMED）
 

@@ -508,24 +508,58 @@ StoreAnalysis 是容易產生「為單店多撈資料」的頁面，
 
 # 20. Annual Flow
 
+Batch 5B-2B 後，Annual 的資料讀取先由 selected-year Summary trust 決定：
+
+```text
+selectedYear
+   │
+   ├─ dashboard_summary
+   │      └─ documentId selectedYear range
+   │
+   ├─ summary_recalc_flags
+   │      └─ documentId selectedYear range
+   │
+   ▼
+resolveAnnualReadPlan()
+   │
+   ├─ SUMMARY_LOADING
+   ├─ SUMMARY_TRUSTED
+   └─ FALLBACK_MONTHS
+            │
+            ▼
+      monthly_aggregated
+      只讀 current month
+      + dirty / missing / stale historical months
+```
+
+正常 trusted historical path：
+
+```text
+historical daily_reports full-year resident load = 0
+whole-year monthly_aggregated load               = 0
+whole-year therapist_monthly_aggregated load     = 0
+raw monthly_targets normal historical path       = 0
+polling                                            = 0
+```
+
+`AnnualView` 對使用者選取的月份 interval 可做 bounded：
+
+```text
+monthly_targets_summary/{YYYY-MM}
+```
+
+point reads；Raw Target 只在 Formal fallback contract 明確允許時讀取。
+
+Annual KPI benchmark 是另一條 derived path：
+
 ```text
 completed historical dashboard_summary
-   │
-   ├────────► AnnualView historical summaries
    │
    └────────► rebuildAnnualKpiSummary
                     │
                     ▼
              annual_kpi_summary
 ```
-
-本月 / 未整理月份：
-
-```text
-annualAggregatedData
-```
-
-可作 fallback。
 
 ---
 
@@ -715,6 +749,29 @@ no update/delete
 # 26. Read Tracker Flow
 
 ```text
+brand-scoped read_tracker_config
+   │
+   ├─ CYJ legacy global_settings path
+   └─ 安妞 / 伊啵 brand settings path
+   │
+   ▼
+App persisted-config listener
+   │
+   ▼
+resolveReadTrackerModeFromConfig()
+   │
+   ├─ active persisted schedule
+   ├─ manual-local device preference
+   ├─ persisted config mode
+   └─ off
+   │
+   ▼
+effective mode
+```
+
+觀測資料流：
+
+```text
 onSnapshot / getDocs locations
    │
    ▼
@@ -731,6 +788,17 @@ readTracker.js
            │
            ▼
    SystemMaintenance ranking / hourly analysis
+```
+
+Maintenance presentation boundary：
+
+```text
+readTrackerConfig / scheduleStatus
+→ 目前真正排程狀態 + badge
+
+scheduleForm
+→ editor draft only
+→ 未儲存時只顯示 draft warning，不改 runtime authority
 ```
 
 ---
