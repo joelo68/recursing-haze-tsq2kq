@@ -5,6 +5,48 @@
 
 ---
 
+# Projection v2 Current-Month Flow Override — 2026-09-08
+
+```text
+Historical Raw (previous 3 complete months)
+daily_reports
+    │
+    ├─ Formal KPI semantics
+    ├─ Lifecycle / Reporting Calendar
+    └─ System Exclusion
+    ▼
+functions/projectionAuthority.js
+    │
+    ├─ store weekday median baselines
+    └─ CYJ / ANNIU brand phase calibration
+    ▼
+projection_models/current
+    │
+    ├────────► Dashboard Current MTD
+    │          src/utils/projectionModelConsumer.js
+    │
+    └────────► Telegram Current MTD
+               functions/telegram/projectionConsumer.js
+               ↓
+               aggregateTelegramProjectionRows()
+               aggregate-first → phase → integer round
+```
+
+v2 只校正 v1 remaining forecast：
+
+```text
+currentActual
++ (shadowV1 - currentActual) × phaseMultiplier
+```
+
+CYJ / 安妞在 Day 5+ 且 phase reliable 時可套 v2；伊啵、Day 1–4、phase unreliable 維持 v1。Stale / missing model 才退 current pace。
+
+System Excluded own-store：own actual 可見，但 `allowBrandFallbackForRow=false`，所以不使用 brand historical fallback / phase。
+
+Read topology：Dashboard 仍為 current brand-month 單一 Projection point read；Telegram 仍在既有 execution / brand 讀 Projection + Lifecycle + System Exclusion authority。沒有 persistent listener、polling 或 consumer 3-month Raw scan。
+
+---
+
 # 1. 核心原則
 
 系統資料可分：

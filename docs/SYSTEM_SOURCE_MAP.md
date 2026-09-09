@@ -1,9 +1,71 @@
 # SYSTEM_SOURCE_MAP.md
 
 > 狀態：Project Knowledge Base / Source Map v0.1
-> 已整併至 2026-09-08 Batch 5B-2B Annual Reads / Store Manager Global Ranking / Read Tracker Schedule/UI Authority closeout；latest runtime implementation lineage = `b7928cc1f74d50cf8c8bbb5f7755dd56f1d1c812`，Annual Reads runtime ancestor = `b82bb1e2a1f727c0645be9fa21c5f47a06f8b565`，Store Manager Global Ranking = `0aaba6e9c50a66e0b309cad108afc65328fbcfb1`，`CURRENT_APP_VERSION = 3.5.3`，`~/cyj-new` 為唯一正式 Source of Truth。docs-only closeout commit 不改變 runtime lineage；各功能的部署／Production Confirmation 仍以 `CURRENT_STATE.md` 為準。
+> 已整併至 2026-09-08 Projection v2 Phase Calibration / Telegram Exact Integer Parity closeout；latest runtime source = `d5906ef52738d0b86a92b246722c089bcbaa7b15`，Projection v2 ancestor = `1b2df57c5b1fff3576b2e9cddddeac2ab3b2081d`，Frontend Production gh-pages = `be7b0514128f05d7bfeaa1202fb22f7376d0cb35`，`CURRENT_APP_VERSION = 3.5.3`，`~/cyj-new` 為唯一正式 Source of Truth。
 > 禁止以舊對話、舊版檔案、AI 記憶或未提供的檔案補足事實。
 > 無法由目前正式程式確認的內容，必須標記為「未由目前正式來源確認」。
+
+---
+
+# Projection v2 / Exact Parity Runtime Source Override — 2026-09-08
+
+最新正式 Projection runtime lineage：
+
+```text
+main runtime source           = d5906ef52738d0b86a92b246722c089bcbaa7b15
+Projection v2 ancestor        = 1b2df57c5b1fff3576b2e9cddddeac2ab3b2081d
+Frontend Production gh-pages = be7b0514128f05d7bfeaa1202fb22f7376d0cb35
+CURRENT_APP_VERSION          = 3.5.3
+```
+
+正式 owners：
+
+```text
+functions/projectionAuthority.js
+  → previous 3 complete months
+  → Store weekday median v1 baseline
+  → CYJ / ANNIU brand phase calibration v2
+  → projection_models/current single writer
+
+src/utils/projectionModelConsumer.js
+  → Dashboard Current-MTD Projection consumer
+
+functions/telegram/projectionConsumer.js
+  → Telegram Current-MTD Projection consumer
+  → exact aggregate-first integer parity
+
+functions/index.js
+  → rebuildProjectionModelNow
+  → calculateHistoricalProjectionCurve
+  → telegramWebhook
+  → notificationPatrol
+
+tests/projectionV2PhaseCalibration.test.js
+tests/telegramProjectionConsumer.test.js
+tests/telegramProjectionExactParity.test.js
+```
+
+品牌 contract：
+
+```text
+CYJ   → projection-strategy-v2-phase-calibrated
+ANNIU → projection-strategy-v2-phase-calibrated
+YIBO  → v1 only
+```
+
+Physical authority path 不變：
+
+```text
+CYJ
+artifacts/{appId}/public/data/projection_models/current
+
+ANNIU / YIBO
+brands/{brandId}/projection_models/current
+```
+
+v2 沒有新增 collection、persistent listener、polling 或 consumer Raw 3-month scan。System Excluded own-store 可看自己，但不能用 brand Projection fallback / phase。
+
+`projectionRange.aggregationBasis` 是 Telegram consumer runtime payload，只為 aggregate-first exact rounding parity；不是 Firestore persisted schema。
 
 ---
 

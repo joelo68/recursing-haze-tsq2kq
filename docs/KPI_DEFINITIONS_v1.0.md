@@ -579,6 +579,71 @@ These are operational scenarios, not statistical confidence intervals or guarant
 
 If only one trusted baseline exists, all three scenarios use it. If neither exists, Projection is N/A.
 
+### 12.7 Production phase calibration v2 — CYJ / 安妞
+
+Production v2 是 v1 Store weekday model 的 additive calibration，不是第二套獨立 Projection authority。
+
+Brand scope：
+
+```text
+CYJ   → v2 enabled
+安妞  → v2 enabled
+伊啵  → v1 retained
+```
+
+Historical phase source 使用與 Projection Model 相同的 previous 3 complete calendar months。只有 source months 對該 KPI 具完整 expected Store×Date samples 時，phase curve 才能標為 reliable。
+
+Day 5 起若當日 phase point reliable：
+
+```text
+calendarProgress = daysPassed / daysInMonth
+phaseMultiplier  = calendarProgress / historicalCumulativeCompletionShare
+
+v2Projection
+= currentActual
++ (v1Projection - currentActual) × phaseMultiplier
+```
+
+正式規則：
+
+- Phase **只縮放 remaining forecast**；`currentActual` 不得被 multiplier 重算。
+- Day 1–4：使用 v1。
+- Phase missing / disabled / unreliable / source-month mismatch：使用 v1。
+- Projection Model stale / untrusted：沿既有 fail-closed contract 回 current pace。
+- `projectionRange.shadowV1` 保留 v1 forecast 作 trust / audit / regression；不作第二個對等 user-facing forecast。
+- Challenge Target 不參與 phase calibration。
+- System Excluded own-store self-view 不得使用 brand phase；own data 可見，但 Projection brand fallback / phase 必須停用。
+
+Aggregate rounding contract：
+
+```text
+scope pre-round components
+→ scope aggregate
+→ phase calibration
+→ integer round
+```
+
+Dashboard 與 Telegram 對相同 authority / rows / cutoff 必須得到相同整數 Projection；不得因 per-store 先 round 再 aggregate 產生 1～數元差異。
+
+### Appendix A Runtime Conformance Override — 2026-09-08
+
+下方早期 Audit Findings 中與 Projection 有關的 finding 13 / 14 是當時 source audit 的歷史紀錄，已被 Batch 8 + Projection v2 / Exact Parity runtime supersede。最新正式狀態：
+
+```text
+Projection formal KPI semantics                     = MATCH
+Projection Lifecycle / Reporting Calendar authority = MATCH
+Projection System Exclusion authority               = MATCH
+Store weekday median / source-month authority        = MATCH
+Dashboard / Telegram Projection definition parity   = MATCH
+CYJ / ANNIU phase calibration v2                     = MATCH
+YIBO v1 isolation                                    = MATCH
+Exact integer aggregate rounding parity              = MATCH
+consumer Raw 3-month scan                            = 0
+persistent listener / polling delta                  = 0 / 0
+```
+
+`projection-model-v1` / `projection-semantic-v1` 名稱維持，不代表 CYJ / 安妞仍停在 v1 strategy；其目前 runtime 以 additive `strategyVersion=projection-strategy-v2-phase-calibrated` 表達。
+
 ---
 
 ## 13. Annual / Custom-Range KPI

@@ -5,6 +5,56 @@
 
 ---
 
+# Projection v2 + Exact Integer Parity Override — 2026-09-08
+
+Store KPI Current-MTD Projection 正式 owners：
+
+```text
+functions/telegram/projectionConsumer.js
+functions/index.js → getStorePerformance()
+```
+
+CYJ / 安妞使用 v2 phase-calibrated strategy；伊啵維持 v1。Actual / target / achievement authority 不變，Projection 不得覆寫 actual。
+
+Exact parity：
+
+```text
+舊 Telegram
+per-store Projection
+→ per-store integer round
+→ brand sum
+
+Dashboard
+scope aggregate
+→ phase
+→ integer round
+
+目前 Telegram
+per-store consumer 保留 projectionRange.aggregationBasis pre-round basis
+→ aggregateTelegramProjectionRows()
+→ scope aggregate
+→ phase
+→ integer round
+```
+
+因此相同 brand / cutoff 下，CYJ、安妞、伊啵 Dashboard 與 Telegram 現金／權責月底 Projection 已 Production smoke exact match。
+
+`aggregationBasis` 只存在 runtime tool payload，不寫 Firestore，不新增 reads / listeners / writes / polling。
+
+System Excluded own-store 若禁止 brand fallback，aggregate phase 也 fail closed，不得因 parity refactor 洩漏 brand phase。
+
+部署狀態：
+
+```text
+telegramWebhook    = DEPLOYED / interactive Production smoke PASS
+notificationPatrol = DEPLOYED / GEN_2 ACTIVE
+updateTime         = 2026-09-08T09:53:43.363702723Z
+```
+
+本 closeout 沒有另取得實際 scheduled Projection 訊息內容 smoke，因此 `notificationPatrol DEPLOYED/ACTIVE` 與 `scheduled delivery content smoke observed` 必須分開記錄。
+
+---
+
 # 1. 系統構成
 
 ```text

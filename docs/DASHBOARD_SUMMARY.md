@@ -5,6 +5,40 @@
 
 ---
 
+# Dashboard Current-Month Projection v2 Override — 2026-09-08
+
+Historical Summary trust 與 Current-Month Projection 是不同 authority：
+
+```text
+Historical month
+→ verified Summary-first
+
+Current month
+→ current detail actual
+→ projection_models/current
+→ Projection consumer
+```
+
+Dashboard Projection v2：
+
+```text
+CYJ / 安妞
+Store weekday v1 shadow
++ own-brand historical cumulative month phase
+→ remaining forecast phase calibration
+
+伊啵
+→ v1 unchanged
+```
+
+Phase 不得改寫 actual；`projectionRange.shadowV1` 保留 v1 baseline。Day 1–4 / unreliable phase 回 v1，stale model 回 current pace。
+
+System Excluded own-store self-view 不使用 brand phase。Production 已確認 excluded own-store 仍可看自身資料且 Projection 不取得 brand phase；這是 shared System Exclusion scope contract，不是店名 hardcode。
+
+Exact Parity closeout 後，Dashboard 與 Telegram 對相同 brand / cutoff 的現金、權責月底 Projection 要求整數完全一致；使用者已確認 CYJ / 安妞 / 伊啵皆 exact match。
+
+---
+
 # 1. 為什麼有 Summary
 
 本系統同時需要：

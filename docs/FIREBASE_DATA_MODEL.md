@@ -7,6 +7,62 @@
 
 ---
 
+# `projection_models/current` v2 Additive Model Override — 2026-09-08
+
+Projection v2 沒有新增 collection 或第二份 document，仍使用：
+
+```text
+CYJ
+artifacts/{appId}/public/data/projection_models/current
+
+安妞 / 伊啵
+brands/{brandId}/projection_models/current
+```
+
+Persisted base contract 仍是：
+
+```text
+schemaVersion   = projection-model-v1
+semanticVersion = projection-semantic-v1
+modelMonth
+sourceMonths = previous 3 complete months
+authority
+brand
+stores
+sourceStats
+```
+
+CYJ / 安妞 additive v2 fields：
+
+```text
+strategyVersion = projection-strategy-v2-phase-calibrated
+
+brand.phaseCalibration.schemaVersion = projection-phase-v1
+brand.phaseCalibration.brandId
+brand.phaseCalibration.enabled = true
+brand.phaseCalibration.strategyVersion
+brand.phaseCalibration.sourceMonths[]
+brand.phaseCalibration.minSourceMonths = 3
+
+brand.phaseCalibration.cash.reliable
+brand.phaseCalibration.cash.sourceMonthCount
+brand.phaseCalibration.cash.completeSourceMonths[]
+brand.phaseCalibration.cash.points.{day}.sampleCount
+brand.phaseCalibration.cash.points.{day}.reliable
+brand.phaseCalibration.cash.points.{day}.cumulativeShare
+brand.phaseCalibration.cash.points.{day}.valueStatus
+
+brand.phaseCalibration.accrual.*
+```
+
+伊啵不寫 v2 `strategyVersion` / `brand.phaseCalibration`，保持 v1-compatible。
+
+重要：Telegram exact parity 的 `projectionRange.aggregationBasis` 是 request/runtime consumer payload，**不是** `projection_models/current` persisted field。
+
+Firestore Rules、physical paths、writer document count 沒有因 v2 / exact parity 改變。
+
+---
+
 # 1. 資料路徑總則
 
 目前前端透過 `App.jsx` 的兩個 resolver 統一處理大多數品牌資料：

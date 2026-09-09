@@ -4,6 +4,100 @@
 > 優先順序：使用者提供的目前正式部署 source > 本檔案 > 其他 Knowledge Base 文件。  
 > 最後整併更新：**2026-09-08（UTC+8）**。
 
+# Latest Production Runtime Override — 2026-09-08（Projection v2 Phase Calibration + Telegram Exact Integer Parity Closeout）
+
+> 本節是目前最高優先的 Projection runtime 狀態。下方 Batch 5B-2B、Batch 9、Batch 8 v1 與更早章節保留歷史 evidence；若衝突，以目前正式 source、Production readback 與本節為準。
+
+正式 runtime lineage：
+
+```text
+Official working directory    = ~/cyj-new
+branch                        = main
+Projection v2 implementation  = 1b2df57c5b1fff3576b2e9cddddeac2ab3b2081d
+Exact parity implementation   = d5906ef52738d0b86a92b246722c089bcbaa7b15
+Frontend Production gh-pages  = be7b0514128f05d7bfeaa1202fb22f7376d0cb35
+CURRENT_APP_VERSION           = 3.5.3（未提高）
+```
+
+Projection Model persisted base contract 維持：
+
+```text
+schemaVersion   = projection-model-v1
+semanticVersion = projection-semantic-v1
+documentId      = current
+sourceMonths    = previous 3 complete calendar months
+```
+
+CYJ / 安妞在相同 `projection_models/current` 文件內以 additive `strategyVersion = projection-strategy-v2-phase-calibrated` 與 `brand.phaseCalibration` 啟用 v2；伊啵保持 v1。
+
+v2 正式語意：
+
+```text
+phaseMultiplier
+= calendar progress / historical cumulative completion share
+
+v2
+= currentActual
++ (shadowV1Forecast - currentActual) × phaseMultiplier
+```
+
+規則：
+
+```text
+Day 1–4                  → v1
+Day 5+ + reliable phase  → v2
+phase missing/unreliable → v1
+model stale/missing      → current pace
+```
+
+Phase 只修正尚未發生的 remaining forecast，不重算／放大 current actual；`projectionRange.shadowV1` 保留 v1 診斷基線。
+
+System Exclusion：被排除店 own-store account 仍可查看自己的數據，但不得使用 brand historical fallback / brand phase。Production smoke 已確認 self-view 維持 safe path。
+
+Exact integer parity：Dashboard 正式計算順序是 aggregate-first → phase → integer round。Telegram 已改為保留 runtime-only pre-round `projectionRange.aggregationBasis`，品牌 scope aggregate 後才套 phase / round；使用者已確認 CYJ、安妞、伊啵 Dashboard / Telegram 現金與權責月底 Projection 整數完全一致。
+
+Production deployment / observation：
+
+```text
+Projection Authority Functions  = DEPLOYED
+CYJ v2 model readback           = PASS
+ANNIU v2 model readback         = PASS
+YIBO v1 isolation readback      = PASS
+telegramWebhook                 = DEPLOYED / interactive smoke PASS
+notificationPatrol              = DEPLOYED / GEN_2 ACTIVE
+notificationPatrol updateTime   = 2026-09-08T09:53:43.363702723Z
+Frontend gh-pages               = DEPLOYED / Dashboard smoke PASS
+Firestore Rules                 = unchanged
+CURRENT_APP_VERSION             = 3.5.3 unchanged
+```
+
+Read topology delta versus Batch 8 Projection cutover：
+
+```text
+Dashboard Projection point reads = +0
+Telegram authority point reads   = +0
+Projection model writes topology = +0
+persistent listeners             = +0
+polling                          = +0
+consumer raw 3-month scans       = +0
+```
+
+狀態必須分開：
+
+```text
+Projection v2 Authority / Models          = PRODUCTION CONFIRMED
+Dashboard v2 consumer                     = PRODUCTION CONFIRMED
+Telegram interactive v2 / exact parity    = PRODUCTION CONFIRMED
+YIBO v1 isolation                         = PRODUCTION CONFIRMED
+System Excluded own-store phase isolation = PRODUCTION CONFIRMED
+notificationPatrol deployment             = DEPLOYED / ACTIVE
+scheduled delivery content smoke          = NOT SEPARATELY OBSERVED
+```
+
+`notificationPatrol` 已確認 Function 部署與 ACTIVE；本 closeout 沒有另取得一則實際 scheduled Projection 訊息內容，因此不得把 scheduled delivery content smoke 寫成 PASS。
+
+Documentation Impact：本次更新 `CURRENT_STATE.md`、`SYSTEM_SOURCE_MAP.md`、`ARCHITECTURE.md`、`DATA_FLOW.md`、`DASHBOARD_SUMMARY.md`、`TELEGRAM_AGENT.md`、`FIREBASE_DATA_MODEL.md`、`KPI_DEFINITIONS_v1.0.md`；`MAINTENANCE_TOOLS.md`、`DEPLOYMENT.md`、`AUTH_AND_SECURITY.md`、`PROJECT_OPERATING_RULES.md` = None。
+
 # Latest Production Runtime Override — 2026-09-08（Batch 5B-2B Annual Reads + Store Manager Global Ranking + Read Tracker Schedule/UI Authority Closeout）
 
 > 本節是目前最高優先的 Frontend Production runtime / Firestore read-topology 狀態。下方 Batch 9、Batch 8 與更早章節保留各自歷史 evidence；若狀態衝突，以目前正式 source、Production publish 與本節為準。

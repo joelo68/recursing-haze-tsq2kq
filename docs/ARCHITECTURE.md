@@ -1,8 +1,56 @@
 # ARCHITECTURE.md
 
 > 本文件描述目前正式部署版本的系統架構。  
-> 已整併至 2026-09-08 Batch 5B-2B Annual Reads / Store Manager Global Ranking / Read Tracker Schedule/UI Authority closeout。
+> 已整併至 2026-09-08 Projection v2 Phase Calibration / Telegram Exact Integer Parity closeout。
 > `CURRENT_STATE.md` 專門區分「已正式確認」、「待部署」與「Production 觀察中」的 Security 工作。
+
+# Projection v2 Production Architecture Override — 2026-09-08
+
+```text
+previous 3 complete months daily_reports
+        │
+        ├─ Formal KPI semantics
+        ├─ Store Lifecycle / Reporting Calendar
+        └─ System Exclusion
+        ▼
+functions/projectionAuthority.js
+        │
+        ├─ Store × weekday median baseline (v1)
+        └─ CYJ / ANNIU brand cumulative month-phase curve (v2)
+        ▼
+projection_models/current
+        │
+        ├─ Dashboard → src/utils/projectionModelConsumer.js
+        └─ Telegram  → functions/telegram/projectionConsumer.js
+```
+
+v2 不建立第二份 model document。Persisted `projection-model-v1` / `projection-semantic-v1` 維持；CYJ / 安妞以 additive `strategyVersion` + `brand.phaseCalibration` 啟用，伊啵維持 v1。
+
+```text
+phaseMultiplier
+= calendarProgress / historicalCumulativeCompletionShare
+
+v2
+= currentActual
++ (shadowV1Forecast - currentActual) × phaseMultiplier
+```
+
+Day 1–4 或 phase 不可靠時回 v1；model 不可信時回 current pace。Phase 只修正 remaining forecast，不改 actual。
+
+System Exclusion own-store 的 `selfViewExcluded` scope 會關閉 brand fallback / phase，避免排除店透過 Projection 間接取得品牌 aggregate signal。
+
+Telegram exact parity 不改 Firestore model：consumer 以 runtime-only `projectionRange.aggregationBasis` 保存 pre-round basis，scope aggregate 後才 phase / round，與 Dashboard 同序。
+
+Topology delta：
+
+```text
+reads      +0
+listeners  +0
+writes     +0
+polling    +0
+```
+
+---
 
 # 1. 高階架構
 
