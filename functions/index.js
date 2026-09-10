@@ -42,6 +42,24 @@ const projectionAuthorityFunctions = createProjectionAuthorityFunctions({ admin,
 exports.rebuildProjectionModelNow = projectionAuthorityFunctions.rebuildProjectionModelNow;
 
 // ==========================================
+// ★ Projection Accuracy Checkpoints v1：自動保存 Day 05/07/10/15/20/25 預估證據
+// Backend-only writer；重用 Formal Projection consumer、Lifecycle/Reporting Calendar/System Exclusion。
+// 不載入 Telegram Policy、不新增 listener/polling；月底 final actual / WAPE 由後續 Batch B2 處理。
+// ==========================================
+const { createProjectionAccuracyFunctions } = require("./projectionAccuracy");
+const projectionAccuracyFunctions = createProjectionAccuracyFunctions({
+  admin,
+  db,
+  getStorePerformance,
+  loadProjectionAuthority: loadTelegramAgentProjectionAuthority,
+  createAgentContext: createTelegramAgentContext,
+  getBrandCollection: getSummaryCollection,
+  normalizeStoreKey: normalizeSummaryCoreName,
+});
+exports.captureProjectionAccuracyCheckpoint = projectionAccuracyFunctions.captureProjectionAccuracyCheckpoint;
+
+
+// ==========================================
 // ★ Device Approval v1：新裝置確認與裝置管理後端
 // UI 使用貼近日常工作的中文；內部仍保留清楚的 security schema。
 // ==========================================

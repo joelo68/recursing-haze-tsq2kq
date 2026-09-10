@@ -217,6 +217,19 @@ service cloud.firestore {
       allow write: if false;
     }
 
+
+    // Projection Accuracy v1：Backend-only checkpoint evidence。
+    // 前端僅登入後讀取；checkpoint / finalizer 寫入一律由 Functions Admin SDK 執行。
+    match /brands/{brandId}/projection_accuracy/{document=**} {
+      allow read: if signedIn();
+      allow write: if false;
+    }
+
+    match /artifacts/{appId}/public/data/projection_accuracy/{document=**} {
+      allow read: if signedIn();
+      allow write: if false;
+    }
+
     // 既有品牌資料維持原本登入後可讀寫；排除上方受保護集合，避免寬鬆規則覆蓋。
     match /brands/{brandId}/{collectionName}/{document=**} {
       allow read, write: if signedIn()
@@ -230,6 +243,7 @@ service cloud.firestore {
         && collectionName != 'login_security_state'
         && collectionName != 'store_lifecycle'
         && collectionName != 'projection_models'
+        && collectionName != 'projection_accuracy'
         && !(collectionName == 'settings' && document == 'audit_exclusions')
         && !(collectionName == 'settings' && document == 'permissions');
     }
@@ -247,6 +261,7 @@ service cloud.firestore {
         && collectionName != 'global_blocked_devices'
         && collectionName != 'store_lifecycle'
         && collectionName != 'projection_models'
+        && collectionName != 'projection_accuracy'
         && collectionName != 'global_settings';
     }
 
