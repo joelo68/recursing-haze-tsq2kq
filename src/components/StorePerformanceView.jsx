@@ -298,9 +298,9 @@ const StorePerformanceView = ({ dashboardStats, myStoreRankings, brandInfo }) =>
 
         {range ? (
           <div className="grid grid-cols-1 gap-2.5 sm:grid-cols-3">
-            <ProjectionScenarioColumn title="偏穩" value={range.conservative} desc="後續維持穩定服務與成交時，月底較保守的可能落點。" tone={tone} />
-            <ProjectionScenarioColumn title="主推估" value={range.standard} desc="目前主畫面採用的推估值，適合日常追蹤與會議判讀。" active tone={tone} />
-            <ProjectionScenarioColumn title="衝刺" value={range.aggressive} desc="若活動、回購與成交動能拉升，月底可能觸及的上緣。" tone={tone} />
+            <ProjectionScenarioColumn title="低位推估" value={range.conservative} desc="若後續業績進展低於目前主要推估節奏，月底可能接近此較低落點。" tone={tone} />
+            <ProjectionScenarioColumn title="主推估" value={range.standard} desc="依目前已回報業績與歷史營運節奏，推算的主要月底落點。" active tone={tone} />
+            <ProjectionScenarioColumn title="高位推估" value={range.aggressive} desc="若後續業績進展高於目前主要推估節奏，月底可能接近此較高落點。" tone={tone} />
           </div>
         ) : (
           <div className="rounded-2xl border border-stone-100 bg-stone-50/70 px-4 py-5 text-center text-xs font-bold text-stone-400">
@@ -361,7 +361,7 @@ const StorePerformanceView = ({ dashboardStats, myStoreRankings, brandInfo }) =>
                 <span className="w-fit rounded-full border border-stone-100 bg-stone-50 px-2.5 py-1 text-[10px] font-black text-stone-500">{projectionWeightText}</span>
               </div>
               <p className="mt-2 text-[11px] font-bold leading-5 text-stone-500">
-                系統會參考本月已回報業績，也會納入過去相似營業日的表現節奏。越接近月底，推估會越貼近本月實際狀況；實際結果仍以月底結算為準。
+                系統會依本月已回報業績、目前進度與歷史營運節奏推估月底可能落點。隨著本月資料逐步累積，推估會持續貼近實際表現；最終仍以月底正式結算為準。
               </p>
             </div>
           </div>

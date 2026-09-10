@@ -65,3 +65,16 @@ test("StorePerformanceView uses KPI-specific Annual benchmark metadata and prese
   assert.match(source, /getAnnualBenchmarkLabel\(trafficAnnualBenchmark\)/);
   assert.doesNotMatch(source, /numeric > 0 \? fmtNum/);
 });
+
+test("Projection drawer uses neutral low/main/high estimate language without implying operating health", () => {
+  assert.match(source, /title="低位推估"/);
+  assert.match(source, /title="主推估"/);
+  assert.match(source, /title="高位推估"/);
+  assert.match(source, /若後續業績進展低於目前主要推估節奏，月底可能接近此較低落點。/);
+  assert.match(source, /依目前已回報業績與歷史營運節奏，推算的主要月底落點。/);
+  assert.match(source, /若後續業績進展高於目前主要推估節奏，月底可能接近此較高落點。/);
+  assert.match(source, /系統會依本月已回報業績、目前進度與歷史營運節奏推估月底可能落點。/);
+  assert.doesNotMatch(source, /title="偏穩"/);
+  assert.doesNotMatch(source, /title="衝刺"/);
+  assert.doesNotMatch(source, /後續維持穩定服務與成交時/);
+});
