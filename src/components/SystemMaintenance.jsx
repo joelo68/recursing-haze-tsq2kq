@@ -85,6 +85,7 @@ import {
   buildProjectionObservabilitySnapshot,
   buildProjectionAccuracyObservabilitySnapshot,
   buildProjectionHistoricalAccuracyComparison,
+  getProjectionHistoryYearsForRange,
   describeProjectionBias,
   getProjectionAccuracyDisplayPct,
   getProjectionObservabilityTone,
@@ -178,6 +179,21 @@ export default function SystemMaintenance() {
     loadedAtText: "",
   });
   const projectionAccuracyRequestSeq = useRef(0);
+  const [projectionHistoryMode, setProjectionHistoryMode] = useState("latest4");
+  const [projectionHistoryStartMonth, setProjectionHistoryStartMonth] = useState("");
+  const [projectionHistoryEndMonth, setProjectionHistoryEndMonth] = useState("");
+  const [projectionHistoryMetric, setProjectionHistoryMetric] = useState("cash");
+  const [projectionHistoryDetailsOpen, setProjectionHistoryDetailsOpen] = useState(false);
+  const [projectionHistoryDocuments, setProjectionHistoryDocuments] = useState({});
+  const [projectionHistoryLoadState, setProjectionHistoryLoadState] = useState({
+    status: "idle",
+    loadedYears: [],
+    sessionReadCount: 0,
+    loadedAtText: "",
+    error: "",
+  });
+  const projectionHistoryRequestSeq = useRef(0);
+  const projectionHistoryCacheRef = useRef({});
 
   useEffect(() => {
     projectionAccuracyRequestSeq.current += 1;
@@ -198,6 +214,21 @@ export default function SystemMaintenance() {
       data: null,
       error: null,
       loadedAtText: "",
+    });
+    projectionHistoryRequestSeq.current += 1;
+    projectionHistoryCacheRef.current = {};
+    setProjectionHistoryMode("latest4");
+    setProjectionHistoryStartMonth("");
+    setProjectionHistoryEndMonth("");
+    setProjectionHistoryMetric("cash");
+    setProjectionHistoryDetailsOpen(false);
+    setProjectionHistoryDocuments({});
+    setProjectionHistoryLoadState({
+      status: "idle",
+      loadedYears: [],
+      sessionReadCount: 0,
+      loadedAtText: "",
+      error: "",
     });
   }, [currentBrand?.id]);
 
@@ -2604,6 +2635,129 @@ export default function SystemMaintenance() {
       }
     }
   };
+
+  // B2C.1 Rolling History：年度單文件 point-read，只有進階工具開啟或使用者套用區間時讀取。
+  // 無 listener、無 polling、無 Raw query；同品牌同年份在同一工作階段使用記憶體快取。
+  const loadProjectionHistoryYears = async ({ years = [], force = false } = {}) => {
+    const activeBrandId = String(currentBrand?.id || "").trim().toLowerCase() || "cyj";
+    if (!["cyj", "anniu"].includes(activeBrandId)) return { readCount: 0, loadedYears: [] };
+
+    const normalizedYears = [...new Set((Array.isArray(years) ? years : [])
+      .map((year) => String(year || "").trim())
+      .filter((year) => /^\d{4}$/.test(year)))]
+      .sort();
+    if (!normalizedYears.length || normalizedYears.length > 5) {
+      return { readCount: 0, loadedYears: [] };
+    }
+
+    const requestSeq = projectionHistoryRequestSeq.current + 1;
+    projectionHistoryRequestSeq.current = requestSeq;
+    const pendingYears = normalizedYears.filter((year) => {
+      const cacheKey = `${activeBrandId}:${year}`;
+      return force || !Object.prototype.hasOwnProperty.call(projectionHistoryCacheRef.current, cacheKey);
+    });
+
+    if (!pendingYears.length) {
+      const nextDocuments = {};
+      normalizedYears.forEach((year) => {
+        const cached = projectionHistoryCacheRef.current[`${activeBrandId}:${year}`];
+        if (cached) nextDocuments[year] = cached;
+      });
+      setProjectionHistoryDocuments((prev) => ({ ...prev, ...nextDocuments }));
+      return { readCount: 0, loadedYears: normalizedYears };
+    }
+
+    setProjectionHistoryLoadState((prev) => ({ ...prev, status: "loading", error: "" }));
+    const results = await Promise.all(pendingYears.map(async (year) => {
+      try {
+        const historyRef = doc(getCollectionPath("projection_accuracy_history"), year);
+        const snap = await getDoc(historyRef);
+        return {
+          year,
+          data: snap.exists() ? (snap.data() || {}) : null,
+          error: null,
+        };
+      } catch (error) {
+        return { year, data: null, error };
+      }
+    }));
+
+    if (requestSeq !== projectionHistoryRequestSeq.current) {
+      return { readCount: 0, loadedYears: [] };
+    }
+
+    const errors = results.filter((row) => row.error);
+    results.forEach((row) => {
+      const cacheKey = `${activeBrandId}:${row.year}`;
+      if (!row.error) {
+        // null 也寫入 cache，代表本工作階段已確認該年份目前尚無 rolling history 文件。
+        projectionHistoryCacheRef.current[cacheKey] = row.data;
+      }
+    });
+
+    // 成功讀到「文件不存在」時也要移除舊畫面資料，避免強制更新後沿用 stale year doc。
+    setProjectionHistoryDocuments((prev) => {
+      const next = { ...prev };
+      results.forEach((row) => {
+        if (row.error) return;
+        if (row.data) next[row.year] = row.data;
+        else delete next[row.year];
+      });
+      normalizedYears.forEach((year) => {
+        const cached = projectionHistoryCacheRef.current[`${activeBrandId}:${year}`];
+        if (cached) next[year] = cached;
+      });
+      return next;
+    });
+    setProjectionHistoryLoadState((prev) => ({
+      status: errors.length ? "error" : "ready",
+      loadedYears: [...new Set([...(prev.loadedYears || []), ...results.filter((row) => !row.error).map((row) => row.year)])].sort(),
+      sessionReadCount: Math.max(0, Number(prev.sessionReadCount || 0)) + pendingYears.length,
+      loadedAtText: new Date().toLocaleString("zh-TW", { hour12: false }),
+      error: errors.length ? (errors[0].error?.message || String(errors[0].error)) : "",
+    }));
+
+    return {
+      readCount: pendingYears.length,
+      loadedYears: results.filter((row) => !row.error).map((row) => row.year),
+      errors,
+    };
+  };
+
+  const handleApplyProjectionHistoryRange = async ({ force = false } = {}) => {
+    const currentYearMonth = getTaipeiProjectionYearMonth();
+    const years = projectionHistoryMode === "custom"
+      ? getProjectionHistoryYearsForRange({
+          startMonth: projectionHistoryStartMonth,
+          endMonth: projectionHistoryEndMonth,
+          currentYearMonth,
+          maxYears: 5,
+        })
+      : getProjectionHistoryYearsForRange({ currentYearMonth });
+
+    if (projectionHistoryMode === "custom" && !years.length) {
+      showToast("請確認歷史比較的起訖月份，單次最多跨 5 個年度", "error");
+      return;
+    }
+
+    const result = await loadProjectionHistoryYears({ years, force });
+    if (result?.errors?.length) {
+      showToast("部分歷史月份同步失敗，已保留目前可用資料", "error");
+    } else if (force || Number(result?.readCount || 0) > 0) {
+      showToast("歷史推估驗證資料已更新", "success");
+    }
+  };
+
+  // 開啟進階工具時只同步目前年度 1 份 rolling history 文件。
+  // 這讓新完成月份在下次進入工具時自然出現，但不建立任何常駐監聽。
+  useEffect(() => {
+    const activeBrandId = String(currentBrand?.id || "").trim().toLowerCase();
+    if (!showAdvancedTools || !["cyj", "anniu"].includes(activeBrandId)) return;
+    const currentYearMonth = getTaipeiProjectionYearMonth();
+    const currentYear = currentYearMonth.slice(0, 4);
+    if (!/^\d{4}$/.test(currentYear)) return;
+    loadProjectionHistoryYears({ years: [currentYear] });
+  }, [showAdvancedTools, currentBrand?.id]);
 
   // 新增工具：資料健康檢查
   const handleRunDataHealthCheck = async () => {
@@ -5354,8 +5508,8 @@ export default function SystemMaintenance() {
             <ToolRow
               icon={BarChart3}
               title="業績推估準確度"
-              desc="查看指定月份已保存的推估驗證結果。單月查詢每次只讀 1 份月份紀錄，不會額外掃描日報；下方歷史比較使用既有唯讀稽核結果，本頁顯示不增加 Firestore 讀取。"
-              badge="單月查詢 1 筆"
+              desc="查看指定月份的單月追蹤，以及可自行選擇期間的歷史推估比較。單月查詢只讀 1 份月份紀錄；歷史比較按年度讀取小型摘要，不掃描日報。"
+              badge="單月 1 筆｜歷史每年 1 筆"
               tone={getProjectionObservabilityTone(projectionAccuracyState?.data?.status)}
             >
               <div className="flex items-center gap-2 rounded-2xl border border-stone-100 bg-white/80 px-3 h-11">
@@ -5396,7 +5550,7 @@ export default function SystemMaintenance() {
 
             {projectionAccuracyState.status === "idle" && (
               <div className="rounded-2xl border border-stone-100 bg-white/70 px-4 py-3 text-[11px] font-bold text-stone-500 leading-relaxed">
-                單月結果預設不讀資料；選擇月份後按「查看單月結果」才讀取 1 份月份驗證紀錄。下方歷史比較來自已完成的唯讀驗證，本頁開啟與切換品牌都不會重新掃描日報。
+                單月結果預設不讀資料；選擇月份後按「查看單月結果」才讀取 1 份月份紀錄。歷史比較只使用已完成的驗證摘要，不會重新掃描日報。
               </div>
             )}
 
@@ -5508,7 +5662,7 @@ export default function SystemMaintenance() {
                   <div className="grid grid-cols-2 lg:grid-cols-4 gap-2">
                     {[
                       ["已累積驗證時間點", `${Number(data.checkpointCount || 0)}/${Number(data.expectedCheckpointCount || 6)}`],
-                      ["月底結果", data.scoringAvailable ? "已完成" : "尚未完成"],
+                      ["月底結果", data.scoringAvailable ? "已完成" : (data.exists ? "尚未完成" : "沒有當時紀錄")],
                       ["驗證版本", data.scoringAvailable ? `第 ${Number(data.scoreRevision || 0)} 版` : "-"],
                       ["推估方式", data.v2Expected ? "智慧校正" : "標準推估"],
                     ].map(([label, value]) => (
@@ -5531,7 +5685,9 @@ export default function SystemMaintenance() {
 
                   {!data.scoringAvailable ? (
                     <div className="rounded-2xl border border-amber-100 bg-amber-50/35 px-4 py-3 text-[11px] font-bold text-[#8A6128] leading-relaxed">
-                      目前只顯示已保存的驗證時間點。月底正式業績完成前，系統不會提前產生準確度結果，也不會在瀏覽器自行推算。
+                      {!data.exists && data.yearMonth !== data.currentYearMonth
+                        ? "此月份沒有當時保存的單月追蹤紀錄；若有完整歷史驗證，可直接查看下方的歷史推估比較。"
+                        : "目前只顯示已保存的驗證時間點。月底正式業績完成前，系統不會提前產生準確度結果，也不會在瀏覽器自行推算。"}
                     </div>
                   ) : (
                     <>
@@ -5607,8 +5763,16 @@ export default function SystemMaintenance() {
             })()}
 
             {(() => {
+              const liveHistoryDocuments = Object.values(projectionHistoryDocuments || {}).filter(Boolean);
               const history = buildProjectionHistoricalAccuracyComparison({
                 brandId: currentBrand?.id || "cyj",
+                liveHistoryDocuments,
+                ...(projectionHistoryMode === "custom"
+                  ? {
+                      startMonth: projectionHistoryStartMonth,
+                      endMonth: projectionHistoryEndMonth,
+                    }
+                  : {}),
               });
               const formatPct = (value) => (
                 typeof value === "number" && Number.isFinite(value)
@@ -5616,87 +5780,30 @@ export default function SystemMaintenance() {
                   : "N/A"
               );
               const methodLabel = (key) => PROJECTION_HISTORICAL_METHOD_LABELS[key] || key;
-              const renderHistoricalMetric = (metricKey, label) => {
-                const metric = history.metrics?.[metricKey] || {};
-                const overall = metric.overall || {};
-                return (
-                  <div className="rounded-[1.4rem] border border-stone-100 bg-white p-3 space-y-3">
-                    <div>
-                      <p className="text-xs font-black text-stone-800">{label}</p>
-                      <p className="mt-0.5 text-[10px] font-bold text-stone-400">
-                        4 個已完成月份整體比較
-                      </p>
-                    </div>
-                    <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
-                      {["effective", "shadowV1", "currentPace"].map((methodKey) => {
-                        const score = overall.methods?.[methodKey] || {};
-                        const isBest = overall.bestMethods?.includes(methodKey);
-                        return (
-                          <div
-                            key={`${metricKey}_history_${methodKey}`}
-                            className={`rounded-2xl border p-3 ${
-                              isBest
-                                ? "border-emerald-100 bg-emerald-50/65"
-                                : "border-stone-100 bg-stone-50/60"
-                            }`}
-                          >
-                            <div className="flex items-center justify-between gap-2">
-                              <p className="text-[10px] font-black text-stone-500">{methodLabel(methodKey)}</p>
-                              {isBest && (
-                                <span className="px-2 py-0.5 rounded-full border border-emerald-100 bg-white text-emerald-700 text-[9px] font-black">
-                                  歷史最佳
-                                </span>
-                              )}
-                            </div>
-                            <p className={`mt-1 text-lg font-black ${isBest ? "text-emerald-700" : "text-stone-800"}`}>
-                              {formatPct(score.accuracyPct)}
-                            </p>
-                            <p className="mt-1 text-[10px] font-bold text-stone-400">
-                              {score.tendencyLabel || "-"}
-                            </p>
-                          </div>
-                        );
-                      })}
-                    </div>
+              const metricKey = projectionHistoryMetric === "accrual" ? "accrual" : "cash";
+              const metricLabel = metricKey === "cash" ? "現金業績" : "權責業績";
+              const metric = history.metrics?.[metricKey] || {};
+              const overall = metric.overall || {};
+              const canUseRollingHistory = ["cyj", "anniu"].includes(String(currentBrand?.id || "").toLowerCase());
 
-                    <div>
-                      <p className="text-[10px] font-black text-stone-500">不同日期的準確度</p>
-                      <div className="mt-2 grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-3 gap-2">
-                        {(metric.checkpoints || []).map((row) => (
-                          <div key={`${metricKey}_${row.checkpointKey}`} className="rounded-xl border border-stone-100 bg-stone-50/55 p-2.5">
-                            <div className="flex items-center justify-between gap-2">
-                              <p className="text-[10px] font-black text-stone-700">{row.label}</p>
-                              <span className="text-[9px] font-black text-emerald-600">
-                                {row.bestMethods?.map(methodLabel).join(" / ") || "-"}
-                              </span>
-                            </div>
-                            <div className="mt-1.5 space-y-1 text-[10px] font-bold">
-                              {["effective", "shadowV1", "currentPace"].map((methodKey) => {
-                                const score = row.methods?.[methodKey] || {};
-                                const isBest = row.bestMethods?.includes(methodKey);
-                                return (
-                                  <div key={`${metricKey}_${row.checkpointKey}_${methodKey}`} className="flex items-center justify-between gap-2">
-                                    <span className={isBest ? "text-emerald-700" : "text-stone-400"}>{methodLabel(methodKey)}</span>
-                                    <span className={isBest ? "text-emerald-700" : "text-stone-600"}>{formatPct(score.accuracyPct)}</span>
-                                  </div>
-                                );
-                              })}
-                            </div>
-                          </div>
-                        ))}
-                      </div>
-                    </div>
-                  </div>
-                );
+              const switchHistoryMode = (nextMode) => {
+                setProjectionHistoryMode(nextMode);
+                setProjectionHistoryDetailsOpen(false);
+                if (nextMode === "custom") {
+                  const months = history.targetMonths || history.availableMonths || [];
+                  const available = history.availableMonths || [];
+                  setProjectionHistoryStartMonth(months[0] || available[0] || "");
+                  setProjectionHistoryEndMonth(months[months.length - 1] || available[available.length - 1] || "");
+                }
               };
 
-              if (!history.available) {
+              if (!canUseRollingHistory) {
                 return (
                   <div className="rounded-[1.5rem] border border-stone-100 bg-white/80 p-4">
                     <div className="flex items-center gap-2 flex-wrap">
                       <p className="text-sm font-black text-stone-800">歷史推估驗證</p>
                       <span className="px-2.5 py-1 rounded-full border border-stone-100 bg-stone-50 text-stone-500 text-[10px] font-black">
-                        本頁 0 額外讀取
+                        使用標準推估
                       </span>
                     </div>
                     <p className="mt-2 text-[11px] font-bold text-stone-500 leading-relaxed">
@@ -5707,18 +5814,20 @@ export default function SystemMaintenance() {
               }
 
               return (
-                <div className="rounded-[1.5rem] border border-[#E8DDD0] bg-[#FFFDF9] p-4 space-y-4">
-                  <div className="flex flex-col lg:flex-row lg:items-start lg:justify-between gap-3">
+                <div className="rounded-[1.5rem] border border-[#E8DDD0] bg-[#FFFDF9] p-4 space-y-3">
+                  <div className="flex flex-col xl:flex-row xl:items-start xl:justify-between gap-3">
                     <div>
                       <div className="flex items-center gap-2 flex-wrap">
                         <p className="text-sm font-black text-stone-800">
                           {brandLabel}｜歷史推估驗證
                         </p>
-                        <span className="px-2.5 py-1 rounded-full border border-emerald-100 bg-emerald-50 text-emerald-700 text-[10px] font-black">
-                          {history.monthRangeLabel}
-                        </span>
+                        {history.monthRangeLabel && (
+                          <span className="px-2.5 py-1 rounded-full border border-emerald-100 bg-emerald-50 text-emerald-700 text-[10px] font-black">
+                            {history.monthRangeLabel}
+                          </span>
+                        )}
                         <span className="px-2.5 py-1 rounded-full border border-stone-100 bg-white text-stone-500 text-[10px] font-black">
-                          本頁 0 額外讀取
+                          可比較 {history.trustedMonthCount || 0} 個月
                         </span>
                       </div>
                       <p className="mt-1 text-[11px] font-bold text-stone-500 leading-relaxed">
@@ -5726,21 +5835,211 @@ export default function SystemMaintenance() {
                       </p>
                     </div>
                     <p className="text-[10px] font-black text-stone-400">
-                      已確認月份：{history.trustedMonthCount}/{history.targetMonths.length}
+                      本工作階段同步：{Number(projectionHistoryLoadState.sessionReadCount || 0)} 筆
                     </p>
                   </div>
 
-                  <div className="rounded-2xl border border-amber-100 bg-amber-50/35 px-4 py-3 text-[11px] font-bold text-[#8A6128] leading-relaxed">
-                    這是既有歷史唯讀驗證的固定結果，不是補寫到正式月份紀錄。它用當時可取得的資料回看推估表現，因此可以現在就比較三種推估方式，不必等本月底。
+                  <div className="rounded-2xl border border-stone-100 bg-white/80 p-3">
+                    <div className="flex flex-col lg:flex-row lg:items-end gap-2">
+                      <label className="flex-1 min-w-[180px]">
+                        <span className="block mb-1 text-[10px] font-black text-stone-400">比較期間</span>
+                        <select
+                          value={projectionHistoryMode}
+                          onChange={(e) => switchHistoryMode(e.target.value)}
+                          className="w-full h-10 rounded-xl border border-stone-200 bg-white px-3 text-xs font-black text-stone-700 outline-none"
+                        >
+                          <option value="latest4">最近 4 個完整月份</option>
+                          <option value="custom">自行選擇月份區間</option>
+                        </select>
+                      </label>
+
+                      {projectionHistoryMode === "custom" && (
+                        <>
+                          <label className="min-w-[150px]">
+                            <span className="block mb-1 text-[10px] font-black text-stone-400">開始月份</span>
+                            <input
+                              type="month"
+                              max={getTaipeiProjectionYearMonth()}
+                              value={projectionHistoryStartMonth}
+                              onChange={(e) => {
+                                setProjectionHistoryStartMonth(e.target.value);
+                                setProjectionHistoryDetailsOpen(false);
+                              }}
+                              className="w-full h-10 rounded-xl border border-stone-200 bg-white px-3 text-xs font-black text-stone-700 outline-none"
+                            />
+                          </label>
+                          <label className="min-w-[150px]">
+                            <span className="block mb-1 text-[10px] font-black text-stone-400">結束月份</span>
+                            <input
+                              type="month"
+                              max={getTaipeiProjectionYearMonth()}
+                              value={projectionHistoryEndMonth}
+                              onChange={(e) => {
+                                setProjectionHistoryEndMonth(e.target.value);
+                                setProjectionHistoryDetailsOpen(false);
+                              }}
+                              className="w-full h-10 rounded-xl border border-stone-200 bg-white px-3 text-xs font-black text-stone-700 outline-none"
+                            />
+                          </label>
+                        </>
+                      )}
+
+                      <BeautyButton
+                        onClick={() => handleApplyProjectionHistoryRange({ force: false })}
+                        disabled={projectionHistoryLoadState.status === "loading"}
+                        variant="secondary"
+                      >
+                        {projectionHistoryLoadState.status === "loading"
+                          ? <Loader2 size={14} className="animate-spin" />
+                          : <RefreshCw size={14} />}
+                        套用區間
+                      </BeautyButton>
+                      <BeautyButton
+                        onClick={() => handleApplyProjectionHistoryRange({ force: true })}
+                        disabled={projectionHistoryLoadState.status === "loading"}
+                        variant="ghost"
+                      >
+                        <RefreshCw size={14} />
+                        更新最新資料
+                      </BeautyButton>
+                    </div>
+                    {projectionHistoryLoadState.status === "error" && (
+                      <p className="mt-2 text-[10px] font-bold text-rose-500">
+                        部分歷史資料同步失敗：{projectionHistoryLoadState.error || "請稍後再試"}
+                      </p>
+                    )}
                   </div>
 
-                  <div className="grid grid-cols-1 xl:grid-cols-2 gap-3">
-                    {renderHistoricalMetric("cash", "現金業績")}
-                    {renderHistoricalMetric("accrual", "權責業績")}
-                  </div>
+                  {!history.available ? (
+                    <div className="rounded-2xl border border-amber-100 bg-amber-50/35 px-4 py-3 text-[11px] font-bold text-[#8A6128] leading-relaxed">
+                      {history.statusDetail}
+                    </div>
+                  ) : (
+                    <>
+                      <div className="inline-flex w-full sm:w-auto rounded-2xl border border-stone-100 bg-white p-1">
+                        {[
+                          ["cash", "現金業績"],
+                          ["accrual", "權責業績"],
+                        ].map(([key, label]) => (
+                          <button
+                            key={key}
+                            type="button"
+                            onClick={() => {
+                              setProjectionHistoryMetric(key);
+                              setProjectionHistoryDetailsOpen(false);
+                            }}
+                            className={`flex-1 sm:flex-none px-4 py-2 rounded-xl text-xs font-black transition-colors ${
+                              metricKey === key
+                                ? "bg-[#4F3F33] text-white"
+                                : "text-stone-500 hover:bg-stone-50"
+                            }`}
+                          >
+                            {label}
+                          </button>
+                        ))}
+                      </div>
+
+                      <div>
+                        <div className="flex items-end justify-between gap-2 flex-wrap">
+                          <div>
+                            <p className="text-xs font-black text-stone-800">{metricLabel}｜整體比較</p>
+                            <p className="mt-0.5 text-[10px] font-bold text-stone-400">
+                              準確度越高，代表越接近月底實際業績
+                            </p>
+                          </div>
+                          <p className="text-[10px] font-black text-stone-400">
+                            歷史回看 {history.historicalBacktestMonthCount || 0} 個月｜正式累積 {history.liveMonthCount || 0} 個月
+                          </p>
+                        </div>
+                        <div className="mt-2 grid grid-cols-1 sm:grid-cols-3 gap-2">
+                          {["effective", "shadowV1", "currentPace"].map((methodKey) => {
+                            const score = overall.methods?.[methodKey] || {};
+                            const isBest = overall.bestMethods?.includes(methodKey);
+                            return (
+                              <div
+                                key={`${metricKey}_history_${methodKey}`}
+                                className={`rounded-2xl border p-3 ${
+                                  isBest
+                                    ? "border-emerald-100 bg-emerald-50/65"
+                                    : "border-stone-100 bg-white"
+                                }`}
+                              >
+                                <div className="flex items-center justify-between gap-2">
+                                  <p className="text-[10px] font-black text-stone-500">{methodLabel(methodKey)}</p>
+                                  {isBest && (
+                                    <span className="px-2 py-0.5 rounded-full border border-emerald-100 bg-white text-emerald-700 text-[9px] font-black">
+                                      目前最佳
+                                    </span>
+                                  )}
+                                </div>
+                                <p className={`mt-1 text-lg font-black ${isBest ? "text-emerald-700" : "text-stone-800"}`}>
+                                  {formatPct(score.accuracyPct)}
+                                </p>
+                                <p className="mt-1 text-[10px] font-bold text-stone-400">
+                                  {score.tendencyLabel || "-"}
+                                </p>
+                              </div>
+                            );
+                          })}
+                        </div>
+                      </div>
+
+                      <div className="border-t border-stone-100 pt-3">
+                        <button
+                          type="button"
+                          onClick={() => setProjectionHistoryDetailsOpen((current) => !current)}
+                          className="w-full flex items-center justify-between gap-3 rounded-2xl border border-stone-100 bg-white px-4 py-3 text-left"
+                        >
+                          <div>
+                            <p className="text-xs font-black text-stone-700">各日期比較</p>
+                            <p className="mt-0.5 text-[10px] font-bold text-stone-400">
+                              需要時再展開 5 / 7 / 10 / 15 / 20 / 25 日的細節
+                            </p>
+                          </div>
+                          <ChevronDown
+                            size={16}
+                            className={`shrink-0 text-stone-400 transition-transform ${projectionHistoryDetailsOpen ? "rotate-180" : ""}`}
+                          />
+                        </button>
+
+                        {projectionHistoryDetailsOpen && (
+                          <div className="mt-2 overflow-x-auto rounded-2xl border border-stone-100 bg-white">
+                            <div className="min-w-[430px]">
+                              <div className="grid grid-cols-[64px_repeat(3,minmax(105px,1fr))] gap-1 border-b border-stone-100 bg-stone-50/70 px-3 py-2 text-[9px] font-black text-stone-400">
+                                <span>時間</span>
+                                <span>智慧校正</span>
+                                <span>原本方式</span>
+                                <span>依目前進度</span>
+                              </div>
+                              {(metric.checkpoints || []).map((row) => (
+                                <div
+                                  key={`${metricKey}_${row.checkpointKey}`}
+                                  className="grid grid-cols-[64px_repeat(3,minmax(105px,1fr))] gap-1 border-b last:border-b-0 border-stone-100 px-3 py-2 text-[10px] font-bold"
+                                >
+                                  <span className="font-black text-stone-600">{row.label}</span>
+                                  {["effective", "shadowV1", "currentPace"].map((methodKey) => {
+                                    const score = row.methods?.[methodKey] || {};
+                                    const isBest = row.bestMethods?.includes(methodKey);
+                                    return (
+                                      <span
+                                        key={`${row.checkpointKey}_${methodKey}`}
+                                        className={isBest ? "font-black text-emerald-700" : "text-stone-500"}
+                                      >
+                                        {formatPct(score.accuracyPct)}{isBest ? " ✓" : ""}
+                                      </span>
+                                    );
+                                  })}
+                                </div>
+                              ))}
+                            </div>
+                          </div>
+                        )}
+                      </div>
+                    </>
+                  )}
 
                   <div className="rounded-2xl border border-stone-100 bg-white/70 px-3 py-2 text-[10px] font-bold text-stone-400 leading-relaxed">
-                    歷史驗證原始稽核當時為唯讀執行：{Number(history.originalAuditReads || 0).toLocaleString()} 次估計讀取、0 寫入、0 常駐監聽、0 輪詢；本頁現在只顯示已封存的比較結果，不會再次產生這批 Raw 讀取。
+                    歷史回看資料與正式累積資料會分開保存，只合併做畫面比較；不會補寫成過去的單月追蹤紀錄，也不會修改推估公式。
                   </div>
                 </div>
               );

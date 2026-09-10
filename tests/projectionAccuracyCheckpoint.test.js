@@ -516,6 +516,317 @@ test("B2A scoring transaction is idempotent, never rewrites checkpoints, and res
   assert.equal(store.get(monthlyRef.path).checkpoints.day10.effective.cash.standard, 900);
 });
 
+test("B2C.1 complete score atomically publishes yearly history and self-heals an older score once", async () => {
+  const monthlyRef = { path: "brands/anniu/projection_accuracy/2026-10" };
+  const summaryRef = { path: "brands/anniu/dashboard_summary/2026-10" };
+  const flagRef = { path: "brands/anniu/summary_recalc_flags/2026-10" };
+  const historyRef = { path: "brands/anniu/projection_accuracy_history/2026" };
+  const fakeAdmin = {
+    firestore: { FieldValue: { serverTimestamp: () => "__SERVER_TIMESTAMP__" } },
+  };
+
+  const checkpoints = {};
+  for (const day of accuracy.PROJECTION_ACCURACY_CHECKPOINT_DAYS) {
+    const key = `day${String(day).padStart(2, "0")}`;
+    checkpoints[key] = {
+      cutoffDate: `2026-10-${String(day).padStart(2, "0")}`,
+      cutoffDay: day,
+      capturedAtText: `2026-10-${String(day + 1).padStart(2, "0")}T00:10:00.000Z`,
+      scoreEligibility: {
+        cash: { eligible: true, reasons: [] },
+        accrual: { eligible: true, reasons: [] },
+      },
+      effective: {
+        cash: { standard: 31000000 + day * 10000 },
+        accrual: { standard: 30000000 + day * 10000 },
+      },
+      shadowV1: {
+        ready: true,
+        cash: { standard: 30000000 + day * 10000 },
+        accrual: { standard: 29000000 + day * 10000 },
+      },
+      naiveCurrentPace: {
+        cash: 30500000 + day * 10000,
+        accrual: 29500000 + day * 10000,
+      },
+      model: {
+        strategyVersion: "projection-strategy-v2-phase-calibrated",
+        runtimePhase: {
+          cash: { phaseApplied: true },
+          accrual: { phaseApplied: true },
+        },
+      },
+    };
+  }
+
+  const summary = {
+    version: "dashboard-summary-v2",
+    semanticVersion: "summary-semantics-v1",
+    kpiContractVersion: "kpi-contract-v1",
+    brandId: "anniu",
+    yearMonth: "2026-10",
+    lifecycleSnapshot: {
+      schemaVersion: "store-lifecycle-v1",
+      datasetStatus: "READY",
+      revision: 7,
+      eligibleStoreCount: 17,
+    },
+    systemExclusionSnapshot: {
+      version: "system-exclusion-v1",
+      brandId: "anniu",
+      revision: 2,
+      stores: [],
+    },
+    reportingCompleteness: {
+      schemaVersion: "reporting-completeness-v1",
+      reportingStatus: "DATA_COMPLETE",
+      expectedStoreDayCount: 527,
+      submittedStoreDayCount: 527,
+      missingStoreDayCount: 0,
+      reportingCalendarMasterRevision: 4,
+      reportingCalendarRevision: 3,
+      storeClosedReportDayCount: 0,
+    },
+    grandTotal: {
+      formalNetCash: 32000000,
+      formalNetCashStatus: "VALID",
+      formalAccrual: 31000000,
+      formalAccrualStatus: "VALID",
+    },
+  };
+  const flag = {
+    status: "verified",
+    dirty: false,
+    lastMismatchCount: 0,
+    reportingCalendarRevision: 3,
+    requiredReportingCalendarRevision: 3,
+    systemExclusionRevision: 2,
+  };
+  const store = new Map([
+    [monthlyRef.path, { schemaVersion: "projection-accuracy-v1", checkpoints }],
+    [summaryRef.path, summary],
+    [flagRef.path, flag],
+  ]);
+  const readCounts = new Map();
+  const fakeDb = {
+    async runTransaction(callback) {
+      const tx = {
+        async get(ref) {
+          readCounts.set(ref.path, (readCounts.get(ref.path) || 0) + 1);
+          const value = store.get(ref.path);
+          return { exists: value !== undefined, data: () => value };
+        },
+        set(ref, patch) {
+          const previous = store.get(ref.path) || {};
+          store.set(ref.path, { ...previous, ...patch });
+        },
+      };
+      return callback(tx);
+    },
+  };
+
+  const first = await accuracy.persistVerifiedMonthScore({
+    db: fakeDb,
+    admin: fakeAdmin,
+    monthlyRef,
+    summaryRef,
+    flagRef,
+    historyRef,
+    brandId: "anniu",
+    yearMonth: "2026-10",
+    scoredAtText: "2026-11-01T00:00:00.000Z",
+  });
+  assert.equal(first.written, true);
+  assert.equal(first.history.written, true);
+  assert.equal(store.get(monthlyRef.path).historyMeta.synced, true);
+  assert.equal(store.get(historyRef.path).monthCount, 1);
+  assert.equal(readCounts.get(historyRef.path), 1);
+  assert.doesNotMatch(JSON.stringify(store.get(historyRef.path)), /32000000|31000000/);
+
+  const second = await accuracy.persistVerifiedMonthScore({
+    db: fakeDb,
+    admin: fakeAdmin,
+    monthlyRef,
+    summaryRef,
+    flagRef,
+    historyRef,
+    brandId: "anniu",
+    yearMonth: "2026-10",
+    scoredAtText: "2026-11-01T00:01:00.000Z",
+  });
+  assert.equal(second.written, false);
+  assert.equal(second.reason, "ALREADY_CURRENT");
+  assert.equal(second.history.reason, "HISTORY_ALREADY_SYNCED");
+  assert.equal(readCounts.get(historyRef.path), 1, "already-synced score should not re-read yearly history");
+
+  // Simulate an older score created before B2C.1: score is current but has no historyMeta/history doc.
+  const prior = { ...store.get(monthlyRef.path) };
+  delete prior.historyMeta;
+  store.set(monthlyRef.path, prior);
+  store.delete(historyRef.path);
+
+  const healed = await accuracy.persistVerifiedMonthScore({
+    db: fakeDb,
+    admin: fakeAdmin,
+    monthlyRef,
+    summaryRef,
+    flagRef,
+    historyRef,
+    brandId: "anniu",
+    yearMonth: "2026-10",
+    scoredAtText: "2026-11-01T00:02:00.000Z",
+  });
+  assert.equal(healed.written, false);
+  assert.equal(healed.reason, "ALREADY_CURRENT");
+  assert.equal(healed.history.reason, "HISTORY_UPDATED");
+  assert.equal(store.get(monthlyRef.path).historyMeta.synced, true);
+  assert.equal(readCounts.get(historyRef.path), 2);
+});
+
+test("B2C.1 rolling history accepts only six complete V2 checkpoints and rejects Yibo", () => {
+  const makeState = (actual, error) => ({
+    eligible: true,
+    score: {
+      actual,
+      error,
+      absError: Math.abs(error),
+    },
+  });
+  const byCheckpoint = {};
+  for (const day of accuracy.PROJECTION_ACCURACY_CHECKPOINT_DAYS) {
+    const key = `day${String(day).padStart(2, "0")}`;
+    byCheckpoint[key] = {
+      cutoffDay: day,
+      cutoffDate: `2026-10-${String(day).padStart(2, "0")}`,
+      model: {
+        runtimePhase: {
+          cash: { phaseApplied: true },
+          accrual: { phaseApplied: true },
+        },
+      },
+      cash: {
+        effective: makeState(1000, -20),
+        shadowV1: makeState(1000, -80),
+        currentPace: makeState(1000, -40),
+      },
+      accrual: {
+        effective: makeState(1200, -24),
+        shadowV1: makeState(1200, -96),
+        currentPace: makeState(1200, -48),
+      },
+    };
+  }
+
+  const complete = accuracy.buildProjectionAccuracyHistoryMonth({
+    brandId: "cyj",
+    yearMonth: "2026-10",
+    scorecard: { byCheckpoint },
+    scoreRevision: 2,
+    inputSignature: "sig-2",
+    scoredAtText: "2026-11-01T00:00:00.000Z",
+  });
+  assert.equal(complete.complete, true);
+  assert.equal(complete.month.evidenceType, "live_checkpoint");
+  assert.equal(complete.month.scoreRevision, 2);
+  assert.equal(complete.month.statisticsVersion, "normalized-wape-components-v1");
+  assert.equal(typeof complete.month.checkpoints.day25.cash.effective.absErrorWeight, "number");
+  assert.equal(complete.month.checkpoints.day25.cash.effective.absError, undefined);
+
+  const missing = structuredClone({ byCheckpoint });
+  delete missing.byCheckpoint.day07;
+  assert.equal(accuracy.buildProjectionAccuracyHistoryMonth({
+    brandId: "cyj",
+    yearMonth: "2026-10",
+    scorecard: missing,
+    scoreRevision: 2,
+    inputSignature: "sig-2",
+  }).complete, false);
+
+  const fallback = structuredClone({ byCheckpoint });
+  fallback.byCheckpoint.day10.model.runtimePhase.cash.phaseApplied = false;
+  assert.match(accuracy.buildProjectionAccuracyHistoryMonth({
+    brandId: "anniu",
+    yearMonth: "2026-10",
+    scorecard: fallback,
+    scoreRevision: 2,
+    inputSignature: "sig-2",
+  }).reason, /PHASE_NOT_APPLIED/);
+
+  assert.equal(accuracy.buildProjectionAccuracyHistoryMonth({
+    brandId: "yibo",
+    yearMonth: "2026-10",
+    scorecard: { byCheckpoint },
+    scoreRevision: 1,
+    inputSignature: "sig-yibo",
+  }).complete, false);
+});
+
+test("B2C.1 rolling history document is revision-safe and brand/year isolated", () => {
+  const month = {
+    brandId: "cyj",
+    yearMonth: "2026-10",
+    evidenceType: "live_checkpoint",
+    comparisonMode: accuracy.PROJECTION_ACCURACY_HISTORY_COMPARISON_MODE,
+    complete: true,
+    scoreRevision: 2,
+    inputSignature: "sig-2",
+    checkpoints: {},
+  };
+
+  const first = accuracy.buildProjectionAccuracyHistoryDocument({
+    existing: {},
+    brandId: "cyj",
+    year: "2026",
+    month,
+    updatedAtText: "2026-11-01T00:00:00.000Z",
+  });
+  assert.equal(first.changed, true);
+  assert.equal(first.document.schemaVersion, accuracy.PROJECTION_ACCURACY_HISTORY_SCHEMA_VERSION);
+  assert.equal(first.document.statisticsVersion, accuracy.PROJECTION_ACCURACY_HISTORY_STATISTICS_VERSION);
+  assert.deepEqual(first.document.availableMonths, ["2026-10"]);
+
+  const same = accuracy.buildProjectionAccuracyHistoryDocument({
+    existing: first.document,
+    brandId: "cyj",
+    year: "2026",
+    month,
+  });
+  assert.equal(same.changed, false);
+
+  assert.throws(() => accuracy.buildProjectionAccuracyHistoryDocument({
+    existing: first.document,
+    brandId: "cyj",
+    year: "2026",
+    month: { ...month, scoreRevision: 1, inputSignature: "sig-1" },
+  }), /revision_ahead/);
+
+  assert.throws(() => accuracy.buildProjectionAccuracyHistoryDocument({
+    existing: first.document,
+    brandId: "cyj",
+    year: "2026",
+    month: { ...month, inputSignature: "different" },
+  }), /same_revision_signature_mismatch/);
+
+  assert.throws(() => accuracy.buildProjectionAccuracyHistoryDocument({
+    existing: first.document,
+    brandId: "anniu",
+    year: "2026",
+    month: { ...month, brandId: "anniu" },
+  }), /brand_mismatch/);
+});
+
+test("B2C.1 scoring transaction wires annual history summary without a new scheduler or listener", () => {
+  const source = read("functions/projectionAccuracy.js");
+  assert.match(source, /PROJECTION_ACCURACY_HISTORY_COLLECTION = "projection_accuracy_history"/);
+  assert.match(source, /historyRef: PROJECTION_ACCURACY_HISTORY_BRANDS\.includes\(normalizedBrandId\)/);
+  assert.match(source, /transaction\.get\(historyRef\)/);
+  assert.match(source, /transaction\.set\(historyRef/);
+  assert.match(source, /buildProjectionAccuracyHistoryMonth/);
+  assert.match(source, /PHASE_NOT_APPLIED/);
+  assert.doesNotMatch(source, /onSnapshot\s*\(/);
+  assert.doesNotMatch(source, /setInterval\s*\(/);
+});
+
 test("B2A index hook runs only after verified Summary guard and keeps scoring failure non-blocking", () => {
   const source = read("functions/index.js");
   assert.match(source, /finalFlagState\?\.verified === true/);
@@ -553,4 +864,13 @@ test("B1 Firestore Rules protect projection_accuracy from frontend writes on bot
     /match \/artifacts\/\{appId\}\/public\/data\/projection_accuracy\/\{document=\*\*\} \{[\s\S]*?allow read: if signedIn\(\);[\s\S]*?allow write: if false;/
   );
   assert.equal((rules.match(/collectionName != 'projection_accuracy'/g) || []).length, 2);
+  assert.match(
+    rules,
+    /match \/brands\/\{brandId\}\/projection_accuracy_history\/\{document=\*\*\} \{[\s\S]*?allow read: if signedIn\(\);[\s\S]*?allow write: if false;/
+  );
+  assert.match(
+    rules,
+    /match \/artifacts\/\{appId\}\/public\/data\/projection_accuracy_history\/\{document=\*\*\} \{[\s\S]*?allow read: if signedIn\(\);[\s\S]*?allow write: if false;/
+  );
+  assert.equal((rules.match(/collectionName != 'projection_accuracy_history'/g) || []).length, 2);
 });

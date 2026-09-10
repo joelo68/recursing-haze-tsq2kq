@@ -373,10 +373,10 @@ export const buildProjectionAccuracyObservabilitySnapshot = ({
     return {
       ...base,
       status: "warning",
-      statusLabel: isCurrent ? "本月尚未累積驗證時間點" : "此月份沒有正式驗證紀錄",
+      statusLabel: isCurrent ? "本月尚未累積驗證時間點" : "此月份沒有當時保存的單月追蹤紀錄",
       statusDetail: isCurrent
         ? "系統會在每月 5 / 7 / 10 / 15 / 20 / 25 日保存驗證時間點；尚未到保存日或當日紀錄尚未建立。"
-        : "此月份沒有正式月份驗證紀錄；畫面不會用其他資料自行補出結果。",
+        : "這不代表歷史業績遺失；若該月份具備完整歷史驗證，可於下方「歷史推估驗證」查看比較結果。",
     };
   }
 
@@ -586,14 +586,58 @@ export const describeProjectionBias = (biasPct) => {
   return `平均${biasPct < 0 ? "偏低" : "偏高"} ${magnitude.toFixed(2)}%`;
 };
 
+export const PROJECTION_ACCURACY_HISTORY_SCHEMA_VERSION = "projection-accuracy-history-v1";
+export const PROJECTION_ACCURACY_HISTORY_COMPARISON_MODE = "v2_vs_v1_vs_pace";
+export const PROJECTION_ACCURACY_HISTORY_STATISTICS_VERSION = "normalized-wape-components-v1";
+export const PROJECTION_ACCURACY_HISTORY_DEFAULT_MONTH_COUNT = 4;
+
+const HISTORY_METHOD_KEYS = Object.freeze(["effective", "shadowV1", "currentPace"]);
+const HISTORY_METRIC_KEYS = Object.freeze(["cash", "accrual"]);
+
+const finiteOrNull = (value) => (
+  typeof value === "number" && Number.isFinite(value) ? value : null
+);
+
+const normalizeHistoricalScoreState = (state = null) => ({
+  eligible: state?.eligible === true,
+  actualWeight: finiteOrNull(state?.actualWeight),
+  errorWeight: finiteOrNull(state?.errorWeight),
+  absErrorWeight: finiteOrNull(state?.absErrorWeight),
+});
+
+const summarizeHistoricalStates = (states = []) => {
+  const rows = states
+    .map(normalizeHistoricalScoreState)
+    .filter((row) => (
+      row.eligible === true
+      && row.actualWeight !== null
+      && row.errorWeight !== null
+      && row.absErrorWeight !== null
+      && row.actualWeight > 0
+    ));
+  const actualWeightSum = rows.reduce((sum, row) => sum + row.actualWeight, 0);
+  const absErrorWeightSum = rows.reduce((sum, row) => sum + row.absErrorWeight, 0);
+  const errorWeightSum = rows.reduce((sum, row) => sum + row.errorWeight, 0);
+  const wapePct = actualWeightSum > 0
+    ? Number(((absErrorWeightSum / actualWeightSum) * 100).toFixed(4))
+    : null;
+  const biasPct = actualWeightSum > 0
+    ? Number(((errorWeightSum / actualWeightSum) * 100).toFixed(4))
+    : null;
+  return {
+    count: rows.length,
+    actualWeightSum: actualWeightSum > 0 ? actualWeightSum : null,
+    absErrorWeightSum: rows.length ? absErrorWeightSum : null,
+    errorWeightSum: rows.length ? errorWeightSum : null,
+    wapePct,
+    biasPct,
+  };
+};
+
 const buildHistoricalDisplayScore = (score = null) => {
   const count = Math.max(0, Number(score?.count || 0));
-  const wapePct = typeof score?.wapePct === "number" && Number.isFinite(score.wapePct)
-    ? score.wapePct
-    : null;
-  const biasPct = typeof score?.biasPct === "number" && Number.isFinite(score.biasPct)
-    ? score.biasPct
-    : null;
+  const wapePct = finiteOrNull(score?.wapePct);
+  const biasPct = finiteOrNull(score?.biasPct);
   return {
     count,
     accuracyPct: getProjectionAccuracyDisplayPct(wapePct),
@@ -603,11 +647,11 @@ const buildHistoricalDisplayScore = (score = null) => {
   };
 };
 
-const buildHistoricalMethodSet = (raw = {}) => {
+const buildHistoricalMethodSetFromStates = (statesByMethod = {}) => {
   const methods = Object.fromEntries(
-    ["effective", "shadowV1", "currentPace"].map((key) => [
+    HISTORY_METHOD_KEYS.map((key) => [
       key,
-      buildHistoricalDisplayScore(raw?.[key]),
+      buildHistoricalDisplayScore(summarizeHistoricalStates(statesByMethod?.[key] || [])),
     ])
   );
   const comparable = Object.entries(methods)
@@ -623,65 +667,203 @@ const buildHistoricalMethodSet = (raw = {}) => {
   return { methods, bestMethods };
 };
 
+const isCompleteComparableHistoryMonth = ({ month = null, brandId = "", checkpointDays = [] } = {}) => {
+  const normalizedBrandId = normalizeBrandId(brandId);
+  const normalizedMonth = normalizeYearMonth(month?.yearMonth || "");
+  if (!normalizedBrandId || !normalizedMonth) return false;
+  if (!PROJECTION_V2_BRANDS.includes(normalizedBrandId)) return false;
+  if (normalizeBrandId(month?.brandId) !== normalizedBrandId) return false;
+  if (month?.complete !== true) return false;
+  if (String(month?.comparisonMode || "") !== PROJECTION_ACCURACY_HISTORY_COMPARISON_MODE) return false;
+  if (String(month?.statisticsVersion || "") !== PROJECTION_ACCURACY_HISTORY_STATISTICS_VERSION) return false;
+  if (month?.evidenceType === "live_checkpoint") {
+    if (String(month?.scoreSemanticVersion || "") !== PROJECTION_ACCURACY_SCORE_SEMANTIC_VERSION) return false;
+    if (!(Number(month?.scoreRevision || 0) >= 1)) return false;
+    if (!String(month?.inputSignature || "").trim()) return false;
+  }
+
+  const checkpoints = month?.checkpoints && typeof month.checkpoints === "object"
+    ? month.checkpoints
+    : {};
+  for (const day of checkpointDays) {
+    const key = `day${String(day).padStart(2, "0")}`;
+    const checkpoint = checkpoints[key];
+    if (!checkpoint || Number(checkpoint.cutoffDay || 0) !== Number(day)) return false;
+    if (String(checkpoint.cutoffDate || "") !== `${normalizedMonth}-${String(day).padStart(2, "0")}`) return false;
+    for (const metric of HISTORY_METRIC_KEYS) {
+      if (checkpoint?.phaseApplied?.[metric] !== true) return false;
+      for (const method of HISTORY_METHOD_KEYS) {
+        const state = normalizeHistoricalScoreState(checkpoint?.[metric]?.[method]);
+        if (
+          state.eligible !== true
+          || state.actualWeight === null
+          || state.errorWeight === null
+          || state.absErrorWeight === null
+          || state.actualWeight <= 0
+        ) return false;
+      }
+    }
+  }
+  return true;
+};
+
+const normalizeLiveHistoryDocuments = ({ documents = [], brandId = "" } = {}) => {
+  const normalizedBrandId = normalizeBrandId(brandId);
+  const months = {};
+  for (const document of Array.isArray(documents) ? documents : []) {
+    if (!document || typeof document !== "object") continue;
+    if (String(document.schemaVersion || "") !== PROJECTION_ACCURACY_HISTORY_SCHEMA_VERSION) continue;
+    if (String(document.comparisonMode || "") !== PROJECTION_ACCURACY_HISTORY_COMPARISON_MODE) continue;
+    if (String(document.statisticsVersion || "") !== PROJECTION_ACCURACY_HISTORY_STATISTICS_VERSION) continue;
+    if (normalizeBrandId(document.brandId) !== normalizedBrandId) continue;
+    const year = String(document.year || "");
+    if (!/^\d{4}$/.test(year)) continue;
+    const rawMonths = document.months && typeof document.months === "object" ? document.months : {};
+    Object.entries(rawMonths).forEach(([yearMonth, month]) => {
+      const normalizedMonth = normalizeYearMonth(yearMonth);
+      if (!normalizedMonth || !normalizedMonth.startsWith(`${year}-`)) return;
+      months[normalizedMonth] = month;
+    });
+  }
+  return months;
+};
+
+export const getProjectionHistoryYearsForRange = ({
+  startMonth = "",
+  endMonth = "",
+  currentYearMonth = "",
+  maxYears = 5,
+} = {}) => {
+  const start = normalizeYearMonth(startMonth);
+  const end = normalizeYearMonth(endMonth);
+  const current = normalizeYearMonth(currentYearMonth);
+  if (!start && !end) return current ? [current.slice(0, 4)] : [];
+  if (!start || !end || start > end) return [];
+  const first = Number(start.slice(0, 4));
+  const last = Number(end.slice(0, 4));
+  if (!Number.isInteger(first) || !Number.isInteger(last) || last < first) return [];
+  if (last - first + 1 > Math.max(1, Number(maxYears || 5))) return [];
+  return Array.from({ length: last - first + 1 }, (_, index) => String(first + index));
+};
+
 export const buildProjectionHistoricalAccuracyComparison = ({
   brandId = "",
   evidence = PROJECTION_ACCURACY_HISTORICAL_EVIDENCE,
+  liveHistoryDocuments = [],
+  startMonth = "",
+  endMonth = "",
+  latestMonthCount = PROJECTION_ACCURACY_HISTORY_DEFAULT_MONTH_COUNT,
 } = {}) => {
   const normalizedBrandId = normalizeBrandId(brandId);
-  const supportedBrands = Array.isArray(evidence?.brandIds)
-    ? evidence.brandIds.map(normalizeBrandId).filter(Boolean)
-    : [];
-  const targetMonths = Array.isArray(evidence?.targetMonths)
-    ? evidence.targetMonths.map(normalizeYearMonth).filter(Boolean)
-    : [];
   const checkpointDays = Array.isArray(evidence?.checkpointDays)
-    ? evidence.checkpointDays.map((day) => Number(day)).filter((day) => Number.isFinite(day) && day > 0)
-    : [];
-  const brandEvidence = evidence?.brands?.[normalizedBrandId] || null;
+    ? evidence.checkpointDays.map(Number).filter((day) => PROJECTION_ACCURACY_CHECKPOINT_KEYS.includes(`day${String(day).padStart(2, "0")}`))
+    : PROJECTION_ACCURACY_CHECKPOINT_KEYS.map((key) => Number(key.replace("day", "")));
+  const seedBrand = evidence?.brands?.[normalizedBrandId] || null;
+  const seedMonths = seedBrand?.months && typeof seedBrand.months === "object"
+    ? seedBrand.months
+    : {};
+  const liveMonths = normalizeLiveHistoryDocuments({
+    documents: liveHistoryDocuments,
+    brandId: normalizedBrandId,
+  });
+
+  const mergedMonths = { ...seedMonths, ...liveMonths };
+  const completeMonths = Object.entries(mergedMonths)
+    .filter(([, month]) => isCompleteComparableHistoryMonth({
+      month,
+      brandId: normalizedBrandId,
+      checkpointDays,
+    }))
+    .map(([yearMonth]) => normalizeYearMonth(yearMonth))
+    .filter(Boolean)
+    .sort();
+
+  const requestedStart = normalizeYearMonth(startMonth);
+  const requestedEnd = normalizeYearMonth(endMonth);
+  const explicitRange = Boolean(startMonth || endMonth);
+  const invalidRange = explicitRange && (!requestedStart || !requestedEnd || requestedStart > requestedEnd);
+  const safeLatestCount = Math.max(1, Math.min(24, Number(latestMonthCount || PROJECTION_ACCURACY_HISTORY_DEFAULT_MONTH_COUNT)));
+  const selectedMonths = invalidRange
+    ? []
+    : explicitRange
+      ? completeMonths.filter((yearMonth) => yearMonth >= requestedStart && yearMonth <= requestedEnd)
+      : completeMonths.slice(-safeLatestCount);
+
+  const selectedRows = selectedMonths.map((yearMonth) => mergedMonths[yearMonth]);
+  const historicalBacktestMonthCount = selectedRows.filter((row) => row?.evidenceType === "historical_backtest").length;
+  const liveMonthCount = selectedRows.filter((row) => row?.evidenceType === "live_checkpoint").length;
+  const monthRangeLabel = selectedMonths.length
+    ? `${selectedMonths[0].replace("-", " 年 ")} 月～${selectedMonths[selectedMonths.length - 1].slice(5)} 月`
+    : "";
 
   const base = {
     brandId: normalizedBrandId,
     available: false,
-    status: "warning",
-    statusLabel: "目前沒有相同口徑的歷史驗證資料",
-    statusDetail: "歷史比較只顯示已完成且通過資料完整性檢查的既有驗證結果，不會用其他品牌或不同口徑資料補值。",
+    status: invalidRange ? "error" : "warning",
+    statusLabel: invalidRange ? "比較期間無效" : "目前沒有相同口徑的歷史驗證資料",
+    statusDetail: invalidRange
+      ? "請確認起始月份早於或等於結束月份。"
+      : "歷史比較只納入資料完整且智慧校正確實套用的月份，不會用其他品牌或不同口徑資料補值。",
     evidenceVersion: String(evidence?.evidenceVersion || ""),
     generatedAtText: String(evidence?.generatedAtText || ""),
     sourceJsonSha256: String(evidence?.sourceJsonSha256 || ""),
     sourceReportSha256: String(evidence?.sourceReportSha256 || ""),
-    targetMonths,
     checkpointDays,
-    monthRangeLabel: targetMonths.length
-      ? `${targetMonths[0].replace("-", " 年 ")} 月～${targetMonths[targetMonths.length - 1].slice(5)} 月`
-      : "",
-    trustedMonthCount: 0,
-    rawRowCount: 0,
+    availableMonths: completeMonths,
+    targetMonths: selectedMonths,
+    rangeStartMonth: selectedMonths[0] || requestedStart || "",
+    rangeEndMonth: selectedMonths[selectedMonths.length - 1] || requestedEnd || "",
+    monthRangeLabel,
+    trustedMonthCount: selectedMonths.length,
+    historicalBacktestMonthCount,
+    liveMonthCount,
+    rawRowCount: Math.max(0, Number(seedBrand?.rawRowCount || 0)),
     displayReadCount: 0,
     originalAuditReads: Math.max(0, Number(evidence?.auditCost?.estimatedBilledReads || 0)),
     originalAuditWrites: Math.max(0, Number(evidence?.auditCost?.writes || 0)),
     metrics: {
-      cash: { overall: buildHistoricalMethodSet({}), checkpoints: [] },
-      accrual: { overall: buildHistoricalMethodSet({}), checkpoints: [] },
+      cash: { overall: buildHistoricalMethodSetFromStates({}), checkpoints: [] },
+      accrual: { overall: buildHistoricalMethodSetFromStates({}), checkpoints: [] },
     },
   };
 
-  if (!normalizedBrandId || !supportedBrands.includes(normalizedBrandId) || !brandEvidence) {
-    return base;
+  if (!normalizedBrandId || !PROJECTION_V2_BRANDS.includes(normalizedBrandId)) return base;
+  if (invalidRange) return base;
+  if (!selectedRows.length) {
+    return {
+      ...base,
+      statusLabel: completeMonths.length ? "選擇期間沒有完整驗證月份" : base.statusLabel,
+      statusDetail: completeMonths.length
+        ? "請重新選擇包含可完整比較月份的期間。"
+        : base.statusDetail,
+    };
   }
 
   const buildMetric = (metricKey) => {
-    const rawMetric = brandEvidence?.metrics?.[metricKey] || {};
+    const checkpointRows = checkpointDays.map((day) => {
+      const checkpointKey = `day${String(day).padStart(2, "0")}`;
+      const statesByMethod = Object.fromEntries(HISTORY_METHOD_KEYS.map((method) => [
+        method,
+        selectedRows.map((month) => month?.checkpoints?.[checkpointKey]?.[metricKey]?.[method]),
+      ]));
+      return {
+        checkpointKey,
+        day,
+        label: `${day} 日`,
+        ...buildHistoricalMethodSetFromStates(statesByMethod),
+      };
+    });
+
+    const overallStates = Object.fromEntries(HISTORY_METHOD_KEYS.map((method) => [
+      method,
+      selectedRows.flatMap((month) => checkpointDays.map((day) => (
+        month?.checkpoints?.[`day${String(day).padStart(2, "0")}`]?.[metricKey]?.[method]
+      ))),
+    ]));
+
     return {
-      overall: buildHistoricalMethodSet(rawMetric?.overall || {}),
-      checkpoints: checkpointDays.map((day) => {
-        const key = `day${String(day).padStart(2, "0")}`;
-        return {
-          checkpointKey: key,
-          day,
-          label: `${day} 日`,
-          ...buildHistoricalMethodSet(rawMetric?.[key] || {}),
-        };
-      }),
+      overall: buildHistoricalMethodSetFromStates(overallStates),
+      checkpoints: checkpointRows,
     };
   };
 
@@ -690,16 +872,13 @@ export const buildProjectionHistoricalAccuracyComparison = ({
     available: true,
     status: "healthy",
     statusLabel: "歷史驗證資料可用",
-    statusDetail: `使用 ${targetMonths.length} 個已完成月份，比較每月 5 / 7 / 10 / 15 / 20 / 25 日當時的推估與月底實際業績。`,
-    trustedMonthCount: Math.max(0, Number(brandEvidence?.trustedMonthCount || 0)),
-    rawRowCount: Math.max(0, Number(brandEvidence?.rawRowCount || 0)),
+    statusDetail: `目前比較 ${selectedMonths.length} 個可完整比較月份；可自行調整月份區間。`,
     metrics: {
       cash: buildMetric("cash"),
       accrual: buildMetric("accrual"),
     },
   };
 };
-
 
 export const getProjectionObservabilityTone = (status = "") => {
   if (status === "healthy") return "emerald";

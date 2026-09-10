@@ -14,6 +14,7 @@ import {
   buildProjectionObservabilitySnapshot,
   buildProjectionAccuracyObservabilitySnapshot,
   buildProjectionHistoricalAccuracyComparison,
+  getProjectionHistoryYearsForRange,
   describeProjectionBias,
   getProjectionAccuracyDisplayPct,
   getProjectionObservabilityTone,
@@ -315,10 +316,10 @@ test("B2B Yibo remains V1 and never receives a V2 Accuracy label", () => {
   assert.equal(result.v2AppliedCheckpointCount.accrual, 0);
 });
 
-test("B2C single-month Accuracy read remains one manual point read with no listener, polling, Raw query or write", () => {
+test("B2C.1 single-month read stays one point read and rolling history uses yearly point reads only", () => {
   const source = read("src/components/SystemMaintenance.jsx");
   const start = source.indexOf("const handleLoadProjectionAccuracyObservability = async () => {");
-  const end = source.indexOf("// 新增工具：資料健康檢查", start);
+  const end = source.indexOf("// B2C.1 Rolling History", start);
   assert.ok(start >= 0 && end > start);
   const handler = source.slice(start, end);
 
@@ -330,23 +331,36 @@ test("B2C single-month Accuracy read remains one manual point read with no liste
   assert.doesNotMatch(handler, /daily_reports|monthly_aggregated|dashboard_summary|summary_recalc_flags/);
   assert.doesNotMatch(handler, /setDoc\(|addDoc\(|updateDoc\(|writeBatch\(/);
   assert.match(handler, /projectionAccuracyRequestSeq/);
-  assert.match(handler, /requestSeq !== projectionAccuracyRequestSeq\.current/);
+
+  const historyStart = source.indexOf("const loadProjectionHistoryYears = async");
+  const historyEnd = source.indexOf("// 新增工具：資料健康檢查", historyStart);
+  assert.ok(historyStart >= 0 && historyEnd > historyStart);
+  const historyLoader = source.slice(historyStart, historyEnd);
+  assert.match(historyLoader, /doc\(getCollectionPath\("projection_accuracy_history"\), year\)/);
+  assert.match(historyLoader, /getDoc\(historyRef\)/);
+  assert.doesNotMatch(historyLoader, /getDocs\(/);
+  assert.doesNotMatch(historyLoader, /onSnapshot\(/);
+  assert.doesNotMatch(historyLoader, /setInterval\(/);
+  assert.doesNotMatch(historyLoader, /daily_reports|monthly_aggregated|dashboard_summary|summary_recalc_flags/);
+  assert.doesNotMatch(historyLoader, /setDoc\(|addDoc\(|updateDoc\(|writeBatch\(/);
+  assert.match(historyLoader, /projectionHistoryCacheRef/);
+  assert.match(historyLoader, /normalizedYears\.length > 5/);
 
   const uiStart = source.indexOf('title="業績推估準確度"');
   const uiEnd = source.indexOf('title="核心資料一致性健檢"', uiStart);
   assert.ok(uiStart >= 0 && uiEnd > uiStart);
   const accuracyUi = source.slice(uiStart, uiEnd);
-  assert.match(accuracyUi, /查看單月結果/);
-  assert.match(accuracyUi, /單月查詢 1 筆/);
-  assert.match(accuracyUi, /本頁 0 額外讀取/);
-  assert.match(accuracyUi, /智慧校正實際套用/);
-  assert.match(accuracyUi, /不同日期的準確度/);
-  assert.doesNotMatch(accuracyUi, /WAPE、Bias、APE 全部直接使用 Backend persisted score/);
-  assert.doesNotMatch(accuracyUi, /Backend checkpoint/);
+  assert.match(accuracyUi, /自行選擇月份區間/);
+  assert.match(accuracyUi, /現金業績/);
+  assert.match(accuracyUi, /權責業績/);
+  assert.match(accuracyUi, /各日期比較/);
+  assert.match(accuracyUi, /projectionHistoryDetailsOpen/);
+  assert.match(accuracyUi, /此月份沒有當時保存的單月追蹤紀錄/);
+  assert.doesNotMatch(accuracyUi, /WAPE、Bias、APE/);
   assert.doesNotMatch(accuracyUi, /Score Revision|Score Semantic|V2 eligible/);
 });
 
-test("B2C historical evidence converts audited error into business-friendly accuracy without Firestore reads", () => {
+test("B2C.1 month-level historical evidence supports selectable ranges and rolling live months", () => {
   assert.equal(getProjectionAccuracyDisplayPct(11.0574), 88.9426);
   assert.equal(describeProjectionBias(-7.703), "平均偏低 7.70%");
   assert.equal(describeProjectionBias(2.2582), "平均偏高 2.26%");
@@ -355,8 +369,6 @@ test("B2C historical evidence converts audited error into business-friendly accu
 
   const cyj = buildProjectionHistoricalAccuracyComparison({ brandId: "cyj" });
   assert.equal(cyj.available, true);
-  assert.equal(cyj.displayReadCount, 0);
-  assert.equal(cyj.originalAuditReads, 10147);
   assert.deepEqual(cyj.targetMonths, ["2026-05", "2026-06", "2026-07", "2026-08"]);
   assert.equal(cyj.trustedMonthCount, 4);
   assert.equal(cyj.metrics.cash.overall.methods.effective.accuracyPct, 88.9426);
@@ -366,40 +378,85 @@ test("B2C historical evidence converts audited error into business-friendly accu
     ["currentPace"]
   );
 
-  const anniu = buildProjectionHistoricalAccuracyComparison({ brandId: "anniu" });
-  assert.equal(anniu.available, true);
-  assert.equal(anniu.trustedMonthCount, 4);
-  assert.equal(anniu.metrics.accrual.overall.methods.effective.accuracyPct, 91.563);
-  assert.deepEqual(anniu.metrics.accrual.overall.bestMethods, ["effective"]);
+  const cyjMayJune = buildProjectionHistoricalAccuracyComparison({
+    brandId: "cyj",
+    startMonth: "2026-05",
+    endMonth: "2026-06",
+  });
+  assert.deepEqual(cyjMayJune.targetMonths, ["2026-05", "2026-06"]);
+  assert.equal(cyjMayJune.trustedMonthCount, 2);
+  assert.equal(cyjMayJune.metrics.cash.overall.methods.effective.count, 12);
+  assert.equal(cyjMayJune.metrics.cash.overall.methods.effective.accuracyPct, 91.3651);
   assert.notEqual(
-    anniu.metrics.cash.overall.methods.effective.accuracyPct,
+    cyjMayJune.metrics.cash.overall.methods.effective.accuracyPct,
     cyj.metrics.cash.overall.methods.effective.accuracyPct
   );
 
+  const seedOctober = structuredClone(PROJECTION_ACCURACY_HISTORICAL_EVIDENCE.brands.cyj.months["2026-08"]);
+  seedOctober.yearMonth = "2026-10";
+  seedOctober.evidenceType = "live_checkpoint";
+  seedOctober.scoreSemanticVersion = "projection-accuracy-score-v1";
+  seedOctober.scoreRevision = 1;
+  seedOctober.inputSignature = "live-october-signature";
+  Object.values(seedOctober.checkpoints).forEach((checkpoint) => {
+    checkpoint.cutoffDate = `2026-10-${String(checkpoint.cutoffDay).padStart(2, "0")}`;
+  });
+  const rolling = buildProjectionHistoricalAccuracyComparison({
+    brandId: "cyj",
+    liveHistoryDocuments: [{
+      schemaVersion: "projection-accuracy-history-v1",
+      comparisonMode: "v2_vs_v1_vs_pace",
+      statisticsVersion: "normalized-wape-components-v1",
+      brandId: "cyj",
+      year: "2026",
+      months: { "2026-10": seedOctober },
+    }],
+  });
+  assert.deepEqual(rolling.targetMonths, ["2026-06", "2026-07", "2026-08", "2026-10"]);
+  assert.equal(rolling.liveMonthCount, 1);
+  assert.equal(rolling.historicalBacktestMonthCount, 3);
+
+  const anniu = buildProjectionHistoricalAccuracyComparison({ brandId: "anniu" });
+  assert.equal(anniu.available, true);
+  assert.equal(anniu.metrics.accrual.overall.methods.effective.accuracyPct, 91.563);
+
   const yibo = buildProjectionHistoricalAccuracyComparison({ brandId: "yibo" });
   assert.equal(yibo.available, false);
-  assert.equal(yibo.displayReadCount, 0);
   assert.match(yibo.statusDetail, /不同口徑資料補值/);
+
+  assert.deepEqual(
+    getProjectionHistoryYearsForRange({ startMonth: "2026-05", endMonth: "2027-02" }),
+    ["2026", "2027"]
+  );
+  assert.deepEqual(
+    getProjectionHistoryYearsForRange({ startMonth: "2027-02", endMonth: "2026-05" }),
+    []
+  );
 });
 
-test("B2C historical evidence is immutable frontend data, not a second Firestore or Projection authority", () => {
+test("B2C.1 historical backtest stays immutable and separate from rolling Firestore evidence", () => {
   const evidenceSource = read("src/data/projectionAccuracyHistoricalEvidence.js");
   const uiSource = read("src/components/SystemMaintenance.jsx");
 
   assert.equal(Object.isFrozen(PROJECTION_ACCURACY_HISTORICAL_EVIDENCE), true);
-  assert.equal(Object.isFrozen(PROJECTION_ACCURACY_HISTORICAL_EVIDENCE.brands.cyj.metrics.cash), true);
-  assert.match(evidenceSource, /projection-accuracy-historical-evidence-v1/);
+  assert.equal(
+    Object.isFrozen(PROJECTION_ACCURACY_HISTORICAL_EVIDENCE.brands.cyj.months["2026-05"].checkpoints.day05.cash),
+    true
+  );
+  assert.match(evidenceSource, /projection-accuracy-historical-evidence-v2/);
+  assert.match(evidenceSource, /historical_backtest/);
+  assert.match(evidenceSource, /normalized-wape-components-v1/);
+  assert.match(evidenceSource, /actualWeight/);
+  assert.doesNotMatch(evidenceSource, /33377364|37544307|32196527|30397230/);
   assert.match(evidenceSource, /01fd6c14e4029783be362d764087e1979a93f69d793aa5e3e6e02723e3fc4da6/);
-  assert.match(evidenceSource, /dd963b26acd62e006d942353f1ded132edcf57b8c6e7a9c1f1126bfb0a380afb/);
   assert.doesNotMatch(evidenceSource, /getDoc\(|getDocs\(|onSnapshot\(|setDoc\(|addDoc\(|updateDoc\(|writeBatch\(|setInterval\(/);
 
-  const historicalStart = uiSource.indexOf("const history = buildProjectionHistoricalAccuracyComparison");
+  const historicalStart = uiSource.indexOf("const liveHistoryDocuments = Object.values");
   const historicalEnd = uiSource.indexOf('title="核心資料一致性健檢"', historicalStart);
   assert.ok(historicalStart >= 0 && historicalEnd > historicalStart);
   const historicalUi = uiSource.slice(historicalStart, historicalEnd);
-  assert.doesNotMatch(historicalUi, /getDoc\(|getDocs\(|onSnapshot\(|setDoc\(|addDoc\(|updateDoc\(|writeBatch\(|setInterval\(/);
-  assert.match(historicalUi, /不是補寫到正式月份紀錄/);
-  assert.match(historicalUi, /不必等本月底/);
+  assert.match(historicalUi, /歷史回看資料與正式累積資料會分開保存/);
+  assert.match(historicalUi, /不會補寫成過去的單月追蹤紀錄/);
 });
 
 test("B2B Accuracy contracts stay aligned with B2A writer and existing frontend-read-only Rules", () => {
@@ -419,4 +476,13 @@ test("B2B Accuracy contracts stay aligned with B2A writer and existing frontend-
     rules,
     /match \/artifacts\/\{appId\}\/public\/data\/projection_accuracy\/\{document=\*\*\} \{[\s\S]*?allow read: if signedIn\(\);[\s\S]*?allow write: if false;/
   );
+  assert.match(
+    rules,
+    /match \/brands\/\{brandId\}\/projection_accuracy_history\/\{document=\*\*\} \{[\s\S]*?allow read: if signedIn\(\);[\s\S]*?allow write: if false;/
+  );
+  assert.match(
+    rules,
+    /match \/artifacts\/\{appId\}\/public\/data\/projection_accuracy_history\/\{document=\*\*\} \{[\s\S]*?allow read: if signedIn\(\);[\s\S]*?allow write: if false;/
+  );
+  assert.equal((rules.match(/collectionName != 'projection_accuracy_history'/g) || []).length, 2);
 });

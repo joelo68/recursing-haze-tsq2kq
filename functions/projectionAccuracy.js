@@ -19,6 +19,18 @@ const PROJECTION_ACCURACY_SCORE_SEMANTIC_VERSION = "projection-accuracy-score-v1
 const PROJECTION_ACCURACY_FINAL_ACTUAL_SOURCE = "verified_dashboard_summary";
 const PROJECTION_ACCURACY_SUMMARY_VERSION = "dashboard-summary-v2";
 const PROJECTION_ACCURACY_SUMMARY_SEMANTIC_VERSION = "summary-semantics-v1";
+const PROJECTION_ACCURACY_HISTORY_COLLECTION = "projection_accuracy_history";
+const PROJECTION_ACCURACY_HISTORY_SCHEMA_VERSION = "projection-accuracy-history-v1";
+const PROJECTION_ACCURACY_HISTORY_COMPARISON_MODE = "v2_vs_v1_vs_pace";
+const PROJECTION_ACCURACY_HISTORY_BRANDS = Object.freeze(["cyj", "anniu"]);
+// Private normalization anchors from the approved B2A0 seed. They are used only to
+// convert exact score amounts into dimensionless WAPE components before persistence.
+// projection_accuracy_history never stores exact revenue totals.
+const PROJECTION_ACCURACY_HISTORY_WEIGHT_BASELINES = Object.freeze({
+  cyj: Object.freeze({ cash: 33377364, accrual: 37544307 }),
+  anniu: Object.freeze({ cash: 32196527, accrual: 30397230 }),
+});
+const PROJECTION_ACCURACY_HISTORY_STATISTICS_VERSION = "normalized-wape-components-v1";
 
 const isFiniteNumber = (value) => typeof value === "number" && Number.isFinite(value);
 const safeArray = (value) => Array.isArray(value) ? value : [];
@@ -781,12 +793,217 @@ function buildMonthFinalScorecard({
   return { byCheckpoint, overall };
 }
 
+
+function normalizeHistoryMethodState(state = null, { brandId = "", metric = "cash" } = {}) {
+  const normalizedBrandId = String(brandId || "").trim().toLowerCase();
+  const normalizedMetric = metric === "accrual" ? "accrual" : "cash";
+  const baseline = Number(PROJECTION_ACCURACY_HISTORY_WEIGHT_BASELINES?.[normalizedBrandId]?.[normalizedMetric] || 0);
+  const score = state?.score && typeof state.score === "object" ? state.score : null;
+  if (
+    state?.eligible !== true
+    || !score
+    || !(baseline > 0)
+    || !isFiniteNumber(score.actual)
+    || !isFiniteNumber(score.error)
+    || !isFiniteNumber(score.absError)
+    || !(Number(score.actual) > 0)
+  ) {
+    return {
+      eligible: false,
+      actualWeight: null,
+      errorWeight: null,
+      absErrorWeight: null,
+    };
+  }
+  return {
+    eligible: true,
+    actualWeight: Number((Number(score.actual) / baseline).toFixed(12)),
+    errorWeight: Number((Number(score.error) / baseline).toFixed(12)),
+    absErrorWeight: Number((Number(score.absError) / baseline).toFixed(12)),
+  };
+}
+
+function buildProjectionAccuracyHistoryMonth({
+  brandId = "",
+  yearMonth = "",
+  scorecard = null,
+  scoreRevision = 0,
+  inputSignature = "",
+  scoredAtText = "",
+} = {}) {
+  const normalizedBrandId = String(brandId || "").trim().toLowerCase();
+  const normalizedYearMonth = normalizeYearMonth(yearMonth);
+  if (
+    !PROJECTION_ACCURACY_HISTORY_BRANDS.includes(normalizedBrandId)
+    || !normalizedYearMonth
+    || !scorecard
+    || typeof scorecard !== "object"
+  ) {
+    return { complete: false, reason: "INVALID_HISTORY_SCOPE", month: null };
+  }
+
+  const byCheckpoint = scorecard?.byCheckpoint && typeof scorecard.byCheckpoint === "object"
+    ? scorecard.byCheckpoint
+    : {};
+  const expectedKeys = PROJECTION_ACCURACY_CHECKPOINT_DAYS
+    .map((day) => `day${String(day).padStart(2, "0")}`);
+  const checkpoints = {};
+
+  for (const checkpointKey of expectedKeys) {
+    const source = byCheckpoint[checkpointKey];
+    if (!source || typeof source !== "object") {
+      return { complete: false, reason: `MISSING_${checkpointKey.toUpperCase()}`, month: null };
+    }
+
+    const cutoffDay = Math.max(0, Number(source?.cutoffDay || 0));
+    const expectedDay = Number(checkpointKey.replace("day", ""));
+    if (cutoffDay !== expectedDay) {
+      return { complete: false, reason: `CHECKPOINT_DAY_MISMATCH:${checkpointKey}`, month: null };
+    }
+
+    const row = {
+      cutoffDay,
+      cutoffDate: String(source?.cutoffDate || ""),
+      phaseApplied: {
+        cash: source?.model?.runtimePhase?.cash?.phaseApplied === true,
+        accrual: source?.model?.runtimePhase?.accrual?.phaseApplied === true,
+      },
+      cash: {},
+      accrual: {},
+    };
+
+    for (const metric of ["cash", "accrual"]) {
+      // Historical V2 comparison may only label the effective method as
+      // "智慧校正推估" when phase calibration actually ran at this checkpoint.
+      if (row.phaseApplied[metric] !== true) {
+        return { complete: false, reason: `PHASE_NOT_APPLIED:${checkpointKey}:${metric}`, month: null };
+      }
+      for (const method of ["effective", "shadowV1", "currentPace"]) {
+        const state = normalizeHistoryMethodState(source?.[metric]?.[method], {
+          brandId: normalizedBrandId,
+          metric,
+        });
+        if (state.eligible !== true) {
+          return {
+            complete: false,
+            reason: `METHOD_NOT_COMPARABLE:${checkpointKey}:${metric}:${method}`,
+            month: null,
+          };
+        }
+        row[metric][method] = state;
+      }
+    }
+    checkpoints[checkpointKey] = row;
+  }
+
+  return {
+    complete: true,
+    reason: "COMPLETE",
+    month: {
+      brandId: normalizedBrandId,
+      yearMonth: normalizedYearMonth,
+      evidenceType: "live_checkpoint",
+      comparisonMode: PROJECTION_ACCURACY_HISTORY_COMPARISON_MODE,
+      statisticsVersion: PROJECTION_ACCURACY_HISTORY_STATISTICS_VERSION,
+      complete: true,
+      scoreSemanticVersion: PROJECTION_ACCURACY_SCORE_SEMANTIC_VERSION,
+      scoreRevision: Math.max(0, Number(scoreRevision || 0)),
+      inputSignature: String(inputSignature || ""),
+      scoredAtText: String(scoredAtText || ""),
+      checkpoints,
+    },
+  };
+}
+
+function buildProjectionAccuracyHistoryDocument({
+  existing = {},
+  brandId = "",
+  year = "",
+  month = null,
+  updatedAtText = "",
+} = {}) {
+  const normalizedBrandId = String(brandId || "").trim().toLowerCase();
+  const normalizedYear = String(year || "").trim();
+  if (
+    !PROJECTION_ACCURACY_HISTORY_BRANDS.includes(normalizedBrandId)
+    || !/^\d{4}$/.test(normalizedYear)
+    || !month
+    || typeof month !== "object"
+  ) {
+    throw new Error("projection_accuracy_history_invalid_args");
+  }
+  if (String(month.yearMonth || "").slice(0, 4) !== normalizedYear) {
+    throw new Error("projection_accuracy_history_year_mismatch");
+  }
+  if (String(month.comparisonMode || "") !== PROJECTION_ACCURACY_HISTORY_COMPARISON_MODE) {
+    throw new Error("projection_accuracy_history_mode_mismatch");
+  }
+
+  const existingBrandId = String(existing?.brandId || "").trim().toLowerCase();
+  const existingYear = String(existing?.year || "").trim();
+  const existingSchema = String(existing?.schemaVersion || "");
+  const existingMode = String(existing?.comparisonMode || "");
+  const existingStatisticsVersion = String(existing?.statisticsVersion || "");
+  if (existingBrandId && existingBrandId !== normalizedBrandId) {
+    throw new Error("projection_accuracy_history_brand_mismatch");
+  }
+  if (existingYear && existingYear !== normalizedYear) {
+    throw new Error("projection_accuracy_history_existing_year_mismatch");
+  }
+  if (existingSchema && existingSchema !== PROJECTION_ACCURACY_HISTORY_SCHEMA_VERSION) {
+    throw new Error("projection_accuracy_history_schema_mismatch");
+  }
+  if (existingMode && existingMode !== PROJECTION_ACCURACY_HISTORY_COMPARISON_MODE) {
+    throw new Error("projection_accuracy_history_existing_mode_mismatch");
+  }
+  if (existingStatisticsVersion && existingStatisticsVersion !== PROJECTION_ACCURACY_HISTORY_STATISTICS_VERSION) {
+    throw new Error("projection_accuracy_history_statistics_mismatch");
+  }
+
+  const months = existing?.months && typeof existing.months === "object"
+    ? { ...existing.months }
+    : {};
+  const currentMonth = months[month.yearMonth];
+  const currentRevision = Math.max(0, Number(currentMonth?.scoreRevision || 0));
+  const nextRevision = Math.max(0, Number(month.scoreRevision || 0));
+  const currentSignature = String(currentMonth?.inputSignature || "");
+  const nextSignature = String(month.inputSignature || "");
+
+  if (currentRevision > nextRevision) {
+    throw new Error("projection_accuracy_history_revision_ahead");
+  }
+  if (currentRevision === nextRevision && currentMonth) {
+    if (currentSignature !== nextSignature) {
+      throw new Error("projection_accuracy_history_same_revision_signature_mismatch");
+    }
+    return { changed: false, document: existing };
+  }
+
+  months[month.yearMonth] = month;
+  const monthKeys = Object.keys(months).filter(normalizeYearMonth).sort();
+  return {
+    changed: true,
+    document: {
+      schemaVersion: PROJECTION_ACCURACY_HISTORY_SCHEMA_VERSION,
+      comparisonMode: PROJECTION_ACCURACY_HISTORY_COMPARISON_MODE,
+      statisticsVersion: PROJECTION_ACCURACY_HISTORY_STATISTICS_VERSION,
+      brandId: normalizedBrandId,
+      year: normalizedYear,
+      monthCount: monthKeys.length,
+      availableMonths: monthKeys,
+      months,
+      updatedAtText: String(updatedAtText || new Date().toISOString()),
+    },
+  };
+}
+
 async function persistVerifiedMonthScore({
   db,
   admin,
   monthlyRef,
   summaryRef,
   flagRef,
+  historyRef = null,
   brandId,
   yearMonth,
   scoredAtText = "",
@@ -845,21 +1062,115 @@ async function persistVerifiedMonthScore({
       finalActual: trust.actual,
     });
 
-    if (String(existing?.scoreMeta?.inputSignature || "") === inputSignature) {
+    const alreadyCurrent = String(existing?.scoreMeta?.inputSignature || "") === inputSignature;
+    const existingRevision = Math.max(0, Number(existing?.scoreMeta?.scoreRevision || 0));
+    const scorecard = alreadyCurrent
+      ? (existing?.scorecard && typeof existing.scorecard === "object" ? existing.scorecard : null)
+      : buildMonthFinalScorecard({
+          checkpoints,
+          finalActual: trust.actual,
+        });
+    if (!scorecard) {
       return {
         written: false,
-        reason: "ALREADY_CURRENT",
-        scoreRevision: Math.max(0, Number(existing?.scoreMeta?.scoreRevision || 0)),
+        reason: "CURRENT_SCORECARD_MISSING",
+        scoreRevision: existingRevision,
         inputSignature,
       };
     }
 
-    const scorecard = buildMonthFinalScorecard({
-      checkpoints,
-      finalActual: trust.actual,
-    });
     const nowText = String(scoredAtText || new Date().toISOString());
-    const nextRevision = Math.max(0, Number(existing?.scoreMeta?.scoreRevision || 0)) + 1;
+    const scoreRevision = alreadyCurrent ? existingRevision : existingRevision + 1;
+    let historyResult = { written: false, reason: "HISTORY_NOT_APPLICABLE" };
+    let historyMeta = existing?.historyMeta && typeof existing.historyMeta === "object"
+      ? { ...existing.historyMeta }
+      : null;
+
+    if (historyRef && PROJECTION_ACCURACY_HISTORY_BRANDS.includes(String(brandId || "").trim().toLowerCase())) {
+      const historyMonthResult = buildProjectionAccuracyHistoryMonth({
+        brandId,
+        yearMonth,
+        scorecard,
+        scoreRevision,
+        inputSignature,
+        scoredAtText: String(existing?.scoreMeta?.scoredAtText || nowText),
+      });
+      const historyAlreadySynced = Boolean(
+        historyMonthResult.complete === true
+        && historyMeta?.synced === true
+        && String(historyMeta?.inputSignature || "") === inputSignature
+        && Math.max(0, Number(historyMeta?.scoreRevision || 0)) === scoreRevision
+        && String(historyMeta?.statisticsVersion || "") === PROJECTION_ACCURACY_HISTORY_STATISTICS_VERSION
+      );
+
+      if (historyAlreadySynced) {
+        historyResult = { written: false, reason: "HISTORY_ALREADY_SYNCED" };
+      } else if (historyMonthResult.complete === true && historyMonthResult.month) {
+        // The yearly compact history summary participates in the same Firestore
+        // transaction as the monthly score. Concurrent score revisions therefore
+        // retry against the newest year document instead of losing another month.
+        // For an already-current pre-B2C.1 score, this is a one-time self-heal read.
+        const historySnap = await transaction.get(historyRef);
+        const historyDocResult = buildProjectionAccuracyHistoryDocument({
+          existing: historySnap.exists ? (historySnap.data() || {}) : {},
+          brandId,
+          year: String(yearMonth).slice(0, 4),
+          month: historyMonthResult.month,
+          updatedAtText: nowText,
+        });
+        if (historyDocResult.changed) {
+          transaction.set(historyRef, {
+            ...historyDocResult.document,
+            updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+          });
+          historyResult = { written: true, reason: "HISTORY_UPDATED" };
+        } else {
+          historyResult = { written: false, reason: "HISTORY_ALREADY_CURRENT" };
+        }
+        historyMeta = {
+          schemaVersion: PROJECTION_ACCURACY_HISTORY_SCHEMA_VERSION,
+          statisticsVersion: PROJECTION_ACCURACY_HISTORY_STATISTICS_VERSION,
+          comparisonMode: PROJECTION_ACCURACY_HISTORY_COMPARISON_MODE,
+          year: String(yearMonth).slice(0, 4),
+          scoreRevision,
+          inputSignature,
+          synced: true,
+          syncedAtText: nowText,
+        };
+      } else {
+        historyResult = { written: false, reason: historyMonthResult.reason || "HISTORY_NOT_COMPLETE" };
+        historyMeta = {
+          schemaVersion: PROJECTION_ACCURACY_HISTORY_SCHEMA_VERSION,
+          statisticsVersion: PROJECTION_ACCURACY_HISTORY_STATISTICS_VERSION,
+          comparisonMode: PROJECTION_ACCURACY_HISTORY_COMPARISON_MODE,
+          year: String(yearMonth).slice(0, 4),
+          scoreRevision,
+          inputSignature,
+          synced: false,
+          reason: historyResult.reason,
+          syncedAtText: nowText,
+        };
+      }
+    }
+
+    if (alreadyCurrent) {
+      const existingHistorySignature = stableJsonHash(existing?.historyMeta || null);
+      const nextHistorySignature = stableJsonHash(historyMeta || null);
+      if (existingHistorySignature !== nextHistorySignature) {
+        transaction.set(monthlyRef, {
+          historyMeta,
+          historyUpdatedAt: admin.firestore.FieldValue.serverTimestamp(),
+          historyUpdatedAtText: nowText,
+        }, { merge: true });
+      }
+      return {
+        written: false,
+        reason: "ALREADY_CURRENT",
+        scoreRevision,
+        inputSignature,
+        history: historyResult,
+      };
+    }
 
     transaction.set(monthlyRef, {
       finalActual: {
@@ -871,12 +1182,13 @@ async function persistVerifiedMonthScore({
       scorecard,
       scoreMeta: {
         semanticVersion: PROJECTION_ACCURACY_SCORE_SEMANTIC_VERSION,
-        scoreRevision: nextRevision,
+        scoreRevision,
         checkpointEvidenceSignature,
         finalActualAuthoritySignature,
         inputSignature,
         scoredAtText: nowText,
       },
+      historyMeta,
       scoreUpdatedAt: admin.firestore.FieldValue.serverTimestamp(),
       scoreUpdatedAtText: nowText,
     }, { merge: true });
@@ -884,10 +1196,11 @@ async function persistVerifiedMonthScore({
     return {
       written: true,
       reason: "SCORED",
-      scoreRevision: nextRevision,
+      scoreRevision,
       inputSignature,
       checkpointCount: checkpointKeys.length,
       scorecard,
+      history: historyResult,
     };
   });
 }
@@ -1003,6 +1316,9 @@ function createProjectionAccuracyFunctions({
       monthlyRef: getBrandCollection(normalizedBrandId, PROJECTION_ACCURACY_COLLECTION).doc(normalizedYearMonth),
       summaryRef: getBrandCollection(normalizedBrandId, "dashboard_summary").doc(normalizedYearMonth),
       flagRef: getBrandCollection(normalizedBrandId, "summary_recalc_flags").doc(normalizedYearMonth),
+      historyRef: PROJECTION_ACCURACY_HISTORY_BRANDS.includes(normalizedBrandId)
+        ? getBrandCollection(normalizedBrandId, PROJECTION_ACCURACY_HISTORY_COLLECTION).doc(normalizedYearMonth.slice(0, 4))
+        : null,
       brandId: normalizedBrandId,
       yearMonth: normalizedYearMonth,
     });
@@ -1088,6 +1404,11 @@ module.exports = {
   PROJECTION_ACCURACY_FINAL_ACTUAL_SOURCE,
   PROJECTION_ACCURACY_SUMMARY_VERSION,
   PROJECTION_ACCURACY_SUMMARY_SEMANTIC_VERSION,
+  PROJECTION_ACCURACY_HISTORY_COLLECTION,
+  PROJECTION_ACCURACY_HISTORY_SCHEMA_VERSION,
+  PROJECTION_ACCURACY_HISTORY_COMPARISON_MODE,
+  PROJECTION_ACCURACY_HISTORY_BRANDS,
+  PROJECTION_ACCURACY_HISTORY_STATISTICS_VERSION,
   getTaipeiIsoDate,
   shiftIsoDate,
   resolveScheduledCheckpoint,
@@ -1110,6 +1431,9 @@ module.exports = {
   buildMethodScoreForCheckpoint,
   summarizeFinalScores,
   buildMonthFinalScorecard,
+  normalizeHistoryMethodState,
+  buildProjectionAccuracyHistoryMonth,
+  buildProjectionAccuracyHistoryDocument,
   persistVerifiedMonthScore,
   createProjectionAccuracyFunctions,
 };
