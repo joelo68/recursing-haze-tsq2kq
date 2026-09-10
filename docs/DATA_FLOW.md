@@ -5,6 +5,143 @@
 
 ---
 
+# Projection Accuracy / Rolling History Flow Override — 2026-09-10
+
+Projection Accuracy 不改寫 current-month Projection Authority；它位於 Projection 結果之後，負責「保存當時推估 → 月底驗證 → 歷史比較」。
+
+## B1 — Checkpoint Capture
+
+```text
+07:10 Asia/Taipei scheduler
+        │
+        ▼
+resolve yesterday
+        │
+        ├─ 不是 5 / 7 / 10 / 15 / 20 / 25 → skip
+        │
+        ▼
+Formal scope + Lifecycle
++ Reporting Calendar
++ System Exclusion
++ Projection Authority
+        │
+        ▼
+當日可比較 completeness / projection evidence
+        │
+        ▼
+projection_accuracy/{YYYY-MM}
+checkpoints.dayXX
+        │
+        └─ transaction first-writer-wins
+```
+
+錯過 cutoff day 不由 B1 自動補寫；checkpoint evidence 建立後保持 immutable。
+
+## B2A — Month-Final Score
+
+```text
+historical Summary repair / finalize
+        │
+        ▼
+dashboard_summary verified
++ summary_recalc_flags trusted / clean
+        │
+        ▼
+scoreProjectionAccuracyMonthFromVerifiedSummary
+        │
+        ├─ finalActual = verified_dashboard_summary
+        ├─ effective production projection
+        ├─ shadow V1
+        └─ current pace
+        │
+        ▼
+same projection_accuracy/{YYYY-MM}
+        │
+        ├─ scorecard
+        ├─ scoreMeta / scoreRevision / signatures
+        └─ checkpoints 保持不變
+```
+
+若之後正式 Summary 修正而 trusted final actual authority 改變，B2A 可重算 score；交易 OCC / signatures 防止舊結果覆蓋新 authority。
+
+## B2C.1 — Rolling History
+
+```text
+B2A score transaction
+        │
+        ├─ month 不符合完整 rolling contract → 不讀 / 不寫 history
+        │
+        ▼
+complete CYJ / ANNIU comparable month
+        │
+        ├─ convert exact score amounts
+        │    → normalized WAPE components
+        │
+        ▼
+projection_accuracy_history/{YYYY}
+        │
+        ├─ one yearly point read
+        ├─ merge months.{YYYY-MM}
+        ├─ revision / signature safe
+        └─ <= 1 yearly write
+```
+
+Rolling history 沒有新增 scheduler；它沿用 B2A verified month scoring 的 event-driven path。伊啵維持 V1，不進 `v2_vs_v1_vs_pace` 年度 history。
+
+## B2A0 Historical Evidence 與 Live Evidence 分流
+
+```text
+一次性 read-only B2A0 backtest
+        │
+        ▼
+src/data/projectionAccuracyHistoricalEvidence.js
+        │
+        └─ approved static aggregate evidence
+           CYJ / 安妞 2026-05~08
+           Firestore reads at display time = 0
+
+
+自然 Production checkpoint / score
+        │
+        ▼
+projection_accuracy
+        │
+        ▼
+projection_accuracy_history/{YYYY}
+```
+
+兩條 evidence 可以在 UI 合併比較，但不能互相冒充；B2A0 不回填成 past live checkpoint。
+
+## SystemMaintenance Consumer
+
+```text
+進階工具開啟
+        │
+        ├─ projection_models/current
+        │    explicit refresh → 1 point read
+        │
+        ├─ projection_accuracy/{YYYY-MM}
+        │    單月查詢 → 1 point read
+        │
+        └─ projection_accuracy_history/{currentYear}
+             CYJ / 安妞 → 1 point read when uncached
+             ↓
+             session memory cache
+```
+
+歷史比較支援：
+
+```text
+最近 4 個完整月份
+自行選擇起訖月份
+現金 / 權責切換
+5 / 7 / 10 / 15 / 20 / 25 細節按需展開
+```
+
+同品牌同年度切換月份範圍不逐月讀 Firestore；跨年只讀必要年度小型文件，且單次自訂區間受 UI 年度範圍限制。「更新最新資料」會明確 force refresh。沒有 listener、polling 或 Raw daily report scan。
+
+---
+
 # Projection v2 Current-Month Flow Override — 2026-09-08
 
 ```text

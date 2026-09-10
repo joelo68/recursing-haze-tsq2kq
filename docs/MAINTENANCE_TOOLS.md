@@ -5,6 +5,117 @@
 
 ---
 
+# Projection Model / Accuracy / Rolling History Observability — 2026-09-10
+
+`SystemMaintenance.jsx` 的 Projection 相關工具屬 **Director-only / Read-only observability**。正常使用不修改 Raw 業績、Projection Model、Accuracy checkpoint 或歷史 Summary。
+
+## 業績推估模型監控
+
+用途：
+
+```text
+查看目前品牌 projection_models/current
+→ schema / semantic
+→ modelMonth / sourceMonths
+→ V2 strategy / phase reliability
+→ rebuild metadata
+```
+
+Reads：
+
+```text
+按「重新整理」才讀 projection_models/current
+= 1 point read
+
+listener = 0
+polling  = 0
+Raw scan = 0
+writes   = 0
+```
+
+## 業績推估準確度
+
+單月查詢：
+
+```text
+projection_accuracy/{YYYY-MM}
+= 1 point read / explicit lookup
+```
+
+顯示：
+
+```text
+已累積驗證時間點
+月底結果
+目前使用的推估方式
+原本推估方式
+依目前進度推估
+各 cutoff 的比較
+```
+
+如果舊月份沒有當時保存的正式 checkpoint，UI 應顯示：
+
+```text
+此月份沒有當時保存的單月追蹤紀錄
+```
+
+這不代表歷史業績遺失，也不得用 B2A0 reconstructed evidence 回填成假的單月 live record。
+
+## 歷史推估驗證
+
+資料來源有兩種，identity 必須分開：
+
+```text
+approved B2A0 static evidence
+→ src/data/projectionAccuracyHistoricalEvidence.js
+→ 顯示時 0 Firestore reads
+
+natural live rolling evidence
+→ projection_accuracy_history/{YYYY}
+→ 1 point read / uncached required year
+```
+
+CYJ / 安妞進入進階工具時只同步目前年度的小型 rolling history document；同品牌同年度在同一工作階段以 memory cache 重用。自行切換同年度月份範圍不逐月讀取；按「更新最新資料」會 force refresh。
+
+歷史 UI：
+
+```text
+預設 = 最近 4 個完整可比較月份
+可選 = 自行選擇起訖月份
+指標 = 現金 / 權責 tabs
+5 / 7 / 10 / 15 / 20 / 25 = 預設收合，按需展開
+```
+
+Yibo：
+
+```text
+維持標準推估 / V1
+不借用 CYJ / 安妞 historical V2 evidence
+不寫 projection_accuracy_history 的 v2_vs_v1_vs_pace rolling month
+```
+
+## Read-cost 原則
+
+```text
+開啟進階工具：
+CYJ / 安妞 current-year history = 最多 1 次 uncached year point read
+伊啵 rolling history            = 0
+
+單月查看                      = +1 point read / click
+同年度自選月份區間             = +0 after cache
+跨年度範圍                    = 只讀必要年度小型文件
+更新最新資料                  = 明確 force refresh
+
+listener                       = 0
+polling                        = 0
+daily_reports history query    = 0
+frontend writes                = 0
+```
+
+「本工作階段同步：N 筆」表示本次工作階段對 rolling year-summary 的實際同步讀取數，不應解讀為整個頁面的 Firestore billed reads 總數。
+
+---
+
 # 1. 維護中心定位
 
 正式 `SystemMaintenance.jsx` 同時負責：
@@ -19,6 +130,7 @@
 - Firestore reads 監控
 - 資料量觀察
 - 年度 Target Summary 過渡整理
+- Projection Model / Accuracy / rolling history observability
 
 因此修改這支檔案時，要先判斷：
 

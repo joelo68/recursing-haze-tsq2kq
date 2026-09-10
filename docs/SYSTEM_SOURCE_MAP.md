@@ -1,9 +1,119 @@
 # SYSTEM_SOURCE_MAP.md
 
 > 狀態：Project Knowledge Base / Source Map v0.1
-> 已整併至 2026-09-08 Projection v2 Phase Calibration / Telegram Exact Integer Parity closeout；latest runtime source = `d5906ef52738d0b86a92b246722c089bcbaa7b15`，Projection v2 ancestor = `1b2df57c5b1fff3576b2e9cddddeac2ab3b2081d`，Frontend Production gh-pages = `be7b0514128f05d7bfeaa1202fb22f7376d0cb35`，`CURRENT_APP_VERSION = 3.5.3`，`~/cyj-new` 為唯一正式 Source of Truth。
+> 已整併至 2026-09-10 Projection Accuracy / Observability + Rolling History closeout；latest runtime source = `922e36c0522b760392597cd5417e304dcb18fbd7`，Projection Accuracy / B2C.1 implementation = `0d26d66d81f02fae06bfe3e0e9109ae869be4013`，Frontend Production gh-pages = `fba015f46ec80863c0e62d5397b2c8ed99622fe3`，`CURRENT_APP_VERSION = 3.5.3`，`~/cyj-new` 為唯一正式 Source of Truth。
 > 禁止以舊對話、舊版檔案、AI 記憶或未提供的檔案補足事實。
 > 無法由目前正式程式確認的內容，必須標記為「未由目前正式來源確認」。
+
+---
+
+# Projection Accuracy / Observability Runtime Source Override — 2026-09-10
+
+最新正式 Projection / Accuracy runtime lineage：
+
+```text
+main runtime source                = 922e36c0522b760392597cd5417e304dcb18fbd7
+Projection Accuracy / B2C.1        = 0d26d66d81f02fae06bfe3e0e9109ae869be4013
+Frontend Production gh-pages      = fba015f46ec80863c0e62d5397b2c8ed99622fe3
+CURRENT_APP_VERSION                = 3.5.3
+```
+
+B2C.2 / B2C.2A 是後續 Frontend copy refinement；沒有改 Accuracy authority、Firestore schema 或 read topology。
+
+正式 owners：
+
+```text
+functions/projectionAccuracy.js
+  → B1 07:10 Asia/Taipei immutable checkpoint capture
+  → B2A verified Summary month-final scoring
+  → score revision / input signatures
+  → B2C.1 yearly rolling history writer
+  → CYJ / ANNIU history allowlist
+
+functions/projectionAuthority.js
+  → checkpoint capture 使用的 Projection / Lifecycle / Calendar / Exclusion authority
+
+functions/index.js
+  → captureProjectionAccuracyCheckpoint export / schedule wiring
+  → verified Summary repair/finalize 後的 Accuracy scoring hook
+
+src/utils/projectionObservability.js
+  → Projection Model observability trust
+  → single-month Accuracy trust / business presentation
+  → approved historical + rolling history merge
+  → selectable range aggregation
+  → Yibo V1 fail-closed presentation
+
+src/data/projectionAccuracyHistoricalEvidence.js
+  → approved B2A0 source-controlled historical aggregate evidence
+  → CYJ / 安妞 2026-05~08
+  → 不等於 live checkpoint / Firestore backfill
+
+src/components/SystemMaintenance.jsx
+  → director-only Projection Model monitor
+  → single-month Accuracy point read
+  → yearly rolling-history point reads + session cache
+  → latest-4 / custom range / Cash-Accrual tabs / collapsed cutoff details
+
+firestore.rules
+  → projection_models frontend read / write deny
+  → projection_accuracy frontend read / write deny
+  → projection_accuracy_history frontend read / write deny
+  → CYJ legacy + standard brand roots
+
+tests/projectionAccuracyCheckpoint.test.js
+tests/projectionObservability.test.js
+  → checkpoint immutability / score / history transaction / brand isolation
+  → read topology / historical evidence / UI contracts
+```
+
+Physical paths：
+
+```text
+CYJ
+artifacts/{appId}/public/data/projection_models/current
+artifacts/{appId}/public/data/projection_accuracy/{YYYY-MM}
+artifacts/{appId}/public/data/projection_accuracy_history/{YYYY}
+
+安妞
+brands/anniu/projection_models/current
+brands/anniu/projection_accuracy/{YYYY-MM}
+brands/anniu/projection_accuracy_history/{YYYY}
+
+伊啵
+brands/yibo/projection_models/current
+brands/yibo/projection_accuracy/{YYYY-MM}
+rolling v2 history = 不寫
+```
+
+Source / evidence identity：
+
+```text
+projection_models/current
+→ current-month Projection authority
+
+projection_accuracy/{YYYY-MM}
+→ immutable cutoff evidence + verified month-final score
+
+projection_accuracy_history/{YYYY}
+→ future natural CYJ / ANNIU rolling comparable months
+
+projectionAccuracyHistoricalEvidence.js
+→ approved reconstructed historical evidence only
+→ 不可視為過去 live checkpoint
+```
+
+Read topology：
+
+```text
+Projection Model monitor          = 1 point read / explicit refresh
+single-month Accuracy             = 1 point read / explicit lookup
+static historical evidence        = 0 Firestore reads
+rolling live history              = 1 point read / uncached required year
+persistent listener delta         = 0
+polling delta                     = 0
+historical Raw scan in consumer   = 0
+```
 
 ---
 

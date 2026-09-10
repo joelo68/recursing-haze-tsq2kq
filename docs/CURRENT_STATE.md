@@ -2,7 +2,176 @@
 
 > 用途：記錄「目前正式環境已確認到哪個狀態」。這不是 CHANGELOG。  
 > 優先順序：使用者提供的目前正式部署 source > 本檔案 > 其他 Knowledge Base 文件。  
-> 最後整併更新：**2026-09-08（UTC+8）**。
+> 最後整併更新：**2026-09-10（UTC+8）**。
+
+# Latest Production Runtime Override — 2026-09-10（Projection Accuracy / Observability + Rolling History Closeout）
+
+> 本節是目前最高優先的 Projection Accuracy / Observability 狀態。下方 2026-09-08 Projection v2 與更早章節保留歷史 evidence；若衝突，以目前正式 source、Production publish、Production UI smoke 與本節為準。
+> B2C.2 / B2C.2A 只調整使用者文案，不改 Projection Authority、Accuracy data contract、Firestore path、Security 或 reads topology。
+
+正式 runtime lineage：
+
+```text
+Official working directory       = ~/cyj-new
+branch                           = main
+Projection Accuracy / B2C.1      = 0d26d66d81f02fae06bfe3e0e9109ae869be4013
+Projection wording B2C.2         = 9fb539205be704f7fc06e120faed02d12b412275
+Projection header B2C.2A         = 922e36c0522b760392597cd5417e304dcb18fbd7
+Current main runtime source      = 922e36c0522b760392597cd5417e304dcb18fbd7
+Frontend Production gh-pages    = fba015f46ec80863c0e62d5397b2c8ed99622fe3
+CURRENT_APP_VERSION              = 3.5.3（未提高）
+```
+
+## B1 — Immutable Projection Accuracy Checkpoints
+
+正式 checkpoint contract：
+
+```text
+schedule               = 07:10 Asia/Taipei
+capture target         = yesterday
+approved cutoff days   = 5 / 7 / 10 / 15 / 20 / 25
+monthly document       = projection_accuracy/{YYYY-MM}
+schemaVersion          = projection-accuracy-v1
+semanticVersion        = projection-accuracy-checkpoint-v1
+writer                 = Backend / Functions Admin SDK
+persistence            = transaction first-writer-wins
+missed cutoff backfill = NO
+```
+
+B1 使用既有 Formal scope、Store Lifecycle、Reporting Calendar、System Exclusion 與 Projection Authority；CYJ / 安妞 / 伊啵都可保存月內 checkpoint。Checkpoint 建立後不可被 B2A scoring 覆寫。
+
+## B2A — Verified Month-Final Scoring
+
+月底 scoring 只接受已驗證的 `dashboard_summary` authority：
+
+```text
+finalActual.source          = verified_dashboard_summary
+summaryVersion              = dashboard-summary-v2
+summarySemanticVersion      = summary-semantics-v1
+scoreMeta.semanticVersion   = projection-accuracy-score-v1
+```
+
+`repairDirtySummaryNow` / `repairDirtySummaries` 在 verified Summary guard 後呼叫正式 Accuracy scoring。若後續正式 Summary 修正造成 trusted final actual authority 改變，可產生新的 `scoreRevision`；既有 checkpoints 仍保持 immutable。
+
+## B2A0 — Historical Backtest Evidence
+
+一次性 read-only 歷史回測只作為既有證據，不回填成過去的正式 checkpoint：
+
+```text
+brands                  = CYJ / 安妞
+target months           = 2026-05 ~ 2026-08
+cutoff days             = 5 / 7 / 10 / 15 / 20 / 25
+Firestore reads         = 10,147
+Firestore writes        = 0
+listeners               = 0
+polling                 = 0
+```
+
+整體歷史比較：
+
+```text
+Effective V2 WAPE       = 9.438449%
+Current Pace WAPE       = 12.522621%
+Shadow V1 WAPE          = 16.551930%
+V2 aggregate wins       = 13 / 16 brand-month-metric scopes
+```
+
+因此目前證據支持 V2 方向，但回測本身沒有修改 Projection 公式。前端歷史 seed 由 `src/data/projectionAccuracyHistoricalEvidence.js` 保存為 source-controlled aggregate evidence；不建立 `projection_accuracy_backtests` Firestore collection，也不把歷史回測偽裝成 live checkpoint。
+
+## B2B / B2C.1 — Observability + Selectable Rolling History
+
+`SystemMaintenance.jsx` 的主管唯讀觀測正式分成三層：
+
+```text
+Projection Model
+→ projection_models/current
+→ explicit refresh = 1 point read
+
+單月推估驗證
+→ projection_accuracy/{YYYY-MM}
+→ explicit lookup = 1 point read
+
+歷史推估驗證
+→ approved B2A0 static evidence
+   + projection_accuracy_history/{YYYY}
+→ static evidence = 0 Firestore reads
+→ live rolling history = 1 point read / required year when not cached
+```
+
+進階工具開啟時，CYJ / 安妞只讀目前年度的 rolling history 單文件；同品牌同年度在工作階段使用記憶體快取。自行切換同年度月份區間不逐月讀取；「更新最新資料」才會 force refresh。沒有 listener、polling 或歷史 Raw scan。
+
+B2C.1 年度 rolling history：
+
+```text
+collection             = projection_accuracy_history
+documentId             = YYYY
+schemaVersion          = projection-accuracy-history-v1
+comparisonMode         = v2_vs_v1_vs_pace
+statisticsVersion      = normalized-wape-components-v1
+formal writer brands   = CYJ / 安妞
+YIBO                   = 不寫 rolling V2 history
+```
+
+只有可完整同口徑比較的月份才可寫入年度 history。年度文件與該月正式 scoring 參與同一 Firestore transaction，並以 `scoreRevision + inputSignature` 防止舊結果覆蓋新 revision。Rolling history 不保存 exact revenue totals，只保存用於歷史準確度比較的 normalized WAPE components。
+
+Production UI 已確認：
+
+```text
+CYJ 2026-05~08         = 4 個完整比較月份，歷史比較正常
+CYJ 2026-05~06         = 2 個完整比較月份，重新聚合正常
+安妞 2026-05~08        = 品牌隔離正常
+伊啵                   = 使用標準推估，不借用 CYJ / 安妞 V2 歷史
+2026-08 legacy month   = 顯示「此月份沒有當時保存的單月追蹤紀錄」
+Cash / Accrual         = 分頁切換
+5/7/10/15/20/25 detail = 預設收合
+```
+
+## Read / Write Topology Delta
+
+```text
+frontend monthly Accuracy lookup       = 1 point read / explicit click
+frontend approved historical seed      = 0 Firestore reads
+frontend rolling history               = 1 point read / uncached required year
+frontend listener delta                = 0
+frontend polling delta                 = 0
+frontend historical Raw scan           = 0
+
+backend incomplete / ineligible month  = +0 history read / +0 history write
+backend complete new/revised month      = +1 yearly history read / <=1 yearly history write
+new scheduler for B2C.1                = 0
+```
+
+## Final Status Separation
+
+```text
+B1 checkpoint pipeline
+IMPLEMENTED / VALIDATED / DEPLOYED      = YES
+first natural checkpoint evidence       = NOT YET OBSERVED in this closeout
+
+B2A month-final scoring
+IMPLEMENTED / VALIDATED / DEPLOYED      = YES
+first natural month-final score         = NOT YET OBSERVED in this closeout
+
+B2B observability
+IMPLEMENTED / VALIDATED / DEPLOYED
+/ PRODUCTION CONFIRMED                  = YES
+
+B2C.1 selectable history + rolling writer
+IMPLEMENTED / VALIDATED / COMMITTED
+/ PUSHED / DEPLOYED / PRODUCTION CONFIRMED = YES
+first natural projection_accuracy_history write
+                                        = NOT YET OBSERVED in this closeout
+
+B2C.2 / B2C.2A UI copy
+PRODUCTION CONFIRMED                    = YES
+Accuracy/Data Model impact              = None
+```
+
+「未觀察到第一筆自然 checkpoint / month-final score / rolling history write」是 runtime evidence 尚待自然時間條件發生，不得改寫成已觀察 PASS；這不取消已完成的 B2C.1 UI / deployment Production confirmation。
+
+Documentation Impact：本 closeout 更新 `CURRENT_STATE.md`、`FIREBASE_DATA_MODEL.md`、`DATA_FLOW.md`、`SYSTEM_SOURCE_MAP.md`、`MAINTENANCE_TOOLS.md`；其他 canonical docs = None。
+
+---
 
 # Latest Production Runtime Override — 2026-09-08（Projection v2 Phase Calibration + Telegram Exact Integer Parity Closeout）
 

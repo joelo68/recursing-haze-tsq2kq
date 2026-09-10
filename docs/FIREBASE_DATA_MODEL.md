@@ -7,6 +7,161 @@
 
 ---
 
+# Projection Accuracy / Rolling History Data Model Override — 2026-09-10
+
+本節記錄 B1 / B2A / B2C.1 正式新增的 Accuracy evidence 與年度 rolling history。它們都是 **Derived / Audit Evidence**，不是 Raw 業績輸入，也不是 Projection Model 的第二份 authority。
+
+## `projection_accuracy/{YYYY-MM}`
+
+**類型：Derived / Immutable Checkpoint Evidence + Month-Final Score**
+
+Physical path：
+
+```text
+CYJ
+artifacts/{appId}/public/data/projection_accuracy/{YYYY-MM}
+
+安妞 / 伊啵
+brands/{brandId}/projection_accuracy/{YYYY-MM}
+```
+
+核心 persisted contract：
+
+```text
+schemaVersion   = projection-accuracy-v1
+semanticVersion = projection-accuracy-checkpoint-v1
+brandId
+yearMonth
+checkpointDays  = [5, 7, 10, 15, 20, 25]
+checkpoints.day05 / day07 / day10 / day15 / day20 / day25
+updatedAt
+updatedAtText
+```
+
+Checkpoint 由 Backend scheduler / Functions Admin SDK 以 transaction first-writer-wins 保存；錯過的 cutoff 不由正式 B1 pipeline 自動補寫。
+
+月底 verified Summary scoring 會 additive merge：
+
+```text
+finalActual.source = verified_dashboard_summary
+finalActual.cash
+finalActual.accrual
+finalActual.authority
+
+scorecard
+scoreMeta.semanticVersion = projection-accuracy-score-v1
+scoreMeta.scoreRevision
+scoreMeta.checkpointEvidenceSignature
+scoreMeta.finalActualAuthoritySignature
+scoreMeta.inputSignature
+scoreMeta.scoredAtText
+
+historyMeta   // B2C.1 rolling history 同步狀態
+scoreUpdatedAt
+```
+
+B2A scoring 可因後續 trusted final actual authority 改變而增加 `scoreRevision`；不得修改既有 checkpoint evidence。
+
+Firestore Rules：
+
+```text
+signed-in read
+frontend write = false
+Backend Admin SDK writer only
+```
+
+CYJ legacy root 與 `brands/{brandId}` root 都有明確保護，且 broad catch-all 已排除此 collection。
+
+## `projection_accuracy_history/{YYYY}`
+
+**類型：Derived / 年度輕量比較摘要**
+
+Physical path：
+
+```text
+CYJ
+artifacts/{appId}/public/data/projection_accuracy_history/{YYYY}
+
+standard brand root
+brands/{brandId}/projection_accuracy_history/{YYYY}
+```
+
+Rules 對 standard brand path 採 generic brand pattern，但目前正式 Backend writer allowlist 只有：
+
+```text
+cyj
+anniu
+```
+
+伊啵維持 V1，不寫 `v2_vs_v1_vs_pace` rolling history。
+
+年度 document contract：
+
+```text
+schemaVersion     = projection-accuracy-history-v1
+comparisonMode    = v2_vs_v1_vs_pace
+statisticsVersion = normalized-wape-components-v1
+brandId
+year
+monthCount
+availableMonths[]
+months.{YYYY-MM}
+updatedAtText
+updatedAt
+```
+
+每月 entry 至少承載：
+
+```text
+brandId
+yearMonth
+evidenceType = live_checkpoint
+comparisonMode
+statisticsVersion
+complete = true
+scoreSemanticVersion
+scoreRevision
+inputSignature
+scoredAtText
+metrics
+checkpoints
+```
+
+年度 history **不保存 exact revenue totals**。Backend 會把正式 score amount 轉成 dimensionless normalized WAPE components 後才持久化，用於不同月份區間的歷史準確度重聚合。
+
+只有符合正式完整比較契約的月份才可加入 history。年度文件與該月 Accuracy scoring 在同一 Firestore transaction 中更新；既有 `brandId / year / schemaVersion / comparisonMode / statisticsVersion` 不一致時 fail closed，較舊 score revision 不得覆蓋較新月份 evidence。
+
+Firestore Rules：
+
+```text
+signed-in read
+frontend write = false
+Backend Admin SDK writer only
+```
+
+CYJ legacy root 與 standard brand root 都被 broad catch-all 明確排除。
+
+## Historical Backtest Evidence 不是 Firestore Collection
+
+B2A0 歷史驗證資料：
+
+```text
+src/data/projectionAccuracyHistoricalEvidence.js
+```
+
+是經核准的一次性 read-only backtest aggregate evidence，CYJ / 安妞目前涵蓋 2026-05～08。它：
+
+```text
+不是 projection_accuracy 的歷史補寫
+不是 projection_accuracy_history 的假 live month
+不是 Raw revenue source
+不建立 projection_accuracy_backtests collection
+```
+
+B2C.1 前端把 approved static evidence 與未來自然形成的 rolling history 在 presentation layer 合併，但兩者的 evidence identity 保持分離。
+
+---
+
 # `projection_models/current` v2 Additive Model Override — 2026-09-08
 
 Projection v2 沒有新增 collection 或第二份 document，仍使用：
