@@ -74,6 +74,8 @@ test("Projection drawer uses neutral low/main/high estimate language without imp
   assert.match(source, /依目前已回報業績與歷史營運節奏，推算的主要月底落點。/);
   assert.match(source, /若後續業績進展高於目前主要推估節奏，月底可能接近此較高落點。/);
   assert.match(source, /系統會依本月已回報業績、目前進度與歷史營運節奏推估月底可能落點。/);
+  assert.match(source, /主畫面保留最需要追蹤的推估數字；這裡補充現金與權責的低位、主要與高位推估，方便主管掌握月底可能落點與變動範圍。/);
+  assert.doesNotMatch(source, /方便主管判斷後續衝刺空間/);
   assert.doesNotMatch(source, /title="偏穩"/);
   assert.doesNotMatch(source, /title="衝刺"/);
   assert.doesNotMatch(source, /後續維持穩定服務與成交時/);

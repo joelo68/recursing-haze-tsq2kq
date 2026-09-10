@@ -336,7 +336,7 @@ const StorePerformanceView = ({ dashboardStats, myStoreRankings, brandInfo }) =>
               </div>
               <h3 className="text-xl font-black text-stone-700">月底推估怎麼看？</h3>
               <p className="mt-1 max-w-xl text-[11px] font-bold leading-5 text-stone-400">
-                主畫面保留最需要追蹤的推估數字；這裡補充現金與權責在不同營運情境下的可能落點，方便主管判斷後續衝刺空間。
+                主畫面保留最需要追蹤的推估數字；這裡補充現金與權責的低位、主要與高位推估，方便主管掌握月底可能落點與變動範圍。
               </p>
             </div>
             <button
