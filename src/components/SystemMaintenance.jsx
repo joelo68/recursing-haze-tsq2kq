@@ -79,6 +79,12 @@ import {
   normalizeLifecycleMaster,
 } from "../utils/storeLifecycle";
 
+import {
+  buildProjectionObservabilitySnapshot,
+  getProjectionObservabilityTone,
+  getTaipeiProjectionYearMonth,
+} from "../utils/projectionObservability.js";
+
 const todayMonth = () => new Date().toISOString().substring(0, 7);
 const TARGET_COVERAGE_AUDIT_ENDPOINT = "https://us-central1-cyjsituation-analysis.cloudfunctions.net/auditHistoricalTargetCoverage";
 const TARGET_COVERAGE_MIGRATION_ENDPOINT = "https://us-central1-cyjsituation-analysis.cloudfunctions.net/migrateHistoricalTargetCoverageMetadata";
@@ -146,6 +152,24 @@ export default function SystemMaintenance() {
   const [targetCoverageAuditPassword, setTargetCoverageAuditPassword] = useState("");
   const [targetCoverageAuditReport, setTargetCoverageAuditReport] = useState(null);
   const [targetCoverageMigrationReport, setTargetCoverageMigrationReport] = useState(null);
+
+  const [projectionObservabilityState, setProjectionObservabilityState] = useState({
+    brandId: "",
+    status: "idle",
+    data: null,
+    error: null,
+    loadedAtText: "",
+  });
+
+  useEffect(() => {
+    setProjectionObservabilityState({
+      brandId: "",
+      status: "idle",
+      data: null,
+      error: null,
+      loadedAtText: "",
+    });
+  }, [currentBrand?.id]);
 
   const [readTrackerMode, setReadTrackerModeState] = useState(getReadTrackerMode());
   const [localReadStats, setLocalReadStats] = useState({});
@@ -2428,6 +2452,58 @@ export default function SystemMaintenance() {
       showToast("讀取全域追蹤失敗，請確認 read_debug_sessions 權限或資料是否存在", "error");
     } finally {
       setLoadingReadStats(false);
+    }
+  };
+
+  // Projection Observability v1：按需單文件讀取，不建立 listener / polling，
+  // 不改 Projection Authority，也不在前端重算 Accuracy。
+  const handleLoadProjectionObservability = async () => {
+    const activeBrandId = String(currentBrand?.id || "").trim().toLowerCase() || "cyj";
+    setLoadingAction("projectionObservability");
+    setProjectionObservabilityState({
+      brandId: activeBrandId,
+      status: "loading",
+      data: null,
+      error: null,
+      loadedAtText: "",
+    });
+
+    try {
+      const modelRef = doc(getCollectionPath("projection_models"), "current");
+      const modelSnap = await getDoc(modelRef);
+      const model = modelSnap.exists() ? (modelSnap.data() || {}) : null;
+      const data = buildProjectionObservabilitySnapshot({
+        model,
+        brandId: activeBrandId,
+        currentYearMonth: getTaipeiProjectionYearMonth(),
+      });
+
+      setProjectionObservabilityState({
+        brandId: activeBrandId,
+        status: "ready",
+        data,
+        error: null,
+        loadedAtText: new Date().toLocaleString("zh-TW", { hour12: false }),
+      });
+
+      showToast(
+        data.status === "healthy"
+          ? `${brandLabel} 推估模型狀態已更新`
+          : `${brandLabel} 推估模型有狀態需要確認`,
+        data.status === "error" ? "error" : (data.status === "warning" ? "info" : "success")
+      );
+    } catch (error) {
+      console.error("讀取 Projection Model 狀態失敗：", error);
+      setProjectionObservabilityState({
+        brandId: activeBrandId,
+        status: "error",
+        data: null,
+        error: error?.message || String(error),
+        loadedAtText: new Date().toLocaleString("zh-TW", { hour12: false }),
+      });
+      showToast("讀取業績推估模型狀態失敗", "error");
+    } finally {
+      setLoadingAction(null);
     }
   };
 
@@ -5044,6 +5120,138 @@ export default function SystemMaintenance() {
                 )}
               </div>
             )}
+            <ToolRow
+              icon={Activity}
+              title="業績推估模型監控"
+              desc="唯讀查看目前品牌 Projection Model 的版本、來源月份、V2 Phase reliability 與最近重建資訊。按下重新整理才做 1 次 projection_models/current point read；不建立 listener、不掃 Raw、不修改模型。"
+              badge="Read Only"
+              tone={getProjectionObservabilityTone(projectionObservabilityState?.data?.status)}
+            >
+              <BeautyButton
+                onClick={handleLoadProjectionObservability}
+                disabled={loadingAction !== null}
+                variant="primary"
+              >
+                {loadingAction === "projectionObservability"
+                  ? <Loader2 size={14} className="animate-spin" />
+                  : <RefreshCw size={14} />}
+                重新整理模型狀態
+              </BeautyButton>
+            </ToolRow>
+
+            {projectionObservabilityState.status === "idle" && (
+              <div className="rounded-2xl border border-stone-100 bg-white/70 px-4 py-3 text-[11px] font-bold text-stone-500 leading-relaxed">
+                此區預設不讀 Firestore。需要查看時再按「重新整理模型狀態」。本批只做模型可觀測性；預估準確率 checkpoint / 月底成績單會由下一個 Accuracy Tracking 批次建立 Backend summary 後再接入。
+              </div>
+            )}
+
+            {projectionObservabilityState.status === "error" && (
+              <div className="rounded-2xl border border-rose-100 bg-rose-50/40 px-4 py-3 text-[11px] font-bold text-rose-600 leading-relaxed">
+                讀取失敗：{projectionObservabilityState.error || "未知錯誤"}
+              </div>
+            )}
+
+            {projectionObservabilityState.status === "ready" && projectionObservabilityState.data && (() => {
+              const data = projectionObservabilityState.data;
+              const statusTone = data.status === "healthy"
+                ? "text-emerald-700 border-emerald-100 bg-emerald-50"
+                : data.status === "error"
+                  ? "text-rose-600 border-rose-100 bg-rose-50"
+                  : "text-[#9A6A24] border-amber-100 bg-amber-50";
+              const phaseText = (metric) => (
+                data.v2Expected
+                  ? (metric?.reliable
+                    ? `READY｜${Number(metric.sourceMonthCount || 0)} 個完整來源月`
+                    : `FALLBACK｜${Number(metric?.sourceMonthCount || 0)} 個完整來源月`)
+                  : "V1｜不使用品牌 Phase"
+              );
+
+              return (
+                <div className="rounded-[1.5rem] border border-stone-100 bg-white/90 p-4 space-y-4">
+                  <div className="flex flex-col lg:flex-row lg:items-center lg:justify-between gap-3">
+                    <div>
+                      <div className="flex items-center gap-2 flex-wrap">
+                        <p className="text-sm font-black text-stone-800">{brandLabel}｜業績推估模型</p>
+                        <span className={`px-2.5 py-1 rounded-full border text-[10px] font-black ${statusTone}`}>
+                          {data.statusLabel}
+                        </span>
+                      </div>
+                      <p className="mt-1 text-[11px] font-bold text-stone-400">
+                        {data.statusDetail || "目前模型文件未回報額外狀態說明"}
+                      </p>
+                    </div>
+                    <p className="text-[10px] font-black text-stone-400">
+                      本次讀取：1 doc｜{projectionObservabilityState.loadedAtText || "-"}
+                    </p>
+                  </div>
+
+                  <div className="grid grid-cols-2 lg:grid-cols-4 gap-2">
+                    {[
+                      ["策略", data.strategyLabel || "-"],
+                      ["模型月份", data.modelMonth || "-"],
+                      ["來源月份", data.sourceMonths?.join(" / ") || "-"],
+                      ["門市模型", `${Number(data.storeCount || 0).toLocaleString()} 店`],
+                    ].map(([label, value]) => (
+                      <div key={label} className="rounded-2xl border border-stone-100 bg-stone-50/60 p-3">
+                        <p className="text-[10px] font-black text-stone-400">{label}</p>
+                        <p className="mt-1 text-xs font-black text-stone-700 break-words">{value}</p>
+                      </div>
+                    ))}
+                  </div>
+
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
+                    {[["現金 Phase", data.cashPhase], ["權責 Phase", data.accrualPhase]].map(([label, metric]) => (
+                      <div key={label} className="rounded-2xl border border-stone-100 bg-white p-3">
+                        <div className="flex items-center justify-between gap-2">
+                          <p className="text-[11px] font-black text-stone-700">{label}</p>
+                          <span className={`px-2 py-1 rounded-full border text-[10px] font-black ${
+                            data.v2Expected && metric?.reliable
+                              ? "text-emerald-700 border-emerald-100 bg-emerald-50"
+                              : "text-[#9A6A24] border-amber-100 bg-amber-50"
+                          }`}>
+                            {phaseText(metric)}
+                          </span>
+                        </div>
+                        {metric?.completeSourceMonths?.length > 0 && (
+                          <p className="mt-2 text-[10px] font-bold text-stone-400">
+                            完整月份：{metric.completeSourceMonths.join(" / ")}
+                          </p>
+                        )}
+                      </div>
+                    ))}
+                  </div>
+
+                  <div className="grid grid-cols-1 md:grid-cols-3 gap-2">
+                    <div className="rounded-2xl border border-stone-100 bg-stone-50/60 p-3">
+                      <p className="text-[10px] font-black text-stone-400">Schema / Semantic</p>
+                      <p className="mt-1 text-[11px] font-black text-stone-700 break-all">
+                        {data.schemaVersion || "-"} / {data.semanticVersion || "-"}
+                      </p>
+                    </div>
+                    <div className="rounded-2xl border border-stone-100 bg-stone-50/60 p-3">
+                      <p className="text-[10px] font-black text-stone-400">V2 啟用門檻</p>
+                      <p className="mt-1 text-[11px] font-black text-stone-700">
+                        {data.v2Expected ? `Day ${data.phaseMinDay}+ 且 Phase reliable` : "目前品牌維持 V1"}
+                      </p>
+                    </div>
+                    <div className="rounded-2xl border border-stone-100 bg-stone-50/60 p-3">
+                      <p className="text-[10px] font-black text-stone-400">最近模型重建</p>
+                      <p className="mt-1 text-[11px] font-black text-stone-700 break-words">
+                        {data.generatedAtText || "-"}
+                      </p>
+                      {data.trigger && (
+                        <p className="mt-1 text-[10px] font-bold text-stone-400">trigger：{data.trigger}</p>
+                      )}
+                    </div>
+                  </div>
+
+                  <div className="rounded-2xl border border-stone-100 bg-stone-50/50 px-3 py-2 text-[10px] font-bold text-stone-400">
+                    System Exclusion snapshot：模型文件目前列出 {Number(data.excludedStoreCount || 0).toLocaleString()} 間排除店。此監控只顯示 persisted model metadata，不在前端改寫 Projection Authority。
+                  </div>
+                </div>
+              );
+            })()}
+
             <ToolRow
               icon={Database}
               title="核心資料一致性健檢"
