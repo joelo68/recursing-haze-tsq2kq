@@ -80,8 +80,13 @@ import {
 } from "../utils/storeLifecycle";
 
 import {
+  PROJECTION_ACCURACY_METHOD_LABELS,
+  PROJECTION_HISTORICAL_METHOD_LABELS,
   buildProjectionObservabilitySnapshot,
   buildProjectionAccuracyObservabilitySnapshot,
+  buildProjectionHistoricalAccuracyComparison,
+  describeProjectionBias,
+  getProjectionAccuracyDisplayPct,
   getProjectionObservabilityTone,
   getTaipeiProjectionYearMonth,
 } from "../utils/projectionObservability.js";
@@ -2538,7 +2543,7 @@ export default function SystemMaintenance() {
     const activeBrandId = String(currentBrand?.id || "").trim().toLowerCase() || "cyj";
     const selectedYearMonth = String(projectionAccuracyMonth || "").trim();
     if (!/^\d{4}-\d{2}$/.test(selectedYearMonth)) {
-      showToast("請先選擇正確的 Accuracy 月份", "error");
+      showToast("請先選擇正確的驗證月份", "error");
       return;
     }
 
@@ -2577,8 +2582,8 @@ export default function SystemMaintenance() {
 
       showToast(
         data.status === "healthy"
-          ? `${brandLabel} ${selectedYearMonth} 推估準確度成績已載入`
-          : `${brandLabel} ${selectedYearMonth} Accuracy 狀態已更新`,
+          ? `${brandLabel} ${selectedYearMonth} 推估驗證結果已載入`
+          : `${brandLabel} ${selectedYearMonth} 推估驗證狀態已更新`,
         data.status === "error" ? "error" : (data.status === "warning" ? "info" : "success")
       );
     } catch (error) {
@@ -5348,9 +5353,9 @@ export default function SystemMaintenance() {
 
             <ToolRow
               icon={BarChart3}
-              title="業績推估準確度追蹤"
-              desc="唯讀查看指定月份已保存的 Projection Accuracy checkpoint 與 Backend 月底成績。每次只讀 1 份 projection_accuracy/{YYYY-MM}；WAPE、Bias、APE 全部直接使用 Backend persisted score，不在前端重新計算。"
-              badge="1 Doc / Click"
+              title="業績推估準確度"
+              desc="查看指定月份已保存的推估驗證結果。單月查詢每次只讀 1 份月份紀錄，不會額外掃描日報；下方歷史比較使用既有唯讀稽核結果，本頁顯示不增加 Firestore 讀取。"
+              badge="單月查詢 1 筆"
               tone={getProjectionObservabilityTone(projectionAccuracyState?.data?.status)}
             >
               <div className="flex items-center gap-2 rounded-2xl border border-stone-100 bg-white/80 px-3 h-11">
@@ -5385,13 +5390,13 @@ export default function SystemMaintenance() {
                 {loadingAction === "projectionAccuracyObservability"
                   ? <Loader2 size={14} className="animate-spin" />
                   : <Eye size={14} />}
-                查看準確度成績
+                查看單月結果
               </BeautyButton>
             </ToolRow>
 
             {projectionAccuracyState.status === "idle" && (
               <div className="rounded-2xl border border-stone-100 bg-white/70 px-4 py-3 text-[11px] font-bold text-stone-500 leading-relaxed">
-                此區預設不讀 Firestore。選擇月份後按「查看準確度成績」才做 1 次 point read；查看 Accuracy 不會連帶切換維護中心月份，也不會觸發 Summary / Raw 額外讀取。
+                單月結果預設不讀資料；選擇月份後按「查看單月結果」才讀取 1 份月份驗證紀錄。下方歷史比較來自已完成的唯讀驗證，本頁開啟與切換品牌都不會重新掃描日報。
               </div>
             )}
 
@@ -5418,12 +5423,7 @@ export default function SystemMaintenance() {
                   ? `$${Math.round(value).toLocaleString()}`
                   : "N/A"
               );
-              const methodLabel = (key) => {
-                if (key === "effective") return "正式方案";
-                if (key === "shadowV1") return data.v2Expected ? "Shadow V1" : "V1 對照";
-                if (key === "currentPace") return "Current Pace";
-                return key;
-              };
+              const methodLabel = (key) => PROJECTION_ACCURACY_METHOD_LABELS[key] || key;
               const renderMetricScore = (metricKey, label) => {
                 const comparison = data.metrics?.[metricKey] || {};
                 const methods = comparison.methods || {};
@@ -5435,12 +5435,12 @@ export default function SystemMaintenance() {
                       <div>
                         <p className="text-xs font-black text-stone-800">{label}</p>
                         <p className="mt-0.5 text-[10px] font-bold text-stone-400">
-                          WAPE 越低越準；Bias 負值代表整體偏低估
+                          準確度越高，代表整體越接近月底實際業績
                         </p>
                       </div>
                       {data.v2Expected && (
                         <span className="px-2 py-1 rounded-full border border-blue-100 bg-blue-50 text-blue-600 text-[10px] font-black">
-                          V2 Phase applied：{Number(data.v2AppliedCheckpointCount?.[metricKey] || 0)} 個 checkpoint
+                          智慧校正實際套用：{Number(data.v2AppliedCheckpointCount?.[metricKey] || 0)} 個時間點
                         </span>
                       )}
                     </div>
@@ -5448,6 +5448,7 @@ export default function SystemMaintenance() {
                       {["effective", "shadowV1", "currentPace"].map((methodKey) => {
                         const score = methods[methodKey] || {};
                         const isBest = bestMethods.includes(methodKey);
+                        const accuracyPct = getProjectionAccuracyDisplayPct(score.wapePct);
                         return (
                           <div
                             key={`${metricKey}_${methodKey}`}
@@ -5461,26 +5462,21 @@ export default function SystemMaintenance() {
                               <p className="text-[10px] font-black text-stone-500">{methodLabel(methodKey)}</p>
                               {isBest && (
                                 <span className="px-2 py-0.5 rounded-full border border-emerald-100 bg-white text-emerald-700 text-[9px] font-black">
-                                  最低 WAPE
+                                  最接近實際
                                 </span>
                               )}
                             </div>
                             <p className={`mt-1 text-lg font-black ${isBest ? "text-emerald-700" : "text-stone-800"}`}>
-                              {formatPct(score.wapePct)}
+                              {formatPct(accuracyPct)}
                             </p>
-                            <div className="mt-1 flex items-center justify-between gap-2 text-[10px] font-bold text-stone-400">
-                              <span>Bias {formatPct(score.biasPct)}</span>
-                              <span>n={Number(score.count || 0)}</span>
+                            <div className="mt-1 flex flex-wrap items-center justify-between gap-2 text-[10px] font-bold text-stone-400">
+                              <span>{describeProjectionBias(score.biasPct)}</span>
+                              <span>驗證 {Number(score.count || 0)} 次</span>
                             </div>
                           </div>
                         );
                       })}
                     </div>
-                    {data.v2Expected && Number(methods?.effectiveV2AppliedOnly?.count || 0) > 0 && (
-                      <p className="mt-2 text-[10px] font-bold text-blue-500">
-                        V2-applied subset：WAPE {formatPct(methods.effectiveV2AppliedOnly.wapePct)}｜Bias {formatPct(methods.effectiveV2AppliedOnly.biasPct)}｜n={Number(methods.effectiveV2AppliedOnly.count || 0)}
-                      </p>
-                    )}
                   </div>
                 );
               };
@@ -5491,30 +5487,30 @@ export default function SystemMaintenance() {
                     <div>
                       <div className="flex items-center gap-2 flex-wrap">
                         <p className="text-sm font-black text-stone-800">
-                          {brandLabel}｜{data.yearMonth || projectionAccuracyMonth} 推估準確度
+                          {brandLabel}｜{data.yearMonth || projectionAccuracyMonth} 單月推估驗證
                         </p>
                         <span className={`px-2.5 py-1 rounded-full border text-[10px] font-black ${statusTone}`}>
                           {data.statusLabel}
                         </span>
                         <span className="px-2.5 py-1 rounded-full border border-stone-100 bg-stone-50 text-stone-500 text-[10px] font-black">
-                          {data.v2Expected ? "CYJ / 安妞 V2 eligible" : "伊啵 V1"}
+                          {data.v2Expected ? "已啟用智慧校正" : "使用標準推估"}
                         </span>
                       </div>
                       <p className="mt-1 text-[11px] font-bold text-stone-400">
-                        {data.statusDetail || "目前沒有額外 Accuracy 狀態說明"}
+                        {data.statusDetail || "目前沒有額外狀態說明"}
                       </p>
                     </div>
                     <p className="text-[10px] font-black text-stone-400">
-                      本次讀取：1 doc｜{projectionAccuracyState.loadedAtText || "-"}
+                      本次讀取：1 筆｜{projectionAccuracyState.loadedAtText || "-"}
                     </p>
                   </div>
 
                   <div className="grid grid-cols-2 lg:grid-cols-4 gap-2">
                     {[
-                      ["Checkpoint", `${Number(data.checkpointCount || 0)}/${Number(data.expectedCheckpointCount || 6)}`],
-                      ["月底成績", data.scoringAvailable ? "已建立" : "尚未建立"],
-                      ["Score Revision", data.scoringAvailable ? `#${Number(data.scoreRevision || 0)}` : "-"],
-                      ["Score Semantic", data.scoreSemanticVersion || "-"],
+                      ["已累積驗證時間點", `${Number(data.checkpointCount || 0)}/${Number(data.expectedCheckpointCount || 6)}`],
+                      ["月底結果", data.scoringAvailable ? "已完成" : "尚未完成"],
+                      ["驗證版本", data.scoringAvailable ? `第 ${Number(data.scoreRevision || 0)} 版` : "-"],
+                      ["推估方式", data.v2Expected ? "智慧校正" : "標準推估"],
                     ].map(([label, value]) => (
                       <div key={label} className="rounded-2xl border border-stone-100 bg-stone-50/60 p-3">
                         <p className="text-[10px] font-black text-stone-400">{label}</p>
@@ -5527,7 +5523,7 @@ export default function SystemMaintenance() {
                     <div className="flex flex-wrap gap-1.5">
                       {data.checkpointKeys.map((key) => (
                         <span key={key} className="px-2.5 py-1 rounded-full border border-amber-100 bg-amber-50/70 text-[#9A6A24] text-[10px] font-black">
-                          {key.replace("day", "Day ")}
+                          {Number(key.replace("day", ""))} 日
                         </span>
                       ))}
                     </div>
@@ -5535,39 +5531,37 @@ export default function SystemMaintenance() {
 
                   {!data.scoringAvailable ? (
                     <div className="rounded-2xl border border-amber-100 bg-amber-50/35 px-4 py-3 text-[11px] font-bold text-[#8A6128] leading-relaxed">
-                      目前只顯示已存在的 Backend checkpoint 證據。月底 verified Final Actual 尚未寫入前，不會在瀏覽器自行用當前資料推算 Accuracy。
+                      目前只顯示已保存的驗證時間點。月底正式業績完成前，系統不會提前產生準確度結果，也不會在瀏覽器自行推算。
                     </div>
                   ) : (
                     <>
                       <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
                         <div className="rounded-2xl border border-stone-100 bg-stone-50/60 p-3">
-                          <p className="text-[10px] font-black text-stone-400">Final Actual｜現金</p>
+                          <p className="text-[10px] font-black text-stone-400">月底實際業績｜現金</p>
                           <p className="mt-1 text-base font-black text-stone-800">{formatMoney(data.finalActual?.cash?.value)}</p>
-                          <p className="mt-1 text-[10px] font-bold text-stone-400">{data.finalActual?.cash?.status || "-"}</p>
                         </div>
                         <div className="rounded-2xl border border-stone-100 bg-stone-50/60 p-3">
-                          <p className="text-[10px] font-black text-stone-400">Final Actual｜權責</p>
+                          <p className="text-[10px] font-black text-stone-400">月底實際業績｜權責</p>
                           <p className="mt-1 text-base font-black text-stone-800">{formatMoney(data.finalActual?.accrual?.value)}</p>
-                          <p className="mt-1 text-[10px] font-bold text-stone-400">{data.finalActual?.accrual?.status || "-"}</p>
                         </div>
                       </div>
 
                       <div className="grid grid-cols-1 xl:grid-cols-2 gap-2">
-                        {renderMetricScore("cash", "現金 Accuracy")}
-                        {renderMetricScore("accrual", "權責 Accuracy")}
+                        {renderMetricScore("cash", "現金推估比較")}
+                        {renderMetricScore("accrual", "權責推估比較")}
                       </div>
 
                       {data.checkpointRows?.length > 0 && (
                         <div>
                           <div className="flex flex-wrap items-end justify-between gap-2">
                             <div>
-                              <p className="text-xs font-black text-stone-700">Checkpoint APE</p>
+                              <p className="text-xs font-black text-stone-700">各時間點比較</p>
                               <p className="mt-0.5 text-[10px] font-bold text-stone-400">
-                                直接顯示 Backend 已保存 APE；不在前端重算 Final Actual 誤差。
+                                顯示當時已保存的推估與月底實際業績差距；不在前端重新計算。
                               </p>
                             </div>
                             <p className="text-[10px] font-black text-stone-400">
-                              scored：{data.scoredAtText || "-"}
+                              完成時間：{data.scoredAtText || "-"}
                             </p>
                           </div>
                           <div className="mt-2 grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-2">
@@ -5575,7 +5569,7 @@ export default function SystemMaintenance() {
                               <div key={row.checkpointKey} className="rounded-2xl border border-stone-100 bg-stone-50/55 p-3">
                                 <div className="flex items-center justify-between gap-2">
                                   <p className="text-[11px] font-black text-stone-700">
-                                    {row.checkpointKey.replace("day", "Day ")}
+                                    {Number(row.checkpointKey.replace("day", ""))} 日
                                   </p>
                                   <span className="text-[9px] font-black text-stone-400">{row.cutoffDate || "-"}</span>
                                 </div>
@@ -5587,15 +5581,13 @@ export default function SystemMaintenance() {
                                     <div key={`${row.checkpointKey}_${label}`} className="rounded-xl border border-white bg-white/80 p-2">
                                       <div className="flex items-center justify-between gap-1">
                                         <p className="font-black text-stone-600">{label}</p>
-                                        {data.v2Expected && (
-                                          <span className={`font-black ${phaseApplied ? "text-blue-500" : "text-stone-300"}`}>
-                                            {phaseApplied ? "V2" : "V1"}
-                                          </span>
-                                        )}
+                                        <span className="font-black text-stone-400">
+                                          {data.v2Expected ? (phaseApplied ? "智慧校正" : "標準推估") : "標準推估"}
+                                        </span>
                                       </div>
-                                      <p className="mt-1 font-bold text-stone-500">正式 {formatPct(metric?.effective?.apePct)}</p>
-                                      <p className="font-bold text-stone-400">{data.v2Expected ? "V1" : "對照"} {formatPct(metric?.shadowV1?.apePct)}</p>
-                                      <p className="font-bold text-stone-400">Pace {formatPct(metric?.currentPace?.apePct)}</p>
+                                      <p className="mt-1 font-bold text-stone-500">目前方式 {formatPct(metric?.effective?.accuracyPctDisplay)}</p>
+                                      <p className="font-bold text-stone-400">原本方式 {formatPct(metric?.shadowV1?.accuracyPctDisplay)}</p>
+                                      <p className="font-bold text-stone-400">依進度 {formatPct(metric?.currentPace?.accuracyPctDisplay)}</p>
                                     </div>
                                   ))}
                                 </div>
@@ -5608,7 +5600,147 @@ export default function SystemMaintenance() {
                   )}
 
                   <div className="rounded-2xl border border-stone-100 bg-stone-50/50 px-3 py-2 text-[10px] font-bold text-stone-400">
-                    Authority：{data.finalActual?.source || (data.exists ? "checkpoint evidence only" : "no document")}。此區不寫 Firestore、不修正模型、不變更 Projection v1/v2 公式。
+                    此區只顯示正式保存的月份驗證結果，不寫入 Firestore、不修改歷史日報，也不調整推估公式。
+                  </div>
+                </div>
+              );
+            })()}
+
+            {(() => {
+              const history = buildProjectionHistoricalAccuracyComparison({
+                brandId: currentBrand?.id || "cyj",
+              });
+              const formatPct = (value) => (
+                typeof value === "number" && Number.isFinite(value)
+                  ? `${value.toFixed(2)}%`
+                  : "N/A"
+              );
+              const methodLabel = (key) => PROJECTION_HISTORICAL_METHOD_LABELS[key] || key;
+              const renderHistoricalMetric = (metricKey, label) => {
+                const metric = history.metrics?.[metricKey] || {};
+                const overall = metric.overall || {};
+                return (
+                  <div className="rounded-[1.4rem] border border-stone-100 bg-white p-3 space-y-3">
+                    <div>
+                      <p className="text-xs font-black text-stone-800">{label}</p>
+                      <p className="mt-0.5 text-[10px] font-bold text-stone-400">
+                        4 個已完成月份整體比較
+                      </p>
+                    </div>
+                    <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
+                      {["effective", "shadowV1", "currentPace"].map((methodKey) => {
+                        const score = overall.methods?.[methodKey] || {};
+                        const isBest = overall.bestMethods?.includes(methodKey);
+                        return (
+                          <div
+                            key={`${metricKey}_history_${methodKey}`}
+                            className={`rounded-2xl border p-3 ${
+                              isBest
+                                ? "border-emerald-100 bg-emerald-50/65"
+                                : "border-stone-100 bg-stone-50/60"
+                            }`}
+                          >
+                            <div className="flex items-center justify-between gap-2">
+                              <p className="text-[10px] font-black text-stone-500">{methodLabel(methodKey)}</p>
+                              {isBest && (
+                                <span className="px-2 py-0.5 rounded-full border border-emerald-100 bg-white text-emerald-700 text-[9px] font-black">
+                                  歷史最佳
+                                </span>
+                              )}
+                            </div>
+                            <p className={`mt-1 text-lg font-black ${isBest ? "text-emerald-700" : "text-stone-800"}`}>
+                              {formatPct(score.accuracyPct)}
+                            </p>
+                            <p className="mt-1 text-[10px] font-bold text-stone-400">
+                              {score.tendencyLabel || "-"}
+                            </p>
+                          </div>
+                        );
+                      })}
+                    </div>
+
+                    <div>
+                      <p className="text-[10px] font-black text-stone-500">不同日期的準確度</p>
+                      <div className="mt-2 grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-3 gap-2">
+                        {(metric.checkpoints || []).map((row) => (
+                          <div key={`${metricKey}_${row.checkpointKey}`} className="rounded-xl border border-stone-100 bg-stone-50/55 p-2.5">
+                            <div className="flex items-center justify-between gap-2">
+                              <p className="text-[10px] font-black text-stone-700">{row.label}</p>
+                              <span className="text-[9px] font-black text-emerald-600">
+                                {row.bestMethods?.map(methodLabel).join(" / ") || "-"}
+                              </span>
+                            </div>
+                            <div className="mt-1.5 space-y-1 text-[10px] font-bold">
+                              {["effective", "shadowV1", "currentPace"].map((methodKey) => {
+                                const score = row.methods?.[methodKey] || {};
+                                const isBest = row.bestMethods?.includes(methodKey);
+                                return (
+                                  <div key={`${metricKey}_${row.checkpointKey}_${methodKey}`} className="flex items-center justify-between gap-2">
+                                    <span className={isBest ? "text-emerald-700" : "text-stone-400"}>{methodLabel(methodKey)}</span>
+                                    <span className={isBest ? "text-emerald-700" : "text-stone-600"}>{formatPct(score.accuracyPct)}</span>
+                                  </div>
+                                );
+                              })}
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  </div>
+                );
+              };
+
+              if (!history.available) {
+                return (
+                  <div className="rounded-[1.5rem] border border-stone-100 bg-white/80 p-4">
+                    <div className="flex items-center gap-2 flex-wrap">
+                      <p className="text-sm font-black text-stone-800">歷史推估驗證</p>
+                      <span className="px-2.5 py-1 rounded-full border border-stone-100 bg-stone-50 text-stone-500 text-[10px] font-black">
+                        本頁 0 額外讀取
+                      </span>
+                    </div>
+                    <p className="mt-2 text-[11px] font-bold text-stone-500 leading-relaxed">
+                      {history.statusDetail}
+                    </p>
+                  </div>
+                );
+              }
+
+              return (
+                <div className="rounded-[1.5rem] border border-[#E8DDD0] bg-[#FFFDF9] p-4 space-y-4">
+                  <div className="flex flex-col lg:flex-row lg:items-start lg:justify-between gap-3">
+                    <div>
+                      <div className="flex items-center gap-2 flex-wrap">
+                        <p className="text-sm font-black text-stone-800">
+                          {brandLabel}｜歷史推估驗證
+                        </p>
+                        <span className="px-2.5 py-1 rounded-full border border-emerald-100 bg-emerald-50 text-emerald-700 text-[10px] font-black">
+                          {history.monthRangeLabel}
+                        </span>
+                        <span className="px-2.5 py-1 rounded-full border border-stone-100 bg-white text-stone-500 text-[10px] font-black">
+                          本頁 0 額外讀取
+                        </span>
+                      </div>
+                      <p className="mt-1 text-[11px] font-bold text-stone-500 leading-relaxed">
+                        {history.statusDetail}
+                      </p>
+                    </div>
+                    <p className="text-[10px] font-black text-stone-400">
+                      已確認月份：{history.trustedMonthCount}/{history.targetMonths.length}
+                    </p>
+                  </div>
+
+                  <div className="rounded-2xl border border-amber-100 bg-amber-50/35 px-4 py-3 text-[11px] font-bold text-[#8A6128] leading-relaxed">
+                    這是既有歷史唯讀驗證的固定結果，不是補寫到正式月份紀錄。它用當時可取得的資料回看推估表現，因此可以現在就比較三種推估方式，不必等本月底。
+                  </div>
+
+                  <div className="grid grid-cols-1 xl:grid-cols-2 gap-3">
+                    {renderHistoricalMetric("cash", "現金業績")}
+                    {renderHistoricalMetric("accrual", "權責業績")}
+                  </div>
+
+                  <div className="rounded-2xl border border-stone-100 bg-white/70 px-3 py-2 text-[10px] font-bold text-stone-400 leading-relaxed">
+                    歷史驗證原始稽核當時為唯讀執行：{Number(history.originalAuditReads || 0).toLocaleString()} 次估計讀取、0 寫入、0 常駐監聽、0 輪詢；本頁現在只顯示已封存的比較結果，不會再次產生這批 Raw 讀取。
                   </div>
                 </div>
               );

@@ -5,8 +5,17 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 import {
+  PROJECTION_ACCURACY_HISTORICAL_EVIDENCE,
+} from "../src/data/projectionAccuracyHistoricalEvidence.js";
+
+import {
+  PROJECTION_ACCURACY_METHOD_LABELS,
+  PROJECTION_HISTORICAL_METHOD_LABELS,
   buildProjectionObservabilitySnapshot,
   buildProjectionAccuracyObservabilitySnapshot,
+  buildProjectionHistoricalAccuracyComparison,
+  describeProjectionBias,
+  getProjectionAccuracyDisplayPct,
   getProjectionObservabilityTone,
   getTaipeiProjectionYearMonth,
 } from "../src/utils/projectionObservability.js";
@@ -267,7 +276,7 @@ test("B2B current month can show immutable checkpoint progress before Final Actu
   assert.equal(result.status, "warning");
   assert.equal(result.scoringAvailable, false);
   assert.equal(result.checkpointCount, 2);
-  assert.match(result.statusLabel, /Checkpoint/);
+  assert.match(result.statusLabel, /驗證時間點/);
 });
 
 test("B2B Accuracy trust fails closed on cross-brand or score semantic mismatch", () => {
@@ -289,7 +298,7 @@ test("B2B Accuracy trust fails closed on cross-brand or score semantic mismatch"
     currentYearMonth: "2026-09",
   });
   assert.equal(semantic.status, "error");
-  assert.match(semantic.statusLabel, /Score 版本不相容/);
+  assert.match(semantic.statusLabel, /月底驗證資料版本不相容/);
 });
 
 test("B2B Yibo remains V1 and never receives a V2 Accuracy label", () => {
@@ -306,7 +315,7 @@ test("B2B Yibo remains V1 and never receives a V2 Accuracy label", () => {
   assert.equal(result.v2AppliedCheckpointCount.accrual, 0);
 });
 
-test("B2B frontend Accuracy read is one manual point read with no listener, polling, Raw query or write", () => {
+test("B2C single-month Accuracy read remains one manual point read with no listener, polling, Raw query or write", () => {
   const source = read("src/components/SystemMaintenance.jsx");
   const start = source.indexOf("const handleLoadProjectionAccuracyObservability = async () => {");
   const end = source.indexOf("// 新增工具：資料健康檢查", start);
@@ -323,9 +332,74 @@ test("B2B frontend Accuracy read is one manual point read with no listener, poll
   assert.match(handler, /projectionAccuracyRequestSeq/);
   assert.match(handler, /requestSeq !== projectionAccuracyRequestSeq\.current/);
 
-  assert.match(source, /查看準確度成績/);
-  assert.match(source, /1 Doc \/ Click/);
-  assert.match(source, /WAPE、Bias、APE 全部直接使用 Backend persisted score/);
+  const uiStart = source.indexOf('title="業績推估準確度"');
+  const uiEnd = source.indexOf('title="核心資料一致性健檢"', uiStart);
+  assert.ok(uiStart >= 0 && uiEnd > uiStart);
+  const accuracyUi = source.slice(uiStart, uiEnd);
+  assert.match(accuracyUi, /查看單月結果/);
+  assert.match(accuracyUi, /單月查詢 1 筆/);
+  assert.match(accuracyUi, /本頁 0 額外讀取/);
+  assert.match(accuracyUi, /智慧校正實際套用/);
+  assert.match(accuracyUi, /不同日期的準確度/);
+  assert.doesNotMatch(accuracyUi, /WAPE、Bias、APE 全部直接使用 Backend persisted score/);
+  assert.doesNotMatch(accuracyUi, /Backend checkpoint/);
+  assert.doesNotMatch(accuracyUi, /Score Revision|Score Semantic|V2 eligible/);
+});
+
+test("B2C historical evidence converts audited error into business-friendly accuracy without Firestore reads", () => {
+  assert.equal(getProjectionAccuracyDisplayPct(11.0574), 88.9426);
+  assert.equal(describeProjectionBias(-7.703), "平均偏低 7.70%");
+  assert.equal(describeProjectionBias(2.2582), "平均偏高 2.26%");
+  assert.equal(PROJECTION_ACCURACY_METHOD_LABELS.effective, "目前使用的推估方式");
+  assert.equal(PROJECTION_HISTORICAL_METHOD_LABELS.effective, "智慧校正推估");
+
+  const cyj = buildProjectionHistoricalAccuracyComparison({ brandId: "cyj" });
+  assert.equal(cyj.available, true);
+  assert.equal(cyj.displayReadCount, 0);
+  assert.equal(cyj.originalAuditReads, 10147);
+  assert.deepEqual(cyj.targetMonths, ["2026-05", "2026-06", "2026-07", "2026-08"]);
+  assert.equal(cyj.trustedMonthCount, 4);
+  assert.equal(cyj.metrics.cash.overall.methods.effective.accuracyPct, 88.9426);
+  assert.deepEqual(cyj.metrics.cash.overall.bestMethods, ["effective"]);
+  assert.deepEqual(
+    cyj.metrics.cash.checkpoints.find((row) => row.day === 25)?.bestMethods,
+    ["currentPace"]
+  );
+
+  const anniu = buildProjectionHistoricalAccuracyComparison({ brandId: "anniu" });
+  assert.equal(anniu.available, true);
+  assert.equal(anniu.trustedMonthCount, 4);
+  assert.equal(anniu.metrics.accrual.overall.methods.effective.accuracyPct, 91.563);
+  assert.deepEqual(anniu.metrics.accrual.overall.bestMethods, ["effective"]);
+  assert.notEqual(
+    anniu.metrics.cash.overall.methods.effective.accuracyPct,
+    cyj.metrics.cash.overall.methods.effective.accuracyPct
+  );
+
+  const yibo = buildProjectionHistoricalAccuracyComparison({ brandId: "yibo" });
+  assert.equal(yibo.available, false);
+  assert.equal(yibo.displayReadCount, 0);
+  assert.match(yibo.statusDetail, /不同口徑資料補值/);
+});
+
+test("B2C historical evidence is immutable frontend data, not a second Firestore or Projection authority", () => {
+  const evidenceSource = read("src/data/projectionAccuracyHistoricalEvidence.js");
+  const uiSource = read("src/components/SystemMaintenance.jsx");
+
+  assert.equal(Object.isFrozen(PROJECTION_ACCURACY_HISTORICAL_EVIDENCE), true);
+  assert.equal(Object.isFrozen(PROJECTION_ACCURACY_HISTORICAL_EVIDENCE.brands.cyj.metrics.cash), true);
+  assert.match(evidenceSource, /projection-accuracy-historical-evidence-v1/);
+  assert.match(evidenceSource, /01fd6c14e4029783be362d764087e1979a93f69d793aa5e3e6e02723e3fc4da6/);
+  assert.match(evidenceSource, /dd963b26acd62e006d942353f1ded132edcf57b8c6e7a9c1f1126bfb0a380afb/);
+  assert.doesNotMatch(evidenceSource, /getDoc\(|getDocs\(|onSnapshot\(|setDoc\(|addDoc\(|updateDoc\(|writeBatch\(|setInterval\(/);
+
+  const historicalStart = uiSource.indexOf("const history = buildProjectionHistoricalAccuracyComparison");
+  const historicalEnd = uiSource.indexOf('title="核心資料一致性健檢"', historicalStart);
+  assert.ok(historicalStart >= 0 && historicalEnd > historicalStart);
+  const historicalUi = uiSource.slice(historicalStart, historicalEnd);
+  assert.doesNotMatch(historicalUi, /getDoc\(|getDocs\(|onSnapshot\(|setDoc\(|addDoc\(|updateDoc\(|writeBatch\(|setInterval\(/);
+  assert.match(historicalUi, /不是補寫到正式月份紀錄/);
+  assert.match(historicalUi, /不必等本月底/);
 });
 
 test("B2B Accuracy contracts stay aligned with B2A writer and existing frontend-read-only Rules", () => {

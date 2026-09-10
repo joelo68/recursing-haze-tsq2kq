@@ -8,6 +8,9 @@ import {
   PROJECTION_V2_BRANDS,
   getExpectedProjectionSourceMonths,
 } from "./projectionModelConsumer.js";
+import {
+  PROJECTION_ACCURACY_HISTORICAL_EVIDENCE,
+} from "../data/projectionAccuracyHistoricalEvidence.js";
 
 export const PROJECTION_ACCURACY_SCHEMA_VERSION = "projection-accuracy-v1";
 export const PROJECTION_ACCURACY_CHECKPOINT_SEMANTIC_VERSION = "projection-accuracy-checkpoint-v1";
@@ -21,6 +24,18 @@ export const PROJECTION_ACCURACY_CHECKPOINT_KEYS = Object.freeze([
   "day20",
   "day25",
 ]);
+
+export const PROJECTION_ACCURACY_METHOD_LABELS = Object.freeze({
+  effective: "目前使用的推估方式",
+  shadowV1: "原本推估方式",
+  currentPace: "依目前進度推估",
+});
+
+export const PROJECTION_HISTORICAL_METHOD_LABELS = Object.freeze({
+  effective: "智慧校正推估",
+  shadowV1: "原本推估方式",
+  currentPace: "依目前進度推估",
+});
 
 const normalizeBrandId = (value = "") => {
   const text = String(value || "").trim().toLowerCase();
@@ -315,7 +330,7 @@ export const buildProjectionAccuracyObservabilitySnapshot = ({
     currentYearMonth: normalizedCurrentMonth,
     exists: Boolean(accuracy && typeof accuracy === "object"),
     status: "missing",
-    statusLabel: "尚無 Accuracy 證據",
+    statusLabel: "尚無推估驗證資料",
     statusDetail: "",
     schemaVersion: "",
     semanticVersion: "",
@@ -348,7 +363,7 @@ export const buildProjectionAccuracyObservabilitySnapshot = ({
     return {
       ...base,
       status: "error",
-      statusLabel: "Accuracy 查詢範圍無效",
+      statusLabel: "推估驗證查詢範圍無效",
       statusDetail: "品牌或月份格式無法辨識。",
     };
   }
@@ -358,10 +373,10 @@ export const buildProjectionAccuracyObservabilitySnapshot = ({
     return {
       ...base,
       status: "warning",
-      statusLabel: isCurrent ? "本月尚無 Checkpoint" : "此月份沒有 Accuracy 文件",
+      statusLabel: isCurrent ? "本月尚未累積驗證時間點" : "此月份沒有正式驗證紀錄",
       statusDetail: isCurrent
-        ? "Checkpoint 只會在 Day 05 / 07 / 10 / 15 / 20 / 25 正式保存；尚未到保存日或當日證據尚未建立。"
-        : "此月份沒有 projection_accuracy 文件；不以 Raw 或歷史回算資料在前端補值。",
+        ? "系統會在每月 5 / 7 / 10 / 15 / 20 / 25 日保存驗證時間點；尚未到保存日或當日紀錄尚未建立。"
+        : "此月份沒有正式月份驗證紀錄；畫面不會用其他資料自行補出結果。",
     };
   }
 
@@ -399,7 +414,7 @@ export const buildProjectionAccuracyObservabilitySnapshot = ({
     return {
       ...snapshot,
       status: "error",
-      statusLabel: "Accuracy 品牌資料不一致",
+      statusLabel: "推估驗證品牌資料不一致",
       statusDetail: `文件 brandId=${documentBrandId || "unknown"}，目前品牌=${normalizedBrandId}.`,
     };
   }
@@ -408,7 +423,7 @@ export const buildProjectionAccuracyObservabilitySnapshot = ({
     return {
       ...snapshot,
       status: "error",
-      statusLabel: "Accuracy 月份資料不一致",
+      statusLabel: "推估驗證月份資料不一致",
       statusDetail: `文件 yearMonth=${documentYearMonth || "unknown"}，查詢月份=${selectedYearMonth}.`,
     };
   }
@@ -420,7 +435,7 @@ export const buildProjectionAccuracyObservabilitySnapshot = ({
     return {
       ...snapshot,
       status: "error",
-      statusLabel: "Accuracy Checkpoint 版本不相容",
+      statusLabel: "推估驗證資料版本不相容",
       statusDetail: `${schemaVersion || "no-schema"} / ${semanticVersion || "no-semantic"}`,
     };
   }
@@ -429,8 +444,8 @@ export const buildProjectionAccuracyObservabilitySnapshot = ({
     return {
       ...snapshot,
       status: "error",
-      statusLabel: "V1 品牌出現非預期 V2 Accuracy 證據",
-      statusDetail: "目前品牌未核准 V2 Phase；前端不會把這份資料標示成 V2 成績。",
+      statusLabel: "推估方式資料不一致",
+      statusDetail: "此品牌目前使用標準推估，不應出現智慧校正的驗證紀錄；畫面已停止顯示該份結果。",
     };
   }
 
@@ -449,10 +464,10 @@ export const buildProjectionAccuracyObservabilitySnapshot = ({
     return {
       ...snapshot,
       status: "warning",
-      statusLabel: isCurrent ? "Checkpoint 累積中" : "等待月底 Accuracy 成績",
+      statusLabel: isCurrent ? "驗證時間點累積中" : "等待月底驗證結果",
       statusDetail: checkpointCount
-        ? `已保存 ${checkpointCount}/${PROJECTION_ACCURACY_CHECKPOINT_KEYS.length} 個 Checkpoint；目前尚無 verified Final Actual 成績。`
-        : "Accuracy 文件已存在，但尚未保存可評分 Checkpoint。",
+        ? `已保存 ${checkpointCount}/${PROJECTION_ACCURACY_CHECKPOINT_KEYS.length} 個驗證時間點；目前尚未完成月底正式業績。`
+        : "月份驗證紀錄已建立，但目前還沒有可比較的時間點。",
     };
   }
 
@@ -462,8 +477,8 @@ export const buildProjectionAccuracyObservabilitySnapshot = ({
       ...snapshot,
       scoreSemanticVersion,
       status: "error",
-      statusLabel: "Accuracy Score 版本不相容",
-      statusDetail: scoreSemanticVersion || "score semantic version missing",
+      statusLabel: "月底驗證資料版本不相容",
+      statusDetail: "這份月底驗證紀錄使用不同資料版本，為避免誤判暫不顯示。",
     };
   }
 
@@ -479,8 +494,8 @@ export const buildProjectionAccuracyObservabilitySnapshot = ({
       ...snapshot,
       scoreSemanticVersion,
       status: "error",
-      statusLabel: "Final Actual Authority 不相容",
-      statusDetail: "月底實績不是目前品牌／月份的 verified dashboard_summary authority。",
+      statusLabel: "月底實際業績來源不相容",
+      statusDetail: "月底實際業績不是目前品牌與月份已確認的正式月結來源，為避免誤判暫不顯示。",
     };
   }
 
@@ -499,8 +514,8 @@ export const buildProjectionAccuracyObservabilitySnapshot = ({
       ...snapshot,
       scoreSemanticVersion,
       status: "error",
-      statusLabel: "Final Actual 數值不完整",
-      statusDetail: "persisted Final Cash / Accrual 缺少有效數值；前端不自行補算。",
+      statusLabel: "月底實際業績資料不完整",
+      statusDetail: "正式月底現金或權責業績缺少有效數值；畫面不會自行補算。",
     };
   }
 
@@ -536,8 +551,8 @@ export const buildProjectionAccuracyObservabilitySnapshot = ({
   return {
     ...snapshot,
     status: "healthy",
-    statusLabel: "月底 Accuracy 成績已建立",
-    statusDetail: `已用 verified Final Actual 評分 ${checkpointCount} 個正式 Checkpoint；畫面直接顯示 Backend persisted score，不重新計算。`,
+    statusLabel: "月底驗證結果已建立",
+    statusDetail: `已使用正式月底業績完成 ${checkpointCount} 個驗證時間點的比較；畫面只呈現已保存結果，不重新推算。`,
     scoreSemanticVersion,
     scoreRevision: Math.max(0, Number(scoreMeta?.scoreRevision || 0)),
     scoredAtText: String(scoreMeta?.scoredAtText || accuracy?.scoreUpdatedAtText || ""),
@@ -555,6 +570,133 @@ export const buildProjectionAccuracyObservabilitySnapshot = ({
     },
     metrics,
     checkpointRows,
+  };
+};
+
+
+export const getProjectionAccuracyDisplayPct = (wapePct) => {
+  if (typeof wapePct !== "number" || !Number.isFinite(wapePct)) return null;
+  return Math.max(0, Math.min(100, 100 - wapePct));
+};
+
+export const describeProjectionBias = (biasPct) => {
+  if (typeof biasPct !== "number" || !Number.isFinite(biasPct)) return "偏差資料不足";
+  const magnitude = Math.abs(biasPct);
+  if (magnitude < 0.005) return "平均接近實際";
+  return `平均${biasPct < 0 ? "偏低" : "偏高"} ${magnitude.toFixed(2)}%`;
+};
+
+const buildHistoricalDisplayScore = (score = null) => {
+  const count = Math.max(0, Number(score?.count || 0));
+  const wapePct = typeof score?.wapePct === "number" && Number.isFinite(score.wapePct)
+    ? score.wapePct
+    : null;
+  const biasPct = typeof score?.biasPct === "number" && Number.isFinite(score.biasPct)
+    ? score.biasPct
+    : null;
+  return {
+    count,
+    accuracyPct: getProjectionAccuracyDisplayPct(wapePct),
+    averageErrorPct: wapePct,
+    biasPct,
+    tendencyLabel: describeProjectionBias(biasPct),
+  };
+};
+
+const buildHistoricalMethodSet = (raw = {}) => {
+  const methods = Object.fromEntries(
+    ["effective", "shadowV1", "currentPace"].map((key) => [
+      key,
+      buildHistoricalDisplayScore(raw?.[key]),
+    ])
+  );
+  const comparable = Object.entries(methods)
+    .filter(([, score]) => score.count > 0 && score.accuracyPct !== null);
+  const bestAccuracy = comparable.length
+    ? Math.max(...comparable.map(([, score]) => score.accuracyPct))
+    : null;
+  const bestMethods = bestAccuracy === null
+    ? []
+    : comparable
+      .filter(([, score]) => Math.abs(score.accuracyPct - bestAccuracy) <= 1e-9)
+      .map(([key]) => key);
+  return { methods, bestMethods };
+};
+
+export const buildProjectionHistoricalAccuracyComparison = ({
+  brandId = "",
+  evidence = PROJECTION_ACCURACY_HISTORICAL_EVIDENCE,
+} = {}) => {
+  const normalizedBrandId = normalizeBrandId(brandId);
+  const supportedBrands = Array.isArray(evidence?.brandIds)
+    ? evidence.brandIds.map(normalizeBrandId).filter(Boolean)
+    : [];
+  const targetMonths = Array.isArray(evidence?.targetMonths)
+    ? evidence.targetMonths.map(normalizeYearMonth).filter(Boolean)
+    : [];
+  const checkpointDays = Array.isArray(evidence?.checkpointDays)
+    ? evidence.checkpointDays.map((day) => Number(day)).filter((day) => Number.isFinite(day) && day > 0)
+    : [];
+  const brandEvidence = evidence?.brands?.[normalizedBrandId] || null;
+
+  const base = {
+    brandId: normalizedBrandId,
+    available: false,
+    status: "warning",
+    statusLabel: "目前沒有相同口徑的歷史驗證資料",
+    statusDetail: "歷史比較只顯示已完成且通過資料完整性檢查的既有驗證結果，不會用其他品牌或不同口徑資料補值。",
+    evidenceVersion: String(evidence?.evidenceVersion || ""),
+    generatedAtText: String(evidence?.generatedAtText || ""),
+    sourceJsonSha256: String(evidence?.sourceJsonSha256 || ""),
+    sourceReportSha256: String(evidence?.sourceReportSha256 || ""),
+    targetMonths,
+    checkpointDays,
+    monthRangeLabel: targetMonths.length
+      ? `${targetMonths[0].replace("-", " 年 ")} 月～${targetMonths[targetMonths.length - 1].slice(5)} 月`
+      : "",
+    trustedMonthCount: 0,
+    rawRowCount: 0,
+    displayReadCount: 0,
+    originalAuditReads: Math.max(0, Number(evidence?.auditCost?.estimatedBilledReads || 0)),
+    originalAuditWrites: Math.max(0, Number(evidence?.auditCost?.writes || 0)),
+    metrics: {
+      cash: { overall: buildHistoricalMethodSet({}), checkpoints: [] },
+      accrual: { overall: buildHistoricalMethodSet({}), checkpoints: [] },
+    },
+  };
+
+  if (!normalizedBrandId || !supportedBrands.includes(normalizedBrandId) || !brandEvidence) {
+    return base;
+  }
+
+  const buildMetric = (metricKey) => {
+    const rawMetric = brandEvidence?.metrics?.[metricKey] || {};
+    return {
+      overall: buildHistoricalMethodSet(rawMetric?.overall || {}),
+      checkpoints: checkpointDays.map((day) => {
+        const key = `day${String(day).padStart(2, "0")}`;
+        return {
+          checkpointKey: key,
+          day,
+          label: `${day} 日`,
+          ...buildHistoricalMethodSet(rawMetric?.[key] || {}),
+        };
+      }),
+    };
+  };
+
+  return {
+    ...base,
+    available: true,
+    status: "healthy",
+    statusLabel: "歷史驗證資料可用",
+    statusDetail: `使用 ${targetMonths.length} 個已完成月份，比較每月 5 / 7 / 10 / 15 / 20 / 25 日當時的推估與月底實際業績。`,
+    trustedMonthCount: Math.max(0, Number(brandEvidence?.trustedMonthCount || 0)),
+    rawRowCount: Math.max(0, Number(brandEvidence?.rawRowCount || 0)),
+    metrics: {
+      cash: buildMetric("cash"),
+      accrual: buildMetric("accrual"),
+    },
   };
 };
 
