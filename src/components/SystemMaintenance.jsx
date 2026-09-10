@@ -1,5 +1,5 @@
 // src/components/SystemMaintenance.jsx
-import React, { useState, useContext, useEffect, useMemo } from "react";
+import React, { useState, useContext, useEffect, useMemo, useRef } from "react";
 import { auth, db } from "../config/firebase";
 import {
   getDocs,
@@ -81,6 +81,7 @@ import {
 
 import {
   buildProjectionObservabilitySnapshot,
+  buildProjectionAccuracyObservabilitySnapshot,
   getProjectionObservabilityTone,
   getTaipeiProjectionYearMonth,
 } from "../utils/projectionObservability.js";
@@ -160,10 +161,34 @@ export default function SystemMaintenance() {
     error: null,
     loadedAtText: "",
   });
+  const [projectionAccuracyMonth, setProjectionAccuracyMonth] = useState(
+    () => getTaipeiProjectionYearMonth()
+  );
+  const [projectionAccuracyState, setProjectionAccuracyState] = useState({
+    brandId: "",
+    yearMonth: "",
+    status: "idle",
+    data: null,
+    error: null,
+    loadedAtText: "",
+  });
+  const projectionAccuracyRequestSeq = useRef(0);
 
   useEffect(() => {
+    projectionAccuracyRequestSeq.current += 1;
+    setLoadingAction((current) => (
+      current === "projectionAccuracyObservability" ? null : current
+    ));
     setProjectionObservabilityState({
       brandId: "",
+      status: "idle",
+      data: null,
+      error: null,
+      loadedAtText: "",
+    });
+    setProjectionAccuracyState({
+      brandId: "",
+      yearMonth: "",
       status: "idle",
       data: null,
       error: null,
@@ -2504,6 +2529,74 @@ export default function SystemMaintenance() {
       showToast("讀取業績推估模型狀態失敗", "error");
     } finally {
       setLoadingAction(null);
+    }
+  };
+
+  // Projection Accuracy B2B：只讀單一 projection_accuracy/{YYYY-MM}。
+  // 不查 Raw、不重算 WAPE / Bias、不建立 listener / polling。
+  const handleLoadProjectionAccuracyObservability = async () => {
+    const activeBrandId = String(currentBrand?.id || "").trim().toLowerCase() || "cyj";
+    const selectedYearMonth = String(projectionAccuracyMonth || "").trim();
+    if (!/^\d{4}-\d{2}$/.test(selectedYearMonth)) {
+      showToast("請先選擇正確的 Accuracy 月份", "error");
+      return;
+    }
+
+    const requestSeq = projectionAccuracyRequestSeq.current + 1;
+    projectionAccuracyRequestSeq.current = requestSeq;
+    setLoadingAction("projectionAccuracyObservability");
+    setProjectionAccuracyState({
+      brandId: activeBrandId,
+      yearMonth: selectedYearMonth,
+      status: "loading",
+      data: null,
+      error: null,
+      loadedAtText: "",
+    });
+
+    try {
+      const accuracyRef = doc(getCollectionPath("projection_accuracy"), selectedYearMonth);
+      const accuracySnap = await getDoc(accuracyRef);
+      if (requestSeq !== projectionAccuracyRequestSeq.current) return;
+      const accuracy = accuracySnap.exists() ? (accuracySnap.data() || {}) : null;
+      const data = buildProjectionAccuracyObservabilitySnapshot({
+        accuracy,
+        brandId: activeBrandId,
+        yearMonth: selectedYearMonth,
+        currentYearMonth: getTaipeiProjectionYearMonth(),
+      });
+
+      setProjectionAccuracyState({
+        brandId: activeBrandId,
+        yearMonth: selectedYearMonth,
+        status: "ready",
+        data,
+        error: null,
+        loadedAtText: new Date().toLocaleString("zh-TW", { hour12: false }),
+      });
+
+      showToast(
+        data.status === "healthy"
+          ? `${brandLabel} ${selectedYearMonth} 推估準確度成績已載入`
+          : `${brandLabel} ${selectedYearMonth} Accuracy 狀態已更新`,
+        data.status === "error" ? "error" : (data.status === "warning" ? "info" : "success")
+      );
+    } catch (error) {
+      if (requestSeq !== projectionAccuracyRequestSeq.current) return;
+      console.error("讀取 Projection Accuracy 狀態失敗：", error);
+      setProjectionAccuracyState({
+        brandId: activeBrandId,
+        yearMonth: selectedYearMonth,
+        status: "error",
+        data: null,
+        error: error?.message || String(error),
+        loadedAtText: new Date().toLocaleString("zh-TW", { hour12: false }),
+      });
+      showToast("讀取業績推估準確度失敗", "error");
+    } finally {
+      if (requestSeq === projectionAccuracyRequestSeq.current) {
+        setLoadingAction(null);
+      }
     }
   };
 
@@ -5247,6 +5340,275 @@ export default function SystemMaintenance() {
 
                   <div className="rounded-2xl border border-stone-100 bg-stone-50/50 px-3 py-2 text-[10px] font-bold text-stone-400">
                     System Exclusion snapshot：模型文件目前列出 {Number(data.excludedStoreCount || 0).toLocaleString()} 間排除店。此監控只顯示 persisted model metadata，不在前端改寫 Projection Authority。
+                  </div>
+                </div>
+              );
+            })()}
+
+
+            <ToolRow
+              icon={BarChart3}
+              title="業績推估準確度追蹤"
+              desc="唯讀查看指定月份已保存的 Projection Accuracy checkpoint 與 Backend 月底成績。每次只讀 1 份 projection_accuracy/{YYYY-MM}；WAPE、Bias、APE 全部直接使用 Backend persisted score，不在前端重新計算。"
+              badge="1 Doc / Click"
+              tone={getProjectionObservabilityTone(projectionAccuracyState?.data?.status)}
+            >
+              <div className="flex items-center gap-2 rounded-2xl border border-stone-100 bg-white/80 px-3 h-11">
+                <Calendar size={14} className="text-stone-400" />
+                <input
+                  type="month"
+                  max={getTaipeiProjectionYearMonth()}
+                  value={projectionAccuracyMonth}
+                  onChange={(e) => {
+                    projectionAccuracyRequestSeq.current += 1;
+                    setLoadingAction((current) => (
+                      current === "projectionAccuracyObservability" ? null : current
+                    ));
+                    setProjectionAccuracyMonth(e.target.value);
+                    setProjectionAccuracyState({
+                      brandId: "",
+                      yearMonth: "",
+                      status: "idle",
+                      data: null,
+                      error: null,
+                      loadedAtText: "",
+                    });
+                  }}
+                  className="bg-transparent text-xs font-black text-stone-700 outline-none w-[118px]"
+                />
+              </div>
+              <BeautyButton
+                onClick={handleLoadProjectionAccuracyObservability}
+                disabled={loadingAction !== null || !projectionAccuracyMonth}
+                variant="primary"
+              >
+                {loadingAction === "projectionAccuracyObservability"
+                  ? <Loader2 size={14} className="animate-spin" />
+                  : <Eye size={14} />}
+                查看準確度成績
+              </BeautyButton>
+            </ToolRow>
+
+            {projectionAccuracyState.status === "idle" && (
+              <div className="rounded-2xl border border-stone-100 bg-white/70 px-4 py-3 text-[11px] font-bold text-stone-500 leading-relaxed">
+                此區預設不讀 Firestore。選擇月份後按「查看準確度成績」才做 1 次 point read；查看 Accuracy 不會連帶切換維護中心月份，也不會觸發 Summary / Raw 額外讀取。
+              </div>
+            )}
+
+            {projectionAccuracyState.status === "error" && (
+              <div className="rounded-2xl border border-rose-100 bg-rose-50/40 px-4 py-3 text-[11px] font-bold text-rose-600 leading-relaxed">
+                讀取失敗：{projectionAccuracyState.error || "未知錯誤"}
+              </div>
+            )}
+
+            {projectionAccuracyState.status === "ready" && projectionAccuracyState.data && (() => {
+              const data = projectionAccuracyState.data;
+              const statusTone = data.status === "healthy"
+                ? "text-emerald-700 border-emerald-100 bg-emerald-50"
+                : data.status === "error"
+                  ? "text-rose-600 border-rose-100 bg-rose-50"
+                  : "text-[#9A6A24] border-amber-100 bg-amber-50";
+              const formatPct = (value) => (
+                typeof value === "number" && Number.isFinite(value)
+                  ? `${value.toFixed(2)}%`
+                  : "N/A"
+              );
+              const formatMoney = (value) => (
+                typeof value === "number" && Number.isFinite(value)
+                  ? `$${Math.round(value).toLocaleString()}`
+                  : "N/A"
+              );
+              const methodLabel = (key) => {
+                if (key === "effective") return "正式方案";
+                if (key === "shadowV1") return data.v2Expected ? "Shadow V1" : "V1 對照";
+                if (key === "currentPace") return "Current Pace";
+                return key;
+              };
+              const renderMetricScore = (metricKey, label) => {
+                const comparison = data.metrics?.[metricKey] || {};
+                const methods = comparison.methods || {};
+                const bestMethods = Array.isArray(comparison.bestMethods) ? comparison.bestMethods : [];
+
+                return (
+                  <div className="rounded-[1.35rem] border border-stone-100 bg-white p-3">
+                    <div className="flex flex-wrap items-center justify-between gap-2">
+                      <div>
+                        <p className="text-xs font-black text-stone-800">{label}</p>
+                        <p className="mt-0.5 text-[10px] font-bold text-stone-400">
+                          WAPE 越低越準；Bias 負值代表整體偏低估
+                        </p>
+                      </div>
+                      {data.v2Expected && (
+                        <span className="px-2 py-1 rounded-full border border-blue-100 bg-blue-50 text-blue-600 text-[10px] font-black">
+                          V2 Phase applied：{Number(data.v2AppliedCheckpointCount?.[metricKey] || 0)} 個 checkpoint
+                        </span>
+                      )}
+                    </div>
+                    <div className="mt-3 grid grid-cols-1 sm:grid-cols-3 gap-2">
+                      {["effective", "shadowV1", "currentPace"].map((methodKey) => {
+                        const score = methods[methodKey] || {};
+                        const isBest = bestMethods.includes(methodKey);
+                        return (
+                          <div
+                            key={`${metricKey}_${methodKey}`}
+                            className={`rounded-2xl border p-3 ${
+                              isBest
+                                ? "border-emerald-100 bg-emerald-50/65"
+                                : "border-stone-100 bg-stone-50/60"
+                            }`}
+                          >
+                            <div className="flex items-center justify-between gap-2">
+                              <p className="text-[10px] font-black text-stone-500">{methodLabel(methodKey)}</p>
+                              {isBest && (
+                                <span className="px-2 py-0.5 rounded-full border border-emerald-100 bg-white text-emerald-700 text-[9px] font-black">
+                                  最低 WAPE
+                                </span>
+                              )}
+                            </div>
+                            <p className={`mt-1 text-lg font-black ${isBest ? "text-emerald-700" : "text-stone-800"}`}>
+                              {formatPct(score.wapePct)}
+                            </p>
+                            <div className="mt-1 flex items-center justify-between gap-2 text-[10px] font-bold text-stone-400">
+                              <span>Bias {formatPct(score.biasPct)}</span>
+                              <span>n={Number(score.count || 0)}</span>
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
+                    {data.v2Expected && Number(methods?.effectiveV2AppliedOnly?.count || 0) > 0 && (
+                      <p className="mt-2 text-[10px] font-bold text-blue-500">
+                        V2-applied subset：WAPE {formatPct(methods.effectiveV2AppliedOnly.wapePct)}｜Bias {formatPct(methods.effectiveV2AppliedOnly.biasPct)}｜n={Number(methods.effectiveV2AppliedOnly.count || 0)}
+                      </p>
+                    )}
+                  </div>
+                );
+              };
+
+              return (
+                <div className="rounded-[1.5rem] border border-stone-100 bg-white/90 p-4 space-y-4">
+                  <div className="flex flex-col lg:flex-row lg:items-center lg:justify-between gap-3">
+                    <div>
+                      <div className="flex items-center gap-2 flex-wrap">
+                        <p className="text-sm font-black text-stone-800">
+                          {brandLabel}｜{data.yearMonth || projectionAccuracyMonth} 推估準確度
+                        </p>
+                        <span className={`px-2.5 py-1 rounded-full border text-[10px] font-black ${statusTone}`}>
+                          {data.statusLabel}
+                        </span>
+                        <span className="px-2.5 py-1 rounded-full border border-stone-100 bg-stone-50 text-stone-500 text-[10px] font-black">
+                          {data.v2Expected ? "CYJ / 安妞 V2 eligible" : "伊啵 V1"}
+                        </span>
+                      </div>
+                      <p className="mt-1 text-[11px] font-bold text-stone-400">
+                        {data.statusDetail || "目前沒有額外 Accuracy 狀態說明"}
+                      </p>
+                    </div>
+                    <p className="text-[10px] font-black text-stone-400">
+                      本次讀取：1 doc｜{projectionAccuracyState.loadedAtText || "-"}
+                    </p>
+                  </div>
+
+                  <div className="grid grid-cols-2 lg:grid-cols-4 gap-2">
+                    {[
+                      ["Checkpoint", `${Number(data.checkpointCount || 0)}/${Number(data.expectedCheckpointCount || 6)}`],
+                      ["月底成績", data.scoringAvailable ? "已建立" : "尚未建立"],
+                      ["Score Revision", data.scoringAvailable ? `#${Number(data.scoreRevision || 0)}` : "-"],
+                      ["Score Semantic", data.scoreSemanticVersion || "-"],
+                    ].map(([label, value]) => (
+                      <div key={label} className="rounded-2xl border border-stone-100 bg-stone-50/60 p-3">
+                        <p className="text-[10px] font-black text-stone-400">{label}</p>
+                        <p className="mt-1 text-xs font-black text-stone-700 break-words">{value}</p>
+                      </div>
+                    ))}
+                  </div>
+
+                  {data.checkpointKeys?.length > 0 && (
+                    <div className="flex flex-wrap gap-1.5">
+                      {data.checkpointKeys.map((key) => (
+                        <span key={key} className="px-2.5 py-1 rounded-full border border-amber-100 bg-amber-50/70 text-[#9A6A24] text-[10px] font-black">
+                          {key.replace("day", "Day ")}
+                        </span>
+                      ))}
+                    </div>
+                  )}
+
+                  {!data.scoringAvailable ? (
+                    <div className="rounded-2xl border border-amber-100 bg-amber-50/35 px-4 py-3 text-[11px] font-bold text-[#8A6128] leading-relaxed">
+                      目前只顯示已存在的 Backend checkpoint 證據。月底 verified Final Actual 尚未寫入前，不會在瀏覽器自行用當前資料推算 Accuracy。
+                    </div>
+                  ) : (
+                    <>
+                      <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
+                        <div className="rounded-2xl border border-stone-100 bg-stone-50/60 p-3">
+                          <p className="text-[10px] font-black text-stone-400">Final Actual｜現金</p>
+                          <p className="mt-1 text-base font-black text-stone-800">{formatMoney(data.finalActual?.cash?.value)}</p>
+                          <p className="mt-1 text-[10px] font-bold text-stone-400">{data.finalActual?.cash?.status || "-"}</p>
+                        </div>
+                        <div className="rounded-2xl border border-stone-100 bg-stone-50/60 p-3">
+                          <p className="text-[10px] font-black text-stone-400">Final Actual｜權責</p>
+                          <p className="mt-1 text-base font-black text-stone-800">{formatMoney(data.finalActual?.accrual?.value)}</p>
+                          <p className="mt-1 text-[10px] font-bold text-stone-400">{data.finalActual?.accrual?.status || "-"}</p>
+                        </div>
+                      </div>
+
+                      <div className="grid grid-cols-1 xl:grid-cols-2 gap-2">
+                        {renderMetricScore("cash", "現金 Accuracy")}
+                        {renderMetricScore("accrual", "權責 Accuracy")}
+                      </div>
+
+                      {data.checkpointRows?.length > 0 && (
+                        <div>
+                          <div className="flex flex-wrap items-end justify-between gap-2">
+                            <div>
+                              <p className="text-xs font-black text-stone-700">Checkpoint APE</p>
+                              <p className="mt-0.5 text-[10px] font-bold text-stone-400">
+                                直接顯示 Backend 已保存 APE；不在前端重算 Final Actual 誤差。
+                              </p>
+                            </div>
+                            <p className="text-[10px] font-black text-stone-400">
+                              scored：{data.scoredAtText || "-"}
+                            </p>
+                          </div>
+                          <div className="mt-2 grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-2">
+                            {data.checkpointRows.map((row) => (
+                              <div key={row.checkpointKey} className="rounded-2xl border border-stone-100 bg-stone-50/55 p-3">
+                                <div className="flex items-center justify-between gap-2">
+                                  <p className="text-[11px] font-black text-stone-700">
+                                    {row.checkpointKey.replace("day", "Day ")}
+                                  </p>
+                                  <span className="text-[9px] font-black text-stone-400">{row.cutoffDate || "-"}</span>
+                                </div>
+                                <div className="mt-2 grid grid-cols-2 gap-2 text-[10px]">
+                                  {[
+                                    ["現金", row.cash, row.phaseApplied?.cash],
+                                    ["權責", row.accrual, row.phaseApplied?.accrual],
+                                  ].map(([label, metric, phaseApplied]) => (
+                                    <div key={`${row.checkpointKey}_${label}`} className="rounded-xl border border-white bg-white/80 p-2">
+                                      <div className="flex items-center justify-between gap-1">
+                                        <p className="font-black text-stone-600">{label}</p>
+                                        {data.v2Expected && (
+                                          <span className={`font-black ${phaseApplied ? "text-blue-500" : "text-stone-300"}`}>
+                                            {phaseApplied ? "V2" : "V1"}
+                                          </span>
+                                        )}
+                                      </div>
+                                      <p className="mt-1 font-bold text-stone-500">正式 {formatPct(metric?.effective?.apePct)}</p>
+                                      <p className="font-bold text-stone-400">{data.v2Expected ? "V1" : "對照"} {formatPct(metric?.shadowV1?.apePct)}</p>
+                                      <p className="font-bold text-stone-400">Pace {formatPct(metric?.currentPace?.apePct)}</p>
+                                    </div>
+                                  ))}
+                                </div>
+                              </div>
+                            ))}
+                          </div>
+                        </div>
+                      )}
+                    </>
+                  )}
+
+                  <div className="rounded-2xl border border-stone-100 bg-stone-50/50 px-3 py-2 text-[10px] font-bold text-stone-400">
+                    Authority：{data.finalActual?.source || (data.exists ? "checkpoint evidence only" : "no document")}。此區不寫 Firestore、不修正模型、不變更 Projection v1/v2 公式。
                   </div>
                 </div>
               );
