@@ -228,6 +228,302 @@ test("B1 persistence is transaction first-writer-wins and retry cannot overwrite
   assert.equal(stored.checkpoints.day10.effective.cash.standard, 100);
 });
 
+
+test("B2A verified final actual authority requires trusted Summary flag, complete reporting and formal KPI", () => {
+  const summary = {
+    version: "dashboard-summary-v2",
+    semanticVersion: "summary-semantics-v1",
+    kpiContractVersion: "kpi-contract-v1",
+    brandId: "anniu",
+    yearMonth: "2026-09",
+    lifecycleSnapshot: {
+      schemaVersion: "store-lifecycle-v1",
+      datasetStatus: "READY",
+      revision: 7,
+      eligibleStoreCount: 17,
+    },
+    systemExclusionSnapshot: {
+      version: "system-exclusion-v1",
+      brandId: "anniu",
+      revision: 2,
+      stores: [],
+    },
+    reportingCompleteness: {
+      schemaVersion: "reporting-completeness-v1",
+      reportingStatus: "DATA_COMPLETE",
+      expectedStoreDayCount: 510,
+      submittedStoreDayCount: 510,
+      missingStoreDayCount: 0,
+      reportingCalendarMasterRevision: 4,
+      reportingCalendarRevision: 3,
+      storeClosedReportDayCount: 0,
+    },
+    grandTotal: {
+      formalNetCash: 1000,
+      formalNetCashStatus: "VALID",
+      formalAccrual: 1200,
+      formalAccrualStatus: "VALID",
+    },
+  };
+  const flag = {
+    status: "verified",
+    dirty: false,
+    lastMismatchCount: 0,
+    reportingCalendarRevision: 3,
+    requiredReportingCalendarRevision: 3,
+    systemExclusionRevision: 2,
+  };
+
+  const trusted = accuracy.inspectVerifiedFinalActualAuthority({
+    brandId: "anniu",
+    yearMonth: "2026-09",
+    summaryData: summary,
+    summaryFlag: flag,
+  });
+  assert.equal(trusted.trusted, true);
+  assert.equal(trusted.actual.cash.value, 1000);
+  assert.equal(trusted.actual.accrual.value, 1200);
+
+  const dirty = accuracy.inspectVerifiedFinalActualAuthority({
+    brandId: "anniu",
+    yearMonth: "2026-09",
+    summaryData: summary,
+    summaryFlag: { ...flag, dirty: true },
+  });
+  assert.equal(dirty.trusted, false);
+  assert.equal(dirty.reason, "SUMMARY_FLAG_DIRTY");
+
+  const calendarRace = accuracy.inspectVerifiedFinalActualAuthority({
+    brandId: "anniu",
+    yearMonth: "2026-09",
+    summaryData: summary,
+    summaryFlag: { ...flag, requiredReportingCalendarRevision: 4 },
+  });
+  assert.equal(calendarRace.trusted, false);
+  assert.equal(calendarRace.reason, "REPORTING_CALENDAR_REVISION_MISMATCH");
+});
+
+test("B2A month-final scoring preserves method semantics and labels V2-applied subset from captured runtime phase", () => {
+  const checkpoint = {
+    cutoffDate: "2026-09-10",
+    cutoffDay: 10,
+    capturedAtText: "2026-09-11T00:10:00.000Z",
+    scoreEligibility: {
+      cash: { eligible: true, reasons: [] },
+      accrual: { eligible: true, reasons: [] },
+    },
+    effective: {
+      cash: { standard: 900 },
+      accrual: { standard: 1200 },
+    },
+    shadowV1: {
+      ready: true,
+      cash: { standard: 800 },
+      accrual: { standard: 1000 },
+    },
+    naiveCurrentPace: {
+      cash: 950,
+      accrual: 1100,
+    },
+    model: {
+      strategyVersion: "projection-strategy-v2-phase-calibrated",
+      runtimePhase: {
+        cash: { phaseApplied: true },
+        accrual: { phaseApplied: false },
+      },
+    },
+  };
+
+  const scorecard = accuracy.buildMonthFinalScorecard({
+    checkpoints: { day10: checkpoint },
+    finalActual: {
+      cash: { value: 1000, status: "VALID" },
+      accrual: { value: 1250, status: "VALID" },
+    },
+  });
+
+  assert.equal(scorecard.byCheckpoint.day10.cash.effective.score.error, -100);
+  assert.equal(scorecard.byCheckpoint.day10.cash.effective.score.apePct, 10);
+  assert.equal(scorecard.byCheckpoint.day10.cash.effective.score.biasPct, -10);
+  assert.equal(scorecard.overall.cash.effective.count, 1);
+  assert.equal(scorecard.overall.cash.effectiveV2AppliedOnly.count, 1);
+  assert.equal(scorecard.overall.accrual.effectiveV2AppliedOnly.count, 0);
+  assert.equal(scorecard.overall.cash.currentPace.wapePct, 5);
+});
+
+test("B2A scoring transaction is idempotent, never rewrites checkpoints, and rescoring increments only when trusted actual authority changes", async () => {
+  const monthlyRef = { path: "brands/anniu/projection_accuracy/2026-09" };
+  const summaryRef = { path: "brands/anniu/dashboard_summary/2026-09" };
+  const flagRef = { path: "brands/anniu/summary_recalc_flags/2026-09" };
+  const fakeAdmin = {
+    firestore: {
+      FieldValue: {
+        serverTimestamp: () => "__SERVER_TIMESTAMP__",
+      },
+    },
+  };
+
+  const checkpoint = {
+    cutoffDate: "2026-09-10",
+    cutoffDay: 10,
+    capturedAtText: "2026-09-11T00:10:00.000Z",
+    scoreEligibility: {
+      cash: { eligible: true, reasons: [] },
+      accrual: { eligible: true, reasons: [] },
+    },
+    effective: {
+      cash: { standard: 900 },
+      accrual: { standard: 1100 },
+    },
+    shadowV1: {
+      ready: true,
+      cash: { standard: 850 },
+      accrual: { standard: 1050 },
+    },
+    naiveCurrentPace: {
+      cash: 950,
+      accrual: 1150,
+    },
+    model: {
+      strategyVersion: "projection-strategy-v2-phase-calibrated",
+      runtimePhase: {
+        cash: { phaseApplied: true },
+        accrual: { phaseApplied: true },
+      },
+    },
+  };
+
+  const summary = {
+    version: "dashboard-summary-v2",
+    semanticVersion: "summary-semantics-v1",
+    kpiContractVersion: "kpi-contract-v1",
+    brandId: "anniu",
+    yearMonth: "2026-09",
+    lifecycleSnapshot: {
+      schemaVersion: "store-lifecycle-v1",
+      datasetStatus: "READY",
+      revision: 7,
+      eligibleStoreCount: 17,
+    },
+    systemExclusionSnapshot: {
+      version: "system-exclusion-v1",
+      brandId: "anniu",
+      revision: 2,
+      stores: [],
+    },
+    reportingCompleteness: {
+      schemaVersion: "reporting-completeness-v1",
+      reportingStatus: "DATA_COMPLETE",
+      expectedStoreDayCount: 510,
+      submittedStoreDayCount: 510,
+      missingStoreDayCount: 0,
+      reportingCalendarMasterRevision: 4,
+      reportingCalendarRevision: 3,
+      storeClosedReportDayCount: 0,
+    },
+    grandTotal: {
+      formalNetCash: 1000,
+      formalNetCashStatus: "VALID",
+      formalAccrual: 1200,
+      formalAccrualStatus: "VALID",
+    },
+  };
+  const flag = {
+    status: "verified",
+    dirty: false,
+    lastMismatchCount: 0,
+    reportingCalendarRevision: 3,
+    requiredReportingCalendarRevision: 3,
+    systemExclusionRevision: 2,
+  };
+
+  const store = new Map([
+    [monthlyRef.path, {
+      schemaVersion: "projection-accuracy-v1",
+      checkpoints: { day10: checkpoint },
+    }],
+    [summaryRef.path, summary],
+    [flagRef.path, flag],
+  ]);
+  const fakeDb = {
+    async runTransaction(callback) {
+      const tx = {
+        async get(ref) {
+          const value = store.get(ref.path);
+          return {
+            exists: value !== undefined,
+            data: () => value,
+          };
+        },
+        set(ref, patch) {
+          const previous = store.get(ref.path) || {};
+          store.set(ref.path, { ...previous, ...patch });
+        },
+      };
+      return callback(tx);
+    },
+  };
+
+  const first = await accuracy.persistVerifiedMonthScore({
+    db: fakeDb,
+    admin: fakeAdmin,
+    monthlyRef,
+    summaryRef,
+    flagRef,
+    brandId: "anniu",
+    yearMonth: "2026-09",
+    scoredAtText: "2026-10-01T00:00:00.000Z",
+  });
+  assert.equal(first.written, true);
+  assert.equal(first.scoreRevision, 1);
+  assert.equal(store.get(monthlyRef.path).checkpoints.day10.effective.cash.standard, 900);
+
+  const second = await accuracy.persistVerifiedMonthScore({
+    db: fakeDb,
+    admin: fakeAdmin,
+    monthlyRef,
+    summaryRef,
+    flagRef,
+    brandId: "anniu",
+    yearMonth: "2026-09",
+    scoredAtText: "2026-10-01T00:01:00.000Z",
+  });
+  assert.equal(second.written, false);
+  assert.equal(second.reason, "ALREADY_CURRENT");
+  assert.equal(second.scoreRevision, 1);
+
+  store.set(summaryRef.path, {
+    ...summary,
+    grandTotal: {
+      ...summary.grandTotal,
+      formalNetCash: 1100,
+    },
+  });
+
+  const third = await accuracy.persistVerifiedMonthScore({
+    db: fakeDb,
+    admin: fakeAdmin,
+    monthlyRef,
+    summaryRef,
+    flagRef,
+    brandId: "anniu",
+    yearMonth: "2026-09",
+    scoredAtText: "2026-10-01T00:02:00.000Z",
+  });
+  assert.equal(third.written, true);
+  assert.equal(third.scoreRevision, 2);
+  assert.equal(store.get(monthlyRef.path).finalActual.cash.value, 1100);
+  assert.equal(store.get(monthlyRef.path).checkpoints.day10.effective.cash.standard, 900);
+});
+
+test("B2A index hook runs only after verified Summary guard and keeps scoring failure non-blocking", () => {
+  const source = read("functions/index.js");
+  assert.match(source, /finalFlagState\?\.verified === true/);
+  assert.match(source, /scoreProjectionAccuracyMonthFromVerifiedSummary/);
+  assert.match(source, /reason: "SCORING_FAILED"/);
+  assert.match(source, /Accuracy is observability evidence|Accuracy 是 observability evidence/);
+});
+
 test("B1 index wiring is Backend-only, policy-state-free and uses existing brand path resolver", () => {
   const source = read("functions/index.js");
   assert.match(source, /createProjectionAccuracyFunctions/);

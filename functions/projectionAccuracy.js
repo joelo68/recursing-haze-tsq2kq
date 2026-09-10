@@ -1,9 +1,11 @@
 "use strict";
 
+const { createHash } = require("node:crypto");
 const { onSchedule } = require("firebase-functions/v2/scheduler");
 const { isLifecycleEntryExpectedForDate } = require("./storeLifecycle");
 const { aggregateTelegramProjectionRows } = require("./telegram/projectionConsumer");
 const { isValidNumericStatus } = require("./telegram/formalKpi");
+const { KPI_CONTRACT_VERSION } = require("./kpiContracts");
 
 const PROJECTION_ACCURACY_SCHEMA_VERSION = "projection-accuracy-v1";
 const PROJECTION_ACCURACY_SEMANTIC_VERSION = "projection-accuracy-checkpoint-v1";
@@ -13,6 +15,10 @@ const PROJECTION_ACCURACY_CHECKPOINT_DAYS = Object.freeze([5, 7, 10, 15, 20, 25]
 const PROJECTION_ACCURACY_SCHEDULE = "10 7 * * *";
 const PROJECTION_ACCURACY_TIME_ZONE = "Asia/Taipei";
 const PROJECTION_ACCURACY_MAX_STORE_ROWS = 80;
+const PROJECTION_ACCURACY_SCORE_SEMANTIC_VERSION = "projection-accuracy-score-v1";
+const PROJECTION_ACCURACY_FINAL_ACTUAL_SOURCE = "verified_dashboard_summary";
+const PROJECTION_ACCURACY_SUMMARY_VERSION = "dashboard-summary-v2";
+const PROJECTION_ACCURACY_SUMMARY_SEMANTIC_VERSION = "summary-semantics-v1";
 
 const isFiniteNumber = (value) => typeof value === "number" && Number.isFinite(value);
 const safeArray = (value) => Array.isArray(value) ? value : [];
@@ -475,6 +481,417 @@ async function persistCheckpointFirstWriterWins({
   });
 }
 
+
+function stableJsonHash(value) {
+  const json = JSON.stringify(value);
+  return createHash("sha256").update(json).digest("hex");
+}
+
+function inspectVerifiedFinalActualAuthority({
+  brandId = "",
+  yearMonth = "",
+  summaryData = {},
+  summaryFlag = {},
+} = {}) {
+  const normalizedBrandId = String(brandId || "").trim().toLowerCase();
+  const normalizedYearMonth = normalizeYearMonth(yearMonth);
+  const fail = (reason) => ({ trusted: false, reason, actual: null, authority: null });
+
+  if (!normalizedBrandId || !normalizedYearMonth) return fail("INVALID_SCOPE");
+  if (String(summaryFlag?.status || "").toLowerCase() !== "verified") return fail("SUMMARY_FLAG_NOT_VERIFIED");
+  if (summaryFlag?.dirty === true) return fail("SUMMARY_FLAG_DIRTY");
+  if (Number(summaryFlag?.lastMismatchCount || 0) !== 0) return fail("SUMMARY_FLAG_MISMATCH");
+
+  if (String(summaryData?.version || "") !== PROJECTION_ACCURACY_SUMMARY_VERSION) {
+    return fail("SUMMARY_VERSION_MISMATCH");
+  }
+  if (String(summaryData?.semanticVersion || "") !== PROJECTION_ACCURACY_SUMMARY_SEMANTIC_VERSION) {
+    return fail("SUMMARY_SEMANTIC_MISMATCH");
+  }
+  if (String(summaryData?.kpiContractVersion || "") !== KPI_CONTRACT_VERSION) {
+    return fail("KPI_CONTRACT_MISMATCH");
+  }
+  if (String(summaryData?.brandId || "").trim().toLowerCase() !== normalizedBrandId) {
+    return fail("SUMMARY_BRAND_MISMATCH");
+  }
+  if (normalizeYearMonth(summaryData?.yearMonth) !== normalizedYearMonth) {
+    return fail("SUMMARY_MONTH_MISMATCH");
+  }
+
+  const completeness = summaryData?.reportingCompleteness || {};
+  const expectedStoreDays = Math.max(0, Number(completeness?.expectedStoreDayCount || 0));
+  const submittedStoreDays = Math.max(0, Number(completeness?.submittedStoreDayCount || 0));
+  const missingStoreDays = Math.max(0, Number(completeness?.missingStoreDayCount || 0));
+  if (
+    String(completeness?.reportingStatus || "") !== "DATA_COMPLETE"
+    || expectedStoreDays <= 0
+    || submittedStoreDays !== expectedStoreDays
+    || missingStoreDays !== 0
+  ) {
+    return fail("REPORTING_NOT_COMPLETE");
+  }
+
+  const lifecycle = summaryData?.lifecycleSnapshot || {};
+  if (String(lifecycle?.datasetStatus || "") !== "READY") return fail("LIFECYCLE_NOT_READY");
+
+  const summaryCalendarRevision = Math.max(0, Number(completeness?.reportingCalendarRevision || 0));
+  const flagCalendarRevision = Math.max(0, Number(summaryFlag?.reportingCalendarRevision || 0));
+  const requiredCalendarRevision = Math.max(
+    flagCalendarRevision,
+    Math.max(0, Number(summaryFlag?.requiredReportingCalendarRevision || 0))
+  );
+  if (
+    summaryCalendarRevision !== flagCalendarRevision
+    || summaryCalendarRevision < requiredCalendarRevision
+  ) {
+    return fail("REPORTING_CALENDAR_REVISION_MISMATCH");
+  }
+
+  const summaryExclusionRevision = Math.max(
+    0,
+    Number(summaryData?.systemExclusionSnapshot?.revision || 0)
+  );
+  const flagExclusionRevision = Math.max(0, Number(summaryFlag?.systemExclusionRevision || 0));
+  if (summaryExclusionRevision !== flagExclusionRevision) {
+    return fail("SYSTEM_EXCLUSION_REVISION_MISMATCH");
+  }
+
+  const grand = summaryData?.grandTotal || {};
+  const cashStatus = String(grand?.formalNetCashStatus || "");
+  const accrualStatus = String(grand?.formalAccrualStatus || "");
+  const cashValue = isValidNumericStatus(cashStatus) && isFiniteNumber(grand?.formalNetCash)
+    ? Number(grand.formalNetCash)
+    : null;
+  const accrualValue = isValidNumericStatus(accrualStatus) && isFiniteNumber(grand?.formalAccrual)
+    ? Number(grand.formalAccrual)
+    : null;
+  if (cashValue === null || accrualValue === null) return fail("FORMAL_ACTUAL_NOT_VALID");
+
+  const authority = {
+    source: PROJECTION_ACCURACY_FINAL_ACTUAL_SOURCE,
+    brandId: normalizedBrandId,
+    yearMonth: normalizedYearMonth,
+    summaryVersion: String(summaryData?.version || ""),
+    summarySemanticVersion: String(summaryData?.semanticVersion || ""),
+    kpiContractVersion: String(summaryData?.kpiContractVersion || ""),
+    lifecycle: {
+      schemaVersion: String(lifecycle?.schemaVersion || ""),
+      datasetStatus: String(lifecycle?.datasetStatus || ""),
+      revision: Math.max(0, Number(lifecycle?.revision || 0)),
+      eligibleStoreCount: Math.max(0, Number(lifecycle?.eligibleStoreCount || 0)),
+    },
+    systemExclusionSnapshot: {
+      version: String(summaryData?.systemExclusionSnapshot?.version || ""),
+      brandId: String(summaryData?.systemExclusionSnapshot?.brandId || "").trim().toLowerCase(),
+      revision: summaryExclusionRevision,
+      stores: safeArray(summaryData?.systemExclusionSnapshot?.stores).map(String).sort(),
+    },
+    reportingCompleteness: {
+      schemaVersion: String(completeness?.schemaVersion || ""),
+      reportingStatus: String(completeness?.reportingStatus || ""),
+      expectedStoreDayCount: expectedStoreDays,
+      submittedStoreDayCount: submittedStoreDays,
+      missingStoreDayCount: missingStoreDays,
+      reportingCalendarMasterRevision: Math.max(
+        0,
+        Number(completeness?.reportingCalendarMasterRevision || 0)
+      ),
+      reportingCalendarRevision: summaryCalendarRevision,
+      storeClosedReportDayCount: Math.max(
+        0,
+        Number(completeness?.storeClosedReportDayCount || 0)
+      ),
+    },
+  };
+
+  return {
+    trusted: true,
+    reason: "VERIFIED_FINAL_ACTUAL",
+    actual: {
+      cash: { value: cashValue, status: cashStatus },
+      accrual: { value: accrualValue, status: accrualStatus },
+    },
+    authority,
+  };
+}
+
+function buildFinalForecastScore(forecast, actual) {
+  if (!isFiniteNumber(forecast) || !isFiniteNumber(actual)) {
+    return { eligible: false, reason: "INVALID_FORECAST_OR_ACTUAL", score: null };
+  }
+  const error = Number(forecast) - Number(actual);
+  const absError = Math.abs(error);
+  if (!(Number(actual) > 0)) {
+    return {
+      eligible: false,
+      reason: "ACTUAL_NOT_POSITIVE_FOR_PERCENTAGE_SCORE",
+      score: {
+        forecast: Math.round(Number(forecast)),
+        actual: Math.round(Number(actual)),
+        error: Math.round(error),
+        absError: Math.round(absError),
+        apePct: null,
+        accuracyPctDisplay: null,
+        biasPct: null,
+      },
+    };
+  }
+  const apePct = Number(((absError / Number(actual)) * 100).toFixed(4));
+  const biasPct = Number(((error / Number(actual)) * 100).toFixed(4));
+  return {
+    eligible: true,
+    reason: "SCORED",
+    score: {
+      forecast: Math.round(Number(forecast)),
+      actual: Math.round(Number(actual)),
+      error: Math.round(error),
+      absError: Math.round(absError),
+      apePct,
+      accuracyPctDisplay: Number(Math.max(0, 100 - apePct).toFixed(4)),
+      biasPct,
+    },
+  };
+}
+
+function buildCheckpointEvidenceSignature(checkpoints = {}) {
+  const normalized = Object.fromEntries(
+    Object.entries(checkpoints && typeof checkpoints === "object" ? checkpoints : {})
+      .filter(([key]) => /^day(05|07|10|15|20|25)$/.test(key))
+      .sort(([a], [b]) => a.localeCompare(b))
+      .map(([key, checkpoint]) => [key, {
+        cutoffDate: String(checkpoint?.cutoffDate || ""),
+        capturedAtText: String(checkpoint?.capturedAtText || ""),
+        scoreEligibility: toPlainJson(checkpoint?.scoreEligibility || null),
+        effective: {
+          cash: checkpoint?.effective?.cash?.standard ?? null,
+          accrual: checkpoint?.effective?.accrual?.standard ?? null,
+        },
+        shadowV1: {
+          ready: checkpoint?.shadowV1?.ready === true,
+          cash: checkpoint?.shadowV1?.cash?.standard ?? null,
+          accrual: checkpoint?.shadowV1?.accrual?.standard ?? null,
+        },
+        naiveCurrentPace: {
+          cash: checkpoint?.naiveCurrentPace?.cash ?? null,
+          accrual: checkpoint?.naiveCurrentPace?.accrual ?? null,
+        },
+        model: {
+          strategyVersion: String(checkpoint?.model?.strategyVersion || ""),
+          runtimePhase: toPlainJson(checkpoint?.model?.runtimePhase || null),
+        },
+      }])
+  );
+  return stableJsonHash(normalized);
+}
+
+function buildMethodScoreForCheckpoint(checkpoint = {}, metric = "cash", method = "effective", actual = null) {
+  const metricEligibility = checkpoint?.scoreEligibility?.[metric] || {};
+  if (metricEligibility?.eligible !== true) {
+    return {
+      eligible: false,
+      reason: "CHECKPOINT_NOT_SCORE_ELIGIBLE",
+      checkpointReasons: safeArray(metricEligibility?.reasons).map(String),
+      score: null,
+    };
+  }
+
+  let forecast = null;
+  if (method === "effective") forecast = checkpoint?.effective?.[metric]?.standard;
+  else if (method === "shadowV1") {
+    if (checkpoint?.shadowV1?.ready !== true) {
+      return { eligible: false, reason: "SHADOW_V1_NOT_READY", score: null };
+    }
+    forecast = checkpoint?.shadowV1?.[metric]?.standard;
+  } else if (method === "currentPace") {
+    forecast = checkpoint?.naiveCurrentPace?.[metric];
+  }
+
+  return buildFinalForecastScore(forecast, actual);
+}
+
+function summarizeFinalScores(states = []) {
+  const scores = safeArray(states)
+    .filter((state) => state?.eligible === true && state?.score)
+    .map((state) => state.score);
+  const actualSum = scores.reduce((sum, row) => sum + Number(row.actual || 0), 0);
+  const absErrorSum = scores.reduce((sum, row) => sum + Number(row.absError || 0), 0);
+  const errorSum = scores.reduce((sum, row) => sum + Number(row.error || 0), 0);
+  return {
+    count: scores.length,
+    actualSum: Math.round(actualSum),
+    absErrorSum: Math.round(absErrorSum),
+    errorSum: Math.round(errorSum),
+    wapePct: actualSum > 0 ? Number(((absErrorSum / actualSum) * 100).toFixed(4)) : null,
+    biasPct: actualSum > 0 ? Number(((errorSum / actualSum) * 100).toFixed(4)) : null,
+    meanApePct: scores.length
+      ? Number((scores.reduce((sum, row) => sum + Number(row.apePct || 0), 0) / scores.length).toFixed(4))
+      : null,
+  };
+}
+
+function buildMonthFinalScorecard({
+  checkpoints = {},
+  finalActual = {},
+} = {}) {
+  const byCheckpoint = {};
+  const aggregateStates = {
+    cash: { effective: [], shadowV1: [], currentPace: [], effectiveV2AppliedOnly: [] },
+    accrual: { effective: [], shadowV1: [], currentPace: [], effectiveV2AppliedOnly: [] },
+  };
+
+  for (const [checkpointKey, checkpoint] of Object.entries(checkpoints || {}).sort(([a], [b]) => a.localeCompare(b))) {
+    if (!/^day(05|07|10|15|20|25)$/.test(checkpointKey)) continue;
+    const row = {
+      checkpointKey,
+      cutoffDate: String(checkpoint?.cutoffDate || ""),
+      cutoffDay: Math.max(0, Number(checkpoint?.cutoffDay || 0)),
+      model: {
+        strategyVersion: String(checkpoint?.model?.strategyVersion || ""),
+        runtimePhase: toPlainJson(checkpoint?.model?.runtimePhase || null),
+      },
+      cash: {},
+      accrual: {},
+    };
+
+    for (const metric of ["cash", "accrual"]) {
+      const actual = finalActual?.[metric]?.value;
+      for (const method of ["effective", "shadowV1", "currentPace"]) {
+        const state = buildMethodScoreForCheckpoint(checkpoint, metric, method, actual);
+        row[metric][method] = state;
+        aggregateStates[metric][method].push(state);
+      }
+      if (
+        checkpoint?.model?.runtimePhase?.[metric]?.phaseApplied === true
+        && row[metric].effective?.eligible === true
+      ) {
+        aggregateStates[metric].effectiveV2AppliedOnly.push(row[metric].effective);
+      }
+    }
+    byCheckpoint[checkpointKey] = row;
+  }
+
+  const overall = {};
+  for (const metric of ["cash", "accrual"]) {
+    overall[metric] = {};
+    for (const method of ["effective", "shadowV1", "currentPace", "effectiveV2AppliedOnly"]) {
+      overall[metric][method] = summarizeFinalScores(aggregateStates[metric][method]);
+    }
+  }
+
+  return { byCheckpoint, overall };
+}
+
+async function persistVerifiedMonthScore({
+  db,
+  admin,
+  monthlyRef,
+  summaryRef,
+  flagRef,
+  brandId,
+  yearMonth,
+  scoredAtText = "",
+} = {}) {
+  if (!db || !admin || !monthlyRef || !summaryRef || !flagRef) {
+    throw new Error("projection_accuracy_score_persist_invalid_args");
+  }
+
+  return db.runTransaction(async (transaction) => {
+    // Read checkpoint evidence first. Most historical months before B1 have no live
+    // checkpoint document, so they exit after one point read without touching Summary.
+    const monthlySnap = await transaction.get(monthlyRef);
+    if (!monthlySnap.exists) {
+      return { written: false, reason: "NO_CHECKPOINT_DOCUMENT", scoreRevision: 0 };
+    }
+
+    const existing = monthlySnap.data() || {};
+    const checkpoints = existing?.checkpoints && typeof existing.checkpoints === "object"
+      ? existing.checkpoints
+      : {};
+    const checkpointKeys = Object.keys(checkpoints)
+      .filter((key) => /^day(05|07|10|15|20|25)$/.test(key))
+      .sort();
+    if (!checkpointKeys.length) {
+      return { written: false, reason: "NO_CHECKPOINTS", scoreRevision: 0 };
+    }
+
+    // Summary + flag are read inside the same transaction. If a concurrent repair marks
+    // the month dirty or publishes a newer Summary, Firestore retries this transaction
+    // and trust is re-evaluated before any Accuracy write can commit.
+    const flagSnap = await transaction.get(flagRef);
+    const summarySnap = await transaction.get(summaryRef);
+    if (!flagSnap.exists || !summarySnap.exists) {
+      return { written: false, reason: "VERIFIED_SUMMARY_MISSING", scoreRevision: 0 };
+    }
+
+    const trust = inspectVerifiedFinalActualAuthority({
+      brandId,
+      yearMonth,
+      summaryData: summarySnap.data() || {},
+      summaryFlag: flagSnap.data() || {},
+    });
+    if (!trust.trusted) {
+      return {
+        written: false,
+        reason: `SUMMARY_NOT_TRUSTED:${trust.reason}`,
+        scoreRevision: Math.max(0, Number(existing?.scoreMeta?.scoreRevision || 0)),
+      };
+    }
+
+    const checkpointEvidenceSignature = buildCheckpointEvidenceSignature(checkpoints);
+    const finalActualAuthoritySignature = stableJsonHash(trust.authority);
+    const inputSignature = stableJsonHash({
+      checkpointEvidenceSignature,
+      finalActualAuthoritySignature,
+      finalActual: trust.actual,
+    });
+
+    if (String(existing?.scoreMeta?.inputSignature || "") === inputSignature) {
+      return {
+        written: false,
+        reason: "ALREADY_CURRENT",
+        scoreRevision: Math.max(0, Number(existing?.scoreMeta?.scoreRevision || 0)),
+        inputSignature,
+      };
+    }
+
+    const scorecard = buildMonthFinalScorecard({
+      checkpoints,
+      finalActual: trust.actual,
+    });
+    const nowText = String(scoredAtText || new Date().toISOString());
+    const nextRevision = Math.max(0, Number(existing?.scoreMeta?.scoreRevision || 0)) + 1;
+
+    transaction.set(monthlyRef, {
+      finalActual: {
+        source: PROJECTION_ACCURACY_FINAL_ACTUAL_SOURCE,
+        cash: trust.actual.cash,
+        accrual: trust.actual.accrual,
+        authority: trust.authority,
+      },
+      scorecard,
+      scoreMeta: {
+        semanticVersion: PROJECTION_ACCURACY_SCORE_SEMANTIC_VERSION,
+        scoreRevision: nextRevision,
+        checkpointEvidenceSignature,
+        finalActualAuthoritySignature,
+        inputSignature,
+        scoredAtText: nowText,
+      },
+      scoreUpdatedAt: admin.firestore.FieldValue.serverTimestamp(),
+      scoreUpdatedAtText: nowText,
+    }, { merge: true });
+
+    return {
+      written: true,
+      reason: "SCORED",
+      scoreRevision: nextRevision,
+      inputSignature,
+      checkpointCount: checkpointKeys.length,
+      scorecard,
+    };
+  });
+}
+
 function createProjectionAccuracyFunctions({
   admin,
   db,
@@ -572,6 +989,25 @@ function createProjectionAccuracyFunctions({
     };
   }
 
+
+  async function scoreProjectionAccuracyMonthFromVerifiedSummary({ brandId, yearMonth } = {}) {
+    const normalizedBrandId = String(brandId || "").trim().toLowerCase();
+    const normalizedYearMonth = normalizeYearMonth(yearMonth);
+    if (!PROJECTION_ACCURACY_BRANDS.includes(normalizedBrandId) || !normalizedYearMonth) {
+      return { written: false, reason: "INVALID_SCORE_SCOPE", scoreRevision: 0 };
+    }
+
+    return persistVerifiedMonthScore({
+      db,
+      admin,
+      monthlyRef: getBrandCollection(normalizedBrandId, PROJECTION_ACCURACY_COLLECTION).doc(normalizedYearMonth),
+      summaryRef: getBrandCollection(normalizedBrandId, "dashboard_summary").doc(normalizedYearMonth),
+      flagRef: getBrandCollection(normalizedBrandId, "summary_recalc_flags").doc(normalizedYearMonth),
+      brandId: normalizedBrandId,
+      yearMonth: normalizedYearMonth,
+    });
+  }
+
   const captureProjectionAccuracyCheckpoint = onSchedule({
     schedule: PROJECTION_ACCURACY_SCHEDULE,
     timeZone: PROJECTION_ACCURACY_TIME_ZONE,
@@ -636,6 +1072,7 @@ function createProjectionAccuracyFunctions({
   return {
     captureProjectionAccuracyCheckpoint,
     captureBrandCheckpoint,
+    scoreProjectionAccuracyMonthFromVerifiedSummary,
   };
 }
 
@@ -647,6 +1084,10 @@ module.exports = {
   PROJECTION_ACCURACY_CHECKPOINT_DAYS,
   PROJECTION_ACCURACY_SCHEDULE,
   PROJECTION_ACCURACY_TIME_ZONE,
+  PROJECTION_ACCURACY_SCORE_SEMANTIC_VERSION,
+  PROJECTION_ACCURACY_FINAL_ACTUAL_SOURCE,
+  PROJECTION_ACCURACY_SUMMARY_VERSION,
+  PROJECTION_ACCURACY_SUMMARY_SEMANTIC_VERSION,
   getTaipeiIsoDate,
   shiftIsoDate,
   resolveScheduledCheckpoint,
@@ -662,5 +1103,13 @@ module.exports = {
   buildModelMetadata,
   buildCheckpointPayload,
   persistCheckpointFirstWriterWins,
+  stableJsonHash,
+  inspectVerifiedFinalActualAuthority,
+  buildFinalForecastScore,
+  buildCheckpointEvidenceSignature,
+  buildMethodScoreForCheckpoint,
+  summarizeFinalScores,
+  buildMonthFinalScorecard,
+  persistVerifiedMonthScore,
   createProjectionAccuracyFunctions,
 };

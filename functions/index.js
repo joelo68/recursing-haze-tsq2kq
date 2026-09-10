@@ -11819,6 +11819,7 @@ async function finalizeMonthReportAuto({ brandId, yearMonth, trigger = "auto_wor
   let completedCount = 0;
   let buildReport = null;
   let compareReport = null;
+  let projectionAccuracyResult = null;
   let brandLabel = await getSummaryBrandLabel(brandId);
 
   try {
@@ -11957,6 +11958,41 @@ async function finalizeMonthReportAuto({ brandId, yearMonth, trigger = "auto_wor
       });
     }
 
+    // Projection Accuracy B2A：只在 Summary transaction guard 已正式 verified 後評分。
+    // scoring 自己會在單一 transaction 內重新讀取 Accuracy checkpoint + flag + persisted Summary；
+    // 若同時發生歷史修正 / Reporting Calendar revision，Firestore retry 後會重新判斷 trust。
+    // Accuracy 是 observability evidence；評分失敗不能反向把已驗證 Summary 改回 dirty。
+    if (finalFlagState?.verified === true && reportingCalendarRaceDetected !== true) {
+      try {
+        projectionAccuracyResult =
+          await projectionAccuracyFunctions.scoreProjectionAccuracyMonthFromVerifiedSummary({
+            brandId,
+            yearMonth,
+          });
+        console.log(
+          `Projection Accuracy final score ${brandId}/${yearMonth} written=${projectionAccuracyResult.written} reason=${projectionAccuracyResult.reason} revision=${projectionAccuracyResult.scoreRevision || 0}`
+        );
+      } catch (accuracyError) {
+        projectionAccuracyResult = {
+          written: false,
+          reason: "SCORING_FAILED",
+          error: String(accuracyError?.message || accuracyError),
+        };
+        console.error(`Projection Accuracy final score failed ${brandId}/${yearMonth}`, accuracyError);
+        await writeAutoMaintenanceLog(brandId, {
+          type: "projection_accuracy",
+          action: "score_verified_month_failed",
+          month: yearMonth,
+          status: "failed",
+          errorMessage: String(accuracyError?.message || accuracyError),
+          trigger,
+          brandLabel,
+        }).catch((logError) => {
+          console.error(`Projection Accuracy failure log failed ${brandId}/${yearMonth}`, logError);
+        });
+      }
+    }
+
     return {
       brandId,
       yearMonth,
@@ -11968,6 +12004,7 @@ async function finalizeMonthReportAuto({ brandId, yearMonth, trigger = "auto_wor
       completedQueueCount: completedCount,
       buildReport,
       compareReport,
+      projectionAccuracy: projectionAccuracyResult,
     };
   } catch (error) {
     await flagRef.set({
