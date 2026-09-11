@@ -82,6 +82,15 @@ const modulePermissionsFunctions = createModulePermissionsFunctions({ admin, db 
 exports.manageModulePermissions = modulePermissionsFunctions.manageModulePermissions;
 
 // ==========================================
+// ★ Smart Forecast B3B：營運情境 Backend-only authority
+// 一品牌 / 一月份 / 一文件；最高管理者 + Trusted Device + credential + revision OCC。
+// B3B 只建立 Context，不修改既有 Projection v2 公式。
+// ==========================================
+const { createProjectionContextFunctions } = require("./projectionContext");
+const projectionContextFunctions = createProjectionContextFunctions({ admin, db });
+exports.manageProjectionContext = projectionContextFunctions.manageProjectionContext;
+
+// ==========================================
 // ★ Store Lifecycle v1：門市生命週期 Master administrative writer
 // 僅建立上游 authority；Batch 1 不切換 Dashboard / Ranking / Annual / Telegram consumer。
 // ==========================================

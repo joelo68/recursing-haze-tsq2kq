@@ -65,6 +65,7 @@ const TELEGRAM_SECURITY_CONFIG_ENDPOINT = "https://us-central1-cyjsituation-anal
 const SYSTEM_EXCLUSION_ENDPOINT = "https://us-central1-cyjsituation-analysis.cloudfunctions.net/manageSystemExclusions";
 const STORE_LIFECYCLE_ENDPOINT = "https://us-central1-cyjsituation-analysis.cloudfunctions.net/manageStoreLifecycle";
 const MODULE_PERMISSIONS_ENDPOINT = "https://us-central1-cyjsituation-analysis.cloudfunctions.net/manageModulePermissions";
+const PROJECTION_CONTEXT_ENDPOINT = "https://us-central1-cyjsituation-analysis.cloudfunctions.net/manageProjectionContext";
 
 
 const isNewerVersion = (local, remote) => {
@@ -119,6 +120,7 @@ const TherapistTargetView = lazyWithRetry(() => import("./components/TherapistTa
 const TherapistScheduleView = lazyWithRetry(() => import("./components/TherapistScheduleView"));
 const StoreScheduleView = lazyWithRetry(() => import("./components/StoreScheduleView"));
 const NotificationManager = lazyWithRetry(() => import("./components/NotificationManager"));
+const SmartForecastView = lazyWithRetry(() => import("./components/SmartForecastView"));
 
 
 const removeUndefinedDeep = (value) => {
@@ -536,11 +538,11 @@ const sanitizeSecurityKey = (value = "") => {
 const DIRECTOR_VIEW_PERMISSIONS = {
   super_admin: { allowedViews: null, label: "最高管理者" },
   operation_admin: {
-    allowedViews: new Set(["dashboard", "daily", "regional", "ranking", "store-analysis", "audit", "annual", "logs", "notification"]),
+    allowedViews: new Set(["dashboard", "daily", "regional", "ranking", "store-analysis", "audit", "annual", "smart-forecast", "logs", "notification"]),
     label: "營運主管",
   },
   finance_admin: {
-    allowedViews: new Set(["dashboard", "daily", "regional", "ranking", "store-analysis", "annual"]),
+    allowedViews: new Set(["dashboard", "daily", "regional", "ranking", "store-analysis", "annual", "smart-forecast"]),
     label: "財務主管",
   },
   viewer: {
@@ -1511,6 +1513,18 @@ export default function App() {
     setActiveView("dashboard");
   }, [activeView, canAccessStoreScheduleView]);
 
+  const canAccessSmartForecastView = useMemo(() => {
+    if (!userRole) return false;
+    if (userRole === "director") return canDirectorAccessView("smart-forecast");
+    return Array.isArray(permissions?.[userRole]) && permissions[userRole].includes("smart-forecast");
+  }, [userRole, permissions, canDirectorAccessView]);
+
+  useEffect(() => {
+    if (activeView !== "smart-forecast" || canAccessSmartForecastView) return;
+    setToast({ message: "目前角色尚未開放「智慧推估」權限", type: "error" });
+    setActiveView("dashboard");
+  }, [activeView, canAccessSmartForecastView]);
+
   const selectedYearMonth = useMemo(() => {
     const y = String(selectedYear || "");
     const m = String(selectedMonth || "").padStart(2, "0");
@@ -1742,6 +1756,8 @@ export default function App() {
       const error = new Error(result?.message || `HTTP ${response.status}`);
       error.result = result;
       error.status = response.status;
+      error.code = String(result?.code || "");
+      error.currentContext = result?.currentContext || null;
       throw error;
     }
     return result;
@@ -3773,6 +3789,34 @@ export default function App() {
     buildDeviceSecurityActor,
   ]);
 
+
+  const updateProjectionContext = useCallback(async ({
+    yearMonth = "",
+    events = [],
+    expectedRevision = 0,
+  } = {}) => {
+    if (!isDeviceSecuritySuperAdmin) {
+      throw new Error("只有最高管理者可以修改本月活動資訊");
+    }
+    if (currentDeviceTrust?.status !== "trusted") {
+      throw new Error("目前裝置尚未完成信任確認，無法修改本月活動資訊");
+    }
+
+    return callDeviceSecurityEndpoint(PROJECTION_CONTEXT_ENDPOINT, {
+      brandId: currentBrandId,
+      yearMonth,
+      events,
+      expectedRevision: Math.max(0, Number(expectedRevision || 0)),
+      actor: { ...buildDeviceSecurityActor(), roleId: "director" },
+    });
+  }, [
+    isDeviceSecuritySuperAdmin,
+    currentDeviceTrust?.status,
+    callDeviceSecurityEndpoint,
+    currentBrandId,
+    buildDeviceSecurityActor,
+  ]);
+
   const updateStoreSchedule = useCallback(async ({
     storeKey = "",
     yearMonth = "",
@@ -4255,7 +4299,7 @@ export default function App() {
     annualAggregatedData, annualDashboardSummaries, annualSummaryStatusMap, annualSummaryLoadState, therapistAnnualAggregatedData, // ★ 把年度 Summary 與管理師資料交出去
     showToast, openConfirm, fmtMoney, fmtNum, inputDate, setInputDate, setTargets, selectedYear, selectedMonth, setSelectedYear, setSelectedMonth, permissions, storeAccounts, managerAuth, currentUser, userRole, logActivity, handleUpdateStorePassword, handleUpdateManagerPassword, handleUpdateTherapistPassword, navigateToStore, activeView, appId,
     therapists: visibleTherapists, therapistReports: visibleTherapistReports, therapistSchedules, therapistTargets, trainerAuth, handleUpdateTrainerAuth, systemExclusionState, auditExclusions, handleUpdateAuditExclusions, currentBrand, setCurrentBrandId, getCollectionPath, getDocPath, dailyLoginCount, yesterdayLoginCount, securityConfig, featureFlags, therapistModuleEnabled, isOnline, isLowPowerMode,
-    currentDeviceTrust, currentSecurityAccountKey, manageDeviceSecurityAction, reviewDeviceApprovalAction, updateTelegramSecurityAlertConfig, updateModulePermissions, updateStoreSchedule, canManageDeviceSecurity: isDeviceSecuritySuperAdmin, openDeviceApprovalPanel,
+    currentDeviceTrust, currentSecurityAccountKey, manageDeviceSecurityAction, reviewDeviceApprovalAction, updateTelegramSecurityAlertConfig, updateModulePermissions, updateProjectionContext, updateStoreSchedule, canManageDeviceSecurity: isDeviceSecuritySuperAdmin, openDeviceApprovalPanel,
     fetchGlobalData,
     officialManagers: managers,
     delegations, activeDelegations, delegationAccess, accessibleStores, officialStores, delegatedStores,
@@ -4264,7 +4308,7 @@ export default function App() {
     directorPermissionProfile,
     canDirectorAccessView,
     isReadOnlyDirector: userRole === "director" && !canDirectorAccessView("history")
-  }), [user, loading, visibleManagers, visibleManagerOrder, budgets, monthlyTargetSummary, currentLifecycleMasterState, currentDashboardSummary, currentRankingsSummary, currentReportSummaryReady, currentReportSummaryReadyYearMonth, currentReportSummaryReadyBrandId, currentSummaryRecalcFlagState, historicalDetailRefreshState, targets, visibleRawData, rawData, annualAggregatedData, annualDashboardSummaries, annualSummaryStatusMap, annualSummaryLoadState, therapistAnnualAggregatedData, inputDate, selectedYear, selectedMonth, permissions, storeAccounts, managerAuth, currentUser, userRole, logActivity, handleUpdateStorePassword, handleUpdateManagerPassword, handleUpdateTherapistPassword, navigateToStore, activeView, appId, visibleTherapists, visibleTherapistReports, therapistSchedules, therapistTargets, trainerAuth, handleUpdateTrainerAuth, systemExclusionState, auditExclusions, handleUpdateAuditExclusions, currentBrand, setCurrentBrandId, getCollectionPath, getDocPath, dailyLoginCount, yesterdayLoginCount, securityConfig, featureFlags, therapistModuleEnabled, isOnline, isLowPowerMode, currentDeviceTrust, currentSecurityAccountKey, manageDeviceSecurityAction, reviewDeviceApprovalAction, updateTelegramSecurityAlertConfig, updateModulePermissions, updateStoreSchedule, isDeviceSecuritySuperAdmin, openDeviceApprovalPanel, fetchGlobalData, managers, delegations, activeDelegations, delegationAccess, accessibleStores, officialStores, delegatedStores, refreshDelegations, canAccessStore, canEditStoreReport, getActiveDelegationForStore, directorLevel, directorPermissionProfile, canDirectorAccessView]); // ★ 依賴陣列也要加
+  }), [user, loading, visibleManagers, visibleManagerOrder, budgets, monthlyTargetSummary, currentLifecycleMasterState, currentDashboardSummary, currentRankingsSummary, currentReportSummaryReady, currentReportSummaryReadyYearMonth, currentReportSummaryReadyBrandId, currentSummaryRecalcFlagState, historicalDetailRefreshState, targets, visibleRawData, rawData, annualAggregatedData, annualDashboardSummaries, annualSummaryStatusMap, annualSummaryLoadState, therapistAnnualAggregatedData, inputDate, selectedYear, selectedMonth, permissions, storeAccounts, managerAuth, currentUser, userRole, logActivity, handleUpdateStorePassword, handleUpdateManagerPassword, handleUpdateTherapistPassword, navigateToStore, activeView, appId, visibleTherapists, visibleTherapistReports, therapistSchedules, therapistTargets, trainerAuth, handleUpdateTrainerAuth, systemExclusionState, auditExclusions, handleUpdateAuditExclusions, currentBrand, setCurrentBrandId, getCollectionPath, getDocPath, dailyLoginCount, yesterdayLoginCount, securityConfig, featureFlags, therapistModuleEnabled, isOnline, isLowPowerMode, currentDeviceTrust, currentSecurityAccountKey, manageDeviceSecurityAction, reviewDeviceApprovalAction, updateTelegramSecurityAlertConfig, updateModulePermissions, updateProjectionContext, updateStoreSchedule, isDeviceSecuritySuperAdmin, openDeviceApprovalPanel, fetchGlobalData, managers, delegations, activeDelegations, delegationAccess, accessibleStores, officialStores, delegatedStores, refreshDelegations, canAccessStore, canEditStoreReport, getActiveDelegationForStore, directorLevel, directorPermissionProfile, canDirectorAccessView]); // ★ 依賴陣列也要加
   
   const memoizedViews = useMemo(() => {
     return (
@@ -4290,12 +4334,13 @@ export default function App() {
           {activeView === "t-targets" && canDirectorAccessView("t-targets") && <TherapistTargetView />}
           {activeView === "t-schedule" && canDirectorAccessView("t-schedule") && <TherapistScheduleView />}
           {activeView === "store-schedule" && canAccessStoreScheduleView && <StoreScheduleView />}
+          {activeView === "smart-forecast" && canAccessSmartForecastView && <SmartForecastView />}
           {activeView === "notification" && canDirectorAccessView("notification") && <NotificationManager />}
           {activeView === "therapist-manager" && canDirectorAccessView("therapist-manager") && <TherapistManagerView />}
         </Suspense>
       </main>
     );
-  }, [activeView, auditType, canDirectorAccessView, canAccessStoreScheduleView]);
+  }, [activeView, auditType, canDirectorAccessView, canAccessStoreScheduleView, canAccessSmartForecastView]);
 
   if (loading) return <div className="min-h-screen flex flex-col items-center justify-center bg-[#F9F8F6]"><Loader2 className="w-16 h-16 animate-spin text-stone-400 mb-4" /><p className="animate-pulse text-stone-500 font-bold tracking-wider">Loading DRCYJ Cloud...</p></div>;
   

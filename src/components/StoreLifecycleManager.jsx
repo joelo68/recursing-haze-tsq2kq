@@ -16,6 +16,8 @@ import {
 import { doc, getDoc } from "firebase/firestore";
 import { auth } from "../config/firebase";
 import { Card } from "./SharedUI";
+import SmartDatePicker from "./SmartDatePicker";
+import SmartMonthPicker from "./SmartMonthPicker";
 import {
   getCanonicalLifecycleStoreName,
   getLifecycleBrandMeta,
@@ -844,23 +846,26 @@ const StoreLifecycleManager = ({
 
                 <label className="block">
                   <span className="mb-1.5 block text-xs font-black text-[#7C7063]">共用首次正式納管月份</span>
-                  <input
-                    type="month"
+                  <SmartMonthPicker
                     value={batchCommonFirstMonth}
-                    onChange={(event) => setBatchCommonFirstMonth(event.target.value)}
+                    onChange={setBatchCommonFirstMonth}
                     disabled={batchSaving}
-                    className="w-full rounded-xl border border-[#E8DDD0] bg-white px-3 py-2.5 text-sm font-bold outline-none focus:border-amber-300 disabled:opacity-50"
+                    allowClear
+                    align="left"
+                    className="w-full md:w-full"
+                    buttonClassName="!w-full md:!w-full"
                   />
                 </label>
 
                 <label className="block">
                   <span className="mb-1.5 block text-xs font-black text-[#7C7063]">共用實際開始營運日期（選填）</span>
-                  <input
-                    type="date"
-                    value={batchCommonOpenDate}
-                    onChange={(event) => setBatchCommonOpenDate(event.target.value)}
+                  <SmartDatePicker
+                    selectedDate={batchCommonOpenDate}
+                    onDateSelect={setBatchCommonOpenDate}
+                    stores={[]}
+                    salesData={[]}
                     disabled={batchSaving}
-                    className="w-full rounded-xl border border-[#E8DDD0] bg-white px-3 py-2.5 text-sm font-bold outline-none focus:border-amber-300 disabled:opacity-50"
+                    allowClear
                   />
                   <span className="mt-1.5 block text-[10px] font-bold leading-5 text-[#A69C91]">
                     這裡填門市真正開始營運的日期，可以早於首次正式納管月份；不可晚於納管月份。不確定時請留空，不要為了完成批次而猜日期。
@@ -948,22 +953,25 @@ const StoreLifecycleManager = ({
                               <div className="mt-2 grid grid-cols-1 gap-2 sm:grid-cols-2">
                                 <label>
                                   <span className="mb-1 block text-[9px] font-black text-[#9A8E82]">納管月份</span>
-                                  <input
-                                    type="month"
+                                  <SmartMonthPicker
                                     value={rowDraft.firstEligibleMonth || ""}
+                                    onChange={(month) => updateBatchDraft(row.key, { firstEligibleMonth: month })}
                                     disabled={!checked || isComplete || batchSaving}
-                                    onChange={(event) => updateBatchDraft(row.key, { firstEligibleMonth: event.target.value })}
-                                    className="w-full rounded-lg border border-[#E8DDD0] bg-white px-2 py-2 text-xs font-bold outline-none focus:border-amber-300 disabled:bg-stone-50 disabled:text-stone-400"
+                                    allowClear
+                                    align="left"
+                                    className="w-full md:w-full"
+                                    buttonClassName="!w-full !min-w-0 !px-2 !py-2 !text-xs md:!w-full"
                                   />
                                 </label>
                                 <label>
                                   <span className="mb-1 block text-[9px] font-black text-[#9A8E82]">開始日期</span>
-                                  <input
-                                    type="date"
-                                    value={rowDraft.openDate || ""}
+                                  <SmartDatePicker
+                                    selectedDate={rowDraft.openDate || ""}
+                                    onDateSelect={(date) => updateBatchDraft(row.key, { openDate: date })}
+                                    stores={[]}
+                                    salesData={[]}
                                     disabled={!checked || isComplete || batchSaving}
-                                    onChange={(event) => updateBatchDraft(row.key, { openDate: event.target.value })}
-                                    className="w-full rounded-lg border border-[#E8DDD0] bg-white px-2 py-2 text-xs font-bold outline-none focus:border-amber-300 disabled:bg-stone-50 disabled:text-stone-400"
+                                    allowClear
                                   />
                                 </label>
                               </div>
@@ -1154,22 +1162,48 @@ const StoreLifecycleManager = ({
               <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
                 <label className="space-y-1.5">
                   <span className="flex items-center gap-1 text-xs font-black text-[#7C7063]"><CalendarDays size={14} /> 首次正式納管月份</span>
-                  <input type="month" value={draft.firstEligibleMonth || ""} onChange={(event) => setDraft((prev) => ({ ...prev, firstEligibleMonth: event.target.value }))} className="w-full rounded-xl border border-[#E8DDD0] bg-white px-3 py-2.5 text-sm font-bold outline-none focus:border-amber-300" />
+                  <SmartMonthPicker
+                    value={draft.firstEligibleMonth || ""}
+                    onChange={(month) => setDraft((prev) => ({ ...prev, firstEligibleMonth: month }))}
+                    allowClear
+                    align="left"
+                    className="w-full md:w-full"
+                    buttonClassName="!w-full md:!w-full"
+                  />
                   <span className="text-[10px] font-bold text-[#A69C91]">這是本 SaaS KPI 正式開始納管該店的月份；可晚於門市真正開始營運的日期，且不自動按日數折算目標。</span>
                 </label>
                 <label className="space-y-1.5">
                   <span className="flex items-center gap-1 text-xs font-black text-[#7C7063]"><CalendarDays size={14} /> 實際開始營運日期</span>
-                  <input type="date" value={draft.openDate || ""} onChange={(event) => setDraft((prev) => ({ ...prev, openDate: event.target.value }))} className="w-full rounded-xl border border-[#E8DDD0] bg-white px-3 py-2.5 text-sm font-bold outline-none focus:border-amber-300" />
+                  <SmartDatePicker
+                    selectedDate={draft.openDate || ""}
+                    onDateSelect={(date) => setDraft((prev) => ({ ...prev, openDate: date }))}
+                    stores={[]}
+                    salesData={[]}
+                    allowClear
+                  />
                   <span className="text-[10px] font-bold text-[#A69C91]">填門市真正開始營運日期，可早於首次正式納管月份；未來用於 Daily expected-report boundary，目前 Batch 1 尚未接入日報檢核。</span>
                 </label>
                 <label className="space-y-1.5">
                   <span className="text-xs font-black text-[#7C7063]">永久結束月份（仍納管）</span>
-                  <input type="month" value={draft.lastEligibleMonth || ""} onChange={(event) => setDraft((prev) => ({ ...prev, lastEligibleMonth: event.target.value }))} className="w-full rounded-xl border border-[#E8DDD0] bg-white px-3 py-2.5 text-sm font-bold outline-none focus:border-amber-300" />
+                  <SmartMonthPicker
+                    value={draft.lastEligibleMonth || ""}
+                    onChange={(month) => setDraft((prev) => ({ ...prev, lastEligibleMonth: month }))}
+                    allowClear
+                    align="left"
+                    className="w-full md:w-full"
+                    buttonClassName="!w-full md:!w-full"
+                  />
                   <span className="text-[10px] font-bold text-[#A69C91]">只有永久結束營業才填；暫時停業請使用下方整月暫停。</span>
                 </label>
                 <label className="space-y-1.5">
                   <span className="text-xs font-black text-[#7C7063]">實際永久結束日期</span>
-                  <input type="date" value={draft.closeDate || ""} onChange={(event) => setDraft((prev) => ({ ...prev, closeDate: event.target.value }))} className="w-full rounded-xl border border-[#E8DDD0] bg-white px-3 py-2.5 text-sm font-bold outline-none focus:border-amber-300" />
+                  <SmartDatePicker
+                    selectedDate={draft.closeDate || ""}
+                    onDateSelect={(date) => setDraft((prev) => ({ ...prev, closeDate: date }))}
+                    stores={[]}
+                    salesData={[]}
+                    allowClear
+                  />
                   <span className="text-[10px] font-bold text-[#A69C91]">永久結束月份最後仍是 eligible month；不刪除 Store Identity。</span>
                 </label>
               </div>
@@ -1178,7 +1212,16 @@ const StoreLifecycleManager = ({
                 <div className="text-xs font-black text-[#6E6257]">整月暫停營運 Exempt Months</div>
                 <p className="mt-1 text-[10px] font-bold leading-5 text-[#A69C91]">只用於已核准的「整個月份不營運」。一般休店日、0 業績或沒日報都不能自動視為 exempt。</p>
                 <div className="mt-3 flex flex-col gap-2 sm:flex-row">
-                  <input type="month" value={exemptMonthInput} onChange={(event) => setExemptMonthInput(event.target.value)} className="min-w-0 flex-1 rounded-xl border border-[#E8DDD0] bg-white px-3 py-2.5 text-sm font-bold outline-none focus:border-amber-300" />
+                  <div className="min-w-0 flex-1">
+                    <SmartMonthPicker
+                      value={exemptMonthInput}
+                      onChange={setExemptMonthInput}
+                      allowClear
+                      align="left"
+                      className="w-full md:w-full"
+                      buttonClassName="!w-full md:!w-full"
+                    />
+                  </div>
                   <button type="button" onClick={addExemptMonth} className="rounded-xl border border-[#E8C77A] bg-[#FFF7DF] px-4 py-2.5 text-xs font-black text-[#6A4D26]">加入暫停月份</button>
                 </div>
                 <div className="mt-3 flex flex-wrap gap-2">

@@ -14,7 +14,8 @@ import {
   UserCog, 
   CalendarOff,
   Bell,
-  Users // ★ 1. 補上這行，引入人員圖示
+  Users, // ★ 1. 補上這行，引入人員圖示
+  Sparkles
 } from "lucide-react";
 
 // pathType: 'legacy' 代表舊路徑(CYJ), 'standard' 代表新架構(新品牌)
@@ -51,6 +52,7 @@ export const ALL_MENU_ITEMS = [
   { id: "t-schedule", label: "管師排休", icon: CalendarOff, requiresTherapistModule: true },
   { id: "store-schedule", label: "店家排休", icon: Store },
   { id: "therapist-manager", label: "管師帳號", icon: Users, roles: ["director", "manager"], requiresTherapistModule: true },
+  { id: "smart-forecast", label: "智慧推估", icon: Sparkles },
   { id: "settings", label: "系統設定", icon: Settings },
 ];
 

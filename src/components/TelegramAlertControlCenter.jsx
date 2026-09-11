@@ -42,6 +42,7 @@ import {
 } from "firebase/firestore";
 import { db } from "../config/firebase";
 import { AppContext } from "../AppContext";
+import SmartDatePicker from "./SmartDatePicker";
 
 // Telegram 主動預警沿用 CYJ legacy data root。
 // Functions 端必須使用完全相同的 app id 與路徑，避免前端儲存後排程仍讀到 brands/cyj 的舊設定。
@@ -1694,7 +1695,28 @@ const TelegramAlertControlCenter = ({ view = "alerts", onNavigate }) => {
 
         <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
           <label className="rounded-2xl border border-stone-100 bg-stone-50 p-4"><span className="mb-2 block text-[10px] font-black text-stone-400">每天幾點檢查？</span><div className="flex items-center gap-2"><Clock size={15} className="text-sky-500" /><input type="time" step="300" value={form.sendTime} onChange={(event) => setForm((previous) => ({ ...previous, sendTime: event.target.value }))} className="w-full bg-transparent text-sm font-black text-stone-700 outline-none" /></div></label>
-          <label className="block rounded-2xl border border-stone-100 bg-stone-50 p-4"><span className="mb-2 block text-[10px] font-black text-stone-400">暫停到哪一天？</span><div className="flex min-h-12 min-w-0 items-center gap-2 rounded-xl border border-stone-200 bg-white px-3"><Calendar size={15} className="shrink-0 text-sky-500" /><input type="date" value={form.pausedUntil || ""} onChange={(event) => setForm((previous) => ({ ...previous, pausedUntil: event.target.value }))} className="block h-11 min-w-0 flex-1 bg-transparent px-1 text-sm font-black leading-none text-stone-700 outline-none" style={{ colorScheme: "light" }} /></div></label>
+          <div className="rounded-2xl border border-stone-100 bg-stone-50 p-4">
+            <span className="mb-2 block text-[10px] font-black text-stone-400">暫停到哪一天？</span>
+            <div className="flex items-center gap-2">
+              <div className="min-w-0 flex-1">
+                <SmartDatePicker
+                  selectedDate={form.pausedUntil || ""}
+                  onDateSelect={(date) => setForm((previous) => ({ ...previous, pausedUntil: date || "" }))}
+                  stores={[]}
+                  salesData={[]}
+                />
+              </div>
+              {form.pausedUntil && (
+                <button
+                  type="button"
+                  onClick={() => setForm((previous) => ({ ...previous, pausedUntil: "" }))}
+                  className="shrink-0 rounded-xl border border-stone-200 bg-white px-3 py-2 text-[10px] font-black text-stone-500 hover:bg-stone-50"
+                >
+                  清除
+                </button>
+              )}
+            </div>
+          </div>
         </div>
 
         <div className="grid grid-cols-1 gap-4 lg:grid-cols-3">
@@ -1803,7 +1825,29 @@ const TelegramAlertControlCenter = ({ view = "alerts", onNavigate }) => {
         {policyEditor.type === "exclude_store" && <div className="space-y-3"><label className="block rounded-xl border border-stone-100 bg-white p-3"><span className="mb-1 block text-[10px] font-black text-stone-400">店家名稱</span><input value={policyEditor.storeName} onChange={(event) => setPolicyEditor((previous) => ({ ...previous, storeName: event.target.value }))} placeholder="例如：中美店" className="w-full bg-transparent text-xs font-black text-stone-700 outline-none" /></label><div className="rounded-xl border border-stone-100 bg-white p-3"><p className="mb-2 text-[10px] font-black text-stone-400">不納入哪些地方？</p><div className="grid grid-cols-1 gap-2 sm:grid-cols-2">{TELEGRAM_POLICY_SCOPES.map((scope) => { const active = policyEditor.scopes.includes(scope.id); return <button key={scope.id} type="button" onClick={() => setPolicyEditor((previous) => ({ ...previous, scopes: active ? previous.scopes.filter((item) => item !== scope.id) : [...previous.scopes, scope.id] }))} className={`rounded-xl border px-3 py-2 text-left text-[10px] font-black ${active ? "border-violet-200 bg-violet-50 text-violet-700" : "border-stone-100 bg-stone-50 text-stone-400"}`}>{scope.label}</button>; })}</div></div></div>}
         {policyEditor.type === "alert_rule" && <div className="space-y-3"><label className="block rounded-xl border border-stone-100 bg-white p-3"><span className="mb-1 block text-[10px] font-black text-stone-400">要調整的提醒</span><select value={policyEditor.ruleId} onChange={(event) => setPolicyEditor((previous) => ({ ...previous, ruleId: event.target.value }))} className="w-full bg-transparent text-xs font-black text-stone-700 outline-none">{TELEGRAM_POLICY_RULES.map((rule) => <option key={rule.id} value={rule.id}>{rule.label}</option>)}</select></label>{policyEditor.ruleId === "progressGap" ? <div className="grid grid-cols-2 gap-2"><TelegramRuleNumberField label="黃燈落後" value={policyEditor.watchThreshold} onChange={(value) => setPolicyEditor((previous) => ({ ...previous, watchThreshold: value }))} unit="百分點" /><TelegramRuleNumberField label="紅燈落後" value={policyEditor.criticalThreshold} onChange={(value) => setPolicyEditor((previous) => ({ ...previous, criticalThreshold: value }))} unit="百分點" /></div> : policyEditor.ruleId === "limit" ? <TelegramRuleNumberField label="最多顯示" value={policyEditor.limit} onChange={(value) => setPolicyEditor((previous) => ({ ...previous, limit: value }))} unit="家" max={20} /> : !["missingReport", "missingTarget"].includes(policyEditor.ruleId) ? <div className="grid grid-cols-1 gap-2 sm:grid-cols-2"><TelegramRuleNumberField label="提醒門檻" value={policyEditor.threshold} onChange={(value) => setPolicyEditor((previous) => ({ ...previous, threshold: value }))} unit={["cashAchievementRate", "closingRate", "skincareRatio"].includes(policyEditor.ruleId) ? "%" : policyEditor.ruleId === "traffic" ? "人次" : "人"} max={["newCustomers", "traffic"].includes(policyEditor.ruleId) ? 999999 : 100} /><TelegramRuleSeverityField value={policyEditor.severity} onChange={(value) => setPolicyEditor((previous) => ({ ...previous, severity: value }))} />{policyEditor.ruleId === "closingRate" && <TelegramRuleNumberField label="至少多少位新客才判斷" value={policyEditor.minSample} onChange={(value) => setPolicyEditor((previous) => ({ ...previous, minSample: value }))} unit="人" max={999} />}</div> : <label className="flex items-center justify-between rounded-xl border border-stone-100 bg-white p-3 text-xs font-black text-stone-700">要啟用這項提醒<input type="checkbox" checked={policyEditor.enabledValue !== false} onChange={(event) => setPolicyEditor((previous) => ({ ...previous, enabledValue: event.target.checked }))} className="h-4 w-4" /></label>}</div>}
         {policyEditor.type === "response_preference" && <div className="space-y-3"><div className="grid grid-cols-1 gap-3 sm:grid-cols-2"><label className="rounded-xl border border-stone-100 bg-white p-3"><span className="mb-1 block text-[10px] font-black text-stone-400">套用對象</span><select value={policyEditor.ownerScope} onChange={(event) => setPolicyEditor((previous) => ({ ...previous, ownerScope: event.target.value }))} className="w-full bg-transparent text-xs font-black text-stone-700 outline-none"><option value="global">所有使用者</option><option value="user">指定使用者</option></select></label>{policyEditor.ownerScope === "user" && <label className="rounded-xl border border-stone-100 bg-white p-3"><span className="mb-1 block text-[10px] font-black text-stone-400">Telegram 使用者 ID</span><input value={policyEditor.userId} onChange={(event) => setPolicyEditor((previous) => ({ ...previous, userId: event.target.value }))} className="w-full bg-transparent text-xs font-black text-stone-700 outline-none" /></label>}</div><label className="block rounded-xl border border-stone-100 bg-white p-3"><span className="mb-1 block text-[10px] font-black text-stone-400">希望機器人怎麼回答？</span><textarea value={policyEditor.instruction} onChange={(event) => setPolicyEditor((previous) => ({ ...previous, instruction: event.target.value }))} placeholder="例如：回答時先給結論，再列出最多三項優先行動。" rows={4} className="w-full resize-none bg-transparent text-xs font-bold leading-5 text-stone-700 outline-none" /></label></div>}
-        <label className="block rounded-xl border border-stone-100 bg-white p-3"><span className="block text-[10px] font-black text-stone-400">有效到哪一天？</span><div className="mt-2 flex min-h-12 min-w-0 items-center rounded-xl border border-stone-200 bg-stone-50 px-3"><input type="date" value={policyEditor.effectiveUntil} onChange={(event) => setPolicyEditor((previous) => ({ ...previous, effectiveUntil: event.target.value }))} className="block h-11 min-w-0 flex-1 bg-transparent px-1 text-sm font-black leading-none text-stone-700 outline-none" style={{ colorScheme: "light" }} /></div><span className="mt-2 block text-[9px] font-bold leading-4 text-stone-300">留空代表持續有效，直到人工停用。</span></label>
+        <div className="rounded-xl border border-stone-100 bg-white p-3">
+          <span className="block text-[10px] font-black text-stone-400">有效到哪一天？</span>
+          <div className="mt-2 flex items-center gap-2">
+            <div className="min-w-0 flex-1">
+              <SmartDatePicker
+                selectedDate={policyEditor.effectiveUntil || ""}
+                onDateSelect={(date) => setPolicyEditor((previous) => ({ ...previous, effectiveUntil: date || "" }))}
+                stores={[]}
+                salesData={[]}
+              />
+            </div>
+            {policyEditor.effectiveUntil && (
+              <button
+                type="button"
+                onClick={() => setPolicyEditor((previous) => ({ ...previous, effectiveUntil: "" }))}
+                className="shrink-0 rounded-xl border border-stone-200 bg-stone-50 px-3 py-2 text-[10px] font-black text-stone-500 hover:bg-white"
+              >
+                清除
+              </button>
+            )}
+          </div>
+          <span className="mt-2 block text-[9px] font-bold leading-4 text-stone-300">留空代表持續有效，直到人工停用。</span>
+        </div>
         <ActionButton onClick={savePolicy} disabled={isBusy || !canManagePolicyCenter} className="w-full">{loadingAction === "savePolicy" ? <Loader2 size={14} className="animate-spin" /> : <Save size={14} />}建立長期規則</ActionButton>
       </section>
 

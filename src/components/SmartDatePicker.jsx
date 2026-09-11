@@ -5,7 +5,7 @@ import { Calendar as CalendarIcon, X } from "lucide-react";
 import SmartCalendar from "./SmartCalendar";
 
 // ★ 新增 minDate 參數
-const SmartDatePicker = ({ selectedDate, onDateSelect, stores, salesData, maxDate, minDate, align = "left", statusHiddenDates = [] }) => {
+const SmartDatePicker = ({ selectedDate, onDateSelect, stores, salesData, maxDate, minDate, align = "left", statusHiddenDates = [], disabled = false, allowClear = false, placeholder = "選擇日期" }) => {
   const [isOpen, setIsOpen] = useState(false);
   const containerRef = useRef(null);
   const calendarRef = useRef(null);
@@ -24,6 +24,7 @@ const SmartDatePicker = ({ selectedDate, onDateSelect, stores, salesData, maxDat
   const toggleCalendar = (e) => {
     e.preventDefault();
     e.stopPropagation();
+    if (disabled) return;
     if (!isOpen) measureCoords();
     setIsOpen(!isOpen);
   };
@@ -43,6 +44,10 @@ const SmartDatePicker = ({ selectedDate, onDateSelect, stores, salesData, maxDat
       setCoords({ top: rect.bottom + window.scrollY + 2, left: leftPos });
     }
   }, [isOpen, selectedDate]); 
+
+  useEffect(() => {
+    if (disabled && isOpen) setIsOpen(false);
+  }, [disabled, isOpen]);
 
   useEffect(() => {
     const handleClickOutside = (event) => {
@@ -86,10 +91,34 @@ const SmartDatePicker = ({ selectedDate, onDateSelect, stores, salesData, maxDat
 
   return (
     <div className="relative w-full" ref={containerRef}>
-      <button type="button" onClick={toggleCalendar} className="w-full flex items-center justify-between gap-3 bg-white border border-stone-200 px-3 py-2 rounded-lg text-stone-700 font-bold hover:bg-stone-50 transition-colors shadow-sm">
-        <span className="text-sm">{selectedDate}</span>
-        <CalendarIcon size={14} className="text-stone-400 ml-auto shrink-0" />
-      </button>
+      <div className="flex items-center gap-2">
+        <button
+          type="button"
+          onClick={toggleCalendar}
+          disabled={disabled}
+          className="flex min-w-0 flex-1 items-center justify-between gap-3 rounded-lg border border-stone-200 bg-white px-3 py-2 text-stone-700 font-bold shadow-sm transition-colors hover:bg-stone-50 disabled:cursor-not-allowed disabled:bg-stone-50 disabled:text-stone-300 disabled:shadow-none"
+        >
+          <span className={`truncate text-sm ${selectedDate ? "" : "text-stone-400"}`}>{selectedDate || placeholder}</span>
+          <CalendarIcon size={14} className="ml-auto shrink-0 text-stone-400" />
+        </button>
+        {allowClear && selectedDate && (
+          <button
+            type="button"
+            disabled={disabled}
+            onClick={(event) => {
+              event.preventDefault();
+              event.stopPropagation();
+              onDateSelect("");
+              setIsOpen(false);
+            }}
+            className="shrink-0 rounded-lg border border-stone-200 bg-white p-2 text-stone-400 transition-colors hover:bg-stone-50 hover:text-stone-600 disabled:cursor-not-allowed disabled:opacity-40"
+            title="清除日期"
+            aria-label="清除日期"
+          >
+            <X size={14} />
+          </button>
+        )}
+      </div>
       {isOpen && ReactDOM.createPortal(window.innerWidth < 768 ? MobileCalendar : DesktopCalendar, document.body)}
     </div>
   );

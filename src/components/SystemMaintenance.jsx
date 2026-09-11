@@ -48,6 +48,7 @@ import {
 } from "lucide-react";
 import { ViewWrapper } from "./SharedUI";
 import SmartCalendar from "./SmartCalendar";
+import SmartMonthPicker from "./SmartMonthPicker";
 import {
   getReadTrackerMode,
   setReadTrackerMode,
@@ -2005,7 +2006,7 @@ export default function SystemMaintenance() {
                 <button type="button" onClick={() => shiftMonth(-1)} className="h-9 px-3 rounded-xl bg-[#F7F0E7] text-[#8B7056] text-xs font-black hover:bg-[#EFE3D5]">上一月</button>
                 <label className="flex items-center gap-2 px-2 text-xs font-black text-[#7D6753]">
                   <Calendar size={14} className="text-[#B7863D]" />
-                  <input type="month" value={calMonth} onChange={(e) => handleMonthChange(e.target.value)} className="bg-transparent outline-none w-[116px] text-center text-[#4F3F33]" />
+                  <SmartMonthPicker value={calMonth} onChange={handleMonthChange} align="right" buttonClassName="!h-9 !min-w-[150px] !border-0 !bg-transparent !px-0 !py-0 !text-xs !shadow-none hover:!bg-transparent" />
                 </label>
                 <button type="button" onClick={() => shiftMonth(1)} className="h-9 px-3 rounded-xl bg-[#F7F0E7] text-[#8B7056] text-xs font-black hover:bg-[#EFE3D5]">下一月</button>
               </div>
@@ -5514,16 +5515,15 @@ export default function SystemMaintenance() {
             >
               <div className="flex items-center gap-2 rounded-2xl border border-stone-100 bg-white/80 px-3 h-11">
                 <Calendar size={14} className="text-stone-400" />
-                <input
-                  type="month"
-                  max={getTaipeiProjectionYearMonth()}
+                <SmartMonthPicker
                   value={projectionAccuracyMonth}
-                  onChange={(e) => {
+                  maxMonth={getTaipeiProjectionYearMonth()}
+                  onChange={(month) => {
                     projectionAccuracyRequestSeq.current += 1;
                     setLoadingAction((current) => (
                       current === "projectionAccuracyObservability" ? null : current
                     ));
-                    setProjectionAccuracyMonth(e.target.value);
+                    setProjectionAccuracyMonth(month);
                     setProjectionAccuracyState({
                       brandId: "",
                       yearMonth: "",
@@ -5533,7 +5533,8 @@ export default function SystemMaintenance() {
                       loadedAtText: "",
                     });
                   }}
-                  className="bg-transparent text-xs font-black text-stone-700 outline-none w-[118px]"
+                  align="right"
+                  buttonClassName="!h-9 !min-w-[150px] !border-0 !bg-transparent !px-0 !py-0 !text-xs !shadow-none hover:!bg-transparent"
                 />
               </div>
               <BeautyButton
@@ -5857,28 +5858,32 @@ export default function SystemMaintenance() {
                         <>
                           <label className="min-w-[150px]">
                             <span className="block mb-1 text-[10px] font-black text-stone-400">開始月份</span>
-                            <input
-                              type="month"
-                              max={getTaipeiProjectionYearMonth()}
+                            <SmartMonthPicker
                               value={projectionHistoryStartMonth}
-                              onChange={(e) => {
-                                setProjectionHistoryStartMonth(e.target.value);
+                              maxMonth={getTaipeiProjectionYearMonth()}
+                              onChange={(month) => {
+                                setProjectionHistoryStartMonth(month);
                                 setProjectionHistoryDetailsOpen(false);
                               }}
-                              className="w-full h-10 rounded-xl border border-stone-200 bg-white px-3 text-xs font-black text-stone-700 outline-none"
+                              allowClear
+                              align="left"
+                              className="w-full md:w-full"
+                              buttonClassName="!h-10 !w-full !min-w-[150px] !text-xs md:!w-full"
                             />
                           </label>
                           <label className="min-w-[150px]">
                             <span className="block mb-1 text-[10px] font-black text-stone-400">結束月份</span>
-                            <input
-                              type="month"
-                              max={getTaipeiProjectionYearMonth()}
+                            <SmartMonthPicker
                               value={projectionHistoryEndMonth}
-                              onChange={(e) => {
-                                setProjectionHistoryEndMonth(e.target.value);
+                              maxMonth={getTaipeiProjectionYearMonth()}
+                              onChange={(month) => {
+                                setProjectionHistoryEndMonth(month);
                                 setProjectionHistoryDetailsOpen(false);
                               }}
-                              className="w-full h-10 rounded-xl border border-stone-200 bg-white px-3 text-xs font-black text-stone-700 outline-none"
+                              allowClear
+                              align="right"
+                              className="w-full md:w-full"
+                              buttonClassName="!h-10 !w-full !min-w-[150px] !text-xs md:!w-full"
                             />
                           </label>
                         </>
@@ -6093,11 +6098,11 @@ export default function SystemMaintenance() {
               ) : (
                 <div className="flex items-center gap-2 rounded-2xl border border-stone-100 bg-white/70 px-3 h-11">
                   <Calendar size={14} className="text-stone-400" />
-                  <input
-                    type="month"
+                  <SmartMonthPicker
                     value={calMonth}
-                    onChange={(e) => setCalMonth(e.target.value)}
-                    className="bg-transparent text-xs font-black text-stone-700 outline-none w-28"
+                    onChange={setCalMonth}
+                    align="right"
+                    buttonClassName="!h-9 !min-w-[140px] !border-0 !bg-transparent !px-0 !py-0 !text-xs !shadow-none hover:!bg-transparent"
                   />
                 </div>
               )}
@@ -6253,12 +6258,12 @@ export default function SystemMaintenance() {
               </div>
             )}
             <ToolRow icon={Calendar} title="月結前檢查" desc="檢查指定月份缺報、重複資料與目標設定。只讀取、不修改資料。" badge="月結流程">
-              <div className="flex items-center gap-2 rounded-2xl border border-stone-100 bg-white/70 px-3 h-11"><Calendar size={14} className="text-stone-400" /><input type="month" value={calMonth} onChange={(e)=>setCalMonth(e.target.value)} className="bg-transparent text-xs font-black text-stone-700 outline-none w-28" /></div>
+              <div className="flex items-center gap-2 rounded-2xl border border-stone-100 bg-white/70 px-3 h-11"><Calendar size={14} className="text-stone-400" /><SmartMonthPicker value={calMonth} onChange={setCalMonth} align="right" buttonClassName="!h-9 !min-w-[140px] !border-0 !bg-transparent !px-0 !py-0 !text-xs !shadow-none hover:!bg-transparent" /></div>
               <BeautyButton onClick={handleRunClosingCheck} disabled={loadingAction !== null} variant="primary">{loadingAction === "closingCheck" ? <Loader2 size={14} className="animate-spin" /> : <Eye size={14} />}檢查月結</BeautyButton>
             </ToolRow>
             {closingReport && <div className="rounded-[1.5rem] border border-amber-100 bg-amber-50/30 p-4 space-y-3"><div className="flex flex-col md:flex-row md:items-center md:justify-between gap-2"><p className="text-sm font-black text-stone-800">{closingReport.month} 月結前檢查｜{closingReport.readiness || "檢查完成"}</p><p className="text-[11px] font-bold text-stone-400">檢查 {closingReport.checkedDays} 天｜店家 {closingReport.stores}｜排除 {closingReport.excludedStoreCount || 0}｜在職管理師 {closingReport.activeTherapists}</p></div><div className="grid grid-cols-1 md:grid-cols-5 gap-2">{closingReport.warnings.map((item)=><div key={item.label} className="bg-white/90 border border-stone-100 rounded-2xl p-3"><p className="text-[11px] font-black text-stone-400">{item.label}</p><p className={`mt-1 text-xl font-black ${item.neutral ? "text-stone-700" : item.count ? "text-[#B7863D]" : "text-emerald-600"}`}>{item.count.toLocaleString()}</p></div>)}</div></div>}
             <ToolRow icon={Play} title="月度數據重新校準" desc="重新掃描指定月份日報並修正彙整表，適合數字對帳或月結資料異常時使用。" badge="建議保留" tone="emerald">
-              <div className="flex items-center gap-2 rounded-2xl border border-stone-100 bg-white/70 px-3 h-11"><Calendar size={14} className="text-stone-400" /><input type="month" value={calMonth} onChange={(e) => setCalMonth(e.target.value)} className="bg-transparent text-xs font-black text-stone-700 outline-none w-28" /></div>
+              <div className="flex items-center gap-2 rounded-2xl border border-stone-100 bg-white/70 px-3 h-11"><Calendar size={14} className="text-stone-400" /><SmartMonthPicker value={calMonth} onChange={setCalMonth} align="right" buttonClassName="!h-9 !min-w-[140px] !border-0 !bg-transparent !px-0 !py-0 !text-xs !shadow-none hover:!bg-transparent" /></div>
               <BeautyButton onClick={handleCalibrateData} disabled={loadingAction !== null} variant="primary">{loadingAction === "calibrate" ? <Loader2 size={14} className="animate-spin" /> : <Play size={14} />}啟動校準</BeautyButton>
             </ToolRow>
             <ToolRow icon={RefreshCw} title="待重新校準月份" desc="只保留需要重建的歷史月份；本月使用即時明細，不應長期累積 pending。" badge={recalcQueueTotal ? `${recalcQueueTotal.toLocaleString()} 筆待處理` : "Summary 前置"} tone="amber">
@@ -6366,7 +6371,7 @@ export default function SystemMaintenance() {
               </div>
             )}
             <ToolRow icon={CheckCircle2} title="月份報表整理" desc="適合月底大量補報、修正後一次執行：重建本月 Summary、立即比對，並清除該月份 pending queue。" badge="營運模式" tone="emerald">
-              <div className="flex items-center gap-2 rounded-2xl border border-stone-100 bg-white/70 px-3 h-11"><Calendar size={14} className="text-stone-400" /><input type="month" value={calMonth} onChange={(e) => setCalMonth(e.target.value)} className="bg-transparent text-xs font-black text-stone-700 outline-none w-28" /></div>
+              <div className="flex items-center gap-2 rounded-2xl border border-stone-100 bg-white/70 px-3 h-11"><Calendar size={14} className="text-stone-400" /><SmartMonthPicker value={calMonth} onChange={setCalMonth} align="right" buttonClassName="!h-9 !min-w-[140px] !border-0 !bg-transparent !px-0 !py-0 !text-xs !shadow-none hover:!bg-transparent" /></div>
               <BeautyButton onClick={handleMonthEndDashboardSummaryCalibration} disabled={loadingAction !== null} variant="primary">
                 {loadingAction === "monthEndSummaryCalibration" ? <Loader2 size={14} className="animate-spin" /> : <CheckCircle2 size={14} />}
                 月結前校準
@@ -6586,7 +6591,7 @@ export default function SystemMaintenance() {
               </div>
             )}
             <ToolRow icon={Database} title="進階：重建歷史報表" desc="一般情況請使用上方月份報表整理助手；此工具保留給需要單獨重建資料的人員使用。" badge="進階工具" tone="emerald">
-              <div className="flex items-center gap-2 rounded-2xl border border-stone-100 bg-white/70 px-3 h-11"><Calendar size={14} className="text-stone-400" /><input type="month" value={calMonth} onChange={(e) => setCalMonth(e.target.value)} className="bg-transparent text-xs font-black text-stone-700 outline-none w-28" /></div>
+              <div className="flex items-center gap-2 rounded-2xl border border-stone-100 bg-white/70 px-3 h-11"><Calendar size={14} className="text-stone-400" /><SmartMonthPicker value={calMonth} onChange={setCalMonth} align="right" buttonClassName="!h-9 !min-w-[140px] !border-0 !bg-transparent !px-0 !py-0 !text-xs !shadow-none hover:!bg-transparent" /></div>
               <BeautyButton onClick={handleRebuildDashboardSummary} disabled={loadingAction !== null} variant="primary">
                 {loadingAction === "rebuildSummary" ? <Loader2 size={14} className="animate-spin" /> : <Database size={14} />}
                 重建 Summary
@@ -6621,7 +6626,7 @@ export default function SystemMaintenance() {
               </div>
             )}
             <ToolRow icon={CheckCircle2} title="進階：歷史報表比對" desc="一般情況月份報表整理會自動比對；此工具保留給需要單獨確認數字一致性的人員使用。" badge="進階工具" tone="emerald">
-              <div className="flex items-center gap-2 rounded-2xl border border-stone-100 bg-white/70 px-3 h-11"><Calendar size={14} className="text-stone-400" /><input type="month" value={calMonth} onChange={(e) => setCalMonth(e.target.value)} className="bg-transparent text-xs font-black text-stone-700 outline-none w-28" /></div>
+              <div className="flex items-center gap-2 rounded-2xl border border-stone-100 bg-white/70 px-3 h-11"><Calendar size={14} className="text-stone-400" /><SmartMonthPicker value={calMonth} onChange={setCalMonth} align="right" buttonClassName="!h-9 !min-w-[140px] !border-0 !bg-transparent !px-0 !py-0 !text-xs !shadow-none hover:!bg-transparent" /></div>
               <BeautyButton onClick={handleCompareDashboardSummary} disabled={loadingAction !== null} variant="primary">
                 {loadingAction === "compareSummary" ? <Loader2 size={14} className="animate-spin" /> : <CheckCircle2 size={14} />}
                 比對 Summary
@@ -6733,7 +6738,7 @@ export default function SystemMaintenance() {
         <section className="rounded-[2rem] border border-[#EEDFC7] bg-white/95 shadow-[0_22px_70px_rgba(120,90,40,0.05)] overflow-hidden"><button onClick={()=>setShowAdvancedTools((prev)=>!prev)} className="w-full p-6 flex flex-col md:flex-row md:items-center md:justify-between gap-3 text-left"><SectionTitle eyebrow="Protected Area" title="高風險資料處理" desc="還原、封存與批次修復都集中在這裡；沒有明確異常時不建議操作。" icon={AlertTriangle} /><div className="inline-flex items-center gap-2 text-xs font-black text-stone-500 bg-stone-50 border border-stone-200 rounded-2xl px-3 py-2 w-fit">{showAdvancedTools ? "收合工具" : "展開工具"}<ChevronDown size={14} className={`transition-transform ${showAdvancedTools ? "rotate-180" : ""}`} /></div></button>
           {showAdvancedTools && <div className="px-6 pb-6 space-y-3 animate-in fade-in slide-in-from-top-2 duration-300"><ToolRow icon={Database} title="日期格式修復" desc="先掃描日期格式異常，再確認是否批次修復為 YYYY-MM-DD。" badge={dateIssues.length ? `${dateIssues.length} 筆預覽` : "兩段式"}><BeautyButton onClick={handleScanDateFormats} disabled={loadingAction !== null} variant="secondary">{loadingAction === "scanDates" ? <Loader2 size={14} className="animate-spin" /> : <Eye size={14} />}掃描日期</BeautyButton><BeautyButton onClick={handleFixDateFormats} disabled={loadingAction !== null || dateIssues.length === 0} variant="primary">{loadingAction === "fixDates" ? <Loader2 size={14} className="animate-spin" /> : <Save size={14} />}修復日期</BeautyButton></ToolRow>{dateIssues.length > 0 && <div className="rounded-[1.5rem] border border-amber-100 bg-amber-50/40 p-4 text-xs font-bold text-amber-800 space-y-1"><p className="font-black">日期異常預覽</p>{dateIssues.slice(0,5).map((item)=><p key={`${item.colName}_${item.id}`}>{item.colName}｜{item.store}｜{item.person}｜{item.oldDate} → {item.newDate}</p>)}</div>}
           <ToolRow icon={Scissors} title="重複資料檢測與封存" desc="預設只檢測，不再一鍵刪除。確認後會將舊資料標記封存。" badge={duplicateGroups.length ? `${duplicateGroups.length} 組預覽` : "安全版"} tone="rose"><BeautyButton onClick={handleScanDuplicates} disabled={loadingAction !== null} variant="secondary">{loadingAction === "scanDups" ? <Loader2 size={14} className="animate-spin" /> : <Eye size={14} />}檢測重複</BeautyButton><BeautyButton onClick={handleArchiveDuplicates} disabled={loadingAction !== null || duplicateGroups.length === 0} variant="soft">{loadingAction === "archiveDups" ? <Loader2 size={14} className="animate-spin" /> : <Scissors size={14} />}封存舊資料</BeautyButton></ToolRow>{duplicateGroups.length > 0 && <div className="rounded-[1.5rem] border border-rose-100 bg-rose-50/30 p-4 text-xs font-bold text-rose-700 space-y-1"><p className="font-black">重複資料預覽</p>{duplicateGroups.slice(0,5).map((group)=><p key={`${group.colName}_${group.key}`}>{group.colName}｜{group.date}｜{group.store}｜{group.person}｜保留 1 筆、封存 {group.duplicateIds.length} 筆</p>)}</div>}
-          <ToolRow icon={RefreshCw} title="封存資料檢視與還原" desc="查看已封存的疑似重複資料，可單筆還原。" badge={archivedDuplicates.length ? `${archivedDuplicates.length} 筆` : "可還原"}><div className="flex items-center gap-2 rounded-2xl border border-stone-100 bg-white/70 px-3 h-11"><Calendar size={14} className="text-stone-400" /><input type="month" value={archiveFilterMonth} onChange={(e)=>setArchiveFilterMonth(e.target.value)} className="bg-transparent text-xs font-black text-stone-700 outline-none w-28" /></div><BeautyButton onClick={handleLoadArchivedDuplicates} disabled={loadingAction !== null} variant="secondary">{loadingAction === "loadArchived" ? <Loader2 size={14} className="animate-spin" /> : <Eye size={14} />}載入封存</BeautyButton></ToolRow>{archivedDuplicates.length > 0 && <div className="rounded-[1.5rem] border border-stone-100 bg-stone-50/50 p-4 space-y-2 max-h-[340px] overflow-y-auto"><p className="text-xs font-black text-stone-700">封存資料清單</p>{archivedDuplicates.slice(0,30).map((row)=><div key={`${row.colName}_${row.id}`} className="bg-white border border-stone-100 rounded-2xl p-3 flex flex-col md:flex-row md:items-center md:justify-between gap-3"><div className="min-w-0"><p className="text-xs font-black text-stone-700 truncate">{row.colName}｜{row.date}｜{row.store}｜{row.person}</p><p className="text-[10px] font-bold text-stone-400 mt-1">保留文件：{row.keepId}｜封存時間：{row.archivedAt}</p></div><BeautyButton onClick={()=>handleRestoreArchivedDuplicate(row)} disabled={loadingAction !== null} variant="soft" className="h-9 px-4 shrink-0">{loadingAction === `restore_${row.id}` ? <Loader2 size={13} className="animate-spin" /> : <RefreshCw size={13} />}還原</BeautyButton></div>)}</div>}</div>}
+          <ToolRow icon={RefreshCw} title="封存資料檢視與還原" desc="查看已封存的疑似重複資料，可單筆還原。" badge={archivedDuplicates.length ? `${archivedDuplicates.length} 筆` : "可還原"}><div className="flex items-center gap-2 rounded-2xl border border-stone-100 bg-white/70 px-3 h-11"><Calendar size={14} className="text-stone-400" /><SmartMonthPicker value={archiveFilterMonth} onChange={setArchiveFilterMonth} align="right" buttonClassName="!h-9 !min-w-[140px] !border-0 !bg-transparent !px-0 !py-0 !text-xs !shadow-none hover:!bg-transparent" /></div><BeautyButton onClick={handleLoadArchivedDuplicates} disabled={loadingAction !== null} variant="secondary">{loadingAction === "loadArchived" ? <Loader2 size={14} className="animate-spin" /> : <Eye size={14} />}載入封存</BeautyButton></ToolRow>{archivedDuplicates.length > 0 && <div className="rounded-[1.5rem] border border-stone-100 bg-stone-50/50 p-4 space-y-2 max-h-[340px] overflow-y-auto"><p className="text-xs font-black text-stone-700">封存資料清單</p>{archivedDuplicates.slice(0,30).map((row)=><div key={`${row.colName}_${row.id}`} className="bg-white border border-stone-100 rounded-2xl p-3 flex flex-col md:flex-row md:items-center md:justify-between gap-3"><div className="min-w-0"><p className="text-xs font-black text-stone-700 truncate">{row.colName}｜{row.date}｜{row.store}｜{row.person}</p><p className="text-[10px] font-bold text-stone-400 mt-1">保留文件：{row.keepId}｜封存時間：{row.archivedAt}</p></div><BeautyButton onClick={()=>handleRestoreArchivedDuplicate(row)} disabled={loadingAction !== null} variant="soft" className="h-9 px-4 shrink-0">{loadingAction === `restore_${row.id}` ? <Loader2 size={13} className="animate-spin" /> : <RefreshCw size={13} />}還原</BeautyButton></div>)}</div>}</div>}
         </section>
 
         <section className="rounded-[2rem] border border-stone-100 bg-white/90 p-6 shadow-[0_16px_50px_rgba(120,90,40,0.04)]"><ToolRow icon={RefreshCw} title="清除本機快取" desc="只清除目前瀏覽器暫存，不會刪除雲端資料。適合畫面異常、舊版快取或登入狀態卡住時使用。" badge="本機排錯"><BeautyButton onClick={handleClearLocalCache} variant="secondary"><RefreshCw size={14} />清除快取並重載</BeautyButton></ToolRow></section>

@@ -10,6 +10,7 @@ import { getDoc, doc } from "firebase/firestore";
 import { AppContext } from "../AppContext";
 import { sortManagerNames, sortStoreNames, sortManagersByOrgOrder, sortStoresByOrgOrder } from "../utils/helpers";
 import { ViewWrapper, Card } from "./SharedUI";
+import SmartMonthPicker from "./SmartMonthPicker";
 import { filterSystemExcludedStoreKeys } from "../utils/systemExclusion.js";
 import {
   buildAnnualFormalMonth,
@@ -1080,19 +1081,21 @@ const annualData = useMemo(() => {
               <div className="flex items-center gap-2 text-stone-600 font-bold text-sm whitespace-nowrap xl:ml-0 shrink-0">
                 <span>自訂區間：</span>
               </div>
-              <div className="flex items-center gap-2 w-full md:w-auto">
-                <input 
-                  type="month" 
+              <div className="flex w-full flex-col items-stretch gap-2 sm:flex-row sm:items-center md:w-auto">
+                <SmartMonthPicker
                   value={startMonthStr}
-                  onChange={(e) => setStartMonthStr(e.target.value)}
-                  className="bg-stone-50 border border-stone-200 text-stone-700 text-sm rounded-lg focus:ring-amber-500 focus:border-amber-500 block w-full p-2 font-mono"
+                  onChange={setStartMonthStr}
+                  minMonth={`${selectedYear}-01`}
+                  maxMonth={`${selectedYear}-12`}
+                  align="left"
                 />
-                <span className="text-stone-400"><ArrowRight size={16}/></span>
-                <input 
-                  type="month" 
+                <span className="hidden text-stone-400 sm:inline-flex"><ArrowRight size={16}/></span>
+                <SmartMonthPicker
                   value={endMonthStr}
-                  onChange={(e) => setEndMonthStr(e.target.value)}
-                  className="bg-stone-50 border border-stone-200 text-stone-700 text-sm rounded-lg focus:ring-amber-500 focus:border-amber-500 block w-full p-2 font-mono"
+                  onChange={setEndMonthStr}
+                  minMonth={`${selectedYear}-01`}
+                  maxMonth={`${selectedYear}-12`}
+                  align="right"
                 />
               </div>
            </div>

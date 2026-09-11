@@ -242,6 +242,18 @@ service cloud.firestore {
       allow write: if false;
     }
 
+    // Smart Forecast B3B Projection Context：營運情境 authority。
+    // 前端登入後只讀；所有寫入由最高管理者安全 Backend writer 執行。
+    match /brands/{brandId}/projection_context/{document=**} {
+      allow read: if signedIn();
+      allow write: if false;
+    }
+
+    match /artifacts/{appId}/public/data/projection_context/{document=**} {
+      allow read: if signedIn();
+      allow write: if false;
+    }
+
     // 既有品牌資料維持原本登入後可讀寫；排除上方受保護集合，避免寬鬆規則覆蓋。
     match /brands/{brandId}/{collectionName}/{document=**} {
       allow read, write: if signedIn()
@@ -257,6 +269,7 @@ service cloud.firestore {
         && collectionName != 'projection_models'
         && collectionName != 'projection_accuracy'
         && collectionName != 'projection_accuracy_history'
+        && collectionName != 'projection_context'
         && !(collectionName == 'settings' && document == 'audit_exclusions')
         && !(collectionName == 'settings' && document == 'permissions');
     }
@@ -276,6 +289,7 @@ service cloud.firestore {
         && collectionName != 'projection_models'
         && collectionName != 'projection_accuracy'
         && collectionName != 'projection_accuracy_history'
+        && collectionName != 'projection_context'
         && collectionName != 'global_settings';
     }
 

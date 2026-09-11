@@ -1418,7 +1418,7 @@ const SettingsView = () => {
                   <table className="w-full text-left text-sm">
                     <thead><tr className="border-b border-[#E8DDCC]"><th className="p-4 font-bold text-[#7C7063] sticky left-0 bg-[#FFFCF7] z-10">功能模組</th><th className="p-4 font-bold text-[#4D4338] text-center bg-rose-50/50">教專</th><th className="p-4 font-bold text-[#4D4338] text-center bg-teal-50/50">區長</th><th className="p-4 font-bold text-[#4D4338] text-center bg-[#FFF7DF]/50">店經理</th><th className="p-4 font-bold text-[#4D4338] text-center bg-indigo-50/50">管理師</th></tr></thead>
                     <tbody className="divide-y divide-stone-100">
-                      {ALL_MENU_ITEMS.map((item) => (
+                      {ALL_MENU_ITEMS.filter((item) => item.directorOnly !== true).map((item) => (
                         <tr key={item.id} className="hover:bg-[#FAF7F1]">
                           <td className="p-4 flex items-center gap-3 sticky left-0 bg-[#FFFCF7]/95 backdrop-blur-sm z-10 border-r border-[#EFE7DA] md:border-none shadow-[2px_0_5px_-2px_rgba(0,0,0,0.05)] md:shadow-none"><div className="p-2 bg-[#F3EEE6] rounded-lg text-[#7C7063] shrink-0"><item.icon size={18} /></div><span className="font-bold text-[#4D4338] whitespace-nowrap">{item.label}</span></td>
                           <td className="p-4 text-center bg-rose-50/30"><input type="checkbox" checked={localPermissions.trainer?.includes(item.id)} onChange={() => togglePermission("trainer", item.id)} className="w-5 h-5 rounded border-stone-300 text-rose-600 focus:ring-rose-500 cursor-pointer"/></td>

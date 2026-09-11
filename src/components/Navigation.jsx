@@ -92,7 +92,7 @@ export const Sidebar = ({
 
     const baseItems = userRole === "director"
       ? ALL_MENU_ITEMS
-      : ALL_MENU_ITEMS.filter((item) => (permissions?.[userRole] || []).includes(item.id));
+      : ALL_MENU_ITEMS.filter((item) => item.directorOnly !== true && (permissions?.[userRole] || []).includes(item.id));
 
     const featureFilteredItems = filterMenuItemsByFeatureFlags(baseItems, therapistModuleEnabled);
 
@@ -197,7 +197,7 @@ export const MobileTopNav = ({ activeView, setActiveView, permissions, userRole,
 
     const baseItems = userRole === "director"
       ? ALL_MENU_ITEMS
-      : ALL_MENU_ITEMS.filter((item) => (permissions?.[userRole] || []).includes(item.id));
+      : ALL_MENU_ITEMS.filter((item) => item.directorOnly !== true && (permissions?.[userRole] || []).includes(item.id));
 
     const featureFilteredItems = filterMenuItemsByFeatureFlags(baseItems, therapistModuleEnabled);
 

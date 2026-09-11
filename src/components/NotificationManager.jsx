@@ -35,6 +35,7 @@ import {
 } from "firebase/firestore";
 import { db } from "../config/firebase";
 import { ViewWrapper } from "./SharedUI";
+import SmartDatePicker from "./SmartDatePicker";
 import TelegramAlertControlCenter from "./TelegramAlertControlCenter";
 
 const WEEKDAYS = [
@@ -502,7 +503,28 @@ const NotificationManager = () => {
                   <div className="space-y-4 border-t border-stone-100 p-5">
                     <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
                       <label className="rounded-2xl border border-stone-100 bg-stone-50 p-4"><span className="mb-2 block text-[10px] font-black text-stone-400">資料計算到</span><select value={currentRule.cutoffMode} onChange={(event) => setCurrentRule((previous) => ({ ...previous, cutoffMode: event.target.value }))} className="w-full bg-transparent text-xs font-black text-stone-700 outline-none"><option value="yesterday">前一天結束</option><option value="current">發送當下</option></select></label>
-                      <label className="block rounded-2xl border border-stone-100 bg-stone-50 p-4"><span className="mb-2 block text-[10px] font-black text-stone-400">暫停至（含當日）</span><div className="flex min-h-12 min-w-0 items-center rounded-xl border border-stone-200 bg-white px-3"><input type="date" value={currentRule.pausedUntil || ""} onChange={(event) => setCurrentRule((previous) => ({ ...previous, pausedUntil: event.target.value }))} className="block h-11 min-w-0 flex-1 bg-transparent px-1 text-sm font-black leading-none text-stone-700 outline-none" style={{ colorScheme: "light" }} /></div></label>
+                      <div className="rounded-2xl border border-stone-100 bg-stone-50 p-4">
+                        <span className="mb-2 block text-[10px] font-black text-stone-400">暫停至（含當日）</span>
+                        <div className="flex items-center gap-2">
+                          <div className="min-w-0 flex-1">
+                            <SmartDatePicker
+                              selectedDate={currentRule.pausedUntil || ""}
+                              onDateSelect={(date) => setCurrentRule((previous) => ({ ...previous, pausedUntil: date || "" }))}
+                              stores={[]}
+                              salesData={[]}
+                            />
+                          </div>
+                          {currentRule.pausedUntil && (
+                            <button
+                              type="button"
+                              onClick={() => setCurrentRule((previous) => ({ ...previous, pausedUntil: "" }))}
+                              className="shrink-0 rounded-xl border border-stone-200 bg-white px-3 py-2 text-[10px] font-black text-stone-500 hover:bg-stone-50"
+                            >
+                              清除
+                            </button>
+                          )}
+                        </div>
+                      </div>
                     </div>
                     {reportDefinition.vars.length > 0 && (
                       <label className="block rounded-2xl border border-stone-100 bg-stone-50 p-4"><span className="mb-2 block text-[10px] font-black text-stone-400">自訂訊息內容</span><p className="mb-2 text-[10px] font-bold text-stone-400">可用欄位：{reportDefinition.vars.join("、")}</p><textarea rows={5} value={currentRule.template} onChange={(event) => setCurrentRule((previous) => ({ ...previous, template: event.target.value }))} className="w-full resize-none bg-transparent text-xs font-bold leading-5 text-stone-700 outline-none" /></label>
