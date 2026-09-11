@@ -5,6 +5,147 @@
 
 ---
 
+# Smart Forecast / Projection Context v2 Flow Override — 2026-09-11
+
+B3B 新增的是「營運情境事前紀錄」資料流，不是新的 Projection calculation pipeline。
+
+## Read Flow
+
+```text
+user opens Smart Forecast
+        │
+        ├─ currentBrand
+        ├─ selected YYYY-MM
+        └─ module permission
+        │
+        ▼
+brand-scoped in-memory cache
+        │
+        ├─ hit → reuse current brand+month context
+        │
+        └─ miss
+             │
+             ▼
+getDoc(projection_context/{YYYY-MM})
+             │
+             ▼
+normalize projection-context-v2
+             │
+             ▼
+Smart Forecast UI
+```
+
+同月份 cache key 包含 brandId，因此：
+
+```text
+CYJ 2026-10
+!=
+安妞 2026-10
+!=
+伊啵 2026-10
+```
+
+沒有 listener、query 或 polling。明確按「更新」才再做該 brand-month 的 point read。
+
+## Secure Write Flow
+
+```text
+最高管理者編輯本月活動
+        │
+        ├─ event context
+        ├─ selected store scope
+        └─ optional per-store schedule
+        │
+        ▼
+App.updateProjectionContext
+        │
+        ▼
+manageProjectionContext
+        │
+        ├─ Firebase request auth
+        ├─ verifySuperAdminActor
+        ├─ expectedRevision OCC
+        │
+        ▼
+Firestore transaction
+        │
+        ├─ READ  projection_context/{YYYY-MM}
+        ├─ READ  store_lifecycle/master
+        ├─ READ  audit_exclusions
+        │
+        ├─ validate current Lifecycle / System Exclusion
+        │
+        ├─ validate event + storeSchedule
+        │
+        ├─ WRITE projection_context/{YYYY-MM}
+        └─ WRITE maintenance_logs/{auditId}
+```
+
+同一 monthly document 使用 replace semantics；revision 每次成功更新 +1。
+
+Stale writer：
+
+```text
+revision mismatch
+→ HTTP 409
+→ currentContext returned
+→ frontend refreshes latest context
+→ user decides again
+```
+
+因此多人同時操作不使用 silent last-write-wins。
+
+## Event / Store Schedule Flow
+
+```text
+campaign / event
+→ overall startDate..endDate
+→ optional event store scope
+→ optional storeSchedule[]
+     storeKey
+     startDate
+     endDate
+```
+
+Backend 保證：
+
+```text
+store identity canonicalized
+store ∈ current Lifecycle eligible cohort
+store NOT System Excluded
+schedule within event period
+schedule within store Lifecycle active dates
+store-scoped event schedule does not escape event scope
+```
+
+Reporting Calendar closed dates在 B3B 不作 hard block；Lifecycle open/close boundary 仍是正式 guard。
+
+## DEV Preview Flow
+
+```text
+import.meta.env.DEV
+AND VITE_PROJECTION_CONTEXT_LIVE_WRITE != true
+→ local preview mode
+→ account + brand + month localStorage
+→ Production writer not called
+```
+
+這只屬測試支援，不是 Firestore data source。正式 Production runtime 不使用 local preview 保存營運 Context。
+
+## Downstream Boundary
+
+目前：
+
+```text
+projection_context
+→ stored operational context
+→ NO automatic Production Projection formula adjustment
+```
+
+B3C historical / candidate research 不因 B3B 上線而自動升格。未來若要讓 Event Context 影響 Projection，必須另做 Shadow evidence、promotion gate、consumer / formula regression 與獨立 Documentation Impact。
+
+---
+
 # Projection Accuracy / Rolling History Flow Override — 2026-09-10
 
 Projection Accuracy 不改寫 current-month Projection Authority；它位於 Projection 結果之後，負責「保存當時推估 → 月底驗證 → 歷史比較」。

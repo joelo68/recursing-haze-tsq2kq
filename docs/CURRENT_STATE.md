@@ -2,7 +2,270 @@
 
 > 用途：記錄「目前正式環境已確認到哪個狀態」。這不是 CHANGELOG。  
 > 優先順序：使用者提供的目前正式部署 source > 本檔案 > 其他 Knowledge Base 文件。  
-> 最後整併更新：**2026-09-10（UTC+8）**。
+> 最後整併更新：**2026-09-11（UTC+8）**。
+
+# Latest Production Runtime Override — 2026-09-11（Smart Forecast B3B Event Context v2 + Shared Picker Migration Closeout）
+
+> 本節是目前最高優先的 Smart Forecast / Projection Context runtime 狀態。它新增營運情境資料與安全寫入 authority，但**不修改目前正式 Projection v2 公式**。下方 Projection Accuracy / Projection v2 章節仍分別保留既有 authority / evidence；若衝突，以目前正式 source、Production deployment 與本節為準。
+
+正式 runtime lineage：
+
+```text
+Official repo                         = ~/cyj-new
+Production runtime commit             = b962dc08c4c5515bcb3b6d56f4f74a82d985ca94
+origin/main                            = b962dc08c4c5515bcb3b6d56f4f74a82d985ca94
+Frontend Production gh-pages          = 612e620f88ef3d6693ceb3b9a3ea100f3d3192da
+Pre-promotion rollback tag            = pre-b3b-smart-forecast-v2-20260911-133936
+CURRENT_APP_VERSION                    = 3.5.3（未提高）
+```
+
+Documentation closeout Source Gate 於 `local/b3b-smart-forecast-preview` 讀回上述同一 runtime commit，worktree clean；Production authority 仍以 `origin/main` / deployed runtime 為準。
+
+## B3B — Smart Forecast / Projection Context v2
+
+正式新增獨立營運模組：
+
+```text
+Navigation / module permission
+→ SmartForecastView
+→ projection_context/{YYYY-MM}
+```
+
+B3B 的責任是**事前保存營運情境**，不是把研究公式直接放進 Production Projection。正式 Projection v2 / Accuracy contract 不因本 Batch 改寫；B3C1B～B3C1C5 research candidates 仍未 Promotion。
+
+Event Context contract：
+
+```text
+schemaVersion = projection-context-v2
+one document  = one brand × one YYYY-MM
+revision      = optimistic concurrency revision
+mode          = normal_month | event_month
+events[]      = monthly business event context
+```
+
+事件支援：
+
+```text
+type:
+  vip
+  anniversary
+  seasonal
+  promotion
+  launch
+  other
+
+level:
+  normal
+  notable
+  major
+
+metrics:
+  cash
+  accrual
+```
+
+v2 每個 event 可保存：
+
+```text
+id
+campaignId
+name
+type
+startDate / endDate
+level
+scopeMode
+storeKeys[]
+storeSchedule[]:
+  storeKey
+  startDate
+  endDate
+metrics[]
+note
+```
+
+因此同一 campaign 可以在同月份內保存不同店家的實體活動日期；舊 event 沒有 `storeSchedule` 時仍相容為空陣列。
+
+Store schedule 在 Backend 使用 shared Store Lifecycle Identity，並 fail closed 驗證：
+
+```text
+Lifecycle READY / month eligible
+schedule date within Lifecycle open-close boundary
+NOT System Excluded
+store-scoped event → scheduled store 必須在 event scope
+schedule dates → 必須落在 event overall period
+duplicate store schedule → reject
+```
+
+單月 document bounded：
+
+```text
+max events                       = 12
+max storeSchedule rows / event   = 80
+max storeSchedule rows / month   = 240
+```
+
+## Security / OCC
+
+正式 writer：
+
+```text
+functions/projectionContext.js
+→ manageProjectionContext
+```
+
+Write path：
+
+```text
+POST
+→ Firebase request auth
+→ verifySuperAdminActor
+   → highest-admin actor
+   → Trusted Device
+   → current credential re-verification
+→ expectedRevision OCC
+→ Firestore transaction
+   ├─ projection_context/{YYYY-MM}
+   ├─ store_lifecycle/master
+   └─ audit_exclusions
+→ validate current authority
+→ replace monthly context
+→ append maintenance_logs audit
+```
+
+Stale revision：
+
+```text
+HTTP 409
+code = PROJECTION_CONTEXT_CONFLICT
+currentContext = latest persisted context
+```
+
+因此多位最高管理者同時修改時不得 silent last-write-wins。
+
+Firestore Rules 對 CYJ legacy 與 standard-brand `projection_context` 都是：
+
+```text
+signed-in read = allowed
+frontend write = false
+Backend Admin SDK = writer authority
+```
+
+View permission 與 write authority 分離：`smart-forecast` 可依 module permission 顯示；正式活動維護仍只允許符合最高管理者／Trusted Device 條件的安全 writer。
+
+## Reads / Writes Topology
+
+Smart Forecast frontend：
+
+```text
+selected brand + YYYY-MM cache miss
+→ projection_context/{YYYY-MM}
+→ 1 point getDoc
+
+force refresh
+→ 1 point getDoc
+
+listener = 0
+query    = 0
+polling  = 0
+```
+
+Cache identity 使用 `brandId + yearMonth`，不得跨品牌共用同月份 context。
+
+Backend 每次成功 save 的核心 transaction：
+
+```text
+reads:
+  projection_context/{YYYY-MM}
+  store_lifecycle/master
+  audit_exclusions
+= 3 point reads
+
+writes:
+  projection_context/{YYYY-MM}
+  maintenance_logs/{auditId}
+= 2 writes
+
+per-store Firestore read = 0
+```
+
+DEV Local Preview 只存在開發模式，以 account + brand + month 隔離的 browser localStorage 保存；不寫 Production。Production build 使用正式 Backend writer。
+
+## Shared Picker Migration
+
+本次整合 tree 同時完成共用日期／月份 Picker migration：
+
+```text
+SmartMonthPicker
+→ Smart Forecast
+→ Annual custom range
+→ Store Lifecycle
+→ System Maintenance
+
+SmartDatePicker
+→ Smart Forecast store schedule
+→ Notification pause date
+→ Telegram date-only controls
+→ Store Lifecycle / maintenance date controls
+```
+
+Browser-native `date` / `month` picker 已由上述 date-only/month-only controls 移除；既有 time-only scheduling controls維持原設計。Shared picker 本身沒有 Firestore data access、listener 或 polling。
+
+## Validation / Deployment / Production Confirmation
+
+正式 promotion validation：
+
+```text
+Projection Context / Product / Picker targeted regression = 45 / 45 PASS
+Full repository regression                                = 631 / 631 PASS
+Functions syntax                                           = PASS
+npm run build                                              = PASS
+git diff --check                                           = PASS
+CURRENT_APP_VERSION                                        = 3.5.3 unchanged
+```
+
+正式 scoped deploy：
+
+```text
+Firestore Rules            = DEPLOYED
+manageProjectionContext    = DEPLOYED
+GitHub Pages Frontend      = DEPLOYED
+Firebase Hosting           = NOT used for this frontend promotion
+```
+
+Production smoke 由使用者確認：
+
+```text
+Smart Forecast page / Picker render            PASS
+real Production context write                  PASS
+reload + logout/login persistence              PASS
+CYJ / 安妞 / 伊啵 same-month brand isolation   PASS
+per-store scheduled dates                      PASS
+OCC stale-revision protection                  PASS
+```
+
+Shared Picker migration 的跨頁 regression 已驗證並部署；本 closeout 的 Production smoke 明確覆蓋 Smart Forecast picker，其他已 migration 頁面不額外宣稱逐頁 Production smoke。
+
+Yibo boundary：
+
+```text
+Yibo 可保存 Event Context
+Yibo Projection 仍使用標準 / V1 path
+Event Context 不會把 Yibo 自動升級成 Projection v2
+```
+
+Final status：
+
+```text
+B3B Event Context v2
+IMPLEMENTED / VALIDATED / COMMITTED / PUSHED / DEPLOYED / PRODUCTION CONFIRMED = YES
+
+Projection formula promotion from B3C research = NO
+CURRENT_APP_VERSION                             = 3.5.3 unchanged
+```
+
+Documentation Impact：本 closeout 更新 `CURRENT_STATE.md`、`FIREBASE_DATA_MODEL.md`、`SYSTEM_SOURCE_MAP.md`、`AUTH_AND_SECURITY.md`、`ARCHITECTURE.md`、`DATA_FLOW.md`。`DEPLOYMENT.md` 已正確記錄 GitHub Pages / `.firebaserc` 現況，本 Batch 無部署機制變更，因此不改。其他 canonical docs = None。
+
+---
 
 # Latest Production Runtime Override — 2026-09-10（Projection Accuracy / Observability + Rolling History Closeout）
 

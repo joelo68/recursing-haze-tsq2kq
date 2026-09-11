@@ -7,6 +7,197 @@
 
 ---
 
+# `projection_context/{YYYY-MM}` — Smart Forecast Event Context v2 Override — 2026-09-11
+
+**類型：Operational Context / Backend-managed Business Input**
+
+`projection_context` 保存管理者事前輸入的營運情境。它不是 Raw 業績、不是 `projection_models/current` 的替代品，也不是 B3C research formula artifact。
+
+Physical path：
+
+```text
+CYJ
+artifacts/{appId}/public/data/projection_context/{YYYY-MM}
+
+安妞 / 伊啵
+brands/{brandId}/projection_context/{YYYY-MM}
+```
+
+Top-level contract：
+
+```text
+schemaVersion = projection-context-v2
+brandId
+yearMonth
+revision
+mode = normal_month | event_month
+events[]
+lifecycleRevision
+systemExclusionRevision
+updatedAt / updatedAtText
+updatedBy / updatedByRole / updatedByAccountId
+```
+
+Event contract：
+
+```text
+id
+campaignId
+name
+
+type:
+  vip
+  anniversary
+  seasonal
+  promotion
+  launch
+  other
+
+startDate
+endDate
+
+level:
+  normal
+  notable
+  major
+
+scopeMode
+storeKeys[]
+
+storeSchedule[]:
+  storeKey
+  startDate
+  endDate
+
+metrics[]:
+  cash
+  accrual
+
+note
+```
+
+`campaignId` 若未提供，Backend 以 event `id` 作相容 fallback。舊 v1-style event 沒有 `storeSchedule` 時，Frontend / Backend 正規化為空陣列。
+
+Store Identity / authority：
+
+```text
+storeKey
+→ normalizeStoreLifecycleCore
+→ shared Store Lifecycle identity
+```
+
+Backend 儲存時同一 transaction 重新讀：
+
+```text
+projection_context/{YYYY-MM}
+store_lifecycle/master
+audit_exclusions
+```
+
+並要求：
+
+```text
+Lifecycle datasetStatus = READY
+event / schedule store ∈ 當月 Lifecycle eligible cohort
+System Excluded store = reject
+storeSchedule date ∈ event startDate..endDate
+storeSchedule date ∈ store Lifecycle active date boundary
+store-scoped event → schedule row 必須在 event storeKeys scope
+duplicate schedule store row = reject
+```
+
+為維持「一品牌 × 一月份 × 一文件」bounded document：
+
+```text
+max events / month                      = 12
+max storeSchedule rows / event          = 80
+max total storeSchedule rows / month    = 240
+```
+
+Write authority：
+
+```text
+functions/projectionContext.js
+→ manageProjectionContext
+→ POST only
+→ Firebase request auth
+→ verifySuperAdminActor
+→ expectedRevision OCC
+→ transaction replace monthly context
+→ maintenance_logs append audit
+```
+
+成功寫入會增加 `revision`。Stale `expectedRevision` 回：
+
+```text
+HTTP 409
+code = PROJECTION_CONTEXT_CONFLICT
+currentContext = latest context
+```
+
+Audit log 至少保存：
+
+```text
+type = projection_context
+action = update
+source = manageProjectionContext
+brandId
+yearMonth
+revision
+mode
+eventCount
+scheduledStoreCount
+operator / operatorRole / operatorAccountId
+createdAt / createdAtText
+```
+
+Firestore Rules：
+
+```text
+signed-in frontend read = allowed
+frontend write          = false
+Backend Admin SDK       = writer authority
+```
+
+CYJ legacy root 與 `brands/{brandId}` root 都有 explicit rule，並從 broad signed-in write catch-all 排除 `projection_context`。
+
+Frontend read topology：
+
+```text
+Smart Forecast selected brand-month cache miss
+→ 1 point getDoc(projection_context/{YYYY-MM})
+
+explicit refresh
+→ 1 point getDoc
+
+listener = 0
+query    = 0
+polling  = 0
+```
+
+Backend save transaction 的核心 Firestore I/O：
+
+```text
+3 point reads:
+  context + lifecycle master + exclusion setting
+
+2 writes:
+  context + maintenance audit
+
+per-store Firestore read = 0
+```
+
+重要邊界：
+
+```text
+Event Context = business context capture
+!= Production Projection formula input promotion
+```
+
+本 Batch 沒有修改 `projection_models/current` 的既有 v2 / v1 contract；伊啵仍維持標準 / V1 Projection。
+
+---
+
 # Projection Accuracy / Rolling History Data Model Override — 2026-09-10
 
 本節記錄 B1 / B2A / B2C.1 正式新增的 Accuracy evidence 與年度 rolling history。它們都是 **Derived / Audit Evidence**，不是 Raw 業績輸入，也不是 Projection Model 的第二份 authority。

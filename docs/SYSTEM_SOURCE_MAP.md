@@ -1,9 +1,131 @@
 # SYSTEM_SOURCE_MAP.md
 
 > 狀態：Project Knowledge Base / Source Map v0.1
-> 已整併至 2026-09-10 Projection Accuracy / Observability + Rolling History closeout；latest runtime source = `922e36c0522b760392597cd5417e304dcb18fbd7`，Projection Accuracy / B2C.1 implementation = `0d26d66d81f02fae06bfe3e0e9109ae869be4013`，Frontend Production gh-pages = `fba015f46ec80863c0e62d5397b2c8ed99622fe3`，`CURRENT_APP_VERSION = 3.5.3`，`~/cyj-new` 為唯一正式 Source of Truth。
+> 已整併至 2026-09-11 Smart Forecast B3B Event Context v2 closeout；latest runtime source = `b962dc08c4c5515bcb3b6d56f4f74a82d985ca94`，Frontend Production gh-pages = `612e620f88ef3d6693ceb3b9a3ea100f3d3192da`，`CURRENT_APP_VERSION = 3.5.3`，`~/cyj-new` 為唯一正式 Source of Truth。
 > 禁止以舊對話、舊版檔案、AI 記憶或未提供的檔案補足事實。
 > 無法由目前正式程式確認的內容，必須標記為「未由目前正式來源確認」。
+
+---
+
+# Smart Forecast / Event Context v2 Runtime Source Override — 2026-09-11
+
+最新正式 B3B runtime lineage：
+
+```text
+Runtime promotion commit        = b962dc08c4c5515bcb3b6d56f4f74a82d985ca94
+origin/main                     = b962dc08c4c5515bcb3b6d56f4f74a82d985ca94
+Frontend Production gh-pages   = 612e620f88ef3d6693ceb3b9a3ea100f3d3192da
+Pre-promotion rollback tag     = pre-b3b-smart-forecast-v2-20260911-133936
+CURRENT_APP_VERSION            = 3.5.3
+```
+
+正式 owners：
+
+```text
+functions/projectionContext.js
+  → projection-context-v2 schema
+  → event / campaign / per-store schedule validation
+  → Store Lifecycle + System Exclusion revalidation
+  → expectedRevision OCC
+  → maintenance_logs audit
+  → secure manageProjectionContext writer
+
+functions/index.js
+  → createProjectionContextFunctions(...)
+  → exports.manageProjectionContext
+
+firestore.rules
+  → CYJ legacy + standard-brand projection_context
+  → signed-in read
+  → frontend write deny
+  → broad catch-all exclusion
+
+src/components/SmartForecastView.jsx
+  → standalone Smart Forecast operational module
+  → brand-scoped month cache
+  → 1 point getDoc / selected brand-month cache miss
+  → VIP / event editor
+  → manager-first store selection
+  → per-store schedule editor
+  → OCC conflict refresh
+  → DEV-only local preview persistence
+
+src/App.jsx
+  → SmartForecastView route / view gate
+  → smart-forecast module permission
+  → secure updateProjectionContext endpoint wrapper
+  → OCC code/currentContext propagation
+
+src/constants/index.js
+src/components/Navigation.jsx
+src/components/SettingsView.jsx
+  → Smart Forecast menu + module permission management
+
+src/components/SmartMonthPicker.jsx
+src/components/SmartDatePicker.jsx
+  → shared month/date picker authority
+  → no Firestore data access
+
+src/components/AnnualView.jsx
+src/components/NotificationManager.jsx
+src/components/StoreLifecycleManager.jsx
+src/components/SystemMaintenance.jsx
+src/components/TelegramAlertControlCenter.jsx
+  → shared picker migration consumers
+
+tests/projectionContext.test.js
+tests/smartForecastProduct.test.js
+tests/systemPickerConsistency.test.js
+tests/systemPickerFinalMigration.test.js
+  → schema / Security / OCC / brand isolation / reads topology / picker regression
+```
+
+Physical context paths：
+
+```text
+CYJ
+artifacts/{appId}/public/data/projection_context/{YYYY-MM}
+
+安妞 / 伊啵
+brands/{brandId}/projection_context/{YYYY-MM}
+```
+
+Read / write topology：
+
+```text
+Frontend:
+  one brand-month cache miss = 1 point getDoc
+  force refresh              = 1 point getDoc
+  listener/query/polling     = 0 / 0 / 0
+
+Backend save transaction:
+  reads  = context + lifecycle master + audit_exclusions
+  writes = context + maintenance_logs
+  per-store Firestore reads = 0
+```
+
+Security boundary：
+
+```text
+View visibility
+→ director view gate OR saved role module permission
+
+Event Context mutation
+→ highest admin + Trusted Device + current credential
+→ expectedRevision OCC
+→ Backend only
+```
+
+B3B boundary：
+
+```text
+projection_context stores business context
+B3C research candidates remain research
+Production Projection v2 formula unchanged
+Yibo Projection remains standard / V1
+```
+
+Shared picker migration is UI authority consolidation only；它不新增 Firestore listener/query/polling。
 
 ---
 

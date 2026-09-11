@@ -5,6 +5,139 @@
 
 ---
 
+# Smart Forecast / Projection Context Security Override — 2026-09-11
+
+Smart Forecast 的「看得到頁面」與「可以改正式情境資料」是兩層不同 authority。
+
+## View / Read Boundary
+
+`smart-forecast` 已加入 module permission：
+
+```text
+director
+→ 依既有 director view gate
+
+其他 role
+→ 依 permissions.{role} 是否包含 smart-forecast
+```
+
+Firestore `projection_context` 本身採：
+
+```text
+signedIn → read
+frontend write → deny
+```
+
+因此 module permission 是前端 product access gate；**Firestore read rule 不是細粒度 server-side role authorization**。不可把「頁面沒顯示」誤寫成「Rules 已禁止所有其他登入角色讀取」。
+
+## Mutation Boundary
+
+正式 writer：
+
+```text
+manageProjectionContext
+```
+
+安全鏈：
+
+```text
+POST
+→ requireFirebaseRequestAuth
+→ strict brand / YYYY-MM validation
+→ verifySuperAdminActor
+   → highest-admin identity
+   → Trusted Device
+   → current credential re-verification
+→ expectedRevision
+→ Firestore transaction
+```
+
+Frontend `canEdit` 只決定 UX；Backend 不信任前端 `role` / `canEdit` 作 mutation authorization。
+
+## Multi-admin Race Safety
+
+Transaction 先讀目前：
+
+```text
+projection_context/{YYYY-MM}
+```
+
+若：
+
+```text
+currentRevision != expectedRevision
+```
+
+則：
+
+```text
+HTTP 409
+PROJECTION_CONTEXT_CONFLICT
+currentContext = latest persisted context
+```
+
+Frontend 必須以 `currentContext` 更新目前畫面，再由操作者重新確認後儲存；不得 silent last-write-wins。
+
+同一 transaction 也重新讀：
+
+```text
+store_lifecycle/master
+audit_exclusions
+```
+
+所以活動範圍與店級日期不是只信任前端先前載入的名單；Backend commit 前會用目前 Lifecycle / System Exclusion authority 再驗證。
+
+## Rules / Audit
+
+兩套品牌 root 都有 explicit protection：
+
+```text
+brands/{brandId}/projection_context/{...}
+artifacts/{appId}/public/data/projection_context/{...}
+
+read  = signedIn
+write = false
+```
+
+`projection_context` 同時從 broad signed-in write catch-all 排除，避免較寬鬆規則覆蓋 explicit deny。
+
+每次成功更新另 append：
+
+```text
+maintenance_logs
+type = projection_context
+source = manageProjectionContext
+brandId / yearMonth / revision
+eventCount / scheduledStoreCount
+operator metadata
+```
+
+Audit 不保存使用者 credential。
+
+## Production Confirmation
+
+本次已部署：
+
+```text
+Firestore Rules
+manageProjectionContext
+GitHub Pages frontend
+```
+
+使用者已在 Production 確認：
+
+```text
+real save + reload persistence          PASS
+logout/login persistence                PASS
+cross-brand isolation                   PASS
+per-store scheduled dates               PASS
+stale-revision OCC                      PASS
+```
+
+`CURRENT_APP_VERSION` 維持 `3.5.3`。
+
+---
+
 # 1. 身份架構現況
 
 目前 Firestore Rules 明確註解：
@@ -719,20 +852,45 @@ deny
 
 # 27. 目前 Rules 的限制
 
-除了受保護的：
+目前仍以：
+
+```text
+signedIn()
+```
+
+作為多數既有資料的基礎 gate；**不能**因此宣稱整套 Firestore 已做到完整 server-side role authorization。
+
+但目前正式 Rules 已對多個敏感 authority 做 explicit protection，例如：
 
 ```text
 management_delegations
 system_logs
+account_devices / Device Approval / Security state
+store_lifecycle
+permissions / audit_exclusions
+projection_models
+projection_accuracy
+projection_accuracy_history
+projection_context
 ```
 
-其他大部分既有品牌資料仍採：
+其中 `projection_context`：
 
 ```text
-signedIn → read/write
+signed-in read = allowed
+frontend write = false
 ```
 
-這是目前正式架構，不應被文件寫成「每一個 collection 都已做到嚴格 role-based Firestore authorization」。
+正式 mutation 只能走 `manageProjectionContext` Backend writer。
+
+因此正確描述是：
+
+```text
+部分敏感 authority 已 Backend-only / write-deny
++
+大量一般既有營運資料仍沿用 broad signed-in access
+!= 全系統已完成 server-side role authorization
+```
 
 ---
 

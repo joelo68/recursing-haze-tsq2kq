@@ -1,8 +1,116 @@
 # ARCHITECTURE.md
 
 > 本文件描述目前正式部署版本的系統架構。  
-> 已整併至 2026-09-08 Projection v2 Phase Calibration / Telegram Exact Integer Parity closeout。
+> 已整併至 2026-09-11 Smart Forecast B3B Event Context v2 / Shared Picker closeout。
 > `CURRENT_STATE.md` 專門區分「已正式確認」、「待部署」與「Production 觀察中」的 Security 工作。
+
+# Smart Forecast / Event Context B3B Production Architecture Override — 2026-09-11
+
+Smart Forecast 是獨立的營運情境模組，不放進 `SystemMaintenance`，也不直接改 Projection formula。
+
+```text
+Browser / PWA
+  │
+  ├─ Navigation + module permission
+  │
+  ▼
+SmartForecastView
+  │
+  ├─ SmartMonthPicker
+  ├─ SmartDatePicker
+  ├─ manager-first store selection
+  ├─ brand + month memory cache
+  └─ selected brand-month
+        │
+        ├─ read → 1 point getDoc
+        ▼
+projection_context/{YYYY-MM}
+        ▲
+        │
+        └─ write
+             App.updateProjectionContext
+             → manageProjectionContext
+             → Auth + highest-admin
+             → Trusted Device + credential
+             → expectedRevision OCC
+             → transaction
+                  ├─ context
+                  ├─ store_lifecycle/master
+                  ├─ audit_exclusions
+                  └─ maintenance_logs
+```
+
+Context schema：
+
+```text
+projection-context-v2
+one brand × one month × one document
+
+events[]
+  ├─ campaignId
+  ├─ event period / type / level / metrics
+  ├─ brand or selected-store scope
+  └─ storeSchedule[]
+       └─ per-store startDate / endDate
+```
+
+Backend uses shared Store Lifecycle identity and System Exclusion authority. Store schedules do not trigger per-store document reads；Lifecycle stores reside in the single master document already read by the transaction.
+
+Frontend topology：
+
+```text
+cache miss / selected brand-month = 1 point getDoc
+force refresh                    = 1 point getDoc
+persistent listener              = 0
+query                            = 0
+polling                          = 0
+```
+
+Backend successful save：
+
+```text
+3 point reads
+2 writes
+```
+
+DEV local preview is isolated by account + brand + month in browser localStorage and cannot write Production. Production runtime uses the secure Backend writer.
+
+## Projection Boundary
+
+```text
+projection_context
+= prospective operational context
+
+projection_models/current
+= current Production Projection authority
+
+B3C offline research artifacts
+= research evidence only
+```
+
+B3B 不把 Event Context 自動接入 Projection v2 calculation。CYJ / 安妞既有 Projection v2 authority 不變；伊啵仍走標準 / V1 Projection。
+
+## Shared Picker Layer
+
+本次正式 tree 同時建立：
+
+```text
+SmartMonthPicker
+SmartDatePicker
+```
+
+作為系統共用 month/date interaction layer。它們是 presentation components：
+
+```text
+Firestore read  = 0
+Firestore write = 0
+listener        = 0
+polling         = 0
+```
+
+已 migration 的 date/month-only consumers 包含 Smart Forecast、Annual、Notification、Store Lifecycle、System Maintenance、Telegram Alert Control。Native time inputs 仍保留在真正的時間排程 controls。
+
+---
 
 # Projection v2 Production Architecture Override — 2026-09-08
 
