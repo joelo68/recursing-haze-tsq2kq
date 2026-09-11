@@ -5,6 +5,61 @@
 
 ---
 
+# Frontend UX Consumer Flow Override — 2026-09-11
+
+## Projection Accuracy consumer moved into Smart Forecast
+
+目前正式 display flow：
+
+```text
+SmartForecastView selected brand + YYYY-MM
+        │
+        ├─ existing projection_context brand-month flow
+        │
+        └─ SmartForecastAccuracyPanel
+             │
+             ├─ cache miss
+             │    └─ getDoc(projection_accuracy/{YYYY-MM})
+             │
+             └─ user opens history
+                  ├─ CYJ / 安妞
+                  │    └─ getDoc(projection_accuracy_history/{YYYY}) / required uncached year
+                  └─ 伊啵
+                       └─ no rolling V2 history read
+```
+
+Approved source-controlled historical evidence 仍可與 live rolling evidence 在 presentation layer 合併比較，但不互相冒充。`SystemMaintenance.jsx` 不再是 Projection Accuracy / rolling-history consumer。
+
+Read delta：
+
+```text
+selected-month Accuracy = 1 point read / uncached brand-month
+history                  = 1 point read / required uncached year after expand
+getDocs                   = 0
+onSnapshot                = 0
+polling                   = 0
+frontend write            = 0
+```
+
+## Permission Matrix save flow remains unchanged
+
+```text
+SettingsView checkbox
+→ localPermissions draft
+→ active-role presentation / unsaved reminder
+→ user presses 儲存模組權限
+→ existing updateModulePermissions(localPermissions)
+→ authoritative result refreshes local draft
+```
+
+本次 UX 沒有在 Permission Matrix 加入直接 Firestore read/write/listener/polling，也沒有改 permission document schema 或品牌 path。
+
+## System Maintenance IA
+
+System Maintenance 的四個主要工作入口只重新組織既有 handler / governance surface；選擇工作本身不讀寫 Firestore。技術性 recovery 工具從日常 UI 退場時，Backend recovery authority 沒有被刪除。
+
+---
+
 # Smart Forecast / Projection Context v2 Flow Override — 2026-09-11
 
 B3B 新增的是「營運情境事前紀錄」資料流，不是新的 Projection calculation pipeline。

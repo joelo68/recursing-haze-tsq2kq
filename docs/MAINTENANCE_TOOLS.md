@@ -5,6 +5,65 @@
 
 ---
 
+# Production UX Override — 2026-09-11
+
+> 本節取代下方較早的 `Projection Model / Accuracy / Rolling History Observability` 與 `Guided Scenarios` 之「目前 UI 入口」描述；舊章節可保留資料風險與歷史操作背景，但若 UI owner / label 衝突，以本節為準。
+
+## 現在的主要工作入口
+
+正式 `SystemMaintenance.jsx` 日常主畫面固定四個問題導向入口：
+
+```text
+檢查本月資料
+整理月份報表
+處理異常資料
+備份或救回資料
+```
+
+`系統流量觀察` 維持次要入口；資料量、讀取來源等診斷能力預設收合；日期修復、重複資料、組織還原等高風險工具仍集中在獨立保護區。舊 Step 1/4 task wizard / duplicated second flow 已退役。
+
+## Projection boundary
+
+```text
+SystemMaintenance
+→ 可以保留 Projection Model health / governance observation
+→ 不再顯示 Projection Accuracy / rolling-history detail UI
+
+SmartForecastView
+→ SmartForecastAccuracyPanel
+→ 目前正式「推估準確度」產品入口
+```
+
+因此下方舊「業績推估準確度」章節的資料 contract / read-only 風險說明仍可作背景，但**目前 UI owner 已改為 `SmartForecastAccuracyPanel.jsx`**。
+
+## Normal UI retired technical recovery entries
+
+目前正常 Maintenance UI 不再暴露：
+
+```text
+年度 Target Summary 前端補整理入口
+Target Coverage full-month audit 前端入口
+Target Coverage metadata migration 前端入口
+```
+
+這些入口退場不是刪除正式 Backend recovery / governance authority；需要 recovery 時仍應依最新正式 source、security gate 與 scoped tooling 操作，不可把舊按鈕描述成目前日常 UI。
+
+## Reads / authority impact
+
+本次 Maintenance IA 本身：
+
+```text
+new listener = 0
+new query    = 0
+new polling  = 0
+new path     = 0
+new writer   = 0
+```
+
+工作入口選擇只是 UI state；真正資料操作仍沿用既有 handlers / Backend authority。
+
+---
+
 # Projection Model / Accuracy / Rolling History Observability — 2026-09-10
 
 `SystemMaintenance.jsx` 的 Projection 相關工具屬 **Director-only / Read-only observability**。正常使用不修改 Raw 業績、Projection Model、Accuracy checkpoint 或歷史 Summary。

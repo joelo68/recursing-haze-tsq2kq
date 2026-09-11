@@ -4,6 +4,128 @@
 > 優先順序：使用者提供的目前正式部署 source > 本檔案 > 其他 Knowledge Base 文件。  
 > 最後整併更新：**2026-09-11（UTC+8）**。
 
+# Latest Production Runtime Override — 2026-09-11（Smart Forecast Accuracy Placement + System Maintenance UX + Permission Matrix UX Closeout）
+
+> 本節是目前最高優先的 Frontend UX / ownership 狀態。它調整 Projection Accuracy 的產品歸屬、System Maintenance 的操作入口與 Permission Matrix 的防誤設呈現；**不修改 Projection 公式、Projection Accuracy data contract、Firestore path/schema、Backend permission authority 或 Firestore Rules**。下方較早 B3B / B2C / Maintenance 章節保留其歷史 evidence；若 UI owner / runtime lineage 衝突，以本節與目前正式 source 為準。
+
+正式 runtime lineage：
+
+```text
+Official repo                         = ~/cyj-new
+Production runtime commit             = c4b7b57e486d64ef59282d23789ea7ec93a9a884
+origin/main                            = c4b7b57e486d64ef59282d23789ea7ec93a9a884
+Frontend Production gh-pages          = 6761f277f1b796cc49697d1f10acaa8919fc800e
+CURRENT_APP_VERSION                    = 3.5.3（未提高）
+Functions deploy in this closeout      = NO
+Firestore Rules deploy in this closeout= NO
+```
+
+## Smart Forecast owns Projection Accuracy presentation
+
+目前 Frontend owner：
+
+```text
+SmartForecastView
+→ SmartForecastAccuracyPanel
+   ├─ projection_accuracy/{YYYY-MM}
+   ├─ projection_accuracy_history/{YYYY}
+   └─ approved source-controlled historical evidence
+```
+
+正式 UI 順序：
+
+```text
+本月情境
+→ 推估方式
+→ 推估準確度
+→ 本月活動
+```
+
+讀取拓撲：
+
+```text
+selected brand-month Accuracy       = 1 point getDoc / cache miss
+rolling history                     = 1 yearly point getDoc / required uncached year, only when history is opened
+CYJ / 安妞 rolling V2 history       = enabled
+伊啵 rolling V2 history             = not read
+listener                            = 0
+polling                             = 0
+collection scan                     = 0
+frontend write                      = 0
+```
+
+`SystemMaintenance.jsx` 不再承載 Projection Accuracy / rolling-history detail UI；Projection model health / governance boundary 可留在 Maintenance。Accuracy writer、score writer、Rules 與 data model 均未因本次 UI ownership 調整而改義。
+
+## System Maintenance problem-oriented UX
+
+目前日常主入口固定為：
+
+```text
+檢查本月資料
+整理月份報表
+處理異常資料
+備份或救回資料
+```
+
+`系統流量觀察` 降為次要入口；資料量／讀取來源等診斷工具預設收合；高風險資料處理仍維持獨立保護區。舊 Step 1/4 任務精靈與重複第二套流程已退役。
+
+正常 UI 同時退休：
+
+```text
+年度 Target Summary 前端補整理入口
+Target Coverage full-month audit 前端入口
+Target Coverage metadata migration 前端入口
+```
+
+這些退場不等於刪除 Backend recovery / governance capability；正式 authority、writer、Summary semantics 與 Security boundary 維持原設計。
+
+## Permission Matrix UX
+
+`SettingsView.jsx` 的模組讀寫權限管理新增 presentation safety：
+
+```text
+職務標題 sticky
+功能模組欄 sticky
+目前編輯職務提示
+active role column highlight
+sticky save bar + unsaved reminder
+```
+
+Checkbox 仍只修改 local draft；正式儲存仍走既有：
+
+```text
+updateModulePermissions(localPermissions)
+```
+
+本次沒有在 Permission Matrix 新增直接 `getDoc/getDocs/setDoc/updateDoc/onSnapshot/setInterval`，也沒有改 permission schema、角色語意、Backend authorization、Rules 或品牌 path。
+
+## Validation / Deployment / Production Confirmation
+
+```text
+Permission targeted regression        = 159 / 159 PASS
+Full repository regression            = 653 / 653 PASS
+npm run build                          = PASS
+git diff --check                       = PASS
+System Maintenance local user test     = PASS
+Permission Matrix local user test      = PASS
+Frontend GitHub Pages deploy           = PASS
+Production smoke                       = PASS
+CURRENT_APP_VERSION                    = 3.5.3 unchanged
+```
+
+Final status：
+
+```text
+IMPLEMENTED / VALIDATED / COMMITTED / PUSHED / DEPLOYED / PRODUCTION CONFIRMED = YES
+Functions delta                        = 0
+Firestore Rules delta                  = 0
+Firestore path/schema delta            = 0
+```
+
+Documentation Impact：本 closeout 更新 `CURRENT_STATE.md`、`SYSTEM_SOURCE_MAP.md`、`ARCHITECTURE.md`、`DATA_FLOW.md`、`MAINTENANCE_TOOLS.md`；`AUTH_AND_SECURITY.md`、`FIREBASE_DATA_MODEL.md`、`DEPLOYMENT.md`、`DASHBOARD_SUMMARY.md`、`DEVELOPMENT_GUIDE.md`、`TELEGRAM_AGENT.md`、`DATA_IDENTITY_RULES.md` = None。
+
+---
+
 # Latest Production Runtime Override — 2026-09-11（Smart Forecast B3B Event Context v2 + Shared Picker Migration Closeout）
 
 > 本節是目前最高優先的 Smart Forecast / Projection Context runtime 狀態。它新增營運情境資料與安全寫入 authority，但**不修改目前正式 Projection v2 公式**。下方 Projection Accuracy / Projection v2 章節仍分別保留既有 authority / evidence；若衝突，以目前正式 source、Production deployment 與本節為準。

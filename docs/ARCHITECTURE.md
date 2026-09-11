@@ -1,8 +1,53 @@
 # ARCHITECTURE.md
 
 > 本文件描述目前正式部署版本的系統架構。  
-> 已整併至 2026-09-11 Smart Forecast B3B Event Context v2 / Shared Picker closeout。
+> 已整併至 2026-09-11 Frontend UX ownership closeout（Smart Forecast Accuracy / System Maintenance / Permission Matrix）。
 > `CURRENT_STATE.md` 專門區分「已正式確認」、「待部署」與「Production 觀察中」的 Security 工作。
+
+# Frontend UX Ownership Architecture Override — 2026-09-11
+
+本次正式 Frontend 把「營運推估」、「資料治理」、「權限設定」三個 UI responsibility 重新分界，但不改其 Backend / Firestore authority。
+
+```text
+SmartForecastView
+  ├─ 本月情境 / Projection method
+  ├─ SmartForecastAccuracyPanel
+  │    ├─ projection_accuracy/{YYYY-MM} point read
+  │    └─ projection_accuracy_history/{YYYY} lazy yearly point read
+  └─ 本月活動 / projection_context
+
+SystemMaintenance
+  ├─ 檢查本月資料
+  ├─ 整理月份報表
+  ├─ 處理異常資料
+  ├─ 備份或救回資料
+  └─ secondary / advanced governance tools
+
+SettingsView / Permission Matrix
+  ├─ local permission draft
+  ├─ sticky role identity / active column safety
+  └─ existing updateModulePermissions(...) save authority
+```
+
+架構邊界：
+
+- Projection Accuracy 的 writer / scoring / data model 不因 UI 搬移而改變。
+- System Maintenance 仍是資料治理中心，但不再作為 Projection Accuracy product UI。
+- Permission Matrix 的變更是 presentation safety；沒有新增前端直接 permission write，也沒有改 Backend authorization / Rules。
+- System Maintenance IA 重排不建立第二套 handler / writer；既有正式 handler 與 data authority 繼續被沿用。
+
+Firestore / runtime topology delta：
+
+```text
+selected-month Accuracy read = +1 bounded point read / uncached brand-month
+history read                 = +1 yearly point read / required uncached year after expand
+new persistent listener      = 0
+new polling                  = 0
+new Firestore path/schema    = 0
+Functions / Rules change     = 0 / 0
+```
+
+---
 
 # Smart Forecast / Event Context B3B Production Architecture Override — 2026-09-11
 

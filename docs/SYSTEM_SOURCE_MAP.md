@@ -1,9 +1,77 @@
 # SYSTEM_SOURCE_MAP.md
 
 > 狀態：Project Knowledge Base / Source Map v0.1
-> 已整併至 2026-09-11 Smart Forecast B3B Event Context v2 closeout；latest runtime source = `b962dc08c4c5515bcb3b6d56f4f74a82d985ca94`，Frontend Production gh-pages = `612e620f88ef3d6693ceb3b9a3ea100f3d3192da`，`CURRENT_APP_VERSION = 3.5.3`，`~/cyj-new` 為唯一正式 Source of Truth。
+> 已整併至 2026-09-11 Frontend UX ownership closeout；latest runtime source = `c4b7b57e486d64ef59282d23789ea7ec93a9a884`，Frontend Production gh-pages = `6761f277f1b796cc49697d1f10acaa8919fc800e`，`CURRENT_APP_VERSION = 3.5.3`，`~/cyj-new` 為唯一正式 Source of Truth。
 > 禁止以舊對話、舊版檔案、AI 記憶或未提供的檔案補足事實。
 > 無法由目前正式程式確認的內容，必須標記為「未由目前正式來源確認」。
+
+---
+
+# Frontend UX Ownership Runtime Source Override — 2026-09-11
+
+最新正式 runtime lineage：
+
+```text
+Runtime promotion commit       = c4b7b57e486d64ef59282d23789ea7ec93a9a884
+origin/main                    = c4b7b57e486d64ef59282d23789ea7ec93a9a884
+Frontend Production gh-pages  = 6761f277f1b796cc49697d1f10acaa8919fc800e
+CURRENT_APP_VERSION           = 3.5.3
+```
+
+本次最新 Frontend owners：
+
+```text
+src/components/SmartForecastView.jsx
+  → Smart Forecast page composer
+  → Projection Accuracy panel placement owner
+
+src/components/SmartForecastAccuracyPanel.jsx
+  → projection_accuracy/{YYYY-MM} read-only consumer
+  → projection_accuracy_history/{YYYY} lazy yearly read-only consumer
+  → approved static historical evidence presentation
+  → no listener / polling / collection scan / frontend write
+
+src/components/SystemMaintenance.jsx
+  → data-governance / maintenance workspace
+  → four primary problem-oriented tasks
+  → traffic observation as secondary surface
+  → no Projection Accuracy / rolling-history detail UI
+
+src/components/SettingsView.jsx
+  → module permission matrix presentation
+  → sticky role headers / sticky module column / active-role highlight / sticky save bar
+  → local draft only until existing updateModulePermissions(...) save authority is invoked
+```
+
+Regression owners：
+
+```text
+tests/smartForecastAccuracyPlacement.test.js
+tests/projectionObservability.test.js
+tests/systemMaintenanceProductIA.test.js
+tests/permissionMatrixUx.test.js
+```
+
+Maintenance normal-UI retirement in this runtime：
+
+```text
+yearly Target Summary rebuild UI       = retired from normal UI
+Target Coverage full-month audit UI    = retired from normal UI
+Target Coverage metadata migration UI  = retired from normal UI
+Backend recovery / governance surfaces = retained
+```
+
+Permission semantics / Security authority 沒有因 UX 改版重定義；`AUTH_AND_SECURITY.md` 既有「Frontend module permission != 完整 server-side authorization」邊界維持。
+
+Read topology delta from this Frontend ownership change：
+
+```text
+Smart Forecast selected-month Accuracy = +1 single-document read / uncached brand-month
+rolling history                        = +1 yearly single-document read / required uncached year after expand
+new listener                           = 0
+new polling                            = 0
+Permission Matrix direct Firestore ops = 0
+```
 
 ---
 
