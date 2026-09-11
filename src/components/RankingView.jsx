@@ -6,6 +6,7 @@ import { ViewWrapper, Card } from "./SharedUI";
 import { buildHistoricalFormalRankingRows, resolveHistoricalReportFormalTrust } from "../utils/reportFormalConsumer";
 import { buildCurrentDetailFormalAuthority } from "../utils/currentDetailFormalConsumer.js";
 import { normalizeStoreLifecycleCore } from "../utils/storeLifecycle.js";
+import { resolveKpiPresentationLabel } from "../utils/kpiPresentation.js";
 
 const RankingView = () => {
   const { 
@@ -344,8 +345,16 @@ const RankingView = () => {
   const isCurrentDetailFormalMode = !isHistoricalFormalMode && currentDetailFormalAuthority.compatible;
   const isFormalRankingMode = isHistoricalFormalMode || isCurrentDetailFormalMode;
   const isFiniteKpi = (value) => value !== null && value !== undefined && Number.isFinite(Number(value));
-  const formatPercentOrNA = (value, digits = 1) => isFiniteKpi(value) ? `${Number(value).toFixed(digits)}%` : "N/A";
-  const formatMoneyOrNA = (value) => isFiniteKpi(value) ? fmtMoney(Number(value)) : "N/A";
+  const formatPercentOrNA = (value, digits = 1, status = "") => (
+    isFiniteKpi(value)
+      ? `${Number(value).toFixed(digits)}%`
+      : resolveKpiPresentationLabel({ status, fallback: "尚無資料" })
+  );
+  const formatMoneyOrNA = (value, status = "") => (
+    isFiniteKpi(value)
+      ? fmtMoney(Number(value))
+      : resolveKpiPresentationLabel({ status, fallback: "尚無資料" })
+  );
 
   const targetSourceDebug = useMemo(() => {
     return {
@@ -474,11 +483,11 @@ const RankingView = () => {
         isFormalRankingMode ? (store.rank ?? "") : (index + 1),
         store.displayName,
         store.manager,
-        isFiniteKpi(store.cashTotal) ? store.cashTotal : "N/A",
-        formatPercentOrNA(store.achievement, 2),
-        isFiniteKpi(store.accrualTotal) ? store.accrualTotal : "N/A",
-        isFiniteKpi(store.accrualTarget) ? store.accrualTarget : "N/A",
-        formatPercentOrNA(store.accrualAchievement, 2),
+        isFiniteKpi(store.cashTotal) ? store.cashTotal : resolveKpiPresentationLabel({ status: store.cashStatus, fallback: "尚無資料" }),
+        formatPercentOrNA(store.achievement, 2, store.achievementStatus),
+        isFiniteKpi(store.accrualTotal) ? store.accrualTotal : resolveKpiPresentationLabel({ status: store.accrualStatus, fallback: "尚無資料" }),
+        isFiniteKpi(store.accrualTarget) ? store.accrualTarget : resolveKpiPresentationLabel({ status: store.accrualTargetStatus, fallback: "目標未設定" }),
+        formatPercentOrNA(store.accrualAchievement, 2, store.accrualAchievementStatus),
         store.skincareSalesTotal || 0,
         store.trafficTotal || 0,
         store.trafficASP || 0,
@@ -514,7 +523,7 @@ const RankingView = () => {
           <div className="text-right">
             <div className="text-xs text-stone-400 font-bold uppercase">現金達成</div>
             <div className={`text-xl font-mono font-bold ${isFiniteKpi(store.achievement) && Number(store.achievement) >= 100 ? 'text-emerald-500' : 'text-stone-700'}`}>
-              {formatPercentOrNA(store.achievement)}
+              {formatPercentOrNA(store.achievement, 1, store.achievementStatus)}
             </div>
           </div>
         </div>
@@ -522,17 +531,17 @@ const RankingView = () => {
         <div className="grid grid-cols-2 gap-4">
           <div className="space-y-1">
             <p className="text-xs text-stone-400 flex items-center gap-1"><DollarSign size={10}/> 現金業績</p>
-            <p className="font-mono font-bold text-stone-700">{formatMoneyOrNA(store.cashTotal)}</p>
+            <p className="font-mono font-bold text-stone-700">{formatMoneyOrNA(store.cashTotal, store.cashStatus)}</p>
           </div>
           <div className="space-y-1">
              <p className="text-xs text-stone-400 flex items-center gap-1"><Briefcase size={10}/> 權責達成</p>
              <p className={`font-mono font-bold ${isFiniteKpi(store.accrualAchievement) && Number(store.accrualAchievement) >= 100 ? 'text-emerald-600' : 'text-blue-600'}`}>
-               {formatPercentOrNA(store.accrualAchievement)}
+               {formatPercentOrNA(store.accrualAchievement, 1, store.accrualAchievementStatus)}
              </p>
           </div>
           <div className="space-y-1">
             <p className="text-xs text-stone-400 flex items-center gap-1"><TrendingUp size={10}/> 權責業績</p>
-            <p className="font-mono font-bold text-stone-600">{formatMoneyOrNA(store.accrualTotal)}</p>
+            <p className="font-mono font-bold text-stone-600">{formatMoneyOrNA(store.accrualTotal, store.accrualStatus)}</p>
           </div>
           <div className="space-y-1">
             <p className="text-xs text-stone-400 flex items-center gap-1"><Users size={10}/> 客流/新客</p>
@@ -609,18 +618,18 @@ const RankingView = () => {
                   <tr key={store.name} className="hover:bg-stone-50 transition-colors">
                     <td className="px-3 py-3.5 text-center text-stone-400 font-bold">{isFormalRankingMode ? (store.rank ?? "—") : (index + 1)}</td>
                     <td className="px-3 py-3.5 font-bold text-stone-700">{store.displayName}</td>
-                    <td className="px-3 py-3.5 text-right font-mono font-bold text-stone-700">{formatMoneyOrNA(store.cashTotal)}</td>
+                    <td className="px-3 py-3.5 text-right font-mono font-bold text-stone-700">{formatMoneyOrNA(store.cashTotal, store.cashStatus)}</td>
                     
                     <td className={`px-3 py-3.5 text-right font-mono font-bold ${isFiniteKpi(store.achievement) && Number(store.achievement) >= 100 ? "text-emerald-500" : "text-amber-500"}`}>
-                      {formatPercentOrNA(store.achievement)}
+                      {formatPercentOrNA(store.achievement, 1, store.achievementStatus)}
                     </td>
 
                     <td className="px-3 py-3.5 text-right font-mono font-bold text-blue-600">
-                      {formatMoneyOrNA(store.accrualTotal)}
+                      {formatMoneyOrNA(store.accrualTotal, store.accrualStatus)}
                     </td>
                     
                     <td className={`px-3 py-3.5 text-right font-mono font-bold ${isFiniteKpi(store.accrualAchievement) && Number(store.accrualAchievement) >= 100 ? "text-emerald-500" : "text-blue-400"}`}>
-                      {formatPercentOrNA(store.accrualAchievement)}
+                      {formatPercentOrNA(store.accrualAchievement, 1, store.accrualAchievementStatus)}
                     </td>
 
                     <td className="px-3 py-3.5 text-right font-mono text-stone-600">{fmtNum(store.trafficTotal)}</td>

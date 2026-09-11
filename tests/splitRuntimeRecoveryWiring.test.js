@@ -65,7 +65,7 @@ test("App keeps System Exclusion as one brand-scoped live authority document and
   assert.doesNotMatch(source, /key:\s*"auditExclusions"/);
   assert.match(source, /fetchGlobalData_core_docs[\s\S]{0,220}9/);
   assert.doesNotMatch(source, /setInterval\([\s\S]{0,200}audit_exclusions/);
-  assert.match(source, /CURRENT_APP_VERSION = "3\.5\.3"/);
+  assert.match(source, /CURRENT_APP_VERSION = "3\.6\.0"/);
 });
 
 test("Daily Analysis consumes formal System Exclusion scope and separates partial observed actuals from completeness", () => {

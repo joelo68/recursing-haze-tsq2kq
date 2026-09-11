@@ -32,7 +32,7 @@ const DashboardView = () => {
           <ViewWrapper>
               <div className="flex h-[50vh] items-center justify-center flex-col animate-in fade-in duration-300">
                   <Loader2 className="w-12 h-12 animate-spin text-stone-300 mb-4" />
-                  <span className="text-stone-400 font-bold tracking-widest text-sm">Dashboard 數據載入中...</span>
+                  <span className="text-stone-400 font-bold tracking-widest text-sm">營運資料載入中...</span>
               </div>
           </ViewWrapper>
       );

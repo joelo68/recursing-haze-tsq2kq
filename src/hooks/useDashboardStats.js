@@ -973,47 +973,47 @@ export function useDashboardStats() {
       loading: {
         label: "檢查中",
         tone: "stone",
-        hint: "正在確認此月份 Summary 是否可作為 Dashboard 資料來源。",
+        hint: "正在確認此月份的月報資料是否可使用。",
       },
       missing: {
-        label: "尚未建立 Summary",
+        label: "尚未建立月報資料",
         tone: "rose",
-        hint: "此月份尚未建立完整 Summary，Dashboard 會改用明細資料，避免顯示舊數字。",
+        hint: "此月份尚未建立完整月報資料，目前改用明細資料，避免顯示舊數字。",
       },
       dirty: {
-        label: "Summary 需重新整理",
+        label: "月報資料需要重新整理",
         tone: "amber",
-        hint: "此月份有待重算異動，Dashboard 暫時改用明細資料，避免舊 Summary 誤導判斷。",
+        hint: "此月份有待重算異動，目前改用明細資料，避免舊月報資料誤導判斷。",
       },
       exclusion_stale: {
         label: "排除設定已更新",
         tone: "amber",
-        hint: "此月份 Summary 使用舊版排除設定，已暫停信任並改用明細資料等待重算。",
+        hint: "此月份月報資料使用舊版排除設定，已暫停使用並改用明細資料等待重新整理。",
       },
       current_dirty: {
         label: "本月即時資料",
         tone: "amber",
-        hint: "本月仍以即時明細為準，Summary 不作為 Dashboard 主要來源。",
+        hint: "本月仍以即時明細為準，歷史月報資料不作為營運總覽主要來源。",
       },
       unverified: {
-        label: "Summary 尚未比對",
+        label: "月報資料尚未比對",
         tone: "amber",
-        hint: "Summary 已建立但尚未完成比對，Dashboard 暫時改用明細資料。",
+        hint: "月報資料已建立但尚未完成比對，目前暫時改用明細資料。",
       },
       mismatch: {
-        label: "Summary 比對異常",
+        label: "月報資料比對異常",
         tone: "rose",
-        hint: "Summary 與明細重算結果不一致，Dashboard 暫時改用明細資料。",
+        hint: "月報資料與明細重新計算結果不一致，目前暫時改用明細資料。",
       },
       verified: {
-        label: "Summary 已驗證",
+        label: "月報資料已確認",
         tone: "emerald",
-        hint: "Summary 已建立、無待重算異動，且最近一次比對通過。",
+        hint: "月報資料已建立、沒有待整理異動，且最近一次比對通過。",
       },
       error: {
-        label: "Summary 狀態檢查失敗",
+        label: "月報資料狀態檢查失敗",
         tone: "rose",
-        hint: "無法確認 Summary 可信度，Dashboard 會改用明細資料。",
+        hint: "無法確認月報資料是否可使用，目前會改用明細資料。",
       },
     };
     return map[statusKey] || map.unverified;
@@ -2202,14 +2202,14 @@ export function useDashboardStats() {
       yearMonth: selectedYearMonth,
       trustStatus: dashboardSummaryBundle.trustStatus,
       statusKey: dashboardSummaryBundle.trustStatus?.statusKey || (isSelectedCurrentMonth ? "current" : "unknown"),
-      statusLabel: isSelectedCurrentMonth ? "本月即時資料" : (dashboardSummaryBundle.trustStatus?.label || "Summary 狀態未知"),
+      statusLabel: isSelectedCurrentMonth ? "本月即時資料" : (dashboardSummaryBundle.trustStatus?.label || "月報資料狀態未知"),
       statusHint: isSelectedCurrentMonth
-        ? "本月 Dashboard 以即時明細為準。"
+        ? "本月營運總覽以即時明細為準。"
         : isHistoricalDetailRefreshing
-        ? "Summary 已失效，正在重新讀取此月份最新明細；完成前保留原畫面，避免顯示 0 或半套資料。"
+        ? "歷史月報資料已失效，正在重新讀取此月份最新明細；完成前保留原畫面，避免顯示 0 或不完整資料。"
         : hasHistoricalDetailRefreshError
         ? `最新明細載入失敗：${historicalDetailRefreshState?.error || "未知錯誤"}`
-        : (dashboardSummaryBundle.trustStatus?.hint || "尚未完成 Summary 狀態判斷。"),
+        : (dashboardSummaryBundle.trustStatus?.hint || "尚未完成月報資料狀態判斷。"),
       isTrustedSummary: dashboardSummaryBundle.trustStatus?.isTrusted === true,
       detailRefreshStatus: historicalDetailRefreshState?.status || "idle",
       detailRefreshYearMonth: historicalDetailRefreshState?.yearMonth || "",
@@ -2228,12 +2228,12 @@ export function useDashboardStats() {
       dataSourceLabel: isSelectedCurrentMonth
         ? "即時明細"
         : summaryDashboardStats
-        ? "已整理 Summary"
+        ? "已確認月報資料"
         : isHistoricalDetailRefreshing
         ? "正在載入最新明細"
         : hasHistoricalDetailRefreshError
         ? "明細載入失敗"
-        : "明細暫代",
+        : "目前顯示明細資料",
       lastUpdatedAtText: dashboardSummaryBundle.trustStatus?.lastUpdatedAtText || "",
       lastCompareAtText: dashboardSummaryBundle.trustStatus?.lastCompareAtText || "",
       pendingCount: dashboardSummaryBundle.trustStatus?.pendingCount || 0,

@@ -28,6 +28,7 @@ import {
   STORE_HEALTH_DIMENSIONS,
 } from "../utils/storeHealth.js";
 import { KPI_VALUE_STATUS } from "../utils/kpiContracts.js";
+import { resolveKpiPresentationLabel } from "../utils/kpiPresentation.js";
 
 const StoreAnalysisView = () => {
   const {
@@ -142,12 +143,16 @@ const StoreAnalysisView = () => {
     benchmarks: targets?.benchmarks || {},
   }), [brandId, targets?.benchmarks]);
 
-  const formatMoneyOrNA = useCallback((value) => (
-    typeof value === "number" && Number.isFinite(value) ? fmtMoney(value) : "N/A"
+  const formatMoneyOrNA = useCallback((value, status = "") => (
+    typeof value === "number" && Number.isFinite(value)
+      ? fmtMoney(value)
+      : resolveKpiPresentationLabel({ status, fallback: "尚無資料" })
   ), [fmtMoney]);
 
-  const formatAchievementOrNA = useCallback((value) => (
-    typeof value === "number" && Number.isFinite(value) ? `${value.toFixed(1)}% 達成` : "N/A"
+  const formatAchievementOrNA = useCallback((value, status = "") => (
+    typeof value === "number" && Number.isFinite(value)
+      ? `${value.toFixed(1)}% 達成`
+      : resolveKpiPresentationLabel({ status, fallback: "尚無資料" })
   ), []);
 
   const getAchievementTone = useCallback((value) => {
@@ -156,11 +161,11 @@ const StoreAnalysisView = () => {
   }, []);
 
   const formatHealthPercentOrNA = useCallback((value, digits = 1) => (
-    typeof value === "number" && Number.isFinite(value) ? `${(value * 100).toFixed(digits)}%` : "N/A"
+    typeof value === "number" && Number.isFinite(value) ? `${(value * 100).toFixed(digits)}%` : "尚無資料"
   ), []);
 
   const formatScoreOrNA = useCallback((value) => (
-    typeof value === "number" && Number.isFinite(value) ? value.toFixed(0) : "N/A"
+    typeof value === "number" && Number.isFinite(value) ? value.toFixed(0) : "尚無資料"
   ), []);
 
   const isHealthMetricBelowBenchmark = useCallback((value, benchmark, offset = 0) => (
@@ -1037,7 +1042,7 @@ const StoreAnalysisView = () => {
                   <div className="flex justify-between items-center mb-2">
                     <div>
                         <h3 className="font-bold text-stone-700 flex items-center gap-2"><Activity size={18} className="text-indigo-500"/> {managementRadarTitle}</h3>
-                        <p className="text-xs text-stone-400">Regional Five-Force Analysis</p>
+                        <p className="text-xs text-stone-400">區域經營體質分析</p>
                     </div>
                     {/* ★ 加入白話文翻譯蒟蒻 ★ */}
                     <RadarGuideTooltip />
@@ -1063,8 +1068,8 @@ const StoreAnalysisView = () => {
 
                <div className="w-full xl:w-2/3 grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4 content-start">
                   <div className="bg-white p-5 rounded-2xl border shadow-sm flex flex-col justify-between">
-                    <div><p className="text-stone-400 text-xs font-bold mb-1">彙整現金業績</p><h3 className="text-2xl font-bold text-stone-700">{formatMoneyOrNA(activeManagementMetrics.totalCash)}</h3></div>
-                    <p className={`text-sm font-bold mt-2 ${getAchievementTone(activeManagementMetrics.achievement)}`}>{formatAchievementOrNA(activeManagementMetrics.achievement)}</p>
+                    <div><p className="text-stone-400 text-xs font-bold mb-1">彙整現金業績</p><h3 className="text-2xl font-bold text-stone-700">{formatMoneyOrNA(activeManagementMetrics.totalCash, activeManagementMetrics.cashStatus)}</h3></div>
+                    <p className={`text-sm font-bold mt-2 ${getAchievementTone(activeManagementMetrics.achievement)}`}>{formatAchievementOrNA(activeManagementMetrics.achievement, activeManagementMetrics.achievementStatus)}</p>
                   </div>
                   <div className="bg-white p-5 rounded-2xl border shadow-sm">
                     <p className="text-stone-400 text-xs font-bold mb-1">彙整消耗客單</p>
@@ -1072,7 +1077,7 @@ const StoreAnalysisView = () => {
                   </div>
                   <div className="bg-white p-5 rounded-2xl border shadow-sm">
                     <p className="text-stone-400 text-xs font-bold mb-1">彙整目標</p>
-                    <h3 className="text-2xl font-bold text-stone-700">{formatMoneyOrNA(activeManagementMetrics.budget)}</h3>
+                    <h3 className="text-2xl font-bold text-stone-700">{formatMoneyOrNA(activeManagementMetrics.budget, activeManagementMetrics.budgetStatus)}</h3>
                   </div>
                   <div className="bg-white p-5 rounded-2xl border shadow-sm">
                     <p className="text-stone-400 text-xs font-bold mb-1">平均新客客單</p>
@@ -1242,7 +1247,7 @@ const StoreAnalysisView = () => {
                   <div className="flex justify-between items-center mb-2">
                     <div>
                         <h3 className="font-bold text-stone-700 flex items-center gap-2"><Activity size={18} className="text-amber-500"/> 經營體質診斷</h3>
-                        <p className="text-xs text-stone-400">Five-Force Store Analysis</p>
+                        <p className="text-xs text-stone-400">單店經營體質分析</p>
                     </div>
                     <div className="flex items-center gap-2">
                         {(() => {
@@ -1297,8 +1302,8 @@ const StoreAnalysisView = () => {
 
                <div className="w-full xl:w-2/3 grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4 content-start">
                   <div className="bg-white p-5 rounded-2xl border shadow-sm flex flex-col justify-between">
-                    <div><p className="text-stone-400 text-xs font-bold mb-1">現金業績</p><h3 className="text-2xl font-bold text-stone-700">{formatMoneyOrNA(storeMetrics.totalCash)}</h3></div>
-                    <p className={`text-sm font-bold mt-2 ${getAchievementTone(storeMetrics.achievement)}`}>{formatAchievementOrNA(storeMetrics.achievement)}</p>
+                    <div><p className="text-stone-400 text-xs font-bold mb-1">現金業績</p><h3 className="text-2xl font-bold text-stone-700">{formatMoneyOrNA(storeMetrics.totalCash, storeMetrics.cashStatus)}</h3></div>
+                    <p className={`text-sm font-bold mt-2 ${getAchievementTone(storeMetrics.achievement)}`}>{formatAchievementOrNA(storeMetrics.achievement, storeMetrics.achievementStatus)}</p>
                   </div>
                   <div className="bg-white p-5 rounded-2xl border shadow-sm">
                     <p className="text-stone-400 text-xs font-bold mb-1">平均消耗客單</p>
@@ -1306,7 +1311,7 @@ const StoreAnalysisView = () => {
                   </div>
                   <div className="bg-white p-5 rounded-2xl border shadow-sm">
                     <p className="text-stone-400 text-xs font-bold mb-1">本月目標</p>
-                    <h3 className="text-2xl font-bold text-stone-700">{formatMoneyOrNA(storeMetrics.budget)}</h3>
+                    <h3 className="text-2xl font-bold text-stone-700">{formatMoneyOrNA(storeMetrics.budget, storeMetrics.budgetStatus)}</h3>
                   </div>
                   <div className="bg-white p-5 rounded-2xl border shadow-sm">
                     <p className="text-stone-400 text-xs font-bold mb-1">新客平均客單</p>

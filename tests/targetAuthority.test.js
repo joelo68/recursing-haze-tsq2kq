@@ -221,7 +221,7 @@ test("App propagates benchmark settings and no longer promotes missing newASP to
   assert.match(app, /import \{ validPositiveSetting \} from "\.\/utils\/kpiContracts"/);
   assert.match(app, /benchmarks:\s*data\?\.benchmarks/);
   assert.match(app, /newASP:\s*newAspResult\.valid \? newAspResult\.value : null/);
-  assert.match(app, /CURRENT_APP_VERSION = "3\.5\.3"/);
+  assert.match(app, /CURRENT_APP_VERSION = "3\.6\.0"/);
   assert.doesNotMatch(app, /newASP:\s*Number\(data\.newASP \?\? 3500\)/);
 });
 

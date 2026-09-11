@@ -10,6 +10,7 @@ import { ViewWrapper, Card } from "./SharedUI";
 import { AppContext } from "../AppContext";
 import { sortManagerNames, sortStoreNames, sortManagersByOrgOrder, sortStoresByOrgOrder } from "../utils/helpers";
 import { KPI_VALUE_STATUS } from "../utils/kpiContracts.js";
+import { resolveKpiPresentationLabel } from "../utils/kpiPresentation.js";
 import { aggregateFormalMetrics } from "../utils/summarySemantics.js";
 import { buildDailyObservedTotals, isDailyObservedFormalStatus } from "../utils/dailyObservedTotals.js";
 import { getLifecycleEligibleStoreEntries, isLifecycleEntryExpectedForDate, normalizeLifecycleMaster } from "../utils/storeLifecycle.js";
@@ -436,8 +437,16 @@ const DailyView = () => {
   }, [dailyTherapistReports, effectiveStores, systemExcludedStoreSet, cleanName, therapists, therapistSortConfig]);
 
   const isFiniteKpi = (value) => typeof value === "number" && Number.isFinite(value);
-  const formatMoneyOrNA = (value) => isFiniteKpi(value) ? fmtMoney(value) : "N/A";
-  const formatNumberOrNA = (value) => isFiniteKpi(value) ? fmtNum(value) : "N/A";
+  const formatMoneyOrNA = (value, status = "") => (
+    isFiniteKpi(value)
+      ? fmtMoney(value)
+      : resolveKpiPresentationLabel({ status, fallback: "尚無資料" })
+  );
+  const formatNumberOrNA = (value, status = "") => (
+    isFiniteKpi(value)
+      ? fmtNum(value)
+      : resolveKpiPresentationLabel({ status, fallback: "尚無資料" })
+  );
 
   const handleSort = (key) => setSortConfig(prev => ({ key, direction: prev.key === key && prev.direction === 'desc' ? 'asc' : 'desc' }));
   const handleTherapistSort = (key) => setTherapistSortConfig(prev => ({ key, direction: prev.key === key && prev.direction === 'desc' ? 'asc' : 'desc' }));
@@ -670,8 +679,8 @@ const DailyView = () => {
                             
                             {store.isReported ? (
                               <>
-                                <td className="p-4 text-center font-mono font-bold text-amber-600">{formatMoneyOrNA(store.cash)}</td>
-                                <td className="p-4 text-center font-mono font-bold text-indigo-600">{formatMoneyOrNA(store.accrual)}</td>
+                                <td className="p-4 text-center font-mono font-bold text-amber-600">{formatMoneyOrNA(store.cash, store.cashStatus)}</td>
+                                <td className="p-4 text-center font-mono font-bold text-indigo-600">{formatMoneyOrNA(store.accrual, store.accrualStatus)}</td>
                                 {/* ★ 修復：將操作客流與新客數改為純數字 fmtNum */}
                                 <td className="p-4 text-center font-mono text-stone-600">{fmtNum(store.traffic)}</td>
                                 <td className="p-4 text-center font-mono text-emerald-600">{fmtNum(store.newCustomers)}</td>

@@ -688,7 +688,7 @@ export default function SystemMaintenance() {
   const handleLoadRecalcQueue = async () => {
     setLoadingAction("loadRecalcQueue");
     setLogs([]);
-    addLog(`🧭 載入 ${brandLabel} 待重新校準月份...`);
+    addLog(`🧭 載入 ${brandLabel} 待重新整理月份...`);
     try {
       const rows = await loadPendingRecalcQueueRows();
       const groups = summarizeRecalcQueueRows(rows);
@@ -697,7 +697,7 @@ export default function SystemMaintenance() {
       setRecalcQueueTotal(rows.length);
       setRecalcQueueHealth(health);
       addLog(`✅ 已載入 ${rows.length.toLocaleString()} 筆待重算紀錄：歷史 ${health.historical.toLocaleString()}、本月 ${health.live.toLocaleString()}、未來 ${health.future.toLocaleString()}、格式異常 ${health.invalid.toLocaleString()}。`);
-      showToast(groups.length ? `已載入 ${groups.length} 個待重算月份` : "目前沒有待重新校準月份", groups.length ? "success" : "info");
+      showToast(groups.length ? `已載入 ${groups.length} 個待重算月份` : "目前沒有待重新整理月份", groups.length ? "success" : "info");
       return { rows, groups, total: rows.length, health };
     } catch (error) {
       console.error(error);
@@ -710,7 +710,7 @@ export default function SystemMaintenance() {
   };
 
   const handleCleanupRecalcQueueNoise = async () => {
-    if (!window.confirm("確定整理無效待辦嗎？\n\n本月、未來月份與格式異常的 pending 將移出待重算清單；歷史月份仍會保留等待自動修復。")) return;
+    if (!window.confirm("確定整理無效待辦嗎？\n\n本月、未來月份與格式異常的待辦會移出等待整理清單；歷史月份仍會保留等待系統自動整理。")) return;
 
     setLoadingAction("cleanupRecalcQueue");
     setLogs([]);
@@ -862,12 +862,12 @@ export default function SystemMaintenance() {
   const handleCalibrateRecalcMonth = async (group) => {
     const month = group?.month;
     if (!month || month === "未知月份") return showToast("此月份格式異常，請先整理無效待辦", "error");
-    if (month >= todayMonth()) return showToast("本月或未來月份不應校準 Summary，請使用「整理無效待辦」", "info");
-    if (!window.confirm(`確定要重新校準 ${month} 嗎？\n\n將呼叫月度校準，完成後會把此月份 ${group.count.toLocaleString()} 筆 recalc_queue 標記為 completed。`)) return;
+    if (month >= todayMonth()) return showToast("本月或未來月份不應整理歷史月報，請使用「整理無效待辦」", "info");
+    if (!window.confirm(`確定要重新整理 ${month} 嗎？\n\n系統會重新整理這個月份，完成後會把 ${group.count.toLocaleString()} 筆待整理異動標記完成。`)) return;
 
     setLoadingAction(`calibrateQueue_${month}`);
     setLogs([]);
-    addLog(`🔄 啟動待重算月份校準：${brandId}｜${month}`);
+    addLog(`🔄 啟動待整理月份作業：${brandId}｜${month}`);
     try {
       await addMaintenanceLog({ type: "recalc_queue", action: "start_recalc_queue_calibration", month, status: "started", queueCount: group.count });
       const response = await fetch(`https://recalculatemonthlydata-hyhcwrnyaa-uc.a.run.app?brandId=${brandId}&yearMonth=${month}`);
@@ -893,12 +893,12 @@ export default function SystemMaintenance() {
 
       setRecalcQueueGroups((prev) => prev.filter((item) => item.month !== month));
       setRecalcQueueTotal((prev) => Math.max(0, prev - completedCount));
-      showToast(`${month} 已重新校準，${completedCount.toLocaleString()} 筆待重算紀錄已完成`, "success");
+      showToast(`${month} 已重新整理，${completedCount.toLocaleString()} 筆待整理紀錄已完成`, "success");
     } catch (error) {
       console.error(error);
-      addLog(`❌ 待重算月份校準失敗: ${error.message}`);
+      addLog(`❌ 待整理月份作業失敗: ${error.message}`);
       await addMaintenanceLog({ type: "recalc_queue", action: "fail_recalc_queue_calibration", month, status: "failed", errorMessage: error.message, queueCount: group.count });
-      showToast("待重算月份校準失敗", "error");
+      showToast("待整理月份作業失敗", "error");
     } finally {
       setLoadingAction(null);
     }
@@ -1174,9 +1174,9 @@ export default function SystemMaintenance() {
             <div key={row.label} className="bg-white rounded-2xl border border-stone-100 p-3 flex items-center justify-between gap-3">
               <div className="min-w-0">
                 <div className="flex items-center gap-2"><span className="w-7 h-7 rounded-xl bg-amber-50 text-[#B7863D] text-[11px] font-black flex items-center justify-center border border-amber-100">{index + 1}</span><p className="text-xs font-black text-stone-700 truncate">{row.label}</p></div>
-                <p className="text-[10px] text-stone-400 mt-1 ml-9">觸發 {row.triggers.toLocaleString()} 次｜平均 {row.avg.toLocaleString()} docs / 次</p>
+                <p className="text-[10px] text-stone-400 mt-1 ml-9">觸發 {row.triggers.toLocaleString()} 次｜平均讀取 {row.avg.toLocaleString()} 筆 / 次</p>
               </div>
-              <div className="text-right shrink-0"><p className={`text-sm font-black ${valueClass}`}>{row.docs.toLocaleString()}</p><p className="text-[10px] text-stone-400">docs</p></div>
+              <div className="text-right shrink-0"><p className={`text-sm font-black ${valueClass}`}>{row.docs.toLocaleString()}</p><p className="text-[10px] text-stone-400">筆</p></div>
             </div>
           ))}
         </div>
@@ -1235,7 +1235,7 @@ export default function SystemMaintenance() {
       icon: Radio,
       title: "系統流量觀察",
       subtitle: "只有需要追查讀取量時才使用",
-      goal: "找出哪些功能或資料來源造成 Firestore reads 上升。",
+      goal: "找出哪些功能或資料來源造成雲端資料讀取量上升。",
       when: "晚間全域上報後、費用異常，或改版後需要觀察節流效果時。",
       doesNot: "不會修改營運資料；只有全域上報模式會產生少量追蹤寫入。",
       result: "會看到讀取來源排行、尖峰時段與可優化方向。",
@@ -1317,7 +1317,7 @@ export default function SystemMaintenance() {
           : "目前屬於可觀察狀態；若出現本月待整理異動，代表舊版待辦尚未整理，請先依畫面建議處理。";
         items = [
           makeItem("資料健康檢查", `高風險 ${counts.danger}｜需注意 ${counts.warning}｜提醒 ${counts.info}`),
-          makeItem("待整理異動", isSelectedCurrentMonth() ? `本月異常待辦 ${currentMonthPending} 筆` : `歷史待校準 ${pendingTotal} 筆`),
+          makeItem("待整理異動", isSelectedCurrentMonth() ? `本月異常待辦 ${currentMonthPending} 筆` : `歷史待整理 ${pendingTotal} 筆`),
           makeItem("營運總覽狀態", "已確認歷史報表是否建立，以及整理後是否又有新異動"),
         ];
         nextActions = status === "danger"
@@ -1341,14 +1341,14 @@ export default function SystemMaintenance() {
         message = status === "success"
           ? "檢查結果可進入月份報表整理與比對。"
           : status === "danger"
-          ? "目前有會影響月結準確性的項目，建議先處理異常後再校準。"
+          ? "目前有會影響月結準確性的項目，建議先處理異常後再整理月報。"
           : "可先確認提醒項目是否合理；若出現本月待整理異動，請先依畫面建議處理。";
 
         metrics = [
           { label: "月結狀態", value: readiness, tone: status },
           { label: "缺少店日報", value: closing?.missingStoreReports?.length || 0, tone: (closing?.missingStoreReports?.length || 0) ? "danger" : "success" },
           { label: "高風險異常", value: counts.danger, tone: counts.danger ? "danger" : "success" },
-          { label: "待校準", value: pendingTotal, tone: pendingTotal ? "warning" : "success" },
+          { label: "待整理", value: pendingTotal, tone: pendingTotal ? "warning" : "success" },
         ];
         items = [
           makeItem("月結前檢查", `結果：${readiness}`),
@@ -1357,7 +1357,7 @@ export default function SystemMaintenance() {
           makeItem("歷史報表狀態", "已確認月份報表是否已整理完成"),
         ];
         nextActions = status === "success"
-          ? ["執行「月份報表整理」。", "校準後再執行 Summary 比對，確認一致。"]
+          ? ["執行「月份報表整理」。", "整理後再執行報表比對，確認資料一致。"]
           : ["先處理缺報、重複或紅色高風險異常。", "處理完成後，再重新執行月結前作業。"];
       } else if (scenarioId === "issue") {
         const health = await handleRunDataHealthCheck();
@@ -1375,14 +1375,14 @@ export default function SystemMaintenance() {
           { label: "異常類型", value: counts.issueTypes, tone: counts.issueTypes ? "warning" : "success" },
           { label: "高風險", value: counts.danger, tone: counts.danger ? "danger" : "success" },
           { label: "需注意", value: counts.warning, tone: counts.warning ? "warning" : "success" },
-          { label: "待校準", value: pendingTotal, tone: pendingTotal ? "warning" : "success" },
+          { label: "待整理", value: pendingTotal, tone: pendingTotal ? "warning" : "success" },
         ];
         items = [
           makeItem("資料異常掃描", `已掃描 ${Number(health?.scanned || 0).toLocaleString()} 筆資料`),
-          makeItem("待整理月份", `待校準 ${pendingTotal} 筆`),
+          makeItem("待整理月份", `待整理 ${pendingTotal} 筆`),
           makeItem("封存資料", "已載入目前月份的封存資料"),
         ];
-        nextActions = ["先處理資料本身問題，再執行單月校準。", "若資料是誤封存，可在封存資料清單中還原。"];
+        nextActions = ["先處理資料本身問題，再重新整理該月份。", "若資料是誤封存，可在封存資料清單中還原。"];
       } else if (scenarioId === "backup") {
         await handleLoadOrgStructureSnapshots();
         await handleLoadBackupRecords();
@@ -1857,7 +1857,7 @@ export default function SystemMaintenance() {
     try {
       const result = await flushReadTrackerToFirestore({ db, brandId, brandLabel, userRole, userName: "maintenance_user", activeView: "system_maintenance", force: true });
       if (result.skipped) showToast(`未上報：${result.reason}`, "info");
-      else { showToast(`已上報 ${result.totalReadDocs.toLocaleString()} docs`, "success"); refreshLocalReadStats(); }
+      else { showToast(`已上報 ${result.totalReadDocs.toLocaleString()} 筆資料`, "success"); refreshLocalReadStats(); }
     } catch (error) { console.error(error); showToast("手動上報失敗", "error"); }
     finally { setLoadingReadStats(false); }
   };
@@ -1994,7 +1994,7 @@ export default function SystemMaintenance() {
     setGlobalReadRangeUnsupportedCount(0);
     setGlobalReadRangeLegacyFallback(false);
     setGlobalReadScopeLabel("尚未載入全域讀取排行");
-    showToast("已清除目前畫面上的全域排行結果；Firestore 原始上報資料未刪除", "info");
+    showToast("已清除目前畫面上的全域排行結果；雲端原始上報資料未刪除", "info");
   };
 
   const handleLoadGlobalReadStats = async (options = {}) => {
@@ -2983,13 +2983,13 @@ export default function SystemMaintenance() {
 
   const getSummaryStatusMeta = (statusKey) => {
     const map = {
-      missing: { label: "尚未建立", tone: "rose", hint: "此品牌月份尚未建立完整 Summary，Dashboard 會使用原本明細計算。" },
+      missing: { label: "尚未建立", tone: "rose", hint: "此品牌月份尚未建立完整月報資料，營運總覽會使用原本明細計算。" },
       dirty: { label: "需重建", tone: "amber", hint: "此月份有新的日報提交、業績修正或刪除，建議重建並重新比對。" },
-      current_dirty: { label: "本月待辦異常", tone: "rose", hint: "本月 Dashboard 使用即時明細，不應存在 pending Queue；請執行「整理無效待辦」。" },
-      mismatch: { label: "比對有差異", tone: "rose", hint: "Summary 與原始明細重算結果不一致，請先檢查差異再上線使用。" },
-      unverified: { label: "已建立，尚未比對", tone: "amber", hint: "三份 Summary 已存在，但尚未完成比對驗證。" },
-      verified: { label: "已建立且比對通過", tone: "emerald", hint: "Summary 已建立、無待重算異動，且最近一次比對通過。" },
-      ready: { label: "已建立", tone: "emerald", hint: "三份 Summary 已存在。建議仍執行比對確認。" },
+      current_dirty: { label: "本月待辦異常", tone: "rose", hint: "本月營運總覽使用即時明細，不應長期存在等待整理的異動；請執行「整理無效待辦」。" },
+      mismatch: { label: "比對有差異", tone: "rose", hint: "月報資料與原始明細重新計算結果不一致，請先檢查差異再使用。" },
+      unverified: { label: "已建立，尚未比對", tone: "amber", hint: "三份月報資料已存在，但尚未完成比對確認。" },
+      verified: { label: "已建立且比對通過", tone: "emerald", hint: "月報資料已建立、沒有待整理異動，且最近一次比對通過。" },
+      ready: { label: "已建立", tone: "emerald", hint: "三份月報資料已存在。建議仍執行比對確認。" },
     };
     return map[statusKey] || map.ready;
   };
@@ -3069,11 +3069,11 @@ export default function SystemMaintenance() {
         checkedAt: new Date().toLocaleString("zh-TW", { hour12: false }),
       };
       setSummaryStatusReport(report);
-      if (!silent) showToast(`Summary 狀態：${report.label}`, statusKey === "verified" || statusKey === "ready" ? "success" : statusKey === "missing" || statusKey === "mismatch" ? "error" : "info");
+      if (!silent) showToast(`月報資料狀態：${report.label}`, statusKey === "verified" || statusKey === "ready" ? "success" : statusKey === "missing" || statusKey === "mismatch" ? "error" : "info");
       return report;
     } catch (error) {
       console.error(error);
-      if (!silent) showToast("Summary 狀態檢查失敗", "error");
+      if (!silent) showToast("月報資料狀態檢查失敗", "error");
       return null;
     } finally {
       if (!silent) setLoadingAction(null);
@@ -3084,19 +3084,19 @@ export default function SystemMaintenance() {
   const handleCalibrateAllPendingMonths = async () => {
     const rows = await loadPendingRecalcQueueRows();
     const groups = summarizeRecalcQueueRows(rows).filter((group) => group.month && group.month !== "未知月份" && group.month < todayMonth());
-    if (groups.length === 0) return showToast("目前沒有需要校準的歷史月份；本月或異常待辦請先整理", "info");
+    if (groups.length === 0) return showToast("目前沒有需要重新整理的歷史月份；本月或異常待辦請先整理", "info");
     const historicalQueueCount = groups.reduce((sum, group) => sum + Number(group.count || 0), 0);
-    if (!window.confirm(`確定要依序校準 ${groups.length} 個歷史月份嗎？\n\n共 ${historicalQueueCount.toLocaleString()} 筆歷史 pending 會在校準成功後標記完成。`)) return;
+    if (!window.confirm(`確定要依序整理 ${groups.length} 個歷史月份嗎？\n\n共 ${historicalQueueCount.toLocaleString()} 筆歷史待整理異動會在整理成功後標記完成。`)) return;
 
     setLoadingAction("calibrateAllQueues");
     setLogs([]);
-    addLog(`🔄 啟動批次校準：${brandId}｜${groups.length} 個歷史月份｜${historicalQueueCount.toLocaleString()} 筆 pending`);
+    addLog(`🔄 啟動批次整理：${brandId}｜${groups.length} 個歷史月份｜${historicalQueueCount.toLocaleString()} 筆待整理異動`);
     let completedMonths = 0;
     let completedRows = 0;
     try {
       await addMaintenanceLog({ type: "recalc_queue", action: "start_calibrate_all_pending_months", status: "started", monthCount: groups.length, queueCount: historicalQueueCount });
       for (const group of groups.sort((a, b) => String(a.month).localeCompare(String(b.month)))) {
-        addLog(`・校準 ${group.month} 中...`);
+        addLog(`・整理 ${group.month} 中...`);
         const response = await fetch(`https://recalculatemonthlydata-hyhcwrnyaa-uc.a.run.app?brandId=${brandId}&yearMonth=${group.month}`);
         if (!response.ok) throw new Error(`${group.month} 伺服器回應異常`);
         const result = await response.text();
@@ -3116,18 +3116,18 @@ export default function SystemMaintenance() {
           createdAt: serverTimestamp(),
           createdAtText: new Date().toISOString(),
         });
-        addLog(`✅ ${group.month} 完成，${count.toLocaleString()} 筆 queue 已標記完成。`);
+        addLog(`✅ ${group.month} 完成，${count.toLocaleString()} 筆待整理異動已標記完成。`);
       }
       await addMaintenanceLog({ type: "recalc_queue", action: "finish_calibrate_all_pending_months", status: "success", monthCount: completedMonths, completedQueueCount: completedRows });
       setRecalcQueueGroups([]);
       setRecalcQueueTotal(0);
       await loadDashboardSummaryStatus(calMonth, true);
-      showToast(`已完成 ${completedMonths} 個月份校準，${completedRows.toLocaleString()} 筆待辦已完成`, "success");
+      showToast(`已完成 ${completedMonths} 個月份整理，${completedRows.toLocaleString()} 筆待辦已完成`, "success");
     } catch (error) {
       console.error(error);
-      addLog(`❌ 批次校準失敗：${error.message}`);
+      addLog(`❌ 批次整理失敗：${error.message}`);
       await addMaintenanceLog({ type: "recalc_queue", action: "fail_calibrate_all_pending_months", status: "failed", errorMessage: error.message, completedMonths, completedQueueCount: completedRows });
-      showToast("批次校準失敗，請查看紀錄", "error");
+      showToast("批次整理失敗，請查看紀錄", "error");
     } finally {
       setLoadingAction(null);
       handleLoadRecalcQueue();
@@ -3136,7 +3136,7 @@ export default function SystemMaintenance() {
 
   const handleMonthEndDashboardSummaryCalibration = async () => {
     if (!/^\d{4}-\d{2}$/.test(String(calMonth || ""))) return showToast("請先選擇正確月份", "error");
-    if (!window.confirm(`確定要執行 ${calMonth} 月份報表整理嗎？\n\n流程會重建 dashboard_summary / therapist_summary / rankings_summary、立即比對，並將此月份 pending queue 標記完成。`)) return;
+    if (!window.confirm(`確定要執行 ${calMonth} 月份報表整理嗎？\n\n流程會重新整理營運總覽、管理師與排行月報資料，立即比對，並將此月份的待整理異動標記完成。`)) return;
 
     setLoadingAction("monthEndSummaryCalibration");
     setLogs([]);
@@ -3160,7 +3160,7 @@ export default function SystemMaintenance() {
         getDoc(doc(getCollectionPath("rankings_summary"), calMonth)),
       ]);
       if (!storedDashboardSnap.exists() || !storedTherapistSnap.exists() || !storedRankingsSnap.exists()) {
-        throw new Error("Summary 寫入後讀回失敗，無法完成 Raw ↔ persisted Summary 驗證");
+        throw new Error("歷史月報寫入後讀回失敗，無法完成資料驗證");
       }
       const rows = makeSummaryCompareRows({
         storedDashboard: storedDashboardSnap.data() || {},
@@ -3227,8 +3227,8 @@ export default function SystemMaintenance() {
         mismatchCount: mismatchRows.length,
         completedQueueCount: completedCount,
       });
-      addLog(`✅ Summary 已重建並比對：${isMatched ? "全部一致" : `${mismatchRows.length} 項差異`}。`);
-      addLog(`✅ ${completedCount.toLocaleString()} 筆 ${calMonth} pending queue 已標記完成。`);
+      addLog(`✅ 月報資料已重新整理並比對：${isMatched ? "全部一致" : `${mismatchRows.length} 項差異`}。`);
+      addLog(`✅ ${completedCount.toLocaleString()} 筆 ${calMonth} 待整理異動已標記完成。`);
       await loadDashboardSummaryStatus(calMonth, true);
       await handleLoadRecalcQueue();
       showToast(isMatched ? "月份報表整理完成且比對一致" : `月份報表整理完成，但有 ${mismatchRows.length} 項差異`, isMatched ? "success" : "error");
@@ -3244,11 +3244,11 @@ export default function SystemMaintenance() {
 
   const handleRebuildDashboardSummary = async () => {
     if (!/^\d{4}-\d{2}$/.test(String(calMonth || ""))) return showToast("請先選擇正確月份", "error");
-    if (!window.confirm(`確定要重建 ${calMonth} 的 Dashboard Summary 嗎？\n\n這不會改動原始日報，只會產生 dashboard_summary / therapist_summary / rankings_summary。`)) return;
+    if (!window.confirm(`確定要重新整理 ${calMonth} 的歷史月報嗎？\n\n這不會改動原始日報，只會更新營運總覽、管理師與排行月報資料。`)) return;
     setLoadingAction("rebuildSummary");
     setLogs([]);
     setSummaryBuildReport(null);
-    addLog(`🧱 開始重建 Dashboard Summary：${brandId}｜${calMonth}`);
+    addLog(`🧱 開始重新整理歷史月報：${brandId}｜${calMonth}`);
     try {
       await addMaintenanceLog({ type: "dashboard_summary", action: "start_rebuild_summary", month: calMonth, status: "started" });
       const { dashboardSummary, therapistSummary, rankingsSummary } = await buildDashboardSummaryPayloads(calMonth);
@@ -3287,13 +3287,13 @@ export default function SystemMaintenance() {
         createdAtText: new Date().toISOString(),
       });
       await addMaintenanceLog({ type: "dashboard_summary", action: "finish_rebuild_summary", month: calMonth, status: "success", result: report });
-      showToast(`${calMonth} Dashboard Summary 已重建`, "success");
+      showToast(`${calMonth} 歷史月報已重新整理`, "success");
       await loadDashboardSummaryStatus(calMonth, true);
     } catch (error) {
       console.error(error);
-      addLog(`❌ Dashboard Summary 重建失敗：${error.message}`);
+      addLog(`❌ 歷史月報重新整理失敗：${error.message}`);
       await addMaintenanceLog({ type: "dashboard_summary", action: "fail_rebuild_summary", month: calMonth, status: "failed", errorMessage: error.message });
-      showToast("Dashboard Summary 重建失敗", "error");
+      showToast("歷史月報重新整理失敗", "error");
     } finally {
       setLoadingAction(null);
     }
@@ -3308,38 +3308,38 @@ export default function SystemMaintenance() {
 
   const makeSummaryCompareRows = ({ storedDashboard, storedTherapist, storedRankings, freshDashboard, freshTherapist, freshRankings }) => {
     const rows = [
-      { label: "現金業績（legacy）", stored: getMetricValue(storedDashboard, "grandTotal.cash"), fresh: getMetricValue(freshDashboard, "grandTotal.cash"), type: "money" },
-      { label: "權責業績（legacy）", stored: getMetricValue(storedDashboard, "grandTotal.accrual"), fresh: getMetricValue(freshDashboard, "grandTotal.accrual"), type: "money" },
-      { label: "Gross Cash", stored: getMetricValue(storedDashboard, "grandTotal.grossCash", null), fresh: getMetricValue(freshDashboard, "grandTotal.grossCash", null), type: "money", exactNull: true },
-      { label: "General Refund", stored: getMetricValue(storedDashboard, "grandTotal.refund", null), fresh: getMetricValue(freshDashboard, "grandTotal.refund", null), type: "money", exactNull: true },
-      { label: "Skincare Refund", stored: getMetricValue(storedDashboard, "grandTotal.skincareRefund", null), fresh: getMetricValue(freshDashboard, "grandTotal.skincareRefund", null), type: "money", exactNull: true },
-      { label: "Formal 淨現金", stored: getMetricValue(storedDashboard, "grandTotal.formalNetCash", null), fresh: getMetricValue(freshDashboard, "grandTotal.formalNetCash", null), type: "money", exactNull: true },
+      { label: "現金業績（既有欄位）", stored: getMetricValue(storedDashboard, "grandTotal.cash"), fresh: getMetricValue(freshDashboard, "grandTotal.cash"), type: "money" },
+      { label: "權責業績（既有欄位）", stored: getMetricValue(storedDashboard, "grandTotal.accrual"), fresh: getMetricValue(freshDashboard, "grandTotal.accrual"), type: "money" },
+      { label: "現金原始值", stored: getMetricValue(storedDashboard, "grandTotal.grossCash", null), fresh: getMetricValue(freshDashboard, "grandTotal.grossCash", null), type: "money", exactNull: true },
+      { label: "一般退款", stored: getMetricValue(storedDashboard, "grandTotal.refund", null), fresh: getMetricValue(freshDashboard, "grandTotal.refund", null), type: "money", exactNull: true },
+      { label: "肌膚退款", stored: getMetricValue(storedDashboard, "grandTotal.skincareRefund", null), fresh: getMetricValue(freshDashboard, "grandTotal.skincareRefund", null), type: "money", exactNull: true },
+      { label: "正式淨現金", stored: getMetricValue(storedDashboard, "grandTotal.formalNetCash", null), fresh: getMetricValue(freshDashboard, "grandTotal.formalNetCash", null), type: "money", exactNull: true },
       { label: "總權責", stored: getMetricValue(storedDashboard, "grandTotal.totalAccrual", null), fresh: getMetricValue(freshDashboard, "grandTotal.totalAccrual", null), type: "money", exactNull: true },
-      { label: "Formal 權責", stored: getMetricValue(storedDashboard, "grandTotal.formalAccrual", null), fresh: getMetricValue(freshDashboard, "grandTotal.formalAccrual", null), type: "money", exactNull: true },
-      { label: "Gross Cash 狀態", stored: getMetricValue(storedDashboard, "grandTotal.grossCashStatus", ""), fresh: getMetricValue(freshDashboard, "grandTotal.grossCashStatus", ""), type: "text", exact: true },
-      { label: "General Refund 狀態", stored: getMetricValue(storedDashboard, "grandTotal.refundStatus", ""), fresh: getMetricValue(freshDashboard, "grandTotal.refundStatus", ""), type: "text", exact: true },
-      { label: "Skincare Refund 狀態", stored: getMetricValue(storedDashboard, "grandTotal.skincareRefundStatus", ""), fresh: getMetricValue(freshDashboard, "grandTotal.skincareRefundStatus", ""), type: "text", exact: true },
-      { label: "Formal 淨現金狀態", stored: getMetricValue(storedDashboard, "grandTotal.formalNetCashStatus", ""), fresh: getMetricValue(freshDashboard, "grandTotal.formalNetCashStatus", ""), type: "text", exact: true },
+      { label: "正式權責", stored: getMetricValue(storedDashboard, "grandTotal.formalAccrual", null), fresh: getMetricValue(freshDashboard, "grandTotal.formalAccrual", null), type: "money", exactNull: true },
+      { label: "現金原始值狀態", stored: getMetricValue(storedDashboard, "grandTotal.grossCashStatus", ""), fresh: getMetricValue(freshDashboard, "grandTotal.grossCashStatus", ""), type: "text", exact: true },
+      { label: "一般退款狀態", stored: getMetricValue(storedDashboard, "grandTotal.refundStatus", ""), fresh: getMetricValue(freshDashboard, "grandTotal.refundStatus", ""), type: "text", exact: true },
+      { label: "肌膚退款狀態", stored: getMetricValue(storedDashboard, "grandTotal.skincareRefundStatus", ""), fresh: getMetricValue(freshDashboard, "grandTotal.skincareRefundStatus", ""), type: "text", exact: true },
+      { label: "正式淨現金狀態", stored: getMetricValue(storedDashboard, "grandTotal.formalNetCashStatus", ""), fresh: getMetricValue(freshDashboard, "grandTotal.formalNetCashStatus", ""), type: "text", exact: true },
       { label: "總權責狀態", stored: getMetricValue(storedDashboard, "grandTotal.totalAccrualStatus", ""), fresh: getMetricValue(freshDashboard, "grandTotal.totalAccrualStatus", ""), type: "text", exact: true },
-      { label: "Formal 權責狀態", stored: getMetricValue(storedDashboard, "grandTotal.formalAccrualStatus", ""), fresh: getMetricValue(freshDashboard, "grandTotal.formalAccrualStatus", ""), type: "text", exact: true },
-      { label: "Formal 現金目標", stored: getMetricValue(storedDashboard, "grandTotal.formalCashTarget", null), fresh: getMetricValue(freshDashboard, "grandTotal.formalCashTarget", null), type: "money", exactNull: true },
-      { label: "Formal 權責目標", stored: getMetricValue(storedDashboard, "grandTotal.formalAccrualTarget", null), fresh: getMetricValue(freshDashboard, "grandTotal.formalAccrualTarget", null), type: "money", exactNull: true },
-      { label: "Formal 現金達成狀態", stored: getMetricValue(storedDashboard, "grandTotal.formalCashAchievementStatus", ""), fresh: getMetricValue(freshDashboard, "grandTotal.formalCashAchievementStatus", ""), type: "text", exact: true },
-      { label: "Formal 權責達成狀態", stored: getMetricValue(storedDashboard, "grandTotal.formalAccrualAchievementStatus", ""), fresh: getMetricValue(freshDashboard, "grandTotal.formalAccrualAchievementStatus", ""), type: "text", exact: true },
-      { label: "Cash Coverage", stored: getMetricValue(storedDashboard, "targetCoverage.cashCoverageComplete", null), fresh: getMetricValue(freshDashboard, "targetCoverage.cashCoverageComplete", null), type: "boolean", exact: true },
-      { label: "Accrual Coverage", stored: getMetricValue(storedDashboard, "targetCoverage.accrualCoverageComplete", null), fresh: getMetricValue(freshDashboard, "targetCoverage.accrualCoverageComplete", null), type: "boolean", exact: true },
-      { label: "Eligible Store Count", stored: getMetricValue(storedDashboard, "formalTargetAuthority.eligibleStoreCount", null), fresh: getMetricValue(freshDashboard, "formalTargetAuthority.eligibleStoreCount", null), type: "count", exactNull: true },
-      { label: "Formal Cash Target Total", stored: getMetricValue(storedDashboard, "formalTargetAuthority.cashTargetTotal", null), fresh: getMetricValue(freshDashboard, "formalTargetAuthority.cashTargetTotal", null), type: "money", exactNull: true },
-      { label: "Formal Accrual Target Total", stored: getMetricValue(storedDashboard, "formalTargetAuthority.accrualTargetTotal", null), fresh: getMetricValue(freshDashboard, "formalTargetAuthority.accrualTargetTotal", null), type: "money", exactNull: true },
-      { label: "Formal Target Coverage Consistent", stored: getMetricValue(storedDashboard, "formalTargetAuthority.coverageConsistent", null), fresh: getMetricValue(freshDashboard, "formalTargetAuthority.coverageConsistent", null), type: "boolean", exact: true },
-      { label: "Lifecycle Ready", stored: getMetricValue(storedDashboard, "formalTargetAuthority.lifecycleReady", null), fresh: getMetricValue(freshDashboard, "formalTargetAuthority.lifecycleReady", null), type: "boolean", exact: true },
-      { label: "Formal Rank Eligible Count", stored: getMetricValue(storedDashboard, "formalRankEligibleStoreCount", null), fresh: getMetricValue(freshDashboard, "formalRankEligibleStoreCount", null), type: "count", exactNull: true },
-      { label: "Summary Semantic Version", stored: getMetricValue(storedDashboard, "semanticVersion", ""), fresh: getMetricValue(freshDashboard, "semanticVersion", ""), type: "text", exact: true },
-      { label: "Store-level Formal Signature", stored: buildSummaryStoreSemanticSignature(storedDashboard), fresh: buildSummaryStoreSemanticSignature(freshDashboard), type: "text", exact: true },
-      { label: "Ranking Semantic Version", stored: getMetricValue(storedRankings, "semanticVersion", ""), fresh: getMetricValue(freshRankings, "semanticVersion", ""), type: "text", exact: true },
-      { label: "Formal Ranking Eligible Count", stored: getMetricValue(storedRankings, "formalRankEligibleStoreCount", null), fresh: getMetricValue(freshRankings, "formalRankEligibleStoreCount", null), type: "count", exactNull: true },
-      { label: "Formal Ranking Signature", stored: buildFormalRankingSignature(storedRankings), fresh: buildFormalRankingSignature(freshRankings), type: "text", exact: true },
-      { label: "Therapist KPI Signature", stored: buildTherapistSummarySignature(storedTherapist), fresh: buildTherapistSummarySignature(freshTherapist), type: "text", exact: true },
+      { label: "正式權責狀態", stored: getMetricValue(storedDashboard, "grandTotal.formalAccrualStatus", ""), fresh: getMetricValue(freshDashboard, "grandTotal.formalAccrualStatus", ""), type: "text", exact: true },
+      { label: "正式現金目標", stored: getMetricValue(storedDashboard, "grandTotal.formalCashTarget", null), fresh: getMetricValue(freshDashboard, "grandTotal.formalCashTarget", null), type: "money", exactNull: true },
+      { label: "正式權責目標", stored: getMetricValue(storedDashboard, "grandTotal.formalAccrualTarget", null), fresh: getMetricValue(freshDashboard, "grandTotal.formalAccrualTarget", null), type: "money", exactNull: true },
+      { label: "正式現金達成狀態", stored: getMetricValue(storedDashboard, "grandTotal.formalCashAchievementStatus", ""), fresh: getMetricValue(freshDashboard, "grandTotal.formalCashAchievementStatus", ""), type: "text", exact: true },
+      { label: "正式權責達成狀態", stored: getMetricValue(storedDashboard, "grandTotal.formalAccrualAchievementStatus", ""), fresh: getMetricValue(freshDashboard, "grandTotal.formalAccrualAchievementStatus", ""), type: "text", exact: true },
+      { label: "現金目標完整度", stored: getMetricValue(storedDashboard, "targetCoverage.cashCoverageComplete", null), fresh: getMetricValue(freshDashboard, "targetCoverage.cashCoverageComplete", null), type: "boolean", exact: true },
+      { label: "權責目標完整度", stored: getMetricValue(storedDashboard, "targetCoverage.accrualCoverageComplete", null), fresh: getMetricValue(freshDashboard, "targetCoverage.accrualCoverageComplete", null), type: "boolean", exact: true },
+      { label: "納入計算店數", stored: getMetricValue(storedDashboard, "formalTargetAuthority.eligibleStoreCount", null), fresh: getMetricValue(freshDashboard, "formalTargetAuthority.eligibleStoreCount", null), type: "count", exactNull: true },
+      { label: "正式現金目標總額", stored: getMetricValue(storedDashboard, "formalTargetAuthority.cashTargetTotal", null), fresh: getMetricValue(freshDashboard, "formalTargetAuthority.cashTargetTotal", null), type: "money", exactNull: true },
+      { label: "正式權責目標總額", stored: getMetricValue(storedDashboard, "formalTargetAuthority.accrualTargetTotal", null), fresh: getMetricValue(freshDashboard, "formalTargetAuthority.accrualTargetTotal", null), type: "money", exactNull: true },
+      { label: "目標完整度一致", stored: getMetricValue(storedDashboard, "formalTargetAuthority.coverageConsistent", null), fresh: getMetricValue(freshDashboard, "formalTargetAuthority.coverageConsistent", null), type: "boolean", exact: true },
+      { label: "門市營運期間已完成", stored: getMetricValue(storedDashboard, "formalTargetAuthority.lifecycleReady", null), fresh: getMetricValue(freshDashboard, "formalTargetAuthority.lifecycleReady", null), type: "boolean", exact: true },
+      { label: "可參與排行店數", stored: getMetricValue(storedDashboard, "formalRankEligibleStoreCount", null), fresh: getMetricValue(freshDashboard, "formalRankEligibleStoreCount", null), type: "count", exactNull: true },
+      { label: "月報計算版本", stored: getMetricValue(storedDashboard, "semanticVersion", ""), fresh: getMetricValue(freshDashboard, "semanticVersion", ""), type: "text", exact: true },
+      { label: "單店資料一致性標記", stored: buildSummaryStoreSemanticSignature(storedDashboard), fresh: buildSummaryStoreSemanticSignature(freshDashboard), type: "text", exact: true },
+      { label: "排行計算版本", stored: getMetricValue(storedRankings, "semanticVersion", ""), fresh: getMetricValue(freshRankings, "semanticVersion", ""), type: "text", exact: true },
+      { label: "正式排行可參與店數", stored: getMetricValue(storedRankings, "formalRankEligibleStoreCount", null), fresh: getMetricValue(freshRankings, "formalRankEligibleStoreCount", null), type: "count", exactNull: true },
+      { label: "正式排行一致性標記", stored: buildFormalRankingSignature(storedRankings), fresh: buildFormalRankingSignature(freshRankings), type: "text", exact: true },
+      { label: "管理師指標一致性標記", stored: buildTherapistSummarySignature(storedTherapist), fresh: buildTherapistSummarySignature(freshTherapist), type: "text", exact: true },
       { label: "人員業績", stored: getMetricValue(storedTherapist, "grandTotal.totalRevenue"), fresh: getMetricValue(freshTherapist, "grandTotal.totalRevenue"), type: "money" },
       { label: "店日報筆數", stored: getMetricValue(storedDashboard, "sourceCounts.dailyReports"), fresh: getMetricValue(freshDashboard, "sourceCounts.dailyReports"), type: "count" },
       { label: "管理師日報筆數", stored: getMetricValue(storedTherapist, "sourceCounts.therapistReports"), fresh: getMetricValue(freshTherapist, "sourceCounts.therapistReports"), type: "count" },
@@ -3373,7 +3373,7 @@ export default function SystemMaintenance() {
     setLoadingAction("compareSummary");
     setLogs([]);
     setSummaryCompareReport(null);
-    addLog(`🔎 開始比對 Dashboard Summary：${brandId}｜${calMonth}`);
+    addLog(`🔎 開始比對歷史月報：${brandId}｜${calMonth}`);
     try {
       const [dashboardSnap, therapistSnap, rankingsSnap] = await Promise.all([
         getDoc(doc(getCollectionPath("dashboard_summary"), calMonth)),
@@ -3382,7 +3382,7 @@ export default function SystemMaintenance() {
       ]);
 
       if (!dashboardSnap.exists() || !therapistSnap.exists() || !rankingsSnap.exists()) {
-        showToast("尚未找到完整三份 Summary，請先執行重新整理報表", "error");
+        showToast("尚未找到完整三份月報資料，請先執行重新整理報表", "error");
         addLog("⚠️ 該月份尚未完整建立 dashboard_summary / therapist_summary / rankings_summary。");
         return;
       }
@@ -3407,7 +3407,7 @@ export default function SystemMaintenance() {
       };
       setSummaryCompareReport(report);
 
-      addLog(isMatched ? "✅ Summary 與明細重算結果一致。" : `⚠️ Summary 與明細重算有 ${mismatchRows.length} 項差異。`);
+      addLog(isMatched ? "✅ 月報資料與明細重新計算結果一致。" : `⚠️ 月報資料與明細重新計算有 ${mismatchRows.length} 項差異。`);
       await addMaintenanceLog({
         type: "dashboard_summary",
         action: "compare_summary_with_raw",
@@ -3416,13 +3416,13 @@ export default function SystemMaintenance() {
         mismatchCount: mismatchRows.length,
         result: report,
       });
-      showToast(isMatched ? "Summary 比對一致" : `Summary 比對發現 ${mismatchRows.length} 項差異`, isMatched ? "success" : "error");
+      showToast(isMatched ? "月報資料比對一致" : `月報資料比對發現 ${mismatchRows.length} 項差異`, isMatched ? "success" : "error");
       await loadDashboardSummaryStatus(calMonth, true);
     } catch (error) {
       console.error(error);
-      addLog(`❌ Dashboard Summary 比對失敗：${error.message}`);
+      addLog(`❌ 歷史月報比對失敗：${error.message}`);
       await addMaintenanceLog({ type: "dashboard_summary", action: "fail_compare_summary", month: calMonth, status: "failed", errorMessage: error.message });
-      showToast("Dashboard Summary 比對失敗", "error");
+      showToast("歷史月報比對失敗", "error");
     } finally {
       setLoadingAction(null);
     }
@@ -3702,7 +3702,7 @@ export default function SystemMaintenance() {
     setLogs([]);
     addLog(`🧭 啟動核心資料一致性健檢：${brandLabel}｜${rangeLabel}`);
     if (isYearScope) {
-      addLog("ℹ️ 全年模式會讀取該年度店家／管理師日報；屬人工維護 Audit，不建議高頻執行。");
+      addLog("ℹ️ 全年模式會讀取該年度店家／管理師日報；屬人工維護檢查，不建議高頻執行。");
     }
 
     try {
@@ -3770,7 +3770,7 @@ export default function SystemMaintenance() {
             let kind = "duplicate_zero";
             let severity = "warning";
             let reason = "同一門市同月份存在多份全 0 目標文件。";
-            let recommendation = "先確認是否為歷史空白資料；V1 健檢不會自動修改。";
+            let recommendation = "先確認是否為歷史空白資料；本次健檢不會自動修改。";
 
             if (effective.length === 1) {
               kind = "duplicate_safe";
@@ -3779,7 +3779,7 @@ export default function SystemMaintenance() {
             } else if (effective.length > 1 && effectiveSignatures.size === 1) {
               kind = "duplicate_identical";
               reason = "同一門市同月份存在多份內容相同的有效目標。";
-              recommendation = "內容一致，可列入後續安全整理候選；V1 不自動封存。";
+              recommendation = "內容一致，可列入後續安全整理候選；本次健檢不會自動封存。";
             } else if (effectiveSignatures.size > 1) {
               kind = "conflict";
               severity = "danger";
@@ -3812,7 +3812,7 @@ export default function SystemMaintenance() {
             canonicalKey,
             reason: identical ? "同一邏輯鍵存在多份內容相同文件。" : "同一邏輯鍵存在多份不同內容文件。",
             recommendation: identical
-              ? "列入後續安全整理候選；V1 只標示，不修改資料。"
+              ? "列入後續安全整理候選；本次健檢只標示，不修改資料。"
               : "禁止自動封存，請先確認哪一份才是正式資料。",
             records: records.map(recordOf),
           }));
@@ -3838,7 +3838,7 @@ export default function SystemMaintenance() {
         recordOf: (row) => ({
           id: row.sourceDocId,
           label: row.target.storeName,
-          summary: `現金 ${Number(row.target.cashTarget || 0).toLocaleString()}｜權責 ${Number(row.target.accrualTarget || 0).toLocaleString()}｜${row.isCanonicalStoreName ? "canonical" : "非 canonical"}`,
+          summary: `現金 ${Number(row.target.cashTarget || 0).toLocaleString()}｜權責 ${Number(row.target.accrualTarget || 0).toLocaleString()}｜${row.isCanonicalStoreName ? "正式店名" : "非正式店名"}`,
           effective: row.hasEffectiveTarget,
         }),
         targetMode: true,
@@ -4066,10 +4066,10 @@ export default function SystemMaintenance() {
             severity: "warning",
             kind: "summary_missing",
             collectionName: "monthly_targets_summary",
-            title: `${yearMonth} 月目標 Summary 尚未建立`,
+            title: `${yearMonth} 月目標彙整尚未建立`,
             canonicalKey: yearMonth,
-            reason: "找不到 monthly_targets_summary 指定月份文件。",
-            recommendation: "先確認 raw monthly_targets 無衝突，再執行年度目標補整理。",
+            reason: "找不到指定月份的月目標彙整資料。",
+            recommendation: "先確認原始月目標沒有衝突，再執行年度目標補整理。",
             records: [],
           }));
           return;
@@ -4099,19 +4099,19 @@ export default function SystemMaintenance() {
             severity: "danger",
             kind: "summary_mismatch",
             collectionName: "monthly_targets_summary",
-            title: `${brandLabel} ${core}｜${yearMonth} Raw / Summary 不一致`,
+            title: `${brandLabel} ${core}｜${yearMonth} 原始目標 / 月目標彙整不一致`,
             canonicalKey: `${yearMonth}|${core}`,
-            reason: `raw 現金 ${rawCash.toLocaleString()} / 權責 ${rawAccrual.toLocaleString()}；Summary 現金 ${summaryCash.toLocaleString()} / 權責 ${summaryAccrual.toLocaleString()}`,
-            recommendation: "先處理 raw duplicate / conflict，再重建 monthly_targets_summary。",
+            reason: `原始目標現金 ${rawCash.toLocaleString()} / 權責 ${rawAccrual.toLocaleString()}；月目標彙整現金 ${summaryCash.toLocaleString()} / 權責 ${summaryAccrual.toLocaleString()}`,
+            recommendation: "先處理原始月目標的重複或衝突，再重新建立月目標彙整。",
             records: [
               {
                 id: rawTarget.sourceDocId || "raw_resolved",
-                label: "monthly_targets（裁決後）",
+                label: "原始月目標（確認後）",
                 summary: `現金 ${rawCash.toLocaleString()}｜權責 ${rawAccrual.toLocaleString()}`,
               },
               {
                 id: summaryTarget.sourceDocId || yearMonth,
-                label: "monthly_targets_summary",
+                label: "月目標彙整",
                 summary: `現金 ${summaryCash.toLocaleString()}｜權責 ${summaryAccrual.toLocaleString()}`,
               },
             ],
@@ -4177,7 +4177,7 @@ export default function SystemMaintenance() {
       });
 
       addLog(
-        `✅ 核心一致性健檢完成：${rangeLabel}｜掃描 ${scanned.toLocaleString()} docs｜衝突 ${conflicts}｜提醒 ${warnings}｜Summary 差異 ${summaryMismatches}。`
+        `✅ 核心一致性健檢完成：${rangeLabel}｜掃描 ${scanned.toLocaleString()} 筆資料｜衝突 ${conflicts}｜提醒 ${warnings}｜月報差異 ${summaryMismatches}。`
       );
       showToast(
         conflicts
@@ -4201,10 +4201,10 @@ export default function SystemMaintenance() {
   const backupDocs = ["org_structure", "store_account_data", "manager_auth", "permissions", "trainer_auth", "audit_exclusions", "security_config", "read_tracker_config", "director_auth", "master_auth"];
 
   const handleCalibrateData = async () => {
-    if (!window.confirm(`確定要針對【${brandId}】在 ${calMonth} 的數據執行校準嗎？\n\n建議先完成「資料健康檢查」與「月結前檢查」。`)) return;
+    if (!window.confirm(`確定要針對【${brandId}】在 ${calMonth} 的數據重新整理嗎？\n\n建議先完成「資料健康檢查」與「月結前檢查」。`)) return;
     setLoadingAction("calibrate");
     setLogs([]);
-    addLog(`🔄 啟動數據盤點與校準... 目標: ${brandId}, 月份: ${calMonth}`);
+    addLog(`🔄 啟動數據盤點與整理... 目標: ${brandId}, 月份: ${calMonth}`);
 
     try {
       await addMaintenanceLog({ type: "calibration", action: "start_monthly_calibration", month: calMonth, status: "started" });
@@ -4219,12 +4219,12 @@ export default function SystemMaintenance() {
         setRecalcQueueGroups((prev) => prev.filter((item) => item.month !== calMonth));
         setRecalcQueueTotal((prev) => Math.max(0, prev - completedQueueCount));
       }
-      addLog(`✅ ${calMonth} 校準完成。${completedQueueCount ? `已同步完成 ${completedQueueCount.toLocaleString()} 筆待重算紀錄。` : ""}`);
-      showToast(completedQueueCount ? `校準完成，${completedQueueCount.toLocaleString()} 筆待重算紀錄已完成` : "校準完成並已寫入紀錄", "success");
+      addLog(`✅ ${calMonth} 整理完成。${completedQueueCount ? `已同步完成 ${completedQueueCount.toLocaleString()} 筆待整理紀錄。` : ""}`);
+      showToast(completedQueueCount ? `整理完成，${completedQueueCount.toLocaleString()} 筆待整理紀錄已完成` : "整理完成並已寫入紀錄", "success");
     } catch (err) {
       await addMaintenanceLog({ type: "calibration", action: "fail_monthly_calibration", month: calMonth, status: "failed", errorMessage: err.message });
-      addLog(`❌ 校準失敗: ${err.message}`);
-      showToast("校準失敗", "error");
+      addLog(`❌ 整理失敗: ${err.message}`);
+      showToast("整理失敗", "error");
     } finally {
       setLoadingAction(null);
     }
@@ -4459,7 +4459,7 @@ export default function SystemMaintenance() {
   };
 
   const handleRestoreArchivedDuplicate = async (row) => {
-    if (!window.confirm(`確定要還原這筆封存資料嗎？\n${row.date}｜${row.store}｜${row.person}\n\n還原後可能會重新納入報表與月結計算，並建議重新校準 ${String(row.date || "").slice(0, 7)}。`)) return;
+    if (!window.confirm(`確定要還原這筆封存資料嗎？\n${row.date}｜${row.store}｜${row.person}\n\n還原後可能會重新納入報表與月結計算，並建議重新整理 ${String(row.date || "").slice(0, 7)} 的月報。`)) return;
     setLoadingAction(`restore_${row.id}`);
 
     try {
@@ -4472,7 +4472,7 @@ export default function SystemMaintenance() {
       await addMaintenanceLog({ type: "archive_restore", action: "restore_archived_duplicate", sourceCollection: row.colName, sourceId: row.id, date: row.date, store: row.store, person: row.person, affectedYearMonth: String(row.date || "").slice(0, 7) });
       setArchivedDuplicates((prev) => prev.filter((item) => !(item.id === row.id && item.colName === row.colName)));
       addLog(`↩️ 已還原封存資料：${row.colName}｜${row.date}｜${row.store}｜${row.person}`);
-      showToast("封存資料已還原，建議重新校準對應月份", "success");
+      showToast("封存資料已還原，建議重新整理對應月份", "success");
     } catch (error) {
       addLog(`❌ 還原失敗: ${error.message}`);
       showToast("還原封存資料失敗", "error");
@@ -4657,9 +4657,9 @@ export default function SystemMaintenance() {
               const phaseText = (metric) => (
                 data.v2Expected
                   ? (metric?.reliable
-                    ? `READY｜${Number(metric.sourceMonthCount || 0)} 個完整來源月`
-                    : `FALLBACK｜${Number(metric?.sourceMonthCount || 0)} 個完整來源月`)
-                  : "V1｜不使用品牌 Phase"
+                    ? `可使用｜${Number(metric.sourceMonthCount || 0)} 個完整來源月`
+                    : `暫用標準方式｜${Number(metric?.sourceMonthCount || 0)} 個完整來源月`)
+                  : "標準推估｜不使用品牌校正資料"
               );
 
               return (
@@ -4677,7 +4677,7 @@ export default function SystemMaintenance() {
                       </p>
                     </div>
                     <p className="text-[10px] font-black text-stone-400">
-                      本次讀取：1 doc｜{projectionObservabilityState.loadedAtText || "-"}
+                      本次讀取：1 筆資料｜{projectionObservabilityState.loadedAtText || "-"}
                     </p>
                   </div>
 
@@ -4696,7 +4696,7 @@ export default function SystemMaintenance() {
                   </div>
 
                   <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
-                    {[["現金 Phase", data.cashPhase], ["權責 Phase", data.accrualPhase]].map(([label, metric]) => (
+                    {[["現金校正資料", data.cashPhase], ["權責校正資料", data.accrualPhase]].map(([label, metric]) => (
                       <div key={label} className="rounded-2xl border border-stone-100 bg-white p-3">
                         <div className="flex items-center justify-between gap-2">
                           <p className="text-[11px] font-black text-stone-700">{label}</p>
@@ -4719,15 +4719,15 @@ export default function SystemMaintenance() {
 
                   <div className="grid grid-cols-1 md:grid-cols-3 gap-2">
                     <div className="rounded-2xl border border-stone-100 bg-stone-50/60 p-3">
-                      <p className="text-[10px] font-black text-stone-400">Schema / Semantic</p>
+                      <p className="text-[10px] font-black text-stone-400">技術版本</p>
                       <p className="mt-1 text-[11px] font-black text-stone-700 break-all">
                         {data.schemaVersion || "-"} / {data.semanticVersion || "-"}
                       </p>
                     </div>
                     <div className="rounded-2xl border border-stone-100 bg-stone-50/60 p-3">
-                      <p className="text-[10px] font-black text-stone-400">V2 啟用門檻</p>
+                      <p className="text-[10px] font-black text-stone-400">智慧校正啟用條件</p>
                       <p className="mt-1 text-[11px] font-black text-stone-700">
-                        {data.v2Expected ? `Day ${data.phaseMinDay}+ 且 Phase reliable` : "目前品牌維持 V1"}
+                        {data.v2Expected ? `第 ${data.phaseMinDay} 日後且校正資料完整` : "目前品牌維持標準推估"}
                       </p>
                     </div>
                     <div className="rounded-2xl border border-stone-100 bg-stone-50/60 p-3">
@@ -4736,13 +4736,13 @@ export default function SystemMaintenance() {
                         {data.generatedAtText || "-"}
                       </p>
                       {data.trigger && (
-                        <p className="mt-1 text-[10px] font-bold text-stone-400">trigger：{data.trigger}</p>
+                        <p className="mt-1 text-[10px] font-bold text-stone-400">重建來源：{data.trigger}</p>
                       )}
                     </div>
                   </div>
 
                   <div className="rounded-2xl border border-stone-100 bg-stone-50/50 px-3 py-2 text-[10px] font-bold text-stone-400">
-                    System Exclusion snapshot：模型文件目前列出 {Number(data.excludedStoreCount || 0).toLocaleString()} 間排除店。此監控只顯示 persisted model metadata，不在前端改寫 Projection Authority。
+                    目前推估資料列出 {Number(data.excludedStoreCount || 0).toLocaleString()} 間排除店。這裡只顯示已保存的推估資訊，不會修改排除設定或推估規則。
                   </div>
                 </div>
               );
@@ -4833,13 +4833,13 @@ export default function SystemMaintenance() {
                       <p className="text-sm font-black text-stone-800">
                         核心資料一致性健檢｜{consistencyReport.rangeLabel || consistencyReport.month}
                       </p>
-                      <span className="px-2.5 py-1 rounded-full bg-white border border-stone-100 text-[10px] font-black text-stone-500">唯讀 Audit</span>
+                      <span className="px-2.5 py-1 rounded-full bg-white border border-stone-100 text-[10px] font-black text-stone-500">只讀檢查</span>
                       {consistencyReport.scope === "year" && (
                         <span className="px-2.5 py-1 rounded-full bg-amber-50 border border-amber-100 text-[10px] font-black text-[#B7863D]">全年 12 個月</span>
                       )}
                     </div>
                     <p className="text-[11px] font-bold text-stone-400 mt-1">
-                      品牌：{consistencyReport.brandLabel}｜掃描 {Number(consistencyReport.scanned || 0).toLocaleString()} docs｜{consistencyReport.createdAt}
+                      品牌：{consistencyReport.brandLabel}｜掃描 {Number(consistencyReport.scanned || 0).toLocaleString()} 筆資料｜{consistencyReport.createdAt}
                     </p>
                   </div>
                   <span className={`px-3 py-1.5 rounded-full bg-white border text-[11px] font-black ${
@@ -4859,7 +4859,7 @@ export default function SystemMaintenance() {
                     ["高風險衝突", consistencyReport.conflicts, consistencyReport.conflicts ? "text-rose-600" : "text-emerald-600"],
                     ["需確認", consistencyReport.warnings, consistencyReport.warnings ? "text-[#B7863D]" : "text-emerald-600"],
                     ["可整理重複", consistencyReport.safeDuplicates, consistencyReport.safeDuplicates ? "text-[#B7863D]" : "text-emerald-600"],
-                    ["Summary 差異", consistencyReport.summaryMismatches, consistencyReport.summaryMismatches ? "text-rose-600" : "text-emerald-600"],
+                    ["月報差異", consistencyReport.summaryMismatches, consistencyReport.summaryMismatches ? "text-rose-600" : "text-emerald-600"],
                   ].map(([label, value, tone]) => (
                     <div key={label} className="rounded-2xl border border-stone-100 bg-white/90 p-3">
                       <p className="text-[10px] font-black text-stone-400">{label}</p>
@@ -4878,7 +4878,7 @@ export default function SystemMaintenance() {
                         管理師日報 {Number(consistencyReport.sourceCounts?.therapist_daily_reports || 0).toLocaleString()}
                       </span>
                       <span className="px-2.5 py-1 rounded-full bg-stone-50 text-stone-500 border border-stone-100">
-                        月目標 Summary {Number(consistencyReport.sourceCounts?.monthly_targets_summary || 0).toLocaleString()} / 12
+                        月目標彙整 {Number(consistencyReport.sourceCounts?.monthly_targets_summary || 0).toLocaleString()} / 12
                       </span>
                     </div>
                   </div>
@@ -4886,7 +4886,7 @@ export default function SystemMaintenance() {
 
                 {consistencyReport.issues.length === 0 ? (
                   <div className="rounded-2xl border border-emerald-100 bg-white/90 p-4 text-xs font-black text-emerald-700">
-                    本次未發現重複、有效值衝突或目標 Summary 不一致。
+                    本次未發現重複、有效值衝突或目標彙整不一致。
                   </div>
                 ) : (
                   <div className="space-y-2 max-h-[620px] overflow-y-auto pr-1">
@@ -4915,7 +4915,7 @@ export default function SystemMaintenance() {
                                 </span>
                                 <p className="text-xs font-black text-stone-800">{issue.title}</p>
                               </div>
-                              <p className="mt-1 text-[10px] font-bold text-stone-400 break-all">Key：{issue.canonicalKey || "-"}</p>
+                              <p className="mt-1 text-[10px] font-bold text-stone-400 break-all">識別：{issue.canonicalKey || "-"}</p>
                             </div>
                             <div className="flex items-center gap-2 shrink-0">
                               <span className="text-[10px] font-black text-stone-400">{Number(issue.records?.length || 0).toLocaleString()} 筆</span>
@@ -4966,7 +4966,7 @@ export default function SystemMaintenance() {
               <div className="flex items-center gap-2 rounded-2xl border border-stone-100 bg-white/70 px-3 h-11"><Calendar size={14} className="text-stone-400" /><SmartMonthPicker value={calMonth} onChange={setCalMonth} align="right" buttonClassName="!h-9 !min-w-[140px] !border-0 !bg-transparent !px-0 !py-0 !text-xs !shadow-none hover:!bg-transparent" /></div>
               <BeautyButton onClick={handleCalibrateData} disabled={loadingAction !== null} variant="primary">{loadingAction === "calibrate" ? <Loader2 size={14} className="animate-spin" /> : <Play size={14} />}重新整理</BeautyButton>
             </ToolRow>
-            <ToolRow icon={RefreshCw} title="等待整理的月份" desc="查看有哪些歷史月份仍等待系統整理。本月使用即時資料，不應長期留在等待清單。" badge={recalcQueueTotal ? `${recalcQueueTotal.toLocaleString()} 筆待處理` : "Summary 前置"} tone="amber">
+            <ToolRow icon={RefreshCw} title="等待整理的月份" desc="查看有哪些歷史月份仍等待系統整理。本月使用即時資料，不應長期留在等待清單。" badge={recalcQueueTotal ? `${recalcQueueTotal.toLocaleString()} 筆待處理` : "月報整理前置"} tone="amber">
               <BeautyButton onClick={handleLoadRecalcQueue} disabled={loadingAction !== null} variant="secondary">
                 {loadingAction === "loadRecalcQueue" ? <Loader2 size={14} className="animate-spin" /> : <Eye size={14} />}
                 載入等待清單
@@ -4977,7 +4977,7 @@ export default function SystemMaintenance() {
               </BeautyButton>
               <BeautyButton onClick={handleCalibrateAllPendingMonths} disabled={loadingAction !== null || recalcQueueTotal === 0} variant="primary">
                 {loadingAction === "calibrateAllQueues" ? <Loader2 size={14} className="animate-spin" /> : <RefreshCw size={14} />}
-                校準全部歷史待辦
+                整理全部歷史待辦
               </BeautyButton>
             </ToolRow>
             {recalcQueueHealth && recalcQueueHealth.total > 0 && (
@@ -5000,10 +5000,10 @@ export default function SystemMaintenance() {
               <div className="rounded-[1.5rem] border border-amber-100 bg-amber-50/30 p-4 space-y-3">
                 <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-2">
                   <div>
-                    <p className="text-sm font-black text-stone-800">待重新校準月份</p>
+                    <p className="text-sm font-black text-stone-800">待重新整理月份</p>
                     <p className="text-[11px] font-bold text-stone-400 mt-1">歷史月份會重新整理報表；本月、未來與格式異常資料應使用「整理無效待辦」移出清單。</p>
                   </div>
-                  <p className="text-[11px] font-bold text-stone-400">共 {recalcQueueTotal.toLocaleString()} 筆 pending</p>
+                  <p className="text-[11px] font-bold text-stone-400">共 {recalcQueueTotal.toLocaleString()} 筆待整理異動</p>
                 </div>
                 <div className="space-y-2 max-h-[320px] overflow-y-auto pr-1">
                   {recalcQueueGroups.map((group) => (
@@ -5021,7 +5021,7 @@ export default function SystemMaintenance() {
                       {group.month < todayMonth() ? (
                         <BeautyButton onClick={() => handleCalibrateRecalcMonth(group)} disabled={loadingAction !== null} variant="primary" className="shrink-0">
                           {loadingAction === `calibrateQueue_${group.month}` ? <Loader2 size={14} className="animate-spin" /> : <RefreshCw size={14} />}
-                          校準此月份
+                          整理此月份
                         </BeautyButton>
                       ) : (
                         <span className="shrink-0 px-3 py-2 rounded-xl border border-rose-100 bg-rose-50 text-rose-600 text-[10px] font-black">請整理無效待辦</span>
@@ -5036,7 +5036,7 @@ export default function SystemMaintenance() {
                 <div className="flex flex-col xl:flex-row xl:items-center xl:justify-between gap-4">
                   <div className="min-w-0">
                     <div className="flex items-center gap-2 flex-wrap">
-                      <p className="text-base font-black text-stone-800">{summaryStatusReport.month} Summary 狀態</p>
+                      <p className="text-base font-black text-stone-800">{summaryStatusReport.month} 月報資料狀態</p>
                       <span className={`px-3 py-1.5 rounded-full bg-white border text-[11px] font-black ${summaryStatusReport.tone === "emerald" ? "text-emerald-700 border-emerald-100" : summaryStatusReport.tone === "rose" ? "text-rose-600 border-rose-100" : "text-[#B7863D] border-amber-100"}`}>{summaryStatusReport.label}</span>
                     </div>
                     <p className="mt-1 text-xs font-bold text-[#9A8978] leading-relaxed">{summaryStatusReport.hint}</p>
@@ -5048,9 +5048,9 @@ export default function SystemMaintenance() {
                 </div>
                 <div className="grid grid-cols-2 md:grid-cols-4 xl:grid-cols-6 gap-2 mt-4">
                   {[
-                    ["dashboard_summary", summaryStatusReport.summaryDocs?.dashboard ? "已建立" : "尚未建立"],
-                    ["therapist_summary", summaryStatusReport.summaryDocs?.therapist ? "已建立" : "尚未建立"],
-                    ["rankings_summary", summaryStatusReport.summaryDocs?.rankings ? "已建立" : "尚未建立"],
+                    ["營運總覽月報", summaryStatusReport.summaryDocs?.dashboard ? "已建立" : "尚未建立"],
+                    ["管理師月報", summaryStatusReport.summaryDocs?.therapist ? "已建立" : "尚未建立"],
+                    ["排行月報", summaryStatusReport.summaryDocs?.rankings ? "已建立" : "尚未建立"],
                     ["待重算異動", `${Number(summaryStatusReport.pendingCount || 0).toLocaleString()} 筆`],
                     ["最後重建", summaryStatusReport.updatedAtText || "-"],
                     ["最後比對", summaryStatusReport.lastCompareAt || "-"],
@@ -5064,21 +5064,21 @@ export default function SystemMaintenance() {
                 {summaryStatusReport.pendingCount > 0 && (
                   <div className="mt-3 rounded-2xl border border-amber-100 bg-white/80 p-3 text-[11px] font-bold text-[#B7863D] leading-relaxed">
                     {summaryStatusReport.statusKey === "current_dirty"
-                      ? `本月仍有 ${Number(summaryStatusReport.pendingCount || 0).toLocaleString()} 筆舊版或異常待辦，來源：${summaryStatusReport.pendingSources?.join("、") || "-"}。本月 Dashboard 以即時明細為準，請先執行「整理無效待辦」。`
-                      : `此月份仍有 ${Number(summaryStatusReport.pendingCount || 0).toLocaleString()} 筆 pending 異動，來源：${summaryStatusReport.pendingSources?.join("、") || "-"}。歷史月份建議先執行「校準此月份」或重新建立 Summary 後再比對。`}
+                      ? `本月仍有 ${Number(summaryStatusReport.pendingCount || 0).toLocaleString()} 筆舊版或異常待辦，來源：${summaryStatusReport.pendingSources?.join("、") || "-"}。本月營運總覽以即時明細為準，請先執行「整理無效待辦」。`
+                      : `此月份仍有 ${Number(summaryStatusReport.pendingCount || 0).toLocaleString()} 筆待整理異動，來源：${summaryStatusReport.pendingSources?.join("、") || "-"}。歷史月份建議先執行「整理此月份」或重新整理月報後再比對。`}
                   </div>
                 )}
               </div>
             )}
-            <ToolRow icon={CheckCircle2} title="月份報表整理" desc="適合月底大量補報、修正後一次執行：重建本月 Summary、立即比對，並清除該月份 pending queue。" badge="營運模式" tone="emerald">
+            <ToolRow icon={CheckCircle2} title="月份報表整理" desc="適合月底大量補報、修正後一次執行：重新整理本月月報資料、立即比對，並清除該月份待整理異動。" badge="營運模式" tone="emerald">
               <div className="flex items-center gap-2 rounded-2xl border border-stone-100 bg-white/70 px-3 h-11"><Calendar size={14} className="text-stone-400" /><SmartMonthPicker value={calMonth} onChange={setCalMonth} align="right" buttonClassName="!h-9 !min-w-[140px] !border-0 !bg-transparent !px-0 !py-0 !text-xs !shadow-none hover:!bg-transparent" /></div>
               <BeautyButton onClick={handleMonthEndDashboardSummaryCalibration} disabled={loadingAction !== null} variant="primary">
                 {loadingAction === "monthEndSummaryCalibration" ? <Loader2 size={14} className="animate-spin" /> : <CheckCircle2 size={14} />}
-                月結前校準
+                月結前整理
               </BeautyButton>
             </ToolRow>
             <div className="rounded-[1.5rem] border border-stone-100 bg-stone-50/60 px-4 py-3 text-[11px] font-bold leading-relaxed text-stone-500">
-              舊版年度目標補整理與 Target Coverage 修復入口已從一般維護介面退場。目標完整度由現行事件驅動機制維護；歷史修復能力仍保留在後端受控工具，不在日常介面提供。
+              舊版年度目標補整理與目標完整度修復入口已從一般維護介面退場。目標完整度由現行事件驅動機制維護；歷史修復能力仍保留在受控工具，不在日常介面提供。
             </div>
             <ToolRow icon={Database} title="重新整理歷史月份" desc="一般情況使用月份報表整理即可；只有需要單獨重新建立某個歷史月份時才使用。" badge="進階工具" tone="emerald">
               <div className="flex items-center gap-2 rounded-2xl border border-stone-100 bg-white/70 px-3 h-11"><Calendar size={14} className="text-stone-400" /><SmartMonthPicker value={calMonth} onChange={setCalMonth} align="right" buttonClassName="!h-9 !min-w-[140px] !border-0 !bg-transparent !px-0 !py-0 !text-xs !shadow-none hover:!bg-transparent" /></div>
@@ -5091,8 +5091,8 @@ export default function SystemMaintenance() {
               <div className="rounded-[1.5rem] border border-emerald-100 bg-emerald-50/30 p-4 space-y-3">
                 <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-2">
                   <div>
-                    <p className="text-sm font-black text-stone-800">{summaryBuildReport.month} Dashboard Summary 重建完成</p>
-                    <p className="text-[11px] font-bold text-stone-400 mt-1">已寫入 dashboard_summary、therapist_summary、rankings_summary，共 {summaryBuildReport.writtenDocs} 份文件｜{summaryBuildReport.createdAt}</p>
+                    <p className="text-sm font-black text-stone-800">{summaryBuildReport.month} 歷史月報重新整理完成</p>
+                    <p className="text-[11px] font-bold text-stone-400 mt-1">已更新營運總覽、管理師與排行月報，共 {summaryBuildReport.writtenDocs} 份資料｜{summaryBuildReport.createdAt}</p>
                   </div>
                   <span className="px-3 py-1.5 rounded-full bg-white text-emerald-700 border border-emerald-100 text-[11px] font-black">不影響原始日報</span>
                 </div>
@@ -5126,8 +5126,8 @@ export default function SystemMaintenance() {
               <div className={`rounded-[1.5rem] border p-4 space-y-3 ${summaryCompareReport.matched ? "border-emerald-100 bg-emerald-50/30" : "border-rose-100 bg-rose-50/30"}`}>
                 <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-2">
                   <div>
-                    <p className="text-sm font-black text-stone-800">{summaryCompareReport.month} Summary 比對結果｜{summaryCompareReport.status}</p>
-                    <p className="text-[11px] font-bold text-stone-400 mt-1">已建立 Summary 更新時間：{summaryCompareReport.storedUpdatedAt}｜比對時間：{summaryCompareReport.comparedAt}</p>
+                    <p className="text-sm font-black text-stone-800">{summaryCompareReport.month} 月報比對結果｜{summaryCompareReport.status}</p>
+                    <p className="text-[11px] font-bold text-stone-400 mt-1">已整理月報更新時間：{summaryCompareReport.storedUpdatedAt}｜比對時間：{summaryCompareReport.comparedAt}</p>
                   </div>
                   <span className={`px-3 py-1.5 rounded-full bg-white border text-[11px] font-black ${summaryCompareReport.matched ? "text-emerald-700 border-emerald-100" : "text-rose-600 border-rose-100"}`}>
                     {summaryCompareReport.matched ? "全部一致" : `${summaryCompareReport.mismatchCount} 項差異`}
@@ -5171,7 +5171,7 @@ export default function SystemMaintenance() {
           <div className="p-6 border-b border-[#F0E3CF]"><SectionTitle eyebrow="進階資料規模" title="資料量概況與備份紀錄" desc="資料量概況會讀取多個完整資料集合，只在需要盤點資料規模時手動載入；備份紀錄則可用來確認過去匯出。" icon={BarChart3} /></div>
           <div className="p-6 grid grid-cols-1 xl:grid-cols-2 gap-6">
             <div className="rounded-[1.5rem] border border-stone-100 bg-stone-50/50 overflow-hidden"><div className="px-4 py-3 border-b border-stone-100 bg-white flex items-center justify-between"><div className="flex items-center gap-2"><BarChart3 size={16} className="text-[#B7863D]" /><span className="text-sm font-black text-stone-700">資料量概況</span></div><button onClick={handleLoadDataVolume} disabled={loadingAction !== null} className="text-[11px] font-black px-3 py-1.5 rounded-xl bg-gradient-to-r from-[#FFF7DF] via-[#F7E8C6] to-[#EACB86] text-[#5A4225] border border-amber-200 disabled:opacity-40 flex items-center gap-1.5">{loadingAction === "dataVolume" ? <Loader2 size={13} className="animate-spin" /> : <Eye size={13} />}載入概況</button></div><div className="p-4 space-y-2 max-h-[320px] overflow-y-auto">{dataVolumeRows.length === 0 ? <div className="h-40 flex flex-col items-center justify-center text-stone-300 gap-2"><BarChart3 size={30} /><p className="text-xs font-black">尚未載入資料量</p></div> : dataVolumeRows.map((row)=><div key={row.colName} className="bg-white rounded-2xl border border-stone-100 p-3 flex items-center justify-between gap-3"><div><p className="text-xs font-black text-stone-700">{row.colName}</p><p className="text-[10px] font-bold text-stone-400">本月 {Number(row.monthCount || 0).toLocaleString()} 筆｜封存重複 {row.archivedCount.toLocaleString()} 筆</p></div><p className="text-sm font-black text-[#B7863D]">{row.count.toLocaleString()}</p></div>)}</div></div>
-            <div className="rounded-[1.5rem] border border-stone-100 bg-stone-50/50 overflow-hidden"><div className="px-4 py-3 border-b border-stone-100 bg-white flex items-center justify-between"><div className="flex items-center gap-2"><ClipboardList size={16} className="text-[#B7863D]" /><span className="text-sm font-black text-stone-700">備份紀錄</span></div><button onClick={handleLoadBackupRecords} disabled={loadingAction !== null} className="text-[11px] font-black px-3 py-1.5 rounded-xl border border-stone-200 text-stone-500 hover:bg-stone-50 disabled:opacity-40 flex items-center gap-1.5">{loadingAction === "backupRecords" ? <Loader2 size={13} className="animate-spin" /> : <Eye size={13} />}載入紀錄</button></div><div className="p-4 space-y-2 max-h-[320px] overflow-y-auto">{backupRecords.length === 0 ? <div className="h-40 flex flex-col items-center justify-center text-stone-300 gap-2"><ClipboardList size={30} /><p className="text-xs font-black">尚未載入備份紀錄</p></div> : backupRecords.map((row)=><div key={row.id} className="bg-white rounded-2xl border border-stone-100 p-3"><div className="flex items-center justify-between gap-3"><p className="text-xs font-black text-stone-700 truncate">{row.fileName || row.backupType}</p><span className="text-[10px] font-black text-[#B7863D] bg-amber-50 border border-amber-100 rounded-full px-2 py-1">{row.backupType}</span></div><p className="mt-1 text-[10px] font-bold text-stone-400">{row.createdAtText || "—"}｜{row.exportedBy || "—"}｜{Number(row.totalDocs || 0).toLocaleString()} docs</p></div>)}</div></div>
+            <div className="rounded-[1.5rem] border border-stone-100 bg-stone-50/50 overflow-hidden"><div className="px-4 py-3 border-b border-stone-100 bg-white flex items-center justify-between"><div className="flex items-center gap-2"><ClipboardList size={16} className="text-[#B7863D]" /><span className="text-sm font-black text-stone-700">備份紀錄</span></div><button onClick={handleLoadBackupRecords} disabled={loadingAction !== null} className="text-[11px] font-black px-3 py-1.5 rounded-xl border border-stone-200 text-stone-500 hover:bg-stone-50 disabled:opacity-40 flex items-center gap-1.5">{loadingAction === "backupRecords" ? <Loader2 size={13} className="animate-spin" /> : <Eye size={13} />}載入紀錄</button></div><div className="p-4 space-y-2 max-h-[320px] overflow-y-auto">{backupRecords.length === 0 ? <div className="h-40 flex flex-col items-center justify-center text-stone-300 gap-2"><ClipboardList size={30} /><p className="text-xs font-black">尚未載入備份紀錄</p></div> : backupRecords.map((row)=><div key={row.id} className="bg-white rounded-2xl border border-stone-100 p-3"><div className="flex items-center justify-between gap-3"><p className="text-xs font-black text-stone-700 truncate">{row.fileName || row.backupType}</p><span className="text-[10px] font-black text-[#B7863D] bg-amber-50 border border-amber-100 rounded-full px-2 py-1">{row.backupType}</span></div><p className="mt-1 text-[10px] font-bold text-stone-400">{row.createdAtText || "—"}｜{row.exportedBy || "—"}｜{Number(row.totalDocs || 0).toLocaleString()} 筆</p></div>)}</div></div>
           </div>
         </section>
 

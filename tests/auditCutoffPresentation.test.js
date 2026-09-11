@@ -67,7 +67,7 @@ test("SmartCalendar 變更為 additive contract，不影響店家排休 multi-se
   assert.match(source, /statusHiddenDates\s*=\s*\[\]/);
 });
 
-test("CURRENT_APP_VERSION 保持 3.5.3", () => {
+test("CURRENT_APP_VERSION 已提升至 3.6.0", () => {
   const app = read("src/App.jsx");
-  assert.match(app, /CURRENT_APP_VERSION\s*=\s*"3\.5\.3"/);
+  assert.match(app, /CURRENT_APP_VERSION\s*=\s*"3\.6\.0"/);
 });

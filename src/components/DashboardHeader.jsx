@@ -51,20 +51,20 @@ const DashboardHeader = ({
         wrap: "border-emerald-100 bg-emerald-50/70 text-emerald-700",
         icon: CheckCircle2,
         dot: "bg-emerald-400",
-        label: "已整理 Summary",
+        label: "已確認月報資料",
       }
     : isLoading
     ? {
         wrap: "border-stone-100 bg-stone-50 text-stone-500",
         icon: Clock3,
         dot: "bg-stone-300",
-        label: "資料來源檢查中",
+        label: "資料狀態確認中",
       }
     : {
         wrap: "border-amber-100 bg-amber-50/80 text-amber-700",
         icon: AlertTriangle,
         dot: "bg-amber-400",
-        label: "明細暫代顯示",
+        label: "目前顯示明細資料",
       };
 
   const StatusIcon = statusTheme.icon;
@@ -122,9 +122,9 @@ const DashboardHeader = ({
                 )}
               </div>
               <div className="mt-1 flex flex-wrap items-center gap-2">
-                <p className="text-[11px] md:text-xs text-stone-400 font-bold tracking-wider uppercase">Dashboard</p>
+                <p className="text-[11px] md:text-xs text-stone-400 font-bold tracking-wider uppercase">營運資料</p>
                 <div
-                  title={summaryStatus.statusHint || "Dashboard 資料來源狀態"}
+                  title={summaryStatus.statusHint || "目前資料狀態"}
                   className={`inline-flex max-w-full items-center gap-1.5 rounded-full border px-2.5 py-1 text-[10px] font-black ${statusTheme.wrap}`}
                 >
                   <span className={`h-1.5 w-1.5 rounded-full ${statusTheme.dot}`} />

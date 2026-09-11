@@ -349,14 +349,14 @@ const SettingsView = () => {
       return [];
     }
     const allTabsDefinition = [
-      { id: "kpi", label: "KPI 參數", isAdminOnly: true, icon: Target },
+      { id: "kpi", label: "營運指標設定", isAdminOnly: true, icon: Target },
       { id: "health", label: "標準設定", isAdminOnly: true, icon: Activity },
       { id: "permissions", label: "權限資安", isAdminOnly: true, icon: Shield },
       { id: "feature-flags", label: "品牌功能", isAdminOnly: true, icon: CheckSquare },
       { id: "trainer-account", label: "教專帳號", isAdminOnly: true, icon: Users }, 
       { id: "shops", label: "店家管理", isAdminOnly: true, icon: Store },
       { id: "reporting-calendar", label: "營運日曆", isAdminOnly: true, icon: Calendar },
-      { id: "store-lifecycle", label: "門市生命週期", isAdminOnly: true, icon: Calendar },
+      { id: "store-lifecycle", label: "門市營運期間", isAdminOnly: true, icon: Calendar },
       { id: "stores", label: "店經帳號", isAdminOnly: true, icon: UserCheck },
       { id: "managers", label: "區長架構", isAdminOnly: true, icon: LayoutGrid },
       { id: "delegations", label: "代理與托管", isAdminOnly: true, icon: Users },
@@ -646,7 +646,7 @@ const SettingsView = () => {
         ...nextTargets,
         newASP: newAspResult.valid ? String(newAspResult.value) : "",
       });
-      showToast("KPI 參數已儲存", "success");
+      showToast("營運指標設定已儲存", "success");
     } catch (e) {
       console.error("KPI 參數儲存失敗:", e);
       showToast("儲存失敗", "error");
@@ -1412,7 +1412,7 @@ const SettingsView = () => {
           <div className="relative flex flex-col gap-4 w-full min-w-0">
             <div className="flex flex-col md:flex-row md:items-end md:justify-between gap-2">
               <div>
-                <p className="text-[11px] font-black tracking-[0.28em] text-[#B7863D] mb-2">SYSTEM SETTINGS</p>
+                <p className="text-[11px] font-black tracking-[0.28em] text-[#B7863D] mb-2">系統設定</p>
                 <h2 className="text-2xl md:text-3xl font-black text-[#2F2923] tracking-tight">系統管理中心</h2>
                 <p className="text-sm font-bold text-[#A69C91] mt-2">品牌營運參數、權限資安、帳號架構與系統維護設定。</p>
               </div>
@@ -1716,7 +1716,7 @@ const SettingsView = () => {
                           <Activity size={18} /> 閒置省流量待機
                         </div>
                         <p className="text-xs text-emerald-700/70 font-bold mt-1 leading-relaxed">
-                          使用者離開但未登出時，暫停高流量即時監聽，回來操作後自動恢復。
+                          使用者離開但未登出時，暫停較耗流量的即時資料更新，回來操作後自動恢復。
                         </p>
                       </div>
                       <button
@@ -1917,12 +1917,12 @@ const SettingsView = () => {
                     <Calendar size={18} />
                   </div>
                   <div className="min-w-0">
-                    <h3 className="font-black text-emerald-800">年度平均樣本由門市生命週期自動判定</h3>
+                    <h3 className="font-black text-emerald-800">年度平均樣本由門市營運期間自動判定</h3>
                     <p className="mt-1 text-sm font-bold leading-6 text-emerald-700/80">
-                      年度平均現在只採用門市生命週期完整、回報完整且 KPI 有效的月份。開店／永久結束的不完整月份會自動排除；完整回報的真實 0 仍會納入平均。
+                      年度平均現在只採用門市營運期間設定完整、回報完整且營運指標有效的月份。開店／永久結束的不完整月份會自動排除；完整回報的真實 0 仍會納入平均。
                     </p>
                     <p className="mt-2 text-xs font-bold leading-5 text-emerald-700/70">
-                      舊版「年度平均起算月份／例外門市」設定已停止影響年度平均；既有 Firestore legacy 欄位暫時保留，不會在這裡覆寫或刪除。
+                      舊版「年度平均起算月份／例外門市」設定已停止影響年度平均；既有相容欄位暫時保留，不會在這裡覆寫或刪除。
                     </p>
                   </div>
                 </div>

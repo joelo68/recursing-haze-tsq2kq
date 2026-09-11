@@ -183,5 +183,5 @@ test('metadata-only migration remains an explicit backend recovery surface but r
   assert.doesNotMatch(maintenanceSource, /TARGET_COVERAGE_MIGRATION_ENDPOINT/);
   assert.doesNotMatch(maintenanceSource, /handleMigrateHistoricalTargetCoverageMetadata/);
   assert.doesNotMatch(maintenanceSource, /targetCoverageMigrationReport/);
-  assert.match(maintenanceSource, /歷史修復能力仍保留在後端受控工具/);
+  assert.match(maintenanceSource, /歷史修復能力仍保留在受控工具/);
 });

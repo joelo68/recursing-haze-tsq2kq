@@ -27,7 +27,8 @@ test("Batch 6A writers and consumers use shared Therapist KPI semantics", () => 
   assert.match(maintenance, /from "\.\.\/utils\/therapistKpi"/);
   assert.match(maintenance, /applyTherapistRankingSemantics\(Object\.values\(therapistMap\)\)/);
   assert.match(maintenance, /buildTherapistAggregateMetrics\(therapistRankings\)/);
-  assert.match(maintenance, /Therapist KPI Signature/);
+  assert.match(maintenance, /buildTherapistSummarySignature\(storedTherapist\)/);
+  assert.match(maintenance, /buildTherapistSummarySignature\(freshTherapist\)/);
   assert.doesNotMatch(maintenance, /item\.rank > therapistRankings\.length - 10/);
 
   assert.match(hook, /from '\.\.\/utils\/therapistKpi\.js'/);
@@ -72,7 +73,7 @@ test("Batch 6A pure helpers do not add Firestore or polling", () => {
   for (const source of [fe, be]) {
     assert.doesNotMatch(source, /firebase\/firestore|firebase-admin|\.collection\(|getDocs\(|getDoc\(|onSnapshot\(|setInterval\(|onSchedule\(/);
   }
-  assert.match(app, /CURRENT_APP_VERSION\s*=\s*["']3\.5\.3["']/);
+  assert.match(app, /CURRENT_APP_VERSION\s*=\s*["']3\.6\.0["']/);
 });
 
 test("Batch 6A automatic Summary builder deploy call graph remains repair-only", () => {

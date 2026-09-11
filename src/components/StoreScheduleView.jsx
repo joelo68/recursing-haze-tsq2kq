@@ -72,7 +72,7 @@ const StoreScheduleView = () => {
     setLoadError("");
     try {
       const snap = await getDoc(doc(getCollectionPath("store_lifecycle"), "master"));
-      if (!snap.exists()) throw new Error("目前品牌尚未建立門市生命週期資料");
+      if (!snap.exists()) throw new Error("目前品牌尚未建立門市營運期間資料");
       setMaster(normalizeLifecycleMaster(snap.data() || {}, brandId));
       setLoadState("ready");
     } catch (error) {
@@ -245,7 +245,7 @@ const StoreScheduleView = () => {
   const handleSave = useCallback(async () => {
     if (!selectedStoreKey) return notify("請先選擇店家", "error");
     if (!master?.stores?.[selectedStoreKey] || master.stores[selectedStoreKey].entryStatus !== "COMPLETE") {
-      return notify("這間店的 Lifecycle 尚未完成，不能設定排休", "error");
+      return notify("這間店的營運期間設定尚未完成，暫時不能設定排休", "error");
     }
     if (currentDeviceTrust?.status !== "trusted") {
       return notify("目前裝置尚未完成信任確認，無法修改店家排休", "error");
@@ -347,7 +347,7 @@ const StoreScheduleView = () => {
                   <option value="">請選擇店家...</option>
                   {availableStores.map((store) => (
                     <option key={store.storeKey} value={store.storeKey} disabled={!store.lifecycleReady}>
-                      {store.label}{store.lifecycleReady ? "" : "（Lifecycle 未完成）"}
+                      {store.label}{store.lifecycleReady ? "" : "（營運期間未完成）"}
                     </option>
                   ))}
                 </select>
@@ -460,7 +460,7 @@ const StoreScheduleView = () => {
 
           <div className="flex flex-col-reverse gap-3 border-t border-stone-100 pt-5 md:flex-row md:items-center md:justify-between">
             <div className="text-xs font-bold leading-6 text-stone-400">
-              儲存只會更新 Reporting Calendar 的店家休店 authority，不會建立或修改 Raw daily_reports。
+              儲存只會更新這間門市的正式休店設定，不會建立或修改既有日報資料。
             </div>
             <button
               type="button"

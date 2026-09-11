@@ -140,7 +140,7 @@ const HistoryView = () => {
     if (allStores.length === 1) setFilterStore(allStores[0]);
   }, [allStores]);
 
-  // 品牌關閉管理師模組時，數據修正中心也同步收起管理師日報。
+  // 品牌關閉管理師模組時，業績修正也同步收起管理師日報。
   // 若使用者原本停在管理師日報，會自動切回店務日報並清空管理師查詢資料。
   useEffect(() => {
     if (!isTherapistModuleEnabled && activeTab === "therapist") {
@@ -462,7 +462,7 @@ const HistoryView = () => {
         
         <div className="flex flex-col sm:flex-row items-start sm:items-center gap-3">
            <div className="flex items-center gap-2">
-              <h2 className="text-2xl font-bold text-stone-800">數據修正中心</h2>
+              <h2 className="text-2xl font-bold text-stone-800">業績修正</h2>
               <span className="px-2 py-1 bg-stone-100 text-stone-500 rounded text-xs font-bold">{brandPrefix}</span>
            </div>
            <span className="hidden sm:inline text-stone-400">|</span>
@@ -565,7 +565,7 @@ const HistoryView = () => {
               {!hasQueried ? (
                 <div className="flex flex-col items-center justify-center py-20 px-4 text-center bg-stone-50/50 rounded-xl border-2 border-dashed border-stone-200 m-2">
                   <Database size={48} className="text-stone-300 mb-4" />
-                  <h4 className="text-stone-500 font-bold text-lg mb-2 tracking-wide">數據查詢待命區</h4>
+                  <h4 className="text-stone-500 font-bold text-lg mb-2 tracking-wide">尚未查詢資料</h4>
                   <p className="text-stone-400 text-sm max-w-sm">
                     為保護系統效能，進入此頁面時不會預先載入歷史資料。<br/><br/>
                     請在上方設定好日期範圍與店家後，點擊「<strong className="text-stone-600">查詢</strong>」以調閱紀錄。

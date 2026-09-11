@@ -82,6 +82,6 @@ test("Store Analysis preserves existing selected-store Firestore listener topolo
   assert.match(storeAnalysisSource, /store_analysis_selected_store_reports_fallback/);
 });
 
-test("hotfix keeps application version unchanged", () => {
-  assert.match(appSource, /CURRENT_APP_VERSION\s*=\s*"3\.5\.3"/);
+test("store analysis Formal consumer remains compatible with the promoted app version", () => {
+  assert.match(appSource, /CURRENT_APP_VERSION\s*=\s*"3\.6\.0"/);
 });

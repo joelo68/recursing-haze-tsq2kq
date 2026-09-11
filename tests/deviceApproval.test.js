@@ -24,7 +24,7 @@ test("new device protection defaults to off and covers all current roles", () =>
   assert.match(backend, /deviceApprovalMode:\s*'off'/);
   assert.match(backend, /deviceApprovalRoles:\s*\['director', 'trainer', 'manager', 'store', 'therapist'\]/);
   assert.match(backend, /deviceApprovalExpiryMinutes:\s*15/);
-  assert.match(app, /CURRENT_APP_VERSION\s*=\s*"3\.5\.3"/);
+  assert.match(app, /CURRENT_APP_VERSION\s*=\s*"3\.6\.0"/);
 });
 
 test("backend verifies Firebase request auth and application credential before device decision", () => {
@@ -269,7 +269,7 @@ test("device review levels separate observing, reverify, and blocked states", ()
   assert.match(monitor, /updateDeviceTrust\(profile, device, "reverify_required"\)/);
   assert.match(app, /主管要求重新驗證/);
   assert.match(app, /新裝置待觀察/);
-  assert.match(app, /CURRENT_APP_VERSION\s*=\s*"3\.5\.3"/);
+  assert.match(app, /CURRENT_APP_VERSION\s*=\s*"3\.6\.0"/);
 });
 
 test("six-digit self verification allows only three failed attempts and reports remaining attempts", () => {
@@ -335,7 +335,7 @@ test("Telegram security alerts reuse the three recognized chats but remain disab
   assert.match(telegramCenter, /登入安全即時通知/);
   assert.match(telegramCenter, /高階主管主群/);
   assert.match(telegramCenter, /主管群/);
-  assert.match(telegramCenter, /Agent 測試群/);
+  assert.match(telegramCenter, /測試群/);
 });
 
 test("security alert Firestore triggers dispatch both CYJ legacy and brand events through the selected Telegram targets", () => {
@@ -474,8 +474,8 @@ test("highest-admin card still watches only the displayed request for live resol
   assert.match(app, /resolvedText:\s*getDeviceApprovalResolvedText\(data\)/);
 });
 
-test("summary-first manager notice preserves app version and existing focused approval panel", () => {
-  assert.match(app, /CURRENT_APP_VERSION\s*=\s*"3\.5\.3"/);
+test("summary-first manager notice remains compatible with the promoted app version and existing focused approval panel", () => {
+  assert.match(app, /CURRENT_APP_VERSION\s*=\s*"3\.6\.0"/);
   assert.match(app, /focusRequestId=\{superAdminApprovalFocusId\}/);
   assert.match(panel, /這是剛才主動提醒您的登入申請/);
 });

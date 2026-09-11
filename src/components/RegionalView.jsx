@@ -13,6 +13,7 @@ import { ViewWrapper, Card } from "./SharedUI";
 import { Loader2, Map as MapIcon } from "lucide-react";
 import { buildHistoricalFormalRegionalData, resolveHistoricalReportFormalTrust } from "../utils/reportFormalConsumer";
 import { buildCurrentDetailFormalAuthority, buildCurrentDetailFormalScope } from "../utils/currentDetailFormalConsumer.js";
+import { resolveKpiPresentationLabel } from "../utils/kpiPresentation.js";
 
 const RegionalView = () => {
   const { 
@@ -211,8 +212,16 @@ const RegionalView = () => {
   ]);
 
   const isFiniteKpi = (value) => value !== null && value !== undefined && Number.isFinite(Number(value));
-  const formatPercentOrNA = (value, digits = 0) => isFiniteKpi(value) ? `${Number(value).toFixed(digits)}%` : "N/A";
-  const formatMoneyOrNA = (value) => isFiniteKpi(value) ? fmtMoney(Number(value)) : "N/A";
+  const formatPercentOrNA = (value, digits = 0, status = "") => (
+    isFiniteKpi(value)
+      ? `${Number(value).toFixed(digits)}%`
+      : resolveKpiPresentationLabel({ status, fallback: "尚無資料" })
+  );
+  const formatMoneyOrNA = (value, status = "") => (
+    isFiniteKpi(value)
+      ? fmtMoney(Number(value))
+      : resolveKpiPresentationLabel({ status, fallback: "尚無資料" })
+  );
 
   // 3. 本地即時運算區域數據
   const regionalData = useMemo(() => {
@@ -390,7 +399,7 @@ const RegionalView = () => {
                           : "bg-amber-50 text-amber-600"
                       }`}
                     >
-                      {formatPercentOrNA(region.achievement)}
+                      {formatPercentOrNA(region.achievement, 0, region.achievementStatus)}
                     </div>
                   </div>
                 </div>
@@ -398,13 +407,13 @@ const RegionalView = () => {
                   <div className="flex justify-between items-center">
                     <span className="text-stone-500 text-sm">現金總業績</span>
                     <span className="text-lg font-bold text-stone-700">
-                      {formatMoneyOrNA(region.cashTotal)}
+                      {formatMoneyOrNA(region.cashTotal, region.cashStatus)}
                     </span>
                   </div>
                   <div className="flex justify-between items-center">
                     <span className="text-stone-500 text-sm">權責總業績</span>
                     <span className="text-base font-bold text-stone-600">
-                      {formatMoneyOrNA(region.accrualTotal)}
+                      {formatMoneyOrNA(region.accrualTotal, region.accrualStatus)}
                     </span>
                   </div>
                   <div className="flex justify-between items-center">
@@ -506,20 +515,20 @@ const RegionalView = () => {
                             {store.cleanName}
                           </h4>
                           <span className={`text-sm font-bold ${isFiniteKpi(store.achievement) && Number(store.achievement) >= 100 ? 'text-emerald-600' : 'text-amber-500'}`}>
-                            {formatPercentOrNA(store.achievement)}
+                            {formatPercentOrNA(store.achievement, 0, store.achievementStatus)}
                           </span>
                         </div>
                         <div className="space-y-2 text-sm">
                           <div className="flex justify-between">
                             <span className="text-stone-400">現金</span>
                             <span className="font-bold">
-                              {formatMoneyOrNA(store.cashTotal)}
+                              {formatMoneyOrNA(store.cashTotal, store.cashStatus)}
                             </span>
                           </div>
                           <div className="flex justify-between">
                             <span className="text-stone-400">權責</span>
                             <span className="font-bold">
-                              {formatMoneyOrNA(store.accrualTotal)}
+                              {formatMoneyOrNA(store.accrualTotal, store.accrualStatus)}
                             </span>
                           </div>
                         </div>

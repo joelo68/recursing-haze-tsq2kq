@@ -84,7 +84,7 @@ test("Anniu V2 model remains brand-isolated", () => {
   assert.equal(result.v2Active, true);
 });
 
-test("Yibo remains a valid V1 brand and is not labeled V2", () => {
+test("Yibo remains standard projection and is not labeled smart-calibrated", () => {
   const model = {
     schemaVersion: "projection-model-v1",
     semanticVersion: "projection-semantic-v1",
@@ -103,7 +103,7 @@ test("Yibo remains a valid V1 brand and is not labeled V2", () => {
   assert.equal(result.status, "healthy");
   assert.equal(result.v2Expected, false);
   assert.equal(result.v2Active, false);
-  assert.equal(result.strategyLabel, "V1");
+  assert.equal(result.strategyLabel, "標準推估");
 });
 
 test("metric-specific reliability failure is surfaced as warning", () => {

@@ -275,10 +275,10 @@ const LoginView = ({
   }, [trainerAuth]);
 
   const DIRECTOR_LEVEL_OPTIONS = [
-    { value: "super_admin", label: "最高管理者", hint: "系統維護、權限、帳號、封鎖、Summary" },
+    { value: "super_admin", label: "最高管理者", hint: "系統維護、權限、帳號、裝置與月報管理" },
     { value: "operation_admin", label: "營運主管", hint: "全品牌營運、報表、回報檢核" },
     { value: "finance_admin", label: "財務主管", hint: "報表、匯出、財務檢視" },
-    { value: "viewer", label: "只讀主管", hint: "Dashboard 與報表檢視" },
+    { value: "viewer", label: "只讀主管", hint: "營運總覽與報表檢視" },
   ];
 
   const getDirectorTitleWeight = (name = "") => {
@@ -666,7 +666,7 @@ const LoginView = ({
         const correctPass = getDirectorPassword(selectedUser);
         const isMasterLogin = password === currentMasterKey;
         if (selectedDirectorAccount?.isActive === false) {
-           setError("此高階主管帳號已停用，請使用 Master Key 管理帳號");
+           setError("此高階主管帳號已停用，請使用最高管理金鑰管理帳號");
         } else if (password === correctPass || isMasterLogin) {
            const userInfo = {
              name: selectedUser,
@@ -766,25 +766,25 @@ const LoginView = ({
        let success = false;
 
        if (directorManageMode === 'add') {
-           if (!isMaster) { setError("❌ 權限不足：僅最高管理員(Master Key)可新增帳號"); setIsLoading(false); return; }
+           if (!isMaster) { setError("❌ 權限不足：僅最高管理者可新增帳號"); setIsLoading(false); return; }
            if (!newDirectorName || !newPassword) { setError("請填寫新高管名稱與密碼"); setIsLoading(false); return; }
            if (directorAuthData.accounts?.[newDirectorName]) { setError("此名稱已存在"); setIsLoading(false); return; }
            success = await handleUpdateDirectorAuth('add', newDirectorName, { password: newPassword, level: selectedDirectorLevel, isActive: true });
        
        } else if (directorManageMode === 'rename') {
-           if (!isMaster) { setError("❌ 權限不足：僅最高管理員(Master Key)可修改帳號名稱"); setIsLoading(false); return; }
+           if (!isMaster) { setError("❌ 權限不足：僅最高管理者可修改帳號名稱"); setIsLoading(false); return; }
            if (!managedDirectorName || !newDirectorName) { setError("請選擇原帳號並填寫新名稱"); setIsLoading(false); return; }
            if (directorAuthData.accounts?.[newDirectorName]) { setError("新名稱已存在，請更換其他名稱"); setIsLoading(false); return; }
            const currentAccount = getDirectorAccount(managedDirectorName);
            success = await handleUpdateDirectorAuth('rename', managedDirectorName, { ...currentAccount, name: newDirectorName }, newDirectorName);
        
        } else if (directorManageMode === 'level') {
-           if (!isMaster) { setError("❌ 權限不足：僅 Master Key 可調整權限層級"); setIsLoading(false); return; }
+           if (!isMaster) { setError("❌ 權限不足：僅最高管理者可調整權限層級"); setIsLoading(false); return; }
            if (!managedDirectorName) { setError("請選擇要調整的高管"); setIsLoading(false); return; }
            success = await handleUpdateDirectorAuth('level', managedDirectorName, { level: selectedDirectorLevel });
 
        } else if (directorManageMode === 'delete') {
-           if (!isMaster) { setError("❌ 權限不足：僅 Master Key 可停用 / 啟用帳號"); setIsLoading(false); return; }
+           if (!isMaster) { setError("❌ 權限不足：僅最高管理者可停用 / 啟用帳號"); setIsLoading(false); return; }
            if (!managedDirectorName) { setError("請選擇要停用 / 啟用的高管"); setIsLoading(false); return; }
            const currentAccount = getDirectorAccount(managedDirectorName);
            const nextActive = currentAccount?.isActive === false;
@@ -798,7 +798,7 @@ const LoginView = ({
                isSelf = true;
            }
            if (!isMaster && !isSelf) {
-               setError("舊密碼 或 Master Key 錯誤！"); 
+               setError("舊密碼或最高管理金鑰錯誤！");
                setIsLoading(false); 
                return;
            }
@@ -1040,7 +1040,7 @@ const LoginView = ({
                   type="password" 
                   value={password} 
                   onChange={(e) => setPassword(e.target.value)} 
-                  placeholder={role === 'director' ? "密碼 (或 Master Key)" : "輸入密碼"} 
+                  placeholder={role === 'director' ? "密碼（或最高管理金鑰）" : "輸入密碼"}
                   className={inputClass} 
                   onKeyDown={(e) => e.key === "Enter" && handleAuth()} 
                 />
@@ -1058,14 +1058,14 @@ const LoginView = ({
                       </div>
                       
                       {directorManageMode !== 'edit-pass' && (
-                        <p className="text-[11px] text-rose-500 mb-2 px-1 font-medium">* 此操作僅限 Master Key 執行；改密碼可用舊密碼或 Master Key</p>
+                        <p className="text-[11px] text-rose-500 mb-2 px-1 font-medium">* 此操作僅限最高管理金鑰；修改密碼可使用舊密碼或最高管理金鑰</p>
                       )}
 
                       <input 
                         type="password" 
                         value={oldPassword} 
                         onChange={(e) => setOldPassword(e.target.value)} 
-                        placeholder={directorManageMode === 'edit-pass' ? "舊密碼 或 Master Key" : "請輸入 Master Key"} 
+                        placeholder={directorManageMode === 'edit-pass' ? "舊密碼或最高管理金鑰" : "請輸入最高管理金鑰"}
                         className={inputClass} 
                       />
 

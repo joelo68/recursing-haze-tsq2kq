@@ -42,7 +42,7 @@ const shiftYearMonth = (yearMonth = "", offset = 0) => {
 const formatPct = (value) => (
   typeof value === "number" && Number.isFinite(value)
     ? `${value.toFixed(1)}%`
-    : "N/A"
+    : "尚無資料"
 );
 
 const SmartForecastAccuracyPanel = ({

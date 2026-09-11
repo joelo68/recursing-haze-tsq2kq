@@ -54,7 +54,7 @@ import {
 // ==========================================
 // ★ 系統核心版本號 (終極動態快取版)
 // ==========================================
-const CURRENT_APP_VERSION = "3.5.3";
+const CURRENT_APP_VERSION = "3.6.0";
 const LOGIN_LOCATION_ENDPOINT = "https://resolveloginlocation-hyhcwrnyaa-uc.a.run.app";
 const DEVICE_ACCESS_ENDPOINT = "https://us-central1-cyjsituation-analysis.cloudfunctions.net/checkDeviceAccess";
 const DEVICE_APPROVAL_REVIEW_ENDPOINT = "https://us-central1-cyjsituation-analysis.cloudfunctions.net/reviewDeviceApproval";
@@ -100,7 +100,7 @@ const lazyWithRetry = (componentImport) =>
       console.warn("模組載入失敗，正在自動重整...", error);
       const currentUrl = window.location.href.split('?')[0]; 
       window.location.replace(`${currentUrl}?v=${new Date().getTime()}`);
-      return { default: () => <div className="p-10 text-center text-stone-400">正在同步最新模組...</div> };
+      return { default: () => <div className="p-10 text-center text-stone-400">正在載入最新版本...</div> };
     }
   });
 
@@ -368,25 +368,9 @@ const normalizeDirectorAuthData = (data = {}) => {
   return { accounts: normalizedAccounts, directorOrder: normalizedOrder };
 };
 
-const VIEW_ACTIVITY_LABELS = {
-  dashboard: "營運總覽",
-  daily: "每日總覽",
-  regional: "區域總覽",
-  ranking: "排行榜",
-  "store-analysis": "店家分析",
-  audit: "回報檢核",
-  history: "數據修正中心",
-  input: "日報輸入",
-  logs: "登入監控 / 操作日誌",
-  settings: "系統設定",
-  annual: "年度分析",
-  targets: "年度目標設定",
-  "t-targets": "管理師目標",
-  "t-schedule": "管理師排休",
-  "store-schedule": "店家排休",
-  notification: "通知管理",
-  "therapist-manager": "管理師管理",
-};
+const VIEW_ACTIVITY_LABELS = Object.fromEntries(
+  ALL_MENU_ITEMS.map(({ id, label }) => [id, label])
+);
 
 const IMPORTANT_PAGE_VIEW_SET = new Set([
   "dashboard",
@@ -551,19 +535,26 @@ const DIRECTOR_VIEW_PERMISSIONS = {
   },
 };
 
-const DIRECTOR_RESTRICTED_VIEWS = {
-  history: "業績修正",
-  input: "日報輸入",
-  targets: "年度目標設定",
-  "t-targets": "管理師目標",
-  "t-schedule": "管理師排休",
-  "store-schedule": "店家排休",
-  settings: "系統管理中心",
-  "therapist-manager": "管理師管理",
-  logs: "登入監控 / 操作日誌",
-  audit: "回報檢核",
-  notification: "通知管理",
-};
+const DIRECTOR_RESTRICTED_VIEW_IDS = [
+  "history",
+  "input",
+  "targets",
+  "t-targets",
+  "t-schedule",
+  "store-schedule",
+  "settings",
+  "therapist-manager",
+  "logs",
+  "audit",
+  "notification",
+];
+
+const DIRECTOR_RESTRICTED_VIEWS = Object.fromEntries(
+  DIRECTOR_RESTRICTED_VIEW_IDS.map((viewId) => [
+    viewId,
+    VIEW_ACTIVITY_LABELS[viewId] || viewId,
+  ])
+);
 
 // ★ 讀取節流 v1：把大型資料源限制在真正需要的頁面。
 // 年度資料只供年度分析使用；月度明細只供 Dashboard / 排行 / 區域 / 店家分析 / 檢核 / 修正使用。

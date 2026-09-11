@@ -67,16 +67,16 @@ test("Daily and Audit use Lifecycle expected-date authority and report document 
   assert.match(audit, /submittedStoreSet/);
   assert.match(audit, /cleanStoreName\(row\?\.storeName \|\| row\?\.store \|\| ""\)/);
   assert.doesNotMatch(audit, /sub\.includes\(id\)/);
-  assert.match(audit, /Store Lifecycle 尚未就緒，店家日報暫不判定漏報/);
+  assert.match(audit, /門市營運期間設定尚未完成，因此店家日報暫不判定漏報/);
 });
 
-test("5D-2 does not change Firestore Rules or application version contract", () => {
+test("5D-2 keeps the Firestore Rules contract and remains compatible with the promoted app version", () => {
   const rules = read("firestore.rules");
   const app = read("src/App.jsx");
   assert.match(rules, /store_lifecycle/);
   assert.match(rules, /allow read/);
   assert.match(rules, /allow write:\s*if false/);
-  assert.match(app, /3\.5\.3/);
+  assert.match(app, /CURRENT_APP_VERSION\s*=\s*"3\.6\.0"/);
 });
 
 test("runtime stabilization Audit delegates store identity to shared Lifecycle authority", () => {

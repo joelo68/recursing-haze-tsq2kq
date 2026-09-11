@@ -986,7 +986,7 @@ const SystemMonitor = () => {
               </div>
               <div className="flex items-center gap-2">
                 <input value={keyword} onChange={(e) => { setKeyword(e.target.value); setCurrentPage(1); }} placeholder="搜尋使用者、動作、店家..." className="h-9 w-full xl:w-64 rounded-xl border border-stone-200 bg-white px-3 text-sm font-bold text-stone-600 outline-none focus:border-amber-300 min-w-0" />
-                {lastQueryInfo && <span className="hidden xl:inline text-[11px] font-bold text-stone-400 whitespace-nowrap">已載入 {logs.length || 0} 筆｜本次顯示 {lastQueryInfo.count || 0} / 讀取 {lastQueryInfo.rawCount ?? lastQueryInfo.count ?? 0} 筆｜上限 {lastQueryInfo.readLimit || logLimitCount}{lastQueryInfo.sourceField === "createdAtText" ? "｜備援欄位" : ""}｜{lastQueryInfo.queriedAt}</span>}
+                {lastQueryInfo && <span className="hidden xl:inline text-[11px] font-bold text-stone-400 whitespace-nowrap">已載入 {logs.length || 0} 筆｜本次顯示 {lastQueryInfo.count || 0} / 讀取 {lastQueryInfo.rawCount ?? lastQueryInfo.count ?? 0} 筆｜上限 {lastQueryInfo.readLimit || logLimitCount}{lastQueryInfo.sourceField === "createdAtText" ? "｜相容資料" : ""}｜{lastQueryInfo.queriedAt}</span>}
               </div>
             </div>
           )}

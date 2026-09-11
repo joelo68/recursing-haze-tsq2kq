@@ -628,7 +628,7 @@ const TherapistManagerView = () => {
               {!isCreating && selectedTherapist?.id && (
                 <div>
                   <label className="block text-[11px] font-black text-stone-400 mb-1.5 tracking-wider">
-                    登入帳號 / 文件 ID
+                    登入帳號
                   </label>
                   <input
                     type="text"

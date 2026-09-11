@@ -11,8 +11,8 @@ const app = fs.readFileSync(path.join(root, 'src', 'App.jsx'), 'utf8');
 const panel = fs.readFileSync(path.join(root, 'src', 'components', 'DeviceApprovalPanel.jsx'), 'utf8');
 const backend = fs.readFileSync(path.join(root, 'functions', 'deviceApproval.js'), 'utf8');
 
-test('keeps current app version 3.5.3', () => {
-  assert.match(app, /CURRENT_APP_VERSION\s*=\s*"3\.5\.3"/);
+test('uses promoted current app version 3.6.0', () => {
+  assert.match(app, /CURRENT_APP_VERSION\s*=\s*"3\.6\.0"/);
 });
 
 test('highest-admin brand summary remains realtime via the existing onSnapshot', () => {

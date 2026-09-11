@@ -98,7 +98,7 @@ test("Frontend no longer direct-writes audit_exclusions and handles revision con
   assert.match(app, /currentSystemExclusion/);
   assert.doesNotMatch(app, /setDoc\(auditExclusionsDoc/);
   assert.doesNotMatch(app, /getDocs\([^\n]*audit_exclusions/);
-  assert.match(app, /CURRENT_APP_VERSION = "3\.5\.3"/);
+  assert.match(app, /CURRENT_APP_VERSION = "3\.6\.0"/);
 });
 
 test("Firestore Rules close both brand and legacy browser write paths for audit_exclusions", () => {

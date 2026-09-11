@@ -239,7 +239,7 @@ test('Pre-Batch-5 Target Coverage audit stays backend-controlled and retires fro
   assert.doesNotMatch(maintenanceSource, /handleAuditHistoricalTargetCoverage/);
   assert.doesNotMatch(maintenanceSource, /targetCoverageAuditPassword/);
   assert.match(maintenanceSource, /資料一致性檢查/);
-  assert.match(maintenanceSource, /舊版年度目標補整理與 Target Coverage 修復入口已從一般維護介面退場/);
+  assert.match(maintenanceSource, /舊版年度目標補整理與目標完整度修復入口已從一般維護介面退場/);
   assert.doesNotMatch(maintenanceSource, /handleExecuteCyjNewStoreRepair/);
 });
 

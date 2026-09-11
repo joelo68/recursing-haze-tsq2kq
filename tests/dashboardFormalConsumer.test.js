@@ -234,7 +234,7 @@ test("missing/mismatched live target summary never falls back to a stale embedde
   assert.equal(result.cashAchievementStatus, SUMMARY_KPI_STATUS.TARGET_INCOMPLETE);
 });
 
-test("consumer wiring uses Formal actual/target/ranking and UI renders N/A instead of coercing null to 0", () => {
+test("consumer wiring uses Formal actual/target/ranking and UI renders status-aware labels instead of coercing null to 0", () => {
   const hook = read("src/hooks/useDashboardStats.js");
   const view = read("src/components/StorePerformanceView.jsx");
 
@@ -250,7 +250,9 @@ test("consumer wiring uses Formal actual/target/ranking and UI renders N/A inste
   assert.match(hook, /formalRankEligibleStoreCount/);
   assert.match(view, /formatKpiPercent/);
   assert.match(view, /目標資料未完整/);
-  assert.match(view, /return "N\/A"/);
+  assert.match(view, /resolveKpiPresentationLabel/);
+  assert.match(view, /fallback: "尚無資料"/);
+  assert.doesNotMatch(view, /return "N\/A"/);
 });
 test("writer ↔ consumer contract exposes the exact Batch 4 formal fields Batch 5A consumes", () => {
   const writer = read("functions/index.js");
@@ -330,10 +332,10 @@ test("5E-1B dashboard normalization preserves canonical explicit zero over legac
   assert.equal(normalized["新店"].isCanonicalSource, true);
 });
 
-test("5E-1B Store Performance renders Formal zero-target projection as N/A and keeps pace gap neutral", () => {
+test("5E-1B Store Performance renders Formal zero-target projection as not applicable and keeps pace gap neutral", () => {
   const source = read("src/components/StorePerformanceView.jsx");
   assert.match(source, /const strictKpiPresentation = formalConsumerActive \|\| storeSelfViewActive/);
-  assert.match(source, /strictKpiPresentation && targetValue === 0\) return "N\/A"/);
+  assert.match(source, /strictKpiPresentation && targetValue === 0\) return "不適用"/);
   assert.match(source, /const paceGap = cashAchievementAvailable \? totalAchievement - timeProgress : null/);
 });
 

@@ -9,6 +9,7 @@ import {
   getAnnualBenchmarkMetric,
   isAnnualBenchmarkMetricDisplayable,
 } from "../utils/annualKpiBenchmark.js";
+import { resolveKpiPresentationLabel } from "../utils/kpiPresentation.js";
 
 const StorePerformanceView = ({ dashboardStats, myStoreRankings, brandInfo }) => {
   const { fmtMoney, fmtNum, targets, userRole } = useContext(AppContext);
@@ -48,17 +49,28 @@ const StorePerformanceView = ({ dashboardStats, myStoreRankings, brandInfo }) =>
   const formalConsumerActive = dashboardStats.formalConsumerActive === true;
   const storeSelfViewActive = dashboardStats.storeSelfViewActive === true;
   const strictKpiPresentation = formalConsumerActive || storeSelfViewActive;
+  const formalKpiStatus = dashboardStats.formalKpiStatus || {};
   const isFiniteKpi = (value) => typeof value === "number" && Number.isFinite(value);
   const cashAchievementAvailable = isFiniteKpi(totalAchievement);
   const accrualAchievementAvailable = isFiniteKpi(dashboardStats.totalAccrualAchievement);
   const timeProgress = daysInMonth > 0 ? (daysPassed / daysInMonth) * 100 : 0;
   const paceGap = cashAchievementAvailable ? totalAchievement - timeProgress : null;
-  const formatKpiMoney = (value) => (strictKpiPresentation && !isFiniteKpi(value) ? "N/A" : fmtMoney(value));
-  const formatKpiPercent = (value) => (isFiniteKpi(value) ? `${value.toFixed(0)}%` : "N/A");
-  const formatProjectionTargetRate = (projection, target) => {
+  const formatKpiMoney = (value, status = "") => (
+    strictKpiPresentation && !isFiniteKpi(value)
+      ? resolveKpiPresentationLabel({ status, fallback: "尚無資料" })
+      : fmtMoney(value)
+  );
+  const formatKpiPercent = (value, status = "") => (
+    isFiniteKpi(value)
+      ? `${value.toFixed(0)}%`
+      : resolveKpiPresentationLabel({ status, fallback: "不適用" })
+  );
+  const formatProjectionTargetRate = (projection, target, targetStatus = "") => {
     const targetValue = Number(target);
-    if (strictKpiPresentation && (!isFiniteKpi(projection) || !isFiniteKpi(target))) return "N/A";
-    if (strictKpiPresentation && targetValue === 0) return "N/A";
+    if (strictKpiPresentation && (!isFiniteKpi(projection) || !isFiniteKpi(target))) {
+      return resolveKpiPresentationLabel({ status: targetStatus, fallback: "尚無資料" });
+    }
+    if (strictKpiPresentation && targetValue === 0) return "不適用";
     return targetValue > 0 ? `${((Number(projection || 0) / targetValue) * 100).toFixed(0)}%` : "0%";
   };
   const annualKpiBenchmark = dashboardStats.annualKpiBenchmark || {};
@@ -260,7 +272,7 @@ const StorePerformanceView = ({ dashboardStats, myStoreRankings, brandInfo }) =>
     : "依本月營運表現與歷史節奏推估";
 
   const formatProjectionValue = (value) => {
-    if (!isFiniteKpi(value)) return "N/A";
+    if (!isFiniteKpi(value)) return "尚無資料";
     return fmtMoney(value);
   };
 
@@ -459,7 +471,7 @@ const StorePerformanceView = ({ dashboardStats, myStoreRankings, brandInfo }) =>
             </div>
             <div className={`mt-4 md:mt-0 px-4 py-2 rounded-xl flex items-center gap-2 ${paceGap === null ? "bg-stone-50 text-stone-500 border border-stone-100" : paceGap >= 0 ? "bg-emerald-50 text-emerald-600 border border-emerald-100" : "bg-rose-50 text-rose-600 border border-rose-100"}`}>
               <span className="text-sm font-bold">{paceGap === null ? "目標資料未完整" : paceGap >= 0 ? "超前預算" : "落後預算"}</span>
-              <span className="text-xl font-mono font-bold">{paceGap === null ? "N/A" : `${Math.abs(paceGap).toFixed(0)}%`}</span>
+              <span className="text-xl font-mono font-bold">{paceGap === null ? resolveKpiPresentationLabel({ status: formalKpiStatus.cashTarget || formalKpiStatus.cash || "", fallback: "不適用" }) : `${Math.abs(paceGap).toFixed(0)}%`}</span>
             </div>
           </div>
 
@@ -468,7 +480,7 @@ const StorePerformanceView = ({ dashboardStats, myStoreRankings, brandInfo }) =>
               <div className="space-y-3">
                 <div className="flex justify-between text-sm md:text-base font-bold">
                   <span className="text-stone-500">實際達成率 (預算)</span>
-                  <span className={!cashAchievementAvailable ? "text-stone-400" : totalAchievement >= timeProgress ? "text-emerald-500" : "text-rose-500"}>{formatKpiPercent(totalAchievement)}</span>
+                  <span className={!cashAchievementAvailable ? "text-stone-400" : totalAchievement >= timeProgress ? "text-emerald-500" : "text-rose-500"}>{formatKpiPercent(totalAchievement, formalKpiStatus.cashTarget || formalKpiStatus.cash)}</span>
                 </div>
                 <div className="w-full bg-stone-100 h-3.5 md:h-4 rounded-full overflow-hidden shadow-inner">
                   <div className={`h-full rounded-full transition-all duration-1000 ${!cashAchievementAvailable ? "bg-stone-300" : totalAchievement >= 100 ? "bg-gradient-to-r from-emerald-400 to-teal-400" : totalAchievement >= timeProgress ? "bg-emerald-400" : "bg-rose-400"}`} style={{ width: `${cashAchievementAvailable ? Math.min(Math.max(totalAchievement, 0), 100) : 0}%` }} />
@@ -546,7 +558,7 @@ const StorePerformanceView = ({ dashboardStats, myStoreRankings, brandInfo }) =>
                 <div className="space-y-1.5 pt-3 border-t border-stone-200/60">
                   <div className="flex justify-between items-center text-[11px]">
                      <span className="text-stone-400">預算目標</span>
-                     <span className="font-mono font-bold text-stone-500">{formatKpiMoney(storeGrandTotal.budget)}</span>
+                     <span className="font-mono font-bold text-stone-500">{formatKpiMoney(storeGrandTotal.budget, formalKpiStatus.cashTarget)}</span>
                   </div>
                   {storeGrandTotal.hasChallengeCash && (
                      <div className="flex justify-between items-center text-[11px]">
@@ -582,7 +594,7 @@ const StorePerformanceView = ({ dashboardStats, myStoreRankings, brandInfo }) =>
                 <div className="space-y-1.5 pt-3 border-t border-stone-200/60">
                   <div className="flex justify-between items-center text-[11px]">
                      <span className="text-stone-400">預算目標</span>
-                     <span className="font-mono font-bold text-stone-500">{formatKpiMoney(storeGrandTotal.accrualBudget)}</span>
+                     <span className="font-mono font-bold text-stone-500">{formatKpiMoney(storeGrandTotal.accrualBudget, formalKpiStatus.accrualTarget)}</span>
                   </div>
                   {storeGrandTotal.hasChallengeAccrual && (
                      <div className="flex justify-between items-center text-[11px]">
@@ -600,10 +612,10 @@ const StorePerformanceView = ({ dashboardStats, myStoreRankings, brandInfo }) =>
       {/* 財務與營運卡片 */}
       <div><h3 className="text-lg font-bold text-stone-700 mb-4 flex items-center gap-2 pl-1"><div className="w-1 h-6 bg-amber-500 rounded-full"></div>財務績效</h3>
         <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-          <MiniKpiCard title="總現金業績" value={formatKpiMoney(storeGrandTotal.cash)} icon={DollarSign} color="text-amber-500"
+          <MiniKpiCard title="總現金業績" value={formatKpiMoney(storeGrandTotal.cash, formalKpiStatus.cash)} icon={DollarSign} color="text-amber-500"
             subText={
               <div className="flex flex-col gap-1 w-full">
-                <div className="flex items-center justify-between"><span className={`font-bold ${cashAchievementAvailable && totalAchievement >= 100 ? "text-emerald-600" : "text-stone-500"}`}>預算目標達成率</span><span className={`font-bold ${cashAchievementAvailable && totalAchievement >= 100 ? "text-emerald-600" : "text-stone-500"}`}>{formatKpiPercent(totalAchievement)}</span></div>
+                <div className="flex items-center justify-between"><span className={`font-bold ${cashAchievementAvailable && totalAchievement >= 100 ? "text-emerald-600" : "text-stone-500"}`}>預算目標達成率</span><span className={`font-bold ${cashAchievementAvailable && totalAchievement >= 100 ? "text-emerald-600" : "text-stone-500"}`}>{formatKpiPercent(totalAchievement, formalKpiStatus.cashTarget || formalKpiStatus.cash)}</span></div>
                 {storeGrandTotal.hasChallengeCash && (
                    <div className="flex items-center justify-between border-t border-stone-100 pt-1">
                      <span className={`font-bold text-[11px] ${dashboardStats.challengeAchievement >= 100 ? "text-amber-600" : "text-amber-600/60"}`}><Star size={10} className="inline mb-0.5"/> 挑戰目標達成率</span>
@@ -613,10 +625,10 @@ const StorePerformanceView = ({ dashboardStats, myStoreRankings, brandInfo }) =>
               </div>
             }
           />
-          <MiniKpiCard title="總權責業績" value={formatKpiMoney(storeGrandTotal.accrual)} icon={CreditCard} color="text-cyan-500"
+          <MiniKpiCard title="總權責業績" value={formatKpiMoney(storeGrandTotal.accrual, formalKpiStatus.accrual)} icon={CreditCard} color="text-cyan-500"
             subText={
               <div className="flex flex-col gap-1 w-full">
-                <div className="flex items-center justify-between"><span className={`font-bold ${accrualAchievementAvailable && dashboardStats.totalAccrualAchievement >= 100 ? "text-emerald-600" : "text-stone-500"}`}>預算目標達成率</span><span className={`font-bold ${accrualAchievementAvailable && dashboardStats.totalAccrualAchievement >= 100 ? "text-emerald-600" : "text-stone-500"}`}>{formatKpiPercent(dashboardStats.totalAccrualAchievement)}</span></div>
+                <div className="flex items-center justify-between"><span className={`font-bold ${accrualAchievementAvailable && dashboardStats.totalAccrualAchievement >= 100 ? "text-emerald-600" : "text-stone-500"}`}>預算目標達成率</span><span className={`font-bold ${accrualAchievementAvailable && dashboardStats.totalAccrualAchievement >= 100 ? "text-emerald-600" : "text-stone-500"}`}>{formatKpiPercent(dashboardStats.totalAccrualAchievement, formalKpiStatus.accrualTarget || formalKpiStatus.accrual)}</span></div>
                 {storeGrandTotal.hasChallengeAccrual && (
                    <div className="flex items-center justify-between border-t border-stone-100 pt-1">
                      <span className={`font-bold text-[11px] ${dashboardStats.challengeAccrualAchievement >= 100 ? "text-amber-600" : "text-amber-600/60"}`}><Star size={10} className="inline mb-0.5"/> 挑戰目標達成率</span>

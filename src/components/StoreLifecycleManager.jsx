@@ -55,7 +55,7 @@ const getStatusMeta = (status = "") => {
 const getDatasetMeta = (status = "BUILDING") => (
   status === "READY"
     ? { label: "已完成確認", className: "bg-emerald-50 text-emerald-700 border-emerald-100" }
-    : { label: "建置中", className: "bg-amber-50 text-amber-700 border-amber-100" }
+    : { label: "設定中", className: "bg-amber-50 text-amber-700 border-amber-100" }
 );
 
 const StoreLifecycleManager = ({
@@ -116,7 +116,7 @@ const StoreLifecycleManager = ({
     } catch (error) {
       console.error("Store Lifecycle 載入失敗:", error);
       if (requestId === loadSequenceRef.current && activeBrandRef.current === brandId) {
-        setLoadError(error?.message || "門市生命週期資料載入失敗");
+        setLoadError(error?.message || "門市營運期間資料載入失敗");
       }
       return null;
     } finally {
@@ -263,7 +263,7 @@ const StoreLifecycleManager = ({
 
   const openBatchInitializer = () => {
     if (master.datasetStatus === "READY") {
-      notify("目前 Lifecycle 已標記 READY；若要重新批次初始化，請先改回「建置中」", "error");
+      notify("目前營運期間資料已完成確認；若要重新批次設定，請先改回「建置中」", "error");
       return;
     }
     if (batchRows.length === 0) {
@@ -424,7 +424,7 @@ const StoreLifecycleManager = ({
     });
     const result = await response.json().catch(() => ({}));
     if (!response.ok || result?.ok === false) {
-      const error = new Error(result?.message || `門市生命週期操作失敗 (${response.status})`);
+      const error = new Error(result?.message || `門市營運期間操作失敗 (${response.status})`);
       error.status = response.status;
       error.result = result;
       throw error;
@@ -435,7 +435,7 @@ const StoreLifecycleManager = ({
   const performSave = async (password) => {
     const check = validateLifecycleEntryDraft(draft);
     if (!check.valid) {
-      notify(check.errors[0] || "門市生命週期資料格式有誤", "error");
+      notify(check.errors[0] || "門市營運期間資料格式有誤", "error");
       return false;
     }
 
@@ -454,7 +454,7 @@ const StoreLifecycleManager = ({
         },
       }, password);
       if (activeBrandRef.current !== brandId) return false;
-      notify(`${result?.entry?.canonicalStoreName || draft.canonicalStoreName} 生命週期已儲存`, "success");
+      notify(`${result?.entry?.canonicalStoreName || draft.canonicalStoreName} 營運期間已儲存`, "success");
       await loadMaster({ silent: true });
       const nextEntry = normalizeLifecycleEntry(result?.entry || {}, draft.canonicalStoreName, brandId);
       setSelectedKey(nextEntry.storeKey);
@@ -467,7 +467,7 @@ const StoreLifecycleManager = ({
         const freshEntry = fresh?.stores?.[selectedKey];
         if (freshEntry) setDraft(normalizeLifecycleEntry(freshEntry, selectedKey, brandId));
       } else {
-        notify(error.message || "門市生命週期儲存失敗", "error");
+        notify(error.message || "門市營運期間儲存失敗", "error");
       }
       return false;
     } finally {
@@ -481,21 +481,21 @@ const StoreLifecycleManager = ({
       return;
     }
     if (currentDeviceTrust?.status !== "trusted") {
-      notify("請改用已信任的裝置修改門市生命週期", "error");
+      notify("請改用已信任的裝置修改門市營運期間", "error");
       return;
     }
 
     const check = validateLifecycleEntryDraft(draft);
     if (!check.valid) {
-      notify(check.errors[0] || "門市生命週期資料格式有誤", "error");
+      notify(check.errors[0] || "門市營運期間資料格式有誤", "error");
       return;
     }
 
     setCredentialPassword("");
     setCredentialDialog({
       type: "save",
-      title: "確認儲存門市生命週期",
-      description: `即將儲存「${draft.canonicalStoreName || selectedRow?.canonicalStoreName || selectedKey}」的生命週期資料。`,
+      title: "確認儲存門市營運期間",
+      description: `即將儲存「${draft.canonicalStoreName || selectedRow?.canonicalStoreName || selectedKey}」的營運期間資料。`,
     });
   };
 
@@ -636,11 +636,11 @@ const StoreLifecycleManager = ({
 
   const handleBatchSave = () => {
     if (master.datasetStatus === "READY") {
-      notify("Lifecycle 已是 READY，批次初始化只允許在 BUILDING 狀態執行", "error");
+      notify("營運期間資料已完成確認；批次設定只能在「建置中」狀態執行", "error");
       return;
     }
     if (currentDeviceTrust?.status !== "trusted") {
-      notify("請改用已信任的裝置執行批次初始化", "error");
+      notify("請改用已信任的裝置執行批次設定", "error");
       return;
     }
     if (batchSelectedKeys.length === 0) {
@@ -663,8 +663,8 @@ const StoreLifecycleManager = ({
     setCredentialPassword("");
     setCredentialDialog({
       type: "batch",
-      title: "確認批次初始化門市生命週期",
-      description: `本次將依序儲存 ${selectedRows.length} 間 ${brandMeta.label} 門市。Backend 仍會逐店重新驗證、transaction 寫入與 revision 衝突檢查。`,
+      title: "確認批次設定門市營運期間",
+      description: `本次將依序儲存 ${selectedRows.length} 間 ${brandMeta.label} 門市。系統會逐店重新確認身分與裝置信任狀態，並避免覆蓋其他管理者剛更新的資料。`,
     });
   };
 
@@ -677,13 +677,13 @@ const StoreLifecycleManager = ({
         expectedMasterRevision: Number(master.revision || 0),
       }, password);
       if (activeBrandRef.current !== brandId) return false;
-      notify(nextStatus === "READY" ? "門市生命週期資料已完成確認" : "門市生命週期資料已改回建置中", "success");
+      notify(nextStatus === "READY" ? "門市營運期間資料已完成確認" : "門市營運期間資料已改回設定中", "success");
       setMaster((prev) => ({ ...prev, datasetStatus: result.datasetStatus, revision: result.masterRevision }));
       await loadMaster({ silent: true });
       return true;
     } catch (error) {
       if (error?.status === 409) await loadMaster({ silent: true });
-      notify(error.message || "資料集狀態更新失敗", "error");
+      notify(error.message || "資料狀態更新失敗", "error");
       return false;
     } finally {
       setStatusChanging(false);
@@ -692,7 +692,7 @@ const StoreLifecycleManager = ({
 
   const handleDatasetStatus = (nextStatus) => {
     if (currentDeviceTrust?.status !== "trusted") {
-      notify("請改用已信任的裝置變更資料集狀態", "error");
+      notify("請改用已信任的裝置變更資料狀態", "error");
       return;
     }
 
@@ -700,10 +700,10 @@ const StoreLifecycleManager = ({
     setCredentialDialog({
       type: "dataset",
       nextStatus,
-      title: nextStatus === "READY" ? "完成整個品牌資料確認" : "改回建置中",
+      title: nextStatus === "READY" ? "完成整個品牌資料確認" : "改回設定中",
       description: nextStatus === "READY"
-        ? "系統會再次檢查目前組織架構中的所有門市是否都有完整生命週期。Batch 1 仍不會切換任何 KPI 計算。"
-        : "將資料集改回建置中不會刪除已建立的門市生命週期，也不會影響目前 KPI。",
+        ? "系統會再次檢查目前組織架構中的所有門市是否都有完整的營運期間資料。完成確認後，正式功能會依這些日期判斷應納入的門市與回報範圍。"
+        : "改回設定中不會刪除已建立的門市營運期間資料，也不會改變目前已儲存的營運數據。",
     });
   };
 
@@ -735,15 +735,15 @@ const StoreLifecycleManager = ({
 
   if (loading) {
     return (
-      <Card title="門市生命週期">
-        <div className="flex items-center justify-center gap-2 py-16 text-sm font-bold text-[#A69C91]"><Loader2 className="animate-spin" size={20} /> 正在載入門市生命週期…</div>
+      <Card title="門市營運期間管理">
+        <div className="flex items-center justify-center gap-2 py-16 text-sm font-bold text-[#A69C91]"><Loader2 className="animate-spin" size={20} /> 正在載入門市營運期間…</div>
       </Card>
     );
   }
 
   return (
     <div className="space-y-6 w-full max-w-full min-w-0">
-      <Card title="門市生命週期 Master">
+      <Card title="門市營運期間管理">
         <div className="space-y-4">
           <div className="grid grid-cols-1 gap-3 md:grid-cols-4">
             <div className="rounded-2xl border border-[#EFE7DA] bg-[#FFFCF7] p-4">
@@ -751,7 +751,7 @@ const StoreLifecycleManager = ({
               <div className="mt-1 text-lg font-black text-[#4D4338]">{brandMeta.label}</div>
             </div>
             <div className="rounded-2xl border border-[#EFE7DA] bg-[#FFFCF7] p-4">
-              <div className="text-[11px] font-black text-[#A69C91]">資料集狀態</div>
+              <div className="text-[11px] font-black text-[#A69C91]">資料狀態</div>
               <span className={`mt-2 inline-flex rounded-full border px-2.5 py-1 text-xs font-black ${datasetMeta.className}`}>{datasetMeta.label}</span>
             </div>
             <div className="rounded-2xl border border-[#EFE7DA] bg-[#FFFCF7] p-4">
@@ -759,13 +759,13 @@ const StoreLifecycleManager = ({
               <div className="mt-1 text-lg font-black text-[#4D4338]">{Object.keys(master.stores || {}).length} / {completedCount}</div>
             </div>
             <div className="rounded-2xl border border-[#EFE7DA] bg-[#FFFCF7] p-4">
-              <div className="text-[11px] font-black text-[#A69C91]">Master Revision</div>
+              <div className="text-[11px] font-black text-[#A69C91]">資料版本</div>
               <div className="mt-1 text-lg font-black text-[#4D4338]">{master.revision || 0}</div>
             </div>
           </div>
 
           <div className="rounded-2xl border border-sky-100 bg-sky-50/60 p-4 text-xs font-bold leading-6 text-sky-800">
-            Batch 1 只建立 Store Lifecycle 上游 Master。即使標記為「已完成確認」，目前 Dashboard、Ranking、Annual、Regional、Projection、Telegram 都不會讀取這份資料，因此不會改變既有 KPI 數字。
+            這裡管理每間門市何時開始、暫停或結束納入正式營運計算。完成確認後，相關報表會依這些日期判斷應納入的門市與回報範圍。
           </div>
 
           {loadError && (
@@ -781,7 +781,7 @@ const StoreLifecycleManager = ({
               <ShieldCheck size={20} className="mt-0.5 shrink-0 text-[#B7863D]" />
               <div className="flex-1 min-w-0">
                 <div className="font-black text-[#4D4338]">高風險資料寫入保護</div>
-                <p className="mt-1 text-xs font-bold leading-5 text-[#8C8176]">每次儲存都會由 Backend 重新驗證 Firebase 登入、目前可信裝置與最高管理者密碼。密碼只用於本次驗證，不會寫入 Lifecycle、log 或瀏覽器儲存空間。</p>
+                <p className="mt-1 text-xs font-bold leading-5 text-[#8C8176]">每次儲存都會重新確認登入身分、目前裝置信任狀態與最高管理者密碼。密碼只用於本次確認，不會寫入門市營運資料、操作紀錄或瀏覽器儲存空間。</p>
                 <div className="mt-3 flex flex-col gap-2 md:flex-row md:items-center md:justify-between">
                   <div className={`inline-flex w-fit items-center justify-center rounded-xl border px-3 py-2.5 text-xs font-black ${currentDeviceTrust?.status === "trusted" ? "border-emerald-100 bg-emerald-50 text-emerald-700" : "border-rose-100 bg-rose-50 text-rose-700"}`}>
                     {currentDeviceTrust?.status === "trusted" ? "🛡 目前裝置已信任" : "⚠ 請改用已信任裝置"}
@@ -793,7 +793,7 @@ const StoreLifecycleManager = ({
                       onClick={openBatchInitializer}
                       className="inline-flex items-center justify-center gap-2 rounded-xl border border-sky-200 bg-sky-50 px-4 py-2.5 text-xs font-black text-sky-700 disabled:opacity-45"
                     >
-                      <Building2 size={15} /> 批次初始化
+                      <Building2 size={15} /> 批次設定
                     </button>
                     <button
                       type="button"
@@ -802,7 +802,7 @@ const StoreLifecycleManager = ({
                       className="inline-flex items-center justify-center gap-2 rounded-xl border border-[#E8C77A] bg-gradient-to-r from-[#FFF4D8] to-[#EFD399] px-4 py-2.5 text-xs font-black text-[#6A4D26] disabled:opacity-50"
                     >
                       {statusChanging ? <Loader2 size={15} className="animate-spin" /> : <CheckCircle2 size={15} />}
-                      {master.datasetStatus === "READY" ? "改回建置中" : "完成資料確認"}
+                      {master.datasetStatus === "READY" ? "改回設定中" : "完成資料確認"}
                     </button>
                   </div>
                 </div>
@@ -816,11 +816,11 @@ const StoreLifecycleManager = ({
       </Card>
 
       {batchOpen && (
-        <Card title="門市批次初始化">
+        <Card title="門市批次設定">
           <div className="space-y-5">
             <div className="flex flex-col gap-3 rounded-2xl border border-sky-100 bg-sky-50/60 p-4 lg:flex-row lg:items-start lg:justify-between">
               <div className="min-w-0">
-                <div className="font-black text-sky-800">第一次大量建置用；正式例外仍回到單店精修</div>
+                <div className="font-black text-sky-800">第一次大量設定使用；特殊門市仍回到單店調整</div>
                 <p className="mt-1 text-xs font-bold leading-5 text-sky-800/75">
                   只列出目前 {brandMeta.label} 組織架構中的門市。已完整門市在批次模式中鎖定，不會被覆寫；永久結束、整月暫停等特殊資料仍由右側單店編輯處理。
                 </p>
@@ -831,7 +831,7 @@ const StoreLifecycleManager = ({
                 disabled={batchSaving}
                 className="shrink-0 rounded-xl border border-sky-100 bg-white px-3 py-2 text-xs font-black text-sky-700 disabled:opacity-40"
               >
-                關閉批次初始化
+                關閉批次設定
               </button>
             </div>
 
@@ -840,7 +840,7 @@ const StoreLifecycleManager = ({
                 <div>
                   <div className="text-sm font-black text-[#4D4338]">共用欄位</div>
                   <p className="mt-1 text-[11px] font-bold leading-5 text-[#A69C91]">
-                    系統不會自行推論日期。首次正式納管月份是 SaaS KPI 邊界；實際開始營運日期是門市真實開店邊界，可以更早。只有你實際輸入的共用值才會套用；預設只補空白欄位。
+                    系統不會自行推論日期。首次正式納管月份是正式報表的計算邊界；實際開始營運日期是門市真實開店邊界，可以更早。只有你實際輸入的共用值才會套用；預設只補空白欄位。
                   </p>
                 </div>
 
@@ -1012,7 +1012,7 @@ const StoreLifecycleManager = ({
               <div className="text-xs font-bold leading-5 text-[#7C7063]">
                 {batchSaving
                   ? `正在逐店儲存 ${batchProgress.current} / ${batchProgress.total}；請勿切換品牌或關閉頁面。`
-                  : `準備儲存 ${batchSelectedKeys.length} 間。每間仍使用既有 Backend transaction 與 revision 保護；單店 409 不會覆蓋其他管理者資料。`}
+                  : `準備儲存 ${batchSelectedKeys.length} 間。系統會逐店確認最新資料，若其他管理者剛完成更新，該店會停止覆蓋並顯示衝突提醒。`}
               </div>
               <button
                 type="button"
@@ -1095,7 +1095,7 @@ const StoreLifecycleManager = ({
               />
               <button type="button" onClick={addCustomStore} className="shrink-0 rounded-xl border border-[#E8C77A] bg-[#FFF7DF] px-3 py-2 text-xs font-black text-[#6A4D26]">加入</button>
             </div>
-            <p className="text-[11px] font-bold leading-5 text-[#A69C91]">加入歷史門市只建立 Lifecycle 草稿，不會新增 org_structure、帳號、日報或 KPI 資料。</p>
+            <p className="text-[11px] font-bold leading-5 text-[#A69C91]">加入歷史門市只建立營運期間草稿，不會新增組織架構、帳號、日報或營運指標資料。</p>
 
             <div className="max-h-[470px] overflow-y-auto pr-1">
               <div className="grid grid-cols-2 gap-2">
@@ -1127,7 +1127,7 @@ const StoreLifecycleManager = ({
                         />
                       </div>
                       <div className="mt-1 truncate text-[9px] font-bold text-[#B0A59A]">
-                        {row.source === "lifecycle" ? "歷史門市" : row.source === "org+lifecycle" ? "已建立 Lifecycle" : "尚未建立"}
+                        {row.source === "lifecycle" ? "歷史門市" : row.source === "org+lifecycle" ? "已建立營運期間" : "尚未建立"}
                       </div>
                     </button>
                   );
@@ -1141,7 +1141,7 @@ const StoreLifecycleManager = ({
             </div>
           </div>
         </Card>
-        <Card title="門市生命週期設定">
+        <Card title="門市營運期間設定">
           {!selectedKey ? (
             <div className="flex flex-col items-center justify-center rounded-2xl border-2 border-dashed border-[#EDE2D4] bg-[#FFFCF8] px-5 py-16 text-center">
               <Building2 size={38} className="text-[#D5C8BA]" />
@@ -1154,7 +1154,7 @@ const StoreLifecycleManager = ({
                 <div>
                   <div className="text-[11px] font-black text-[#A69C91]">目前編輯</div>
                   <div className="mt-1 text-lg font-black text-[#4D4338]">{draft.canonicalStoreName || selectedRow?.canonicalStoreName || selectedKey}</div>
-                  <div className="mt-1 text-[10px] font-bold text-[#A69C91]">Store Key：{draft.storeKey || selectedKey}｜Revision {draft.revision || 0}</div>
+                  <div className="mt-1 text-[10px] font-bold text-[#A69C91]">門市識別：{draft.storeKey || selectedKey}｜資料版本 {draft.revision || 0}</div>
                 </div>
                 <span className={`inline-flex w-fit rounded-full border px-2.5 py-1 text-xs font-black ${draftStatus.className}`}>{draftStatus.label}</span>
               </div>
@@ -1170,7 +1170,7 @@ const StoreLifecycleManager = ({
                     className="w-full md:w-full"
                     buttonClassName="!w-full md:!w-full"
                   />
-                  <span className="text-[10px] font-bold text-[#A69C91]">這是本 SaaS KPI 正式開始納管該店的月份；可晚於門市真正開始營運的日期，且不自動按日數折算目標。</span>
+                  <span className="text-[10px] font-bold text-[#A69C91]">這是正式報表開始納入該店的月份；可晚於門市真正開始營運的日期，且不會自動按日數折算目標。</span>
                 </label>
                 <label className="space-y-1.5">
                   <span className="flex items-center gap-1 text-xs font-black text-[#7C7063]"><CalendarDays size={14} /> 實際開始營運日期</span>
@@ -1209,8 +1209,8 @@ const StoreLifecycleManager = ({
               </div>
 
               <div className="rounded-2xl border border-[#EFE7DA] bg-[#FFFCF8] p-4">
-                <div className="text-xs font-black text-[#6E6257]">整月暫停營運 Exempt Months</div>
-                <p className="mt-1 text-[10px] font-bold leading-5 text-[#A69C91]">只用於已核准的「整個月份不營運」。一般休店日、0 業績或沒日報都不能自動視為 exempt。</p>
+                <div className="text-xs font-black text-[#6E6257]">整月暫停營運</div>
+                <p className="mt-1 text-[10px] font-bold leading-5 text-[#A69C91]">只用於已核准的「整個月份不營運」。一般休店日、0 業績或沒有日報，都不能自動視為整月暫停營運。</p>
                 <div className="mt-3 flex flex-col gap-2 sm:flex-row">
                   <div className="min-w-0 flex-1">
                     <SmartMonthPicker
@@ -1239,7 +1239,7 @@ const StoreLifecycleManager = ({
               )}
 
               <div className="rounded-2xl border border-amber-100 bg-amber-50/60 p-4 text-xs font-bold leading-6 text-amber-800">
-                系統不會因為沒有日報、業績為 0、從區長轄區移除，或暫時休店就自動判定永久關店。現階段允許先儲存未完整草稿，但只有資料完整的門市才能讓整個品牌 Lifecycle 通過 READY 檢查。
+                系統不會因為沒有日報、業績為 0、從區長轄區移除，或暫時休店就自動判定永久關店。現階段允許先儲存未完整草稿，但只有所有必要資料都完成，整個品牌才能完成資料確認。
               </div>
 
               <div className="flex justify-end">
@@ -1307,19 +1307,19 @@ const StoreLifecycleManager = ({
                   className="w-full rounded-xl border-2 border-[#E8DDD0] bg-white px-4 py-3 text-sm font-bold text-[#4D4338] outline-none focus:border-amber-300 focus:ring-4 focus:ring-amber-50"
                 />
                 <span className="mt-2 block text-[10px] font-bold leading-5 text-[#A69C91]">
-                  密碼只會送到 Backend 做本次重新驗證；成功或失敗後都會從畫面狀態清除，不寫入 Firestore、Lifecycle 或瀏覽器儲存空間。
+                  密碼只用於這一次身分確認；成功或失敗後都會從畫面狀態清除，不會寫入雲端營運資料、門市營運期間資料或瀏覽器儲存空間。
                 </span>
               </label>
 
               {credentialDialog.type === "batch" && (
                 <div className="rounded-xl border border-sky-100 bg-sky-50/70 px-3 py-2.5 text-xs font-bold leading-5 text-sky-800">
-                  這組密碼只用於本次批次操作。Frontend 會依序呼叫既有單店 Endpoint；Backend 對每一間門市仍重新驗證 trusted device、最高管理者權限與 revision。
+                  這組密碼只用於本次批次操作。系統會逐店重新確認已信任裝置、最高管理者權限與資料版本，避免多人同時覆寫。
                 </div>
               )}
 
               {credentialDialog.type === "dataset" && credentialDialog.nextStatus === "READY" && (
                 <div className="rounded-xl border border-amber-100 bg-amber-50/70 px-3 py-2.5 text-xs font-bold leading-5 text-amber-800">
-                  READY 只代表 Lifecycle Master 已完成確認；Batch 1 仍不會讓 Dashboard、Ranking、Annual 或 Telegram 改讀這份資料。
+                  完成資料確認代表這份門市營運期間設定可供正式功能使用；相關報表會依既有規則讀取，不會修改原始日報。
                 </div>
               )}
 
@@ -1357,7 +1357,7 @@ class StoreLifecycleErrorBoundary extends React.Component {
   }
 
   static getDerivedStateFromError(error) {
-    return { hasError: true, message: String(error?.message || "門市生命週期畫面暫時無法顯示") };
+    return { hasError: true, message: String(error?.message || "門市營運期間畫面暫時無法顯示") };
   }
 
   componentDidCatch(error, info) {
@@ -1367,12 +1367,12 @@ class StoreLifecycleErrorBoundary extends React.Component {
   render() {
     if (this.state.hasError) {
       return (
-        <Card title="門市生命週期">
+        <Card title="門市營運期間管理">
           <div className="rounded-2xl border border-rose-100 bg-rose-50/70 p-5 text-sm font-bold leading-6 text-rose-700">
             <div className="flex items-start gap-2">
               <AlertTriangle size={18} className="mt-0.5 shrink-0" />
               <div className="min-w-0 flex-1">
-                <div className="font-black">門市生命週期工具暫時無法顯示</div>
+                <div className="font-black">門市營運期間工具暫時無法顯示</div>
                 <div className="mt-1 text-xs">{this.state.message}</div>
                 <div className="mt-1 text-xs text-rose-600/80">其他系統設定與營運資料不受影響。</div>
               </div>

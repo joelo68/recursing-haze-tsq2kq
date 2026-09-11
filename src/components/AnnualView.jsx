@@ -12,6 +12,7 @@ import { sortManagerNames, sortStoreNames, sortManagersByOrgOrder, sortStoresByO
 import { ViewWrapper, Card } from "./SharedUI";
 import SmartMonthPicker from "./SmartMonthPicker";
 import { filterSystemExcludedStoreKeys } from "../utils/systemExclusion.js";
+import { resolveKpiPresentationLabel } from "../utils/kpiPresentation.js";
 import {
   buildAnnualFormalMonth,
   buildAnnualIntervalTotals,
@@ -947,13 +948,19 @@ const annualData = useMemo(() => {
     return effectiveStores.filter((storeName) => !excluded.has(canonicalStoreName(storeName))).length;
   }, [effectiveStores, auditExclusions, systemExclusionState, canonicalStoreName]);
 
-  const displayAnnualMoney = (value, preSystemSkip = false) => {
-    if (preSystemSkip) return "—";
-    return value !== null && value !== undefined && Number.isFinite(Number(value)) ? fmtMoney(Number(value)) : "N/A";
+  const displayAnnualMoney = (value, preSystemSkip = false, status = "") => {
+    if (value !== null && value !== undefined && Number.isFinite(Number(value))) return fmtMoney(Number(value));
+    return resolveKpiPresentationLabel({
+      status: preSystemSkip ? "PRE_SYSTEM" : status,
+      fallback: "尚無資料",
+    });
   };
-  const displayAnnualPercent = (value, preSystemSkip = false) => {
-    if (preSystemSkip) return "—";
-    return value !== null && value !== undefined && Number.isFinite(Number(value)) ? `${Number(value).toFixed(1)}%` : "N/A";
+  const displayAnnualPercent = (value, preSystemSkip = false, status = "") => {
+    if (value !== null && value !== undefined && Number.isFinite(Number(value))) return `${Number(value).toFixed(1)}%`;
+    return resolveKpiPresentationLabel({
+      status: preSystemSkip ? "PRE_SYSTEM" : status,
+      fallback: "尚無資料",
+    });
   };
   const annualProgressWidth = (value) => (
     value !== null && value !== undefined && Number.isFinite(Number(value))
@@ -974,7 +981,7 @@ const annualData = useMemo(() => {
                </div>
                <div>
                  <h1 className="text-2xl font-bold text-stone-800">經營績效分析 ({brandPrefix})</h1>
-                 <p className="text-xs text-stone-500 font-medium">Performance Analytics</p>
+                 <p className="text-xs text-stone-500 font-medium">年度營運分析</p>
                </div>
              </div>
              
@@ -1202,7 +1209,7 @@ const annualData = useMemo(() => {
                       <td className="py-4 pl-2 font-bold text-stone-700">
                         <span>{stat.label}</span>
                         {stat.preSystemSkip && (
-                          <span className="ml-2 px-2 py-0.5 rounded-full bg-stone-100 text-stone-400 text-[10px] font-bold">Pre-system</span>
+                          <span className="ml-2 px-2 py-0.5 rounded-full bg-stone-100 text-stone-400 text-[10px] font-bold">不納入</span>
                         )}
                         {stat.performanceStatus === "NOT_STARTED" && (
                           <span className="ml-2 px-2 py-0.5 rounded-full bg-sky-50 text-sky-500 text-[10px] font-bold">未開始</span>
@@ -1211,21 +1218,21 @@ const annualData = useMemo(() => {
                           <span className="ml-2 px-2 py-0.5 rounded-full bg-amber-50 text-amber-600 text-[10px] font-bold">資料未完整</span>
                         )}
                       </td>
-                      <td className="py-4 text-right font-mono text-stone-400 text-xs">{displayAnnualMoney(stat.budget, stat.preSystemSkip)}</td>
-                      <td className="py-4 text-right font-mono text-stone-700 font-bold">{displayAnnualMoney(stat.cash, stat.preSystemSkip)}</td>
+                      <td className="py-4 text-right font-mono text-stone-400 text-xs">{displayAnnualMoney(stat.budget, stat.preSystemSkip, stat.performanceStatus)}</td>
+                      <td className="py-4 text-right font-mono text-stone-700 font-bold">{displayAnnualMoney(stat.cash, stat.preSystemSkip, stat.performanceStatus)}</td>
                       <td className="py-4 text-right font-bold">
                          <span className={`px-2 py-1 rounded-md text-xs ${stat.achievement >= 100 ? 'bg-amber-100 text-amber-700' : 'bg-stone-100 text-stone-400'}`}>
-                           {displayAnnualPercent(stat.achievement, stat.preSystemSkip)}
+                           {displayAnnualPercent(stat.achievement, stat.preSystemSkip, stat.performanceStatus)}
                          </span>
                       </td>
-                      <td className="py-4 text-right font-mono text-stone-400 text-xs pl-4 border-l border-dashed border-stone-100">{displayAnnualMoney(stat.accrualBudget, stat.preSystemSkip)}</td>
-                      <td className="py-4 text-right font-mono text-indigo-600 font-bold">{displayAnnualMoney(stat.accrual, stat.preSystemSkip)}</td>
+                      <td className="py-4 text-right font-mono text-stone-400 text-xs pl-4 border-l border-dashed border-stone-100">{displayAnnualMoney(stat.accrualBudget, stat.preSystemSkip, stat.performanceStatus)}</td>
+                      <td className="py-4 text-right font-mono text-indigo-600 font-bold">{displayAnnualMoney(stat.accrual, stat.preSystemSkip, stat.performanceStatus)}</td>
                       <td className="py-4 text-right font-bold">
                          <span className={`px-2 py-1 rounded-md text-xs ${stat.accrualAchievement >= 100 ? 'bg-indigo-100 text-indigo-700' : 'bg-stone-100 text-stone-400'}`}>
-                           {displayAnnualPercent(stat.accrualAchievement, stat.preSystemSkip)}
+                           {displayAnnualPercent(stat.accrualAchievement, stat.preSystemSkip, stat.performanceStatus)}
                          </span>
                       </td>
-                      <td className="py-4 text-right font-mono text-stone-600 pl-4 border-l border-dashed border-stone-100">{stat.preSystemSkip ? "—" : (Number.isFinite(Number(stat.traffic)) && stat.traffic !== null ? fmtNum(stat.traffic) : "N/A")}</td>
+                      <td className="py-4 text-right font-mono text-stone-600 pl-4 border-l border-dashed border-stone-100">{Number.isFinite(Number(stat.traffic)) && stat.traffic !== null ? fmtNum(stat.traffic) : resolveKpiPresentationLabel({ status: stat.preSystemSkip ? "PRE_SYSTEM" : stat.performanceStatus, fallback: "尚無資料" })}</td>
                     </tr>
                   ))}
                 </tbody>

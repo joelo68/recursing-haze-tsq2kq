@@ -284,6 +284,6 @@ test("Annual KPI rebuild is Summary-first, Lifecycle/System-Exclusion anchored a
   assert.doesNotMatch(rebuildBlock, /firstActivityDay/);
 
   assert.match(settingsSource, /annualAverageSettings 已退休為 legacy data/);
-  assert.match(settingsSource, /年度平均樣本由門市生命週期自動判定/);
+  assert.match(settingsSource, /年度平均樣本由門市營運期間自動判定/);
   assert.doesNotMatch(settingsSource, /ANNUAL_KPI_REBUILD_ENDPOINT/);
 });

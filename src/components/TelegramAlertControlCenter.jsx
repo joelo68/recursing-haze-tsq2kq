@@ -242,9 +242,9 @@ const isPolicyActiveNow = (policy = {}) => {
 
 
 const TELEGRAM_SECURITY_TARGET_OPTIONS = [
-  { id: "main", label: "高階主管主群", hint: "Chat ID -4991191955｜既有正式主群" },
-  { id: "manager", label: "主管群", hint: "Chat ID -1002361008620｜既有主管群" },
-  { id: "agent_test", label: "Agent 測試群", hint: "Chat ID -5241604208｜既有測試白名單" },
+  { id: "main", label: "高階主管主群", hint: "群組編號 -4991191955｜既有正式主群" },
+  { id: "manager", label: "主管群", hint: "群組編號 -1002361008620｜既有主管群" },
+  { id: "agent_test", label: "測試群", hint: "群組編號 -5241604208｜既有測試白名單" },
 ];
 
 const createDefaultTelegramSecurityForm = () => ({
@@ -801,7 +801,7 @@ const TelegramAlertControlCenter = ({ view = "alerts", onNavigate }) => {
 
   const savePolicy = async () => {
     if (!canManagePolicyCenter) {
-      notify("只有 master／director 可以修改長期規則與權限", "error");
+      notify("只有具管理權限的高階主管可以修改長期規則與權限", "error");
       return;
     }
     try {
@@ -851,7 +851,7 @@ const TelegramAlertControlCenter = ({ view = "alerts", onNavigate }) => {
 
   const togglePolicyEnabled = async (policy) => {
     if (!canManagePolicyCenter) {
-      notify("只有 master／director 可以修改長期規則與權限", "error");
+      notify("只有具管理權限的高階主管可以修改長期規則與權限", "error");
       return;
     }
     try {
@@ -877,7 +877,7 @@ const TelegramAlertControlCenter = ({ view = "alerts", onNavigate }) => {
 
   const cleanupPolicyConflicts = async () => {
     if (!canManagePolicyCenter) {
-      notify("只有 master／director 可以修改長期規則與權限", "error");
+      notify("只有具管理權限的高階主管可以修改長期規則與權限", "error");
       return;
     }
     try {
@@ -928,7 +928,7 @@ const TelegramAlertControlCenter = ({ view = "alerts", onNavigate }) => {
 
   const savePermission = async () => {
     if (!canManagePolicyCenter) {
-      notify("只有 master／director 可以修改長期規則與權限", "error");
+      notify("只有具管理權限的高階主管可以修改長期規則與權限", "error");
       return;
     }
     const userId = String(permissionDraft.userId || "").trim();
@@ -971,7 +971,7 @@ const TelegramAlertControlCenter = ({ view = "alerts", onNavigate }) => {
 
   const removePermission = async (userId) => {
     if (!canManagePolicyCenter) {
-      notify("只有 master／director 可以修改長期規則與權限", "error");
+      notify("只有具管理權限的高階主管可以修改長期規則與權限", "error");
       return;
     }
     if (!window.confirm(`確定移除 Telegram 使用者 ${userId} 的規則管理權限嗎？`)) return;
@@ -1025,9 +1025,9 @@ const TelegramAlertControlCenter = ({ view = "alerts", onNavigate }) => {
           .sort((a, b) => String(b.createdAtText || "").localeCompare(String(a.createdAtText || "")))
           .slice(0, 100)
       );
-      if (!silent) notify("v5 報表快照、排程與改善任務已更新", "success");
+      if (!silent) notify("報表紀錄、排程與改善任務已更新", "success");
     } catch (error) {
-      notify(error.message || "v5 營運中樞資料載入失敗", "error");
+      notify(error.message || "營運中樞資料載入失敗", "error");
     } finally {
       if (!silent) setLoadingAction(null);
     }
@@ -1035,7 +1035,7 @@ const TelegramAlertControlCenter = ({ view = "alerts", onNavigate }) => {
 
   const saveV5MorningBriefSchedule = async () => {
     if (!canManagePolicyCenter) {
-      notify("只有 master／director 可以建立固定排程", "error");
+      notify("只有具管理權限的高階主管可以建立固定排程", "error");
       return;
     }
     try {
@@ -1109,7 +1109,7 @@ const TelegramAlertControlCenter = ({ view = "alerts", onNavigate }) => {
         ...(status === "completed" ? {
           completedAt: serverTimestamp(),
           completedAtText: new Date().toISOString(),
-          resultText: task.resultText || "由 SaaS 營運中樞標記完成",
+          resultText: task.resultText || "由營運中樞標記完成",
         } : {}),
         updatedAt: serverTimestamp(),
         updatedAtText: new Date().toISOString(),
@@ -1333,7 +1333,7 @@ const TelegramAlertControlCenter = ({ view = "alerts", onNavigate }) => {
       notify(
         normalized.enabled
           ? `登入安全即時通知已啟用：${normalized.chatTargets.length} 個群組`
-          : "登入安全即時通知已停用；安全事件仍會保留在 SaaS",
+          : "登入安全即時通知已停用；安全事件仍會保留在登入監控",
         "success"
       );
     } catch (error) {
@@ -1387,10 +1387,10 @@ const TelegramAlertControlCenter = ({ view = "alerts", onNavigate }) => {
       const data = snap.data() || {};
       if (data.status === "completed") return data;
       if (data.status === "error") {
-        throw new Error(data.errorMessage || "後端執行失敗");
+        throw new Error(data.errorMessage || "系統執行失敗");
       }
     }
-    throw new Error("後端處理逾時，請稍後更新執行狀態");
+    throw new Error("系統處理逾時，請稍後更新執行狀態");
   };
 
   const runCommand = async (action) => {
@@ -1742,7 +1742,7 @@ const TelegramAlertControlCenter = ({ view = "alerts", onNavigate }) => {
         <div className="flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
           <div>
             <div className="flex items-center gap-2"><ShieldCheck size={17} className="text-amber-600" /><p className="text-sm font-black text-stone-800">登入安全即時通知</p></div>
-            <p className="mt-1 text-[11px] font-bold leading-5 text-stone-400">只通知真正需要處理的登入安全事件；正常登入、新裝置自行驗證成功都不會推播。安全事件即使未開啟 Telegram，也會保留在 SaaS 登入監控。</p>
+            <p className="mt-1 text-[11px] font-bold leading-5 text-stone-400">只通知真正需要處理的登入安全事件；正常登入、新裝置自行驗證成功都不會推播。即使未開啟 Telegram 通知，安全事件仍會保留在登入監控。</p>
           </div>
           <button type="button" onClick={() => setSecurityAlertForm((previous) => ({ ...previous, enabled: !previous.enabled }))} disabled={!canManageSecurityAlertConfig} className={`relative h-9 w-16 shrink-0 rounded-full transition disabled:cursor-not-allowed disabled:opacity-45 ${securityAlertForm.enabled ? "bg-emerald-500" : "bg-stone-200"}`}><span className={`absolute top-1 h-7 w-7 rounded-full bg-white shadow transition ${securityAlertForm.enabled ? "left-8" : "left-1"}`} /></button>
         </div>
@@ -1756,7 +1756,7 @@ const TelegramAlertControlCenter = ({ view = "alerts", onNavigate }) => {
 
         {!canManageSecurityAlertConfig && (
           <div className="rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3 text-[10px] font-bold leading-5 text-amber-700">
-            登入安全通知屬於全品牌 Security 設定，目前帳號可查看但不可修改；只有最高管理者可從已信任裝置儲存。
+            登入安全通知屬於全品牌設定，目前帳號可查看但不可修改；只有具管理權限的最高管理者可從已信任裝置儲存。
           </div>
         )}
         {canManageSecurityAlertConfig && currentDeviceTrust?.status !== "trusted" && (
@@ -1765,7 +1765,7 @@ const TelegramAlertControlCenter = ({ view = "alerts", onNavigate }) => {
           </div>
         )}
         <div className="flex flex-col gap-3 rounded-2xl border border-white bg-white/80 p-4 sm:flex-row sm:items-center sm:justify-between">
-          <div><p className="text-[11px] font-black text-stone-700">目前狀態：{securityAlertForm.enabled ? "準備主動通知" : "只記錄、不推播"}</p><p className="mt-1 text-[10px] font-bold text-stone-400">可先選群組再開啟；儲存時 Backend 會重新驗證最高管理者、已信任裝置與 revision，避免多人同時覆寫。</p></div>
+          <div><p className="text-[11px] font-black text-stone-700">目前狀態：{securityAlertForm.enabled ? "準備主動通知" : "只記錄、不推播"}</p><p className="mt-1 text-[10px] font-bold text-stone-400">可先選群組再開啟；儲存時系統會重新確認最高管理者、已信任裝置與資料版本，避免多人同時覆寫。</p></div>
           <ActionButton onClick={requestSaveSecurityAlertConfig} disabled={isBusy || !canManageSecurityAlertConfig || currentDeviceTrust?.status !== "trusted"}>{loadingAction === "saveSecurityAlertConfig" ? <Loader2 size={14} className="animate-spin" /> : <Save size={14} />}儲存登入安全通知</ActionButton>
         </div>
       </section>
@@ -1820,7 +1820,7 @@ const TelegramAlertControlCenter = ({ view = "alerts", onNavigate }) => {
     <div className="grid grid-cols-1 gap-4 xl:grid-cols-[1fr_1.15fr]">
       <section className="space-y-4 rounded-2xl border border-violet-100 bg-violet-50/30 p-5">
         <div><p className="text-sm font-black text-stone-800">新增長期規則</p><p className="mt-1 text-[11px] font-bold text-stone-400">例如永久排除店家、改變品牌提醒條件，或記住回答習慣。</p></div>
-        {!canManagePolicyCenter && <div className="rounded-xl border border-amber-200 bg-amber-50 p-3 text-[10px] font-bold text-amber-700">目前帳號只能查看，只有 master／director 可以修改。</div>}
+        {!canManagePolicyCenter && <div className="rounded-xl border border-amber-200 bg-amber-50 p-3 text-[10px] font-bold text-amber-700">目前帳號只能查看，只有最高管理者可以修改。</div>}
         <div className="grid grid-cols-1 gap-3 sm:grid-cols-2"><label className="rounded-xl border border-stone-100 bg-white p-3"><span className="mb-1 block text-[10px] font-black text-stone-400">我想設定</span><select value={policyEditor.type} onChange={(event) => setPolicyEditor((previous) => ({ ...createDefaultPolicyEditor(), type: event.target.value, ownerScope: event.target.value === "response_preference" ? "global" : "brand" }))} className="w-full bg-transparent text-xs font-black text-stone-700 outline-none"><option value="exclude_store">哪些店家不納入</option><option value="alert_rule">品牌提醒條件例外</option><option value="response_preference">機器人的回答習慣</option></select></label>{policyEditor.type !== "response_preference" && <label className="rounded-xl border border-stone-100 bg-white p-3"><span className="mb-1 block text-[10px] font-black text-stone-400">品牌</span><select value={policyEditor.brandId} onChange={(event) => setPolicyEditor((previous) => ({ ...previous, brandId: event.target.value }))} className="w-full bg-transparent text-xs font-black text-stone-700 outline-none">{TELEGRAM_ALERT_BRANDS.map((brand) => <option key={brand.id} value={brand.id}>{brand.label}</option>)}</select></label>}</div>
         {policyEditor.type === "exclude_store" && <div className="space-y-3"><label className="block rounded-xl border border-stone-100 bg-white p-3"><span className="mb-1 block text-[10px] font-black text-stone-400">店家名稱</span><input value={policyEditor.storeName} onChange={(event) => setPolicyEditor((previous) => ({ ...previous, storeName: event.target.value }))} placeholder="例如：中美店" className="w-full bg-transparent text-xs font-black text-stone-700 outline-none" /></label><div className="rounded-xl border border-stone-100 bg-white p-3"><p className="mb-2 text-[10px] font-black text-stone-400">不納入哪些地方？</p><div className="grid grid-cols-1 gap-2 sm:grid-cols-2">{TELEGRAM_POLICY_SCOPES.map((scope) => { const active = policyEditor.scopes.includes(scope.id); return <button key={scope.id} type="button" onClick={() => setPolicyEditor((previous) => ({ ...previous, scopes: active ? previous.scopes.filter((item) => item !== scope.id) : [...previous.scopes, scope.id] }))} className={`rounded-xl border px-3 py-2 text-left text-[10px] font-black ${active ? "border-violet-200 bg-violet-50 text-violet-700" : "border-stone-100 bg-stone-50 text-stone-400"}`}>{scope.label}</button>; })}</div></div></div>}
         {policyEditor.type === "alert_rule" && <div className="space-y-3"><label className="block rounded-xl border border-stone-100 bg-white p-3"><span className="mb-1 block text-[10px] font-black text-stone-400">要調整的提醒</span><select value={policyEditor.ruleId} onChange={(event) => setPolicyEditor((previous) => ({ ...previous, ruleId: event.target.value }))} className="w-full bg-transparent text-xs font-black text-stone-700 outline-none">{TELEGRAM_POLICY_RULES.map((rule) => <option key={rule.id} value={rule.id}>{rule.label}</option>)}</select></label>{policyEditor.ruleId === "progressGap" ? <div className="grid grid-cols-2 gap-2"><TelegramRuleNumberField label="黃燈落後" value={policyEditor.watchThreshold} onChange={(value) => setPolicyEditor((previous) => ({ ...previous, watchThreshold: value }))} unit="百分點" /><TelegramRuleNumberField label="紅燈落後" value={policyEditor.criticalThreshold} onChange={(value) => setPolicyEditor((previous) => ({ ...previous, criticalThreshold: value }))} unit="百分點" /></div> : policyEditor.ruleId === "limit" ? <TelegramRuleNumberField label="最多顯示" value={policyEditor.limit} onChange={(value) => setPolicyEditor((previous) => ({ ...previous, limit: value }))} unit="家" max={20} /> : !["missingReport", "missingTarget"].includes(policyEditor.ruleId) ? <div className="grid grid-cols-1 gap-2 sm:grid-cols-2"><TelegramRuleNumberField label="提醒門檻" value={policyEditor.threshold} onChange={(value) => setPolicyEditor((previous) => ({ ...previous, threshold: value }))} unit={["cashAchievementRate", "closingRate", "skincareRatio"].includes(policyEditor.ruleId) ? "%" : policyEditor.ruleId === "traffic" ? "人次" : "人"} max={["newCustomers", "traffic"].includes(policyEditor.ruleId) ? 999999 : 100} /><TelegramRuleSeverityField value={policyEditor.severity} onChange={(value) => setPolicyEditor((previous) => ({ ...previous, severity: value }))} />{policyEditor.ruleId === "closingRate" && <TelegramRuleNumberField label="至少多少位新客才判斷" value={policyEditor.minSample} onChange={(value) => setPolicyEditor((previous) => ({ ...previous, minSample: value }))} unit="人" max={999} />}</div> : <label className="flex items-center justify-between rounded-xl border border-stone-100 bg-white p-3 text-xs font-black text-stone-700">要啟用這項提醒<input type="checkbox" checked={policyEditor.enabledValue !== false} onChange={(event) => setPolicyEditor((previous) => ({ ...previous, enabledValue: event.target.checked }))} className="h-4 w-4" /></label>}</div>}
@@ -1894,7 +1894,7 @@ const TelegramAlertControlCenter = ({ view = "alerts", onNavigate }) => {
               <div className="rounded-2xl bg-amber-50 p-3 text-amber-600"><ShieldCheck size={20} /></div>
               <div>
                 <h4 className="text-base font-black text-stone-800">確認修改登入安全通知</h4>
-                <p className="mt-1 text-[11px] font-bold leading-5 text-stone-400">這是全品牌 Security 設定。Backend 會重新確認目前帳號、已信任裝置與最高管理者權限；密碼不會寫入 Firestore 或瀏覽器儲存空間。</p>
+                <p className="mt-1 text-[11px] font-bold leading-5 text-stone-400">這是全品牌登入安全通知設定。系統會重新確認目前帳號、已信任裝置與最高管理者權限；密碼不會寫入雲端營運資料或瀏覽器儲存空間。</p>
               </div>
             </div>
             <label className="mt-5 block">

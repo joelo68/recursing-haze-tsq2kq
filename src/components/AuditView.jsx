@@ -759,8 +759,8 @@ const AuditView = ({ auditType: controlledAuditType, setAuditType: setControlled
 
   const handleCopy = () => {
     if (isStoreDailyLifecycleBlocked) {
-      navigator.clipboard.writeText(`回報檢核(${checkDate})：Store Lifecycle 尚未就緒，暫不判定店家漏報。`);
-      showToast("Lifecycle 尚未就緒", "warning");
+      navigator.clipboard.writeText(`回報檢核(${checkDate})：門市營運期間設定尚未完成，暫不判定店家漏報。`);
+      showToast("門市營運期間設定尚未完成", "warning");
       return;
     }
     let text = `未完成名單(${checkDate})：\n`;
@@ -818,7 +818,7 @@ const AuditView = ({ auditType: controlledAuditType, setAuditType: setControlled
         {isStoreDailyLifecycleBlocked && (
           <div className="mb-4 rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm font-bold text-amber-700 flex items-start gap-2">
             <AlertCircle size={18} className="mt-0.5 shrink-0" />
-            <span>Store Lifecycle 尚未就緒，店家日報暫不判定漏報，避免把未納管日期誤標成未完成。</span>
+            <span>門市營運期間設定尚未完成，因此店家日報暫不判定漏報，避免把尚未納入營運的日期誤標成未完成。</span>
           </div>
         )}
 

@@ -96,7 +96,7 @@ export const buildProjectionObservabilitySnapshot = ({
     status: "missing",
     statusLabel: "模型尚未讀取",
     statusDetail: "",
-    strategyLabel: v2Expected ? "V2 預期" : "V1",
+    strategyLabel: v2Expected ? "預計使用智慧校正" : "標準推估",
     v2Expected,
     v2Active: false,
     modelMonth: "",
@@ -121,8 +121,8 @@ export const buildProjectionObservabilitySnapshot = ({
     return {
       ...base,
       status: "missing",
-      statusLabel: "Projection Model 不存在",
-      statusDetail: "目前品牌找不到 projection_models/current。",
+      statusLabel: "尚無可用的推估模型",
+      statusDetail: "目前品牌尚未建立可供推估使用的模型資料。",
     };
   }
 
@@ -158,7 +158,7 @@ export const buildProjectionObservabilitySnapshot = ({
     strategyVersion,
     phaseSchemaVersion,
     v2Active,
-    strategyLabel: v2Active ? "V2 Phase Calibrated" : (v2Expected ? "V1 fallback / V2 未就緒" : "V1"),
+    strategyLabel: v2Active ? "智慧校正" : (v2Expected ? "暫時使用標準推估" : "標準推估"),
     cashPhase,
     accrualPhase,
     generatedAtText: String(model?.generatedAtText || ""),
@@ -183,7 +183,7 @@ export const buildProjectionObservabilitySnapshot = ({
     return {
       ...snapshot,
       status: "error",
-      statusLabel: "Projection Model 版本不相容",
+      statusLabel: "推估模型需要更新",
       statusDetail: `${snapshot.schemaVersion || "no-schema"} / ${snapshot.semanticVersion || "no-semantic"}`,
     };
   }
@@ -202,8 +202,8 @@ export const buildProjectionObservabilitySnapshot = ({
       return {
         ...snapshot,
         status: "warning",
-        statusLabel: "V2 Phase 尚未就緒",
-        statusDetail: "目前品牌應使用 V2，但 strategy / phase metadata 尚未同時符合正式條件。",
+        statusLabel: "智慧校正推估尚未就緒",
+        statusDetail: "目前品牌預計使用智慧校正推估，但必要資料尚未完整符合正式條件。",
       };
     }
 
@@ -211,16 +211,16 @@ export const buildProjectionObservabilitySnapshot = ({
       return {
         ...snapshot,
         status: "warning",
-        statusLabel: "V2 部分指標 Phase 不可靠",
-        statusDetail: `Cash=${snapshot.cashPhase.reliable ? "READY" : "FALLBACK"}；Accrual=${snapshot.accrualPhase.reliable ? "READY" : "FALLBACK"}`,
+        statusLabel: "部分推估指標暫不穩定",
+        statusDetail: `現金=${snapshot.cashPhase.reliable ? "可使用" : "暫用標準方式"}；權責=${snapshot.accrualPhase.reliable ? "可使用" : "暫用標準方式"}`,
       };
     }
 
     return {
       ...snapshot,
       status: "healthy",
-      statusLabel: "V2 模型狀態正常",
-      statusDetail: "Cash / Accrual Phase 均符合目前模型文件的 reliability 條件。",
+      statusLabel: "智慧校正推估狀態正常",
+      statusDetail: "現金與權責推估資料皆符合目前正式使用條件。",
     };
   }
 
@@ -228,16 +228,16 @@ export const buildProjectionObservabilitySnapshot = ({
     return {
       ...snapshot,
       status: "warning",
-      statusLabel: "V1 品牌出現非預期 V2 metadata",
-      statusDetail: "目前品牌尚未核准切換 V2，請先做 readiness / backtest audit。",
+      statusLabel: "推估方式資料需要確認",
+      statusDetail: "目前品牌尚未正式切換智慧校正推估，請先完成推估資料確認。",
     };
   }
 
   return {
     ...snapshot,
     status: "healthy",
-    statusLabel: "V1 模型狀態正常",
-    statusDetail: "目前品牌維持 V1；尚未啟用品牌 Phase Calibration。",
+    statusLabel: "標準推估狀態正常",
+    statusDetail: "目前品牌維持標準推估，尚未啟用智慧校正。",
   };
 };
 

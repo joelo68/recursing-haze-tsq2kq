@@ -222,7 +222,7 @@ const TargetView = () => {
 
   const handleUnlock = async (monthIndex) => {
     const month = monthIndex + 1;
-    const confirmUnlock = window.confirm(`確定要「解鎖開放」 ${selectedStore} ${month} 月的目標嗎？\n\n(注意：解鎖後原數字會保留，店長可重新登入修改，存檔後將再次鎖定)`);
+    const confirmUnlock = window.confirm(`確定要「開放修改」 ${selectedStore} ${month} 月的目標嗎？\n\n(注意：解鎖後原數字會保留，店長可重新登入修改，存檔後將再次鎖定)`);
 
     if (!confirmUnlock) return;
 
@@ -545,8 +545,8 @@ const TargetView = () => {
                     <thead className="bg-stone-50 text-stone-500 font-bold border-b border-stone-200">
                       <tr>
                         <th className="py-3 pl-4">月份</th>
-                        <th className="py-3 px-2">現金目標 (Cash)</th>
-                        <th className="py-3 px-2">權責目標 (Accrual)</th>
+                        <th className="py-3 px-2">現金目標</th>
+                        <th className="py-3 px-2">權責目標</th>
                         <th className="py-3 px-2 w-[80px] text-center">狀態</th>
                       </tr>
                     </thead>
@@ -607,7 +607,7 @@ const TargetView = () => {
                                         <button 
                                           type="button"
                                           onClick={() => handleUnlock(idx)}
-                                          title="點擊解鎖開放編輯"
+                                          title="開放修改"
                                           className="flex items-center justify-center text-stone-400 hover:text-amber-500 hover:bg-amber-50 p-1.5 rounded-lg transition-all mx-auto group/btn shadow-sm border border-transparent hover:border-amber-100"
                                         >
                                           <Lock size={16} className="block group-hover/btn:hidden transition-transform" />
@@ -636,7 +636,7 @@ const TargetView = () => {
                                        type="button"
                                        onClick={(e) => toggleChallenge(idx, e)}
                                        className="text-[10px] font-bold px-2 py-0.5 rounded-full flex items-center gap-0.5 transition-all bg-amber-50 text-amber-600 hover:bg-amber-100 border border-amber-200 opacity-0 group-hover:opacity-100"
-                                       title="新增週慶/活動挑戰數字"
+                                       title="新增活動挑戰目標"
                                      >
                                        <Star size={10} /> 挑戰
                                      </button>

@@ -364,7 +364,7 @@ test("latest production writer persists the exact Formal Ranking authority Batch
   assert.match(writer, /formalTargetAuthority/);
 });
 
-test("Batch 5B-1 adds no Firestore listener/query and keeps app version unchanged", () => {
+test("Batch 5B-1 adds no Firestore listener/query and remains compatible with the promoted app version", () => {
   const util = read("src/utils/reportFormalConsumer.js");
   const ranking = read("src/components/RankingView.jsx");
   const regional = read("src/components/RegionalView.jsx");
@@ -372,7 +372,7 @@ test("Batch 5B-1 adds no Firestore listener/query and keeps app version unchange
   assert.doesNotMatch(util, /firebase\/firestore|onSnapshot\s*\(|getDocs\s*\(|getDoc\s*\(/);
   assert.doesNotMatch(ranking, /firebase\/firestore|onSnapshot\s*\(|getDocs\s*\(|getDoc\s*\(/);
   assert.doesNotMatch(regional, /firebase\/firestore|onSnapshot\s*\(|getDocs\s*\(|getDoc\s*\(/);
-  assert.match(app, /CURRENT_APP_VERSION = "3\.5\.3"/);
+  assert.match(app, /CURRENT_APP_VERSION = "3\.6\.0"/);
 });
 
 test("5E-1B report Formal target reader accepts VALID_ZERO while N_A stays non-rankable", () => {
