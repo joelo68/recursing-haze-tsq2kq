@@ -33,13 +33,34 @@ test("StoreLifecycleManager uses shared month/date pickers and preserves blank d
 });
 
 test("SystemMaintenance has no browser-native date/month picker left", () => {
-  const source = read("src/components/SystemMaintenance.jsx");
-  assert.match(source, /import SmartMonthPicker from "\.\/SmartMonthPicker"/);
-  assert.doesNotMatch(source, /type="month"/);
-  assert.doesNotMatch(source, /type="date"/);
-  for (const token of ["projectionAccuracyMonth", "projectionHistoryStartMonth", "projectionHistoryEndMonth", "archiveFilterMonth"]) {
-    assert.match(source, new RegExp(token));
+  const maintenance = read("src/components/SystemMaintenance.jsx");
+  const accuracy = read("src/components/SmartForecastAccuracyPanel.jsx");
+  const smartForecast = read("src/components/SmartForecastView.jsx");
+
+  assert.match(maintenance, /import SmartMonthPicker from "\.\/SmartMonthPicker"/);
+  assert.doesNotMatch(maintenance, /type="month"/);
+  assert.doesNotMatch(maintenance, /type="date"/);
+  assert.match(maintenance, /archiveFilterMonth/);
+
+  // Projection accuracy month/range controls moved with their product ownership
+  // from SystemMaintenance into Smart Forecast.
+  assert.doesNotMatch(
+    maintenance,
+    /projectionAccuracyMonth|projectionHistoryStartMonth|projectionHistoryEndMonth/
+  );
+
+  assert.match(accuracy, /import SmartMonthPicker from "\.\/SmartMonthPicker"/);
+  assert.doesNotMatch(accuracy, /type="month"/);
+  assert.doesNotMatch(accuracy, /type="date"/);
+
+  for (const token of ["selectedMonth", "historyStartMonth", "historyEndMonth"]) {
+    assert.match(accuracy, new RegExp(token));
   }
+
+  assert.match(smartForecast, /import SmartMonthPicker from "\.\/SmartMonthPicker"/);
+  assert.match(smartForecast, /selectedMonth/);
+  assert.doesNotMatch(smartForecast, /type="month"/);
+  assert.doesNotMatch(smartForecast, /type="date"/);
 });
 
 test("SmartMonthPicker supports empty, clearable, and disabled states without displaying a fake current selection", () => {

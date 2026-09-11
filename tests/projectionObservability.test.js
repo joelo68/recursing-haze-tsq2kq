@@ -317,47 +317,69 @@ test("B2B Yibo remains V1 and never receives a V2 Accuracy label", () => {
 });
 
 test("B2C.1 single-month read stays one point read and rolling history uses yearly point reads only", () => {
-  const source = read("src/components/SystemMaintenance.jsx");
-  const start = source.indexOf("const handleLoadProjectionAccuracyObservability = async () => {");
-  const end = source.indexOf("// B2C.1 Rolling History", start);
-  assert.ok(start >= 0 && end > start);
-  const handler = source.slice(start, end);
+  const source = read("src/components/SmartForecastAccuracyPanel.jsx");
 
-  assert.match(handler, /doc\(getCollectionPath\("projection_accuracy"\), selectedYearMonth\)/);
-  assert.equal((handler.match(/getDoc\(/g) || []).length, 1);
-  assert.doesNotMatch(handler, /getDocs\(/);
-  assert.doesNotMatch(handler, /onSnapshot\(/);
-  assert.doesNotMatch(handler, /setInterval\(/);
-  assert.doesNotMatch(handler, /daily_reports|monthly_aggregated|dashboard_summary|summary_recalc_flags/);
-  assert.doesNotMatch(handler, /setDoc\(|addDoc\(|updateDoc\(|writeBatch\(/);
-  assert.match(handler, /projectionAccuracyRequestSeq/);
+  const singleStart = source.indexOf("const loadAccuracy = useCallback");
+  const singleEnd = source.indexOf("useEffect(() => {", singleStart);
+  assert.ok(singleStart >= 0 && singleEnd > singleStart);
+  const singleLoader = source.slice(singleStart, singleEnd);
 
-  const historyStart = source.indexOf("const loadProjectionHistoryYears = async");
-  const historyEnd = source.indexOf("// 新增工具：資料健康檢查", historyStart);
+  assert.match(
+    singleLoader,
+    /getDoc\(doc\(getCollectionPath\("projection_accuracy"\), selectedMonth\)\)/
+  );
+  assert.equal((singleLoader.match(/getDoc\(/g) || []).length, 1);
+  assert.doesNotMatch(singleLoader, /getDocs\(/);
+  assert.doesNotMatch(singleLoader, /onSnapshot\(/);
+  assert.doesNotMatch(singleLoader, /setInterval\(/);
+  assert.doesNotMatch(
+    singleLoader,
+    /daily_reports|monthly_aggregated|dashboard_summary|summary_recalc_flags/
+  );
+  assert.doesNotMatch(
+    singleLoader,
+    /setDoc\(|addDoc\(|updateDoc\(|writeBatch\(/
+  );
+  assert.match(singleLoader, /accuracyCacheRef/);
+  assert.match(singleLoader, /accuracyRequestSeq/);
+
+  const historyStart = source.indexOf("const loadHistory = useCallback");
+  const historyEnd = source.indexOf("const openHistory = async", historyStart);
   assert.ok(historyStart >= 0 && historyEnd > historyStart);
   const historyLoader = source.slice(historyStart, historyEnd);
-  assert.match(historyLoader, /doc\(getCollectionPath\("projection_accuracy_history"\), year\)/);
-  assert.match(historyLoader, /getDoc\(historyRef\)/);
+
+  assert.match(
+    historyLoader,
+    /getProjectionHistoryYearsForRange/
+  );
+  assert.match(
+    historyLoader,
+    /getDoc\(doc\(getCollectionPath\("projection_accuracy_history"\), year\)\)/
+  );
+  assert.equal((historyLoader.match(/getDoc\(/g) || []).length, 1);
   assert.doesNotMatch(historyLoader, /getDocs\(/);
   assert.doesNotMatch(historyLoader, /onSnapshot\(/);
   assert.doesNotMatch(historyLoader, /setInterval\(/);
-  assert.doesNotMatch(historyLoader, /daily_reports|monthly_aggregated|dashboard_summary|summary_recalc_flags/);
-  assert.doesNotMatch(historyLoader, /setDoc\(|addDoc\(|updateDoc\(|writeBatch\(/);
-  assert.match(historyLoader, /projectionHistoryCacheRef/);
-  assert.match(historyLoader, /normalizedYears\.length > 5/);
+  assert.doesNotMatch(
+    historyLoader,
+    /daily_reports|monthly_aggregated|dashboard_summary|summary_recalc_flags/
+  );
+  assert.doesNotMatch(
+    historyLoader,
+    /setDoc\(|addDoc\(|updateDoc\(|writeBatch\(/
+  );
+  assert.match(historyLoader, /historyCacheRef/);
+  assert.match(historyLoader, /historyRequestSeq/);
 
-  const uiStart = source.indexOf('title="業績推估準確度"');
-  const uiEnd = source.indexOf('title="核心資料一致性健檢"', uiStart);
-  assert.ok(uiStart >= 0 && uiEnd > uiStart);
-  const accuracyUi = source.slice(uiStart, uiEnd);
-  assert.match(accuracyUi, /自行選擇月份區間/);
-  assert.match(accuracyUi, /現金業績/);
-  assert.match(accuracyUi, /權責業績/);
-  assert.match(accuracyUi, /各日期比較/);
-  assert.match(accuracyUi, /projectionHistoryDetailsOpen/);
-  assert.match(accuracyUi, /此月份沒有當時保存的單月追蹤紀錄/);
-  assert.doesNotMatch(accuracyUi, /WAPE、Bias、APE/);
-  assert.doesNotMatch(accuracyUi, /Score Revision|Score Semantic|V2 eligible/);
+  assert.match(source, />推估準確度<\/h2>/);
+  assert.match(source, /自行選擇月份/);
+  assert.match(source, /現金業績/);
+  assert.match(source, /權責業績/);
+  assert.match(source, /各日期比較/);
+  assert.match(source, /historyDetailsOpen/);
+  assert.match(source, /尚未開始累積|等待完整月份/);
+  assert.doesNotMatch(source, /WAPE、Bias、APE/);
+  assert.doesNotMatch(source, /Score Revision|Score Semantic|V2 eligible/);
 });
 
 test("B2C.1 month-level historical evidence supports selectable ranges and rolling live months", () => {
@@ -436,7 +458,7 @@ test("B2C.1 month-level historical evidence supports selectable ranges and rolli
 
 test("B2C.1 historical backtest stays immutable and separate from rolling Firestore evidence", () => {
   const evidenceSource = read("src/data/projectionAccuracyHistoricalEvidence.js");
-  const uiSource = read("src/components/SystemMaintenance.jsx");
+  const uiSource = read("src/components/SmartForecastAccuracyPanel.jsx");
 
   assert.equal(Object.isFrozen(PROJECTION_ACCURACY_HISTORICAL_EVIDENCE), true);
   assert.equal(
@@ -451,12 +473,9 @@ test("B2C.1 historical backtest stays immutable and separate from rolling Firest
   assert.match(evidenceSource, /01fd6c14e4029783be362d764087e1979a93f69d793aa5e3e6e02723e3fc4da6/);
   assert.doesNotMatch(evidenceSource, /getDoc\(|getDocs\(|onSnapshot\(|setDoc\(|addDoc\(|updateDoc\(|writeBatch\(|setInterval\(/);
 
-  const historicalStart = uiSource.indexOf("const liveHistoryDocuments = Object.values");
-  const historicalEnd = uiSource.indexOf('title="核心資料一致性健檢"', historicalStart);
-  assert.ok(historicalStart >= 0 && historicalEnd > historicalStart);
-  const historicalUi = uiSource.slice(historicalStart, historicalEnd);
-  assert.match(historicalUi, /歷史回看資料與正式累積資料會分開保存/);
-  assert.match(historicalUi, /不會補寫成過去的單月追蹤紀錄/);
+  assert.match(uiSource, /const liveHistoryDocuments = useMemo/);
+  assert.match(uiSource, /歷史回看資料與正式累積資料會分開保存/);
+  assert.match(uiSource, /不會補寫成過去的單月追蹤紀錄/);
 });
 
 test("B2B Accuracy contracts stay aligned with B2A writer and existing frontend-read-only Rules", () => {

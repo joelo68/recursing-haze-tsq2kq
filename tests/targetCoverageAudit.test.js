@@ -232,17 +232,14 @@ test('Functions index exports exactly one read-only Pre-Batch-5 audit endpoint',
   assert.match(functionsIndex, /exports\.auditHistoricalTargetCoverage = targetCoverageAuditFunctions\.auditHistoricalTargetCoverage/);
 });
 
-test('SystemMaintenance exposes all-existing-month Audit Only UI without listener or polling and preserves CURRENT_APP_VERSION outside this scope', () => {
-  assert.match(maintenanceSource, /Production：Target Coverage 全現有月份稽核/);
-  assert.match(maintenanceSource, /EXISTING_SUMMARY_MONTHS/);
-  assert.match(maintenanceSource, /不掃 Raw monthly_targets、不寫入任何資料/);
-  assert.match(maintenanceSource, /Audit Only｜0 Writes/);
-  assert.match(maintenanceSource, /TARGET_COVERAGE_AUDIT_ENDPOINT/);
-  assert.match(maintenanceSource, /auth\.currentUser\?\.getIdToken/);
-  assert.match(maintenanceSource, /currentDeviceTrust\?\.status[^\n]*trusted/);
-  assert.doesNotMatch(maintenanceSource, /onSnapshot\([^\n]*targetCoverageAudit/);
-  assert.doesNotMatch(maintenanceSource, /setInterval\([^\n]*targetCoverageAudit/);
-  assert.match(maintenanceSource, /核心資料一致性健檢/);
+test('Pre-Batch-5 Target Coverage audit stays backend-controlled and retires from normal SystemMaintenance UI', () => {
+  assert.match(functionsIndex, /exports\.auditHistoricalTargetCoverage = targetCoverageAuditFunctions\.auditHistoricalTargetCoverage/);
+  assert.doesNotMatch(maintenanceSource, /Production：Target Coverage 全現有月份稽核/);
+  assert.doesNotMatch(maintenanceSource, /TARGET_COVERAGE_AUDIT_ENDPOINT/);
+  assert.doesNotMatch(maintenanceSource, /handleAuditHistoricalTargetCoverage/);
+  assert.doesNotMatch(maintenanceSource, /targetCoverageAuditPassword/);
+  assert.match(maintenanceSource, /資料一致性檢查/);
+  assert.match(maintenanceSource, /舊版年度目標補整理與 Target Coverage 修復入口已從一般維護介面退場/);
   assert.doesNotMatch(maintenanceSource, /handleExecuteCyjNewStoreRepair/);
 });
 

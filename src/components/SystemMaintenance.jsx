@@ -1,6 +1,6 @@
 // src/components/SystemMaintenance.jsx
 import React, { useState, useContext, useEffect, useMemo, useRef } from "react";
-import { auth, db } from "../config/firebase";
+import { db } from "../config/firebase";
 import {
   getDocs,
   getDoc,
@@ -34,7 +34,6 @@ import {
   Radio,
   BarChart3,
   Activity,
-  Target,
   Eye,
   Power,
   Globe2,
@@ -81,21 +80,12 @@ import {
 } from "../utils/storeLifecycle";
 
 import {
-  PROJECTION_ACCURACY_METHOD_LABELS,
-  PROJECTION_HISTORICAL_METHOD_LABELS,
   buildProjectionObservabilitySnapshot,
-  buildProjectionAccuracyObservabilitySnapshot,
-  buildProjectionHistoricalAccuracyComparison,
-  getProjectionHistoryYearsForRange,
-  describeProjectionBias,
-  getProjectionAccuracyDisplayPct,
   getProjectionObservabilityTone,
   getTaipeiProjectionYearMonth,
 } from "../utils/projectionObservability.js";
 
 const todayMonth = () => new Date().toISOString().substring(0, 7);
-const TARGET_COVERAGE_AUDIT_ENDPOINT = "https://us-central1-cyjsituation-analysis.cloudfunctions.net/auditHistoricalTargetCoverage";
-const TARGET_COVERAGE_MIGRATION_ENDPOINT = "https://us-central1-cyjsituation-analysis.cloudfunctions.net/migrateHistoricalTargetCoverageMetadata";
 
 // Keep ToolRow at module scope. Defining a component inside SystemMaintenance creates a
 // new component identity on every parent state update; controlled inputs nested inside it
@@ -122,7 +112,7 @@ const ToolRow = ({ icon: Icon, title, desc, badge, children, tone = "amber" }) =
 };
 
 export default function SystemMaintenance() {
-  const { currentBrand, userRole, showToast, getCollectionPath, getDocPath, currentUser, currentDeviceTrust, directorLevel } = useContext(AppContext);
+  const { currentBrand, userRole, showToast, getCollectionPath, getDocPath, currentUser } = useContext(AppContext);
 
   const [logs, setLogs] = useState([]);
   const [loadingAction, setLoadingAction] = useState(null);
@@ -130,10 +120,10 @@ export default function SystemMaintenance() {
   const [backupType, setBackupType] = useState("full");
   const [showAdvancedTools, setShowAdvancedTools] = useState(false);
   const [showCoreTools, setShowCoreTools] = useState(false);
+  const [showTrafficTools, setShowTrafficTools] = useState(false);
   const [activeMaintenanceScenario, setActiveMaintenanceScenario] = useState("daily");
   const [guidedFlowReport, setGuidedFlowReport] = useState(null);
   const [guidedFlowRunning, setGuidedFlowRunning] = useState(false);
-  const [wizardStep, setWizardStep] = useState(1);
   const [dateIssues, setDateIssues] = useState([]);
   const [duplicateGroups, setDuplicateGroups] = useState([]);
 
@@ -151,15 +141,10 @@ export default function SystemMaintenance() {
   const [summaryCompareReport, setSummaryCompareReport] = useState(null);
   const [summaryStatusReport, setSummaryStatusReport] = useState(null);
   const [archiveFilterMonth, setArchiveFilterMonth] = useState(todayMonth());
-  const [targetSummaryYear, setTargetSummaryYear] = useState(String(new Date().getFullYear()));
-  const [targetSummaryReport, setTargetSummaryReport] = useState(null);
   const [consistencyReport, setConsistencyReport] = useState(null);
   const [expandedConsistencyIssue, setExpandedConsistencyIssue] = useState("");
   const [consistencyAuditScope, setConsistencyAuditScope] = useState("month");
   const [consistencyAuditYear, setConsistencyAuditYear] = useState(String(new Date().getFullYear()));
-  const [targetCoverageAuditPassword, setTargetCoverageAuditPassword] = useState("");
-  const [targetCoverageAuditReport, setTargetCoverageAuditReport] = useState(null);
-  const [targetCoverageMigrationReport, setTargetCoverageMigrationReport] = useState(null);
 
   const [projectionObservabilityState, setProjectionObservabilityState] = useState({
     brandId: "",
@@ -168,68 +153,14 @@ export default function SystemMaintenance() {
     error: null,
     loadedAtText: "",
   });
-  const [projectionAccuracyMonth, setProjectionAccuracyMonth] = useState(
-    () => getTaipeiProjectionYearMonth()
-  );
-  const [projectionAccuracyState, setProjectionAccuracyState] = useState({
-    brandId: "",
-    yearMonth: "",
-    status: "idle",
-    data: null,
-    error: null,
-    loadedAtText: "",
-  });
-  const projectionAccuracyRequestSeq = useRef(0);
-  const [projectionHistoryMode, setProjectionHistoryMode] = useState("latest4");
-  const [projectionHistoryStartMonth, setProjectionHistoryStartMonth] = useState("");
-  const [projectionHistoryEndMonth, setProjectionHistoryEndMonth] = useState("");
-  const [projectionHistoryMetric, setProjectionHistoryMetric] = useState("cash");
-  const [projectionHistoryDetailsOpen, setProjectionHistoryDetailsOpen] = useState(false);
-  const [projectionHistoryDocuments, setProjectionHistoryDocuments] = useState({});
-  const [projectionHistoryLoadState, setProjectionHistoryLoadState] = useState({
-    status: "idle",
-    loadedYears: [],
-    sessionReadCount: 0,
-    loadedAtText: "",
-    error: "",
-  });
-  const projectionHistoryRequestSeq = useRef(0);
-  const projectionHistoryCacheRef = useRef({});
 
   useEffect(() => {
-    projectionAccuracyRequestSeq.current += 1;
-    setLoadingAction((current) => (
-      current === "projectionAccuracyObservability" ? null : current
-    ));
     setProjectionObservabilityState({
       brandId: "",
       status: "idle",
       data: null,
       error: null,
       loadedAtText: "",
-    });
-    setProjectionAccuracyState({
-      brandId: "",
-      yearMonth: "",
-      status: "idle",
-      data: null,
-      error: null,
-      loadedAtText: "",
-    });
-    projectionHistoryRequestSeq.current += 1;
-    projectionHistoryCacheRef.current = {};
-    setProjectionHistoryMode("latest4");
-    setProjectionHistoryStartMonth("");
-    setProjectionHistoryEndMonth("");
-    setProjectionHistoryMetric("cash");
-    setProjectionHistoryDetailsOpen(false);
-    setProjectionHistoryDocuments({});
-    setProjectionHistoryLoadState({
-      status: "idle",
-      loadedYears: [],
-      sessionReadCount: 0,
-      loadedAtText: "",
-      error: "",
     });
   }, [currentBrand?.id]);
 
@@ -276,14 +207,6 @@ export default function SystemMaintenance() {
   const brandId = currentBrand?.id || "unknown";
   const brandLabel = currentBrand?.label || "目前品牌";
   const isSelectedCurrentMonth = (month = calMonth) => String(month || "") === todayMonth();
-  const canRunTargetCoverageAudit = Boolean(
-    userRole === "director" && (
-      directorLevel === "super_admin" ||
-      currentUser?.directorLevel === "super_admin" ||
-      currentUser?.isSuperAdmin === true ||
-      currentUser?.isMasterLogin === true
-    )
-  );
 
   const toDateKey = (date) => {
     if (!(date instanceof Date) || Number.isNaN(date.getTime())) return "";
@@ -513,206 +436,6 @@ export default function SystemMaintenance() {
   const addLog = (msg) => {
     const timeStr = new Date().toLocaleTimeString("zh-TW", { hour12: false });
     setLogs((prev) => [{ id: Date.now() + Math.random(), time: timeStr, text: msg }, ...prev]);
-  };
-
-  const formatTargetCoverageAuditValue = (value) => (
-    value === null || value === undefined || value === ""
-      ? "-"
-      : Number(value).toLocaleString()
-  );
-
-  const getTargetCoverageAuditClassificationMeta = (classification = "") => {
-    const map = {
-      ALREADY_V1: { label: "已是 Coverage v1", className: "border-emerald-100 bg-emerald-50 text-emerald-700" },
-      SUMMARY_BACKFILL_SAFE: { label: "可安全補 Metadata", className: "border-blue-100 bg-blue-50 text-blue-700" },
-      RAW_RECONSTRUCTION_REQUIRED: { label: "需 Raw 重建", className: "border-rose-100 bg-rose-50 text-rose-600" },
-      LIFECYCLE_NOT_READY: { label: "Lifecycle 未 READY", className: "border-amber-100 bg-amber-50 text-[#B7863D]" },
-      PRE_SYSTEM_SKIP: { label: "Pre-system 排除", className: "border-stone-200 bg-stone-50 text-stone-500" },
-    };
-    return map[classification] || { label: classification || "未知", className: "border-stone-200 bg-stone-50 text-stone-500" };
-  };
-
-  const handleAuditHistoricalTargetCoverage = async () => {
-    if (!canRunTargetCoverageAudit) {
-      showToast("此稽核僅限最高管理者使用", "error");
-      return;
-    }
-    const credentialPassword = String(targetCoverageAuditPassword || "");
-    if (!credentialPassword) {
-      showToast("請輸入目前最高管理者登入密碼再執行稽核", "error");
-      return;
-    }
-    const deviceId = String(currentDeviceTrust?.deviceId || "").trim();
-    if (!deviceId || String(currentDeviceTrust?.status || "") !== "trusted") {
-      showToast("目前裝置尚未確認為 Trusted，無法執行高權限稽核", "error");
-      return;
-    }
-
-    setLoadingAction("targetCoverageAudit");
-    setTargetCoverageAuditReport(null);
-    setTargetCoverageMigrationReport(null);
-    addLog(`🔎 開始 Target Coverage 全現有月份只讀稽核：${brandId}`);
-
-    try {
-      const idToken = await auth.currentUser?.getIdToken?.();
-      if (!idToken) throw new Error("Firebase 登入狀態已失效，請重新登入");
-
-      const accountId = String(
-        currentUser?.securityAccountId ||
-        currentUser?.id ||
-        currentUser?.accountId ||
-        currentUser?.name ||
-        ""
-      ).trim();
-      if (!accountId) throw new Error("無法取得目前最高管理者帳號識別");
-
-      const response = await fetch(TARGET_COVERAGE_AUDIT_ENDPOINT, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: `Bearer ${idToken}`,
-        },
-        body: JSON.stringify({
-          brandId,
-          actor: {
-            roleId: userRole,
-            accountId,
-            userName: currentUser?.name || "最高管理者",
-            deviceId,
-            credentialPassword,
-          },
-        }),
-      });
-      const result = await response.json().catch(() => ({}));
-      if (!response.ok || result?.ok === false) {
-        throw new Error(result?.message || `HTTP ${response.status}`);
-      }
-      if (result?.auditOnly !== true || Number(result?.readEstimate?.firestoreWrites || 0) !== 0) {
-        throw new Error("後端回傳不是只讀 Audit，已停止顯示結果");
-      }
-      if (String(result?.auditScope || "") !== "EXISTING_SUMMARY_MONTHS" || result?.includesCurrentAndFuture !== true) {
-        throw new Error("後端 Audit 尚未支援當月／未來既有 Summary，已停止後續 Migration");
-      }
-
-      setTargetCoverageAuditReport(result);
-      const counts = result?.summary?.counts || {};
-      addLog(
-        `✅ Target Coverage 稽核完成：${brandLabel}｜月份 ${Number(result?.summary?.totalMonths || 0).toLocaleString()}｜可補 ${Number(counts.SUMMARY_BACKFILL_SAFE || 0).toLocaleString()}｜需 Raw ${Number(counts.RAW_RECONSTRUCTION_REQUIRED || 0).toLocaleString()}｜已 V1 ${Number(counts.ALREADY_V1 || 0).toLocaleString()}｜Writes 0`
-      );
-      showToast("Target Coverage 全現有月份只讀稽核完成", "success");
-    } catch (error) {
-      addLog(`❌ Target Coverage 稽核失敗：${error.message}`);
-      showToast(error.message || "Target Coverage 稽核失敗", "error");
-    } finally {
-      setTargetCoverageAuditPassword("");
-      setLoadingAction(null);
-    }
-  };
-
-  const handleMigrateHistoricalTargetCoverageMetadata = async () => {
-    if (!canRunTargetCoverageAudit) {
-      showToast("此 Migration 僅限最高管理者使用", "error");
-      return;
-    }
-    if (!targetCoverageAuditReport || String(targetCoverageAuditReport.brandId || "") !== String(brandId || "")) {
-      showToast("請先重新執行目前品牌的只讀稽核", "error");
-      return;
-    }
-    if (String(targetCoverageAuditReport.auditScope || "") !== "EXISTING_SUMMARY_MONTHS") {
-      showToast("目前 Audit 範圍不是全現有月份，請重新執行只讀稽核", "error");
-      return;
-    }
-
-    const candidateMonths = Array.isArray(targetCoverageAuditReport.summary?.migrationCandidateMonths)
-      ? targetCoverageAuditReport.summary.migrationCandidateMonths.map(String).filter(Boolean)
-      : [];
-    if (!candidateMonths.length) {
-      showToast("目前沒有需要補 Coverage Metadata 的安全候選月份", "info");
-      return;
-    }
-
-    const credentialPassword = String(targetCoverageAuditPassword || "");
-    if (!credentialPassword) {
-      showToast("請輸入目前最高管理者登入密碼再執行 Migration", "error");
-      return;
-    }
-    const deviceId = String(currentDeviceTrust?.deviceId || "").trim();
-    if (!deviceId || String(currentDeviceTrust?.status || "") !== "trusted") {
-      showToast("目前裝置尚未確認為 Trusted，無法執行高權限 Migration", "error");
-      return;
-    }
-
-    const confirmed = window.confirm(
-      `確定要替 ${brandLabel} 的 ${candidateMonths.length} 個既有 Summary 月份補 Target Coverage v1 Metadata？\n\n` +
-      `範圍可包含歷史、當月與未來已存在 Summary；本操作只寫 Coverage metadata，不掃 Raw monthly_targets，也不改目標 totals / counts / target map。\n` +
-      `Backend 會在同一個 transaction 重新驗證全部月份；任一月份不再安全時，本次 0 Writes。`
-    );
-    if (!confirmed) return;
-
-    setLoadingAction("targetCoverageMigration");
-    setTargetCoverageMigrationReport(null);
-    addLog(`🧩 開始 Target Coverage Metadata migration：${brandId}｜${candidateMonths.join(", ")}`);
-
-    try {
-      const idToken = await auth.currentUser?.getIdToken?.();
-      if (!idToken) throw new Error("Firebase 登入狀態已失效，請重新登入");
-
-      const accountId = String(
-        currentUser?.securityAccountId ||
-        currentUser?.id ||
-        currentUser?.accountId ||
-        currentUser?.name ||
-        ""
-      ).trim();
-      if (!accountId) throw new Error("無法取得目前最高管理者帳號識別");
-
-      const response = await fetch(TARGET_COVERAGE_MIGRATION_ENDPOINT, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: `Bearer ${idToken}`,
-        },
-        body: JSON.stringify({
-          brandId,
-          auditVersion: targetCoverageAuditReport.auditVersion,
-          auditScope: targetCoverageAuditReport.auditScope,
-          yearMonths: candidateMonths,
-          confirmMetadataOnly: true,
-          actor: {
-            roleId: userRole,
-            accountId,
-            userName: currentUser?.name || "最高管理者",
-            deviceId,
-            credentialPassword,
-          },
-        }),
-      });
-      const result = await response.json().catch(() => ({}));
-      if (!response.ok || result?.ok === false) {
-        const blockedText = Array.isArray(result?.blocked)
-          ? result.blocked.map((row) => `${row.yearMonth}:${row.classification}`).join("、")
-          : "";
-        throw new Error(`${result?.message || `HTTP ${response.status}`}${blockedText ? `｜${blockedText}` : ""}`);
-      }
-      if (result?.metadataOnly !== true || Number(result?.rawMonthlyTargetsReads || 0) !== 0) {
-        throw new Error("後端回傳不符合 Metadata-only / Raw Reads 0 安全契約，已停止後續操作");
-      }
-      if (Number(result?.writtenCount || 0) > 0 && result?.allVerified !== true) {
-        throw new Error("Persisted readback 未完全驗證，請停止後續 Migration");
-      }
-
-      setTargetCoverageMigrationReport(result);
-      addLog(
-        `✅ Target Coverage Metadata migration 完成：${brandLabel}｜寫入 ${Number(result?.writtenCount || 0)}｜已略過 V1 ${Number(result?.skippedCount || 0)}｜Raw Reads 0｜Persisted ${result?.allVerified ? "PASS" : "N/A"}`
-      );
-      showToast("Target Coverage Metadata migration 完成；請重新執行全現有月份只讀稽核確認", "success");
-    } catch (error) {
-      addLog(`❌ Target Coverage Metadata migration 失敗：${error.message}`);
-      showToast(error.message || "Target Coverage Metadata migration 失敗", "error");
-    } finally {
-      setTargetCoverageAuditPassword("");
-      setLoadingAction(null);
-    }
   };
 
   const formatDateString = (value) => {
@@ -978,8 +701,8 @@ export default function SystemMaintenance() {
       return { rows, groups, total: rows.length, health };
     } catch (error) {
       console.error(error);
-      addLog(`❌ 載入待重算月份失敗: ${error.message}`);
-      showToast("載入待重算月份失敗", "error");
+      addLog(`❌ 載入等待清單月份失敗: ${error.message}`);
+      showToast("載入等待清單月份失敗", "error");
       return { rows: [], groups: [], total: 0, health: null, error };
     } finally {
       setLoadingAction(null);
@@ -1297,6 +1020,10 @@ export default function SystemMaintenance() {
   }, [currentBrand?.id, getDocPath]);
 
   useEffect(() => {
+    if (isSelectedCurrentMonth(calMonth)) {
+      setSummaryStatusReport(null);
+      return;
+    }
     loadDashboardSummaryStatus(calMonth, true);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [currentBrand?.id, calMonth]);
@@ -1462,92 +1189,59 @@ export default function SystemMaintenance() {
     {
       id: "daily",
       icon: CheckCircle2,
-      title: "日常檢查",
-      subtitle: "每天看一下系統是否正常",
-      goal: "用來確認本月資料、排除店家、待重算狀態是否正常。",
-      when: "平常巡檢、主管覺得數字怪怪、剛有人大量補報後。",
-      impact: "只讀取檢查資料，不會修改原始日報。",
-      steps: ["先按資料健康檢查", "有異常再展開明細查看", "若出現本月 pending，先整理無效待辦"],
-      tone: "emerald",
+      title: "檢查本月資料",
+      subtitle: "今天或本月營運中，先確認資料有沒有問題",
+      goal: "檢查缺報、重複、異常與待整理資料，整理成需要注意的重點。",
+      when: "每天巡檢、主管覺得數字怪怪的，或剛完成大量補報後。",
+      doesNot: "只做檢查，不會修改原始日報，也不會自動整理歷史月份。",
+      result: "會看到「正常／需注意／需處理」，以及建議下一步。",
+      tone: "amber",
     },
     {
       id: "closing",
       icon: Calendar,
-      title: "月結前作業",
-      subtitle: "月底一次確認與校準",
-      goal: "把本月補報、修正後的資料整理成可月結狀態。",
-      when: "月底、月初關帳前、主管要確認最終月報前。",
-      impact: "會重建 Dashboard 彙總與清除該月待校準紀錄，但不會修改原始日報。",
-      steps: ["先執行月結前檢查", "再執行月份報表整理", "最後執行 Summary 比對確認一致"],
+      title: "整理月份報表",
+      subtitle: "月底、月初或歷史月份資料確認完成後使用",
+      goal: "先確認缺報與異常，再整理該月份的營運總覽、管理師與排名報表。",
+      when: "月底、月初關帳前，或歷史月份補報／修正已完成後。",
+      doesNot: "不會改寫原始日報；真正整理前會再次確認。",
+      result: "會看到整理結果，以及整理後的數字是否一致。",
       tone: "amber",
     },
     {
       id: "issue",
       icon: AlertTriangle,
-      title: "資料異常處理",
-      subtitle: "發現某天、某店、某人數字異常",
-      goal: "找出異常來源，必要時封存、還原或重新校準指定月份。",
-      when: "日報不見、數字不一致、重複資料、有人修正歷史業績後。",
-      impact: "部分工具只檢查；封存、還原、校準會改變報表計算結果，操作前會二次確認。",
-      steps: ["先看健康檢查明細", "再看待重新校準月份", "必要時使用封存資料管理或單月校準"],
+      title: "處理異常資料",
+      subtitle: "看到數字怪、重複資料或歷史資料需要修正時",
+      goal: "先找出真正異常來源，再決定是否需要重新整理、封存或還原。",
+      when: "日報不見、數字不一致、資料重複，或有人修正歷史業績後。",
+      doesNot: "不會在還沒確認原因前直接改資料；高風險操作仍需二次確認。",
+      result: "會看到異常類型、影響範圍與建議處理順序。",
       tone: "rose",
     },
     {
       id: "backup",
       icon: Shield,
-      title: "安全備份與還原",
-      subtitle: "誤刪、誤改、架構救援",
-      goal: "處理區長架構、設定備份與還原，避免資料救援困難。",
-      when: "改區長架構前後、誤刪區長、需要回復設定時。",
-      impact: "載入快照只查看；還原會覆蓋目前組織架構，操作前會二次確認。",
-      steps: ["先載入組織架構快照", "確認時間與操作者", "必要時才按還原"],
+      title: "備份或救回資料",
+      subtitle: "改設定前想先留底，或誤改後需要救援時",
+      goal: "查看備份與組織架構快照，必要時從確認過的時間點還原。",
+      when: "改區長架構前後、誤刪或誤改設定，或需要資料救援時。",
+      doesNot: "載入備份只會查看；真正還原前會再次確認，不會自動覆蓋。",
+      result: "會看到可用的備份／快照，以及可以確認的還原時間點。",
       tone: "emerald",
     },
     {
       id: "traffic",
       icon: Radio,
-      title: "流量監控",
-      subtitle: "觀察 reads 爆量來源",
+      title: "系統流量觀察",
+      subtitle: "只有需要追查讀取量時才使用",
       goal: "找出哪些功能或資料來源造成 Firestore reads 上升。",
-      when: "晚間全域上報後、費用異常、改版後要觀察節流效果時。",
-      impact: "本機模式不寫入雲端；全域上報會產生少量寫入，但可追蹤全體來源。",
-      steps: ["晚間開啟全域上報或排程", "隔天載入近 24 小時排行", "依前幾名決定下一步優化"],
+      when: "晚間全域上報後、費用異常，或改版後需要觀察節流效果時。",
+      doesNot: "不會修改營運資料；只有全域上報模式會產生少量追蹤寫入。",
+      result: "會看到讀取來源排行、尖峰時段與可優化方向。",
       tone: "blue",
     },
   ]), []);
-
-  const activeScenario = useMemo(
-    () => scenarioCards.find((item) => item.id === activeMaintenanceScenario) || scenarioCards[0],
-    [scenarioCards, activeMaintenanceScenario]
-  );
-
-  const ScenarioIcon = activeScenario.icon;
-  const getScenarioToneClass = (tone) => {
-    if (tone === "emerald") return "border-emerald-100 bg-emerald-50/70 text-emerald-700";
-    if (tone === "rose") return "border-rose-100 bg-rose-50/70 text-rose-600";
-    if (tone === "blue") return "border-blue-100 bg-blue-50/70 text-blue-600";
-    return "border-amber-100 bg-amber-50/70 text-[#B7863D]";
-  };
-
-
-  const getFlowButtonLabel = (scenarioId) => {
-    const labels = {
-      daily: "一鍵執行日常檢查",
-      closing: "一鍵執行月結前流程",
-      issue: "一鍵掃描資料異常",
-      backup: "載入備份與快照",
-      traffic: "載入流量監控",
-    };
-    return labels[scenarioId] || "執行情境流程";
-  };
-
-  const getFlowResultTone = (status) => {
-    if (status === "success") return "border-emerald-100 bg-emerald-50/70 text-emerald-700";
-    if (status === "warning") return "border-amber-100 bg-amber-50/70 text-[#8A6128]";
-    if (status === "danger") return "border-rose-100 bg-rose-50/70 text-rose-600";
-    if (status === "running") return "border-blue-100 bg-blue-50/70 text-blue-600";
-    return "border-stone-100 bg-stone-50/70 text-stone-500";
-  };
 
   const getFlowStatusMeta = (status) => {
     if (status === "success") return { label: "正常", icon: CheckCircle2, titleClass: "text-emerald-700", badgeClass: "bg-emerald-600 text-white" };
@@ -1579,11 +1273,11 @@ export default function SystemMaintenance() {
       title: scenario.title,
       status: "running",
       headline: "正在檢查，請稍候",
-      message: "系統正在依照此情境自動執行檢查。此區塊高度固定，不會因執行中途更新造成畫面跳動。",
+      message: "系統正在執行你選擇的工作，完成後會直接顯示結果與建議下一步。",
       createdAt: nowText,
       items: [],
       metrics: [],
-      nextActions: ["檢查完成後，這裡會直接顯示「正常 / 需注意 / 需處理」。"],
+      nextActions: ["檢查完成後，這裡會直接顯示「正常／需注意／需處理」。"],
     });
     addLog(`🧭 啟動情境流程：${scenario.title}`);
 
@@ -1615,20 +1309,20 @@ export default function SystemMaintenance() {
         else if (counts.warning > 0 || pendingTotal > 0) status = "warning";
         else status = "success";
 
-        headline = status === "success" ? "日常檢查完成｜正常" : status === "danger" ? "日常檢查完成｜需處理" : "日常檢查完成｜需注意";
+        headline = status === "success" ? "本月資料檢查完成｜正常" : status === "danger" ? "本月資料檢查完成｜需處理" : "本月資料檢查完成｜需注意";
         message = status === "success"
           ? "目前沒有重大異常，也沒有需要立即處理的待辦。"
           : counts.danger > 0
           ? "偵測到高風險異常，建議先展開健康檢查明細，確認是哪一天、哪間店或哪位管理師。"
-          : "目前屬於可觀察狀態；若清單出現本月 pending，代表舊版待辦尚未整理，請先執行「整理無效待辦」。";
+          : "目前屬於可觀察狀態；若出現本月待整理異動，代表舊版待辦尚未整理，請先依畫面建議處理。";
         items = [
           makeItem("資料健康檢查", `高風險 ${counts.danger}｜需注意 ${counts.warning}｜提醒 ${counts.info}`),
           makeItem("待整理異動", isSelectedCurrentMonth() ? `本月異常待辦 ${currentMonthPending} 筆` : `歷史待校準 ${pendingTotal} 筆`),
-          makeItem("Dashboard 狀態", "已檢查 Summary 是否建立與是否有異動"),
+          makeItem("營運總覽狀態", "已確認歷史報表是否建立，以及整理後是否又有新異動"),
         ];
         nextActions = status === "danger"
           ? ["先展開健康檢查明細，處理紅色高風險項目。", "處理完成後，再重新執行日常檢查。"]
-          : [currentMonthPending > 0 ? "先執行「整理無效待辦」，本月資料仍以即時明細為準。" : "目前沒有本月待重算異常。", "若只是排除店家或負數退款提醒，確認合理即可。"];
+          : [currentMonthPending > 0 ? "先依畫面建議整理本月待辦；本月資料仍以即時明細為準。" : "目前沒有本月待整理異常。", "若只是排除店家或負數退款提醒，確認合理即可。"];
       } else if (scenarioId === "closing") {
         const closing = await handleRunClosingCheck();
         const health = await handleRunDataHealthCheck();
@@ -1648,7 +1342,7 @@ export default function SystemMaintenance() {
           ? "檢查結果可進入月份報表整理與比對。"
           : status === "danger"
           ? "目前有會影響月結準確性的項目，建議先處理異常後再校準。"
-          : "可先確認提醒項目是否合理；若清單出現本月 pending，請先執行「整理無效待辦」。";
+          : "可先確認提醒項目是否合理；若出現本月待整理異動，請先依畫面建議處理。";
 
         metrics = [
           { label: "月結狀態", value: readiness, tone: status },
@@ -1659,8 +1353,8 @@ export default function SystemMaintenance() {
         items = [
           makeItem("月結前檢查", `結果：${readiness}`),
           makeItem("資料健康檢查", `高風險 ${counts.danger}｜需注意 ${counts.warning}`),
-          makeItem("待整理異動", `共 ${pendingTotal} 筆 pending`),
-          makeItem("Summary 狀態", "已確認彙總資料狀態"),
+          makeItem("待整理異動", `共 ${pendingTotal} 筆待整理資料`),
+          makeItem("歷史報表狀態", "已確認月份報表是否已整理完成"),
         ];
         nextActions = status === "success"
           ? ["執行「月份報表整理」。", "校準後再執行 Summary 比對，確認一致。"]
@@ -1740,55 +1434,55 @@ export default function SystemMaintenance() {
     }
   };
 
-  const handleSelectMaintenanceScenario = (scenarioId) => {
-    setActiveMaintenanceScenario(scenarioId);
-    // 切換情境時不要沿用上一個情境的結果，避免使用者誤判目前看的仍是舊流程。
-    setGuidedFlowReport(null);
-  };
-
   const renderMaintenanceScenarioGuide = () => {
     const isCurrent = isSelectedCurrentMonth();
     const report = guidedFlowReport?.scenarioId === activeMaintenanceScenario ? guidedFlowReport : null;
-    const safeReport = report || {
-      status: "idle",
-      title: activeMaintenanceScenario === "closing" ? "月份報表整理" : activeMaintenanceScenario === "backup" ? "資料安全狀態" : activeMaintenanceScenario === "traffic" ? "流量觀察狀態" : "本月資料狀態",
-      headline: "尚未執行檢查",
-      message: "請先選擇上方狀態卡，系統會用任務精靈整理成容易判斷的結果。",
-      metrics: [],
-      items: [],
-      nextActions: ["建議先從「本月資料狀態」開始。"],
-    };
-    const meta = getFlowStatusMeta(safeReport.status);
-    const StatusIcon = meta.icon;
+    const selectedSummaryStatus = summaryStatusReport?.month === calMonth ? summaryStatusReport : null;
+
+    const getStatusKey = (status) => status === "success"
+      ? "success"
+      : status === "danger"
+      ? "danger"
+      : status === "warning"
+      ? "warning"
+      : status === "running"
+      ? "running"
+      : "idle";
 
     const tonePalette = {
       success: {
         card: "border-[#D7ECDF] bg-[#F7FCF8]",
         icon: "border-[#D7ECDF] bg-[#EEF8F2] text-[#4F8A68]",
         pill: "border-[#D7ECDF] bg-[#EEF8F2] text-[#4F8A68]",
-        label: "正常",
       },
       warning: {
         card: "border-[#F2DEB5] bg-[#FFFBF1]",
         icon: "border-[#F2DEB5] bg-[#FFF6E4] text-[#A77732]",
         pill: "border-[#F2DEB5] bg-[#FFF6E4] text-[#A77732]",
-        label: "需注意",
       },
       danger: {
         card: "border-[#F3D4DA] bg-[#FFF7F8]",
         icon: "border-[#F3D4DA] bg-[#FFF0F2] text-[#B66A79]",
         pill: "border-[#F3D4DA] bg-[#FFF0F2] text-[#B66A79]",
-        label: "需處理",
+      },
+      running: {
+        card: "border-blue-100 bg-blue-50/40",
+        icon: "border-blue-100 bg-white text-blue-600",
+        pill: "border-blue-100 bg-blue-50 text-blue-600",
       },
       idle: {
         card: "border-[#E8DDD0] bg-[#FBF7F1]",
         icon: "border-[#E7D8C7] bg-[#F7F0E7] text-[#8B7056]",
         pill: "border-[#E7D8C7] bg-[#F7F0E7] text-[#8B7056]",
-        label: "待處理",
       },
     };
 
-    const getStatusKey = (status) => status === "success" ? "success" : status === "danger" ? "danger" : status === "warning" ? "warning" : "idle";
+    const metricToneClass = (tone) => {
+      if (tone === "success") return "border-[#D7ECDF] bg-[#F3FAF5] text-[#4F8A68]";
+      if (tone === "warning") return "border-[#F2DEB5] bg-[#FFF8EA] text-[#A77732]";
+      if (tone === "danger") return "border-[#F3D4DA] bg-[#FFF7F8] text-[#B66A79]";
+      return "border-[#E8DDD0] bg-[#FBF7F1] text-[#7D6753]";
+    };
 
     const normalizeMetricLabel = (label = "") => String(label)
       .replace("待月底校準", "待月結整理")
@@ -1798,73 +1492,42 @@ export default function SystemMaintenance() {
       .replace("Summary", "歷史報表")
       .replace("pending", "待整理異動");
 
-    const findings = Array.isArray(safeReport.metrics) && safeReport.metrics.length > 0
-      ? safeReport.metrics.slice(0, 3).map((item) => ({ ...item, label: normalizeMetricLabel(item.label) }))
-      : [
-          { label: "目前狀態", value: meta.label, tone: safeReport.status === "idle" ? "neutral" : safeReport.status },
-          { label: "資料影響", value: "尚未檢查", tone: "neutral" },
-          { label: "建議操作", value: "先執行檢查", tone: "warning" },
-        ];
-
-    const metricToneClass = (tone) => {
-      if (tone === "success") return "border-[#D7ECDF] bg-[#F3FAF5] text-[#4F8A68]";
-      if (tone === "warning") return "border-[#F2DEB5] bg-[#FFF8EA] text-[#A77732]";
-      if (tone === "danger") return "border-[#F3D4DA] bg-[#FFF7F8] text-[#B66A79]";
-      return "border-[#E8DDD0] bg-[#FBF7F1] text-[#7D6753]";
-    };
-
-    const explainMeaning = () => {
-      if (safeReport.status === "success") return "目前沒有需要立即處理的重大異常，可以繼續以營運總覽作為本月即時判斷依據。";
-      if (safeReport.status === "danger") return "系統偵測到可能影響報表判斷的項目，建議先查看明細並處理紅色高風險資料，再重新檢查。";
-      if (safeReport.status === "warning") return isCurrent
-        ? "目前多半屬於可觀察狀態。本月補報、修正或目標調整造成的待整理項目，可以留到月結前一次處理。"
-        : "此月份有需要注意的資料狀態，若要作為歷史報表依據，建議先完成月份報表整理與數字確認。";
-      if (safeReport.status === "running") return "系統正在檢查，請先不要重複點擊或切換高風險工具。";
-      return "尚未開始檢查。執行後，系統會用營運語言說明發現什麼、代表什麼、現在該做什麼。";
-    };
-
-    const runScenario = (scenarioId) => {
-      setActiveMaintenanceScenario(scenarioId);
-      setGuidedFlowReport(null);
-      setWizardStep(1);
-    };
-
-    const selectedSummaryStatus = summaryStatusReport?.month === calMonth ? summaryStatusReport : null;
     const selectedMonthLabel = (() => {
-      const [y, m] = String(calMonth || todayMonth()).split("-");
-      return y && m ? `${y} 年 ${String(Number(m)).padStart(2, "0")} 月` : calMonth;
+      const [year, month] = String(calMonth || todayMonth()).split("-");
+      return year && month ? `${year} 年 ${String(Number(month)).padStart(2, "0")} 月` : calMonth;
     })();
+
     const shiftMonth = (amount) => {
       const [year, month] = String(calMonth || todayMonth()).split("-").map(Number);
       if (!year || !month) return;
       const next = new Date(year, month - 1 + amount, 1);
-      const nextValue = `${next.getFullYear()}-${String(next.getMonth() + 1).padStart(2, "0")}`;
-      setCalMonth(nextValue);
-      setWizardStep(1);
+      setCalMonth(`${next.getFullYear()}-${String(next.getMonth() + 1).padStart(2, "0")}`);
       setGuidedFlowReport(null);
     };
+
     const handleMonthChange = (value) => {
       if (!value) return;
       setCalMonth(value);
-      setWizardStep(1);
       setGuidedFlowReport(null);
     };
+
     const formatSummaryTime = (value) => {
       if (!value || value === "-") return "尚無紀錄";
       const parsed = new Date(value);
       if (!Number.isNaN(parsed.getTime())) return parsed.toLocaleString("zh-TW", { hour12: false });
       return String(value);
     };
-    const monthModeLabel = isCurrent ? "本月即時營運中" : "歷史月份檢查";
+
     const monthStatusLabel = (() => {
-      if (isCurrent) return "只檢查，不整理";
-      if (!selectedSummaryStatus) return "自動檢查中";
+      if (isCurrent) return "本月即時資料";
+      if (!selectedSummaryStatus) return "狀態檢查中";
       if (selectedSummaryStatus.statusKey === "verified" || selectedSummaryStatus.statusKey === "ready") return "已整理";
       if (selectedSummaryStatus.statusKey === "missing") return "尚未整理";
       if (selectedSummaryStatus.statusKey === "dirty" || selectedSummaryStatus.pendingCount > 0) return "需要整理";
       if (selectedSummaryStatus.statusKey === "mismatch") return "需處理";
       return "建議檢查";
     })();
+
     const monthStatusToneClass = isCurrent
       ? "border-[#D7ECDF] bg-[#EEF8F2] text-[#4F8A68]"
       : monthStatusLabel === "已整理"
@@ -1872,292 +1535,191 @@ export default function SystemMaintenance() {
       : monthStatusLabel === "需處理"
       ? "border-[#F3D4DA] bg-[#FFF0F2] text-[#B66A79]"
       : "border-[#F2DEB5] bg-[#FFF6E4] text-[#A77732]";
-    const monthAdviceTitle = isCurrent
-      ? "目前建議：檢查本月資料狀態"
+
+    const recommendedScenarioId = isCurrent || monthStatusLabel === "已整理" ? "daily" : "closing";
+    const recommendationText = isCurrent
+      ? "目前是本月營運中，建議先「檢查本月資料」。只檢查，不會整理歷史報表。"
       : monthStatusLabel === "已整理"
-      ? `目前建議：${calMonth} 報表已整理，可安心查看`
+      ? `${selectedMonthLabel} 已整理完成；如果只是查看資料，不需要重複整理。`
       : monthStatusLabel === "需要整理"
-      ? `目前建議：整理 ${calMonth} 報表`
+      ? `${selectedMonthLabel} 有 ${Number(selectedSummaryStatus?.pendingCount || 0).toLocaleString()} 筆待整理異動，建議使用「整理月份報表」。`
       : monthStatusLabel === "尚未整理"
-      ? `目前建議：建立 ${calMonth} 報表整理資料`
-      : `目前建議：檢查 ${calMonth} 報表狀態`;
-    const monthAdviceBody = isCurrent
-      ? "當月資料以即時日報與即時目標為準。平常只需要確認資料是否安心，指定月份資料確認後再整理歷史報表。"
-      : monthStatusLabel === "已整理"
-      ? `上次整理：${formatSummaryTime(selectedSummaryStatus?.updatedAtText || selectedSummaryStatus?.lastUpdatedAtText)}。目前沒有新的待整理異動，歷史報表可安心查看。`
-      : monthStatusLabel === "需要整理"
-      ? `此月份在上次整理後仍有 ${Number(selectedSummaryStatus?.pendingCount || 0).toLocaleString()} 筆待整理異動。上次整理：${formatSummaryTime(selectedSummaryStatus?.updatedAtText || selectedSummaryStatus?.lastUpdatedAtText)}，最近異動：${formatSummaryTime(selectedSummaryStatus?.latestPendingAt)}。`
-      : monthStatusLabel === "尚未整理"
-      ? "此月份尚未建立完整歷史報表整理資料。若該月份資料已確認完成，可以執行月份報表整理。"
-      : "系統正在或尚未完成此月份整理狀態判斷，請重新檢查狀態。";
+      ? `${selectedMonthLabel} 尚未整理；資料確認完成後，可以使用「整理月份報表」。`
+      : monthStatusLabel === "需處理"
+      ? `${selectedMonthLabel} 的整理結果需要確認，建議先使用「整理月份報表」重新整理並確認數字。`
+      : `先確認 ${selectedMonthLabel} 的資料狀態，再決定是否需要整理月份報表。`;
 
-    const shouldShowMonthReportAssistant = !isCurrent && selectedSummaryStatus && ["missing", "dirty", "unverified", "mismatch"].includes(selectedSummaryStatus.statusKey);
-    const monthReportAssistantTone = selectedSummaryStatus?.statusKey === "mismatch" ? "rose" : selectedSummaryStatus?.statusKey === "missing" ? "amber" : "amber";
-    const monthReportAssistantTitle = selectedSummaryStatus?.statusKey === "mismatch"
-      ? `${calMonth} 報表比對異常，建議重新整理後再確認`
-      : selectedSummaryStatus?.statusKey === "missing"
-      ? `${calMonth} 尚未建立歷史報表整理資料`
-      : `${calMonth} 有 ${Number(selectedSummaryStatus?.pendingCount || 0).toLocaleString()} 筆資料待整理`;
-    const monthReportAssistantBody = selectedSummaryStatus?.statusKey === "mismatch"
-      ? "Dashboard 目前會先以明細暫代，避免主管看到不一致的 Summary。建議重新整理此月份報表，完成後系統會再次比對。"
-      : selectedSummaryStatus?.statusKey === "missing"
-      ? "此月份還沒有可供 Dashboard 安心使用的歷史報表資料。整理完成後，歷史月份可切回 Summary，減少長期明細讀取。"
-      : "Dashboard 目前已改用明細暫代顯示，主管看到的數字仍以明細為準。整理完成並比對正常後，系統會重新切回已整理 Summary。";
-
-
-    const statusCards = [
-      {
-        id: "daily",
-        title: isCurrent ? "本月資料狀態" : "資料狀態",
-        subtitle: isCurrent ? "營運資料是否可信" : `${calMonth} 資料檢查`,
-        status: report?.scenarioId === "daily" ? getStatusKey(report.status) : (isCurrent ? "warning" : "idle"),
-        summary: report?.scenarioId === "daily" ? report.message : (isCurrent ? "建議先檢查本月資料；平常只檢查，不整理報表。" : `檢查 ${calMonth} 是否有缺報、異常或待整理異動。`),
-        action: isCurrent ? "檢查本月資料" : `檢查 ${calMonth} 資料`,
-        icon: ClipboardList,
-        highlights: ["即時日報", "即時目標", "缺報與異常提醒"],
-        scenarioId: "daily",
-      },
-      {
-        id: "closing",
-        title: "報表整理狀態",
-        subtitle: isCurrent ? "資料確認後使用" : `${calMonth} 報表狀態`,
-        status: report?.scenarioId === "closing" ? getStatusKey(report.status) : (isCurrent ? "idle" : (monthStatusLabel === "已整理" ? "success" : monthStatusLabel === "需處理" ? "danger" : "warning")),
-        summary: report?.scenarioId === "closing" ? report.message : (isCurrent ? "本月資料仍會變動，建議資料確認完成後再整理報表。" : monthAdviceBody),
-        action: isCurrent ? "了解整理時機" : `整理 ${calMonth} 報表`,
-        icon: Calendar,
-        highlights: ["缺報檢查", "歷史報表整理", "數字一致確認"],
-        scenarioId: "closing",
-      },
-      {
-        id: "backup",
-        title: "資料安全狀態",
-        subtitle: "備份、還原與封存",
-        status: report?.scenarioId === "backup" ? getStatusKey(report.status) : "success",
-        summary: report?.scenarioId === "backup" ? report.message : "目前沒有需要立即還原或救援的風險提醒。",
-        action: "查看安全工具",
-        icon: Shield,
-        highlights: ["快照可查詢", "還原需確認", "封存可追蹤"],
-        scenarioId: "backup",
-      },
-      {
-        id: "traffic",
-        title: "流量觀察狀態",
-        subtitle: "讀取量是否異常",
-        status: report?.scenarioId === "traffic" ? getStatusKey(report.status) : "idle",
-        summary: report?.scenarioId === "traffic" ? report.message : "當月即時資料會有必要讀取量，先觀察排行前幾名即可。",
-        action: "查看流量",
-        icon: Radio,
-        highlights: ["必要即時成本", "低頻來源觀察", "3～5 天趨勢"],
-        scenarioId: "traffic",
-      },
-    ];
-
-    const activeCard = statusCards.find((card) => card.scenarioId === activeMaintenanceScenario) || statusCards[0];
-    const activeTone = tonePalette[getStatusKey(activeCard.status)];
+    const primaryCards = scenarioCards.filter((card) => card.id !== "traffic");
+    const activeCard = primaryCards.find((card) => card.id === activeMaintenanceScenario) || primaryCards[0];
     const ActiveIcon = activeCard.icon;
+    const activeTone = tonePalette[report ? getStatusKey(report.status) : "idle"];
 
-    const wizardSteps = [
-      {
-        title: "你現在想處理什麼？",
-        desc: "先選擇上方狀態卡，系統會用任務精靈帶你完成，不需要自己找工具。",
-        body: activeCard.summary,
-      },
-      {
-        title: "系統檢查結果",
-        desc: "這一步只顯示重點，不把所有進階工具攤開。",
-        body: safeReport.status === "idle" ? "按下開始後，系統會整理成正常、需注意或需處理。" : safeReport.message,
-      },
-      {
-        title: "這代表什麼？",
-        desc: "把檢查結果轉成營運語言，讓使用者知道是否會影響判斷。",
-        body: explainMeaning(),
-      },
-      {
-        title: "你現在要做什麼？",
-        desc: "最後只給明確下一步，避免誤按進階工具。",
-        body: (safeReport.nextActions || ["先執行檢查，再依照系統建議處理。"])
+    const selectScenario = (scenarioId) => {
+      setActiveMaintenanceScenario(scenarioId);
+      setGuidedFlowReport(null);
+    };
+
+    const actionLabel = activeCard.id === "daily"
+      ? "開始檢查本月資料"
+      : activeCard.id === "closing"
+      ? (isCurrent ? "先檢查月結準備" : `整理 ${calMonth} 報表`)
+      : activeCard.id === "issue"
+      ? "開始檢查異常資料"
+      : "載入備份與快照";
+
+    const runActiveTask = () => {
+      if (activeCard.id === "closing" && !isCurrent) {
+        handleMonthEndDashboardSummaryCalibration();
+        return;
+      }
+      handleRunGuidedFlow(activeCard.id);
+    };
+
+    const findings = Array.isArray(report?.metrics)
+      ? report.metrics.slice(0, 3).map((item) => ({ ...item, label: normalizeMetricLabel(item.label) }))
+      : [];
+
+    const nextActions = Array.isArray(report?.nextActions)
+      ? report.nextActions
           .slice(0, 3)
-          .map((item, index) => `${index + 1}. ${String(item).replace("Summary", "歷史報表").replace("pending", "待整理異動")}`)
-          .join("\n"),
-      },
-    ];
-    const currentStep = wizardSteps[Math.max(0, wizardStep - 1)];
+          .map((item) => String(item).replace(/Summary/g, "歷史報表").replace(/pending/g, "待整理異動"))
+      : [];
+
+    const resultMeta = getFlowStatusMeta(report?.status || "idle");
+    const ResultIcon = resultMeta.icon;
 
     return (
       <section className="space-y-3">
-        <div className="rounded-[1.5rem] border border-[#E8DDD0] bg-gradient-to-br from-[#FFFCF7] via-white to-[#FFF8EC] p-3.5 shadow-[0_12px_30px_rgba(154,118,84,0.06)]">
-          <div className="flex flex-col gap-3 xl:flex-row xl:items-center xl:justify-between">
-            <div className="flex items-start gap-2.5 min-w-0">
-              <div className="w-10 h-10 rounded-[1.1rem] border border-[#F0DDBB] bg-[#FFF6E4] text-[#B7863D] flex items-center justify-center shrink-0">
-                <Sparkles size={18} strokeWidth={1.8} />
+        <div className="rounded-[1.5rem] border border-[#E8DDD0] bg-gradient-to-br from-[#FFFCF7] via-white to-[#FFF8EC] p-4 shadow-[0_12px_30px_rgba(154,118,84,0.06)]">
+          <div className="flex flex-col gap-4 xl:flex-row xl:items-center xl:justify-between">
+            <div className="min-w-0">
+              <div className="flex flex-wrap items-center gap-2">
+                <span className="px-3 py-1 rounded-full border border-[#E7D8C7] bg-[#F7F0E7] text-[#8B7056] text-xs font-black">系統維護</span>
+                <span className={`px-3 py-1 rounded-full border text-xs font-black ${monthStatusToneClass}`}>{monthStatusLabel}</span>
+              </div>
+              <h2 className="mt-2 text-xl md:text-2xl font-black text-[#4F3F33]">先選月份，再選你現在要做的事</h2>
+              <p className="mt-1 text-sm font-bold text-[#7D6753] leading-6">{recommendationText}</p>
+            </div>
+
+            <div className="flex items-center gap-2 rounded-2xl border border-[#E8DDD0] bg-white/80 p-1.5 shadow-sm shrink-0">
+              <button type="button" onClick={() => shiftMonth(-1)} className="h-9 px-3 rounded-xl bg-[#F7F0E7] text-[#8B7056] text-xs font-black hover:bg-[#EFE3D5]">上一月</button>
+              <label className="flex items-center gap-2 px-2 text-xs font-black text-[#7D6753]">
+                <Calendar size={14} className="text-[#B7863D]" />
+                <SmartMonthPicker value={calMonth} onChange={handleMonthChange} align="right" buttonClassName="!h-9 !min-w-[150px] !border-0 !bg-transparent !px-0 !py-0 !text-xs !shadow-none hover:!bg-transparent" />
+              </label>
+              <button type="button" onClick={() => shiftMonth(1)} className="h-9 px-3 rounded-xl bg-[#F7F0E7] text-[#8B7056] text-xs font-black hover:bg-[#EFE3D5]">下一月</button>
+            </div>
+          </div>
+
+          <div className="mt-3 flex flex-wrap items-center gap-2 text-[11px] font-black">
+            <span className="rounded-full border border-stone-100 bg-white/80 px-3 py-1 text-stone-500">目前查看：{selectedMonthLabel}</span>
+            {!isCurrent && selectedSummaryStatus?.updatedAtText && (
+              <span className="rounded-full border border-stone-100 bg-white/80 px-3 py-1 text-stone-500">上次整理：{formatSummaryTime(selectedSummaryStatus.updatedAtText || selectedSummaryStatus.lastUpdatedAtText)}</span>
+            )}
+          </div>
+        </div>
+
+        <div className="rounded-[1.65rem] border border-[#E8DDD0] bg-white/90 p-4 shadow-[0_14px_36px_rgba(154,118,84,0.07)]">
+          <div>
+            <h2 className="text-lg md:text-xl font-black text-[#4F3F33]">你現在要做哪一件事？</h2>
+            <p className="mt-1 text-xs md:text-sm font-bold text-[#9A8978]">不用先懂系統工具，選最接近你現在情況的一項。</p>
+          </div>
+
+          <div className="mt-3 grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-2.5">
+            {primaryCards.map((card) => {
+              const Icon = card.icon;
+              const selected = card.id === activeCard.id;
+              const recommended = card.id === recommendedScenarioId;
+              return (
+                <button
+                  key={card.id}
+                  type="button"
+                  onClick={() => selectScenario(card.id)}
+                  className={`text-left rounded-[1.35rem] border p-3.5 transition-all min-h-[150px] ${
+                    selected
+                      ? "border-[#D8B883] bg-[#FFFDF9] ring-2 ring-[#F5E7D0] shadow-[0_12px_28px_rgba(154,118,84,0.07)]"
+                      : "border-[#E8DDD0] bg-white hover:border-[#D8B883] hover:bg-[#FFFDF9]"
+                  }`}
+                >
+                  <div className="flex items-start justify-between gap-2">
+                    <div className="w-9 h-9 rounded-xl border border-[#F0DDBB] bg-[#FFF6E4] text-[#B7863D] flex items-center justify-center">
+                      <Icon size={17} strokeWidth={1.8} />
+                    </div>
+                    {recommended && <span className="rounded-full border border-[#D7ECDF] bg-[#EEF8F2] px-2 py-0.5 text-[10px] font-black text-[#4F8A68]">建議先做</span>}
+                  </div>
+                  <h3 className="mt-3 text-sm font-black text-[#4F3F33]">{card.title}</h3>
+                  <p className="mt-1 text-[11px] font-bold leading-5 text-[#7D6753]">{card.subtitle}</p>
+                  <p className="mt-2 text-[10px] font-black text-[#A77732]">{selected ? "目前選擇" : "選擇這項"} →</p>
+                </button>
+              );
+            })}
+          </div>
+        </div>
+
+        <div className={`rounded-[1.65rem] border p-4 md:p-5 shadow-[0_14px_36px_rgba(154,118,84,0.07)] ${activeTone.card}`}>
+          <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
+            <div className="flex items-start gap-3 min-w-0">
+              <div className={`w-11 h-11 rounded-[1.1rem] border flex items-center justify-center shrink-0 ${activeTone.icon}`}>
+                <ActiveIcon size={20} strokeWidth={1.8} />
               </div>
               <div className="min-w-0">
-                <div className="flex flex-wrap gap-2">
-                  <span className="px-3 py-1 rounded-full border border-[#F2DEB5] bg-[#FFF6E4] text-[#A77732] text-xs font-black">今日建議</span>
-                  <span className={`px-3 py-1 rounded-full border text-xs font-black ${monthStatusToneClass}`}>{monthStatusLabel}</span>
-                  <span className="px-3 py-1 rounded-full border border-[#E7D8C7] bg-[#F7F0E7] text-[#8B7056] text-xs font-black">{monthModeLabel}</span>
-                </div>
-                <h2 className="mt-1.5 text-base md:text-lg font-black text-[#4F3F33] tracking-tight">{monthAdviceTitle}</h2>
-                <p className="mt-1 text-xs md:text-sm font-bold text-[#7D6753] leading-5 max-w-3xl">{monthAdviceBody}</p>
+                <span className="inline-flex rounded-full border border-[#E7D8C7] bg-white/80 px-3 py-1 text-[11px] font-black text-[#8B7056]">目前選擇</span>
+                <h2 className="mt-2 text-xl font-black text-[#4F3F33]">你選的是：{activeCard.title}</h2>
+                <p className="mt-1 text-sm font-bold text-[#7D6753]">{activeCard.subtitle}</p>
               </div>
             </div>
-            <div className="flex flex-col gap-2 xl:items-end shrink-0">
-              <div className="flex items-center gap-2 rounded-2xl border border-[#E8DDD0] bg-white/75 p-1.5 shadow-sm">
-                <button type="button" onClick={() => shiftMonth(-1)} className="h-9 px-3 rounded-xl bg-[#F7F0E7] text-[#8B7056] text-xs font-black hover:bg-[#EFE3D5]">上一月</button>
-                <label className="flex items-center gap-2 px-2 text-xs font-black text-[#7D6753]">
-                  <Calendar size={14} className="text-[#B7863D]" />
-                  <SmartMonthPicker value={calMonth} onChange={handleMonthChange} align="right" buttonClassName="!h-9 !min-w-[150px] !border-0 !bg-transparent !px-0 !py-0 !text-xs !shadow-none hover:!bg-transparent" />
-                </label>
-                <button type="button" onClick={() => shiftMonth(1)} className="h-9 px-3 rounded-xl bg-[#F7F0E7] text-[#8B7056] text-xs font-black hover:bg-[#EFE3D5]">下一月</button>
-              </div>
-              <div className="flex flex-wrap gap-2 xl:justify-end">
-                <span className="px-2.5 py-1 rounded-full border border-[#E7D8C7] bg-[#F7F0E7] text-[#8B7056] text-[11px] font-black">目前檢查：{selectedMonthLabel}</span>
-                {!isCurrent && <span className="px-2.5 py-1 rounded-full border border-[#F2DEB5] bg-[#FFF6E4] text-[#A77732] text-[11px] font-black">上次整理：{formatSummaryTime(selectedSummaryStatus?.updatedAtText || selectedSummaryStatus?.lastUpdatedAtText)}</span>}
-                {!isCurrent && <span className="px-2.5 py-1 rounded-full border border-[#F2DEB5] bg-[#FFF6E4] text-[#A77732] text-[11px] font-black">最近異動：{formatSummaryTime(selectedSummaryStatus?.latestPendingAt)}</span>}
-              </div>
-            </div>
-          </div>
-        </div>
 
-        {shouldShowMonthReportAssistant && (
-          <div className={`rounded-[1.65rem] border p-4 shadow-[0_14px_34px_rgba(154,118,84,0.06)] ${monthReportAssistantTone === "rose" ? "border-rose-100 bg-rose-50/35" : "border-amber-100 bg-amber-50/35"}`}>
-            <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
-              <div className="flex items-start gap-3 min-w-0">
-                <div className={`w-11 h-11 rounded-[1.15rem] border flex items-center justify-center shrink-0 ${monthReportAssistantTone === "rose" ? "border-rose-100 bg-white text-rose-500" : "border-amber-100 bg-white text-[#B7863D]"}`}>
-                  <Calendar size={19} strokeWidth={1.8} />
-                </div>
-                <div className="min-w-0">
-                  <div className="flex flex-wrap items-center gap-2">
-                    <span className={`px-3 py-1 rounded-full border bg-white text-[11px] font-black ${monthReportAssistantTone === "rose" ? "border-rose-100 text-rose-600" : "border-amber-100 text-[#B7863D]"}`}>月份報表整理助手</span>
-                    <span className="px-3 py-1 rounded-full border border-stone-100 bg-white/80 text-[11px] font-black text-stone-500">Dashboard 目前明細暫代</span>
-                  </div>
-                  <h3 className="mt-2 text-lg font-black text-[#4F3F33] tracking-tight">{monthReportAssistantTitle}</h3>
-                  <p className="mt-1 text-xs font-bold leading-5 text-[#7D6753] max-w-3xl">{monthReportAssistantBody}</p>
-                  <div className="mt-3 flex flex-wrap gap-2 text-[11px] font-black text-stone-500">
-                    <span className="rounded-full border border-stone-100 bg-white/80 px-3 py-1">待整理：{Number(selectedSummaryStatus?.pendingCount || 0).toLocaleString()} 筆</span>
-                    <span className="rounded-full border border-stone-100 bg-white/80 px-3 py-1">最近異動：{formatSummaryTime(selectedSummaryStatus?.latestPendingAt || selectedSummaryStatus?.lastDirtyAtText)}</span>
-                    <span className="rounded-full border border-stone-100 bg-white/80 px-3 py-1">最後比對：{formatSummaryTime(selectedSummaryStatus?.lastCompareAt)}</span>
-                  </div>
-                </div>
-              </div>
-              <div className="flex flex-col gap-2 sm:flex-row lg:flex-col lg:items-stretch shrink-0">
-                <BeautyButton onClick={handleMonthEndDashboardSummaryCalibration} disabled={loadingAction !== null} variant="primary" className="min-w-[170px]">
-                  {loadingAction === "monthEndSummaryCalibration" ? <Loader2 size={14} className="animate-spin" /> : <CheckCircle2 size={14} />}
-                  立即整理 {calMonth}
-                </BeautyButton>
-                <BeautyButton onClick={() => loadDashboardSummaryStatus(calMonth)} disabled={loadingAction !== null} variant="soft" className="min-w-[170px]">
-                  {loadingAction === "summaryStatus" ? <Loader2 size={14} className="animate-spin" /> : <Eye size={14} />}
-                  重新檢查
-                </BeautyButton>
-              </div>
-            </div>
-          </div>
-        )}
-
-        <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-2.5 auto-rows-fr">
-          {statusCards.map((card) => {
-            const tone = tonePalette[getStatusKey(card.status)];
-            const Icon = card.icon;
-            const CardStatusIcon = card.status === "success" ? CheckCircle2 : card.status === "warning" ? AlertTriangle : Clock;
-            const selected = card.scenarioId === activeMaintenanceScenario;
-            return (
-              <button
-                key={card.id}
-                type="button"
-                onClick={() => runScenario(card.scenarioId)}
-                className={`text-left rounded-[1.35rem] border p-3 transition-all shadow-[0_10px_24px_rgba(154,118,84,0.045)] min-h-[130px] h-full ${selected ? "border-[#D8B883] bg-white ring-2 ring-[#F5E7D0]" : `${tone.card} hover:border-[#D8B883]`}`}
+            <div className="flex flex-col gap-2 sm:flex-row lg:shrink-0">
+              <BeautyButton
+                onClick={runActiveTask}
+                disabled={guidedFlowRunning || loadingAction !== null}
+                variant="primary"
+                className="min-w-[190px]"
               >
-                <div className="flex items-start justify-between gap-3">
-                  <div className={`w-9 h-9 rounded-[1rem] border flex items-center justify-center ${tone.icon}`}>
-                    <Icon size={17} strokeWidth={1.8} />
-                  </div>
-                  <span className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full border text-[10px] font-black ${tone.pill}`}>
-                    <CardStatusIcon size={11} />{tone.label}
-                  </span>
-                </div>
-                <h3 className="mt-3 text-sm font-black text-[#4F3F33]">{card.title}</h3>
-                <p className="mt-0.5 text-[11px] font-bold text-[#9A8978]">{card.subtitle}</p>
-                <p className="mt-2 text-[11px] font-bold text-[#6F5A48] leading-4 line-clamp-2">{card.summary}</p>
-                <div className="mt-2 flex items-center justify-between text-[11px] font-black text-[#A77732]">
-                  <span>{card.action}</span>
-                  <span>→</span>
-                </div>
-              </button>
-            );
-          })}
+                {guidedFlowRunning || loadingAction === "monthEndSummaryCalibration" ? <Loader2 size={15} className="animate-spin" /> : <Play size={15} />}
+                {guidedFlowRunning ? "檢查中..." : loadingAction === "monthEndSummaryCalibration" ? "整理中..." : actionLabel}
+              </BeautyButton>
+              <BeautyButton onClick={() => setShowCoreTools(true)} variant="soft">
+                <Settings size={15} /> 需要其他工具
+              </BeautyButton>
+            </div>
+          </div>
+
+          <div className="mt-4 grid grid-cols-1 md:grid-cols-2 gap-2.5">
+            <div className="rounded-2xl border border-white/80 bg-white/75 p-3.5">
+              <p className="text-[11px] font-black text-[#B7863D]">適合什麼時候</p>
+              <p className="mt-1 text-xs font-bold leading-5 text-[#6F5A48]">{activeCard.when}</p>
+            </div>
+            <div className="rounded-2xl border border-white/80 bg-white/75 p-3.5">
+              <p className="text-[11px] font-black text-[#B7863D]">會幫你做什麼</p>
+              <p className="mt-1 text-xs font-bold leading-5 text-[#6F5A48]">{activeCard.goal}</p>
+            </div>
+            <div className="rounded-2xl border border-white/80 bg-white/75 p-3.5">
+              <p className="text-[11px] font-black text-[#B7863D]">這一步不會做什麼</p>
+              <p className="mt-1 text-xs font-bold leading-5 text-[#6F5A48]">{activeCard.doesNot}</p>
+            </div>
+            <div className="rounded-2xl border border-white/80 bg-white/75 p-3.5">
+              <p className="text-[11px] font-black text-[#B7863D]">完成後你會看到</p>
+              <p className="mt-1 text-xs font-bold leading-5 text-[#6F5A48]">{activeCard.result}</p>
+            </div>
+          </div>
         </div>
 
-        <div className="rounded-[1.65rem] border border-[#E8DDD0] bg-white/90 shadow-[0_14px_36px_rgba(154,118,84,0.07)] overflow-hidden">
-          <div className="grid min-h-[390px] lg:grid-cols-[0.72fr_1.28fr]">
-            <div className="border-b border-[#EFE5DA] bg-[#FFFDF9] p-4 lg:border-b-0 lg:border-r lg:p-4">
-              <div className="flex items-start gap-3">
-                <div className={`w-11 h-11 rounded-[1.1rem] border flex items-center justify-center shrink-0 ${activeTone.icon}`}>
-                  <ActiveIcon size={20} strokeWidth={1.8} />
-                </div>
-                <div>
-                  <span className={`px-3 py-1 rounded-full border text-xs font-black ${activeTone.pill}`}>{activeTone.label}</span>
-                  <h2 className="mt-2 text-xl font-black text-[#4F3F33]">{activeCard.title}</h2>
-                  <p className="mt-1.5 text-xs font-bold text-[#7D6753] leading-5">{activeCard.summary}</p>
-                </div>
+        {(report || guidedFlowRunning) && (
+          <div className={`rounded-[1.65rem] border p-4 md:p-5 shadow-[0_14px_36px_rgba(154,118,84,0.06)] ${tonePalette[getStatusKey(report?.status || "running")].card}`}>
+            <div className="flex items-start gap-3">
+              <div className={`w-10 h-10 rounded-xl border flex items-center justify-center shrink-0 ${tonePalette[getStatusKey(report?.status || "running")].icon}`}>
+                <ResultIcon size={18} className={report?.status === "running" ? "animate-spin" : ""} />
               </div>
-
-              <div className="mt-4 rounded-[1.25rem] border border-[#E8DDD0] bg-[#FBF7F1] p-3">
-                <p className="text-[11px] font-black tracking-widest text-[#B6A696]">重點摘要</p>
-                <div className="mt-2 space-y-1.5">
-                  {activeCard.highlights.map((item) => (
-                    <div key={item} className="flex items-center gap-2 text-xs font-bold text-[#6F5A48]">
-                      <CheckCircle2 size={16} className="text-[#B7863D] shrink-0" />
-                      {item}
-                    </div>
-                  ))}
-                </div>
-              </div>
-
-              <div className="mt-4 flex flex-col gap-2 sm:flex-row lg:flex-col">
-                <BeautyButton
-                  onClick={() => activeCard.scenarioId === "closing" && !isCurrent ? handleMonthEndDashboardSummaryCalibration() : handleRunGuidedFlow(activeCard.scenarioId)}
-                  disabled={guidedFlowRunning || loadingAction !== null}
-                  variant="primary"
-                  className="h-10 flex-1"
-                >
-                  {guidedFlowRunning || loadingAction === "monthEndSummaryCalibration" ? <Loader2 size={16} className="animate-spin" /> : activeCard.scenarioId === "closing" && !isCurrent ? <CheckCircle2 size={16} /> : <Play size={16} />}
-                  {guidedFlowRunning ? "檢查中..." : loadingAction === "monthEndSummaryCalibration" ? "整理中..." : activeCard.scenarioId === "closing" ? (isCurrent ? "查看整理時機" : `立即整理 ${calMonth}`) : activeCard.scenarioId === "daily" ? "開始本月檢查" : activeCard.action}
-                </BeautyButton>
-                <BeautyButton onClick={() => setShowCoreTools(true)} variant="soft" className="h-10 flex-1">
-                  <Settings size={16} /> 打開進階工具
-                </BeautyButton>
+              <div className="min-w-0">
+                <span className={`inline-flex rounded-full border px-3 py-1 text-[11px] font-black ${tonePalette[getStatusKey(report?.status || "running")].pill}`}>{resultMeta.label}</span>
+                <h3 className="mt-2 text-lg font-black text-[#4F3F33]">{report?.headline || "正在檢查，請稍候"}</h3>
+                <p className="mt-1 text-xs md:text-sm font-bold leading-5 text-[#7D6753]">{report?.message || "系統正在整理檢查結果。"}</p>
               </div>
             </div>
 
-            <div className="p-4 lg:p-4 flex flex-col min-h-[390px]">
-              <div className="flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
-                <div>
-                  <div className="flex items-center gap-2">
-                    <span className="px-3 py-1 rounded-full border border-[#F2DEB5] bg-[#FFF6E4] text-[#A77732] text-xs font-black">Step {wizardStep} / 4</span>
-                    <span className="px-3 py-1 rounded-full border border-[#E8DDD0] bg-[#FBF7F1] text-[#8B7056] text-xs font-black">任務精靈</span>
-                  </div>
-                  <h3 className="mt-2 text-xl font-black text-[#4F3F33]">{currentStep.title}</h3>
-                  <p className="mt-1.5 text-xs font-bold text-[#9A8978]">{currentStep.desc}</p>
-                </div>
-              </div>
-
-              <div className="mt-4 flex gap-2">
-                {[1, 2, 3, 4].map((step) => <div key={step} className={`h-1.5 flex-1 rounded-full ${step <= wizardStep ? "bg-[#C89F68]" : "bg-[#EFE5DA]"}`} />)}
-              </div>
-
-              <div className="mt-4 rounded-[1.35rem] border border-[#E8DDD0] bg-[#FBF7F1] p-3.5 min-h-[104px]">
-                <div className="flex items-start gap-3">
-                  <div className="w-10 h-10 rounded-[1.1rem] border border-[#F0DDBB] bg-[#FFF6E4] text-[#B7863D] flex items-center justify-center shrink-0">
-                    {wizardStep === 1 && <Sparkles size={18} />}
-                    {wizardStep === 2 && <Eye size={18} />}
-                    {wizardStep === 3 && <AlertTriangle size={18} />}
-                    {wizardStep === 4 && <CheckCircle2 size={18} />}
-                  </div>
-                  <p className="text-sm font-bold leading-6 text-[#6F5A48] whitespace-pre-line">{currentStep.body}</p>
-                </div>
-              </div>
-
-              <div className={`mt-3 grid grid-cols-1 sm:grid-cols-3 gap-2 min-h-[66px] ${wizardStep === 2 ? "opacity-100" : "opacity-0 pointer-events-none"}`}>
+            {findings.length > 0 && (
+              <div className="mt-4 grid grid-cols-1 sm:grid-cols-3 gap-2">
                 {findings.map((item) => (
                   <div key={item.label} className={`rounded-2xl border p-3 text-center ${metricToneClass(item.tone)}`}>
                     <p className="text-[10px] font-black tracking-widest opacity-75">{item.label}</p>
@@ -2165,18 +1727,42 @@ export default function SystemMaintenance() {
                   </div>
                 ))}
               </div>
+            )}
 
-              <div className="mt-auto pt-4 flex flex-col gap-2 sm:flex-row sm:justify-between">
-                <BeautyButton variant="soft" disabled={wizardStep === 1} onClick={() => setWizardStep(Math.max(1, wizardStep - 1))}>上一步</BeautyButton>
-                {wizardStep < 4 ? (
-                  <BeautyButton onClick={() => setWizardStep(Math.min(4, wizardStep + 1))}>下一步</BeautyButton>
-                ) : (
-                  <BeautyButton variant="soft" onClick={() => setWizardStep(1)}>完成，回到總覽</BeautyButton>
-                )}
+            {nextActions.length > 0 && (
+              <div className="mt-4 rounded-2xl border border-white/80 bg-white/75 p-3.5">
+                <p className="text-[11px] font-black text-[#B7863D]">建議下一步</p>
+                <div className="mt-2 space-y-1.5">
+                  {nextActions.map((item, index) => (
+                    <div key={`${index}_${item}`} className="flex items-start gap-2 text-xs font-bold leading-5 text-[#6F5A48]">
+                      <span className="w-5 h-5 rounded-full bg-[#FFF6E4] text-[#B7863D] flex items-center justify-center text-[10px] font-black shrink-0">{index + 1}</span>
+                      <span>{item}</span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+          </div>
+        )}
+
+        <button
+          type="button"
+          onClick={() => setShowTrafficTools(true)}
+          className="w-full rounded-[1.35rem] border border-blue-100 bg-blue-50/40 px-4 py-3 text-left shadow-[0_10px_24px_rgba(59,130,246,0.05)] transition-all hover:border-blue-200 hover:bg-blue-50/70"
+        >
+          <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+            <div className="flex items-center gap-3 min-w-0">
+              <div className="w-9 h-9 rounded-xl border border-blue-100 bg-white text-blue-600 flex items-center justify-center shrink-0">
+                <Radio size={16} />
+              </div>
+              <div className="min-w-0">
+                <p className="text-sm font-black text-[#4F3F33]">系統流量觀察</p>
+                <p className="mt-0.5 text-[11px] font-bold text-[#7D6753]">只有費用異常、改版觀察或需要追查讀取來源時才開啟。</p>
               </div>
             </div>
+            <span className="text-xs font-black text-blue-600 shrink-0">開啟流量觀察 →</span>
           </div>
-        </div>
+        </button>
       </section>
     );
   };
@@ -2568,197 +2154,6 @@ export default function SystemMaintenance() {
       setLoadingAction(null);
     }
   };
-
-  // Projection Accuracy B2B：只讀單一 projection_accuracy/{YYYY-MM}。
-  // 不查 Raw、不重算 WAPE / Bias、不建立 listener / polling。
-  const handleLoadProjectionAccuracyObservability = async () => {
-    const activeBrandId = String(currentBrand?.id || "").trim().toLowerCase() || "cyj";
-    const selectedYearMonth = String(projectionAccuracyMonth || "").trim();
-    if (!/^\d{4}-\d{2}$/.test(selectedYearMonth)) {
-      showToast("請先選擇正確的驗證月份", "error");
-      return;
-    }
-
-    const requestSeq = projectionAccuracyRequestSeq.current + 1;
-    projectionAccuracyRequestSeq.current = requestSeq;
-    setLoadingAction("projectionAccuracyObservability");
-    setProjectionAccuracyState({
-      brandId: activeBrandId,
-      yearMonth: selectedYearMonth,
-      status: "loading",
-      data: null,
-      error: null,
-      loadedAtText: "",
-    });
-
-    try {
-      const accuracyRef = doc(getCollectionPath("projection_accuracy"), selectedYearMonth);
-      const accuracySnap = await getDoc(accuracyRef);
-      if (requestSeq !== projectionAccuracyRequestSeq.current) return;
-      const accuracy = accuracySnap.exists() ? (accuracySnap.data() || {}) : null;
-      const data = buildProjectionAccuracyObservabilitySnapshot({
-        accuracy,
-        brandId: activeBrandId,
-        yearMonth: selectedYearMonth,
-        currentYearMonth: getTaipeiProjectionYearMonth(),
-      });
-
-      setProjectionAccuracyState({
-        brandId: activeBrandId,
-        yearMonth: selectedYearMonth,
-        status: "ready",
-        data,
-        error: null,
-        loadedAtText: new Date().toLocaleString("zh-TW", { hour12: false }),
-      });
-
-      showToast(
-        data.status === "healthy"
-          ? `${brandLabel} ${selectedYearMonth} 推估驗證結果已載入`
-          : `${brandLabel} ${selectedYearMonth} 推估驗證狀態已更新`,
-        data.status === "error" ? "error" : (data.status === "warning" ? "info" : "success")
-      );
-    } catch (error) {
-      if (requestSeq !== projectionAccuracyRequestSeq.current) return;
-      console.error("讀取 Projection Accuracy 狀態失敗：", error);
-      setProjectionAccuracyState({
-        brandId: activeBrandId,
-        yearMonth: selectedYearMonth,
-        status: "error",
-        data: null,
-        error: error?.message || String(error),
-        loadedAtText: new Date().toLocaleString("zh-TW", { hour12: false }),
-      });
-      showToast("讀取業績推估準確度失敗", "error");
-    } finally {
-      if (requestSeq === projectionAccuracyRequestSeq.current) {
-        setLoadingAction(null);
-      }
-    }
-  };
-
-  // B2C.1 Rolling History：年度單文件 point-read，只有進階工具開啟或使用者套用區間時讀取。
-  // 無 listener、無 polling、無 Raw query；同品牌同年份在同一工作階段使用記憶體快取。
-  const loadProjectionHistoryYears = async ({ years = [], force = false } = {}) => {
-    const activeBrandId = String(currentBrand?.id || "").trim().toLowerCase() || "cyj";
-    if (!["cyj", "anniu"].includes(activeBrandId)) return { readCount: 0, loadedYears: [] };
-
-    const normalizedYears = [...new Set((Array.isArray(years) ? years : [])
-      .map((year) => String(year || "").trim())
-      .filter((year) => /^\d{4}$/.test(year)))]
-      .sort();
-    if (!normalizedYears.length || normalizedYears.length > 5) {
-      return { readCount: 0, loadedYears: [] };
-    }
-
-    const requestSeq = projectionHistoryRequestSeq.current + 1;
-    projectionHistoryRequestSeq.current = requestSeq;
-    const pendingYears = normalizedYears.filter((year) => {
-      const cacheKey = `${activeBrandId}:${year}`;
-      return force || !Object.prototype.hasOwnProperty.call(projectionHistoryCacheRef.current, cacheKey);
-    });
-
-    if (!pendingYears.length) {
-      const nextDocuments = {};
-      normalizedYears.forEach((year) => {
-        const cached = projectionHistoryCacheRef.current[`${activeBrandId}:${year}`];
-        if (cached) nextDocuments[year] = cached;
-      });
-      setProjectionHistoryDocuments((prev) => ({ ...prev, ...nextDocuments }));
-      return { readCount: 0, loadedYears: normalizedYears };
-    }
-
-    setProjectionHistoryLoadState((prev) => ({ ...prev, status: "loading", error: "" }));
-    const results = await Promise.all(pendingYears.map(async (year) => {
-      try {
-        const historyRef = doc(getCollectionPath("projection_accuracy_history"), year);
-        const snap = await getDoc(historyRef);
-        return {
-          year,
-          data: snap.exists() ? (snap.data() || {}) : null,
-          error: null,
-        };
-      } catch (error) {
-        return { year, data: null, error };
-      }
-    }));
-
-    if (requestSeq !== projectionHistoryRequestSeq.current) {
-      return { readCount: 0, loadedYears: [] };
-    }
-
-    const errors = results.filter((row) => row.error);
-    results.forEach((row) => {
-      const cacheKey = `${activeBrandId}:${row.year}`;
-      if (!row.error) {
-        // null 也寫入 cache，代表本工作階段已確認該年份目前尚無 rolling history 文件。
-        projectionHistoryCacheRef.current[cacheKey] = row.data;
-      }
-    });
-
-    // 成功讀到「文件不存在」時也要移除舊畫面資料，避免強制更新後沿用 stale year doc。
-    setProjectionHistoryDocuments((prev) => {
-      const next = { ...prev };
-      results.forEach((row) => {
-        if (row.error) return;
-        if (row.data) next[row.year] = row.data;
-        else delete next[row.year];
-      });
-      normalizedYears.forEach((year) => {
-        const cached = projectionHistoryCacheRef.current[`${activeBrandId}:${year}`];
-        if (cached) next[year] = cached;
-      });
-      return next;
-    });
-    setProjectionHistoryLoadState((prev) => ({
-      status: errors.length ? "error" : "ready",
-      loadedYears: [...new Set([...(prev.loadedYears || []), ...results.filter((row) => !row.error).map((row) => row.year)])].sort(),
-      sessionReadCount: Math.max(0, Number(prev.sessionReadCount || 0)) + pendingYears.length,
-      loadedAtText: new Date().toLocaleString("zh-TW", { hour12: false }),
-      error: errors.length ? (errors[0].error?.message || String(errors[0].error)) : "",
-    }));
-
-    return {
-      readCount: pendingYears.length,
-      loadedYears: results.filter((row) => !row.error).map((row) => row.year),
-      errors,
-    };
-  };
-
-  const handleApplyProjectionHistoryRange = async ({ force = false } = {}) => {
-    const currentYearMonth = getTaipeiProjectionYearMonth();
-    const years = projectionHistoryMode === "custom"
-      ? getProjectionHistoryYearsForRange({
-          startMonth: projectionHistoryStartMonth,
-          endMonth: projectionHistoryEndMonth,
-          currentYearMonth,
-          maxYears: 5,
-        })
-      : getProjectionHistoryYearsForRange({ currentYearMonth });
-
-    if (projectionHistoryMode === "custom" && !years.length) {
-      showToast("請確認歷史比較的起訖月份，單次最多跨 5 個年度", "error");
-      return;
-    }
-
-    const result = await loadProjectionHistoryYears({ years, force });
-    if (result?.errors?.length) {
-      showToast("部分歷史月份同步失敗，已保留目前可用資料", "error");
-    } else if (force || Number(result?.readCount || 0) > 0) {
-      showToast("歷史推估驗證資料已更新", "success");
-    }
-  };
-
-  // 開啟進階工具時只同步目前年度 1 份 rolling history 文件。
-  // 這讓新完成月份在下次進入工具時自然出現，但不建立任何常駐監聽。
-  useEffect(() => {
-    const activeBrandId = String(currentBrand?.id || "").trim().toLowerCase();
-    if (!showAdvancedTools || !["cyj", "anniu"].includes(activeBrandId)) return;
-    const currentYearMonth = getTaipeiProjectionYearMonth();
-    const currentYear = currentYearMonth.slice(0, 4);
-    if (!/^\d{4}$/.test(currentYear)) return;
-    loadProjectionHistoryYears({ years: [currentYear] });
-  }, [showAdvancedTools, currentBrand?.id]);
 
   // 新增工具：資料健康檢查
   const handleRunDataHealthCheck = async () => {
@@ -3987,7 +3382,7 @@ export default function SystemMaintenance() {
       ]);
 
       if (!dashboardSnap.exists() || !therapistSnap.exists() || !rankingsSnap.exists()) {
-        showToast("尚未找到完整三份 Summary，請先執行重建 Summary", "error");
+        showToast("尚未找到完整三份 Summary，請先執行重新整理報表", "error");
         addLog("⚠️ 該月份尚未完整建立 dashboard_summary / therapist_summary / rankings_summary。");
         return;
       }
@@ -4801,158 +4196,6 @@ export default function SystemMaintenance() {
     }
   };
 
-  const handleRebuildYearlyTargetSummary = async () => {
-    const year = String(targetSummaryYear || new Date().getFullYear()).trim();
-    if (!/^\d{4}$/.test(year)) return showToast("請先確認年度格式", "error");
-
-    if (!window.confirm(`確定要補整理 ${brandLabel} ${year} 年 1～12 月店家目標嗎？\n\n這是過渡工具，只會依照目前 monthly_targets 重新整理 monthly_targets_summary，不會修改原始目標。`)) return;
-
-    setLoadingAction("rebuildYearlyTargetSummary");
-    setTargetSummaryReport(null);
-    setLogs([]);
-    addLog(`🎯 開始補整理年度目標 Summary：${brandLabel}｜${year}`);
-
-    try {
-      const snap = await getDocs(getCollectionPath("monthly_targets"));
-      const monthBuckets = {};
-      const skippedDocs = [];
-
-      for (let i = 1; i <= 12; i += 1) {
-        const yearMonth = `${year}-${String(i).padStart(2, "0")}`;
-        monthBuckets[yearMonth] = { yearMonth, month: i, targets: {}, targetMeta: {}, targetCandidates: {}, sourceDocIds: [] };
-      }
-
-      snap.docs.forEach((d) => {
-        const data = d.data() || {};
-        const parsed = parseMonthlyTargetDocForSummary(d.id, data, year);
-        if (!parsed) {
-          if (String(d.id || "").includes(year)) skippedDocs.push(d.id);
-          return;
-        }
-        const bucket = monthBuckets[parsed.yearMonth];
-        const nextMeta = {
-          sourceDocId: parsed.sourceDocId,
-          updatedAtMs: parsed.updatedAtMs,
-          isCanonicalStoreName: parsed.isCanonicalStoreName,
-          hasEffectiveTarget: parsed.hasEffectiveTarget,
-          targetSignature: parsed.targetSignature,
-        };
-        if (!bucket.targetCandidates[parsed.storeName]) bucket.targetCandidates[parsed.storeName] = [];
-        bucket.targetCandidates[parsed.storeName].push({ ...nextMeta, target: parsed.target });
-
-        if (shouldReplaceTargetSummaryEntry(bucket.targetMeta[parsed.storeName], nextMeta)) {
-          bucket.targets[parsed.storeName] = parsed.target;
-          bucket.targetMeta[parsed.storeName] = nextMeta;
-        }
-        bucket.sourceDocIds.push(d.id);
-      });
-
-      const targetConflicts = [];
-      Object.values(monthBuckets).forEach((bucket) => {
-        Object.entries(bucket.targetCandidates || {}).forEach(([storeName, candidates]) => {
-          const effectiveCandidates = candidates.filter((item) => item.hasEffectiveTarget);
-          const signatures = new Set(effectiveCandidates.map((item) => item.targetSignature));
-          if (signatures.size <= 1) return;
-          targetConflicts.push({
-            yearMonth: bucket.yearMonth,
-            storeName,
-            sourceDocIds: effectiveCandidates.map((item) => item.sourceDocId),
-          });
-        });
-      });
-
-      if (targetConflicts.length > 0) {
-        const labels = targetConflicts
-          .slice(0, 6)
-          .map((item) => `${item.yearMonth} ${item.storeName}`)
-          .join("、");
-        throw new Error(
-          `偵測到 ${targetConflicts.length} 組「同店同月不同有效目標」，已停止寫入 Summary。` +
-          `請先執行「核心資料一致性健檢」人工確認${labels ? `：${labels}${targetConflicts.length > 6 ? "…" : ""}` : ""}`
-        );
-      }
-
-      const batch = writeBatch(db);
-      const nowText = new Date().toISOString();
-      let totalTargets = 0;
-      let writtenDocs = 0;
-      const rows = [];
-
-      Object.values(monthBuckets).forEach((bucket) => {
-        const targetEntries = Object.entries(bucket.targets || {});
-        const storeCount = targetEntries.length;
-        totalTargets += storeCount;
-
-        const cashTargetTotal = targetEntries.reduce((sum, [, item]) => sum + Number(item.cashTarget || 0), 0);
-        const accrualTargetTotal = targetEntries.reduce((sum, [, item]) => sum + Number(item.accrualTarget || 0), 0);
-
-        batch.set(doc(getCollectionPath("monthly_targets_summary"), bucket.yearMonth), {
-          brandId,
-          brandLabel,
-          year,
-          month: bucket.month,
-          yearMonth: bucket.yearMonth,
-          targets: bucket.targets,
-          storeCount,
-          targetCount: storeCount,
-          cashTargetTotal,
-          accrualTargetTotal,
-          sourceDocCount: bucket.sourceDocIds.length,
-          source: "SystemMaintenance_yearly_target_summary_rebuild",
-          rebuiltAt: serverTimestamp(),
-          rebuiltAtText: nowText,
-          rebuiltBy: currentUser?.name || "director",
-          rebuiltByRole: userRole || "director",
-        });
-
-        writtenDocs += 1;
-        rows.push({ month: bucket.yearMonth, storeCount, sourceDocCount: bucket.sourceDocIds.length, cashTargetTotal, accrualTargetTotal });
-      });
-
-      await batch.commit();
-
-      const report = {
-        brandId,
-        brandLabel,
-        year,
-        sourceDocs: snap.size,
-        writtenDocs,
-        totalTargets,
-        skippedDocs: skippedDocs.length,
-        rows,
-        createdAt: new Date().toLocaleString("zh-TW", { hour12: false }),
-      };
-
-      setTargetSummaryReport(report);
-      addLog(`✅ 年度目標 Summary 補整理完成：寫入 ${writtenDocs} 份月份資料，整理 ${totalTargets.toLocaleString()} 筆店家目標。`);
-
-      await addMaintenanceLog({
-        type: "monthly_targets_summary",
-        action: "rebuild_yearly_monthly_targets_summary",
-        status: "success",
-        year,
-        writtenDocs,
-        totalTargets,
-        sourceDocs: snap.size,
-      });
-
-      showToast(`${year} 年目標 Summary 補整理完成`, "success");
-    } catch (error) {
-      console.error(error);
-      addLog(`❌ 年度目標 Summary 補整理失敗：${error.message}`);
-      await addMaintenanceLog({
-        type: "monthly_targets_summary",
-        action: "fail_rebuild_yearly_monthly_targets_summary",
-        status: "failed",
-        year,
-        errorMessage: error.message,
-      });
-      showToast("年度目標 Summary 補整理失敗", "error");
-    } finally {
-      setLoadingAction(null);
-    }
-  };
-
   // 既有主要工具：校準與備份
   const backupCollections = { daily: ["daily_reports", "therapist_daily_reports"], settings: ["monthly_targets", "therapist_targets", "therapist_schedules", "therapists"], full: ["daily_reports", "therapist_daily_reports", "monthly_aggregated", "therapist_monthly_aggregated", "monthly_targets", "therapist_targets", "therapist_schedules", "therapists"] };
   const backupDocs = ["org_structure", "store_account_data", "manager_auth", "permissions", "trainer_auth", "audit_exclusions", "security_config", "read_tracker_config", "director_auth", "master_auth"];
@@ -5247,7 +4490,7 @@ export default function SystemMaintenance() {
 
         <section className="rounded-[2rem] border border-[#E8DDD0] bg-gradient-to-br from-[#FFFCF7] via-white to-[#FFF8EC] shadow-[0_22px_70px_rgba(120,90,40,0.06)] overflow-hidden">
           <button type="button" onClick={() => setShowCoreTools((prev) => !prev)} className="w-full p-6 flex flex-col md:flex-row md:items-center md:justify-between gap-3 text-left">
-            <SectionTitle eyebrow="Advanced Tools" title="進階維護工具" desc="一般人員只需要使用上方三個入口；需要資料救援、報表整理或流量排查時再展開。" icon={Settings} />
+            <SectionTitle eyebrow="需要時再開" title="進一步處理" desc="日常只需要使用上方四個主要入口；只有系統提示或已確認資料異常時，再展開這些工具。" icon={Settings} />
             <div className="inline-flex items-center gap-2 text-xs font-black text-stone-500 bg-white/80 border border-stone-200 rounded-2xl px-3 py-2 w-fit">
               {showCoreTools ? "收合工具" : "展開工具"}
               <ChevronDown size={14} className={`transition-transform ${showCoreTools ? "rotate-180" : ""}`} />
@@ -5375,9 +4618,9 @@ export default function SystemMaintenance() {
             )}
             <ToolRow
               icon={Activity}
-              title="業績推估模型監控"
-              desc="唯讀查看目前品牌 Projection Model 的版本、來源月份、V2 Phase reliability 與最近重建資訊。按下重新整理才做 1 次 projection_models/current point read；不建立 listener、不掃 Raw、不修改模型。"
-              badge="Read Only"
+              title="業績推估功能狀態"
+              desc="確認目前品牌的業績推估功能是否正常。只有按下重新整理時才讀取 1 份狀態資料；不會修改業績或推估結果。"
+              badge="只讀"
               tone={getProjectionObservabilityTone(projectionObservabilityState?.data?.status)}
             >
               <BeautyButton
@@ -5394,7 +4637,7 @@ export default function SystemMaintenance() {
 
             {projectionObservabilityState.status === "idle" && (
               <div className="rounded-2xl border border-stone-100 bg-white/70 px-4 py-3 text-[11px] font-bold text-stone-500 leading-relaxed">
-                此區預設不讀 Firestore。需要查看時再按「重新整理模型狀態」。本批只做模型可觀測性；預估準確率 checkpoint / 月底成績單會由下一個 Accuracy Tracking 批次建立 Backend summary 後再接入。
+                此區平常不會自動讀取資料；需要確認推估功能狀態時再按「重新整理模型狀態」。推估結果與準確度請到「智慧推估」查看。
               </div>
             )}
 
@@ -5506,555 +4749,12 @@ export default function SystemMaintenance() {
             })()}
 
 
-            <ToolRow
-              icon={BarChart3}
-              title="業績推估準確度"
-              desc="查看指定月份的單月追蹤，以及可自行選擇期間的歷史推估比較。單月查詢只讀 1 份月份紀錄；歷史比較按年度讀取小型摘要，不掃描日報。"
-              badge="單月 1 筆｜歷史每年 1 筆"
-              tone={getProjectionObservabilityTone(projectionAccuracyState?.data?.status)}
-            >
-              <div className="flex items-center gap-2 rounded-2xl border border-stone-100 bg-white/80 px-3 h-11">
-                <Calendar size={14} className="text-stone-400" />
-                <SmartMonthPicker
-                  value={projectionAccuracyMonth}
-                  maxMonth={getTaipeiProjectionYearMonth()}
-                  onChange={(month) => {
-                    projectionAccuracyRequestSeq.current += 1;
-                    setLoadingAction((current) => (
-                      current === "projectionAccuracyObservability" ? null : current
-                    ));
-                    setProjectionAccuracyMonth(month);
-                    setProjectionAccuracyState({
-                      brandId: "",
-                      yearMonth: "",
-                      status: "idle",
-                      data: null,
-                      error: null,
-                      loadedAtText: "",
-                    });
-                  }}
-                  align="right"
-                  buttonClassName="!h-9 !min-w-[150px] !border-0 !bg-transparent !px-0 !py-0 !text-xs !shadow-none hover:!bg-transparent"
-                />
-              </div>
-              <BeautyButton
-                onClick={handleLoadProjectionAccuracyObservability}
-                disabled={loadingAction !== null || !projectionAccuracyMonth}
-                variant="primary"
-              >
-                {loadingAction === "projectionAccuracyObservability"
-                  ? <Loader2 size={14} className="animate-spin" />
-                  : <Eye size={14} />}
-                查看單月結果
-              </BeautyButton>
-            </ToolRow>
-
-            {projectionAccuracyState.status === "idle" && (
-              <div className="rounded-2xl border border-stone-100 bg-white/70 px-4 py-3 text-[11px] font-bold text-stone-500 leading-relaxed">
-                單月結果預設不讀資料；選擇月份後按「查看單月結果」才讀取 1 份月份紀錄。歷史比較只使用已完成的驗證摘要，不會重新掃描日報。
-              </div>
-            )}
-
-            {projectionAccuracyState.status === "error" && (
-              <div className="rounded-2xl border border-rose-100 bg-rose-50/40 px-4 py-3 text-[11px] font-bold text-rose-600 leading-relaxed">
-                讀取失敗：{projectionAccuracyState.error || "未知錯誤"}
-              </div>
-            )}
-
-            {projectionAccuracyState.status === "ready" && projectionAccuracyState.data && (() => {
-              const data = projectionAccuracyState.data;
-              const statusTone = data.status === "healthy"
-                ? "text-emerald-700 border-emerald-100 bg-emerald-50"
-                : data.status === "error"
-                  ? "text-rose-600 border-rose-100 bg-rose-50"
-                  : "text-[#9A6A24] border-amber-100 bg-amber-50";
-              const formatPct = (value) => (
-                typeof value === "number" && Number.isFinite(value)
-                  ? `${value.toFixed(2)}%`
-                  : "N/A"
-              );
-              const formatMoney = (value) => (
-                typeof value === "number" && Number.isFinite(value)
-                  ? `$${Math.round(value).toLocaleString()}`
-                  : "N/A"
-              );
-              const methodLabel = (key) => PROJECTION_ACCURACY_METHOD_LABELS[key] || key;
-              const renderMetricScore = (metricKey, label) => {
-                const comparison = data.metrics?.[metricKey] || {};
-                const methods = comparison.methods || {};
-                const bestMethods = Array.isArray(comparison.bestMethods) ? comparison.bestMethods : [];
-
-                return (
-                  <div className="rounded-[1.35rem] border border-stone-100 bg-white p-3">
-                    <div className="flex flex-wrap items-center justify-between gap-2">
-                      <div>
-                        <p className="text-xs font-black text-stone-800">{label}</p>
-                        <p className="mt-0.5 text-[10px] font-bold text-stone-400">
-                          準確度越高，代表整體越接近月底實際業績
-                        </p>
-                      </div>
-                      {data.v2Expected && (
-                        <span className="px-2 py-1 rounded-full border border-blue-100 bg-blue-50 text-blue-600 text-[10px] font-black">
-                          智慧校正實際套用：{Number(data.v2AppliedCheckpointCount?.[metricKey] || 0)} 個時間點
-                        </span>
-                      )}
-                    </div>
-                    <div className="mt-3 grid grid-cols-1 sm:grid-cols-3 gap-2">
-                      {["effective", "shadowV1", "currentPace"].map((methodKey) => {
-                        const score = methods[methodKey] || {};
-                        const isBest = bestMethods.includes(methodKey);
-                        const accuracyPct = getProjectionAccuracyDisplayPct(score.wapePct);
-                        return (
-                          <div
-                            key={`${metricKey}_${methodKey}`}
-                            className={`rounded-2xl border p-3 ${
-                              isBest
-                                ? "border-emerald-100 bg-emerald-50/65"
-                                : "border-stone-100 bg-stone-50/60"
-                            }`}
-                          >
-                            <div className="flex items-center justify-between gap-2">
-                              <p className="text-[10px] font-black text-stone-500">{methodLabel(methodKey)}</p>
-                              {isBest && (
-                                <span className="px-2 py-0.5 rounded-full border border-emerald-100 bg-white text-emerald-700 text-[9px] font-black">
-                                  最接近實際
-                                </span>
-                              )}
-                            </div>
-                            <p className={`mt-1 text-lg font-black ${isBest ? "text-emerald-700" : "text-stone-800"}`}>
-                              {formatPct(accuracyPct)}
-                            </p>
-                            <div className="mt-1 flex flex-wrap items-center justify-between gap-2 text-[10px] font-bold text-stone-400">
-                              <span>{describeProjectionBias(score.biasPct)}</span>
-                              <span>驗證 {Number(score.count || 0)} 次</span>
-                            </div>
-                          </div>
-                        );
-                      })}
-                    </div>
-                  </div>
-                );
-              };
-
-              return (
-                <div className="rounded-[1.5rem] border border-stone-100 bg-white/90 p-4 space-y-4">
-                  <div className="flex flex-col lg:flex-row lg:items-center lg:justify-between gap-3">
-                    <div>
-                      <div className="flex items-center gap-2 flex-wrap">
-                        <p className="text-sm font-black text-stone-800">
-                          {brandLabel}｜{data.yearMonth || projectionAccuracyMonth} 單月推估驗證
-                        </p>
-                        <span className={`px-2.5 py-1 rounded-full border text-[10px] font-black ${statusTone}`}>
-                          {data.statusLabel}
-                        </span>
-                        <span className="px-2.5 py-1 rounded-full border border-stone-100 bg-stone-50 text-stone-500 text-[10px] font-black">
-                          {data.v2Expected ? "已啟用智慧校正" : "使用標準推估"}
-                        </span>
-                      </div>
-                      <p className="mt-1 text-[11px] font-bold text-stone-400">
-                        {data.statusDetail || "目前沒有額外狀態說明"}
-                      </p>
-                    </div>
-                    <p className="text-[10px] font-black text-stone-400">
-                      本次讀取：1 筆｜{projectionAccuracyState.loadedAtText || "-"}
-                    </p>
-                  </div>
-
-                  <div className="grid grid-cols-2 lg:grid-cols-4 gap-2">
-                    {[
-                      ["已累積驗證時間點", `${Number(data.checkpointCount || 0)}/${Number(data.expectedCheckpointCount || 6)}`],
-                      ["月底結果", data.scoringAvailable ? "已完成" : (data.exists ? "尚未完成" : "沒有當時紀錄")],
-                      ["驗證版本", data.scoringAvailable ? `第 ${Number(data.scoreRevision || 0)} 版` : "-"],
-                      ["推估方式", data.v2Expected ? "智慧校正" : "標準推估"],
-                    ].map(([label, value]) => (
-                      <div key={label} className="rounded-2xl border border-stone-100 bg-stone-50/60 p-3">
-                        <p className="text-[10px] font-black text-stone-400">{label}</p>
-                        <p className="mt-1 text-xs font-black text-stone-700 break-words">{value}</p>
-                      </div>
-                    ))}
-                  </div>
-
-                  {data.checkpointKeys?.length > 0 && (
-                    <div className="flex flex-wrap gap-1.5">
-                      {data.checkpointKeys.map((key) => (
-                        <span key={key} className="px-2.5 py-1 rounded-full border border-amber-100 bg-amber-50/70 text-[#9A6A24] text-[10px] font-black">
-                          {Number(key.replace("day", ""))} 日
-                        </span>
-                      ))}
-                    </div>
-                  )}
-
-                  {!data.scoringAvailable ? (
-                    <div className="rounded-2xl border border-amber-100 bg-amber-50/35 px-4 py-3 text-[11px] font-bold text-[#8A6128] leading-relaxed">
-                      {!data.exists && data.yearMonth !== data.currentYearMonth
-                        ? "此月份沒有當時保存的單月追蹤紀錄；若有完整歷史驗證，可直接查看下方的歷史推估比較。"
-                        : "目前只顯示已保存的驗證時間點。月底正式業績完成前，系統不會提前產生準確度結果，也不會在瀏覽器自行推算。"}
-                    </div>
-                  ) : (
-                    <>
-                      <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
-                        <div className="rounded-2xl border border-stone-100 bg-stone-50/60 p-3">
-                          <p className="text-[10px] font-black text-stone-400">月底實際業績｜現金</p>
-                          <p className="mt-1 text-base font-black text-stone-800">{formatMoney(data.finalActual?.cash?.value)}</p>
-                        </div>
-                        <div className="rounded-2xl border border-stone-100 bg-stone-50/60 p-3">
-                          <p className="text-[10px] font-black text-stone-400">月底實際業績｜權責</p>
-                          <p className="mt-1 text-base font-black text-stone-800">{formatMoney(data.finalActual?.accrual?.value)}</p>
-                        </div>
-                      </div>
-
-                      <div className="grid grid-cols-1 xl:grid-cols-2 gap-2">
-                        {renderMetricScore("cash", "現金推估比較")}
-                        {renderMetricScore("accrual", "權責推估比較")}
-                      </div>
-
-                      {data.checkpointRows?.length > 0 && (
-                        <div>
-                          <div className="flex flex-wrap items-end justify-between gap-2">
-                            <div>
-                              <p className="text-xs font-black text-stone-700">各時間點比較</p>
-                              <p className="mt-0.5 text-[10px] font-bold text-stone-400">
-                                顯示當時已保存的推估與月底實際業績差距；不在前端重新計算。
-                              </p>
-                            </div>
-                            <p className="text-[10px] font-black text-stone-400">
-                              完成時間：{data.scoredAtText || "-"}
-                            </p>
-                          </div>
-                          <div className="mt-2 grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-2">
-                            {data.checkpointRows.map((row) => (
-                              <div key={row.checkpointKey} className="rounded-2xl border border-stone-100 bg-stone-50/55 p-3">
-                                <div className="flex items-center justify-between gap-2">
-                                  <p className="text-[11px] font-black text-stone-700">
-                                    {Number(row.checkpointKey.replace("day", ""))} 日
-                                  </p>
-                                  <span className="text-[9px] font-black text-stone-400">{row.cutoffDate || "-"}</span>
-                                </div>
-                                <div className="mt-2 grid grid-cols-2 gap-2 text-[10px]">
-                                  {[
-                                    ["現金", row.cash, row.phaseApplied?.cash],
-                                    ["權責", row.accrual, row.phaseApplied?.accrual],
-                                  ].map(([label, metric, phaseApplied]) => (
-                                    <div key={`${row.checkpointKey}_${label}`} className="rounded-xl border border-white bg-white/80 p-2">
-                                      <div className="flex items-center justify-between gap-1">
-                                        <p className="font-black text-stone-600">{label}</p>
-                                        <span className="font-black text-stone-400">
-                                          {data.v2Expected ? (phaseApplied ? "智慧校正" : "標準推估") : "標準推估"}
-                                        </span>
-                                      </div>
-                                      <p className="mt-1 font-bold text-stone-500">目前方式 {formatPct(metric?.effective?.accuracyPctDisplay)}</p>
-                                      <p className="font-bold text-stone-400">原本方式 {formatPct(metric?.shadowV1?.accuracyPctDisplay)}</p>
-                                      <p className="font-bold text-stone-400">依進度 {formatPct(metric?.currentPace?.accuracyPctDisplay)}</p>
-                                    </div>
-                                  ))}
-                                </div>
-                              </div>
-                            ))}
-                          </div>
-                        </div>
-                      )}
-                    </>
-                  )}
-
-                  <div className="rounded-2xl border border-stone-100 bg-stone-50/50 px-3 py-2 text-[10px] font-bold text-stone-400">
-                    此區只顯示正式保存的月份驗證結果，不寫入 Firestore、不修改歷史日報，也不調整推估公式。
-                  </div>
-                </div>
-              );
-            })()}
-
-            {(() => {
-              const liveHistoryDocuments = Object.values(projectionHistoryDocuments || {}).filter(Boolean);
-              const history = buildProjectionHistoricalAccuracyComparison({
-                brandId: currentBrand?.id || "cyj",
-                liveHistoryDocuments,
-                ...(projectionHistoryMode === "custom"
-                  ? {
-                      startMonth: projectionHistoryStartMonth,
-                      endMonth: projectionHistoryEndMonth,
-                    }
-                  : {}),
-              });
-              const formatPct = (value) => (
-                typeof value === "number" && Number.isFinite(value)
-                  ? `${value.toFixed(2)}%`
-                  : "N/A"
-              );
-              const methodLabel = (key) => PROJECTION_HISTORICAL_METHOD_LABELS[key] || key;
-              const metricKey = projectionHistoryMetric === "accrual" ? "accrual" : "cash";
-              const metricLabel = metricKey === "cash" ? "現金業績" : "權責業績";
-              const metric = history.metrics?.[metricKey] || {};
-              const overall = metric.overall || {};
-              const canUseRollingHistory = ["cyj", "anniu"].includes(String(currentBrand?.id || "").toLowerCase());
-
-              const switchHistoryMode = (nextMode) => {
-                setProjectionHistoryMode(nextMode);
-                setProjectionHistoryDetailsOpen(false);
-                if (nextMode === "custom") {
-                  const months = history.targetMonths || history.availableMonths || [];
-                  const available = history.availableMonths || [];
-                  setProjectionHistoryStartMonth(months[0] || available[0] || "");
-                  setProjectionHistoryEndMonth(months[months.length - 1] || available[available.length - 1] || "");
-                }
-              };
-
-              if (!canUseRollingHistory) {
-                return (
-                  <div className="rounded-[1.5rem] border border-stone-100 bg-white/80 p-4">
-                    <div className="flex items-center gap-2 flex-wrap">
-                      <p className="text-sm font-black text-stone-800">歷史推估驗證</p>
-                      <span className="px-2.5 py-1 rounded-full border border-stone-100 bg-stone-50 text-stone-500 text-[10px] font-black">
-                        使用標準推估
-                      </span>
-                    </div>
-                    <p className="mt-2 text-[11px] font-bold text-stone-500 leading-relaxed">
-                      {history.statusDetail}
-                    </p>
-                  </div>
-                );
-              }
-
-              return (
-                <div className="rounded-[1.5rem] border border-[#E8DDD0] bg-[#FFFDF9] p-4 space-y-3">
-                  <div className="flex flex-col xl:flex-row xl:items-start xl:justify-between gap-3">
-                    <div>
-                      <div className="flex items-center gap-2 flex-wrap">
-                        <p className="text-sm font-black text-stone-800">
-                          {brandLabel}｜歷史推估驗證
-                        </p>
-                        {history.monthRangeLabel && (
-                          <span className="px-2.5 py-1 rounded-full border border-emerald-100 bg-emerald-50 text-emerald-700 text-[10px] font-black">
-                            {history.monthRangeLabel}
-                          </span>
-                        )}
-                        <span className="px-2.5 py-1 rounded-full border border-stone-100 bg-white text-stone-500 text-[10px] font-black">
-                          可比較 {history.trustedMonthCount || 0} 個月
-                        </span>
-                      </div>
-                      <p className="mt-1 text-[11px] font-bold text-stone-500 leading-relaxed">
-                        {history.statusDetail}
-                      </p>
-                    </div>
-                    <p className="text-[10px] font-black text-stone-400">
-                      本工作階段同步：{Number(projectionHistoryLoadState.sessionReadCount || 0)} 筆
-                    </p>
-                  </div>
-
-                  <div className="rounded-2xl border border-stone-100 bg-white/80 p-3">
-                    <div className="flex flex-col lg:flex-row lg:items-end gap-2">
-                      <label className="flex-1 min-w-[180px]">
-                        <span className="block mb-1 text-[10px] font-black text-stone-400">比較期間</span>
-                        <select
-                          value={projectionHistoryMode}
-                          onChange={(e) => switchHistoryMode(e.target.value)}
-                          className="w-full h-10 rounded-xl border border-stone-200 bg-white px-3 text-xs font-black text-stone-700 outline-none"
-                        >
-                          <option value="latest4">最近 4 個完整月份</option>
-                          <option value="custom">自行選擇月份區間</option>
-                        </select>
-                      </label>
-
-                      {projectionHistoryMode === "custom" && (
-                        <>
-                          <label className="min-w-[150px]">
-                            <span className="block mb-1 text-[10px] font-black text-stone-400">開始月份</span>
-                            <SmartMonthPicker
-                              value={projectionHistoryStartMonth}
-                              maxMonth={getTaipeiProjectionYearMonth()}
-                              onChange={(month) => {
-                                setProjectionHistoryStartMonth(month);
-                                setProjectionHistoryDetailsOpen(false);
-                              }}
-                              allowClear
-                              align="left"
-                              className="w-full md:w-full"
-                              buttonClassName="!h-10 !w-full !min-w-[150px] !text-xs md:!w-full"
-                            />
-                          </label>
-                          <label className="min-w-[150px]">
-                            <span className="block mb-1 text-[10px] font-black text-stone-400">結束月份</span>
-                            <SmartMonthPicker
-                              value={projectionHistoryEndMonth}
-                              maxMonth={getTaipeiProjectionYearMonth()}
-                              onChange={(month) => {
-                                setProjectionHistoryEndMonth(month);
-                                setProjectionHistoryDetailsOpen(false);
-                              }}
-                              allowClear
-                              align="right"
-                              className="w-full md:w-full"
-                              buttonClassName="!h-10 !w-full !min-w-[150px] !text-xs md:!w-full"
-                            />
-                          </label>
-                        </>
-                      )}
-
-                      <BeautyButton
-                        onClick={() => handleApplyProjectionHistoryRange({ force: false })}
-                        disabled={projectionHistoryLoadState.status === "loading"}
-                        variant="secondary"
-                      >
-                        {projectionHistoryLoadState.status === "loading"
-                          ? <Loader2 size={14} className="animate-spin" />
-                          : <RefreshCw size={14} />}
-                        套用區間
-                      </BeautyButton>
-                      <BeautyButton
-                        onClick={() => handleApplyProjectionHistoryRange({ force: true })}
-                        disabled={projectionHistoryLoadState.status === "loading"}
-                        variant="ghost"
-                      >
-                        <RefreshCw size={14} />
-                        更新最新資料
-                      </BeautyButton>
-                    </div>
-                    {projectionHistoryLoadState.status === "error" && (
-                      <p className="mt-2 text-[10px] font-bold text-rose-500">
-                        部分歷史資料同步失敗：{projectionHistoryLoadState.error || "請稍後再試"}
-                      </p>
-                    )}
-                  </div>
-
-                  {!history.available ? (
-                    <div className="rounded-2xl border border-amber-100 bg-amber-50/35 px-4 py-3 text-[11px] font-bold text-[#8A6128] leading-relaxed">
-                      {history.statusDetail}
-                    </div>
-                  ) : (
-                    <>
-                      <div className="inline-flex w-full sm:w-auto rounded-2xl border border-stone-100 bg-white p-1">
-                        {[
-                          ["cash", "現金業績"],
-                          ["accrual", "權責業績"],
-                        ].map(([key, label]) => (
-                          <button
-                            key={key}
-                            type="button"
-                            onClick={() => {
-                              setProjectionHistoryMetric(key);
-                              setProjectionHistoryDetailsOpen(false);
-                            }}
-                            className={`flex-1 sm:flex-none px-4 py-2 rounded-xl text-xs font-black transition-colors ${
-                              metricKey === key
-                                ? "bg-[#4F3F33] text-white"
-                                : "text-stone-500 hover:bg-stone-50"
-                            }`}
-                          >
-                            {label}
-                          </button>
-                        ))}
-                      </div>
-
-                      <div>
-                        <div className="flex items-end justify-between gap-2 flex-wrap">
-                          <div>
-                            <p className="text-xs font-black text-stone-800">{metricLabel}｜整體比較</p>
-                            <p className="mt-0.5 text-[10px] font-bold text-stone-400">
-                              準確度越高，代表越接近月底實際業績
-                            </p>
-                          </div>
-                          <p className="text-[10px] font-black text-stone-400">
-                            歷史回看 {history.historicalBacktestMonthCount || 0} 個月｜正式累積 {history.liveMonthCount || 0} 個月
-                          </p>
-                        </div>
-                        <div className="mt-2 grid grid-cols-1 sm:grid-cols-3 gap-2">
-                          {["effective", "shadowV1", "currentPace"].map((methodKey) => {
-                            const score = overall.methods?.[methodKey] || {};
-                            const isBest = overall.bestMethods?.includes(methodKey);
-                            return (
-                              <div
-                                key={`${metricKey}_history_${methodKey}`}
-                                className={`rounded-2xl border p-3 ${
-                                  isBest
-                                    ? "border-emerald-100 bg-emerald-50/65"
-                                    : "border-stone-100 bg-white"
-                                }`}
-                              >
-                                <div className="flex items-center justify-between gap-2">
-                                  <p className="text-[10px] font-black text-stone-500">{methodLabel(methodKey)}</p>
-                                  {isBest && (
-                                    <span className="px-2 py-0.5 rounded-full border border-emerald-100 bg-white text-emerald-700 text-[9px] font-black">
-                                      目前最佳
-                                    </span>
-                                  )}
-                                </div>
-                                <p className={`mt-1 text-lg font-black ${isBest ? "text-emerald-700" : "text-stone-800"}`}>
-                                  {formatPct(score.accuracyPct)}
-                                </p>
-                                <p className="mt-1 text-[10px] font-bold text-stone-400">
-                                  {score.tendencyLabel || "-"}
-                                </p>
-                              </div>
-                            );
-                          })}
-                        </div>
-                      </div>
-
-                      <div className="border-t border-stone-100 pt-3">
-                        <button
-                          type="button"
-                          onClick={() => setProjectionHistoryDetailsOpen((current) => !current)}
-                          className="w-full flex items-center justify-between gap-3 rounded-2xl border border-stone-100 bg-white px-4 py-3 text-left"
-                        >
-                          <div>
-                            <p className="text-xs font-black text-stone-700">各日期比較</p>
-                            <p className="mt-0.5 text-[10px] font-bold text-stone-400">
-                              需要時再展開 5 / 7 / 10 / 15 / 20 / 25 日的細節
-                            </p>
-                          </div>
-                          <ChevronDown
-                            size={16}
-                            className={`shrink-0 text-stone-400 transition-transform ${projectionHistoryDetailsOpen ? "rotate-180" : ""}`}
-                          />
-                        </button>
-
-                        {projectionHistoryDetailsOpen && (
-                          <div className="mt-2 overflow-x-auto rounded-2xl border border-stone-100 bg-white">
-                            <div className="min-w-[430px]">
-                              <div className="grid grid-cols-[64px_repeat(3,minmax(105px,1fr))] gap-1 border-b border-stone-100 bg-stone-50/70 px-3 py-2 text-[9px] font-black text-stone-400">
-                                <span>時間</span>
-                                <span>智慧校正</span>
-                                <span>原本方式</span>
-                                <span>依目前進度</span>
-                              </div>
-                              {(metric.checkpoints || []).map((row) => (
-                                <div
-                                  key={`${metricKey}_${row.checkpointKey}`}
-                                  className="grid grid-cols-[64px_repeat(3,minmax(105px,1fr))] gap-1 border-b last:border-b-0 border-stone-100 px-3 py-2 text-[10px] font-bold"
-                                >
-                                  <span className="font-black text-stone-600">{row.label}</span>
-                                  {["effective", "shadowV1", "currentPace"].map((methodKey) => {
-                                    const score = row.methods?.[methodKey] || {};
-                                    const isBest = row.bestMethods?.includes(methodKey);
-                                    return (
-                                      <span
-                                        key={`${row.checkpointKey}_${methodKey}`}
-                                        className={isBest ? "font-black text-emerald-700" : "text-stone-500"}
-                                      >
-                                        {formatPct(score.accuracyPct)}{isBest ? " ✓" : ""}
-                                      </span>
-                                    );
-                                  })}
-                                </div>
-                              ))}
-                            </div>
-                          </div>
-                        )}
-                      </div>
-                    </>
-                  )}
-
-                  <div className="rounded-2xl border border-stone-100 bg-white/70 px-3 py-2 text-[10px] font-bold text-stone-400 leading-relaxed">
-                    歷史回看資料與正式累積資料會分開保存，只合併做畫面比較；不會補寫成過去的單月追蹤紀錄，也不會修改推估公式。
-                  </div>
-                </div>
-              );
-            })()}
 
             <ToolRow
               icon={Database}
-              title="核心資料一致性健檢"
-              desc="跨 monthly_targets、店家／管理師日報、月彙總、人員主檔與 org_structure，以正規化邏輯鍵找出重複、衝突與 Raw / Summary 不一致。可切換單月或全年；V1 僅檢查，不修改任何資料。"
-              badge="Audit Only"
+              title="資料一致性檢查"
+              desc="比對目標、日報、月資料、人員與組織資料是否一致。可檢查單月或全年；只做檢查，不會修改資料。"
+              badge="只讀檢查"
               tone="amber"
             >
               <div className="inline-flex items-center rounded-2xl border border-stone-100 bg-white/80 p-1 h-11">
@@ -6262,14 +4962,14 @@ export default function SystemMaintenance() {
               <BeautyButton onClick={handleRunClosingCheck} disabled={loadingAction !== null} variant="primary">{loadingAction === "closingCheck" ? <Loader2 size={14} className="animate-spin" /> : <Eye size={14} />}檢查月結</BeautyButton>
             </ToolRow>
             {closingReport && <div className="rounded-[1.5rem] border border-amber-100 bg-amber-50/30 p-4 space-y-3"><div className="flex flex-col md:flex-row md:items-center md:justify-between gap-2"><p className="text-sm font-black text-stone-800">{closingReport.month} 月結前檢查｜{closingReport.readiness || "檢查完成"}</p><p className="text-[11px] font-bold text-stone-400">檢查 {closingReport.checkedDays} 天｜店家 {closingReport.stores}｜排除 {closingReport.excludedStoreCount || 0}｜在職管理師 {closingReport.activeTherapists}</p></div><div className="grid grid-cols-1 md:grid-cols-5 gap-2">{closingReport.warnings.map((item)=><div key={item.label} className="bg-white/90 border border-stone-100 rounded-2xl p-3"><p className="text-[11px] font-black text-stone-400">{item.label}</p><p className={`mt-1 text-xl font-black ${item.neutral ? "text-stone-700" : item.count ? "text-[#B7863D]" : "text-emerald-600"}`}>{item.count.toLocaleString()}</p></div>)}</div></div>}
-            <ToolRow icon={Play} title="月度數據重新校準" desc="重新掃描指定月份日報並修正彙整表，適合數字對帳或月結資料異常時使用。" badge="建議保留" tone="emerald">
+            <ToolRow icon={Play} title="重新整理月份數據" desc="當原始日報已確認正確，但月份彙整仍不一致時使用。會重新整理指定月份的彙整資料。" badge="進階處理" tone="emerald">
               <div className="flex items-center gap-2 rounded-2xl border border-stone-100 bg-white/70 px-3 h-11"><Calendar size={14} className="text-stone-400" /><SmartMonthPicker value={calMonth} onChange={setCalMonth} align="right" buttonClassName="!h-9 !min-w-[140px] !border-0 !bg-transparent !px-0 !py-0 !text-xs !shadow-none hover:!bg-transparent" /></div>
-              <BeautyButton onClick={handleCalibrateData} disabled={loadingAction !== null} variant="primary">{loadingAction === "calibrate" ? <Loader2 size={14} className="animate-spin" /> : <Play size={14} />}啟動校準</BeautyButton>
+              <BeautyButton onClick={handleCalibrateData} disabled={loadingAction !== null} variant="primary">{loadingAction === "calibrate" ? <Loader2 size={14} className="animate-spin" /> : <Play size={14} />}重新整理</BeautyButton>
             </ToolRow>
-            <ToolRow icon={RefreshCw} title="待重新校準月份" desc="只保留需要重建的歷史月份；本月使用即時明細，不應長期累積 pending。" badge={recalcQueueTotal ? `${recalcQueueTotal.toLocaleString()} 筆待處理` : "Summary 前置"} tone="amber">
+            <ToolRow icon={RefreshCw} title="等待整理的月份" desc="查看有哪些歷史月份仍等待系統整理。本月使用即時資料，不應長期留在等待清單。" badge={recalcQueueTotal ? `${recalcQueueTotal.toLocaleString()} 筆待處理` : "Summary 前置"} tone="amber">
               <BeautyButton onClick={handleLoadRecalcQueue} disabled={loadingAction !== null} variant="secondary">
                 {loadingAction === "loadRecalcQueue" ? <Loader2 size={14} className="animate-spin" /> : <Eye size={14} />}
-                載入待重算
+                載入等待清單
               </BeautyButton>
               <BeautyButton onClick={handleCleanupRecalcQueueNoise} disabled={loadingAction !== null} variant="secondary">
                 {loadingAction === "cleanupRecalcQueue" ? <Loader2 size={14} className="animate-spin" /> : <Scissors size={14} />}
@@ -6301,7 +5001,7 @@ export default function SystemMaintenance() {
                 <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-2">
                   <div>
                     <p className="text-sm font-black text-stone-800">待重新校準月份</p>
-                    <p className="text-[11px] font-bold text-stone-400 mt-1">歷史月份會重建 Summary；本月、未來與格式異常資料應使用「整理無效待辦」移出清單。</p>
+                    <p className="text-[11px] font-bold text-stone-400 mt-1">歷史月份會重新整理報表；本月、未來與格式異常資料應使用「整理無效待辦」移出清單。</p>
                   </div>
                   <p className="text-[11px] font-bold text-stone-400">共 {recalcQueueTotal.toLocaleString()} 筆 pending</p>
                 </div>
@@ -6377,224 +5077,14 @@ export default function SystemMaintenance() {
                 月結前校準
               </BeautyButton>
             </ToolRow>
-            <ToolRow icon={Target} title="一鍵補整理年度目標" desc="過渡工具：將今年 1～12 月店家目標整理成輕量資料，供營運總覽後續降低讀取量使用。" badge="過渡工具" tone="amber">
-              <div className="flex items-center gap-2 rounded-2xl border border-stone-100 bg-white/70 px-3 h-11">
-                <Calendar size={14} className="text-stone-400" />
-                <input
-                  type="number"
-                  min="2020"
-                  max="2099"
-                  value={targetSummaryYear}
-                  onChange={(e) => setTargetSummaryYear(e.target.value)}
-                  className="bg-transparent text-xs font-black text-stone-700 outline-none w-20"
-                />
-              </div>
-              <BeautyButton onClick={handleRebuildYearlyTargetSummary} disabled={loadingAction !== null} variant="primary">
-                {loadingAction === "rebuildYearlyTargetSummary" ? <Loader2 size={14} className="animate-spin" /> : <Target size={14} />}
-                一鍵補整理
-              </BeautyButton>
-            </ToolRow>
-            {targetSummaryReport && (
-              <div className="rounded-[1.5rem] border border-amber-100 bg-amber-50/30 p-4 space-y-3">
-                <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-2">
-                  <div>
-                    <p className="text-sm font-black text-stone-800">{targetSummaryReport.year} 年度目標補整理完成</p>
-                    <p className="text-[11px] font-bold text-stone-400 mt-1">
-                      品牌：{targetSummaryReport.brandLabel}｜寫入 {targetSummaryReport.writtenDocs} 份月份資料｜整理 {Number(targetSummaryReport.totalTargets || 0).toLocaleString()} 筆店家目標｜來源 {Number(targetSummaryReport.sourceDocs || 0).toLocaleString()} 筆
-                    </p>
-                  </div>
-                  <span className="px-3 py-1.5 rounded-full bg-white text-[#B7863D] border border-amber-100 text-[11px] font-black">不修改原始目標</span>
-                </div>
-                <div className="grid grid-cols-2 md:grid-cols-4 xl:grid-cols-6 gap-2">
-                  {(targetSummaryReport.rows || []).map((row) => (
-                    <div key={row.month} className="rounded-2xl border border-stone-100 bg-white/90 p-3">
-                      <p className="text-[11px] font-black text-stone-400">{row.month}</p>
-                      <p className="mt-1 text-lg font-black text-[#B7863D]">{Number(row.storeCount || 0).toLocaleString()}</p>
-                      <p className="mt-0.5 text-[10px] font-bold text-stone-400">店家目標</p>
-                    </div>
-                  ))}
-                </div>
-              </div>
-            )}
-            <ToolRow icon={Shield} title="Production：Target Coverage 全現有月份稽核" desc="只讀 monthly_targets_summary + store_lifecycle，包含歷史、當月與未來已存在 Summary；分類可安全補 Coverage metadata 的月份，不掃 Raw monthly_targets、不寫入任何資料。" badge="Audit Only｜0 Writes" tone="emerald">
-              <div className="flex items-center gap-2 rounded-2xl border border-stone-100 bg-white/70 px-3 h-11 min-w-[220px]">
-                <Shield size={14} className="text-stone-400 shrink-0" />
-                <input
-                  type="password"
-                  value={targetCoverageAuditPassword}
-                  onChange={(e) => setTargetCoverageAuditPassword(e.target.value)}
-                  autoComplete="current-password"
-                  placeholder="最高管理者登入密碼"
-                  disabled={!canRunTargetCoverageAudit || loadingAction !== null}
-                  className="bg-transparent text-xs font-black text-stone-700 outline-none min-w-0 w-full placeholder:text-stone-300 disabled:opacity-50"
-                />
-              </div>
-              <BeautyButton onClick={handleAuditHistoricalTargetCoverage} disabled={loadingAction !== null || !canRunTargetCoverageAudit} variant="primary">
-                {loadingAction === "targetCoverageAudit" ? <Loader2 size={14} className="animate-spin" /> : <Eye size={14} />}
-                執行只讀稽核
-              </BeautyButton>
-            </ToolRow>
-            {!canRunTargetCoverageAudit && (
-              <div className="rounded-2xl border border-stone-100 bg-stone-50/70 px-4 py-3 text-[11px] font-bold text-stone-500">
-                此工具涉及 Production Target Authority，只開放最高管理者在已信任裝置執行。
-              </div>
-            )}
-            {targetCoverageAuditReport && (
-              <div className="rounded-[1.75rem] border border-emerald-100 bg-emerald-50/20 p-5 space-y-4">
-                <div className="flex flex-col xl:flex-row xl:items-start xl:justify-between gap-3">
-                  <div>
-                    <div className="flex items-center gap-2 flex-wrap">
-                      <p className="text-sm font-black text-stone-800">{brandLabel}｜Existing Summary Target Coverage Audit</p>
-                      <span className="px-2.5 py-1 rounded-full border border-emerald-100 bg-white text-[10px] font-black text-emerald-700">READ ONLY</span>
-                    </div>
-                    <p className="mt-1 text-[11px] font-bold text-stone-400 leading-relaxed">
-                      Lifecycle：{targetCoverageAuditReport.lifecycle?.datasetStatus || "-"}｜範圍：所有已存在 Summary 月份（含當月／未來）｜Audit：{targetCoverageAuditReport.auditVersion || "-"}｜{targetCoverageAuditReport.auditedAtText || "-"}
-                    </p>
-                  </div>
-                  <div className="rounded-2xl border border-stone-100 bg-white px-3 py-2 text-[10px] font-black text-stone-500 leading-relaxed">
-                    Estimated Reads {Number(targetCoverageAuditReport.readEstimate?.estimatedFirestoreReads || 0).toLocaleString()}｜Raw Target Reads {Number(targetCoverageAuditReport.readEstimate?.rawMonthlyTargetsReads || 0)}｜Writes {Number(targetCoverageAuditReport.readEstimate?.firestoreWrites || 0)}
-                  </div>
-                </div>
-
-                <div className="grid grid-cols-2 md:grid-cols-3 xl:grid-cols-6 gap-2">
-                  {[
-                    ["總月份", targetCoverageAuditReport.summary?.totalMonths || 0, "text-stone-700"],
-                    ["已是 V1", targetCoverageAuditReport.summary?.counts?.ALREADY_V1 || 0, "text-emerald-700"],
-                    ["可安全補 Metadata", targetCoverageAuditReport.summary?.counts?.SUMMARY_BACKFILL_SAFE || 0, "text-blue-700"],
-                    ["需 Raw 重建", targetCoverageAuditReport.summary?.counts?.RAW_RECONSTRUCTION_REQUIRED || 0, "text-rose-600"],
-                    ["Lifecycle 未 READY", targetCoverageAuditReport.summary?.counts?.LIFECYCLE_NOT_READY || 0, "text-[#B7863D]"],
-                    ["Pre-system 排除", targetCoverageAuditReport.summary?.counts?.PRE_SYSTEM_SKIP || 0, "text-stone-500"],
-                  ].map(([label, value, tone]) => (
-                    <div key={label} className="rounded-2xl border border-stone-100 bg-white/95 p-3">
-                      <p className="text-[10px] font-black text-stone-400">{label}</p>
-                      <p className={`mt-1 text-lg font-black ${tone}`}>{Number(value || 0).toLocaleString()}</p>
-                    </div>
-                  ))}
-                </div>
-
-                <div className="space-y-2 max-h-[520px] overflow-y-auto pr-1">
-                  {(targetCoverageAuditReport.rows || []).map((row) => {
-                    const meta = getTargetCoverageAuditClassificationMeta(row.classification);
-                    return (
-                      <div key={`${row.brandId}_${row.yearMonth}`} className="rounded-2xl border border-stone-100 bg-white/95 p-4">
-                        <div className="flex flex-col lg:flex-row lg:items-start lg:justify-between gap-3">
-                          <div className="min-w-0">
-                            <div className="flex items-center gap-2 flex-wrap">
-                              <p className="text-sm font-black text-stone-800">{row.yearMonth || "月份格式異常"}</p>
-                              <span className={`px-2.5 py-1 rounded-full border text-[10px] font-black ${meta.className}`}>{meta.label}</span>
-                              {row.migrationWriteAllowed === true && <span className="px-2 py-1 rounded-full border border-blue-100 bg-blue-50 text-blue-700 text-[10px] font-black">Phase B Candidate</span>}
-                            </div>
-                            <p className="mt-1 text-[10px] font-bold text-stone-400 break-words">
-                              Reasons：{(row.reasonCodes || []).join("、") || "-"}
-                            </p>
-                          </div>
-                          <div className="text-[10px] font-black text-stone-400 shrink-0">
-                            Coverage：{row.targetCoverageVersion || "legacy"}
-                          </div>
-                        </div>
-
-                        {row.classification !== "PRE_SYSTEM_SKIP" && (
-                          <div className="grid grid-cols-2 md:grid-cols-4 xl:grid-cols-6 gap-2 mt-3">
-                            {[
-                              ["Summary Target Rows", row.summaryTargetRowCount],
-                              ["Store Count", `${row.declaredStoreCount ?? "-"} / ${row.calculatedStoreCount ?? "-"}`],
-                              ["Target Count", `${row.declaredTargetCount ?? "-"} / ${row.calculatedTargetCount ?? "-"}`],
-                              ["Cash Target", `${formatTargetCoverageAuditValue(row.storedCashTargetTotal)} / ${formatTargetCoverageAuditValue(row.calculatedCashTargetTotal)}`],
-                              ["Accrual Target", `${formatTargetCoverageAuditValue(row.storedAccrualTargetTotal)} / ${formatTargetCoverageAuditValue(row.calculatedAccrualTargetTotal)}`],
-                              ["Eligible Stores", row.eligibleStoreCount ?? "-"],
-                            ].map(([label, value]) => (
-                              <div key={label} className="rounded-xl border border-stone-100 bg-stone-50/60 p-2.5">
-                                <p className="text-[9px] font-black text-stone-400">{label}</p>
-                                <p className="mt-1 text-[11px] font-black text-stone-700 break-all">{value}</p>
-                              </div>
-                            ))}
-                          </div>
-                        )}
-
-                        {row.previewCoverage && (
-                          <p className="mt-3 text-[10px] font-bold text-stone-500 leading-relaxed">
-                            Preview：Cash {row.previewCoverage.cashConfiguredStoreCount}/{row.previewCoverage.eligibleStoreCount}（{row.previewCoverage.cashCoverageComplete ? "完整" : "不完整"}）｜Accrual {row.previewCoverage.accrualConfiguredStoreCount}/{row.previewCoverage.eligibleStoreCount}（{row.previewCoverage.accrualCoverageComplete ? "完整" : "不完整"}）
-                          </p>
-                        )}
-                      </div>
-                    );
-                  })}
-                </div>
-              </div>
-            )}
-            {targetCoverageAuditReport &&
-              String(targetCoverageAuditReport.brandId || "") === String(brandId || "") &&
-              Number(targetCoverageAuditReport.summary?.migrationCandidateMonths?.length || 0) > 0 && (
-                <ToolRow
-                  icon={Save}
-                  title="Production：補 Target Coverage Metadata"
-                  desc="只處理上方全現有月份 Audit 判定安全的月份（可含歷史／當月／未來既有 Summary）。Backend 會在單品牌 atomic transaction 重新讀取 Summary + Lifecycle 並再次驗證；任一月份失去安全條件時整批 0 Writes。"
-                  badge={`${Number(targetCoverageAuditReport.summary?.migrationCandidateMonths?.length || 0)} 個月份｜Metadata Only`}
-                  tone="emerald"
-                >
-                  <div className="flex items-center gap-2 rounded-2xl border border-stone-100 bg-white/70 px-3 h-11 min-w-[220px]">
-                    <Shield size={14} className="text-stone-400 shrink-0" />
-                    <input
-                      type="password"
-                      value={targetCoverageAuditPassword}
-                      onChange={(e) => setTargetCoverageAuditPassword(e.target.value)}
-                      autoComplete="current-password"
-                      placeholder="最高管理者登入密碼"
-                      disabled={!canRunTargetCoverageAudit || loadingAction !== null}
-                      className="bg-transparent text-xs font-black text-stone-700 outline-none min-w-0 w-full placeholder:text-stone-300 disabled:opacity-50"
-                    />
-                  </div>
-                  <BeautyButton
-                    onClick={handleMigrateHistoricalTargetCoverageMetadata}
-                    disabled={loadingAction !== null || !canRunTargetCoverageAudit}
-                    variant="primary"
-                  >
-                    {loadingAction === "targetCoverageMigration" ? <Loader2 size={14} className="animate-spin" /> : <Save size={14} />}
-                    補 {Number(targetCoverageAuditReport.summary?.migrationCandidateMonths?.length || 0)} 個月 Metadata
-                  </BeautyButton>
-                </ToolRow>
-              )}
-            {targetCoverageMigrationReport && (
-              <div className="rounded-[1.75rem] border border-blue-100 bg-blue-50/25 p-5 space-y-3">
-                <div className="flex flex-col xl:flex-row xl:items-start xl:justify-between gap-3">
-                  <div>
-                    <div className="flex items-center gap-2 flex-wrap">
-                      <p className="text-sm font-black text-stone-800">{brandLabel}｜Target Coverage Metadata Migration</p>
-                      <span className="px-2.5 py-1 rounded-full border border-blue-100 bg-white text-[10px] font-black text-blue-700">METADATA ONLY</span>
-                      {targetCoverageMigrationReport.allVerified === true && <span className="px-2.5 py-1 rounded-full border border-emerald-100 bg-emerald-50 text-[10px] font-black text-emerald-700">PERSISTED VERIFIED</span>}
-                    </div>
-                    <p className="mt-1 text-[11px] font-bold text-stone-400 leading-relaxed">
-                      Migration：{targetCoverageMigrationReport.migrationVersion || "-"}｜{targetCoverageMigrationReport.migratedAtText || "-"}
-                    </p>
-                  </div>
-                  <div className="rounded-2xl border border-stone-100 bg-white px-3 py-2 text-[10px] font-black text-stone-500 leading-relaxed">
-                    Minimum Reads {Number(targetCoverageMigrationReport.readEstimate?.minimumFirestoreReads || 0).toLocaleString()}｜Raw Target Reads {Number(targetCoverageMigrationReport.rawMonthlyTargetsReads || 0)}｜Writes {Number(targetCoverageMigrationReport.firestoreWrites || 0)}
-                  </div>
-                </div>
-                <div className="grid grid-cols-2 md:grid-cols-4 gap-2">
-                  {[
-                    ["Requested", targetCoverageMigrationReport.requestedMonths?.length || 0],
-                    ["Written", targetCoverageMigrationReport.writtenCount || 0],
-                    ["Already V1", targetCoverageMigrationReport.skippedCount || 0],
-                    ["Verified", (targetCoverageMigrationReport.persistedVerification || []).filter((row) => row.verified === true).length],
-                  ].map(([label, value]) => (
-                    <div key={label} className="rounded-2xl border border-stone-100 bg-white/95 p-3">
-                      <p className="text-[10px] font-black text-stone-400">{label}</p>
-                      <p className="mt-1 text-lg font-black text-stone-700">{Number(value || 0).toLocaleString()}</p>
-                    </div>
-                  ))}
-                </div>
-                <p className="text-[10px] font-bold text-stone-500 leading-relaxed">
-                  Written：{(targetCoverageMigrationReport.writtenMonths || []).join("、") || "無"}｜Skipped：{(targetCoverageMigrationReport.skippedMonths || []).join("、") || "無"}
-                </p>
-                <p className="text-[10px] font-black text-blue-700">下一步：重新執行上方 READ ONLY Audit；本次寫入月份應全部轉為「已是 Coverage v1」。</p>
-              </div>
-            )}
-            <ToolRow icon={Database} title="進階：重建歷史報表" desc="一般情況請使用上方月份報表整理助手；此工具保留給需要單獨重建資料的人員使用。" badge="進階工具" tone="emerald">
+            <div className="rounded-[1.5rem] border border-stone-100 bg-stone-50/60 px-4 py-3 text-[11px] font-bold leading-relaxed text-stone-500">
+              舊版年度目標補整理與 Target Coverage 修復入口已從一般維護介面退場。目標完整度由現行事件驅動機制維護；歷史修復能力仍保留在後端受控工具，不在日常介面提供。
+            </div>
+            <ToolRow icon={Database} title="重新整理歷史月份" desc="一般情況使用月份報表整理即可；只有需要單獨重新建立某個歷史月份時才使用。" badge="進階工具" tone="emerald">
               <div className="flex items-center gap-2 rounded-2xl border border-stone-100 bg-white/70 px-3 h-11"><Calendar size={14} className="text-stone-400" /><SmartMonthPicker value={calMonth} onChange={setCalMonth} align="right" buttonClassName="!h-9 !min-w-[140px] !border-0 !bg-transparent !px-0 !py-0 !text-xs !shadow-none hover:!bg-transparent" /></div>
               <BeautyButton onClick={handleRebuildDashboardSummary} disabled={loadingAction !== null} variant="primary">
                 {loadingAction === "rebuildSummary" ? <Loader2 size={14} className="animate-spin" /> : <Database size={14} />}
-                重建 Summary
+                重新整理報表
               </BeautyButton>
             </ToolRow>
             {summaryBuildReport && (
@@ -6625,11 +5115,11 @@ export default function SystemMaintenance() {
                 </div>
               </div>
             )}
-            <ToolRow icon={CheckCircle2} title="進階：歷史報表比對" desc="一般情況月份報表整理會自動比對；此工具保留給需要單獨確認數字一致性的人員使用。" badge="進階工具" tone="emerald">
+            <ToolRow icon={CheckCircle2} title="確認歷史報表數字" desc="一般情況月份報表整理會自動確認；只有需要單獨再次確認數字時才使用。" badge="進階工具" tone="emerald">
               <div className="flex items-center gap-2 rounded-2xl border border-stone-100 bg-white/70 px-3 h-11"><Calendar size={14} className="text-stone-400" /><SmartMonthPicker value={calMonth} onChange={setCalMonth} align="right" buttonClassName="!h-9 !min-w-[140px] !border-0 !bg-transparent !px-0 !py-0 !text-xs !shadow-none hover:!bg-transparent" /></div>
               <BeautyButton onClick={handleCompareDashboardSummary} disabled={loadingAction !== null} variant="primary">
                 {loadingAction === "compareSummary" ? <Loader2 size={14} className="animate-spin" /> : <CheckCircle2 size={14} />}
-                比對 Summary
+                確認數字
               </BeautyButton>
             </ToolRow>
             {summaryCompareReport && (
@@ -6665,8 +5155,20 @@ export default function SystemMaintenance() {
           </div>}
         </section>
 
+        <section className="rounded-[2rem] border border-blue-100 bg-white/95 shadow-[0_18px_55px_rgba(59,130,246,0.05)] overflow-hidden">
+          <button type="button" onClick={() => setShowTrafficTools((prev) => !prev)} className="w-full p-6 flex flex-col md:flex-row md:items-center md:justify-between gap-3 text-left">
+            <SectionTitle eyebrow="次要診斷" title="系統流量觀察" desc="平常不需要開啟。只有讀取費用異常、改版後觀察或要找出高讀取來源時再使用。" icon={Radio} />
+            <div className="inline-flex items-center gap-2 text-xs font-black text-blue-600 bg-blue-50 border border-blue-100 rounded-2xl px-3 py-2 w-fit">
+              {showTrafficTools ? "收合工具" : "開啟流量觀察"}
+              <ChevronDown size={14} className={`transition-transform ${showTrafficTools ? "rotate-180" : ""}`} />
+            </div>
+          </button>
+        </section>
+
+        {showTrafficTools && (
+          <>
         <section className="rounded-[2rem] border border-[#EEDFC7] bg-white/95 shadow-[0_22px_70px_rgba(120,90,40,0.05)] overflow-hidden">
-          <div className="p-6 border-b border-[#F0E3CF]"><SectionTitle eyebrow="Data Observability" title="資料量概況與備份紀錄" desc="掌握資料規模、封存筆數與備份歷史。" icon={BarChart3} /></div>
+          <div className="p-6 border-b border-[#F0E3CF]"><SectionTitle eyebrow="進階資料規模" title="資料量概況與備份紀錄" desc="資料量概況會讀取多個完整資料集合，只在需要盤點資料規模時手動載入；備份紀錄則可用來確認過去匯出。" icon={BarChart3} /></div>
           <div className="p-6 grid grid-cols-1 xl:grid-cols-2 gap-6">
             <div className="rounded-[1.5rem] border border-stone-100 bg-stone-50/50 overflow-hidden"><div className="px-4 py-3 border-b border-stone-100 bg-white flex items-center justify-between"><div className="flex items-center gap-2"><BarChart3 size={16} className="text-[#B7863D]" /><span className="text-sm font-black text-stone-700">資料量概況</span></div><button onClick={handleLoadDataVolume} disabled={loadingAction !== null} className="text-[11px] font-black px-3 py-1.5 rounded-xl bg-gradient-to-r from-[#FFF7DF] via-[#F7E8C6] to-[#EACB86] text-[#5A4225] border border-amber-200 disabled:opacity-40 flex items-center gap-1.5">{loadingAction === "dataVolume" ? <Loader2 size={13} className="animate-spin" /> : <Eye size={13} />}載入概況</button></div><div className="p-4 space-y-2 max-h-[320px] overflow-y-auto">{dataVolumeRows.length === 0 ? <div className="h-40 flex flex-col items-center justify-center text-stone-300 gap-2"><BarChart3 size={30} /><p className="text-xs font-black">尚未載入資料量</p></div> : dataVolumeRows.map((row)=><div key={row.colName} className="bg-white rounded-2xl border border-stone-100 p-3 flex items-center justify-between gap-3"><div><p className="text-xs font-black text-stone-700">{row.colName}</p><p className="text-[10px] font-bold text-stone-400">本月 {Number(row.monthCount || 0).toLocaleString()} 筆｜封存重複 {row.archivedCount.toLocaleString()} 筆</p></div><p className="text-sm font-black text-[#B7863D]">{row.count.toLocaleString()}</p></div>)}</div></div>
             <div className="rounded-[1.5rem] border border-stone-100 bg-stone-50/50 overflow-hidden"><div className="px-4 py-3 border-b border-stone-100 bg-white flex items-center justify-between"><div className="flex items-center gap-2"><ClipboardList size={16} className="text-[#B7863D]" /><span className="text-sm font-black text-stone-700">備份紀錄</span></div><button onClick={handleLoadBackupRecords} disabled={loadingAction !== null} className="text-[11px] font-black px-3 py-1.5 rounded-xl border border-stone-200 text-stone-500 hover:bg-stone-50 disabled:opacity-40 flex items-center gap-1.5">{loadingAction === "backupRecords" ? <Loader2 size={13} className="animate-spin" /> : <Eye size={13} />}載入紀錄</button></div><div className="p-4 space-y-2 max-h-[320px] overflow-y-auto">{backupRecords.length === 0 ? <div className="h-40 flex flex-col items-center justify-center text-stone-300 gap-2"><ClipboardList size={30} /><p className="text-xs font-black">尚未載入備份紀錄</p></div> : backupRecords.map((row)=><div key={row.id} className="bg-white rounded-2xl border border-stone-100 p-3"><div className="flex items-center justify-between gap-3"><p className="text-xs font-black text-stone-700 truncate">{row.fileName || row.backupType}</p><span className="text-[10px] font-black text-[#B7863D] bg-amber-50 border border-amber-100 rounded-full px-2 py-1">{row.backupType}</span></div><p className="mt-1 text-[10px] font-bold text-stone-400">{row.createdAtText || "—"}｜{row.exportedBy || "—"}｜{Number(row.totalDocs || 0).toLocaleString()} docs</p></div>)}</div></div>
@@ -6674,7 +5176,7 @@ export default function SystemMaintenance() {
         </section>
 
         <section className="rounded-[2rem] border border-[#EEDFC7] bg-white/95 shadow-[0_22px_70px_rgba(120,90,40,0.05)] overflow-hidden">
-          <div className="p-6 border-b border-[#F0E3CF] flex flex-col lg:flex-row lg:items-center lg:justify-between gap-4"><SectionTitle eyebrow="Traffic Diagnosis" title="讀取來源追蹤" desc="用來判斷晚間讀取暴增是由哪一個資料來源、頁面或角色造成。" icon={Radio} />
+          <div className="p-6 border-b border-[#F0E3CF] flex flex-col lg:flex-row lg:items-center lg:justify-between gap-4"><SectionTitle eyebrow="流量來源" title="系統流量來源" desc="用來判斷晚間讀取增加主要來自哪個功能、資料來源或角色。" icon={Radio} />
             <div className="flex flex-wrap gap-2">{[{ id: "off", label: "關閉", icon: Power }, { id: "local", label: "本機模式", icon: Monitor }, { id: "global", label: "全域上報", icon: Globe2 }].map((mode)=><button key={mode.id} onClick={()=>handleChangeReadTrackerMode(mode.id)} className={`px-4 py-2 rounded-2xl text-xs font-black border flex items-center gap-2 transition-all ${getReadTrackerModeButtonClass(mode.id)}`}><mode.icon size={14} />{mode.label}</button>)}</div>
           </div>
           <div className="p-6 border-b border-[#F0E3CF] bg-[#FFFCF7]"><div className="rounded-[1.75rem] border border-[#EEDFC7] bg-white shadow-sm overflow-hidden"><div className="p-5 flex flex-col xl:flex-row xl:items-center xl:justify-between gap-4 border-b border-stone-100"><div className="min-w-0"><h3 className="text-sm font-black text-stone-800 flex items-center gap-2"><Clock size={18} className="text-[#B7863D]" />排程式全域上報</h3><p className="text-xs text-stone-400 font-bold mt-1">固定晚間診斷區間，讓每天數據可比較；支援跨日，例如 19:00～07:00。</p></div><div className={`shrink-0 inline-flex items-center gap-2 px-3 py-2 rounded-2xl text-xs font-black border ${!scheduleStatus.scheduleEnabled ? "bg-stone-50 text-stone-500 border-stone-200" : scheduleStatus.isActive ? "bg-emerald-50 text-emerald-700 border-emerald-100" : "bg-amber-50 text-amber-700 border-amber-100"}`}><CheckCircle2 size={15} />{scheduleStatus.label}｜現在 {scheduleStatus.nowTime}{hasUnsavedScheduleChanges ? "｜排程草稿尚未儲存" : ""}</div></div>
@@ -6735,13 +5237,16 @@ export default function SystemMaintenance() {
           <div className="p-6 grid grid-cols-1 xl:grid-cols-2 gap-6"><div className="rounded-[1.5rem] border border-stone-100 bg-stone-50/50 overflow-hidden"><div className="px-4 py-3 border-b border-stone-100 bg-white flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3"><div className="flex flex-wrap items-center gap-2"><Activity size={16} className="text-emerald-500" /><span className="text-sm font-black text-stone-700">目前裝置統計</span><span className={`px-2 py-1 rounded-full border text-[10px] font-black ${localReadModeTone}`}>{localReadModeLabel}</span>{localReadLastRefreshedAt && <span className="text-[10px] font-bold text-stone-300">更新 {localReadLastRefreshedAt.toLocaleTimeString("zh-TW", { hour12: false, hour: "2-digit", minute: "2-digit", second: "2-digit" })}</span>}</div><div className="flex flex-wrap items-center gap-2">{readTrackerMode === "off" && <button onClick={handleEnableLocalReadTracker} className="text-[11px] font-black px-3 py-1.5 rounded-xl border border-emerald-100 bg-emerald-50 text-emerald-600 hover:bg-emerald-100">開啟本機追蹤</button>}<button onClick={refreshLocalReadStats} className="text-[11px] font-black px-3 py-1.5 rounded-xl border border-stone-200 text-stone-500 hover:bg-stone-50">重新整理</button><button onClick={handleClearReadTracker} className="text-[11px] font-black px-3 py-1.5 rounded-xl border border-rose-100 text-rose-500 hover:bg-rose-50">清除</button></div></div>{renderStatList({ rows: readStatsRows, emptyIcon: BarChart3, emptyText: localReadEmptyText, emptySubText: readTrackerMode === "off" ? "可按右上「開啟本機追蹤」，或在上方模式切換為本機模式 / 全域上報後再觀察。" : "若切換頁面後仍無資料，代表目前沒有新的被追蹤讀取，或資料已由前端狀態提供。" })}</div><div className="rounded-[1.5rem] border border-stone-100 bg-stone-50/50 overflow-hidden"><div className="px-4 py-3 border-b border-stone-100 bg-white flex flex-col gap-3"><div className="flex flex-col md:flex-row md:items-center md:justify-between gap-3"><div className="flex items-center gap-2"><Globe2 size={16} className="text-blue-500" /><span className="text-sm font-black text-stone-700">全域讀取排行</span><span className="text-[10px] font-black text-blue-500 bg-blue-50 border border-blue-100 rounded-full px-2 py-0.5">可篩選時段</span></div><div className="flex flex-wrap items-center gap-2"><button onClick={() => handleLoadGlobalReadStats({ scope: "all" })} disabled={loadingReadStats} className="text-[11px] font-black px-3 py-1.5 rounded-xl bg-gradient-to-r from-[#FFF7DF] via-[#F7E8C6] to-[#EACB86] text-[#5A4225] border border-amber-200 disabled:opacity-40 flex items-center gap-1.5">{loadingReadStats ? <Loader2 size={13} className="animate-spin" /> : <Eye size={13} />}全部 / 近 24 小時</button><button onClick={() => handleLoadGlobalReadStats({ scope: "range" })} disabled={loadingReadStats} className="text-[11px] font-black px-3 py-1.5 rounded-xl border border-blue-100 bg-blue-50 text-blue-600 disabled:opacity-40 flex items-center gap-1.5">{loadingReadStats ? <Loader2 size={13} className="animate-spin" /> : <Clock size={13} />}載入時段</button><button onClick={handleClearGlobalReadStats} disabled={loadingReadStats && globalReadStats.length === 0 && globalReadRangeUnsupportedCount === 0} className="text-[11px] font-black px-3 py-1.5 rounded-xl border border-rose-100 bg-white text-rose-500 hover:bg-rose-50 disabled:opacity-40 flex items-center gap-1.5"><Trash2 size={13} />清除</button></div></div><div className="rounded-2xl border border-stone-100 bg-stone-50/70 p-3 space-y-3"><div className="flex flex-wrap gap-2"><button type="button" onClick={() => setGlobalReadRange(makeGlobalReadRange("last1h"))} className="text-[10px] font-black px-2.5 py-1 rounded-full border border-stone-200 bg-white text-stone-500 hover:bg-stone-100">最近 1 小時</button><button type="button" onClick={() => setGlobalReadRange(makeGlobalReadRange("early4to5"))} className="text-[10px] font-black px-2.5 py-1 rounded-full border border-stone-200 bg-white text-stone-500 hover:bg-stone-100">凌晨 04:00～05:00</button><button type="button" onClick={() => setGlobalReadRange(makeGlobalReadRange("overnight"))} className="text-[10px] font-black px-2.5 py-1 rounded-full border border-stone-200 bg-white text-stone-500 hover:bg-stone-100">昨晚 18:00～今早 07:00</button></div><div className="grid grid-cols-1 md:grid-cols-2 gap-3">{renderGlobalReadRangePicker("start", "開始時間")}{renderGlobalReadRangePicker("end", "結束時間")}</div><p className="text-[10px] font-bold text-stone-400 leading-relaxed">「全部 / 近 24 小時」保留原本觀察方式；「載入時段」可用來查凌晨 04:00～05:00 等異常尖峰來源。指定時段最多查詢 7 天，避免一次讀取過多追蹤資料。</p></div></div>{globalReadStats.length > 0 && <div className="p-4 pb-0 text-[11px] text-stone-400 font-bold">已彙整 {globalReadScopeLabel}｜{globalRowsCount.toLocaleString()} 筆上報工作階段</div>}{globalReadRangeUnsupportedCount > 0 && <div className="m-4 mb-0 rounded-2xl border border-amber-100 bg-amber-50 px-4 py-3 text-[11px] font-bold text-amber-700 leading-relaxed">{globalReadRangeLegacyFallback ? <>此時段找到 {globalReadRangeUnsupportedCount.toLocaleString()} 筆舊版全域上報工作階段，但舊資料沒有 hourlyBuckets 小時分桶，已改用舊版 session 時間粗略彙整。這份排行可用來初步判斷來源，但不是「{getReadableRangeText(globalReadRange.start, globalReadRange.end)}」的精準小時分桶。</> : <>此時段找到 {globalReadRangeUnsupportedCount.toLocaleString()} 筆舊版全域上報工作階段，但舊資料沒有 hourlyBuckets 小時分桶，無法還原「{getReadableRangeText(globalReadRange.start, globalReadRange.end)}」的精準來源。新版上線後，下一輪全域上報即可用目前選擇的時段正確分析。</>}</div>}{renderStatList({ rows: globalReadStats, emptyIcon: Globe2, emptyText: "尚未載入全域讀取排行", valueClass: "text-blue-600" })}</div></div>
         </section>
 
+          </>
+        )}
+
         <section className="rounded-[2rem] border border-[#EEDFC7] bg-white/95 shadow-[0_22px_70px_rgba(120,90,40,0.05)] overflow-hidden"><button onClick={()=>setShowAdvancedTools((prev)=>!prev)} className="w-full p-6 flex flex-col md:flex-row md:items-center md:justify-between gap-3 text-left"><SectionTitle eyebrow="Protected Area" title="高風險資料處理" desc="還原、封存與批次修復都集中在這裡；沒有明確異常時不建議操作。" icon={AlertTriangle} /><div className="inline-flex items-center gap-2 text-xs font-black text-stone-500 bg-stone-50 border border-stone-200 rounded-2xl px-3 py-2 w-fit">{showAdvancedTools ? "收合工具" : "展開工具"}<ChevronDown size={14} className={`transition-transform ${showAdvancedTools ? "rotate-180" : ""}`} /></div></button>
-          {showAdvancedTools && <div className="px-6 pb-6 space-y-3 animate-in fade-in slide-in-from-top-2 duration-300"><ToolRow icon={Database} title="日期格式修復" desc="先掃描日期格式異常，再確認是否批次修復為 YYYY-MM-DD。" badge={dateIssues.length ? `${dateIssues.length} 筆預覽` : "兩段式"}><BeautyButton onClick={handleScanDateFormats} disabled={loadingAction !== null} variant="secondary">{loadingAction === "scanDates" ? <Loader2 size={14} className="animate-spin" /> : <Eye size={14} />}掃描日期</BeautyButton><BeautyButton onClick={handleFixDateFormats} disabled={loadingAction !== null || dateIssues.length === 0} variant="primary">{loadingAction === "fixDates" ? <Loader2 size={14} className="animate-spin" /> : <Save size={14} />}修復日期</BeautyButton></ToolRow>{dateIssues.length > 0 && <div className="rounded-[1.5rem] border border-amber-100 bg-amber-50/40 p-4 text-xs font-bold text-amber-800 space-y-1"><p className="font-black">日期異常預覽</p>{dateIssues.slice(0,5).map((item)=><p key={`${item.colName}_${item.id}`}>{item.colName}｜{item.store}｜{item.person}｜{item.oldDate} → {item.newDate}</p>)}</div>}
-          <ToolRow icon={Scissors} title="重複資料檢測與封存" desc="預設只檢測，不再一鍵刪除。確認後會將舊資料標記封存。" badge={duplicateGroups.length ? `${duplicateGroups.length} 組預覽` : "安全版"} tone="rose"><BeautyButton onClick={handleScanDuplicates} disabled={loadingAction !== null} variant="secondary">{loadingAction === "scanDups" ? <Loader2 size={14} className="animate-spin" /> : <Eye size={14} />}檢測重複</BeautyButton><BeautyButton onClick={handleArchiveDuplicates} disabled={loadingAction !== null || duplicateGroups.length === 0} variant="soft">{loadingAction === "archiveDups" ? <Loader2 size={14} className="animate-spin" /> : <Scissors size={14} />}封存舊資料</BeautyButton></ToolRow>{duplicateGroups.length > 0 && <div className="rounded-[1.5rem] border border-rose-100 bg-rose-50/30 p-4 text-xs font-bold text-rose-700 space-y-1"><p className="font-black">重複資料預覽</p>{duplicateGroups.slice(0,5).map((group)=><p key={`${group.colName}_${group.key}`}>{group.colName}｜{group.date}｜{group.store}｜{group.person}｜保留 1 筆、封存 {group.duplicateIds.length} 筆</p>)}</div>}
-          <ToolRow icon={RefreshCw} title="封存資料檢視與還原" desc="查看已封存的疑似重複資料，可單筆還原。" badge={archivedDuplicates.length ? `${archivedDuplicates.length} 筆` : "可還原"}><div className="flex items-center gap-2 rounded-2xl border border-stone-100 bg-white/70 px-3 h-11"><Calendar size={14} className="text-stone-400" /><SmartMonthPicker value={archiveFilterMonth} onChange={setArchiveFilterMonth} align="right" buttonClassName="!h-9 !min-w-[140px] !border-0 !bg-transparent !px-0 !py-0 !text-xs !shadow-none hover:!bg-transparent" /></div><BeautyButton onClick={handleLoadArchivedDuplicates} disabled={loadingAction !== null} variant="secondary">{loadingAction === "loadArchived" ? <Loader2 size={14} className="animate-spin" /> : <Eye size={14} />}載入封存</BeautyButton></ToolRow>{archivedDuplicates.length > 0 && <div className="rounded-[1.5rem] border border-stone-100 bg-stone-50/50 p-4 space-y-2 max-h-[340px] overflow-y-auto"><p className="text-xs font-black text-stone-700">封存資料清單</p>{archivedDuplicates.slice(0,30).map((row)=><div key={`${row.colName}_${row.id}`} className="bg-white border border-stone-100 rounded-2xl p-3 flex flex-col md:flex-row md:items-center md:justify-between gap-3"><div className="min-w-0"><p className="text-xs font-black text-stone-700 truncate">{row.colName}｜{row.date}｜{row.store}｜{row.person}</p><p className="text-[10px] font-bold text-stone-400 mt-1">保留文件：{row.keepId}｜封存時間：{row.archivedAt}</p></div><BeautyButton onClick={()=>handleRestoreArchivedDuplicate(row)} disabled={loadingAction !== null} variant="soft" className="h-9 px-4 shrink-0">{loadingAction === `restore_${row.id}` ? <Loader2 size={13} className="animate-spin" /> : <RefreshCw size={13} />}還原</BeautyButton></div>)}</div>}</div>}
+          {showAdvancedTools && <div className="px-6 pb-6 space-y-3 animate-in fade-in slide-in-from-top-2 duration-300"><ToolRow icon={Database} title="日期資料修正" desc="先掃描日期格式異常，再確認是否批次修復為 YYYY-MM-DD。" badge={dateIssues.length ? `${dateIssues.length} 筆預覽` : "兩段式"}><BeautyButton onClick={handleScanDateFormats} disabled={loadingAction !== null} variant="secondary">{loadingAction === "scanDates" ? <Loader2 size={14} className="animate-spin" /> : <Eye size={14} />}掃描日期</BeautyButton><BeautyButton onClick={handleFixDateFormats} disabled={loadingAction !== null || dateIssues.length === 0} variant="primary">{loadingAction === "fixDates" ? <Loader2 size={14} className="animate-spin" /> : <Save size={14} />}修復日期</BeautyButton></ToolRow>{dateIssues.length > 0 && <div className="rounded-[1.5rem] border border-amber-100 bg-amber-50/40 p-4 text-xs font-bold text-amber-800 space-y-1"><p className="font-black">日期異常預覽</p>{dateIssues.slice(0,5).map((item)=><p key={`${item.colName}_${item.id}`}>{item.colName}｜{item.store}｜{item.person}｜{item.oldDate} → {item.newDate}</p>)}</div>}
+          <ToolRow icon={Scissors} title="重複資料整理" desc="預設只檢測，不再一鍵刪除。確認後會將舊資料標記封存。" badge={duplicateGroups.length ? `${duplicateGroups.length} 組預覽` : "安全版"} tone="rose"><BeautyButton onClick={handleScanDuplicates} disabled={loadingAction !== null} variant="secondary">{loadingAction === "scanDups" ? <Loader2 size={14} className="animate-spin" /> : <Eye size={14} />}檢測重複</BeautyButton><BeautyButton onClick={handleArchiveDuplicates} disabled={loadingAction !== null || duplicateGroups.length === 0} variant="soft">{loadingAction === "archiveDups" ? <Loader2 size={14} className="animate-spin" /> : <Scissors size={14} />}封存舊資料</BeautyButton></ToolRow>{duplicateGroups.length > 0 && <div className="rounded-[1.5rem] border border-rose-100 bg-rose-50/30 p-4 text-xs font-bold text-rose-700 space-y-1"><p className="font-black">重複資料預覽</p>{duplicateGroups.slice(0,5).map((group)=><p key={`${group.colName}_${group.key}`}>{group.colName}｜{group.date}｜{group.store}｜{group.person}｜保留 1 筆、封存 {group.duplicateIds.length} 筆</p>)}</div>}
+          <ToolRow icon={RefreshCw} title="查看與還原封存資料" desc="查看已封存的疑似重複資料，可單筆還原。" badge={archivedDuplicates.length ? `${archivedDuplicates.length} 筆` : "可還原"}><div className="flex items-center gap-2 rounded-2xl border border-stone-100 bg-white/70 px-3 h-11"><Calendar size={14} className="text-stone-400" /><SmartMonthPicker value={archiveFilterMonth} onChange={setArchiveFilterMonth} align="right" buttonClassName="!h-9 !min-w-[140px] !border-0 !bg-transparent !px-0 !py-0 !text-xs !shadow-none hover:!bg-transparent" /></div><BeautyButton onClick={handleLoadArchivedDuplicates} disabled={loadingAction !== null} variant="secondary">{loadingAction === "loadArchived" ? <Loader2 size={14} className="animate-spin" /> : <Eye size={14} />}載入封存</BeautyButton></ToolRow>{archivedDuplicates.length > 0 && <div className="rounded-[1.5rem] border border-stone-100 bg-stone-50/50 p-4 space-y-2 max-h-[340px] overflow-y-auto"><p className="text-xs font-black text-stone-700">封存資料清單</p>{archivedDuplicates.slice(0,30).map((row)=><div key={`${row.colName}_${row.id}`} className="bg-white border border-stone-100 rounded-2xl p-3 flex flex-col md:flex-row md:items-center md:justify-between gap-3"><div className="min-w-0"><p className="text-xs font-black text-stone-700 truncate">{row.colName}｜{row.date}｜{row.store}｜{row.person}</p><p className="text-[10px] font-bold text-stone-400 mt-1">保留文件：{row.keepId}｜封存時間：{row.archivedAt}</p></div><BeautyButton onClick={()=>handleRestoreArchivedDuplicate(row)} disabled={loadingAction !== null} variant="soft" className="h-9 px-4 shrink-0">{loadingAction === `restore_${row.id}` ? <Loader2 size={13} className="animate-spin" /> : <RefreshCw size={13} />}還原</BeautyButton></div>)}</div>}</div>}
         </section>
 
-        <section className="rounded-[2rem] border border-stone-100 bg-white/90 p-6 shadow-[0_16px_50px_rgba(120,90,40,0.04)]"><ToolRow icon={RefreshCw} title="清除本機快取" desc="只清除目前瀏覽器暫存，不會刪除雲端資料。適合畫面異常、舊版快取或登入狀態卡住時使用。" badge="本機排錯"><BeautyButton onClick={handleClearLocalCache} variant="secondary"><RefreshCw size={14} />清除快取並重載</BeautyButton></ToolRow></section>
+        {showCoreTools && <section className="rounded-[2rem] border border-stone-100 bg-white/90 p-6 shadow-[0_16px_50px_rgba(120,90,40,0.04)]"><ToolRow icon={RefreshCw} title="清除本機快取" desc="只清除目前瀏覽器暫存，不會刪除雲端資料。適合畫面異常、舊版快取或登入狀態卡住時使用。" badge="本機排錯"><BeautyButton onClick={handleClearLocalCache} variant="secondary"><RefreshCw size={14} />清除快取並重載</BeautyButton></ToolRow></section>}
 
         <section className="rounded-[2rem] border border-stone-100 bg-[#FFFCF7] p-6 shadow-[inset_0_2px_10px_rgba(120,90,40,0.02)]"><div className="flex justify-between items-center mb-4"><div className="flex items-center gap-2 text-stone-600"><ClipboardList size={18} strokeWidth={2} className="text-[#B7863D]" /><span className="font-black tracking-tight text-sm">操作紀錄</span></div><div className="flex items-center gap-3">{loadingAction && <span className="text-xs text-amber-700 bg-amber-50 px-3 py-1.5 rounded-xl font-black animate-pulse flex items-center gap-1.5 border border-amber-100/50"><Loader2 size={14} className="animate-spin" />執行中...</span>}{logs.length > 0 && !loadingAction && <button onClick={()=>setLogs([])} className="text-xs font-black text-stone-400 hover:text-rose-500 transition-colors flex items-center gap-1 px-2 py-1"><Trash2 size={14} />清除</button>}</div></div><div className="bg-white rounded-[1.5rem] p-5 font-mono text-[13px] h-[280px] overflow-y-auto border border-stone-200/50 shadow-sm space-y-2 selection:bg-amber-100">{logs.length === 0 ? <div className="flex h-full items-center justify-center flex-col gap-3 opacity-50"><ClipboardList size={36} className="text-stone-300" strokeWidth={1.5} /><span className="text-xs font-black tracking-widest text-stone-400 uppercase">Ready</span></div> : logs.map((log)=>{ const isError = log.text.includes("❌"); const isFix = log.text.includes("✏️"); const isDel = log.text.includes("🗑️"); const isSuccess = log.text.includes("✅") || log.text.includes("🎉") || log.text.includes("✨") || log.text.includes("🔄") || log.text.includes("↩️"); let textColor = "text-stone-500"; if (isError) textColor = "text-rose-500 font-black"; else if (isFix) textColor = "text-amber-600"; else if (isDel) textColor = "text-stone-400 line-through"; else if (isSuccess) textColor = "text-stone-800 font-black"; return <div key={log.id} className="border-b border-stone-50 pb-2.5 last:border-0 hover:bg-stone-50 rounded px-2 -mx-2 transition-colors flex items-start gap-3"><span className="text-stone-400 shrink-0 select-none pt-0.5">[{log.time}]</span><span className={`${textColor} break-all leading-relaxed`}>{log.text}</span></div>; })}</div></section>
       </div>

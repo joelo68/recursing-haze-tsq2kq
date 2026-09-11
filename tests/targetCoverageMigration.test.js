@@ -176,15 +176,12 @@ test('backend migration endpoint accepts fresh all-existing-month audit scope, s
   assert.doesNotMatch(migrationSource, /setInterval\s*\(/);
 });
 
-test('Functions index and SystemMaintenance expose one explicit all-existing-month metadata-only migration path', () => {
+test('metadata-only migration remains an explicit backend recovery surface but retires from normal SystemMaintenance UI', () => {
   assert.match(functionsIndex, /createTargetCoverageMigrationFunctions/);
   assert.match(functionsIndex, /exports\.migrateHistoricalTargetCoverageMetadata = targetCoverageMigrationFunctions\.migrateHistoricalTargetCoverageMetadata/);
-  assert.match(maintenanceSource, /Production：補 Target Coverage Metadata/);
-  assert.match(maintenanceSource, /auditScope:\s*targetCoverageAuditReport\.auditScope/);
-  assert.match(maintenanceSource, /TARGET_COVERAGE_MIGRATION_ENDPOINT/);
-  assert.match(maintenanceSource, /confirmMetadataOnly:\s*true/);
-  assert.match(maintenanceSource, /atomic transaction/);
-  assert.match(maintenanceSource, /Raw Target Reads/);
-  assert.doesNotMatch(maintenanceSource, /onSnapshot\([^\n]*targetCoverageMigration/);
-  assert.doesNotMatch(maintenanceSource, /setInterval\([^\n]*targetCoverageMigration/);
+  assert.doesNotMatch(maintenanceSource, /Production：補 Target Coverage Metadata/);
+  assert.doesNotMatch(maintenanceSource, /TARGET_COVERAGE_MIGRATION_ENDPOINT/);
+  assert.doesNotMatch(maintenanceSource, /handleMigrateHistoricalTargetCoverageMetadata/);
+  assert.doesNotMatch(maintenanceSource, /targetCoverageMigrationReport/);
+  assert.match(maintenanceSource, /歷史修復能力仍保留在後端受控工具/);
 });

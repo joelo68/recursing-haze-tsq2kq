@@ -20,6 +20,7 @@ import { AppContext } from "../AppContext";
 import { Card, ViewWrapper } from "./SharedUI";
 import SmartDatePicker from "./SmartDatePicker";
 import SmartMonthPicker from "./SmartMonthPicker";
+import SmartForecastAccuracyPanel from "./SmartForecastAccuracyPanel";
 import {
   getCanonicalLifecycleStoreName,
   getStoreLifecycleKey,
@@ -811,6 +812,13 @@ const SmartForecastView = () => {
             </div>
           </Card>
         </div>
+
+        <SmartForecastAccuracyPanel
+          brandId={brandId}
+          brandLabel={brandLabel}
+          selectedMonth={selectedMonth}
+          getCollectionPath={getCollectionPath}
+        />
 
         <Card className="p-5 md:p-6">
           <div className="flex items-center justify-between gap-3">

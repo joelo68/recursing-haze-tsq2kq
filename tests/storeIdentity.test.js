@@ -150,12 +150,13 @@ test("Backend：monthly_aggregated 必須保留 CYJ 新店 canonical guard", () 
   );
 });
 
-test("SystemMaintenance：Core Consistency Audit 必須保留且正式版不可含一次性修復工具", () => {
+test("SystemMaintenance：資料一致性檢查必須保留且正式版不可含一次性修復工具", () => {
   const source = readProjectFile("src/components/SystemMaintenance.jsx");
 
-  assert.match(source, /核心資料一致性健檢/);
+  assert.match(source, /資料一致性檢查/);
+  assert.match(source, /handleRunCoreConsistencyAudit/);
   assert.match(source, /執行全年健檢/);
-  assert.match(source, /V1 僅檢查，不修改任何資料/);
+  assert.match(source, /只做檢查，不會修改資料/);
 
   assert.doesNotMatch(
     source,

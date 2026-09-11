@@ -147,6 +147,41 @@ const BENCHMARK_CATEGORIES = [
   { id: 'acquisition', title: '新客質量 (達標率)', sub: '新客客單達成目標的幾% (基準 100%)', type: 'percent', suffix: '%', step: 5 },
 ];
 
+const PERMISSION_ROLE_COLUMNS = [
+  {
+    id: "trainer",
+    label: "教專",
+    headerClass: "bg-rose-50/95",
+    cellClass: "bg-rose-50/30",
+    activeClass: "bg-rose-100/70 ring-2 ring-inset ring-rose-200",
+    chipClass: "border-rose-200 bg-rose-50 text-rose-700",
+  },
+  {
+    id: "manager",
+    label: "區長",
+    headerClass: "bg-teal-50/95",
+    cellClass: "bg-teal-50/30",
+    activeClass: "bg-teal-100/70 ring-2 ring-inset ring-teal-200",
+    chipClass: "border-teal-200 bg-teal-50 text-teal-700",
+  },
+  {
+    id: "store",
+    label: "店經理",
+    headerClass: "bg-[#FFF7DF]/95",
+    cellClass: "bg-[#FFF7DF]/30",
+    activeClass: "bg-[#F8E7B9]/70 ring-2 ring-inset ring-[#E8C77A]",
+    chipClass: "border-[#E8C77A] bg-[#FFF7DF] text-[#7A5A2D]",
+  },
+  {
+    id: "therapist",
+    label: "管理師",
+    headerClass: "bg-indigo-50/95",
+    cellClass: "bg-indigo-50/30",
+    activeClass: "bg-indigo-100/70 ring-2 ring-inset ring-indigo-200",
+    chipClass: "border-indigo-200 bg-indigo-50 text-indigo-700",
+  },
+];
+
 const SettingsView = () => {
   const {
     targets, setTargets, showToast, managers, managerOrder, storeAccounts,
@@ -169,6 +204,8 @@ const SettingsView = () => {
   const [activeTab, setActiveTab] = useState("");
   const [localTargets, setLocalTargets] = useState(targets || { newASP: "", trafficASP: 1200, benchmarks: {} });
   const [localPermissions, setLocalPermissions] = useState(permissions || DEFAULT_PERMISSIONS);
+  const [activePermissionRole, setActivePermissionRole] = useState("");
+  const [permissionMatrixTouched, setPermissionMatrixTouched] = useState(false);
   const [localManagers, setLocalManagers] = useState(managers || {});
   const [localManagerOrder, setLocalManagerOrder] = useState(normalizeManagerOrder(managers || {}, managerOrder));
   
@@ -218,7 +255,12 @@ const SettingsView = () => {
       setLocalManagerOrder(normalizeManagerOrder(managers || {}, managerOrder));
     }
   }, [managers, managerOrder]);
-  useEffect(() => { if (permissions) setLocalPermissions(permissions); }, [permissions]);
+  useEffect(() => {
+    if (permissions) {
+      setLocalPermissions(permissions);
+      setPermissionMatrixTouched(false);
+    }
+  }, [permissions]);
   useEffect(() => { 
     if (targets) {
       const newAspResult = validPositiveSetting(targets?.newASP);
@@ -617,17 +659,29 @@ const SettingsView = () => {
       }
       const result = await updateModulePermissions(localPermissions);
       if (result?.permissions) setLocalPermissions(result.permissions);
+      setPermissionMatrixTouched(false);
       showToast("權限設定已更新", "success");
       if (fetchGlobalData) fetchGlobalData();
     } catch (error) {
       console.error("模組權限更新失敗:", error);
       if (error?.status === 409 && error?.result?.currentPermissions) {
         setLocalPermissions(error.result.currentPermissions);
+        setPermissionMatrixTouched(false);
       }
       showToast(error?.result?.message || error?.message || "更新失敗", "error");
     }
   };
-  const togglePermission = (role, menuId) => { const current = localPermissions[role] || []; const updated = current.includes(menuId) ? current.filter((id) => id !== menuId) : [...current, menuId]; setLocalPermissions({ ...localPermissions, [role]: updated }); };
+  const togglePermission = (role, menuId) => {
+    setActivePermissionRole(role);
+    setPermissionMatrixTouched(true);
+    setLocalPermissions((previous) => {
+      const current = previous?.[role] || [];
+      const updated = current.includes(menuId)
+        ? current.filter((id) => id !== menuId)
+        : [...current, menuId];
+      return { ...previous, [role]: updated };
+    });
+  };
   
   const handleSaveSecurityConfig = async () => { 
     try {
@@ -1413,26 +1467,129 @@ const SettingsView = () => {
         {activeTab === "permissions" && (
           <div className="space-y-6 w-full max-w-full min-w-0">
             <Card title="模組讀寫權限管理">
-              <div className="overflow-x-auto w-full pb-2">
-                <div className="min-w-[600px]">
-                  <table className="w-full text-left text-sm">
-                    <thead><tr className="border-b border-[#E8DDCC]"><th className="p-4 font-bold text-[#7C7063] sticky left-0 bg-[#FFFCF7] z-10">功能模組</th><th className="p-4 font-bold text-[#4D4338] text-center bg-rose-50/50">教專</th><th className="p-4 font-bold text-[#4D4338] text-center bg-teal-50/50">區長</th><th className="p-4 font-bold text-[#4D4338] text-center bg-[#FFF7DF]/50">店經理</th><th className="p-4 font-bold text-[#4D4338] text-center bg-indigo-50/50">管理師</th></tr></thead>
-                    <tbody className="divide-y divide-stone-100">
-                      {ALL_MENU_ITEMS.filter((item) => item.directorOnly !== true).map((item) => (
-                        <tr key={item.id} className="hover:bg-[#FAF7F1]">
-                          <td className="p-4 flex items-center gap-3 sticky left-0 bg-[#FFFCF7]/95 backdrop-blur-sm z-10 border-r border-[#EFE7DA] md:border-none shadow-[2px_0_5px_-2px_rgba(0,0,0,0.05)] md:shadow-none"><div className="p-2 bg-[#F3EEE6] rounded-lg text-[#7C7063] shrink-0"><item.icon size={18} /></div><span className="font-bold text-[#4D4338] whitespace-nowrap">{item.label}</span></td>
-                          <td className="p-4 text-center bg-rose-50/30"><input type="checkbox" checked={localPermissions.trainer?.includes(item.id)} onChange={() => togglePermission("trainer", item.id)} className="w-5 h-5 rounded border-stone-300 text-rose-600 focus:ring-rose-500 cursor-pointer"/></td>
-                          <td className="p-4 text-center bg-teal-50/30"><input type="checkbox" checked={localPermissions.manager?.includes(item.id)} onChange={() => togglePermission("manager", item.id)} className="w-5 h-5 rounded cursor-pointer"/></td>
-                          <td className="p-4 text-center bg-[#FFF7DF]/30"><input type="checkbox" checked={localPermissions.store?.includes(item.id)} onChange={() => togglePermission("store", item.id)} className="w-5 h-5 rounded cursor-pointer"/></td>
-                          <td className="p-4 text-center bg-indigo-50/30"><input type="checkbox" checked={localPermissions.therapist?.includes(item.id)} onChange={() => togglePermission("therapist", item.id)} className="w-5 h-5 rounded cursor-pointer"/></td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
+              <div className="space-y-3">
+                <div className="rounded-2xl border border-[#EFE7DA] bg-[#FAF7F1]/80 p-3.5">
+                  <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
+                    <div className="min-w-0">
+                      <p className="text-sm font-black text-[#4D4338]">
+                        目前編輯職務：
+                        <span className="ml-2 text-[#B7863D]">
+                          {PERMISSION_ROLE_COLUMNS.find((role) => role.id === activePermissionRole)?.label || "尚未選擇"}
+                        </span>
+                      </p>
+                      <p className="mt-1 text-[11px] font-bold leading-5 text-[#A69C91]">
+                        先點職務名稱再往下勾選；勾選任何欄位時也會自動切換目前編輯職務，該欄會持續高亮。
+                      </p>
+                    </div>
+                    <div className="flex flex-wrap gap-2">
+                      {PERMISSION_ROLE_COLUMNS.map((role) => {
+                        const selected = activePermissionRole === role.id;
+                        return (
+                          <button
+                            key={role.id}
+                            type="button"
+                            onClick={() => setActivePermissionRole(role.id)}
+                            className={`rounded-xl border px-3 py-2 text-xs font-black transition-all ${
+                              selected
+                                ? `${role.chipClass} ring-2 ring-offset-1 ring-[#E8C77A]/60 shadow-sm`
+                                : "border-[#E8DDD0] bg-white text-[#7C7063] hover:border-[#D8B883]"
+                            }`}
+                          >
+                            {selected ? "目前編輯：" : ""}{role.label}
+                          </button>
+                        );
+                      })}
+                    </div>
+                  </div>
                 </div>
-              </div>
-              <div className="mt-6 flex justify-end">
-                <button onClick={handleSavePermissions} className="w-full md:w-auto bg-gradient-to-r from-[#FFF7DF] via-[#F7E8C6] to-[#EACB86] text-[#5A4225] border border-[#E8C77A] px-8 py-3 rounded-xl font-bold hover:brightness-[1.02] shadow-lg active:scale-95 transition-all">儲存模組權限</button>
+
+                <div className="max-h-[68vh] overflow-auto rounded-2xl border border-[#EFE7DA] bg-white shadow-inner">
+                  <div className="min-w-[720px]">
+                    <table className="w-full text-left text-sm border-separate border-spacing-0">
+                      <thead>
+                        <tr>
+                          <th className="sticky top-0 left-0 z-40 border-b border-r border-[#E8DDCC] bg-[#FFFCF7] p-4 font-black text-[#7C7063] shadow-[2px_2px_6px_-4px_rgba(0,0,0,0.20)]">
+                            功能模組
+                          </th>
+                          {PERMISSION_ROLE_COLUMNS.map((role) => {
+                            const selected = activePermissionRole === role.id;
+                            return (
+                              <th
+                                key={role.id}
+                                className={`sticky top-0 z-30 border-b border-[#E8DDCC] p-0 text-center ${
+                                  selected ? role.activeClass : role.headerClass
+                                }`}
+                              >
+                                <button
+                                  type="button"
+                                  onClick={() => setActivePermissionRole(role.id)}
+                                  className="w-full px-4 py-4 font-black text-[#4D4338]"
+                                  title={`切換目前編輯職務為${role.label}`}
+                                >
+                                  <span className="block">{role.label}</span>
+                                  <span className={`mt-1 block text-[10px] font-black ${selected ? "text-[#B7863D]" : "text-[#A69C91]"}`}>
+                                    {selected ? "目前編輯" : "點此聚焦"}
+                                  </span>
+                                </button>
+                              </th>
+                            );
+                          })}
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-stone-100">
+                        {ALL_MENU_ITEMS.filter((item) => item.directorOnly !== true).map((item) => (
+                          <tr key={item.id} className="group">
+                            <td className="sticky left-0 z-20 border-r border-[#EFE7DA] bg-[#FFFCF7]/95 p-4 shadow-[2px_0_5px_-2px_rgba(0,0,0,0.08)] backdrop-blur-sm">
+                              <div className="flex items-center gap-3">
+                                <div className="shrink-0 rounded-lg bg-[#F3EEE6] p-2 text-[#7C7063]"><item.icon size={18} /></div>
+                                <span className="whitespace-nowrap font-bold text-[#4D4338]">{item.label}</span>
+                              </div>
+                            </td>
+                            {PERMISSION_ROLE_COLUMNS.map((role) => {
+                              const selected = activePermissionRole === role.id;
+                              const checked = localPermissions?.[role.id]?.includes(item.id) || false;
+                              return (
+                                <td
+                                  key={`${item.id}_${role.id}`}
+                                  className={`p-4 text-center transition-all ${
+                                    selected ? role.activeClass : role.cellClass
+                                  }`}
+                                >
+                                  <input
+                                    type="checkbox"
+                                    checked={checked}
+                                    onFocus={() => setActivePermissionRole(role.id)}
+                                    onChange={() => togglePermission(role.id, item.id)}
+                                    aria-label={`${role.label}｜${item.label}`}
+                                    title={`${role.label}｜${item.label}`}
+                                    className="h-5 w-5 cursor-pointer rounded border-stone-300"
+                                  />
+                                </td>
+                              );
+                            })}
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+
+                <div className="sticky bottom-3 z-30 flex flex-col gap-3 rounded-2xl border border-[#E8C77A] bg-[#FFFCF7]/95 p-3.5 shadow-[0_12px_30px_rgba(90,74,54,0.12)] backdrop-blur md:flex-row md:items-center md:justify-between">
+                  <div>
+                    <p className={`text-xs font-black ${permissionMatrixTouched ? "text-[#B7863D]" : "text-[#7C7063]"}`}>
+                      {permissionMatrixTouched ? "有尚未儲存的權限變更" : "目前沒有尚未儲存的權限變更"}
+                    </p>
+                    <p className="mt-1 text-[10px] font-bold text-[#A69C91]">
+                      儲存前請確認「目前編輯職務」與高亮欄位是否正確。
+                    </p>
+                  </div>
+                  <button
+                    onClick={handleSavePermissions}
+                    className="w-full rounded-xl border border-[#E8C77A] bg-gradient-to-r from-[#FFF7DF] via-[#F7E8C6] to-[#EACB86] px-8 py-3 font-bold text-[#5A4225] shadow-lg transition-all hover:brightness-[1.02] active:scale-95 md:w-auto"
+                  >
+                    儲存模組權限
+                  </button>
+                </div>
               </div>
             </Card>
 

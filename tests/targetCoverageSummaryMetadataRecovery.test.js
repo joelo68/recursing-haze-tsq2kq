@@ -180,23 +180,13 @@ test("5E metadata self-heal: listener topology and three-brand physical paths re
   );
 });
 
-test("5E metadata self-heal: Maintenance yearly rebuild stays full replacement; Backend owns Coverage recovery", () => {
-  const start = maintenanceSource.indexOf("const handleRebuildYearlyTargetSummary = async () =>");
-  const end = maintenanceSource.indexOf("// 既有主要工具：校準與備份", start);
-  const block = maintenanceSource.slice(start, end);
-
-  assert.ok(start >= 0 && end > start);
-  assert.match(
-    block,
-    /batch\.set\(doc\(getCollectionPath\("monthly_targets_summary"\), bucket\.yearMonth\), \{/,
-  );
-  assert.match(block, /source: "SystemMaintenance_yearly_target_summary_rebuild"/);
-  assert.doesNotMatch(block, /targetCoverageVersion/);
-  assert.doesNotMatch(block, /coverageSource/);
-  assert.doesNotMatch(block, /merge:\s*true/);
-
+test("5E metadata self-heal: normal Maintenance retires yearly target Summary rebuild and Backend owns Coverage recovery", () => {
+  assert.doesNotMatch(maintenanceSource, /const handleRebuildYearlyTargetSummary = async \(\) =>/);
+  assert.doesNotMatch(maintenanceSource, /SystemMaintenance_yearly_target_summary_rebuild/);
+  assert.doesNotMatch(maintenanceSource, /一鍵補整理年度目標/);
   assert.match(
     coverageSource,
     /Same target values do NOT prove that the Summary is still a valid Formal/,
   );
+  assert.match(coverageSource, /repairCurrentSummaryCoverageMetadata/);
 });
