@@ -6,6 +6,8 @@ const { isLifecycleEntryExpectedForDate } = require("./storeLifecycle");
 const { aggregateTelegramProjectionRows } = require("./telegram/projectionConsumer");
 const { isValidNumericStatus } = require("./telegram/formalKpi");
 const { KPI_CONTRACT_VERSION } = require("./kpiContracts");
+const { PROJECTION_CONTEXT_COLLECTION } = require("./projectionContext");
+const { buildProspectiveShadowCandidate } = require("./projectionShadowCandidate");
 
 const PROJECTION_ACCURACY_SCHEMA_VERSION = "projection-accuracy-v1";
 const PROJECTION_ACCURACY_SEMANTIC_VERSION = "projection-accuracy-checkpoint-v1";
@@ -361,6 +363,7 @@ function buildCheckpointPayload({
   completeness,
   performance,
   authority,
+  projectionContext = null,
   capturedAtText,
   readCount,
   readSources,
@@ -384,6 +387,16 @@ function buildCheckpointPayload({
   const shadow = buildShadowV1Aggregate(rows);
   const naiveCash = buildNaiveCurrentPace(cashActual, cutoffDay, daysInMonth);
   const naiveAccrual = buildNaiveCurrentPace(accrualActual, cutoffDay, daysInMonth);
+  const prospectiveShadow = buildProspectiveShadowCandidate({
+    brandId,
+    yearMonth,
+    checkpointKey,
+    cutoffDate,
+    capturedAtText,
+    context: projectionContext,
+    actual: { cash: cashActual, accrual: accrualActual },
+    effective: { cash: effectiveCash, accrual: effectiveAccrual },
+  });
 
   const cashEligibility = buildScoreEligibility({
     metric: "cash",
@@ -432,6 +445,7 @@ function buildCheckpointPayload({
       cash: naiveCash,
       accrual: naiveAccrual,
     },
+    prospectiveShadow: toPlainJson(prospectiveShadow),
     model: buildModelMetadata(authority, rows),
     cutoffDayCompleteness: toPlainJson(completeness),
     scoreEligibility: {
@@ -686,6 +700,23 @@ function buildCheckpointEvidenceSignature(checkpoints = {}) {
         naiveCurrentPace: {
           cash: checkpoint?.naiveCurrentPace?.cash ?? null,
           accrual: checkpoint?.naiveCurrentPace?.accrual ?? null,
+        },
+        prospectiveShadow: {
+          candidateId: String(checkpoint?.prospectiveShadow?.candidateId || ""),
+          contextRevision: Math.max(0, Number(checkpoint?.prospectiveShadow?.context?.revision || 0)),
+          contextHash: String(checkpoint?.prospectiveShadow?.context?.contextHash || ""),
+          cash: {
+            eligible: checkpoint?.prospectiveShadow?.cash?.eligible === true,
+            standard: checkpoint?.prospectiveShadow?.cash?.standard ?? null,
+            factor: checkpoint?.prospectiveShadow?.cash?.factor ?? null,
+            reason: String(checkpoint?.prospectiveShadow?.cash?.reason || ""),
+          },
+          accrual: {
+            eligible: checkpoint?.prospectiveShadow?.accrual?.eligible === true,
+            standard: checkpoint?.prospectiveShadow?.accrual?.standard ?? null,
+            factor: checkpoint?.prospectiveShadow?.accrual?.factor ?? null,
+            reason: String(checkpoint?.prospectiveShadow?.accrual?.reason || ""),
+          },
         },
         model: {
           strategyVersion: String(checkpoint?.model?.strategyVersion || ""),
@@ -1266,6 +1297,18 @@ function createProjectionAccuracyFunctions({
       []
     );
 
+    let projectionContext = null;
+    if (String(brandId || "").trim().toLowerCase() === "cyj") {
+      const contextRef = getBrandCollection(brandId, PROJECTION_CONTEXT_COLLECTION).doc(yearMonth);
+      const contextSnap = await contextRef.get();
+      recordLocalRead(ctx, 1, "projection_accuracy_projection_context", {
+        brandId,
+        yearMonth,
+        updatedAtText: contextSnap.exists ? String(contextSnap.data()?.updatedAtText || "") : "",
+      });
+      projectionContext = contextSnap.exists ? (contextSnap.data() || {}) : null;
+    }
+
     const checkpoint = buildCheckpointPayload({
       brandId,
       yearMonth,
@@ -1274,6 +1317,7 @@ function createProjectionAccuracyFunctions({
       completeness,
       performance,
       authority,
+      projectionContext,
       capturedAtText,
       readCount: ctx.readCount,
       readSources: ctx.sources,
