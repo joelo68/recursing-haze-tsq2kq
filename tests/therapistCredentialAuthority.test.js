@@ -256,7 +256,7 @@ test("credential state classifier rejects dual sources and validates separated s
   );
 });
 
-test("login, password change and therapist master all consume the shared credential authority without frontend cutover", () => {
+test("login, password change and therapist master share credential authority while B1C2C2 cuts only master administration over", () => {
   assert.match(deviceApproval, /loadTherapistCredentialSource/);
   assert.match(accountAuthority, /updateTherapistCredentialPasswordInTransaction/);
   assert.match(therapistMaster, /buildEmbeddedCredentialCreateFields/);

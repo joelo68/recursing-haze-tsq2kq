@@ -3,8 +3,8 @@ import React, { useState, useContext, useEffect, useMemo, useCallback } from "re
 import {
   Save, Plus, Trash2, Edit2, Edit, Lock, User, Store, Target,
   CheckCircle, AlertCircle, X, Shield, ChevronDown, Search,
-  UserCheck, UserX, Key, Calendar, DollarSign, Users, LayoutGrid,
-  Database, Activity, Clock, Archive, MoreVertical, CheckSquare
+  UserCheck, Calendar, DollarSign, Users, LayoutGrid,
+  Database, Activity, Clock, MoreVertical, CheckSquare
 } from "lucide-react";
 // ★ 確保這裡有引入 getDocs 和 writeBatch
 import { 
@@ -186,7 +186,6 @@ const SettingsView = () => {
   const {
     targets, setTargets, showToast, managers, managerOrder, storeAccounts,
     managerAuth, userRole, permissions, currentUser,
-    therapists, therapistTargets, therapistSchedules,
     trainerAuth, handleUpdateTrainerAuth,
     getDocPath, getCollectionPath,
     currentBrand, securityConfig, featureFlags,
@@ -306,25 +305,12 @@ const SettingsView = () => {
   const [editingManagerName, setEditingManagerName] = useState("");
   const [editingManagerPassword, setEditingManagerPassword] = useState("");
   const [newShop, setNewShop] = useState({ name: "", manager: "" });
-  const [isAddingTherapist, setIsAddingTherapist] = useState(false);
-  const [editingTherapist, setEditingTherapist] = useState(null);
-  const [searchTerm, setSearchTerm] = useState("");
-  const [formManager, setFormManager] = useState("");
-  const [formStore, setFormStore] = useState("");
-  const [formName, setFormName] = useState("");
-  const [formPassword, setFormPassword] = useState("0000");
-  
-  const [formOnboardDate, setFormOnboardDate] = useState("");
-  const [formResignDate, setFormResignDate] = useState("");
-  
   const [newTrainerName, setNewTrainerName] = useState("");
   const [newTrainerPass, setNewTrainerPass] = useState("0000");
   const [editingTrainerId, setEditingTrainerId] = useState("");
   const [editingTrainerName, setEditingTrainerName] = useState("");
   const [editingTrainerPass, setEditingTrainerPass] = useState("");
   
-  const [showResigned, setShowResigned] = useState(false);
-
   const [delegationForm, setDelegationForm] = useState(createEmptyDelegationForm);
   const [editingDelegationId, setEditingDelegationId] = useState("");
   const [savingDelegation, setSavingDelegation] = useState(false);
@@ -360,7 +346,6 @@ const SettingsView = () => {
       { id: "stores", label: "店經帳號", isAdminOnly: true, icon: UserCheck },
       { id: "managers", label: "區長架構", isAdminOnly: true, icon: LayoutGrid },
       { id: "delegations", label: "代理與托管", isAdminOnly: true, icon: Users },
-      //{ id: "therapists", label: "人員帳號", isAdminOnly: true, icon: User },
       { id: "maintenance", label: "系統維護", isAdminOnly: true, icon: Database }
     ];
     allTabsDefinition.forEach(tab => {
@@ -1074,107 +1059,6 @@ const SettingsView = () => {
     }
   };
   
-  const handleAddTherapist = async () => { 
-    if(!formName) return showToast("請輸入姓名", "error"); 
-    try { 
-      await addDoc(getCollectionPath("therapists"), { 
-        name: formName,
-        store: formStore,
-        storeName: formStore,
-        stores: formStore ? [formStore] : [],
-        manager: formManager,
-        managerName: formManager,
-        region: formManager,
-        password: formPassword, 
-        status: 'active',
-        isActive: true,
-        onboardDate: formOnboardDate, 
-        resignDate: formResignDate,   
-        createdAt: serverTimestamp(),
-        updatedAt: serverTimestamp(),
-        updatedAtText: new Date().toISOString(),
-      }); 
-      setIsAddingTherapist(false); 
-      setFormName(""); 
-      showToast("已新增", "success"); 
-      if (fetchGlobalData) fetchGlobalData();
-    } catch(e) { showToast("失敗", "error"); } 
-  };
-
-  const handleUpdateTherapist = async () => { 
-    if(!editingTherapist) return; 
-    const ref = doc(getCollectionPath("therapists"), editingTherapist.id); 
-    await updateDoc(ref, { 
-      name: formName,
-      store: formStore,
-      storeName: formStore,
-      stores: formStore ? [formStore] : [],
-      manager: formManager,
-      managerName: formManager,
-      region: formManager,
-      password: formPassword,
-      onboardDate: formOnboardDate,
-      resignDate: formResignDate,
-      updatedAt: serverTimestamp(),
-      updatedAtText: new Date().toISOString(),
-    }); 
-    setEditingTherapist(null); 
-    showToast("已更新", "success"); 
-    if (fetchGlobalData) fetchGlobalData();
-  };
-
-  const toggleStatus = async (t) => { 
-    const ref = doc(getCollectionPath("therapists"), t.id); 
-    const isNowActive = t.status === 'active';
-    const updates = { status: isNowActive ? 'resigned' : 'active' };
-    
-    if (isNowActive && !t.resignDate) {
-      updates.resignDate = getTodayStr();
-    } else if (!isNowActive) {
-      updates.resignDate = "";
-    }
-    
-    await updateDoc(ref, updates); 
-    showToast(isNowActive ? "帳號已停用並記錄停權日" : "帳號已重新啟用", "success"); 
-    if (fetchGlobalData) fetchGlobalData();
-  };
-
-  const handleDeleteTherapist = async (id) => { if(!confirm("確定要永久刪除此帳號？(這將導致該員歷史報表數據遺失，建議使用帳號暫停代替)")) return; await deleteDoc(doc(getCollectionPath("therapists"), id)); showToast("已徹底刪除", "success"); if (fetchGlobalData) fetchGlobalData(); };
-  
-  const openEdit = (t) => { 
-    setEditingTherapist(t); 
-    setFormManager(t.manager || t.managerName || t.region || ""); 
-    setFormStore(t.store || t.storeName || (Array.isArray(t.stores) ? t.stores[0] : "")); 
-    setFormName(t.name); 
-    setFormPassword(t.password); 
-    setFormOnboardDate(t.onboardDate || "");
-    setFormResignDate(t.resignDate || "");
-  };
-
-  const openAddTherapist = () => {
-    setIsAddingTherapist(true);
-    setFormName(""); 
-    setFormPassword("0000"); 
-    setFormStore(""); 
-    setFormManager("");
-    setFormOnboardDate(getTodayStr()); 
-    setFormResignDate("");
-  };
-
-  const availableStoresForTherapist = useMemo(() => formManager ? sortStoresByOrgOrder(localManagers, (localManagers && localManagers[formManager]?localManagers[formManager]:[]), "", localManagerOrder) : [], [formManager, localManagers, localManagerOrder]);
-  
-  const filteredTherapists = useMemo(() => { 
-    return therapists.filter(t => {
-      const therapistStoreName = t.store || t.storeName || (Array.isArray(t.stores) ? t.stores[0] : "");
-      const searchMatch = (t.name || "").includes(searchTerm) || therapistStoreName.includes(searchTerm);
-      if (!searchMatch) return false;
-
-      const isResigned = t.isResigned === true || t.resigned === true || t.status === 'resigned' || t.status === '離職' || t.isActive === false;
-
-      return showResigned ? isResigned : !isResigned;
-    }); 
-  }, [therapists, searchTerm, showResigned]);
-
   const delegationManagers = useMemo(() => (
     sortManagersByOrgOrder(officialManagers || localManagers || {}, null, localManagerOrder)
       .filter((name) => name && name !== UNASSIGNED_KEY && !String(name).includes("未分區"))
@@ -2122,205 +2006,6 @@ const SettingsView = () => {
     從區長轄區移除的店家會自動回到「未分配」，不會再從營運架構中消失。若修改區長姓名，登入帳號也會同步改名。
   </div>
   <label className="block text-xs font-bold text-[#A69C91] mb-2">已分配店家</label><div className="flex flex-wrap gap-2 mb-4">{editingManagerStores.map((s) => (<div key={s} className="group relative flex items-center"><span className="px-3 py-1.5 bg-[#FFFCF7] border border-[#E8DDCC] rounded-lg text-xs font-bold text-[#675B4E] shadow-sm pr-7">{s}</span><button onClick={() => handleRemoveStoreFromEditing(s)} className="absolute right-1 p-1 text-stone-300 hover:text-rose-500 transition-colors"><X size={12} /></button></div>))}</div><div className="mb-4"><label className="block text-xs font-bold text-[#A69C91] mb-1">新增未分配店家 (從未分配清單選擇)</label><div className="relative"><select onChange={(e) => { handleAddStoreToEditing(e.target.value); e.target.value = ""; }} className="w-full px-4 py-2 border-2 border-[#E8DDCC] rounded-xl font-bold bg-[#FFFCF7] appearance-none text-[#4D4338]"><option value="">+ 點擊選擇店家</option>{availableStoresForManagerEdit.filter((s) => !editingManagerStores.includes(s)).map((s) => (<option key={s} value={s}>{s}</option>))}</select><ChevronDown size={16} className="absolute right-3 top-3 text-[#A69C91] pointer-events-none"/></div></div><div className="flex gap-2 justify-end"><button onClick={cancelEditManager} className="px-3 py-1.5 text-xs font-bold text-[#A69C91] hover:text-[#675B4E]">取消</button><button onClick={() => handleSaveManagerStores(managerName)} className="px-4 py-1.5 bg-gradient-to-r from-[#FFF7DF] via-[#F7E8C6] to-[#EACB86] text-[#5A4225] border border-[#E8C77A] text-xs font-bold rounded-lg hover:brightness-[1.02] shadow-sm">儲存名稱與轄區</button></div></div>) : (<div className="flex flex-wrap gap-2 mt-4">{stores.map((s) => (<span key={s} className={`px-2.5 py-1 border rounded-lg text-xs font-bold ${managerName === UNASSIGNED_KEY ? "bg-[#FFFCF7] border-[#E8DDCC] text-[#A69C91]" : "bg-[#FAF7F1] border-[#EFE7DA] text-[#675B4E]"}`}>{s}</span>))}</div>)}</Card>))}</div></div> )}
-        
-        {activeTab === "therapists_DISABLED" && ( 
-          <div className="space-y-6 w-full max-w-full min-w-0">
-            
-            <div className="bg-[#FFFCF7] p-2 rounded-2xl border border-[#EFE7DA] shadow-sm flex flex-col xl:flex-row gap-3 items-center justify-between">
-              
-              <div className="flex bg-[#F3EEE6]/60 p-1 rounded-xl w-full xl:w-auto relative border border-[#E8DDCC]/50">
-                <div 
-                  className="absolute inset-y-1 w-[calc(50%-4px)] bg-[#FFFCF7] rounded-lg shadow-sm transition-transform duration-300 ease-out"
-                  style={{ transform: `translateX(${showResigned ? 'calc(100% + 4px)' : '4px'})` }}
-                />
-                
-                <button 
-                  onClick={() => setShowResigned(false)} 
-                  className={`relative z-10 flex-1 xl:w-40 py-2.5 text-sm font-bold rounded-lg transition-colors flex items-center justify-center gap-2 ${!showResigned ? 'text-[#2F2923]' : 'text-[#A69C91] hover:text-[#675B4E]'}`}
-                >
-                  <UserCheck size={16} className={!showResigned ? "text-emerald-500" : ""} /> 在職戰力
-                </button>
-                <button 
-                  onClick={() => setShowResigned(true)} 
-                  className={`relative z-10 flex-1 xl:w-[200px] py-2.5 text-sm font-bold rounded-lg transition-colors flex items-center justify-center gap-2 ${showResigned ? 'text-[#2F2923]' : 'text-[#A69C91] hover:text-[#675B4E]'}`}
-                >
-                  <Archive size={16} className={showResigned ? "text-[#675B4E]" : ""} /> 停權 / 封存庫
-                </button>
-              </div>
-
-              <div className="flex w-full xl:w-auto gap-3">
-                <div className="relative flex-1 xl:w-72">
-                  <Search className="absolute left-3.5 top-3 text-[#A69C91]" size={18} />
-                  <input 
-                    type="text" 
-                    placeholder="搜尋姓名或店家..." 
-                    value={searchTerm} 
-                    onChange={(e) => setSearchTerm(e.target.value)} 
-                    className="w-full pl-10 pr-4 py-2.5 bg-[#FAF7F1] border-none rounded-xl outline-none focus:ring-2 focus:ring-amber-400 transition-all font-medium text-[#4D4338] placeholder-stone-400" 
-                  />
-                </div>
-                <button 
-                  onClick={openAddTherapist} 
-                  className="px-5 py-2.5 bg-gradient-to-r from-[#FFF7DF] via-[#F7E8C6] to-[#EACB86] text-[#5A4225] border border-[#E8C77A] rounded-xl font-bold flex items-center justify-center gap-2 hover:brightness-[1.02] transition-all shadow-md hover:shadow-lg active:scale-95 shrink-0"
-                >
-                  <Plus size={18} /> 新增
-                </button>
-              </div>
-            </div>
-
-            {(isAddingTherapist || editingTherapist) && (
-              <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-stone-900/30 backdrop-blur-sm">
-                <div className="bg-[#FFFCF7] w-full max-w-md rounded-3xl shadow-2xl overflow-hidden animate-in zoom-in-95 max-h-[90vh] overflow-y-auto border border-[#E8DDCC]">
-                  <div className="bg-[#FAF7F1] px-6 py-4 border-b border-[#EFE7DA] flex justify-between items-center">
-                    <h3 className="font-bold text-lg text-[#2F2923] flex items-center gap-2">
-                      {editingTherapist ? <Edit2 size={20} className="text-[#B7863D]"/> : <Plus size={20} className="text-[#B7863D]"/>}
-                      {editingTherapist ? "編輯人員資料" : "新增管理師"}
-                    </h3>
-                    <button onClick={() => { setIsAddingTherapist(false); setEditingTherapist(null); }} className="text-[#A69C91] hover:text-[#675B4E] bg-[#FFFCF7] p-1 rounded-full shadow-sm"><X size={20}/></button>
-                  </div>
-                  <div className="p-6 space-y-5">
-                    <div className="grid grid-cols-2 gap-4">
-                      <div>
-                        <label className="text-xs font-bold text-[#A69C91] block mb-1.5 uppercase tracking-wider">所屬區域</label>
-                        <select value={formManager} onChange={(e) => { setFormManager(e.target.value); setFormStore(""); }} className="w-full px-4 py-3 border border-[#E8DDCC] rounded-xl font-bold bg-[#FAF7F1] outline-none focus:border-[#D6A84F] focus:bg-[#FFFCF7] transition-colors appearance-none">
-                          <option value="">選擇區域</option>
-                          {sortManagersByOrgOrder(localManagers, null, localManagerOrder).map(m => <option key={m} value={m}>{m}區</option>)}
-                        </select>
-                      </div>
-                      <div>
-                        <label className="text-xs font-bold text-[#A69C91] block mb-1.5 uppercase tracking-wider">配屬店家</label>
-                        <select value={formStore} onChange={(e) => setFormStore(e.target.value)} className="w-full px-4 py-3 border border-[#E8DDCC] rounded-xl font-bold bg-[#FAF7F1] outline-none focus:border-[#D6A84F] focus:bg-[#FFFCF7] transition-colors appearance-none disabled:opacity-50" disabled={!formManager}>
-                          <option value="">選擇店家</option>
-                          {availableStoresForTherapist.map(s => <option key={s} value={s}>{s}</option>)}
-                        </select>
-                      </div>
-                    </div>
-                    <div>
-                      <label className="text-xs font-bold text-[#A69C91] block mb-1.5 uppercase tracking-wider">員工姓名</label>
-                      <input type="text" value={formName} onChange={(e) => setFormName(e.target.value)} className="w-full px-4 py-3 border border-[#E8DDCC] rounded-xl font-bold bg-[#FAF7F1] outline-none focus:border-[#D6A84F] focus:bg-[#FFFCF7] transition-colors" placeholder="請輸入姓名" />
-                    </div>
-                    <div>
-                      <label className="text-xs font-bold text-[#A69C91] block mb-1.5 uppercase tracking-wider flex items-center gap-1"><Key size={12}/> 登入密碼</label>
-                      <input type="text" value={formPassword} onChange={(e) => setFormPassword(e.target.value)} className="w-full px-4 py-3 border border-[#E8DDCC] rounded-xl font-mono bg-[#FAF7F1] outline-none focus:border-[#D6A84F] focus:bg-[#FFFCF7] transition-colors" placeholder="預設 0000" />
-                    </div>
-                    
-                    <div className="grid grid-cols-2 gap-4 pt-1 border-t border-[#EFE7DA]">
-                      <div>
-                        <label className="text-xs font-bold text-[#A69C91] block mb-1.5 uppercase tracking-wider flex items-center gap-1">
-                          <Calendar size={12}/> 上線日 (生效日)
-                        </label>
-                        <SmartDatePicker 
-                          selectedDate={formOnboardDate || getTodayStr()} 
-                          onDateSelect={setFormOnboardDate} 
-                        />
-                      </div>
-                      <div>
-                        <label className="text-xs font-bold text-[#A69C91] block mb-1.5 uppercase tracking-wider flex items-center gap-1">
-                          <Calendar size={12}/> 停權日 (選填)
-                        </label>
-                        <div className="relative">
-                          <SmartDatePicker 
-                            selectedDate={formResignDate || "未設定"} 
-                            onDateSelect={setFormResignDate} 
-                          />
-                          {formResignDate && (
-                            <button 
-                              onClick={(e) => { e.preventDefault(); e.stopPropagation(); setFormResignDate(""); }} 
-                              className="absolute right-[36px] top-1/2 -translate-y-1/2 p-1 text-stone-300 hover:text-rose-500 z-10 transition-colors bg-[#FFFCF7] rounded-full"
-                              title="清除日期"
-                            >
-                              <X size={14} />
-                            </button>
-                          )}
-                        </div>
-                      </div>
-                    </div>
-
-                    <div className="pt-2 flex gap-3">
-                      <button onClick={() => { setIsAddingTherapist(false); setEditingTherapist(null); }} className="flex-1 py-3.5 bg-[#FFFCF7] border border-[#E8DDCC] text-[#7C7063] rounded-xl font-bold hover:bg-[#FAF7F1] transition-colors">取消</button>
-                      <button onClick={editingTherapist ? handleUpdateTherapist : handleAddTherapist} className="flex-1 py-3.5 bg-gradient-to-r from-[#FFF7DF] via-[#F7E8C6] to-[#EACB86] text-[#5A4225] border border-[#E8C77A] rounded-xl font-bold hover:brightness-[1.02] shadow-md transition-all active:scale-95">{editingTherapist ? "儲存修改" : "確認新增"}</button>
-                    </div>
-                  </div>
-                </div>
-              </div>
-            )}
-            
-            {filteredTherapists.length === 0 ? (
-              <div className="text-center py-20 bg-[#FFFCF7]/50 rounded-3xl border border-[#EFE7DA] border-dashed">
-                <div className="bg-[#F3EEE6]/50 w-20 h-20 rounded-full flex items-center justify-center mx-auto mb-4">
-                  <UserX size={32} className="text-stone-300" />
-                </div>
-                <h3 className="text-lg font-bold text-[#675B4E] mb-1">{showResigned ? "查無停權資料" : "查無在職人員"}</h3>
-                <p className="text-[#A69C91] text-sm">請嘗試更換搜尋關鍵字，或是新增人員。</p>
-              </div>
-            ) : (
-              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
-                {filteredTherapists.map(t => {
-                  const isArchived = showResigned;
-                  
-                  return (
-                    <div key={t.id} className={`bg-[#FFFCF7] rounded-3xl p-5 border transition-all duration-300 relative group overflow-hidden ${isArchived ? 'border-[#E8DDCC] shadow-sm opacity-80 hover:opacity-100 bg-[#FAF7F1]' : 'border-[#EFE7DA] shadow-[0_2px_10px_-4px_rgba(0,0,0,0.05)] hover:shadow-lg hover:-translate-y-0.5 hover:border-[#E8C77A]'}`}>
-                      
-                      <div className="absolute -right-4 -top-4 opacity-[0.02] group-hover:opacity-[0.06] transition-opacity duration-500 pointer-events-none">
-                        <User size={120} />
-                      </div>
-
-                      <div className="relative z-10 flex flex-col h-full">
-                        <div className="flex justify-between items-start mb-6">
-                          <div>
-                            <div className="flex items-center gap-1.5 mb-2">
-                              <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full bg-[#F3EEE6] text-[#7C7063] text-[10px] font-bold tracking-wider">
-                                <Store size={10}/> {t.store}店
-                              </span>
-                              {isArchived && (
-                                <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full bg-stone-200/80 text-[#7C7063] text-[10px] font-bold tracking-wider border border-stone-300/50">
-                                  <Archive size={10}/> 帳號暫停
-                                </span>
-                              )}
-                            </div>
-                            <h3 className={`text-xl font-bold tracking-tight flex items-center gap-2 ${isArchived ? 'text-[#675B4E]' : 'text-[#2F2923]'}`}>
-                              {t.name}
-                            </h3>
-                            <div className="text-[10px] font-mono text-[#A69C91] mt-1 flex flex-col gap-0.5">
-                              {t.onboardDate && <span>上線: {t.onboardDate}</span>}
-                              {t.resignDate && <span className="text-rose-400/80">停權: {t.resignDate}</span>}
-                            </div>
-                          </div>
-
-                          <div className="flex gap-1 opacity-100 lg:opacity-0 group-hover:opacity-100 transition-opacity">
-                            <button 
-                              onClick={() => toggleStatus(t)} 
-                              className={`p-2 rounded-xl transition-all ${!isArchived ? 'bg-[#FAF7F1] hover:bg-rose-50 text-[#A69C91] hover:text-rose-600' : 'bg-[#FFFCF7] border border-[#E8DDCC] hover:bg-emerald-50 text-[#7C7063] hover:text-emerald-600 shadow-sm'}`} 
-                              title={!isArchived ? "暫停帳號 (適用離職/留停)" : "重新啟用帳號 (復職/歸隊)"}
-                            >
-                              {!isArchived ? <Archive size={16} strokeWidth={2.5}/> : <UserCheck size={16} strokeWidth={2.5}/>}
-                            </button>
-                            <button onClick={() => openEdit(t)} className={`p-2 rounded-xl transition-all ${isArchived ? 'bg-[#FFFCF7] border border-[#E8DDCC] shadow-sm' : 'bg-[#FAF7F1] hover:bg-[#FFF7DF]'} text-[#A69C91] hover:text-[#B7863D]`} title="編輯資料">
-                              <Edit2 size={16} strokeWidth={2.5}/>
-                            </button>
-                          </div>
-                        </div>
-
-                        <div className="mt-auto pt-4 border-t border-[#EFE7DA]/80 flex justify-between items-center text-sm">
-                          <div className="flex items-center gap-2 text-[#A69C91]">
-                            <div className="w-6 h-6 rounded-full bg-[#F3EEE6] flex items-center justify-center">
-                              <Key size={12} className="text-[#7C7063]"/>
-                            </div>
-                            <span className="font-mono text-xs tracking-widest">{t.password}</span>
-                          </div>
-                          
-                          <button onClick={() => handleDeleteTherapist(t.id)} className="p-1.5 text-stone-300 hover:text-rose-500 hover:bg-rose-50 rounded-lg transition-colors opacity-0 group-hover:opacity-100" title="永久實體刪除 (危險)">
-                            <Trash2 size={14}/>
-                          </button>
-                        </div>
-                      </div>
-                    </div>
-                  );
-                })}
-              </div>
-            )}
-          </div> 
-        )}
         
         {activeTab === "delegations" && (
           <div className="space-y-6 w-full max-w-full min-w-0">

@@ -59,6 +59,7 @@ const LOGIN_LOCATION_ENDPOINT = "https://resolveloginlocation-hyhcwrnyaa-uc.a.ru
 const DEVICE_ACCESS_ENDPOINT = "https://us-central1-cyjsituation-analysis.cloudfunctions.net/checkDeviceAccess";
 const LOGIN_DIRECTORY_ENDPOINT = "https://us-central1-cyjsituation-analysis.cloudfunctions.net/getApplicationLoginDirectory";
 const CHANGE_APPLICATION_PASSWORD_ENDPOINT = "https://us-central1-cyjsituation-analysis.cloudfunctions.net/changeApplicationPassword";
+const THERAPIST_MASTER_ENDPOINT = "https://us-central1-cyjsituation-analysis.cloudfunctions.net/manageTherapistMaster";
 const DEVICE_APPROVAL_REVIEW_ENDPOINT = "https://us-central1-cyjsituation-analysis.cloudfunctions.net/reviewDeviceApproval";
 const DEVICE_MANAGEMENT_ENDPOINT = "https://us-central1-cyjsituation-analysis.cloudfunctions.net/manageAccountDevice";
 const DEVICE_EMERGENCY_ENDPOINT = "https://us-central1-cyjsituation-analysis.cloudfunctions.net/emergencyUnblockDevice";
@@ -2912,15 +2913,15 @@ export default function App() {
     };
   }, [user, fetchGlobalData]);
 
-  // P0-B1C2C1 transitional admin hydration:
-  // 正常登入只使用 sanitized directory；舊 credential-bearing admin source 僅在最高管理者
-  // 真正開啟尚未完成 Backend cutover 的管理頁時按需載入，離頁立即從 React state 清除。
+  // P0-B1C2C2 transitional admin hydration:
+  // 正常登入只使用 sanitized directory；仍含 legacy credential 的設定來源只在最高管理者
+  // 真正開啟「系統設定」時按需載入。管師帳號已改走 Backend sanitized master authority。
   useEffect(() => {
     let cancelled = false;
     const brandId = String(currentBrandId || "").trim().toLowerCase();
     const isDirectorAdmin = userRole === "director" && Boolean(currentUser) && canDirectorAccessView(activeView);
     const needsSettingsRaw = isDirectorAdmin && activeView === "settings";
-    const needsTherapistMasterRaw = isDirectorAdmin && activeView === "therapist-manager";
+    const ownsTherapistMasterHydration = isDirectorAdmin && activeView === "therapist-manager";
 
     const restoreSanitizedState = () => {
       const directory = loginDirectory?.brandId === brandId ? loginDirectory : EMPTY_LOGIN_DIRECTORY;
@@ -2943,7 +2944,12 @@ export default function App() {
       setDirectorAuth({});
     };
 
-    if (!needsSettingsRaw && !needsTherapistMasterRaw) {
+    if (ownsTherapistMasterHydration) {
+      // 由下方 Backend therapist master hydration effect 獨立管理，避免 raw credential fallback。
+      return undefined;
+    }
+
+    if (!needsSettingsRaw) {
       restoreSanitizedState();
       setAdminCredentialSourceState({ status: "idle", brandId, view: "", error: "" });
       return undefined;
@@ -2969,29 +2975,6 @@ export default function App() {
           setTrainerAuth(normalizeTrainerAuthData(trainerAuthSnap.exists() ? trainerAuthSnap.data() : {}));
           setDirectorAuth({});
           trackReadSource("admin_credential_settings_lazy", 3, getStableReadMeta("admin_credential_settings_lazy"));
-        } else if (needsTherapistMasterRaw) {
-          const therapistSnap = await getDocs(getCollectionPath("therapists"));
-          if (cancelled || currentBrandIdRef.current !== brandId) return;
-          const rawTherapists = therapistSnap.docs.map((documentSnapshot) => {
-            const data = documentSnapshot.data() || {};
-            const storeName = data.store || data.storeName || data.primaryStore || (Array.isArray(data.stores) ? data.stores[0] : "");
-            const managerName = data.manager || data.managerName || data.region || data.area || "";
-            return {
-              id: documentSnapshot.id,
-              ...data,
-              store: storeName,
-              storeName: data.storeName || storeName,
-              manager: managerName,
-              managerName: data.managerName || managerName,
-              normalizedStoreCore: normalizeStore(storeName),
-            };
-          });
-          setTherapists(rawTherapists);
-          setStoreAccounts(Array.isArray(loginDirectory?.stores) ? loginDirectory.stores.map((item) => ({ ...item })) : []);
-          setManagerAuth({});
-          setTrainerAuth({ accounts: {}, trainerOrder: [] });
-          setDirectorAuth({});
-          trackReadSource("admin_therapist_master_lazy", therapistSnap.docs.length, getStableReadMeta("admin_therapist_master_lazy"));
         }
 
         if (!cancelled) {
@@ -3023,7 +3006,6 @@ export default function App() {
     accountDirectoryState.updatedAtText,
     canDirectorAccessView,
     getDocPath,
-    getCollectionPath,
     getStableReadMeta,
     normalizeStore,
   ]);
@@ -4105,6 +4087,156 @@ export default function App() {
     credentialPassword: securitySessionCredentialRef.current || "",
   }), [userRole, currentSecurityAccountRawId, currentSecurityAccountKey, currentUser, currentDeviceTrust]);
 
+  const callTherapistMasterAuthority = useCallback(async (request = {}) => {
+    if (!isDeviceSecuritySuperAdmin) {
+      throw new Error("只有最高管理者可以管理管師帳號");
+    }
+    if (currentDeviceTrust?.status !== "trusted") {
+      throw new Error("目前裝置尚未完成信任確認，無法管理管師帳號");
+    }
+
+    const brandIdAtStart = String(currentBrandId || "").trim().toLowerCase();
+    const result = await callDeviceSecurityEndpoint(THERAPIST_MASTER_ENDPOINT, {
+      ...request,
+      brandId: brandIdAtStart,
+      actor: { ...buildDeviceSecurityActor(), roleId: "director" },
+    });
+    if (String(result?.brandId || "").trim().toLowerCase() !== brandIdAtStart) {
+      throw new Error("管師帳號資料品牌不一致，已停止套用結果");
+    }
+    return { ...result, brandIdAtStart };
+  }, [
+    isDeviceSecuritySuperAdmin,
+    currentDeviceTrust?.status,
+    currentBrandId,
+    callDeviceSecurityEndpoint,
+    buildDeviceSecurityActor,
+  ]);
+
+  const normalizeTherapistMasterRow = useCallback((data = {}) => {
+    const storeName = data.store || data.storeName || data.primaryStore || (Array.isArray(data.stores) ? data.stores[0] : "");
+    const managerName = data.manager || data.managerName || data.region || data.area || "";
+    return {
+      ...data,
+      id: String(data.id || ""),
+      store: storeName,
+      storeName: data.storeName || storeName,
+      manager: managerName,
+      managerName: data.managerName || managerName,
+      normalizedStoreCore: normalizeStore(storeName),
+      masterSignature: String(data.masterSignature || ""),
+    };
+  }, [normalizeStore]);
+
+  const refreshTherapistMasterDirectory = useCallback(async () => {
+    const result = await callTherapistMasterAuthority({ action: "list" });
+    const rows = Array.isArray(result?.therapists)
+      ? result.therapists.map(normalizeTherapistMasterRow)
+      : [];
+    if (currentBrandIdRef.current === result.brandIdAtStart) {
+      setTherapists(rows);
+      trackReadSource("admin_therapist_master_backend", rows.length, getStableReadMeta("admin_therapist_master_backend"));
+    }
+    return rows;
+  }, [callTherapistMasterAuthority, normalizeTherapistMasterRow, getStableReadMeta]);
+
+  const manageTherapistMasterAction = useCallback(async ({
+    action = "",
+    therapistId = "",
+    expectedMasterSignature = "",
+    payload = {},
+    confirmPermanentDelete = false,
+  } = {}) => {
+    const safeAction = String(action || "").trim().toLowerCase();
+    if (safeAction === "list") {
+      const therapists = await refreshTherapistMasterDirectory();
+      return { ok: true, action: "list", therapists };
+    }
+
+    try {
+      const result = await callTherapistMasterAuthority(removeUndefinedDeep({
+        action: safeAction,
+        therapistId: therapistId || undefined,
+        expectedMasterSignature: expectedMasterSignature || undefined,
+        payload: payload && typeof payload === "object" ? payload : {},
+        confirmPermanentDelete: confirmPermanentDelete === true,
+      }));
+
+      if (currentBrandIdRef.current === result.brandIdAtStart) {
+        if (result.deleted === true) {
+          setTherapists((previous) => (previous || []).filter((item) => String(item?.id || "") !== String(result.therapistId || "")));
+        } else if (result.therapist) {
+          const nextRow = normalizeTherapistMasterRow({
+            ...result.therapist,
+            masterSignature: result.masterSignature || "",
+          });
+          setTherapists((previous) => {
+            const list = Array.isArray(previous) ? previous : [];
+            const index = list.findIndex((item) => String(item?.id || "") === nextRow.id);
+            if (index < 0) return [...list, nextRow];
+            const next = [...list];
+            next[index] = nextRow;
+            return next;
+          });
+        }
+      }
+      return result;
+    } catch (error) {
+      if (error?.status === 409 && currentBrandIdRef.current === String(currentBrandId || "").trim().toLowerCase()) {
+        await refreshTherapistMasterDirectory().catch((refreshError) => {
+          console.warn("管師帳號衝突後重新整理失敗:", refreshError);
+        });
+      }
+      throw error;
+    }
+  }, [
+    currentBrandId,
+    callTherapistMasterAuthority,
+    normalizeTherapistMasterRow,
+    refreshTherapistMasterDirectory,
+  ]);
+
+  useEffect(() => {
+    const brandId = String(currentBrandId || "").trim().toLowerCase();
+    const shouldLoad = userRole === "director"
+      && Boolean(currentUser)
+      && activeView === "therapist-manager"
+      && canDirectorAccessView("therapist-manager");
+    if (!shouldLoad) return undefined;
+
+    let cancelled = false;
+    setAdminCredentialSourceState({ status: "loading", brandId, view: "therapist-manager", error: "" });
+
+    refreshTherapistMasterDirectory()
+      .then(() => {
+        if (!cancelled && currentBrandIdRef.current === brandId) {
+          setAdminCredentialSourceState({ status: "ready", brandId, view: "therapist-manager", error: "" });
+        }
+      })
+      .catch((error) => {
+        console.error("管師帳號資料同步失敗:", error);
+        if (!cancelled && currentBrandIdRef.current === brandId) {
+          setAdminCredentialSourceState({
+            status: "error",
+            brandId,
+            view: "therapist-manager",
+            error: error?.message || "管師帳號資料目前無法同步，請稍後重新進入此頁。",
+          });
+        }
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [
+    userRole,
+    currentUser,
+    activeView,
+    currentBrandId,
+    canDirectorAccessView,
+    refreshTherapistMasterDirectory,
+  ]);
+
   const updateModulePermissions = useCallback(async (nextPermissions = {}) => {
     if (!isDeviceSecuritySuperAdmin) {
       throw new Error("只有最高管理者可以修改模組權限");
@@ -4312,7 +4444,6 @@ export default function App() {
 
   const handleUpdateStorePassword = useCallback(async (id, newPass) => { try { const updated = storeAccounts.map((a) => a.id === id ? { ...a, password: newPass } : a); await setDoc(getDocPath("store_account_data"), { accounts: updated }); return true; } catch (e) { return false; } }, [storeAccounts, getDocPath]);
   const handleUpdateManagerPassword = useCallback(async (name, newPass) => { try { await setDoc(getDocPath("manager_auth"), { [name]: newPass }, { merge: true }); return true; } catch (e) { return false; } }, [getDocPath]);
-  const handleUpdateTherapistPassword = useCallback(async (id, newPass) => { try { await updateDoc(doc(getCollectionPath("therapists"), id), { password: newPass }); return true; } catch (e) { console.error(e); return false; } }, [getCollectionPath]);
   const handleUpdateTrainerAuth = useCallback(async (actionOrPassword, trainerId = null, payload = {}) => {
     try {
       const current = normalizeTrainerAuthData(trainerAuth || {});
@@ -4639,7 +4770,7 @@ export default function App() {
   const contextValue = useMemo(() => ({
     user, loading, managers: visibleManagers, managerOrder: visibleManagerOrder, budgets, monthlyTargetSummary, currentLifecycleMasterState, currentDashboardSummary, currentRankingsSummary, currentReportSummaryReady, currentReportSummaryReadyYearMonth, currentReportSummaryReadyBrandId, currentSummaryRecalcFlagState, historicalDetailRefreshState, targets, rawData: visibleRawData, allReports: rawData,
     annualAggregatedData, annualDashboardSummaries, annualSummaryStatusMap, annualSummaryLoadState, therapistAnnualAggregatedData, // ★ 把年度 Summary 與管理師資料交出去
-    showToast, openConfirm, fmtMoney, fmtNum, inputDate, setInputDate, setTargets, selectedYear, selectedMonth, setSelectedYear, setSelectedMonth, permissions, storeAccounts, managerAuth, currentUser, userRole, logActivity, handleUpdateStorePassword, handleUpdateManagerPassword, handleUpdateTherapistPassword, navigateToStore, activeView, appId,
+    showToast, openConfirm, fmtMoney, fmtNum, inputDate, setInputDate, setTargets, selectedYear, selectedMonth, setSelectedYear, setSelectedMonth, permissions, storeAccounts, managerAuth, currentUser, userRole, logActivity, handleUpdateStorePassword, handleUpdateManagerPassword, manageTherapistMasterAction, navigateToStore, activeView, appId,
     therapists: visibleTherapists, therapistReports: visibleTherapistReports, therapistSchedules, therapistTargets, trainerAuth, handleUpdateTrainerAuth, systemExclusionState, auditExclusions, handleUpdateAuditExclusions, currentBrand, setCurrentBrandId, getCollectionPath, getDocPath, dailyLoginCount, yesterdayLoginCount, securityConfig, featureFlags, therapistModuleEnabled, isOnline, isLowPowerMode,
     currentDeviceTrust, currentSecurityAccountKey, manageDeviceSecurityAction, reviewDeviceApprovalAction, updateTelegramSecurityAlertConfig, updateModulePermissions, updateProjectionContext, updateStoreSchedule, canManageDeviceSecurity: isDeviceSecuritySuperAdmin, openDeviceApprovalPanel,
     fetchGlobalData,
@@ -4650,7 +4781,7 @@ export default function App() {
     directorPermissionProfile,
     canDirectorAccessView,
     isReadOnlyDirector: userRole === "director" && !canDirectorAccessView("history")
-  }), [user, loading, visibleManagers, visibleManagerOrder, budgets, monthlyTargetSummary, currentLifecycleMasterState, currentDashboardSummary, currentRankingsSummary, currentReportSummaryReady, currentReportSummaryReadyYearMonth, currentReportSummaryReadyBrandId, currentSummaryRecalcFlagState, historicalDetailRefreshState, targets, visibleRawData, rawData, annualAggregatedData, annualDashboardSummaries, annualSummaryStatusMap, annualSummaryLoadState, therapistAnnualAggregatedData, inputDate, selectedYear, selectedMonth, permissions, storeAccounts, managerAuth, currentUser, userRole, logActivity, handleUpdateStorePassword, handleUpdateManagerPassword, handleUpdateTherapistPassword, navigateToStore, activeView, appId, visibleTherapists, visibleTherapistReports, therapistSchedules, therapistTargets, trainerAuth, handleUpdateTrainerAuth, systemExclusionState, auditExclusions, handleUpdateAuditExclusions, currentBrand, setCurrentBrandId, getCollectionPath, getDocPath, dailyLoginCount, yesterdayLoginCount, securityConfig, featureFlags, therapistModuleEnabled, isOnline, isLowPowerMode, currentDeviceTrust, currentSecurityAccountKey, manageDeviceSecurityAction, reviewDeviceApprovalAction, updateTelegramSecurityAlertConfig, updateModulePermissions, updateProjectionContext, updateStoreSchedule, isDeviceSecuritySuperAdmin, openDeviceApprovalPanel, fetchGlobalData, managers, delegations, activeDelegations, delegationAccess, accessibleStores, officialStores, delegatedStores, refreshDelegations, canAccessStore, canEditStoreReport, getActiveDelegationForStore, directorLevel, directorPermissionProfile, canDirectorAccessView]); // ★ 依賴陣列也要加
+  }), [user, loading, visibleManagers, visibleManagerOrder, budgets, monthlyTargetSummary, currentLifecycleMasterState, currentDashboardSummary, currentRankingsSummary, currentReportSummaryReady, currentReportSummaryReadyYearMonth, currentReportSummaryReadyBrandId, currentSummaryRecalcFlagState, historicalDetailRefreshState, targets, visibleRawData, rawData, annualAggregatedData, annualDashboardSummaries, annualSummaryStatusMap, annualSummaryLoadState, therapistAnnualAggregatedData, inputDate, selectedYear, selectedMonth, permissions, storeAccounts, managerAuth, currentUser, userRole, logActivity, handleUpdateStorePassword, handleUpdateManagerPassword, manageTherapistMasterAction, navigateToStore, activeView, appId, visibleTherapists, visibleTherapistReports, therapistSchedules, therapistTargets, trainerAuth, handleUpdateTrainerAuth, systemExclusionState, auditExclusions, handleUpdateAuditExclusions, currentBrand, setCurrentBrandId, getCollectionPath, getDocPath, dailyLoginCount, yesterdayLoginCount, securityConfig, featureFlags, therapistModuleEnabled, isOnline, isLowPowerMode, currentDeviceTrust, currentSecurityAccountKey, manageDeviceSecurityAction, reviewDeviceApprovalAction, updateTelegramSecurityAlertConfig, updateModulePermissions, updateProjectionContext, updateStoreSchedule, isDeviceSecuritySuperAdmin, openDeviceApprovalPanel, fetchGlobalData, managers, delegations, activeDelegations, delegationAccess, accessibleStores, officialStores, delegatedStores, refreshDelegations, canAccessStore, canEditStoreReport, getActiveDelegationForStore, directorLevel, directorPermissionProfile, canDirectorAccessView]); // ★ 依賴陣列也要加
   
   const memoizedViews = useMemo(() => {
     return (
@@ -4671,7 +4802,7 @@ export default function App() {
           {activeView === "input" && canDirectorAccessView("input") && <InputView />}
           {activeView === "logs" && canDirectorAccessView("logs") && <SystemMonitor />}
           {activeView === "settings" && canDirectorAccessView("settings") && (
-            adminCredentialSourceState.status === "ready" && adminCredentialSourceState.view === "settings"
+            adminCredentialSourceState.status === "ready" && adminCredentialSourceState.view === "settings" && adminCredentialSourceState.brandId === currentBrandId
               ? <SettingsView />
               : (
                 <div className="flex min-h-[55vh] items-center justify-center px-4">
@@ -4701,7 +4832,7 @@ export default function App() {
           {activeView === "smart-forecast" && canAccessSmartForecastView && <SmartForecastView />}
           {activeView === "notification" && canDirectorAccessView("notification") && <NotificationManager />}
           {activeView === "therapist-manager" && canDirectorAccessView("therapist-manager") && (
-            adminCredentialSourceState.status === "ready" && adminCredentialSourceState.view === "therapist-manager"
+            adminCredentialSourceState.status === "ready" && adminCredentialSourceState.view === "therapist-manager" && adminCredentialSourceState.brandId === currentBrandId
               ? <TherapistManagerView />
               : (
                 <div className="flex min-h-[55vh] items-center justify-center px-4">
@@ -4726,7 +4857,7 @@ export default function App() {
         </Suspense>
       </main>
     );
-  }, [activeView, auditType, canDirectorAccessView, canAccessStoreScheduleView, canAccessSmartForecastView, adminCredentialSourceState]);
+  }, [activeView, auditType, canDirectorAccessView, canAccessStoreScheduleView, canAccessSmartForecastView, adminCredentialSourceState, currentBrandId]);
 
   if (loading) return <div className="min-h-screen flex flex-col items-center justify-center bg-[#F9F8F6]"><Loader2 className="w-16 h-16 animate-spin text-stone-400 mb-4" /><p className="animate-pulse text-stone-500 font-bold tracking-wider">Loading DRCYJ Cloud...</p></div>;
   

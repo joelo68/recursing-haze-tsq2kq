@@ -13,6 +13,7 @@ const SUPPORTED_THERAPIST_MASTER_ACTIONS = new Set([
   "archive",
   "restore",
   "delete",
+  "list",
 ]);
 const FORBIDDEN_PAYLOAD_KEYS = new Set([
   "password",
@@ -120,6 +121,10 @@ function assertPayloadIsMasterOnly(payload = {}, action = "") {
           unsupportedField: key,
         });
       }
+    }
+  } else if (action === "list") {
+    if (Object.keys(source).length > 0) {
+      throw new TherapistMasterAuthorityError("unsupported_master_field", 400);
     }
   } else if (Object.keys(source).some((key) => !["resignDate"].includes(key))) {
     throw new TherapistMasterAuthorityError("unsupported_master_field", 400);
@@ -721,6 +726,25 @@ function createTherapistMasterAuthorityFunctions({
         ? body.payload
         : {};
       assertPayloadIsMasterOnly(payload, action);
+
+      if (action === "list") {
+        const snapshot = await getBrandCollection(db, brandId, "therapists").get();
+        const therapists = snapshot.docs.map((documentSnapshot) => {
+          const raw = documentSnapshot.data() || {};
+          const masterRaw = { ...raw, id: documentSnapshot.id };
+          return {
+            ...sanitizeTherapistResponse(masterRaw),
+            masterSignature: buildTherapistMasterSignature(masterRaw),
+          };
+        });
+        return res.status(200).json({
+          ok: true,
+          brandId,
+          action,
+          therapists,
+          readCount: snapshot.docs.length,
+        });
+      }
 
       let therapistRef;
       let therapistId;

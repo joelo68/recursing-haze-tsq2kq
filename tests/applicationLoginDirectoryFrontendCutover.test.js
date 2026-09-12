@@ -62,19 +62,21 @@ test("backend application identity is authoritative for director level and maste
   assert.ok(loginBlock.indexOf("await activateApplicationIdentitySession") < loginBlock.indexOf("setUserRole(roleId)"));
 });
 
-test("legacy admin credential material is lazy-loaded only on protected management views and scrubbed on exit", () => {
-  const adminBlock = sliceBetween(app, "P0-B1C2C1 transitional admin hydration", "const targetYearStr = String(selectedYear)");
+test("legacy settings credential material remains lazy while therapist master admin data is backend-sanitized", () => {
+  const adminBlock = sliceBetween(app, "P0-B1C2C2 transitional admin hydration", "const targetYearStr = String(selectedYear)");
   assert.match(adminBlock, /activeView === "settings"/);
   assert.match(adminBlock, /activeView === "therapist-manager"/);
   assert.match(adminBlock, /getDoc\(getDocPath\("store_account_data"\)\)/);
   assert.match(adminBlock, /getDoc\(getDocPath\("manager_auth"\)\)/);
   assert.match(adminBlock, /getDoc\(getDocPath\("trainer_auth"\)\)/);
-  assert.match(adminBlock, /getDocs\(getCollectionPath\("therapists"\)\)/);
+  assert.doesNotMatch(adminBlock, /getDocs\(getCollectionPath\("therapists"\)\)/);
   assert.doesNotMatch(adminBlock, /master_auth|director_auth/);
-  assert.match(adminBlock, /setManagerAuth\(\{\}\)/);
-  assert.match(adminBlock, /setTrainerAuth\(\{ accounts: \{\}, trainerOrder: \[\] \}\)/);
+  assert.match(adminBlock, /ownsTherapistMasterHydration/);
   assert.doesNotMatch(adminBlock, /onSnapshot\s*\(/);
   assert.doesNotMatch(adminBlock, /setInterval\s*\(/);
+
+  assert.match(app, /callTherapistMasterAuthority\(\{ action: "list" \}\)/);
+  assert.match(app, /trackReadSource\("admin_therapist_master_backend"/);
 });
 
 test("directory cutover does not advance Rules lockdown or app version", () => {

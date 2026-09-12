@@ -7,7 +7,6 @@ import {
   Plus,
   Edit2,
   X,
-  Key,
   Calendar,
   UserX,
   Store,
@@ -16,12 +15,9 @@ import {
   Shield,
   TrendingUp,
   Lock,
-  Eye,
   ChevronDown,
   CheckCircle2,
 } from "lucide-react";
-import { doc, setDoc, deleteDoc, serverTimestamp } from "firebase/firestore";
-
 import { AppContext } from "../AppContext";
 import { ViewWrapper } from "./SharedUI";
 import SmartDatePicker from "./SmartDatePicker";
@@ -32,8 +28,7 @@ const TherapistManagerView = () => {
     therapists,
     managers, managerOrder,
     showToast,
-    getCollectionPath,
-    fetchGlobalData,
+    manageTherapistMasterAction,
   } = useContext(AppContext);
 
   const [showResigned, setShowResigned] = useState(false);
@@ -43,7 +38,6 @@ const TherapistManagerView = () => {
 
   const [selectedTherapist, setSelectedTherapist] = useState(null);
   const [isCreating, setIsCreating] = useState(false);
-  const [showPassword, setShowPassword] = useState(false);
 
   // 2xl 以下使用抽屜，避免右側面板把畫面撐爆
   const [isDrawerOpen, setIsDrawerOpen] = useState(false);
@@ -51,7 +45,6 @@ const TherapistManagerView = () => {
   const [formManager, setFormManager] = useState("");
   const [formStore, setFormStore] = useState("");
   const [formName, setFormName] = useState("");
-  const [formPassword, setFormPassword] = useState("0000");
   const [formOnboardDate, setFormOnboardDate] = useState("");
   const [formResignDate, setFormResignDate] = useState("");
 
@@ -111,10 +104,8 @@ const TherapistManagerView = () => {
     setFormManager("");
     setFormStore("");
     setFormName("");
-    setFormPassword("0000");
     setFormOnboardDate(getTodayStr());
     setFormResignDate("");
-    setShowPassword(false);
   };
 
   const loadTherapistToForm = (t) => {
@@ -124,10 +115,8 @@ const TherapistManagerView = () => {
     setFormManager(foundManager || "");
     setFormStore(normalizeManagedStoreCore(rawStore));
     setFormName(t?.name || "");
-    setFormPassword(t?.password || "");
     setFormOnboardDate(t?.onboardDate || "");
     setFormResignDate(t?.resignDate || "");
-    setShowPassword(false);
   };
 
   const allManagers = useMemo(() => {
@@ -230,8 +219,7 @@ const TherapistManagerView = () => {
         return (
           String(t?.name || "").toLowerCase().includes(q) ||
           String(t?.id || "").toLowerCase().includes(q) ||
-          String(t?.store || "").toLowerCase().includes(q) ||
-          String(t?.password || "").toLowerCase().includes(q)
+          String(t?.store || "").toLowerCase().includes(q)
         );
       });
     }
@@ -270,15 +258,27 @@ const TherapistManagerView = () => {
       return;
     }
 
-    if (
-      selectedTherapist &&
-      !filteredTherapists.some((t) => t.id === selectedTherapist.id)
-    ) {
-      const next = filteredTherapists[0] || null;
-      setSelectedTherapist(next);
+    if (selectedTherapist) {
+      const refreshedSelected = filteredTherapists.find((t) => t.id === selectedTherapist.id);
+      if (
+        refreshedSelected &&
+        refreshedSelected.masterSignature &&
+        refreshedSelected.masterSignature !== selectedTherapist.masterSignature
+      ) {
+        // OCC 衝突後 Backend 會重新抓名單；同一筆 ID 若簽章已變，右側表單也要同步到最新版，
+        // 避免使用者在舊 local state 上再次送出相同的過期 signature。
+        setSelectedTherapist(refreshedSelected);
+        loadTherapistToForm(refreshedSelected);
+        return;
+      }
 
-      if (next) loadTherapistToForm(next);
-      else resetForm();
+      if (!refreshedSelected) {
+        const next = filteredTherapists[0] || null;
+        setSelectedTherapist(next);
+
+        if (next) loadTherapistToForm(next);
+        else resetForm();
+      }
     }
 
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -311,159 +311,147 @@ const TherapistManagerView = () => {
     }
   };
 
+  const getManagementErrorMessage = (error, fallback = "操作失敗") => {
+    const code = String(error?.code || error?.result?.code || "");
+    if (code === "therapist_master_conflict") return "這筆人員資料剛被其他管理者更新，名單已重新整理，請確認後再操作。";
+    if (code === "super_admin_reverification_required") return "管理者驗證已失效，請重新登入後再操作。";
+    if (code === "archive_before_delete_required") return "請先封存帳號，再進行永久刪除。";
+    if (code === "store_outside_brand_organization") return "所選店家已不在目前品牌的組織架構中，請重新選擇。";
+    if (code === "organization_duplicate_store") return "目前店家歸屬有重複，請先修正區域與店家設定。";
+    if (code === "credential_payload_not_allowed") return "人員主檔不能直接修改登入密碼。";
+    return error?.result?.message || error?.message || fallback;
+  };
+
   const handleCreateTherapist = async () => {
-    if (!formStore || !formName.trim() || !formPassword.trim()) {
-      showToast("請填寫完整人員資訊：店家、姓名與密碼", "error");
+    if (!formStore || !formName.trim()) {
+      showToast("請填寫完整人員資訊：店家與姓名", "error");
+      return;
+    }
+    if (typeof manageTherapistMasterAction !== "function") {
+      showToast("人員帳號安全服務尚未就緒", "error");
       return;
     }
 
     try {
-      // 使用 Firestore 自動 ID，避免舊版 T+6 位時間尾碼在長期使用下重複覆寫。
-      const docRef = doc(getCollectionPath("therapists"));
-      const newId = docRef.id;
-      const canonicalStore = normalizeManagedStoreCore(formStore);
-
-      await setDoc(docRef, {
-        id: newId,
-        name: formName.trim(),
-        store: canonicalStore,
-        storeName: canonicalStore,
-        password: formPassword.trim(),
-        onboardDate: formOnboardDate || getTodayStr(),
-        resignDate: formResignDate || "",
-        status: formResignDate ? "離職" : "在職",
-        isActive: !formResignDate,
-        isResigned: Boolean(formResignDate),
-        createdAt: serverTimestamp(),
-        updatedAt: serverTimestamp(),
+      const result = await manageTherapistMasterAction({
+        action: "create",
+        payload: {
+          name: formName.trim(),
+          store: normalizeManagedStoreCore(formStore),
+          onboardDate: formOnboardDate || getTodayStr(),
+          resignDate: formResignDate || "",
+        },
       });
+      const next = result?.therapist
+        ? { ...result.therapist, masterSignature: result.masterSignature || "" }
+        : null;
 
-      showToast("新增人員成功", "success");
+      showToast("新增人員成功；初次登入將使用系統初始密碼並要求更新", "success");
       setIsCreating(false);
       setIsDrawerOpen(false);
-
-      if (fetchGlobalData) fetchGlobalData();
+      if (next) setSelectedTherapist(next);
     } catch (error) {
       console.error("新增失敗:", error);
-      showToast("新增失敗", "error");
+      showToast(getManagementErrorMessage(error, "新增失敗"), "error");
     }
   };
 
   const handleUpdateTherapist = async () => {
-    if (!selectedTherapist || !formStore || !formName.trim() || !formPassword.trim()) {
-      showToast("資料不完整，請確認姓名、店家與密碼", "error");
+    if (!selectedTherapist || !formStore || !formName.trim()) {
+      showToast("資料不完整，請確認姓名與店家", "error");
+      return;
+    }
+    if (!selectedTherapist.masterSignature) {
+      showToast("這筆資料版本尚未同步完成，請重新進入管師帳號後再試", "error");
       return;
     }
 
     try {
-      const archived = Boolean(formResignDate);
-      const docRef = doc(getCollectionPath("therapists"), selectedTherapist.id);
-      const canonicalStore = normalizeManagedStoreCore(formStore);
-
-      await setDoc(
-        docRef,
-        {
+      const result = await manageTherapistMasterAction({
+        action: "update",
+        therapistId: selectedTherapist.id,
+        expectedMasterSignature: selectedTherapist.masterSignature,
+        payload: {
           name: formName.trim(),
-          store: canonicalStore,
-          storeName: canonicalStore,
-          password: formPassword.trim(),
-          onboardDate: formOnboardDate || "",
+          store: normalizeManagedStoreCore(formStore),
+          onboardDate: formOnboardDate || getTodayStr(),
           resignDate: formResignDate || "",
-          status: archived ? "離職" : "在職",
-          isActive: !archived,
-          isResigned: archived,
-          updatedAt: serverTimestamp(),
         },
-        { merge: true }
-      );
+      });
+      const next = result?.therapist
+        ? { ...result.therapist, masterSignature: result.masterSignature || "" }
+        : selectedTherapist;
 
       showToast("資料更新成功", "success");
-
-      // 儲存成功後關閉 2xl 以下的浮動抽屜，並保留目前篩選結果。
-      // 大螢幕右側固定面板不受影響；資料列表會由 fetchGlobalData 更新。
+      setSelectedTherapist(next);
+      loadTherapistToForm(next);
       setIsDrawerOpen(false);
       setIsCreating(false);
-
-      if (fetchGlobalData) fetchGlobalData();
     } catch (error) {
       console.error("更新失敗:", error);
-      showToast("更新失敗", "error");
+      showToast(getManagementErrorMessage(error, "更新失敗"), "error");
     }
   };
 
   const toggleStatus = async (t = selectedTherapist) => {
     if (!t) return;
+    if (!t.masterSignature) {
+      showToast("這筆資料版本尚未同步完成，請重新進入管師帳號後再試", "error");
+      return;
+    }
 
     const archived = isTherapistArchived(t);
-    const nextArchived = !archived;
-    const actionName = nextArchived ? "封存帳號" : "重新啟用帳號";
-
+    const action = archived ? "restore" : "archive";
+    const actionName = archived ? "重新啟用帳號" : "封存帳號";
     if (!window.confirm(`確定要${actionName}「${t.name}」嗎？`)) return;
 
     try {
-      const docRef = doc(getCollectionPath("therapists"), t.id);
-
-      await setDoc(
-        docRef,
-        {
-          isResigned: nextArchived,
-          status: nextArchived ? "離職" : "在職",
-          isActive: !nextArchived,
-          resignDate: nextArchived ? getTodayStr() : "",
-          updatedAt: serverTimestamp(),
-        },
-        { merge: true }
-      );
-
+      const result = await manageTherapistMasterAction({
+        action,
+        therapistId: t.id,
+        expectedMasterSignature: t.masterSignature,
+        payload: archived ? {} : { resignDate: getTodayStr() },
+      });
+      const next = result?.therapist
+        ? { ...result.therapist, masterSignature: result.masterSignature || "" }
+        : t;
+      setSelectedTherapist(next);
+      loadTherapistToForm(next);
       showToast(`已${actionName}`, "success");
-
-      if (fetchGlobalData) fetchGlobalData();
     } catch (error) {
       console.error("狀態更新失敗:", error);
-      showToast("狀態更新失敗", "error");
+      showToast(getManagementErrorMessage(error, "狀態更新失敗"), "error");
     }
   };
 
   const handleDeleteTherapist = async (t = selectedTherapist) => {
     if (!t) return;
-
-    if (
-      !window.confirm(
-        `警告：這是永久實體刪除，將無法復原。\n\n建議優先使用「封存」保留歷史資料。\n\n確定永久刪除「${t.name}」嗎？`
-      )
-    ) {
+    if (!isTherapistArchived(t)) {
+      showToast("永久刪除前請先封存帳號，以避免誤刪在職人員", "error");
+      return;
+    }
+    if (!t.masterSignature) {
+      showToast("這筆資料版本尚未同步完成，請重新進入管師帳號後再試", "error");
       return;
     }
 
-    try {
-      await deleteDoc(doc(getCollectionPath("therapists"), t.id));
+    if (!window.confirm(`警告：這是永久實體刪除，將無法復原。\n\n確定永久刪除「${t.name}」嗎？`)) return;
 
+    try {
+      await manageTherapistMasterAction({
+        action: "delete",
+        therapistId: t.id,
+        expectedMasterSignature: t.masterSignature,
+        confirmPermanentDelete: true,
+      });
       showToast("人員已永久刪除", "success");
       setSelectedTherapist(null);
       setIsCreating(false);
       setIsDrawerOpen(false);
-
-      if (fetchGlobalData) fetchGlobalData();
     } catch (error) {
       console.error("刪除失敗:", error);
-      showToast("刪除失敗", "error");
+      showToast(getManagementErrorMessage(error, "刪除失敗"), "error");
     }
-  };
-
-  const resetPassword = () => {
-    const next = window.prompt("請輸入新的登入密碼", formPassword || "0000");
-
-    if (next === null) return;
-
-    const cleaned = next.trim();
-
-    if (!cleaned) {
-      showToast("密碼不可空白", "error");
-      return;
-    }
-
-    setFormPassword(cleaned);
-    showToast("密碼已暫存，請按「儲存修改」才會寫入", "info");
   };
 
   const clearFilters = () => {
@@ -639,41 +627,11 @@ const TherapistManagerView = () => {
                 </div>
               )}
 
-              <div>
-                <label className="block text-[11px] font-black text-stone-400 mb-1.5 tracking-wider">
-                  登入密碼
-                </label>
-
-                <div className="flex gap-2">
-                  <div className="relative flex-1">
-                    <Key
-                      size={14}
-                      className="absolute left-3 top-1/2 -translate-y-1/2 text-stone-400"
-                    />
-                    <input
-                      type={showPassword ? "text" : "password"}
-                      value={formPassword}
-                      onChange={(e) => setFormPassword(e.target.value)}
-                      placeholder="預設 0000"
-                      className="w-full h-10 pl-9 pr-9 rounded-xl bg-stone-50 border border-stone-200 text-xs font-mono font-black text-stone-800 outline-none focus:bg-white focus:border-amber-300 focus:ring-4 focus:ring-amber-50 transition-all"
-                    />
-                    <button
-                      type="button"
-                      onClick={() => setShowPassword((p) => !p)}
-                      className="absolute right-2 top-1/2 -translate-y-1/2 w-7 h-7 rounded-lg text-stone-400 hover:bg-stone-100 hover:text-stone-700 transition-all flex items-center justify-center"
-                      title="顯示 / 隱藏密碼"
-                    >
-                      <Eye size={14} />
-                    </button>
-                  </div>
-
-                  <button
-                    onClick={resetPassword}
-                    className="h-10 px-3 rounded-xl border border-stone-200 bg-white text-stone-600 text-xs font-black hover:bg-stone-50 transition-all whitespace-nowrap"
-                  >
-                    重設
-                  </button>
-                </div>
+              <div className="rounded-2xl border border-amber-100 bg-amber-50/60 px-4 py-3">
+                <p className="text-xs font-black text-amber-800">登入密碼由本人管理</p>
+                <p className="mt-1 text-[11px] font-bold leading-5 text-amber-700/80">
+                  此頁不顯示、搜尋或修改任何登入密碼。新增帳號會使用系統初始密碼，首次登入時由本人完成更新。
+                </p>
               </div>
 
               <div>
@@ -770,7 +728,7 @@ const TherapistManagerView = () => {
                 </button>
               </div>
 
-              {!isCreating && selectedTherapist && (
+              {!isCreating && selectedTherapist && selectedArchived && (
                 <button
                   onClick={() => handleDeleteTherapist(selectedTherapist)}
                   className="mt-2 w-full h-8 rounded-xl text-[11px] font-black text-stone-400 hover:text-rose-600 hover:bg-rose-50 transition-all flex items-center justify-center gap-1.5"
@@ -949,12 +907,11 @@ const TherapistManagerView = () => {
               ) : (
                 <div className="w-full overflow-hidden">
                   {/* 表頭 */}
-                  <div className="hidden sm:grid grid-cols-[minmax(110px,1.35fr)_78px_58px_82px_42px_82px] px-4 py-3 bg-stone-50/80 border-b border-stone-100 text-[11px] font-black text-stone-400 tracking-wider items-center">
+                  <div className="hidden sm:grid grid-cols-[minmax(130px,1.5fr)_88px_64px_92px_82px] px-4 py-3 bg-stone-50/80 border-b border-stone-100 text-[11px] font-black text-stone-400 tracking-wider items-center">
                     <div>姓名</div>
                     <div>店家</div>
                     <div>狀態</div>
                     <div>上線日</div>
-                    <div>密碼</div>
                     <div className="text-center">操作</div>
                   </div>
 
@@ -967,7 +924,7 @@ const TherapistManagerView = () => {
                         <div
                           key={t.id}
                           onClick={() => handleSelectTherapist(t)}
-                          className={`sm:grid sm:grid-cols-[minmax(110px,1.35fr)_78px_58px_82px_42px_82px] px-4 py-3 border-b border-stone-100 items-center cursor-pointer transition-all group ${
+                          className={`sm:grid sm:grid-cols-[minmax(130px,1.5fr)_88px_64px_92px_82px] px-4 py-3 border-b border-stone-100 items-center cursor-pointer transition-all group ${
                             selected
                               ? "bg-amber-50/70 shadow-[inset_3px_0_0_#d97706]"
                               : "bg-white hover:bg-stone-50/90"
@@ -1037,10 +994,6 @@ const TherapistManagerView = () => {
                             {t.onboardDate || "—"}
                           </div>
 
-                          <div className="hidden sm:block text-[11px] font-mono font-black tracking-[0.2em] text-stone-500">
-                            ••••
-                          </div>
-
                           <div
                             className="hidden sm:flex items-center justify-end gap-1"
                             onClick={(e) => e.stopPropagation()}
@@ -1065,13 +1018,15 @@ const TherapistManagerView = () => {
                               {archived ? <UserCheck size={12} /> : <Archive size={12} />}
                             </button>
 
-                            <button
-                              onClick={() => handleDeleteTherapist(t)}
-                              className="w-7 h-7 rounded-lg bg-white border border-stone-200 text-stone-300 shadow-sm hover:text-rose-600 hover:border-rose-200 hover:bg-rose-50 transition-all flex items-center justify-center"
-                              title="永久刪除"
-                            >
-                              <Trash2 size={11} />
-                            </button>
+                            {archived && (
+                              <button
+                                onClick={() => handleDeleteTherapist(t)}
+                                className="w-7 h-7 rounded-lg bg-white border border-stone-200 text-stone-300 shadow-sm hover:text-rose-600 hover:border-rose-200 hover:bg-rose-50 transition-all flex items-center justify-center"
+                                title="永久刪除"
+                              >
+                                <Trash2 size={11} />
+                              </button>
+                            )}
                           </div>
                         </div>
                       );

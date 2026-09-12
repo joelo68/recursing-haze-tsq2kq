@@ -111,6 +111,16 @@ function makeEnv({
         if (!refs.has(key)) refs.set(key, { key, id: docId, exists: false, data: {} });
         return refs.get(key);
       },
+      async get() {
+        const prefix = `${b}:${name}:`;
+        const docs = [...refs.values()]
+          .filter((ref) => ref.exists && ref.key.startsWith(prefix))
+          .map((ref) => ({
+            id: ref.id,
+            data: () => structuredClone(ref.data || {}),
+          }));
+        return { docs, size: docs.length };
+      },
     };
   }
 
@@ -216,7 +226,7 @@ function makeEnv({
       ...body,
     };
     if (
-      action !== "create" &&
+      !["create", "list"].includes(action) &&
       !Object.prototype.hasOwnProperty.call(requestBody, "expectedMasterSignature")
     ) {
       const therapistId = String(requestBody.therapistId || requestBody.accountId || "t1");
@@ -242,16 +252,65 @@ function makeEnv({
   };
 }
 
-test("B1C1B3 is backend-only shadow master authority on the existing Account Authority runtime", () => {
+test("B1C2C2 cuts therapist master management over to the existing Account Authority runtime", () => {
   assert.equal(THERAPIST_MASTER_AUTHORITY_VERSION, "therapist-master-authority-v1");
   assert.match(functionsIndex, /exports\.manageTherapistMaster\s*=\s*therapistMasterAuthorityFunctions\.manageTherapistMaster/);
   assert.match(functionsIndex, /runtimeServiceAccount:\s*ACCOUNT_AUTHORITY_RUNTIME_SERVICE_ACCOUNT/);
   assert.match(functionsIndex, /normalizeStoreCore:\s*normalizeStoreLifecycleCore/);
-  assert.doesNotMatch(app, /manageTherapistMaster/);
-  assert.doesNotMatch(managerView, /manageTherapistMaster/);
-  assert.doesNotMatch(settings, /manageTherapistMaster/);
+  assert.match(app, /THERAPIST_MASTER_ENDPOINT/);
+  assert.match(app, /const manageTherapistMasterAction = useCallback/);
+  assert.match(managerView, /manageTherapistMasterAction/);
+  assert.doesNotMatch(managerView, /firebase\/firestore|setDoc\(|deleteDoc\(|updateDoc\(|\.password/);
+  assert.doesNotMatch(settings, /getCollectionPath\("therapists"\)|therapists_DISABLED|handleAddTherapist|handleDeleteTherapist/);
   assert.match(app, /CURRENT_APP_VERSION\s*=\s*"3\.6\.0"/);
   assert.doesNotMatch(rules, /request\.auth\.token\.drcyjIdentity/);
+});
+
+test("list returns signed sanitized therapist master rows without credential material or transaction writes", async () => {
+  const env = makeEnv();
+  const res = await env.call({ action: "list" });
+  assert.equal(res.statusCode, 200);
+  assert.equal(res.body.ok, true);
+  assert.equal(res.body.action, "list");
+  assert.equal(res.body.readCount, 1);
+  assert.equal(res.body.therapists.length, 1);
+  assert.equal(res.body.therapists[0].id, "t1");
+  assert.equal(res.body.therapists[0].name, "王小美");
+  assert.match(res.body.therapists[0].masterSignature, /^[0-9a-f]{64}$/);
+  assert.equal(Object.prototype.hasOwnProperty.call(res.body.therapists[0], "password"), false);
+  assert.equal(JSON.stringify(res.body).includes("member-secret"), false);
+  assert.equal(env.transactionCount, 0);
+  assert.equal(env.writes.length, 0);
+  assert.equal(env.deletes.length, 0);
+});
+
+test("list stays inside the requested brand therapist collection", async () => {
+  const env = makeEnv({
+    brandId: "yibo",
+    therapists: {
+      y1: {
+        id: "y1",
+        name: "伊啵測試",
+        store: "A",
+        status: "在職",
+        isActive: true,
+        password: "yibo-secret",
+      },
+    },
+  });
+  env.refs.set("cyj:therapists:foreign", {
+    key: "cyj:therapists:foreign",
+    id: "foreign",
+    exists: true,
+    data: { id: "foreign", name: "CYJ不應出現", store: "A", password: "foreign-secret" },
+  });
+
+  const res = await env.call({ action: "list" });
+  assert.equal(res.statusCode, 200);
+  assert.equal(res.body.brandId, "yibo");
+  assert.deepEqual(res.body.therapists.map((item) => item.id), ["y1"]);
+  assert.equal(JSON.stringify(res.body).includes("foreign-secret"), false);
+  assert.equal(JSON.stringify(res.body).includes("yibo-secret"), false);
 });
 
 test("therapist master authority rejects unknown brand before a transaction", async () => {
@@ -607,10 +666,11 @@ test("permanent delete removes a separated credential document in the same thera
   assert.ok(env.deletes.includes("cyj:therapists:t1"));
 });
 
-test("therapist credential collection is protected now while raw therapist master lockdown remains later", () => {
+test("therapist credential collection stays protected while B1C2C2 retires browser raw therapist credential access", () => {
   assert.match(rules, /match \/brands\/\{brandId\}\/therapist_credentials\/\{document=\*\*\}/);
   assert.match(rules, /match \/artifacts\/\{appId\}\/public\/data\/therapist_credentials\/\{document=\*\*\}/);
   assert.equal((rules.match(/collectionName != 'therapist_credentials'/g) || []).length, 2);
-  assert.match(managerView, /String\(t\?\.password \|\| ""\)/);
-  assert.match(app, /getDocs\(getCollectionPath\("therapists"\)\)/);
+  assert.doesNotMatch(managerView, /\.password|firebase\/firestore/);
+  assert.doesNotMatch(app, /getDocs\(getCollectionPath\("therapists"\)\)/);
+  assert.match(app, /admin_therapist_master_backend/);
 });
