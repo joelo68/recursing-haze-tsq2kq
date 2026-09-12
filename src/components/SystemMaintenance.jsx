@@ -4198,7 +4198,8 @@ export default function SystemMaintenance() {
 
   // 既有主要工具：校準與備份
   const backupCollections = { daily: ["daily_reports", "therapist_daily_reports"], settings: ["monthly_targets", "therapist_targets", "therapist_schedules", "therapists"], full: ["daily_reports", "therapist_daily_reports", "monthly_aggregated", "therapist_monthly_aggregated", "monthly_targets", "therapist_targets", "therapist_schedules", "therapists"] };
-  const backupDocs = ["org_structure", "store_account_data", "manager_auth", "permissions", "trainer_auth", "audit_exclusions", "security_config", "read_tracker_config", "director_auth", "master_auth"];
+  // master_auth 含最高管理金鑰，屬 Backend-only credential，不得匯出到 Browser 備份檔。
+  const backupDocs = ["org_structure", "store_account_data", "manager_auth", "permissions", "trainer_auth", "audit_exclusions", "security_config", "read_tracker_config", "director_auth"];
 
   const handleCalibrateData = async () => {
     if (!window.confirm(`確定要針對【${brandId}】在 ${calMonth} 的數據重新整理嗎？\n\n建議先完成「資料健康檢查」與「月結前檢查」。`)) return;

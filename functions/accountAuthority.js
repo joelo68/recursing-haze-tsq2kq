@@ -240,6 +240,8 @@ function validateApplicationClaims(requestAuth = {}, { brandId, roleId, accountI
 
 const MANAGED_ACCOUNT_ROLES = new Set(["director", "trainer", "manager", "store"]);
 const DIRECTOR_LEVELS = new Set(["super_admin", "operation_admin", "finance_admin", "viewer"]);
+const MASTER_MANAGEMENT_KEY_ACTIONS = new Set(["verify_master_key", "change_master_key"]);
+const DIRECTOR_ACCOUNT_MUTATION_ACTIONS = new Set(["create", "rename", "set_level", "set_active", "reset_password", "delete"]);
 
 function normalizeAccountText(value = "", maxLength = 120) {
   return String(value ?? "").trim().slice(0, maxLength);
@@ -249,6 +251,83 @@ function assertSupportedBrandId(value = "") {
   const brandId = String(value || "").trim().toLowerCase();
   if (!["cyj", "anniu", "yibo"].includes(brandId)) throw new AccountAuthorityError("invalid_brand", 400);
   return brandId;
+}
+
+function assertMasterManagementKey(raw = {}, managementKey = "") {
+  const expected = String(raw?.password || "");
+  const provided = String(managementKey || "");
+  if (!expected) throw new AccountAuthorityError("master_management_key_missing", 409);
+  if (!provided) throw new AccountAuthorityError("master_management_key_required", 403);
+  if (!safePasswordMatch(provided, expected)) throw new AccountAuthorityError("master_management_key_invalid", 403);
+  return Math.max(0, Number(raw?.revision || 0));
+}
+
+function assertNewMasterManagementKey(newManagementKey = "", currentManagementKey = "") {
+  const next = String(newManagementKey || "").trim();
+  if (!next) throw new AccountAuthorityError("missing_new_management_key", 400);
+  if (next.length < 6) throw new AccountAuthorityError("new_management_key_too_short", 400);
+  if (next.length > 160) throw new AccountAuthorityError("new_management_key_too_long", 400);
+  if (safePasswordMatch(next, currentManagementKey)) throw new AccountAuthorityError("new_management_key_matches_current", 400);
+  if (WEAK_NEW_PASSWORDS.has(next.toLowerCase())) throw new AccountAuthorityError("weak_new_management_key", 400);
+  return next;
+}
+
+async function manageMasterManagementKeyInTransaction({
+  transaction,
+  db,
+  brandId,
+  action,
+  managementKey,
+  newManagementKey,
+  nowText,
+  actorCheck,
+  getBrandCollection,
+  getBrandSettingDoc,
+}) {
+  const masterRef = getBrandSettingDoc(db, brandId, "master_auth");
+  const masterSnap = await transaction.get(masterRef);
+  if (!masterSnap.exists) throw new AccountAuthorityError("master_management_key_missing", 409);
+  const current = masterSnap.data() || {};
+  const revision = assertMasterManagementKey(current, managementKey);
+
+  if (action === "verify_master_key") {
+    return { verified: true, revision };
+  }
+
+  if (action !== "change_master_key") {
+    throw new AccountAuthorityError("unsupported_master_management_key_action", 400);
+  }
+
+  if (actorCheck?.isMasterCredential === true) {
+    throw new AccountAuthorityError("personal_super_admin_login_required", 403);
+  }
+
+  const nextManagementKey = assertNewMasterManagementKey(newManagementKey, managementKey);
+  const nextRevision = revision + 1;
+
+  transaction.set(masterRef, {
+    password: nextManagementKey,
+    revision: nextRevision,
+    updatedAtText: nowText,
+    updatedBy: String(actorCheck?.actorName || actorCheck?.actorAccountId || "最高管理者"),
+    updatedByAccountId: String(actorCheck?.actorAccountId || ""),
+  }, { merge: true });
+
+  const auditRef = getBrandCollection(db, brandId, "system_logs").doc();
+  transaction.set(auditRef, {
+    createdAtText: nowText,
+    activityType: "auth.master_management_key_change",
+    action: "變更最高管理金鑰",
+    role: "director",
+    user: String(actorCheck?.actorName || actorCheck?.actorAccountId || "最高管理者"),
+    brand: brandId,
+    details: {
+      previousRevision: revision,
+      nextRevision,
+    },
+  }, { merge: false });
+
+  return { verified: true, changed: true, revision: nextRevision };
 }
 
 function normalizeAccountStores(value = []) {
@@ -631,7 +710,7 @@ function applyStoreAdminAction({ raw, organizationRaw, action, targetAccountId, 
   throw new AccountAuthorityError("unsupported_account_action", 400);
 }
 
-async function manageAccountInTransaction({ transaction, db, brandId, roleId, action, targetAccountId, payload, nowText, actorCheck, getBrandCollection, getBrandSettingDoc }) {
+async function manageAccountInTransaction({ transaction, db, brandId, roleId, action, targetAccountId, payload, managementKey = "", nowText, actorCheck, getBrandCollection, getBrandSettingDoc }) {
   const role = String(roleId || "").toLowerCase();
   if (!MANAGED_ACCOUNT_ROLES.has(role)) throw new AccountAuthorityError("unsupported_managed_role", 400);
 
@@ -639,15 +718,26 @@ async function manageAccountInTransaction({ transaction, db, brandId, roleId, ac
   const ref = getBrandSettingDoc(db, brandId, docName);
   const refs = [ref];
   let orgRef = null;
+  let masterRef = null;
   if (role === "store") {
     orgRef = getBrandSettingDoc(db, brandId, "org_structure");
     refs.push(orgRef);
+  }
+  if (role === "director") {
+    masterRef = getBrandSettingDoc(db, brandId, "master_auth");
+    refs.push(masterRef);
   }
   const snapshots = await Promise.all(refs.map((item) => transaction.get(item)));
   const accountSnap = snapshots[0];
   if (!accountSnap.exists && action !== "create") throw new AccountAuthorityError("credential_source_missing", 404);
   const raw = accountSnap.exists ? (accountSnap.data() || {}) : {};
   const organizationRaw = orgRef && snapshots[1]?.exists ? (snapshots[1].data() || {}) : {};
+
+  if (role === "director") {
+    const masterSnap = snapshots[refs.indexOf(masterRef)];
+    if (!masterSnap?.exists) throw new AccountAuthorityError("master_management_key_missing", 409);
+    assertMasterManagementKey(masterSnap.data() || {}, managementKey);
+  }
 
   const result = role === "director"
     ? applyDirectorAdminAction({ raw, action, targetAccountId, payload, brandId, nowText })
@@ -798,10 +888,14 @@ function createAccountAuthorityFunctions({
       const targetAccountId = normalizeAccountText(body.accountId);
       const payload = body.payload && typeof body.payload === "object" ? body.payload : {};
       const actor = body.actor && typeof body.actor === "object" ? body.actor : {};
+      const managementKey = normalizePassword(body.managementKey);
 
       if (!MANAGED_ACCOUNT_ROLES.has(roleId)) throw new AccountAuthorityError("unsupported_managed_role", 400);
       if (!action) throw new AccountAuthorityError("missing_account_action", 400);
       if (roleId === "manager" && action !== "reset_password") throw new AccountAuthorityError("manager_org_authority_required", 409);
+      if (MASTER_MANAGEMENT_KEY_ACTIONS.has(action) && roleId !== "director") {
+        throw new AccountAuthorityError("master_management_key_director_only", 403);
+      }
 
       // 先用 server-issued Application Identity claims 擋掉 anonymous／跨帳號請求，
       // 再進一步讀 Trusted Device 與 credential 做最高管理者重新驗證。
@@ -810,7 +904,38 @@ function createAccountAuthorityFunctions({
       if (!actorCheck?.ok) throw new AccountAuthorityError("super_admin_reverification_required", 403);
       assertAdminApplicationClaims(requestAuth, brandId, actor, actorCheck);
 
+      if (roleId === "director" && DIRECTOR_ACCOUNT_MUTATION_ACTIONS.has(action) && !managementKey) {
+        throw new AccountAuthorityError("master_management_key_required", 403);
+      }
+
       const nowText = new Date().toISOString();
+
+      if (MASTER_MANAGEMENT_KEY_ACTIONS.has(action)) {
+        const result = await db.runTransaction(async (transaction) => manageMasterManagementKeyInTransaction({
+          transaction,
+          db,
+          brandId,
+          action,
+          managementKey,
+          newManagementKey: payload?.newManagementKey,
+          nowText,
+          actorCheck,
+          getBrandCollection,
+          getBrandSettingDoc,
+        }));
+
+        return res.status(200).json({
+          ok: true,
+          changed: result.changed === true,
+          verified: result.verified === true,
+          brandId,
+          roleId,
+          action,
+          managementKeyRevision: result.revision,
+          updatedAtText: nowText,
+        });
+      }
+
       const result = await db.runTransaction(async (transaction) => manageAccountInTransaction({
         transaction,
         db,
@@ -819,6 +944,7 @@ function createAccountAuthorityFunctions({
         action,
         targetAccountId,
         payload,
+        managementKey,
         nowText,
         actorCheck,
         getBrandCollection,
@@ -852,12 +978,17 @@ module.exports = {
   SUPPORTED_PASSWORD_ROLES,
   MANAGED_ACCOUNT_ROLES,
   DIRECTOR_LEVELS,
+  MASTER_MANAGEMENT_KEY_ACTIONS,
+  DIRECTOR_ACCOUNT_MUTATION_ACTIONS,
   KNOWN_INITIAL_PASSWORDS,
   AccountAuthorityError,
   createAccountAuthorityFunctions,
   validateApplicationClaims,
   assertAdminApplicationClaims,
   assertSupportedBrandId,
+  assertMasterManagementKey,
+  assertNewMasterManagementKey,
+  manageMasterManagementKeyInTransaction,
   normalizeDirectorAuthForAdmin,
   normalizeTrainerAuthForAdmin,
   applyDirectorAdminAction,

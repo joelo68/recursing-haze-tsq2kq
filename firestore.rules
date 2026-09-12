@@ -185,15 +185,17 @@ service cloud.firestore {
       allow write: if false;
     }
 
-    // Login Security Telegram 設定屬全品牌 Security authority。
-    // 一般 global_settings 仍維持登入後可讀寫，但 telegram_security_alerts 禁止前端直寫；
-    // 只能由通過 Firebase Auth + Trusted Device + Super Admin 再驗證的 Backend writer 更新。
+    // Login Security Telegram / Master Credential 設定屬全品牌 Security authority。
+    // master_auth 含最高管理金鑰，Browser 一律不可讀寫；只能由 Backend authority 存取。
+    // 其餘一般 global_settings 維持既有登入後讀取與有限寫入相容。
     match /artifacts/{appId}/public/data/global_settings/{settingId} {
-      allow read: if signedIn();
+      allow read: if signedIn()
+        && settingId != 'master_auth';
       allow write: if signedIn()
         && settingId != 'telegram_security_alerts'
         && settingId != 'audit_exclusions'
-        && settingId != 'permissions';
+        && settingId != 'permissions'
+        && settingId != 'master_auth';
     }
 
     // Module Permissions v1：模組權限為 Security authority。
@@ -201,6 +203,11 @@ service cloud.firestore {
     match /brands/{brandId}/settings/permissions {
       allow read: if signedIn();
       allow write: if false;
+    }
+
+    // 最高管理金鑰：Browser 永遠不可讀寫，登入／頁面解鎖／變更一律經 Backend authority。
+    match /brands/{brandId}/settings/master_auth {
+      allow read, write: if false;
     }
 
     // System Exclusion v1：正式營運 scope authority。
@@ -282,7 +289,8 @@ service cloud.firestore {
         && collectionName != 'projection_accuracy_history'
         && collectionName != 'projection_context'
         && !(collectionName == 'settings' && document == 'audit_exclusions')
-        && !(collectionName == 'settings' && document == 'permissions');
+        && !(collectionName == 'settings' && document == 'permissions')
+        && !(collectionName == 'settings' && document == 'master_auth');
     }
 
     match /artifacts/{appId}/public/data/{collectionName}/{document=**} {

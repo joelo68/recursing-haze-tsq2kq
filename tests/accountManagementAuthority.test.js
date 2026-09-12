@@ -35,6 +35,10 @@ const makeResponse = () => ({
 });
 
 function makeEnv({ settingsData = {}, requestAuth, adminCheck } = {}) {
+  const effectiveSettingsData = {
+    master_auth: { password: "master-key", revision: 3 },
+    ...(settingsData || {}),
+  };
   const refs = new Map();
   const writes = [];
   let auditCounter = 0;
@@ -43,8 +47,8 @@ function makeEnv({ settingsData = {}, requestAuth, adminCheck } = {}) {
   const getSettingRef = (brandId, name) => {
     const key = `${brandId}:settings:${name}`;
     if (!refs.has(key)) {
-      const has = Object.prototype.hasOwnProperty.call(settingsData, name);
-      refs.set(key, { key, exists: has, data: structuredClone(has ? settingsData[name] : {}) });
+      const has = Object.prototype.hasOwnProperty.call(effectiveSettingsData, name);
+      refs.set(key, { key, exists: has, data: structuredClone(has ? effectiveSettingsData[name] : {}) });
     }
     return refs.get(key);
   };
@@ -116,6 +120,7 @@ function makeEnv({ settingsData = {}, requestAuth, adminCheck } = {}) {
       headers: { authorization: "Bearer token" },
       body: {
         brandId: "cyj",
+        managementKey: "master-key",
         actor: { roleId: "director", accountId: "boss", deviceId: "dev-1", credentialPassword: "secret" },
         ...body,
       },
@@ -263,6 +268,125 @@ test("manager creation/deletion stays outside B1C1B1 because it must be atomic w
   const reset = await resetEnv.call({ roleId: "manager", action: "reset_password", accountId: "北區長" });
   assert.equal(reset.statusCode, 200);
   assert.equal(resetEnv.refs.get("cyj:settings:manager_auth").data["北區長"], getInitialPasswordsForRole("manager", "cyj")[0]);
+});
+
+test("director management requires the existing highest management key in addition to super-admin re-verification", async () => {
+  const base = {
+    director_auth: {
+      accounts: {
+        boss: { id: "boss", name: "Boss", password: "keep", level: "super_admin", isActive: true },
+        d2: { id: "d2", name: "主管二", password: "keep2", level: "operation_admin", isActive: true },
+      },
+      directorOrder: ["boss", "d2"],
+    },
+  };
+
+  const missingEnv = makeEnv({ settingsData: base });
+  const missing = await missingEnv.call({
+    roleId: "director",
+    action: "set_level",
+    accountId: "d2",
+    managementKey: "",
+    payload: { level: "viewer" },
+  });
+  assert.equal(missing.statusCode, 403);
+  assert.equal(missing.body.code, "master_management_key_required");
+  assert.equal(missingEnv.transactionCount, 0);
+
+  const wrongEnv = makeEnv({ settingsData: base });
+  const wrong = await wrongEnv.call({
+    roleId: "director",
+    action: "set_level",
+    accountId: "d2",
+    managementKey: "wrong-key",
+    payload: { level: "viewer" },
+  });
+  assert.equal(wrong.statusCode, 403);
+  assert.equal(wrong.body.code, "master_management_key_invalid");
+  assert.equal(wrongEnv.refs.get("cyj:settings:director_auth").data.accounts.d2.level, "operation_admin");
+});
+
+test("highest management key can be verified without returning secret material or refreshing account data", async () => {
+  const env = makeEnv();
+  const res = await env.call({
+    roleId: "director",
+    action: "verify_master_key",
+    managementKey: "master-key",
+  });
+  assert.equal(res.statusCode, 200);
+  assert.equal(res.body.ok, true);
+  assert.equal(res.body.verified, true);
+  assert.equal(res.body.changed, false);
+  assert.equal(res.body.managementKeyRevision, 3);
+  assert.doesNotMatch(JSON.stringify(res.body), /master-key/);
+  assert.equal(env.writes.length, 0);
+});
+
+test("highest management key change is transactional, audited, and never returns old or new key", async () => {
+  const env = makeEnv();
+  const res = await env.call({
+    roleId: "director",
+    action: "change_master_key",
+    managementKey: "master-key",
+    payload: { newManagementKey: "next-secure-key" },
+  });
+  assert.equal(res.statusCode, 200);
+  assert.equal(res.body.changed, true);
+  assert.equal(res.body.managementKeyRevision, 4);
+  assert.equal(env.refs.get("cyj:settings:master_auth").data.password, "next-secure-key");
+  assert.equal(env.refs.get("cyj:settings:master_auth").data.revision, 4);
+  assert.doesNotMatch(JSON.stringify(res.body), /master-key|next-secure-key/);
+  const audit = env.writes.find((write) => write.key.includes(":system_logs:"));
+  assert.ok(audit);
+  assert.equal(audit.data.activityType, "auth.master_management_key_change");
+  assert.doesNotMatch(JSON.stringify(audit.data), /master-key|next-secure-key|password/i);
+});
+
+test("highest management key cannot be changed from a session that itself used the master credential", async () => {
+  const env = makeEnv({
+    adminCheck: {
+      ok: true,
+      actorName: "Master",
+      actorRole: "master",
+      actorAccountId: "boss",
+      isMasterCredential: true,
+    },
+  });
+  const res = await env.call({
+    roleId: "director",
+    action: "change_master_key",
+    managementKey: "master-key",
+    payload: { newManagementKey: "next-secure-key" },
+  });
+  assert.equal(res.statusCode, 403);
+  assert.equal(res.body.code, "personal_super_admin_login_required");
+  assert.equal(env.refs.get("cyj:settings:master_auth").data.password, "master-key");
+});
+
+test("highest management key remains brand-scoped and never falls back across brands", async () => {
+  const env = makeEnv({
+    settingsData: { master_auth: { password: "yibo-master", revision: 8 } },
+    requestAuth: {
+      ok: true,
+      decoded: {
+        drcyjIdentity: true,
+        identityVersion: "application-identity-v1",
+        brandId: "yibo",
+        roleId: "director",
+        accountId: "boss",
+      },
+    },
+  });
+  const res = await env.call({
+    brandId: "yibo",
+    roleId: "director",
+    action: "verify_master_key",
+    managementKey: "yibo-master",
+  });
+  assert.equal(res.statusCode, 200);
+  assert.equal(res.body.managementKeyRevision, 8);
+  assert.ok(env.refs.has("yibo:settings:master_auth"));
+  assert.equal(env.refs.has("cyj:settings:master_auth"), false);
 });
 
 test("therapist master CRUD is intentionally excluded from administrative credential authority", async () => {

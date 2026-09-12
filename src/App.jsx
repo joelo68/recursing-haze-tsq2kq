@@ -4243,6 +4243,7 @@ export default function App() {
     action = "",
     accountId = "",
     payload = {},
+    managementKey = "",
   } = {}) => {
     if (!isDeviceSecuritySuperAdmin) {
       throw new Error("只有最高管理者可以管理高階主管帳號");
@@ -4252,17 +4253,23 @@ export default function App() {
     }
 
     const brandIdAtStart = String(currentBrandId || "").trim().toLowerCase();
+    const safeAction = String(action || "").trim().toLowerCase();
     const result = await callDeviceSecurityEndpoint(MANAGE_APPLICATION_ACCOUNT_ENDPOINT, {
       brandId: brandIdAtStart,
       roleId: String(roleId || "director").trim().toLowerCase(),
-      action: String(action || "").trim().toLowerCase(),
+      action: safeAction,
       accountId: String(accountId || "").trim(),
       payload: payload && typeof payload === "object" ? payload : {},
+      managementKey: String(managementKey || ""),
       actor: { ...buildDeviceSecurityActor(), roleId: "director" },
     });
 
     if (String(result?.brandId || "").trim().toLowerCase() !== brandIdAtStart) {
       throw new Error("高階主管帳號資料品牌不一致，已停止套用結果");
+    }
+
+    if (["verify_master_key", "change_master_key"].includes(safeAction)) {
+      return { ...result, directoryRefreshed: false };
     }
 
     const directoryRefreshed = await fetchGlobalData({

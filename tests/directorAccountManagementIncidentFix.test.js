@@ -42,7 +42,9 @@ test("director account management lives in Settings and uses backend authority i
     settings.indexOf('activeTab === "trainer-account"'),
   );
   assert.ok(directorBlock.length > 0);
-  assert.doesNotMatch(directorBlock, /account\.password|directorAuth|type="password"|value=\{[^}]*password/i);
+  assert.doesNotMatch(directorBlock, /account\.password|directorAuth|value=\{[^}]*account[^}]*password/i);
+  assert.match(directorBlock, /value=\{directorManagementKeyInput\}/);
+  assert.match(directorBlock, /value=\{currentMasterManagementKey\}/);
 });
 
 test("director admin supports delete but preserves the last active super admin", () => {
@@ -94,14 +96,15 @@ test("current signed-in director cannot rename demote disable or delete itself",
       directorOrder: ["d1", "d2"],
     },
   };
+  const masterRef = { data: { password: "master-key", revision: 1 } };
   let writes = 0;
   const transaction = {
-    async get() {
-      return { exists: true, data: () => structuredClone(accountRef.data) };
+    async get(ref) {
+      return { exists: true, data: () => structuredClone(ref.data) };
     },
     set() { writes += 1; },
   };
-  const getBrandSettingDoc = () => accountRef;
+  const getBrandSettingDoc = (_db, _brandId, name) => name === "master_auth" ? masterRef : accountRef;
   const getBrandCollection = () => ({ doc: () => ({}) });
 
   for (const [action, payload] of [
@@ -119,6 +122,7 @@ test("current signed-in director cannot rename demote disable or delete itself",
         action,
         targetAccountId: "d1",
         payload,
+        managementKey: "master-key",
         nowText: "2026-09-12T12:00:00.000Z",
         actorCheck: { actorAccountId: "d1", actorName: "A" },
         getBrandCollection,
@@ -131,9 +135,11 @@ test("current signed-in director cannot rename demote disable or delete itself",
   assert.equal(writes, 0);
 });
 
-test("incident fix keeps Rules/version boundaries unchanged", () => {
+test("director incident fix keeps app version while master_auth is now explicitly backend-only", () => {
   assert.match(app, /CURRENT_APP_VERSION\s*=\s*"3\.6\.0"/);
   assert.match(rules, /function signedIn\(\)\s*\{\s*return request\.auth != null;/);
   assert.doesNotMatch(rules, /request\.auth\.token\.drcyjIdentity/);
+  assert.match(rules, /match \/brands\/\{brandId\}\/settings\/master_auth\s*\{\s*allow read, write:\s*if false;/);
+  assert.match(rules, /settingId != 'master_auth'/);
   assert.match(backend, /serviceAccount:\s*ACCOUNT_AUTHORITY_RUNTIME_SERVICE_ACCOUNT/);
 });

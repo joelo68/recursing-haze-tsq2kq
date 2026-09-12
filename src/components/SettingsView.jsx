@@ -1,5 +1,5 @@
 // src/components/SettingsView.jsx
-import React, { useState, useContext, useEffect, useMemo, useCallback } from "react";
+import React, { useState, useContext, useEffect, useMemo, useCallback, useRef } from "react";
 import {
   Save, Plus, Trash2, Edit2, Edit, Lock, User, Store, Target,
   CheckCircle, AlertCircle, X, Shield, ChevronDown, Search,
@@ -306,6 +306,14 @@ const SettingsView = () => {
   const [editingDirectorId, setEditingDirectorId] = useState("");
   const [editingDirectorName, setEditingDirectorName] = useState("");
   const [directorActionBusy, setDirectorActionBusy] = useState("");
+  const directorManagementKeyRef = useRef("");
+  const [directorManagementUnlocked, setDirectorManagementUnlocked] = useState(false);
+  const [directorManagementKeyInput, setDirectorManagementKeyInput] = useState("");
+  const [directorManagementGateBusy, setDirectorManagementGateBusy] = useState(false);
+  const [showMasterManagementKeyChange, setShowMasterManagementKeyChange] = useState(false);
+  const [currentMasterManagementKey, setCurrentMasterManagementKey] = useState("");
+  const [newMasterManagementKey, setNewMasterManagementKey] = useState("");
+  const [confirmMasterManagementKey, setConfirmMasterManagementKey] = useState("");
   const [newTrainerName, setNewTrainerName] = useState("");
   const [newTrainerPass, setNewTrainerPass] = useState("0000");
   const [editingTrainerId, setEditingTrainerId] = useState("");
@@ -325,6 +333,26 @@ const SettingsView = () => {
 
   const directorLevel = currentUser?.directorLevel || currentUser?.adminLevel || (String(currentUser?.name || "").includes("Joe") ? "super_admin" : "operation_admin");
   const isDirectorSuperAdmin = userRole !== "director" || currentUser?.isMasterLogin === true || directorLevel === "super_admin";
+  const currentDirectorManagementBrandId = String(
+    typeof currentBrand === "string" ? currentBrand : (currentBrand?.id || "")
+  ).trim().toLowerCase();
+
+  const lockDirectorManagement = useCallback(() => {
+    directorManagementKeyRef.current = "";
+    setDirectorManagementUnlocked(false);
+    setDirectorManagementKeyInput("");
+    setDirectorManagementGateBusy(false);
+    setShowMasterManagementKeyChange(false);
+    setCurrentMasterManagementKey("");
+    setNewMasterManagementKey("");
+    setConfirmMasterManagementKey("");
+    setEditingDirectorId("");
+    setEditingDirectorName("");
+  }, []);
+
+  useEffect(() => {
+    lockDirectorManagement();
+  }, [activeTab, currentDirectorManagementBrandId, lockDirectorManagement]);
 
   const visibleTabs = useMemo(() => {
     const tabs = [];
@@ -445,13 +473,101 @@ const SettingsView = () => {
     if (code === "last_super_admin_required") return "至少需要保留一位啟用中的最高管理者";
     if (code === "self_account_admin_action_not_allowed") return "目前正在使用的高階主管帳號不能直接變更自己的名稱、權限、狀態或刪除；請由另一位最高管理者操作";
     if (code === "super_admin_reverification_required") return "目前登入驗證已失效，請重新登入後再操作";
+    if (code === "master_management_key_required") return "請先輸入最高管理金鑰";
+    if (code === "master_management_key_invalid") return "最高管理金鑰不正確";
+    if (code === "master_management_key_missing") return "此品牌尚未設定最高管理金鑰，請先確認正式安全設定";
+    if (code === "personal_super_admin_login_required") return "變更最高管理金鑰時，請先使用自己的最高管理者帳號密碼登入，不可使用最高管理金鑰登入後直接改金鑰";
+    if (code === "missing_new_management_key") return "請輸入新的最高管理金鑰";
+    if (code === "new_management_key_too_short") return "新的最高管理金鑰至少需要 6 碼";
+    if (code === "new_management_key_too_long") return "新的最高管理金鑰長度過長";
+    if (code === "new_management_key_matches_current") return "新的最高管理金鑰不可與目前相同";
+    if (code === "weak_new_management_key") return "新的最高管理金鑰過於簡單，請改用較安全的組合";
     if (code === "account_missing") return "這個高階主管帳號已不存在，請重新整理後再試";
     return error?.message || "操作失敗，請稍後再試";
+  };
+
+  const handleUnlockDirectorManagement = async () => {
+    const managementKey = String(directorManagementKeyInput || "");
+    if (!managementKey) {
+      showToast("請輸入最高管理金鑰", "error");
+      return;
+    }
+    if (typeof manageApplicationAccountAction !== "function") {
+      showToast("高階主管帳號服務尚未就緒", "error");
+      return;
+    }
+    if (directorManagementGateBusy) return;
+
+    setDirectorManagementGateBusy(true);
+    try {
+      const result = await manageApplicationAccountAction({
+        roleId: "director",
+        action: "verify_master_key",
+        managementKey,
+      });
+      if (result?.verified !== true) throw new Error("最高管理金鑰驗證未完成");
+      directorManagementKeyRef.current = managementKey;
+      setDirectorManagementUnlocked(true);
+      setDirectorManagementKeyInput("");
+      showToast("最高管理金鑰驗證完成", "success");
+    } catch (error) {
+      console.error("最高管理金鑰驗證失敗:", error);
+      directorManagementKeyRef.current = "";
+      setDirectorManagementUnlocked(false);
+      showToast(explainDirectorAccountError(error), "error");
+    } finally {
+      setDirectorManagementGateBusy(false);
+    }
+  };
+
+  const handleChangeMasterManagementKey = async () => {
+    if (currentUser?.isMasterLogin === true) {
+      showToast("請先使用自己的最高管理者帳號密碼重新登入，再變更最高管理金鑰", "error");
+      return;
+    }
+
+    const currentKey = String(currentMasterManagementKey || "");
+    const nextKey = String(newMasterManagementKey || "").trim();
+    const confirmKey = String(confirmMasterManagementKey || "").trim();
+
+    if (!currentKey) return showToast("請再次輸入目前最高管理金鑰", "error");
+    if (!nextKey) return showToast("請輸入新的最高管理金鑰", "error");
+    if (nextKey.length < 6) return showToast("新的最高管理金鑰至少需要 6 碼", "error");
+    if (nextKey !== confirmKey) return showToast("兩次輸入的新金鑰不一致", "error");
+    if (directorManagementGateBusy || directorActionBusy) return;
+    if (!window.confirm("確定要變更此品牌的最高管理金鑰嗎？\n\n變更後，舊金鑰會立即失效，所有使用最高管理金鑰的緊急／最高權限驗證都必須改用新金鑰。")) return;
+
+    setDirectorManagementGateBusy(true);
+    try {
+      const result = await manageApplicationAccountAction({
+        roleId: "director",
+        action: "change_master_key",
+        managementKey: currentKey,
+        payload: { newManagementKey: nextKey },
+      });
+      if (result?.changed !== true) throw new Error("最高管理金鑰變更未完成");
+      showToast("最高管理金鑰已更新，請使用新金鑰重新進入高階主管帳號", "success");
+      lockDirectorManagement();
+    } catch (error) {
+      console.error("最高管理金鑰變更失敗:", error);
+      const code = String(error?.code || error?.result?.code || "");
+      if (["master_management_key_invalid", "master_management_key_missing", "super_admin_reverification_required"].includes(code)) {
+        lockDirectorManagement();
+      }
+      showToast(explainDirectorAccountError(error), "error");
+    } finally {
+      setDirectorManagementGateBusy(false);
+    }
   };
 
   const runDirectorAccountAction = async ({ action, accountId = "", payload = {}, successMessage = "已完成" }) => {
     if (typeof manageApplicationAccountAction !== "function") {
       showToast("高階主管帳號服務尚未就緒", "error");
+      return false;
+    }
+    if (!directorManagementUnlocked || !directorManagementKeyRef.current) {
+      showToast("請先輸入最高管理金鑰", "error");
+      lockDirectorManagement();
       return false;
     }
     const busyKey = `${action}:${accountId || payload?.name || "new"}`;
@@ -463,6 +579,7 @@ const SettingsView = () => {
         action,
         accountId,
         payload,
+        managementKey: directorManagementKeyRef.current,
       });
       showToast(
         result?.directoryRefreshed === false
@@ -473,6 +590,10 @@ const SettingsView = () => {
       return true;
     } catch (error) {
       console.error("高階主管帳號操作失敗:", error);
+      const code = String(error?.code || error?.result?.code || "");
+      if (["master_management_key_required", "master_management_key_invalid", "master_management_key_missing", "super_admin_reverification_required"].includes(code)) {
+        lockDirectorManagement();
+      }
       showToast(explainDirectorAccountError(error), "error");
       return false;
     } finally {
@@ -1987,6 +2108,52 @@ const SettingsView = () => {
 
         {activeTab === "director-account" && (
           <Card title="高階主管帳號管理">
+            {!directorManagementUnlocked ? (
+              <div className="mx-auto w-full max-w-xl py-6">
+                <div className="rounded-[1.75rem] border border-[#E8DDD0] bg-gradient-to-br from-[#FFF9EC] via-white to-[#FFF4DC] p-6 shadow-sm">
+                  <div className="flex items-start gap-4">
+                    <div className="flex h-12 w-12 shrink-0 items-center justify-center rounded-2xl border border-[#F3DFB8] bg-white text-[#B7863D] shadow-sm">
+                      <Key size={21} />
+                    </div>
+                    <div className="min-w-0">
+                      <div className="text-lg font-black text-[#4D4338]">請先輸入最高管理金鑰</div>
+                      <p className="mt-1 text-xs font-bold leading-5 text-[#8A7D70]">此區可以新增、停用、刪除高階主管及重設登入密碼。為避免誤操作，進入前必須再次驗證目前品牌的最高管理金鑰。</p>
+                    </div>
+                  </div>
+
+                  <div className={`mt-5 rounded-xl border px-3 py-2.5 text-xs font-black ${currentDeviceTrust?.status === "trusted" ? "border-emerald-100 bg-emerald-50 text-emerald-700" : "border-rose-100 bg-rose-50 text-rose-700"}`}>
+                    {currentDeviceTrust?.status === "trusted" ? "🛡 目前裝置已信任" : "⚠ 請改用已信任裝置後再進入"}
+                  </div>
+
+                  <label className="mt-5 block">
+                    <span className="mb-2 block text-xs font-black text-[#7C7063]">最高管理金鑰</span>
+                    <input
+                      autoFocus
+                      type="password"
+                      value={directorManagementKeyInput}
+                      onChange={(event) => setDirectorManagementKeyInput(event.target.value)}
+                      onKeyDown={(event) => {
+                        if (event.key === "Enter" && !directorManagementGateBusy) handleUnlockDirectorManagement();
+                      }}
+                      placeholder="輸入目前品牌的最高管理金鑰"
+                      autoComplete="off"
+                      className="w-full rounded-xl border-2 border-[#E8DDD0] bg-white px-4 py-3 text-sm font-bold text-[#4D4338] outline-none focus:border-amber-300 focus:ring-4 focus:ring-amber-50"
+                    />
+                    <span className="mt-2 block text-[10px] font-bold leading-5 text-[#A69C91]">金鑰只會用於本次頁面驗證與後續高階主管操作，不會寫入瀏覽器儲存空間，也不會顯示目前設定值。</span>
+                  </label>
+
+                  <button
+                    type="button"
+                    onClick={handleUnlockDirectorManagement}
+                    disabled={!directorManagementKeyInput || directorManagementGateBusy || currentDeviceTrust?.status !== "trusted"}
+                    className="mt-5 inline-flex w-full items-center justify-center gap-2 rounded-xl border border-[#E8C77A] bg-gradient-to-r from-[#FFF7DF] via-[#F7E8C6] to-[#EACB86] px-5 py-3 text-sm font-black text-[#5A4225] disabled:opacity-45"
+                  >
+                    {directorManagementGateBusy ? <Clock size={17} /> : <Shield size={17} />}
+                    {directorManagementGateBusy ? "驗證中…" : "驗證並進入"}
+                  </button>
+                </div>
+              </div>
+            ) : (
             <div className="w-full space-y-6 min-w-0">
               <div className="rounded-2xl border border-[#F3DFB8] bg-[#FFF9EF] p-5">
                 <div className="flex items-start gap-3">
@@ -1996,6 +2163,105 @@ const SettingsView = () => {
                     <p className="mt-1 text-xs font-bold leading-5 text-[#8A7D70]">登入頁只負責登入。新增、權限調整、停用、密碼重設與刪除都在這裡處理；系統不會顯示任何人的正式登入密碼。</p>
                   </div>
                 </div>
+              </div>
+
+              <div className="rounded-2xl border border-[#DDE8E0] bg-[#F6FBF7] p-5">
+                <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
+                  <div className="flex items-start gap-3">
+                    <div className="mt-0.5 rounded-xl border border-emerald-100 bg-white p-2 text-emerald-600"><Shield size={18} /></div>
+                    <div>
+                      <p className="font-black text-[#3F5145]">最高管理金鑰已驗證</p>
+                      <p className="mt-1 text-xs font-bold leading-5 text-[#7C8A80]">離開此頁籤、切換品牌或重新整理後會立即重新鎖定。高階主管的每一項修改仍會由後端再次核對同一把金鑰。</p>
+                    </div>
+                  </div>
+                  <div className="flex flex-wrap gap-2">
+                    <button
+                      type="button"
+                      onClick={() => setShowMasterManagementKeyChange((previous) => !previous)}
+                      disabled={currentUser?.isMasterLogin === true}
+                      className="rounded-xl border border-[#D8C7A8] bg-white px-4 py-2.5 text-xs font-black text-[#765A31] disabled:cursor-not-allowed disabled:opacity-45"
+                      title={currentUser?.isMasterLogin === true ? "請使用自己的最高管理者帳號密碼登入後再變更金鑰" : "變更目前品牌的最高管理金鑰"}
+                    >
+                      <Key size={14} className="mr-1 inline" />變更最高管理金鑰
+                    </button>
+                    <button
+                      type="button"
+                      onClick={lockDirectorManagement}
+                      className="rounded-xl border border-[#E8DDD0] bg-white px-4 py-2.5 text-xs font-black text-[#7C7063]"
+                    >
+                      <Lock size={14} className="mr-1 inline" />重新鎖定
+                    </button>
+                  </div>
+                </div>
+
+                {currentUser?.isMasterLogin === true && (
+                  <div className="mt-4 rounded-xl border border-amber-200 bg-amber-50 px-3 py-2.5 text-xs font-bold leading-5 text-amber-700">
+                    本次是使用最高管理金鑰登入。為避免變更後讓目前管理工作階段立即失效，請先使用自己的最高管理者帳號密碼重新登入，再執行金鑰變更。
+                  </div>
+                )}
+
+                {showMasterManagementKeyChange && currentUser?.isMasterLogin !== true && (
+                  <div className="mt-5 rounded-2xl border border-[#E8DDD0] bg-white p-5">
+                    <div className="text-sm font-black text-[#4D4338]">變更最高管理金鑰</div>
+                    <p className="mt-1 text-xs font-bold leading-5 text-[#8A7D70]">變更後舊金鑰會立即失效，也會同步影響所有使用最高管理金鑰的緊急／最高權限驗證。系統不提供查看目前金鑰。</p>
+                    <div className="mt-4 grid grid-cols-1 gap-4 lg:grid-cols-3">
+                      <label className="block">
+                        <span className="mb-2 block text-xs font-black text-[#7C7063]">目前最高管理金鑰</span>
+                        <input
+                          type="password"
+                          value={currentMasterManagementKey}
+                          onChange={(event) => setCurrentMasterManagementKey(event.target.value)}
+                          autoComplete="off"
+                          className="w-full rounded-xl border-2 border-[#EFE7DA] px-4 py-3 text-sm font-bold outline-none focus:border-[#D6A84F]"
+                        />
+                      </label>
+                      <label className="block">
+                        <span className="mb-2 block text-xs font-black text-[#7C7063]">新的最高管理金鑰</span>
+                        <input
+                          type="password"
+                          value={newMasterManagementKey}
+                          onChange={(event) => setNewMasterManagementKey(event.target.value)}
+                          autoComplete="new-password"
+                          placeholder="至少 6 碼"
+                          className="w-full rounded-xl border-2 border-[#EFE7DA] px-4 py-3 text-sm font-bold outline-none focus:border-[#D6A84F]"
+                        />
+                      </label>
+                      <label className="block">
+                        <span className="mb-2 block text-xs font-black text-[#7C7063]">再次輸入新金鑰</span>
+                        <input
+                          type="password"
+                          value={confirmMasterManagementKey}
+                          onChange={(event) => setConfirmMasterManagementKey(event.target.value)}
+                          autoComplete="new-password"
+                          className="w-full rounded-xl border-2 border-[#EFE7DA] px-4 py-3 text-sm font-bold outline-none focus:border-[#D6A84F]"
+                        />
+                      </label>
+                    </div>
+                    <div className="mt-4 flex flex-col gap-2 sm:flex-row sm:justify-end">
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setShowMasterManagementKeyChange(false);
+                          setCurrentMasterManagementKey("");
+                          setNewMasterManagementKey("");
+                          setConfirmMasterManagementKey("");
+                        }}
+                        disabled={directorManagementGateBusy}
+                        className="rounded-xl border border-[#E8DDD0] bg-white px-4 py-2.5 text-xs font-black text-[#7C7063] disabled:opacity-40"
+                      >
+                        取消
+                      </button>
+                      <button
+                        type="button"
+                        onClick={handleChangeMasterManagementKey}
+                        disabled={directorManagementGateBusy || !currentMasterManagementKey || !newMasterManagementKey || !confirmMasterManagementKey}
+                        className="rounded-xl border border-[#E8C77A] bg-gradient-to-r from-[#FFF7DF] to-[#EFD399] px-5 py-2.5 text-xs font-black text-[#5A4225] disabled:opacity-45"
+                      >
+                        {directorManagementGateBusy ? "驗證並更新中…" : "確認變更最高管理金鑰"}
+                      </button>
+                    </div>
+                  </div>
+                )}
               </div>
 
               <div className="rounded-2xl border border-[#EFE7DA] bg-[#FFFCF7] p-5">
@@ -2094,6 +2360,7 @@ const SettingsView = () => {
                 })}
               </div>
             </div>
+            )}
           </Card>
         )}
 
