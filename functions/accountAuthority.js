@@ -485,6 +485,14 @@ function applyDirectorAdminAction({ raw, action, targetAccountId, payload, brand
     return { next, accountId: target };
   }
 
+  if (action === "delete") {
+    const wasActiveSuperAdmin = next.accounts[target].isActive !== false && String(next.accounts[target].level || "") === "super_admin";
+    delete next.accounts[target];
+    next.directorOrder = next.directorOrder.filter((item) => item !== target);
+    if (wasActiveSuperAdmin) assertActiveSuperAdminRemains(next);
+    return { next, accountId: target, deleted: true };
+  }
+
   throw new AccountAuthorityError("unsupported_account_action", 400);
 }
 
@@ -648,6 +656,14 @@ async function manageAccountInTransaction({ transaction, db, brandId, roleId, ac
       : role === "manager"
         ? applyManagerAdminAction({ raw, action, targetAccountId, brandId, nowText })
         : applyStoreAdminAction({ raw, organizationRaw, action, targetAccountId, payload, brandId, nowText });
+
+  if (
+    role === "director" &&
+    ["rename", "set_level", "set_active", "delete"].includes(String(action || "").toLowerCase()) &&
+    normalizeAccountText(targetAccountId) === normalizeAccountText(actorCheck?.actorAccountId)
+  ) {
+    throw new AccountAuthorityError("self_account_admin_action_not_allowed", 409);
+  }
 
   transaction.set(ref, result.next, { merge: false });
 

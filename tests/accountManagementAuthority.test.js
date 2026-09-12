@@ -132,14 +132,15 @@ function makeEnv({ settingsData = {}, requestAuth, adminCheck } = {}) {
   };
 }
 
-test("B1C1B1 is backend-only shadow authority on the existing dedicated runtime and does not advance frontend or Rules", () => {
+test("B1C1B1 account authority is intentionally consumed by post-login director management while LoginView and Rules stay unchanged", () => {
   assert.equal(ACCOUNT_AUTHORITY_RUNTIME_SERVICE_ACCOUNT, "drcyj-account-authority@cyjsituation-analysis.iam.gserviceaccount.com");
   assert.match(backend, /const manageApplicationAccount = onRequest\(/);
   assert.match(backend, /verifySuperAdminActor\(\{ db, brandId, actor \}\)/);
   assert.match(functionsIndex, /exports\.manageApplicationAccount\s*=\s*accountAuthorityFunctions\.manageApplicationAccount/);
-  assert.doesNotMatch(app, /manageApplicationAccount/);
+  assert.match(app, /const MANAGE_APPLICATION_ACCOUNT_ENDPOINT\s*=\s*"https:\/\/us-central1-cyjsituation-analysis\.cloudfunctions\.net\/manageApplicationAccount"/);
+  assert.match(app, /const manageApplicationAccountAction = useCallback/);
   assert.doesNotMatch(login, /manageApplicationAccount/);
-  assert.doesNotMatch(settings, /manageApplicationAccount/);
+  assert.match(settings, /manageApplicationAccountAction/);
   assert.doesNotMatch(therapistManager, /manageApplicationAccount/);
   assert.match(app, /CURRENT_APP_VERSION\s*=\s*"3\.6\.0"/);
   assert.doesNotMatch(rules, /request\.auth\.token\.drcyjIdentity/);

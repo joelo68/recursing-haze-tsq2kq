@@ -190,15 +190,11 @@ const SettingsView = () => {
     getDocPath, getCollectionPath,
     currentBrand, securityConfig, featureFlags,
     currentDeviceTrust,
+    loginDirectory, manageApplicationAccountAction,
     updateModulePermissions,
     user, officialManagers, delegations = [], refreshDelegations,
-    fetchGlobalData // ★ 新增：提取單次抓取函數
+    fetchGlobalData
   } = useContext(AppContext);
-
-  // ★ 新增：每次進入設定頁面時，自動抓取一次最新資料
-  useEffect(() => {
-    if (fetchGlobalData) fetchGlobalData();
-  }, [fetchGlobalData]);
 
   const [activeTab, setActiveTab] = useState("");
   const [localTargets, setLocalTargets] = useState(targets || { newASP: "", trafficASP: 1200, benchmarks: {} });
@@ -305,6 +301,11 @@ const SettingsView = () => {
   const [editingManagerName, setEditingManagerName] = useState("");
   const [editingManagerPassword, setEditingManagerPassword] = useState("");
   const [newShop, setNewShop] = useState({ name: "", manager: "" });
+  const [newDirectorName, setNewDirectorName] = useState("");
+  const [newDirectorLevel, setNewDirectorLevel] = useState("operation_admin");
+  const [editingDirectorId, setEditingDirectorId] = useState("");
+  const [editingDirectorName, setEditingDirectorName] = useState("");
+  const [directorActionBusy, setDirectorActionBusy] = useState("");
   const [newTrainerName, setNewTrainerName] = useState("");
   const [newTrainerPass, setNewTrainerPass] = useState("0000");
   const [editingTrainerId, setEditingTrainerId] = useState("");
@@ -339,6 +340,7 @@ const SettingsView = () => {
       { id: "health", label: "標準設定", isAdminOnly: true, icon: Activity },
       { id: "permissions", label: "權限資安", isAdminOnly: true, icon: Shield },
       { id: "feature-flags", label: "品牌功能", isAdminOnly: true, icon: CheckSquare },
+      { id: "director-account", label: "高階主管帳號", isAdminOnly: true, icon: Shield },
       { id: "trainer-account", label: "教專帳號", isAdminOnly: true, icon: Users }, 
       { id: "shops", label: "店家管理", isAdminOnly: true, icon: Store },
       { id: "reporting-calendar", label: "營運日曆", isAdminOnly: true, icon: Calendar },
@@ -411,6 +413,161 @@ const SettingsView = () => {
     }
   };
 
+
+  const DIRECTOR_LEVEL_OPTIONS = [
+    { value: "super_admin", label: "最高管理者", note: "可管理帳號、權限與系統安全設定" },
+    { value: "operation_admin", label: "營運管理", note: "可管理日常營運功能" },
+    { value: "finance_admin", label: "財務管理", note: "以財務相關檢視與管理為主" },
+    { value: "viewer", label: "僅查看", note: "僅保留允許的查看權限" },
+  ];
+
+  const directorAccounts = useMemo(() => {
+    const rows = Array.isArray(loginDirectory?.directors) ? loginDirectory.directors : [];
+    return [...rows].sort((a, b) => {
+      const ao = Number.isFinite(Number(a?.sortOrder)) ? Number(a.sortOrder) : 9999;
+      const bo = Number.isFinite(Number(b?.sortOrder)) ? Number(b.sortOrder) : 9999;
+      if (ao !== bo) return ao - bo;
+      return String(a?.name || a?.id || "").localeCompare(String(b?.name || b?.id || ""), "zh-Hant");
+    });
+  }, [loginDirectory]);
+
+  const currentDirectorAccountId = String(
+    currentUser?.accountId || currentUser?.id || currentUser?.name || ""
+  ).trim();
+
+  const getDirectorLevelLabel = (level = "") => (
+    DIRECTOR_LEVEL_OPTIONS.find((item) => item.value === level)?.label || "營運管理"
+  );
+
+  const explainDirectorAccountError = (error) => {
+    const code = String(error?.code || error?.result?.code || "");
+    if (code === "account_already_exists") return "這個高階主管姓名已存在";
+    if (code === "last_super_admin_required") return "至少需要保留一位啟用中的最高管理者";
+    if (code === "self_account_admin_action_not_allowed") return "目前正在使用的高階主管帳號不能直接變更自己的名稱、權限、狀態或刪除；請由另一位最高管理者操作";
+    if (code === "super_admin_reverification_required") return "目前登入驗證已失效，請重新登入後再操作";
+    if (code === "account_missing") return "這個高階主管帳號已不存在，請重新整理後再試";
+    return error?.message || "操作失敗，請稍後再試";
+  };
+
+  const runDirectorAccountAction = async ({ action, accountId = "", payload = {}, successMessage = "已完成" }) => {
+    if (typeof manageApplicationAccountAction !== "function") {
+      showToast("高階主管帳號服務尚未就緒", "error");
+      return false;
+    }
+    const busyKey = `${action}:${accountId || payload?.name || "new"}`;
+    if (directorActionBusy) return false;
+    setDirectorActionBusy(busyKey);
+    try {
+      const result = await manageApplicationAccountAction({
+        roleId: "director",
+        action,
+        accountId,
+        payload,
+      });
+      showToast(
+        result?.directoryRefreshed === false
+          ? `${successMessage}，名單會在重新進入頁面後同步`
+          : successMessage,
+        "success"
+      );
+      return true;
+    } catch (error) {
+      console.error("高階主管帳號操作失敗:", error);
+      showToast(explainDirectorAccountError(error), "error");
+      return false;
+    } finally {
+      setDirectorActionBusy("");
+    }
+  };
+
+  const handleAddDirectorAccount = async () => {
+    const name = String(newDirectorName || "").trim();
+    if (!name) return showToast("請輸入高階主管姓名", "error");
+    const success = await runDirectorAccountAction({
+      action: "create",
+      payload: { name, level: newDirectorLevel },
+      successMessage: `已新增「${name}」，首次登入請使用系統初始密碼`,
+    });
+    if (success) {
+      setNewDirectorName("");
+      setNewDirectorLevel("operation_admin");
+    }
+  };
+
+  const beginEditDirector = (account) => {
+    setEditingDirectorId(String(account?.id || account?.name || ""));
+    setEditingDirectorName(String(account?.name || account?.id || ""));
+  };
+
+  const cancelEditDirector = () => {
+    setEditingDirectorId("");
+    setEditingDirectorName("");
+  };
+
+  const handleRenameDirector = async (account) => {
+    const id = String(account?.id || "");
+    const nextName = String(editingDirectorName || "").trim();
+    if (!id || !nextName) return showToast("請輸入高階主管姓名", "error");
+    if (nextName === String(account?.name || "")) {
+      cancelEditDirector();
+      return;
+    }
+    const success = await runDirectorAccountAction({
+      action: "rename",
+      accountId: id,
+      payload: { name: nextName },
+      successMessage: "高階主管姓名已更新",
+    });
+    if (success) cancelEditDirector();
+  };
+
+  const handleDirectorLevelChange = async (account, level) => {
+    const id = String(account?.id || "");
+    if (!id || !level || level === account?.level) return;
+    await runDirectorAccountAction({
+      action: "set_level",
+      accountId: id,
+      payload: { level },
+      successMessage: `「${account?.name || id}」的管理權限已更新`,
+    });
+  };
+
+  const handleToggleDirectorAccount = async (account) => {
+    const id = String(account?.id || "");
+    if (!id) return;
+    const nextActive = account?.isActive === false;
+    const verb = nextActive ? "重新啟用" : "停用";
+    if (!window.confirm(`確定要${verb}「${account?.name || id}」嗎？`)) return;
+    await runDirectorAccountAction({
+      action: "set_active",
+      accountId: id,
+      payload: { isActive: nextActive },
+      successMessage: nextActive ? "高階主管帳號已重新啟用" : "高階主管帳號已停用",
+    });
+  };
+
+  const handleResetDirectorPassword = async (account) => {
+    const id = String(account?.id || "");
+    if (!id) return;
+    if (!window.confirm(`確定重設「${account?.name || id}」的登入密碼嗎？\n\n重設後會回到該品牌的系統初始密碼，對方下次登入時需重新建立自己的密碼。`)) return;
+    await runDirectorAccountAction({
+      action: "reset_password",
+      accountId: id,
+      successMessage: "登入密碼已重設，下次登入會要求重新建立密碼",
+    });
+  };
+
+  const handleDeleteDirectorAccount = async (account) => {
+    const id = String(account?.id || "");
+    if (!id) return;
+    if (!window.confirm(`確定永久刪除高階主管「${account?.name || id}」嗎？\n\n此操作無法復原；若只是暫時停止使用，建議選擇「停用」。`)) return;
+    const success = await runDirectorAccountAction({
+      action: "delete",
+      accountId: id,
+      successMessage: "高階主管帳號已刪除",
+    });
+    if (success && editingDirectorId === id) cancelEditDirector();
+  };
 
   const trainerAuthData = useMemo(() => normalizeTrainerAuthData(trainerAuth || {}), [trainerAuth]);
 
@@ -1823,6 +1980,118 @@ const SettingsView = () => {
                 >
                   <Save size={18} /> 儲存品牌功能設定
                 </button>
+              </div>
+            </div>
+          </Card>
+        )}
+
+        {activeTab === "director-account" && (
+          <Card title="高階主管帳號管理">
+            <div className="w-full space-y-6 min-w-0">
+              <div className="rounded-2xl border border-[#F3DFB8] bg-[#FFF9EF] p-5">
+                <div className="flex items-start gap-3">
+                  <div className="mt-0.5 rounded-xl border border-[#F3DFB8] bg-white p-2 text-[#B7863D]"><Shield size={18} /></div>
+                  <div>
+                    <p className="font-black text-[#5A4225]">高階主管帳號改到登入後管理</p>
+                    <p className="mt-1 text-xs font-bold leading-5 text-[#8A7D70]">登入頁只負責登入。新增、權限調整、停用、密碼重設與刪除都在這裡處理；系統不會顯示任何人的正式登入密碼。</p>
+                  </div>
+                </div>
+              </div>
+
+              <div className="rounded-2xl border border-[#EFE7DA] bg-[#FFFCF7] p-5">
+                <div className="grid grid-cols-1 gap-4 lg:grid-cols-[1fr_240px_auto] lg:items-end">
+                  <div>
+                    <label className="mb-2 block text-xs font-black text-[#A69C91]">新增高階主管姓名</label>
+                    <input
+                      type="text"
+                      value={newDirectorName}
+                      onChange={(e) => setNewDirectorName(e.target.value)}
+                      placeholder="例如：營運副總"
+                      className="w-full rounded-xl border-2 border-[#EFE7DA] px-4 py-3 font-bold outline-none focus:border-[#D6A84F]"
+                    />
+                  </div>
+                  <div>
+                    <label className="mb-2 block text-xs font-black text-[#A69C91]">管理權限</label>
+                    <select
+                      value={newDirectorLevel}
+                      onChange={(e) => setNewDirectorLevel(e.target.value)}
+                      className="w-full rounded-xl border-2 border-[#EFE7DA] bg-white px-4 py-3 font-bold text-[#4D4338] outline-none focus:border-[#D6A84F]"
+                    >
+                      {DIRECTOR_LEVEL_OPTIONS.map((item) => <option key={item.value} value={item.value}>{item.label}</option>)}
+                    </select>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={handleAddDirectorAccount}
+                    disabled={Boolean(directorActionBusy)}
+                    className="flex w-full items-center justify-center gap-2 rounded-xl border border-[#E8C77A] bg-gradient-to-r from-[#FFF7DF] via-[#F7E8C6] to-[#EACB86] px-6 py-3 font-black text-[#5A4225] shadow-sm transition-all hover:brightness-[1.02] disabled:opacity-50 lg:w-auto"
+                  >
+                    <Plus size={18} /> 新增高階主管
+                  </button>
+                </div>
+                <p className="mt-3 text-xs font-bold leading-5 text-[#A69C91]">新增後由系統使用該品牌的初始密碼建立帳號；主管首次登入時會被要求建立自己的新密碼。</p>
+              </div>
+
+              <div className="space-y-3">
+                {directorAccounts.length === 0 ? (
+                  <div className="rounded-2xl border-2 border-dashed border-[#E8DDCC] bg-[#FAF7F1] py-12 text-center text-sm font-bold text-[#A69C91]">目前沒有可顯示的高階主管帳號</div>
+                ) : directorAccounts.map((account) => {
+                  const id = String(account?.id || account?.name || "");
+                  const isSelf = id === currentDirectorAccountId || String(account?.name || "") === String(currentUser?.name || "");
+                  const isEditing = editingDirectorId === id;
+                  const isActive = account?.isActive !== false;
+                  const busy = Boolean(directorActionBusy);
+                  return (
+                    <div key={id} className={`rounded-2xl border p-4 ${isActive ? "border-[#EFE7DA] bg-white" : "border-stone-200 bg-stone-50 opacity-75"}`}>
+                      <div className="flex flex-col gap-4 xl:flex-row xl:items-center xl:justify-between">
+                        <div className="min-w-0 flex-1">
+                          {isEditing ? (
+                            <div className="flex max-w-xl gap-2">
+                              <input
+                                value={editingDirectorName}
+                                onChange={(e) => setEditingDirectorName(e.target.value)}
+                                className="min-w-0 flex-1 rounded-xl border-2 border-[#EFE7DA] px-3 py-2.5 font-bold outline-none focus:border-[#D6A84F]"
+                              />
+                              <button type="button" disabled={busy} onClick={() => handleRenameDirector(account)} className="rounded-xl bg-[#5A4225] px-4 py-2 text-xs font-black text-white disabled:opacity-50">儲存</button>
+                              <button type="button" onClick={cancelEditDirector} className="rounded-xl border border-[#EFE7DA] px-4 py-2 text-xs font-black text-[#7C7063]">取消</button>
+                            </div>
+                          ) : (
+                            <div className="flex items-center gap-3">
+                              <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-2xl border border-[#F3DFB8] bg-[#FFF9EF] text-[#B7863D]"><Shield size={19} /></div>
+                              <div className="min-w-0">
+                                <div className="flex flex-wrap items-center gap-2">
+                                  <p className="truncate text-base font-black text-[#3F3A35]">{account?.name || id}</p>
+                                  {isSelf && <span className="rounded-full bg-sky-50 px-2.5 py-1 text-[11px] font-black text-sky-700">目前登入</span>}
+                                  <span className={`rounded-full px-2.5 py-1 text-[11px] font-black ${isActive ? "bg-emerald-50 text-emerald-700" : "bg-stone-200 text-stone-500"}`}>{isActive ? "啟用中" : "已停用"}</span>
+                                </div>
+                                <p className="mt-1 text-xs font-bold text-[#A69C91]">{getDirectorLevelLabel(account?.level)}</p>
+                              </div>
+                            </div>
+                          )}
+                        </div>
+
+                        {!isEditing && (
+                          <div className="flex flex-wrap items-center gap-2 xl:justify-end">
+                            <select
+                              value={account?.level || "operation_admin"}
+                              disabled={busy || isSelf}
+                              onChange={(e) => handleDirectorLevelChange(account, e.target.value)}
+                              className="rounded-xl border border-[#EFE7DA] bg-white px-3 py-2 text-xs font-black text-[#675B4E] disabled:cursor-not-allowed disabled:opacity-50"
+                              title={isSelf ? "目前登入帳號請由另一位最高管理者調整權限" : "調整管理權限"}
+                            >
+                              {DIRECTOR_LEVEL_OPTIONS.map((item) => <option key={item.value} value={item.value}>{item.label}</option>)}
+                            </select>
+                            <button type="button" disabled={busy || isSelf} onClick={() => beginEditDirector(account)} className="rounded-xl border border-[#EFE7DA] px-3 py-2 text-xs font-black text-[#675B4E] disabled:opacity-40">修改姓名</button>
+                            <button type="button" disabled={busy} onClick={() => handleResetDirectorPassword(account)} className="rounded-xl bg-[#FFF7DF] px-3 py-2 text-xs font-black text-[#8A632E] disabled:opacity-40"><Key size={14} className="mr-1 inline" />重設密碼</button>
+                            <button type="button" disabled={busy || isSelf} onClick={() => handleToggleDirectorAccount(account)} className={`rounded-xl px-3 py-2 text-xs font-black disabled:opacity-40 ${isActive ? "bg-amber-50 text-amber-700" : "bg-emerald-50 text-emerald-700"}`}>{isActive ? "停用" : "啟用"}</button>
+                            <button type="button" disabled={busy || isSelf} onClick={() => handleDeleteDirectorAccount(account)} className="rounded-xl bg-rose-50 px-3 py-2 text-xs font-black text-rose-600 disabled:opacity-40"><Trash2 size={14} className="mr-1 inline" />刪除</button>
+                          </div>
+                        )}
+                      </div>
+                      {isSelf && <p className="mt-3 text-[11px] font-bold text-[#A69C91]">為避免目前登入中的身份突然失效，自己的姓名、權限、停用與刪除需由另一位最高管理者操作；重設自己的登入密碼仍可使用。</p>}
+                    </div>
+                  );
+                })}
               </div>
             </div>
           </Card>
