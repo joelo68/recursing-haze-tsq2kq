@@ -1,4 +1,5 @@
 const crypto = require('crypto');
+const { buildVerifiedApplicationIdentity } = require('./applicationIdentity');
 const { onRequest } = require('firebase-functions/v2/https');
 const { onSchedule } = require('firebase-functions/v2/scheduler');
 
@@ -1041,7 +1042,8 @@ function createDeviceApprovalFunctions({ admin, db }) {
   const checkDeviceAccess = onRequest({ cors: true, timeoutSeconds: 20, memory: '256MiB' }, async (req, res) => {
     if (req.method !== 'POST') return res.status(405).json({ ok: false, message: 'method_not_allowed' });
     const requestAuth = await requireFirebaseRequestAuth(req, admin);
-    if (!requestAuth.ok) return res.status(401).json({ ok: false, message: '登入狀態已失效，請重新登入' });
+    if (!requestAuth.ok) return res.status(401).json({ ok: false, credentialVerified: false, message: '登入狀態已失效，請重新登入' });
+    let credentialVerified = false;
     try {
       const body = req.body || {};
       const brandId = normalizeBrandId(body.brandId);
@@ -1050,10 +1052,63 @@ function createDeviceApprovalFunctions({ admin, db }) {
       const password = String(body.password || '');
       const deviceInfo = normalizeDeviceInfo(body.deviceInfo || {});
       const loginLocation = normalizeLocation(body.loginLocation || {});
-      if (!deviceInfo.deviceId) return res.status(400).json({ ok: false, message: 'missing_device' });
+      if (!deviceInfo.deviceId) return res.status(400).json({ ok: false, credentialVerified: false, message: 'missing_device' });
 
       const credential = await verifyApplicationCredential({ db, brandId, roleId, accountId: accountIdInput, password });
-      if (!credential.ok) return res.status(401).json({ ok: false, message: '帳號驗證未通過', reason: credential.reason });
+      if (!credential.ok) return res.status(401).json({ ok: false, credentialVerified: false, message: '帳號驗證未通過', reason: credential.reason });
+      credentialVerified = true;
+
+      // P0-B1B2 Application Session Cutover:
+      // Custom Token 只能在「credential 已通過 + device decision allowed=true」之後核發。
+      // blocked / enforce pending 不得先拿到可登入的 application identity token。
+      const applicationIdentityBundle = buildVerifiedApplicationIdentity({
+        brandId,
+        roleId,
+        requestedAccountId: accountIdInput,
+        credential,
+      });
+      const requestApplicationIdentityToken = body.requestApplicationIdentityToken === true;
+
+      const sendApplicationIdentityResponse = async (status, payload = {}) => {
+        const sessionEligible = payload?.allowed === true;
+        let applicationIdentityCustomToken = '';
+
+        if (requestApplicationIdentityToken && sessionEligible) {
+          try {
+            applicationIdentityCustomToken = await admin.auth().createCustomToken(
+              applicationIdentityBundle.uid,
+              applicationIdentityBundle.claims
+            );
+          } catch (error) {
+            console.error('application identity session token mint failed', error?.message || error);
+            return res.status(503).json({
+              ok: false,
+              allowed: false,
+              credentialVerified: true,
+              code: 'application_identity_token_unavailable',
+              applicationIdentity: {
+                ...applicationIdentityBundle.identity,
+                tokenRequested: true,
+                tokenAvailable: false,
+                sessionEligible: true,
+              },
+              message: '登入工作階段建立失敗，請稍後再試。',
+            });
+          }
+        }
+
+        return res.status(status).json({
+          ...payload,
+          credentialVerified: true,
+          applicationIdentity: {
+            ...applicationIdentityBundle.identity,
+            tokenRequested: requestApplicationIdentityToken,
+            tokenAvailable: Boolean(applicationIdentityCustomToken),
+            sessionEligible,
+          },
+          ...(applicationIdentityCustomToken ? { applicationIdentityCustomToken } : {}),
+        });
+      };
 
       const credentialAccountId = String(credential.accountId || accountIdInput).trim();
       const accountId = sanitizeSecurityKey(credentialAccountId);
@@ -1094,7 +1149,7 @@ function createDeviceApprovalFunctions({ admin, db }) {
           admin, db, brandId, accountKey, alertType: 'blocked_device_login', severity: 'high',
           payload: { role: roleId, accountId, userName, deviceId: deviceInfo.deviceId, deviceShort: deviceInfo.deviceShort, device: deviceInfo.device, browser: deviceInfo.browser, os: deviceInfo.os, loginLocation, globalBlocked: true, message: `${userName} 嘗試使用已全品牌停用的裝置登入` },
         }).catch((error) => console.warn('blocked device security alert failed', error.message));
-        return res.status(200).json({
+        return sendApplicationIdentityResponse(200, {
           ok: true,
           allowed: false,
           blocked: true,
@@ -1125,7 +1180,7 @@ function createDeviceApprovalFunctions({ admin, db }) {
           admin, db, brandId, accountKey, alertType: 'blocked_device_login', severity: 'high',
           payload: { role: roleId, accountId, userName, deviceId: deviceInfo.deviceId, deviceShort: deviceInfo.deviceShort, device: deviceInfo.device, browser: deviceInfo.browser, os: deviceInfo.os, loginLocation, globalBlocked: blockedDevice?.status === 'global_blocked' || blockedDevice?.source === 'manual_global_blocked', message: `${userName} 嘗試使用已停用的裝置登入` },
         }).catch((error) => console.warn('blocked device security alert failed', error.message));
-        return res.status(200).json({
+        return sendApplicationIdentityResponse(200, {
           ok: true,
           allowed: false,
           blocked: true,
@@ -1169,7 +1224,7 @@ function createDeviceApprovalFunctions({ admin, db }) {
             },
           },
         }, { merge: true });
-        return res.status(200).json({
+        return sendApplicationIdentityResponse(200, {
           ok: true,
           allowed: true,
           deviceTrusted: true,
@@ -1214,7 +1269,7 @@ function createDeviceApprovalFunctions({ admin, db }) {
           updatedAtText: nowText,
           devices: { [deviceInfo.deviceId]: reviewedDevice },
         }, { merge: true });
-        return res.status(200).json({
+        return sendApplicationIdentityResponse(200, {
           ok: true,
           allowed: true,
           approvalRequired: false,
@@ -1269,7 +1324,7 @@ function createDeviceApprovalFunctions({ admin, db }) {
               },
             },
           }, { merge: true });
-          return res.status(200).json({
+          return sendApplicationIdentityResponse(200, {
             ok: true,
             allowed: true,
             deviceTrusted: existingDevice.trusted !== false,
@@ -1330,7 +1385,7 @@ function createDeviceApprovalFunctions({ admin, db }) {
             }, { merge: true }),
           ]);
         }
-        return res.status(200).json({
+        return sendApplicationIdentityResponse(200, {
           ok: true,
           allowed: true,
           isNewDevice: true,
@@ -1394,7 +1449,7 @@ function createDeviceApprovalFunctions({ admin, db }) {
           details: { requestId: request.requestId, likelyKnownDevice: Boolean(recovered || reviewRecovered), approvalMode: securityConfig.deviceApprovalMode },
         },
       });
-      return res.status(200).json({
+      return sendApplicationIdentityResponse(200, {
         ok: true,
         allowed: !enforced,
         approvalRequired: true,
@@ -1417,7 +1472,13 @@ function createDeviceApprovalFunctions({ admin, db }) {
       });
     } catch (error) {
       console.error('checkDeviceAccess failed', error);
-      return res.status(500).json({ ok: false, message: '裝置確認暫時無法完成，請稍後再試。' });
+      return res.status(503).json({
+        ok: false,
+        credentialVerified,
+        message: credentialVerified
+          ? '帳號已驗證，但裝置確認暫時無法完成，請稍後再試。'
+          : '帳號驗證暫時無法完成，請稍後再試。',
+      });
     }
   });
 

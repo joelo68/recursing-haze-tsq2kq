@@ -63,7 +63,13 @@ exports.captureProjectionAccuracyCheckpoint = projectionAccuracyFunctions.captur
 // ★ Device Approval v1：新裝置確認與裝置管理後端
 // UI 使用貼近日常工作的中文；內部仍保留清楚的 security schema。
 // ==========================================
-const { createDeviceApprovalFunctions } = require("./deviceApproval");
+const {
+  createDeviceApprovalFunctions,
+  normalizeBrandId: normalizeDeviceSecurityBrandId,
+  getBrandCollection: getDeviceSecurityBrandCollection,
+  getBrandSettingDoc: getDeviceSecurityBrandSettingDoc,
+  requireFirebaseRequestAuth,
+} = require("./deviceApproval");
 const deviceApprovalFunctions = createDeviceApprovalFunctions({ admin, db });
 exports.checkDeviceAccess = deviceApprovalFunctions.checkDeviceAccess;
 exports.reviewDeviceApproval = deviceApprovalFunctions.reviewDeviceApproval;
@@ -72,6 +78,22 @@ exports.emergencyUnblockDevice = deviceApprovalFunctions.emergencyUnblockDevice;
 exports.cleanupExpiredDeviceApprovals = deviceApprovalFunctions.cleanupExpiredDeviceApprovals;
 exports.reportLoginSecurityEvent = deviceApprovalFunctions.reportLoginSecurityEvent;
 exports.updateTelegramSecurityAlertConfig = deviceApprovalFunctions.updateTelegramSecurityAlertConfig;
+
+// ==========================================
+// ★ P0-B1A：Application Identity Foundation (shadow)
+// 只新增 sanitized login directory + future Custom Token identity authority。
+// Frontend 尚未 cutover；不改 Rules、不改既有登入決策、不新增 listener/polling。
+// ==========================================
+const { createApplicationIdentityFunctions } = require("./applicationIdentity");
+const applicationIdentityFunctions = createApplicationIdentityFunctions({
+  onRequest,
+  db,
+  normalizeBrandId: normalizeDeviceSecurityBrandId,
+  getBrandCollection: getDeviceSecurityBrandCollection,
+  getBrandSettingDoc: getDeviceSecurityBrandSettingDoc,
+  requireFirebaseRequestAuth: (req) => requireFirebaseRequestAuth(req, admin),
+});
+exports.getApplicationLoginDirectory = applicationIdentityFunctions.getApplicationLoginDirectory;
 
 // ==========================================
 // ★ Module Permissions v1：模組權限 Backend-only authority

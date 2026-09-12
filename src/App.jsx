@@ -15,7 +15,7 @@ import React, {
 } from "react";
 
 import {
-  app, auth, db, appId } from "./config/firebase"; import { onAuthStateChanged, signInAnonymously, signInWithCustomToken } from "firebase/auth"; import { collection, addDoc, deleteDoc, updateDoc, doc, getDoc, onSnapshot, serverTimestamp, setDoc, query, orderBy, limit, deleteField, where, increment, getDocs, documentId } from "firebase/firestore"; import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip as RechartsTooltip, Legend, ResponsiveContainer, LineChart, Line, ComposedChart, Area, Cell, PieChart, Pie } from "recharts"; import {    LayoutDashboard, Upload, TrendingUp, Map as MapIcon, Settings, ClipboardCheck, Menu, Search, Filter, Trash2, Save, Plus, DollarSign, Target, Users, Award, Loader2, FileText, AlertCircle, CheckCircle, User, Store, Lock, LogOut, FileWarning, Edit2, CheckSquare, X, Download, ChevronLeft, ChevronRight, Activity, Sparkles, ChevronDown, Heart, Coffee, Shield, WifiOff, ShoppingBag, CreditCard, Smartphone, Monitor, Bell, Clock, Music, ShieldAlert, Calendar
+  app, auth, db, appId } from "./config/firebase"; import { onAuthStateChanged, signInAnonymously, signInWithCustomToken, signOut } from "firebase/auth"; import { collection, addDoc, deleteDoc, updateDoc, doc, getDoc, onSnapshot, serverTimestamp, setDoc, query, orderBy, limit, deleteField, where, increment, getDocs, documentId } from "firebase/firestore"; import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip as RechartsTooltip, Legend, ResponsiveContainer, LineChart, Line, ComposedChart, Area, Cell, PieChart, Pie } from "recharts"; import {    LayoutDashboard, Upload, TrendingUp, Map as MapIcon, Settings, ClipboardCheck, Menu, Search, Filter, Trash2, Save, Plus, DollarSign, Target, Users, Award, Loader2, FileText, AlertCircle, CheckCircle, User, Store, Lock, LogOut, FileWarning, Edit2, CheckSquare, X, Download, ChevronLeft, ChevronRight, Activity, Sparkles, ChevronDown, Heart, Coffee, Shield, WifiOff, ShoppingBag, CreditCard, Smartphone, Monitor, Bell, Clock, Music, ShieldAlert, Calendar
 } from "lucide-react";
 
 import { ROLES, ALL_MENU_ITEMS, DEFAULT_REGIONAL_MANAGERS, DEFAULT_PERMISSIONS } from "./constants/index";
@@ -617,6 +617,9 @@ export default function App() {
   // 僅保存在目前頁面記憶體中，供需要較高權限的裝置確認動作再次向後端驗證。
   // 不寫入 Firestore / localStorage / sessionStorage。
   const securitySessionCredentialRef = useRef("");
+  // P0-B1B2：Custom Token 只存在 Firebase Auth 記憶體／SDK session；
+  // 這個 ref 只保留非敏感 application identity metadata，不保存 token。
+  const applicationSessionIdentityRef = useRef(null);
   const [currentDeviceTrust, setCurrentDeviceTrust] = useState({
     status: "checking",
     label: "裝置狀態確認中",
@@ -1788,14 +1791,17 @@ export default function App() {
 
     if (!isOnline || !roleId) {
       return {
-        ok: !shouldFailClosed,
-        allowed: !shouldFailClosed,
+        ok: false,
+        allowed: false,
+        credentialVerified: false,
         deviceInfo,
         isNewDevice: false,
-        riskTags: ["裝置確認服務暫時無法使用"],
+        riskTags: ["帳號驗證未完成"],
         deviceStatus: "check_failed",
         approvalMode: mode,
-        message: shouldFailClosed ? "目前無法完成裝置確認，請確認網路後再試一次。" : "裝置狀態暫時未確認",
+        message: !roleId
+          ? "登入資料不完整，請返回登入頁重新選擇帳號。"
+          : "目前無法完成帳號驗證，請確認網路後再試一次。",
       };
     }
 
@@ -1810,9 +1816,26 @@ export default function App() {
         accountId,
         userName,
         password: String(loginCredential?.password || ""),
+        requestApplicationIdentityToken: true,
         deviceInfo,
         loginLocation: removeUndefinedDeep(loginLocation),
       });
+
+      if (result?.credentialVerified !== true) {
+        const verificationError = new Error("帳號驗證結果不完整，請重新登入。");
+        verificationError.code = "credential_verification_missing";
+        verificationError.result = result || {};
+        verificationError.status = 503;
+        throw verificationError;
+      }
+
+      if (result?.allowed === true && !String(result?.applicationIdentityCustomToken || "").trim()) {
+        const sessionError = new Error("登入工作階段建立失敗，請稍後再試。");
+        sessionError.code = "application_identity_token_missing";
+        sessionError.result = result || {};
+        sessionError.status = 503;
+        throw sessionError;
+      }
 
       if (result?.recoveredDeviceId && result.recoveredDeviceId !== deviceInfo.deviceId) {
         persistStableClientDeviceId(result.recoveredDeviceId);
@@ -1826,32 +1849,108 @@ export default function App() {
       logDeviceCheckResult(roleId, userName, normalizedResult, deviceInfo);
       return normalizedResult;
     } catch (error) {
-      console.warn("裝置確認服務暫時無法完成:", error);
-      const credentialRejected = error?.status === 401;
-      // 「維持目前方式 / 先觀察」都不能因後端裝置確認暫時失敗而改變既有登入結果。
-      // 只有正式啟用 enforce 的受保護角色才採 fail-closed。
-      const mustBlock = shouldFailClosed;
+      console.warn("登入／裝置確認服務暫時無法完成:", error);
+      const credentialVerified = error?.result?.credentialVerified === true;
+      const credentialRejected = error?.status === 401 || error?.result?.credentialVerified === false;
+      const sessionUnavailable = [
+        "application_identity_token_missing",
+        "application_identity_token_unavailable",
+      ].includes(String(error?.code || ""));
+
+      // P0-B1B2：正式 application session 必須同時具備 server credential verification
+      // 與 server-issued Custom Token。只要 endpoint / token issuance 未完整完成，
+      // 不再以 anonymous Firebase session 作為營運登入 fallback。
       const result = {
-        ok: !mustBlock,
-        allowed: !mustBlock,
+        ok: false,
+        allowed: false,
+        credentialVerified,
         deviceInfo,
         isNewDevice: false,
         deviceTrusted: null,
         autoTrusted: false,
         alertCreated: false,
-        riskTags: ["裝置確認服務暫時無法使用"],
+        riskTags: credentialVerified ? ["登入工作階段未建立"] : ["帳號驗證未完成"],
         deviceStatus: "check_failed",
         approvalMode: mode,
         loginLocation,
         error: error.message,
-        message: shouldFailClosed && credentialRejected
-          ? "帳號資訊需要重新確認，請返回登入頁重新輸入帳號密碼。"
-          : (shouldFailClosed ? "目前無法完成裝置確認，請稍後再試一次。" : "裝置狀態暫時未確認"),
+        message: !credentialVerified
+          ? (credentialRejected
+              ? "帳號或密碼驗證未通過，請重新輸入。"
+              : "目前無法完成帳號驗證，請確認網路後再試一次。")
+          : (sessionUnavailable
+              ? "登入工作階段建立失敗，請稍後再試。"
+              : "目前無法完成安全登入，請稍後再試一次。"),
       };
       logDeviceCheckResult(roleId, userName, result, deviceInfo);
       return result;
     }
   }, [isOnline, currentBrandId, securityConfig, resolveLoginLocation, callDeviceSecurityEndpoint, logDeviceCheckResult]);
+
+  const activateApplicationIdentitySession = useCallback(async ({ deviceSecurity = {}, roleId = "" } = {}) => {
+    const customToken = String(deviceSecurity?.applicationIdentityCustomToken || "").trim();
+    const identity = deviceSecurity?.applicationIdentity || {};
+    const expectedBrandId = String(currentBrandIdRef.current || currentBrandId || "").trim().toLowerCase();
+    const expectedRoleId = String(roleId || "").trim().toLowerCase();
+    const expectedAccountId = String(identity?.accountId || "").trim();
+
+    if (
+      deviceSecurity?.credentialVerified !== true ||
+      deviceSecurity?.allowed !== true ||
+      !customToken ||
+      !expectedBrandId ||
+      !expectedRoleId ||
+      !expectedAccountId
+    ) {
+      throw new Error("登入身份資料不完整，請重新登入。");
+    }
+
+    if (
+      String(identity?.brandId || "").trim().toLowerCase() !== expectedBrandId ||
+      String(identity?.roleId || "").trim().toLowerCase() !== expectedRoleId
+    ) {
+      throw new Error("登入身份與目前品牌或角色不一致，請重新登入。");
+    }
+
+    try {
+      const userCredential = await signInWithCustomToken(auth, customToken);
+      const tokenResult = await userCredential.user.getIdTokenResult(true);
+      const claims = tokenResult?.claims || {};
+
+      const claimsValid =
+        claims?.drcyjIdentity === true &&
+        String(claims?.identityVersion || "") === String(identity?.version || "") &&
+        String(claims?.brandId || "").trim().toLowerCase() === expectedBrandId &&
+        String(claims?.roleId || "").trim().toLowerCase() === expectedRoleId &&
+        String(claims?.accountId || "").trim() === expectedAccountId &&
+        String(userCredential.user?.uid || "") === String(identity?.uid || "");
+
+      if (!claimsValid) {
+        throw new Error("登入身份驗證結果不一致，請重新登入。");
+      }
+
+      applicationSessionIdentityRef.current = {
+        version: String(identity?.version || ""),
+        uid: String(identity?.uid || ""),
+        brandId: expectedBrandId,
+        roleId: expectedRoleId,
+        accountId: expectedAccountId,
+        directorLevel: String(claims?.directorLevel || identity?.directorLevel || ""),
+      };
+
+      return applicationSessionIdentityRef.current;
+    } catch (error) {
+      applicationSessionIdentityRef.current = null;
+      try {
+        await signInAnonymously(auth);
+      } catch (rollbackError) {
+        console.warn("Application session rollback to anonymous failed:", rollbackError);
+        try { await signOut(auth); } catch (signOutError) { console.warn("Auth sign-out fallback failed:", signOutError); }
+        setUser(null);
+      }
+      throw error;
+    }
+  }, [currentBrandId]);
 
   useEffect(() => {
     if (!userRole || !currentUser || !activeView) return;
@@ -1880,12 +1979,15 @@ export default function App() {
 
   const handleLogout = useCallback(async (reason = "使用者手動登出") => {
     const userName = currentUser?.name || (userRole === "director" ? "高階主管" : (userRole === "trainer" ? "教專" : "未知"));
-    if (userRole) logActivity(userRole, userName, "登出系統", {
-      message: reason,
-      loginLocation: loginSessionLocationRef.current || UNKNOWN_LOGIN_LOCATION,
-    });
+    if (userRole) {
+      await logActivity(userRole, userName, "登出系統", {
+        message: reason,
+        loginLocation: loginSessionLocationRef.current || UNKNOWN_LOGIN_LOCATION,
+      });
+    }
     loginSessionLocationRef.current = UNKNOWN_LOGIN_LOCATION;
     securitySessionCredentialRef.current = "";
+    applicationSessionIdentityRef.current = null;
     pendingDeviceLoginRef.current = null;
     setPendingDeviceLogin(null);
     setIsDeviceApprovalPanelOpen(false);
@@ -1914,6 +2016,17 @@ export default function App() {
       approvalRequestId: "",
     });
     setUserRole(null); setCurrentUser(null); setActiveView("dashboard");
+
+    // B1B2 logout：正式 application identity session 退回 bootstrap anonymous auth。
+    // 若 anonymous sign-in 因網路異常失敗，至少 signOut 清掉目前 custom identity，
+    // 不讓已登出的畫面繼續保有上一位操作者的 Firebase claims。
+    try {
+      await signInAnonymously(auth);
+    } catch (error) {
+      console.warn("登出後建立匿名登入工作階段失敗:", error);
+      try { await signOut(auth); } catch (signOutError) { console.warn("Firebase signOut fallback failed:", signOutError); }
+      setUser(null);
+    }
   }, [currentUser, userRole, logActivity, securityConfig]);
 
   useEffect(() => {
@@ -2071,10 +2184,29 @@ export default function App() {
 
   useEffect(() => {
     const initAuth = async () => {
-      try { if (typeof __initial_auth_token !== "undefined" && __initial_auth_token) { await signInWithCustomToken(auth, __initial_auth_token); } else { await signInAnonymously(auth); } } catch (error) { console.warn("Auth Error:", error); }
+      try {
+        // 每次 App 重新載入都回到 bootstrap auth；DRCYJ application session 不跨 reload 自動還原。
+        if (typeof __initial_auth_token !== "undefined" && __initial_auth_token) {
+          await signInWithCustomToken(auth, __initial_auth_token);
+        } else {
+          await signInAnonymously(auth);
+        }
+      } catch (error) {
+        console.warn("Auth Error:", error);
+      }
     };
     initAuth();
-    return onAuthStateChanged(auth, (u) => { setUser(u); setLoading(false); });
+
+    return onAuthStateChanged(auth, (u) => {
+      // `user` 在既有 App 中只作 Firestore/Auth ready gate，沒有使用 uid/email 等欄位。
+      // anonymous → application custom user 切換時保留同一個非空 state reference，
+      // 避免所有 [user, ...] listener 因 principal object 改變而被 React 重建、造成 reads burst。
+      setUser((previous) => {
+        if (!u) return null;
+        return previous || u;
+      });
+      setLoading(false);
+    });
   }, []);
 
   const fetchGlobalData = useCallback(async (options = {}) => {
@@ -3653,6 +3785,25 @@ export default function App() {
 
     pendingDeviceLoginRef.current = null;
     setPendingDeviceLogin(null);
+
+    try {
+      await activateApplicationIdentitySession({ deviceSecurity, roleId });
+    } catch (error) {
+      console.error("Application identity session activation failed:", error);
+      applicationSessionIdentityRef.current = null;
+      setUserRole(null);
+      setCurrentUser(null);
+      setCurrentDeviceTrust({
+        status: "unknown",
+        label: "安全登入未完成",
+        deviceShort: deviceSecurity?.deviceInfo?.deviceShort || immediateDeviceInfo.deviceShort,
+        deviceId: deviceSecurity?.deviceInfo?.deviceId || immediateDeviceInfo.deviceId,
+        approvalRequestId: "",
+      });
+      setToast({ message: error?.message || "安全登入未完成，請重新登入。", type: "error" });
+      return { ok: false, sessionUnavailable: true };
+    }
+
     setUserRole(roleId);
     if (finalUser) setCurrentUser(finalUser);
     securitySessionCredentialRef.current = String(loginCredential?.password || "");
@@ -3727,7 +3878,7 @@ export default function App() {
     }
     setActiveView("dashboard");
     return { ok: true };
-  }, [therapists, logActivity, registerAccountDevice]);
+  }, [therapists, logActivity, registerAccountDevice, activateApplicationIdentitySession]);
 
   const resumePendingDeviceLogin = useCallback(async () => {
     const pending = pendingDeviceLoginRef.current;

@@ -27,13 +27,19 @@ test("new device protection defaults to off and covers all current roles", () =>
   assert.match(app, /CURRENT_APP_VERSION\s*=\s*"3\.6\.0"/);
 });
 
-test("backend verifies Firebase request auth and application credential before device decision", () => {
+test("every successful login requires server credential verification and a server-issued application session", () => {
   assert.match(backend, /requireFirebaseRequestAuth\(req, admin\)/);
   assert.match(backend, /admin\.auth\(\)\.verifyIdToken\(token\)/);
   assert.match(backend, /verifyApplicationCredential\(\{ db, brandId, roleId, accountId: accountIdInput, password \}\)/);
+  assert.match(backend, /let credentialVerified = false/);
+  assert.match(backend, /credentialVerified = true/);
+  assert.match(backend, /const sessionEligible = payload\?\.allowed === true/);
+  assert.match(backend, /if \(requestApplicationIdentityToken && sessionEligible\)/);
   assert.match(app, /Authorization:\s*`Bearer \$\{idToken\}`/);
-  assert.match(app, /credentialRejected\s*=\s*error\?\.status\s*===\s*401/);
-  assert.match(app, /const mustBlock = shouldFailClosed/);
+  assert.match(app, /result\?\.credentialVerified !== true/);
+  assert.match(app, /requestApplicationIdentityToken:\s*true/);
+  assert.match(app, /signInWithCustomToken\(auth, customToken\)/);
+  assert.match(app, /claims\?\.drcyjIdentity === true/);
 });
 
 test("existing trusted devices remain grandfathered while recoverable devices do not auto-inherit trust in approval mode", () => {
