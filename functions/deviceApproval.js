@@ -19,6 +19,10 @@ const LOGIN_SECURITY_PASSWORD_FAIL_THRESHOLD = 3;
 const TELEGRAM_SECURITY_CONFIG_VERSION = 'security-alert-v1';
 const TELEGRAM_SECURITY_CONFIG_TARGETS = new Set(['main', 'manager', 'agent_test']);
 
+// ★ P0-B1B2 Incident Fix：checkDeviceAccess 使用專用 Runtime Service Account。
+// 僅此登入 authority 需要 Firestore data access + 自身 signBlob；避免把 Token Creator 擴散到共用 Default Compute SA。
+const APPLICATION_IDENTITY_RUNTIME_SERVICE_ACCOUNT = 'drcyj-application-identity@cyjsituation-analysis.iam.gserviceaccount.com';
+
 function sanitizeSecurityKey(value = '') {
   return String(value || '')
     .trim()
@@ -1039,7 +1043,12 @@ async function verifyMasterPassword({ db, brandId, password }) {
 }
 
 function createDeviceApprovalFunctions({ admin, db }) {
-  const checkDeviceAccess = onRequest({ cors: true, timeoutSeconds: 20, memory: '256MiB' }, async (req, res) => {
+  const checkDeviceAccess = onRequest({
+    cors: true,
+    timeoutSeconds: 20,
+    memory: '256MiB',
+    serviceAccount: APPLICATION_IDENTITY_RUNTIME_SERVICE_ACCOUNT,
+  }, async (req, res) => {
     if (req.method !== 'POST') return res.status(405).json({ ok: false, message: 'method_not_allowed' });
     const requestAuth = await requireFirebaseRequestAuth(req, admin);
     if (!requestAuth.ok) return res.status(401).json({ ok: false, credentialVerified: false, message: '登入狀態已失效，請重新登入' });
