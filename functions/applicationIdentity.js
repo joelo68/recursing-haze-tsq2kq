@@ -2,6 +2,8 @@ const crypto = require("crypto");
 
 const APPLICATION_IDENTITY_VERSION = "application-identity-v1";
 const APPLICATION_DIRECTORY_VERSION = "application-login-directory-v1";
+const LOGIN_DIRECTORY_RUNTIME_SERVICE_ACCOUNT = "drcyj-login-directory@cyjsituation-analysis.iam.gserviceaccount.com";
+const APPLICATION_DIRECTORY_BRANDS = Object.freeze(["cyj", "anniu", "yibo"]);
 const APPLICATION_IDENTITY_ROLES = Object.freeze([
   "director",
   "trainer",
@@ -12,6 +14,12 @@ const APPLICATION_IDENTITY_ROLES = Object.freeze([
 
 function normalizeText(value = "", maxLength = 160) {
   return String(value ?? "").trim().slice(0, maxLength);
+}
+
+function normalizeDirectoryBrandId(value = "") {
+  const brandId = normalizeText(value, 24).toLowerCase();
+  if (brandId === "default-app-id") return "cyj";
+  return APPLICATION_DIRECTORY_BRANDS.includes(brandId) ? brandId : "";
 }
 
 function normalizeRoleId(value = "") {
@@ -299,7 +307,12 @@ function createApplicationIdentityFunctions({
   if (typeof requireFirebaseRequestAuth !== "function") throw new Error("missing_requireFirebaseRequestAuth");
 
   const getApplicationLoginDirectory = onRequest(
-    { cors: true, timeoutSeconds: 20, memory: "256MiB" },
+    {
+      cors: true,
+      timeoutSeconds: 20,
+      memory: "256MiB",
+      serviceAccount: LOGIN_DIRECTORY_RUNTIME_SERVICE_ACCOUNT,
+    },
     async (req, res) => {
       if (req.method !== "POST") {
         return res.status(405).json({ ok: false, message: "method_not_allowed" });
@@ -311,7 +324,20 @@ function createApplicationIdentityFunctions({
       }
 
       try {
-        const brandId = normalizeBrandId(req.body?.brandId);
+        const strictBrandId = normalizeDirectoryBrandId(req.body?.brandId);
+        if (!strictBrandId) {
+          return res.status(400).json({
+            ok: false,
+            code: "unsupported_brand",
+            message: "品牌資料不正確，請重新整理後再試",
+          });
+        }
+
+        const brandId = normalizeBrandId(strictBrandId);
+        if (brandId !== strictBrandId) {
+          throw new Error("directory_brand_resolver_mismatch");
+        }
+
         const [
           storeAccountSnap,
           managerAuthSnap,
@@ -374,6 +400,9 @@ function createApplicationIdentityFunctions({
 module.exports = {
   APPLICATION_IDENTITY_VERSION,
   APPLICATION_DIRECTORY_VERSION,
+  LOGIN_DIRECTORY_RUNTIME_SERVICE_ACCOUNT,
+  APPLICATION_DIRECTORY_BRANDS,
+  normalizeDirectoryBrandId,
   buildApplicationIdentityUid,
   buildVerifiedApplicationIdentity,
   buildSanitizedLoginDirectory,
