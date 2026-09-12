@@ -24,6 +24,10 @@ const TELEGRAM_SECURITY_CONFIG_TARGETS = new Set(['main', 'manager', 'agent_test
 // 僅此登入 authority 需要 Firestore data access + 自身 signBlob；避免把 Token Creator 擴散到共用 Default Compute SA。
 const APPLICATION_IDENTITY_RUNTIME_SERVICE_ACCOUNT = 'drcyj-application-identity@cyjsituation-analysis.iam.gserviceaccount.com';
 
+// ★ P0-B1C2B.1：裝置確認覆核使用獨立 Runtime Service Account。
+// 此流程只需要 Firestore data access；不得繼承 Application Identity 的 token mint 權限，也不得繼續使用共用 Default Compute SA。
+const DEVICE_REVIEW_RUNTIME_SERVICE_ACCOUNT = 'drcyj-device-approval@cyjsituation-analysis.iam.gserviceaccount.com';
+
 function sanitizeSecurityKey(value = '') {
   return String(value || '')
     .trim()
@@ -1508,7 +1512,12 @@ function createDeviceApprovalFunctions({ admin, db }) {
     }
   });
 
-  const reviewDeviceApproval = onRequest({ cors: true, timeoutSeconds: 20, memory: '256MiB' }, async (req, res) => {
+  const reviewDeviceApproval = onRequest({
+    cors: true,
+    timeoutSeconds: 20,
+    memory: '256MiB',
+    serviceAccount: DEVICE_REVIEW_RUNTIME_SERVICE_ACCOUNT,
+  }, async (req, res) => {
     if (req.method !== 'POST') return res.status(405).json({ ok: false, message: 'method_not_allowed' });
     const requestAuth = await requireFirebaseRequestAuth(req, admin);
     if (!requestAuth.ok) return res.status(401).json({ ok: false, message: '登入狀態已失效，請重新登入' });
