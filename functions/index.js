@@ -175,6 +175,30 @@ const managerOrganizationAuthorityFunctions = createManagerOrganizationAuthority
 });
 exports.manageManagerOrganization = managerOrganizationAuthorityFunctions.manageManagerOrganization;
 
+// ==========================================
+// ★ P0-B1C1B3：Therapist Master Authority (shadow)
+// 管理師人員主檔新增／修改／封存／復職／永久刪除收斂至 Backend transaction。
+// Master OCC 使用不含 password 的 semantic signature；本人改密碼不會製造假的人員資料衝突。
+// create 僅為 legacy 相容由 Backend 建立初始密碼；不接受管理者自訂 password。
+// Frontend 尚未 cutover；credential 實體拆分、Rules lockdown 留待後續 migration/cutover。
+// ==========================================
+const { createTherapistMasterAuthorityFunctions } = require("./therapistMasterAuthority");
+const therapistMasterAuthorityFunctions = createTherapistMasterAuthorityFunctions({
+  onRequest,
+  db,
+  runtimeServiceAccount: ACCOUNT_AUTHORITY_RUNTIME_SERVICE_ACCOUNT,
+  normalizeBrandId: normalizeDeviceSecurityBrandId,
+  getBrandCollection: getDeviceSecurityBrandCollection,
+  getBrandSettingDoc: getDeviceSecurityBrandSettingDoc,
+  requireFirebaseRequestAuth: (req) => requireFirebaseRequestAuth(req, admin),
+  verifySuperAdminActor,
+  assertAdminApplicationClaims,
+  normalizeStoreCore: normalizeStoreLifecycleCore,
+  getInitialPasswordsForRole,
+  serverTimestamp: () => admin.firestore.FieldValue.serverTimestamp(),
+});
+exports.manageTherapistMaster = therapistMasterAuthorityFunctions.manageTherapistMaster;
+
 
 // ==========================================
 // ★ Target Coverage v1：Target Summary event-driven authority
