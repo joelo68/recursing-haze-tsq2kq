@@ -69,6 +69,7 @@ const {
   getBrandCollection: getDeviceSecurityBrandCollection,
   getBrandSettingDoc: getDeviceSecurityBrandSettingDoc,
   requireFirebaseRequestAuth,
+  verifyApplicationCredential,
 } = require("./deviceApproval");
 const deviceApprovalFunctions = createDeviceApprovalFunctions({ admin, db });
 exports.checkDeviceAccess = deviceApprovalFunctions.checkDeviceAccess;
@@ -94,6 +95,23 @@ const applicationIdentityFunctions = createApplicationIdentityFunctions({
   requireFirebaseRequestAuth: (req) => requireFirebaseRequestAuth(req, admin),
 });
 exports.getApplicationLoginDirectory = applicationIdentityFunctions.getApplicationLoginDirectory;
+
+// ==========================================
+// ★ P0-B1C1A：Backend Password Authority Foundation (shadow)
+// 僅建立「本人改密碼」後端 writer；Frontend 尚未 cutover，Rules 亦維持不變。
+// 透過 transaction 重新驗證 fresh credential，避免多人／多分頁 race 覆蓋。
+// ==========================================
+const { createAccountAuthorityFunctions } = require("./accountAuthority");
+const accountAuthorityFunctions = createAccountAuthorityFunctions({
+  onRequest,
+  db,
+  normalizeBrandId: normalizeDeviceSecurityBrandId,
+  getBrandCollection: getDeviceSecurityBrandCollection,
+  getBrandSettingDoc: getDeviceSecurityBrandSettingDoc,
+  requireFirebaseRequestAuth: (req) => requireFirebaseRequestAuth(req, admin),
+  verifyApplicationCredential,
+});
+exports.changeApplicationPassword = accountAuthorityFunctions.changeApplicationPassword;
 
 // ==========================================
 // ★ Module Permissions v1：模組權限 Backend-only authority

@@ -111,7 +111,7 @@ async function requireFirebaseRequestAuth(req, admin) {
   if (!token) return { ok: false };
   try {
     const decoded = await admin.auth().verifyIdToken(token);
-    return { ok: true, uid: String(decoded?.uid || '') };
+    return { ok: true, uid: String(decoded?.uid || ''), decoded };
   } catch (error) {
     return { ok: false };
   }
@@ -2048,6 +2048,7 @@ module.exports = {
   getBrandCollection,
   getBrandSettingDoc,
   requireFirebaseRequestAuth,
+  verifyApplicationCredential,
   verifySuperAdminActor,
   verifyTrustedApplicationActor,
 };
