@@ -1,9 +1,144 @@
 # SYSTEM_SOURCE_MAP.md
 
 > 狀態：Project Knowledge Base / Source Map v0.1
-> 已整併至 2026-09-11 Frontend UX ownership closeout；latest runtime source = `c4b7b57e486d64ef59282d23789ea7ec93a9a884`，Frontend Production gh-pages = `6761f277f1b796cc49697d1f10acaa8919fc800e`，`CURRENT_APP_VERSION = 3.5.3`，`~/cyj-new` 為唯一正式 Source of Truth。
+> 已整併至 2026-09-12 UI Language / Presentation Semantics v3.6.0 closeout；latest runtime source = `ffe533ee681f85112dc56c8007dabaa2dde25837`，Frontend Production gh-pages = `39fa441555982f6e9f65d36c5549cd9bef3a6393`，`CURRENT_APP_VERSION = 3.6.0`，`~/cyj-new` 為唯一正式 Source of Truth。
 > 禁止以舊對話、舊版檔案、AI 記憶或未提供的檔案補足事實。
 > 無法由目前正式程式確認的內容，必須標記為「未由目前正式來源確認」。
+
+---
+
+# UI Language / Presentation Semantics Runtime Source Override — 2026-09-12
+
+最新正式 runtime lineage：
+
+```text
+Runtime promotion commit       = ffe533ee681f85112dc56c8007dabaa2dde25837
+origin/main                    = ffe533ee681f85112dc56c8007dabaa2dde25837
+Frontend Production gh-pages  = 39fa441555982f6e9f65d36c5549cd9bef3a6393
+CURRENT_APP_VERSION           = 3.6.0
+```
+
+本批是 Frontend presentation / operational-copy release。資料模型、KPI 計算、Summary / Projection / Target / Lifecycle authority、Security、Firestore path、Functions 與 Rules 均未換 owner。
+
+正式 presentation owners：
+
+```text
+src/App.jsx
+  → CURRENT_APP_VERSION = 3.6.0
+  → canonical menu labels
+  → activity / restricted-view display labels derived from canonical menu labels
+
+src/utils/kpiPresentation.js
+  → shared KPI / target / lifecycle presentation labels
+  → preserves VALID_ZERO as real zero
+  → pure presentation helper; no Firestore access
+
+src/utils/projectionObservability.js
+  → management-language Projection observability labels
+  → Projection math / writer authority unchanged
+
+src/hooks/useDashboardStats.js
+  → existing Dashboard authority consumption retained
+  → user-facing status wording aligned without adding reads
+```
+
+主要 user-facing component scope：
+
+```text
+AnnualView.jsx
+AuditView.jsx
+DailyView.jsx
+DashboardHeader.jsx
+DashboardView.jsx
+HistoryView.jsx
+LoginView.jsx
+RankingView.jsx
+RegionalView.jsx
+ReportingCalendarManager.jsx
+SettingsView.jsx
+SmartForecastAccuracyPanel.jsx
+StoreAnalysisView.jsx
+StoreLifecycleManager.jsx
+StorePerformanceView.jsx
+StoreScheduleView.jsx
+SystemMaintenance.jsx
+SystemMonitor.jsx
+TargetView.jsx
+TelegramAlertControlCenter.jsx
+TherapistManagerView.jsx
+```
+
+明確例外：
+
+```text
+src/components/TherapistPerformanceView.jsx
+  → byte-identical in this release
+  → Top 5 / ME / vs preserved
+```
+
+正式 presentation contract：
+
+```text
+TARGET_NOT_SET        → 目標未設定
+CHALLENGE_NOT_SET     → 挑戰目標未設定
+TARGET_INCOMPLETE     → 目標資料不足
+DATA_INCOMPLETE       → 資料不足
+FIELD_MISSING         → 尚無資料
+DATA_INVALID          → 資料異常
+N_A                   → 不適用
+NOT_STARTED           → 尚未開始
+PRE_SYSTEM            → 不納入
+LIFECYCLE_NOT_READY   → 營運期間未完成
+VALID_ZERO / numeric 0→ 保留 0
+```
+
+Regression owners：
+
+```text
+tests/uiLanguageSemantics.test.js
+tests/kpiPresentationSemantics.test.js
+tests/projectionObservability.test.js
+tests/currentDetailFormalWiring.test.js
+tests/dashboardFormalConsumer.test.js
+tests/storePerformanceNullSafety.test.js
+tests/targetCoverageAudit.test.js
+tests/targetCoverageMigration.test.js
+tests/therapistKpiWiring.test.js
++ existing version-lock / consumer regression tests aligned to CURRENT_APP_VERSION 3.6.0
+```
+
+Production validation：
+
+```text
+full repository regression = 665 / 665 PASS
+test files                 = 63
+production build           = PASS
+local desktop/mobile smoke = PASS
+Production desktop/mobile  = PASS
+```
+
+Read / authority delta：
+
+```text
+new Firestore reads        = 0
+new listeners              = 0
+new queries                = 0
+new polling                = 0
+Functions / Rules delta    = 0 / 0
+Firestore path/schema      = unchanged
+brand isolation            = unchanged
+```
+
+未來修改 UI wording / KPI status presentation 時，先讀：
+
+```text
+src/utils/kpiPresentation.js
+tests/kpiPresentationSemantics.test.js
+tests/uiLanguageSemantics.test.js
++ 實際受影響 component
+```
+
+不得為了改顯示文字去重定義 internal status、Summary authority 或 KPI formula。技術名詞可保留在 diagnostics / canonical docs，但一般營運 UI 以可理解的管理語言為主。
 
 ---
 

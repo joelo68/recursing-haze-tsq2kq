@@ -2,7 +2,124 @@
 
 > 用途：記錄「目前正式環境已確認到哪個狀態」。這不是 CHANGELOG。  
 > 優先順序：使用者提供的目前正式部署 source > 本檔案 > 其他 Knowledge Base 文件。  
-> 最後整併更新：**2026-09-11（UTC+8）**。
+> 最後整併更新：**2026-09-12（UTC+8）**。
+
+# Latest Production Runtime Override — 2026-09-12（UI Language / Presentation Semantics v3.6.0 Closeout）
+
+> 本節是目前最高優先的 Frontend 操作用語／呈現語意狀態。這次把一般管理者會看到的工程詞彙與含糊狀態整理成一致、可操作的營運語言，並正式提升 `CURRENT_APP_VERSION` 至 `3.6.0`。**本次沒有改 KPI 公式、Summary / Projection / Lifecycle / Target authority、Identity、Security、Firestore path/schema、Backend Functions、Firestore Rules 或 read topology。** 下方較早章節保留其當時 runtime / evidence；若目前版本、Frontend presentation owner 或 Production lineage 衝突，以本節與目前正式 source 為準。
+
+正式 runtime lineage：
+
+```text
+Official repo                         = ~/cyj-new
+Production runtime commit             = ffe533ee681f85112dc56c8007dabaa2dde25837
+origin/main                            = ffe533ee681f85112dc56c8007dabaa2dde25837
+Frontend Production gh-pages          = 39fa441555982f6e9f65d36c5549cd9bef3a6393
+CURRENT_APP_VERSION                    = 3.6.0
+Functions deploy in this closeout      = NO
+Firestore Rules deploy in this closeout= NO
+Firebase Hosting deploy               = NO
+```
+
+## Shared KPI presentation semantics
+
+新增純 Frontend presentation owner：
+
+```text
+src/utils/kpiPresentation.js
+```
+
+它只負責把既有 KPI / target / lifecycle 狀態轉成一般管理者可理解的顯示文字；不重新計算 KPI、不改 persisted status、不寫 Firestore。
+
+目前正式顯示 contract：
+
+```text
+TARGET_NOT_SET        → 目標未設定
+CHALLENGE_NOT_SET     → 挑戰目標未設定
+TARGET_INCOMPLETE     → 目標資料不足
+DATA_INCOMPLETE       → 資料不足
+FIELD_MISSING         → 尚無資料
+DATA_INVALID          → 資料異常
+N_A                   → 不適用
+NOT_STARTED           → 尚未開始
+PRE_SYSTEM            → 不納入
+LIFECYCLE_NOT_READY   → 營運期間未完成
+VALID_ZERO / numeric 0→ 保留真實 0，不得改標為「目標未設定」
+```
+
+Presentation status 與 domain contract 必須分離：`VALID_ZERO`、`TARGET_NOT_SET`、`N_A` 等內部狀態仍保留原本正式語意；本批只改使用者看到的 copy。
+
+## Operational UI language authority
+
+主要 user-facing surfaces 已統一一般管理語言，包括：
+
+```text
+App / navigation / activity labels
+Dashboard / Annual / Daily / Regional / Ranking
+Store Analysis / Store Performance
+Target / Settings / Store Lifecycle / Reporting Calendar
+System Maintenance / System Monitor
+Login / Telegram Alert Control Center
+Smart Forecast Accuracy presentation
+Therapist Manager
+```
+
+`src/App.jsx` 的 activity label 由既有 canonical menu label 派生，避免同一功能在選單、權限提示與操作紀錄出現不同名稱。
+
+內部 contract 名稱不因本批 mechanically rename；Summary、Projection、Lifecycle、Coverage、revision、authority 等工程概念仍可存在 source / diagnostics / canonical docs，但一般日常 UI 不應把它們當主要操作文字。
+
+明確例外：
+
+```text
+src/components/TherapistPerformanceView.jsx
+→ 本批 byte-identical
+→ Top 5 / ME / vs 保留
+```
+
+## Read / write / authority impact
+
+```text
+new Firestore read primitive   = 0
+new listener                   = 0
+new query                      = 0
+new polling                    = 0
+Backend Functions delta        = 0
+Firestore Rules delta          = 0
+Firestore path/schema delta    = 0
+brand isolation delta          = 0
+KPI / Summary / Projection math= unchanged
+```
+
+因此本批不需要 Functions、Rules 或 Firebase Hosting deploy；正式 Frontend publish 仍走 repository 已確認的 GitHub Pages `npm run deploy` authority。
+
+## Validation / Deployment / Production Confirmation
+
+```text
+Promotion version-lock tests          = PASS
+Final full repository regression      = 665 / 665 PASS
+Discovered test files                 = 63
+npm run build                          = PASS
+git diff --check                       = PASS
+Local UI smoke                         = PASS — desktop + mobile
+Frontend GitHub Pages deploy           = PASS
+Production smoke                       = PASS — desktop + mobile
+CURRENT_APP_VERSION                    = 3.6.0
+```
+
+Final status：
+
+```text
+IMPLEMENTED / VALIDATED / COMMITTED / PUSHED / DEPLOYED / PRODUCTION CONFIRMED = YES
+Runtime commit                         = ffe533ee681f85112dc56c8007dabaa2dde25837
+Production gh-pages                    = 39fa441555982f6e9f65d36c5549cd9bef3a6393
+Functions deploy                       = NO — not required
+Firestore Rules deploy                 = NO — not required
+Firebase Hosting deploy                = NO — not required
+```
+
+Documentation Impact：本 closeout 更新 `CURRENT_STATE.md`、`SYSTEM_SOURCE_MAP.md`。`ARCHITECTURE.md`、`AUTH_AND_SECURITY.md`、`DATA_FLOW.md`、`FIREBASE_DATA_MODEL.md`、`DEPLOYMENT.md`、`DASHBOARD_SUMMARY.md`、`MAINTENANCE_TOOLS.md`、`TELEGRAM_AGENT.md`、`DATA_IDENTITY_RULES.md`、`DEVELOPMENT_GUIDE.md`、`PROJECT_OPERATING_RULES.md` = None。較早章節中的 `3.5.3` 是當時歷史 evidence，不做全檔機械改寫。
+
+---
 
 # Latest Production Runtime Override — 2026-09-11（Smart Forecast Accuracy Placement + System Maintenance UX + Permission Matrix UX Closeout）
 
