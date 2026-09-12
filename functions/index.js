@@ -70,6 +70,7 @@ const {
   getBrandSettingDoc: getDeviceSecurityBrandSettingDoc,
   requireFirebaseRequestAuth,
   verifyApplicationCredential,
+  verifySuperAdminActor,
 } = require("./deviceApproval");
 const deviceApprovalFunctions = createDeviceApprovalFunctions({ admin, db });
 exports.checkDeviceAccess = deviceApprovalFunctions.checkDeviceAccess;
@@ -110,8 +111,10 @@ const accountAuthorityFunctions = createAccountAuthorityFunctions({
   getBrandSettingDoc: getDeviceSecurityBrandSettingDoc,
   requireFirebaseRequestAuth: (req) => requireFirebaseRequestAuth(req, admin),
   verifyApplicationCredential,
+  verifySuperAdminActor,
 });
 exports.changeApplicationPassword = accountAuthorityFunctions.changeApplicationPassword;
+exports.manageApplicationAccount = accountAuthorityFunctions.manageApplicationAccount;
 
 // ==========================================
 // ★ Module Permissions v1：模組權限 Backend-only authority
