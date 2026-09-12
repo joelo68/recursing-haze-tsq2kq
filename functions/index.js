@@ -102,7 +102,12 @@ exports.getApplicationLoginDirectory = applicationIdentityFunctions.getApplicati
 // 僅建立「本人改密碼」後端 writer；Frontend 尚未 cutover，Rules 亦維持不變。
 // 透過 transaction 重新驗證 fresh credential，避免多人／多分頁 race 覆蓋。
 // ==========================================
-const { createAccountAuthorityFunctions } = require("./accountAuthority");
+const {
+  createAccountAuthorityFunctions,
+  ACCOUNT_AUTHORITY_RUNTIME_SERVICE_ACCOUNT,
+  assertAdminApplicationClaims,
+  getInitialPasswordsForRole,
+} = require("./accountAuthority");
 const accountAuthorityFunctions = createAccountAuthorityFunctions({
   onRequest,
   db,
@@ -143,9 +148,32 @@ const {
   getLifecycleEligibleStoreEntries,
   isLifecycleEntryFullEligibleMonth,
   buildLifecycleReportingCompleteness,
+  normalizeStoreLifecycleCore,
 } = require("./storeLifecycle");
 const storeLifecycleFunctions = createStoreLifecycleFunctions({ admin, db });
 exports.manageStoreLifecycle = storeLifecycleFunctions.manageStoreLifecycle;
+
+// ==========================================
+// ★ P0-B1C1B2：Manager Organization Authority (shadow)
+// 將區長 org_structure + manager_auth 收斂至同一 transaction；
+// 以完整組織 semantic signature 做 OCC，不新增 org_structure revision schema。
+// Frontend 尚未 cutover；Rules、版本號、既有組織 writer 均維持不變。
+// ==========================================
+const { createManagerOrganizationAuthorityFunctions } = require("./managerOrganizationAuthority");
+const managerOrganizationAuthorityFunctions = createManagerOrganizationAuthorityFunctions({
+  onRequest,
+  db,
+  runtimeServiceAccount: ACCOUNT_AUTHORITY_RUNTIME_SERVICE_ACCOUNT,
+  normalizeBrandId: normalizeDeviceSecurityBrandId,
+  getBrandCollection: getDeviceSecurityBrandCollection,
+  getBrandSettingDoc: getDeviceSecurityBrandSettingDoc,
+  requireFirebaseRequestAuth: (req) => requireFirebaseRequestAuth(req, admin),
+  verifySuperAdminActor,
+  assertAdminApplicationClaims,
+  normalizeStoreCore: normalizeStoreLifecycleCore,
+  getInitialPasswordsForRole,
+});
+exports.manageManagerOrganization = managerOrganizationAuthorityFunctions.manageManagerOrganization;
 
 
 // ==========================================
