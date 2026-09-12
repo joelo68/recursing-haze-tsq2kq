@@ -1,5 +1,6 @@
 const crypto = require("crypto");
 const { APPLICATION_IDENTITY_VERSION } = require("./applicationIdentity");
+const { updateTherapistCredentialPasswordInTransaction } = require("./therapistCredentialAuthority");
 
 const ACCOUNT_AUTHORITY_RUNTIME_SERVICE_ACCOUNT =
   "drcyj-account-authority@cyjsituation-analysis.iam.gserviceaccount.com";
@@ -183,14 +184,17 @@ function updateStorePasswordData(raw = {}, accountId = "", currentPassword = "",
 
 async function writePasswordChangeInTransaction({ transaction, db, brandId, roleId, accountId, currentPassword, newPassword, nowText, getBrandCollection, getBrandSettingDoc }) {
   if (roleId === "therapist") {
-    const ref = getBrandCollection(db, brandId, "therapists").doc(accountId);
-    const snap = await transaction.get(ref);
-    if (!snap.exists) throw new AccountAuthorityError("account_missing", 404);
-    const data = snap.data() || {};
-    const inactive = data.isActive === false || data.resigned === true || data.isResigned === true || ["resigned", "離職"].includes(String(data.status || "").toLowerCase());
-    if (inactive) throw new AccountAuthorityError("account_inactive", 403);
-    if (!safePasswordMatch(currentPassword, data.password || "")) throw new AccountAuthorityError("credential_changed", 409);
-    transaction.set(ref, { password: newPassword, updatedAtText: nowText }, { merge: true });
+    await updateTherapistCredentialPasswordInTransaction({
+      transaction,
+      db,
+      brandId,
+      therapistId: accountId,
+      currentPassword,
+      newPassword,
+      nowText,
+      getBrandCollection,
+      passwordMatches: safePasswordMatch,
+    });
     return;
   }
 

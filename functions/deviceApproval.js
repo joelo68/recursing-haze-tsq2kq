@@ -1,5 +1,6 @@
 const crypto = require('crypto');
 const { buildVerifiedApplicationIdentity } = require('./applicationIdentity');
+const { loadTherapistCredentialSource } = require('./therapistCredentialAuthority');
 const { onRequest } = require('firebase-functions/v2/https');
 const { onSchedule } = require('firebase-functions/v2/scheduler');
 
@@ -231,13 +232,29 @@ async function verifyApplicationCredential({ db, brandId, roleId, accountId, pas
   }
 
   if (role === 'therapist') {
-    const snap = await getBrandCollection(db, brandId, 'therapists').doc(id).get();
-    if (!snap.exists) return { ok: false, reason: 'account_missing' };
-    const account = snap.data() || {};
-    const inactive = account.isActive === false || ['resigned', '離職'].includes(String(account.status || '').toLowerCase()) || account.resigned === true || account.isResigned === true;
-    if (inactive) return { ok: false, reason: 'account_inactive' };
-    if (!safePasswordMatch(inputPassword, account.password || '')) return { ok: false, reason: 'wrong_password' };
-    return { ok: true, accountId: snap.id, userName: String(account.name || id) };
+    try {
+      const source = await loadTherapistCredentialSource({
+        db,
+        brandId,
+        therapistId: id,
+        getBrandCollection,
+        requireActive: true,
+      });
+      if (!safePasswordMatch(inputPassword, source.password || '')) {
+        return { ok: false, reason: 'wrong_password' };
+      }
+      return {
+        ok: true,
+        accountId: source.therapistId,
+        userName: String(source.masterData?.name || id),
+        credentialStorageMode: source.mode,
+      };
+    } catch (error) {
+      return {
+        ok: false,
+        reason: String(error?.code || 'credential_source_unavailable'),
+      };
+    }
   }
 
   return { ok: false, reason: 'unsupported_role' };

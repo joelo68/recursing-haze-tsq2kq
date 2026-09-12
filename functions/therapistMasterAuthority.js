@@ -1,4 +1,10 @@
 const crypto = require("node:crypto");
+const {
+  THERAPIST_CREDENTIAL_STORAGE_MODE_EMBEDDED,
+  normalizeTherapistCredentialStorageMode,
+  buildEmbeddedCredentialCreateFields,
+  deleteSeparatedTherapistCredentialInTransaction,
+} = require("./therapistCredentialAuthority");
 
 const THERAPIST_MASTER_AUTHORITY_VERSION = "therapist-master-authority-v1";
 const SUPPORTED_THERAPIST_MASTER_ACTIONS = new Set([
@@ -340,9 +346,10 @@ function applyTherapistMasterAction({
         serverTimestamp,
         includeCreated: true,
       }),
-      // Compatibility-only until the later credential-storage cutover.
-      // Never accept this value from an administrative payload.
-      password: initialPassword,
+      // B1C2B foundation: existing/new therapists remain legacy-authoritative until
+      // an explicit atomic migration flips this account to separated_v1.
+      // Never accept password or storage mode from an administrative payload.
+      ...buildEmbeddedCredentialCreateFields(initialPassword),
     };
 
     return {
@@ -556,6 +563,14 @@ async function manageTherapistMasterInTransaction({
   });
 
   if (result.deleted) {
+    deleteSeparatedTherapistCredentialInTransaction({
+      transaction,
+      db,
+      brandId,
+      therapistId,
+      masterData: currentRaw || {},
+      getBrandCollection,
+    });
     transaction.delete(therapistRef);
   } else if (isCreate) {
     transaction.set(therapistRef, result.next, { merge: false });
@@ -625,6 +640,9 @@ async function manageTherapistMasterInTransaction({
     previousMasterSignature,
     masterSignature: nextMasterSignature,
     therapist: nextRecord ? sanitizeTherapistResponse(nextRecord) : null,
+    credentialStorageMode: result.deleted
+      ? normalizeTherapistCredentialStorageMode(currentRaw || {})
+      : normalizeTherapistCredentialStorageMode(nextRecord || {}),
   };
 }
 
@@ -755,7 +773,7 @@ function createTherapistMasterAuthorityFunctions({
         requiresInitialPasswordChange: result.requiresInitialPasswordChange === true,
         masterSignature: result.masterSignature,
         therapist: result.therapist,
-        credentialStorageMode: "embedded_legacy_pending_migration",
+        credentialStorageMode: result.credentialStorageMode || THERAPIST_CREDENTIAL_STORAGE_MODE_EMBEDDED,
       });
     } catch (error) {
       const status = Number(error?.status || 500);

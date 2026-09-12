@@ -159,6 +159,16 @@ service cloud.firestore {
       allow read, write: if false;
     }
 
+    // Therapist Credential Separation v1：管理師密碼實體與人員主檔分離。
+    // 此集合永遠不允許 Browser 直接讀寫；登入與改密碼僅能經 Backend authority。
+    match /brands/{brandId}/therapist_credentials/{document=**} {
+      allow read, write: if false;
+    }
+
+    match /artifacts/{appId}/public/data/therapist_credentials/{document=**} {
+      allow read, write: if false;
+    }
+
     match /artifacts/{appId}/public/data/global_blocked_devices/{document=**} {
       allow read, write: if false;
     }
@@ -265,6 +275,7 @@ service cloud.firestore {
         && collectionName != 'security_alerts'
         && collectionName != 'security_summary'
         && collectionName != 'login_security_state'
+        && collectionName != 'therapist_credentials'
         && collectionName != 'store_lifecycle'
         && collectionName != 'projection_models'
         && collectionName != 'projection_accuracy'
@@ -284,6 +295,7 @@ service cloud.firestore {
         && collectionName != 'security_alerts'
         && collectionName != 'security_summary'
         && collectionName != 'login_security_state'
+        && collectionName != 'therapist_credentials'
         && collectionName != 'global_blocked_devices'
         && collectionName != 'store_lifecycle'
         && collectionName != 'projection_models'

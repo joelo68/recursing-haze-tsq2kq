@@ -560,18 +560,57 @@ test("master update does not accept arbitrary fields or mutate credential from a
   }), /credential_payload_not_allowed/);
 });
 
-test("credential physical split is intentionally deferred without introducing a second password source", () => {
-  assert.match(backendSource, /embedded_legacy_pending_migration/);
-  assert.doesNotMatch(backendSource, /["']therapist_credentials["']/);
+test("B1C2B therapist master provisions only the legacy authority until explicit atomic migration", () => {
+  assert.match(backendSource, /buildEmbeddedCredentialCreateFields\(initialPassword\)/);
+  assert.match(backendSource, /credentialStorageMode:\s*result\.credentialStorageMode/);
+  assert.match(backendSource, /deleteSeparatedTherapistCredentialInTransaction/);
   assert.doesNotMatch(backendSource, /onSnapshot|setInterval|setTimeout/);
   assert.match(backendSource, /transaction\.set\(therapistRef,\s*result\.next,\s*\{\s*merge:\s*true\s*\}\)/s);
   assert.match(backendSource, /semantic master signature intentionally excludes password/);
 });
 
-test("current Rules prove why therapist credential must be physically separated before raw-credential lockdown", () => {
-  assert.match(rules, /match \/brands\/\{brandId\}\/\{collectionName\}\/\{document=\*\*\}/);
-  assert.match(rules, /allow read, write:\s*if signedIn\(\)/);
-  assert.match(rules, /match \/artifacts\/\{appId\}\/public\/data\/\{collectionName\}\/\{document=\*\*\}/);
+test("permanent delete removes a separated credential document in the same therapist master transaction", async () => {
+  const env = makeEnv({
+    therapists: {
+      t1: {
+        id: "t1",
+        name: "已離職",
+        store: "A",
+        onboardDate: "2025-01-01",
+        resignDate: "2026-01-01",
+        status: "離職",
+        isActive: false,
+        isResigned: true,
+        resigned: true,
+        credentialStorageMode: "separated_v1",
+      },
+    },
+  });
+  const credentialRef = env.collectionRef("cyj", "therapist_credentials").doc("t1");
+  credentialRef.exists = true;
+  credentialRef.data = {
+    schemaVersion: "therapist-credential-v1",
+    brandId: "cyj",
+    therapistId: "t1",
+    password: "private-secret",
+  };
+
+  const res = await env.call({
+    action: "delete",
+    therapistId: "t1",
+    payload: {},
+    confirmPermanentDelete: true,
+  });
+  assert.equal(res.statusCode, 200);
+  assert.equal(res.body.deleted, true);
+  assert.ok(env.deletes.includes("cyj:therapist_credentials:t1"));
+  assert.ok(env.deletes.includes("cyj:therapists:t1"));
+});
+
+test("therapist credential collection is protected now while raw therapist master lockdown remains later", () => {
+  assert.match(rules, /match \/brands\/\{brandId\}\/therapist_credentials\/\{document=\*\*\}/);
+  assert.match(rules, /match \/artifacts\/\{appId\}\/public\/data\/therapist_credentials\/\{document=\*\*\}/);
+  assert.equal((rules.match(/collectionName != 'therapist_credentials'/g) || []).length, 2);
   assert.match(managerView, /String\(t\?\.password \|\| ""\)/);
   assert.match(app, /getDocs\(getCollectionPath\("therapists"\)\)/);
 });
