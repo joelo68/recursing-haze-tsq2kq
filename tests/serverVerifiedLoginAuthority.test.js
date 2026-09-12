@@ -44,12 +44,16 @@ test("B1B2 fails closed when secure application session issuance is incomplete",
   assert.doesNotMatch(app, /const mustBlock = !credentialVerified \|\| shouldFailClosed/);
 });
 
-test("B1B1 keeps client password checks only as a temporary compatibility gate", () => {
-  assert.match(login, /password === correctPass/);
-  assert.match(login, /account && account\.password === password/);
-  assert.match(login, /therapist && therapist\.password === tPassword/);
+test("B1C2C1 removes browser password comparison and delegates every role login to backend authority", () => {
+  assert.doesNotMatch(login, /password === correctPass/);
+  assert.doesNotMatch(login, /account && account\.password === password/);
+  assert.doesNotMatch(login, /therapist && therapist\.password === tPassword/);
+  assert.doesNotMatch(login, /managerAuth|masterAuth|trainerAuth|directorAuth/);
+  assert.match(login, /const finishBackendLogin = async/);
+  assert.match(login, /result\?\.credentialRejected/);
+  assert.match(login, /onChangeApplicationPassword/);
   for (const role of ["director", "trainer", "manager", "store", "therapist"]) {
-    assert.match(login, new RegExp(`await onLogin\\("${role}"`));
+    assert.match(login, new RegExp(`roleId: \"${role}\"`));
   }
 });
 

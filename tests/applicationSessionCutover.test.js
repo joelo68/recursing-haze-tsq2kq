@@ -100,9 +100,16 @@ test("master credential is not promoted into a durable Firebase custom claim", (
   assert.equal(Object.prototype.hasOwnProperty.call(result.claims, "isMasterCredential"), false);
 });
 
-test("B1B2 leaves Firestore Rules and credential-directory retirement for later stages", () => {
+test("B1C2C1 retires raw credential bootstrap while Firestore Rules lockdown remains later", () => {
   assert.match(rules, /function signedIn\(\)\s*\{\s*return request\.auth != null;/);
-  assert.match(app, /getDoc\(getDocPath\("store_account_data"\)\)/);
-  assert.match(app, /getDoc\(getDocPath\("manager_auth"\)\)/);
+  assert.match(app, /LOGIN_DIRECTORY_ENDPOINT/);
+  const fetchStart = app.indexOf("const fetchGlobalData");
+  const fetchEnd = app.indexOf("const unsubReadTrackerConfig", fetchStart);
+  assert.ok(fetchStart > 0 && fetchEnd > fetchStart);
+  const bootstrap = app.slice(fetchStart, fetchEnd);
+  for (const rawSource of ["store_account_data", "manager_auth", "trainer_auth", "director_auth", "master_auth"]) {
+    assert.doesNotMatch(bootstrap, new RegExp(`getDoc\\(getDocPath\\(\"${rawSource}\"\\)\\)`));
+  }
+  assert.match(app, /transitional admin hydration/);
   assert.match(app, /CURRENT_APP_VERSION\s*=\s*"3\.6\.0"/);
 });

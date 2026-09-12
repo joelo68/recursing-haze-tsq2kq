@@ -20,6 +20,7 @@ const {
 
 const applicationIdentitySource = read("functions/applicationIdentity.js");
 const functionsIndex = read("functions/index.js");
+const app = read("src/App.jsx");
 
 const EXPECTED_RUNTIME_SA =
   "drcyj-login-directory@cyjsituation-analysis.iam.gserviceaccount.com";
@@ -161,7 +162,7 @@ test("directory keeps explicit default-app-id compatibility without cross-brand 
   ].sort());
 });
 
-test("directory source remains sanitized, request-scoped and shadow-only", () => {
+test("directory source remains sanitized and request-scoped after frontend cutover", () => {
   assert.match(
     functionsIndex,
     /exports\.getApplicationLoginDirectory\s*=\s*applicationIdentityFunctions\.getApplicationLoginDirectory/
@@ -170,6 +171,8 @@ test("directory source remains sanitized, request-scoped and shadow-only", () =>
   assert.doesNotMatch(applicationIdentitySource, /master_auth/);
   assert.doesNotMatch(applicationIdentitySource, /setInterval\s*\(/);
   assert.doesNotMatch(applicationIdentitySource, /onSnapshot\s*\(/);
+  assert.match(app, /LOGIN_DIRECTORY_ENDPOINT/);
+  assert.match(app, /loginDirectory=\{loginDirectory\}/);
 
   const directoryBlockStart = applicationIdentitySource.indexOf("const getApplicationLoginDirectory = onRequest(");
   const directoryBlockEnd = applicationIdentitySource.indexOf("return { getApplicationLoginDirectory };", directoryBlockStart);

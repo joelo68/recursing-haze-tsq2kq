@@ -63,7 +63,7 @@ test("App keeps System Exclusion as one brand-scoped live authority document and
   assert.match(source, /setSystemExclusionState\(nextState\)/);
   assert.match(source, /setAuditExclusions\(nextState\.stores\)/);
   assert.doesNotMatch(source, /key:\s*"auditExclusions"/);
-  assert.match(source, /fetchGlobalData_core_docs[\s\S]{0,220}9/);
+  assert.match(source, /fetchGlobalData_core_docs[\s\S]{0,220}4/);
   assert.doesNotMatch(source, /setInterval\([\s\S]{0,200}audit_exclusions/);
   assert.match(source, /CURRENT_APP_VERSION = "3\.6\.0"/);
 });

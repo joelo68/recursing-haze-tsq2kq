@@ -82,19 +82,20 @@ function makeFactory({ dataBySetting = {}, therapistData = {}, requestAuth, cred
   return { factory, settingRefs, therapistRefs, writes, get transactionCount() { return transactionCount; } };
 }
 
-test("B1C1A stays shadowed, uses a separate runtime SA, and does not advance frontend or Rules", () => {
+test("B1C1A keeps a separate runtime authority while B1C2C1 explicitly cuts first-login password updates over to it", () => {
   assert.equal(ACCOUNT_AUTHORITY_RUNTIME_SERVICE_ACCOUNT, "drcyj-account-authority@cyjsituation-analysis.iam.gserviceaccount.com");
   assert.match(backend, /serviceAccount:\s*ACCOUNT_AUTHORITY_RUNTIME_SERVICE_ACCOUNT/);
   assert.doesNotMatch(backend, /drcyj-application-identity@/);
   assert.doesNotMatch(backend, /artifacts\/default-app-id\/public\/data|collection\('brands'\)/);
   assert.match(deviceApproval, /verifyApplicationCredential,/);
   assert.match(functionsIndex, /exports\.changeApplicationPassword\s*=\s*accountAuthorityFunctions\.changeApplicationPassword/);
-  assert.doesNotMatch(app, /changeApplicationPassword/);
+  assert.match(app, /const CHANGE_APPLICATION_PASSWORD_ENDPOINT\s*=\s*"https:\/\/us-central1-cyjsituation-analysis\.cloudfunctions\.net\/changeApplicationPassword"/);
+  assert.match(app, /const changeApplicationPassword = useCallback/);
+  assert.match(app, /onChangeApplicationPassword=\{changeApplicationPassword\}/);
   assert.match(app, /CURRENT_APP_VERSION\s*=\s*"3\.6\.0"/);
   assert.match(rules, /function signedIn\(\)\s*\{\s*return request\.auth != null;/);
   assert.doesNotMatch(rules, /request\.auth\.token\.drcyjIdentity/);
 });
-
 test("role data adapters update only password-bearing account data while preserving neighboring fields", () => {
   const now = "2026-09-12T08:00:00.000Z";
   assert.equal(updateDirectorPasswordData({ accounts: { d1: { id: "d1", name: "主管", password: "old", level: "super_admin" } }, directorOrder: ["d1"] }, "d1", "old", "new", now).accounts.d1.password, "new");

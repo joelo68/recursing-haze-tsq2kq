@@ -229,13 +229,15 @@ test("frontend no longer directly mutates protected device-security collections"
   assert.doesNotMatch(frontend, /addDoc\([^\n]{0,240}(security_alerts|device_approval_requests)/);
 });
 
-test("LoginView forwards the credential to App for every supported role after client-side password check", () => {
+test("LoginView delegates every supported role credential to backend authority without client-side password comparison", () => {
+  assert.match(login, /const finishBackendLogin = async/);
+  assert.match(login, /await onLogin\(roleId, userInfo, \{ accountId, password: String\(passwordValue \|\| ""\) \}\)/);
   for (const role of ["director", "trainer", "manager", "store", "therapist"]) {
-    assert.match(login, new RegExp(`await onLogin\\("${role}"`));
+    assert.ok(login.includes(`finishBackendLogin({ roleId: "${role}"`), `${role} must delegate credential verification to finishBackendLogin`);
   }
-  assert.match(login, /await onLogin\(loginRole, loginPayload, \{ accountId: forcePasswordUpdate\.accountId, password: nextPass \}\)/);
+  assert.match(login, /await onChangeApplicationPassword\(\{ roleId, accountId, currentPassword, newPassword: nextPass \}\)/);
+  assert.doesNotMatch(login, /account\.password\s*===\s*password|therapist\.password\s*===\s*tPassword|password\s*===\s*correctPass/);
 });
-
 test("monitor-mode device badge becomes trusted live after approval without relogin", () => {
   assert.match(app, /approvalRequestId:\s*approvalRequired \? String\(deviceSecurity\?\.requestId \|\| ""\) : ""/);
   assert.match(app, /getCollectionPath\("device_approval_requests"\)/);
@@ -320,16 +322,17 @@ test("rapid multi-location detection uses a ten-minute window and suppresses sam
   assert.match(backend, /if \(aCountry && bCountry && aCountry !== bCountry\) return true/);
 });
 
-test("login page reports failed passwords for every supported role without blocking the UI", () => {
+test("login page reports backend-rejected passwords generically without restoring client-side credential checks", () => {
   assert.match(app, /LOGIN_SECURITY_EVENT_ENDPOINT[\s\S]{0,250}reportLoginSecurityEvent/);
   assert.match(app, /onSecurityEvent=\{reportLoginSecurityEvent\}/);
+  assert.match(app, /credentialRejected:\s*true/);
   assert.match(login, /eventType:\s*"password_failed"/);
-  for (const role of ["director", "trainer", "manager", "store", "therapist"]) {
-    assert.match(login, new RegExp(`reportPasswordFailure\\("${role}"`));
-  }
+  assert.match(login, /if \(result\?\.credentialRejected\)/);
+  assert.match(login, /reportPasswordFailure\(roleId, accountId/);
   assert.match(login, /Promise\.resolve\(onSecurityEvent/);
+  assert.doesNotMatch(login, /reportPasswordFailure\("(?:director|trainer|manager|store|therapist)"/);
+  assert.doesNotMatch(login, /account\.password\s*===\s*password|therapist\.password\s*===\s*tPassword|password\s*===\s*correctPass/);
 });
-
 test("Telegram security alerts reuse the three recognized chats but remain disabled until a highest manager chooses targets", () => {
   assert.match(functionsIndex, /TARGET_CHAT_ID_MAIN\s*=\s*'-4991191955'/);
   assert.match(functionsIndex, /TARGET_CHAT_ID_MANAGER\s*=\s*'-1002361008620'/);

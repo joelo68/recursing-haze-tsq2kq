@@ -244,10 +244,12 @@ test("checkDeviceAccess mints an application custom token only after device poli
   assert.match(mintBlock, /createCustomToken/);
 });
 
-test("Functions entry keeps sanitized directory shadowed while B1B2 cuts over only the application session", () => {
+test("B1C2C1 frontend consumes sanitized directory while application session cutover stays intact", () => {
   assert.match(functionsIndex, /createApplicationIdentityFunctions/);
   assert.match(functionsIndex, /exports\.getApplicationLoginDirectory\s*=\s*applicationIdentityFunctions\.getApplicationLoginDirectory/);
-  assert.doesNotMatch(app, /getApplicationLoginDirectory/);
+  assert.match(app, /LOGIN_DIRECTORY_ENDPOINT/);
+  assert.match(app, /getApplicationLoginDirectory/);
+  assert.match(app, /assertSanitizedLoginDirectory/);
   assert.match(app, /requestApplicationIdentityToken:\s*true/);
   assert.match(app, /signInWithCustomToken\(auth, customToken\)/);
   assert.match(app, /CURRENT_APP_VERSION\s*=\s*"3\.6\.0"/);

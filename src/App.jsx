@@ -57,6 +57,8 @@ import {
 const CURRENT_APP_VERSION = "3.6.0";
 const LOGIN_LOCATION_ENDPOINT = "https://resolveloginlocation-hyhcwrnyaa-uc.a.run.app";
 const DEVICE_ACCESS_ENDPOINT = "https://us-central1-cyjsituation-analysis.cloudfunctions.net/checkDeviceAccess";
+const LOGIN_DIRECTORY_ENDPOINT = "https://us-central1-cyjsituation-analysis.cloudfunctions.net/getApplicationLoginDirectory";
+const CHANGE_APPLICATION_PASSWORD_ENDPOINT = "https://us-central1-cyjsituation-analysis.cloudfunctions.net/changeApplicationPassword";
 const DEVICE_APPROVAL_REVIEW_ENDPOINT = "https://us-central1-cyjsituation-analysis.cloudfunctions.net/reviewDeviceApproval";
 const DEVICE_MANAGEMENT_ENDPOINT = "https://us-central1-cyjsituation-analysis.cloudfunctions.net/manageAccountDevice";
 const DEVICE_EMERGENCY_ENDPOINT = "https://us-central1-cyjsituation-analysis.cloudfunctions.net/emergencyUnblockDevice";
@@ -166,6 +168,51 @@ const BRANDS = [
   { id: 'anniu', label: '安妞', icon: Heart, pathType: 'new', color: 'rose', gradient: 'from-rose-400 to-pink-600', bg: 'bg-rose-50', text: 'text-rose-600' },
   { id: 'yibo', label: '伊啵', icon: Music, pathType: 'new', color: 'sky', gradient: 'from-sky-400 to-indigo-600', bg: 'bg-sky-50', text: 'text-sky-600' }
 ];
+
+const APPLICATION_LOGIN_DIRECTORY_VERSION = "application-login-directory-v1";
+const EMPTY_LOGIN_DIRECTORY = Object.freeze({
+  version: APPLICATION_LOGIN_DIRECTORY_VERSION,
+  brandId: "",
+  directors: [],
+  trainers: [],
+  managers: [],
+  stores: [],
+  therapists: [],
+});
+
+const LOGIN_DIRECTORY_ARRAY_KEYS = ["directors", "trainers", "managers", "stores", "therapists"];
+const LOGIN_DIRECTORY_FORBIDDEN_KEY = /(?:password|secret|token)/i;
+
+const assertSanitizedLoginDirectory = (directory, expectedBrandId) => {
+  if (!directory || typeof directory !== "object" || Array.isArray(directory)) {
+    throw new Error("登入名單格式不正確");
+  }
+  if (String(directory.version || "") !== APPLICATION_LOGIN_DIRECTORY_VERSION) {
+    throw new Error("登入名單版本不相容");
+  }
+  if (String(directory.brandId || "").trim().toLowerCase() !== String(expectedBrandId || "").trim().toLowerCase()) {
+    throw new Error("登入名單品牌不一致");
+  }
+  for (const key of LOGIN_DIRECTORY_ARRAY_KEYS) {
+    if (!Array.isArray(directory[key])) throw new Error(`登入名單缺少 ${key}`);
+  }
+
+  const scan = (value) => {
+    if (Array.isArray(value)) {
+      value.forEach(scan);
+      return;
+    }
+    if (!value || typeof value !== "object") return;
+    for (const [key, child] of Object.entries(value)) {
+      if (LOGIN_DIRECTORY_FORBIDDEN_KEY.test(String(key || "").replace(/[_-]/g, ""))) {
+        throw new Error("登入名單包含不應傳到瀏覽器的敏感欄位");
+      }
+      scan(child);
+    }
+  };
+  scan(directory);
+  return directory;
+};
 
 const DEFAULT_SECURITY_CONFIG = {
   enabled: true,
@@ -1104,8 +1151,14 @@ export default function App() {
   const [permissions, setPermissions] = useState(DEFAULT_PERMISSIONS);
   const [therapists, setTherapists] = useState([]);
   const [directorAuth, setDirectorAuth] = useState({});
-  const [trainerAuth, setTrainerAuth] = useState(normalizeTrainerAuthData({ password: "0000" }));
-  const [masterAuth, setMasterAuth] = useState({ password: "BOSS888" });
+  const [trainerAuth, setTrainerAuth] = useState({ accounts: {}, trainerOrder: [] });
+  const [loginDirectory, setLoginDirectory] = useState(EMPTY_LOGIN_DIRECTORY);
+  const [adminCredentialSourceState, setAdminCredentialSourceState] = useState({
+    status: "idle", // idle | loading | ready | error
+    brandId: "",
+    view: "",
+    error: "",
+  });
   const [therapistReports, setTherapistReports] = useState([]); 
   const [therapistSchedules, setTherapistSchedules] = useState({}); 
   const [therapistTargets, setTherapistTargets] = useState({}); 
@@ -1757,6 +1810,16 @@ export default function App() {
     return result;
   }, []);
 
+  const changeApplicationPassword = useCallback(async ({ roleId, accountId, currentPassword, newPassword } = {}) => {
+    return callDeviceSecurityEndpoint(CHANGE_APPLICATION_PASSWORD_ENDPOINT, {
+      brandId: currentBrandId,
+      roleId: String(roleId || ""),
+      accountId: String(accountId || ""),
+      currentPassword: String(currentPassword || ""),
+      newPassword: String(newPassword || ""),
+    });
+  }, [callDeviceSecurityEndpoint, currentBrandId]);
+
   const reportLoginSecurityEvent = useCallback(async ({ eventType, roleId, accountId, userName = "" } = {}) => {
     if (!isOnline || !eventType || !roleId || !accountId) return { ok: false, skipped: true };
 
@@ -1851,7 +1914,9 @@ export default function App() {
     } catch (error) {
       console.warn("登入／裝置確認服務暫時無法完成:", error);
       const credentialVerified = error?.result?.credentialVerified === true;
-      const credentialRejected = error?.status === 401 || error?.result?.credentialVerified === false;
+      const credentialRejected = Boolean(
+        error?.status === 401 && String(error?.result?.reason || "").trim()
+      );
       const sessionUnavailable = [
         "application_identity_token_missing",
         "application_identity_token_unavailable",
@@ -1864,6 +1929,7 @@ export default function App() {
         ok: false,
         allowed: false,
         credentialVerified,
+        credentialRejected,
         deviceInfo,
         isNewDevice: false,
         deviceTrusted: null,
@@ -1936,6 +2002,7 @@ export default function App() {
         roleId: expectedRoleId,
         accountId: expectedAccountId,
         directorLevel: String(claims?.directorLevel || identity?.directorLevel || ""),
+        isMasterCredential: identity?.isMasterCredential === true,
       };
 
       return applicationSessionIdentityRef.current;
@@ -2259,9 +2326,7 @@ export default function App() {
     try {
       for (let attemptIndex = 0; attemptIndex < retryDelays.length; attemptIndex += 1) {
         const delayMs = retryDelays[attemptIndex];
-        if (delayMs > 0) {
-          await new Promise((resolve) => setTimeout(resolve, delayMs));
-        }
+        if (delayMs > 0) await new Promise((resolve) => setTimeout(resolve, delayMs));
 
         if (
           requestId !== accountDirectoryRequestRef.current ||
@@ -2280,18 +2345,14 @@ export default function App() {
         }));
 
         try {
-          // 必要帳號來源與次要設定同時讀取；只有必要來源失敗才阻擋登入名單發布。
+          // P0-B1C2C1：登入名單由 Backend Sanitized Directory 統一提供。
+          // Browser 正常 bootstrap 不再直接讀取 store/manager/trainer/director/master credential 文件。
           const tasks = [
             { key: "org", required: true, promise: withTimeout(getDoc(getDocPath("org_structure")), "組織架構") },
-            { key: "storeAccounts", required: true, promise: withTimeout(getDoc(getDocPath("store_account_data")), "店經理帳號") },
-            { key: "managerAuth", required: true, promise: withTimeout(getDoc(getDocPath("manager_auth")), "區長帳號") },
+            { key: "directory", required: true, promise: withTimeout(callDeviceSecurityEndpoint(LOGIN_DIRECTORY_ENDPOINT, { brandId: brandIdAtStart }), "授權名單") },
             { key: "permissions", required: false, promise: withTimeout(getDoc(getDocPath("permissions")), "權限設定") },
-            { key: "therapists", required: true, promise: withTimeout(getDocs(getCollectionPath("therapists")), "管理師名單") },
-            { key: "trainerAuth", required: true, promise: withTimeout(getDoc(getDocPath("trainer_auth")), "教專帳號") },
             { key: "securityConfig", required: false, promise: withTimeout(getDoc(getDocPath("security_config")), "安全設定") },
             { key: "featureFlags", required: false, promise: withTimeout(getDoc(getDocPath("feature_flags")), "功能設定") },
-            { key: "directorAuth", required: true, promise: withTimeout(getDoc(getDocPath("director_auth")), "高階主管帳號") },
-            { key: "masterAuth", required: true, promise: withTimeout(getDoc(getDocPath("master_auth")), "最高管理帳號") },
             { key: "delegations", required: false, promise: withTimeout(getDocs(query(getCollectionPath("management_delegations"), where("status", "in", ["active", "scheduled"]))), "代理與托管") },
           ];
 
@@ -2301,24 +2362,18 @@ export default function App() {
             resultMap[tasks[index].key] = result;
           });
 
-          trackReadSource("fetchGlobalData_core_docs", 9, getStableReadMeta("fetchGlobalData_core_docs"));
+          // 4 個 Browser point reads：org + permissions + security_config + feature_flags。
+          trackReadSource("fetchGlobalData_core_docs", 4, getStableReadMeta("fetchGlobalData_core_docs"));
           const delegationResult = resultMap.delegations;
           trackReadSource(
             "fetchGlobalData_delegations",
             delegationResult?.status === "fulfilled" ? delegationResult.value.docs.length : 0,
             getStableReadMeta("fetchGlobalData_delegations")
           );
-          const therapistResult = resultMap.therapists;
-          trackReadSource(
-            "fetchGlobalData_therapists",
-            therapistResult?.status === "fulfilled" ? therapistResult.value.docs.length : 0,
-            getStableReadMeta("fetchGlobalData_therapists")
-          );
 
           const failedRequiredTasks = tasks.filter((task) => (
             task.required && resultMap[task.key]?.status !== "fulfilled"
           ));
-
           if (failedRequiredTasks.length > 0) {
             const firstFailure = resultMap[failedRequiredTasks[0].key]?.reason;
             throw new Error(
@@ -2334,12 +2389,14 @@ export default function App() {
           }
 
           const orgSnap = resultMap.org.value;
-          const accSnap = resultMap.storeAccounts.value;
-          const mAuthSnap = resultMap.managerAuth.value;
-          const thSnap = resultMap.therapists.value;
-          const trAuthSnap = resultMap.trainerAuth.value;
-          const dAuthSnap = resultMap.directorAuth.value;
-          const mastSnap = resultMap.masterAuth.value;
+          const directoryResult = resultMap.directory.value || {};
+          const nextLoginDirectory = assertSanitizedLoginDirectory(directoryResult.directory, brandIdAtStart);
+
+          trackReadSource(
+            "login_directory_backend_estimated",
+            4 + Math.max(1, nextLoginDirectory.therapists.length),
+            getStableReadMeta("login_directory_backend_estimated")
+          );
 
           let nextManagers = {};
           let nextManagerOrder = [];
@@ -2357,17 +2414,13 @@ export default function App() {
             nextManagerOrder = normalizeManagerOrder(nextManagers);
           }
 
-          const nextStoreAccounts = accSnap.exists() && Array.isArray(accSnap.data()?.accounts)
-            ? accSnap.data().accounts
-            : [];
-          const nextManagerAuth = mAuthSnap.exists() ? (mAuthSnap.data() || {}) : {};
-          const nextTherapists = thSnap.docs.map((documentSnapshot) => {
-            const data = documentSnapshot.data() || {};
+          const nextStoreAccounts = nextLoginDirectory.stores.map((account) => ({ ...account }));
+          const nextTherapists = nextLoginDirectory.therapists.map((data) => {
             const storeName = data.store || data.storeName || data.primaryStore || (Array.isArray(data.stores) ? data.stores[0] : "");
             const managerName = data.manager || data.managerName || data.region || data.area || "";
             return {
-              id: documentSnapshot.id,
               ...data,
+              id: String(data.id || ""),
               store: storeName,
               storeName: data.storeName || storeName,
               manager: managerName,
@@ -2375,37 +2428,17 @@ export default function App() {
               normalizedStoreCore: normalizeStore(storeName),
             };
           });
-          const nextTrainerAuth = normalizeTrainerAuthData(
-            trAuthSnap.exists() ? trAuthSnap.data() : { password: "0000" }
-          );
 
-          let nextDirectorAuth;
-          if (dAuthSnap.exists()) {
-            nextDirectorAuth = normalizeDirectorAuthData(dAuthSnap.data());
-            if (Object.keys(nextDirectorAuth.accounts || {}).length === 0) {
-              nextDirectorAuth = normalizeDirectorAuthData({ "營運總監": "0000" });
-            }
-          } else {
-            let defaultPass = "0000";
-            if (currentBrand.id === "cyj") defaultPass = "16500";
-            if (currentBrand.id === "anniu") defaultPass = "8888";
-            if (currentBrand.id === "yibo") defaultPass = "9999";
-            nextDirectorAuth = normalizeDirectorAuthData({ "營運總監": defaultPass });
-          }
-
-          const nextMasterAuth = mastSnap.exists() && mastSnap.data()?.password
-            ? mastSnap.data()
-            : { password: "BOSS888" };
-
-          // 必要帳號資料全部完成後才一次發布，避免登入頁出現半套名單或錯誤人數。
+          // 必要來源全部完成後才一次發布；React state 中只保留 sanitized login directory。
           setManagers(nextManagers);
           setManagerOrder(nextManagerOrder);
+          setLoginDirectory(nextLoginDirectory);
           setStoreAccounts(nextStoreAccounts);
-          setManagerAuth(nextManagerAuth);
           setTherapists(nextTherapists);
-          setTrainerAuth(nextTrainerAuth);
-          setDirectorAuth(nextDirectorAuth);
-          setMasterAuth(nextMasterAuth);
+          setManagerAuth({});
+          setTrainerAuth({ accounts: {}, trainerOrder: [] });
+          setDirectorAuth({});
+
           if (delegationResult?.status === "fulfilled") {
             setDelegations(delegationResult.value.docs.map((documentSnapshot) => ({
               id: documentSnapshot.id,
@@ -2434,7 +2467,7 @@ export default function App() {
             setFeatureFlags(snap.exists() ? normalizeFeatureFlags(snap.data()) : DEFAULT_FEATURE_FLAGS);
           }, "feature_flags ");
 
-          if (shouldBackfillManagerOrder && (userRole === "director" || userRole === "master")) {
+          if (shouldBackfillManagerOrder && applicationSessionIdentityRef.current?.roleId === "director") {
             setDoc(
               getDocPath("org_structure"),
               { managers: nextManagers, managerOrder: nextManagerOrder },
@@ -2464,7 +2497,6 @@ export default function App() {
         }
       }
 
-      // 背景重新同步失敗時保留上一份完整名單；首次載入失敗才阻擋登入。
       if (startingStatus === "refreshing" && hasPublishedDirectory) {
         updateAccountDirectoryState({
           ...previousDirectoryState,
@@ -2498,6 +2530,7 @@ export default function App() {
     getStableReadMeta,
     normalizeStore,
     updateAccountDirectoryState,
+    callDeviceSecurityEndpoint,
   ]);
 
   useEffect(() => {
@@ -2821,12 +2854,13 @@ export default function App() {
 
     setManagers({});
     setManagerOrder([]);
+    setLoginDirectory(EMPTY_LOGIN_DIRECTORY);
     setStoreAccounts([]);
     setManagerAuth({});
     setTherapists([]);
     setDirectorAuth({});
-    setTrainerAuth(normalizeTrainerAuthData({ password: "0000" }));
-    setMasterAuth({ password: "BOSS888" });
+    setTrainerAuth({ accounts: {}, trainerOrder: [] });
+    setAdminCredentialSourceState({ status: "idle", brandId: currentBrandId, view: "", error: "" });
     setDelegations([]);
     setTherapistSchedules({});
     setTherapistTargets({});
@@ -2877,6 +2911,122 @@ export default function App() {
       document.removeEventListener("visibilitychange", handleVisibilityChange);
     };
   }, [user, fetchGlobalData]);
+
+  // P0-B1C2C1 transitional admin hydration:
+  // 正常登入只使用 sanitized directory；舊 credential-bearing admin source 僅在最高管理者
+  // 真正開啟尚未完成 Backend cutover 的管理頁時按需載入，離頁立即從 React state 清除。
+  useEffect(() => {
+    let cancelled = false;
+    const brandId = String(currentBrandId || "").trim().toLowerCase();
+    const isDirectorAdmin = userRole === "director" && Boolean(currentUser) && canDirectorAccessView(activeView);
+    const needsSettingsRaw = isDirectorAdmin && activeView === "settings";
+    const needsTherapistMasterRaw = isDirectorAdmin && activeView === "therapist-manager";
+
+    const restoreSanitizedState = () => {
+      const directory = loginDirectory?.brandId === brandId ? loginDirectory : EMPTY_LOGIN_DIRECTORY;
+      setStoreAccounts(Array.isArray(directory.stores) ? directory.stores.map((item) => ({ ...item })) : []);
+      setTherapists(Array.isArray(directory.therapists) ? directory.therapists.map((data) => {
+        const storeName = data.store || data.storeName || data.primaryStore || (Array.isArray(data.stores) ? data.stores[0] : "");
+        const managerName = data.manager || data.managerName || data.region || data.area || "";
+        return {
+          ...data,
+          id: String(data.id || ""),
+          store: storeName,
+          storeName: data.storeName || storeName,
+          manager: managerName,
+          managerName: data.managerName || managerName,
+          normalizedStoreCore: normalizeStore(storeName),
+        };
+      }) : []);
+      setManagerAuth({});
+      setTrainerAuth({ accounts: {}, trainerOrder: [] });
+      setDirectorAuth({});
+    };
+
+    if (!needsSettingsRaw && !needsTherapistMasterRaw) {
+      restoreSanitizedState();
+      setAdminCredentialSourceState({ status: "idle", brandId, view: "", error: "" });
+      return undefined;
+    }
+
+    setAdminCredentialSourceState({ status: "loading", brandId, view: activeView, error: "" });
+
+    (async () => {
+      try {
+        if (needsSettingsRaw) {
+          const [storeAccountSnap, managerAuthSnap, trainerAuthSnap] = await Promise.all([
+            getDoc(getDocPath("store_account_data")),
+            getDoc(getDocPath("manager_auth")),
+            getDoc(getDocPath("trainer_auth")),
+          ]);
+          if (cancelled || currentBrandIdRef.current !== brandId) return;
+
+          const rawStoreAccounts = storeAccountSnap.exists() && Array.isArray(storeAccountSnap.data()?.accounts)
+            ? storeAccountSnap.data().accounts
+            : [];
+          setStoreAccounts(rawStoreAccounts);
+          setManagerAuth(managerAuthSnap.exists() ? (managerAuthSnap.data() || {}) : {});
+          setTrainerAuth(normalizeTrainerAuthData(trainerAuthSnap.exists() ? trainerAuthSnap.data() : {}));
+          setDirectorAuth({});
+          trackReadSource("admin_credential_settings_lazy", 3, getStableReadMeta("admin_credential_settings_lazy"));
+        } else if (needsTherapistMasterRaw) {
+          const therapistSnap = await getDocs(getCollectionPath("therapists"));
+          if (cancelled || currentBrandIdRef.current !== brandId) return;
+          const rawTherapists = therapistSnap.docs.map((documentSnapshot) => {
+            const data = documentSnapshot.data() || {};
+            const storeName = data.store || data.storeName || data.primaryStore || (Array.isArray(data.stores) ? data.stores[0] : "");
+            const managerName = data.manager || data.managerName || data.region || data.area || "";
+            return {
+              id: documentSnapshot.id,
+              ...data,
+              store: storeName,
+              storeName: data.storeName || storeName,
+              manager: managerName,
+              managerName: data.managerName || managerName,
+              normalizedStoreCore: normalizeStore(storeName),
+            };
+          });
+          setTherapists(rawTherapists);
+          setStoreAccounts(Array.isArray(loginDirectory?.stores) ? loginDirectory.stores.map((item) => ({ ...item })) : []);
+          setManagerAuth({});
+          setTrainerAuth({ accounts: {}, trainerOrder: [] });
+          setDirectorAuth({});
+          trackReadSource("admin_therapist_master_lazy", therapistSnap.docs.length, getStableReadMeta("admin_therapist_master_lazy"));
+        }
+
+        if (!cancelled) {
+          setAdminCredentialSourceState({ status: "ready", brandId, view: activeView, error: "" });
+        }
+      } catch (error) {
+        console.error("帳號管理資料同步失敗:", error);
+        if (!cancelled) {
+          restoreSanitizedState();
+          setAdminCredentialSourceState({
+            status: "error",
+            brandId,
+            view: activeView,
+            error: "帳號管理資料目前無法同步，請稍後重新進入此頁。",
+          });
+        }
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [
+    userRole,
+    currentUser,
+    activeView,
+    currentBrandId,
+    loginDirectory,
+    accountDirectoryState.updatedAtText,
+    canDirectorAccessView,
+    getDocPath,
+    getCollectionPath,
+    getStableReadMeta,
+    normalizeStore,
+  ]);
 
   useEffect(() => {
     if (!user) return;
@@ -3681,7 +3831,7 @@ export default function App() {
       finalUser = { ...finalUser, securityAccountId: loginAccountId };
     }
 
-    const userName = finalUser?.name || (roleId === "director" ? "高階主管" : (roleId === "trainer" ? "教專" : "使用者"));
+    let userName = finalUser?.name || (roleId === "director" ? "高階主管" : (roleId === "trainer" ? "教專" : "使用者"));
     const immediateDeviceInfo = getClientDeviceInfo();
     setCurrentDeviceTrust({
       status: "checking",
@@ -3691,6 +3841,52 @@ export default function App() {
     });
 
     const deviceSecurity = await registerAccountDevice(roleId, finalUser || { name: userName }, loginCredential);
+
+    if (deviceSecurity?.credentialRejected === true) {
+      setCurrentDeviceTrust({
+        status: "checking",
+        label: "裝置狀態確認中",
+        deviceShort: immediateDeviceInfo.deviceShort,
+        deviceId: immediateDeviceInfo.deviceId,
+      });
+      setUserRole(null);
+      setCurrentUser(null);
+      return {
+        ok: false,
+        credentialRejected: true,
+        message: deviceSecurity?.message || "帳號或密碼驗證未通過，請重新輸入。",
+      };
+    }
+
+    // P0-B1C2C1：登入後的身份層級／Master Credential 判斷只接受 Backend application identity。
+    // Browser directory 僅負責帳號選擇，不再提供 password 或最高管理金鑰判斷。
+    const verifiedIdentity = deviceSecurity?.applicationIdentity || {};
+    const identityMatchesRequest =
+      deviceSecurity?.credentialVerified === true &&
+      String(verifiedIdentity?.brandId || "").trim().toLowerCase() === String(currentBrandId || "").trim().toLowerCase() &&
+      String(verifiedIdentity?.roleId || "").trim().toLowerCase() === String(roleId || "").trim().toLowerCase();
+
+    if (identityMatchesRequest) {
+      const verifiedAccountId = String(verifiedIdentity?.accountId || loginAccountId || "").trim();
+      const verifiedUserName = String(verifiedIdentity?.userName || finalUser?.name || userName || verifiedAccountId).trim();
+      const verifiedStores = Array.isArray(verifiedIdentity?.stores) ? verifiedIdentity.stores.filter(Boolean) : null;
+      finalUser = {
+        ...(finalUser || {}),
+        ...(verifiedAccountId ? { id: verifiedAccountId, accountId: verifiedAccountId, securityAccountId: verifiedAccountId } : {}),
+        ...(verifiedUserName ? { name: verifiedUserName } : {}),
+        ...(verifiedStores ? {
+          stores: verifiedStores,
+          store: verifiedStores[0] || finalUser?.store || finalUser?.storeName || "",
+          storeName: verifiedStores[0] || finalUser?.storeName || finalUser?.store || "",
+        } : {}),
+        ...(roleId === "director" ? {
+          directorLevel: String(verifiedIdentity?.directorLevel || finalUser?.directorLevel || ""),
+          isSuperAdmin: String(verifiedIdentity?.directorLevel || "") === "super_admin",
+          isMasterLogin: verifiedIdentity?.isMasterCredential === true,
+        } : {}),
+      };
+      userName = verifiedUserName || userName;
+    }
 
     if (deviceSecurity?.blocked || (deviceSecurity?.allowed === false && deviceSecurity?.deviceStatus === "blocked")) {
       setCurrentDeviceTrust({
@@ -3877,8 +4073,12 @@ export default function App() {
       });
     }
     setActiveView("dashboard");
-    return { ok: true };
-  }, [therapists, logActivity, registerAccountDevice, activateApplicationIdentitySession]);
+    return {
+      ok: true,
+      identity: deviceSecurity?.applicationIdentity || null,
+      isMasterCredential: deviceSecurity?.applicationIdentity?.isMasterCredential === true,
+    };
+  }, [therapists, currentBrandId, logActivity, registerAccountDevice, activateApplicationIdentitySession]);
 
   const resumePendingDeviceLogin = useCallback(async () => {
     const pending = pendingDeviceLoginRef.current;
@@ -4470,7 +4670,29 @@ export default function App() {
           {activeView === "history" && canDirectorAccessView("history") && <HistoryView />}
           {activeView === "input" && canDirectorAccessView("input") && <InputView />}
           {activeView === "logs" && canDirectorAccessView("logs") && <SystemMonitor />}
-          {activeView === "settings" && canDirectorAccessView("settings") && <SettingsView />}
+          {activeView === "settings" && canDirectorAccessView("settings") && (
+            adminCredentialSourceState.status === "ready" && adminCredentialSourceState.view === "settings"
+              ? <SettingsView />
+              : (
+                <div className="flex min-h-[55vh] items-center justify-center px-4">
+                  <div className="w-full max-w-md rounded-3xl border border-[#E8DDD0] bg-[#FFFCF8] p-6 text-center shadow-sm">
+                    {adminCredentialSourceState.status === "error" ? (
+                      <>
+                        <AlertCircle className="mx-auto mb-3 text-rose-400" size={28} />
+                        <div className="text-sm font-black text-[#4D4338]">帳號管理資料暫時無法開啟</div>
+                        <div className="mt-2 text-xs font-bold leading-5 text-[#8C8176]">{adminCredentialSourceState.error || "請稍後重新進入系統設定。"}</div>
+                      </>
+                    ) : (
+                      <>
+                        <Loader2 className="mx-auto mb-3 animate-spin text-[#B7863D]" size={28} />
+                        <div className="text-sm font-black text-[#4D4338]">帳號管理資料同步中…</div>
+                        <div className="mt-2 text-xs font-bold text-[#8C8176]">完成後即可安全進行帳號設定。</div>
+                      </>
+                    )}
+                  </div>
+                </div>
+              )
+          )}
           {activeView === "annual" && <AnnualView />}
           {activeView === "targets" && canDirectorAccessView("targets") && <TargetView />}
           {activeView === "t-targets" && canDirectorAccessView("t-targets") && <TherapistTargetView />}
@@ -4478,11 +4700,33 @@ export default function App() {
           {activeView === "store-schedule" && canAccessStoreScheduleView && <StoreScheduleView />}
           {activeView === "smart-forecast" && canAccessSmartForecastView && <SmartForecastView />}
           {activeView === "notification" && canDirectorAccessView("notification") && <NotificationManager />}
-          {activeView === "therapist-manager" && canDirectorAccessView("therapist-manager") && <TherapistManagerView />}
+          {activeView === "therapist-manager" && canDirectorAccessView("therapist-manager") && (
+            adminCredentialSourceState.status === "ready" && adminCredentialSourceState.view === "therapist-manager"
+              ? <TherapistManagerView />
+              : (
+                <div className="flex min-h-[55vh] items-center justify-center px-4">
+                  <div className="w-full max-w-md rounded-3xl border border-[#E8DDD0] bg-[#FFFCF8] p-6 text-center shadow-sm">
+                    {adminCredentialSourceState.status === "error" ? (
+                      <>
+                        <AlertCircle className="mx-auto mb-3 text-rose-400" size={28} />
+                        <div className="text-sm font-black text-[#4D4338]">管師帳號資料暫時無法開啟</div>
+                        <div className="mt-2 text-xs font-bold leading-5 text-[#8C8176]">{adminCredentialSourceState.error || "請稍後重新進入管師帳號。"}</div>
+                      </>
+                    ) : (
+                      <>
+                        <Loader2 className="mx-auto mb-3 animate-spin text-[#B7863D]" size={28} />
+                        <div className="text-sm font-black text-[#4D4338]">管師帳號資料同步中…</div>
+                        <div className="mt-2 text-xs font-bold text-[#8C8176]">完成後即可安全進行帳號管理。</div>
+                      </>
+                    )}
+                  </div>
+                </div>
+              )
+          )}
         </Suspense>
       </main>
     );
-  }, [activeView, auditType, canDirectorAccessView, canAccessStoreScheduleView, canAccessSmartForecastView]);
+  }, [activeView, auditType, canDirectorAccessView, canAccessStoreScheduleView, canAccessSmartForecastView, adminCredentialSourceState]);
 
   if (loading) return <div className="min-h-screen flex flex-col items-center justify-center bg-[#F9F8F6]"><Loader2 className="w-16 h-16 animate-spin text-stone-400 mb-4" /><p className="animate-pulse text-stone-500 font-bold tracking-wider">Loading DRCYJ Cloud...</p></div>;
   
@@ -4628,10 +4872,10 @@ if (isUpdating) {
       <LoginView 
         appVersion={CURRENT_APP_VERSION}
         onLogin={handleLogin}
+        onChangeApplicationPassword={changeApplicationPassword}
         onSecurityEvent={reportLoginSecurityEvent}
-        storeAccounts={storeAccounts} managers={publicManagers} managerOrder={managerOrder} managerAuth={managerAuth} therapists={therapists} 
-        onUpdatePassword={handleUpdateStorePassword} onUpdateManagerPassword={handleUpdateManagerPassword} onUpdateTherapistPassword={handleUpdateTherapistPassword} 
-        trainerAuth={trainerAuth} handleUpdateTrainerAuth={handleUpdateTrainerAuth} directorAuth={directorAuth} handleUpdateDirectorAuth={handleUpdateDirectorAuth} masterAuth={masterAuth}
+        loginDirectory={loginDirectory}
+        managers={publicManagers} managerOrder={managerOrder}
         currentBrandId={currentBrandId} onSwitchBrand={handleSwitchBrand} hasSelectedBrand={hasSelectedBrand}
         accountDirectoryStatus={accountDirectoryState.status}
         accountDirectoryError={accountDirectoryState.error}
