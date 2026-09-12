@@ -4,7 +4,7 @@ import {
   Save, Plus, Trash2, Edit2, Edit, Lock, User, Store, Target,
   CheckCircle, AlertCircle, X, Shield, ChevronDown, Search,
   UserCheck, Calendar, DollarSign, Users, LayoutGrid,
-  Database, Activity, Clock, MoreVertical, CheckSquare
+  Database, Activity, Clock, MoreVertical, CheckSquare, Key
 } from "lucide-react";
 // ★ 確保這裡有引入 getDocs 和 writeBatch
 import { 
