@@ -1,7 +1,8 @@
 // src/config/firebase.js
 import { initializeApp } from "firebase/app";
 import { getAuth } from "firebase/auth";
-import { getFirestore } from "firebase/firestore";
+import { getFirestore, initializeFirestore } from "firebase/firestore";
+import { shouldForceFirestoreLongPollingForCurrentBrowser } from "../utils/firestoreTransport";
 
 // --- Firebase Config ---
 const originalConfig = {
@@ -24,7 +25,14 @@ const firebaseConfig =
 
 const app = initializeApp(firebaseConfig);
 const auth = getAuth(app);
-const db = getFirestore(app);
+const forceLongPolling = shouldForceFirestoreLongPollingForCurrentBrowser();
+const db = forceLongPolling
+  ? initializeFirestore(app, {
+      // iPhone / iPad WebKit compatibility:
+      // the default WebChannel path can delay server-backed Firestore delivery.
+      experimentalForceLongPolling: true,
+    })
+  : getFirestore(app);
 
 // 處理 appId 邏輯
 const rawAppId =
