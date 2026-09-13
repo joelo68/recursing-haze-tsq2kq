@@ -36,7 +36,7 @@ export const Toast = ({ message, type, onClose }) => {
     : "bg-amber-600";
     
   return (
-    <div className={`fixed bottom-20 md:bottom-6 right-6 ${bgClass} text-white px-6 py-3 rounded-full shadow-xl shadow-stone-300 flex items-center gap-3 z-[60] animate-in slide-in-from-bottom-10 fade-in duration-300 max-w-[90vw]`}>
+    <div className={`fixed bottom-20 md:bottom-6 right-6 ${bgClass} text-white px-6 py-3 rounded-full shadow-xl shadow-stone-300 flex items-center gap-3 z-[10020] animate-in slide-in-from-bottom-10 fade-in duration-300 max-w-[90vw]`}>
       {type === "success" ? <CheckCircle size={20} /> : type === "error" ? <AlertCircle size={20} /> : <Bell size={20} />}
       <span className="font-medium text-sm tracking-wide">{message}</span>
     </div>
@@ -46,7 +46,7 @@ export const Toast = ({ message, type, onClose }) => {
 export const ConfirmModal = ({ isOpen, title, message, onConfirm, onCancel }) => {
   if (!isOpen) return null;
   return (
-    <div className="fixed inset-0 bg-stone-900/40 backdrop-blur-sm z-[70] flex items-center justify-center p-4">
+    <div className="fixed inset-0 bg-stone-900/40 backdrop-blur-sm z-[10010] flex items-center justify-center p-4">
       <div className="bg-white rounded-3xl p-6 max-w-sm w-full shadow-2xl animate-in zoom-in-95 duration-200">
         <h3 className="text-lg font-bold text-stone-800 mb-2">{title}</h3>
         <p className="text-stone-500 mb-6 whitespace-pre-line">{message}</p>
