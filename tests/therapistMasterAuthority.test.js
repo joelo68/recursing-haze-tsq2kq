@@ -277,7 +277,9 @@ test("B1C2C2 cuts therapist master management over to the existing Account Autho
   assert.match(app, /THERAPIST_MASTER_ENDPOINT/);
   assert.match(app, /const manageTherapistMasterAction = useCallback/);
   assert.match(managerView, /manageTherapistMasterAction/);
-  assert.doesNotMatch(managerView, /firebase\/firestore|setDoc\(|deleteDoc\(|updateDoc\(|\.password/);
+  assert.doesNotMatch(managerView, /firebase\/firestore|setDoc\(|deleteDoc\(|updateDoc\(/);
+  assert.match(managerView, /manageApplicationAccountAction/);
+  assert.match(managerView, /action:\s*"reveal_password"/);
   assert.doesNotMatch(settings, /getCollectionPath\("therapists"\)|therapists_DISABLED|handleAddTherapist|handleDeleteTherapist/);
   assert.match(app, /CURRENT_APP_VERSION\s*=\s*"3\.6\.0"/);
   assert.doesNotMatch(rules, /request\.auth\.token\.drcyjIdentity/);
@@ -775,7 +777,8 @@ test("therapist credential collection stays protected while B1C2C2 retires brows
   assert.match(rules, /match \/brands\/\{brandId\}\/therapist_credentials\/\{document=\*\*\}/);
   assert.match(rules, /match \/artifacts\/\{appId\}\/public\/data\/therapist_credentials\/\{document=\*\*\}/);
   assert.equal((rules.match(/collectionName != 'therapist_credentials'/g) || []).length, 2);
-  assert.doesNotMatch(managerView, /\.password|firebase\/firestore/);
+  assert.doesNotMatch(managerView, /firebase\/firestore/);
+  assert.match(managerView, /action:\s*"reveal_password"/);
   assert.doesNotMatch(app, /getDocs\(getCollectionPath\("therapists"\)\)/);
   assert.match(app, /admin_therapist_master_record_backend/);
   assert.doesNotMatch(app, /admin_therapist_master_backend/);

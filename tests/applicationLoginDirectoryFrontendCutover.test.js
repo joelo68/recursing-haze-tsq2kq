@@ -75,21 +75,17 @@ test("backend application identity is authoritative for director level and maste
   assert.ok(loginBlock.indexOf("await activateApplicationIdentitySession") < loginBlock.indexOf("setUserRole(roleId)"));
 });
 
-test("legacy settings credential material remains lazy while therapist manager reuses the sanitized login directory", () => {
-  const adminBlock = sliceBetween(app, "P0-B1C2C2 transitional admin hydration", "const targetYearStr = String(selectedYear)");
-  assert.match(adminBlock, /activeView === "settings"/);
-  assert.match(adminBlock, /activeView === "therapist-manager"/);
-  assert.match(adminBlock, /getDoc\(getDocPath\("store_account_data"\)\)/);
-  assert.match(adminBlock, /getDoc\(getDocPath\("manager_auth"\)\)/);
-  assert.match(adminBlock, /getDoc\(getDocPath\("trainer_auth"\)\)/);
+test("settings and therapist manager both stay on sanitized directory after admin credential writer retirement", () => {
+  const adminBlock = sliceBetween(app, "Admin Credential Writer Retirement", "const targetYearStr = String(selectedYear)");
+  assert.match(adminBlock, /\["settings", "therapist-manager"\]\.includes\(activeView\)/);
+  for (const sourceName of ["store_account_data", "manager_auth", "trainer_auth", "director_auth", "master_auth"]) {
+    assert.doesNotMatch(adminBlock, new RegExp(`getDoc\\(getDocPath\\(\"${sourceName}\"\\)\\)`));
+  }
+  assert.match(adminBlock, /loginDirectory\?\.brandId === brandId/);
+  assert.match(adminBlock, /setStoreAccounts/);
+  assert.match(adminBlock, /setTherapists/);
   assert.doesNotMatch(adminBlock, /getDocs\(getCollectionPath\("therapists"\)\)/);
-  assert.doesNotMatch(adminBlock, /master_auth|director_auth/);
-  assert.match(adminBlock, /ownsTherapistMasterHydration/);
-  assert.match(adminBlock, /管師帳號直接使用登入時已取得的 sanitized directory/);
-  assert.match(adminBlock, /restoreSanitizedState\(\)/);
-  assert.match(adminBlock, /status:\s*"ready"[\s\S]{0,120}view:\s*"therapist-manager"/);
-  assert.doesNotMatch(adminBlock, /onSnapshot\s*\(/);
-  assert.doesNotMatch(adminBlock, /setInterval\s*\(/);
+  assert.doesNotMatch(adminBlock, /onSnapshot\s*\(|setInterval\s*\(/);
 
   assert.doesNotMatch(app, /callTherapistMasterAuthority\(\{ action: "list" \}\)/);
   assert.match(app, /const refreshTherapistMasterRecord = useCallback/);

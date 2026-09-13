@@ -17,8 +17,9 @@ const applicationIdentity = read("functions/applicationIdentity.js");
 const rules = read("firestore.rules");
 
 test("therapist manager opens from sanitized directory without page-entry therapist collection hydration", () => {
-  assert.match(app, /管師帳號直接使用登入時已取得的 sanitized directory/);
-  assert.match(app, /setAdminCredentialSourceState\(\{ status: "ready", brandId, view: "therapist-manager"/);
+  assert.match(app, /Admin Credential Writer Retirement/);
+  assert.match(app, /\["settings", "therapist-manager"\]\.includes\(activeView\)/);
+  assert.match(app, /setAdminCredentialSourceState\(\{ status: "ready", brandId, view: activeView/);
   assert.doesNotMatch(app, /const refreshTherapistMasterDirectory/);
   assert.doesNotMatch(app, /callTherapistMasterAuthority\(\{ action: "list" \}\)/);
   assert.doesNotMatch(app, /admin_therapist_master_backend/);
@@ -35,11 +36,13 @@ test("selected therapist detail is one backend point read and OCC conflict refre
   assert.doesNotMatch(app, /error\?\.status === 409[\s\S]{0,500}action:\s*"list"/);
 });
 
-test("forgotten-password recovery resets authority source without exposing any stored therapist password", () => {
+test("forgotten-password recovery stays reset-only while optional reveal is explicit backend authority", () => {
   assert.match(managerView, /重設登入密碼/);
   assert.match(managerView, /action:\s*"reset_password"/);
   assert.match(managerView, /系統初始密碼重新登入並設定新密碼/);
-  assert.doesNotMatch(managerView, /\.password|credentialPassword|currentPassword|newPassword/);
+  assert.match(managerView, /action:\s*"reveal_password"/);
+  assert.match(managerView, /最高管理金鑰/);
+  assert.doesNotMatch(managerView, /credentialPassword|currentPassword|newPassword|therapist_credentials/);
 
   assert.match(masterAuthority, /resetTherapistCredentialPasswordInTransaction/);
   assert.match(masterAuthority, /getInitialPasswordsForRole\("therapist", brandId\)/);

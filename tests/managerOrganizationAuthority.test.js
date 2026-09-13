@@ -203,13 +203,16 @@ function makeEnv({
   };
 }
 
-test("B1C1B2 is backend-only shadow authority on the existing Account Authority runtime", () => {
+test("manager organization authority is now the sole Settings writer for manager create/update/delete", () => {
   assert.equal(MANAGER_ORGANIZATION_AUTHORITY_VERSION, "manager-organization-authority-v1");
   assert.match(functionsIndex, /exports\.manageManagerOrganization\s*=\s*managerOrganizationAuthorityFunctions\.manageManagerOrganization/);
   assert.match(functionsIndex, /runtimeServiceAccount:\s*ACCOUNT_AUTHORITY_RUNTIME_SERVICE_ACCOUNT/);
   assert.match(functionsIndex, /normalizeStoreCore:\s*normalizeStoreLifecycleCore/);
-  assert.doesNotMatch(app, /manageManagerOrganization/);
-  assert.doesNotMatch(settings, /manageManagerOrganization/);
+  assert.match(app, /MANAGE_MANAGER_ORGANIZATION_ENDPOINT/);
+  assert.match(app, /const manageManagerOrganizationAction = useCallback/);
+  assert.match(settings, /manageManagerOrganizationAction/);
+  assert.match(settings, /const handleAddManager[\s\S]{0,500}runManagerOrganizationAction\(\{[\s\S]{0,160}action:\s*"create"/);
+  assert.doesNotMatch(settings, /setDoc\(getDocPath\("manager_auth"\)/);
   assert.match(app, /CURRENT_APP_VERSION\s*=\s*"3\.6\.0"/);
   assert.doesNotMatch(rules, /request\.auth\.token\.drcyjIdentity/);
 });

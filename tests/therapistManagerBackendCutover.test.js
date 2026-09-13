@@ -37,14 +37,16 @@ test("B1C2C2 therapist manager uses backend authority for every master mutation"
   assert.doesNotMatch(managerView, /firebase\/firestore|setDoc\(|updateDoc\(|deleteDoc\(/);
 });
 
-test("therapist manager never reveals stored passwords and forgotten-password recovery is backend reset only", () => {
-  assert.doesNotMatch(managerView, /\.password|formPassword|showPassword/);
+test("therapist manager keeps reset and adds explicit single-account backend reveal without direct credential source access", () => {
+  assert.doesNotMatch(managerView, /firebase\/firestore|therapist_credentials/);
   assert.doesNotMatch(managerView, /credentialPassword|currentPassword|newPassword/);
-  assert.match(managerView, /此頁不顯示、搜尋或直接編輯任何登入密碼/);
-  assert.match(managerView, /忘記密碼時，可由最高管理者重設為系統初始密碼/);
+  assert.match(managerView, /此頁不會預載、搜尋或直接編輯登入密碼/);
   assert.match(managerView, /action:\s*"reset_password"/);
-  assert.match(managerView, /重設登入密碼/);
+  assert.match(managerView, /action:\s*"reveal_password"/);
+  assert.match(managerView, /最高管理金鑰/);
+  assert.match(managerView, /manageApplicationAccountAction/);
   assert.doesNotMatch(managerView, /payload:[\s\S]{0,300}password/);
+  assert.doesNotMatch(managerView, /localStorage\.setItem|sessionStorage\.setItem/);
 });
 
 test("therapist manager opens from existing sanitized login directory and fetches only the selected master document", () => {
@@ -54,7 +56,8 @@ test("therapist manager opens from existing sanitized login directory and fetche
   assert.match(backend, /readCount:\s*1/);
   assert.match(backend, /sanitizeTherapistResponse\(masterRaw\)/);
   assert.match(backend, /masterSignature:\s*buildTherapistMasterSignature\(masterRaw\)/);
-  assert.match(app, /管師帳號直接使用登入時已取得的 sanitized directory/);
+  assert.match(app, /Admin Credential Writer Retirement/);
+  assert.match(app, /\["settings", "therapist-manager"\]\.includes\(activeView\)/);
   assert.match(app, /const refreshTherapistMasterRecord = useCallback/);
   assert.match(app, /action:\s*"get"/);
   assert.match(app, /admin_therapist_master_record_backend/);

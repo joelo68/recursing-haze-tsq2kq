@@ -46,7 +46,7 @@ test("Frontend 使用既有 manageApplicationAccount endpoint，不建立第二�
   assert.match(app, /const MANAGE_APPLICATION_ACCOUNT_ENDPOINT\s*=\s*"https:\/\/us-central1-cyjsituation-analysis\.cloudfunctions\.net\/manageApplicationAccount"/);
   const actionBlock = sliceBetween(app, "const manageApplicationAccountAction", "const updateModulePermissions");
   assert.match(actionBlock, /managementKey:\s*String\(managementKey \|\| ""\)/);
-  assert.match(actionBlock, /\["verify_master_key", "change_master_key"\]\.includes\(safeAction\)/);
+  assert.match(actionBlock, /\["verify_master_key", "change_master_key", "reveal_password"\]\.includes\(safeAction\)/);
   assert.doesNotMatch(actionBlock, /onSnapshot\s*\(/);
   assert.doesNotMatch(actionBlock, /setInterval\s*\(/);
 });
@@ -73,7 +73,7 @@ test("Firestore Rules block browser access to master_auth for legacy and new-bra
     rules,
     /match \/brands\/\{brandId\}\/settings\/master_auth\s*\{\s*allow read, write:\s*if false;/,
   );
-  assert.match(rules, /allow read:\s*if signedIn\(\)\s*&& settingId != 'master_auth';/);
+  assert.match(rules, /allow read:\s*if signedIn\(\)[\s\S]{0,260}settingId != 'master_auth'/);
   assert.match(rules, /settingId != 'master_auth'/);
   assert.match(rules, /!\(collectionName == 'settings' && document == 'master_auth'\)/);
 });

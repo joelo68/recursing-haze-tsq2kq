@@ -214,12 +214,38 @@ service cloud.firestore {
     // 其餘一般 global_settings 維持既有登入後讀取與有限寫入相容。
     match /artifacts/{appId}/public/data/global_settings/{settingId} {
       allow read: if signedIn()
-        && settingId != 'master_auth';
+        && settingId != 'master_auth'
+        && settingId != 'director_auth'
+        && settingId != 'trainer_auth'
+        && settingId != 'manager_auth'
+        && settingId != 'store_account_data';
       allow write: if signedIn()
         && settingId != 'telegram_security_alerts'
         && settingId != 'audit_exclusions'
         && settingId != 'permissions'
-        && settingId != 'master_auth';
+        && settingId != 'master_auth'
+        && settingId != 'director_auth'
+        && settingId != 'trainer_auth'
+        && settingId != 'manager_auth'
+        && settingId != 'store_account_data';
+    }
+
+    // Admin Credential Writer Retirement：所有含登入密碼的設定文件改由 Backend authority 存取。
+    // Browser 不得直接讀取或寫入，避免帳號管理頁重新 hydration 整批 credential。
+    match /brands/{brandId}/settings/director_auth {
+      allow read, write: if false;
+    }
+
+    match /brands/{brandId}/settings/trainer_auth {
+      allow read, write: if false;
+    }
+
+    match /brands/{brandId}/settings/manager_auth {
+      allow read, write: if false;
+    }
+
+    match /brands/{brandId}/settings/store_account_data {
+      allow read, write: if false;
     }
 
     // Module Permissions v1：模組權限為 Security authority。
@@ -316,7 +342,11 @@ service cloud.firestore {
         && collectionName != 'projection_context'
         && !(collectionName == 'settings' && document == 'audit_exclusions')
         && !(collectionName == 'settings' && document == 'permissions')
-        && !(collectionName == 'settings' && document == 'master_auth');
+        && !(collectionName == 'settings' && document == 'master_auth')
+        && !(collectionName == 'settings' && document == 'director_auth')
+        && !(collectionName == 'settings' && document == 'trainer_auth')
+        && !(collectionName == 'settings' && document == 'manager_auth')
+        && !(collectionName == 'settings' && document == 'store_account_data');
     }
 
     match /artifacts/{appId}/public/data/{collectionName}/{document=**} {

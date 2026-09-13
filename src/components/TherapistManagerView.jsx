@@ -29,6 +29,7 @@ const TherapistManagerView = () => {
     managers, managerOrder,
     showToast,
     manageTherapistMasterAction,
+    manageApplicationAccountAction,
   } = useContext(AppContext);
 
   const [showResigned, setShowResigned] = useState(false);
@@ -43,6 +44,15 @@ const TherapistManagerView = () => {
   const [isDrawerOpen, setIsDrawerOpen] = useState(false);
   const [detailLoadingId, setDetailLoadingId] = useState("");
   const detailRequestRef = useRef(0);
+  const [credentialReveal, setCredentialReveal] = useState({
+    open: false,
+    therapistId: "",
+    therapistName: "",
+    managementKey: "",
+    password: "",
+    loading: false,
+    error: "",
+  });
 
   const [formManager, setFormManager] = useState("");
   const [formStore, setFormStore] = useState("");
@@ -513,6 +523,75 @@ const TherapistManagerView = () => {
     }
   };
 
+  const closeCredentialReveal = () => {
+    setCredentialReveal({
+      open: false,
+      therapistId: "",
+      therapistName: "",
+      managementKey: "",
+      password: "",
+      loading: false,
+      error: "",
+    });
+  };
+
+  const openCredentialReveal = (t = selectedTherapist) => {
+    if (!t?.id) return;
+    if (isTherapistArchived(t)) {
+      showToast("封存中的帳號不提供密碼查看，請先重新啟用。", "error");
+      return;
+    }
+    setCredentialReveal({
+      open: true,
+      therapistId: String(t.id),
+      therapistName: String(t.name || t.id),
+      managementKey: "",
+      password: "",
+      loading: false,
+      error: "",
+    });
+  };
+
+  const submitCredentialReveal = async () => {
+    const managementKey = String(credentialReveal.managementKey || "");
+    if (!managementKey) {
+      setCredentialReveal((previous) => ({ ...previous, error: "請輸入最高管理金鑰" }));
+      return;
+    }
+    if (typeof manageApplicationAccountAction !== "function") {
+      setCredentialReveal((previous) => ({ ...previous, error: "帳號安全服務尚未就緒" }));
+      return;
+    }
+    setCredentialReveal((previous) => ({ ...previous, loading: true, error: "", password: "" }));
+    try {
+      const result = await manageApplicationAccountAction({
+        roleId: "therapist",
+        action: "reveal_password",
+        accountId: credentialReveal.therapistId,
+        managementKey,
+      });
+      const password = String(result?.password || "");
+      if (!password) throw new Error("目前無法取得這個帳號的登入密碼");
+      setCredentialReveal((previous) => ({
+        ...previous,
+        loading: false,
+        error: "",
+        managementKey: "",
+        password,
+      }));
+    } catch (error) {
+      const code = String(error?.code || error?.result?.code || "");
+      const message = code === "master_management_key_invalid"
+        ? "最高管理金鑰不正確"
+        : code === "personal_super_admin_login_required"
+          ? "請使用個人最高管理者帳號登入後再查看密碼"
+          : code === "account_inactive"
+            ? "封存中的帳號不提供密碼查看"
+            : getManagementErrorMessage(error, "目前無法查看密碼");
+      setCredentialReveal((previous) => ({ ...previous, loading: false, password: "", error: message }));
+    }
+  };
+
   const handleDeleteTherapist = async (t = selectedTherapist) => {
     if (!t) return;
     if (!isTherapistArchived(t)) {
@@ -736,18 +815,28 @@ const TherapistManagerView = () => {
               <div className="rounded-2xl border border-amber-100 bg-amber-50/60 px-4 py-3">
                 <p className="text-xs font-black text-amber-800">登入密碼由本人管理</p>
                 <p className="mt-1 text-[11px] font-bold leading-5 text-amber-700/80">
-                  此頁不顯示、搜尋或直接編輯任何登入密碼。忘記密碼時，可由最高管理者重設為系統初始密碼，再由本人登入後重新設定。
+                  此頁不會預載、搜尋或直接編輯登入密碼。忘記密碼時可重設為系統初始密碼；如需協助本人確認，也可輸入最高管理金鑰後只查看這一個帳號。
                 </p>
 
                 {!isCreating && selectedTherapist && !selectedArchived && (
-                  <button
-                    onClick={() => handleResetTherapistPassword(selectedTherapist)}
-                    disabled={selectedDetailLoading}
-                    className="mt-3 h-9 px-3 rounded-xl border border-amber-200 bg-white text-amber-800 text-xs font-black hover:bg-amber-50 transition-all flex items-center justify-center gap-1.5 disabled:opacity-50 disabled:cursor-wait"
-                  >
-                    <Lock size={13} />
-                    {selectedDetailLoading ? "確認資料中…" : "重設登入密碼"}
-                  </button>
+                  <div className="mt-3 flex flex-wrap gap-2">
+                    <button
+                      onClick={() => openCredentialReveal(selectedTherapist)}
+                      disabled={selectedDetailLoading}
+                      className="h-9 px-3 rounded-xl border border-sky-100 bg-white text-sky-700 text-xs font-black hover:bg-sky-50 transition-all flex items-center justify-center gap-1.5 disabled:opacity-50 disabled:cursor-wait"
+                    >
+                      <Shield size={13} />
+                      查看目前密碼
+                    </button>
+                    <button
+                      onClick={() => handleResetTherapistPassword(selectedTherapist)}
+                      disabled={selectedDetailLoading}
+                      className="h-9 px-3 rounded-xl border border-amber-200 bg-white text-amber-800 text-xs font-black hover:bg-amber-50 transition-all flex items-center justify-center gap-1.5 disabled:opacity-50 disabled:cursor-wait"
+                    >
+                      <Lock size={13} />
+                      {selectedDetailLoading ? "確認資料中…" : "重設登入密碼"}
+                    </button>
+                  </div>
                 )}
               </div>
 
@@ -1186,6 +1275,52 @@ const TherapistManagerView = () => {
             </div>
           </div>
         )}
+      {credentialReveal.open && (
+        <div className="fixed inset-0 z-[10000] flex items-center justify-center bg-stone-900/40 p-4 backdrop-blur-sm">
+          <div className="w-full max-w-md overflow-hidden rounded-3xl border border-stone-200 bg-white shadow-2xl">
+            <div className="flex items-center justify-between border-b border-stone-100 px-5 py-4">
+              <div>
+                <h3 className="font-black text-stone-900">查看登入密碼</h3>
+                <p className="mt-1 text-xs font-bold text-stone-400">{credentialReveal.therapistName}</p>
+              </div>
+              <button type="button" onClick={closeCredentialReveal} className="rounded-xl p-2 text-stone-400 hover:bg-stone-100"><X size={18} /></button>
+            </div>
+            <div className="space-y-4 p-5">
+              {!credentialReveal.password ? (
+                <>
+                  <div className="rounded-2xl border border-amber-100 bg-amber-50/70 p-4 text-xs font-bold leading-5 text-amber-800">只會讀取這一位管理師目前真正的 credential authority。請輸入最高管理金鑰再次確認；金鑰不會儲存在瀏覽器。</div>
+                  <div>
+                    <label className="mb-1 block text-xs font-black text-stone-400">最高管理金鑰</label>
+                    <input
+                      type="password"
+                      autoComplete="off"
+                      value={credentialReveal.managementKey}
+                      onChange={(event) => setCredentialReveal((previous) => ({ ...previous, managementKey: event.target.value, error: "" }))}
+                      onKeyDown={(event) => { if (event.key === "Enter" && !credentialReveal.loading) submitCredentialReveal(); }}
+                      className="w-full rounded-xl border-2 border-stone-200 bg-white px-4 py-3 font-mono font-bold outline-none focus:border-amber-300"
+                      placeholder="請輸入最高管理金鑰"
+                    />
+                  </div>
+                  {credentialReveal.error && <p className="rounded-xl bg-rose-50 px-3 py-2 text-xs font-bold text-rose-600">{credentialReveal.error}</p>}
+                  <div className="flex gap-3">
+                    <button type="button" onClick={closeCredentialReveal} className="flex-1 rounded-xl bg-stone-100 py-3 text-xs font-black text-stone-600">取消</button>
+                    <button type="button" onClick={submitCredentialReveal} disabled={!credentialReveal.managementKey || credentialReveal.loading} className="flex-1 rounded-xl bg-stone-900 py-3 text-xs font-black text-white disabled:opacity-40">{credentialReveal.loading ? "驗證中…" : "驗證並查看"}</button>
+                  </div>
+                </>
+              ) : (
+                <>
+                  <div className="rounded-2xl border border-emerald-100 bg-emerald-50/70 p-4">
+                    <p className="text-xs font-black text-emerald-700">目前登入密碼</p>
+                    <p className="mt-2 break-all font-mono text-xl font-black tracking-wider text-emerald-900">{credentialReveal.password}</p>
+                  </div>
+                  <p className="text-[11px] font-bold leading-5 text-stone-400">密碼只暫時存在這個視窗的記憶體；關閉後即清除，不會寫入 localStorage、sessionStorage 或操作紀錄。</p>
+                  <button type="button" onClick={closeCredentialReveal} className="w-full rounded-xl bg-stone-900 py-3 text-xs font-black text-white">關閉</button>
+                </>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
       </div>
     </ViewWrapper>
   );

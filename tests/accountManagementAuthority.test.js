@@ -146,7 +146,8 @@ test("B1C1B1 account authority is intentionally consumed by post-login director 
   assert.match(app, /const manageApplicationAccountAction = useCallback/);
   assert.doesNotMatch(login, /manageApplicationAccount/);
   assert.match(settings, /manageApplicationAccountAction/);
-  assert.doesNotMatch(therapistManager, /manageApplicationAccount/);
+  assert.match(therapistManager, /manageApplicationAccountAction/);
+  assert.match(therapistManager, /action:\s*"reveal_password"/);
   assert.match(app, /CURRENT_APP_VERSION\s*=\s*"3\.6\.0"/);
   assert.doesNotMatch(rules, /request\.auth\.token\.drcyjIdentity/);
 });
@@ -389,10 +390,72 @@ test("highest management key remains brand-scoped and never falls back across br
   assert.equal(env.refs.has("cyj:settings:master_auth"), false);
 });
 
-test("therapist master CRUD is intentionally excluded from administrative credential authority", async () => {
+test("therapist master CRUD stays on therapist authority even though reveal_password is shared", async () => {
   const env = makeEnv();
   const res = await env.call({ roleId: "therapist", action: "create", payload: { name: "管理師" } });
-  assert.equal(res.statusCode, 400);
-  assert.equal(res.body.code, "unsupported_managed_role");
+  assert.equal(res.statusCode, 409);
+  assert.equal(res.body.code, "therapist_master_authority_required");
   assert.equal(env.transactionCount, 0);
+});
+
+
+test("single-account password reveal requires the highest management key and audits without secret material", async () => {
+  const env = makeEnv({
+    settingsData: {
+      trainer_auth: {
+        accounts: { t1: { id: "t1", name: "教專一", password: "trainer-private", isActive: true } },
+        trainerOrder: ["t1"],
+      },
+    },
+  });
+  const res = await env.call({ roleId: "trainer", action: "reveal_password", accountId: "t1" });
+  assert.equal(res.statusCode, 200);
+  assert.equal(res.headers["Cache-Control"], "private, no-store");
+  assert.equal(res.body.changed, false);
+  assert.equal(res.body.password, "trainer-private");
+  const audit = env.writes.find((write) => write.key.includes(":system_logs:"));
+  assert.ok(audit);
+  assert.equal(audit.data.activityType, "auth.credential_reveal");
+  assert.equal(audit.data.details.managedRole, "trainer");
+  assert.equal(audit.data.details.targetAccountId, "t1");
+  assert.doesNotMatch(JSON.stringify(audit.data), /trainer-private|master-key|password/i);
+});
+
+test("password reveal fails closed on wrong highest management key and from a master-credential session", async () => {
+  const wrongKeyEnv = makeEnv({
+    settingsData: {
+      trainer_auth: { accounts: { t1: { id: "t1", name: "教專一", password: "trainer-private", isActive: true } }, trainerOrder: ["t1"] },
+    },
+  });
+  const wrongKey = await wrongKeyEnv.call({ roleId: "trainer", action: "reveal_password", accountId: "t1", managementKey: "wrong" });
+  assert.equal(wrongKey.statusCode, 403);
+  assert.equal(wrongKey.body.code, "master_management_key_invalid");
+  assert.equal(wrongKeyEnv.writes.length, 0);
+
+  const masterSessionEnv = makeEnv({
+    settingsData: {
+      trainer_auth: { accounts: { t1: { id: "t1", name: "教專一", password: "trainer-private", isActive: true } }, trainerOrder: ["t1"] },
+    },
+    adminCheck: {
+      ok: true,
+      actorName: "Master",
+      actorRole: "master",
+      actorAccountId: "boss",
+      isMasterCredential: true,
+    },
+  });
+  const masterSession = await masterSessionEnv.call({ roleId: "trainer", action: "reveal_password", accountId: "t1" });
+  assert.equal(masterSession.statusCode, 403);
+  assert.equal(masterSession.body.code, "personal_super_admin_login_required");
+});
+
+test("Settings retires raw credential hydration and direct browser credential writers", () => {
+  for (const sourceName of ["director_auth", "trainer_auth", "manager_auth", "store_account_data"]) {
+    assert.doesNotMatch(settings, new RegExp(`getDocPath\\(\\"${sourceName}\\"\\)`));
+  }
+  assert.doesNotMatch(settings, /account\.password|managerAuth\[/);
+  assert.match(settings, /action:\s*"reveal_password"/);
+  assert.match(settings, /action:\s*"reset_password"/);
+  assert.match(settings, /manageManagerOrganizationAction/);
+  assert.doesNotMatch(settings, /localStorage\.setItem\(|sessionStorage\.setItem\(/);
 });

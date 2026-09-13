@@ -1,6 +1,9 @@
 const crypto = require("crypto");
 const { APPLICATION_IDENTITY_VERSION } = require("./applicationIdentity");
-const { updateTherapistCredentialPasswordInTransaction } = require("./therapistCredentialAuthority");
+const {
+  updateTherapistCredentialPasswordInTransaction,
+  loadTherapistCredentialSource,
+} = require("./therapistCredentialAuthority");
 
 const ACCOUNT_AUTHORITY_RUNTIME_SERVICE_ACCOUNT =
   "drcyj-account-authority@cyjsituation-analysis.iam.gserviceaccount.com";
@@ -238,7 +241,8 @@ function validateApplicationClaims(requestAuth = {}, { brandId, roleId, accountI
 
 
 
-const MANAGED_ACCOUNT_ROLES = new Set(["director", "trainer", "manager", "store"]);
+const MANAGED_ACCOUNT_ROLES = new Set(["director", "trainer", "manager", "store", "therapist"]);
+const CREDENTIAL_REVEAL_ACTION = "reveal_password";
 const DIRECTOR_LEVELS = new Set(["super_admin", "operation_admin", "finance_admin", "viewer"]);
 const MASTER_MANAGEMENT_KEY_ACTIONS = new Set(["verify_master_key", "change_master_key"]);
 const DIRECTOR_ACCOUNT_MUTATION_ACTIONS = new Set(["create", "rename", "set_level", "set_active", "reset_password", "delete"]);
@@ -710,6 +714,136 @@ function applyStoreAdminAction({ raw, organizationRaw, action, targetAccountId, 
   throw new AccountAuthorityError("unsupported_account_action", 400);
 }
 
+
+function readManagedCredentialPassword({ roleId, raw, accountId }) {
+  const role = String(roleId || "").trim().toLowerCase();
+  const target = normalizeAccountText(accountId);
+  if (!target) throw new AccountAuthorityError("account_missing", 404);
+
+  if (role === "director") {
+    const normalized = normalizeDirectorAuthForAdmin(raw || {});
+    const key = findObjectAccountKey(normalized.accounts || {}, target);
+    if (!key) throw new AccountAuthorityError("account_missing", 404);
+    const account = normalized.accounts[key] || {};
+    if (account.isActive === false) throw new AccountAuthorityError("account_inactive", 403);
+    const password = String(account.password || "");
+    if (!password) throw new AccountAuthorityError("credential_source_missing", 409);
+    return { accountId: String(account.id || key), password };
+  }
+
+  if (role === "trainer") {
+    const normalized = normalizeTrainerAuthForAdmin(raw || {});
+    const key = findObjectAccountKey(normalized.accounts || {}, target);
+    if (!key) throw new AccountAuthorityError("account_missing", 404);
+    const account = normalized.accounts[key] || {};
+    if (account.isActive === false) throw new AccountAuthorityError("account_inactive", 403);
+    const password = String(account.password || "");
+    if (!password) throw new AccountAuthorityError("credential_source_missing", 409);
+    return { accountId: String(account.id || key), password };
+  }
+
+  if (role === "manager") {
+    const source = raw && typeof raw === "object" ? raw : {};
+    if (!Object.prototype.hasOwnProperty.call(source, target)) {
+      throw new AccountAuthorityError("account_missing", 404);
+    }
+    const entry = source[target];
+    const password = entry && typeof entry === "object"
+      ? String(entry.password || "")
+      : String(entry || "");
+    if (!password) throw new AccountAuthorityError("credential_source_missing", 409);
+    return { accountId: target, password };
+  }
+
+  if (role === "store") {
+    const source = raw && typeof raw === "object" ? raw : {};
+    const accounts = Array.isArray(source.accounts) ? source.accounts : [];
+    const account = accounts.find((item) => String(item?.id || "") === target);
+    if (!account) throw new AccountAuthorityError("account_missing", 404);
+    if (account.isActive === false) throw new AccountAuthorityError("account_inactive", 403);
+    const password = String(account.password || "");
+    if (!password) throw new AccountAuthorityError("credential_source_missing", 409);
+    return { accountId: String(account.id || target), password };
+  }
+
+  throw new AccountAuthorityError("unsupported_managed_role", 400);
+}
+
+async function revealManagedCredentialInTransaction({
+  transaction,
+  db,
+  brandId,
+  roleId,
+  targetAccountId,
+  managementKey,
+  nowText,
+  actorCheck,
+  getBrandCollection,
+  getBrandSettingDoc,
+}) {
+  const role = String(roleId || "").trim().toLowerCase();
+  if (!MANAGED_ACCOUNT_ROLES.has(role)) throw new AccountAuthorityError("unsupported_managed_role", 400);
+  if (actorCheck?.isMasterCredential === true) {
+    throw new AccountAuthorityError("personal_super_admin_login_required", 403);
+  }
+
+  const masterRef = getBrandSettingDoc(db, brandId, "master_auth");
+  const masterSnap = await transaction.get(masterRef);
+  if (!masterSnap.exists) throw new AccountAuthorityError("master_management_key_missing", 409);
+  assertMasterManagementKey(masterSnap.data() || {}, managementKey);
+
+  let revealed;
+  if (role === "therapist") {
+    const source = await loadTherapistCredentialSource({
+      transaction,
+      db,
+      brandId,
+      therapistId: targetAccountId,
+      getBrandCollection,
+      requireActive: true,
+    });
+    revealed = {
+      accountId: String(source.therapistId || targetAccountId),
+      password: String(source.password || ""),
+      credentialStorageMode: String(source.mode || ""),
+    };
+  } else {
+    const docName = ({
+      director: "director_auth",
+      trainer: "trainer_auth",
+      manager: "manager_auth",
+      store: "store_account_data",
+    })[role];
+    const accountRef = getBrandSettingDoc(db, brandId, docName);
+    const accountSnap = await transaction.get(accountRef);
+    if (!accountSnap.exists) throw new AccountAuthorityError("credential_source_missing", 404);
+    revealed = readManagedCredentialPassword({
+      roleId: role,
+      raw: accountSnap.data() || {},
+      accountId: targetAccountId,
+    });
+  }
+
+  if (!revealed.password) throw new AccountAuthorityError("credential_source_missing", 409);
+
+  const auditRef = getBrandCollection(db, brandId, "system_logs").doc();
+  transaction.set(auditRef, {
+    createdAtText: nowText,
+    activityType: "auth.credential_reveal",
+    action: "查看登入密碼",
+    role: "director",
+    user: String(actorCheck?.actorName || actorCheck?.actorAccountId || "最高管理者"),
+    brand: brandId,
+    details: {
+      managedRole: role,
+      targetAccountId: revealed.accountId,
+      credentialStorageMode: revealed.credentialStorageMode || "",
+    },
+  }, { merge: false });
+
+  return revealed;
+}
+
 async function manageAccountInTransaction({ transaction, db, brandId, roleId, action, targetAccountId, payload, managementKey = "", nowText, actorCheck, getBrandCollection, getBrandSettingDoc }) {
   const role = String(roleId || "").toLowerCase();
   if (!MANAGED_ACCOUNT_ROLES.has(role)) throw new AccountAuthorityError("unsupported_managed_role", 400);
@@ -892,7 +1026,12 @@ function createAccountAuthorityFunctions({
 
       if (!MANAGED_ACCOUNT_ROLES.has(roleId)) throw new AccountAuthorityError("unsupported_managed_role", 400);
       if (!action) throw new AccountAuthorityError("missing_account_action", 400);
-      if (roleId === "manager" && action !== "reset_password") throw new AccountAuthorityError("manager_org_authority_required", 409);
+      if (roleId === "manager" && !["reset_password", CREDENTIAL_REVEAL_ACTION].includes(action)) {
+        throw new AccountAuthorityError("manager_org_authority_required", 409);
+      }
+      if (roleId === "therapist" && action !== CREDENTIAL_REVEAL_ACTION) {
+        throw new AccountAuthorityError("therapist_master_authority_required", 409);
+      }
       if (MASTER_MANAGEMENT_KEY_ACTIONS.has(action) && roleId !== "director") {
         throw new AccountAuthorityError("master_management_key_director_only", 403);
       }
@@ -909,6 +1048,34 @@ function createAccountAuthorityFunctions({
       }
 
       const nowText = new Date().toISOString();
+
+      if (action === CREDENTIAL_REVEAL_ACTION) {
+        if (!managementKey) throw new AccountAuthorityError("master_management_key_required", 403);
+        const result = await db.runTransaction(async (transaction) => revealManagedCredentialInTransaction({
+          transaction,
+          db,
+          brandId,
+          roleId,
+          targetAccountId,
+          managementKey,
+          nowText,
+          actorCheck,
+          getBrandCollection,
+          getBrandSettingDoc,
+        }));
+
+        return res.status(200).json({
+          ok: true,
+          changed: false,
+          brandId,
+          roleId,
+          action,
+          accountId: result.accountId,
+          password: result.password,
+          ...(result.credentialStorageMode ? { credentialStorageMode: result.credentialStorageMode } : {}),
+          revealedAtText: nowText,
+        });
+      }
 
       if (MASTER_MANAGEMENT_KEY_ACTIONS.has(action)) {
         const result = await db.runTransaction(async (transaction) => manageMasterManagementKeyInTransaction({
@@ -977,6 +1144,7 @@ module.exports = {
   ACCOUNT_AUTHORITY_RUNTIME_SERVICE_ACCOUNT,
   SUPPORTED_PASSWORD_ROLES,
   MANAGED_ACCOUNT_ROLES,
+  CREDENTIAL_REVEAL_ACTION,
   DIRECTOR_LEVELS,
   MASTER_MANAGEMENT_KEY_ACTIONS,
   DIRECTOR_ACCOUNT_MUTATION_ACTIONS,
@@ -996,6 +1164,8 @@ module.exports = {
   applyManagerAdminAction,
   applyStoreAdminAction,
   manageAccountInTransaction,
+  readManagedCredentialPassword,
+  revealManagedCredentialInTransaction,
   getInitialPasswordsForRole,
   isBootstrapInitialCredential,
   assertNewPassword,
