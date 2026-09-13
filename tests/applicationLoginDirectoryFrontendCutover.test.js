@@ -11,6 +11,7 @@ const read = (relativePath) => fs.readFileSync(path.join(root, relativePath), "u
 
 const app = read("src/App.jsx");
 const login = read("src/components/LoginView.jsx");
+const applicationIdentity = read("functions/applicationIdentity.js");
 const rules = read("firestore.rules");
 
 const sliceBetween = (source, startText, endText) => {
@@ -31,6 +32,18 @@ test("B1C2C1 normal bootstrap uses sanitized directory instead of raw credential
     assert.doesNotMatch(bootstrap, new RegExp(`getDoc\\(getDocPath\\(\"${sourceName}\"\\)\\)`));
   }
   assert.doesNotMatch(bootstrap, /getDocs\(getCollectionPath\("therapists"\)\)/);
+});
+
+test("sanitized therapist login directory includes non-secret roster fields needed for immediate manager rendering", () => {
+  const therapistDirectoryBlock = sliceBetween(
+    applicationIdentity,
+    "function normalizeTherapistDirectoryRecord",
+    "function buildSanitizedLoginDirectory"
+  );
+  assert.match(therapistDirectoryBlock, /onboardDate:\s*normalizeText\(source\.onboardDate \|\| source\.startDate/);
+  assert.match(therapistDirectoryBlock, /resignDate:/);
+  assert.match(therapistDirectoryBlock, /isActive:/);
+  assert.doesNotMatch(therapistDirectoryBlock, /password|credentialStorageMode|secret|token/i);
 });
 
 test("LoginView receives sanitized selectors and never receives or compares stored passwords", () => {
@@ -62,7 +75,7 @@ test("backend application identity is authoritative for director level and maste
   assert.ok(loginBlock.indexOf("await activateApplicationIdentitySession") < loginBlock.indexOf("setUserRole(roleId)"));
 });
 
-test("legacy settings credential material remains lazy while therapist master admin data is backend-sanitized", () => {
+test("legacy settings credential material remains lazy while therapist manager reuses the sanitized login directory", () => {
   const adminBlock = sliceBetween(app, "P0-B1C2C2 transitional admin hydration", "const targetYearStr = String(selectedYear)");
   assert.match(adminBlock, /activeView === "settings"/);
   assert.match(adminBlock, /activeView === "therapist-manager"/);
@@ -72,11 +85,15 @@ test("legacy settings credential material remains lazy while therapist master ad
   assert.doesNotMatch(adminBlock, /getDocs\(getCollectionPath\("therapists"\)\)/);
   assert.doesNotMatch(adminBlock, /master_auth|director_auth/);
   assert.match(adminBlock, /ownsTherapistMasterHydration/);
+  assert.match(adminBlock, /管師帳號直接使用登入時已取得的 sanitized directory/);
+  assert.match(adminBlock, /restoreSanitizedState\(\)/);
+  assert.match(adminBlock, /status:\s*"ready"[\s\S]{0,120}view:\s*"therapist-manager"/);
   assert.doesNotMatch(adminBlock, /onSnapshot\s*\(/);
   assert.doesNotMatch(adminBlock, /setInterval\s*\(/);
 
-  assert.match(app, /callTherapistMasterAuthority\(\{ action: "list" \}\)/);
-  assert.match(app, /trackReadSource\("admin_therapist_master_backend"/);
+  assert.doesNotMatch(app, /callTherapistMasterAuthority\(\{ action: "list" \}\)/);
+  assert.match(app, /const refreshTherapistMasterRecord = useCallback/);
+  assert.match(app, /trackReadSource\([\s\S]{0,120}"admin_therapist_master_record_backend"/);
 });
 
 test("directory cutover does not advance Rules lockdown or app version", () => {

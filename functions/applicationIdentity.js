@@ -257,6 +257,7 @@ function normalizeTherapistDirectoryRecord(id = "", raw = {}) {
     ...(stores.length ? { stores } : {}),
     manager: normalizeText(source.manager || source.managerName || "", 120),
     managerName: normalizeText(source.managerName || source.manager || "", 120),
+    onboardDate: normalizeText(source.onboardDate || source.startDate || "", 24),
     isActive: source.isActive !== false,
     status: normalizeText(source.status || "", 40),
     resigned: source.resigned === true,

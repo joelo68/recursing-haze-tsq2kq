@@ -3,6 +3,7 @@ const {
   THERAPIST_CREDENTIAL_STORAGE_MODE_EMBEDDED,
   normalizeTherapistCredentialStorageMode,
   buildEmbeddedCredentialCreateFields,
+  resetTherapistCredentialPasswordInTransaction,
   deleteSeparatedTherapistCredentialInTransaction,
 } = require("./therapistCredentialAuthority");
 
@@ -14,6 +15,8 @@ const SUPPORTED_THERAPIST_MASTER_ACTIONS = new Set([
   "restore",
   "delete",
   "list",
+  "get",
+  "reset_password",
 ]);
 const FORBIDDEN_PAYLOAD_KEYS = new Set([
   "password",
@@ -122,7 +125,7 @@ function assertPayloadIsMasterOnly(payload = {}, action = "") {
         });
       }
     }
-  } else if (action === "list") {
+  } else if (["list", "get", "reset_password"].includes(action)) {
     if (Object.keys(source).length > 0) {
       throw new TherapistMasterAuthorityError("unsupported_master_field", 400);
     }
@@ -553,37 +556,68 @@ async function manageTherapistMasterInTransaction({
     throw new TherapistMasterAuthorityError("permanent_delete_confirmation_required", 400);
   }
 
-  const result = applyTherapistMasterAction({
-    action,
-    therapistId,
-    payload,
-    currentRaw,
-    organizationRaw,
-    brandId,
-    nowText,
-    todayText,
-    normalizeStoreCore,
-    getInitialPasswordsForRole,
-    serverTimestamp,
-  });
+  let result;
 
-  if (result.deleted) {
-    deleteSeparatedTherapistCredentialInTransaction({
+  if (action === "reset_password") {
+    const initialPassword = String(getInitialPasswordsForRole("therapist", brandId)?.[0] || "");
+    if (!initialPassword) throw new TherapistMasterAuthorityError("initial_password_unavailable", 500);
+
+    const credentialReset = await resetTherapistCredentialPasswordInTransaction({
       transaction,
       db,
       brandId,
       therapistId,
-      masterData: currentRaw || {},
+      newPassword: initialPassword,
+      nowText,
       getBrandCollection,
+      therapistSnapshot: therapistSnap,
     });
-    transaction.delete(therapistRef);
-  } else if (isCreate) {
-    transaction.set(therapistRef, result.next, { merge: false });
+
+    result = {
+      next: {},
+      therapistId,
+      deleted: false,
+      archived: isTherapistArchived(currentRaw || {}),
+      requiresInitialPasswordChange: true,
+      initialCredentialProvisioned: false,
+      passwordReset: true,
+      storeCore: normalizeText(currentRaw?.store || currentRaw?.storeName || "", 160),
+      managerName: normalizeText(currentRaw?.manager || currentRaw?.managerName || "", 120),
+      credentialStorageMode: credentialReset.mode,
+    };
   } else {
-    // Merge preserves the latest credential and unrelated legacy/operational fields.
-    // Because this transaction read the document first, a concurrent password change
-    // causes Firestore to retry; the semantic master signature intentionally excludes password.
-    transaction.set(therapistRef, result.next, { merge: true });
+    result = applyTherapistMasterAction({
+      action,
+      therapistId,
+      payload,
+      currentRaw,
+      organizationRaw,
+      brandId,
+      nowText,
+      todayText,
+      normalizeStoreCore,
+      getInitialPasswordsForRole,
+      serverTimestamp,
+    });
+
+    if (result.deleted) {
+      deleteSeparatedTherapistCredentialInTransaction({
+        transaction,
+        db,
+        brandId,
+        therapistId,
+        masterData: currentRaw || {},
+        getBrandCollection,
+      });
+      transaction.delete(therapistRef);
+    } else if (isCreate) {
+      transaction.set(therapistRef, result.next, { merge: false });
+    } else {
+      // Merge preserves the latest credential and unrelated legacy/operational fields.
+      // Because this transaction read the document first, a concurrent password change
+      // causes Firestore to retry; the semantic master signature intentionally excludes password.
+      transaction.set(therapistRef, result.next, { merge: true });
+    }
   }
 
   const nextRecord = result.deleted
@@ -609,6 +643,7 @@ async function manageTherapistMasterInTransaction({
     ),
     archived: result.archived === true,
     deleted: result.deleted === true,
+    passwordReset: result.passwordReset === true,
     createdAtText: nowText,
     source: THERAPIST_MASTER_AUTHORITY_VERSION,
   }, { merge: false });
@@ -634,6 +669,7 @@ async function manageTherapistMasterInTransaction({
       ),
       archived: result.archived === true,
       deleted: result.deleted === true,
+      passwordReset: result.passwordReset === true,
       initialCredentialProvisioned: result.initialCredentialProvisioned === true,
       masterSignatureBefore: previousMasterSignature,
       masterSignatureAfter: nextMasterSignature,
@@ -645,9 +681,11 @@ async function manageTherapistMasterInTransaction({
     previousMasterSignature,
     masterSignature: nextMasterSignature,
     therapist: nextRecord ? sanitizeTherapistResponse(nextRecord) : null,
-    credentialStorageMode: result.deleted
-      ? normalizeTherapistCredentialStorageMode(currentRaw || {})
-      : normalizeTherapistCredentialStorageMode(nextRecord || {}),
+    credentialStorageMode: result.credentialStorageMode || (
+      result.deleted
+        ? normalizeTherapistCredentialStorageMode(currentRaw || {})
+        : normalizeTherapistCredentialStorageMode(nextRecord || {})
+    ),
   };
 }
 
@@ -746,6 +784,25 @@ function createTherapistMasterAuthorityFunctions({
         });
       }
 
+      if (action === "get") {
+        const therapistId = normalizeTherapistId(body.therapistId || body.accountId || "");
+        const therapistRef = getBrandCollection(db, brandId, "therapists").doc(therapistId);
+        const therapistSnap = await therapistRef.get();
+        if (!therapistSnap?.exists) throw new TherapistMasterAuthorityError("therapist_missing", 404);
+        const raw = therapistSnap.data() || {};
+        const masterRaw = { ...raw, id: therapistId };
+        return res.status(200).json({
+          ok: true,
+          brandId,
+          action,
+          therapistId,
+          therapist: sanitizeTherapistResponse(masterRaw),
+          masterSignature: buildTherapistMasterSignature(masterRaw),
+          credentialStorageMode: normalizeTherapistCredentialStorageMode(raw),
+          readCount: 1,
+        });
+      }
+
       let therapistRef;
       let therapistId;
       if (action === "create") {
@@ -757,7 +814,7 @@ function createTherapistMasterAuthorityFunctions({
       }
 
       const expectedMasterSignature = normalizeText(body.expectedMasterSignature, 128);
-      if (action !== "create" && !expectedMasterSignature) {
+      if (!["create", "get"].includes(action) && !expectedMasterSignature) {
         throw new TherapistMasterAuthorityError("master_signature_required", 400);
       }
 
@@ -795,6 +852,7 @@ function createTherapistMasterAuthorityFunctions({
         archived: result.archived === true,
         deleted: result.deleted === true,
         requiresInitialPasswordChange: result.requiresInitialPasswordChange === true,
+        passwordReset: result.passwordReset === true,
         masterSignature: result.masterSignature,
         therapist: result.therapist,
         credentialStorageMode: result.credentialStorageMode || THERAPIST_CREDENTIAL_STORAGE_MODE_EMBEDDED,

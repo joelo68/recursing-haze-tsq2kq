@@ -80,10 +80,12 @@ function makeEnv({
       updatedAtText: "2026-08-01T00:00:00.000Z",
     },
   },
+  credentials = {},
   requestAuth,
   adminCheck,
 } = {}) {
   const refs = new Map();
+  const reads = [];
   const writes = [];
   const deletes = [];
   let generated = 0;
@@ -102,6 +104,10 @@ function makeEnv({
     const key = `${brandId}:therapists:${id}`;
     refs.set(key, { key, id, exists: true, data: structuredClone(data) });
   });
+  Object.entries(credentials || {}).forEach(([id, data]) => {
+    const key = `${brandId}:therapist_credentials:${id}`;
+    refs.set(key, { key, id, exists: true, data: structuredClone(data) });
+  });
 
   function collectionRef(b, name) {
     return {
@@ -109,7 +115,16 @@ function makeEnv({
         const docId = id || `auto_${++generated}`;
         const key = `${b}:${name}:${docId}`;
         if (!refs.has(key)) refs.set(key, { key, id: docId, exists: false, data: {} });
-        return refs.get(key);
+        const ref = refs.get(key);
+        ref.get = async () => {
+          reads.push(key);
+          return {
+            exists: ref.exists,
+            id: ref.id,
+            data: () => structuredClone(ref.data || {}),
+          };
+        };
+        return ref;
       },
       async get() {
         const prefix = `${b}:${name}:`;
@@ -129,6 +144,7 @@ function makeEnv({
       transactionCount += 1;
       const tx = {
         async get(ref) {
+          reads.push(ref.key);
           return {
             exists: ref.exists,
             id: ref.id,
@@ -226,7 +242,7 @@ function makeEnv({
       ...body,
     };
     if (
-      !["create", "list"].includes(action) &&
+      !["create", "list", "get"].includes(action) &&
       !Object.prototype.hasOwnProperty.call(requestBody, "expectedMasterSignature")
     ) {
       const therapistId = String(requestBody.therapistId || requestBody.accountId || "t1");
@@ -243,6 +259,7 @@ function makeEnv({
 
   return {
     refs,
+    reads,
     writes,
     deletes,
     call,
@@ -282,6 +299,94 @@ test("list returns signed sanitized therapist master rows without credential mat
   assert.equal(env.transactionCount, 0);
   assert.equal(env.writes.length, 0);
   assert.equal(env.deletes.length, 0);
+});
+
+test("get returns exactly one signed sanitized therapist row without a collection scan", async () => {
+  const env = makeEnv();
+  const res = await env.call({ action: "get", therapistId: "t1" });
+  assert.equal(res.statusCode, 200);
+  assert.equal(res.body.ok, true);
+  assert.equal(res.body.action, "get");
+  assert.equal(res.body.readCount, 1);
+  assert.equal(res.body.therapistId, "t1");
+  assert.equal(res.body.therapist.name, "王小美");
+  assert.match(res.body.masterSignature, /^[0-9a-f]{64}$/);
+  assert.equal(Object.prototype.hasOwnProperty.call(res.body.therapist, "password"), false);
+  assert.deepEqual(env.reads, ["cyj:therapists:t1"]);
+  assert.equal(env.transactionCount, 0);
+  assert.equal(env.writes.length, 0);
+});
+
+test("reset_password restores embedded legacy credential to the server initial password without changing master signature", async () => {
+  const env = makeEnv();
+  const before = buildTherapistMasterSignature(env.refs.get("cyj:therapists:t1").data);
+  const res = await env.call({ action: "reset_password", therapistId: "t1" });
+  assert.equal(res.statusCode, 200);
+  assert.equal(res.body.ok, true);
+  assert.equal(res.body.passwordReset, true);
+  assert.equal(res.body.requiresInitialPasswordChange, true);
+  assert.equal(res.body.credentialStorageMode, "embedded_legacy");
+  assert.equal(res.body.masterSignature, before);
+  assert.equal(env.refs.get("cyj:therapists:t1").data.password, "0000");
+  assert.equal([...env.refs.keys()].some((key) => key.startsWith("cyj:therapist_credentials:") && env.refs.get(key).exists), false);
+  assert.ok(env.writes.some((row) => row.key === "cyj:therapists:t1" && row.data.password === "0000"));
+  assert.ok(env.writes.some((row) => row.key.startsWith("cyj:system_logs:") && row.data.details?.passwordReset === true));
+});
+
+test("reset_password writes only separated_v1 credential authority when the therapist has already migrated", async () => {
+  const env = makeEnv({
+    brandId: "yibo",
+    therapists: {
+      t1: {
+        id: "t1",
+        name: "伊啵管理師",
+        store: "A",
+        credentialStorageMode: "separated_v1",
+        isActive: true,
+        status: "在職",
+      },
+    },
+    credentials: {
+      t1: {
+        schemaVersion: "therapist-credential-v1",
+        brandId: "yibo",
+        therapistId: "t1",
+        password: "private-old",
+        createdAtText: "2026-09-12T09:00:00.000Z",
+        updatedAtText: "2026-09-12T09:00:00.000Z",
+        migratedAtText: "2026-09-12T09:00:00.000Z",
+      },
+    },
+  });
+  const res = await env.call({ action: "reset_password", therapistId: "t1" });
+  assert.equal(res.statusCode, 200);
+  assert.equal(res.body.passwordReset, true);
+  assert.equal(res.body.credentialStorageMode, "separated_v1");
+  assert.equal(env.refs.get("yibo:therapist_credentials:t1").data.password, "0000");
+  assert.equal(env.refs.get("yibo:therapists:t1").data.password, undefined);
+  assert.equal(env.refs.get("yibo:therapists:t1").data.credentialStorageMode, "separated_v1");
+  assert.ok(env.writes.some((row) => row.key === "yibo:therapist_credentials:t1" && row.data.password === "0000"));
+  assert.equal(env.writes.some((row) => row.key === "yibo:therapists:t1" && Object.prototype.hasOwnProperty.call(row.data, "password")), false);
+});
+
+test("reset_password refuses archived therapist accounts and writes no credential", async () => {
+  const env = makeEnv({
+    therapists: {
+      t1: {
+        id: "t1",
+        name: "離職管理師",
+        store: "A",
+        password: "private-old",
+        isActive: false,
+        isResigned: true,
+        status: "離職",
+      },
+    },
+  });
+  const res = await env.call({ action: "reset_password", therapistId: "t1" });
+  assert.equal(res.statusCode, 403);
+  assert.equal(res.body.code, "account_inactive");
+  assert.equal(env.writes.length, 0);
 });
 
 test("list stays inside the requested brand therapist collection", async () => {
@@ -672,5 +777,6 @@ test("therapist credential collection stays protected while B1C2C2 retires brows
   assert.equal((rules.match(/collectionName != 'therapist_credentials'/g) || []).length, 2);
   assert.doesNotMatch(managerView, /\.password|firebase\/firestore/);
   assert.doesNotMatch(app, /getDocs\(getCollectionPath\("therapists"\)\)/);
-  assert.match(app, /admin_therapist_master_backend/);
+  assert.match(app, /admin_therapist_master_record_backend/);
+  assert.doesNotMatch(app, /admin_therapist_master_backend/);
 });

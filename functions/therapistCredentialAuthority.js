@@ -149,10 +149,18 @@ function buildTherapistCredentialState({ brandId, therapistId, masterData = {}, 
   return { ok: true, classification: "SEPARATED_V1_READY", mode };
 }
 
-async function loadTherapistCredentialSource({ db, brandId, therapistId, getBrandCollection, transaction = null, requireActive = true } = {}) {
+async function loadTherapistCredentialSource({
+  db,
+  brandId,
+  therapistId,
+  getBrandCollection,
+  transaction = null,
+  requireActive = true,
+  therapistSnapshot = null,
+} = {}) {
   const refs = getTherapistCredentialRefs({ db, brandId, therapistId, getBrandCollection });
   const read = transaction ? (ref) => transaction.get(ref) : (ref) => ref.get();
-  const therapistSnap = await read(refs.therapistRef);
+  const therapistSnap = therapistSnapshot || await read(refs.therapistRef);
   if (!therapistSnap?.exists) throw new TherapistCredentialAuthorityError("account_missing", 404);
   const masterData = therapistSnap.data() || {};
   if (requireActive && isTherapistInactive(masterData)) {
@@ -214,6 +222,52 @@ async function updateTherapistCredentialPasswordInTransaction({
     }, { merge: true });
   }
   return { mode: source.mode, therapistId: source.therapistId };
+}
+
+async function resetTherapistCredentialPasswordInTransaction({
+  transaction,
+  db,
+  brandId,
+  therapistId,
+  newPassword,
+  nowText,
+  getBrandCollection,
+  therapistSnapshot = null,
+} = {}) {
+  if (!transaction || typeof transaction.get !== "function" || typeof transaction.set !== "function") {
+    throw new Error("missing_transaction");
+  }
+  const credentialPassword = String(newPassword ?? "");
+  if (!credentialPassword) {
+    throw new TherapistCredentialAuthorityError("credential_password_missing", 500);
+  }
+
+  const source = await loadTherapistCredentialSource({
+    transaction,
+    db,
+    brandId,
+    therapistId,
+    getBrandCollection,
+    requireActive: true,
+    therapistSnapshot,
+  });
+
+  if (source.mode === THERAPIST_CREDENTIAL_STORAGE_MODE_EMBEDDED) {
+    transaction.set(source.therapistRef, {
+      password: credentialPassword,
+      updatedAtText: normalizeText(nowText, 80),
+    }, { merge: true });
+  } else {
+    transaction.set(source.credentialRef, {
+      password: credentialPassword,
+      updatedAtText: normalizeText(nowText, 80),
+    }, { merge: true });
+  }
+
+  return {
+    mode: source.mode,
+    therapistId: source.therapistId,
+  };
 }
 
 async function migrateTherapistCredentialInTransaction({
@@ -300,6 +354,7 @@ module.exports = {
   buildTherapistCredentialState,
   loadTherapistCredentialSource,
   updateTherapistCredentialPasswordInTransaction,
+  resetTherapistCredentialPasswordInTransaction,
   migrateTherapistCredentialInTransaction,
   deleteSeparatedTherapistCredentialInTransaction,
 };

@@ -1,5 +1,5 @@
 // src/components/TherapistManagerView.jsx
-import React, { useState, useContext, useMemo, useEffect } from "react";
+import React, { useState, useContext, useMemo, useEffect, useRef } from "react";
 import {
   UserCheck,
   Archive,
@@ -41,6 +41,8 @@ const TherapistManagerView = () => {
 
   // 2xl 以下使用抽屜，避免右側面板把畫面撐爆
   const [isDrawerOpen, setIsDrawerOpen] = useState(false);
+  const [detailLoadingId, setDetailLoadingId] = useState("");
+  const detailRequestRef = useRef(0);
 
   const [formManager, setFormManager] = useState("");
   const [formStore, setFormStore] = useState("");
@@ -117,6 +119,46 @@ const TherapistManagerView = () => {
     setFormName(t?.name || "");
     setFormOnboardDate(t?.onboardDate || "");
     setFormResignDate(t?.resignDate || "");
+  };
+
+  const loadTherapistDetail = async (t, { openDrawer = false } = {}) => {
+    if (!t?.id) return t || null;
+
+    setIsCreating(false);
+    setSelectedTherapist(t);
+    loadTherapistToForm(t);
+    if (openDrawer) setIsDrawerOpen(true);
+
+    if (t.masterSignature) return t;
+
+    const requestId = ++detailRequestRef.current;
+    setDetailLoadingId(String(t.id));
+
+    try {
+      const result = await manageTherapistMasterAction({
+        action: "get",
+        therapistId: t.id,
+      });
+      const next = result?.therapist
+        ? { ...result.therapist, masterSignature: result.masterSignature || result.therapist.masterSignature || "" }
+        : t;
+
+      if (detailRequestRef.current === requestId) {
+        setSelectedTherapist(next);
+        loadTherapistToForm(next);
+      }
+      return next;
+    } catch (error) {
+      console.error("管理師資料確認失敗:", error);
+      if (detailRequestRef.current === requestId) {
+        showToast(getManagementErrorMessage(error, "目前無法確認這筆人員資料"), "error");
+      }
+      throw error;
+    } finally {
+      if (detailRequestRef.current === requestId) {
+        setDetailLoadingId("");
+      }
+    }
   };
 
   const allManagers = useMemo(() => {
@@ -252,11 +294,7 @@ const TherapistManagerView = () => {
       return;
     }
 
-    if (!selectedTherapist && filteredTherapists.length > 0) {
-      setSelectedTherapist(filteredTherapists[0]);
-      loadTherapistToForm(filteredTherapists[0]);
-      return;
-    }
+    if (!selectedTherapist) return;
 
     if (selectedTherapist) {
       const refreshedSelected = filteredTherapists.find((t) => t.id === selectedTherapist.id);
@@ -273,11 +311,9 @@ const TherapistManagerView = () => {
       }
 
       if (!refreshedSelected) {
-        const next = filteredTherapists[0] || null;
-        setSelectedTherapist(next);
-
-        if (next) loadTherapistToForm(next);
-        else resetForm();
+        setSelectedTherapist(null);
+        setIsDrawerOpen(false);
+        resetForm();
       }
     }
 
@@ -285,13 +321,12 @@ const TherapistManagerView = () => {
   }, [filteredTherapists, isCreating, hasActiveFilter]);
 
   const handleSelectTherapist = (t) => {
-    setIsCreating(false);
-    setSelectedTherapist(t);
-    loadTherapistToForm(t);
-    setIsDrawerOpen(true);
+    loadTherapistDetail(t, { openDrawer: true }).catch(() => {});
   };
 
   const openCreatePanel = () => {
+    detailRequestRef.current += 1;
+    setDetailLoadingId("");
     setIsCreating(true);
     setSelectedTherapist(null);
     resetForm();
@@ -299,26 +334,28 @@ const TherapistManagerView = () => {
   };
 
   const closePanel = () => {
+    detailRequestRef.current += 1;
+    setDetailLoadingId("");
     setIsDrawerOpen(false);
     setIsCreating(false);
 
-    if (hasActiveFilter && filteredTherapists.length > 0) {
-      setSelectedTherapist(filteredTherapists[0]);
-      loadTherapistToForm(filteredTherapists[0]);
-    } else {
-      setSelectedTherapist(null);
-      resetForm();
-    }
+    setSelectedTherapist(null);
+    resetForm();
   };
 
   const getManagementErrorMessage = (error, fallback = "操作失敗") => {
     const code = String(error?.code || error?.result?.code || "");
-    if (code === "therapist_master_conflict") return "這筆人員資料剛被其他管理者更新，名單已重新整理，請確認後再操作。";
+    if (code === "therapist_master_conflict") return "這筆人員資料剛被其他管理者更新，已重新確認最新內容，請確認後再操作。";
     if (code === "super_admin_reverification_required") return "管理者驗證已失效，請重新登入後再操作。";
     if (code === "archive_before_delete_required") return "請先封存帳號，再進行永久刪除。";
     if (code === "store_outside_brand_organization") return "所選店家已不在目前品牌的組織架構中，請重新選擇。";
     if (code === "organization_duplicate_store") return "目前店家歸屬有重複，請先修正區域與店家設定。";
     if (code === "credential_payload_not_allowed") return "人員主檔不能直接修改登入密碼。";
+    if (code === "therapist_missing" || code === "account_missing") return "找不到這位管理師的最新帳號資料，請重新搜尋。";
+    if (code === "account_inactive") return "封存中的帳號不能重設登入密碼，請先重新啟用。";
+    if (["credential_source_missing", "credential_document_invalid", "credential_dual_source_conflict", "invalid_credential_storage_mode"].includes(code)) {
+      return "這位管理師的登入資料狀態需要管理者檢查，暫時無法重設密碼。";
+    }
     return error?.result?.message || error?.message || fallback;
   };
 
@@ -395,26 +432,35 @@ const TherapistManagerView = () => {
 
   const toggleStatus = async (t = selectedTherapist) => {
     if (!t) return;
-    if (!t.masterSignature) {
-      showToast("這筆資料版本尚未同步完成，請重新進入管師帳號後再試", "error");
+
+    let target = t;
+    if (!target.masterSignature) {
+      try {
+        target = await loadTherapistDetail(target);
+      } catch {
+        return;
+      }
+    }
+    if (!target?.masterSignature) {
+      showToast("這筆資料尚未確認完成，請稍後再試", "error");
       return;
     }
 
-    const archived = isTherapistArchived(t);
+    const archived = isTherapistArchived(target);
     const action = archived ? "restore" : "archive";
     const actionName = archived ? "重新啟用帳號" : "封存帳號";
-    if (!window.confirm(`確定要${actionName}「${t.name}」嗎？`)) return;
+    if (!window.confirm(`確定要${actionName}「${target.name}」嗎？`)) return;
 
     try {
       const result = await manageTherapistMasterAction({
         action,
-        therapistId: t.id,
-        expectedMasterSignature: t.masterSignature,
+        therapistId: target.id,
+        expectedMasterSignature: target.masterSignature,
         payload: archived ? {} : { resignDate: getTodayStr() },
       });
       const next = result?.therapist
         ? { ...result.therapist, masterSignature: result.masterSignature || "" }
-        : t;
+        : target;
       setSelectedTherapist(next);
       loadTherapistToForm(next);
       showToast(`已${actionName}`, "success");
@@ -424,24 +470,76 @@ const TherapistManagerView = () => {
     }
   };
 
+  const handleResetTherapistPassword = async (t = selectedTherapist) => {
+    if (!t) return;
+    if (isTherapistArchived(t)) {
+      showToast("封存中的帳號不能重設登入密碼，請先重新啟用。", "error");
+      return;
+    }
+
+    let target = t;
+    if (!target.masterSignature) {
+      try {
+        target = await loadTherapistDetail(target, { openDrawer: true });
+      } catch {
+        return;
+      }
+    }
+    if (!target?.masterSignature) {
+      showToast("這筆資料尚未確認完成，請稍後再試", "error");
+      return;
+    }
+
+    const confirmed = window.confirm(
+      `確定要重設「${target.name}」的登入密碼嗎？\n\n重設後本人需使用系統初始密碼登入，並重新設定自己的密碼。`
+    );
+    if (!confirmed) return;
+
+    try {
+      const result = await manageTherapistMasterAction({
+        action: "reset_password",
+        therapistId: target.id,
+        expectedMasterSignature: target.masterSignature,
+      });
+      const next = result?.therapist
+        ? { ...result.therapist, masterSignature: result.masterSignature || target.masterSignature }
+        : target;
+      setSelectedTherapist(next);
+      loadTherapistToForm(next);
+      showToast("登入密碼已重設；請讓本人使用系統初始密碼重新登入並設定新密碼。", "success");
+    } catch (error) {
+      console.error("重設登入密碼失敗:", error);
+      showToast(getManagementErrorMessage(error, "重設登入密碼失敗"), "error");
+    }
+  };
+
   const handleDeleteTherapist = async (t = selectedTherapist) => {
     if (!t) return;
     if (!isTherapistArchived(t)) {
       showToast("永久刪除前請先封存帳號，以避免誤刪在職人員", "error");
       return;
     }
-    if (!t.masterSignature) {
-      showToast("這筆資料版本尚未同步完成，請重新進入管師帳號後再試", "error");
+
+    let target = t;
+    if (!target.masterSignature) {
+      try {
+        target = await loadTherapistDetail(target);
+      } catch {
+        return;
+      }
+    }
+    if (!target?.masterSignature) {
+      showToast("這筆資料尚未確認完成，請稍後再試", "error");
       return;
     }
 
-    if (!window.confirm(`警告：這是永久實體刪除，將無法復原。\n\n確定永久刪除「${t.name}」嗎？`)) return;
+    if (!window.confirm(`警告：這是永久實體刪除，將無法復原。\n\n確定永久刪除「${target.name}」嗎？`)) return;
 
     try {
       await manageTherapistMasterAction({
         action: "delete",
-        therapistId: t.id,
-        expectedMasterSignature: t.masterSignature,
+        therapistId: target.id,
+        expectedMasterSignature: target.masterSignature,
         confirmPermanentDelete: true,
       });
       showToast("人員已永久刪除", "success");
@@ -496,13 +594,14 @@ const TherapistManagerView = () => {
     );
   };
 
-  const SelectBox = ({ value, onChange, children, className = "" }) => {
+  const SelectBox = ({ value, onChange, children, className = "", disabled = false }) => {
     return (
       <div className={`relative ${className}`}>
         <select
           value={value}
           onChange={onChange}
-          className="w-full h-10 pl-3 pr-8 rounded-xl bg-white border border-stone-200 text-xs font-black text-stone-600 outline-none appearance-none focus:border-amber-300 focus:ring-4 focus:ring-amber-50 transition-all"
+          disabled={disabled}
+          className="w-full h-10 pl-3 pr-8 rounded-xl bg-white border border-stone-200 text-xs font-black text-stone-600 outline-none appearance-none focus:border-amber-300 focus:ring-4 focus:ring-amber-50 transition-all disabled:bg-stone-100 disabled:text-stone-400 disabled:cursor-wait"
         >
           {children}
         </select>
@@ -517,6 +616,10 @@ const TherapistManagerView = () => {
   const selectedArchived = selectedTherapist
     ? isTherapistArchived(selectedTherapist)
     : false;
+  const selectedDetailLoading = Boolean(
+    selectedTherapist?.id &&
+    detailLoadingId === String(selectedTherapist.id)
+  );
 
   const renderDetailPanel = ({ mode = "inline" }) => (
     <aside
@@ -534,7 +637,7 @@ const TherapistManagerView = () => {
               {isCreating
                 ? "建立新的管理師登入帳號"
                 : selectedTherapist
-                ? "調整人員資料與狀態"
+                ? (selectedDetailLoading ? "正在確認最新資料…" : "調整人員資料與狀態")
                 : "請從左側選擇人員"}
             </p>
           </div>
@@ -569,6 +672,7 @@ const TherapistManagerView = () => {
                 </label>
                 <SelectBox
                   value={formManager}
+                  disabled={selectedDetailLoading}
                   onChange={(e) => {
                     setFormManager(e.target.value);
                     setFormStore("");
@@ -589,6 +693,7 @@ const TherapistManagerView = () => {
                 </label>
                 <SelectBox
                   value={formStore}
+                  disabled={selectedDetailLoading}
                   onChange={(e) => setFormStore(e.target.value)}
                 >
                   <option value="">選擇店家</option>
@@ -608,6 +713,7 @@ const TherapistManagerView = () => {
                   type="text"
                   value={formName}
                   onChange={(e) => setFormName(e.target.value)}
+                  disabled={selectedDetailLoading}
                   placeholder="請輸入姓名"
                   className="w-full h-10 px-3 rounded-xl bg-stone-50 border border-stone-200 text-xs font-black text-stone-800 outline-none focus:bg-white focus:border-amber-300 focus:ring-4 focus:ring-amber-50 transition-all"
                 />
@@ -630,8 +736,19 @@ const TherapistManagerView = () => {
               <div className="rounded-2xl border border-amber-100 bg-amber-50/60 px-4 py-3">
                 <p className="text-xs font-black text-amber-800">登入密碼由本人管理</p>
                 <p className="mt-1 text-[11px] font-bold leading-5 text-amber-700/80">
-                  此頁不顯示、搜尋或修改任何登入密碼。新增帳號會使用系統初始密碼，首次登入時由本人完成更新。
+                  此頁不顯示、搜尋或直接編輯任何登入密碼。忘記密碼時，可由最高管理者重設為系統初始密碼，再由本人登入後重新設定。
                 </p>
+
+                {!isCreating && selectedTherapist && !selectedArchived && (
+                  <button
+                    onClick={() => handleResetTherapistPassword(selectedTherapist)}
+                    disabled={selectedDetailLoading}
+                    className="mt-3 h-9 px-3 rounded-xl border border-amber-200 bg-white text-amber-800 text-xs font-black hover:bg-amber-50 transition-all flex items-center justify-center gap-1.5 disabled:opacity-50 disabled:cursor-wait"
+                  >
+                    <Lock size={13} />
+                    {selectedDetailLoading ? "確認資料中…" : "重設登入密碼"}
+                  </button>
+                )}
               </div>
 
               <div>
@@ -697,7 +814,8 @@ const TherapistManagerView = () => {
 
                     <button
                       onClick={() => toggleStatus(selectedTherapist)}
-                      className={`h-9 px-3 rounded-xl text-xs font-black border transition-all flex items-center gap-1.5 ${
+                      disabled={selectedDetailLoading}
+                      className={`h-9 px-3 rounded-xl text-xs font-black border transition-all flex items-center gap-1.5 disabled:opacity-50 disabled:cursor-wait ${
                         selectedArchived
                           ? "border-emerald-100 bg-emerald-50 text-emerald-700 hover:bg-emerald-100"
                           : "border-stone-200 bg-white text-stone-600 hover:bg-stone-50"
@@ -722,7 +840,8 @@ const TherapistManagerView = () => {
 
                 <button
                   onClick={isCreating ? handleCreateTherapist : handleUpdateTherapist}
-                  className="h-10 rounded-xl bg-stone-900 text-white text-xs font-black shadow-md hover:bg-stone-800 active:scale-[0.98] transition-all"
+                  disabled={!isCreating && (selectedDetailLoading || !selectedTherapist?.masterSignature)}
+                  className="h-10 rounded-xl bg-stone-900 text-white text-xs font-black shadow-md hover:bg-stone-800 active:scale-[0.98] transition-all disabled:bg-stone-300 disabled:shadow-none disabled:cursor-wait"
                 >
                   {isCreating ? "確認新增" : "儲存修改"}
                 </button>

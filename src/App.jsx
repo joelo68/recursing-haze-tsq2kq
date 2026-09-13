@@ -2946,7 +2946,10 @@ export default function App() {
     };
 
     if (ownsTherapistMasterHydration) {
-      // 由下方 Backend therapist master hydration effect 獨立管理，避免 raw credential fallback。
+      // 管師帳號直接使用登入時已取得的 sanitized directory，避免進頁後再整批讀 therapists。
+      // 真正需要編輯某一位時，才由 manageTherapistMaster 做單文件讀取取得最新版與 OCC signature。
+      restoreSanitizedState();
+      setAdminCredentialSourceState({ status: "ready", brandId, view: "therapist-manager", error: "" });
       return undefined;
     }
 
@@ -4129,17 +4132,43 @@ export default function App() {
     };
   }, [normalizeStore]);
 
-  const refreshTherapistMasterDirectory = useCallback(async () => {
-    const result = await callTherapistMasterAuthority({ action: "list" });
-    const rows = Array.isArray(result?.therapists)
-      ? result.therapists.map(normalizeTherapistMasterRow)
-      : [];
-    if (currentBrandIdRef.current === result.brandIdAtStart) {
-      setTherapists(rows);
-      trackReadSource("admin_therapist_master_backend", rows.length, getStableReadMeta("admin_therapist_master_backend"));
+  const refreshTherapistMasterRecord = useCallback(async (therapistId = "") => {
+    const safeTherapistId = String(therapistId || "").trim();
+    if (!safeTherapistId) throw new Error("缺少管理師帳號識別資料");
+
+    const result = await callTherapistMasterAuthority({
+      action: "get",
+      therapistId: safeTherapistId,
+    });
+    const nextRow = result?.therapist
+      ? normalizeTherapistMasterRow({
+          ...result.therapist,
+          masterSignature: result.masterSignature || "",
+        })
+      : null;
+
+    if (currentBrandIdRef.current === result.brandIdAtStart && nextRow) {
+      setTherapists((previous) => {
+        const list = Array.isArray(previous) ? previous : [];
+        const index = list.findIndex((item) => String(item?.id || "") === nextRow.id);
+        if (index < 0) return [...list, nextRow];
+        const next = [...list];
+        next[index] = nextRow;
+        return next;
+      });
+      trackReadSource(
+        "admin_therapist_master_record_backend",
+        1,
+        getStableReadMeta("admin_therapist_master_record_backend")
+      );
     }
-    return rows;
-  }, [callTherapistMasterAuthority, normalizeTherapistMasterRow, getStableReadMeta]);
+
+    return nextRow;
+  }, [
+    callTherapistMasterAuthority,
+    normalizeTherapistMasterRow,
+    getStableReadMeta,
+  ]);
 
   const manageTherapistMasterAction = useCallback(async ({
     action = "",
@@ -4149,9 +4178,20 @@ export default function App() {
     confirmPermanentDelete = false,
   } = {}) => {
     const safeAction = String(action || "").trim().toLowerCase();
+
     if (safeAction === "list") {
-      const therapists = await refreshTherapistMasterDirectory();
-      return { ok: true, action: "list", therapists };
+      throw new Error("管師帳號名單已改用登入授權名單，不再整批重新讀取");
+    }
+
+    if (safeAction === "get") {
+      const therapist = await refreshTherapistMasterRecord(therapistId);
+      return {
+        ok: true,
+        action: "get",
+        therapistId: String(therapistId || ""),
+        therapist,
+        masterSignature: therapist?.masterSignature || "",
+      };
     }
 
     try {
@@ -4183,9 +4223,13 @@ export default function App() {
       }
       return result;
     } catch (error) {
-      if (error?.status === 409 && currentBrandIdRef.current === String(currentBrandId || "").trim().toLowerCase()) {
-        await refreshTherapistMasterDirectory().catch((refreshError) => {
-          console.warn("管師帳號衝突後重新整理失敗:", refreshError);
+      if (
+        error?.status === 409 &&
+        therapistId &&
+        currentBrandIdRef.current === String(currentBrandId || "").trim().toLowerCase()
+      ) {
+        await refreshTherapistMasterRecord(therapistId).catch((refreshError) => {
+          console.warn("管師帳號衝突後重新整理單筆資料失敗:", refreshError);
         });
       }
       throw error;
@@ -4194,49 +4238,9 @@ export default function App() {
     currentBrandId,
     callTherapistMasterAuthority,
     normalizeTherapistMasterRow,
-    refreshTherapistMasterDirectory,
+    refreshTherapistMasterRecord,
   ]);
 
-  useEffect(() => {
-    const brandId = String(currentBrandId || "").trim().toLowerCase();
-    const shouldLoad = userRole === "director"
-      && Boolean(currentUser)
-      && activeView === "therapist-manager"
-      && canDirectorAccessView("therapist-manager");
-    if (!shouldLoad) return undefined;
-
-    let cancelled = false;
-    setAdminCredentialSourceState({ status: "loading", brandId, view: "therapist-manager", error: "" });
-
-    refreshTherapistMasterDirectory()
-      .then(() => {
-        if (!cancelled && currentBrandIdRef.current === brandId) {
-          setAdminCredentialSourceState({ status: "ready", brandId, view: "therapist-manager", error: "" });
-        }
-      })
-      .catch((error) => {
-        console.error("管師帳號資料同步失敗:", error);
-        if (!cancelled && currentBrandIdRef.current === brandId) {
-          setAdminCredentialSourceState({
-            status: "error",
-            brandId,
-            view: "therapist-manager",
-            error: error?.message || "管師帳號資料目前無法同步，請稍後重新進入此頁。",
-          });
-        }
-      });
-
-    return () => {
-      cancelled = true;
-    };
-  }, [
-    userRole,
-    currentUser,
-    activeView,
-    currentBrandId,
-    canDirectorAccessView,
-    refreshTherapistMasterDirectory,
-  ]);
 
   const manageApplicationAccountAction = useCallback(async ({
     roleId = "director",

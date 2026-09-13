@@ -20,6 +20,7 @@ const {
   buildTherapistCredentialState,
   loadTherapistCredentialSource,
   updateTherapistCredentialPasswordInTransaction,
+  resetTherapistCredentialPasswordInTransaction,
   migrateTherapistCredentialInTransaction,
 } = require("../functions/therapistCredentialAuthority");
 
@@ -201,6 +202,76 @@ test("password change writes only the currently authoritative therapist credenti
   assert.deepEqual(separated.writes.map((row) => row.key), ["cyj:therapist_credentials:t1"]);
 });
 
+test("admin reset writes only the authoritative therapist credential source and never migrates storage mode", async () => {
+  const legacy = makeEnv({
+    therapists: {
+      t1: { id: "t1", password: "private-old", credentialStorageMode: "embedded_legacy", isActive: true },
+    },
+  });
+  const legacyResult = await resetTherapistCredentialPasswordInTransaction({
+    transaction: legacy.transaction,
+    db: legacy.db,
+    brandId: "cyj",
+    therapistId: "t1",
+    newPassword: "0000",
+    nowText: "2026-09-12T15:30:00.000Z",
+    getBrandCollection: legacy.getBrandCollection,
+  });
+  assert.equal(legacyResult.mode, THERAPIST_CREDENTIAL_STORAGE_MODE_EMBEDDED);
+  assert.deepEqual(legacy.reads, ["cyj:therapists:t1"]);
+  assert.deepEqual(legacy.writes.map((row) => row.key), ["cyj:therapists:t1"]);
+  assert.equal(legacy.writes[0].data.password, "0000");
+  assert.equal(legacy.refs.get("cyj:therapists:t1").data.credentialStorageMode, "embedded_legacy");
+
+  const separated = makeEnv({
+    brandId: "yibo",
+    therapists: {
+      t1: { id: "t1", credentialStorageMode: "separated_v1", isActive: true },
+    },
+    credentials: {
+      t1: separatedDoc("yibo", "t1", "private-old"),
+    },
+  });
+  const separatedResult = await resetTherapistCredentialPasswordInTransaction({
+    transaction: separated.transaction,
+    db: separated.db,
+    brandId: "yibo",
+    therapistId: "t1",
+    newPassword: "0000",
+    nowText: "2026-09-12T15:30:00.000Z",
+    getBrandCollection: separated.getBrandCollection,
+  });
+  assert.equal(separatedResult.mode, THERAPIST_CREDENTIAL_STORAGE_MODE_SEPARATED);
+  assert.deepEqual(separated.reads, [
+    "yibo:therapists:t1",
+    "yibo:therapist_credentials:t1",
+  ]);
+  assert.deepEqual(separated.writes.map((row) => row.key), ["yibo:therapist_credentials:t1"]);
+  assert.equal(separated.writes[0].data.password, "0000");
+  assert.equal(separated.refs.get("yibo:therapists:t1").data.password, undefined);
+});
+
+test("admin reset refuses an inactive therapist credential source", async () => {
+  const env = makeEnv({
+    therapists: {
+      t1: { id: "t1", password: "private-old", isActive: false, status: "離職" },
+    },
+  });
+  await assert.rejects(
+    resetTherapistCredentialPasswordInTransaction({
+      transaction: env.transaction,
+      db: env.db,
+      brandId: "cyj",
+      therapistId: "t1",
+      newPassword: "0000",
+      nowText: "2026-09-12T15:30:00.000Z",
+      getBrandCollection: env.getBrandCollection,
+    }),
+    /account_inactive/
+  );
+  assert.equal(env.writes.length, 0);
+});
+
 test("atomic separation helper creates credential and removes legacy password in one transaction surface", async () => {
   const env = makeEnv({
     brandId: "anniu",
@@ -260,6 +331,7 @@ test("login, password change and therapist master share credential authority whi
   assert.match(deviceApproval, /loadTherapistCredentialSource/);
   assert.match(accountAuthority, /updateTherapistCredentialPasswordInTransaction/);
   assert.match(therapistMaster, /buildEmbeddedCredentialCreateFields/);
+  assert.match(therapistMaster, /resetTherapistCredentialPasswordInTransaction/);
   assert.match(therapistMaster, /deleteSeparatedTherapistCredentialInTransaction/);
   assert.doesNotMatch(functionsIndex, /migrateTherapistCredential|auditTherapistCredential/);
   assert.doesNotMatch(deviceApproval, /onSnapshot\s*\(|setInterval\s*\(/);
