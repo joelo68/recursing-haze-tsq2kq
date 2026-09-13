@@ -2,6 +2,8 @@ const crypto = require("crypto");
 
 const APPLICATION_IDENTITY_VERSION = "application-identity-v1";
 const APPLICATION_DIRECTORY_VERSION = "application-login-directory-v1";
+const APPLICATION_DIRECTORY_SUMMARY_VERSION = "application-login-directory-summary-v1";
+const APPLICATION_DIRECTORY_SUMMARY_DOC_ID = "current";
 const LOGIN_DIRECTORY_RUNTIME_SERVICE_ACCOUNT = "drcyj-login-directory@cyjsituation-analysis.iam.gserviceaccount.com";
 const APPLICATION_DIRECTORY_BRANDS = Object.freeze(["cyj", "anniu", "yibo"]);
 const APPLICATION_IDENTITY_ROLES = Object.freeze([
@@ -292,6 +294,311 @@ function buildSanitizedLoginDirectory({
   };
 }
 
+
+const LOGIN_DIRECTORY_SETTING_SLICE_MAP = Object.freeze({
+  director_auth: "directors",
+  trainer_auth: "trainers",
+  manager_auth: "managers",
+  store_account_data: "stores",
+});
+
+function getLoginDirectoryCounts(directory = {}) {
+  return {
+    directors: Array.isArray(directory?.directors) ? directory.directors.length : 0,
+    trainers: Array.isArray(directory?.trainers) ? directory.trainers.length : 0,
+    managers: Array.isArray(directory?.managers) ? directory.managers.length : 0,
+    stores: Array.isArray(directory?.stores) ? directory.stores.length : 0,
+    therapists: Array.isArray(directory?.therapists) ? directory.therapists.length : 0,
+  };
+}
+
+function isSanitizedLoginDirectoryShape(directory = {}, expectedBrandId = "") {
+  if (!directory || typeof directory !== "object" || Array.isArray(directory)) return false;
+  if (String(directory.version || "") !== APPLICATION_DIRECTORY_VERSION) return false;
+  if (normalizeDirectoryBrandId(directory.brandId) !== normalizeDirectoryBrandId(expectedBrandId)) return false;
+  return ["directors", "trainers", "managers", "stores", "therapists"]
+    .every((key) => Array.isArray(directory[key]));
+}
+
+function buildLoginDirectorySummaryDocument({
+  brandId = "",
+  directory = {},
+  revision = 1,
+  updatedAtText = "",
+  source = "directory-source-change",
+} = {}) {
+  const brand = normalizeDirectoryBrandId(brandId);
+  if (!brand || !isSanitizedLoginDirectoryShape(directory, brand)) {
+    throw new Error("invalid_login_directory_summary_source");
+  }
+  const safeRevision = Math.max(1, Number(revision || 1));
+  return {
+    version: APPLICATION_DIRECTORY_SUMMARY_VERSION,
+    directoryVersion: APPLICATION_DIRECTORY_VERSION,
+    brandId: brand,
+    revision: safeRevision,
+    directory,
+    counts: getLoginDirectoryCounts(directory),
+    updatedAtText: normalizeText(updatedAtText || new Date().toISOString(), 64),
+    source: normalizeText(source, 80) || "directory-source-change",
+  };
+}
+
+function isUsableLoginDirectorySummary(summary = {}, expectedBrandId = "") {
+  const brand = normalizeDirectoryBrandId(expectedBrandId);
+  return Boolean(
+    brand &&
+    summary &&
+    typeof summary === "object" &&
+    String(summary.version || "") === APPLICATION_DIRECTORY_SUMMARY_VERSION &&
+    String(summary.directoryVersion || "") === APPLICATION_DIRECTORY_VERSION &&
+    normalizeDirectoryBrandId(summary.brandId) === brand &&
+    Number(summary.revision || 0) >= 1 &&
+    isSanitizedLoginDirectoryShape(summary.directory, brand)
+  );
+}
+
+function normalizeLoginDirectorySettingSlice(settingId = "", raw = {}) {
+  const id = normalizeText(settingId, 80);
+  if (id === "director_auth") return { key: "directors", value: normalizeDirectorDirectory(raw) };
+  if (id === "trainer_auth") return { key: "trainers", value: normalizeTrainerDirectory(raw) };
+  if (id === "manager_auth") return { key: "managers", value: normalizeManagerDirectory(raw) };
+  if (id === "store_account_data") return { key: "stores", value: normalizeStoreDirectory(raw) };
+  return null;
+}
+
+function stableDirectoryValue(value) {
+  return JSON.stringify(value ?? null);
+}
+
+async function readSanitizedLoginDirectorySources({
+  db,
+  brandId = "",
+  getBrandCollection,
+  getBrandSettingDoc,
+} = {}) {
+  const brand = normalizeDirectoryBrandId(brandId);
+  if (!db || !brand) throw new Error("invalid_directory_source_request");
+  if (typeof getBrandCollection !== "function" || typeof getBrandSettingDoc !== "function") {
+    throw new Error("missing_directory_source_resolver");
+  }
+
+  const [
+    storeAccountSnap,
+    managerAuthSnap,
+    trainerAuthSnap,
+    directorAuthSnap,
+    therapistsSnap,
+  ] = await Promise.all([
+    getBrandSettingDoc(db, brand, "store_account_data").get(),
+    getBrandSettingDoc(db, brand, "manager_auth").get(),
+    getBrandSettingDoc(db, brand, "trainer_auth").get(),
+    getBrandSettingDoc(db, brand, "director_auth").get(),
+    getBrandCollection(db, brand, "therapists").get(),
+  ]);
+
+  const therapists = [];
+  (therapistsSnap?.docs || []).forEach((docSnap) => {
+    therapists.push({
+      id: String(docSnap.id || ""),
+      data: docSnap.data?.() || {},
+    });
+  });
+
+  return {
+    directory: buildSanitizedLoginDirectory({
+      brandId: brand,
+      storeAccountData: storeAccountSnap?.exists ? (storeAccountSnap.data?.() || {}) : {},
+      managerAuth: managerAuthSnap?.exists ? (managerAuthSnap.data?.() || {}) : {},
+      trainerAuth: trainerAuthSnap?.exists ? (trainerAuthSnap.data?.() || {}) : {},
+      directorAuth: directorAuthSnap?.exists ? (directorAuthSnap.data?.() || {}) : {},
+      therapists,
+    }),
+    readCount: 4 + Math.max(1, (therapistsSnap?.docs || []).length),
+  };
+}
+
+function getLoginDirectorySummaryRef({ db, brandId = "", getBrandCollection } = {}) {
+  const brand = normalizeDirectoryBrandId(brandId);
+  if (!db || !brand || typeof getBrandCollection !== "function") {
+    throw new Error("invalid_login_directory_summary_ref");
+  }
+  return getBrandCollection(db, brand, "login_directory_summary").doc(APPLICATION_DIRECTORY_SUMMARY_DOC_ID);
+}
+
+async function applyLoginDirectorySummaryMutation({
+  db,
+  brandId = "",
+  getBrandCollection,
+  getBrandSettingDoc,
+  mutateDirectory,
+  source = "directory-source-change",
+} = {}) {
+  const brand = normalizeDirectoryBrandId(brandId);
+  if (!db || !brand || typeof db.runTransaction !== "function") {
+    throw new Error("invalid_login_directory_summary_transaction");
+  }
+  if (typeof mutateDirectory !== "function") throw new Error("missing_directory_mutator");
+
+  const summaryRef = getLoginDirectorySummaryRef({ db, brandId: brand, getBrandCollection });
+  const nowText = new Date().toISOString();
+
+  const patchExisting = async () => db.runTransaction(async (transaction) => {
+    const snap = await transaction.get(summaryRef);
+    const current = snap?.exists ? (snap.data?.() || {}) : {};
+    if (!isUsableLoginDirectorySummary(current, brand)) {
+      return { changed: false, seedRequired: true, readCount: 1 };
+    }
+
+    const nextDirectory = mutateDirectory(current.directory);
+    if (!isSanitizedLoginDirectoryShape(nextDirectory, brand)) {
+      throw new Error("invalid_login_directory_summary_mutation");
+    }
+    if (stableDirectoryValue(nextDirectory) === stableDirectoryValue(current.directory)) {
+      return { changed: false, seedRequired: false, readCount: 1, revision: Number(current.revision || 1) };
+    }
+
+    const nextRevision = Math.max(1, Number(current.revision || 1)) + 1;
+    transaction.set(summaryRef, buildLoginDirectorySummaryDocument({
+      brandId: brand,
+      directory: nextDirectory,
+      revision: nextRevision,
+      updatedAtText: nowText,
+      source,
+    }), { merge: false });
+
+    return { changed: true, seedRequired: false, readCount: 1, revision: nextRevision };
+  });
+
+  const firstAttempt = await patchExisting();
+  if (!firstAttempt.seedRequired) return firstAttempt;
+
+  // Summary 尚未建立時，只在第一次真正的登入名單變更做一次完整 seed。
+  // 這是 event-driven one-shot fallback；之後每次 visible directory mutation 都只讀 summary 1 doc。
+  const seededSource = await readSanitizedLoginDirectorySources({
+    db,
+    brandId: brand,
+    getBrandCollection,
+    getBrandSettingDoc,
+  });
+
+  const seedResult = await db.runTransaction(async (transaction) => {
+    const snap = await transaction.get(summaryRef);
+    const current = snap?.exists ? (snap.data?.() || {}) : {};
+
+    if (isUsableLoginDirectorySummary(current, brand)) {
+      const nextDirectory = mutateDirectory(current.directory);
+      if (stableDirectoryValue(nextDirectory) === stableDirectoryValue(current.directory)) {
+        return { changed: false, revision: Number(current.revision || 1) };
+      }
+      const nextRevision = Math.max(1, Number(current.revision || 1)) + 1;
+      transaction.set(summaryRef, buildLoginDirectorySummaryDocument({
+        brandId: brand,
+        directory: nextDirectory,
+        revision: nextRevision,
+        updatedAtText: nowText,
+        source,
+      }), { merge: false });
+      return { changed: true, revision: nextRevision };
+    }
+
+    const seededDirectory = mutateDirectory(seededSource.directory);
+    transaction.set(summaryRef, buildLoginDirectorySummaryDocument({
+      brandId: brand,
+      directory: seededDirectory,
+      revision: 1,
+      updatedAtText: nowText,
+      source: `${source}:seed`,
+    }), { merge: false });
+    return { changed: true, revision: 1 };
+  });
+
+  return {
+    ...seedResult,
+    seedRequired: false,
+    seeded: true,
+    // 1 summary read in first attempt + source reads + 1 summary read in seed transaction.
+    readCount: 2 + Number(seededSource.readCount || 0),
+  };
+}
+
+async function patchLoginDirectorySummaryFromSettingChange({
+  change,
+  brandId = "",
+  settingId = "",
+  db,
+  getBrandCollection,
+  getBrandSettingDoc,
+} = {}) {
+  const id = normalizeText(settingId, 80);
+  if (!LOGIN_DIRECTORY_SETTING_SLICE_MAP[id]) return { changed: false, ignored: true, readCount: 0 };
+
+  const beforeRaw = change?.before?.exists ? (change.before.data?.() || {}) : {};
+  const afterRaw = change?.after?.exists ? (change.after.data?.() || {}) : {};
+  const beforeSlice = normalizeLoginDirectorySettingSlice(id, beforeRaw);
+  const afterSlice = normalizeLoginDirectorySettingSlice(id, afterRaw);
+  if (!beforeSlice || !afterSlice) return { changed: false, ignored: true, readCount: 0 };
+
+  // 密碼重設等不影響 sanitized login directory 的變更，不讀 summary、不製造 listener reads。
+  if (stableDirectoryValue(beforeSlice.value) === stableDirectoryValue(afterSlice.value)) {
+    return { changed: false, sanitizedUnchanged: true, readCount: 0 };
+  }
+
+  return applyLoginDirectorySummaryMutation({
+    db,
+    brandId,
+    getBrandCollection,
+    getBrandSettingDoc,
+    source: `setting:${id}`,
+    mutateDirectory: (directory) => ({
+      ...directory,
+      [afterSlice.key]: afterSlice.value,
+    }),
+  });
+}
+
+async function patchLoginDirectorySummaryFromTherapistChange({
+  change,
+  brandId = "",
+  therapistId = "",
+  db,
+  getBrandCollection,
+  getBrandSettingDoc,
+} = {}) {
+  const id = normalizeAccountId(therapistId);
+  if (!id) return { changed: false, ignored: true, readCount: 0 };
+
+  const beforeRecord = change?.before?.exists
+    ? normalizeTherapistDirectoryRecord(id, change.before.data?.() || {})
+    : null;
+  const afterRecord = change?.after?.exists
+    ? normalizeTherapistDirectoryRecord(id, change.after.data?.() || {})
+    : null;
+
+  // 管理師本人改密碼或 credential-only 欄位變更不應刷新登入名單 Summary。
+  if (stableDirectoryValue(beforeRecord) === stableDirectoryValue(afterRecord)) {
+    return { changed: false, sanitizedUnchanged: true, readCount: 0 };
+  }
+
+  return applyLoginDirectorySummaryMutation({
+    db,
+    brandId,
+    getBrandCollection,
+    getBrandSettingDoc,
+    source: "therapist-master",
+    mutateDirectory: (directory) => {
+      const currentRows = Array.isArray(directory?.therapists) ? directory.therapists : [];
+      const nextRows = currentRows.filter((row) => String(row?.id || "") !== id);
+      if (afterRecord?.id && afterRecord?.name) {
+        const currentIndex = currentRows.findIndex((row) => String(row?.id || "") === id);
+        if (currentIndex >= 0) nextRows.splice(currentIndex, 0, afterRecord);
+        else nextRows.push(afterRecord);
+      }
+      return { ...directory, therapists: nextRows };
+    },
+  });
+}
+
 function createApplicationIdentityFunctions({
   onRequest,
   db,
@@ -339,36 +646,13 @@ function createApplicationIdentityFunctions({
           throw new Error("directory_brand_resolver_mismatch");
         }
 
-        const [
-          storeAccountSnap,
-          managerAuthSnap,
-          trainerAuthSnap,
-          directorAuthSnap,
-          therapistsSnap,
-        ] = await Promise.all([
-          getBrandSettingDoc(db, brandId, "store_account_data").get(),
-          getBrandSettingDoc(db, brandId, "manager_auth").get(),
-          getBrandSettingDoc(db, brandId, "trainer_auth").get(),
-          getBrandSettingDoc(db, brandId, "director_auth").get(),
-          getBrandCollection(db, brandId, "therapists").get(),
-        ]);
-
-        const therapists = [];
-        (therapistsSnap?.docs || []).forEach((docSnap) => {
-          therapists.push({
-            id: String(docSnap.id || ""),
-            data: docSnap.data?.() || {},
-          });
-        });
-
-        const directory = buildSanitizedLoginDirectory({
+        const sourceResult = await readSanitizedLoginDirectorySources({
+          db,
           brandId,
-          storeAccountData: storeAccountSnap?.exists ? (storeAccountSnap.data?.() || {}) : {},
-          managerAuth: managerAuthSnap?.exists ? (managerAuthSnap.data?.() || {}) : {},
-          trainerAuth: trainerAuthSnap?.exists ? (trainerAuthSnap.data?.() || {}) : {},
-          directorAuth: directorAuthSnap?.exists ? (directorAuthSnap.data?.() || {}) : {},
-          therapists,
+          getBrandCollection,
+          getBrandSettingDoc,
         });
+        const directory = sourceResult.directory;
 
         if (typeof res.set === "function") {
           res.set("Cache-Control", "private, no-store");
@@ -377,13 +661,8 @@ function createApplicationIdentityFunctions({
         return res.status(200).json({
           ok: true,
           directory,
-          counts: {
-            directors: directory.directors.length,
-            trainers: directory.trainers.length,
-            managers: directory.managers.length,
-            stores: directory.stores.length,
-            therapists: directory.therapists.length,
-          },
+          counts: getLoginDirectoryCounts(directory),
+          readCount: Number(sourceResult.readCount || 0),
         });
       } catch (error) {
         console.error("getApplicationLoginDirectory failed", error);
@@ -401,12 +680,22 @@ function createApplicationIdentityFunctions({
 module.exports = {
   APPLICATION_IDENTITY_VERSION,
   APPLICATION_DIRECTORY_VERSION,
+  APPLICATION_DIRECTORY_SUMMARY_VERSION,
+  APPLICATION_DIRECTORY_SUMMARY_DOC_ID,
   LOGIN_DIRECTORY_RUNTIME_SERVICE_ACCOUNT,
   APPLICATION_DIRECTORY_BRANDS,
   normalizeDirectoryBrandId,
   buildApplicationIdentityUid,
   buildVerifiedApplicationIdentity,
   buildSanitizedLoginDirectory,
+  getLoginDirectoryCounts,
+  isSanitizedLoginDirectoryShape,
+  buildLoginDirectorySummaryDocument,
+  isUsableLoginDirectorySummary,
+  normalizeLoginDirectorySettingSlice,
+  readSanitizedLoginDirectorySources,
+  patchLoginDirectorySummaryFromSettingChange,
+  patchLoginDirectorySummaryFromTherapistChange,
   normalizeDirectorDirectory,
   normalizeTrainerDirectory,
   normalizeManagerDirectory,

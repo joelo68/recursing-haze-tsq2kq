@@ -181,6 +181,18 @@ service cloud.firestore {
       allow write: if false;
     }
 
+    // Login Directory Summary v1：僅保存 sanitized 登入名單，不含 password / secret / token。
+    // Browser 只讀；所有更新由 Backend Firestore triggers 維護。
+    match /brands/{brandId}/login_directory_summary/{document=**} {
+      allow read: if signedIn();
+      allow write: if false;
+    }
+
+    match /artifacts/{appId}/public/data/login_directory_summary/{document=**} {
+      allow read: if signedIn();
+      allow write: if false;
+    }
+
     match /artifacts/{appId}/public/data/global_blocked_devices/{document=**} {
       allow read, write: if false;
     }
@@ -296,6 +308,7 @@ service cloud.firestore {
         && collectionName != 'login_security_state'
         && collectionName != 'therapist_credentials'
         && collectionName != 'therapists'
+        && collectionName != 'login_directory_summary'
         && collectionName != 'store_lifecycle'
         && collectionName != 'projection_models'
         && collectionName != 'projection_accuracy'
@@ -318,6 +331,7 @@ service cloud.firestore {
         && collectionName != 'login_security_state'
         && collectionName != 'therapist_credentials'
         && collectionName != 'therapists'
+        && collectionName != 'login_directory_summary'
         && collectionName != 'global_blocked_devices'
         && collectionName != 'store_lifecycle'
         && collectionName != 'projection_models'

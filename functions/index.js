@@ -86,7 +86,12 @@ exports.updateTelegramSecurityAlertConfig = deviceApprovalFunctions.updateTelegr
 // 只新增 sanitized login directory + future Custom Token identity authority。
 // Frontend 尚未 cutover；不改 Rules、不改既有登入決策、不新增 listener/polling。
 // ==========================================
-const { createApplicationIdentityFunctions } = require("./applicationIdentity");
+const {
+  createApplicationIdentityFunctions,
+  normalizeDirectoryBrandId,
+  patchLoginDirectorySummaryFromSettingChange,
+  patchLoginDirectorySummaryFromTherapistChange,
+} = require("./applicationIdentity");
 const applicationIdentityFunctions = createApplicationIdentityFunctions({
   onRequest,
   db,
@@ -9977,6 +9982,65 @@ exports.onManagerAuthChange = functions.firestore.document("brands/{brandId}/set
      if (diff === 0) return null;
      return db.collection("public_info").doc("stats").set({ totalUsers: admin.firestore.FieldValue.increment(diff) }, { merge: true });
 });
+
+
+// ==========================================
+// ★ B1C2E-2 Login Directory Freshness
+// 僅在登入名單「可見欄位」真的變更時更新單一 summary doc。
+// 密碼重設／secret-only change 不讀 summary、不寫 summary；無 polling、無 collection listener。
+// Login screen consumer 只監聽 login_directory_summary/current，已登入營運頁不常駐此 listener。
+// ==========================================
+exports.onLegacyLoginDirectoryTherapistChange = functions.firestore
+  .document("artifacts/{appId}/public/data/therapists/{id}")
+  .onWrite(async (change, context) => patchLoginDirectorySummaryFromTherapistChange({
+    change,
+    brandId: "cyj",
+    therapistId: context.params.id,
+    db,
+    getBrandCollection: getDeviceSecurityBrandCollection,
+    getBrandSettingDoc: getDeviceSecurityBrandSettingDoc,
+  }));
+
+exports.onBrandLoginDirectoryTherapistChange = functions.firestore
+  .document("brands/{brandId}/therapists/{id}")
+  .onWrite(async (change, context) => {
+    const brandId = normalizeDirectoryBrandId(context.params.brandId);
+    if (!brandId) return null;
+    return patchLoginDirectorySummaryFromTherapistChange({
+      change,
+      brandId,
+      therapistId: context.params.id,
+      db,
+      getBrandCollection: getDeviceSecurityBrandCollection,
+      getBrandSettingDoc: getDeviceSecurityBrandSettingDoc,
+    });
+  });
+
+exports.onLegacyLoginDirectorySettingChange = functions.firestore
+  .document("artifacts/{appId}/public/data/global_settings/{settingId}")
+  .onWrite(async (change, context) => patchLoginDirectorySummaryFromSettingChange({
+    change,
+    brandId: "cyj",
+    settingId: context.params.settingId,
+    db,
+    getBrandCollection: getDeviceSecurityBrandCollection,
+    getBrandSettingDoc: getDeviceSecurityBrandSettingDoc,
+  }));
+
+exports.onBrandLoginDirectorySettingChange = functions.firestore
+  .document("brands/{brandId}/settings/{settingId}")
+  .onWrite(async (change, context) => {
+    const brandId = normalizeDirectoryBrandId(context.params.brandId);
+    if (!brandId) return null;
+    return patchLoginDirectorySummaryFromSettingChange({
+      change,
+      brandId,
+      settingId: context.params.settingId,
+      db,
+      getBrandCollection: getDeviceSecurityBrandCollection,
+      getBrandSettingDoc: getDeviceSecurityBrandSettingDoc,
+    });
+  });
 
 // ==========================================
 // ★ 6. 終極盤點機

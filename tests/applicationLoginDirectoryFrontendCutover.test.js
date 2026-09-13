@@ -25,7 +25,7 @@ test("B1C2C1 normal bootstrap uses sanitized directory instead of raw credential
   assert.match(app, /LOGIN_DIRECTORY_ENDPOINT\s*=\s*"https:\/\/us-central1-cyjsituation-analysis\.cloudfunctions\.net\/getApplicationLoginDirectory"/);
   assert.match(app, /callDeviceSecurityEndpoint\(LOGIN_DIRECTORY_ENDPOINT, \{ brandId: brandIdAtStart \}\)/);
   assert.match(app, /assertSanitizedLoginDirectory\(directoryResult\.directory, brandIdAtStart\)/);
-  assert.match(app, /setLoginDirectory\(nextLoginDirectory\)/);
+  assert.match(app, /publishSanitizedLoginDirectory\(nextLoginDirectory, brandIdAtStart\)/);
 
   const bootstrap = sliceBetween(app, "const fetchGlobalData", "const unsubReadTrackerConfig");
   for (const sourceName of ["store_account_data", "manager_auth", "trainer_auth", "director_auth", "master_auth"]) {

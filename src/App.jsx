@@ -173,6 +173,7 @@ const BRANDS = [
 ];
 
 const APPLICATION_LOGIN_DIRECTORY_VERSION = "application-login-directory-v1";
+const APPLICATION_LOGIN_DIRECTORY_SUMMARY_VERSION = "application-login-directory-summary-v1";
 const EMPTY_LOGIN_DIRECTORY = Object.freeze({
   version: APPLICATION_LOGIN_DIRECTORY_VERSION,
   brandId: "",
@@ -215,6 +216,25 @@ const assertSanitizedLoginDirectory = (directory, expectedBrandId) => {
   };
   scan(directory);
   return directory;
+};
+
+const assertSanitizedLoginDirectorySummary = (summary, expectedBrandId) => {
+  if (!summary || typeof summary !== "object" || Array.isArray(summary)) {
+    throw new Error("登入名單同步格式不正確");
+  }
+  if (String(summary.version || "") !== APPLICATION_LOGIN_DIRECTORY_SUMMARY_VERSION) {
+    throw new Error("登入名單同步版本不相容");
+  }
+  if (String(summary.brandId || "").trim().toLowerCase() !== String(expectedBrandId || "").trim().toLowerCase()) {
+    throw new Error("登入名單同步品牌不一致");
+  }
+  const revision = Math.max(0, Number(summary.revision || 0));
+  if (revision < 1) throw new Error("登入名單同步版本尚未就緒");
+  return {
+    directory: assertSanitizedLoginDirectory(summary.directory, expectedBrandId),
+    revision,
+    updatedAtText: String(summary.updatedAtText || ""),
+  };
 };
 
 const DEFAULT_SECURITY_CONFIG = {
@@ -1506,6 +1526,7 @@ export default function App() {
   const accountDirectoryStateRef = useRef(accountDirectoryState);
   const accountDirectoryRequestRef = useRef(0);
   const accountDirectoryInFlightRef = useRef(false);
+  const accountDirectorySummaryRevisionRef = useRef({ brandId: "", revision: 0 });
 
   const updateAccountDirectoryState = useCallback((updater) => {
     setAccountDirectoryState((previous) => {
@@ -2269,6 +2290,32 @@ export default function App() {
       return core.replace(/店$/, '').trim();
   }, []);
 
+  const publishSanitizedLoginDirectory = useCallback((directory, expectedBrandId) => {
+    const nextLoginDirectory = assertSanitizedLoginDirectory(directory, expectedBrandId);
+    const nextStoreAccounts = nextLoginDirectory.stores.map((account) => ({ ...account }));
+    const nextTherapists = nextLoginDirectory.therapists.map((data) => {
+      const storeName = data.store || data.storeName || data.primaryStore || (Array.isArray(data.stores) ? data.stores[0] : "");
+      const managerName = data.manager || data.managerName || data.region || data.area || "";
+      return {
+        ...data,
+        id: String(data.id || ""),
+        store: storeName,
+        storeName: data.storeName || storeName,
+        manager: managerName,
+        managerName: data.managerName || managerName,
+        normalizedStoreCore: normalizeStore(storeName),
+      };
+    });
+
+    setLoginDirectory(nextLoginDirectory);
+    setStoreAccounts(nextStoreAccounts);
+    setTherapists(nextTherapists);
+    setManagerAuth({});
+    setTrainerAuth({ accounts: {}, trainerOrder: [] });
+    setDirectorAuth({});
+    return nextLoginDirectory;
+  }, [normalizeStore]);
+
   useEffect(() => {
     const initAuth = async () => {
       try {
@@ -2306,6 +2353,10 @@ export default function App() {
     } = options || {};
 
     const brandIdAtStart = currentBrand.id;
+    const summaryRevisionAtStart =
+      accountDirectorySummaryRevisionRef.current.brandId === brandIdAtStart
+        ? Number(accountDirectorySummaryRevisionRef.current.revision || 0)
+        : 0;
     const previousDirectoryState = accountDirectoryStateRef.current || {};
     const hasPublishedDirectory =
       previousDirectoryState.brandId === brandIdAtStart &&
@@ -2414,7 +2465,7 @@ export default function App() {
 
           trackReadSource(
             "login_directory_backend_estimated",
-            4 + Math.max(1, nextLoginDirectory.therapists.length),
+            Math.max(0, Number(directoryResult.readCount ?? (4 + nextLoginDirectory.therapists.length))),
             getStableReadMeta("login_directory_backend_estimated")
           );
 
@@ -2434,30 +2485,17 @@ export default function App() {
             nextManagerOrder = normalizeManagerOrder(nextManagers);
           }
 
-          const nextStoreAccounts = nextLoginDirectory.stores.map((account) => ({ ...account }));
-          const nextTherapists = nextLoginDirectory.therapists.map((data) => {
-            const storeName = data.store || data.storeName || data.primaryStore || (Array.isArray(data.stores) ? data.stores[0] : "");
-            const managerName = data.manager || data.managerName || data.region || data.area || "";
-            return {
-              ...data,
-              id: String(data.id || ""),
-              store: storeName,
-              storeName: data.storeName || storeName,
-              manager: managerName,
-              managerName: data.managerName || managerName,
-              normalizedStoreCore: normalizeStore(storeName),
-            };
-          });
-
-          // 必要來源全部完成後才一次發布；React state 中只保留 sanitized login directory。
+          // 必要來源全部完成後才一次發布。若登入畫面的 summary listener 在本次
+          // bootstrap 期間收到更高 revision，保留較新的跨裝置名單，避免慢到的舊 request 覆蓋。
           setManagers(nextManagers);
           setManagerOrder(nextManagerOrder);
-          setLoginDirectory(nextLoginDirectory);
-          setStoreAccounts(nextStoreAccounts);
-          setTherapists(nextTherapists);
-          setManagerAuth({});
-          setTrainerAuth({ accounts: {}, trainerOrder: [] });
-          setDirectorAuth({});
+          const liveSummaryRevision = accountDirectorySummaryRevisionRef.current;
+          const summaryIsNewer =
+            liveSummaryRevision.brandId === brandIdAtStart &&
+            Number(liveSummaryRevision.revision || 0) > summaryRevisionAtStart;
+          if (!summaryIsNewer) {
+            publishSanitizedLoginDirectory(nextLoginDirectory, brandIdAtStart);
+          }
 
           if (delegationResult?.status === "fulfilled") {
             setDelegations(delegationResult.value.docs.map((documentSnapshot) => ({
@@ -2549,8 +2587,81 @@ export default function App() {
     getCollectionPath,
     getStableReadMeta,
     normalizeStore,
+    publishSanitizedLoginDirectory,
     updateAccountDirectoryState,
     callDeviceSecurityEndpoint,
+  ]);
+
+  // B1C2E-2：只有登入畫面監聽 1 份 sanitized directory summary。
+  // 已登入營運頁不常駐此 listener；無 polling、無 therapists collection listener。
+  // Reads：登入畫面初始約 1 doc；之後只有可見登入名單真的變更時 +1 doc。
+  useEffect(() => {
+    const brandId = String(currentBrandId || "").trim().toLowerCase();
+    const shouldWatchLoginDirectory = Boolean(user && hasSelectedBrand && !userRole && !pendingDeviceLogin && brandId);
+    if (!shouldWatchLoginDirectory) return undefined;
+
+    const summaryRef = doc(getCollectionPath("login_directory_summary"), "current");
+    const unsubscribe = onSnapshot(
+      summaryRef,
+      (snap) => {
+        trackReadSource(
+          "login_directory_summary_login_screen",
+          snap.exists() ? 1 : 0,
+          getStableReadMeta("login_directory_summary_login_screen")
+        );
+        if (!snap.exists()) return;
+
+        try {
+          const summary = assertSanitizedLoginDirectorySummary(snap.data() || {}, brandId);
+          const previousRevision = accountDirectorySummaryRevisionRef.current;
+          if (
+            previousRevision.brandId === brandId &&
+            Number(previousRevision.revision || 0) > summary.revision
+          ) {
+            return;
+          }
+
+          accountDirectorySummaryRevisionRef.current = {
+            brandId,
+            revision: summary.revision,
+          };
+          publishSanitizedLoginDirectory(summary.directory, brandId);
+
+          updateAccountDirectoryState((previous) => {
+            const bootstrapStillRunning =
+              accountDirectoryInFlightRef.current &&
+              previous.brandId === brandId &&
+              ["loading", "refreshing"].includes(previous.status);
+            return {
+              ...previous,
+              status: bootstrapStillRunning ? previous.status : "ready",
+              brandId,
+              reason: "directory-summary-live",
+              error: "",
+              updatedAtText: summary.updatedAtText || new Date().toISOString(),
+            };
+          });
+        } catch (error) {
+          // Summary 尚未 seed／版本不相容時沿用既有 Backend directory；不做大型 fallback read。
+          console.warn("登入名單即時同步暫不可用，沿用目前名單:", error?.message || error);
+        }
+      },
+      (error) => {
+        console.warn("登入名單即時同步失敗，沿用目前名單:", error);
+      }
+    );
+
+    return () => unsubscribe();
+  }, [
+    user,
+    userRole,
+    pendingDeviceLogin,
+    hasSelectedBrand,
+    currentBrandId,
+    getCollectionPath,
+    getStableReadMeta,
+    publishSanitizedLoginDirectory,
+    updateAccountDirectoryState,
   ]);
 
   useEffect(() => {
@@ -2871,6 +2982,7 @@ export default function App() {
     // 切換品牌時取消上一品牌尚未完成的請求，避免舊資料晚到後覆蓋新品牌。
     accountDirectoryRequestRef.current += 1;
     accountDirectoryInFlightRef.current = false;
+    accountDirectorySummaryRevisionRef.current = { brandId: currentBrandId, revision: 0 };
 
     setManagers({});
     setManagerOrder([]);
