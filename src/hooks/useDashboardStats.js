@@ -897,6 +897,30 @@ export function useDashboardStats() {
     return () => { cancelled = true; };
   }, [getCollectionPath, selectedYearMonth, isSelectedCurrentMonth, brandInfo?.id]);
 
+  // B1C2E-1：把「authority 還在載入」與「authority 已完成但模型不可用」分開。
+  // 只有前者需要暫停公布推估；後者仍沿用既有 current-pace fallback 契約。
+  const projectionPresentationReady = useMemo(() => {
+    if (!isSelectedCurrentMonth) return true;
+
+    const brandId = String(brandInfo?.id || "").toLowerCase();
+    const modelAnchored = projectionModelState?.ready === true
+      && String(projectionModelState?.brandId || "").toLowerCase() === brandId
+      && String(projectionModelState?.modelMonth || "") === selectedYearMonth;
+    const lifecycleResolved = currentLifecycleMasterState?.ready === true
+      && String(currentLifecycleMasterState?.brandId || "").toLowerCase() === brandId;
+    const exclusionResolved = systemExclusionState?.ready === true
+      && String(systemExclusionState?.brandId || "").toLowerCase() === brandId;
+
+    return Boolean(brandId && modelAnchored && lifecycleResolved && exclusionResolved);
+  }, [
+    isSelectedCurrentMonth,
+    brandInfo?.id,
+    selectedYearMonth,
+    projectionModelState,
+    currentLifecycleMasterState,
+    systemExclusionState,
+  ]);
+
   const projectionLifecycleMaster = useMemo(() => {
     const brandId = String(brandInfo?.id || "").toLowerCase();
     const lifecycleBrandId = String(currentLifecycleMasterState?.brandId || "").toLowerCase();
@@ -1886,6 +1910,7 @@ export function useDashboardStats() {
     const accrualProjection = projectionResult.accrualProjection;
     const projectionRange = {
       ...projectionResult.projectionRange,
+      presentationReady: projectionPresentationReady,
       modelTrust: {
         trusted: projectionModelTrust.trusted === true,
         reason: projectionModelTrust.reason || "",
@@ -1908,12 +1933,12 @@ export function useDashboardStats() {
 
     const activeCashAvailable = isFiniteKpiNumber(activeDetailScope.cash);
     const activeAccrualAvailable = isFiniteKpiNumber(activeDetailScope.accrual);
-    const activeProjection = activeCashAvailable ? projection : null;
-    const activeAccrualProjection = activeAccrualAvailable ? accrualProjection : null;
+    const activeProjection = activeCashAvailable && projectionPresentationReady ? projection : null;
+    const activeAccrualProjection = activeAccrualAvailable && projectionPresentationReady ? accrualProjection : null;
     const activeProjectionRange = {
       ...projectionRange,
-      cash: activeCashAvailable ? projectionRange.cash : null,
-      accrual: activeAccrualAvailable ? projectionRange.accrual : null,
+      cash: activeCashAvailable && projectionPresentationReady ? projectionRange.cash : null,
+      accrual: activeAccrualAvailable && projectionPresentationReady ? projectionRange.accrual : null,
     };
 
     return {
@@ -1981,7 +2006,7 @@ export function useDashboardStats() {
       },
     };
   // ★ 監視清單換成了包含全部小抄的字典
-  }, [allReports, selectedYear, selectedMonth, selectedYearMonth, effectiveStores, brandPrefix, brandInfo?.id, cleanName, currentDetailFormalScope, currentDetailFormalAuthority, monthlyTargetSummary, storeSelfViewActive, storeSelfViewProfile.scopeStoreKeys, projectionLifecycleEntryMap, projectionModelTrust, projectionModelState.data]);
+  }, [allReports, selectedYear, selectedMonth, selectedYearMonth, effectiveStores, brandPrefix, brandInfo?.id, cleanName, currentDetailFormalScope, currentDetailFormalAuthority, monthlyTargetSummary, storeSelfViewActive, storeSelfViewProfile.scopeStoreKeys, projectionLifecycleEntryMap, projectionModelTrust, projectionModelState.data, projectionPresentationReady]);
 
   const detailMyStoreRankings = useMemo(() => {
     if (!currentDetailFormalAuthority?.compatible) return [];

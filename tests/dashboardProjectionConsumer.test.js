@@ -297,6 +297,7 @@ test("Dashboard wiring uses one projection_models/current point read and retires
   const hook = read("src/hooks/useDashboardStats.js");
   const app = read("src/App.jsx");
   const dashboardView = read("src/components/DashboardView.jsx");
+  const storePerformanceView = read("src/components/StorePerformanceView.jsx");
 
   assert.match(hook, /doc\(getCollectionPath\("projection_models"\), PROJECTION_MODEL_DOC_ID\)/);
   assert.match(hook, /await getDoc\(modelRef\)/);
@@ -317,4 +318,11 @@ test("Dashboard wiring uses one projection_models/current point read and retires
   assert.doesNotMatch(app, /\bstoreList\b/);
   assert.equal(fs.existsSync(path.join(root, "src/hooks/useAnalytics.js")), false);
   assert.doesNotMatch(dashboardView, /\banalytics\b/);
+
+  // B1C2E-1: loading is not a legitimate current-pace fallback.
+  assert.match(hook, /const projectionPresentationReady = useMemo/);
+  assert.match(hook, /presentationReady:\s*projectionPresentationReady/);
+  assert.match(hook, /activeCashAvailable && projectionPresentationReady/);
+  assert.match(storePerformanceView, /projectionRange\.presentationReady !== false/);
+  assert.match(storePerformanceView, /推估資料同步中/);
 });

@@ -4,7 +4,7 @@ import {
   ComposedChart, Line, Bar, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer,
   Area
 } from "recharts";
-import { Target, TrendingUp, DollarSign, Activity, Calendar, Award, Filter, ArrowRight, Settings, X, Ban, CheckCircle, Save } from "lucide-react";
+import { Target, TrendingUp, DollarSign, Activity, Calendar, Award, Filter, ArrowRight, Settings, X, Ban, CheckCircle, Save, Loader2 } from "lucide-react";
 
 import { getDoc, doc } from "firebase/firestore";
 import { AppContext } from "../AppContext";
@@ -215,6 +215,11 @@ const AnnualView = () => {
   const annualSummaryTrustError = Boolean(
     annualSummaryLoadState?.dashboardError || annualSummaryLoadState?.flagsError
   );
+
+  // B1C2E-1：年度分析只有在 Summary / 排除設定 / Lifecycle / 年度目標摘要
+  // 都完成目前品牌與年份的 readiness 後才發布數字。資料尚在同步時保留載入狀態，
+  // 不把暫時空集合誤呈現成「年度沒有資料」。
+  const annualPresentationReady = annualSummaryTrustReady && annualTargetSummariesLoaded;
 
   const cleanName = useMemo(() => (name) => {
     if (!name) return "";
@@ -967,6 +972,18 @@ const annualData = useMemo(() => {
       ? Math.max(0, Math.min(Number(value), 100))
       : 0
   );
+
+  if (!annualPresentationReady) {
+    return (
+      <ViewWrapper>
+        <div className="flex min-h-[52vh] flex-col items-center justify-center px-6 text-center animate-in fade-in duration-300">
+          <Loader2 className="mb-4 h-11 w-11 animate-spin text-amber-400" />
+          <p className="text-sm font-black tracking-wide text-stone-600">正在整理年度分析資料…</p>
+          <p className="mt-2 max-w-md text-xs font-bold leading-5 text-stone-400">完成後會自動顯示最新年度數據，不需要重複切換頁面。</p>
+        </div>
+      </ViewWrapper>
+    );
+  }
 
   return (
     <ViewWrapper>

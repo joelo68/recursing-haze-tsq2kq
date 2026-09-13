@@ -1,7 +1,7 @@
 // src/components/StorePerformanceView.jsx
 import React, { useContext, useEffect, useState } from "react";
 import { XAxis, YAxis, CartesianGrid, Tooltip as RechartsTooltip, ResponsiveContainer, Line, ComposedChart, Area } from "recharts";
-import { AlertTriangle, Trophy, Medal, Star, Activity, Target, DollarSign, CreditCard, ShoppingBag, Users, TrendingUp, Sparkles, CheckSquare, Award, PieChart, Crown, Map as MapIcon, Flame, Info, X } from "lucide-react";
+import { AlertTriangle, Trophy, Medal, Star, Activity, Target, DollarSign, CreditCard, ShoppingBag, Users, TrendingUp, Sparkles, CheckSquare, Award, PieChart, Crown, Map as MapIcon, Flame, Info, X, Loader2 } from "lucide-react";
 import { AppContext } from "../AppContext";
 import { Card } from "./SharedUI";
 import {
@@ -266,8 +266,11 @@ const StorePerformanceView = ({ dashboardStats, myStoreRankings, brandInfo }) =>
   };
 
   const projectionRange = storeGrandTotal.projectionRange || {};
+  const projectionPresentationReady = projectionRange.presentationReady !== false;
   const projectionProfile = projectionRange.profile || null;
-  const projectionWeightText = projectionProfile
+  const projectionWeightText = !projectionPresentationReady
+    ? "推估資料同步中"
+    : projectionProfile
     ? `${projectionProfile.label || "標準推估"}｜本月 ${Math.round((projectionProfile.currentWeight || 0) * 100)}% / 歷史節奏 ${Math.round((projectionProfile.historyWeight || 0) * 100)}%`
     : "依本月營運表現與歷史節奏推估";
 
@@ -308,7 +311,13 @@ const StorePerformanceView = ({ dashboardStats, myStoreRankings, brandInfo }) =>
           </div>
         </div>
 
-        {range ? (
+        {!projectionPresentationReady ? (
+          <div className="flex min-h-[132px] flex-col items-center justify-center rounded-2xl border border-stone-100 bg-stone-50/70 px-4 py-5 text-center">
+            <Loader2 className="mb-2 h-5 w-5 animate-spin text-stone-300" />
+            <p className="text-xs font-black text-stone-500">推估資料同步中</p>
+            <p className="mt-1 text-[11px] font-bold text-stone-400">完成後會自動更新低位、主推估與高位情境。</p>
+          </div>
+        ) : range ? (
           <div className="grid grid-cols-1 gap-2.5 sm:grid-cols-3">
             <ProjectionScenarioColumn title="低位推估" value={range.conservative} desc="若後續業績進展低於目前主要推估節奏，月底可能接近此較低落點。" tone={tone} />
             <ProjectionScenarioColumn title="主推估" value={range.standard} desc="依目前已回報業績與歷史營運節奏，推算的主要月底落點。" active tone={tone} />
@@ -540,18 +549,18 @@ const StorePerformanceView = ({ dashboardStats, myStoreRankings, brandInfo }) =>
                   </div>
                 </div>
                 <h3 className="text-3xl font-extrabold text-stone-700 font-mono tracking-tight mb-3">
-                  {formatKpiMoney(storeGrandTotal.projection)}
+                  {projectionPresentationReady ? formatKpiMoney(storeGrandTotal.projection) : "同步中"}
                 </h3>
                 <div className="flex flex-wrap gap-2 mb-3">
                   <div className="inline-flex items-center gap-1 px-2 py-1 bg-emerald-50 text-emerald-700 rounded-md text-[11px] font-bold border border-emerald-100">
                     <span>{storeGrandTotal.hasChallengeCash ? '預算達成' : '預估達成'}</span>
-                    <span>{formatProjectionTargetRate(storeGrandTotal.projection, storeGrandTotal.budget)}</span>
+                    <span>{projectionPresentationReady ? formatProjectionTargetRate(storeGrandTotal.projection, storeGrandTotal.budget) : "—"}</span>
                   </div>
                   {storeGrandTotal.hasChallengeCash && (
                     <div className="inline-flex items-center gap-1 px-2 py-1 bg-amber-50 text-amber-700 rounded-md text-[11px] font-bold border border-amber-100 shadow-sm">
                       <Star size={10} className="fill-amber-500 text-amber-500" />
                       <span>挑戰達成</span>
-                      <span>{formatProjectionTargetRate(storeGrandTotal.projection, storeGrandTotal.challengeBudget)}</span>
+                      <span>{projectionPresentationReady ? formatProjectionTargetRate(storeGrandTotal.projection, storeGrandTotal.challengeBudget) : "—"}</span>
                     </div>
                   )}
                 </div>
@@ -576,18 +585,18 @@ const StorePerformanceView = ({ dashboardStats, myStoreRankings, brandInfo }) =>
                   </div>
                 </div>
                 <h3 className="text-3xl font-extrabold text-stone-700 font-mono tracking-tight mb-3">
-                  {formatKpiMoney(storeGrandTotal.accrualProjection)}
+                  {projectionPresentationReady ? formatKpiMoney(storeGrandTotal.accrualProjection) : "同步中"}
                 </h3>
                 <div className="flex flex-wrap gap-2 mb-3">
                   <div className="inline-flex items-center gap-1 px-2 py-1 bg-emerald-50 text-emerald-700 rounded-md text-[11px] font-bold border border-emerald-100">
                     <span>{storeGrandTotal.hasChallengeAccrual ? '預算達成' : '預估達成'}</span>
-                    <span>{formatProjectionTargetRate(storeGrandTotal.accrualProjection, storeGrandTotal.accrualBudget)}</span>
+                    <span>{projectionPresentationReady ? formatProjectionTargetRate(storeGrandTotal.accrualProjection, storeGrandTotal.accrualBudget) : "—"}</span>
                   </div>
                   {storeGrandTotal.hasChallengeAccrual && (
                     <div className="inline-flex items-center gap-1 px-2 py-1 bg-amber-50 text-amber-700 rounded-md text-[11px] font-bold border border-amber-100 shadow-sm">
                       <Star size={10} className="fill-amber-500 text-amber-500" />
                       <span>挑戰達成</span>
-                      <span>{formatProjectionTargetRate(storeGrandTotal.accrualProjection, storeGrandTotal.challengeAccrualBudget)}</span>
+                      <span>{projectionPresentationReady ? formatProjectionTargetRate(storeGrandTotal.accrualProjection, storeGrandTotal.challengeAccrualBudget) : "—"}</span>
                     </div>
                   )}
                 </div>

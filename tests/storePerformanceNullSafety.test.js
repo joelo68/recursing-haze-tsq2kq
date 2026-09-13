@@ -40,9 +40,25 @@ test("StorePerformanceView keeps nullable challenge projections as N/A instead o
   );
 });
 
-test("StorePerformanceView keeps Formal projection null as no-data wording while preserving a real zero", () => {
-  assert.match(source, /\{formatKpiMoney\(storeGrandTotal\.projection\)\}/);
-  assert.match(source, /\{formatKpiMoney\(storeGrandTotal\.accrualProjection\)\}/);
+test("StorePerformanceView keeps Formal projection null-safe and suppresses transient values until Projection readiness", () => {
+  assert.match(source, /const projectionPresentationReady = projectionRange\.presentationReady !== false;/);
+  assert.match(
+    source,
+    /\{projectionPresentationReady \? formatKpiMoney\(storeGrandTotal\.projection\) : "同步中"\}/
+  );
+  assert.match(
+    source,
+    /\{projectionPresentationReady \? formatKpiMoney\(storeGrandTotal\.accrualProjection\) : "同步中"\}/
+  );
+  assert.match(
+    source,
+    /\{projectionPresentationReady \? formatProjectionTargetRate\(storeGrandTotal\.projection, storeGrandTotal\.budget\) : "—"\}/
+  );
+  assert.match(
+    source,
+    /\{projectionPresentationReady \? formatProjectionTargetRate\(storeGrandTotal\.accrualProjection, storeGrandTotal\.accrualBudget\) : "—"\}/
+  );
+  assert.match(source, /!projectionPresentationReady[\s\S]*?推估資料同步中/);
   assert.doesNotMatch(source, /\{fmtMoney\(storeGrandTotal\.projection\)\}/);
   assert.doesNotMatch(source, /\{fmtMoney\(storeGrandTotal\.accrualProjection\)\}/);
   assert.match(source, /const formatProjectionValue = \(value\) => \{\s*if \(!isFiniteKpi\(value\)\) return "尚無資料";\s*return fmtMoney\(value\);/);
