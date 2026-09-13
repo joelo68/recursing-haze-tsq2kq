@@ -169,6 +169,18 @@ service cloud.firestore {
       allow read, write: if false;
     }
 
+    // Therapist Master v1：人員主檔可供已登入畫面讀取，但 Browser 不得直接修改。
+    // 新增／修改／封存／還原／刪除一律經 manageTherapistMaster Backend authority。
+    match /brands/{brandId}/therapists/{document=**} {
+      allow read: if signedIn();
+      allow write: if false;
+    }
+
+    match /artifacts/{appId}/public/data/therapists/{document=**} {
+      allow read: if signedIn();
+      allow write: if false;
+    }
+
     match /artifacts/{appId}/public/data/global_blocked_devices/{document=**} {
       allow read, write: if false;
     }
@@ -283,6 +295,7 @@ service cloud.firestore {
         && collectionName != 'security_summary'
         && collectionName != 'login_security_state'
         && collectionName != 'therapist_credentials'
+        && collectionName != 'therapists'
         && collectionName != 'store_lifecycle'
         && collectionName != 'projection_models'
         && collectionName != 'projection_accuracy'
@@ -304,6 +317,7 @@ service cloud.firestore {
         && collectionName != 'security_summary'
         && collectionName != 'login_security_state'
         && collectionName != 'therapist_credentials'
+        && collectionName != 'therapists'
         && collectionName != 'global_blocked_devices'
         && collectionName != 'store_lifecycle'
         && collectionName != 'projection_models'
