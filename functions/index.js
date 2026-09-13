@@ -201,6 +201,7 @@ const therapistMasterAuthorityFunctions = createTherapistMasterAuthorityFunction
   normalizeStoreCore: normalizeStoreLifecycleCore,
   getInitialPasswordsForRole,
   serverTimestamp: () => admin.firestore.FieldValue.serverTimestamp(),
+  deleteField: () => admin.firestore.FieldValue.delete(),
 });
 exports.manageTherapistMaster = therapistMasterAuthorityFunctions.manageTherapistMaster;
 

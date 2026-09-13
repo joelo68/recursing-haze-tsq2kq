@@ -152,6 +152,38 @@ test("B1C2E-2 therapist credential-only changes create zero summary reads", asyn
   assert.equal(env.state.summaryWrites, 0);
 });
 
+test("therapist credential storage migration creates zero login-directory summary reads and writes", async () => {
+  const env = makeSummaryEnv();
+  const before = {
+    name: "王小美",
+    store: "台北店",
+    manager: "北區",
+    password: "legacy-secret",
+    credentialStorageMode: "embedded_legacy",
+  };
+  const after = {
+    name: "王小美",
+    store: "台北店",
+    manager: "北區",
+    credentialStorageMode: "separated_v1",
+    credentialMigratedAtText: "2026-09-13T14:30:00.000Z",
+  };
+  const result = await patchLoginDirectorySummaryFromTherapistChange({
+    change: changeSnap(before, after),
+    brandId: "cyj",
+    therapistId: "t1",
+    db: env.db,
+    getBrandCollection: env.getBrandCollection,
+    getBrandSettingDoc: env.getBrandSettingDoc,
+  });
+
+  assert.equal(result.changed, false);
+  assert.equal(result.sanitizedUnchanged, true);
+  assert.equal(result.readCount, 0);
+  assert.equal(env.state.transactionReads, 0);
+  assert.equal(env.state.summaryWrites, 0);
+});
+
 test("B1C2E-2 first visible mutation seeds one complete brand summary, then later mutations are one-summary-read only", async () => {
   const settings = {
     store_account_data: { accounts: [{ id: "s1", name: "店經理", password: "secret", stores: ["台北店"] }] },

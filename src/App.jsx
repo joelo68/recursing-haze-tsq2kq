@@ -4291,6 +4291,7 @@ export default function App() {
       ? normalizeTherapistMasterRow({
           ...result.therapist,
           masterSignature: result.masterSignature || "",
+          credentialStorageMode: String(result.credentialStorageMode || ""),
         })
       : null;
 
@@ -4323,6 +4324,7 @@ export default function App() {
     expectedMasterSignature = "",
     payload = {},
     confirmPermanentDelete = false,
+    confirmCredentialMigration = false,
   } = {}) => {
     const safeAction = String(action || "").trim().toLowerCase();
 
@@ -4348,6 +4350,7 @@ export default function App() {
         expectedMasterSignature: expectedMasterSignature || undefined,
         payload: payload && typeof payload === "object" ? payload : {},
         confirmPermanentDelete: confirmPermanentDelete === true,
+        confirmCredentialMigration: confirmCredentialMigration === true,
       }));
 
       if (currentBrandIdRef.current === result.brandIdAtStart) {
@@ -4357,6 +4360,7 @@ export default function App() {
           const nextRow = normalizeTherapistMasterRow({
             ...result.therapist,
             masterSignature: result.masterSignature || "",
+            credentialStorageMode: String(result.credentialStorageMode || ""),
           });
           setTherapists((previous) => {
             const list = Array.isArray(previous) ? previous : [];

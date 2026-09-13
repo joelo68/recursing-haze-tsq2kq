@@ -82,10 +82,13 @@ test("disabled Settings therapist writer is retired instead of preserved as a hi
   assert.doesNotMatch(settings, /handleAddTherapist|handleUpdateTherapist|handleDeleteTherapist/);
 });
 
-test("B1C2C2 preserves Rules and credential migration boundary", () => {
+test("single-account credential migration stays inside existing backend authority and preserves Rules boundary", () => {
   assert.match(rules, /function signedIn\(\)\s*\{\s*return request\.auth != null;/);
   assert.match(app, /CURRENT_APP_VERSION\s*=\s*"3\.6\.0"/);
-  assert.doesNotMatch(backend, /migrateTherapistCredential/);
+  assert.match(backend, /migrateTherapistCredentialInTransaction/);
+  assert.match(backend, /"migrate_credential"/);
+  assert.match(managerView, /升級帳號安全/);
+  assert.match(managerView, /action:\s*"migrate_credential"/);
   assert.doesNotMatch(app, /therapist_credentials/);
   assert.doesNotMatch(managerView, /therapist_credentials/);
 });

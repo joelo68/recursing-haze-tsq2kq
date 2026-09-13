@@ -328,6 +328,35 @@ test("atomic separation helper creates credential and removes legacy password in
   assert.deepEqual(masterWrite.data.password, { __deleteField: true });
 });
 
+test("migration helper reuses a preloaded therapist snapshot so master is not point-read twice", async () => {
+  const env = makeEnv({
+    brandId: "cyj",
+    therapists: {
+      t1: { id: "t1", name: "A", password: "legacy-secret", credentialStorageMode: "embedded_legacy", isActive: true },
+    },
+  });
+  const therapistSnapshot = {
+    exists: true,
+    id: "t1",
+    data: () => structuredClone(env.refs.get("cyj:therapists:t1").data),
+  };
+
+  const result = await migrateTherapistCredentialInTransaction({
+    transaction: env.transaction,
+    db: env.db,
+    brandId: "cyj",
+    therapistId: "t1",
+    getBrandCollection: env.getBrandCollection,
+    nowText: "2026-09-13T14:30:00.000Z",
+    serverTimestamp: () => ({ __serverTimestamp: true }),
+    deleteField: () => ({ __deleteField: true }),
+    therapistSnapshot,
+  });
+
+  assert.equal(result.changed, true);
+  assert.deepEqual(env.reads, ["cyj:therapist_credentials:t1"]);
+});
+
 test("credential state classifier rejects dual sources and validates separated schema", () => {
   const legacy = buildEmbeddedCredentialCreateFields("0000");
   assert.equal(legacy.credentialStorageMode, "embedded_legacy");
@@ -347,12 +376,15 @@ test("credential state classifier rejects dual sources and validates separated s
   );
 });
 
-test("login, password change and therapist master share separated credential authority without exposing a migration endpoint", () => {
+test("login, password change and therapist master share separated credential authority without exposing a standalone migration endpoint", () => {
   assert.match(deviceApproval, /loadTherapistCredentialSource/);
   assert.match(accountAuthority, /updateTherapistCredentialPasswordInTransaction/);
   assert.match(therapistMaster, /buildSeparatedCredentialCreateDocument/);
   assert.doesNotMatch(therapistMaster, /buildEmbeddedCredentialCreateFields/);
   assert.match(therapistMaster, /resetTherapistCredentialPasswordInTransaction/);
+  assert.match(therapistMaster, /migrateTherapistCredentialInTransaction/);
+  assert.match(therapistMaster, /"migrate_credential"/);
+  assert.match(therapistMaster, /confirmCredentialMigration/);
   assert.match(therapistMaster, /deleteSeparatedTherapistCredentialInTransaction/);
   assert.doesNotMatch(functionsIndex, /exports\.(?:migrateTherapistCredential|auditTherapistCredential)/);
   assert.doesNotMatch(deviceApproval, /onSnapshot\s*\(|setInterval\s*\(/);

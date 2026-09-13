@@ -43,6 +43,7 @@ const TherapistManagerView = () => {
   // 2xl 以下使用抽屜，避免右側面板把畫面撐爆
   const [isDrawerOpen, setIsDrawerOpen] = useState(false);
   const [detailLoadingId, setDetailLoadingId] = useState("");
+  const [credentialMigrationLoadingId, setCredentialMigrationLoadingId] = useState("");
   const detailRequestRef = useRef(0);
   const [credentialReveal, setCredentialReveal] = useState({
     open: false,
@@ -363,8 +364,10 @@ const TherapistManagerView = () => {
     if (code === "credential_payload_not_allowed") return "人員主檔不能直接修改登入密碼。";
     if (code === "therapist_missing" || code === "account_missing") return "找不到這位管理師的最新帳號資料，請重新搜尋。";
     if (code === "account_inactive") return "封存中的帳號不能重設登入密碼，請先重新啟用。";
+    if (code === "credential_migration_confirmation_required") return "帳號安全升級尚未完成確認，未進行任何變更。";
+    if (code === "credential_separation_state_invalid") return "這位管理師的登入資料狀態不一致，已停止安全升級，請先由管理者檢查。";
     if (["credential_source_missing", "credential_document_invalid", "credential_dual_source_conflict", "invalid_credential_storage_mode"].includes(code)) {
-      return "這位管理師的登入資料狀態需要管理者檢查，暫時無法重設密碼。";
+      return "這位管理師的登入資料狀態需要管理者檢查，系統已停止修改。";
     }
     return error?.result?.message || error?.message || fallback;
   };
@@ -520,6 +523,76 @@ const TherapistManagerView = () => {
     } catch (error) {
       console.error("重設登入密碼失敗:", error);
       showToast(getManagementErrorMessage(error, "重設登入密碼失敗"), "error");
+    }
+  };
+
+  const handleUpgradeTherapistCredential = async (t = selectedTherapist) => {
+    if (!t?.id) return;
+    if (typeof manageTherapistMasterAction !== "function") {
+      showToast("帳號安全服務尚未就緒", "error");
+      return;
+    }
+
+    let target = t;
+    if (!target.masterSignature || !target.credentialStorageMode) {
+      try {
+        target = await loadTherapistDetail(target, { openDrawer: true });
+      } catch {
+        return;
+      }
+    }
+
+    const mode = String(target?.credentialStorageMode || "");
+    if (mode === "separated_v1") {
+      showToast("這個帳號已完成安全升級，不需要再次處理。", "success");
+      return;
+    }
+    if (mode !== "embedded_legacy") {
+      showToast("這個帳號的登入資料狀態需要先檢查，已停止安全升級。", "error");
+      return;
+    }
+    if (!target?.masterSignature) {
+      showToast("這筆資料尚未確認完成，請稍後再試", "error");
+      return;
+    }
+
+    const confirmed = window.confirm(
+      `確定要升級「${target.name}」的帳號安全嗎？\n\n這只會把目前登入密碼移到受保護的安全區，不會變更密碼內容，也不會改動人員資料。`
+    );
+    if (!confirmed) return;
+
+    setCredentialMigrationLoadingId(String(target.id));
+    try {
+      const result = await manageTherapistMasterAction({
+        action: "migrate_credential",
+        therapistId: target.id,
+        expectedMasterSignature: target.masterSignature,
+        confirmCredentialMigration: true,
+      });
+      const next = result?.therapist
+        ? {
+            ...result.therapist,
+            masterSignature: result.masterSignature || target.masterSignature,
+            credentialStorageMode: String(result.credentialStorageMode || "separated_v1"),
+          }
+        : {
+            ...target,
+            credentialStorageMode: String(result?.credentialStorageMode || "separated_v1"),
+          };
+
+      setSelectedTherapist(next);
+      loadTherapistToForm(next);
+      showToast(
+        result?.credentialMigrated === true
+          ? "帳號安全升級完成；原本的登入密碼沒有變更。"
+          : "這個帳號已經完成安全升級。",
+        "success"
+      );
+    } catch (error) {
+      console.error("帳號安全升級失敗:", error);
+      showToast(getManagementErrorMessage(error, "帳號安全升級失敗"), "error");
+    } finally {
+      setCredentialMigrationLoadingId("");
     }
   };
 
@@ -699,6 +772,11 @@ const TherapistManagerView = () => {
     selectedTherapist?.id &&
     detailLoadingId === String(selectedTherapist.id)
   );
+  const selectedCredentialMigrating = Boolean(
+    selectedTherapist?.id &&
+    credentialMigrationLoadingId === String(selectedTherapist.id)
+  );
+  const selectedCredentialMode = String(selectedTherapist?.credentialStorageMode || "");
 
   const renderDetailPanel = ({ mode = "inline" }) => (
     <aside
@@ -818,11 +896,34 @@ const TherapistManagerView = () => {
                   此頁不會預載、搜尋或直接編輯登入密碼。忘記密碼時可重設為系統初始密碼；如需協助本人確認，也可輸入最高管理金鑰後只查看這一個帳號。
                 </p>
 
+                {!isCreating && selectedTherapist && selectedCredentialMode === "embedded_legacy" && (
+                  <div className="mt-3">
+                    <button
+                      onClick={() => handleUpgradeTherapistCredential(selectedTherapist)}
+                      disabled={selectedDetailLoading || selectedCredentialMigrating}
+                      className="h-9 px-3 rounded-xl border border-emerald-200 bg-white text-emerald-700 text-xs font-black hover:bg-emerald-50 transition-all flex items-center justify-center gap-1.5 disabled:opacity-50 disabled:cursor-wait"
+                    >
+                      <Shield size={13} />
+                      {selectedCredentialMigrating ? "安全升級中…" : "升級帳號安全"}
+                    </button>
+                    <p className="mt-1.5 text-[10px] font-bold leading-4 text-emerald-700/80">
+                      只移動目前密碼的保存位置，不會更改密碼，也不會改動人員資料。
+                    </p>
+                  </div>
+                )}
+
+                {!isCreating && selectedTherapist && selectedCredentialMode === "separated_v1" && (
+                  <div className="mt-3 inline-flex items-center gap-1.5 rounded-full border border-emerald-100 bg-white px-2.5 py-1.5 text-[10px] font-black text-emerald-700">
+                    <CheckCircle2 size={12} />
+                    帳號安全已升級
+                  </div>
+                )}
+
                 {!isCreating && selectedTherapist && !selectedArchived && (
                   <div className="mt-3 flex flex-wrap gap-2">
                     <button
                       onClick={() => openCredentialReveal(selectedTherapist)}
-                      disabled={selectedDetailLoading}
+                      disabled={selectedDetailLoading || selectedCredentialMigrating}
                       className="h-9 px-3 rounded-xl border border-sky-100 bg-white text-sky-700 text-xs font-black hover:bg-sky-50 transition-all flex items-center justify-center gap-1.5 disabled:opacity-50 disabled:cursor-wait"
                     >
                       <Shield size={13} />
@@ -830,7 +931,7 @@ const TherapistManagerView = () => {
                     </button>
                     <button
                       onClick={() => handleResetTherapistPassword(selectedTherapist)}
-                      disabled={selectedDetailLoading}
+                      disabled={selectedDetailLoading || selectedCredentialMigrating}
                       className="h-9 px-3 rounded-xl border border-amber-200 bg-white text-amber-800 text-xs font-black hover:bg-amber-50 transition-all flex items-center justify-center gap-1.5 disabled:opacity-50 disabled:cursor-wait"
                     >
                       <Lock size={13} />

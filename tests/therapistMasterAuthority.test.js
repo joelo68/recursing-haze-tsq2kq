@@ -154,9 +154,15 @@ function makeEnv({
         set(ref, data, options = {}) {
           const cloned = structuredClone(data);
           writes.push({ key: ref.key, data: cloned, options });
-          ref.data = options.merge
-            ? { ...(ref.data || {}), ...cloned }
-            : cloned;
+          const next = options.merge ? { ...(ref.data || {}) } : {};
+          Object.entries(cloned).forEach(([key, value]) => {
+            if (value && typeof value === "object" && value.__deleteField === true) {
+              delete next[key];
+            } else {
+              next[key] = value;
+            }
+          });
+          ref.data = next;
           ref.exists = true;
         },
         delete(ref) {
@@ -226,6 +232,7 @@ function makeEnv({
     normalizeStoreCore,
     getInitialPasswordsForRole: () => ["0000"],
     serverTimestamp: () => ({ __serverTimestamp: true }),
+    deleteField: () => ({ __deleteField: true }),
   });
 
   const call = async (body = {}) => {
@@ -369,6 +376,125 @@ test("reset_password writes only separated_v1 credential authority when the ther
   assert.equal(env.refs.get("yibo:therapists:t1").data.credentialStorageMode, "separated_v1");
   assert.ok(env.writes.some((row) => row.key === "yibo:therapist_credentials:t1" && row.data.password === "0000"));
   assert.equal(env.writes.some((row) => row.key === "yibo:therapists:t1" && Object.prototype.hasOwnProperty.call(row.data, "password")), false);
+});
+
+test("migrate_credential atomically preserves the current password, removes it from master, and keeps the semantic master signature stable", async () => {
+  const env = makeEnv({
+    brandId: "cyj",
+    therapists: {
+      t1: {
+        id: "t1",
+        name: "王小美",
+        store: "A",
+        storeName: "A",
+        manager: "北區",
+        managerName: "北區",
+        region: "北區",
+        password: "legacy-secret",
+        credentialStorageMode: "embedded_legacy",
+        status: "在職",
+        isActive: true,
+        isResigned: false,
+        resigned: false,
+      },
+    },
+  });
+
+  const beforeSignature = buildTherapistMasterSignature(env.refs.get("cyj:therapists:t1").data);
+  const res = await env.call({
+    action: "migrate_credential",
+    therapistId: "t1",
+    confirmCredentialMigration: true,
+  });
+
+  assert.equal(res.statusCode, 200);
+  assert.equal(res.body.ok, true);
+  assert.equal(res.body.credentialMigrated, true);
+  assert.equal(res.body.credentialMigrationClassification, "SEPARATED_V1_READY");
+  assert.equal(res.body.credentialStorageMode, "separated_v1");
+  assert.equal(res.body.masterSignature, beforeSignature);
+  assert.equal(env.refs.get("cyj:therapists:t1").data.credentialStorageMode, "separated_v1");
+  assert.equal(Object.prototype.hasOwnProperty.call(env.refs.get("cyj:therapists:t1").data, "password"), false);
+
+  const credential = env.refs.get("cyj:therapist_credentials:t1");
+  assert.ok(credential?.exists);
+  assert.equal(credential.data.schemaVersion, "therapist-credential-v1");
+  assert.equal(credential.data.brandId, "cyj");
+  assert.equal(credential.data.therapistId, "t1");
+  assert.equal(credential.data.password, "legacy-secret");
+  assert.equal(credential.data.migratedFrom, "therapists.password");
+
+  assert.equal(env.reads.filter((key) => key === "cyj:therapists:t1").length, 1);
+  assert.equal(env.reads.filter((key) => key === "cyj:therapist_credentials:t1").length, 1);
+  assert.ok(env.writes.some((row) => row.key.startsWith("cyj:system_logs:")));
+  assert.equal(JSON.stringify(res.body).includes("legacy-secret"), false);
+  assert.equal(env.writes.filter((row) => row.key.startsWith("cyj:system_logs:")).some((row) => JSON.stringify(row.data).includes("legacy-secret")), false);
+});
+
+test("migrate_credential is explicit, idempotent, and fails closed on dual-source state", async () => {
+  const noConfirm = makeEnv();
+  const denied = await noConfirm.call({
+    action: "migrate_credential",
+    therapistId: "t1",
+    confirmCredentialMigration: false,
+  });
+  assert.equal(denied.statusCode, 400);
+  assert.equal(denied.body.code, "credential_migration_confirmation_required");
+  assert.equal(noConfirm.transactionCount, 0);
+
+  const env = makeEnv();
+  const first = await env.call({
+    action: "migrate_credential",
+    therapistId: "t1",
+    confirmCredentialMigration: true,
+  });
+  assert.equal(first.statusCode, 200);
+  assert.equal(first.body.credentialMigrated, true);
+
+  const credentialWritesBefore = env.writes.filter((row) => row.key === "cyj:therapist_credentials:t1").length;
+  const masterWritesBefore = env.writes.filter((row) => row.key === "cyj:therapists:t1").length;
+  const second = await env.call({
+    action: "migrate_credential",
+    therapistId: "t1",
+    expectedMasterSignature: first.body.masterSignature,
+    confirmCredentialMigration: true,
+  });
+  assert.equal(second.statusCode, 200);
+  assert.equal(second.body.credentialMigrated, false);
+  assert.equal(second.body.credentialMigrationClassification, "SEPARATED_V1_READY");
+  assert.equal(env.writes.filter((row) => row.key === "cyj:therapist_credentials:t1").length, credentialWritesBefore);
+  assert.equal(env.writes.filter((row) => row.key === "cyj:therapists:t1").length, masterWritesBefore);
+
+  const conflict = makeEnv({
+    therapists: {
+      t1: {
+        id: "t1",
+        name: "王小美",
+        store: "A",
+        password: "legacy-secret",
+        credentialStorageMode: "embedded_legacy",
+        status: "在職",
+        isActive: true,
+      },
+    },
+    credentials: {
+      t1: {
+        schemaVersion: "therapist-credential-v1",
+        brandId: "cyj",
+        therapistId: "t1",
+        password: "unexpected-secret",
+      },
+    },
+  });
+  const blocked = await conflict.call({
+    action: "migrate_credential",
+    therapistId: "t1",
+    confirmCredentialMigration: true,
+  });
+  assert.equal(blocked.statusCode, 409);
+  assert.equal(blocked.body.code, "credential_dual_source_conflict");
+  assert.equal(conflict.refs.get("cyj:therapists:t1").data.password, "legacy-secret");
+  assert.equal(conflict.refs.get("cyj:therapist_credentials:t1").data.password, "unexpected-secret");
 });
 
 test("reset_password refuses archived therapist accounts and writes no credential", async () => {

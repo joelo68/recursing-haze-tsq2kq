@@ -64,16 +64,18 @@ test("frontend therapist master mutation bypasses remain retired before Rules lo
   assert.doesNotMatch(scheduleView, directTherapistWritePattern);
 });
 
-test("Backend remains the sole therapist master mutation authority and credential migration stays out of scope", () => {
-  for (const action of ["create", "update", "archive", "restore", "delete", "reset_password"]) {
+test("Backend remains the sole therapist master mutation authority and credential migration is single-account only", () => {
+  for (const action of ["create", "update", "archive", "restore", "delete", "reset_password", "migrate_credential"]) {
     assert.match(masterAuthority, new RegExp(`"${action}"`));
   }
   assert.match(masterAuthority, /manageTherapistMasterInTransaction/);
   assert.match(masterAuthority, /verifySuperAdminActor/);
   assert.match(masterAuthority, /expectedMasterSignature/);
-  assert.doesNotMatch(masterAuthority, /migrateTherapistCredentialInTransaction/);
+  assert.match(masterAuthority, /migrateTherapistCredentialInTransaction/);
+  assert.match(masterAuthority, /confirmCredentialMigration/);
   assert.match(credentialAuthority, /THERAPIST_CREDENTIAL_STORAGE_MODE_EMBEDDED/);
   assert.match(credentialAuthority, /THERAPIST_CREDENTIAL_STORAGE_MODE_SEPARATED/);
+  assert.doesNotMatch(masterAuthority, /collection\(["']therapists["']\)\.get\(/);
 });
 
 test("B1C2D is Rules-only and does not change app version or read topology", () => {

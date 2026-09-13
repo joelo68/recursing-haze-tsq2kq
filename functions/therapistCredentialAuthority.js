@@ -290,16 +290,15 @@ async function migrateTherapistCredentialInTransaction({
   nowText,
   serverTimestamp,
   deleteField,
+  therapistSnapshot = null,
 } = {}) {
   if (!transaction || typeof transaction.get !== "function" || typeof transaction.set !== "function") {
     throw new Error("missing_transaction");
   }
   if (typeof deleteField !== "function") throw new Error("missing_delete_field");
   const refs = getTherapistCredentialRefs({ db, brandId, therapistId, getBrandCollection });
-  const [therapistSnap, credentialSnap] = await Promise.all([
-    transaction.get(refs.therapistRef),
-    transaction.get(refs.credentialRef),
-  ]);
+  const therapistSnap = therapistSnapshot || await transaction.get(refs.therapistRef);
+  const credentialSnap = await transaction.get(refs.credentialRef);
   if (!therapistSnap?.exists) throw new TherapistCredentialAuthorityError("account_missing", 404);
   const masterData = therapistSnap.data() || {};
   const mode = normalizeTherapistCredentialStorageMode(masterData);

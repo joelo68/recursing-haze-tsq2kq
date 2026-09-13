@@ -49,7 +49,8 @@ test("forgotten-password recovery stays reset-only while optional reveal is expl
   assert.match(masterAuthority, /requiresInitialPasswordChange:\s*true/);
   assert.match(credentialAuthority, /if \(source\.mode === THERAPIST_CREDENTIAL_STORAGE_MODE_EMBEDDED\)/);
   assert.match(credentialAuthority, /transaction\.set\(source\.credentialRef/);
-  assert.doesNotMatch(masterAuthority, /migrateTherapistCredentialInTransaction/);
+  assert.match(masterAuthority, /migrateTherapistCredentialInTransaction/);
+  assert.match(masterAuthority, /confirmCredentialMigration/);
 });
 
 test("sanitized directory carries roster display fields but not credential material", () => {
@@ -63,7 +64,7 @@ test("sanitized directory carries roster display fields but not credential mater
   assert.doesNotMatch(block, /password|credentialStorageMode|secret|token/i);
 });
 
-test("optimization adds no listener polling collection query Rules change or credential migration", () => {
+test("optimization adds no listener polling or collection query while migration remains exact single-account", () => {
   const start = app.indexOf("const refreshTherapistMasterRecord");
   const end = app.indexOf("const manageApplicationAccountAction", start);
   assert.ok(start >= 0 && end > start);
