@@ -181,11 +181,11 @@ const managerOrganizationAuthorityFunctions = createManagerOrganizationAuthority
 exports.manageManagerOrganization = managerOrganizationAuthorityFunctions.manageManagerOrganization;
 
 // ==========================================
-// ★ P0-B1C1B3：Therapist Master Authority (shadow)
+// ★ Therapist Master Authority：人員主檔 + credential writer 已切到 Backend transaction。
 // 管理師人員主檔新增／修改／封存／復職／永久刪除收斂至 Backend transaction。
 // Master OCC 使用不含 password 的 semantic signature；本人改密碼不會製造假的人員資料衝突。
-// create 僅為 legacy 相容由 Backend 建立初始密碼；不接受管理者自訂 password。
-// Frontend 尚未 cutover；credential 實體拆分、Rules lockdown 留待後續 migration/cutover。
+// 新增管理師時，初始密碼直接建立於 therapist_credentials；therapists 主檔不再保存 password。
+// 既有 embedded_legacy 帳號仍由 credential authority 相容讀取，等待獨立受控 migration。
 // ==========================================
 const { createTherapistMasterAuthorityFunctions } = require("./therapistMasterAuthority");
 const therapistMasterAuthorityFunctions = createTherapistMasterAuthorityFunctions({

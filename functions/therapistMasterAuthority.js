@@ -1,8 +1,10 @@
 const crypto = require("node:crypto");
 const {
   THERAPIST_CREDENTIAL_STORAGE_MODE_EMBEDDED,
+  THERAPIST_CREDENTIAL_STORAGE_MODE_SEPARATED,
   normalizeTherapistCredentialStorageMode,
-  buildEmbeddedCredentialCreateFields,
+  getTherapistCredentialRefs,
+  buildSeparatedCredentialCreateDocument,
   resetTherapistCredentialPasswordInTransaction,
   deleteSeparatedTherapistCredentialInTransaction,
 } = require("./therapistCredentialAuthority");
@@ -309,11 +311,9 @@ function applyTherapistMasterAction({
   payload,
   currentRaw,
   organizationRaw,
-  brandId,
   nowText,
   todayText,
   normalizeStoreCore,
-  getInitialPasswordsForRole,
   serverTimestamp,
 }) {
   if (!SUPPORTED_THERAPIST_MASTER_ACTIONS.has(action)) {
@@ -338,8 +338,6 @@ function applyTherapistMasterAction({
     const resignDate = normalizeDate(data.resignDate || "", { field: "resign_date" });
     assertChronology(onboardDate, resignDate);
     const archived = Boolean(resignDate);
-    const initialPassword = String(getInitialPasswordsForRole("therapist", brandId)?.[0] || "");
-    if (!initialPassword) throw new TherapistMasterAuthorityError("initial_password_unavailable", 500);
 
     const next = {
       ...makeMasterFields({
@@ -354,10 +352,10 @@ function applyTherapistMasterAction({
         serverTimestamp,
         includeCreated: true,
       }),
-      // B1C2B foundation: existing/new therapists remain legacy-authoritative until
-      // an explicit atomic migration flips this account to separated_v1.
-      // Never accept password or storage mode from an administrative payload.
-      ...buildEmbeddedCredentialCreateFields(initialPassword),
+      // New therapist masters are credential-free from birth.
+      // The initial password is provisioned atomically into therapist_credentials
+      // by the surrounding transaction and is never accepted from the admin payload.
+      credentialStorageMode: THERAPIST_CREDENTIAL_STORAGE_MODE_SEPARATED,
     };
 
     return {
@@ -366,7 +364,8 @@ function applyTherapistMasterAction({
       deleted: false,
       archived,
       requiresInitialPasswordChange: true,
-      initialCredentialProvisioned: true,
+      initialCredentialProvisioned: false,
+      credentialStorageMode: THERAPIST_CREDENTIAL_STORAGE_MODE_SEPARATED,
       storeCore: resolvedStore.core,
       managerName: resolvedStore.managerName,
     };
@@ -592,11 +591,9 @@ async function manageTherapistMasterInTransaction({
       payload,
       currentRaw,
       organizationRaw,
-      brandId,
       nowText,
       todayText,
       normalizeStoreCore,
-      getInitialPasswordsForRole,
       serverTimestamp,
     });
 
@@ -611,7 +608,34 @@ async function manageTherapistMasterInTransaction({
       });
       transaction.delete(therapistRef);
     } else if (isCreate) {
+      const initialPassword = String(getInitialPasswordsForRole("therapist", brandId)?.[0] || "");
+      if (!initialPassword) throw new TherapistMasterAuthorityError("initial_password_unavailable", 500);
+
+      const credentialRefs = getTherapistCredentialRefs({
+        db,
+        brandId,
+        therapistId,
+        getBrandCollection,
+      });
+      const credentialSnap = await transaction.get(credentialRefs.credentialRef);
+      if (credentialSnap?.exists) {
+        throw new TherapistMasterAuthorityError("therapist_credential_id_collision", 409);
+      }
+
+      const credentialRecord = buildSeparatedCredentialCreateDocument({
+        brandId,
+        therapistId,
+        password: initialPassword,
+        nowText,
+        serverTimestamp,
+      });
+
+      // Master + credential are born together in the same transaction.
+      // A failed credential write cannot leave a password-less therapist master behind.
       transaction.set(therapistRef, result.next, { merge: false });
+      transaction.set(credentialRefs.credentialRef, credentialRecord, { merge: false });
+      result.initialCredentialProvisioned = true;
+      result.credentialStorageMode = THERAPIST_CREDENTIAL_STORAGE_MODE_SEPARATED;
     } else {
       // Merge preserves the latest credential and unrelated legacy/operational fields.
       // Because this transaction read the document first, a concurrent password change

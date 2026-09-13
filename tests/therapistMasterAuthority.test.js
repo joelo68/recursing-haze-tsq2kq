@@ -466,7 +466,7 @@ test("master semantic signature excludes credential churn but detects stale mast
   assert.equal(env.writes.length, 0);
 });
 
-test("create uses server initial credential, validates organization store, and never returns password material", async () => {
+test("create atomically provisions separated credential, validates organization store, and never returns password material", async () => {
   const env = makeEnv();
   const rejected = await env.call({
     action: "create",
@@ -486,6 +486,7 @@ test("create uses server initial credential, validates organization store, and n
   });
   assert.equal(res.statusCode, 200);
   assert.equal(res.body.requiresInitialPasswordChange, true);
+  assert.equal(res.body.credentialStorageMode, "separated_v1");
   assert.equal(res.body.therapist.store, "新店");
   assert.equal(res.body.therapist.manager, "北區");
   assert.equal(Object.prototype.hasOwnProperty.call(res.body.therapist, "password"), false);
@@ -493,15 +494,85 @@ test("create uses server initial credential, validates organization store, and n
 
   const created = [...env.refs.values()].find((ref) => ref.key.startsWith("cyj:therapists:auto_") && ref.exists);
   assert.ok(created);
-  assert.equal(created.data.password, "0000");
   assert.equal(created.data.name, "新管理師");
   assert.equal(created.data.store, "新店");
   assert.equal(created.data.manager, "北區");
+  assert.equal(created.data.credentialStorageMode, "separated_v1");
+  assert.equal(Object.prototype.hasOwnProperty.call(created.data, "password"), false);
+
+  const credential = env.refs.get(`cyj:therapist_credentials:${created.id}`);
+  assert.ok(credential?.exists);
+  assert.equal(credential.data.schemaVersion, "therapist-credential-v1");
+  assert.equal(credential.data.brandId, "cyj");
+  assert.equal(credential.data.therapistId, created.id);
+  assert.equal(credential.data.password, "0000");
+  assert.equal(Object.prototype.hasOwnProperty.call(credential.data, "migratedFrom"), false);
+  assert.equal(Object.prototype.hasOwnProperty.call(credential.data, "migratedAtText"), false);
 
   const audit = env.writes.find((row) => row.key.includes(":system_logs:"));
   assert.ok(audit);
   assert.doesNotMatch(JSON.stringify(audit.data), /0000|admin-picked-secret|boss-secret|credentialPassword/);
 });
+test("new separated therapist credential is written only to the requested standard-brand path", async () => {
+  const env = makeEnv({
+    brandId: "anniu",
+    therapists: {},
+    org: {
+      managers: {
+        北區: ["安妞A店"],
+      },
+      managerOrder: ["北區"],
+    },
+  });
+  const res = await env.call({
+    action: "create",
+    payload: {
+      name: "安妞新管理師",
+      store: "安妞A店",
+      onboardDate: "2026-09-13",
+    },
+  });
+  assert.equal(res.statusCode, 200);
+  assert.equal(res.body.credentialStorageMode, "separated_v1");
+
+  const master = [...env.refs.values()].find((ref) => ref.key.startsWith("anniu:therapists:auto_") && ref.exists);
+  assert.ok(master);
+  const credential = env.refs.get(`anniu:therapist_credentials:${master.id}`);
+  assert.ok(credential?.exists);
+  assert.equal(credential.data.brandId, "anniu");
+  assert.equal(credential.data.therapistId, master.id);
+  assert.equal(Object.prototype.hasOwnProperty.call(master.data, "password"), false);
+  assert.equal([...env.refs.keys()].some((key) => key.startsWith("cyj:therapist_credentials:")), false);
+  assert.equal([...env.refs.keys()].some((key) => key.startsWith("yibo:therapist_credentials:")), false);
+});
+
+test("create fails closed instead of overwriting an unexpected credential document collision", async () => {
+  const env = makeEnv({
+    therapists: {},
+    credentials: {
+      auto_1: {
+        schemaVersion: "therapist-credential-v1",
+        brandId: "cyj",
+        therapistId: "auto_1",
+        password: "unexpected-existing-secret",
+      },
+    },
+  });
+  const res = await env.call({
+    action: "create",
+    payload: {
+      name: "碰撞測試",
+      store: "CYJA店",
+      onboardDate: "2026-09-13",
+    },
+  });
+  assert.equal(res.statusCode, 409);
+  assert.equal(res.body.code, "therapist_credential_id_collision");
+  assert.equal(env.refs.get("cyj:therapists:auto_1")?.exists, false);
+  assert.equal(env.refs.get("cyj:therapist_credentials:auto_1").data.password, "unexpected-existing-secret");
+  assert.equal(env.writes.length, 0);
+});
+
 
 test("update preserves fresh credential and unrelated operational fields while refreshing store ownership", async () => {
   const env = makeEnv();
@@ -726,12 +797,16 @@ test("master update does not accept arbitrary fields or mutate credential from a
   }), /credential_payload_not_allowed/);
 });
 
-test("B1C2B therapist master provisions only the legacy authority until explicit atomic migration", () => {
-  assert.match(backendSource, /buildEmbeddedCredentialCreateFields\(initialPassword\)/);
-  assert.match(backendSource, /credentialStorageMode:\s*result\.credentialStorageMode/);
+test("therapist new-account writer creates separated_v1 atomically while preserving legacy compatibility for existing accounts", () => {
+  assert.match(backendSource, /buildSeparatedCredentialCreateDocument/);
+  assert.match(backendSource, /credentialStorageMode:\s*THERAPIST_CREDENTIAL_STORAGE_MODE_SEPARATED/);
+  assert.doesNotMatch(backendSource, /buildEmbeddedCredentialCreateFields/);
+  assert.match(backendSource, /transaction\.set\(therapistRef,\s*result\.next,\s*\{\s*merge:\s*false\s*\}\)/s);
+  assert.match(backendSource, /transaction\.set\(credentialRefs\.credentialRef,\s*credentialRecord,\s*\{\s*merge:\s*false\s*\}\)/s);
+  assert.match(backendSource, /therapist_credential_id_collision/);
+  assert.match(backendSource, /resetTherapistCredentialPasswordInTransaction/);
   assert.match(backendSource, /deleteSeparatedTherapistCredentialInTransaction/);
   assert.doesNotMatch(backendSource, /onSnapshot|setInterval|setTimeout/);
-  assert.match(backendSource, /transaction\.set\(therapistRef,\s*result\.next,\s*\{\s*merge:\s*true\s*\}\)/s);
   assert.match(backendSource, /semantic master signature intentionally excludes password/);
 });
 

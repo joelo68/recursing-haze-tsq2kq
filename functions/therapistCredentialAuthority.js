@@ -92,7 +92,7 @@ function normalizeSeparatedCredentialDocument(raw = {}, { brandId, therapistId }
   };
 }
 
-function buildSeparatedCredentialDocument({ brandId, therapistId, password, nowText, serverTimestamp } = {}) {
+function buildSeparatedCredentialBaseDocument({ brandId, therapistId, password, nowText, serverTimestamp } = {}) {
   const safeBrandId = assertTherapistCredentialBrandId(brandId);
   const safeTherapistId = normalizeText(therapistId, 180);
   const credentialPassword = String(password ?? "");
@@ -105,14 +105,25 @@ function buildSeparatedCredentialDocument({ brandId, therapistId, password, nowT
     password: credentialPassword,
     createdAtText: normalizeText(nowText, 80),
     updatedAtText: normalizeText(nowText, 80),
-    migratedAtText: normalizeText(nowText, 80),
-    migratedFrom: "therapists.password",
   };
   if (typeof serverTimestamp === "function") {
     const timestamp = serverTimestamp();
     record.createdAt = timestamp;
     record.updatedAt = timestamp;
-    record.migratedAt = timestamp;
+  }
+  return record;
+}
+
+function buildSeparatedCredentialCreateDocument(options = {}) {
+  return buildSeparatedCredentialBaseDocument(options);
+}
+
+function buildSeparatedCredentialDocument(options = {}) {
+  const record = buildSeparatedCredentialBaseDocument(options);
+  record.migratedAtText = normalizeText(options?.nowText, 80);
+  record.migratedFrom = "therapists.password";
+  if (Object.prototype.hasOwnProperty.call(record, "updatedAt")) {
+    record.migratedAt = record.updatedAt;
   }
   return record;
 }
@@ -350,6 +361,7 @@ module.exports = {
   getTherapistCredentialRefs,
   normalizeSeparatedCredentialDocument,
   buildSeparatedCredentialDocument,
+  buildSeparatedCredentialCreateDocument,
   buildEmbeddedCredentialCreateFields,
   buildTherapistCredentialState,
   loadTherapistCredentialSource,

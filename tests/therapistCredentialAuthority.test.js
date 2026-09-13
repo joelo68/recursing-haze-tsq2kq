@@ -16,6 +16,7 @@ const {
   THERAPIST_CREDENTIAL_STORAGE_MODE_EMBEDDED,
   THERAPIST_CREDENTIAL_STORAGE_MODE_SEPARATED,
   normalizeTherapistCredentialStorageMode,
+  buildSeparatedCredentialCreateDocument,
   buildEmbeddedCredentialCreateFields,
   buildTherapistCredentialState,
   loadTherapistCredentialSource,
@@ -100,6 +101,25 @@ test("B1C2B storage mode defaults old therapist masters to embedded legacy and u
     () => normalizeTherapistCredentialStorageMode({ credentialStorageMode: "future_unknown_mode" }),
     /invalid_credential_storage_mode/
   );
+});
+
+test("native separated credential provisioning has no fake migration provenance", () => {
+  const doc = buildSeparatedCredentialCreateDocument({
+    brandId: "anniu",
+    therapistId: "t-new",
+    password: "0000",
+    nowText: "2026-09-13T14:00:00.000Z",
+    serverTimestamp: () => ({ __serverTimestamp: true }),
+  });
+  assert.equal(doc.schemaVersion, THERAPIST_CREDENTIAL_SCHEMA_VERSION);
+  assert.equal(doc.brandId, "anniu");
+  assert.equal(doc.therapistId, "t-new");
+  assert.equal(doc.password, "0000");
+  assert.equal(doc.createdAtText, "2026-09-13T14:00:00.000Z");
+  assert.equal(doc.updatedAtText, "2026-09-13T14:00:00.000Z");
+  assert.equal(Object.prototype.hasOwnProperty.call(doc, "migratedFrom"), false);
+  assert.equal(Object.prototype.hasOwnProperty.call(doc, "migratedAtText"), false);
+  assert.equal(Object.prototype.hasOwnProperty.call(doc, "migratedAt"), false);
 });
 
 test("legacy therapist login reads only the therapist master and does not add a credential read", async () => {
@@ -327,13 +347,14 @@ test("credential state classifier rejects dual sources and validates separated s
   );
 });
 
-test("login, password change and therapist master share credential authority while B1C2C2 cuts only master administration over", () => {
+test("login, password change and therapist master share separated credential authority without exposing a migration endpoint", () => {
   assert.match(deviceApproval, /loadTherapistCredentialSource/);
   assert.match(accountAuthority, /updateTherapistCredentialPasswordInTransaction/);
-  assert.match(therapistMaster, /buildEmbeddedCredentialCreateFields/);
+  assert.match(therapistMaster, /buildSeparatedCredentialCreateDocument/);
+  assert.doesNotMatch(therapistMaster, /buildEmbeddedCredentialCreateFields/);
   assert.match(therapistMaster, /resetTherapistCredentialPasswordInTransaction/);
   assert.match(therapistMaster, /deleteSeparatedTherapistCredentialInTransaction/);
-  assert.doesNotMatch(functionsIndex, /migrateTherapistCredential|auditTherapistCredential/);
+  assert.doesNotMatch(functionsIndex, /exports\.(?:migrateTherapistCredential|auditTherapistCredential)/);
   assert.doesNotMatch(deviceApproval, /onSnapshot\s*\(|setInterval\s*\(/);
 });
 
