@@ -264,7 +264,11 @@ test("Annual consumer filters System Exclusion from formal and compatibility pat
 });
 
 test("Annual target Summary reads skip Yibo pre-system months", () => {
-  assert.match(annualSource, /filter\(\(yearMonth\) => !isAnnualPreSystemMonth\(currentBrand, yearMonth\)\)/);
+  // B1C2E-UX1 moves the annual target-summary read owner from AnnualView to App.
+  // Keep guarding the same business rule at the new owner: Yibo pre-system months
+  // must be filtered before the brand-year monthly_targets_summary query executes.
+  assert.match(appSource, /filter\(\(yearMonth\) => !isAnnualPreSystemMonth\(annualBrandId, yearMonth\)\)/);
+  assert.match(appSource, /where\(documentId\(\), "in", annualTargetMonthKeys\)/);
 });
 
 
@@ -347,9 +351,9 @@ test("AnnualView keeps future actual as NOT_STARTED\/N\/A while target rows rema
 });
 
 
-test("B1C2E-1 Annual presentation keeps transient not-ready state out of operational numbers", () => {
+test("B1C2E-UX1.1 Annual presentation keeps transient not-ready actuals out without blocking the Annual shell", () => {
   assert.match(annualSource, /const annualPresentationReady = annualSummaryTrustReady && annualTargetSummariesLoaded/);
-  assert.match(annualSource, /if \(!annualPresentationReady\)/);
-  assert.match(annualSource, /正在整理年度分析資料/);
-  assert.match(annualSource, /不需要重複切換頁面/);
+  assert.doesNotMatch(annualSource, /if \(!annualPresentationReady\)/);
+  assert.match(annualSource, /const selectedRangeActualReady = Boolean\(/);
+  assert.match(annualSource, /annualAggregateLoadState/);
 });

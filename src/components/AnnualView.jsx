@@ -67,6 +67,9 @@ const AnnualView = () => {
     annualSummaryStatusMap = {}, // ★ Summary 狀態：避免 dirty / mismatch 仍被使用
     annualSummaryLoadState = {}, // ★ 年度 Summary / flag readiness + brand/year anchoring
     monthlyTargetSummary, // ★ 當月目標輕量 Summary：避免 AnnualView 為了本月預算讀完整 monthly_targets
+    annualMonthlyTargetSummaries = {},
+    annualTargetSummaryLoadState = {},
+    annualAggregateLoadState = {},
     budgets, 
     managers, managerOrder, 
     fmtMoney, 
@@ -94,9 +97,14 @@ const AnnualView = () => {
 
   const [isConfigModalOpen, setIsConfigModalOpen] = useState(false);
   const [localExclusions, setLocalExclusions] = useState([]);
-  const [annualMonthlyTargetSummaries, setAnnualMonthlyTargetSummaries] = useState({});
-  const [annualTargetSummariesLoaded, setAnnualTargetSummariesLoaded] = useState(false);
   const [annualTargetFallbacks, setAnnualTargetFallbacks] = useState({});
+  const [annualTargetFallbackLoadState, setAnnualTargetFallbackLoadState] = useState({
+    brandId: "",
+    year: "",
+    ready: false,
+    loading: false,
+    error: "",
+  });
 
   // 當切換品牌或年份時，重置過濾與時間區間
   useEffect(() => {
@@ -104,6 +112,14 @@ const AnnualView = () => {
     setSelectedAnnualStore("");
     setStartMonthStr(`${selectedYear}-01`);
     setEndMonthStr(`${selectedYear}-12`);
+    setAnnualTargetFallbacks({});
+    setAnnualTargetFallbackLoadState({
+      brandId: "",
+      year: "",
+      ready: false,
+      loading: false,
+      error: "",
+    });
   }, [currentBrand, selectedYear]);
 
   const getMonthKeysInRange = (startValue, endValue) => {
@@ -130,53 +146,6 @@ const AnnualView = () => {
     return keys;
   };
 
-  useEffect(() => {
-    let cancelled = false;
-
-    const loadAnnualMonthlyTargetSummaries = async () => {
-      if (!getCollectionPath) return;
-
-      setAnnualTargetSummariesLoaded(false);
-      const monthKeys = getMonthKeysInRange(startMonthStr, endMonthStr)
-        .filter((yearMonth) => !isAnnualPreSystemMonth(currentBrand, yearMonth));
-      if (monthKeys.length === 0) {
-        setAnnualMonthlyTargetSummaries({});
-        setAnnualTargetSummariesLoaded(true);
-        return;
-      }
-
-      try {
-        const rows = await Promise.all(
-          monthKeys.map(async (yearMonth) => {
-            const snap = await getDoc(doc(getCollectionPath("monthly_targets_summary"), yearMonth));
-            return [yearMonth, snap.exists() ? { id: snap.id, ...snap.data() } : null];
-          })
-        );
-
-        if (cancelled) return;
-
-        const next = {};
-        rows.forEach(([yearMonth, data]) => {
-          if (data) next[yearMonth] = data;
-        });
-        setAnnualMonthlyTargetSummaries(next);
-        setAnnualTargetSummariesLoaded(true);
-      } catch (error) {
-        console.warn("AnnualView 載入 monthly_targets_summary 失敗:", error);
-        if (!cancelled) {
-          setAnnualMonthlyTargetSummaries({});
-          setAnnualTargetSummariesLoaded(true);
-        }
-      }
-    };
-
-    loadAnnualMonthlyTargetSummaries();
-
-    return () => {
-      cancelled = true;
-    };
-  }, [getCollectionPath, startMonthStr, endMonthStr, selectedYear, currentBrand]);
-
   // ==========================================
   // 2. 品牌資訊與篩選引擎
   // ==========================================
@@ -197,29 +166,78 @@ const AnnualView = () => {
     return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}`;
   }, []);
 
-  const annualSummaryTrustReady = useMemo(() => {
-    const brandId = typeof currentBrand === "string"
+  const annualBrandId = useMemo(() => (
+    typeof currentBrand === "string"
       ? currentBrand.toLowerCase()
-      : String(currentBrand?.id || "").toLowerCase();
-    return annualSummaryLoadState?.brandId === brandId
+      : String(currentBrand?.id || "").toLowerCase()
+  ), [currentBrand]);
+
+  const annualSummaryTrustReady = useMemo(() => {
+    return annualSummaryLoadState?.brandId === annualBrandId
       && String(annualSummaryLoadState?.year || "") === String(selectedYear)
       && annualSummaryLoadState?.dashboardReady === true
       && annualSummaryLoadState?.flagsReady === true
       && systemExclusionState?.ready === true
-      && String(systemExclusionState?.brandId || "").toLowerCase() === brandId
+      && String(systemExclusionState?.brandId || "").toLowerCase() === annualBrandId
       && currentLifecycleMasterState?.ready === true
-      && String(currentLifecycleMasterState?.brandId || "").toLowerCase() === brandId
+      && String(currentLifecycleMasterState?.brandId || "").toLowerCase() === annualBrandId
       && String(currentLifecycleMasterState?.data?.datasetStatus || "") === "READY";
-  }, [annualSummaryLoadState, currentBrand, selectedYear, systemExclusionState, currentLifecycleMasterState]);
+  }, [annualSummaryLoadState, annualBrandId, selectedYear, systemExclusionState, currentLifecycleMasterState]);
+
+  const annualTargetSummariesLoaded = Boolean(
+    annualTargetSummaryLoadState?.brandId === annualBrandId
+      && String(annualTargetSummaryLoadState?.year || "") === String(selectedYear)
+      && annualTargetSummaryLoadState?.ready === true
+  );
 
   const annualSummaryTrustError = Boolean(
     annualSummaryLoadState?.dashboardError || annualSummaryLoadState?.flagsError
   );
 
-  // B1C2E-1：年度分析只有在 Summary / 排除設定 / Lifecycle / 年度目標摘要
-  // 都完成目前品牌與年份的 readiness 後才發布數字。資料尚在同步時保留載入狀態，
-  // 不把暫時空集合誤呈現成「年度沒有資料」。
+  // B1C2E-UX1 / UX1.1：年度 authority 分層呈現。
+  // Summary/Target 是年度基礎 trust；monthly_aggregated fallback 有獨立 readiness，
+  // 因此 current/unverified month 尚在同步時不會把 null 誤呈現成「尚無資料」。
   const annualPresentationReady = annualSummaryTrustReady && annualTargetSummariesLoaded;
+  const annualAggregateStateAnchored = Boolean(
+    annualAggregateLoadState?.brandId === annualBrandId
+      && String(annualAggregateLoadState?.year || "") === String(selectedYear)
+  );
+  const annualAggregateReady = Boolean(
+    annualAggregateStateAnchored
+      && annualAggregateLoadState?.ready === true
+      && !annualAggregateLoadState?.error
+  );
+  const annualAggregateScopeKnown = Boolean(
+    annualAggregateStateAnchored
+      && (
+        annualAggregateLoadState?.ready === true
+        || Boolean(annualAggregateLoadState?.fallbackKey)
+        || (Array.isArray(annualAggregateLoadState?.fallbackYearMonths) && annualAggregateLoadState.fallbackYearMonths.length > 0)
+      )
+  );
+  const annualAggregateFallbackMonthSet = useMemo(() => new Set(
+    annualAggregateStateAnchored && Array.isArray(annualAggregateLoadState?.fallbackYearMonths)
+      ? annualAggregateLoadState.fallbackYearMonths
+      : []
+  ), [annualAggregateStateAnchored, annualAggregateLoadState]);
+
+  const selectedRangeMonthKeys = useMemo(() => (
+    getMonthKeysInRange(startMonthStr, endMonthStr)
+  ), [startMonthStr, endMonthStr, selectedYear]);
+
+  const selectedRangeNeedsAggregate = selectedRangeMonthKeys.some((yearMonth) => (
+    annualAggregateFallbackMonthSet.has(yearMonth)
+  ));
+  const selectedRangeActualReady = Boolean(
+    annualSummaryTrustReady
+      && annualAggregateScopeKnown
+      && (!selectedRangeNeedsAggregate || annualAggregateReady)
+  );
+  const annualTargetFallbackReady = Boolean(
+    annualTargetFallbackLoadState?.brandId === annualBrandId
+      && String(annualTargetFallbackLoadState?.year || "") === String(selectedYear)
+      && annualTargetFallbackLoadState?.ready === true
+  );
 
   const cleanName = useMemo(() => (name) => {
     if (!name) return "";
@@ -486,9 +504,28 @@ const AnnualView = () => {
     const loadMissingTargetFallbacks = async () => {
       if (!annualTargetSummariesLoaded || !getCollectionPath) return;
 
-      const monthKeys = getMonthKeysInRange(startMonthStr, endMonthStr);
+      // B1C2E-UX1.1：precise fallback 的生命週期固定在 brand + year，
+      // 不再跟 Q1/Q2/月篩選綁定。篩選只切片已準備好的年度 snapshot。
+      const monthKeys = getMonthKeysInRange(`${selectedYear}-01`, `${selectedYear}-12`);
+      setAnnualTargetFallbackLoadState({
+        brandId: annualBrandId,
+        year: String(selectedYear),
+        ready: false,
+        loading: true,
+        error: "",
+      });
+
       if (monthKeys.length === 0) {
-        if (!cancelled) setAnnualTargetFallbacks({});
+        if (!cancelled) {
+          setAnnualTargetFallbacks({});
+          setAnnualTargetFallbackLoadState({
+            brandId: annualBrandId,
+            year: String(selectedYear),
+            ready: true,
+            loading: false,
+            error: "",
+          });
+        }
         return;
       }
 
@@ -533,7 +570,16 @@ const AnnualView = () => {
       });
 
       if (missingPairs.length === 0) {
-        if (!cancelled) setAnnualTargetFallbacks({});
+        if (!cancelled) {
+          setAnnualTargetFallbacks({});
+          setAnnualTargetFallbackLoadState({
+            brandId: annualBrandId,
+            year: String(selectedYear),
+            ready: true,
+            loading: false,
+            error: "",
+          });
+        }
         return;
       }
 
@@ -586,12 +632,30 @@ const AnnualView = () => {
         }
       }
 
-      if (!cancelled) setAnnualTargetFallbacks(nextFallbacks);
+      if (!cancelled) {
+        setAnnualTargetFallbacks(nextFallbacks);
+        setAnnualTargetFallbackLoadState({
+          brandId: annualBrandId,
+          year: String(selectedYear),
+          ready: true,
+          loading: false,
+          error: "",
+        });
+      }
     };
 
     loadMissingTargetFallbacks().catch((error) => {
       console.warn("AnnualView 精準讀取 monthly_targets fallback 失敗:", error);
-      if (!cancelled) setAnnualTargetFallbacks({});
+      if (!cancelled) {
+        setAnnualTargetFallbacks({});
+        setAnnualTargetFallbackLoadState({
+          brandId: annualBrandId,
+          year: String(selectedYear),
+          ready: true,
+          loading: false,
+          error: error?.message || "monthly_targets precise fallback load failed",
+        });
+      }
     });
 
     return () => {
@@ -606,9 +670,8 @@ const AnnualView = () => {
     annualSummaryTrustError,
     currentYearMonth,
     getCollectionPath,
-    startMonthStr,
-    endMonthStr,
     selectedYear,
+    annualBrandId,
     currentBrand,
     brandPrefix,
     effectiveStores,
@@ -953,41 +1016,53 @@ const annualData = useMemo(() => {
     return effectiveStores.filter((storeName) => !excluded.has(canonicalStoreName(storeName))).length;
   }, [effectiveStores, auditExclusions, systemExclusionState, canonicalStoreName]);
 
-  const displayAnnualMoney = (value, preSystemSkip = false, status = "") => {
+  const displayAnnualMoney = (value, preSystemSkip = false, status = "", pending = false) => {
+    if (pending) return "同步中";
     if (value !== null && value !== undefined && Number.isFinite(Number(value))) return fmtMoney(Number(value));
     return resolveKpiPresentationLabel({
       status: preSystemSkip ? "PRE_SYSTEM" : status,
       fallback: "尚無資料",
     });
   };
-  const displayAnnualPercent = (value, preSystemSkip = false, status = "") => {
+  const displayAnnualPercent = (value, preSystemSkip = false, status = "", pending = false) => {
+    if (pending) return "同步中";
     if (value !== null && value !== undefined && Number.isFinite(Number(value))) return `${Number(value).toFixed(1)}%`;
     return resolveKpiPresentationLabel({
       status: preSystemSkip ? "PRE_SYSTEM" : status,
       fallback: "尚無資料",
     });
   };
-  const annualProgressWidth = (value) => (
-    value !== null && value !== undefined && Number.isFinite(Number(value))
+  const annualProgressWidth = (value, pending = false) => (
+    !pending && value !== null && value !== undefined && Number.isFinite(Number(value))
       ? Math.max(0, Math.min(Number(value), 100))
       : 0
   );
 
-  if (!annualPresentationReady) {
-    return (
-      <ViewWrapper>
-        <div className="flex min-h-[52vh] flex-col items-center justify-center px-6 text-center animate-in fade-in duration-300">
-          <Loader2 className="mb-4 h-11 w-11 animate-spin text-amber-400" />
-          <p className="text-sm font-black tracking-wide text-stone-600">正在整理年度分析資料…</p>
-          <p className="mt-2 max-w-md text-xs font-bold leading-5 text-stone-400">完成後會自動顯示最新年度數據，不需要重複切換頁面。</p>
-        </div>
-      </ViewWrapper>
-    );
-  }
+  const isMonthActualPending = (stat) => {
+    const yearMonth = `${stat.y}-${String(stat.m).padStart(2, "0")}`;
+    if (stat.preSystemSkip || stat.performanceStatus === "NOT_STARTED") return false;
+    if (!annualSummaryTrustReady) return true;
+    return annualAggregateFallbackMonthSet.has(yearMonth) && !annualAggregateReady;
+  };
+
+  const intervalActualPending = !selectedRangeActualReady;
+  const intervalTargetPending = !annualTargetSummariesLoaded || !annualTargetFallbackReady;
+  const intervalAchievementPending = intervalActualPending || intervalTargetPending;
+  const annualSyncing = !annualPresentationReady
+    || intervalActualPending
+    || intervalTargetPending
+    || annualTargetSummaryLoadState?.refreshing === true
+    || annualAggregateLoadState?.refreshing === true;
 
   return (
     <ViewWrapper>
       <div className="space-y-6 pb-12">
+        {annualSyncing && (
+          <div className="flex items-center gap-2 rounded-2xl border border-amber-100 bg-amber-50/70 px-4 py-3 text-xs font-bold text-amber-700 animate-in fade-in duration-200">
+            <Loader2 className="h-4 w-4 shrink-0 animate-spin" />
+            <span>{!annualPresentationReady ? "年度資料同步中，畫面會自動補齊" : "最新年度資料正在背景更新"}</span>
+          </div>
+        )}
         
         {/* 標題與權限顯示 */}
         <div className="flex flex-col gap-4 mb-2">
@@ -1131,14 +1206,14 @@ const annualData = useMemo(() => {
             <div className="absolute top-0 right-0 p-4 opacity-20"><DollarSign size={100} /></div>
             <div className="relative z-10">
               <p className="text-amber-100 font-bold text-sm mb-1 flex items-center gap-1"><Target size={14}/> 區間現金{intervalAchievementLabel === "區間目標完成進度" ? "目標完成進度" : "達成"}</p>
-              <h2 className="text-4xl font-extrabold font-mono tracking-tight mb-4">{displayAnnualMoney(totals.cash)}</h2>
+              <h2 className="text-4xl font-extrabold font-mono tracking-tight mb-4">{displayAnnualMoney(totals.cash, false, "", intervalActualPending)}</h2>
               <div className="space-y-2">
                 <div className="flex justify-between text-xs font-medium text-amber-100">
-                  <span>區間目標 {displayAnnualMoney(totals.budget)}</span>
-                  <span>{displayAnnualPercent(totals.cashAch)}</span>
+                  <span>區間目標 {displayAnnualMoney(totals.budget, false, "", intervalTargetPending)}</span>
+                  <span>{displayAnnualPercent(totals.cashAch, false, "", intervalAchievementPending)}</span>
                 </div>
                 <div className="w-full bg-black/20 h-2 rounded-full overflow-hidden">
-                  <div className="bg-white h-full rounded-full transition-all duration-1000" style={{ width: `${annualProgressWidth(totals.cashAch)}%` }}></div>
+                  <div className="bg-white h-full rounded-full transition-all duration-1000" style={{ width: `${annualProgressWidth(totals.cashAch, intervalAchievementPending)}%` }}></div>
                 </div>
               </div>
             </div>
@@ -1147,7 +1222,7 @@ const annualData = useMemo(() => {
              <div className="absolute top-0 right-0 p-4 opacity-5 text-indigo-600"><Activity size={100} /></div>
              <div className="relative z-10">
               <p className="text-indigo-400 font-bold text-sm mb-1 flex items-center gap-1"><Award size={14}/> 區間權責{intervalAchievementLabel === "區間目標完成進度" ? "目標完成進度" : "達成"}</p>
-              <h2 className={`text-4xl font-extrabold font-mono tracking-tight text-stone-700 ${brandPrefix === '安妞' ? 'mb-1' : 'mb-4'}`}>{displayAnnualMoney(totals.accrual)}</h2>
+              <h2 className={`text-4xl font-extrabold font-mono tracking-tight text-stone-700 ${brandPrefix === '安妞' ? 'mb-1' : 'mb-4'}`}>{displayAnnualMoney(totals.accrual, false, "", intervalActualPending)}</h2>
               {/* ★ 針對安妞的文字提示 */}
               {brandPrefix === '安妞' && (
                 <p className="text-[11px] text-indigo-400 mb-3 font-medium flex items-center gap-1">
@@ -1156,11 +1231,11 @@ const annualData = useMemo(() => {
               )}
               <div className="space-y-2">
                 <div className="flex justify-between text-xs font-medium text-stone-400">
-                  <span>區間目標 {displayAnnualMoney(totals.accrualBudget)}</span>
-                  <span className={totals.accrualAch >= 100 ? "text-emerald-500" : "text-stone-500"}>{displayAnnualPercent(totals.accrualAch)}</span>
+                  <span>區間目標 {displayAnnualMoney(totals.accrualBudget, false, "", intervalTargetPending)}</span>
+                  <span className={totals.accrualAch >= 100 ? "text-emerald-500" : "text-stone-500"}>{displayAnnualPercent(totals.accrualAch, false, "", intervalAchievementPending)}</span>
                 </div>
                 <div className="w-full bg-stone-100 h-2 rounded-full overflow-hidden">
-                  <div className="bg-indigo-500 h-full rounded-full transition-all duration-1000" style={{ width: `${annualProgressWidth(totals.accrualAch)}%` }}></div>
+                  <div className="bg-indigo-500 h-full rounded-full transition-all duration-1000" style={{ width: `${annualProgressWidth(totals.accrualAch, intervalAchievementPending)}%` }}></div>
                 </div>
               </div>
             </div>
@@ -1231,38 +1306,41 @@ const annualData = useMemo(() => {
                         {stat.performanceStatus === "NOT_STARTED" && (
                           <span className="ml-2 px-2 py-0.5 rounded-full bg-sky-50 text-sky-500 text-[10px] font-bold">未開始</span>
                         )}
-                        {stat.performanceStatus === "DATA_INCOMPLETE" && !stat.preSystemSkip && (
+                        {isMonthActualPending(stat) && !stat.preSystemSkip && stat.performanceStatus !== "NOT_STARTED" && (
+                          <span className="ml-2 px-2 py-0.5 rounded-full bg-sky-50 text-sky-600 text-[10px] font-bold">同步中</span>
+                        )}
+                        {stat.performanceStatus === "DATA_INCOMPLETE" && !stat.preSystemSkip && !isMonthActualPending(stat) && (
                           <span className="ml-2 px-2 py-0.5 rounded-full bg-amber-50 text-amber-600 text-[10px] font-bold">資料未完整</span>
                         )}
                       </td>
-                      <td className="py-4 text-right font-mono text-stone-400 text-xs">{displayAnnualMoney(stat.budget, stat.preSystemSkip, stat.performanceStatus)}</td>
-                      <td className="py-4 text-right font-mono text-stone-700 font-bold">{displayAnnualMoney(stat.cash, stat.preSystemSkip, stat.performanceStatus)}</td>
+                      <td className="py-4 text-right font-mono text-stone-400 text-xs">{displayAnnualMoney(stat.budget, stat.preSystemSkip, stat.performanceStatus, !annualTargetSummariesLoaded || !annualTargetFallbackReady)}</td>
+                      <td className="py-4 text-right font-mono text-stone-700 font-bold">{displayAnnualMoney(stat.cash, stat.preSystemSkip, stat.performanceStatus, isMonthActualPending(stat))}</td>
                       <td className="py-4 text-right font-bold">
                          <span className={`px-2 py-1 rounded-md text-xs ${stat.achievement >= 100 ? 'bg-amber-100 text-amber-700' : 'bg-stone-100 text-stone-400'}`}>
-                           {displayAnnualPercent(stat.achievement, stat.preSystemSkip, stat.performanceStatus)}
+                           {displayAnnualPercent(stat.achievement, stat.preSystemSkip, stat.performanceStatus, isMonthActualPending(stat) || !annualTargetSummariesLoaded || !annualTargetFallbackReady)}
                          </span>
                       </td>
-                      <td className="py-4 text-right font-mono text-stone-400 text-xs pl-4 border-l border-dashed border-stone-100">{displayAnnualMoney(stat.accrualBudget, stat.preSystemSkip, stat.performanceStatus)}</td>
-                      <td className="py-4 text-right font-mono text-indigo-600 font-bold">{displayAnnualMoney(stat.accrual, stat.preSystemSkip, stat.performanceStatus)}</td>
+                      <td className="py-4 text-right font-mono text-stone-400 text-xs pl-4 border-l border-dashed border-stone-100">{displayAnnualMoney(stat.accrualBudget, stat.preSystemSkip, stat.performanceStatus, !annualTargetSummariesLoaded || !annualTargetFallbackReady)}</td>
+                      <td className="py-4 text-right font-mono text-indigo-600 font-bold">{displayAnnualMoney(stat.accrual, stat.preSystemSkip, stat.performanceStatus, isMonthActualPending(stat))}</td>
                       <td className="py-4 text-right font-bold">
                          <span className={`px-2 py-1 rounded-md text-xs ${stat.accrualAchievement >= 100 ? 'bg-indigo-100 text-indigo-700' : 'bg-stone-100 text-stone-400'}`}>
-                           {displayAnnualPercent(stat.accrualAchievement, stat.preSystemSkip, stat.performanceStatus)}
+                           {displayAnnualPercent(stat.accrualAchievement, stat.preSystemSkip, stat.performanceStatus, isMonthActualPending(stat) || !annualTargetSummariesLoaded || !annualTargetFallbackReady)}
                          </span>
                       </td>
-                      <td className="py-4 text-right font-mono text-stone-600 pl-4 border-l border-dashed border-stone-100">{Number.isFinite(Number(stat.traffic)) && stat.traffic !== null ? fmtNum(stat.traffic) : resolveKpiPresentationLabel({ status: stat.preSystemSkip ? "PRE_SYSTEM" : stat.performanceStatus, fallback: "尚無資料" })}</td>
+                      <td className="py-4 text-right font-mono text-stone-600 pl-4 border-l border-dashed border-stone-100">{isMonthActualPending(stat) ? "同步中" : (Number.isFinite(Number(stat.traffic)) && stat.traffic !== null ? fmtNum(stat.traffic) : resolveKpiPresentationLabel({ status: stat.preSystemSkip ? "PRE_SYSTEM" : stat.performanceStatus, fallback: "尚無資料" }))}</td>
                     </tr>
                   ))}
                 </tbody>
                 <tfoot className="bg-stone-50 font-bold text-stone-800 border-t-2 border-stone-100">
                   <tr>
                     <td className="py-4 pl-2 text-stone-500">區間總計</td>
-                    <td className="py-4 text-right font-mono text-stone-500 text-xs">{displayAnnualMoney(totals.budget)}</td>
-                    <td className="py-4 text-right font-mono text-amber-600">{displayAnnualMoney(totals.cash)}</td>
-                    <td className="py-4 text-right text-emerald-600">{displayAnnualPercent(totals.cashAch)}</td>
-                    <td className="py-4 text-right font-mono text-stone-500 text-xs pl-4 border-l border-dashed border-stone-200">{displayAnnualMoney(totals.accrualBudget)}</td>
-                    <td className="py-4 text-right font-mono text-indigo-600">{displayAnnualMoney(totals.accrual)}</td>
-                    <td className="py-4 text-right text-emerald-600">{displayAnnualPercent(totals.accrualAch)}</td>
-                    <td className="py-4 text-right font-mono pl-4 border-l border-dashed border-stone-200">{fmtNum(totals.traffic)}</td>
+                    <td className="py-4 text-right font-mono text-stone-500 text-xs">{displayAnnualMoney(totals.budget, false, "", intervalTargetPending)}</td>
+                    <td className="py-4 text-right font-mono text-amber-600">{displayAnnualMoney(totals.cash, false, "", intervalActualPending)}</td>
+                    <td className="py-4 text-right text-emerald-600">{displayAnnualPercent(totals.cashAch, false, "", intervalAchievementPending)}</td>
+                    <td className="py-4 text-right font-mono text-stone-500 text-xs pl-4 border-l border-dashed border-stone-200">{displayAnnualMoney(totals.accrualBudget, false, "", intervalTargetPending)}</td>
+                    <td className="py-4 text-right font-mono text-indigo-600">{displayAnnualMoney(totals.accrual, false, "", intervalActualPending)}</td>
+                    <td className="py-4 text-right text-emerald-600">{displayAnnualPercent(totals.accrualAch, false, "", intervalAchievementPending)}</td>
+                    <td className="py-4 text-right font-mono pl-4 border-l border-dashed border-stone-200">{intervalActualPending ? "同步中" : (totals.traffic !== null && totals.traffic !== undefined && Number.isFinite(Number(totals.traffic)) ? fmtNum(totals.traffic) : "尚無資料")}</td>
                   </tr>
                 </tfoot>
               </table>
