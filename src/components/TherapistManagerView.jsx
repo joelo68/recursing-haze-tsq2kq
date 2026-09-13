@@ -132,7 +132,7 @@ const TherapistManagerView = () => {
     setFormResignDate(t?.resignDate || "");
   };
 
-  const loadTherapistDetail = async (t, { openDrawer = false } = {}) => {
+  const loadTherapistDetail = async (t, { openDrawer = false, forceRefresh = false } = {}) => {
     if (!t?.id) return t || null;
 
     setIsCreating(false);
@@ -140,7 +140,7 @@ const TherapistManagerView = () => {
     loadTherapistToForm(t);
     if (openDrawer) setIsDrawerOpen(true);
 
-    if (t.masterSignature) return t;
+    if (t.masterSignature && !forceRefresh) return t;
 
     const requestId = ++detailRequestRef.current;
     setDetailLoadingId(String(t.id));
@@ -533,13 +533,11 @@ const TherapistManagerView = () => {
       return;
     }
 
-    let target = t;
-    if (!target.masterSignature || !target.credentialStorageMode) {
-      try {
-        target = await loadTherapistDetail(target, { openDrawer: true });
-      } catch {
-        return;
-      }
+    let target;
+    try {
+      target = await loadTherapistDetail(t, { openDrawer: true, forceRefresh: true });
+    } catch {
+      return;
     }
 
     const mode = String(target?.credentialStorageMode || "");

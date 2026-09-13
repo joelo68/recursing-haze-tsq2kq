@@ -51,3 +51,18 @@ test("frontend exposes a plain-language single-account safety upgrade without di
   assert.match(app, /credentialStorageMode:\s*String\(result\.credentialStorageMode \|\| ""\)/);
   assert.doesNotMatch(managerView, /firebase\/firestore|therapist_credentials/);
 });
+
+test("migration canary refreshes the exact therapist OCC token immediately before the sensitive write", () => {
+  assert.match(managerView, /loadTherapistDetail = async \(t, \{ openDrawer = false, forceRefresh = false \} = \{\}\)/);
+  assert.match(managerView, /if \(t\.masterSignature && !forceRefresh\) return t;/);
+
+  const start = managerView.indexOf("const handleUpgradeTherapistCredential");
+  const end = managerView.indexOf("const openCredentialReveal", start);
+  assert.ok(start >= 0 && end > start);
+  const block = managerView.slice(start, end);
+
+  assert.match(block, /loadTherapistDetail\(t, \{ openDrawer: true, forceRefresh: true \}\)/);
+  assert.match(block, /action:\s*"migrate_credential"/);
+  assert.match(block, /expectedMasterSignature:\s*target\.masterSignature/);
+  assert.doesNotMatch(block, /if \(!target\.masterSignature \|\| !target\.credentialStorageMode\)/);
+});
