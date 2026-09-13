@@ -239,19 +239,23 @@ function normalizeMasterProjection(raw = {}) {
   };
 }
 
-function buildTherapistMasterSignature(raw = {}) {
-  const stable = normalizeMasterProjection(raw);
+function buildTherapistMasterSignature(raw = {}, therapistId = "") {
+  const canonicalTherapistId = normalizeText(therapistId || raw?.id || "", 180);
+  const stable = normalizeMasterProjection({
+    ...(raw && typeof raw === "object" ? raw : {}),
+    ...(canonicalTherapistId ? { id: canonicalTherapistId } : {}),
+  });
   return crypto.createHash("sha256")
     .update(JSON.stringify(stable))
     .digest("hex");
 }
 
-function assertExpectedMasterSignature(expectedSignature = "", currentRaw = {}) {
+function assertExpectedMasterSignature(expectedSignature = "", currentRaw = {}, therapistId = "") {
   const expected = normalizeText(expectedSignature, 128);
   if (!expected) {
     throw new TherapistMasterAuthorityError("master_signature_required", 400);
   }
-  const current = buildTherapistMasterSignature(currentRaw);
+  const current = buildTherapistMasterSignature(currentRaw, therapistId);
   if (expected !== current) {
     throw new TherapistMasterAuthorityError("therapist_master_conflict", 409, {
       currentMasterSignature: current,
@@ -546,7 +550,7 @@ async function manageTherapistMasterInTransaction({
   const currentRaw = therapistSnap.exists ? (therapistSnap.data() || {}) : null;
   const previousMasterSignature = isCreate
     ? ""
-    : assertExpectedMasterSignature(expectedMasterSignature, currentRaw);
+    : assertExpectedMasterSignature(expectedMasterSignature, currentRaw, therapistId);
 
   let organizationRaw = {};
   if (orgRef) {
@@ -689,7 +693,7 @@ async function manageTherapistMasterInTransaction({
   if (action === "migrate_credential" && result.credentialMigrated === true && nextRecord) {
     delete nextRecord.password;
   }
-  const nextMasterSignature = nextRecord ? buildTherapistMasterSignature(nextRecord) : "";
+  const nextMasterSignature = nextRecord ? buildTherapistMasterSignature(nextRecord, therapistId) : "";
 
   const maintenanceRef = getBrandCollection(db, brandId, "maintenance_logs").doc();
   transaction.set(maintenanceRef, {
@@ -750,7 +754,7 @@ async function manageTherapistMasterInTransaction({
     ...result,
     previousMasterSignature,
     masterSignature: nextMasterSignature,
-    therapist: nextRecord ? sanitizeTherapistResponse(nextRecord) : null,
+    therapist: nextRecord ? sanitizeTherapistResponse({ ...nextRecord, id: therapistId }) : null,
     credentialStorageMode: result.credentialStorageMode || (
       result.deleted
         ? normalizeTherapistCredentialStorageMode(currentRaw || {})
@@ -850,7 +854,7 @@ function createTherapistMasterAuthorityFunctions({
           const masterRaw = { ...raw, id: documentSnapshot.id };
           return {
             ...sanitizeTherapistResponse(masterRaw),
-            masterSignature: buildTherapistMasterSignature(masterRaw),
+            masterSignature: buildTherapistMasterSignature(raw, documentSnapshot.id),
           };
         });
         return res.status(200).json({
@@ -875,7 +879,7 @@ function createTherapistMasterAuthorityFunctions({
           action,
           therapistId,
           therapist: sanitizeTherapistResponse(masterRaw),
-          masterSignature: buildTherapistMasterSignature(masterRaw),
+          masterSignature: buildTherapistMasterSignature(raw, therapistId),
           credentialStorageMode: normalizeTherapistCredentialStorageMode(raw),
           readCount: 1,
         });

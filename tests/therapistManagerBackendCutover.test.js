@@ -55,7 +55,7 @@ test("therapist manager opens from existing sanitized login directory and fetche
   assert.match(backend, /therapistRef\.get\(\)/);
   assert.match(backend, /readCount:\s*1/);
   assert.match(backend, /sanitizeTherapistResponse\(masterRaw\)/);
-  assert.match(backend, /masterSignature:\s*buildTherapistMasterSignature\(masterRaw\)/);
+  assert.match(backend, /masterSignature:\s*buildTherapistMasterSignature\(raw,\s*therapistId\)/);
   assert.match(app, /Admin Credential Writer Retirement/);
   assert.match(app, /\["settings", "therapist-manager"\]\.includes\(activeView\)/);
   assert.match(app, /const refreshTherapistMasterRecord = useCallback/);
@@ -71,7 +71,7 @@ test("OCC conflicts refresh only the selected therapist and never auto-overwrite
   assert.match(managerView, /therapist_master_conflict/);
   assert.match(managerView, /refreshedSelected\.masterSignature[\s\S]{0,220}selectedTherapist\.masterSignature/);
   assert.match(managerView, /setSelectedTherapist\(refreshedSelected\)[\s\S]{0,120}loadTherapistToForm\(refreshedSelected\)/);
-  assert.match(backend, /assertExpectedMasterSignature\(expectedMasterSignature, currentRaw\)/);
+  assert.match(backend, /assertExpectedMasterSignature\(expectedMasterSignature,\s*currentRaw,\s*therapistId\)/);
   assert.doesNotMatch(app, /refreshTherapistMasterDirectory/);
   assert.doesNotMatch(app, /currentMasterSignature[\s\S]{0,220}manageTherapistMasterAction/);
 });

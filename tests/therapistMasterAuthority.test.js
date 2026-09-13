@@ -254,7 +254,7 @@ function makeEnv({
     ) {
       const therapistId = String(requestBody.therapistId || requestBody.accountId || "t1");
       const ref = refs.get(`${brandId}:therapists:${therapistId}`);
-      if (ref?.exists) requestBody.expectedMasterSignature = buildTherapistMasterSignature(ref.data);
+      if (ref?.exists) requestBody.expectedMasterSignature = buildTherapistMasterSignature(ref.data, therapistId);
     }
     await factory.manageTherapistMaster({
       method: "POST",
@@ -983,4 +983,69 @@ test("therapist credential collection stays protected while B1C2C2 retires brows
   assert.doesNotMatch(app, /getDocs\(getCollectionPath\("therapists"\)\)/);
   assert.match(app, /admin_therapist_master_record_backend/);
   assert.doesNotMatch(app, /admin_therapist_master_backend/);
+});
+
+test("legacy master without physical id uses Firestore document id as canonical OCC identity", async () => {
+  const env = makeEnv({
+    brandId: "cyj",
+    therapists: {
+      legacy1: {
+        name: "Legacy 管理師",
+        store: "A",
+        storeName: "A",
+        stores: ["A"],
+        manager: "北區",
+        managerName: "北區",
+        region: "北區",
+        password: "legacy-private",
+        onboardDate: "2026-01-10",
+        resignDate: "",
+        status: "在職",
+        isActive: true,
+        isResigned: false,
+        resigned: false,
+      },
+    },
+  });
+
+  const physicalMaster = env.refs.get("cyj:therapists:legacy1").data;
+  assert.equal(Object.prototype.hasOwnProperty.call(physicalMaster, "id"), false);
+
+  const rawOnlySignature = buildTherapistMasterSignature(physicalMaster);
+  const canonicalSignature = buildTherapistMasterSignature(physicalMaster, "legacy1");
+  assert.notEqual(rawOnlySignature, canonicalSignature);
+
+  const getRes = await env.call({
+    action: "get",
+    therapistId: "legacy1",
+  });
+  assert.equal(getRes.statusCode, 200);
+  assert.equal(getRes.body.ok, true);
+  assert.equal(getRes.body.therapist.id, "legacy1");
+  assert.equal(getRes.body.masterSignature, canonicalSignature);
+
+  const migrateRes = await env.call({
+    action: "migrate_credential",
+    therapistId: "legacy1",
+    expectedMasterSignature: getRes.body.masterSignature,
+    confirmCredentialMigration: true,
+  });
+
+  assert.equal(migrateRes.statusCode, 200);
+  assert.equal(migrateRes.body.ok, true);
+  assert.equal(migrateRes.body.credentialMigrated, true);
+  assert.equal(migrateRes.body.credentialStorageMode, "separated_v1");
+  assert.equal(migrateRes.body.masterSignature, canonicalSignature);
+  assert.equal(migrateRes.body.therapist.id, "legacy1");
+
+  const migratedMaster = env.refs.get("cyj:therapists:legacy1").data;
+  assert.equal(Object.prototype.hasOwnProperty.call(migratedMaster, "id"), false);
+  assert.equal(Object.prototype.hasOwnProperty.call(migratedMaster, "password"), false);
+  assert.equal(migratedMaster.credentialStorageMode, "separated_v1");
+
+  const credential = env.refs.get("cyj:therapist_credentials:legacy1");
+  assert.equal(credential.exists, true);
+  assert.equal(credential.data.brandId, "cyj");
+  assert.equal(credential.data.therapistId, "legacy1");
+  assert.equal(credential.data.password, "legacy-private");
 });

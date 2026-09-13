@@ -66,3 +66,13 @@ test("migration canary refreshes the exact therapist OCC token immediately befor
   assert.match(block, /expectedMasterSignature:\s*target\.masterSignature/);
   assert.doesNotMatch(block, /if \(!target\.masterSignature \|\| !target\.credentialStorageMode\)/);
 });
+
+test("migration OCC canonicalizes legacy masters with the Firestore document id", () => {
+  assert.match(masterAuthority, /function buildTherapistMasterSignature\(raw = \{\}, therapistId = ""\)/);
+  assert.match(masterAuthority, /buildTherapistMasterSignature\(currentRaw, therapistId\)/);
+  assert.match(masterAuthority, /assertExpectedMasterSignature\(expectedMasterSignature, currentRaw, therapistId\)/);
+  assert.match(masterAuthority, /buildTherapistMasterSignature\(nextRecord, therapistId\)/);
+  assert.match(masterAuthority, /sanitizeTherapistResponse\(\{ \.\.\.nextRecord, id: therapistId \}\)/);
+  assert.match(masterAuthority, /buildTherapistMasterSignature\(raw, documentSnapshot\.id\)/);
+  assert.match(masterAuthority, /buildTherapistMasterSignature\(raw, therapistId\)/);
+});
