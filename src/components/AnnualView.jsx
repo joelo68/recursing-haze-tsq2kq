@@ -1054,6 +1054,19 @@ const annualData = useMemo(() => {
     || annualTargetSummaryLoadState?.refreshing === true
     || annualAggregateLoadState?.refreshing === true;
 
+  // B1C2E-UX1 mobile render identity:
+  // iOS/WebKit can keep the previous text raster when the same text node changes inside a
+  // clipped/composited card. Keep the data authority unchanged, but give the four dynamic
+  // KPI text nodes a declarative identity that changes when readiness/value changes.
+  const intervalCashDisplay = displayAnnualMoney(totals.cash, false, "", intervalActualPending);
+  const intervalCashAchievementDisplay = displayAnnualPercent(totals.cashAch, false, "", intervalAchievementPending);
+  const intervalAccrualDisplay = displayAnnualMoney(totals.accrual, false, "", intervalActualPending);
+  const intervalAccrualAchievementDisplay = displayAnnualPercent(totals.accrualAch, false, "", intervalAchievementPending);
+  const intervalCashRenderKey = `cash-${intervalActualPending ? "pending" : "ready"}-${intervalCashDisplay}`;
+  const intervalCashAchievementRenderKey = `cash-ach-${intervalAchievementPending ? "pending" : "ready"}-${intervalCashAchievementDisplay}`;
+  const intervalAccrualRenderKey = `accrual-${intervalActualPending ? "pending" : "ready"}-${intervalAccrualDisplay}`;
+  const intervalAccrualAchievementRenderKey = `accrual-ach-${intervalAchievementPending ? "pending" : "ready"}-${intervalAccrualAchievementDisplay}`;
+
   return (
     <ViewWrapper>
       <div className="space-y-6 pb-12">
@@ -1201,28 +1214,33 @@ const annualData = useMemo(() => {
         </div>
 
         {/* 區塊 1: 區間總 KPI */}
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-4 animate-in fade-in slide-in-from-bottom-4 duration-500 delay-100">
-          <div className="bg-gradient-to-br from-amber-500 to-orange-500 rounded-2xl p-6 text-white shadow-lg relative overflow-hidden">
-            <div className="absolute top-0 right-0 p-4 opacity-20"><DollarSign size={100} /></div>
-            <div className="relative z-10">
+        {/* Mobile render stability:
+            KPI values can resolve while Annual readiness is finishing. Keep this critical summary
+            surface out of transform-based entrance animation so iOS/WebKit does not retain a stale
+            text raster until the next scroll/repaint. This is presentation-only: data/readiness
+            semantics and Firestore reads stay unchanged. */}
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-4" data-annual-kpi-render-stable="true">
+          <div className="bg-gradient-to-br from-amber-500 to-orange-500 rounded-2xl p-6 text-white shadow-lg relative md:overflow-hidden">
+            <div className="hidden md:block absolute top-0 right-0 p-4 opacity-20"><DollarSign size={100} /></div>
+            <div className="relative md:z-10">
               <p className="text-amber-100 font-bold text-sm mb-1 flex items-center gap-1"><Target size={14}/> 區間現金{intervalAchievementLabel === "區間目標完成進度" ? "目標完成進度" : "達成"}</p>
-              <h2 className="text-4xl font-extrabold font-mono tracking-tight mb-4">{displayAnnualMoney(totals.cash, false, "", intervalActualPending)}</h2>
+              <h2 key={intervalCashRenderKey} className="text-4xl font-extrabold font-mono tracking-tight mb-4 whitespace-nowrap">{intervalCashDisplay}</h2>
               <div className="space-y-2">
-                <div className="flex justify-between text-xs font-medium text-amber-100">
-                  <span>區間目標 {displayAnnualMoney(totals.budget, false, "", intervalTargetPending)}</span>
-                  <span>{displayAnnualPercent(totals.cashAch, false, "", intervalAchievementPending)}</span>
+                <div className="flex items-center justify-between gap-3 text-xs font-medium text-amber-100">
+                  <span className="min-w-0">區間目標 {displayAnnualMoney(totals.budget, false, "", intervalTargetPending)}</span>
+                  <span key={intervalCashAchievementRenderKey} className="shrink-0 whitespace-nowrap">{intervalCashAchievementDisplay}</span>
                 </div>
                 <div className="w-full bg-black/20 h-2 rounded-full overflow-hidden">
-                  <div className="bg-white h-full rounded-full transition-all duration-1000" style={{ width: `${annualProgressWidth(totals.cashAch, intervalAchievementPending)}%` }}></div>
+                  <div className="bg-white h-full rounded-full md:transition-all md:duration-1000" style={{ width: `${annualProgressWidth(totals.cashAch, intervalAchievementPending)}%` }}></div>
                 </div>
               </div>
             </div>
           </div>
-          <div className="bg-white border-2 border-indigo-100 rounded-2xl p-6 shadow-sm relative overflow-hidden flex flex-col justify-center">
-             <div className="absolute top-0 right-0 p-4 opacity-5 text-indigo-600"><Activity size={100} /></div>
-             <div className="relative z-10">
+          <div className="bg-white border-2 border-indigo-100 rounded-2xl p-6 shadow-sm relative md:overflow-hidden flex flex-col justify-center">
+             <div className="hidden md:block absolute top-0 right-0 p-4 opacity-5 text-indigo-600"><Activity size={100} /></div>
+             <div className="relative md:z-10">
               <p className="text-indigo-400 font-bold text-sm mb-1 flex items-center gap-1"><Award size={14}/> 區間權責{intervalAchievementLabel === "區間目標完成進度" ? "目標完成進度" : "達成"}</p>
-              <h2 className={`text-4xl font-extrabold font-mono tracking-tight text-stone-700 ${brandPrefix === '安妞' ? 'mb-1' : 'mb-4'}`}>{displayAnnualMoney(totals.accrual, false, "", intervalActualPending)}</h2>
+              <h2 key={intervalAccrualRenderKey} className={`text-4xl font-extrabold font-mono tracking-tight text-stone-700 whitespace-nowrap ${brandPrefix === '安妞' ? 'mb-1' : 'mb-4'}`}>{intervalAccrualDisplay}</h2>
               {/* ★ 針對安妞的文字提示 */}
               {brandPrefix === '安妞' && (
                 <p className="text-[11px] text-indigo-400 mb-3 font-medium flex items-center gap-1">
@@ -1230,12 +1248,12 @@ const annualData = useMemo(() => {
                 </p>
               )}
               <div className="space-y-2">
-                <div className="flex justify-between text-xs font-medium text-stone-400">
-                  <span>區間目標 {displayAnnualMoney(totals.accrualBudget, false, "", intervalTargetPending)}</span>
-                  <span className={totals.accrualAch >= 100 ? "text-emerald-500" : "text-stone-500"}>{displayAnnualPercent(totals.accrualAch, false, "", intervalAchievementPending)}</span>
+                <div className="flex items-center justify-between gap-3 text-xs font-medium text-stone-400">
+                  <span className="min-w-0">區間目標 {displayAnnualMoney(totals.accrualBudget, false, "", intervalTargetPending)}</span>
+                  <span key={intervalAccrualAchievementRenderKey} className={`shrink-0 whitespace-nowrap ${totals.accrualAch >= 100 ? "text-emerald-500" : "text-stone-500"}`}>{intervalAccrualAchievementDisplay}</span>
                 </div>
                 <div className="w-full bg-stone-100 h-2 rounded-full overflow-hidden">
-                  <div className="bg-indigo-500 h-full rounded-full transition-all duration-1000" style={{ width: `${annualProgressWidth(totals.accrualAch, intervalAchievementPending)}%` }}></div>
+                  <div className="bg-indigo-500 h-full rounded-full md:transition-all md:duration-1000" style={{ width: `${annualProgressWidth(totals.accrualAch, intervalAchievementPending)}%` }}></div>
                 </div>
               </div>
             </div>
