@@ -13,6 +13,8 @@ const app = read("src/App.jsx");
 const managerView = read("src/components/TherapistManagerView.jsx");
 const settings = read("src/components/SettingsView.jsx");
 const backend = read("functions/therapistMasterAuthority.js");
+const credentialAuthority = read("functions/therapistCredentialAuthority.js");
+const maintenance = read("src/components/SystemMaintenance.jsx");
 const rules = read("firestore.rules");
 
 const sliceBetween = (source, startText, endText) => {
@@ -82,15 +84,18 @@ test("disabled Settings therapist writer is retired instead of preserved as a hi
   assert.doesNotMatch(settings, /handleAddTherapist|handleUpdateTherapist|handleDeleteTherapist/);
 });
 
-test("single-account credential migration stays inside existing backend authority and preserves Rules boundary", () => {
+test("post-migration runtime retires legacy credential actions while preserving the backend-only Rules boundary", () => {
   assert.match(rules, /function signedIn\(\)\s*\{\s*return request\.auth != null;/);
   assert.match(app, /CURRENT_APP_VERSION\s*=\s*"3\.6\.0"/);
-  assert.match(backend, /migrateTherapistCredentialInTransaction/);
-  assert.match(backend, /"migrate_credential"/);
-  assert.match(managerView, /升級帳號安全/);
-  assert.match(managerView, /action:\s*"migrate_credential"/);
+  assert.match(credentialAuthority, /THERAPIST_CREDENTIAL_STORAGE_MODE_SEPARATED\s*=\s*"separated_v1"/);
+  assert.match(credentialAuthority, /legacy_credential_retired/);
+  assert.doesNotMatch(backend, /migrate_credential|credential_migration_inventory|confirmCredentialMigration|migrateTherapistCredentialInTransaction/);
+  assert.doesNotMatch(managerView, /升級帳號安全|migrate_credential|confirmCredentialMigration/);
+  assert.doesNotMatch(maintenance, /管理師帳號安全升級|credential_migration_inventory|migrate_credential|confirmCredentialMigration/);
+  assert.doesNotMatch(app, /confirmCredentialMigration/);
   assert.doesNotMatch(app, /therapist_credentials/);
   assert.doesNotMatch(managerView, /therapist_credentials/);
+  assert.doesNotMatch(maintenance, /therapist_credentials/);
 });
 
 test("therapist manager page adds no collection hydration, listener or polling", () => {

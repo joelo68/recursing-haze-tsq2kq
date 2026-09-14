@@ -4324,7 +4324,6 @@ export default function App() {
     expectedMasterSignature = "",
     payload = {},
     confirmPermanentDelete = false,
-    confirmCredentialMigration = false,
   } = {}) => {
     const safeAction = String(action || "").trim().toLowerCase();
 
@@ -4350,7 +4349,6 @@ export default function App() {
         expectedMasterSignature: expectedMasterSignature || undefined,
         payload: payload && typeof payload === "object" ? payload : {},
         confirmPermanentDelete: confirmPermanentDelete === true,
-        confirmCredentialMigration: confirmCredentialMigration === true,
       }));
 
       if (currentBrandIdRef.current === result.brandIdAtStart) {

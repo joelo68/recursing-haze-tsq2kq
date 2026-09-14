@@ -1,9 +1,8 @@
 const THERAPIST_CREDENTIAL_SCHEMA_VERSION = "therapist-credential-v1";
-const THERAPIST_CREDENTIAL_STORAGE_MODE_EMBEDDED = "embedded_legacy";
 const THERAPIST_CREDENTIAL_STORAGE_MODE_SEPARATED = "separated_v1";
-const LEGACY_STORAGE_MODE_ALIASES = new Set([
+const RETIRED_LEGACY_STORAGE_MODES = new Set([
   "",
-  THERAPIST_CREDENTIAL_STORAGE_MODE_EMBEDDED,
+  "embedded_legacy",
   "embedded_legacy_pending_migration",
 ]);
 
@@ -31,11 +30,13 @@ function assertTherapistCredentialBrandId(value = "") {
 function normalizeTherapistCredentialStorageMode(source = {}) {
   const rawMode = typeof source === "string" ? source : source?.credentialStorageMode;
   const mode = normalizeText(rawMode, 64).toLowerCase();
-  if (LEGACY_STORAGE_MODE_ALIASES.has(mode)) {
-    return THERAPIST_CREDENTIAL_STORAGE_MODE_EMBEDDED;
-  }
   if (mode === THERAPIST_CREDENTIAL_STORAGE_MODE_SEPARATED) {
     return THERAPIST_CREDENTIAL_STORAGE_MODE_SEPARATED;
+  }
+  if (RETIRED_LEGACY_STORAGE_MODES.has(mode)) {
+    throw new TherapistCredentialAuthorityError("legacy_credential_retired", 409, {
+      credentialStorageMode: mode || "missing",
+    });
   }
   throw new TherapistCredentialAuthorityError("invalid_credential_storage_mode", 409, {
     credentialStorageMode: mode,
@@ -118,46 +119,52 @@ function buildSeparatedCredentialCreateDocument(options = {}) {
   return buildSeparatedCredentialBaseDocument(options);
 }
 
-function buildSeparatedCredentialDocument(options = {}) {
-  const record = buildSeparatedCredentialBaseDocument(options);
-  record.migratedAtText = normalizeText(options?.nowText, 80);
-  record.migratedFrom = "therapists.password";
-  if (Object.prototype.hasOwnProperty.call(record, "updatedAt")) {
-    record.migratedAt = record.updatedAt;
-  }
-  return record;
-}
-
-function buildEmbeddedCredentialCreateFields(password = "") {
-  const credentialPassword = String(password ?? "");
-  if (!credentialPassword) throw new TherapistCredentialAuthorityError("credential_password_missing", 500);
-  return {
-    credentialStorageMode: THERAPIST_CREDENTIAL_STORAGE_MODE_EMBEDDED,
-    password: credentialPassword,
-  };
-}
-
-function buildTherapistCredentialState({ brandId, therapistId, masterData = {}, credentialExists = false, credentialData = {} } = {}) {
-  const mode = normalizeTherapistCredentialStorageMode(masterData);
+function inspectTherapistCredentialState({
+  brandId,
+  therapistId,
+  masterData = {},
+  credentialExists = false,
+  credentialData = {},
+} = {}) {
+  const rawMode = normalizeText(masterData?.credentialStorageMode, 64).toLowerCase();
   const masterHasPassword = typeof masterData?.password === "string" && masterData.password.length > 0;
-  if (mode === THERAPIST_CREDENTIAL_STORAGE_MODE_EMBEDDED) {
-    if (!masterHasPassword) return { ok: false, classification: "LEGACY_PASSWORD_MISSING", mode };
-    if (credentialExists) return { ok: false, classification: "DUAL_SOURCE_CONFLICT", mode };
-    return { ok: true, classification: "EMBEDDED_LEGACY_READY", mode };
+
+  if (rawMode !== THERAPIST_CREDENTIAL_STORAGE_MODE_SEPARATED) {
+    return {
+      ok: false,
+      classification: "LEGACY_CREDENTIAL_RETIRED",
+      mode: rawMode || "missing",
+    };
   }
-  if (masterHasPassword) return { ok: false, classification: "DUAL_SOURCE_CONFLICT", mode };
-  if (!credentialExists) return { ok: false, classification: "SEPARATED_CREDENTIAL_MISSING", mode };
+  if (masterHasPassword) {
+    return {
+      ok: false,
+      classification: credentialExists ? "DUAL_SOURCE_CONFLICT" : "MASTER_PASSWORD_PRESENT",
+      mode: THERAPIST_CREDENTIAL_STORAGE_MODE_SEPARATED,
+    };
+  }
+  if (!credentialExists) {
+    return {
+      ok: false,
+      classification: "SEPARATED_CREDENTIAL_MISSING",
+      mode: THERAPIST_CREDENTIAL_STORAGE_MODE_SEPARATED,
+    };
+  }
   try {
     normalizeSeparatedCredentialDocument(credentialData, { brandId, therapistId });
   } catch (error) {
     return {
       ok: false,
       classification: "SEPARATED_CREDENTIAL_INVALID",
-      mode,
+      mode: THERAPIST_CREDENTIAL_STORAGE_MODE_SEPARATED,
       code: String(error?.code || "credential_document_invalid"),
     };
   }
-  return { ok: true, classification: "SEPARATED_V1_READY", mode };
+  return {
+    ok: true,
+    classification: "SEPARATED_V1_READY",
+    mode: THERAPIST_CREDENTIAL_STORAGE_MODE_SEPARATED,
+  };
 }
 
 async function loadTherapistCredentialSource({
@@ -173,26 +180,32 @@ async function loadTherapistCredentialSource({
   const read = transaction ? (ref) => transaction.get(ref) : (ref) => ref.get();
   const therapistSnap = therapistSnapshot || await read(refs.therapistRef);
   if (!therapistSnap?.exists) throw new TherapistCredentialAuthorityError("account_missing", 404);
+
   const masterData = therapistSnap.data() || {};
   if (requireActive && isTherapistInactive(masterData)) {
     throw new TherapistCredentialAuthorityError("account_inactive", 403);
   }
+
   const mode = normalizeTherapistCredentialStorageMode(masterData);
-  if (mode === THERAPIST_CREDENTIAL_STORAGE_MODE_EMBEDDED) {
-    const password = typeof masterData.password === "string" ? masterData.password : "";
-    if (!password) throw new TherapistCredentialAuthorityError("credential_source_missing", 409);
-    return { ...refs, mode, masterData, password, credentialData: null };
-  }
-  const credentialSnap = await read(refs.credentialRef);
-  if (!credentialSnap?.exists) throw new TherapistCredentialAuthorityError("credential_source_missing", 409);
   if (typeof masterData.password === "string" && masterData.password.length > 0) {
-    throw new TherapistCredentialAuthorityError("credential_dual_source_conflict", 409);
+    throw new TherapistCredentialAuthorityError("credential_master_password_present", 409);
+  }
+
+  const credentialSnap = await read(refs.credentialRef);
+  if (!credentialSnap?.exists) {
+    throw new TherapistCredentialAuthorityError("credential_source_missing", 409);
   }
   const credentialData = normalizeSeparatedCredentialDocument(credentialSnap.data() || {}, {
     brandId: refs.brandId,
     therapistId: refs.therapistId,
   });
-  return { ...refs, mode, masterData, credentialData, password: credentialData.password };
+  return {
+    ...refs,
+    mode,
+    masterData,
+    credentialData,
+    password: credentialData.password,
+  };
 }
 
 async function updateTherapistCredentialPasswordInTransaction({
@@ -210,6 +223,7 @@ async function updateTherapistCredentialPasswordInTransaction({
     throw new Error("missing_transaction");
   }
   if (typeof passwordMatches !== "function") throw new Error("missing_password_matcher");
+
   const source = await loadTherapistCredentialSource({
     transaction,
     db,
@@ -221,18 +235,16 @@ async function updateTherapistCredentialPasswordInTransaction({
   if (!passwordMatches(currentPassword, source.password)) {
     throw new TherapistCredentialAuthorityError("credential_changed", 409);
   }
-  if (source.mode === THERAPIST_CREDENTIAL_STORAGE_MODE_EMBEDDED) {
-    transaction.set(source.therapistRef, {
-      password: String(newPassword ?? ""),
-      updatedAtText: normalizeText(nowText, 80),
-    }, { merge: true });
-  } else {
-    transaction.set(source.credentialRef, {
-      password: String(newPassword ?? ""),
-      updatedAtText: normalizeText(nowText, 80),
-    }, { merge: true });
-  }
-  return { mode: source.mode, therapistId: source.therapistId };
+
+  transaction.set(source.credentialRef, {
+    password: String(newPassword ?? ""),
+    updatedAtText: normalizeText(nowText, 80),
+  }, { merge: true });
+
+  return {
+    mode: THERAPIST_CREDENTIAL_STORAGE_MODE_SEPARATED,
+    therapistId: source.therapistId,
+  };
 }
 
 async function resetTherapistCredentialPasswordInTransaction({
@@ -263,95 +275,37 @@ async function resetTherapistCredentialPasswordInTransaction({
     therapistSnapshot,
   });
 
-  if (source.mode === THERAPIST_CREDENTIAL_STORAGE_MODE_EMBEDDED) {
-    transaction.set(source.therapistRef, {
-      password: credentialPassword,
-      updatedAtText: normalizeText(nowText, 80),
-    }, { merge: true });
-  } else {
-    transaction.set(source.credentialRef, {
-      password: credentialPassword,
-      updatedAtText: normalizeText(nowText, 80),
-    }, { merge: true });
-  }
+  transaction.set(source.credentialRef, {
+    password: credentialPassword,
+    updatedAtText: normalizeText(nowText, 80),
+  }, { merge: true });
 
   return {
-    mode: source.mode,
+    mode: THERAPIST_CREDENTIAL_STORAGE_MODE_SEPARATED,
     therapistId: source.therapistId,
   };
 }
 
-async function migrateTherapistCredentialInTransaction({
+function deleteSeparatedTherapistCredentialInTransaction({
   transaction,
   db,
   brandId,
   therapistId,
+  masterData,
   getBrandCollection,
-  nowText,
-  serverTimestamp,
-  deleteField,
-  therapistSnapshot = null,
 } = {}) {
-  if (!transaction || typeof transaction.get !== "function" || typeof transaction.set !== "function") {
-    throw new Error("missing_transaction");
-  }
-  if (typeof deleteField !== "function") throw new Error("missing_delete_field");
-  const refs = getTherapistCredentialRefs({ db, brandId, therapistId, getBrandCollection });
-  const therapistSnap = therapistSnapshot || await transaction.get(refs.therapistRef);
-  const credentialSnap = await transaction.get(refs.credentialRef);
-  if (!therapistSnap?.exists) throw new TherapistCredentialAuthorityError("account_missing", 404);
-  const masterData = therapistSnap.data() || {};
-  const mode = normalizeTherapistCredentialStorageMode(masterData);
-  if (mode === THERAPIST_CREDENTIAL_STORAGE_MODE_SEPARATED) {
-    const state = buildTherapistCredentialState({
-      brandId: refs.brandId,
-      therapistId: refs.therapistId,
-      masterData,
-      credentialExists: credentialSnap?.exists === true,
-      credentialData: credentialSnap?.exists ? (credentialSnap.data() || {}) : {},
-    });
-    if (!state.ok) {
-      throw new TherapistCredentialAuthorityError("credential_separation_state_invalid", 409, {
-        classification: state.classification,
-      });
-    }
-    return { changed: false, mode, classification: state.classification };
-  }
-  if (credentialSnap?.exists) throw new TherapistCredentialAuthorityError("credential_dual_source_conflict", 409);
-  const password = typeof masterData.password === "string" ? masterData.password : "";
-  if (!password) throw new TherapistCredentialAuthorityError("credential_source_missing", 409);
-  const credentialRecord = buildSeparatedCredentialDocument({
-    brandId: refs.brandId,
-    therapistId: refs.therapistId,
-    password,
-    nowText,
-    serverTimestamp,
-  });
-  transaction.set(refs.credentialRef, credentialRecord, { merge: false });
-  transaction.set(refs.therapistRef, {
-    credentialStorageMode: THERAPIST_CREDENTIAL_STORAGE_MODE_SEPARATED,
-    credentialMigratedAtText: normalizeText(nowText, 80),
-    password: deleteField(),
-  }, { merge: true });
-  return {
-    changed: true,
-    mode: THERAPIST_CREDENTIAL_STORAGE_MODE_SEPARATED,
-    classification: "SEPARATED_V1_READY",
-  };
-}
-
-function deleteSeparatedTherapistCredentialInTransaction({ transaction, db, brandId, therapistId, masterData, getBrandCollection } = {}) {
   if (!transaction || typeof transaction.delete !== "function") throw new Error("missing_transaction");
-  const mode = normalizeTherapistCredentialStorageMode(masterData || {});
-  if (mode !== THERAPIST_CREDENTIAL_STORAGE_MODE_SEPARATED) return { deleted: false, mode };
+  normalizeTherapistCredentialStorageMode(masterData || {});
   const refs = getTherapistCredentialRefs({ db, brandId, therapistId, getBrandCollection });
   transaction.delete(refs.credentialRef);
-  return { deleted: true, mode };
+  return {
+    deleted: true,
+    mode: THERAPIST_CREDENTIAL_STORAGE_MODE_SEPARATED,
+  };
 }
 
 module.exports = {
   THERAPIST_CREDENTIAL_SCHEMA_VERSION,
-  THERAPIST_CREDENTIAL_STORAGE_MODE_EMBEDDED,
   THERAPIST_CREDENTIAL_STORAGE_MODE_SEPARATED,
   TherapistCredentialAuthorityError,
   assertTherapistCredentialBrandId,
@@ -359,13 +313,10 @@ module.exports = {
   isTherapistInactive,
   getTherapistCredentialRefs,
   normalizeSeparatedCredentialDocument,
-  buildSeparatedCredentialDocument,
   buildSeparatedCredentialCreateDocument,
-  buildEmbeddedCredentialCreateFields,
-  buildTherapistCredentialState,
+  inspectTherapistCredentialState,
   loadTherapistCredentialSource,
   updateTherapistCredentialPasswordInTransaction,
   resetTherapistCredentialPasswordInTransaction,
-  migrateTherapistCredentialInTransaction,
   deleteSeparatedTherapistCredentialInTransaction,
 };

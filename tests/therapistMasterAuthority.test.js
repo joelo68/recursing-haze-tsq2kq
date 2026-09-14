@@ -68,7 +68,7 @@ function makeEnv({
       manager: "北區",
       managerName: "北區",
       region: "北區",
-      password: "member-secret",
+      credentialStorageMode: "separated_v1",
       onboardDate: "2026-01-10",
       resignDate: "",
       status: "在職",
@@ -80,7 +80,16 @@ function makeEnv({
       updatedAtText: "2026-08-01T00:00:00.000Z",
     },
   },
-  credentials = {},
+  credentials = {
+    t1: {
+      schemaVersion: "therapist-credential-v1",
+      brandId,
+      therapistId: "t1",
+      password: "member-secret",
+      createdAtText: "2026-09-12T09:00:00.000Z",
+      updatedAtText: "2026-09-12T09:00:00.000Z",
+    },
+  },
   requestAuth,
   adminCheck,
 } = {}) {
@@ -326,272 +335,60 @@ test("get returns exactly one signed sanitized therapist row without a collectio
   assert.equal(env.writes.length, 0);
 });
 
-test("credential migration inventory is read-only, brand-scoped, password-free, and classifies rollout safety", async () => {
-  const env = makeEnv({
-    brandId: "cyj",
-    therapists: {
-      legacyReady: {
-        name: "在職舊帳號",
-        store: "A",
-        password: "legacy-secret",
-        credentialStorageMode: "embedded_legacy",
-        status: "在職",
-        isActive: true,
-      },
-      separatedReady: {
-        name: "已升級帳號",
-        store: "B",
-        credentialStorageMode: "separated_v1",
-        status: "在職",
-        isActive: true,
-      },
-      dualConflict: {
-        name: "衝突帳號",
-        store: "C",
-        password: "legacy-conflict-secret",
-        credentialStorageMode: "embedded_legacy",
-        status: "在職",
-        isActive: true,
-      },
-      archivedReady: {
-        name: "離職舊帳號",
-        store: "D",
-        password: "archived-secret",
-        credentialStorageMode: "embedded_legacy",
-        status: "離職",
-        isActive: false,
-        isResigned: true,
-      },
-    },
-    credentials: {
-      separatedReady: {
-        schemaVersion: "therapist-credential-v1",
-        brandId: "cyj",
-        therapistId: "separatedReady",
-        password: "separated-secret",
-      },
-      dualConflict: {
-        schemaVersion: "therapist-credential-v1",
-        brandId: "cyj",
-        therapistId: "dualConflict",
-        password: "unexpected-secret",
-      },
-      orphanCredential: {
-        schemaVersion: "therapist-credential-v1",
-        brandId: "cyj",
-        therapistId: "orphanCredential",
-        password: "orphan-secret",
-      },
-    },
-  });
-
-  const res = await env.call({ action: "credential_migration_inventory" });
-  assert.equal(res.statusCode, 200);
-  assert.equal(res.body.ok, true);
-  assert.equal(res.body.action, "credential_migration_inventory");
-  assert.equal(res.body.brandId, "cyj");
-  assert.equal(res.body.readCount, 7);
-  assert.deepEqual(res.body.counts, {
-    total: 4,
-    ready: 2,
-    activeReady: 1,
-    archivedReady: 1,
-    separated: 1,
-    blocked: 1,
-    orphanCredentialCount: 1,
-  });
-  assert.equal(res.body.issues.length, 1);
-  assert.equal(res.body.issues[0].type, "ORPHAN_CREDENTIAL_DOCUMENT");
-  assert.equal(res.body.issues[0].therapistId, "orphanCredential");
-
-  const byId = new Map(res.body.rows.map((row) => [row.id, row]));
-  assert.equal(byId.get("legacyReady").migrationClassification, "EMBEDDED_LEGACY_READY");
-  assert.equal(byId.get("legacyReady").migrationReady, true);
-  assert.equal(byId.get("archivedReady").migrationReady, true);
-  assert.equal(byId.get("archivedReady").archived, true);
-  assert.equal(byId.get("separatedReady").migrationClassification, "SEPARATED_V1_READY");
-  assert.equal(byId.get("separatedReady").alreadySeparated, true);
-  assert.equal(byId.get("dualConflict").migrationClassification, "DUAL_SOURCE_CONFLICT");
-  assert.equal(byId.get("dualConflict").migrationReady, false);
-
-  assert.equal(env.transactionCount, 0);
-  assert.equal(env.writes.length, 0);
-  assert.equal(env.deletes.length, 0);
-  assert.equal(JSON.stringify(res.body).includes("legacy-secret"), false);
-  assert.equal(JSON.stringify(res.body).includes("separated-secret"), false);
-  assert.equal(JSON.stringify(res.body).includes("unexpected-secret"), false);
-  assert.equal(JSON.stringify(res.body).includes("orphan-secret"), false);
+test("retired migration actions fail before any transaction or collection scan", async () => {
+  for (const action of ["credential_migration_inventory", "migrate_credential"]) {
+    const env = makeEnv();
+    const res = await env.call({ action, therapistId: "t1" });
+    assert.equal(res.statusCode, 400);
+    assert.equal(res.body.code, "unsupported_therapist_master_action");
+    assert.equal(env.transactionCount, 0);
+    assert.equal(env.writes.length, 0);
+    assert.equal(env.deletes.length, 0);
+    assert.equal(env.reads.length, 0);
+  }
 });
 
-test("reset_password restores embedded legacy credential to the server initial password without changing master signature", async () => {
+test("reset_password writes only separated_v1 credential authority and keeps the semantic master signature stable", async () => {
   const env = makeEnv();
-  const before = buildTherapistMasterSignature(env.refs.get("cyj:therapists:t1").data);
+  const masterRef = env.refs.get("cyj:therapists:t1");
+  const before = buildTherapistMasterSignature(masterRef.data, "t1");
+
   const res = await env.call({ action: "reset_password", therapistId: "t1" });
   assert.equal(res.statusCode, 200);
   assert.equal(res.body.ok, true);
   assert.equal(res.body.passwordReset, true);
   assert.equal(res.body.requiresInitialPasswordChange, true);
-  assert.equal(res.body.credentialStorageMode, "embedded_legacy");
+  assert.equal(res.body.credentialStorageMode, "separated_v1");
   assert.equal(res.body.masterSignature, before);
-  assert.equal(env.refs.get("cyj:therapists:t1").data.password, "0000");
-  assert.equal([...env.refs.keys()].some((key) => key.startsWith("cyj:therapist_credentials:") && env.refs.get(key).exists), false);
-  assert.ok(env.writes.some((row) => row.key === "cyj:therapists:t1" && row.data.password === "0000"));
+  assert.equal(env.refs.get("cyj:therapist_credentials:t1").data.password, "0000");
+  assert.equal(Object.prototype.hasOwnProperty.call(masterRef.data, "password"), false);
+  assert.ok(env.writes.some((row) => row.key === "cyj:therapist_credentials:t1" && row.data.password === "0000"));
+  assert.equal(env.writes.some((row) => row.key === "cyj:therapists:t1" && Object.prototype.hasOwnProperty.call(row.data, "password")), false);
   assert.ok(env.writes.some((row) => row.key.startsWith("cyj:system_logs:") && row.data.details?.passwordReset === true));
 });
 
-test("reset_password writes only separated_v1 credential authority when the therapist has already migrated", async () => {
+test("reset_password fails closed instead of reviving a retired legacy credential", async () => {
   const env = makeEnv({
-    brandId: "yibo",
     therapists: {
       t1: {
         id: "t1",
-        name: "伊啵管理師",
+        name: "歷史異常帳號",
         store: "A",
-        credentialStorageMode: "separated_v1",
-        isActive: true,
+        password: "legacy-secret",
+        credentialStorageMode: "embedded_legacy",
         status: "在職",
+        isActive: true,
       },
     },
-    credentials: {
-      t1: {
-        schemaVersion: "therapist-credential-v1",
-        brandId: "yibo",
-        therapistId: "t1",
-        password: "private-old",
-        createdAtText: "2026-09-12T09:00:00.000Z",
-        updatedAtText: "2026-09-12T09:00:00.000Z",
-        migratedAtText: "2026-09-12T09:00:00.000Z",
-      },
-    },
+    credentials: {},
   });
+
   const res = await env.call({ action: "reset_password", therapistId: "t1" });
-  assert.equal(res.statusCode, 200);
-  assert.equal(res.body.passwordReset, true);
-  assert.equal(res.body.credentialStorageMode, "separated_v1");
-  assert.equal(env.refs.get("yibo:therapist_credentials:t1").data.password, "0000");
-  assert.equal(env.refs.get("yibo:therapists:t1").data.password, undefined);
-  assert.equal(env.refs.get("yibo:therapists:t1").data.credentialStorageMode, "separated_v1");
-  assert.ok(env.writes.some((row) => row.key === "yibo:therapist_credentials:t1" && row.data.password === "0000"));
-  assert.equal(env.writes.some((row) => row.key === "yibo:therapists:t1" && Object.prototype.hasOwnProperty.call(row.data, "password")), false);
-});
-
-test("migrate_credential atomically preserves the current password, removes it from master, and keeps the semantic master signature stable", async () => {
-  const env = makeEnv({
-    brandId: "cyj",
-    therapists: {
-      t1: {
-        id: "t1",
-        name: "王小美",
-        store: "A",
-        storeName: "A",
-        manager: "北區",
-        managerName: "北區",
-        region: "北區",
-        password: "legacy-secret",
-        credentialStorageMode: "embedded_legacy",
-        status: "在職",
-        isActive: true,
-        isResigned: false,
-        resigned: false,
-      },
-    },
-  });
-
-  const beforeSignature = buildTherapistMasterSignature(env.refs.get("cyj:therapists:t1").data);
-  const res = await env.call({
-    action: "migrate_credential",
-    therapistId: "t1",
-    confirmCredentialMigration: true,
-  });
-
-  assert.equal(res.statusCode, 200);
-  assert.equal(res.body.ok, true);
-  assert.equal(res.body.credentialMigrated, true);
-  assert.equal(res.body.credentialMigrationClassification, "SEPARATED_V1_READY");
-  assert.equal(res.body.credentialStorageMode, "separated_v1");
-  assert.equal(res.body.masterSignature, beforeSignature);
-  assert.equal(env.refs.get("cyj:therapists:t1").data.credentialStorageMode, "separated_v1");
-  assert.equal(Object.prototype.hasOwnProperty.call(env.refs.get("cyj:therapists:t1").data, "password"), false);
-
-  const credential = env.refs.get("cyj:therapist_credentials:t1");
-  assert.ok(credential?.exists);
-  assert.equal(credential.data.schemaVersion, "therapist-credential-v1");
-  assert.equal(credential.data.brandId, "cyj");
-  assert.equal(credential.data.therapistId, "t1");
-  assert.equal(credential.data.password, "legacy-secret");
-  assert.equal(credential.data.migratedFrom, "therapists.password");
-
-  assert.equal(env.reads.filter((key) => key === "cyj:therapists:t1").length, 1);
-  assert.equal(env.reads.filter((key) => key === "cyj:therapist_credentials:t1").length, 1);
-  assert.ok(env.writes.some((row) => row.key.startsWith("cyj:system_logs:")));
-  assert.equal(JSON.stringify(res.body).includes("legacy-secret"), false);
-  assert.equal(env.writes.filter((row) => row.key.startsWith("cyj:system_logs:")).some((row) => JSON.stringify(row.data).includes("legacy-secret")), false);
-});
-
-test("migrate_credential is explicit, idempotent, and fails closed on dual-source state", async () => {
-  const noConfirm = makeEnv();
-  const denied = await noConfirm.call({
-    action: "migrate_credential",
-    therapistId: "t1",
-    confirmCredentialMigration: false,
-  });
-  assert.equal(denied.statusCode, 400);
-  assert.equal(denied.body.code, "credential_migration_confirmation_required");
-  assert.equal(noConfirm.transactionCount, 0);
-
-  const env = makeEnv();
-  const first = await env.call({
-    action: "migrate_credential",
-    therapistId: "t1",
-    confirmCredentialMigration: true,
-  });
-  assert.equal(first.statusCode, 200);
-  assert.equal(first.body.credentialMigrated, true);
-
-  const credentialWritesBefore = env.writes.filter((row) => row.key === "cyj:therapist_credentials:t1").length;
-  const masterWritesBefore = env.writes.filter((row) => row.key === "cyj:therapists:t1").length;
-  const second = await env.call({
-    action: "migrate_credential",
-    therapistId: "t1",
-    expectedMasterSignature: first.body.masterSignature,
-    confirmCredentialMigration: true,
-  });
-  assert.equal(second.statusCode, 200);
-  assert.equal(second.body.credentialMigrated, false);
-  assert.equal(second.body.credentialMigrationClassification, "SEPARATED_V1_READY");
-  assert.equal(env.writes.filter((row) => row.key === "cyj:therapist_credentials:t1").length, credentialWritesBefore);
-  assert.equal(env.writes.filter((row) => row.key === "cyj:therapists:t1").length, masterWritesBefore);
-
-  const conflict = makeEnv({
-    therapists: {
-      t1: {
-        id: "t1",
-        name: "王小美",
-        store: "A",
-        password: "legacy-secret",
-        credentialStorageMode: "embedded_legacy",
-        status: "在職",
-        isActive: true,
-      },
-    },
-    credentials: {
-      t1: {
-        schemaVersion: "therapist-credential-v1",
-        brandId: "cyj",
-        therapistId: "t1",
-        password: "unexpected-secret",
-      },
-    },
-  });
-  const blocked = await conflict.call({
-    action: "migrate_credential",
-    therapistId: "t1",
-    confirmCredentialMigration: true,
-  });
-  assert.equal(blocked.statusCode, 409);
-  assert.equal(blocked.body.code, "credential_dual_source_conflict");
-  assert.equal(conflict.refs.get("cyj:therapists:t1").data.password, "legacy-secret");
-  assert.equal(conflict.refs.get("cyj:therapist_credentials:t1").data.password, "unexpected-secret");
+  assert.equal(res.statusCode, 409);
+  assert.equal(res.body.code, "legacy_credential_retired");
+  assert.equal(env.writes.length, 0);
+  assert.equal(env.deletes.length, 0);
+  assert.equal(env.refs.get("cyj:therapists:t1").data.password, "legacy-secret");
 });
 
 test("reset_password refuses archived therapist accounts and writes no credential", async () => {
@@ -601,7 +398,7 @@ test("reset_password refuses archived therapist accounts and writes no credentia
         id: "t1",
         name: "離職管理師",
         store: "A",
-        password: "private-old",
+        credentialStorageMode: "separated_v1",
         isActive: false,
         isResigned: true,
         status: "離職",
@@ -624,7 +421,7 @@ test("list stays inside the requested brand therapist collection", async () => {
         store: "A",
         status: "在職",
         isActive: true,
-        password: "yibo-secret",
+        credentialStorageMode: "separated_v1",
       },
     },
   });
@@ -640,7 +437,7 @@ test("list stays inside the requested brand therapist collection", async () => {
   assert.equal(res.body.brandId, "yibo");
   assert.deepEqual(res.body.therapists.map((item) => item.id), ["y1"]);
   assert.equal(JSON.stringify(res.body).includes("foreign-secret"), false);
-  assert.equal(JSON.stringify(res.body).includes("yibo-secret"), false);
+  assert.equal(JSON.stringify(res.body).includes("member-secret"), false);
 });
 
 test("therapist master authority rejects unknown brand before a transaction", async () => {
@@ -816,7 +613,8 @@ test("update preserves fresh credential and unrelated operational fields while r
   assert.equal(ref.data.storeName, "C");
   assert.deepEqual(ref.data.stores, ["C"]);
   assert.equal(ref.data.manager, "南區");
-  assert.equal(ref.data.password, "member-secret");
+  assert.equal(Object.prototype.hasOwnProperty.call(ref.data, "password"), false);
+  assert.equal(env.refs.get("cyj:therapist_credentials:t1").data.password, "member-secret");
   assert.equal(ref.data.legacyTarget, 123);
   assert.equal(ref.data.status, "在職");
   assert.equal(ref.data.isActive, true);
@@ -836,7 +634,8 @@ test("archive preserves credential and writes one canonical inactive state", asy
   assert.equal(res.statusCode, 200);
   assert.equal(res.body.archived, true);
   const ref = env.refs.get("cyj:therapists:t1");
-  assert.equal(ref.data.password, "member-secret");
+  assert.equal(Object.prototype.hasOwnProperty.call(ref.data, "password"), false);
+  assert.equal(env.refs.get("cyj:therapist_credentials:t1").data.password, "member-secret");
   assert.equal(ref.data.status, "離職");
   assert.equal(ref.data.isActive, false);
   assert.equal(ref.data.isResigned, true);
@@ -852,7 +651,7 @@ test("restore clears legacy inactive markers and revalidates the therapist store
         name: "王小美",
         store: "A",
         storeName: "A",
-        password: "member-secret",
+        credentialStorageMode: "separated_v1",
         onboardDate: "2026-01-10",
         resignDate: "2026-08-20",
         inactiveDate: "2026-08-20",
@@ -867,7 +666,8 @@ test("restore clears legacy inactive markers and revalidates the therapist store
   const res = await env.call({ action: "restore", therapistId: "t1", payload: {} });
   assert.equal(res.statusCode, 200);
   const ref = env.refs.get("cyj:therapists:t1");
-  assert.equal(ref.data.password, "member-secret");
+  assert.equal(Object.prototype.hasOwnProperty.call(ref.data, "password"), false);
+  assert.equal(env.refs.get("cyj:therapist_credentials:t1").data.password, "member-secret");
   assert.equal(ref.data.status, "在職");
   assert.equal(ref.data.isActive, true);
   assert.equal(ref.data.isResigned, false);
@@ -896,7 +696,7 @@ test("permanent delete is explicit and requires archived state", async () => {
         id: "t1",
         name: "已離職",
         store: "A",
-        password: "private-secret",
+        credentialStorageMode: "separated_v1",
         onboardDate: "2025-01-01",
         resignDate: "2026-01-01",
         status: "離職",
@@ -922,7 +722,7 @@ test("permanent delete is explicit and requires archived state", async () => {
         id: "t1",
         name: "已離職",
         store: "A",
-        password: "private-secret",
+        credentialStorageMode: "separated_v1",
         onboardDate: "2025-01-01",
         resignDate: "2026-01-01",
         status: "離職",
@@ -940,7 +740,7 @@ test("permanent delete is explicit and requires archived state", async () => {
   });
   assert.equal(confirmed.statusCode, 200);
   assert.equal(confirmed.body.deleted, true);
-  assert.deepEqual(confirmedEnv.deletes, ["cyj:therapists:t1"]);
+  assert.deepEqual(confirmedEnv.deletes.sort(), ["cyj:therapist_credentials:t1", "cyj:therapists:t1"].sort());
   const audit = confirmedEnv.writes.find((row) => row.key.includes(":system_logs:"));
   assert.ok(audit);
   assert.doesNotMatch(JSON.stringify(audit.data), /private-secret|boss-secret|credentialPassword/);
@@ -1020,10 +820,11 @@ test("master update does not accept arbitrary fields or mutate credential from a
   }), /credential_payload_not_allowed/);
 });
 
-test("therapist new-account writer creates separated_v1 atomically while preserving legacy compatibility for existing accounts", () => {
+test("therapist new-account writer creates separated_v1 atomically with no legacy credential write path", () => {
   assert.match(backendSource, /buildSeparatedCredentialCreateDocument/);
   assert.match(backendSource, /credentialStorageMode:\s*THERAPIST_CREDENTIAL_STORAGE_MODE_SEPARATED/);
   assert.doesNotMatch(backendSource, /buildEmbeddedCredentialCreateFields/);
+  assert.doesNotMatch(backendSource, /migrate_credential|credential_migration_inventory|confirmCredentialMigration|migrateTherapistCredentialInTransaction/);
   assert.match(backendSource, /transaction\.set\(therapistRef,\s*result\.next,\s*\{\s*merge:\s*false\s*\}\)/s);
   assert.match(backendSource, /transaction\.set\(credentialRefs\.credentialRef,\s*credentialRecord,\s*\{\s*merge:\s*false\s*\}\)/s);
   assert.match(backendSource, /therapist_credential_id_collision/);
@@ -1082,25 +883,35 @@ test("therapist credential collection stays protected while B1C2C2 retires brows
   assert.doesNotMatch(app, /admin_therapist_master_backend/);
 });
 
-test("legacy master without physical id uses Firestore document id as canonical OCC identity", async () => {
+test("master without physical id uses Firestore document id as canonical OCC identity under separated credentials", async () => {
   const env = makeEnv({
     brandId: "cyj",
     therapists: {
       legacy1: {
-        name: "Legacy 管理師",
+        name: "歷史管理師",
         store: "A",
         storeName: "A",
         stores: ["A"],
         manager: "北區",
         managerName: "北區",
         region: "北區",
-        password: "legacy-private",
+        credentialStorageMode: "separated_v1",
         onboardDate: "2026-01-10",
         resignDate: "",
         status: "在職",
         isActive: true,
         isResigned: false,
         resigned: false,
+      },
+    },
+    credentials: {
+      legacy1: {
+        schemaVersion: "therapist-credential-v1",
+        brandId: "cyj",
+        therapistId: "legacy1",
+        password: "private-secret",
+        createdAtText: "2026-09-14T00:00:00.000Z",
+        updatedAtText: "2026-09-14T00:00:00.000Z",
       },
     },
   });
@@ -1120,29 +931,24 @@ test("legacy master without physical id uses Firestore document id as canonical 
   assert.equal(getRes.body.ok, true);
   assert.equal(getRes.body.therapist.id, "legacy1");
   assert.equal(getRes.body.masterSignature, canonicalSignature);
+  assert.equal(getRes.body.credentialStorageMode, "separated_v1");
 
-  const migrateRes = await env.call({
-    action: "migrate_credential",
+  const updateRes = await env.call({
+    action: "update",
     therapistId: "legacy1",
     expectedMasterSignature: getRes.body.masterSignature,
-    confirmCredentialMigration: true,
+    payload: {
+      name: "歷史管理師更新",
+      store: "A",
+      onboardDate: "2026-01-10",
+      resignDate: "",
+    },
   });
 
-  assert.equal(migrateRes.statusCode, 200);
-  assert.equal(migrateRes.body.ok, true);
-  assert.equal(migrateRes.body.credentialMigrated, true);
-  assert.equal(migrateRes.body.credentialStorageMode, "separated_v1");
-  assert.equal(migrateRes.body.masterSignature, canonicalSignature);
-  assert.equal(migrateRes.body.therapist.id, "legacy1");
-
-  const migratedMaster = env.refs.get("cyj:therapists:legacy1").data;
-  assert.equal(Object.prototype.hasOwnProperty.call(migratedMaster, "id"), false);
-  assert.equal(Object.prototype.hasOwnProperty.call(migratedMaster, "password"), false);
-  assert.equal(migratedMaster.credentialStorageMode, "separated_v1");
-
-  const credential = env.refs.get("cyj:therapist_credentials:legacy1");
-  assert.equal(credential.exists, true);
-  assert.equal(credential.data.brandId, "cyj");
-  assert.equal(credential.data.therapistId, "legacy1");
-  assert.equal(credential.data.password, "legacy-private");
+  assert.equal(updateRes.statusCode, 200);
+  assert.equal(updateRes.body.ok, true);
+  assert.equal(updateRes.body.therapist.id, "legacy1");
+  assert.equal(updateRes.body.credentialStorageMode, "separated_v1");
+  assert.equal(env.refs.get("cyj:therapist_credentials:legacy1").data.password, "private-secret");
+  assert.equal(Object.prototype.hasOwnProperty.call(env.refs.get("cyj:therapists:legacy1").data, "password"), false);
 });

@@ -185,7 +185,7 @@ exports.manageManagerOrganization = managerOrganizationAuthorityFunctions.manage
 // 管理師人員主檔新增／修改／封存／復職／永久刪除收斂至 Backend transaction。
 // Master OCC 使用不含 password 的 semantic signature；本人改密碼不會製造假的人員資料衝突。
 // 新增管理師時，初始密碼直接建立於 therapist_credentials；therapists 主檔不再保存 password。
-// 既有 embedded_legacy 帳號仍由 credential authority 相容讀取，等待獨立受控 migration。
+// Therapist Credential Migration 已完成；正式 runtime 僅接受 separated_v1，舊版 credential 會 fail closed。
 // ==========================================
 const { createTherapistMasterAuthorityFunctions } = require("./therapistMasterAuthority");
 const therapistMasterAuthorityFunctions = createTherapistMasterAuthorityFunctions({
@@ -201,7 +201,6 @@ const therapistMasterAuthorityFunctions = createTherapistMasterAuthorityFunction
   normalizeStoreCore: normalizeStoreLifecycleCore,
   getInitialPasswordsForRole,
   serverTimestamp: () => admin.firestore.FieldValue.serverTimestamp(),
-  deleteField: () => admin.firestore.FieldValue.delete(),
 });
 exports.manageTherapistMaster = therapistMasterAuthorityFunctions.manageTherapistMaster;
 

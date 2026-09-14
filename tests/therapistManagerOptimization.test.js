@@ -36,7 +36,7 @@ test("selected therapist detail is one backend point read and OCC conflict refre
   assert.doesNotMatch(app, /error\?\.status === 409[\s\S]{0,500}action:\s*"list"/);
 });
 
-test("forgotten-password recovery stays reset-only while optional reveal is explicit backend authority", () => {
+test("forgotten-password recovery stays reset-only while optional reveal uses separated credential backend authority", () => {
   assert.match(managerView, /重設登入密碼/);
   assert.match(managerView, /action:\s*"reset_password"/);
   assert.match(managerView, /系統初始密碼重新登入並設定新密碼/);
@@ -47,10 +47,10 @@ test("forgotten-password recovery stays reset-only while optional reveal is expl
   assert.match(masterAuthority, /resetTherapistCredentialPasswordInTransaction/);
   assert.match(masterAuthority, /getInitialPasswordsForRole\("therapist", brandId\)/);
   assert.match(masterAuthority, /requiresInitialPasswordChange:\s*true/);
-  assert.match(credentialAuthority, /if \(source\.mode === THERAPIST_CREDENTIAL_STORAGE_MODE_EMBEDDED\)/);
+  assert.match(credentialAuthority, /THERAPIST_CREDENTIAL_STORAGE_MODE_SEPARATED = "separated_v1"/);
   assert.match(credentialAuthority, /transaction\.set\(source\.credentialRef/);
-  assert.match(masterAuthority, /migrateTherapistCredentialInTransaction/);
-  assert.match(masterAuthority, /confirmCredentialMigration/);
+  assert.doesNotMatch(credentialAuthority, /THERAPIST_CREDENTIAL_STORAGE_MODE_EMBEDDED/);
+  assert.doesNotMatch(masterAuthority, /migrateTherapistCredentialInTransaction|confirmCredentialMigration|migrate_credential|credential_migration_inventory/);
 });
 
 test("sanitized directory carries roster display fields but not credential material", () => {
@@ -64,7 +64,7 @@ test("sanitized directory carries roster display fields but not credential mater
   assert.doesNotMatch(block, /password|credentialStorageMode|secret|token/i);
 });
 
-test("optimization adds no listener polling or collection query while migration remains exact single-account", () => {
+test("optimization adds no listener polling or collection query after credential migration retirement", () => {
   const start = app.indexOf("const refreshTherapistMasterRecord");
   const end = app.indexOf("const manageApplicationAccountAction", start);
   assert.ok(start >= 0 && end > start);

@@ -40,9 +40,9 @@ const makeResponse = () => ({
 
 const makeSnapshot = (ref) => ({ exists: ref.exists !== false, data: () => ref.data, id: ref.id || "" });
 
-function makeFactory({ dataBySetting = {}, therapistData = {}, requestAuth, credential }) {
+function makeFactory({ dataBySetting = {}, therapistData = {}, therapistCredentialData = {}, requestAuth, credential }) {
   const settingRefs = new Map();
-  const therapistRefs = new Map();
+  const collectionRefs = new Map();
   const writes = [];
   let transactionCount = 0;
   const refForSetting = (brandId, name) => {
@@ -50,10 +50,13 @@ function makeFactory({ dataBySetting = {}, therapistData = {}, requestAuth, cred
     if (!settingRefs.has(key)) settingRefs.set(key, { key, data: structuredClone(dataBySetting[name] || {}), exists: Object.prototype.hasOwnProperty.call(dataBySetting, name) });
     return settingRefs.get(key);
   };
-  const refForTherapist = (brandId, id) => {
-    const key = `${brandId}:therapists:${id}`;
-    if (!therapistRefs.has(key)) therapistRefs.set(key, { key, id, data: structuredClone(therapistData[id] || {}), exists: Object.prototype.hasOwnProperty.call(therapistData, id) });
-    return therapistRefs.get(key);
+  const refForCollection = (brandId, name, id) => {
+    const key = `${brandId}:${name}:${id}`;
+    if (!collectionRefs.has(key)) {
+      const source = name === "therapists" ? therapistData : name === "therapist_credentials" ? therapistCredentialData : {};
+      collectionRefs.set(key, { key, id, data: structuredClone(source[id] || {}), exists: Object.prototype.hasOwnProperty.call(source, id) });
+    }
+    return collectionRefs.get(key);
   };
   const db = {
     async runTransaction(callback) {
@@ -75,11 +78,11 @@ function makeFactory({ dataBySetting = {}, therapistData = {}, requestAuth, cred
     db,
     normalizeBrandId: (value) => ["cyj", "anniu", "yibo"].includes(String(value || "").toLowerCase()) ? String(value).toLowerCase() : "cyj",
     getBrandSettingDoc: (_db, brandId, name) => refForSetting(brandId, name),
-    getBrandCollection: (_db, brandId, name) => ({ doc: (id) => refForTherapist(brandId, id) }),
+    getBrandCollection: (_db, brandId, name) => ({ doc: (id) => refForCollection(brandId, name, id) }),
     requireFirebaseRequestAuth: async () => requestAuth || ({ ok: true, uid: "anon", decoded: { firebase: { sign_in_provider: "anonymous" } } }),
     verifyApplicationCredential: async () => credential || ({ ok: true, accountId: "acct-1", userName: "User" }),
   });
-  return { factory, settingRefs, therapistRefs, writes, get transactionCount() { return transactionCount; } };
+  return { factory, settingRefs, collectionRefs, collectionRef: refForCollection, writes, get transactionCount() { return transactionCount; } };
 }
 
 test("B1C1A keeps a separate runtime authority while B1C2C1 explicitly cuts first-login password updates over to it", () => {
@@ -211,16 +214,25 @@ test("transaction fresh-read blocks stale credential races", async () => {
   assert.equal(env.writes.length, 0);
 });
 
-test("therapist password authority writes only the selected therapist document", async () => {
+test("therapist password authority writes only the selected separated credential document", async () => {
   const env = makeFactory({
-    therapistData: { th1: { name: "A", password: "old-private", isActive: true }, th2: { name: "B", password: "keep", isActive: true } },
+    therapistData: {
+      th1: { id: "th1", name: "A", credentialStorageMode: "separated_v1", isActive: true },
+      th2: { id: "th2", name: "B", credentialStorageMode: "separated_v1", isActive: true },
+    },
+    therapistCredentialData: {
+      th1: { schemaVersion: "therapist-credential-v1", brandId: "cyj", therapistId: "th1", password: "old-private" },
+      th2: { schemaVersion: "therapist-credential-v1", brandId: "cyj", therapistId: "th2", password: "keep" },
+    },
     credential: { ok: true, accountId: "th1", userName: "A" },
     requestAuth: { ok: true, uid: "u", decoded: { drcyjIdentity: true, identityVersion: "application-identity-v1", brandId: "cyj", roleId: "therapist", accountId: "th1" } },
   });
   const res = makeResponse();
   await env.factory.changeApplicationPassword({ method: "POST", headers: { authorization: "Bearer token" }, body: { brandId: "cyj", roleId: "therapist", accountId: "th1", currentPassword: "old-private", newPassword: "new-private" } }, res);
   assert.equal(res.statusCode, 200);
-  assert.equal(env.therapistRefs.get("cyj:therapists:th1").data.password, "new-private");
+  assert.equal(Object.prototype.hasOwnProperty.call(env.collectionRefs.get("cyj:therapists:th1").data, "password"), false);
+  assert.equal(env.collectionRefs.get("cyj:therapist_credentials:th1").data.password, "new-private");
+  assert.equal(env.collectionRef("cyj", "therapist_credentials", "th2").data.password, "keep");
   assert.equal(env.writes.length, 1);
-  assert.equal(env.writes[0].ref, "cyj:therapists:th1");
+  assert.equal(env.writes[0].ref, "cyj:therapist_credentials:th1");
 });

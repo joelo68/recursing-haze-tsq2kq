@@ -64,17 +64,17 @@ test("frontend therapist master mutation bypasses remain retired before Rules lo
   assert.doesNotMatch(scheduleView, directTherapistWritePattern);
 });
 
-test("Backend remains the sole therapist master mutation authority and credential migration is single-account only", () => {
-  for (const action of ["create", "update", "archive", "restore", "delete", "reset_password", "migrate_credential"]) {
+test("Backend remains the sole therapist master mutation authority after legacy credential retirement", () => {
+  for (const action of ["create", "update", "archive", "restore", "delete", "reset_password"]) {
     assert.match(masterAuthority, new RegExp(`"${action}"`));
   }
   assert.match(masterAuthority, /manageTherapistMasterInTransaction/);
   assert.match(masterAuthority, /verifySuperAdminActor/);
   assert.match(masterAuthority, /expectedMasterSignature/);
-  assert.match(masterAuthority, /migrateTherapistCredentialInTransaction/);
-  assert.match(masterAuthority, /confirmCredentialMigration/);
-  assert.match(credentialAuthority, /THERAPIST_CREDENTIAL_STORAGE_MODE_EMBEDDED/);
   assert.match(credentialAuthority, /THERAPIST_CREDENTIAL_STORAGE_MODE_SEPARATED/);
+  assert.match(credentialAuthority, /legacy_credential_retired/);
+  assert.doesNotMatch(masterAuthority, /migrate_credential|credential_migration_inventory|migrateTherapistCredentialInTransaction|confirmCredentialMigration/);
+  assert.doesNotMatch(credentialAuthority, /THERAPIST_CREDENTIAL_STORAGE_MODE_EMBEDDED|buildEmbeddedCredentialCreateFields|migrateTherapistCredentialInTransaction/);
   assert.doesNotMatch(masterAuthority, /collection\(["']therapists["']\)\.get\(/);
 });
 
