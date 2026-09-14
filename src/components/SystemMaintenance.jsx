@@ -86,6 +86,49 @@ import {
 } from "../utils/projectionObservability.js";
 
 const todayMonth = () => new Date().toISOString().substring(0, 7);
+const THERAPIST_CREDENTIAL_BATCH_LIMIT = 10;
+
+const summarizeTherapistCredentialSafetyRows = (rows = [], orphanCredentialCount = 0) => (rows || []).reduce((acc, row) => {
+  acc.total += 1;
+  if (row?.migrationReady === true) {
+    acc.ready += 1;
+    if (row?.archived === true) acc.archivedReady += 1;
+    else acc.activeReady += 1;
+  } else if (row?.alreadySeparated === true) {
+    acc.separated += 1;
+  } else {
+    acc.blocked += 1;
+  }
+  return acc;
+}, { total: 0, ready: 0, activeReady: 0, archivedReady: 0, separated: 0, blocked: 0, orphanCredentialCount: Number(orphanCredentialCount || 0) });
+
+const getTherapistCredentialSafetyLabel = (row = {}) => {
+  if (row?.migrationReady === true) return row?.archived === true ? "離職帳號・可升級" : "可升級";
+  if (row?.alreadySeparated === true) return "已完成";
+  const labels = {
+    LEGACY_PASSWORD_MISSING: "舊帳號缺少密碼資料",
+    DUAL_SOURCE_CONFLICT: "同一帳號出現兩份密碼來源",
+    SEPARATED_CREDENTIAL_MISSING: "安全資料不完整",
+    SEPARATED_CREDENTIAL_INVALID: "安全資料格式異常",
+    invalid_credential_storage_mode: "帳號安全狀態無法辨識",
+  };
+  return labels[String(row?.migrationClassification || "")] || "需要人工確認";
+};
+
+const getTherapistCredentialSafetyErrorMessage = (error = {}) => {
+  const code = String(error?.code || "");
+  const messages = {
+    therapist_master_conflict: "這筆人員資料剛被更新，請重新載入後再操作",
+    credential_dual_source_conflict: "同一帳號出現兩份密碼來源，已停止操作",
+    credential_separation_state_invalid: "帳號安全資料狀態異常，已停止操作",
+    credential_source_missing: "找不到完整的帳號密碼資料，已停止操作",
+    credential_document_invalid: "帳號安全資料格式異常，已停止操作",
+    therapist_missing: "找不到這位管理師帳號，已停止操作",
+    account_missing: "找不到這位管理師帳號，已停止操作",
+    super_admin_reverification_required: "最高管理者驗證已失效，請重新確認登入與裝置信任狀態",
+  };
+  return messages[code] || String(error?.message || "帳號安全升級失敗，請停止操作並檢查");
+};
 
 // Keep ToolRow at module scope. Defining a component inside SystemMaintenance creates a
 // new component identity on every parent state update; controlled inputs nested inside it
@@ -112,7 +155,16 @@ const ToolRow = ({ icon: Icon, title, desc, badge, children, tone = "amber" }) =
 };
 
 export default function SystemMaintenance() {
-  const { currentBrand, userRole, showToast, getCollectionPath, getDocPath, currentUser } = useContext(AppContext);
+  const {
+    currentBrand,
+    userRole,
+    showToast,
+    getCollectionPath,
+    getDocPath,
+    currentUser,
+    manageTherapistMasterAction,
+    canManageDeviceSecurity: isDeviceSecuritySuperAdmin,
+  } = useContext(AppContext);
 
   const [logs, setLogs] = useState([]);
   const [loadingAction, setLoadingAction] = useState(null);
@@ -126,6 +178,32 @@ export default function SystemMaintenance() {
   const [guidedFlowRunning, setGuidedFlowRunning] = useState(false);
   const [dateIssues, setDateIssues] = useState([]);
   const [duplicateGroups, setDuplicateGroups] = useState([]);
+  const [credentialSafetyInventory, setCredentialSafetyInventory] = useState({
+    loadedBrandId: "",
+    rows: [],
+    counts: null,
+    issues: [],
+    readCount: 0,
+    loadedAtText: "",
+  });
+  const [credentialSafetySelection, setCredentialSafetySelection] = useState([]);
+  const [credentialSafetyBatchReport, setCredentialSafetyBatchReport] = useState(null);
+  const currentMaintenanceBrandRef = useRef(String(currentBrand?.id || "unknown"));
+
+  useEffect(() => {
+    const nextBrandId = String(currentBrand?.id || "unknown");
+    currentMaintenanceBrandRef.current = nextBrandId;
+    setCredentialSafetyInventory({
+      loadedBrandId: "",
+      rows: [],
+      counts: null,
+      issues: [],
+      readCount: 0,
+      loadedAtText: "",
+    });
+    setCredentialSafetySelection([]);
+    setCredentialSafetyBatchReport(null);
+  }, [currentBrand?.id]);
 
   const [healthReport, setHealthReport] = useState(null);
   const [expandedHealthIssue, setExpandedHealthIssue] = useState("");
@@ -4482,7 +4560,228 @@ export default function SystemMaintenance() {
     }
   };
 
+  const handleLoadCredentialSafetyInventory = async () => {
+    if (!isDeviceSecuritySuperAdmin) {
+      showToast("只有最高管理者可以執行帳號安全升級", "error");
+      return;
+    }
+    if (typeof manageTherapistMasterAction !== "function") {
+      showToast("帳號安全功能目前無法使用", "error");
+      return;
+    }
+
+    const lockedBrandId = String(currentMaintenanceBrandRef.current || "");
+    setLoadingAction("credentialSafetyInventory");
+    setCredentialSafetyBatchReport(null);
+    try {
+      const result = await manageTherapistMasterAction({
+        action: "credential_migration_inventory",
+      });
+      if (String(currentMaintenanceBrandRef.current || "") !== lockedBrandId) {
+        throw new Error("品牌已切換，這次檢查結果不會套用，請重新載入");
+      }
+      const rows = Array.isArray(result?.rows) ? result.rows : [];
+      const issues = Array.isArray(result?.issues) ? result.issues : [];
+      const counts = result?.counts && typeof result.counts === "object"
+        ? result.counts
+        : summarizeTherapistCredentialSafetyRows(rows, issues.length);
+      setCredentialSafetyInventory({
+        loadedBrandId: lockedBrandId,
+        rows,
+        counts,
+        issues,
+        readCount: Number(result?.readCount || 0),
+        loadedAtText: new Date().toISOString(),
+      });
+      setCredentialSafetySelection([]);
+      addLog(`🔐 已檢查 ${brandLabel} 管理師帳號安全狀態：待升級 ${Number(counts.ready || 0).toLocaleString()}｜已完成 ${Number(counts.separated || 0).toLocaleString()}｜需確認 ${Number(counts.blocked || 0).toLocaleString()}`);
+      showToast("帳號安全狀態已載入", "success");
+    } catch (error) {
+      addLog(`❌ 帳號安全狀態載入失敗：${error.message}`);
+      showToast(error?.message || "帳號安全狀態載入失敗", "error");
+    } finally {
+      setLoadingAction(null);
+    }
+  };
+
+  const handleToggleCredentialSafetySelection = (therapistId, checked) => {
+    const safeId = String(therapistId || "");
+    if (!safeId) return;
+    const alreadySelected = credentialSafetySelection.includes(safeId);
+    if (checked && !alreadySelected && credentialSafetySelection.length >= THERAPIST_CREDENTIAL_BATCH_LIMIT) {
+      showToast(`每次最多選擇 ${THERAPIST_CREDENTIAL_BATCH_LIMIT} 位`, "error");
+      return;
+    }
+    setCredentialSafetySelection((previous) => {
+      const next = previous.filter((id) => id !== safeId);
+      return checked ? [...next, safeId] : next;
+    });
+  };
+
+  const handleSelectCredentialSafetyFirstBatch = () => {
+    const counts = credentialSafetyInventory.counts || {};
+    if (Number(counts.blocked || 0) > 0 || Number(counts.orphanCredentialCount || 0) > 0) {
+      showToast("目前有帳號安全資料需要先確認，已停止批次選取", "error");
+      return;
+    }
+    const ids = (credentialSafetyInventory.rows || [])
+      .filter((row) => row?.migrationReady === true)
+      .slice(0, THERAPIST_CREDENTIAL_BATCH_LIMIT)
+      .map((row) => String(row.id || ""))
+      .filter(Boolean);
+    setCredentialSafetySelection(ids);
+    if (!ids.length) showToast("目前沒有待升級帳號", "success");
+  };
+
+  const handleRunCredentialSafetyBatch = async () => {
+    const lockedBrandId = String(credentialSafetyInventory.loadedBrandId || "");
+    const currentBrandId = String(currentMaintenanceBrandRef.current || "");
+    if (!isDeviceSecuritySuperAdmin) {
+      showToast("只有最高管理者可以執行帳號安全升級", "error");
+      return;
+    }
+    if (typeof manageTherapistMasterAction !== "function") {
+      showToast("帳號安全功能目前無法使用", "error");
+      return;
+    }
+    if (!lockedBrandId || lockedBrandId !== currentBrandId) {
+      showToast("品牌狀態已變更，請先重新載入帳號狀態", "error");
+      return;
+    }
+    const counts = credentialSafetyInventory.counts || {};
+    if (Number(counts.blocked || 0) > 0 || Number(counts.orphanCredentialCount || 0) > 0) {
+      showToast("目前有帳號安全資料需要先確認，批次升級已停止", "error");
+      return;
+    }
+    const selectedRows = (credentialSafetyInventory.rows || []).filter((row) =>
+      credentialSafetySelection.includes(String(row?.id || "")) && row?.migrationReady === true
+    );
+    if (!selectedRows.length) {
+      showToast("請先選擇要升級的管理師帳號", "error");
+      return;
+    }
+    if (selectedRows.length > THERAPIST_CREDENTIAL_BATCH_LIMIT) {
+      showToast(`每次最多只能升級 ${THERAPIST_CREDENTIAL_BATCH_LIMIT} 位`, "error");
+      return;
+    }
+
+    const names = selectedRows.map((row) => `${row.name || row.id}${row.store ? `（${row.store}）` : ""}`).join("、");
+    if (!window.confirm(`確定要升級 ${brandLabel} 的 ${selectedRows.length} 位管理師帳號嗎？\n\n${names}\n\n密碼本身不會改變；系統會逐一確認最新帳號狀態後再移動保存位置。任一帳號出現異常時，後續帳號會立即停止，不會自動重試。`)) return;
+
+    setLoadingAction("credentialSafetyBatch");
+    setCredentialSafetyBatchReport({
+      status: "running",
+      attempted: 0,
+      succeeded: 0,
+      results: [],
+      unprocessedCount: selectedRows.length,
+      startedAtText: new Date().toISOString(),
+    });
+
+    const results = [];
+    let stopped = false;
+    for (const row of selectedRows) {
+      if (String(currentMaintenanceBrandRef.current || "") !== lockedBrandId) {
+        results.push({ id: row.id, name: row.name, store: row.store, ok: false, message: "品牌已切換，已停止後續帳號" });
+        stopped = true;
+        break;
+      }
+
+      addLog(`🔐 準備升級：${row.name || row.id}${row.store ? `｜${row.store}` : ""}`);
+      try {
+        const fresh = await manageTherapistMasterAction({
+          action: "get",
+          therapistId: row.id,
+        });
+        if (!fresh?.masterSignature) throw new Error("無法取得最新帳號確認資料");
+
+        const migrated = await manageTherapistMasterAction({
+          action: "migrate_credential",
+          therapistId: row.id,
+          expectedMasterSignature: fresh.masterSignature,
+          confirmCredentialMigration: true,
+        });
+        if (String(migrated?.credentialStorageMode || "") !== "separated_v1") {
+          throw new Error("帳號安全升級結果未達預期，已停止後續帳號");
+        }
+
+        results.push({
+          id: row.id,
+          name: row.name,
+          store: row.store,
+          ok: true,
+          changed: migrated?.credentialMigrated === true,
+          message: migrated?.credentialMigrated === true ? "升級完成" : "先前已完成，重新確認正常",
+        });
+        addLog(`✅ 帳號安全升級完成：${row.name || row.id}${migrated?.credentialMigrated === true ? "" : "（已是安全狀態）"}`);
+      } catch (error) {
+        const safeMessage = getTherapistCredentialSafetyErrorMessage(error);
+        results.push({
+          id: row.id,
+          name: row.name,
+          store: row.store,
+          ok: false,
+          code: String(error?.code || ""),
+          message: safeMessage,
+        });
+        addLog(`❌ 帳號安全升級停止：${row.name || row.id}｜${safeMessage}`);
+        stopped = true;
+        break;
+      }
+    }
+
+    const succeeded = results.filter((row) => row.ok).length;
+    const failed = results.filter((row) => !row.ok).length;
+    const unprocessedCount = Math.max(0, selectedRows.length - results.length);
+    const sameBrandAtCompletion = String(currentMaintenanceBrandRef.current || "") === lockedBrandId;
+
+    if (sameBrandAtCompletion) {
+      const successIds = new Set(results.filter((row) => row.ok).map((row) => String(row.id || "")));
+      setCredentialSafetyInventory((previous) => {
+        if (String(previous.loadedBrandId || "") !== lockedBrandId) return previous;
+        const rows = (previous.rows || []).map((row) => successIds.has(String(row?.id || ""))
+          ? {
+              ...row,
+              credentialStorageMode: "separated_v1",
+              migrationClassification: "SEPARATED_V1_READY",
+              migrationReady: false,
+              alreadySeparated: true,
+            }
+          : row
+        );
+        return {
+          ...previous,
+          rows,
+          counts: summarizeTherapistCredentialSafetyRows(rows, previous.counts?.orphanCredentialCount || 0),
+        };
+      });
+      setCredentialSafetySelection([]);
+      setCredentialSafetyBatchReport({
+        status: stopped ? "stopped" : "success",
+        attempted: results.length,
+        succeeded,
+        failed,
+        results,
+        unprocessedCount,
+        completedAtText: new Date().toISOString(),
+      });
+    }
+
+    if (!sameBrandAtCompletion) {
+      showToast("品牌已切換，原品牌操作已停止；請切回原品牌重新載入狀態確認", "error");
+    } else if (stopped) {
+      showToast(`已完成 ${succeeded} 位；遇到異常後已停止，沒有自動重試`, "error");
+    } else {
+      showToast(`已完成 ${succeeded} 位管理師帳號安全升級`, "success");
+    }
+    setLoadingAction(null);
+  };
+
   const handleClearLocalCache = () => { if (!window.confirm("這只會清除目前瀏覽器暫存，不會刪除雲端資料。確定要繼續嗎？")) return; addLog("🧹 清除本機快取並重新載入..."); localStorage.clear(); window.location.reload(true); };
+
+  const credentialSafetyCounts = credentialSafetyInventory.counts || summarizeTherapistCredentialSafetyRows(credentialSafetyInventory.rows, 0);
+  const credentialSafetyHasBlockingIssue = Number(credentialSafetyCounts.blocked || 0) > 0 || Number(credentialSafetyCounts.orphanCredentialCount || 0) > 0;
+  const credentialSafetyInventoryCurrent = credentialSafetyInventory.loadedBrandId === brandId;
 
   return (
     <ViewWrapper>
@@ -5242,7 +5541,117 @@ export default function SystemMaintenance() {
         )}
 
         <section className="rounded-[2rem] border border-[#EEDFC7] bg-white/95 shadow-[0_22px_70px_rgba(120,90,40,0.05)] overflow-hidden"><button onClick={()=>setShowAdvancedTools((prev)=>!prev)} className="w-full p-6 flex flex-col md:flex-row md:items-center md:justify-between gap-3 text-left"><SectionTitle eyebrow="Protected Area" title="高風險資料處理" desc="還原、封存與批次修復都集中在這裡；沒有明確異常時不建議操作。" icon={AlertTriangle} /><div className="inline-flex items-center gap-2 text-xs font-black text-stone-500 bg-stone-50 border border-stone-200 rounded-2xl px-3 py-2 w-fit">{showAdvancedTools ? "收合工具" : "展開工具"}<ChevronDown size={14} className={`transition-transform ${showAdvancedTools ? "rotate-180" : ""}`} /></div></button>
-          {showAdvancedTools && <div className="px-6 pb-6 space-y-3 animate-in fade-in slide-in-from-top-2 duration-300"><ToolRow icon={Database} title="日期資料修正" desc="先掃描日期格式異常，再確認是否批次修復為 YYYY-MM-DD。" badge={dateIssues.length ? `${dateIssues.length} 筆預覽` : "兩段式"}><BeautyButton onClick={handleScanDateFormats} disabled={loadingAction !== null} variant="secondary">{loadingAction === "scanDates" ? <Loader2 size={14} className="animate-spin" /> : <Eye size={14} />}掃描日期</BeautyButton><BeautyButton onClick={handleFixDateFormats} disabled={loadingAction !== null || dateIssues.length === 0} variant="primary">{loadingAction === "fixDates" ? <Loader2 size={14} className="animate-spin" /> : <Save size={14} />}修復日期</BeautyButton></ToolRow>{dateIssues.length > 0 && <div className="rounded-[1.5rem] border border-amber-100 bg-amber-50/40 p-4 text-xs font-bold text-amber-800 space-y-1"><p className="font-black">日期異常預覽</p>{dateIssues.slice(0,5).map((item)=><p key={`${item.colName}_${item.id}`}>{item.colName}｜{item.store}｜{item.person}｜{item.oldDate} → {item.newDate}</p>)}</div>}
+          {showAdvancedTools && <div className="px-6 pb-6 space-y-3 animate-in fade-in slide-in-from-top-2 duration-300">
+          {isDeviceSecuritySuperAdmin && <>
+            <ToolRow
+              icon={Shield}
+              title="管理師帳號安全升級"
+              desc={`將舊帳號的密碼保存位置移到受保護區，密碼本身不會改變。每次最多 ${THERAPIST_CREDENTIAL_BATCH_LIMIT} 位，系統會逐一確認，遇到異常立即停止。`}
+              badge="受控批次"
+              tone="emerald"
+            >
+              <BeautyButton onClick={handleLoadCredentialSafetyInventory} disabled={loadingAction !== null} variant="secondary">
+                {loadingAction === "credentialSafetyInventory" ? <Loader2 size={14} className="animate-spin" /> : <Eye size={14} />}
+                載入帳號狀態
+              </BeautyButton>
+              <BeautyButton
+                onClick={handleSelectCredentialSafetyFirstBatch}
+                disabled={loadingAction !== null || !credentialSafetyInventoryCurrent || Number(credentialSafetyCounts.ready || 0) === 0 || credentialSafetyHasBlockingIssue}
+                variant="soft"
+              >
+                <CheckCircle2 size={14} />
+                選取前 {THERAPIST_CREDENTIAL_BATCH_LIMIT} 位
+              </BeautyButton>
+              <BeautyButton
+                onClick={handleRunCredentialSafetyBatch}
+                disabled={loadingAction !== null || credentialSafetySelection.length === 0 || credentialSafetyHasBlockingIssue}
+                variant="primary"
+              >
+                {loadingAction === "credentialSafetyBatch" ? <Loader2 size={14} className="animate-spin" /> : <Shield size={14} />}
+                升級已選 {credentialSafetySelection.length ? `(${credentialSafetySelection.length})` : ""}
+              </BeautyButton>
+            </ToolRow>
+
+            {credentialSafetyInventoryCurrent && credentialSafetyInventory.loadedAtText && (
+              <div className={`rounded-[1.5rem] border p-4 ${credentialSafetyHasBlockingIssue ? "border-rose-100 bg-rose-50/30" : "border-emerald-100 bg-emerald-50/30"}`}>
+                <div className="flex flex-col lg:flex-row lg:items-start lg:justify-between gap-3">
+                  <div>
+                    <p className="text-sm font-black text-stone-800">{brandLabel}｜帳號安全狀態</p>
+                    <p className="mt-1 text-[11px] font-bold text-stone-500 leading-relaxed">
+                      待升級 {Number(credentialSafetyCounts.ready || 0).toLocaleString()} 位（在職 {Number(credentialSafetyCounts.activeReady || 0).toLocaleString()}／離職 {Number(credentialSafetyCounts.archivedReady || 0).toLocaleString()}）｜已完成 {Number(credentialSafetyCounts.separated || 0).toLocaleString()} 位｜需人工確認 {Number(credentialSafetyCounts.blocked || 0).toLocaleString()} 位
+                    </p>
+                    <p className="mt-1 text-[10px] font-bold text-stone-400">本次檢查讀取 {Number(credentialSafetyInventory.readCount || 0).toLocaleString()} 筆帳號資料；不會持續監看。</p>
+                  </div>
+                  <span className={`px-3 py-1.5 rounded-full border text-[11px] font-black ${credentialSafetyHasBlockingIssue ? "bg-white text-rose-600 border-rose-100" : "bg-white text-emerald-700 border-emerald-100"}`}>
+                    {credentialSafetyHasBlockingIssue ? "請先處理異常" : Number(credentialSafetyCounts.ready || 0) > 0 ? "可以分批升級" : "目前已整理完成"}
+                  </span>
+                </div>
+
+                {Number(credentialSafetyCounts.orphanCredentialCount || 0) > 0 && (
+                  <div className="mt-3 rounded-2xl border border-rose-100 bg-white/90 px-4 py-3 text-xs font-bold text-rose-600 leading-relaxed">
+                    發現 {Number(credentialSafetyCounts.orphanCredentialCount || 0).toLocaleString()} 筆沒有對應人員主檔的帳號安全資料。為避免誤動資料，本品牌批次升級已鎖定，請先查明原因。
+                  </div>
+                )}
+                {Number(credentialSafetyCounts.blocked || 0) > 0 && (
+                  <div className="mt-3 rounded-2xl border border-rose-100 bg-white/90 px-4 py-3 text-xs font-bold text-rose-600 leading-relaxed">
+                    有 {Number(credentialSafetyCounts.blocked || 0).toLocaleString()} 位帳號的安全資料不完整或出現衝突。本品牌批次升級已鎖定，不會略過異常帳號繼續操作。
+                  </div>
+                )}
+
+                <div className="mt-4 max-h-[420px] overflow-y-auto space-y-2 pr-1">
+                  {(credentialSafetyInventory.rows || []).map((row) => {
+                    const selectable = row?.migrationReady === true && !credentialSafetyHasBlockingIssue;
+                    const selected = credentialSafetySelection.includes(String(row?.id || ""));
+                    return (
+                      <label key={row.id} className={`rounded-2xl border px-3 py-3 flex items-start gap-3 ${selected ? "border-emerald-200 bg-emerald-50/60" : "border-stone-100 bg-white/90"} ${selectable ? "cursor-pointer" : "cursor-default"}`}>
+                        <input
+                          type="checkbox"
+                          className="mt-1 h-4 w-4 accent-emerald-600"
+                          checked={selected}
+                          disabled={!selectable || loadingAction !== null}
+                          onChange={(event) => handleToggleCredentialSafetySelection(row.id, event.target.checked)}
+                        />
+                        <div className="min-w-0 flex-1">
+                          <div className="flex items-center gap-2 flex-wrap">
+                            <p className="text-xs font-black text-stone-800">{row.name || "未命名管理師"}</p>
+                            <span className="text-[10px] font-black text-stone-500 bg-stone-50 border border-stone-100 rounded-full px-2 py-1">{row.store || "未分店"}</span>
+                            <span className={`text-[10px] font-black rounded-full border px-2 py-1 ${row.migrationReady ? "text-amber-700 bg-amber-50 border-amber-100" : row.alreadySeparated ? "text-emerald-700 bg-emerald-50 border-emerald-100" : "text-rose-600 bg-rose-50 border-rose-100"}`}>
+                              {getTherapistCredentialSafetyLabel(row)}
+                            </span>
+                          </div>
+                          <p className="mt-1 text-[10px] font-bold text-stone-400 break-all">帳號識別：{row.id}</p>
+                        </div>
+                      </label>
+                    );
+                  })}
+                </div>
+              </div>
+            )}
+
+            {credentialSafetyBatchReport && credentialSafetyBatchReport.status !== "running" && (
+              <div className={`rounded-[1.5rem] border p-4 ${credentialSafetyBatchReport.status === "success" ? "border-emerald-100 bg-emerald-50/30" : "border-rose-100 bg-rose-50/30"}`}>
+                <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-2">
+                  <p className="text-sm font-black text-stone-800">本次帳號安全升級結果</p>
+                  <p className={`text-xs font-black ${credentialSafetyBatchReport.status === "success" ? "text-emerald-700" : "text-rose-600"}`}>
+                    成功 {Number(credentialSafetyBatchReport.succeeded || 0)}｜失敗 {Number(credentialSafetyBatchReport.failed || 0)}｜未執行 {Number(credentialSafetyBatchReport.unprocessedCount || 0)}
+                  </p>
+                </div>
+                <div className="mt-3 space-y-2">
+                  {(credentialSafetyBatchReport.results || []).map((row) => (
+                    <div key={`${row.id}_${row.ok ? "ok" : "error"}`} className="rounded-2xl border border-stone-100 bg-white/90 px-3 py-2">
+                      <p className={`text-xs font-black ${row.ok ? "text-emerald-700" : "text-rose-600"}`}>{row.ok ? "✓" : "×"} {row.name || row.id}{row.store ? `｜${row.store}` : ""}</p>
+                      <p className="mt-1 text-[10px] font-bold text-stone-500">{row.message}</p>
+                    </div>
+                  ))}
+                </div>
+                {credentialSafetyBatchReport.status === "stopped" && (
+                  <p className="mt-3 text-[11px] font-bold text-rose-600 leading-relaxed">已依安全規則停止後續帳號，系統沒有自動重試。請先確認失敗原因，再重新載入帳號狀態。</p>
+                )}
+              </div>
+            )}
+          </>}
+
+          <ToolRow icon={Database} title="日期資料修正" desc="先掃描日期格式異常，再確認是否批次修復為 YYYY-MM-DD。" badge={dateIssues.length ? `${dateIssues.length} 筆預覽` : "兩段式"}><BeautyButton onClick={handleScanDateFormats} disabled={loadingAction !== null} variant="secondary">{loadingAction === "scanDates" ? <Loader2 size={14} className="animate-spin" /> : <Eye size={14} />}掃描日期</BeautyButton><BeautyButton onClick={handleFixDateFormats} disabled={loadingAction !== null || dateIssues.length === 0} variant="primary">{loadingAction === "fixDates" ? <Loader2 size={14} className="animate-spin" /> : <Save size={14} />}修復日期</BeautyButton></ToolRow>{dateIssues.length > 0 && <div className="rounded-[1.5rem] border border-amber-100 bg-amber-50/40 p-4 text-xs font-bold text-amber-800 space-y-1"><p className="font-black">日期異常預覽</p>{dateIssues.slice(0,5).map((item)=><p key={`${item.colName}_${item.id}`}>{item.colName}｜{item.store}｜{item.person}｜{item.oldDate} → {item.newDate}</p>)}</div>}
           <ToolRow icon={Scissors} title="重複資料整理" desc="預設只檢測，不再一鍵刪除。確認後會將舊資料標記封存。" badge={duplicateGroups.length ? `${duplicateGroups.length} 組預覽` : "安全版"} tone="rose"><BeautyButton onClick={handleScanDuplicates} disabled={loadingAction !== null} variant="secondary">{loadingAction === "scanDups" ? <Loader2 size={14} className="animate-spin" /> : <Eye size={14} />}檢測重複</BeautyButton><BeautyButton onClick={handleArchiveDuplicates} disabled={loadingAction !== null || duplicateGroups.length === 0} variant="soft">{loadingAction === "archiveDups" ? <Loader2 size={14} className="animate-spin" /> : <Scissors size={14} />}封存舊資料</BeautyButton></ToolRow>{duplicateGroups.length > 0 && <div className="rounded-[1.5rem] border border-rose-100 bg-rose-50/30 p-4 text-xs font-bold text-rose-700 space-y-1"><p className="font-black">重複資料預覽</p>{duplicateGroups.slice(0,5).map((group)=><p key={`${group.colName}_${group.key}`}>{group.colName}｜{group.date}｜{group.store}｜{group.person}｜保留 1 筆、封存 {group.duplicateIds.length} 筆</p>)}</div>}
           <ToolRow icon={RefreshCw} title="查看與還原封存資料" desc="查看已封存的疑似重複資料，可單筆還原。" badge={archivedDuplicates.length ? `${archivedDuplicates.length} 筆` : "可還原"}><div className="flex items-center gap-2 rounded-2xl border border-stone-100 bg-white/70 px-3 h-11"><Calendar size={14} className="text-stone-400" /><SmartMonthPicker value={archiveFilterMonth} onChange={setArchiveFilterMonth} align="right" buttonClassName="!h-9 !min-w-[140px] !border-0 !bg-transparent !px-0 !py-0 !text-xs !shadow-none hover:!bg-transparent" /></div><BeautyButton onClick={handleLoadArchivedDuplicates} disabled={loadingAction !== null} variant="secondary">{loadingAction === "loadArchived" ? <Loader2 size={14} className="animate-spin" /> : <Eye size={14} />}載入封存</BeautyButton></ToolRow>{archivedDuplicates.length > 0 && <div className="rounded-[1.5rem] border border-stone-100 bg-stone-50/50 p-4 space-y-2 max-h-[340px] overflow-y-auto"><p className="text-xs font-black text-stone-700">封存資料清單</p>{archivedDuplicates.slice(0,30).map((row)=><div key={`${row.colName}_${row.id}`} className="bg-white border border-stone-100 rounded-2xl p-3 flex flex-col md:flex-row md:items-center md:justify-between gap-3"><div className="min-w-0"><p className="text-xs font-black text-stone-700 truncate">{row.colName}｜{row.date}｜{row.store}｜{row.person}</p><p className="text-[10px] font-bold text-stone-400 mt-1">保留文件：{row.keepId}｜封存時間：{row.archivedAt}</p></div><BeautyButton onClick={()=>handleRestoreArchivedDuplicate(row)} disabled={loadingAction !== null} variant="soft" className="h-9 px-4 shrink-0">{loadingAction === `restore_${row.id}` ? <Loader2 size={13} className="animate-spin" /> : <RefreshCw size={13} />}還原</BeautyButton></div>)}</div>}</div>}
         </section>

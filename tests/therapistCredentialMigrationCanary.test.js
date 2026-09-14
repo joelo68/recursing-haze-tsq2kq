@@ -14,6 +14,7 @@ const masterAuthority = read("functions/therapistMasterAuthority.js");
 const credentialAuthority = read("functions/therapistCredentialAuthority.js");
 const app = read("src/App.jsx");
 const managerView = read("src/components/TherapistManagerView.jsx");
+const maintenance = read("src/components/SystemMaintenance.jsx");
 const rules = read("firestore.rules");
 
 test("migration canary reuses the existing secured manageTherapistMaster endpoint and exposes no standalone migration function", () => {
@@ -75,4 +76,29 @@ test("migration OCC canonicalizes legacy masters with the Firestore document id"
   assert.match(masterAuthority, /sanitizeTherapistResponse\(\{ \.\.\.nextRecord, id: therapistId \}\)/);
   assert.match(masterAuthority, /buildTherapistMasterSignature\(raw, documentSnapshot\.id\)/);
   assert.match(masterAuthority, /buildTherapistMasterSignature\(raw, therapistId\)/);
+});
+
+test("controlled rollout inventory stays backend-only and the maintenance batch is capped, sequential, and fresh-OCC", () => {
+  assert.match(masterAuthority, /"credential_migration_inventory"/);
+  assert.match(masterAuthority, /getBrandCollection\(db, brandId, "therapists"\)\.get\(\)/);
+  assert.match(masterAuthority, /getBrandCollection\(db, brandId, "therapist_credentials"\)\.get\(\)/);
+  assert.match(masterAuthority, /buildTherapistCredentialState/);
+  assert.match(masterAuthority, /migrationReady:\s*state\.ok === true && state\.classification === "EMBEDDED_LEGACY_READY"/);
+  assert.match(masterAuthority, /alreadySeparated:\s*state\.ok === true && state\.classification === "SEPARATED_V1_READY"/);
+
+  assert.match(maintenance, /THERAPIST_CREDENTIAL_BATCH_LIMIT\s*=\s*10/);
+  assert.match(maintenance, /action:\s*"credential_migration_inventory"/);
+  assert.doesNotMatch(maintenance, /therapist_credentials/);
+
+  const start = maintenance.indexOf("const handleRunCredentialSafetyBatch");
+  const end = maintenance.indexOf("const handleClearLocalCache", start);
+  assert.ok(start >= 0 && end > start);
+  const block = maintenance.slice(start, end);
+  assert.match(block, /for \(const row of selectedRows\)/);
+  assert.match(block, /action:\s*"get"/);
+  assert.match(block, /action:\s*"migrate_credential"/);
+  assert.match(block, /expectedMasterSignature:\s*fresh\.masterSignature/);
+  assert.match(block, /confirmCredentialMigration:\s*true/);
+  assert.match(block, /break;/);
+  assert.doesNotMatch(block, /Promise\.all\s*\(/);
 });

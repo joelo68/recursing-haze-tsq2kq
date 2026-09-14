@@ -8,6 +8,7 @@ const {
   resetTherapistCredentialPasswordInTransaction,
   migrateTherapistCredentialInTransaction,
   deleteSeparatedTherapistCredentialInTransaction,
+  buildTherapistCredentialState,
 } = require("./therapistCredentialAuthority");
 
 const THERAPIST_MASTER_AUTHORITY_VERSION = "therapist-master-authority-v1";
@@ -21,6 +22,7 @@ const SUPPORTED_THERAPIST_MASTER_ACTIONS = new Set([
   "get",
   "reset_password",
   "migrate_credential",
+  "credential_migration_inventory",
 ]);
 const FORBIDDEN_PAYLOAD_KEYS = new Set([
   "password",
@@ -129,7 +131,7 @@ function assertPayloadIsMasterOnly(payload = {}, action = "") {
         });
       }
     }
-  } else if (["list", "get", "reset_password", "migrate_credential"].includes(action)) {
+  } else if (["list", "get", "reset_password", "migrate_credential", "credential_migration_inventory"].includes(action)) {
     if (Object.keys(source).length > 0) {
       throw new TherapistMasterAuthorityError("unsupported_master_field", 400);
     }
@@ -882,6 +884,91 @@ function createTherapistMasterAuthorityFunctions({
           masterSignature: buildTherapistMasterSignature(raw, therapistId),
           credentialStorageMode: normalizeTherapistCredentialStorageMode(raw),
           readCount: 1,
+        });
+      }
+
+      if (action === "credential_migration_inventory") {
+        const [therapistSnapshot, credentialSnapshot] = await Promise.all([
+          getBrandCollection(db, brandId, "therapists").get(),
+          getBrandCollection(db, brandId, "therapist_credentials").get(),
+        ]);
+        const credentialById = new Map(
+          credentialSnapshot.docs.map((documentSnapshot) => [
+            String(documentSnapshot.id || ""),
+            documentSnapshot.data() || {},
+          ])
+        );
+        const masterIds = new Set();
+        const rows = therapistSnapshot.docs.map((documentSnapshot) => {
+          const therapistId = normalizeTherapistId(documentSnapshot.id);
+          masterIds.add(therapistId);
+          const raw = documentSnapshot.data() || {};
+          const credentialData = credentialById.get(therapistId);
+          let state;
+          try {
+            state = buildTherapistCredentialState({
+              brandId,
+              therapistId,
+              masterData: raw,
+              credentialExists: credentialById.has(therapistId),
+              credentialData: credentialData || {},
+            });
+          } catch (error) {
+            state = {
+              ok: false,
+              classification: String(error?.code || "CREDENTIAL_STATE_INVALID"),
+              mode: normalizeText(raw?.credentialStorageMode || "", 64),
+            };
+          }
+
+          const therapist = sanitizeTherapistResponse({ ...raw, id: therapistId });
+          return {
+            id: therapistId,
+            name: therapist.name,
+            store: therapist.store,
+            archived: therapist.archived === true,
+            credentialStorageMode: String(state.mode || ""),
+            migrationClassification: String(state.classification || "CREDENTIAL_STATE_INVALID"),
+            migrationReady: state.ok === true && state.classification === "EMBEDDED_LEGACY_READY",
+            alreadySeparated: state.ok === true && state.classification === "SEPARATED_V1_READY",
+          };
+        });
+        rows.sort((a, b) => {
+          const rank = (row) => row.migrationReady ? (row.archived ? 1 : 0) : row.alreadySeparated ? 2 : 3;
+          return rank(a) - rank(b) || String(a.store || "").localeCompare(String(b.store || ""), "zh-Hant") || String(a.name || "").localeCompare(String(b.name || ""), "zh-Hant");
+        });
+
+        const orphanCredentialIds = credentialSnapshot.docs
+          .map((documentSnapshot) => String(documentSnapshot.id || ""))
+          .filter((therapistId) => therapistId && !masterIds.has(therapistId));
+        const counts = rows.reduce((acc, row) => {
+          acc.total += 1;
+          if (row.migrationReady) {
+            acc.ready += 1;
+            if (row.archived) acc.archivedReady += 1;
+            else acc.activeReady += 1;
+          } else if (row.alreadySeparated) {
+            acc.separated += 1;
+          } else {
+            acc.blocked += 1;
+          }
+          return acc;
+        }, { total: 0, ready: 0, activeReady: 0, archivedReady: 0, separated: 0, blocked: 0 });
+
+        return res.status(200).json({
+          ok: true,
+          brandId,
+          action,
+          rows,
+          counts: {
+            ...counts,
+            orphanCredentialCount: orphanCredentialIds.length,
+          },
+          issues: orphanCredentialIds.slice(0, 50).map((therapistId) => ({
+            type: "ORPHAN_CREDENTIAL_DOCUMENT",
+            therapistId,
+          })),
+          readCount: therapistSnapshot.docs.length + credentialSnapshot.docs.length,
         });
       }
 

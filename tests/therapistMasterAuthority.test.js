@@ -326,6 +326,103 @@ test("get returns exactly one signed sanitized therapist row without a collectio
   assert.equal(env.writes.length, 0);
 });
 
+test("credential migration inventory is read-only, brand-scoped, password-free, and classifies rollout safety", async () => {
+  const env = makeEnv({
+    brandId: "cyj",
+    therapists: {
+      legacyReady: {
+        name: "在職舊帳號",
+        store: "A",
+        password: "legacy-secret",
+        credentialStorageMode: "embedded_legacy",
+        status: "在職",
+        isActive: true,
+      },
+      separatedReady: {
+        name: "已升級帳號",
+        store: "B",
+        credentialStorageMode: "separated_v1",
+        status: "在職",
+        isActive: true,
+      },
+      dualConflict: {
+        name: "衝突帳號",
+        store: "C",
+        password: "legacy-conflict-secret",
+        credentialStorageMode: "embedded_legacy",
+        status: "在職",
+        isActive: true,
+      },
+      archivedReady: {
+        name: "離職舊帳號",
+        store: "D",
+        password: "archived-secret",
+        credentialStorageMode: "embedded_legacy",
+        status: "離職",
+        isActive: false,
+        isResigned: true,
+      },
+    },
+    credentials: {
+      separatedReady: {
+        schemaVersion: "therapist-credential-v1",
+        brandId: "cyj",
+        therapistId: "separatedReady",
+        password: "separated-secret",
+      },
+      dualConflict: {
+        schemaVersion: "therapist-credential-v1",
+        brandId: "cyj",
+        therapistId: "dualConflict",
+        password: "unexpected-secret",
+      },
+      orphanCredential: {
+        schemaVersion: "therapist-credential-v1",
+        brandId: "cyj",
+        therapistId: "orphanCredential",
+        password: "orphan-secret",
+      },
+    },
+  });
+
+  const res = await env.call({ action: "credential_migration_inventory" });
+  assert.equal(res.statusCode, 200);
+  assert.equal(res.body.ok, true);
+  assert.equal(res.body.action, "credential_migration_inventory");
+  assert.equal(res.body.brandId, "cyj");
+  assert.equal(res.body.readCount, 7);
+  assert.deepEqual(res.body.counts, {
+    total: 4,
+    ready: 2,
+    activeReady: 1,
+    archivedReady: 1,
+    separated: 1,
+    blocked: 1,
+    orphanCredentialCount: 1,
+  });
+  assert.equal(res.body.issues.length, 1);
+  assert.equal(res.body.issues[0].type, "ORPHAN_CREDENTIAL_DOCUMENT");
+  assert.equal(res.body.issues[0].therapistId, "orphanCredential");
+
+  const byId = new Map(res.body.rows.map((row) => [row.id, row]));
+  assert.equal(byId.get("legacyReady").migrationClassification, "EMBEDDED_LEGACY_READY");
+  assert.equal(byId.get("legacyReady").migrationReady, true);
+  assert.equal(byId.get("archivedReady").migrationReady, true);
+  assert.equal(byId.get("archivedReady").archived, true);
+  assert.equal(byId.get("separatedReady").migrationClassification, "SEPARATED_V1_READY");
+  assert.equal(byId.get("separatedReady").alreadySeparated, true);
+  assert.equal(byId.get("dualConflict").migrationClassification, "DUAL_SOURCE_CONFLICT");
+  assert.equal(byId.get("dualConflict").migrationReady, false);
+
+  assert.equal(env.transactionCount, 0);
+  assert.equal(env.writes.length, 0);
+  assert.equal(env.deletes.length, 0);
+  assert.equal(JSON.stringify(res.body).includes("legacy-secret"), false);
+  assert.equal(JSON.stringify(res.body).includes("separated-secret"), false);
+  assert.equal(JSON.stringify(res.body).includes("unexpected-secret"), false);
+  assert.equal(JSON.stringify(res.body).includes("orphan-secret"), false);
+});
+
 test("reset_password restores embedded legacy credential to the server initial password without changing master signature", async () => {
   const env = makeEnv();
   const before = buildTherapistMasterSignature(env.refs.get("cyj:therapists:t1").data);
