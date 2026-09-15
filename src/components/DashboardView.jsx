@@ -21,7 +21,7 @@ const DashboardSectionLoading = ({ label }) => (
 );
 
 const DashboardView = () => {
-  const { userRole, therapistModuleEnabled } = useContext(AppContext);
+  const { userRole, therapistModuleEnabled, systemExclusionState } = useContext(AppContext);
   const isTherapistModuleEnabled = therapistModuleEnabled !== false;
 
   // ★ 召喚完美封裝的外接大腦！
@@ -36,6 +36,14 @@ const DashboardView = () => {
     groupedStoresForFilter, availableStoresForDropdown,
     officialStoresForDropdown, delegatedStoresForDropdown, delegatedStoreDetails
   } = useDashboardStats();
+
+  // B1C2E-UX2B：店家範圍控制只在 System Exclusion authority
+  // 已對準目前品牌後才公開，避免 authority 尚未 ready 時短暫顯示被排除店家。
+  const dashboardStoreScopeReady = Boolean(
+    systemExclusionState?.ready === true
+      && String(systemExclusionState?.brandId || "").trim().toLowerCase()
+        === String(brandInfo?.id || "").trim().toLowerCase()
+  );
 
   // B1C2E-UX2A：Dashboard 外殼與目前視角的資料 readiness 分離。
   // 門市視角不再被 therapistStats 阻塞；人員視角也不必等待 dashboardStats。
@@ -57,6 +65,7 @@ const DashboardView = () => {
            yesterdayLoginCount={yesterdayLoginCount}
            dashboardSummaryStatus={dashboardSummaryStatus}
            dashboardKpiStatus={dashboardStats?.formalKpiStatus || {}}
+           storeScopeReady={dashboardStoreScopeReady}
            viewMode={viewMode}
            setViewMode={setViewMode}
            selectedDashboardManager={selectedDashboardManager}

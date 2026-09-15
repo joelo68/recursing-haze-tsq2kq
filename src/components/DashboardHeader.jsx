@@ -9,12 +9,13 @@ const DashboardHeader = ({
   selectedDashboardStore, setSelectedDashboardStore,
   groupedStoresForFilter, availableStoresForDropdown,
   officialStoresForDropdown = [], delegatedStoresForDropdown = [], delegatedStoreDetails = {},
-  dashboardKpiStatus = {}
+  dashboardKpiStatus = {},
+  storeScopeReady = false
 }) => {
   const { userRole, therapistModuleEnabled } = useContext(AppContext);
   const isTherapistModuleEnabled = therapistModuleEnabled !== false;
 
-  const hasDelegatedStores = delegatedStoresForDropdown.length > 0;
+  const hasDelegatedStores = storeScopeReady && delegatedStoresForDropdown.length > 0;
   const isScopedOperator = userRole === 'manager' || userRole === 'store';
   const canChooseStore = (
     userRole === 'director' ||
@@ -22,6 +23,14 @@ const DashboardHeader = ({
     userRole === 'manager' ||
     (userRole === 'store' && (availableStoresForDropdown.length > 1 || hasDelegatedStores))
   );
+  const showStoreScopeControl = storeScopeReady
+    ? canChooseStore
+    : (
+        userRole === 'director' ||
+        userRole === 'trainer' ||
+        userRole === 'manager' ||
+        userRole === 'store'
+      );
 
   const formatDelegationOptionLabel = (storeName) => {
     const detail = delegatedStoreDetails?.[storeName] || null;
@@ -175,36 +184,42 @@ const DashboardHeader = ({
         </div>
 
         <div className="flex flex-wrap xl:flex-nowrap items-center gap-2 md:gap-3">
-          {canChooseStore && (
+          {showStoreScopeControl && (
             <div className="flex items-center gap-2 w-full sm:w-auto">
               {(userRole === 'director' || userRole === 'trainer') && (
                 <select
-                    value={selectedDashboardManager}
+                    value={storeScopeReady ? selectedDashboardManager : ""}
+                    disabled={!storeScopeReady}
+                    aria-busy={!storeScopeReady}
                     onChange={(e) => {
                         setSelectedDashboardManager(e.target.value);
                         setSelectedDashboardStore(""); 
                     }}
-                    className="flex-1 sm:flex-none px-4 py-2.5 border border-stone-200 rounded-xl text-sm font-bold text-stone-600 outline-none focus:border-amber-400 focus:ring-2 focus:ring-amber-100 bg-stone-50 hover:bg-white transition-all cursor-pointer min-w-[120px]"
+                    className="flex-1 sm:flex-none px-4 py-2.5 border border-stone-200 rounded-xl text-sm font-bold text-stone-600 outline-none focus:border-amber-400 focus:ring-2 focus:ring-amber-100 bg-stone-50 hover:bg-white transition-all cursor-pointer min-w-[120px] disabled:cursor-wait disabled:text-stone-400 disabled:bg-stone-100"
                 >
-                    <option value="">全品牌</option>
-                    {Object.keys(groupedStoresForFilter).map(m => (
+                    <option value="">{storeScopeReady ? "全品牌" : "範圍同步中..."}</option>
+                    {storeScopeReady && Object.keys(groupedStoresForFilter).map(m => (
                         <option key={m} value={m}>{m}區</option>
                     ))}
                 </select>
               )}
               
               <select
-                  value={selectedDashboardStore}
+                  value={storeScopeReady ? selectedDashboardStore : ""}
+                  disabled={!storeScopeReady}
+                  aria-busy={!storeScopeReady}
                   onChange={(e) => setSelectedDashboardStore(e.target.value)}
-                  className="flex-1 sm:flex-none px-4 py-2.5 border border-stone-200 rounded-xl text-sm font-bold text-stone-600 outline-none focus:border-amber-400 focus:ring-2 focus:ring-amber-100 bg-stone-50 hover:bg-white transition-all cursor-pointer min-w-[150px]"
+                  className="flex-1 sm:flex-none px-4 py-2.5 border border-stone-200 rounded-xl text-sm font-bold text-stone-600 outline-none focus:border-amber-400 focus:ring-2 focus:ring-amber-100 bg-stone-50 hover:bg-white transition-all cursor-pointer min-w-[150px] disabled:cursor-wait disabled:text-stone-400 disabled:bg-stone-100"
               >
                   <option value="" className="font-bold text-stone-800">
-                    {isScopedOperator
-                      ? (hasDelegatedStores ? "全部可管理店家" : (userRole === 'manager' ? "全區店家" : "我的店家"))
-                      : (selectedDashboardManager ? "全區店家" : "顯示全區")}
+                    {storeScopeReady
+                      ? (isScopedOperator
+                          ? (hasDelegatedStores ? "全部可管理店家" : (userRole === 'manager' ? "全區店家" : "我的店家"))
+                          : (selectedDashboardManager ? "全區店家" : "顯示全區"))
+                      : "店家範圍同步中..."}
                   </option>
 
-                  {isScopedOperator ? (
+                  {storeScopeReady && (isScopedOperator ? (
                     <>
                       {officialStoresForDropdown.length > 0 && (
                         <optgroup label={userRole === 'manager' ? "正式轄區" : "正式店家"}>
@@ -235,7 +250,7 @@ const DashboardHeader = ({
                     availableStoresForDropdown.map(s => (
                       <option key={s} value={s} className="font-medium text-stone-700 bg-white">{s}</option>
                     ))
-                  ))}
+                  )))}
               </select>
             </div>
           )}
