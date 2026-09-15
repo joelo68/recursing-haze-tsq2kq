@@ -536,6 +536,7 @@ export default function App() {
   // P0-B1B2：Custom Token 只存在 Firebase Auth 記憶體／SDK session；
   // 這個 ref 只保留非敏感 application identity metadata，不保存 token。
   const applicationSessionIdentityRef = useRef(null);
+  const [applicationSessionIdentity, setApplicationSessionIdentity] = useState(null);
   const [currentDeviceTrust, setCurrentDeviceTrust] = useState({
     status: "checking",
     label: "裝置狀態確認中",
@@ -556,6 +557,25 @@ export default function App() {
   useEffect(() => {
     currentBrandIdRef.current = currentBrandId;
   }, [currentBrandId]);
+
+  const hasVerifiedApplicationSession = useMemo(() => {
+    const identity = applicationSessionIdentity || {};
+    const brandId = String(currentBrandId || "").trim().toLowerCase();
+    const roleId = String(userRole || "").trim().toLowerCase();
+    const identityBrandId = String(identity.brandId || "").trim().toLowerCase();
+    const identityRoleId = String(identity.roleId || "").trim().toLowerCase();
+    const identityUid = String(identity.uid || "").trim();
+    const identityAccountId = String(identity.accountId || "").trim();
+
+    return Boolean(
+      identityUid &&
+      identityAccountId &&
+      brandId &&
+      roleId &&
+      identityBrandId === brandId &&
+      identityRoleId === roleId
+    );
+  }, [applicationSessionIdentity, currentBrandId, userRole]);
 
   const getReadMeta = useCallback((label = "") => ({
     label,
@@ -1072,7 +1092,7 @@ export default function App() {
   // Reads：每次登入/切品牌初始 1 doc，之後只在 audit_exclusions 真正變更時增加 1 doc；無 polling。
   useEffect(() => {
     const brandId = String(currentBrandId || "").toLowerCase();
-    if (!user || !brandId) return undefined;
+    if (!hasVerifiedApplicationSession || !brandId) return undefined;
 
     const exclusionRef = getDocPath("audit_exclusions");
     const unsubscribe = onSnapshot(
@@ -1109,7 +1129,7 @@ export default function App() {
     );
 
     return () => unsubscribe();
-  }, [user, currentBrandId, getDocPath, getStableReadMeta]);
+  }, [hasVerifiedApplicationSession, currentBrandId, getDocPath, getStableReadMeta]);
 
   // ★ Guided Device Approval：正式模式下，只要「自己的新裝置」正在等待確認，
   // 原本已信任的裝置會主動進入確認流程，不再要求一般使用者自己注意 Header Badge。
@@ -1882,7 +1902,7 @@ export default function App() {
         throw new Error("登入身份驗證結果不一致，請重新登入。");
       }
 
-      applicationSessionIdentityRef.current = {
+      const verifiedSessionIdentity = {
         version: String(identity?.version || ""),
         uid: String(identity?.uid || ""),
         brandId: expectedBrandId,
@@ -1891,10 +1911,13 @@ export default function App() {
         directorLevel: String(claims?.directorLevel || identity?.directorLevel || ""),
         isMasterCredential: identity?.isMasterCredential === true,
       };
+      applicationSessionIdentityRef.current = verifiedSessionIdentity;
+      setApplicationSessionIdentity(verifiedSessionIdentity);
 
-      return applicationSessionIdentityRef.current;
+      return verifiedSessionIdentity;
     } catch (error) {
       applicationSessionIdentityRef.current = null;
+      setApplicationSessionIdentity(null);
       try {
         await signInAnonymously(auth);
       } catch (rollbackError) {
@@ -1942,6 +1965,7 @@ export default function App() {
     loginSessionLocationRef.current = UNKNOWN_LOGIN_LOCATION;
     securitySessionCredentialRef.current = "";
     applicationSessionIdentityRef.current = null;
+    setApplicationSessionIdentity(null);
     pendingDeviceLoginRef.current = null;
     setPendingDeviceLogin(null);
     setIsDeviceApprovalPanelOpen(false);
@@ -2267,10 +2291,6 @@ export default function App() {
           const tasks = [
             { key: "org", required: true, promise: withTimeout(getDoc(getDocPath("org_structure")), "組織架構") },
             { key: "directory", required: true, promise: withTimeout(callDeviceSecurityEndpoint(LOGIN_DIRECTORY_ENDPOINT, { brandId: brandIdAtStart }), "授權名單") },
-            { key: "permissions", required: false, promise: withTimeout(getDoc(getDocPath("permissions")), "權限設定") },
-            { key: "securityConfig", required: false, promise: withTimeout(getDoc(getDocPath("security_config")), "安全設定") },
-            { key: "featureFlags", required: false, promise: withTimeout(getDoc(getDocPath("feature_flags")), "功能設定") },
-            { key: "delegations", required: false, promise: withTimeout(getDocs(query(getCollectionPath("management_delegations"), where("status", "in", ["active", "scheduled"]))), "代理與托管") },
           ];
 
           const settledResults = await Promise.allSettled(tasks.map((task) => task.promise));
@@ -2279,14 +2299,8 @@ export default function App() {
             resultMap[tasks[index].key] = result;
           });
 
-          // 4 個 Browser point reads：org + permissions + security_config + feature_flags。
-          trackReadSource("fetchGlobalData_core_docs", 4, getStableReadMeta("fetchGlobalData_core_docs"));
-          const delegationResult = resultMap.delegations;
-          trackReadSource(
-            "fetchGlobalData_delegations",
-            delegationResult?.status === "fulfilled" ? delegationResult.value.docs.length : 0,
-            getStableReadMeta("fetchGlobalData_delegations")
-          );
+          // 登入前 Browser 只讀 1 個必要組織文件；授權名單由 Backend sanitized directory 提供。
+          trackReadSource("fetchGlobalData_core_docs", 1, getStableReadMeta("fetchGlobalData_core_docs"));
 
           const failedRequiredTasks = tasks.filter((task) => (
             task.required && resultMap[task.key]?.status !== "fulfilled"
@@ -2342,34 +2356,6 @@ export default function App() {
           if (!summaryIsNewer) {
             publishSanitizedLoginDirectory(nextLoginDirectory, brandIdAtStart);
           }
-
-          if (delegationResult?.status === "fulfilled") {
-            setDelegations(delegationResult.value.docs.map((documentSnapshot) => ({
-              id: documentSnapshot.id,
-              ...documentSnapshot.data(),
-            })));
-          } else if (delegationResult?.reason) {
-            console.warn("management_delegations 讀取失敗，沿用目前值：", delegationResult.reason);
-          }
-
-          const applyOptionalDoc = (key, applyValue, fallbackLabel) => {
-            const result = resultMap[key];
-            if (result?.status === "fulfilled") {
-              applyValue(result.value);
-            } else if (result?.reason) {
-              console.warn(`${fallbackLabel}讀取失敗，沿用目前值：`, result.reason);
-            }
-          };
-
-          applyOptionalDoc("permissions", (snap) => {
-            setPermissions(snap.exists() ? snap.data() : DEFAULT_PERMISSIONS);
-          }, "permissions ");
-          applyOptionalDoc("securityConfig", (snap) => {
-            setSecurityConfig(snap.exists() ? normalizeSecurityConfig(snap.data()) : DEFAULT_SECURITY_CONFIG);
-          }, "security_config ");
-          applyOptionalDoc("featureFlags", (snap) => {
-            setFeatureFlags(snap.exists() ? normalizeFeatureFlags(snap.data()) : DEFAULT_FEATURE_FLAGS);
-          }, "feature_flags ");
 
           if (shouldBackfillManagerOrder && applicationSessionIdentityRef.current?.roleId === "director") {
             setDoc(
@@ -2436,6 +2422,106 @@ export default function App() {
     publishSanitizedLoginDirectory,
     updateAccountDirectoryState,
     callDeviceSecurityEndpoint,
+  ]);
+
+  // P0-FINAL-1B：正式營運 authority 只能在 server-issued application identity 完成後載入。
+  // 原本登入前會發生的 3 個 point reads + 1 個小型 delegations query 延後到 claims 驗證後。
+  // 不新增 listener、不新增 polling；使用者未完成登入時反而減少 reads。
+  const fetchApplicationSessionAuthority = useCallback(async (sessionIdentity = null) => {
+    const identity = sessionIdentity || applicationSessionIdentityRef.current || {};
+    const brandIdAtStart = String(currentBrand?.id || currentBrandId || "").trim().toLowerCase();
+    const identityBrandId = String(identity?.brandId || "").trim().toLowerCase();
+    const identityUid = String(identity?.uid || "").trim();
+    const identityRoleId = String(identity?.roleId || "").trim();
+    const identityAccountId = String(identity?.accountId || "").trim();
+
+    if (
+      !identityUid ||
+      !identityRoleId ||
+      !identityAccountId ||
+      !brandIdAtStart ||
+      identityBrandId !== brandIdAtStart
+    ) {
+      return false;
+    }
+
+    const tasks = [
+      { key: "permissions", promise: getDoc(getDocPath("permissions")) },
+      { key: "securityConfig", promise: getDoc(getDocPath("security_config")) },
+      { key: "featureFlags", promise: getDoc(getDocPath("feature_flags")) },
+      {
+        key: "delegations",
+        promise: getDocs(
+          query(
+            getCollectionPath("management_delegations"),
+            where("status", "in", ["active", "scheduled"])
+          )
+        ),
+      },
+    ];
+
+    const settledResults = await Promise.allSettled(tasks.map((task) => task.promise));
+    const resultMap = {};
+    settledResults.forEach((result, index) => {
+      resultMap[tasks[index].key] = result;
+    });
+
+    const liveIdentity = applicationSessionIdentityRef.current || {};
+    const stillCurrent = Boolean(
+      String(currentBrandIdRef.current || "").trim().toLowerCase() === brandIdAtStart &&
+      String(liveIdentity?.uid || "") === identityUid &&
+      String(liveIdentity?.brandId || "").trim().toLowerCase() === brandIdAtStart
+    );
+    if (!stillCurrent) return false;
+
+    trackReadSource(
+      "application_session_authority_docs",
+      3,
+      getStableReadMeta("application_session_authority_docs")
+    );
+
+    const applyOptionalDoc = (key, applyValue, fallbackLabel) => {
+      const result = resultMap[key];
+      if (result?.status === "fulfilled") {
+        applyValue(result.value);
+      } else if (result?.reason) {
+        console.warn(`${fallbackLabel}讀取失敗，沿用目前值：`, result.reason);
+      }
+    };
+
+    applyOptionalDoc("permissions", (snap) => {
+      setPermissions(snap.exists() ? snap.data() : DEFAULT_PERMISSIONS);
+    }, "permissions ");
+    applyOptionalDoc("securityConfig", (snap) => {
+      setSecurityConfig(snap.exists() ? normalizeSecurityConfig(snap.data()) : DEFAULT_SECURITY_CONFIG);
+    }, "security_config ");
+    applyOptionalDoc("featureFlags", (snap) => {
+      setFeatureFlags(snap.exists() ? normalizeFeatureFlags(snap.data()) : DEFAULT_FEATURE_FLAGS);
+    }, "feature_flags ");
+
+    const delegationResult = resultMap.delegations;
+    if (delegationResult?.status === "fulfilled") {
+      const rows = delegationResult.value.docs.map((documentSnapshot) => ({
+        id: documentSnapshot.id,
+        ...documentSnapshot.data(),
+      }));
+      setDelegations(rows);
+      trackReadSource(
+        "application_session_authority_delegations",
+        rows.length,
+        getStableReadMeta("application_session_authority_delegations")
+      );
+    } else if (delegationResult?.reason) {
+      console.warn("management_delegations 讀取失敗，沿用目前值：", delegationResult.reason);
+    }
+
+    return true;
+  }, [
+    currentBrand?.id,
+    currentBrandId,
+    getDocPath,
+    getCollectionPath,
+    getStableReadMeta,
   ]);
 
   // B1C2E-2：只有登入畫面監聽 1 份 sanitized directory summary。
@@ -2511,7 +2597,7 @@ export default function App() {
   ]);
 
   useEffect(() => {
-    if (!user) return;
+    if (!hasVerifiedApplicationSession) return;
 
     const unsubReadTrackerConfig = onSnapshot(getDocPath("read_tracker_config"), (s) => {
       trackReadSource("read_tracker_config", s.exists() ? 1 : 0, getReadMeta("read_tracker_config"));
@@ -2540,10 +2626,10 @@ export default function App() {
     });
 
     return () => unsubReadTrackerConfig();
-  }, [user, getDocPath, getReadMeta]);
+  }, [hasVerifiedApplicationSession, getDocPath, getReadMeta]);
 
   useEffect(() => {
-    if (!user) return;
+    if (!hasVerifiedApplicationSession) return;
 
     let timerId = null;
     let cancelled = false;
@@ -2570,7 +2656,7 @@ export default function App() {
       cancelled = true;
       if (timerId) window.clearTimeout(timerId);
     };
-  }, [user, readTrackerConfigState]);
+  }, [hasVerifiedApplicationSession, readTrackerConfigState]);
 
   const lowFrequencyCacheRef = useRef({});
 
@@ -2587,14 +2673,14 @@ export default function App() {
 
   // 完整目標資料屬高成本來源；只在真正需要、頁籤可見、連線正常且未進入省流量待機時保持監聽。
   const shouldKeepMonthlyTargetsLive =
-    Boolean(user) &&
+    Boolean(hasVerifiedApplicationSession) &&
     shouldLoadMonthlyTargets &&
     isPageVisible &&
     isOnline &&
     !isLowPowerMode;
 
   useEffect(() => {
-    if (!shouldLoadMonthlyTargets || !user) {
+    if (!shouldLoadMonthlyTargets || !hasVerifiedApplicationSession) {
       // 離開目標功能或登出時清空，避免切品牌後誤用舊品牌資料。
       setBudgets({});
       return undefined;
@@ -2621,7 +2707,7 @@ export default function App() {
       try { unsubBudgetTargets && unsubBudgetTargets(); } catch (error) { console.warn("monthly_targets unsubscribe failed", error); }
     };
   }, [
-    user,
+    hasVerifiedApplicationSession,
     currentBrandId,
     getCollectionPath,
     shouldLoadMonthlyTargets,
@@ -2632,7 +2718,7 @@ export default function App() {
   // ★ KPI 參數獨立常駐監聽：
   // kpi_targets 只有 1 doc，必須在登入 / 品牌切換後穩定讀回，避免登出重登後還原成預設值。
   useEffect(() => {
-    if (!user) {
+    if (!hasVerifiedApplicationSession) {
       setTargets({ newASP: null, trafficASP: 1200, benchmarks: {} });
       return undefined;
     }
@@ -2656,13 +2742,13 @@ export default function App() {
     return () => {
       try { unsubKpiTargets && unsubKpiTargets(); } catch (error) { console.warn("kpi_targets unsubscribe failed", error); }
     };
-  }, [user, currentBrandId, getDocPath, getStableReadMeta]);
+  }, [hasVerifiedApplicationSession, currentBrandId, getDocPath, getStableReadMeta]);
 
   // ★ monthly_targets_summary 輕量即時監聽：
   // 監聽「目前選擇月份」的目標 Summary，供 Dashboard / Ranking / Annual 等一般分析頁使用。
   // 完整 monthly_targets 已改為必要頁面才讀，降低 monthly_targets_live 讀取量。
   useEffect(() => {
-    if (!user || !selectedYearMonth) {
+    if (!hasVerifiedApplicationSession || !selectedYearMonth) {
       setMonthlyTargetSummary(null);
       return;
     }
@@ -2695,12 +2781,12 @@ export default function App() {
     return () => {
       try { unsubMonthlyTargetSummary && unsubMonthlyTargetSummary(); } catch (error) { console.warn("monthly_targets_summary unsubscribe failed", error); }
     };
-  }, [user, selectedYearMonth, currentBrand?.id, getCollectionPath, getStableReadMeta]);
+  }, [hasVerifiedApplicationSession, selectedYearMonth, currentBrand?.id, getCollectionPath, getStableReadMeta]);
 
   // Batch 7：Current/detail + Annual Formal consumers 共用單一 Store Lifecycle Master listener。
   // 只在正式營運 consumer views 啟用；不建立 per-store listener、query 或 polling。
   const shouldLoadCurrentLifecycleMaster = OPERATIONAL_FORMAL_LIFECYCLE_VIEWS.has(activeView);
-  const shouldKeepCurrentLifecycleMasterLive = Boolean(user)
+  const shouldKeepCurrentLifecycleMasterLive = Boolean(hasVerifiedApplicationSession)
     && shouldLoadCurrentLifecycleMaster
     && isPageVisible
     && isOnline
@@ -2708,7 +2794,7 @@ export default function App() {
 
   useEffect(() => {
     const brandId = currentBrand?.id || currentBrandId || "";
-    if (!user || !shouldLoadCurrentLifecycleMaster) {
+    if (!hasVerifiedApplicationSession || !shouldLoadCurrentLifecycleMaster) {
       setCurrentLifecycleMasterState({ brandId: "", ready: false, data: null, error: null });
       return undefined;
     }
@@ -2745,7 +2831,7 @@ export default function App() {
 
     return () => unsubscribe();
   }, [
-    user,
+    hasVerifiedApplicationSession,
     currentBrand?.id,
     currentBrandId,
     getCollectionPath,
@@ -2758,7 +2844,7 @@ export default function App() {
   // Ranking / Regional 優先讀 dashboard_summary / rankings_summary，不再一進頁面就讀整月 daily_reports。
   // 若 Summary 不存在，才允許 App 回退到明細監聽，保留正式營運數字安全性。
   useEffect(() => {
-    if (!user || !selectedYearMonth) {
+    if (!hasVerifiedApplicationSession || !selectedYearMonth) {
       setCurrentDashboardSummary(null);
       setCurrentRankingsSummary(null);
       setCurrentReportSummaryReady(false);
@@ -2820,7 +2906,7 @@ export default function App() {
       try { unsubDashboardSummary && unsubDashboardSummary(); } catch (error) { console.warn("dashboard_summary report unsubscribe failed", error); }
       try { unsubRankingsSummary && unsubRankingsSummary(); } catch (error) { console.warn("rankings_summary report unsubscribe failed", error); }
     };
-  }, [user, selectedYearMonth, currentBrand?.id, getCollectionPath, getStableReadMeta]);
+  }, [hasVerifiedApplicationSession, selectedYearMonth, currentBrand?.id, getCollectionPath, getStableReadMeta]);
 
   useEffect(() => {
     if (!user) return;
@@ -2934,7 +3020,7 @@ export default function App() {
   ]);
 
   useEffect(() => {
-    if (!user) return;
+    if (!hasVerifiedApplicationSession) return;
 
     const targetYearStr = String(selectedYear);
     let isMounted = true;
@@ -3001,10 +3087,10 @@ export default function App() {
         try { unsubscribe && unsubscribe(); } catch (error) { console.warn("low frequency unsubscribe failed", error); }
       });
     };
-  }, [user, currentBrandId, currentBrand, getCollectionPath, selectedYear, activeView, auditType, therapistModuleEnabled, getStableReadMeta]);
+  }, [hasVerifiedApplicationSession, currentBrandId, currentBrand, getCollectionPath, selectedYear, activeView, auditType, therapistModuleEnabled, getStableReadMeta]);
 
   useEffect(() => {
-    if (!user) {
+    if (!hasVerifiedApplicationSession) {
       setDailyLoginCount(0);
       setYesterdayLoginCount(0);
       return;
@@ -3031,7 +3117,7 @@ export default function App() {
       unsubStatsToday();
       unsubStatsYesterday();
     };
-  }, [user, currentBrandId, getCollectionPath, getStableReadMeta]);
+  }, [hasVerifiedApplicationSession, currentBrandId, getCollectionPath, getStableReadMeta]);
 
 
   const monthCacheRef = useRef({});
@@ -3040,7 +3126,7 @@ export default function App() {
   // ★ 歷史 Summary 一變 dirty，就讓目前月份的明細快取失效並觸發一次性重抓。
   // 這個 listener 只監聽 1 個 flag doc；不會把歷史 daily_reports 改回長駐監聽。
   useEffect(() => {
-    if (!user || !selectedYearMonth) {
+    if (!hasVerifiedApplicationSession || !selectedYearMonth) {
       setCurrentSummaryRecalcFlagState({ brandId: "", yearMonth: "", ready: false, data: null, error: null });
       setHistoricalDetailRefreshState({
         yearMonth: "",
@@ -3155,7 +3241,7 @@ export default function App() {
     return () => {
       try { unsubscribe && unsubscribe(); } catch (error) { console.warn("history detail refresh flag unsubscribe failed", error); }
     };
-  }, [user, selectedYearMonth, currentBrand.id, getCollectionPath, getStableReadMeta]);
+  }, [hasVerifiedApplicationSession, selectedYearMonth, currentBrand.id, getCollectionPath, getStableReadMeta]);
 
   // Runtime stabilization — Historical Summary readiness one-shot recovery.
   //
@@ -3164,7 +3250,7 @@ export default function App() {
   // dashboard_summary/{YM}, rankings_summary/{YM}, summary_recalc_flags/{YM}.
   // This is not polling and does not reopen historical daily_reports as a listener.
   useEffect(() => {
-    if (!user || !selectedYearMonth) return undefined;
+    if (!hasVerifiedApplicationSession || !selectedYearMonth) return undefined;
 
     const now = new Date();
     const currentYearMonth = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}`;
@@ -3279,7 +3365,7 @@ export default function App() {
       clearTimeout(recoveryTimer);
     };
   }, [
-    user,
+    hasVerifiedApplicationSession,
     selectedYearMonth,
     currentBrand?.id,
     currentReportSummaryReady,
@@ -3295,7 +3381,7 @@ export default function App() {
   useEffect(() => {
     const shouldLoadAnnualData = ANNUAL_DATA_VIEWS.has(activeView);
 
-    if (!user) {
+    if (!hasVerifiedApplicationSession) {
       setAnnualAggregatedData([]);
       setAnnualDashboardSummaries([]);
       setAnnualSummaryStatusMap({});
@@ -3426,12 +3512,12 @@ export default function App() {
       try { unsubDashboardSummary && unsubDashboardSummary(); } catch (error) { console.warn("annual dashboard_summary unsubscribe failed", error); }
       try { unsubSummaryFlags && unsubSummaryFlags(); } catch (error) { console.warn("annual summary_recalc_flags unsubscribe failed", error); }
     };
-  }, [user, currentBrand?.id, selectedYear, activeView, getCollectionPath, getStableReadMeta, isLowPowerMode]);
+  }, [hasVerifiedApplicationSession, currentBrand?.id, selectedYear, activeView, getCollectionPath, getStableReadMeta, isLowPowerMode]);
 
   useEffect(() => {
     const shouldLoadAnnualData = ANNUAL_DATA_VIEWS.has(activeView);
 
-    if (!user) {
+    if (!hasVerifiedApplicationSession) {
       setAnnualMonthlyTargetSummaries({});
       setAnnualTargetSummaryLoadState({
         brandId: "",
@@ -3535,7 +3621,7 @@ export default function App() {
       active = false;
     };
   }, [
-    user,
+    hasVerifiedApplicationSession,
     currentBrand?.id,
     selectedYear,
     activeView,
@@ -3547,7 +3633,7 @@ export default function App() {
   useEffect(() => {
     const shouldLoadAnnualData = ANNUAL_DATA_VIEWS.has(activeView);
 
-    if (!user) {
+    if (!hasVerifiedApplicationSession) {
       setAnnualAggregatedData([]);
       setAnnualAggregateLoadState({
         brandId: "",
@@ -3692,7 +3778,7 @@ export default function App() {
       try { unsubscribe && unsubscribe(); } catch (error) { console.warn("annual monthly_aggregated fallback unsubscribe failed", error); }
     };
   }, [
-    user,
+    hasVerifiedApplicationSession,
     currentBrand?.id,
     selectedYear,
     activeView,
@@ -3794,7 +3880,7 @@ export default function App() {
       (activeView === "dashboard" && (dashboardViewMode === "therapist" || userRole === "therapist" || userRole === "trainer"))
     );
 
-    if (!user || isLowPowerMode || (!shouldLoadDailyReportData && !shouldLoadTherapistReportData)) {
+    if (!hasVerifiedApplicationSession || isLowPowerMode || (!shouldLoadDailyReportData && !shouldLoadTherapistReportData)) {
       setRawData([]);
       setTherapistReports([]);
       return;
@@ -3935,7 +4021,7 @@ export default function App() {
         isMounted = false; 
       };
     }
-  }, [user, currentBrand, selectedYear, selectedMonth, activeView, dashboardViewMode, storeAnalysisSelectedStore, userRole, therapistModuleEnabled, currentDashboardSummary, currentRankingsSummary, currentReportSummaryReady, currentReportSummaryReadyYearMonth, currentReportSummaryReadyBrandId, currentSummaryRecalcFlagState, systemExclusionState, getCollectionPath, getStableReadMeta, isLowPowerMode, historicalDetailRefreshToken]);
+  }, [hasVerifiedApplicationSession, currentBrand, selectedYear, selectedMonth, activeView, dashboardViewMode, storeAnalysisSelectedStore, userRole, therapistModuleEnabled, currentDashboardSummary, currentRankingsSummary, currentReportSummaryReady, currentReportSummaryReadyYearMonth, currentReportSummaryReadyBrandId, currentSummaryRecalcFlagState, systemExclusionState, getCollectionPath, getStableReadMeta, isLowPowerMode, historicalDetailRefreshToken]);
 
 
  const handleLogin = useCallback(async (roleId, userInfo = null, loginCredential = {}) => {
@@ -4116,10 +4202,12 @@ export default function App() {
     setPendingDeviceLogin(null);
 
     try {
-      await activateApplicationIdentitySession({ deviceSecurity, roleId });
+      const activatedIdentity = await activateApplicationIdentitySession({ deviceSecurity, roleId });
+      await fetchApplicationSessionAuthority(activatedIdentity);
     } catch (error) {
       console.error("Application identity session activation failed:", error);
       applicationSessionIdentityRef.current = null;
+      setApplicationSessionIdentity(null);
       setUserRole(null);
       setCurrentUser(null);
       setCurrentDeviceTrust({
@@ -4211,7 +4299,7 @@ export default function App() {
       identity: deviceSecurity?.applicationIdentity || null,
       isMasterCredential: deviceSecurity?.applicationIdentity?.isMasterCredential === true,
     };
-  }, [therapists, currentBrandId, logActivity, registerAccountDevice, activateApplicationIdentitySession]);
+  }, [therapists, currentBrandId, logActivity, registerAccountDevice, activateApplicationIdentitySession, fetchApplicationSessionAuthority]);
 
   const resumePendingDeviceLogin = useCallback(async () => {
     const pending = pendingDeviceLoginRef.current;
@@ -4703,7 +4791,7 @@ export default function App() {
   const closeConfirmModal = useCallback(() => setConfirmModal((p) => ({ ...p, isOpen: false })), []);
 
   const refreshDelegations = useCallback(async (options = {}) => {
-    if (!user) return [];
+    if (!hasVerifiedApplicationSession) return [];
     const includeHistory = options === true || options?.includeHistory === true;
     try {
       const collectionRef = getCollectionPath("management_delegations");
@@ -4720,7 +4808,7 @@ export default function App() {
       console.error("代理與托管資料更新失敗：", error);
       return [];
     }
-  }, [user, getCollectionPath, getStableReadMeta]);
+  }, [hasVerifiedApplicationSession, getCollectionPath, getStableReadMeta]);
 
   const handleUpdateAuditExclusions = useCallback(async (newExclusions) => {
     const brandIdAtStart = currentBrandId;
