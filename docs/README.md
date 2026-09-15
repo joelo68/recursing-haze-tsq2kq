@@ -108,6 +108,18 @@ SYSTEM_SOURCE_MAP.md.md
 
 `docs/archive/` 保存歷史 release note 與一次性 Knowledge Base 更新紀錄。Archive 不追改最新版本，也不可取代 canonical docs。
 
+Repository root 不保存一次性交付 artifacts。下列類型若已完成正式 promotion／驗證，應由 Git history 保存，不繼續留在 live root：
+
+```text
+歷史 deploy README
+一次性 validation report
+舊 SHA / Knowledge Base manifest
+一次性 source tree dump
+已失效 patch / delivery patch
+```
+
+只有仍屬正式入口、相容 pointer、runtime source、tests、必要 config 或 canonical `docs/` 的檔案才應留在目前 repository tree。
+
 # 6. 目前版本／正式狀態
 
 不要在本索引複製完整 Production 狀態。只固定：
