@@ -532,12 +532,26 @@ const DailyView = () => {
               {canChooseStore && (
                 <div className="flex items-center gap-2 w-full sm:w-auto">
                   {(userRole === 'director' || userRole === 'trainer') && (
-                    <select value={selectedManager} onChange={(e) => { setSelectedManager(e.target.value); setSelectedStore(""); }} className="flex-1 sm:flex-none px-4 py-2.5 border border-stone-200 rounded-xl text-sm font-bold text-stone-600 outline-none focus:border-amber-400 focus:ring-2 focus:ring-amber-100 bg-stone-50 hover:bg-white transition-all cursor-pointer min-w-[110px]">
+                    <select value={systemExclusionReady ? selectedManager : ""}
+                            disabled={!systemExclusionReady}
+                            aria-busy={!systemExclusionReady} onChange={(e) => { setSelectedManager(e.target.value); setSelectedStore(""); }} className="flex-1 sm:flex-none px-4 py-2.5 border border-stone-200 rounded-xl text-sm font-bold text-stone-600 outline-none focus:border-amber-400 focus:ring-2 focus:ring-amber-100 bg-stone-50 hover:bg-white transition-all cursor-pointer disabled:cursor-wait disabled:text-stone-400 disabled:bg-stone-100 min-w-[110px]">
+                        {systemExclusionReady ? (
+                          <>
+
                       <option value="">全區</option>
                       {sortManagersByOrgOrder(managers, Object.keys(groupedStoresForFilter), managerOrder).map(m => <option key={m} value={m}>{m}區</option>)}
-                    </select>
+                                              </>
+                        ) : (
+                          <option value="">範圍同步中...</option>
+                        )}
+                        </select>
                   )}
-                  <select value={selectedStore} onChange={(e) => setSelectedStore(e.target.value)} className="flex-1 sm:flex-none px-4 py-2.5 border border-stone-200 rounded-xl text-sm font-bold text-stone-600 outline-none focus:border-amber-400 focus:ring-2 focus:ring-amber-100 bg-stone-50 hover:bg-white transition-all cursor-pointer min-w-[150px]">
+                  <select value={systemExclusionReady ? selectedStore : ""}
+                            disabled={!systemExclusionReady}
+                            aria-busy={!systemExclusionReady} onChange={(e) => setSelectedStore(e.target.value)} className="flex-1 sm:flex-none px-4 py-2.5 border border-stone-200 rounded-xl text-sm font-bold text-stone-600 outline-none focus:border-amber-400 focus:ring-2 focus:ring-amber-100 bg-stone-50 hover:bg-white transition-all cursor-pointer disabled:cursor-wait disabled:text-stone-400 disabled:bg-stone-100 min-w-[150px]">
+                        {systemExclusionReady ? (
+                          <>
+
                     <option value="">
                       {isScopedOperator
                         ? (hasDelegatedStores ? "全部可管理店家" : (userRole === 'manager' ? "全區店家" : "我的店家"))
@@ -573,7 +587,11 @@ const DailyView = () => {
                     ) : (
                       availableStoresForDropdown.map(s => <option key={s} value={s} className="font-medium text-stone-700">{s}</option>)
                     ))}
-                  </select>
+                                            </>
+                        ) : (
+                          <option value="">店家範圍同步中...</option>
+                        )}
+                        </select>
                   
                   {(userRole === 'director' || userRole === 'trainer' || userRole === 'manager') && (
                     <button 

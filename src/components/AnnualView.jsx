@@ -172,6 +172,13 @@ const AnnualView = () => {
       : String(currentBrand?.id || "").toLowerCase()
   ), [currentBrand]);
 
+  // B1C2E-UX2C：正式範圍選單只在目前品牌的 System Exclusion authority
+  // 已確認後公開。KPI / Summary readiness 維持原本 fail-closed 邏輯不變。
+  const annualStoreScopeReady = Boolean(
+    systemExclusionState?.ready === true
+      && String(systemExclusionState?.brandId || "").toLowerCase() === annualBrandId
+  );
+
   const annualSummaryTrustReady = useMemo(() => {
     return annualSummaryLoadState?.brandId === annualBrandId
       && String(annualSummaryLoadState?.year || "") === String(selectedYear)
@@ -1115,25 +1122,39 @@ const annualData = useMemo(() => {
                     
                     {(userRole === 'director' || userRole === 'trainer') && (
                         <select
-                            value={selectedAnnualManager}
+                            value={annualStoreScopeReady ? selectedAnnualManager : ""}
+                            disabled={!annualStoreScopeReady}
+                            aria-busy={!annualStoreScopeReady}
                             onChange={(e) => {
                                 setSelectedAnnualManager(e.target.value);
                                 setSelectedAnnualStore(""); 
                             }}
-                            className="px-3 py-2 border border-stone-200 rounded-xl text-sm font-bold text-stone-600 outline-none focus:border-amber-400 bg-stone-50 shadow-sm cursor-pointer min-w-[120px] hover:border-stone-300 transition-colors"
+                            className="px-3 py-2 border border-stone-200 rounded-xl text-sm font-bold text-stone-600 outline-none focus:border-amber-400 bg-stone-50 shadow-sm cursor-pointer disabled:cursor-wait disabled:text-stone-400 disabled:bg-stone-100 min-w-[120px] hover:border-stone-300 transition-colors"
                         >
+                        {annualStoreScopeReady ? (
+                          <>
+
                             <option value="">全品牌</option>
                             {sortManagersByOrgOrder(managers, Object.keys(groupedStoresForFilter), managerOrder).map(m => (
                                 <option key={m} value={m}>{m}區</option>
                             ))}
+                                                  </>
+                        ) : (
+                          <option value="">範圍同步中...</option>
+                        )}
                         </select>
                     )}
                     
                     <select
-                        value={selectedAnnualStore}
+                        value={annualStoreScopeReady ? selectedAnnualStore : ""}
+                            disabled={!annualStoreScopeReady}
+                            aria-busy={!annualStoreScopeReady}
                         onChange={(e) => setSelectedAnnualStore(e.target.value)}
-                        className="px-3 py-2 border border-stone-200 rounded-xl text-sm font-bold text-stone-600 outline-none focus:border-amber-400 bg-stone-50 shadow-sm cursor-pointer min-w-[140px] hover:border-stone-300 transition-colors"
+                        className="px-3 py-2 border border-stone-200 rounded-xl text-sm font-bold text-stone-600 outline-none focus:border-amber-400 bg-stone-50 shadow-sm cursor-pointer disabled:cursor-wait disabled:text-stone-400 disabled:bg-stone-100 min-w-[140px] hover:border-stone-300 transition-colors"
                     >
+                        {annualStoreScopeReady ? (
+                          <>
+
                         <option value="" className="font-bold text-stone-800">
                             {selectedAnnualManager || userRole === 'manager' ? "全區店家" : "顯示全區"}
                         </option>
@@ -1151,7 +1172,11 @@ const annualData = useMemo(() => {
                                 <option key={s} value={s} className="font-medium text-stone-700 bg-white">{s}</option>
                             ))
                         )}
-                    </select>
+                                              </>
+                        ) : (
+                          <option value="">店家範圍同步中...</option>
+                        )}
+                        </select>
 
                     <div className="hidden xl:block w-px h-6 bg-stone-200 mx-2"></div>
                 </div>
