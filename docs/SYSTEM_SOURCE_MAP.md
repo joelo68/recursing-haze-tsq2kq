@@ -1,5 +1,33 @@
 # SYSTEM_SOURCE_MAP.md
 
+# Repository Canonical Documentation Entry Override — 2026-09-15
+
+Repository documentation ownership：
+
+```text
+docs/
+→ 唯一 canonical Project Knowledge Base
+
+README.md
+→ repository landing page only
+
+AI_START_HERE.md
+ARCHITECTURE.md
+DATA_IDENTITY_RULES.md
+DEPLOYMENT.md
+DEVELOPMENT_GUIDE.md
+SYSTEM_SOURCE_MAP.md
+→ root compatibility pointers only
+→ 不得保存第二份正式內容
+
+SYSTEM_SOURCE_MAP.md.md
+→ retired / untracked
+```
+
+此 hygiene normalization 不改 `src/`、`functions/`、Firestore Rules、Firestore data、Firestore path、KPI、Summary、Security 或 brand isolation。`CURRENT_APP_VERSION = 3.6.0` 不變。
+
+---
+
 # B1C2E / Credential Retirement Runtime Source Override — 2026-09-15
 
 正式 Production lineage：
