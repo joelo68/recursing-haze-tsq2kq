@@ -10,6 +10,16 @@ import DashboardHeader from "./DashboardHeader";
 import StorePerformanceView from "./StorePerformanceView";
 import TherapistPerformanceView from "./TherapistPerformanceView";
 
+const DashboardSectionLoading = ({ label }) => (
+  <div
+    className="flex min-h-[36vh] items-center justify-center flex-col animate-in fade-in duration-300"
+    data-dashboard-section-loading="true"
+  >
+    <Loader2 className="w-10 h-10 animate-spin text-stone-300 mb-3" />
+    <span className="text-stone-400 font-bold tracking-widest text-sm">{label}</span>
+  </div>
+);
+
 const DashboardView = () => {
   const { userRole, therapistModuleEnabled } = useContext(AppContext);
   const isTherapistModuleEnabled = therapistModuleEnabled !== false;
@@ -27,16 +37,14 @@ const DashboardView = () => {
     officialStoresForDropdown, delegatedStoresForDropdown, delegatedStoreDetails
   } = useDashboardStats();
 
-  if (!dashboardStats || (isTherapistModuleEnabled && !therapistStats)) {
-      return (
-          <ViewWrapper>
-              <div className="flex h-[50vh] items-center justify-center flex-col animate-in fade-in duration-300">
-                  <Loader2 className="w-12 h-12 animate-spin text-stone-300 mb-4" />
-                  <span className="text-stone-400 font-bold tracking-widest text-sm">營運資料載入中...</span>
-              </div>
-          </ViewWrapper>
-      );
-  }
+  // B1C2E-UX2A：Dashboard 外殼與目前視角的資料 readiness 分離。
+  // 門市視角不再被 therapistStats 阻塞；人員視角也不必等待 dashboardStats。
+  const isStoreViewActive = (
+    viewMode === 'store'
+    && userRole !== 'therapist'
+    && userRole !== 'trainer'
+  );
+  const isTherapistViewActive = isTherapistModuleEnabled && viewMode === 'therapist';
 
   return (
     <ViewWrapper>
@@ -63,20 +71,28 @@ const DashboardView = () => {
         />
 
         {/* 2. 零件二：門市營運視圖 */}
-        {(viewMode === 'store' && userRole !== 'therapist' && userRole !== 'trainer') && (
-           <StorePerformanceView 
-              dashboardStats={dashboardStats} 
-              myStoreRankings={myStoreRankings} 
+        {isStoreViewActive && (
+          dashboardStats ? (
+            <StorePerformanceView
+              dashboardStats={dashboardStats}
+              myStoreRankings={myStoreRankings}
               brandInfo={brandInfo}
-           />
+            />
+          ) : (
+            <DashboardSectionLoading label="門市營運資料載入中..." />
+          )
         )}
-        
+
         {/* 3. 零件三：人員績效視圖 */}
-        {isTherapistModuleEnabled && viewMode === 'therapist' && (
-           <TherapistPerformanceView 
-              therapistStats={therapistStats} 
-              brandInfo={brandInfo} 
-           />
+        {isTherapistViewActive && (
+          therapistStats ? (
+            <TherapistPerformanceView
+              therapistStats={therapistStats}
+              brandInfo={brandInfo}
+            />
+          ) : (
+            <DashboardSectionLoading label="人員績效資料載入中..." />
+          )
         )}
         
       </div>
