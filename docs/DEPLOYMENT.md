@@ -102,6 +102,47 @@ Functions runtime：
 Node.js 22
 ```
 
+## 3.1 Functions deployment package hygiene
+
+`firebase.json` 的 Functions source 是整個：
+
+```text
+functions/
+```
+
+因此 `functions/` 內未被 ignore 的非 runtime 檔案，也可能被帶入 Functions deployment package。
+
+正式規則：
+
+```text
+functions/
+→ 只保留 runtime source、runtime support module、package metadata 與必要 config
+
+docs/
+→ 唯一 canonical Project Knowledge Base
+```
+
+禁止在 `functions/` 重新放入：
+
+```text
+Project Knowledge Base 的 .md 副本
+functions/docs/ 文件鏡像
+KNOWLEDGE_BASE_MANIFEST.json
+index.backup.js 或其他 runtime source backup copy
+```
+
+Runtime rollback／歷史版本應使用 Git history，不在 Functions source directory 保存 backup source。
+
+2026-09-15 A2B-1 hygiene retirement 已移除 17 個無 runtime/test/script reference 的舊副本／backup；稽核時它們合計 270,897 bytes，且原本全部屬於 package-eligible。
+
+正式 Functions deploy 前仍必須先確認：
+
+```text
+branch / HEAD / origin/main 正確
+worktree clean
+實際異動 function 已完成 syntax / regression
+```
+
 # 4. Firebase Root Config
 
 `firebase.json` 目前配置：
