@@ -1,5 +1,86 @@
 # FIREBASE_DATA_MODEL.md
 
+# `therapist_credentials` Final Authority Override — 2026-09-15
+
+正式 Production lineage：
+
+```text
+Official repo                    = ~/cyj-new
+Production runtime commit        = 8e69eb27c59ae4aa81353cd3af879f7b80a3c6ff
+origin/main                       = 8e69eb27c59ae4aa81353cd3af879f7b80a3c6ff
+Frontend Production gh-pages     = 3126b4bc3df034dd4565b6f0a9aadae1f1c2171c
+CURRENT_APP_VERSION              = 3.6.0
+Credential retirement ancestor   = cce7c7d93a5a8907f122f18d480f30b1d1b90f9f
+Annual mobile stability ancestor = 7c461156f2cab5ea3c0cb8b8e33778624b73b3c0
+Dashboard UX2A ancestor          = 65a8e327b9cb8c60ed8573066c5fe2228b9e3d1c
+Dashboard UX2B ancestor          = d7b5de96238e1889cb6830220d80f7f23d55ba97
+Annual/Daily UX2C runtime        = 8e69eb27c59ae4aa81353cd3af879f7b80a3c6ff
+```
+
+
+**類型：Backend-only Authentication Credential Data**
+
+Physical paths：
+
+```text
+CYJ
+artifacts/{appId}/public/data/therapist_credentials/{therapistId}
+
+安妞 / 伊啵
+brands/{brandId}/therapist_credentials/{therapistId}
+```
+
+正式 credential document contract：
+
+```text
+schemaVersion = therapist-credential-v1
+brandId
+therapistId
+password
+createdAt / createdAtText
+updatedAt / updatedAtText
+```
+
+`migratedAt*` 可存在於過往 migration evidence，但 migration runtime 已退役；它不是新的 live writer requirement。
+
+對應 `therapists/{therapistId}`：
+
+```text
+credentialStorageMode = separated_v1
+password              = 不得存在
+```
+
+正式 authority：
+
+```text
+functions/therapistCredentialAuthority.js
+```
+
+Validation：
+
+```text
+schemaVersion exact match
+brandId exact match
+therapistId exact match
+password must exist
+legacy mode fail closed
+master password present fail closed
+missing / invalid separated doc fail closed
+```
+
+Rules：
+
+```text
+therapist_credentials frontend read  = false
+therapist_credentials frontend write = false
+Backend Admin SDK                    = authority
+```
+
+Current B1C2E UX2A/B/C 沒有新增 collection/path/schema，也沒有修改任何 Firestore data。
+
+---
+
+
 > Project Knowledge Base / 第二層文件  
 > 由原 2026-08-18 Data Model 基線，加上截至 2026-08-25 已正式確認／已驗證的 Security sources 整併。  
 > 本文件描述「目前程式實際讀寫到的 Firestore logical model」，不是 Firebase Console 的完整 schema 匯出。  

@@ -1,7 +1,100 @@
 # SYSTEM_SOURCE_MAP.md
 
+# B1C2E / Credential Retirement Runtime Source Override — 2026-09-15
+
+正式 Production lineage：
+
+```text
+Official repo                    = ~/cyj-new
+Production runtime commit        = 8e69eb27c59ae4aa81353cd3af879f7b80a3c6ff
+origin/main                       = 8e69eb27c59ae4aa81353cd3af879f7b80a3c6ff
+Frontend Production gh-pages     = 3126b4bc3df034dd4565b6f0a9aadae1f1c2171c
+CURRENT_APP_VERSION              = 3.6.0
+Credential retirement ancestor   = cce7c7d93a5a8907f122f18d480f30b1d1b90f9f
+Annual mobile stability ancestor = 7c461156f2cab5ea3c0cb8b8e33778624b73b3c0
+Dashboard UX2A ancestor          = 65a8e327b9cb8c60ed8573066c5fe2228b9e3d1c
+Dashboard UX2B ancestor          = d7b5de96238e1889cb6830220d80f7f23d55ba97
+Annual/Daily UX2C runtime        = 8e69eb27c59ae4aa81353cd3af879f7b80a3c6ff
+```
+
+
+最新正式 owners：
+
+```text
+functions/therapistCredentialAuthority.js
+  → separated_v1 only
+  → legacy / missing / embedded / dual-source states fail closed
+  → shared credential read + password update/reset authority
+
+functions/accountAuthority.js
+  → therapist self password change through separated credential authority
+
+functions/therapistMasterAuthority.js
+  → therapist create/reset/delete credential transaction ownership
+  → no migration action
+
+functions/deviceApproval.js
+  → therapist login credential source through shared authority
+
+src/hooks/useDashboardStats.js
+  → Current/detail Formal authority
+  → Projection presentation readiness
+  → no full monthly_targets Dashboard fallback
+
+src/components/DashboardView.jsx
+  → UX2A independent store/therapist section readiness
+  → current-brand System Exclusion filter readiness source
+
+src/components/DashboardHeader.jsx
+  → UX2B fail-closed manager/store option presentation
+
+src/components/AnnualView.jsx
+  → Annual Summary/Target/aggregate readiness
+  → mobile declarative KPI render stability
+  → UX2C current-brand store-scope selector readiness
+
+src/components/DailyView.jsx
+  → Lifecycle expected-date authority
+  → current-brand System Exclusion readiness
+  → UX2C selector presentation gate
+```
+
+Regression owners：
+
+```text
+tests/therapistCredentialRetirement.test.js
+tests/annualMobileRenderStability.test.js
+tests/dashboardViewReadinessIsolation.test.js
+tests/dashboardFilterReadiness.test.js
+tests/formalScopeSelectorReadiness.test.js
+tests/currentDetailFormalWiring.test.js
+tests/dashboardProjectionConsumer.test.js
+```
+
+Read / brand isolation contract：
+
+```text
+CYJ physical root
+→ artifacts/{appId}/public/data
+
+安妞 / 伊啵 physical root
+→ brands/{brandId}
+
+B1C2E UX2A/B/C
+→ no new listener/query/polling/point read
+
+therapist_credentials
+→ Backend authority only
+→ Frontend direct access denied
+```
+
+若下方較早 source-map 章節描述 migration UI、embedded therapist password、Dashboard 全頁 readiness blocking 或 Annual/Daily selector pre-authority exposure，均視為歷史狀態；以本節與目前正式 source 為準。
+
+---
+
+
 > 狀態：Project Knowledge Base / Source Map v0.1
-> 已整併至 2026-09-12 UI Language / Presentation Semantics v3.6.0 closeout；latest runtime source = `ffe533ee681f85112dc56c8007dabaa2dde25837`，Frontend Production gh-pages = `39fa441555982f6e9f65d36c5549cd9bef3a6393`，`CURRENT_APP_VERSION = 3.6.0`，`~/cyj-new` 為唯一正式 Source of Truth。
+> 已整併至 2026-09-15 B1C2E / Therapist Credential Legacy Retirement final closeout；latest runtime source = `8e69eb27c59ae4aa81353cd3af879f7b80a3c6ff`，Frontend Production gh-pages = `3126b4bc3df034dd4565b6f0a9aadae1f1c2171c`，`CURRENT_APP_VERSION = 3.6.0`，`~/cyj-new` 為唯一正式 Source of Truth。
 > 禁止以舊對話、舊版檔案、AI 記憶或未提供的檔案補足事實。
 > 無法由目前正式程式確認的內容，必須標記為「未由目前正式來源確認」。
 

@@ -1,7 +1,78 @@
 # ARCHITECTURE.md
 
+# B1C2E / Therapist Credential Architecture Override — 2026-09-15
+
+正式 Production lineage：
+
+```text
+Official repo                    = ~/cyj-new
+Production runtime commit        = 8e69eb27c59ae4aa81353cd3af879f7b80a3c6ff
+origin/main                       = 8e69eb27c59ae4aa81353cd3af879f7b80a3c6ff
+Frontend Production gh-pages     = 3126b4bc3df034dd4565b6f0a9aadae1f1c2171c
+CURRENT_APP_VERSION              = 3.6.0
+Credential retirement ancestor   = cce7c7d93a5a8907f122f18d480f30b1d1b90f9f
+Annual mobile stability ancestor = 7c461156f2cab5ea3c0cb8b8e33778624b73b3c0
+Dashboard UX2A ancestor          = 65a8e327b9cb8c60ed8573066c5fe2228b9e3d1c
+Dashboard UX2B ancestor          = d7b5de96238e1889cb6830220d80f7f23d55ba97
+Annual/Daily UX2C runtime        = 8e69eb27c59ae4aa81353cd3af879f7b80a3c6ff
+```
+
+
+## Credential Separation Architecture
+
+```text
+therapists/{therapistId}
+  → 人員主檔
+  → credentialStorageMode = separated_v1
+  → no password
+
+therapist_credentials/{therapistId}
+  → therapist-credential-v1
+  → Backend-only credential source
+
+Login / self password change / admin reset / therapist create
+  → shared Backend credential authority
+  → no Frontend credential collection access
+```
+
+舊 `embedded_legacy` / missing storage mode 不再是相容讀取路徑，而是 fail closed。Migration function / migration UI 已退出正式 runtime。
+
+## Formal Readiness Architecture
+
+```text
+App authorities
+  ├─ Store Lifecycle master
+  ├─ System Exclusion state
+  ├─ Target / Summary readiness
+  └─ Projection model trust/readiness
+       ↓
+Presentation consumers
+  ├─ Dashboard
+  ├─ Annual
+  └─ Daily
+```
+
+Dashboard view composer 不再用「店家資料 OR 管理師資料任一未 ready 就整頁 loading」；兩個 section 各自等待自己的資料。Filter option presentation 另外要求 current-brand System Exclusion readiness，避免切品牌／冷啟動期間先顯示尚未確認的店家。
+
+Annual 與 Daily 同樣把 selector exposure 與 current-brand System Exclusion readiness 對齊。這些 gate 只重用既有 authority state，不新增 Firestore read topology。
+
+Annual mobile KPI render stability 使用 React declarative render identity 與 mobile de-compositing；不使用 `requestAnimationFrame` / forced reflow workaround。
+
+## Current Formal Consumer Boundary
+
+Current/detail Formal scope 必須先取得 Lifecycle + System Exclusion authority；Projection loading 不是合法 current-pace fallback。System Excluded own-store self-view 可保留自身資料，但不能透過 brand fallback / aggregate scope 洩漏品牌訊號。
+
+```text
+CURRENT_APP_VERSION = 3.6.0
+```
+
+下方舊章節中的 `3.5.3` 是歷史 evidence，不做機械式全檔替換。
+
+---
+
+
 > 本文件描述目前正式部署版本的系統架構。  
-> 已整併至 2026-09-11 Frontend UX ownership closeout（Smart Forecast Accuracy / System Maintenance / Permission Matrix）。
+> 已整併至 2026-09-15 B1C2E / Therapist Credential Legacy Retirement final closeout；較早章節保留歷史 evidence。
 > `CURRENT_STATE.md` 專門區分「已正式確認」、「待部署」與「Production 觀察中」的 Security 工作。
 
 # Frontend UX Ownership Architecture Override — 2026-09-11

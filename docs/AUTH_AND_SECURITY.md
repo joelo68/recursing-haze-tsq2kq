@@ -1,5 +1,94 @@
 # AUTH_AND_SECURITY.md
 
+# Therapist Credential Separation / Legacy Retirement Security Override — 2026-09-15
+
+正式 Production lineage：
+
+```text
+Official repo                    = ~/cyj-new
+Production runtime commit        = 8e69eb27c59ae4aa81353cd3af879f7b80a3c6ff
+origin/main                       = 8e69eb27c59ae4aa81353cd3af879f7b80a3c6ff
+Frontend Production gh-pages     = 3126b4bc3df034dd4565b6f0a9aadae1f1c2171c
+CURRENT_APP_VERSION              = 3.6.0
+Credential retirement ancestor   = cce7c7d93a5a8907f122f18d480f30b1d1b90f9f
+Annual mobile stability ancestor = 7c461156f2cab5ea3c0cb8b8e33778624b73b3c0
+Dashboard UX2A ancestor          = 65a8e327b9cb8c60ed8573066c5fe2228b9e3d1c
+Dashboard UX2B ancestor          = d7b5de96238e1889cb6830220d80f7f23d55ba97
+Annual/Daily UX2C runtime        = 8e69eb27c59ae4aa81353cd3af879f7b80a3c6ff
+```
+
+
+正式管理師 credential 安全邊界：
+
+```text
+therapists
+→ 人員主檔
+→ credentialStorageMode 必須是 separated_v1
+→ password 不得存在
+
+therapist_credentials
+→ credential document
+→ schemaVersion = therapist-credential-v1
+→ Frontend read/write = deny
+→ Backend Admin SDK authority
+```
+
+正式 password consumers / writers 全部經 shared Backend authority：
+
+```text
+Login
+→ deviceApproval.loadTherapistCredentialSource(...)
+
+Self password change
+→ accountAuthority
+→ updateTherapistCredentialPasswordInTransaction(...)
+
+Admin reset
+→ therapistMasterAuthority
+→ resetTherapistCredentialPasswordInTransaction(...)
+
+Create therapist
+→ therapist master transaction
+→ create separated credential directly
+```
+
+Fail-closed states：
+
+```text
+credentialStorageMode missing
+embedded_legacy
+embedded_legacy_pending_migration
+master password still present
+separated credential missing
+separated credential invalid
+dual source
+```
+
+這些狀態不得 fallback 回 `therapists.password`。
+
+正式退役：
+
+```text
+migrate_credential
+credential_migration_inventory
+single-account migration action
+System Maintenance batch migration UI
+legacy compatibility read
+```
+
+Rules 對兩套 physical roots 都維持 therapist credential frontend deny；本 closeout 不新增 Rules 寬鬆例外。
+
+Regression owner：
+
+```text
+tests/therapistCredentialRetirement.test.js
+```
+
+安全文件不得記錄任何實際 password / API key / token；此原則不變。
+
+---
+
+
 > 本文件描述目前正式登入、帳號、閒置節流、裝置信任、登入監控與 Firestore Rules 邊界。  
 > 安全文件刻意不保存實際帳號密碼、API Key、Bot Token 或其他 credential。
 

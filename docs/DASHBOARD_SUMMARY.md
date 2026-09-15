@@ -1,5 +1,86 @@
 # DASHBOARD_SUMMARY.md
 
+# Dashboard Formal Readiness / UX2A-UX2B Override — 2026-09-15
+
+正式 Production lineage：
+
+```text
+Official repo                    = ~/cyj-new
+Production runtime commit        = 8e69eb27c59ae4aa81353cd3af879f7b80a3c6ff
+origin/main                       = 8e69eb27c59ae4aa81353cd3af879f7b80a3c6ff
+Frontend Production gh-pages     = 3126b4bc3df034dd4565b6f0a9aadae1f1c2171c
+CURRENT_APP_VERSION              = 3.6.0
+Credential retirement ancestor   = cce7c7d93a5a8907f122f18d480f30b1d1b90f9f
+Annual mobile stability ancestor = 7c461156f2cab5ea3c0cb8b8e33778624b73b3c0
+Dashboard UX2A ancestor          = 65a8e327b9cb8c60ed8573066c5fe2228b9e3d1c
+Dashboard UX2B ancestor          = d7b5de96238e1889cb6830220d80f7f23d55ba97
+Annual/Daily UX2C runtime        = 8e69eb27c59ae4aa81353cd3af879f7b80a3c6ff
+```
+
+
+Current-month Dashboard 正式 authority 現況：
+
+```text
+Current detail
+→ buildCurrentDetailFormalAuthority(...)
+→ buildCurrentDetailFormalScope(...)
+→ Lifecycle + System Exclusion
+→ Formal KPI status
+```
+
+Dashboard 不再以 full `monthly_targets` raw fallback 補目前正式 target authority；Target / data incompleteness 必須保留 fail-closed status。
+
+## Section readiness
+
+```text
+Dashboard shell + Header
+→ 保留
+
+門市營運 active
+→ 只等待 dashboardStats
+
+人員績效 active
+→ 只等待 therapistStats
+```
+
+因此管理師資料尚未 ready 不再阻擋門市營運；店家資料尚未 ready 也不阻擋人員績效頁本身。
+
+## Filter readiness
+
+Dashboard manager/store option list 只有在：
+
+```text
+systemExclusionState.ready === true
+AND
+systemExclusionState.brandId === current brand
+```
+
+才公開。未 ready 時 control 保留但 disabled，顯示「範圍同步中... / 店家範圍同步中...」。
+
+## Projection readiness
+
+`projection_models/current` 仍是 bounded point-read authority。Model loading / trust 尚未完成時：
+
+```text
+presentationReady = false
+→ UI 顯示推估資料同步中
+→ 不得偽裝成 current pace 合法 fallback
+```
+
+Stale / missing model 在 authority 已判定後才可依既有正式規則 fallback。
+
+## Read impact
+
+```text
+UX2A new reads/listeners/queries/polling = 0
+UX2B new reads/listeners/queries/polling = 0
+```
+
+下方較早提到 Dashboard targeted raw target fallback 的內容若與 `currentDetailFormalWiring.test.js` / 目前 source 衝突，以本節為準。
+
+---
+
+
 > 本文件記錄目前正式 Dashboard Summary / Historical Data 信任與 fallback 架構。  
 > 建立來源：目前正式 `App.jsx`、`useDashboardStats.js`、`functions/index.js`、`SystemMaintenance.jsx`、`AnnualView.jsx`、相關 View。
 

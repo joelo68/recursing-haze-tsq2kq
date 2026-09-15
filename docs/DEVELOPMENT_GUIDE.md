@@ -1,5 +1,96 @@
 # DEVELOPMENT_GUIDE.md
 
+# 2026-09-15 Formal Readiness / Therapist Credential Guardrails
+
+正式 Production lineage：
+
+```text
+Official repo                    = ~/cyj-new
+Production runtime commit        = 8e69eb27c59ae4aa81353cd3af879f7b80a3c6ff
+origin/main                       = 8e69eb27c59ae4aa81353cd3af879f7b80a3c6ff
+Frontend Production gh-pages     = 3126b4bc3df034dd4565b6f0a9aadae1f1c2171c
+CURRENT_APP_VERSION              = 3.6.0
+Credential retirement ancestor   = cce7c7d93a5a8907f122f18d480f30b1d1b90f9f
+Annual mobile stability ancestor = 7c461156f2cab5ea3c0cb8b8e33778624b73b3c0
+Dashboard UX2A ancestor          = 65a8e327b9cb8c60ed8573066c5fe2228b9e3d1c
+Dashboard UX2B ancestor          = d7b5de96238e1889cb6830220d80f7f23d55ba97
+Annual/Daily UX2C runtime        = 8e69eb27c59ae4aa81353cd3af879f7b80a3c6ff
+```
+
+
+未來修改下列區域時，先遵守本節。
+
+## Therapist credential
+
+禁止重新加入：
+
+```text
+therapists.password
+embedded_legacy runtime fallback
+migrate_credential
+credential_migration_inventory
+Frontend direct therapist_credentials access
+```
+
+正式 mode 只有：
+
+```text
+credentialStorageMode = separated_v1
+```
+
+Login、自行改密碼、管理者 reset、新增／刪除 credential 都必須走 shared Backend credential authority。修改 credential/security 時最低要檢查：
+
+```text
+functions/therapistCredentialAuthority.js
+functions/accountAuthority.js
+functions/therapistMasterAuthority.js
+functions/deviceApproval.js
+firestore.rules
+tests/therapistCredentialRetirement.test.js
+```
+
+## Formal readiness presentation
+
+不要把「authority 還在載入」當成「沒有排除店」、「沒有 Lifecycle 限制」或「可以 current pace」。
+
+Dashboard / Annual / Daily 的 store-scope selector 必須先確認：
+
+```text
+authority.ready === true
+AND
+authority.brandId === currentBrand
+```
+
+才公開 option list。
+
+Dashboard store / therapist sections 必須維持獨立 readiness，不得恢復 cross-module full-page blocking。
+
+Projection：
+
+```text
+loading != valid current-pace fallback
+```
+
+只有 authority 已完成判定後，才能依 Projection 正式 fallback contract 選擇 current pace。
+
+## Read-cost rule
+
+Readiness UI 修正優先重用既有 state；不得為了讓 selector 比資料早顯示而新增 polling / broad listener / collection scan。
+
+Regression owners：
+
+```text
+tests/dashboardViewReadinessIsolation.test.js
+tests/dashboardFilterReadiness.test.js
+tests/formalScopeSelectorReadiness.test.js
+tests/dashboardProjectionConsumer.test.js
+tests/annualMobileRenderStability.test.js
+tests/currentDetailFormalWiring.test.js
+```
+
+---
+
+
 > 目的：讓未來工程師或 AI 在修改正式系統前，先理解「不能破壞的架構規則」。
 
 # 1. Source of Truth

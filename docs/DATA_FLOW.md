@@ -1,5 +1,98 @@
 # DATA_FLOW.md
 
+# B1C2E / Therapist Credential Flow Override — 2026-09-15
+
+正式 Production lineage：
+
+```text
+Official repo                    = ~/cyj-new
+Production runtime commit        = 8e69eb27c59ae4aa81353cd3af879f7b80a3c6ff
+origin/main                       = 8e69eb27c59ae4aa81353cd3af879f7b80a3c6ff
+Frontend Production gh-pages     = 3126b4bc3df034dd4565b6f0a9aadae1f1c2171c
+CURRENT_APP_VERSION              = 3.6.0
+Credential retirement ancestor   = cce7c7d93a5a8907f122f18d480f30b1d1b90f9f
+Annual mobile stability ancestor = 7c461156f2cab5ea3c0cb8b8e33778624b73b3c0
+Dashboard UX2A ancestor          = 65a8e327b9cb8c60ed8573066c5fe2228b9e3d1c
+Dashboard UX2B ancestor          = d7b5de96238e1889cb6830220d80f7f23d55ba97
+Annual/Daily UX2C runtime        = 8e69eb27c59ae4aa81353cd3af879f7b80a3c6ff
+```
+
+
+## Therapist credential flow
+
+```text
+therapist login
+→ Backend device/login authority
+→ loadTherapistCredentialSource
+→ therapists master says separated_v1
+→ therapist_credentials/{therapistId}
+→ verify credential
+```
+
+```text
+self password change
+→ Backend account authority transaction
+→ therapist_credentials only
+```
+
+```text
+admin password reset / therapist create
+→ Backend therapist master authority transaction
+→ therapist_credentials only
+```
+
+Legacy embedded password / migration fallback 已退役。
+
+## Dashboard readiness flow
+
+```text
+Dashboard shell
+├─ Header
+├─ Store section → dashboardStats readiness
+└─ Therapist section → therapistStats readiness
+
+Header store-scope controls
+→ current-brand System Exclusion ready?
+   ├─ NO  → disabled sync placeholder
+   └─ YES → expose manager/store options
+```
+
+## Annual readiness flow
+
+```text
+Summary + flags + Lifecycle + System Exclusion
+→ annualSummaryTrustReady
+
+Target yearly summaries
+→ annualTargetSummariesLoaded
+
+monthly_aggregated fallback
+→ only when selected range actually needs it
+
+System Exclusion current-brand ready
+→ Annual manager/store selector options
+```
+
+## Daily readiness flow
+
+```text
+selected date
+→ bounded single-day daily report queries
+
+Lifecycle current-brand READY
++ System Exclusion current-brand READY
+→ formal presentation store scope
+
+System Exclusion not ready
+→ data body remains waiting
+→ manager/store selector options also remain masked
+```
+
+B1C2E UX2A/B/C 不新增 listener/query/polling/point read；只重用既有 authority state。
+
+---
+
+
 > 本文件把目前正式系統的「資料從哪裡來、經過什麼、最後去哪裡」串成可追查流程。  
 > 用途：未來某頁數字錯時，先沿資料流找上游，不要直接在畫面補判斷。
 

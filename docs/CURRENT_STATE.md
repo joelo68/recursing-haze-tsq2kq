@@ -1,8 +1,116 @@
 # CURRENT_STATE.md
 
+# Final B1C2E / Credential Retirement Production Closeout — 2026-09-15
+
+> 本節是目前最高優先的 Security / Formal-readiness / Annual mobile stability 狀態。2026-09-12 以前章節保留歷史 evidence；若 runtime lineage、therapist credential authority、Dashboard / Annual / Daily readiness 或 production status 衝突，以目前正式 source 與本節為準。
+
+正式 Production lineage：
+
+```text
+Official repo                    = ~/cyj-new
+Production runtime commit        = 8e69eb27c59ae4aa81353cd3af879f7b80a3c6ff
+origin/main                       = 8e69eb27c59ae4aa81353cd3af879f7b80a3c6ff
+Frontend Production gh-pages     = 3126b4bc3df034dd4565b6f0a9aadae1f1c2171c
+CURRENT_APP_VERSION              = 3.6.0
+Credential retirement ancestor   = cce7c7d93a5a8907f122f18d480f30b1d1b90f9f
+Annual mobile stability ancestor = 7c461156f2cab5ea3c0cb8b8e33778624b73b3c0
+Dashboard UX2A ancestor          = 65a8e327b9cb8c60ed8573066c5fe2228b9e3d1c
+Dashboard UX2B ancestor          = d7b5de96238e1889cb6830220d80f7f23d55ba97
+Annual/Daily UX2C runtime        = 8e69eb27c59ae4aa81353cd3af879f7b80a3c6ff
+```
+
+
+## Therapist Credential Legacy Retirement
+
+正式管理師登入 credential 已完成 migration retirement：
+
+```text
+credentialStorageMode = separated_v1
+therapists             = 人員主檔；不得再保存 password
+therapist_credentials  = Backend-only credential document
+legacy / missing mode  = fail closed
+embedded password      = fail closed
+dual source            = fail closed
+```
+
+正式 authority：
+
+```text
+functions/therapistCredentialAuthority.js
+functions/accountAuthority.js
+functions/therapistMasterAuthority.js
+functions/deviceApproval.js
+```
+
+Login、自行改密碼、管理者重設密碼與新增管理師皆使用 separated credential authority。`migrate_credential`、`credential_migration_inventory`、管理師單帳號 migration UI 與 System Maintenance migration UI 均已退役。Frontend 不直接存取 `therapist_credentials`；Rules 對 CYJ legacy root 與 standard brand root 都是 frontend read/write deny。
+
+## B1C2E Formal Readiness / UX Closeout
+
+目前正式 presentation / authority contract：
+
+```text
+Projection loading
+→ 不得當成 current-pace 合法 fallback
+→ projectionPresentationReady 前 fail closed
+
+Dashboard
+→ Header 保留
+→ 門市營運 / 人員績效各自等待自己的資料
+→ 不再互相造成整頁 blocking
+
+Dashboard manager/store filters
+→ current-brand System Exclusion authority 未 ready 前
+→ 顯示「範圍同步中... / 店家範圍同步中...」
+→ 不公開未確認 option list
+
+Annual
+→ Summary / Target / Lifecycle / System Exclusion readiness 維持 fail closed
+→ mobile KPI 以 declarative render identity 更新
+→ mobile 不靠 forced repaint
+→ manager/store filters 等 current-brand System Exclusion authority
+
+Daily
+→ Lifecycle + current-brand System Exclusion authority
+→ data body 與 manager/store filters 都 fail closed
+```
+
+Current/detail Formal consumers 保持 Lifecycle + System Exclusion authority；Dashboard 不恢復 full `monthly_targets` raw fallback。System Excluded own-store self-view 仍可看自身資料，但品牌／區域／排名等 aggregate scope 不得因此重新納入排除店。
+
+## Read / Runtime Impact
+
+```text
+B1C2E UX readiness new listeners    = 0
+B1C2E UX readiness new polling      = 0
+B1C2E UX readiness new queries      = 0
+B1C2E UX readiness new point reads  = 0
+Credential retirement new listener  = 0
+Credential migration runtime action = retired
+Firestore Rules change in UX2A/B/C  = 0
+Firestore data mutation in UX2A/B/C = 0
+CURRENT_APP_VERSION                 = 3.6.0 unchanged
+```
+
+## Final Production Confirmation
+
+```text
+Therapist credential legacy retirement = PRODUCTION CONFIRMED
+Annual mobile render stability          = PRODUCTION CONFIRMED
+Dashboard UX2A section readiness        = PRODUCTION CONFIRMED
+Dashboard UX2B filter authority         = PRODUCTION CONFIRMED
+Annual/Daily UX2C filter authority      = PRODUCTION CONFIRMED
+
+Final Remaining Work Audit
+= no concrete B1C2E runtime gap requiring UX2D identified
+```
+
+Documentation Impact：本次 final closeout 更新 `CURRENT_STATE.md`、`SYSTEM_SOURCE_MAP.md`、`ARCHITECTURE.md`、`AUTH_AND_SECURITY.md`、`FIREBASE_DATA_MODEL.md`、`DASHBOARD_SUMMARY.md`、`DATA_FLOW.md`、`DEVELOPMENT_GUIDE.md`、`MAINTENANCE_TOOLS.md`。`DEPLOYMENT.md`、`DATA_IDENTITY_RULES.md`、`TELEGRAM_AGENT.md`、`PROJECT_OPERATING_RULES.md` = None。
+
+---
+
+
 > 用途：記錄「目前正式環境已確認到哪個狀態」。這不是 CHANGELOG。  
 > 優先順序：使用者提供的目前正式部署 source > 本檔案 > 其他 Knowledge Base 文件。  
-> 最後整併更新：**2026-09-12（UTC+8）**。
+> 最後整併更新：**2026-09-15（UTC+8）**。
 
 # Latest Production Runtime Override — 2026-09-12（UI Language / Presentation Semantics v3.6.0 Closeout）
 

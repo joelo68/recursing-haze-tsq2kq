@@ -1,5 +1,53 @@
 # MAINTENANCE_TOOLS.md
 
+# Therapist Credential Migration Tool Retirement Override — 2026-09-15
+
+正式 Production lineage：
+
+```text
+Official repo                    = ~/cyj-new
+Production runtime commit        = 8e69eb27c59ae4aa81353cd3af879f7b80a3c6ff
+origin/main                       = 8e69eb27c59ae4aa81353cd3af879f7b80a3c6ff
+Frontend Production gh-pages     = 3126b4bc3df034dd4565b6f0a9aadae1f1c2171c
+CURRENT_APP_VERSION              = 3.6.0
+Credential retirement ancestor   = cce7c7d93a5a8907f122f18d480f30b1d1b90f9f
+Annual mobile stability ancestor = 7c461156f2cab5ea3c0cb8b8e33778624b73b3c0
+Dashboard UX2A ancestor          = 65a8e327b9cb8c60ed8573066c5fe2228b9e3d1c
+Dashboard UX2B ancestor          = d7b5de96238e1889cb6830220d80f7f23d55ba97
+Annual/Daily UX2C runtime        = 8e69eb27c59ae4aa81353cd3af879f7b80a3c6ff
+```
+
+
+Therapist credential migration 已完成，正式 System Maintenance 不再提供：
+
+```text
+管理師帳號安全升級
+credential_migration_inventory
+migrate_credential
+batch credential migration UI
+```
+
+`TherapistManagerView` 也不再提供單一帳號 migration action。
+
+現在可保留的是**診斷**，用來識別：
+
+```text
+LEGACY_CREDENTIAL_RETIRED
+MASTER_PASSWORD_PRESENT
+DUAL_SOURCE_CONFLICT
+SEPARATED_CREDENTIAL_MISSING
+SEPARATED_CREDENTIAL_INVALID
+```
+
+但診斷不得 fallback 或自動把 legacy password 當正式登入來源。
+
+若未來真的需要處理異常 credential，必須以當時最新正式 source、Backend security authority 與 scoped recovery plan 重新設計；不得復活已退役 migration button。
+
+本 closeout 沒有新增 System Maintenance listener/query/polling，也沒有新增新的 credential collection scan。
+
+---
+
+
 > 本文件描述目前正式 `SystemMaintenance.jsx` 的用途、資料影響、風險分級與操作順序。  
 > 維護中心不是「看到問題就全部按一次」的工具箱。
 
