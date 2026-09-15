@@ -7,7 +7,7 @@
 ```text
 Official repo                    = ~/cyj-new
 Production runtime commit        = 8e69eb27c59ae4aa81353cd3af879f7b80a3c6ff
-origin/main                       = 8e69eb27c59ae4aa81353cd3af879f7b80a3c6ff
+Repository HEAD / origin/main    = resolve live before each task; docs-only commits may be newer than deployed runtime
 Frontend Production gh-pages     = 3126b4bc3df034dd4565b6f0a9aadae1f1c2171c
 CURRENT_APP_VERSION              = 3.6.0
 Credential retirement ancestor   = cce7c7d93a5a8907f122f18d480f30b1d1b90f9f
@@ -16,6 +16,8 @@ Dashboard UX2A ancestor          = 65a8e327b9cb8c60ed8573066c5fe2228b9e3d1c
 Dashboard UX2B ancestor          = d7b5de96238e1889cb6830220d80f7f23d55ba97
 Annual/Daily UX2C runtime        = 8e69eb27c59ae4aa81353cd3af879f7b80a3c6ff
 ```
+
+> **Lineage rule：** `origin/main` 是 repository Source Gate，docs-only commit 也會讓它往前，因此 canonical docs 不再把「目前 origin/main SHA」寫死成 Production runtime SHA。每次新工作都必須先 `git fetch` 並 live resolve `HEAD / origin/main`；`Production runtime commit` 與 `Frontend Production gh-pages` 才是目前已部署 runtime anchor。
 
 
 最新正式 owners：
