@@ -118,6 +118,7 @@ export default function SystemMaintenance() {
     getCollectionPath,
     getDocPath,
     currentUser,
+    manageManagerOrganizationAction,
   } = useContext(AppContext);
 
   const [logs, setLogs] = useState([]);
@@ -4320,57 +4321,42 @@ export default function SystemMaintenance() {
 
   const handleRestoreOrgStructureSnapshot = async (snapshot) => {
     const managerKeys = Object.keys(snapshot?.managers || {});
-    if (!snapshot?.managers || managerKeys.length === 0) {
-      showToast("此快照沒有可還原的 managers 資料", "error");
+    if (!snapshot?.id || !snapshot?.managers || managerKeys.length === 0) {
+      showToast("此快照沒有可還原的組織架構資料", "error");
+      return;
+    }
+    if (typeof manageManagerOrganizationAction !== "function") {
+      showToast("組織架構安全服務尚未就緒", "error");
       return;
     }
 
-    if (!window.confirm(`確定要還原這份組織架構快照嗎？\n\n快照時間：${snapshot.createdAtText || "-"}\n區塊數：${managerKeys.length}\n\n此操作會覆蓋目前 org_structure.managers。`)) return;
+    if (!window.confirm(`確定要還原這份組織架構快照嗎？\n\n快照時間：${snapshot.createdAtText || "-"}\n區塊數：${managerKeys.length}\n\n系統會先確認目前區長帳號與快照相容，再以安全交易方式還原。`)) return;
 
     setLoadingAction(`restoreOrg_${snapshot.id}`);
     try {
-      const currentSnap = await getDoc(getDocPath("org_structure"));
-      const currentManagers = currentSnap.exists() ? currentSnap.data()?.managers || {} : {};
-
-      await addDoc(getCollectionPath("org_structure_snapshots"), {
-        brandId,
-        brandLabel,
-        action: "before_restore_org_structure",
-        managers: JSON.parse(JSON.stringify(currentManagers || {})),
-        managerKeys: Object.keys(currentManagers || {}),
-        storeCount: Object.values(currentManagers || {}).flat().filter(Boolean).length,
-        operator: currentUser?.name || "director",
-        operatorRole: userRole || "director",
-        restoredFromSnapshotId: snapshot.id,
-        createdAt: serverTimestamp(),
-        createdAtText: new Date().toISOString(),
-        details: "還原 org_structure 前自動建立目前狀態快照",
-      });
-
-      await setDoc(getDocPath("org_structure"), { managers: snapshot.managers }, { merge: true });
-
-      await addDoc(getCollectionPath("maintenance_logs"), {
-        type: "org_structure_restore",
-        action: "restore_org_structure_snapshot",
-        brandId,
-        brandLabel,
-        operator: currentUser?.name || "director",
-        operatorRole: userRole || "director",
-        snapshotId: snapshot.id,
-        snapshotCreatedAtText: snapshot.createdAtText || "",
-        restoredManagerKeys: managerKeys,
-        restoredStoreCount: Object.values(snapshot.managers || {}).flat().filter(Boolean).length,
-        createdAt: serverTimestamp(),
-        createdAtText: new Date().toISOString(),
-        details: `已還原 org_structure 快照 ${snapshot.id}`,
+      await manageManagerOrganizationAction({
+        action: "restore_snapshot",
+        payload: { snapshotId: snapshot.id },
       });
 
       addLog(`🛡️ 已還原組織架構快照：${snapshot.createdAtText || snapshot.id}`);
-      showToast("組織架構已還原，請重新整理或切換頁面確認", "success");
+      showToast("組織架構已安全還原，最新資料已重新同步", "success");
       await handleLoadOrgStructureSnapshots();
     } catch (error) {
       console.error(error);
-      showToast("還原組織架構快照失敗", "error");
+      const code = String(error?.code || error?.result?.code || "");
+      const message = code === "organization_conflict"
+        ? "組織架構剛被其他管理者更新，系統已重新同步；請重新確認後再還原"
+        : code === "snapshot_manager_set_changed"
+          ? "此快照的區長名單與目前帳號架構不同，為避免登入權限錯置，已停止還原"
+          : code === "snapshot_manager_credential_missing"
+            ? "此快照包含目前沒有登入憑證的區長，為避免權限錯置，已停止還原"
+            : code === "snapshot_missing"
+              ? "找不到這份快照，請重新載入快照清單"
+              : code === "snapshot_brand_mismatch"
+                ? "快照品牌與目前品牌不一致，已停止還原"
+                : error?.result?.message || error?.message || "還原組織架構快照失敗";
+      showToast(message, "error");
     } finally {
       setLoadingAction(null);
     }

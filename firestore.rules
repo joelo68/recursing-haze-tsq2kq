@@ -275,6 +275,7 @@ service cloud.firestore {
         && settingId != 'security_config'
         && settingId != 'feature_flags'
         && settingId != 'kpi_targets'
+        && settingId != 'org_structure'
         && settingId != 'telegram_security_alerts'
         && settingId != 'audit_exclusions'
         && settingId != 'permissions'
@@ -283,6 +284,29 @@ service cloud.firestore {
         && settingId != 'trainer_auth'
         && settingId != 'manager_auth'
         && settingId != 'store_account_data';
+    }
+
+    // P0-FINAL-1D-A2-1：正式組織架構 Browser 只讀。
+    // 新增／移動／刪除店家、區長調整與快照還原全部經 manageManagerOrganization。
+    match /brands/{brandId}/settings/org_structure {
+      allow read: if sameBrandIdentity(brandId);
+      allow write: if false;
+    }
+
+    match /artifacts/{appId}/public/data/global_settings/org_structure {
+      allow read: if cyjLegacyIdentity(appId);
+      allow write: if false;
+    }
+
+    // 組織架構快照已成為 Backend restore authority 的輸入，因此 Browser 不得偽造或覆寫。
+    match /brands/{brandId}/org_structure_snapshots/{document=**} {
+      allow read: if sameBrandIdentity(brandId);
+      allow write: if false;
+    }
+
+    match /artifacts/{appId}/public/data/org_structure_snapshots/{document=**} {
+      allow read: if cyjLegacyIdentity(appId);
+      allow write: if false;
     }
 
     // Admin Credential Writer Retirement：所有含登入密碼的設定文件改由 Backend authority 存取。
@@ -401,6 +425,7 @@ service cloud.firestore {
         && settingId != 'security_config'
         && settingId != 'feature_flags'
         && settingId != 'kpi_targets'
+        && settingId != 'org_structure'
         && settingId != 'master_auth'
         && settingId != 'director_auth'
         && settingId != 'trainer_auth'
@@ -412,6 +437,7 @@ service cloud.firestore {
     match /brands/{brandId}/{collectionName}/{document=**} {
       allow read, write: if sameBrandIdentity(brandId)
         && collectionName != 'management_delegations'
+        && collectionName != 'org_structure_snapshots'
         && collectionName != 'system_logs'
         && collectionName != 'account_devices'
         && collectionName != 'device_approval_requests'
@@ -433,6 +459,7 @@ service cloud.firestore {
     match /artifacts/{appId}/public/data/{collectionName}/{document=**} {
       allow read, write: if cyjLegacyIdentity(appId)
         && collectionName != 'management_delegations'
+        && collectionName != 'org_structure_snapshots'
         && collectionName != 'system_logs'
         && collectionName != 'account_devices'
         && collectionName != 'device_approval_requests'

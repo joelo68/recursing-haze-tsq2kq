@@ -8,8 +8,8 @@ import {
 } from "lucide-react";
 // ★ 確保這裡有引入 getDocs 和 writeBatch
 import { 
-  doc, setDoc, updateDoc, deleteField, collection, addDoc, deleteDoc, getDoc,
-  serverTimestamp, arrayUnion, arrayRemove, getDocs, writeBatch
+  doc, setDoc, deleteField, addDoc,
+  serverTimestamp, getDocs, writeBatch
 } from "firebase/firestore";
 
 import { db, appId } from "../config/firebase";
@@ -324,52 +324,6 @@ const SettingsView = () => {
 
   const normalizeStoreList = (stores = []) => [...new Set((stores || []).filter(Boolean))];
 
-  const buildStableManagerOrder = (nextManagers = localManagers, preferredOrder = localManagerOrder) => {
-    return normalizeManagerOrder(nextManagers || {}, preferredOrder || []);
-  };
-
-  const saveOrgStructure = async (docRef, nextManagers, preferredOrder = localManagerOrder, useUpdate = false) => {
-    const nextManagerOrder = buildStableManagerOrder(nextManagers, preferredOrder);
-    const payload = { managers: nextManagers, managerOrder: nextManagerOrder };
-    if (useUpdate) await updateDoc(docRef, payload);
-    else await setDoc(docRef, payload);
-    setLocalManagers(nextManagers);
-    setLocalManagerOrder(nextManagerOrder);
-  };
-
-  const createOrgStructureSnapshot = async (action, beforeManagers, extra = {}) => {
-    try {
-      await addDoc(getCollectionPath("org_structure_snapshots"), {
-        brandId: currentBrand?.id || "unknown",
-        brandLabel: currentBrand?.label || currentBrand?.name || currentBrand?.id || "目前品牌",
-        action,
-        managers: JSON.parse(JSON.stringify(beforeManagers || {})),
-        managerKeys: Object.keys(beforeManagers || {}),
-        managerOrder: buildStableManagerOrder(beforeManagers || {}),
-        storeCount: Object.values(beforeManagers || {}).flat().filter(Boolean).length,
-        operator: currentUser?.name || userRole || "director",
-        operatorRole: userRole || "unknown",
-        createdAt: serverTimestamp(),
-        createdAtText: new Date().toISOString(),
-        ...extra,
-      });
-
-      await addDoc(getCollectionPath("maintenance_logs"), {
-        type: "org_structure_snapshot",
-        action,
-        brandId: currentBrand?.id || "unknown",
-        brandLabel: currentBrand?.label || currentBrand?.name || currentBrand?.id || "目前品牌",
-        operator: currentUser?.name || userRole || "director",
-        operatorRole: userRole || "unknown",
-        createdAt: serverTimestamp(),
-        createdAtText: new Date().toISOString(),
-        details: extra?.details || "org_structure 修改前自動建立快照",
-      });
-    } catch (error) {
-      console.warn("org_structure snapshot failed:", error);
-      // 快照失敗不阻擋主要操作，避免維護動作卡住；正式環境會在 console 與 maintenance_logs 追查。
-    }
-  };
 
 
   const DIRECTOR_LEVEL_OPTIONS = [
@@ -1097,77 +1051,25 @@ const SettingsView = () => {
   const handleAddGlobalStore = async () => {
     if (!newShop.name || !newShop.manager) return showToast("請輸入完整資訊", "error");
 
-    try {
-      const targetManager = newShop.manager;
-      const docRef = getDocPath("org_structure");
-      const docSnap = await getDoc(docRef);
-      const beforeManagers = docSnap.exists() ? JSON.parse(JSON.stringify(docSnap.data().managers || {})) : {};
-
-      await createOrgStructureSnapshot("add_store_to_manager", beforeManagers, {
-        targetManager,
-        storeName: newShop.name,
-        details: `新增店家 ${newShop.name} 至 ${targetManager}`,
-      });
-
-      const storeName = String(newShop.name || "").trim();
-      const newManagers = JSON.parse(JSON.stringify(beforeManagers || {}));
-
-      // 重要：任何店家被指派到某個區長時，必須先從所有區塊移除，再加入目標區長。
-      // 這可避免同一間店同時存在於「未分配」與已分配區長，造成畫面重複與營運總覽歸屬混亂。
-      Object.keys(newManagers).forEach((managerName) => {
-        if (Array.isArray(newManagers[managerName])) {
-          newManagers[managerName] = normalizeStoreList(newManagers[managerName]).filter((s) => s !== storeName);
-        } else {
-          newManagers[managerName] = [];
-        }
-      });
-
-      if (!Array.isArray(newManagers[targetManager])) newManagers[targetManager] = [];
-      newManagers[targetManager] = normalizeStoreList([...newManagers[targetManager], storeName]);
-      if (!Array.isArray(newManagers[UNASSIGNED_KEY])) newManagers[UNASSIGNED_KEY] = [];
-
-      await saveOrgStructure(docRef, newManagers, localManagerOrder, true);
-      setNewShop({ name: "", manager: "" });
-      showToast("已新增，並建立修改前快照", "success");
-      if (fetchGlobalData) fetchGlobalData();
-    } catch (e) {
-      showToast("失敗: " + e.message, "error");
-    }
+    const success = await runManagerOrganizationAction({
+      action: "assign_store",
+      managerName: newShop.manager,
+      payload: { storeName: String(newShop.name || "").trim() },
+      successMessage: "已新增，並建立修改前快照",
+    });
+    if (success) setNewShop({ name: "", manager: "" });
   };
 
   const handleDeleteGlobalStore = async (storeName, managerName) => {
     const isPermanentDelete = managerName === UNASSIGNED_KEY;
     if (!confirm(isPermanentDelete ? "確定永久刪除此店家？" : "確定將此店家移至『未分配』名單？")) return;
 
-    try {
-      const docRef = getDocPath("org_structure");
-      const docSnap = await getDoc(docRef);
-      if (!docSnap.exists()) throw new Error("讀取設定檔失敗");
-
-      const beforeManagers = JSON.parse(JSON.stringify(docSnap.data().managers || {}));
-      await createOrgStructureSnapshot(isPermanentDelete ? "permanent_delete_unassigned_store" : "move_store_to_unassigned", beforeManagers, {
-        managerName,
-        storeName,
-        details: isPermanentDelete ? `從未分配永久刪除店家 ${storeName}` : `將 ${managerName} 的 ${storeName} 移至未分配`,
-      });
-
-      const newManagers = JSON.parse(JSON.stringify(beforeManagers));
-      if (Array.isArray(newManagers[managerName])) {
-        newManagers[managerName] = newManagers[managerName].filter((x) => x !== storeName);
-      }
-
-      if (!isPermanentDelete) {
-        if (!Array.isArray(newManagers[UNASSIGNED_KEY])) newManagers[UNASSIGNED_KEY] = [];
-        if (!newManagers[UNASSIGNED_KEY].includes(storeName)) newManagers[UNASSIGNED_KEY].push(storeName);
-      }
-
-      await saveOrgStructure(docRef, newManagers, localManagerOrder);
-      showToast(isPermanentDelete ? "已永久刪除，並建立快照" : "已移至未分配，並建立快照", "success");
-      if (fetchGlobalData) fetchGlobalData();
-    } catch (e) {
-      console.error(e);
-      showToast("失敗: " + e.message, "error");
-    }
+    await runManagerOrganizationAction({
+      action: isPermanentDelete ? "delete_unassigned_store" : "move_store_to_unassigned",
+      managerName: isPermanentDelete ? "" : managerName,
+      payload: { storeName },
+      successMessage: isPermanentDelete ? "已永久刪除，並建立修改前快照" : "已移至未分配，並建立修改前快照",
+    });
   };
 
   const openEditManager = (managerName, stores = []) => {
@@ -1207,7 +1109,15 @@ const SettingsView = () => {
           ? "同名區長已存在"
           : code === "store_owned_by_other_manager"
             ? "其中一間店已被其他區長接手，請重新確認轄區"
-            : error?.result?.message || error?.message || "區長架構更新失敗";
+            : code === "store_already_exists"
+              ? "這間店已存在於目前組織架構，請先確認現有歸屬"
+              : code === "store_owner_changed"
+                ? "這間店的區域歸屬剛被其他管理者更新，系統已重新同步；請確認後再操作"
+                : code === "store_not_unassigned"
+                  ? "這間店已不在未分配名單，系統已重新同步；請確認後再操作"
+                  : code === "store_missing"
+                    ? "找不到這間店，系統已重新同步；請確認後再操作"
+                    : error?.result?.message || error?.message || "區長架構更新失敗";
       showToast(message, "error");
       return false;
     }

@@ -21,6 +21,7 @@ const {
 const functionsIndex = read("functions/index.js");
 const app = read("src/App.jsx");
 const settings = read("src/components/SettingsView.jsx");
+const maintenance = read("src/components/SystemMaintenance.jsx");
 const rules = read("firestore.rules");
 
 const normalizeStoreCore = (value = "") => {
@@ -203,18 +204,27 @@ function makeEnv({
   };
 }
 
-test("manager organization authority is now the sole Settings writer for manager create/update/delete", () => {
+test("manager organization authority owns manager, store, and restore mutations without Browser org_structure writers", () => {
   assert.equal(MANAGER_ORGANIZATION_AUTHORITY_VERSION, "manager-organization-authority-v1");
   assert.match(functionsIndex, /exports\.manageManagerOrganization\s*=\s*managerOrganizationAuthorityFunctions\.manageManagerOrganization/);
   assert.match(functionsIndex, /runtimeServiceAccount:\s*ACCOUNT_AUTHORITY_RUNTIME_SERVICE_ACCOUNT/);
   assert.match(functionsIndex, /normalizeStoreCore:\s*normalizeStoreLifecycleCore/);
   assert.match(app, /MANAGE_MANAGER_ORGANIZATION_ENDPOINT/);
   assert.match(app, /const manageManagerOrganizationAction = useCallback/);
+  assert.doesNotMatch(app, /managerOrder backfill failed/);
   assert.match(settings, /manageManagerOrganizationAction/);
   assert.match(settings, /const handleAddManager[\s\S]{0,500}runManagerOrganizationAction\(\{[\s\S]{0,160}action:\s*"create"/);
+  assert.match(settings, /handleAddGlobalStore[\s\S]{0,500}action:\s*"assign_store"/);
+  assert.match(settings, /handleDeleteGlobalStore[\s\S]{0,700}"delete_unassigned_store"[\s\S]{0,200}"move_store_to_unassigned"/);
+  assert.doesNotMatch(settings, /saveOrgStructure\s*=/);
+  assert.doesNotMatch(settings, /createOrgStructureSnapshot\s*=/);
+  assert.doesNotMatch(settings, /getDocPath\("org_structure"\)/);
+  assert.match(maintenance, /handleRestoreOrgStructureSnapshot[\s\S]{0,900}action:\s*"restore_snapshot"/);
+  assert.doesNotMatch(maintenance, /setDoc\(getDocPath\("org_structure"\)/);
   assert.doesNotMatch(settings, /setDoc\(getDocPath\("manager_auth"\)/);
   assert.match(app, /CURRENT_APP_VERSION\s*=\s*"3\.6\.0"/);
-  assert.match(rules, /request\.auth\.token\.drcyjIdentity == true/);
+  assert.match(rules, /match \/brands\/\{brandId\}\/settings\/org_structure[\s\S]{0,180}allow write:\s*if false/);
+  assert.match(rules, /match \/brands\/\{brandId\}\/org_structure_snapshots\/\{document=\*\*\}[\s\S]{0,180}allow write:\s*if false/);
 });
 
 test("manager organization authority rejects unknown brand before a transaction", async () => {
@@ -381,4 +391,172 @@ test("pure action does not mutate unrelated credential material or accept raw pa
   assert.equal(result.managerAuth["東區"], "0000");
   assert.equal(result.managerAuth["北區"], "private");
   assert.notEqual(result.managerAuth["東區"], "should-not-be-used");
+});
+
+
+test("assign_store adds a new store atomically without touching manager credentials", async () => {
+  const env = makeEnv();
+  const res = await env.call({
+    action: "assign_store",
+    managerName: "北區",
+    payload: { storeName: "CYJ板橋店" },
+  });
+  assert.equal(res.statusCode, 200);
+  const org = env.settingRef("cyj", "org_structure").data;
+  assert.ok(org.managers["北區"].includes("CYJ板橋店"));
+  assert.equal(env.writes.some((row) => row.key === "cyj:settings:manager_auth"), false);
+  assert.ok(env.writes.some((row) => row.key.includes(":org_structure_snapshots:")));
+  assert.ok(env.writes.some((row) => row.key.includes(":system_logs:")));
+});
+
+
+test("assign_store preserves the existing UI ability to add a new store directly to 未分配", async () => {
+  const env = makeEnv();
+  const res = await env.call({
+    action: "assign_store",
+    managerName: "未分配",
+    payload: { storeName: "CYJ待分區店" },
+  });
+  assert.equal(res.statusCode, 200);
+  const org = env.settingRef("cyj", "org_structure").data;
+  assert.ok(org.managers["未分配"].includes("CYJ待分區店"));
+});
+
+test("assign_store rejects identity aliases that already exist elsewhere", async () => {
+  const env = makeEnv();
+  const res = await env.call({
+    action: "assign_store",
+    managerName: "北區",
+    payload: { storeName: "DRCYJ新店" },
+  });
+  assert.equal(res.statusCode, 409);
+  assert.equal(res.body.code, "store_already_exists");
+  assert.equal(env.writes.length, 0);
+});
+
+test("move_store_to_unassigned fails closed on stale owner and succeeds for current owner", async () => {
+  const env = makeEnv();
+
+  const stale = await env.call({
+    action: "move_store_to_unassigned",
+    managerName: "南區",
+    payload: { storeName: "CYJA店" },
+  });
+  assert.equal(stale.statusCode, 409);
+  assert.equal(stale.body.code, "store_owner_changed");
+  assert.equal(env.writes.length, 0);
+
+  const success = await env.call({
+    action: "move_store_to_unassigned",
+    managerName: "北區",
+    payload: { storeName: "CYJA店" },
+  });
+  assert.equal(success.statusCode, 200);
+  const org = env.settingRef("cyj", "org_structure").data;
+  assert.equal(org.managers["北區"].includes("CYJA店"), false);
+  assert.ok(org.managers["未分配"].includes("CYJA店"));
+  assert.equal(env.writes.some((row) => row.key === "cyj:settings:manager_auth"), false);
+});
+
+test("delete_unassigned_store only deletes a store that is still unassigned", async () => {
+  const env = makeEnv();
+
+  const denied = await env.call({
+    action: "delete_unassigned_store",
+    payload: { storeName: "CYJA店" },
+  });
+  assert.equal(denied.statusCode, 409);
+  assert.equal(denied.body.code, "store_not_unassigned");
+  assert.equal(env.writes.length, 0);
+
+  const success = await env.call({
+    action: "delete_unassigned_store",
+    payload: { storeName: "CYJD店" },
+  });
+  assert.equal(success.statusCode, 200);
+  const org = env.settingRef("cyj", "org_structure").data;
+  assert.equal(org.managers["未分配"].includes("CYJD店"), false);
+});
+
+test("restore_snapshot restores store assignments only when manager identities and credentials still match", async () => {
+  const env = makeEnv();
+  env.refs.set("cyj:org_structure_snapshots:safe-snapshot", {
+    key: "cyj:org_structure_snapshots:safe-snapshot",
+    exists: true,
+    data: {
+      brandId: "cyj",
+      managers: {
+        北區: ["CYJA店"],
+        南區: ["CYJB店", "CYJC店"],
+        未分配: ["CYJ新店店", "CYJD店"],
+      },
+      managerOrder: ["南區", "北區", "未分配"],
+    },
+  });
+
+  const res = await env.call({
+    action: "restore_snapshot",
+    payload: { snapshotId: "safe-snapshot" },
+  });
+  assert.equal(res.statusCode, 200);
+
+  const org = env.settingRef("cyj", "org_structure").data;
+  assert.deepEqual(org.managers["北區"], ["CYJA店"]);
+  assert.deepEqual(org.managers["南區"], ["CYJB店", "CYJC店"]);
+  assert.deepEqual(org.managerOrder, ["南區", "北區", "未分配"]);
+  assert.equal(env.writes.some((row) => row.key === "cyj:settings:manager_auth"), false);
+
+  const beforeRestore = env.writes.find((row) => (
+    row.key.includes(":org_structure_snapshots:") &&
+    row.data.action === "before_restore_org_structure"
+  ));
+  assert.ok(beforeRestore);
+  assert.deepEqual(beforeRestore.data.managers["北區"], ["CYJA店", "CYJB店"]);
+});
+
+test("restore_snapshot rejects old snapshots after the manager identity set changed", async () => {
+  const env = makeEnv();
+  env.refs.set("cyj:org_structure_snapshots:old-manager-snapshot", {
+    key: "cyj:org_structure_snapshots:old-manager-snapshot",
+    exists: true,
+    data: {
+      brandId: "cyj",
+      managers: {
+        舊北區: ["CYJA店", "CYJB店"],
+        南區: ["CYJC店"],
+        未分配: ["CYJ新店店", "CYJD店"],
+      },
+      managerOrder: ["舊北區", "南區", "未分配"],
+    },
+  });
+
+  const res = await env.call({
+    action: "restore_snapshot",
+    payload: { snapshotId: "old-manager-snapshot" },
+  });
+  assert.equal(res.statusCode, 409);
+  assert.equal(res.body.code, "snapshot_manager_set_changed");
+  assert.equal(env.writes.length, 0);
+});
+
+test("store mutation OCC rejects stale simultaneous administrator intent", async () => {
+  const env = makeEnv();
+  const staleSignature = buildManagerOrganizationSignature(env.settingRef("cyj", "org_structure").data);
+
+  const first = await env.call({
+    action: "assign_store",
+    managerName: "北區",
+    payload: { storeName: "CYJ板橋店" },
+    expectedOrganizationSignature: staleSignature,
+  });
+  assert.equal(first.statusCode, 200);
+
+  const second = await env.call({
+    action: "assign_store",
+    managerName: "南區",
+    payload: { storeName: "CYJ桃園店" },
+    expectedOrganizationSignature: staleSignature,
+  });
+  assert.equal(second.statusCode, 409);
+  assert.equal(second.body.code, "organization_conflict");
 });

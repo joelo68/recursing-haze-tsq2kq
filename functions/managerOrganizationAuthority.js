@@ -2,7 +2,18 @@ const crypto = require("node:crypto");
 
 const MANAGER_ORGANIZATION_AUTHORITY_VERSION = "manager-organization-authority-v1";
 const UNASSIGNED_MANAGER_KEY = "未分配";
-const SUPPORTED_MANAGER_ORGANIZATION_ACTIONS = new Set(["create", "update", "delete"]);
+const MANAGER_ACCOUNT_ACTIONS = new Set(["create", "update", "delete"]);
+const STORE_ORGANIZATION_ACTIONS = new Set([
+  "assign_store",
+  "move_store_to_unassigned",
+  "delete_unassigned_store",
+]);
+const RESTORE_ORGANIZATION_ACTION = "restore_snapshot";
+const SUPPORTED_MANAGER_ORGANIZATION_ACTIONS = new Set([
+  ...MANAGER_ACCOUNT_ACTIONS,
+  ...STORE_ORGANIZATION_ACTIONS,
+  RESTORE_ORGANIZATION_ACTION,
+]);
 const RESERVED_MANAGER_KEYS = new Set(["__proto__", "prototype", "constructor"]);
 
 class ManagerOrganizationAuthorityError extends Error {
@@ -246,9 +257,121 @@ function applyManagerOrganizationAction({
       accountId: nextName,
       nextName,
       previousName: "",
+      storeName: "",
       storesMovedToUnassigned: [],
       requiresInitialPasswordChange: true,
       deleted: false,
+      nowText,
+    };
+  }
+
+  if (action === "assign_store") {
+    const managerName = normalizeText(targetManagerName, 120);
+    if (!managerName || RESERVED_MANAGER_KEYS.has(managerName.toLowerCase())) {
+      throw new ManagerOrganizationAuthorityError("missing_manager_name", 400);
+    }
+    if (!Object.prototype.hasOwnProperty.call(managers, managerName)) {
+      throw new ManagerOrganizationAuthorityError("manager_missing", 404);
+    }
+    const storeName = normalizeText(data.storeName, 160);
+    const storeCore = normalizeText(normalizeStoreCore(storeName), 160);
+    if (!storeName || !storeCore) {
+      throw new ManagerOrganizationAuthorityError("invalid_store_identity", 400);
+    }
+    const storeIndex = buildStoreIndex(managers, normalizeStoreCore);
+    if (storeIndex.has(storeCore)) {
+      throw new ManagerOrganizationAuthorityError("store_already_exists", 409, {
+        currentManagerName: storeIndex.get(storeCore)?.managerName || "",
+      });
+    }
+
+    const nextManagers = cloneManagers(managers);
+    nextManagers[managerName] = normalizeStoreList([...(nextManagers[managerName] || []), storeName]);
+    return {
+      managers: nextManagers,
+      managerOrder: normalizeManagerOrder(nextManagers, currentOrder),
+      managerAuth,
+      accountId: managerName,
+      nextName: managerName,
+      previousName: managerName,
+      storeName,
+      storesMovedToUnassigned: [],
+      requiresInitialPasswordChange: false,
+      deleted: false,
+      nowText,
+    };
+  }
+
+  if (action === "move_store_to_unassigned") {
+    const managerName = normalizeManagerName(targetManagerName);
+    if (!Object.prototype.hasOwnProperty.call(managers, managerName)) {
+      throw new ManagerOrganizationAuthorityError("manager_missing", 404);
+    }
+    const requestedStore = normalizeText(data.storeName, 160);
+    const storeCore = normalizeText(normalizeStoreCore(requestedStore), 160);
+    if (!requestedStore || !storeCore) {
+      throw new ManagerOrganizationAuthorityError("invalid_store_identity", 400);
+    }
+    const storeIndex = buildStoreIndex(managers, normalizeStoreCore);
+    const current = storeIndex.get(storeCore);
+    if (!current) throw new ManagerOrganizationAuthorityError("store_missing", 404);
+    if (current.managerName !== managerName) {
+      throw new ManagerOrganizationAuthorityError("store_owner_changed", 409, {
+        currentManagerName: current.managerName,
+      });
+    }
+
+    const nextManagers = cloneManagers(managers);
+    nextManagers[managerName] = normalizeStoreList(nextManagers[managerName] || [])
+      .filter((store) => normalizeText(normalizeStoreCore(store), 160) !== storeCore);
+    nextManagers[UNASSIGNED_MANAGER_KEY] = normalizeStoreList([
+      ...(nextManagers[UNASSIGNED_MANAGER_KEY] || []),
+      current.rawStore,
+    ]);
+    return {
+      managers: nextManagers,
+      managerOrder: normalizeManagerOrder(nextManagers, currentOrder),
+      managerAuth,
+      accountId: managerName,
+      nextName: managerName,
+      previousName: managerName,
+      storeName: current.rawStore,
+      storesMovedToUnassigned: [current.rawStore],
+      requiresInitialPasswordChange: false,
+      deleted: false,
+      nowText,
+    };
+  }
+
+  if (action === "delete_unassigned_store") {
+    const requestedStore = normalizeText(data.storeName, 160);
+    const storeCore = normalizeText(normalizeStoreCore(requestedStore), 160);
+    if (!requestedStore || !storeCore) {
+      throw new ManagerOrganizationAuthorityError("invalid_store_identity", 400);
+    }
+    const storeIndex = buildStoreIndex(managers, normalizeStoreCore);
+    const current = storeIndex.get(storeCore);
+    if (!current) throw new ManagerOrganizationAuthorityError("store_missing", 404);
+    if (current.managerName !== UNASSIGNED_MANAGER_KEY) {
+      throw new ManagerOrganizationAuthorityError("store_not_unassigned", 409, {
+        currentManagerName: current.managerName,
+      });
+    }
+
+    const nextManagers = cloneManagers(managers);
+    nextManagers[UNASSIGNED_MANAGER_KEY] = normalizeStoreList(nextManagers[UNASSIGNED_MANAGER_KEY] || [])
+      .filter((store) => normalizeText(normalizeStoreCore(store), 160) !== storeCore);
+    return {
+      managers: nextManagers,
+      managerOrder: normalizeManagerOrder(nextManagers, currentOrder),
+      managerAuth,
+      accountId: "",
+      nextName: "",
+      previousName: "",
+      storeName: current.rawStore,
+      storesMovedToUnassigned: [],
+      requiresInitialPasswordChange: false,
+      deleted: true,
       nowText,
     };
   }
@@ -328,6 +451,7 @@ function applyManagerOrganizationAction({
       accountId: nextName,
       nextName,
       previousName: currentName,
+      storeName: "",
       storesMovedToUnassigned: releasedStores,
       requiresInitialPasswordChange: false,
       deleted: false,
@@ -359,11 +483,84 @@ function applyManagerOrganizationAction({
     accountId: currentName,
     nextName: "",
     previousName: currentName,
+    storeName: "",
     storesMovedToUnassigned: storesToMove,
     requiresInitialPasswordChange: false,
     deleted: true,
     nowText,
   };
+}
+
+function normalizeComparableManagerNames(managers = {}) {
+  return Object.keys(managers || {})
+    .filter((name) => name !== UNASSIGNED_MANAGER_KEY)
+    .map((name) => normalizeText(name, 120))
+    .filter(Boolean)
+    .sort(zhCompare);
+}
+
+function assertSnapshotRestoreCompatible({
+  organizationRaw,
+  managerAuthRaw,
+  snapshotRaw,
+  brandId,
+  normalizeStoreCore,
+}) {
+  const snapshotBrandId = normalizeText(snapshotRaw?.brandId, 24).toLowerCase();
+  if (snapshotBrandId && snapshotBrandId !== brandId) {
+    throw new ManagerOrganizationAuthorityError("snapshot_brand_mismatch", 409);
+  }
+
+  const currentManagers = cloneManagers(organizationRaw?.managers || {});
+  const snapshotManagers = cloneManagers(snapshotRaw?.managers || {});
+  buildStoreIndex(currentManagers, normalizeStoreCore);
+  buildStoreIndex(snapshotManagers, normalizeStoreCore);
+
+  const currentNames = normalizeComparableManagerNames(currentManagers);
+  const snapshotNames = normalizeComparableManagerNames(snapshotManagers);
+  if (JSON.stringify(currentNames) !== JSON.stringify(snapshotNames)) {
+    throw new ManagerOrganizationAuthorityError("snapshot_manager_set_changed", 409);
+  }
+
+  const credentialSource = managerAuthRaw && typeof managerAuthRaw === "object"
+    ? managerAuthRaw
+    : {};
+  const missingCredentials = snapshotNames.filter(
+    (name) => !Object.prototype.hasOwnProperty.call(credentialSource, name)
+  );
+  if (missingCredentials.length) {
+    throw new ManagerOrganizationAuthorityError("snapshot_manager_credential_missing", 409);
+  }
+
+  return {
+    managers: snapshotManagers,
+    managerOrder: normalizeManagerOrder(
+      snapshotManagers,
+      Array.isArray(snapshotRaw?.managerOrder) && snapshotRaw.managerOrder.length
+        ? snapshotRaw.managerOrder
+        : organizationRaw?.managerOrder || []
+    ),
+  };
+}
+
+function buildOrganizationMaintenanceDetails({
+  action,
+  result,
+  targetManagerName,
+  restoredSnapshotId = "",
+}) {
+  if (action === "create") return `新增區長 ${result.accountId}`;
+  if (action === "delete") return `刪除區長 ${result.previousName}，底下店家移至未分配`;
+  if (action === "update") {
+    return result.previousName !== result.nextName
+      ? `區長 ${result.previousName} 改名為 ${result.nextName}，並更新轄區`
+      : `更新區長 ${result.accountId} 轄區`;
+  }
+  if (action === "assign_store") return `新增店家 ${result.storeName} 至 ${result.accountId}`;
+  if (action === "move_store_to_unassigned") return `將 ${result.accountId} 的 ${result.storeName} 移至未分配`;
+  if (action === "delete_unassigned_store") return `從未分配永久刪除店家 ${result.storeName}`;
+  if (action === RESTORE_ORGANIZATION_ACTION) return `還原 org_structure 快照 ${restoredSnapshotId}`;
+  return `更新組織架構 ${targetManagerName || ""}`.trim();
 }
 
 async function manageManagerOrganizationInTransaction({
@@ -382,33 +579,77 @@ async function manageManagerOrganizationInTransaction({
   getInitialPasswordsForRole,
 }) {
   const orgRef = getBrandSettingDoc(db, brandId, "org_structure");
-  const authRef = getBrandSettingDoc(db, brandId, "manager_auth");
+  const needsManagerAuth = MANAGER_ACCOUNT_ACTIONS.has(action) || action === RESTORE_ORGANIZATION_ACTION;
+  const authRef = needsManagerAuth ? getBrandSettingDoc(db, brandId, "manager_auth") : null;
 
-  const [orgSnap, authSnap] = await Promise.all([
-    transaction.get(orgRef),
-    transaction.get(authRef),
-  ]);
+  const restoreSnapshotId = action === RESTORE_ORGANIZATION_ACTION
+    ? normalizeText(payload?.snapshotId, 180)
+    : "";
+  if (action === RESTORE_ORGANIZATION_ACTION && !restoreSnapshotId) {
+    throw new ManagerOrganizationAuthorityError("snapshot_id_required", 400);
+  }
+  const restoreSnapshotRef = restoreSnapshotId
+    ? getBrandCollection(db, brandId, "org_structure_snapshots").doc(restoreSnapshotId)
+    : null;
 
+  const refs = [orgRef];
+  if (authRef) refs.push(authRef);
+  if (restoreSnapshotRef) refs.push(restoreSnapshotRef);
+  const snapshots = await Promise.all(refs.map((ref) => transaction.get(ref)));
+
+  const orgSnap = snapshots[0];
   if (!orgSnap.exists) throw new ManagerOrganizationAuthorityError("organization_missing", 404);
   const organizationRaw = orgSnap.data() || {};
-  const managerAuthRaw = authSnap.exists ? (authSnap.data() || {}) : {};
+
+  const authSnap = authRef ? snapshots[refs.indexOf(authRef)] : null;
+  const managerAuthRaw = authSnap?.exists ? (authSnap.data() || {}) : {};
+
+  const restoreSnapshotSnap = restoreSnapshotRef ? snapshots[refs.indexOf(restoreSnapshotRef)] : null;
+  if (restoreSnapshotRef && !restoreSnapshotSnap?.exists) {
+    throw new ManagerOrganizationAuthorityError("snapshot_missing", 404);
+  }
 
   const previousOrganizationSignature = assertExpectedSignature(
     expectedOrganizationSignature,
     organizationRaw
   );
 
-  const result = applyManagerOrganizationAction({
-    action,
-    targetManagerName,
-    payload,
-    organizationRaw,
-    managerAuthRaw,
-    brandId,
-    nowText,
-    normalizeStoreCore,
-    getInitialPasswordsForRole,
-  });
+  let result;
+  if (action === RESTORE_ORGANIZATION_ACTION) {
+    const restored = assertSnapshotRestoreCompatible({
+      organizationRaw,
+      managerAuthRaw,
+      snapshotRaw: restoreSnapshotSnap.data() || {},
+      brandId,
+      normalizeStoreCore,
+    });
+    result = {
+      managers: restored.managers,
+      managerOrder: restored.managerOrder,
+      managerAuth: managerAuthRaw,
+      accountId: "",
+      nextName: "",
+      previousName: "",
+      storeName: "",
+      storesMovedToUnassigned: [],
+      requiresInitialPasswordChange: false,
+      deleted: false,
+      restoredSnapshotId: restoreSnapshotId,
+      nowText,
+    };
+  } else {
+    result = applyManagerOrganizationAction({
+      action,
+      targetManagerName,
+      payload,
+      organizationRaw,
+      managerAuthRaw,
+      brandId,
+      nowText,
+      normalizeStoreCore,
+      getInitialPasswordsForRole,
+    });
+  }
 
   const nextOrganization = {
     ...organizationRaw,
@@ -418,45 +659,52 @@ async function manageManagerOrganizationInTransaction({
   const nextOrganizationSignature = buildManagerOrganizationSignature(nextOrganization);
 
   transaction.set(orgRef, nextOrganization, { merge: false });
-  transaction.set(authRef, result.managerAuth, { merge: false });
+  if (MANAGER_ACCOUNT_ACTIONS.has(action)) {
+    transaction.set(authRef, result.managerAuth, { merge: false });
+  }
 
+  const previousManagers = cloneManagers(organizationRaw.managers || {});
   const snapshotRef = getBrandCollection(db, brandId, "org_structure_snapshots").doc();
   transaction.set(snapshotRef, {
     brandId,
-    action: `manager_${action}`,
-    managers: cloneManagers(organizationRaw.managers || {}),
-    managerKeys: Object.keys(cloneManagers(organizationRaw.managers || {})),
+    action: action === RESTORE_ORGANIZATION_ACTION ? "before_restore_org_structure" : `organization_${action}`,
+    managers: previousManagers,
+    managerKeys: Object.keys(previousManagers),
     managerOrder: normalizeManagerOrder(
-      cloneManagers(organizationRaw.managers || {}),
+      previousManagers,
       organizationRaw.managerOrder || []
     ),
-    storeCount: Object.values(cloneManagers(organizationRaw.managers || {}))
-      .flat()
-      .filter(Boolean).length,
+    storeCount: Object.values(previousManagers).flat().filter(Boolean).length,
     operator: String(actorCheck?.actorName || actorCheck?.actorAccountId || "最高管理者"),
     operatorRole: "director",
     targetManagerName: String(targetManagerName || ""),
     nextManagerName: result.nextName || "",
+    storeName: result.storeName || "",
+    restoredFromSnapshotId: restoreSnapshotId,
     createdAtText: nowText,
     source: MANAGER_ORGANIZATION_AUTHORITY_VERSION,
     organizationSignature: previousOrganizationSignature,
   }, { merge: false });
 
+  const maintenanceDetails = buildOrganizationMaintenanceDetails({
+    action,
+    result,
+    targetManagerName,
+    restoredSnapshotId: restoreSnapshotId,
+  });
   const maintenanceRef = getBrandCollection(db, brandId, "maintenance_logs").doc();
   transaction.set(maintenanceRef, {
-    type: "org_structure_snapshot",
-    action: `manager_${action}`,
+    type: action === RESTORE_ORGANIZATION_ACTION
+      ? "org_structure_restore"
+      : "org_structure_snapshot",
+    action: action === RESTORE_ORGANIZATION_ACTION
+      ? "restore_org_structure_snapshot"
+      : `organization_${action}`,
     brandId,
     operator: String(actorCheck?.actorName || actorCheck?.actorAccountId || "最高管理者"),
     operatorRole: "director",
     createdAtText: nowText,
-    details: action === "create"
-      ? `新增區長 ${result.accountId}`
-      : action === "delete"
-        ? `刪除區長 ${result.previousName}，底下店家移至未分配`
-        : result.previousName !== result.nextName
-          ? `區長 ${result.previousName} 改名為 ${result.nextName}，並更新轄區`
-          : `更新區長 ${result.accountId} 轄區`,
+    details: maintenanceDetails,
     source: MANAGER_ORGANIZATION_AUTHORITY_VERSION,
   }, { merge: false });
 
@@ -471,7 +719,9 @@ async function manageManagerOrganizationInTransaction({
     details: {
       managedAction: action,
       targetManagerName: String(targetManagerName || ""),
-      resultManagerName: result.accountId,
+      resultManagerName: result.accountId || "",
+      storeName: result.storeName || "",
+      restoredSnapshotId: restoreSnapshotId,
       deleted: result.deleted === true,
       releasedStoreCount: result.storesMovedToUnassigned.length,
       organizationSignatureBefore: previousOrganizationSignature,
@@ -621,6 +871,9 @@ function createManagerOrganizationAuthorityFunctions({
 module.exports = {
   MANAGER_ORGANIZATION_AUTHORITY_VERSION,
   UNASSIGNED_MANAGER_KEY,
+  MANAGER_ACCOUNT_ACTIONS,
+  STORE_ORGANIZATION_ACTIONS,
+  RESTORE_ORGANIZATION_ACTION,
   ManagerOrganizationAuthorityError,
   createManagerOrganizationAuthorityFunctions,
   buildManagerOrganizationSignature,
@@ -629,5 +882,7 @@ module.exports = {
   buildStoreIndex,
   resolveRequestedStores,
   applyManagerOrganizationAction,
+  assertSnapshotRestoreCompatible,
+  buildOrganizationMaintenanceDetails,
   manageManagerOrganizationInTransaction,
 };

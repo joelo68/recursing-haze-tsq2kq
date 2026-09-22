@@ -2372,14 +2372,12 @@ export default function App() {
 
           let nextManagers = {};
           let nextManagerOrder = [];
-          let shouldBackfillManagerOrder = false;
 
           if (loginOrganization.exists) {
             const rawManagers = loginOrganization.managers || {};
             const rawManagerOrder = Array.isArray(loginOrganization.managerOrder) ? loginOrganization.managerOrder : [];
             nextManagers = rawManagers;
             nextManagerOrder = normalizeManagerOrder(rawManagers, rawManagerOrder);
-            shouldBackfillManagerOrder = rawManagerOrder.length === 0;
           } else {
             nextManagers = currentBrand.id === "cyj" ? DEFAULT_REGIONAL_MANAGERS : {};
             nextManagerOrder = normalizeManagerOrder(nextManagers);
@@ -2395,14 +2393,6 @@ export default function App() {
             Number(liveSummaryRevision.revision || 0) > summaryRevisionAtStart;
           if (!summaryIsNewer) {
             publishSanitizedLoginDirectory(nextLoginDirectory, brandIdAtStart);
-          }
-
-          if (shouldBackfillManagerOrder && applicationSessionIdentityRef.current?.roleId === "director") {
-            setDoc(
-              getDocPath("org_structure"),
-              { managers: nextManagers, managerOrder: nextManagerOrder },
-              { merge: true }
-            ).catch((error) => console.warn("managerOrder backfill failed:", error));
           }
 
           updateAccountDirectoryState({
