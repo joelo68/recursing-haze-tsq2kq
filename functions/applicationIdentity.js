@@ -2,6 +2,7 @@ const crypto = require("crypto");
 
 const APPLICATION_IDENTITY_VERSION = "application-identity-v1";
 const APPLICATION_DIRECTORY_VERSION = "application-login-directory-v1";
+const APPLICATION_ORGANIZATION_VERSION = "application-login-organization-v1";
 const APPLICATION_DIRECTORY_SUMMARY_VERSION = "application-login-directory-summary-v1";
 const APPLICATION_DIRECTORY_SUMMARY_DOC_ID = "current";
 const LOGIN_DIRECTORY_RUNTIME_SERVICE_ACCOUNT = "drcyj-login-directory@cyjsituation-analysis.iam.gserviceaccount.com";
@@ -291,6 +292,77 @@ function buildSanitizedLoginDirectory({
     managers: normalizeManagerDirectory(managerAuth),
     stores: normalizeStoreDirectory(storeAccountData),
     therapists: therapistRows,
+  };
+}
+
+const LOGIN_ORGANIZATION_RESERVED_KEYS = new Set(["__proto__", "prototype", "constructor"]);
+
+function buildSanitizedLoginOrganization({
+  brandId = "",
+  organizationRaw = {},
+  exists = true,
+} = {}) {
+  const brand = normalizeDirectoryBrandId(brandId);
+  if (!brand) throw new Error("invalid_login_organization_brand");
+
+  const source = organizationRaw && typeof organizationRaw === "object" && !Array.isArray(organizationRaw)
+    ? organizationRaw
+    : {};
+  const rawManagers = source.managers && typeof source.managers === "object" && !Array.isArray(source.managers)
+    ? source.managers
+    : {};
+
+  const managers = {};
+  Object.entries(rawManagers).forEach(([rawName, rawStores]) => {
+    const name = normalizeText(rawName, 120);
+    if (!name) return;
+    if (LOGIN_ORGANIZATION_RESERVED_KEYS.has(name.toLowerCase())) {
+      throw new Error("invalid_login_organization_manager");
+    }
+    const storeSource = Array.isArray(rawStores) ? rawStores : [rawStores];
+    managers[name] = [...new Set(
+      storeSource.map((value) => normalizeText(value, 160)).filter(Boolean)
+    )].slice(0, 256);
+  });
+
+  const managerKeys = new Set(Object.keys(managers));
+  const managerOrder = [];
+  const seen = new Set();
+  (Array.isArray(source.managerOrder) ? source.managerOrder : []).forEach((rawName) => {
+    const name = normalizeText(rawName, 120);
+    if (!name || seen.has(name) || !managerKeys.has(name)) return;
+    seen.add(name);
+    managerOrder.push(name);
+  });
+
+  return {
+    version: APPLICATION_ORGANIZATION_VERSION,
+    brandId: brand,
+    exists: exists === true,
+    managers,
+    managerOrder,
+  };
+}
+
+async function readSanitizedLoginOrganizationSource({
+  db,
+  brandId = "",
+  getBrandSettingDoc,
+} = {}) {
+  const brand = normalizeDirectoryBrandId(brandId);
+  if (!db || !brand) throw new Error("invalid_login_organization_request");
+  if (typeof getBrandSettingDoc !== "function") {
+    throw new Error("missing_login_organization_resolver");
+  }
+
+  const organizationSnap = await getBrandSettingDoc(db, brand, "org_structure").get();
+  return {
+    organization: buildSanitizedLoginOrganization({
+      brandId: brand,
+      organizationRaw: organizationSnap?.exists ? (organizationSnap.data?.() || {}) : {},
+      exists: organizationSnap?.exists === true,
+    }),
+    readCount: 1,
   };
 }
 
@@ -646,13 +718,21 @@ function createApplicationIdentityFunctions({
           throw new Error("directory_brand_resolver_mismatch");
         }
 
-        const sourceResult = await readSanitizedLoginDirectorySources({
-          db,
-          brandId,
-          getBrandCollection,
-          getBrandSettingDoc,
-        });
+        const [sourceResult, organizationResult] = await Promise.all([
+          readSanitizedLoginDirectorySources({
+            db,
+            brandId,
+            getBrandCollection,
+            getBrandSettingDoc,
+          }),
+          readSanitizedLoginOrganizationSource({
+            db,
+            brandId,
+            getBrandSettingDoc,
+          }),
+        ]);
         const directory = sourceResult.directory;
+        const organization = organizationResult.organization;
 
         if (typeof res.set === "function") {
           res.set("Cache-Control", "private, no-store");
@@ -661,8 +741,9 @@ function createApplicationIdentityFunctions({
         return res.status(200).json({
           ok: true,
           directory,
+          organization,
           counts: getLoginDirectoryCounts(directory),
-          readCount: Number(sourceResult.readCount || 0),
+          readCount: Number(sourceResult.readCount || 0) + Number(organizationResult.readCount || 0),
         });
       } catch (error) {
         console.error("getApplicationLoginDirectory failed", error);
@@ -680,6 +761,7 @@ function createApplicationIdentityFunctions({
 module.exports = {
   APPLICATION_IDENTITY_VERSION,
   APPLICATION_DIRECTORY_VERSION,
+  APPLICATION_ORGANIZATION_VERSION,
   APPLICATION_DIRECTORY_SUMMARY_VERSION,
   APPLICATION_DIRECTORY_SUMMARY_DOC_ID,
   LOGIN_DIRECTORY_RUNTIME_SERVICE_ACCOUNT,
@@ -688,6 +770,8 @@ module.exports = {
   buildApplicationIdentityUid,
   buildVerifiedApplicationIdentity,
   buildSanitizedLoginDirectory,
+  buildSanitizedLoginOrganization,
+  readSanitizedLoginOrganizationSource,
   getLoginDirectoryCounts,
   isSanitizedLoginDirectoryShape,
   buildLoginDirectorySummaryDocument,

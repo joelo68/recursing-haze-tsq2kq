@@ -141,10 +141,12 @@ test("directory keeps explicit default-app-id compatibility without cross-brand 
   const legacy = await invoke(handler, { brandId: "default-app-id" });
   assert.equal(legacy.statusCode, 200);
   assert.equal(legacy.responseBody?.directory?.brandId, "cyj");
+  assert.equal(legacy.responseBody?.organization?.brandId, "cyj");
   assert.deepEqual(reads.sort(), [
     "collection:cyj:therapists",
     "setting:cyj:director_auth",
     "setting:cyj:manager_auth",
+    "setting:cyj:org_structure",
     "setting:cyj:store_account_data",
     "setting:cyj:trainer_auth",
   ].sort());
@@ -153,10 +155,12 @@ test("directory keeps explicit default-app-id compatibility without cross-brand 
   const yibo = await invoke(handler, { brandId: "yibo" });
   assert.equal(yibo.statusCode, 200);
   assert.equal(yibo.responseBody?.directory?.brandId, "yibo");
+  assert.equal(yibo.responseBody?.organization?.brandId, "yibo");
   assert.deepEqual(reads.sort(), [
     "collection:yibo:therapists",
     "setting:yibo:director_auth",
     "setting:yibo:manager_auth",
+    "setting:yibo:org_structure",
     "setting:yibo:store_account_data",
     "setting:yibo:trainer_auth",
   ].sort());

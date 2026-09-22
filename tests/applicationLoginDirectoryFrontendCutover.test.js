@@ -25,6 +25,7 @@ test("B1C2C1 normal bootstrap uses sanitized directory instead of raw credential
   assert.match(app, /LOGIN_DIRECTORY_ENDPOINT\s*=\s*"https:\/\/us-central1-cyjsituation-analysis\.cloudfunctions\.net\/getApplicationLoginDirectory"/);
   assert.match(app, /callDeviceSecurityEndpoint\(LOGIN_DIRECTORY_ENDPOINT, \{ brandId: brandIdAtStart \}\)/);
   assert.match(app, /assertSanitizedLoginDirectory\(directoryResult\.directory, brandIdAtStart\)/);
+  assert.match(app, /assertSanitizedLoginOrganization\(directoryResult\.organization, brandIdAtStart\)/);
   assert.match(app, /publishSanitizedLoginDirectory\(nextLoginDirectory, brandIdAtStart\)/);
 
   const bootstrap = sliceBetween(app, "const fetchGlobalData", "const unsubReadTrackerConfig");
@@ -32,6 +33,8 @@ test("B1C2C1 normal bootstrap uses sanitized directory instead of raw credential
     assert.doesNotMatch(bootstrap, new RegExp(`getDoc\\(getDocPath\\(\"${sourceName}\"\\)\\)`));
   }
   assert.doesNotMatch(bootstrap, /getDocs\(getCollectionPath\("therapists"\)\)/);
+  assert.doesNotMatch(bootstrap, /getDoc\(getDocPath\("org_structure"\)\)/);
+  assert.match(bootstrap, /fetchGlobalData_core_docs", 0/);
 });
 
 test("sanitized therapist login directory includes non-secret roster fields needed for immediate manager rendering", () => {

@@ -14,9 +14,11 @@ const require = createRequire(import.meta.url);
 const {
   APPLICATION_IDENTITY_VERSION,
   APPLICATION_DIRECTORY_VERSION,
+  APPLICATION_ORGANIZATION_VERSION,
   buildApplicationIdentityUid,
   buildVerifiedApplicationIdentity,
   buildSanitizedLoginDirectory,
+  buildSanitizedLoginOrganization,
   createApplicationIdentityFunctions,
 } = require("../functions/applicationIdentity");
 
@@ -141,13 +143,44 @@ test("sanitized login directory preserves login selectors but strips every passw
   assert.doesNotMatch(serialized, /"password"\s*:/i);
 });
 
-test("directory endpoint requires Firebase auth and reads only the five minimal account sources", async () => {
+test("sanitized login organization exposes only manager-to-store structure", () => {
+  const organization = buildSanitizedLoginOrganization({
+    brandId: "anniu",
+    exists: true,
+    organizationRaw: {
+      managers: {
+        "北區長": ["台北店", "板橋店", "台北店"],
+        "南區長": "高雄店",
+      },
+      managerOrder: ["南區長", "北區長", "不存在"],
+      password: "must-not-leak",
+      secretNote: "must-not-leak",
+    },
+  });
+
+  assert.equal(organization.version, APPLICATION_ORGANIZATION_VERSION);
+  assert.equal(organization.brandId, "anniu");
+  assert.equal(organization.exists, true);
+  assert.deepEqual(organization.managers, {
+    "北區長": ["台北店", "板橋店"],
+    "南區長": ["高雄店"],
+  });
+  assert.deepEqual(organization.managerOrder, ["南區長", "北區長"]);
+  assert.doesNotMatch(JSON.stringify(organization), /must-not-leak|password|secretNote/i);
+});
+
+test("directory endpoint requires Firebase auth and returns five account sources plus sanitized organization", async () => {
   const reads = [];
   const dataBySetting = {
     store_account_data: { accounts: [{ id: "s1", name: "店經理", password: "secret", stores: ["A店"] }] },
     manager_auth: { "區長 A": "secret" },
     trainer_auth: { accounts: { t1: { id: "t1", name: "教專", password: "secret" } }, trainerOrder: ["t1"] },
     director_auth: { accounts: { d1: { id: "d1", name: "主管", password: "secret", level: "operation_admin" } }, directorOrder: ["d1"] },
+    org_structure: {
+      managers: { "區長 A": ["A店"] },
+      managerOrder: ["區長 A"],
+      password: "org-secret",
+    },
   };
 
   const docSnap = (data) => ({
@@ -212,11 +245,18 @@ test("directory endpoint requires Firebase auth and reads only the five minimal 
   assert.equal(statusCode, 200);
   assert.equal(responseBody.ok, true);
   assert.equal(responseBody.directory.brandId, "cyj");
+  assert.equal(responseBody.organization.version, APPLICATION_ORGANIZATION_VERSION);
+  assert.equal(responseBody.organization.brandId, "cyj");
+  assert.equal(responseBody.organization.exists, true);
+  assert.deepEqual(responseBody.organization.managers, { "區長 A": ["A店"] });
+  assert.deepEqual(responseBody.organization.managerOrder, ["區長 A"]);
+  assert.equal(responseBody.readCount, 6);
   assert.equal(cacheControl, "private, no-store");
   assert.deepEqual(reads.sort(), [
     "collection:cyj:therapists",
     "setting:cyj:director_auth",
     "setting:cyj:manager_auth",
+    "setting:cyj:org_structure",
     "setting:cyj:store_account_data",
     "setting:cyj:trainer_auth",
   ].sort());

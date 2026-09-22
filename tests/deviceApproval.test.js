@@ -157,6 +157,14 @@ test("same account and device reuse one deterministic active request and pending
   assert.match(backend, /Math\.max\(0, Number\(inboxSnap\?\.data\(\)\?\.pendingCount \|\| 0\) \+ Number\(delta \|\| 0\)\)/);
 });
 
+test("pending device request is bound to the Firebase bootstrap principal that passed credential verification", () => {
+  assert.match(backend, /const requestAuth = await requireFirebaseRequestAuth\(req, admin\)/);
+  assert.match(backend, /bootstrapAuthUid:\s*requestAuth\.uid/);
+  assert.match(backend, /const normalizedBootstrapAuthUid = String\(bootstrapAuthUid \|\| ''\)\.trim\(\)/);
+  assert.match(backend, /if \(!normalizedBootstrapAuthUid\) throw new Error\('missing_bootstrap_auth_uid'\)/);
+  assert.match(backend, /bootstrapAuthUid:\s*normalizedBootstrapAuthUid/);
+});
+
 test("expired requests preserve reviewed non-trusted status", () => {
   assert.match(backend, /cleanupExpiredDeviceApprovals = onSchedule\(\{ schedule: 'every 15 minutes'/);
   assert.match(backend, /deviceStatus:\s*targetStatus/);

@@ -41,7 +41,8 @@ test("login bootstrap keeps only login-required Firestore data", () => {
     "// P0-FINAL-1B：正式營運 authority"
   );
 
-  assert.match(bootstrap, /getDoc\(getDocPath\("org_structure"\)\)/);
+  assert.doesNotMatch(bootstrap, /getDoc\(getDocPath\("org_structure"\)\)/);
+  assert.match(bootstrap, /assertSanitizedLoginOrganization\(directoryResult\.organization, brandIdAtStart\)/);
   assert.match(bootstrap, /LOGIN_DIRECTORY_ENDPOINT/);
 
   for (const forbidden of [
@@ -57,7 +58,7 @@ test("login bootstrap keeps only login-required Firestore data", () => {
     );
   }
 
-  assert.match(bootstrap, /fetchGlobalData_core_docs", 1/);
+  assert.match(bootstrap, /fetchGlobalData_core_docs", 0/);
 });
 
 test("session authority is loaded only after server-issued application identity", () => {

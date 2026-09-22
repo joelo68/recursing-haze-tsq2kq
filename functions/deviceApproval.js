@@ -684,7 +684,10 @@ function adjustPendingSummariesInTransaction({
   }, { merge: true });
 }
 
-async function createOrRefreshApprovalRequest({ admin, db, brandId, roleId, accountId, credentialAccountId = '', userName, accountKey, deviceInfo, loginLocation, existingDevice, securityConfig, likelyKnownDevice = false, recoveredFromDeviceId = '', selfApprovalAllowed = false, hasTrustedApproverDevice = false }) {
+async function createOrRefreshApprovalRequest({ admin, db, brandId, roleId, accountId, credentialAccountId = '', userName, accountKey, deviceInfo, loginLocation, existingDevice, securityConfig, likelyKnownDevice = false, recoveredFromDeviceId = '', selfApprovalAllowed = false, hasTrustedApproverDevice = false, bootstrapAuthUid = '' }) {
+  const normalizedBootstrapAuthUid = String(bootstrapAuthUid || '').trim();
+  if (!normalizedBootstrapAuthUid) throw new Error('missing_bootstrap_auth_uid');
+
   const requestId = makeRequestId(brandId, accountKey, deviceInfo.deviceId);
   const requestRef = getBrandCollection(db, brandId, 'device_approval_requests').doc(requestId);
   const secretRef = requestRef.collection('private').doc('verification');
@@ -774,6 +777,7 @@ async function createOrRefreshApprovalRequest({ admin, db, brandId, roleId, acco
       schemaVersion: 'device-approval-v1',
       requestId,
       status: 'pending',
+      bootstrapAuthUid: normalizedBootstrapAuthUid,
       brandId: normalizeBrandId(brandId),
       brandLabel: getBrandLabel(brandId),
       role: roleId,
@@ -1460,6 +1464,7 @@ function createDeviceApprovalFunctions({ admin, db }) {
         recoveredFromDeviceId: approvalRecoveredDeviceId,
         selfApprovalAllowed,
         hasTrustedApproverDevice,
+        bootstrapAuthUid: requestAuth.uid,
       });
       const enforced = securityConfig.deviceApprovalMode === 'enforce';
       await writeSecurityLog({

@@ -174,6 +174,7 @@ const BRANDS = [
 ];
 
 const APPLICATION_LOGIN_DIRECTORY_VERSION = "application-login-directory-v1";
+const APPLICATION_LOGIN_ORGANIZATION_VERSION = "application-login-organization-v1";
 const APPLICATION_LOGIN_DIRECTORY_SUMMARY_VERSION = "application-login-directory-summary-v1";
 const EMPTY_LOGIN_DIRECTORY = Object.freeze({
   version: APPLICATION_LOGIN_DIRECTORY_VERSION,
@@ -217,6 +218,57 @@ const assertSanitizedLoginDirectory = (directory, expectedBrandId) => {
   };
   scan(directory);
   return directory;
+};
+
+
+const LOGIN_ORGANIZATION_RESERVED_KEYS = new Set(["__proto__", "prototype", "constructor"]);
+
+const assertSanitizedLoginOrganization = (organization, expectedBrandId) => {
+  if (!organization || typeof organization !== "object" || Array.isArray(organization)) {
+    throw new Error("登入組織資料格式不正確");
+  }
+  if (String(organization.version || "") !== APPLICATION_LOGIN_ORGANIZATION_VERSION) {
+    throw new Error("登入組織資料版本不相容");
+  }
+  if (String(organization.brandId || "").trim().toLowerCase() !== String(expectedBrandId || "").trim().toLowerCase()) {
+    throw new Error("登入組織資料品牌不一致");
+  }
+
+  const rawManagers = organization.managers;
+  if (!rawManagers || typeof rawManagers !== "object" || Array.isArray(rawManagers)) {
+    throw new Error("登入組織資料缺少區域架構");
+  }
+  if (!Array.isArray(organization.managerOrder)) {
+    throw new Error("登入組織資料缺少排序");
+  }
+
+  const managers = {};
+  for (const [rawName, rawStores] of Object.entries(rawManagers)) {
+    const name = String(rawName || "").trim();
+    if (!name || LOGIN_ORGANIZATION_RESERVED_KEYS.has(name.toLowerCase()) || !Array.isArray(rawStores)) {
+      throw new Error("登入組織資料內容不正確");
+    }
+    const stores = rawStores.map((value) => String(value || "").trim()).filter(Boolean);
+    managers[name] = [...new Set(stores)];
+  }
+
+  const managerKeys = new Set(Object.keys(managers));
+  const managerOrder = [];
+  const seen = new Set();
+  organization.managerOrder.forEach((rawName) => {
+    const name = String(rawName || "").trim();
+    if (!name || seen.has(name) || !managerKeys.has(name)) return;
+    seen.add(name);
+    managerOrder.push(name);
+  });
+
+  return {
+    version: APPLICATION_LOGIN_ORGANIZATION_VERSION,
+    brandId: String(expectedBrandId || "").trim().toLowerCase(),
+    exists: organization.exists === true,
+    managers,
+    managerOrder,
+  };
 };
 
 const assertSanitizedLoginDirectorySummary = (summary, expectedBrandId) => {
@@ -2289,7 +2341,6 @@ export default function App() {
           // P0-B1C2C1：登入名單由 Backend Sanitized Directory 統一提供。
           // Browser 正常 bootstrap 不再直接讀取 store/manager/trainer/director/master credential 文件。
           const tasks = [
-            { key: "org", required: true, promise: withTimeout(getDoc(getDocPath("org_structure")), "組織架構") },
             { key: "directory", required: true, promise: withTimeout(callDeviceSecurityEndpoint(LOGIN_DIRECTORY_ENDPOINT, { brandId: brandIdAtStart }), "授權名單") },
           ];
 
@@ -2299,8 +2350,9 @@ export default function App() {
             resultMap[tasks[index].key] = result;
           });
 
-          // 登入前 Browser 只讀 1 個必要組織文件；授權名單由 Backend sanitized directory 提供。
-          trackReadSource("fetchGlobalData_core_docs", 1, getStableReadMeta("fetchGlobalData_core_docs"));
+          // P0-FINAL-1C-1：登入前 Browser 不再直接讀 org_structure。
+          // 登入名單與必要組織排序由同一個 Backend sanitized bootstrap response 提供。
+          trackReadSource("fetchGlobalData_core_docs", 0, getStableReadMeta("fetchGlobalData_core_docs"));
 
           const failedRequiredTasks = tasks.filter((task) => (
             task.required && resultMap[task.key]?.status !== "fulfilled"
@@ -2319,13 +2371,13 @@ export default function App() {
             return false;
           }
 
-          const orgSnap = resultMap.org.value;
           const directoryResult = resultMap.directory.value || {};
           const nextLoginDirectory = assertSanitizedLoginDirectory(directoryResult.directory, brandIdAtStart);
+          const loginOrganization = assertSanitizedLoginOrganization(directoryResult.organization, brandIdAtStart);
 
           trackReadSource(
             "login_directory_backend_estimated",
-            Math.max(0, Number(directoryResult.readCount ?? (4 + nextLoginDirectory.therapists.length))),
+            Math.max(0, Number(directoryResult.readCount ?? (5 + nextLoginDirectory.therapists.length))),
             getStableReadMeta("login_directory_backend_estimated")
           );
 
@@ -2333,10 +2385,9 @@ export default function App() {
           let nextManagerOrder = [];
           let shouldBackfillManagerOrder = false;
 
-          if (orgSnap.exists()) {
-            const orgData = orgSnap.data() || {};
-            const rawManagers = orgData.managers || {};
-            const rawManagerOrder = Array.isArray(orgData.managerOrder) ? orgData.managerOrder : [];
+          if (loginOrganization.exists) {
+            const rawManagers = loginOrganization.managers || {};
+            const rawManagerOrder = Array.isArray(loginOrganization.managerOrder) ? loginOrganization.managerOrder : [];
             nextManagers = rawManagers;
             nextManagerOrder = normalizeManagerOrder(rawManagers, rawManagerOrder);
             shouldBackfillManagerOrder = rawManagerOrder.length === 0;
@@ -2416,7 +2467,6 @@ export default function App() {
     user,
     currentBrand,
     getDocPath,
-    getCollectionPath,
     getStableReadMeta,
     normalizeStore,
     publishSanitizedLoginDirectory,
