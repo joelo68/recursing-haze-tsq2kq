@@ -71,6 +71,7 @@ const TELEGRAM_SECURITY_CONFIG_ENDPOINT = "https://us-central1-cyjsituation-anal
 const SYSTEM_EXCLUSION_ENDPOINT = "https://us-central1-cyjsituation-analysis.cloudfunctions.net/manageSystemExclusions";
 const STORE_LIFECYCLE_ENDPOINT = "https://us-central1-cyjsituation-analysis.cloudfunctions.net/manageStoreLifecycle";
 const MODULE_PERMISSIONS_ENDPOINT = "https://us-central1-cyjsituation-analysis.cloudfunctions.net/manageModulePermissions";
+const ADMINISTRATIVE_SETTINGS_ENDPOINT = "https://us-central1-cyjsituation-analysis.cloudfunctions.net/manageAdministrativeSetting";
 const PROJECTION_CONTEXT_ENDPOINT = "https://us-central1-cyjsituation-analysis.cloudfunctions.net/manageProjectionContext";
 
 
@@ -2125,18 +2126,6 @@ export default function App() {
       document.removeEventListener("visibilitychange", handleVisibilityChange);
     };
   }, [isOnline]); 
-
-  useEffect(() => {
-    if (userRole === 'director' || userRole === 'master') {
-      const globalVersionRef = doc(db, "artifacts", appId, "public", "data", "global_settings", "system_version");
-      getDoc(globalVersionRef).then(s => {
-         const remoteVersion = s.exists() ? s.data().version : null;
-         if (!remoteVersion || isNewerVersion(CURRENT_APP_VERSION, remoteVersion)) {
-            setDoc(globalVersionRef, { version: CURRENT_APP_VERSION }, { merge: true });
-         }
-      }).catch(e => console.warn("Broadcast failed", e));
-    }
-  }, [userRole]);
 
   useEffect(() => {
     let intervalId = null;
@@ -4582,6 +4571,63 @@ export default function App() {
     fetchGlobalData,
   ]);
 
+  const manageAdministrativeSettingAction = useCallback(async ({
+    action = "",
+    payload = {},
+    expectedRevision = 0,
+  } = {}) => {
+    if (!isDeviceSecuritySuperAdmin) {
+      throw new Error("只有最高管理者可以修改系統管理設定");
+    }
+    if (currentDeviceTrust?.status !== "trusted") {
+      throw new Error("目前裝置尚未完成信任確認，無法修改系統管理設定");
+    }
+
+    const brandIdAtStart = String(currentBrandId || "").trim().toLowerCase();
+    const result = await callDeviceSecurityEndpoint(ADMINISTRATIVE_SETTINGS_ENDPOINT, {
+      brandId: brandIdAtStart,
+      action: String(action || "").trim().toLowerCase(),
+      payload: payload && typeof payload === "object" ? payload : {},
+      expectedRevision: Number(expectedRevision || 0),
+      actor: { ...buildDeviceSecurityActor(), roleId: "director" },
+    });
+
+    if (String(result?.brandId || "").trim().toLowerCase() !== brandIdAtStart) {
+      throw new Error("系統管理設定品牌不一致，已停止套用結果");
+    }
+    return result;
+  }, [
+    isDeviceSecuritySuperAdmin,
+    currentDeviceTrust?.status,
+    currentBrandId,
+    callDeviceSecurityEndpoint,
+    buildDeviceSecurityActor,
+  ]);
+
+  useEffect(() => {
+    if (
+      !hasVerifiedApplicationSession ||
+      !isDeviceSecuritySuperAdmin ||
+      currentDeviceTrust?.status !== "trusted"
+    ) {
+      return;
+    }
+
+    manageAdministrativeSettingAction({
+      action: "publish_system_version",
+      payload: { version: CURRENT_APP_VERSION },
+      expectedRevision: 0,
+    }).catch((error) => {
+      console.warn("system_version backend publish failed:", error?.message || error);
+    });
+  }, [
+    hasVerifiedApplicationSession,
+    isDeviceSecuritySuperAdmin,
+    currentDeviceTrust?.status,
+    currentBrandId,
+    manageAdministrativeSettingAction,
+  ]);
+
   const buildManagerOrganizationSignatureClient = useCallback(async () => {
     const sourceManagers = managers && typeof managers === "object" ? managers : {};
     const normalizedManagers = {};
@@ -5056,7 +5102,7 @@ export default function App() {
     annualMonthlyTargetSummaries, annualTargetSummaryLoadState, annualAggregateLoadState, therapistAnnualAggregatedData, // ★ 年度 trust / target / fallback readiness
     showToast, openConfirm, fmtMoney, fmtNum, inputDate, setInputDate, setTargets, selectedYear, selectedMonth, setSelectedYear, setSelectedMonth, permissions, storeAccounts, managerAuth, currentUser, userRole, logActivity, manageTherapistMasterAction, navigateToStore, activeView, appId,
     therapists: visibleTherapists, therapistReports: visibleTherapistReports, therapistSchedules, therapistTargets, trainerAuth, systemExclusionState, auditExclusions, handleUpdateAuditExclusions, currentBrand, setCurrentBrandId, getCollectionPath, getDocPath, dailyLoginCount, yesterdayLoginCount, securityConfig, featureFlags, therapistModuleEnabled, isOnline, isLowPowerMode,
-    currentDeviceTrust, currentSecurityAccountKey, manageDeviceSecurityAction, reviewDeviceApprovalAction, updateTelegramSecurityAlertConfig, manageApplicationAccountAction, manageManagerOrganizationAction, updateModulePermissions, updateProjectionContext, updateStoreSchedule, canManageDeviceSecurity: isDeviceSecuritySuperAdmin, openDeviceApprovalPanel,
+    currentDeviceTrust, currentSecurityAccountKey, manageDeviceSecurityAction, reviewDeviceApprovalAction, updateTelegramSecurityAlertConfig, manageApplicationAccountAction, manageAdministrativeSettingAction, manageManagerOrganizationAction, updateModulePermissions, updateProjectionContext, updateStoreSchedule, canManageDeviceSecurity: isDeviceSecuritySuperAdmin, openDeviceApprovalPanel,
     loginDirectory,
     fetchGlobalData,
     officialManagers: managers,
@@ -5066,7 +5112,7 @@ export default function App() {
     directorPermissionProfile,
     canDirectorAccessView,
     isReadOnlyDirector: userRole === "director" && !canDirectorAccessView("history")
-  }), [user, loading, visibleManagers, visibleManagerOrder, budgets, monthlyTargetSummary, currentLifecycleMasterState, currentDashboardSummary, currentRankingsSummary, currentReportSummaryReady, currentReportSummaryReadyYearMonth, currentReportSummaryReadyBrandId, currentSummaryRecalcFlagState, historicalDetailRefreshState, targets, visibleRawData, rawData, annualAggregatedData, annualDashboardSummaries, annualSummaryStatusMap, annualSummaryLoadState, annualMonthlyTargetSummaries, annualTargetSummaryLoadState, annualAggregateLoadState, therapistAnnualAggregatedData, inputDate, selectedYear, selectedMonth, permissions, storeAccounts, managerAuth, currentUser, userRole, logActivity, manageTherapistMasterAction, navigateToStore, activeView, appId, visibleTherapists, visibleTherapistReports, therapistSchedules, therapistTargets, trainerAuth, systemExclusionState, auditExclusions, handleUpdateAuditExclusions, currentBrand, setCurrentBrandId, getCollectionPath, getDocPath, dailyLoginCount, yesterdayLoginCount, securityConfig, featureFlags, therapistModuleEnabled, isOnline, isLowPowerMode, currentDeviceTrust, currentSecurityAccountKey, manageDeviceSecurityAction, reviewDeviceApprovalAction, updateTelegramSecurityAlertConfig, manageApplicationAccountAction, manageManagerOrganizationAction, updateModulePermissions, updateProjectionContext, updateStoreSchedule, isDeviceSecuritySuperAdmin, openDeviceApprovalPanel, loginDirectory, fetchGlobalData, managers, delegations, activeDelegations, delegationAccess, accessibleStores, officialStores, delegatedStores, refreshDelegations, canAccessStore, canEditStoreReport, getActiveDelegationForStore, directorLevel, directorPermissionProfile, canDirectorAccessView]); // ★ 依賴陣列也要加
+  }), [user, loading, visibleManagers, visibleManagerOrder, budgets, monthlyTargetSummary, currentLifecycleMasterState, currentDashboardSummary, currentRankingsSummary, currentReportSummaryReady, currentReportSummaryReadyYearMonth, currentReportSummaryReadyBrandId, currentSummaryRecalcFlagState, historicalDetailRefreshState, targets, visibleRawData, rawData, annualAggregatedData, annualDashboardSummaries, annualSummaryStatusMap, annualSummaryLoadState, annualMonthlyTargetSummaries, annualTargetSummaryLoadState, annualAggregateLoadState, therapistAnnualAggregatedData, inputDate, selectedYear, selectedMonth, permissions, storeAccounts, managerAuth, currentUser, userRole, logActivity, manageTherapistMasterAction, navigateToStore, activeView, appId, visibleTherapists, visibleTherapistReports, therapistSchedules, therapistTargets, trainerAuth, systemExclusionState, auditExclusions, handleUpdateAuditExclusions, currentBrand, setCurrentBrandId, getCollectionPath, getDocPath, dailyLoginCount, yesterdayLoginCount, securityConfig, featureFlags, therapistModuleEnabled, isOnline, isLowPowerMode, currentDeviceTrust, currentSecurityAccountKey, manageDeviceSecurityAction, reviewDeviceApprovalAction, updateTelegramSecurityAlertConfig, manageApplicationAccountAction, manageAdministrativeSettingAction, manageManagerOrganizationAction, updateModulePermissions, updateProjectionContext, updateStoreSchedule, isDeviceSecuritySuperAdmin, openDeviceApprovalPanel, loginDirectory, fetchGlobalData, managers, delegations, activeDelegations, delegationAccess, accessibleStores, officialStores, delegatedStores, refreshDelegations, canAccessStore, canEditStoreReport, getActiveDelegationForStore, directorLevel, directorPermissionProfile, canDirectorAccessView]); // ★ 依賴陣列也要加
   
   const memoizedViews = useMemo(() => {
     return (

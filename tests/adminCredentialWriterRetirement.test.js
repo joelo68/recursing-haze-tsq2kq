@@ -73,8 +73,16 @@ test("browser access to all admin credential documents is denied on both path fa
   for (const name of ["director_auth", "trainer_auth", "manager_auth", "store_account_data"]) {
     assert.match(rules, new RegExp(`match \\/brands\\/\\{brandId\\}\\/settings\\/${name}\\s*\\{\\s*allow read, write:\\s*if false;`));
     assert.match(rules, new RegExp(`settingId != '${name}'`));
-    assert.match(rules, new RegExp(`!\\(collectionName == 'settings' && document == '${name}'\\)`));
   }
+  assert.match(
+    rules,
+    /match \/brands\/\{brandId\}\/settings\/\{settingId\}\/\{document=\*\*\}[\s\S]{0,1400}settingId != 'director_auth'[\s\S]{0,700}settingId != 'store_account_data'/,
+  );
+  assert.match(
+    rules,
+    /match \/brands\/\{brandId\}\/\{collectionName\}\/\{document=\*\*\}[\s\S]{0,1800}collectionName != 'settings'/,
+  );
+  assert.doesNotMatch(rules, /collectionName == 'settings' && document == 'director_auth'/);
 });
 
 test("read topology stays event/point-read only and app version is unchanged", () => {

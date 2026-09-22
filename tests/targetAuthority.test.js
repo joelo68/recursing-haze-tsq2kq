@@ -18,6 +18,7 @@ const settingsView = read("src/components/SettingsView.jsx");
 const app = read("src/App.jsx");
 const functionsIndex = read("functions/index.js");
 const coverageSource = read("functions/targetCoverage.js");
+const administrativeSettingsAuthority = read("functions/administrativeSettingsAuthority.js");
 
 const eligibleEntries = ["A", "B", "C"].map((storeKey) => ({
   storeKey,
@@ -206,7 +207,11 @@ test("TargetView uses canonical target validity and no longer writes target Summ
 test("KPI Settings preserves missing newASP and validates benchmark ranges before write", () => {
   assert.match(settingsView, /validPositiveSetting\(localTargets\?\.newASP\)/);
   assert.match(settingsView, /validateStoreHealthBenchmark/);
-  assert.match(settingsView, /newASP:\s*newAspResult\.valid \? newAspResult\.value : deleteField\(\)/);
+  assert.match(settingsView, /newASP:\s*newAspResult\.valid \? newAspResult\.value : null/);
+  assert.match(administrativeSettingsAuthority, /deleteNewAsp:\s*newASP === null/);
+  assert.match(administrativeSettingsAuthority, /if \(deleteNewAsp\) payload\.newASP = fieldValue\.delete\(\)/);
+  assert.match(administrativeSettingsAuthority, /normalizeKpiBenchmarks/);
+  assert.match(administrativeSettingsAuthority, /invalid_benchmark_range/);
   assert.match(settingsView, /benchmarks\.\$\{brandKey\}\.\$\{category\.id\}/);
   assert.doesNotMatch(settingsView, /newASP:\s*Number\(localTargets\?\.newASP \?\? 3500\)/);
   assert.doesNotMatch(settingsView, /value=\{localTargets\.newASP \?\? 3500\}/);

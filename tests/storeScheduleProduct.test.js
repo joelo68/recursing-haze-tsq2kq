@@ -50,7 +50,15 @@ test("module permission writes move behind a highest-admin backend authority", (
 test("Firestore rules deny direct client writes to permissions on all brand paths", () => {
   assert.match(rules, /settingId != 'permissions'/);
   assert.match(rules, /match \/brands\/\{brandId\}\/settings\/permissions[\s\S]*allow write:\s*if false/);
-  assert.match(rules, /!\(collectionName == 'settings' && document == 'permissions'\)/);
+  assert.match(
+    rules,
+    /match \/brands\/\{brandId\}\/settings\/\{settingId\}\/\{document=\*\*\}[\s\S]{0,700}settingId != 'permissions'/,
+  );
+  assert.match(
+    rules,
+    /match \/brands\/\{brandId\}\/\{collectionName\}\/\{document=\*\*\}[\s\S]{0,1800}collectionName != 'settings'/,
+  );
+  assert.doesNotMatch(rules, /collectionName == 'settings' && document == 'permissions'/);
 });
 
 test("store schedule actor verification requires trusted device plus application credential", () => {

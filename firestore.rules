@@ -252,8 +252,9 @@ service cloud.firestore {
     }
 
     // Login Security Telegram / Master Credential 設定屬 CYJ legacy Security authority。
-    // system_version 是全 App bootstrap metadata：anonymous 與任一正式 Application Identity 可讀；
-    // Browser 更新 system_version 仍保留給正式 Application Identity，角色 writer 收斂留在 1D。
+    // system_version 是全 App bootstrap metadata：anonymous 與任一正式 Application Identity 可讀。
+    // P0-FINAL-1D-A1 起，system_version / security_config / feature_flags / kpi_targets
+    // 的 Browser write 全數封鎖，改由最高管理者 Backend authority 寫入。
     // 其他 CYJ global_settings 必須是 CYJ Application Identity。
     match /artifacts/{appId}/public/data/global_settings/{settingId} {
       allow read: if appId == 'default-app-id' && (
@@ -268,21 +269,20 @@ service cloud.firestore {
           && settingId != 'store_account_data'
         )
       );
-      allow write: if appId == 'default-app-id' && (
-        (settingId == 'system_version' && applicationIdentity())
-        || (
-          settingId != 'system_version'
-          && cyjApplicationIdentity()
-          && settingId != 'telegram_security_alerts'
-          && settingId != 'audit_exclusions'
-          && settingId != 'permissions'
-          && settingId != 'master_auth'
-          && settingId != 'director_auth'
-          && settingId != 'trainer_auth'
-          && settingId != 'manager_auth'
-          && settingId != 'store_account_data'
-        )
-      );
+      allow write: if appId == 'default-app-id'
+        && cyjApplicationIdentity()
+        && settingId != 'system_version'
+        && settingId != 'security_config'
+        && settingId != 'feature_flags'
+        && settingId != 'kpi_targets'
+        && settingId != 'telegram_security_alerts'
+        && settingId != 'audit_exclusions'
+        && settingId != 'permissions'
+        && settingId != 'master_auth'
+        && settingId != 'director_auth'
+        && settingId != 'trainer_auth'
+        && settingId != 'manager_auth'
+        && settingId != 'store_account_data';
     }
 
     // Admin Credential Writer Retirement：所有含登入密碼的設定文件改由 Backend authority 存取。
@@ -318,6 +318,22 @@ service cloud.firestore {
     // System Exclusion v1：正式營運 scope authority。
     // 前端只讀；所有修改必須經 Backend 的最高管理者、Trusted Device、credential 與 revision OCC。
     match /brands/{brandId}/settings/audit_exclusions {
+      allow read: if sameBrandIdentity(brandId);
+      allow write: if false;
+    }
+
+    // P0-FINAL-1D-A1：高階管理設定只允許 Browser read；writer 由 Backend authority 執行。
+    match /brands/{brandId}/settings/security_config {
+      allow read: if sameBrandIdentity(brandId);
+      allow write: if false;
+    }
+
+    match /brands/{brandId}/settings/feature_flags {
+      allow read: if sameBrandIdentity(brandId);
+      allow write: if false;
+    }
+
+    match /brands/{brandId}/settings/kpi_targets {
       allow read: if sameBrandIdentity(brandId);
       allow write: if false;
     }
@@ -376,7 +392,23 @@ service cloud.firestore {
       allow write: if false;
     }
 
-    // 既有品牌資料維持原本登入後可讀寫；排除上方受保護集合，避免寬鬆規則覆蓋。
+    // 既有品牌 settings 相容 surface：以第一層 settingId 判斷，避免 recursive wildcard
+    // path 與字串比較造成受保護設定被寬鬆 fallback 意外放行。
+    match /brands/{brandId}/settings/{settingId}/{document=**} {
+      allow read, write: if sameBrandIdentity(brandId)
+        && settingId != 'audit_exclusions'
+        && settingId != 'permissions'
+        && settingId != 'security_config'
+        && settingId != 'feature_flags'
+        && settingId != 'kpi_targets'
+        && settingId != 'master_auth'
+        && settingId != 'director_auth'
+        && settingId != 'trainer_auth'
+        && settingId != 'manager_auth'
+        && settingId != 'store_account_data';
+    }
+
+    // 其他既有品牌資料維持原本登入後可讀寫；settings 整個 collection 由上方專用規則接管。
     match /brands/{brandId}/{collectionName}/{document=**} {
       allow read, write: if sameBrandIdentity(brandId)
         && collectionName != 'management_delegations'
@@ -395,13 +427,7 @@ service cloud.firestore {
         && collectionName != 'projection_accuracy'
         && collectionName != 'projection_accuracy_history'
         && collectionName != 'projection_context'
-        && !(collectionName == 'settings' && document == 'audit_exclusions')
-        && !(collectionName == 'settings' && document == 'permissions')
-        && !(collectionName == 'settings' && document == 'master_auth')
-        && !(collectionName == 'settings' && document == 'director_auth')
-        && !(collectionName == 'settings' && document == 'trainer_auth')
-        && !(collectionName == 'settings' && document == 'manager_auth')
-        && !(collectionName == 'settings' && document == 'store_account_data');
+        && collectionName != 'settings';
     }
 
     match /artifacts/{appId}/public/data/{collectionName}/{document=**} {

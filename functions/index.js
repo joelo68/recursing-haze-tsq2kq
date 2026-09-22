@@ -135,6 +135,24 @@ const modulePermissionsFunctions = createModulePermissionsFunctions({ admin, db 
 exports.manageModulePermissions = modulePermissionsFunctions.manageModulePermissions;
 
 // ==========================================
+// ★ P0-FINAL-1D-A1：Administrative Settings Authority
+// security_config / feature_flags / kpi_targets / system_version 的 Browser writer 收斂至 Backend。
+// 最高管理者 + Trusted Device + credential + revision OCC；不新增 listener/polling。
+// ==========================================
+const { createAdministrativeSettingsAuthorityFunctions } = require("./administrativeSettingsAuthority");
+const administrativeSettingsAuthorityFunctions = createAdministrativeSettingsAuthorityFunctions({
+  onRequest,
+  admin,
+  db,
+  getBrandCollection: getDeviceSecurityBrandCollection,
+  getBrandSettingDoc: getDeviceSecurityBrandSettingDoc,
+  requireFirebaseRequestAuth: (req) => requireFirebaseRequestAuth(req, admin),
+  verifySuperAdminActor,
+  assertAdminApplicationClaims,
+});
+exports.manageAdministrativeSetting = administrativeSettingsAuthorityFunctions.manageAdministrativeSetting;
+
+// ==========================================
 // ★ Smart Forecast B3B：營運情境 Backend-only authority
 // 一品牌 / 一月份 / 一文件；最高管理者 + Trusted Device + credential + revision OCC。
 // B3B 只建立 Context，不修改既有 Projection v2 公式。

@@ -109,7 +109,7 @@ const SettingsView = () => {
     getDocPath, getCollectionPath,
     currentBrand, securityConfig, featureFlags,
     currentDeviceTrust,
-    loginDirectory, manageApplicationAccountAction, manageManagerOrganizationAction,
+    loginDirectory, manageApplicationAccountAction, manageAdministrativeSettingAction, manageManagerOrganizationAction,
     updateModulePermissions,
     user, officialManagers, delegations = [], refreshDelegations,
     fetchGlobalData
@@ -903,26 +903,22 @@ const SettingsView = () => {
         },
       };
 
-      const docRef = getDocPath("kpi_targets");
-      const docSnap = await getDoc(docRef);
-
-      // newASP blank/0 = 未設定。既有文件用 deleteField 移除，不把 hardcoded fallback 寫成 authority。
-      if (docSnap.exists()) {
-        await updateDoc(docRef, {
-          newASP: newAspResult.valid ? newAspResult.value : deleteField(),
-          trafficASP: nextTargets.trafficASP,
-          ...benchmarkFieldUpdates,
-        });
-      } else {
-        const createPayload = {
-          trafficASP: nextTargets.trafficASP,
-          benchmarks: { [brandKey]: nextBrandBenchmarks },
-        };
-        if (newAspResult.valid) createPayload.newASP = newAspResult.value;
-        await setDoc(docRef, createPayload, { merge: true });
+      if (typeof manageAdministrativeSettingAction !== "function") {
+        throw new Error("系統管理設定安全服務尚未就緒");
       }
 
-      setTargets(nextTargets);
+      const result = await manageAdministrativeSettingAction({
+        action: "update_kpi_targets",
+        expectedRevision: Number(targets?.revision || 0),
+        payload: {
+          newASP: newAspResult.valid ? newAspResult.value : null,
+          trafficASP: nextTargets.trafficASP,
+          benchmarks: nextTargets.benchmarks,
+        },
+      });
+
+      const nextRevision = Number(result?.revision || Number(targets?.revision || 0));
+      setTargets({ ...nextTargets, revision: nextRevision });
       setLocalTargets({
         ...nextTargets,
         newASP: newAspResult.valid ? String(newAspResult.value) : "",
@@ -1021,8 +1017,15 @@ const SettingsView = () => {
         exemptRoles: localSecurityConfig.exemptRoles || ["director", "master"],
       };
 
-      await setDoc(getDocPath("security_config"), payload); 
-      setLocalSecurityConfig(payload);
+      if (typeof manageAdministrativeSettingAction !== "function") {
+        throw new Error("系統管理設定安全服務尚未就緒");
+      }
+      const result = await manageAdministrativeSettingAction({
+        action: "update_security_config",
+        expectedRevision: Number(securityConfig?.revision || 0),
+        payload,
+      });
+      setLocalSecurityConfig({ ...payload, revision: Number(result?.revision || securityConfig?.revision || 0) });
       showToast("資安、省流量與閒置控管已更新", "success"); 
       if (fetchGlobalData) fetchGlobalData();
     } catch (e) {
@@ -1045,8 +1048,15 @@ const SettingsView = () => {
         updatedByRole: userRole || "",
       };
 
-      await setDoc(getDocPath("feature_flags"), payload, { merge: true });
-      setLocalFeatureFlags(payload);
+      if (typeof manageAdministrativeSettingAction !== "function") {
+        throw new Error("系統管理設定安全服務尚未就緒");
+      }
+      const result = await manageAdministrativeSettingAction({
+        action: "update_feature_flags",
+        expectedRevision: Number(featureFlags?.revision || 0),
+        payload,
+      });
+      setLocalFeatureFlags({ ...payload, revision: Number(result?.revision || featureFlags?.revision || 0) });
       if (fetchGlobalData) await fetchGlobalData();
       showToast("品牌功能設定已更新", "success");
     } catch (e) {

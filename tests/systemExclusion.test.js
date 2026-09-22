@@ -106,7 +106,15 @@ test("Firestore Rules close both brand and legacy browser write paths for audit_
   assert.match(rules, /match \/brands\/\{brandId\}\/settings\/audit_exclusions/);
   assert.match(rules, /match \/artifacts\/\{appId\}\/public\/data\/global_settings\/audit_exclusions/);
   assert.match(rules, /settingId != 'audit_exclusions'/);
-  assert.match(rules, /collectionName == 'settings' && document == 'audit_exclusions'/);
+  assert.match(
+    rules,
+    /match \/brands\/\{brandId\}\/settings\/\{settingId\}\/\{document=\*\*\}[\s\S]{0,500}settingId != 'audit_exclusions'/,
+  );
+  assert.match(
+    rules,
+    /match \/brands\/\{brandId\}\/\{collectionName\}\/\{document=\*\*\}[\s\S]{0,1800}collectionName != 'settings'/,
+  );
+  assert.doesNotMatch(rules, /collectionName == 'settings' && document == 'audit_exclusions'/);
 });
 
 test("Target Coverage carries System Exclusion snapshot and uses event-driven low-frequency refresh", () => {
