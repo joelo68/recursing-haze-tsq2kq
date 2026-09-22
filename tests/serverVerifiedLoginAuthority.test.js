@@ -57,12 +57,13 @@ test("B1C2C1 removes browser password comparison and delegates every role login 
   }
 });
 
-test("B1B2 consumes the server-issued application session while Firestore Rules remain intentionally unchanged", () => {
+test("B1B2 server-issued application session is now consumed by Firestore claim enforcement", () => {
   assert.match(app, /requestApplicationIdentityToken\s*:\s*true/);
   assert.match(app, /applicationIdentityCustomToken/);
   assert.match(app, /signInWithCustomToken\(auth, customToken\)/);
   assert.match(app, /claims\?\.drcyjIdentity === true/);
   assert.match(app, /signInAnonymously\(auth\)/);
-  assert.match(rules, /function signedIn\(\)\s*\{\s*return request\.auth != null;/);
+  assert.match(rules, /request\.auth\.token\.drcyjIdentity == true/);
+  assert.match(rules, /request\.auth\.token\.identityVersion == 'application-identity-v1'/);
   assert.match(app, /CURRENT_APP_VERSION\s*=\s*"3\.6\.0"/);
 });

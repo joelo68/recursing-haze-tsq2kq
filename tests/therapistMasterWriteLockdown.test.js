@@ -25,11 +25,11 @@ const directTherapistWritePattern =
 test("B1C2D keeps therapist master readable but blocks direct browser writes on both physical roots", () => {
   assert.match(
     rules,
-    /match \/brands\/\{brandId\}\/therapists\/\{document=\*\*\}\s*\{\s*allow read: if signedIn\(\);\s*allow write: if false;\s*\}/s
+    /match \/brands\/\{brandId\}\/therapists\/\{document=\*\*\}\s*\{\s*allow read: if sameBrandIdentity\(brandId\);\s*allow write: if false;\s*\}/s
   );
   assert.match(
     rules,
-    /match \/artifacts\/\{appId\}\/public\/data\/therapists\/\{document=\*\*\}\s*\{\s*allow read: if signedIn\(\);\s*allow write: if false;\s*\}/s
+    /match \/artifacts\/\{appId\}\/public\/data\/therapists\/\{document=\*\*\}\s*\{\s*allow read: if cyjLegacyIdentity\(appId\);\s*allow write: if false;\s*\}/s
   );
 });
 

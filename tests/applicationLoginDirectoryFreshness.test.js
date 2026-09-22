@@ -295,14 +295,14 @@ test("B1C2E-2 frontend keeps the realtime surface to one login-screen-only docum
   assert.match(block, /login_directory_summary_login_screen/);
 });
 
-test("B1C2E-2 Rules make the summary browser-read-only and close broad fallback writes", () => {
+test("B1C2E-2 sanitized summary remains bootstrap-readable, browser-read-only, and brand isolated", () => {
   assert.match(
     rules,
-    /match \/brands\/\{brandId\}\/login_directory_summary\/\{document=\*\*\}\s*\{\s*allow read: if signedIn\(\);\s*allow write: if false;/s
+    /match \/brands\/\{brandId\}\/login_directory_summary\/\{document=\*\*\}\s*\{\s*allow read: if anonymousBootstrap\(\) \|\| sameBrandIdentity\(brandId\);\s*allow write: if false;/s
   );
   assert.match(
     rules,
-    /match \/artifacts\/\{appId\}\/public\/data\/login_directory_summary\/\{document=\*\*\}\s*\{\s*allow read: if signedIn\(\);\s*allow write: if false;/s
+    /match \/artifacts\/\{appId\}\/public\/data\/login_directory_summary\/\{document=\*\*\}\s*\{\s*allow read: if \(appId == 'default-app-id' && anonymousBootstrap\(\)\) \|\| cyjLegacyIdentity\(appId\);\s*allow write: if false;/s
   );
   assert.equal((rules.match(/collectionName != 'login_directory_summary'/g) || []).length, 2);
 });

@@ -853,24 +853,24 @@ test("B1 index wiring is Backend-only, policy-state-free and uses existing brand
   assert.doesNotMatch(moduleSource, /onSnapshot\s*\(/);
 });
 
-test("B1 Firestore Rules protect projection_accuracy from frontend writes on both roots", () => {
+test("B1 Firestore Rules protect projection_accuracy with brand-scoped reads and backend-only writes on both roots", () => {
   const rules = read("firestore.rules");
   assert.match(
     rules,
-    /match \/brands\/\{brandId\}\/projection_accuracy\/\{document=\*\*\} \{[\s\S]*?allow read: if signedIn\(\);[\s\S]*?allow write: if false;/
+    /match \/brands\/\{brandId\}\/projection_accuracy\/\{document=\*\*\} \{[\s\S]*?allow read: if sameBrandIdentity\(brandId\);[\s\S]*?allow write: if false;/
   );
   assert.match(
     rules,
-    /match \/artifacts\/\{appId\}\/public\/data\/projection_accuracy\/\{document=\*\*\} \{[\s\S]*?allow read: if signedIn\(\);[\s\S]*?allow write: if false;/
+    /match \/artifacts\/\{appId\}\/public\/data\/projection_accuracy\/\{document=\*\*\} \{[\s\S]*?allow read: if cyjLegacyIdentity\(appId\);[\s\S]*?allow write: if false;/
   );
   assert.equal((rules.match(/collectionName != 'projection_accuracy'/g) || []).length, 2);
   assert.match(
     rules,
-    /match \/brands\/\{brandId\}\/projection_accuracy_history\/\{document=\*\*\} \{[\s\S]*?allow read: if signedIn\(\);[\s\S]*?allow write: if false;/
+    /match \/brands\/\{brandId\}\/projection_accuracy_history\/\{document=\*\*\} \{[\s\S]*?allow read: if sameBrandIdentity\(brandId\);[\s\S]*?allow write: if false;/
   );
   assert.match(
     rules,
-    /match \/artifacts\/\{appId\}\/public\/data\/projection_accuracy_history\/\{document=\*\*\} \{[\s\S]*?allow read: if signedIn\(\);[\s\S]*?allow write: if false;/
+    /match \/artifacts\/\{appId\}\/public\/data\/projection_accuracy_history\/\{document=\*\*\} \{[\s\S]*?allow read: if cyjLegacyIdentity\(appId\);[\s\S]*?allow write: if false;/
   );
   assert.equal((rules.match(/collectionName != 'projection_accuracy_history'/g) || []).length, 2);
 });

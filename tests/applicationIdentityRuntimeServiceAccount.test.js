@@ -55,8 +55,8 @@ test("custom token authority remains allowed-only and fails closed if minting is
   );
 });
 
-test("dedicated runtime-SA incident fix does not advance Rules lockdown or app version", () => {
+test("dedicated runtime-SA remains intact after Rules claim enforcement and app version stays unchanged", () => {
   assert.match(app, /CURRENT_APP_VERSION\s*=\s*"3\.6\.0"/);
-  assert.match(rules, /function signedIn\(\)\s*\{\s*return request\.auth != null;/);
-  assert.doesNotMatch(rules, /request\.auth\.token\.drcyjIdentity/);
+  assert.match(rules, /function applicationIdentity\(\)/);
+  assert.match(rules, /request\.auth\.token\.drcyjIdentity == true/);
 });

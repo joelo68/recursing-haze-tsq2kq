@@ -270,9 +270,9 @@ test("Reporting Calendar uses month-scoped semantic revisions and a shared Summa
   assert.doesNotMatch(guardBlock, /store_lifecycle/);
 });
 
-test("Firestore rules make Store Lifecycle frontend-read-only on both physical roots", () => {
-  assert.match(rules, /match \/brands\/\{brandId\}\/store_lifecycle\/\{document=\*\*\}[\s\S]*?allow read: if signedIn\(\);[\s\S]*?allow write: if false;/);
-  assert.match(rules, /match \/artifacts\/\{appId\}\/public\/data\/store_lifecycle\/\{document=\*\*\}[\s\S]*?allow read: if signedIn\(\);[\s\S]*?allow write: if false;/);
+test("Firestore rules make Store Lifecycle brand-scoped frontend-read-only on both physical roots", () => {
+  assert.match(rules, /match \/brands\/\{brandId\}\/store_lifecycle\/\{document=\*\*\}[\s\S]*?allow read: if sameBrandIdentity\(brandId\);[\s\S]*?allow write: if false;/);
+  assert.match(rules, /match \/artifacts\/\{appId\}\/public\/data\/store_lifecycle\/\{document=\*\*\}[\s\S]*?allow read: if cyjLegacyIdentity\(appId\);[\s\S]*?allow write: if false;/);
   const exclusionCount = (rules.match(/collectionName != 'store_lifecycle'/g) || []).length;
   assert.equal(exclusionCount, 2);
 });

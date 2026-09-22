@@ -95,7 +95,9 @@ test("settings and therapist manager both stay on sanitized directory after admi
   assert.match(app, /trackReadSource\([\s\S]{0,120}"admin_therapist_master_record_backend"/);
 });
 
-test("directory cutover does not advance Rules lockdown or app version", () => {
-  assert.match(rules, /function signedIn\(\)\s*\{\s*return request\.auth != null;/);
+test("directory cutover remains compatible with the narrowed bootstrap Rules surface", () => {
+  assert.match(rules, /function anonymousBootstrap\(\)/);
+  assert.match(rules, /login_directory_summary/);
+  assert.match(rules, /anonymousBootstrap\(\) \|\| sameBrandIdentity\(brandId\)/);
   assert.match(app, /CURRENT_APP_VERSION\s*=\s*"3\.6\.0"/);
 });

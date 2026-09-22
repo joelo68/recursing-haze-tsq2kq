@@ -137,7 +137,7 @@ function makeEnv({ settingsData = {}, requestAuth, adminCheck } = {}) {
   };
 }
 
-test("B1C1B1 account authority is intentionally consumed by post-login director management while LoginView and Rules stay unchanged", () => {
+test("B1C1B1 account authority remains isolated while post-login management uses Application Identity Rules", () => {
   assert.equal(ACCOUNT_AUTHORITY_RUNTIME_SERVICE_ACCOUNT, "drcyj-account-authority@cyjsituation-analysis.iam.gserviceaccount.com");
   assert.match(backend, /const manageApplicationAccount = onRequest\(/);
   assert.match(backend, /verifySuperAdminActor\(\{ db, brandId, actor \}\)/);
@@ -149,7 +149,7 @@ test("B1C1B1 account authority is intentionally consumed by post-login director 
   assert.match(therapistManager, /manageApplicationAccountAction/);
   assert.match(therapistManager, /action:\s*"reveal_password"/);
   assert.match(app, /CURRENT_APP_VERSION\s*=\s*"3\.6\.0"/);
-  assert.doesNotMatch(rules, /request\.auth\.token\.drcyjIdentity/);
+  assert.match(rules, /function applicationIdentity\(\)[\s\S]{0,320}request\.auth\.token\.drcyjIdentity == true/);
 });
 
 

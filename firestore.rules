@@ -5,6 +5,48 @@ service cloud.firestore {
       return request.auth != null;
     }
 
+    // P0-FINAL-1C-2：Firebase Auth ready 不再等於 SaaS 資料權限。
+    // 正式營運資料必須使用 Backend 核發的 Application Identity Custom Claims。
+    function applicationIdentity() {
+      return signedIn()
+        && request.auth.token.drcyjIdentity == true
+        && request.auth.token.identityVersion == 'application-identity-v1'
+        && request.auth.token.brandId in ['cyj', 'anniu', 'yibo']
+        && request.auth.token.roleId in ['director', 'trainer', 'manager', 'store', 'therapist']
+        && request.auth.token.accountId is string
+        && request.auth.token.accountId.size() > 0;
+    }
+
+    function sameBrandIdentity(brandId) {
+      return applicationIdentity()
+        && request.auth.token.brandId == brandId;
+    }
+
+    function cyjApplicationIdentity() {
+      return applicationIdentity()
+        && request.auth.token.brandId == 'cyj';
+    }
+
+    function cyjLegacyIdentity(appId) {
+      return appId == 'default-app-id'
+        && cyjApplicationIdentity();
+    }
+
+    // 登入畫面使用 Firebase anonymous auth 作為極小 bootstrap surface。
+    function anonymousBootstrap() {
+      return signedIn()
+        && request.auth.token.firebase.sign_in_provider == 'anonymous';
+    }
+
+    // Pending device request 在 Custom Token 建立前只能由「建立這筆 request 的 anonymous UID」讀取。
+    // Custom Token 建立後則回到同品牌 Application Identity 規則。
+    function ownsBootstrapDeviceRequest() {
+      return signedIn()
+        && resource.data.bootstrapAuthUid is string
+        && resource.data.bootstrapAuthUid.size() > 0
+        && resource.data.bootstrapAuthUid == request.auth.uid;
+    }
+
     // 目前專案採匿名登入／自訂 Token 混合架構，因此 Rules 先負責：
     // 1. 代理資料結構驗證；2. 禁止硬刪；3. 禁止代理取得正式組織修改權限。
     // 真正的職級不可只信任前端欄位；日後若改用 Custom Claims，可再把 director/master 改為伺服器身分驗證。
@@ -53,53 +95,53 @@ service cloud.firestore {
         && data.updatedByRole in ['director', 'master'];
     }
 
-    // 品牌與 legacy 容器文件本身維持登入後存取。
+    // 品牌容器也必須綁定正式 Application Identity；不能由 anonymous bootstrap 穿透。
     match /brands/{brandId} {
-      allow read, write: if signedIn();
+      allow read, write: if sameBrandIdentity(brandId);
     }
 
     match /artifacts/{appId} {
-      allow read, write: if signedIn();
+      allow read, write: if cyjLegacyIdentity(appId);
     }
 
     match /artifacts/{appId}/public/{publicDoc} {
-      allow read, write: if signedIn();
+      allow read, write: if cyjLegacyIdentity(appId);
     }
 
     // 新品牌路徑：代理資料只能新增／更新，不允許刪除；歷史以 status=ended 保留。
     match /brands/{brandId}/management_delegations/{delegationId} {
-      allow read: if signedIn();
-      allow create, update: if signedIn() && validDelegation(request.resource.data);
+      allow read: if sameBrandIdentity(brandId);
+      allow create, update: if sameBrandIdentity(brandId) && validDelegation(request.resource.data);
       allow delete: if false;
     }
 
     // CYJ 舊版路徑。
     match /artifacts/{appId}/public/data/management_delegations/{delegationId} {
-      allow read: if signedIn();
-      allow create, update: if signedIn() && validDelegation(request.resource.data);
+      allow read: if cyjLegacyIdentity(appId);
+      allow create, update: if cyjLegacyIdentity(appId) && validDelegation(request.resource.data);
       allow delete: if false;
     }
 
     // 系統日誌禁止修改或刪除。
     match /brands/{brandId}/system_logs/{logId} {
-      allow create, read: if signedIn();
+      allow create, read: if sameBrandIdentity(brandId);
       allow update, delete: if false;
     }
 
     match /artifacts/{appId}/public/data/system_logs/{logId} {
-      allow create, read: if signedIn();
+      allow create, read: if cyjLegacyIdentity(appId);
       allow update, delete: if false;
     }
 
     // Device Approval v1：裝置信任與核准結果一律由 Cloud Functions 寫入。
     // 前端只保留必要讀取，避免新裝置自行把自己改成「已信任」。
     match /brands/{brandId}/account_devices/{document=**} {
-      allow read: if signedIn();
+      allow read: if sameBrandIdentity(brandId);
       allow write: if false;
     }
 
     match /brands/{brandId}/device_approval_requests/{requestId} {
-      allow read: if signedIn();
+      allow read: if sameBrandIdentity(brandId) || ownsBootstrapDeviceRequest();
       allow write: if false;
     }
 
@@ -108,17 +150,17 @@ service cloud.firestore {
     }
 
     match /brands/{brandId}/device_approval_inbox/{document=**} {
-      allow read: if signedIn();
+      allow read: if sameBrandIdentity(brandId);
       allow write: if false;
     }
 
     match /brands/{brandId}/security_alerts/{document=**} {
-      allow read: if signedIn();
+      allow read: if sameBrandIdentity(brandId);
       allow write: if false;
     }
 
     match /brands/{brandId}/security_summary/{document=**} {
-      allow read: if signedIn();
+      allow read: if sameBrandIdentity(brandId);
       allow write: if false;
     }
 
@@ -127,12 +169,12 @@ service cloud.firestore {
     }
 
     match /artifacts/{appId}/public/data/account_devices/{document=**} {
-      allow read: if signedIn();
+      allow read: if cyjLegacyIdentity(appId);
       allow write: if false;
     }
 
     match /artifacts/{appId}/public/data/device_approval_requests/{requestId} {
-      allow read: if signedIn();
+      allow read: if cyjLegacyIdentity(appId) || (appId == 'default-app-id' && ownsBootstrapDeviceRequest());
       allow write: if false;
     }
 
@@ -141,17 +183,17 @@ service cloud.firestore {
     }
 
     match /artifacts/{appId}/public/data/device_approval_inbox/{document=**} {
-      allow read: if signedIn();
+      allow read: if cyjLegacyIdentity(appId);
       allow write: if false;
     }
 
     match /artifacts/{appId}/public/data/security_alerts/{document=**} {
-      allow read: if signedIn();
+      allow read: if cyjLegacyIdentity(appId);
       allow write: if false;
     }
 
     match /artifacts/{appId}/public/data/security_summary/{document=**} {
-      allow read: if signedIn();
+      allow read: if cyjLegacyIdentity(appId);
       allow write: if false;
     }
 
@@ -172,24 +214,24 @@ service cloud.firestore {
     // Therapist Master v1：人員主檔可供已登入畫面讀取，但 Browser 不得直接修改。
     // 新增／修改／封存／還原／刪除一律經 manageTherapistMaster Backend authority。
     match /brands/{brandId}/therapists/{document=**} {
-      allow read: if signedIn();
+      allow read: if sameBrandIdentity(brandId);
       allow write: if false;
     }
 
     match /artifacts/{appId}/public/data/therapists/{document=**} {
-      allow read: if signedIn();
+      allow read: if cyjLegacyIdentity(appId);
       allow write: if false;
     }
 
     // Login Directory Summary v1：僅保存 sanitized 登入名單，不含 password / secret / token。
     // Browser 只讀；所有更新由 Backend Firestore triggers 維護。
     match /brands/{brandId}/login_directory_summary/{document=**} {
-      allow read: if signedIn();
+      allow read: if anonymousBootstrap() || sameBrandIdentity(brandId);
       allow write: if false;
     }
 
     match /artifacts/{appId}/public/data/login_directory_summary/{document=**} {
-      allow read: if signedIn();
+      allow read: if (appId == 'default-app-id' && anonymousBootstrap()) || cyjLegacyIdentity(appId);
       allow write: if false;
     }
 
@@ -200,34 +242,47 @@ service cloud.firestore {
     // Store Lifecycle v1：正式 KPI eligibility Master。
     // 前端只允許登入後讀取；所有寫入必須經過 Backend 的最高管理者再驗證與 transaction。
     match /brands/{brandId}/store_lifecycle/{document=**} {
-      allow read: if signedIn();
+      allow read: if sameBrandIdentity(brandId);
       allow write: if false;
     }
 
     match /artifacts/{appId}/public/data/store_lifecycle/{document=**} {
-      allow read: if signedIn();
+      allow read: if cyjLegacyIdentity(appId);
       allow write: if false;
     }
 
-    // Login Security Telegram / Master Credential 設定屬全品牌 Security authority。
-    // master_auth 含最高管理金鑰，Browser 一律不可讀寫；只能由 Backend authority 存取。
-    // 其餘一般 global_settings 維持既有登入後讀取與有限寫入相容。
+    // Login Security Telegram / Master Credential 設定屬 CYJ legacy Security authority。
+    // system_version 是全 App bootstrap metadata：anonymous 與任一正式 Application Identity 可讀；
+    // Browser 更新 system_version 仍保留給正式 Application Identity，角色 writer 收斂留在 1D。
+    // 其他 CYJ global_settings 必須是 CYJ Application Identity。
     match /artifacts/{appId}/public/data/global_settings/{settingId} {
-      allow read: if signedIn()
-        && settingId != 'master_auth'
-        && settingId != 'director_auth'
-        && settingId != 'trainer_auth'
-        && settingId != 'manager_auth'
-        && settingId != 'store_account_data';
-      allow write: if signedIn()
-        && settingId != 'telegram_security_alerts'
-        && settingId != 'audit_exclusions'
-        && settingId != 'permissions'
-        && settingId != 'master_auth'
-        && settingId != 'director_auth'
-        && settingId != 'trainer_auth'
-        && settingId != 'manager_auth'
-        && settingId != 'store_account_data';
+      allow read: if appId == 'default-app-id' && (
+        (settingId == 'system_version' && (anonymousBootstrap() || applicationIdentity()))
+        || (
+          settingId != 'system_version'
+          && cyjApplicationIdentity()
+          && settingId != 'master_auth'
+          && settingId != 'director_auth'
+          && settingId != 'trainer_auth'
+          && settingId != 'manager_auth'
+          && settingId != 'store_account_data'
+        )
+      );
+      allow write: if appId == 'default-app-id' && (
+        (settingId == 'system_version' && applicationIdentity())
+        || (
+          settingId != 'system_version'
+          && cyjApplicationIdentity()
+          && settingId != 'telegram_security_alerts'
+          && settingId != 'audit_exclusions'
+          && settingId != 'permissions'
+          && settingId != 'master_auth'
+          && settingId != 'director_auth'
+          && settingId != 'trainer_auth'
+          && settingId != 'manager_auth'
+          && settingId != 'store_account_data'
+        )
+      );
     }
 
     // Admin Credential Writer Retirement：所有含登入密碼的設定文件改由 Backend authority 存取。
@@ -251,7 +306,7 @@ service cloud.firestore {
     // Module Permissions v1：模組權限為 Security authority。
     // 前端只讀；所有修改必須經 Backend 的最高管理者、Trusted Device、credential 與 revision OCC。
     match /brands/{brandId}/settings/permissions {
-      allow read: if signedIn();
+      allow read: if sameBrandIdentity(brandId);
       allow write: if false;
     }
 
@@ -263,24 +318,24 @@ service cloud.firestore {
     // System Exclusion v1：正式營運 scope authority。
     // 前端只讀；所有修改必須經 Backend 的最高管理者、Trusted Device、credential 與 revision OCC。
     match /brands/{brandId}/settings/audit_exclusions {
-      allow read: if signedIn();
+      allow read: if sameBrandIdentity(brandId);
       allow write: if false;
     }
 
     match /artifacts/{appId}/public/data/global_settings/audit_exclusions {
-      allow read: if signedIn();
+      allow read: if cyjLegacyIdentity(appId);
       allow write: if false;
     }
 
     // Projection Model v1：Backend-only derived authority。
     // 前端僅登入後讀取；所有寫入由 Functions Admin SDK 執行。
     match /brands/{brandId}/projection_models/{document=**} {
-      allow read: if signedIn();
+      allow read: if sameBrandIdentity(brandId);
       allow write: if false;
     }
 
     match /artifacts/{appId}/public/data/projection_models/{document=**} {
-      allow read: if signedIn();
+      allow read: if cyjLegacyIdentity(appId);
       allow write: if false;
     }
 
@@ -288,42 +343,42 @@ service cloud.firestore {
     // Projection Accuracy v1：Backend-only checkpoint evidence。
     // 前端僅登入後讀取；checkpoint / finalizer 寫入一律由 Functions Admin SDK 執行。
     match /brands/{brandId}/projection_accuracy/{document=**} {
-      allow read: if signedIn();
+      allow read: if sameBrandIdentity(brandId);
       allow write: if false;
     }
 
     match /artifacts/{appId}/public/data/projection_accuracy/{document=**} {
-      allow read: if signedIn();
+      allow read: if cyjLegacyIdentity(appId);
       allow write: if false;
     }
 
     // Projection Accuracy History v1：Backend-only 年度輕量比較摘要。
     // 僅保存已完成且可同口徑比較的月份；前端登入後唯讀。
     match /brands/{brandId}/projection_accuracy_history/{document=**} {
-      allow read: if signedIn();
+      allow read: if sameBrandIdentity(brandId);
       allow write: if false;
     }
 
     match /artifacts/{appId}/public/data/projection_accuracy_history/{document=**} {
-      allow read: if signedIn();
+      allow read: if cyjLegacyIdentity(appId);
       allow write: if false;
     }
 
     // Smart Forecast B3B Projection Context：營運情境 authority。
     // 前端登入後只讀；所有寫入由最高管理者安全 Backend writer 執行。
     match /brands/{brandId}/projection_context/{document=**} {
-      allow read: if signedIn();
+      allow read: if sameBrandIdentity(brandId);
       allow write: if false;
     }
 
     match /artifacts/{appId}/public/data/projection_context/{document=**} {
-      allow read: if signedIn();
+      allow read: if cyjLegacyIdentity(appId);
       allow write: if false;
     }
 
     // 既有品牌資料維持原本登入後可讀寫；排除上方受保護集合，避免寬鬆規則覆蓋。
     match /brands/{brandId}/{collectionName}/{document=**} {
-      allow read, write: if signedIn()
+      allow read, write: if sameBrandIdentity(brandId)
         && collectionName != 'management_delegations'
         && collectionName != 'system_logs'
         && collectionName != 'account_devices'
@@ -350,7 +405,7 @@ service cloud.firestore {
     }
 
     match /artifacts/{appId}/public/data/{collectionName}/{document=**} {
-      allow read, write: if signedIn()
+      allow read, write: if cyjLegacyIdentity(appId)
         && collectionName != 'management_delegations'
         && collectionName != 'system_logs'
         && collectionName != 'account_devices'
@@ -371,9 +426,10 @@ service cloud.firestore {
         && collectionName != 'global_settings';
     }
 
-    // 其他既有根集合維持登入後存取；brands / artifacts 已由上方專屬規則處理。
+    // 其他既有根集合屬全域相容 surface：至少必須是正式 Application Identity。
+    // 更細的角色／writer authority 收斂留在 P0-FINAL-1D。
     match /{topLevel}/{document=**} {
-      allow read, write: if signedIn()
+      allow read, write: if applicationIdentity()
         && topLevel != 'brands'
         && topLevel != 'artifacts';
     }

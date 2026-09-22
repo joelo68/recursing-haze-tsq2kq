@@ -172,9 +172,9 @@ test("Backend wiring replaces legacy brands/cyj projection curve worker", () => 
   assert.doesNotMatch(source, /setInterval\s*\(/);
 });
 
-test("Projection model Rules are signed-in read and backend-only write on both roots", () => {
+test("Projection model Rules are brand-scoped read and backend-only write on both roots", () => {
   const rules = read("firestore.rules");
-  assert.match(rules, /match \/brands\/\{brandId\}\/projection_models\/\{document=\*\*\} \{[\s\S]*?allow read: if signedIn\(\);[\s\S]*?allow write: if false;/);
-  assert.match(rules, /match \/artifacts\/\{appId\}\/public\/data\/projection_models\/\{document=\*\*\} \{[\s\S]*?allow read: if signedIn\(\);[\s\S]*?allow write: if false;/);
+  assert.match(rules, /match \/brands\/\{brandId\}\/projection_models\/\{document=\*\*\} \{[\s\S]*?allow read: if sameBrandIdentity\(brandId\);[\s\S]*?allow write: if false;/);
+  assert.match(rules, /match \/artifacts\/\{appId\}\/public\/data\/projection_models\/\{document=\*\*\} \{[\s\S]*?allow read: if cyjLegacyIdentity\(appId\);[\s\S]*?allow write: if false;/);
   assert.ok((rules.match(/collectionName != 'projection_models'/g) || []).length >= 2);
 });

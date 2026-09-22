@@ -295,8 +295,10 @@ test("B1C2C1 frontend consumes sanitized directory while application session cut
   assert.match(app, /CURRENT_APP_VERSION\s*=\s*"3\.6\.0"/);
 });
 
-test("P0-B1A does not tighten Firestore Rules before frontend credential retirement", () => {
-  assert.match(rules, /function signedIn\(\)\s*\{\s*return request\.auth != null;/);
+test("P0-FINAL-1C-2 preserves the identity foundation and enforces brand claims in broad rules", () => {
+  assert.match(rules, /function applicationIdentity\(\)/);
+  assert.match(rules, /request\.auth\.token\.drcyjIdentity == true/);
+  assert.match(rules, /request\.auth\.token\.identityVersion == 'application-identity-v1'/);
   assert.match(rules, /match \/brands\/\{brandId\}\/\{collectionName\}\/\{document=\*\*\}/);
-  assert.match(rules, /allow read, write:\s*if signedIn\(\)/);
+  assert.match(rules, /allow read, write:\s*if sameBrandIdentity\(brandId\)/);
 });

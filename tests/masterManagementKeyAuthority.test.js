@@ -73,7 +73,7 @@ test("Firestore Rules block browser access to master_auth for legacy and new-bra
     rules,
     /match \/brands\/\{brandId\}\/settings\/master_auth\s*\{\s*allow read, write:\s*if false;/,
   );
-  assert.match(rules, /allow read:\s*if signedIn\(\)[\s\S]{0,260}settingId != 'master_auth'/);
+  assert.match(rules, /match \/artifacts\/\{appId\}\/public\/data\/global_settings\/\{settingId\}[\s\S]{0,520}&& cyjApplicationIdentity\(\)[\s\S]{0,180}&& settingId != 'master_auth'/);
   assert.match(rules, /settingId != 'master_auth'/);
   assert.match(rules, /!\(collectionName == 'settings' && document == 'master_auth'\)/);
 });

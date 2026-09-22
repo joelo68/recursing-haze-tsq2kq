@@ -478,7 +478,7 @@ test("B2C.1 historical backtest stays immutable and separate from rolling Firest
   assert.match(uiSource, /不會補寫成過去的單月追蹤紀錄/);
 });
 
-test("B2B Accuracy contracts stay aligned with B2A writer and existing frontend-read-only Rules", () => {
+test("B2B Accuracy contracts stay aligned with B2A writer and brand-scoped frontend-read-only Rules", () => {
   const backend = read("functions/projectionAccuracy.js");
   const rules = read("firestore.rules");
 
@@ -489,19 +489,19 @@ test("B2B Accuracy contracts stay aligned with B2A writer and existing frontend-
 
   assert.match(
     rules,
-    /match \/brands\/\{brandId\}\/projection_accuracy\/\{document=\*\*\} \{[\s\S]*?allow read: if signedIn\(\);[\s\S]*?allow write: if false;/
+    /match \/brands\/\{brandId\}\/projection_accuracy\/\{document=\*\*\} \{[\s\S]*?allow read: if sameBrandIdentity\(brandId\);[\s\S]*?allow write: if false;/
   );
   assert.match(
     rules,
-    /match \/artifacts\/\{appId\}\/public\/data\/projection_accuracy\/\{document=\*\*\} \{[\s\S]*?allow read: if signedIn\(\);[\s\S]*?allow write: if false;/
+    /match \/artifacts\/\{appId\}\/public\/data\/projection_accuracy\/\{document=\*\*\} \{[\s\S]*?allow read: if cyjLegacyIdentity\(appId\);[\s\S]*?allow write: if false;/
   );
   assert.match(
     rules,
-    /match \/brands\/\{brandId\}\/projection_accuracy_history\/\{document=\*\*\} \{[\s\S]*?allow read: if signedIn\(\);[\s\S]*?allow write: if false;/
+    /match \/brands\/\{brandId\}\/projection_accuracy_history\/\{document=\*\*\} \{[\s\S]*?allow read: if sameBrandIdentity\(brandId\);[\s\S]*?allow write: if false;/
   );
   assert.match(
     rules,
-    /match \/artifacts\/\{appId\}\/public\/data\/projection_accuracy_history\/\{document=\*\*\} \{[\s\S]*?allow read: if signedIn\(\);[\s\S]*?allow write: if false;/
+    /match \/artifacts\/\{appId\}\/public\/data\/projection_accuracy_history\/\{document=\*\*\} \{[\s\S]*?allow read: if cyjLegacyIdentity\(appId\);[\s\S]*?allow write: if false;/
   );
   assert.equal((rules.match(/collectionName != 'projection_accuracy_history'/g) || []).length, 2);
 });

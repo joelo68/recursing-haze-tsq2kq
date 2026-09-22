@@ -285,7 +285,7 @@ function makeEnv({
   };
 }
 
-test("B1C2C2 cuts therapist master management over to the existing Account Authority runtime", () => {
+test("B1C2C2 cuts therapist master management over to the existing Account Authority runtime under Application Identity Rules", () => {
   assert.equal(THERAPIST_MASTER_AUTHORITY_VERSION, "therapist-master-authority-v1");
   assert.match(functionsIndex, /exports\.manageTherapistMaster\s*=\s*therapistMasterAuthorityFunctions\.manageTherapistMaster/);
   assert.match(functionsIndex, /runtimeServiceAccount:\s*ACCOUNT_AUTHORITY_RUNTIME_SERVICE_ACCOUNT/);
@@ -298,7 +298,7 @@ test("B1C2C2 cuts therapist master management over to the existing Account Autho
   assert.match(managerView, /action:\s*"reveal_password"/);
   assert.doesNotMatch(settings, /getCollectionPath\("therapists"\)|therapists_DISABLED|handleAddTherapist|handleDeleteTherapist/);
   assert.match(app, /CURRENT_APP_VERSION\s*=\s*"3\.6\.0"/);
-  assert.doesNotMatch(rules, /request\.auth\.token\.drcyjIdentity/);
+  assert.match(rules, /function applicationIdentity\(\)[\s\S]{0,320}request\.auth\.token\.drcyjIdentity == true/);
 });
 
 test("list returns signed sanitized therapist master rows without credential material or transaction writes", async () => {

@@ -135,10 +135,10 @@ test("current signed-in director cannot rename demote disable or delete itself",
   assert.equal(writes, 0);
 });
 
-test("director incident fix keeps app version while master_auth is now explicitly backend-only", () => {
+test("director incident fix keeps app version while master_auth stays backend-only under Application Identity Rules", () => {
   assert.match(app, /CURRENT_APP_VERSION\s*=\s*"3\.6\.0"/);
   assert.match(rules, /function signedIn\(\)\s*\{\s*return request\.auth != null;/);
-  assert.doesNotMatch(rules, /request\.auth\.token\.drcyjIdentity/);
+  assert.match(rules, /function applicationIdentity\(\)[\s\S]{0,320}request\.auth\.token\.drcyjIdentity == true/);
   assert.match(rules, /match \/brands\/\{brandId\}\/settings\/master_auth\s*\{\s*allow read, write:\s*if false;/);
   assert.match(rules, /settingId != 'master_auth'/);
   assert.match(backend, /serviceAccount:\s*ACCOUNT_AUTHORITY_RUNTIME_SERVICE_ACCOUNT/);

@@ -214,7 +214,7 @@ test("manager organization authority is now the sole Settings writer for manager
   assert.match(settings, /const handleAddManager[\s\S]{0,500}runManagerOrganizationAction\(\{[\s\S]{0,160}action:\s*"create"/);
   assert.doesNotMatch(settings, /setDoc\(getDocPath\("manager_auth"\)/);
   assert.match(app, /CURRENT_APP_VERSION\s*=\s*"3\.6\.0"/);
-  assert.doesNotMatch(rules, /request\.auth\.token\.drcyjIdentity/);
+  assert.match(rules, /request\.auth\.token\.drcyjIdentity == true/);
 });
 
 test("manager organization authority rejects unknown brand before a transaction", async () => {

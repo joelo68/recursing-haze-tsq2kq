@@ -49,9 +49,11 @@ test("P0-FINAL-1C-1 binds every pending device request to its verified Firebase 
   assert.match(deviceApproval, /bootstrapAuthUid:\s*normalizedBootstrapAuthUid/);
 });
 
-test("P0-FINAL-1C-1 does not advance Rules lockdown or app version", () => {
-  assert.match(rules, /function signedIn\(\)\s*\{\s*return request\.auth != null;/);
-  assert.doesNotMatch(rules, /request\.auth\.token/);
+test("P0-FINAL-1C-1 bootstrap ownership is consumed by 1C-2 Rules without changing app version", () => {
+  assert.match(rules, /function applicationIdentity\(\)/);
+  assert.match(rules, /function ownsBootstrapDeviceRequest\(\)/);
+  assert.match(rules, /resource\.data\.bootstrapAuthUid == request\.auth\.uid/);
+  assert.match(rules, /function anonymousBootstrap\(\)/);
   assert.match(app, /const CURRENT_APP_VERSION = "3\.6\.0";/);
 });
 

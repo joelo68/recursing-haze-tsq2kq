@@ -85,7 +85,7 @@ function makeFactory({ dataBySetting = {}, therapistData = {}, therapistCredenti
   return { factory, settingRefs, collectionRefs, collectionRef: refForCollection, writes, get transactionCount() { return transactionCount; } };
 }
 
-test("B1C1A keeps a separate runtime authority while B1C2C1 explicitly cuts first-login password updates over to it", () => {
+test("B1C1A keeps a separate runtime authority while B1C2C1 password cutover remains compatible with Application Identity Rules", () => {
   assert.equal(ACCOUNT_AUTHORITY_RUNTIME_SERVICE_ACCOUNT, "drcyj-account-authority@cyjsituation-analysis.iam.gserviceaccount.com");
   assert.match(backend, /serviceAccount:\s*ACCOUNT_AUTHORITY_RUNTIME_SERVICE_ACCOUNT/);
   assert.doesNotMatch(backend, /drcyj-application-identity@/);
@@ -97,7 +97,7 @@ test("B1C1A keeps a separate runtime authority while B1C2C1 explicitly cuts firs
   assert.match(app, /onChangeApplicationPassword=\{changeApplicationPassword\}/);
   assert.match(app, /CURRENT_APP_VERSION\s*=\s*"3\.6\.0"/);
   assert.match(rules, /function signedIn\(\)\s*\{\s*return request\.auth != null;/);
-  assert.doesNotMatch(rules, /request\.auth\.token\.drcyjIdentity/);
+  assert.match(rules, /function applicationIdentity\(\)[\s\S]{0,320}request\.auth\.token\.drcyjIdentity == true/);
 });
 test("role data adapters update only password-bearing account data while preserving neighboring fields", () => {
   const now = "2026-09-12T08:00:00.000Z";
