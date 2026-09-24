@@ -1,0 +1,101 @@
+name: CI Validation Gate
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-validation-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  core-validation:
+    name: Core validation
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Use Node.js 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: |
+            package-lock.json
+            functions/package-lock.json
+
+      - name: Install frontend dependencies
+        run: npm ci
+
+      - name: Install Functions dependencies
+        run: npm ci --prefix functions
+
+      - name: Commit-range whitespace gate
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          PUSH_BASE_SHA: ${{ github.event.before }}
+        run: |
+          set -euo pipefail
+          BASE_SHA=""
+
+          if [ "$EVENT_NAME" = "pull_request" ]; then
+            BASE_SHA="${PR_BASE_SHA:-}"
+          elif [ "$EVENT_NAME" = "push" ]; then
+            BASE_SHA="${PUSH_BASE_SHA:-}"
+          fi
+
+          if [ -n "$BASE_SHA" ] && [ "$BASE_SHA" != "0000000000000000000000000000000000000000" ]; then
+            git diff --check "$BASE_SHA"...HEAD
+          elif git rev-parse HEAD^ >/dev/null 2>&1; then
+            git diff --check HEAD^ HEAD
+          else
+            git diff --check
+          fi
+
+      - name: Full source, regression and build gate
+        run: npm run ci:validate
+
+  firestore-rules-emulator:
+    name: Firestore Rules emulator
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@v4
+
+      - name: Use Node.js 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: |
+            package-lock.json
+            functions/package-lock.json
+
+      - name: Use Java 21
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "21"
+
+      - name: Install frontend dependencies
+        run: npm ci
+
+      - name: Install Functions dependencies
+        run: npm ci --prefix functions
+
+      - name: Run all Firestore Rules emulator tests
+        run: npm run ci:rules

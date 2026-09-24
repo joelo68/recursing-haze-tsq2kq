@@ -10,7 +10,9 @@
     "lint": "eslint .",
     "preview": "vite preview",
     "predeploy": "npm run build",
-    "deploy": "npm run build && gh-pages -d dist"
+    "deploy": "npm run build && gh-pages -d dist",
+    "ci:validate": "node scripts/ci-validate.mjs",
+    "ci:rules": "npx --yes firebase-tools@15.30.2 emulators:exec --project cyjsituation-analysis --only firestore,auth \"node --test --test-concurrency=1 tests/*RulesEmulator.test.mjs\""
   },
   "dependencies": {
     "class-variance-authority": "^0.7.1",
