@@ -1,5 +1,69 @@
 # DEPLOYMENT.md
 
+# P0 Authority Cutover Deployment Order Override — 2026-09-24
+
+當安全改版同時符合以下條件：
+
+```text
+old Frontend = 仍直接寫某 Firestore path
+new Frontend = 改走 Backend authority
+new Rules    = 將該 Browser write 關閉
+```
+
+不得機械式使用固定「Backend → Rules → Frontend」順序；若 Rules 先鎖，舊 Frontend 會在 rollout window 暫時失去寫入能力。
+
+A2-2 驗證過的安全順序：
+
+```text
+1. deploy Backend authority
+2. confirm Backend ACTIVE
+3. deploy new Frontend
+4. confirm live asset convergence
+5. Production UI smoke through Backend
+6. deploy Firestore Rules lockdown
+7. active Rules release / source readback
+8. final post-Rules Production UI smoke
+```
+
+本次正式 deploy：
+
+```bash
+firebase deploy \
+  --project cyjsituation-analysis \
+  --only functions:manageManagementDelegation
+
+npm run deploy
+
+firebase deploy \
+  --project cyjsituation-analysis \
+  --only firestore:rules
+```
+
+只部署真正異動 runtime；不得改成 blanket `firebase deploy`。
+
+Rules deployment 與 Rules readback 是兩個不同 evidence：
+
+```text
+firebase deploy 顯示 compiled / released / Deploy complete
+→ Rules 已發布
+
+active release/source readback
+→ 額外確認 live Rules 與 repository source 一致
+```
+
+若 readback API 因本機 OAuth quota-project / API access 失敗，不可把它誤判成「Rules deploy 沒有成功」；應補 readback verification，不重複部署已成功 release 的 Rules。
+
+A2-2 runtime anchors：
+
+```text
+runtime source commit = 6c0ea5104d4b75927c2b58edd9cfa37113476c6f
+production gh-pages   = 918ef50f364801eb0f4882ce2b08706259f75672
+active ruleset        = projects/cyjsituation-analysis/rulesets/aca6332c-620d-4b89-87a7-e6cde6b62475
+CURRENT_APP_VERSION   = 3.6.0
+```
+
+---
+
 > 本文件分成「目前 source 可確認的部署設定」與「不可由目前 repository 確認的項目」。  
 > 不把過去聊天中的部署習慣自動當成 repository 事實。
 

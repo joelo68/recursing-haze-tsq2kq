@@ -1,5 +1,85 @@
 # ARCHITECTURE.md
 
+# P0 Security Authority Architecture Override — 2026-09-24
+
+P0 完成後，管理性資料寫入採「Frontend intent → Backend authority → transaction → Rules deny Browser bypass」架構。
+
+```text
+Browser / PWA
+   │
+   ├─ Application Identity session
+   │
+   ▼
+App secure action wrapper
+   │
+   ├─ Organization
+   │    └─ manageManagerOrganization
+   │
+   └─ Delegation
+        └─ manageManagementDelegation
+             │
+             ├─ Firebase request auth
+             ├─ server-issued director claims
+             ├─ highest-admin re-verification
+             ├─ Trusted Device
+             ├─ current credential
+             ├─ brand resolver
+             └─ Firestore transaction
+```
+
+Organization authority：
+
+```text
+functions/managerOrganizationAuthority.js
+→ org_structure + manager/store credential-related authoritative mutations
+→ semantic OCC / transaction
+→ Browser org_structure writes retired
+```
+
+Delegation authority：
+
+```text
+functions/managementDelegationAuthority.js
+→ create / update / end
+→ existing delegation-v1 business document semantics preserved
+→ brand-level shared authority-state serialization
+→ overlap validation across different delegation IDs
+→ semantic snapshot OCC
+→ maintenance/system audit in authoritative flow
+```
+
+Rules boundary：
+
+```text
+management_delegations
+→ same-brand Application Identity read
+→ frontend write = false
+
+management_delegation_authority
+→ frontend read/write = false
+```
+
+Read topology：
+
+```text
+new frontend listener = 0
+new polling           = 0
+new broad persistent query = 0
+```
+
+因此 P0 的安全強化是 writer / authority architecture cutover，不是用額外常駐讀取換取一致性。
+
+Production runtime：
+
+```text
+runtime commit      = 6c0ea5104d4b75927c2b58edd9cfa37113476c6f
+gh-pages            = 918ef50f364801eb0f4882ce2b08706259f75672
+CURRENT_APP_VERSION = 3.6.0
+P0                  = CLOSED
+```
+
+---
+
 # B1C2E / Therapist Credential Architecture Override — 2026-09-15
 
 正式 Production lineage：

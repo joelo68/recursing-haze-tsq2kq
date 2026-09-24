@@ -1,5 +1,78 @@
 # SYSTEM_SOURCE_MAP.md
 
+# P0 Security Authority Source Override — 2026-09-24
+
+正式 runtime anchor：
+
+```text
+Production runtime commit    = 6c0ea5104d4b75927c2b58edd9cfa37113476c6f
+Frontend Production gh-pages = 918ef50f364801eb0f4882ce2b08706259f75672
+CURRENT_APP_VERSION          = 3.6.0
+P0                            = CLOSED
+```
+
+目前 Organization / Delegation 正式 owner：
+
+```text
+functions/managerOrganizationAuthority.js
+  → manager / store / org_structure mutation authority
+  → restore / assignment race protection
+
+functions/managementDelegationAuthority.js
+  → management delegation create / update / end authority
+  → cross-ID overlap guard
+  → shared brand mutation serialization
+  → semantic OCC
+
+functions/index.js
+  → exports manageManagementDelegation
+
+src/App.jsx
+  → secure management-delegation endpoint wrapper
+  → trusted admin session / brand anchoring
+
+src/components/SettingsView.jsx
+  → delegation UX
+  → no direct delegation / delegation-audit Firestore writer
+
+firestore.rules
+  → management_delegations same-brand read
+  → Browser write deny
+  → management_delegation_authority frontend deny
+```
+
+A2-2 regression owners：
+
+```text
+tests/managementDelegationAuthority.test.js
+tests/managementDelegationRulesEmulator.test.mjs
+tests/managementDelegationWriterRetirement.test.js
+```
+
+A2-1 regression owners仍保留：
+
+```text
+tests/managerOrganizationAuthority.test.js
+tests/managerOrganizationRulesEmulator.test.mjs
+tests/orgStructureWriterRetirement.test.js
+```
+
+Physical path contract：
+
+```text
+CYJ legacy root
+artifacts/default-app-id/public/data/{collection}
+
+standard brand root
+brands/{brandId}/{collection}
+```
+
+`management_delegation_authority/state` 是 Backend-only mutation coordination surface；不得成為一般 Frontend consumer、listener 或 polling source。
+
+若下方較早 source-map 章節仍描述 Browser 可直接寫 `org_structure` 或 `management_delegations`，均屬歷史狀態。
+
+---
+
 # Repository Canonical Documentation Entry Override — 2026-09-15
 
 Repository documentation ownership：

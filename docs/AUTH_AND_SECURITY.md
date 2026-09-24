@@ -1,5 +1,105 @@
 # AUTH_AND_SECURITY.md
 
+# P0 Administrative Authority Security Override — 2026-09-24
+
+P0 已完成 Browser administrative writer retirement 與 Rules 收口。
+
+## Application Identity Boundary
+
+正式管理資料權限不以單純 Firebase signed-in 作為 authority；Rules / Backend 使用 server-issued Application Identity 的 brand / role / account 身份，管理性 mutation 另外要求高階管理者安全鏈。
+
+## Organization Mutation
+
+```text
+Frontend intent
+→ manageManagerOrganization
+→ authenticated director identity
+→ highest-admin / Trusted Device / credential verification
+→ transaction / OCC
+→ Backend write
+```
+
+`org_structure` 與對應 restore / mutation surface 不再接受 Browser 直接寫入。
+
+## Management Delegation Mutation
+
+```text
+Frontend intent
+→ manageManagementDelegation
+→ POST only
+→ Firebase request auth
+→ server-issued director Application Identity
+→ highest-admin verification
+→ Trusted Device
+→ current credential re-verification
+→ brand-scoped transaction
+```
+
+正式 action：
+
+```text
+create
+update
+end
+```
+
+安全要求：
+
+```text
+same-brand principal / delegate identity
+authorized store scope
+no self-delegation
+valid date range / scope
+editOrganization = false
+semantic OCC on update/end
+overlap protection across different delegation IDs
+```
+
+多最高管理者同時寫入時，以 Backend-only `management_delegation_authority/state` 作 brand mutation serialization surface；不得依賴 Browser 先查後寫避免 race。
+
+## Rules Boundary
+
+兩套 physical roots：
+
+```text
+brands/{brandId}/management_delegations/{delegationId}
+artifacts/{appId}/public/data/management_delegations/{delegationId}
+```
+
+正式 Rules：
+
+```text
+read  = same-brand Application Identity
+write = false from Browser
+```
+
+Backend-only authority state：
+
+```text
+brands/{brandId}/management_delegation_authority/state
+artifacts/{appId}/public/data/management_delegation_authority/state
+```
+
+Frontend read/write 均不得作為 authority。
+
+## Audit / Secret Boundary
+
+Delegation mutation 的 audit 與正式 mutation 在 Backend authority 流程內產生；Browser 不再另寫 delegation maintenance log。Audit 不保存 submitted password、token 或其他 secret material。
+
+## Production Evidence
+
+```text
+Backend function ACTIVE / Node.js 22
+Frontend Production release confirmed
+Firestore Rules active release + source match confirmed
+pre-Rules create/update/end smoke = PASS
+post-Rules create/update/end smoke = PASS
+CURRENT_APP_VERSION = 3.6.0 unchanged
+P0 = CLOSED
+```
+
+---
+
 # Therapist Credential Separation / Legacy Retirement Security Override — 2026-09-15
 
 正式 Production lineage：

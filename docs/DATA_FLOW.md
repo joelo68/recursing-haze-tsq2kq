@@ -1,5 +1,74 @@
 # DATA_FLOW.md
 
+# P0 Organization / Management Delegation Secure Flow Override — 2026-09-24
+
+## Organization mutation flow
+
+```text
+highest admin UI
+→ App secure organization action
+→ manageManagerOrganization
+→ Application Identity + Trusted Device + credential verification
+→ Firestore transaction / OCC
+→ org_structure / required credential & audit mutations
+```
+
+Browser direct `org_structure` mutation 已退役。
+
+## Management delegation read flow
+
+```text
+App / Settings
+→ existing brand-scoped management_delegations reads
+→ normalize / resolve active delegation
+→ Dashboard / Daily / History / Input / Audit / Telegram consumers
+```
+
+A2-2 不新增 realtime listener、polling 或 broad persistent query。
+
+## Management delegation write flow
+
+```text
+highest admin
+→ Settings create / update / end
+→ App.manageManagementDelegationAction
+→ manageManagementDelegation
+   ├─ Firebase request auth
+   ├─ server-issued director identity
+   ├─ highest-admin / Trusted Device / credential
+   ├─ brand resolver
+   └─ Firestore transaction
+        ├─ authority state
+        ├─ org_structure
+        ├─ store account scope
+        ├─ target delegation
+        ├─ active/scheduled overlap check when required
+        ├─ delegation write
+        └─ maintenance/system audit
+```
+
+Stale administrator intent：
+
+```text
+semantic snapshot mismatch
+→ HTTP 409
+→ Frontend refreshes current delegation
+→ operator reviews again
+```
+
+因此不做 silent last-write-wins。
+
+Brand isolation：
+
+```text
+CYJ → artifacts/default-app-id/public/data
+安妞 / 伊啵 → brands/{brandId}
+```
+
+P0 完成後，Rules 阻止 Browser 直接繞過上述 Backend flow。
+
+---
+
 # B1C2E / Therapist Credential Flow Override — 2026-09-15
 
 正式 Production lineage：

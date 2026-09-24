@@ -1,5 +1,98 @@
 # DEVELOPMENT_GUIDE.md
 
+# P0 Administrative Writer Guardrails — 2026-09-24
+
+P0 CLOSED 後，未來修改 Organization / Management Delegation 時必須保留以下 guardrail。
+
+## 禁止恢復 Browser authority
+
+不得重新加入：
+
+```text
+Frontend direct org_structure writer
+Frontend direct management_delegations create/update/end
+Frontend direct delegation maintenance-log writer
+Frontend write to management_delegation_authority
+```
+
+UI 的 `role`、disabled button 或 hidden control 都不能取代 Backend authorization。
+
+## 正式 owners
+
+```text
+Organization
+→ functions/managerOrganizationAuthority.js
+
+Management Delegation
+→ functions/managementDelegationAuthority.js
+
+Frontend intent
+→ src/App.jsx
+→ src/components/SettingsView.jsx
+
+Enforcement
+→ firestore.rules
+```
+
+## Multi-admin safety
+
+任何會跨 document / delegation ID 競爭的改動，都必須重新檢查：
+
+```text
+transaction boundary
+semantic OCC
+shared mutation serialization
+overlap / duplicate ownership rule
+stale-client 409 behavior
+```
+
+不得用「Frontend 先 query 再 write」當作 race protection。
+
+## Brand isolation
+
+每次修改都要同時驗證：
+
+```text
+CYJ legacy path
+artifacts/default-app-id/public/data/...
+
+安妞 / 伊啵
+brands/{brandId}/...
+```
+
+不得硬編單一品牌，也不得為特定店家加例外。
+
+## Read-cost guardrail
+
+Management Delegation mutation 可使用 bounded、event-driven backend reads；不得因此新增：
+
+```text
+frontend polling
+new persistent broad listener
+per-store listener fan-out
+```
+
+## Minimum regression
+
+```bash
+node --test \
+  tests/managementDelegationAuthority.test.js \
+  tests/managementDelegationWriterRetirement.test.js \
+  tests/managerOrganizationAuthority.test.js \
+  tests/orgStructureWriterRetirement.test.js
+```
+
+Rules 改動另跑：
+
+```text
+tests/managementDelegationRulesEmulator.test.mjs
+tests/managerOrganizationRulesEmulator.test.mjs
+```
+
+Frontend 有改仍需 `npm run build`；只有 docs-only closeout 不需要 runtime build。
+
+---
+
 # 2026-09-15 Formal Readiness / Therapist Credential Guardrails
 
 正式 Production lineage：

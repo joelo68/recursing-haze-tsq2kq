@@ -1,5 +1,124 @@
 # CURRENT_STATE.md
 
+# P0 Security Authority Final Closeout — 2026-09-24
+
+> 本節是目前最高優先的 Security authority / administrative mutation 狀態。P0 已完成 Production closeout。較早 Security 章節保留歷史 evidence；若 Browser writer、Application Identity、Organization／Delegation authority、Rules 或 runtime lineage 與本節衝突，以目前正式 source、Production deployment 與本節為準。
+
+正式 Production lineage：
+
+```text
+Official repo                     = ~/cyj-new
+Production runtime commit         = 6c0ea5104d4b75927c2b58edd9cfa37113476c6f
+Repository HEAD / origin/main     = runtime closeout 時為上述 commit；docs-only closeout 後可較新
+Frontend Production gh-pages      = 918ef50f364801eb0f4882ce2b08706259f75672
+Active Firestore ruleset          = projects/cyjsituation-analysis/rulesets/aca6332c-620d-4b89-87a7-e6cde6b62475
+CURRENT_APP_VERSION               = 3.6.0
+P0 Security Authority Upgrade     = CLOSED
+```
+
+## Final Authority State
+
+P0 完成後，正式管理性 mutation 不再以「Browser 已登入」作為寫入 authority。核心邊界：
+
+```text
+Application Identity
+→ Backend 核發 / Rules 驗證 brand + role + account identity
+
+Credential / account mutation
+→ Backend authority
+
+Manager / store organization mutation
+→ functions/managerOrganizationAuthority.js
+→ Browser direct org_structure writer retired
+
+Management delegation mutation
+→ functions/managementDelegationAuthority.js
+→ create / update / end 全部走 Backend authority
+→ Browser direct management_delegations writer retired
+```
+
+Management Delegation 正式安全鏈：
+
+```text
+Settings / App
+→ manageManagementDelegation
+→ Firebase request auth
+→ server-issued director Application Identity
+→ highest-admin / Trusted Device / current credential re-verification
+→ brand-scoped transaction
+→ delegation + shared authority state + maintenance/system audit
+```
+
+多管理者同時操作採 Backend transaction + shared brand authority-state serialization + semantic OCC；不同 delegation IDs 也不得繞過重疊檢查形成 silent race。
+
+## Brand / Path Boundary
+
+```text
+CYJ
+artifacts/default-app-id/public/data/...
+
+安妞 / 伊啵
+brands/{brandId}/...
+```
+
+Organization / Delegation authority 都必須使用正式 brand resolver，不得硬寫單一品牌路徑或對特定店家建立例外。
+
+## Read / Runtime Impact
+
+```text
+new frontend delegation listener = 0
+new frontend polling             = 0
+new persistent broad query       = 0
+
+delegation mutation
+→ bounded backend transaction reads
+→ create/update 才檢查 brand-scoped active/scheduled overlap
+→ end 不建立常駐讀取
+
+CURRENT_APP_VERSION = 3.6.0 unchanged
+```
+
+## Production Confirmation
+
+```text
+P0-FINAL-1D-A2-1 Organization Authority
+= PRODUCTION CONFIRMED
+
+P0-FINAL-1D-A2-2 Management Delegation Authority
+= PRODUCTION CONFIRMED
+
+A2-2 pre-Rules Production smoke
+create / update / end = PASS
+
+A2-2 post-Rules Production smoke
+create / update / end = PASS
+
+Backend manageManagementDelegation
+= ACTIVE / Node.js 22
+
+Frontend
+= Production gh-pages confirmed
+
+Firestore Rules
+= deployed + active release readback + source match confirmed
+```
+
+Final status：
+
+```text
+IMPLEMENTED            = YES
+VALIDATED              = YES
+COMMITTED              = YES
+PUSHED                 = YES
+DEPLOYED               = YES
+PRODUCTION CONFIRMED   = YES
+P0 CLOSED              = YES
+```
+
+Documentation Impact：本 final closeout 更新 `CURRENT_STATE.md`、`SYSTEM_SOURCE_MAP.md`、`ARCHITECTURE.md`、`AUTH_AND_SECURITY.md`、`FIREBASE_DATA_MODEL.md`、`DATA_FLOW.md`、`DEPLOYMENT.md`、`DEVELOPMENT_GUIDE.md`。`DASHBOARD_SUMMARY.md`、`MAINTENANCE_TOOLS.md`、`TELEGRAM_AGENT.md`、`DATA_IDENTITY_RULES.md`、`PROJECT_OPERATING_RULES.md` = None。
+
+---
+
 # Final B1C2E / Credential Retirement Production Closeout — 2026-09-15
 
 > 本節是目前最高優先的 Security / Formal-readiness / Annual mobile stability 狀態。2026-09-12 以前章節保留歷史 evidence；若 runtime lineage、therapist credential authority、Dashboard / Annual / Daily readiness 或 production status 衝突，以目前正式 source 與本節為準。

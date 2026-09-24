@@ -1,5 +1,77 @@
 # FIREBASE_DATA_MODEL.md
 
+# Management Delegation Authority Data Model Override — 2026-09-24
+
+P0-FINAL-1D-A2-2 保留既有 `management_delegations` business document contract，改變的是 writer authority 與 race-control surface，不以 schema rewrite 破壞既有 consumer。
+
+## `management_delegations/{delegationId}`
+
+Physical paths：
+
+```text
+CYJ
+artifacts/default-app-id/public/data/management_delegations/{delegationId}
+
+安妞 / 伊啵
+brands/{brandId}/management_delegations/{delegationId}
+```
+
+正式 business schema version 仍為：
+
+```text
+delegation-v1
+```
+
+Consumer 對 existing delegation status / scope / permission semantics 維持相容。Frontend 可依 same-brand identity 讀取，但不再直接 create/update。
+
+Writer：
+
+```text
+functions/managementDelegationAuthority.js
+→ manageManagementDelegation
+```
+
+## `management_delegation_authority/state`
+
+新增 Backend-only mutation coordination document：
+
+```text
+CYJ
+artifacts/default-app-id/public/data/management_delegation_authority/state
+
+安妞 / 伊啵
+brands/{brandId}/management_delegation_authority/state
+```
+
+用途：
+
+```text
+serialize same-brand delegation mutations
+protect concurrent administrators
+coordinate cross-document / cross-delegation overlap validation
+```
+
+它不是一般營運 business document，不得由 Frontend 作 listener / polling / editable state authority。其內部 payload 以 Backend source 為準，不另建立 Frontend schema dependency。
+
+## Audit
+
+成功 delegation mutation 同一 authoritative flow 會產生對應 maintenance / system audit。Browser 不再以獨立 direct write 補 audit。
+
+## Rules
+
+```text
+management_delegations
+→ same-brand frontend read
+→ frontend write deny
+
+management_delegation_authority
+→ frontend read/write deny
+```
+
+本批沒有新增 per-store delegation document、polling collection 或跨品牌共享 path。
+
+---
+
 # `therapist_credentials` Final Authority Override — 2026-09-15
 
 正式 Production lineage：
