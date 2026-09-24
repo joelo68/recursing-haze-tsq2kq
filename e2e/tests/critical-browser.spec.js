@@ -112,3 +112,17 @@ test("critical security: device approval gate blocks normal work and can return 
   await page.getByRole("button", { name: /返回登入/ }).click();
   await expect(page.getByTestId("security-result")).toHaveText("RETURNED");
 });
+
+test("critical observability: System Monitor shows bounded production health without external requests", async ({ page }) => {
+  await page.goto("/e2e/index.html?case=health");
+
+  await expect(page.getByRole("button", { name: "系統狀態", exact: true })).toBeVisible();
+  await expect(page.getByText("整體運作正常", { exact: true })).toBeVisible();
+  await expect(page.getByText("上月已確認", { exact: true })).toBeVisible();
+  await expect(page.getByText("0 筆待確認", { exact: true })).toBeVisible();
+  await expect(page.getByText("今天 12 次", { exact: true })).toBeVisible();
+  await expect(page.getByText("單次檢查設計上限為 21 筆文件讀取。", { exact: false })).toBeVisible();
+
+  await page.getByRole("button", { name: /重新檢查/ }).click();
+  await expect(page.getByText("整體運作正常", { exact: true })).toBeVisible();
+});

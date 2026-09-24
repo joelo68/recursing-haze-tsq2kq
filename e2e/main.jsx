@@ -7,6 +7,7 @@ import LoginView from "../src/components/LoginView";
 import DeviceApprovalGate from "../src/components/DeviceApprovalGate";
 import { Sidebar, MobileTopNav } from "../src/components/Navigation";
 import { AsyncActionButton } from "../src/components/SharedUI";
+import SystemMonitor from "../src/components/SystemMonitor";
 
 const loginDirectory = {
   version: "application-login-directory-v1",
@@ -222,12 +223,91 @@ const SecurityHarness = () => {
   );
 };
 
+const HealthHarness = () => {
+  const contextValue = {
+    currentBrand: { id: "cyj", label: "CYJ" },
+    currentUser: { id: "director-e2e", name: "測試總經理" },
+    userRole: "director",
+    currentDeviceTrust: { status: "trusted" },
+    currentSecurityAccountKey: "cyj_director_director-e2e",
+    canManageDeviceSecurity: true,
+    manageDeviceSecurityAction: async () => ({ ok: true }),
+    reviewDeviceApprovalAction: async () => ({ ok: true }),
+    getCollectionPath: () => null,
+    getProductionHealthSnapshotAction: async () => ({
+      ok: true,
+      snapshot: {
+        schemaVersion: "production-observability-v1",
+        brandId: "cyj",
+        brandLabel: "CYJ",
+        generatedAtText: "2026-09-24T05:30:00.000Z",
+        overall: {
+          status: "healthy",
+          label: "整體運作正常",
+          detail: "目前沒有發現需要立即處理的系統狀態。",
+        },
+        summary: {
+          status: "healthy",
+          previousYearMonth: "2026-08",
+          previousVerified: true,
+          unresolvedCount: 0,
+          unresolvedMonths: [],
+        },
+        security: {
+          status: "healthy",
+          pendingCount: 0,
+          adminAssistancePendingCount: 0,
+        },
+        usage: {
+          status: "healthy",
+          todayLoginCount: 12,
+          yesterdayLoginCount: 20,
+        },
+        readTracking: {
+          status: "healthy",
+          mode: "off",
+          scheduleEnabled: true,
+          startTime: "19:00",
+          endTime: "07:00",
+        },
+        maintenance: {
+          status: "healthy",
+          recentCount: 1,
+          failureCount: 0,
+          rows: [
+            {
+              id: "m1",
+              type: "summary",
+              action: "自動資料整理",
+              status: "success",
+              failed: false,
+              month: "2026-08",
+              createdAtText: "2026-09-24T04:00:00.000Z",
+            },
+          ],
+        },
+        diagnostics: {
+          sourceErrors: [],
+          maxDocumentReadBudget: 21,
+        },
+      },
+    }),
+  };
+
+  return (
+    <AppContext.Provider value={contextValue}>
+      <SystemMonitor />
+    </AppContext.Provider>
+  );
+};
+
 const Harness = () => {
   const testCase = new URLSearchParams(window.location.search).get("case") || "login";
 
   if (testCase === "navigation") return <NavigationHarness />;
   if (testCase === "save") return <SaveHarness />;
   if (testCase === "security") return <SecurityHarness />;
+  if (testCase === "health") return <HealthHarness />;
   return <LoginHarness />;
 };
 

@@ -1,5 +1,5 @@
 // src/components/SystemMonitor.jsx
-import React, { useState, useMemo, useContext, useEffect } from "react";
+import React, { useState, useMemo, useContext, useEffect, useCallback } from "react";
 import {
   Smartphone, Monitor, ChevronLeft, ChevronRight, RefreshCw,
   Calendar, Search, RotateCcw, ShieldAlert, ShieldCheck, Laptop, ChevronDown
@@ -18,7 +18,8 @@ const SystemMonitor = () => {
   const {
     getCollectionPath, currentBrand, currentUser, userRole,
     currentDeviceTrust, currentSecurityAccountKey,
-    manageDeviceSecurityAction, reviewDeviceApprovalAction, canManageDeviceSecurity
+    manageDeviceSecurityAction, reviewDeviceApprovalAction, canManageDeviceSecurity,
+    getProductionHealthSnapshotAction
   } = useContext(AppContext);
   
   const [logs, setLogs] = useState([]);
@@ -32,7 +33,11 @@ const SystemMonitor = () => {
   const [keyword, setKeyword] = useState("");
   const [expandedLogId, setExpandedLogId] = useState(null);
   const [lastQueryInfo, setLastQueryInfo] = useState(null);
-  const [monitorMode, setMonitorMode] = useState("logs");
+  const [monitorMode, setMonitorMode] = useState("health");
+  const [productionHealth, setProductionHealth] = useState(null);
+  const [productionHealthLoading, setProductionHealthLoading] = useState(false);
+  const [productionHealthError, setProductionHealthError] = useState("");
+  const [productionHealthLoadedBrandId, setProductionHealthLoadedBrandId] = useState("");
   const [deviceProfiles, setDeviceProfiles] = useState([]);
   const [deviceLoading, setDeviceLoading] = useState(false);
   const [deviceHasLoaded, setDeviceHasLoaded] = useState(false);
@@ -815,6 +820,67 @@ const SystemMonitor = () => {
     fetchLogs(queryDateRange, { append: true });
   };
 
+  const loadProductionHealth = useCallback(async ({ force = false } = {}) => {
+    const brandId = String(currentBrand?.id || "");
+    if (!brandId || typeof getProductionHealthSnapshotAction !== "function") {
+      setProductionHealthError("目前無法取得系統狀態。");
+      return null;
+    }
+    if (!force && productionHealthLoadedBrandId === brandId && productionHealth) {
+      return productionHealth;
+    }
+
+    setProductionHealthLoading(true);
+    setProductionHealthError("");
+    try {
+      const result = await getProductionHealthSnapshotAction();
+      if (!result?.ok || !result?.snapshot) {
+        throw new Error(result?.message || "系統狀態暫時無法取得，請稍後再試。");
+      }
+      setProductionHealth(result.snapshot);
+      setProductionHealthLoadedBrandId(brandId);
+      return result.snapshot;
+    } catch (error) {
+      setProductionHealthError(error?.message || "系統狀態暫時無法取得，請稍後再試。");
+      return null;
+    } finally {
+      setProductionHealthLoading(false);
+    }
+  }, [
+    currentBrand?.id,
+    getProductionHealthSnapshotAction,
+    productionHealth,
+    productionHealthLoadedBrandId,
+  ]);
+
+  useEffect(() => {
+    if (monitorMode !== "health") return;
+    const brandId = String(currentBrand?.id || "");
+    if (productionHealthLoadedBrandId && productionHealthLoadedBrandId !== brandId) {
+      setProductionHealth(null);
+      setProductionHealthError("");
+    }
+    loadProductionHealth();
+  }, [monitorMode, currentBrand?.id, productionHealthLoadedBrandId, loadProductionHealth]);
+
+  const getHealthTone = (status = "") => {
+    if (status === "healthy") return {
+      shell: "border-emerald-100 bg-emerald-50/60",
+      text: "text-emerald-700",
+      dot: "bg-emerald-500",
+    };
+    if (status === "error") return {
+      shell: "border-rose-100 bg-rose-50/60",
+      text: "text-rose-700",
+      dot: "bg-rose-500",
+    };
+    return {
+      shell: "border-amber-100 bg-amber-50/60",
+      text: "text-amber-700",
+      dot: "bg-amber-500",
+    };
+  };
+
   const handleResetQuery = () => {
     setUiDateRange({ start: todayStr, end: todayStr });
     setQueryDateRange({ start: todayStr, end: todayStr });
@@ -839,12 +905,13 @@ const SystemMonitor = () => {
         <Card className="!overflow-visible z-30 relative w-full max-w-full min-w-0">
           <div className="flex flex-col xl:flex-row justify-between items-start xl:items-center mb-6 gap-4 w-full max-w-full min-w-0">
             <div>
-              <h3 className="text-lg font-bold text-stone-700">{monitorMode === "logs" ? "系統操作日誌" : monitorMode === "approvals" ? "待確認裝置" : "裝置登入管理"} ({currentBrand.label})</h3>
-              <p className="text-xs text-stone-400">{monitorMode === "logs" ? "追蹤系統內的所有操作紀錄" : monitorMode === "approvals" ? "集中處理目前正在等待確認的新裝置" : "查看帳號已記錄的常用裝置與新裝置狀態"}</p>
+              <h3 className="text-lg font-bold text-stone-700">{monitorMode === "health" ? "系統狀態" : monitorMode === "logs" ? "系統操作日誌" : monitorMode === "approvals" ? "待確認裝置" : "裝置登入管理"} ({currentBrand.label})</h3>
+              <p className="text-xs text-stone-400">{monitorMode === "health" ? "快速確認資料整理、安全與系統運作是否需要處理" : monitorMode === "logs" ? "追蹤系統內的所有操作紀錄" : monitorMode === "approvals" ? "集中處理目前正在等待確認的新裝置" : "查看帳號已記錄的常用裝置與新裝置狀態"}</p>
             </div>
             
-            <div className="flex items-center gap-2 rounded-2xl border border-stone-100 bg-white p-1 shadow-sm">
-              <button type="button" onClick={() => setMonitorMode("logs")} className={`px-4 py-2 rounded-xl text-xs font-black transition-all ${monitorMode === "logs" ? "bg-[#EFD399] text-[#6A4D26] shadow-sm" : "text-stone-500 hover:bg-stone-50"}`}>操作日誌</button>
+            <div className="flex items-center gap-2 rounded-2xl border border-stone-100 bg-white p-1 shadow-sm overflow-x-auto max-w-full">
+              <button type="button" onClick={() => setMonitorMode("health")} className={`px-4 py-2 rounded-xl text-xs font-black transition-all whitespace-nowrap ${monitorMode === "health" ? "bg-[#EFD399] text-[#6A4D26] shadow-sm" : "text-stone-500 hover:bg-stone-50"}`}>系統狀態</button>
+              <button type="button" onClick={() => setMonitorMode("logs")} className={`px-4 py-2 rounded-xl text-xs font-black transition-all whitespace-nowrap ${monitorMode === "logs" ? "bg-[#EFD399] text-[#6A4D26] shadow-sm" : "text-stone-500 hover:bg-stone-50"}`}>操作日誌</button>
               <button type="button" onClick={() => setMonitorMode("approvals")} className={`px-4 py-2 rounded-xl text-xs font-black transition-all ${monitorMode === "approvals" ? "bg-[#EFD399] text-[#6A4D26] shadow-sm" : "text-stone-500 hover:bg-stone-50"}`}>待確認裝置</button>
               <button type="button" onClick={() => setMonitorMode("devices")} className={`px-4 py-2 rounded-xl text-xs font-black transition-all ${monitorMode === "devices" ? "bg-[#EFD399] text-[#6A4D26] shadow-sm" : "text-stone-500 hover:bg-stone-50"}`}>裝置管理</button>
             </div>
@@ -1000,6 +1067,170 @@ const SystemMonitor = () => {
               <span className="ml-2 text-amber-500">系統會先依日期區間讀取，再用相容條件過濾；若查不到較早紀錄，請提高讀取數量或按「載入更多」。</span>
             </div>
           )}
+
+          {monitorMode === "health" && (
+            <div className="space-y-4">
+              {productionHealthLoading && !productionHealth ? (
+                <div className="flex flex-col items-center justify-center rounded-2xl border border-stone-100 bg-stone-50/60 py-16 text-center text-stone-400">
+                  <RefreshCw className="mb-3 animate-spin" size={30} />
+                  <p className="text-sm font-black">正在檢查目前系統狀態…</p>
+                </div>
+              ) : productionHealthError && !productionHealth ? (
+                <div className="rounded-2xl border border-rose-100 bg-rose-50/60 p-5">
+                  <div className="flex items-start gap-3">
+                    <ShieldAlert className="mt-0.5 shrink-0 text-rose-500" size={22} />
+                    <div className="min-w-0 flex-1">
+                      <p className="font-black text-rose-700">系統狀態暫時無法確認</p>
+                      <p className="mt-1 text-sm font-bold leading-6 text-rose-600/80">{productionHealthError}</p>
+                    </div>
+                    <AsyncActionButton
+                      type="button"
+                      onClick={() => loadProductionHealth({ force: true })}
+                      loadingText="檢查中…"
+                      className="shrink-0 rounded-xl border border-rose-200 bg-white px-3 py-2 text-xs font-black text-rose-700"
+                    >
+                      重新檢查
+                    </AsyncActionButton>
+                  </div>
+                </div>
+              ) : productionHealth ? (
+                <>
+                  {(() => {
+                    const overallTone = getHealthTone(productionHealth.overall?.status);
+                    return (
+                      <div className={`rounded-2xl border p-5 ${overallTone.shell}`}>
+                        <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+                          <div className="flex items-start gap-3">
+                            <div className={`mt-1 h-3 w-3 shrink-0 rounded-full ${overallTone.dot}`} />
+                            <div>
+                              <p className={`text-lg font-black ${overallTone.text}`}>{productionHealth.overall?.label || "系統狀態"}</p>
+                              <p className="mt-1 text-sm font-bold leading-6 text-stone-500">{productionHealth.overall?.detail || ""}</p>
+                              <p className="mt-2 text-[11px] font-bold text-stone-400">
+                                最後檢查：{productionHealth.generatedAtText ? new Date(productionHealth.generatedAtText).toLocaleString("zh-TW", { hour12: false }) : "-"}
+                              </p>
+                            </div>
+                          </div>
+                          <AsyncActionButton
+                            type="button"
+                            onClick={() => loadProductionHealth({ force: true })}
+                            loadingText="檢查中…"
+                            className="shrink-0 rounded-xl border border-stone-200 bg-white px-4 py-2.5 text-sm font-black text-stone-600 shadow-sm hover:bg-stone-50"
+                          >
+                            <RefreshCw size={15} />
+                            重新檢查
+                          </AsyncActionButton>
+                        </div>
+                      </div>
+                    );
+                  })()}
+
+                  <div className="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-4">
+                    {[
+                      {
+                        key: "summary",
+                        label: "資料整理",
+                        status: productionHealth.summary?.status,
+                        value: productionHealth.summary?.previousVerified ? "上月已確認" : "需要確認",
+                        detail: productionHealth.summary?.unresolvedCount > 0
+                          ? `${productionHealth.summary.unresolvedCount} 個月份仍在整理`
+                          : `檢查月份 ${productionHealth.summary?.previousYearMonth || "-"}`,
+                      },
+                      {
+                        key: "security",
+                        label: "登入安全",
+                        status: productionHealth.security?.status,
+                        value: `${Number(productionHealth.security?.pendingCount || 0)} 筆待確認`,
+                        detail: Number(productionHealth.security?.adminAssistancePendingCount || 0) > 0
+                          ? `${productionHealth.security.adminAssistancePendingCount} 筆需要最高管理者協助`
+                          : "目前沒有主管待處理項目",
+                      },
+                      {
+                        key: "usage",
+                        label: "系統使用",
+                        status: productionHealth.usage?.status,
+                        value: `今天 ${Number(productionHealth.usage?.todayLoginCount || 0)} 次`,
+                        detail: `昨天 ${Number(productionHealth.usage?.yesterdayLoginCount || 0)} 次登入`,
+                      },
+                      {
+                        key: "readTracking",
+                        label: "讀取追蹤",
+                        status: productionHealth.readTracking?.status,
+                        value: productionHealth.readTracking?.mode === "global" ? "全域追蹤" : productionHealth.readTracking?.mode === "local" ? "本機追蹤" : "目前關閉",
+                        detail: productionHealth.readTracking?.scheduleEnabled
+                          ? `排程 ${productionHealth.readTracking?.startTime || "-"}～${productionHealth.readTracking?.endTime || "-"}`
+                          : "未啟用排程",
+                      },
+                    ].map((card) => {
+                      const tone = getHealthTone(card.status);
+                      return (
+                        <div key={card.key} className={`rounded-2xl border p-4 ${tone.shell}`}>
+                          <div className="flex items-center gap-2">
+                            <span className={`h-2.5 w-2.5 rounded-full ${tone.dot}`} />
+                            <p className={`text-xs font-black ${tone.text}`}>{card.label}</p>
+                          </div>
+                          <p className="mt-3 text-xl font-black text-stone-700">{card.value}</p>
+                          <p className="mt-1 text-xs font-bold leading-5 text-stone-500">{card.detail}</p>
+                        </div>
+                      );
+                    })}
+                  </div>
+
+                  {(productionHealth.summary?.unresolvedMonths?.length > 0 || productionHealth.maintenance?.recentCount > 0) && (
+                    <div className="grid grid-cols-1 gap-3 xl:grid-cols-2">
+                      <div className="rounded-2xl border border-stone-100 bg-white p-4">
+                        <div className="flex items-center justify-between gap-3">
+                          <p className="text-sm font-black text-stone-700">資料整理待辦</p>
+                          <span className="text-xs font-black text-stone-400">{Number(productionHealth.summary?.unresolvedCount || 0)} 個月份</span>
+                        </div>
+                        {productionHealth.summary?.unresolvedMonths?.length ? (
+                          <div className="mt-3 space-y-2">
+                            {productionHealth.summary.unresolvedMonths.map((item) => (
+                              <div key={`${item.yearMonth}_${item.status}`} className="flex items-center justify-between rounded-xl bg-stone-50 px-3 py-2 text-xs">
+                                <span className="font-black text-stone-600">{item.yearMonth || "月份未明"}</span>
+                                <span className="font-bold text-amber-700">{item.status === "dirty" ? "等待重新整理" : item.status === "mismatch" ? "資料需要核對" : "處理中"}</span>
+                              </div>
+                            ))}
+                          </div>
+                        ) : (
+                          <p className="mt-3 text-xs font-bold text-emerald-700">目前沒有歷史月份等待重新整理。</p>
+                        )}
+                      </div>
+
+                      <div className="rounded-2xl border border-stone-100 bg-white p-4">
+                        <div className="flex items-center justify-between gap-3">
+                          <p className="text-sm font-black text-stone-700">近期自動維護</p>
+                          <span className={`text-xs font-black ${Number(productionHealth.maintenance?.failureCount || 0) > 0 ? "text-rose-600" : "text-emerald-600"}`}>
+                            {Number(productionHealth.maintenance?.failureCount || 0) > 0 ? `${productionHealth.maintenance.failureCount} 筆需要留意` : "沒有失敗紀錄"}
+                          </span>
+                        </div>
+                        {productionHealth.maintenance?.rows?.length ? (
+                          <div className="mt-3 space-y-2">
+                            {productionHealth.maintenance.rows.map((item) => (
+                              <div key={`${item.id}_${item.createdAtText}`} className="rounded-xl bg-stone-50 px-3 py-2 text-xs">
+                                <div className="flex items-center justify-between gap-3">
+                                  <span className="truncate font-black text-stone-600">{item.action || item.type || "自動維護"}</span>
+                                  <span className={`shrink-0 font-black ${item.failed ? "text-rose-600" : "text-emerald-600"}`}>{item.failed ? "需要留意" : "完成"}</span>
+                                </div>
+                                {item.month && <p className="mt-1 font-bold text-stone-400">{item.month}</p>}
+                              </div>
+                            ))}
+                          </div>
+                        ) : (
+                          <p className="mt-3 text-xs font-bold text-stone-400">近期沒有自動維護紀錄。</p>
+                        )}
+                      </div>
+                    </div>
+                  )}
+
+                  <div className="rounded-2xl border border-stone-100 bg-stone-50/60 px-4 py-3 text-[11px] font-bold leading-5 text-stone-400">
+                    這個畫面只在進入或按下「重新檢查」時讀取小範圍狀態，不會常駐監聽或定時輪詢。
+                    單次檢查設計上限為 {Number(productionHealth.diagnostics?.maxDocumentReadBudget || 21)} 筆文件讀取。
+                  </div>
+                </>
+              ) : null}
+            </div>
+          )}
+
 
           {/* ★ 畫面呈現邏輯：尚未查詢 -> 讀取中 -> 顯示表格 */}
           {monitorMode === "logs" && (

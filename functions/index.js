@@ -87,6 +87,7 @@ exports.updateTelegramSecurityAlertConfig = deviceApprovalFunctions.updateTelegr
 // Frontend 尚未 cutover；不改 Rules、不改既有登入決策、不新增 listener/polling。
 // ==========================================
 const {
+  APPLICATION_IDENTITY_VERSION,
   createApplicationIdentityFunctions,
   normalizeDirectoryBrandId,
   patchLoginDirectorySummaryFromSettingChange,
@@ -101,6 +102,23 @@ const applicationIdentityFunctions = createApplicationIdentityFunctions({
   requireFirebaseRequestAuth: (req) => requireFirebaseRequestAuth(req, admin),
 });
 exports.getApplicationLoginDirectory = applicationIdentityFunctions.getApplicationLoginDirectory;
+
+// ==========================================
+// ★ P1-C Production Observability：bounded on-demand health snapshot
+// 單次按需讀取；不建立 listener / polling / health mirror collection。
+// 僅正式 Application Identity 的同品牌 director 可讀。
+// ==========================================
+const { createProductionObservabilityFunctions } = require("./productionObservability");
+const productionObservabilityFunctions = createProductionObservabilityFunctions({
+  onRequest,
+  db,
+  normalizeBrandId: normalizeDeviceSecurityBrandId,
+  getBrandCollection: getDeviceSecurityBrandCollection,
+  getBrandSettingDoc: getDeviceSecurityBrandSettingDoc,
+  requireFirebaseRequestAuth: (req) => requireFirebaseRequestAuth(req, admin),
+  applicationIdentityVersion: APPLICATION_IDENTITY_VERSION,
+});
+exports.getProductionHealthSnapshot = productionObservabilityFunctions.getProductionHealthSnapshot;
 
 // ==========================================
 // ★ P0-B1C1A：Backend Password Authority Foundation (shadow)
