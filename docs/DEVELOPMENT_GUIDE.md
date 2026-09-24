@@ -1,5 +1,108 @@
 # DEVELOPMENT_GUIDE.md
 
+# P1-A CI Validation Guardrails — 2026-09-24
+
+P1-A CLOSED 後，repository 具有正式自動驗證 gate。
+
+## 日常使用
+
+本機核心驗證：
+
+```bash
+npm run ci:validate
+```
+
+Rules / Security emulator 驗證：
+
+```bash
+npm run ci:rules
+```
+
+GitHub Actions 會在：
+
+```text
+pull_request
+push → main
+manual workflow_dispatch
+```
+
+自動執行。
+
+## 正式 CI owners
+
+```text
+.github/workflows/ci-validation.yml
+scripts/ci-validate.mjs
+package.json
+firebase.json
+tests/ciValidationGate.test.js
+```
+
+修改這些 owner 時，不得只確認 YAML syntax；至少要重新確認：
+
+```text
+CI workflow remains read-only
+no deploy command introduced
+Node runtime remains 22
+Functions dependencies install successfully
+non-emulator regression still runs
+production build still runs
+Firestore + Auth emulators both start
+Rules emulator regression still runs
+CURRENT_APP_VERSION ownership is unchanged unless explicitly approved
+```
+
+## CI 不等於部署
+
+正式 contract：
+
+```text
+CI PASS
+≠ DEPLOYED
+≠ PRODUCTION CONFIRMED
+```
+
+P1-A workflow 不得自行加入：
+
+```text
+firebase deploy
+npm run deploy
+gh-pages -d
+contents: write
+Production secrets / runtime mutation
+```
+
+如果未來另有明確需求建立 deployment workflow，必須視為獨立 Security / Deployment batch，不能直接擴大 P1-A validation workflow 權限。
+
+## Emulator guardrail
+
+Rules tests 同時依賴：
+
+```text
+Firestore Emulator = 8080
+Auth Emulator      = 9099
+Java               = 21 in GitHub Actions
+firebase-tools     = 15.30.2
+```
+
+不能只啟動 Firestore；`*RulesEmulator.test.mjs` 會建立／登入 Auth 測試 identity，因此 Auth Emulator 是必要測試依賴。
+
+## Scope-based validation
+
+P1-A 是最低自動門檻，不取代功能自己的 targeted regression。
+
+例如 Security / Identity / Summary / Writer / Permission / Store Lifecycle 等正式 owner 有修改時，仍要依改動範圍增加該功能需要的 targeted / emulator / regression；不得因「CI 綠燈」就省略必要的 domain-specific validation。
+
+首次正式 remote evidence：
+
+```text
+source commit = ac3d252a22d5b57de19cfe299f0a6858265440f1
+run id        = 35958234613
+conclusion    = SUCCESS
+```
+
+---
+
 # Global Async Action Feedback Guardrails — 2026-09-24
 
 未來新增或修改 Frontend 按鈕時，先判斷它是否真的等待非同步結果。

@@ -1,5 +1,73 @@
 # SYSTEM_SOURCE_MAP.md
 
+# P1-A CI Validation Gate Source Override — 2026-09-24
+
+正式 P1-A source：
+
+```text
+source commit = ac3d252a22d5b57de19cfe299f0a6858265440f1
+CI run        = 35958234613 / SUCCESS
+```
+
+正式 owners：
+
+```text
+.github/workflows/ci-validation.yml
+→ GitHub Actions orchestration
+→ Core validation job
+→ Firestore Rules emulator job
+→ read-only repository permission
+→ no deployment step
+
+scripts/ci-validate.mjs
+→ source/security owner presence gate
+→ CURRENT_APP_VERSION anchor check
+→ Functions Node syntax check
+→ full tests/*.test.js non-emulator regression
+→ production build
+→ no deployment action
+
+package.json
+→ npm run ci:validate
+→ npm run ci:rules
+
+firebase.json
+→ local / CI emulator declaration
+→ firestore:8080
+→ auth:9099
+
+tests/ciValidationGate.test.js
+→ CI workflow/config regression owner
+→ verifies no Firebase deploy / gh-pages deploy / contents:write
+```
+
+P1-A Security regression owner set 也要求下列既有 tests 保持存在：
+
+```text
+tests/adminCredentialWriterRetirement.test.js
+tests/managementDelegationWriterRetirement.test.js
+tests/orgStructureWriterRetirement.test.js
+tests/therapistCredentialRetirement.test.js
+tests/therapistMasterWriteLockdown.test.js
+tests/firestoreBrandClaimRulesEmulator.test.mjs
+tests/administrativeSettingsRulesEmulator.test.mjs
+tests/managementDelegationRulesEmulator.test.mjs
+tests/managerOrganizationRulesEmulator.test.mjs
+```
+
+Production boundary：
+
+```text
+Production runtime commit    = 7bd1779ca8df7b14ce76b0e2d39f04eb83fd5ea2
+Frontend Production gh-pages = 52180b5a614b5d8e3cf17a6212f3262ebde034c7
+CURRENT_APP_VERSION          = 3.6.0
+AUTO_DEPLOY                  = NO
+```
+
+P1-A 是 validation infrastructure owner，不是 Frontend / Backend / Firestore business runtime owner。
+
+---
+
 # Global Async Action Feedback v1 Source Override — 2026-09-24
 
 正式 runtime：

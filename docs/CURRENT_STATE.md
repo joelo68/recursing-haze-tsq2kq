@@ -1,5 +1,107 @@
 # CURRENT_STATE.md
 
+# P1-A CI Validation Gate Final Closeout — 2026-09-24
+
+P1-A 已完成本機驗證、GitHub push 與首次 Remote CI green confirmation。這一批只建立驗證與測試基礎設施，不部署 Frontend / Functions / Firestore Rules，也不修改 Production data。
+
+正式 lineage：
+
+```text
+P1-A source commit              = ac3d252a22d5b57de19cfe299f0a6858265440f1
+P1-A GitHub Actions run         = 35958234613
+P1-A remote CI conclusion       = success
+Production runtime commit       = 7bd1779ca8df7b14ce76b0e2d39f04eb83fd5ea2
+Frontend Production gh-pages    = 52180b5a614b5d8e3cf17a6212f3262ebde034c7
+Production index asset          = assets/index-H__8lRtl.js
+CURRENT_APP_VERSION             = 3.6.0
+```
+
+正式 CI gate：
+
+```text
+.github/workflows/ci-validation.yml
+→ pull_request
+→ push to main
+→ workflow_dispatch
+→ contents: read only
+→ no deploy authority
+```
+
+兩個平行 job：
+
+```text
+Core validation
+→ Node.js 22
+→ npm ci
+→ Functions npm ci
+→ commit-range git diff --check
+→ source/security owner gate
+→ all Functions .js node --check
+→ full non-emulator tests/*.test.js regression
+→ npm run build
+
+Firestore Rules emulator
+→ Node.js 22
+→ Java 21
+→ Firestore Emulator
+→ Auth Emulator
+→ all *RulesEmulator.test.mjs
+```
+
+正式本機 commands：
+
+```text
+npm run ci:validate
+npm run ci:rules
+```
+
+Rules emulator 固定測試環境：
+
+```text
+firebase-tools = 15.30.2
+Firestore Emulator port = 8080
+Auth Emulator port      = 9099
+```
+
+首次 Remote CI：
+
+```text
+Run ID                    = 35958234613
+Core validation           = SUCCESS
+Firestore Rules emulator  = SUCCESS
+overall conclusion         = SUCCESS
+```
+
+安全與 Production boundary：
+
+```text
+AUTO_DEPLOY                 = NO
+Frontend runtime changed    = NO
+Backend runtime changed     = NO
+Firestore Rules changed     = NO
+Firestore data changed      = NO
+Production gh-pages changed = NO
+CURRENT_APP_VERSION         = 3.6.0 unchanged
+```
+
+Final status：
+
+```text
+IMPLEMENTED                  = YES
+LOCAL VALIDATED              = YES
+LOCAL CORE VALIDATION        = YES
+LOCAL RULES EMULATOR         = YES
+COMMITTED                    = YES
+PUSHED                       = YES
+GITHUB CI REMOTE CONFIRMED   = YES
+DEPLOYED                     = NOT APPLICABLE — CI/config only
+P1-A CLOSED                  = YES
+```
+
+Documentation Impact：本 closeout 更新 `CURRENT_STATE.md`、`SYSTEM_SOURCE_MAP.md`、`ARCHITECTURE.md`、`DEVELOPMENT_GUIDE.md`。`AUTH_AND_SECURITY.md`、`FIREBASE_DATA_MODEL.md`、`DATA_FLOW.md`、`DEPLOYMENT.md`、`DASHBOARD_SUMMARY.md`、`MAINTENANCE_TOOLS.md`、`TELEGRAM_AGENT.md`、`DATA_IDENTITY_RULES.md`、`PROJECT_OPERATING_RULES.md` = None。
+
+---
+
 # Global Async Action Feedback v1 Production Closeout — 2026-09-24
 
 正式 runtime lineage：

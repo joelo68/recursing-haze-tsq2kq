@@ -1,5 +1,72 @@
 # ARCHITECTURE.md
 
+# P1-A CI Validation Architecture Override — 2026-09-24
+
+P1-A 建立正式 repository validation gate，將原本主要依賴人工執行的核心驗證固定成 source-controlled CI。
+
+```text
+Developer / maintainer
+        │
+        ├─ pull request
+        ├─ push main
+        └─ workflow_dispatch
+        │
+        ▼
+GitHub Actions — CI Validation Gate
+        │
+        ├───────────────┐
+        ▼               ▼
+Core validation     Firestore Rules emulator
+        │               │
+        │               ├─ Node.js 22
+        │               ├─ Java 21
+        │               ├─ Firestore Emulator
+        │               ├─ Auth Emulator
+        │               └─ *RulesEmulator.test.mjs
+        │
+        ├─ source/security owner gate
+        ├─ commit-range whitespace gate
+        ├─ Functions syntax
+        ├─ full non-emulator regression
+        └─ production build
+```
+
+權限與部署邊界：
+
+```text
+GitHub workflow permission = contents: read
+firebase deploy            = absent
+npm run deploy             = absent
+gh-pages publish           = absent
+production credential      = not required
+```
+
+因此 CI failure 只能阻止／警示驗證結果，不會自行修改 Production。
+
+Emulator declaration：
+
+```text
+firebase.json
+→ functions:5001
+→ firestore:8080
+→ auth:9099
+```
+
+`auth:9099` 是本機／CI 測試環境設定，用來讓 Rules emulator tests 建立 Firebase Auth 測試 identity；不是 Production Auth endpoint 或 Production Security policy 的變更。
+
+正式確認：
+
+```text
+source commit               = ac3d252a22d5b57de19cfe299f0a6858265440f1
+GitHub Actions run          = 35958234613
+Core validation             = SUCCESS
+Firestore Rules emulator    = SUCCESS
+overall                     = SUCCESS
+CURRENT_APP_VERSION         = 3.6.0 unchanged
+```
+
+---
+
 # Global Async Action Feedback v1 Architecture Override — 2026-09-24
 
 等待型 Frontend action 的正式 presentation pattern：
