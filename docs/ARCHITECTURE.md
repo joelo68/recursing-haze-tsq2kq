@@ -1,5 +1,83 @@
 # ARCHITECTURE.md
 
+# P1-B Critical Browser E2E Architecture Override — 2026-09-24
+
+P1-B 在 P1-A static / regression / Rules emulator 之外，新增 Browser rendering / interaction contract layer。
+
+```text
+GitHub push / PR
+      │
+      ├──────────────────────────────┐
+      ▼                              ▼
+P1-A CI Validation Gate        P1-B Critical Browser E2E
+      │                              │
+      │                              ├─ Ubuntu runner
+      │                              ├─ Node.js 22
+      │                              ├─ Chromium
+      │                              └─ local Vite fixture
+      │
+      └─ syntax / regression / build      │
+                                         ▼
+                                 actual React components
+                                         │
+                ┌────────────────────────┼────────────────────────┐
+                ▼                        ▼                        ▼
+             LoginView              Navigation             DeviceApprovalGate
+                │                        │                        │
+                └─────────────── AsyncActionButton ─────────────┘
+```
+
+P1-B 測試層只驗證 Browser contract：
+
+```text
+rendering
+user interaction
+disabled / busy state
+login-screen state transitions
+permission-driven menu exposure
+security gate presentation
+```
+
+它不取代：
+
+```text
+Backend authority tests
+Firestore Rules emulator
+Identity / credential authority regression
+Production smoke
+```
+
+Network isolation contract：
+
+```text
+allowed:
+http://127.0.0.1:4174
+
+forbidden:
+cloudfunctions.net
+run.app
+firestore.googleapis.com
+identitytoolkit.googleapis.com
+firebaseio.com
+joelo68.github.io
+```
+
+測試本身另外監看 browser requests；任何非 local request 都會使 E2E fail。
+
+因此 P1-B 不需要 Production credentials，不會建立 Production Firestore reads，不會操作正式帳號，也不會產生營運 mutation。
+
+正式確認：
+
+```text
+source commit             = 7721d35dd7a6b7e065f588c030690a15c6b13628
+Core CI run               = 35960092580 / SUCCESS
+Critical Browser E2E run  = 35960092581 / SUCCESS
+CURRENT_APP_VERSION       = 3.6.0 unchanged
+P1-B                      = CLOSED
+```
+
+---
+
 # P1-A CI Validation Architecture Override — 2026-09-24
 
 P1-A 建立正式 repository validation gate，將原本主要依賴人工執行的核心驗證固定成 source-controlled CI。

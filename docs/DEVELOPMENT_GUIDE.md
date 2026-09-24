@@ -1,5 +1,123 @@
 # DEVELOPMENT_GUIDE.md
 
+# P1-B Critical Browser E2E Guardrails — 2026-09-24
+
+P1-B CLOSED 後，重要 Frontend flow 除了 unit / regression / build 外，還有 Chromium Browser E2E gate。
+
+## 本機指令
+
+列出 Browser E2E：
+
+```bash
+npm run e2e:browser:list
+```
+
+建立 E2E fixture：
+
+```bash
+npm run e2e:build
+```
+
+執行 Chromium E2E：
+
+```bash
+npm run e2e:browser
+```
+
+目前正式維護方式：Intel Mac 不強制安裝 Chromium；GitHub `ubuntu-latest` 是 authoritative browser execution environment。
+
+## 正式 owners
+
+```text
+.github/workflows/browser-e2e.yml
+playwright.e2e.config.js
+vite.e2e.config.js
+e2e/index.html
+e2e/main.jsx
+e2e/tests/critical-browser.spec.js
+tests/browserE2EGovernance.test.js
+```
+
+## Critical flow 最低範圍
+
+目前至少保留：
+
+```text
+login accepted path
+login rejected credential path
+initial-password safety gate
+desktop/mobile permission navigation
+async save busy + duplicate-click guard
+new-device approval blocking screen
+```
+
+未來若修改上述 production owner：
+
+```text
+LoginView
+Navigation
+DeviceApprovalGate
+AsyncActionButton
+```
+
+且改動會影響 Browser contract，必須同步評估／更新 P1-B E2E；不能只靠 unit test。
+
+## Production isolation
+
+Browser E2E 禁止：
+
+```text
+Production credential
+Production account password
+Production Firestore
+Production Firebase Auth
+Production Functions / Cloud Run
+Production GitHub Pages
+Production mutation
+```
+
+`.github/workflows/browser-e2e.yml` 維持：
+
+```text
+permissions:
+  contents: read
+```
+
+不得直接加入 deploy、repository write、Production secrets 或 runtime mutation。
+
+如果未來確實需要 Backend-integrated E2E，必須另建獨立 staging / emulator architecture，不可把 Production endpoint 偷塞進目前 P1-B harness。
+
+## Validation semantics
+
+正式狀態必須區分：
+
+```text
+E2E IMPLEMENTED
+E2E VALIDATED
+E2E REMOTE CONFIRMED
+DEPLOYED
+PRODUCTION CONFIRMED
+```
+
+P1-B 是 test / CI infrastructure，因此：
+
+```text
+DEPLOYED = NOT APPLICABLE
+PRODUCTION RUNTIME CHANGED = NO
+```
+
+Remote browser green 不等於使用者正式 Production workflow 已人工驗證；若 future batch 修改 Production runtime，仍要依改動範圍做 human smoke。
+
+首次正式 evidence：
+
+```text
+source commit   = 7721d35dd7a6b7e065f588c030690a15c6b13628
+core run        = 35960092580 / SUCCESS
+browser run     = 35960092581 / SUCCESS
+```
+
+---
+
 # P1-A CI Validation Guardrails — 2026-09-24
 
 P1-A CLOSED 後，repository 具有正式自動驗證 gate。

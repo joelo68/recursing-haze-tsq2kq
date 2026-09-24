@@ -1,5 +1,81 @@
 # SYSTEM_SOURCE_MAP.md
 
+# P1-B Critical Browser E2E Source Override — 2026-09-24
+
+正式 P1-B source：
+
+```text
+source commit     = 7721d35dd7a6b7e065f588c030690a15c6b13628
+core CI run       = 35960092580 / SUCCESS
+browser E2E run   = 35960092581 / SUCCESS
+```
+
+正式 owners：
+
+```text
+.github/workflows/browser-e2e.yml
+→ GitHub Actions Chromium orchestration
+→ contents: read only
+→ no deploy / no secrets
+
+playwright.e2e.config.js
+→ Chromium browser test configuration
+→ local baseURL 127.0.0.1:4174
+→ service workers blocked
+
+vite.e2e.config.js
+→ E2E-only Vite fixture build/server
+→ dist-e2e
+→ not Production Vite config
+
+e2e/index.html
+e2e/main.jsx
+→ isolated Browser E2E harness
+→ imports actual production React components
+
+e2e/tests/critical-browser.spec.js
+→ Critical Browser E2E behavior regression
+
+tests/browserE2EGovernance.test.js
+→ workflow/source isolation regression
+→ no Production hosts
+→ no deploy authority
+```
+
+`package.json` / `package-lock.json` 增加：
+
+```text
+@playwright/test = 1.63.0
+
+npm run e2e:serve
+npm run e2e:build
+npm run e2e:browser
+npm run e2e:browser:list
+```
+
+P1-B fixture 目前使用的 production component owners：
+
+```text
+src/components/LoginView.jsx
+src/components/Navigation.jsx
+src/components/DeviceApprovalGate.jsx
+src/components/SharedUI.jsx
+src/AppContext.js
+```
+
+重要：E2E fixture 是 browser contract test surface，不是第二套 business source。任何登入、權限、Device Security、Async feedback 的正式邏輯仍以 `src/` owner 為 Source of Truth。
+
+Production boundary：
+
+```text
+Production runtime commit    = 7bd1779ca8df7b14ce76b0e2d39f04eb83fd5ea2
+Frontend Production gh-pages = 52180b5a614b5d8e3cf17a6212f3262ebde034c7
+CURRENT_APP_VERSION          = 3.6.0
+AUTO_DEPLOY                  = NO
+```
+
+---
+
 # P1-A CI Validation Gate Source Override — 2026-09-24
 
 正式 P1-A source：

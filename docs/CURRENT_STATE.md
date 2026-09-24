@@ -1,5 +1,95 @@
 # CURRENT_STATE.md
 
+# P1-B Critical Browser E2E Final Closeout — 2026-09-24
+
+P1-B 已完成 Critical Browser E2E 建置、GitHub Remote Chromium 執行與正式 closeout。這一批新增的是測試／CI infrastructure，不修改 Production runtime、Functions、Firestore Rules 或 Production data。
+
+正式 lineage：
+
+```text
+P1-B source commit             = 7721d35dd7a6b7e065f588c030690a15c6b13628
+P1-A Core CI run               = 35960092580 / SUCCESS
+P1-B Browser E2E run           = 35960092581 / SUCCESS
+Production runtime commit      = 7bd1779ca8df7b14ce76b0e2d39f04eb83fd5ea2
+Frontend Production gh-pages   = 52180b5a614b5d8e3cf17a6212f3262ebde034c7
+Production index asset         = assets/index-H__8lRtl.js
+CURRENT_APP_VERSION            = 3.6.0
+```
+
+正式 Browser E2E owner：
+
+```text
+.github/workflows/browser-e2e.yml
+playwright.e2e.config.js
+vite.e2e.config.js
+e2e/index.html
+e2e/main.jsx
+e2e/tests/critical-browser.spec.js
+tests/browserE2EGovernance.test.js
+```
+
+Browser E2E 使用真正 production browser components，但透過 local fixture 隔離 Backend：
+
+```text
+LoginView
+Navigation / Sidebar / MobileTopNav
+DeviceApprovalGate
+AsyncActionButton
+AppContext
+```
+
+目前 Critical flows：
+
+```text
+1. 高階主管 sanitized directory 正常登入 callback
+2. 錯誤 credential 留在登入頁並顯示錯誤
+3. 初始密碼必須先進入首次安全更新
+4. 區長 desktop + mobile 只顯示允許的功能
+5. async save 顯示 busy 並阻擋重複執行
+6. 新裝置 DeviceApprovalGate 阻擋正常工作並可返回登入
+```
+
+安全隔離：
+
+```text
+Browser E2E host            = 127.0.0.1:4174
+Production Backend calls    = forbidden
+Production Firestore calls  = forbidden
+Production Firebase Auth    = forbidden
+Production GitHub Pages     = forbidden
+workflow permission         = contents: read
+auto deploy                 = NO
+Production secrets required = NO
+```
+
+Playwright：
+
+```text
+@playwright/test = 1.63.0
+browser          = Chromium
+Remote runner    = GitHub ubuntu-latest
+local Intel Mac  = 不要求安裝 Chromium
+```
+
+Final status：
+
+```text
+IMPLEMENTED                    = YES
+LOCAL STATIC VALIDATED         = YES
+LOCAL E2E FIXTURE BUILD        = YES
+LOCAL P1-A CORE REGRESSION     = YES
+COMMITTED                      = YES
+PUSHED                         = YES
+GITHUB CORE CI CONFIRMED       = YES
+GITHUB BROWSER E2E CONFIRMED   = YES
+DEPLOYED                       = NOT APPLICABLE — test/CI only
+P1-B CLOSED                    = YES
+```
+
+Documentation Impact：本 closeout 更新 `CURRENT_STATE.md`、`SYSTEM_SOURCE_MAP.md`、`ARCHITECTURE.md`、`DEVELOPMENT_GUIDE.md`。`AUTH_AND_SECURITY.md`、`FIREBASE_DATA_MODEL.md`、`DATA_FLOW.md`、`DEPLOYMENT.md`、`DASHBOARD_SUMMARY.md`、`MAINTENANCE_TOOLS.md`、`TELEGRAM_AGENT.md`、`DATA_IDENTITY_RULES.md`、`PROJECT_OPERATING_RULES.md` = None。
+
+---
+
 # P1-A CI Validation Gate Final Closeout — 2026-09-24
 
 P1-A 已完成本機驗證、GitHub push 與首次 Remote CI green confirmation。這一批只建立驗證與測試基礎設施，不部署 Frontend / Functions / Firestore Rules，也不修改 Production data。
