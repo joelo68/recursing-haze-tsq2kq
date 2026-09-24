@@ -17,6 +17,7 @@ import {
   getProjectionHistoryYearsForRange,
   getTaipeiProjectionYearMonth,
 } from "../utils/projectionObservability.js";
+import { AsyncActionButton } from "./SharedUI";
 
 const emptyAccuracyState = () => ({
   status: "idle",
@@ -383,11 +384,11 @@ const SmartForecastAccuracyPanel = ({
           )}
 
           <div className="border-t border-stone-100 pt-4">
-            <button
+            <AsyncActionButton
               type="button"
               onClick={openHistory}
               className="flex w-full items-center justify-between gap-3 rounded-2xl border border-stone-100 bg-stone-50/55 px-4 py-3 text-left"
-            >
+             loadingText="載入中…">
               <div>
                 <p className="text-sm font-extrabold text-stone-700">歷史表現</p>
                 <p className="mt-0.5 text-xs font-bold text-stone-400">
@@ -403,7 +404,7 @@ const SmartForecastAccuracyPanel = ({
                   className={`text-stone-400 transition-transform ${historyOpen ? "rotate-180" : ""}`}
                 />
               </div>
-            </button>
+            </AsyncActionButton>
 
             {historyOpen && (
               <div className="mt-3 space-y-3 rounded-2xl border border-stone-100 bg-[#FFFDF9] p-4">

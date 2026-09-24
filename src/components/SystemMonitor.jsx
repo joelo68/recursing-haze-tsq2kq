@@ -9,7 +9,7 @@ import {
 } from "firebase/firestore";
 
 import { AppContext } from "../AppContext";
-import { ViewWrapper, Card } from "./SharedUI";
+import { ViewWrapper, Card, AsyncActionButton } from "./SharedUI";
 import SmartDatePicker from "./SmartDatePicker";
 import DeviceApprovalPanel from "./DeviceApprovalPanel";
 import { formatLocalYYYYMMDD } from "../utils/helpers";
@@ -1304,14 +1304,14 @@ const SystemMonitor = () => {
                     </select>
                   </div>
 
-                  <button
+                  <AsyncActionButton
                     type="button"
                     onClick={fetchDeviceProfiles}
                     className="h-10 px-4 rounded-xl bg-stone-800 text-white text-sm font-black flex items-center justify-center gap-2 active:scale-95 whitespace-nowrap"
-                  >
+                   loadingText="載入中…">
                     {deviceLoading ? <RefreshCw size={16} className="animate-spin" /> : <RefreshCw size={16} />}
                     {deviceHasLoaded ? "重新載入" : "載入資料"}
-                  </button>
+                  </AsyncActionButton>
                 </div>
               </div>
 

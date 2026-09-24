@@ -9,7 +9,7 @@ import { Target, TrendingUp, DollarSign, Activity, Calendar, Award, Filter, Arro
 import { getDoc, doc } from "firebase/firestore";
 import { AppContext } from "../AppContext";
 import { sortManagerNames, sortStoreNames, sortManagersByOrgOrder, sortStoresByOrgOrder } from "../utils/helpers";
-import { ViewWrapper, Card } from "./SharedUI";
+import { ViewWrapper, Card, AsyncActionButton } from "./SharedUI";
 import SmartMonthPicker from "./SmartMonthPicker";
 import { filterSystemExcludedStoreKeys } from "../utils/systemExclusion.js";
 import { resolveKpiPresentationLabel } from "../utils/kpiPresentation.js";
@@ -1433,9 +1433,9 @@ const annualData = useMemo(() => {
             </div>
             <div className="p-4 border-t border-stone-100 bg-white shrink-0 flex justify-end gap-3">
               <button onClick={() => setIsConfigModalOpen(false)} className="px-6 py-2.5 rounded-xl font-bold text-stone-500 hover:bg-stone-50">取消</button>
-              <button onClick={saveConfig} className="px-6 py-2.5 rounded-xl font-bold bg-stone-800 text-white hover:bg-stone-700 shadow-lg flex items-center gap-2">
+              <AsyncActionButton onClick={saveConfig} className="px-6 py-2.5 rounded-xl font-bold bg-stone-800 text-white hover:bg-stone-700 shadow-lg flex items-center gap-2" loadingText="儲存中…">
                 <Save size={18}/> 儲存設定
-              </button>
+              </AsyncActionButton>
             </div>
           </div>
         </div>

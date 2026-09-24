@@ -1,6 +1,6 @@
 // src/components/SharedUI.jsx
 import React, { useEffect } from "react";
-import { CheckCircle, AlertCircle, Bell } from "lucide-react";
+import { CheckCircle, AlertCircle, Bell, Loader2 } from "lucide-react";
 
 export const ViewWrapper = ({ children }) => (
   <div className="animate-in fade-in slide-in-from-bottom-2 duration-500 w-full">
@@ -40,6 +40,55 @@ export const Toast = ({ message, type, onClose }) => {
       {type === "success" ? <CheckCircle size={20} /> : type === "error" ? <AlertCircle size={20} /> : <Bell size={20} />}
       <span className="font-medium text-sm tracking-wide">{message}</span>
     </div>
+  );
+};
+
+
+export const AsyncActionButton = ({
+  children,
+  onClick,
+  loadingText = "處理中…",
+  busy = false,
+  disabled = false,
+  className = "",
+  ...props
+}) => {
+  const [internalBusy, setInternalBusy] = React.useState(false);
+  const busyRef = React.useRef(false);
+  const isBusy = Boolean(busy || internalBusy);
+
+  const handleClick = async (event) => {
+    if (disabled || isBusy || busyRef.current) return;
+
+    const result = onClick?.(event);
+    if (!result || typeof result.then !== "function") return result;
+
+    busyRef.current = true;
+    setInternalBusy(true);
+    try {
+      return await result;
+    } finally {
+      busyRef.current = false;
+      setInternalBusy(false);
+    }
+  };
+
+  return (
+    <button
+      {...props}
+      onClick={handleClick}
+      disabled={Boolean(disabled || isBusy)}
+      aria-busy={isBusy}
+      data-async-feedback="v1"
+      className={`${className} ${isBusy ? "cursor-wait" : ""}`.trim()}
+    >
+      {isBusy ? (
+        <span className="inline-flex items-center justify-center gap-2">
+          <Loader2 size={16} className="animate-spin shrink-0" aria-hidden="true" />
+          {loadingText ? <span>{loadingText}</span> : null}
+        </span>
+      ) : children}
+    </button>
   );
 };
 

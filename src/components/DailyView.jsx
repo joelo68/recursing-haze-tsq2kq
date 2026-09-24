@@ -6,7 +6,7 @@ import {
   Settings, X, Ban, Save, User, FileWarning, Loader2, Clock 
 } from "lucide-react";
 import { query, where, onSnapshot } from "firebase/firestore";
-import { ViewWrapper, Card } from "./SharedUI";
+import { ViewWrapper, Card, AsyncActionButton } from "./SharedUI";
 import { AppContext } from "../AppContext";
 import { sortManagerNames, sortStoreNames, sortManagersByOrgOrder, sortStoresByOrgOrder } from "../utils/helpers";
 import { KPI_VALUE_STATUS } from "../utils/kpiContracts.js";
@@ -841,9 +841,9 @@ const DailyView = () => {
             
             <div className="p-4 border-t border-stone-100 bg-white shrink-0 flex justify-end gap-3">
               <button onClick={() => setIsConfigModalOpen(false)} className="px-6 py-2.5 rounded-xl font-bold text-stone-500 hover:bg-stone-50 transition-colors">取消</button>
-              <button onClick={saveConfig} className="px-6 py-2.5 rounded-xl font-bold bg-stone-800 text-white hover:bg-stone-700 shadow-lg flex items-center gap-2 transition-colors">
+              <AsyncActionButton onClick={saveConfig} className="px-6 py-2.5 rounded-xl font-bold bg-stone-800 text-white hover:bg-stone-700 shadow-lg flex items-center gap-2 transition-colors" loadingText="儲存中…">
                 <Save size={18}/> 儲存設定
-              </button>
+              </AsyncActionButton>
             </div>
             
           </div>

@@ -5,7 +5,7 @@ import { doc, setDoc, writeBatch, serverTimestamp } from "firebase/firestore";
 import { db, appId } from "../config/firebase";
 import { AppContext } from "../AppContext";
 import { sortManagerNames, sortStoreNames, sortTherapistsByStoreThenName, sortManagersByOrgOrder, sortStoresByOrgOrder, normalizeStoreCoreName } from "../utils/helpers";
-import { ViewWrapper, Card } from "./SharedUI";
+import { ViewWrapper, Card, AsyncActionButton } from "./SharedUI";
 
 const TherapistTargetView = () => {
   const {
@@ -271,9 +271,9 @@ const TherapistTargetView = () => {
           </div>
 
           <div className="flex justify-end">
-             <button onClick={handleSaveTherapistTargets} disabled={!tTargetTherapist} className="w-full md:w-auto bg-stone-800 text-white px-8 py-3 rounded-xl font-bold hover:bg-stone-700 shadow-sm flex items-center justify-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed transition-all active:scale-95">
+             <AsyncActionButton onClick={handleSaveTherapistTargets} disabled={!tTargetTherapist} className="w-full md:w-auto bg-stone-800 text-white px-8 py-3 rounded-xl font-bold hover:bg-stone-700 shadow-sm flex items-center justify-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed transition-all active:scale-95" loadingText="儲存中…">
               <Save size={18}/> 儲存設定
-            </button>
+            </AsyncActionButton>
           </div>
 
           {tTargetTherapist ? (

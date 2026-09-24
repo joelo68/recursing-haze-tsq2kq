@@ -14,7 +14,7 @@ import {
 
 import { db, appId } from "../config/firebase";
 import { AppContext } from "../AppContext";
-import { ViewWrapper, Card } from "./SharedUI";
+import { ViewWrapper, Card, AsyncActionButton } from "./SharedUI";
 import { DEFAULT_PERMISSIONS, ALL_MENU_ITEMS } from "../constants/index";
 import { generateUUID, normalizeManagerOrder, sortManagersByOrgOrder, sortStoresByOrgOrder } from "../utils/helpers";
 import { KPI_VALUE_STATUS, validPositiveSetting, validateStoreHealthBenchmark } from "../utils/kpiContracts";
@@ -1534,7 +1534,7 @@ const SettingsView = () => {
           </div>
         </div>
 
-        {activeTab === "kpi" && (<Card title="KPI 目標參數"><div className="max-w-md w-full space-y-6 min-w-0"><div><label className="block text-sm font-bold text-[#7C7063] mb-2">目標新客客單</label><input type="number" min="0" value={localTargets.newASP ?? ""} onChange={(e) => setLocalTargets({...localTargets, newASP: e.target.value})} placeholder="未設定" className="w-full px-4 py-3 border-2 rounded-xl outline-none focus:border-[#D6A84F]"/><p className="mt-1 text-[11px] font-bold text-[#A69C91]">留白或 0 代表「目標未設定」，系統不會自動寫入預設值。</p></div><div><label className="block text-sm font-bold text-[#7C7063] mb-2">目標消耗客單</label><input type="number" value={localTargets.trafficASP ?? 1200} onChange={(e) => setLocalTargets({...localTargets, trafficASP: Number(e.target.value)})} className="w-full px-4 py-3 border-2 rounded-xl outline-none focus:border-[#D6A84F]"/></div><button onClick={handleSaveTargets} className="w-full bg-gradient-to-r from-[#FFF7DF] via-[#F7E8C6] to-[#EACB86] text-[#5A4225] border border-[#E8C77A] py-3 rounded-xl font-bold active:scale-95 transition-transform">儲存設定</button></div></Card>)}
+        {activeTab === "kpi" && (<Card title="KPI 目標參數"><div className="max-w-md w-full space-y-6 min-w-0"><div><label className="block text-sm font-bold text-[#7C7063] mb-2">目標新客客單</label><input type="number" min="0" value={localTargets.newASP ?? ""} onChange={(e) => setLocalTargets({...localTargets, newASP: e.target.value})} placeholder="未設定" className="w-full px-4 py-3 border-2 rounded-xl outline-none focus:border-[#D6A84F]"/><p className="mt-1 text-[11px] font-bold text-[#A69C91]">留白或 0 代表「目標未設定」，系統不會自動寫入預設值。</p></div><div><label className="block text-sm font-bold text-[#7C7063] mb-2">目標消耗客單</label><input type="number" value={localTargets.trafficASP ?? 1200} onChange={(e) => setLocalTargets({...localTargets, trafficASP: Number(e.target.value)})} className="w-full px-4 py-3 border-2 rounded-xl outline-none focus:border-[#D6A84F]"/></div><AsyncActionButton onClick={handleSaveTargets} className="w-full bg-gradient-to-r from-[#FFF7DF] via-[#F7E8C6] to-[#EACB86] text-[#5A4225] border border-[#E8C77A] py-3 rounded-xl font-bold active:scale-95 transition-transform" loadingText="儲存中…">儲存設定</AsyncActionButton></div></Card>)}
         
         {activeTab === "health" && (
             <Card title="門市體質診斷標準">
@@ -1562,7 +1562,7 @@ const SettingsView = () => {
                             );
                         })}
                     </div>
-                    <div className="flex justify-end pt-4 border-t border-[#EFE7DA]"><button onClick={handleSaveTargets} className="w-full md:w-auto bg-gradient-to-r from-[#FFF7DF] via-[#F7E8C6] to-[#EACB86] text-[#5A4225] border border-[#E8C77A] px-8 py-3 rounded-xl font-bold hover:brightness-[1.02] shadow-lg active:scale-95 transition-all flex items-center justify-center gap-2"><Save size={18} /> 儲存體質標準</button></div>
+                    <div className="flex justify-end pt-4 border-t border-[#EFE7DA]"><AsyncActionButton onClick={handleSaveTargets} className="w-full md:w-auto bg-gradient-to-r from-[#FFF7DF] via-[#F7E8C6] to-[#EACB86] text-[#5A4225] border border-[#E8C77A] px-8 py-3 rounded-xl font-bold hover:brightness-[1.02] shadow-lg active:scale-95 transition-all flex items-center justify-center gap-2" loadingText="儲存中…"><Save size={18} /> 儲存體質標準</AsyncActionButton></div>
                 </div>
             </Card>
         )}
@@ -1686,12 +1686,12 @@ const SettingsView = () => {
                       儲存前請確認「目前編輯職務」與高亮欄位是否正確。
                     </p>
                   </div>
-                  <button
+                  <AsyncActionButton
                     onClick={handleSavePermissions}
                     className="w-full rounded-xl border border-[#E8C77A] bg-gradient-to-r from-[#FFF7DF] via-[#F7E8C6] to-[#EACB86] px-8 py-3 font-bold text-[#5A4225] shadow-lg transition-all hover:brightness-[1.02] active:scale-95 md:w-auto"
-                  >
+                   loadingText="儲存中…">
                     儲存模組權限
-                  </button>
+                  </AsyncActionButton>
                 </div>
               </div>
             </Card>
@@ -1966,9 +1966,9 @@ const SettingsView = () => {
                 </div>
 
                 <div className="flex justify-end pt-4 border-t border-[#EFE7DA]">
-                  <button onClick={handleSaveSecurityConfig} className="w-full md:w-auto bg-gradient-to-r from-[#FFF7DF] via-[#F7E8C6] to-[#EACB86] text-[#5A4225] border border-[#E8C77A] px-8 py-3 rounded-xl font-bold hover:brightness-[1.02] shadow-lg active:scale-95 transition-all flex items-center gap-2 justify-center">
+                  <AsyncActionButton onClick={handleSaveSecurityConfig} className="w-full md:w-auto bg-gradient-to-r from-[#FFF7DF] via-[#F7E8C6] to-[#EACB86] text-[#5A4225] border border-[#E8C77A] px-8 py-3 rounded-xl font-bold hover:brightness-[1.02] shadow-lg active:scale-95 transition-all flex items-center gap-2 justify-center" loadingText="儲存中…">
                     <Save size={18} /> 儲存資安與省流量設定
-                  </button>
+                  </AsyncActionButton>
                 </div>
               </div>
             </Card>
@@ -2036,12 +2036,12 @@ const SettingsView = () => {
               </div>
 
               <div className="flex justify-end">
-                <button
+                <AsyncActionButton
                   onClick={handleSaveFeatureFlags}
                   className="w-full md:w-auto bg-gradient-to-r from-[#FFF7DF] via-[#F7E8C6] to-[#EACB86] text-[#5A4225] border border-[#E8C77A] px-8 py-3 rounded-xl font-bold hover:brightness-[1.02] shadow-lg active:scale-95 transition-all flex items-center gap-2 justify-center"
-                >
+                 loadingText="儲存中…">
                   <Save size={18} /> 儲存品牌功能設定
-                </button>
+                </AsyncActionButton>
               </div>
             </div>
           </Card>
@@ -2227,14 +2227,14 @@ const SettingsView = () => {
                       {DIRECTOR_LEVEL_OPTIONS.map((item) => <option key={item.value} value={item.value}>{item.label}</option>)}
                     </select>
                   </div>
-                  <button
+                  <AsyncActionButton
                     type="button"
                     onClick={handleAddDirectorAccount}
                     disabled={Boolean(directorActionBusy)}
                     className="flex w-full items-center justify-center gap-2 rounded-xl border border-[#E8C77A] bg-gradient-to-r from-[#FFF7DF] via-[#F7E8C6] to-[#EACB86] px-6 py-3 font-black text-[#5A4225] shadow-sm transition-all hover:brightness-[1.02] disabled:opacity-50 lg:w-auto"
-                  >
+                   loadingText="新增中…">
                     <Plus size={18} /> 新增高階主管
-                  </button>
+                  </AsyncActionButton>
                 </div>
                 <p className="mt-3 text-xs font-bold leading-5 text-[#A69C91]">新增後由系統使用該品牌的初始密碼建立帳號；主管首次登入時會被要求建立自己的新密碼。</p>
               </div>
@@ -2259,7 +2259,7 @@ const SettingsView = () => {
                                 onChange={(e) => setEditingDirectorName(e.target.value)}
                                 className="min-w-0 flex-1 rounded-xl border-2 border-[#EFE7DA] px-3 py-2.5 font-bold outline-none focus:border-[#D6A84F]"
                               />
-                              <button type="button" disabled={busy} onClick={() => handleRenameDirector(account)} className="rounded-xl bg-[#5A4225] px-4 py-2 text-xs font-black text-white disabled:opacity-50">儲存</button>
+                              <AsyncActionButton type="button" disabled={busy} onClick={() => handleRenameDirector(account)} className="rounded-xl bg-[#5A4225] px-4 py-2 text-xs font-black text-white disabled:opacity-50" loadingText="儲存中…">儲存</AsyncActionButton>
                               <button type="button" onClick={cancelEditDirector} className="rounded-xl border border-[#EFE7DA] px-4 py-2 text-xs font-black text-[#7C7063]">取消</button>
                             </div>
                           ) : (
@@ -2290,9 +2290,9 @@ const SettingsView = () => {
                             </select>
                             <button type="button" disabled={busy || isSelf} onClick={() => beginEditDirector(account)} className="rounded-xl border border-[#EFE7DA] px-3 py-2 text-xs font-black text-[#675B4E] disabled:opacity-40">修改姓名</button>
                             <button type="button" disabled={busy} onClick={() => openCredentialReveal("director", account.id, account.name)} className="rounded-xl border border-sky-100 bg-sky-50 px-3 py-2 text-xs font-black text-sky-700 disabled:opacity-40"><Shield size={14} className="mr-1 inline" />查看密碼</button>
-                            <button type="button" disabled={busy} onClick={() => handleResetDirectorPassword(account)} className="rounded-xl bg-[#FFF7DF] px-3 py-2 text-xs font-black text-[#8A632E] disabled:opacity-40"><Key size={14} className="mr-1 inline" />重設密碼</button>
-                            <button type="button" disabled={busy || isSelf} onClick={() => handleToggleDirectorAccount(account)} className={`rounded-xl px-3 py-2 text-xs font-black disabled:opacity-40 ${isActive ? "bg-amber-50 text-amber-700" : "bg-emerald-50 text-emerald-700"}`}>{isActive ? "停用" : "啟用"}</button>
-                            <button type="button" disabled={busy || isSelf} onClick={() => handleDeleteDirectorAccount(account)} className="rounded-xl bg-rose-50 px-3 py-2 text-xs font-black text-rose-600 disabled:opacity-40"><Trash2 size={14} className="mr-1 inline" />刪除</button>
+                            <AsyncActionButton type="button" disabled={busy} onClick={() => handleResetDirectorPassword(account)} className="rounded-xl bg-[#FFF7DF] px-3 py-2 text-xs font-black text-[#8A632E] disabled:opacity-40" loadingText="重設中…"><Key size={14} className="mr-1 inline" />重設密碼</AsyncActionButton>
+                            <AsyncActionButton type="button" disabled={busy || isSelf} onClick={() => handleToggleDirectorAccount(account)} className={`rounded-xl px-3 py-2 text-xs font-black disabled:opacity-40 ${isActive ? "bg-amber-50 text-amber-700" : "bg-emerald-50 text-emerald-700"}`} loadingText="更新中…">{isActive ? "停用" : "啟用"}</AsyncActionButton>
+                            <AsyncActionButton type="button" disabled={busy || isSelf} onClick={() => handleDeleteDirectorAccount(account)} className="rounded-xl bg-rose-50 px-3 py-2 text-xs font-black text-rose-600 disabled:opacity-40" loadingText="刪除中…"><Trash2 size={14} className="mr-1 inline" />刪除</AsyncActionButton>
                           </div>
                         )}
                       </div>
@@ -2321,12 +2321,12 @@ const SettingsView = () => {
                       className="w-full px-4 py-3 border-2 border-[#EFE7DA] rounded-xl outline-none focus:border-[#D6A84F] font-bold"
                     />
                   </div>
-                  <button
+                  <AsyncActionButton
                     onClick={handleAddTrainerAccount}
                     className="w-full lg:w-auto bg-stone-900 text-white px-6 py-3 rounded-xl font-black shadow-lg hover:bg-stone-800 active:scale-[0.98] transition-all flex items-center justify-center gap-2"
-                  >
+                   loadingText="新增中…">
                     <Plus size={18} /> 新增教專
-                  </button>
+                  </AsyncActionButton>
                 </div>
                 <p className="mt-3 text-xs font-bold text-[#A69C91]">
                   新增帳號由系統自動套用初始密碼；一般畫面不會預載或顯示既有密碼。需要協助時可重設，或使用最高管理金鑰查看單一帳號。
@@ -2369,20 +2369,20 @@ const SettingsView = () => {
                         </div>
 
                         <div className="flex flex-wrap gap-2 justify-end">
-                          <button onClick={() => moveTrainerAccount(account.id, -1)} disabled={index === 0} className="px-3 py-2 rounded-xl border border-[#EFE7DA] text-xs font-black text-[#7C7063] disabled:opacity-30 hover:bg-[#FAF7F1]">上移</button>
-                          <button onClick={() => moveTrainerAccount(account.id, 1)} disabled={index === trainerAccounts.length - 1} className="px-3 py-2 rounded-xl border border-[#EFE7DA] text-xs font-black text-[#7C7063] disabled:opacity-30 hover:bg-[#FAF7F1]">下移</button>
+                          <AsyncActionButton onClick={() => moveTrainerAccount(account.id, -1)} disabled={index === 0} className="px-3 py-2 rounded-xl border border-[#EFE7DA] text-xs font-black text-[#7C7063] disabled:opacity-30 hover:bg-[#FAF7F1]" loadingText="排序中…">上移</AsyncActionButton>
+                          <AsyncActionButton onClick={() => moveTrainerAccount(account.id, 1)} disabled={index === trainerAccounts.length - 1} className="px-3 py-2 rounded-xl border border-[#EFE7DA] text-xs font-black text-[#7C7063] disabled:opacity-30 hover:bg-[#FAF7F1]" loadingText="排序中…">下移</AsyncActionButton>
                           {isEditing ? (
                             <>
-                              <button onClick={() => handleSaveTrainerAccount(account.id)} className="px-4 py-2 rounded-xl bg-stone-900 text-white text-xs font-black hover:bg-stone-800">儲存</button>
+                              <AsyncActionButton onClick={() => handleSaveTrainerAccount(account.id)} className="px-4 py-2 rounded-xl bg-stone-900 text-white text-xs font-black hover:bg-stone-800" loadingText="儲存中…">儲存</AsyncActionButton>
                               <button onClick={cancelEditTrainer} className="px-4 py-2 rounded-xl border border-stone-200 text-xs font-black text-stone-500 hover:bg-stone-50">取消</button>
                             </>
                           ) : (
                             <>
                               <button onClick={() => openCredentialReveal("trainer", account.id, account.name)} className="px-4 py-2 rounded-xl bg-sky-50 text-sky-700 text-xs font-black hover:bg-sky-100">查看密碼</button>
-                              <button onClick={() => handleResetTrainerPassword(account)} className="px-4 py-2 rounded-xl bg-[#FFF7DF] text-[#8A632E] text-xs font-black hover:bg-amber-100">重設密碼</button>
+                              <AsyncActionButton onClick={() => handleResetTrainerPassword(account)} className="px-4 py-2 rounded-xl bg-[#FFF7DF] text-[#8A632E] text-xs font-black hover:bg-amber-100" loadingText="重設中…">重設密碼</AsyncActionButton>
                               <button onClick={() => beginEditTrainer(account)} className="px-4 py-2 rounded-xl border border-[#EFE7DA] text-xs font-black text-[#7C7063] hover:bg-[#FAF7F1]">修改</button>
-                              <button onClick={() => handleToggleTrainerAccount(account)} className={`px-4 py-2 rounded-xl text-xs font-black ${isActive ? "bg-amber-50 text-amber-700 hover:bg-amber-100" : "bg-emerald-50 text-emerald-700 hover:bg-emerald-100"}`}>{isActive ? "停用" : "啟用"}</button>
-                              <button onClick={() => handleDeleteTrainerAccount(account)} className="px-4 py-2 rounded-xl bg-rose-50 text-rose-600 text-xs font-black hover:bg-rose-100">刪除</button>
+                              <AsyncActionButton onClick={() => handleToggleTrainerAccount(account)} className={`px-4 py-2 rounded-xl text-xs font-black ${isActive ? "bg-amber-50 text-amber-700 hover:bg-amber-100" : "bg-emerald-50 text-emerald-700 hover:bg-emerald-100"}`} loadingText="更新中…">{isActive ? "停用" : "啟用"}</AsyncActionButton>
+                              <AsyncActionButton onClick={() => handleDeleteTrainerAccount(account)} className="px-4 py-2 rounded-xl bg-rose-50 text-rose-600 text-xs font-black hover:bg-rose-100" loadingText="刪除中…">刪除</AsyncActionButton>
                             </>
                           )}
                         </div>
@@ -2395,7 +2395,7 @@ const SettingsView = () => {
           </Card>
         )}
 
-                {activeTab === "shops" && ( <div className="space-y-6 w-full max-w-full min-w-0"><Card title="新增營運店家"><div className="flex flex-col md:flex-row gap-4 items-end"><div className="flex-1 w-full"><label className="block text-xs font-bold text-[#A69C91] mb-1">分店簡稱</label><input type="text" value={newShop.name} onChange={(e) => setNewShop({ ...newShop, name: e.target.value })} placeholder="例如: 中山" className="w-full px-4 py-2 border-2 border-[#EFE7DA] rounded-xl outline-none focus:border-[#D6A84F] font-bold"/></div><div className="flex-1 w-full"><label className="block text-xs font-bold text-[#A69C91] mb-1">所屬區域</label><div className="relative"><select value={newShop.manager} onChange={(e) => setNewShop({ ...newShop, manager: e.target.value })} className="w-full px-4 py-2 border-2 border-[#EFE7DA] rounded-xl outline-none focus:border-[#D6A84F] font-bold appearance-none bg-[#FFFCF7] text-[#4D4338]"><option value="">請選擇...</option>{sortManagersByOrgOrder(localManagers, null, localManagerOrder).map((m) => (<option key={m} value={m}>{m} 區</option>))}</select><ChevronDown size={16} className="absolute right-3 top-3 text-[#A69C91] pointer-events-none"/></div></div><button onClick={handleAddGlobalStore} className="w-full md:w-auto bg-gradient-to-r from-[#FFF7DF] via-[#F7E8C6] to-[#EACB86] text-[#5A4225] border border-[#E8C77A] px-6 py-2.5 rounded-xl font-bold hover:brightness-[1.02] shadow-sm flex items-center justify-center gap-2"><Plus size={18} /> 新增</button></div></Card><Card title="全域店家列表"><div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">{managerEntries.map(([mgr, stores]) => (<div key={mgr} className={`bg-[#FAF7F1] rounded-2xl p-4 border ${mgr === UNASSIGNED_KEY ? "border-stone-300 shadow-inner" : "border-[#EFE7DA]"}`}><div className="flex items-center gap-2 mb-3 border-b border-[#E8DDCC] pb-2"><span className={`font-bold ${mgr === UNASSIGNED_KEY ? "text-[#7C7063]" : "text-[#4D4338]"}`}>{mgr} {mgr!==UNASSIGNED_KEY && "區"}</span><span className="text-xs text-[#A69C91] ml-auto">{stores.length} 間</span></div><div className="flex flex-wrap gap-2">{stores.map((store) => (<div key={store} className="group relative flex items-center"><span className={`px-3 py-1.5 border rounded-lg text-xs font-bold shadow-sm pr-7 ${mgr === UNASSIGNED_KEY ? "bg-[#FFFCF7] text-[#7C7063] border-[#E8DDCC]" : "bg-[#FFFCF7] text-[#675B4E] border-[#E8DDCC]"}`}>{store}</span><button onClick={() => handleDeleteGlobalStore(store, mgr)} className="absolute right-1 p-1 text-stone-300 hover:text-rose-500 transition-colors"><X size={12} /></button></div>))}</div></div>))}</div></Card></div> )}
+                {activeTab === "shops" && ( <div className="space-y-6 w-full max-w-full min-w-0"><Card title="新增營運店家"><div className="flex flex-col md:flex-row gap-4 items-end"><div className="flex-1 w-full"><label className="block text-xs font-bold text-[#A69C91] mb-1">分店簡稱</label><input type="text" value={newShop.name} onChange={(e) => setNewShop({ ...newShop, name: e.target.value })} placeholder="例如: 中山" className="w-full px-4 py-2 border-2 border-[#EFE7DA] rounded-xl outline-none focus:border-[#D6A84F] font-bold"/></div><div className="flex-1 w-full"><label className="block text-xs font-bold text-[#A69C91] mb-1">所屬區域</label><div className="relative"><select value={newShop.manager} onChange={(e) => setNewShop({ ...newShop, manager: e.target.value })} className="w-full px-4 py-2 border-2 border-[#EFE7DA] rounded-xl outline-none focus:border-[#D6A84F] font-bold appearance-none bg-[#FFFCF7] text-[#4D4338]"><option value="">請選擇...</option>{sortManagersByOrgOrder(localManagers, null, localManagerOrder).map((m) => (<option key={m} value={m}>{m} 區</option>))}</select><ChevronDown size={16} className="absolute right-3 top-3 text-[#A69C91] pointer-events-none"/></div></div><AsyncActionButton onClick={handleAddGlobalStore} className="w-full md:w-auto bg-gradient-to-r from-[#FFF7DF] via-[#F7E8C6] to-[#EACB86] text-[#5A4225] border border-[#E8C77A] px-6 py-2.5 rounded-xl font-bold hover:brightness-[1.02] shadow-sm flex items-center justify-center gap-2" loadingText="新增中…"><Plus size={18} /> 新增</AsyncActionButton></div></Card><Card title="全域店家列表"><div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">{managerEntries.map(([mgr, stores]) => (<div key={mgr} className={`bg-[#FAF7F1] rounded-2xl p-4 border ${mgr === UNASSIGNED_KEY ? "border-stone-300 shadow-inner" : "border-[#EFE7DA]"}`}><div className="flex items-center gap-2 mb-3 border-b border-[#E8DDCC] pb-2"><span className={`font-bold ${mgr === UNASSIGNED_KEY ? "text-[#7C7063]" : "text-[#4D4338]"}`}>{mgr} {mgr!==UNASSIGNED_KEY && "區"}</span><span className="text-xs text-[#A69C91] ml-auto">{stores.length} 間</span></div><div className="flex flex-wrap gap-2">{stores.map((store) => (<div key={store} className="group relative flex items-center"><span className={`px-3 py-1.5 border rounded-lg text-xs font-bold shadow-sm pr-7 ${mgr === UNASSIGNED_KEY ? "bg-[#FFFCF7] text-[#7C7063] border-[#E8DDCC]" : "bg-[#FFFCF7] text-[#675B4E] border-[#E8DDCC]"}`}>{store}</span><AsyncActionButton onClick={() => handleDeleteGlobalStore(store, mgr)} className="absolute right-1 p-1 text-stone-300 hover:text-rose-500 transition-colors" loadingText="處理中…"><X size={12} /></AsyncActionButton></div>))}</div></div>))}</div></Card></div> )}
         {activeTab === "reporting-calendar" && (
           <ReportingCalendarManager
             currentBrand={currentBrand}
@@ -2437,7 +2437,7 @@ const SettingsView = () => {
                     <ChevronDown size={16} className="absolute right-3 top-3 text-[#A69C91] pointer-events-none" />
                   </div>
                 </div>
-                <button onClick={handleAddStoreAccount} className="bg-gradient-to-r from-[#FFF7DF] via-[#F7E8C6] to-[#EACB86] text-[#5A4225] border border-[#E8C77A] px-4 py-2.5 rounded-xl font-bold hover:brightness-[1.02]">新增店經理</button>
+                <AsyncActionButton onClick={handleAddStoreAccount} className="bg-gradient-to-r from-[#FFF7DF] via-[#F7E8C6] to-[#EACB86] text-[#5A4225] border border-[#E8C77A] px-4 py-2.5 rounded-xl font-bold hover:brightness-[1.02]" loadingText="新增中…">新增店經理</AsyncActionButton>
               </div>
               <p className="mt-3 text-xs font-bold text-[#A69C91]">新增帳號由系統自動設定初始密碼；一般畫面不會預載既有密碼。</p>
             </Card>
@@ -2456,9 +2456,9 @@ const SettingsView = () => {
                         <td className="p-4"><div className="flex flex-wrap gap-1">{(account.stores || []).map((store) => <span key={store} className="px-2 py-1 bg-[#F3EEE6] rounded text-xs font-bold text-[#675B4E]">{store}</span>)}</div></td>
                         <td className="p-4"><div className="flex justify-end gap-1 flex-wrap">
                           <button onClick={() => openCredentialReveal("store", account.id, account.name)} className="px-3 py-2 rounded-lg bg-sky-50 text-sky-700 text-xs font-black">查看密碼</button>
-                          <button onClick={() => handleResetStorePassword(account)} className="px-3 py-2 rounded-lg bg-[#FFF7DF] text-[#8A632E] text-xs font-black">重設密碼</button>
+                          <AsyncActionButton onClick={() => handleResetStorePassword(account)} className="px-3 py-2 rounded-lg bg-[#FFF7DF] text-[#8A632E] text-xs font-black" loadingText="重設中…">重設密碼</AsyncActionButton>
                           <button onClick={() => openEditStoreAccount(account)} className="text-[#A69C91] hover:text-[#675B4E] hover:bg-[#F3EEE6] p-2 rounded-lg"><Edit2 size={18} /></button>
-                          <button onClick={() => handleDeleteStoreAccount(account.id)} className="text-rose-400 hover:text-rose-600 hover:bg-rose-50 p-2 rounded-lg"><Trash2 size={18} /></button>
+                          <AsyncActionButton onClick={() => handleDeleteStoreAccount(account.id)} className="text-rose-400 hover:text-rose-600 hover:bg-rose-50 p-2 rounded-lg" loadingText="刪除中…"><Trash2 size={18} /></AsyncActionButton>
                         </div></td>
                       </tr>
                     ))}
@@ -2479,7 +2479,7 @@ const SettingsView = () => {
                       <div className="flex flex-wrap gap-2 mb-2 p-2 bg-[#FAF7F1] rounded-lg min-h-[40px]">{editStoreForm.stores.map((store) => <span key={store} className="px-2 py-1 bg-[#FFFCF7] border border-[#E8DDCC] rounded text-xs font-bold text-[#675B4E] shadow-sm flex items-center gap-1">{store}<button onClick={() => handleRemoveStoreFromEditForm(store)} className="text-stone-300 hover:text-rose-500"><X size={12} /></button></span>)}</div>
                       <select onChange={(e) => { handleAddStoreToEditForm(e.target.value); e.target.value = ""; }} className="w-full p-2 border rounded-lg font-bold bg-[#FFFCF7]"><option value="">+ 加入負責店家</option>{availableStoresForEditing.map((store) => <option key={store} value={store}>{store}</option>)}</select>
                     </div>
-                    <div className="pt-4 flex gap-3"><button onClick={() => setEditingStoreAccount(null)} className="flex-1 py-3 bg-[#F3EEE6] text-[#7C7063] rounded-xl font-bold">取消</button><button onClick={handleUpdateStoreAccount} className="flex-1 py-3 bg-gradient-to-r from-[#FFF7DF] via-[#F7E8C6] to-[#EACB86] text-[#5A4225] border border-[#E8C77A] rounded-xl font-bold">儲存變更</button></div>
+                    <div className="pt-4 flex gap-3"><button onClick={() => setEditingStoreAccount(null)} className="flex-1 py-3 bg-[#F3EEE6] text-[#7C7063] rounded-xl font-bold">取消</button><AsyncActionButton onClick={handleUpdateStoreAccount} className="flex-1 py-3 bg-gradient-to-r from-[#FFF7DF] via-[#F7E8C6] to-[#EACB86] text-[#5A4225] border border-[#E8C77A] rounded-xl font-bold" loadingText="儲存中…">儲存變更</AsyncActionButton></div>
                   </div>
                 </div>
               </div>
@@ -2492,7 +2492,7 @@ const SettingsView = () => {
             <Card title="新增區長">
               <div className="flex flex-col md:flex-row gap-4 items-end">
                 <div className="flex-1 w-full"><label className="block text-xs font-bold text-[#A69C91] mb-1">區長姓名</label><input type="text" value={newManager.name} onChange={(e) => setNewManager({ name: e.target.value })} placeholder="例如: Jonas" className="w-full px-4 py-2 border-2 border-[#EFE7DA] rounded-xl outline-none focus:border-[#D6A84F] font-bold" /></div>
-                <button onClick={handleAddManager} className="w-full md:w-auto bg-gradient-to-r from-[#FFF7DF] via-[#F7E8C6] to-[#EACB86] text-[#5A4225] border border-[#E8C77A] px-6 py-2.5 rounded-xl font-bold hover:brightness-[1.02] shadow-sm flex items-center justify-center gap-2"><Plus size={18} /> 新增區長</button>
+                <AsyncActionButton onClick={handleAddManager} className="w-full md:w-auto bg-gradient-to-r from-[#FFF7DF] via-[#F7E8C6] to-[#EACB86] text-[#5A4225] border border-[#E8C77A] px-6 py-2.5 rounded-xl font-bold hover:brightness-[1.02] shadow-sm flex items-center justify-center gap-2" loadingText="新增中…"><Plus size={18} /> 新增區長</AsyncActionButton>
               </div>
               <p className="mt-3 text-xs font-bold text-[#A69C91]">新增區長會同時建立登入帳號並套用系統初始密碼；不接受管理者在瀏覽器自行指定密碼。</p>
             </Card>
@@ -2508,9 +2508,9 @@ const SettingsView = () => {
                     {managerName !== UNASSIGNED_KEY && (
                       <div className="flex gap-2 flex-wrap justify-end">
                         <button onClick={() => openCredentialReveal("manager", managerName, managerName)} className="text-xs bg-sky-50 text-sky-700 px-3 py-1.5 rounded-lg font-bold">查看密碼</button>
-                        <button onClick={() => handleResetManagerPassword(managerName)} className="text-xs bg-[#FFF7DF] text-[#8A632E] px-3 py-1.5 rounded-lg font-bold">重設密碼</button>
+                        <AsyncActionButton onClick={() => handleResetManagerPassword(managerName)} className="text-xs bg-[#FFF7DF] text-[#8A632E] px-3 py-1.5 rounded-lg font-bold" loadingText="重設中…">重設密碼</AsyncActionButton>
                         <button onClick={() => openEditManager(managerName, stores)} className="text-xs bg-[#F3EEE6] text-[#675B4E] px-3 py-1.5 rounded-lg font-bold whitespace-nowrap">編輯轄區</button>
-                        <button onClick={() => handleDeleteManager(managerName)} className="text-rose-400 hover:bg-rose-50 p-1.5 rounded-lg"><Trash2 size={16} /></button>
+                        <AsyncActionButton onClick={() => handleDeleteManager(managerName)} className="text-rose-400 hover:bg-rose-50 p-1.5 rounded-lg" loadingText="刪除中…"><Trash2 size={16} /></AsyncActionButton>
                       </div>
                     )}
                   </div>
@@ -2525,7 +2525,7 @@ const SettingsView = () => {
                       <label className="block text-xs font-bold text-[#A69C91] mb-2">已分配店家</label>
                       <div className="flex flex-wrap gap-2 mb-4">{editingManagerStores.map((store) => <div key={store} className="group relative flex items-center"><span className="px-3 py-1.5 bg-[#FFFCF7] border border-[#E8DDCC] rounded-lg text-xs font-bold text-[#675B4E] shadow-sm pr-7">{store}</span><button onClick={() => handleRemoveStoreFromEditing(store)} className="absolute right-1 p-1 text-stone-300 hover:text-rose-500"><X size={12} /></button></div>)}</div>
                       <div className="mb-4"><label className="block text-xs font-bold text-[#A69C91] mb-1">新增未分配店家</label><div className="relative"><select onChange={(e) => { handleAddStoreToEditing(e.target.value); e.target.value = ""; }} className="w-full px-4 py-2 border-2 border-[#E8DDCC] rounded-xl font-bold bg-[#FFFCF7] appearance-none text-[#4D4338]"><option value="">+ 點擊選擇店家</option>{availableStoresForManagerEdit.filter((store) => !editingManagerStores.includes(store)).map((store) => <option key={store} value={store}>{store}</option>)}</select><ChevronDown size={16} className="absolute right-3 top-3 text-[#A69C91] pointer-events-none" /></div></div>
-                      <div className="flex gap-2 justify-end"><button onClick={cancelEditManager} className="px-3 py-1.5 text-xs font-bold text-[#A69C91]">取消</button><button onClick={() => handleSaveManagerStores(managerName)} className="px-4 py-1.5 bg-gradient-to-r from-[#FFF7DF] via-[#F7E8C6] to-[#EACB86] text-[#5A4225] border border-[#E8C77A] text-xs font-bold rounded-lg">儲存名稱與轄區</button></div>
+                      <div className="flex gap-2 justify-end"><button onClick={cancelEditManager} className="px-3 py-1.5 text-xs font-bold text-[#A69C91]">取消</button><AsyncActionButton onClick={() => handleSaveManagerStores(managerName)} className="px-4 py-1.5 bg-gradient-to-r from-[#FFF7DF] via-[#F7E8C6] to-[#EACB86] text-[#5A4225] border border-[#E8C77A] text-xs font-bold rounded-lg" loadingText="儲存中…">儲存名稱與轄區</AsyncActionButton></div>
                     </div>
                   ) : (
                     <div className="flex flex-wrap gap-2 mt-4">{stores.map((store) => <span key={store} className={`px-2.5 py-1 border rounded-lg text-xs font-bold ${managerName === UNASSIGNED_KEY ? "bg-[#FFFCF7] border-[#E8DDCC] text-[#A69C91]" : "bg-[#FAF7F1] border-[#EFE7DA] text-[#675B4E]"}`}>{store}</span>)}</div>
@@ -2728,7 +2728,7 @@ const SettingsView = () => {
                             </div>
                             <div className="flex gap-2">
                               {!["ended", "expired"].includes(item.computedStatus) && <button onClick={() => handleEditDelegation(item)} className="px-3 py-2 rounded-xl bg-[#F3EEE6] text-[#675B4E] text-xs font-bold">編輯</button>}
-                              {!["ended", "expired"].includes(item.computedStatus) && <button onClick={() => handleEndDelegation(item)} className="px-3 py-2 rounded-xl bg-rose-50 text-rose-600 text-xs font-bold">立即結束</button>}
+                              {!["ended", "expired"].includes(item.computedStatus) && <AsyncActionButton onClick={() => handleEndDelegation(item)} className="px-3 py-2 rounded-xl bg-rose-50 text-rose-600 text-xs font-bold" loadingText="結束中…">立即結束</AsyncActionButton>}
                             </div>
                           </div>
                           <div className="mt-4 rounded-xl bg-[#FAF7F1] p-3">
