@@ -108,18 +108,27 @@ service cloud.firestore {
       allow read, write: if cyjLegacyIdentity(appId);
     }
 
-    // 新品牌路徑：代理資料只能新增／更新，不允許刪除；歷史以 status=ended 保留。
+    // P0-FINAL-1D-A2-2：代理與托管由 Backend authority 單一寫入。
+    // Browser 僅保留同品牌讀取；create / update / delete 全部封鎖。
     match /brands/{brandId}/management_delegations/{delegationId} {
       allow read: if sameBrandIdentity(brandId);
-      allow create, update: if sameBrandIdentity(brandId) && validDelegation(request.resource.data);
-      allow delete: if false;
+      allow write: if false;
     }
 
-    // CYJ 舊版路徑。
+    // CYJ legacy path：同樣只讀，寫入僅由 Admin SDK Backend authority 執行。
     match /artifacts/{appId}/public/data/management_delegations/{delegationId} {
       allow read: if cyjLegacyIdentity(appId);
-      allow create, update: if cyjLegacyIdentity(appId) && validDelegation(request.resource.data);
-      allow delete: if false;
+      allow write: if false;
+    }
+
+    // Delegation authority state 是跨文件 race/OCC 的 Backend-only serialization state。
+    // Browser 不需要讀取，也不得偽造 revision / lock state。
+    match /brands/{brandId}/management_delegation_authority/{document=**} {
+      allow read, write: if false;
+    }
+
+    match /artifacts/{appId}/public/data/management_delegation_authority/{document=**} {
+      allow read, write: if false;
     }
 
     // 系統日誌禁止修改或刪除。
@@ -437,6 +446,7 @@ service cloud.firestore {
     match /brands/{brandId}/{collectionName}/{document=**} {
       allow read, write: if sameBrandIdentity(brandId)
         && collectionName != 'management_delegations'
+        && collectionName != 'management_delegation_authority'
         && collectionName != 'org_structure_snapshots'
         && collectionName != 'system_logs'
         && collectionName != 'account_devices'
@@ -459,6 +469,7 @@ service cloud.firestore {
     match /artifacts/{appId}/public/data/{collectionName}/{document=**} {
       allow read, write: if cyjLegacyIdentity(appId)
         && collectionName != 'management_delegations'
+        && collectionName != 'management_delegation_authority'
         && collectionName != 'org_structure_snapshots'
         && collectionName != 'system_logs'
         && collectionName != 'account_devices'

@@ -199,6 +199,26 @@ const managerOrganizationAuthorityFunctions = createManagerOrganizationAuthority
 exports.manageManagerOrganization = managerOrganizationAuthorityFunctions.manageManagerOrganization;
 
 // ==========================================
+// ★ P0-FINAL-1D-A2-2：Management Delegation Authority
+// 代理／托管 create / update / end 全部收斂至 Backend transaction。
+// 共用 authority state 讓不同 delegation IDs 的重疊操作也能被 OCC / transaction serialization 保護。
+// ==========================================
+const { createManagementDelegationAuthorityFunctions } = require("./managementDelegationAuthority");
+const managementDelegationAuthorityFunctions = createManagementDelegationAuthorityFunctions({
+  onRequest,
+  db,
+  runtimeServiceAccount: ACCOUNT_AUTHORITY_RUNTIME_SERVICE_ACCOUNT,
+  normalizeBrandId: normalizeDeviceSecurityBrandId,
+  getBrandCollection: getDeviceSecurityBrandCollection,
+  getBrandSettingDoc: getDeviceSecurityBrandSettingDoc,
+  requireFirebaseRequestAuth: (req) => requireFirebaseRequestAuth(req, admin),
+  verifySuperAdminActor,
+  assertAdminApplicationClaims,
+  serverTimestamp: () => admin.firestore.FieldValue.serverTimestamp(),
+});
+exports.manageManagementDelegation = managementDelegationAuthorityFunctions.manageManagementDelegation;
+
+// ==========================================
 // ★ Therapist Master Authority：人員主檔 + credential writer 已切到 Backend transaction。
 // 管理師人員主檔新增／修改／封存／復職／永久刪除收斂至 Backend transaction。
 // Master OCC 使用不含 password 的 semantic signature；本人改密碼不會製造假的人員資料衝突。

@@ -8,8 +8,8 @@ import {
 } from "lucide-react";
 // ★ 確保這裡有引入 getDocs 和 writeBatch
 import { 
-  doc, setDoc, deleteField, addDoc,
-  serverTimestamp, getDocs, writeBatch
+  doc, deleteField,
+  getDocs, writeBatch
 } from "firebase/firestore";
 
 import { db, appId } from "../config/firebase";
@@ -109,7 +109,7 @@ const SettingsView = () => {
     getDocPath, getCollectionPath,
     currentBrand, securityConfig, featureFlags,
     currentDeviceTrust,
-    loginDirectory, manageApplicationAccountAction, manageAdministrativeSettingAction, manageManagerOrganizationAction,
+    loginDirectory, manageApplicationAccountAction, manageAdministrativeSettingAction, manageManagerOrganizationAction, manageManagementDelegationAction,
     updateModulePermissions,
     user, officialManagers, delegations = [], refreshDelegations,
     fetchGlobalData
@@ -1350,9 +1350,12 @@ const SettingsView = () => {
       showToast("請選擇原主管與代理人", "error");
       return;
     }
+    if (typeof manageManagementDelegationAction !== "function") {
+      showToast("代理與托管安全服務尚未就緒", "error");
+      return;
+    }
 
     const id = editingDelegationId || `DLG-${getTodayStr().replace(/-/g, "")}-${generateUUID()}`;
-    const nowText = new Date().toISOString();
     const candidate = {
       id,
       schemaVersion: "delegation-v1",
@@ -1379,10 +1382,6 @@ const SettingsView = () => {
         editOrganization: false,
       },
       reason: String(delegationForm.reason || "").trim(),
-      updatedBy: currentUser?.name || userRole || "director",
-      updatedByRole: userRole || "unknown",
-      updatedByUid: user?.uid || "",
-      updatedAtText: nowText,
     };
 
     const validation = validateDelegationConflict({
@@ -1396,40 +1395,44 @@ const SettingsView = () => {
       return;
     }
 
+    const expectedDelegation = editingDelegationId
+      ? (delegations || []).find((item) => String(item?.id || "") === String(editingDelegationId)) || null
+      : null;
+    if (editingDelegationId && !expectedDelegation) {
+      showToast("代理安排資料已更新，請重新整理後再編輯", "error");
+      await refreshDelegations?.({ includeHistory: true });
+      return;
+    }
+
     setSavingDelegation(true);
     try {
-      const payload = {
-        ...candidate,
-        updatedAt: serverTimestamp(),
-        ...(editingDelegationId ? {} : {
-          createdBy: currentUser?.name || userRole || "director",
-          createdByRole: userRole || "unknown",
-          createdByUid: user?.uid || "",
-          createdAt: serverTimestamp(),
-          createdAtText: nowText,
-        }),
-      };
-      await setDoc(doc(getCollectionPath("management_delegations"), id), payload, { merge: true });
-      await addDoc(getCollectionPath("maintenance_logs"), {
-        type: "management_delegation",
+      await manageManagementDelegationAction({
         action: editingDelegationId ? "update" : "create",
         delegationId: id,
-        principalName: principal.name,
-        delegateName: delegate.name,
-        startDate: candidate.startDate,
-        endDate: candidate.endDate,
-        storeNames: resolveDelegationStores(candidate, officialManagers || localManagers || {}, storeAccounts),
-        operator: currentUser?.name || userRole || "director",
-        operatorRole: userRole || "unknown",
-        createdAt: serverTimestamp(),
-        createdAtText: nowText,
+        payload: candidate,
+        expectedDelegation,
       });
       await refreshDelegations?.({ includeHistory: true });
       showToast(editingDelegationId ? "代理安排已更新" : "代理安排已建立", "success");
       resetDelegationForm();
     } catch (error) {
-      console.error(error);
-      showToast(`代理安排儲存失敗：${error?.message || "請稍後再試"}`, "error");
+      console.error("代理安排儲存失敗:", error);
+      const code = String(error?.code || error?.result?.code || "");
+      if (error?.status === 409) {
+        await refreshDelegations?.({ includeHistory: true });
+      }
+      const message = code === "delegation_overlap_conflict"
+        ? `代理期間與既有安排重疊${Array.isArray(error?.result?.overlapStores) && error.result.overlapStores.length ? `：${error.result.overlapStores.slice(0, 4).join("、")}` : ""}`
+        : code === "delegation_conflict"
+          ? "這筆代理安排剛被其他管理者更新，系統已重新同步；請確認後再操作一次。"
+          : code === "delegation_store_outside_principal_scope"
+            ? "原主管的正式轄區剛有變更，系統已重新同步；請重新選擇代理範圍。"
+            : code === "principal_account_missing"
+              ? "找不到原主管的正式帳號或轄區，請重新確認。"
+              : code === "delegate_account_missing"
+                ? "找不到代理人的正式帳號，請重新確認。"
+                : error?.result?.message || error?.message || "代理安排儲存失敗";
+      showToast(message, "error");
     } finally {
       setSavingDelegation(false);
     }
@@ -1456,34 +1459,36 @@ const SettingsView = () => {
   const handleEndDelegation = async (raw) => {
     const item = normalizeDelegation(raw, raw?.id);
     if (!item.id || !confirm(`確定立即結束「${item.delegateName} 代理 ${item.principalName}」嗎？`)) return;
+    if (typeof manageManagementDelegationAction !== "function") {
+      showToast("代理與托管安全服務尚未就緒", "error");
+      return;
+    }
+    if (savingDelegation) return;
+
+    setSavingDelegation(true);
     try {
-      const nowText = new Date().toISOString();
-      await setDoc(doc(getCollectionPath("management_delegations"), item.id), {
-        status: "ended",
-        endedEarly: true,
-        endedAt: serverTimestamp(),
-        endedAtText: nowText,
-        endedBy: currentUser?.name || userRole || "director",
-        updatedAt: serverTimestamp(),
-        updatedAtText: nowText,
-      }, { merge: true });
-      await addDoc(getCollectionPath("maintenance_logs"), {
-        type: "management_delegation",
+      await manageManagementDelegationAction({
         action: "end",
         delegationId: item.id,
-        principalName: item.principalName,
-        delegateName: item.delegateName,
-        operator: currentUser?.name || userRole || "director",
-        operatorRole: userRole || "unknown",
-        createdAt: serverTimestamp(),
-        createdAtText: nowText,
+        expectedDelegation: raw,
       });
       await refreshDelegations?.({ includeHistory: true });
       if (editingDelegationId === item.id) resetDelegationForm();
       showToast("代理安排已立即結束，正式隸屬不受影響", "success");
     } catch (error) {
-      console.error(error);
-      showToast("結束代理失敗", "error");
+      console.error("結束代理失敗:", error);
+      const code = String(error?.code || error?.result?.code || "");
+      if (error?.status === 409) {
+        await refreshDelegations?.({ includeHistory: true });
+      }
+      const message = code === "delegation_conflict"
+        ? "這筆代理安排剛被其他管理者更新，系統已重新同步；請確認後再操作一次。"
+        : code === "delegation_already_ended"
+          ? "這筆代理安排已經結束，系統已重新同步。"
+          : error?.result?.message || error?.message || "結束代理失敗";
+      showToast(message, "error");
+    } finally {
+      setSavingDelegation(false);
     }
   };
 
