@@ -1,5 +1,54 @@
 # DEPLOYMENT.md
 
+# P1-C Production Observability Deployment Record — 2026-09-24
+
+P1-C runtime 只包含一支新 Function 與既有 GitHub Pages Frontend 更新。
+
+精準部署：
+
+```bash
+firebase deploy \
+  --project cyjsituation-analysis \
+  --only functions:getProductionHealthSnapshot
+
+npm run deploy
+```
+
+不得改成全量 Functions deploy；本批沒有 Firestore Rules、Firebase Hosting、Firestore data 或 IAM 變更。
+
+部署順序：
+
+```text
+1. source / CI / Browser E2E green
+2. deploy functions:getProductionHealthSnapshot
+3. confirm Gen2 Function ACTIVE
+4. unauthenticated POST returns 401
+5. npm run deploy
+6. confirm gh-pages advanced
+7. confirm live index asset convergence + HTTP 200
+8. human Production smoke across CYJ / 安妞 / 伊啵
+```
+
+正式 Production：
+
+```text
+source commit             = af5cf63556ddd908edd1c4307a2ddaddc6f1383f
+Function                  = getProductionHealthSnapshot
+Function state            = ACTIVE
+Function updateTime       = 2026-09-24T06:33:00.349869783Z
+Production gh-pages       = 20e3919932334b3b26cb252b21489f78ee0ad88d
+Production index asset    = assets/index-BeSH78jj.js
+Unauthenticated guard     = HTTP 401 PASS
+Live asset                = HTTP 200 PASS
+Human Production smoke    = PASS
+CURRENT_APP_VERSION       = 3.6.0
+```
+
+P1-C 沒有 Rules rollout window，因此不需要 P0 類型的 Backend → Frontend → Rules lockdown sequencing。
+
+---
+
+
 # P0 Authority Cutover Deployment Order Override — 2026-09-24
 
 當安全改版同時符合以下條件：

@@ -1,5 +1,92 @@
 # DEVELOPMENT_GUIDE.md
 
+# P1-C Production Observability Guardrails — 2026-09-24
+
+P1-C CLOSED 後，`SystemMonitor` 的 Production health 功能必須維持 on-demand bounded-read contract。
+
+正式 owners：
+
+```text
+functions/productionObservability.js
+functions/index.js
+src/App.jsx
+src/components/SystemMonitor.jsx
+tests/productionObservability.test.js
+tests/systemMonitorProductionHealth.test.js
+e2e/main.jsx
+e2e/tests/critical-browser.spec.js
+```
+
+修改上述 owner 時至少重新確認：
+
+```text
+same-brand Application Identity
+directorLevel access remains aligned with System Monitor permission
+CYJ legacy path / anniu / yibo path isolation
+no new health listener
+no polling
+no mirrored health collection
+no Backend write
+bounded query limits remain explicit
+CURRENT_APP_VERSION unchanged unless explicitly approved
+```
+
+正式 read budget：
+
+```text
+previous summary flag       1
+previous dashboard summary  1
+summary issue query        ≤10
+security summary            1
+today stats                 1
+yesterday stats             1
+read tracker config         1
+maintenance query          ≤5
+------------------------------
+maximum                    21 documents / refresh
+```
+
+如果未來要加入新的 health signal：
+
+1. 先找既有 Summary / status document；不要直接掃 raw collection。
+2. 先算新增 reads。
+3. 優先 single-document / small bounded query。
+4. 不得用 Browser polling 模擬 observability。
+5. 不得為了 UI 顯示另建一套重複 business authority。
+6. 跨品牌一定走正式 brand resolver，不可 hardcode 特定店家或品牌例外。
+
+本批驗證層：
+
+```text
+node --check Functions
+targeted tests
+npm run e2e:build
+npm run ci:validate
+npm run ci:rules
+Remote Core CI
+Remote Chromium E2E
+Production Function ACTIVE
+unauthenticated endpoint 401
+live gh-pages asset 200
+human three-brand + mobile smoke
+```
+
+狀態語意：
+
+```text
+IMPLEMENTED
+VALIDATED
+COMMITTED
+PUSHED
+DEPLOYED
+PRODUCTION CONFIRMED
+```
+
+必須分開記錄。CI / E2E green 不等於 Production Confirmed。
+
+---
+
+
 # P1-B Critical Browser E2E Guardrails — 2026-09-24
 
 P1-B CLOSED 後，重要 Frontend flow 除了 unit / regression / build 外，還有 Chromium Browser E2E gate。

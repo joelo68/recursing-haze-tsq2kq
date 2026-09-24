@@ -1,5 +1,90 @@
 # SYSTEM_SOURCE_MAP.md
 
+# P1-C Production Observability Source Override — 2026-09-24
+
+正式 runtime：
+
+```text
+source commit               = af5cf63556ddd908edd1c4307a2ddaddc6f1383f
+Production gh-pages         = 20e3919932334b3b26cb252b21489f78ee0ad88d
+Production index asset      = assets/index-BeSH78jj.js
+Function                    = getProductionHealthSnapshot / ACTIVE
+CURRENT_APP_VERSION         = 3.6.0
+```
+
+正式 owners：
+
+```text
+functions/productionObservability.js
+→ Production health normalization
+→ bounded read plan
+→ same-brand Application Identity authorization
+→ read-only aggregation
+→ no writer / no trigger / no polling
+
+functions/index.js
+→ exports getProductionHealthSnapshot
+
+src/App.jsx
+→ PRODUCTION_OBSERVABILITY_ENDPOINT
+→ getProductionHealthSnapshotAction
+→ AppContext exposure
+
+src/components/SystemMonitor.jsx
+→ 「系統狀態」UI
+→ on-demand load / refresh
+→ no health listener
+→ no polling
+
+tests/productionObservability.test.js
+→ health semantics / brand / permission / read-budget regression
+
+tests/systemMonitorProductionHealth.test.js
+→ Frontend / Backend / Rules boundary regression
+
+e2e/main.jsx
+e2e/tests/critical-browser.spec.js
+→ isolated Browser health presentation contract
+```
+
+既有被讀取的 Production owners 維持原 Source of Truth：
+
+```text
+summary_recalc_flags
+dashboard_summary
+security_summary/device_approvals
+system_stats/{today,yesterday}
+settings/read_tracker_config
+maintenance_logs
+```
+
+P1-C 不複製上述資料成第二套 health model；Backend 僅在使用者進入或重新檢查時按需整理。
+
+品牌 path：
+
+```text
+CYJ
+artifacts/default-app-id/public/data/...
+
+安妞 / 伊啵
+brands/{brandId}/...
+```
+
+正式 boundary：
+
+```text
+new listener                  = 0
+polling                       = 0
+new health collection         = 0
+backend write                 = 0
+max reads per refresh         = 21
+Firestore Rules change        = NO
+Firestore data model change   = NO
+```
+
+---
+
+
 # P1-B Critical Browser E2E Source Override — 2026-09-24
 
 正式 P1-B source：

@@ -1,5 +1,89 @@
 # ARCHITECTURE.md
 
+# P1-C Production Observability Architecture Override — 2026-09-24
+
+P1-C 採「按需、有限讀取、Backend 聚合」架構，不維護常駐 health mirror。
+
+```text
+System Monitor / 系統狀態
+          │
+          │ user enters tab / presses 重新檢查
+          ▼
+App.getProductionHealthSnapshotAction
+          │
+          │ authenticated HTTPS
+          ▼
+getProductionHealthSnapshot
+          │
+          ├─ same-brand Application Identity
+          ├─ director
+          ├─ super_admin | operation_admin
+          │
+          ├─ previous summary flag          1
+          ├─ previous dashboard summary     1
+          ├─ unresolved summary flags      ≤10
+          ├─ security summary               1
+          ├─ today system stats             1
+          ├─ yesterday system stats         1
+          ├─ read tracker config            1
+          └─ recent maintenance logs       ≤5
+          │
+          ▼
+normalized response
+maximum document results = 21 / refresh
+```
+
+核心原則：
+
+```text
+Summary-first / existing-summary-first
+on-demand
+bounded query
+brand-scoped
+read-only
+no Browser direct health query
+no health listener
+no polling
+no mirrored health collection
+```
+
+P1-C 的 `overall / summary / security / usage / readTracking / maintenance` 是 presentation health state，不成為新的業務資料 authority。
+
+Summary 判讀仍以既有正式 trust owner 為準：
+
+```text
+summary_recalc_flags
+dashboard_summary
+```
+
+Device Security 仍以既有 security owner 為準：
+
+```text
+security_summary/device_approvals
+deviceApproval.js
+Application Identity
+```
+
+Read Tracker 的正式設定仍由既有 `read_tracker_config` owner 管理；P1-C 只讀目前模式與排程資訊，不改 tracker mode。
+
+Production Browser E2E 仍使用 local fixture，不直接呼叫 Production endpoint；真正 Production endpoint 與三品牌資料隔離由 Backend / unit / regression / human smoke 分層驗證。
+
+正式 Production evidence：
+
+```text
+source commit          = af5cf63556ddd908edd1c4307a2ddaddc6f1383f
+Core CI                = 35964473041 / SUCCESS
+Browser E2E            = 35964473058 / SUCCESS
+Function               = ACTIVE
+Production gh-pages    = 20e3919932334b3b26cb252b21489f78ee0ad88d
+Production asset       = assets/index-BeSH78jj.js
+Human smoke            = PASS — CYJ / 安妞 / 伊啵 / mobile
+P1-C                    = CLOSED
+```
+
+---
+
+
 # P1-B Critical Browser E2E Architecture Override — 2026-09-24
 
 P1-B 在 P1-A static / regression / Rules emulator 之外，新增 Browser rendering / interaction contract layer。

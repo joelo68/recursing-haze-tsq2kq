@@ -1,5 +1,112 @@
 # CURRENT_STATE.md
 
+# P1-C Production Observability Final Closeout — 2026-09-24
+
+P1-C 已完成 Production Observability 建置、精準部署與三品牌正式人工 smoke。這一批在既有 `SystemMonitor` 內新增「系統狀態」分頁，不新增主選單頁面；採 Backend on-demand bounded aggregation，不建立新的 Firestore health collection、listener 或 polling。
+
+正式 lineage：
+
+```text
+P1-C source commit             = af5cf63556ddd908edd1c4307a2ddaddc6f1383f
+P1-C Core CI run               = 35964473041 / SUCCESS
+P1-C Browser E2E run           = 35964473058 / SUCCESS
+Production Function            = getProductionHealthSnapshot / ACTIVE
+Frontend Production gh-pages   = 20e3919932334b3b26cb252b21489f78ee0ad88d
+Production index asset         = assets/index-BeSH78jj.js
+CURRENT_APP_VERSION            = 3.6.0
+```
+
+正式功能：
+
+```text
+系統監控
+├─ 系統狀態        ← P1-C 新增，預設分頁
+├─ 操作日誌
+├─ 待確認裝置
+└─ 裝置管理
+```
+
+`系統狀態` 以一般管理語言呈現：
+
+```text
+整體系統狀態
+資料整理
+登入安全
+系統使用
+讀取追蹤
+近期自動維護
+```
+
+正式資料流：
+
+```text
+SystemMonitor
+→ App getProductionHealthSnapshotAction
+→ getProductionHealthSnapshot
+→ bounded reads from existing brand-scoped owners
+→ normalized health response
+→ no Browser direct Production Firestore health query
+```
+
+Read / runtime boundary：
+
+```text
+new Firestore listener          = 0
+new polling                     = 0
+new Firestore health collection = 0
+backend writes                  = 0
+max document reads / refresh    = 21
+Firestore Rules changed         = NO
+Firestore data model changed    = NO
+IAM changed                     = NO
+```
+
+權限：
+
+```text
+same-brand Application Identity
+roleId = director
+directorLevel = super_admin | operation_admin
+```
+
+Production deployment：
+
+```text
+firebase deploy --project cyjsituation-analysis --only functions:getProductionHealthSnapshot
+npm run deploy
+```
+
+本批未部署 Firestore Rules、其他 Functions、Firebase Hosting 或 IAM。
+
+Production smoke：
+
+```text
+CYJ                         = PASS
+安妞                        = PASS
+伊啵                        = PASS
+重新檢查                    = PASS
+品牌切換隔離                = PASS
+原操作日誌 / 裝置功能       = PASS
+手機                        = PASS
+```
+
+Final status：
+
+```text
+IMPLEMENTED                   = YES
+VALIDATED                     = YES
+COMMITTED                     = YES
+PUSHED                        = YES
+DEPLOYED                      = YES
+PRODUCTION CONFIRMED          = YES
+P1-C CLOSED                   = YES
+```
+
+Documentation Impact：本 closeout 更新 `CURRENT_STATE.md`、`SYSTEM_SOURCE_MAP.md`、`ARCHITECTURE.md`、`DEVELOPMENT_GUIDE.md`、`DEPLOYMENT.md`。`AUTH_AND_SECURITY.md`、`FIREBASE_DATA_MODEL.md`、`DATA_FLOW.md`、`DASHBOARD_SUMMARY.md`、`MAINTENANCE_TOOLS.md`、`TELEGRAM_AGENT.md`、`DATA_IDENTITY_RULES.md`、`PROJECT_OPERATING_RULES.md` = None。
+
+---
+
+
 # P1-B Critical Browser E2E Final Closeout — 2026-09-24
 
 P1-B 已完成 Critical Browser E2E 建置、GitHub Remote Chromium 執行與正式 closeout。這一批新增的是測試／CI infrastructure，不修改 Production runtime、Functions、Firestore Rules 或 Production data。
