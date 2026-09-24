@@ -1,5 +1,74 @@
 # DEVELOPMENT_GUIDE.md
 
+# Global Async Action Feedback Guardrails — 2026-09-24
+
+未來新增或修改 Frontend 按鈕時，先判斷它是否真的等待非同步結果。
+
+適合 `AsyncActionButton`：
+
+```text
+save
+create
+update
+delete
+submit
+rebuild
+refresh/load that awaits remote data
+other user actions returning a Promise
+```
+
+不應機械式使用：
+
+```text
+navigation
+tab switch
+accordion expand/collapse
+month/date picker selection
+filter toggle
+local-only state switch
+```
+
+共用 owner：
+
+```text
+src/components/SharedUI.jsx
+→ AsyncActionButton
+```
+
+最低 UX contract：
+
+```text
+pending → visible loading text / spinner
+pending → disabled
+pending → duplicate click blocked
+resolve/reject → button restored
+existing toast/error flow preserved
+```
+
+禁止在 shared UI component 中加入：
+
+```text
+Firestore import
+backend endpoint ownership
+brand/path branching
+listener
+polling
+business validation
+```
+
+若操作本身已有更完整的 specialized progress state，例如 batch progress 或 multi-step submit，優先保留原 owner，不為了統一外觀破壞其 semantics。
+
+Regression：
+
+```bash
+node --test tests/asyncActionFeedback.test.js
+npm run build
+```
+
+變更 business handler / Security / Rules 時，仍必須另外跑該功能原本的 targeted regression；async feedback regression 不能取代 domain regression。
+
+---
+
 # P0 Administrative Writer Guardrails — 2026-09-24
 
 P0 CLOSED 後，未來修改 Organization / Management Delegation 時必須保留以下 guardrail。

@@ -1,5 +1,70 @@
 # SYSTEM_SOURCE_MAP.md
 
+# Global Async Action Feedback v1 Source Override — 2026-09-24
+
+正式 runtime：
+
+```text
+Production runtime commit    = 7bd1779ca8df7b14ce76b0e2d39f04eb83fd5ea2
+Frontend Production gh-pages = 52180b5a614b5d8e3cf17a6212f3262ebde034c7
+Production index asset       = assets/index-H__8lRtl.js
+CURRENT_APP_VERSION          = 3.6.0
+```
+
+正式 shared owner：
+
+```text
+src/components/SharedUI.jsx
+→ AsyncActionButton
+```
+
+責任：
+
+```text
+Promise-aware local busy state
+loading text
+spinner
+temporary disabled state
+duplicate-click protection
+preserve caller className / props / existing handler
+```
+
+Regression owner：
+
+```text
+tests/asyncActionFeedback.test.js
+```
+
+v1 consumer scope：
+
+```text
+AnnualView.jsx
+AuditView.jsx
+DailyView.jsx
+HistoryView.jsx
+SettingsView.jsx
+SystemMonitor.jsx
+TelegramAlertControlCenter.jsx
+TherapistScheduleView.jsx
+TherapistTargetView.jsx
+RankingView.jsx
+SmartForecastAccuracyPanel.jsx
+```
+
+既有 specialized progress owner 不被取代：
+
+```text
+InputView
+TargetView
+StoreLifecycleManager
+SystemMaintenance
+NotificationManager
+```
+
+`AsyncActionButton` 是 presentation-only component；不得成為 Firestore、Backend authority、brand resolver 或 business data owner。
+
+---
+
 # P0 Security Authority Source Override — 2026-09-24
 
 正式 runtime anchor：

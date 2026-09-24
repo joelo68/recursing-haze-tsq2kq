@@ -1,5 +1,52 @@
 # ARCHITECTURE.md
 
+# Global Async Action Feedback v1 Architecture Override — 2026-09-24
+
+等待型 Frontend action 的正式 presentation pattern：
+
+```text
+User presses async action
+        │
+        ▼
+AsyncActionButton
+        │
+        ├─ invoke existing handler
+        ├─ Promise detected
+        ├─ local busy guard
+        ├─ spinner + action-specific loading text
+        ├─ disabled while pending
+        └─ restore after resolve / reject
+        │
+        ▼
+existing handler / authority / toast
+```
+
+重要邊界：
+
+```text
+AsyncActionButton
+≠ Backend authority
+≠ Firestore writer
+≠ data fetch policy
+≠ Security gate
+≠ brand isolation owner
+```
+
+它不改變原 handler 的成功／失敗 contract，也不新增 listener、polling、query 或 Firestore path。
+
+純 navigation / tab / expand / filter / picker 類即時 interaction 不應為了視覺一致而強制套用 async busy state。
+
+正式 Production：
+
+```text
+runtime commit      = 7bd1779ca8df7b14ce76b0e2d39f04eb83fd5ea2
+gh-pages            = 52180b5a614b5d8e3cf17a6212f3262ebde034c7
+CURRENT_APP_VERSION = 3.6.0
+Production smoke    = PASS
+```
+
+---
+
 # P0 Security Authority Architecture Override — 2026-09-24
 
 P0 完成後，管理性資料寫入採「Frontend intent → Backend authority → transaction → Rules deny Browser bypass」架構。

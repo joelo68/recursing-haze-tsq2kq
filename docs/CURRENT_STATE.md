@@ -1,5 +1,80 @@
 # CURRENT_STATE.md
 
+# Global Async Action Feedback v1 Production Closeout — 2026-09-24
+
+正式 runtime lineage：
+
+```text
+Production runtime commit      = 7bd1779ca8df7b14ce76b0e2d39f04eb83fd5ea2
+Frontend Production gh-pages   = 52180b5a614b5d8e3cf17a6212f3262ebde034c7
+Production index asset         = assets/index-H__8lRtl.js
+CURRENT_APP_VERSION            = 3.6.0
+```
+
+本批完成跨系統等待型按鈕的一致互動回饋，正式共用 owner：
+
+```text
+src/components/SharedUI.jsx
+→ AsyncActionButton
+→ Promise-aware busy state
+→ loading text + spinner
+→ disabled while pending
+→ duplicate-click guard
+→ existing success/error toast contract preserved
+```
+
+v1 套用於實際需要等待 async 結果的代表性操作，包括設定儲存、帳號／組織管理、Annual／Daily／Ranking／Audit 儲存、History 編輯、管理師排休／目標、System Monitor 載入、Telegram 規則整理與 Smart Forecast 歷史載入。
+
+既有已具成熟 loading state 的流程維持原 owner，例如：
+
+```text
+InputView → isSubmitting
+TargetView → isSaving
+StoreLifecycleManager → batchSaving / saving
+SystemMaintenance → loadingAction
+NotificationManager → isSaving / isLoading
+```
+
+本批不機械式包裝純導覽、分頁、展開收合、月份切換、篩選、toggle 或即時選取按鈕。
+
+Read / Security impact：
+
+```text
+Backend Functions changed      = NO
+Firestore Rules changed        = NO
+Firestore path/schema changed  = NO
+new listener                   = 0
+new polling                    = 0
+new Firestore query primitive  = 0
+Security / Identity authority  = unchanged
+Summary / KPI authority        = unchanged
+CURRENT_APP_VERSION            = 3.6.0 unchanged
+```
+
+Production human smoke：
+
+```text
+System Monitor async load              = PASS
+Smart Forecast history async load      = PASS
+Settings brand feature save            = PASS
+duplicate-click protection             = PASS
+```
+
+Final status：
+
+```text
+IMPLEMENTED            = YES
+VALIDATED              = YES
+COMMITTED              = YES
+PUSHED                 = YES
+FRONTEND DEPLOYED      = YES
+PRODUCTION CONFIRMED   = YES
+```
+
+Documentation Impact：本 closeout 更新 `CURRENT_STATE.md`、`SYSTEM_SOURCE_MAP.md`、`ARCHITECTURE.md`、`DEVELOPMENT_GUIDE.md`。`AUTH_AND_SECURITY.md`、`FIREBASE_DATA_MODEL.md`、`DATA_FLOW.md`、`DEPLOYMENT.md`、`DASHBOARD_SUMMARY.md`、`MAINTENANCE_TOOLS.md`、`TELEGRAM_AGENT.md`、`DATA_IDENTITY_RULES.md`、`PROJECT_OPERATING_RULES.md` = None。
+
+---
+
 # P0 Security Authority Final Closeout — 2026-09-24
 
 > 本節是目前最高優先的 Security authority / administrative mutation 狀態。P0 已完成 Production closeout。較早 Security 章節保留歷史 evidence；若 Browser writer、Application Identity、Organization／Delegation authority、Rules 或 runtime lineage 與本節衝突，以目前正式 source、Production deployment 與本節為準。
