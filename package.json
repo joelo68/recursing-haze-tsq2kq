@@ -12,7 +12,11 @@
     "predeploy": "npm run build",
     "deploy": "npm run build && gh-pages -d dist",
     "ci:validate": "node scripts/ci-validate.mjs",
-    "ci:rules": "npx --yes firebase-tools@15.30.2 emulators:exec --project cyjsituation-analysis --only firestore,auth \"node --test --test-concurrency=1 tests/*RulesEmulator.test.mjs\""
+    "ci:rules": "npx --yes firebase-tools@15.30.2 emulators:exec --project cyjsituation-analysis --only firestore,auth \"node --test --test-concurrency=1 tests/*RulesEmulator.test.mjs\"",
+    "e2e:serve": "vite --config vite.e2e.config.js --host 127.0.0.1 --port 4174 --strictPort",
+    "e2e:build": "vite build --config vite.e2e.config.js",
+    "e2e:browser": "playwright test -c playwright.e2e.config.js",
+    "e2e:browser:list": "playwright test -c playwright.e2e.config.js --list"
   },
   "dependencies": {
     "class-variance-authority": "^0.7.1",
@@ -27,6 +31,7 @@
   },
   "devDependencies": {
     "@eslint/js": "^9.39.1",
+    "@playwright/test": "1.63.0",
     "@types/react": "^19.2.5",
     "@types/react-dom": "^19.2.3",
     "@vitejs/plugin-react": "^5.1.1",
