@@ -3063,7 +3063,18 @@ export default function App() {
         const nowMs = Date.now();
 
         const shouldLoadSchedules = therapistModuleEnabled && (activeView === "t-schedule" || (activeView === "audit" && auditType === "therapist-daily"));
-        const shouldLoadTherapistTargets = therapistModuleEnabled && (activeView === "dashboard" || activeView === "t-targets" || (activeView === "audit" && auditType === "therapist-target"));
+
+        // P2-A2.1：Dashboard 店鋪模式不需要管理師年度目標。
+        // 只有切到人員績效，或登入角色本身固定使用人員績效時，才啟動全年 therapist_targets listener。
+        // t-targets / therapist-target audit 仍保留原本完整年度 live authority。
+        const shouldLoadTherapistTargets = therapistModuleEnabled && (
+          activeView === "t-targets" ||
+          (activeView === "audit" && auditType === "therapist-target") ||
+          (
+            activeView === "dashboard" &&
+            (dashboardViewMode === "therapist" || userRole === "therapist" || userRole === "trainer")
+          )
+        );
 
         if (shouldLoadSchedules) {
           const scheduleCacheKey = `${currentBrand.id}_${targetYearStr}_therapist_schedules_v2`;
@@ -3118,7 +3129,7 @@ export default function App() {
         try { unsubscribe && unsubscribe(); } catch (error) { console.warn("low frequency unsubscribe failed", error); }
       });
     };
-  }, [hasVerifiedApplicationSession, currentBrandId, currentBrand, getCollectionPath, selectedYear, activeView, auditType, therapistModuleEnabled, getStableReadMeta]);
+  }, [hasVerifiedApplicationSession, currentBrandId, currentBrand, getCollectionPath, selectedYear, activeView, auditType, therapistModuleEnabled, dashboardViewMode, userRole, getStableReadMeta]);
 
   useEffect(() => {
     if (!hasVerifiedApplicationSession) {
