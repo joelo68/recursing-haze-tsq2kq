@@ -74,12 +74,21 @@ test("Store Analysis keeps nullable Store Health UI fail-closed instead of forma
   assert.doesNotMatch(storeAnalysisSource, /health\.raw\.retention\s*\*\s*100\)\.toFixed/);
 });
 
-test("Store Analysis preserves existing selected-store Firestore listener topology and adds no new Store Health listener", () => {
+test("Store Analysis selected-store read topology keeps primary and bounded fallback month-scoped", () => {
   const snapshotCount = (storeAnalysisSource.match(/onSnapshot\s*\(/g) || []).length;
   assert.equal(snapshotCount, 2);
-  assert.match(storeAnalysisSource, /where\("date",\s*">=",\s*selectedYearMonthRange\.startDate\)/);
-  assert.match(storeAnalysisSource, /where\("date",\s*"<=",\s*selectedYearMonthRange\.endDate\)/);
-  assert.match(storeAnalysisSource, /store_analysis_selected_store_reports_fallback/);
+
+  const monthStartCount = (storeAnalysisSource.match(/where\("date",\s*">=",\s*selectedYearMonthRange\.startDate\)/g) || []).length;
+  const monthEndCount = (storeAnalysisSource.match(/where\("date",\s*"<=",\s*selectedYearMonthRange\.endDate\)/g) || []).length;
+  assert.ok(monthStartCount >= 2, `expected primary + bounded fallback month-start constraints, got ${monthStartCount}`);
+  assert.ok(monthEndCount >= 2, `expected primary + bounded fallback month-end constraints, got ${monthEndCount}`);
+
+  assert.match(storeAnalysisSource, /store_analysis_selected_store_reports_month_bounded_fallback/);
+  assert.doesNotMatch(
+    storeAnalysisSource,
+    /query\(getCollectionPath\("daily_reports"\),\s*where\("storeName",\s*"in",\s*variants\)\)/
+  );
+  assert.doesNotMatch(storeAnalysisSource, /store_analysis_selected_store_reports_fallback/);
 });
 
 test("store analysis Formal consumer remains compatible with the promoted app version", () => {

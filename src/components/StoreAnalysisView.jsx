@@ -283,21 +283,6 @@ const StoreAnalysisView = () => {
     };
   }, [selectedYear, selectedMonth]);
 
-  const isDateInSelectedMonth = useCallback((dateValue) => {
-    if (!dateValue) return false;
-
-    const raw = String(dateValue).trim();
-    const parts = raw.replace(/-/g, "/").split("/");
-    const y = parseInt(parts[0], 10);
-    const m = parseInt(parts[1], 10);
-
-    const targetYear = parseInt(selectedYear, 10);
-    const targetMonth = parseInt(selectedMonth, 10);
-    const rocYear = targetYear - 1911;
-
-    return (y === targetYear || y === rocYear) && m === targetMonth;
-  }, [selectedYear, selectedMonth]);
-
   const buildStoreNameVariants = useCallback((storeName = "") => {
     const core = cleanStoreName(storeName);
     const variants = [
@@ -386,51 +371,69 @@ const StoreAnalysisView = () => {
     }
 
     let fallbackUnsub = null;
+    let fallbackStarted = false;
     let cancelled = false;
     setStoreScopedLoading(true);
 
-    const applySnapshot = (snap, label, shouldFilterMonth = false) => {
+    const applySnapshot = (snap, label) => {
       trackSnapshotRead(label, snap, {
         label,
         view: "store-analysis",
         storeName: selectedStore,
       });
-
-      const docs = snap.docs.map((d) => ({ id: d.id, ...d.data() }));
-      const filtered = shouldFilterMonth
-        ? docs.filter((d) => isDateInSelectedMonth(d.date))
-        : docs;
-
       if (!cancelled) {
-        setStoreScopedReports(filtered);
+        setStoreScopedReports(snap.docs.map((d) => ({ id: d.id, ...d.data() })));
         setStoreScopedLoading(false);
-      }
-
-      if (!shouldFilterMonth && docs.length === 0) {
-        startFallback();
       }
     };
 
-    const startFallback = () => {
-      try {
-        fallbackUnsub = onSnapshot(
-          query(getCollectionPath("daily_reports"), where("storeName", "in", variants)),
-          (snap) => applySnapshot(snap, "store_analysis_selected_store_reports_fallback", true),
-          (error) => {
-            console.error("單店分析 fallback 讀取失敗:", error);
-            if (!cancelled) {
-              setStoreScopedReports([]);
-              setStoreScopedLoading(false);
-            }
-          }
-        );
-      } catch (error) {
-        console.error("單店分析 fallback query 建立失敗:", error);
-        if (!cancelled) {
-          setStoreScopedReports([]);
-          setStoreScopedLoading(false);
-        }
+    const shouldUseBoundedFallback = (error) => {
+      const code = String(error?.code || "").toLowerCase();
+      const message = String(error?.message || "").toLowerCase();
+      return code === "failed-precondition" || message.includes("requires an index");
+    };
+
+    const startBoundedFallback = (primaryError) => {
+      if (cancelled || fallbackStarted) return;
+      fallbackStarted = true;
+
+      if (!shouldUseBoundedFallback(primaryError)) {
+        console.error("單店分析精準讀取失敗，非索引型錯誤不啟動 fallback:", primaryError);
+        setStoreScopedReports([]);
+        setStoreScopedLoading(false);
+        return;
       }
+
+      fallbackUnsub = onSnapshot(
+        query(
+          getCollectionPath("daily_reports"),
+          where("date", ">=", selectedYearMonthRange.startDate),
+          where("date", "<=", selectedYearMonthRange.endDate),
+          orderBy("date", "desc")
+        ),
+        (snap) => {
+          trackSnapshotRead("store_analysis_selected_store_reports_month_bounded_fallback", snap, {
+            label: "store_analysis_selected_store_reports_month_bounded_fallback",
+            view: "store-analysis",
+            storeName: selectedStore,
+          });
+          const variantSet = new Set(variants);
+          const rows = snap.docs
+            .map((d) => ({ id: d.id, ...d.data() }))
+            .filter((d) => variantSet.has(String(d?.storeName || "").trim()));
+          if (!cancelled) {
+            setStoreScopedReports(rows);
+            setStoreScopedLoading(false);
+          }
+        },
+        (error) => {
+          console.error("單店分析單月 bounded fallback 讀取失敗:", error);
+          if (!cancelled) {
+            setStoreScopedReports([]);
+            setStoreScopedLoading(false);
+          }
+        }
+      );
     };
 
     let primaryUnsub = null;
@@ -443,23 +446,23 @@ const StoreAnalysisView = () => {
           where("date", "<=", selectedYearMonthRange.endDate),
           orderBy("date", "desc")
         ),
-        (snap) => applySnapshot(snap, "store_analysis_selected_store_reports", false),
+        (snap) => applySnapshot(snap, "store_analysis_selected_store_reports"),
         (error) => {
-          console.warn("單店分析精準讀取失敗，改用店名 fallback:", error);
-          if (!cancelled) startFallback();
+          console.warn("單店分析精準讀取失敗，檢查是否可啟動單月 bounded fallback:", error);
+          startBoundedFallback(error);
         }
       );
     } catch (error) {
-      console.warn("單店分析精準 query 建立失敗，改用店名 fallback:", error);
-      startFallback();
+      console.warn("單店分析精準 query 建立失敗:", error);
+      startBoundedFallback(error);
     }
 
     return () => {
       cancelled = true;
       try { primaryUnsub && primaryUnsub(); } catch (error) { console.warn("store analysis primary unsubscribe failed", error); }
-      try { fallbackUnsub && fallbackUnsub(); } catch (error) { console.warn("store analysis fallback unsubscribe failed", error); }
+      try { fallbackUnsub && fallbackUnsub(); } catch (error) { console.warn("store analysis bounded fallback unsubscribe failed", error); }
     };
-  }, [activeView, selectedStore, selectedYearMonthRange.startDate, selectedYearMonthRange.endDate, getCollectionPath, buildStoreNameVariants, isDateInSelectedMonth]);
+  }, [activeView, selectedStore, selectedYearMonthRange.startDate, selectedYearMonthRange.endDate, getCollectionPath, buildStoreNameVariants]);
 
   const formalReportRows = useMemo(() => (
     selectedStore ? storeScopedAnalysisReports : analysisAllReports
