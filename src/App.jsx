@@ -3901,8 +3901,17 @@ export default function App() {
       reportingCalendarReason: reportingCalendarTrust.reason,
     });
 
+    // P2-A2.2B：Audit 四個子頁只載入自己真正需要的 Raw report authority。
+    // daily             -> daily_reports only
+    // therapist-daily   -> therapist_daily_reports only
+    // target            -> neither Raw report source (uses monthly_targets)
+    // therapist-target  -> neither Raw report source (uses therapist_targets)
+    const auditNeedsDailyReports = activeView !== "audit" || auditType === "daily";
+    const auditNeedsTherapistReports = activeView !== "audit" || auditType === "therapist-daily";
+
     const shouldLoadDailyReportData =
       MONTHLY_DAILY_REPORT_DATA_VIEWS.has(activeView) &&
+      auditNeedsDailyReports &&
       (
         (activeView === "dashboard" || isSummaryFirstReportView)
           ? dashboardReadPolicy.shouldLoadDailyReports
@@ -3920,7 +3929,10 @@ export default function App() {
       );
 
     const shouldLoadTherapistReportData = therapistModuleEnabled && (
-      MONTHLY_THERAPIST_REPORT_DATA_VIEWS.has(activeView) ||
+      (
+        MONTHLY_THERAPIST_REPORT_DATA_VIEWS.has(activeView) &&
+        auditNeedsTherapistReports
+      ) ||
       (activeView === "dashboard" && (dashboardViewMode === "therapist" || userRole === "therapist" || userRole === "trainer"))
     );
 
@@ -4065,7 +4077,7 @@ export default function App() {
         isMounted = false; 
       };
     }
-  }, [hasVerifiedApplicationSession, currentBrand, selectedYear, selectedMonth, activeView, dashboardViewMode, storeAnalysisSelectedStore, userRole, therapistModuleEnabled, currentDashboardSummary, currentRankingsSummary, currentReportSummaryReady, currentReportSummaryReadyYearMonth, currentReportSummaryReadyBrandId, currentSummaryRecalcFlagState, systemExclusionState, getCollectionPath, getStableReadMeta, isLowPowerMode, historicalDetailRefreshToken]);
+  }, [hasVerifiedApplicationSession, currentBrand, selectedYear, selectedMonth, activeView, auditType, dashboardViewMode, storeAnalysisSelectedStore, userRole, therapistModuleEnabled, currentDashboardSummary, currentRankingsSummary, currentReportSummaryReady, currentReportSummaryReadyYearMonth, currentReportSummaryReadyBrandId, currentSummaryRecalcFlagState, systemExclusionState, getCollectionPath, getStableReadMeta, isLowPowerMode, historicalDetailRefreshToken]);
 
 
  const handleLogin = useCallback(async (roleId, userInfo = null, loginCredential = {}) => {
