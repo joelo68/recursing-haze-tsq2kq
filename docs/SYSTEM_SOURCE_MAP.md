@@ -4250,3 +4250,33 @@ IMPLEMENTED / VALIDATED / COMMITTED / PUSHED / DEPLOYED / PRODUCTION CONFIRMED =
 ```
 
 Documentation closeout 不改 runtime source、不提高 `CURRENT_APP_VERSION`、不需 runtime deploy。
+
+
+# P2-A2.4B1 Current Store-Month Reports Runtime Owners
+
+```text
+functions/currentStoreMonthReports.js
+  → current-month Store×Month compact row-pack writer
+  → per-source event version / tombstone race guard
+
+functions/index.js
+  aggregateLegacyReports
+  aggregateBrandReports
+  → existing daily_reports onWrite trigger integration
+
+firestore.rules
+  current_store_month_reports
+  current_store_month_reports_status
+  → same-brand read / Browser write denied
+```
+
+Regression owners:
+
+```text
+tests/p2A24CurrentStoreMonthReports.test.js
+tests/p2A24CurrentStoreMonthReportsWiring.test.js
+tests/currentDetailFormalConsumer.test.js
+tests/reportingCompleteness.test.js
+```
+
+B1 is Backend foundation only: no frontend cutover, no polling/scheduler, no `CURRENT_APP_VERSION` change. `monthly_aggregated` remains legacy aggregate/fallback and is not promoted to report-presence authority.

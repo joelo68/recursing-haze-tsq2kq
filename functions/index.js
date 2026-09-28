@@ -190,9 +190,24 @@ const {
   isLifecycleEntryFullEligibleMonth,
   buildLifecycleReportingCompleteness,
   normalizeStoreLifecycleCore,
+  getCanonicalStoreName,
 } = require("./storeLifecycle");
 const storeLifecycleFunctions = createStoreLifecycleFunctions({ admin, db });
 exports.manageStoreLifecycle = storeLifecycleFunctions.manageStoreLifecycle;
+
+// ==========================================
+// ★ P2-A2.4B1：Current Store-Month Reports backend foundation
+// current-month daily_reports → Store×Month compact row-pack.
+// Reuses existing onWrite triggers; no polling / scheduler / frontend cutover.
+// ==========================================
+const { createCurrentStoreMonthReportsWriter } = require("./currentStoreMonthReports");
+const currentStoreMonthReportsWriter = createCurrentStoreMonthReportsWriter({
+  admin,
+  db,
+  getBrandCollection: getDeviceSecurityBrandCollection,
+  normalizeStoreCore: normalizeStoreLifecycleCore,
+  getCanonicalStoreName,
+});
 
 // ==========================================
 // ★ P0-B1C1B2：Manager Organization Authority (shadow)
@@ -780,6 +795,7 @@ async function updateMonthlyAggregation(change, basePath) {
 }
 exports.aggregateLegacyReports = functions.firestore.document("artifacts/{appId}/public/data/daily_reports/{reportId}").onWrite(async (change, context) => Promise.all([
   updateMonthlyAggregation(change, `artifacts/${context.params.appId}/public/data/monthly_aggregated`),
+  currentStoreMonthReportsWriter.updateFromDailyWrite(change, context, getBackendDirtyBrandId(context.params.appId)),
   markSummaryDirtyFromDailyWrite(change, context, {
     brandId: getBackendDirtyBrandId(context.params.appId),
     reportId: context.params.reportId,
@@ -790,6 +806,7 @@ exports.aggregateLegacyReports = functions.firestore.document("artifacts/{appId}
 ]));
 exports.aggregateBrandReports = functions.firestore.document("brands/{brandId}/daily_reports/{reportId}").onWrite(async (change, context) => Promise.all([
   updateMonthlyAggregation(change, `brands/${context.params.brandId}/monthly_aggregated`),
+  currentStoreMonthReportsWriter.updateFromDailyWrite(change, context, context.params.brandId),
   markSummaryDirtyFromDailyWrite(change, context, {
     brandId: context.params.brandId,
     reportId: context.params.reportId,

@@ -3039,3 +3039,39 @@ audit_exclusions
 ```
 
 Projection consumer 不應自行重掃 previous 3 months Raw。
+
+
+# P2-A2.4B1 Current Store-Month Reports Foundation
+
+Additive Backend-only current-month row-pack authority:
+
+```text
+CYJ:
+artifacts/default-app-id/public/data/current_store_month_reports/{YYYY-MM}_{storeKeyEncoded}
+
+Anniu / Yibo:
+brands/{brandId}/current_store_month_reports/{YYYY-MM}_{storeKeyEncoded}
+```
+
+Schema `current-store-month-reports-v1` preserves source report identity/date/raw Store Identity and only the KPI fields required by current Formal / Store Health consumers. It is intentionally not a totals-only aggregate: a real report whose values are all numeric `0` still has source-document presence, while a missing report remains absent.
+
+Writer path:
+
+```text
+daily_reports onWrite
+→ existing aggregateLegacyReports / aggregateBrandReports
+→ currentStoreMonthReportsWriter.updateFromDailyWrite(...)
+→ one/two Store×Month projection documents in a transaction
+```
+
+No polling, scheduler or full-month query is added. Per-source event timestamps plus tombstones protect at-least-once / out-of-order trigger delivery. Store Identity reuses the shared Store Lifecycle owner.
+
+Reserved readiness authority:
+
+```text
+current_store_month_reports_status/{YYYY-MM}
+```
+
+B1 does not publish readiness and does not cut over frontend consumers. Bootstrap/parity certification is required before any consumer may treat the projection as current-month authority.
+
+Both projection collections are same-brand readable and Browser-write denied on CYJ legacy and Anniu/Yibo roots; generic collection rules explicitly exclude them to prevent a broader write rule from reopening writes.

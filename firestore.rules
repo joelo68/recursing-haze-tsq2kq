@@ -378,6 +378,27 @@ service cloud.firestore {
 
     // Projection Model v1：Backend-only derived authority。
     // 前端僅登入後讀取；所有寫入由 Functions Admin SDK 執行。
+    // P2-A2.4B1：Backend-only current Store×Month report row-pack.
+    match /brands/{brandId}/current_store_month_reports/{document=**} {
+      allow read: if sameBrandIdentity(brandId);
+      allow write: if false;
+    }
+
+    match /artifacts/{appId}/public/data/current_store_month_reports/{document=**} {
+      allow read: if cyjLegacyIdentity(appId);
+      allow write: if false;
+    }
+
+    match /brands/{brandId}/current_store_month_reports_status/{document=**} {
+      allow read: if sameBrandIdentity(brandId);
+      allow write: if false;
+    }
+
+    match /artifacts/{appId}/public/data/current_store_month_reports_status/{document=**} {
+      allow read: if cyjLegacyIdentity(appId);
+      allow write: if false;
+    }
+
     match /brands/{brandId}/projection_models/{document=**} {
       allow read: if sameBrandIdentity(brandId);
       allow write: if false;
@@ -463,6 +484,8 @@ service cloud.firestore {
         && collectionName != 'projection_accuracy'
         && collectionName != 'projection_accuracy_history'
         && collectionName != 'projection_context'
+        && collectionName != 'current_store_month_reports'
+        && collectionName != 'current_store_month_reports_status'
         && collectionName != 'settings';
     }
 
@@ -487,6 +510,8 @@ service cloud.firestore {
         && collectionName != 'projection_accuracy'
         && collectionName != 'projection_accuracy_history'
         && collectionName != 'projection_context'
+        && collectionName != 'current_store_month_reports'
+        && collectionName != 'current_store_month_reports_status'
         && collectionName != 'global_settings';
     }
 
