@@ -4,11 +4,11 @@ import fs from "node:fs";
 
 const read = (path) => fs.readFileSync(path, "utf8");
 
-test("B1 reuses existing daily report onWrite triggers; no scheduler/polling", () => {
+test("B2B current store-month projection uses dedicated daily report onWrite triggers; no scheduler/polling", () => {
   const index = read("functions/index.js");
   const module = read("functions/currentStoreMonthReports.js");
-  assert.match(index, /currentStoreMonthReportsWriter\.updateFromDailyWrite\(change, context, getBackendDirtyBrandId\(context\.params\.appId\)\)/);
-  assert.match(index, /currentStoreMonthReportsWriter\.updateFromDailyWrite\(change, context, context\.params\.brandId\)/);
+  assert.match(index, /exports\.projectLegacyCurrentStoreMonthReports = functions\.firestore[\s\S]*?artifacts\/\{appId\}\/public\/data\/daily_reports\/\{reportId\}[\s\S]*?currentStoreMonthReportsWriter\.updateFromDailyWrite/);
+  assert.match(index, /exports\.projectBrandCurrentStoreMonthReports = functions\.firestore[\s\S]*?brands\/\{brandId\}\/daily_reports\/\{reportId\}[\s\S]*?currentStoreMonthReportsWriter\.updateFromDailyWrite/);
   assert.doesNotMatch(module, /onSchedule/);
   assert.doesNotMatch(module, /setInterval\s*\(/);
   assert.doesNotMatch(module, /\.where\(["']date["']/);

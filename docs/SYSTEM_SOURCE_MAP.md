@@ -4305,3 +4305,31 @@ tests/p2A24CurrentStoreMonthReports.test.js
 ```
 
 Read topology: one bounded current-month Raw query + one compact projection query + one status point read per explicitly audited brand. No listener, polling or scheduler is added. Frontend consumers remain unchanged and `CURRENT_APP_VERSION = 3.6.0`.
+
+
+# P2-A2.4B2B Projection Retry-Isolation Owners
+
+```text
+functions/index.js
+  → projectLegacyCurrentStoreMonthReports
+  → projectBrandCurrentStoreMonthReports
+  → aggregateLegacyReports no longer owns projection writer
+  → aggregateBrandReports no longer owns projection writer
+
+functions/currentStoreMonthReports.js
+  → unchanged idempotent per-source event projection transaction owner
+
+tests/p2A24CurrentStoreMonthReportsWiring.test.js
+tests/p2A24CurrentStoreMonthReportsRetryIsolation.test.js
+```
+
+Deploy sequencing for this isolation is intentionally two-step:
+
+```text
+1. create/update dedicated projection functions first
+2. update aggregateLegacyReports + aggregateBrandReports second
+```
+
+A short overlap is safe because projection events are versioned by source report event timestamp and equal/older events are ignored. This avoids an intentional gap in projection coverage while removing the writer from legacy aggregate exports.
+
+No Firestore Rules change and no frontend deployment are required.

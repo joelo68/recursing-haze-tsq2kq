@@ -3114,3 +3114,26 @@ active Raw/Projection row mismatch
 The B1 live writer is hardened in the same sub-batch so an explicit store-name prefix belonging to another brand is rejected instead of being silently canonicalized into the current brand path.
 
 B2A does not bootstrap, does not write readiness status and does not cut over Dashboard / Regional / Ranking / Store Analysis / Audit.
+
+
+# P2-A2.4B2B Current Store-Month Projection Retry Isolation
+
+Production parity audit on 2026-09 showed all three brands had valid current-month Raw identity with zero duplicate canonical Store×Date rows, while the compact projection had not yet been bootstrapped.
+
+Before bootstrap, the live projection writer is moved off the legacy aggregation exports and onto dedicated Firestore onWrite exports:
+
+```text
+projectLegacyCurrentStoreMonthReports
+  artifacts/{appId}/public/data/daily_reports/{reportId}
+
+projectBrandCurrentStoreMonthReports
+  brands/{brandId}/daily_reports/{reportId}
+```
+
+Each dedicated trigger performs only the idempotent current-store-month projection transaction. `aggregateLegacyReports` and `aggregateBrandReports` no longer invoke `currentStoreMonthReportsWriter.updateFromDailyWrite`.
+
+Reason: the legacy aggregate path uses `FieldValue.increment`. Coupling projection failure into the same `Promise.all` adds an avoidable retry surface where a projection-side failure can cause the aggregate export to fail after an increment side effect may already have succeeded.
+
+This sub-batch isolates the new projection side effect. It does **not** claim the pre-existing legacy aggregate + summary-dirty path is fully idempotent; that is separate legacy technical debt.
+
+No bootstrap, readiness status write, frontend consumer cutover, polling, or scheduler is added in B2B.

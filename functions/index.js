@@ -802,9 +802,29 @@ async function updateMonthlyAggregation(change, basePath) {
   }
   return hasChanges ? aggRef.set(updates, { merge: true }) : null;
 }
+// P2-A2.4B2B：Projection retry isolation.
+// current_store_month_reports 使用獨立 onWrite trigger，避免 projection failure
+// 將既有 monthly_aggregated FieldValue.increment trigger 一起判定失敗並增加額外 retry surface。
+// 注意：legacy aggregate trigger 本身既有的 increment + dirty side-effect retry semantics
+// 是既存技術債，本批不宣稱已全面 idempotent 化。
+exports.projectLegacyCurrentStoreMonthReports = functions.firestore
+  .document("artifacts/{appId}/public/data/daily_reports/{reportId}")
+  .onWrite(async (change, context) => currentStoreMonthReportsWriter.updateFromDailyWrite(
+    change,
+    context,
+    getBackendDirtyBrandId(context.params.appId)
+  ));
+
+exports.projectBrandCurrentStoreMonthReports = functions.firestore
+  .document("brands/{brandId}/daily_reports/{reportId}")
+  .onWrite(async (change, context) => currentStoreMonthReportsWriter.updateFromDailyWrite(
+    change,
+    context,
+    context.params.brandId
+  ));
+
 exports.aggregateLegacyReports = functions.firestore.document("artifacts/{appId}/public/data/daily_reports/{reportId}").onWrite(async (change, context) => Promise.all([
   updateMonthlyAggregation(change, `artifacts/${context.params.appId}/public/data/monthly_aggregated`),
-  currentStoreMonthReportsWriter.updateFromDailyWrite(change, context, getBackendDirtyBrandId(context.params.appId)),
   markSummaryDirtyFromDailyWrite(change, context, {
     brandId: getBackendDirtyBrandId(context.params.appId),
     reportId: context.params.reportId,
@@ -815,7 +835,6 @@ exports.aggregateLegacyReports = functions.firestore.document("artifacts/{appId}
 ]));
 exports.aggregateBrandReports = functions.firestore.document("brands/{brandId}/daily_reports/{reportId}").onWrite(async (change, context) => Promise.all([
   updateMonthlyAggregation(change, `brands/${context.params.brandId}/monthly_aggregated`),
-  currentStoreMonthReportsWriter.updateFromDailyWrite(change, context, context.params.brandId),
   markSummaryDirtyFromDailyWrite(change, context, {
     brandId: context.params.brandId,
     reportId: context.params.reportId,
