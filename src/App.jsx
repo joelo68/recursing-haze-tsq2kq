@@ -2697,12 +2697,10 @@ export default function App() {
   // 完整 monthly_targets 只在真正需要編輯 / 檢核年度目標時讀取，避免一般頁面每次讀全年約 400+ docs。
   // KPI 參數 kpi_targets 已拆成獨立 1-doc 常駐監聽，避免登出重登後回到預設值。
   
-  // monthly_targets 第三階段節流：
-  // Dashboard / Ranking / Annual 已優先使用 monthly_targets_summary 或 dashboard_summary。
-  // 完整 monthly_targets 只在「年度目標設定」與「回報檢核 > 店家目標」這類必須編輯 / 核對完整目標資料的頁面才監聽。
-  const shouldLoadMonthlyTargets =
-    activeView === "targets" ||
-    (activeView === "audit" && auditType === "target");
+  // P2-A2.3：完整 monthly_targets 只保留給真正需要編輯 / 解鎖全年 Raw 目標的「年度目標設定」。
+  // 回報檢核 > 店家目標改吃既有 selected-month monthly_targets_summary 1-doc authority，
+  // 不再為檢核用途啟動完整 monthly_targets collection listener。
+  const shouldLoadMonthlyTargets = activeView === "targets";
 
   // 完整目標資料屬高成本來源；只在真正需要、頁籤可見、連線正常且未進入省流量待機時保持監聽。
   const shouldKeepMonthlyTargetsLive =

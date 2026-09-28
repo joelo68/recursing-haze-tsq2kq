@@ -12,6 +12,10 @@ import {
   normalizeLifecycleMaster,
   normalizeStoreLifecycleCore,
 } from "../utils/storeLifecycle.js";
+import {
+  buildAuditTargetSummaryAuthority,
+  resolveAuditStoreTargetPresence,
+} from "../utils/auditTargetAuthority.js";
 
 // ★ 終極翻譯蒟蒻：日期標準化
 const safeGetDateStr = (val) => {
@@ -107,7 +111,7 @@ const getDateYearMonth = (dateStr = "") => {
 
 const AuditView = ({ auditType: controlledAuditType, setAuditType: setControlledAuditType } = {}) => {
   const {
-    managers, managerOrder, showToast, budgets, selectedYear, selectedMonth, setSelectedYear, setSelectedMonth, rawData,
+    managers, managerOrder, showToast, monthlyTargetSummary, selectedYear, selectedMonth, setSelectedYear, setSelectedMonth, rawData,
     therapists, therapistReports, therapistSchedules, userRole, currentUser, therapistTargets,
     auditExclusions = [], handleUpdateAuditExclusions, currentBrand, therapistModuleEnabled,
     getActiveDelegationForStore, delegatedStores = [], currentLifecycleMasterState
@@ -318,6 +322,15 @@ const AuditView = ({ auditType: controlledAuditType, setAuditType: setControlled
     });
     return map;
   }, [lifecycleEntriesForMonth, cleanStoreName]);
+
+  // P2-A2.3：店家目標檢核使用既有 selected-month Target Summary。
+  // Coverage metadata 是 missing 狀態 authority；Summary brand/month 不相符或 metadata 未就緒時 fail closed。
+  const targetSummaryAuthority = useMemo(() => buildAuditTargetSummaryAuthority({
+    summary: monthlyTargetSummary,
+    brandId: currentLifecycleBrandId,
+    yearMonth: selectedYearMonthKey,
+    normalizeStoreKey: cleanStoreName,
+  }), [monthlyTargetSummary, currentLifecycleBrandId, selectedYearMonthKey, cleanStoreName]);
 
   const normalizeText = useCallback((value) => {
     return String(value || "")
@@ -683,14 +696,28 @@ const AuditView = ({ auditType: controlledAuditType, setAuditType: setControlled
       if (auditType === 'daily') missing = dailyMatrix.stores[checkDate] || [];
       else if (auditType === 'therapist-daily') missing = dailyMatrix.therapists[checkDate] || [];
       else if (auditType === 'target') {
+          // Summary 尚未通過 brand/month/Coverage authority gate 時，不把所有店家誤判成缺目標。
+          if (targetSummaryAuthority.compatible !== true) {
+              return { missing, missingByManager };
+          }
+
           Object.entries(managers).forEach(([mgr, stores]) => {
               stores.forEach(s => {
-                  if (auditExclusions.includes(s) || auditExclusions.includes(cleanStoreName(s))) return;
-                  const name = `${brandPrefix}${s}店`, key = `${name}_${parseInt(selectedYear)}_${parseInt(selectedMonth)}`;
-                  const b = budgets[key];
-                  if (!b || (!b.cashTarget && !b.accrualTarget)) {
+                  const storeCore = cleanStoreName(s);
+                  if (auditExclusions.includes(s) || auditExclusions.includes(storeCore)) return;
+
+                  const lifecycleEntry = lifecycleEntryByCore.get(storeCore);
+                  const name = lifecycleEntry?.canonicalStoreName || `${brandPrefix}${storeCore}店`;
+                  const targetPresence = resolveAuditStoreTargetPresence({
+                    authority: targetSummaryAuthority,
+                    storeName: name,
+                    normalizeStoreKey: cleanStoreName,
+                  });
+
+                  // numeric 0 是 VALID_ZERO / configured；missing、invalid、authority conflict 才列入未完成。
+                  if (!targetPresence.configured) {
                     missing.push(name);
-                    const responsibility = getResponsibilityLabel(mgr, s, `${selectedYear}-${String(selectedMonth).padStart(2, "0")}-01`);
+                    const responsibility = getResponsibilityLabel(mgr, storeCore, `${selectedYear}-${String(selectedMonth).padStart(2, "0")}-01`);
                     if(!missingByManager[responsibility]) missingByManager[responsibility]=[];
                     missingByManager[responsibility].push(name);
                   }
@@ -752,15 +779,20 @@ const AuditView = ({ auditType: controlledAuditType, setAuditType: setControlled
       });
 
       return { missing, missingByManager };
-  }, [auditType, checkDate, dailyMatrix, managers, managerOrder, budgets, therapistTargets, selectedYear, selectedMonth, auditExclusions, brandPrefix, cleanStoreName, validTherapistsForMonth, isTherapistMatch, isTargetInSelectedMonth, getTherapistMonthlyTarget, getTherapistDisplayName, getTherapistStore, getTherapistManager, getResponsibilityLabel]);
+  }, [auditType, checkDate, dailyMatrix, managers, managerOrder, targetSummaryAuthority, lifecycleEntryByCore, therapistTargets, selectedYear, selectedMonth, auditExclusions, brandPrefix, cleanStoreName, validTherapistsForMonth, isTherapistMatch, isTargetInSelectedMonth, getTherapistMonthlyTarget, getTherapistDisplayName, getTherapistStore, getTherapistManager, getResponsibilityLabel]);
 
   const isStoreDailyLifecycleBlocked = auditType === "daily" && !lifecycleReady;
+  const isStoreTargetAuthorityBlocked = auditType === "target" && targetSummaryAuthority.compatible !== true;
   const calendarStores = auditType.includes('therapist') ? activeTherapistsForCalendar : activeStoresForCalendar;
 
   const handleCopy = () => {
     if (isStoreDailyLifecycleBlocked) {
       navigator.clipboard.writeText(`回報檢核(${checkDate})：門市營運期間設定尚未完成，暫不判定店家漏報。`);
       showToast("門市營運期間設定尚未完成", "warning");
+      return;
+    }
+    if (isStoreTargetAuthorityBlocked) {
+      showToast("店家目標資料同步中，暫不判定目標缺漏", "warning");
       return;
     }
     let text = `未完成名單(${checkDate})：\n`;
@@ -822,6 +854,13 @@ const AuditView = ({ auditType: controlledAuditType, setAuditType: setControlled
           </div>
         )}
 
+        {isStoreTargetAuthorityBlocked && (
+          <div className="mb-4 rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm font-bold text-amber-700 flex items-start gap-2">
+            <AlertCircle size={18} className="mt-0.5 shrink-0" />
+            <span>店家目標資料同步中，暫不判定目標缺漏，避免把尚未就緒的 Summary 誤當成未設定。</span>
+          </div>
+        )}
+
         <div className="border border-rose-100 rounded-3xl overflow-hidden shadow-sm mb-8">
           <div className={`${dailyAuditVisualState.phase === "ready" ? "bg-rose-50" : "bg-amber-50"} px-6 py-4 flex justify-between items-center`}>
             {dailyAuditVisualState.phase === "ready" ? (
@@ -835,7 +874,7 @@ const AuditView = ({ auditType: controlledAuditType, setAuditType: setControlled
                     : "未完成名單"}
                   <span className="bg-white px-2 py-0.5 rounded-full text-xs border border-rose-200">{activeData.missing.length}</span>
                 </h4>
-                {(activeData.missing.length > 0 || !isDailyAuditType) && (
+                {(activeData.missing.length > 0 || !isDailyAuditType) && !isStoreTargetAuthorityBlocked && (
                   <button onClick={handleCopy} className="text-xs bg-white text-rose-500 px-4 py-2 rounded-xl border border-rose-200 font-bold">複製名單</button>
                 )}
               </>
@@ -866,9 +905,14 @@ const AuditView = ({ auditType: controlledAuditType, setAuditType: setControlled
                 <div className="mt-2 text-sm font-medium text-stone-400">當日 18:00 後顯示回報完成狀態</div>
               </div>
             )}
-            {dailyAuditVisualState.phase === "ready" && activeData.missing.length === 0 && !isStoreDailyLifecycleBlocked && (
+            {dailyAuditVisualState.phase === "ready" && activeData.missing.length === 0 && !isStoreDailyLifecycleBlocked && !isStoreTargetAuthorityBlocked && (
               <div className="col-span-3 text-center py-10 text-emerald-500 font-bold text-lg">
                 <div className="w-12 h-12 rounded-full bg-emerald-100 flex items-center justify-center mx-auto mb-2"><CheckCircle size={24}/></div>已全數回報
+              </div>
+            )}
+            {isStoreTargetAuthorityBlocked && (
+              <div className="col-span-3 text-center py-10 text-amber-600 font-bold text-base">
+                店家目標資料同步中，暫無缺漏判定結果
               </div>
             )}
             {isStoreDailyLifecycleBlocked && (

@@ -839,14 +839,15 @@ updatedBy
 
 ### 高成本資料源
 
-App 已將完整 `monthly_targets` listener 限制在真正需要的功能：
+P2-A2.3 起，App 將完整 `monthly_targets` listener 只保留在真正需要編輯、解鎖與全年 Raw 目標的功能：
 
 ```text
 年度目標設定
-回報檢核 > 店家目標
 ```
 
-Dashboard / Ranking / Annual 優先使用 Summary。
+`回報檢核 > 店家目標` 改用既有 selected-month `monthly_targets_summary/{YYYY-MM}` 單文件 authority，不再啟動完整 `monthly_targets` collection listener。檢核端使用 Target Coverage metadata 判斷 missing 狀態；explicit numeric `0` 維持 `VALID_ZERO / configured`，authority conflict、invalid 或 Summary brand/month/coverage 未就緒時 fail closed。
+
+Dashboard / Ranking / Annual 仍優先使用 Summary。
 
 ---
 

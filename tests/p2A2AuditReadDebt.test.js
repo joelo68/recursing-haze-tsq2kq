@@ -19,8 +19,9 @@ test("P2-A2.2B therapist-daily gates the therapist monthly report source", () =>
   assert.equal(app.includes('trackSnapshotRead("therapist_daily_reports_current_month"'), true);
 });
 
-test("P2-A2.2B target audit keeps target authorities instead of Raw report listeners", () => {
-  assert.equal(app.includes('(activeView === "audit" && auditType === "target")'), true);
+test("P2-A2.2B target Audit subtypes stay outside Raw report listeners", () => {
+  assert.equal(app.includes('const auditNeedsDailyReports = activeView !== "audit" || auditType === "daily";'), true);
+  assert.equal(app.includes('const auditNeedsTherapistReports = activeView !== "audit" || auditType === "therapist-daily";'), true);
   assert.equal(app.includes('(activeView === "audit" && auditType === "therapist-target")'), true);
   assert.equal(app.includes('(activeView === "audit" && auditType === "therapist-daily")'), true);
 });

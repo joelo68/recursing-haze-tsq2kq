@@ -1525,6 +1525,7 @@ HistoryView display 不再對 `新店` 使用「省略最後一個店」的頁�
 - daily audit cutoff
 - 店家 / 管理師缺報與目標檢核
 - audit exclusion
+- P2-A2.3：`店家目標` 使用 selected-month `monthly_targets_summary/{YYYY-MM}` 1-doc authority；完整 `monthly_targets` Raw listener 只保留給年度目標設定
 
 ---
 
