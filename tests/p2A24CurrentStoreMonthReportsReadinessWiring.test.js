@@ -36,7 +36,7 @@ test('B3-2 promotion persists versioned readiness and immediately re-audits fail
   assert.match(source, /consumerReady:\s*false/);
 });
 
-test('B3-2 adds no listener, polling, scheduler or frontend cutover', () => {
+test('B3-2 readiness authority adds no listener, polling or scheduler; later B4 owns frontend cutover', () => {
   const source = read('functions/currentStoreMonthReportsReadiness.js');
   const client = read('scripts/currentStoreMonthReportsReadinessClient.mjs');
   const app = read('src/App.jsx');
@@ -48,7 +48,7 @@ test('B3-2 adds no listener, polling, scheduler or frontend cutover', () => {
   assert.match(client, /signInWithCustomToken/);
   assert.match(client, /applicationIdentityCustomToken/);
   assert.match(client, /idToken:\s*applicationIdToken/);
-  assert.doesNotMatch(app, /current_store_month_reports/);
+  // B4 may consume promoted Projection in App; B3-2 still owns only readiness authority/security.
   assert.match(app, /const CURRENT_APP_VERSION = "3\.6\.0";/);
 });
 

@@ -51,6 +51,10 @@ import {
   getReadTrackerScheduleStatus,
   getReadTrackerNextScheduleBoundaryDelayMs,
 } from "./utils/readTracker";
+import {
+  flattenCurrentStoreMonthReports,
+  inspectCurrentStoreMonthReportsReadiness,
+} from "./utils/currentStoreMonthReportsConsumer.js";
 
 // ==========================================
 // ★ 系統核心版本號 (終極動態快取版)
@@ -538,6 +542,9 @@ const MONTHLY_REPORT_DATA_VIEWS = new Set(["dashboard", "regional", "ranking", "
 // Dashboard 預設店鋪模式時也先不讀管理師日報；切到人員績效才啟動。
 // HistoryView owns its own user-triggered date-range getDocs query.
 const MONTHLY_DAILY_REPORT_DATA_VIEWS = new Set(["dashboard", "regional", "ranking", "store-analysis", "audit"]);
+// P2-A2.4B4：只有廣域 current-month store consumers 允許切到 store-month Projection。
+// Audit / Daily 維持 Raw SoT；Store Analysis 選定單店後也維持既有小範圍 Raw query。
+const CURRENT_STORE_MONTH_PROJECTION_VIEWS = new Set(["dashboard", "regional", "ranking", "store-analysis"]);
 const OPERATIONAL_FORMAL_LIFECYCLE_VIEWS = new Set(["dashboard", "regional", "ranking", "daily", "audit", "store-analysis", "annual"]);
 const HISTORICAL_SUMMARY_READINESS_RECOVERY_DELAY_MS = 10_000;
 // HistoryView also owns therapist history through the same scoped, user-triggered query flow.
@@ -3950,16 +3957,125 @@ export default function App() {
       if (!shouldLoadTherapistReportData) setTherapistReports([]);
 
       let unsubReports = null;
+      let unsubProjectionStatus = null;
+      let unsubProjectionReports = null;
       let unsubTherapistReports = null;
+      let dailySourceMode = "";
+      let disposed = false;
 
-      if (shouldLoadDailyReportData) {
+      const stopRawReports = () => {
+        if (unsubReports) {
+          try { unsubReports(); } catch (error) { console.warn("current-month raw reports unsubscribe failed", error); }
+          unsubReports = null;
+        }
+      };
+
+      const stopProjectionReports = () => {
+        if (unsubProjectionReports) {
+          try { unsubProjectionReports(); } catch (error) { console.warn("current-month projection unsubscribe failed", error); }
+          unsubProjectionReports = null;
+        }
+      };
+
+      const startRawReports = (reason = "RAW_DEFAULT") => {
+        if (disposed || !shouldLoadDailyReportData || dailySourceMode === "raw") return;
+        stopProjectionReports();
+        dailySourceMode = "raw";
         unsubReports = onSnapshot(
           query(getCollectionPath("daily_reports"), where("date", ">=", startDate), where("date", "<=", endDate), orderBy("date", "desc")),
           (s) => {
-            trackSnapshotRead("daily_reports_current_month", s, getStableReadMeta("daily_reports_current_month"));
+            if (disposed || dailySourceMode !== "raw") return;
+            trackSnapshotRead("daily_reports_current_month", s, {
+              ...getStableReadMeta("daily_reports_current_month"),
+              fallbackReason: reason,
+            });
             setRawData(s.docs.map((d) => ({ id: d.id, ...d.data() })));
+          },
+          (error) => {
+            console.error("當月店日報 Raw listener 讀取失敗:", error);
           }
         );
+      };
+
+      const startProjectionReports = () => {
+        if (disposed || !shouldLoadDailyReportData || dailySourceMode === "projection") return;
+        stopRawReports();
+        dailySourceMode = "projection";
+        unsubProjectionReports = onSnapshot(
+          query(getCollectionPath("current_store_month_reports"), where("yearMonth", "==", targetYearMonth)),
+          (snap) => {
+            if (disposed || dailySourceMode !== "projection") return;
+            trackSnapshotRead(
+              "current_store_month_reports_current_month",
+              snap,
+              getStableReadMeta("current_store_month_reports_current_month")
+            );
+            const projection = flattenCurrentStoreMonthReports({
+              documents: snap.docs.map((d) => ({ id: d.id, data: d.data() })),
+              brandId: currentBrand?.id || "",
+              yearMonth: targetYearMonth,
+            });
+            if (!projection.compatible) {
+              console.warn("Current store-month Projection 不可用，切回 Raw:", projection.reason);
+              dailySourceMode = "";
+              startRawReports(projection.reason || "PROJECTION_INVALID");
+              return;
+            }
+            setRawData(projection.reports);
+          },
+          (error) => {
+            console.warn("Current store-month Projection listener 失敗，切回 Raw:", error);
+            if (disposed) return;
+            dailySourceMode = "";
+            startRawReports("PROJECTION_LISTENER_ERROR");
+          }
+        );
+      };
+
+      const shouldAttemptProjection = Boolean(
+        shouldLoadDailyReportData &&
+        CURRENT_STORE_MONTH_PROJECTION_VIEWS.has(activeView) &&
+        !(activeView === "store-analysis" && storeAnalysisSelectedStore)
+      );
+
+      if (shouldLoadDailyReportData) {
+        if (shouldAttemptProjection) {
+          const statusRef = doc(getCollectionPath("current_store_month_reports_status"), targetYearMonth);
+          unsubProjectionStatus = onSnapshot(
+            statusRef,
+            (snap) => {
+              if (disposed) return;
+              trackReadSource(
+                "current_store_month_reports_status_current_month",
+                1,
+                getStableReadMeta("current_store_month_reports_status_current_month")
+              );
+              const readiness = inspectCurrentStoreMonthReportsReadiness({
+                status: snap.exists() ? snap.data() : null,
+                brandId: currentBrand?.id || "",
+                yearMonth: targetYearMonth,
+              });
+              if (readiness.ready) {
+                startProjectionReports();
+              } else {
+                if (dailySourceMode !== "raw") {
+                  dailySourceMode = "";
+                  startRawReports(readiness.reason || "CONSUMER_NOT_READY");
+                }
+              }
+            },
+            (error) => {
+              console.warn("Current store-month readiness status 讀取失敗，切回 Raw:", error);
+              if (disposed) return;
+              if (dailySourceMode !== "raw") {
+                dailySourceMode = "";
+                startRawReports("READINESS_STATUS_ERROR");
+              }
+            }
+          );
+        } else {
+          startRawReports("RAW_VIEW_AUTHORITY");
+        }
       }
 
       if (shouldLoadTherapistReportData) {
@@ -3973,7 +4089,10 @@ export default function App() {
       }
 
       return () => {
-        if (unsubReports) unsubReports();
+        disposed = true;
+        stopRawReports();
+        stopProjectionReports();
+        if (unsubProjectionStatus) unsubProjectionStatus();
         if (unsubTherapistReports) unsubTherapistReports();
       };
 

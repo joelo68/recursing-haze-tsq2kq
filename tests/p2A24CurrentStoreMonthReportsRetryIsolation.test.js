@@ -55,12 +55,12 @@ test("B2B dedicated projection triggers are exactly scoped to raw daily reports"
   }
 });
 
-test("B2B does not add polling, scheduler, frontend cutover, or version bump", () => {
+test("B2B projection writer does not add polling or scheduler and keeps version unchanged; later B4 owns frontend cutover", () => {
   const current = fs.readFileSync("functions/currentStoreMonthReports.js", "utf8");
   const app = fs.readFileSync("src/App.jsx", "utf8");
 
   assert.doesNotMatch(current, /setInterval\s*\(/);
   assert.doesNotMatch(current, /onSchedule/);
-  assert.doesNotMatch(app, /current_store_month_reports/);
+  // B4 intentionally adds the frontend consumer; B2B continues to guard writer isolation and scheduling.
   assert.match(app, /const CURRENT_APP_VERSION = "3\.6\.0";/);
 });

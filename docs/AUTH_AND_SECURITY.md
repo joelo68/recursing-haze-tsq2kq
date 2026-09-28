@@ -1,5 +1,37 @@
 # AUTH_AND_SECURITY.md
 
+# P2-A2.4 Current Store-Month Read Security Boundary — 2026-09-28
+
+B3-2 consumer readiness mutation 已使用 server-issued Application Identity 綁定 actor，並完成 Production negative probe：anonymous Firebase session 即使聲稱最高管理者 actor，也會在 credential / audit / write 前被 `admin_application_identity_mismatch` 拒絕。
+
+正式 promotion security chain：
+
+```text
+Firebase request auth
+→ Application Identity pre-bind
+→ Trusted Device
+→ current credential re-verification
+→ super_admin
+→ Application Identity post-bind to verified actorAccountId
+→ explicit confirmation
+→ revision OCC transaction
+→ consumerReady promotion
+→ immediate post-audit fail-closed
+```
+
+B4 Frontend projection read 不新增 Browser write authority：
+
+```text
+current_store_month_reports_status
+current_store_month_reports
+```
+
+仍由 Firestore Rules 限制為 same-brand Application Identity read、Browser write deny。Frontend 只在已驗證 application session 下啟動 current-month read flow，且 status 的 brand/month/schema/readiness/signature contract 不可信時回 Raw source，不跨品牌沿用上一品牌 readiness。
+
+B4 不修改 credential、Trusted Device、Rules、Backend mutation authority 或 IAM。
+
+---
+
 # P0 Administrative Authority Security Override — 2026-09-24
 
 P0 已完成 Browser administrative writer retirement 與 Rules 收口。

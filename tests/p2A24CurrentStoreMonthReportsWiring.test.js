@@ -22,9 +22,14 @@ test("B1 Rules make projection/status browser-read-only and close generic bypass
   assert.ok((rules.match(/collectionName != 'current_store_month_reports_status'/g) || []).length >= 2);
 });
 
-test("B1 is backend-only and CURRENT_APP_VERSION stays 3.6.0", () => {
+test("B4 cuts approved current-month broad consumers to Projection and CURRENT_APP_VERSION stays 3.6.0", () => {
   const app = read("src/App.jsx");
-  assert.doesNotMatch(app, /current_store_month_reports/);
+  const consumer = read("src/utils/currentStoreMonthReportsConsumer.js");
+  assert.match(app, /current_store_month_reports_status/);
+  assert.match(app, /current_store_month_reports/);
+  assert.match(app, /CURRENT_STORE_MONTH_PROJECTION_VIEWS/);
+  assert.match(consumer, /current-store-month-reports-readiness-v1/);
+  assert.match(consumer, /READINESS_SIGNATURE_MISMATCH/);
   assert.match(app, /const CURRENT_APP_VERSION = "3\.6\.0";/);
 });
 

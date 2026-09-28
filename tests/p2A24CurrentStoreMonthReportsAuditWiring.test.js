@@ -43,9 +43,9 @@ test("B2A hardens the live writer against explicit cross-brand store names", () 
   assert.match(index, /detectStoreBrandFromName,/);
 });
 
-test("B2A adds no frontend consumer cutover and keeps CURRENT_APP_VERSION 3.6.0", () => {
+test("B2A audit contract remains isolated after the later B4 frontend cutover and keeps CURRENT_APP_VERSION 3.6.0", () => {
   const app = read("src/App.jsx");
-  assert.doesNotMatch(app, /current_store_month_reports/);
+  // B4 intentionally introduces the frontend Projection consumer; B2A only owns audit isolation.
   assert.match(app, /const CURRENT_APP_VERSION = "3\.6\.0";/);
 });
 

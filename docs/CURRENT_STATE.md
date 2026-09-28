@@ -1,5 +1,80 @@
 # CURRENT_STATE.md
 
+# P2-A2.4B3-2 / B4 Current Store-Month Consumer Authority — 2026-09-28
+
+本節是目前最新的 current-month store report consumer 狀態。
+
+正式 Source Gate / Backend promotion evidence：
+
+```text
+B4 pre-change Source Gate ancestor = e27cecda941e15c8202e4e7bb45af81a7089074a
+CURRENT_APP_VERSION                 = 3.6.0
+CYJ 2026-09 readiness revision      = 2
+CYJ readinessStatus                 = CONSUMER_READY
+CYJ consumerReady                   = true
+B3-2 Application Identity gate      = PRODUCTION CONFIRMED
+anonymous apply                     = HTTP 403 / admin_application_identity_mismatch
+B3-2 post-promotion parity          = PASS
+Frontend consumer cutover           = IMPLEMENTED / SCOPED VALIDATED / NOT DEPLOYED
+```
+
+B4 Frontend read policy：
+
+```text
+current month + broad store consumer
+(Dashboard / Regional / Ranking / Store Analysis without selected store)
+        │
+        ▼
+current_store_month_reports_status/{yearMonth}
+        │
+        ├─ promoted CONSUMER_READY + supported schema/signature
+        │      ▼
+        │  current_store_month_reports
+        │  yearMonth-scoped listener
+        │  → flatten active sourceEvents rows
+        │  → existing currentDetailFormalConsumer semantics
+        │
+        └─ not ready / mismatch / projection invalid / listener error
+               ▼
+           existing bounded current-month daily_reports listener
+```
+
+Authority boundary：
+
+```text
+Audit / Daily                     = Raw daily_reports SoT unchanged
+Store Analysis selected store     = existing selected-store + selected-month Raw query unchanged
+Historical months                 = existing Summary/detail policy unchanged
+Therapist data                    = unchanged
+Anniu / Yibo without own consumerReady status = Raw fallback; no cross-brand forced cutover
+```
+
+Read topology：
+
+```text
+new polling                          = 0
+new scheduler                        = 0
+new broad Raw listener               = 0
+ready brand broad initial path       = 1 status doc + store-month projection docs
+not-ready / invalid projection path  = 1 status doc + existing Raw fallback
+```
+
+代表性 CYJ 2026-09 Production evidence before B4 deploy：Raw 866 reports、Projection 33 docs、status 1 doc；因此 promoted broad initial source 可由約 866 Raw document reads 降為約 34 status/projection reads，後續 live event 由單店 projection doc 更新。
+
+B4 scoped validation（delivery sandbox）：
+
+```text
+new consumer + wiring + Store Analysis read-debt tests = 14 / 14 PASS
+CURRENT_APP_VERSION unchanged                         = PASS
+full repo build / full regression                     = PENDING formal repo apply
+Frontend deploy                                       = NO
+Production confirmation                               = NO
+```
+
+Documentation Impact：更新 `CURRENT_STATE.md`、`AUTH_AND_SECURITY.md`、`DATA_FLOW.md`、`SYSTEM_SOURCE_MAP.md`。其餘 docs = None for this delivery stage.
+
+---
+
 # P1-C Production Observability Final Closeout — 2026-09-24
 
 P1-C 已完成 Production Observability 建置、精準部署與三品牌正式人工 smoke。這一批在既有 `SystemMonitor` 內新增「系統狀態」分頁，不新增主選單頁面；採 Backend on-demand bounded aggregation，不建立新的 Firestore health collection、listener 或 polling。

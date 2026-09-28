@@ -26,7 +26,7 @@ test('B2C apply is race-safe against live projection and multi-admin execution',
   assert.match(source, /db\.runTransaction/);
 });
 
-test('B2C stays bounded and adds no polling/listener/scheduler/frontend cutover', () => {
+test('B2C stays bounded and adds no polling/listener/scheduler; later B4 owns frontend cutover', () => {
   const source = read('functions/currentStoreMonthReportsBootstrap.js');
   const client = read('scripts/currentStoreMonthReportsBootstrapClient.mjs');
   const app = read('src/App.jsx');
@@ -37,7 +37,7 @@ test('B2C stays bounded and adds no polling/listener/scheduler/frontend cutover'
   assert.doesNotMatch(source, /onSchedule/);
   assert.doesNotMatch(source, /onSnapshot/);
   assert.doesNotMatch(client, /setInterval\s*\(/);
-  assert.doesNotMatch(app, /current_store_month_reports/);
+  // Frontend cutover is a B4 concern; B2C continues to enforce bounded backend/bootstrap behavior.
   assert.match(app, /const CURRENT_APP_VERSION = "3\.6\.0";/);
 });
 

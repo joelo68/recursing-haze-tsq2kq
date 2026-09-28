@@ -1,5 +1,59 @@
 # DATA_FLOW.md
 
+# P2-A2.4B4 Current Store-Month Frontend Consumer Flow — 2026-09-28
+
+Current-month broad store read flow：
+
+```text
+App current-month report transport
+        │
+        ├─ Dashboard
+        ├─ Regional
+        ├─ Ranking
+        └─ Store Analysis（未選定單店）
+        │
+        ▼
+current_store_month_reports_status/{yearMonth}
+        │
+        ├─ consumerReady=true
+        │  readinessStatus=CONSUMER_READY
+        │  supported schema/readiness version
+        │  promoted source/projection signature matched
+        │      │
+        │      ▼
+        │  current_store_month_reports
+        │  where(yearMonth == selected current month)
+        │      │
+        │      ▼
+        │  active sourceEvents rows only
+        │      │
+        │      ▼
+        │  App rawData / allReports compatibility shape
+        │      │
+        │      ▼
+        │  currentDetailFormalConsumer
+        │  → Dashboard / Ranking / Regional / Store Analysis formal semantics
+        │
+        └─ not ready / malformed / cross-brand / read error
+               │
+               ▼
+           existing current-month daily_reports bounded listener
+```
+
+Raw authority intentionally retained：
+
+```text
+DailyView / daily analysis        → Raw source remains owner
+Audit daily reporting            → Raw source remains owner
+Store Analysis selected store    → selected-store + selected-month Raw listener remains owner
+History / historical detail      → existing getDocs / Summary fallback policy unchanged
+therapist_daily_reports          → unchanged
+```
+
+No polling / scheduler is added. Read reduction applies only after each brand-month has its own promoted `consumerReady` status; brand without readiness automatically remains on Raw.
+
+---
+
 # P0 Organization / Management Delegation Secure Flow Override — 2026-09-24
 
 ## Organization mutation flow

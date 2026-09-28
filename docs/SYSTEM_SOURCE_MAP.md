@@ -1,5 +1,51 @@
 # SYSTEM_SOURCE_MAP.md
 
+# P2-A2.4B4 Current Store-Month Frontend Consumer Source Override — 2026-09-28
+
+Primary owners：
+
+```text
+functions/currentStoreMonthReports.js
+→ current-month store projection writer/schema
+→ one projection doc per brand/yearMonth/store
+→ sourceEvents preserves per-report live event authority
+
+functions/currentStoreMonthReportsAudit.js
+→ Raw ↔ Projection parity audit/status inspection
+
+src/utils/currentStoreMonthReportsConsumer.js
+→ Frontend readiness trust inspection
+→ schema/brand/month/signature validation
+→ projection document structural validation
+→ active sourceEvents flattening to existing report-row shape
+
+src/App.jsx
+→ current-month transport cutover owner
+→ readiness single-doc listener
+→ projection yearMonth-scoped listener
+→ Raw fallback
+→ view boundary: Dashboard/Regional/Ranking/Store Analysis broad only
+
+src/utils/currentDetailFormalConsumer.js
+→ unchanged current/detail Formal KPI semantics after transport cutover
+
+src/components/StoreAnalysisView.jsx
+→ selected-store scoped Raw listener remains owner when a store is selected
+```
+
+Regression owners：
+
+```text
+tests/p2A24CurrentStoreMonthReportsConsumer.test.js
+tests/p2A24CurrentStoreMonthReportsConsumerWiring.test.js
+tests/p2A24CurrentStoreMonthReportsWiring.test.js
+tests/storeAnalysisReadDebt.test.js
+```
+
+Security / Rules owner remains existing Firestore Rules; B4 adds no Browser write path.
+
+---
+
 # P1-C Production Observability Source Override — 2026-09-24
 
 正式 runtime：
