@@ -242,6 +242,7 @@ const currentStoreMonthReportsReadinessFunctions =
     getBrandCollection: getDeviceSecurityBrandCollection,
     requireFirebaseRequestAuth: (req) => requireFirebaseRequestAuth(req, admin),
     verifySuperAdminActor,
+    assertAdminApplicationClaims,
     auditBrandProjection,
   });
 exports.manageCurrentStoreMonthReportsReadiness =

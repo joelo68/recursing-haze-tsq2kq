@@ -8,6 +8,8 @@ test('B3-2 endpoint is current-month, highest-admin/trusted-device protected, an
   const source = read('functions/currentStoreMonthReportsReadiness.js');
   assert.match(source, /requireFirebaseRequestAuth/);
   assert.match(source, /verifySuperAdminActor/);
+  assert.match(source, /assertAdminApplicationClaims/);
+  assert.match(source, /if \(action === 'apply'\)/);
   assert.match(source, /yearMonth !== currentYearMonth/);
   assert.match(source, /PROMOTE_CURRENT_STORE_MONTH_REPORTS_READY/);
   assert.match(source, /expectedRevision/);
@@ -42,6 +44,10 @@ test('B3-2 adds no listener, polling, scheduler or frontend cutover', () => {
   assert.doesNotMatch(source, /onSchedule/);
   assert.doesNotMatch(source, /onSnapshot/);
   assert.doesNotMatch(client, /setInterval\s*\(/);
+  assert.match(client, /checkDeviceAccess/);
+  assert.match(client, /signInWithCustomToken/);
+  assert.match(client, /applicationIdentityCustomToken/);
+  assert.match(client, /idToken:\s*applicationIdToken/);
   assert.doesNotMatch(app, /current_store_month_reports/);
   assert.match(app, /const CURRENT_APP_VERSION = "3\.6\.0";/);
 });
@@ -49,6 +55,7 @@ test('B3-2 adds no listener, polling, scheduler or frontend cutover', () => {
 test('B3-2 keeps projection/status Browser writes denied and exports only the backend authority', () => {
   const index = read('functions/index.js');
   const rules = read('firestore.rules');
+  assert.match(index, /createCurrentStoreMonthReportsReadinessFunctions\(\{[\s\S]*?assertAdminApplicationClaims[\s\S]*?auditBrandProjection/);
   assert.match(index, /exports\.manageCurrentStoreMonthReportsReadiness/);
   assert.match(rules, /current_store_month_reports\/\{document=\*\*\}[\s\S]*?allow write:\s*if false/);
   assert.match(rules, /current_store_month_reports_status\/\{document=\*\*\}[\s\S]*?allow write:\s*if false/);

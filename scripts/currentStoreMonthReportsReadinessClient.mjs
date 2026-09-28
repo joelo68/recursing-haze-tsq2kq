@@ -4,9 +4,10 @@ import path from 'node:path';
 import readline from 'node:readline';
 import { Writable } from 'node:stream';
 import { deleteApp, initializeApp } from 'firebase/app';
-import { getAuth, signInAnonymously } from 'firebase/auth';
+import { getAuth, signInAnonymously, signInWithCustomToken } from 'firebase/auth';
 
 const ENDPOINT = 'https://us-central1-cyjsituation-analysis.cloudfunctions.net/manageCurrentStoreMonthReportsReadiness';
+const DEVICE_ACCESS_ENDPOINT = 'https://us-central1-cyjsituation-analysis.cloudfunctions.net/checkDeviceAccess';
 const CONFIRMATION = 'PROMOTE_CURRENT_STORE_MONTH_REPORTS_READY';
 const FIREBASE_CONFIG = {
   apiKey: 'AIzaSyDqeHT2J9Z69k88-clPwKyuywg1TSpojYM',
@@ -103,6 +104,80 @@ async function callEndpoint({ idToken, brandId, yearMonth, actor, action, expect
   return { httpStatus: response.status, ...body };
 }
 
+async function establishApplicationIdentitySession({
+  auth,
+  requestIdToken,
+  brandId,
+  actor,
+}) {
+  const deviceId = String(actor?.deviceId || '').trim();
+  const accountId = String(actor?.accountId || '').trim();
+  const userName = String(actor?.userName || accountId || '最高管理者').trim();
+
+  const response = await fetch(DEVICE_ACCESS_ENDPOINT, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      Authorization: `Bearer ${requestIdToken}`,
+    },
+    body: JSON.stringify({
+      brandId,
+      roleId: 'director',
+      accountId,
+      userName,
+      password: String(actor?.credentialPassword || ''),
+      requestApplicationIdentityToken: true,
+      deviceInfo: {
+        deviceId,
+        stableDeviceId: deviceId,
+        deviceShort: deviceId.replace(/^dev_/, '').slice(-8),
+        device: 'CLI',
+        browser: `Node.js ${process.version}`,
+        os: process.platform,
+        deviceFingerprint: '',
+        deviceStorageStatus: 'cli_existing_stable_id',
+      },
+      loginLocation: {},
+    }),
+  });
+
+  const result = await response.json().catch(() => ({}));
+  if (!response.ok || result?.ok === false) {
+    throw new Error(result?.code || result?.message || `Application identity HTTP ${response.status}`);
+  }
+  if (result?.credentialVerified !== true || result?.allowed !== true) {
+    throw new Error(result?.message || 'Application identity session is not eligible');
+  }
+
+  const customToken = String(result?.applicationIdentityCustomToken || '').trim();
+  const identity = result?.applicationIdentity || {};
+  if (!customToken) throw new Error('Application identity custom token missing');
+  if (String(identity?.brandId || '').trim().toLowerCase() !== String(brandId || '').trim().toLowerCase()) {
+    throw new Error('Application identity brand mismatch');
+  }
+  if (String(identity?.roleId || '').trim().toLowerCase() !== 'director') {
+    throw new Error('Application identity role mismatch');
+  }
+  if (String(identity?.accountId || '').trim() !== accountId) {
+    throw new Error('Application identity account mismatch');
+  }
+
+  const userCredential = await signInWithCustomToken(auth, customToken);
+  const tokenResult = await userCredential.user.getIdTokenResult(true);
+  const claims = tokenResult?.claims || {};
+  const claimsValid = (
+    claims?.drcyjIdentity === true
+    && String(claims?.identityVersion || '') === String(identity?.version || '')
+    && String(claims?.brandId || '').trim().toLowerCase() === String(brandId || '').trim().toLowerCase()
+    && String(claims?.roleId || '').trim().toLowerCase() === 'director'
+    && String(claims?.accountId || '').trim() === accountId
+    && String(userCredential.user?.uid || '') === String(identity?.uid || '')
+  );
+  if (!claimsValid) throw new Error('Application identity claims mismatch');
+
+  return userCredential.user.getIdToken(true);
+}
+
 const args = parseArgs(process.argv.slice(2));
 const brands = normalizeBrands(args.brands || args.brand || 'all');
 const yearMonth = String(args.month || '').trim();
@@ -129,8 +204,8 @@ const app = initializeApp(FIREBASE_CONFIG, `current-store-month-readiness-${Date
 try {
   const auth = getAuth(app);
   await signInAnonymously(auth);
-  const idToken = await auth.currentUser?.getIdToken();
-  if (!idToken) throw new Error('Firebase anonymous auth failed');
+  const bootstrapIdToken = await auth.currentUser?.getIdToken();
+  if (!bootstrapIdToken) throw new Error('Firebase anonymous auth failed');
 
   const planResults = [];
   console.log('=== CURRENT STORE-MONTH READINESS PLAN ===');
@@ -138,7 +213,7 @@ try {
     process.stdout.write(`${brandId}: `);
     try {
       const result = await callEndpoint({
-        idToken,
+        idToken: bootstrapIdToken,
         brandId,
         yearMonth,
         actor,
@@ -176,8 +251,16 @@ try {
       const brandId = String(plan.brandId || plan.audit?.brandId || '');
       process.stdout.write(`${brandId}: `);
       try {
+        const requestIdToken = await auth.currentUser?.getIdToken(true);
+        if (!requestIdToken) throw new Error('Firebase request auth unavailable');
+        const applicationIdToken = await establishApplicationIdentitySession({
+          auth,
+          requestIdToken,
+          brandId,
+          actor,
+        });
         const result = await callEndpoint({
-          idToken,
+          idToken: applicationIdToken,
           brandId,
           yearMonth: yearMonth || plan.yearMonth || plan.audit?.yearMonth || '',
           actor,
@@ -217,6 +300,7 @@ try {
     applyRequested,
     generatedAtText: new Date().toISOString(),
     endpoint: ENDPOINT,
+    applyAuthentication: 'server-issued-application-identity',
     brandsRequested: brands,
     planResults,
     applyResults,

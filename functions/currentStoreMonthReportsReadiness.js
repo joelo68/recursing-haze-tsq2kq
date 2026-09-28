@@ -142,6 +142,7 @@ function createCurrentStoreMonthReportsReadinessFunctions({
   getBrandCollection,
   requireFirebaseRequestAuth,
   verifySuperAdminActor,
+  assertAdminApplicationClaims,
   auditBrandProjection,
 } = {}) {
   if (
@@ -151,6 +152,7 @@ function createCurrentStoreMonthReportsReadinessFunctions({
     || typeof getBrandCollection !== 'function'
     || typeof requireFirebaseRequestAuth !== 'function'
     || typeof verifySuperAdminActor !== 'function'
+    || typeof assertAdminApplicationClaims !== 'function'
     || typeof auditBrandProjection !== 'function'
   ) {
     throw new Error('current store-month readiness dependencies are incomplete');
@@ -187,9 +189,26 @@ function createCurrentStoreMonthReportsReadinessFunctions({
       }
 
       const actor = body.actor && typeof body.actor === 'object' ? body.actor : {};
+
+      // Promotion is a backend authority mutation. Before any Trusted Device / credential reads,
+      // bind the request Firebase session to the claimed application actor so anonymous or
+      // cross-account tokens cannot reach the consumerReady write path. Read-only plan keeps
+      // the existing operator contract and remains protected by super-admin re-verification.
+      if (action === 'apply') {
+        assertAdminApplicationClaims(requestAuth, brandId, actor, {
+          actorAccountId: actor?.accountId,
+        });
+      }
+
       const actorCheck = await verifySuperAdminActor({ db, brandId, actor });
       if (!actorCheck?.ok) {
         throw new CurrentStoreMonthReportsReadinessError('SUPER_ADMIN_REVERIFICATION_REQUIRED', 403);
+      }
+
+      // Re-bind after server-side credential verification so the token account and the
+      // canonical verified actor account must still be identical before promotion proceeds.
+      if (action === 'apply') {
+        assertAdminApplicationClaims(requestAuth, brandId, actor, actorCheck);
       }
 
       const initialAudit = await auditBrandProjection({ db, brandId, yearMonth });
