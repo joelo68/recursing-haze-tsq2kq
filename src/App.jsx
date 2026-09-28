@@ -536,10 +536,12 @@ const MONTHLY_REPORT_DATA_VIEWS = new Set(["dashboard", "regional", "ranking", "
 // ★ 讀取節流 v2：拆開「店日報」與「管理師日報」監聽。
 // regional / ranking / store-analysis 只需要店日報，不應同步常駐讀 therapist_daily_reports。
 // Dashboard 預設店鋪模式時也先不讀管理師日報；切到人員績效才啟動。
-const MONTHLY_DAILY_REPORT_DATA_VIEWS = new Set(["dashboard", "regional", "ranking", "store-analysis", "audit", "history"]);
+// HistoryView owns its own user-triggered date-range getDocs query.
+const MONTHLY_DAILY_REPORT_DATA_VIEWS = new Set(["dashboard", "regional", "ranking", "store-analysis", "audit"]);
 const OPERATIONAL_FORMAL_LIFECYCLE_VIEWS = new Set(["dashboard", "regional", "ranking", "daily", "audit", "store-analysis", "annual"]);
 const HISTORICAL_SUMMARY_READINESS_RECOVERY_DELAY_MS = 10_000;
-const MONTHLY_THERAPIST_REPORT_DATA_VIEWS = new Set(["audit", "history"]);
+// HistoryView also owns therapist history through the same scoped, user-triggered query flow.
+const MONTHLY_THERAPIST_REPORT_DATA_VIEWS = new Set(["audit"]);
 
 
 export default function App() {
