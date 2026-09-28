@@ -4333,3 +4333,36 @@ Deploy sequencing for this isolation is intentionally two-step:
 A short overlap is safe because projection events are versioned by source report event timestamp and equal/older events are ignored. This avoids an intentional gap in projection coverage while removing the writer from legacy aggregate exports.
 
 No Firestore Rules change and no frontend deployment are required.
+
+
+# P2-A2.4B2C Bootstrap Owners
+
+```text
+functions/currentStoreMonthReportsBootstrap.js
+  → operator plan/apply endpoint implementation
+  → current-month bounded Raw + projection inventory
+  → snapshot-cutoff race-safe transactional merge
+  → per-brand Bootstrap lease / runId OCC
+  → point-in-time exact parity certification status
+
+functions/currentStoreMonthReportsAudit.js
+  → existing exact Raw↔Projection comparison reused after Bootstrap
+
+functions/currentStoreMonthReports.js
+  → existing per-source event-version merge semantics reused by Bootstrap
+
+functions/deviceApproval.js
+  → existing brand path resolver
+  → existing Firebase auth / Trusted Device / credential / highest-admin verification
+
+functions/index.js
+  → bootstrapCurrentStoreMonthReports export
+
+scripts/currentStoreMonthReportsBootstrapClient.mjs
+  → local operator plan/apply client; no listener/polling
+
+tests/p2A24CurrentStoreMonthReportsBootstrap.test.js
+tests/p2A24CurrentStoreMonthReportsBootstrapWiring.test.js
+```
+
+B2C status is intentionally `consumerReady=false`: Bootstrap certification is point-in-time evidence only and does not authorize frontend cutover.

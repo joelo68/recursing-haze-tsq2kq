@@ -3137,3 +3137,38 @@ Reason: the legacy aggregate path uses `FieldValue.increment`. Coupling projecti
 This sub-batch isolates the new projection side effect. It does **not** claim the pre-existing legacy aggregate + summary-dirty path is fully idempotent; that is separate legacy technical debt.
 
 No bootstrap, readiness status write, frontend consumer cutover, polling, or scheduler is added in B2B.
+
+
+# P2-A2.4B2C Current Store-Month Bootstrap + Point-in-Time Certification
+
+B2C adds an operator-triggered, current-month-only Bootstrap authority for `current_store_month_reports`.
+
+Security and scope:
+- Firebase request authentication.
+- Existing `verifySuperAdminActor`: trusted device + fresh application credential + highest-admin authority.
+- Current month only.
+- `plan` is read-only.
+- `apply` requires the literal confirmation `BOOTSTRAP_CURRENT_STORE_MONTH_REPORTS`.
+- CYJ continues to resolve through `artifacts/default-app-id/public/data/...`; Anniu/Yibo remain under `brands/{brandId}/...`.
+
+Race safety:
+- Raw is captured as a bounded current-month query with server read-time cutoff.
+- Each Store×Month projection document is merged in a Firestore transaction.
+- Raw rows use the source document `updateTime` as their event version.
+- A live projection event newer than the Bootstrap snapshot cutoff is preserved.
+- A stale active projection source that no longer belongs to the Raw snapshot can be tombstoned only when its event version is not newer than the snapshot cutoff.
+- A status-document lease + `runId` OCC prevents two highest admins from applying the same brand Bootstrap concurrently.
+
+Certification:
+- After merge, the existing Raw↔Projection parity audit is rerun.
+- `BOOTSTRAP_CERTIFIED` is written only for exact point-in-time parity.
+- The status document explicitly persists `consumerReady=false` and `certificationIsPointInTime=true`.
+- This status must not be treated as live frontend readiness; later consumer cutover requires its own freshness contract.
+
+Read/write topology:
+- No polling, scheduler, or persistent listener.
+- Plan: one current-month Raw query + one month-scoped projection query.
+- Apply additionally uses one projection-document transaction per affected Store×Month bucket, one status lease transaction, one exact parity re-read, and one status finalization transaction.
+- Bootstrap is an exceptional one-time repair/seed path, not a normal runtime read path.
+
+B2C does not change Firestore Rules, `CURRENT_APP_VERSION`, or frontend consumers.

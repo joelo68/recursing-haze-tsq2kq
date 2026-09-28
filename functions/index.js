@@ -197,9 +197,9 @@ const storeLifecycleFunctions = createStoreLifecycleFunctions({ admin, db });
 exports.manageStoreLifecycle = storeLifecycleFunctions.manageStoreLifecycle;
 
 // ==========================================
-// ★ P2-A2.4B1：Current Store-Month Reports backend foundation
+// ★ P2-A2.4B：Current Store-Month Report Projection foundation.
 // current-month daily_reports → Store×Month compact row-pack.
-// Reuses existing onWrite triggers; no polling / scheduler / frontend cutover.
+// B2B 起 projection 使用獨立 onWrite triggers；no polling / scheduler / frontend cutover.
 // ==========================================
 const { createCurrentStoreMonthReportsWriter } = require("./currentStoreMonthReports");
 const currentStoreMonthReportsWriter = createCurrentStoreMonthReportsWriter({
@@ -217,6 +217,15 @@ const { createCurrentStoreMonthReportsAuditFunctions } = require("./currentStore
 const currentStoreMonthReportsAuditFunctions = createCurrentStoreMonthReportsAuditFunctions({ admin, db });
 exports.auditCurrentStoreMonthReportsProjection =
   currentStoreMonthReportsAuditFunctions.auditCurrentStoreMonthReportsProjection;
+
+// ★ P2-A2.4B2C：Current Store-Month one-time Bootstrap + exact parity certification.
+// plan 預設 read-only；apply 必須最高管理者 + Trusted Device + credential + explicit confirmation。
+// status 僅是 point-in-time bootstrap certification，consumerReady 固定 false；Frontend 尚未 cutover。
+const { createCurrentStoreMonthReportsBootstrapFunctions } = require("./currentStoreMonthReportsBootstrap");
+const currentStoreMonthReportsBootstrapFunctions =
+  createCurrentStoreMonthReportsBootstrapFunctions({ admin, db });
+exports.bootstrapCurrentStoreMonthReports =
+  currentStoreMonthReportsBootstrapFunctions.bootstrapCurrentStoreMonthReports;
 
 // ==========================================
 // ★ P0-B1C1B2：Manager Organization Authority (shadow)
