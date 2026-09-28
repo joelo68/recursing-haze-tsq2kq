@@ -3172,3 +3172,49 @@ Read/write topology:
 - Bootstrap is an exceptional one-time repair/seed path, not a normal runtime read path.
 
 B2C does not change Firestore Rules, `CURRENT_APP_VERSION`, or frontend consumers.
+
+# P2-A2.4B3-2 Current Store-Month Consumer Readiness Authority
+
+B3-2 adds a Backend-only promotion contract for the existing
+`current_store_month_reports_status/{YYYY-MM}` document. It does not change the
+projection row schema and does not cut frontend consumers over.
+
+Bootstrap evidence remains immutable in meaning:
+- `status=BOOTSTRAP_CERTIFIED`
+- `sourceSignature` / `projectionSignature` remain the B2C point-in-time baseline.
+- `certificationIsPointInTime=true` remains true.
+
+Consumer readiness is additive:
+- `consumerReady=true`
+- `readinessStatus=CONSUMER_READY`
+- `readinessVersion=current-store-month-reports-readiness-v1`
+- `readinessEvidence=POST_BOOTSTRAP_LIVE_EVENT_EXACT_PARITY`
+- `consumerReadySourceSignature`
+- `consumerReadyProjectionSignature`
+- `consumerReadyAt` / `consumerReadyAtText`
+- `consumerReadyBy` / `consumerReadyByAccountId` / `consumerReadyByRole`
+
+Promotion is fail-closed. It is allowed only when the current-month exact audit
+has zero invalid/duplicate/source-only/projection-only rows, current Raw and
+Projection signatures are equal, and that current signature differs from the
+preserved B2C bootstrap signature. Equal current/bootstrap signatures mean
+`WAITING_FOR_LIVE_EVENT`, not failure.
+
+Security and race contract:
+- Firebase request authentication.
+- Existing highest-admin + Trusted Device + fresh credential re-verification.
+- Current month only.
+- Explicit confirmation `PROMOTE_CURRENT_STORE_MONTH_REPORTS_READY`.
+- `expectedRevision` OCC on the status document.
+- Promotion is immediately followed by a second exact parity audit.
+- If the post-promotion audit is unhealthy, readiness is revoked fail-closed
+  when the status revision still belongs to that promotion.
+
+Read/write topology:
+- Plan = one existing bounded exact parity audit; zero writes.
+- Apply = plan audit + one status transaction + one post-promotion exact audit.
+- Failure revocation adds at most one additional status transaction.
+- No polling, scheduler, persistent listener, broad historical query, or
+  frontend cutover is added.
+
+B3-2 does not change Firestore Rules or `CURRENT_APP_VERSION`.

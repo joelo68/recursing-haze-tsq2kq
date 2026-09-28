@@ -403,6 +403,12 @@ async function auditBrandProjection({ db, brandId, yearMonth }) {
       schemaVersion: String(statusData.schemaVersion || ''),
       certifiedSourceSignature: String(statusData.sourceSignature || ''),
       certifiedProjectionSignature: String(statusData.projectionSignature || ''),
+      consumerReady: statusData.consumerReady === true,
+      certificationIsPointInTime: statusData.certificationIsPointInTime === true,
+      readinessStatus: String(statusData.readinessStatus || ''),
+      readinessVersion: String(statusData.readinessVersion || ''),
+      consumerReadySourceSignature: String(statusData.consumerReadySourceSignature || ''),
+      consumerReadyProjectionSignature: String(statusData.consumerReadyProjectionSignature || ''),
     },
     readEstimate: {
       rawDailyReportReads: rawSnap.size,

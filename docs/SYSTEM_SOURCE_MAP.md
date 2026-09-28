@@ -4366,3 +4366,33 @@ tests/p2A24CurrentStoreMonthReportsBootstrapWiring.test.js
 ```
 
 B2C status is intentionally `consumerReady=false`: Bootstrap certification is point-in-time evidence only and does not authorize frontend cutover.
+
+# P2-A2.4B3-2 Current Store-Month Readiness Owners
+
+```text
+functions/currentStoreMonthReportsReadiness.js
+  -> readiness plan/apply endpoint
+  -> post-bootstrap live-signature gate
+  -> highest-admin + Trusted Device + credential protection
+  -> status revision OCC
+  -> immediate post-promotion exact-parity re-audit / fail-closed revoke
+
+functions/currentStoreMonthReportsAudit.js
+  -> exact Raw<->Projection comparison
+  -> additive readiness status fields in audit response
+
+functions/index.js
+  -> manageCurrentStoreMonthReportsReadiness export
+
+scripts/currentStoreMonthReportsReadinessClient.mjs
+  -> local operator PLAN/APPLY client
+  -> APPLY only sends READY_TO_PROMOTE brands
+
+tests/p2A24CurrentStoreMonthReportsReadiness.test.js
+tests/p2A24CurrentStoreMonthReportsReadinessWiring.test.js
+```
+
+Readiness does not rewrite the B2C bootstrap signatures. `consumerReady=true`
+is additive evidence that a post-bootstrap live state change reached exact
+Raw<->Projection parity. B3-2 itself still does not authorize or implement a
+frontend cutover; that remains a separate B3-3 change.

@@ -213,7 +213,10 @@ const currentStoreMonthReportsWriter = createCurrentStoreMonthReportsWriter({
 
 // ★ P2-A2.4B2A：Current Store-Month Projection read-only production parity audit.
 // 一次性最高管理者稽核 current month Raw vs compact projection；不寫 Firestore、不 bootstrap。
-const { createCurrentStoreMonthReportsAuditFunctions } = require("./currentStoreMonthReportsAudit");
+const {
+  createCurrentStoreMonthReportsAuditFunctions,
+  auditBrandProjection,
+} = require("./currentStoreMonthReportsAudit");
 const currentStoreMonthReportsAuditFunctions = createCurrentStoreMonthReportsAuditFunctions({ admin, db });
 exports.auditCurrentStoreMonthReportsProjection =
   currentStoreMonthReportsAuditFunctions.auditCurrentStoreMonthReportsProjection;
@@ -226,6 +229,23 @@ const currentStoreMonthReportsBootstrapFunctions =
   createCurrentStoreMonthReportsBootstrapFunctions({ admin, db });
 exports.bootstrapCurrentStoreMonthReports =
   currentStoreMonthReportsBootstrapFunctions.bootstrapCurrentStoreMonthReports;
+
+// ★ P2-A2.4B3-2：Current Store-Month Consumer Readiness authority.
+// 只在 Bootstrap baseline 之後觀察到 live signature 前進且 Raw↔Projection exact parity 時，
+// 才允許最高管理者以 revision OCC 顯式 promotion；本批仍不切 Frontend consumer。
+const { createCurrentStoreMonthReportsReadinessFunctions } = require("./currentStoreMonthReportsReadiness");
+const currentStoreMonthReportsReadinessFunctions =
+  createCurrentStoreMonthReportsReadinessFunctions({
+    onRequest,
+    admin,
+    db,
+    getBrandCollection: getDeviceSecurityBrandCollection,
+    requireFirebaseRequestAuth: (req) => requireFirebaseRequestAuth(req, admin),
+    verifySuperAdminActor,
+    auditBrandProjection,
+  });
+exports.manageCurrentStoreMonthReportsReadiness =
+  currentStoreMonthReportsReadinessFunctions.manageCurrentStoreMonthReportsReadiness;
 
 // ==========================================
 // ★ P0-B1C1B2：Manager Organization Authority (shadow)
