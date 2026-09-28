@@ -107,3 +107,20 @@ test("B1 delete tombstone blocks older resurrection", () => {
   assert.equal(stale.changed, false);
   assert.equal(stale.data.sourceReportCount, 0);
 });
+
+
+test("B2A projection bucket rejects an explicit cross-brand store name", () => {
+  const row = buildProjectedReportRow({
+    date: "2026-09-28",
+    storeName: "安妞A店",
+    cash: 1,
+  }, "cross-brand");
+  const bucket = buildProjectionBucket({
+    row,
+    brandId: "cyj",
+    normalizeStoreCore,
+    getCanonicalStoreName,
+    detectStoreBrandFromName: (value = "") => String(value).startsWith("安妞") ? "anniu" : "",
+  });
+  assert.equal(bucket, null);
+});

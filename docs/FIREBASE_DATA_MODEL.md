@@ -3075,3 +3075,42 @@ current_store_month_reports_status/{YYYY-MM}
 B1 does not publish readiness and does not cut over frontend consumers. Bootstrap/parity certification is required before any consumer may treat the projection as current-month authority.
 
 Both projection collections are same-brand readable and Browser-write denied on CYJ legacy and Anniu/Yibo roots; generic collection rules explicitly exclude them to prevent a broader write rule from reopening writes.
+
+
+# P2-A2.4B2A Current Store-Month Projection Read-only Parity Audit
+
+Before any bootstrap or Frontend cutover, Production current-month Raw and the B1 compact projection are compared by a highest-admin, operator-triggered, read-only endpoint:
+
+```text
+auditCurrentStoreMonthReportsProjection
+```
+
+The audit reads only the selected brand's current calendar month:
+
+```text
+daily_reports
+  date >= YYYY-MM-01
+  date <= YYYY-MM-31
+
+current_store_month_reports
+  yearMonth == YYYY-MM
+
+current_store_month_reports_status/{YYYY-MM}
+  one point read
+```
+
+It performs zero Firestore writes and creates no listener, polling loop, scheduler or automatic scan. The intentionally broad current-month Raw query is a temporary operator diagnostic used to establish bootstrap parity, not a runtime consumer pattern.
+
+Parity is exact on source-report identity and field presence. Numeric `0` remains distinct from a missing field. Certification basis fails closed when any of these are observed:
+
+```text
+explicit cross-brand storeName
+invalid report identity/date
+duplicate canonical Store×Date
+invalid projection metadata/document id
+active Raw/Projection row mismatch
+```
+
+The B1 live writer is hardened in the same sub-batch so an explicit store-name prefix belonging to another brand is rejected instead of being silently canonicalized into the current brand path.
+
+B2A does not bootstrap, does not write readiness status and does not cut over Dashboard / Regional / Ranking / Store Analysis / Audit.

@@ -4280,3 +4280,28 @@ tests/reportingCompleteness.test.js
 ```
 
 B1 is Backend foundation only: no frontend cutover, no polling/scheduler, no `CURRENT_APP_VERSION` change. `monthly_aggregated` remains legacy aggregate/fallback and is not promoted to report-presence authority.
+
+
+# P2-A2.4B2A Current Store-Month Projection Audit Owners
+
+```text
+functions/currentStoreMonthReports.js
+  → existing live projection writer
+  → B2A explicit cross-brand storeName fail-closed guard
+
+functions/currentStoreMonthReportsAudit.js
+  → current-month Raw/Projection exact parity owner
+  → zero-write highest-admin endpoint
+
+functions/index.js
+  → exports auditCurrentStoreMonthReportsProjection
+
+scripts/currentStoreMonthReportsAuditClient.mjs
+  → local operator read-only three-brand audit client
+
+tests/p2A24CurrentStoreMonthReportsAudit.test.js
+tests/p2A24CurrentStoreMonthReportsAuditWiring.test.js
+tests/p2A24CurrentStoreMonthReports.test.js
+```
+
+Read topology: one bounded current-month Raw query + one compact projection query + one status point read per explicitly audited brand. No listener, polling or scheduler is added. Frontend consumers remain unchanged and `CURRENT_APP_VERSION = 3.6.0`.

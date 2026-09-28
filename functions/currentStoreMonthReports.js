@@ -80,10 +80,13 @@ function buildProjectionBucket({
   brandId = '',
   normalizeStoreCore = (value) => String(value || '').trim(),
   getCanonicalStoreName = (value) => String(value || '').trim(),
+  detectStoreBrandFromName = () => '',
 } = {}) {
   if (!row) return null;
   const normalizedBrandId = normalizeProjectionBrandId(brandId);
   const date = normalizeIsoDate(row.date);
+  const explicitStoreBrand = String(detectStoreBrandFromName(row.storeName) || '').trim();
+  if (explicitStoreBrand && explicitStoreBrand !== normalizedBrandId) return null;
   const storeKey = String(normalizeStoreCore(row.storeName) || '').trim();
   if (!normalizedBrandId || !date || !storeKey) return null;
   const yearMonth = date.slice(0, 7);
@@ -190,11 +193,16 @@ function createCurrentStoreMonthReportsWriter({
   getBrandCollection,
   normalizeStoreCore,
   getCanonicalStoreName,
+  detectStoreBrandFromName,
 } = {}) {
   if (!admin || !db || typeof getBrandCollection !== 'function') {
     throw new Error('current store-month reports writer dependencies are incomplete');
   }
-  if (typeof normalizeStoreCore !== 'function' || typeof getCanonicalStoreName !== 'function') {
+  if (
+    typeof normalizeStoreCore !== 'function'
+    || typeof getCanonicalStoreName !== 'function'
+    || typeof detectStoreBrandFromName !== 'function'
+  ) {
     throw new Error('current store-month reports identity helpers are required');
   }
 
@@ -222,10 +230,10 @@ function createCurrentStoreMonthReportsWriter({
       : null;
 
     const beforeBucket = buildProjectionBucket({
-      row: beforeRow, brandId, normalizeStoreCore, getCanonicalStoreName,
+      row: beforeRow, brandId, normalizeStoreCore, getCanonicalStoreName, detectStoreBrandFromName,
     });
     const afterBucket = buildProjectionBucket({
-      row: afterRow, brandId, normalizeStoreCore, getCanonicalStoreName,
+      row: afterRow, brandId, normalizeStoreCore, getCanonicalStoreName, detectStoreBrandFromName,
     });
 
     const currentYearMonth = getTaipeiYearMonth();

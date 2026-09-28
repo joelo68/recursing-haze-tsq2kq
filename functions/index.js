@@ -191,6 +191,7 @@ const {
   buildLifecycleReportingCompleteness,
   normalizeStoreLifecycleCore,
   getCanonicalStoreName,
+  detectStoreBrandFromName,
 } = require("./storeLifecycle");
 const storeLifecycleFunctions = createStoreLifecycleFunctions({ admin, db });
 exports.manageStoreLifecycle = storeLifecycleFunctions.manageStoreLifecycle;
@@ -207,7 +208,15 @@ const currentStoreMonthReportsWriter = createCurrentStoreMonthReportsWriter({
   getBrandCollection: getDeviceSecurityBrandCollection,
   normalizeStoreCore: normalizeStoreLifecycleCore,
   getCanonicalStoreName,
+  detectStoreBrandFromName,
 });
+
+// ★ P2-A2.4B2A：Current Store-Month Projection read-only production parity audit.
+// 一次性最高管理者稽核 current month Raw vs compact projection；不寫 Firestore、不 bootstrap。
+const { createCurrentStoreMonthReportsAuditFunctions } = require("./currentStoreMonthReportsAudit");
+const currentStoreMonthReportsAuditFunctions = createCurrentStoreMonthReportsAuditFunctions({ admin, db });
+exports.auditCurrentStoreMonthReportsProjection =
+  currentStoreMonthReportsAuditFunctions.auditCurrentStoreMonthReportsProjection;
 
 // ==========================================
 // ★ P0-B1C1B2：Manager Organization Authority (shadow)
