@@ -71,6 +71,7 @@ const {
   requireFirebaseRequestAuth,
   verifyApplicationCredential,
   verifySuperAdminActor,
+  verifyTrustedApplicationActor,
 } = require("./deviceApproval");
 const deviceApprovalFunctions = createDeviceApprovalFunctions({ admin, db });
 exports.checkDeviceAccess = deviceApprovalFunctions.checkDeviceAccess;
@@ -307,6 +308,7 @@ const therapistMasterAuthorityFunctions = createTherapistMasterAuthorityFunction
   getBrandSettingDoc: getDeviceSecurityBrandSettingDoc,
   requireFirebaseRequestAuth: (req) => requireFirebaseRequestAuth(req, admin),
   verifySuperAdminActor,
+  verifyTrustedApplicationActor,
   assertAdminApplicationClaims,
   normalizeStoreCore: normalizeStoreLifecycleCore,
   getInitialPasswordsForRole,

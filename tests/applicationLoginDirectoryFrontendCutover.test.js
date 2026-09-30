@@ -80,7 +80,8 @@ test("backend application identity is authoritative for director level and maste
 
 test("settings and therapist manager both stay on sanitized directory after admin credential writer retirement", () => {
   const adminBlock = sliceBetween(app, "Admin Credential Writer Retirement", "const targetYearStr = String(selectedYear)");
-  assert.match(adminBlock, /\["settings", "therapist-manager"\]\.includes\(activeView\)/);
+  assert.match(adminBlock, /\(isDirectorAdmin && activeView === "settings"\)/);
+  assert.match(adminBlock, /activeView === "therapist-manager"[\s\S]*\(userRole === "director" \|\| userRole === "trainer"\)[\s\S]*canDirectorAccessView\("therapist-manager"\)/);
   for (const sourceName of ["store_account_data", "manager_auth", "trainer_auth", "director_auth", "master_auth"]) {
     assert.doesNotMatch(adminBlock, new RegExp(`getDoc\\(getDocPath\\(\"${sourceName}\"\\)\\)`));
   }

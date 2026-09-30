@@ -59,7 +59,8 @@ test("therapist manager opens from existing sanitized login directory and fetche
   assert.match(backend, /sanitizeTherapistResponse\(masterRaw\)/);
   assert.match(backend, /masterSignature:\s*buildTherapistMasterSignature\(raw,\s*therapistId\)/);
   assert.match(app, /Admin Credential Writer Retirement/);
-  assert.match(app, /\["settings", "therapist-manager"\]\.includes\(activeView\)/);
+  assert.match(app, /\(isDirectorAdmin && activeView === "settings"\)/);
+  assert.match(app, /activeView === "therapist-manager"[\s\S]*\(userRole === "director" \|\| userRole === "trainer"\)[\s\S]*canDirectorAccessView\("therapist-manager"\)/);
   assert.match(app, /const refreshTherapistMasterRecord = useCallback/);
   assert.match(app, /action:\s*"get"/);
   assert.match(app, /admin_therapist_master_record_backend/);

@@ -1,3 +1,89 @@
+# Trainer / Therapist Account Authority Incident — 2026-09-30
+
+本節是 `管師帳號` 教專角色權限事故的最新狀態；若下方較早章節仍把 Therapist Manager 管理權限描述為 director-only，以本節與目前正式 source 為準。
+
+事故根因不是 Projection / Summary / Firestore 資料損壞。Frontend 導覽／權限可讓具 `therapist-manager` permission 的教專進入頁面，但 `Admin Credential Writer Retirement` 的 sanitized-directory readiness gate 只讓 `director` 取得 ready；因此教專進入後會永久停在「管師帳號資料同步中」。同時，既有 `manageTherapistMaster` Backend mutation authority 仍是 highest-admin-only，與正式營運權限不一致。
+
+正式角色契約：
+
+```text
+trainer / 教專
+├─ 查看管理師帳號名單        = ALLOW
+├─ 查看單筆 sanitized master = ALLOW
+├─ 新增                      = ALLOW
+├─ 修改                      = ALLOW
+├─ 封存 / 重新啟用           = ALLOW
+├─ 重設登入密碼              = ALLOW
+├─ 查看目前密碼              = DENY
+└─ 永久刪除                  = DENY
+
+highest-admin / director
+└─ 維持既有完整管理與 credential disclosure / permanent delete authority
+```
+
+修正後 authority：
+
+```text
+Frontend
+→ trainer 必須具 therapist-manager permission
+→ sanitized login directory 可進 ready
+→ TherapistManagerView
+→ reveal / permanent delete controls 只對 highest-admin 顯示
+
+Backend manageTherapistMaster
+→ exact brand / role / account Application Identity
+→ Trusted Device
+→ fresh current credential re-verification
+→ trainer action allowlist
+→ current permissions authority recheck
+→ mutation transaction 內再次 re-read permissions，避免撤權 race
+
+Firestore Rules
+→ therapists browser write deny 不變
+→ therapist_credentials browser read/write deny 不變
+```
+
+Read topology：
+
+```text
+new listener / polling / scheduler       = 0
+new collection hydration                 = 0
+trainer selected-record get              = existing single master read + one permission point read
+trainer mutation                         = existing transaction + one permission point read inside transaction
+password reveal path                     = trainer 不可進入
+permanent delete path                    = trainer 不可進入
+```
+
+本批不改 Firestore physical path、Summary、Projection、Lifecycle、Target、KPI semantics 或品牌隔離；`CURRENT_APP_VERSION = 3.6.0` 不變。
+
+本地正式候選驗證：
+
+```text
+targeted authority/security regression   = 70 / 70 PASS
+stale guard + new contract regression    = 26 / 26 PASS
+full non-emulator regression             = 1057 / 1057 PASS
+Production build                         = PASS
+Firestore Rules emulator                 = 4 / 4 PASS
+existing Critical Browser E2E            = PASS
+trainer→管師帳號 incident Browser E2E     = PASS
+all Critical Browser E2E                 = PASS
+```
+
+目前狀態：
+
+```text
+IMPLEMENTED           = YES / local formal candidate
+VALIDATED             = YES
+COMMITTED / PUSHED    = NO
+DEPLOYED              = NO
+PRODUCTION CONFIRMED  = NO
+CURRENT_APP_VERSION   = 3.6.0 unchanged
+```
+
+Documentation Impact：`CURRENT_STATE.md`、`AUTH_AND_SECURITY.md`、`SYSTEM_SOURCE_MAP.md`、`DATA_FLOW.md`。
+
+---
+
 # CURRENT_STATE.md
 
 # P2-A2.4B3-2 / B4 Current Store-Month Consumer Authority — 2026-09-28

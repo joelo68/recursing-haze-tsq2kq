@@ -7,6 +7,7 @@ const {
   resetTherapistCredentialPasswordInTransaction,
   deleteSeparatedTherapistCredentialInTransaction,
 } = require("./therapistCredentialAuthority");
+const { APPLICATION_IDENTITY_VERSION } = require("./applicationIdentity");
 
 const THERAPIST_MASTER_AUTHORITY_VERSION = "therapist-master-authority-v1";
 const SUPPORTED_THERAPIST_MASTER_ACTIONS = new Set([
@@ -17,6 +18,14 @@ const SUPPORTED_THERAPIST_MASTER_ACTIONS = new Set([
   "delete",
   "list",
   "get",
+  "reset_password",
+]);
+const TRAINER_THERAPIST_MASTER_ACTIONS = new Set([
+  "get",
+  "create",
+  "update",
+  "archive",
+  "restore",
   "reset_password",
 ]);
 const FORBIDDEN_PAYLOAD_KEYS = new Set([
@@ -47,6 +56,39 @@ class TherapistMasterAuthorityError extends Error {
 
 function normalizeText(value = "", max = 160) {
   return String(value ?? "").trim().slice(0, max);
+}
+
+function assertTrainerApplicationIdentity(requestAuth = {}, brandId = "", actor = {}, actorCheck = {}) {
+  const decoded = requestAuth?.decoded || {};
+  const actorAccountId = normalizeText(actor?.accountId, 180);
+  const verifiedAccountId = normalizeText(actorCheck?.actorAccountId || actorAccountId, 180);
+  const valid = (
+    decoded?.drcyjIdentity === true &&
+    String(decoded.identityVersion || "") === APPLICATION_IDENTITY_VERSION &&
+    String(decoded.brandId || "").trim().toLowerCase() === String(brandId || "").trim().toLowerCase() &&
+    String(decoded.roleId || "").trim().toLowerCase() === "trainer" &&
+    String(actor?.roleId || "").trim().toLowerCase() === "trainer" &&
+    String(decoded.accountId || "") === actorAccountId &&
+    Boolean(actorAccountId) &&
+    verifiedAccountId === actorAccountId
+  );
+
+  if (!valid) {
+    throw new TherapistMasterAuthorityError("trainer_application_identity_mismatch", 403);
+  }
+  return true;
+}
+
+function assertTrainerTherapistManagerPermission(permissionDoc) {
+  if (!permissionDoc?.exists) return true;
+  const data = typeof permissionDoc.data === "function"
+    ? (permissionDoc.data() || {})
+    : {};
+  const allowed = Array.isArray(data.trainer) && data.trainer.includes("therapist-manager");
+  if (!allowed) {
+    throw new TherapistMasterAuthorityError("therapist_master_permission_required", 403);
+  }
+  return true;
 }
 
 function assertSupportedBrandId(value = "") {
@@ -522,6 +564,7 @@ async function manageTherapistMasterInTransaction({
   nowText,
   todayText,
   actorCheck,
+  actorRole = "director",
   getBrandCollection,
   getBrandSettingDoc,
   normalizeStoreCore,
@@ -533,6 +576,15 @@ async function manageTherapistMasterInTransaction({
   const orgRef = needsOrganization
     ? getBrandSettingDoc(db, brandId, "org_structure")
     : null;
+
+  if (actorRole === "trainer") {
+    if (!TRAINER_THERAPIST_MASTER_ACTIONS.has(action)) {
+      throw new TherapistMasterAuthorityError("trainer_therapist_master_action_forbidden", 403);
+    }
+    const trainerPermissionRef = getBrandSettingDoc(db, brandId, "permissions");
+    const trainerPermissionSnap = await transaction.get(trainerPermissionRef);
+    assertTrainerTherapistManagerPermission(trainerPermissionSnap);
+  }
 
   const therapistSnap = await transaction.get(therapistRef);
   if (isCreate && therapistSnap.exists) {
@@ -651,13 +703,18 @@ async function manageTherapistMasterInTransaction({
     : { ...(currentRaw || {}), ...(result.next || {}) };
   const nextMasterSignature = nextRecord ? buildTherapistMasterSignature(nextRecord, therapistId) : "";
 
+  const auditOperatorRole = String(actorCheck?.actorRole || "").toLowerCase() === "trainer"
+    ? "trainer"
+    : "director";
+  const auditOperatorFallback = auditOperatorRole === "trainer" ? "教專" : "最高管理者";
+
   const maintenanceRef = getBrandCollection(db, brandId, "maintenance_logs").doc();
   transaction.set(maintenanceRef, {
     type: "therapist_master_authority",
     action: `therapist_${action}`,
     brandId,
-    operator: String(actorCheck?.actorName || actorCheck?.actorAccountId || "最高管理者"),
-    operatorRole: "director",
+    operator: String(actorCheck?.actorName || actorCheck?.actorAccountId || auditOperatorFallback),
+    operatorRole: auditOperatorRole,
     therapistId,
     therapistName: normalizeText(
       nextRecord?.name || currentRaw?.name || currentRaw?.displayName || therapistId,
@@ -679,8 +736,8 @@ async function manageTherapistMasterInTransaction({
     createdAtText: nowText,
     activityType: "organization.therapist_master_management",
     action: "管理師人員資料管理",
-    role: "director",
-    user: String(actorCheck?.actorName || actorCheck?.actorAccountId || "最高管理者"),
+    role: auditOperatorRole,
+    user: String(actorCheck?.actorName || actorCheck?.actorAccountId || auditOperatorFallback),
     brand: brandId,
     details: {
       managedAction: action,
@@ -724,6 +781,7 @@ function createTherapistMasterAuthorityFunctions({
   getBrandSettingDoc,
   requireFirebaseRequestAuth,
   verifySuperAdminActor,
+  verifyTrustedApplicationActor,
   assertAdminApplicationClaims,
   normalizeStoreCore,
   getInitialPasswordsForRole,
@@ -776,15 +834,43 @@ function createTherapistMasterAuthorityFunctions({
       }
 
       const actor = body.actor || {};
-      assertAdminApplicationClaims(requestAuth, brandId, actor, {
-        actorAccountId: actor?.accountId,
-      });
+      const actorRole = normalizeText(actor?.roleId, 24).toLowerCase();
+      let actorCheck = null;
 
-      const actorCheck = await verifySuperAdminActor({ db, brandId, actor });
-      if (!actorCheck?.ok) {
-        throw new TherapistMasterAuthorityError("super_admin_reverification_required", 403);
+      if (actorRole === "director") {
+        assertAdminApplicationClaims(requestAuth, brandId, actor, {
+          actorAccountId: actor?.accountId,
+        });
+
+        actorCheck = await verifySuperAdminActor({ db, brandId, actor });
+        if (!actorCheck?.ok) {
+          throw new TherapistMasterAuthorityError("super_admin_reverification_required", 403);
+        }
+        assertAdminApplicationClaims(requestAuth, brandId, actor, actorCheck);
+      } else if (actorRole === "trainer") {
+        if (!TRAINER_THERAPIST_MASTER_ACTIONS.has(action)) {
+          throw new TherapistMasterAuthorityError("trainer_therapist_master_action_forbidden", 403);
+        }
+        if (typeof verifyTrustedApplicationActor !== "function") {
+          throw new TherapistMasterAuthorityError("trainer_authority_unavailable", 503);
+        }
+
+        assertTrainerApplicationIdentity(requestAuth, brandId, actor, {
+          actorAccountId: actor?.accountId,
+        });
+        actorCheck = await verifyTrustedApplicationActor({
+          db,
+          brandId,
+          actor,
+          allowedRoles: ["trainer"],
+        });
+        if (!actorCheck?.ok) {
+          throw new TherapistMasterAuthorityError("trainer_reverification_required", 403);
+        }
+        assertTrainerApplicationIdentity(requestAuth, brandId, actor, actorCheck);
+      } else {
+        throw new TherapistMasterAuthorityError("therapist_master_actor_forbidden", 403);
       }
-      assertAdminApplicationClaims(requestAuth, brandId, actor, actorCheck);
 
       const payload = body.payload && typeof body.payload === "object" && !Array.isArray(body.payload)
         ? body.payload
@@ -811,6 +897,13 @@ function createTherapistMasterAuthorityFunctions({
       }
 
       if (action === "get") {
+        let authorizationReadCount = 0;
+        if (actorRole === "trainer") {
+          const trainerPermissionSnap = await getBrandSettingDoc(db, brandId, "permissions").get();
+          authorizationReadCount = 1;
+          assertTrainerTherapistManagerPermission(trainerPermissionSnap);
+        }
+
         const therapistId = normalizeTherapistId(body.therapistId || body.accountId || "");
         const therapistRef = getBrandCollection(db, brandId, "therapists").doc(therapistId);
         const therapistSnap = await therapistRef.get();
@@ -825,7 +918,7 @@ function createTherapistMasterAuthorityFunctions({
           therapist: sanitizeTherapistResponse(masterRaw),
           masterSignature: buildTherapistMasterSignature(raw, therapistId),
           credentialStorageMode: normalizeTherapistCredentialStorageMode(raw),
-          readCount: 1,
+          readCount: 1 + authorizationReadCount,
         });
       }
 
@@ -862,6 +955,7 @@ function createTherapistMasterAuthorityFunctions({
           nowText,
           todayText,
           actorCheck,
+          actorRole,
           getBrandCollection,
           getBrandSettingDoc,
           normalizeStoreCore,
@@ -909,7 +1003,10 @@ function createTherapistMasterAuthorityFunctions({
 module.exports = {
   THERAPIST_MASTER_AUTHORITY_VERSION,
   SUPPORTED_THERAPIST_MASTER_ACTIONS,
+  TRAINER_THERAPIST_MASTER_ACTIONS,
   TherapistMasterAuthorityError,
+  assertTrainerApplicationIdentity,
+  assertTrainerTherapistManagerPermission,
   normalizeMasterProjection,
   buildTherapistMasterSignature,
   buildOrganizationStoreIndex,

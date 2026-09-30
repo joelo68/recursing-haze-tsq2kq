@@ -8,6 +8,7 @@ import DeviceApprovalGate from "../src/components/DeviceApprovalGate";
 import { Sidebar, MobileTopNav } from "../src/components/Navigation";
 import { AsyncActionButton } from "../src/components/SharedUI";
 import SystemMonitor from "../src/components/SystemMonitor";
+import TherapistManagerView from "../src/components/TherapistManagerView";
 
 const loginDirectory = {
   version: "application-login-directory-v1",
@@ -185,6 +186,163 @@ const SaveHarness = () => {
   );
 };
 
+
+const TrainerTherapistHarness = () => {
+  const [active, setActive] = useState("dashboard");
+  const [actionLog, setActionLog] = useState([]);
+  const permissions = {
+    trainer: ["dashboard", "therapist-manager"],
+  };
+
+  const therapist = {
+    id: "therapist-e2e",
+    name: "測試管理師",
+    store: "測試店",
+    storeName: "測試店",
+    stores: ["測試店"],
+    onboardDate: "2026-09-01",
+    resignDate: "",
+    isActive: true,
+    status: "active",
+    masterSignature: "sig-e2e-1",
+    credentialStorageMode: "separated_v1",
+  };
+
+  const recordAction = (action) => {
+    setActionLog((current) => [...current, action]);
+  };
+
+  const manageTherapistMasterAction = async (request = {}) => {
+    const action = String(request.action || "");
+    recordAction(action);
+
+    if (action === "delete") {
+      throw new Error("E2E trainer must never reach permanent delete");
+    }
+
+    if (action === "get") {
+      return {
+        ok: true,
+        therapist,
+        masterSignature: therapist.masterSignature,
+      };
+    }
+
+    if (action === "update") {
+      const next = {
+        ...therapist,
+        ...(request.payload || {}),
+      };
+      return {
+        ok: true,
+        therapist: next,
+        masterSignature: "sig-e2e-update",
+      };
+    }
+
+    if (action === "archive") {
+      return {
+        ok: true,
+        therapist: {
+          ...therapist,
+          isActive: false,
+          status: "封存",
+          resignDate: "2026-09-30",
+        },
+        masterSignature: "sig-e2e-archive",
+      };
+    }
+
+    if (action === "restore") {
+      return {
+        ok: true,
+        therapist: {
+          ...therapist,
+          isActive: true,
+          status: "active",
+          resignDate: "",
+        },
+        masterSignature: "sig-e2e-restore",
+      };
+    }
+
+    if (action === "reset_password") {
+      return {
+        ok: true,
+        therapist,
+        masterSignature: "sig-e2e-reset",
+      };
+    }
+
+    if (action === "create") {
+      const created = {
+        ...therapist,
+        id: "therapist-created-e2e",
+        name: String(request.payload?.name || "新增管理師"),
+        store: String(request.payload?.store || "測試"),
+      };
+      return {
+        ok: true,
+        therapist: created,
+        masterSignature: "sig-e2e-create",
+      };
+    }
+
+    throw new Error(`unexpected trainer therapist action: ${action}`);
+  };
+
+  const manageApplicationAccountAction = async (request = {}) => {
+    recordAction(`FORBIDDEN_ACCOUNT_ACTION:${String(request.action || "")}`);
+    throw new Error("E2E trainer must never reach credential reveal authority");
+  };
+
+  const contextValue = {
+    currentBrand: { id: "cyj", label: "CYJ" },
+    therapistModuleEnabled: true,
+    therapists: [therapist],
+    managers,
+    managerOrder: ["北區"],
+    showToast: () => {},
+    manageTherapistMasterAction,
+    manageApplicationAccountAction,
+    canRevealTherapistPassword: false,
+    canDeleteTherapistAccount: false,
+  };
+
+  return (
+    <AppContext.Provider value={contextValue}>
+      <div className="hidden md:block">
+        <Sidebar
+          activeView={active}
+          setActiveView={setActive}
+          isSidebarOpen={true}
+          setSidebarOpen={() => {}}
+          userRole="trainer"
+          onLogout={() => setActive("logout")}
+          permissions={permissions}
+          currentUser={{ id: "trainer-e2e", name: "測試教專" }}
+          canAccessView={(viewId) => permissions.trainer.includes(viewId)}
+        />
+      </div>
+
+      <main className="min-h-screen bg-stone-50 p-6 md:ml-64">
+        {active === "therapist-manager" ? (
+          <>
+            <div data-testid="trainer-therapist-ready">READY</div>
+            <TherapistManagerView />
+          </>
+        ) : (
+          <div data-testid="trainer-dashboard">TRAINER_DASHBOARD</div>
+        )}
+
+        <div data-testid="trainer-action-log" className="fixed bottom-2 right-2 z-[99999] rounded bg-white px-2 py-1 text-[10px]">
+          {actionLog.join(",")}
+        </div>
+      </main>
+    </AppContext.Provider>
+  );
+};
+
 const SecurityHarness = () => {
   const [status, setStatus] = useState("BLOCKED");
 
@@ -306,6 +464,7 @@ const Harness = () => {
 
   if (testCase === "navigation") return <NavigationHarness />;
   if (testCase === "save") return <SaveHarness />;
+  if (testCase === "trainer-therapist") return <TrainerTherapistHarness />;
   if (testCase === "security") return <SecurityHarness />;
   if (testCase === "health") return <HealthHarness />;
   return <LoginHarness />;

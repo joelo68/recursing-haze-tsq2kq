@@ -1,3 +1,71 @@
+# Trainer Therapist-Account Authority Owners — 2026-09-30
+
+本節是教專 `管師帳號` role/capability 與 Backend authority 的最新 owner map。
+
+```text
+src/constants/index.js
+→ therapist-manager menu role metadata
+→ trainer default therapist-manager permission
+
+src/App.jsx
+→ therapist-manager view capability gate
+→ sanitized login-directory readiness owner
+→ trainer/director manageTherapistMaster caller role binding
+→ highest-admin-only reveal/delete capability publication
+
+src/components/TherapistManagerView.jsx
+→ therapist master CRUD/reset UI
+→ trainer hides credential reveal
+→ trainer hides permanent delete
+→ frontend guard remains secondary to Backend authority
+
+functions/index.js
+→ inject verifyTrustedApplicationActor into therapist master authority
+
+functions/therapistMasterAuthority.js
+→ trainer Application Identity binding
+→ trainer Trusted Device + current credential re-verification
+→ trainer action allowlist
+→ current permission point-read
+→ mutation transaction permission re-read / race protection
+→ brand resolver remains physical-path owner
+
+functions/deviceApproval.js
+→ verifyTrustedApplicationActor shared security primitive
+
+firestore.rules
+→ unchanged
+→ therapists browser write deny
+→ therapist_credentials browser read/write deny
+```
+
+Read topology：
+
+```text
+page-entry therapist collection hydration = 0
+new realtime listener                     = 0
+new polling                               = 0
+trainer selected record                   = one therapist point read + one permission point read
+trainer mutation                          = permission point read inside existing transaction
+```
+
+Regression / Browser owners：
+
+```text
+tests/trainerTherapistManagerAuthority.test.js
+tests/applicationLoginDirectoryFrontendCutover.test.js
+tests/therapistManagerBackendCutover.test.js
+tests/therapistManagerOptimization.test.js
+tests/therapistMasterAuthority.test.js
+tests/therapistMasterWriteLockdown.test.js
+e2e/main.jsx
+e2e/tests/trainer-therapist-manager.spec.js
+```
+
+`CURRENT_APP_VERSION = 3.6.0` unchanged.
+
+---
+
 # SYSTEM_SOURCE_MAP.md
 
 # P2-A2.4B4 Current Store-Month Frontend Consumer Source Override — 2026-09-28

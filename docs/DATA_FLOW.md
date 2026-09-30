@@ -1,3 +1,69 @@
+# Trainer → Therapist Account Management Flow Override — 2026-09-30
+
+正式教專 `管師帳號` flow：
+
+```text
+trainer authenticated session
+→ server-issued Application Identity
+→ permissions.trainer contains therapist-manager
+→ Navigation / App therapist-manager capability
+→ existing sanitized login directory
+→ TherapistManagerView ready
+```
+
+單筆查看：
+
+```text
+TherapistManagerView
+→ manageTherapistMaster { action: get }
+→ Backend exact brand / trainer identity
+→ Trusted Device + fresh credential
+→ current permissions point read
+→ one selected therapists/{id} point read
+→ sanitized master response
+```
+
+教專 mutation：
+
+```text
+create / update / archive / restore / reset_password
+→ manageTherapistMaster
+→ exact brand / role / account Application Identity
+→ Trusted Device
+→ current credential re-verification
+→ trainer action allowlist
+→ Firestore transaction
+   ├─ re-read current permissions authority
+   ├─ read/write only requested therapist master / separated credential as action requires
+   ├─ existing OCC / organization validation
+   └─ maintenance + system audit
+```
+
+禁止 flow：
+
+```text
+trainer → reveal_password
+= no Frontend control + existing credential disclosure authority remains highest-admin-only
+
+trainer → permanent delete
+= no Frontend control + Backend trainer action allowlist DENY
+```
+
+Firestore direct Browser mutation 不重新開放；`therapists` 與 `therapist_credentials` 仍由既有 Rules / Backend authority 保護。
+
+Read topology impact：
+
+```text
+new listener        = 0
+new polling         = 0
+new collection scan = 0
+new point read      = current permission authority only, scoped to trainer selected-record/mutation flow
+```
+
+跨品牌 physical paths 不由頁面自行判斷，仍沿用既有 brand resolver；本批不更動 Summary / Projection / KPI / Target data flow。
+
+---
+
 # DATA_FLOW.md
 
 # P2-A2.4B4 Current Store-Month Frontend Consumer Flow — 2026-09-28

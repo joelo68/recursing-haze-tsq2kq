@@ -18,7 +18,8 @@ const rules = read("firestore.rules");
 
 test("therapist manager opens from sanitized directory without page-entry therapist collection hydration", () => {
   assert.match(app, /Admin Credential Writer Retirement/);
-  assert.match(app, /\["settings", "therapist-manager"\]\.includes\(activeView\)/);
+  assert.match(app, /\(isDirectorAdmin && activeView === "settings"\)/);
+  assert.match(app, /activeView === "therapist-manager"[\s\S]*\(userRole === "director" \|\| userRole === "trainer"\)[\s\S]*canDirectorAccessView\("therapist-manager"\)/);
   assert.match(app, /setAdminCredentialSourceState\(\{ status: "ready", brandId, view: activeView/);
   assert.doesNotMatch(app, /const refreshTherapistMasterDirectory/);
   assert.doesNotMatch(app, /callTherapistMasterAuthority\(\{ action: "list" \}\)/);

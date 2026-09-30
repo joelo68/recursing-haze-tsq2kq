@@ -1,3 +1,72 @@
+# Trainer Therapist-Account Authority Security Override — 2026-09-30
+
+`therapist-manager` 不再等同 highest-admin-only 頁面。正式營運 contract 是：教專可查看管理師帳號名單、查看 sanitized 單筆主檔、新增、修改、封存／重新啟用與重設密碼；教專不可查看目前密碼，也不可永久刪除。
+
+Frontend capability 不是 security authority。教專操作 `manageTherapistMaster` 時 Backend 必須重新驗證：
+
+```text
+server-issued Application Identity
+→ drcyjIdentity = true
+→ identityVersion = application-identity-v1
+→ exact brandId
+→ roleId = trainer
+→ exact accountId binding
+→ Trusted Device
+→ current credential re-verification
+→ current trainer therapist-manager permission
+```
+
+Trainer action allowlist：
+
+```text
+get             ALLOW
+create          ALLOW
+update          ALLOW
+archive         ALLOW
+restore         ALLOW
+reset_password  ALLOW
+
+delete          DENY
+list            DENY
+```
+
+`delete` 不因 UI 隱藏而視為安全；Backend allowlist 亦 fail-closed。密碼查看仍走既有 single-account credential reveal authority，並維持 highest-management-key + personal super-admin session 的既有安全邊界；trainer Frontend 不提供 reveal control，也不呼叫該 authority。
+
+多管理者／撤權 race：trainer mutation transaction 會重新讀目前品牌 `permissions` authority；若管理者在操作期間撤銷 `therapist-manager`，交易不得依賴先前 Frontend state 繼續寫入。
+
+Firestore Rules 不放寬：
+
+```text
+therapists              frontend write = deny
+therapist_credentials   frontend read/write = deny
+```
+
+品牌隔離維持既有 resolver：
+
+```text
+CYJ    → legacy physical root
+anniu  → brands/anniu/...
+yibo   → brands/yibo/...
+```
+
+本批沒有新增 Firestore listener、polling、scheduler 或 collection scan。教專 selected-record / mutation 的新增成本只限 current permission single-document point read。
+
+Security regression owners：
+
+```text
+tests/trainerTherapistManagerAuthority.test.js
+tests/therapistMasterAuthority.test.js
+tests/therapistMasterWriteLockdown.test.js
+tests/applicationLoginDirectoryFrontendCutover.test.js
+tests/therapistManagerBackendCutover.test.js
+tests/therapistManagerOptimization.test.js
+e2e/tests/trainer-therapist-manager.spec.js
+```
+
+`CURRENT_APP_VERSION = 3.6.0` 不變。
+
+---
+
 # AUTH_AND_SECURITY.md
 
 # P2-A2.4 Current Store-Month Read Security Boundary — 2026-09-28

@@ -30,6 +30,8 @@ const TherapistManagerView = () => {
     showToast,
     manageTherapistMasterAction,
     manageApplicationAccountAction,
+    canRevealTherapistPassword,
+    canDeleteTherapistAccount,
   } = useContext(AppContext);
 
   const [showResigned, setShowResigned] = useState(false);
@@ -357,6 +359,9 @@ const TherapistManagerView = () => {
     const code = String(error?.code || error?.result?.code || "");
     if (code === "therapist_master_conflict") return "這筆人員資料剛被其他管理者更新，已重新確認最新內容，請確認後再操作。";
     if (code === "super_admin_reverification_required") return "管理者驗證已失效，請重新登入後再操作。";
+    if (code === "trainer_reverification_required" || code === "trainer_application_identity_mismatch") return "教專登入驗證已失效，請重新登入後再操作。";
+    if (code === "therapist_master_permission_required") return "目前教專帳號未開放管師帳號管理權限。";
+    if (code === "trainer_therapist_master_action_forbidden") return "教專不可執行這項管師帳號操作。";
     if (code === "archive_before_delete_required") return "請先封存帳號，再進行永久刪除。";
     if (code === "store_outside_brand_organization") return "所選店家已不在目前品牌的組織架構中，請重新選擇。";
     if (code === "organization_duplicate_store") return "目前店家歸屬有重複，請先修正區域與店家設定。";
@@ -537,6 +542,10 @@ const TherapistManagerView = () => {
 
   const openCredentialReveal = (t = selectedTherapist) => {
     if (!t?.id) return;
+    if (!canRevealTherapistPassword) {
+      showToast("目前角色不可查看管理師登入密碼", "error");
+      return;
+    }
     if (isTherapistArchived(t)) {
       showToast("封存中的帳號不提供密碼查看，請先重新啟用。", "error");
       return;
@@ -594,6 +603,10 @@ const TherapistManagerView = () => {
 
   const handleDeleteTherapist = async (t = selectedTherapist) => {
     if (!t) return;
+    if (!canDeleteTherapistAccount) {
+      showToast("目前角色不可永久刪除管理師帳號", "error");
+      return;
+    }
     if (!isTherapistArchived(t)) {
       showToast("永久刪除前請先封存帳號，以避免誤刪在職人員", "error");
       return;
@@ -817,7 +830,9 @@ const TherapistManagerView = () => {
               <div className="rounded-2xl border border-amber-100 bg-amber-50/60 px-4 py-3">
                 <p className="text-xs font-black text-amber-800">登入密碼由本人管理</p>
                 <p className="mt-1 text-[11px] font-bold leading-5 text-amber-700/80">
-                  此頁不會預載、搜尋或直接編輯登入密碼。忘記密碼時可重設為系統初始密碼；如需協助本人確認，也可輸入最高管理金鑰後只查看這一個帳號。
+                  {canRevealTherapistPassword
+                    ? "此頁不會預載、搜尋或直接編輯登入密碼。忘記密碼時可重設為系統初始密碼；如需協助本人確認，也可輸入最高管理金鑰後只查看這一個帳號。"
+                    : "此頁不會預載、搜尋或直接編輯登入密碼。忘記密碼時可重設為系統初始密碼；目前角色不提供密碼查看。"}
                 </p>
 
                 {!isCreating && selectedTherapist && selectedCredentialReady && (
@@ -835,14 +850,16 @@ const TherapistManagerView = () => {
 
                 {!isCreating && selectedTherapist && !selectedArchived && (
                   <div className="mt-3 flex flex-wrap gap-2">
-                    <button
-                      onClick={() => openCredentialReveal(selectedTherapist)}
-                      disabled={selectedDetailLoading || !selectedCredentialReady}
-                      className="h-9 px-3 rounded-xl border border-sky-100 bg-white text-sky-700 text-xs font-black hover:bg-sky-50 transition-all flex items-center justify-center gap-1.5 disabled:opacity-50 disabled:cursor-wait"
-                    >
-                      <Shield size={13} />
-                      查看目前密碼
-                    </button>
+                    {canRevealTherapistPassword && (
+                      <button
+                        onClick={() => openCredentialReveal(selectedTherapist)}
+                        disabled={selectedDetailLoading || !selectedCredentialReady}
+                        className="h-9 px-3 rounded-xl border border-sky-100 bg-white text-sky-700 text-xs font-black hover:bg-sky-50 transition-all flex items-center justify-center gap-1.5 disabled:opacity-50 disabled:cursor-wait"
+                      >
+                        <Shield size={13} />
+                        查看目前密碼
+                      </button>
+                    )}
                     <button
                       onClick={() => handleResetTherapistPassword(selectedTherapist)}
                       disabled={selectedDetailLoading || !selectedCredentialReady}
@@ -951,7 +968,7 @@ const TherapistManagerView = () => {
                 </button>
               </div>
 
-              {!isCreating && selectedTherapist && selectedArchived && (
+              {!isCreating && selectedTherapist && selectedArchived && canDeleteTherapistAccount && (
                 <button
                   onClick={() => handleDeleteTherapist(selectedTherapist)}
                   className="mt-2 w-full h-8 rounded-xl text-[11px] font-black text-stone-400 hover:text-rose-600 hover:bg-rose-50 transition-all flex items-center justify-center gap-1.5"
@@ -1241,7 +1258,7 @@ const TherapistManagerView = () => {
                               {archived ? <UserCheck size={12} /> : <Archive size={12} />}
                             </button>
 
-                            {archived && (
+                            {archived && canDeleteTherapistAccount && (
                               <button
                                 onClick={() => handleDeleteTherapist(t)}
                                 className="w-7 h-7 rounded-lg bg-white border border-stone-200 text-stone-300 shadow-sm hover:text-rose-600 hover:border-rose-200 hover:bg-rose-50 transition-all flex items-center justify-center"

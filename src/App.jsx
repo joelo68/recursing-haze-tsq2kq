@@ -1475,12 +1475,18 @@ export default function App() {
     : null;
 
   const canDirectorAccessView = useCallback((viewId) => {
+    if (viewId === "therapist-manager" && userRole === "trainer") {
+      return (
+        Array.isArray(permissions?.trainer) &&
+        permissions.trainer.includes("therapist-manager")
+      );
+    }
     if (userRole !== "director") return true;
     if (currentUser?.isMasterLogin === true) return true;
     const profile = DIRECTOR_VIEW_PERMISSIONS[directorLevel] || DIRECTOR_VIEW_PERMISSIONS.operation_admin;
     if (!profile.allowedViews) return true;
     return profile.allowedViews.has(viewId);
-  }, [userRole, currentUser?.isMasterLogin, directorLevel]);
+  }, [userRole, currentUser?.isMasterLogin, directorLevel, permissions]);
 
   const therapistModuleEnabled = featureFlags?.therapistModuleEnabled !== false;
 
@@ -3020,7 +3026,16 @@ export default function App() {
   useEffect(() => {
     const brandId = String(currentBrandId || "").trim().toLowerCase();
     const isDirectorAdmin = userRole === "director" && Boolean(currentUser) && canDirectorAccessView(activeView);
-    const ownsSanitizedAdminView = isDirectorAdmin && ["settings", "therapist-manager"].includes(activeView);
+    const canUseTherapistManager = (
+      activeView === "therapist-manager" &&
+      Boolean(currentUser) &&
+      (userRole === "director" || userRole === "trainer") &&
+      canDirectorAccessView("therapist-manager")
+    );
+    const ownsSanitizedAdminView = (
+      (isDirectorAdmin && activeView === "settings") ||
+      canUseTherapistManager
+    );
 
     const directory = loginDirectory?.brandId === brandId ? loginDirectory : EMPTY_LOGIN_DIRECTORY;
     setStoreAccounts(Array.isArray(directory.stores) ? directory.stores.map((item) => ({ ...item })) : []);
@@ -4499,9 +4514,14 @@ export default function App() {
     credentialPassword: securitySessionCredentialRef.current || "",
   }), [userRole, currentSecurityAccountRawId, currentSecurityAccountKey, currentUser, currentDeviceTrust]);
 
+  const canManageTherapistAccounts = Boolean(
+    isDeviceSecuritySuperAdmin ||
+    (userRole === "trainer" && canDirectorAccessView("therapist-manager"))
+  );
+
   const callTherapistMasterAuthority = useCallback(async (request = {}) => {
-    if (!isDeviceSecuritySuperAdmin) {
-      throw new Error("只有最高管理者可以管理管師帳號");
+    if (!canManageTherapistAccounts) {
+      throw new Error("目前帳號沒有管理管師帳號的權限");
     }
     if (currentDeviceTrust?.status !== "trusted") {
       throw new Error("目前裝置尚未完成信任確認，無法管理管師帳號");
@@ -4511,14 +4531,15 @@ export default function App() {
     const result = await callDeviceSecurityEndpoint(THERAPIST_MASTER_ENDPOINT, {
       ...request,
       brandId: brandIdAtStart,
-      actor: { ...buildDeviceSecurityActor(), roleId: "director" },
+      actor: { ...buildDeviceSecurityActor(), roleId: userRole },
     });
     if (String(result?.brandId || "").trim().toLowerCase() !== brandIdAtStart) {
       throw new Error("管師帳號資料品牌不一致，已停止套用結果");
     }
     return { ...result, brandIdAtStart };
   }, [
-    isDeviceSecuritySuperAdmin,
+    canManageTherapistAccounts,
+    userRole,
     currentDeviceTrust?.status,
     currentBrandId,
     callDeviceSecurityEndpoint,
@@ -5286,7 +5307,7 @@ export default function App() {
     annualMonthlyTargetSummaries, annualTargetSummaryLoadState, annualAggregateLoadState, therapistAnnualAggregatedData, // ★ 年度 trust / target / fallback readiness
     showToast, openConfirm, fmtMoney, fmtNum, inputDate, setInputDate, setTargets, selectedYear, selectedMonth, setSelectedYear, setSelectedMonth, permissions, storeAccounts, managerAuth, currentUser, userRole, logActivity, manageTherapistMasterAction, navigateToStore, activeView, appId,
     therapists: visibleTherapists, therapistReports: visibleTherapistReports, therapistSchedules, therapistTargets, trainerAuth, systemExclusionState, auditExclusions, handleUpdateAuditExclusions, currentBrand, setCurrentBrandId, getCollectionPath, getDocPath, dailyLoginCount, yesterdayLoginCount, securityConfig, featureFlags, therapistModuleEnabled, isOnline, isLowPowerMode,
-    currentDeviceTrust, currentSecurityAccountKey, manageDeviceSecurityAction, reviewDeviceApprovalAction, updateTelegramSecurityAlertConfig, manageApplicationAccountAction, manageAdministrativeSettingAction, manageManagerOrganizationAction, manageManagementDelegationAction, updateModulePermissions, updateProjectionContext, updateStoreSchedule, getProductionHealthSnapshotAction, canManageDeviceSecurity: isDeviceSecuritySuperAdmin, openDeviceApprovalPanel,
+    currentDeviceTrust, currentSecurityAccountKey, manageDeviceSecurityAction, reviewDeviceApprovalAction, updateTelegramSecurityAlertConfig, manageApplicationAccountAction, manageAdministrativeSettingAction, manageManagerOrganizationAction, manageManagementDelegationAction, updateModulePermissions, updateProjectionContext, updateStoreSchedule, getProductionHealthSnapshotAction, canManageDeviceSecurity: isDeviceSecuritySuperAdmin, canRevealTherapistPassword: isDeviceSecuritySuperAdmin, canDeleteTherapistAccount: isDeviceSecuritySuperAdmin, openDeviceApprovalPanel,
     loginDirectory,
     fetchGlobalData,
     officialManagers: managers,

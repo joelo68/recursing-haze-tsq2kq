@@ -51,7 +51,7 @@ export const ALL_MENU_ITEMS = [
   { id: "t-targets", label: "管師目標", icon: UserCog, requiresTherapistModule: true }, 
   { id: "t-schedule", label: "管師排休", icon: CalendarOff, requiresTherapistModule: true },
   { id: "store-schedule", label: "店家排休", icon: Store },
-  { id: "therapist-manager", label: "管師帳號", icon: Users, roles: ["director", "manager"], requiresTherapistModule: true },
+  { id: "therapist-manager", label: "管師帳號", icon: Users, roles: ["director", "trainer", "manager"], requiresTherapistModule: true },
   { id: "smart-forecast", label: "智慧推估", icon: Sparkles },
   { id: "settings", label: "系統設定", icon: Settings },
 ];
@@ -69,7 +69,7 @@ export const DEFAULT_PERMISSIONS = {
   director: ALL_MENU_ITEMS.map((i) => i.id),
   
   // 教專權限
-  trainer: ["dashboard", "ranking", "audit", "settings", "t-targets", "t-schedule"],
+  trainer: ["dashboard", "ranking", "audit", "settings", "t-targets", "t-schedule", "therapist-manager"],
 
   manager: ["dashboard", "annual", "targets", "regional", "store-analysis", "audit", "t-targets", "t-schedule"],
   store: ["dashboard", "annual", "targets", "store-analysis", "ranking", "history", "input", "t-targets", "t-schedule"],
