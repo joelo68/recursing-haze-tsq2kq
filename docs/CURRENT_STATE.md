@@ -1,3 +1,66 @@
+# Annual YTD Provisional-Month Interval Fix — 2026-10-01
+
+FRD-A1 Frontend deploy 後的人工作業發現：目前年度的「整年度」區間在月初、當月尚未形成 numeric actual 時，上方區間現金／權責卡片會顯示「尚無資料」，即使先前月份已有有效實績。
+
+Root cause 位於 `src/utils/annualFormalConsumer.js::buildAnnualIntervalTotals()`，不是 FRD-A1 Annual KPI loader extraction。既有 total helper 對所有 actual rows 採「任一 null 即整體 null」；current-month `PROVISIONAL` row 在月初可合法為 null，因此會把已有效的歷史 YTD actual 一起 fail closed。
+
+正式契約：
+
+```text
+historical DATA_COMPLETE numeric actual
+→ 納入 YTD
+
+current PROVISIONAL numeric actual
+→ 納入 YTD
+
+current PROVISIONAL null actual
+→ 暫不納入該 actual metric
+→ 不得把既有 YTD actual 變成 N/A
+
+historical DATA_INCOMPLETE null actual
+→ 仍 fail closed
+→ 防止缺失歷史月份被默默跳過
+
+future NOT_STARTED
+→ 不納入 actual
+→ target 仍依既有契約納入全年 denominator
+```
+
+因此目前年度「整年度」應維持：
+
+```text
+actual = 1/1 至截至目前已有的有效實績
+target = 選定全年區間內既有目標 denominator
+progress = YTD actual / selected-range target
+```
+
+本修正只調整共用 Annual interval aggregation helper；不修改 `AnnualView.jsx` 顯示 workaround、不修改 Summary / Lifecycle / System Exclusion authority、不修改任何 Firestore listener/query/path，也不修改 Backend / Rules / CURRENT_APP_VERSION。
+
+Regression 新增：
+
+```text
+PROVISIONAL null 不抹除既有 YTD actual
+PROVISIONAL numeric / explicit zero 正常納入
+historical DATA_INCOMPLETE null 仍 fail closed
+future target denominator 行為維持
+```
+
+狀態：
+
+```text
+SOURCE_BASE           = de12ab8e20ed67484fcdd65bdfdc0e8ae1323c45
+IMPLEMENTED           = YES_LOCAL_AFTER_PATCH
+VALIDATED             = PENDING_LOCAL_EXECUTION
+COMMITTED / PUSHED    = NO
+DEPLOYED               = NO
+PRODUCTION CONFIRMED  = NO
+CURRENT_APP_VERSION   = 3.6.0 unchanged
+```
+
+Documentation Impact：更新 `CURRENT_STATE.md`。`SYSTEM_SOURCE_MAP.md` ownership 未改；其他 canonical docs = None。
+
+---
+
 # Frontend Responsibility Decomposition A1 — Annual KPI Benchmark Loader Extraction — 2026-10-01
 
 本批是 P2 功能性結案後第一個 Frontend Responsibility Decomposition 最小批次。目的不是純搬檔，而是把 `useDashboardStats.js` 內獨立的 Annual KPI benchmark I/O / session cache responsibility 收斂成單一 hook owner。

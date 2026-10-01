@@ -328,6 +328,155 @@ test("empty Lifecycle scope is excluded from interval totals rather than treated
   assert.equal(result.achievement, null);
 });
 
+test("current-year interval keeps valid YTD actuals when current PROVISIONAL month has no actual yet", () => {
+  const totals = buildAnnualIntervalTotals([
+    {
+      cash: 100,
+      budget: 100,
+      accrual: 120,
+      accrualBudget: 110,
+      traffic: 10,
+      includedInTotals: true,
+      actualIncludedInTotals: true,
+      targetIncludedInTotals: true,
+      performanceStatus: "DATA_COMPLETE",
+    },
+    {
+      cash: 200,
+      budget: 200,
+      accrual: 220,
+      accrualBudget: 210,
+      traffic: 20,
+      includedInTotals: true,
+      actualIncludedInTotals: true,
+      targetIncludedInTotals: true,
+      performanceStatus: "DATA_COMPLETE",
+    },
+    {
+      cash: null,
+      budget: 300,
+      accrual: null,
+      accrualBudget: 310,
+      traffic: null,
+      includedInTotals: true,
+      actualIncludedInTotals: true,
+      targetIncludedInTotals: true,
+      performanceStatus: "PROVISIONAL",
+    },
+    {
+      cash: null,
+      budget: 400,
+      accrual: null,
+      accrualBudget: 410,
+      traffic: null,
+      includedInTotals: true,
+      actualIncludedInTotals: false,
+      targetIncludedInTotals: true,
+      performanceStatus: "NOT_STARTED",
+    },
+  ]);
+
+  assert.equal(totals.cash, 300);
+  assert.equal(totals.accrual, 340);
+  assert.equal(totals.budget, 1000);
+  assert.equal(totals.accrualBudget, 1040);
+  assert.equal(totals.cashAch, 30);
+  assert.equal(totals.accrualAch, (340 / 1040) * 100);
+  assert.equal(totals.includesFutureTargets, true);
+  assert.equal(totals.performanceStatus, "PROVISIONAL");
+});
+
+test("current PROVISIONAL actual is included once it becomes numeric, including explicit zero", () => {
+  const positive = buildAnnualIntervalTotals([
+    {
+      cash: 100,
+      budget: 100,
+      accrual: 120,
+      accrualBudget: 100,
+      traffic: 10,
+      includedInTotals: true,
+      actualIncludedInTotals: true,
+      targetIncludedInTotals: true,
+      performanceStatus: "DATA_COMPLETE",
+    },
+    {
+      cash: 25,
+      budget: 100,
+      accrual: 30,
+      accrualBudget: 100,
+      traffic: 2,
+      includedInTotals: true,
+      actualIncludedInTotals: true,
+      targetIncludedInTotals: true,
+      performanceStatus: "PROVISIONAL",
+    },
+  ]);
+  assert.equal(positive.cash, 125);
+  assert.equal(positive.accrual, 150);
+
+  const zero = buildAnnualIntervalTotals([
+    {
+      cash: 100,
+      budget: 100,
+      accrual: 120,
+      accrualBudget: 100,
+      traffic: 10,
+      includedInTotals: true,
+      actualIncludedInTotals: true,
+      targetIncludedInTotals: true,
+      performanceStatus: "DATA_COMPLETE",
+    },
+    {
+      cash: 0,
+      budget: 100,
+      accrual: 0,
+      accrualBudget: 100,
+      traffic: 0,
+      includedInTotals: true,
+      actualIncludedInTotals: true,
+      targetIncludedInTotals: true,
+      performanceStatus: "PROVISIONAL",
+    },
+  ]);
+  assert.equal(zero.cash, 100);
+  assert.equal(zero.accrual, 120);
+});
+
+test("historical DATA_INCOMPLETE actual still fails closed and is never skipped like current PROVISIONAL", () => {
+  const totals = buildAnnualIntervalTotals([
+    {
+      cash: 100,
+      budget: 100,
+      accrual: 120,
+      accrualBudget: 100,
+      traffic: 10,
+      includedInTotals: true,
+      actualIncludedInTotals: true,
+      targetIncludedInTotals: true,
+      performanceStatus: "DATA_COMPLETE",
+    },
+    {
+      cash: null,
+      budget: 200,
+      accrual: null,
+      accrualBudget: 200,
+      traffic: 0,
+      includedInTotals: true,
+      actualIncludedInTotals: true,
+      targetIncludedInTotals: true,
+      performanceStatus: "DATA_INCOMPLETE",
+    },
+  ]);
+
+  assert.equal(totals.cash, null);
+  assert.equal(totals.accrual, null);
+  assert.equal(totals.budget, 300);
+  assert.equal(totals.accrualBudget, 300);
+  assert.equal(totals.cashAch, null);
+  assert.equal(totals.accrualAch, null);
+  assert.equal(totals.performanceStatus, "DATA_INCOMPLETE");
+});
+
 test("annual interval totals fail closed when any included Formal target is incomplete", () => {
   const totals = buildAnnualIntervalTotals([
     { cash: 100, budget: 100, accrual: 120, accrualBudget: 100, traffic: 10, includedInTotals: true },

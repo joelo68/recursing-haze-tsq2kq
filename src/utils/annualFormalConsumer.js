@@ -408,15 +408,39 @@ export const buildAnnualIntervalTotals = (monthlyStats = []) => {
   ));
   const targetRows = included.filter((row) => row?.targetIncludedInTotals !== false);
 
-  const sumNullableMetric = (rows, key) => {
+  const sumNullableTargetMetric = (rows, key) => {
     if (rows.some((row) => !isFiniteValue(row?.[key]))) return null;
     return rows.reduce((sum, row) => sum + Number(row?.[key] || 0), 0);
   };
 
-  const totalCash = sumNullableMetric(actualRows, "cash");
-  const totalBudget = sumNullableMetric(targetRows, "budget");
-  const totalAccrual = sumNullableMetric(actualRows, "accrual");
-  const totalAccrualBudget = sumNullableMetric(targetRows, "accrualBudget");
+  // Current-month PROVISIONAL actual can legitimately be absent at the start of a month.
+  // Do not let that temporary null erase already-valid YTD actuals.
+  // Historical/incomplete nulls still fail closed so missing history cannot silently shrink the numerator.
+  const sumNullableActualMetric = (rows, key) => {
+    let total = 0;
+    let hasNumericValue = false;
+
+    for (const row of rows) {
+      if (isFiniteValue(row?.[key])) {
+        total += Number(row[key]);
+        hasNumericValue = true;
+        continue;
+      }
+
+      if (row?.performanceStatus === "PROVISIONAL") {
+        continue;
+      }
+
+      return null;
+    }
+
+    return hasNumericValue ? total : null;
+  };
+
+  const totalCash = sumNullableActualMetric(actualRows, "cash");
+  const totalBudget = sumNullableTargetMetric(targetRows, "budget");
+  const totalAccrual = sumNullableActualMetric(actualRows, "accrual");
+  const totalAccrualBudget = sumNullableTargetMetric(targetRows, "accrualBudget");
   const totalTraffic = actualRows.reduce((sum, row) => sum + (isFiniteValue(row?.traffic) ? Number(row.traffic) : 0), 0);
 
   const cashAch = isFiniteValue(totalCash) && isFiniteValue(totalBudget) && Number(totalBudget) > 0
