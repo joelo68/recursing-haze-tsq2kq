@@ -1,3 +1,39 @@
+# FRD-A4 Dashboard Historical Read-Policy Ownership — 2026-10-01
+
+```text
+src/App.jsx
+→ sole historical Dashboard / report daily_reports read-topology authority
+→ resolveHistoricalDashboardReadPolicy()
+→ owns Summary readiness + dirty refresh read decision
+→ owns System Exclusion + Reporting Calendar trust input for read topology
+
+src/hooks/useDashboardStats.js
+→ no dashboardTargetReadPolicy mirror
+→ no resolveHistoricalDashboardReadPolicy dependency
+→ no inspectHistoricalReportingCalendarTrust dependency
+→ retains Summary presentation trust / fallback composition
+→ remains free of direct firebase/firestore primitives
+
+src/utils/dashboardReadPolicy.js
+→ unchanged shared read-policy contract
+→ consumed by App read topology
+```
+
+Boundary：
+
+```text
+Firestore reads                     = unchanged
+Firestore listeners                 = unchanged
+new query                           = 0
+new polling                         = 0
+brand paths                         = unchanged
+Backend                             = unchanged
+Firestore Rules                     = unchanged
+CURRENT_APP_VERSION                 = 3.6.0 unchanged
+```
+
+---
+
 # FRD-A3 Therapist Summary Listener Ownership — 2026-10-01
 
 ```text

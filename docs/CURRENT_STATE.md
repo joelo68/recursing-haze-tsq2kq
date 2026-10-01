@@ -1,3 +1,74 @@
+# Frontend Responsibility Decomposition A4 — Dead Dashboard Read-Policy Mirror Retirement — 2026-10-01
+
+FRD-A3 closeout 後重新 inventory 最新正式 source。`useDashboardStats.js` 已沒有直接 Firestore primitive，但仍保留一段 `dashboardTargetReadPolicy` `useMemo`。Repo 內該值只有宣告、沒有 consumer；真正決定 `daily_reports` 是否載入的 read-topology authority 位於 `src/App.jsx`，並使用 `resolveHistoricalDashboardReadPolicy()` 同時檢查 Summary readiness、System Exclusion 與 Reporting Calendar trust。
+
+本批不把 dead mirror 抽到另一個檔案，而是直接退役，避免 App read authority 與 Dashboard 無效 mirror 未來產生語意 drift。
+
+Source Gate：
+
+```text
+pre-change main                     = 00136d77a3b61d17e2da5eb2fc0d961193ebe690
+CURRENT_APP_VERSION                 = 3.6.0 unchanged
+```
+
+責任收斂：
+
+```text
+src/App.jsx
+→ sole historical daily_reports read-topology policy owner
+→ resolveHistoricalDashboardReadPolicy()
+→ System Exclusion trust
+→ Reporting Calendar trust
+→ dashboardReadPolicy.shouldLoadDailyReports
+
+src/hooks/useDashboardStats.js
+→ retire unused dashboardTargetReadPolicy mirror
+→ remove unused resolveHistoricalDashboardReadPolicy import
+→ remove unused inspectHistoricalReportingCalendarTrust import
+→ retain dashboardSummaryBundle / isSummaryTrustedForDashboard presentation trust
+→ retain brand/month anchoring and System Exclusion presentation trust
+```
+
+Read / brand / security boundary：
+
+```text
+Firestore read topology             = unchanged
+listener topology                   = unchanged
+new read                            = 0
+new listener                        = 0
+new query                           = 0
+new polling                         = 0
+brand physical paths                = unchanged
+Backend / Rules                     = unchanged
+security authority                  = unchanged
+```
+
+Regression：
+
+```text
+App sole read-policy ownership guard
+dead mirror non-regression guard
+Dashboard presentation-trust preservation guard
+no direct Firestore primitive guard
+CURRENT_APP_VERSION guard
+dashboardHistoricalReads stale ownership assertion corrected
+```
+
+狀態：
+
+```text
+IMPLEMENTED                         = YES_LOCAL_AFTER_PATCH
+VALIDATED                           = PENDING_LOCAL_EXECUTION
+COMMITTED / PUSHED                  = NO
+DEPLOYED                            = NO
+PRODUCTION CONFIRMED                = NO
+CURRENT_APP_VERSION                 = 3.6.0 unchanged
+```
+
+Documentation Impact：更新 `CURRENT_STATE.md`、`SYSTEM_SOURCE_MAP.md`；其他 canonical docs = None。
+
+---
+
 # Frontend Responsibility Decomposition A3 — Therapist Summary Listener Extraction — 2026-10-01
 
 FRD-A2 closeout 後重新 inventory 最新正式 source。`useDashboardStats.js` 唯一剩餘的直接 Firestore primitive 是歷史人員績效 `therapist_summary/{yearMonth}` 的單文件 `onSnapshot`。本批把 listener / local load-state ownership 抽到 dedicated hook；Dashboard 保留 Summary trust、Formal fallback 與 Therapist KPI presentation composition。

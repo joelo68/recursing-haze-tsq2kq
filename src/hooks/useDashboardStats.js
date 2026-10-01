@@ -24,8 +24,7 @@ import {
   filterDashboardStorePresentationKeys,
 } from '../utils/storeSelfView.js';
 import { applyTherapistRankingSemantics, buildTherapistAggregateMetrics } from '../utils/therapistKpi.js';
-import { getSummaryRecalcFlagState, resolveHistoricalDashboardReadPolicy } from '../utils/dashboardReadPolicy.js';
-import { inspectHistoricalReportingCalendarTrust } from '../utils/storeLifecycle.js';
+import { getSummaryRecalcFlagState } from '../utils/dashboardReadPolicy.js';
 import {
   filterSystemExcludedStoreKeys,
   inspectHistoricalSystemExclusionTrust,
@@ -113,82 +112,6 @@ export function useDashboardStats() {
     else { name = "CYJ"; }
     return { brandInfo: { id: normalizedId, name }, brandPrefix: name };
   }, [currentBrand]);
-
-  // Batch 5A-2：Dashboard 歷史月份的 raw target fallback 必須與 App 的
-  // Summary trust authority 使用同一套 policy，避免 verified Formal Summary 又回頭讀 raw monthly_targets。
-  const dashboardTargetReadPolicy = useMemo(() => {
-    const y = Number(selectedYear);
-    const m = Number(selectedMonth);
-    const targetYearMonth = y && m ? `${y}-${String(m).padStart(2, "0")}` : "";
-    const now = new Date();
-    const isCurrentMonth = y === now.getFullYear() && m === now.getMonth() + 1;
-    const summaryYearMonth = String(currentDashboardSummary?.yearMonth || currentDashboardSummary?.id || "");
-    const rankingsYearMonth = String(currentRankingsSummary?.yearMonth || currentRankingsSummary?.id || "");
-    const hasUsableDashboardSummary = Boolean(
-      targetYearMonth &&
-      summaryYearMonth === targetYearMonth &&
-      currentDashboardSummary?.stores &&
-      Object.keys(currentDashboardSummary.stores || {}).length > 0 &&
-      rankingsYearMonth === targetYearMonth &&
-      currentRankingsSummary
-    );
-    const reportSummaryReadyForMonth = Boolean(
-      targetYearMonth &&
-      currentReportSummaryReady === true &&
-      currentReportSummaryReadyYearMonth === targetYearMonth &&
-      currentReportSummaryReadyBrandId === brandInfo?.id
-    );
-    const summaryFlagReadyForMonth = Boolean(
-      targetYearMonth &&
-      currentSummaryRecalcFlagState?.brandId === brandInfo?.id &&
-      currentSummaryRecalcFlagState?.yearMonth === targetYearMonth &&
-      currentSummaryRecalcFlagState?.ready === true
-    );
-    const historicalRefreshRequested = Boolean(
-      targetYearMonth &&
-      historicalDetailRefreshState?.yearMonth === targetYearMonth &&
-      ["requested", "loading"].includes(historicalDetailRefreshState?.status)
-    );
-    const systemExclusionTrust = inspectHistoricalSystemExclusionTrust({
-      currentState: systemExclusionState,
-      brandId: brandInfo?.id,
-      summaries: [currentDashboardSummary, currentRankingsSummary],
-      summaryFlag: currentSummaryRecalcFlagState?.data || null,
-    });
-    const reportingCalendarTrust = inspectHistoricalReportingCalendarTrust({
-      currentLifecycleMasterState,
-      dashboardSummary: currentDashboardSummary,
-      summaryFlag: currentSummaryRecalcFlagState?.data || null,
-      brandId: brandInfo?.id,
-    });
-
-    return resolveHistoricalDashboardReadPolicy({
-      isCurrentMonth,
-      historicalRefreshRequested,
-      reportSummaryReady: reportSummaryReadyForMonth,
-      hasUsableDashboardSummary,
-      summaryFlagReady: summaryFlagReadyForMonth,
-      summaryFlag: currentSummaryRecalcFlagState?.data || null,
-      summaryFlagError: currentSummaryRecalcFlagState?.error || null,
-      systemExclusionTrusted: systemExclusionTrust.trusted,
-      systemExclusionReason: systemExclusionTrust.reason,
-      reportingCalendarTrusted: reportingCalendarTrust.trusted,
-      reportingCalendarReason: reportingCalendarTrust.reason,
-    });
-  }, [
-    selectedYear,
-    selectedMonth,
-    currentDashboardSummary,
-    currentRankingsSummary,
-    currentReportSummaryReady,
-    currentReportSummaryReadyYearMonth,
-    currentReportSummaryReadyBrandId,
-    currentSummaryRecalcFlagState,
-    historicalDetailRefreshState,
-    systemExclusionState,
-    currentLifecycleMasterState,
-    brandInfo?.id,
-  ]);
 
   const annualKpiBenchmark = useAnnualKpiBenchmark({
     getCollectionPath,

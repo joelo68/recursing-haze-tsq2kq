@@ -142,7 +142,7 @@ test("mismatch flag is never trusted", () => {
   assert.equal(state.isDirty, true);
 });
 
-test("App uses the shared historical read policy for Dashboard daily_reports", () => {
+test("App is the sole historical read-policy owner for Dashboard daily_reports", () => {
   assert.match(appSource, /resolveHistoricalDashboardReadPolicy/);
   assert.match(appSource, /dashboardReadPolicy\.shouldLoadDailyReports/);
   assert.match(appSource, /currentSummaryRecalcFlagState/);
@@ -150,8 +150,10 @@ test("App uses the shared historical read policy for Dashboard daily_reports", (
   assert.match(appSource, /systemExclusionTrusted: systemExclusionTrust\.trusted/);
   assert.match(appSource, /inspectHistoricalReportingCalendarTrust/);
   assert.match(appSource, /reportingCalendarTrusted: reportingCalendarTrust\.trusted/);
-  assert.match(hookSource, /inspectHistoricalReportingCalendarTrust/);
-  assert.match(hookSource, /reportingCalendarTrusted: reportingCalendarTrust\.trusted/);
+
+  assert.doesNotMatch(hookSource, /dashboardTargetReadPolicy/);
+  assert.doesNotMatch(hookSource, /resolveHistoricalDashboardReadPolicy/);
+  assert.doesNotMatch(hookSource, /inspectHistoricalReportingCalendarTrust/);
 });
 
 test("Dashboard hook no longer listens to recalc_queue or maintenance_logs", () => {
@@ -182,9 +184,19 @@ test("App read trust is anchored to both month and brand to prevent cross-brand 
   assert.match(hookSource, /currentSummaryRecalcFlagState\?\.brandId === brandInfo\?\.id/);
 });
 
-test("Dashboard trusted read gate requires both dashboard and rankings summary for the selected month", () => {
+test("Dashboard trusted gates require the rankings summary to match each owner's selected month", () => {
+  // App owns read topology and compares against its targetYearMonth.
   assert.match(appSource, /rankingsSummaryYearMonth === targetYearMonth/);
-  assert.match(hookSource, /rankingsYearMonth === targetYearMonth/);
+
+  // useDashboardStats owns presentation trust and compares against selectedYearMonth.
+  assert.match(
+    hookSource,
+    /const rankingsMatchesMonth = Boolean\(currentRankingsSummary\) && rankingsYearMonth === selectedYearMonth;/
+  );
+  assert.match(
+    hookSource,
+    /else if \(!summaryDocs\.dashboard \|\| !summaryDocs\.rankings\) statusKey = "missing";/
+  );
 });
 
 test("runtime stabilization historical readiness has one-shot point-read recovery without polling", () => {
