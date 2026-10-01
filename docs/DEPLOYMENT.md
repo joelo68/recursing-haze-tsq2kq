@@ -1,5 +1,99 @@
 # DEPLOYMENT.md
 
+# Trainer / Therapist Account Authority Production Closeout — 2026-10-01
+
+本節記錄 `管師帳號` 教專 authority incident 的正式 Production deployment 與 human smoke。Runtime source、Backend、Frontend、CI 與正式畫面已完成收斂。
+
+正式 lineage：
+
+```text
+source commit                       = 948c46140897812a4914320d0129395f0df7f11c
+GitHub CI Validation Gate           = 36713591814 / SUCCESS
+Critical Browser E2E                = 36713591849 / SUCCESS
+CURRENT_APP_VERSION                 = 3.6.0
+```
+
+精準 Backend deployment：
+
+```bash
+firebase deploy \
+  --project cyjsituation-analysis \
+  --only functions:manageTherapistMaster
+```
+
+Backend Production evidence：
+
+```text
+Function                            = manageTherapistMaster
+generation                          = Gen2
+state                               = ACTIVE
+updateTime                          = 2026-09-30T12:20:46.072943598Z
+unauthenticated POST                = HTTP 401 PASS
+```
+
+精準 Frontend deployment：
+
+```bash
+npm run deploy
+```
+
+Frontend Production evidence：
+
+```text
+previous gh-pages                   = ea1153245b6777d262ba37b1c53cacb47d07f525
+Production gh-pages                 = ee102ca9813323df1b81ee281a0569f79861174d
+Production index asset              = assets/index-D1S6Yt07.js
+live asset convergence              = PASS
+live asset HTTP                     = 200 PASS
+```
+
+本 incident 沒有修改 `firestore.rules`，因此沒有 Rules deploy；也沒有 blanket Functions deploy、Firebase Hosting deploy、IAM change 或 `CURRENT_APP_VERSION` bump。
+
+正式 Human Production smoke：
+
+```text
+brand                               = 安妞
+
+trainer login                       = PASS
+therapist-manager no sync hang      = PASS
+search / open therapist             = PASS
+
+trainer create control              = VISIBLE
+trainer update control              = VISIBLE
+trainer archive control             = VISIBLE
+trainer reset-password control      = VISIBLE
+trainer reveal-password control     = HIDDEN
+trainer permanent-delete control    = HIDDEN
+
+highest-admin login                 = PASS
+highest-admin therapist-manager     = PASS
+highest-admin reveal-password       = VISIBLE
+highest-admin permanent-delete      = VISIBLE
+
+representative trainer mutation
+archive → restore                   = PASS
+```
+
+Production mutation smoke 刻意採可逆的 `archive → restore`；沒有為了 closeout 對正式帳號逐項執行 `create`、`update` 或 `reset_password` destructive smoke。
+
+最終狀態：
+
+```text
+IMPLEMENTED                         = YES
+VALIDATED                           = YES
+COMMITTED / PUSHED                  = YES
+BACKEND DEPLOYED                    = YES
+FRONTEND DEPLOYED                   = YES
+FIRESTORE RULES DEPLOYED            = NO / NOT REQUIRED
+PRODUCTION CONFIRMED                = YES
+INCIDENT CLOSED                     = YES
+CURRENT_APP_VERSION                 = 3.6.0 unchanged
+```
+
+Documentation Impact：本 Production closeout 更新 `CURRENT_STATE.md`、`DEPLOYMENT.md`；其他 canonical docs = None。
+
+---
+
 # P1-C Production Observability Deployment Record — 2026-09-24
 
 P1-C runtime 只包含一支新 Function 與既有 GitHub Pages Frontend 更新。

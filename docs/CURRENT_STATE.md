@@ -17,7 +17,7 @@ trainer / 教專
 ├─ 查看目前密碼              = DENY
 └─ 永久刪除                  = DENY
 
-highest-admin / director
+highest-admin / super-admin director
 └─ 維持既有完整管理與 credential disclosure / permanent delete authority
 ```
 
@@ -69,18 +69,58 @@ trainer→管師帳號 incident Browser E2E     = PASS
 all Critical Browser E2E                 = PASS
 ```
 
+Production closeout evidence（2026-10-01）：
+
+```text
+source commit                         = 948c46140897812a4914320d0129395f0df7f11c
+GitHub CI Validation Gate             = run 36713591814 / SUCCESS
+Core validation                       = SUCCESS
+Firestore Rules emulator              = SUCCESS
+Critical Browser E2E                  = run 36713591849 / SUCCESS
+
+Backend Function                      = manageTherapistMaster
+Backend Function state                = ACTIVE
+Backend Function updateTime           = 2026-09-30T12:20:46.072943598Z
+Unauthenticated Backend guard         = HTTP 401 PASS
+
+Frontend Production gh-pages          = ee102ca9813323df1b81ee281a0569f79861174d
+Production index asset                = assets/index-D1S6Yt07.js
+Live asset convergence                = PASS
+Live asset HTTP                       = 200 PASS
+
+Production brand smoke                = 安妞 / PASS
+trainer login                         = PASS
+trainer therapist-manager readiness   = PASS
+trainer search / selected detail      = PASS
+trainer archive → restore mutation    = PASS
+trainer reveal password control       = HIDDEN
+trainer permanent delete control      = HIDDEN
+
+highest-admin therapist-manager       = PASS
+highest-admin reveal password control = VISIBLE
+highest-admin permanent delete        = VISIBLE
+
+Firestore Rules deployed              = NO — source unchanged in this incident
+CURRENT_APP_VERSION                   = 3.6.0 unchanged
+```
+
+Production mutation smoke 採低風險代表路徑 `archive → restore`，已實際穿過 trainer Backend mutation authority 與 transaction。為避免不必要變更正式營運資料，`create`、`update`、`reset_password` 未逐項在 Production 對真實帳號執行 destructive smoke；其 contract 已由 local / CI regression 與 Browser E2E 驗證。
+
 目前狀態：
 
 ```text
-IMPLEMENTED           = YES / local formal candidate
+IMPLEMENTED           = YES
 VALIDATED             = YES
-COMMITTED / PUSHED    = NO
-DEPLOYED              = NO
-PRODUCTION CONFIRMED  = NO
+COMMITTED / PUSHED    = YES
+DEPLOYED              = YES
+PRODUCTION CONFIRMED  = YES
+INCIDENT CLOSED       = YES
 CURRENT_APP_VERSION   = 3.6.0 unchanged
 ```
 
-Documentation Impact：`CURRENT_STATE.md`、`AUTH_AND_SECURITY.md`、`SYSTEM_SOURCE_MAP.md`、`DATA_FLOW.md`。
+原 implementation Documentation Impact：`CURRENT_STATE.md`、`AUTH_AND_SECURITY.md`、`SYSTEM_SOURCE_MAP.md`、`DATA_FLOW.md`。
+
+Production closeout Documentation Impact：`CURRENT_STATE.md`、`DEPLOYMENT.md`；其餘 canonical docs = None。
 
 ---
 
