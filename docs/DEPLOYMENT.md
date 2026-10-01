@@ -1,5 +1,106 @@
 # DEPLOYMENT.md
 
+# FRD-A5 Annual Data Authority Production Closeout — 2026-10-01
+
+本節記錄 `Frontend Responsibility Decomposition A5 — Annual Data Authority Extraction` 的正式 Frontend deployment 與 human production smoke。Runtime 將 App-level Annual Firestore I/O 與 8 個 Annual runtime states 從 `src/App.jsx` 收斂至 `src/hooks/useAnnualDataAuthority.js`；`App.jsx` 保留 hook wiring / AppContext publication，`AnnualView.jsx` 的 precise `monthly_targets` point-read fallback 維持 consumer-specific ownership。
+
+正式 lineage：
+
+```text
+runtime source commit                = dda5279996be66552a362026862b4fed96c98f9d
+runtime parent                       = 5e249af7cee8691d6874c027de15cf15d279455c
+CURRENT_APP_VERSION                  = 3.6.0 unchanged
+```
+
+Validation：
+
+```text
+targeted regression                  = 90 / 90 PASS
+local detached-staging validation    = PASS
+full ci:validate                     = PASS
+production build                     = PASS
+git diff / exact scope gate          = PASS
+runtime correction after validation  = NO
+```
+
+精準 Frontend deployment：
+
+```bash
+npm run deploy
+```
+
+Repository deploy contract：
+
+```text
+npm run deploy
+→ npm run build
+→ gh-pages -d dist
+Firebase Hosting                     = NOT DEPLOYED
+Functions                            = NOT DEPLOYED
+Firestore Rules                      = NOT DEPLOYED
+```
+
+Frontend Production evidence：
+
+```text
+previous gh-pages                    = 3e87d54187d3325d2aeb2b04c68718eb642883e2
+production gh-pages                  = 0dc5f94005173720d33fd71f3308585cae6cff02
+production index asset               = assets/index-Cqu-qZiT.js
+live convergence                     = PASS
+live index HTTP                      = 200
+live asset HTTP                      = 200
+technical production smoke           = PASS
+human production smoke               = PASS
+```
+
+Human smoke scope：
+
+```text
+Annual current year                  = PASS
+Annual historical trusted month      = PASS
+quarter / month / custom interval    = PASS
+manager / store filters              = PASS
+CYJ -> Anniu -> Yibo -> CYJ isolation = PASS
+```
+
+Runtime / read boundary：
+
+```text
+Annual App-level I/O owner           = src/hooks/useAnnualDataAuthority.js
+App.jsx responsibility               = hook wiring + AppContext publication
+AnnualView precise target fallback   = preserved
+dashboard_summary                    = selected-year query + onSnapshot
+summary_recalc_flags                 = selected-year query + onSnapshot
+monthly_targets_summary              = selected-brand-year getDocs
+monthly_aggregated                   = fallback-month-only query + onSnapshot
+Firestore read topology delta        = 0
+listener topology delta              = 0
+new read                             = 0
+new listener                         = 0
+new query                            = 0
+new polling                          = 0
+brand path resolver                  = unchanged getCollectionPath()
+security authority                   = unchanged
+Backend deployment                   = NO / NOT REQUIRED
+Firestore Rules deployment           = NO / NOT REQUIRED
+```
+
+最終狀態：
+
+```text
+IMPLEMENTED                          = YES
+VALIDATED                            = YES
+COMMITTED                            = YES
+PUSHED                               = YES
+DEPLOYED                             = YES
+PRODUCTION CONFIRMED                 = YES
+CURRENT_APP_VERSION                  = 3.6.0 unchanged
+```
+
+Documentation Impact：`CURRENT_STATE.md`、`DEPLOYMENT.md`；`SYSTEM_SOURCE_MAP.md` ownership 已於 runtime commit 完成，無需再改。Docs-only closeout commit 不需要重新部署 Frontend。
+
+---
+
 # FRD-A4 Dead Dashboard Read-Policy Mirror Production Closeout — 2026-10-01
 
 本節記錄 `Frontend Responsibility Decomposition A4 — Dead Dashboard Read-Policy Mirror Retirement` 的正式 Frontend deployment 與 human production smoke。Runtime 退役 `useDashboardStats.js` 內沒有 consumer 的 `dashboardTargetReadPolicy` mirror，並移除其未使用的 `resolveHistoricalDashboardReadPolicy` / `inspectHistoricalReportingCalendarTrust` dependencies。真正的 historical `daily_reports` read-topology authority 維持在 `src/App.jsx`；Dashboard 的 Summary presentation trust / fail-closed semantics 保持不變。

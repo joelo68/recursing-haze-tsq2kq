@@ -80,15 +80,40 @@ production build                     = PASS
 git diff / exact scope gate          = PASS
 ```
 
+Production evidence：
+
+```text
+runtime source commit                = dda5279996be66552a362026862b4fed96c98f9d
+runtime parent                       = 5e249af7cee8691d6874c027de15cf15d279455c
+previous gh-pages                    = 3e87d54187d3325d2aeb2b04c68718eb642883e2
+production gh-pages                  = 0dc5f94005173720d33fd71f3308585cae6cff02
+production index asset               = assets/index-Cqu-qZiT.js
+live convergence                     = PASS
+live index HTTP                      = 200
+live asset HTTP                      = 200
+technical production smoke           = PASS
+human production smoke               = PASS
+```
+
+Human smoke scope：
+
+```text
+Annual current year                  = PASS
+Annual historical trusted month      = PASS
+quarter / month / custom interval    = PASS
+manager / store filters              = PASS
+CYJ -> Anniu -> Yibo -> CYJ isolation = PASS
+```
+
 目前狀態：
 
 ```text
-IMPLEMENTED                          = YES_LOCAL_WORKTREE
-VALIDATED                            = YES_LOCAL_STAGING
-COMMITTED                            = NO
-PUSHED                               = NO
-DEPLOYED                             = NO
-PRODUCTION CONFIRMED                 = NO
+IMPLEMENTED                          = YES
+VALIDATED                            = YES
+COMMITTED                            = YES
+PUSHED                               = YES
+DEPLOYED                             = YES_GITHUB_PAGES
+PRODUCTION CONFIRMED                 = YES
 ANNUAL APP-LEVEL I/O OWNER           = useAnnualDataAuthority
 ANNUALVIEW PRECISE TARGET FALLBACK   = PRESERVED
 FIRESTORE READ TOPOLOGY CHANGE       = 0
@@ -103,7 +128,7 @@ FIRESTORE RULES DEPLOY REQUIRED      = NO
 CURRENT_APP_VERSION                  = 3.6.0 unchanged
 ```
 
-Documentation Impact：本次 implementation closeout 更新 `CURRENT_STATE.md`、`SYSTEM_SOURCE_MAP.md`。因尚未部署 Production，`DEPLOYMENT.md` 本階段不修改；待 Hosting deployment 與 Production smoke 完成後再寫入實際 production evidence。
+Documentation Impact：Production closeout 更新 `CURRENT_STATE.md`、`DEPLOYMENT.md`；`SYSTEM_SOURCE_MAP.md` ownership 已於 runtime commit 完成，本步不再修改。Frontend runtime 已部署並完成 technical + human production smoke；docs-only closeout commit 不需要重新部署。
 
 ---
 
