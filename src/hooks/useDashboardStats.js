@@ -2,7 +2,6 @@
 import { useState, useMemo, useContext, useEffect } from 'react';
 import { AppContext } from '../AppContext';
 import { sortManagerNames, sortStoreNames, sortManagersByOrgOrder, sortStoresByOrgOrder } from "../utils/helpers";
-import { doc, onSnapshot } from 'firebase/firestore';
 import { KPI_VALUE_STATUS, formalNetCash } from '../utils/kpiContracts.js';
 import {
   DASHBOARD_LIVE_RANKING_SEMANTICS,
@@ -39,6 +38,7 @@ import {
 } from '../utils/annualKpiBenchmark.js';
 import { useAnnualKpiBenchmark } from './useAnnualKpiBenchmark.js';
 import { useDashboardProjectionModel } from './useDashboardProjectionModel.js';
+import { useDashboardTherapistSummary } from './useDashboardTherapistSummary.js';
 
 const isFiniteKpiNumber = (value) => typeof value === "number" && Number.isFinite(value);
 const getFormalNetCashValue = (row = {}) => {
@@ -723,17 +723,11 @@ export function useDashboardStats() {
   ]);
 
   // ==========================================
-  // ★ Batch 5A-2：Dashboard Summary trust 來源收斂
+  // ★ Batch 5A-2 / FRD-A3：Dashboard Summary trust 來源收斂
   // dashboard_summary / rankings_summary / summary_recalc_flags 由 App 單一監聽後傳入；
-  // 此 hook 不再重複監聽，也不再依賴 recalc_queue / maintenance_logs 大型 query。
-  // therapist_summary 只在人員績效歷史視圖真正需要時才監聽單一文件。
+  // therapist_summary 的 view-scoped single-document listener 由 dedicated hook 擁有。
+  // useDashboardStats 只保留 Summary trust / presentation composition。
   // ==========================================
-  const [therapistSummaryState, setTherapistSummaryState] = useState({
-    yearMonth: "",
-    data: null,
-    ready: true,
-    error: null,
-  });
 
   const selectedYearMonth = useMemo(() => {
     const y = String(selectedYear || "");
@@ -745,6 +739,17 @@ export function useDashboardStats() {
     const now = new Date();
     return Number(selectedYear) === now.getFullYear() && Number(selectedMonth) === now.getMonth() + 1;
   }, [selectedYear, selectedMonth]);
+
+  // FRD-A3：historical therapist_summary listener/state owner moved to a dedicated hook.
+  // The loader remains view-scoped and brand/month anchored; Summary trust stays in this hook.
+  const therapistSummaryState = useDashboardTherapistSummary({
+    getCollectionPath,
+    brandId: brandInfo?.id,
+    selectedYearMonth,
+    isSelectedCurrentMonth,
+    isTherapistModuleEnabled,
+    viewMode,
+  });
 
   // FRD-A2：Projection Model Firestore point-read/state owner moved to a dedicated hook.
   // Trust composition remains here with Lifecycle + System Exclusion so I/O extraction does not change authority semantics.
@@ -901,61 +906,16 @@ export function useDashboardStats() {
     return map[statusKey] || map.unverified;
   };
 
-  useEffect(() => {
-    if (
-      !getCollectionPath ||
-      !selectedYearMonth ||
-      isSelectedCurrentMonth ||
-      !isTherapistModuleEnabled ||
-      viewMode !== "therapist"
-    ) {
-      setTherapistSummaryState({
-        yearMonth: selectedYearMonth,
-        data: null,
-        ready: true,
-        error: null,
-      });
-      return undefined;
-    }
-
-    setTherapistSummaryState({
-      yearMonth: selectedYearMonth,
-      data: null,
-      ready: false,
-      error: null,
-    });
-
-    const unsubscribe = onSnapshot(
-      doc(getCollectionPath("therapist_summary"), selectedYearMonth),
-      (snap) => {
-        setTherapistSummaryState({
-          yearMonth: selectedYearMonth,
-          data: snap.exists() ? { id: snap.id, ...snap.data() } : null,
-          ready: true,
-          error: null,
-        });
-      },
-      (error) => {
-        console.warn("Dashboard therapist_summary 監聽失敗，將使用管理師明細 fallback：", error);
-        setTherapistSummaryState({
-          yearMonth: selectedYearMonth,
-          data: null,
-          ready: true,
-          error,
-        });
-      }
-    );
-
-    return () => {
-      try { unsubscribe && unsubscribe(); } catch (error) { console.warn("therapist_summary listener cleanup failed", error); }
-    };
-  }, [getCollectionPath, selectedYearMonth, isSelectedCurrentMonth, isTherapistModuleEnabled, viewMode]);
-
   const dashboardSummaryBundle = useMemo(() => {
     const dashboardYearMonth = String(currentDashboardSummary?.yearMonth || currentDashboardSummary?.id || "");
     const rankingsYearMonth = String(currentRankingsSummary?.yearMonth || currentRankingsSummary?.id || "");
     const dashboardMatchesMonth = Boolean(currentDashboardSummary) && dashboardYearMonth === selectedYearMonth;
     const rankingsMatchesMonth = Boolean(currentRankingsSummary) && rankingsYearMonth === selectedYearMonth;
+    const therapistMatchesScope = Boolean(
+      therapistSummaryState?.data &&
+      String(therapistSummaryState?.brandId || "").toLowerCase() === String(brandInfo?.id || "").toLowerCase() &&
+      therapistSummaryState?.yearMonth === selectedYearMonth
+    );
     const reportReadyForMonth = Boolean(
       currentReportSummaryReady === true &&
       currentReportSummaryReadyYearMonth === selectedYearMonth &&
@@ -971,7 +931,7 @@ export function useDashboardStats() {
     const flagState = getSummaryRecalcFlagState(recalcFlag);
     const summaryDocs = {
       dashboard: dashboardMatchesMonth,
-      therapist: Boolean(therapistSummaryState?.data) && therapistSummaryState?.yearMonth === selectedYearMonth,
+      therapist: therapistMatchesScope,
       rankings: rankingsMatchesMonth,
     };
     const systemExclusionTrust = inspectHistoricalSystemExclusionTrust({
@@ -1007,7 +967,7 @@ export function useDashboardStats() {
     if (!reportReadyForMonth || !flagReadyForMonth) {
       return {
         dashboard: dashboardMatchesMonth ? currentDashboardSummary : null,
-        therapist: therapistSummaryState?.yearMonth === selectedYearMonth ? therapistSummaryState?.data : null,
+        therapist: therapistMatchesScope ? therapistSummaryState.data : null,
         rankings: rankingsMatchesMonth ? currentRankingsSummary : null,
         trustStatus: {
           yearMonth: selectedYearMonth,
@@ -1040,7 +1000,7 @@ export function useDashboardStats() {
 
     return {
       dashboard: dashboardMatchesMonth ? currentDashboardSummary : null,
-      therapist: therapistSummaryState?.yearMonth === selectedYearMonth ? therapistSummaryState?.data : null,
+      therapist: therapistMatchesScope ? therapistSummaryState.data : null,
       rankings: rankingsMatchesMonth ? currentRankingsSummary : null,
       trustStatus: {
         yearMonth: selectedYearMonth,

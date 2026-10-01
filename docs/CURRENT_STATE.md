@@ -1,3 +1,74 @@
+# Frontend Responsibility Decomposition A3 — Therapist Summary Listener Extraction — 2026-10-01
+
+FRD-A2 closeout 後重新 inventory 最新正式 source。`useDashboardStats.js` 唯一剩餘的直接 Firestore primitive 是歷史人員績效 `therapist_summary/{yearMonth}` 的單文件 `onSnapshot`。本批把 listener / local load-state ownership 抽到 dedicated hook；Dashboard 保留 Summary trust、Formal fallback 與 Therapist KPI presentation composition。
+
+Source Gate：
+
+```text
+pre-change main                     = 14b82a6c00ae34d3dca363912c21f03738a7ae02
+CURRENT_APP_VERSION                 = 3.6.0 unchanged
+```
+
+責任切分：
+
+```text
+src/hooks/useDashboardTherapistSummary.js
+→ therapist_summary/{yearMonth} single-document onSnapshot
+→ historical-only activation
+→ therapist-view-only activation
+→ therapist module enable gate
+→ brand + yearMonth load-state anchoring
+→ listener cleanup / read-error fallback state
+
+src/hooks/useDashboardStats.js
+→ no direct firebase/firestore primitive after FRD-A3
+→ consume therapistSummaryState
+→ require exact brand + yearMonth before accepting therapist Summary
+→ keep dashboard Summary trust / Formal fallback composition
+→ keep Therapist KPI ranking / filter / presentation semantics
+```
+
+Read / brand / security boundary：
+
+```text
+Firestore path                      = unchanged via getCollectionPath("therapist_summary")
+document id                         = selectedYearMonth
+listener activation                 = historical + therapist view + module enabled only
+listener count                      = unchanged: one single-document listener when active
+query                               = 0
+polling                             = 0
+steady-state read topology delta    = 0
+brand physical path resolver        = unchanged
+cross-brand stale state             = fail-closed by brand + yearMonth consumer anchor
+Backend / Rules                     = unchanged
+```
+
+Regression：
+
+```text
+FRD-A3 listener ownership guard
+single-document listener / no-query / no-polling guard
+historical + therapist-view activation guard
+brand + month isolation guard
+Annual KPI / Projection Model ownership non-expansion guard
+FRD-A1 / FRD-A2 historical responsibility tests updated to current owner
+```
+
+狀態：
+
+```text
+IMPLEMENTED                         = YES_LOCAL_AFTER_PATCH
+VALIDATED                           = PENDING_LOCAL_EXECUTION
+COMMITTED / PUSHED                  = NO
+DEPLOYED                            = NO
+PRODUCTION CONFIRMED                = NO
+CURRENT_APP_VERSION                 = 3.6.0 unchanged
+```
+
+Documentation Impact：更新 `CURRENT_STATE.md`、`SYSTEM_SOURCE_MAP.md`；其他 canonical docs = None。
+
+---
+
 # Frontend Responsibility Decomposition A2 — Projection Model Loader Extraction — 2026-10-01
 
 本批延續 FRD-A1 的責任拆分方式，不做純搬檔。`useDashboardStats.js` 目前剩餘兩個明確 Firestore I/O seam 中，Projection Model loader 是較低風險且責任完整的 extraction：單一 current-month point read + local load state；Projection trust / Lifecycle / System Exclusion composition 則仍留在 Dashboard owner。

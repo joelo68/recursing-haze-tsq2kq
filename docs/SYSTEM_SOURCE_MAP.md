@@ -1,3 +1,46 @@
+# FRD-A3 Therapist Summary Listener Ownership — 2026-10-01
+
+```text
+src/hooks/useDashboardTherapistSummary.js
+→ historical Dashboard therapist Summary Frontend I/O owner
+→ therapist_summary/{selectedYearMonth} one onSnapshot
+→ historical + therapist-view + module-enabled activation
+→ brand + yearMonth state anchoring
+→ listener cleanup / error state
+
+src/hooks/useDashboardStats.js
+→ no longer owns direct Firestore primitives
+→ consumes therapist Summary only when brand + yearMonth match
+→ retains Dashboard Summary trust / degraded-detail fallback composition
+→ retains Therapist KPI filtering / ranking / presentation
+
+src/hooks/useDashboardProjectionModel.js
+→ unchanged Projection Model point-read owner
+
+src/hooks/useAnnualKpiBenchmark.js
+→ unchanged Annual KPI benchmark point-read/cache owner
+
+tests/frontendResponsibilityDecompositionA3.test.js
+→ listener ownership / single-document topology guard
+→ activation / cleanup guard
+→ brand-month isolation guard
+→ non-expansion guard
+```
+
+Boundary：
+
+```text
+Firestore reads/listener topology   = unchanged
+new query                           = 0
+new polling                         = 0
+brand paths                         = unchanged
+Backend                             = unchanged
+Firestore Rules                     = unchanged
+CURRENT_APP_VERSION                 = 3.6.0 unchanged
+```
+
+---
+
 # FRD-A2 Projection Model Loader Ownership — 2026-10-01
 
 ```text

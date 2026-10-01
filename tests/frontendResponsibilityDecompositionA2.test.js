@@ -11,6 +11,7 @@ const read = (relativePath) => fs.readFileSync(path.join(root, relativePath), "u
 
 const dashboardHook = read("src/hooks/useDashboardStats.js");
 const projectionLoader = read("src/hooks/useDashboardProjectionModel.js");
+const therapistSummaryLoader = read("src/hooks/useDashboardTherapistSummary.js");
 
 test("FRD-A2 moves Projection Model Firestore IO out of useDashboardStats", () => {
   assert.match(dashboardHook, /useDashboardProjectionModel\(\{/);
@@ -59,9 +60,10 @@ test("FRD-A2 keeps Projection trust composition in useDashboardStats", () => {
   assert.doesNotMatch(projectionLoader, /systemExclusionState/);
 });
 
-test("FRD-A2 does not absorb therapist Summary listener ownership", () => {
-  assert.match(dashboardHook, /getCollectionPath\("therapist_summary"\)/);
-  assert.match(dashboardHook, /onSnapshot\(/);
+test("FRD-A2 Projection loader remains isolated from therapist Summary listener ownership", () => {
+  assert.match(dashboardHook, /useDashboardTherapistSummary\(\{/);
+  assert.match(therapistSummaryLoader, /getCollectionPath\("therapist_summary"\)/);
+  assert.match(therapistSummaryLoader, /onSnapshot\(/);
   assert.doesNotMatch(projectionLoader, /therapist_summary/);
   assert.doesNotMatch(projectionLoader, /onSnapshot\(/);
 });
