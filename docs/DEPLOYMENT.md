@@ -1,5 +1,62 @@
 # DEPLOYMENT.md
 
+# P2-B1A Dashboard Legacy Shadow Retirement Production Closeout — 2026-10-01
+
+本節記錄 P2-B1A 的正式 Frontend deployment 與 human production smoke。Runtime 只退役 Historical Dashboard 已無 consumer 的 shadow aliases；沒有修改 Summary Writer、Formal KPI semantics、System Exclusion、Identity、Firestore path、Backend、Rules 或品牌隔離。
+
+正式 lineage：
+
+```text
+source commit                       = 87961bc7c1ae0f7d38ef204f332bd0cf53736e8a
+GitHub CI Validation Gate           = 36812133431 / SUCCESS
+Critical Browser E2E                = 36812133231 / SUCCESS
+CURRENT_APP_VERSION                 = 3.6.0
+```
+
+精準 Frontend deployment：
+
+```bash
+npm run deploy
+```
+
+Frontend Production evidence：
+
+```text
+previous gh-pages                   = ee102ca9813323df1b81ee281a0569f79861174d
+production gh-pages                 = 2b148aeaedbfcd3c8c096e631ea91b7aefaef597
+production index asset              = assets/index-DrGETCuQ.js
+live asset convergence              = PASS
+live asset HTTP                     = 200 PASS
+```
+
+本批沒有 Backend change、Firestore Rules change、Firestore path change、新 listener/query/polling 或 `CURRENT_APP_VERSION` bump，因此沒有 Functions / Rules deployment；steady-state Firestore reads change = 0。
+
+Human Production smoke：
+
+```text
+CYJ Dashboard                       = PASS
+安妞 Dashboard                      = PASS
+伊啵 Dashboard                      = NOT_TESTED
+```
+
+伊啵本次未執行 human smoke，因此不宣稱伊啵 smoke PASS；這不改寫已完成的 automated validation，也不把未測品牌描述成已人工確認。
+
+最終狀態：
+
+```text
+IMPLEMENTED                         = YES
+VALIDATED                           = YES
+COMMITTED                           = YES
+PUSHED                              = YES
+DEPLOYED                            = YES
+PRODUCTION CONFIRMED                = YES (CYJ / 安妞 human smoke)
+CURRENT_APP_VERSION                 = 3.6.0
+```
+
+Documentation Impact：`CURRENT_STATE.md`、`DEPLOYMENT.md`。
+
+---
+
 # Trainer / Therapist Account Authority Production Closeout — 2026-10-01
 
 本節記錄 `管師帳號` 教專 authority incident 的正式 Production deployment 與 human smoke。Runtime source、Backend、Frontend、CI 與正式畫面已完成收斂。

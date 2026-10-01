@@ -53,15 +53,27 @@ production build              = PASS（由 ci:validate 執行）
 狀態：
 
 ```text
-IMPLEMENTED            = YES_LOCAL
-VALIDATED              = YES
-COMMITTED / PUSHED     = NO
-DEPLOYED               = NO
-PRODUCTION CONFIRMED   = NO
-CURRENT_APP_VERSION    = 3.6.0 unchanged
+IMPLEMENTED                 = YES
+VALIDATED                   = YES
+COMMITTED / PUSHED          = YES
+source commit               = 87961bc7c1ae0f7d38ef204f332bd0cf53736e8a
+GitHub CI Validation Gate   = 36812133431 / SUCCESS
+Critical Browser E2E        = 36812133231 / SUCCESS
+DEPLOYED                    = YES
+production gh-pages         = 2b148aeaedbfcd3c8c096e631ea91b7aefaef597
+production index asset      = assets/index-DrGETCuQ.js
+live asset convergence      = PASS
+live asset HTTP             = 200 PASS
+PRODUCTION CONFIRMED        = YES (CYJ / 安妞 human smoke)
+CYJ                         = PASS
+安妞                        = PASS
+伊啵                        = NOT_TESTED
+CURRENT_APP_VERSION         = 3.6.0 unchanged
 ```
 
-Documentation Impact：`CURRENT_STATE.md`、`SYSTEM_SOURCE_MAP.md`。
+Production closeout 沒有新增 Backend / Firestore Rules deployment；伊啵本次未執行 human smoke，因此不宣稱伊啵 production smoke PASS。
+
+Documentation Impact：implementation 階段更新 `CURRENT_STATE.md`、`SYSTEM_SOURCE_MAP.md`；production closeout 更新 `CURRENT_STATE.md`、`DEPLOYMENT.md`。
 
 ---
 
