@@ -1,3 +1,43 @@
+# P2-B1B1 Annual KPI Frontend Mirror Alias Retirement Owners — 2026-10-01
+
+```text
+src/utils/annualKpiBenchmark.js
+→ V1 persisted document input compatibility remains readable
+→ canonical Frontend contract is metrics.<kpi>
+→ retired Frontend top-level mirror aliases:
+   trafficMonthlyAverage
+   newCustomerMonthlyAverage
+   cashMonthlyAverage
+   accrualMonthlyAverage
+   legacyBasedMetric
+
+functions/annualKpiSummary.js
+→ unchanged
+→ still owns persisted V2 compatibility fields pending data-migration evidence
+
+functions/index.js
+→ unchanged
+→ rebuildAnnualKpiSummaryNow / scheduled rebuild still consume Backend payload compatibility fields
+
+tests/annualKpiBenchmark.test.js
+→ V1 input remains readable
+→ normalized / filtered Frontend outputs must not re-expose retired aliases
+```
+
+Boundary：
+
+```text
+Backend                   = unchanged
+Firestore Rules           = unchanged
+Firestore reads           = unchanged
+brand physical paths      = unchanged
+top-level basedMonths     = unchanged
+top-level basedMonthCount = unchanged
+CURRENT_APP_VERSION       = 3.6.0 unchanged
+```
+
+---
+
 # P2-B1A Dashboard Legacy Shadow Retirement Owners — 2026-10-01
 
 ```text

@@ -1,6 +1,7 @@
 // src/utils/annualKpiBenchmark.js
 // Batch 7 Annual benchmark consumer semantics.
-// V2 uses KPI-specific month authority; V1 remains readable during staged rollout.
+// V2 uses KPI-specific month authority; V1 input remains readable during staged rollout.
+// P2-B1B1 retires dead Frontend top-level mirror aliases after normalization.
 
 import { KPI_VALUE_STATUS } from "./kpiContracts.js";
 
@@ -20,6 +21,22 @@ const isFiniteValue = (value) => (
 const validStatus = (status) => (
   status === KPI_VALUE_STATUS.VALID || status === KPI_VALUE_STATUS.VALID_ZERO
 );
+
+const RETIRED_FRONTEND_MIRROR_KEYS = Object.freeze([
+  "trafficMonthlyAverage",
+  "newCustomerMonthlyAverage",
+  "cashMonthlyAverage",
+  "accrualMonthlyAverage",
+  "legacyBasedMetric",
+]);
+
+const stripRetiredFrontendMirrorAliases = (value = {}) => {
+  const result = value && typeof value === "object" ? { ...value } : {};
+  RETIRED_FRONTEND_MIRROR_KEYS.forEach((key) => {
+    delete result[key];
+  });
+  return result;
+};
 
 const normalizeYearMonth = (value = "") => {
   const text = String(value || "").trim();
@@ -73,15 +90,11 @@ const makeEmptyMetric = () => ({
 });
 
 export const makeEmptyAnnualKpiBenchmark = (base = {}, source = "not_available") => ({
-  ...base,
+  ...stripRetiredFrontendMirrorAliases(base),
   ready: true,
   source,
   schemaVersion: String(base?.schemaVersion || ""),
   metrics: Object.fromEntries(ANNUAL_BENCHMARK_METRIC_IDS.map((metricId) => [metricId, makeEmptyMetric()])),
-  trafficMonthlyAverage: null,
-  newCustomerMonthlyAverage: null,
-  cashMonthlyAverage: null,
-  accrualMonthlyAverage: null,
   basedMonthCount: 0,
   basedMonths: [],
   stores: base?.stores && typeof base.stores === "object" ? base.stores : {},
@@ -160,7 +173,7 @@ export const normalizeAnnualKpiBenchmarkPayload = (data = {}) => {
   );
 
   return {
-    ...source,
+    ...stripRetiredFrontendMirrorAliases(source),
     ready: true,
     schemaVersion,
     metrics,
@@ -171,10 +184,6 @@ export const normalizeAnnualKpiBenchmarkPayload = (data = {}) => {
     benchmarkScopeByMonth: source.benchmarkScopeByMonth && typeof source.benchmarkScopeByMonth === "object"
       ? source.benchmarkScopeByMonth
       : {},
-    trafficMonthlyAverage: metrics.traffic.monthlyAverage,
-    newCustomerMonthlyAverage: metrics.newCustomers.monthlyAverage,
-    cashMonthlyAverage: metrics.cash.monthlyAverage,
-    accrualMonthlyAverage: metrics.accrual.monthlyAverage,
     basedMonthCount: metrics.traffic.basedMonthCount,
     basedMonths: metrics.traffic.basedMonths,
   };
@@ -276,14 +285,10 @@ const buildV2FilteredScope = ({
   );
 
   return {
-    ...payload,
+    ...stripRetiredFrontendMirrorAliases(payload),
     scope: selected.length === 1 ? "store" : "filtered",
     scopeStoreCount: selected.length,
     metrics,
-    trafficMonthlyAverage: metrics.traffic.monthlyAverage,
-    newCustomerMonthlyAverage: metrics.newCustomers.monthlyAverage,
-    cashMonthlyAverage: metrics.cash.monthlyAverage,
-    accrualMonthlyAverage: metrics.accrual.monthlyAverage,
     basedMonthCount: metrics.traffic.basedMonthCount,
     basedMonths: metrics.traffic.basedMonths,
   };
@@ -351,14 +356,10 @@ const buildLegacyFilteredScope = ({
   );
 
   return {
-    ...payload,
+    ...stripRetiredFrontendMirrorAliases(payload),
     scope: selected.length === 1 ? "store" : "filtered",
     scopeStoreCount: selected.length,
     metrics,
-    trafficMonthlyAverage: metrics.traffic.monthlyAverage,
-    newCustomerMonthlyAverage: metrics.newCustomers.monthlyAverage,
-    cashMonthlyAverage: metrics.cash.monthlyAverage,
-    accrualMonthlyAverage: metrics.accrual.monthlyAverage,
     basedMonthCount: metrics.traffic.basedMonthCount,
     basedMonths: metrics.traffic.basedMonths,
   };

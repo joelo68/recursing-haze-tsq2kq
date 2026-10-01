@@ -1,3 +1,60 @@
+# P2-B1B1 Annual KPI Frontend Mirror Alias Retirement — 2026-10-01
+
+本批延續 P2 Legacy Compatibility Retirement，Source Gate 基準：
+
+```text
+pre-change source commit = 1591c60b5cda253409025daa054b437826e4a8cc
+CURRENT_APP_VERSION      = 3.6.0 unchanged
+```
+
+正式退役 Frontend Annual KPI normalized / filtered view-model 已無 runtime consumer 的 top-level mirror aliases：
+
+```text
+trafficMonthlyAverage
+newCustomerMonthlyAverage
+cashMonthlyAverage
+accrualMonthlyAverage
+legacyBasedMetric
+```
+
+Canonical consumer contract 維持 `metrics.<kpi>`。
+
+邊界：
+
+```text
+V1 persisted annual_kpi_summary input reader = KEEP
+Backend persisted compatibility writer       = KEEP / DATA_MIGRATION_REQUIRED
+Backend manual rebuild response               = unchanged
+Backend daily rebuild scheduler               = unchanged
+top-level basedMonths / basedMonthCount       = unchanged
+Firestore path / brand isolation              = unchanged
+new listener / query / polling                = 0
+steady-state Firestore reads change           = 0
+```
+
+Validation：
+
+```text
+targeted annual KPI regression = PASS
+full CI validation             = PASS
+production build               = PASS (ci:validate)
+```
+
+狀態：
+
+```text
+IMPLEMENTED          = YES_LOCAL
+VALIDATED            = YES
+COMMITTED / PUSHED   = NO
+DEPLOYED             = NO
+PRODUCTION CONFIRMED = NO
+CURRENT_APP_VERSION  = 3.6.0 unchanged
+```
+
+Documentation Impact：`CURRENT_STATE.md`、`SYSTEM_SOURCE_MAP.md`。
+
+---
+
 # P2-B1A Dashboard Legacy Shadow View-Model Retirement — 2026-10-01
 
 本批是 P2 Legacy Compatibility Retirement 的第一個最小 runtime retirement。Source Gate 基準：

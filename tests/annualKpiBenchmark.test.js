@@ -107,10 +107,13 @@ test("rounded monthly average zero is not mislabeled as a true VALID_ZERO sample
   assert.equal(isAnnualBenchmarkMetricDisplayable(small), true);
 });
 
-test("legacy Annual KPI document remains readable during staged rollout", () => {
+test("legacy Annual KPI input remains readable as canonical metrics without re-exposing retired frontend mirror aliases", () => {
   const legacy = normalizeAnnualKpiBenchmarkPayload({
     trafficMonthlyAverage: 15,
     newCustomerMonthlyAverage: 4,
+    cashMonthlyAverage: 100,
+    accrualMonthlyAverage: 120,
+    legacyBasedMetric: "traffic",
     basedMonths: ["2026-01", "2026-02"],
     basedMonthCount: 2,
     stores: {},
@@ -119,7 +122,82 @@ test("legacy Annual KPI document remains readable during staged rollout", () => 
   assert.equal(legacy.schemaVersion, "");
   assert.equal(legacy.metrics.traffic.monthlyAverage, 15);
   assert.equal(legacy.metrics.newCustomers.monthlyAverage, 4);
+  assert.equal(legacy.metrics.cash.monthlyAverage, 100);
+  assert.equal(legacy.metrics.accrual.monthlyAverage, 120);
   assert.deepEqual(legacy.metrics.traffic.basedMonths, ["2026-01", "2026-02"]);
+
+  [
+    "trafficMonthlyAverage",
+    "newCustomerMonthlyAverage",
+    "cashMonthlyAverage",
+    "accrualMonthlyAverage",
+    "legacyBasedMetric",
+  ].forEach((key) => {
+    assert.equal(Object.prototype.hasOwnProperty.call(legacy, key), false, key);
+  });
+});
+
+test("V2 Annual KPI normalization and filtered scope do not re-expose retired frontend mirror aliases", () => {
+  const payload = normalizeAnnualKpiBenchmarkPayload({
+    schemaVersion: ANNUAL_KPI_SUMMARY_SCHEMA_VERSION,
+    brandId: "cyj",
+    trafficMonthlyAverage: 999,
+    newCustomerMonthlyAverage: 999,
+    cashMonthlyAverage: 999,
+    accrualMonthlyAverage: 999,
+    legacyBasedMetric: "traffic",
+    metrics: {
+      traffic: metric({ "2026-01": 10 }),
+      newCustomers: metric({ "2026-01": 2 }),
+      cash: metric({ "2026-01": 100 }),
+      accrual: metric({ "2026-01": 120 }),
+    },
+    benchmarkScopeByMonth: {
+      "2026-01": { requiredStoreKeys: ["A"] },
+    },
+    stores: {
+      A: {
+        storeCore: "A",
+        metrics: {
+          traffic: metric({ "2026-01": 10 }),
+          newCustomers: metric({ "2026-01": 2 }),
+          cash: metric({ "2026-01": 100 }),
+          accrual: metric({ "2026-01": 120 }),
+        },
+      },
+    },
+  });
+
+  assert.equal(payload.metrics.traffic.monthlyAverage, 10);
+
+  const filtered = buildAnnualKpiBenchmarkScope({
+    payload,
+    selectedStoreCores: ["A"],
+    normalizeStoreKey: (value) => String(value || "").replace(/店$/, ""),
+  });
+
+  [
+    "trafficMonthlyAverage",
+    "newCustomerMonthlyAverage",
+    "cashMonthlyAverage",
+    "accrualMonthlyAverage",
+    "legacyBasedMetric",
+  ].forEach((key) => {
+    assert.equal(Object.prototype.hasOwnProperty.call(payload, key), false, `normalized ${key}`);
+    assert.equal(Object.prototype.hasOwnProperty.call(filtered, key), false, `filtered ${key}`);
+  });
+
+  assert.equal(filtered.metrics.traffic.monthlyAverage, 10);
+  assert.equal(filtered.metrics.newCustomers.monthlyAverage, 2);
+});
+
+test("Frontend Annual KPI helper has no producer syntax for retired top-level mirror aliases", () => {
+  const source = fs.readFileSync(path.join(root, "src/utils/annualKpiBenchmark.js"), "utf8");
+  assert.doesNotMatch(source, /\btrafficMonthlyAverage\s*:/);
+  assert.doesNotMatch(source, /\bnewCustomerMonthlyAverage\s*:/);
+  assert.doesNotMatch(source, /\bcashMonthlyAverage\s*:/);
+  assert.doesNotMatch(source, /\baccrualMonthlyAverage\s*:/);
+  assert.doesNotMatch(source, /\blegacyBasedMetric\s*:/);
 });
 
 test("Dashboard Annual KPI benchmark cache is anchored to candidate-month Reporting Calendar revisions", () => {
