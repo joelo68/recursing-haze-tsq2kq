@@ -184,19 +184,50 @@ Backend / Rules                = unchanged
 
 本批不修改 Annual KPI schema、V1 compatibility reader、Backend persisted compatibility writer、Dashboard KPI semantics、System Exclusion、Lifecycle 或 CURRENT_APP_VERSION。
 
-Validation 由本批 apply 後執行 targeted regression、full `ci:validate` 與 production build gate；在實際執行前不得標記 PASS。
+Validation / Production evidence：
+
+```text
+runtime source commit                = de12ab8e20ed67484fcdd65bdfdc0e8ae1323c45
+runtime parent                       = 5f1d3e8faed0fd2931894e5bac9357d40d0a8243
+local targeted regression            = PASS
+local full ci:validate               = PASS
+local production build               = PASS
+GitHub CI Validation Gate            = 36821708412 / SUCCESS
+Critical Browser E2E                 = 36821708537 / SUCCESS
+previous gh-pages                    = a7054ef71738413caf5df1c72596adb758a349dc
+production gh-pages                  = 31c2ed6964122bcb055de9087cbb2eeb46e1f874
+production index asset               = assets/index-B76_SBCQ.js
+live convergence                     = PASS
+live asset HTTP                      = 200
+```
+
+Human verification boundary：
+
+```text
+FRD-A1 specific three-brand benchmark/cache-isolation smoke
+= NOT INDEPENDENTLY EXECUTED
+
+later Annual YTD smoke
+= PASS, but it validates the Annual YTD fix scope
+= not reused as evidence for FRD-A1-specific cache-isolation behavior
+```
 
 狀態：
 
 ```text
-IMPLEMENTED          = YES_LOCAL_AFTER_PATCH
-VALIDATED            = PENDING_LOCAL_EXECUTION
-COMMITTED / PUSHED   = NO
-DEPLOYED             = NO
-PRODUCTION CONFIRMED = NO
+IMPLEMENTED                          = YES
+VALIDATED                            = YES
+COMMITTED                            = YES
+PUSHED                               = YES
+DEPLOYED                             = YES
+PRODUCTION CONFIRMED                 = NO / FRD-A1-SPECIFIC HUMAN SMOKE NOT INDEPENDENTLY EXECUTED
+FIRESTORE READS CHANGE               = 0
+BACKEND DEPLOYED                     = NO / NOT REQUIRED
+FIRESTORE RULES DEPLOYED             = NO / NOT REQUIRED
+CURRENT_APP_VERSION                  = 3.6.0 unchanged
 ```
 
-Documentation Impact：更新 `CURRENT_STATE.md`、`SYSTEM_SOURCE_MAP.md`；其他 canonical docs = None。
+Documentation Impact：FRD-A1 reconciliation 更新 `CURRENT_STATE.md`、`DEPLOYMENT.md`；`SYSTEM_SOURCE_MAP.md` ownership 已正確，其他 canonical docs = None。
 
 ---
 

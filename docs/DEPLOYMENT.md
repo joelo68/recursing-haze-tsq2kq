@@ -1,5 +1,73 @@
 # DEPLOYMENT.md
 
+# FRD-A1 Annual KPI Benchmark Loader Deployment Reconciliation — 2026-10-01
+
+本節補齊 FRD-A1 `Annual KPI Benchmark Loader Extraction` 的實際 deployment evidence，修正文檔仍停留在 local/pending 的狀態。Runtime 本身沒有在本 docs-only reconciliation 中再修改。
+
+正式 lineage：
+
+```text
+runtime source commit                = de12ab8e20ed67484fcdd65bdfdc0e8ae1323c45
+runtime parent                       = 5f1d3e8faed0fd2931894e5bac9357d40d0a8243
+GitHub CI Validation Gate            = 36821708412 / SUCCESS
+Critical Browser E2E                 = 36821708537 / SUCCESS
+CURRENT_APP_VERSION                  = 3.6.0 unchanged
+```
+
+Frontend Production evidence：
+
+```text
+previous gh-pages                    = a7054ef71738413caf5df1c72596adb758a349dc
+production gh-pages                  = 31c2ed6964122bcb055de9087cbb2eeb46e1f874
+production index asset               = assets/index-B76_SBCQ.js
+live convergence                     = PASS
+live asset HTTP                      = 200
+```
+
+Runtime / read boundary：
+
+```text
+annual_kpi_summary/{year}            = same single-document getDoc path
+brand-year session cache             = unchanged semantics
+normal cache miss reads              = 1 point read / activated brand-year
+steady-state read delta              = 0
+new listener                         = 0
+new query                            = 0
+new polling                          = 0
+brand paths changed                  = NO
+Backend deployment                   = NO / NOT REQUIRED
+Firestore Rules deployment           = NO / NOT REQUIRED
+```
+
+Human verification boundary：
+
+```text
+FRD-A1 specific three-brand benchmark/cache-isolation smoke
+= NOT INDEPENDENTLY EXECUTED
+
+Annual YTD smoke performed later
+= PASS for Annual YTD interval behavior
+= intentionally not counted as FRD-A1-specific benchmark/cache evidence
+```
+
+因此本節只把已實際完成的 deployment / automated validation 寫實，不把未執行的 FRD-A1-specific human smoke 虛構成 PASS。
+
+狀態：
+
+```text
+IMPLEMENTED                          = YES
+VALIDATED                            = YES
+COMMITTED                            = YES
+PUSHED                               = YES
+DEPLOYED                             = YES
+PRODUCTION CONFIRMED                 = NO / FRD-A1-SPECIFIC HUMAN SMOKE NOT INDEPENDENTLY EXECUTED
+CURRENT_APP_VERSION                  = 3.6.0 unchanged
+```
+
+Documentation Impact：`CURRENT_STATE.md`、`DEPLOYMENT.md`；`SYSTEM_SOURCE_MAP.md` ownership 無變更。
+
+---
+
 # Annual YTD Provisional-Month Fix Production Closeout — 2026-10-01
 
 本次為 Frontend-only Production deployment；修正 Annual 共用 interval aggregation contract，使 current-month `PROVISIONAL` 尚未形成 numeric actual 時，不會抹除既有 YTD actual，同時保留 historical `DATA_INCOMPLETE` fail-closed。
