@@ -1313,13 +1313,6 @@ export function useDashboardStats() {
         });
     if (!storeSelfViewActive && !formalScope?.compatible) return null;
 
-    const legacyGrand = {
-      cash: grand.cash,
-      accrual: grand.accrual,
-      budget: grand.budget,
-      accrualBudget: grand.accrualBudget,
-    };
-
     // Store self-view 與 Formal aggregation eligibility 是兩個不同概念：
     // 被 System Excluded 的店家自己的 store account 仍可使用 Summary 內既有 explicit KPI 欄位查看自己，
     // 但這個 scope 不具 Formal aggregate / ranking / annual benchmark authority。
@@ -1348,11 +1341,8 @@ export function useDashboardStats() {
       lifecycleReady: true,
     } : formalScope;
 
-    // 對既有 Dashboard view-model 做 compatibility mapping。
-    grand.legacyCash = legacyGrand.cash;
-    grand.legacyAccrual = legacyGrand.accrual;
-    grand.legacyBudget = legacyGrand.budget;
-    grand.legacyAccrualBudget = legacyGrand.accrualBudget;
+    // P2-B1A：Historical Dashboard 已由 Formal activeScope 直接覆蓋既有 view-model keys。
+    // 舊版 Historical Dashboard shadow aliases 已無 consumer，正式退役。
     grand.cash = activeScope.cash;
     grand.accrual = activeScope.accrual;
     grand.budget = activeScope.cashTarget;

@@ -1,3 +1,27 @@
+# P2-B1A Dashboard Legacy Shadow Retirement Owners — 2026-10-01
+
+```text
+src/hooks/useDashboardStats.js
+→ Historical Formal activeScope remains canonical Dashboard view-model input
+→ retires dead grand.legacyCash / legacyAccrual / legacyBudget / legacyAccrualBudget shadow fields
+
+tests/dashboardProjectionConsumer.test.js
+→ regression guard: legacy Dashboard shadow fields must not return
+→ existing Projection Model / Batch 9 analytics retirement guards remain
+```
+
+Boundary：
+
+```text
+Firestore read topology = unchanged
+Backend                  = unchanged
+Firestore Rules          = unchanged
+brand paths              = unchanged
+CURRENT_APP_VERSION      = 3.6.0 unchanged
+```
+
+---
+
 # Trainer Therapist-Account Authority Owners — 2026-09-30
 
 本節是教專 `管師帳號` role/capability 與 Backend authority 的最新 owner map。

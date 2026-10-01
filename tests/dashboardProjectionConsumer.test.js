@@ -319,6 +319,12 @@ test("Dashboard wiring uses one projection_models/current point read and retires
   assert.equal(fs.existsSync(path.join(root, "src/hooks/useAnalytics.js")), false);
   assert.doesNotMatch(dashboardView, /\banalytics\b/);
 
+  // P2-B1A: dead Dashboard legacy shadow fields are retired from runtime.
+  assert.doesNotMatch(hook, /\blegacyCash\b/);
+  assert.doesNotMatch(hook, /\blegacyAccrual\b/);
+  assert.doesNotMatch(hook, /\blegacyBudget\b/);
+  assert.doesNotMatch(hook, /\blegacyAccrualBudget\b/);
+
   // B1C2E-1: loading is not a legitimate current-pace fallback.
   assert.match(hook, /const projectionPresentationReady = useMemo/);
   assert.match(hook, /presentationReady:\s*projectionPresentationReady/);

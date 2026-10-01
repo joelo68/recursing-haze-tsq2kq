@@ -1,3 +1,70 @@
+# P2-B1A Dashboard Legacy Shadow View-Model Retirement — 2026-10-01
+
+本批是 P2 Legacy Compatibility Retirement 的第一個最小 runtime retirement。Source Gate 基準：
+
+```text
+pre-change source commit = 99675e562333a2688f1e6f6457a53ac3d5c220a1
+CURRENT_APP_VERSION      = 3.6.0 unchanged
+```
+
+正式移除 `src/hooks/useDashboardStats.js` 內已無 consumer 的 Historical Dashboard shadow fields：
+
+```text
+grand.legacyCash
+grand.legacyAccrual
+grand.legacyBudget
+grand.legacyAccrualBudget
+```
+
+Historical Dashboard 仍由既有 Formal `activeScope` 直接寫入：
+
+```text
+grand.cash
+grand.accrual
+grand.budget
+grand.accrualBudget
+grand.formalNetCash
+grand.formalAccrual
+grand.formalCashTarget
+grand.formalAccrualTarget
+```
+
+本批沒有改 Summary Writer、Formal KPI semantics、System Exclusion、Store Identity、Firestore path、Backend、Rules 或品牌隔離。
+
+Read impact：
+
+```text
+new Firestore listener / query / polling = 0
+removed Firestore listener / query       = 0
+steady-state Firestore reads change      = 0
+
+本批目的 = 移除 dead compatibility view-model surface
+不是以刪除 correctness fallback 來換 reads
+```
+
+Validation：
+
+```text
+targeted Dashboard regression = PASS
+full CI validation            = PASS
+production build              = PASS（由 ci:validate 執行）
+```
+
+狀態：
+
+```text
+IMPLEMENTED            = YES_LOCAL
+VALIDATED              = YES
+COMMITTED / PUSHED     = NO
+DEPLOYED               = NO
+PRODUCTION CONFIRMED   = NO
+CURRENT_APP_VERSION    = 3.6.0 unchanged
+```
+
+Documentation Impact：`CURRENT_STATE.md`、`SYSTEM_SOURCE_MAP.md`。
+
+---
+
 # Trainer / Therapist Account Authority Incident — 2026-09-30
 
 本節是 `管師帳號` 教專角色權限事故的最新狀態；若下方較早章節仍把 Therapist Manager 管理權限描述為 director-only，以本節與目前正式 source 為準。
