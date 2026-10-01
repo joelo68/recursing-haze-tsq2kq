@@ -11,6 +11,7 @@ import { ANNUAL_READ_MODE, buildAnnualAggregateYearMonthCandidates, resolveAnnua
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const root = path.resolve(__dirname, "..");
 const appSource = fs.readFileSync(path.join(root, "src/App.jsx"), "utf8");
+const annualAuthoritySource = fs.readFileSync(path.join(root, "src/hooks/useAnnualDataAuthority.js"), "utf8");
 const annualSource = fs.readFileSync(path.join(root, "src/components/AnnualView.jsx"), "utf8");
 
 const makeSummary = ({ brandId = "cyj", yearMonth = "2026-07" } = {}) => ({
@@ -222,17 +223,17 @@ test("future year creates no aggregate fallback once scoped Summary listeners ar
   assert.deepEqual(result.fallbackYearMonths, []);
 });
 
-test("App scopes Annual dashboard_summary and flags by documentId year range", () => {
-  assert.match(appSource, /where\(documentId\(\), ">=", yearStartId\)/);
-  assert.match(appSource, /where\(documentId\(\), "<=", yearEndId\)/);
-  assert.match(appSource, /getCollectionPath\("dashboard_summary"\)/);
-  assert.match(appSource, /getCollectionPath\("summary_recalc_flags"\)/);
+test("Annual data authority scopes dashboard_summary and flags by documentId year range", () => {
+  assert.match(annualAuthoritySource, /where\(documentId\(\), ">=", yearStartId\)/);
+  assert.match(annualAuthoritySource, /where\(documentId\(\), "<=", yearEndId\)/);
+  assert.match(annualAuthoritySource, /getCollectionPath\("dashboard_summary"\)/);
+  assert.match(annualAuthoritySource, /getCollectionPath\("summary_recalc_flags"\)/);
 });
 
-test("App no longer keeps whole-year store or therapist aggregate listeners in Annual source block", () => {
-  const start = appSource.indexOf("const shouldLoadAnnualData = ANNUAL_DATA_VIEWS.has(activeView);");
-  const end = appSource.indexOf("const targetYear = String(selectedYear);", appSource.indexOf("useEffect(() => {", start + 1));
-  const block = appSource.slice(start, end > start ? end : start + 12000);
+test("Annual data authority keeps whole-year store or therapist aggregate listeners retired", () => {
+  const start = annualAuthoritySource.indexOf("const shouldLoadAnnualData = ANNUAL_DATA_VIEWS.has(activeView);");
+  const end = annualAuthoritySource.indexOf("const targetYear = String(selectedYear);", annualAuthoritySource.indexOf("useEffect(() => {", start + 1));
+  const block = annualAuthoritySource.slice(start, end > start ? end : start + 12000);
   assert.doesNotMatch(block, /where\("year", "in", \[targetYear, Number\(targetYear\)\]\)/);
   assert.doesNotMatch(block, /getCollectionPath\("therapist_monthly_aggregated"\)/);
 });
@@ -248,12 +249,12 @@ test("aggregate fallback query keeps padded and legacy unpadded yearMonth compat
   assert.ok(candidates.length <= 30);
 });
 
-test("App uses fallback-month-only monthly_aggregated query and shared read plan", () => {
-  assert.match(appSource, /resolveAnnualReadPlan/);
-  assert.match(appSource, /buildAnnualAggregateYearMonthCandidates/);
-  assert.match(appSource, /where\("yearMonth", "in", aggregateYearMonthCandidates\)/);
-  assert.match(appSource, /monthly_aggregated_fallback_months/);
-  assert.match(appSource, /systemExclusionState/);
+test("Annual data authority uses fallback-month-only monthly_aggregated query and shared read plan", () => {
+  assert.match(annualAuthoritySource, /resolveAnnualReadPlan/);
+  assert.match(annualAuthoritySource, /buildAnnualAggregateYearMonthCandidates/);
+  assert.match(annualAuthoritySource, /where\("yearMonth", "in", aggregateYearMonthCandidates\)/);
+  assert.match(annualAuthoritySource, /monthly_aggregated_fallback_months/);
+  assert.match(annualAuthoritySource, /systemExclusionState/);
 });
 
 test("Annual consumer filters System Exclusion from formal and compatibility paths", () => {
@@ -264,11 +265,11 @@ test("Annual consumer filters System Exclusion from formal and compatibility pat
 });
 
 test("Annual target Summary reads skip Yibo pre-system months", () => {
-  // B1C2E-UX1 moves the annual target-summary read owner from AnnualView to App.
+  // FRD-A5 moves the annual target-summary read owner from App to the dedicated authority hook.
   // Keep guarding the same business rule at the new owner: Yibo pre-system months
   // must be filtered before the brand-year monthly_targets_summary query executes.
-  assert.match(appSource, /filter\(\(yearMonth\) => !isAnnualPreSystemMonth\(annualBrandId, yearMonth\)\)/);
-  assert.match(appSource, /where\(documentId\(\), "in", annualTargetMonthKeys\)/);
+  assert.match(annualAuthoritySource, /filter\(\(yearMonth\) => !isAnnualPreSystemMonth\(annualBrandId, yearMonth\)\)/);
+  assert.match(annualAuthoritySource, /where\(documentId\(\), "in", annualTargetMonthKeys\)/);
 });
 
 
@@ -336,7 +337,7 @@ test("Reporting Calendar month revision stales only the affected historical Annu
 
 test("App extends the existing single Lifecycle Master authority to Annual without adding a per-store listener", () => {
   assert.match(appSource, /OPERATIONAL_FORMAL_LIFECYCLE_VIEWS[\s\S]*"annual"/);
-  assert.match(appSource, /resolveAnnualReadPlan\(\{[\s\S]*currentLifecycleMasterState/);
+  assert.match(annualAuthoritySource, /resolveAnnualReadPlan\(\{[\s\S]*currentLifecycleMasterState/);
   assert.match(annualSource, /buildAnnualLifecycleScope/);
   assert.match(annualSource, /currentLifecycleMasterState/);
 });

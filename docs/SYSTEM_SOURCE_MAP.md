@@ -1,3 +1,58 @@
+# FRD-A5 Annual Data Authority Ownership — 2026-10-01
+
+```text
+src/hooks/useAnnualDataAuthority.js
+→ sole App-level Annual Firestore I/O owner
+→ owns 8 Annual runtime states
+→ dashboard_summary selected-year onSnapshot
+→ summary_recalc_flags selected-year onSnapshot
+→ monthly_targets_summary selected-brand-year getDocs
+→ monthly_aggregated fallback-month-only onSnapshot
+→ owns verified-session / Annual-view / low-power gates
+→ owns brand + selectedYear anchoring and query cleanup
+→ composes existing annualReadPolicy with System Exclusion + Lifecycle inputs
+
+src/App.jsx
+→ invokes useAnnualDataAuthority()
+→ publishes unchanged Annual AppContext contract
+→ no Annual Firestore effect implementation
+→ no Annual local state setter ownership
+
+src/components/AnnualView.jsx
+→ presentation / Formal consumer owner
+→ retains precise monthly_targets getDoc fallback when authoritative target Summary lacks the required row
+→ precise fallback is intentionally outside useAnnualDataAuthority
+
+src/utils/annualReadPolicy.js
+→ unchanged Annual fallback-month planning contract
+
+tests/frontendResponsibilityDecompositionA5.test.js
+→ App-level I/O ownership guard
+→ exact three-effect activation guard
+→ read-topology neutrality guard
+→ brand/year isolation guard
+→ AnnualView precise fallback non-expansion guard
+→ AppContext/version guard
+```
+
+Boundary：
+
+```text
+Firestore read topology             = unchanged
+listener topology                   = unchanged
+new read                            = 0
+new listener                        = 0
+new query                           = 0
+new polling                         = 0
+brand physical paths                = unchanged via getCollectionPath()
+Backend                             = unchanged
+Firestore Rules                     = unchanged
+security authority                  = unchanged
+CURRENT_APP_VERSION                 = 3.6.0 unchanged
+```
+
+---
+
 # FRD-A4 Dashboard Historical Read-Policy Ownership — 2026-10-01
 
 ```text
@@ -169,12 +224,16 @@ src/utils/dashboardFormalConsumer.js
 → raw/detail only for explicit degraded trust states
 
 Annual
+src/hooks/useAnnualDataAuthority.js
 src/App.jsx
 src/utils/annualReadPolicy.js
 src/utils/annualFormalConsumer.js
 src/components/AnnualView.jsx
+→ useAnnualDataAuthority owns App-level Annual Firestore I/O + runtime state
+→ App.jsx owns wiring / AppContext publication only
 → selected-year Summary authority
 → aggregate reads scoped to explicit fallback months
+→ AnnualView retains precise monthly_targets consumer fallback
 
 Target Audit
 src/App.jsx

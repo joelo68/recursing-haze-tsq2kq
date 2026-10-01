@@ -1,3 +1,112 @@
+# Frontend Responsibility Decomposition A5 — Annual Data Authority Extraction — 2026-10-01
+
+FRD-A4 production closeout 後，以 `main @ 5e249af7cee8691d6874c027de15cf15d279455c` 重新完成 Annual source gate 與 exact dependency inventory。原本 `src/App.jsx` 同時持有 8 個 Annual state 與 3 個 Annual Firestore effects；其中 `monthly_aggregated` fallback 必須等待年度 Summary / flag readiness，再結合 System Exclusion 與 Store Lifecycle trust，因此本批以一個 coherent Annual Data Authority 抽離，而不是拆成互不協調的小 hook。
+
+Source Gate：
+
+```text
+pre-change main                     = 5e249af7cee8691d6874c027de15cf15d279455c
+CURRENT_APP_VERSION                 = 3.6.0 unchanged
+```
+
+責任收斂：
+
+```text
+src/hooks/useAnnualDataAuthority.js
+→ owns 8 Annual runtime states
+→ dashboard_summary selected-year query + onSnapshot
+→ summary_recalc_flags selected-year query + onSnapshot
+→ monthly_targets_summary selected-brand-year getDocs query
+→ monthly_aggregated fallback-month-only query + onSnapshot
+→ owns verified-session / Annual-view / low-power activation gates
+→ owns brand + selectedYear state anchoring
+→ owns Annual query cleanup and load/error state
+→ consumes existing annualReadPolicy + System Exclusion + Lifecycle trust inputs
+
+src/App.jsx
+→ invokes useAnnualDataAuthority()
+→ publishes the same 8 Annual outputs through AppContext
+→ no longer owns Annual Firestore effect implementation
+→ no longer owns Annual local state setters
+
+src/components/AnnualView.jsx
+→ unchanged
+→ retains consumer-specific precise monthly_targets point-read fallback
+→ retains Formal presentation / interval / System Exclusion consumer semantics
+
+src/utils/annualReadPolicy.js
+→ unchanged
+→ remains fallback-month planning authority
+```
+
+Read / brand / security boundary：
+
+```text
+dashboard_summary                    = 1 selected-year query + onSnapshot
+summary_recalc_flags                 = 1 selected-year query + onSnapshot
+monthly_targets_summary              = 1 selected-brand-year getDocs query
+monthly_aggregated                   = fallback-month-only query + onSnapshot
+AnnualView monthly_targets fallback  = unchanged consumer-specific point read
+
+Firestore read topology delta        = 0
+listener topology delta              = 0
+new read                             = 0
+new listener                         = 0
+new query                            = 0
+new polling                          = 0
+brand path resolver                  = unchanged getCollectionPath()
+hardcoded physical brand path        = none
+Backend                              = unchanged
+Firestore Rules                      = unchanged
+security authority                   = unchanged
+```
+
+Regression / validation：
+
+```text
+FRD-A5 ownership guard
+three-effect activation/session gate guard
+exact read-topology neutrality guard
+brand/year isolation guard
+System Exclusion + Lifecycle fallback-trust guard
+AnnualView precise target fallback non-expansion guard
+AppContext publication contract guard
+CURRENT_APP_VERSION guard
+
+targeted regression                  = 90 / 90 PASS
+local detached-staging validation    = PASS
+full ci:validate                     = PASS
+production build                     = PASS
+git diff / exact scope gate          = PASS
+```
+
+目前狀態：
+
+```text
+IMPLEMENTED                          = YES_LOCAL_WORKTREE
+VALIDATED                            = YES_LOCAL_STAGING
+COMMITTED                            = NO
+PUSHED                               = NO
+DEPLOYED                             = NO
+PRODUCTION CONFIRMED                 = NO
+ANNUAL APP-LEVEL I/O OWNER           = useAnnualDataAuthority
+ANNUALVIEW PRECISE TARGET FALLBACK   = PRESERVED
+FIRESTORE READ TOPOLOGY CHANGE       = 0
+LISTENER TOPOLOGY CHANGE             = 0
+NEW READ                             = 0
+NEW LISTENER                         = 0
+NEW QUERY                            = 0
+NEW POLLING                          = 0
+SECURITY AUTHORITY CHANGED           = NO
+BACKEND DEPLOY REQUIRED              = NO
+FIRESTORE RULES DEPLOY REQUIRED      = NO
+CURRENT_APP_VERSION                  = 3.6.0 unchanged
+```
+
+Documentation Impact：本次 implementation closeout 更新 `CURRENT_STATE.md`、`SYSTEM_SOURCE_MAP.md`。因尚未部署 Production，`DEPLOYMENT.md` 本階段不修改；待 Hosting deployment 與 Production smoke 完成後再寫入實際 production evidence。
+
+---
+
 # Frontend Responsibility Decomposition A4 — Dead Dashboard Read-Policy Mirror Retirement — 2026-10-01
 
 FRD-A3 closeout 後重新 inventory 最新正式 source。`useDashboardStats.js` 已沒有直接 Firestore primitive，但仍保留一段 `dashboardTargetReadPolicy` `useMemo`。Repo 內該值只有宣告、沒有 consumer；真正決定 `daily_reports` 是否載入的 read-topology authority 位於 `src/App.jsx`，並使用 `resolveHistoricalDashboardReadPolicy()` 同時檢查 Summary readiness、System Exclusion 與 Reporting Calendar trust。

@@ -9,29 +9,30 @@ const __dirname = path.dirname(__filename);
 const root = path.resolve(__dirname, "..");
 
 const appSource = fs.readFileSync(path.join(root, "src/App.jsx"), "utf8");
+const annualAuthoritySource = fs.readFileSync(path.join(root, "src/hooks/useAnnualDataAuthority.js"), "utf8");
 const annualSource = fs.readFileSync(path.join(root, "src/components/AnnualView.jsx"), "utf8");
 
 test("B1C2E-UX1 keeps Annual trusted snapshots across view switches while unsubscribing Annual queries", () => {
   assert.match(
-    appSource,
+    annualAuthoritySource,
     /B1C2E-UX1：離開年度分析只解除年度 Query，不清掉已通過 trust gate 的 session snapshot/
   );
   assert.match(
-    appSource,
+    annualAuthoritySource,
     /if \(isLowPowerMode \|\| !shouldLoadAnnualData\) return undefined;/
   );
   assert.match(
-    appSource,
+    annualAuthoritySource,
     /hasPublishedAnnualSnapshot/
   );
 });
 
 test("B1C2E-UX1 loads monthly target summaries once per brand-year instead of per filter range", () => {
-  assert.match(appSource, /annualMonthlyTargetSummaries/);
-  assert.match(appSource, /annualTargetSummaryLoadState/);
-  assert.match(appSource, /monthly_targets_summary_year_for_annual/);
+  assert.match(annualAuthoritySource, /annualMonthlyTargetSummaries/);
+  assert.match(annualAuthoritySource, /annualTargetSummaryLoadState/);
+  assert.match(annualAuthoritySource, /monthly_targets_summary_year_for_annual/);
   assert.match(
-    appSource,
+    annualAuthoritySource,
     /where\(documentId\(\), "in", annualTargetMonthKeys\)/
   );
 
@@ -69,17 +70,17 @@ test("B1C2E-UX1 quarter and month filters stay local after brand-year target rea
 
 
 test("B1C2E-UX1.1 tracks Annual aggregate fallback readiness instead of treating empty data as loaded", () => {
-  assert.match(appSource, /annualAggregateLoadState/);
-  assert.match(appSource, /fallbackYearMonths/);
-  assert.match(appSource, /hasPublishedAggregateSnapshot/);
-  assert.match(appSource, /monthly_aggregated fallback load failed/);
+  assert.match(annualAuthoritySource, /annualAggregateLoadState/);
+  assert.match(annualAuthoritySource, /fallbackYearMonths/);
+  assert.match(annualAuthoritySource, /hasPublishedAggregateSnapshot/);
+  assert.match(annualAuthoritySource, /monthly_aggregated fallback load failed/);
   assert.match(annualSource, /selectedRangeActualReady/);
   assert.match(annualSource, /annualAggregateScopeKnown/);
   assert.match(annualSource, /annualAggregateFallbackMonthSet/);
 });
 
 test("B1C2E-UX1.1 preserves Annual aggregate snapshot across view switches", () => {
-  const aggregateEffect = appSource.match(
+  const aggregateEffect = annualAuthoritySource.match(
     /B1C2E-UX1\.1：離開 Annual[\s\S]*?\n  \}, \[[\s\S]*?currentLifecycleMasterState,[\s\S]*?\n  \]\);/
   )?.[0] || "";
 

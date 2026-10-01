@@ -520,6 +520,7 @@ test("trusted historical and Yibo pre-system months never allow raw monthly_targ
 test("AnnualView and App wire readiness, fail-closed trust, Formal scope and no trusted historical raw fallback", () => {
   const annualSource = fs.readFileSync(path.join(root, "src/components/AnnualView.jsx"), "utf8");
   const appSource = fs.readFileSync(path.join(root, "src/App.jsx"), "utf8");
+  const annualAuthoritySource = fs.readFileSync(path.join(root, "src/hooks/useAnnualDataAuthority.js"), "utf8");
 
   assert.match(annualSource, /annualSummaryLoadState/);
   assert.match(annualSource, /resolveAnnualHistoricalFormalTrust/);
@@ -527,9 +528,10 @@ test("AnnualView and App wire readiness, fail-closed trust, Formal scope and no 
   assert.match(annualSource, /shouldAllowAnnualRawTargetFallback/);
   assert.match(annualSource, /if \(isHistoricalMonth && !annualSummaryTrustReady\) return;/);
   assert.doesNotMatch(annualSource, /if \(!flag\) return true/);
-  assert.match(appSource, /annualSummaryLoadState/);
-  assert.match(appSource, /dashboardReady: true/);
-  assert.match(appSource, /flagsReady: true/);
+  assert.match(appSource, /useAnnualDataAuthority/);
+  assert.match(annualAuthoritySource, /annualSummaryLoadState/);
+  assert.match(annualAuthoritySource, /dashboardReady: true/);
+  assert.match(annualAuthoritySource, /flagsReady: true/);
 });
 
 test("System Exclusion save synchronizes AppContext only after secure Backend revisioned write succeeds", () => {

@@ -201,7 +201,7 @@ test("Dashboard trusted gates require the rankings summary to match each owner's
 
 test("runtime stabilization historical readiness has one-shot point-read recovery without polling", () => {
   const start = appSource.indexOf("// Runtime stabilization — Historical Summary readiness one-shot recovery.");
-  const end = appSource.indexOf("const shouldLoadAnnualData = ANNUAL_DATA_VIEWS.has(activeView);", start);
+  const end = appSource.indexOf("// FRD-A5：Annual data authority 移出 App", start);
   assert.ok(start >= 0 && end > start);
   const recovery = appSource.slice(start, end);
 

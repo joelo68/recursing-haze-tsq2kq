@@ -8,8 +8,10 @@ const here = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(here, "..");
 const appPath = path.join(repoRoot, "src", "App.jsx");
 const gatePath = path.join(repoRoot, "src", "components", "DeviceApprovalGate.jsx");
+const annualAuthorityPath = path.join(repoRoot, "src", "hooks", "useAnnualDataAuthority.js");
 
 const app = fs.readFileSync(appPath, "utf8");
+const annualAuthority = fs.readFileSync(annualAuthorityPath, "utf8");
 const deviceGate = fs.readFileSync(gatePath, "utf8");
 
 const sliceBetween = (startToken, endToken) => {
@@ -104,8 +106,10 @@ test("operational App reads are gated by verified application session", () => {
     assert.match(app, pattern);
   }
 
+  assert.match(app, /useAnnualDataAuthority\(\{[\s\S]*hasVerifiedApplicationSession/);
+
   const annualGateCount = (
-    app.match(
+    annualAuthority.match(
       /const shouldLoadAnnualData = ANNUAL_DATA_VIEWS\.has\(activeView\);\s+if \(!hasVerifiedApplicationSession\) \{/g
     ) || []
   ).length;

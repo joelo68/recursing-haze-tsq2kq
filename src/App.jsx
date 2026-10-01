@@ -15,7 +15,7 @@ import React, {
 } from "react";
 
 import {
-  app, auth, db, appId } from "./config/firebase"; import { onAuthStateChanged, signInAnonymously, signInWithCustomToken, signOut } from "firebase/auth"; import { collection, addDoc, deleteDoc, updateDoc, doc, getDoc, onSnapshot, serverTimestamp, setDoc, query, orderBy, limit, deleteField, where, increment, getDocs, documentId } from "firebase/firestore"; import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip as RechartsTooltip, Legend, ResponsiveContainer, LineChart, Line, ComposedChart, Area, Cell, PieChart, Pie } from "recharts"; import {    LayoutDashboard, Upload, TrendingUp, Map as MapIcon, Settings, ClipboardCheck, Menu, Search, Filter, Trash2, Save, Plus, DollarSign, Target, Users, Award, Loader2, FileText, AlertCircle, CheckCircle, User, Store, Lock, LogOut, FileWarning, Edit2, CheckSquare, X, Download, ChevronLeft, ChevronRight, Activity, Sparkles, ChevronDown, Heart, Coffee, Shield, WifiOff, ShoppingBag, CreditCard, Smartphone, Monitor, Bell, Clock, Music, ShieldAlert, Calendar
+  app, auth, db, appId } from "./config/firebase"; import { onAuthStateChanged, signInAnonymously, signInWithCustomToken, signOut } from "firebase/auth"; import { collection, addDoc, deleteDoc, updateDoc, doc, getDoc, onSnapshot, serverTimestamp, setDoc, query, orderBy, limit, deleteField, where, increment, getDocs } from "firebase/firestore"; import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip as RechartsTooltip, Legend, ResponsiveContainer, LineChart, Line, ComposedChart, Area, Cell, PieChart, Pie } from "recharts"; import {    LayoutDashboard, Upload, TrendingUp, Map as MapIcon, Settings, ClipboardCheck, Menu, Search, Filter, Trash2, Save, Plus, DollarSign, Target, Users, Award, Loader2, FileText, AlertCircle, CheckCircle, User, Store, Lock, LogOut, FileWarning, Edit2, CheckSquare, X, Download, ChevronLeft, ChevronRight, Activity, Sparkles, ChevronDown, Heart, Coffee, Shield, WifiOff, ShoppingBag, CreditCard, Smartphone, Monitor, Bell, Clock, Music, ShieldAlert, Calendar
 } from "lucide-react";
 
 import { ROLES, ALL_MENU_ITEMS, DEFAULT_REGIONAL_MANAGERS, DEFAULT_PERMISSIONS } from "./constants/index";
@@ -24,8 +24,6 @@ import { validPositiveSetting } from "./utils/kpiContracts";
 import { inspectHistoricalSystemExclusionTrust, normalizeSystemExclusionState } from "./utils/systemExclusion";
 import { resolveHistoricalDashboardReadPolicy } from "./utils/dashboardReadPolicy";
 import { inspectHistoricalReportingCalendarTrust } from "./utils/storeLifecycle";
-import { buildAnnualAggregateYearMonthCandidates, normalizeAnnualYearMonth, resolveAnnualReadPlan } from "./utils/annualReadPolicy";
-import { isAnnualPreSystemMonth } from "./utils/annualFormalConsumer";
 import { isFormalReportSummaryPairCompatible } from "./utils/reportFormalConsumer";
 import {
   buildDelegationAccessProfile,
@@ -55,6 +53,7 @@ import {
   flattenCurrentStoreMonthReports,
   inspectCurrentStoreMonthReportsReadiness,
 } from "./utils/currentStoreMonthReportsConsumer.js";
+import { useAnnualDataAuthority } from "./hooks/useAnnualDataAuthority";
 
 // ==========================================
 // ★ 系統核心版本號 (終極動態快取版)
@@ -532,9 +531,9 @@ const DIRECTOR_RESTRICTED_VIEWS = Object.fromEntries(
 );
 
 // ★ 讀取節流 v1：把大型資料源限制在真正需要的頁面。
-// 年度資料只供年度分析使用；月度明細只供 Dashboard / 排行 / 區域 / 店家分析 / 檢核 / 修正使用。
+// Annual data activation / query ownership 已由 useAnnualDataAuthority 統一管理；
+// 月度明細只供 Dashboard / 排行 / 區域 / 店家分析 / 檢核 / 修正使用。
 // 日報輸入、系統設定、登入監控、目標設定等頁面不應背景常駐讀整月或全年資料。
-const ANNUAL_DATA_VIEWS = new Set(["annual"]);
 const MONTHLY_REPORT_DATA_VIEWS = new Set(["dashboard", "regional", "ranking", "store-analysis", "audit", "history"]);
 
 // ★ 讀取節流 v2：拆開「店日報」與「管理師日報」監聽。
@@ -1053,35 +1052,6 @@ export default function App() {
   }, []);
 
   const [rawData, setRawData] = useState([]); 
-  const [annualAggregatedData, setAnnualAggregatedData] = useState([]); 
-  const [annualDashboardSummaries, setAnnualDashboardSummaries] = useState([]);
-  const [annualSummaryStatusMap, setAnnualSummaryStatusMap] = useState({});
-  const [annualSummaryLoadState, setAnnualSummaryLoadState] = useState({
-    brandId: "",
-    year: "",
-    dashboardReady: false,
-    flagsReady: false,
-    dashboardError: "",
-    flagsError: "",
-  });
-  const [annualMonthlyTargetSummaries, setAnnualMonthlyTargetSummaries] = useState({});
-  const [annualTargetSummaryLoadState, setAnnualTargetSummaryLoadState] = useState({
-    brandId: "",
-    year: "",
-    ready: false,
-    refreshing: false,
-    error: "",
-  });
-  const [annualAggregateLoadState, setAnnualAggregateLoadState] = useState({
-    brandId: "",
-    year: "",
-    ready: false,
-    refreshing: false,
-    fallbackKey: "",
-    fallbackYearMonths: [],
-    error: "",
-  });
-  const [therapistAnnualAggregatedData, setTherapistAnnualAggregatedData] = useState([]); // ★新增：管理師專屬結算包
   const [budgets, setBudgets] = useState({});
   const [monthlyTargetSummary, setMonthlyTargetSummary] = useState(null); // ★ monthly_targets_summary/{yearMonth}：Dashboard 目標資料輕量即時來源
   const [currentLifecycleMasterState, setCurrentLifecycleMasterState] = useState({
@@ -3442,419 +3412,27 @@ export default function App() {
     getStableReadMeta,
   ]);
 
-  useEffect(() => {
-    const shouldLoadAnnualData = ANNUAL_DATA_VIEWS.has(activeView);
-
-    if (!hasVerifiedApplicationSession) {
-      setAnnualAggregatedData([]);
-      setAnnualDashboardSummaries([]);
-      setAnnualSummaryStatusMap({});
-      setAnnualSummaryLoadState({
-        brandId: "",
-        year: "",
-        dashboardReady: false,
-        flagsReady: false,
-        dashboardError: "",
-        flagsError: "",
-      });
-      setTherapistAnnualAggregatedData([]);
-      return undefined;
-    }
-
-    // B1C2E-UX1：離開年度分析只解除年度 Query，不清掉已通過 trust gate 的 session snapshot。
-    // 回到同品牌 / 同年份時可以先顯示上一份可信資料，再由新的 snapshot 背景校正；
-    // 切品牌 / 切年份仍必須重新進入 fail-closed readiness。
-    if (isLowPowerMode || !shouldLoadAnnualData) return undefined;
-
-    const targetYear = String(selectedYear);
-    const annualBrandId = String(currentBrand?.id || "").toLowerCase();
-    const yearStartId = `${targetYear}-01`;
-    const yearEndId = `${targetYear}-12`;
-    const hasPublishedAnnualSnapshot = Boolean(
-      annualSummaryLoadState?.brandId === annualBrandId &&
-      String(annualSummaryLoadState?.year || "") === targetYear &&
-      annualSummaryLoadState?.dashboardReady === true &&
-      annualSummaryLoadState?.flagsReady === true
-    );
-    let active = true;
-
-    if (!hasPublishedAnnualSnapshot) {
-      setAnnualAggregatedData([]);
-      setTherapistAnnualAggregatedData([]);
-      setAnnualDashboardSummaries([]);
-      setAnnualSummaryStatusMap({});
-      setAnnualSummaryLoadState({
-        brandId: annualBrandId,
-        year: targetYear,
-        dashboardReady: false,
-        flagsReady: false,
-        dashboardError: "",
-        flagsError: "",
-      });
-    }
-
-    const dashboardSummaryQuery = query(
-      getCollectionPath("dashboard_summary"),
-      where(documentId(), ">=", yearStartId),
-      where(documentId(), "<=", yearEndId)
-    );
-    const unsubDashboardSummary = onSnapshot(
-      dashboardSummaryQuery,
-      (s) => {
-        if (!active) return;
-        trackSnapshotRead("dashboard_summary_year_for_annual", s, getStableReadMeta("dashboard_summary_year_for_annual"));
-        setAnnualDashboardSummaries(s.docs.map((d) => ({ id: d.id, ...d.data() })));
-        setAnnualSummaryLoadState((prev) => (
-          prev.brandId === annualBrandId && prev.year === targetYear
-            ? { ...prev, dashboardReady: true, dashboardError: "" }
-            : {
-                brandId: annualBrandId,
-                year: targetYear,
-                dashboardReady: true,
-                flagsReady: false,
-                dashboardError: "",
-                flagsError: "",
-              }
-        ));
-      },
-      (error) => {
-        if (!active) return;
-        console.error("年度 dashboard_summary 監聽失敗:", error);
-        if (!hasPublishedAnnualSnapshot) setAnnualDashboardSummaries([]);
-        setAnnualSummaryLoadState((prev) => (
-          prev.brandId === annualBrandId && prev.year === targetYear
-            ? { ...prev, dashboardReady: true, dashboardError: error?.message || "dashboard_summary load failed" }
-            : prev
-        ));
-      }
-    );
-
-    const summaryFlagsQuery = query(
-      getCollectionPath("summary_recalc_flags"),
-      where(documentId(), ">=", yearStartId),
-      where(documentId(), "<=", yearEndId)
-    );
-    const unsubSummaryFlags = onSnapshot(
-      summaryFlagsQuery,
-      (s) => {
-        if (!active) return;
-        trackSnapshotRead("summary_recalc_flags_year_for_annual", s, getStableReadMeta("summary_recalc_flags_year_for_annual"));
-        const map = {};
-        s.docs.forEach((d) => {
-          const data = { id: d.id, ...d.data() };
-          const ym = String(data.affectedYearMonth || data.yearMonth || d.id || "");
-          if (ym) map[ym] = data;
-        });
-        setAnnualSummaryStatusMap(map);
-        setAnnualSummaryLoadState((prev) => (
-          prev.brandId === annualBrandId && prev.year === targetYear
-            ? { ...prev, flagsReady: true, flagsError: "" }
-            : {
-                brandId: annualBrandId,
-                year: targetYear,
-                dashboardReady: false,
-                flagsReady: true,
-                dashboardError: "",
-                flagsError: "",
-              }
-        ));
-      },
-      (error) => {
-        if (!active) return;
-        console.error("年度 summary_recalc_flags 監聽失敗:", error);
-        if (!hasPublishedAnnualSnapshot) setAnnualSummaryStatusMap({});
-        setAnnualSummaryLoadState((prev) => (
-          prev.brandId === annualBrandId && prev.year === targetYear
-            ? { ...prev, flagsReady: true, flagsError: error?.message || "summary_recalc_flags load failed" }
-            : prev
-        ));
-      }
-    );
-
-    return () => {
-      active = false;
-      try { unsubDashboardSummary && unsubDashboardSummary(); } catch (error) { console.warn("annual dashboard_summary unsubscribe failed", error); }
-      try { unsubSummaryFlags && unsubSummaryFlags(); } catch (error) { console.warn("annual summary_recalc_flags unsubscribe failed", error); }
-    };
-  }, [hasVerifiedApplicationSession, currentBrand?.id, selectedYear, activeView, getCollectionPath, getStableReadMeta, isLowPowerMode]);
-
-  useEffect(() => {
-    const shouldLoadAnnualData = ANNUAL_DATA_VIEWS.has(activeView);
-
-    if (!hasVerifiedApplicationSession) {
-      setAnnualMonthlyTargetSummaries({});
-      setAnnualTargetSummaryLoadState({
-        brandId: "",
-        year: "",
-        ready: false,
-        refreshing: false,
-        error: "",
-      });
-      return undefined;
-    }
-
-    // B1C2E-UX1：Q1/Q2/Q3/Q4/月份篩選只做本機切片，不能重新打 monthly_targets_summary。
-    // 同品牌 / 同年份再次進入 Annual 時保留 trusted target snapshot，同時用單一年度 query 背景校正。
-    if (isLowPowerMode || !shouldLoadAnnualData) return undefined;
-
-    const targetYear = String(selectedYear);
-    const annualBrandId = String(currentBrand?.id || "").toLowerCase();
-    const hasPublishedTargetSnapshot = Boolean(
-      annualTargetSummaryLoadState?.brandId === annualBrandId &&
-      String(annualTargetSummaryLoadState?.year || "") === targetYear &&
-      annualTargetSummaryLoadState?.ready === true
-    );
-
-    const annualTargetMonthKeys = Array.from({ length: 12 }, (_, index) => (
-      `${targetYear}-${String(index + 1).padStart(2, "0")}`
-    )).filter((yearMonth) => !isAnnualPreSystemMonth(annualBrandId, yearMonth));
-
-    if (annualTargetMonthKeys.length === 0) {
-      setAnnualMonthlyTargetSummaries({});
-      setAnnualTargetSummaryLoadState({
-        brandId: annualBrandId,
-        year: targetYear,
-        ready: true,
-        refreshing: false,
-        error: "",
-      });
-      return undefined;
-    }
-
-    if (!hasPublishedTargetSnapshot) {
-      setAnnualMonthlyTargetSummaries({});
-      setAnnualTargetSummaryLoadState({
-        brandId: annualBrandId,
-        year: targetYear,
-        ready: false,
-        refreshing: true,
-        error: "",
-      });
-    } else {
-      setAnnualTargetSummaryLoadState((prev) => ({
-        ...prev,
-        refreshing: true,
-        error: "",
-      }));
-    }
-
-    let active = true;
-    const loadAnnualTargetSummaries = async () => {
-      try {
-        const targetSnap = await getDocs(query(
-          getCollectionPath("monthly_targets_summary"),
-          where(documentId(), "in", annualTargetMonthKeys)
-        ));
-        if (!active) return;
-
-        trackSnapshotRead(
-          "monthly_targets_summary_year_for_annual",
-          targetSnap,
-          getStableReadMeta("monthly_targets_summary_year_for_annual")
-        );
-
-        const next = {};
-        targetSnap.docs.forEach((d) => {
-          next[d.id] = { id: d.id, ...d.data() };
-        });
-        setAnnualMonthlyTargetSummaries(next);
-        setAnnualTargetSummaryLoadState({
-          brandId: annualBrandId,
-          year: targetYear,
-          ready: true,
-          refreshing: false,
-          error: "",
-        });
-      } catch (error) {
-        if (!active) return;
-        console.warn("年度 monthly_targets_summary 載入失敗:", error);
-        if (!hasPublishedTargetSnapshot) setAnnualMonthlyTargetSummaries({});
-        setAnnualTargetSummaryLoadState({
-          brandId: annualBrandId,
-          year: targetYear,
-          ready: true,
-          refreshing: false,
-          error: error?.message || "monthly_targets_summary load failed",
-        });
-      }
-    };
-
-    loadAnnualTargetSummaries();
-
-    return () => {
-      active = false;
-    };
-  }, [
-    hasVerifiedApplicationSession,
-    currentBrand?.id,
-    selectedYear,
-    activeView,
-    getCollectionPath,
-    getStableReadMeta,
-    isLowPowerMode,
-  ]);
-
-  useEffect(() => {
-    const shouldLoadAnnualData = ANNUAL_DATA_VIEWS.has(activeView);
-
-    if (!hasVerifiedApplicationSession) {
-      setAnnualAggregatedData([]);
-      setAnnualAggregateLoadState({
-        brandId: "",
-        year: "",
-        ready: false,
-        refreshing: false,
-        fallbackKey: "",
-        fallbackYearMonths: [],
-        error: "",
-      });
-      return undefined;
-    }
-
-    // B1C2E-UX1.1：離開 Annual 只解除 fallback listener，不刪除同品牌 / 同年份
-    // 已取得的 compatibility snapshot。回頁先保留可信畫面，再背景校正；
-    // 品牌、年份或 fallback scope 改變時仍 fail-closed，不跨 scope 重用。
-    if (isLowPowerMode || !shouldLoadAnnualData) return undefined;
-
-    const targetYear = String(selectedYear);
-    const annualBrandId = String(currentBrand?.id || "").toLowerCase();
-    const now = new Date();
-    const currentYearMonth = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}`;
-    const readPlan = resolveAnnualReadPlan({
-      selectedYear: targetYear,
-      currentYearMonth,
-      brandId: annualBrandId,
-      dashboardSummaries: annualDashboardSummaries,
-      summaryStatusMap: annualSummaryStatusMap,
-      summaryLoadState: annualSummaryLoadState,
-      systemExclusionState,
-      currentLifecycleMasterState,
-    });
-
-    // Summary / Lifecycle authority 尚未 ready 時，不能猜 fallback scope。
-    // 若同 scope 已有上一份 snapshot，保留資料但標示 refreshing；否則保持未 ready。
-    if (!readPlan.ready) {
-      setAnnualAggregateLoadState((prev) => (
-        prev.brandId === annualBrandId && String(prev.year || "") === targetYear && prev.ready === true
-          ? { ...prev, refreshing: true, error: "" }
-          : {
-              brandId: annualBrandId,
-              year: targetYear,
-              ready: false,
-              refreshing: true,
-              fallbackKey: "",
-              fallbackYearMonths: [],
-              error: "",
-            }
-      ));
-      return undefined;
-    }
-
-    const fallbackYearMonths = [...readPlan.fallbackYearMonths].sort();
-    const fallbackKey = fallbackYearMonths.join("|");
-
-    if (fallbackYearMonths.length === 0) {
-      setAnnualAggregatedData([]);
-      setAnnualAggregateLoadState({
-        brandId: annualBrandId,
-        year: targetYear,
-        ready: true,
-        refreshing: false,
-        fallbackKey,
-        fallbackYearMonths,
-        error: "",
-      });
-      return undefined;
-    }
-
-    const hasPublishedAggregateSnapshot = Boolean(
-      annualAggregateLoadState?.brandId === annualBrandId
-      && String(annualAggregateLoadState?.year || "") === targetYear
-      && annualAggregateLoadState?.fallbackKey === fallbackKey
-      && annualAggregateLoadState?.ready === true
-    );
-
-    if (!hasPublishedAggregateSnapshot) {
-      setAnnualAggregatedData([]);
-      setAnnualAggregateLoadState({
-        brandId: annualBrandId,
-        year: targetYear,
-        ready: false,
-        refreshing: true,
-        fallbackKey,
-        fallbackYearMonths,
-        error: "",
-      });
-    } else {
-      setAnnualAggregateLoadState((prev) => ({
-        ...prev,
-        refreshing: true,
-        error: "",
-      }));
-    }
-
-    let active = true;
-    const fallbackSet = new Set(fallbackYearMonths);
-    const aggregateYearMonthCandidates = buildAnnualAggregateYearMonthCandidates(fallbackYearMonths);
-    const aggregateQuery = query(
-      getCollectionPath("monthly_aggregated"),
-      where("yearMonth", "in", aggregateYearMonthCandidates)
-    );
-
-    const unsubscribe = onSnapshot(
-      aggregateQuery,
-      (snap) => {
-        if (!active) return;
-        trackSnapshotRead("monthly_aggregated_fallback_months", snap, getStableReadMeta("monthly_aggregated_fallback_months"));
-        setAnnualAggregatedData(
-          snap.docs
-            .map((d) => ({ id: d.id, ...d.data() }))
-            .filter((row) => fallbackSet.has(normalizeAnnualYearMonth(row?.yearMonth)))
-        );
-        setAnnualAggregateLoadState({
-          brandId: annualBrandId,
-          year: targetYear,
-          ready: true,
-          refreshing: false,
-          fallbackKey,
-          fallbackYearMonths,
-          error: "",
-        });
-      },
-      (error) => {
-        if (!active) return;
-        console.error("年度 monthly_aggregated fallback 監聽失敗:", error);
-        if (!hasPublishedAggregateSnapshot) setAnnualAggregatedData([]);
-        setAnnualAggregateLoadState({
-          brandId: annualBrandId,
-          year: targetYear,
-          ready: hasPublishedAggregateSnapshot,
-          refreshing: false,
-          fallbackKey,
-          fallbackYearMonths,
-          error: error?.message || "monthly_aggregated fallback load failed",
-        });
-      }
-    );
-
-    return () => {
-      active = false;
-      try { unsubscribe && unsubscribe(); } catch (error) { console.warn("annual monthly_aggregated fallback unsubscribe failed", error); }
-    };
-  }, [
-    hasVerifiedApplicationSession,
-    currentBrand?.id,
-    selectedYear,
-    activeView,
-    isLowPowerMode,
-    getCollectionPath,
-    getStableReadMeta,
+  // FRD-A5：Annual data authority 移出 App；App 僅保留 dependency wiring / AppContext publication。
+  const {
+    annualAggregatedData,
     annualDashboardSummaries,
     annualSummaryStatusMap,
     annualSummaryLoadState,
+    annualMonthlyTargetSummaries,
+    annualTargetSummaryLoadState,
+    annualAggregateLoadState,
+    therapistAnnualAggregatedData,
+  } = useAnnualDataAuthority({
+    hasVerifiedApplicationSession,
+    currentBrand,
+    selectedYear,
+    activeView,
+    isLowPowerMode,
+    getCollectionPath,
+    getStableReadMeta,
     systemExclusionState,
     currentLifecycleMasterState,
-  ]);
+  });
 
   useEffect(() => {
     const targetYear = String(selectedYear);
