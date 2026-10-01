@@ -54,18 +54,57 @@ Annual KPI / Projection Model ownership non-expansion guard
 FRD-A1 / FRD-A2 historical responsibility tests updated to current owner
 ```
 
-狀態：
+Validation / Production evidence：
 
 ```text
-IMPLEMENTED                         = YES_LOCAL_AFTER_PATCH
-VALIDATED                           = PENDING_LOCAL_EXECUTION
-COMMITTED / PUSHED                  = NO
-DEPLOYED                            = NO
-PRODUCTION CONFIRMED                = NO
-CURRENT_APP_VERSION                 = 3.6.0 unchanged
+runtime source commit                = a32066c82c6fb81e1e940cf285b548a6535d6ead
+runtime parent                       = 14b82a6c00ae34d3dca363912c21f03738a7ae02
+local targeted regression            = PASS
+local full ci:validate               = PASS
+local production build               = PASS
+GitHub CI Validation Gate            = 36831328670 / SUCCESS
+Critical Browser E2E                 = 36831328601 / SUCCESS
+previous gh-pages                    = 86c745d25243fec93d7a9d8fbefc79d5680177dc
+production gh-pages                  = d15bd422e3537db98ecbc9141a5224ce78c741c6
+production index asset               = assets/index-DIFOcXH2.js
+production asset SHA-256             = 1f8c567c9fd9dad9b9ffcab56136215bccd709748458a960ad8fa32bfaa79aa9
+live convergence                     = PASS
+live index HTTP                      = 200
+live asset HTTP                      = 200
 ```
 
-Documentation Impact：更新 `CURRENT_STATE.md`、`SYSTEM_SOURCE_MAP.md`；其他 canonical docs = None。
+Human Production smoke：
+
+```text
+requested FRD-A3 scope               = PASS
+CYJ current-month store mode         = PASS
+CYJ current-month therapist mode     = PASS
+CYJ historical therapist Summary     = PASS
+CYJ -> Anniu -> Yibo isolation       = PASS
+switch-back to CYJ same month        = PASS
+therapist -> store -> therapist      = PASS
+```
+
+最終狀態：
+
+```text
+IMPLEMENTED                          = YES
+VALIDATED                            = YES
+COMMITTED                            = YES
+PUSHED                               = YES
+DEPLOYED                             = YES
+PRODUCTION CONFIRMED                 = YES
+THERAPIST SUMMARY IO OWNER           = useDashboardTherapistSummary
+DASHBOARD DIRECT FIRESTORE PRIMITIVE = 0
+FIRESTORE READ TOPOLOGY CHANGE       = 0
+NEW QUERY                            = 0
+NEW POLLING                          = 0
+BACKEND DEPLOYED                     = NO / NOT REQUIRED
+FIRESTORE RULES DEPLOYED             = NO / NOT REQUIRED
+CURRENT_APP_VERSION                  = 3.6.0 unchanged
+```
+
+Documentation Impact：production closeout 更新 `CURRENT_STATE.md`、`DEPLOYMENT.md`；`SYSTEM_SOURCE_MAP.md` ownership 已於 FRD-A3 runtime commit 更新，無需再改；其他 canonical docs = None。
 
 ---
 

@@ -1,5 +1,84 @@
 # DEPLOYMENT.md
 
+# FRD-A3 Therapist Summary Listener Production Closeout — 2026-10-01
+
+本節記錄 `Frontend Responsibility Decomposition A3 — Therapist Summary Listener Extraction` 的正式 Frontend deployment 與 human production smoke。Runtime 將歷史 Dashboard 人員績效 `therapist_summary/{selectedYearMonth}` 的單文件 listener / local load-state owner 從 `useDashboardStats.js` 抽離至 `useDashboardTherapistSummary.js`。Dashboard 保留 Summary trust、Formal fallback 與 Therapist KPI filtering / ranking / presentation composition。
+
+正式 lineage：
+
+```text
+runtime source commit                = a32066c82c6fb81e1e940cf285b548a6535d6ead
+runtime parent                       = 14b82a6c00ae34d3dca363912c21f03738a7ae02
+GitHub CI Validation Gate            = 36831328670 / SUCCESS
+Critical Browser E2E                 = 36831328601 / SUCCESS
+CURRENT_APP_VERSION                  = 3.6.0 unchanged
+```
+
+精準 Frontend deployment：
+
+```bash
+npm run build
+npx --no-install gh-pages -d dist
+```
+
+Frontend Production evidence：
+
+```text
+previous gh-pages                    = 86c745d25243fec93d7a9d8fbefc79d5680177dc
+production gh-pages                  = d15bd422e3537db98ecbc9141a5224ce78c741c6
+production index asset               = assets/index-DIFOcXH2.js
+production asset SHA-256             = 1f8c567c9fd9dad9b9ffcab56136215bccd709748458a960ad8fa32bfaa79aa9
+live convergence                     = PASS
+live index HTTP                      = 200
+live asset HTTP                      = 200
+human production smoke               = PASS
+```
+
+Human smoke scope：
+
+```text
+CYJ current-month store mode         = PASS
+CYJ current-month therapist mode     = PASS
+CYJ historical therapist Summary     = PASS
+CYJ -> Anniu -> Yibo isolation       = PASS
+switch-back to CYJ same month        = PASS
+therapist -> store -> therapist      = PASS
+```
+
+Runtime / read boundary：
+
+```text
+therapist Summary path               = getCollectionPath("therapist_summary") / selectedYearMonth
+listener activation                 = historical + therapist view + module enabled only
+listener count                      = one single-document onSnapshot when active
+steady-state read topology delta     = 0
+new query                            = 0
+new polling                          = 0
+brand physical path resolver         = unchanged
+consumer authority anchor            = brand + yearMonth
+Dashboard direct Firestore primitive = 0
+Annual KPI owner                     = unchanged
+Projection Model owner               = unchanged
+Backend deployment                   = NO / NOT REQUIRED
+Firestore Rules deployment           = NO / NOT REQUIRED
+```
+
+最終狀態：
+
+```text
+IMPLEMENTED                          = YES
+VALIDATED                            = YES
+COMMITTED                            = YES
+PUSHED                               = YES
+DEPLOYED                             = YES
+PRODUCTION CONFIRMED                 = YES
+CURRENT_APP_VERSION                  = 3.6.0 unchanged
+```
+
+Documentation Impact：`CURRENT_STATE.md`、`DEPLOYMENT.md`；`SYSTEM_SOURCE_MAP.md` ownership 已於 runtime commit 更新，無需再改。
+
+---
+
 # FRD-A2 Projection Model Loader Production Closeout — 2026-10-01
 
 本節記錄 `Frontend Responsibility Decomposition A2 — Projection Model Loader Extraction` 的正式 Frontend deployment 與 human production smoke。Runtime 將 Dashboard `projection_models/current` 的單一 Firestore point-read / load-state owner 從 `useDashboardStats.js` 抽離至 `useDashboardProjectionModel.js`；Projection trust、Lifecycle、Reporting Calendar、System Exclusion 與 projection presentation semantics 仍由 Dashboard owner 組合。
