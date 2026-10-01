@@ -32,26 +32,35 @@ new listener / query / polling                = 0
 steady-state Firestore reads change           = 0
 ```
 
-Validation：
+Validation / Production evidence：
 
 ```text
 targeted annual KPI regression = PASS
-full CI validation             = PASS
+full local CI validation       = PASS
 production build               = PASS (ci:validate)
+runtime source commit          = 7f3558885454e7863b259ee645e14b7d385eeb2b
+GitHub CI Validation Gate      = 36818278205 / SUCCESS
+Critical Browser E2E           = 36818278168 / SUCCESS
+previous gh-pages              = 2b148aeaedbfcd3c8c096e631ea91b7aefaef597
+production gh-pages            = a7054ef71738413caf5df1c72596adb758a349dc
+production index asset         = assets/index-DzMFEHWb.js
+human production smoke         = PASS (requested CYJ / 安妞 / 伊啵 scope)
 ```
+
+本批 deploy 使用已驗證 production build 後直接 publish `dist`；沒有 Functions / Firestore Rules deployment。第一次 deployment script 的 live CDN probe 回報 `PENDING`，因此不補寫未實際取得的 live asset HTTP 證據；正式 production confirmation 來自 GitHub Pages branch/asset lineage 與 human production smoke。
 
 狀態：
 
 ```text
-IMPLEMENTED          = YES_LOCAL
+IMPLEMENTED          = YES
 VALIDATED            = YES
-COMMITTED / PUSHED   = NO
-DEPLOYED             = NO
-PRODUCTION CONFIRMED = NO
+COMMITTED / PUSHED   = YES
+DEPLOYED             = YES
+PRODUCTION CONFIRMED = YES
 CURRENT_APP_VERSION  = 3.6.0 unchanged
 ```
 
-Documentation Impact：`CURRENT_STATE.md`、`SYSTEM_SOURCE_MAP.md`。
+Documentation Impact：implementation 更新 `CURRENT_STATE.md`、`SYSTEM_SOURCE_MAP.md`；production closeout 更新 `CURRENT_STATE.md`、`DEPLOYMENT.md`。
 
 ---
 

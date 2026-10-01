@@ -1,5 +1,69 @@
 # DEPLOYMENT.md
 
+# P2-B1B1 Annual KPI Frontend Mirror Alias Retirement Production Closeout — 2026-10-01
+
+本節記錄 P2-B1B1 的正式 Frontend deployment 與 human production smoke。Runtime 只退役 Frontend Annual KPI normalized / filtered view-model 已無 consumer 的 top-level mirror aliases；V1 persisted `annual_kpi_summary` input reader、Backend persisted compatibility writer、manual rebuild response、scheduled rebuild 與 top-level `basedMonths / basedMonthCount` 均保留。
+
+正式 lineage：
+
+```text
+source commit                       = 7f3558885454e7863b259ee645e14b7d385eeb2b
+parent source                       = 1591c60b5cda253409025daa054b437826e4a8cc
+GitHub CI Validation Gate           = 36818278205 / SUCCESS
+Critical Browser E2E                = 36818278168 / SUCCESS
+CURRENT_APP_VERSION                 = 3.6.0
+```
+
+精準 Frontend deployment：
+
+```bash
+npm run build
+npx --no-install gh-pages -d dist
+```
+
+`package.json` 的 `npm run deploy` 會因 `predeploy` 與 `deploy` 各自執行 build 而重複建置，因此本批採上述等價的單次 production build + `gh-pages -d dist` publish；沒有擴大 deployment scope。
+
+Frontend Production evidence：
+
+```text
+previous gh-pages                   = 2b148aeaedbfcd3c8c096e631ea91b7aefaef597
+production gh-pages                 = a7054ef71738413caf5df1c72596adb758a349dc
+production index asset              = assets/index-DzMFEHWb.js
+initial live convergence probe      = PENDING
+live asset HTTP                     = NOT_RECORDED
+human production smoke              = PASS
+```
+
+第一次 deployment script 的 CDN convergence probe 尚未收斂，因此不把未實際取得的 live asset HTTP 狀態寫成 PASS。其後 GitHub `gh-pages` branch 已確認指向新 production asset，並完成使用者 requested human production smoke；因此本批 `PRODUCTION CONFIRMED = YES`。
+
+Human Production smoke：
+
+```text
+requested scope                     = CYJ / 安妞 / 伊啵
+Dashboard / Annual benchmark smoke  = PASS
+manager / store scope interaction   = PASS (requested smoke scope)
+```
+
+本批沒有 Backend change、Firestore Rules change、Firestore path change、新 listener/query/polling 或 `CURRENT_APP_VERSION` bump；steady-state Firestore reads change = 0。因此沒有 Functions / Rules deployment。
+
+最終狀態：
+
+```text
+IMPLEMENTED                         = YES
+VALIDATED                           = YES
+COMMITTED                           = YES
+PUSHED                              = YES
+DEPLOYED                            = YES
+PRODUCTION CONFIRMED                = YES
+BACKEND DEPLOYED                    = NO / NOT REQUIRED
+FIRESTORE RULES DEPLOYED            = NO / NOT REQUIRED
+CURRENT_APP_VERSION                 = 3.6.0 unchanged
+```
+
+Documentation Impact：production closeout 更新 `CURRENT_STATE.md`、`DEPLOYMENT.md`；其他 canonical docs = None。
+
+---
+
 # P2-B1A Dashboard Legacy Shadow Retirement Production Closeout — 2026-10-01
 
 本節記錄 P2-B1A 的正式 Frontend deployment 與 human production smoke。Runtime 只退役 Historical Dashboard 已無 consumer 的 shadow aliases；沒有修改 Summary Writer、Formal KPI semantics、System Exclusion、Identity、Firestore path、Backend、Rules 或品牌隔離。
