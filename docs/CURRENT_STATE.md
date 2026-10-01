@@ -54,18 +54,64 @@ CURRENT_APP_VERSION guard
 dashboardHistoricalReads stale ownership assertion corrected
 ```
 
-狀態：
+Validation / Production evidence：
 
 ```text
-IMPLEMENTED                         = YES_LOCAL_AFTER_PATCH
-VALIDATED                           = PENDING_LOCAL_EXECUTION
-COMMITTED / PUSHED                  = NO
-DEPLOYED                            = NO
-PRODUCTION CONFIRMED                = NO
-CURRENT_APP_VERSION                 = 3.6.0 unchanged
+runtime source commit                = 0ae25e5bed7dbd442b956e796de251e1e91514c9
+runtime parent                       = 00136d77a3b61d17e2da5eb2fc0d961193ebe690
+initial targeted regression          = 63 PASS / 1 stale assertion FAIL
+stale assertion correction           = tests/dashboardHistoricalReads.test.js only
+final targeted regression            = PASS
+local full ci:validate               = PASS
+local production build               = PASS
+GitHub CI Validation Gate            = 36834767988 / SUCCESS
+Critical Browser E2E                 = 36834768078 / SUCCESS
+previous gh-pages                    = d15bd422e3537db98ecbc9141a5224ce78c741c6
+production gh-pages                  = 3e87d54187d3325d2aeb2b04c68718eb642883e2
+production index asset               = assets/index-BCrs-BGv.js
+production asset SHA-256             = e621019aa59039cddd721d02f3e8808f49106e2b7d8d5a7cc43cb74245414f0b
+live convergence                     = PASS
+live index HTTP                      = 200
+live asset HTTP                      = 200
 ```
 
-Documentation Impact：更新 `CURRENT_STATE.md`、`SYSTEM_SOURCE_MAP.md`；其他 canonical docs = None。
+Human Production smoke：
+
+```text
+requested FRD-A4 scope               = PASS
+CYJ current-month Dashboard          = PASS
+CYJ verified historical Dashboard    = PASS
+historical manager/store filters     = PASS
+CYJ -> Anniu -> Yibo isolation       = PASS
+dirty/unverified detail fallback     = PASS
+```
+
+最終狀態：
+
+```text
+IMPLEMENTED                          = YES
+VALIDATED                            = YES
+COMMITTED                            = YES
+PUSHED                               = YES
+DEPLOYED                             = YES
+PRODUCTION CONFIRMED                 = YES
+APP HISTORICAL READ POLICY OWNER     = YES
+DASHBOARD DEAD READ POLICY MIRROR    = REMOVED
+DASHBOARD PRESENTATION TRUST OWNER   = PRESERVED
+DASHBOARD DIRECT FIRESTORE PRIMITIVE = 0
+FIRESTORE READ TOPOLOGY CHANGE       = 0
+LISTENER TOPOLOGY CHANGE             = 0
+NEW READ                             = 0
+NEW LISTENER                         = 0
+NEW QUERY                            = 0
+NEW POLLING                          = 0
+SECURITY AUTHORITY CHANGED           = NO
+BACKEND DEPLOYED                     = NO / NOT REQUIRED
+FIRESTORE RULES DEPLOYED             = NO / NOT REQUIRED
+CURRENT_APP_VERSION                  = 3.6.0 unchanged
+```
+
+Documentation Impact：production closeout 更新 `CURRENT_STATE.md`、`DEPLOYMENT.md`；`SYSTEM_SOURCE_MAP.md` ownership 已於 FRD-A4 runtime commit 更新，無需再改；其他 canonical docs = None。
 
 ---
 

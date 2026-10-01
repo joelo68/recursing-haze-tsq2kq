@@ -1,5 +1,96 @@
 # DEPLOYMENT.md
 
+# FRD-A4 Dead Dashboard Read-Policy Mirror Production Closeout — 2026-10-01
+
+本節記錄 `Frontend Responsibility Decomposition A4 — Dead Dashboard Read-Policy Mirror Retirement` 的正式 Frontend deployment 與 human production smoke。Runtime 退役 `useDashboardStats.js` 內沒有 consumer 的 `dashboardTargetReadPolicy` mirror，並移除其未使用的 `resolveHistoricalDashboardReadPolicy` / `inspectHistoricalReportingCalendarTrust` dependencies。真正的 historical `daily_reports` read-topology authority 維持在 `src/App.jsx`；Dashboard 的 Summary presentation trust / fail-closed semantics 保持不變。
+
+正式 lineage：
+
+```text
+runtime source commit                = 0ae25e5bed7dbd442b956e796de251e1e91514c9
+runtime parent                       = 00136d77a3b61d17e2da5eb2fc0d961193ebe690
+GitHub CI Validation Gate            = 36834767988 / SUCCESS
+Critical Browser E2E                 = 36834768078 / SUCCESS
+CURRENT_APP_VERSION                  = 3.6.0 unchanged
+```
+
+Validation note：
+
+```text
+initial targeted regression          = 63 PASS / 1 stale assertion FAIL
+stale assertion                      = expected removed Dashboard targetYearMonth mirror
+correction                           = tests/dashboardHistoricalReads.test.js only
+final targeted regression            = PASS
+local full ci:validate               = PASS
+local production build               = PASS
+runtime correction after first run   = NO
+```
+
+精準 Frontend deployment：
+
+```bash
+npm run build
+npx --no-install gh-pages -d dist
+```
+
+Frontend Production evidence：
+
+```text
+previous gh-pages                    = d15bd422e3537db98ecbc9141a5224ce78c741c6
+production gh-pages                  = 3e87d54187d3325d2aeb2b04c68718eb642883e2
+production index asset               = assets/index-BCrs-BGv.js
+production asset SHA-256             = e621019aa59039cddd721d02f3e8808f49106e2b7d8d5a7cc43cb74245414f0b
+live convergence                     = PASS
+live index HTTP                      = 200
+live asset HTTP                      = 200
+human production smoke               = PASS
+```
+
+Human smoke scope：
+
+```text
+CYJ current-month Dashboard          = PASS
+CYJ verified historical Dashboard    = PASS
+historical manager/store filters     = PASS
+CYJ -> Anniu -> Yibo isolation       = PASS
+dirty/unverified detail fallback     = PASS
+```
+
+Runtime / read boundary：
+
+```text
+historical daily_reports policy owner = src/App.jsx
+Dashboard dead read-policy mirror     = removed
+Dashboard presentation trust owner    = preserved
+Dashboard direct Firestore primitive  = 0
+Firestore read topology delta         = 0
+listener topology delta               = 0
+new read                              = 0
+new listener                          = 0
+new query                             = 0
+new polling                           = 0
+brand physical paths                  = unchanged
+security authority                    = unchanged
+Backend deployment                    = NO / NOT REQUIRED
+Firestore Rules deployment            = NO / NOT REQUIRED
+```
+
+最終狀態：
+
+```text
+IMPLEMENTED                          = YES
+VALIDATED                            = YES
+COMMITTED                            = YES
+PUSHED                               = YES
+DEPLOYED                             = YES
+PRODUCTION CONFIRMED                 = YES
+CURRENT_APP_VERSION                  = 3.6.0 unchanged
+```
+
+Documentation Impact：`CURRENT_STATE.md`、`DEPLOYMENT.md`；`SYSTEM_SOURCE_MAP.md` ownership 已於 runtime commit 更新，無需再改。
+
+---
+
 # FRD-A3 Therapist Summary Listener Production Closeout — 2026-10-01
 
 本節記錄 `Frontend Responsibility Decomposition A3 — Therapist Summary Listener Extraction` 的正式 Frontend deployment 與 human production smoke。Runtime 將歷史 Dashboard 人員績效 `therapist_summary/{selectedYearMonth}` 的單文件 listener / local load-state owner 從 `useDashboardStats.js` 抽離至 `useDashboardTherapistSummary.js`。Dashboard 保留 Summary trust、Formal fallback 與 Therapist KPI filtering / ranking / presentation composition。
