@@ -1,5 +1,75 @@
 # DEPLOYMENT.md
 
+# Annual YTD Provisional-Month Fix Production Closeout — 2026-10-01
+
+本次為 Frontend-only Production deployment；修正 Annual 共用 interval aggregation contract，使 current-month `PROVISIONAL` 尚未形成 numeric actual 時，不會抹除既有 YTD actual，同時保留 historical `DATA_INCOMPLETE` fail-closed。
+
+正式 lineage：
+
+```text
+runtime source commit                = cd57c97bb944756bd344c3acead6ced72b5ae17c
+runtime parent                       = de12ab8e20ed67484fcdd65bdfdc0e8ae1323c45
+GitHub CI Validation Gate            = 36823578014 / SUCCESS
+Critical Browser E2E                 = 36823578115 / SUCCESS
+CURRENT_APP_VERSION                  = 3.6.0 unchanged
+```
+
+精準 Frontend deployment：
+
+```bash
+npm run build
+npx --no-install gh-pages -d dist
+```
+
+Frontend Production evidence：
+
+```text
+previous gh-pages                    = 31c2ed6964122bcb055de9087cbb2eeb46e1f874
+production gh-pages                  = 42132459e2daff375b1910baaa595abc9b75fd42
+production index asset               = assets/index-DU1Od94X.js
+production asset SHA-256             = 0f1ecf8de26f725e4973bc9bff3ae4407fb081ec36d013440939b3b1c2d14e71
+live asset convergence               = PASS
+live asset HTTP                      = 200
+human production smoke               = PASS
+```
+
+Human smoke scope：
+
+```text
+2026 / 整年度 / 全品牌
+upper Annual interval KPI cards      = numeric / expected YTD behavior
+current PROVISIONAL null             = does not erase historical YTD
+result                               = PASS
+```
+
+Runtime impact：
+
+```text
+Firestore reads change               = 0
+new listener                         = 0
+new query                            = 0
+new polling                          = 0
+brand paths changed                  = NO
+Backend deployment                   = NO / NOT REQUIRED
+Firestore Rules deployment           = NO / NOT REQUIRED
+```
+
+最終狀態：
+
+```text
+IMPLEMENTED                          = YES
+VALIDATED                            = YES
+COMMITTED                            = YES
+PUSHED                               = YES
+DEPLOYED                             = YES
+PRODUCTION CONFIRMED                 = YES
+CURRENT_APP_VERSION                  = 3.6.0 unchanged
+```
+
+Documentation Impact：`CURRENT_STATE.md`、`DEPLOYMENT.md`。
+
+---
+
 # P2-B1B1 Annual KPI Frontend Mirror Alias Retirement Production Closeout — 2026-10-01
 
 本節記錄 P2-B1B1 的正式 Frontend deployment 與 human production smoke。Runtime 只退役 Frontend Annual KPI normalized / filtered view-model 已無 consumer 的 top-level mirror aliases；V1 persisted `annual_kpi_summary` input reader、Backend persisted compatibility writer、manual rebuild response、scheduled rebuild 與 top-level `basedMonths / basedMonthCount` 均保留。

@@ -1,3 +1,83 @@
+# Annual YTD Provisional-Month Fix Production Closeout — 2026-10-01
+
+本節是 `Annual YTD Provisional-Month Interval Fix` 的 Production closeout。先前 FRD-A1 deploy 後的人工作業暴露年度區間既有 edge case：目前月份為 `PROVISIONAL` 且尚無 numeric actual 時，舊 interval total helper 會把既有 YTD actual 一起變成 null。Root cause 已在共用 `buildAnnualIntervalTotals()` 修正，不是以 `AnnualView.jsx` 單頁 workaround 掩蓋。
+
+正式 lineage：
+
+```text
+runtime source commit                = cd57c97bb944756bd344c3acead6ced72b5ae17c
+runtime parent                       = de12ab8e20ed67484fcdd65bdfdc0e8ae1323c45
+GitHub CI Validation Gate            = 36823578014 / SUCCESS
+Critical Browser E2E                 = 36823578115 / SUCCESS
+previous gh-pages                    = 31c2ed6964122bcb055de9087cbb2eeb46e1f874
+production gh-pages                  = 42132459e2daff375b1910baaa595abc9b75fd42
+production index asset               = assets/index-DU1Od94X.js
+live asset convergence               = PASS
+live asset HTTP                      = 200
+CURRENT_APP_VERSION                  = 3.6.0 unchanged
+```
+
+Production contract：
+
+```text
+historical valid actual
+→ included in YTD
+
+current PROVISIONAL numeric / explicit zero
+→ included in YTD
+
+current PROVISIONAL null
+→ skipped for that actual metric only
+→ existing YTD remains displayable
+
+historical DATA_INCOMPLETE null
+→ still fail closed
+
+future NOT_STARTED
+→ excluded from actual
+→ target denominator unchanged
+```
+
+Human Production smoke：
+
+```text
+2026 / 整年度 / 全品牌
+YTD interval cards                   = PASS
+current provisional null handling    = PASS
+human smoke                          = PASS
+```
+
+因此目前年度「整年度」維持既定營運語意：
+
+```text
+actual   = 1/1 至截至目前已有的有效實績
+target   = 選定區間內既有 target denominator
+progress = YTD actual / selected-range target
+```
+
+本批沒有 Firestore read/listener/query/polling、brand path、Backend、Rules 或 version 變更。
+
+最終狀態：
+
+```text
+IMPLEMENTED                          = YES
+VALIDATED                            = YES
+COMMITTED                            = YES
+PUSHED                               = YES
+DEPLOYED                             = YES
+PRODUCTION CONFIRMED                 = YES
+FIRESTORE READS CHANGE               = 0
+BACKEND DEPLOYED                     = NO / NOT REQUIRED
+FIRESTORE RULES DEPLOYED             = NO / NOT REQUIRED
+CURRENT_APP_VERSION                  = 3.6.0 unchanged
+```
+
+FRD-A1 runtime 仍位於本次 source lineage 中；本次 smoke 明確確認的是 Annual YTD 修正範圍，不額外虛構未執行的三品牌 cache-isolation human smoke。
+
+Documentation Impact：production closeout 更新 `CURRENT_STATE.md`、`DEPLOYMENT.md`；`SYSTEM_SOURCE_MAP.md` ownership 未改，其他 canonical docs = None。
+
+---
+
 # Annual YTD Provisional-Month Interval Fix — 2026-10-01
 
 FRD-A1 Frontend deploy 後的人工作業發現：目前年度的「整年度」區間在月初、當月尚未形成 numeric actual 時，上方區間現金／權責卡片會顯示「尚無資料」，即使先前月份已有有效實績。
