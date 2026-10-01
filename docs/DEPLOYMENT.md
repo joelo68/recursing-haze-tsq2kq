@@ -1,5 +1,81 @@
 # DEPLOYMENT.md
 
+# FRD-A2 Projection Model Loader Production Closeout — 2026-10-01
+
+本節記錄 `Frontend Responsibility Decomposition A2 — Projection Model Loader Extraction` 的正式 Frontend deployment 與 human production smoke。Runtime 將 Dashboard `projection_models/current` 的單一 Firestore point-read / load-state owner 從 `useDashboardStats.js` 抽離至 `useDashboardProjectionModel.js`；Projection trust、Lifecycle、Reporting Calendar、System Exclusion 與 projection presentation semantics 仍由 Dashboard owner 組合。
+
+正式 lineage：
+
+```text
+runtime source commit                = a301aedbac3256f2164733d6ec405d0e4f12559a
+runtime parent                       = fcd06f82f043139d482375e9abadb82afc51ade7
+GitHub CI Validation Gate            = 36827548200 / SUCCESS
+Critical Browser E2E                 = 36827548219 / SUCCESS
+CURRENT_APP_VERSION                  = 3.6.0 unchanged
+```
+
+精準 Frontend deployment：
+
+```bash
+npm run build
+npx --no-install gh-pages -d dist
+```
+
+Frontend Production evidence：
+
+```text
+previous gh-pages                    = 42132459e2daff375b1910baaa595abc9b75fd42
+production gh-pages                  = 86c745d25243fec93d7a9d8fbefc79d5680177dc
+production index asset               = assets/index-DR_namU9.js
+production asset SHA-256             = 715c8e7613fe61ac9a295c417c00da830769545ffd022a946f15852e0373dac4
+live convergence                     = PASS
+live asset HTTP                      = 200
+human production smoke               = PASS
+```
+
+Human smoke scope：
+
+```text
+CYJ current-month Dashboard          = PASS
+Anniu current-month Dashboard        = PASS
+Yibo current-month V1/fallback       = PASS
+cross-brand switch-back isolation    = PASS
+manager/store filter + projection    = PASS
+therapist performance page           = PASS
+```
+
+Runtime / read boundary：
+
+```text
+projection model path                = getCollectionPath("projection_models") / current
+normal activated reads               = 1 point read / current brand-month activation
+steady-state read delta              = 0
+new listener                         = 0
+new query                            = 0
+new polling                          = 0
+brand physical path resolver         = unchanged
+Projection trust owner               = useDashboardStats
+therapist_summary listener owner     = useDashboardStats
+Backend deployment                   = NO / NOT REQUIRED
+Firestore Rules deployment           = NO / NOT REQUIRED
+```
+
+最終狀態：
+
+```text
+IMPLEMENTED                          = YES
+VALIDATED                            = YES
+COMMITTED                            = YES
+PUSHED                               = YES
+DEPLOYED                             = YES
+PRODUCTION CONFIRMED                 = YES
+CURRENT_APP_VERSION                  = 3.6.0 unchanged
+```
+
+Documentation Impact：`CURRENT_STATE.md`、`DEPLOYMENT.md`；`SYSTEM_SOURCE_MAP.md` ownership 無變更。
+
+---
+
 # FRD-A1 Annual KPI Benchmark Loader Deployment Reconciliation — 2026-10-01
 
 本節補齊 FRD-A1 `Annual KPI Benchmark Loader Extraction` 的實際 deployment evidence，修正文檔仍停留在 local/pending 的狀態。Runtime 本身沒有在本 docs-only reconciliation 中再修改。

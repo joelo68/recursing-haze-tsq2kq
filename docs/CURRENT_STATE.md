@@ -52,18 +52,55 @@ therapist_summary ownership non-expansion guard
 FRD-A1 isolation regression updated for new Projection owner
 ```
 
-狀態：
+Validation / Production evidence：
 
 ```text
-IMPLEMENTED                         = YES_LOCAL_AFTER_PATCH
-VALIDATED                           = PENDING_LOCAL_EXECUTION
-COMMITTED / PUSHED                  = NO
-DEPLOYED                            = NO
-PRODUCTION CONFIRMED                = NO
-CURRENT_APP_VERSION                 = 3.6.0 unchanged
+runtime source commit                = a301aedbac3256f2164733d6ec405d0e4f12559a
+runtime parent                       = fcd06f82f043139d482375e9abadb82afc51ade7
+local targeted regression            = PASS
+local full ci:validate               = PASS
+local production build               = PASS
+GitHub CI Validation Gate            = 36827548200 / SUCCESS
+Critical Browser E2E                 = 36827548219 / SUCCESS
+previous gh-pages                    = 42132459e2daff375b1910baaa595abc9b75fd42
+production gh-pages                  = 86c745d25243fec93d7a9d8fbefc79d5680177dc
+production index asset               = assets/index-DR_namU9.js
+production asset SHA-256             = 715c8e7613fe61ac9a295c417c00da830769545ffd022a946f15852e0373dac4
+live convergence                     = PASS
+live asset HTTP                      = 200
 ```
 
-Documentation Impact：更新 `CURRENT_STATE.md`、`SYSTEM_SOURCE_MAP.md`；其他 canonical docs = None。
+Human Production smoke：
+
+```text
+requested FRD-A2 scope               = PASS
+CYJ current-month Dashboard          = PASS
+Anniu current-month Dashboard        = PASS
+Yibo current-month V1/fallback       = PASS
+cross-brand switch-back isolation    = PASS
+manager/store filter + projection    = PASS
+therapist performance page           = PASS
+```
+
+最終狀態：
+
+```text
+IMPLEMENTED                          = YES
+VALIDATED                            = YES
+COMMITTED                            = YES
+PUSHED                               = YES
+DEPLOYED                             = YES
+PRODUCTION CONFIRMED                 = YES
+FIRESTORE READS CHANGE               = 0
+NEW LISTENER                         = 0
+NEW QUERY                            = 0
+NEW POLLING                          = 0
+BACKEND DEPLOYED                     = NO / NOT REQUIRED
+FIRESTORE RULES DEPLOYED             = NO / NOT REQUIRED
+CURRENT_APP_VERSION                  = 3.6.0 unchanged
+```
+
+Documentation Impact：production closeout 更新 `CURRENT_STATE.md`、`DEPLOYMENT.md`；`SYSTEM_SOURCE_MAP.md` ownership 無變更，其他 canonical docs = None。
 
 ---
 
