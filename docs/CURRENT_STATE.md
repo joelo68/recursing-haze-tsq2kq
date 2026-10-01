@@ -1,3 +1,62 @@
+# Frontend Responsibility Decomposition A1 — Annual KPI Benchmark Loader Extraction — 2026-10-01
+
+本批是 P2 功能性結案後第一個 Frontend Responsibility Decomposition 最小批次。目的不是純搬檔，而是把 `useDashboardStats.js` 內獨立的 Annual KPI benchmark I/O / session cache responsibility 收斂成單一 hook owner。
+
+Source Gate：
+
+```text
+pre-change main          = 5f1d3e8faed0fd2931894e5bac9357d40d0a8243
+CURRENT_APP_VERSION      = 3.6.0 unchanged
+```
+
+責任切分：
+
+```text
+src/hooks/useAnnualKpiBenchmark.js
+→ annual_kpi_summary/{year} single-document getDoc
+→ brand + year isolated session cache
+→ one-hour cache TTL
+→ persisted payload normalization
+→ missing / error fail-safe state
+
+src/hooks/useDashboardStats.js
+→ consume annualKpiBenchmark result
+→ keep Lifecycle / Reporting Calendar / System Exclusion trust validation
+→ keep role / manager / store filtering
+→ keep Projection Model and therapist_summary I/O ownership unchanged
+```
+
+Read / brand / security boundary：
+
+```text
+Firestore path                 = unchanged via getCollectionPath("annual_kpi_summary")
+normal cache miss reads        = 1 point read / activated brand-year
+listener                       = 0
+query                          = 0
+polling                        = 0
+steady-state read delta        = 0
+brand physical path resolver   = unchanged
+Backend / Rules                = unchanged
+```
+
+本批不修改 Annual KPI schema、V1 compatibility reader、Backend persisted compatibility writer、Dashboard KPI semantics、System Exclusion、Lifecycle 或 CURRENT_APP_VERSION。
+
+Validation 由本批 apply 後執行 targeted regression、full `ci:validate` 與 production build gate；在實際執行前不得標記 PASS。
+
+狀態：
+
+```text
+IMPLEMENTED          = YES_LOCAL_AFTER_PATCH
+VALIDATED            = PENDING_LOCAL_EXECUTION
+COMMITTED / PUSHED   = NO
+DEPLOYED             = NO
+PRODUCTION CONFIRMED = NO
+```
+
+Documentation Impact：更新 `CURRENT_STATE.md`、`SYSTEM_SOURCE_MAP.md`；其他 canonical docs = None。
+
+---
+
 # P2 Final Functional Closeout — 2026-10-01
 
 本節是 P2 的最新功能性結案判定。它不把「刪光所有 legacy / compatibility 字樣」當成完成條件，而以 Production read topology、authority、correctness 與安全 fallback 是否已收斂為準。

@@ -37,8 +37,8 @@ import {
   ANNUAL_KPI_SUMMARY_SCHEMA_VERSION,
   buildAnnualKpiBenchmarkScope,
   makeEmptyAnnualKpiBenchmark,
-  normalizeAnnualKpiBenchmarkPayload,
 } from '../utils/annualKpiBenchmark.js';
+import { useAnnualKpiBenchmark } from './useAnnualKpiBenchmark.js';
 
 const isFiniteKpiNumber = (value) => typeof value === "number" && Number.isFinite(value);
 const getFormalNetCashValue = (row = {}) => {
@@ -201,100 +201,11 @@ export function useDashboardStats() {
   });
 
 
-  const [annualKpiBenchmark, setAnnualKpiBenchmark] = useState({
-    ready: false,
-    source: "idle",
-    schemaVersion: "",
-    metrics: {},
-    stores: {},
-    benchmarkScopeByMonth: {},
-    storeCount: 0,
-    updatedAtText: "",
-    error: null,
+  const annualKpiBenchmark = useAnnualKpiBenchmark({
+    getCollectionPath,
+    brandId: brandInfo?.id,
+    selectedYear,
   });
-
-  useEffect(() => {
-    let cancelled = false;
-
-    const loadAnnualKpiBenchmark = async () => {
-      const year = String(selectedYear || "").trim();
-      const brandId = String(brandInfo?.id || "").trim() || "cyj";
-
-      if (!getCollectionPath || !year) {
-        setAnnualKpiBenchmark(makeEmptyAnnualKpiBenchmark({}, "not_available"));
-        return;
-      }
-
-      const cacheKey = `cyj_annual_kpi_summary_v6_${brandId}_${year}`;
-      const cacheTtlMs = 60 * 60 * 1000;
-
-      try {
-        if (typeof sessionStorage !== "undefined") {
-          const cachedRaw = sessionStorage.getItem(cacheKey);
-          if (cachedRaw) {
-            const cached = JSON.parse(cachedRaw);
-            if (cached?.cachedAt && Date.now() - Number(cached.cachedAt) < cacheTtlMs) {
-              setAnnualKpiBenchmark({
-                ...normalizeAnnualKpiBenchmarkPayload(cached),
-                ready: true,
-                source: "session_cache",
-                error: null,
-              });
-              return;
-            }
-          }
-        }
-      } catch (error) {
-        // 快取失敗不影響 Dashboard，改讀 Firestore 單一年度摘要 doc。
-      }
-
-      setAnnualKpiBenchmark((prev) => ({
-        ...prev,
-        ready: false,
-        source: "loading",
-        error: null,
-      }));
-
-      try {
-        const summaryRef = doc(getCollectionPath("annual_kpi_summary"), year);
-        const snap = await getDoc(summaryRef);
-        if (cancelled) return;
-
-        if (!snap.exists()) {
-          setAnnualKpiBenchmark(makeEmptyAnnualKpiBenchmark({}, "missing"));
-          return;
-        }
-
-        const data = snap.data() || {};
-        const payload = {
-          ...normalizeAnnualKpiBenchmarkPayload(data),
-          ready: true,
-          source: "annual_kpi_summary",
-          error: null,
-        };
-
-        setAnnualKpiBenchmark(payload);
-
-        try {
-          if (typeof sessionStorage !== "undefined") {
-            sessionStorage.setItem(cacheKey, JSON.stringify({ ...payload, cachedAt: Date.now() }));
-          }
-        } catch (error) {
-          // 快取失敗不影響顯示。
-        }
-      } catch (error) {
-        console.warn("讀取年度 KPI 摘要失敗：", error);
-        if (cancelled) return;
-        setAnnualKpiBenchmark({
-          ...makeEmptyAnnualKpiBenchmark({}, "error"),
-          error: error?.message || String(error),
-        });
-      }
-    };
-
-    loadAnnualKpiBenchmark();
-    return () => { cancelled = true; };
-  }, [getCollectionPath, brandInfo?.id, selectedYear]);
 
 
   const cleanName = useMemo(() => (name) => {

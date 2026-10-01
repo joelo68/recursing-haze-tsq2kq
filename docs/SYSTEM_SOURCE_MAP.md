@@ -1,3 +1,39 @@
+# FRD-A1 Annual KPI Benchmark Loader Ownership — 2026-10-01
+
+```text
+src/hooks/useAnnualKpiBenchmark.js
+→ Annual KPI benchmark Frontend I/O owner
+→ annual_kpi_summary/{year} one getDoc
+→ brand-year session cache / TTL
+→ normalize persisted payload / missing-error fail-safe
+
+src/hooks/useDashboardStats.js
+→ no longer owns annual_kpi_summary Firestore read/cache implementation
+→ still owns benchmark trust/scope composition with Dashboard state
+
+src/utils/annualKpiBenchmark.js
+→ unchanged canonical normalization / scope semantics
+→ V1 persisted input compatibility remains
+
+tests/frontendResponsibilityDecompositionA1.test.js
+→ loader ownership / single-read / no-listener-no-query-no-polling guard
+→ cache brand-year isolation guard
+→ Projection Model / therapist Summary ownership non-expansion guard
+```
+
+Boundary：
+
+```text
+Firestore reads delta    = 0
+Firestore listeners      = unchanged
+Backend                  = unchanged
+Firestore Rules          = unchanged
+brand paths              = unchanged
+CURRENT_APP_VERSION      = 3.6.0 unchanged
+```
+
+---
+
 # P2 Final Ownership / Residual Compatibility Boundary — 2026-10-01
 
 P2 final functional closeout 後，正式 ownership 以「正常路徑 authority」與「刻意保留的 safety compatibility」區分；不再以欄位名稱是否含 legacy / fallback 判斷是否應移除。
