@@ -11,6 +11,7 @@ const read = (relativePath) => fs.readFileSync(path.join(root, relativePath), "u
 
 const dashboardHook = read("src/hooks/useDashboardStats.js");
 const annualLoader = read("src/hooks/useAnnualKpiBenchmark.js");
+const projectionLoader = read("src/hooks/useDashboardProjectionModel.js");
 
 test("FRD-A1 moves Annual KPI benchmark IO out of useDashboardStats", () => {
   assert.match(dashboardHook, /useAnnualKpiBenchmark\(\{/);
@@ -48,8 +49,9 @@ test("FRD-A1 preserves normalization and missing/error fail-safe semantics", () 
   assert.match(annualLoader, /makeEmptyAnnualKpiBenchmark\(\{\}, "error"\)/);
 });
 
-test("FRD-A1 does not absorb Projection Model or therapist Summary IO ownership", () => {
-  assert.match(dashboardHook, /getCollectionPath\("projection_models"\)/);
+test("FRD-A1 annual loader remains isolated from Projection Model and therapist Summary ownership", () => {
+  assert.match(dashboardHook, /useDashboardProjectionModel\(\{/);
+  assert.match(projectionLoader, /getCollectionPath\("projection_models"\)/);
   assert.match(dashboardHook, /getCollectionPath\("therapist_summary"\)/);
   assert.match(dashboardHook, /onSnapshot\(/);
   assert.doesNotMatch(annualLoader, /projection_models/);

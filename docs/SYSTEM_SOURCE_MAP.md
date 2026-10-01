@@ -1,3 +1,43 @@
+# FRD-A2 Projection Model Loader Ownership — 2026-10-01
+
+```text
+src/hooks/useDashboardProjectionModel.js
+→ Dashboard Projection Model Frontend I/O owner
+→ projection_models/current one getDoc
+→ current-month activation gate
+→ brand + modelMonth load-state anchoring
+→ missing/error fallback state
+
+src/hooks/useDashboardStats.js
+→ no longer owns Projection Model Firestore getDoc implementation
+→ still owns Projection Model trust composition
+→ still owns Lifecycle / Reporting Calendar / System Exclusion coordination
+→ still owns projection calculation / presentation
+→ therapist_summary listener remains here
+
+src/utils/projectionModelConsumer.js
+→ unchanged Projection Model contract / trust / calculation semantics
+
+tests/frontendResponsibilityDecompositionA2.test.js
+→ loader ownership / single-read / no-listener-no-query-no-polling guard
+→ activation / anchoring guard
+→ trust boundary guard
+→ therapist listener non-expansion guard
+```
+
+Boundary：
+
+```text
+Firestore reads delta               = 0
+Projection listener                 = 0
+Backend                             = unchanged
+Firestore Rules                     = unchanged
+brand paths                         = unchanged
+CURRENT_APP_VERSION                 = 3.6.0 unchanged
+```
+
+---
+
 # FRD-A1 Annual KPI Benchmark Loader Ownership — 2026-10-01
 
 ```text

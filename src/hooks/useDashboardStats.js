@@ -2,14 +2,13 @@
 import { useState, useMemo, useContext, useEffect } from 'react';
 import { AppContext } from '../AppContext';
 import { sortManagerNames, sortStoreNames, sortManagersByOrgOrder, sortStoresByOrgOrder } from "../utils/helpers";
-import { doc, getDoc, onSnapshot } from 'firebase/firestore';
+import { doc, onSnapshot } from 'firebase/firestore';
 import { KPI_VALUE_STATUS, formalNetCash } from '../utils/kpiContracts.js';
 import {
   DASHBOARD_LIVE_RANKING_SEMANTICS,
   buildDashboardLiveRanking,
 } from '../utils/dashboardLiveRanking.js';
 import {
-  PROJECTION_MODEL_DOC_ID,
   buildDashboardProjectionFromModel,
   buildProjectionLifecycleEntryMap,
   inspectProjectionModelTrust,
@@ -39,6 +38,7 @@ import {
   makeEmptyAnnualKpiBenchmark,
 } from '../utils/annualKpiBenchmark.js';
 import { useAnnualKpiBenchmark } from './useAnnualKpiBenchmark.js';
+import { useDashboardProjectionModel } from './useDashboardProjectionModel.js';
 
 const isFiniteKpiNumber = (value) => typeof value === "number" && Number.isFinite(value);
 const getFormalNetCashValue = (row = {}) => {
@@ -189,17 +189,6 @@ export function useDashboardStats() {
     currentLifecycleMasterState,
     brandInfo?.id,
   ]);
-
-  // Batch 8B：Dashboard Projection 改讀 Backend-owned 單一 Projection Model authority。
-  // Current-month Dashboard 每次品牌/月份 activation 最多 1 個 point read；不新增 listener / polling。
-  const [projectionModelState, setProjectionModelState] = useState({
-    brandId: "",
-    modelMonth: "",
-    ready: false,
-    data: null,
-    error: null,
-  });
-
 
   const annualKpiBenchmark = useAnnualKpiBenchmark({
     getCollectionPath,
@@ -757,56 +746,14 @@ export function useDashboardStats() {
     return Number(selectedYear) === now.getFullYear() && Number(selectedMonth) === now.getMonth() + 1;
   }, [selectedYear, selectedMonth]);
 
-  useEffect(() => {
-    const brandId = String(brandInfo?.id || "").toLowerCase();
-    if (!getCollectionPath || !selectedYearMonth || !isSelectedCurrentMonth || !brandId) {
-      setProjectionModelState({
-        brandId,
-        modelMonth: selectedYearMonth,
-        ready: true,
-        data: null,
-        error: null,
-      });
-      return undefined;
-    }
-
-    let cancelled = false;
-    setProjectionModelState({
-      brandId,
-      modelMonth: selectedYearMonth,
-      ready: false,
-      data: null,
-      error: null,
-    });
-
-    const loadProjectionModel = async () => {
-      try {
-        const modelRef = doc(getCollectionPath("projection_models"), PROJECTION_MODEL_DOC_ID);
-        const snap = await getDoc(modelRef);
-        if (cancelled) return;
-        setProjectionModelState({
-          brandId,
-          modelMonth: selectedYearMonth,
-          ready: true,
-          data: snap.exists() ? { id: snap.id, ...snap.data() } : null,
-          error: null,
-        });
-      } catch (error) {
-        if (cancelled) return;
-        console.warn("Dashboard Projection Model 讀取失敗，改用本月節奏 fallback：", error);
-        setProjectionModelState({
-          brandId,
-          modelMonth: selectedYearMonth,
-          ready: true,
-          data: null,
-          error,
-        });
-      }
-    };
-
-    loadProjectionModel();
-    return () => { cancelled = true; };
-  }, [getCollectionPath, selectedYearMonth, isSelectedCurrentMonth, brandInfo?.id]);
+  // FRD-A2：Projection Model Firestore point-read/state owner moved to a dedicated hook.
+  // Trust composition remains here with Lifecycle + System Exclusion so I/O extraction does not change authority semantics.
+  const projectionModelState = useDashboardProjectionModel({
+    getCollectionPath,
+    brandId: brandInfo?.id,
+    selectedYearMonth,
+    isSelectedCurrentMonth,
+  });
 
   // B1C2E-1：把「authority 還在載入」與「authority 已完成但模型不可用」分開。
   // 只有前者需要暫停公布推估；後者仍沿用既有 current-pace fallback 契約。

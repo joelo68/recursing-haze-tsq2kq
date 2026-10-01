@@ -293,14 +293,32 @@ test("System Excluded own-store self-view can disable brand baseline fallback", 
   assert.ok(result.sourceStats.currentPaceFallbacks > 0);
 });
 
-test("Dashboard wiring uses one projection_models/current point read and retires legacy analytics compatibility", () => {
+test("Dashboard wiring delegates one projection_models/current point read and retires legacy analytics compatibility", () => {
   const hook = read("src/hooks/useDashboardStats.js");
+  const projectionLoader = read("src/hooks/useDashboardProjectionModel.js");
   const app = read("src/App.jsx");
   const dashboardView = read("src/components/DashboardView.jsx");
   const storePerformanceView = read("src/components/StorePerformanceView.jsx");
 
-  assert.match(hook, /doc\(getCollectionPath\("projection_models"\), PROJECTION_MODEL_DOC_ID\)/);
-  assert.match(hook, /await getDoc\(modelRef\)/);
+  // FRD-A2: Firestore point-read ownership moved to the dedicated loader,
+  // while Dashboard keeps Projection trust/composition semantics.
+  assert.match(hook, /useDashboardProjectionModel\(\{/);
+  assert.doesNotMatch(hook, /getCollectionPath\("projection_models"\)/);
+  assert.doesNotMatch(hook, /\bgetDoc\s*\(/);
+
+  assert.match(
+    projectionLoader,
+    /doc\(getCollectionPath\("projection_models"\), PROJECTION_MODEL_DOC_ID\)/
+  );
+  assert.match(projectionLoader, /await getDoc\(modelRef\)/);
+  assert.equal((projectionLoader.match(/\bgetDoc\s*\(/g) || []).length, 1);
+  assert.doesNotMatch(projectionLoader, /\bonSnapshot\s*\(/);
+  assert.doesNotMatch(projectionLoader, /\bgetDocs\s*\(/);
+  assert.doesNotMatch(projectionLoader, /\bquery\s*\(/);
+  assert.doesNotMatch(projectionLoader, /\bcollection\s*\(/);
+  assert.doesNotMatch(projectionLoader, /projection_curves/);
+  assert.doesNotMatch(projectionLoader, /from ['"]\.\.\/config\/firebase['"]/);
+
   assert.doesNotMatch(hook, /projection_curves/);
   assert.doesNotMatch(hook, /\bgetDocs\s*\(/);
   assert.doesNotMatch(hook, /\bcollection\s*\(/);

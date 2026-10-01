@@ -12,6 +12,7 @@ const read = (relativePath) => fs.readFileSync(path.join(root, relativePath), "u
 const viewSource = read("src/components/DashboardView.jsx");
 const headerSource = read("src/components/DashboardHeader.jsx");
 const hookSource = read("src/hooks/useDashboardStats.js");
+const projectionLoaderSource = read("src/hooks/useDashboardProjectionModel.js");
 const appSource = read("src/App.jsx");
 
 test("B1C2E-UX2B anchors Dashboard filter readiness to current-brand System Exclusion authority", () => {
@@ -67,7 +68,24 @@ test("B1C2E-UX2B changes no read topology or projection authority", () => {
     changedRuntime,
     /\bonSnapshot\b|\bgetDoc\b|\bgetDocs\b|\bcollection\s*\(|\bquery\s*\(|\bsetInterval\s*\(|\bsetTimeout\s*\(/
   );
-  assert.match(hookSource, /doc\(getCollectionPath\("projection_models"\), PROJECTION_MODEL_DOC_ID\)/);
+
+  // FRD-A2 moves only the Projection Model point-read owner.
+  // UX2B must remain read-neutral while Dashboard keeps Projection trust semantics.
+  assert.match(hookSource, /useDashboardProjectionModel\(\{/);
+  assert.doesNotMatch(hookSource, /getCollectionPath\("projection_models"\)/);
+  assert.doesNotMatch(hookSource, /\bgetDoc\s*\(/);
+
+  assert.match(
+    projectionLoaderSource,
+    /doc\(getCollectionPath\("projection_models"\), PROJECTION_MODEL_DOC_ID\)/
+  );
+  assert.match(projectionLoaderSource, /await getDoc\(modelRef\)/);
+  assert.equal((projectionLoaderSource.match(/\bgetDoc\s*\(/g) || []).length, 1);
+  assert.doesNotMatch(
+    projectionLoaderSource,
+    /\bonSnapshot\s*\(|\bgetDocs\s*\(|\bquery\s*\(|\bsetInterval\s*\(/
+  );
+
   assert.match(hookSource, /const projectionPresentationReady = useMemo/);
   assert.match(hookSource, /activeCashAvailable && projectionPresentationReady/);
 });

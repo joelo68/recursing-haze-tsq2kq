@@ -1,3 +1,72 @@
+# Frontend Responsibility Decomposition A2 — Projection Model Loader Extraction — 2026-10-01
+
+本批延續 FRD-A1 的責任拆分方式，不做純搬檔。`useDashboardStats.js` 目前剩餘兩個明確 Firestore I/O seam 中，Projection Model loader 是較低風險且責任完整的 extraction：單一 current-month point read + local load state；Projection trust / Lifecycle / System Exclusion composition 則仍留在 Dashboard owner。
+
+Source Gate：
+
+```text
+pre-change main                     = fcd06f82f043139d482375e9abadb82afc51ade7
+CURRENT_APP_VERSION                 = 3.6.0 unchanged
+```
+
+責任切分：
+
+```text
+src/hooks/useDashboardProjectionModel.js
+→ projection_models/current single-document getDoc
+→ current-month activation gate
+→ brand + modelMonth state anchoring
+→ missing / read-error fallback state
+→ cancellation guard
+
+src/hooks/useDashboardStats.js
+→ consume projectionModelState
+→ keep projectionPresentationReady
+→ keep inspectProjectionModelTrust
+→ keep Lifecycle / Reporting Calendar / System Exclusion trust composition
+→ keep projection calculation / presentation semantics
+→ keep therapist_summary listener ownership unchanged
+```
+
+Read / brand / security boundary：
+
+```text
+Firestore path                      = unchanged via getCollectionPath("projection_models")
+document id                         = current
+normal activated reads              = 1 point read / current brand-month activation
+listener                            = 0
+query                               = 0
+polling                             = 0
+steady-state read delta             = 0
+brand physical path resolver        = unchanged
+Backend / Rules                     = unchanged
+```
+
+Regression：
+
+```text
+FRD-A2 ownership / single-read topology guard
+current-month activation + brand-month anchoring guard
+Projection trust remains in Dashboard guard
+therapist_summary ownership non-expansion guard
+FRD-A1 isolation regression updated for new Projection owner
+```
+
+狀態：
+
+```text
+IMPLEMENTED                         = YES_LOCAL_AFTER_PATCH
+VALIDATED                           = PENDING_LOCAL_EXECUTION
+COMMITTED / PUSHED                  = NO
+DEPLOYED                            = NO
+PRODUCTION CONFIRMED                = NO
+CURRENT_APP_VERSION                 = 3.6.0 unchanged
+```
+
+Documentation Impact：更新 `CURRENT_STATE.md`、`SYSTEM_SOURCE_MAP.md`；其他 canonical docs = None。
+
+---
+
 # Annual YTD Provisional-Month Fix Production Closeout — 2026-10-01
 
 本節是 `Annual YTD Provisional-Month Interval Fix` 的 Production closeout。先前 FRD-A1 deploy 後的人工作業暴露年度區間既有 edge case：目前月份為 `PROVISIONAL` 且尚無 numeric actual 時，舊 interval total helper 會把既有 YTD actual 一起變成 null。Root cause 已在共用 `buildAnnualIntervalTotals()` 修正，不是以 `AnnualView.jsx` 單頁 workaround 掩蓋。
