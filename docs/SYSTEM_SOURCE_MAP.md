@@ -1,3 +1,91 @@
+# P2 Final Ownership / Residual Compatibility Boundary — 2026-10-01
+
+P2 final functional closeout 後，正式 ownership 以「正常路徑 authority」與「刻意保留的 safety compatibility」區分；不再以欄位名稱是否含 legacy / fallback 判斷是否應移除。
+
+## Normal-path authority owners
+
+```text
+Historical Dashboard
+src/App.jsx
+src/hooks/useDashboardStats.js
+src/utils/dashboardReadPolicy.js
+src/utils/dashboardFormalConsumer.js
+→ verified Summary-first
+→ raw/detail only for explicit degraded trust states
+
+Annual
+src/App.jsx
+src/utils/annualReadPolicy.js
+src/utils/annualFormalConsumer.js
+src/components/AnnualView.jsx
+→ selected-year Summary authority
+→ aggregate reads scoped to explicit fallback months
+
+Target Audit
+src/App.jsx
+src/components/AuditView.jsx
+src/utils/auditTargetAuthority.js
+→ selected-month monthly_targets_summary authority
+→ no full Raw target listener for audit
+
+Current broad store-month transport
+src/App.jsx
+src/utils/currentStoreMonthReportsConsumer.js
+functions/currentStoreMonthReports.js
+→ readiness status single document
+→ yearMonth-scoped current_store_month_reports
+→ bounded Raw fallback when projection is not trusted
+
+Annual KPI benchmark
+src/utils/annualKpiBenchmark.js
+src/components/StorePerformanceView.jsx
+→ canonical Frontend consumer contract = metrics.<kpi>
+```
+
+## Intentional compatibility / recovery owners
+
+```text
+src/utils/annualKpiBenchmark.js
+→ V1 persisted annual_kpi_summary input compatibility remains readable
+→ source.basedMonths / source.basedMonthCount remain input-only compatibility
+
+functions/annualKpiSummary.js
+functions/index.js
+→ Backend persisted / rebuild response compatibility remains
+→ future retirement requires data-migration evidence
+
+src/App.jsx / Dashboard read policy
+→ bounded Raw/detail fail-safe remains correctness boundary
+
+functions/targetCoverageAudit.js
+functions/targetCoverageMigration.js
+functions/zeroTargetInventory.js
+→ explicit governance / migration / recovery tools
+→ not normal resident read topology
+```
+
+## Retirement status
+
+```text
+P2-B1A Dashboard legacy shadow fields        = RETIRED
+P2-B1B1 Annual KPI value mirror aliases      = RETIRED
+P2-B1B2 shared-month top-level mirrors       = CANCELED / NO RUNTIME CHANGE
+remaining evidence-backed compatibility      = INTENTIONALLY RETAINED
+```
+
+Future retirement gate：
+
+```text
+production migration evidence
++ repo-wide no-consumer proof
++ measurable complexity/read/failure reduction
++ regression / brand / security validation
+```
+
+`CURRENT_APP_VERSION = 3.6.0` unchanged.
+
+---
+
 # P2-B1B1 Annual KPI Frontend Mirror Alias Retirement Owners — 2026-10-01
 
 ```text

@@ -1,5 +1,78 @@
 # DEVELOPMENT_GUIDE.md
 
+# P2 Post-Closeout Engineering Guardrails — 2026-10-01
+
+P2 已採功能性結案：
+
+```text
+Firestore Read Debt Cleanup     = CORE CLOSED
+Legacy Compatibility Retirement = FUNCTIONALLY CLOSED
+```
+
+後續維護不得把「看到 legacy / compatibility / fallback」等同「必須刪除」。
+
+## Compatibility retirement gate
+
+只有同時滿足以下條件才開新的 retirement batch：
+
+1. 先用最新正式 source 做 repo-wide consumer proof。
+2. 若涉及 persisted data，必須先有 Production / migration evidence。
+3. 刪除後必須有實際收益：降低 reads、listener、Function invocation、failure surface 或明確責任重疊。
+4. correctness fallback 不得為了 code cleanliness 被移除。
+5. 三品牌 path / identity / scope 必須重新確認。
+6. Security / admin recovery surface 若受影響，需同時檢查 Frontend、Backend、Rules、OCC / race boundary。
+7. 無實際 runtime 收益的 alias cleanup 預設不做 Production deploy cycle。
+
+目前明確 KEEP：
+
+```text
+Dashboard degraded detail fallback
+Annual fallback-month aggregate reads
+Current Store-Month Raw fail-safe
+Target editor Raw authority
+Annual KPI V1 persisted input reader
+Backend Annual KPI compatibility writer / rebuild response
+explicit audit / migration / recovery tools
+```
+
+## Next-phase decomposition rule
+
+下一個較高價值方向可評估 Frontend Responsibility Decomposition，但不能直接把巨型檔案拆小當作成果。
+
+優先候選：
+
+```text
+src/App.jsx
+src/hooks/useDashboardStats.js
+```
+
+每次 decomposition 前必須先列出：
+
+```text
+responsibility inventory
+data / authority owner
+Firestore listeners / queries / reads
+brand-path boundary
+Identity / Permission / Security dependency
+existing regression owners
+expected extraction seam
+rollback boundary
+```
+
+只有能縮小 regression blast radius、責任重疊或未來維護風險的 extraction 才值得實作。純搬檔、不減責任、不改善測試邊界的 refactor 不做。
+
+其他候選（非已批准工作）：
+
+```text
+shared Store Identity normalization consolidation
+therapist current-month read optimization if measured evidence shows material debt
+Backend persisted compatibility migration after explicit data-migration readiness
+```
+
+P2 final closeout 本身是 docs-only；沒有 runtime / Backend / Rules / Firestore path / version 變更，也不需 runtime deploy。
+
+---
+
 # P1-C Production Observability Guardrails — 2026-09-24
 
 P1-C CLOSED 後，`SystemMonitor` 的 Production health 功能必須維持 on-demand bounded-read contract。

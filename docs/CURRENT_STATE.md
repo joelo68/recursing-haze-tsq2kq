@@ -1,3 +1,130 @@
+# P2 Final Functional Closeout — 2026-10-01
+
+本節是 P2 的最新功能性結案判定。它不把「刪光所有 legacy / compatibility 字樣」當成完成條件，而以 Production read topology、authority、correctness 與安全 fallback 是否已收斂為準。
+
+Source Truth / Production lineage：
+
+```text
+final review source main           = ae248323f22a1dda98eafbfd44663c503de82462
+last P2 runtime source change      = 7f3558885454e7863b259ee645e14b7d385eeb2b
+production gh-pages                = a7054ef71738413caf5df1c72596adb758a349dc
+production index asset             = assets/index-DzMFEHWb.js
+CURRENT_APP_VERSION                = 3.6.0 unchanged
+```
+
+## Final scope decision
+
+```text
+P2 Firestore Read Debt Cleanup          = CORE CLOSED
+P2 Legacy Compatibility Retirement      = FUNCTIONALLY CLOSED
+P2-B1B2 shared-month mirror retirement  = NOT IMPLEMENTED / CANCELED BY FINAL SCOPE REVIEW
+```
+
+P2 的核心目的已完成：正常營運路徑採 Summary-first / event-driven / small-scoped authority；Raw / detail path 只在編輯 authority、明確 degraded state 或 correctness fail-safe 時保留。
+
+已完成的核心 read / authority 收斂：
+
+```text
+Historical Dashboard verified path
+→ dashboard_summary / monthly_targets_summary / summary_recalc_flags
+→ no normal historical daily_reports load
+→ no raw monthly_targets recovery
+→ no recalc_queue / maintenance_logs resident query in Dashboard hook
+
+Annual verified historical path
+→ selected-year dashboard_summary + summary_recalc_flags
+→ monthly_aggregated only for current / dirty / missing / stale fallback months
+→ fully trusted historical year can use zero monthly_aggregated fallback reads
+
+Audit > Target
+→ selected-month monthly_targets_summary single-document authority
+→ full Raw monthly_targets listener remains only where Target editing actually owns Raw state
+
+Current broad store-month consumers
+→ current_store_month_reports_status single-document readiness authority
+→ current_store_month_reports yearMonth-scoped projection
+→ bounded current-month daily_reports remains fail-safe when readiness / projection is unavailable
+```
+
+B1A / B1B1 已退役有明確 consumer-proof 的 dead Frontend compatibility surface。B1B2 audit 進一步證明 UI consumer 使用 `metrics.<kpi>.basedMonths / basedMonthCount`，但再移除 payload top-level shared-month mirrors 不會降低 reads、listener、Function invocation、security risk 或 Production failure surface，因此停止擴張 cleanup scope。
+
+## Intentionally retained compatibility
+
+下列項目是有責任邊界的 safety / compatibility，不是 P2 blocker：
+
+```text
+Dashboard dirty / missing / untrusted detail fallback
+Annual fallback-month monthly_aggregated
+Current Store-Month Raw fail-safe
+Target editor Raw monthly_targets authority
+Annual KPI V1 persisted-document input reader
+Backend Annual KPI persisted / response compatibility fields
+explicit high-privilege audit / migration / recovery surfaces
+```
+
+尤其：
+
+```text
+source.basedMonths / source.basedMonthCount
+→ V1 annual_kpi_summary input compatibility
+→ canonical metrics.<kpi>.basedMonths / basedMonthCount
+→ KEEP
+
+Backend annual_kpi_summary compatibility writer
+→ KEEP / DATA_MIGRATION_REQUIRED
+```
+
+未來只有同時具備以下條件才重新開 compatibility retirement：
+
+```text
+1. Production / migration evidence 證明舊 persisted data 已不需要
+2. repo-wide consumer proof = no runtime consumer
+3. 移除可實際降低 complexity / reads / failure surface
+4. brand isolation / security / regression boundary 可被完整驗證
+```
+
+不得因名稱含 `legacy`、`compatibility` 或 `fallback` 就機械刪除。
+
+## Current Store-Month evidence boundary
+
+較早 B4 章節記錄的是當時 staged 狀態，保留歷史 evidence，不機械改寫。現行 `main` 已包含 B4 projection consumer，且後續 Frontend Production publish 已包含該 runtime；本次 docs-only final closeout 不另宣稱一筆「專門針對 B4 projection path」的新 human smoke evidence。Raw fail-safe 因此繼續保留。
+
+## Next engineering direction
+
+P2 結案後，不再以逐欄 compatibility cleanup 作為預設工作。下一個較高價值方向是：
+
+```text
+Frontend Responsibility Decomposition
+priority owners:
+- src/App.jsx
+- src/hooks/useDashboardStats.js
+```
+
+開始任何 decomposition 前仍須重新做 Source Truth Gate、責任 inventory、read/security/brand boundary 與 regression blast-radius 分析；不得直接大規模重構。
+
+其他 future candidates：
+
+```text
+remaining duplicated Store Identity normalization
+therapist current-month read topology（only if measured read evidence justifies it）
+Backend persisted compatibility migration（only with data-migration evidence）
+```
+
+最終狀態：
+
+```text
+P2 CORE CLOSED                         = YES
+P2 COMPATIBILITY FUNCTIONALLY CLOSED   = YES
+B1B2 RUNTIME CHANGE                    = NO
+RUNTIME CHANGED BY FINAL CLOSEOUT      = NO
+DEPLOYMENT REQUIRED                    = NO
+CURRENT_APP_VERSION                    = 3.6.0 unchanged
+```
+
+Documentation Impact：本 final scope closeout 更新 `CURRENT_STATE.md`、`SYSTEM_SOURCE_MAP.md`、`DEVELOPMENT_GUIDE.md`；`ARCHITECTURE.md`、`AUTH_AND_SECURITY.md`、`DATA_FLOW.md`、`FIREBASE_DATA_MODEL.md`、`DEPLOYMENT.md`、`DASHBOARD_SUMMARY.md`、`MAINTENANCE_TOOLS.md`、`TELEGRAM_AGENT.md`、`DATA_IDENTITY_RULES.md`、`PROJECT_OPERATING_RULES.md` = None。
+
+---
+
 # P2-B1B1 Annual KPI Frontend Mirror Alias Retirement — 2026-10-01
 
 本批延續 P2 Legacy Compatibility Retirement，Source Gate 基準：
