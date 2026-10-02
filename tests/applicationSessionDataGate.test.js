@@ -9,9 +9,11 @@ const repoRoot = path.resolve(here, "..");
 const appPath = path.join(repoRoot, "src", "App.jsx");
 const gatePath = path.join(repoRoot, "src", "components", "DeviceApprovalGate.jsx");
 const annualAuthorityPath = path.join(repoRoot, "src", "hooks", "useAnnualDataAuthority.js");
+const targetViewPath = path.join(repoRoot, "src", "components", "TargetView.jsx");
 
 const app = fs.readFileSync(appPath, "utf8");
 const annualAuthority = fs.readFileSync(annualAuthorityPath, "utf8");
+const targetView = fs.readFileSync(targetViewPath, "utf8");
 const deviceGate = fs.readFileSync(gatePath, "utf8");
 
 const sliceBetween = (startToken, endToken) => {
@@ -88,8 +90,6 @@ test("operational App reads are gated by verified application session", () => {
   const requiredPatterns = [
     /if \(!hasVerifiedApplicationSession \|\| !brandId\) return undefined;/,
     /if \(!hasVerifiedApplicationSession\) return;\s+const unsubReadTrackerConfig/,
-    /const shouldKeepMonthlyTargetsLive =\s+Boolean\(hasVerifiedApplicationSession\)/,
-    /if \(!shouldLoadMonthlyTargets \|\| !hasVerifiedApplicationSession\)/,
     /if \(!hasVerifiedApplicationSession\) \{\s+setTargets\(/,
     /if \(!hasVerifiedApplicationSession \|\| !selectedYearMonth\) \{\s+setMonthlyTargetSummary/,
     /if \(!hasVerifiedApplicationSession \|\| !shouldLoadCurrentLifecycleMaster\)/,
@@ -114,6 +114,19 @@ test("operational App reads are gated by verified application session", () => {
     ) || []
   ).length;
   assert.equal(annualGateCount, 3);
+});
+
+
+test("Target editor Raw read is mounted only inside the authenticated targets view and is bounded", () => {
+  assert.match(app, /activeView === "targets" && canDirectorAccessView\("targets"\) && <TargetView \/>/);
+  assert.doesNotMatch(app, /onSnapshot\(\s*getCollectionPath\("monthly_targets"\)/);
+  assert.doesNotMatch(app, /const \[budgets, setBudgets\] = useState/);
+
+  assert.match(targetView, /const \[budgets, setBudgets\] = useState\(\{\}\)/);
+  assert.match(targetView, /if \(!targetReadScopeKey \|\| !selectedStore\) return undefined/);
+  assert.match(targetView, /if \(!isPageVisible \|\| !isOnline \|\| isLowPowerMode\)/);
+  assert.match(targetView, /where\(documentId\(\), ">=", prefix\)/);
+  assert.match(targetView, /where\(documentId\(\), "<=", `\$\{prefix\}\\uf8ff`\)/);
 });
 
 test("intentional pre-login surfaces remain narrow", () => {

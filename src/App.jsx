@@ -682,6 +682,16 @@ export default function App() {
     ...readMetaRef.current,
   }), []);
 
+  // Target editor owns the scoped monthly_targets read. Keep read-tracker metadata in App
+  // so the existing observability stream can compare pre/post optimization under the same label.
+  const trackTargetEditorRead = useCallback((mode = "live", snapshot = null) => {
+    if (!snapshot) return;
+    const label = mode === "legacy-fallback"
+      ? "monthly_targets_legacy_fallback"
+      : "monthly_targets_live";
+    trackSnapshotRead(label, snapshot, getStableReadMeta(label));
+  }, [getStableReadMeta]);
+
   const handleSwitchBrand = (brandId) => { setCurrentBrandId(brandId); setHasSelectedBrand(true); };
 
   const getCollectionPath = useCallback((collectionName) => {
@@ -1052,7 +1062,6 @@ export default function App() {
   }, []);
 
   const [rawData, setRawData] = useState([]); 
-  const [budgets, setBudgets] = useState({});
   const [monthlyTargetSummary, setMonthlyTargetSummary] = useState(null); // ★ monthly_targets_summary/{yearMonth}：Dashboard 目標資料輕量即時來源
   const [currentLifecycleMasterState, setCurrentLifecycleMasterState] = useState({
     brandId: "",
@@ -2676,58 +2685,9 @@ export default function App() {
 
   const lowFrequencyCacheRef = useRef({});
 
-  // ★ monthly_targets 穩定監聽：
-  // 完整 monthly_targets 只在真正需要編輯 / 檢核年度目標時讀取，避免一般頁面每次讀全年約 400+ docs。
-  // KPI 參數 kpi_targets 已拆成獨立 1-doc 常駐監聽，避免登出重登後回到預設值。
-  
-  // P2-A2.3：完整 monthly_targets 只保留給真正需要編輯 / 解鎖全年 Raw 目標的「年度目標設定」。
-  // 回報檢核 > 店家目標改吃既有 selected-month monthly_targets_summary 1-doc authority，
-  // 不再為檢核用途啟動完整 monthly_targets collection listener。
-  const shouldLoadMonthlyTargets = activeView === "targets";
-
-  // 完整目標資料屬高成本來源；只在真正需要、頁籤可見、連線正常且未進入省流量待機時保持監聽。
-  const shouldKeepMonthlyTargetsLive =
-    Boolean(hasVerifiedApplicationSession) &&
-    shouldLoadMonthlyTargets &&
-    isPageVisible &&
-    isOnline &&
-    !isLowPowerMode;
-
-  useEffect(() => {
-    if (!shouldLoadMonthlyTargets || !hasVerifiedApplicationSession) {
-      // 離開目標功能或登出時清空，避免切品牌後誤用舊品牌資料。
-      setBudgets({});
-      return undefined;
-    }
-
-    if (!shouldKeepMonthlyTargetsLive) {
-      // 背景分頁、離線或省流量待機時只取消即時監聽；保留畫面中的最後資料，
-      // 回到前景或恢復操作後會重新訂閱並取得最新版本。
-      return undefined;
-    }
-
-    const unsubBudgetTargets = onSnapshot(
-      getCollectionPath("monthly_targets"),
-      (budgetSnap) => {
-        trackSnapshotRead("monthly_targets_live", budgetSnap, getStableReadMeta("monthly_targets_live"));
-        const b = {};
-        budgetSnap.docs.forEach((d) => (b[d.id] = d.data()));
-        setBudgets(b);
-      },
-      (error) => console.error("monthly_targets 即時監聽失敗:", error)
-    );
-
-    return () => {
-      try { unsubBudgetTargets && unsubBudgetTargets(); } catch (error) { console.warn("monthly_targets unsubscribe failed", error); }
-    };
-  }, [
-    hasVerifiedApplicationSession,
-    currentBrandId,
-    getCollectionPath,
-    shouldLoadMonthlyTargets,
-    shouldKeepMonthlyTargetsLive,
-    getStableReadMeta,
-  ]);
+  // ★ P2 Read Optimization：Raw monthly_targets 的編輯 authority 已下放 TargetView。
+  // TargetView 只監聽「選定店家 × 選定年份」的 canonical document-id prefix；
+  // CYJ 新店 legacy alias 只做一次 bounded fallback。App 不再持有完整 collection listener / budgets mirror。
 
   // ★ KPI 參數獨立常駐監聽：
   // kpi_targets 只有 1 doc，必須在登入 / 品牌切換後穩定讀回，避免登出重登後還原成預設值。
@@ -2760,7 +2720,7 @@ export default function App() {
 
   // ★ monthly_targets_summary 輕量即時監聽：
   // 監聽「目前選擇月份」的目標 Summary，供 Dashboard / Ranking / Annual 等一般分析頁使用。
-  // 完整 monthly_targets 已改為必要頁面才讀，降低 monthly_targets_live 讀取量。
+  // Raw monthly_targets 編輯讀取已由 TargetView 改成 selected-store × selected-year bounded scope。
   useEffect(() => {
     if (!hasVerifiedApplicationSession || !selectedYearMonth) {
       setMonthlyTargetSummary(null);
@@ -4880,11 +4840,11 @@ export default function App() {
   }, [userRole, currentUser, currentBrandId, currentBrand, activeView]);
 
   const contextValue = useMemo(() => ({
-    user, loading, managers: visibleManagers, managerOrder: visibleManagerOrder, budgets, monthlyTargetSummary, currentLifecycleMasterState, currentDashboardSummary, currentRankingsSummary, currentReportSummaryReady, currentReportSummaryReadyYearMonth, currentReportSummaryReadyBrandId, currentSummaryRecalcFlagState, historicalDetailRefreshState, targets, rawData: visibleRawData, allReports: rawData,
+    user, loading, managers: visibleManagers, managerOrder: visibleManagerOrder, monthlyTargetSummary, currentLifecycleMasterState, currentDashboardSummary, currentRankingsSummary, currentReportSummaryReady, currentReportSummaryReadyYearMonth, currentReportSummaryReadyBrandId, currentSummaryRecalcFlagState, historicalDetailRefreshState, targets, rawData: visibleRawData, allReports: rawData,
     annualAggregatedData, annualDashboardSummaries, annualSummaryStatusMap, annualSummaryLoadState,
     annualMonthlyTargetSummaries, annualTargetSummaryLoadState, annualAggregateLoadState, therapistAnnualAggregatedData, // ★ 年度 trust / target / fallback readiness
     showToast, openConfirm, fmtMoney, fmtNum, inputDate, setInputDate, setTargets, selectedYear, selectedMonth, setSelectedYear, setSelectedMonth, permissions, storeAccounts, managerAuth, currentUser, userRole, logActivity, manageTherapistMasterAction, navigateToStore, activeView, appId,
-    therapists: visibleTherapists, therapistReports: visibleTherapistReports, therapistSchedules, therapistTargets, trainerAuth, systemExclusionState, auditExclusions, handleUpdateAuditExclusions, currentBrand, setCurrentBrandId, getCollectionPath, getDocPath, dailyLoginCount, yesterdayLoginCount, securityConfig, featureFlags, therapistModuleEnabled, isOnline, isLowPowerMode,
+    therapists: visibleTherapists, therapistReports: visibleTherapistReports, therapistSchedules, therapistTargets, trainerAuth, systemExclusionState, auditExclusions, handleUpdateAuditExclusions, currentBrand, setCurrentBrandId, getCollectionPath, getDocPath, dailyLoginCount, yesterdayLoginCount, securityConfig, featureFlags, therapistModuleEnabled, isOnline, isLowPowerMode, trackTargetEditorRead,
     currentDeviceTrust, currentSecurityAccountKey, manageDeviceSecurityAction, reviewDeviceApprovalAction, updateTelegramSecurityAlertConfig, manageApplicationAccountAction, manageAdministrativeSettingAction, manageManagerOrganizationAction, manageManagementDelegationAction, updateModulePermissions, updateProjectionContext, updateStoreSchedule, getProductionHealthSnapshotAction, canManageDeviceSecurity: isDeviceSecuritySuperAdmin, canRevealTherapistPassword: isDeviceSecuritySuperAdmin, canDeleteTherapistAccount: isDeviceSecuritySuperAdmin, openDeviceApprovalPanel,
     loginDirectory,
     fetchGlobalData,
@@ -4895,7 +4855,7 @@ export default function App() {
     directorPermissionProfile,
     canDirectorAccessView,
     isReadOnlyDirector: userRole === "director" && !canDirectorAccessView("history")
-  }), [user, loading, visibleManagers, visibleManagerOrder, budgets, monthlyTargetSummary, currentLifecycleMasterState, currentDashboardSummary, currentRankingsSummary, currentReportSummaryReady, currentReportSummaryReadyYearMonth, currentReportSummaryReadyBrandId, currentSummaryRecalcFlagState, historicalDetailRefreshState, targets, visibleRawData, rawData, annualAggregatedData, annualDashboardSummaries, annualSummaryStatusMap, annualSummaryLoadState, annualMonthlyTargetSummaries, annualTargetSummaryLoadState, annualAggregateLoadState, therapistAnnualAggregatedData, inputDate, selectedYear, selectedMonth, permissions, storeAccounts, managerAuth, currentUser, userRole, logActivity, manageTherapistMasterAction, navigateToStore, activeView, appId, visibleTherapists, visibleTherapistReports, therapistSchedules, therapistTargets, trainerAuth, systemExclusionState, auditExclusions, handleUpdateAuditExclusions, currentBrand, setCurrentBrandId, getCollectionPath, getDocPath, dailyLoginCount, yesterdayLoginCount, securityConfig, featureFlags, therapistModuleEnabled, isOnline, isLowPowerMode, currentDeviceTrust, currentSecurityAccountKey, manageDeviceSecurityAction, reviewDeviceApprovalAction, updateTelegramSecurityAlertConfig, manageApplicationAccountAction, manageAdministrativeSettingAction, manageManagerOrganizationAction, manageManagementDelegationAction, updateModulePermissions, updateProjectionContext, updateStoreSchedule, getProductionHealthSnapshotAction, isDeviceSecuritySuperAdmin, openDeviceApprovalPanel, loginDirectory, fetchGlobalData, managers, delegations, activeDelegations, delegationAccess, accessibleStores, officialStores, delegatedStores, refreshDelegations, canAccessStore, canEditStoreReport, getActiveDelegationForStore, directorLevel, directorPermissionProfile, canDirectorAccessView]); // ★ 依賴陣列也要加
+  }), [user, loading, visibleManagers, visibleManagerOrder, monthlyTargetSummary, currentLifecycleMasterState, currentDashboardSummary, currentRankingsSummary, currentReportSummaryReady, currentReportSummaryReadyYearMonth, currentReportSummaryReadyBrandId, currentSummaryRecalcFlagState, historicalDetailRefreshState, targets, visibleRawData, rawData, annualAggregatedData, annualDashboardSummaries, annualSummaryStatusMap, annualSummaryLoadState, annualMonthlyTargetSummaries, annualTargetSummaryLoadState, annualAggregateLoadState, therapistAnnualAggregatedData, inputDate, selectedYear, selectedMonth, permissions, storeAccounts, managerAuth, currentUser, userRole, logActivity, manageTherapistMasterAction, navigateToStore, activeView, appId, visibleTherapists, visibleTherapistReports, therapistSchedules, therapistTargets, trainerAuth, systemExclusionState, auditExclusions, handleUpdateAuditExclusions, currentBrand, setCurrentBrandId, getCollectionPath, getDocPath, dailyLoginCount, yesterdayLoginCount, securityConfig, featureFlags, therapistModuleEnabled, isOnline, isLowPowerMode, trackTargetEditorRead, currentDeviceTrust, currentSecurityAccountKey, manageDeviceSecurityAction, reviewDeviceApprovalAction, updateTelegramSecurityAlertConfig, manageApplicationAccountAction, manageAdministrativeSettingAction, manageManagerOrganizationAction, manageManagementDelegationAction, updateModulePermissions, updateProjectionContext, updateStoreSchedule, getProductionHealthSnapshotAction, isDeviceSecuritySuperAdmin, openDeviceApprovalPanel, loginDirectory, fetchGlobalData, managers, delegations, activeDelegations, delegationAccess, accessibleStores, officialStores, delegatedStores, refreshDelegations, canAccessStore, canEditStoreReport, getActiveDelegationForStore, directorLevel, directorPermissionProfile, canDirectorAccessView]); // ★ 依賴陣列也要加
   
   const memoizedViews = useMemo(() => {
     return (

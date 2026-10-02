@@ -839,15 +839,20 @@ updatedBy
 
 ### 高成本資料源
 
-P2-A2.3 起，App 將完整 `monthly_targets` listener 只保留在真正需要編輯、解鎖與全年 Raw 目標的功能：
+P2 Read Optimization 起，年度目標設定不再監聽完整 `monthly_targets` collection。Raw 編輯 authority 收斂到 `TargetView`，只讀目前「選定店家 × 選定年份」：
 
 ```text
-年度目標設定
+TargetView
+→ canonical document-id prefix live query
+→ selected store × selected year
+→ 正常最多 12 個月 Raw target docs
 ```
 
-`回報檢核 > 店家目標` 改用既有 selected-month `monthly_targets_summary/{YYYY-MM}` 單文件 authority，不再啟動完整 `monthly_targets` collection listener。檢核端使用 Target Coverage metadata 判斷 missing 狀態；explicit numeric `0` 維持 `VALID_ZERO / configured`，authority conflict、invalid 或 Summary brand/month/coverage 未就緒時 fail closed。
+CYJ `新店` 為保留歷史 alias 相容，只有選到該店時才額外執行同年度 legacy document-id prefix 的 bounded one-shot fallback；canonical row 永遠優先。重新儲存／解鎖仍沿用既有 canonical write + legacy delete migration。
 
-Dashboard / Ranking / Annual 仍優先使用 Summary。
+頁籤背景、離線或 Low Power 時會取消 canonical live query 並停止編輯；恢復前景／連線後重新同步。這個 cutover 不新增 polling、不新增 Backend/Rules authority，也不改 `VALID_ZERO / TARGET_NOT_SET / challenge` semantics。
+
+`回報檢核 > 店家目標` 維持既有 selected-month `monthly_targets_summary/{YYYY-MM}` 單文件 authority，不讀 Raw collection。Dashboard / Ranking / Annual 仍優先使用 Summary。
 
 ---
 

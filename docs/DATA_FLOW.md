@@ -964,7 +964,7 @@ Cash / Accrual 不再共用一個 combined coverage 判斷。Lifecycle 尚未 RE
 
 目前普通 Dashboard / Ranking / Annual / Telegram 等既有 consumer **尚未全部切換**使用此新 metadata；後續 consumer Batch 才正式 cutover。Batch 3 的目的先把上游 authority 寫正。
 
-完整 `monthly_targets` listener 仍只在真正編輯／完整檢核目標時啟動；Batch 3 沒有新增 all-target persistent listener。
+P2 Read Optimization 後，Frontend 已退役完整 `monthly_targets` collection listener。年度目標編輯器由 `TargetView` 直接持有 scoped Raw authority：canonical 路徑只監聽「選定店家 × 選定年份」document-id prefix（正常最多 12 個月 docs）；CYJ新店 legacy alias 只做同年度 bounded one-shot fallback。Audit / Dashboard 等一般 consumer 維持 Summary-first，不會因這個 cutover 新增 Raw listener。
 
 ---
 

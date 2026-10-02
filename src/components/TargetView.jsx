@@ -3,7 +3,7 @@ import React, { useState, useContext, useEffect, useMemo } from "react";
 import { 
   Save, Calendar, Store, DollarSign, CreditCard, TrendingUp, Lock, Unlock, CheckCircle, Star, X 
 } from "lucide-react";
-import { doc, writeBatch, serverTimestamp, deleteField } from "firebase/firestore";
+import { doc, documentId, getDocs, onSnapshot, query, where, writeBatch, serverTimestamp, deleteField } from "firebase/firestore";
 
 import { db, appId } from "../config/firebase";
 import { AppContext } from "../AppContext";
@@ -46,16 +46,29 @@ const hasConfiguredBaseTarget = (row = null) => {
   return validBaseTarget(row.cashTarget).valid || validBaseTarget(row.accrualTarget).valid;
 };
 
+const createEmptyMonthTargets = () => Array.from({ length: 12 }, (_, i) => ({
+  month: i + 1,
+  cashTarget: "",
+  accrualTarget: "",
+  challengeCashTarget: "",
+  challengeAccrualTarget: "",
+  isUnlocked: false,
+  isChallengeExpanded: false,
+  isDirty: false,
+}));
+
 const TargetView = () => {
   const { 
     userRole, 
     managers, managerOrder, 
     currentUser, 
-    budgets, 
     showToast, 
     logActivity,
     getCollectionPath,
-    currentBrand
+    currentBrand,
+    isOnline,
+    isLowPowerMode,
+    trackTargetEditorRead,
   } = useContext(AppContext);
 
   const currentYear = new Date().getFullYear();
@@ -63,19 +76,13 @@ const TargetView = () => {
   const [selectedManager, setSelectedManager] = useState("");
   const [selectedStore, setSelectedStore] = useState("");
   const [isSaving, setIsSaving] = useState(false);
+  const [budgets, setBudgets] = useState({});
+  const [targetReadState, setTargetReadState] = useState({ scopeKey: "", status: "idle", error: "", loaded: false });
+  const [isPageVisible, setIsPageVisible] = useState(() => (
+    typeof document === "undefined" ? true : document.visibilityState !== "hidden"
+  ));
 
-  const [monthTargets, setMonthTargets] = useState(
-    Array.from({ length: 12 }, (_, i) => ({ 
-      month: i + 1, 
-      cashTarget: "", 
-      accrualTarget: "",
-      challengeCashTarget: "",
-      challengeAccrualTarget: "",
-      isUnlocked: false,
-      isChallengeExpanded: false,
-      isDirty: false,
-    }))
-  );
+  const [monthTargets, setMonthTargets] = useState(createEmptyMonthTargets);
 
   const brandPrefix = useMemo(() => {
     let name = "CYJ";
@@ -93,6 +100,14 @@ const TargetView = () => {
     }
     return name;
   }, [currentBrand]);
+
+  useEffect(() => {
+    if (typeof document === "undefined") return undefined;
+    const syncVisibility = () => setIsPageVisible(document.visibilityState !== "hidden");
+    syncVisibility();
+    document.addEventListener("visibilitychange", syncVisibility);
+    return () => document.removeEventListener("visibilitychange", syncVisibility);
+  }, []);
 
 
   const availableStores = useMemo(() => {
@@ -174,11 +189,154 @@ const TargetView = () => {
     return canonicalKey;
   };
 
+  const canonicalTargetPrefix = selectedStore
+    ? getCanonicalTargetBudgetKey(selectedStore, selectedYear, 1).replace(/_1$/, "_")
+    : "";
+  const legacyTargetPrefix = selectedStore
+    ? getLegacyCyjNewStoreBudgetKey(selectedStore, selectedYear, 1).replace(/_1$/, "_")
+    : "";
+  const targetReadBrandKey = typeof currentBrand === "string"
+    ? currentBrand
+    : (currentBrand?.id || brandPrefix);
+  const targetReadScopeKey = canonicalTargetPrefix
+    ? `${targetReadBrandKey}|${canonicalTargetPrefix}`
+    : "";
+
+  const targetReadReady = Boolean(
+    targetReadScopeKey &&
+    targetReadState.scopeKey === targetReadScopeKey &&
+    targetReadState.status === "ready"
+  );
+
+  const targetReadHydrated = Boolean(
+    targetReadScopeKey &&
+    targetReadState.scopeKey === targetReadScopeKey &&
+    targetReadState.loaded
+  );
+
+  // P2 Read Optimization：年度目標編輯器不再讀整個 monthly_targets collection。
+  // canonical Raw 只保留「選定店家 × 選定年份」document-id prefix 的單一 live query；
+  // CYJ 新店歷史 alias 只做一次 bounded one-shot fallback，canonical 永遠優先。
   useEffect(() => {
-    if (!selectedStore) {
-      setMonthTargets(Array.from({ length: 12 }, (_, i) => ({ 
-        month: i + 1, cashTarget: "", accrualTarget: "", challengeCashTarget: "", challengeAccrualTarget: "", isUnlocked: false, isChallengeExpanded: false, isDirty: false
-      })));
+    setBudgets({});
+    setTargetReadState({
+      scopeKey: targetReadScopeKey,
+      status: targetReadScopeKey ? "loading" : "idle",
+      error: "",
+      loaded: false,
+    });
+  }, [targetReadScopeKey]);
+
+  useEffect(() => {
+    if (!targetReadScopeKey || !selectedStore) return undefined;
+
+    if (!isPageVisible || !isOnline || isLowPowerMode) {
+      setTargetReadState((previous) => ({
+        ...previous,
+        scopeKey: targetReadScopeKey,
+        status: "paused",
+        error: "",
+      }));
+      return undefined;
+    }
+
+    let cancelled = false;
+    let canonicalRows = {};
+    let legacyRows = {};
+    let canonicalReady = false;
+
+    const buildPrefixQuery = (prefix) => query(
+      getCollectionPath("monthly_targets"),
+      where(documentId(), ">=", prefix),
+      where(documentId(), "<=", `${prefix}\uf8ff`)
+    );
+    let legacyReady = !legacyTargetPrefix;
+
+    setTargetReadState((previous) => ({
+      ...previous,
+      scopeKey: targetReadScopeKey,
+      status: "loading",
+      error: "",
+    }));
+
+    const publishRows = () => {
+      if (cancelled) return;
+      setBudgets({ ...legacyRows, ...canonicalRows });
+      if (canonicalReady && legacyReady) {
+        setTargetReadState({ scopeKey: targetReadScopeKey, status: "ready", error: "", loaded: true });
+      }
+    };
+
+    const canonicalQuery = buildPrefixQuery(canonicalTargetPrefix);
+    const unsubscribe = onSnapshot(
+      canonicalQuery,
+      (budgetSnap) => {
+        if (cancelled) return;
+        const nextCanonicalRows = {};
+        budgetSnap.docs.forEach((targetDoc) => {
+          nextCanonicalRows[targetDoc.id] = targetDoc.data();
+        });
+        canonicalRows = nextCanonicalRows;
+        canonicalReady = true;
+        trackTargetEditorRead?.("live", budgetSnap);
+        publishRows();
+      },
+      (error) => {
+        if (cancelled) return;
+        console.error("monthly_targets scoped 即時監聽失敗:", error);
+        setTargetReadState({
+          scopeKey: targetReadScopeKey,
+          status: "error",
+          error: "目標資料同步失敗，請重新整理後再試",
+          loaded: false,
+        });
+      }
+    );
+
+    if (legacyTargetPrefix) {
+      getDocs(buildPrefixQuery(legacyTargetPrefix))
+        .then((legacySnap) => {
+          if (cancelled) return;
+          const nextLegacyRows = {};
+          legacySnap.docs.forEach((targetDoc) => {
+            nextLegacyRows[targetDoc.id] = targetDoc.data();
+          });
+          legacyRows = nextLegacyRows;
+          legacyReady = true;
+          trackTargetEditorRead?.("legacy-fallback", legacySnap);
+          publishRows();
+        })
+        .catch((error) => {
+          if (cancelled) return;
+          console.error("CYJ新店 legacy monthly_targets fallback 讀取失敗:", error);
+          setTargetReadState({
+            scopeKey: targetReadScopeKey,
+            status: "error",
+            error: "歷史目標相容資料同步失敗，已停止編輯以避免覆寫",
+            loaded: false,
+          });
+        });
+    }
+
+    return () => {
+      cancelled = true;
+      try { unsubscribe?.(); } catch (error) { console.warn("monthly_targets scoped unsubscribe failed", error); }
+    };
+  }, [
+    targetReadScopeKey,
+    canonicalTargetPrefix,
+    legacyTargetPrefix,
+    selectedStore,
+    getCollectionPath,
+    isPageVisible,
+    isOnline,
+    isLowPowerMode,
+    trackTargetEditorRead,
+  ]);
+
+  useEffect(() => {
+    if (!selectedStore || !targetReadHydrated) {
+      setMonthTargets(createEmptyMonthTargets());
       return;
     }
 
@@ -201,7 +359,7 @@ const TargetView = () => {
     });
     
     setMonthTargets(newTargets);
-  }, [selectedStore, selectedYear, budgets]);
+  }, [selectedStore, selectedYear, budgets, targetReadHydrated]);
 
   const isDataLockedForStore = (monthIndex) => {
     if (monthTargets[monthIndex].isUnlocked) {
@@ -214,6 +372,7 @@ const TargetView = () => {
   };
 
   const isInputDisabled = (monthIndex) => {
+    if (!targetReadReady) return true;
     if (userRole === "director" || userRole === "manager" || userRole === "trainer") {
       return false; 
     }
@@ -221,6 +380,10 @@ const TargetView = () => {
   };
 
   const handleUnlock = async (monthIndex) => {
+    if (!targetReadReady) {
+      showToast("目標資料尚未同步完成，請稍後再試", "error");
+      return;
+    }
     const month = monthIndex + 1;
     const confirmUnlock = window.confirm(`確定要「開放修改」 ${selectedStore} ${month} 月的目標嗎？\n\n(注意：解鎖後原數字會保留，店長可重新登入修改，存檔後將再次鎖定)`);
 
@@ -327,6 +490,10 @@ const TargetView = () => {
   };
 
   const handleSaveAll = async () => {
+    if (!targetReadReady) {
+      showToast("目標資料尚未同步完成，為避免覆寫已停止儲存", "error");
+      return;
+    }
     if (!selectedStore) {
       showToast("請選擇店家", "error");
       return;
@@ -536,6 +703,20 @@ const TargetView = () => {
           </div>
         </Card>
 
+        {selectedStore && targetReadState.status !== "ready" && (
+          <div className={`rounded-2xl border px-4 py-3 text-sm font-bold ${
+            targetReadState.status === "error"
+              ? "border-rose-200 bg-rose-50 text-rose-600"
+              : "border-amber-200 bg-amber-50 text-amber-700"
+          }`}>
+            {targetReadState.status === "error"
+              ? (targetReadState.error || "目標資料同步失敗，已暫停編輯")
+              : targetReadState.status === "paused"
+                ? "目前離線、背景分頁或省流量待機中；恢復連線後會自動重新同步目標資料。"
+                : "正在同步此店家所選年度的目標資料…"}
+          </div>
+        )}
+
         {selectedStore ? (
           <>
             <div className="hidden md:block animate-in fade-in slide-in-from-bottom-4 duration-500">
@@ -602,7 +783,9 @@ const TargetView = () => {
                               <td className="py-2 px-2 text-center align-middle">
                                 <div className="flex flex-col items-center justify-center gap-2">
                                   <div className="h-6 flex items-center">
-                                    {storeLocked ? (
+                                    {!targetReadReady ? (
+                                      <span className="text-[10px] font-bold text-amber-500">同步中</span>
+                                    ) : storeLocked ? (
                                       isManagementRole ? (
                                         <button 
                                           type="button"
@@ -748,7 +931,11 @@ const TargetView = () => {
                             item.isUnlocked ? <Unlock size={16} className="text-amber-500 animate-pulse" /> : <CheckCircle size={16} className="text-emerald-500"/>
                         )}
                       </h4>
-                      {storeLocked ? (
+                      {!targetReadReady ? (
+                        <div className="flex items-center gap-1 text-xs font-bold text-amber-600 bg-amber-50 border border-amber-100 px-2 py-1 rounded-lg">
+                          <Calendar size={12} /> 同步中
+                        </div>
+                      ) : storeLocked ? (
                          isManagementRole ? (
                            <button 
                              type="button"
@@ -884,7 +1071,7 @@ const TargetView = () => {
                <button
                  type="button"
                  onClick={handleSaveAll}
-                 disabled={isSaving}
+                 disabled={isSaving || !targetReadReady}
                  className="w-full md:w-auto px-8 py-4 md:py-3 bg-stone-800 text-white rounded-2xl md:rounded-xl font-bold shadow-2xl md:shadow-lg hover:bg-stone-700 hover:shadow-xl active:scale-95 transition-all flex items-center justify-center gap-2 disabled:opacity-50"
                >
                  {isSaving ? "儲存中..." : <><Save size={20} /> 儲存設定</>}

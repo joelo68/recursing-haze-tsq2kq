@@ -2005,7 +2005,7 @@ HistoryView display 不再對 `新店` 使用「省略最後一個店」的頁�
 - daily audit cutoff
 - 店家 / 管理師缺報與目標檢核
 - audit exclusion
-- P2-A2.3：`店家目標` 使用 selected-month `monthly_targets_summary/{YYYY-MM}` 1-doc authority；完整 `monthly_targets` Raw listener 只保留給年度目標設定
+- P2-A2.3：`店家目標` 使用 selected-month `monthly_targets_summary/{YYYY-MM}` 1-doc authority；P2 Read Optimization 後年度目標設定也不再啟動 full collection listener，而改為 selected-store × selected-year bounded Raw read
 
 ---
 
@@ -2020,7 +2020,21 @@ HistoryView display 不再對 `新店` 使用「省略最後一個店」的頁�
 
 `monthly_targets_summary` 自 Batch 3 起改由 Backend event-driven writer 維護，Frontend 不再直接寫 Derived Target Summary。
 
-目前 Batch 3 source 已具有：
+P2 Read Optimization 後 Raw read owner 也收斂到 `TargetView`：
+
+```text
+selectedStore + selectedYear
+→ canonical monthly_targets document-id prefix live query
+→ 正常最多 12 個月 docs
+
+CYJ新店
+→ 同年度 legacy alias prefix one-shot fallback
+→ canonical-first merge
+```
+
+`App.jsx` 不再保存 `budgets` mirror，也不再持有完整 `monthly_targets` collection listener。品牌實體 path 仍只透過 `getCollectionPath("monthly_targets")` resolver；前景／online／Low Power gating 保留，且同步未 READY 時 TargetView fail closed 禁止儲存／解鎖。
+
+目前 Batch 3 / P2 source 已具有：
 
 - canonical target store name
 - canonical target document key

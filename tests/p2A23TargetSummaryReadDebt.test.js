@@ -10,6 +10,7 @@ import {
 
 const app = fs.readFileSync(new URL("../src/App.jsx", import.meta.url), "utf8");
 const audit = fs.readFileSync(new URL("../src/components/AuditView.jsx", import.meta.url), "utf8");
+const targetView = fs.readFileSync(new URL("../src/components/TargetView.jsx", import.meta.url), "utf8");
 const dataModel = fs.readFileSync(new URL("../docs/FIREBASE_DATA_MODEL.md", import.meta.url), "utf8");
 const sourceMap = fs.readFileSync(new URL("../docs/SYSTEM_SOURCE_MAP.md", import.meta.url), "utf8");
 
@@ -33,11 +34,9 @@ const makeSummary = (overrides = {}) => ({
 });
 
 test("P2-A2.3 Audit target no longer activates full monthly_targets listener", () => {
-  assert.match(app, /const shouldLoadMonthlyTargets = activeView === "targets";/);
-  assert.doesNotMatch(
-    app,
-    /shouldLoadMonthlyTargets\s*=[\s\S]{0,220}activeView === "audit" && auditType === "target"/
-  );
+  assert.doesNotMatch(app, /const shouldLoadMonthlyTargets = activeView === "targets";/);
+  assert.doesNotMatch(app, /onSnapshot\(\s*getCollectionPath\("monthly_targets"\)/);
+  assert.doesNotMatch(audit, /onSnapshot\s*\(/);
   assert.match(app, /doc\(getCollectionPath\("monthly_targets_summary"\), selectedYearMonth\)/);
 });
 
@@ -153,16 +152,28 @@ test("P2-A2.3 authority conflict and invalid targets fail closed", () => {
   assert.equal(invalid.status, AUDIT_TARGET_AUTHORITY_STATUS.DATA_INVALID);
 });
 
-test("P2-A2.3 Target editor keeps full Raw authority and no new listener or polling is added", () => {
+test("P2 Read Optimization: Target editor keeps Raw authority but App full collection listener is retired", () => {
   assert.match(app, /activeView === "targets"/);
-  assert.match(app, /trackSnapshotRead\("monthly_targets_live"/);
-  assert.equal((app.match(/trackSnapshotRead\("monthly_targets_live"/g) || []).length, 1);
+  assert.match(app, /trackSnapshotRead\(label, snapshot, getStableReadMeta\(label\)\)/);
+  assert.match(app, /"monthly_targets_live"/);
+  assert.doesNotMatch(app, /onSnapshot\(\s*getCollectionPath\("monthly_targets"\)/);
+  assert.doesNotMatch(app, /const \[budgets, setBudgets\] = useState/);
+
+  assert.match(targetView, /where\(documentId\(\), ">=", prefix\)/);
+  assert.match(targetView, /where\(documentId\(\), "<=", `\$\{prefix\}\\uf8ff`\)/);
+  assert.match(targetView, /trackTargetEditorRead\?\.\("live", budgetSnap\)/);
+  assert.match(targetView, /getDocs\(buildPrefixQuery\(legacyTargetPrefix\)\)/);
+  assert.doesNotMatch(targetView, /setInterval\s*\(/);
+
   assert.equal((app.match(/monthly_targets_summary_live/g) || []).length >= 1, true);
   assert.doesNotMatch(audit, /onSnapshot\s*\(/);
   assert.doesNotMatch(audit, /setInterval\s*\(/);
 });
 
-test("P2-A2.3 documentation records the Summary-first target audit topology", () => {
-  assert.match(dataModel, /`回報檢核 > 店家目標` 改用既有 selected-month `monthly_targets_summary\/\{YYYY-MM\}` 單文件 authority/);
+test("documentation records Summary-first audit plus bounded Target editor Raw topology", () => {
+  assert.match(dataModel, /年度目標設定不再監聽完整 `monthly_targets` collection/);
+  assert.match(dataModel, /selected store × selected year/);
+  assert.match(dataModel, /bounded one-shot fallback/);
   assert.match(sourceMap, /P2-A2\.3：`店家目標` 使用 selected-month `monthly_targets_summary\/\{YYYY-MM\}` 1-doc authority/);
+  assert.match(sourceMap, /selected-store × selected-year bounded Raw read/);
 });

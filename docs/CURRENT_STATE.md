@@ -738,7 +738,13 @@ Annual verified historical path
 
 Audit > Target
 → selected-month monthly_targets_summary single-document authority
-→ full Raw monthly_targets listener remains only where Target editing actually owns Raw state
+→ no Raw monthly_targets listener
+
+Target editor Raw authority
+→ TargetView owns selected-store × selected-year canonical document-id prefix live query
+→ normal scope is at most 12 monthly Raw docs
+→ CYJ新店 legacy alias is bounded one-shot fallback only
+→ App no longer owns a full monthly_targets collection listener / budgets mirror
 
 Current broad store-month consumers
 → current_store_month_reports_status single-document readiness authority
@@ -756,7 +762,7 @@ B1A / B1B1 已退役有明確 consumer-proof 的 dead Frontend compatibility sur
 Dashboard dirty / missing / untrusted detail fallback
 Annual fallback-month monthly_aggregated
 Current Store-Month Raw fail-safe
-Target editor Raw monthly_targets authority
+Target editor bounded Raw monthly_targets authority
 Annual KPI V1 persisted-document input reader
 Backend Annual KPI persisted / response compatibility fields
 explicit high-privilege audit / migration / recovery surfaces
