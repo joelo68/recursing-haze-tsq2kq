@@ -14,7 +14,11 @@ const lowFrequencyBlock = app.slice(lowFrequencyStart, lowFrequencyEnd);
 test("P2-A2.1 Dashboard store mode does not own therapist target year listener", () => {
   assert.match(
     lowFrequencyBlock,
-    /activeView === "dashboard"[\s\S]*dashboardViewMode === "therapist"[\s\S]*userRole === "therapist"[\s\S]*userRole === "trainer"/
+    /activeView === "dashboard"[\s\S]*dashboardViewMode === "therapist"[\s\S]*userRole === "therapist"/
+  );
+  assert.doesNotMatch(
+    lowFrequencyBlock,
+    /dashboardViewMode === "therapist"[\s\S]*userRole === "therapist"[\s\S]*userRole === "trainer"/
   );
   assert.doesNotMatch(
     lowFrequencyBlock,

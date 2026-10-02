@@ -1365,7 +1365,7 @@ export function useDashboardStats() {
   }, [dashboardSummaryBundle.dashboard, effectiveStores, cleanName, getSummaryStoreName, getSummaryStoreCandidates, normalizeSummaryStores, summaryStoreMatchesSet, isSelectedCurrentMonth, isSummaryTrustedForDashboard]);
 
   const summaryTherapistStats = useMemo(() => {
-    if (viewMode !== "therapist" && userRole !== "therapist" && userRole !== "trainer") return null;
+    if (viewMode !== "therapist" && userRole !== "therapist") return null;
     // Excluded own-store self-view 不信任 therapist_summary 的 Formal exclusion scope；
     // Dashboard 人員模式沿用既有 therapist detail read path，只限自己的 effectiveStores。
     if (storeSelfViewActive && userRole === "store") return null;
@@ -1800,7 +1800,7 @@ export function useDashboardStats() {
   const detailTherapistStats = useMemo(() => {
     const emptyTherapistStats = { rankings: [], myStats: null, grandTotal: {}, yesterdayTop3: [], todayTop3: [], myYearlyTotal: 0, source: "not_loaded" };
     if (!isTherapistModuleEnabled) return emptyTherapistStats;
-    if (viewMode !== "therapist" && userRole !== "therapist" && userRole !== "trainer") return emptyTherapistStats;
+    if (viewMode !== "therapist" && userRole !== "therapist") return emptyTherapistStats;
     if (!therapistReports) return emptyTherapistStats; 
     
     const currentMonthReports = therapistReports.filter(r => {

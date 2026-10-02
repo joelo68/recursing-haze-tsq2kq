@@ -3016,15 +3016,15 @@ export default function App() {
 
         const shouldLoadSchedules = therapistModuleEnabled && (activeView === "t-schedule" || (activeView === "audit" && auditType === "therapist-daily"));
 
-        // P2-A2.1：Dashboard 店鋪模式不需要管理師年度目標。
-        // 只有切到人員績效，或登入角色本身固定使用人員績效時，才啟動全年 therapist_targets listener。
+        // P2-A2.1 / Trainer Dashboard Mode：Dashboard 門市模式不需要管理師年度目標。
+        // 可切換角色（含教專）只在 viewMode=therapist 時啟動；管理師角色本身固定使用人員績效。
         // t-targets / therapist-target audit 仍保留原本完整年度 live authority。
         const shouldLoadTherapistTargets = therapistModuleEnabled && (
           activeView === "t-targets" ||
           (activeView === "audit" && auditType === "therapist-target") ||
           (
             activeView === "dashboard" &&
-            (dashboardViewMode === "therapist" || userRole === "therapist" || userRole === "trainer")
+            (dashboardViewMode === "therapist" || userRole === "therapist")
           )
         );
 
@@ -3491,7 +3491,7 @@ export default function App() {
         MONTHLY_THERAPIST_REPORT_DATA_VIEWS.has(activeView) &&
         auditNeedsTherapistReports
       ) ||
-      (activeView === "dashboard" && (dashboardViewMode === "therapist" || userRole === "therapist" || userRole === "trainer"))
+      (activeView === "dashboard" && (dashboardViewMode === "therapist" || userRole === "therapist"))
     );
 
     if (!hasVerifiedApplicationSession || isLowPowerMode || (!shouldLoadDailyReportData && !shouldLoadTherapistReportData)) {

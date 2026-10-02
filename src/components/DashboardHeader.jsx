@@ -172,7 +172,7 @@ const DashboardHeader = ({
             </div>
           </div>
 
-          {isTherapistModuleEnabled && userRole !== 'therapist' && userRole !== 'trainer' && (
+          {isTherapistModuleEnabled && userRole !== 'therapist' && (
             <>
               <div className="hidden sm:block w-px h-10 bg-stone-100"></div>
               <div className="bg-stone-100/80 p-1 rounded-2xl flex shadow-inner w-fit border border-stone-200/50">

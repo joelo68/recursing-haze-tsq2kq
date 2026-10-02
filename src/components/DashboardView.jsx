@@ -50,7 +50,6 @@ const DashboardView = () => {
   const isStoreViewActive = (
     viewMode === 'store'
     && userRole !== 'therapist'
-    && userRole !== 'trainer'
   );
   const isTherapistViewActive = isTherapistModuleEnabled && viewMode === 'therapist';
 
