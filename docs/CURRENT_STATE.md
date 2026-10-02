@@ -1,3 +1,138 @@
+# P3 Projection Natural Evidence Automation — P3-A Natural Production Readback — 2026-10-02
+
+P3 已正式進入自然 Production evidence 觀察階段。本批以正式 source `main @ 8f9cf24245fbf85bd0f00e110e99c9f8944a8a58` 對 2026-09 執行 READ-ONLY Production point-read 驗證；沒有修改 Firestore、runtime source、Projection formula 或正式資料。
+
+Source Gate：
+
+```text
+main / origin-main                    = 8f9cf24245fbf85bd0f00e110e99c9f8944a8a58
+worktree                              = CLEAN
+CURRENT_APP_VERSION                   = 3.6.0 unchanged
+P2                                    = CLOSED
+```
+
+P3-A Production readback：
+
+```text
+Firestore point-read requests         = 11
+Firestore writes                      = 0
+collection scan                       = 0
+listener                              = 0
+polling                               = 0
+transport failure                     = NONE
+unexpected evidence gap               = NONE
+RESULT                                = PASS
+```
+
+## Natural Checkpoint Evidence
+
+2026-09 三品牌皆已自然產生正式 `projection_accuracy/{YYYY-MM}` checkpoint evidence：
+
+```text
+CYJ     = day10 / day15 / day20 / day25
+安妞    = day10 / day15 / day20 / day25
+伊啵    = day10 / day15 / day20 / day25
+```
+
+因此：
+
+```text
+first natural checkpoint evidence
+= PRODUCTION OBSERVED
+```
+
+CYJ / 安妞 checkpoint 使用 `projection-strategy-v2-phase-calibrated`，且觀察到的四個 checkpoint 皆有 cash / accrual phase applied。伊啵維持 V1 隔離，不借用 CYJ / 安妞 V2 phase authority。
+
+## Natural Month-Final Scoring
+
+2026-09 已觀察到 verified Summary 驅動的自然 month-final score：
+
+```text
+CYJ
+summary verified                      = YES
+finalActual.source                    = verified_dashboard_summary
+scoreRevision                         = 3
+scoredAtText                          = 2026-10-01T09:06:16.164Z
+
+安妞
+summary verified                      = YES
+finalActual.source                    = verified_dashboard_summary
+scoreRevision                         = 10
+scoredAtText                          = 2026-10-01T13:11:15.740Z
+```
+
+因此：
+
+```text
+first natural month-final score
+= PRODUCTION OBSERVED（CYJ / 安妞）
+```
+
+伊啵 2026-09 readback：
+
+```text
+projection_accuracy checkpoint        = EXISTS
+dashboard_summary                     = NOT PRESENT
+summary_recalc_flags.status           = ignored_future_month
+month-final score                     = WAITING_FOR_VERIFIED_SUMMARY
+rolling V2 history                    = NOT APPLICABLE
+```
+
+本批沒有把伊啵此狀態判為 P3 evidence failure，也沒有修改任何 Production data。
+
+## Natural Rolling History
+
+2026-09 尚未形成 `projection_accuracy_history/{2026}`，但正式 writer 原因可確認為：
+
+```text
+CYJ historyMeta.reason                = MISSING_DAY05
+安妞 historyMeta.reason               = MISSING_DAY05
+```
+
+9 月 live evidence 只有 4 個 checkpoint，缺少完整 contract 所需的：
+
+```text
+day05 / day07 / day10 / day15 / day20 / day25
+```
+
+因此：
+
+```text
+first natural projection_accuracy_history write
+= NOT YET OBSERVED
+status
+= EXPECTED_NOT_ELIGIBLE_INCOMPLETE_LIVE_CHECKPOINT_SET
+unexpected gap
+= NO
+```
+
+正式原則保持：
+
+```text
+不得人工補 day05 / day07
+不得回填假 checkpoint
+不得為了完成 P3 修改 Raw / Summary / Projection
+不得建立第二套 evidence writer
+```
+
+第一個可自然具備完整 rolling-history 資格的月份，必須先自然完成全部 6 個 checkpoint，再由 verified month-final Summary 觸發既有 scoring transaction。P3 下一個觀察點因此是「第一個完整自然月份完成 verified month-final scoring 後」。
+
+## P3 Status
+
+```text
+P3                                = IN_PROGRESS
+P3-A natural checkpoint           = PRODUCTION CONFIRMED
+P3-A natural month-final score    = PRODUCTION CONFIRMED（CYJ / 安妞）
+P3-A rolling history              = PENDING NATURAL ELIGIBILITY
+P3 unexpected runtime gap         = NONE
+P3 runtime patch required now     = NO
+CURRENT_APP_VERSION               = 3.6.0 unchanged
+```
+
+Documentation Impact：本批只更新 `CURRENT_STATE.md`；runtime source / Functions / Rules / Frontend = None。
+
+---
+
 # P2 Read / Authority Optimization — FINAL CLOSEOUT — 2026-10-02
 
 P2-FINAL 以正式 Production source `main @ 642f6638b3df6256ced8abfeec23ceb2c6828431` 完成 read / listener / authority closeout inventory。此次盤點為 READ-ONLY，不讀 Production Firestore、不修改 runtime、不進行任何 deploy。
