@@ -1,3 +1,145 @@
+# P2 Read / Authority Optimization — FINAL CLOSEOUT — 2026-10-02
+
+P2-FINAL 以正式 Production source `main @ 642f6638b3df6256ced8abfeec23ceb2c6828431` 完成 read / listener / authority closeout inventory。此次盤點為 READ-ONLY，不讀 Production Firestore、不修改 runtime、不進行任何 deploy。
+
+Source Gate：
+
+```text
+main / origin-main                    = 642f6638b3df6256ced8abfeec23ceb2c6828431
+worktree                              = CLEAN
+CURRENT_APP_VERSION                   = 3.6.0 unchanged
+```
+
+P2 已完成的主要收斂：
+
+```text
+Historical Dashboard / Ranking / Regional
+→ Summary-first
+→ verified Summary suppresses historical Raw reads
+→ dirty / unverified 才做 bounded detail fallback
+
+History
+→ user-triggered scoped date-range reads
+→ 不再啟動 App whole-month Raw listeners
+
+Audit
+→ subtype-specific Raw authority
+→ target audit 使用 monthly_targets_summary
+→ 不再因 Audit 其他 subtype 啟動不需要的 Raw source
+
+Store Analysis
+→ selected-store + selected-month scoped query
+→ missing-index 時才啟動 selected-month bounded fallback
+→ selected-store 模式不再依賴 App whole-month Raw
+
+Target Editor
+→ selected store × selected year canonical prefix live query
+→ 正常最多約 12 個 Raw target docs
+→ CYJ 新店 legacy alias 僅 bounded one-shot fallback
+→ App 全 collection monthly_targets listener 已退役
+
+Annual
+→ selected-year dashboard_summary + summary_recalc_flags
+→ monthly_targets_summary selected-brand-year query
+→ monthly_aggregated 僅 fallback-month query
+→ verified historical year 不需要 whole-year aggregate Raw hydration
+
+Current-month broad store consumers
+→ current_store_month_reports Projection + readiness
+→ Projection 不可信時才 fail back 到既有 bounded current-month Raw authority
+
+Device Security
+→ summary-first / single-request realtime surface
+→ manual device state + emergency unblock authority 已收斂為 transactional mutation
+```
+
+P2-FINAL static inventory：
+
+```text
+source files scanned                  = 116
+candidate files                       = 69
+frontend listeners                    = 32
+broad-read heuristic candidates       = 52
+possible-duplicate heuristic rows     = 18
+timer rows                            = 23
+security signal rows                  = 134
+```
+
+Manual owner review 結論：
+
+```text
+large listener outside owning view    = NONE FOUND
+material duplicate authority/listener = NONE FOUND
+Firestore read polling                = NONE FOUND
+cross-brand runtime path mismatch     = NONE FOUND
+unresolved concrete Security race     = NONE FOUND
+remaining high-ROI DO NOW item        = NONE
+```
+
+Heuristic candidates 的正式分類：
+
+```text
+SystemMaintenance full scans / backup / diagnostics
+→ DO WHEN TOUCHED
+→ explicit operator action；不是背景常駐讀取
+
+SystemMonitor account_devices directory
+→ DO WHEN TOUCHED
+→ manual-load + bounded limit；不是 persistent listener
+
+NotificationManager notification_rules
+→ STOP FOR NOW
+→ one-shot page load；目前不是高成本 runtime authority
+
+selected-month / Annual Summary listener overlap
+→ STOP
+→ 小型 single-doc / selected-year authority；收益不足以承擔重新切 wiring 的 regression 風險
+
+current-month therapist_daily_reports Dashboard authority
+→ PRESERVE FOR NOW
+→ 現有月度 Raw listener確實仍有理論省讀空間
+→ 但 therapist_monthly_aggregated 尚無 current-month readiness / parity authority
+→ 不以未驗證 derived aggregate 取代即時 Raw
+→ 未來只有建立可信 current-month therapist projection/readiness 時再重新評估
+```
+
+Timer review：
+
+```text
+idle / low-power timer                = local session control
+delegation date rollover timer        = local date state
+Device Approval countdown             = local UI countdown
+SystemMaintenance local read refresh  = localStorage stats
+Read Tracker flush timer              = observability write path；非 Firestore read polling
+```
+
+P2 Value/Cost 最終判定：
+
+```text
+DO NOW                                = 0
+DO WHEN TOUCHED                       = manual maintenance / device-directory bounded reads
+STOP                                  = marginal / cleanup-only candidates
+P2                                    = CLOSED
+```
+
+Production state：
+
+```text
+P2_RUNTIME_WORK                       = CLOSED
+P2_FINAL_INVENTORY                    = PASS
+P2_REMAINING_DO_NOW                   = 0
+PRODUCTION_SOURCE_OF_TRUTH            = 642f6638b3df6256ced8abfeec23ceb2c6828431
+CURRENT_APP_VERSION                   = 3.6.0 unchanged
+RUNTIME_CHANGE                        = NONE
+FRONTEND_DEPLOY_REQUIRED              = NO
+BACKEND_DEPLOY_REQUIRED               = NO
+FIRESTORE_RULES_DEPLOY_REQUIRED       = NO
+```
+
+Documentation Impact：本次 closeout 僅更新 `CURRENT_STATE.md`。沒有 runtime source 變更，不需要 build 或 Production deploy。
+
+---
+
 # Frontend Responsibility Decomposition A5 — Annual Data Authority Extraction — 2026-10-01
 
 FRD-A4 production closeout 後，以 `main @ 5e249af7cee8691d6874c027de15cf15d279455c` 重新完成 Annual source gate 與 exact dependency inventory。原本 `src/App.jsx` 同時持有 8 個 Annual state 與 3 個 Annual Firestore effects；其中 `monthly_aggregated` fallback 必須等待年度 Summary / flag readiness，再結合 System Exclusion 與 Store Lifecycle trust，因此本批以一個 coherent Annual Data Authority 抽離，而不是拆成互不協調的小 hook。
