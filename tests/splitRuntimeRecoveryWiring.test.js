@@ -1,5 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import { CURRENT_APP_VERSION_SOURCE_PATTERN } from "./helpers/appVersionContract.js";
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -66,7 +67,7 @@ test("App keeps System Exclusion as one brand-scoped live authority document and
   assert.match(source, /fetchGlobalData_core_docs[\s\S]{0,220}0/);
   assert.match(source, /application_session_authority_docs[\s\S]{0,220}3/);
   assert.doesNotMatch(source, /setInterval\([\s\S]{0,200}audit_exclusions/);
-  assert.match(source, /CURRENT_APP_VERSION = "3\.6\.0"/);
+  assert.match(source, CURRENT_APP_VERSION_SOURCE_PATTERN);
 });
 
 test("Daily Analysis consumes formal System Exclusion scope and separates partial observed actuals from completeness", () => {

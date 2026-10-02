@@ -1,5 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import { CURRENT_APP_VERSION_SOURCE_PATTERN } from "./helpers/appVersionContract.js";
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -372,7 +373,7 @@ test("Batch 5B-1 adds no Firestore listener/query and remains compatible with th
   assert.doesNotMatch(util, /firebase\/firestore|onSnapshot\s*\(|getDocs\s*\(|getDoc\s*\(/);
   assert.doesNotMatch(ranking, /firebase\/firestore|onSnapshot\s*\(|getDocs\s*\(|getDoc\s*\(/);
   assert.doesNotMatch(regional, /firebase\/firestore|onSnapshot\s*\(|getDocs\s*\(|getDoc\s*\(/);
-  assert.match(app, /CURRENT_APP_VERSION = "3\.6\.0"/);
+  assert.match(app, CURRENT_APP_VERSION_SOURCE_PATTERN);
 });
 
 test("5E-1B report Formal target reader accepts VALID_ZERO while N_A stays non-rankable", () => {

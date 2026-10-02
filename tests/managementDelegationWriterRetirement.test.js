@@ -1,3 +1,4 @@
+import { CURRENT_APP_VERSION_SOURCE_PATTERN } from "./helpers/appVersionContract.js";
 import test from "node:test";
 import assert from "node:assert/strict";
 import fs from "node:fs";
@@ -67,7 +68,7 @@ test("A2-2 rules preserve same-brand read but Browser-lock delegation and author
 });
 
 test("A2-2 adds no delegation realtime listener/polling and leaves CURRENT_APP_VERSION unchanged", () => {
-  assert.match(app, /CURRENT_APP_VERSION\s*=\s*"3\.6\.0"/);
+  assert.match(app, CURRENT_APP_VERSION_SOURCE_PATTERN);
   const changed = `${app}\n${settings}\n${backend}`;
   assert.doesNotMatch(
     changed,

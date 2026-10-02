@@ -1,5 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import { CURRENT_APP_VERSION_SOURCE_PATTERN } from "./helpers/appVersionContract.js";
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -226,7 +227,7 @@ test("App propagates benchmark settings and no longer promotes missing newASP to
   assert.match(app, /import \{ validPositiveSetting \} from "\.\/utils\/kpiContracts"/);
   assert.match(app, /benchmarks:\s*data\?\.benchmarks/);
   assert.match(app, /newASP:\s*newAspResult\.valid \? newAspResult\.value : null/);
-  assert.match(app, /CURRENT_APP_VERSION = "3\.6\.0"/);
+  assert.match(app, CURRENT_APP_VERSION_SOURCE_PATTERN);
   assert.doesNotMatch(app, /newASP:\s*Number\(data\.newASP \?\? 3500\)/);
 });
 

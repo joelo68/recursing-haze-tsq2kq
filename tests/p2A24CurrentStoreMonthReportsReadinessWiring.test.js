@@ -1,5 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { CURRENT_APP_VERSION_SOURCE_PATTERN } from "./helpers/appVersionContract.js";
 import fs from 'node:fs';
 
 const read = (path) => fs.readFileSync(path, 'utf8');
@@ -49,7 +50,7 @@ test('B3-2 readiness authority adds no listener, polling or scheduler; later B4 
   assert.match(client, /applicationIdentityCustomToken/);
   assert.match(client, /idToken:\s*applicationIdToken/);
   // B4 may consume promoted Projection in App; B3-2 still owns only readiness authority/security.
-  assert.match(app, /const CURRENT_APP_VERSION = "3\.6\.0";/);
+  assert.match(app, CURRENT_APP_VERSION_SOURCE_PATTERN);
 });
 
 test('B3-2 keeps projection/status Browser writes denied and exports only the backend authority', () => {

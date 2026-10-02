@@ -1,3 +1,4 @@
+import { CURRENT_APP_VERSION_SOURCE_PATTERN } from "./helpers/appVersionContract.js";
 import test from "node:test";
 import assert from "node:assert/strict";
 import fs from "node:fs";
@@ -62,5 +63,5 @@ test("B2B projection writer does not add polling or scheduler and keeps version 
   assert.doesNotMatch(current, /setInterval\s*\(/);
   assert.doesNotMatch(current, /onSchedule/);
   // B4 intentionally adds the frontend consumer; B2B continues to guard writer isolation and scheduling.
-  assert.match(app, /const CURRENT_APP_VERSION = "3\.6\.0";/);
+  assert.match(app, CURRENT_APP_VERSION_SOURCE_PATTERN);
 });

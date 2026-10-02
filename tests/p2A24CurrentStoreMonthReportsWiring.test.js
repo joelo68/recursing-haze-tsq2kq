@@ -1,3 +1,4 @@
+import { CURRENT_APP_VERSION_SOURCE_PATTERN } from "./helpers/appVersionContract.js";
 import test from "node:test";
 import assert from "node:assert/strict";
 import fs from "node:fs";
@@ -22,7 +23,7 @@ test("B1 Rules make projection/status browser-read-only and close generic bypass
   assert.ok((rules.match(/collectionName != 'current_store_month_reports_status'/g) || []).length >= 2);
 });
 
-test("B4 cuts approved current-month broad consumers to Projection and CURRENT_APP_VERSION stays 3.6.0", () => {
+test("B4 cuts approved current-month broad consumers to Projection and follows the shared app version contract", () => {
   const app = read("src/App.jsx");
   const consumer = read("src/utils/currentStoreMonthReportsConsumer.js");
   assert.match(app, /current_store_month_reports_status/);
@@ -30,7 +31,7 @@ test("B4 cuts approved current-month broad consumers to Projection and CURRENT_A
   assert.match(app, /CURRENT_STORE_MONTH_PROJECTION_VIEWS/);
   assert.match(consumer, /current-store-month-reports-readiness-v1/);
   assert.match(consumer, /READINESS_SIGNATURE_MISMATCH/);
-  assert.match(app, /const CURRENT_APP_VERSION = "3\.6\.0";/);
+  assert.match(app, CURRENT_APP_VERSION_SOURCE_PATTERN);
 });
 
 test("B1 delegates Store Identity to shared Lifecycle owner", () => {

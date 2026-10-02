@@ -1,5 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import { CURRENT_APP_VERSION_SOURCE_PATTERN } from "./helpers/appVersionContract.js";
 import fs from "node:fs";
 import path from "node:path";
 import { createRequire } from "node:module";
@@ -95,7 +96,7 @@ test("B1C1A keeps a separate runtime authority while B1C2C1 password cutover rem
   assert.match(app, /const CHANGE_APPLICATION_PASSWORD_ENDPOINT\s*=\s*"https:\/\/us-central1-cyjsituation-analysis\.cloudfunctions\.net\/changeApplicationPassword"/);
   assert.match(app, /const changeApplicationPassword = useCallback/);
   assert.match(app, /onChangeApplicationPassword=\{changeApplicationPassword\}/);
-  assert.match(app, /CURRENT_APP_VERSION\s*=\s*"3\.6\.0"/);
+  assert.match(app, CURRENT_APP_VERSION_SOURCE_PATTERN);
   assert.match(rules, /function signedIn\(\)\s*\{\s*return request\.auth != null;/);
   assert.match(rules, /function applicationIdentity\(\)[\s\S]{0,320}request\.auth\.token\.drcyjIdentity == true/);
 });

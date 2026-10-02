@@ -1,3 +1,4 @@
+import { CURRENT_APP_VERSION_SOURCE_PATTERN } from "./helpers/appVersionContract.js";
 // tests/auditCutoffPresentation.test.js
 import test from "node:test";
 import assert from "node:assert/strict";
@@ -67,7 +68,7 @@ test("SmartCalendar 變更為 additive contract，不影響店家排休 multi-se
   assert.match(source, /statusHiddenDates\s*=\s*\[\]/);
 });
 
-test("CURRENT_APP_VERSION 已提升至 3.6.0", () => {
+test("CURRENT_APP_VERSION follows the shared version contract", () => {
   const app = read("src/App.jsx");
-  assert.match(app, /CURRENT_APP_VERSION\s*=\s*"3\.6\.0"/);
+  assert.match(app, CURRENT_APP_VERSION_SOURCE_PATTERN);
 });

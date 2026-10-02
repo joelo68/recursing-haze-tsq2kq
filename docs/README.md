@@ -125,7 +125,7 @@ Repository root 不保存一次性交付 artifacts。下列類型若已完成正
 不要在本索引複製完整 Production 狀態。只固定：
 
 ```text
-CURRENT_APP_VERSION = 3.6.0
+CURRENT_APP_VERSION = 3.6.1
 ```
 
 其餘 Production runtime commit、Frontend gh-pages、已部署 Functions、Production confirmation 均讀：

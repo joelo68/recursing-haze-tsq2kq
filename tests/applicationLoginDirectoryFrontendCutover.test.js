@@ -1,5 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import { CURRENT_APP_VERSION_SOURCE_PATTERN } from "./helpers/appVersionContract.js";
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -100,5 +101,5 @@ test("directory cutover remains compatible with the narrowed bootstrap Rules sur
   assert.match(rules, /function anonymousBootstrap\(\)/);
   assert.match(rules, /login_directory_summary/);
   assert.match(rules, /anonymousBootstrap\(\) \|\| sameBrandIdentity\(brandId\)/);
-  assert.match(app, /CURRENT_APP_VERSION\s*=\s*"3\.6\.0"/);
+  assert.match(app, CURRENT_APP_VERSION_SOURCE_PATTERN);
 });

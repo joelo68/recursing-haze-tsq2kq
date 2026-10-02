@@ -1,5 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import { CURRENT_APP_VERSION_SOURCE_PATTERN } from "./helpers/appVersionContract.js";
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -99,5 +100,5 @@ test("protected backend-only writers remain closed to browser", () => {
 });
 
 test("1C-2 is Rules-only and does not change frontend runtime version", () => {
-  assert.match(app, /const CURRENT_APP_VERSION = "3\.6\.0";/);
+  assert.match(app, CURRENT_APP_VERSION_SOURCE_PATTERN);
 });

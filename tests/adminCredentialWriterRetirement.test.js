@@ -1,5 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import { CURRENT_APP_VERSION_SOURCE_PATTERN } from "./helpers/appVersionContract.js";
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -86,7 +87,7 @@ test("browser access to all admin credential documents is denied on both path fa
 });
 
 test("read topology stays event/point-read only and app version is unchanged", () => {
-  assert.match(app, /CURRENT_APP_VERSION\s*=\s*"3\.6\.0"/);
+  assert.match(app, CURRENT_APP_VERSION_SOURCE_PATTERN);
   assert.doesNotMatch(settings, /onSnapshot\s*\(|setInterval\s*\(|setTimeout\s*\(/);
   assert.doesNotMatch(therapistManager, /onSnapshot\s*\(|setInterval\s*\(|setTimeout\s*\(/);
   assert.match(settings, /最高管理金鑰/);

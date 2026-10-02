@@ -1,5 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import { CURRENT_APP_VERSION_SOURCE_PATTERN } from "./helpers/appVersionContract.js";
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -68,5 +69,5 @@ test("UX2C preserves existing Annual and Daily data authority paths", () => {
 });
 
 test("UX2C keeps CURRENT_APP_VERSION unchanged", () => {
-  assert.match(app, /const CURRENT_APP_VERSION = "3\.6\.0";/);
+  assert.match(app, CURRENT_APP_VERSION_SOURCE_PATTERN);
 });

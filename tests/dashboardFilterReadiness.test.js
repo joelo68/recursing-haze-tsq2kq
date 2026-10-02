@@ -1,3 +1,4 @@
+import { CURRENT_APP_VERSION_SOURCE_PATTERN } from "./helpers/appVersionContract.js";
 import test from "node:test";
 import assert from "node:assert/strict";
 import fs from "node:fs";
@@ -91,5 +92,5 @@ test("B1C2E-UX2B changes no read topology or projection authority", () => {
 });
 
 test("B1C2E-UX2B does not change CURRENT_APP_VERSION", () => {
-  assert.match(appSource, /const CURRENT_APP_VERSION = "3\.6\.0";/);
+  assert.match(appSource, CURRENT_APP_VERSION_SOURCE_PATTERN);
 });

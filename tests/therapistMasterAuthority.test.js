@@ -1,3 +1,4 @@
+import { CURRENT_APP_VERSION_SOURCE_PATTERN } from "./helpers/appVersionContract.js";
 import test from "node:test";
 import assert from "node:assert/strict";
 import fs from "node:fs";
@@ -297,7 +298,7 @@ test("B1C2C2 cuts therapist master management over to the existing Account Autho
   assert.match(managerView, /manageApplicationAccountAction/);
   assert.match(managerView, /action:\s*"reveal_password"/);
   assert.doesNotMatch(settings, /getCollectionPath\("therapists"\)|therapists_DISABLED|handleAddTherapist|handleDeleteTherapist/);
-  assert.match(app, /CURRENT_APP_VERSION\s*=\s*"3\.6\.0"/);
+  assert.match(app, CURRENT_APP_VERSION_SOURCE_PATTERN);
   assert.match(rules, /function applicationIdentity\(\)[\s\S]{0,320}request\.auth\.token\.drcyjIdentity == true/);
 });
 

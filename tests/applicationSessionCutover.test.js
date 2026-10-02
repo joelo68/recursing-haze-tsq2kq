@@ -1,5 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import { CURRENT_APP_VERSION_SOURCE_PATTERN } from "./helpers/appVersionContract.js";
 import fs from "node:fs";
 import path from "node:path";
 import { createRequire } from "node:module";
@@ -112,5 +113,5 @@ test("admin credential writer retirement removes transitional raw hydration whil
   }
   assert.doesNotMatch(app, /transitional admin hydration/);
   assert.match(app, /Admin Credential Writer Retirement/);
-  assert.match(app, /CURRENT_APP_VERSION\s*=\s*"3\.6\.0"/);
+  assert.match(app, CURRENT_APP_VERSION_SOURCE_PATTERN);
 });

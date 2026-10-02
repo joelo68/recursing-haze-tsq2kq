@@ -1,3 +1,4 @@
+import { CURRENT_APP_VERSION_SOURCE_PATTERN } from "./helpers/appVersionContract.js";
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
@@ -38,7 +39,7 @@ test('B2C stays bounded and adds no polling/listener/scheduler; later B4 owns fr
   assert.doesNotMatch(source, /onSnapshot/);
   assert.doesNotMatch(client, /setInterval\s*\(/);
   // Frontend cutover is a B4 concern; B2C continues to enforce bounded backend/bootstrap behavior.
-  assert.match(app, /const CURRENT_APP_VERSION = "3\.6\.0";/);
+  assert.match(app, CURRENT_APP_VERSION_SOURCE_PATTERN);
 });
 
 test('B2C status certification is point-in-time and never frontend readiness', () => {

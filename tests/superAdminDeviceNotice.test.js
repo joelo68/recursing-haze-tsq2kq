@@ -1,5 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { CURRENT_APP_VERSION_SOURCE_PATTERN } from "./helpers/appVersionContract.js";
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -11,8 +12,8 @@ const app = fs.readFileSync(path.join(root, 'src', 'App.jsx'), 'utf8');
 const panel = fs.readFileSync(path.join(root, 'src', 'components', 'DeviceApprovalPanel.jsx'), 'utf8');
 const backend = fs.readFileSync(path.join(root, 'functions', 'deviceApproval.js'), 'utf8');
 
-test('uses promoted current app version 3.6.0', () => {
-  assert.match(app, /CURRENT_APP_VERSION\s*=\s*"3\.6\.0"/);
+test('uses the shared current app version contract', () => {
+  assert.match(app, CURRENT_APP_VERSION_SOURCE_PATTERN);
 });
 
 test('highest-admin brand summary remains realtime via the existing onSnapshot', () => {

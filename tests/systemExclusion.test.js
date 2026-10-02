@@ -1,5 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import { CURRENT_APP_VERSION_SOURCE_PATTERN } from "./helpers/appVersionContract.js";
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -98,7 +99,7 @@ test("Frontend no longer direct-writes audit_exclusions and handles revision con
   assert.match(app, /currentSystemExclusion/);
   assert.doesNotMatch(app, /setDoc\(auditExclusionsDoc/);
   assert.doesNotMatch(app, /getDocs\([^\n]*audit_exclusions/);
-  assert.match(app, /CURRENT_APP_VERSION = "3\.6\.0"/);
+  assert.match(app, CURRENT_APP_VERSION_SOURCE_PATTERN);
 });
 
 test("Firestore Rules close both brand and legacy browser write paths for audit_exclusions", () => {

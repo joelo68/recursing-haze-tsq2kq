@@ -1,3 +1,4 @@
+import { CURRENT_APP_VERSION_SOURCE_PATTERN } from "./helpers/appVersionContract.js";
 import test from "node:test";
 import assert from "node:assert/strict";
 import fs from "node:fs";
@@ -92,5 +93,5 @@ test("Store Analysis selected-store read topology keeps primary and bounded fall
 });
 
 test("store analysis Formal consumer remains compatible with the promoted app version", () => {
-  assert.match(appSource, /CURRENT_APP_VERSION\s*=\s*"3\.6\.0"/);
+  assert.match(appSource, CURRENT_APP_VERSION_SOURCE_PATTERN);
 });

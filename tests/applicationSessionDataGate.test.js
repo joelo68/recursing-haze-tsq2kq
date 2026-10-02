@@ -1,3 +1,4 @@
+import { CURRENT_APP_VERSION_SOURCE_PATTERN } from "./helpers/appVersionContract.js";
 import test from "node:test";
 import assert from "node:assert/strict";
 import fs from "node:fs";
@@ -140,7 +141,7 @@ test("intentional pre-login surfaces remain narrow", () => {
 });
 
 test("application version and identity cutover remain unchanged", () => {
-  assert.match(app, /const CURRENT_APP_VERSION = "3\.6\.0";/);
+  assert.match(app, CURRENT_APP_VERSION_SOURCE_PATTERN);
   assert.match(app, /signInWithCustomToken\(auth, customToken\)/);
   assert.match(app, /claims\?\.drcyjIdentity === true/);
 });

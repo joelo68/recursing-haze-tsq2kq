@@ -1,3 +1,4 @@
+import { CURRENT_APP_VERSION_SOURCE_PATTERN } from "./helpers/appVersionContract.js";
 import test from "node:test";
 import assert from "node:assert/strict";
 import fs from "node:fs";
@@ -66,5 +67,5 @@ test("retirement adds no listener, polling, standalone migration function or app
   assert.match(indexSource, /exports\.manageTherapistMaster\s*=\s*therapistMasterAuthorityFunctions\.manageTherapistMaster/);
   assert.match(indexSource, /exports\.changeApplicationPassword\s*=\s*accountAuthorityFunctions\.changeApplicationPassword/);
   assert.match(indexSource, /exports\.manageApplicationAccount\s*=\s*accountAuthorityFunctions\.manageApplicationAccount/);
-  assert.match(app, /CURRENT_APP_VERSION\s*=\s*"3\.6\.0"/);
+  assert.match(app, CURRENT_APP_VERSION_SOURCE_PATTERN);
 });

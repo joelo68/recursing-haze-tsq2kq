@@ -2794,3 +2794,70 @@ node --test tests/telegramProjectionConsumer.test.js
 ```
 
 跨 writer / Dashboard / Telegram semantics 的改動，三組 regression 都要跑。
+
+
+---
+
+# Daily Report Date Safety v1
+
+`InputView.jsx` 的正式日報送出流程必須先經過 `src/utils/dailyReportDateSafety.js` 的日期安全判斷，再進入既有 confirmation 與 Raw write。
+
+正式時間基準：
+
+```text
+time zone              = Asia/Taipei
+business-day rollover  = 04:00
+same-day submit start  = 15:00
+```
+
+因此：
+
+```text
+selected date > current report date
+→ HARD BLOCK
+
+current calendar date 04:00–14:59
++ selected date = current report date
+→ HARD BLOCK
+→ no override
+
+current calendar date >= 15:00
++ selected date = current report date
+→ normal confirmation
+
+00:00–03:59
+→ 沿用既有 04:00 business-day rollover
+→ 前一日仍是 current report date，不誤判為歷史補登
+
+selected date < current report date
+→ historical backfill allowed
+→ 顯示補登模式
+→ 日期警示與 final confirmation 都再次強調實際寫入日期
+```
+
+禁止：
+
+```text
+自動把日期改成昨天
+只靠 toast 警告仍允許 15:00 前送出
+只在第一層 confirmation 檢查日期、final write 前不重驗
+為日期防呆新增 Firestore listener / query / polling
+在 InputView 重新建立 Summary dirty / recalc queue writer
+```
+
+Store 日報與 Therapist 日報共用同一日期安全 contract；既有 permission、delegation、brand/store/therapist scope 與 Firestore physical path 不因此改變。
+
+
+## App version regression contract
+
+Regression tests must not scatter literal `CURRENT_APP_VERSION` patch versions across unrelated feature tests.
+
+Use:
+
+```text
+tests/helpers/appVersionContract.js
+```
+
+as the single test-side version contract. When an explicit application version promotion is requested, update the runtime version and this shared test contract together; historical feature tests should consume the shared pattern instead of hard-coding the previous patch version.
+
+This prevents an intentional version promotion from producing unrelated false-negative regressions while preserving one exact version authority for CI.

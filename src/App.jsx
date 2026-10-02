@@ -58,7 +58,7 @@ import { useAnnualDataAuthority } from "./hooks/useAnnualDataAuthority";
 // ==========================================
 // ★ 系統核心版本號 (終極動態快取版)
 // ==========================================
-const CURRENT_APP_VERSION = "3.6.0";
+const CURRENT_APP_VERSION = "3.6.1";
 const LOGIN_LOCATION_ENDPOINT = "https://resolveloginlocation-hyhcwrnyaa-uc.a.run.app";
 const DEVICE_ACCESS_ENDPOINT = "https://us-central1-cyjsituation-analysis.cloudfunctions.net/checkDeviceAccess";
 const LOGIN_DIRECTORY_ENDPOINT = "https://us-central1-cyjsituation-analysis.cloudfunctions.net/getApplicationLoginDirectory";

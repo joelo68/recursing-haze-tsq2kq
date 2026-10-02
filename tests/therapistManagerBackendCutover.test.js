@@ -1,3 +1,4 @@
+import { CURRENT_APP_VERSION_SOURCE_PATTERN } from "./helpers/appVersionContract.js";
 import test from "node:test";
 import assert from "node:assert/strict";
 import fs from "node:fs";
@@ -87,7 +88,7 @@ test("disabled Settings therapist writer is retired instead of preserved as a hi
 
 test("post-migration runtime retires legacy credential actions while preserving the backend-only Rules boundary", () => {
   assert.match(rules, /function signedIn\(\)\s*\{\s*return request\.auth != null;/);
-  assert.match(app, /CURRENT_APP_VERSION\s*=\s*"3\.6\.0"/);
+  assert.match(app, CURRENT_APP_VERSION_SOURCE_PATTERN);
   assert.match(credentialAuthority, /THERAPIST_CREDENTIAL_STORAGE_MODE_SEPARATED\s*=\s*"separated_v1"/);
   assert.match(credentialAuthority, /legacy_credential_retired/);
   assert.doesNotMatch(backend, /migrate_credential|credential_migration_inventory|confirmCredentialMigration|migrateTherapistCredentialInTransaction/);

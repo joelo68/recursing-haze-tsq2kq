@@ -1,5 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import { CURRENT_APP_VERSION_SOURCE_PATTERN } from "./helpers/appVersionContract.js";
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -73,7 +74,7 @@ test("Batch 6A pure helpers do not add Firestore or polling", () => {
   for (const source of [fe, be]) {
     assert.doesNotMatch(source, /firebase\/firestore|firebase-admin|\.collection\(|getDocs\(|getDoc\(|onSnapshot\(|setInterval\(|onSchedule\(/);
   }
-  assert.match(app, /CURRENT_APP_VERSION\s*=\s*["']3\.6\.0["']/);
+  assert.match(app, CURRENT_APP_VERSION_SOURCE_PATTERN);
 });
 
 test("Batch 6A automatic Summary builder deploy call graph remains repair-only", () => {

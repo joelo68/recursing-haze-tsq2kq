@@ -1,3 +1,4 @@
+import { CURRENT_APP_VERSION_SOURCE_PATTERN } from "./helpers/appVersionContract.js";
 import test from "node:test";
 import assert from "node:assert/strict";
 import fs from "node:fs";
@@ -65,5 +66,5 @@ test("B1B2 server-issued application session is now consumed by Firestore claim 
   assert.match(app, /signInAnonymously\(auth\)/);
   assert.match(rules, /request\.auth\.token\.drcyjIdentity == true/);
   assert.match(rules, /request\.auth\.token\.identityVersion == 'application-identity-v1'/);
-  assert.match(app, /CURRENT_APP_VERSION\s*=\s*"3\.6\.0"/);
+  assert.match(app, CURRENT_APP_VERSION_SOURCE_PATTERN);
 });

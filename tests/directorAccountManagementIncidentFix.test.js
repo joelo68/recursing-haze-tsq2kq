@@ -1,5 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import { CURRENT_APP_VERSION_SOURCE_PATTERN } from "./helpers/appVersionContract.js";
 import fs from "node:fs";
 import path from "node:path";
 import { createRequire } from "node:module";
@@ -136,7 +137,7 @@ test("current signed-in director cannot rename demote disable or delete itself",
 });
 
 test("director incident fix keeps app version while master_auth stays backend-only under Application Identity Rules", () => {
-  assert.match(app, /CURRENT_APP_VERSION\s*=\s*"3\.6\.0"/);
+  assert.match(app, CURRENT_APP_VERSION_SOURCE_PATTERN);
   assert.match(rules, /function signedIn\(\)\s*\{\s*return request\.auth != null;/);
   assert.match(rules, /function applicationIdentity\(\)[\s\S]{0,320}request\.auth\.token\.drcyjIdentity == true/);
   assert.match(rules, /match \/brands\/\{brandId\}\/settings\/master_auth\s*\{\s*allow read, write:\s*if false;/);

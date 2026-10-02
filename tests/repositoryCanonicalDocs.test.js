@@ -1,5 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import { CURRENT_APP_VERSION_DOC_PATTERN } from "./helpers/appVersionContract.js";
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -60,7 +61,7 @@ test("canonical docs index records root pointer governance", () => {
   const sourceMap = fs.readFileSync(path.join(repoRoot, "docs/SYSTEM_SOURCE_MAP.md"), "utf8");
 
   assert.ok(canonicalReadme.includes("最後整併更新：2026-09-15"));
-  assert.ok(canonicalReadme.includes("CURRENT_APP_VERSION = 3.6.0"));
+  assert.match(canonicalReadme, CURRENT_APP_VERSION_DOC_PATTERN);
   assert.ok(canonicalReadme.includes("# 4. Canonical / Compatibility Pointer 邊界"));
   assert.ok(canonicalReadme.includes("這些 root 檔案只能是 pointer"));
   assert.ok(sourceMap.includes("Repository Canonical Documentation Entry Override — 2026-09-15"));

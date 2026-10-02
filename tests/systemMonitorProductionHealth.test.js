@@ -1,5 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import { CURRENT_APP_VERSION_SOURCE_PATTERN } from "./helpers/appVersionContract.js";
 import fs from "node:fs";
 
 const app = fs.readFileSync("src/App.jsx", "utf8");
@@ -46,5 +47,5 @@ test("P1-C does not create a new Firestore health collection or broaden Rules", 
 });
 
 test("P1-C keeps app version unchanged", () => {
-  assert.match(app, /const CURRENT_APP_VERSION = "3\.6\.0";/);
+  assert.match(app, CURRENT_APP_VERSION_SOURCE_PATTERN);
 });

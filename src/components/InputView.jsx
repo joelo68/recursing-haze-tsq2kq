@@ -13,19 +13,56 @@ import {
 
 import { parseNumber, formatNumber, toStandardDateFormat, sortManagerNames, sortStoreNames, sortManagersByOrgOrder, sortStoresByOrgOrder } from "../utils/helpers";
 import { calculateTherapistReportTotalRevenue, isAnniuTherapistReportBrand } from "../utils/therapistReportContract";
+import { classifyDailyReportDate, formatReportMonthDay, getCurrentTaipeiReportDate } from "../utils/dailyReportDateSafety";
 import { AppContext } from "../AppContext";
 import { ViewWrapper, Card } from "./SharedUI";
 import SmartDatePicker from "./SmartDatePicker";
 
-const getLocalTodayString = () => {
-  const now = new Date();
-  if (now.getHours() < 4) {
-    now.setDate(now.getDate() - 1);
+const getReportTodayString = () => getCurrentTaipeiReportDate();
+
+const buildDateSafetyBlock = (decision) => {
+  if (decision?.status === "SAME_DAY_BEFORE_CUTOFF") {
+    return {
+      title: "目前尚未到當日日報回報時間",
+      message: `現在是台北時間 ${decision.taipeiTimeText}。下午 3:00 前不可送出 ${decision.selectedDate} 當日日報，請重新確認回報日期。`,
+      hint: "如果你要補登先前的業績，請先選擇正確的歷史日期。",
+    };
   }
-  const year = now.getFullYear();
-  const month = String(now.getMonth() + 1).padStart(2, '0');
-  const day = String(now.getDate()).padStart(2, '0');
-  return `${year}-${month}-${day}`;
+
+  if (decision?.status === "FUTURE_DATE") {
+    return {
+      title: "不可填寫未來日期的日報",
+      message: `${decision.selectedDate || "目前選擇的日期"} 尚未進入可回報日期範圍，請重新確認日期。`,
+      hint: `目前可回報日期上限為 ${decision.reportDate}。`,
+    };
+  }
+
+  return {
+    title: "回報日期無法辨識",
+    message: "請重新選擇正確的回報日期後再送出。",
+    hint: "",
+  };
+};
+
+const DateSafetyBlockModal = ({ block, onClose }) => {
+  if (!block) return null;
+  return (
+    <div className="fixed inset-0 z-[1100] flex items-center justify-center p-4 bg-stone-900/80 backdrop-blur-sm">
+      <div className="bg-white rounded-3xl shadow-2xl w-full max-w-sm overflow-hidden animate-in zoom-in-95 border-4 border-rose-100">
+        <div className="bg-rose-600 p-6 flex flex-col items-center text-center">
+          <div className="bg-white/20 p-3 rounded-full mb-3"><AlertTriangle size={32} className="text-white"/></div>
+          <h3 className="text-white text-xl font-extrabold tracking-wide">{block.title}</h3>
+        </div>
+        <div className="p-6 space-y-4">
+          <p className="text-stone-700 font-bold leading-relaxed text-center">{block.message}</p>
+          {block.hint && <p className="bg-rose-50 border border-rose-100 rounded-xl p-3 text-sm font-bold text-rose-700">{block.hint}</p>}
+          <button onClick={onClose} className="w-full py-3.5 bg-stone-800 text-white rounded-xl font-bold hover:bg-stone-900 transition-colors">
+            返回重新確認
+          </button>
+        </div>
+      </div>
+    </div>
+  );
 };
 
 
@@ -80,6 +117,7 @@ const StoreInputView = () => {
   
   const [showConfirmModal, setShowConfirmModal] = useState(false); 
   const [showDateWarningModal, setShowDateWarningModal] = useState(false); 
+  const [dateSafetyBlock, setDateSafetyBlock] = useState(null);
   const [existingReportId, setExistingReportId] = useState(null); 
   
   const LABELS = {
@@ -88,7 +126,9 @@ const StoreInputView = () => {
     newCustomers: "新客數", newCustomerClosings: "新客留單人數", newCustomerSales: "新客業績", refund: "當日退費",
   };
   
-  const today = getLocalTodayString();
+  const today = getReportTodayString();
+  const dateSafety = classifyDailyReportDate(inputDate);
+  const isBackfillDate = dateSafety.status === "BACKFILL";
 
   const brandPrefix = useMemo(() => {
     if (!currentBrand) return "CYJ";
@@ -117,7 +157,7 @@ const StoreInputView = () => {
   useEffect(() => {
     const handleWakeUp = () => {
       if (document.visibilityState === "visible" || document.hasFocus()) {
-        const realToday = getLocalTodayString(); 
+        const realToday = getReportTodayString();
         const isFormEmpty = Object.values(formData).every(val => val === "");
         if (inputDate !== realToday && isFormEmpty) {
            setInputDate(realToday);
@@ -143,7 +183,7 @@ const StoreInputView = () => {
         if (parsed.manager) setSelectedManager(parsed.manager);
         
         const draftDate = parsed.date;
-        if (draftDate === getLocalTodayString()) {
+        if (draftDate === getReportTodayString()) {
            setInputDate(draftDate);
         }
       } catch (e) { console.error(e); }
@@ -225,7 +265,11 @@ const StoreInputView = () => {
     if (typeof canEditStoreReport === "function" && !canEditStoreReport(selectedStore, "editReports")) {
       return showToast("你目前沒有這間店的日報填寫權限", "error");
     }
-    if (inputDate > today) return showToast("不可提交未來日期", "error"); 
+    const safetyDecision = classifyDailyReportDate(inputDate);
+    if (!safetyDecision.allowed) {
+      setDateSafetyBlock(buildDateSafetyBlock(safetyDecision));
+      return;
+    }
 
     const formattedInputDate = toStandardDateFormat(inputDate).replace(/\//g, "-");
     const targetCoreStore = getCoreStoreName(selectedStore);
@@ -238,7 +282,7 @@ const StoreInputView = () => {
 
     setExistingReportId(existingReport ? existingReport.id : null);
 
-    if (inputDate !== today) {
+    if (safetyDecision.status === "BACKFILL") {
       setShowDateWarningModal(true);
     } else {
       setShowConfirmModal(true);
@@ -252,8 +296,14 @@ const StoreInputView = () => {
 
   const handleFinalSubmit = async () => {
     if (isSubmitting || !isOnline) return;
+    const safetyDecision = classifyDailyReportDate(inputDate);
+    if (!safetyDecision.allowed) {
+      setShowConfirmModal(false);
+      setDateSafetyBlock(buildDateSafetyBlock(safetyDecision));
+      return;
+    }
     setIsSubmitting(true);
-    
+
     try {
       const normalizedDate = toStandardDateFormat(inputDate);
       const safeDate = normalizedDate.replace(/\//g, "-");
@@ -372,6 +422,15 @@ const StoreInputView = () => {
             maxDate={today} 
           />
         </div>
+        {isBackfillDate && (
+          <div className="bg-rose-50 border border-rose-200 rounded-xl p-3 flex items-start gap-2 text-rose-700">
+            <AlertTriangle size={18} className="shrink-0 mt-0.5"/>
+            <div>
+              <p className="font-black">補登日報</p>
+              <p className="text-sm font-bold">你現在填寫的是 {inputDate} 日報；本次資料會寫入歷史日期，不是目前回報日 {today}。</p>
+            </div>
+          </div>
+        )}
         <div className="grid grid-cols-2 gap-6">
           <div>
             <label className="block text-xs font-bold mb-1.5 text-stone-400">區域</label>
@@ -445,27 +504,30 @@ const StoreInputView = () => {
       {showDateWarningModal && (
         <div className="fixed inset-0 z-[1000] flex items-center justify-center p-4 bg-stone-900/80 backdrop-blur-sm">
           <div className="bg-white rounded-3xl shadow-2xl w-full max-w-sm overflow-hidden animate-in zoom-in-95 border-4 border-rose-100">
-            <div className="bg-rose-500 p-6 flex flex-col items-center text-center"><div className="bg-white/20 p-3 rounded-full mb-3"><Calendar size={32} className="text-white"/></div><h3 className="text-white text-xl font-extrabold tracking-wide">日期確認</h3></div>
+            <div className="bg-rose-500 p-6 flex flex-col items-center text-center"><div className="bg-white/20 p-3 rounded-full mb-3"><Calendar size={32} className="text-white"/></div><h3 className="text-white text-xl font-extrabold tracking-wide">補登日報日期確認</h3></div>
             <div className="p-6 space-y-6 text-center">
               <div><p className="text-stone-500 font-bold mb-1">您選擇的回報日期是</p><p className="text-3xl font-mono font-black text-rose-600">{inputDate}</p></div>
-              <div className="bg-rose-50 p-4 rounded-xl border border-rose-100 text-left"><p className="flex items-start gap-2 text-rose-800 text-sm font-bold"><AlertTriangle size={18} className="shrink-0 mt-0.5"/><span>系統偵測到此日期 <u>並非今天</u> ({today})。{existingReportId && (<span className="block mt-2 pt-2 border-t border-rose-200 text-rose-600">⚠️ 注意：該日期已有日報紀錄，繼續提交將會 <span className="underline font-black">覆蓋舊資料</span>！</span>)}</span></p></div>
-              <div className="flex gap-3"><button onClick={() => setShowDateWarningModal(false)} className="flex-1 py-3.5 bg-stone-100 text-stone-500 rounded-xl font-bold hover:bg-stone-200 transition-colors">取消</button><button onClick={handleDateWarningConfirm} className="flex-1 py-3.5 bg-rose-600 text-white rounded-xl font-bold hover:bg-rose-700 shadow-lg shadow-rose-200 transition-all active:scale-95">確認日期無誤</button></div>
+              <div className="bg-rose-50 p-4 rounded-xl border border-rose-100 text-left"><p className="flex items-start gap-2 text-rose-800 text-sm font-bold"><AlertTriangle size={18} className="shrink-0 mt-0.5"/><span>你正在補登 <u>{inputDate}</u> 日報；目前回報日為 {today}。本次資料會寫入 {inputDate}，不是目前回報日。{existingReportId && (<span className="block mt-2 pt-2 border-t border-rose-200 text-rose-600">⚠️ 注意：該日期已有日報紀錄，繼續提交將會 <span className="underline font-black">覆蓋舊資料</span>！</span>)}</span></p></div>
+              <div className="flex gap-3"><button onClick={() => setShowDateWarningModal(false)} className="flex-1 py-3.5 bg-stone-100 text-stone-500 rounded-xl font-bold hover:bg-stone-200 transition-colors">取消</button><button onClick={handleDateWarningConfirm} className="flex-1 py-3.5 bg-rose-600 text-white rounded-xl font-bold hover:bg-rose-700 shadow-lg shadow-rose-200 transition-all active:scale-95">確認補登日期</button></div>
             </div>
           </div>
         </div>
       )}
 
+      <DateSafetyBlockModal block={dateSafetyBlock} onClose={() => setDateSafetyBlock(null)} />
+
       {showConfirmModal && (
         <div className="fixed inset-0 z-[999] flex items-center justify-center p-4 bg-stone-900/60 backdrop-blur-sm">
           <div className="bg-white rounded-2xl shadow-xl w-full max-w-md overflow-hidden animate-in zoom-in-95">
-            <div className="bg-amber-400 p-4 flex justify-between items-center"><h3 className="text-white font-bold flex gap-2"><AlertCircle/> 確認提交</h3><button onClick={()=>setShowConfirmModal(false)}><X className="text-white"/></button></div>
+            <div className="bg-amber-400 p-4 flex justify-between items-center"><h3 className="text-white font-bold flex gap-2"><AlertCircle/> {isBackfillDate ? "補登日報確認" : "確認提交"}</h3><button onClick={()=>setShowConfirmModal(false)}><X className="text-white"/></button></div>
             <div className="p-6 space-y-4">
+              {isBackfillDate && <div className="bg-rose-50 border border-rose-200 rounded-xl p-3 text-rose-700 font-black text-center">你正在補登 {inputDate} 日報；送出後資料會記在 {inputDate}。</div>}
               <div className="bg-stone-50 p-4 rounded-xl space-y-2"><div className="flex justify-between font-bold text-stone-700"><span>日期</span><span>{inputDate}</span></div><div className="flex justify-between font-bold text-stone-700"><span>店家</span><span>{selectedStore}</span></div><div className="flex justify-between font-bold text-amber-600 border-t pt-2"><span>現金業績</span><span>${formData.cash}</span></div><div className="flex justify-between font-bold text-indigo-600"><span>總權責</span><span>${formData.accrual}</span></div></div>
               {existingReportId && <p className="text-xs text-rose-500 font-bold bg-rose-50 p-2 rounded">⚠️ 提醒：資料將覆蓋當日舊紀錄。</p>}
               <div className="flex gap-3 pt-2">
                 <button onClick={()=>setShowConfirmModal(false)} disabled={isSubmitting} className="flex-1 py-3 border rounded-xl font-bold text-stone-500 hover:bg-stone-50 disabled:opacity-50">返回</button>
                 <button onClick={handleFinalSubmit} disabled={isSubmitting || !isOnline} className="flex-1 py-3 bg-stone-800 text-white rounded-xl font-bold hover:bg-stone-900 disabled:opacity-70 flex justify-center items-center gap-2">
-                  {!isOnline ? <WifiOff size={20}/> : isSubmitting ? <Activity className="animate-spin" size={20}/> : "確認提交"}
+                  {!isOnline ? <WifiOff size={20}/> : isSubmitting ? <Activity className="animate-spin" size={20}/> : isBackfillDate ? `確認補登 ${formatReportMonthDay(inputDate)} 日報` : "確認提交"}
                 </button>
               </div>
             </div>
@@ -497,13 +559,16 @@ const TherapistInputView = () => {
 
   const [showConfirmModal, setShowConfirmModal] = useState(false); 
   const [showDateWarningModal, setShowDateWarningModal] = useState(false); 
+  const [dateSafetyBlock, setDateSafetyBlock] = useState(null);
 
   const LABELS = {
     totalRevenue: "今日總業績 (新客+舊客-退費)", newCustomerRevenue: "新客業績", newCustomerSkincareRevenue: "新客保養品業績", newCustomerCount: "新客人數",
     newCustomerClosings: "新客留單人數", oldCustomerRevenue: "舊客業績", oldCustomerSkincareRevenue: "舊客保養品業績", oldCustomerCount: "舊客人數", returnRevenue: "今日當月退費業績",
   };
 
-  const today = getLocalTodayString();
+  const today = getReportTodayString();
+  const dateSafety = classifyDailyReportDate(inputDate);
+  const isBackfillDate = dateSafety.status === "BACKFILL";
 
   const { brandInfo } = useMemo(() => {
     let id = "CYJ", name = "CYJ";
@@ -530,7 +595,7 @@ const TherapistInputView = () => {
   useEffect(() => {
     const handleWakeUp = () => {
       if (document.visibilityState === "visible" || document.hasFocus()) {
-        const realToday = getLocalTodayString();
+        const realToday = getReportTodayString();
         const isFormEmpty = !formData.newCustomerRevenue && !formData.oldCustomerRevenue && !formData.newCustomerSkincareRevenue && !formData.oldCustomerSkincareRevenue;
         
         if (inputDate !== realToday && isFormEmpty) {
@@ -555,7 +620,7 @@ const TherapistInputView = () => {
         if (parsed.formData) setFormData({ ...defaultPersonalData, ...parsed.formData });
         
         const draftDate = parsed.date;
-        if (draftDate === getLocalTodayString()) {
+        if (draftDate === getReportTodayString()) {
            setInputDate(draftDate);
         }
       } catch (e) { console.error(e); }
@@ -612,11 +677,15 @@ const TherapistInputView = () => {
 
   const handlePreSubmit = () => {
     if (!isOnline) return showToast("目前處於離線狀態，無法送出日報", "error");
-    if (inputDate > today) return showToast("不可提交未來日期", "error");
+    const safetyDecision = classifyDailyReportDate(inputDate);
+    if (!safetyDecision.allowed) {
+      setDateSafetyBlock(buildDateSafetyBlock(safetyDecision));
+      return;
+    }
     const hasData = formData.newCustomerRevenue || formData.newCustomerSkincareRevenue || formData.oldCustomerRevenue || formData.oldCustomerSkincareRevenue || formData.newCustomerCount || formData.oldCustomerCount || formData.returnRevenue;
     if (!hasData) return showToast("請至少輸入一項業績或人數數據", "error");
     
-    if (inputDate !== today) {
+    if (safetyDecision.status === "BACKFILL") {
       setShowDateWarningModal(true);
     } else {
       setShowConfirmModal(true);
@@ -630,6 +699,12 @@ const TherapistInputView = () => {
 
   const handleFinalSubmit = async () => {
     if (isSubmitting || !isOnline) return;
+    const safetyDecision = classifyDailyReportDate(inputDate);
+    if (!safetyDecision.allowed) {
+      setShowConfirmModal(false);
+      setDateSafetyBlock(buildDateSafetyBlock(safetyDecision));
+      return;
+    }
     setIsSubmitting(true);
 
     try {
@@ -714,9 +789,19 @@ const TherapistInputView = () => {
          </div>
       </div>
 
+       {isBackfillDate && (
+         <div className="bg-rose-50 border border-rose-200 rounded-xl p-3 flex items-start gap-2 text-rose-700">
+           <AlertTriangle size={18} className="shrink-0 mt-0.5"/>
+           <div>
+             <p className="font-black">補登日報</p>
+             <p className="text-sm font-bold">你現在填寫的是 {inputDate} 個人日報；本次資料會寫入歷史日期，不是目前回報日 {today}。</p>
+           </div>
+         </div>
+       )}
+
       {hasSubmittedToday && (
         <div className="bg-emerald-50 text-emerald-600 p-3 rounded-xl text-sm font-bold flex items-center gap-2 border border-emerald-100">
-          <CheckCircle size={16}/> 您已完成今日 ({inputDate}) 的回報。
+          <CheckCircle size={16}/> 您已完成 {inputDate} 的回報。
         </div>
       )}
 
@@ -785,27 +870,30 @@ const TherapistInputView = () => {
       {showDateWarningModal && (
         <div className="fixed inset-0 z-[1000] flex items-center justify-center p-4 bg-stone-900/80 backdrop-blur-sm">
           <div className="bg-white rounded-3xl shadow-2xl w-full max-w-sm overflow-hidden animate-in zoom-in-95 border-4 border-rose-100">
-            <div className="bg-rose-500 p-6 flex flex-col items-center text-center"><div className="bg-white/20 p-3 rounded-full mb-3"><Calendar size={32} className="text-white"/></div><h3 className="text-white text-xl font-extrabold tracking-wide">日期確認</h3></div>
+            <div className="bg-rose-500 p-6 flex flex-col items-center text-center"><div className="bg-white/20 p-3 rounded-full mb-3"><Calendar size={32} className="text-white"/></div><h3 className="text-white text-xl font-extrabold tracking-wide">補登日報日期確認</h3></div>
             <div className="p-6 space-y-6 text-center">
               <div><p className="text-stone-500 font-bold mb-1">您選擇的回報日期是</p><p className="text-3xl font-mono font-black text-rose-600">{inputDate}</p></div>
-              <div className="bg-rose-50 p-4 rounded-xl border border-rose-100 text-left"><p className="flex items-start gap-2 text-rose-800 text-sm font-bold"><AlertTriangle size={18} className="shrink-0 mt-0.5"/><span>系統偵測到此日期 <u>並非今天</u> ({today})。{hasSubmittedToday && (<span className="block mt-2 pt-2 border-t border-rose-200 text-rose-600">⚠️ 注意：該日期已有您的回報紀錄，繼續提交將會 <span className="underline font-black">覆蓋舊資料</span>！</span>)}</span></p></div>
-              <div className="flex gap-3"><button onClick={() => setShowDateWarningModal(false)} className="flex-1 py-3.5 bg-stone-100 text-stone-500 rounded-xl font-bold hover:bg-stone-200 transition-colors">取消</button><button onClick={handleDateWarningConfirm} className="flex-1 py-3.5 bg-rose-600 text-white rounded-xl font-bold hover:bg-rose-700 shadow-lg shadow-rose-200 transition-all active:scale-95">確認日期無誤</button></div>
+              <div className="bg-rose-50 p-4 rounded-xl border border-rose-100 text-left"><p className="flex items-start gap-2 text-rose-800 text-sm font-bold"><AlertTriangle size={18} className="shrink-0 mt-0.5"/><span>你正在補登 <u>{inputDate}</u> 個人日報；目前回報日為 {today}。本次資料會寫入 {inputDate}，不是目前回報日。{hasSubmittedToday && (<span className="block mt-2 pt-2 border-t border-rose-200 text-rose-600">⚠️ 注意：該日期已有您的回報紀錄，繼續提交將會 <span className="underline font-black">覆蓋舊資料</span>！</span>)}</span></p></div>
+              <div className="flex gap-3"><button onClick={() => setShowDateWarningModal(false)} className="flex-1 py-3.5 bg-stone-100 text-stone-500 rounded-xl font-bold hover:bg-stone-200 transition-colors">取消</button><button onClick={handleDateWarningConfirm} className="flex-1 py-3.5 bg-rose-600 text-white rounded-xl font-bold hover:bg-rose-700 shadow-lg shadow-rose-200 transition-all active:scale-95">確認補登日期</button></div>
             </div>
           </div>
         </div>
       )}
 
+      <DateSafetyBlockModal block={dateSafetyBlock} onClose={() => setDateSafetyBlock(null)} />
+
       {showConfirmModal && (
         <div className="fixed inset-0 z-[999] flex items-center justify-center p-4 bg-stone-900/60 backdrop-blur-sm">
           <div className="bg-white rounded-2xl shadow-xl w-full max-w-md overflow-hidden animate-in zoom-in-95">
-            <div className="bg-indigo-600 p-4 flex justify-between items-center"><h3 className="text-white font-bold flex gap-2"><AlertCircle/> 確認提交</h3><button onClick={()=>setShowConfirmModal(false)}><X className="text-white"/></button></div>
+            <div className="bg-indigo-600 p-4 flex justify-between items-center"><h3 className="text-white font-bold flex gap-2"><AlertCircle/> {isBackfillDate ? "補登日報確認" : "確認提交"}</h3><button onClick={()=>setShowConfirmModal(false)}><X className="text-white"/></button></div>
             <div className="p-6 space-y-4">
+              {isBackfillDate && <div className="bg-rose-50 border border-rose-200 rounded-xl p-3 text-rose-700 font-black text-center">你正在補登 {inputDate} 個人日報；送出後資料會記在 {inputDate}。</div>}
               <div className="bg-stone-50 p-4 rounded-xl space-y-2 text-sm"><div className="flex justify-between font-bold text-stone-700"><span>日期</span><span>{inputDate}</span></div><div className="flex justify-between font-bold text-stone-700"><span>人員</span><span>{currentUser?.name}</span></div><div className="border-t border-stone-200 my-2 pt-2 space-y-1"><div className="flex justify-between"><span className="text-stone-500">今日總業績</span><span className="font-mono font-bold text-indigo-600 text-lg">${formData.totalRevenue || 0}</span></div><div className="flex justify-between text-xs text-stone-400 pl-2"><span>{isAnniuTherapistReport ? `(新客 ${formData.newCustomerRevenue || 0} + 新客保養品 ${formData.newCustomerSkincareRevenue || 0} + 舊客 ${formData.oldCustomerRevenue || 0} + 舊客保養品 ${formData.oldCustomerSkincareRevenue || 0})` : `(新客 ${formData.newCustomerRevenue || 0} + 舊客 ${formData.oldCustomerRevenue || 0})`}</span></div><div className="flex justify-between mt-2"><span className="text-stone-500">退費業績</span><span className="font-mono font-bold text-rose-500">${formData.returnRevenue || 0}</span></div></div></div>
               {hasSubmittedToday && <p className="text-xs text-rose-500 font-bold bg-rose-50 p-2 rounded flex items-center gap-1"><AlertTriangle size={12}/> 提醒：資料將覆蓋當日舊紀錄。</p>}
               <div className="flex gap-3 pt-2">
                 <button onClick={()=>setShowConfirmModal(false)} disabled={isSubmitting} className="flex-1 py-3 border rounded-xl font-bold text-stone-500 hover:bg-stone-50 disabled:opacity-50">返回</button>
                 <button onClick={handleFinalSubmit} disabled={isSubmitting || !isOnline} className="flex-1 py-3 bg-indigo-600 text-white rounded-xl font-bold hover:bg-indigo-700 shadow-md disabled:opacity-70 flex justify-center items-center gap-2">
-                  {!isOnline ? <WifiOff size={20}/> : isSubmitting ? <Activity className="animate-spin" size={20}/> : "確認提交"}
+                  {!isOnline ? <WifiOff size={20}/> : isSubmitting ? <Activity className="animate-spin" size={20}/> : isBackfillDate ? `確認補登 ${formatReportMonthDay(inputDate)} 日報` : "確認提交"}
                 </button>
               </div>
             </div>

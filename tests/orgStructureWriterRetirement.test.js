@@ -1,5 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import { CURRENT_APP_VERSION_SOURCE_PATTERN } from "./helpers/appVersionContract.js";
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -73,7 +74,7 @@ test("P0-FINAL-1D-A2-1 rules keep org_structure and its restore snapshots readab
 });
 
 test("P0-FINAL-1D-A2-1 keeps CURRENT_APP_VERSION unchanged and adds no new realtime/polling primitive in the changed UI surfaces", () => {
-  assert.match(app, /CURRENT_APP_VERSION\s*=\s*"3\.6\.0"/);
+  assert.match(app, CURRENT_APP_VERSION_SOURCE_PATTERN);
   const changedUi = `${app}\n${settings}\n${maintenance}`;
   assert.doesNotMatch(changedUi, /setInterval\([^)]*org_structure|org_structure[\s\S]{0,120}setInterval\(/);
   assert.doesNotMatch(changedUi, /onSnapshot\([^)]*org_structure|org_structure[\s\S]{0,120}onSnapshot\(/);

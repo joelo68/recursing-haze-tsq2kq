@@ -1,3 +1,4 @@
+import { CURRENT_APP_VERSION_SOURCE_PATTERN } from "./helpers/appVersionContract.js";
 import test from "node:test";
 import assert from "node:assert/strict";
 import fs from "node:fs";
@@ -67,6 +68,6 @@ test("P1-A core validation includes syntax, full regression, build and security 
 test("P1-A does not change application version ownership", () => {
   assert.match(
     read("src/App.jsx"),
-    /const CURRENT_APP_VERSION = "3\.6\.0";/,
+    CURRENT_APP_VERSION_SOURCE_PATTERN,
   );
 });

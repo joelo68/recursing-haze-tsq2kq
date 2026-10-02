@@ -1,5 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import { CURRENT_APP_VERSION_SOURCE_PATTERN } from "./helpers/appVersionContract.js";
 import fs from "node:fs";
 import path from "node:path";
 import { createRequire } from "node:module";
@@ -148,7 +149,7 @@ test("B1C1B1 account authority remains isolated while post-login management uses
   assert.match(settings, /manageApplicationAccountAction/);
   assert.match(therapistManager, /manageApplicationAccountAction/);
   assert.match(therapistManager, /action:\s*"reveal_password"/);
-  assert.match(app, /CURRENT_APP_VERSION\s*=\s*"3\.6\.0"/);
+  assert.match(app, CURRENT_APP_VERSION_SOURCE_PATTERN);
   assert.match(rules, /function applicationIdentity\(\)[\s\S]{0,320}request\.auth\.token\.drcyjIdentity == true/);
 });
 

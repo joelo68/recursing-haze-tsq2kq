@@ -1,3 +1,4 @@
+import { CURRENT_APP_VERSION_SOURCE_PATTERN } from "./helpers/appVersionContract.js";
 import test from "node:test";
 import assert from "node:assert/strict";
 import fs from "node:fs";
@@ -256,6 +257,6 @@ test("existing specialized progress controls remain specialized", () => {
 });
 
 test("v1 stays frontend-only and does not bump the app version", () => {
-  assert.match(read("src/App.jsx"), /const CURRENT_APP_VERSION = "3\.6\.0";/);
+  assert.match(read("src/App.jsx"), CURRENT_APP_VERSION_SOURCE_PATTERN);
   assert.doesNotMatch(read("src/components/SharedUI.jsx"), /firebase|Firestore/);
 });

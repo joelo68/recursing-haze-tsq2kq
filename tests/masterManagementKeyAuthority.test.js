@@ -1,5 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import { CURRENT_APP_VERSION_SOURCE_PATTERN } from "./helpers/appVersionContract.js";
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -94,6 +95,6 @@ test("Browser maintenance backup no longer exports the highest management key", 
 });
 
 test("版本與部署邊界維持：不新增 Function export、不提高 CURRENT_APP_VERSION", () => {
-  assert.match(app, /CURRENT_APP_VERSION\s*=\s*"3\.6\.0"/);
+  assert.match(app, CURRENT_APP_VERSION_SOURCE_PATTERN);
   assert.doesNotMatch(app, /MASTER_MANAGEMENT_KEY_ENDPOINT/);
 });

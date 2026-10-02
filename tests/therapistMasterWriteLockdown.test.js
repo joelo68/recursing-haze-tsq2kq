@@ -1,3 +1,4 @@
+import { CURRENT_APP_VERSION_SOURCE_PATTERN } from "./helpers/appVersionContract.js";
 import test from "node:test";
 import assert from "node:assert/strict";
 import fs from "node:fs";
@@ -79,7 +80,7 @@ test("Backend remains the sole therapist master mutation authority after legacy 
 });
 
 test("B1C2D is Rules-only and does not change app version or read topology", () => {
-  assert.match(app, /CURRENT_APP_VERSION\s*=\s*"3\.6\.0"/);
+  assert.match(app, CURRENT_APP_VERSION_SOURCE_PATTERN);
   assert.doesNotMatch(managerView, /onSnapshot\s*\(|setInterval\s*\(|setTimeout\s*\(/);
   assert.match(managerView, /action:\s*"get"/);
   assert.match(managerView, /action:\s*"reset_password"/);

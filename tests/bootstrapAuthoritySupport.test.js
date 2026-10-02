@@ -1,5 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import { CURRENT_APP_VERSION_SOURCE_PATTERN } from "./helpers/appVersionContract.js";
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -54,7 +55,7 @@ test("P0-FINAL-1C-1 bootstrap ownership is consumed by 1C-2 Rules without changi
   assert.match(rules, /function ownsBootstrapDeviceRequest\(\)/);
   assert.match(rules, /resource\.data\.bootstrapAuthUid == request\.auth\.uid/);
   assert.match(rules, /function anonymousBootstrap\(\)/);
-  assert.match(app, /const CURRENT_APP_VERSION = "3\.6\.0";/);
+  assert.match(app, CURRENT_APP_VERSION_SOURCE_PATTERN);
 });
 
 test("bootstrap support adds no polling or backend realtime listener", () => {

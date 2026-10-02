@@ -1,5 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import { CURRENT_APP_VERSION_SOURCE_PATTERN } from "./helpers/appVersionContract.js";
 import fs from "node:fs";
 import path from "node:path";
 import { createRequire } from "node:module";
@@ -159,5 +160,5 @@ test("security boundary remains Backend-only with no new browser Firestore write
     rules,
     /match \/artifacts\/\{appId\}\/public\/data\/therapists\/\{document=\*\*\}\s*\{\s*allow read: if cyjLegacyIdentity\(appId\);\s*allow write: if false;/s
   );
-  assert.match(app, /CURRENT_APP_VERSION\s*=\s*"3\.6\.0"/);
+  assert.match(app, CURRENT_APP_VERSION_SOURCE_PATTERN);
 });

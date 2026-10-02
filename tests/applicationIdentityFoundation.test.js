@@ -1,5 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import { CURRENT_APP_VERSION_SOURCE_PATTERN } from "./helpers/appVersionContract.js";
 import fs from "node:fs";
 import path from "node:path";
 import { createRequire } from "node:module";
@@ -292,7 +293,7 @@ test("B1C2C1 frontend consumes sanitized directory while application session cut
   assert.match(app, /assertSanitizedLoginDirectory/);
   assert.match(app, /requestApplicationIdentityToken:\s*true/);
   assert.match(app, /signInWithCustomToken\(auth, customToken\)/);
-  assert.match(app, /CURRENT_APP_VERSION\s*=\s*"3\.6\.0"/);
+  assert.match(app, CURRENT_APP_VERSION_SOURCE_PATTERN);
 });
 
 test("P0-FINAL-1C-2 preserves the identity foundation and enforces brand claims in broad rules", () => {

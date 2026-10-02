@@ -1,5 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import { CURRENT_APP_VERSION_SOURCE_PATTERN } from "./helpers/appVersionContract.js";
 import fs from "node:fs";
 import path from "node:path";
 
@@ -97,6 +98,6 @@ test("P1-B covers login, permission navigation, save duplicate guard and device 
 test("P1-B does not modify application version ownership", () => {
   assert.match(
     read("src/App.jsx"),
-    /const CURRENT_APP_VERSION = "3\.6\.0";/,
+    CURRENT_APP_VERSION_SOURCE_PATTERN,
   );
 });

@@ -1,3 +1,4 @@
+import { CURRENT_APP_VERSION_SOURCE_PATTERN } from "./helpers/appVersionContract.js";
 import test from "node:test";
 import assert from "node:assert/strict";
 import fs from "node:fs";
@@ -24,7 +25,7 @@ test("new device protection defaults to off and covers all current roles", () =>
   assert.match(backend, /deviceApprovalMode:\s*'off'/);
   assert.match(backend, /deviceApprovalRoles:\s*\['director', 'trainer', 'manager', 'store', 'therapist'\]/);
   assert.match(backend, /deviceApprovalExpiryMinutes:\s*15/);
-  assert.match(app, /CURRENT_APP_VERSION\s*=\s*"3\.6\.0"/);
+  assert.match(app, CURRENT_APP_VERSION_SOURCE_PATTERN);
 });
 
 test("every successful login requires server credential verification and a server-issued application session", () => {
@@ -317,7 +318,7 @@ test("device review levels separate observing, reverify, and blocked states", ()
   assert.match(monitor, /updateDeviceTrust\(profile, device, "reverify_required"\)/);
   assert.match(app, /主管要求重新驗證/);
   assert.match(app, /新裝置待觀察/);
-  assert.match(app, /CURRENT_APP_VERSION\s*=\s*"3\.6\.0"/);
+  assert.match(app, CURRENT_APP_VERSION_SOURCE_PATTERN);
 });
 
 test("six-digit self verification allows only three failed attempts and reports remaining attempts", () => {
@@ -524,7 +525,7 @@ test("highest-admin card still watches only the displayed request for live resol
 });
 
 test("summary-first manager notice remains compatible with the promoted app version and existing focused approval panel", () => {
-  assert.match(app, /CURRENT_APP_VERSION\s*=\s*"3\.6\.0"/);
+  assert.match(app, CURRENT_APP_VERSION_SOURCE_PATTERN);
   assert.match(app, /focusRequestId=\{superAdminApprovalFocusId\}/);
   assert.match(panel, /這是剛才主動提醒您的登入申請/);
 });

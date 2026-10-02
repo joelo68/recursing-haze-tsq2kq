@@ -1,5 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import { CURRENT_APP_VERSION_SOURCE_PATTERN } from "./helpers/appVersionContract.js";
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -56,7 +57,7 @@ test("custom token authority remains allowed-only and fails closed if minting is
 });
 
 test("dedicated runtime-SA remains intact after Rules claim enforcement and app version stays unchanged", () => {
-  assert.match(app, /CURRENT_APP_VERSION\s*=\s*"3\.6\.0"/);
+  assert.match(app, CURRENT_APP_VERSION_SOURCE_PATTERN);
   assert.match(rules, /function applicationIdentity\(\)/);
   assert.match(rules, /request\.auth\.token\.drcyjIdentity == true/);
 });

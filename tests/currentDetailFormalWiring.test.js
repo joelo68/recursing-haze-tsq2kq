@@ -1,3 +1,4 @@
+import { CURRENT_APP_VERSION_SOURCE_PATTERN } from "./helpers/appVersionContract.js";
 import test from "node:test";
 import assert from "node:assert/strict";
 import fs from "node:fs";
@@ -76,7 +77,7 @@ test("5D-2 keeps the Firestore Rules contract and remains compatible with the pr
   assert.match(rules, /store_lifecycle/);
   assert.match(rules, /allow read/);
   assert.match(rules, /allow write:\s*if false/);
-  assert.match(app, /CURRENT_APP_VERSION\s*=\s*"3\.6\.0"/);
+  assert.match(app, CURRENT_APP_VERSION_SOURCE_PATTERN);
 });
 
 test("runtime stabilization Audit delegates store identity to shared Lifecycle authority", () => {

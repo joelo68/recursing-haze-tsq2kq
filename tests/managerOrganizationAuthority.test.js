@@ -1,5 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import { CURRENT_APP_VERSION_SOURCE_PATTERN } from "./helpers/appVersionContract.js";
 import fs from "node:fs";
 import path from "node:path";
 import { createRequire } from "node:module";
@@ -222,7 +223,7 @@ test("manager organization authority owns manager, store, and restore mutations 
   assert.match(maintenance, /handleRestoreOrgStructureSnapshot[\s\S]{0,900}action:\s*"restore_snapshot"/);
   assert.doesNotMatch(maintenance, /setDoc\(getDocPath\("org_structure"\)/);
   assert.doesNotMatch(settings, /setDoc\(getDocPath\("manager_auth"\)/);
-  assert.match(app, /CURRENT_APP_VERSION\s*=\s*"3\.6\.0"/);
+  assert.match(app, CURRENT_APP_VERSION_SOURCE_PATTERN);
   assert.match(rules, /match \/brands\/\{brandId\}\/settings\/org_structure[\s\S]{0,180}allow write:\s*if false/);
   assert.match(rules, /match \/brands\/\{brandId\}\/org_structure_snapshots\/\{document=\*\*\}[\s\S]{0,180}allow write:\s*if false/);
 });

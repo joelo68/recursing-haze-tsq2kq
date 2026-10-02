@@ -1,3 +1,4 @@
+import { CURRENT_APP_VERSION_SOURCE_PATTERN } from "./helpers/appVersionContract.js";
 import test from "node:test";
 import assert from "node:assert/strict";
 import fs from "node:fs";
@@ -253,7 +254,7 @@ test("A2-2 registers a backend-only delegation writer without changing app versi
   assert.match(app, /MANAGE_MANAGEMENT_DELEGATION_ENDPOINT/);
   assert.match(app, /const manageManagementDelegationAction = useCallback/);
   assert.match(settings, /manageManagementDelegationAction/);
-  assert.match(app, /CURRENT_APP_VERSION\s*=\s*"3\.6\.0"/);
+  assert.match(app, CURRENT_APP_VERSION_SOURCE_PATTERN);
   assert.match(rules, /management_delegation_authority/);
 });
 

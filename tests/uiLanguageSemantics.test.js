@@ -1,3 +1,4 @@
+import { CURRENT_APP_VERSION_SOURCE_PATTERN } from "./helpers/appVersionContract.js";
 import test from "node:test";
 import assert from "node:assert/strict";
 import fs from "node:fs";
@@ -107,8 +108,8 @@ test("TherapistPerformance wording exception stays byte-identical", () => {
   assert.match(source, /\bvs\b/);
 });
 
-test("semantic implementation is promoted with app version 3.6.0", () => {
+test("semantic implementation remains compatible with the shared app version contract", () => {
   const app = read("src/App.jsx");
-  assert.match(app, /CURRENT_APP_VERSION\s*=\s*"3\.6\.0"/);
+  assert.match(app, CURRENT_APP_VERSION_SOURCE_PATTERN);
   assert.doesNotMatch(app, /CURRENT_APP_VERSION\s*=\s*"3\.5\.3"/);
 });
