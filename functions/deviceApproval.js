@@ -894,17 +894,22 @@ async function createOrRefreshApprovalRequest({ admin, db, brandId, roleId, acco
   };
 }
 
-async function resolvePendingRequestInTransaction({ admin, transaction, db, brandId, requestRef, requestData, nextStatus, actorName, actorRole, source, targetDevicePatch = {} }) {
+async function resolvePendingRequestInTransaction({ admin, transaction, db, brandId, requestRef, requestData, nextStatus, actorName, actorRole, source, targetDevicePatch = {}, profileSnap: preloadedProfileSnap = null, inboxSnap: preloadedInboxSnap = null, brandSnap: preloadedBrandSnap = null }) {
   if (!requestData || requestData.status !== 'pending') return false;
   const accountKey = requestData.accountKey;
   const profileRef = getBrandCollection(db, brandId, 'account_devices').doc(accountKey);
   const inboxRef = getBrandCollection(db, brandId, 'device_approval_inbox').doc(accountKey);
   const brandSummaryRef = getBrandSecuritySummaryDoc(db, brandId, 'device_approvals');
-  const [profileSnap, inboxSnap, brandSnap] = await Promise.all([
-    transaction.get(profileRef),
-    transaction.get(inboxRef),
-    transaction.get(brandSummaryRef),
-  ]);
+  let profileSnap = preloadedProfileSnap;
+  let inboxSnap = preloadedInboxSnap;
+  let brandSnap = preloadedBrandSnap;
+  if (!profileSnap || !inboxSnap || !brandSnap) {
+    [profileSnap, inboxSnap, brandSnap] = await Promise.all([
+      transaction.get(profileRef),
+      transaction.get(inboxRef),
+      transaction.get(brandSummaryRef),
+    ]);
+  }
   const profile = profileSnap.exists ? profileSnap.data() || {} : {};
   const devices = profile.devices || {};
   const currentDevice = devices[requestData.deviceId] || {};
@@ -1874,64 +1879,143 @@ function createDeviceApprovalFunctions({ admin, db }) {
       }
       const adminCheck = await verifySuperAdminActor({ db, brandId, actor });
       if (!adminCheck.ok) return res.status(403).json({ ok: false, message: '此操作僅限最高管理者使用' });
-      const profileRef = getBrandCollection(db, brandId, 'account_devices').doc(accountKey);
-      const profileSnap = await profileRef.get();
-      if (!profileSnap.exists) return res.status(404).json({ ok: false, message: '找不到裝置資料' });
-      const profile = profileSnap.data() || {};
-      const device = profile.devices?.[deviceId];
-      if (!device) return res.status(404).json({ ok: false, message: '找不到這台裝置' });
+
       const actorName = adminCheck.actorName;
-      const nowText = new Date().toISOString();
+      const profileRef = getBrandCollection(db, brandId, 'account_devices').doc(accountKey);
+      const requestId = makeRequestId(brandId, accountKey, deviceId);
+      const requestRef = getBrandCollection(db, brandId, 'device_approval_requests').doc(requestId);
+      const inboxRef = getBrandCollection(db, brandId, 'device_approval_inbox').doc(accountKey);
+      const brandSummaryRef = getBrandSecuritySummaryDoc(db, brandId, 'device_approvals');
       const isTrusted = nextStatus === 'trusted';
       const isGlobalBlocked = nextStatus === 'global_blocked';
       const isBlocked = nextStatus === 'blocked' || isGlobalBlocked;
       const isObserving = nextStatus === 'observing';
       const isReverifyRequired = nextStatus === 'reverify_required' || nextStatus === 'suspicious';
-      const nextDevice = {
-        ...device,
-        trusted: isTrusted,
-        status: nextStatus === 'suspicious' ? 'reverify_required' : nextStatus,
-        source: isTrusted
-          ? 'manual_trusted'
-          : isGlobalBlocked
-            ? 'manual_global_blocked'
-            : isBlocked
-              ? 'manual_blocked'
-              : isObserving
-                ? 'manual_observing'
-                : 'manual_reverify_required',
-        ...(isReverifyRequired ? { reverifyRequired: true } : { reverifyRequired: false }),
-        reviewedBy: actorName,
-        reviewedRole: 'director',
-        reviewedAtText: nowText,
-        updatedAtText: nowText,
-        ...(isBlocked ? { blockedBy: actorName, blockedAtText: nowText, blockScope: isGlobalBlocked ? 'all_brands' : 'current_brand' } : {}),
-      };
-      await profileRef.set({ devices: { [deviceId]: nextDevice }, updatedAtText: nowText }, { merge: true });
 
-      const globalRef = getGlobalBlockedRef(db, profile.role || 'unknown', profile.accountId || profile.userName || accountKey, deviceId);
-      if (isGlobalBlocked) {
-        await globalRef.set({
-          active: true, status: 'global_blocked', source: 'manual_global_blocked', scope: 'all_brands', role: profile.role || '', accountId: profile.accountId || '',
-          userName: profile.userName || profile.accountId || accountKey, deviceId, deviceShort: device.deviceShort || '', device: device.device || '', browser: device.browser || '', os: device.os || '',
-          blockedBy: actorName, blockedRole: 'director', blockedAtText: nowText, updatedAtText: nowText,
-        }, { merge: true });
-      } else if (isTrusted) {
-        await globalRef.set({ active: false, status: 'resolved', source: 'manual_trusted', resolvedBy: actorName, resolvedRole: 'director', resolvedAtText: nowText, updatedAtText: nowText }, { merge: true });
+      // Manual device review is a security state transition, not a collection of best-effort writes.
+      // Keep account_devices, global block state, pending request, inbox and summary in one transaction
+      // so concurrent highest-admin actions or a mid-flight failure cannot leave contradictory authority.
+      const mutationResult = await db.runTransaction(async (transaction) => {
+        const [profileSnap, requestSnap] = await Promise.all([
+          transaction.get(profileRef),
+          transaction.get(requestRef),
+        ]);
+        if (!profileSnap.exists) return { ok: false, reason: 'profile_not_found' };
+
+        const profile = profileSnap.data() || {};
+        const device = profile.devices?.[deviceId];
+        if (!device) return { ok: false, reason: 'device_not_found' };
+
+        const globalRef = getGlobalBlockedRef(
+          db,
+          profile.role || 'unknown',
+          profile.accountId || profile.userName || accountKey,
+          deviceId
+        );
+        const requestData = requestSnap.exists ? requestSnap.data() || {} : {};
+        const hasPendingRequest = requestSnap.exists && requestData.status === 'pending';
+
+        let inboxSnap = null;
+        let brandSnap = null;
+        if (hasPendingRequest) {
+          [inboxSnap, brandSnap] = await Promise.all([
+            transaction.get(inboxRef),
+            transaction.get(brandSummaryRef),
+          ]);
+        }
+        if (isGlobalBlocked || isTrusted) {
+          // Read the global authority before writing it so concurrent block/trust actions retry serially.
+          await transaction.get(globalRef);
+        }
+
+        const nowText = new Date().toISOString();
+        const nextDevice = {
+          ...device,
+          trusted: isTrusted,
+          status: nextStatus === 'suspicious' ? 'reverify_required' : nextStatus,
+          source: isTrusted
+            ? 'manual_trusted'
+            : isGlobalBlocked
+              ? 'manual_global_blocked'
+              : isBlocked
+                ? 'manual_blocked'
+                : isObserving
+                  ? 'manual_observing'
+                  : 'manual_reverify_required',
+          ...(isReverifyRequired ? { reverifyRequired: true } : { reverifyRequired: false }),
+          reviewedBy: actorName,
+          reviewedRole: 'director',
+          reviewedAtText: nowText,
+          updatedAtText: nowText,
+          ...(isBlocked ? { blockedBy: actorName, blockedAtText: nowText, blockScope: isGlobalBlocked ? 'all_brands' : 'current_brand' } : {}),
+        };
+
+        if (hasPendingRequest) {
+          await resolvePendingRequestInTransaction({
+            admin,
+            transaction,
+            db,
+            brandId,
+            requestRef,
+            requestData,
+            nextStatus: isTrusted ? 'approved' : (isGlobalBlocked || isBlocked ? 'blocked' : (isObserving ? 'observing' : 'reverify_required')),
+            actorName,
+            actorRole: 'director',
+            source: 'system_monitor',
+            targetDevicePatch: nextDevice,
+            profileSnap,
+            inboxSnap,
+            brandSnap,
+          });
+        } else {
+          transaction.set(profileRef, {
+            devices: { [deviceId]: nextDevice },
+            updatedAtText: nowText,
+          }, { merge: true });
+        }
+
+        if (isGlobalBlocked) {
+          transaction.set(globalRef, {
+            active: true,
+            status: 'global_blocked',
+            source: 'manual_global_blocked',
+            scope: 'all_brands',
+            role: profile.role || '',
+            accountId: profile.accountId || '',
+            userName: profile.userName || profile.accountId || accountKey,
+            deviceId,
+            deviceShort: device.deviceShort || '',
+            device: device.device || '',
+            browser: device.browser || '',
+            os: device.os || '',
+            blockedBy: actorName,
+            blockedRole: 'director',
+            blockedAtText: nowText,
+            updatedAtText: nowText,
+          }, { merge: true });
+        } else if (isTrusted) {
+          transaction.set(globalRef, {
+            active: false,
+            status: 'resolved',
+            source: 'manual_trusted',
+            resolvedBy: actorName,
+            resolvedRole: 'director',
+            resolvedAtText: nowText,
+            updatedAtText: nowText,
+          }, { merge: true });
+        }
+
+        return { ok: true, profile, device, nextDevice };
+      });
+
+      if (!mutationResult?.ok) {
+        if (mutationResult?.reason === 'profile_not_found') return res.status(404).json({ ok: false, message: '找不到裝置資料' });
+        if (mutationResult?.reason === 'device_not_found') return res.status(404).json({ ok: false, message: '找不到這台裝置' });
+        return res.status(409).json({ ok: false, message: '裝置狀態已變更，請重新載入後再試' });
       }
 
-      const requestId = makeRequestId(brandId, accountKey, deviceId);
-      const requestRef = getBrandCollection(db, brandId, 'device_approval_requests').doc(requestId);
-      await db.runTransaction(async (transaction) => {
-        const requestSnap = await transaction.get(requestRef);
-        if (!requestSnap.exists || requestSnap.data()?.status !== 'pending') return;
-        await resolvePendingRequestInTransaction({
-          admin, transaction, db, brandId, requestRef, requestData: requestSnap.data() || {},
-          nextStatus: isTrusted ? 'approved' : (isGlobalBlocked || isBlocked ? 'blocked' : (isObserving ? 'observing' : 'reverify_required')), actorName, actorRole: 'director', source: 'system_monitor',
-          targetDevicePatch: nextDevice,
-        });
-      });
       await requestRef.collection('private').doc('verification').delete().catch(() => {});
+      const { profile, device, nextDevice } = mutationResult;
       await writeSecurityLog({
         db, brandId,
         payload: {
@@ -1973,55 +2057,110 @@ function createDeviceApprovalFunctions({ admin, db }) {
       const loginLocation = normalizeLocation(body.loginLocation || {});
       const blockedDeviceId = sanitizeSecurityKey(body.blockedDeviceId || '');
       if (!roleId || !accountId || !deviceInfo.deviceId) return res.status(400).json({ ok: false, message: '資料不完整' });
+
       const accountKey = sanitizeSecurityKey(`${brandId}_${roleId}_${accountId}`);
       const profileRef = getBrandCollection(db, brandId, 'account_devices').doc(accountKey);
-      const profileSnap = await profileRef.get();
-      const profileDevices = profileSnap.exists ? profileSnap.data()?.devices || {} : {};
-      const existing = profileDevices?.[deviceInfo.deviceId] || {};
-      const recoverableRisk = findRecoverableRiskDeviceEntry(profileDevices, deviceInfo, loginLocation);
-      const recoverableKnown = findRecoverableKnownDeviceEntry(profileDevices, deviceInfo, loginLocation);
-      const nowText = new Date().toISOString();
-      const nextDevice = {
-        ...existing,
-        ...deviceInfo,
-        trusted: true,
-        status: 'trusted',
-        source: 'emergency_master_unblocked',
-        reviewedBy: '最高管理者救援',
-        reviewedRole: 'master',
-        reviewedAtText: nowText,
-        emergencyUnblocked: true,
-        emergencyUnblockedAtText: nowText,
-        updatedAtText: nowText,
-      };
-      await profileRef.set({ brandId, brandLabel: getBrandLabel(brandId), role: roleId, accountId, userName, updatedAtText: nowText, devices: { [deviceInfo.deviceId]: nextDevice } }, { merge: true });
-      const globalDeviceIds = [...new Set([
-        deviceInfo.deviceId,
-        blockedDeviceId,
-        recoverableRisk?.storedDeviceId || '',
-        recoverableKnown?.storedDeviceId || '',
-      ].filter(Boolean))];
-      await Promise.all(globalDeviceIds.map((candidateDeviceId) => (
-        getGlobalBlockedRef(db, roleId, accountId, candidateDeviceId).set({
-          active: false,
-          status: 'resolved',
-          source: 'emergency_master_unblocked',
-          resolvedBy: '最高管理者救援',
-          resolvedRole: 'master',
-          resolvedAtText: nowText,
-          updatedAtText: nowText,
-        }, { merge: true })
-      )));
-
       const requestId = makeRequestId(brandId, accountKey, deviceInfo.deviceId);
       const requestRef = getBrandCollection(db, brandId, 'device_approval_requests').doc(requestId);
-      await db.runTransaction(async (transaction) => {
-        const requestSnap = await transaction.get(requestRef);
-        if (!requestSnap.exists || requestSnap.data()?.status !== 'pending') return;
-        await resolvePendingRequestInTransaction({ admin, transaction, db, brandId, requestRef, requestData: requestSnap.data() || {}, nextStatus: 'approved', actorName: '最高管理者救援', actorRole: 'master', source: 'emergency_master_unblocked', targetDevicePatch: nextDevice });
+      const inboxRef = getBrandCollection(db, brandId, 'device_approval_inbox').doc(accountKey);
+      const brandSummaryRef = getBrandSecuritySummaryDoc(db, brandId, 'device_approvals');
+
+      // Emergency recovery must be all-or-nothing across the account device, every matching
+      // global block marker, and the pending approval state. A partial rescue is itself unsafe.
+      const recoveryResult = await db.runTransaction(async (transaction) => {
+        const [profileSnap, requestSnap] = await Promise.all([
+          transaction.get(profileRef),
+          transaction.get(requestRef),
+        ]);
+        const profileDevices = profileSnap.exists ? profileSnap.data()?.devices || {} : {};
+        const existing = profileDevices?.[deviceInfo.deviceId] || {};
+        const recoverableRisk = findRecoverableRiskDeviceEntry(profileDevices, deviceInfo, loginLocation);
+        const recoverableKnown = findRecoverableKnownDeviceEntry(profileDevices, deviceInfo, loginLocation);
+        const globalDeviceIds = [...new Set([
+          deviceInfo.deviceId,
+          blockedDeviceId,
+          recoverableRisk?.storedDeviceId || '',
+          recoverableKnown?.storedDeviceId || '',
+        ].filter(Boolean))];
+        const globalRefs = globalDeviceIds.map((candidateDeviceId) => getGlobalBlockedRef(db, roleId, accountId, candidateDeviceId));
+
+        // Read every global marker before writes so a concurrent block/recovery action forces a retry.
+        if (globalRefs.length > 0) {
+          await Promise.all(globalRefs.map((ref) => transaction.get(ref)));
+        }
+
+        const requestData = requestSnap.exists ? requestSnap.data() || {} : {};
+        const hasPendingRequest = requestSnap.exists && requestData.status === 'pending';
+        let inboxSnap = null;
+        let brandSnap = null;
+        if (hasPendingRequest) {
+          [inboxSnap, brandSnap] = await Promise.all([
+            transaction.get(inboxRef),
+            transaction.get(brandSummaryRef),
+          ]);
+        }
+
+        const nowText = new Date().toISOString();
+        const nextDevice = {
+          ...existing,
+          ...deviceInfo,
+          trusted: true,
+          status: 'trusted',
+          source: 'emergency_master_unblocked',
+          reviewedBy: '最高管理者救援',
+          reviewedRole: 'master',
+          reviewedAtText: nowText,
+          emergencyUnblocked: true,
+          emergencyUnblockedAtText: nowText,
+          updatedAtText: nowText,
+        };
+
+        if (hasPendingRequest) {
+          await resolvePendingRequestInTransaction({
+            admin,
+            transaction,
+            db,
+            brandId,
+            requestRef,
+            requestData,
+            nextStatus: 'approved',
+            actorName: '最高管理者救援',
+            actorRole: 'master',
+            source: 'emergency_master_unblocked',
+            targetDevicePatch: nextDevice,
+            profileSnap,
+            inboxSnap,
+            brandSnap,
+          });
+        } else {
+          transaction.set(profileRef, {
+            brandId,
+            brandLabel: getBrandLabel(brandId),
+            role: roleId,
+            accountId,
+            userName,
+            updatedAtText: nowText,
+            devices: { [deviceInfo.deviceId]: nextDevice },
+          }, { merge: true });
+        }
+
+        globalRefs.forEach((globalRef) => {
+          transaction.set(globalRef, {
+            active: false,
+            status: 'resolved',
+            source: 'emergency_master_unblocked',
+            resolvedBy: '最高管理者救援',
+            resolvedRole: 'master',
+            resolvedAtText: nowText,
+            updatedAtText: nowText,
+          }, { merge: true });
+        });
+
+        return { nextDevice, globalDeviceIds };
       });
+
       await requestRef.collection('private').doc('verification').delete().catch(() => {});
-      await writeSecurityLog({ db, brandId, payload: { role: 'master', user: '最高管理者救援', action: '最高管理者協助裝置恢復', activityType: 'security.emergency_unblock', view: 'login', device: deviceInfo.device, browser: deviceInfo.browser, os: deviceInfo.os, deviceId: deviceInfo.deviceId, deviceShort: deviceInfo.deviceShort, details: { targetRole: roleId, targetAccountId: accountId, targetUserName: userName } } });
+      await writeSecurityLog({ db, brandId, payload: { role: 'master', user: '最高管理者救援', action: '最高管理者協助裝置恢復', activityType: 'security.emergency_unblock', view: 'login', device: deviceInfo.device, browser: deviceInfo.browser, os: deviceInfo.os, deviceId: deviceInfo.deviceId, deviceShort: deviceInfo.deviceShort, details: { targetRole: roleId, targetAccountId: accountId, targetUserName: userName, resolvedGlobalDeviceIds: recoveryResult.globalDeviceIds } } });
       return res.status(200).json({ ok: true, message: '裝置已恢復使用，請重新登入。' });
     } catch (error) {
       console.error('emergencyUnblockDevice failed', error);

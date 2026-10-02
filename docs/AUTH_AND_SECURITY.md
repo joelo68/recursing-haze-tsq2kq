@@ -980,6 +980,29 @@ verification secret 另外放 private subcollection／document。
 
 最新 race／Summary-first 是否已正式部署，必須以 `CURRENT_STATE.md` 為準。
 
+## 22.1 Manual Device Review Atomicity
+
+`SystemMonitor` 的手動裝置處置與最高管理者救援都屬於 Security authority mutation。
+
+正式 writer contract：
+
+```text
+account_devices
++ global_blocked_devices（需要時）
++ device_approval_requests（若仍 pending）
++ device_approval_inbox / security_summary（若 pending request 被結束）
+→ 同一 Firestore transaction
+```
+
+目的：
+
+- 避免 account device 已改、global block 尚未改的 partial state。
+- 避免多位最高管理者同時操作時，跨文件 Security authority 互相矛盾。
+- transaction 會讀取相關 authority document 後再寫入，使並發 mutation 由 Firestore retry/serialization 處理。
+- verification secret cleanup 與 append-only security audit log 在 transaction 成功後執行，不作為 authority commit 的一部分。
+
+這項 hardening 不新增 listener、polling 或 collection scan；Frontend 與 Firestore Rules 的 writer boundary 不變。
+
 ---
 
 # 23. Brand Block vs Global Block

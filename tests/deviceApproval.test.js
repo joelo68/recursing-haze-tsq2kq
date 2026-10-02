@@ -121,12 +121,44 @@ test("recoverable risky devices cannot bypass block or suspicious review by chan
   assert.match(backend, /approvalExistingDevice\?\.status !== 'suspicious'/);
 });
 
-test("emergency recovery clears both current and legacy matching global block ids", () => {
+test("emergency recovery clears both current and legacy matching global block ids atomically", () => {
   assert.match(app, /blockedDeviceId: pending\.blockedDeviceId \|\| pending\.blockedData\?\.deviceId/);
   assert.match(backend, /blockedDeviceId = sanitizeSecurityKey\(body\.blockedDeviceId \|\| ''\)/);
   assert.match(backend, /recoverableRisk\?\.storedDeviceId/);
   assert.match(backend, /recoverableKnown\?\.storedDeviceId/);
-  assert.match(backend, /Promise\.all\(globalDeviceIds\.map/);
+  const start = backend.indexOf("const emergencyUnblockDevice = onRequest");
+  const end = backend.indexOf("const cleanupExpiredDeviceApprovals = onSchedule", start);
+  assert.ok(start >= 0 && end > start);
+  const block = backend.slice(start, end);
+  assert.match(block, /const recoveryResult = await db\.runTransaction/);
+  assert.match(block, /const globalRefs = globalDeviceIds\.map/);
+  assert.match(block, /Promise\.all\(globalRefs\.map\(\(ref\) => transaction\.get\(ref\)\)\)/);
+  assert.match(block, /globalRefs\.forEach\(\(globalRef\) => \{[\s\S]*transaction\.set\(globalRef/);
+  assert.doesNotMatch(block, /await profileRef\.set/);
+  assert.doesNotMatch(block, /Promise\.all\(globalDeviceIds\.map\([\s\S]*\.set\(/);
+});
+
+test("manual device management keeps profile, global block and pending resolution in one transaction", () => {
+  const start = backend.indexOf("const manageAccountDevice = onRequest");
+  const end = backend.indexOf("const emergencyUnblockDevice = onRequest", start);
+  assert.ok(start >= 0 && end > start);
+  const block = backend.slice(start, end);
+  assert.match(block, /const mutationResult = await db\.runTransaction/);
+  assert.match(block, /transaction\.get\(profileRef\)/);
+  assert.match(block, /transaction\.get\(requestRef\)/);
+  assert.match(block, /await transaction\.get\(globalRef\)/);
+  assert.match(block, /resolvePendingRequestInTransaction\(\{[\s\S]*profileSnap,[\s\S]*inboxSnap,[\s\S]*brandSnap/);
+  assert.match(block, /transaction\.set\(profileRef/);
+  assert.match(block, /transaction\.set\(globalRef/);
+  assert.doesNotMatch(block, /await profileRef\.set/);
+  assert.doesNotMatch(block, /await globalRef\.set/);
+});
+
+test("manual security transactions can reuse preloaded authority snapshots without rereading after writes", () => {
+  assert.match(backend, /profileSnap: preloadedProfileSnap = null/);
+  assert.match(backend, /inboxSnap: preloadedInboxSnap = null/);
+  assert.match(backend, /brandSnap: preloadedBrandSnap = null/);
+  assert.match(backend, /if \(!profileSnap \|\| !inboxSnap \|\| !brandSnap\)/);
 });
 
 test("highest manager can distinguish observing from required re-verification", () => {
