@@ -4890,3 +4890,49 @@ Readiness does not rewrite the B2C bootstrap signatures. `consumerReady=true`
 is additive evidence that a post-bootstrap live state change reached exact
 Raw<->Projection parity. B3-2 itself still does not authorize or implement a
 frontend cutover; that remains a separate B3-3 change.
+
+# Production Release Health / Runtime Evidence v1
+
+既有 P1-C Production Observability 為系統健康 owner：
+
+```text
+src/components/SystemMonitor.jsx
+src/App.jsx
+functions/productionObservability.js
+functions/index.js
+tests/productionObservability.test.js
+tests/systemMonitorProductionHealth.test.js
+```
+
+Release Identity v1 追加：
+
+```text
+vite.config.js
+src/utils/releaseIdentity.js
+tests/releaseIdentity.test.js
+dist/release.json   # build artifact，不是 source-controlled authority
+```
+
+Authority 邊界：
+
+```text
+productionObservability.js
+→ backend operational health snapshot
+→ on-demand / brand-scoped / read-only / bounded reads
+
+system_version
+→ App semantic version update marker
+
+release.json
+→ GitHub Pages static deployment identity
+
+releaseIdentity.js
+→ browser-side normalize / compare
+→ 不讀 Firestore、不建立 listener、不 polling
+
+SystemMonitor.jsx
+→ presentation / aggregation
+→ 不成為資料寫入 authority
+```
+
+Release Health 不新增 Firestore path，也不改 CYJ／安妞／伊啵品牌資料 root。

@@ -2861,3 +2861,46 @@ tests/helpers/appVersionContract.js
 as the single test-side version contract. When an explicit application version promotion is requested, update the runtime version and this shared test contract together; historical feature tests should consume the shared pattern instead of hard-coding the previous patch version.
 
 This prevents an intentional version promotion from producing unrelated false-negative regressions while preserving one exact version authority for CI.
+
+# Production Release Health / Runtime Evidence v1
+
+Production Release Health 延伸既有 P1-C Production Observability；不得另建第二套 Firestore health authority。
+
+正式責任分工：
+
+```text
+functions/productionObservability.js
+→ 品牌範圍、on-demand、read-only 系統健康 snapshot
+→ MAX_DOCUMENT_READ_BUDGET 維持 21
+→ 不負責 GitHub Pages release identity
+
+artifacts/default-app-id/public/data/global_settings/system_version
+→ 既有 App 更新版本標記
+→ 由 Backend administrative settings authority 發布
+→ 不是 Git commit / asset 的 deploy authority
+
+dist/release.json
+→ Vite build-time 靜態發布身份
+→ schemaVersion / appVersion / sourceCommit / entryAsset
+→ 跟著 GitHub Pages dist 一起發布
+→ 不寫 Firestore
+
+SystemMonitor
+→ 同一個「系統狀態」頁聚合呈現
+→ 比對目前瀏覽器版本、loaded entry asset、release.json、system_version
+```
+
+`release.json` 只能作為同一個 GitHub Pages deployment 的靜態 release evidence，不得改成 listener、polling 或 Firestore mirror。
+
+Release Health 每次 on-demand 檢查最多增加：
+
+```text
+Firestore reads: +0
+Firestore listeners: +0
+polling: +0
+static HTTP: 1 GET release.json（cache: no-store）
+```
+
+如果 `release.json` 無法取得，UI 必須顯示「待確認」，不得把未知狀態當成 healthy。
+
+如果 browser loaded asset 與 `release.json.entryAsset` 不一致，即使 `CURRENT_APP_VERSION` 相同，也視為 stale；這是為了支援「正式修正但不 bump CURRENT_APP_VERSION」的部署。

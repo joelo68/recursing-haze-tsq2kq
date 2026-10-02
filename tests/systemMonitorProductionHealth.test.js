@@ -8,6 +8,8 @@ const monitor = fs.readFileSync("src/components/SystemMonitor.jsx", "utf8");
 const backend = fs.readFileSync("functions/productionObservability.js", "utf8");
 const index = fs.readFileSync("functions/index.js", "utf8");
 const rules = fs.readFileSync("firestore.rules", "utf8");
+const vite = fs.readFileSync("vite.config.js", "utf8");
+const releaseIdentity = fs.readFileSync("src/utils/releaseIdentity.js", "utf8");
 
 test("P1-C frontend calls a dedicated same-brand backend snapshot endpoint", () => {
   assert.match(app, /PRODUCTION_OBSERVABILITY_ENDPOINT/);
@@ -48,4 +50,26 @@ test("P1-C does not create a new Firestore health collection or broaden Rules", 
 
 test("P1-C keeps app version unchanged", () => {
   assert.match(app, CURRENT_APP_VERSION_SOURCE_PATTERN);
+});
+
+test("P1-RH extends P1-C with static release identity instead of a second Firestore health authority", () => {
+  assert.match(vite, /drcyj-release-identity/);
+  assert.match(vite, /fileName:\s*'release\.json'/);
+  assert.match(vite, /sourceCommit:\s*resolveSourceCommit\(\)/);
+  assert.match(vite, /entryAsset:/);
+  assert.match(vite, /globIgnores:\s*\['\*\*\/release\.json'\]/);
+  assert.match(monitor, /fetchPublishedReleaseIdentity/);
+  assert.match(monitor, /getLoadedEntryAsset/);
+  assert.match(monitor, /publishedSystemVersion/);
+  assert.match(app, /setPublishedSystemVersion/);
+  assert.match(app, /appVersion:\s*CURRENT_APP_VERSION/);
+  assert.doesNotMatch(backend, /release\.json/);
+  assert.doesNotMatch(rules, /release_health|release_identity/);
+});
+
+test("P1-RH keeps P1-C Firestore read budget unchanged and adds no release polling/listener", () => {
+  assert.match(backend, /MAX_DOCUMENT_READ_BUDGET = 21/);
+  assert.doesNotMatch(monitor, /setInterval\([^)]*releaseIdentity/i);
+  assert.doesNotMatch(monitor, /onSnapshot\([^)]*releaseIdentity/i);
+  assert.match(releaseIdentity, /cache:\s*"no-store"/);
 });

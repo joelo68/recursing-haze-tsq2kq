@@ -609,6 +609,7 @@ export default function App() {
   });
 
   const [isUpdating, setIsUpdating] = useState(false);
+  const [publishedSystemVersion, setPublishedSystemVersion] = useState("");
   const [isOnline, setIsOnline] = useState(navigator.onLine);
   const [isPageVisible, setIsPageVisible] = useState(() =>
     typeof document === "undefined" ? true : document.visibilityState !== "hidden"
@@ -2102,14 +2103,18 @@ export default function App() {
     };
 
     const unsubVersion = onSnapshot(globalVersionRef, (s) => {
-      if (s.exists()) checkAndExecuteUpdate(s.data().version);
+      const remoteVersion = s.exists() ? String(s.data()?.version || "").trim() : "";
+      setPublishedSystemVersion(remoteVersion);
+      if (remoteVersion) checkAndExecuteUpdate(remoteVersion);
     });
 
     const handleVisibilityChange = async () => {
       if (document.visibilityState === 'visible' && isOnline) {
         try {
           const s = await getDoc(globalVersionRef);
-          if (s.exists()) checkAndExecuteUpdate(s.data().version);
+          const remoteVersion = s.exists() ? String(s.data()?.version || "").trim() : "";
+          setPublishedSystemVersion(remoteVersion);
+          if (remoteVersion) checkAndExecuteUpdate(remoteVersion);
         } catch (e) {
           console.warn("Wake up version check failed", e);
         }
@@ -4845,7 +4850,7 @@ export default function App() {
     annualMonthlyTargetSummaries, annualTargetSummaryLoadState, annualAggregateLoadState, therapistAnnualAggregatedData, // ★ 年度 trust / target / fallback readiness
     showToast, openConfirm, fmtMoney, fmtNum, inputDate, setInputDate, setTargets, selectedYear, selectedMonth, setSelectedYear, setSelectedMonth, permissions, storeAccounts, managerAuth, currentUser, userRole, logActivity, manageTherapistMasterAction, navigateToStore, activeView, appId,
     therapists: visibleTherapists, therapistReports: visibleTherapistReports, therapistSchedules, therapistTargets, trainerAuth, systemExclusionState, auditExclusions, handleUpdateAuditExclusions, currentBrand, setCurrentBrandId, getCollectionPath, getDocPath, dailyLoginCount, yesterdayLoginCount, securityConfig, featureFlags, therapistModuleEnabled, isOnline, isLowPowerMode, trackTargetEditorRead,
-    currentDeviceTrust, currentSecurityAccountKey, manageDeviceSecurityAction, reviewDeviceApprovalAction, updateTelegramSecurityAlertConfig, manageApplicationAccountAction, manageAdministrativeSettingAction, manageManagerOrganizationAction, manageManagementDelegationAction, updateModulePermissions, updateProjectionContext, updateStoreSchedule, getProductionHealthSnapshotAction, canManageDeviceSecurity: isDeviceSecuritySuperAdmin, canRevealTherapistPassword: isDeviceSecuritySuperAdmin, canDeleteTherapistAccount: isDeviceSecuritySuperAdmin, openDeviceApprovalPanel,
+    currentDeviceTrust, currentSecurityAccountKey, manageDeviceSecurityAction, reviewDeviceApprovalAction, updateTelegramSecurityAlertConfig, manageApplicationAccountAction, manageAdministrativeSettingAction, manageManagerOrganizationAction, manageManagementDelegationAction, updateModulePermissions, updateProjectionContext, updateStoreSchedule, getProductionHealthSnapshotAction, appVersion: CURRENT_APP_VERSION, publishedSystemVersion, canManageDeviceSecurity: isDeviceSecuritySuperAdmin, canRevealTherapistPassword: isDeviceSecuritySuperAdmin, canDeleteTherapistAccount: isDeviceSecuritySuperAdmin, openDeviceApprovalPanel,
     loginDirectory,
     fetchGlobalData,
     officialManagers: managers,
@@ -4855,7 +4860,7 @@ export default function App() {
     directorPermissionProfile,
     canDirectorAccessView,
     isReadOnlyDirector: userRole === "director" && !canDirectorAccessView("history")
-  }), [user, loading, visibleManagers, visibleManagerOrder, monthlyTargetSummary, currentLifecycleMasterState, currentDashboardSummary, currentRankingsSummary, currentReportSummaryReady, currentReportSummaryReadyYearMonth, currentReportSummaryReadyBrandId, currentSummaryRecalcFlagState, historicalDetailRefreshState, targets, visibleRawData, rawData, annualAggregatedData, annualDashboardSummaries, annualSummaryStatusMap, annualSummaryLoadState, annualMonthlyTargetSummaries, annualTargetSummaryLoadState, annualAggregateLoadState, therapistAnnualAggregatedData, inputDate, selectedYear, selectedMonth, permissions, storeAccounts, managerAuth, currentUser, userRole, logActivity, manageTherapistMasterAction, navigateToStore, activeView, appId, visibleTherapists, visibleTherapistReports, therapistSchedules, therapistTargets, trainerAuth, systemExclusionState, auditExclusions, handleUpdateAuditExclusions, currentBrand, setCurrentBrandId, getCollectionPath, getDocPath, dailyLoginCount, yesterdayLoginCount, securityConfig, featureFlags, therapistModuleEnabled, isOnline, isLowPowerMode, trackTargetEditorRead, currentDeviceTrust, currentSecurityAccountKey, manageDeviceSecurityAction, reviewDeviceApprovalAction, updateTelegramSecurityAlertConfig, manageApplicationAccountAction, manageAdministrativeSettingAction, manageManagerOrganizationAction, manageManagementDelegationAction, updateModulePermissions, updateProjectionContext, updateStoreSchedule, getProductionHealthSnapshotAction, isDeviceSecuritySuperAdmin, openDeviceApprovalPanel, loginDirectory, fetchGlobalData, managers, delegations, activeDelegations, delegationAccess, accessibleStores, officialStores, delegatedStores, refreshDelegations, canAccessStore, canEditStoreReport, getActiveDelegationForStore, directorLevel, directorPermissionProfile, canDirectorAccessView]); // ★ 依賴陣列也要加
+  }), [user, loading, visibleManagers, visibleManagerOrder, monthlyTargetSummary, currentLifecycleMasterState, currentDashboardSummary, currentRankingsSummary, currentReportSummaryReady, currentReportSummaryReadyYearMonth, currentReportSummaryReadyBrandId, currentSummaryRecalcFlagState, historicalDetailRefreshState, targets, visibleRawData, rawData, annualAggregatedData, annualDashboardSummaries, annualSummaryStatusMap, annualSummaryLoadState, annualMonthlyTargetSummaries, annualTargetSummaryLoadState, annualAggregateLoadState, therapistAnnualAggregatedData, inputDate, selectedYear, selectedMonth, permissions, storeAccounts, managerAuth, currentUser, userRole, logActivity, manageTherapistMasterAction, navigateToStore, activeView, appId, visibleTherapists, visibleTherapistReports, therapistSchedules, therapistTargets, trainerAuth, systemExclusionState, auditExclusions, handleUpdateAuditExclusions, currentBrand, setCurrentBrandId, getCollectionPath, getDocPath, dailyLoginCount, yesterdayLoginCount, securityConfig, featureFlags, therapistModuleEnabled, isOnline, isLowPowerMode, trackTargetEditorRead, currentDeviceTrust, currentSecurityAccountKey, manageDeviceSecurityAction, reviewDeviceApprovalAction, updateTelegramSecurityAlertConfig, manageApplicationAccountAction, manageAdministrativeSettingAction, manageManagerOrganizationAction, manageManagementDelegationAction, updateModulePermissions, updateProjectionContext, updateStoreSchedule, getProductionHealthSnapshotAction, publishedSystemVersion, isDeviceSecuritySuperAdmin, openDeviceApprovalPanel, loginDirectory, fetchGlobalData, managers, delegations, activeDelegations, delegationAccess, accessibleStores, officialStores, delegatedStores, refreshDelegations, canAccessStore, canEditStoreReport, getActiveDelegationForStore, directorLevel, directorPermissionProfile, canDirectorAccessView]); // ★ 依賴陣列也要加
   
   const memoizedViews = useMemo(() => {
     return (

@@ -13,13 +13,19 @@ import { ViewWrapper, Card, AsyncActionButton } from "./SharedUI";
 import SmartDatePicker from "./SmartDatePicker";
 import DeviceApprovalPanel from "./DeviceApprovalPanel";
 import { formatLocalYYYYMMDD } from "../utils/helpers";
+import {
+  buildReleaseIdentityStatus,
+  fetchPublishedReleaseIdentity,
+  getLoadedEntryAsset,
+  getServiceWorkerRuntimeState,
+} from "../utils/releaseIdentity";
 
 const SystemMonitor = () => {
   const {
     getCollectionPath, currentBrand, currentUser, userRole,
     currentDeviceTrust, currentSecurityAccountKey,
     manageDeviceSecurityAction, reviewDeviceApprovalAction, canManageDeviceSecurity,
-    getProductionHealthSnapshotAction
+    getProductionHealthSnapshotAction, appVersion, publishedSystemVersion
   } = useContext(AppContext);
   
   const [logs, setLogs] = useState([]);
@@ -38,6 +44,9 @@ const SystemMonitor = () => {
   const [productionHealthLoading, setProductionHealthLoading] = useState(false);
   const [productionHealthError, setProductionHealthError] = useState("");
   const [productionHealthLoadedBrandId, setProductionHealthLoadedBrandId] = useState("");
+  const [releaseIdentity, setReleaseIdentity] = useState(null);
+  const [releaseIdentityLoading, setReleaseIdentityLoading] = useState(false);
+  const [releaseIdentityError, setReleaseIdentityError] = useState("");
   const [deviceProfiles, setDeviceProfiles] = useState([]);
   const [deviceLoading, setDeviceLoading] = useState(false);
   const [deviceHasLoaded, setDeviceHasLoaded] = useState(false);
@@ -822,6 +831,38 @@ const SystemMonitor = () => {
     fetchLogs(queryDateRange, { append: true });
   };
 
+  const loadReleaseIdentity = useCallback(async ({ force = false } = {}) => {
+    if (!force && releaseIdentity) return releaseIdentity;
+
+    setReleaseIdentityLoading(true);
+    setReleaseIdentityError("");
+    try {
+      const publishedRelease = await fetchPublishedReleaseIdentity();
+      const next = buildReleaseIdentityStatus({
+        appVersion,
+        publishedSystemVersion,
+        loadedEntryAsset: getLoadedEntryAsset(),
+        publishedRelease,
+        serviceWorkerState: getServiceWorkerRuntimeState(),
+      });
+      setReleaseIdentity(next);
+      return next;
+    } catch (error) {
+      const next = buildReleaseIdentityStatus({
+        appVersion,
+        publishedSystemVersion,
+        loadedEntryAsset: getLoadedEntryAsset(),
+        publishedRelease: null,
+        serviceWorkerState: getServiceWorkerRuntimeState(),
+      });
+      setReleaseIdentity(next);
+      setReleaseIdentityError(error?.message || "正式版本資訊暫時無法取得。");
+      return next;
+    } finally {
+      setReleaseIdentityLoading(false);
+    }
+  }, [appVersion, publishedSystemVersion, releaseIdentity]);
+
   const loadProductionHealth = useCallback(async ({ force = false } = {}) => {
     const brandId = String(currentBrand?.id || "");
     if (!brandId || typeof getProductionHealthSnapshotAction !== "function") {
@@ -855,6 +896,14 @@ const SystemMonitor = () => {
     productionHealthLoadedBrandId,
   ]);
 
+  const refreshProductionHealth = useCallback(async () => {
+    const [health] = await Promise.all([
+      loadProductionHealth({ force: true }),
+      loadReleaseIdentity({ force: true }),
+    ]);
+    return health;
+  }, [loadProductionHealth, loadReleaseIdentity]);
+
   useEffect(() => {
     if (monitorMode !== "health") return;
     const brandId = String(currentBrand?.id || "");
@@ -863,7 +912,14 @@ const SystemMonitor = () => {
       setProductionHealthError("");
     }
     loadProductionHealth();
-  }, [monitorMode, currentBrand?.id, productionHealthLoadedBrandId, loadProductionHealth]);
+    loadReleaseIdentity();
+  }, [
+    monitorMode,
+    currentBrand?.id,
+    productionHealthLoadedBrandId,
+    loadProductionHealth,
+    loadReleaseIdentity,
+  ]);
 
   const getHealthTone = (status = "") => {
     if (status === "healthy") return {
@@ -1087,7 +1143,7 @@ const SystemMonitor = () => {
                     </div>
                     <AsyncActionButton
                       type="button"
-                      onClick={() => loadProductionHealth({ force: true })}
+                      onClick={refreshProductionHealth}
                       loadingText="檢查中…"
                       className="shrink-0 rounded-xl border border-rose-200 bg-white px-3 py-2 text-xs font-black text-rose-700"
                     >
@@ -1114,7 +1170,7 @@ const SystemMonitor = () => {
                           </div>
                           <AsyncActionButton
                             type="button"
-                            onClick={() => loadProductionHealth({ force: true })}
+                            onClick={refreshProductionHealth}
                             loadingText="檢查中…"
                             className="shrink-0 rounded-xl border border-stone-200 bg-white px-4 py-2.5 text-sm font-black text-stone-600 shadow-sm hover:bg-stone-50"
                           >
@@ -1125,6 +1181,82 @@ const SystemMonitor = () => {
                       </div>
                     );
                   })()}
+
+                  <div className="rounded-2xl border border-stone-100 bg-white p-4">
+                    <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+                      <div>
+                        <p className="text-sm font-black text-stone-700">正式版本</p>
+                        <p className="mt-1 text-xs font-bold leading-5 text-stone-400">
+                          比對目前瀏覽器、正式發布檔與既有 system_version 更新標記
+                        </p>
+                      </div>
+                      <div className="flex items-center gap-2">
+                        {releaseIdentityLoading && <RefreshCw className="animate-spin text-stone-400" size={14} />}
+                        {releaseIdentity && (() => {
+                          const tone = getHealthTone(releaseIdentity.status === "stale" ? "error" : releaseIdentity.status);
+                          return (
+                            <span className={`inline-flex items-center gap-2 rounded-full border px-3 py-1 text-xs font-black ${tone.shell} ${tone.text}`}>
+                              <span className={`h-2 w-2 rounded-full ${tone.dot}`} />
+                              {releaseIdentity.label}
+                            </span>
+                          );
+                        })()}
+                      </div>
+                    </div>
+
+                    {releaseIdentity ? (
+                      <>
+                        <div className="mt-4 grid grid-cols-2 gap-2 lg:grid-cols-4">
+                          <div className="rounded-xl bg-stone-50 px-3 py-2.5">
+                            <p className="text-[10px] font-black tracking-wide text-stone-400">目前版本</p>
+                            <p className="mt-1 truncate text-sm font-black text-stone-700">v{releaseIdentity.appVersion || "-"}</p>
+                          </div>
+                          <div className="rounded-xl bg-stone-50 px-3 py-2.5">
+                            <p className="text-[10px] font-black tracking-wide text-stone-400">正式來源</p>
+                            <p className="mt-1 truncate font-mono text-xs font-black text-stone-700">
+                              {releaseIdentity.publishedRelease?.sourceCommit?.slice(0, 10) || "-"}
+                            </p>
+                          </div>
+                          <div className="rounded-xl bg-stone-50 px-3 py-2.5">
+                            <p className="text-[10px] font-black tracking-wide text-stone-400">目前載入檔</p>
+                            <p className="mt-1 truncate font-mono text-[11px] font-black text-stone-700">
+                              {releaseIdentity.loadedEntryAsset?.replace(/^assets\//, "") || "-"}
+                            </p>
+                          </div>
+                          <div className="rounded-xl bg-stone-50 px-3 py-2.5">
+                            <p className="text-[10px] font-black tracking-wide text-stone-400">PWA</p>
+                            <p className="mt-1 truncate text-sm font-black text-stone-700">
+                              {releaseIdentity.serviceWorker?.supported
+                                ? (releaseIdentity.serviceWorker.controlled ? "已接管" : "未接管")
+                                : "不支援"}
+                            </p>
+                          </div>
+                        </div>
+                        <div className="mt-3 flex flex-wrap gap-x-4 gap-y-1 text-[11px] font-bold text-stone-400">
+                          <span>正式發布檔：{releaseIdentity.publishedRelease?.entryAsset?.replace(/^assets\//, "") || "-"}</span>
+                          <span>正式版本：v{releaseIdentity.publishedRelease?.appVersion || "-"}</span>
+                          <span>更新標記：{releaseIdentity.publishedSystemVersion ? `v${releaseIdentity.publishedSystemVersion}` : "未取得"}</span>
+                        </div>
+                        <p className={`mt-2 text-xs font-bold leading-5 ${
+                          releaseIdentity.status === "stale"
+                            ? "text-rose-600"
+                            : releaseIdentity.status === "attention"
+                              ? "text-amber-700"
+                              : "text-emerald-700"
+                        }`}>
+                          {releaseIdentity.detail}
+                        </p>
+                      </>
+                    ) : (
+                      <p className="mt-3 text-xs font-bold text-stone-400">正式版本資訊讀取中…</p>
+                    )}
+
+                    {releaseIdentityError && (
+                      <p className="mt-2 text-[11px] font-bold text-amber-700">
+                        靜態發布資訊暫時無法取得：{releaseIdentityError}
+                      </p>
+                    )}
+                  </div>
 
                   <div className="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-4">
                     {[

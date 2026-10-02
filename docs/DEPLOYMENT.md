@@ -1300,3 +1300,55 @@ runtime deploy        = NOT REQUIRED
 ## Rules deployment boundary
 
 System Exclusion repository Rules source已有 direct-write deny；Stage C 沒有修改 Rules，也沒有在本次 closeout 重新 readback live Rules version。若後續需要把 live Rules 狀態正式收斂，必須先以當時最新 `firestore.rules` Source of Truth 做 independent verification；不要因為 Frontend 已改走 Backend endpoint 就推論 live Rules 一定相同。
+
+# Production Release Identity v1
+
+正式前端仍使用：
+
+```bash
+npm run deploy
+```
+
+也就是：
+
+```text
+npm run build
+→ gh-pages -d dist
+```
+
+Vite production build 會額外產生：
+
+```text
+dist/release.json
+```
+
+欄位：
+
+```text
+schemaVersion = release-identity-v1
+appVersion
+sourceCommit
+entryAsset
+```
+
+`sourceCommit` 取正式 build 當下的 Git `HEAD`；`entryAsset` 取同一次 Vite bundle 的主 entry asset。`release.json` 與 `dist` 一起發布，不建立 Firestore release collection。
+
+因此 deployment evidence 可分成：
+
+```text
+Git main commit
+→ release.json.sourceCommit
+
+GitHub Pages bundle
+→ release.json.entryAsset
+
+Browser runtime
+→ loaded entry asset
+
+App update marker
+→ global_settings/system_version
+```
+
+四者不可互相冒充。
+
+若本批只修改 Release Health Frontend / Vite build metadata，且 Functions / Rules source 未變，精準 deploy 只需要正式 frontend target；不要機械式部署 Functions、Rules 或 Firebase Hosting。
