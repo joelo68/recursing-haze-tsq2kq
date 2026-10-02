@@ -761,6 +761,8 @@ const SystemMonitor = () => {
         return <span className="inline-flex bg-amber-50 text-amber-600 px-2.5 py-1 rounded-lg text-xs font-bold whitespace-nowrap">店經理</span>;
       case "therapist":
         return <span className="inline-flex bg-indigo-50 text-indigo-600 px-2.5 py-1 rounded-lg text-xs font-bold whitespace-nowrap">管理師</span>;
+      case "trainer":
+        return <span className="inline-flex bg-sky-50 text-sky-600 px-2.5 py-1 rounded-lg text-xs font-bold whitespace-nowrap">教專</span>;
       default:
         return <span className="inline-flex bg-stone-50 text-stone-500 px-2.5 py-1 rounded-lg text-xs whitespace-nowrap">未知</span>;
     }
