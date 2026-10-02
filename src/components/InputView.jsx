@@ -12,6 +12,7 @@ import {
 } from "firebase/firestore";
 
 import { parseNumber, formatNumber, toStandardDateFormat, sortManagerNames, sortStoreNames, sortManagersByOrgOrder, sortStoresByOrgOrder } from "../utils/helpers";
+import { calculateTherapistReportTotalRevenue, isAnniuTherapistReportBrand } from "../utils/therapistReportContract";
 import { AppContext } from "../AppContext";
 import { ViewWrapper, Card } from "./SharedUI";
 import SmartDatePicker from "./SmartDatePicker";
@@ -486,8 +487,8 @@ const TherapistInputView = () => {
   } = useContext(AppContext);
   
   const defaultPersonalData = {
-    totalRevenue: "", newCustomerRevenue: "", newCustomerCount: "", newCustomerClosings: "", 
-    oldCustomerRevenue: "", oldCustomerCount: "", returnRevenue: "",
+    totalRevenue: "", newCustomerRevenue: "", newCustomerSkincareRevenue: "", newCustomerCount: "", newCustomerClosings: "",
+    oldCustomerRevenue: "", oldCustomerSkincareRevenue: "", oldCustomerCount: "", returnRevenue: "",
   };
   
   const [formData, setFormData] = useState(defaultPersonalData);
@@ -498,8 +499,8 @@ const TherapistInputView = () => {
   const [showDateWarningModal, setShowDateWarningModal] = useState(false); 
 
   const LABELS = {
-    totalRevenue: "今日總業績 (新客+舊客-退費)", newCustomerRevenue: "新客業績", newCustomerCount: "新客人數",
-    newCustomerClosings: "新客留單人數", oldCustomerRevenue: "舊客業績", oldCustomerCount: "舊客人數", returnRevenue: "今日當月退費業績", 
+    totalRevenue: "今日總業績 (新客+舊客-退費)", newCustomerRevenue: "新客業績", newCustomerSkincareRevenue: "新客保養品業績", newCustomerCount: "新客人數",
+    newCustomerClosings: "新客留單人數", oldCustomerRevenue: "舊客業績", oldCustomerSkincareRevenue: "舊客保養品業績", oldCustomerCount: "舊客人數", returnRevenue: "今日當月退費業績",
   };
 
   const today = getLocalTodayString();
@@ -521,11 +522,16 @@ const TherapistInputView = () => {
     [currentUser]
   );
 
+  const isAnniuTherapistReport = isAnniuTherapistReportBrand(currentBrand);
+  const totalRevenueLabel = isAnniuTherapistReport
+    ? "今日總業績 (新客+新客保養品+舊客+舊客保養品-退費)"
+    : LABELS.totalRevenue;
+
   useEffect(() => {
     const handleWakeUp = () => {
       if (document.visibilityState === "visible" || document.hasFocus()) {
         const realToday = getLocalTodayString();
-        const isFormEmpty = !formData.newCustomerRevenue && !formData.oldCustomerRevenue;
+        const isFormEmpty = !formData.newCustomerRevenue && !formData.oldCustomerRevenue && !formData.newCustomerSkincareRevenue && !formData.oldCustomerSkincareRevenue;
         
         if (inputDate !== realToday && isFormEmpty) {
            setInputDate(realToday);
@@ -546,7 +552,7 @@ const TherapistInputView = () => {
     if (savedDraft) {
       try {
         const parsed = JSON.parse(savedDraft);
-        if (parsed.formData) setFormData(parsed.formData);
+        if (parsed.formData) setFormData({ ...defaultPersonalData, ...parsed.formData });
         
         const draftDate = parsed.date;
         if (draftDate === getLocalTodayString()) {
@@ -563,15 +569,12 @@ const TherapistInputView = () => {
   }, [formData, inputDate, currentBrand]);
 
   useEffect(() => {
-    const newRev = parseNumber(formData.newCustomerRevenue) || 0;
-    const oldRev = parseNumber(formData.oldCustomerRevenue) || 0;
-    const returnRev = parseNumber(formData.returnRevenue) || 0; 
-    const total = newRev + oldRev - returnRev; 
+    const total = calculateTherapistReportTotalRevenue(formData, currentBrand);
     
     if (parseNumber(formData.totalRevenue) !== total) {
       setFormData(prev => ({ ...prev, totalRevenue: formatNumber(total) }));
     }
-  }, [formData.newCustomerRevenue, formData.oldCustomerRevenue, formData.returnRevenue]); 
+  }, [formData.newCustomerRevenue, formData.newCustomerSkincareRevenue, formData.oldCustomerRevenue, formData.oldCustomerSkincareRevenue, formData.returnRevenue, currentBrand]);
 
   useEffect(() => {
     const checkSubmission = async () => {
@@ -610,7 +613,7 @@ const TherapistInputView = () => {
   const handlePreSubmit = () => {
     if (!isOnline) return showToast("目前處於離線狀態，無法送出日報", "error");
     if (inputDate > today) return showToast("不可提交未來日期", "error");
-    const hasData = formData.newCustomerRevenue || formData.oldCustomerRevenue || formData.newCustomerCount || formData.oldCustomerCount || formData.returnRevenue;
+    const hasData = formData.newCustomerRevenue || formData.newCustomerSkincareRevenue || formData.oldCustomerRevenue || formData.oldCustomerSkincareRevenue || formData.newCustomerCount || formData.oldCustomerCount || formData.returnRevenue;
     if (!hasData) return showToast("請至少輸入一項業績或人數數據", "error");
     
     if (inputDate !== today) {
@@ -646,9 +649,11 @@ const TherapistInputView = () => {
         
         totalRevenue: parseNumber(formData.totalRevenue),
         newCustomerRevenue: parseNumber(formData.newCustomerRevenue),
+        ...(isAnniuTherapistReport ? { newCustomerSkincareRevenue: parseNumber(formData.newCustomerSkincareRevenue) } : {}),
         newCustomerCount: parseNumber(formData.newCustomerCount),
         newCustomerClosings: parseNumber(formData.newCustomerClosings),
         oldCustomerRevenue: parseNumber(formData.oldCustomerRevenue),
+        ...(isAnniuTherapistReport ? { oldCustomerSkincareRevenue: parseNumber(formData.oldCustomerSkincareRevenue) } : {}),
         oldCustomerCount: parseNumber(formData.oldCustomerCount),
         returnRevenue: parseNumber(formData.returnRevenue),
         
@@ -719,7 +724,7 @@ const TherapistInputView = () => {
         <div className="space-y-6">
           <div className="bg-indigo-50 p-4 rounded-xl border border-indigo-100">
              <label className="text-xs font-bold text-indigo-500 mb-1 flex items-center gap-1">
-                <Calculator size={12}/> {LABELS.totalRevenue} (自動加總)
+                <Calculator size={12}/> {totalRevenueLabel} (自動加總)
              </label>
              <div className="relative">
                 <DollarSign size={18} className="absolute left-3 top-3.5 text-indigo-400"/>
@@ -731,8 +736,13 @@ const TherapistInputView = () => {
             <h4 className="text-xs font-bold text-stone-400 uppercase tracking-wider mb-2 flex items-center gap-2"><Star size={12}/> 新客數據</h4>
             <div className="grid grid-cols-2 gap-4">
                 <div><label className="text-xs font-bold text-stone-500 mb-1 block">{LABELS.newCustomerRevenue}</label><input type="text" value={formData.newCustomerRevenue} onChange={(e) => handleNumberChange("newCustomerRevenue", e.target.value)} placeholder="0" className="w-full border-2 p-3 rounded-xl font-bold text-amber-600 focus:border-amber-400 outline-none" inputMode="numeric" pattern="[0-9]*"/></div>
-                <div><label className="text-xs font-bold text-stone-500 mb-1 block">{LABELS.newCustomerCount} <span className="text-stone-300 font-normal">(Max 99)</span></label><input type="text" value={formData.newCustomerCount} onChange={(e) => handleNumberChange("newCustomerCount", e.target.value)} placeholder="0" className="w-full border-2 p-3 rounded-xl font-bold text-stone-700 focus:border-amber-400 outline-none" inputMode="numeric" pattern="[0-9]*" maxLength={2}/></div>
-                <div className="col-span-2"><label className="text-xs font-bold text-stone-500 mb-1 block">{LABELS.newCustomerClosings} <span className="text-stone-300 font-normal">(Max 99)</span></label><input type="text" value={formData.newCustomerClosings} onChange={(e) => handleNumberChange("newCustomerClosings", e.target.value)} placeholder="0" className="w-full border-2 p-3 rounded-xl font-bold text-stone-700 focus:border-amber-400 outline-none" inputMode="numeric" pattern="[0-9]*" maxLength={2}/></div>
+                {isAnniuTherapistReport ? (
+                  <div><label className="text-xs font-bold text-stone-500 mb-1 block">{LABELS.newCustomerSkincareRevenue}</label><input type="text" value={formData.newCustomerSkincareRevenue} onChange={(e) => handleNumberChange("newCustomerSkincareRevenue", e.target.value)} placeholder="0" className="w-full border-2 p-3 rounded-xl font-bold text-teal-600 focus:border-teal-400 outline-none" inputMode="numeric" pattern="[0-9]*"/></div>
+                ) : (
+                  <div><label className="text-xs font-bold text-stone-500 mb-1 block">{LABELS.newCustomerCount} <span className="text-stone-300 font-normal">(Max 99)</span></label><input type="text" value={formData.newCustomerCount} onChange={(e) => handleNumberChange("newCustomerCount", e.target.value)} placeholder="0" className="w-full border-2 p-3 rounded-xl font-bold text-stone-700 focus:border-amber-400 outline-none" inputMode="numeric" pattern="[0-9]*" maxLength={2}/></div>
+                )}
+                {isAnniuTherapistReport && <div><label className="text-xs font-bold text-stone-500 mb-1 block">{LABELS.newCustomerCount} <span className="text-stone-300 font-normal">(Max 99)</span></label><input type="text" value={formData.newCustomerCount} onChange={(e) => handleNumberChange("newCustomerCount", e.target.value)} placeholder="0" className="w-full border-2 p-3 rounded-xl font-bold text-stone-700 focus:border-amber-400 outline-none" inputMode="numeric" pattern="[0-9]*" maxLength={2}/></div>}
+                <div className={isAnniuTherapistReport ? "" : "col-span-2"}><label className="text-xs font-bold text-stone-500 mb-1 block">{LABELS.newCustomerClosings} <span className="text-stone-300 font-normal">(Max 99)</span></label><input type="text" value={formData.newCustomerClosings} onChange={(e) => handleNumberChange("newCustomerClosings", e.target.value)} placeholder="0" className="w-full border-2 p-3 rounded-xl font-bold text-stone-700 focus:border-amber-400 outline-none" inputMode="numeric" pattern="[0-9]*" maxLength={2}/></div>
             </div>
           </div>
 
@@ -740,7 +750,12 @@ const TherapistInputView = () => {
             <h4 className="text-xs font-bold text-stone-400 uppercase tracking-wider mb-2 flex items-center gap-2"><Users size={12}/> 舊客數據</h4>
             <div className="grid grid-cols-2 gap-4">
                 <div><label className="text-xs font-bold text-stone-500 mb-1 block">{LABELS.oldCustomerRevenue}</label><input type="text" value={formData.oldCustomerRevenue} onChange={(e) => handleNumberChange("oldCustomerRevenue", e.target.value)} placeholder="0" className="w-full border-2 p-3 rounded-xl font-bold text-indigo-600 focus:border-indigo-400 outline-none" inputMode="numeric" pattern="[0-9]*"/></div>
-                <div><label className="text-xs font-bold text-stone-500 mb-1 block">{LABELS.oldCustomerCount} <span className="text-stone-300 font-normal">(Max 99)</span></label><input type="text" value={formData.oldCustomerCount} onChange={(e) => handleNumberChange("oldCustomerCount", e.target.value)} placeholder="0" className="w-full border-2 p-3 rounded-xl font-bold text-stone-700 focus:border-indigo-400 outline-none" inputMode="numeric" pattern="[0-9]*" maxLength={2}/></div>
+                {isAnniuTherapistReport ? (
+                  <div><label className="text-xs font-bold text-stone-500 mb-1 block">{LABELS.oldCustomerSkincareRevenue}</label><input type="text" value={formData.oldCustomerSkincareRevenue} onChange={(e) => handleNumberChange("oldCustomerSkincareRevenue", e.target.value)} placeholder="0" className="w-full border-2 p-3 rounded-xl font-bold text-teal-600 focus:border-teal-400 outline-none" inputMode="numeric" pattern="[0-9]*"/></div>
+                ) : (
+                  <div><label className="text-xs font-bold text-stone-500 mb-1 block">{LABELS.oldCustomerCount} <span className="text-stone-300 font-normal">(Max 99)</span></label><input type="text" value={formData.oldCustomerCount} onChange={(e) => handleNumberChange("oldCustomerCount", e.target.value)} placeholder="0" className="w-full border-2 p-3 rounded-xl font-bold text-stone-700 focus:border-indigo-400 outline-none" inputMode="numeric" pattern="[0-9]*" maxLength={2}/></div>
+                )}
+                {isAnniuTherapistReport && <div className="col-span-2"><label className="text-xs font-bold text-stone-500 mb-1 block">{LABELS.oldCustomerCount} <span className="text-stone-300 font-normal">(Max 99)</span></label><input type="text" value={formData.oldCustomerCount} onChange={(e) => handleNumberChange("oldCustomerCount", e.target.value)} placeholder="0" className="w-full border-2 p-3 rounded-xl font-bold text-stone-700 focus:border-indigo-400 outline-none" inputMode="numeric" pattern="[0-9]*" maxLength={2}/></div>}
             </div>
           </div>
 
@@ -785,7 +800,7 @@ const TherapistInputView = () => {
           <div className="bg-white rounded-2xl shadow-xl w-full max-w-md overflow-hidden animate-in zoom-in-95">
             <div className="bg-indigo-600 p-4 flex justify-between items-center"><h3 className="text-white font-bold flex gap-2"><AlertCircle/> 確認提交</h3><button onClick={()=>setShowConfirmModal(false)}><X className="text-white"/></button></div>
             <div className="p-6 space-y-4">
-              <div className="bg-stone-50 p-4 rounded-xl space-y-2 text-sm"><div className="flex justify-between font-bold text-stone-700"><span>日期</span><span>{inputDate}</span></div><div className="flex justify-between font-bold text-stone-700"><span>人員</span><span>{currentUser?.name}</span></div><div className="border-t border-stone-200 my-2 pt-2 space-y-1"><div className="flex justify-between"><span className="text-stone-500">今日總業績</span><span className="font-mono font-bold text-indigo-600 text-lg">${formData.totalRevenue || 0}</span></div><div className="flex justify-between text-xs text-stone-400 pl-2"><span>(新客 ${formData.newCustomerRevenue || 0} + 舊客 ${formData.oldCustomerRevenue || 0})</span></div><div className="flex justify-between mt-2"><span className="text-stone-500">退費業績</span><span className="font-mono font-bold text-rose-500">${formData.returnRevenue || 0}</span></div></div></div>
+              <div className="bg-stone-50 p-4 rounded-xl space-y-2 text-sm"><div className="flex justify-between font-bold text-stone-700"><span>日期</span><span>{inputDate}</span></div><div className="flex justify-between font-bold text-stone-700"><span>人員</span><span>{currentUser?.name}</span></div><div className="border-t border-stone-200 my-2 pt-2 space-y-1"><div className="flex justify-between"><span className="text-stone-500">今日總業績</span><span className="font-mono font-bold text-indigo-600 text-lg">${formData.totalRevenue || 0}</span></div><div className="flex justify-between text-xs text-stone-400 pl-2"><span>{isAnniuTherapistReport ? `(新客 ${formData.newCustomerRevenue || 0} + 新客保養品 ${formData.newCustomerSkincareRevenue || 0} + 舊客 ${formData.oldCustomerRevenue || 0} + 舊客保養品 ${formData.oldCustomerSkincareRevenue || 0})` : `(新客 ${formData.newCustomerRevenue || 0} + 舊客 ${formData.oldCustomerRevenue || 0})`}</span></div><div className="flex justify-between mt-2"><span className="text-stone-500">退費業績</span><span className="font-mono font-bold text-rose-500">${formData.returnRevenue || 0}</span></div></div></div>
               {hasSubmittedToday && <p className="text-xs text-rose-500 font-bold bg-rose-50 p-2 rounded flex items-center gap-1"><AlertTriangle size={12}/> 提醒：資料將覆蓋當日舊紀錄。</p>}
               <div className="flex gap-3 pt-2">
                 <button onClick={()=>setShowConfirmModal(false)} disabled={isSubmitting} className="flex-1 py-3 border rounded-xl font-bold text-stone-500 hover:bg-stone-50 disabled:opacity-50">返回</button>

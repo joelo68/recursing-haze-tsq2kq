@@ -821,9 +821,24 @@ Therapist / authorized operator
    ▼
 InputView
    │
+   ├─ CYJ / 伊啵：既有個人日報欄位與 totalRevenue 語意不變
+   │
+   └─ 安妞：額外輸入
+          newCustomerSkincareRevenue
+          oldCustomerSkincareRevenue
+          │
+          └─ totalRevenue
+             = newCustomerRevenue
+             + newCustomerSkincareRevenue
+             + oldCustomerRevenue
+             + oldCustomerSkincareRevenue
+             - returnRevenue
+   │
    ▼
 therapist_daily_reports
 ```
+
+安妞新增欄位採 additive schema；歷史 document 缺欄時以 `0` 相容，不批次重寫 Raw。前端仍只負責正式日報與本機草稿，dirty / recalc 由 backend onWrite 處理。
 
 ---
 

@@ -21,6 +21,7 @@ import { AppContext } from "../AppContext";
 import SmartDatePicker from "./SmartDatePicker";
 import { formatLocalYYYYMMDD, toStandardDateFormat, sortStoreNames, sortStoresByOrgOrder } from "../utils/helpers";
 import { normalizeStoreLifecycleCore } from "../utils/storeLifecycle.js";
+import { calculateTherapistReportTotalRevenue, getTherapistReportWritableFields, isAnniuTherapistReportBrand } from "../utils/therapistReportContract";
 
 const HistoryView = () => {
   const { 
@@ -74,6 +75,8 @@ const HistoryView = () => {
     if (!currentBrand) return "unknown";
     return typeof currentBrand === "string" ? currentBrand : (currentBrand.id || "unknown");
   }, [currentBrand]);
+
+  const isAnniuTherapistReport = isAnniuTherapistReportBrand(currentBrand);
 
 
   const getOperatorName = () => currentUser?.name || (userRole === "director" ? "高階主管" : (userRole === "trainer" ? "教專" : userRole || "unknown"));
@@ -177,9 +180,11 @@ const HistoryView = () => {
   const THERAPIST_FIELDS = [
     { key: "totalRevenue", label: "總業績", width: "min-w-[100px]", isHighlight: true, readOnly: true },
     { key: "newCustomerRevenue", label: "新客業績", width: "min-w-[100px]" },
+    ...(isAnniuTherapistReport ? [{ key: "newCustomerSkincareRevenue", label: "新客保養品", width: "min-w-[110px]", legacyZero: true }] : []),
     { key: "newCustomerCount", label: "新客人數", width: "min-w-[80px]" },
     { key: "newCustomerClosings", label: "新客留單", width: "min-w-[80px]" },
     { key: "oldCustomerRevenue", label: "舊客業績", width: "min-w-[100px]" },
+    ...(isAnniuTherapistReport ? [{ key: "oldCustomerSkincareRevenue", label: "舊客保養品", width: "min-w-[110px]", legacyZero: true }] : []),
     { key: "oldCustomerCount", label: "舊客人數", width: "min-w-[80px]" },
     { key: "returnRevenue", label: "退費", width: "min-w-[100px]", isNegative: true },
   ];
@@ -315,7 +320,14 @@ const HistoryView = () => {
     }
     setEditId(row.id); 
     const safeDate = String(row.date || "").replace(/\//g, "-");
-    setEditForm({ ...row, date: safeDate }); 
+    setEditForm({
+      ...row,
+      ...(isAnniuTherapistReport && activeTab === "therapist" ? {
+        newCustomerSkincareRevenue: Number(row.newCustomerSkincareRevenue || 0),
+        oldCustomerSkincareRevenue: Number(row.oldCustomerSkincareRevenue || 0),
+      } : {}),
+      date: safeDate,
+    });
   };
   
   const cancelEdit = () => { setEditId(null); setEditForm({}); };
@@ -323,8 +335,8 @@ const HistoryView = () => {
   const handleEditChange = (field, value) => { 
     setEditForm((prev) => {
       const newState = { ...prev, [field]: value };
-      if (activeTab === "therapist" && ["newCustomerRevenue", "oldCustomerRevenue", "returnRevenue"].includes(field)) {
-        newState.totalRevenue = Number(newState.newCustomerRevenue || 0) + Number(newState.oldCustomerRevenue || 0) - Number(newState.returnRevenue || 0);
+      if (activeTab === "therapist" && ["newCustomerRevenue", "newCustomerSkincareRevenue", "oldCustomerRevenue", "oldCustomerSkincareRevenue", "returnRevenue"].includes(field)) {
+        newState.totalRevenue = calculateTherapistReportTotalRevenue(newState, currentBrand);
       }
       if (activeTab === "store" && ["operationalAccrual", "skincareSales"].includes(field)) {
          newState.accrual = Number(newState.operationalAccrual || 0) + Number(newState.skincareSales || 0);
@@ -343,7 +355,7 @@ const HistoryView = () => {
       const collectionName = activeTab === "store" ? "daily_reports" : "therapist_daily_reports";
       const docRef = doc(getCollectionPath(collectionName), editId);
       let cleanData = {};
-      const fields = activeTab === "store" ? ["cash", "accrual", "operationalAccrual", "skincareSales", "traffic", "newCustomers", "newCustomerClosings", "newCustomerSales", "refund", "skincareRefund"] : ["totalRevenue", "newCustomerRevenue", "newCustomerCount", "newCustomerClosings", "oldCustomerRevenue", "oldCustomerCount", "returnRevenue"];
+      const fields = activeTab === "store" ? ["cash", "accrual", "operationalAccrual", "skincareSales", "traffic", "newCustomers", "newCustomerClosings", "newCustomerSales", "refund", "skincareRefund"] : getTherapistReportWritableFields(currentBrand);
       fields.forEach(f => { cleanData[f] = Number(editForm[f] || 0); });
       
       const finalSafeDate = String(editForm.date || "").replace(/\//g, "-");
@@ -607,7 +619,7 @@ const HistoryView = () => {
                                   <span className="font-bold text-stone-800">{displayStore}</span>
                                 </div>
                               </td>
-                              {activeTab === "store" ? ( STORE_FIELDS.map(f => (<td key={f.key} className="p-4 text-right">{isEditing ? (<input type="number" value={editForm[f.key]} onChange={(e)=>handleEditChange(f.key,e.target.value)} readOnly={f.key === 'accrual'} className={`border rounded w-20 text-right px-1 outline-none focus:border-amber-400 ${f.isNegative ? "text-rose-500" : ""} ${f.key === 'accrual' ? 'bg-stone-100 text-stone-500' : ''}`}/>) : (<span className={f.isNegative ? "text-rose-500 font-bold" : ""}>{fmt(row[f.key])}</span>)}</td>)) ) : ( <> <td className="p-4 font-bold">{row.therapistName}</td>{THERAPIST_FIELDS.map(f => (<td key={f.key} className="p-4 text-right">{isEditing ? (<input type="number" value={editForm[f.key]} onChange={(e)=>handleEditChange(f.key,e.target.value)} readOnly={f.readOnly} className={`border rounded w-20 text-right px-1 outline-none focus:border-indigo-400 ${f.isNegative ? "text-rose-500" : f.isHighlight ? "font-bold text-indigo-600" : ""} ${f.readOnly ? "bg-stone-100 text-stone-500 cursor-not-allowed" : ""}`}/>) : (<span className={f.isNegative ? "text-rose-500 font-bold" : f.isHighlight ? "text-indigo-600 font-bold" : ""}>{fmt(row[f.key])}</span>)}</td>))}</> )}
+                              {activeTab === "store" ? ( STORE_FIELDS.map(f => (<td key={f.key} className="p-4 text-right">{isEditing ? (<input type="number" value={editForm[f.key]} onChange={(e)=>handleEditChange(f.key,e.target.value)} readOnly={f.key === 'accrual'} className={`border rounded w-20 text-right px-1 outline-none focus:border-amber-400 ${f.isNegative ? "text-rose-500" : ""} ${f.key === 'accrual' ? 'bg-stone-100 text-stone-500' : ''}`}/>) : (<span className={f.isNegative ? "text-rose-500 font-bold" : ""}>{fmt(row[f.key])}</span>)}</td>)) ) : ( <> <td className="p-4 font-bold">{row.therapistName}</td>{THERAPIST_FIELDS.map(f => (<td key={f.key} className="p-4 text-right">{isEditing ? (<input type="number" value={editForm[f.key] ?? (f.legacyZero ? 0 : "")} onChange={(e)=>handleEditChange(f.key,e.target.value)} readOnly={f.readOnly} className={`border rounded w-20 text-right px-1 outline-none focus:border-indigo-400 ${f.isNegative ? "text-rose-500" : f.isHighlight ? "font-bold text-indigo-600" : ""} ${f.readOnly ? "bg-stone-100 text-stone-500 cursor-not-allowed" : ""}`}/>) : (<span className={f.isNegative ? "text-rose-500 font-bold" : f.isHighlight ? "text-indigo-600 font-bold" : ""}>{fmt(f.legacyZero ? (row[f.key] ?? 0) : row[f.key])}</span>)}</td>))}</> )}
                               <td className="p-4 text-center md:sticky md:right-0 bg-white group-hover:bg-stone-50 md:z-10 border-l border-stone-100 shadow-[-4px_0_8px_-2px_rgba(0,0,0,0.05)]">
                                 {isEditing ? ( <div className="flex gap-2 justify-center"><AsyncActionButton onClick={saveEdit} className="p-1.5 bg-emerald-100 text-emerald-600 rounded hover:bg-emerald-200" loadingText="儲存中…"><Save size={16}/></AsyncActionButton><button onClick={cancelEdit} className="p-1.5 bg-stone-100 text-stone-500 rounded hover:bg-stone-200"><X size={16}/></button></div> ) : ( <div className="flex gap-2 justify-center">{canModifyRow(row, "editHistory") && <button onClick={()=>startEdit(row)} className="p-1.5 hover:bg-amber-50 text-amber-500 rounded transition-colors"><Edit2 size={16}/></button>}{canModifyRow(row, "deleteReports") && <button onClick={()=>handleDelete(row.id)} className="p-1.5 hover:bg-rose-50 text-rose-500 rounded transition-colors"><Trash2 size={16}/></button>}{!canModifyRow(row, "editHistory") && !canModifyRow(row, "deleteReports") && <span className="text-xs font-bold text-stone-300">僅查看</span>}</div> )}
                               </td>

@@ -725,6 +725,25 @@ oldCustomerCount
 returnRevenue
 ```
 
+安妞管理師日報另有 additive 欄位：
+
+```text
+newCustomerSkincareRevenue
+oldCustomerSkincareRevenue
+```
+
+安妞 `totalRevenue`：
+
+```text
+newCustomerRevenue
++ newCustomerSkincareRevenue
++ oldCustomerRevenue
++ oldCustomerSkincareRevenue
+- returnRevenue
+```
+
+CYJ / 伊啵維持既有 `newCustomerRevenue + oldCustomerRevenue - returnRevenue` 語意。歷史安妞 Raw 缺少兩個 skincare 欄位時由 reader / editor contract 視為 `0`；不進行歷史 Raw bulk migration。
+
 ### Source Authority
 
 Telegram Agent 已明確定義：
@@ -798,7 +817,14 @@ therapistName
 storeName
 ```
 
-實績欄位依 therapist daily report 聚合。
+實績欄位依 therapist daily report 聚合。安妞新增的：
+
+```text
+newCustomerSkincareRevenue
+oldCustomerSkincareRevenue
+```
+
+亦由既有 `therapist_daily_reports` onWrite 差額聚合保存；缺欄視為 `0`。不新增 listener、query 或 polling。
 
 ---
 
