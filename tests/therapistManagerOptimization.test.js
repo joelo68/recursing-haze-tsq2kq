@@ -17,6 +17,22 @@ const credentialAuthority = read("functions/therapistCredentialAuthority.js");
 const applicationIdentity = read("functions/applicationIdentity.js");
 const rules = read("firestore.rules");
 
+test("therapist manager stays off the startup entry path and loads through the existing retryable lazy boundary", () => {
+  assert.doesNotMatch(
+    app,
+    /import TherapistManagerView from ["']\.\/components\/TherapistManagerView["'];/
+  );
+  assert.match(
+    app,
+    /const TherapistManagerView = lazyWithRetry\(\(\) => import\(["']\.\/components\/TherapistManagerView["']\)\);/
+  );
+  assert.match(app, /<Suspense fallback=/);
+  assert.match(
+    app,
+    /activeView === "therapist-manager"[\s\S]*canDirectorAccessView\("therapist-manager"\)[\s\S]*<TherapistManagerView \/>/
+  );
+});
+
 test("therapist manager opens from sanitized directory without page-entry therapist collection hydration", () => {
   assert.match(app, /Admin Credential Writer Retirement/);
   assert.match(app, /\(isDirectorAdmin && activeView === "settings"\)/);

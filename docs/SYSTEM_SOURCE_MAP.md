@@ -1673,6 +1673,7 @@ Navigation / Shared UI / Feature Views
 - `TargetView`
 - `TherapistTargetView`
 - `TherapistScheduleView`
+- `TherapistManagerView`
 - `NotificationManager`
 
 ---

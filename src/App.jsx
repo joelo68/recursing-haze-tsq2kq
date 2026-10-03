@@ -36,7 +36,6 @@ import {
 import { ViewWrapper, Card, Skeleton, Toast, ConfirmModal } from "./components/SharedUI";
 import { Sidebar, MobileTopNav } from "./components/Navigation";
 import { AppContext } from "./AppContext";
-import TherapistManagerView from "./components/TherapistManagerView";
 import LoginView from "./components/LoginView";
 import DeviceApprovalGate from "./components/DeviceApprovalGate";
 import DeviceApprovalPanel from "./components/DeviceApprovalPanel";
@@ -134,6 +133,7 @@ const TherapistScheduleView = lazyWithRetry(() => import("./components/Therapist
 const StoreScheduleView = lazyWithRetry(() => import("./components/StoreScheduleView"));
 const NotificationManager = lazyWithRetry(() => import("./components/NotificationManager"));
 const SmartForecastView = lazyWithRetry(() => import("./components/SmartForecastView"));
+const TherapistManagerView = lazyWithRetry(() => import("./components/TherapistManagerView"));
 
 
 const removeUndefinedDeep = (value) => {
