@@ -1,3 +1,198 @@
+# Latest Production Runtime Override — 2026-10-03（Therapist Historical Summary-first）
+
+> 本節是目前最高優先的 Production runtime / Dashboard therapist read-topology 狀態。下方 Canonical Role Metadata、Daily Report Date Safety、Release Health、P3、P2 與更早章節保留各自當時 evidence；若 runtime lineage、historical therapist read ownership 或 Production 狀態衝突，以目前正式 source、release identity、Production smoke 與本節為準。
+
+## Current Production Runtime
+
+```text
+main / origin-main                 = 3d6aed6e1742cb4e2be99647eddf9c09d602250c
+runtime parent                     = 681b152c78c9f5865c75f99c07da00cb020e39fd
+Frontend Production gh-pages      = d1178a857c1fa953b628b924bd32e405d62961da
+CURRENT_APP_VERSION                = 3.6.1
+Production asset                   = assets/index-DbIJbKo6.js
+Release identity schema            = release-identity-v1
+Release identity authority         = dist/release.json
+```
+
+`CURRENT_APP_VERSION` 維持 `3.6.1`；Therapist Historical Summary-first 沒有提高版本。
+
+## Therapist Historical Summary-first — PRODUCTION CONFIRMED / CLOSED
+
+本批修正的 source-proven read debt：
+
+```text
+historical Dashboard therapist mode
+→ therapist_summary/{YYYY-MM} 已提供 verified Summary presentation authority
+→ 舊 topology 仍可能同時執行整月 therapist_daily_reports getDocs
+→ verified historical 畫面可能支付未被 presentation 使用的 detail reads
+```
+
+目前正式 authority：
+
+```text
+src/App.jsx
+→ monthly Dashboard raw-read topology owner
+→ invokes useDashboardTherapistSummary()
+→ publishes therapistSummaryState through AppContext
+→ resolveHistoricalTherapistReadPolicy()
+→ verified historical + therapist Summary ready/matched 時
+   suppress normal whole-month therapist_daily_reports getDocs
+
+src/hooks/useDashboardTherapistSummary.js
+→ therapist_summary/{selectedYearMonth}
+→ one scoped document onSnapshot
+→ historical + therapist-view + module-enabled activation
+→ explicit active / ready / error state
+→ brand + yearMonth anchoring
+→ no query / polling
+
+src/hooks/useDashboardStats.js
+→ no direct therapist Summary Firestore listener invocation
+→ consumes AppContext therapistSummaryState
+→ retains Summary trust / KPI / ranking / filter presentation
+
+src/utils/dashboardReadPolicy.js
+→ resolveHistoricalDashboardReadPolicy()
+→ resolveHistoricalTherapistReadPolicy()
+```
+
+正常 verified historical therapist view 的 read contract：
+
+```text
+verified historical Dashboard trust
++ therapist_summary active
++ therapist_summary ready
++ therapist_summary brand/yearMonth matched
++ no therapist_summary error
+→ presentation consumes therapist Summary
+→ normal whole-month therapist_daily_reports getDocs suppressed
+```
+
+保留 detail authority 的情況：
+
+```text
+current month
+dirty / manual historical refresh
+Dashboard trust degraded
+therapist_summary missing
+therapist_summary listener error
+store-role historical detail semantics
+audit therapist-daily Raw flow
+```
+
+其中 `store` role 的歷史 detail semantics 本批刻意保留，避免 System Excluded own-store self-view 在尚未共享 upstream scope authority 前被 Summary-first 誤裁。
+
+## Read / Security / Brand Boundary
+
+```text
+normal verified historical therapist
+whole-month raw getDocs              = SUPPRESSED_FOR_SUMMARY_COMPATIBLE_NON_STORE_ROLES
+
+therapist_summary listener           = ONE_SCOPED_DOCUMENT_UNCHANGED
+current-month therapist live detail  = PRESERVED
+store-role historical detail         = PRESERVED
+therapist target year listener       = UNCHANGED
+therapist target editor / audit      = PRESERVED
+audit therapist-daily Raw authority  = PRESERVED
+
+new Firestore listener               = 0
+new Firestore query                  = 0
+new Firestore read primitive         = 0
+new polling                          = 0
+
+Backend change                       = NO
+Firestore Rules change               = NO
+brand physical path change           = NO
+Firebase Hosting deploy              = NO / not target
+Frontend deploy target               = GitHub Pages
+```
+
+跨品牌仍沿用既有 `getCollectionPath(...)` / brand resolver authority；本批沒有改動 CYJ legacy root 或 Anniu / Yibo brand physical paths。
+
+## Validation / Deployment Evidence
+
+```text
+IMPLEMENTED                           = YES
+VALIDATED                             = YES
+COMMITTED                             = YES
+PUSHED                                = YES
+DEPLOYED                              = YES_FRONTEND_GITHUB_PAGES
+
+feature commit                        = 3d6aed6e1742cb4e2be99647eddf9c09d602250c
+feature parent                        = 681b152c78c9f5865c75f99c07da00cb020e39fd
+gh-pages                              = d1178a857c1fa953b628b924bd32e405d62961da
+
+targeted therapist/read regression    = PASS
+full ci:validate                       = PASS
+frontend build                        = PASS
+```
+
+Regression closeout 中兩類 test contract 同步完成，沒有因此回改 runtime semantics：
+
+```text
+Trainer Dashboard gate regex
+→ 改為 whitespace-tolerant，同一 semantic gate
+→ PASS
+
+FRD-A1 / FRD-A2 therapist ownership
+→ App.jsx 是 useDashboardTherapistSummary() invocation owner
+→ useDashboardStats 是 AppContext therapistSummaryState consumer
+→ PASS
+
+runtime logic change from regression fixes = NO
+```
+
+Release identity：
+
+```text
+schemaVersion                         = release-identity-v1
+appVersion                            = 3.6.1
+sourceCommit                          = 3d6aed6e1742cb4e2be99647eddf9c09d602250c
+entryAsset                            = assets/index-DbIJbKo6.js
+```
+
+## Production Human Smoke
+
+2026-10-03 正式環境 Human Smoke：
+
+```text
+SystemMonitor Release                 = PASS
+Historical Therapist Summary          = PASS
+Historical Month Switching            = PASS
+Current Month Therapist               = PASS
+Store Role Therapist                  = PASS
+Fallback                              = NOT NATURALLY OBSERVED
+Therapist Target / Audit              = PASS
+Permission / Navigation               = PASS
+No White Screen                       = PASS
+```
+
+`Fallback = NOT NATURALLY OBSERVED` 不阻擋 closeout：沒有為 smoke 人工製造 Production dirty / unverified 狀態；missing/error/dirty detail fallback 已由 regression contract 覆蓋。本節不宣稱已在自然 Production dirty 案例中觀察 fallback。
+
+正式狀態：
+
+```text
+THERAPIST_HISTORICAL_SUMMARY_FIRST    = PRODUCTION_CONFIRMED / CLOSED
+HUMAN_PRODUCTION_SMOKE                = PASS
+PRODUCTION_CONFIRMED                  = YES
+```
+
+## Existing Closed / In-Progress Boundaries
+
+```text
+CANONICAL_ROLE_METADATA_V1            = PRODUCTION_CONFIRMED / CLOSED
+P1_RH_RELEASE_HEALTH_V1               = PRODUCTION_CONFIRMED / CLOSED
+DAILY_REPORT_DATE_SAFETY_V1           = PRODUCTION_CONFIRMED / CLOSED
+P3                                    = IN_PROGRESS
+P3-A rolling history                  = PENDING NATURAL ELIGIBILITY
+```
+
+本批沒有修改 Projection formula、checkpoint writer、month-final scoring 或 rolling-history eligibility。
+
+Documentation Impact：本次 docs-only closeout 只更新 `docs/CURRENT_STATE.md`；runtime source / Functions / Rules / Frontend = None。
+
+---
+
 # Latest Production Runtime Override — 2026-10-03（Canonical Role Metadata v1）
 
 > 本節是目前最高優先的 Production runtime / role-presentation authority 狀態。下方 Daily Report Date Safety、Release Health、P3、P2 與更早章節保留各自當時 evidence；若 runtime lineage、role presentation authority 或 Production 狀態衝突，以目前正式 source、release identity、Production smoke 與本節為準。
