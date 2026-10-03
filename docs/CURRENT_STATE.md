@@ -1,3 +1,148 @@
+# Latest Production Runtime Override — 2026-10-02（Daily Report Date Safety v1 + Production Release Health / Runtime Evidence v1）
+
+> 本節是目前最高優先的 Production runtime / release identity 狀態。下方 P3、P2 與更早章節保留各自當時 evidence；若版本、runtime lineage 或 Production 狀態衝突，以目前正式 source、Production release identity、Production smoke 與本節為準。
+
+## Current Production Runtime
+
+```text
+main / origin-main                 = 93de750bba5661e1bb07b0e538fbfc016183ecd3
+runtime parent                     = 83ebb1d56ec4bb70aea6f5ad811dc8851d8d8993
+Frontend Production gh-pages      = 43449a25de76782a208e3db6a0c58c3fdff5a08e
+CURRENT_APP_VERSION                = 3.6.1
+Production asset                   = assets/index-c1M9KKrS.js
+Release identity schema            = release-identity-v1
+Release identity authority         = dist/release.json
+```
+
+`CURRENT_APP_VERSION` 已由 Daily Report Date Safety v1 promotion 提升至 `3.6.1`；Production Release Health v1 沒有再次提高版本。
+
+## Production Release Health / Runtime Evidence v1 — PRODUCTION CONFIRMED
+
+正式 Release Health 沿用既有 P1-C Production Observability，不建立第二套 Firestore health authority：
+
+```text
+Operational health owner           = functions/productionObservability.js
+Semantic update marker             = global_settings/system_version
+Static deployment identity         = dist/release.json
+Presentation / operator surface    = SystemMonitor → 系統狀態
+```
+
+`dist/release.json` 由正式 Vite build 產生，核心欄位：
+
+```text
+schemaVersion                      = release-identity-v1
+appVersion                         = 3.6.1
+sourceCommit                       = 93de750bba5661e1bb07b0e538fbfc016183ecd3
+entryAsset                         = assets/index-c1M9KKrS.js
+```
+
+`release.json` 明確排除於 Service Worker precache；SystemMonitor 的人工健康檢查以 `cache: no-store` 取得正式發布 identity，避免舊 PWA cache 被誤認為最新 release。
+
+Production deploy / propagation evidence：
+
+```text
+IMPLEMENTED                         = YES
+VALIDATED                           = YES
+COMMITTED                           = YES
+PUSHED                              = YES
+DEPLOYED                            = YES_FRONTEND_GITHUB_PAGES
+PRODUCTION_ASSET_PROPAGATED         = YES
+RELEASE_IDENTITY_RUNTIME_VERIFIED   = YES
+HUMAN_PRODUCTION_SMOKE              = PASS
+PRODUCTION_CONFIRMED                = YES
+```
+
+2026-10-02 19:56 左右的正式 SystemMonitor smoke 已確認：
+
+```text
+System status                       = 整體運作正常
+Current version                     = v3.6.1
+Published source                    = 93de750bba
+Browser loaded asset                = index-c1M9KKrS.js
+Published asset                     = index-c1M9KKrS.js
+PWA                                 = 已接管
+Release status                      = 正式版本一致
+Browser vs published release        = MATCH
+```
+
+因此 P1-RH 正式狀態：
+
+```text
+P1_RH_RELEASE_HEALTH_V1             = PRODUCTION_CONFIRMED / CLOSED
+```
+
+Read / authority impact：
+
+```text
+P1-C max document read budget       = 21 unchanged
+steady-state Firestore read delta   = 0
+new listener                        = 0
+new query                           = 0
+new polling                         = 0
+new Firestore write path            = 0
+static HTTP per on-demand check      = 1 GET release.json
+Backend change                      = NO
+Rules change                        = NO
+Firebase Hosting deploy             = NO
+Frontend deploy target              = GitHub Pages
+```
+
+## Daily Report Date Safety v1 — PRODUCTION CONFIRMED / CLOSED
+
+Daily Report Date Safety v1 已隨前一個正式 runtime commit `83ebb1d56ec4bb70aea6f5ad811dc8851d8d8993` 部署，並包含於目前 Production runtime `93de750bba5661e1bb07b0e538fbfc016183ecd3`。
+
+正式 contract：
+
+```text
+Timezone authority                  = Asia/Taipei
+Business-day rollover               = 04:00 preserved
+Future selected date                = HARD BLOCK
+Same-day 04:00–14:59                = HARD BLOCK / no override
+Same-day >= 15:00                   = existing normal confirmation
+Historical date                     = explicit backfill flow
+Store / therapist report flows      = same safety contract
+InputView Summary queue writer      = none
+new listener / query / polling      = 0
+```
+
+Production Human Smoke 已完整確認：
+
+```text
+Historical backfill                 = PASS
+Future date block                   = PASS
+Same-day after 15:00                = PASS
+Store report flow                   = PASS
+Therapist / manager flow            = PASS
+Same-day before 15:00 HARD BLOCK    = PASS
+No override                         = PASS
+HUMAN_PRODUCTION_SMOKE              = PASS
+PRODUCTION_CONFIRMED                = YES
+```
+
+2026-10-03 14:21（Asia/Taipei）正式環境截圖已確認：選擇 `2026-10-03` 當日日報並嘗試送出時，系統顯示「目前尚未到當日日報回報時間」，並明確提示下午 3:00 前不可送出當日日報；畫面只提供返回重新確認，沒有 override／強制送出路徑。
+
+因此 Daily Report Date Safety v1 正式狀態：
+
+```text
+DAILY_REPORT_DATE_SAFETY_V1         = PRODUCTION_CONFIRMED / CLOSED
+```
+
+## P3 Boundary
+
+本次 Release Health / Date Safety closeout 不修改 Projection formula、checkpoint writer、month-final scoring 或 rolling-history eligibility。P3 仍維持：
+
+```text
+P3                                  = IN_PROGRESS
+P3-A natural checkpoint             = PRODUCTION CONFIRMED
+P3-A natural month-final score      = PRODUCTION CONFIRMED（CYJ / 安妞）
+P3-A rolling history                = PENDING NATURAL ELIGIBILITY
+P3 runtime patch required now       = NO
+```
+
+Documentation Impact：本次 docs-only closeout 只更新 `docs/CURRENT_STATE.md`；runtime source / Functions / Rules / Frontend = None。
+
+---
+
 # P3 Projection Natural Evidence Automation — P3-A Natural Production Readback — 2026-10-02
 
 P3 已正式進入自然 Production evidence 觀察階段。本批以正式 source `main @ 8f9cf24245fbf85bd0f00e110e99c9f8944a8a58` 對 2026-09 執行 READ-ONLY Production point-read 驗證；沒有修改 Firestore、runtime source、Projection formula 或正式資料。
