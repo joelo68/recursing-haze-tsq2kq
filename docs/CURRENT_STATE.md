@@ -1,3 +1,143 @@
+# Latest Production Runtime Override — 2026-10-03（Canonical Role Metadata v1）
+
+> 本節是目前最高優先的 Production runtime / role-presentation authority 狀態。下方 Daily Report Date Safety、Release Health、P3、P2 與更早章節保留各自當時 evidence；若 runtime lineage、role presentation authority 或 Production 狀態衝突，以目前正式 source、release identity、Production smoke 與本節為準。
+
+## Current Production Runtime
+
+```text
+main / origin-main                 = ec1ccfd4962d8e26c2f5f8f6893be6a4ad94ff2e
+runtime parent                     = 8389ed41740782efebf451c0626065d5b7690964
+Frontend Production gh-pages      = 33ce034e773dbeb2cd68377e8bc9845872a9bbe3
+CURRENT_APP_VERSION                = 3.6.1
+Production asset                   = assets/index-B_16iztG.js
+Release identity schema            = release-identity-v1
+Release identity authority         = dist/release.json
+```
+
+`CURRENT_APP_VERSION` 維持 `3.6.1`；Canonical Role Metadata v1 沒有提高版本。
+
+## Canonical Role Metadata v1 — PRODUCTION CONFIRMED / CLOSED
+
+Frontend role presentation 的 canonical owner：
+
+```text
+src/constants/index.js
+→ APPLICATION_ROLE_METADATA
+   director   = 高階主管
+   trainer    = 教專
+   manager    = 區長
+   store      = 店經理
+   therapist  = 管理師
+→ SECURITY_ACTOR_ROLE_METADATA
+   master     = 最高管理者（Security / Audit presentation only）
+→ getRoleLabel(...)
+→ getRoleBadgeLabel(...)
+```
+
+正式 Application Identity role 數維持 5：
+
+```text
+director
+trainer
+manager
+store
+therapist
+```
+
+`master` 不是第六個 Application Identity role；它只保留 Security / Audit presentation 語意，不得因本批 metadata 統一而被加入 Login、Application Identity、Module Permission、Backend authorization 或 Firestore Rules 的一般 role allowlist。
+
+舊 `ROLES` 中沒有正式 consumer 的 client-side credential-like `pass` metadata 已退役；正式登入 credential / identity authority 維持既有 Backend 流程。
+
+## Security / Permission Boundary
+
+本批只統一 Frontend presentation metadata，不改 authorization authority：
+
+```text
+Backend authorization authority       = PRESERVED
+Firestore Rules authority             = PRESERVED
+Permission semantics                  = UNCHANGED
+Brand physical paths                  = UNCHANGED
+Application Identity semantics        = UNCHANGED
+Device Security authority             = UNCHANGED
+```
+
+Backend / Rules 仍保留各自 explicit fail-closed role allowlist，不從 Frontend metadata 推導權限。
+
+Read / listener / write impact：
+
+```text
+read topology delta                   = 0
+new Firestore listener                = 0
+new Firestore query                   = 0
+new Firestore read                    = 0
+new Firestore write                   = 0
+new polling                           = 0
+Backend deploy                        = NO / not required
+Rules deploy                          = NO / not required
+Firebase Hosting deploy               = NO / not target
+Frontend deploy target                = GitHub Pages
+```
+
+## Production Deployment Evidence
+
+```text
+IMPLEMENTED                           = YES
+VALIDATED                             = YES
+COMMITTED                             = YES
+PUSHED                                = YES
+DEPLOYED                              = YES_FRONTEND_GITHUB_PAGES
+PRODUCTION_ASSET_PROPAGATED           = YES
+RELEASE_IDENTITY_RUNTIME_VERIFIED     = YES
+```
+
+Release identity：
+
+```text
+sourceCommit                          = ec1ccfd4962d8e26c2f5f8f6893be6a4ad94ff2e
+entryAsset                            = assets/index-B_16iztG.js
+appVersion                            = 3.6.1
+schemaVersion                         = release-identity-v1
+```
+
+## Production Human Smoke
+
+2026-10-03 正式環境 Human Smoke：
+
+```text
+SystemMonitor Release                 = PASS
+Login Role Labels                     = PASS
+Settings Role Labels                  = PASS
+SystemMonitor Role Badge              = PASS
+Device Approval                       = PASS
+Permission / Navigation Regression    = PASS
+No White Screen                       = PASS
+```
+
+`Master Audit Label` 僅在正式畫面剛好有對應 Security / Audit actor 資料時可補觀察；它不是本批 closeout 的必要 smoke，因此本節不宣稱已自然觀察到該案例。
+
+正式狀態：
+
+```text
+CANONICAL_ROLE_METADATA_V1            = PRODUCTION_CONFIRMED / CLOSED
+HUMAN_PRODUCTION_SMOKE                = PASS
+PRODUCTION_CONFIRMED                  = YES
+```
+
+## Existing Closed / In-Progress Boundaries
+
+```text
+P1_RH_RELEASE_HEALTH_V1               = PRODUCTION_CONFIRMED / CLOSED
+DAILY_REPORT_DATE_SAFETY_V1           = PRODUCTION_CONFIRMED / CLOSED
+P3                                    = IN_PROGRESS
+P3-A rolling history                  = PENDING NATURAL ELIGIBILITY
+```
+
+本批沒有修改 Projection formula、checkpoint writer、month-final scoring 或 rolling-history eligibility。
+
+Documentation Impact：本次 docs-only closeout 只更新 `docs/CURRENT_STATE.md`；runtime source / Functions / Rules / Frontend = None。
+
+---
+
 # Latest Production Runtime Override — 2026-10-02（Daily Report Date Safety v1 + Production Release Health / Runtime Evidence v1）
 
 > 本節是目前最高優先的 Production runtime / release identity 狀態。下方 P3、P2 與更早章節保留各自當時 evidence；若版本、runtime lineage 或 Production 狀態衝突，以目前正式 source、Production release identity、Production smoke 與本節為準。
