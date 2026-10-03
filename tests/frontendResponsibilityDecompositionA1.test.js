@@ -9,6 +9,7 @@ const __dirname = path.dirname(__filename);
 const root = path.resolve(__dirname, "..");
 const read = (relativePath) => fs.readFileSync(path.join(root, relativePath), "utf8");
 
+const appSource = read("src/App.jsx");
 const dashboardHook = read("src/hooks/useDashboardStats.js");
 const annualLoader = read("src/hooks/useAnnualKpiBenchmark.js");
 const projectionLoader = read("src/hooks/useDashboardProjectionModel.js");
@@ -53,7 +54,8 @@ test("FRD-A1 preserves normalization and missing/error fail-safe semantics", () 
 test("FRD-A1 annual loader remains isolated from Projection Model and therapist Summary ownership", () => {
   assert.match(dashboardHook, /useDashboardProjectionModel\(\{/);
   assert.match(projectionLoader, /getCollectionPath\("projection_models"\)/);
-  assert.match(dashboardHook, /useDashboardTherapistSummary\(\{/);
+  assert.doesNotMatch(dashboardHook, /useDashboardTherapistSummary\(\{/);
+  assert.match(appSource, /useDashboardTherapistSummary\(\{/);
   assert.match(therapistSummaryLoader, /getCollectionPath\("therapist_summary"\)/);
   assert.match(therapistSummaryLoader, /onSnapshot\(/);
   assert.doesNotMatch(annualLoader, /projection_models/);

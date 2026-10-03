@@ -136,3 +136,87 @@ export const resolveHistoricalDashboardReadPolicy = ({
     reason: flagState.isDirty ? "SUMMARY_DIRTY" : "SUMMARY_UNVERIFIED",
   };
 };
+export const resolveHistoricalTherapistReadPolicy = ({
+  isCurrentMonth = false,
+  dashboardReadPolicy = null,
+  therapistSummaryActive = false,
+  therapistSummaryReady = false,
+  therapistSummaryError = null,
+  hasUsableTherapistSummary = false,
+  preserveDetailFallback = false,
+} = {}) => {
+  if (isCurrentMonth || dashboardReadPolicy?.mode === DASHBOARD_READ_MODE.CURRENT_LIVE) {
+    return {
+      shouldLoadTherapistReports: true,
+      summaryTrusted: false,
+      reason: "CURRENT_MONTH_LIVE",
+    };
+  }
+
+  // Store self-view may intentionally rely on excluded own-store detail semantics.
+  // App currently preserves every store-role historical therapist detail path rather
+  // than trying to reproduce that presentation-only scope decision in read topology.
+  if (preserveDetailFallback) {
+    return {
+      shouldLoadTherapistReports: true,
+      summaryTrusted: false,
+      reason: "ROLE_DETAIL_SEMANTICS_PRESERVED",
+    };
+  }
+
+  const mode = dashboardReadPolicy?.mode || "";
+  if (mode === DASHBOARD_READ_MODE.DIRTY_REFRESH) {
+    return {
+      shouldLoadTherapistReports: true,
+      summaryTrusted: false,
+      reason: "DIRTY_REFRESH_REQUESTED",
+    };
+  }
+
+  if (mode === DASHBOARD_READ_MODE.DETAIL_FALLBACK) {
+    return {
+      shouldLoadTherapistReports: true,
+      summaryTrusted: false,
+      reason: dashboardReadPolicy?.reason || "DASHBOARD_DETAIL_FALLBACK",
+    };
+  }
+
+  if (mode === DASHBOARD_READ_MODE.LOADING) {
+    return {
+      shouldLoadTherapistReports: false,
+      summaryTrusted: false,
+      reason: "SUMMARY_TRUST_LOADING",
+    };
+  }
+
+  if (mode === DASHBOARD_READ_MODE.SUMMARY_TRUSTED) {
+    if (!therapistSummaryActive || !therapistSummaryReady) {
+      return {
+        shouldLoadTherapistReports: false,
+        summaryTrusted: false,
+        reason: "THERAPIST_SUMMARY_LOADING",
+      };
+    }
+
+    if (therapistSummaryError || !hasUsableTherapistSummary) {
+      return {
+        shouldLoadTherapistReports: true,
+        summaryTrusted: false,
+        reason: therapistSummaryError ? "THERAPIST_SUMMARY_ERROR" : "THERAPIST_SUMMARY_MISSING",
+      };
+    }
+
+    return {
+      shouldLoadTherapistReports: false,
+      summaryTrusted: true,
+      reason: "VERIFIED_THERAPIST_SUMMARY",
+    };
+  }
+
+  // Unknown policy state fails closed to the existing detail path.
+  return {
+    shouldLoadTherapistReports: true,
+    summaryTrusted: false,
+    reason: "UNKNOWN_DASHBOARD_READ_POLICY",
+  };
+};

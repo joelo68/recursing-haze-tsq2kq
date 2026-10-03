@@ -1,5 +1,46 @@
 # DEVELOPMENT_GUIDE.md
 
+# Therapist Historical Summary-first Guardrail — 2026-10-03
+
+歷史 Dashboard 管理師 read optimization 必須同時滿足 correctness 與 read reduction：
+
+```text
+verified historical Dashboard trust
++ therapist_summary active
++ therapist_summary ready
++ brand / yearMonth matched
++ no therapist_summary error
+→ suppress normal whole-month therapist_daily_reports getDocs
+```
+
+以下情況必須保留 detail fallback：
+
+```text
+current month
+dirty/manual refresh
+Dashboard trust degraded
+therapist_summary missing
+therapist_summary listener error
+store-role detail semantics not yet shared upstream
+audit therapist-daily
+```
+
+禁止為了省 reads：
+- 把 current-month therapist performance 改成 historical Summary actual；
+- 移除 audit Raw authority；
+- 改動 therapist target editor/audit live authority；
+- 以新的 polling 或 broad resident listener 取代 existing single-document Summary listener。
+
+Regression minimum：
+- `tests/dashboardHistoricalReads.test.js`
+- `tests/frontendResponsibilityDecompositionA3.test.js`
+- existing therapist target / Dashboard mode tests
+- full `npm run ci:validate`
+- frontend build
+
+---
+
+
 # P2 Post-Closeout Engineering Guardrails — 2026-10-01
 
 P2 已採功能性結案：

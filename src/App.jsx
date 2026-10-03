@@ -22,7 +22,7 @@ import { ROLES, ALL_MENU_ITEMS, DEFAULT_REGIONAL_MANAGERS, DEFAULT_PERMISSIONS, 
 import { generateUUID, formatLocalYYYYMMDD, toStandardDateFormat, formatNumber, parseNumber, normalizeManagerOrder } from "./utils/helpers";
 import { validPositiveSetting } from "./utils/kpiContracts";
 import { inspectHistoricalSystemExclusionTrust, normalizeSystemExclusionState } from "./utils/systemExclusion";
-import { resolveHistoricalDashboardReadPolicy } from "./utils/dashboardReadPolicy";
+import { resolveHistoricalDashboardReadPolicy, resolveHistoricalTherapistReadPolicy } from "./utils/dashboardReadPolicy";
 import { inspectHistoricalReportingCalendarTrust } from "./utils/storeLifecycle";
 import { isFormalReportSummaryPairCompatible } from "./utils/reportFormalConsumer";
 import {
@@ -54,6 +54,7 @@ import {
   inspectCurrentStoreMonthReportsReadiness,
 } from "./utils/currentStoreMonthReportsConsumer.js";
 import { useAnnualDataAuthority } from "./hooks/useAnnualDataAuthority";
+import { useDashboardTherapistSummary } from "./hooks/useDashboardTherapistSummary.js";
 
 // ==========================================
 // ★ 系統核心版本號 (終極動態快取版)
@@ -1526,6 +1527,27 @@ export default function App() {
     const m = String(selectedMonth || "").padStart(2, "0");
     return y && m ? `${y}-${m}` : "";
   }, [selectedYear, selectedMonth]);
+
+  const isSelectedCurrentMonth = useMemo(() => {
+    const now = new Date();
+    return Number(selectedYear) === now.getFullYear() && Number(selectedMonth) === now.getMonth() + 1;
+  }, [selectedYear, selectedMonth]);
+
+  // Therapist Historical Summary-first:
+  // App owns monthly read topology, so it also owns the dedicated therapist_summary loader invocation.
+  // The loader itself remains a single-document, historical, view-scoped hook.
+  const therapistSummaryState = useDashboardTherapistSummary({
+    getCollectionPath,
+    brandId: currentBrand?.id,
+    selectedYearMonth,
+    isSelectedCurrentMonth,
+    isTherapistModuleEnabled: therapistModuleEnabled,
+    viewMode: hasVerifiedApplicationSession &&
+      activeView === "dashboard" &&
+      (dashboardViewMode === "therapist" || userRole === "therapist")
+      ? "therapist"
+      : "store",
+  });
 
   const [inputDate, setInputDate] = useState(() => formatLocalYYYYMMDD(new Date()));
 
@@ -3483,12 +3505,37 @@ export default function App() {
             )
       );
 
+    const therapistSummaryMatchesScope = Boolean(
+      therapistSummaryState?.active === true &&
+      therapistSummaryState?.ready === true &&
+      !therapistSummaryState?.error &&
+      therapistSummaryState?.data &&
+      String(therapistSummaryState?.brandId || "").trim().toLowerCase() === String(currentBrand?.id || "").trim().toLowerCase() &&
+      therapistSummaryState?.yearMonth === targetYearMonth
+    );
+    const historicalTherapistReadPolicy = resolveHistoricalTherapistReadPolicy({
+      isCurrentMonth,
+      dashboardReadPolicy,
+      therapistSummaryActive: therapistSummaryState?.active === true,
+      therapistSummaryReady: therapistSummaryState?.ready === true,
+      therapistSummaryError: therapistSummaryState?.error || null,
+      hasUsableTherapistSummary: therapistSummaryMatchesScope,
+      // Store role may intentionally enter excluded own-store self-view, whose detail semantics
+      // are presentation-specific. Preserve that raw authority until a dedicated shared scope
+      // contract is promoted upstream.
+      preserveDetailFallback: userRole === "store",
+    });
+    const dashboardNeedsTherapistReports = Boolean(
+      activeView === "dashboard" &&
+      (dashboardViewMode === "therapist" || userRole === "therapist") &&
+      historicalTherapistReadPolicy.shouldLoadTherapistReports
+    );
     const shouldLoadTherapistReportData = therapistModuleEnabled && (
       (
         MONTHLY_THERAPIST_REPORT_DATA_VIEWS.has(activeView) &&
         auditNeedsTherapistReports
       ) ||
-      (activeView === "dashboard" && (dashboardViewMode === "therapist" || userRole === "therapist"))
+      dashboardNeedsTherapistReports
     );
 
     if (!hasVerifiedApplicationSession || isLowPowerMode || (!shouldLoadDailyReportData && !shouldLoadTherapistReportData)) {
@@ -3744,7 +3791,7 @@ export default function App() {
         isMounted = false; 
       };
     }
-  }, [hasVerifiedApplicationSession, currentBrand, selectedYear, selectedMonth, activeView, auditType, dashboardViewMode, storeAnalysisSelectedStore, userRole, therapistModuleEnabled, currentDashboardSummary, currentRankingsSummary, currentReportSummaryReady, currentReportSummaryReadyYearMonth, currentReportSummaryReadyBrandId, currentSummaryRecalcFlagState, systemExclusionState, getCollectionPath, getStableReadMeta, isLowPowerMode, historicalDetailRefreshToken]);
+  }, [hasVerifiedApplicationSession, currentBrand, selectedYear, selectedMonth, activeView, auditType, dashboardViewMode, storeAnalysisSelectedStore, userRole, therapistModuleEnabled, therapistSummaryState, currentDashboardSummary, currentRankingsSummary, currentReportSummaryReady, currentReportSummaryReadyYearMonth, currentReportSummaryReadyBrandId, currentSummaryRecalcFlagState, systemExclusionState, getCollectionPath, getStableReadMeta, isLowPowerMode, historicalDetailRefreshToken]);
 
 
  const handleLogin = useCallback(async (roleId, userInfo = null, loginCredential = {}) => {
@@ -4841,7 +4888,7 @@ export default function App() {
     annualAggregatedData, annualDashboardSummaries, annualSummaryStatusMap, annualSummaryLoadState,
     annualMonthlyTargetSummaries, annualTargetSummaryLoadState, annualAggregateLoadState, therapistAnnualAggregatedData, // ★ 年度 trust / target / fallback readiness
     showToast, openConfirm, fmtMoney, fmtNum, inputDate, setInputDate, setTargets, selectedYear, selectedMonth, setSelectedYear, setSelectedMonth, permissions, storeAccounts, managerAuth, currentUser, userRole, logActivity, manageTherapistMasterAction, navigateToStore, activeView, appId,
-    therapists: visibleTherapists, therapistReports: visibleTherapistReports, therapistSchedules, therapistTargets, trainerAuth, systemExclusionState, auditExclusions, handleUpdateAuditExclusions, currentBrand, setCurrentBrandId, getCollectionPath, getDocPath, dailyLoginCount, yesterdayLoginCount, securityConfig, featureFlags, therapistModuleEnabled, isOnline, isLowPowerMode, trackTargetEditorRead,
+    therapists: visibleTherapists, therapistReports: visibleTherapistReports, therapistSummaryState, therapistSchedules, therapistTargets, trainerAuth, systemExclusionState, auditExclusions, handleUpdateAuditExclusions, currentBrand, setCurrentBrandId, getCollectionPath, getDocPath, dailyLoginCount, yesterdayLoginCount, securityConfig, featureFlags, therapistModuleEnabled, isOnline, isLowPowerMode, trackTargetEditorRead,
     currentDeviceTrust, currentSecurityAccountKey, manageDeviceSecurityAction, reviewDeviceApprovalAction, updateTelegramSecurityAlertConfig, manageApplicationAccountAction, manageAdministrativeSettingAction, manageManagerOrganizationAction, manageManagementDelegationAction, updateModulePermissions, updateProjectionContext, updateStoreSchedule, getProductionHealthSnapshotAction, appVersion: CURRENT_APP_VERSION, publishedSystemVersion, canManageDeviceSecurity: isDeviceSecuritySuperAdmin, canRevealTherapistPassword: isDeviceSecuritySuperAdmin, canDeleteTherapistAccount: isDeviceSecuritySuperAdmin, openDeviceApprovalPanel,
     loginDirectory,
     fetchGlobalData,
@@ -4852,7 +4899,7 @@ export default function App() {
     directorPermissionProfile,
     canDirectorAccessView,
     isReadOnlyDirector: userRole === "director" && !canDirectorAccessView("history")
-  }), [user, loading, visibleManagers, visibleManagerOrder, monthlyTargetSummary, currentLifecycleMasterState, currentDashboardSummary, currentRankingsSummary, currentReportSummaryReady, currentReportSummaryReadyYearMonth, currentReportSummaryReadyBrandId, currentSummaryRecalcFlagState, historicalDetailRefreshState, targets, visibleRawData, rawData, annualAggregatedData, annualDashboardSummaries, annualSummaryStatusMap, annualSummaryLoadState, annualMonthlyTargetSummaries, annualTargetSummaryLoadState, annualAggregateLoadState, therapistAnnualAggregatedData, inputDate, selectedYear, selectedMonth, permissions, storeAccounts, managerAuth, currentUser, userRole, logActivity, manageTherapistMasterAction, navigateToStore, activeView, appId, visibleTherapists, visibleTherapistReports, therapistSchedules, therapistTargets, trainerAuth, systemExclusionState, auditExclusions, handleUpdateAuditExclusions, currentBrand, setCurrentBrandId, getCollectionPath, getDocPath, dailyLoginCount, yesterdayLoginCount, securityConfig, featureFlags, therapistModuleEnabled, isOnline, isLowPowerMode, trackTargetEditorRead, currentDeviceTrust, currentSecurityAccountKey, manageDeviceSecurityAction, reviewDeviceApprovalAction, updateTelegramSecurityAlertConfig, manageApplicationAccountAction, manageAdministrativeSettingAction, manageManagerOrganizationAction, manageManagementDelegationAction, updateModulePermissions, updateProjectionContext, updateStoreSchedule, getProductionHealthSnapshotAction, publishedSystemVersion, isDeviceSecuritySuperAdmin, openDeviceApprovalPanel, loginDirectory, fetchGlobalData, managers, delegations, activeDelegations, delegationAccess, accessibleStores, officialStores, delegatedStores, refreshDelegations, canAccessStore, canEditStoreReport, getActiveDelegationForStore, directorLevel, directorPermissionProfile, canDirectorAccessView]); // ★ 依賴陣列也要加
+  }), [user, loading, visibleManagers, visibleManagerOrder, monthlyTargetSummary, currentLifecycleMasterState, currentDashboardSummary, currentRankingsSummary, currentReportSummaryReady, currentReportSummaryReadyYearMonth, currentReportSummaryReadyBrandId, currentSummaryRecalcFlagState, historicalDetailRefreshState, targets, visibleRawData, rawData, annualAggregatedData, annualDashboardSummaries, annualSummaryStatusMap, annualSummaryLoadState, annualMonthlyTargetSummaries, annualTargetSummaryLoadState, annualAggregateLoadState, therapistAnnualAggregatedData, inputDate, selectedYear, selectedMonth, permissions, storeAccounts, managerAuth, currentUser, userRole, logActivity, manageTherapistMasterAction, navigateToStore, activeView, appId, visibleTherapists, visibleTherapistReports, therapistSummaryState, therapistSchedules, therapistTargets, trainerAuth, systemExclusionState, auditExclusions, handleUpdateAuditExclusions, currentBrand, setCurrentBrandId, getCollectionPath, getDocPath, dailyLoginCount, yesterdayLoginCount, securityConfig, featureFlags, therapistModuleEnabled, isOnline, isLowPowerMode, trackTargetEditorRead, currentDeviceTrust, currentSecurityAccountKey, manageDeviceSecurityAction, reviewDeviceApprovalAction, updateTelegramSecurityAlertConfig, manageApplicationAccountAction, manageAdministrativeSettingAction, manageManagerOrganizationAction, manageManagementDelegationAction, updateModulePermissions, updateProjectionContext, updateStoreSchedule, getProductionHealthSnapshotAction, publishedSystemVersion, isDeviceSecuritySuperAdmin, openDeviceApprovalPanel, loginDirectory, fetchGlobalData, managers, delegations, activeDelegations, delegationAccess, accessibleStores, officialStores, delegatedStores, refreshDelegations, canAccessStore, canEditStoreReport, getActiveDelegationForStore, directorLevel, directorPermissionProfile, canDirectorAccessView]); // ★ 依賴陣列也要加
   
   const memoizedViews = useMemo(() => {
     return (

@@ -64,7 +64,7 @@ test("Trainer store mode does not keep therapist target/report reads alive", () 
 
   assert.match(
     monthlyReadBlock,
-    /activeView === "dashboard" && \(dashboardViewMode === "therapist" \|\| userRole === "therapist"\)/
+    /activeView === "dashboard"\s*&&\s*\(dashboardViewMode === "therapist" \|\| userRole === "therapist"\)/
   );
   assert.doesNotMatch(
     monthlyReadBlock,

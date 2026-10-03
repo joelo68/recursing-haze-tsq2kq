@@ -9,6 +9,7 @@ const __dirname = path.dirname(__filename);
 const root = path.resolve(__dirname, "..");
 const read = (relativePath) => fs.readFileSync(path.join(root, relativePath), "utf8");
 
+const appSource = read("src/App.jsx");
 const dashboardHook = read("src/hooks/useDashboardStats.js");
 const projectionLoader = read("src/hooks/useDashboardProjectionModel.js");
 const therapistSummaryLoader = read("src/hooks/useDashboardTherapistSummary.js");
@@ -61,7 +62,8 @@ test("FRD-A2 keeps Projection trust composition in useDashboardStats", () => {
 });
 
 test("FRD-A2 Projection loader remains isolated from therapist Summary listener ownership", () => {
-  assert.match(dashboardHook, /useDashboardTherapistSummary\(\{/);
+  assert.doesNotMatch(dashboardHook, /useDashboardTherapistSummary\(\{/);
+  assert.match(appSource, /useDashboardTherapistSummary\(\{/);
   assert.match(therapistSummaryLoader, /getCollectionPath\("therapist_summary"\)/);
   assert.match(therapistSummaryLoader, /onSnapshot\(/);
   assert.doesNotMatch(projectionLoader, /therapist_summary/);

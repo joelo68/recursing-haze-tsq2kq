@@ -1,5 +1,54 @@
 # Trainer → Therapist Account Management Flow Override — 2026-09-30
 
+# Therapist Historical Summary-first Read Flow — 2026-10-03
+
+```text
+Dashboard therapist mode
+        │
+        ├─ current month
+        │    └─ therapist_daily_reports live detail listener
+        │
+        └─ historical month
+             │
+             ├─ dashboard_summary + rankings_summary + summary_recalc_flags trust
+             │
+             └─ therapist_summary/{YYYY-MM} single-doc listener
+                      │
+                      ├─ trust loading
+                      │    └─ wait; no eager whole-month therapist detail read
+                      │
+                      ├─ verified + therapist Summary ready/matched
+                      │    └─ Summary-first presentation
+                      │         └─ normal therapist_daily_reports getDocs = 0
+                      │
+                      └─ missing/error/dirty explicit fallback
+                           └─ bounded one-shot therapist_daily_reports month getDocs
+```
+
+Authority ownership：
+
+```text
+src/App.jsx
+→ monthly read-topology decision
+→ resolveHistoricalDashboardReadPolicy()
+→ resolveHistoricalTherapistReadPolicy()
+→ therapist Summary loader invocation / AppContext publication
+
+src/hooks/useDashboardTherapistSummary.js
+→ therapist_summary/{YYYY-MM} single-document onSnapshot implementation
+→ active / loading / ready / error state
+
+src/hooks/useDashboardStats.js
+→ consumes published therapistSummaryState
+→ Summary/detail KPI composition only
+→ no direct Firestore primitive
+```
+
+Store-role excluded-own-store self-view remains on detail authority until a shared upstream scope contract is available. Current-month therapist detail and therapist target editor/audit authority are unchanged.
+
+---
+
+
 正式教專 `管師帳號` flow：
 
 ```text

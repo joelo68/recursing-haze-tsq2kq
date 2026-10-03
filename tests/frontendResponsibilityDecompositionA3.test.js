@@ -16,14 +16,18 @@ const projectionLoader = read("src/hooks/useDashboardProjectionModel.js");
 const annualLoader = read("src/hooks/useAnnualKpiBenchmark.js");
 const appSource = read("src/App.jsx");
 
-test("FRD-A3 moves therapist Summary Firestore listener ownership out of useDashboardStats", () => {
-  assert.match(dashboardHook, /useDashboardTherapistSummary\(\{/);
-  assert.match(dashboardHook, /brandId:\s*brandInfo\?\.id/);
-  assert.match(dashboardHook, /selectedYearMonth/);
-  assert.match(dashboardHook, /isSelectedCurrentMonth/);
-  assert.match(dashboardHook, /isTherapistModuleEnabled/);
-  assert.match(dashboardHook, /viewMode/);
+test("FRD-A3 keeps therapist Summary Firestore listener in the dedicated hook and lets App own invocation", () => {
+  assert.match(appSource, /useDashboardTherapistSummary\(\{/);
+  assert.match(appSource, /brandId:\s*currentBrand\?\.id/);
+  assert.match(appSource, /selectedYearMonth/);
+  assert.match(appSource, /isSelectedCurrentMonth/);
+  assert.match(appSource, /isTherapistModuleEnabled:\s*therapistModuleEnabled/);
+  assert.match(appSource, /dashboardViewMode === "therapist"/);
+  assert.match(appSource, /therapistSummaryState/);
+  assert.match(appSource, /therapistReports:\s*visibleTherapistReports,\s*therapistSummaryState/);
 
+  assert.doesNotMatch(dashboardHook, /useDashboardTherapistSummary\(\{/);
+  assert.match(dashboardHook, /therapistSummaryState/);
   assert.doesNotMatch(dashboardHook, /from ['"]firebase\/firestore['"]/);
   assert.doesNotMatch(dashboardHook, /\bonSnapshot\s*\(/);
   assert.doesNotMatch(dashboardHook, /\bdoc\s*\(/);
@@ -53,6 +57,8 @@ test("FRD-A3 preserves view-scoped activation semantics", () => {
   assert.match(therapistSummaryLoader, /isSelectedCurrentMonth/);
   assert.match(therapistSummaryLoader, /!isTherapistModuleEnabled/);
   assert.match(therapistSummaryLoader, /viewMode !== "therapist"/);
+  assert.match(therapistSummaryLoader, /active:\s*false/);
+  assert.match(therapistSummaryLoader, /active:\s*true/);
   assert.match(therapistSummaryLoader, /unsubscribe\?\.\(\)/);
   assert.match(therapistSummaryLoader, /cancelled = true/);
 });

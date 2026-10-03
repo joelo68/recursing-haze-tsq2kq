@@ -37,7 +37,6 @@ import {
 } from '../utils/annualKpiBenchmark.js';
 import { useAnnualKpiBenchmark } from './useAnnualKpiBenchmark.js';
 import { useDashboardProjectionModel } from './useDashboardProjectionModel.js';
-import { useDashboardTherapistSummary } from './useDashboardTherapistSummary.js';
 
 const isFiniteKpiNumber = (value) => typeof value === "number" && Number.isFinite(value);
 const getFormalNetCashValue = (row = {}) => {
@@ -69,7 +68,7 @@ export function useDashboardStats() {
     targets, userRole, currentUser, 
     allReports, monthlyTargetSummary, currentLifecycleMasterState, managers, managerOrder = [], selectedYear, selectedMonth, therapistReports,
     currentBrand, therapists, dailyLoginCount, yesterdayLoginCount,
-    therapistAnnualAggregatedData, getCollectionPath, historicalDetailRefreshState,
+    therapistAnnualAggregatedData, therapistSummaryState, getCollectionPath, historicalDetailRefreshState,
     currentDashboardSummary, currentRankingsSummary, currentReportSummaryReady,
     currentReportSummaryReadyYearMonth, currentReportSummaryReadyBrandId, currentSummaryRecalcFlagState,
     systemExclusionState, therapistModuleEnabled,
@@ -648,7 +647,7 @@ export function useDashboardStats() {
   // ==========================================
   // ★ Batch 5A-2 / FRD-A3：Dashboard Summary trust 來源收斂
   // dashboard_summary / rankings_summary / summary_recalc_flags 由 App 單一監聽後傳入；
-  // therapist_summary 的 view-scoped single-document listener 由 dedicated hook 擁有。
+  // therapist_summary 的 view-scoped single-document listener implementation 由 dedicated hook 擁有；App 負責 invocation / read-topology coordination。
   // useDashboardStats 只保留 Summary trust / presentation composition。
   // ==========================================
 
@@ -663,17 +662,9 @@ export function useDashboardStats() {
     return Number(selectedYear) === now.getFullYear() && Number(selectedMonth) === now.getMonth() + 1;
   }, [selectedYear, selectedMonth]);
 
-  // FRD-A3：historical therapist_summary listener/state owner moved to a dedicated hook.
-  // The loader remains view-scoped and brand/month anchored; Summary trust stays in this hook.
-  const therapistSummaryState = useDashboardTherapistSummary({
-    getCollectionPath,
-    brandId: brandInfo?.id,
-    selectedYearMonth,
-    isSelectedCurrentMonth,
-    isTherapistModuleEnabled,
-    viewMode,
-  });
-
+  // Therapist Historical Summary-first：
+  // dedicated therapist_summary loader is invoked by App, the monthly read-topology owner,
+  // and published through AppContext. This hook only consumes the brand/month-anchored state.
   // FRD-A2：Projection Model Firestore point-read/state owner moved to a dedicated hook.
   // Trust composition remains here with Lifecycle + System Exclusion so I/O extraction does not change authority semantics.
   const projectionModelState = useDashboardProjectionModel({

@@ -7,12 +7,14 @@ const makeTherapistSummaryState = ({
   data = null,
   ready = true,
   error = null,
+  active = false,
 } = {}) => ({
   brandId,
   yearMonth,
   data,
   ready,
   error,
+  active,
 });
 
 export function useDashboardTherapistSummary({
@@ -40,6 +42,7 @@ export function useDashboardTherapistSummary({
         brandId,
         yearMonth: selectedYearMonth,
         ready: true,
+        active: false,
       }));
       return undefined;
     }
@@ -50,6 +53,7 @@ export function useDashboardTherapistSummary({
       brandId,
       yearMonth: selectedYearMonth,
       ready: false,
+      active: true,
     }));
 
     const unsubscribe = onSnapshot(
@@ -62,6 +66,7 @@ export function useDashboardTherapistSummary({
           yearMonth: selectedYearMonth,
           data: snap.exists() ? { id: snap.id, ...snap.data() } : null,
           ready: true,
+          active: true,
         }));
       },
       (error) => {
@@ -73,6 +78,7 @@ export function useDashboardTherapistSummary({
           yearMonth: selectedYearMonth,
           ready: true,
           error,
+          active: true,
         }));
       }
     );

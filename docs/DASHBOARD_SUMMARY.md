@@ -1,5 +1,47 @@
 # DASHBOARD_SUMMARY.md
 
+# Therapist Historical Summary-first Read Topology — 2026-10-03
+
+歷史 Dashboard 人員績效的正式 read contract：
+
+```text
+current month
+→ therapist_daily_reports live detail authority unchanged
+
+historical + Dashboard trust loading
+→ wait for Summary authority
+→ do not eagerly getDocs(therapist_daily_reports)
+
+historical + verified Dashboard/Ranking/flag trust
++ therapist_summary/{YYYY-MM} ready and brand/month matched
+→ therapist_summary is presentation authority
+→ normal therapist_daily_reports whole-month getDocs = 0
+
+historical + therapist_summary missing/error
+→ one-shot therapist_daily_reports detail fallback
+
+historical + dirty/manual detail refresh
+→ one-shot therapist_daily_reports detail refresh remains allowed
+```
+
+`src/App.jsx` is the monthly read-topology owner. `src/hooks/useDashboardTherapistSummary.js` remains the single-document Firestore listener implementation owner, but its invocation/state is lifted to `App` and published through `AppContext` so the raw-detail decision and Summary readiness are no longer split across unrelated owners.
+
+Store-role historical therapist detail is intentionally preserved for now because excluded own-store self-view has presentation-specific semantics. Current-month therapist optimization and `therapist_targets` year-listener optimization remain deferred until measured Production evidence shows material debt.
+
+Read impact for Summary-compatible non-store historical therapist views:
+
+```text
+existing therapist_summary listener = unchanged (1 scoped document listener)
+normal whole-month therapist_daily_reports getDocs = removed when Summary is trusted
+new listener = 0
+new query = 0
+new polling = 0
+Backend / Rules / brand paths = unchanged
+```
+
+---
+
+
 # Dashboard Formal Readiness / UX2A-UX2B Override — 2026-09-15
 
 正式 Production lineage：

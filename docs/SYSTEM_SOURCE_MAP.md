@@ -1,5 +1,53 @@
 # Canonical Role Metadata v1 Source Override — 2026-10-03
 
+# Therapist Historical Summary-first Read Ownership — 2026-10-03
+
+```text
+src/App.jsx
+→ sole monthly Dashboard raw-read topology owner
+→ invokes useDashboardTherapistSummary()
+→ publishes therapistSummaryState through AppContext
+→ resolveHistoricalTherapistReadPolicy()
+→ suppresses normal historical therapist_daily_reports whole-month getDocs
+   only when verified Summary + therapist Summary are ready/matched
+→ preserves current-month / dirty / missing / error detail authority
+
+src/hooks/useDashboardTherapistSummary.js
+→ therapist_summary/{selectedYearMonth} one onSnapshot
+→ historical + therapist-view + module-enabled activation
+→ explicit active / ready / error state
+→ brand + yearMonth anchoring
+→ no query / polling
+
+src/hooks/useDashboardStats.js
+→ no direct therapist Summary Firestore listener invocation
+→ consumes AppContext therapistSummaryState
+→ retains Summary trust / KPI / ranking / filter presentation
+
+src/utils/dashboardReadPolicy.js
+→ resolveHistoricalDashboardReadPolicy()
+→ resolveHistoricalTherapistReadPolicy()
+```
+
+Boundary：
+
+```text
+current-month therapist live detail = unchanged
+therapist target editor/audit authority = unchanged
+audit therapist-daily Raw authority = unchanged
+store-role historical detail semantics = preserved
+new Firestore listener = 0
+new Firestore query = 0
+new polling = 0
+Backend = unchanged
+Firestore Rules = unchanged
+brand paths = unchanged
+CURRENT_APP_VERSION = 3.6.1 unchanged
+```
+
+---
+
+
 Frontend role presentation 的 canonical owner：
 
 ```text

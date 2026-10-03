@@ -8,6 +8,7 @@ import {
   DASHBOARD_READ_MODE,
   getSummaryRecalcFlagState,
   resolveHistoricalDashboardReadPolicy,
+  resolveHistoricalTherapistReadPolicy,
 } from "../src/utils/dashboardReadPolicy.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -112,6 +113,123 @@ test("current month keeps live/detail reads unchanged", () => {
   assert.equal(result.allowRawTargetFallback, true);
 });
 
+
+test("verified historical therapist Summary suppresses whole-month detail reads after therapist summary is ready", () => {
+  const dashboardPolicy = resolveHistoricalDashboardReadPolicy({
+    isCurrentMonth: false,
+    reportSummaryReady: true,
+    hasUsableDashboardSummary: true,
+    summaryFlagReady: true,
+    summaryFlag: verifiedFlag,
+  });
+  const result = resolveHistoricalTherapistReadPolicy({
+    isCurrentMonth: false,
+    dashboardReadPolicy: dashboardPolicy,
+    therapistSummaryActive: true,
+    therapistSummaryReady: true,
+    hasUsableTherapistSummary: true,
+  });
+
+  assert.equal(result.shouldLoadTherapistReports, false);
+  assert.equal(result.summaryTrusted, true);
+  assert.equal(result.reason, "VERIFIED_THERAPIST_SUMMARY");
+});
+
+test("historical therapist Summary loading waits instead of eagerly reading detail", () => {
+  const dashboardPolicy = resolveHistoricalDashboardReadPolicy({
+    isCurrentMonth: false,
+    reportSummaryReady: true,
+    hasUsableDashboardSummary: true,
+    summaryFlagReady: true,
+    summaryFlag: verifiedFlag,
+  });
+  const result = resolveHistoricalTherapistReadPolicy({
+    dashboardReadPolicy: dashboardPolicy,
+    therapistSummaryActive: false,
+    therapistSummaryReady: true,
+    hasUsableTherapistSummary: false,
+  });
+
+  assert.equal(result.shouldLoadTherapistReports, false);
+  assert.equal(result.reason, "THERAPIST_SUMMARY_LOADING");
+});
+
+test("missing or failed historical therapist Summary falls back to therapist detail", () => {
+  const dashboardPolicy = resolveHistoricalDashboardReadPolicy({
+    isCurrentMonth: false,
+    reportSummaryReady: true,
+    hasUsableDashboardSummary: true,
+    summaryFlagReady: true,
+    summaryFlag: verifiedFlag,
+  });
+
+  const missing = resolveHistoricalTherapistReadPolicy({
+    dashboardReadPolicy: dashboardPolicy,
+    therapistSummaryActive: true,
+    therapistSummaryReady: true,
+    hasUsableTherapistSummary: false,
+  });
+  assert.equal(missing.shouldLoadTherapistReports, true);
+  assert.equal(missing.reason, "THERAPIST_SUMMARY_MISSING");
+
+  const failed = resolveHistoricalTherapistReadPolicy({
+    dashboardReadPolicy: dashboardPolicy,
+    therapistSummaryActive: true,
+    therapistSummaryReady: true,
+    therapistSummaryError: new Error("listener failed"),
+    hasUsableTherapistSummary: false,
+  });
+  assert.equal(failed.shouldLoadTherapistReports, true);
+  assert.equal(failed.reason, "THERAPIST_SUMMARY_ERROR");
+});
+
+test("dirty historical therapist refresh and current month preserve raw detail authority", () => {
+  const dirtyPolicy = resolveHistoricalDashboardReadPolicy({
+    isCurrentMonth: false,
+    historicalRefreshRequested: true,
+    reportSummaryReady: true,
+    hasUsableDashboardSummary: true,
+    summaryFlagReady: true,
+    summaryFlag: { status: "dirty", dirty: true },
+  });
+  const dirty = resolveHistoricalTherapistReadPolicy({
+    dashboardReadPolicy: dirtyPolicy,
+    therapistSummaryActive: true,
+    therapistSummaryReady: true,
+    hasUsableTherapistSummary: true,
+  });
+  assert.equal(dirty.shouldLoadTherapistReports, true);
+  assert.equal(dirty.reason, "DIRTY_REFRESH_REQUESTED");
+
+  const current = resolveHistoricalTherapistReadPolicy({
+    isCurrentMonth: true,
+    dashboardReadPolicy: { mode: DASHBOARD_READ_MODE.CURRENT_LIVE },
+    therapistSummaryActive: false,
+    therapistSummaryReady: true,
+  });
+  assert.equal(current.shouldLoadTherapistReports, true);
+  assert.equal(current.reason, "CURRENT_MONTH_LIVE");
+});
+
+test("store role can preserve historical therapist detail semantics until self-view scope is shared upstream", () => {
+  const dashboardPolicy = resolveHistoricalDashboardReadPolicy({
+    isCurrentMonth: false,
+    reportSummaryReady: true,
+    hasUsableDashboardSummary: true,
+    summaryFlagReady: true,
+    summaryFlag: verifiedFlag,
+  });
+  const result = resolveHistoricalTherapistReadPolicy({
+    dashboardReadPolicy: dashboardPolicy,
+    therapistSummaryActive: true,
+    therapistSummaryReady: true,
+    hasUsableTherapistSummary: true,
+    preserveDetailFallback: true,
+  });
+  assert.equal(result.shouldLoadTherapistReports, true);
+  assert.equal(result.reason, "ROLE_DETAIL_SEMANTICS_PRESERVED");
+});
+
 test("missing or unverified historical summary fails closed to detail fallback", () => {
   const missing = resolveHistoricalDashboardReadPolicy({
     reportSummaryReady: true,
@@ -140,6 +258,17 @@ test("mismatch flag is never trusted", () => {
   });
   assert.equal(state.isVerified, false);
   assert.equal(state.isDirty, true);
+});
+
+test("App owns historical therapist Summary-first read topology while useDashboardStats only consumes published state", () => {
+  assert.match(appSource, /resolveHistoricalTherapistReadPolicy/);
+  assert.match(appSource, /useDashboardTherapistSummary\(\{/);
+  assert.match(appSource, /therapistSummaryState/);
+  assert.match(appSource, /historicalTherapistReadPolicy\.shouldLoadTherapistReports/);
+  assert.match(appSource, /preserveDetailFallback:\s*userRole === "store"/);
+
+  assert.doesNotMatch(hookSource, /useDashboardTherapistSummary\(\{/);
+  assert.match(hookSource, /therapistSummaryState/);
 });
 
 test("App is the sole historical read-policy owner for Dashboard daily_reports", () => {
