@@ -9,6 +9,7 @@ import {
 } from "firebase/firestore";
 
 import { AppContext } from "../AppContext";
+import { getRoleBadgeLabel, getRoleLabel } from "../constants/index";
 import { ViewWrapper, Card, AsyncActionButton } from "./SharedUI";
 import SmartDatePicker from "./SmartDatePicker";
 import DeviceApprovalPanel from "./DeviceApprovalPanel";
@@ -104,12 +105,12 @@ const SystemMonitor = () => {
 
   const ROLE_FILTER_LABELS = {
     all: "全部身份",
-    director: "高階主管",
-    manager: "區長",
-    store: "店經理",
-    therapist: "管理師",
-    trainer: "教專",
-    master: "最高管理者",
+    director: getRoleLabel("director"),
+    manager: getRoleLabel("manager"),
+    store: getRoleLabel("store"),
+    therapist: getRoleLabel("therapist"),
+    trainer: getRoleLabel("trainer"),
+    master: getRoleLabel("master"),
   };
 
   const normalizeLogFilterText = (value = "") => String(value || "")
@@ -761,20 +762,16 @@ const SystemMonitor = () => {
   };
 
   const getRoleBadge = (role) => {
-    switch (role) {
-      case "director":
-        return <span className="inline-flex bg-rose-50 text-rose-600 px-2.5 py-1 rounded-lg text-xs font-bold whitespace-nowrap">高階</span>;
-      case "manager":
-        return <span className="inline-flex bg-teal-50 text-teal-600 px-2.5 py-1 rounded-lg text-xs font-bold whitespace-nowrap">區長</span>;
-      case "store":
-        return <span className="inline-flex bg-amber-50 text-amber-600 px-2.5 py-1 rounded-lg text-xs font-bold whitespace-nowrap">店經理</span>;
-      case "therapist":
-        return <span className="inline-flex bg-indigo-50 text-indigo-600 px-2.5 py-1 rounded-lg text-xs font-bold whitespace-nowrap">管理師</span>;
-      case "trainer":
-        return <span className="inline-flex bg-sky-50 text-sky-600 px-2.5 py-1 rounded-lg text-xs font-bold whitespace-nowrap">教專</span>;
-      default:
-        return <span className="inline-flex bg-stone-50 text-stone-500 px-2.5 py-1 rounded-lg text-xs whitespace-nowrap">未知</span>;
-    }
+    const badgeClass = ({
+      director: "bg-rose-50 text-rose-600",
+      manager: "bg-teal-50 text-teal-600",
+      store: "bg-amber-50 text-amber-600",
+      therapist: "bg-indigo-50 text-indigo-600",
+      trainer: "bg-sky-50 text-sky-600",
+      master: "bg-stone-100 text-stone-700",
+    })[role] || "bg-stone-50 text-stone-500";
+    const badgeLabel = getRoleBadgeLabel(role, "未知");
+    return <span className={`inline-flex ${badgeClass} px-2.5 py-1 rounded-lg text-xs font-bold whitespace-nowrap`}>{badgeLabel}</span>;
   };
 
   const getDeviceIcon = (device) =>
@@ -1021,12 +1018,12 @@ const SystemMonitor = () => {
                 <span className="text-[11px] font-black text-stone-400">身份</span>
                 <select value={logRoleFilter} onChange={(e) => setLogRoleFilter(e.target.value)} className="h-10 rounded-xl border border-stone-200 bg-white px-3 text-sm font-black text-stone-600 outline-none focus:border-amber-300">
                   <option value="all">全部身份</option>
-                  <option value="director">高階主管</option>
-                  <option value="manager">區長</option>
-                  <option value="store">店經理</option>
-                  <option value="therapist">管理師</option>
-                  <option value="trainer">教專</option>
-                  <option value="master">最高管理者</option>
+                  <option value="director">{ROLE_FILTER_LABELS.director}</option>
+                  <option value="manager">{ROLE_FILTER_LABELS.manager}</option>
+                  <option value="store">{ROLE_FILTER_LABELS.store}</option>
+                  <option value="therapist">{ROLE_FILTER_LABELS.therapist}</option>
+                  <option value="trainer">{ROLE_FILTER_LABELS.trainer}</option>
+                  <option value="master">{ROLE_FILTER_LABELS.master}</option>
                 </select>
               </label>
 

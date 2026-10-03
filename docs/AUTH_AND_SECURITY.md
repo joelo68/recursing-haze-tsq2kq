@@ -1,3 +1,35 @@
+# Canonical Role Metadata v1 Security Boundary — 2026-10-03
+
+Frontend 角色顯示 metadata 現在由 `src/constants/index.js` 的 `APPLICATION_ROLE_METADATA` 統一提供五個正式 Application Role 的顯示名稱與 badge 名稱：
+
+```text
+director   → 高階主管
+trainer    → 教專
+manager    → 區長
+store      → 店經理
+therapist  → 管理師
+```
+
+`master` 只存在於 `SECURITY_ACTOR_ROLE_METADATA`，代表 Security / Audit 特殊 actor 的 presentation；它**不是**可登入的 Application Identity role，也不得因此被加入 Login、Custom Claims、Module Permission 或 Firestore Rules role allowlist。
+
+Canonical Role Metadata 是 Frontend presentation authority，不是 authorization authority。舊 `ROLES` 中未被登入流程使用的 client-side credential-like `pass` metadata 同時退役；正式登入仍只走既有 Backend credential / Application Identity authority。以下 Backend / Rules owner 維持自己的 fail-closed allowlist，這次不改語意、不改 path、不放寬權限：
+
+```text
+functions/applicationIdentity.js         → APPLICATION_IDENTITY_ROLES
+functions/modulePermissions.js            → MODULE_PERMISSION_ROLES
+functions/accountAuthority.js             → password / managed-account role allowlists
+functions/administrativeSettingsAuthority.js
+                                         → Security config supported roles
+functions/deviceApproval.js               → Device Security protected roles
+firestore.rules                           → server-issued Application Identity role validation
+```
+
+因此「改角色中文名稱／badge」應修改 canonical presentation metadata；「改誰能登入、看頁面、寫資料或執行管理操作」仍必須走對應 Backend / Rules / Permission owner，不得把 Frontend metadata 當成 Security authority。
+
+本批不新增 Firestore listener/query/polling/write，也不修改 Backend / Rules / brand path。`CURRENT_APP_VERSION = 3.6.1` 不變。
+
+---
+
 # Trainer Therapist-Account Authority Security Override — 2026-09-30
 
 `therapist-manager` 不再等同 highest-admin-only 頁面。正式營運 contract 是：教專可查看管理師帳號名單、查看 sanitized 單筆主檔、新增、修改、封存／重新啟用與重設密碼；教專不可查看目前密碼，也不可永久刪除。

@@ -1,14 +1,7 @@
 import React, { useEffect, useMemo, useState } from "react";
 import { X, ShieldCheck, Smartphone, MapPin, Clock3, KeyRound, CheckCircle2, AlertTriangle, Ban, ArrowLeft, ShieldAlert } from "lucide-react";
 import { limit, onSnapshot, query, where } from "firebase/firestore";
-
-const ROLE_LABELS = {
-  director: "高階主管",
-  trainer: "教專",
-  manager: "區長",
-  store: "店經理",
-  therapist: "管理師",
-};
+import { getRoleLabel } from "../constants/index";
 
 const formatDateTime = (value = "") => {
   if (!value) return "-";
@@ -261,7 +254,7 @@ const DeviceApprovalPanel = ({
                   <div className="flex items-start justify-between gap-3">
                     <div className="min-w-0">
                       <div className="truncate text-base font-black text-[#4D4338]">{guided ? "您要確認的新裝置" : (request.userName || "使用者")}</div>
-                      <div className="mt-0.5 text-[11px] font-black text-[#B0A59A]">{ROLE_LABELS[request.role] || request.role || "帳號"}{guided && request.userName ? `・${request.userName}` : ""}</div>
+                      <div className="mt-0.5 text-[11px] font-black text-[#B0A59A]">{getRoleLabel(request.role, request.role || "帳號")}{guided && request.userName ? `・${request.userName}` : ""}</div>
                     </div>
                     <div className="rounded-full border border-amber-100 bg-amber-50 px-2.5 py-1 text-[11px] font-black text-amber-700">等待確認</div>
                   </div>

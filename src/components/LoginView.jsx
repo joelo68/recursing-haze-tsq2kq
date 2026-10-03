@@ -613,7 +613,7 @@ const LoginView = ({
               onClick={() => { setRole(r.id); setError(""); setPassword(""); setSelectedUser(""); setTRegion(""); setTStore(""); setTPersonId(""); setTPassword(""); }}
               className={`px-4 py-2 text-sm font-medium transition-all relative ${role === r.id ? `text-stone-800` : "text-stone-400 hover:text-stone-600"}`}
             >
-              {r.id === 'director' ? '高階主管' : r.label}
+              {r.label}
               {role === r.id && <span className="absolute bottom-[-5px] left-0 w-full h-[2px] bg-stone-800 rounded-full"></span>}
             </button>
           ))}

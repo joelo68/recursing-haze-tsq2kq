@@ -25,15 +25,56 @@ export const BRANDS = [
   { id: "yibo", label: "伊啵", pathType: "standard" },
 ];
 
-export const ROLES = {
-  // ★ 統一將 label 從 "總監" 改為 "高階主管"
-  DIRECTOR: { id: "director", label: "高階主管", pass: "16500" },
-  // 教專 (TRAINER)，密碼由資料庫控制
-  TRAINER: { id: "trainer", label: "教專", pass: null }, 
-  MANAGER: { id: "manager", label: "區長", pass: null },
-  STORE: { id: "store", label: "店經理", pass: null },
-  THERAPIST: { id: "therapist", label: "管理師", pass: null },
+export const APPLICATION_ROLE_METADATA = Object.freeze([
+  Object.freeze({ id: "director", label: "高階主管", badgeLabel: "高階" }),
+  Object.freeze({ id: "trainer", label: "教專", badgeLabel: "教專" }),
+  Object.freeze({ id: "manager", label: "區長", badgeLabel: "區長" }),
+  Object.freeze({ id: "store", label: "店經理", badgeLabel: "店經理" }),
+  Object.freeze({ id: "therapist", label: "管理師", badgeLabel: "管理師" }),
+]);
+
+// `master` 是 Security / Audit 特殊 actor，不是可登入的 Application Identity role。
+// 不可把這份 presentation metadata 當成 Backend / Rules authorization allowlist。
+export const SECURITY_ACTOR_ROLE_METADATA = Object.freeze({
+  master: Object.freeze({ id: "master", label: "最高管理者", badgeLabel: "最高管理者" }),
+});
+
+const APPLICATION_ROLE_METADATA_BY_ID = Object.freeze(
+  Object.fromEntries(APPLICATION_ROLE_METADATA.map((role) => [role.id, role]))
+);
+
+export const APPLICATION_ROLE_IDS = Object.freeze(
+  APPLICATION_ROLE_METADATA.map((role) => role.id)
+);
+
+export const ROLE_PRESENTATION_BY_ID = Object.freeze({
+  ...APPLICATION_ROLE_METADATA_BY_ID,
+  ...SECURITY_ACTOR_ROLE_METADATA,
+});
+
+export const getRolePresentation = (roleId = "") => (
+  ROLE_PRESENTATION_BY_ID[String(roleId || "").trim().toLowerCase()] || null
+);
+
+export const getRoleLabel = (roleId = "", fallback = "") => {
+  const normalizedFallback = String(fallback || "");
+  return getRolePresentation(roleId)?.label || normalizedFallback || String(roleId || "");
 };
+
+export const getRoleBadgeLabel = (roleId = "", fallback = "") => {
+  const normalizedFallback = String(fallback || "");
+  const role = getRolePresentation(roleId);
+  return role?.badgeLabel || role?.label || normalizedFallback || String(roleId || "");
+};
+
+export const ROLES = Object.freeze({
+  // Login / Navigation 相容名稱；不保存 password / pass 等 credential-like metadata。
+  DIRECTOR: APPLICATION_ROLE_METADATA_BY_ID.director,
+  TRAINER: APPLICATION_ROLE_METADATA_BY_ID.trainer,
+  MANAGER: APPLICATION_ROLE_METADATA_BY_ID.manager,
+  STORE: APPLICATION_ROLE_METADATA_BY_ID.store,
+  THERAPIST: APPLICATION_ROLE_METADATA_BY_ID.therapist,
+});
 
 export const ALL_MENU_ITEMS = [
   { id: "dashboard", label: "營運總覽", icon: LayoutDashboard },

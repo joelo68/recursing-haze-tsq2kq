@@ -18,7 +18,7 @@ import {
   app, auth, db, appId } from "./config/firebase"; import { onAuthStateChanged, signInAnonymously, signInWithCustomToken, signOut } from "firebase/auth"; import { collection, addDoc, deleteDoc, updateDoc, doc, getDoc, onSnapshot, serverTimestamp, setDoc, query, orderBy, limit, deleteField, where, increment, getDocs } from "firebase/firestore"; import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip as RechartsTooltip, Legend, ResponsiveContainer, LineChart, Line, ComposedChart, Area, Cell, PieChart, Pie } from "recharts"; import {    LayoutDashboard, Upload, TrendingUp, Map as MapIcon, Settings, ClipboardCheck, Menu, Search, Filter, Trash2, Save, Plus, DollarSign, Target, Users, Award, Loader2, FileText, AlertCircle, CheckCircle, User, Store, Lock, LogOut, FileWarning, Edit2, CheckSquare, X, Download, ChevronLeft, ChevronRight, Activity, Sparkles, ChevronDown, Heart, Coffee, Shield, WifiOff, ShoppingBag, CreditCard, Smartphone, Monitor, Bell, Clock, Music, ShieldAlert, Calendar
 } from "lucide-react";
 
-import { ROLES, ALL_MENU_ITEMS, DEFAULT_REGIONAL_MANAGERS, DEFAULT_PERMISSIONS } from "./constants/index";
+import { ROLES, ALL_MENU_ITEMS, DEFAULT_REGIONAL_MANAGERS, DEFAULT_PERMISSIONS, getRoleLabel } from "./constants/index";
 import { generateUUID, formatLocalYYYYMMDD, toStandardDateFormat, formatNumber, parseNumber, normalizeManagerOrder } from "./utils/helpers";
 import { validPositiveSetting } from "./utils/kpiContracts";
 import { inspectHistoricalSystemExclusionTrust, normalizeSystemExclusionState } from "./utils/systemExclusion";
@@ -375,14 +375,6 @@ const normalizeSecurityConfig = (config = {}) => ({
   deviceApprovalExpiryMinutes: Math.max(5, Math.min(60, Number(config.deviceApprovalExpiryMinutes ?? DEFAULT_SECURITY_CONFIG.deviceApprovalExpiryMinutes))),
   allowTrustedDeviceSelfApproval: config.allowTrustedDeviceSelfApproval !== false,
 });
-
-const DEVICE_APPROVAL_ROLE_LABELS = {
-  director: "高階主管",
-  trainer: "教專",
-  manager: "區長",
-  store: "店經理",
-  therapist: "管理師",
-};
 
 const formatDeviceApprovalNoticeTime = (value = "") => {
   if (!value) return "剛剛";
@@ -1802,7 +1794,7 @@ export default function App() {
   const registerAccountDevice = useCallback(async (roleId, userInfo = {}, loginCredential = {}) => {
     const deviceInfo = getClientDeviceInfo();
     const accountId = String(loginCredential?.accountId || userInfo?.id || userInfo?.accountId || userInfo?.name || roleId).trim();
-    const userName = userInfo?.name || (roleId === "director" ? "高階主管" : (roleId === "trainer" ? "教專" : "使用者"));
+    const userName = userInfo?.name || (["director", "trainer"].includes(roleId) ? getRoleLabel(roleId, "使用者") : "使用者");
     const mode = securityConfig?.deviceApprovalMode || "off";
     const protectedRoles = Array.isArray(securityConfig?.deviceApprovalRoles)
       ? securityConfig.deviceApprovalRoles
@@ -3781,7 +3773,7 @@ export default function App() {
       finalUser = { ...finalUser, securityAccountId: loginAccountId };
     }
 
-    let userName = finalUser?.name || (roleId === "director" ? "高階主管" : (roleId === "trainer" ? "教專" : "使用者"));
+    let userName = finalUser?.name || (["director", "trainer"].includes(roleId) ? getRoleLabel(roleId, "使用者") : "使用者");
     const immediateDeviceInfo = getClientDeviceInfo();
     setCurrentDeviceTrust({
       status: "checking",
@@ -5237,7 +5229,7 @@ if (isUpdating) {
                     <div className="truncate text-base font-black text-[#4D4338]">
                       {superAdminDeviceNotice.userName || "使用者"}
                       <span className="ml-2 text-xs font-black text-[#A69C91]">
-                        {DEVICE_APPROVAL_ROLE_LABELS[superAdminDeviceNotice.role] || superAdminDeviceNotice.role || "帳號"}
+                        {getRoleLabel(superAdminDeviceNotice.role, superAdminDeviceNotice.role || "帳號")}
                       </span>
                     </div>
                   </div>

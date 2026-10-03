@@ -1,3 +1,52 @@
+# Canonical Role Metadata v1 Source Override — 2026-10-03
+
+Frontend role presentation 的 canonical owner：
+
+```text
+src/constants/index.js
+  → APPLICATION_ROLE_METADATA
+     director   = 高階主管 / badge 高階
+     trainer    = 教專
+     manager    = 區長
+     store      = 店經理
+     therapist  = 管理師
+  → SECURITY_ACTOR_ROLE_METADATA
+     master     = 最高管理者（Security / Audit presentation only）
+  → getRoleLabel(...)
+  → getRoleBadgeLabel(...)
+  → ROLES 僅保留 role presentation / id 相容 shape，不再保存 credential-like pass metadata
+```
+
+目前主要 presentation consumers：
+
+```text
+src/components/LoginView.jsx
+src/components/Navigation.jsx
+src/components/SettingsView.jsx
+src/components/SystemMonitor.jsx
+src/components/DeviceApprovalPanel.jsx
+src/App.jsx
+```
+
+Authority boundary：
+
+```text
+Canonical Role Metadata
+→ 只統一 Frontend role label / badge / role-option presentation
+
+Application Identity / Permission / Device Security / Rules
+→ 不從 Frontend metadata 推導 authorization
+→ 保留 Backend / Rules 自己的 explicit fail-closed role allowlist
+
+master
+→ Security / Audit 特殊 actor
+→ 不屬於五個正式 Application Identity roles
+```
+
+正式 Security owners 仍是 `functions/applicationIdentity.js`、`functions/modulePermissions.js`、`functions/accountAuthority.js`、`functions/administrativeSettingsAuthority.js`、`functions/deviceApproval.js` 與 `firestore.rules`。本批沒有改變任何 Firestore physical path、brand isolation、role permission semantics 或 read topology。
+
+---
+
 # FRD-A5 Annual Data Authority Ownership — 2026-10-01
 
 ```text

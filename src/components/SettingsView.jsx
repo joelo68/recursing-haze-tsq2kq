@@ -15,7 +15,7 @@ import {
 import { db, appId } from "../config/firebase";
 import { AppContext } from "../AppContext";
 import { ViewWrapper, Card, AsyncActionButton } from "./SharedUI";
-import { DEFAULT_PERMISSIONS, ALL_MENU_ITEMS } from "../constants/index";
+import { APPLICATION_ROLE_METADATA, DEFAULT_PERMISSIONS, ALL_MENU_ITEMS, getRoleLabel } from "../constants/index";
 import { generateUUID, normalizeManagerOrder, sortManagersByOrgOrder, sortStoresByOrgOrder } from "../utils/helpers";
 import { KPI_VALUE_STATUS, validPositiveSetting, validateStoreHealthBenchmark } from "../utils/kpiContracts";
 import {
@@ -70,7 +70,7 @@ const BENCHMARK_CATEGORIES = [
 const PERMISSION_ROLE_COLUMNS = [
   {
     id: "trainer",
-    label: "教專",
+    label: getRoleLabel("trainer"),
     headerClass: "bg-rose-50/95",
     cellClass: "bg-rose-50/30",
     activeClass: "bg-rose-100/70 ring-2 ring-inset ring-rose-200",
@@ -78,7 +78,7 @@ const PERMISSION_ROLE_COLUMNS = [
   },
   {
     id: "manager",
-    label: "區長",
+    label: getRoleLabel("manager"),
     headerClass: "bg-teal-50/95",
     cellClass: "bg-teal-50/30",
     activeClass: "bg-teal-100/70 ring-2 ring-inset ring-teal-200",
@@ -86,7 +86,7 @@ const PERMISSION_ROLE_COLUMNS = [
   },
   {
     id: "store",
-    label: "店經理",
+    label: getRoleLabel("store"),
     headerClass: "bg-[#FFF7DF]/95",
     cellClass: "bg-[#FFF7DF]/30",
     activeClass: "bg-[#F8E7B9]/70 ring-2 ring-inset ring-[#E8C77A]",
@@ -94,7 +94,7 @@ const PERMISSION_ROLE_COLUMNS = [
   },
   {
     id: "therapist",
-    label: "管理師",
+    label: getRoleLabel("therapist"),
     headerClass: "bg-indigo-50/95",
     cellClass: "bg-indigo-50/30",
     activeClass: "bg-indigo-100/70 ring-2 ring-inset ring-indigo-200",
@@ -1742,13 +1742,7 @@ const SettingsView = () => {
                     <div>
                       <label className="block text-xs font-black text-[#A69C91] mb-2 tracking-wider">套用對象</label>
                       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-2.5">
-                        {[
-                          { id: "director", label: "高階主管" },
-                          { id: "trainer", label: "教專" },
-                          { id: "manager", label: "區長" },
-                          { id: "store", label: "店經理" },
-                          { id: "therapist", label: "管理師" },
-                        ].map((role) => {
+                        {APPLICATION_ROLE_METADATA.map((role) => {
                           const checked = (localSecurityConfig.deviceApprovalRoles || ["director", "trainer", "manager", "store", "therapist"]).includes(role.id);
                           return (
                             <label key={role.id} className={`flex items-center gap-2.5 rounded-xl border-2 px-3 py-3 cursor-pointer ${checked ? "border-sky-200 bg-sky-50/70" : "border-[#EFE7DA] bg-white"}`}>
@@ -1939,10 +1933,10 @@ const SettingsView = () => {
                   <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-5 gap-3">
                     <label className="flex items-center gap-3 p-3 border-2 border-[#F3DFB8] rounded-xl bg-[#FFF7DF] text-[#8A632E] cursor-not-allowed opacity-80">
                       <input type="checkbox" checked disabled className="w-5 h-5 rounded text-[#B7863D]" />
-                      <span className="font-bold">高階主管 <br/><span className="text-[10px] font-normal opacity-80">系統預設豁免登出</span></span>
+                      <span className="font-bold">{getRoleLabel("director")} <br/><span className="text-[10px] font-normal opacity-80">系統預設豁免登出</span></span>
                     </label>
 
-                    {[{id:'trainer', label:'教專'}, {id:'manager', label:'區長'}, {id:'store', label:'店經理'}, {id:'therapist', label:'管理師'}].map(role => (
+                    {APPLICATION_ROLE_METADATA.filter((role) => role.id !== "director").map(role => (
                       <label key={role.id} className={`flex items-center gap-3 p-3 border-2 rounded-xl cursor-pointer transition-all ${localSecurityConfig.exemptRoles?.includes(role.id) ? 'border-[#D6A84F] bg-[#FFF7DF]/30' : 'border-[#EFE7DA] bg-[#FFFCF7] hover:border-[#E8DDCC]'}`}>
                         <input type="checkbox"
                           checked={localSecurityConfig.exemptRoles?.includes(role.id)}

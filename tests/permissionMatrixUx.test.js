@@ -13,8 +13,8 @@ test("權限矩陣固定職務標題與功能模組欄，長清單捲動時仍�
   const source = read("src/components/SettingsView.jsx");
 
   assert.match(source, /const PERMISSION_ROLE_COLUMNS = \[/);
-  for (const role of ["教專", "區長", "店經理", "管理師"]) {
-    assert.match(source, new RegExp(`label: "${role}"`));
+  for (const roleId of ["trainer", "manager", "store", "therapist"]) {
+    assert.match(source, new RegExp(`label: getRoleLabel\\("${roleId}"\\)`));
   }
 
   assert.match(source, /max-h-\[68vh\] overflow-auto/);
