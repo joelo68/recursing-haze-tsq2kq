@@ -1,3 +1,172 @@
+# Latest Production Runtime Override — 2026-10-03（TherapistManagerView Lazy Load）
+
+> 本節是目前最高優先的 Production runtime / frontend bundle 狀態。下方 Therapist Historical Summary-first、Canonical Role Metadata、Daily Report Date Safety、Release Health、P3、P2 與更早章節保留各自當時 evidence；若 runtime lineage、frontend entry asset 或 bundle 狀態衝突，以目前正式 source、release identity、Production smoke 與本節為準。
+
+## Current Production Runtime
+
+```text
+main / origin-main                 = 83e3f4aaee90250490bb840e1a4d61bd3a82acfd
+runtime parent                     = 22df9a4b2c2a2646e1c08f4de0cc50b98a63110d
+Frontend Production gh-pages      = dcc12e3c991ee96deca06397d2733f045e55b623
+CURRENT_APP_VERSION                = 3.6.1
+Production asset                   = assets/index-CaPLv9eW.js
+Release identity schema            = release-identity-v1
+Release identity authority         = dist/release.json
+```
+
+`CURRENT_APP_VERSION` 維持 `3.6.1`；TherapistManagerView lazy-load optimization 沒有提高版本。
+
+## TherapistManagerView Lazy Load — PRODUCTION CONFIRMED / CLOSED
+
+本批針對 production entry bundle 的實測優化：
+
+```text
+before entry raw                    = 867,190 bytes
+before entry gzip                   = 261,446 bytes
+
+after entry raw                     = 827,168 bytes
+after entry gzip                    = 251,102 bytes
+
+raw saved                           = 40,022 bytes
+gzip saved                          = 10,344 bytes
+raw reduction                       ≈ 4.62%
+gzip reduction                      ≈ 3.96%
+```
+
+新的 lazy chunk：
+
+```text
+TherapistManagerView chunk raw      = 31,920 bytes
+TherapistManagerView chunk gzip     = 9,194 bytes
+```
+
+目前正式 loading authority：
+
+```text
+src/App.jsx
+→ TherapistManagerView 不再 static import
+→ 透過既有 lazyWithRetry(() => import(...)) 載入
+→ 只有進入 activeView === "therapist-manager" 時才載入相關 chunk
+→ 沿用既有 Suspense / lazy retry boundary
+
+src/components/TherapistManagerView.jsx
+→ component runtime logic unchanged
+→ Firestore / permission / credential semantics unchanged
+
+tests/therapistManagerOptimization.test.js
+→ regression contract 防止 TherapistManagerView 被改回 startup static import
+
+docs/SYSTEM_SOURCE_MAP.md
+→ canonical lazy-loaded View inventory 已加入 TherapistManagerView
+```
+
+## Runtime / Security / Data Boundary
+
+```text
+TherapistManagerView component source change  = NO
+Firestore read topology change                = NO
+new Firestore listener                        = 0
+new Firestore query                           = 0
+new Firestore read primitive                  = 0
+new polling                                   = 0
+
+Security logic change                         = NO
+Backend change                                = NO
+Firestore Rules change                        = NO
+brand physical path change                    = NO
+manualChunks change                           = NO
+
+Frontend deploy target                        = GitHub Pages
+Firebase Hosting deploy                       = NO / not target
+Functions deploy                              = NO / not required
+Rules deploy                                  = NO / not required
+```
+
+## Validation / Deployment Evidence
+
+```text
+IMPLEMENTED                           = YES
+VALIDATED                             = YES
+COMMITTED                             = YES
+PUSHED                                = YES
+DEPLOYED                              = YES_FRONTEND_GITHUB_PAGES
+
+feature commit                        = 83e3f4aaee90250490bb840e1a4d61bd3a82acfd
+feature parent                        = 22df9a4b2c2a2646e1c08f4de0cc50b98a63110d
+gh-pages                              = dcc12e3c991ee96deca06397d2733f045e55b623
+
+targeted regression                   = PASS
+full ci:validate                       = PASS
+frontend build                        = PASS
+measured bundle acceptance            = PASS
+```
+
+Release identity：
+
+```text
+schemaVersion                         = release-identity-v1
+appVersion                            = 3.6.1
+sourceCommit                          = 83e3f4aaee90250490bb840e1a4d61bd3a82acfd
+entryAsset                            = assets/index-CaPLv9eW.js
+```
+
+## Production Human Smoke
+
+2026-10-03 正式環境 Human Smoke：
+
+```text
+SystemMonitor Release                 = PASS
+Login / Dashboard                     = PASS
+Therapist Manager First Open          = PASS
+Therapist Manager Functions           = PASS
+Leave / Return                        = PASS
+Permission Regression                 = PASS
+Navigation                            = PASS
+No White Screen                       = PASS
+```
+
+正式狀態：
+
+```text
+THERAPIST_MANAGER_LAZY_LOAD           = PRODUCTION_CONFIRMED / CLOSED
+HUMAN_PRODUCTION_SMOKE                = PASS
+PRODUCTION_CONFIRMED                  = YES
+```
+
+## Bundle / Recharts Follow-up Boundary
+
+```text
+BUNDLE_RECHARTS_BUILD_HEALTH          = IN_PROGRESS
+
+Recharts Bar direct-import candidate
+= PROVEN BUILD HEALTH FIX
+= performance benefit negligible
+= DEFER_LOW_PRIORITY
+
+>500 kB entry warning
+= REMAINS_SEPARATE_ISSUE
+= not resolved by TherapistManagerView lazy loading
+```
+
+目前不因 warning 單獨導入 `manualChunks`，也不為 bundle warning 做大型 `App.jsx` 架構重構；後續候選仍需先有 isolated baseline / variant measurement，再決定是否進 Production。
+
+## Existing Closed / In-Progress Boundaries
+
+```text
+THERAPIST_HISTORICAL_SUMMARY_FIRST    = PRODUCTION_CONFIRMED / CLOSED
+CANONICAL_ROLE_METADATA_V1            = PRODUCTION_CONFIRMED / CLOSED
+P1_RH_RELEASE_HEALTH_V1               = PRODUCTION_CONFIRMED / CLOSED
+DAILY_REPORT_DATE_SAFETY_V1           = PRODUCTION_CONFIRMED / CLOSED
+P3                                    = IN_PROGRESS
+P3-A rolling history                  = PENDING NATURAL ELIGIBILITY
+```
+
+本批沒有修改 Projection formula、checkpoint writer、month-final scoring 或 rolling-history eligibility。
+
+Documentation Impact：本次 docs-only closeout 只更新 `docs/CURRENT_STATE.md`；runtime source / Functions / Rules / Frontend = None。
+
+---
+
 # Latest Production Runtime Override — 2026-10-03（Therapist Historical Summary-first）
 
 > 本節是目前最高優先的 Production runtime / Dashboard therapist read-topology 狀態。下方 Canonical Role Metadata、Daily Report Date Safety、Release Health、P3、P2 與更早章節保留各自當時 evidence；若 runtime lineage、historical therapist read ownership 或 Production 狀態衝突，以目前正式 source、release identity、Production smoke 與本節為準。
