@@ -1,3 +1,179 @@
+# Latest Production Runtime Override — 2026-10-04（Dashboard Action Center Retirement）
+
+> 本節是目前最高優先的 Production runtime / Dashboard 首屏狀態。下方 TherapistManagerView Lazy Load、Therapist Historical Summary-first、Canonical Role Metadata、Daily Report Date Safety、Release Health、P3、P2 與更早章節保留各自當時 evidence；若 runtime lineage、Dashboard Action Center 狀態或 frontend release identity 衝突，以目前正式 source、release identity、Production smoke 與本節為準。
+
+## Current Production Runtime
+
+```text
+main / origin-main                 = 2225a652a5210620338b0c6d919cd8bd8defd2d9
+runtime parent                     = ffaaccfe80f018d654a455caf30b27fa534c1ec2
+Frontend Production gh-pages      = 26bb2e06ec8e360888f6e4005fce66cd41cae6f2
+CURRENT_APP_VERSION                = 3.6.1
+Production asset                   = assets/index-Bqfunz1I.js
+Release identity schema            = release-identity-v1
+Release identity authority         = dist/release.json
+```
+
+`CURRENT_APP_VERSION` 維持 `3.6.1`；本批只撤下 Dashboard Action Center active wiring，沒有提高版本。
+
+## Dashboard Action Center — RETIRED / PRODUCTION CONFIRMED / CLOSED
+
+Action Center V1 曾完成 IMPLEMENTED / VALIDATED / DEPLOYED，但正式使用檢視後確認固定四卡沒有足夠獨立管理價值：
+
+```text
+今日／逾期回報
+→ 與既有 Dashboard Header「回報尚未完整（目前顯示已回報累計）」部分重疊
+→ 單獨不足以支撐大型 Action Center 區塊
+
+月底推估
+→ 已存在於營運總覽
+→ 固定卡片屬資訊重複
+
+本月目標
+→ 正常情境多半提前完成設定
+→ 「已完整」沒有日常行動價值
+
+安全確認
+→ 低頻 exception
+→ 「無待處理」不應長期佔據 Dashboard 首屏
+```
+
+正式產品結論：
+
+```text
+Dashboard
+→ 繼續負責營運全貌與當下資料完整度提示
+
+Action Center
+→ 不為了版面而重複既有資訊
+→ 只有未來能形成足夠獨立、可行動的 exception set 時才重新評估
+→ 正常狀態不固定佔據首屏
+```
+
+## Current Frontend Ownership
+
+```text
+src/components/DashboardView.jsx
+→ 不再 import / mount ActionCenter
+→ DashboardHeader 後直接進既有 Store / Therapist performance content
+
+src/hooks/useDashboardStats.js
+→ 不再 build actionCenterState
+→ 不再消費 Action Center 專用 deviceApprovalActionSummary
+→ 不再排 Action Center 專用 18:00 / 跨日 timer
+
+src/components/ActionCenter.jsx
+src/utils/actionCenter.js
+→ 暫時保留為 inactive module
+→ 不在 Dashboard runtime active path
+→ 本批不刪檔，避免把產品決策與 cleanup 混成同一批
+
+src/components/AuditView.jsx
+src/utils/dailyAuditPolicy.js
+→ 既有回報檢核功能保留
+→ 18:00 Asia/Taipei cutoff policy 不受 Action Center retirement 影響
+```
+
+## Read / Security / Brand Boundary
+
+```text
+new Firestore listener             = 0
+new Firestore query                = 0
+new polling                        = 0
+Firestore read topology delta      = 0
+
+Backend change                     = NO
+Firestore Rules change             = NO
+Security authority change          = NO
+brand physical path change         = NO
+CURRENT_APP_VERSION bump           = NO
+
+Frontend deploy target             = GitHub Pages
+Functions deploy                   = NO
+Rules deploy                       = NO
+```
+
+撤下 Action Center 後沒有新增讀取，也停止 Action Center 專用 frontend clock work；原本 Dashboard、Audit、Security / device management 與三品牌 scope authority 均維持既有 owner。
+
+## Validation / Deployment Evidence
+
+本機先驗證、確認 UX 後才推正式：
+
+```text
+LOCAL_HUMAN_SMOKE                  = PASS
+targeted regression                = 24 / 24 PASS
+full ci:validate                   = 1165 / 1165 PASS
+frontend build                     = PASS
+git diff --check                   = PASS
+```
+
+正式部署：
+
+```text
+IMPLEMENTED                        = YES
+VALIDATED                          = YES
+COMMITTED                          = YES
+PUSHED                             = YES
+DEPLOYED                           = YES_FRONTEND_GITHUB_PAGES
+
+runtime commit                     = 2225a652a5210620338b0c6d919cd8bd8defd2d9
+runtime parent                     = ffaaccfe80f018d654a455caf30b27fa534c1ec2
+gh-pages                           = 26bb2e06ec8e360888f6e4005fce66cd41cae6f2
+```
+
+Release identity：
+
+```text
+schemaVersion                      = release-identity-v1
+appVersion                         = 3.6.1
+sourceCommit                       = 2225a652a5210620338b0c6d919cd8bd8defd2d9
+entryAsset                         = assets/index-Bqfunz1I.js
+```
+
+## Production Human Smoke
+
+2026-10-04 正式環境 Human Smoke：
+
+```text
+Action Center absent               = PASS
+Dashboard Header unchanged         = PASS
+Dashboard layout                   = PASS
+CYJ / 安妞 / 伊啵                  = PASS
+region / manager / store filters   = PASS
+Therapist mode                     = PASS
+Daily Audit                        = PASS
+Security original entry            = PASS
+No new runtime error               = PASS
+```
+
+正式狀態：
+
+```text
+DASHBOARD_ACTION_CENTER            = RETIRED / PRODUCTION_CONFIRMED / CLOSED
+LOCAL_HUMAN_SMOKE                  = PASS
+PRODUCTION_HUMAN_SMOKE             = PASS
+PRODUCTION_CONFIRMED               = YES
+```
+
+## Follow-up Boundary
+
+未來若重新啟用 Action Center，最低產品門檻是：
+
+```text
+- 必須提供 Dashboard 其他位置看不到的獨立管理訊號
+- 應以 exception / missing / risk / pending 為主，而非正常狀態卡片
+- 不因湊版面重複月底推估、本月目標或正常 Security 狀態
+- 優先重用既有 Summary / authority
+- 不以 Dashboard runtime 掃歷史 raw collections 作 workaround
+- 新 listener / query 必須另做 Firestore reads 評估
+```
+
+目前既有 Bundle / Recharts `>500 kB` warning 仍屬獨立議題，不與本批 Action Center retirement 混合處理。
+
+Documentation Impact：本次 closeout 只更新 `docs/CURRENT_STATE.md`；runtime source / Functions / Rules / frontend deploy = None。
+
+---
+
 # Latest Production Runtime Override — 2026-10-03（TherapistManagerView Lazy Load）
 
 > 本節是目前最高優先的 Production runtime / frontend bundle 狀態。下方 Therapist Historical Summary-first、Canonical Role Metadata、Daily Report Date Safety、Release Health、P3、P2 與更早章節保留各自當時 evidence；若 runtime lineage、frontend entry asset 或 bundle 狀態衝突，以目前正式 source、release identity、Production smoke 與本節為準。
