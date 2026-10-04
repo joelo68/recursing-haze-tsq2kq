@@ -6,8 +6,24 @@ const {
   verifySuperAdminActor,
 } = require('./deviceApproval');
 
-const MODULE_PERMISSIONS_SCHEMA_VERSION = 'module-permissions-v1';
+const MODULE_PERMISSIONS_SCHEMA_VERSION = 'module-permissions-v2';
 const MODULE_PERMISSION_ROLES = Object.freeze(['director', 'trainer', 'manager', 'store', 'therapist']);
+const DIRECTOR_PERMISSION_LEVELS = Object.freeze(['operation_admin', 'finance_admin', 'viewer']);
+const DIRECTOR_PERMISSION_REQUIRED_VIEW_IDS = Object.freeze(['dashboard']);
+const DIRECTOR_PERMISSION_SUPER_ADMIN_ONLY_VIEW_IDS = new Set(['settings']);
+const DEFAULT_DIRECTOR_LEVEL_PERMISSIONS = Object.freeze({
+  operation_admin: Object.freeze([
+    'dashboard', 'daily', 'regional', 'ranking', 'store-analysis', 'audit',
+    'annual', 'smart-forecast', 'logs', 'notification',
+  ]),
+  finance_admin: Object.freeze([
+    'dashboard', 'daily', 'regional', 'ranking', 'store-analysis', 'annual', 'smart-forecast',
+  ]),
+  viewer: Object.freeze([
+    'dashboard', 'daily', 'regional', 'ranking', 'store-analysis', 'annual',
+  ]),
+});
+
 
 function resolveModulePermissionsBrandId(value = '') {
   const raw = String(value || '').trim().toLowerCase();
@@ -22,7 +38,33 @@ function normalizeModulePermissionId(value = '') {
   return /^[a-z0-9][a-z0-9-]{0,63}$/.test(id) ? id : '';
 }
 
-function normalizeModulePermissions(raw = {}) {
+function normalizeDirectorLevelPermissions(raw = {}) {
+  const source = raw && typeof raw === 'object' && !Array.isArray(raw) ? raw : {};
+  const normalized = {};
+
+  DIRECTOR_PERMISSION_LEVELS.forEach((levelId) => {
+    const configured = Array.isArray(source[levelId])
+      ? source[levelId]
+      : DEFAULT_DIRECTOR_LEVEL_PERMISSIONS[levelId];
+
+    const ids = [...new Set(
+      configured
+        .map(normalizeModulePermissionId)
+        .filter(Boolean)
+        .filter((viewId) => !DIRECTOR_PERMISSION_SUPER_ADMIN_ONLY_VIEW_IDS.has(viewId))
+    )];
+
+    DIRECTOR_PERMISSION_REQUIRED_VIEW_IDS.forEach((viewId) => {
+      if (!ids.includes(viewId)) ids.unshift(viewId);
+    });
+
+    normalized[levelId] = ids.sort();
+  });
+
+  return normalized;
+}
+
+function normalizeBaseModulePermissions(raw = {}) {
   const source = raw && typeof raw === 'object' && !Array.isArray(raw) ? raw : {};
   const normalized = {};
   MODULE_PERMISSION_ROLES.forEach((role) => {
@@ -33,6 +75,14 @@ function normalizeModulePermissions(raw = {}) {
     )].sort();
   });
   return normalized;
+}
+
+function normalizeModulePermissions(raw = {}) {
+  const source = raw && typeof raw === 'object' && !Array.isArray(raw) ? raw : {};
+  return {
+    ...normalizeBaseModulePermissions(source),
+    directorLevels: normalizeDirectorLevelPermissions(source.directorLevels || {}),
+  };
 }
 
 function parseExpectedPermissionRevision(value) {
@@ -63,7 +113,11 @@ function createModulePermissionsFunctions({ admin, db }) {
       }
 
       const expectedRevision = parseExpectedPermissionRevision(body.expectedRevision);
-      const requestedPermissions = normalizeModulePermissions(body.permissions || {});
+      const rawRequestedPermissions = body.permissions && typeof body.permissions === 'object' && !Array.isArray(body.permissions)
+        ? body.permissions
+        : {};
+      const requestHasDirectorLevels = Object.prototype.hasOwnProperty.call(rawRequestedPermissions, 'directorLevels');
+      const requestedBasePermissions = normalizeBaseModulePermissions(rawRequestedPermissions);
       const permissionsRef = getBrandSettingDoc(db, brandId, 'permissions');
       const auditRef = getBrandCollection(db, brandId, 'maintenance_logs').doc();
       let result = null;
@@ -77,7 +131,8 @@ function createModulePermissionsFunctions({ admin, db }) {
           const error = new Error('模組權限已由其他最高管理者更新，請重新載入後再儲存');
           error.code = 'MODULE_PERMISSIONS_CONFLICT';
           error.currentPermissions = {
-            ...normalizeModulePermissions(current),
+            ...normalizeBaseModulePermissions(current),
+            directorLevels: normalizeDirectorLevelPermissions(current.directorLevels || {}),
             schemaVersion: String(current.schemaVersion || MODULE_PERMISSIONS_SCHEMA_VERSION),
             revision: currentRevision,
             updatedAtText: String(current.updatedAtText || ''),
@@ -88,6 +143,13 @@ function createModulePermissionsFunctions({ admin, db }) {
 
         const nextRevision = currentRevision + 1;
         const nowText = new Date().toISOString();
+        const directorLevels = requestHasDirectorLevels
+          ? normalizeDirectorLevelPermissions(rawRequestedPermissions.directorLevels || {})
+          : normalizeDirectorLevelPermissions(current.directorLevels || {});
+        const requestedPermissions = {
+          ...requestedBasePermissions,
+          directorLevels,
+        };
         const payload = {
           schemaVersion: MODULE_PERMISSIONS_SCHEMA_VERSION,
           revision: nextRevision,
@@ -148,6 +210,10 @@ function createModulePermissionsFunctions({ admin, db }) {
 module.exports = {
   createModulePermissionsFunctions,
   MODULE_PERMISSIONS_SCHEMA_VERSION,
+  DIRECTOR_PERMISSION_LEVELS,
+  DEFAULT_DIRECTOR_LEVEL_PERMISSIONS,
+  normalizeDirectorLevelPermissions,
+  normalizeBaseModulePermissions,
   normalizeModulePermissions,
   resolveModulePermissionsBrandId,
 };

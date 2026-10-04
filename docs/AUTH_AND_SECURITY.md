@@ -539,6 +539,93 @@ directorLevel = super_admin
 
 程式另外保留 master credential／master login 類型的緊急或高權限驗證路徑。不要把 `master` 當成與 `director` 並列的一般員工角色。
 
+## 2.1 高階主管頁面權限（Module Permissions v2）
+
+`director` 之下的頁面進入權限不再由 `App.jsx` 的固定清單單獨決定。
+
+目前正式設計：
+
+```text
+directorLevel = super_admin
+→ 固定可使用全部系統頁面
+→ 不接受角色矩陣取消
+
+directorLevel = operation_admin / finance_admin / viewer
+→ 由目前品牌的 permissions.directorLevels 決定可進入頁面
+```
+
+安全固定規則：
+
+```text
+dashboard
+→ 所有高階主管層級固定保留，作為登入首頁
+
+settings
+→ 固定只允許 super_admin
+→ 不可由權限矩陣授予其他 directorLevel
+```
+
+這一層的語意是：
+
+> 頁面進入 / 顯示權限。
+
+它**不是**通用的 action-level 唯讀 ACL。若某角色可以進入某頁，該頁內具體寫入 action 仍必須依該功能既有的 Frontend guard、Backend authority 與 Firestore Rules 判斷；不得因為「僅查看」角色名稱就推論所有頁面內 action 已自動唯讀。
+
+角色矩陣的正式 writer 沿用：
+
+```text
+manageModulePermissions
+```
+
+Backend 仍會重新驗證：
+
+- Application Identity
+- `super_admin`
+- Trusted Device
+- fresh credential / actor authority
+- brand scope
+- `expectedRevision` / revision OCC
+
+Browser 不直接寫 `permissions`。
+
+多管理者同時修改時，transaction 會比對目前 `revision`；若版本已被其他最高管理者更新，回傳 conflict，Frontend 必須重新載入目前 authority，不得 last-write-wins 覆蓋。
+
+三品牌保持獨立：
+
+```text
+CYJ
+→ artifacts/default-app-id/public/data/global_settings/permissions
+
+安妞
+→ brands/anniu/settings/permissions
+
+伊啵
+→ brands/yibo/settings/permissions
+```
+
+因此調整 CYJ 的高階主管頁面權限不會默默改到安妞或伊啵。
+
+相容性規則：
+
+- `module-permissions-v1` / 缺少 `directorLevels` 的舊文件會以既有 Production hardcoded director 預設作 fallback。
+- 新版 Backend 若收到舊 client 的 module-permission save、payload 沒有 `directorLevels`，transaction 會保留目前文件中的 `directorLevels`，避免舊 client 把新權限矩陣清掉。
+
+Reads：
+
+```text
+new listener = 0
+new query    = 0
+new polling  = 0
+```
+
+沿用 App 登入／切品牌後既有的單次：
+
+```text
+getDoc(getDocPath("permissions"))
+```
+
+---
+
 # 3. 帳號資料來源
 
 App 啟動／切品牌後會載入帳號目錄：

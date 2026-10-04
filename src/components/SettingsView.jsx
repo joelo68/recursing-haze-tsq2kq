@@ -16,6 +16,12 @@ import { db, appId } from "../config/firebase";
 import { AppContext } from "../AppContext";
 import { ViewWrapper, Card, AsyncActionButton } from "./SharedUI";
 import { APPLICATION_ROLE_METADATA, DEFAULT_PERMISSIONS, ALL_MENU_ITEMS, getRoleLabel } from "../constants/index";
+import {
+  DIRECTOR_LEVEL_OPTIONS as DIRECTOR_PERMISSION_LEVEL_OPTIONS,
+  DIRECTOR_PERMISSION_REQUIRED_VIEW_IDS,
+  DIRECTOR_PERMISSION_SUPER_ADMIN_ONLY_VIEW_IDS,
+  normalizeDirectorLevelPermissionMap,
+} from "../utils/directorPermissions";
 import { generateUUID, normalizeManagerOrder, sortManagersByOrgOrder, sortStoresByOrgOrder } from "../utils/helpers";
 import { KPI_VALUE_STATUS, validPositiveSetting, validateStoreHealthBenchmark } from "../utils/kpiContracts";
 import {
@@ -120,6 +126,8 @@ const SettingsView = () => {
   const [localPermissions, setLocalPermissions] = useState(permissions || DEFAULT_PERMISSIONS);
   const [activePermissionRole, setActivePermissionRole] = useState("");
   const [permissionMatrixTouched, setPermissionMatrixTouched] = useState(false);
+  const [directorPermissionMatrixTouched, setDirectorPermissionMatrixTouched] = useState(false);
+  const [activeDirectorPermissionLevel, setActiveDirectorPermissionLevel] = useState("operation_admin");
   const [localManagers, setLocalManagers] = useState(managers || {});
   const [localManagerOrder, setLocalManagerOrder] = useState(normalizeManagerOrder(managers || {}, managerOrder));
   
@@ -163,6 +171,21 @@ const SettingsView = () => {
     return { brandKey: key, brandLabel: label };
   }, [currentBrand]);
 
+  const effectiveDirectorLevelPermissions = useMemo(
+    () => normalizeDirectorLevelPermissionMap(localPermissions?.directorLevels || {}),
+    [localPermissions?.directorLevels]
+  );
+  const directorRequiredViewIds = useMemo(
+    () => new Set(DIRECTOR_PERMISSION_REQUIRED_VIEW_IDS),
+    []
+  );
+  const directorSuperAdminOnlyViewIds = useMemo(
+    () => new Set(DIRECTOR_PERMISSION_SUPER_ADMIN_ONLY_VIEW_IDS),
+    []
+  );
+  const isLocalDirectorPermissionTrial = typeof window !== "undefined"
+    && ["localhost", "127.0.0.1"].includes(window.location.hostname);
+
   useEffect(() => {
     if (managers) {
       setLocalManagers(managers);
@@ -173,6 +196,7 @@ const SettingsView = () => {
     if (permissions) {
       setLocalPermissions(permissions);
       setPermissionMatrixTouched(false);
+      setDirectorPermissionMatrixTouched(false);
     }
   }, [permissions]);
   useEffect(() => { 
@@ -914,6 +938,66 @@ const SettingsView = () => {
     });
   };
   
+  const toggleDirectorLevelPermission = (levelId, menuId) => {
+    if (levelId === "super_admin") return;
+    if (directorRequiredViewIds.has(menuId)) return;
+    if (directorSuperAdminOnlyViewIds.has(menuId)) return;
+
+    setActiveDirectorPermissionLevel(levelId);
+    setDirectorPermissionMatrixTouched(true);
+    setLocalPermissions((previous) => {
+      const normalized = normalizeDirectorLevelPermissionMap(previous?.directorLevels || {});
+      const current = normalized[levelId] || [];
+      const updated = current.includes(menuId)
+        ? current.filter((id) => id !== menuId)
+        : [...current, menuId];
+      return {
+        ...previous,
+        directorLevels: {
+          ...normalized,
+          [levelId]: updated,
+        },
+      };
+    });
+  };
+
+  const handleSaveDirectorLevelPermissions = async () => {
+    const directorLevels = normalizeDirectorLevelPermissionMap(localPermissions?.directorLevels || {});
+    const nextPermissions = {
+      ...localPermissions,
+      directorLevels,
+    };
+
+    if (isLocalDirectorPermissionTrial) {
+      setLocalPermissions((previous) => ({
+        ...previous,
+        ...nextPermissions,
+        revision: Math.max(0, Number(previous?.revision || 0)) + 1,
+      }));
+      setDirectorPermissionMatrixTouched(false);
+      showToast("本機試跑：高階主管頁面權限已模擬儲存，不會寫入正式資料", "success");
+      return;
+    }
+
+    try {
+      if (typeof updateModulePermissions !== "function") {
+        throw new Error("模組權限安全服務尚未就緒");
+      }
+      const result = await updateModulePermissions(nextPermissions);
+      if (result?.permissions) setLocalPermissions(result.permissions);
+      setDirectorPermissionMatrixTouched(false);
+      showToast(`${brandLabel}高階主管頁面權限已更新`, "success");
+      if (fetchGlobalData) fetchGlobalData();
+    } catch (error) {
+      console.error("高階主管頁面權限更新失敗:", error);
+      if (error?.status === 409 && error?.result?.currentPermissions) {
+        setLocalPermissions(error.result.currentPermissions);
+        setDirectorPermissionMatrixTouched(false);
+      }
+      showToast(error?.result?.message || error?.message || "更新失敗", "error");
+    }
+  };
+
   const handleSaveSecurityConfig = async () => { 
     try {
       const lowPowerIdleMinutes = Math.max(1, Number(localSecurityConfig.lowPowerIdleMinutes || 30));
@@ -2197,6 +2281,150 @@ const SettingsView = () => {
                     </div>
                   </div>
                 )}
+              </div>
+
+
+              <div className="rounded-2xl border border-[#E5DDD2] bg-white p-5 shadow-sm">
+                <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
+                  <div>
+                    <div className="flex flex-wrap items-center gap-2">
+                      <p className="text-base font-black text-[#3F3A35]">高階主管頁面權限</p>
+                      <span className="rounded-full border border-[#E8C77A] bg-[#FFF8E7] px-2.5 py-1 text-[10px] font-black text-[#8A632E]">
+                        目前品牌：{brandLabel}
+                      </span>
+                      {isLocalDirectorPermissionTrial && (
+                        <span className="rounded-full border border-sky-200 bg-sky-50 px-2.5 py-1 text-[10px] font-black text-sky-700">
+                          本機試跑・不寫正式資料
+                        </span>
+                      )}
+                    </div>
+                    <p className="mt-2 max-w-4xl text-xs font-bold leading-5 text-[#8A7D70]">
+                      調整「營運管理、財務管理、僅查看」可以進入哪些系統頁面。最高管理者固定保留全部頁面；
+                      「營運總覽」固定保留作為登入首頁，「系統設定」固定只允許最高管理者。
+                    </p>
+                    <p className="mt-1 text-[11px] font-bold leading-5 text-[#A69C91]">
+                      此設定是頁面進入權限，不會把頁面內既有操作自動改成唯讀。其他已在線使用者會在下次重新整理、重新登入或切換品牌後取得新設定。
+                    </p>
+                  </div>
+                  <div className="shrink-0 rounded-xl border border-[#EFE7DA] bg-[#FAF7F1] px-3 py-2 text-[11px] font-black text-[#7C7063]">
+                    revision {Math.max(0, Number(localPermissions?.revision || 0))}
+                  </div>
+                </div>
+
+                <div className="mt-5 max-h-[62vh] overflow-auto rounded-2xl border border-[#EFE7DA] bg-[#FFFCF7]">
+                  <div className="min-w-[820px]">
+                    <table className="w-full border-separate border-spacing-0 text-left text-sm">
+                      <thead>
+                        <tr>
+                          <th className="sticky left-0 top-0 z-40 border-b border-r border-[#E8DDCC] bg-[#FFFCF7] p-4 font-black text-[#7C7063]">
+                            系統頁面
+                          </th>
+                          {DIRECTOR_PERMISSION_LEVEL_OPTIONS.map((level) => {
+                            const selected = activeDirectorPermissionLevel === level.id;
+                            return (
+                              <th
+                                key={level.id}
+                                className={`sticky top-0 z-30 border-b border-[#E8DDCC] p-0 text-center ${
+                                  selected ? "bg-[#FFF2D1]" : level.id === "super_admin" ? "bg-emerald-50" : "bg-white"
+                                }`}
+                              >
+                                <button
+                                  type="button"
+                                  onClick={() => setActiveDirectorPermissionLevel(level.id)}
+                                  className="w-full px-4 py-4"
+                                >
+                                  <span className="block font-black text-[#4D4338]">{level.label}</span>
+                                  <span className={`mt-1 block text-[10px] font-black ${selected ? "text-[#B7863D]" : "text-[#A69C91]"}`}>
+                                    {level.id === "super_admin" ? "固定全開" : selected ? "目前編輯" : "點此聚焦"}
+                                  </span>
+                                </button>
+                              </th>
+                            );
+                          })}
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-stone-100">
+                        {ALL_MENU_ITEMS.map((item) => (
+                          <tr key={`director_${item.id}`}>
+                            <td className="sticky left-0 z-20 border-r border-[#EFE7DA] bg-[#FFFCF7]/95 p-4">
+                              <div className="flex items-center gap-3">
+                                <div className="rounded-lg bg-[#F3EEE6] p-2 text-[#7C7063]"><item.icon size={18} /></div>
+                                <div>
+                                  <span className="whitespace-nowrap font-bold text-[#4D4338]">{item.label}</span>
+                                  {directorRequiredViewIds.has(item.id) && (
+                                    <span className="ml-2 rounded-full bg-sky-50 px-2 py-0.5 text-[9px] font-black text-sky-700">登入首頁</span>
+                                  )}
+                                  {directorSuperAdminOnlyViewIds.has(item.id) && (
+                                    <span className="ml-2 rounded-full bg-amber-50 px-2 py-0.5 text-[9px] font-black text-amber-700">最高管理限定</span>
+                                  )}
+                                </div>
+                              </div>
+                            </td>
+                            {DIRECTOR_PERMISSION_LEVEL_OPTIONS.map((level) => {
+                              const isSuperAdmin = level.id === "super_admin";
+                              const isRequired = directorRequiredViewIds.has(item.id);
+                              const isSuperAdminOnly = directorSuperAdminOnlyViewIds.has(item.id);
+                              const checked = isSuperAdmin
+                                ? true
+                                : isSuperAdminOnly
+                                  ? false
+                                  : isRequired || Boolean(effectiveDirectorLevelPermissions?.[level.id]?.includes(item.id));
+                              const disabled = isSuperAdmin || isRequired || isSuperAdminOnly;
+                              const selected = activeDirectorPermissionLevel === level.id;
+
+                              return (
+                                <td
+                                  key={`director_${item.id}_${level.id}`}
+                                  className={`p-4 text-center transition-all ${selected ? "bg-[#FFF7DF]/70" : isSuperAdmin ? "bg-emerald-50/40" : "bg-white"}`}
+                                >
+                                  <input
+                                    type="checkbox"
+                                    checked={checked}
+                                    disabled={disabled}
+                                    onFocus={() => setActiveDirectorPermissionLevel(level.id)}
+                                    onChange={() => toggleDirectorLevelPermission(level.id, item.id)}
+                                    aria-label={`${level.label}｜${item.label}`}
+                                    title={
+                                      isSuperAdmin
+                                        ? "最高管理者固定可使用全部頁面"
+                                        : isRequired
+                                          ? "營運總覽固定保留"
+                                          : isSuperAdminOnly
+                                            ? "此頁固定只允許最高管理者"
+                                            : `${level.label}｜${item.label}`
+                                    }
+                                    className="h-5 w-5 cursor-pointer rounded border-stone-300 disabled:cursor-not-allowed disabled:opacity-55"
+                                  />
+                                </td>
+                              );
+                            })}
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+
+                <div className="mt-4 flex flex-col gap-3 rounded-2xl border border-[#F3DFB8] bg-[#FFF9EF] p-4 md:flex-row md:items-center md:justify-between">
+                  <div>
+                    <p className={`text-xs font-black ${directorPermissionMatrixTouched ? "text-[#B7863D]" : "text-[#7C7063]"}`}>
+                      {directorPermissionMatrixTouched ? "有尚未儲存的高階主管頁面權限變更" : "目前沒有尚未儲存的頁面權限變更"}
+                    </p>
+                    <p className="mt-1 text-[10px] font-bold text-[#A69C91]">
+                      每個品牌獨立保存；儲存由最高管理者 Backend authority 與 revision OCC 再次驗證。
+                    </p>
+                  </div>
+                  <AsyncActionButton
+                    type="button"
+                    onClick={handleSaveDirectorLevelPermissions}
+                    disabled={!directorPermissionMatrixTouched}
+                    className="w-full rounded-xl border border-[#E8C77A] bg-gradient-to-r from-[#FFF7DF] via-[#F7E8C6] to-[#EACB86] px-6 py-3 text-sm font-black text-[#5A4225] shadow-sm disabled:opacity-45 md:w-auto"
+                    loadingText="儲存中…"
+                  >
+                    <Save size={16} />
+                    {isLocalDirectorPermissionTrial ? "模擬儲存頁面權限" : "儲存高階主管頁面權限"}
+                  </AsyncActionButton>
+                </div>
               </div>
 
               <div className="rounded-2xl border border-[#EFE7DA] bg-[#FFFCF7] p-5">

@@ -2033,6 +2033,104 @@ Cloud Function export +0
 - `src/constants/index.js`
 - `src/components/Navigation.jsx`
 - `src/App.jsx`
+- `src/utils/directorPermissions.js`
+- `src/components/SettingsView.jsx`
+- `functions/modulePermissions.js`
+
+## 7.1 高階主管 directorLevel 頁面權限
+
+正式 directorLevel：
+
+```text
+super_admin      最高管理者
+operation_admin  營運管理
+finance_admin    財務管理
+viewer           僅查看
+```
+
+`super_admin` 固定全頁面，不由角色權限矩陣取消。
+
+其餘三種 directorLevel 的 page-entry authority 由目前品牌的：
+
+```text
+permissions.directorLevels
+```
+
+提供。
+
+Frontend resolver：
+
+```text
+src/utils/directorPermissions.js
+→ normalizeDirectorLevelPermissionMap()
+→ resolveDirectorLevelPermissionProfile()
+```
+
+`src/App.jsx` 的 Navigation guard 與實際 renderer 共用同一份 `canDirectorAccessView()`，不再只靠 menu 隱藏；直接切 view / store navigation 也會經過同一動態頁面 guard。
+
+安全固定值：
+
+```text
+dashboard
+→ 全 directorLevel 必備
+
+settings
+→ super_admin-only
+```
+
+管理 UI：
+
+```text
+src/components/SettingsView.jsx
+→ 高階主管帳號
+→ 高階主管頁面權限矩陣
+```
+
+正式 writer：
+
+```text
+functions/modulePermissions.js
+→ manageModulePermissions
+```
+
+既有 `permissions` settings doc 由 `module-permissions-v1` 升為 `module-permissions-v2`，新增：
+
+```text
+directorLevels.operation_admin
+directorLevels.finance_admin
+directorLevels.viewer
+```
+
+三品牌仍使用既有 brand resolver：
+
+```text
+CYJ   → global_settings/permissions
+安妞  → brands/anniu/settings/permissions
+伊啵  → brands/yibo/settings/permissions
+```
+
+沒有新增 Firestore physical path。
+
+Compatibility：
+
+- v1 文件缺 `directorLevels` 時，Frontend / Backend 使用原本 Production hardcoded director 預設。
+- 舊 client 更新其他 module permissions、沒有送 `directorLevels` 時，Backend transaction 保留目前 `directorLevels`。
+- revision OCC 防止多最高管理者互相覆蓋。
+
+Read topology：
+
+```text
+new listener = 0
+new query    = 0
+new polling  = 0
+steady-state Firestore read delta = 0
+```
+
+沿用 App 既有 `permissions` 單次讀取。
+
+注意：
+
+> `viewer` 目前代表角色名稱與頁面進入 profile，不代表所有允許進入頁面的 action 都自動變成 read-only。Action-level ACL 仍由各功能既有 Frontend / Backend / Rules authority 負責。
 
 Therapist module 可透過 feature flag 關閉，
 Navigation 會同步移除相關 menu items。

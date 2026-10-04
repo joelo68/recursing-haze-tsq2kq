@@ -1377,15 +1377,111 @@ isActive
 
 ## 10.7 `permissions`
 
-**類型：Settings Doc**
+**類型：Brand-scoped Settings Doc**
 
-Menu / view permission 設定來源之一。
+正式 physical path：
 
-實際 view access 還會再受：
+```text
+CYJ
+artifacts/default-app-id/public/data/global_settings/permissions
 
-- role
+安妞
+brands/anniu/settings/permissions
+
+伊啵
+brands/yibo/settings/permissions
+```
+
+三品牌各自保存，不共用同一份 permissions 文件。
+
+目前 schema：
+
+```text
+schemaVersion = module-permissions-v2
+revision
+director
+trainer
+manager
+store
+therapist
+
+directorLevels.operation_admin
+directorLevels.finance_admin
+directorLevels.viewer
+
+updatedAt
+updatedAtText
+updatedBy
+updatedByRole
+updatedByAccountId
+```
+
+`directorLevels` 保存的是「可進入的 view id 陣列」，例如：
+
+```text
+directorLevels.operation_admin = [
+  dashboard,
+  daily,
+  regional,
+  ranking,
+  store-analysis,
+  ...
+]
+```
+
+固定語意：
+
+```text
+super_admin
+→ 不存為可編輯 directorLevels profile
+→ 固定全頁面
+
+dashboard
+→ operation_admin / finance_admin / viewer 固定保留
+
+settings
+→ 固定 super_admin-only
+→ Backend / Frontend normalization 都會拒絕授予其他 directorLevel
+```
+
+舊文件／舊 client 相容：
+
+```text
+缺少 directorLevels
+→ 使用既有 Production director 預設作 fallback
+
+舊 client 儲存其他 module permissions、payload 未帶 directorLevels
+→ Backend transaction 保留目前文件的 directorLevels
+```
+
+因此升級到 v2 不需要 migration writer，也不會因舊 client 儲存其他模組權限而清掉高階主管頁面設定。
+
+正式 writer：
+
+```text
+functions/modulePermissions.js
+→ manageModulePermissions
+```
+
+Backend transaction 同時處理：
+
+- brand scope
+- highest-admin actor revalidation
+- Trusted Device
+- revision OCC
+- audit log
+- normalize / sanitize permission ids
+
+Browser direct write 仍由既有 Firestore Rules 阻擋。
+
+讀取拓樸沒有新增常駐 listener/query/polling；App 沿用登入／切品牌後既有單次 `getDoc(getDocPath("permissions"))`。
+
+實際 view access 仍會再受：
+
+- application role
 - director level
 - feature flags
+- 頁面本身更細的 action authority
 
 共同影響。
 

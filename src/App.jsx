@@ -19,6 +19,7 @@ import {
 } from "lucide-react";
 
 import { ROLES, ALL_MENU_ITEMS, DEFAULT_REGIONAL_MANAGERS, DEFAULT_PERMISSIONS, getRoleLabel } from "./constants/index";
+import { resolveDirectorLevelPermissionProfile } from "./utils/directorPermissions";
 import { generateUUID, formatLocalYYYYMMDD, toStandardDateFormat, formatNumber, parseNumber, normalizeManagerOrder } from "./utils/helpers";
 import { validPositiveSetting } from "./utils/kpiContracts";
 import { inspectHistoricalSystemExclusionTrust, normalizeSystemExclusionState } from "./utils/systemExclusion";
@@ -486,22 +487,6 @@ const sanitizeSecurityKey = (value = "") => {
     .slice(0, 120) || "unknown";
 };
 
-
-const DIRECTOR_VIEW_PERMISSIONS = {
-  super_admin: { allowedViews: null, label: "最高管理者" },
-  operation_admin: {
-    allowedViews: new Set(["dashboard", "daily", "regional", "ranking", "store-analysis", "audit", "annual", "smart-forecast", "logs", "notification"]),
-    label: "營運主管",
-  },
-  finance_admin: {
-    allowedViews: new Set(["dashboard", "daily", "regional", "ranking", "store-analysis", "annual", "smart-forecast"]),
-    label: "財務主管",
-  },
-  viewer: {
-    allowedViews: new Set(["dashboard", "daily", "regional", "ranking", "store-analysis", "annual"]),
-    label: "只讀主管",
-  },
-};
 
 const DIRECTOR_RESTRICTED_VIEW_IDS = [
   "history",
@@ -1481,9 +1466,11 @@ export default function App() {
   const [selectedMonth, setSelectedMonth] = useState((new Date().getMonth() + 1).toString());
 
   const directorLevel = currentUser?.directorLevel || currentUser?.adminLevel || (userRole === "director" && String(currentUser?.name || "").includes("Joe") ? "super_admin" : "operation_admin");
-  const directorPermissionProfile = userRole === "director"
-    ? (DIRECTOR_VIEW_PERMISSIONS[directorLevel] || DIRECTOR_VIEW_PERMISSIONS.operation_admin)
-    : null;
+  const directorPermissionProfile = useMemo(() => (
+    userRole === "director"
+      ? resolveDirectorLevelPermissionProfile(permissions, directorLevel)
+      : null
+  ), [userRole, permissions, directorLevel]);
 
   const canDirectorAccessView = useCallback((viewId) => {
     if (viewId === "therapist-manager" && userRole === "trainer") {
@@ -1494,10 +1481,9 @@ export default function App() {
     }
     if (userRole !== "director") return true;
     if (currentUser?.isMasterLogin === true) return true;
-    const profile = DIRECTOR_VIEW_PERMISSIONS[directorLevel] || DIRECTOR_VIEW_PERMISSIONS.operation_admin;
-    if (!profile.allowedViews) return true;
-    return profile.allowedViews.has(viewId);
-  }, [userRole, currentUser?.isMasterLogin, directorLevel, permissions]);
+    if (!directorPermissionProfile?.allowedViews) return true;
+    return directorPermissionProfile.allowedViews.has(viewId);
+  }, [userRole, currentUser?.isMasterLogin, directorPermissionProfile, permissions]);
 
   const therapistModuleEnabled = featureFlags?.therapistModuleEnabled !== false;
 
@@ -4785,7 +4771,7 @@ export default function App() {
     buildDeviceSecurityActor,
   ]);
   
-  const navigateToStore = useCallback((storeName) => { setActiveView("store-analysis"); window.dispatchEvent(new CustomEvent("navigate-to-store", { detail: storeName })); }, []);
+  const navigateToStore = useCallback((storeName) => { if (!canDirectorAccessView("store-analysis")) { handleProtectedSetActiveView("store-analysis"); return; } setActiveView("store-analysis"); window.dispatchEvent(new CustomEvent("navigate-to-store", { detail: storeName })); }, [canDirectorAccessView, handleProtectedSetActiveView]);
 
   useEffect(() => {
     const refreshDateKey = () => setDelegationDateKey((previous) => {
@@ -4980,12 +4966,12 @@ export default function App() {
             <span className="text-stone-400 font-bold tracking-widest text-sm">系統模組載入中...</span>
           </div>
         }>
-          {activeView === "dashboard" && <DashboardView />}
-          {activeView === "daily" && <DailyView />}
-          {activeView === "regional" && <RegionalView />}
-          {activeView === "ranking" && <RankingView />}
-          {activeView === "store-analysis" && <StoreAnalysisView />}
-          {activeView === "audit" && <AuditView auditType={auditType} setAuditType={setAuditType} />}
+          {activeView === "dashboard" && canDirectorAccessView("dashboard") && <DashboardView />}
+          {activeView === "daily" && canDirectorAccessView("daily") && <DailyView />}
+          {activeView === "regional" && canDirectorAccessView("regional") && <RegionalView />}
+          {activeView === "ranking" && canDirectorAccessView("ranking") && <RankingView />}
+          {activeView === "store-analysis" && canDirectorAccessView("store-analysis") && <StoreAnalysisView />}
+          {activeView === "audit" && canDirectorAccessView("audit") && <AuditView auditType={auditType} setAuditType={setAuditType} />}
           {activeView === "history" && canDirectorAccessView("history") && <HistoryView />}
           {activeView === "input" && canDirectorAccessView("input") && <InputView />}
           {activeView === "logs" && canDirectorAccessView("logs") && <SystemMonitor />}
@@ -5012,7 +4998,7 @@ export default function App() {
                 </div>
               )
           )}
-          {activeView === "annual" && <AnnualView />}
+          {activeView === "annual" && canDirectorAccessView("annual") && <AnnualView />}
           {activeView === "targets" && canDirectorAccessView("targets") && <TargetView />}
           {activeView === "t-targets" && canDirectorAccessView("t-targets") && <TherapistTargetView />}
           {activeView === "t-schedule" && canDirectorAccessView("t-schedule") && <TherapistScheduleView />}
