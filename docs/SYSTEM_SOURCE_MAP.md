@@ -1986,7 +1986,6 @@ Navigation 會同步移除相關 menu items。
 ```text
 DashboardView.jsx
   ├─ DashboardHeader.jsx
-  ├─ ActionCenter.jsx
   ├─ StorePerformanceView.jsx
   └─ TherapistPerformanceView.jsx
         ↑
@@ -2024,20 +2023,24 @@ DashboardView.jsx
 - 資料來源檢查中
 - warning / fallback 狀態
 
-## `ActionCenter.jsx` / `actionCenter.js`
+## Action Center 狀態
 
-Dashboard 店家模式的「今日行動中心」是 presentation / decision layer，v1 固定：
+`ActionCenter.jsx` / `actionCenter.js` 目前保留為 inactive module，Dashboard 不再掛載，也不由 `useDashboardStats.js` 計算其 state。
 
-- 只在台灣時間目前月份的店家模式顯示。
-- Top 3 是管理事件，不是逐店警示清單。
-- 回報事件沿用 `dailyAuditPolicy.js` 的 18:00 Asia/Taipei cutoff 與 Lifecycle / Reporting Calendar expected-date authority。
-- 績效事件只使用既有 Dashboard scope-level Projection；月初觀察期與回報未完整時不升級成人工待辦。
-- Target / Data readiness 直接使用既有 `currentDetailFormalAuthority.targetAuthority`，不把缺目標誤算成 0。
-- Security 只消費既有 `security_summary/device_approvals` 中最高管理者協助摘要，不讀完整裝置歷史。
-- System Excluded own-store self-view 不套用品牌 Formal Action Center authority。
-- v1 不新增 Firestore listener、query、polling、Backend Action Center Summary 或 Raw collection scan。
+原因：
 
-`dailyAuditPolicy.js` 是 AuditView 與 Action Center 共用的日報 cutoff policy owner，避免兩個頁面各自維護 18:00 規則。
+- 現行 Dashboard Header 已提供本日資料完整度提示。
+- 月底推估與本月目標屬既有 Dashboard 資訊，重複顯示不形成額外決策價值。
+- Security pending 屬低頻 exception，不應以固定正常卡片長期佔據首頁。
+- 在尚未形成足夠獨立、可行動的 exception set 前，不以固定 Action Center 佔用 Dashboard 首屏。
+
+停用後：
+
+- 不新增 Firestore listener / query / polling。
+- `useDashboardStats.js` 不再排 Action Center 專用 18:00 / 跨日 timer。
+- AuditView 仍獨立使用 `dailyAuditPolicy.js`，其既有回報檢核行為不受影響。
+- Action Center 模組暫不刪除，若未來建立具獨立管理價值的 exception authority，可另案評估重新啟用。
+
 
 ## `StorePerformanceView.jsx`
 

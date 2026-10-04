@@ -37,8 +37,6 @@ import {
 } from '../utils/annualKpiBenchmark.js';
 import { useAnnualKpiBenchmark } from './useAnnualKpiBenchmark.js';
 import { useDashboardProjectionModel } from './useDashboardProjectionModel.js';
-import { buildActionCenterState } from '../utils/actionCenter.js';
-import { getMillisecondsUntilNextTaipeiActionBoundary } from '../utils/dailyAuditPolicy.js';
 
 const isFiniteKpiNumber = (value) => typeof value === "number" && Number.isFinite(value);
 const getFormalNetCashValue = (row = {}) => {
@@ -73,7 +71,7 @@ export function useDashboardStats() {
     therapistAnnualAggregatedData, therapistSummaryState, getCollectionPath, historicalDetailRefreshState,
     currentDashboardSummary, currentRankingsSummary, currentReportSummaryReady,
     currentReportSummaryReadyYearMonth, currentReportSummaryReadyBrandId, currentSummaryRecalcFlagState,
-    systemExclusionState, therapistModuleEnabled, deviceApprovalActionSummary,
+    systemExclusionState, therapistModuleEnabled,
     accessibleStores = [], officialStores = [], delegatedStores = [], delegationAccess = {},
     getActiveDelegationForStore
   } = useContext(AppContext);
@@ -82,26 +80,6 @@ export function useDashboardStats() {
   const [viewMode, setViewMode] = useState((isTherapistModuleEnabled && (userRole === 'therapist' || userRole === 'trainer')) ? 'therapist' : 'store');
   const [selectedDashboardManager, setSelectedDashboardManager] = useState("");
   const [selectedDashboardStore, setSelectedDashboardStore] = useState("");
-  const [actionCenterClockRevision, setActionCenterClockRevision] = useState(0);
-
-  // Action Center 只需要在台灣時間 18:00 與跨日邊界重新判斷。
-  // 使用單次 setTimeout 排下一個邊界，不新增 polling，也不觸發 Firestore read。
-  useEffect(() => {
-    let timerId = null;
-    const scheduleNextBoundary = () => {
-      const delay = getMillisecondsUntilNextTaipeiActionBoundary();
-      timerId = window.setTimeout(() => {
-        setActionCenterClockRevision((value) => value + 1);
-        scheduleNextBoundary();
-      }, delay + 250);
-    };
-
-    scheduleNextBoundary();
-    return () => {
-      if (timerId) window.clearTimeout(timerId);
-    };
-  }, []);
-
   useEffect(() => {
     if (!isTherapistModuleEnabled && viewMode === 'therapist') {
       setViewMode('store');
@@ -1954,30 +1932,6 @@ export function useDashboardStats() {
   }, [baseDashboardStats, effectiveAnnualKpiBenchmark]);
   const myStoreRankings = summaryMyStoreRankings || detailMyStoreRankings;
 
-  const actionCenterState = useMemo(() => buildActionCenterState({
-    selectedYearMonth,
-    brandName: brandInfo?.name || brandPrefix,
-    reports: allReports || [],
-    formalAuthority: currentDetailFormalAuthority,
-    visibleStoreKeys: effectiveStores,
-    storeRankings: myStoreRankings,
-    dashboardStats,
-    securityActionSummary: deviceApprovalActionSummary,
-    storeSelfViewActive,
-    now: new Date(),
-  }), [
-    selectedYearMonth,
-    brandInfo?.name,
-    brandPrefix,
-    allReports,
-    currentDetailFormalAuthority,
-    effectiveStores,
-    myStoreRankings,
-    dashboardStats,
-    deviceApprovalActionSummary,
-    storeSelfViewActive,
-    actionCenterClockRevision,
-  ]);
 
   const therapistStats = isTherapistModuleEnabled ? (summaryTherapistStats || detailTherapistStats) : { rankings: [], myStats: null, grandTotal: {}, yesterdayTop3: [], todayTop3: [], myYearlyTotal: 0, source: "module_disabled" };
 
@@ -1986,7 +1940,7 @@ export function useDashboardStats() {
     selectedDashboardManager, setSelectedDashboardManager,
     selectedDashboardStore, setSelectedDashboardStore,
     brandInfo, brandPrefix,
-    dashboardStats, myStoreRankings, therapistStats, actionCenterState,
+    dashboardStats, myStoreRankings, therapistStats,
     dashboardSummaryStatus: {
       ready: dashboardSummaryBundle.ready,
       usingDashboardSummary: Boolean(summaryDashboardStats),

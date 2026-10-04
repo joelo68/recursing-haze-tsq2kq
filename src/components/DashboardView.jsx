@@ -7,7 +7,6 @@ import { AppContext } from "../AppContext";
 
 import { useDashboardStats } from "../hooks/useDashboardStats";
 import DashboardHeader from "./DashboardHeader";
-import ActionCenter from "./ActionCenter";
 import StorePerformanceView from "./StorePerformanceView";
 import TherapistPerformanceView from "./TherapistPerformanceView";
 
@@ -24,7 +23,6 @@ const DashboardSectionLoading = ({ label }) => (
 const DashboardView = () => {
   const {
     userRole, therapistModuleEnabled, systemExclusionState,
-    openDailyAudit, openDeviceApprovalPanel, navigateToStore,
   } = useContext(AppContext);
   const isTherapistModuleEnabled = therapistModuleEnabled !== false;
 
@@ -34,7 +32,7 @@ const DashboardView = () => {
     selectedDashboardManager, setSelectedDashboardManager,
     selectedDashboardStore, setSelectedDashboardStore,
     brandInfo, brandPrefix,
-    dashboardStats, myStoreRankings, therapistStats, actionCenterState,
+    dashboardStats, myStoreRankings, therapistStats,
     dashboardSummaryStatus,
     dailyLoginCount, yesterdayLoginCount,
     groupedStoresForFilter, availableStoresForDropdown,
@@ -81,16 +79,6 @@ const DashboardView = () => {
            delegatedStoresForDropdown={delegatedStoresForDropdown}
            delegatedStoreDetails={delegatedStoreDetails}
         />
-
-        {/* Action Center v1：只重用 Dashboard 已載入 authority，不新增 Firestore read。 */}
-        {isStoreViewActive && actionCenterState?.visible && (
-          <ActionCenter
-            state={actionCenterState}
-            onOpenAudit={openDailyAudit}
-            onOpenSecurity={openDeviceApprovalPanel}
-            onOpenStore={navigateToStore}
-          />
-        )}
 
         {/* 2. 零件二：門市營運視圖 */}
         {isStoreViewActive && (

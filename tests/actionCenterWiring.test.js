@@ -17,33 +17,32 @@ const dailyAuditPolicy = read('src/utils/dailyAuditPolicy.js');
 const auditView = read('src/components/AuditView.jsx');
 const dashboardHook = read('src/hooks/useDashboardStats.js');
 
-test('Action Center sits between DashboardHeader and store performance without touching therapist mode', () => {
+test('Dashboard no longer mounts Action Center or consumes Action Center navigation seams', () => {
+  assert.doesNotMatch(dashboard, /import ActionCenter from/);
+  assert.doesNotMatch(dashboard, /<ActionCenter/);
+  assert.doesNotMatch(dashboard, /actionCenterState/);
+  assert.doesNotMatch(dashboard, /onOpenAudit=\{openDailyAudit\}/);
+  assert.doesNotMatch(dashboard, /onOpenSecurity=\{openDeviceApprovalPanel\}/);
+  assert.doesNotMatch(dashboard, /onOpenStore=\{navigateToStore\}/);
+
   const headerIndex = dashboard.indexOf('<DashboardHeader');
-  const actionIndex = dashboard.indexOf('<ActionCenter');
-  const storeIndex = dashboard.indexOf('{isStoreViewActive && (');
   const storePerformanceIndex = dashboard.indexOf('<StorePerformanceView');
   const therapistIndex = dashboard.indexOf('{isTherapistViewActive && (');
 
   assert.ok(headerIndex >= 0);
-  assert.ok(actionIndex > headerIndex);
-  assert.ok(storePerformanceIndex > actionIndex);
+  assert.ok(storePerformanceIndex > headerIndex);
   assert.ok(therapistIndex > storePerformanceIndex);
-  assert.match(dashboard, /isStoreViewActive && actionCenterState\?\.visible/);
-  assert.doesNotMatch(dashboard, /isTherapistViewActive[\s\S]{0,200}<ActionCenter/);
 });
 
-test('Action Center reuses existing App security summary and navigation seams', () => {
-  assert.match(app, /deviceApprovalActionSummary/);
-  assert.match(app, /adminAssistancePendingCount/);
-  assert.match(app, /const openDailyAudit = useCallback/);
-  assert.match(app, /setAuditType\("daily"\)/);
-  assert.match(app, /handleProtectedSetActiveView\("audit"\)/);
-  assert.match(dashboard, /onOpenAudit=\{openDailyAudit\}/);
-  assert.match(dashboard, /onOpenSecurity=\{openDeviceApprovalPanel\}/);
-  assert.match(dashboard, /onOpenStore=\{navigateToStore\}/);
+test('Dashboard hook no longer computes Action Center state or schedules Action Center clock work', () => {
+  assert.doesNotMatch(dashboardHook, /buildActionCenterState/);
+  assert.doesNotMatch(dashboardHook, /getMillisecondsUntilNextTaipeiActionBoundary/);
+  assert.doesNotMatch(dashboardHook, /actionCenterClockRevision/);
+  assert.doesNotMatch(dashboardHook, /actionCenterState/);
+  assert.doesNotMatch(dashboardHook, /deviceApprovalActionSummary/);
 });
 
-test('Action Center logic is pure and adds no Firestore read/listener/query primitive', () => {
+test('Retired Action Center modules remain isolated and add no Firestore I/O if revisited later', () => {
   for (const [name, source] of [
     ['ActionCenter.jsx', actionCenter],
     ['actionCenter.js', actionCenterLogic],
@@ -55,16 +54,15 @@ test('Action Center logic is pure and adds no Firestore read/listener/query prim
   }
 });
 
-test('Dashboard hook adds only a Taipei boundary timeout, not polling or a new Firestore primitive', () => {
-  assert.match(dashboardHook, /getMillisecondsUntilNextTaipeiActionBoundary/);
-  assert.match(dashboardHook, /window\.setTimeout/);
-  assert.match(dashboardHook, /不新增 polling，也不觸發 Firestore read/);
-
-  const actionImports = dashboardHook.match(/import \{ buildActionCenterState \} from '\.\.\/utils\/actionCenter\.js';/g) || [];
-  assert.equal(actionImports.length, 1);
+test('Existing App security and audit capabilities remain available outside Dashboard Action Center', () => {
+  assert.match(app, /deviceApprovalActionSummary/);
+  assert.match(app, /adminAssistancePendingCount/);
+  assert.match(app, /const openDailyAudit = useCallback/);
+  assert.match(app, /setAuditType\("daily"\)/);
+  assert.match(app, /handleProtectedSetActiveView\("audit"\)/);
 });
 
-test('AuditView consumes the shared cutoff policy and no longer owns or references duplicate cutoff primitives', () => {
+test('AuditView continues consuming the shared cutoff policy after Action Center retirement', () => {
   assert.match(auditView, /from "\.\.\/utils\/dailyAuditPolicy\.js"/);
   assert.match(auditView, /getDailyAuditPolicy/);
   assert.match(auditView, /const policy = getDailyAuditPolicy\(\);/);
@@ -74,13 +72,10 @@ test('AuditView consumes the shared cutoff policy and no longer owns or referenc
   assert.doesNotMatch(auditView, /\bDAILY_AUDIT_CUTOFF_HOUR\b/);
   assert.doesNotMatch(auditView, /\bgetTaipeiDateTimeParts\s*\(/);
   assert.doesNotMatch(auditView, /\bformatCalendarDate\s*\(/);
-  assert.doesNotMatch(auditView, /const getMillisecondsUntilNextTaipeiCutoff =/);
 });
 
-test('Action Center v1 keeps technical authority language out of its user-facing component', () => {
+test('Inactive Action Center UI keeps technical authority language out of presentation code', () => {
   for (const stale of ['Summary', 'Lifecycle', 'Firestore', 'revision', 'raw collection']) {
     assert.equal(actionCenter.includes(stale), false, `ActionCenter UI still exposes technical term: ${stale}`);
   }
-  assert.match(actionCenter, /今日行動中心/);
-  assert.match(actionCenter, /今天沒有需要立即處理的事項/);
 });
