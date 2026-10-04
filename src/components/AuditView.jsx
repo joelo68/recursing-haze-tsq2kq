@@ -16,6 +16,11 @@ import {
   buildAuditTargetSummaryAuthority,
   resolveAuditStoreTargetPresence,
 } from "../utils/auditTargetAuthority.js";
+import {
+  getDailyAuditPolicy,
+  getDefaultDailyAuditDate,
+  getMillisecondsUntilNextTaipeiCutoff,
+} from "../utils/dailyAuditPolicy.js";
 
 // ★ 終極翻譯蒟蒻：日期標準化
 const safeGetDateStr = (val) => {
@@ -30,73 +35,6 @@ const safeGetDateStr = (val) => {
         if (m) return `${m[1]}-${m[2].padStart(2,'0')}-${m[3].padStart(2,'0')}`;
     }
     return String(val);
-};
-
-const TAIPEI_TIME_ZONE = "Asia/Taipei";
-const DAILY_AUDIT_CUTOFF_HOUR = 18;
-
-const getTaipeiDateTimeParts = (value = new Date()) => {
-  const parts = new Intl.DateTimeFormat("en-CA", {
-    timeZone: TAIPEI_TIME_ZONE,
-    year: "numeric",
-    month: "2-digit",
-    day: "2-digit",
-    hour: "2-digit",
-    hourCycle: "h23",
-  }).formatToParts(value);
-
-  const map = {};
-  parts.forEach((part) => {
-    if (part.type !== "literal") map[part.type] = part.value;
-  });
-
-  return {
-    year: Number(map.year),
-    month: Number(map.month),
-    day: Number(map.day),
-    hour: Number(map.hour),
-  };
-};
-
-const formatCalendarDate = (year, month, day) => (
-  `${String(year).padStart(4, "0")}-${String(month).padStart(2, "0")}-${String(day).padStart(2, "0")}`
-);
-
-const shiftCalendarDate = (year, month, day, deltaDays = 0) => {
-  const utcDate = new Date(Date.UTC(year, month - 1, day));
-  utcDate.setUTCDate(utcDate.getUTCDate() + deltaDays);
-  return formatCalendarDate(
-    utcDate.getUTCFullYear(),
-    utcDate.getUTCMonth() + 1,
-    utcDate.getUTCDate()
-  );
-};
-
-const getDefaultDailyAuditDate = (value = new Date()) => {
-  const taipei = getTaipeiDateTimeParts(value);
-  if (taipei.hour < DAILY_AUDIT_CUTOFF_HOUR) {
-    return shiftCalendarDate(taipei.year, taipei.month, taipei.day, -1);
-  }
-  return formatCalendarDate(taipei.year, taipei.month, taipei.day);
-};
-
-const getMillisecondsUntilNextTaipeiCutoff = (value = new Date()) => {
-  const nowMs = value.getTime();
-  const taipei = getTaipeiDateTimeParts(value);
-
-  // 台灣固定為 UTC+8，18:00 等於 UTC 10:00。
-  let cutoffMs = Date.UTC(
-    taipei.year,
-    taipei.month - 1,
-    taipei.day,
-    DAILY_AUDIT_CUTOFF_HOUR - 8,
-    0,
-    0,
-    0
-  );
-
-  if (nowMs >= cutoffMs) cutoffMs += 24 * 60 * 60 * 1000;
-  return Math.max(1000, cutoffMs - nowMs);
 };
 
 const getDateYearMonth = (dateStr = "") => {
@@ -236,14 +174,14 @@ const AuditView = ({ auditType: controlledAuditType, setAuditType: setControlled
   }, [selectedYear, selectedMonth]);
 
   // 回報檢核的畫面語意必須區分「尚在回報中」與「真的已全數回報」。
-  // 18:00 規則仍由 AuditView 擁有；SmartCalendar 只接收要隱藏狀態點的日期，
-  // 避免把回報檢核的業務規則污染到店家排休等其他 SmartCalendar consumer。
+  // 18:00 / Asia/Taipei 規則統一由 dailyAuditPolicy.js 負責；
+  // SmartCalendar 只接收要隱藏狀態點的日期，避免其他 consumer 複製日報業務規則。
   const dailyAuditVisualState = useMemo(() => {
     if (!isDailyAuditType) return { phase: "ready", statusHiddenDates: [] };
 
-    const taipei = getTaipeiDateTimeParts();
-    const todayDate = formatCalendarDate(taipei.year, taipei.month, taipei.day);
-    const isBeforeCutoff = taipei.hour < DAILY_AUDIT_CUTOFF_HOUR;
+    const policy = getDailyAuditPolicy();
+    const todayDate = policy.todayDate;
+    const isBeforeCutoff = policy.cutoffReached !== true;
 
     if (checkDate > todayDate) {
       return {

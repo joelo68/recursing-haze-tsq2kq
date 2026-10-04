@@ -17,10 +17,15 @@ const projectionLoaderSource = read("src/hooks/useDashboardProjectionModel.js");
 const appSource = read("src/App.jsx");
 
 test("B1C2E-UX2B anchors Dashboard filter readiness to current-brand System Exclusion authority", () => {
-  assert.match(
-    viewSource,
-    /const \{ userRole, therapistModuleEnabled, systemExclusionState \} = useContext\(AppContext\);/
+  // Keep this as a semantic source contract: Action Center may add other
+  // AppContext bindings without weakening the System Exclusion readiness guard.
+  const appContextBinding = viewSource.match(
+    /const\s*\{([\s\S]*?)\}\s*=\s*useContext\(AppContext\);/
   );
+  assert.ok(appContextBinding, "DashboardView must destructure AppContext");
+  assert.match(appContextBinding[1], /\buserRole\b/);
+  assert.match(appContextBinding[1], /\btherapistModuleEnabled\b/);
+  assert.match(appContextBinding[1], /\bsystemExclusionState\b/);
   assert.match(viewSource, /const dashboardStoreScopeReady = Boolean\(/);
   assert.match(viewSource, /systemExclusionState\?\.ready === true/);
   assert.match(

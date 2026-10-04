@@ -1986,6 +1986,7 @@ Navigation 會同步移除相關 menu items。
 ```text
 DashboardView.jsx
   ├─ DashboardHeader.jsx
+  ├─ ActionCenter.jsx
   ├─ StorePerformanceView.jsx
   └─ TherapistPerformanceView.jsx
         ↑
@@ -2022,6 +2023,21 @@ DashboardView.jsx
 - 已整理 Summary
 - 資料來源檢查中
 - warning / fallback 狀態
+
+## `ActionCenter.jsx` / `actionCenter.js`
+
+Dashboard 店家模式的「今日行動中心」是 presentation / decision layer，v1 固定：
+
+- 只在台灣時間目前月份的店家模式顯示。
+- Top 3 是管理事件，不是逐店警示清單。
+- 回報事件沿用 `dailyAuditPolicy.js` 的 18:00 Asia/Taipei cutoff 與 Lifecycle / Reporting Calendar expected-date authority。
+- 績效事件只使用既有 Dashboard scope-level Projection；月初觀察期與回報未完整時不升級成人工待辦。
+- Target / Data readiness 直接使用既有 `currentDetailFormalAuthority.targetAuthority`，不把缺目標誤算成 0。
+- Security 只消費既有 `security_summary/device_approvals` 中最高管理者協助摘要，不讀完整裝置歷史。
+- System Excluded own-store self-view 不套用品牌 Formal Action Center authority。
+- v1 不新增 Firestore listener、query、polling、Backend Action Center Summary 或 Raw collection scan。
+
+`dailyAuditPolicy.js` 是 AuditView 與 Action Center 共用的日報 cutoff policy owner，避免兩個頁面各自維護 18:00 規則。
 
 ## `StorePerformanceView.jsx`
 
