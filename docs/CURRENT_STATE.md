@@ -1,3 +1,316 @@
+# Latest Production Runtime Override — 2026-10-04（High-Level Director Role Permission Matrix）
+
+> 本節是目前最高優先的高階主管頁面權限 / Production runtime 狀態。下方 Release Control、Dashboard Action Center Retirement 與更早章節保留各自當時 evidence；若 runtime lineage、`permissions` schema、directorLevel 頁面權限、brand scope、release identity 或 system_version 發布狀態衝突，以目前正式 source、public release identity、Production smoke 與本節為準。
+
+## Current Production Runtime
+
+```text
+Repository main                    = MAY_ADVANCE_WITH_DOCS_ONLY_COMMITS / NOT_RUNTIME_IDENTITY_AUTHORITY
+Production runtime source commit   = 68bbea96b598ab5e620edb209e7b6a269b9da6dc
+Frontend Production gh-pages       = 904b1887479caec7e09070789cb62b4c1fc7f233
+CURRENT_APP_VERSION                = 3.6.2
+Production entry asset             = assets/index-Cjq856ZB.js
+Release identity schema            = release-identity-v1
+system_version republished         = YES
+Production confirmed               = YES
+```
+
+本批沒有提高 `CURRENT_APP_VERSION`；正式 runtime 仍為 `3.6.2`，但 frontend entry asset 已更新，並由 Release Control 重新發布目前的 `v3.6.2` release，使仍停留在舊同版本 asset 的 client 可收斂到目前正式 bundle。
+
+## High-Level Director Role Permission Matrix — PRODUCTION CONFIRMED / CLOSED
+
+正式目標是把原本寫死在 frontend 的高階主管頁面清單改為可由最高管理者自行調整：
+
+```text
+directorLevel
+├─ super_admin      最高管理者
+├─ operation_admin  營運管理
+├─ finance_admin    財務管理
+└─ viewer           僅查看
+```
+
+原本 `operation_admin / finance_admin / viewer` 的 `allowedViews` 寫死在 `src/App.jsx`；本批改為沿用既有 brand-scoped `permissions` authority，由最高管理者在「系統設定 → 高階主管帳號」內調整頁面可進入權限。
+
+## Permission Authority / Schema
+
+既有 `permissions` 文件升級為：
+
+```text
+schemaVersion = module-permissions-v2
+```
+
+新增高階主管角色頁面權限：
+
+```text
+directorLevels:
+  operation_admin: [...]
+  finance_admin: [...]
+  viewer: [...]
+```
+
+安全固定規則：
+
+```text
+super_admin
+→ 固定完整頁面權限
+→ 不提供自我降權設定
+
+dashboard / 營運總覽
+→ 所有高階主管固定保留
+→ 不可取消
+
+settings / 系統設定
+→ 固定 super_admin-only
+→ 不可授予 operation_admin / finance_admin / viewer
+```
+
+正式 UI：
+
+```text
+系統設定
+→ 高階主管帳號
+→ 最高管理金鑰解鎖
+→ 高階主管頁面權限矩陣
+```
+
+最高管理者可依品牌、依高階主管角色設定可進入的頁面，不再需要為角色頁面調整修改 source / rebuild。
+
+## Scope Boundary — Page Access, Not Generic Action ACL
+
+本批正式 scope 是：
+
+```text
+頁面是否顯示
++
+頁面是否可進入
+```
+
+本批**沒有**宣稱建立全系統通用的：
+
+```text
+不可使用 / 僅查看 / 可操作
+```
+
+action-level ACL。
+
+原因是各頁面的寫入能力分散於 frontend writer、Backend function 與 Firestore Rules；若未逐一建立 action authority，不能只靠「僅查看」名稱假設使用者進頁後所有操作都會自動變成唯讀。
+
+因此目前 `viewer / 僅查看` 是既有 directorLevel 名稱；其真正安全能力仍取決於該頁既有 writer / Backend / Rules。若未來要做真正 action-level readonly / write ACL，必須另開 Security batch 逐頁審核。
+
+## Brand Isolation / Firestore Paths
+
+權限設定維持品牌獨立，不建立跨品牌共用 permission document：
+
+```text
+CYJ
+→ legacy global settings permissions document
+
+安妞 / 伊啵
+→ brands/{brandId}/settings/permissions
+```
+
+正式語意：
+
+```text
+CYJ 權限調整
+≠ 安妞權限調整
+≠ 伊啵權限調整
+```
+
+切換品牌時讀取／顯示該品牌自己的 `permissions` state；不得因 UI 共用而把三品牌角色權限視為同一份資料。
+
+## Frontend / Backend / Rules Ownership
+
+```text
+src/App.jsx
+→ 不再以硬編碼 director allowedViews 作為正式 authority
+→ 使用既有 permissions state 解析 operation_admin / finance_admin / viewer 可進入頁面
+
+src/components/SettingsView.jsx
+→ 高階主管帳號頁新增角色頁面權限矩陣
+→ 顯示目前品牌
+→ 最高管理者 / dashboard / settings 套用固定安全鎖
+→ localhost / 127.0.0.1 僅模擬儲存，不寫 Production
+
+src/utils/directorPermissions.js
+→ director role page-permission normalization / defaults / safety invariants
+
+functions/modulePermissions.js
+→ 既有 manageModulePermissions authority 擴充 module-permissions-v2
+→ Backend 重新驗證 super-admin / Trusted Device
+→ revision OCC 防多管理者 race
+→ 舊 client 未送 directorLevels 時保留現有 directorLevels，不因舊 payload 清空新設定
+
+firestore.rules
+→ 本批未修改
+→ Browser 直接寫 permissions 的既有 DENY 邊界維持不變
+```
+
+## Security / Multi-Admin / Backward Compatibility
+
+正式安全邊界：
+
+```text
+Browser direct permission write    = DENIED
+Backend writer                     = manageModulePermissions
+highest-admin revalidation         = YES
+Trusted Device                     = YES
+revision OCC                       = YES
+multi-admin last-write-wins        = NO
+maintenance audit                  = YES
+```
+
+舊 client 相容：
+
+```text
+舊 frontend 未送 directorLevels
+→ Backend preserve current directorLevels
+→ 不允許舊版 module-permissions-v1 payload 把新版高階主管角色權限清空
+```
+
+因此 rollout 不需要要求所有 client 同時升級後才能安全保存既有 module permissions。
+
+## Firestore Read Topology
+
+本批沒有新增常駐讀取：
+
+```text
+new Firestore listener             = 0
+new Firestore query                = 0
+new polling                        = 0
+steady-state Firestore read delta  = 0
+```
+
+Frontend 沿用既有登入後：
+
+```text
+getDoc(getDocPath("permissions"))
+```
+
+取得該品牌的 permissions document；只有最高管理者實際儲存時才走既有 `manageModulePermissions` Backend transaction / OCC / audit。
+
+## Validation Evidence
+
+正式部署前完成：
+
+```text
+LOCAL_DIRECTOR_PERMISSION_MATRIX_SMOKE = PASS
+targeted permission/security regression = 119 / 119 PASS
+full ci:validate                         = PASS
+frontend build                           = PASS
+functions/modulePermissions.js syntax    = PASS
+git diff --check                         = PASS
+exact candidate scope                    = PASS
+
+CURRENT_APP_VERSION                      = 3.6.2
+VERSION_BUMP                             = NO
+Firestore Rules change                   = NO
+new listener/query/polling               = 0 / 0 / 0
+```
+
+正式候選包含 runtime / test / canonical docs：
+
+```text
+functions/modulePermissions.js
+src/App.jsx
+src/components/SettingsView.jsx
+src/utils/directorPermissions.js
+tests/directorRolePermissionMatrix.test.js
+docs/AUTH_AND_SECURITY.md
+docs/FIREBASE_DATA_MODEL.md
+docs/SYSTEM_SOURCE_MAP.md
+```
+
+## Deployment Evidence
+
+正式 runtime：
+
+```text
+runtime commit                     = 68bbea96b598ab5e620edb209e7b6a269b9da6dc
+Frontend gh-pages                  = 904b1887479caec7e09070789cb62b4c1fc7f233
+CURRENT_APP_VERSION                = 3.6.2
+Production entry asset             = assets/index-Cjq856ZB.js
+
+Function                           = manageModulePermissions
+Function deploy                    = YES
+Frontend deploy                    = YES
+Rules deploy                       = NO_NOT_CHANGED
+```
+
+Public release identity：
+
+```text
+schemaVersion                      = release-identity-v1
+appVersion                         = 3.6.2
+sourceCommit                       = 68bbea96b598ab5e620edb209e7b6a269b9da6dc
+entryAsset                         = assets/index-Cjq856ZB.js
+```
+
+部署後正式 repository worktree clean，且 public `release.json` 已驗證與本次 runtime identity 一致。
+
+## Production Human Smoke / Same-Version Cutover
+
+正式環境 Human Smoke：
+
+```text
+高階主管頁面權限矩陣               = PASS
+最高管理者固定完整權限             = PASS
+dashboard 固定保留                 = PASS
+settings 固定 super-admin-only     = PASS
+角色頁面調整 / 儲存                = PASS
+brand isolation                    = PASS
+既有高階主管帳號管理               = PASS
+new runtime error                  = NONE_REPORTED
+PRODUCTION_HUMAN_SMOKE             = PASS
+```
+
+本批維持 `CURRENT_APP_VERSION=3.6.2`，因此正式 smoke 後使用 Release Control 重新發布目前的同版本 release：
+
+```text
+SYSTEM_VERSION_REPUBLISHED         = YES
+semantic version                   = 3.6.2 → 3.6.2
+new formal entry asset             = assets/index-Cjq856ZB.js
+```
+
+目的不是升版，而是讓仍在舊 `3.6.2` frontend asset 的 client 依 asset-aware updater 收斂到目前正式 bundle。
+
+## Formal Batch Status
+
+```text
+DIRECTOR_ROLE_PERMISSION_MATRIX    = PRODUCTION_CONFIRMED / CLOSED
+
+IMPLEMENTED                        = YES
+VALIDATED                          = YES
+LOCAL_DIRECTOR_PERMISSION_MATRIX_SMOKE = PASS
+COMMITTED                          = YES
+PUSHED                             = YES
+DEPLOYED                           = YES
+PUBLIC_RELEASE_VERIFIED            = YES
+SYSTEM_VERSION_REPUBLISHED         = YES
+PRODUCTION_HUMAN_SMOKE             = PASS
+PRODUCTION_CONFIRMED               = YES
+
+CURRENT_APP_VERSION                = 3.6.2
+VERSION_BUMP                       = NO
+
+RUNTIME_COMMIT                     = 68bbea96b598ab5e620edb209e7b6a269b9da6dc
+GH_PAGES_COMMIT                    = 904b1887479caec7e09070789cb62b4c1fc7f233
+PRODUCTION_ENTRY_ASSET             = assets/index-Cjq856ZB.js
+
+BACKEND_CHANGE                     = YES
+FUNCTION_DEPLOYED                  = manageModulePermissions
+RULES_CHANGE                       = NO
+NEW_LISTENER                       = 0
+NEW_QUERY                          = 0
+NEW_POLLING                        = 0
+```
+
+Production runtime identity 以實際部署的 runtime source commit 為準；repository `main` 可因 docs-only closeout 繼續前進，不把後續 docs commit 誤當新的 runtime identity。
+
+Documentation Impact：本次 closeout 只更新 `docs/CURRENT_STATE.md`；runtime source / Function / Rules / frontend deploy = None。
+
+---
+
 # Latest Production Runtime Override — 2026-10-04（Release Control v3.6.2）
 
 > 本節是目前最高優先的 Production runtime / App Version / Release Control 狀態。下方 Dashboard Action Center Retirement、TherapistManagerView Lazy Load 與更早章節保留各自當時 evidence；若 runtime lineage、CURRENT_APP_VERSION、release identity、system_version 發布狀態或版本更新流程衝突，以目前正式 source、release identity、Production smoke 與本節為準。
