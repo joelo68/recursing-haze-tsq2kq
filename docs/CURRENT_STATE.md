@@ -5,7 +5,8 @@
 ## Current Production Runtime
 
 ```text
-main / origin-main                 = 2225a652a5210620338b0c6d919cd8bd8defd2d9
+Repository main / origin-main      = dd180dd15f627aa927105ee57b83aee5ecf7db64
+Production runtime source commit   = 2225a652a5210620338b0c6d919cd8bd8defd2d9
 runtime parent                     = ffaaccfe80f018d654a455caf30b27fa534c1ec2
 Frontend Production gh-pages      = 26bb2e06ec8e360888f6e4005fce66cd41cae6f2
 CURRENT_APP_VERSION                = 3.6.1
