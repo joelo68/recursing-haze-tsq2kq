@@ -1,3 +1,257 @@
+# Latest Production Runtime Override — 2026-10-04（Release Control v3.6.2）
+
+> 本節是目前最高優先的 Production runtime / App Version / Release Control 狀態。下方 Dashboard Action Center Retirement、TherapistManagerView Lazy Load 與更早章節保留各自當時 evidence；若 runtime lineage、CURRENT_APP_VERSION、release identity、system_version 發布狀態或版本更新流程衝突，以目前正式 source、release identity、Production smoke 與本節為準。
+
+## Current Production Runtime
+
+```text
+Repository main                    = MAY_ADVANCE_WITH_DOCS_ONLY_COMMITS / NOT_RUNTIME_IDENTITY_AUTHORITY
+Production runtime source commit   = 8251ab38a1542752d600d4b1dca4d230bea55d22
+Frontend Production gh-pages       = 73a1282174a1133b9bc55325737b55ec6a53d395
+CURRENT_APP_VERSION                = 3.6.2
+Production asset                   = assets/index-Cv-sUtg7.js
+Release identity schema            = release-identity-v1
+Release identity authority         = dist/release.json / public release.json
+system_version published           = YES
+Production confirmed               = YES
+```
+
+本批為第一次 Release Control 正式 rollout；`CURRENT_APP_VERSION` 由 `3.6.1` 提升為 `3.6.2`，版本提升已由使用者明確核准。
+
+## Release Control — PRODUCTION CONFIRMED / CLOSED
+
+正式目標是把兩件事拆開：
+
+```text
+部署正式程式
+≠
+立即強制所有線上使用者更新
+
+Frontend / Function deploy
+→ 先讓正式 release identity 就緒
+→ 最高管理者確認正式版本 / source commit / entry asset
+→ 再由 System Monitor 手動按「發布更新」
+→ system_version 才更新
+→ 舊版 client 進入既有強制更新流程
+```
+
+因此往後可先部署並驗證正式 release，再由最高管理者決定何時發布更新，不再由最高管理者登入流程自動 publish `CURRENT_APP_VERSION`。
+
+## Current Ownership
+
+```text
+src/App.jsx
+→ CURRENT_APP_VERSION = 3.6.2
+→ 保留既有 system_version listener / foreground recheck / 強制更新 UI
+→ 移除最高管理者登入後自動 publish CURRENT_APP_VERSION
+→ asset-aware updater 只在 system_version marker 指向目前正式 release 時判斷舊 entry asset
+→ 避免「新版已 deploy、marker 尚未發布」空窗造成新版 client 反覆 reload
+
+src/components/SystemMonitor.jsx
+→ 系統狀態 / 正式版本卡新增「發布更新」
+→ 顯示目前 browser version、正式 source、entry asset、PWA、system_version marker
+→ 發布前要求輸入正式版本號再次確認
+→ 只有 CYJ 最高管理者控制全 App global release marker
+→ localhost / 127.0.0.1 僅模擬發布，不呼叫 Production backend
+
+functions/administrativeSettingsAuthority.js
+→ 沿用 manageAdministrativeSetting Backend authority
+→ publish_system_version 由 Backend 驗證 canonical public release.json
+→ Browser 不可自報任意 version / source commit / entry asset
+→ 禁止 downgrade
+→ revision OCC 防多管理者 race
+→ 維持 Application Identity / super-admin / Trusted Device / fresh credential revalidation
+
+firestore.rules
+→ 本批未修改
+→ Browser 直接寫 system_version 的既有阻擋維持不變
+```
+
+## Release Semantics
+
+正式發布目標必須是真正已存在於 public `release.json` 的 release identity：
+
+```text
+appVersion
+sourceCommit
+entryAsset
+```
+
+使用者輸入的版本號是人工確認，不是任意版本建立入口。
+
+本批亦建立同版本 hotfix 的 asset-aware 能力：
+
+```text
+semantic version 可維持不變
+但正式 entryAsset 已更新
+→ 最高管理者仍可發布目前正式 release
+→ 停留在舊 asset 的 client 可重新載入正式 bundle
+```
+
+這不代表每次 frontend deploy 都要發布更新；是否發布仍由實際相容性／營運需求決定。
+
+## Brand / Security / Read Boundary
+
+```text
+system_version scope               = App-global
+control surface                    = CYJ highest administrator only
+affected runtime brands            = CYJ / 安妞 / 伊啵
+
+Backend change                     = YES
+deployed Function                  = manageAdministrativeSetting
+Firestore Rules change             = NO
+Rules deploy                       = NO
+
+new Firestore listener             = 0
+new Firestore query                = 0
+new polling                        = 0
+steady-state Firestore read delta  = 0
+```
+
+日常沒有新增 listener / query / polling。發布動作為 on-demand，沿用既有 `system_version` authority；Backend 另外驗證 public `release.json`，並執行 system_version transaction / revision OCC 與 maintenance audit。
+
+## Validation Evidence
+
+本批在正式部署前完成：
+
+```text
+Release Control local targeted     = PASS
+LOCAL_RELEASE_CONTROL_SMOKE        = PASS
+
+formal candidate targeted          = PASS after app-version test contract promotion
+full ci:validate                   = PASS
+frontend build                     = PASS
+backend node --check               = PASS
+git diff --check                   = PASS
+exact changed-file scope           = PASS
+
+CURRENT_APP_VERSION contract       = 3.6.2
+canonical docs version contract    = 3.6.2
+release identity build contract    = PASS
+```
+
+升版過程曾先後攔截兩個非 runtime regression：
+
+```text
+tests/helpers/appVersionContract.js
+→ 舊測試契約仍固定 3.6.1
+→ 正確提升為 3.6.2
+
+docs/README.md
+→ canonical docs 仍記錄 3.6.1
+→ 正確提升為 3.6.2
+```
+
+兩者修正後重新執行完整 validation PASS，沒有以跳過測試方式通過。
+
+## Deployment Evidence
+
+正式 runtime：
+
+```text
+runtime commit                     = 8251ab38a1542752d600d4b1dca4d230bea55d22
+Frontend gh-pages                  = 73a1282174a1133b9bc55325737b55ec6a53d395
+CURRENT_APP_VERSION                = 3.6.2
+Production entry asset             = assets/index-Cv-sUtg7.js
+
+Function                           = manageAdministrativeSetting
+Function deploy                    = YES
+Frontend deploy                    = YES
+Rules deploy                       = NO_NOT_CHANGED
+```
+
+部署後曾短暫出現 GitHub Pages public serving propagation delay：
+
+```text
+gh-pages branch release.json       = 已是 v3.6.2
+public Pages release.json          = 暫時仍回 v3.6.1
+```
+
+因此 deployment runner 正確停止，沒有提前發布 `system_version`。後續 read-only public remote readback 確認：
+
+```text
+DEPLOYED                           = YES
+PUBLIC_SERVING_CONFIRMED           = YES
+appVersion                         = 3.6.2
+sourceCommit                       = 8251ab38a1542752d600d4b1dca4d230bea55d22
+entryAsset                         = assets/index-Cv-sUtg7.js
+```
+
+確認 public serving 收斂後，才進入人工 controlled release。
+
+## Production Controlled Release / Human Smoke
+
+最高管理者正式頁面確認：
+
+```text
+目前版本                           = v3.6.2
+正式來源                           = 8251ab38a1...
+目前載入檔                         = index-Cv-sUtg7.js
+PWA                                = 已接管
+正式發布檔                         = index-Cv-sUtg7.js
+```
+
+之後由最高管理者本人執行：
+
+```text
+發布更新
+→ 輸入 3.6.2 確認
+→ publish system_version
+```
+
+最終人工確認：
+
+```text
+SYSTEM_VERSION_PUBLISHED           = YES
+PRODUCTION_HUMAN_SMOKE             = PASS
+PRODUCTION_CONFIRMED               = YES
+```
+
+正式批次狀態：
+
+```text
+RELEASE_CONTROL                    = PRODUCTION_CONFIRMED / CLOSED
+IMPLEMENTED                        = YES
+VALIDATED                          = YES
+LOCAL_RELEASE_CONTROL_SMOKE        = PASS
+COMMITTED                          = YES
+PUSHED                             = YES
+DEPLOYED                           = YES
+PUBLIC_SERVING_CONFIRMED           = YES
+SYSTEM_VERSION_PUBLISHED           = YES
+PRODUCTION_HUMAN_SMOKE             = PASS
+PRODUCTION_CONFIRMED               = YES
+
+CURRENT_APP_VERSION                = 3.6.2
+VERSION_BUMP                       = YES_USER_APPROVED
+NEW_LISTENER                       = 0
+NEW_QUERY                          = 0
+NEW_POLLING                        = 0
+RULES_CHANGE                       = NO
+```
+
+## Ongoing Version Policy
+
+後續版本管理原則：
+
+```text
+一般 bug fix / backend-only fix / UI 微調
+→ 不因「有改程式」自動提升 CURRENT_APP_VERSION
+
+已部署且需要舊 client 重新載入
+→ 可由 Release Control 發布目前正式 release
+
+資料模型 / Security / frontend-backend contract / 重要 validation 語意等 breaking change
+→ 明確評估是否提升 CURRENT_APP_VERSION
+→ 版本提升仍需使用者明確決定
+```
+
+Production runtime identity 以實際部署的 runtime source commit 為準；repository `main` 可以因 docs-only closeout 繼續前進，不把 docs commit 誤當新的 runtime identity。
+
+Documentation Impact：本次 closeout 只更新 `docs/CURRENT_STATE.md`；runtime source / Function / Rules / frontend deploy = None。
+
+---
+
 # Latest Production Runtime Override — 2026-10-04（Dashboard Action Center Retirement）
 
 > 本節是目前最高優先的 Production runtime / Dashboard 首屏狀態。下方 TherapistManagerView Lazy Load、Therapist Historical Summary-first、Canonical Role Metadata、Daily Report Date Safety、Release Health、P3、P2 與更早章節保留各自當時 evidence；若 runtime lineage、Dashboard Action Center 狀態或 frontend release identity 衝突，以目前正式 source、release identity、Production smoke 與本節為準。
