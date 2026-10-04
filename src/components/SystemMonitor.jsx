@@ -26,7 +26,8 @@ const SystemMonitor = () => {
     getCollectionPath, currentBrand, currentUser, userRole,
     currentDeviceTrust, currentSecurityAccountKey,
     manageDeviceSecurityAction, reviewDeviceApprovalAction, canManageDeviceSecurity,
-    getProductionHealthSnapshotAction, appVersion, publishedSystemVersion
+    getProductionHealthSnapshotAction, manageAdministrativeSettingAction,
+    appVersion, publishedSystemVersion, publishedSystemRelease
   } = useContext(AppContext);
   
   const [logs, setLogs] = useState([]);
@@ -48,6 +49,10 @@ const SystemMonitor = () => {
   const [releaseIdentity, setReleaseIdentity] = useState(null);
   const [releaseIdentityLoading, setReleaseIdentityLoading] = useState(false);
   const [releaseIdentityError, setReleaseIdentityError] = useState("");
+  const [releasePublishOpen, setReleasePublishOpen] = useState(false);
+  const [releasePublishVersion, setReleasePublishVersion] = useState("");
+  const [releasePublishMessage, setReleasePublishMessage] = useState("");
+  const [releasePublishError, setReleasePublishError] = useState("");
   const [deviceProfiles, setDeviceProfiles] = useState([]);
   const [deviceLoading, setDeviceLoading] = useState(false);
   const [deviceHasLoaded, setDeviceHasLoaded] = useState(false);
@@ -828,6 +833,51 @@ const SystemMonitor = () => {
     fetchLogs(queryDateRange, { append: true });
   };
 
+  const isLocalReleaseControlPreview = Boolean(
+    typeof window !== "undefined" &&
+    ["localhost", "127.0.0.1"].includes(String(window.location?.hostname || "").toLowerCase())
+  );
+
+  const deployedRelease = releaseIdentity?.publishedRelease || null;
+  const releaseMarker = publishedSystemRelease && typeof publishedSystemRelease === "object"
+    ? publishedSystemRelease
+    : {
+        version: publishedSystemVersion || "",
+        releaseSourceCommit: "",
+        entryAsset: "",
+        revision: 0,
+      };
+
+  const releaseMarkerMatches = Boolean(
+    deployedRelease &&
+    releaseMarker.version === deployedRelease.appVersion &&
+    releaseMarker.releaseSourceCommit === deployedRelease.sourceCommit &&
+    releaseMarker.entryAsset === deployedRelease.entryAsset
+  );
+
+  const canPublishRelease = Boolean(
+    String(currentBrand?.id || "") === "cyj" &&
+    canManageDeviceSecurity &&
+    currentDeviceTrust?.status === "trusted" &&
+    typeof manageAdministrativeSettingAction === "function" &&
+    deployedRelease &&
+    releaseIdentity?.appVersion === deployedRelease.appVersion &&
+    releaseIdentity?.loadedEntryAsset === deployedRelease.entryAsset
+  );
+
+  const openReleasePublisher = useCallback(() => {
+    const targetVersion = String(releaseIdentity?.publishedRelease?.appVersion || "").trim();
+    setReleasePublishVersion(targetVersion);
+    setReleasePublishMessage("");
+    setReleasePublishError("");
+    setReleasePublishOpen(true);
+  }, [releaseIdentity?.publishedRelease?.appVersion]);
+
+  const closeReleasePublisher = useCallback(() => {
+    setReleasePublishOpen(false);
+    setReleasePublishError("");
+  }, []);
+
   const loadReleaseIdentity = useCallback(async ({ force = false } = {}) => {
     if (!force && releaseIdentity) return releaseIdentity;
 
@@ -859,6 +909,73 @@ const SystemMonitor = () => {
       setReleaseIdentityLoading(false);
     }
   }, [appVersion, publishedSystemVersion, releaseIdentity]);
+
+  const publishRelease = useCallback(async () => {
+    const target = releaseIdentity?.publishedRelease;
+    const typedVersion = String(releasePublishVersion || "").trim();
+    if (!target?.appVersion || !target?.sourceCommit || !target?.entryAsset) {
+      setReleasePublishError("正式發布資訊尚未完整，請先重新檢查。");
+      return;
+    }
+    if (!canPublishRelease) {
+      setReleasePublishError("目前不符合發布條件；請確認 CYJ、最高管理者與已信任裝置狀態。");
+      return;
+    }
+    if (typedVersion !== target.appVersion) {
+      setReleasePublishError(`請輸入正式部署版本 ${target.appVersion} 以確認發布。`);
+      return;
+    }
+
+    setReleasePublishError("");
+
+    // 本機 UX smoke 絕不呼叫正式 Backend，避免 local trial 誤發全系統更新。
+    if (isLocalReleaseControlPreview) {
+      setReleasePublishMessage(
+        `本機試跑完成：已驗證發布流程，但沒有寫入正式 system_version（目標 v${target.appVersion}）。`
+      );
+      return;
+    }
+
+    try {
+      const result = await manageAdministrativeSettingAction({
+        action: "publish_system_version",
+        payload: {
+          version: target.appVersion,
+          releaseSourceCommit: target.sourceCommit,
+          entryAsset: target.entryAsset,
+        },
+        expectedRevision: Number(releaseMarker?.revision || 0),
+      });
+      setReleasePublishMessage(
+        result?.changed
+          ? `已發布 v${target.appVersion}；舊版使用者會依更新標記重新載入正式版本。`
+          : `v${target.appVersion} 已經是目前發布目標。`
+      );
+      setReleasePublishOpen(false);
+      await loadReleaseIdentity({ force: true });
+    } catch (error) {
+      const code = String(error?.code || error?.result?.code || "");
+      const messages = {
+        setting_revision_conflict: "更新標記已被其他管理者變更，請重新檢查後再發布。",
+        system_version_downgrade_forbidden: "禁止把全系統更新標記降版。",
+        system_version_not_deployed_release: "輸入版本不是目前正式部署版本，已拒絕發布。",
+        release_identity_changed: "正式發布檔已變更，請重新檢查後再發布。",
+        release_identity_fetch_failed: "Backend 暫時無法確認正式發布檔，未進行發布。",
+        release_identity_invalid: "正式發布檔格式異常，未進行發布。",
+        system_version_global_control_requires_cyj: "全系統版本只能從 CYJ 最高管理者控制面發布。",
+        super_admin_reverification_required: "最高管理者或信任裝置驗證已失效，請重新登入後再試。",
+      };
+      setReleasePublishError(messages[code] || error?.message || "版本發布失敗，請稍後再試。");
+    }
+  }, [
+    canPublishRelease,
+    isLocalReleaseControlPreview,
+    loadReleaseIdentity,
+    manageAdministrativeSettingAction,
+    releaseIdentity?.publishedRelease,
+    releaseMarker?.revision,
+    releasePublishVersion,
+  ]);
 
   const loadProductionHealth = useCallback(async ({ force = false } = {}) => {
     const brandId = String(currentBrand?.id || "");
@@ -1187,7 +1304,7 @@ const SystemMonitor = () => {
                           比對目前瀏覽器、正式發布檔與既有 system_version 更新標記
                         </p>
                       </div>
-                      <div className="flex items-center gap-2">
+                      <div className="flex flex-wrap items-center justify-end gap-2">
                         {releaseIdentityLoading && <RefreshCw className="animate-spin text-stone-400" size={14} />}
                         {releaseIdentity && (() => {
                           const tone = getHealthTone(releaseIdentity.status === "stale" ? "error" : releaseIdentity.status);
@@ -1198,6 +1315,27 @@ const SystemMonitor = () => {
                             </span>
                           );
                         })()}
+                        {String(currentBrand?.id || "") === "cyj" && canManageDeviceSecurity && (
+                          <button
+                            type="button"
+                            onClick={openReleasePublisher}
+                            disabled={!canPublishRelease || releaseMarkerMatches}
+                            title={
+                              releaseMarkerMatches
+                                ? "目前正式發布內容已經是更新目標"
+                                : !canPublishRelease
+                                  ? "請先確認正式版本一致、最高管理者與已信任裝置狀態"
+                                  : "發布目前已部署的正式版本"
+                            }
+                            className={`rounded-xl border px-3 py-1.5 text-xs font-black transition-colors ${
+                              canPublishRelease && !releaseMarkerMatches
+                                ? "border-amber-200 bg-amber-50 text-amber-800 hover:bg-amber-100"
+                                : "cursor-not-allowed border-stone-100 bg-stone-50 text-stone-300"
+                            }`}
+                          >
+                            {releaseMarkerMatches ? "已發布" : "發布更新"}
+                          </button>
+                        )}
                       </div>
                     </div>
 
@@ -1243,6 +1381,103 @@ const SystemMonitor = () => {
                         }`}>
                           {releaseIdentity.detail}
                         </p>
+
+                        {String(currentBrand?.id || "") === "cyj" && canManageDeviceSecurity && (
+                          <p className="mt-2 text-[11px] font-bold text-stone-400">
+                            發布目標：{releaseMarker?.entryAsset
+                              ? `${releaseMarker.version || "-"} · ${releaseMarker.entryAsset.replace(/^assets\//, "")}`
+                              : `${releaseMarker?.version || "尚未建立 release identity"}`
+                            }
+                            {Number.isInteger(Number(releaseMarker?.revision))
+                              ? ` · revision ${Number(releaseMarker?.revision || 0)}`
+                              : ""}
+                          </p>
+                        )}
+
+                        {releasePublishOpen && (
+                          <div className="mt-4 rounded-2xl border border-amber-200 bg-amber-50/60 p-4">
+                            <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
+                              <div>
+                                <p className="text-sm font-black text-amber-900">發布全系統更新</p>
+                                <p className="mt-1 text-xs font-bold leading-5 text-amber-800/80">
+                                  只允許發布目前 release.json 已存在的正式版本。發布後，仍停留在較舊版本或舊載入檔的 CYJ／安妞／伊啵使用者會重新載入。
+                                </p>
+                              </div>
+                              {isLocalReleaseControlPreview && (
+                                <span className="shrink-0 rounded-full border border-sky-200 bg-sky-50 px-3 py-1 text-[11px] font-black text-sky-700">
+                                  本機試跑・不寫正式資料
+                                </span>
+                              )}
+                            </div>
+
+                            <div className="mt-3 grid grid-cols-1 gap-2 md:grid-cols-3">
+                              <div className="rounded-xl bg-white/80 px-3 py-2.5">
+                                <p className="text-[10px] font-black text-stone-400">正式版本</p>
+                                <p className="mt-1 text-sm font-black text-stone-700">
+                                  v{releaseIdentity.publishedRelease?.appVersion || "-"}
+                                </p>
+                              </div>
+                              <div className="rounded-xl bg-white/80 px-3 py-2.5">
+                                <p className="text-[10px] font-black text-stone-400">正式來源</p>
+                                <p className="mt-1 truncate font-mono text-[11px] font-black text-stone-700">
+                                  {releaseIdentity.publishedRelease?.sourceCommit?.slice(0, 12) || "-"}
+                                </p>
+                              </div>
+                              <div className="rounded-xl bg-white/80 px-3 py-2.5">
+                                <p className="text-[10px] font-black text-stone-400">正式載入檔</p>
+                                <p className="mt-1 truncate font-mono text-[11px] font-black text-stone-700">
+                                  {releaseIdentity.publishedRelease?.entryAsset?.replace(/^assets\//, "") || "-"}
+                                </p>
+                              </div>
+                            </div>
+
+                            <label className="mt-3 block">
+                              <span className="text-[11px] font-black text-stone-500">
+                                輸入正式版本號以確認
+                              </span>
+                              <input
+                                type="text"
+                                value={releasePublishVersion}
+                                onChange={(event) => {
+                                  setReleasePublishVersion(event.target.value);
+                                  setReleasePublishError("");
+                                  setReleasePublishMessage("");
+                                }}
+                                placeholder={releaseIdentity.publishedRelease?.appVersion || "例如 3.6.2"}
+                                className="mt-1.5 w-full rounded-xl border border-amber-200 bg-white px-3 py-2.5 font-mono text-sm font-black text-stone-700 outline-none focus:border-amber-400 md:max-w-xs"
+                              />
+                            </label>
+
+                            {releasePublishError && (
+                              <p className="mt-2 text-xs font-bold text-rose-600">{releasePublishError}</p>
+                            )}
+
+                            <div className="mt-3 flex flex-wrap gap-2">
+                              <button
+                                type="button"
+                                onClick={closeReleasePublisher}
+                                className="rounded-xl border border-stone-200 bg-white px-4 py-2 text-xs font-black text-stone-500 hover:bg-stone-50"
+                              >
+                                取消
+                              </button>
+                              <AsyncActionButton
+                                type="button"
+                                onClick={publishRelease}
+                                loadingText="確認正式發布中…"
+                                disabled={releasePublishVersion.trim() !== String(releaseIdentity.publishedRelease?.appVersion || "")}
+                                className="rounded-xl border border-amber-300 bg-amber-100 px-4 py-2 text-xs font-black text-amber-900 hover:bg-amber-200 disabled:cursor-not-allowed disabled:opacity-40"
+                              >
+                                {isLocalReleaseControlPreview ? "模擬發布" : "確認發布更新"}
+                              </AsyncActionButton>
+                            </div>
+                          </div>
+                        )}
+
+                        {releasePublishMessage && (
+                          <p className="mt-3 rounded-xl border border-emerald-100 bg-emerald-50 px-3 py-2 text-xs font-bold text-emerald-700">
+                            {releasePublishMessage}
+                          </p>
+                        )}
                       </>
                     ) : (
                       <p className="mt-3 text-xs font-bold text-stone-400">正式版本資訊讀取中…</p>

@@ -9,6 +9,7 @@ const authority = require("../functions/administrativeSettingsAuthority.js");
 const rules = fs.readFileSync(new URL("../firestore.rules", import.meta.url), "utf8");
 const app = fs.readFileSync(new URL("../src/App.jsx", import.meta.url), "utf8");
 const settings = fs.readFileSync(new URL("../src/components/SettingsView.jsx", import.meta.url), "utf8");
+const monitor = fs.readFileSync(new URL("../src/components/SystemMonitor.jsx", import.meta.url), "utf8");
 const backend = fs.readFileSync(new URL("../functions/index.js", import.meta.url), "utf8");
 const authoritySource = fs.readFileSync(new URL("../functions/administrativeSettingsAuthority.js", import.meta.url), "utf8");
 
@@ -111,11 +112,91 @@ test("P0-FINAL-1D-A1 SettingsView cuts admin settings writers over to backend", 
   assert.doesNotMatch(settings, /updateDoc\(getDocPath\("kpi_targets"\)/);
 });
 
-test("P0-FINAL-1D-A1 App cuts system_version browser writer over to backend", () => {
+test("Release Control removes automatic system_version publishing and keeps Browser writes backend-only", () => {
   assert.match(app, /ADMINISTRATIVE_SETTINGS_ENDPOINT/);
   assert.match(app, /manageAdministrativeSettingAction/);
-  assert.match(app, /action:\s*"publish_system_version"/);
+  assert.doesNotMatch(
+    app,
+    /manageAdministrativeSettingAction\(\{[\s\S]{0,160}action:\s*"publish_system_version"[\s\S]{0,160}CURRENT_APP_VERSION/
+  );
   assert.doesNotMatch(app, /setDoc\(globalVersionRef,\s*\{\s*version:\s*CURRENT_APP_VERSION/);
+
+  assert.match(monitor, /action:\s*"publish_system_version"/);
+  assert.match(monitor, /expectedRevision:\s*Number\(releaseMarker\?\.revision/);
+  assert.match(monitor, /releaseSourceCommit:\s*target\.sourceCommit/);
+  assert.match(monitor, /entryAsset:\s*target\.entryAsset/);
+});
+
+
+test("Release Control validates only stable deployed semantic versions", () => {
+  assert.equal(authority.normalizeStableVersion("3.6.2"), "3.6.2");
+  assert.equal(authority.normalizeStableVersion("3.6.2-beta.1"), "");
+  assert.equal(authority.compareStableVersions("3.6.2", "3.6.1"), 1);
+  assert.equal(authority.compareStableVersions("3.6.1", "3.6.1"), 0);
+  assert.equal(authority.compareStableVersions("3.5.9", "3.6.0"), -1);
+});
+
+test("Release Control validates canonical release identity", () => {
+  const release = authority.normalizeReleaseIdentity({
+    schemaVersion: "release-identity-v1",
+    appVersion: "3.6.2",
+    sourceCommit: "a".repeat(40),
+    entryAsset: "assets/index-AbCd1234.js",
+  });
+  assert.equal(release.appVersion, "3.6.2");
+  assert.equal(release.sourceCommit, "a".repeat(40));
+  assert.equal(release.entryAsset, "assets/index-AbCd1234.js");
+
+  assert.throws(
+    () => authority.normalizeReleaseIdentity({
+      schemaVersion: "release-identity-v1",
+      appVersion: "3.6.2",
+      sourceCommit: "bad",
+      entryAsset: "assets/index-AbCd1234.js",
+    }),
+    /release_identity_invalid/
+  );
+});
+
+test("Release Control fetches release.json with a cache-busting request", async () => {
+  let requestedUrl = "";
+  let requestedOptions = null;
+  const release = await authority.fetchCanonicalPublishedReleaseIdentity({
+    url: "https://example.test/app/release.json",
+    now: 24680,
+    fetchImpl: async (url, options) => {
+      requestedUrl = url;
+      requestedOptions = options;
+      return {
+        ok: true,
+        status: 200,
+        json: async () => ({
+          schemaVersion: "release-identity-v1",
+          appVersion: "3.6.2",
+          sourceCommit: "b".repeat(40),
+          entryAsset: "assets/index-Release123.js",
+        }),
+      };
+    },
+  });
+
+  assert.equal(release.appVersion, "3.6.2");
+  assert.match(requestedUrl, /release\.json\?release_control=24680$/);
+  assert.equal(requestedOptions.method, "GET");
+  assert.equal(requestedOptions.headers["Cache-Control"], "no-cache");
+});
+
+test("Release Control backend binds system_version to canonical release identity with OCC and downgrade protection", () => {
+  assert.match(authoritySource, /brandId !== "cyj"/);
+  assert.match(authoritySource, /system_version_global_control_requires_cyj/);
+  assert.match(authoritySource, /fetchPublishedReleaseIdentity\(\)/);
+  assert.match(authoritySource, /system_version_not_deployed_release/);
+  assert.match(authoritySource, /release_identity_changed/);
+  assert.match(authoritySource, /currentRevision !== expectedRevision/);
+  assert.match(authoritySource, /system_version_downgrade_forbidden/);
+  assert.match(authoritySource, /releaseSourceCommit:\s*publishedRelease\.sourceCommit/);
+  assert.match(authoritySource, /entryAsset:\s*publishedRelease\.entryAsset/);
+  assert.match(authoritySource, /revision:\s*nextRevision/);
 });
 
 test("P0-FINAL-1D-A1 Rules make administrative settings browser-read-only", () => {

@@ -1,4 +1,4 @@
-export const EXPECTED_APP_VERSION = "3.6.1";
+export const EXPECTED_APP_VERSION = "3.6.2";
 
 const escapedVersion = EXPECTED_APP_VERSION.replaceAll(".", "\\.");
 

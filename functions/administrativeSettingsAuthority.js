@@ -3,6 +3,10 @@ const crypto = require("crypto");
 const ADMINISTRATIVE_SETTINGS_RUNTIME_SERVICE_ACCOUNT =
   "drcyj-account-authority@cyjsituation-analysis.iam.gserviceaccount.com";
 
+const RELEASE_IDENTITY_SCHEMA_VERSION = "release-identity-v1";
+const PUBLISHED_RELEASE_IDENTITY_URL =
+  "https://joelo68.github.io/recursing-haze-tsq2kq/release.json";
+
 const ADMIN_ACTIONS = new Set([
   "update_security_config",
   "update_feature_flags",
@@ -193,6 +197,89 @@ function normalizeKpiTargets(payload = {}, brandId = "") {
   };
 }
 
+function normalizeStableVersion(value = "") {
+  const version = normalizeText(value, 40);
+  return /^\d+\.\d+\.\d+$/.test(version) ? version : "";
+}
+
+function compareStableVersions(left = "", right = "") {
+  const a = normalizeStableVersion(left);
+  const b = normalizeStableVersion(right);
+  if (!a || !b) {
+    throw new AdministrativeSettingsAuthorityError("invalid_system_version", 400);
+  }
+  const aParts = a.split(".").map(Number);
+  const bParts = b.split(".").map(Number);
+  for (let index = 0; index < 3; index += 1) {
+    if (aParts[index] > bParts[index]) return 1;
+    if (aParts[index] < bParts[index]) return -1;
+  }
+  return 0;
+}
+
+function normalizeReleaseIdentity(value = {}) {
+  if (!value || typeof value !== "object") {
+    throw new AdministrativeSettingsAuthorityError("release_identity_invalid", 503);
+  }
+
+  const schemaVersion = normalizeText(value.schemaVersion, 80);
+  const appVersion = normalizeStableVersion(value.appVersion);
+  const sourceCommit = normalizeText(value.sourceCommit, 40).toLowerCase();
+  const entryAsset = normalizeText(value.entryAsset, 240).replace(/^\/+/, "");
+
+  if (
+    schemaVersion !== RELEASE_IDENTITY_SCHEMA_VERSION ||
+    !appVersion ||
+    !/^[0-9a-f]{40}$/.test(sourceCommit) ||
+    !/^assets\/index-[A-Za-z0-9_-]+\.js$/.test(entryAsset)
+  ) {
+    throw new AdministrativeSettingsAuthorityError("release_identity_invalid", 503);
+  }
+
+  return { schemaVersion, appVersion, sourceCommit, entryAsset };
+}
+
+async function fetchCanonicalPublishedReleaseIdentity({
+  fetchImpl = global.fetch,
+  url = PUBLISHED_RELEASE_IDENTITY_URL,
+  now = Date.now(),
+} = {}) {
+  if (typeof fetchImpl !== "function") {
+    throw new AdministrativeSettingsAuthorityError("release_identity_fetch_unavailable", 503);
+  }
+
+  const releaseUrl = new URL(url);
+  releaseUrl.searchParams.set("release_control", String(now));
+
+  let response;
+  try {
+    response = await fetchImpl(releaseUrl.toString(), {
+      method: "GET",
+      headers: {
+        Accept: "application/json",
+        "Cache-Control": "no-cache",
+      },
+    });
+  } catch {
+    throw new AdministrativeSettingsAuthorityError("release_identity_fetch_failed", 503);
+  }
+
+  if (!response?.ok) {
+    throw new AdministrativeSettingsAuthorityError("release_identity_fetch_failed", 503, {
+      httpStatus: Number(response?.status || 0),
+    });
+  }
+
+  let payload;
+  try {
+    payload = await response.json();
+  } catch {
+    throw new AdministrativeSettingsAuthorityError("release_identity_invalid", 503);
+  }
+
+  return normalizeReleaseIdentity(payload);
+}
+
 function safeAuditDigest(value = {}) {
   return crypto.createHash("sha256").update(JSON.stringify(value)).digest("hex").slice(0, 24);
 }
@@ -238,6 +325,7 @@ function createAdministrativeSettingsAuthorityFunctions({
   requireFirebaseRequestAuth,
   verifySuperAdminActor,
   assertAdminApplicationClaims,
+  fetchPublishedReleaseIdentity = fetchCanonicalPublishedReleaseIdentity,
 }) {
   const manageAdministrativeSetting = onRequest({
     cors: true,
@@ -280,33 +368,107 @@ function createAdministrativeSettingsAuthorityFunctions({
       const nowText = new Date().toISOString();
 
       if (action === "publish_system_version") {
-        const version = normalizeText(payload.version, 40);
-        if (!/^\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.-]+)?$/.test(version)) {
+        // system_version 是全 App 的 release marker。
+        // 為避免跨品牌 audit authority 分裂，只允許 CYJ 最高管理者控制面發布。
+        if (brandId !== "cyj") {
+          throw new AdministrativeSettingsAuthorityError("system_version_global_control_requires_cyj", 403);
+        }
+
+        const version = normalizeStableVersion(payload.version);
+        if (!version) {
           throw new AdministrativeSettingsAuthorityError("invalid_system_version", 400);
+        }
+
+        // Backend 自行讀正式 GitHub Pages release.json，不相信 Browser 自報 release identity。
+        const publishedRelease = await fetchPublishedReleaseIdentity();
+        if (publishedRelease.appVersion !== version) {
+          throw new AdministrativeSettingsAuthorityError("system_version_not_deployed_release", 409, {
+            deployedVersion: publishedRelease.appVersion,
+            deployedSourceCommit: publishedRelease.sourceCommit,
+            deployedEntryAsset: publishedRelease.entryAsset,
+          });
+        }
+
+        const expectedSourceCommit = normalizeText(payload.releaseSourceCommit, 40).toLowerCase();
+        const expectedEntryAsset = normalizeText(payload.entryAsset, 240).replace(/^\/+/, "");
+        if (
+          (expectedSourceCommit && expectedSourceCommit !== publishedRelease.sourceCommit) ||
+          (expectedEntryAsset && expectedEntryAsset !== publishedRelease.entryAsset)
+        ) {
+          throw new AdministrativeSettingsAuthorityError("release_identity_changed", 409, {
+            deployedVersion: publishedRelease.appVersion,
+            deployedSourceCommit: publishedRelease.sourceCommit,
+            deployedEntryAsset: publishedRelease.entryAsset,
+          });
         }
 
         const versionRef = db.doc("artifacts/default-app-id/public/data/global_settings/system_version");
         const result = await db.runTransaction(async (transaction) => {
           const snap = await transaction.get(versionRef);
-          const currentVersion = snap.exists ? normalizeText(snap.data()?.version, 40) : "";
-          if (currentVersion === version) {
-            return { changed: false, version, currentVersion };
+          const current = snap.exists ? snap.data() || {} : {};
+          const currentVersion = normalizeStableVersion(current.version);
+          const parsedRevision = Number(current.revision ?? 0);
+          const currentRevision = Number.isInteger(parsedRevision) && parsedRevision >= 0
+            ? parsedRevision
+            : 0;
+
+          if (currentRevision !== expectedRevision) {
+            throw new AdministrativeSettingsAuthorityError("setting_revision_conflict", 409, {
+              currentRevision,
+            });
           }
+
+          if (currentVersion && compareStableVersions(version, currentVersion) < 0) {
+            throw new AdministrativeSettingsAuthorityError("system_version_downgrade_forbidden", 409, {
+              currentVersion,
+            });
+          }
+
+          const currentSourceCommit = normalizeText(current.releaseSourceCommit, 40).toLowerCase();
+          const currentEntryAsset = normalizeText(current.entryAsset, 240).replace(/^\/+/, "");
+          const alreadyPublished = (
+            currentVersion === version &&
+            currentSourceCommit === publishedRelease.sourceCommit &&
+            currentEntryAsset === publishedRelease.entryAsset
+          );
+
+          if (alreadyPublished) {
+            return {
+              changed: false,
+              version,
+              currentVersion,
+              revision: currentRevision,
+            };
+          }
+
+          const nextRevision = currentRevision + 1;
           transaction.set(versionRef, {
             version,
+            releaseSourceCommit: publishedRelease.sourceCommit,
+            entryAsset: publishedRelease.entryAsset,
+            revision: nextRevision,
             updatedAt: fieldValue.serverTimestamp(),
             updatedAtText: nowText,
             updatedBy: String(actorCheck.actorName || actorCheck.actorAccountId || "最高管理者"),
             updatedByAccountId: String(actorCheck.actorAccountId || ""),
           }, { merge: true });
-          return { changed: true, version, currentVersion };
+
+          return {
+            changed: true,
+            version,
+            currentVersion,
+            revision: nextRevision,
+          };
         });
 
-        await getBrandCollection(db, brandId, "maintenance_logs").add({
+        await getBrandCollection(db, "cyj", "maintenance_logs").add({
           type: "administrative_setting",
           action,
           changed: result.changed === true,
           version,
+          revision: result.revision,
+          releaseSourceCommit: publishedRelease.sourceCommit,
+          entryAsset: publishedRelease.entryAsset,
           actor: String(actorCheck.actorName || actorCheck.actorAccountId || "最高管理者"),
           actorAccountId: String(actorCheck.actorAccountId || ""),
           createdAt: fieldValue.serverTimestamp(),
@@ -319,6 +481,9 @@ function createAdministrativeSettingsAuthorityFunctions({
           action,
           changed: result.changed === true,
           version,
+          revision: result.revision,
+          releaseSourceCommit: publishedRelease.sourceCommit,
+          entryAsset: publishedRelease.entryAsset,
         });
       }
 
@@ -407,5 +572,9 @@ module.exports = {
   normalizeSecurityConfig,
   normalizeFeatureFlags,
   normalizeKpiTargets,
+  normalizeStableVersion,
+  compareStableVersions,
+  normalizeReleaseIdentity,
+  fetchCanonicalPublishedReleaseIdentity,
   createAdministrativeSettingsAuthorityFunctions,
 };

@@ -1,3 +1,63 @@
+# Release Control / Version Publishing Source Map — 2026-10-04
+
+正式 owner：
+
+```text
+src/App.jsx
+→ CURRENT_APP_VERSION
+→ 既有 system_version single-document listener
+→ foreground recheck
+→ version / published entryAsset mismatch 判斷
+→ forced refresh / PWA cache recovery
+→ 不再自動 publish system_version
+
+src/components/SystemMonitor.jsx
+→ 「正式版本」release health presentation
+→ CYJ 最高管理者「發布更新」控制面
+→ 使用正式 release identity 作為 target
+→ localhost / 127.0.0.1 只模擬，不呼叫 Production writer
+
+src/utils/releaseIdentity.js
+→ release.json browser normalization / compare
+→ 不讀 Firestore
+
+functions/administrativeSettingsAuthority.js
+→ publish_system_version Backend authority
+→ Application Identity + highest-admin + Trusted Device + fresh credential
+→ canonical GitHub Pages release.json revalidation
+→ stable version / no downgrade
+→ release identity equality
+→ system_version revision OCC transaction
+→ maintenance audit
+
+functions/index.js
+→ exports.manageAdministrativeSetting
+
+firestore.rules
+→ Browser direct system_version write deny（維持既有）
+```
+
+Read topology：
+
+```text
+new listener = 0
+new query = 0
+new polling = 0
+steady-state Firestore read delta = 0
+
+publish click
+→ existing administrative security revalidation reads
+→ system_version transaction read/write
+→ maintenance audit write
+→ one static HTTPS GET release.json
+```
+
+版本發布是 App-global control；不改 CYJ legacy / 安妞 / 伊啵營運資料 physical path，也不建立 brand-specific `system_version`。
+
+第一次 Production rollout 使用明確核准的 `CURRENT_APP_VERSION = 3.6.2`，用來把 pre-Release-Control 3.6.1 clients 收斂到 asset-aware updater。
+
+---
+
 # Canonical Role Metadata v1 Source Override — 2026-10-03
 
 # Therapist Historical Summary-first Read Ownership — 2026-10-03

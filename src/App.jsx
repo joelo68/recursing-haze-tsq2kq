@@ -54,11 +54,12 @@ import {
 } from "./utils/currentStoreMonthReportsConsumer.js";
 import { useAnnualDataAuthority } from "./hooks/useAnnualDataAuthority";
 import { useDashboardTherapistSummary } from "./hooks/useDashboardTherapistSummary.js";
+import { fetchPublishedReleaseIdentity, getLoadedEntryAsset } from "./utils/releaseIdentity.js";
 
 // ==========================================
 // ★ 系統核心版本號 (終極動態快取版)
 // ==========================================
-const CURRENT_APP_VERSION = "3.6.1";
+const CURRENT_APP_VERSION = "3.6.2";
 const LOGIN_LOCATION_ENDPOINT = "https://resolveloginlocation-hyhcwrnyaa-uc.a.run.app";
 const DEVICE_ACCESS_ENDPOINT = "https://us-central1-cyjsituation-analysis.cloudfunctions.net/checkDeviceAccess";
 const LOGIN_DIRECTORY_ENDPOINT = "https://us-central1-cyjsituation-analysis.cloudfunctions.net/getApplicationLoginDirectory";
@@ -605,6 +606,12 @@ export default function App() {
 
   const [isUpdating, setIsUpdating] = useState(false);
   const [publishedSystemVersion, setPublishedSystemVersion] = useState("");
+  const [publishedSystemRelease, setPublishedSystemRelease] = useState({
+    version: "",
+    releaseSourceCommit: "",
+    entryAsset: "",
+    revision: 0,
+  });
   const [isOnline, setIsOnline] = useState(navigator.onLine);
   const [isPageVisible, setIsPageVisible] = useState(() =>
     typeof document === "undefined" ? true : document.visibilityState !== "hidden"
@@ -2110,22 +2117,54 @@ export default function App() {
   useEffect(() => {
     const globalVersionRef = doc(db, "artifacts", appId, "public", "data", "global_settings", "system_version");
 
-    const checkAndExecuteUpdate = (remoteVersion) => {
-      if (remoteVersion && isOlderVersion(CURRENT_APP_VERSION, remoteVersion)) {
-        
-        // ★ 新增防爆鎖：利用 sessionStorage 紀錄重整次數
+    const normalizeSystemVersionMarker = (snapshot) => {
+      const data = snapshot?.exists?.() ? snapshot.data() || {} : {};
+      const revisionNumber = Number(data?.revision ?? 0);
+      return {
+        version: String(data?.version || "").trim(),
+        releaseSourceCommit: String(data?.releaseSourceCommit || "").trim().toLowerCase(),
+        entryAsset: String(data?.entryAsset || "").trim().replace(/^\/+/, ""),
+        revision: Number.isInteger(revisionNumber) && revisionNumber >= 0 ? revisionNumber : 0,
+      };
+    };
+
+    const checkAndExecuteUpdate = async (marker) => {
+      const remoteVersion = String(marker?.version || "").trim();
+      const remoteEntryAsset = String(marker?.entryAsset || "").trim().replace(/^\/+/, "");
+      const loadedEntryAsset = getLoadedEntryAsset();
+      const versionRequiresUpdate = Boolean(
+        remoteVersion && isOlderVersion(CURRENT_APP_VERSION, remoteVersion)
+      );
+
+      let releaseRequiresUpdate = false;
+      const hasAssetMismatch = Boolean(
+        remoteEntryAsset &&
+        loadedEntryAsset &&
+        remoteEntryAsset !== loadedEntryAsset
+      );
+
+      // 同版本 hotfix 只有在 marker 已經指向「目前正式 release」時才強制 refresh。
+      // 這可避免新版先 deploy、但最高管理者尚未按「發布更新」的空窗期，
+      // 新開頁面已載入新 asset 卻因 marker 還是舊 asset 而被錯誤重整。
+      if (!versionRequiresUpdate && hasAssetMismatch) {
+        try {
+          const currentPublishedRelease = await fetchPublishedReleaseIdentity();
+          releaseRequiresUpdate = currentPublishedRelease?.entryAsset === remoteEntryAsset;
+        } catch (error) {
+          console.warn("Release identity confirmation failed; skip asset-only forced update", error);
+        }
+      }
+
+      if (versionRequiresUpdate || releaseRequiresUpdate) {
+        // ★ 防爆鎖：利用 sessionStorage 紀錄重整次數
         const updateAttempts = parseInt(sessionStorage.getItem('cyj_update_attempts') || '0');
-        
+
         if (updateAttempts >= 3) {
-            // 如果已經自動重整 3 次還是舊版，代表快取卡死。停止無限迴圈，凍結畫面。
             setIsUpdating(true);
-            // 可以在這裡加入一段特殊 UI 狀態，但在 App.jsx 現有架構下，
-            // 只要我們 `return` 不執行 window.location.replace，就能阻止無窮讀取。
             console.error("快取清除失敗，請手動強制重新整理網頁");
-            return; 
+            return;
         }
 
-        // 紀錄重整次數 +1
         sessionStorage.setItem('cyj_update_attempts', (updateAttempts + 1).toString());
         setIsUpdating(true);
 
@@ -2134,37 +2173,36 @@ export default function App() {
         localStorage.removeItem("cyj_input_draft_v3");
         localStorage.removeItem("cyj_therapist_draft");
         localStorage.removeItem("cyj_therapist_draft_v2");
-        
+
         if ('serviceWorker' in navigator) {
           navigator.serviceWorker.getRegistrations().then((registrations) => {
             for (let registration of registrations) registration.unregister();
           }).catch(err => console.warn('SW unregister error', err));
         }
-        
+
         setTimeout(() => {
-          const currentUrl = window.location.href.split('?')[0]; 
+          const currentUrl = window.location.href.split('?')[0];
           const newUrl = `${currentUrl}?v=${new Date().getTime()}`;
           window.location.replace(newUrl);
         }, 3000);
       } else {
-        // 如果版本已經正確，清除重整計數器
         sessionStorage.removeItem('cyj_update_attempts');
       }
     };
 
-    const unsubVersion = onSnapshot(globalVersionRef, (s) => {
-      const remoteVersion = s.exists() ? String(s.data()?.version || "").trim() : "";
-      setPublishedSystemVersion(remoteVersion);
-      if (remoteVersion) checkAndExecuteUpdate(remoteVersion);
-    });
+    const applySystemVersionSnapshot = (snapshot) => {
+      const marker = normalizeSystemVersionMarker(snapshot);
+      setPublishedSystemVersion(marker.version);
+      setPublishedSystemRelease(marker);
+      if (marker.version || marker.entryAsset) void checkAndExecuteUpdate(marker);
+    };
+
+    const unsubVersion = onSnapshot(globalVersionRef, applySystemVersionSnapshot);
 
     const handleVisibilityChange = async () => {
       if (document.visibilityState === 'visible' && isOnline) {
         try {
-          const s = await getDoc(globalVersionRef);
-          const remoteVersion = s.exists() ? String(s.data()?.version || "").trim() : "";
-          setPublishedSystemVersion(remoteVersion);
-          if (remoteVersion) checkAndExecuteUpdate(remoteVersion);
+          applySystemVersionSnapshot(await getDoc(globalVersionRef));
         } catch (e) {
           console.warn("Wake up version check failed", e);
         }
@@ -2176,7 +2214,7 @@ export default function App() {
       unsubVersion();
       document.removeEventListener("visibilitychange", handleVisibilityChange);
     };
-  }, [isOnline]); 
+  }, [isOnline]);
 
   useEffect(() => {
     let intervalId = null;
@@ -4377,30 +4415,6 @@ export default function App() {
     buildDeviceSecurityActor,
   ]);
 
-  useEffect(() => {
-    if (
-      !hasVerifiedApplicationSession ||
-      !isDeviceSecuritySuperAdmin ||
-      currentDeviceTrust?.status !== "trusted"
-    ) {
-      return;
-    }
-
-    manageAdministrativeSettingAction({
-      action: "publish_system_version",
-      payload: { version: CURRENT_APP_VERSION },
-      expectedRevision: 0,
-    }).catch((error) => {
-      console.warn("system_version backend publish failed:", error?.message || error);
-    });
-  }, [
-    hasVerifiedApplicationSession,
-    isDeviceSecuritySuperAdmin,
-    currentDeviceTrust?.status,
-    currentBrandId,
-    manageAdministrativeSettingAction,
-  ]);
-
   const buildManagerOrganizationSignatureClient = useCallback(async () => {
     const sourceManagers = managers && typeof managers === "object" ? managers : {};
     const normalizedManagers = {};
@@ -4945,7 +4959,7 @@ export default function App() {
     annualMonthlyTargetSummaries, annualTargetSummaryLoadState, annualAggregateLoadState, therapistAnnualAggregatedData, // ★ 年度 trust / target / fallback readiness
     showToast, openConfirm, fmtMoney, fmtNum, inputDate, setInputDate, setTargets, selectedYear, selectedMonth, setSelectedYear, setSelectedMonth, permissions, storeAccounts, managerAuth, currentUser, userRole, logActivity, manageTherapistMasterAction, navigateToStore, activeView, appId,
     therapists: visibleTherapists, therapistReports: visibleTherapistReports, therapistSummaryState, therapistSchedules, therapistTargets, trainerAuth, systemExclusionState, auditExclusions, handleUpdateAuditExclusions, currentBrand, setCurrentBrandId, getCollectionPath, getDocPath, dailyLoginCount, yesterdayLoginCount, securityConfig, featureFlags, therapistModuleEnabled, isOnline, isLowPowerMode, trackTargetEditorRead,
-    currentDeviceTrust, currentSecurityAccountKey, manageDeviceSecurityAction, reviewDeviceApprovalAction, updateTelegramSecurityAlertConfig, manageApplicationAccountAction, manageAdministrativeSettingAction, manageManagerOrganizationAction, manageManagementDelegationAction, updateModulePermissions, updateProjectionContext, updateStoreSchedule, getProductionHealthSnapshotAction, appVersion: CURRENT_APP_VERSION, publishedSystemVersion, canManageDeviceSecurity: isDeviceSecuritySuperAdmin, canRevealTherapistPassword: isDeviceSecuritySuperAdmin, canDeleteTherapistAccount: isDeviceSecuritySuperAdmin, openDeviceApprovalPanel, openDailyAudit, deviceApprovalActionSummary,
+    currentDeviceTrust, currentSecurityAccountKey, manageDeviceSecurityAction, reviewDeviceApprovalAction, updateTelegramSecurityAlertConfig, manageApplicationAccountAction, manageAdministrativeSettingAction, manageManagerOrganizationAction, manageManagementDelegationAction, updateModulePermissions, updateProjectionContext, updateStoreSchedule, getProductionHealthSnapshotAction, appVersion: CURRENT_APP_VERSION, publishedSystemVersion, publishedSystemRelease, canManageDeviceSecurity: isDeviceSecuritySuperAdmin, canRevealTherapistPassword: isDeviceSecuritySuperAdmin, canDeleteTherapistAccount: isDeviceSecuritySuperAdmin, openDeviceApprovalPanel, openDailyAudit, deviceApprovalActionSummary,
     loginDirectory,
     fetchGlobalData,
     officialManagers: managers,
@@ -4955,7 +4969,7 @@ export default function App() {
     directorPermissionProfile,
     canDirectorAccessView,
     isReadOnlyDirector: userRole === "director" && !canDirectorAccessView("history")
-  }), [user, loading, visibleManagers, visibleManagerOrder, monthlyTargetSummary, currentLifecycleMasterState, currentDashboardSummary, currentRankingsSummary, currentReportSummaryReady, currentReportSummaryReadyYearMonth, currentReportSummaryReadyBrandId, currentSummaryRecalcFlagState, historicalDetailRefreshState, targets, visibleRawData, rawData, annualAggregatedData, annualDashboardSummaries, annualSummaryStatusMap, annualSummaryLoadState, annualMonthlyTargetSummaries, annualTargetSummaryLoadState, annualAggregateLoadState, therapistAnnualAggregatedData, inputDate, selectedYear, selectedMonth, permissions, storeAccounts, managerAuth, currentUser, userRole, logActivity, manageTherapistMasterAction, navigateToStore, activeView, appId, visibleTherapists, visibleTherapistReports, therapistSummaryState, therapistSchedules, therapistTargets, trainerAuth, systemExclusionState, auditExclusions, handleUpdateAuditExclusions, currentBrand, setCurrentBrandId, getCollectionPath, getDocPath, dailyLoginCount, yesterdayLoginCount, securityConfig, featureFlags, therapistModuleEnabled, isOnline, isLowPowerMode, trackTargetEditorRead, currentDeviceTrust, currentSecurityAccountKey, manageDeviceSecurityAction, reviewDeviceApprovalAction, updateTelegramSecurityAlertConfig, manageApplicationAccountAction, manageAdministrativeSettingAction, manageManagerOrganizationAction, manageManagementDelegationAction, updateModulePermissions, updateProjectionContext, updateStoreSchedule, getProductionHealthSnapshotAction, publishedSystemVersion, isDeviceSecuritySuperAdmin, openDeviceApprovalPanel, openDailyAudit, deviceApprovalActionSummary, loginDirectory, fetchGlobalData, managers, delegations, activeDelegations, delegationAccess, accessibleStores, officialStores, delegatedStores, refreshDelegations, canAccessStore, canEditStoreReport, getActiveDelegationForStore, directorLevel, directorPermissionProfile, canDirectorAccessView]); // ★ 依賴陣列也要加
+  }), [user, loading, visibleManagers, visibleManagerOrder, monthlyTargetSummary, currentLifecycleMasterState, currentDashboardSummary, currentRankingsSummary, currentReportSummaryReady, currentReportSummaryReadyYearMonth, currentReportSummaryReadyBrandId, currentSummaryRecalcFlagState, historicalDetailRefreshState, targets, visibleRawData, rawData, annualAggregatedData, annualDashboardSummaries, annualSummaryStatusMap, annualSummaryLoadState, annualMonthlyTargetSummaries, annualTargetSummaryLoadState, annualAggregateLoadState, therapistAnnualAggregatedData, inputDate, selectedYear, selectedMonth, permissions, storeAccounts, managerAuth, currentUser, userRole, logActivity, manageTherapistMasterAction, navigateToStore, activeView, appId, visibleTherapists, visibleTherapistReports, therapistSummaryState, therapistSchedules, therapistTargets, trainerAuth, systemExclusionState, auditExclusions, handleUpdateAuditExclusions, currentBrand, setCurrentBrandId, getCollectionPath, getDocPath, dailyLoginCount, yesterdayLoginCount, securityConfig, featureFlags, therapistModuleEnabled, isOnline, isLowPowerMode, trackTargetEditorRead, currentDeviceTrust, currentSecurityAccountKey, manageDeviceSecurityAction, reviewDeviceApprovalAction, updateTelegramSecurityAlertConfig, manageApplicationAccountAction, manageAdministrativeSettingAction, manageManagerOrganizationAction, manageManagementDelegationAction, updateModulePermissions, updateProjectionContext, updateStoreSchedule, getProductionHealthSnapshotAction, publishedSystemVersion, publishedSystemRelease, isDeviceSecuritySuperAdmin, openDeviceApprovalPanel, openDailyAudit, deviceApprovalActionSummary, loginDirectory, fetchGlobalData, managers, delegations, activeDelegations, delegationAccess, accessibleStores, officialStores, delegatedStores, refreshDelegations, canAccessStore, canEditStoreReport, getActiveDelegationForStore, directorLevel, directorPermissionProfile, canDirectorAccessView]); // ★ 依賴陣列也要加
   
   const memoizedViews = useMemo(() => {
     return (

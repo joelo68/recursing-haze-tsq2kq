@@ -1,3 +1,55 @@
+# Release Control / Version Publishing — 2026-10-04
+
+正式版本發布分成兩個獨立階段：
+
+```text
+1. Deploy release
+   git main
+   → npm run build
+   → dist/release.json
+   → GitHub Pages
+
+2. Publish update marker
+   System Monitor「正式版本」
+   → CYJ 最高管理者按「發布更新」
+   → manageAdministrativeSetting(action=publish_system_version)
+   → Backend 驗證目前正式 GitHub Pages release.json
+   → system_version transaction / revision OCC
+```
+
+因此 deploy 新 bundle **不再等同立即強制全員更新**。最高管理者可先確認正式 release identity，再決定何時發布更新 marker。
+
+`release.json` 仍是正式靜態 release identity：
+
+```text
+schemaVersion = release-identity-v1
+appVersion
+sourceCommit
+entryAsset
+```
+
+Backend 只允許發布目前 canonical GitHub Pages `release.json` 已存在的 stable version / source commit / entry asset，拒絕任意版本、舊 release identity 與 downgrade。
+
+第一次 Release Control Production rollout 使用使用者明確核准的：
+
+```text
+CURRENT_APP_VERSION = 3.6.2
+```
+
+建議正式部署順序：
+
+```text
+1. deploy functions:manageAdministrativeSetting
+2. deploy frontend via npm run deploy
+3. 最高管理者重新載入並確認 System Monitor 顯示 v3.6.2 正式 release
+4. 在 System Monitor 按「發布更新」
+5. 舊 v3.6.1 client 依 system_version marker 強制切到 v3.6.2
+```
+
+不要在 frontend 尚未正式發布 v3.6.2 前先寫 `system_version=3.6.2`。
+
+---
+
 # DEPLOYMENT.md
 
 # FRD-A5 Annual Data Authority Production Closeout — 2026-10-01

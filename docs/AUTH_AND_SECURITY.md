@@ -1,3 +1,39 @@
+# Release Control Security Override — 2026-10-04
+
+Release Control 將 `system_version` 從「最高管理者登入後自動發布 CURRENT_APP_VERSION」改成最高管理者在 System Monitor 明確執行的全系統版本發布動作。
+
+正式安全鏈：
+
+```text
+CYJ highest administrator control surface
+→ server-issued Application Identity
+→ Trusted Device
+→ fresh credential re-verification
+→ Backend manageAdministrativeSetting
+→ canonical GitHub Pages release.json verification
+→ stable-version / no-downgrade validation
+→ system_version revision OCC transaction
+→ maintenance audit log
+```
+
+Browser 仍不可直接寫 `global_settings/system_version`；`firestore.rules` 既有 `system_version` direct-write deny 不放寬。Backend 不相信 Browser 自報的 release identity，正式 `appVersion / sourceCommit / entryAsset` 必須重新由 GitHub Pages `release.json` 驗證。
+
+全系統版本是 Application-level control，不做三品牌各自版本。UI 只在 CYJ 最高管理者控制面提供發布按鈕；發布後的 marker 仍作用於 CYJ／安妞／伊啵同一套 frontend。
+
+多管理者同時發布以 `system_version.revision` 做 OCC；revision 不一致時拒絕後到 mutation。禁止將版本 marker 降到較舊 stable semantic version。
+
+Release Control 不新增 Firestore listener/query/polling。持續沿用 App 既有單一 `system_version` listener；只有人工發布時才有 on-demand transaction / audit write。Backend 另對 canonical static `release.json` 做一次 HTTPS GET，不建立 Firestore release collection。
+
+第一次 Production rollout 經使用者明確核准：
+
+```text
+CURRENT_APP_VERSION = 3.6.2
+```
+
+此一次性 bump 用來確保舊的 3.6.1 client 進入新的 asset-aware updater。後續同版本 hotfix 可在正式 `entryAsset` 改變時，透過 Release Control 發布該正式 release，不必為每個 hotfix 強制提高 semantic version。
+
+---
+
 # Canonical Role Metadata v1 Security Boundary — 2026-10-03
 
 Frontend 角色顯示 metadata 現在由 `src/constants/index.js` 的 `APPLICATION_ROLE_METADATA` 統一提供五個正式 Application Role 的顯示名稱與 badge 名稱：
