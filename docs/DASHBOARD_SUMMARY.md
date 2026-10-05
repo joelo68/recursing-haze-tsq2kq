@@ -1,5 +1,60 @@
 # DASHBOARD_SUMMARY.md
 
+# Anniu Therapist Ranking Skincare Presentation — 2026-10-05
+
+安妞管理師日報已正式拆分：
+
+```text
+newCustomerRevenue
+newCustomerSkincareRevenue
+oldCustomerRevenue
+oldCustomerSkincareRevenue
+```
+
+Dashboard「管理師績效排行榜」維持原本 `newCustomerRevenue`／`oldCustomerRevenue` 欄位語意，並只在安妞品牌額外呈現單一：
+
+```text
+保養品 = newCustomerSkincareRevenue + oldCustomerSkincareRevenue
+```
+
+不拆成兩個排行榜欄位；排序仍只依 `totalRevenue`，不因保養品欄位改變排名規則。
+
+資料流：
+
+```text
+current month
+therapist_daily_reports
+→ useDashboardStats live aggregation
+→ therapistKpi derived skincareRevenue
+→ TherapistPerformanceView
+
+historical verified month
+therapist_daily_reports
+→ Summary builder / repair
+→ therapist_summary rankings
+→ therapistKpi derived skincareRevenue
+→ TherapistPerformanceView
+```
+
+品牌隔離：
+
+```text
+安妞 → 顯示「保養品」欄位 / CSV 欄位
+CYJ / 伊啵 → 維持原排行榜欄位
+```
+
+Read impact：
+
+```text
+new listener = 0
+new query = 0
+new polling = 0
+current detail reads = unchanged
+historical therapist_summary listener = unchanged
+```
+
+---
+
 # Therapist Historical Summary-first Read Topology — 2026-10-03
 
 歷史 Dashboard 人員績效的正式 read contract：

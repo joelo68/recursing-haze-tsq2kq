@@ -45,6 +45,8 @@ const TherapistPerformanceView = ({ therapistStats, brandInfo }) => {
   const { fmtMoney, fmtNum, userRole, currentUser, managers, therapistTargets, selectedYear, selectedMonth, targets, therapists } = useContext(AppContext);
 
   const isManagerial = userRole !== 'therapist';
+  const normalizedBrandId = String(brandInfo?.id || brandInfo?.name || "").trim().toLowerCase();
+  const isAnniuBrand = normalizedBrandId === "anniu" || normalizedBrandId === "anew" || normalizedBrandId.includes("anniu") || normalizedBrandId.includes("anew") || normalizedBrandId.includes("安妞");
   const formatNullableMoney = (value) => isFiniteTherapistMetric(value) ? fmtMoney(Math.round(value)) : "N/A";
   const formatNullablePercent = (value) => isFiniteTherapistMetric(value) ? `${value.toFixed(0)}%` : "N/A";
   const formatNullableNumber = (value) => isFiniteTherapistMetric(value) ? fmtNum(Math.round(value)) : "N/A";
@@ -158,14 +160,19 @@ const TherapistPerformanceView = ({ therapistStats, brandInfo }) => {
 
   const handleExportCSV = () => {
     const dataToExport = therapistStats.rankings.filter(t => userRole !== 'therapist' || t.id === currentUser?.id);
-    const headers = ["排名,姓名,所屬店家,個人總業績,今明業績,舊客業績,新舊客佔比,新客締結率,新客人數,新客留單數,新客平均業績,舊客平均業績,在職狀態"];
+    const headers = [
+      "排名", "姓名", "所屬店家", "個人總業績", "新客業績", "舊客業績",
+      ...(isAnniuBrand ? ["保養品"] : []),
+      "新舊客佔比", "新客締結率", "新客人數", "新客留單數", "新客平均業績", "舊客平均業績", "在職狀態"
+    ];
     const rows = dataToExport.map(t => [
       t.rank, t.name, t.storeDisplay, t.totalRevenue, t.newCustomerRevenue, t.oldCustomerRevenue,
+      ...(isAnniuBrand ? [t.skincareRevenue] : []),
       `"${t.revenueMix}"`, formatNullablePercent(t.newClosingRate), t.newCustomerCount, t.newCustomerClosings,
       isFiniteTherapistMetric(t.newAsp) ? Math.round(t.newAsp) : "N/A", isFiniteTherapistMetric(t.oldAsp) ? Math.round(t.oldAsp) : "N/A", t.isSystemStaff ? "在職" : "支援/離職"
     ].join(","));
 
-    const csvContent = "\uFEFF" + [headers, ...rows].join("\n");
+    const csvContent = "\uFEFF" + [headers.join(","), ...rows].join("\n");
     const blob = new Blob([csvContent], { type: "text/csv;charset=utf-8;" });
     const link = document.createElement("a");
     const url = URL.createObjectURL(blob);
@@ -806,8 +813,8 @@ const TherapistPerformanceView = ({ therapistStats, brandInfo }) => {
         <div className="grid grid-cols-1 w-full">
           <div className="flex justify-end mb-4"><button onClick={handleExportCSV} className="flex items-center gap-2 px-4 py-2 bg-emerald-50 text-emerald-600 rounded-xl text-sm font-bold hover:bg-emerald-100 transition-colors border border-emerald-100"><Download size={16} /> 匯出 CSV</button></div>
           <div className="overflow-x-auto w-full pb-2">
-            <table className="w-full text-left border-collapse min-w-[1200px] whitespace-nowrap">
-              <thead><tr className="text-xs font-bold text-stone-400 border-b border-stone-100 bg-stone-50/50"><th className="p-3 md:p-4 w-16 text-center">排名</th><th className="p-3 md:p-4">姓名</th><th className="p-3 md:p-4">所屬店家</th><th className="p-3 md:p-4 text-right">個人總業績</th><th className="p-3 md:p-4 text-right">新客業績</th><th className="p-3 md:p-4 text-right">舊客業績</th><th className="p-3 md:p-4 text-center">新舊客佔比</th><th className="p-3 md:p-4 text-right">新客締結率</th><th className="p-3 md:p-4 text-right">新客人數</th><th className="p-3 md:p-4 text-right">新客留單數</th><th className="p-3 md:p-4 text-right">新客平均業績</th><th className="p-3 md:p-4 text-right">舊客平均業績</th></tr></thead>
+            <table className={`w-full text-left border-collapse whitespace-nowrap ${isAnniuBrand ? "min-w-[1320px]" : "min-w-[1200px]"}`}>
+              <thead><tr className="text-xs font-bold text-stone-400 border-b border-stone-100 bg-stone-50/50"><th className="p-3 md:p-4 w-16 text-center">排名</th><th className="p-3 md:p-4">姓名</th><th className="p-3 md:p-4">所屬店家</th><th className="p-3 md:p-4 text-right">個人總業績</th><th className="p-3 md:p-4 text-right">新客業績</th><th className="p-3 md:p-4 text-right">舊客業績</th>{isAnniuBrand && <th className="p-3 md:p-4 text-right">保養品</th>}<th className="p-3 md:p-4 text-center">新舊客佔比</th><th className="p-3 md:p-4 text-right">新客締結率</th><th className="p-3 md:p-4 text-right">新客人數</th><th className="p-3 md:p-4 text-right">新客留單數</th><th className="p-3 md:p-4 text-right">新客平均業績</th><th className="p-3 md:p-4 text-right">舊客平均業績</th></tr></thead>
               <tbody className="text-sm">
                 {therapistStats.rankings.filter(t => !(!isManagerial && t.id !== currentUser?.id)).map((t, idx) => {
                   // ★ 判斷是否為「我的團隊成員」(給予高光標示)
@@ -832,6 +839,7 @@ const TherapistPerformanceView = ({ therapistStats, brandInfo }) => {
                       <td className={`p-3 md:p-4 text-right font-mono font-bold ${isMyOwnTeam ? "text-amber-600" : "text-indigo-600"}`}>{fmtMoney(t.totalRevenue)}</td>
                       <td className="p-3 md:p-4 text-right font-mono text-stone-600">{fmtMoney(t.newCustomerRevenue)}</td>
                       <td className="p-3 md:p-4 text-right font-mono text-stone-600">{fmtMoney(t.oldCustomerRevenue)}</td>
+                      {isAnniuBrand && <td className="p-3 md:p-4 text-right font-mono font-semibold text-emerald-600">{fmtMoney(t.skincareRevenue)}</td>}
                       <td className="p-3 md:p-4 text-center font-mono text-xs text-stone-400">{t.revenueMix}</td>
                       <td className="p-3 md:p-4 text-right font-mono font-bold text-stone-700">{formatNullablePercent(t.newClosingRate)}</td>
                       <td className="p-3 md:p-4 text-right font-mono text-stone-600">{fmtNum(t.newCustomerCount)}</td>

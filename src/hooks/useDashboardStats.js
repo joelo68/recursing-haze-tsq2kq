@@ -1808,7 +1808,7 @@ export function useDashboardStats() {
       if (!statsMap[id]) { 
         statsMap[id] = { 
           id, name: r.therapistName, latestDate: reportTime, storeDisplay: rStoreClean,    
-          totalRevenue: 0, serviceCount: 0, newCustomerRevenue: 0, oldCustomerRevenue: 0,
+          totalRevenue: 0, serviceCount: 0, newCustomerRevenue: 0, newCustomerSkincareRevenue: 0, oldCustomerRevenue: 0, oldCustomerSkincareRevenue: 0,
           newCustomerCount: 0, oldCustomerCount: 0, newCustomerClosings: 0, returnRevenue: 0 
         }; 
       } else {
@@ -1817,7 +1817,8 @@ export function useDashboardStats() {
           }
       }
       statsMap[id].totalRevenue += (Number(r.totalRevenue) || 0); statsMap[id].serviceCount += (Number(r.serviceCount) || 0);
-      statsMap[id].newCustomerRevenue += (Number(r.newCustomerRevenue) || 0); statsMap[id].oldCustomerRevenue += (Number(r.oldCustomerRevenue) || 0);
+      statsMap[id].newCustomerRevenue += (Number(r.newCustomerRevenue) || 0); statsMap[id].newCustomerSkincareRevenue += (Number(r.newCustomerSkincareRevenue) || 0);
+      statsMap[id].oldCustomerRevenue += (Number(r.oldCustomerRevenue) || 0); statsMap[id].oldCustomerSkincareRevenue += (Number(r.oldCustomerSkincareRevenue) || 0);
       statsMap[id].newCustomerCount += (Number(r.newCustomerCount) || 0); statsMap[id].oldCustomerCount += (Number(r.oldCustomerCount) || 0);
       statsMap[id].newCustomerClosings += (Number(r.newCustomerClosings) || 0); statsMap[id].returnRevenue += (Number(r.returnRevenue) || 0);
     });

@@ -1140,6 +1140,24 @@ therapist_summary
 
 當月人員績效仍應使用即時 detail，而不是 Summary，以避免今日回報後排名不即時。
 
+安妞管理師排行榜需要的 skincare 維度由同一份人員 Summary 保存；ranking row 可包含：
+
+```text
+newCustomerSkincareRevenue
+oldCustomerSkincareRevenue
+skincareRevenue
+```
+
+其中：
+
+```text
+skincareRevenue = newCustomerSkincareRevenue + oldCustomerSkincareRevenue
+```
+
+這是 additive presentation metric，不改 `totalRevenue` 的既有安妞 contract，也不改排行排序欄位。CYJ / 伊啵即使缺少兩個 raw skincare 欄位，canonical reader 仍視為 `0`，且前端不顯示保養品欄位。
+
+Summary writer / Maintenance rebuild 直接沿用既有 `therapist_daily_reports` 讀取流程攜帶上述欄位，不新增 query、listener 或 polling。
+
 ---
 
 # 8. Summary Trust / Recalculation

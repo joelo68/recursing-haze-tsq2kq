@@ -11584,7 +11584,9 @@ async function buildAutoDashboardSummaryPayloads(brandId, yearMonth) {
         totalRevenue: 0,
         serviceCount: 0,
         newCustomerRevenue: 0,
+        newCustomerSkincareRevenue: 0,
         oldCustomerRevenue: 0,
+        oldCustomerSkincareRevenue: 0,
         newCustomerCount: 0,
         oldCustomerCount: 0,
         newCustomerClosings: 0,
@@ -11600,7 +11602,9 @@ async function buildAutoDashboardSummaryPayloads(brandId, yearMonth) {
     t.totalRevenue += Number(row.totalRevenue) || 0;
     t.serviceCount += Number(row.serviceCount) || 0;
     t.newCustomerRevenue += Number(row.newCustomerRevenue) || 0;
+    t.newCustomerSkincareRevenue += Number(row.newCustomerSkincareRevenue) || 0;
     t.oldCustomerRevenue += Number(row.oldCustomerRevenue) || 0;
+    t.oldCustomerSkincareRevenue += Number(row.oldCustomerSkincareRevenue) || 0;
     t.newCustomerCount += Number(row.newCustomerCount) || 0;
     t.oldCustomerCount += Number(row.oldCustomerCount) || 0;
     t.newCustomerClosings += Number(row.newCustomerClosings) || 0;

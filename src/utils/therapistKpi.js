@@ -25,7 +25,10 @@ export const buildTherapistSampleMetrics = (row = {}) => {
   const totalRevenue = toFiniteNumber(row.totalRevenue);
   const serviceCount = toFiniteNumber(row.serviceCount);
   const newCustomerRevenue = toFiniteNumber(row.newCustomerRevenue);
+  const newCustomerSkincareRevenue = toFiniteNumber(row.newCustomerSkincareRevenue);
   const oldCustomerRevenue = toFiniteNumber(row.oldCustomerRevenue);
+  const oldCustomerSkincareRevenue = toFiniteNumber(row.oldCustomerSkincareRevenue);
+  const skincareRevenue = newCustomerSkincareRevenue + oldCustomerSkincareRevenue;
   const newCustomerCount = toFiniteNumber(row.newCustomerCount);
   const oldCustomerCount = toFiniteNumber(row.oldCustomerCount);
   const newCustomerClosings = toFiniteNumber(row.newCustomerClosings);
@@ -39,7 +42,10 @@ export const buildTherapistSampleMetrics = (row = {}) => {
     totalRevenue,
     serviceCount,
     newCustomerRevenue,
+    newCustomerSkincareRevenue,
     oldCustomerRevenue,
+    oldCustomerSkincareRevenue,
+    skincareRevenue,
     newCustomerCount,
     oldCustomerCount,
     newCustomerClosings,
@@ -101,7 +107,10 @@ export const buildTherapistAggregateMetrics = (rows = []) => {
     acc.totalRevenue += toFiniteNumber(row.totalRevenue);
     acc.serviceCount += toFiniteNumber(row.serviceCount);
     acc.newCustomerRevenue += toFiniteNumber(row.newCustomerRevenue);
+    acc.newCustomerSkincareRevenue += toFiniteNumber(row.newCustomerSkincareRevenue);
     acc.oldCustomerRevenue += toFiniteNumber(row.oldCustomerRevenue);
+    acc.oldCustomerSkincareRevenue += toFiniteNumber(row.oldCustomerSkincareRevenue);
+    acc.skincareRevenue += toFiniteNumber(row.newCustomerSkincareRevenue) + toFiniteNumber(row.oldCustomerSkincareRevenue);
     acc.newCustomerCount += toFiniteNumber(row.newCustomerCount);
     acc.oldCustomerCount += toFiniteNumber(row.oldCustomerCount);
     acc.newCustomerClosings += toFiniteNumber(row.newCustomerClosings);
@@ -111,7 +120,10 @@ export const buildTherapistAggregateMetrics = (rows = []) => {
     totalRevenue: 0,
     serviceCount: 0,
     newCustomerRevenue: 0,
+    newCustomerSkincareRevenue: 0,
     oldCustomerRevenue: 0,
+    oldCustomerSkincareRevenue: 0,
+    skincareRevenue: 0,
     newCustomerCount: 0,
     oldCustomerCount: 0,
     newCustomerClosings: 0,
@@ -148,7 +160,10 @@ export const buildTherapistSummarySignature = (summary = {}) => {
       storeDisplay: String(row.storeDisplay || row.store || ""),
       totalRevenue: row.totalRevenue,
       newCustomerRevenue: row.newCustomerRevenue,
+      newCustomerSkincareRevenue: row.newCustomerSkincareRevenue,
       oldCustomerRevenue: row.oldCustomerRevenue,
+      oldCustomerSkincareRevenue: row.oldCustomerSkincareRevenue,
+      skincareRevenue: row.skincareRevenue,
       newCustomerCount: row.newCustomerCount,
       oldCustomerCount: row.oldCustomerCount,
       newCustomerClosings: row.newCustomerClosings,
@@ -161,7 +176,10 @@ export const buildTherapistSummarySignature = (summary = {}) => {
     grand: {
       totalRevenue: grand.totalRevenue,
       newCustomerRevenue: grand.newCustomerRevenue,
+      newCustomerSkincareRevenue: grand.newCustomerSkincareRevenue,
       oldCustomerRevenue: grand.oldCustomerRevenue,
+      oldCustomerSkincareRevenue: grand.oldCustomerSkincareRevenue,
+      skincareRevenue: grand.skincareRevenue,
       newCustomerCount: grand.newCustomerCount,
       oldCustomerCount: grand.oldCustomerCount,
       newCustomerClosings: grand.newCustomerClosings,
