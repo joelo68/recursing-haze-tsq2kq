@@ -5,6 +5,7 @@ import { AlertTriangle, Trophy, Medal, Star, Activity, Target, DollarSign, Credi
 import { AppContext } from "../AppContext";
 import { Card } from "./SharedUI";
 import {
+  buildAnnualRatioBenchmarkMetric,
   getAnnualBenchmarkLabel,
   getAnnualBenchmarkMetric,
   isAnnualBenchmarkMetricDisplayable,
@@ -75,24 +76,47 @@ const StorePerformanceView = ({ dashboardStats, myStoreRankings, brandInfo }) =>
   };
   const annualKpiBenchmark = dashboardStats.annualKpiBenchmark || {};
   const trafficAnnualBenchmark = getAnnualBenchmarkMetric(annualKpiBenchmark, "traffic");
+  const avgTrafficAspAnnualBenchmark = buildAnnualRatioBenchmarkMetric({
+    payload: annualKpiBenchmark,
+    numeratorMetricId: "operationalAccrual",
+    denominatorMetricId: "traffic",
+  });
   const newCustomerAnnualBenchmark = getAnnualBenchmarkMetric(annualKpiBenchmark, "newCustomers");
-  const formatAnnualBenchmark = (metric) => (
+  const newCustomerClosingAnnualBenchmark = getAnnualBenchmarkMetric(annualKpiBenchmark, "newCustomerClosings");
+  const avgNewCustomerAspAnnualBenchmark = buildAnnualRatioBenchmarkMetric({
+    payload: annualKpiBenchmark,
+    numeratorMetricId: "newCustomerSales",
+    denominatorMetricId: "newCustomers",
+  });
+  const newCustomerMixAnnualBenchmark = buildAnnualRatioBenchmarkMetric({
+    payload: annualKpiBenchmark,
+    numeratorMetricId: "newCustomers",
+    denominatorMetricId: "traffic",
+    scale: 100,
+  });
+  const formatAnnualBenchmark = (metric, formatter = fmtNum) => (
     isAnnualBenchmarkMetricDisplayable(metric)
-      ? fmtNum(Math.round(Number(metric.monthlyAverage)))
+      ? formatter(Math.round(Number(metric.monthlyAverage)))
       : ""
   );
-  const trafficMonthlyAverageText = formatAnnualBenchmark(trafficAnnualBenchmark);
-  const newCustomerMonthlyAverageText = formatAnnualBenchmark(newCustomerAnnualBenchmark);
-  const trafficBenchmarkMonths = Array.isArray(trafficAnnualBenchmark.basedMonths)
-    ? trafficAnnualBenchmark.basedMonths.filter(Boolean)
-    : [];
-  const newCustomerBenchmarkMonths = Array.isArray(newCustomerAnnualBenchmark.basedMonths)
-    ? newCustomerAnnualBenchmark.basedMonths.filter(Boolean)
-    : [];
-  const trafficBenchmarkMonthCount = Number(trafficAnnualBenchmark.basedMonthCount || trafficBenchmarkMonths.length || 0);
-  const newCustomerBenchmarkMonthCount = Number(newCustomerAnnualBenchmark.basedMonthCount || newCustomerBenchmarkMonths.length || 0);
-  const trafficBenchmarkLabel = getAnnualBenchmarkLabel(trafficAnnualBenchmark);
-  const newCustomerBenchmarkLabel = getAnnualBenchmarkLabel(newCustomerAnnualBenchmark);
+  const buildBenchmarkMeta = (metric, formatter = fmtNum) => {
+    const months = Array.isArray(metric?.basedMonths) ? metric.basedMonths.filter(Boolean) : [];
+    return {
+      text: formatAnnualBenchmark(metric, formatter),
+      label: getAnnualBenchmarkLabel(metric),
+      months,
+      monthCount: Number(metric?.basedMonthCount || months.length || 0),
+    };
+  };
+  const trafficBenchmark = buildBenchmarkMeta(trafficAnnualBenchmark);
+  const avgTrafficAspBenchmark = buildBenchmarkMeta(avgTrafficAspAnnualBenchmark, fmtMoney);
+  const newCustomerBenchmark = buildBenchmarkMeta(newCustomerAnnualBenchmark);
+  const newCustomerClosingBenchmark = buildBenchmarkMeta(newCustomerClosingAnnualBenchmark);
+  const avgNewCustomerAspBenchmark = buildBenchmarkMeta(avgNewCustomerAspAnnualBenchmark, fmtMoney);
+  const newCustomerMixBenchmark = buildBenchmarkMeta(
+    newCustomerMixAnnualBenchmark,
+    (value) => `${fmtNum(value)}% / ${fmtNum(Math.max(0, 100 - Number(value || 0)))}%`
+  );
   const formatBenchmarkMonth = (yearMonth = "") => {
     const match = String(yearMonth || "").match(/^(\d{4})-(\d{2})$/);
     return match ? `${match[1]}/${match[2]}` : String(yearMonth || "");
@@ -226,8 +250,10 @@ const StorePerformanceView = ({ dashboardStats, myStoreRankings, brandInfo }) =>
     const normalizedMonths = Array.isArray(benchmarkMonths) ? benchmarkMonths.filter(Boolean) : [];
     const monthCount = Number(benchmarkMonthCount || normalizedMonths.length || 0);
     const monthText = normalizedMonths.map(formatBenchmarkMonth).join("、");
+    const benchmarkDisplayLabel = String(benchmarkLabel || "")
+      .replace(/^近 (\d+) 個完整月平均$/, "近$1月均");
     const benchmarkTitle = normalizedMonths.length > 0
-      ? `納入月份：${monthText}（共 ${monthCount} 個完整月）`
+      ? `${benchmarkLabel}｜納入月份：${monthText}（共 ${monthCount} 個完整月）`
       : "";
 
     return (
@@ -238,17 +264,17 @@ const StorePerformanceView = ({ dashboardStats, myStoreRankings, brandInfo }) =>
              <p className="text-stone-400 text-xs font-bold uppercase tracking-wider mb-1">{title}</p>
              <h3 className="text-2xl font-extrabold text-stone-700 font-mono tracking-tight">{value}</h3>
           </div>
-          {subText && <div className={`mt-3 pt-3 border-t border-stone-50 text-xs font-medium text-stone-500 flex flex-col gap-1 ${benchmarkText ? "pr-20" : ""}`}>{subText}</div>}
+          {subText && <div className={`mt-3 pt-3 border-t border-stone-50 text-xs font-medium text-stone-500 flex flex-col gap-1 ${benchmarkText ? "pr-28 sm:pr-32" : ""}`}>{subText}</div>}
         </div>
         {benchmarkText && (
           <div className="absolute bottom-4 right-5 z-30">
             <div
-              className="peer flex cursor-help items-baseline gap-1 rounded-full bg-white/85 px-1.5 py-0.5 text-[10px] font-bold text-stone-400 backdrop-blur-sm"
+              className="peer flex cursor-help items-baseline gap-1.5 rounded-lg border border-stone-200/80 bg-stone-50/95 px-2 py-1 text-[10px] font-bold text-stone-400 shadow-sm backdrop-blur-sm"
               title={benchmarkTitle}
             >
-              <span>{benchmarkLabel}</span>
-              <span className="font-mono text-[11px] font-black text-stone-500">{benchmarkText}</span>
-              {normalizedMonths.length > 0 && <Info size={10} className="ml-0.5 text-stone-300" />}
+              <span>{benchmarkDisplayLabel}</span>
+              <span className="font-mono text-xs font-black text-stone-600">{benchmarkText}</span>
+              {normalizedMonths.length > 0 && <Info size={11} className="ml-0.5 text-stone-300" />}
             </div>
 
             {normalizedMonths.length > 0 && (
@@ -663,10 +689,10 @@ const StorePerformanceView = ({ dashboardStats, myStoreRankings, brandInfo }) =>
       <div>
          <h3 className="text-lg font-bold text-stone-700 mb-4 flex items-center gap-2 pl-1"><div className="w-1 h-6 bg-cyan-500 rounded-full"></div>營運效率與客流</h3>
          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-6 gap-4">
-           <MiniKpiCard title="課程操作人數" value={fmtNum(storeGrandTotal.traffic)} icon={Users} color="text-blue-500" subText="本月累計操作人數" benchmarkText={trafficMonthlyAverageText} benchmarkLabel={trafficBenchmarkLabel} benchmarkMonths={trafficBenchmarkMonths} benchmarkMonthCount={trafficBenchmarkMonthCount} />
-           <MiniKpiCard title="平均操作權責" value={fmtMoney(dashboardStats.avgTrafficASP)} icon={TrendingUp} color="text-indigo-500" subText={<span className={dashboardStats.avgTrafficASP >= targets.trafficASP ? "text-emerald-500 font-bold" : "text-rose-500 font-bold"}>{dashboardStats.avgTrafficASP >= targets.trafficASP ? "達標" : "未達標"} (目標 {fmtNum(targets.trafficASP)})</span>} />
-           <MiniKpiCard title="總新客數" value={fmtNum(storeGrandTotal.newCustomers)} icon={Sparkles} color="text-purple-500" subText="本月新增體驗人數" benchmarkText={newCustomerMonthlyAverageText} benchmarkLabel={newCustomerBenchmarkLabel} benchmarkMonths={newCustomerBenchmarkMonths} benchmarkMonthCount={newCustomerBenchmarkMonthCount} />
-           <MiniKpiCard title="總新客留單" value={fmtNum(storeGrandTotal.newCustomerClosings)} icon={CheckSquare} color="text-teal-500" subText={<span>留單率 <span className="font-bold">{storeGrandTotal.newCustomers > 0 ? ((storeGrandTotal.newCustomerClosings / storeGrandTotal.newCustomers) * 100).toFixed(0) : 0}%</span></span>} />
+           <MiniKpiCard title="課程操作人數" value={fmtNum(storeGrandTotal.traffic)} icon={Users} color="text-blue-500" subText="本月累計操作人數" benchmarkText={trafficBenchmark.text} benchmarkLabel={trafficBenchmark.label} benchmarkMonths={trafficBenchmark.months} benchmarkMonthCount={trafficBenchmark.monthCount} />
+           <MiniKpiCard title="平均操作權責" value={fmtMoney(dashboardStats.avgTrafficASP)} icon={TrendingUp} color="text-indigo-500" subText={<span className={dashboardStats.avgTrafficASP >= targets.trafficASP ? "text-emerald-500 font-bold" : "text-rose-500 font-bold"}>{dashboardStats.avgTrafficASP >= targets.trafficASP ? "達標" : "未達標"} (目標 {fmtNum(targets.trafficASP)})</span>} benchmarkText={avgTrafficAspBenchmark.text} benchmarkLabel={avgTrafficAspBenchmark.label} benchmarkMonths={avgTrafficAspBenchmark.months} benchmarkMonthCount={avgTrafficAspBenchmark.monthCount} />
+           <MiniKpiCard title="總新客數" value={fmtNum(storeGrandTotal.newCustomers)} icon={Sparkles} color="text-purple-500" subText="本月新增體驗人數" benchmarkText={newCustomerBenchmark.text} benchmarkLabel={newCustomerBenchmark.label} benchmarkMonths={newCustomerBenchmark.months} benchmarkMonthCount={newCustomerBenchmark.monthCount} />
+           <MiniKpiCard title="總新客留單" value={fmtNum(storeGrandTotal.newCustomerClosings)} icon={CheckSquare} color="text-teal-500" subText={<span>留單率 <span className="font-bold">{storeGrandTotal.newCustomers > 0 ? ((storeGrandTotal.newCustomerClosings / storeGrandTotal.newCustomers) * 100).toFixed(0) : 0}%</span></span>} benchmarkText={newCustomerClosingBenchmark.text} benchmarkLabel={newCustomerClosingBenchmark.label} benchmarkMonths={newCustomerClosingBenchmark.months} benchmarkMonthCount={newCustomerClosingBenchmark.monthCount} />
            <MiniKpiCard
              title="新客平均客單"
              value={fmtMoney(dashboardStats.avgNewCustomerASP)}
@@ -682,8 +708,12 @@ const StorePerformanceView = ({ dashboardStats, myStoreRankings, brandInfo }) =>
                  </span>
                </div>
              }
+             benchmarkText={avgNewCustomerAspBenchmark.text}
+             benchmarkLabel={avgNewCustomerAspBenchmark.label}
+             benchmarkMonths={avgNewCustomerAspBenchmark.months}
+             benchmarkMonthCount={avgNewCustomerAspBenchmark.monthCount}
            />
-           <MiniKpiCard title="新 / 舊客 結構比" value={`${dashboardStats.newCountMix}% / ${dashboardStats.oldCountMix}%`} icon={PieChart} color="text-pink-500" subText={<span className="flex items-center gap-1 text-stone-500">業績比 <span className="font-bold text-stone-700">{dashboardStats.newRevMix}% / {dashboardStats.oldRevMix}%</span></span>} />
+           <MiniKpiCard title="新 / 舊客 結構比" value={`${dashboardStats.newCountMix}% / ${dashboardStats.oldCountMix}%`} icon={PieChart} color="text-pink-500" subText={<span className="flex items-center gap-1 text-stone-500">業績比 <span className="font-bold text-stone-700">{dashboardStats.newRevMix}% / {dashboardStats.oldRevMix}%</span></span>} benchmarkText={newCustomerMixBenchmark.text} benchmarkLabel={newCustomerMixBenchmark.label} benchmarkMonths={newCustomerMixBenchmark.months} benchmarkMonthCount={newCustomerMixBenchmark.monthCount} />
          </div>
       </div>
 

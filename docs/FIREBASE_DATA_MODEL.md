@@ -1285,6 +1285,22 @@ annualAverageSettings
 - 判斷 established store
 - Dashboard annual KPI benchmark
 
+2026-10-05 Dashboard KPI 年均擴充後，`metrics` 正式包含：
+
+```text
+traffic
+newCustomers
+cash
+accrual
+operationalAccrual
+newCustomerSales
+newCustomerClosings
+```
+
+其中 `operationalAccrual / newCustomerSales / newCustomerClosings` 是既有月 Summary 的延伸年度來源，不建立第二份年度 collection。比例型 Dashboard benchmark 由 Frontend 使用各 metric 的 `monthlyValues` 與共同完整月份做 ratio-of-totals；不要把每月百分比直接平均。
+
+`newCustomerClosings` 目前沿用 verified `dashboard_summary` + complete reporting 的可信數值；既有 Store daily input 會將空白序列化為數值 0，因此本批不虛構另一套 formal status 欄位。
+
 若某月份 `dashboard_summary` 不存在，builder 會記為 skipped month，
 不應自行用未知來源填補。
 

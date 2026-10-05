@@ -857,6 +857,52 @@ completed month dashboard_summary
 缺少 dashboard summary 的月份會 skip，
 不會自行猜出一個月的 benchmark。
 
+## 23.1 Dashboard「營運效率與客流」年度比較
+
+2026-10-05 起，既有 `annual_kpi_summary/{year}` 同一份 Summary authority 擴充為可支援六張 KPI 卡的年度比較；Frontend 不新增 Raw 歷史讀取。
+
+Annual source metrics：
+
+```text
+traffic
+newCustomers
+cash
+accrual
+operationalAccrual
+newCustomerSales
+newCustomerClosings
+```
+
+Dashboard 顯示語意：
+
+```text
+課程操作人數
+→ traffic 的完整可信月份月平均
+
+平均操作權責
+→ Σ operationalAccrual / Σ traffic
+→ 只使用 numerator / denominator 共同完整可信月份
+
+總新客數
+→ newCustomers 的完整可信月份月平均
+
+總新客留單
+→ newCustomerClosings 的完整可信月份月平均
+
+新客平均客單
+→ Σ newCustomerSales / Σ newCustomers
+→ 只使用共同完整可信月份
+
+新 / 舊客結構比
+→ 新客 = Σ newCustomers / Σ traffic
+→ 舊客 = 1 - 新客比例
+→ 只使用共同完整可信月份
+```
+
+比例型 KPI 必須使用 ratio-of-totals，不把各月百分比直接做算術平均，避免低流量月份被賦予與高流量月份相同權重。
+
+Frontend 仍由 `useAnnualKpiBenchmark.js` 對 `annual_kpi_summary/{year}` 做單一 point read，cache key 由 v6 提升為 v7，目的是避免舊 session cache 隱藏新增 metrics；這不是新增 Firestore query / listener / polling。
+
 ---
 
 # 24. Maintenance 與 Summary

@@ -20,7 +20,7 @@ test("FRD-A1 moves Annual KPI benchmark IO out of useDashboardStats", () => {
   assert.match(dashboardHook, /brandId:\s*brandInfo\?\.id/);
   assert.match(dashboardHook, /selectedYear/);
 
-  assert.doesNotMatch(dashboardHook, /cyj_annual_kpi_summary_v6_/);
+  assert.doesNotMatch(dashboardHook, /cyj_annual_kpi_summary_v\d+_/);
   assert.doesNotMatch(dashboardHook, /getCollectionPath\("annual_kpi_summary"\)/);
   assert.doesNotMatch(dashboardHook, /normalizeAnnualKpiBenchmarkPayload\(/);
 });
@@ -37,7 +37,7 @@ test("FRD-A1 preserves the exact single-document annual KPI read topology", () =
 });
 
 test("FRD-A1 preserves brand-year cache isolation and one-hour TTL", () => {
-  assert.match(annualLoader, /cyj_annual_kpi_summary_v6_\$\{brandId\}_\$\{year\}/);
+  assert.match(annualLoader, /cyj_annual_kpi_summary_v7_\$\{brandId\}_\$\{year\}/);
   assert.match(annualLoader, /60 \* 60 \* 1000/);
   assert.match(annualLoader, /sessionStorage\.getItem\(cacheKey\)/);
   assert.match(annualLoader, /sessionStorage\.setItem\(cacheKey/);

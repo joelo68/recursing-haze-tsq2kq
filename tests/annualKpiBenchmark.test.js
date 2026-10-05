@@ -7,6 +7,7 @@ import { fileURLToPath } from "node:url";
 import {
   ANNUAL_KPI_SUMMARY_SCHEMA_VERSION,
   buildAnnualKpiBenchmarkScope,
+  buildAnnualRatioBenchmarkMetric,
   getAnnualBenchmarkLabel,
   isAnnualBenchmarkMetricDisplayable,
   normalizeAnnualKpiBenchmarkPayload,
@@ -107,6 +108,55 @@ test("rounded monthly average zero is not mislabeled as a true VALID_ZERO sample
   assert.equal(isAnnualBenchmarkMetricDisplayable(small), true);
 });
 
+
+
+test("derived Annual KPI ratios use ratio-of-totals over the shared complete-month intersection", () => {
+  const payload = normalizeAnnualKpiBenchmarkPayload({
+    schemaVersion: ANNUAL_KPI_SUMMARY_SCHEMA_VERSION,
+    metrics: {
+      traffic: metric({ "2026-01": 10, "2026-02": 20, "2026-03": 10 }),
+      operationalAccrual: metric({ "2026-01": 40000, "2026-02": 120000 }),
+      newCustomers: metric({ "2026-01": 2, "2026-02": 6 }),
+      newCustomerSales: metric({ "2026-01": 30000, "2026-02": 150000 }),
+      cash: metric({ "2026-01": 100000, "2026-02": 300000 }),
+      newCustomerClosings: metric({ "2026-01": 1, "2026-02": 4 }),
+      accrual: metric({ "2026-01": 50000, "2026-02": 130000 }),
+    },
+  });
+
+  const trafficAsp = buildAnnualRatioBenchmarkMetric({
+    payload,
+    numeratorMetricId: "operationalAccrual",
+    denominatorMetricId: "traffic",
+  });
+  assert.equal(trafficAsp.monthlyAverage, Math.round(160000 / 30));
+  assert.deepEqual(trafficAsp.basedMonths, ["2026-01", "2026-02"]);
+  assert.equal(trafficAsp.aggregation, "ratio_of_totals");
+
+  const newAsp = buildAnnualRatioBenchmarkMetric({
+    payload,
+    numeratorMetricId: "newCustomerSales",
+    denominatorMetricId: "newCustomers",
+  });
+  assert.equal(newAsp.monthlyAverage, 22500);
+
+  const newMix = buildAnnualRatioBenchmarkMetric({
+    payload,
+    numeratorMetricId: "newCustomers",
+    denominatorMetricId: "traffic",
+    scale: 100,
+  });
+  assert.equal(newMix.monthlyAverage, 27);
+
+  const unavailable = buildAnnualRatioBenchmarkMetric({
+    payload,
+    numeratorMetricId: "missingMetric",
+    denominatorMetricId: "traffic",
+  });
+  assert.equal(unavailable.status, "N_A");
+  assert.equal(unavailable.monthlyAverage, null);
+});
+
 test("legacy Annual KPI input remains readable as canonical metrics without re-exposing retired frontend mirror aliases", () => {
   const legacy = normalizeAnnualKpiBenchmarkPayload({
     trafficMonthlyAverage: 15,
@@ -124,6 +174,9 @@ test("legacy Annual KPI input remains readable as canonical metrics without re-e
   assert.equal(legacy.metrics.newCustomers.monthlyAverage, 4);
   assert.equal(legacy.metrics.cash.monthlyAverage, 100);
   assert.equal(legacy.metrics.accrual.monthlyAverage, 120);
+  assert.equal(legacy.metrics.operationalAccrual, undefined);
+  assert.equal(legacy.metrics.newCustomerSales, undefined);
+  assert.equal(legacy.metrics.newCustomerClosings, undefined);
   assert.deepEqual(legacy.metrics.traffic.basedMonths, ["2026-01", "2026-02"]);
 
   [

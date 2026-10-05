@@ -38,7 +38,7 @@ export function useAnnualKpiBenchmark({
         return;
       }
 
-      const cacheKey = `cyj_annual_kpi_summary_v6_${brandId}_${year}`;
+      const cacheKey = `cyj_annual_kpi_summary_v7_${brandId}_${year}`;
       const cacheTtlMs = 60 * 60 * 1000;
 
       try {

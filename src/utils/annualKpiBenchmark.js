@@ -12,6 +12,16 @@ export const ANNUAL_BENCHMARK_METRIC_IDS = Object.freeze([
   "newCustomers",
   "cash",
   "accrual",
+  "operationalAccrual",
+  "newCustomerSales",
+  "newCustomerClosings",
+]);
+
+const LEGACY_ANNUAL_BENCHMARK_METRIC_IDS = Object.freeze([
+  "traffic",
+  "newCustomers",
+  "cash",
+  "accrual",
 ]);
 
 const isFiniteValue = (value) => (
@@ -328,14 +338,22 @@ const buildLegacyFilteredScope = ({
 
     storeBasedMonths.forEach((yearMonth) => {
       eligibleMonthSet.add(yearMonth);
-      if (!monthTotals[yearMonth]) monthTotals[yearMonth] = { traffic: 0, newCustomers: 0, cash: 0, accrual: 0 };
+      if (!monthTotals[yearMonth]) {
+        monthTotals[yearMonth] = Object.fromEntries(
+          LEGACY_ANNUAL_BENCHMARK_METRIC_IDS.map((metricId) => [metricId, 0])
+        );
+      }
     });
 
     Object.entries(monthlyValues).forEach(([rawYearMonth, metrics = {}]) => {
       const yearMonth = normalizeYearMonth(rawYearMonth);
       if (!yearMonth || !storeBasedMonthSet.has(yearMonth)) return;
-      if (!monthTotals[yearMonth]) monthTotals[yearMonth] = { traffic: 0, newCustomers: 0, cash: 0, accrual: 0 };
-      ANNUAL_BENCHMARK_METRIC_IDS.forEach((metricId) => {
+      if (!monthTotals[yearMonth]) {
+        monthTotals[yearMonth] = Object.fromEntries(
+          LEGACY_ANNUAL_BENCHMARK_METRIC_IDS.map((metricId) => [metricId, 0])
+        );
+      }
+      LEGACY_ANNUAL_BENCHMARK_METRIC_IDS.forEach((metricId) => {
         if (isFiniteValue(metrics?.[metricId])) monthTotals[yearMonth][metricId] += Number(metrics[metricId]);
       });
     });
@@ -343,7 +361,7 @@ const buildLegacyFilteredScope = ({
 
   const basedMonths = [...eligibleMonthSet].sort();
   const legacyMetricValues = Object.fromEntries(
-    ANNUAL_BENCHMARK_METRIC_IDS.map((metricId) => [
+    LEGACY_ANNUAL_BENCHMARK_METRIC_IDS.map((metricId) => [
       metricId,
       Object.fromEntries(basedMonths.map((yearMonth) => [yearMonth, Number(monthTotals?.[yearMonth]?.[metricId] || 0)])),
     ])
@@ -351,7 +369,9 @@ const buildLegacyFilteredScope = ({
   const metrics = Object.fromEntries(
     ANNUAL_BENCHMARK_METRIC_IDS.map((metricId) => [
       metricId,
-      finalizeScopeMetric(legacyMetricValues[metricId]),
+      LEGACY_ANNUAL_BENCHMARK_METRIC_IDS.includes(metricId)
+        ? finalizeScopeMetric(legacyMetricValues[metricId])
+        : makeEmptyMetric(),
     ])
   );
 
@@ -404,4 +424,56 @@ export const getAnnualBenchmarkLabel = (metric = {}) => {
   if (count <= 0) return "";
   if (count <= 2) return `近 ${count} 個完整月平均`;
   return "年均";
+};
+
+
+export const buildAnnualRatioBenchmarkMetric = ({
+  payload = {},
+  numeratorMetricId = "",
+  denominatorMetricId = "",
+  scale = 1,
+} = {}) => {
+  const numerator = getAnnualBenchmarkMetric(payload, numeratorMetricId);
+  const denominator = getAnnualBenchmarkMetric(payload, denominatorMetricId);
+  const numeratorValues = numerator?.monthlyValues && typeof numerator.monthlyValues === "object"
+    ? numerator.monthlyValues
+    : {};
+  const denominatorValues = denominator?.monthlyValues && typeof denominator.monthlyValues === "object"
+    ? denominator.monthlyValues
+    : {};
+
+  const basedMonths = Object.keys(numeratorValues)
+    .filter((yearMonth) => (
+      normalizeYearMonth(yearMonth)
+      && isFiniteValue(numeratorValues[yearMonth])
+      && isFiniteValue(denominatorValues[yearMonth])
+      && Number(denominatorValues[yearMonth]) > 0
+    ))
+    .sort();
+
+  if (basedMonths.length === 0) return makeEmptyMetric();
+
+  const numeratorTotal = basedMonths.reduce((sum, yearMonth) => sum + Number(numeratorValues[yearMonth]), 0);
+  const denominatorTotal = basedMonths.reduce((sum, yearMonth) => sum + Number(denominatorValues[yearMonth]), 0);
+  if (!(denominatorTotal > 0)) return makeEmptyMetric();
+
+  const ratioValue = (numeratorTotal / denominatorTotal) * Number(scale || 1);
+  const roundedValue = Math.round(ratioValue);
+
+  return {
+    monthlyValues: Object.fromEntries(
+      basedMonths.map((yearMonth) => [
+        yearMonth,
+        (Number(numeratorValues[yearMonth]) / Number(denominatorValues[yearMonth])) * Number(scale || 1),
+      ])
+    ),
+    monthlyAverage: roundedValue,
+    total: numeratorTotal,
+    denominatorTotal,
+    basedMonths,
+    basedMonthCount: basedMonths.length,
+    status: numeratorTotal === 0 ? KPI_VALUE_STATUS.VALID_ZERO : KPI_VALUE_STATUS.VALID,
+    skippedMonths: [],
+    aggregation: "ratio_of_totals",
+  };
 };

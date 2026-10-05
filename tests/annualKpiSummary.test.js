@@ -52,6 +52,11 @@ const validRow = (overrides = {}) => ({
   trafficStatus: "VALID_ZERO",
   newCustomers: 2,
   newCustomersStatus: "VALID",
+  operationalAccrual: 80,
+  operationalAccrualStatus: "VALID",
+  newCustomerSales: 50,
+  newCustomerSalesStatus: "VALID",
+  newCustomerClosings: 1,
   formalNetCash: 100,
   formalNetCashStatus: "VALID",
   formalAccrual: 120,
@@ -240,6 +245,57 @@ test("Annual KPI v2 preserves complete true zero and gives every KPI its own bas
     "2026-03": 2,
   });
   assert.equal(payload.systemExclusionSnapshot.revision, 2);
+});
+
+
+
+test("Annual KPI v2 carries the extra Dashboard efficiency metrics without inventing missing closing samples", () => {
+  const payload = buildAnnualKpiSummaryPayload({
+    brandId: "cyj",
+    brandLabel: "CYJ",
+    year: 2026,
+    candidateMonths: ["2026-01", "2026-02"],
+    monthInputs: [
+      {
+        yearMonth: "2026-01",
+        trust: { trusted: true, reason: "VERIFIED_FORMAL_SUMMARY" },
+        requiredStoreKeys: ["A"],
+        storesByCore: {
+          A: validRow({
+            traffic: 10,
+            operationalAccrual: 50000,
+            newCustomers: 4,
+            newCustomerSales: 80000,
+            newCustomerClosings: 2,
+          }),
+        },
+        reportingByCore: { A: completeReporting() },
+      },
+      {
+        yearMonth: "2026-02",
+        trust: { trusted: true, reason: "VERIFIED_FORMAL_SUMMARY" },
+        requiredStoreKeys: ["A"],
+        storesByCore: {
+          A: validRow({
+            traffic: 20,
+            operationalAccrual: 120000,
+            newCustomers: 6,
+            newCustomerSales: 150000,
+            newCustomerClosings: undefined,
+          }),
+        },
+        reportingByCore: { A: completeReporting() },
+      },
+    ],
+  });
+
+  assert.equal(payload.metrics.operationalAccrual.monthlyValues["2026-01"], 50000);
+  assert.equal(payload.metrics.operationalAccrual.monthlyValues["2026-02"], 120000);
+  assert.equal(payload.metrics.newCustomerSales.monthlyValues["2026-01"], 80000);
+  assert.equal(payload.metrics.newCustomerSales.monthlyValues["2026-02"], 150000);
+  assert.equal(payload.metrics.newCustomerClosings.monthlyValues["2026-01"], 2);
+  assert.equal(payload.metrics.newCustomerClosings.monthlyValues["2026-02"], undefined);
+  assert.deepEqual(payload.metrics.newCustomerClosings.basedMonths, ["2026-01"]);
 });
 
 test("Annual KPI v2 excludes untrusted months without converting them into zero samples", () => {

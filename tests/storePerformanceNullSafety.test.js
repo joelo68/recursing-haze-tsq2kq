@@ -72,13 +72,23 @@ test("StorePerformanceView keeps excluded-store self-view null-safe and labels t
 });
 
 
-test("StorePerformanceView uses KPI-specific Annual benchmark metadata and preserves a real zero", () => {
+test("StorePerformanceView shows Annual benchmark metadata on all six efficiency/customer-flow KPI cards", () => {
   assert.match(source, /getAnnualBenchmarkMetric\(annualKpiBenchmark, "traffic"\)/);
   assert.match(source, /getAnnualBenchmarkMetric\(annualKpiBenchmark, "newCustomers"\)/);
+  assert.match(source, /getAnnualBenchmarkMetric\(annualKpiBenchmark, "newCustomerClosings"\)/);
+  assert.match(source, /numeratorMetricId: "operationalAccrual"/);
+  assert.match(source, /denominatorMetricId: "traffic"/);
+  assert.match(source, /numeratorMetricId: "newCustomerSales"/);
+  assert.match(source, /denominatorMetricId: "newCustomers"/);
+  assert.match(source, /const newCustomerMixBenchmark = buildBenchmarkMeta/);
+  assert.match(source, /benchmarkText=\{avgTrafficAspBenchmark\.text\}/);
+  assert.match(source, /benchmarkText=\{newCustomerClosingBenchmark\.text\}/);
+  assert.match(source, /benchmarkText=\{avgNewCustomerAspBenchmark\.text\}/);
+  assert.match(source, /benchmarkText=\{newCustomerMixBenchmark\.text\}/);
   assert.match(source, /isAnnualBenchmarkMetricDisplayable\(metric\)/);
-  assert.match(source, /trafficBenchmarkMonthCount/);
-  assert.match(source, /newCustomerBenchmarkMonthCount/);
-  assert.match(source, /getAnnualBenchmarkLabel\(trafficAnnualBenchmark\)/);
+  assert.match(source, /getAnnualBenchmarkLabel\(metric\)/);
+  assert.match(source, /rounded-lg border border-stone-200\/80 bg-stone-50\/95/);
+  assert.match(source, /font-mono text-xs font-black text-stone-600/);
   assert.doesNotMatch(source, /numeric > 0 \? fmtNum/);
 });
 

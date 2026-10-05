@@ -13,6 +13,12 @@ const ANNUAL_KPI_METRIC_DEFINITIONS = Object.freeze({
   newCustomers: Object.freeze({ valueKey: "newCustomers", statusKey: "newCustomersStatus" }),
   cash: Object.freeze({ valueKey: "formalNetCash", statusKey: "formalNetCashStatus" }),
   accrual: Object.freeze({ valueKey: "formalAccrual", statusKey: "formalAccrualStatus" }),
+  operationalAccrual: Object.freeze({ valueKey: "operationalAccrual", statusKey: "operationalAccrualStatus" }),
+  newCustomerSales: Object.freeze({ valueKey: "newCustomerSales", statusKey: "newCustomerSalesStatus" }),
+  // Dashboard Summary has long treated newCustomerClosings as an additive numeric field.
+  // Store daily input serializes blank values as numeric 0, so verified Summary + complete reporting
+  // is the current authority for a real zero until this legacy field gets an explicit formal status.
+  newCustomerClosings: Object.freeze({ valueKey: "newCustomerClosings", statusKey: "", trustedNumeric: true }),
 });
 
 const normalizeText = (value = "") => String(value || "").trim();
@@ -176,10 +182,11 @@ const readMetric = (row = {}, metricId = "") => {
   const definition = ANNUAL_KPI_METRIC_DEFINITIONS[metricId];
   if (!definition) return { valid: false, value: null, status: KPI_VALUE_STATUS.DATA_INVALID };
 
-  const status = normalizeText(row?.[definition.statusKey]);
+  const status = definition.statusKey ? normalizeText(row?.[definition.statusKey]) : "";
   const raw = row?.[definition.valueKey];
   const value = raw === null || raw === undefined || raw === "" ? null : Number(raw);
-  if (!isValidNumericStatus(status) || !Number.isFinite(value)) {
+  const trustedNumeric = definition.trustedNumeric === true && Number.isFinite(value);
+  if ((!trustedNumeric && !isValidNumericStatus(status)) || !Number.isFinite(value)) {
     return {
       valid: false,
       value: null,

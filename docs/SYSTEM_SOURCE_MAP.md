@@ -365,6 +365,56 @@ CURRENT_APP_VERSION      = 3.6.0 unchanged
 
 ---
 
+# Dashboard KPI Annual Average Extension — 2026-10-05
+
+```text
+functions/annualKpiSummary.js
+→ existing annual_kpi_summary Backend payload owner
+→ adds operationalAccrual / newCustomerSales / newCustomerClosings metrics
+→ still derives from trusted completed-month dashboard_summary
+
+src/hooks/useAnnualKpiBenchmark.js
+→ unchanged single-document annual_kpi_summary/{year} I/O owner
+→ session cache key v7 prevents old cached payloads hiding newly rebuilt metrics
+
+src/utils/annualKpiBenchmark.js
+→ canonical annual metric normalization / scope owner
+→ ratio-of-totals helper uses common complete months
+
+src/components/StorePerformanceView.jsx
+→ renders Annual comparison metadata on all six 「營運效率與客流」 KPI cards
+→ Annual badge uses secondary neutral visual hierarchy
+```
+
+KPI semantics：
+
+```text
+traffic / newCustomers / newCustomerClosings
+→ monthly average over complete trusted months
+
+avgTrafficASP
+→ Σ operationalAccrual / Σ traffic
+
+avgNewCustomerASP
+→ Σ newCustomerSales / Σ newCustomers
+
+new / old customer count mix
+→ Σ newCustomers / Σ traffic, old = complement
+```
+
+Boundary：
+
+```text
+new Firestore listener             = 0
+new Firestore query                = 0
+new polling                        = 0
+steady-state Firestore read delta  = 0
+Firestore Rules                    = unchanged
+CURRENT_APP_VERSION                = 3.6.2 unchanged
+```
+
+---
+
 # P2 Final Ownership / Residual Compatibility Boundary — 2026-10-01
 
 P2 final functional closeout 後，正式 ownership 以「正常路徑 authority」與「刻意保留的 safety compatibility」區分；不再以欄位名稱是否含 legacy / fallback 判斷是否應移除。
