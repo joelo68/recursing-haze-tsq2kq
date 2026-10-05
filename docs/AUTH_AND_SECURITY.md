@@ -663,11 +663,25 @@ audit_exclusions
 - director 選帳號
 - trainer 選帳號
 - manager 選區長
-- store 選店經理帳號
+- store 先選「區長」作帳號篩選，再選店經理帳號
 - therapist 依人員 master 登入
 - inactive account 阻擋
 - 初始密碼偵測
 - 強制第一次安全更新
+
+店經理登入的第一層「區長」是 **discovery / presentation filter**，不是 authentication authority：
+
+```text
+Backend sanitized login organization（manager → stores）
++ sanitized store account directory（account → stores）
+→ 前端只做交集篩選
+→ 選定 store account id
+→ 既有 Backend password / Application Identity / Device Security 驗證
+```
+
+因此切換區長時只清空已選店經理，不改 account identity、角色、權限或 Device Approval 規則。若存在尚未映射到正式區長的店經理帳號，登入頁保留「未分區／其他」入口，避免帳號因組織資料缺口而從登入 UI 消失。
+
+這個 UX 沿用登入 bootstrap 已取得的 sanitized directory / organization，不新增 Firestore listener、query 或 polling。
 
 Knowledge Base 不記錄任何實際 default password。
 

@@ -1310,6 +1310,8 @@ StorePerformanceView benchmark display
 LoginView
    │
    ├─ role/account selection
+   │    └─ store role：sanitized organization 區長 → filtered store account
+   │                  （只做 discovery，不改 authentication authority）
    ├─ password validation
    └─ initial-password check
    │

@@ -6,6 +6,7 @@ import {
 } from "lucide-react";
 import { ROLES, BRANDS } from "../constants/index"; 
 import { sortManagersByOrgOrder, sortStoresByOrgOrder, sortTherapistsByStoreThenName, normalizeStoreCoreName, zhCompare } from "../utils/helpers";
+import { buildStoreLoginRegionOptions, filterStoreAccountsForLoginRegion } from "../utils/loginDirectoryPresentation";
 import LoginCounter from './LoginCounter';
 
 const LoginView = ({
@@ -28,6 +29,7 @@ const LoginView = ({
   const [role, setRole] = useState("director");
   const [password, setPassword] = useState("");
   const [selectedUser, setSelectedUser] = useState("");
+  const [storeRegion, setStoreRegion] = useState("");
   const [error, setError] = useState("");
   const [isLoading, setIsLoading] = useState(false);
   const [forcePasswordUpdate, setForcePasswordUpdate] = useState(null);
@@ -175,6 +177,25 @@ const LoginView = ({
     });
   }, [storeAccounts, managers, managerOrder]);
 
+  // 店經理登入的「區長」只作帳號搜尋/篩選，不參與 authentication authority。
+  // 全部資料沿用 Backend sanitized login directory + login organization，無新增 Firestore read。
+  const storeLoginRegionOptions = useMemo(() => (
+    buildStoreLoginRegionOptions({
+      storeAccounts: sortedStoreAccounts,
+      managers: managers || {},
+      managerNames: visibleManagerNames,
+    })
+  ), [sortedStoreAccounts, managers, visibleManagerNames]);
+
+  const filteredStoreAccounts = useMemo(() => (
+    filterStoreAccountsForLoginRegion({
+      storeAccounts: sortedStoreAccounts,
+      managers: managers || {},
+      managerNames: visibleManagerNames,
+      selectedRegion: storeRegion,
+    })
+  ), [sortedStoreAccounts, managers, visibleManagerNames, storeRegion]);
+
   const sortedManagerAccounts = useMemo(() => {
     const byName = new Map(managerAccounts.map((account) => [String(account?.name || account?.id || ""), account]));
     const orderedNames = sortManagersByOrgOrder(
@@ -247,6 +268,7 @@ const LoginView = ({
 
   useEffect(() => {
     setTRegion(""); setTStore(""); setTPersonId("");
+    setStoreRegion("");
     setError(""); setPassword(""); setSelectedUser("");
     setForcePasswordUpdate(null); setForceNewPassword(""); setForceConfirmPassword("");
   }, [role, currentBrandId]);
@@ -503,7 +525,10 @@ const LoginView = ({
       }
 
       if (role === "store") {
-        if (!selectedUser) { setError("請選擇帳號"); return; }
+        if (!storeRegion) { setError("請先選擇區長"); return; }
+        if (!selectedUser) { setError("請選擇店經理"); return; }
+        // storeRegion 僅是 discovery filter；正式帳號仍從完整 sanitized directory 解析，
+        // password / application identity / device security authority 完全沿用既有 backend flow。
         const account = sortedStoreAccounts.find((item) => String(item?.id || "") === String(selectedUser));
         if (!account || account.isActive === false) { setError("此店經理帳號已停用"); return; }
         const userInfo = { id: account.id, name: account.name, storeName: account.stores?.[0] || account.storeName, stores: account.stores || [] };
@@ -695,7 +720,40 @@ const LoginView = ({
               {role === "director" && <div className="relative"><select value={selectedUser} onChange={(e) => setSelectedUser(e.target.value)} className={selectClass}><option value="">選擇高階主管</option>{sortedDirectorAccounts.map((account) => (<option key={account.id || account.name} value={account.id || account.name}>{account.name}</option>))}</select></div>}
               {role === "manager" && <div className="relative"><select value={selectedUser} onChange={(e) => setSelectedUser(e.target.value)} className={selectClass}><option value="">選擇區長</option>{sortedManagerAccounts.map((account) => (<option key={account.id || account.name} value={account.id || account.name}>{account.name || account.id}</option>))}</select></div>}
               {role === "trainer" && <div className="relative"><select value={selectedUser} onChange={(e) => setSelectedUser(e.target.value)} className={selectClass}><option value="">選擇教專人員</option>{sortedTrainerAccounts.map((account) => (<option key={account.id} value={account.id}>{account.name}</option>))}</select></div>}
-              {role === "store" && <div className="relative"><select value={selectedUser} onChange={(e) => setSelectedUser(e.target.value)} className={selectClass}><option value="">選擇店經理</option>{sortedStoreAccounts.map((account) => (<option key={account.id} value={account.id}>{account.name}</option>))}</select></div>}
+              {role === "store" && (
+                <>
+                  <div className="relative">
+                    <MapPin className="absolute left-4 top-3.5 text-stone-400" size={18} />
+                    <select
+                      value={storeRegion}
+                      onChange={(e) => {
+                        setStoreRegion(e.target.value);
+                        setSelectedUser("");
+                      }}
+                      className={`${selectClass} pl-12`}
+                    >
+                      <option value="">選擇區長</option>
+                      {storeLoginRegionOptions.map((option) => (
+                        <option key={option.value} value={option.value}>{option.label}</option>
+                      ))}
+                    </select>
+                  </div>
+                  <div className="relative">
+                    <UserCheck className="absolute left-4 top-3.5 text-stone-400" size={18} />
+                    <select
+                      value={selectedUser}
+                      onChange={(e) => setSelectedUser(e.target.value)}
+                      disabled={!storeRegion}
+                      className={`${selectClass} pl-12`}
+                    >
+                      <option value="">{storeRegion ? "選擇店經理" : "請先選擇區長"}</option>
+                      {filteredStoreAccounts.map((account) => (
+                        <option key={account.id} value={account.id}>{account.name}</option>
+                      ))}
+                    </select>
+                  </div>
+                </>
+              )}
               <input type="password" value={password} onChange={(e) => setPassword(e.target.value)} placeholder={role === "director" ? "輸入密碼或最高管理金鑰" : "輸入密碼"} className={inputClass} onKeyDown={(e) => e.key === "Enter" && handleAuth()} />
               <p className="px-1 text-center text-[11px] font-medium leading-5 text-stone-400">密碼只會送往安全登入服務驗證，不會下載或顯示正式帳號密碼。帳號管理請登入系統後由授權管理者操作。</p>
               {error && <div className="text-rose-500 text-sm font-medium flex items-center justify-center gap-2 py-1"><AlertCircle size={14} /> {error}</div>}
