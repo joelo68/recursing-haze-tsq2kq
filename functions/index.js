@@ -9356,10 +9356,7 @@ exports.telegramAgentDailyPatrol = onSchedule({
                 createdBy: "telegramAgentDailyPatrol",
             });
             item.snapshotId = alertSnapshot.snapshotId;
-            const alertMessage = `${String(item.message || "").slice(0, 3450)}
-
-資料截止：${alertSnapshot.cutoffAtText}
-報表快照：${alertSnapshot.snapshotId}｜口徑：${alertSnapshot.metricVersion}`.slice(0, 3900);
+            const alertMessage = String(item.message || "").trim().slice(0, 3900);
             const taskKeyboard = await createTelegramAlertTaskKeyboard(item, chatIds[0]);
             await Promise.all(chatIds.map((id) => sendTelegramMessage(
                 id,
@@ -9565,33 +9562,6 @@ function createTelegramNotificationPolicyContext(sharedPolicyCtx, brandId, quest
     applyTelegramAgentPolicyState(ctx, sharedPolicyCtx.policyCatalog, sharedPolicyCtx.policyPermission, { includeInactive: false });
     recordTelegramAgentRead(ctx, 0, "telegram_agent_policies", { cacheHit: true, sharedCatalog: true });
     return ctx;
-}
-
-function appendTelegramScheduledDataFooter(message, result, ctx, snapshot = null) {
-    const sourceLabels = {
-        daily_reports_current_month_exact: "當月品牌限定即時店家日報",
-        daily_reports_scoped: "品牌限定店家日報",
-        daily_reports_month_fallback: "品牌限定整月日報 fallback",
-        monthly_aggregated: "月彙總 fallback",
-        verified_dashboard_summary: "已驗證歷史月結 Summary",
-        therapist_daily_reports_scoped: "品牌限定管理師日報",
-        therapist_daily_reports_current_month_exact: "當月品牌限定即時管理師日報",
-    };
-    const sourceMeta = Array.isArray(result?.source_meta) ? result.source_meta : [];
-    const sourceText = [...new Set(sourceMeta.map((row) => {
-        const raw = String(row.source || "");
-        if (!raw) return "";
-        if (sourceLabels[raw]) return sourceLabels[raw];
-        if (raw.includes("org_structure") && raw.includes("daily_reports")) return "正式組織架構＋品牌限定店家日報";
-        return raw.replace(/_/g, " ");
-    }).filter(Boolean))].join("、") || "品牌限定即時資料";
-    const policyText = Array.isArray(ctx?.activePolicyIds) && ctx.activePolicyIds.length > 0
-        ? `｜已套用長期規則 ${[...new Set(ctx.activePolicyIds)].slice(0, 4).join("、")}`
-        : "";
-    const snapshotText = snapshot?.snapshotId
-        ? `\n資料截止：${snapshot.cutoffAtText || snapshot.cutoffDate || "-"}\n報表快照：${snapshot.snapshotId}｜口徑：${snapshot.metricVersion || TELEGRAM_V5_METRIC_VERSION}`
-        : "";
-    return `${String(message || "").trim()}\n\n資料口徑：${sourceText}${policyText}${snapshotText}`.slice(0, 3900);
 }
 
 function isTelegramNotificationRuleActive(rule = {}) {
@@ -9977,7 +9947,7 @@ exports.notificationPatrol = onSchedule({
                         sourceMeta,
                         readCount,
                     });
-                    const message = `${built.message}\n\n資料截止：${snapshot.cutoffAtText}\n報表快照：${snapshot.snapshotId}｜口徑：${snapshot.metricVersion}`.slice(0, 3900);
+                    const message = String(built.message || "").trim().slice(0, 3900);
                     await sendTelegramMessage(chatId, message);
                     await finalizeTelegramNotificationRuleRun(rule.id, {
                         lastRunStatus: "sent",
@@ -10013,8 +9983,8 @@ exports.notificationPatrol = onSchedule({
                     readCount,
                 });
                 for (const item of prepared) {
-                    const messageWithFooter = appendTelegramScheduledDataFooter(item.finalMessage, item.sourceResult, item.ctx, snapshot);
-                    await sendTelegramMessage(chatId, messageWithFooter, { parse_mode: "Markdown" });
+                    const scheduledMessage = String(item.finalMessage || "").trim().slice(0, 3900);
+                    await sendTelegramMessage(chatId, scheduledMessage, { parse_mode: "Markdown" });
                 }
                 await finalizeTelegramNotificationRuleRun(rule.id, {
                     lastRunStatus: prepared.length ? "sent" : "clear_not_sent",

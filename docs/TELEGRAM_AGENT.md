@@ -704,6 +704,13 @@ read count
 run key
 ```
 
+正式呈現規則：
+
+- scheduled report／active alert 的一般主動推播只呈現營運內容，不再附加工程診斷 footer。
+- `source meta`、Policy IDs、資料截止時間、snapshot ID、metric version 仍完整保留在 `telegram_report_snapshots`／audit 供追查。
+- `/snapshots`、`/snapshot ...` 或明確要求查看快照時，仍可顯示上述 provenance；這是診斷／稽核入口，不是一般推播版面。
+- 真正的資料缺漏、fallback、ranking 不可用等會影響判讀的 warning 仍可用管理者看得懂的語言呈現；不要把技術 trace 當成 warning。
+
 用途：
 
 > 之後「重新顯示當時晨報」可以讀當時 snapshot，  
@@ -1040,7 +1047,7 @@ npm run build
 ```text
 □ /ping 或基本 webhook
 □ Agent test group query
-□ source footer
+□ 主動推播不顯示工程診斷 footer；snapshot provenance 仍可由診斷入口查詢
 □ store KPI
 □ therapist KPI
 □ historical verified summary
