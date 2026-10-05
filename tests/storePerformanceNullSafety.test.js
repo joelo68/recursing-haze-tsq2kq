@@ -87,8 +87,6 @@ test("StorePerformanceView shows Annual benchmark metadata on all six efficiency
   assert.match(source, /benchmarkText=\{newCustomerMixBenchmark\.text\}/);
   assert.match(source, /isAnnualBenchmarkMetricDisplayable\(metric\)/);
   assert.match(source, /getAnnualBenchmarkLabel\(metric\)/);
-  assert.match(source, /rounded-lg border border-stone-200\/80 bg-stone-50\/95/);
-  assert.match(source, /font-mono text-xs font-black text-stone-600/);
   assert.doesNotMatch(source, /numeric > 0 \? fmtNum/);
 });
 

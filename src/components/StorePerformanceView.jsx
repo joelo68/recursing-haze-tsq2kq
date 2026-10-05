@@ -259,34 +259,44 @@ const StorePerformanceView = ({ dashboardStats, myStoreRankings, brandInfo }) =>
     return (
       <div className="bg-white p-5 rounded-3xl border border-stone-100 shadow-sm hover:shadow-md transition-all group relative overflow-visible h-full flex flex-col">
         <div className={`absolute top-0 right-0 p-3 opacity-10 group-hover:opacity-20 transition-opacity ${color}`}><Icon size={64} /></div>
-        <div className="flex flex-col h-full justify-between relative z-10">
+        <div className="flex h-full min-w-0 flex-col relative z-10">
           <div>
              <p className="text-stone-400 text-xs font-bold uppercase tracking-wider mb-1">{title}</p>
              <h3 className="text-2xl font-extrabold text-stone-700 font-mono tracking-tight">{value}</h3>
           </div>
-          {subText && <div className={`mt-3 pt-3 border-t border-stone-50 text-xs font-medium text-stone-500 flex flex-col gap-1 ${benchmarkText ? "pr-28 sm:pr-32" : ""}`}>{subText}</div>}
-        </div>
-        {benchmarkText && (
-          <div className="absolute bottom-4 right-5 z-30">
-            <div
-              className="peer flex cursor-help items-baseline gap-1.5 rounded-lg border border-stone-200/80 bg-stone-50/95 px-2 py-1 text-[10px] font-bold text-stone-400 shadow-sm backdrop-blur-sm"
-              title={benchmarkTitle}
-            >
-              <span>{benchmarkDisplayLabel}</span>
-              <span className="font-mono text-xs font-black text-stone-600">{benchmarkText}</span>
-              {normalizedMonths.length > 0 && <Info size={11} className="ml-0.5 text-stone-300" />}
-            </div>
 
-            {normalizedMonths.length > 0 && (
-              <div className="pointer-events-none absolute bottom-[calc(100%+8px)] right-0 w-max max-w-[260px] translate-y-1 rounded-xl border border-stone-200 bg-stone-800 px-3 py-2.5 text-left opacity-0 shadow-xl transition-all duration-150 peer-hover:translate-y-0 peer-hover:opacity-100">
-                <p className="text-[10px] font-black tracking-wide text-stone-300">年度平均納入月份</p>
-                <p className="mt-1 whitespace-normal text-xs font-bold leading-5 text-white">{monthText}</p>
-                <p className="mt-1 text-[10px] font-bold text-stone-300">共 {monthCount} 個完整月</p>
-                <span className="absolute -bottom-1.5 right-4 h-3 w-3 rotate-45 bg-stone-800" />
-              </div>
-            )}
-          </div>
-        )}
+          {(subText || benchmarkText) && (
+            <div className="mt-auto pt-3 border-t border-stone-50 flex min-w-0 items-end justify-between gap-2.5">
+              {subText && (
+                <div className="min-w-0 flex-1 text-xs font-medium leading-5 text-stone-500">
+                  {subText}
+                </div>
+              )}
+
+              {benchmarkText && (
+                <div className="relative z-30 ml-auto flex-none">
+                  <div
+                    className="peer flex cursor-help items-baseline gap-1 whitespace-nowrap rounded-xl border border-stone-200/70 bg-stone-50/88 px-2 py-1 text-[9px] font-semibold text-stone-400 shadow-sm backdrop-blur-sm"
+                    title={benchmarkTitle}
+                  >
+                    <span>{benchmarkDisplayLabel}</span>
+                    <span className="font-mono text-[11px] font-extrabold tracking-tight text-stone-500">{benchmarkText}</span>
+                    {normalizedMonths.length > 0 && <Info size={10} className="ml-0.5 text-stone-300" />}
+                  </div>
+
+                  {normalizedMonths.length > 0 && (
+                    <div className="pointer-events-none absolute bottom-[calc(100%+8px)] right-0 w-max max-w-[260px] translate-y-1 rounded-xl border border-stone-200 bg-stone-800 px-3 py-2.5 text-left opacity-0 shadow-xl transition-all duration-150 peer-hover:translate-y-0 peer-hover:opacity-100">
+                      <p className="text-[10px] font-black tracking-wide text-stone-300">年度平均納入月份</p>
+                      <p className="mt-1 whitespace-normal text-xs font-bold leading-5 text-white">{monthText}</p>
+                      <p className="mt-1 text-[10px] font-bold text-stone-300">共 {monthCount} 個完整月</p>
+                      <span className="absolute -bottom-1.5 right-4 h-3 w-3 rotate-45 bg-stone-800" />
+                    </div>
+                  )}
+                </div>
+              )}
+            </div>
+          )}
+        </div>
       </div>
     );
   };
@@ -690,7 +700,26 @@ const StorePerformanceView = ({ dashboardStats, myStoreRankings, brandInfo }) =>
          <h3 className="text-lg font-bold text-stone-700 mb-4 flex items-center gap-2 pl-1"><div className="w-1 h-6 bg-cyan-500 rounded-full"></div>營運效率與客流</h3>
          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-6 gap-4">
            <MiniKpiCard title="課程操作人數" value={fmtNum(storeGrandTotal.traffic)} icon={Users} color="text-blue-500" subText="本月累計操作人數" benchmarkText={trafficBenchmark.text} benchmarkLabel={trafficBenchmark.label} benchmarkMonths={trafficBenchmark.months} benchmarkMonthCount={trafficBenchmark.monthCount} />
-           <MiniKpiCard title="平均操作權責" value={fmtMoney(dashboardStats.avgTrafficASP)} icon={TrendingUp} color="text-indigo-500" subText={<span className={dashboardStats.avgTrafficASP >= targets.trafficASP ? "text-emerald-500 font-bold" : "text-rose-500 font-bold"}>{dashboardStats.avgTrafficASP >= targets.trafficASP ? "達標" : "未達標"} (目標 {fmtNum(targets.trafficASP)})</span>} benchmarkText={avgTrafficAspBenchmark.text} benchmarkLabel={avgTrafficAspBenchmark.label} benchmarkMonths={avgTrafficAspBenchmark.months} benchmarkMonthCount={avgTrafficAspBenchmark.monthCount} />
+           <MiniKpiCard
+             title="平均操作權責"
+             value={fmtMoney(dashboardStats.avgTrafficASP)}
+             icon={TrendingUp}
+             color="text-indigo-500"
+             subText={
+               <div className="flex min-w-0 flex-wrap items-baseline gap-x-1.5 gap-y-0.5">
+                 <span className={`whitespace-nowrap font-bold ${dashboardStats.avgTrafficASP >= targets.trafficASP ? "text-emerald-500" : "text-rose-500"}`}>
+                   {dashboardStats.avgTrafficASP >= targets.trafficASP ? "達標" : "未達標"}
+                 </span>
+                 <span className={`whitespace-nowrap text-[10px] font-bold ${dashboardStats.avgTrafficASP >= targets.trafficASP ? "text-emerald-500/80" : "text-rose-500/80"}`}>
+                   目標 {fmtNum(targets.trafficASP)}
+                 </span>
+               </div>
+             }
+             benchmarkText={avgTrafficAspBenchmark.text}
+             benchmarkLabel={avgTrafficAspBenchmark.label}
+             benchmarkMonths={avgTrafficAspBenchmark.months}
+             benchmarkMonthCount={avgTrafficAspBenchmark.monthCount}
+           />
            <MiniKpiCard title="總新客數" value={fmtNum(storeGrandTotal.newCustomers)} icon={Sparkles} color="text-purple-500" subText="本月新增體驗人數" benchmarkText={newCustomerBenchmark.text} benchmarkLabel={newCustomerBenchmark.label} benchmarkMonths={newCustomerBenchmark.months} benchmarkMonthCount={newCustomerBenchmark.monthCount} />
            <MiniKpiCard title="總新客留單" value={fmtNum(storeGrandTotal.newCustomerClosings)} icon={CheckSquare} color="text-teal-500" subText={<span>留單率 <span className="font-bold">{storeGrandTotal.newCustomers > 0 ? ((storeGrandTotal.newCustomerClosings / storeGrandTotal.newCustomers) * 100).toFixed(0) : 0}%</span></span>} benchmarkText={newCustomerClosingBenchmark.text} benchmarkLabel={newCustomerClosingBenchmark.label} benchmarkMonths={newCustomerClosingBenchmark.months} benchmarkMonthCount={newCustomerClosingBenchmark.monthCount} />
            <MiniKpiCard
@@ -699,13 +728,19 @@ const StorePerformanceView = ({ dashboardStats, myStoreRankings, brandInfo }) =>
              icon={Award}
              color="text-fuchsia-500"
              subText={
-               <div className="flex items-center justify-between w-full">
-                 <span className={dashboardStats.avgNewCustomerASP >= targets.newASP ? "text-emerald-500 font-bold" : "text-rose-500 font-bold"}>
-                   {dashboardStats.avgNewCustomerASP >= targets.newASP ? "達標" : "未達標"} (目標 {fmtNum(targets.newASP)})
-                 </span>
-                 <span className="text-[10px] text-stone-400 font-mono flex items-center gap-0.5">
-                   總業績 <span className="text-stone-500 font-bold">{fmtMoney(storeGrandTotal.newCustomerSales)}</span>
-                 </span>
+               <div className="flex min-w-0 flex-col gap-0.5">
+                 <div className="flex min-w-0 flex-wrap items-baseline gap-x-1.5 gap-y-0.5">
+                   <span className={`whitespace-nowrap font-bold ${dashboardStats.avgNewCustomerASP >= targets.newASP ? "text-emerald-500" : "text-rose-500"}`}>
+                     {dashboardStats.avgNewCustomerASP >= targets.newASP ? "達標" : "未達標"}
+                   </span>
+                   <span className={`whitespace-nowrap text-[10px] font-bold ${dashboardStats.avgNewCustomerASP >= targets.newASP ? "text-emerald-500/80" : "text-rose-500/80"}`}>
+                     目標 {fmtNum(targets.newASP)}
+                   </span>
+                 </div>
+                 <div className="flex min-w-0 flex-wrap items-baseline gap-x-1.5 text-[10px] font-mono text-stone-400">
+                   <span className="whitespace-nowrap">總業績</span>
+                   <span className="whitespace-nowrap font-bold text-stone-500">{fmtMoney(storeGrandTotal.newCustomerSales)}</span>
+                 </div>
                </div>
              }
              benchmarkText={avgNewCustomerAspBenchmark.text}
