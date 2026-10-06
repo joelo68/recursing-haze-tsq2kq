@@ -1,3 +1,41 @@
+# Projection Accuracy 2026-09 Source-Controlled Historical Supplement Override — 2026-10-05
+
+`projection_accuracy` / `projection_accuracy_history` Firestore schema 與 writer contract **不變**。2026-09 沒有被回填成 live checkpoint。
+
+新增 source-controlled presentation evidence：
+
+```text
+src/data/projectionAccuracyHistoricalCurrentAuthorityEvidence.js
+```
+
+定位：
+
+```text
+類型            = Derived / Audit Evidence（source-controlled）
+brandIds        = cyj, anniu
+targetMonths    = [2026-09]
+checkpointDays  = [5, 7, 10, 15, 20, 25]
+comparisonMode  = v2_vs_v1_vs_pace
+statistics      = normalized-wape-components-v1
+evidenceType    = historical_backtest_current_authority
+sourceHead      = 040e998f5b27a3b3e53958a3e94851c48f4e271f
+Production read = 5960 estimated billed reads during one-time reconstruction
+Production write= 0
+```
+
+它與原本：
+
+```text
+src/data/projectionAccuracyHistoricalEvidence.js
+→ B2A0 2026-05~08
+```
+
+保持分檔、分 provenance。兩者都不是 Firestore collection，不是 Raw revenue source，也不會建立 `projection_accuracy_backtests`。
+
+新的 supplement 只保存 normalized WAPE components；不保存 exact historical revenue totals。Frontend 透過 `projectionObservability.js` 做 presentation merge，Firestore display-time read delta = 0。
+
+---
+
 # FIREBASE_DATA_MODEL.md
 
 # Management Delegation Authority Data Model Override — 2026-09-24

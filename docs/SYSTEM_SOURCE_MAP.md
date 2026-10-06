@@ -1,3 +1,49 @@
+# Projection Accuracy 2026-09 Historical Supplement Source Override — 2026-10-05
+
+正式 owner 補充：
+
+```text
+src/data/projectionAccuracyHistoricalEvidence.js
+  → 原 B2A0 approved evidence
+  → CYJ / 安妞 2026-05~08
+  → immutable original provenance
+
+src/data/projectionAccuracyHistoricalCurrentAuthorityEvidence.js
+  → 2026-09 current-authority read-only reconstruction evidence
+  → CYJ / 安妞 only
+  → normalized WAPE components
+  → sourceHead 040e998f5b27a3b3e53958a3e94851c48f4e271f
+  → no Firestore runtime read/write
+
+src/utils/projectionObservability.js
+  → merge original B2A0 + current-authority supplement + eligible live rolling history
+  → complete-month contract
+  → latest-4 / custom range aggregation
+
+src/components/SmartForecastAccuracyPanel.jsx
+  → existing month picker / yearly rolling point reads
+  → no runtime change required for 2026-09 supplement
+```
+
+Brand scope：
+
+```text
+CYJ   → supplement available
+安妞  → supplement available
+伊啵  → V1; supplement unavailable
+```
+
+Runtime read delta：
+
+```text
+static supplement = 0 Firestore reads
+new listener       = 0
+new query          = 0
+new polling        = 0
+```
+
+---
+
 # Release Control / Version Publishing Source Map — 2026-10-04
 
 正式 owner：

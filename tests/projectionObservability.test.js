@@ -7,6 +7,9 @@ import { fileURLToPath } from "node:url";
 import {
   PROJECTION_ACCURACY_HISTORICAL_EVIDENCE,
 } from "../src/data/projectionAccuracyHistoricalEvidence.js";
+import {
+  PROJECTION_ACCURACY_HISTORICAL_CURRENT_AUTHORITY_EVIDENCE,
+} from "../src/data/projectionAccuracyHistoricalCurrentAuthorityEvidence.js";
 
 import {
   PROJECTION_ACCURACY_METHOD_LABELS,
@@ -389,14 +392,18 @@ test("B2C.1 month-level historical evidence supports selectable ranges and rolli
   assert.equal(PROJECTION_ACCURACY_METHOD_LABELS.effective, "目前使用的推估方式");
   assert.equal(PROJECTION_HISTORICAL_METHOD_LABELS.effective, "智慧校正推估");
 
-  const cyj = buildProjectionHistoricalAccuracyComparison({ brandId: "cyj" });
-  assert.equal(cyj.available, true);
-  assert.deepEqual(cyj.targetMonths, ["2026-05", "2026-06", "2026-07", "2026-08"]);
-  assert.equal(cyj.trustedMonthCount, 4);
-  assert.equal(cyj.metrics.cash.overall.methods.effective.accuracyPct, 88.9426);
-  assert.deepEqual(cyj.metrics.cash.overall.bestMethods, ["effective"]);
+  // Keep the original B2A0 2026-05~08 aggregate as a stable golden reference.
+  const cyjB2A0 = buildProjectionHistoricalAccuracyComparison({
+    brandId: "cyj",
+    startMonth: "2026-05",
+    endMonth: "2026-08",
+  });
+  assert.deepEqual(cyjB2A0.targetMonths, ["2026-05", "2026-06", "2026-07", "2026-08"]);
+  assert.equal(cyjB2A0.trustedMonthCount, 4);
+  assert.equal(cyjB2A0.metrics.cash.overall.methods.effective.accuracyPct, 88.9426);
+  assert.deepEqual(cyjB2A0.metrics.cash.overall.bestMethods, ["effective"]);
   assert.deepEqual(
-    cyj.metrics.cash.checkpoints.find((row) => row.day === 25)?.bestMethods,
+    cyjB2A0.metrics.cash.checkpoints.find((row) => row.day === 25)?.bestMethods,
     ["currentPace"]
   );
 
@@ -411,8 +418,26 @@ test("B2C.1 month-level historical evidence supports selectable ranges and rolli
   assert.equal(cyjMayJune.metrics.cash.overall.methods.effective.accuracyPct, 91.3651);
   assert.notEqual(
     cyjMayJune.metrics.cash.overall.methods.effective.accuracyPct,
-    cyj.metrics.cash.overall.methods.effective.accuracyPct
+    cyjB2A0.metrics.cash.overall.methods.effective.accuracyPct
   );
+
+  // 2026-09 is a separately-provenanced current-authority historical backtest.
+  const cyjLatest = buildProjectionHistoricalAccuracyComparison({ brandId: "cyj" });
+  assert.deepEqual(cyjLatest.targetMonths, ["2026-06", "2026-07", "2026-08", "2026-09"]);
+  assert.equal(cyjLatest.trustedMonthCount, 4);
+  assert.equal(cyjLatest.historicalBacktestMonthCount, 4);
+  assert.equal(cyjLatest.currentAuthorityBacktestMonthCount, 1);
+  assert.equal(cyjLatest.metrics.cash.overall.methods.effective.count, 24);
+
+  const cyjJulySeptember = buildProjectionHistoricalAccuracyComparison({
+    brandId: "cyj",
+    startMonth: "2026-07",
+    endMonth: "2026-09",
+  });
+  assert.deepEqual(cyjJulySeptember.targetMonths, ["2026-07", "2026-08", "2026-09"]);
+  assert.equal(cyjJulySeptember.trustedMonthCount, 3);
+  assert.equal(cyjJulySeptember.currentAuthorityBacktestMonthCount, 1);
+  assert.equal(cyjJulySeptember.metrics.cash.overall.methods.effective.count, 18);
 
   const seedOctober = structuredClone(PROJECTION_ACCURACY_HISTORICAL_EVIDENCE.brands.cyj.months["2026-08"]);
   seedOctober.yearMonth = "2026-10";
@@ -434,13 +459,26 @@ test("B2C.1 month-level historical evidence supports selectable ranges and rolli
       months: { "2026-10": seedOctober },
     }],
   });
-  assert.deepEqual(rolling.targetMonths, ["2026-06", "2026-07", "2026-08", "2026-10"]);
+  assert.deepEqual(rolling.targetMonths, ["2026-07", "2026-08", "2026-09", "2026-10"]);
   assert.equal(rolling.liveMonthCount, 1);
   assert.equal(rolling.historicalBacktestMonthCount, 3);
+  assert.equal(rolling.currentAuthorityBacktestMonthCount, 1);
 
-  const anniu = buildProjectionHistoricalAccuracyComparison({ brandId: "anniu" });
-  assert.equal(anniu.available, true);
-  assert.equal(anniu.metrics.accrual.overall.methods.effective.accuracyPct, 91.563);
+  const anniuB2A0 = buildProjectionHistoricalAccuracyComparison({
+    brandId: "anniu",
+    startMonth: "2026-05",
+    endMonth: "2026-08",
+  });
+  assert.equal(anniuB2A0.available, true);
+  assert.equal(anniuB2A0.metrics.accrual.overall.methods.effective.accuracyPct, 91.563);
+
+  const anniuJulySeptember = buildProjectionHistoricalAccuracyComparison({
+    brandId: "anniu",
+    startMonth: "2026-07",
+    endMonth: "2026-09",
+  });
+  assert.deepEqual(anniuJulySeptember.targetMonths, ["2026-07", "2026-08", "2026-09"]);
+  assert.equal(anniuJulySeptember.currentAuthorityBacktestMonthCount, 1);
 
   const yibo = buildProjectionHistoricalAccuracyComparison({ brandId: "yibo" });
   assert.equal(yibo.available, false);
@@ -458,6 +496,7 @@ test("B2C.1 month-level historical evidence supports selectable ranges and rolli
 
 test("B2C.1 historical backtest stays immutable and separate from rolling Firestore evidence", () => {
   const evidenceSource = read("src/data/projectionAccuracyHistoricalEvidence.js");
+  const supplementalSource = read("src/data/projectionAccuracyHistoricalCurrentAuthorityEvidence.js");
   const uiSource = read("src/components/SmartForecastAccuracyPanel.jsx");
 
   assert.equal(Object.isFrozen(PROJECTION_ACCURACY_HISTORICAL_EVIDENCE), true);
@@ -472,6 +511,31 @@ test("B2C.1 historical backtest stays immutable and separate from rolling Firest
   assert.doesNotMatch(evidenceSource, /33377364|37544307|32196527|30397230/);
   assert.match(evidenceSource, /01fd6c14e4029783be362d764087e1979a93f69d793aa5e3e6e02723e3fc4da6/);
   assert.doesNotMatch(evidenceSource, /getDoc\(|getDocs\(|onSnapshot\(|setDoc\(|addDoc\(|updateDoc\(|writeBatch\(|setInterval\(/);
+
+  assert.equal(Object.isFrozen(PROJECTION_ACCURACY_HISTORICAL_CURRENT_AUTHORITY_EVIDENCE), true);
+  assert.deepEqual(
+    PROJECTION_ACCURACY_HISTORICAL_CURRENT_AUTHORITY_EVIDENCE.targetMonths,
+    ["2026-09"]
+  );
+  assert.equal(
+    PROJECTION_ACCURACY_HISTORICAL_CURRENT_AUTHORITY_EVIDENCE.auditCost.estimatedBilledReads,
+    5960
+  );
+  assert.equal(
+    PROJECTION_ACCURACY_HISTORICAL_CURRENT_AUTHORITY_EVIDENCE.brands.cyj.months["2026-09"].evidenceType,
+    "historical_backtest_current_authority"
+  );
+  assert.equal(
+    PROJECTION_ACCURACY_HISTORICAL_CURRENT_AUTHORITY_EVIDENCE.brands.anniu.months["2026-09"].evidenceType,
+    "historical_backtest_current_authority"
+  );
+  assert.match(supplementalSource, /projection-accuracy-historical-current-authority-evidence-v1/);
+  assert.match(supplementalSource, /historical_backtest_current_authority/);
+  assert.match(supplementalSource, /040e998f5b27a3b3e53958a3e94851c48f4e271f/);
+  assert.match(supplementalSource, /"strictParityMismatchCount": 82/);
+  assert.match(supplementalSource, /"structuralMismatch": false/);
+  assert.doesNotMatch(supplementalSource, /38379497|38443389|33377364|37544307|32196527|30397230/);
+  assert.doesNotMatch(supplementalSource, /getDoc\(|getDocs\(|onSnapshot\(|setDoc\(|addDoc\(|updateDoc\(|writeBatch\(|setInterval\(/);
 
   assert.match(uiSource, /const liveHistoryDocuments = useMemo/);
   assert.match(uiSource, /歷史回看資料與正式累積資料會分開保存/);

@@ -11,6 +11,9 @@ import {
 import {
   PROJECTION_ACCURACY_HISTORICAL_EVIDENCE,
 } from "../data/projectionAccuracyHistoricalEvidence.js";
+import {
+  PROJECTION_ACCURACY_HISTORICAL_CURRENT_AUTHORITY_EVIDENCE,
+} from "../data/projectionAccuracyHistoricalCurrentAuthorityEvidence.js";
 
 export const PROJECTION_ACCURACY_SCHEMA_VERSION = "projection-accuracy-v1";
 export const PROJECTION_ACCURACY_CHECKPOINT_SEMANTIC_VERSION = "projection-accuracy-checkpoint-v1";
@@ -593,6 +596,10 @@ export const PROJECTION_ACCURACY_HISTORY_DEFAULT_MONTH_COUNT = 4;
 
 const HISTORY_METHOD_KEYS = Object.freeze(["effective", "shadowV1", "currentPace"]);
 const HISTORY_METRIC_KEYS = Object.freeze(["cash", "accrual"]);
+const HISTORICAL_STATIC_EVIDENCE_TYPES = Object.freeze([
+  "historical_backtest",
+  "historical_backtest_current_authority",
+]);
 
 const finiteOrNull = (value) => (
   typeof value === "number" && Number.isFinite(value) ? value : null
@@ -676,7 +683,12 @@ const isCompleteComparableHistoryMonth = ({ month = null, brandId = "", checkpoi
   if (month?.complete !== true) return false;
   if (String(month?.comparisonMode || "") !== PROJECTION_ACCURACY_HISTORY_COMPARISON_MODE) return false;
   if (String(month?.statisticsVersion || "") !== PROJECTION_ACCURACY_HISTORY_STATISTICS_VERSION) return false;
-  if (month?.evidenceType === "live_checkpoint") {
+  const evidenceType = String(month?.evidenceType || "");
+  if (
+    evidenceType !== "live_checkpoint"
+    && !HISTORICAL_STATIC_EVIDENCE_TYPES.includes(evidenceType)
+  ) return false;
+  if (evidenceType === "live_checkpoint") {
     if (String(month?.scoreSemanticVersion || "") !== PROJECTION_ACCURACY_SCORE_SEMANTIC_VERSION) return false;
     if (!(Number(month?.scoreRevision || 0) >= 1)) return false;
     if (!String(month?.inputSignature || "").trim()) return false;
@@ -749,6 +761,7 @@ export const getProjectionHistoryYearsForRange = ({
 export const buildProjectionHistoricalAccuracyComparison = ({
   brandId = "",
   evidence = PROJECTION_ACCURACY_HISTORICAL_EVIDENCE,
+  supplementalEvidence = PROJECTION_ACCURACY_HISTORICAL_CURRENT_AUTHORITY_EVIDENCE,
   liveHistoryDocuments = [],
   startMonth = "",
   endMonth = "",
@@ -759,9 +772,30 @@ export const buildProjectionHistoricalAccuracyComparison = ({
     ? evidence.checkpointDays.map(Number).filter((day) => PROJECTION_ACCURACY_CHECKPOINT_KEYS.includes(`day${String(day).padStart(2, "0")}`))
     : PROJECTION_ACCURACY_CHECKPOINT_KEYS.map((key) => Number(key.replace("day", "")));
   const seedBrand = evidence?.brands?.[normalizedBrandId] || null;
-  const seedMonths = seedBrand?.months && typeof seedBrand.months === "object"
+  const primarySeedMonths = seedBrand?.months && typeof seedBrand.months === "object"
     ? seedBrand.months
     : {};
+  const supplementalCheckpointDays = Array.isArray(supplementalEvidence?.checkpointDays)
+    ? supplementalEvidence.checkpointDays.map(Number).filter((day) => (
+      PROJECTION_ACCURACY_CHECKPOINT_KEYS.includes(`day${String(day).padStart(2, "0")}`)
+    ))
+    : [];
+  const supplementalCompatible = (
+    String(supplementalEvidence?.evidenceVersion || "")
+      === "projection-accuracy-historical-current-authority-evidence-v1"
+    && String(supplementalEvidence?.auditSchemaVersion || "")
+      === "projection-accuracy-historical-backtest-current-authority-readonly-v1"
+    && String(supplementalEvidence?.statisticsVersion || "")
+      === PROJECTION_ACCURACY_HISTORY_STATISTICS_VERSION
+    && sameArray(supplementalCheckpointDays, checkpointDays)
+  );
+  const supplementalBrand = supplementalCompatible
+    ? (supplementalEvidence?.brands?.[normalizedBrandId] || null)
+    : null;
+  const supplementalSeedMonths = supplementalBrand?.months && typeof supplementalBrand.months === "object"
+    ? supplementalBrand.months
+    : {};
+  const seedMonths = { ...primarySeedMonths, ...supplementalSeedMonths };
   const liveMonths = normalizeLiveHistoryDocuments({
     documents: liveHistoryDocuments,
     brandId: normalizedBrandId,
@@ -790,7 +824,12 @@ export const buildProjectionHistoricalAccuracyComparison = ({
       : completeMonths.slice(-safeLatestCount);
 
   const selectedRows = selectedMonths.map((yearMonth) => mergedMonths[yearMonth]);
-  const historicalBacktestMonthCount = selectedRows.filter((row) => row?.evidenceType === "historical_backtest").length;
+  const historicalBacktestMonthCount = selectedRows.filter((row) => (
+    HISTORICAL_STATIC_EVIDENCE_TYPES.includes(String(row?.evidenceType || ""))
+  )).length;
+  const currentAuthorityBacktestMonthCount = selectedRows.filter(
+    (row) => row?.evidenceType === "historical_backtest_current_authority"
+  ).length;
   const liveMonthCount = selectedRows.filter((row) => row?.evidenceType === "live_checkpoint").length;
   const monthRangeLabel = selectedMonths.length
     ? `${selectedMonths[0].replace("-", " 年 ")} 月～${selectedMonths[selectedMonths.length - 1].slice(5)} 月`
@@ -808,6 +847,12 @@ export const buildProjectionHistoricalAccuracyComparison = ({
     generatedAtText: String(evidence?.generatedAtText || ""),
     sourceJsonSha256: String(evidence?.sourceJsonSha256 || ""),
     sourceReportSha256: String(evidence?.sourceReportSha256 || ""),
+    supplementalEvidenceVersion: supplementalCompatible
+      ? String(supplementalEvidence?.evidenceVersion || "")
+      : "",
+    supplementalGeneratedAtText: supplementalCompatible
+      ? String(supplementalEvidence?.generatedAtText || "")
+      : "",
     checkpointDays,
     availableMonths: completeMonths,
     targetMonths: selectedMonths,
@@ -816,6 +861,7 @@ export const buildProjectionHistoricalAccuracyComparison = ({
     monthRangeLabel,
     trustedMonthCount: selectedMonths.length,
     historicalBacktestMonthCount,
+    currentAuthorityBacktestMonthCount,
     liveMonthCount,
     rawRowCount: Math.max(0, Number(seedBrand?.rawRowCount || 0)),
     displayReadCount: 0,

@@ -1,3 +1,45 @@
+# Projection Accuracy 2026-09 Historical Supplement Override — 2026-10-05
+
+2026-09 的自然 `projection_accuracy` live checkpoint 缺少 day05 / day07，因此仍不得回填成過去的 live checkpoint；但正式 `daily_reports`、Lifecycle、System Exclusion 與 verified final actual 足以用目前正式 Projection authority 做 read-only 歷史重建。
+
+正式 presentation evidence 現在分成三種 identity：
+
+```text
+src/data/projectionAccuracyHistoricalEvidence.js
+→ 原 B2A0 approved static evidence
+→ CYJ / 安妞 2026-05~08
+→ 原檔保持 immutable
+
+src/data/projectionAccuracyHistoricalCurrentAuthorityEvidence.js
+→ 2026-10-05 current-authority read-only reconstruction
+→ 只涵蓋 CYJ / 安妞 2026-09
+→ day05 / 07 / 10 / 15 / 20 / 25
+→ normalized WAPE components only
+→ Firestore writes = 0
+
+projection_accuracy_history/{YYYY}
+→ 未來自然形成的 live_checkpoint months
+```
+
+`src/utils/projectionObservability.js` 只在 presentation layer 合併兩份 source-controlled historical evidence，再由完整性契約篩選後與 rolling live history 合併。若同月份未來存在合格 `live_checkpoint`，live history 仍以既有 merge 順序覆蓋 static historical evidence。
+
+2026-09 reconstruction audit：
+
+```text
+sourceHead           = 040e998f5b27a3b3e53958a3e94851c48f4e271f
+readWindow           = 2026-06-01..2026-09-30
+estimatedBilledReads = 5960
+writes               = 0
+listener             = 0
+polling              = 0
+```
+
+舊 B2A0 與目前 authority 的 strict parity 並非 byte/numeric exact；已確認差異集中於 CYJ 歷史正式資料修正的可解釋 drift，Anniu 2026-05~08 exact、無 structural mismatch。因此 2026-09 supplement 明確標示 `historical_backtest_current_authority`，不可冒充原 B2A0 或 natural live checkpoint。
+
+這個補充不新增 Firestore collection、listener、query、polling、writer，也不修改 Projection formula。
+
+---
+
 # Trainer → Therapist Account Management Flow Override — 2026-09-30
 
 # Therapist Historical Summary-first Read Flow — 2026-10-03
