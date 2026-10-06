@@ -2901,3 +2901,67 @@ Projection Model = not applicable
 ```
 
 Therapist projection 不在 Batch 8C flow 內，維持既有 owner。
+
+---
+
+# 2026-10-06 — Accrual Residual Shadow Calibration v1（Live Shadow）
+
+正式 `projection_accuracy` checkpoint 在既有 `effective / shadowV1 / currentPace` 比較之外，
+新增一個**只用於觀察、不改正式推估**的權責 residual shadow：
+
+```text
+current effective accrual standard
+× brand + checkpoint frozen factor
+→ accrualResidualShadow.standard
+```
+
+正式邊界：
+
+```text
+candidateId                  = projection-accrual-residual-shadow-v1
+eligible brands              = CYJ / 安妞
+metric                       = accrual only
+activation date              = 2026-10-07
+cash formula change          = NO
+formal accrual formula change= NO
+automatic promotion          = NO
+```
+
+factor 來源為 2026-05～09 五個獨立月份的離線 LOMO validation；
+Production runtime 不重新訓練、不讀額外資料、不自動調 factor。
+
+checkpoint flow：
+
+```text
+既有 Projection authority / getStorePerformance
+→ effective accrual projection
+→ buildAccrualResidualShadowCandidate()
+→ projection_accuracy/{YYYY-MM}.checkpoints.dayXX.accrualResidualShadow
+```
+
+月底 verified Summary scoring 時：
+
+```text
+existing checkpoint evidence
++ verified final accrual actual
+→ scorecard.byCheckpoint.dayXX.accrual.accrualResidualShadow
+→ scorecard.overall.accrual.accrualResidualShadow
+```
+
+`projection_accuracy_history` 既有三方法 compact comparison
+(`effective / shadowV1 / currentPace`) 維持不變；
+本候選先保留在 monthly `projection_accuracy` scorecard 作 live Shadow evidence，
+不在本批改寫既有歷史比較 UI 語意。
+
+Reads / writes：
+
+```text
+new Firestore read       = 0
+new listener             = 0
+new query                = 0
+new polling              = 0
+existing checkpoint write= document payload 增加 shadow evidence fields
+```
+
+2026-10-05 `day05` 已在 candidate activation 前，因此不回填、不偽裝成 live Shadow；
+2026-10-07 起的新 checkpoint 才具備正式 live candidate identity。

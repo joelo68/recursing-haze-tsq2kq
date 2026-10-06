@@ -7,7 +7,10 @@ const { aggregateTelegramProjectionRows } = require("./telegram/projectionConsum
 const { isValidNumericStatus } = require("./telegram/formalKpi");
 const { KPI_CONTRACT_VERSION } = require("./kpiContracts");
 const { PROJECTION_CONTEXT_COLLECTION } = require("./projectionContext");
-const { buildProspectiveShadowCandidate } = require("./projectionShadowCandidate");
+const {
+  buildProspectiveShadowCandidate,
+  buildAccrualResidualShadowCandidate,
+} = require("./projectionShadowCandidate");
 
 const PROJECTION_ACCURACY_SCHEMA_VERSION = "projection-accuracy-v1";
 const PROJECTION_ACCURACY_SEMANTIC_VERSION = "projection-accuracy-checkpoint-v1";
@@ -397,6 +400,12 @@ function buildCheckpointPayload({
     actual: { cash: cashActual, accrual: accrualActual },
     effective: { cash: effectiveCash, accrual: effectiveAccrual },
   });
+  const accrualResidualShadow = buildAccrualResidualShadowCandidate({
+    brandId,
+    checkpointKey,
+    cutoffDate,
+    effectiveAccrual,
+  });
 
   const cashEligibility = buildScoreEligibility({
     metric: "cash",
@@ -446,6 +455,7 @@ function buildCheckpointPayload({
       accrual: naiveAccrual,
     },
     prospectiveShadow: toPlainJson(prospectiveShadow),
+    accrualResidualShadow: toPlainJson(accrualResidualShadow),
     model: buildModelMetadata(authority, rows),
     cutoffDayCompleteness: toPlainJson(completeness),
     scoreEligibility: {
@@ -718,6 +728,17 @@ function buildCheckpointEvidenceSignature(checkpoints = {}) {
             reason: String(checkpoint?.prospectiveShadow?.accrual?.reason || ""),
           },
         },
+        ...(checkpoint?.accrualResidualShadow && typeof checkpoint.accrualResidualShadow === "object"
+          ? {
+              accrualResidualShadow: {
+                candidateId: String(checkpoint?.accrualResidualShadow?.candidateId || ""),
+                eligible: checkpoint?.accrualResidualShadow?.eligible === true,
+                standard: checkpoint?.accrualResidualShadow?.standard ?? null,
+                factor: checkpoint?.accrualResidualShadow?.factor ?? null,
+                reason: String(checkpoint?.accrualResidualShadow?.reason || ""),
+              },
+            }
+          : {}),
         model: {
           strategyVersion: String(checkpoint?.model?.strategyVersion || ""),
           runtimePhase: toPlainJson(checkpoint?.model?.runtimePhase || null),
@@ -747,6 +768,18 @@ function buildMethodScoreForCheckpoint(checkpoint = {}, metric = "cash", method 
     forecast = checkpoint?.shadowV1?.[metric]?.standard;
   } else if (method === "currentPace") {
     forecast = checkpoint?.naiveCurrentPace?.[metric];
+  } else if (method === "accrualResidualShadow") {
+    if (metric !== "accrual") {
+      return { eligible: false, reason: "ACCRUAL_RESIDUAL_SHADOW_METRIC_MISMATCH", score: null };
+    }
+    if (checkpoint?.accrualResidualShadow?.eligible !== true) {
+      return {
+        eligible: false,
+        reason: String(checkpoint?.accrualResidualShadow?.reason || "ACCRUAL_RESIDUAL_SHADOW_NOT_ELIGIBLE"),
+        score: null,
+      };
+    }
+    forecast = checkpoint?.accrualResidualShadow?.standard;
   }
 
   return buildFinalForecastScore(forecast, actual);
@@ -779,7 +812,13 @@ function buildMonthFinalScorecard({
   const byCheckpoint = {};
   const aggregateStates = {
     cash: { effective: [], shadowV1: [], currentPace: [], effectiveV2AppliedOnly: [] },
-    accrual: { effective: [], shadowV1: [], currentPace: [], effectiveV2AppliedOnly: [] },
+    accrual: {
+      effective: [],
+      shadowV1: [],
+      currentPace: [],
+      effectiveV2AppliedOnly: [],
+      accrualResidualShadow: [],
+    },
   };
 
   for (const [checkpointKey, checkpoint] of Object.entries(checkpoints || {}).sort(([a], [b]) => a.localeCompare(b))) {
@@ -803,6 +842,16 @@ function buildMonthFinalScorecard({
         row[metric][method] = state;
         aggregateStates[metric][method].push(state);
       }
+      if (metric === "accrual") {
+        const residualShadowState = buildMethodScoreForCheckpoint(
+          checkpoint,
+          metric,
+          "accrualResidualShadow",
+          actual
+        );
+        row[metric].accrualResidualShadow = residualShadowState;
+        aggregateStates.accrual.accrualResidualShadow.push(residualShadowState);
+      }
       if (
         checkpoint?.model?.runtimePhase?.[metric]?.phaseApplied === true
         && row[metric].effective?.eligible === true
@@ -816,7 +865,9 @@ function buildMonthFinalScorecard({
   const overall = {};
   for (const metric of ["cash", "accrual"]) {
     overall[metric] = {};
-    for (const method of ["effective", "shadowV1", "currentPace", "effectiveV2AppliedOnly"]) {
+    const methods = ["effective", "shadowV1", "currentPace", "effectiveV2AppliedOnly"];
+    if (metric === "accrual") methods.push("accrualResidualShadow");
+    for (const method of methods) {
       overall[metric][method] = summarizeFinalScores(aggregateStates[metric][method]);
     }
   }

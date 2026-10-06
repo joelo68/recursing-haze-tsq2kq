@@ -5307,3 +5307,47 @@ SystemMonitor.jsx
 ```
 
 Release Health 不新增 Firestore path，也不改 CYJ／安妞／伊啵品牌資料 root。
+
+---
+
+# 2026-10-06 — Accrual Residual Shadow Calibration v1 Owners
+
+```text
+functions/projectionShadowCandidate.js
+→ owner：projection-accrual-residual-shadow-v1 frozen factors / eligibility / activation
+→ CYJ + 安妞、accrual-only、shadow-only
+→ 不讀 Firestore、不自動學習、不 promotion
+
+functions/projectionAccuracy.js
+→ owner：將 accrualResidualShadow 嵌入既有 checkpoint evidence
+→ evidence signature 納入 candidate identity / factor / standard
+→ verified month scorecard 計算 accrualResidualShadow final error
+→ 不改既有 projection_accuracy_history 三方法 compact contract
+
+functions/index.js
+→ wiring 不變
+→ captureProjectionAccuracyCheckpoint 使用更新後 projectionAccuracy module
+→ repairDirtySummaryNow / repairDirtySummaries 的 month-final scoring 使用更新後 module
+
+tests/projectionAccrualResidualShadow.test.js
+→ frozen factor / activation / brand isolation / fail-closed / scorecard / no-read regression
+```
+
+Deployment surface：
+
+```text
+Functions:
+- captureProjectionAccuracyCheckpoint
+- repairDirtySummaryNow
+- repairDirtySummaries
+
+Frontend = unchanged
+Firestore Rules = unchanged
+CURRENT_APP_VERSION = unchanged
+```
+
+Read topology：
+
+```text
+new reads/listeners/queries/polling = 0 / 0 / 0 / 0
+```

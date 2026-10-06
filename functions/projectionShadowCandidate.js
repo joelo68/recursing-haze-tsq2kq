@@ -27,6 +27,42 @@ const PROSPECTIVE_SHADOW_CALIBRATION = Object.freeze({
   storeSchedulePolicy: "evidence_only",
 });
 
+const ACCRUAL_RESIDUAL_SHADOW_SCHEMA_VERSION = "projection-accrual-residual-shadow-v1";
+const ACCRUAL_RESIDUAL_SHADOW_CANDIDATE_ID = "projection-accrual-residual-shadow-v1";
+const ACCRUAL_RESIDUAL_SHADOW_ACTIVATION_DATE = "2026-10-07";
+const ACCRUAL_RESIDUAL_SHADOW_ELIGIBLE_BRANDS = Object.freeze(["cyj", "anniu"]);
+const ACCRUAL_RESIDUAL_SHADOW_FACTORS = Object.freeze({
+  cyj: Object.freeze({
+    day05: 1.0671806264189028,
+    day07: 1.0868747631985327,
+    day10: 1.1156821451817756,
+    day15: 1.132807108115948,
+    day20: 1.0997853009721472,
+    day25: 1.066560146611014,
+  }),
+  anniu: Object.freeze({
+    day05: 1.1312958364066337,
+    day07: 1.1024797739350842,
+    day10: 1.120625722389392,
+    day15: 1.101014900476267,
+    day20: 1.0627454466241164,
+    day25: 1.0411009537749896,
+  }),
+});
+const ACCRUAL_RESIDUAL_SHADOW_CALIBRATION = Object.freeze({
+  schemaVersion: "projection-accrual-residual-shadow-calibration-v1",
+  candidateId: ACCRUAL_RESIDUAL_SHADOW_CANDIDATE_ID,
+  metric: "accrual",
+  trainingMonths: Object.freeze(["2026-05", "2026-06", "2026-07", "2026-08", "2026-09"]),
+  independentMonthCountPerBrand: 5,
+  validationMethod: "leave-one-month-out",
+  cashChanged: false,
+  accrualFormalChanged: false,
+  shadowOnly: true,
+  productionPromotionAllowed: false,
+  automaticPromotionAllowed: false,
+});
+
 const isFiniteNumber = (value) => typeof value === "number" && Number.isFinite(value);
 const safeArray = (value) => Array.isArray(value) ? value : [];
 
@@ -242,6 +278,76 @@ function buildProspectiveMetricState({
   };
 }
 
+function buildAccrualResidualShadowCandidate({
+  brandId = "",
+  checkpointKey = "",
+  cutoffDate = "",
+  effectiveAccrual = null,
+} = {}) {
+  const normalizedBrandId = normalizeBrandId(brandId);
+  const factor = Number(ACCRUAL_RESIDUAL_SHADOW_FACTORS?.[normalizedBrandId]?.[checkpointKey]);
+
+  const ineligible = (reason) => ({
+    schemaVersion: ACCRUAL_RESIDUAL_SHADOW_SCHEMA_VERSION,
+    candidateId: ACCRUAL_RESIDUAL_SHADOW_CANDIDATE_ID,
+    status: "SHADOW_INELIGIBLE",
+    productionFormulaChanged: false,
+    automaticPromotionAllowed: false,
+    metric: "accrual",
+    brandId: normalizedBrandId,
+    checkpointKey: String(checkpointKey || ""),
+    cutoffDate: String(cutoffDate || ""),
+    eligible: false,
+    reason,
+    factor: Number.isFinite(factor) ? factor : null,
+    formalStandard: isFiniteNumber(effectiveAccrual?.standard)
+      ? Math.round(effectiveAccrual.standard)
+      : null,
+    standard: null,
+    calibration: ACCRUAL_RESIDUAL_SHADOW_CALIBRATION,
+  });
+
+  if (!ACCRUAL_RESIDUAL_SHADOW_ELIGIBLE_BRANDS.includes(normalizedBrandId)) {
+    return ineligible("BRAND_NOT_ELIGIBLE");
+  }
+  if (!/^day(05|07|10|15|20|25)$/.test(String(checkpointKey || ""))) {
+    return ineligible("CHECKPOINT_NOT_ELIGIBLE");
+  }
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(String(cutoffDate || ""))) {
+    return ineligible("CUTOFF_DATE_INVALID");
+  }
+  if (String(cutoffDate) < ACCRUAL_RESIDUAL_SHADOW_ACTIVATION_DATE) {
+    return ineligible("BEFORE_CANDIDATE_ACTIVATION");
+  }
+  if (!Number.isFinite(factor) || factor < 1 || factor > 1.2) {
+    return ineligible("CALIBRATION_FACTOR_INVALID");
+  }
+  if (!isFiniteNumber(effectiveAccrual?.standard)) {
+    return ineligible("FORMAL_STANDARD_NOT_VALID");
+  }
+
+  const formalStandard = Math.round(Number(effectiveAccrual.standard));
+  const standard = Math.round(Number(effectiveAccrual.standard) * factor);
+
+  return {
+    schemaVersion: ACCRUAL_RESIDUAL_SHADOW_SCHEMA_VERSION,
+    candidateId: ACCRUAL_RESIDUAL_SHADOW_CANDIDATE_ID,
+    status: "SHADOW_ELIGIBLE",
+    productionFormulaChanged: false,
+    automaticPromotionAllowed: false,
+    metric: "accrual",
+    brandId: normalizedBrandId,
+    checkpointKey: String(checkpointKey || ""),
+    cutoffDate: String(cutoffDate || ""),
+    eligible: true,
+    reason: "ELIGIBLE",
+    factor,
+    formalStandard,
+    standard,
+    calibration: ACCRUAL_RESIDUAL_SHADOW_CALIBRATION,
+  };
+}
+
 function buildProspectiveShadowCandidate({
   brandId = "",
   yearMonth = "",
@@ -298,7 +404,14 @@ module.exports = {
   PROSPECTIVE_SHADOW_ELIGIBLE_BRAND,
   PROSPECTIVE_SHADOW_FACTORS,
   PROSPECTIVE_SHADOW_CALIBRATION,
+  ACCRUAL_RESIDUAL_SHADOW_SCHEMA_VERSION,
+  ACCRUAL_RESIDUAL_SHADOW_CANDIDATE_ID,
+  ACCRUAL_RESIDUAL_SHADOW_ACTIVATION_DATE,
+  ACCRUAL_RESIDUAL_SHADOW_ELIGIBLE_BRANDS,
+  ACCRUAL_RESIDUAL_SHADOW_FACTORS,
+  ACCRUAL_RESIDUAL_SHADOW_CALIBRATION,
   inspectProspectiveShadowContext,
   buildProspectiveMetricState,
   buildProspectiveShadowCandidate,
+  buildAccrualResidualShadowCandidate,
 };

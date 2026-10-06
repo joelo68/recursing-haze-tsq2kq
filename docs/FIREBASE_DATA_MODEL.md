@@ -3417,3 +3417,62 @@ Read/write topology:
   frontend cutover is added.
 
 B3-2 does not change Firestore Rules or `CURRENT_APP_VERSION`.
+
+---
+
+# 2026-10-06 — Projection Accuracy Accrual Residual Shadow Evidence
+
+既有品牌隔離與 collection path 不變：
+
+```text
+CYJ
+→ legacy brand-resolved projection_accuracy path
+
+安妞
+→ brands/anniu/.../projection_accuracy
+
+伊啵
+→ existing path unchanged; candidate ineligible
+```
+
+`projection_accuracy/{YYYY-MM}.checkpoints.dayXX` 新增：
+
+```text
+accrualResidualShadow:
+  schemaVersion
+  candidateId = projection-accrual-residual-shadow-v1
+  status
+  productionFormulaChanged = false
+  automaticPromotionAllowed = false
+  metric = accrual
+  brandId
+  checkpointKey
+  cutoffDate
+  eligible
+  reason
+  factor
+  formalStandard
+  standard
+  calibration
+```
+
+正式 formula：
+
+```text
+standard = round(effective.accrual.standard × frozenFactor)
+```
+
+本欄位是 Shadow evidence，不是正式 Projection authority。
+`effective.accrual`、Dashboard、Telegram 正式預估 consumer 均不因本欄位改值。
+
+月底 `scorecard` 可新增：
+
+```text
+scorecard.byCheckpoint.dayXX.accrual.accrualResidualShadow
+scorecard.overall.accrual.accrualResidualShadow
+```
+
+其中 scoring 仍以 verified final actual 為 authority。
+
+本批不新增 collection、document listener、query 或 polling；
+只在既有 `projection_accuracy` checkpoint / monthly score document 內增加欄位。
