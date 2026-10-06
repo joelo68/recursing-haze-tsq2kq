@@ -2965,3 +2965,60 @@ existing checkpoint write= document payload 增加 shadow evidence fields
 
 2026-10-05 `day05` 已在 candidate activation 前，因此不回填、不偽裝成 live Shadow；
 2026-10-07 起的新 checkpoint 才具備正式 live candidate identity。
+---
+
+# Smart Forecast Control Center v1 — 2026-10-06
+
+智慧推估頁面新增使用者可理解的狀態中心，但不新增新的 Production 資料來源。
+
+```text
+SmartForecastView
+    │
+    └─ SmartForecastAccuracyPanel
+         │
+         ├─ selected current month
+         │    └─ projection_accuracy/{YYYY-MM}
+         │         └─ 既有單文件 getDoc
+         │
+         ├─ buildSmartForecastControlCenterSnapshot
+         │    ├─ 目前正式模式
+         │    ├─ 智慧學習階段
+         │    ├─ 下一個自然驗證
+         │    ├─ 本月重要時間點
+         │    └─ 可做／尚未開放操作
+         │
+         └─ history opened on demand
+              └─ projection_accuracy_history/{YYYY}
+                   └─ 既有年度單文件 getDoc
+```
+
+Read topology：
+
+```text
+current-month default page
+new Firestore reads = 0
+new listeners       = 0
+new polling         = 0
+new broad queries   = 0
+```
+
+Control Center 直接重用原本「推估準確度」已讀取的當月 `projection_accuracy` 文件，因此不建立第二份 current-month status read。
+
+若使用者切到歷史月份，Control Center 不額外讀取本月文件，而是提示「回到本月查看」；避免為了狀態卡再增加隱性讀取。
+
+2026-10 residual accrual live shadow 的呈現規則：
+
+```text
+2026-10-05
+→ activation 前
+→ 顯示「尚未開始」
+→ 不視為漏失，不回填
+
+2026-10-07 起
+→ 依既有 projection_accuracy checkpoint 判斷
+→ 已有自然背景結果：已完成
+→ 到期但沒有完整結果：需要確認
+→ 未到日期：待觀察
+```
+
+`切換推估模式` 與 `啟用自動智慧推估` 在 v1 只做 readiness presentation，均為 disabled / non-mutating，不建立新的 Backend mutation authority。

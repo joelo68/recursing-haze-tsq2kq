@@ -14,13 +14,16 @@ import {
 import {
   PROJECTION_ACCURACY_METHOD_LABELS,
   PROJECTION_HISTORICAL_METHOD_LABELS,
+  SMART_FORECAST_ACCRUAL_CANDIDATE,
   buildProjectionObservabilitySnapshot,
   buildProjectionAccuracyObservabilitySnapshot,
   buildProjectionHistoricalAccuracyComparison,
+  buildSmartForecastControlCenterSnapshot,
   getProjectionHistoryYearsForRange,
   describeProjectionBias,
   getProjectionAccuracyDisplayPct,
   getProjectionObservabilityTone,
+  getTaipeiProjectionDateKey,
   getTaipeiProjectionYearMonth,
 } from "../src/utils/projectionObservability.js";
 
@@ -59,6 +62,128 @@ test("Taipei year-month does not depend on UTC month boundary", () => {
     getTaipeiProjectionYearMonth(new Date("2026-08-31T16:30:00.000Z")),
     "2026-09"
   );
+});
+
+test("Taipei projection date key uses Asia/Taipei calendar day", () => {
+  assert.equal(
+    getTaipeiProjectionDateKey(new Date("2026-10-06T16:30:00.000Z")),
+    "2026-10-07"
+  );
+});
+
+test("Smart Forecast Control Center candidate identity stays aligned with Backend shadow authority", () => {
+  const backend = read("functions/projectionShadowCandidate.js");
+  assert.match(
+    backend,
+    new RegExp(`ACCRUAL_RESIDUAL_SHADOW_CANDIDATE_ID = "${SMART_FORECAST_ACCRUAL_CANDIDATE.candidateId}"`)
+  );
+  assert.match(
+    backend,
+    new RegExp(`ACCRUAL_RESIDUAL_SHADOW_ACTIVATION_DATE = "${SMART_FORECAST_ACCRUAL_CANDIDATE.activationDate}"`)
+  );
+  assert.match(
+    backend,
+    /ACCRUAL_RESIDUAL_SHADOW_ELIGIBLE_BRANDS = Object\.freeze\(\["cyj", "anniu"\]\)/
+  );
+  assert.match(
+    backend,
+    new RegExp(`independentMonthCountPerBrand: ${SMART_FORECAST_ACCRUAL_CANDIDATE.independentMonthCountPerBrand}`)
+  );
+  assert.equal(SMART_FORECAST_ACCRUAL_CANDIDATE.formalSwitchAllowed, false);
+  assert.equal(SMART_FORECAST_ACCRUAL_CANDIDATE.automaticModeAllowed, false);
+});
+
+test("Smart Forecast Control Center waits for 10/07 without backfilling 10/05", () => {
+  const state = buildSmartForecastControlCenterSnapshot({
+    accuracy: {
+      schemaVersion: "projection-accuracy-v1",
+      semanticVersion: "projection-accuracy-checkpoint-v1",
+      brandId: "cyj",
+      yearMonth: "2026-10",
+      checkpoints: {
+        day05: {
+          cutoffDate: "2026-10-05",
+          accrualResidualShadow: {
+            candidateId: "projection-accrual-residual-shadow-v1",
+            eligible: false,
+            reason: "BEFORE_CANDIDATE_ACTIVATION",
+          },
+        },
+      },
+    },
+    brandId: "cyj",
+    currentDate: "2026-10-06",
+  });
+
+  assert.equal(state.stage, "waiting_activation");
+  assert.equal(state.nextCheckpoint.date, "2026-10-07");
+  assert.equal(state.candidate.historicalMonthCount, 5);
+  assert.equal(state.candidate.expectedCheckpointCount, 5);
+  assert.equal(state.candidate.completedCheckpointCount, 0);
+  assert.equal(state.timeline.find((row) => row.day === 5)?.status, "not_applicable");
+  assert.equal(state.capabilities.manualModeSwitch.enabled, false);
+  assert.equal(state.capabilities.automaticSmartForecast.enabled, false);
+});
+
+test("Smart Forecast Control Center advances after a natural live checkpoint", () => {
+  const state = buildSmartForecastControlCenterSnapshot({
+    accuracy: {
+      schemaVersion: "projection-accuracy-v1",
+      semanticVersion: "projection-accuracy-checkpoint-v1",
+      brandId: "anniu",
+      yearMonth: "2026-10",
+      checkpoints: {
+        day07: {
+          cutoffDate: "2026-10-07",
+          accrualResidualShadow: {
+            candidateId: "projection-accrual-residual-shadow-v1",
+            eligible: true,
+            reason: "ELIGIBLE",
+            standard: 12345678,
+          },
+        },
+      },
+    },
+    brandId: "anniu",
+    currentDate: "2026-10-08",
+  });
+
+  assert.equal(state.stage, "live_observation");
+  assert.equal(state.candidate.completedCheckpointCount, 1);
+  assert.equal(state.nextCheckpoint.date, "2026-10-10");
+  assert.equal(state.attentionCount, 0);
+});
+
+test("Smart Forecast Control Center surfaces a missed natural checkpoint instead of relying on memory", () => {
+  const state = buildSmartForecastControlCenterSnapshot({
+    accuracy: {
+      schemaVersion: "projection-accuracy-v1",
+      semanticVersion: "projection-accuracy-checkpoint-v1",
+      brandId: "cyj",
+      yearMonth: "2026-10",
+      checkpoints: {},
+    },
+    brandId: "cyj",
+    currentDate: "2026-10-08",
+  });
+
+  assert.equal(state.stage, "attention");
+  assert.equal(state.attentionCount, 1);
+  assert.equal(state.timeline.find((row) => row.day === 7)?.status, "attention");
+  assert.equal(state.nextCheckpoint.date, "2026-10-10");
+});
+
+test("Yibo Control Center remains standard-only and does not expose mode switching", () => {
+  const state = buildSmartForecastControlCenterSnapshot({
+    accuracy: null,
+    brandId: "yibo",
+    currentDate: "2026-10-08",
+  });
+  assert.equal(state.formalMode.key, "standard");
+  assert.equal(state.stage, "standard_only");
+  assert.equal(state.candidate.eligible, false);
+  assert.equal(state.capabilities.manualModeSwitch.enabled, false);
+  assert.equal(state.capabilities.automaticSmartForecast.enabled, false);
 });
 
 test("CYJ V2 model is healthy when both phase metrics are reliable", () => {

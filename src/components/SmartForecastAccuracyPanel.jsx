@@ -2,9 +2,17 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { doc, getDoc } from "firebase/firestore";
 import {
+  Activity,
+  AlertTriangle,
   BarChart3,
+  CheckCircle2,
   ChevronDown,
+  Circle,
+  Clock3,
+  LockKeyhole,
   RefreshCw,
+  ShieldCheck,
+  Sparkles,
 } from "lucide-react";
 
 import SmartMonthPicker from "./SmartMonthPicker";
@@ -13,6 +21,7 @@ import {
   PROJECTION_HISTORICAL_METHOD_LABELS,
   buildProjectionAccuracyObservabilitySnapshot,
   buildProjectionHistoricalAccuracyComparison,
+  buildSmartForecastControlCenterSnapshot,
   getProjectionAccuracyDisplayPct,
   getProjectionHistoryYearsForRange,
   getTaipeiProjectionYearMonth,
@@ -22,6 +31,7 @@ import { AsyncActionButton } from "./SharedUI";
 const emptyAccuracyState = () => ({
   status: "idle",
   data: null,
+  raw: null,
   error: "",
   loadedAtText: "",
 });
@@ -51,6 +61,7 @@ const SmartForecastAccuracyPanel = ({
   brandLabel = "",
   selectedMonth = "",
   getCollectionPath,
+  onSelectCurrentMonth,
 }) => {
   const [accuracyState, setAccuracyState] = useState(emptyAccuracyState);
   const [historyOpen, setHistoryOpen] = useState(false);
@@ -111,6 +122,7 @@ const SmartForecastAccuracyPanel = ({
       const next = {
         status: "ready",
         data,
+        raw: accuracy,
         error: "",
         loadedAtText: new Date().toLocaleString("zh-TW", { hour12: false }),
       };
@@ -121,6 +133,7 @@ const SmartForecastAccuracyPanel = ({
       setAccuracyState({
         status: "error",
         data: null,
+        raw: null,
         error: error?.message || String(error),
         loadedAtText: new Date().toLocaleString("zh-TW", { hour12: false }),
       });
@@ -260,6 +273,21 @@ const SmartForecastAccuracyPanel = ({
     await loadHistory({ force });
   };
 
+  const openModelPerformance = async () => {
+    setHistoryMetric("accrual");
+    setHistoryDetailsOpen(false);
+    setHistoryOpen(true);
+    if (canUseRollingHistory && historyState.status === "idle") {
+      await loadHistory({ force: false });
+    }
+  };
+
+  const isCurrentMonth = selectedMonth === currentYearMonth;
+  const controlState = buildSmartForecastControlCenterSnapshot({
+    accuracy: isCurrentMonth ? accuracyState.raw : null,
+    brandId,
+  });
+
   const data = accuracyState.data;
   const statusTone = data?.status === "healthy"
     ? "border-emerald-100 bg-emerald-50 text-emerald-700"
@@ -286,27 +314,257 @@ const SmartForecastAccuracyPanel = ({
   const historyMetricData = history.metrics?.[metricKey] || {};
   const historyOverall = historyMetricData.overall || {};
 
+  const stageTone = controlState.stageTone === "emerald"
+    ? "border-emerald-100 bg-emerald-50 text-emerald-700"
+    : controlState.stageTone === "rose"
+      ? "border-rose-100 bg-rose-50 text-rose-600"
+      : controlState.stageTone === "stone"
+        ? "border-stone-200 bg-stone-50 text-stone-600"
+        : "border-amber-100 bg-amber-50 text-amber-700";
+
+  const timelineTone = (status) => {
+    if (status === "complete") return "border-emerald-100 bg-emerald-50 text-emerald-700";
+    if (status === "attention") return "border-rose-100 bg-rose-50 text-rose-600";
+    if (status === "today") return "border-amber-200 bg-amber-50 text-amber-700";
+    if (status === "not_applicable") return "border-stone-100 bg-stone-50 text-stone-400";
+    return "border-stone-100 bg-white text-stone-500";
+  };
+
+  const stepIcon = (status) => {
+    if (status === "complete") return <CheckCircle2 size={16} className="text-emerald-500" />;
+    if (status === "current") return <Clock3 size={16} className="text-amber-500" />;
+    return <Circle size={16} className="text-stone-300" />;
+  };
+
   return (
     <div className="rounded-3xl border border-stone-100 bg-white p-5 md:p-6 shadow-sm">
       <div className="flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
         <div>
           <div className="flex items-center gap-2 text-stone-800">
-            <BarChart3 size={20} className="text-emerald-500" />
-            <h2 className="font-extrabold text-lg">推估準確度</h2>
+            <Activity size={20} className="text-amber-500" />
+            <h2 className="font-extrabold text-lg">智慧推估進度</h2>
           </div>
           <p className="mt-1 text-sm leading-6 text-stone-500">
-            用已完成月份的正式結果確認推估是否穩定；數字越高，代表越接近月底實際業績。
+            這裡會直接告訴你目前用什麼、系統正在等什麼，以及哪些功能現在可以使用。
           </p>
         </div>
         <button
           type="button"
           onClick={() => loadAccuracy({ force: true })}
-          disabled={accuracyState.status === "loading"}
-          className="inline-flex items-center justify-center gap-2 rounded-xl border border-stone-200 bg-white px-3 py-2 text-sm font-bold text-stone-600 hover:bg-stone-50 disabled:opacity-50"
+          disabled={accuracyState.status === "loading" || !isCurrentMonth}
+          className="inline-flex items-center justify-center gap-2 rounded-xl border border-stone-200 bg-white px-3 py-2 text-sm font-bold text-stone-600 hover:bg-stone-50 disabled:opacity-45"
         >
           <RefreshCw size={16} className={accuracyState.status === "loading" ? "animate-spin" : ""} />
-          更新準確度
+          更新目前狀態
         </button>
+      </div>
+
+      {!isCurrentMonth ? (
+        <div className="mt-4 rounded-2xl border border-amber-100 bg-amber-50/55 p-4">
+          <div className="flex items-start gap-3">
+            <Clock3 size={18} className="mt-0.5 shrink-0 text-amber-600" />
+            <div className="min-w-0">
+              <p className="text-sm font-extrabold text-amber-800">
+                目前正在查看 {selectedMonth} 的歷史月份
+              </p>
+              <p className="mt-1 text-sm font-bold leading-6 text-amber-700">
+                即時學習進度與下一個自然驗證會以本月為準；回到 {currentYearMonth} 就能看到目前狀態。
+              </p>
+              {typeof onSelectCurrentMonth === "function" && (
+                <button
+                  type="button"
+                  onClick={() => onSelectCurrentMonth(currentYearMonth)}
+                  className="mt-3 rounded-xl border border-amber-200 bg-white px-3 py-2 text-xs font-extrabold text-amber-700"
+                >
+                  回到本月查看
+                </button>
+              )}
+            </div>
+          </div>
+        </div>
+      ) : (
+        <div className="mt-4 space-y-4">
+          <div className="grid grid-cols-1 gap-3 lg:grid-cols-3">
+            <div className="rounded-2xl border border-stone-100 bg-[#FFFDF9] p-4">
+              <p className="text-xs font-bold text-stone-400">目前正式模式</p>
+              <div className="mt-2 flex items-center gap-2">
+                <ShieldCheck size={18} className="text-emerald-500" />
+                <p className="font-extrabold text-stone-800">{controlState.formalMode.label}</p>
+              </div>
+              <p className="mt-2 text-xs font-bold leading-5 text-stone-500">
+                {controlState.formalMode.detail}
+              </p>
+            </div>
+
+            <div className="rounded-2xl border border-stone-100 bg-[#FFFDF9] p-4">
+              <p className="text-xs font-bold text-stone-400">智慧學習階段</p>
+              <span className={`mt-2 inline-flex rounded-full border px-3 py-1.5 text-xs font-extrabold ${stageTone}`}>
+                {controlState.stageLabel}
+              </span>
+              <p className="mt-2 text-xs font-bold leading-5 text-stone-500">
+                {controlState.stageDetail}
+              </p>
+            </div>
+
+            <div className="rounded-2xl border border-stone-100 bg-[#FFFDF9] p-4">
+              <p className="text-xs font-bold text-stone-400">下一個自然驗證</p>
+              <p className="mt-2 text-lg font-extrabold text-stone-800">
+                {controlState.nextCheckpoint?.date
+                  ? controlState.nextCheckpoint.date.slice(5).replace("-", "/")
+                  : controlState.candidate.eligible
+                    ? "等待下一階段"
+                    : "目前沒有"}
+              </p>
+              <p className="mt-1 text-xs font-bold leading-5 text-stone-500">
+                {controlState.nextCheckpoint?.detail
+                  || (controlState.candidate.eligible
+                    ? "完成目前觀察後，系統會依月底正式結果進行下一步評估。"
+                    : "目前品牌維持既有正式模式。")}
+              </p>
+            </div>
+          </div>
+
+          {controlState.candidate.eligible && (
+            <div className="rounded-2xl border border-stone-100 bg-stone-50/55 p-4">
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <div>
+                  <p className="text-sm font-extrabold text-stone-700">智慧學習進度</p>
+                  <p className="mt-0.5 text-xs font-bold text-stone-400">
+                    已有 {controlState.candidate.historicalMonthCount} 個完整歷史月份；本月自然驗證 {controlState.candidate.completedCheckpointCount}/{controlState.candidate.expectedCheckpointCount}。
+                  </p>
+                </div>
+                <span className="rounded-full border border-stone-100 bg-white px-2.5 py-1 text-[11px] font-extrabold text-stone-500">
+                  正式推估不受影響
+                </span>
+              </div>
+              <div className="mt-3 grid grid-cols-2 gap-2 md:grid-cols-3 xl:grid-cols-6">
+                {controlState.learningSteps.map((step) => (
+                  <div
+                    key={step.key}
+                    className="flex items-center gap-2 rounded-xl border border-stone-100 bg-white px-3 py-2.5"
+                  >
+                    {stepIcon(step.status)}
+                    <span className={`text-[11px] font-extrabold ${
+                      step.status === "locked" ? "text-stone-400" : "text-stone-600"
+                    }`}>
+                      {step.label}
+                    </span>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {controlState.candidate.eligible && (
+            <div className="rounded-2xl border border-stone-100 bg-white p-4">
+              <div className="flex items-center gap-2">
+                <Clock3 size={17} className="text-stone-500" />
+                <p className="text-sm font-extrabold text-stone-700">本月重要時間點</p>
+              </div>
+              <div className="mt-3 grid grid-cols-2 gap-2 md:grid-cols-3 xl:grid-cols-6">
+                {controlState.timeline.map((row) => (
+                  <div key={row.checkpointKey} className={`rounded-xl border px-3 py-2.5 ${timelineTone(row.status)}`}>
+                    <p className="text-xs font-extrabold">{row.day} 日</p>
+                    <p className="mt-1 text-[10px] font-bold">{row.statusLabel}</p>
+                  </div>
+                ))}
+              </div>
+              <p className="mt-3 text-xs font-bold leading-5 text-stone-400">
+                不用在當天手動操作；系統會自然保存驗證結果。之後再回來，也能看出哪個時間點已完成、哪個需要確認。
+              </p>
+            </div>
+          )}
+
+          <div className="rounded-2xl border border-stone-100 bg-[#FFFDF9] p-4">
+            <div className="flex items-center gap-2">
+              <Sparkles size={17} className="text-amber-500" />
+              <p className="text-sm font-extrabold text-stone-700">目前可以做</p>
+            </div>
+            <div className="mt-3 grid grid-cols-1 gap-2 md:grid-cols-2">
+              <button
+                type="button"
+                onClick={openModelPerformance}
+                disabled={!controlState.capabilities.historyReview}
+                className="flex items-center justify-between rounded-xl border border-stone-200 bg-white px-3 py-3 text-left disabled:opacity-45"
+              >
+                <span>
+                  <span className="block text-xs font-extrabold text-stone-700">查看智慧模型表現</span>
+                  <span className="mt-0.5 block text-[11px] font-bold text-stone-400">比較歷史月份的推估準確度</span>
+                </span>
+                <BarChart3 size={16} className="text-stone-400" />
+              </button>
+
+              <button
+                type="button"
+                aria-label="切換推估模式"
+                disabled
+                className="flex items-center justify-between rounded-xl border border-stone-100 bg-stone-50 px-3 py-3 text-left opacity-70"
+              >
+                <span>
+                  <span className="block text-xs font-extrabold text-stone-600">
+                    {controlState.capabilities.manualModeSwitch.label}
+                  </span>
+                  <span className="mt-0.5 block text-[11px] font-bold leading-4 text-stone-400">
+                    {controlState.capabilities.manualModeSwitch.reason}
+                  </span>
+                </span>
+                <LockKeyhole size={16} className="shrink-0 text-stone-300" />
+              </button>
+
+              <button
+                type="button"
+                aria-label="啟用自動智慧推估"
+                disabled
+                className="flex items-center justify-between rounded-xl border border-stone-100 bg-stone-50 px-3 py-3 text-left opacity-70 md:col-span-2"
+              >
+                <span>
+                  <span className="block text-xs font-extrabold text-stone-600">
+                    {controlState.capabilities.automaticSmartForecast.label}
+                  </span>
+                  <span className="mt-0.5 block text-[11px] font-bold leading-4 text-stone-400">
+                    {controlState.capabilities.automaticSmartForecast.reason}
+                  </span>
+                </span>
+                <LockKeyhole size={16} className="shrink-0 text-stone-300" />
+              </button>
+            </div>
+          </div>
+
+          {controlState.attentionCount > 0 && (
+            <div className="flex items-start gap-3 rounded-2xl border border-rose-100 bg-rose-50/55 p-4">
+              <AlertTriangle size={18} className="mt-0.5 shrink-0 text-rose-500" />
+              <div>
+                <p className="text-sm font-extrabold text-rose-700">有自然驗證需要確認</p>
+                <p className="mt-1 text-xs font-bold leading-5 text-rose-600">
+                  已有 {controlState.attentionCount} 個時間點沒有完整留下背景驗證。這不會改動正式推估，但建議先確認資料狀態。
+                </p>
+              </div>
+            </div>
+          )}
+        </div>
+      )}
+
+      <div className="mt-6 border-t border-stone-100 pt-5">
+        <div className="flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
+          <div>
+            <div className="flex items-center gap-2 text-stone-800">
+              <BarChart3 size={20} className="text-emerald-500" />
+              <h2 className="font-extrabold text-lg">推估準確度</h2>
+            </div>
+            <p className="mt-1 text-sm leading-6 text-stone-500">
+              用已完成月份的正式結果確認推估是否穩定；數字越高，代表越接近月底實際業績。
+            </p>
+          </div>
+          <button
+            type="button"
+            onClick={() => loadAccuracy({ force: true })}
+            disabled={accuracyState.status === "loading"}
+            className="inline-flex items-center justify-center gap-2 rounded-xl border border-stone-200 bg-white px-3 py-2 text-sm font-bold text-stone-600 hover:bg-stone-50 disabled:opacity-50"
+          >
+            <RefreshCw size={16} className={accuracyState.status === "loading" ? "animate-spin" : ""} />
+            更新準確度
+          </button>
+        </div>
       </div>
 
       {accuracyState.status === "loading" && (

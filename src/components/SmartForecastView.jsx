@@ -818,6 +818,7 @@ const SmartForecastView = () => {
           brandLabel={brandLabel}
           selectedMonth={selectedMonth}
           getCollectionPath={getCollectionPath}
+          onSelectCurrentMonth={(yearMonth) => setSelectedMonth(yearMonth)}
         />
 
         <Card className="p-5 md:p-6">

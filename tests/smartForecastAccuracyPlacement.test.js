@@ -16,6 +16,7 @@ test("推估準確度屬於智慧推估，不再出現在系統維護", () => {
 
   assert.match(view, /import SmartForecastAccuracyPanel from "\.\/SmartForecastAccuracyPanel"/);
   assert.match(view, /<SmartForecastAccuracyPanel/);
+  assert.match(panel, />智慧推估進度<\/h2>/);
   assert.match(panel, />推估準確度<\/h2>/);
   assert.doesNotMatch(maintenance, /title="業績推估準確度"/);
   assert.doesNotMatch(maintenance, /projection_accuracy_history/);
@@ -45,6 +46,11 @@ test("智慧推估準確度只做小範圍單文件讀取，不新增常駐監�
   assert.doesNotMatch(panel, /\bsetDoc\s*\(/);
   assert.doesNotMatch(panel, /\baddDoc\s*\(/);
   assert.doesNotMatch(panel, /\bupdateDoc\s*\(/);
+  assert.equal(
+    (panel.match(/getDoc\(doc\(getCollectionPath\("projection_accuracy"\), selectedMonth\)\)/g) || []).length,
+    1
+  );
+  assert.doesNotMatch(panel, /projection_control|smart_forecast_control/);
 });
 
 test("歷史準確度只對核准的智慧校正品牌讀取年度資料", () => {
@@ -92,4 +98,25 @@ test("智慧推估準確度主要文案維持一般管理者可理解語言", ()
   assert.match(panel, /已累積觀察時間點/);
   assert.match(panel, /查看歷史表現/);
   assert.match(panel, /各日期比較/);
+  assert.match(panel, /目前正式模式/);
+  assert.match(panel, /智慧學習階段/);
+  assert.match(panel, /下一個自然驗證/);
+  assert.match(panel, /目前可以做/);
+  assert.match(panel, /查看智慧模型表現/);
+  assert.match(panel, /切換推估模式/);
+  assert.match(panel, /啟用自動智慧推估/);
+  assert.match(panel, /不用在當天手動操作/);
+  assert.match(panel, /回到本月查看/);
+});
+
+test("Smart Forecast Control Center future controls are visible but intentionally non-mutating", () => {
+  const panel = read("src/components/SmartForecastAccuracyPanel.jsx");
+  const observability = read("src/utils/projectionObservability.js");
+
+  assert.match(observability, /SMART_FORECAST_CONTROL_CENTER_SCHEMA_VERSION/);
+  assert.match(observability, /formalSwitchAllowed:\s*false/);
+  assert.match(observability, /automaticModeAllowed:\s*false/);
+  assert.match(panel, /disabled[\s\S]*切換推估模式|manualModeSwitch\.label/);
+  assert.match(panel, /disabled[\s\S]*啟用自動智慧推估|automaticSmartForecast\.label/);
+  assert.doesNotMatch(panel, /setDoc\(|addDoc\(|updateDoc\(|writeBatch\(/);
 });

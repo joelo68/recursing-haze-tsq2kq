@@ -5351,3 +5351,57 @@ Read topology：
 ```text
 new reads/listeners/queries/polling = 0 / 0 / 0 / 0
 ```
+---
+
+# Smart Forecast Control Center v1 Source Map — 2026-10-06
+
+```text
+src/components/SmartForecastView.jsx
+→ 智慧推估頁 owner
+→ selectedMonth owner
+→ 提供「回到本月」切換給狀態中心
+
+src/components/SmartForecastAccuracyPanel.jsx
+→ Smart Forecast Control Center v1 presentation owner
+→ 重用既有 projection_accuracy/{selectedMonth} 單文件讀取
+→ 顯示正式模式／學習階段／下一個自然驗證／時間軸／操作 readiness
+→ 歷史比較仍維持 on-demand projection_accuracy_history/{year}
+
+src/utils/projectionObservability.js
+→ buildSmartForecastControlCenterSnapshot
+→ Smart Forecast lifecycle presentation semantics
+→ candidate activation / brand eligibility frontend mirror
+→ natural checkpoint completed / attention / upcoming 判斷
+→ future mode-switch / automatic-smart controls readiness only
+
+functions/projectionShadowCandidate.js
+→ accrual residual live shadow 的正式 Backend candidate identity
+→ activation / eligible brands / frozen factors / no-auto-promotion authority
+
+functions/projectionAccuracy.js
+→ natural checkpoint evidence writer
+→ Control Center 不新增 writer、不改正式 projection formula
+```
+
+Parity boundary：
+
+```text
+frontend candidate identity
+↔
+functions/projectionShadowCandidate.js
+
+tests/projectionObservability.test.js
+→ 驗證 candidateId / activationDate / eligibleBrands / historical month count parity
+```
+
+Runtime impact：
+
+```text
+new Firestore collection = 0
+new Firestore write      = 0
+new listener             = 0
+new query                = 0
+new polling              = 0
+formal projection change = 0
+automatic promotion      = 0
+```

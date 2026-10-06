@@ -40,6 +40,21 @@ export const PROJECTION_HISTORICAL_METHOD_LABELS = Object.freeze({
   currentPace: "依目前進度推估",
 });
 
+export const SMART_FORECAST_CONTROL_CENTER_SCHEMA_VERSION = "smart-forecast-control-center-v1";
+
+export const SMART_FORECAST_ACCRUAL_CANDIDATE = Object.freeze({
+  candidateId: "projection-accrual-residual-shadow-v1",
+  activationDate: "2026-10-07",
+  eligibleBrands: Object.freeze(["cyj", "anniu"]),
+  metric: "accrual",
+  trainingMonths: Object.freeze(["2026-05", "2026-06", "2026-07", "2026-08", "2026-09"]),
+  independentMonthCountPerBrand: 5,
+  formalSwitchAllowed: false,
+  automaticModeAllowed: false,
+});
+
+const SMART_FORECAST_CHECKPOINT_DAYS = Object.freeze([5, 7, 10, 15, 20, 25]);
+
 const normalizeBrandId = (value = "") => {
   const text = String(value || "").trim().toLowerCase();
   if (["cyj", "drcyj", "default", "default-app-id"].includes(text)) return "cyj";
@@ -68,6 +83,22 @@ export const getTaipeiProjectionYearMonth = (now = new Date()) => {
   const year = parts.find((part) => part.type === "year")?.value || "";
   const month = parts.find((part) => part.type === "month")?.value || "";
   return normalizeYearMonth(`${year}-${month}`);
+};
+
+export const getTaipeiProjectionDateKey = (now = new Date()) => {
+  const date = now instanceof Date ? now : new Date(now);
+  if (!Number.isFinite(date.getTime())) return "";
+  const parts = new Intl.DateTimeFormat("en-CA", {
+    timeZone: "Asia/Taipei",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).formatToParts(date);
+  const year = parts.find((part) => part.type === "year")?.value || "";
+  const month = parts.find((part) => part.type === "month")?.value || "";
+  const day = parts.find((part) => part.type === "day")?.value || "";
+  const value = `${year}-${month}-${day}`;
+  return /^\d{4}-(0[1-9]|1[0-2])-([0-2]\d|3[0-1])$/.test(value) ? value : "";
 };
 
 const buildPhaseMetricStatus = (metric = null) => {
@@ -923,6 +954,251 @@ export const buildProjectionHistoricalAccuracyComparison = ({
       cash: buildMetric("cash"),
       accrual: buildMetric("accrual"),
     },
+  };
+};
+
+
+const normalizeProjectionDateKey = (value = "") => {
+  const text = String(value || "").trim();
+  return /^\d{4}-(0[1-9]|1[0-2])-([0-2]\d|3[0-1])$/.test(text) ? text : "";
+};
+
+const describeCandidateCheckpointIssue = (reason = "") => {
+  const normalized = String(reason || "");
+  if (normalized === "FORMAL_STANDARD_NOT_VALID") return "當次正式權責推估尚未完整，背景驗證沒有成立。";
+  if (normalized === "CHECKPOINT_NOT_ELIGIBLE") return "這個日期不屬於目前的驗證時間點。";
+  if (normalized === "BEFORE_CANDIDATE_ACTIVATION") return "當時新的權責模式尚未開始背景觀察。";
+  if (normalized === "BRAND_NOT_ELIGIBLE") return "目前品牌尚未加入這一階段的背景觀察。";
+  return "當次背景驗證沒有完成，建議確認當日推估資料是否完整。";
+};
+
+export const buildSmartForecastControlCenterSnapshot = ({
+  accuracy = null,
+  brandId = "",
+  currentDate = "",
+} = {}) => {
+  const normalizedBrandId = normalizeBrandId(brandId);
+  const today = normalizeProjectionDateKey(currentDate) || getTaipeiProjectionDateKey();
+  const currentYearMonth = normalizeYearMonth(today.slice(0, 7));
+  const history = buildProjectionHistoricalAccuracyComparison({
+    brandId: normalizedBrandId,
+    latestMonthCount: 24,
+  });
+  const candidate = SMART_FORECAST_ACCRUAL_CANDIDATE;
+  const candidateEligible = candidate.eligibleBrands.includes(normalizedBrandId);
+  const formalSmartExpected = PROJECTION_V2_BRANDS.includes(normalizedBrandId);
+  const formalMode = {
+    key: formalSmartExpected ? "smart_calibrated" : "standard",
+    label: formalSmartExpected ? "智慧校正模式" : "標準模式",
+    detail: formalSmartExpected
+      ? "正式推估仍使用目前已上線的智慧校正方式；新的權責模式只在背景觀察，不會改動正式數字。"
+      : "目前維持標準推估；尚未加入新的權責背景觀察。",
+  };
+
+  const accuracySnapshot = buildProjectionAccuracyObservabilitySnapshot({
+    accuracy,
+    brandId: normalizedBrandId,
+    yearMonth: currentYearMonth,
+    currentYearMonth,
+  });
+  const rawCheckpoints = (
+    accuracy
+    && typeof accuracy === "object"
+    && normalizeBrandId(accuracy?.brandId) === normalizedBrandId
+    && normalizeYearMonth(accuracy?.yearMonth) === currentYearMonth
+    && accuracy?.checkpoints
+    && typeof accuracy.checkpoints === "object"
+  ) ? accuracy.checkpoints : {};
+
+  const timeline = SMART_FORECAST_CHECKPOINT_DAYS.map((day) => {
+    const checkpointKey = `day${String(day).padStart(2, "0")}`;
+    const date = `${currentYearMonth}-${String(day).padStart(2, "0")}`;
+    const checkpoint = rawCheckpoints?.[checkpointKey] || null;
+    const shadow = checkpoint?.accrualResidualShadow || null;
+    const afterActivation = Boolean(date && date >= candidate.activationDate);
+    const matchesCandidate = String(shadow?.candidateId || "") === candidate.candidateId;
+    const completed = candidateEligible
+      && afterActivation
+      && matchesCandidate
+      && shadow?.eligible === true
+      && typeof shadow?.standard === "number"
+      && Number.isFinite(shadow.standard);
+    const hasIssue = candidateEligible
+      && afterActivation
+      && matchesCandidate
+      && shadow?.eligible === false;
+
+    let status = "upcoming";
+    let statusLabel = "待觀察";
+    let detail = "系統會在這個時間點自然保存背景驗證，不需要手動操作。";
+
+    if (!candidateEligible) {
+      status = "not_applicable";
+      statusLabel = "目前不適用";
+      detail = "目前品牌尚未加入新的權責背景觀察。";
+    } else if (!afterActivation) {
+      status = "not_applicable";
+      statusLabel = "尚未開始";
+      detail = "新的權責模式當時尚未開始背景觀察，不會回頭補寫成自然驗證。";
+    } else if (completed) {
+      status = "complete";
+      statusLabel = "已完成";
+      detail = "當次自然資料已成功留下背景驗證結果。";
+    } else if (hasIssue) {
+      status = "attention";
+      statusLabel = "需要確認";
+      detail = describeCandidateCheckpointIssue(shadow?.reason);
+    } else if (date < today) {
+      status = "attention";
+      statusLabel = "尚未完成";
+      detail = "這個自然驗證時間點已經過了，但目前沒有完整的背景驗證結果，建議確認資料狀態。";
+    } else if (date === today) {
+      status = "today";
+      statusLabel = "今天等待";
+      detail = "今天是自然驗證時間點；系統會在背景保存，不需要另外按按鈕。";
+    }
+
+    return {
+      checkpointKey,
+      day,
+      date,
+      completed,
+      status,
+      statusLabel,
+      detail,
+    };
+  });
+
+  const candidateTimeline = timeline.filter((row) => (
+    row.date >= candidate.activationDate
+    && candidateEligible
+  ));
+  const completedRows = candidateTimeline.filter((row) => row.completed);
+  const attentionRows = candidateTimeline.filter((row) => row.status === "attention");
+  const pendingRows = candidateTimeline.filter((row) => !row.completed && row.date >= today);
+  const nextRow = pendingRows[0] || null;
+
+  const scoredCount = Math.max(
+    0,
+    Number(accuracy?.scorecard?.overall?.accrual?.accrualResidualShadow?.count || 0)
+  );
+
+  let stage = "standard_only";
+  let stageLabel = "維持目前正式模式";
+  let stageDetail = "目前品牌尚未加入新的權責背景觀察。";
+  let stageTone = "stone";
+
+  if (candidateEligible) {
+    if (today < candidate.activationDate) {
+      stage = "waiting_activation";
+      stageLabel = "準備完成・等待自然驗證";
+      stageDetail = `權責新模式已完成歷史測試，將從 ${candidate.activationDate.slice(5).replace("-", "/")} 起開始真實營運觀察。`;
+      stageTone = "amber";
+    } else if (attentionRows.length > 0) {
+      stage = "attention";
+      stageLabel = "有驗證時間點需要確認";
+      stageDetail = "系統發現已到期的自然驗證尚未完整留下結果，建議先確認資料，再繼續累積。";
+      stageTone = "rose";
+    } else if (scoredCount > 0) {
+      stage = "month_scored";
+      stageLabel = "本月自然驗證已完成";
+      stageDetail = "本月已有月底正式結果可比較；仍需累積更多自然月份後，才會評估是否開放模式切換。";
+      stageTone = "emerald";
+    } else if (candidateTimeline.length > 0 && completedRows.length >= candidateTimeline.length) {
+      stage = "awaiting_month_end";
+      stageLabel = "本月觀察時間點已完成";
+      stageDetail = "本月自然觀察已收齊，正在等待月底正式結果完成比較。";
+      stageTone = "emerald";
+    } else if (completedRows.length > 0) {
+      stage = "live_observation";
+      stageLabel = "真實營運觀察中";
+      stageDetail = `已完成 ${completedRows.length}/${candidateTimeline.length} 個本月自然驗證時間點，正式推估仍維持不變。`;
+      stageTone = "amber";
+    } else {
+      stage = "waiting_first_checkpoint";
+      stageLabel = "等待第一筆自然驗證";
+      stageDetail = nextRow
+        ? `下一個自然驗證是 ${nextRow.date.slice(5).replace("-", "/")}；系統會自行保存，不需要當天手動操作。`
+        : "目前正在等待下一個自然驗證時間點。";
+      stageTone = "amber";
+    }
+  }
+
+  return {
+    schemaVersion: SMART_FORECAST_CONTROL_CENTER_SCHEMA_VERSION,
+    brandId: normalizedBrandId,
+    currentDate: today,
+    currentYearMonth,
+    formalMode,
+    candidate: {
+      candidateId: candidate.candidateId,
+      eligible: candidateEligible,
+      activationDate: candidate.activationDate,
+      metric: candidate.metric,
+      historicalMonthCount: history.availableMonths.length,
+      historicalMonths: history.availableMonths,
+      completedCheckpointCount: completedRows.length,
+      expectedCheckpointCount: candidateTimeline.length,
+      scoredCheckpointCount: scoredCount,
+    },
+    stage,
+    stageLabel,
+    stageDetail,
+    stageTone,
+    nextCheckpoint: nextRow,
+    attentionCount: attentionRows.length,
+    timeline,
+    capabilities: {
+      historyReview: history.available === true,
+      refreshStatus: true,
+      manualModeSwitch: {
+        enabled: false,
+        label: "切換推估模式",
+        reason: candidateEligible
+          ? "目前仍在真實營運觀察，完成更多自然驗證後才會評估是否開放。"
+          : "目前品牌尚未進入智慧模式切換評估。",
+      },
+      automaticSmartForecast: {
+        enabled: false,
+        label: "啟用自動智慧推估",
+        reason: "自動切換目前尚未開放；未來仍需足夠的長期驗證與安全條件。",
+      },
+    },
+    learningSteps: [
+      {
+        key: "history",
+        label: "歷史資料準備",
+        status: history.availableMonths.length >= candidate.independentMonthCountPerBrand ? "complete" : "current",
+      },
+      {
+        key: "comparison",
+        label: "歷史準確度比較",
+        status: history.available === true ? "complete" : "current",
+      },
+      {
+        key: "candidate",
+        label: "新的權責模式測試",
+        status: candidateEligible ? "complete" : "locked",
+      },
+      {
+        key: "live",
+        label: "真實營運觀察",
+        status: candidateEligible
+          ? (stage === "month_scored" ? "complete" : "current")
+          : "locked",
+      },
+      {
+        key: "switch",
+        label: "正式模式評估",
+        status: "locked",
+      },
+      {
+        key: "automatic",
+        label: "自動智慧推估",
+        status: "locked",
+      },
+    ],
+    accuracyStatus: accuracySnapshot.status,
   };
 };
 
