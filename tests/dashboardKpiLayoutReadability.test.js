@@ -8,10 +8,11 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const root = path.resolve(__dirname, "..");
 const storeView = fs.readFileSync(path.join(root, "src/components/StorePerformanceView.jsx"), "utf8");
 
-test("KPI annual benchmark badge participates in footer layout instead of overlaying content", () => {
+test("KPI annual benchmark badge wraps to a safe footer row when a card becomes narrow", () => {
   assert.doesNotMatch(storeView, /absolute bottom-4 right-5 z-30/);
   assert.doesNotMatch(storeView, /pr-28 sm:pr-32/);
-  assert.match(storeView, /mt-auto pt-3 border-t border-stone-50 flex min-w-0 items-end justify-between gap-2\.5/);
+  assert.match(storeView, /mt-auto flex min-w-0 flex-wrap items-end justify-between gap-x-2\.5 gap-y-2 border-t border-stone-50 pt-3/);
+  assert.match(storeView, /min-w-\[9\.5rem\] flex-1 basis-\[9\.5rem\] text-xs font-medium leading-5 text-stone-500/);
   assert.match(storeView, /relative z-30 ml-auto flex-none/);
   assert.match(storeView, /whitespace-nowrap rounded-xl/);
   assert.match(storeView, /text-\[9px\] font-semibold text-stone-400/);
@@ -34,4 +35,11 @@ test("new-customer ASP footer separates achievement, target and total sales into
   assert.match(block, /<span className="whitespace-nowrap">總業績<\/span>/);
   assert.match(block, /fmtMoney\(storeGrandTotal\.newCustomerSales\)/);
   assert.doesNotMatch(block, /flex items-center justify-between w-full/);
+});
+
+test("six-card desktop layout keeps KPI subtext width instead of shrinking it underneath the annual badge", () => {
+  assert.match(storeView, /xl:grid-cols-6/);
+  assert.match(storeView, /flex-wrap items-end justify-between/);
+  assert.match(storeView, /basis-\[9\.5rem\]/);
+  assert.doesNotMatch(storeView, /mt-auto pt-3 border-t border-stone-50 flex min-w-0 items-end justify-between gap-2\.5/);
 });

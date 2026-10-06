@@ -266,9 +266,9 @@ const StorePerformanceView = ({ dashboardStats, myStoreRankings, brandInfo }) =>
           </div>
 
           {(subText || benchmarkText) && (
-            <div className="mt-auto pt-3 border-t border-stone-50 flex min-w-0 items-end justify-between gap-2.5">
+            <div className="mt-auto flex min-w-0 flex-wrap items-end justify-between gap-x-2.5 gap-y-2 border-t border-stone-50 pt-3">
               {subText && (
-                <div className="min-w-0 flex-1 text-xs font-medium leading-5 text-stone-500">
+                <div className="min-w-[9.5rem] flex-1 basis-[9.5rem] text-xs font-medium leading-5 text-stone-500">
                   {subText}
                 </div>
               )}
