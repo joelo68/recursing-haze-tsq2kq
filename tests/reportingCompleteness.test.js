@@ -337,9 +337,24 @@ test("selected-store closure excludes only the selected store from expected-repo
   assert.equal(result.reportingStatus, "DATA_COMPLETE");
 });
 
-test("calendar-driven historical repair is marked for Annual convergence only after Summary verification", () => {
+test("calendar-driven historical repair converges Annual only after Summary authority verification", () => {
   assert.match(functionsIndex, /reportingCalendarRepairRequired/);
   assert.match(functionsIndex, /result\?\.matched === true/);
   assert.match(functionsIndex, /result\?\.reportingCalendarRaceDetected !== true/);
-  assert.match(functionsIndex, /trigger: "reporting_calendar_summary_repair"/);
+  assert.match(functionsIndex, /result\?\.systemExclusionRaceDetected !== true/);
+  assert.match(functionsIndex, /const reportingCalendarAnnualKeys = new Set\(\)/);
+  assert.match(functionsIndex, /const reportingCalendarDriven = reportingCalendarAnnualKeys\.has\(key\)/);
+  assert.match(functionsIndex, /"reporting_calendar_summary_repair"/);
+  assert.match(functionsIndex, /rebuildAnnualKpiSummaryForBrand\([\s\S]*?\{ trigger \}[\s\S]*?\)/);
+});
+
+test("System Exclusion historical repair shares the same verified Annual convergence boundary", () => {
+  assert.match(functionsIndex, /systemExclusionRepairRequired/);
+  assert.match(functionsIndex, /result\?\.matched === true/);
+  assert.match(functionsIndex, /result\?\.reportingCalendarRaceDetected !== true/);
+  assert.match(functionsIndex, /result\?\.systemExclusionRaceDetected !== true/);
+  assert.match(functionsIndex, /const systemExclusionAnnualKeys = new Set\(\)/);
+  assert.match(functionsIndex, /const systemExclusionDriven = systemExclusionAnnualKeys\.has\(key\)/);
+  assert.match(functionsIndex, /"system_exclusion_summary_repair"/);
+  assert.match(functionsIndex, /"reporting_calendar_system_exclusion_summary_repair"/);
 });

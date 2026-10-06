@@ -3476,3 +3476,24 @@ scorecard.overall.accrual.accrualResidualShadow
 
 本批不新增 collection、document listener、query 或 polling；
 只在既有 `projection_accuracy` checkpoint / monthly score document 內增加欄位。
+
+## 2026-10-06 — Annual KPI System Exclusion authority convergence
+
+`annual_kpi_summary/{YYYY}.systemExclusionSnapshot` remains the formal snapshot used by
+frontend authority checks. It must not advance ahead of its trusted monthly
+`dashboard_summary` inputs.
+
+For System-Exclusion-driven repair, `summary_recalc_flags/{YYYY-MM}` carries:
+
+```text
+requiredSystemExclusionRevision
+systemExclusionRevision
+systemExclusionSnapshot
+```
+
+The repair transaction compares the built Summary revision against the latest required
+revision. A concurrent exclusion update keeps the flag dirty instead of falsely
+verifying the month. Annual rebuild is then event-driven after repaired month authority
+converges and is de-duplicated by brand/year.
+
+No new Firestore collection or document type was introduced.

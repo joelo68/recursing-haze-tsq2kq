@@ -7425,3 +7425,19 @@ brand topology       unchanged
 
 此節只記錄 staging validated truth；official promotion、部署及 Production readback 完成前，
 不得寫成 `DEPLOYED` 或 `PRODUCTION CONFIRMED`。
+
+# Latest Production Candidate — 2026-10-06 Annual KPI / System Exclusion convergence
+
+Observed Production issue: 安妞年度平均整批隱藏。Read-only evidence confirmed
+`annual_kpi_summary/2026.systemExclusionSnapshot.revision = 0` while current
+`audit_exclusions.revision = 2`; Annual metrics, Lifecycle revision and Reporting
+Calendar revisions were otherwise valid. Frontend fail-closed behavior was correct.
+
+Candidate fix keeps strict authority checks and adds upstream convergence:
+System-Exclusion-driven historical Summary repair now schedules a de-duplicated
+brand/year Annual rebuild only after Summary verification. Summary verification gains a
+System Exclusion revision race guard, and Annual writer refuses partial stale-exclusion
+inputs plus performs one final single-document exclusion reread before write.
+
+No brand hardcode, no new collection/listener/query/polling, no frontend workaround.
+CURRENT_APP_VERSION remains 3.6.2.

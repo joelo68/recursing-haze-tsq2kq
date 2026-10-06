@@ -10525,6 +10525,15 @@ async function rebuildAnnualKpiSummaryForBrand(brandId, yearInput, options = {})
     };
   });
 
+  const systemExclusionStaleMonths = monthInputs
+    .filter((input) => String(input?.trust?.reason || "") === "SYSTEM_EXCLUSION_SUMMARY_REVISION_MISMATCH")
+    .map((input) => input.yearMonth);
+  if (systemExclusionStaleMonths.length > 0) {
+    throw new Error(
+      `Annual KPI rebuild deferred: ${normalizedBrandId}/${year} has stale System Exclusion Summary authority for ${systemExclusionStaleMonths.join(",")}`
+    );
+  }
+
   const nowText = new Date().toISOString();
   const purePayload = buildAnnualKpiSummaryPayload({
     brandId: normalizedBrandId,
@@ -10551,6 +10560,28 @@ async function rebuildAnnualKpiSummaryForBrand(brandId, yearInput, options = {})
     ...purePayload,
     updatedAt: admin.firestore.FieldValue.serverTimestamp(),
   };
+
+  // Race guard：Annual build 開始後若 System Exclusion revision 又前進，
+  // 不得把剛才的舊 scope 當成 current authority 寫回 annual_kpi_summary。
+  // 這是單一 settings doc point reread；daily rebuild 每品牌 +1 read，
+  // event-driven convergence 也只在實際修復時觸發，無 polling / broad listener。
+  const latestSystemExclusionSnap = await getAuditExclusionsDocRef(normalizedBrandId).get();
+  const latestSystemExclusionProfile = normalizeStoredSystemExclusionProfile(
+    latestSystemExclusionSnap.exists ? (latestSystemExclusionSnap.data() || {}) : {},
+    normalizedBrandId,
+    normalizeSummaryCoreName
+  );
+  const annualSystemExclusionStillCurrent = isStoredSystemExclusionSnapshotCurrent({
+    snapshot: systemExclusionSnapshot,
+    currentProfile: latestSystemExclusionProfile,
+    brandId: normalizedBrandId,
+    normalizeStoreKey: normalizeSummaryCoreName,
+  });
+  if (!annualSystemExclusionStillCurrent) {
+    throw new Error(
+      `Annual KPI rebuild deferred: ${normalizedBrandId}/${year} System Exclusion authority changed during rebuild`
+    );
+  }
 
   // annual_kpi_summary 是完整重建產物。V2 以 KPI-specific basedMonths / basedMonthCount
   // 取代舊 activity-based 共用分母；Compatibility fields 暫時保留供 staged rollout。
@@ -11946,6 +11977,10 @@ async function finalizeSummaryRecalcFlagWithReportingCalendarGuard({
     0,
     Number(dashboardSummary?.reportingCompleteness?.reportingCalendarRevision || 0)
   );
+  const builtSystemExclusionRevision = Math.max(
+    0,
+    Number(dashboardSummary?.systemExclusionSnapshot?.revision || 0)
+  );
   let finalState = null;
 
   // Calendar writer and repair both transact on this exact month flag.
@@ -11958,7 +11993,19 @@ async function finalizeSummaryRecalcFlagWithReportingCalendarGuard({
       ? requiredRaw
       : builtRevision;
     const calendarCurrent = builtRevision >= requiredRevision;
-    const verified = rawMatched === true && calendarCurrent;
+    const requiredSystemExclusionRaw = Number(
+      latestFlag.requiredSystemExclusionRevision ?? builtSystemExclusionRevision
+    );
+    const requiredSystemExclusionRevision =
+      Number.isInteger(requiredSystemExclusionRaw) && requiredSystemExclusionRaw >= 0
+        ? requiredSystemExclusionRaw
+        : builtSystemExclusionRevision;
+    const systemExclusionCurrent =
+      builtSystemExclusionRevision >= requiredSystemExclusionRevision;
+    const verified =
+      rawMatched === true
+      && calendarCurrent
+      && systemExclusionCurrent;
     const nowText = new Date().toISOString();
 
     tx.set(flagRef, {
@@ -11969,7 +12016,11 @@ async function finalizeSummaryRecalcFlagWithReportingCalendarGuard({
       status: verified ? "verified" : (rawMatched ? "dirty" : "mismatch"),
       dirty: !verified,
       pendingCount: verified ? 0 : completedCount,
-      systemExclusionRevision: Number(dashboardSummary?.systemExclusionSnapshot?.revision || 0),
+      systemExclusionRevision: builtSystemExclusionRevision,
+      requiredSystemExclusionRevision: Math.max(
+        requiredSystemExclusionRevision,
+        builtSystemExclusionRevision
+      ),
       systemExclusionSnapshot: dashboardSummary?.systemExclusionSnapshot || null,
       reportingCalendarRevision: builtRevision,
       requiredReportingCalendarRevision: Math.max(requiredRevision, builtRevision),
@@ -11996,7 +12047,9 @@ async function finalizeSummaryRecalcFlagWithReportingCalendarGuard({
       lastCompletedByRole: "system",
       lastResult: !calendarCurrent
         ? "reporting_calendar_revision_changed_during_rebuild"
-        : (rawMatched ? "auto_month_report_finalized" : "auto_month_report_mismatch"),
+        : (!systemExclusionCurrent
+            ? "system_exclusion_revision_changed_during_rebuild"
+            : (rawMatched ? "auto_month_report_finalized" : "auto_month_report_mismatch")),
       lastMismatchCount: mismatchRows.length,
       completedQueueCount: completedCount,
       lockedBy: admin.firestore.FieldValue.delete(),
@@ -12011,6 +12064,9 @@ async function finalizeSummaryRecalcFlagWithReportingCalendarGuard({
       calendarCurrent,
       builtRevision,
       requiredRevision,
+      systemExclusionCurrent,
+      builtSystemExclusionRevision,
+      requiredSystemExclusionRevision,
     };
   });
 
@@ -12222,6 +12278,7 @@ async function finalizeMonthReportAuto({ brandId, yearMonth, trigger = "auto_wor
       completedCount,
     });
     const reportingCalendarRaceDetected = finalFlagState?.calendarCurrent === false;
+    const systemExclusionRaceDetected = finalFlagState?.systemExclusionCurrent === false;
     if (reportingCalendarRaceDetected) {
       isMatched = false;
       await writeAutoMaintenanceLog(brandId, {
@@ -12236,12 +12293,30 @@ async function finalizeMonthReportAuto({ brandId, yearMonth, trigger = "auto_wor
         brandLabel,
       });
     }
+    if (systemExclusionRaceDetected) {
+      isMatched = false;
+      await writeAutoMaintenanceLog(brandId, {
+        type: "dashboard_summary",
+        action: "system_exclusion_race_guard",
+        month: yearMonth,
+        status: "dirty",
+        builtSystemExclusionRevision: finalFlagState?.builtSystemExclusionRevision ?? null,
+        requiredSystemExclusionRevision: finalFlagState?.requiredSystemExclusionRevision ?? null,
+        trigger,
+        lockId,
+        brandLabel,
+      });
+    }
 
     // Projection Accuracy B2A：只在 Summary transaction guard 已正式 verified 後評分。
     // scoring 自己會在單一 transaction 內重新讀取 Accuracy checkpoint + flag + persisted Summary；
     // 若同時發生歷史修正 / Reporting Calendar revision，Firestore retry 後會重新判斷 trust。
     // Accuracy 是 observability evidence；評分失敗不能反向把已驗證 Summary 改回 dirty。
-    if (finalFlagState?.verified === true && reportingCalendarRaceDetected !== true) {
+    if (
+      finalFlagState?.verified === true
+      && reportingCalendarRaceDetected !== true
+      && systemExclusionRaceDetected !== true
+    ) {
       try {
         projectionAccuracyResult =
           await projectionAccuracyFunctions.scoreProjectionAccuracyMonthFromVerifiedSummary({
@@ -12279,6 +12354,10 @@ async function finalizeMonthReportAuto({ brandId, yearMonth, trigger = "auto_wor
       reportingCalendarRaceDetected,
       reportingCalendarRevision: finalFlagState?.builtRevision ?? 0,
       requiredReportingCalendarRevision: finalFlagState?.requiredRevision ?? 0,
+      systemExclusionRaceDetected,
+      systemExclusionRevision: finalFlagState?.builtSystemExclusionRevision ?? 0,
+      requiredSystemExclusionRevision:
+        finalFlagState?.requiredSystemExclusionRevision ?? 0,
       mismatchCount: mismatchRows.length,
       completedQueueCount: completedCount,
       buildReport,
@@ -12433,6 +12512,9 @@ async function collectReadyDirtySummaryFlags() {
           reportingCalendarRepairRequired:
             Number(data.requiredReportingCalendarRevision || 0)
             > Number(data.reportingCalendarRevision || 0),
+          systemExclusionRepairRequired:
+            Number(data.requiredSystemExclusionRevision || 0)
+            > Number(data.systemExclusionRevision || 0),
           sources: ["summary_recalc_flags"],
         });
       });
@@ -12676,6 +12758,7 @@ exports.repairDirtySummaries = onSchedule({ schedule: "every 5 minutes", timeZon
   console.log(`🧾 Summary 自動修復：本次找到 ${jobs.length} 個待處理月份：${jobs.map((j) => `${j.brandId}/${j.yearMonth}/${(j.sources || []).join('+') || j.status}/${j.pendingCount || 0}`).join(', ')}`);
 
   const reportingCalendarAnnualKeys = new Set();
+  const systemExclusionAnnualKeys = new Set();
 
   for (const job of jobs) {
     try {
@@ -12688,8 +12771,17 @@ exports.repairDirtySummaries = onSchedule({ schedule: "every 5 minutes", timeZon
           job.reportingCalendarRepairRequired === true
           && result?.matched === true
           && result?.reportingCalendarRaceDetected !== true
+          && result?.systemExclusionRaceDetected !== true
         ) {
           reportingCalendarAnnualKeys.add(`${job.brandId}:${String(job.yearMonth).slice(0, 4)}`);
+        }
+        if (
+          job.systemExclusionRepairRequired === true
+          && result?.matched === true
+          && result?.reportingCalendarRaceDetected !== true
+          && result?.systemExclusionRaceDetected !== true
+        ) {
+          systemExclusionAnnualKeys.add(`${job.brandId}:${String(job.yearMonth).slice(0, 4)}`);
         }
       }
     } catch (error) {
@@ -12697,17 +12789,37 @@ exports.repairDirtySummaries = onSchedule({ schedule: "every 5 minutes", timeZon
     }
   }
 
-  // Calendar-driven historical repair should converge Annual in the same worker cycle.
-  // De-duplicate by brand/year and rebuild only after the Summary race guard is verified.
-  for (const key of reportingCalendarAnnualKeys) {
+  // Historical authority repair should converge Annual in the same worker cycle.
+  // De-duplicate by brand/year. rebuildAnnualKpiSummaryForBrand itself fail-closes if
+  // any candidate month still has stale System Exclusion authority, so a partial Annual
+  // cannot be published while another dirty month in the same year is still pending.
+  const annualRepairKeys = new Set([
+    ...reportingCalendarAnnualKeys,
+    ...systemExclusionAnnualKeys,
+  ]);
+  for (const key of annualRepairKeys) {
     const [brandId, yearText] = key.split(":");
+    const reportingCalendarDriven = reportingCalendarAnnualKeys.has(key);
+    const systemExclusionDriven = systemExclusionAnnualKeys.has(key);
+    const trigger = reportingCalendarDriven && systemExclusionDriven
+      ? "reporting_calendar_system_exclusion_summary_repair"
+      : (systemExclusionDriven
+          ? "system_exclusion_summary_repair"
+          : "reporting_calendar_summary_repair");
     try {
-      const annualResult = await rebuildAnnualKpiSummaryForBrand(brandId, Number(yearText), {
-        trigger: "reporting_calendar_summary_repair",
-      });
-      console.log(`✅ Reporting Calendar Annual 自動重建：${brandId}｜${yearText}｜basedMonthCount=${annualResult?.basedMonthCount ?? "?"}`);
+      const annualResult = await rebuildAnnualKpiSummaryForBrand(
+        brandId,
+        Number(yearText),
+        { trigger }
+      );
+      console.log(
+        `✅ Annual authority 自動重建：${brandId}｜${yearText}｜trigger=${trigger}｜basedMonthCount=${annualResult?.basedMonthCount ?? "?"}`
+      );
     } catch (error) {
-      console.error(`❌ Reporting Calendar Annual 自動重建失敗：${brandId}｜${yearText}`, error);
+      console.error(
+        `❌ Annual authority 自動重建延後/失敗：${brandId}｜${yearText}｜trigger=${trigger}`,
+        error
+      );
     }
   }
 });

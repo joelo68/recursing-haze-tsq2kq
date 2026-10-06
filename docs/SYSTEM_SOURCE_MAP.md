@@ -5405,3 +5405,27 @@ new polling              = 0
 formal projection change = 0
 automatic promotion      = 0
 ```
+
+## 2026-10-06 — Annual KPI / System Exclusion convergence owner
+
+Backend owner:
+
+```text
+functions/index.js
+  markHistoricalSummariesDirtyForSystemExclusion
+  finalizeSummaryRecalcFlagWithReportingCalendarGuard
+  finalizeMonthReportAuto
+  collectReadyDirtySummaryFlags
+  repairDirtySummaries
+  rebuildAnnualKpiSummaryForBrand
+```
+
+System Exclusion event owner remains:
+
+```text
+functions/systemExclusion.js
+```
+
+The event owner continues to mark historical Summary authority dirty. The shared Summary
+repair worker now also converges `annual_kpi_summary/{YYYY}` after safe
+System-Exclusion repair. Frontend authority/fail-closed behavior is unchanged.

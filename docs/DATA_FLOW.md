@@ -3022,3 +3022,26 @@ Control Center 直接重用原本「推估準確度」已讀取的當月 `projec
 ```
 
 `切換推估模式` 與 `啟用自動智慧推估` 在 v1 只做 readiness presentation，均為 disabled / non-mutating，不建立新的 Backend mutation authority。
+
+## 2026-10-06 — Annual KPI × System Exclusion event-driven convergence
+
+System Exclusion revision change keeps the existing authority chain:
+
+```text
+audit_exclusions revision change
+→ mark historical dashboard_summary months dirty
+→ repairDirtySummaries rebuilds and verifies each historical month
+→ affected brand/year is de-duplicated
+→ annual_kpi_summary rebuild runs only from repaired authority
+```
+
+The Summary finalize transaction now guards both Reporting Calendar revision and
+System Exclusion revision. If either authority changes during a rebuild, the month stays
+dirty and Annual convergence is deferred. `rebuildAnnualKpiSummaryForBrand` also refuses
+to publish a partial Annual document when any candidate month still carries
+`SYSTEM_EXCLUSION_SUMMARY_REVISION_MISMATCH`, and point-rereads the brand's single
+`audit_exclusions` settings document immediately before the Annual write as a final race
+guard.
+
+Read impact: one additional single-document `audit_exclusions` read per Annual rebuild.
+No listener, broad query, or polling was added.
