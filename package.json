@@ -16,7 +16,11 @@
     "e2e:serve": "vite --config vite.e2e.config.js --host 127.0.0.1 --port 4174 --strictPort",
     "e2e:build": "vite build --config vite.e2e.config.js",
     "e2e:browser": "playwright test -c playwright.e2e.config.js",
-    "e2e:browser:list": "playwright test -c playwright.e2e.config.js --list"
+    "e2e:browser:list": "playwright test -c playwright.e2e.config.js --list",
+    "activity:preflight": "node scripts/activity-sales-preflight.mjs",
+    "activity:emulators": "npm run activity:preflight && npx --yes firebase-tools@15.30.2 emulators:start --config firebase.activity-sales.local.json --project demo-drcyj-activity-sales --only auth,firestore,functions",
+    "activity:dev": "npm run activity:preflight && VITE_ACTIVITY_SALES_DEV=true VITE_ACTIVITY_SALES_PROJECT_ID=demo-drcyj-activity-sales vite --mode activity-sales-local",
+    "activity:build": "npm run activity:preflight && VITE_ACTIVITY_SALES_DEV=true VITE_ACTIVITY_SALES_PROJECT_ID=demo-drcyj-activity-sales vite build --mode activity-sales-local --outDir dist-activity-sales-local"
   },
   "dependencies": {
     "class-variance-authority": "^0.7.1",

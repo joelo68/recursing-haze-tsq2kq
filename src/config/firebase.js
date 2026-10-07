@@ -1,8 +1,9 @@
 // src/config/firebase.js
 import { initializeApp } from "firebase/app";
-import { getAuth } from "firebase/auth";
-import { getFirestore, initializeFirestore } from "firebase/firestore";
+import { connectAuthEmulator, getAuth } from "firebase/auth";
+import { connectFirestoreEmulator, getFirestore, initializeFirestore } from "firebase/firestore";
 import { shouldForceFirestoreLongPollingForCurrentBrowser } from "../utils/firestoreTransport";
+import { ACTIVITY_SALES_DEV_MODE, ACTIVITY_SALES_RUNTIME } from "./runtimeEnvironment";
 
 // --- Firebase Config ---
 const originalConfig = {
@@ -15,9 +16,20 @@ const originalConfig = {
   measurementId: "G-L9DVME64VK",
 };
 
-// 處理全域變數注入的情況
-const firebaseConfig =
-  typeof window !== "undefined" && window.__firebase_config
+const activitySalesDemoConfig = {
+  apiKey: "demo-api-key",
+  authDomain: `${ACTIVITY_SALES_RUNTIME.projectId}.firebaseapp.com`,
+  projectId: ACTIVITY_SALES_RUNTIME.projectId,
+  storageBucket: `${ACTIVITY_SALES_RUNTIME.projectId}.appspot.com`,
+  messagingSenderId: "000000000000",
+  appId: "1:000000000000:web:activity-sales-local",
+};
+
+// Production keeps the existing config resolution untouched.
+// Activity Sales local mode never receives the Production Firebase project config.
+const firebaseConfig = ACTIVITY_SALES_DEV_MODE
+  ? activitySalesDemoConfig
+  : typeof window !== "undefined" && window.__firebase_config
     ? JSON.parse(window.__firebase_config)
     : typeof __firebase_config !== "undefined"
     ? JSON.parse(__firebase_config)
@@ -33,6 +45,21 @@ const db = forceLongPolling
       experimentalForceLongPolling: true,
     })
   : getFirestore(app);
+
+if (ACTIVITY_SALES_DEV_MODE) {
+  connectAuthEmulator(auth, ACTIVITY_SALES_RUNTIME.authEmulatorUrl, {
+    disableWarnings: true,
+  });
+  connectFirestoreEmulator(
+    db,
+    ACTIVITY_SALES_RUNTIME.firestoreEmulatorHost,
+    ACTIVITY_SALES_RUNTIME.firestoreEmulatorPort
+  );
+
+  console.warn(
+    `[Activity Sales DEV] LOCAL DEMO ONLY — project=${ACTIVITY_SALES_RUNTIME.projectId}`
+  );
+}
 
 // 處理 appId 邏輯
 const rawAppId =
