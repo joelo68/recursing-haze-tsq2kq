@@ -185,3 +185,29 @@ Frontend 顯示權限不等於 Backend 授權。
 - 只允許核對目前正式版本，不將新版 `UNCONFIRMED` 當作舊版 `CONFIRMED_ZERO`；正式活動換版須重新操作。批次不啟用退款、更正、取消、特殊成交、店經理列表、正式日報關帳或自動對帳。
 - 每次 `inspect`／`review` 固定 7 筆**同品牌單文件** transaction reads，另計認證/可信裝置 reads。`review` 另外寫 2 筆，無 listener / polling / collection-group query。此為邏輯估算，非實際計費。
 - 僅 `demo-drcyj-activity-sales` Mac Emulator 測試通過後可 commit/push feature；Phase 1–3 一律不得 Production Deploy。
+
+## LOCAL SHOWCASE（獨立記憶體展示入口，2026-10-08）
+
+- 本機執行：`npm run activity:showcase`，開啟 `http://127.0.0.1:5175/activity-sales-showcase.html`。不必啟動 Firebase Emulator，也不必使用正式帳號或密碼。
+- 此入口是獨立 Vite HTML entry，使用既有 `ActivitySalesCenterView`、`ActivitySalesManagementView`、`ActivitySalesAcknowledgement` React 元件，依賴 `activitySalesShowcaseStore.js` 的**虛構記憶體資料**。展示專屬 Vite alias 以 `firebaseShowcaseStub.js` 替代 Firebase 初始化，無需啟動 Emulator；不是將 Firestore Rules 或 Production Identity 關閉。
+- 可選品牌：CYJ／安妞／伊啵；展示角色：高階主管／店經理／管理師。支援模擬已發布活動、套組試算、八步驟草稿／送審／核准、Policy、重大異動修訂及理解確認；另有獨立模擬成交填報，用於驗收 N/A／零成交／有成交與防重複呈現。
+- 隔離：僅 `VITE_ACTIVITY_SALES_LOCAL_SHOWCASE=true`、`VITE_ACTIVITY_SALES_DEV=true`、`VITE_ACTIVITY_SALES_PROJECT_ID=demo-drcyj-activity-sales`，且 Browser host 為 `localhost`／`127.0.0.1` 才會 mount。`vite.activity-sales-showcase.config.mjs` 僅包含 `activity-sales-showcase.html`，不修改 Production `index.html`、`src/main.jsx`、`App.jsx` 或現有 Firebase/Functions/Rules。
+- 此模式不向 Firestore／Functions 傳送展示操作，不持久化資料（重新整理就重置）；所顯示的角色限制、Revision OCC、審核及理解確認只是**介面模擬**，不是 Backend Security/UAT 或真實交易驗證。
+- 真正的 Auth／Trusted Device／Application Identity／Rules／Backend 容錯及三品牌交易驗證仍必須使用原有隔離 Emulator 流程執行。先前 `deviceApproval.js` timestamp 錯誤仍是獨立的 Backend blocker，不應因展示頁可操作而宣告已修正。
+- `npm run activity:showcase:build` 僅建置 `dist-activity-sales-showcase-local/`；**不得部署這份展示產物**。正式 Production deploy：NONE。
+
+# Phase 2A-4R2A — 店經理限定日期待核對候選資料（feature only）
+- Source anchor: `feature/activity-sales-center @ 0b6bd2a42ea8827e4d7df74b0afb194d145ddbb7`, Production `main @ 36ee6eff1a198fc7b4d9ab33eee9068c3a882dcd`, version `3.6.2`. 本批不部署正式環境。
+- `getActivitySalesReviewCandidates` 新增 POST-only Backend read-only gateway。要求 Firebase Application Identity、Trusted Device、新鮮憑證與 `store` 店經理角色。`manager` 是區長，不得沿用。店經理對 `store_account_data.stores` 的權限會在唯讀 transaction 內再次確認，**以 transaction 快照為準**；正式覆核 writer 仍在寫入 transaction 內重驗權限。
+- 只查同品牌 `activity_sales_daily_attributions` 的 `storeCore + reportDate + roleId=therapist`，每次 query 最多 13 docs、回傳最多 12 筆，不提供全品牌／跨日期瀏覽、常駐 listener 或 polling。每筆候選還會讀取管理師 master、目前正式 publication 和 immutable version，排除轉店、離職及舊版歸屬；`UNCONFIRMED` 不在候選中，空清單**不等於**確認零成交。Browser 不能讀私人集合。
+- 回應欄位只含可做下一步 `manageActivitySalesAttributionReview.inspect` 的最小 subject 與非加總歸屬額。不得視這份「候選」為已完成覆核；最後覆核仍必須重新 `inspect` 取得日報 `updateTime` 秒/奈秒 + attribution/review revision，使用原有 OCC 安全 writer。
+- 讀取預算（程式路徑上限，未含登入裝置驗證與查詢計費細節）：授權 doc 1、query 最多 13、每位候選 master/publication/version 各 1，共最多約 **50 document reads/點擊**，0 writes，無 listener；資料多於 12 只回 `truncated=true`，**分頁尚未完成，不得當完整名單**。
+- 新增 `firestore.activity-sales.indexes.json` 作為隔離開發三個 equality filters 的複合索引宣告，僅 `firebase.activity-sales.local.json` 引用；正式 Staging/Production index 尚未部署、必須於 Release Gate 檢查。
+- 本批**尚未完成**：店經理覆核 UI、候選分頁、退款更正與 POS 對帳；不改日報、Summary、Ranking、Revenue、Firestore Rules、CURRENT_APP_VERSION，不開通前端私有資料直讀。
+
+## Phase 2A-4R2B — 店經理成交覆核分頁與操作面板（feature only）
+
+- R2A `getActivitySalesReviewCandidates` 加入以文件 ID 固定排序的 cursor 分頁（每次查詢最多 13 筆原始歸屬，最多檢視 12 筆）；cursor 僅用於導覽，不授予權限。每頁都重新驗證 Firebase Application Identity、最新密碼、Trusted Device、`store_account_data.stores` 及品牌隔離。
+- `ActivitySalesAttributionReviewPanel` 只在 Activity Sales DEV 且 `store` 角色顯示，使用本帳號授權門市＋日期手動查詢。不直接讀私人 Firestore，不使用 listener/polling；頁面結果依目前正式版本與管理師主資料過濾，可能空頁仍有下一頁，不能當作全店完成率。
+- 使用者點單筆後必須重新輸入密碼呼叫 R1 `manageActivitySalesAttributionReview.inspect`，取得 attribution revision、正式日報秒/奈秒版本與 review revision，才可再驗證密碼送 `verified` 或 `flagged`（固定原因碼）至既有 OCC transaction writer。成功後要求重新查詢。
+- 不啟用更正／退款／取消／正式營收調整。`formalRevenueDelta=0`。本次與 R2A 均尚未套用 Mac 正式 feature worktree；完整 CI、Build、Firestore Emulator / 複合索引查詢尚未驗證；不得宣稱 VALIDATED／DEPLOYED。

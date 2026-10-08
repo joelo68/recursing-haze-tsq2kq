@@ -187,6 +187,10 @@ exports.getActivitySalesAttributionStatus=createActivitySalesAttributionReaderFu
 const {createActivitySalesAttributionReviewFunctions}=require("./activitySalesAttributionReview");
 exports.manageActivitySalesAttributionReview=createActivitySalesAttributionReviewFunctions({admin,db}).manageActivitySalesAttributionReview;
 
+// Phase 2A-4R2A: on-demand, brand + store + date restricted manager candidates.
+const {createActivitySalesReviewInboxFunctions}=require("./activitySalesAttributionReviewInbox");
+exports.getActivitySalesReviewCandidates=createActivitySalesReviewInboxFunctions({admin,db}).getActivitySalesReviewCandidates;
+
 // ==========================================
 // ★ P0-FINAL-1D-A1：Administrative Settings Authority
 // security_config / feature_flags / kpi_targets / system_version 的 Browser writer 收斂至 Backend。

@@ -3105,3 +3105,13 @@ store／therapist 在 `InputView` 的隔離面板手動載入本品牌目前正�
 ```
 
 不是即時監聽或清單查詢；未覆核、目前有效覆核、過期覆核在後端分別回 `UNREVIEWED` / `CURRENT` / `STALE`。已覆核不等於已入帳/已關帳，退款與更正流程仍未啟用。
+
+
+## Activity Sales 2A-4R2A — 店經理候選資料流（feature only）
+- 使用者手動 POST `getActivitySalesReviewCandidates`（品牌、門市、日報日期）→ Backend Identity／可信裝置 → 單品牌 `store_account_data` 最新門市權限 + `activity_sales_daily_attributions` 小查詢 → 逐筆 master/publication/version 確認 → 最多 12 筆非加總候選。
+- 無前端直接讀私人 Firestore、無全域 listener／polling／跨品牌 query；`truncated=true` 代表仍可能有更多資料，不能當完整覆核率分母。查到候選後再由既有 Phase 2A-4R1 `inspect`／`review` 單文件交易處理。
+- `daily_reports`、`therapist_daily_reports`、Summary、Ranking 與 formalRevenueDelta 不變；無任何活動成交補加總或修改。
+
+## Activity Sales 2A-4R2B 店經理分頁／覆核資料流（隔離）
+
+店經理指定授權門市與日期、重新認證 → `getActivitySalesReviewCandidates` 依同品牌 private `activity_sales_daily_attributions` 做單次 index query (13-doc ceiling) → 同 read-only transaction 重新讀取門市權限和最多 12 組 therapist / publication / immutable version → 回傳 minimal rows + nextCursor。翻頁後重新認證並重驗權限。選單筆 → `manageActivitySalesAttributionReview.inspect` 重新取得正式日報與三 revision/OCC → `review` 獨立寫 reviews/audit。沒有 background listener／polling／正式日報、Summary、Ranking writer；無任何 Revenue 加總。

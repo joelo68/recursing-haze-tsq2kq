@@ -4970,7 +4970,7 @@ export default function App() {
           </div>
         }>
           {ACTIVITY_SALES_DEV_MODE && activitySalesPreviewOpen ? (
-            <ActivitySalesCenterView key={currentBrandId} brandId={currentBrandId} deviceId={currentDeviceTrust?.deviceId || ""} />
+            <ActivitySalesCenterView key={currentBrandId} brandId={currentBrandId} deviceId={currentDeviceTrust?.deviceId || ""} roleId={userRole} accessibleStores={accessibleStores} />
           ) : (<>
           {activeView === "dashboard" && canDirectorAccessView("dashboard") && <DashboardView />}
           {activeView === "daily" && canDirectorAccessView("daily") && <DailyView />}

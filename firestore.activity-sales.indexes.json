@@ -1,0 +1,14 @@
+{
+  "indexes": [
+    {
+      "collectionGroup": "activity_sales_daily_attributions",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "storeCore", "order": "ASCENDING" },
+        { "fieldPath": "reportDate", "order": "ASCENDING" },
+        { "fieldPath": "roleId", "order": "ASCENDING" }
+      ]
+    }
+  ],
+  "fieldOverrides": []
+}

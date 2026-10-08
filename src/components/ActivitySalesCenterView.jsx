@@ -1,5 +1,6 @@
 import React, { useEffect, useMemo, useState } from "react";
 import ActivitySalesManagementView from "./ActivitySalesManagementView";
+import ActivitySalesAttributionReviewPanel from "./ActivitySalesAttributionReviewPanel";
 import ActivitySalesAcknowledgement from "./ActivitySalesAcknowledgement";
 import { collection, getDocsFromServer, limit, orderBy, query, where } from "firebase/firestore";
 import { auth, db } from "../config/firebase";
@@ -24,7 +25,7 @@ const ListLines = ({ title, values }) => (
   ) : null
 );
 
-export default function ActivitySalesCenterView({ brandId, deviceId }) {
+export default function ActivitySalesCenterView({ brandId, deviceId, roleId, accessibleStores = [], showcaseAdapter = null, showcaseRole = "director" }) {
   const [workspaceTab,setWorkspaceTab]=useState("published");
   const [search, setSearch] = useState("");
   const [refresh, setRefresh] = useState(0);
@@ -44,12 +45,19 @@ export default function ActivitySalesCenterView({ brandId, deviceId }) {
     setLoading(true);
     async function load() {
       try {
-        if (!auth.currentUser) throw new Error("請先完成正式 Application Identity 登入");
-        // One scoped, server-authoritative query per entry/manual refresh; no listener/polling.
-        const ref = collection(db, getActivitySalesPublicationPath(brandId));
-        const snap = await getDocsFromServer(query(ref,
-          where("endDate", ">=", today), orderBy("endDate", "asc"), limit(30)));
-        const rows = listPublishedCampaigns(snap.docs.map((docSnap) => ({ ...docSnap.data(), campaignId: docSnap.id })), today);
+        let raw;
+        if (showcaseAdapter) {
+          // LOCAL SHOWCASE only: inert memory adapter, never Browser Firestore / Functions.
+          raw = showcaseAdapter.listPublished(brandId).slice(0, 30);
+        } else {
+          if (!auth.currentUser) throw new Error("請先完成正式 Application Identity 登入");
+          // One scoped, server-authoritative query per entry/manual refresh; no listener/polling.
+          const ref = collection(db, getActivitySalesPublicationPath(brandId));
+          const snap = await getDocsFromServer(query(ref,
+            where("endDate", ">=", today), orderBy("endDate", "asc"), limit(30)));
+          raw = snap.docs.map((docSnap) => ({ ...docSnap.data(), campaignId: docSnap.id }));
+        }
+        const rows = listPublishedCampaigns(raw, today);
         if (!cancelled) setItems(rows);
       } catch (err) {
         if (!cancelled) setError(err?.code === "permission-denied"
@@ -61,7 +69,7 @@ export default function ActivitySalesCenterView({ brandId, deviceId }) {
     }
     load();
     return () => { cancelled = true; };
-  }, [brandId, refresh, today]);
+  }, [brandId, refresh, today, showcaseAdapter]);
 
   const filtered = useMemo(() => searchPublishedCampaigns(items, search), [items, search]);
   const selected = filtered.find((item) => item.campaignId === selectedId) || filtered[0] || null;
@@ -78,12 +86,14 @@ export default function ActivitySalesCenterView({ brandId, deviceId }) {
       <div className="mb-4 flex gap-2 border-b border-rose-100 pb-3">
         <button type="button" className={`rounded-full px-4 py-2 text-xs font-bold ${workspaceTab==="published" ? "bg-rose-500 text-white" : "border border-stone-200 bg-white text-stone-600"}`} onClick={()=>setWorkspaceTab("published")}>第一線正式活動</button>
         <button type="button" className={`rounded-full px-4 py-2 text-xs font-bold ${workspaceTab==="management" ? "bg-rose-500 text-white" : "border border-stone-200 bg-white text-stone-600"}`} onClick={()=>setWorkspaceTab("management")}>管理端 · 建立／審核</button>
+        {!showcaseAdapter && roleId === "store" && <button type="button" className={`rounded-full px-4 py-2 text-xs font-bold ${workspaceTab==="store-review" ? "bg-rose-500 text-white" : "border border-stone-200 bg-white text-stone-600"}`} onClick={()=>setWorkspaceTab("store-review")}>店經理 · 成交覆核</button>}
       </div>
-      {workspaceTab==="management" ? <ActivitySalesManagementView brandId={brandId} deviceId={deviceId} /> : (<>
+      {workspaceTab==="management" ? <ActivitySalesManagementView brandId={brandId} deviceId={deviceId} showcaseAdapter={showcaseAdapter} showcaseRole={showcaseRole} />
+        : workspaceTab === "store-review" && !showcaseAdapter && roleId === "store" ? <ActivitySalesAttributionReviewPanel brandId={brandId} deviceId={deviceId} roleId={roleId} stores={accessibleStores} /> : (<>
 
       <div className="mb-5 flex flex-wrap items-center justify-between gap-3">
         <div>
-          <span className="text-[10px] font-black tracking-[.18em] text-rose-500">LOCAL EMULATOR · PHASE 1B</span>
+          <span className="text-[10px] font-black tracking-[.18em] text-rose-500">{showcaseAdapter ? "LOCAL SHOWCASE · 虛構資料" : "LOCAL EMULATOR · PHASE 1B"}</span>
           <h2 className="mt-1 text-xl font-black text-stone-800">活動銷售中心 <span className="text-sm font-semibold text-stone-400">{names[brandId] || ""}</span></h2>
           <p className="mt-1 text-xs text-stone-500">僅顯示已正式發布的活動方案；套組試算為銷售參考，不會新增日報營收。</p>
         </div>
@@ -151,7 +161,7 @@ export default function ActivitySalesCenterView({ brandId, deviceId }) {
               <ListLines title="限制與不可併用條件" values={selected.restrictions} />
               {selected.salesTalk && <section className="mt-5"><h4 className="text-xs font-black">建議話術</h4><p className="mt-2 whitespace-pre-wrap rounded-xl bg-stone-50 p-3 text-xs leading-6">{selected.salesTalk}</p></section>}
               {!!selected.faq?.length && <section className="mt-5"><h4 className="text-xs font-black">常見問題</h4>{selected.faq.map((f) => <details key={f.faqId} className="mt-2 rounded-xl border border-stone-200 px-3 py-2 text-xs"><summary className="cursor-pointer font-bold">{f.question}</summary><p className="mt-2 whitespace-pre-wrap leading-6 text-stone-600">{f.answer}</p></details>)}</section>}
-              <ActivitySalesAcknowledgement key={`${brandId}-${selected.campaignId}-${selected.versionId}`} brandId={brandId} deviceId={deviceId} publication={selected} />
+              <ActivitySalesAcknowledgement key={`${brandId}-${selected.campaignId}-${selected.versionId}`} brandId={brandId} deviceId={deviceId} publication={selected} showcaseAdapter={showcaseAdapter} showcaseRole={showcaseRole} />
             </>
           )}
         </section>

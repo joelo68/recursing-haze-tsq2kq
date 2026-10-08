@@ -3566,3 +3566,13 @@ CYJ legacy 根路徑：`artifacts/default-app-id/public/data`；安妞／伊啵�
 - `activity_sales_attribution_review_audit/{summaryDocumentId}_r{nextReviewRevision}`：`schemaVersion=activity-sales-attribution-review-audit-v1`，固定 revisionFrom/To、歸屬 revision、正式 report 版本及覆核者，transaction `create` 不覆寫。
 
 文件 ID 來自既有 `summaryDocumentId`，不含 Browser 任意 path。歸屬額仍只在 `activity_sales_daily_attributions`，活動成交事件仍 immutable。`review` 只改新的兩集合；當 `attributionRevision` 或 `reportUpdateVersion` 異動時，原 review 不再有效（`STALE`）。嚴格區分 `UNCONFIRMED` 與 `CONFIRMED_ZERO`。不新增 collection-group query 或 index；單操作 7 單文件讀與覆核 2 寫（另計 auth reads）。
+
+
+## Activity Sales 2A-4R2A — 候選列表複合索引（feature only）
+- 讀取來源為既有私人 `activity_sales_daily_attributions`，CYJ：`artifacts/default-app-id/public/data/`；安妞／伊啵：各自 `brands/{brandId}/`。不新增集合、listener、writer 或 Firestore Rules Browser 權限。
+- 僅供 `storeCore ==`、`reportDate ==`、`roleId == therapist` 三 equality filters 的 bounded collection query；隔離開發索引定義在 `firestore.activity-sales.indexes.json`，僅 demo local config 參照。未部署遠端索引，正式環境索引需求應由後續 Release Gate 審核。
+- 單次最多 13 候選查詢 docs，再逐筆檢查 manager store 權限、therapist master、publication 與 immutable version；回傳最多 12。候選不是覆核、沒有日報不是 0、過期版本不列入現行候選。
+
+## Activity Sales 2A-4R2B Cursor 頁面契約（feature）
+
+`getActivitySalesReviewCandidates` 回傳 `candidates[]`、`hasMore`、`nextCursor|null`、`maxCandidates=12`、`truncated`（backward compatibility）、`brandId`、`storeCore`、`reportDate`。Cursor base64url 內含 `activity-review-cursor-v1`、brandId、storeCore、reportDate、lastId（`day_<48hex>`）；僅供游標導覽，非身分聲明或權限能力。固定 `orderBy(__name__)`，沿用 `firestore.activity-sales.indexes.json` 中 `storeCore+reportDate+roleId` composite index。每頁最多 13 個候選文件 + 1 個授權文件 + 最多 36 個驗證文件，另計登入驗證；不代表完整待核對人數、不保存全局快照。

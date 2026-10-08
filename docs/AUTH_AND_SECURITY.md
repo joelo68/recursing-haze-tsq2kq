@@ -1756,3 +1756,13 @@ Consumer trust 仍會再次核對 current Lifecycle / Reporting Calendar / Syste
 `manageActivitySalesAttributionReview` 驗證 Firebase Application Identity claim 與 `actor` brand/role/account 完全相等、Trusted Device、即時密碼，再以 `store_account_data.stores` 驗證門市。**店經理是 `store` 身分，不是 `manager`（區長）**。管理師 master 必須仍活躍且屬該門市；缺報、跨品牌、不同公開版本、非法選店均拒絕。
 
 覆核是獨立證明而非更動成交：`inspect` 限單一精確身分的 read-only transaction，`review` 在 revision OCC 下寫 1 個 review doc + 1 個 immutable audit。對資料已重上報的覆核，以 `therapist_daily_reports.updateTime` 秒/奈秒及 `activity_sales_daily_attributions.revision` 判定 `STALE`。瀏覽器對兩個私人 review collections 在 CYJ legacy 與 brands namespace 都 `read/write=false`，generic fallback 同步排除。沒有查詢全店所有管理師的權限入口、沒有退款／更正 API。
+
+
+## Activity Sales 2A-4R2A — 限定門市待核對候選入口（feature only）
+- `getActivitySalesReviewCandidates` 必須經 Firebase Application Identity 同品牌／同帳號 `store`、Trusted Device、credential 驗證；`store_account_data` 的目前門市授權在唯讀 transaction 內重新讀取。`manager`（區長）不等於 `store`（店經理）。
+- 回傳候選前逐筆核對管理師目前 master 所屬門市、仍有效的正式活動 publication/version。私人 Firestore Rules 不變，前端不能讀取 candidate collection。
+- 候選回傳並非覆核授權；最後的 `inspect`、`review` 仍由 Phase 2A-4R1 writer 重新執行 OCC／門市與版本權限。過期資料及跨品牌請求 fail closed，禁止以候選列表直接改寫成交與營收。
+
+## Activity Sales 2A-4R2B 隔離覆核安全契約
+
+店經理覆核入口僅 `store` role；Browser 只能送 HTTP POST，須校驗 `drcyjIdentity`/brandId/accountId/roleId、Trusted Device、最新憑證及 `store_account_data.stores` 即時權限。Backend 的 cursor 是不授權的分頁提示，即使篡改/跨日期/跨門市也不得繞過重新驗證。覆核寫入維持 R1 Firestore transaction 中的日報版本＋歸屬 revision＋review revision OCC。私人 attribution/review/audit 的 Browser Rules 不放寬。

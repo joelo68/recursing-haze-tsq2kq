@@ -5536,3 +5536,26 @@ Backend endpoints：
 - `tests/activitySalesRulesEmulator.test.mjs`：新私有集合 CYJ / Anniu browser read/write deny。
 
 不修改 `daily_reports`、`therapist_daily_reports`、`activity_sales_attribution_sales` 的 Writer，不提供退款、更正入口或覆核前端清單。本次以最新 415 檔 commit archive 為 Source of Truth。
+
+### Activity Sales LOCAL SHOWCASE（非正式入口，2026-10-08）
+- `activity-sales-showcase.html` → `src/activitySalesShowcaseMain.jsx` → `src/components/ActivitySalesLocalShowcase.jsx`：僅本機展示的獨立 React 入口，非正式 `src/main.jsx`／`App.jsx` 路由。
+- `src/utils/activitySalesShowcaseStore.js`：三品牌／角色的虛構記憶體資料與非權威的工作流模擬；**不得作為 Production Auth、Backend Policy 或 Firestore Writer 的資料來源**。
+- `src/components/ActivitySalesCenterView.jsx`、`ActivitySalesManagementView.jsx`、`ActivitySalesAcknowledgement.jsx`：僅在收到展示記憶體 adapter 時走 Mock 路徑，原有 Auth／Backend／Rules 執行路徑維持不變。
+- `src/config/firebaseShowcaseStub.js`：展示專用 Vite alias 替代 Firebase SDK 初始化；只對獨立展示配置生效，不得接到一般 runtime。
+- `vite.activity-sales-showcase.config.mjs`、`package.json` 之 `activity:showcase*`：僅建置獨立展示頁，不納入 Production Hosting 部署。
+
+## Activity Sales Phase 2A-4R2A — Store-manager review candidate owner（feature only）
+- `functions/activitySalesAttributionReviewInboxLogic.js`：品牌／`store`／日期輸入與歸屬文檔驗證。
+- `functions/activitySalesAttributionReviewInbox.js`：受保護且唯讀的 `getActivitySalesReviewCandidates`，store credential snapshot + 小查詢 + current therapist/publication/version 校驗。
+- `functions/index.js`：隔離 feature Backend endpoint export；`src/config/runtimeEnvironment.js`：僅在 activity sales DEV 中導向 localhost。
+- `firestore.activity-sales.indexes.json` + `firebase.activity-sales.local.json`：僅隔離 Emulator 三欄 equality 查詢 index（非正式部署）。
+- `tests/activitySalesReviewInbox.test.js`：品牌隔離、授權撤回、轉店、零成交、舊版、上限及 malformed data。
+- R1 `manageActivitySalesAttributionReview` 仍是唯一覆核寫入 authority；本批不提供店經理前端覆核 UI。
+
+## Activity Sales 2A-4R2B source ownership
+
+- `functions/activitySalesAttributionReviewInbox.js`、`functions/activitySalesAttributionReviewInboxLogic.js`：已授權門市／日期有界分頁、游標驗證、Backend 候選過濾。
+- `src/components/ActivitySalesAttributionReviewPanel.jsx`：store role DEV 專屬，手動分頁、單筆 inspect 與 existing R1 review writer 呼叫。
+- `src/utils/activitySalesReviewUiContract.js`：前端頁面與單筆 OCC 結果契約；非安全 authority。
+- `src/components/ActivitySalesCenterView.jsx`、`src/App.jsx`：DEV store 導覽與授權門市 props；正式導航不動。
+- `tests/activitySalesReviewInbox.test.js`、`tests/activitySalesReviewUiContract.test.js`、`tests/activitySalesReviewInboxEmulator.test.mjs`：純邏輯／HTTP mock 與待 Mac Emulator 的三品牌真實 cursor query regression。
