@@ -5515,3 +5515,11 @@ Backend endpoints：
 - `src/components/InputView.jsx`：僅 DEV 的 store/therapist 日報表單掛載面板，原上報/覆寫流程不變。
 - `src/config/runtimeEnvironment.js`：新增 reader route 的 local emulator mapping；未知 Production Functions 維持阻擋。
 - `tests/activitySalesAttributionReader.test.js`、`tests/activitySalesAttributionReaderEmulator.test.mjs`：契約/權限/OCC 純測試與三品牌 Firestore 真交易讀回。
+
+
+### Phase 2A-3 — isolated daily report attribution entry
+- `src/components/ActivitySalesAttributionEntryForm.jsx`：手動成交／明確零成交輸入、每次 fresh credential、Backend Writer HTTP、in-flight 單請求、人工穩定交易識別碼與 immutable sale ID 安全重試，不寫正式日報。
+- `src/utils/activitySalesAttributionEntry.js`：純函式狀態、價格/套數與 OCC/回應一致性驗證；只生成 non-additive payload。
+- `src/components/ActivitySalesAttributionStatusPanel.jsx`：Phase 2A-2 已驗證狀態查回後顯示 DEV-only 寫入介面、處理 revision 更新／idempotent 重新查詢。
+- `tests/activitySalesAttributionEntry.test.js`：三態、套組價格、非加總金額、OCC/回應認證及前端隔離 regression。
+- `src/components/InputView.jsx`、`functions/activitySalesAttributionWriter.js`、`functions/index.js`、`firestore.rules` **本批不更動**；分別沿用 Phase 2A-2 的 DEV 掛載、Phase 2A-1 的 Backend writer/Functions 與 Browser deny rules。

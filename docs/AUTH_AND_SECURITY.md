@@ -1746,3 +1746,7 @@ Consumer trust 仍會再次核對 current Lifecycle / Reporting Calendar / Syste
 
 ### Activity Sales Phase 2A-2 — private report read
 `getActivitySalesAttributionStatus` 為 POST only，服務端驗證 Application Identity claims、Trusted Device、fresh credential、role/account/store master、已存在且屬於本帳號/店的日報、目前發布活動與 immutable version；只讀一筆 deterministic activity attribution daily document。三品牌獨立路徑；Firestore Rules 仍拒絕 Browser 讀寫所有 attribution 私人集合；資料矛盾 fail closed，不能繞過日報驗證或把未回報當 0。無更正/刪除權限。Frontend 在 Production build 不掛載唯讀面板。
+
+
+## Activity Sales Phase 2A-3 — Client attribution entry boundary (feature only)
+`ActivitySalesAttributionEntryForm.jsx` 只在本機 Activity DEV 模式顯示，使用者必須先透過 Phase 2A-2 重新驗證後的單日活動狀態取得 revision。每次寫入另帶 Firebase Application Identity token、信任裝置、目前帳號密碼、role/account/brand 及 immutable campaign/version；Backend `writeActivitySalesAttribution` 仍獨立重新驗證 master/credential、存在的本人日報、目前 publication/套組及 OCC transaction。Browser 不可直接寫入私人歸屬集合，也不新增 Rules 授權。重複送出保留人工核對的穩定交易識別碼作為 immutable saleId（並非 POS 自動對帳），歸屬結果不可直接增列正式日報營收。零成交為有後果的明確確認，不允許在本功能改成有成交；不提供更正/退款/主管覆核入口。

@@ -3087,3 +3087,7 @@ No listener, broad query, or polling was added.
 
 ### Phase 2A-2 — Submitted report → activity attribution read-only status
 `InputView.jsx` isolated `ActivitySalesAttributionStatusPanel.jsx`（僅手動觸發）→ 公開已發布活動 ≤30 筆 → Firebase Identity + Trusted Device + current credential → Backend `getActivitySalesAttributionStatus` → therapist master（若是 therapist）+ 既存日報 + current publication + immutable version + deterministic daily attribution summary；無私人 Browser read，單次查詢無 polling/listener。`UNCONFIRMED`=N/A, `CONFIRMED_ZERO`=0, `HAS_SALES`=確定成交值；`formalRevenueDelta=0`，不觸發 Summary/Ranking writer，不更新日報。舊版活動查詢另開流程。
+
+
+## Activity Sales Phase 2A-3 — explicit attribution entry (feature only)
+store／therapist 在 `InputView` 的隔離面板手動載入本品牌目前正式活動（公開 projection、<=30 筆）→ 選擇活動 → fresh password + Backend `getActivitySalesAttributionStatus` 讀同一日/帳號/version 的單一私有摘要 → `UNCONFIRMED` 可自行確認 0 或登錄一筆套組成交，`HAS_SALES` 只能按新 revision 再登錄，`CONFIRMED_ZERO` 封鎖寫入 → Backend `writeActivitySalesAttribution` 新一輪 auth/device/credential 身分與 transaction OCC 驗證 → create immutable sale/audit + set private day summary。由操作者填寫穩定交易識別碼防止同一帳號跨頁重複計算，網路不明確保留同一 request ID 供重試，idempotent 結果要求重新查詢。沒有任何 `InputView` 正式日報 `setDoc` 修改，所有歸屬都是非加總 (`formalRevenueDelta=0`)。無自動額外 reads、polling、listener 或 Summary/Ranking trigger。

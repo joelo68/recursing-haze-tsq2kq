@@ -165,3 +165,12 @@ Frontend 顯示權限不等於 Backend 授權。
 - 不修改/重算 `daily_reports`、`therapist_daily_reports`、Summary/Ranking、formal revenue；僅顯示歸屬，`formalRevenueDelta=0`。不提供 Browser Activity Sale writer、新增成交、更正、退款、零轉成交或主管覆核按鈕。
 - 估計每次手動查詢：公開正式活動列表最多讀取 30 documents（限量 query），個別歸屬查詢 store 4 docs / therapist 5 docs transaction reads，另計 Identity/Trusted Device credential reads；無 listener/polling。需以 Emulator/部署後 Firebase Usage 確認實際費用，不把估值寫成實際 reads。
 - 只有 Mac 全 CI、build、Rules/Firestore emulator 通過後才能 commit/push 隔離 feature；Phase 1～3 不得正式 Deploy。
+
+
+# Phase 2A-3 — 日報活動成交填報入口（isolated feature）
+- 基線：`feature/activity-sales-center @ 90ad85dedf039ec64ede1e00e71a88e62d93f196`，Production `main @ 36ee6eff1a198fc7b4d9ab33eee9068c3a882dcd`，`CURRENT_APP_VERSION=3.6.2` 保持不變。
+- 沿用 Phase 2A-2 的 `ActivitySalesAttributionStatusPanel`：僅 `VITE_ACTIVITY_SALES_DEV=true`、已驗證 store／therapist 才會在 `InputView` 看見。本次新增 `ActivitySalesAttributionEntryForm`；先由使用者查當日目前正式活動、本人歸屬狀態及 revision，再選套組與數量，或在無歸屬時明確勾選 0 成交。沒有日報必須由 Backend 409 拒絕，**不會代替正式日報提交**。
+- 入口僅透過既有 `writeActivitySalesAttribution` HTTP Backend POST，攜帶 Firebase token、Trusted Device ID、目前帳號密碼、brand/role/account、原活動 versionId、報表日期和 `expectedRevision`。套組售價與金額取自當前 publication，Backend 仍以 immutable version 的正式價格與本人日報作為唯一 authority。使用者輸入可核對且不含個資的交易識別碼（英數字、-、_）；同一交易跨頁重填必須使用同一編號。失敗或網路回應不明時保留同一 saleId/請求內容供安全重試；確認為既有成交的 idempotent response 必須重新認證查詢，不能自造成交結果。
+- `CONFIRMED_ZERO` 不允許直接轉有成交；`HAS_SALES` 可用最新 revision 新增不可變成交，但不得確認 0；更正／退款／特殊成交／刪除／店經理覆核仍不開通。
+- 無 Browser 私有 Firestore 讀寫，不增加 listener／polling／大型 query；一次手動讀活動清單最多 30、狀態讀單一摘要、一次 Backend writer 有限 transaction。`formalRevenueDelta=0`；不改正式 `daily_reports`/`therapist_daily_reports`、Summary/Ranking、Revenue。Production build 隱藏入口，Phase 1–3 **不得 Deploy**。
+- 本地契約/Reader/Writer/填報單元測試須通過；完整 CI、build、Rules 及三品牌 Firestore Emulator 需由 Mac feature worktree 執行後才可判定 `VALIDATED=YES`，未通過前不得 commit/push。

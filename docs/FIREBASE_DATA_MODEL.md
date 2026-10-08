@@ -3553,3 +3553,7 @@ No new Firestore collection or document type was introduced.
 
 ### Phase 2A-2 — read-only view
 `activity_sales_daily_attributions/{dayHash}` 維持 Phase 2A-1 私有結構與 Browser deny Rules，無新增 collection/index/listener。Backend 透過 `summaryDocumentId(brandId,roleId,accountId,reportDate,campaignId,versionId)` 單筆讀回；文件不存在代表 `UNCONFIRMED`（null/null），僅明確 `CONFIRMED_ZERO` 可顯示 0/0，`HAS_SALES` 須為正整數；revision ≥1、同一 identity/version/storeCore 及 `formalRevenueDelta=0` 皆需驗證。三品牌 Firestore path 不變，`daily_reports`/`therapist_daily_reports` 不新增欄位。
+
+
+### Phase 2A-3 — activity attribution entry surface (feature only)
+僅建立現有 Phase 2A-1 私有歸屬集合的使用者操作入口；**無新 collection、index、Firestore Rules 或正式日報欄位**。每筆 sale 由操作者提供穩定、可核對的交易 `saleId`（此版本不與 POS 自動對帳），並使用其 SHA-256 `saleHash` 及單日/活動/version/account `dayHash`，revision + transaction/OCC 禁止同日並行覆寫。`CONFIRMED_ZERO` 明確 0/0、無資料 `UNCONFIRMED` 為 null/null；`HAS_SALES` 不可回寫成零。`formalRevenueDelta` 永遠為 0，正式 revenue writer 及 Summary 不變。CYJ legacy 與安妞／伊啵品牌 path 完全依 Phase 2A-1 model。
