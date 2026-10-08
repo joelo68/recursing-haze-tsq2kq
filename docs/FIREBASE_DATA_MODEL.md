@@ -3541,3 +3541,11 @@ No new Firestore collection or document type was introduced.
 - 新的 `activity_campaign_versions/{campaignId}_vNNN` 不可覆寫，`baseVersionId` 錨定送審當下第一線版本，`campaignSnapshot` 與審核人員快照不可回寫。`activity_campaign_approvals/{versionId}` 依新版本存決策與 `activeReviewerKeys`；撤銷或緊急 stop 原子清空這些 key。
 - 核准後實際發布／排程到期時，單個 Firestore transaction 讀當前 campaign、immutable version、舊 `activity_sales_publications`，驗證 `brandId/campaignId/versionId/baseVersionId` 完整一致後才更新 publication 並切換 `currentVersionId`、遞增 revision。理解確認依 `versionId` 隔離；歷史確認只對歷史版有效。
 - 路徑沿用 CYJ `artifacts/default-app-id/public/data/{collection}` 與安妞／伊啵 `brands/{brandId}/{collection}`；本批未新增 collection/index，未修改 Rules。
+
+## Activity Sales Phase 2A-1 — 私有活動成交歸屬 Backend Writer（feature only）
+- CYJ：`artifacts/default-app-id/public/data/{collection}`；安妞／伊啵：`brands/{brandId}/{collection}`，`collection` 是以下三種獨立資料：
+  - `activity_sales_daily_attributions/{dayHash}`：`brandId,reportDate,roleId,accountId,storeCore,campaignId,versionId,status,saleCount,attributedAmount,formalRevenueDelta=0,revision,updatedAt`。**不存在**代表 `UNCONFIRMED`；實際儲存 `CONFIRMED_ZERO` 或 `HAS_SALES`。
+  - `activity_sales_attribution_sales/{saleHash}`：immutable 每筆成交 `saleId,packageId,quantity,attributedAmount,versionId,formalRevenueDelta=0` 及已驗證身分、時間。
+  - `activity_sales_attribution_audit/{eventHash_revision}`：每次寫入的 actor/action、OCC 前後 revision、immutable 記錄。
+- `dayHash`、`saleHash` 均用 SHA-256 隔離品牌、角色、帳號、日期、campaign/version；無 `collectionGroup`、無自動 writer 觸發、無 materialized report mutation。
+- 新 collection Browser read/write DENY（品牌專用 Rules + generic fallback 排除）；報表和歷史修正尚無消費端／移轉。

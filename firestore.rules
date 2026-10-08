@@ -470,6 +470,9 @@ service cloud.firestore {
     match /brands/{brandId}/activity_campaign_approvals/{document=**} { allow read, write: if false; }
     match /brands/{brandId}/activity_sales_audit/{document=**} { allow read, write: if false; }
     match /brands/{brandId}/activity_sales_acknowledgements/{document=**} { allow read, write: if false; }
+    match /brands/{brandId}/activity_sales_daily_attributions/{document=**} { allow read, write: if false; }
+    match /brands/{brandId}/activity_sales_attribution_sales/{document=**} { allow read, write: if false; }
+    match /brands/{brandId}/activity_sales_attribution_audit/{document=**} { allow read, write: if false; }
 
     match /artifacts/{appId}/public/data/activity_sales_policy/{document=**} { allow read, write: if false; }
     match /artifacts/{appId}/public/data/activity_campaigns/{document=**} { allow read, write: if false; }
@@ -477,6 +480,9 @@ service cloud.firestore {
     match /artifacts/{appId}/public/data/activity_campaign_approvals/{document=**} { allow read, write: if false; }
     match /artifacts/{appId}/public/data/activity_sales_audit/{document=**} { allow read, write: if false; }
     match /artifacts/{appId}/public/data/activity_sales_acknowledgements/{document=**} { allow read, write: if false; }
+    match /artifacts/{appId}/public/data/activity_sales_daily_attributions/{document=**} { allow read, write: if false; }
+    match /artifacts/{appId}/public/data/activity_sales_attribution_sales/{document=**} { allow read, write: if false; }
+    match /artifacts/{appId}/public/data/activity_sales_attribution_audit/{document=**} { allow read, write: if false; }
 
     match /brands/{brandId}/activity_sales_publications/{document=**} { allow read: if sameBrandIdentity(brandId); allow write: if false; }
     match /artifacts/{appId}/public/data/activity_sales_publications/{document=**} { allow read: if cyjLegacyIdentity(appId); allow write: if false; }
@@ -510,6 +516,9 @@ service cloud.firestore {
         && collectionName != 'activity_campaign_approvals'
         && collectionName != 'activity_sales_audit'
         && collectionName != 'activity_sales_acknowledgements'
+        && collectionName != 'activity_sales_attribution_audit'
+        && collectionName != 'activity_sales_attribution_sales'
+        && collectionName != 'activity_sales_daily_attributions'
         && collectionName != 'activity_sales_publications'
         && collectionName != 'settings';
     }
@@ -543,6 +552,9 @@ service cloud.firestore {
         && collectionName != 'activity_campaign_approvals'
         && collectionName != 'activity_sales_audit'
         && collectionName != 'activity_sales_acknowledgements'
+        && collectionName != 'activity_sales_attribution_audit'
+        && collectionName != 'activity_sales_attribution_sales'
+        && collectionName != 'activity_sales_daily_attributions'
         && collectionName != 'activity_sales_publications'
         && collectionName != 'global_settings';
     }

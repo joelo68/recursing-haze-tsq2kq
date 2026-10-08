@@ -5496,3 +5496,13 @@ Backend endpoints：
 - `functions/activitySalesAttributionContract.js`：活動成交的純驗證契約／三態分類／不可重複加總／歷史版本身分雜湊鍵（不存取 Firestore，非 writer）。
 - `tests/activitySalesAttributionContract.test.js`：契約回歸測試（此批不增加日報 endpoint / UI / Rules）。
 - 既有實際日報 owner：`src/components/InputView.jsx`（`daily_reports` 店務與 `therapist_daily_reports` 個人日報寫入）；`functions/deviceApproval.js`（登入憑證與店家關聯）；活動版本發布仍在 `functions/activitySalesAuthority.js` / `functions/activitySalesPublishedProjection.js`。這批皆只檢查，不修改。
+
+## Activity Sales Phase 2A-1 — 安全 Backend writer ownership（feature only）
+- `functions/activitySalesAttributionWriterLogic.js`：日期、storeCore、日報綁定、版本／套組與修訂身分、OCC request 前置驗證。
+- `functions/activitySalesAttributionWriter.js`：HTTP writer、Application Identity/Trusted Device/credential、單筆交易寫入 summary/sale/audit、immutable idempotency。
+- `functions/index.js`：新增 `writeActivitySalesAttribution` feature-only Functions export。
+- `src/config/runtimeEnvironment.js`：新增該 endpoint 的 demo Emulator 路由，避免開發時呼叫正式 Functions。
+- `firestore.rules`：三個私人 collection 顯式 Browser read/write deny 及 generic fallback 排除。
+- `tests/activitySalesAttributionWriter.test.js`：Backend writer mock transaction、角色／門市、品牌、版本、zero/OCC/idempotency/報價回歸。
+- `tests/activitySalesAttributionWriterEmulator.test.mjs`：僅 demo Firestore Emulator 下檢查三品牌 transaction/OCC 與正式日報不變。
+- `tests/activitySalesRulesEmulator.test.mjs`：擴充新私人集合的瀏覽器阻擋矩陣。

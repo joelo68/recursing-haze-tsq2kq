@@ -3078,3 +3078,8 @@ No listener, broad query, or polling was added.
 - 已發布活動 → `begin_amendment`：Backend scoped reads（policy + campaign + immutable current version），產生 `amendment.draft`，公開投影 **0 writes**。`update_amendment` → `submit_amendment`：建立新 version 與 Inbox approval key（transaction/ revision OCC），仍不碰舊 `activity_sales_publications`。
 - 審核者由 Inbox 20 筆上限單品牌查詢進入 `get_campaign`（policy+campaign+修訂 approval 單文件）；approve/all/return 更新 immutable version 對應 approval state 與 reviewer key。最終核准後，立即發布模式交易換版；手動模式 `publish_amendment` 由 publisher 授權；排程模式由既有 onWrite per-campaign trigger → 單個 Cloud Task（<=25d 續期）→ transaction 比對 base projection／version → 換版。無背景大範圍 query/輪詢。
 - 更新正式 `currentVersionId` 與公開 projection 為同一個原子 commit；第一線已有舊版本 ack 不符合新 versionId。撤銷修訂或 stop 會原子清空在途 Inbox 並讓舊排程失效。Phase 2 正式營收不在本資料流。
+
+## Activity Sales Phase 2A-1 — Backend event attribution（feature only）
+- Backend 驗證 session + device + credential → `therapist` 的 master 或 `store` 的授權 stores → 單品牌單日既有 `daily_reports`／`therapist_daily_reports` → 讀同品牌 published projection + immutable version → 讀當日活動摘要及指定 sale ID。
+- 在同一 Firestore transaction 以 expectedRevision OCC 提交 `activity_sales_daily_attributions` + immutable `activity_sales_attribution_sales` + audit；明確無成交只寫摘要 + audit。重複 saleId 內容相同不重寫／不重加總，內容不同 fail-closed。
+- 此處的 `attributedAmount` 僅為活動歸屬，`formalRevenueDelta=0`；不寫 `daily_reports`、`therapist_daily_reports`、Summary 或 Ranking。無 listener、query、polling；後續報表消費與更正流程尚未啟用。

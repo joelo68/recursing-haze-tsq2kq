@@ -175,6 +175,10 @@ exports.acknowledgeActivitySalesPublication = createActivitySalesAcknowledgement
   admin,db,
 }).acknowledgeActivitySalesPublication;
 
+// Phase 2A-1 isolated activity-sale attribution writer. No formal report/Summary writes.
+const {createActivitySalesAttributionWriterFunctions}=require("./activitySalesAttributionWriter");
+exports.writeActivitySalesAttribution=createActivitySalesAttributionWriterFunctions({admin,db}).writeActivitySalesAttribution;
+
 // ==========================================
 // ★ P0-FINAL-1D-A1：Administrative Settings Authority
 // security_config / feature_flags / kpi_targets / system_version 的 Browser writer 收斂至 Backend。

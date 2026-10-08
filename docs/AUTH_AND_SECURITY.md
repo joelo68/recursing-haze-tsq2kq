@@ -1735,3 +1735,10 @@ Consumer trust 仍會再次核對 current Lifecycle / Reporting Calendar / Syste
 - 修訂的核准者來源是送審時 concrete-member snapshot；在同一 transaction 重新讀當前 revision、approval version 與 reviewer decision，舊 revision 不可覆寫新狀態。`discard_amendment`/`stop` 同交易使 Inbox key 失效；無效品牌或缺漏 immutable version、base projection identity 一律 fail-closed。
 - 第一線只看 `activity_sales_publications` 的白名單欄位，仍禁止瀏覽器讀取 `activity_campaigns`、審核、Policy、Audit 與個人確認；新版理解確認不得沿用舊版 ID。排程重試時必須重新核對 amendment、version、目前正式版才允許換版。
 - 現階段僅本機 demo Emulator；遠端 Staging IAM／Cloud Tasks 的重試與 UAT 尚未完成，不得視為 Production-ready。
+
+## Activity Sales Phase 2A-1 — Attribution writer 安全界線（feature only）
+- `writeActivitySalesAttribution` HTTP POST：`requireFirebaseRequestAuth` application-identity claims 綁品牌/角色/帳號，`verifyTrustedApplicationActor` 重查信任裝置與最新密碼，只允許 `store`、`therapist`。
+- `therapist` 門市來自 **Firestore transaction 中** 的同品牌 `therapists/{accountId}` 主資料，須與所屬個人 `therapist_daily_reports/{date}_{accountId}` 的 `storeName` 一致；`store` 來自登入後端驗證過的 `credential.stores`，再與同品牌 `daily_reports/{date}_{storeName}` 綁定。不能僅憑 Browser 指定門市。
+- 同 transaction 驗證當前 `activity_sales_publications` 與 immutable `activity_campaign_versions`，只認同版本及正式有效期間／門市適用範圍／正式套組價格。OCC revision 防競爭，immutable sale ID 拒絕不同內容覆蓋；零成交不得無審核變成有成交。
+- Browser Rules 對三個私人歸屬 collection 顯式封閉 CYJ 與安妞／伊啵，並從 generic fallback 排除；不更動既有正式日報 Browser writer 規則。
+- 真實 IAM、日報更正／退款、資料追溯與歷史活動版本歸屬仍需後續階段設計及 remote Staging／UAT；本批不宣稱 Production-ready。

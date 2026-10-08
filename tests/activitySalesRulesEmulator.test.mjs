@@ -98,6 +98,7 @@ async function createClaimedUser({ brandId, accountId }) {
 const PRIVATE_COLLECTIONS = [
   "activity_sales_policy", "activity_campaigns", "activity_campaign_versions",
   "activity_campaign_approvals", "activity_sales_audit", "activity_sales_acknowledgements",
+  "activity_sales_daily_attributions", "activity_sales_attribution_sales", "activity_sales_attribution_audit",
 ];
 const PUBLIC_COLLECTION = "activity_sales_publications";
 

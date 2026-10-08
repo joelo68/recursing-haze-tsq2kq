@@ -145,3 +145,12 @@ Frontend 顯示權限不等於 Backend 授權。
 - **尚未實作**：授權寫入端、日報介面、店經理覆核、特殊成交、更正/退款/取消、活動目標、分析、Firestore collections/index/rules；本批不宣稱 Phase 2 完成。
 - 下一個 write gate 必須先驗證最新 `therapist` 憑證主資料所屬門市與 `store` 帳號 `stores` 名單、`daily_reports` / `therapist_daily_reports` 真正資料 ID，並考慮因既有日報 `setDoc` 覆寫造成的競爭條件。不得信任 Browser 傳入門市；不得讓活動歸屬污染正式 Summary／Ranking。
 - Reads/Writes budget：本批新增 Firebase Reads = 0，Writes = 0，Functions invocation = 0；沒有 listener、polling、index 或部署。
+
+# Phase 2A-1 — Event attribution Backend writer（feature only）
+- `writeActivitySalesAttribution` 是隔離後端入口（尚未接 UI），僅開通 `record_sale` 與 `confirm_zero`；退款、特殊成交、修改、刪除、零轉有成交、店經理覆核尚未開通。
+- 必須有已提交且符合品牌／本人／門市／日期的正式日報；使用 `Firebase Application Identity + Trusted Device + fresh credential`；門市來源以 therapist master `store` 或 store credential `stores` 驗證，絕不單憑 Browser 店名。
+- Firestore transaction 先讀本人的店／個人日報、正式活動 publication、該活動不可變 version、當日活動歸屬摘要及指定成交 ID；新增成交使用 immutable `create`，摘要 revision OCC，重複同 ID 同內容只回 idempotent，不重複計算。`CONFIRMED_ZERO` 與未回報不同；若已確認 0，後續成交須等更正工作流另行開發。
+- `activity_sales_daily_attributions`、`activity_sales_attribution_sales`、`activity_sales_attribution_audit` 都屬**全 Browser read/write DENY** 的私人 Backend collection；三品牌各自 namespace；不得透過 generic fallback 越權。
+- 本批不修改 `daily_reports`、`therapist_daily_reports`、Summary、Ranking、正式營收、任一既有 Firestore listener；不新增輪詢或跨品牌查詢。
+- 單次寫入核心 transaction：store 4–5 docs read，therapist 5–6 docs read；另有 Trusted Device/credential 讀取，首次成交 3 docs writes，零成交 2 docs writes；此為程式路徑估算，非實際計費量。
+- Local Emulator 測試與 Mac 完整回歸 PASS 前，不得 commit/push；Phase 1～3 仍不得部署正式環境。`CURRENT_APP_VERSION=3.6.2` 不變。
