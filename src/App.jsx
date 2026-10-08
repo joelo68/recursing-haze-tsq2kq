@@ -4970,7 +4970,7 @@ export default function App() {
           </div>
         }>
           {ACTIVITY_SALES_DEV_MODE && activitySalesPreviewOpen ? (
-            <ActivitySalesCenterView key={currentBrandId} brandId={currentBrandId} />
+            <ActivitySalesCenterView key={currentBrandId} brandId={currentBrandId} deviceId={currentDeviceTrust?.deviceId || ""} />
           ) : (<>
           {activeView === "dashboard" && canDirectorAccessView("dashboard") && <DashboardView />}
           {activeView === "daily" && canDirectorAccessView("daily") && <DailyView />}
@@ -5038,7 +5038,7 @@ export default function App() {
         </Suspense>
       </main>
     );
-  }, [activeView, auditType, canDirectorAccessView, canAccessStoreScheduleView, canAccessSmartForecastView, adminCredentialSourceState, currentBrandId, activitySalesPreviewOpen]);
+  }, [activeView, auditType, canDirectorAccessView, canAccessStoreScheduleView, canAccessSmartForecastView, adminCredentialSourceState, currentBrandId, activitySalesPreviewOpen, currentDeviceTrust?.deviceId]);
 
   if (loading) return <div className="min-h-screen flex flex-col items-center justify-center bg-[#F9F8F6]"><Loader2 className="w-16 h-16 animate-spin text-stone-400 mb-4" /><p className="animate-pulse text-stone-500 font-bold tracking-wider">Loading DRCYJ Cloud...</p></div>;
   

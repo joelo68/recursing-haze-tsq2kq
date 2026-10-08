@@ -98,3 +98,12 @@ Frontend 顯示權限不等於 Backend 授權。
 - 發布詳情一次讀出套組/售價/拆帳/FAQ；前端列表只做有限範圍 `endDate >= today` 單次查詢，不開常駐 listener。
 - 本批第一線 UI 僅 `VITE_ACTIVITY_SALES_DEV=true` 顯示，沒有理解確認 / 日報成交 / 正式管理操作。
 - 不 deploy Production，CURRENT_APP_VERSION 維持 3.6.2。
+
+# Phase 1C-1 活動管理工作台（本機 DEV 隔離）
+- 新增 `getActivitySalesWorkspace` Backend read-only entry；任何讀取皆要求 Application Identity brand/account 一致、Trusted Device 與最新帳號密碼重新驗證。沒有權限時拒絕回傳私人草稿。
+- `capabilities` 最多讀同品牌 `activity_sales_policy/current` 1 筆，回傳本人可建立／直發／發布的布林權限與授權建立者可用的 group id/label；**不回傳群組成員、policy 全量或 credential**。
+- `get_campaign` 僅接受完整活動 ID；唯讀 transaction 中同品牌 policy 1 筆、campaign 1 筆、`pending_approval` 時 approval 1 筆；無跨品牌 query、無常駐 listener、無 polling。後端繼續實施 creator/publisher 權限與「送審時核准快照」的審核者可見性。
+- 管理工作台 `ActivitySalesManagementView.jsx` 僅透過 `VITE_ACTIVITY_SALES_DEV=true` 之既有本機入口顯示，提供 8 段式草稿編輯、價格／歸屬檢查、依 ID 查詢、送審、核准、退回、手動發布、停止與取消；Backend `manageActivityCampaign` 仍為寫入 authority，revision OCC 不變。
+- 私有 `activity_campaigns`、`activity_campaign_approvals`、`activity_sales_policy` 等 Firestore Rules 仍禁止 Browser 直接讀寫；新增讀取 gateway 不新增 Firestore listener/query/index，且不改既有正式業績。
+- **尚未實作：**後台清單／待核准 inbox、最高管理者 policy 設定 UI、排程自動 publisher、已發布內容重大異動重送審、第一線理解確認、Phase 2 日報成交歸屬／目標、Phase 3 分析；不以本子批次宣稱 Phase 1 全部完成。
+- 不部署 Production；不提高 `CURRENT_APP_VERSION`，僅於隔離 feature branch 開發驗證。

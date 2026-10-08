@@ -3521,3 +3521,6 @@ No new Firestore collection or document type was introduced.
 - 每份文件從 immutable `activity_campaign_versions` 的 `campaignSnapshot` 白名單建立，欄位：`schemaVersion,brandId,campaignId,versionId,status,publishedAtText,title,shortSummary,startDate,endDate,storeScope,stores,customerTypes,tags,sellingPoints,suitableFor,notSuitableFor,discountRules,restrictions,salesTalk,faq,packages`。
 - `published` 原子 upsert；`stopped` 原子 delete；審核尚未完成 / approved / scheduled 尚未到期皆不會曝光。
 - 只有展示投影可 Browser 同品牌 read，所有活動私有 Authority collections 與展示投影的 Browser write 均 deny。
+
+## Activity Sales Phase 1C-1（feature only）
+不新增 Firestore collection 或 index。`getActivitySalesWorkspace` 後端按品牌讀取現有單筆資料：CYJ `artifacts/default-app-id/public/data/activity_sales_policy/current`、`activity_campaigns/{campaignId}`、必要時 `activity_campaign_approvals/{currentVersionId}`；安妞／伊啵則為 `brands/{brandId}` 下面對應 collections。Browser Rules 對以上私有 collections 維持 read/write false。活動管理頁不會直接訂閱 Firestore。後端讀取的活動 / 審核文件必須有與所選品牌、ID、version 一致的識別欄位，不符合即拒絕。正式 `daily_reports` 等業績 collection 不變。

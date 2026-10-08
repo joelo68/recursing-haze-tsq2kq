@@ -161,6 +161,7 @@ const { createActivitySalesAuthorityFunctions } = require("./activitySalesAuthor
 const activitySalesAuthorityFunctions = createActivitySalesAuthorityFunctions({ admin, db });
 exports.manageActivitySalesPolicy = activitySalesAuthorityFunctions.manageActivitySalesPolicy;
 exports.manageActivityCampaign = activitySalesAuthorityFunctions.manageActivityCampaign;
+exports.getActivitySalesWorkspace = activitySalesAuthorityFunctions.getActivitySalesWorkspace;
 
 // ==========================================
 // ★ P0-FINAL-1D-A1：Administrative Settings Authority

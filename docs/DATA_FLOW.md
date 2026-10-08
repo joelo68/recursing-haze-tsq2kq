@@ -3059,3 +3059,6 @@ No listener, broad query, or polling was added.
 
 ## Activity Sales Phase 1B 展示資料流（feature only）
 `manageActivityCampaign` → transaction 檢查 policy / OCC + 綁定 immutable version → published 時 `activity_sales_publications/{campaignId}` upsert → 第一線單次 scoped `getDocs` → 搜尋/套組試算；stop 時同 transaction delete 投影。未審核/未到時不產生展示投影。
+
+## Activity Sales Phase 1C-1 管理讀取（isolated feature）
+第一線展示仍使用 `activity_sales_publications` scoped query。管理端與展示端分離：管理員手動輸入 campaign ID → `getActivitySalesWorkspace` → 驗證 brand/identity/device/credential → 在同一唯讀 transaction 中讀 `activity_sales_policy/current` → 僅 `get_campaign` 才讀該 ID 的 `activity_campaigns` 文件 → 若待審再讀對應單筆 `activity_campaign_approvals` → 回傳有限權限旗標與獲授權草稿。無私有 listener、無輪詢、無跨品牌集合搜尋。資料修改／審核一律呼叫既有 `manageActivityCampaign` transaction/OCC writer。Phase 2 日報整合不在本批。

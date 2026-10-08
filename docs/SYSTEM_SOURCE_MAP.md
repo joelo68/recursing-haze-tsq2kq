@@ -5454,3 +5454,13 @@ Backend endpoints：
 - `src/utils/activitySalesPublished.js`：scoped path、查詢與計算的 pure contracts。
 - `src/App.jsx`：僅當 Activity Sales demo flag 啟用時顯示 preview 入口。
 - `tests/activitySalesPublishedProjection.test.js`, `tests/activitySalesPublishedView.test.js`, `tests/activitySalesRulesEmulator.test.mjs`：投影、搜尋試算、Rules regression。
+
+## Activity Sales Phase 1C-1 管理工作台（隔離 feature）
+- `functions/activitySalesAuthority.js`：新增 `getActivitySalesWorkspace` 驗證後端唯讀 endpoint（原 campaign writer 不變）。
+- `functions/activitySalesWorkspaceAccess.js`：純函式權限決策、當前審核者判定與最小化管理資料輸出。
+- `functions/index.js`：匯出 `getActivitySalesWorkspace`（僅 feature，Production 不 deploy）。
+- `src/config/runtimeEnvironment.js`：本機 Dev Functions Emulator 對應 endpoint。
+- `src/components/ActivitySalesManagementView.jsx`：8 段式建立／編輯／審核管理畫面，只有 Activity Sales DEV 入口可達。
+- `src/components/ActivitySalesCenterView.jsx`：第一線/管理工作台切換；`src/App.jsx` 只傳遞已信任裝置 ID。
+- `src/utils/activitySalesEditor.js`：草稿表單轉換、核准選擇器與金額歸屬預檢。
+- `tests/activitySalesWorkspaceAccess.test.js`、`tests/activitySalesEditor.test.js`：讀取權限 / UI serialization regression。

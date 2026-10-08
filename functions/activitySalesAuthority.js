@@ -2,6 +2,7 @@ const crypto = require("crypto");
 const { onRequest } = require("firebase-functions/v2/https");
 const { buildActivitySalesPublication } = require("./activitySalesPublishedProjection");
 const { assertActivitySalesSessionActor } = require("./activitySalesSessionBoundary");
+const { workspaceAccess, presentWorkspaceCampaign } = require("./activitySalesWorkspaceAccess");
 const {
   getBrandCollection,
   requireFirebaseRequestAuth,
@@ -267,6 +268,67 @@ function createActivitySalesAuthorityFunctions({admin,db}) {
     if (!checked.ok) throw new ActivitySalesError("ACTOR_NOT_TRUSTED",403,"此操作需要已信任裝置與目前帳號驗證");
     return checked;
   }
+  // Read-only management gateway: explicitly requested single campaign only, no broad query.
+  // Browser Rules still deny all private Activity Sales collections.
+  const getActivitySalesWorkspace=onRequest({cors:true,timeoutSeconds:20,memory:"256MiB"},async(req,res)=>{
+    if (req.method!=="POST") return res.status(405).json({ok:false,message:"method_not_allowed"});
+    try {
+      const body=req.body || {}; const brand=brandId(body.brandId);
+      if (!brand) throw new ActivitySalesError("BRAND_INVALID",400,"不支援的品牌");
+      const checked=await verifiedActor(req,brand,body.actor || {});
+      const actor=actorSnapshot(checked);
+      const action=text(body.action,40).toLowerCase();
+      if (action!=="capabilities" && action!=="get_campaign") {
+        throw new ActivitySalesError("WORKSPACE_ACTION_INVALID",400,"不支援的管理資料讀取操作");
+      }
+      // Snapshot-consistent read-only transaction: a concurrent policy revision
+      // cannot be mixed with a different campaign/approval state.
+      const result=await db.runTransaction(async(tx)=>{
+        const policySnap=await tx.get(policyRef(brand));
+        const policy=policySnap.exists ? normalizePolicy(policySnap.data() || {}) : null;
+        const canCreate=Boolean(policy && selectorsAllow(policy.creatorSelectors,policy.groups,checked));
+        const canPublish=Boolean(policy && selectorsAllow(policy.publisherSelectors,policy.groups,checked));
+        const canDirectPublish=Boolean(policy && selectorsAllow(policy.directPublishSelectors,policy.groups,checked));
+        const capabilities={policyReady:Boolean(policy),canCreate,canPublish,canDirectPublish,
+          // Group labels only: never expose member lists or sensitive policy authority.
+          groups:canCreate ? Object.values(policy.groups).map((g)=>({groupId:g.groupId,label:g.label})) : []};
+        if (action==="capabilities") return {capabilities};
+
+        const id=stableId(body.campaignId);
+        if (!id) throw new ActivitySalesError("CAMPAIGN_ID_INVALID",400,"請輸入有效的活動代碼");
+        const snap=await tx.get(campaignRef(brand,id));
+        if (!snap.exists) throw new ActivitySalesError("CAMPAIGN_NOT_FOUND",404,"找不到此活動代碼");
+        const campaign=snap.data() || {};
+        if (campaign.brandId!==brand || campaign.campaignId!==id) {
+          throw new ActivitySalesError("CAMPAIGN_IDENTITY_MISMATCH",409,"活動資料識別不一致，已停止讀取");
+        }
+        let approval={};
+        if (campaign.status==="pending_approval") {
+          const versionId=stableId(campaign.currentVersionId);
+          if (!versionId || !versionId.startsWith(`${id}_v`)) {
+            throw new ActivitySalesError("VERSION_IDENTITY_INVALID",409,"活動審核版本識別錯誤");
+          }
+          const approvalSnap=await tx.get(approvalRef(brand,versionId));
+          if (!approvalSnap.exists) throw new ActivitySalesError("APPROVAL_STATE_MISSING",409,"此活動審核資料遺失");
+          approval=approvalSnap.data() || {};
+          if (approval.brandId!==brand || approval.campaignId!==id || approval.versionId!==versionId) {
+            throw new ActivitySalesError("APPROVAL_IDENTITY_MISMATCH",409,"活動審核識別不一致，已停止讀取");
+          }
+        }
+        const rights=workspaceAccess({actor,campaign,approval,canCreate,canPublish});
+        if (!rights.canRead) throw new ActivitySalesError("WORKSPACE_FORBIDDEN",403,"目前帳號沒有查看此活動草稿的權限");
+        return {campaign:presentWorkspaceCampaign(
+          {...campaign,draft:normalizeCampaignDraft(campaign.draft || {})},approval,rights),
+          capabilities:{...capabilities,...rights}};
+      });
+      return res.status(200).json({ok:true,...result});
+    } catch(error) {
+      const status=Number(error?.status || 500);
+      if (status>=500) console.error("getActivitySalesWorkspace failed",error);
+      return res.status(status).json({ok:false,code:error?.code || "WORKSPACE_FAILED",message:error?.message || "目前無法讀取活動管理資料"});
+    }
+  });
+
   const manageActivitySalesPolicy=onRequest({cors:true,timeoutSeconds:30,memory:"256MiB"},async(req,res)=>{
     if (req.method!=="POST") return res.status(405).json({ok:false,message:"method_not_allowed"});
     try {
@@ -471,7 +533,7 @@ function createActivitySalesAuthorityFunctions({admin,db}) {
     }
   });
 
-  return {manageActivitySalesPolicy,manageActivityCampaign};
+  return {manageActivitySalesPolicy,manageActivityCampaign,getActivitySalesWorkspace};
 }
 
 module.exports={

@@ -1,4 +1,5 @@
 import React, { useEffect, useMemo, useState } from "react";
+import ActivitySalesManagementView from "./ActivitySalesManagementView";
 import { collection, getDocsFromServer, limit, orderBy, query, where } from "firebase/firestore";
 import { auth, db } from "../config/firebase";
 import {
@@ -22,7 +23,8 @@ const ListLines = ({ title, values }) => (
   ) : null
 );
 
-export default function ActivitySalesCenterView({ brandId }) {
+export default function ActivitySalesCenterView({ brandId, deviceId }) {
+  const [workspaceTab,setWorkspaceTab]=useState("published");
   const [search, setSearch] = useState("");
   const [refresh, setRefresh] = useState(0);
   const [items, setItems] = useState([]);
@@ -72,6 +74,12 @@ export default function ActivitySalesCenterView({ brandId }) {
 
   return (
     <div className="mx-auto w-full max-w-7xl pb-24 text-stone-700">
+      <div className="mb-4 flex gap-2 border-b border-rose-100 pb-3">
+        <button type="button" className={`rounded-full px-4 py-2 text-xs font-bold ${workspaceTab==="published" ? "bg-rose-500 text-white" : "border border-stone-200 bg-white text-stone-600"}`} onClick={()=>setWorkspaceTab("published")}>第一線正式活動</button>
+        <button type="button" className={`rounded-full px-4 py-2 text-xs font-bold ${workspaceTab==="management" ? "bg-rose-500 text-white" : "border border-stone-200 bg-white text-stone-600"}`} onClick={()=>setWorkspaceTab("management")}>管理端 · 建立／審核</button>
+      </div>
+      {workspaceTab==="management" ? <ActivitySalesManagementView brandId={brandId} deviceId={deviceId} /> : (<>
+
       <div className="mb-5 flex flex-wrap items-center justify-between gap-3">
         <div>
           <span className="text-[10px] font-black tracking-[.18em] text-rose-500">LOCAL EMULATOR · PHASE 1B</span>
@@ -146,6 +154,7 @@ export default function ActivitySalesCenterView({ brandId }) {
           )}
         </section>
       </div>
+      </>)}
     </div>
   );
 }

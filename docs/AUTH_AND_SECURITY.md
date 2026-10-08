@@ -1715,3 +1715,6 @@ Consumer trust 仍會再次核對 current Lifecycle / Reporting Calendar / Syste
 - `activity_sales_publications`：僅已通過正式 Application Identity 的同品牌用戶可 read；write deny；CYJ legacy 路徑同等保護。
 - 發布/停止透過 Backend transaction 同步刷新展示投影；不依賴 UI 的條件過濾代替 Security。
 - Backend 寫入 additionally 比對 Auth custom claims（brandId / roleId / accountId）與重新驗證的 actor，跨品牌/跨帳號 Token 一律拒絕。
+
+## Activity Sales Phase 1C-1 隔離讀取權限（feature branch only）
+`getActivitySalesWorkspace` 是 Backend-only、POST-only 的 Activity Sales 管理讀取入口。透過有效 Firebase Application Identity token 與 body actor 的 brand/role/account 完全匹配，再重新執行 Trusted Device + 目前憑證驗證；不得只憑前端 UI 判斷或從 Browser 直接讀私人 collections。`capabilities` 僅輸出本人權限旗標與可用群組名稱；`get_campaign` 按 ID 單筆取得並檢查 creator/publisher 或目前審核人員快照，非授權者回 403。當 creator policy 權限遭撤銷，單靠歷史 createdBy 不可繼續觀看草稿。權限與資料的讀取置於同一唯讀 transaction，避免政策與活動狀態取自不同快照。對版本／審核識別不一致一律拒絕。所有寫入仍經 Phase 1A writer + revision OCC；此 API 不對外提供寫入。尚未部署正式環境。
