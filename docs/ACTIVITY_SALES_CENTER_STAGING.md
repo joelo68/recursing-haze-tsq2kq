@@ -211,3 +211,15 @@ Frontend 顯示權限不等於 Backend 授權。
 - `ActivitySalesAttributionReviewPanel` 只在 Activity Sales DEV 且 `store` 角色顯示，使用本帳號授權門市＋日期手動查詢。不直接讀私人 Firestore，不使用 listener/polling；頁面結果依目前正式版本與管理師主資料過濾，可能空頁仍有下一頁，不能當作全店完成率。
 - 使用者點單筆後必須重新輸入密碼呼叫 R1 `manageActivitySalesAttributionReview.inspect`，取得 attribution revision、正式日報秒/奈秒版本與 review revision，才可再驗證密碼送 `verified` 或 `flagged`（固定原因碼）至既有 OCC transaction writer。成功後要求重新查詢。
 - 不啟用更正／退款／取消／正式營收調整。`formalRevenueDelta=0`。本次與 R2A 均尚未套用 Mac 正式 feature worktree；完整 CI、Build、Firestore Emulator / 複合索引查詢尚未驗證；不得宣稱 VALIDATED／DEPLOYED。
+
+## Phase 2A-5A — Lifecycle pure contract / NOT ACTIVATED（2026-10-09）
+
+- 本次最新隔離 Source Gate：`feature/activity-sales-center @ 978b5adea2d4893b4586fc4162459123a5671c43`，`CURRENT_APP_VERSION=3.6.2`。正式 `main` 及 Production 全程不變。
+- 先前 4R2B 段落之「尚未套用」為當時候選階段的歷史註記；目前 R2AB 已於隔離 Feature 分支提交至 `978b5ad`。
+- 新增 `functions/activitySalesLifecycleContract.js` 純函式與 `tests/activitySalesLifecycleContract.test.js`。**沒有新增 HTTP 入口、Firebase import、Firestore document、Rules/query/listener/index、UI 開關或任何實際退款／更正執行權限。**
+- 純函式定義標準價與特殊價差額、原因碼、**特殊成交預設 PENDING**；不允許 Browser 自行宣告已核准，不變更正式價與既有 Writer。
+- `CORRECTION` / `CANCELLATION` / `REFUND` 以 immutable 交易身分與 append-only `eventId` 作為候選資料契約；含 revision 驗證、防重放、跨品牌／帳號／活動版本隔離、不得超額退款、不可從終結狀態再沖銷、正式業績變動永遠 0。
+- `evaluateLifecycle` 僅為**單筆交易局部暫擬稽核投影**，返回 `officialKpiAllocation=UNDECIDED`，**不是已上線的活動日／月／目標 KPI**。不改原始成交紀錄、既有 `activity_sales_daily_attributions`、覆核 revision 或正式日報。
+- 尚未定案且**不擅自啟用**：特殊價格誰可核准與在待核准時是否計入績效；跨日退款應歸哪個 KPI 月；組數與平均單價口徑；關帳後更正權限與補報政策。下一批實作 Writer／Rules／Emulator 前需鎖定口徑並重驗上游最新檔案。
+- 成本：本批新增實際 Firebase reads/writes=0，functions invocation=0；Node 測試為純函式，無 Emulator 存取；不會接觸任何正式或 demo 專案。
+- Documentation Impact：僅更新本 staging 設計／狀態文件；正式資料模型文件尚不增列未啟用的 Firestore Schema。
