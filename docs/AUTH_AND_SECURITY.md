@@ -1718,3 +1718,8 @@ Consumer trust 仍會再次核對 current Lifecycle / Reporting Calendar / Syste
 
 ## Activity Sales Phase 1C-1 隔離讀取權限（feature branch only）
 `getActivitySalesWorkspace` 是 Backend-only、POST-only 的 Activity Sales 管理讀取入口。透過有效 Firebase Application Identity token 與 body actor 的 brand/role/account 完全匹配，再重新執行 Trusted Device + 目前憑證驗證；不得只憑前端 UI 判斷或從 Browser 直接讀私人 collections。`capabilities` 僅輸出本人權限旗標與可用群組名稱；`get_campaign` 按 ID 單筆取得並檢查 creator/publisher 或目前審核人員快照，非授權者回 403。當 creator policy 權限遭撤銷，單靠歷史 createdBy 不可繼續觀看草稿。權限與資料的讀取置於同一唯讀 transaction，避免政策與活動狀態取自不同快照。對版本／審核識別不一致一律拒絕。所有寫入仍經 Phase 1A writer + revision OCC；此 API 不對外提供寫入。尚未部署正式環境。
+
+## Activity Sales Phase 1C-2（隔離 feature）
+- 待辦讀取入口僅由 Backend 驗證 Application Identity + 品牌 + 裝置 + 目前憑證後執行；`activeReviewerKeys` 不接受客戶端傳入，而是從已驗證帳號計算。Inbox 讀取限同品牌 `array-contains` 單次 20 筆；回應不包含 policy 全量、私有 approval 決策或審核人員名冊。
+- `get_policy` 將 Policy 群組成員等敏感資訊只提供予通過 `verifySuperAdminActor` 的最高管理者；寫入仍由既有 OCC transaction authority；前端 Rules 不新增 Policy read/write 授權。
+- 審核 inbox key 以提交時 resolved approver snapshot 為準；多核准者表態後在同一 transaction 更新，revision OCC 保護 campaign，避免重複核准與舊待辦殘留。

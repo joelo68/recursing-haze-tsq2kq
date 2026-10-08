@@ -107,3 +107,11 @@ Frontend 顯示權限不等於 Backend 授權。
 - 私有 `activity_campaigns`、`activity_campaign_approvals`、`activity_sales_policy` 等 Firestore Rules 仍禁止 Browser 直接讀寫；新增讀取 gateway 不新增 Firestore listener/query/index，且不改既有正式業績。
 - **尚未實作：**後台清單／待核准 inbox、最高管理者 policy 設定 UI、排程自動 publisher、已發布內容重大異動重送審、第一線理解確認、Phase 2 日報成交歸屬／目標、Phase 3 分析；不以本子批次宣稱 Phase 1 全部完成。
 - 不部署 Production；不提高 `CURRENT_APP_VERSION`，僅於隔離 feature branch 開發驗證。
+
+# Phase 1C-2 — 待核准 Inbox 與最高管理者 Policy UI（feature only）
+- `getActivitySalesWorkspace` 新增 `approval_inbox`：以已驗證品牌與身分產生 reviewer key，僅查本品牌 `activity_campaign_approvals` `activeReviewerKeys array-contains`，一次最多 20 筆，按鈕觸發單次查詢，無 listener / polling / 跨品牌 collection-group query。
+- 審核人員索引在送審、部分核准、移交下一關、完成或退回的**原 transaction** 更新，避免 Inbox 沿用舊關卡；已表態的核准人員不再列入同關可操作名單。只有 Phase 1C-2 新寫入／流轉的 approval 包含 `activeReviewerKeys`；既有舊測試資料若缺欄位，不會自動被 Inbox 找到。本批不做 Production migration / backfill。
+- Inbox 回傳只含 activity id、正式版本 id、標題、審核關卡、提交時間等最小內容；後端再驗證 approval 狀態、目前關卡與 actor，不能用前端傳入 reviewer key 偽造其他管理者。
+- `get_policy` 僅最高管理者可讀完整品牌 Policy；其他登入帳號只能取得 Phase 1C-1 最小 capabilities。Policy 編輯透過既有 `manageActivitySalesPolicy`、`expectedRevision` OCC 更新；不開放 Browser 直接讀／寫 Policy。
+- 前端僅本機 Activity Sales DEV 模式顯示，且切換品牌時清空私人草稿及待辦；所有請求沿用 Application Identity、Trusted Device 與新鮮憑證驗證。
+- **未納入**排程 auto-publisher、第一線理解確認、日報歸屬、目標及 AI 功能；Production `main`、正式資料及 `CURRENT_APP_VERSION=3.6.2` 不變。

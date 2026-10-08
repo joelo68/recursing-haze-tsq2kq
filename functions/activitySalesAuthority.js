@@ -3,6 +3,7 @@ const { onRequest } = require("firebase-functions/v2/https");
 const { buildActivitySalesPublication } = require("./activitySalesPublishedProjection");
 const { assertActivitySalesSessionActor } = require("./activitySalesSessionBoundary");
 const { workspaceAccess, presentWorkspaceCampaign } = require("./activitySalesWorkspaceAccess");
+const { activeReviewerKeys, summarizeApprovalInbox } = require("./activitySalesApprovalInbox");
 const {
   getBrandCollection,
   requireFirebaseRequestAuth,
@@ -268,7 +269,7 @@ function createActivitySalesAuthorityFunctions({admin,db}) {
     if (!checked.ok) throw new ActivitySalesError("ACTOR_NOT_TRUSTED",403,"此操作需要已信任裝置與目前帳號驗證");
     return checked;
   }
-  // Read-only management gateway: explicitly requested single campaign only, no broad query.
+  // Read-only management gateway: single campaign, capped reviewer Inbox, or super-admin Policy.
   // Browser Rules still deny all private Activity Sales collections.
   const getActivitySalesWorkspace=onRequest({cors:true,timeoutSeconds:20,memory:"256MiB"},async(req,res)=>{
     if (req.method!=="POST") return res.status(405).json({ok:false,message:"method_not_allowed"});
@@ -278,8 +279,25 @@ function createActivitySalesAuthorityFunctions({admin,db}) {
       const checked=await verifiedActor(req,brand,body.actor || {});
       const actor=actorSnapshot(checked);
       const action=text(body.action,40).toLowerCase();
-      if (action!=="capabilities" && action!=="get_campaign") {
+      if (!["capabilities","get_campaign","approval_inbox","get_policy"].includes(action)) {
         throw new ActivitySalesError("WORKSPACE_ACTION_INVALID",400,"不支援的管理資料讀取操作");
+      }
+      // Private policy membership is disclosed only to a fresh verified super-admin.
+      // No browser Firestore permission is granted by this read endpoint.
+      if (action==="get_policy") {
+        const superAdmin=await verifySuperAdminActor({db,brandId:brand,actor:body.actor || {}});
+        if (!superAdmin.ok) throw new ActivitySalesError("POLICY_FORBIDDEN",403,"只有最高管理者可讀取活動權限設定");
+        const snap=await policyRef(brand).get();
+        return res.status(200).json({ok:true,policy:normalizePolicy(snap.exists ? snap.data() || {} : {}),policyReady:snap.exists});
+      }
+      if (action==="approval_inbox") {
+        // Single brand-scoped, one-shot array-contains query: max 20 reads/request.
+        // The reviewer key is derived from the verified identity, NEVER from a client-supplied key.
+        const key=decisionKey(actor);
+        const snaps=await col(brand,"activity_campaign_approvals")
+          .where("activeReviewerKeys","array-contains",key).limit(20).get();
+        const items=snaps.docs.map((doc)=>summarizeApprovalInbox(doc.data() || {},actor,brand)).filter(Boolean);
+        return res.status(200).json({ok:true,inbox:items,limit:20,hasMore:snaps.size===20});
       }
       // Snapshot-consistent read-only transaction: a concurrent policy revision
       // cannot be mixed with a different campaign/approval state.
@@ -434,7 +452,8 @@ function createActivitySalesAuthorityFunctions({admin,db}) {
           if (draft.approvalPlan.mode==="none") status=approvedStatus(draft.approvalPlan);
           else {
             status="pending_approval";
-            tx.set(approvalRef(brand,versionId),{schemaVersion:ACTIVITY_SALES_SCHEMA_VERSION,brandId:brand,campaignId:id,versionId,status:"pending",currentStepIndex:0,steps,decisions:{},allowCreatorApproval:draft.approvalPlan.allowCreatorApproval,creator,createdAt:admin.firestore.FieldValue.serverTimestamp(),createdAtText:now},{merge:false});
+            const approvalState={schemaVersion:ACTIVITY_SALES_SCHEMA_VERSION,brandId:brand,campaignId:id,versionId,status:"pending",currentStepIndex:0,steps,decisions:{},allowCreatorApproval:draft.approvalPlan.allowCreatorApproval,creator,campaignTitle:draft.title,createdAt:admin.firestore.FieldValue.serverTimestamp(),createdAtText:now};
+            tx.set(approvalRef(brand,versionId),{...approvalState,activeReviewerKeys:activeReviewerKeys(approvalState,decisionKey)},{merge:false});
           }
           if (status === "published") {
             tx.set(publishedRef(brand,id),buildActivitySalesPublication({
@@ -457,7 +476,7 @@ function createActivitySalesAuthorityFunctions({admin,db}) {
           if (decisions[key]?.stepId===step.stepId) throw new ActivitySalesError("ALREADY_DECIDED",409,"此核准人員已完成本關操作");
           if (action==="return_for_changes") {
             decisions[key]={stepId:step.stepId,decision:"returned",actor,comment:text(body.comment,500),decidedAtText:now};
-            tx.set(aRef,{status:"returned",decisions,returnedAt:admin.firestore.FieldValue.serverTimestamp(),returnedAtText:now},{merge:true});
+            tx.set(aRef,{status:"returned",decisions,activeReviewerKeys:[],returnedAt:admin.firestore.FieldValue.serverTimestamp(),returnedAtText:now},{merge:true});
             tx.set(ref,{revision:next,status:"returned",updatedAt:admin.firestore.FieldValue.serverTimestamp(),updatedAtText:now,updatedBy:actor},{merge:true});
             tx.set(log,{...baseAudit,toStatus:"returned",revision:next,versionId:current.currentVersionId,stepId:step.stepId},{merge:false});
             output={status:"returned",revision:next}; return;
@@ -481,7 +500,10 @@ function createActivitySalesAuthorityFunctions({admin,db}) {
               campaignSnapshot:approvedSnapshot,publishedAtText:now,
             }),{merge:false});
           }
-          tx.set(aRef,{status:status==="pending_approval"?"pending":"approved",currentStepIndex:Math.min(nextIndex,(approval.steps || []).length),decisions,updatedAt:admin.firestore.FieldValue.serverTimestamp(),updatedAtText:now,...(status!=="pending_approval"?{approvedAt:admin.firestore.FieldValue.serverTimestamp(),approvedAtText:now}:{})},{merge:true});
+          const nextApproval={...approval,status:status==="pending_approval"?"pending":"approved",currentStepIndex:Math.min(nextIndex,(approval.steps || []).length),decisions};
+          tx.set(aRef,{status:nextApproval.status,currentStepIndex:nextApproval.currentStepIndex,decisions,
+            activeReviewerKeys:activeReviewerKeys(nextApproval,decisionKey),
+            updatedAt:admin.firestore.FieldValue.serverTimestamp(),updatedAtText:now,...(status!=="pending_approval"?{approvedAt:admin.firestore.FieldValue.serverTimestamp(),approvedAtText:now}:{})},{merge:true});
           tx.set(ref,{revision:next,status,updatedAt:admin.firestore.FieldValue.serverTimestamp(),updatedAtText:now,updatedBy:actor,...(status==="published"?{publishedAt:admin.firestore.FieldValue.serverTimestamp(),publishedAtText:now,publishedBy:actor}:{})},{merge:true});
           tx.set(log,{...baseAudit,toStatus:status,revision:next,versionId:current.currentVersionId,stepId:step.stepId},{merge:false});
           output={status,revision:next,currentStepIndex:Math.min(nextIndex,(approval.steps || []).length)}; return;

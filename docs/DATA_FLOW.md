@@ -3062,3 +3062,9 @@ No listener, broad query, or polling was added.
 
 ## Activity Sales Phase 1C-1 管理讀取（isolated feature）
 第一線展示仍使用 `activity_sales_publications` scoped query。管理端與展示端分離：管理員手動輸入 campaign ID → `getActivitySalesWorkspace` → 驗證 brand/identity/device/credential → 在同一唯讀 transaction 中讀 `activity_sales_policy/current` → 僅 `get_campaign` 才讀該 ID 的 `activity_campaigns` 文件 → 若待審再讀對應單筆 `activity_campaign_approvals` → 回傳有限權限旗標與獲授權草稿。無私有 listener、無輪詢、無跨品牌集合搜尋。資料修改／審核一律呼叫既有 `manageActivityCampaign` transaction/OCC writer。Phase 2 日報整合不在本批。
+
+## Activity Sales Phase 1C-2（隔離）
+- `submit_for_approval` → campaign/version/approval 同 transaction 建立；approval 額外寫入已解析目前關卡的 `activeReviewerKeys` 及展示用 `campaignTitle`。
+- `approve`（未完成關卡）→ 同 transaction 從當前 Inbox 排除已決議者；完成關卡則切換下一步，重算可審人員 key；`return_for_changes` 或最終核准清空 active key。
+- `getActivitySalesWorkspace: approval_inbox` → 單次、單品牌、`array-contains`/limit(20)，後端過濾與最小資料序列化；點擊某筆才沿 Phase 1C-1 `get_campaign` 3-doc read path 載入詳細資料。
+- `getActivitySalesWorkspace: get_policy` → 新鮮最高管理者驗證 → 本品牌 policy/current 1 筆讀取；`manageActivitySalesPolicy` 用既有 revision OCC 寫入。

@@ -3524,3 +3524,8 @@ No new Firestore collection or document type was introduced.
 
 ## Activity Sales Phase 1C-1（feature only）
 不新增 Firestore collection 或 index。`getActivitySalesWorkspace` 後端按品牌讀取現有單筆資料：CYJ `artifacts/default-app-id/public/data/activity_sales_policy/current`、`activity_campaigns/{campaignId}`、必要時 `activity_campaign_approvals/{currentVersionId}`；安妞／伊啵則為 `brands/{brandId}` 下面對應 collections。Browser Rules 對以上私有 collections 維持 read/write false。活動管理頁不會直接訂閱 Firestore。後端讀取的活動 / 審核文件必須有與所選品牌、ID、version 一致的識別欄位，不符合即拒絕。正式 `daily_reports` 等業績 collection 不變。
+
+## Activity Sales Phase 1C-2 approval inbox（隔離 feature）
+- `CYJ`: `artifacts/default-app-id/public/data/activity_campaign_approvals/{versionId}`；`anniu / yibo`: `brands/{brandId}/activity_campaign_approvals/{versionId}`。
+- 新的 approval 欄位：`activeReviewerKeys: string[]`（目前關卡尚未決議且符合建立者自核設定的帳號摘要 key）、`campaignTitle: string`（提交時標題快照）。不寫正式 Firestore、不補歷史。
+- 單一欄位 `array-contains` 查詢（limit 20，預設單欄索引），不新增複合索引、listener 或週期掃描；資料仍由 Backend 管控，不將 private approval 集合 Browser-open。

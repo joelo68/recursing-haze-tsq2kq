@@ -1,8 +1,9 @@
-import React, { useMemo, useState } from "react";
+import React, { useEffect, useMemo, useState } from "react";
 import SmartDatePicker from "./SmartDatePicker";
 import { auth } from "../config/firebase";
 import { ACTIVITY_SALES_DEV_MODE, resolveActivitySalesDevFunctionUrl } from "../config/runtimeEnvironment";
 import { draftToEditor, editorToDraft, emptyDraft, pricingWarnings } from "../utils/activitySalesEditor";
+import ActivitySalesPolicyPanel from "./ActivitySalesPolicyPanel";
 
 const WORKSPACE_URL = "https://us-central1-cyjsituation-analysis.cloudfunctions.net/getActivitySalesWorkspace";
 const CAMPAIGN_URL = "https://us-central1-cyjsituation-analysis.cloudfunctions.net/manageActivityCampaign";
@@ -36,6 +37,9 @@ function RowSection({title,children}) {
 
 export default function ActivitySalesManagementView({brandId,deviceId}) {
   const [credentialPassword,setCredentialPassword]=useState("");
+  const [inbox,setInbox]=useState([]);
+  const [inboxMeta,setInboxMeta]=useState(null);
+  const [policyVisible,setPolicyVisible]=useState(false);
   const [capabilities,setCapabilities]=useState(null);
   const [campaignId,setCampaignId]=useState("");
   const [lookupId,setLookupId]=useState("");
@@ -47,6 +51,10 @@ export default function ActivitySalesManagementView({brandId,deviceId}) {
   const [message,setMessage]=useState("");
   const [reviewComment,setReviewComment]=useState("");
   const [hasUnsavedChanges,setHasUnsavedChanges]=useState(false);
+  // Never retain a different brand's private campaign/policy on a brand switch.
+  useEffect(()=>{setCredentialPassword("");setCapabilities(null);setInbox([]);setInboxMeta(null);
+    setRecord(null);setCampaignId("");setLookupId("");setForm(emptyForm());setHasUnsavedChanges(false);
+    setPolicyVisible(false);setError("");setMessage("");},[brandId]);
   const warnings=useMemo(()=>pricingWarnings(form),[form]);
   const mutateForm=(mutator)=>{setForm((current)=>mutator(current));setHasUnsavedChanges(true);};
   const patch=(key,value)=>mutateForm((f)=>({...f,[key]:value}));
@@ -86,6 +94,10 @@ export default function ActivitySalesManagementView({brandId,deviceId}) {
     catch(err) {setError(`${err?.message || "操作未完成"}${err?.code?.includes("CONFLICT") ? "；請重新載入活動後再操作。" : ""}`);}
     finally {setBusy(false);}
   }
+  const refreshInbox=()=>perform("已更新我的待核准活動",async()=>{
+    const result=await call(WORKSPACE_URL,"approval_inbox");
+    setInbox(result.inbox || []);setInboxMeta({limit:result.limit,hasMore:result.hasMore});
+  });
   const refreshCapabilities=()=>perform("已確認管理權限",async()=>{
     const result=await call(WORKSPACE_URL,"capabilities");
     setCapabilities(result.capabilities);
@@ -119,6 +131,9 @@ export default function ActivitySalesManagementView({brandId,deviceId}) {
   const action=(name,label,comment="")=>perform(`${label}完成，已重新讀取最新狀態`,async()=>{
     if (!record) throw new Error("請先建立或載入活動");
     const result=await call(CAMPAIGN_URL,name,{campaignId,expectedRevision:record.revision,comment});
+    if (["approve","return_for_changes"].includes(name)) {
+      setInbox((current)=>current.filter((item)=>item.campaignId!==campaignId));
+    }
     try {
       await loadCampaign(campaignId);
     } catch (err) {
@@ -152,6 +167,28 @@ export default function ActivitySalesManagementView({brandId,deviceId}) {
       {!!capabilities?.groups?.length && <p className="mt-2 text-[11px] text-stone-500">可用群組：{capabilities.groups.map((g)=>`@${g.groupId}（${g.label}）`).join("、")}</p>}
     </div>
 
+    <section className="rounded-2xl border border-stone-200 bg-white p-4">
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <div><h4 className="text-sm font-black text-stone-800">我的待核准活動</h4>
+          <p className="mt-1 text-[11px] text-stone-500">只查詢本人目前關卡，單次最多 20 筆；不會持續監聽或讀取其他管理者的私人草稿。</p></div>
+        <button type="button" className={smallButton} disabled={busy} onClick={refreshInbox}>手動更新待辦</button>
+      </div>
+      {inbox.length>0 ? <div className="mt-3 grid gap-2 sm:grid-cols-2">{inbox.map((item)=><button
+        key={item.versionId} type="button" disabled={busy || hasUnsavedChanges} onClick={()=>perform("已開啟待核准活動",()=>loadCampaign(item.campaignId))}
+        className="rounded-xl border border-rose-100 bg-rose-50/40 p-3 text-left text-xs hover:bg-rose-50 disabled:opacity-50">
+          <div className="font-black text-stone-800">{item.title}</div>
+          <div className="mt-1 text-stone-500">{item.campaignId} · {item.stepLabel}（第 {item.stepIndex+1}/{item.stepCount} 關）</div>
+        </button>)}</div> : inboxMeta && <p className="mt-3 text-xs text-stone-500">目前沒有屬於您的待核准活動。</p>}
+      {inboxMeta?.hasMore && <p className="mt-2 text-xs text-amber-700">目前僅載入前 20 筆，仍可能有其他待辦；此畫面未提供全品牌掃描。</p>}
+      {hasUnsavedChanges && <p className="mt-2 text-xs text-amber-700">請先儲存或捨棄目前草稿，才能從 Inbox 切換活動。</p>}
+    </section>
+    <section className="rounded-2xl border border-stone-200 bg-white p-4">
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <div><h4 className="text-sm font-black">活動權限 Policy（最高管理者）</h4><p className="mt-1 text-[11px] text-stone-500">需重新驗證最高管理者身分，修改採 revision OCC。</p></div>
+        <button type="button" className={smallButton} onClick={()=>setPolicyVisible((v)=>!v)}>{policyVisible?"收起權限設定":"開啟權限設定"}</button>
+      </div>
+      {policyVisible && <ActivitySalesPolicyPanel key={brandId} request={call} busy={busy} setBusy={setBusy} />}
+    </section>
     <div className="flex flex-wrap items-end gap-2 rounded-2xl border border-stone-200 bg-white p-4">
       <label className="min-w-0 flex-1 text-xs font-semibold">依活動代碼開啟 <input className={`${tones} mt-2 block w-full`} value={lookupId} onChange={(e)=>setLookupId(e.target.value)} placeholder="例如：brand_october_campaign" /></label>
       <button type="button" className={smallButton} disabled={busy} onClick={lookupCampaign}>載入單檔活動</button>

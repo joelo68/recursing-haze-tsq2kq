@@ -5464,3 +5464,9 @@ Backend endpoints：
 - `src/components/ActivitySalesCenterView.jsx`：第一線/管理工作台切換；`src/App.jsx` 只傳遞已信任裝置 ID。
 - `src/utils/activitySalesEditor.js`：草稿表單轉換、核准選擇器與金額歸屬預檢。
 - `tests/activitySalesWorkspaceAccess.test.js`、`tests/activitySalesEditor.test.js`：讀取權限 / UI serialization regression。
+
+## Activity Sales Phase 1C-2 隔離 owner
+- `functions/activitySalesApprovalInbox.js`：待核准人員 key／索引生成／安全最小摘要。
+- `functions/activitySalesAuthority.js`：`getActivitySalesWorkspace` `approval_inbox/get_policy`；approval mutation transaction 同步更新目前可審 key。
+- `src/components/ActivitySalesPolicyPanel.jsx`：最高管理者政策表單／revision OCC UI。
+- `src/components/ActivitySalesManagementView.jsx`：按需載入本人的 Inbox、切換品牌清除私人狀態。
