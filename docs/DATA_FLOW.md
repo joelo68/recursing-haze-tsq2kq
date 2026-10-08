@@ -3091,3 +3091,17 @@ No listener, broad query, or polling was added.
 
 ## Activity Sales Phase 2A-3 — explicit attribution entry (feature only)
 store／therapist 在 `InputView` 的隔離面板手動載入本品牌目前正式活動（公開 projection、<=30 筆）→ 選擇活動 → fresh password + Backend `getActivitySalesAttributionStatus` 讀同一日/帳號/version 的單一私有摘要 → `UNCONFIRMED` 可自行確認 0 或登錄一筆套組成交，`HAS_SALES` 只能按新 revision 再登錄，`CONFIRMED_ZERO` 封鎖寫入 → Backend `writeActivitySalesAttribution` 新一輪 auth/device/credential 身分與 transaction OCC 驗證 → create immutable sale/audit + set private day summary。由操作者填寫穩定交易識別碼防止同一帳號跨頁重複計算，網路不明確保留同一 request ID 供重試，idempotent 結果要求重新查詢。沒有任何 `InputView` 正式日報 `setDoc` 修改，所有歸屬都是非加總 (`formalRevenueDelta=0`)。無自動額外 reads、polling、listener 或 Summary/Ranking trigger。
+
+## Activity Sales 2A-4R1：歸屬覆核（feature-only，非營收 Writer）
+
+```text
+店經理 store account（App Identity + Trusted Device + fresh credential）
+→ Backend store_account_data.stores 驗證店別（不信任 Browser storeName）
+→ therapist master + 正式個人日報 + 當前 publication + immutable version
+→ 單一歸屬摘要（HAS_SALES / CONFIRMED_ZERO / UNCONFIRMED）
+→ inspect：單筆 read-only；review：transaction OCC 比對歸屬修訂、日報更新秒/奈秒版本、review 修訂
+→ activity_sales_attribution_reviews + immutable activity_sales_attribution_review_audit
+→ 原日報、activity_sales_attribution_sales、Summary/Ranking/正式營收均不變
+```
+
+不是即時監聽或清單查詢；未覆核、目前有效覆核、過期覆核在後端分別回 `UNREVIEWED` / `CURRENT` / `STALE`。已覆核不等於已入帳/已關帳，退款與更正流程仍未啟用。

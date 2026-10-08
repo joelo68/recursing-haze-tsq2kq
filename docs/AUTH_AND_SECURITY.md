@@ -1750,3 +1750,9 @@ Consumer trust 仍會再次核對 current Lifecycle / Reporting Calendar / Syste
 
 ## Activity Sales Phase 2A-3 — Client attribution entry boundary (feature only)
 `ActivitySalesAttributionEntryForm.jsx` 只在本機 Activity DEV 模式顯示，使用者必須先透過 Phase 2A-2 重新驗證後的單日活動狀態取得 revision。每次寫入另帶 Firebase Application Identity token、信任裝置、目前帳號密碼、role/account/brand 及 immutable campaign/version；Backend `writeActivitySalesAttribution` 仍獨立重新驗證 master/credential、存在的本人日報、目前 publication/套組及 OCC transaction。Browser 不可直接寫入私人歸屬集合，也不新增 Rules 授權。重複送出保留人工核對的穩定交易識別碼作為 immutable saleId（並非 POS 自動對帳），歸屬結果不可直接增列正式日報營收。零成交為有後果的明確確認，不允許在本功能改成有成交；不提供更正/退款/主管覆核入口。
+
+## Activity Sales Phase 2A-4R1 店經理覆核安全邊界（isolated branch）
+
+`manageActivitySalesAttributionReview` 驗證 Firebase Application Identity claim 與 `actor` brand/role/account 完全相等、Trusted Device、即時密碼，再以 `store_account_data.stores` 驗證門市。**店經理是 `store` 身分，不是 `manager`（區長）**。管理師 master 必須仍活躍且屬該門市；缺報、跨品牌、不同公開版本、非法選店均拒絕。
+
+覆核是獨立證明而非更動成交：`inspect` 限單一精確身分的 read-only transaction，`review` 在 revision OCC 下寫 1 個 review doc + 1 個 immutable audit。對資料已重上報的覆核，以 `therapist_daily_reports.updateTime` 秒/奈秒及 `activity_sales_daily_attributions.revision` 判定 `STALE`。瀏覽器對兩個私人 review collections 在 CYJ legacy 與 brands namespace 都 `read/write=false`，generic fallback 同步排除。沒有查詢全店所有管理師的權限入口、沒有退款／更正 API。

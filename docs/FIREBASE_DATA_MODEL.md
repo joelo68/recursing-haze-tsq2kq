@@ -3557,3 +3557,12 @@ No new Firestore collection or document type was introduced.
 
 ### Phase 2A-3 — activity attribution entry surface (feature only)
 僅建立現有 Phase 2A-1 私有歸屬集合的使用者操作入口；**無新 collection、index、Firestore Rules 或正式日報欄位**。每筆 sale 由操作者提供穩定、可核對的交易 `saleId`（此版本不與 POS 自動對帳），並使用其 SHA-256 `saleHash` 及單日/活動/version/account `dayHash`，revision + transaction/OCC 禁止同日並行覆寫。`CONFIRMED_ZERO` 明確 0/0、無資料 `UNCONFIRMED` 為 null/null；`HAS_SALES` 不可回寫成零。`formalRevenueDelta` 永遠為 0，正式 revenue writer 及 Summary 不變。CYJ legacy 與安妞／伊啵品牌 path 完全依 Phase 2A-1 model。
+
+## Activity Sales Phase 2A-4R1 private manager review（feature only）
+
+CYJ legacy 根路徑：`artifacts/default-app-id/public/data`；安妞／伊啵：`brands/{brandId}`。以下兩集合由 Backend service account 管理，Browser Rules 完全 deny：
+
+- `activity_sales_attribution_reviews/{summaryDocumentId}`：`schemaVersion=activity-sales-attribution-review-v1`、完整歸屬 identity（brand/campaign/version/role=therapist/account/reportDate/storeCore）、`reviewRevision`、`attributionRevision`、`reportUpdateVersion`（正式 report 的 Firestore updateTime 秒:九位奈秒）、`decision=verified|flagged`、enum `reason`、`reviewedByRole=store`、`reviewedByAccountId`、`formalRevenueDelta=0`、`updatedAt`。
+- `activity_sales_attribution_review_audit/{summaryDocumentId}_r{nextReviewRevision}`：`schemaVersion=activity-sales-attribution-review-audit-v1`，固定 revisionFrom/To、歸屬 revision、正式 report 版本及覆核者，transaction `create` 不覆寫。
+
+文件 ID 來自既有 `summaryDocumentId`，不含 Browser 任意 path。歸屬額仍只在 `activity_sales_daily_attributions`，活動成交事件仍 immutable。`review` 只改新的兩集合；當 `attributionRevision` 或 `reportUpdateVersion` 異動時，原 review 不再有效（`STALE`）。嚴格區分 `UNCONFIRMED` 與 `CONFIRMED_ZERO`。不新增 collection-group query 或 index；單操作 7 單文件讀與覆核 2 寫（另計 auth reads）。

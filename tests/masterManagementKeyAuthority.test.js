@@ -87,7 +87,10 @@ test("Firestore Rules block browser access to master_auth for legacy and new-bra
   );
   assert.ok(genericBrandFallback, "generic brand fallback must exist");
   assert.match(genericBrandFallback[1], /allow read, write:\s*if sameBrandIdentity\(brandId\)/);
-  assert.match(genericBrandFallback[1], /&& collectionName != 'settings'\s*;/);
+  // This is an AND guard: its position in the catch-all rule does not affect security.
+  // Require exactly one real conjunct inside the brand fallback, not a nearby comment.
+  const settingsExclusions = genericBrandFallback[1].match(/^\s*&& collectionName != 'settings';?\s*$/gm) || [];
+  assert.equal(settingsExclusions.length, 1, "generic brand fallback must exclude settings exactly once");
   assert.doesNotMatch(rules, /collectionName == 'settings' && document == 'master_auth'/);
 });
 

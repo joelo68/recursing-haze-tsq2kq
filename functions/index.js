@@ -183,6 +183,10 @@ exports.writeActivitySalesAttribution=createActivitySalesAttributionWriterFuncti
 const {createActivitySalesAttributionReaderFunctions}=require("./activitySalesAttributionReader");
 exports.getActivitySalesAttributionStatus=createActivitySalesAttributionReaderFunctions({admin,db}).getActivitySalesAttributionStatus;
 
+// Phase 2A-4R1: store-manager review authority, separate from immutable sales/formal reports.
+const {createActivitySalesAttributionReviewFunctions}=require("./activitySalesAttributionReview");
+exports.manageActivitySalesAttributionReview=createActivitySalesAttributionReviewFunctions({admin,db}).manageActivitySalesAttributionReview;
+
 // ==========================================
 // ★ P0-FINAL-1D-A1：Administrative Settings Authority
 // security_config / feature_flags / kpi_targets / system_version 的 Browser writer 收斂至 Backend。

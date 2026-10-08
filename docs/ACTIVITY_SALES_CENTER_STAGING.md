@@ -152,7 +152,7 @@ Frontend 顯示權限不等於 Backend 授權。
 - Firestore transaction 先讀本人的店／個人日報、正式活動 publication、該活動不可變 version、當日活動歸屬摘要及指定成交 ID；新增成交使用 immutable `create`，摘要 revision OCC，重複同 ID 同內容只回 idempotent，不重複計算。`CONFIRMED_ZERO` 與未回報不同；若已確認 0，後續成交須等更正工作流另行開發。
 - `activity_sales_daily_attributions`、`activity_sales_attribution_sales`、`activity_sales_attribution_audit` 都屬**全 Browser read/write DENY** 的私人 Backend collection；三品牌各自 namespace；不得透過 generic fallback 越權。
 - 本批不修改 `daily_reports`、`therapist_daily_reports`、Summary、Ranking、正式營收、任一既有 Firestore listener；不新增輪詢或跨品牌查詢。
-- 單次寫入核心 transaction：store 4–5 docs read，therapist 5–6 docs read；另有 Trusted Device/credential 讀取，首次成交 3 docs writes，零成交 2 docs writes；此為程式路徑估算，非實際計費量。
+- 單次寫入核心 transaction：store 4–5 docs read，therapist 5–7 docs read；另有 Trusted Device/credential 讀取，首次成交 3 docs writes，零成交 2 docs writes；此為程式路徑估算，非實際計費量。
 - Local Emulator 測試與 Mac 完整回歸 PASS 前，不得 commit/push；Phase 1～3 仍不得部署正式環境。`CURRENT_APP_VERSION=3.6.2` 不變。
 
 
@@ -174,3 +174,14 @@ Frontend 顯示權限不等於 Backend 授權。
 - `CONFIRMED_ZERO` 不允許直接轉有成交；`HAS_SALES` 可用最新 revision 新增不可變成交，但不得確認 0；更正／退款／特殊成交／刪除／店經理覆核仍不開通。
 - 無 Browser 私有 Firestore 讀寫，不增加 listener／polling／大型 query；一次手動讀活動清單最多 30、狀態讀單一摘要、一次 Backend writer 有限 transaction。`formalRevenueDelta=0`；不改正式 `daily_reports`/`therapist_daily_reports`、Summary/Ranking、Revenue。Production build 隱藏入口，Phase 1–3 **不得 Deploy**。
 - 本地契約/Reader/Writer/填報單元測試須通過；完整 CI、build、Rules 及三品牌 Firestore Emulator 需由 Mac feature worktree 執行後才可判定 `VALIDATED=YES`，未通過前不得 commit/push。
+
+# Phase 2A-4R1 — 店經理單管理師活動歸屬覆核（isolated feature）
+- Source Gate：`feature/activity-sales-center @ 1a5ea2dae0d20a197e1c58934f096f25d9ad80d3`；Production `main @ 36ee6eff1a198fc7b4d9ab33eee9068c3a882dcd`；`CURRENT_APP_VERSION=3.6.2` 不變。
+- `manager` 為區長，**店經理使用 `store` 角色**，憑 `store_account_data.stores` 的最新後端憑證與 Application Identity、Trusted Device 驗證。`manager` 不得直接視為店經理覆核；只允許核對同品牌、自己可管門市、已存在正式日報的 `therapist` 歸屬。
+- `manageActivitySalesAttributionReview` 僅提供明確 `subject` 的 `inspect`（唯讀）與 `review`（`verified`／`flagged` 固定理由碼）。每次核對 1 位管理師＋1 日期＋1 活動版本；不允許全品牌查詢、列表或 Browser 私有集合讀寫。前端覆核頁／列表本批尚未建立。
+- 覆核與不可變成交/歸屬**不同集合**：`activity_sales_attribution_reviews/{summaryId}` 存覆核狀態，`activity_sales_attribution_review_audit/{summaryId}_rN` `create` 永久稽核。Firebase Rules Browser 全 deny（CYJ legacy + Anniu/Yibo）。
+- 單一 transaction 依序讀管理師 master、正式管理師日報、目前活動發布投影、immutable version、歸屬摘要、舊覆核；覆核時只寫覆核狀態＋audit 共 2 筆，**不寫**正式日報、sale event、Summary、Ranking 或 Revenue。
+- 覆核必須綁定 **歸屬 revision + 正式日報 `updateTime` 秒/奈秒 token + review revision OCC**。管理師新增成交或日報重新上報後，`inspect` 會回 `STALE`；重複相同覆核可 idempotent，但不同審核者或決策需新的 review revision。`UNCONFIRMED` 不可覆核，`CONFIRMED_ZERO` 才是明確 0。
+- 只允許核對目前正式版本，不將新版 `UNCONFIRMED` 當作舊版 `CONFIRMED_ZERO`；正式活動換版須重新操作。批次不啟用退款、更正、取消、特殊成交、店經理列表、正式日報關帳或自動對帳。
+- 每次 `inspect`／`review` 固定 7 筆**同品牌單文件** transaction reads，另計認證/可信裝置 reads。`review` 另外寫 2 筆，無 listener / polling / collection-group query。此為邏輯估算，非實際計費。
+- 僅 `demo-drcyj-activity-sales` Mac Emulator 測試通過後可 commit/push feature；Phase 1–3 一律不得 Production Deploy。

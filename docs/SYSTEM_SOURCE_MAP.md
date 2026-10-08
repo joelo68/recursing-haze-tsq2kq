@@ -5523,3 +5523,16 @@ Backend endpoints：
 - `src/components/ActivitySalesAttributionStatusPanel.jsx`：Phase 2A-2 已驗證狀態查回後顯示 DEV-only 寫入介面、處理 revision 更新／idempotent 重新查詢。
 - `tests/activitySalesAttributionEntry.test.js`：三態、套組價格、非加總金額、OCC/回應認證及前端隔離 regression。
 - `src/components/InputView.jsx`、`functions/activitySalesAttributionWriter.js`、`functions/index.js`、`firestore.rules` **本批不更動**；分別沿用 Phase 2A-2 的 DEV 掛載、Phase 2A-1 的 Backend writer/Functions 與 Browser deny rules。
+
+## Activity Sales Phase 2A-4R1 店經理覆核（feature-only）
+
+- `functions/activitySalesAttributionReviewLogic.js`：覆核輸入、日報秒/奈秒版本、review revision / stale 判定及狀態驗證。
+- `functions/activitySalesAttributionReview.js`：單管理師 `inspect`／`review` Backend entry；Firebase Identity + Trusted Device + store credential 授權及 transaction，僅更新獨立 private reviews/audit。
+- `functions/index.js`：`manageActivitySalesAttributionReview` isolated export。
+- `src/config/runtimeEnvironment.js`：新增 DEV 模式此 endpoint 的 localhost whitelist 映射；Production 仍不部署。
+- `firestore.rules`：三品牌新的 review / review audit 私有集合及 generic fallback Browser deny。
+- `tests/activitySalesAttributionReview.test.js`：權限、OCC、無日報／零與未回報、stale、三品牌、非正式營收寫入。
+- `tests/activitySalesAttributionReviewEmulator.test.mjs`：Mac demo Firestore 三品牌真實 transaction OCC / stale / formal revenue regression。
+- `tests/activitySalesRulesEmulator.test.mjs`：新私有集合 CYJ / Anniu browser read/write deny。
+
+不修改 `daily_reports`、`therapist_daily_reports`、`activity_sales_attribution_sales` 的 Writer，不提供退款、更正入口或覆核前端清單。本次以最新 415 檔 commit archive 為 Source of Truth。
