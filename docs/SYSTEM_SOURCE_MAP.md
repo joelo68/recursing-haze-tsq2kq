@@ -5443,3 +5443,14 @@ Backend endpoints：
 - `manageActivityCampaign`
 - `tests/activitySalesRulesEmulator.test.mjs`：Activity Sales 同品牌 read / Browser write deny / cross-brand deny。
 - `tests/activitySalesAuthority.test.js`：release semantics、creator-approval feasibility、policy transaction guard、價格拆帳與 wiring。
+
+
+# Activity Sales Center Phase 1B（feature branch / staging only）
+- `functions/activitySalesPublishedProjection.js`：已發布內容白名單展示 projection。
+- `functions/activitySalesSessionBoundary.js`：Firebase identity 的品牌 / 角色 / 帳號與敏感 writer actor 一致性守門。
+- `functions/activitySalesAuthority.js`：publish / stop transaction 同步 projection，禁止發生 frontend/authority split-brain。
+- `firestore.rules`：私有 authority 寫入/讀取封鎖；公開投影同品牌唯讀。
+- `src/components/ActivitySalesCenterView.jsx`：dev-only 第一線查詢/詳情/試算（尚未接日報）。
+- `src/utils/activitySalesPublished.js`：scoped path、查詢與計算的 pure contracts。
+- `src/App.jsx`：僅當 Activity Sales demo flag 啟用時顯示 preview 入口。
+- `tests/activitySalesPublishedProjection.test.js`, `tests/activitySalesPublishedView.test.js`, `tests/activitySalesRulesEmulator.test.mjs`：投影、搜尋試算、Rules regression。

@@ -89,3 +89,12 @@ Frontend 顯示權限不等於 Backend 授權。
 本階段不部署正式 Functions / Rules。
 - Phase 1A 尚未啟用自動排程 publisher；`scheduled_after_approval` 只允許到時後由正式 publisher 動作放行，絕不提前發布。
 - Activity Sales Rules 另以 demo project Emulator regression 驗證同品牌唯讀、Browser write deny、跨品牌 deny。
+
+
+# Phase 1B 第一線唯讀投影（isolated feature）
+- Backend 每次成功 `published`，在同一 Firestore transaction 寫入 `activity_sales_publications/{campaignId}`；stop 時同 transaction 移除，預防狀態與展示分離。
+- Private collections（policy/campaigns/versions/approvals/audit） Browser read/write 一律 deny；第一線只讀已發布白名單投影。
+- 展示資料明確不含審核者清單、建立者登入身分、審核歷程、未發布草稿或權限設定。
+- 發布詳情一次讀出套組/售價/拆帳/FAQ；前端列表只做有限範圍 `endDate >= today` 單次查詢，不開常駐 listener。
+- 本批第一線 UI 僅 `VITE_ACTIVITY_SALES_DEV=true` 顯示，沒有理解確認 / 日報成交 / 正式管理操作。
+- 不 deploy Production，CURRENT_APP_VERSION 維持 3.6.2。

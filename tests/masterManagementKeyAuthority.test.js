@@ -80,10 +80,14 @@ test("Firestore Rules block browser access to master_auth for legacy and new-bra
     rules,
     /match \/brands\/\{brandId\}\/settings\/\{settingId\}\/\{document=\*\*\}[\s\S]{0,900}settingId != 'master_auth'/,
   );
-  assert.match(
-    rules,
-    /match \/brands\/\{brandId\}\/\{collectionName\}\/\{document=\*\*\}[\s\S]{0,1400}collectionName != 'settings'/,
+  // Verify the actual generic brand fallback block rather than a fragile character offset.
+  // Adding new protected collections must not weaken (or falsely fail) settings protection.
+  const genericBrandFallback = rules.match(
+    /match \/brands\/\{brandId\}\/\{collectionName\}\/\{document=\*\*\} \{([\s\S]*?)\n    \}/,
   );
+  assert.ok(genericBrandFallback, "generic brand fallback must exist");
+  assert.match(genericBrandFallback[1], /allow read, write:\s*if sameBrandIdentity\(brandId\)/);
+  assert.match(genericBrandFallback[1], /&& collectionName != 'settings'\s*;/);
   assert.doesNotMatch(rules, /collectionName == 'settings' && document == 'master_auth'/);
 });
 

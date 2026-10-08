@@ -3513,3 +3513,11 @@ No new Firestore collection or document type was introduced.
 上述集合 Browser 同品牌唯讀；write 一律 Backend-only。
 - `activity_campaigns` current head 另保存 `releaseMode` / `scheduledPublishAtText`，讓排程發布在尚未加入 scheduler 前仍可 fail-closed，不會提早變成 published。
 - `activity_campaign_versions.approvalPlanSnapshot.policyRevision` 固定送審當下 policy revision；核准人員群組已解析為 immutable concrete-member snapshot。
+
+
+## Activity Sales Phase 1B：第一線展示投影（feature only）
+- CYJ：`artifacts/default-app-id/public/data/activity_sales_publications/{campaignId}`。
+- 安妞/伊啵：`brands/{brandId}/activity_sales_publications/{campaignId}`。
+- 每份文件從 immutable `activity_campaign_versions` 的 `campaignSnapshot` 白名單建立，欄位：`schemaVersion,brandId,campaignId,versionId,status,publishedAtText,title,shortSummary,startDate,endDate,storeScope,stores,customerTypes,tags,sellingPoints,suitableFor,notSuitableFor,discountRules,restrictions,salesTalk,faq,packages`。
+- `published` 原子 upsert；`stopped` 原子 delete；審核尚未完成 / approved / scheduled 尚未到期皆不會曝光。
+- 只有展示投影可 Browser 同品牌 read，所有活動私有 Authority collections 與展示投影的 Browser write 均 deny。

@@ -56,6 +56,8 @@ import {
 import { useAnnualDataAuthority } from "./hooks/useAnnualDataAuthority";
 import { useDashboardTherapistSummary } from "./hooks/useDashboardTherapistSummary.js";
 import { fetchPublishedReleaseIdentity, getLoadedEntryAsset } from "./utils/releaseIdentity.js";
+import { ACTIVITY_SALES_DEV_MODE } from "./config/runtimeEnvironment";
+const ActivitySalesCenterView = lazy(() => import("./components/ActivitySalesCenterView"));
 
 // ==========================================
 // ★ 系統核心版本號 (終極動態快取版)
@@ -535,6 +537,7 @@ export default function App() {
   const [currentUser, setCurrentUser] = useState(null);
   const [loading, setLoading] = useState(true);
   const [activeView, setActiveView] = useState("dashboard");
+  const [activitySalesPreviewOpen, setActivitySalesPreviewOpen] = useState(false);
   const [dashboardViewMode, setDashboardViewMode] = useState("store");
   const [storeAnalysisSelectedStore, setStoreAnalysisSelectedStore] = useState("");
   const [auditType, setAuditType] = useState("daily");
@@ -4966,6 +4969,9 @@ export default function App() {
             <span className="text-stone-400 font-bold tracking-widest text-sm">系統模組載入中...</span>
           </div>
         }>
+          {ACTIVITY_SALES_DEV_MODE && activitySalesPreviewOpen ? (
+            <ActivitySalesCenterView key={currentBrandId} brandId={currentBrandId} />
+          ) : (<>
           {activeView === "dashboard" && canDirectorAccessView("dashboard") && <DashboardView />}
           {activeView === "daily" && canDirectorAccessView("daily") && <DailyView />}
           {activeView === "regional" && canDirectorAccessView("regional") && <RegionalView />}
@@ -5028,10 +5034,11 @@ export default function App() {
                 </div>
               )
           )}
+          </>)}
         </Suspense>
       </main>
     );
-  }, [activeView, auditType, canDirectorAccessView, canAccessStoreScheduleView, canAccessSmartForecastView, adminCredentialSourceState, currentBrandId]);
+  }, [activeView, auditType, canDirectorAccessView, canAccessStoreScheduleView, canAccessSmartForecastView, adminCredentialSourceState, currentBrandId, activitySalesPreviewOpen]);
 
   if (loading) return <div className="min-h-screen flex flex-col items-center justify-center bg-[#F9F8F6]"><Loader2 className="w-16 h-16 animate-spin text-stone-400 mb-4" /><p className="animate-pulse text-stone-500 font-bold tracking-wider">Loading DRCYJ Cloud...</p></div>;
   
@@ -5395,6 +5402,11 @@ if (isUpdating) {
 
       <div className={`flex min-h-screen bg-[#F9F8F6] text-stone-600 font-sans selection:bg-stone-200 selection:text-stone-800 overflow-x-hidden transition-all duration-300 ${!isOnline ? 'mt-9' : 'mt-0'} ${isLowPowerMode ? 'pb-24' : ''}`}>
         <Sidebar activeView={activeView} setActiveView={handleProtectedSetActiveView} isSidebarOpen={isSidebarOpen} setSidebarOpen={setSidebarOpen} user={user} userRole={userRole} onLogout={() => handleLogout()} permissions={permissions} currentUser={currentUser} canAccessView={canDirectorAccessView} />
+        {ACTIVITY_SALES_DEV_MODE && <button type="button" onClick={() => setActivitySalesPreviewOpen((open) => !open)}
+          className="fixed bottom-20 right-3 z-[100] rounded-full border border-rose-200 bg-white px-4 py-2 text-xs font-black text-rose-700 shadow-xl hover:bg-rose-50"
+          aria-label={activitySalesPreviewOpen ? "返回原系統畫面" : "開啟活動銷售中心本機預覽"}>
+          {activitySalesPreviewOpen ? "返回原系統" : "活動銷售中心 · DEV"}
+        </button>}
         <div className={`flex-1 flex flex-col transition-all duration-500 w-full max-w-full ${isSidebarOpen ? "md:ml-64" : "md:ml-20"} ml-0`}>
           <header className="bg-white/80 backdrop-blur-md border-b border-stone-200 sticky top-0 z-40 px-4 md:px-8 py-3 md:h-20 shadow-sm shadow-stone-200/50 shrink-0 transition-all">
             {/* Desktop Header */}

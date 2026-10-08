@@ -1708,3 +1708,10 @@ Consumer trust 仍會再次核對 current Lifecycle / Reporting Calendar / Syste
 - Browser 對 Activity Sales authority collections 全部禁止寫入。
 - Campaign mutation 在同一 transaction 內讀取 current Activity Sales policy，再做 creator / direct publisher / publisher 授權，避免 policy 變更 race 使用 stale authority。
 - `allowCreatorApproval=false` 對 `all` quorum 採 fail-closed：只要該步驟包含建立者即拒絕送審，避免形成永遠無法完成的審核步驟。
+
+
+## Activity Sales Phase 1B 讀權限收斂（feature only）
+- `activity_sales_policy`, `activity_campaigns`, `activity_campaign_versions`, `activity_campaign_approvals`, `activity_sales_audit`：Browser read/write 全部 deny，不能透過同品牌登入繞過管理權限看到未發布內容。
+- `activity_sales_publications`：僅已通過正式 Application Identity 的同品牌用戶可 read；write deny；CYJ legacy 路徑同等保護。
+- 發布/停止透過 Backend transaction 同步刷新展示投影；不依賴 UI 的條件過濾代替 Security。
+- Backend 寫入 additionally 比對 Auth custom claims（brandId / roleId / accountId）與重新驗證的 actor，跨品牌/跨帳號 Token 一律拒絕。

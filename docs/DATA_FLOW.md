@@ -3055,3 +3055,7 @@ No listener, broad query, or polling was added.
 - 無日報成交 writer。
 - Campaign mutation：`Trusted Application Actor → transaction read current policy + campaign → OCC → write campaign/version/approval/audit`。
 - `scheduled_after_approval`：Phase 1A 審核完成停在 approved；未到排程時間 publish action fail-closed。自動 scheduler 尚未加入。
+
+
+## Activity Sales Phase 1B 展示資料流（feature only）
+`manageActivityCampaign` → transaction 檢查 policy / OCC + 綁定 immutable version → published 時 `activity_sales_publications/{campaignId}` upsert → 第一線單次 scoped `getDocs` → 搜尋/套組試算；stop 時同 transaction delete 投影。未審核/未到時不產生展示投影。

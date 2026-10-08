@@ -1,5 +1,7 @@
 const crypto = require("crypto");
 const { onRequest } = require("firebase-functions/v2/https");
+const { buildActivitySalesPublication } = require("./activitySalesPublishedProjection");
+const { assertActivitySalesSessionActor } = require("./activitySalesSessionBoundary");
 const {
   getBrandCollection,
   requireFirebaseRequestAuth,
@@ -247,6 +249,7 @@ function actorSnapshot(check = {}) {
   return {roleId:text(check.actorRole,40),accountId:text(check.actorAccountId,160),name:text(check.actorName,120)};
 }
 
+
 function createActivitySalesAuthorityFunctions({admin,db}) {
   const col=(brand,name)=>getBrandCollection(db,brand,name);
   const policyRef=(brand)=>col(brand,"activity_sales_policy").doc("current");
@@ -254,10 +257,12 @@ function createActivitySalesAuthorityFunctions({admin,db}) {
   const versionRef=(brand,id)=>col(brand,"activity_campaign_versions").doc(id);
   const approvalRef=(brand,id)=>col(brand,"activity_campaign_approvals").doc(id);
   const auditRef=(brand)=>col(brand,"activity_sales_audit").doc();
+  const publishedRef=(brand,id)=>col(brand,"activity_sales_publications").doc(id);
 
   async function verifiedActor(req,brand,rawActor) {
     const auth=await requireFirebaseRequestAuth(req,admin);
     if (!auth.ok) throw new ActivitySalesError("AUTH_EXPIRED",401,"登入狀態已失效，請重新登入");
+    assertActivitySalesSessionActor(auth,brand,rawActor || {});
     const checked=await verifyTrustedApplicationActor({db,brandId:brand,actor:rawActor || {},allowedRoles:[]});
     if (!checked.ok) throw new ActivitySalesError("ACTOR_NOT_TRUSTED",403,"此操作需要已信任裝置與目前帳號驗證");
     return checked;
@@ -269,6 +274,7 @@ function createActivitySalesAuthorityFunctions({admin,db}) {
       if (!brand) throw new ActivitySalesError("BRAND_INVALID",400,"不支援的品牌");
       const auth=await requireFirebaseRequestAuth(req,admin);
       if (!auth.ok) throw new ActivitySalesError("AUTH_EXPIRED",401,"登入狀態已失效，請重新登入");
+      assertActivitySalesSessionActor(auth,brand,body.actor || {});
       const adminCheck=await verifySuperAdminActor({db,brandId:brand,actor:body.actor || {}});
       if (!adminCheck.ok) throw new ActivitySalesError("POLICY_FORBIDDEN",403,"活動權限設定僅限已信任裝置上的最高管理者修改");
       const expected=revision(body.expectedRevision); const normalized=normalizePolicy(body.policy || {});
@@ -368,6 +374,11 @@ function createActivitySalesAuthorityFunctions({admin,db}) {
             status="pending_approval";
             tx.set(approvalRef(brand,versionId),{schemaVersion:ACTIVITY_SALES_SCHEMA_VERSION,brandId:brand,campaignId:id,versionId,status:"pending",currentStepIndex:0,steps,decisions:{},allowCreatorApproval:draft.approvalPlan.allowCreatorApproval,creator,createdAt:admin.firestore.FieldValue.serverTimestamp(),createdAtText:now},{merge:false});
           }
+          if (status === "published") {
+            tx.set(publishedRef(brand,id),buildActivitySalesPublication({
+              brandId:brand,campaignId:id,versionId,campaignSnapshot:draft,publishedAtText:now,
+            }),{merge:false});
+          }
           tx.set(ref,{revision:next,versionSequence:seq,currentVersionId:versionId,status,releaseMode:draft.approvalPlan.releaseMode,scheduledPublishAtText:draft.approvalPlan.scheduledPublishAt || "",updatedAt:admin.firestore.FieldValue.serverTimestamp(),updatedAtText:now,updatedBy:actor,...(status==="published"?{publishedAt:admin.firestore.FieldValue.serverTimestamp(),publishedAtText:now,publishedBy:actor}:{})},{merge:true});
           tx.set(log,{...baseAudit,toStatus:status,revision:next,versionId},{merge:false});
           output={status,revision:next,versionId}; return;
@@ -392,13 +403,21 @@ function createActivitySalesAuthorityFunctions({admin,db}) {
           decisions[key]={stepId:step.stepId,decision:"approved",actor,comment:text(body.comment,500),decidedAtText:now};
           const approvedActors=Object.values(decisions).filter((d)=>d?.stepId===step.stepId&&d?.decision==="approved").map((d)=>d.actor || {});
           const complete=step.quorum==="all" ? step.members.every((m)=>approvedActors.some((a)=>sameIdentity(m,a))) : approvedActors.length>=1;
-          let nextIndex=stepIndex; let status="pending_approval";
+          let nextIndex=stepIndex; let status="pending_approval"; let approvedSnapshot=null;
           if (complete) {
             nextIndex+=1;
             if (nextIndex>=(approval.steps || []).length) {
               const vSnap=await tx.get(versionRef(brand,current.currentVersionId));
-              status=approvedStatus(vSnap.data()?.campaignSnapshot?.approvalPlan || {});
+              if (!vSnap.exists) throw new ActivitySalesError("VERSION_NOT_FOUND",409,"活動正式版本遺失");
+              approvedSnapshot=vSnap.data()?.campaignSnapshot;
+              status=approvedStatus(approvedSnapshot?.approvalPlan || {});
             }
+          }
+          if (status === "published") {
+            tx.set(publishedRef(brand,id),buildActivitySalesPublication({
+              brandId:brand,campaignId:id,versionId:current.currentVersionId,
+              campaignSnapshot:approvedSnapshot,publishedAtText:now,
+            }),{merge:false});
           }
           tx.set(aRef,{status:status==="pending_approval"?"pending":"approved",currentStepIndex:Math.min(nextIndex,(approval.steps || []).length),decisions,updatedAt:admin.firestore.FieldValue.serverTimestamp(),updatedAtText:now,...(status!=="pending_approval"?{approvedAt:admin.firestore.FieldValue.serverTimestamp(),approvedAtText:now}:{})},{merge:true});
           tx.set(ref,{revision:next,status,updatedAt:admin.firestore.FieldValue.serverTimestamp(),updatedAtText:now,updatedBy:actor,...(status==="published"?{publishedAt:admin.firestore.FieldValue.serverTimestamp(),publishedAtText:now,publishedBy:actor}:{})},{merge:true});
@@ -414,6 +433,13 @@ function createActivitySalesAuthorityFunctions({admin,db}) {
               throw new ActivitySalesError("SCHEDULE_NOT_READY",409,"尚未到活動排程發布時間");
             }
           }
+          if (!current.currentVersionId) throw new ActivitySalesError("VERSION_NOT_FOUND",409,"活動正式版本遺失");
+          const vSnap=await tx.get(versionRef(brand,current.currentVersionId));
+          if (!vSnap.exists) throw new ActivitySalesError("VERSION_NOT_FOUND",409,"活動正式版本遺失");
+          tx.set(publishedRef(brand,id),buildActivitySalesPublication({
+            brandId:brand,campaignId:id,versionId:current.currentVersionId,
+            campaignSnapshot:vSnap.data()?.campaignSnapshot,publishedAtText:now,
+          }),{merge:false});
           tx.set(ref,{revision:next,status:"published",publishedAt:admin.firestore.FieldValue.serverTimestamp(),publishedAtText:now,publishedBy:actor,updatedAt:admin.firestore.FieldValue.serverTimestamp(),updatedAtText:now,updatedBy:actor},{merge:true});
           tx.set(log,{...baseAudit,toStatus:"published",revision:next,versionId:current.currentVersionId || ""},{merge:false});
           output={status:"published",revision:next}; return;
@@ -421,6 +447,8 @@ function createActivitySalesAuthorityFunctions({admin,db}) {
 
         if (action==="stop") {
           if (!canPublish || current.status!=="published") throw new ActivitySalesError("STOP_FORBIDDEN",403,"目前帳號或活動狀態不可停止活動");
+          // Remove frontline visibility atomically with authoritative stop.
+          tx.delete(publishedRef(brand,id));
           tx.set(ref,{revision:next,status:"stopped",stoppedAt:admin.firestore.FieldValue.serverTimestamp(),stoppedAtText:now,stoppedBy:actor,updatedAt:admin.firestore.FieldValue.serverTimestamp(),updatedAtText:now,updatedBy:actor},{merge:true});
           tx.set(log,{...baseAudit,toStatus:"stopped",revision:next,versionId:current.currentVersionId || ""},{merge:false});
           output={status:"stopped",revision:next}; return;
@@ -450,5 +478,5 @@ module.exports={
   ACTIVITY_SALES_SCHEMA_VERSION,POLICY_SCHEMA_VERSION,VERSION_SCHEMA_VERSION,
   ActivitySalesError,normalizePolicy,normalizeGroups,normalizeSelectors,expandSelectors,
   selectorsAllow,normalizeApprovalPlan,resolveApprovalSteps,actorInStep,validateCreatorApprovalPlan,
-  normalizeCampaignDraft,approvedStatus,decisionKey,createActivitySalesAuthorityFunctions,
+  normalizeCampaignDraft,approvedStatus,decisionKey,assertActivitySalesSessionActor,createActivitySalesAuthorityFunctions,
 };

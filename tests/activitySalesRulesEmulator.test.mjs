@@ -95,75 +95,45 @@ async function createClaimedUser({ brandId, accountId }) {
   return client;
 }
 
-const COLLECTIONS = [
-  "activity_sales_policy",
-  "activity_campaigns",
-  "activity_campaign_versions",
-  "activity_campaign_approvals",
-  "activity_sales_audit",
+const PRIVATE_COLLECTIONS = [
+  "activity_sales_policy", "activity_campaigns", "activity_campaign_versions",
+  "activity_campaign_approvals", "activity_sales_audit",
 ];
+const PUBLIC_COLLECTION = "activity_sales_publications";
 
-test("Activity Sales rules: same-brand application identity can read, browser writes and cross-brand access are denied", async () => {
+test("Activity Sales Phase 1B rules: private drafts denied; published projection same-brand read-only", async () => {
   let anniu = null;
   let cyj = null;
   let anonymous = null;
-
   try {
     await adminDb.recursiveDelete(adminDb.collection("brands"));
     await adminDb.recursiveDelete(adminDb.collection("artifacts"));
-
-    for (const collectionName of COLLECTIONS) {
-      await adminDb.doc(`brands/anniu/${collectionName}/sample`).set({ brandId: "anniu", value: 1 });
-      await adminDb.doc(`brands/yibo/${collectionName}/sample`).set({ brandId: "yibo", value: 2 });
-      await adminDb.doc(`artifacts/default-app-id/public/data/${collectionName}/sample`).set({ brandId: "cyj", value: 3 });
+    for (const coll of [...PRIVATE_COLLECTIONS, PUBLIC_COLLECTION]) {
+      await adminDb.doc(`brands/anniu/${coll}/sample`).set({ brandId: "anniu", value: 1 });
+      await adminDb.doc(`brands/yibo/${coll}/sample`).set({ brandId: "yibo", value: 2 });
+      await adminDb.doc(`artifacts/default-app-id/public/data/${coll}/sample`).set({ brandId: "cyj", value: 3 });
     }
-
     anniu = await createClaimedUser({ brandId: "anniu", accountId: "anniu-admin" });
-    for (const collectionName of COLLECTIONS) {
-      await expectAllowed(
-        getDoc(doc(anniu.db, "brands", "anniu", collectionName, "sample")),
-        `anniu ${collectionName} same-brand read`
-      );
-      await expectDenied(
-        setDoc(doc(anniu.db, "brands", "anniu", collectionName, "browser-write"), { value: 9 }),
-        `anniu ${collectionName} browser write`
-      );
-      await expectDenied(
-        getDoc(doc(anniu.db, "brands", "yibo", collectionName, "sample")),
-        `anniu ${collectionName} cross-brand read`
-      );
-      await expectDenied(
-        getDoc(doc(anniu.db, "artifacts", "default-app-id", "public", "data", collectionName, "sample")),
-        `anniu ${collectionName} CYJ legacy cross-brand read`
-      );
-    }
-
     cyj = await createClaimedUser({ brandId: "cyj", accountId: "cyj-admin" });
-    for (const collectionName of COLLECTIONS) {
-      await expectAllowed(
-        getDoc(doc(cyj.db, "artifacts", "default-app-id", "public", "data", collectionName, "sample")),
-        `CYJ ${collectionName} same-brand legacy read`
-      );
-      await expectDenied(
-        setDoc(doc(cyj.db, "artifacts", "default-app-id", "public", "data", collectionName, "browser-write"), { value: 9 }),
-        `CYJ ${collectionName} browser write`
-      );
-      await expectDenied(
-        getDoc(doc(cyj.db, "brands", "anniu", collectionName, "sample")),
-        `CYJ ${collectionName} cross-brand read`
-      );
-    }
-
     anonymous = makeClient("activity-anonymous");
     await signInAnonymously(anonymous.auth);
-    await expectDenied(
-      getDoc(doc(anonymous.db, "brands", "anniu", "activity_campaigns", "sample")),
-      "anonymous Activity Sales read"
-    );
-    await expectDenied(
-      getDoc(doc(anonymous.db, "artifacts", "default-app-id", "public", "data", "activity_campaigns", "sample")),
-      "anonymous CYJ Activity Sales read"
-    );
+
+    for (const coll of PRIVATE_COLLECTIONS) {
+      await expectDenied(getDoc(doc(anniu.db, "brands", "anniu", coll, "sample")), `anniu ${coll} private read`);
+      await expectDenied(getDoc(doc(cyj.db, "artifacts", "default-app-id", "public", "data", coll, "sample")), `CYJ ${coll} private read`);
+      await expectDenied(setDoc(doc(anniu.db, "brands", "anniu", coll, "browser-write"), { injected: true }), `anniu ${coll} private write`);
+      await expectDenied(setDoc(doc(cyj.db, "artifacts", "default-app-id", "public", "data", coll, "browser-write"), { injected: true }), `CYJ ${coll} private write`);
+    }
+
+    await expectAllowed(getDoc(doc(anniu.db, "brands", "anniu", PUBLIC_COLLECTION, "sample")), "anniu published read");
+    await expectAllowed(getDoc(doc(cyj.db, "artifacts", "default-app-id", "public", "data", PUBLIC_COLLECTION, "sample")), "CYJ published legacy read");
+    await expectDenied(setDoc(doc(anniu.db, "brands", "anniu", PUBLIC_COLLECTION, "browser-write"), { injected: true }), "anniu published browser write");
+    await expectDenied(setDoc(doc(cyj.db, "artifacts", "default-app-id", "public", "data", PUBLIC_COLLECTION, "browser-write"), { injected: true }), "CYJ published browser write");
+    await expectDenied(getDoc(doc(anniu.db, "brands", "yibo", PUBLIC_COLLECTION, "sample")), "anniu to yibo cross-brand read");
+    await expectDenied(getDoc(doc(cyj.db, "brands", "anniu", PUBLIC_COLLECTION, "sample")), "CYJ to anniu cross-brand read");
+    await expectDenied(getDoc(doc(anniu.db, "artifacts", "default-app-id", "public", "data", PUBLIC_COLLECTION, "sample")), "anniu to CYJ legacy cross-brand read");
+    await expectDenied(getDoc(doc(anonymous.db, "brands", "anniu", PUBLIC_COLLECTION, "sample")), "anonymous publication read");
+    await expectDenied(getDoc(doc(anonymous.db, "artifacts", "default-app-id", "public", "data", PUBLIC_COLLECTION, "sample")), "anonymous CYJ publication read");
   } finally {
     if (anonymous) await cleanupClient(anonymous);
     if (cyj) await cleanupClient(cyj);

@@ -463,18 +463,21 @@ service cloud.firestore {
         && settingId != 'store_account_data';
     }
 
-    // Activity Sales Center v1：Browser 同品牌唯讀；正式 writer 全部由 Backend authority。
-    match /brands/{brandId}/activity_sales_policy/{document=**} { allow read: if sameBrandIdentity(brandId); allow write: if false; }
-    match /brands/{brandId}/activity_campaigns/{document=**} { allow read: if sameBrandIdentity(brandId); allow write: if false; }
-    match /brands/{brandId}/activity_campaign_versions/{document=**} { allow read: if sameBrandIdentity(brandId); allow write: if false; }
-    match /brands/{brandId}/activity_campaign_approvals/{document=**} { allow read: if sameBrandIdentity(brandId); allow write: if false; }
-    match /brands/{brandId}/activity_sales_audit/{document=**} { allow read: if sameBrandIdentity(brandId); allow write: if false; }
+    // Activity Sales Center Phase 1B：草稿/審核/權限/稽核為 Backend private；僅已發布投影同品牌唯讀。
+    match /brands/{brandId}/activity_sales_policy/{document=**} { allow read, write: if false; }
+    match /brands/{brandId}/activity_campaigns/{document=**} { allow read, write: if false; }
+    match /brands/{brandId}/activity_campaign_versions/{document=**} { allow read, write: if false; }
+    match /brands/{brandId}/activity_campaign_approvals/{document=**} { allow read, write: if false; }
+    match /brands/{brandId}/activity_sales_audit/{document=**} { allow read, write: if false; }
 
-    match /artifacts/{appId}/public/data/activity_sales_policy/{document=**} { allow read: if cyjLegacyIdentity(appId); allow write: if false; }
-    match /artifacts/{appId}/public/data/activity_campaigns/{document=**} { allow read: if cyjLegacyIdentity(appId); allow write: if false; }
-    match /artifacts/{appId}/public/data/activity_campaign_versions/{document=**} { allow read: if cyjLegacyIdentity(appId); allow write: if false; }
-    match /artifacts/{appId}/public/data/activity_campaign_approvals/{document=**} { allow read: if cyjLegacyIdentity(appId); allow write: if false; }
-    match /artifacts/{appId}/public/data/activity_sales_audit/{document=**} { allow read: if cyjLegacyIdentity(appId); allow write: if false; }
+    match /artifacts/{appId}/public/data/activity_sales_policy/{document=**} { allow read, write: if false; }
+    match /artifacts/{appId}/public/data/activity_campaigns/{document=**} { allow read, write: if false; }
+    match /artifacts/{appId}/public/data/activity_campaign_versions/{document=**} { allow read, write: if false; }
+    match /artifacts/{appId}/public/data/activity_campaign_approvals/{document=**} { allow read, write: if false; }
+    match /artifacts/{appId}/public/data/activity_sales_audit/{document=**} { allow read, write: if false; }
+
+    match /brands/{brandId}/activity_sales_publications/{document=**} { allow read: if sameBrandIdentity(brandId); allow write: if false; }
+    match /artifacts/{appId}/public/data/activity_sales_publications/{document=**} { allow read: if cyjLegacyIdentity(appId); allow write: if false; }
 
     // 其他既有品牌資料維持原本登入後可讀寫；settings 整個 collection 由上方專用規則接管。
     match /brands/{brandId}/{collectionName}/{document=**} {
@@ -504,6 +507,7 @@ service cloud.firestore {
         && collectionName != 'activity_campaign_versions'
         && collectionName != 'activity_campaign_approvals'
         && collectionName != 'activity_sales_audit'
+        && collectionName != 'activity_sales_publications'
         && collectionName != 'settings';
     }
 
@@ -535,6 +539,7 @@ service cloud.firestore {
         && collectionName != 'activity_campaign_versions'
         && collectionName != 'activity_campaign_approvals'
         && collectionName != 'activity_sales_audit'
+        && collectionName != 'activity_sales_publications'
         && collectionName != 'global_settings';
     }
 
