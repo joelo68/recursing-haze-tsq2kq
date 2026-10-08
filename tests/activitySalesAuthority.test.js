@@ -109,3 +109,21 @@ test("Phase1A wires backend-only collections and dev route guards",()=>{
   }
   assert.match(runtime,/manageActivitySalesPolicy/); assert.match(runtime,/manageActivityCampaign/);
 });
+
+
+test("Phase 1C-3 requires an explicit timezone and rejects schedule after activity end",()=>{
+  assert.throws(()=>normalizeApprovalPlan({
+    mode:"none",releaseMode:"scheduled_after_approval",
+    scheduledPublishAt:"2026-10-08T10:00:00",
+  }),/排程發布需要有效的發布時間/);
+  const draft={title:"排程活動",startDate:"2026-10-01",endDate:"2026-10-08",
+    packages:[{packageId:"p1",name:"一組",salePrice:980,items:[
+      {itemId:"c1",name:"課程",quantity:1,attributedAmount:980},
+    ]}],approvalPlan:{mode:"none",releaseMode:"scheduled_after_approval",
+      scheduledPublishAt:"2026-10-09T01:00:00+08:00"}};
+  assert.throws(()=>normalizeCampaignDraft(draft),/排程發布時間不可晚於活動結束日期/);
+  assert.equal(normalizeCampaignDraft({
+    ...draft,approvalPlan:{...draft.approvalPlan,
+      scheduledPublishAt:"2026-10-08T10:00:00+08:00"},
+  }).approvalPlan.scheduledPublishAt,"2026-10-08T02:00:00.000Z");
+});

@@ -163,6 +163,18 @@ exports.manageActivitySalesPolicy = activitySalesAuthorityFunctions.manageActivi
 exports.manageActivityCampaign = activitySalesAuthorityFunctions.manageActivityCampaign;
 exports.getActivitySalesWorkspace = activitySalesAuthorityFunctions.getActivitySalesWorkspace;
 
+// Phase 1C-3: single-campaign Cloud Tasks scheduling + version-specific acknowledgement.
+// Feature-only staging; no Production deploy.
+const {createActivitySalesScheduledPublisherFunctions} = require("./activitySalesScheduledPublisher");
+const activitySalesScheduledFunctions = createActivitySalesScheduledPublisherFunctions({admin,db});
+exports.cyjCampaignScheduleTrigger = activitySalesScheduledFunctions.cyjCampaignScheduleTrigger;
+exports.brandCampaignScheduleTrigger = activitySalesScheduledFunctions.brandCampaignScheduleTrigger;
+exports.activitySalesScheduledPublish = activitySalesScheduledFunctions.activitySalesScheduledPublish;
+const {createActivitySalesAcknowledgementFunctions} = require("./activitySalesAcknowledgement");
+exports.acknowledgeActivitySalesPublication = createActivitySalesAcknowledgementFunctions({
+  admin,db,
+}).acknowledgeActivitySalesPublication;
+
 // ==========================================
 // ★ P0-FINAL-1D-A1：Administrative Settings Authority
 // security_config / feature_flags / kpi_targets / system_version 的 Browser writer 收斂至 Backend。

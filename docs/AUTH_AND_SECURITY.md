@@ -1723,3 +1723,9 @@ Consumer trust 仍會再次核對 current Lifecycle / Reporting Calendar / Syste
 - 待辦讀取入口僅由 Backend 驗證 Application Identity + 品牌 + 裝置 + 目前憑證後執行；`activeReviewerKeys` 不接受客戶端傳入，而是從已驗證帳號計算。Inbox 讀取限同品牌 `array-contains` 單次 20 筆；回應不包含 policy 全量、私有 approval 決策或審核人員名冊。
 - `get_policy` 將 Policy 群組成員等敏感資訊只提供予通過 `verifySuperAdminActor` 的最高管理者；寫入仍由既有 OCC transaction authority；前端 Rules 不新增 Policy read/write 授權。
 - 審核 inbox key 以提交時 resolved approver snapshot 為準；多核准者表態後在同一 transaction 更新，revision OCC 保護 campaign，避免重複核准與舊待辦殘留。
+
+## Activity Sales Phase 1C-3 — Backend 排程／理解確認邊界（feature only）
+- Cloud Tasks payload 僅攜帶品牌、campaignId、versionId；不信任 task payload 可直接發布。Task handler 在 Firestore transaction 內以當前 `approved` + `scheduled_after_approval` + immutable version 再驗證，已停止／取消／改版時 fail-closed。
+- 第一線理解確認透過 `acknowledgeActivitySalesPublication` HTTP Backend；每次重新驗證 Firebase Application Identity 的品牌、角色、帳號與 request actor 一致性，並驗證 Trusted Device 與當前密碼；前端不能直接寫入或讀取私人 acknowledgement。
+- `activity_sales_acknowledgements`（CYJ legacy path 與安妞／伊啵品牌 path）Browser read/write 全部 DENY，包含 generic collection fallback 排除。每人／每正式版本的 SHA-256 ID 與 transaction `create` 避免覆寫及重複確認；舊版不能當新版已理解。
+- Emulator 排程佇列只接受 `demo-drcyj-activity-sales` 且必須有 `CLOUD_TASKS_EMULATOR_HOST`，不允許誤用真實 Cloud Tasks。

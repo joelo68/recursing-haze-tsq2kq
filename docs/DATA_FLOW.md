@@ -3068,3 +3068,8 @@ No listener, broad query, or polling was added.
 - `approve`（未完成關卡）→ 同 transaction 從當前 Inbox 排除已決議者；完成關卡則切換下一步，重算可審人員 key；`return_for_changes` 或最終核准清空 active key。
 - `getActivitySalesWorkspace: approval_inbox` → 單次、單品牌、`array-contains`/limit(20)，後端過濾與最小資料序列化；點擊某筆才沿 Phase 1C-1 `get_campaign` 3-doc read path 載入詳細資料。
 - `getActivitySalesWorkspace: get_policy` → 新鮮最高管理者驗證 → 本品牌 policy/current 1 筆讀取；`manageActivitySalesPolicy` 用既有 revision OCC 寫入。
+
+## Activity Sales Phase 1C-3 — Event-driven 排程／理解確認（feature branch）
+- 審核流程或免審核送出將 scheduled campaign 寫成 `approved` → 品牌路徑的 Firestore onWrite 事件 → 對該 campaign/version 建立 Cloud Task（最長 25 日，長期排程接續下一個 task）→ due handler transaction 讀 campaign 1 筆、version 1 筆 → 以版本快照發布 `activity_sales_publications` + 更新狀態/revision + audit。不存在按分鐘掃全品牌的查詢。
+- 第一線開啟正式活動仍只讀該品牌 `activity_sales_publications` 的單次限量 query。選中活動後使用者輸入當前登入密碼、確認已閱讀 → HTTP Backend 重新驗證 session/device/credential → transaction 讀 publication 1 筆 + ack 1 筆 → `create` 本品牌 `activity_sales_acknowledgements/{ackHash}`。查詢本人狀態為同樣的 2 reads、0 writes。
+- 以上與 Phase 2 活動成交歸屬及每日業績寫入完全隔離，沒有重複加總金額；Storage/Firestore 位置按 `cyj` legacy 與 `brands/{anniu|yibo}` 獨立。

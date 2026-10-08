@@ -3529,3 +3529,9 @@ No new Firestore collection or document type was introduced.
 - `CYJ`: `artifacts/default-app-id/public/data/activity_campaign_approvals/{versionId}`；`anniu / yibo`: `brands/{brandId}/activity_campaign_approvals/{versionId}`。
 - 新的 approval 欄位：`activeReviewerKeys: string[]`（目前關卡尚未決議且符合建立者自核設定的帳號摘要 key）、`campaignTitle: string`（提交時標題快照）。不寫正式 Firestore、不補歷史。
 - 單一欄位 `array-contains` 查詢（limit 20，預設單欄索引），不新增複合索引、listener 或週期掃描；資料仍由 Backend 管控，不將 private approval 集合 Browser-open。
+
+## Activity Sales Phase 1C-3 — 排程與理解確認（feature branch only）
+- 現有 `activity_campaigns/{campaignId}`：`status=approved` + `releaseMode=scheduled_after_approval` + canonical UTC `scheduledPublishAtText` 為排程唯一權威；任務只攜帶 `brandId/campaignId/versionId`，不另建 second source of truth。
+- 新 collection `activity_sales_acknowledgements/{ackHash}`：`schemaVersion=activity-sales-acknowledgement-v1`、`brandId`、`campaignId`、`versionId`、`roleId`、`accountId`、`acknowledgedAt`、`acknowledgedAtText`。不可 update/delete，只有後端經正式身分/信任裝置/當前密碼授權後 `create`。
+- CYJ：`artifacts/default-app-id/public/data/activity_sales_acknowledgements/{ackHash}`；安妞：`brands/anniu/activity_sales_acknowledgements/{ackHash}`；伊啵：`brands/yibo/activity_sales_acknowledgements/{ackHash}`。Browser 對三個品牌的 acknowledgement 均無讀寫權限。
+- 不建立 activity-sales 全品牌常駐 query/index。排程提交由文件事件觸發，單次 due 任務 2 docs read + 3 docs write；理解確認單次 2 docs read + 0/1 doc write（皆為設計估算，非實測帳單）。

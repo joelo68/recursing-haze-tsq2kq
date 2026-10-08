@@ -28,11 +28,12 @@ test("role account and group selectors round trip, invalid selectors fail closed
   assert.throws(()=>textToSelectors("not a role"),/格式錯誤/);
   assert.throws(()=>textToSelectors("@bad/name"),/格式錯誤/);
 });
-test("scheduled publish is UTC-normalized; no hidden auto-publisher",()=>{
+test("scheduled publish converts Taipei wall time to UTC and rejects invalid dates",()=>{
   const editor=draftToEditor(emptyDraft());
   editor.approvalPlan.releaseMode="scheduled_after_approval";
   editor.approvalPlan.scheduledPublishAt="2026-10-15T10:30";
   const result=editorToDraft(editor);
-  assert.ok(Number.isFinite(Date.parse(result.approvalPlan.scheduledPublishAt)));
-  assert.throws(()=>editorToDraft({...editor,approvalPlan:{...editor.approvalPlan,scheduledPublishAt:"invalid"}}),/有效的排程/);
+  assert.equal(result.approvalPlan.scheduledPublishAt,"2026-10-15T02:30:00.000Z");
+  assert.throws(()=>editorToDraft({...editor,approvalPlan:{...editor.approvalPlan,scheduledPublishAt:"invalid"}}),/請輸入有效的台北時間/);
+  assert.throws(()=>editorToDraft({...editor,approvalPlan:{...editor.approvalPlan,scheduledPublishAt:"2026-02-30T10:30"}}),/排程發布的日期或時間無效/);
 });

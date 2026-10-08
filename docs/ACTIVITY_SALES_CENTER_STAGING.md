@@ -115,3 +115,13 @@ Frontend 顯示權限不等於 Backend 授權。
 - `get_policy` 僅最高管理者可讀完整品牌 Policy；其他登入帳號只能取得 Phase 1C-1 最小 capabilities。Policy 編輯透過既有 `manageActivitySalesPolicy`、`expectedRevision` OCC 更新；不開放 Browser 直接讀／寫 Policy。
 - 前端僅本機 Activity Sales DEV 模式顯示，且切換品牌時清空私人草稿及待辦；所有請求沿用 Application Identity、Trusted Device 與新鮮憑證驗證。
 - **未納入**排程 auto-publisher、第一線理解確認、日報歸屬、目標及 AI 功能；Production `main`、正式資料及 `CURRENT_APP_VERSION=3.6.2` 不變。
+
+# Phase 1C-3 — Event-driven 排程與正式版本理解確認（feature only）
+- `cyjCampaignScheduleTrigger` 與 `brandCampaignScheduleTrigger` 僅對活動文件的 `approved` 排程轉換建立**單活動 Cloud Tasks**，不開三品牌定時掃描、不加前端 listener/polling；`activitySalesScheduledPublish` 以 current campaign + immutable version transaction 做狀態與版本比對，再原子寫入 `activity_sales_publications`、campaign revision、audit。
+- Cloud Tasks 單次最多 30 日，本階段每次最多排到 25 日，較長排程以同一活動的下一個延遲任務接續；多次觸發／重試以已發布或已取消狀態拒絕重複寫入。排程日期採固定 `Asia/Taipei`，UI 的無時區時間會先轉成帶時區的 UTC ISO。
+- 排程工作不得繞過正式活動版本：當前品牌／活動 ID／版本／releaseMode／scheduledPublishAt 必須匹配；取消、停止、不同版本或過期時不建立新展示資料。人工 `publish` 的既有安全驗證仍維持。
+- `acknowledgeActivitySalesPublication` 用 Firebase Application Identity + Trusted Device + fresh credential 驗證；單次讀同品牌正式展示 1 doc + 使用者/版本確認 1 doc，確認時僅 `create` 一筆不可覆寫的 `activity_sales_acknowledgements`。新版必須重新確認；Browser Rules 封閉該 collection。
+- 第一線理解確認由使用者主動操作，沒有背景同步／全品牌掃描。理解確認不屬於活動成交、也不影響 `daily_reports` 正式營收。
+- 本機 `demo-drcyj-activity-sales` Emulator 必須由 CLI 設置 `CLOUD_TASKS_EMULATOR_HOST` 才允許佇列請求；若缺少則 fail-closed，**不得**發送到真實 Cloud Tasks。Cloud Tasks Emulator 與實際環境的派送重試語意不完全相同，未做 remote Staging/UAT 前不得宣稱 Production readiness。
+- Cloud Tasks 正式 Staging/Production 的 IAM、重試、queue 建立及監控必須在 Release Gate 另行審核；本批不部署任何遠端環境，不更動 `CURRENT_APP_VERSION=3.6.2`。
+- Functions + Cloud Tasks 的隔離端對端測試為 `tests/activitySalesScheduledFunctionsEmulator.test.mjs`，只允許在三項 Emulator 與 `demo-drcyj-activity-sales` 下執行；會在 Emulator 內寫入三個測試活動並確認三品牌都由排程發布。它不代表遠端 Staging 或正式環境已測試。

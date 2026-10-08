@@ -1,6 +1,8 @@
+const {activitySalesServerTimestamp} = require("./activitySalesFirestoreFieldValue");
 const crypto = require("crypto");
 const { onRequest } = require("firebase-functions/v2/https");
 const { buildActivitySalesPublication } = require("./activitySalesPublishedProjection");
+const { taipeiCalendarDate } = require("./activitySalesScheduleLogic");
 const { assertActivitySalesSessionActor } = require("./activitySalesSessionBoundary");
 const { workspaceAccess, presentWorkspaceCampaign } = require("./activitySalesWorkspaceAccess");
 const { activeReviewerKeys, summarizeApprovalInbox } = require("./activitySalesApprovalInbox");
@@ -45,7 +47,7 @@ const isoDate = (value = "") => {
 };
 const isoTimestamp = (value = "") => {
   const v = text(value, 80);
-  if (!v) return "";
+  if (!v || !/(?:Z|[+-]\d{2}:\d{2})$/.test(v)) return "";
   const ms = Date.parse(v);
   return Number.isFinite(ms) ? new Date(ms).toISOString() : "";
 };
@@ -224,6 +226,11 @@ function normalizeCampaignDraft(raw = {}) {
   const startDate=isoDate(raw.startDate);
   const endDate=isoDate(raw.endDate);
   if (!title || !startDate || !endDate || startDate > endDate) throw new ActivitySalesError("CAMPAIGN_INVALID",400,"活動名稱或期間不完整");
+  const plan=normalizeApprovalPlan(raw.approvalPlan || {});
+  if (plan.releaseMode==="scheduled_after_approval" &&
+      taipeiCalendarDate(Date.parse(plan.scheduledPublishAt)) > endDate) {
+    throw new ActivitySalesError("SCHEDULE_AFTER_END",400,"排程發布時間不可晚於活動結束日期");
+  }
   const packages=Array.isArray(raw.packages) ? raw.packages : [];
   if (!packages.length || packages.length > 40) throw new ActivitySalesError("PACKAGES_REQUIRED",400,"活動至少需要一個正式銷售套組");
   const storeScope=text(raw.storeScope,24)==="selected" ? "selected" : "all";
@@ -241,7 +248,7 @@ function normalizeCampaignDraft(raw = {}) {
     salesTalk:text(raw.salesTalk,2400),
     packages:packages.map(normalizePackage),
     faq:(Array.isArray(raw.faq)?raw.faq:[]).slice(0,80).map((f,i)=>({faqId:stableId(f.faqId || `faq_${i+1}`),question:text(f.question,240),answer:text(f.answer,1200)})).filter((f)=>f.faqId&&f.question&&f.answer),
-    approvalPlan:normalizeApprovalPlan(raw.approvalPlan || {}),
+    approvalPlan:plan,
   };
 }
 function approvedStatus(plan = {}) {
@@ -363,9 +370,9 @@ function createActivitySalesAuthorityFunctions({admin,db}) {
         const snap=await tx.get(ref); const current=snap.exists ? Number(snap.data()?.revision || 0) : 0;
         if (current!==expected) throw new ActivitySalesError("POLICY_CONFLICT",409,"活動權限設定已由其他管理者更新，請重新載入");
         const next=current+1; const now=new Date().toISOString();
-        result={...normalized,revision:next,updatedAt:admin.firestore.FieldValue.serverTimestamp(),updatedAtText:now,updatedBy:actorSnapshot(adminCheck)};
+        result={...normalized,revision:next,updatedAt:activitySalesServerTimestamp(admin),updatedAtText:now,updatedBy:actorSnapshot(adminCheck)};
         tx.set(ref,result,{merge:false});
-        tx.set(logRef,{schemaVersion:ACTIVITY_SALES_SCHEMA_VERSION,type:"policy",action:"update",brandId:brand,revision:next,actor:actorSnapshot(adminCheck),createdAt:admin.firestore.FieldValue.serverTimestamp(),createdAtText:now},{merge:false});
+        tx.set(logRef,{schemaVersion:ACTIVITY_SALES_SCHEMA_VERSION,type:"policy",action:"update",brandId:brand,revision:next,actor:actorSnapshot(adminCheck),createdAt:activitySalesServerTimestamp(admin),createdAtText:now},{merge:false});
       });
       return res.status(200).json({ok:true,policy:result});
     } catch(error) {
@@ -390,7 +397,7 @@ function createActivitySalesAuthorityFunctions({admin,db}) {
         const id=stableId(body.campaignId || generated.id);
         if (!id) throw new ActivitySalesError("CAMPAIGN_ID_INVALID",400,"活動代碼格式錯誤");
         const ref=campaignRef(brand,id); const log=auditRef(brand); const now=new Date().toISOString();
-        const payload={schemaVersion:ACTIVITY_SALES_SCHEMA_VERSION,brandId:brand,campaignId:id,revision:1,versionSequence:0,status:"draft",draft,createdAt:admin.firestore.FieldValue.serverTimestamp(),createdAtText:now,createdBy:actor,updatedAt:admin.firestore.FieldValue.serverTimestamp(),updatedAtText:now,updatedBy:actor};
+        const payload={schemaVersion:ACTIVITY_SALES_SCHEMA_VERSION,brandId:brand,campaignId:id,revision:1,versionSequence:0,status:"draft",draft,createdAt:activitySalesServerTimestamp(admin),createdAtText:now,createdBy:actor,updatedAt:activitySalesServerTimestamp(admin),updatedAtText:now,updatedBy:actor};
         await db.runTransaction(async(tx)=>{
           const policySnap=await tx.get(policyRef(brand));
           const existingSnap=await tx.get(ref);
@@ -402,7 +409,7 @@ function createActivitySalesAuthorityFunctions({admin,db}) {
           if (draft.approvalPlan.mode==="none" && !canDirect) throw new ActivitySalesError("DIRECT_PUBLISH_FORBIDDEN",403,"目前帳號不能設定免審核直接發布");
           if (existingSnap.exists) throw new ActivitySalesError("CAMPAIGN_EXISTS",409,"活動代碼已存在");
           tx.set(ref,payload,{merge:false});
-          tx.set(log,{schemaVersion:ACTIVITY_SALES_SCHEMA_VERSION,type:"campaign",action,brandId:brand,campaignId:id,revision:1,policyRevision:policy.revision,actor,createdAt:admin.firestore.FieldValue.serverTimestamp(),createdAtText:now},{merge:false});
+          tx.set(log,{schemaVersion:ACTIVITY_SALES_SCHEMA_VERSION,type:"campaign",action,brandId:brand,campaignId:id,revision:1,policyRevision:policy.revision,actor,createdAt:activitySalesServerTimestamp(admin),createdAtText:now},{merge:false});
         });
         return res.status(200).json({ok:true,campaign:payload});
       }
@@ -426,13 +433,13 @@ function createActivitySalesAuthorityFunctions({admin,db}) {
         }
 
         const next=currentRev+1; const now=new Date().toISOString();
-        const baseAudit={schemaVersion:ACTIVITY_SALES_SCHEMA_VERSION,type:"campaign",action,brandId:brand,campaignId:id,fromStatus:current.status,policyRevision:policy?.revision ?? null,actor,createdAt:admin.firestore.FieldValue.serverTimestamp(),createdAtText:now};
+        const baseAudit={schemaVersion:ACTIVITY_SALES_SCHEMA_VERSION,type:"campaign",action,brandId:brand,campaignId:id,fromStatus:current.status,policyRevision:policy?.revision ?? null,actor,createdAt:activitySalesServerTimestamp(admin),createdAtText:now};
 
         if (action==="update_draft") {
           if (!canCreate || !["draft","returned"].includes(current.status)) throw new ActivitySalesError("EDIT_FORBIDDEN",403,"目前狀態或帳號不可修改此活動");
           const draft=normalizeCampaignDraft(body.campaign || {});
           if (draft.approvalPlan.mode==="none" && !canDirect) throw new ActivitySalesError("DIRECT_PUBLISH_FORBIDDEN",403,"目前帳號不能設定免審核直接發布");
-          tx.set(ref,{revision:next,status:"draft",draft,updatedAt:admin.firestore.FieldValue.serverTimestamp(),updatedAtText:now,updatedBy:actor},{merge:true});
+          tx.set(ref,{revision:next,status:"draft",draft,updatedAt:activitySalesServerTimestamp(admin),updatedAtText:now,updatedBy:actor},{merge:true});
           tx.set(log,{...baseAudit,toStatus:"draft",revision:next},{merge:false});
           output={status:"draft",revision:next}; return;
         }
@@ -446,13 +453,13 @@ function createActivitySalesAuthorityFunctions({admin,db}) {
           const steps=resolveApprovalSteps(draft.approvalPlan,policy.groups);
           const creator=current.createdBy || actor;
           validateCreatorApprovalPlan(steps,creator,draft.approvalPlan.allowCreatorApproval);
-          const version={schemaVersion:VERSION_SCHEMA_VERSION,brandId:brand,campaignId:id,versionId,versionSequence:seq,campaignSnapshot:draft,approvalPlanSnapshot:{...draft.approvalPlan,resolvedSteps:steps,policyRevision:policy.revision},createdAt:admin.firestore.FieldValue.serverTimestamp(),createdAtText:now,createdBy:actor};
+          const version={schemaVersion:VERSION_SCHEMA_VERSION,brandId:brand,campaignId:id,versionId,versionSequence:seq,campaignSnapshot:draft,approvalPlanSnapshot:{...draft.approvalPlan,resolvedSteps:steps,policyRevision:policy.revision},createdAt:activitySalesServerTimestamp(admin),createdAtText:now,createdBy:actor};
           tx.create(versionRef(brand,versionId),version);
           let status;
           if (draft.approvalPlan.mode==="none") status=approvedStatus(draft.approvalPlan);
           else {
             status="pending_approval";
-            const approvalState={schemaVersion:ACTIVITY_SALES_SCHEMA_VERSION,brandId:brand,campaignId:id,versionId,status:"pending",currentStepIndex:0,steps,decisions:{},allowCreatorApproval:draft.approvalPlan.allowCreatorApproval,creator,campaignTitle:draft.title,createdAt:admin.firestore.FieldValue.serverTimestamp(),createdAtText:now};
+            const approvalState={schemaVersion:ACTIVITY_SALES_SCHEMA_VERSION,brandId:brand,campaignId:id,versionId,status:"pending",currentStepIndex:0,steps,decisions:{},allowCreatorApproval:draft.approvalPlan.allowCreatorApproval,creator,campaignTitle:draft.title,createdAt:activitySalesServerTimestamp(admin),createdAtText:now};
             tx.set(approvalRef(brand,versionId),{...approvalState,activeReviewerKeys:activeReviewerKeys(approvalState,decisionKey)},{merge:false});
           }
           if (status === "published") {
@@ -460,7 +467,7 @@ function createActivitySalesAuthorityFunctions({admin,db}) {
               brandId:brand,campaignId:id,versionId,campaignSnapshot:draft,publishedAtText:now,
             }),{merge:false});
           }
-          tx.set(ref,{revision:next,versionSequence:seq,currentVersionId:versionId,status,releaseMode:draft.approvalPlan.releaseMode,scheduledPublishAtText:draft.approvalPlan.scheduledPublishAt || "",updatedAt:admin.firestore.FieldValue.serverTimestamp(),updatedAtText:now,updatedBy:actor,...(status==="published"?{publishedAt:admin.firestore.FieldValue.serverTimestamp(),publishedAtText:now,publishedBy:actor}:{})},{merge:true});
+          tx.set(ref,{revision:next,versionSequence:seq,currentVersionId:versionId,status,releaseMode:draft.approvalPlan.releaseMode,scheduledPublishAtText:draft.approvalPlan.scheduledPublishAt || "",updatedAt:activitySalesServerTimestamp(admin),updatedAtText:now,updatedBy:actor,...(status==="published"?{publishedAt:activitySalesServerTimestamp(admin),publishedAtText:now,publishedBy:actor}:{})},{merge:true});
           tx.set(log,{...baseAudit,toStatus:status,revision:next,versionId},{merge:false});
           output={status,revision:next,versionId}; return;
         }
@@ -476,8 +483,8 @@ function createActivitySalesAuthorityFunctions({admin,db}) {
           if (decisions[key]?.stepId===step.stepId) throw new ActivitySalesError("ALREADY_DECIDED",409,"此核准人員已完成本關操作");
           if (action==="return_for_changes") {
             decisions[key]={stepId:step.stepId,decision:"returned",actor,comment:text(body.comment,500),decidedAtText:now};
-            tx.set(aRef,{status:"returned",decisions,activeReviewerKeys:[],returnedAt:admin.firestore.FieldValue.serverTimestamp(),returnedAtText:now},{merge:true});
-            tx.set(ref,{revision:next,status:"returned",updatedAt:admin.firestore.FieldValue.serverTimestamp(),updatedAtText:now,updatedBy:actor},{merge:true});
+            tx.set(aRef,{status:"returned",decisions,activeReviewerKeys:[],returnedAt:activitySalesServerTimestamp(admin),returnedAtText:now},{merge:true});
+            tx.set(ref,{revision:next,status:"returned",updatedAt:activitySalesServerTimestamp(admin),updatedAtText:now,updatedBy:actor},{merge:true});
             tx.set(log,{...baseAudit,toStatus:"returned",revision:next,versionId:current.currentVersionId,stepId:step.stepId},{merge:false});
             output={status:"returned",revision:next}; return;
           }
@@ -503,8 +510,8 @@ function createActivitySalesAuthorityFunctions({admin,db}) {
           const nextApproval={...approval,status:status==="pending_approval"?"pending":"approved",currentStepIndex:Math.min(nextIndex,(approval.steps || []).length),decisions};
           tx.set(aRef,{status:nextApproval.status,currentStepIndex:nextApproval.currentStepIndex,decisions,
             activeReviewerKeys:activeReviewerKeys(nextApproval,decisionKey),
-            updatedAt:admin.firestore.FieldValue.serverTimestamp(),updatedAtText:now,...(status!=="pending_approval"?{approvedAt:admin.firestore.FieldValue.serverTimestamp(),approvedAtText:now}:{})},{merge:true});
-          tx.set(ref,{revision:next,status,updatedAt:admin.firestore.FieldValue.serverTimestamp(),updatedAtText:now,updatedBy:actor,...(status==="published"?{publishedAt:admin.firestore.FieldValue.serverTimestamp(),publishedAtText:now,publishedBy:actor}:{})},{merge:true});
+            updatedAt:activitySalesServerTimestamp(admin),updatedAtText:now,...(status!=="pending_approval"?{approvedAt:activitySalesServerTimestamp(admin),approvedAtText:now}:{})},{merge:true});
+          tx.set(ref,{revision:next,status,updatedAt:activitySalesServerTimestamp(admin),updatedAtText:now,updatedBy:actor,...(status==="published"?{publishedAt:activitySalesServerTimestamp(admin),publishedAtText:now,publishedBy:actor}:{})},{merge:true});
           tx.set(log,{...baseAudit,toStatus:status,revision:next,versionId:current.currentVersionId,stepId:step.stepId},{merge:false});
           output={status,revision:next,currentStepIndex:Math.min(nextIndex,(approval.steps || []).length)}; return;
         }
@@ -524,7 +531,7 @@ function createActivitySalesAuthorityFunctions({admin,db}) {
             brandId:brand,campaignId:id,versionId:current.currentVersionId,
             campaignSnapshot:vSnap.data()?.campaignSnapshot,publishedAtText:now,
           }),{merge:false});
-          tx.set(ref,{revision:next,status:"published",publishedAt:admin.firestore.FieldValue.serverTimestamp(),publishedAtText:now,publishedBy:actor,updatedAt:admin.firestore.FieldValue.serverTimestamp(),updatedAtText:now,updatedBy:actor},{merge:true});
+          tx.set(ref,{revision:next,status:"published",publishedAt:activitySalesServerTimestamp(admin),publishedAtText:now,publishedBy:actor,updatedAt:activitySalesServerTimestamp(admin),updatedAtText:now,updatedBy:actor},{merge:true});
           tx.set(log,{...baseAudit,toStatus:"published",revision:next,versionId:current.currentVersionId || ""},{merge:false});
           output={status:"published",revision:next}; return;
         }
@@ -533,14 +540,14 @@ function createActivitySalesAuthorityFunctions({admin,db}) {
           if (!canPublish || current.status!=="published") throw new ActivitySalesError("STOP_FORBIDDEN",403,"目前帳號或活動狀態不可停止活動");
           // Remove frontline visibility atomically with authoritative stop.
           tx.delete(publishedRef(brand,id));
-          tx.set(ref,{revision:next,status:"stopped",stoppedAt:admin.firestore.FieldValue.serverTimestamp(),stoppedAtText:now,stoppedBy:actor,updatedAt:admin.firestore.FieldValue.serverTimestamp(),updatedAtText:now,updatedBy:actor},{merge:true});
+          tx.set(ref,{revision:next,status:"stopped",stoppedAt:activitySalesServerTimestamp(admin),stoppedAtText:now,stoppedBy:actor,updatedAt:activitySalesServerTimestamp(admin),updatedAtText:now,updatedBy:actor},{merge:true});
           tx.set(log,{...baseAudit,toStatus:"stopped",revision:next,versionId:current.currentVersionId || ""},{merge:false});
           output={status:"stopped",revision:next}; return;
         }
 
         if (action==="cancel") {
           if (!canCreate || !["draft","returned","approved"].includes(current.status)) throw new ActivitySalesError("CANCEL_FORBIDDEN",403,"目前帳號或活動狀態不可取消");
-          tx.set(ref,{revision:next,status:"cancelled",cancelledAt:admin.firestore.FieldValue.serverTimestamp(),cancelledAtText:now,cancelledBy:actor,updatedAt:admin.firestore.FieldValue.serverTimestamp(),updatedAtText:now,updatedBy:actor},{merge:true});
+          tx.set(ref,{revision:next,status:"cancelled",cancelledAt:activitySalesServerTimestamp(admin),cancelledAtText:now,cancelledBy:actor,updatedAt:activitySalesServerTimestamp(admin),updatedAtText:now,updatedBy:actor},{merge:true});
           tx.set(log,{...baseAudit,toStatus:"cancelled",revision:next,versionId:current.currentVersionId || ""},{merge:false});
           output={status:"cancelled",revision:next}; return;
         }

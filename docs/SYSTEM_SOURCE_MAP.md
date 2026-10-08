@@ -5470,3 +5470,15 @@ Backend endpoints：
 - `functions/activitySalesAuthority.js`：`getActivitySalesWorkspace` `approval_inbox/get_policy`；approval mutation transaction 同步更新目前可審 key。
 - `src/components/ActivitySalesPolicyPanel.jsx`：最高管理者政策表單／revision OCC UI。
 - `src/components/ActivitySalesManagementView.jsx`：按需載入本人的 Inbox、切換品牌清除私人狀態。
+
+## Activity Sales Phase 1C-3 — 排程與第一線理解確認（feature only）
+- `functions/activitySalesScheduledPublisher.js`：兩個品牌隔離的 Firestore onWrite trigger、Cloud Tasks `activitySalesScheduledPublish`，單 campaign 交易式發布。
+- `functions/activitySalesScheduleLogic.js`：排程版本／品牌 gate、25 日 checkpoint 與到期判斷（pure）。
+- `functions/activitySalesAcknowledgement.js`：`acknowledgeActivitySalesPublication` 安全 HTTP writer/status gateway。
+- `functions/activitySalesAcknowledgementLogic.js`：確認文件鍵值與正式版本相等性（pure）。
+- `src/components/ActivitySalesAcknowledgement.jsx`：第一線依活動版本輸入密碼、查詢／送出理解確認。
+- `src/utils/activitySalesEditor.js`：`datetime-local` 固定台北時間與 canonical UTC ISO 雙向轉換。
+- `functions/index.js`：輸出 CYJ / 非 CYJ 雙路徑 trigger、Cloud Tasks、理解確認 HTTP；`src/config/runtimeEnvironment.js`：DEV Functions Emulator endpoint route。
+- `firestore.rules`、`tests/activitySalesRulesEmulator.test.mjs`：新私人 collection Browser 禁止讀寫、generic fallback 排除與三品牌隔離。
+- `tests/activitySalesScheduling.test.js`、`tests/activitySalesAcknowledgement.test.js`、`tests/activitySalesScheduleTimezone.test.js`：任務 idempotency／OCC 狀態防護／安全與時區回歸。
+- `tests/activitySalesScheduledFunctionsEmulator.test.mjs`：三品牌本機 Functions + Firestore + Cloud Tasks Emulator 延遲發布 E2E（僅 demo project）。

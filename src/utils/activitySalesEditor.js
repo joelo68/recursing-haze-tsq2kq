@@ -25,6 +25,31 @@ export function textToSelectors(value) {
     return { type: "account", account: { roleId: match[1], accountId: match[2] } };
   });
 }
+// datetime-local fields are always interpreted as Asia/Taipei wall-clock time,
+// never as the workstation or server's potentially different timezone.
+export function taipeiScheduleInput(instant = "") {
+  if (!instant) return "";
+  const d = new Date(instant);
+  if (!Number.isFinite(d.getTime())) return "";
+  const parts = new Intl.DateTimeFormat("en-GB", {
+    timeZone:"Asia/Taipei", year:"numeric",month:"2-digit",day:"2-digit",
+    hour:"2-digit",minute:"2-digit",hourCycle:"h23",
+  }).formatToParts(d);
+  const val=(type)=>parts.find((part)=>part.type===type)?.value || "";
+  return `${val("year")}-${val("month")}-${val("day")}T${val("hour")}:${val("minute")}`;
+}
+
+export function taipeiScheduleIso(localText = "") {
+  if (!/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}$/.test(localText)) {
+    throw new Error("請輸入有效的台北時間（年-月-日 時:分）");
+  }
+  const d=new Date(`${localText}:00+08:00`);
+  if (!Number.isFinite(d.getTime()) || taipeiScheduleInput(d.toISOString())!==localText) {
+    throw new Error("排程發布的日期或時間無效");
+  }
+  return d.toISOString();
+}
+
 export function draftToEditor(draft = {}) {
   const normalized = { ...emptyDraft(), ...draft };
   for (const key of uiLists) normalized[key] = asLines(draft[key]);
@@ -34,12 +59,7 @@ export function draftToEditor(draft = {}) {
   normalized.approvalPlan = { ...emptyDraft().approvalPlan, ...p,
     selectorText: selectorsToText(p.selectors),
     steps: (p.steps || []).map((s)=>({ ...s, selectorText: selectorsToText(s.selectors) })),
-    scheduledPublishAt: p.scheduledPublishAt ? (() => {
-      const d = new Date(p.scheduledPublishAt);
-      if (!Number.isFinite(d.getTime())) return "";
-      const local = new Date(d.getTime() - d.getTimezoneOffset() * 60_000);
-      return local.toISOString().slice(0,16);
-    })() : "",
+    scheduledPublishAt: taipeiScheduleInput(p.scheduledPublishAt),
   };
   return normalized;
 }
@@ -55,9 +75,7 @@ export function editorToDraft(editor = {}) {
   const p=editor.approvalPlan || {};
   draft.approvalPlan={mode:p.mode,releaseMode:p.releaseMode,allowCreatorApproval:p.allowCreatorApproval === true};
   if (p.releaseMode === "scheduled_after_approval") {
-    const timestamp = Date.parse(p.scheduledPublishAt || "");
-    if (!Number.isFinite(timestamp)) throw new Error("請輸入有效的排程發布日期／時間");
-    draft.approvalPlan.scheduledPublishAt = new Date(timestamp).toISOString();
+    draft.approvalPlan.scheduledPublishAt = taipeiScheduleIso(p.scheduledPublishAt || "");
   }
   if (["any", "all"].includes(p.mode)) draft.approvalPlan.selectors=textToSelectors(p.selectorText);
   if (["sequential", "custom"].includes(p.mode)) draft.approvalPlan.steps=(p.steps || []).map((s)=>({

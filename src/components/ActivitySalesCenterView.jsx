@@ -1,5 +1,6 @@
 import React, { useEffect, useMemo, useState } from "react";
 import ActivitySalesManagementView from "./ActivitySalesManagementView";
+import ActivitySalesAcknowledgement from "./ActivitySalesAcknowledgement";
 import { collection, getDocsFromServer, limit, orderBy, query, where } from "firebase/firestore";
 import { auth, db } from "../config/firebase";
 import {
@@ -150,6 +151,7 @@ export default function ActivitySalesCenterView({ brandId, deviceId }) {
               <ListLines title="限制與不可併用條件" values={selected.restrictions} />
               {selected.salesTalk && <section className="mt-5"><h4 className="text-xs font-black">建議話術</h4><p className="mt-2 whitespace-pre-wrap rounded-xl bg-stone-50 p-3 text-xs leading-6">{selected.salesTalk}</p></section>}
               {!!selected.faq?.length && <section className="mt-5"><h4 className="text-xs font-black">常見問題</h4>{selected.faq.map((f) => <details key={f.faqId} className="mt-2 rounded-xl border border-stone-200 px-3 py-2 text-xs"><summary className="cursor-pointer font-bold">{f.question}</summary><p className="mt-2 whitespace-pre-wrap leading-6 text-stone-600">{f.answer}</p></details>)}</section>}
+              <ActivitySalesAcknowledgement key={`${brandId}-${selected.campaignId}-${selected.versionId}`} brandId={brandId} deviceId={deviceId} publication={selected} />
             </>
           )}
         </section>

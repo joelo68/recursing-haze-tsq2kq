@@ -57,6 +57,7 @@ const PRODUCTION_FUNCTION_ROUTES = Object.freeze({
   "https://us-central1-cyjsituation-analysis.cloudfunctions.net/manageActivitySalesPolicy": "manageActivitySalesPolicy",
   "https://us-central1-cyjsituation-analysis.cloudfunctions.net/manageActivityCampaign": "manageActivityCampaign",
   "https://us-central1-cyjsituation-analysis.cloudfunctions.net/getActivitySalesWorkspace": "getActivitySalesWorkspace",
+  "https://us-central1-cyjsituation-analysis.cloudfunctions.net/acknowledgeActivitySalesPublication": "acknowledgeActivitySalesPublication",
 });
 
 const normalizeEndpointKey = (rawUrl = "") => {
