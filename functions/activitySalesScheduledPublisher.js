@@ -5,8 +5,8 @@ const {activitySalesServerTimestamp} = require("./activitySalesFirestoreFieldVal
 // Firestore onWrite queues one task; no collection scan, listener or periodic polling.
 const { buildActivitySalesPublication } = require("./activitySalesPublishedProjection");
 const {
-  validateScheduleIdentity, isScheduledCandidate, scheduleTransition,
-  scheduleDecision, chooseScheduledTaskTime, taipeiCalendarDate,
+  validateScheduleIdentity, isScheduledCandidate, isScheduledAmendment, scheduleTransition,
+  scheduleDecision, chooseScheduledTaskTime, taipeiCalendarDate, scheduledTimeMs,
 } = require("./activitySalesScheduleLogic");
 
 function createScheduleEngine({ admin, db, enqueueTask, now = Date.now, getBrandCollection: resolver }) {
@@ -16,7 +16,8 @@ function createScheduleEngine({ admin, db, enqueueTask, now = Date.now, getBrand
 
   async function handleTransition({ brandId, campaignId, before, after }) {
     if (!after || typeof after !== "object") return { state: "skip" };
-    const versionId = String(after.currentVersionId || "");
+    const versionId = String(after.status==="published" && after.amendment?.status==="approved"
+      ? after.amendment.versionId : after.currentVersionId || "");
     let identity;
     try { identity = validateScheduleIdentity({brandId, campaignId, versionId}); }
     catch { return { state: "skip" }; }
@@ -26,7 +27,7 @@ function createScheduleEngine({ admin, db, enqueueTask, now = Date.now, getBrand
       throw new Error("ACTIVITY_SCHEDULE_TIME_INVALID");
     }
     if (decision.state !== "requeue" && decision.state !== "publish") return decision;
-    const when = chooseScheduledTaskTime(Date.parse(after.scheduledPublishAtText), now());
+    const when = chooseScheduledTaskTime(scheduledTimeMs(after, identity), now());
     await enqueueTask(identity, when);
     return { state: "enqueued", campaignId, versionId, scheduleTime: when.toISOString() };
   }
@@ -47,14 +48,25 @@ function createScheduleEngine({ admin, db, enqueueTask, now = Date.now, getBrand
       const decision = scheduleDecision(campaign, identity, now());
       if (decision.state !== "publish") return decision;
 
+      const amendment = isScheduledAmendment(campaign, identity);
       const versionSnap = await tx.get(versionRef);
+      const oldPublicationSnap = amendment ? await tx.get(publicationRef) : null;
+      const approvalSnap = amendment ? await tx.get(collection(brandId,"activity_campaign_approvals").doc(versionId)) : null;
       if (!versionSnap.exists) throw new Error("ACTIVITY_SCHEDULE_VERSION_MISSING");
       const version = versionSnap.data() || {};
       if (version.brandId !== brandId || version.campaignId !== campaignId ||
           version.versionId !== versionId ||
           version.campaignSnapshot?.approvalPlan?.releaseMode !== "scheduled_after_approval" ||
           Date.parse(version.campaignSnapshot?.approvalPlan?.scheduledPublishAt || "") !==
-            Date.parse(campaign.scheduledPublishAtText)) {
+            scheduledTimeMs(campaign, identity) ||
+          (amendment && (version.baseVersionId !== campaign.currentVersionId ||
+            version.campaignSnapshot?.approvalPlan?.mode === "none" ||
+            !approvalSnap.exists || approvalSnap.data()?.status !== "approved" ||
+            approvalSnap.data()?.brandId !== brandId ||
+            approvalSnap.data()?.campaignId !== campaignId ||
+            approvalSnap.data()?.versionId !== versionId ||
+            !oldPublicationSnap.exists || oldPublicationSnap.data()?.brandId !== brandId ||
+            oldPublicationSnap.data()?.versionId !== campaign.currentVersionId))) {
         throw new Error("ACTIVITY_SCHEDULE_VERSION_MISMATCH");
       }
       const snapshot = version.campaignSnapshot || {};
@@ -69,6 +81,9 @@ function createScheduleEngine({ admin, db, enqueueTask, now = Date.now, getBrand
       tx.set(ref, {
         revision:Number(campaign.revision || 0)+1,
         status:"published",
+        ...(amendment ? {currentVersionId:versionId,amendment:null,draft:snapshot,
+          releaseMode:campaign.amendment.releaseMode,
+          scheduledPublishAtText:campaign.amendment.scheduledPublishAtText} : {}),
         publishedAt:activitySalesServerTimestamp(admin),
         publishedAtText:stamp,
         publishedBy:{roleId:"system",accountId:"activity_sales_scheduler",name:"活動排程服務"},
@@ -77,9 +92,11 @@ function createScheduleEngine({ admin, db, enqueueTask, now = Date.now, getBrand
         updatedBy:{roleId:"system",accountId:"activity_sales_scheduler",name:"活動排程服務"},
       }, {merge:true});
       tx.set(auditRef, {
-        schemaVersion:"activity-sales-v1",type:"campaign",action:"scheduled_publish",
+        schemaVersion:"activity-sales-v1",type:"campaign",
+        action:amendment?"scheduled_publish_amendment":"scheduled_publish",
         brandId,campaignId,versionId,revision:Number(campaign.revision || 0)+1,
-        fromStatus:"approved",toStatus:"published", actor:{
+        fromStatus:amendment?"published":"approved",toStatus:"published",
+        ...(amendment?{previousVersionId:campaign.currentVersionId}:{}), actor:{
           roleId:"system",accountId:"activity_sales_scheduler",name:"活動排程服務",
         }, createdAt:activitySalesServerTimestamp(admin),createdAtText:stamp,
       },{merge:false});

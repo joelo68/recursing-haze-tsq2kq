@@ -3073,3 +3073,8 @@ No listener, broad query, or polling was added.
 - 審核流程或免審核送出將 scheduled campaign 寫成 `approved` → 品牌路徑的 Firestore onWrite 事件 → 對該 campaign/version 建立 Cloud Task（最長 25 日，長期排程接續下一個 task）→ due handler transaction 讀 campaign 1 筆、version 1 筆 → 以版本快照發布 `activity_sales_publications` + 更新狀態/revision + audit。不存在按分鐘掃全品牌的查詢。
 - 第一線開啟正式活動仍只讀該品牌 `activity_sales_publications` 的單次限量 query。選中活動後使用者輸入當前登入密碼、確認已閱讀 → HTTP Backend 重新驗證 session/device/credential → transaction 讀 publication 1 筆 + ack 1 筆 → `create` 本品牌 `activity_sales_acknowledgements/{ackHash}`。查詢本人狀態為同樣的 2 reads、0 writes。
 - 以上與 Phase 2 活動成交歸屬及每日業績寫入完全隔離，沒有重複加總金額；Storage/Firestore 位置按 `cyj` legacy 與 `brands/{anniu|yibo}` 獨立。
+
+## Activity Sales Phase 1C-4 — published amendment data flow（isolated feature）
+- 已發布活動 → `begin_amendment`：Backend scoped reads（policy + campaign + immutable current version），產生 `amendment.draft`，公開投影 **0 writes**。`update_amendment` → `submit_amendment`：建立新 version 與 Inbox approval key（transaction/ revision OCC），仍不碰舊 `activity_sales_publications`。
+- 審核者由 Inbox 20 筆上限單品牌查詢進入 `get_campaign`（policy+campaign+修訂 approval 單文件）；approve/all/return 更新 immutable version 對應 approval state 與 reviewer key。最終核准後，立即發布模式交易換版；手動模式 `publish_amendment` 由 publisher 授權；排程模式由既有 onWrite per-campaign trigger → 單個 Cloud Task（<=25d 續期）→ transaction 比對 base projection／version → 換版。無背景大範圍 query/輪詢。
+- 更新正式 `currentVersionId` 與公開 projection 為同一個原子 commit；第一線已有舊版本 ack 不符合新 versionId。撤銷修訂或 stop 會原子清空在途 Inbox 並讓舊排程失效。Phase 2 正式營收不在本資料流。

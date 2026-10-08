@@ -5482,3 +5482,12 @@ Backend endpoints：
 - `firestore.rules`、`tests/activitySalesRulesEmulator.test.mjs`：新私人 collection Browser 禁止讀寫、generic fallback 排除與三品牌隔離。
 - `tests/activitySalesScheduling.test.js`、`tests/activitySalesAcknowledgement.test.js`、`tests/activitySalesScheduleTimezone.test.js`：任務 idempotency／OCC 狀態防護／安全與時區回歸。
 - `tests/activitySalesScheduledFunctionsEmulator.test.mjs`：三品牌本機 Functions + Firestore + Cloud Tasks Emulator 延遲發布 E2E（僅 demo project）。
+
+## Activity Sales Phase 1C-4 — 已發布活動重大修訂 owner（feature only）
+- `functions/activitySalesAuthority.js`：`begin/update/submit/discard/publish_amendment` Backend writer、不可變快照、reviewer、OCC 與原子換版；也修正 any/all canonical approvalPlan 連續正規化時遺失審核者的上游問題。
+- `functions/activitySalesWorkspaceAccess.js`：私人修訂審核權限、公開版與修訂草稿分離。
+- `functions/activitySalesScheduleLogic.js`、`functions/activitySalesScheduledPublisher.js`：同活動另一個 `approved` amendment event-driven 排程；到期檢查原版與修訂版身分後切換投影。
+- `src/components/ActivitySalesManagementView.jsx`：正式版本清楚揭露、修訂草稿編輯、重新送審、撤回與切換版本入口。
+- `tests/activitySalesAmendment.test.js`：三品牌、雙管理者 all quorum、權限、OCC、退回、停止、版本切換與 schedule 模擬 transaction 回歸。
+- `tests/activitySalesAmendmentFunctionsEmulator.test.mjs`：demo 專用三品牌真實 Firestore／Functions／Cloud Tasks 端到端新版本排程切換（不在 Production 執行）。
+- `tests/activitySalesInboxTransaction.test.js`：將原有模擬不可變版本補齊 brand/campaign/version 身分。`firestore.rules` 與 `functions/index.js` 無修改。

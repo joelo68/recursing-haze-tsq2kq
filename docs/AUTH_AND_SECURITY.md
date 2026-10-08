@@ -1729,3 +1729,9 @@ Consumer trust 仍會再次核對 current Lifecycle / Reporting Calendar / Syste
 - 第一線理解確認透過 `acknowledgeActivitySalesPublication` HTTP Backend；每次重新驗證 Firebase Application Identity 的品牌、角色、帳號與 request actor 一致性，並驗證 Trusted Device 與當前密碼；前端不能直接寫入或讀取私人 acknowledgement。
 - `activity_sales_acknowledgements`（CYJ legacy path 與安妞／伊啵品牌 path）Browser read/write 全部 DENY，包含 generic collection fallback 排除。每人／每正式版本的 SHA-256 ID 與 transaction `create` 避免覆寫及重複確認；舊版不能當新版已理解。
 - Emulator 排程佇列只接受 `demo-drcyj-activity-sales` 且必須有 `CLOUD_TASKS_EMULATOR_HOST`，不允許誤用真實 Cloud Tasks。
+
+## Activity Sales Phase 1C-4 — 已發布版本重新送審安全界線（feature only）
+- Backend `manageActivityCampaign` 在已驗證 Application Identity、品牌綁定、Trusted Device、新鮮憑證與 transaction current Policy 下才能建立／編輯／送審私人 amendment。Published 訂單不能走舊的 `update_draft` 或無審核版本直發；修訂 `mode=none` 明確拒絕。
+- 修訂的核准者來源是送審時 concrete-member snapshot；在同一 transaction 重新讀當前 revision、approval version 與 reviewer decision，舊 revision 不可覆寫新狀態。`discard_amendment`/`stop` 同交易使 Inbox key 失效；無效品牌或缺漏 immutable version、base projection identity 一律 fail-closed。
+- 第一線只看 `activity_sales_publications` 的白名單欄位，仍禁止瀏覽器讀取 `activity_campaigns`、審核、Policy、Audit 與個人確認；新版理解確認不得沿用舊版 ID。排程重試時必須重新核對 amendment、version、目前正式版才允許換版。
+- 現階段僅本機 demo Emulator；遠端 Staging IAM／Cloud Tasks 的重試與 UAT 尚未完成，不得視為 Production-ready。

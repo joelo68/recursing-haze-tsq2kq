@@ -26,7 +26,7 @@ function make() {
     "cyj/activity_campaign_approvals/autumn_v001":{brandId:"cyj",campaignId:"autumn",versionId:"autumn_v001",status:"pending",currentStepIndex:0,
       steps:[{stepId:"s1",label:"第一關",quorum:"all",members:[a,b]},{stepId:"s2",label:"第二關",quorum:"any",members:[c]}],
       creator:c,allowCreatorApproval:true,decisions:{},activeReviewerKeys:[reviewerKey(a),reviewerKey(b)]},
-    "cyj/activity_campaign_versions/autumn_v001":{campaignSnapshot:{title:"秋季",approvalPlan:{releaseMode:"manual_after_approval"}}},
+    "cyj/activity_campaign_versions/autumn_v001":{brandId:"cyj",campaignId:"autumn",versionId:"autumn_v001",campaignSnapshot:{title:"秋季",approvalPlan:{releaseMode:"manual_after_approval"}}},
   };
   const db={brandCollection:(brand,name)=>({doc:(id)=>({path:`${brand}/${name}/${id}`})}),
     runTransaction:async(fn)=>{

@@ -3535,3 +3535,9 @@ No new Firestore collection or document type was introduced.
 - 新 collection `activity_sales_acknowledgements/{ackHash}`：`schemaVersion=activity-sales-acknowledgement-v1`、`brandId`、`campaignId`、`versionId`、`roleId`、`accountId`、`acknowledgedAt`、`acknowledgedAtText`。不可 update/delete，只有後端經正式身分/信任裝置/當前密碼授權後 `create`。
 - CYJ：`artifacts/default-app-id/public/data/activity_sales_acknowledgements/{ackHash}`；安妞：`brands/anniu/activity_sales_acknowledgements/{ackHash}`；伊啵：`brands/yibo/activity_sales_acknowledgements/{ackHash}`。Browser 對三個品牌的 acknowledgement 均無讀寫權限。
 - 不建立 activity-sales 全品牌常駐 query/index。排程提交由文件事件觸發，單次 due 任務 2 docs read + 3 docs write；理解確認單次 2 docs read + 0/1 doc write（皆為設計估算，非實測帳單）。
+
+## Activity Sales Phase 1C-4 — 已發布活動的獨立修訂（isolated feature）
+- 同品牌 `activity_campaigns/{campaignId}`：`status=published` 與 `currentVersionId` 始終代表目前第一線版本；`amendment={status,baseVersionId,draft,versionId,releaseMode,scheduledPublishAtText}` 是**私有的**修訂鏈，結案後設為 null。修訂的 `draft` 不出現在 Browser 可讀的出版 projection。
+- 新的 `activity_campaign_versions/{campaignId}_vNNN` 不可覆寫，`baseVersionId` 錨定送審當下第一線版本，`campaignSnapshot` 與審核人員快照不可回寫。`activity_campaign_approvals/{versionId}` 依新版本存決策與 `activeReviewerKeys`；撤銷或緊急 stop 原子清空這些 key。
+- 核准後實際發布／排程到期時，單個 Firestore transaction 讀當前 campaign、immutable version、舊 `activity_sales_publications`，驗證 `brandId/campaignId/versionId/baseVersionId` 完整一致後才更新 publication 並切換 `currentVersionId`、遞增 revision。理解確認依 `versionId` 隔離；歷史確認只對歷史版有效。
+- 路徑沿用 CYJ `artifacts/default-app-id/public/data/{collection}` 與安妞／伊啵 `brands/{brandId}/{collection}`；本批未新增 collection/index，未修改 Rules。

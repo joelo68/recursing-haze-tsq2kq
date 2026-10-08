@@ -34,15 +34,23 @@ function workspaceAccess({ actor = {}, campaign = {}, approval = {}, canCreate =
   // Revoked creator membership does not preserve read access; pending approvers retain
   // access based on their immutable submission-time snapshot.
   const canRead = Boolean(canCreate || canPublish || review.isReviewer);
+  const amendment = campaign.status === "published" ? campaign.amendment : null;
+  const amendmentEditable = amendment && ["draft", "returned"].includes(amendment.status);
+  const amendmentPending = amendment?.status === "pending_approval";
   return {
     canRead,
     canEdit: Boolean(canCreate && ["draft", "returned"].includes(campaign.status)),
     canSubmit: Boolean(canCreate && ["draft", "returned"].includes(campaign.status)),
+    canBeginAmendment: Boolean(canCreate && campaign.status === "published" && !amendment),
+    canEditAmendment: Boolean(canCreate && amendmentEditable),
+    canSubmitAmendment: Boolean(canCreate && amendmentEditable),
+    canDiscardAmendment: Boolean(canCreate && amendment),
+    canPublishAmendment: Boolean(canPublish && campaign.status === "published" && amendment?.status === "approved"),
     canPublish: Boolean(canPublish && campaign.status === "approved"),
     canStop: Boolean(canPublish && campaign.status === "published"),
     canCancel: Boolean(canCreate && ["draft", "returned", "approved"].includes(campaign.status)),
-    canApprove: campaign.status === "pending_approval" && review.canApprove,
-    canReturn: campaign.status === "pending_approval" && review.canApprove,
+    canApprove: (campaign.status === "pending_approval" || amendmentPending) && review.canApprove,
+    canReturn: (campaign.status === "pending_approval" || amendmentPending) && review.canApprove,
     alreadyActed: review.alreadyActed,
     isCreator,
   };
@@ -59,7 +67,15 @@ function presentWorkspaceCampaign(campaign = {}, approval = {}, rights = {}) {
     releaseMode: String(campaign.releaseMode || ""),
     scheduledPublishAtText: String(campaign.scheduledPublishAtText || ""),
     createdBy: { roleId: campaign.createdBy?.roleId || "", accountId: campaign.createdBy?.accountId || "", name: campaign.createdBy?.name || "" },
-    draft: campaign.draft || null,
+    // The frontline version stays current while a private amendment is reviewed.
+    draft: campaign.amendment?.draft || campaign.draft || null,
+    amendment: campaign.amendment ? {
+      status: String(campaign.amendment.status || ""),
+      versionId: String(campaign.amendment.versionId || ""),
+      baseVersionId: String(campaign.amendment.baseVersionId || ""),
+      releaseMode: String(campaign.amendment.releaseMode || ""),
+      scheduledPublishAtText: String(campaign.amendment.scheduledPublishAtText || ""),
+    } : null,
     review: step ? {
       stepLabel: String(step.label || ""),
       stepIndex: Number(approval.currentStepIndex || 0),

@@ -15,19 +15,29 @@ function validateScheduleIdentity(raw = {}) {
   return { brandId, campaignId, versionId };
 }
 
-function scheduledTimeMs(campaign = {}) {
-  const text = String(campaign.scheduledPublishAtText || "");
+function scheduledTimeMs(campaign = {}, ids = {}) {
+  const amendment = isScheduledAmendment(campaign, ids);
+  const text = String(amendment ? campaign.amendment.scheduledPublishAtText : campaign.scheduledPublishAtText || "");
   // Stored time must be canonical UTC, not an ambiguous local timestamp.
   if (!/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/.test(text)) return NaN;
   return Date.parse(text);
 }
 
+function isScheduledAmendment(campaign = {}, ids = {}) {
+  const amendment = campaign.amendment;
+  return campaign.status === "published" && amendment?.status === "approved" &&
+    amendment.releaseMode === "scheduled_after_approval" &&
+    campaign.brandId === ids.brandId && campaign.campaignId === ids.campaignId &&
+    amendment.versionId === ids.versionId &&
+    amendment.baseVersionId === campaign.currentVersionId;
+}
 function isScheduledCandidate(campaign = {}, ids = {}) {
-  return campaign.status === "approved" &&
-    campaign.releaseMode === "scheduled_after_approval" &&
-    campaign.brandId === ids.brandId &&
-    campaign.campaignId === ids.campaignId &&
-    campaign.currentVersionId === ids.versionId;
+  return isScheduledAmendment(campaign, ids) ||
+    (campaign.status === "approved" &&
+      campaign.releaseMode === "scheduled_after_approval" &&
+      campaign.brandId === ids.brandId &&
+      campaign.campaignId === ids.campaignId &&
+      campaign.currentVersionId === ids.versionId);
 }
 
 function chooseScheduledTaskTime(targetMs, nowMs = Date.now()) {
@@ -47,7 +57,7 @@ function taipeiCalendarDate(ms) {
 
 function scheduleDecision(campaign, identity, nowMs = Date.now()) {
   if (!isScheduledCandidate(campaign, identity)) return { state: "skip" };
-  const targetMs = scheduledTimeMs(campaign);
+  const targetMs = scheduledTimeMs(campaign, identity);
   if (!Number.isFinite(targetMs)) return { state: "invalid" };
   if (nowMs < targetMs) {
     return { state: "requeue", scheduleTime: chooseScheduledTaskTime(targetMs, nowMs) };
@@ -62,6 +72,6 @@ function scheduleTransition(before, after, identity) {
 
 module.exports = {
   MAX_TASK_DELAY_MS, validateScheduleIdentity, scheduledTimeMs,
-  isScheduledCandidate, chooseScheduledTaskTime, scheduleDecision,
+  isScheduledCandidate, isScheduledAmendment, chooseScheduledTaskTime, scheduleDecision,
   scheduleTransition, taipeiCalendarDate,
 };

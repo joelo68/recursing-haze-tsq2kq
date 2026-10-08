@@ -116,11 +116,12 @@ export default function ActivitySalesManagementView({brandId,deviceId}) {
   }
   const lookupCampaign=()=>perform("活動已重新載入",()=>loadCampaign(lookupId));
   const freshDraft=()=>{setRecord(null);setCampaignId("");setForm(emptyForm());setHasUnsavedChanges(false);setStep(0);setError("");setMessage("新的草稿尚未寫入資料庫");};
-  const canSave=capabilities?.canCreate === true && (!record || ["draft","returned"].includes(record.status));
+  const isAmendment=Boolean(record?.amendment);
+  const canSave=capabilities?.canCreate === true && (!record || capabilities?.canEdit || capabilities?.canEditAmendment);
   const saveDraft=()=>perform("草稿已儲存",async()=>{
     if (warnings.length) throw new Error(warnings.join("；"));
     const draft=editorToDraft(form);
-    const action=record?"update_draft":"create_draft";
+    const action=record?(isAmendment?"update_amendment":"update_draft"):"create_draft";
     const result=await call(CAMPAIGN_URL,action,record
       ? {campaignId,expectedRevision:record.revision,campaign:draft}
       : {campaign:draft});
@@ -273,13 +274,23 @@ export default function ActivitySalesManagementView({brandId,deviceId}) {
         <div className="flex-1"/>
         <button type="button" className={primaryButton} disabled={busy || !canSave} onClick={saveDraft}>{record?"儲存草稿（OCC）":"建立草稿"}</button>
         {!!record && capabilities?.canSubmit && <button type="button" className={smallButton} disabled={busy || hasUnsavedChanges} onClick={()=>action("submit_for_approval","送審")}>提交審核／建立正式版本</button>}
+        {!!record && capabilities?.canSubmitAmendment && <button type="button" className={smallButton} disabled={busy || hasUnsavedChanges} onClick={()=>action("submit_amendment","修訂送審")}>重大異動重新送審</button>}
       </div>
     </div>
 
+    {!!record && record.status==="published" && <div className="rounded-2xl border border-amber-200 bg-amber-50 p-4 text-xs leading-6 text-stone-700">
+      <strong>目前第一線正式版本：{record.currentVersionId}</strong>。
+      {record.amendment ? <span> 正在處理私人修訂（{statusLabels[record.amendment.status] || record.amendment.status}；{record.amendment.versionId || "尚未送審"}）。審核期間舊版展示與理解確認不受草稿影響；正式版本切換後，第一線必須確認新版。</span>
+        : <span> 修改任何已發布活動內容，都需要建立獨立修訂、重新送審；不可直接覆蓋目前展示。</span>}
+      {record.amendment && <span className="block text-rose-700">已發布活動的修訂必須設定審核人員，不能使用「免審核」直接換版。</span>}
+    </div>}
     {!!record && <RowSection title="管理動作（以最新 Revision 與後端權限為準）">
       {record.review && <p className="mb-3 text-xs text-stone-600">目前：{record.review.stepLabel}（第 {record.review.stepIndex+1}/{record.review.stepCount} 關）· 已核准 {record.review.approvedCount}/{record.review.requiredCount}</p>}
       {(capabilities?.canApprove || capabilities?.canReturn) && <TextField label="核准／退回原因（可選）" value={reviewComment} onChange={setReviewComment} />}
       <div className="mt-3 flex flex-wrap gap-2">
+        {capabilities?.canBeginAmendment && <button className={smallButton} disabled={busy || hasUnsavedChanges} type="button" onClick={()=>action("begin_amendment","建立重大異動修訂")}>建立重大異動修訂草稿</button>}
+        {capabilities?.canDiscardAmendment && <button className={smallButton} disabled={busy || hasUnsavedChanges} type="button" onClick={()=>action("discard_amendment","撤銷修訂")}>撤銷未發布修訂</button>}
+        {capabilities?.canPublishAmendment && <button className={smallButton} disabled={busy || hasUnsavedChanges} type="button" onClick={()=>action("publish_amendment","發布修訂")}>切換至核准新版本</button>}
         {capabilities?.canApprove && <button className={smallButton} disabled={busy || hasUnsavedChanges} type="button" onClick={()=>action("approve","核准",reviewComment)}>核准目前關卡</button>}
         {capabilities?.canReturn && <button className={smallButton} disabled={busy || hasUnsavedChanges} type="button" onClick={()=>action("return_for_changes","退回修改",reviewComment)}>退回修改</button>}
         {capabilities?.canPublish && <button className={smallButton} disabled={busy || hasUnsavedChanges} type="button" onClick={()=>action("publish","發布")}>發布核准版本</button>}

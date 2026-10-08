@@ -125,3 +125,11 @@ Frontend 顯示權限不等於 Backend 授權。
 - 本機 `demo-drcyj-activity-sales` Emulator 必須由 CLI 設置 `CLOUD_TASKS_EMULATOR_HOST` 才允許佇列請求；若缺少則 fail-closed，**不得**發送到真實 Cloud Tasks。Cloud Tasks Emulator 與實際環境的派送重試語意不完全相同，未做 remote Staging/UAT 前不得宣稱 Production readiness。
 - Cloud Tasks 正式 Staging/Production 的 IAM、重試、queue 建立及監控必須在 Release Gate 另行審核；本批不部署任何遠端環境，不更動 `CURRENT_APP_VERSION=3.6.2`。
 - Functions + Cloud Tasks 的隔離端對端測試為 `tests/activitySalesScheduledFunctionsEmulator.test.mjs`，只允許在三項 Emulator 與 `demo-drcyj-activity-sales` 下執行；會在 Emulator 內寫入三個測試活動並確認三品牌都由排程發布。它不代表遠端 Staging 或正式環境已測試。
+
+# Phase 1C-4 — 已發布重大異動重新送審（feature branch only）
+- 正式活動 `status=published`、`currentVersionId` 與 `activity_sales_publications/{campaignId}` 在修訂送審期間保持不變；修訂存於同一私人 campaign 的 `amendment`（`draft / pending_approval / returned / approved`），不得直接修改公開投影。
+- `begin_amendment` 從當前不可變版本快照複製草稿；`update_amendment` 僅可編輯私人修訂；`submit_amendment` 必須具體指定審核人員，**即使可免審核直發，也禁止重大修訂 mode=none**。每次送審以新 versionId `vNNN` 建立 immutable version，包含 `baseVersionId`。
+- `approve / return_for_changes` 依當前修訂 versionId 的 immutable reviewer snapshot 處理；`all` quorum / Inbox key / OCC 仍在同一 Firestore transaction 更新。核准完成後：immediate 在同一交易換版；manual 等授權 publisher 呼叫 `publish_amendment`；scheduled 沿用 **單活動 Cloud Task** 在到時再檢查 immutable version 與當前 base projection，才原子換版。
+- `discard_amendment`、緊急 `stop` 會原子清理未完成修訂與其待核准索引；排程過期／改版／停止後的舊任務因版本與狀態核對而跳過。舊版本理解確認紀錄保留為歷史但不能替新 versionId 確認。
+- Backend `getActivitySalesWorkspace` 僅在修訂待審時讀取該版本一筆 approval；Browser Rules 不加新讀寫權限。沒有大型 query、polling、listener 或額外 collection/index。
+- 此子批次不碰 Phase 2 正式日報營收／歸屬，亦不開 Phase 3 分析；Production `main`、Firestore、Functions、Hosting 與 `CURRENT_APP_VERSION=3.6.2` 均不變。

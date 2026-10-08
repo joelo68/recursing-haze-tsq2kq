@@ -155,7 +155,9 @@ function normalizeApprovalPlan(raw = {}) {
   const allowCreatorApproval = raw.allowCreatorApproval === true;
   let steps = [];
   if (mode === "any" || mode === "all") {
-    const selectors = normalizeSelectors(raw.selectors || []);
+    // A draft is normalized on save and again on submit: preserve the approved
+    // any/all selectors already inside the canonical single-step shape.
+    const selectors = normalizeSelectors(raw.selectors || raw.steps?.[0]?.selectors || []);
     if (!selectors.length) throw new ActivitySalesError("APPROVER_REQUIRED",400,"此活動需要指定核准人員");
     steps=[{stepId:"approval",label:text(raw.label || "活動核准",120),quorum:mode,selectors}];
   } else if (mode === "sequential" || mode === "custom") {
@@ -328,8 +330,9 @@ function createActivitySalesAuthorityFunctions({admin,db}) {
           throw new ActivitySalesError("CAMPAIGN_IDENTITY_MISMATCH",409,"活動資料識別不一致，已停止讀取");
         }
         let approval={};
-        if (campaign.status==="pending_approval") {
-          const versionId=stableId(campaign.currentVersionId);
+        if (campaign.status==="pending_approval" ||
+            (campaign.status==="published" && campaign.amendment?.status==="pending_approval")) {
+          const versionId=stableId(campaign.status==="published" ? campaign.amendment.versionId : campaign.currentVersionId);
           if (!versionId || !versionId.startsWith(`${id}_v`)) {
             throw new ActivitySalesError("VERSION_IDENTITY_INVALID",409,"活動審核版本識別錯誤");
           }
@@ -421,7 +424,8 @@ function createActivitySalesAuthorityFunctions({admin,db}) {
         const current=snap.data() || {}; const currentRev=Number(current.revision || 0);
         if (currentRev!==expected) throw new ActivitySalesError("CAMPAIGN_CONFLICT",409,"活動已由其他人更新，請重新載入",{currentRevision:currentRev});
 
-        const policyGatedAction=["update_draft","submit_for_approval","publish","stop","cancel"].includes(action);
+        const policyGatedAction=["update_draft","submit_for_approval","publish","stop","cancel",
+          "begin_amendment","update_amendment","submit_amendment","discard_amendment","publish_amendment"].includes(action);
         let policy=null; let canCreate=false; let canDirect=false; let canPublish=false;
         if (policyGatedAction) {
           const policySnap=await tx.get(policyRef(brand));
@@ -434,6 +438,136 @@ function createActivitySalesAuthorityFunctions({admin,db}) {
 
         const next=currentRev+1; const now=new Date().toISOString();
         const baseAudit={schemaVersion:ACTIVITY_SALES_SCHEMA_VERSION,type:"campaign",action,brandId:brand,campaignId:id,fromStatus:current.status,policyRevision:policy?.revision ?? null,actor,createdAt:activitySalesServerTimestamp(admin),createdAtText:now};
+
+        // Published amendment: independent private draft and approval chain. The
+        // published versionId/projection do not change until the final swap.
+        if (action==="begin_amendment") {
+          if (!canCreate || current.status!=="published" || current.amendment) {
+            throw new ActivitySalesError("AMENDMENT_BEGIN_FORBIDDEN",403,"目前無法建立已發布活動的修訂草稿");
+          }
+          const vSnap=await tx.get(versionRef(brand,current.currentVersionId));
+          const publicSnap=await tx.get(publishedRef(brand,id));
+          if (!vSnap.exists || vSnap.data()?.brandId!==brand || vSnap.data()?.campaignId!==id ||
+              vSnap.data()?.versionId!==current.currentVersionId ||
+              !publicSnap.exists || publicSnap.data()?.brandId!==brand ||
+              publicSnap.data()?.versionId!==current.currentVersionId) {
+            throw new ActivitySalesError("PUBLISHED_VERSION_INVALID",409,"正式活動版本不一致，已停止修訂");
+          }
+          const draft=normalizeCampaignDraft(vSnap.data().campaignSnapshot || {});
+          tx.set(ref,{revision:next,amendment:{status:"draft",baseVersionId:current.currentVersionId,
+            draft,versionId:"",releaseMode:"",scheduledPublishAtText:""},
+            updatedAt:activitySalesServerTimestamp(admin),updatedAtText:now,updatedBy:actor},{merge:true});
+          tx.set(log,{...baseAudit,toStatus:"published",revision:next,baseVersionId:current.currentVersionId},{merge:false});
+          output={status:"published",amendmentStatus:"draft",revision:next}; return;
+        }
+        if (action==="update_amendment") {
+          const amendment=current.amendment;
+          if (!canCreate || current.status!=="published" || !["draft","returned"].includes(amendment?.status)) {
+            throw new ActivitySalesError("AMENDMENT_EDIT_FORBIDDEN",403,"目前修訂狀態不可修改");
+          }
+          const draft=normalizeCampaignDraft(body.campaign || {});
+          // A published change can NEVER use the direct-publish shortcut.
+          tx.set(ref,{revision:next,amendment:{...amendment,status:"draft",draft,versionId:"",
+            releaseMode:"",scheduledPublishAtText:""},
+            updatedAt:activitySalesServerTimestamp(admin),updatedAtText:now,updatedBy:actor},{merge:true});
+          tx.set(log,{...baseAudit,toStatus:"published",revision:next,baseVersionId:amendment.baseVersionId},{merge:false});
+          output={status:"published",amendmentStatus:"draft",revision:next}; return;
+        }
+        if (action==="submit_amendment") {
+          const amendment=current.amendment;
+          if (!canCreate || current.status!=="published" || !["draft","returned"].includes(amendment?.status)) {
+            throw new ActivitySalesError("AMENDMENT_SUBMIT_FORBIDDEN",403,"目前修訂狀態不可送審");
+          }
+          if (amendment.baseVersionId!==current.currentVersionId) {
+            throw new ActivitySalesError("AMENDMENT_BASE_CHANGED",409,"目前正式版本已變更，請重新開始修訂");
+          }
+          const draft=normalizeCampaignDraft(amendment.draft || {});
+          // Significant changes to an already published version always require review.
+          if (draft.approvalPlan.mode==="none") {
+            throw new ActivitySalesError("AMENDMENT_REVIEW_REQUIRED",400,"已發布活動的重大異動必須設定審核人員並重新送審");
+          }
+          const seq=Number(current.versionSequence || 0)+1;
+          const versionId=`${id}_v${String(seq).padStart(3,"0")}`;
+          const steps=resolveApprovalSteps(draft.approvalPlan,policy.groups);
+          const creator=current.createdBy || actor;
+          validateCreatorApprovalPlan(steps,creator,draft.approvalPlan.allowCreatorApproval);
+          const version={schemaVersion:VERSION_SCHEMA_VERSION,brandId:brand,campaignId:id,
+            versionId,versionSequence:seq,campaignSnapshot:draft,
+            approvalPlanSnapshot:{...draft.approvalPlan,resolvedSteps:steps,policyRevision:policy.revision},
+            baseVersionId:current.currentVersionId,createdAt:activitySalesServerTimestamp(admin),createdAtText:now,createdBy:actor};
+          const state={schemaVersion:ACTIVITY_SALES_SCHEMA_VERSION,brandId:brand,campaignId:id,versionId,
+            status:"pending",currentStepIndex:0,steps,decisions:{},allowCreatorApproval:draft.approvalPlan.allowCreatorApproval,
+            creator,campaignTitle:draft.title,createdAt:activitySalesServerTimestamp(admin),createdAtText:now};
+          tx.create(versionRef(brand,versionId),version);
+          tx.set(approvalRef(brand,versionId),{...state,activeReviewerKeys:activeReviewerKeys(state,decisionKey)},{merge:false});
+          tx.set(ref,{revision:next,versionSequence:seq,amendment:{...amendment,status:"pending_approval",
+            versionId,releaseMode:draft.approvalPlan.releaseMode,
+            scheduledPublishAtText:draft.approvalPlan.scheduledPublishAt || ""},
+            updatedAt:activitySalesServerTimestamp(admin),updatedAtText:now,updatedBy:actor},{merge:true});
+          tx.set(log,{...baseAudit,toStatus:"published",revision:next,versionId,
+            baseVersionId:current.currentVersionId},{merge:false});
+          output={status:"published",amendmentStatus:"pending_approval",revision:next,versionId}; return;
+        }
+        if (action==="discard_amendment") {
+          const amendment=current.amendment;
+          if (!canCreate || current.status!=="published" || !amendment) {
+            throw new ActivitySalesError("AMENDMENT_DISCARD_FORBIDDEN",403,"目前沒有可取消的修訂");
+          }
+          const aRef=amendment.status==="pending_approval" ? approvalRef(brand,amendment.versionId) : null;
+          const aSnap=aRef ? await tx.get(aRef) : null;
+          if (aRef && (!aSnap.exists || aSnap.data()?.status!=="pending" ||
+              aSnap.data()?.brandId!==brand || aSnap.data()?.campaignId!==id ||
+              aSnap.data()?.versionId!==amendment.versionId)) {
+            throw new ActivitySalesError("AMENDMENT_APPROVAL_INVALID",409,"修訂審核狀態不一致");
+          }
+          if (aRef) tx.set(aRef,{status:"withdrawn",activeReviewerKeys:[],updatedAt:activitySalesServerTimestamp(admin)},{merge:true});
+          tx.set(ref,{revision:next,amendment:null,updatedAt:activitySalesServerTimestamp(admin),updatedAtText:now,updatedBy:actor},{merge:true});
+          tx.set(log,{...baseAudit,toStatus:"published",revision:next,
+            versionId:amendment.versionId || "",baseVersionId:amendment.baseVersionId},{merge:false});
+          output={status:"published",amendmentStatus:"discarded",revision:next}; return;
+        }
+        if (action==="publish_amendment") {
+          const amendment=current.amendment;
+          if (!canPublish || current.status!=="published" || amendment?.status!=="approved") {
+            throw new ActivitySalesError("AMENDMENT_PUBLISH_FORBIDDEN",403,"目前修訂尚未核准或帳號無發布權限");
+          }
+          if (amendment.baseVersionId!==current.currentVersionId) {
+            throw new ActivitySalesError("AMENDMENT_BASE_CHANGED",409,"正式版本已變更，禁止發布舊修訂");
+          }
+          if (amendment.releaseMode==="scheduled_after_approval") {
+            const at=Date.parse(amendment.scheduledPublishAtText || "");
+            if (!Number.isFinite(at) || Date.now()<at) {
+              throw new ActivitySalesError("SCHEDULE_NOT_READY",409,"尚未到修訂排程發布時間");
+            }
+          }
+          const vSnap=await tx.get(versionRef(brand,amendment.versionId));
+          const approvalSnap=await tx.get(approvalRef(brand,amendment.versionId));
+          const pubSnap=await tx.get(publishedRef(brand,id));
+          const snapshotPlan=vSnap.data()?.campaignSnapshot?.approvalPlan || {};
+          if (!vSnap.exists || vSnap.data()?.brandId!==brand || vSnap.data()?.campaignId!==id ||
+              vSnap.data()?.versionId!==amendment.versionId ||
+              vSnap.data()?.baseVersionId!==current.currentVersionId ||
+              snapshotPlan.mode==="none" || snapshotPlan.releaseMode!==amendment.releaseMode ||
+              (amendment.releaseMode==="scheduled_after_approval" &&
+                snapshotPlan.scheduledPublishAt!==amendment.scheduledPublishAtText) ||
+              !approvalSnap.exists || approvalSnap.data()?.brandId!==brand ||
+              approvalSnap.data()?.campaignId!==id || approvalSnap.data()?.versionId!==amendment.versionId ||
+              approvalSnap.data()?.status!=="approved" ||
+              !pubSnap.exists || pubSnap.data()?.brandId!==brand ||
+              pubSnap.data()?.versionId!==current.currentVersionId) {
+            throw new ActivitySalesError("AMENDMENT_VERSION_INVALID",409,"已發布版本與審核快照不一致");
+          }
+          const draft=vSnap.data().campaignSnapshot;
+          tx.set(publishedRef(brand,id),buildActivitySalesPublication({brandId:brand,campaignId:id,
+            versionId:amendment.versionId,campaignSnapshot:draft,publishedAtText:now}),{merge:false});
+          tx.set(ref,{revision:next,currentVersionId:amendment.versionId,amendment:null,draft,
+            releaseMode:amendment.releaseMode,scheduledPublishAtText:amendment.scheduledPublishAtText,
+            publishedAt:activitySalesServerTimestamp(admin),publishedAtText:now,publishedBy:actor,
+            updatedAt:activitySalesServerTimestamp(admin),updatedAtText:now,updatedBy:actor},{merge:true});
+          tx.set(log,{...baseAudit,toStatus:"published",revision:next,versionId:amendment.versionId,
+            previousVersionId:current.currentVersionId},{merge:false});
+          output={status:"published",revision:next,versionId:amendment.versionId}; return;
+        }
 
         if (action==="update_draft") {
           if (!canCreate || !["draft","returned"].includes(current.status)) throw new ActivitySalesError("EDIT_FORBIDDEN",403,"目前狀態或帳號不可修改此活動");
@@ -473,10 +607,18 @@ function createActivitySalesAuthorityFunctions({admin,db}) {
         }
 
         if (action==="approve" || action==="return_for_changes") {
-          if (current.status!=="pending_approval" || !current.currentVersionId) throw new ActivitySalesError("NOT_PENDING",409,"此活動目前不在審核中");
-          const aRef=approvalRef(brand,current.currentVersionId); const aSnap=await tx.get(aRef);
+          const isAmendment=current.status==="published" && current.amendment?.status==="pending_approval";
+          const pendingVersionId=isAmendment ? current.amendment.versionId : current.currentVersionId;
+          if (!(current.status==="pending_approval" || isAmendment) || !pendingVersionId) {
+            throw new ActivitySalesError("NOT_PENDING",409,"此活動目前不在審核中");
+          }
+          const aRef=approvalRef(brand,pendingVersionId); const aSnap=await tx.get(aRef);
           if (!aSnap.exists) throw new ActivitySalesError("APPROVAL_STATE_MISSING",409,"活動審核狀態遺失");
-          const approval=aSnap.data() || {}; const stepIndex=Number(approval.currentStepIndex || 0); const step=(approval.steps || [])[stepIndex];
+          const approval=aSnap.data() || {};
+          if (approval.brandId!==brand || approval.campaignId!==id || approval.versionId!==pendingVersionId || approval.status!=="pending") {
+            throw new ActivitySalesError("APPROVAL_IDENTITY_MISMATCH",409,"審核文件與目前活動版本不一致");
+          }
+          const stepIndex=Number(approval.currentStepIndex || 0); const step=(approval.steps || [])[stepIndex];
           if (!step || !actorInStep(step,actorCheck)) throw new ActivitySalesError("APPROVAL_FORBIDDEN",403,"目前帳號不是這一關的核准人員");
           if (approval.allowCreatorApproval!==true && sameIdentity(approval.creator || {},actor)) throw new ActivitySalesError("CREATOR_CANNOT_APPROVE",403,"此活動設定為建立者不可自行核准");
           const key=decisionKey(actor); const decisions={...(approval.decisions || {})};
@@ -484,9 +626,11 @@ function createActivitySalesAuthorityFunctions({admin,db}) {
           if (action==="return_for_changes") {
             decisions[key]={stepId:step.stepId,decision:"returned",actor,comment:text(body.comment,500),decidedAtText:now};
             tx.set(aRef,{status:"returned",decisions,activeReviewerKeys:[],returnedAt:activitySalesServerTimestamp(admin),returnedAtText:now},{merge:true});
-            tx.set(ref,{revision:next,status:"returned",updatedAt:activitySalesServerTimestamp(admin),updatedAtText:now,updatedBy:actor},{merge:true});
-            tx.set(log,{...baseAudit,toStatus:"returned",revision:next,versionId:current.currentVersionId,stepId:step.stepId},{merge:false});
-            output={status:"returned",revision:next}; return;
+            tx.set(ref,{revision:next,...(isAmendment ? {amendment:{...current.amendment,status:"returned"}} : {status:"returned"}),
+              updatedAt:activitySalesServerTimestamp(admin),updatedAtText:now,updatedBy:actor},{merge:true});
+            tx.set(log,{...baseAudit,toStatus:isAmendment?"published":"returned",revision:next,
+              versionId:pendingVersionId,stepId:step.stepId},{merge:false});
+            output={status:isAmendment?"published":"returned",amendmentStatus:isAmendment?"returned":null,revision:next}; return;
           }
           decisions[key]={stepId:step.stepId,decision:"approved",actor,comment:text(body.comment,500),decidedAtText:now};
           const approvedActors=Object.values(decisions).filter((d)=>d?.stepId===step.stepId&&d?.decision==="approved").map((d)=>d.actor || {});
@@ -495,15 +639,26 @@ function createActivitySalesAuthorityFunctions({admin,db}) {
           if (complete) {
             nextIndex+=1;
             if (nextIndex>=(approval.steps || []).length) {
-              const vSnap=await tx.get(versionRef(brand,current.currentVersionId));
-              if (!vSnap.exists) throw new ActivitySalesError("VERSION_NOT_FOUND",409,"活動正式版本遺失");
+              const vSnap=await tx.get(versionRef(brand,pendingVersionId));
+              if (!vSnap.exists || vSnap.data()?.brandId!==brand ||
+                  vSnap.data()?.campaignId!==id || vSnap.data()?.versionId!==pendingVersionId ||
+                  (isAmendment && vSnap.data()?.baseVersionId!==current.currentVersionId)) {
+                throw new ActivitySalesError("VERSION_NOT_FOUND",409,"活動正式版本與送審快照不一致");
+              }
               approvedSnapshot=vSnap.data()?.campaignSnapshot;
               status=approvedStatus(approvedSnapshot?.approvalPlan || {});
+              if (isAmendment && status==="published") {
+                const pubSnap=await tx.get(publishedRef(brand,id));
+                if (!pubSnap.exists || pubSnap.data()?.brandId!==brand ||
+                    pubSnap.data()?.versionId!==current.currentVersionId) {
+                  throw new ActivitySalesError("AMENDMENT_BASE_CHANGED",409,"第一線正式發布版本已變更");
+                }
+              }
             }
           }
           if (status === "published") {
             tx.set(publishedRef(brand,id),buildActivitySalesPublication({
-              brandId:brand,campaignId:id,versionId:current.currentVersionId,
+              brandId:brand,campaignId:id,versionId:pendingVersionId,
               campaignSnapshot:approvedSnapshot,publishedAtText:now,
             }),{merge:false});
           }
@@ -511,9 +666,19 @@ function createActivitySalesAuthorityFunctions({admin,db}) {
           tx.set(aRef,{status:nextApproval.status,currentStepIndex:nextApproval.currentStepIndex,decisions,
             activeReviewerKeys:activeReviewerKeys(nextApproval,decisionKey),
             updatedAt:activitySalesServerTimestamp(admin),updatedAtText:now,...(status!=="pending_approval"?{approvedAt:activitySalesServerTimestamp(admin),approvedAtText:now}:{})},{merge:true});
-          tx.set(ref,{revision:next,status,updatedAt:activitySalesServerTimestamp(admin),updatedAtText:now,updatedBy:actor,...(status==="published"?{publishedAt:activitySalesServerTimestamp(admin),publishedAtText:now,publishedBy:actor}:{})},{merge:true});
-          tx.set(log,{...baseAudit,toStatus:status,revision:next,versionId:current.currentVersionId,stepId:step.stepId},{merge:false});
-          output={status,revision:next,currentStepIndex:Math.min(nextIndex,(approval.steps || []).length)}; return;
+          const amendedComplete=isAmendment && status!=="pending_approval";
+          const amendmentSwap=isAmendment && status==="published";
+          tx.set(ref,{revision:next,...(isAmendment ? {
+            amendment:amendmentSwap?null:{...current.amendment,status},
+            ...(amendmentSwap?{currentVersionId:pendingVersionId,draft:approvedSnapshot,
+              releaseMode:current.amendment.releaseMode,
+              scheduledPublishAtText:current.amendment.scheduledPublishAtText}:{}),
+          } : {status}),updatedAt:activitySalesServerTimestamp(admin),updatedAtText:now,updatedBy:actor,
+            ...(status==="published"?{publishedAt:activitySalesServerTimestamp(admin),publishedAtText:now,publishedBy:actor}:{})},{merge:true});
+          tx.set(log,{...baseAudit,toStatus:isAmendment?"published":status,revision:next,
+            versionId:pendingVersionId,stepId:step.stepId,amendmentApproved:amendedComplete},{merge:false});
+          output={status:isAmendment?"published":status,amendmentStatus:isAmendment?(amendmentSwap?"published":status):null,
+            revision:next,currentStepIndex:Math.min(nextIndex,(approval.steps || []).length)}; return;
         }
 
         if (action==="publish") {
@@ -538,9 +703,19 @@ function createActivitySalesAuthorityFunctions({admin,db}) {
 
         if (action==="stop") {
           if (!canPublish || current.status!=="published") throw new ActivitySalesError("STOP_FORBIDDEN",403,"目前帳號或活動狀態不可停止活動");
+          // Emergency stop supersedes all private amendments and removes Inbox keys.
+          const pending=current.amendment?.status==="pending_approval" ?
+            approvalRef(brand,current.amendment.versionId) : null;
+          const pendingSnap=pending ? await tx.get(pending) : null;
+          if (pending && (!pendingSnap.exists || pendingSnap.data()?.status!=="pending" ||
+              pendingSnap.data()?.brandId!==brand || pendingSnap.data()?.campaignId!==id ||
+              pendingSnap.data()?.versionId!==current.amendment.versionId)) {
+            throw new ActivitySalesError("AMENDMENT_APPROVAL_INVALID",409,"修訂審核狀態不一致");
+          }
+          if (pending) tx.set(pending,{status:"withdrawn",activeReviewerKeys:[],updatedAt:activitySalesServerTimestamp(admin)},{merge:true});
           // Remove frontline visibility atomically with authoritative stop.
           tx.delete(publishedRef(brand,id));
-          tx.set(ref,{revision:next,status:"stopped",stoppedAt:activitySalesServerTimestamp(admin),stoppedAtText:now,stoppedBy:actor,updatedAt:activitySalesServerTimestamp(admin),updatedAtText:now,updatedBy:actor},{merge:true});
+          tx.set(ref,{revision:next,amendment:null,status:"stopped",stoppedAt:activitySalesServerTimestamp(admin),stoppedAtText:now,stoppedBy:actor,updatedAt:activitySalesServerTimestamp(admin),updatedAtText:now,updatedBy:actor},{merge:true});
           tx.set(log,{...baseAudit,toStatus:"stopped",revision:next,versionId:current.currentVersionId || ""},{merge:false});
           output={status:"stopped",revision:next}; return;
         }
