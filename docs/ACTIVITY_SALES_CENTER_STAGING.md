@@ -82,3 +82,10 @@ Frontend 顯示權限不等於 Backend 授權。
 當 Phase 1 核心流程完成後，再建立第二層 remote Staging Firebase project。
 該 project 必須與 cyjsituation-analysis 完全不同，且需要明確 project id 後才會設定。
 在使用者提供 / 建立 remote Staging project 前，不會猜 project id，也不會拿 Production 代替。
+
+# Phase 1A 隔離
+`manageActivitySalesPolicy` 與 `manageActivityCampaign` 只加入 feature branch。
+本機 Activity Sales dev mode 已將兩個 endpoint 納入 localhost Functions Emulator route guard。
+本階段不部署正式 Functions / Rules。
+- Phase 1A 尚未啟用自動排程 publisher；`scheduled_after_approval` 只允許到時後由正式 publisher 動作放行，絕不提前發布。
+- Activity Sales Rules 另以 demo project Emulator regression 驗證同品牌唯讀、Browser write deny、跨品牌 deny。

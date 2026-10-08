@@ -5429,3 +5429,17 @@ functions/systemExclusion.js
 The event owner continues to mark historical Summary authority dirty. The shared Summary
 repair worker now also converges `annual_kpi_summary/{YYYY}` after safe
 System-Exclusion repair. Frontend authority/fail-closed behavior is unchanged.
+
+# Activity Sales Center Phase 1A（feature branch）
+主要 owner：
+- `functions/activitySalesAuthority.js`
+- `functions/index.js`
+- `firestore.rules`
+- `src/config/runtimeEnvironment.js`
+- `tests/activitySalesAuthority.test.js`
+
+Backend endpoints：
+- `manageActivitySalesPolicy`
+- `manageActivityCampaign`
+- `tests/activitySalesRulesEmulator.test.mjs`：Activity Sales 同品牌 read / Browser write deny / cross-brand deny。
+- `tests/activitySalesAuthority.test.js`：release semantics、creator-approval feasibility、policy transaction guard、價格拆帳與 wiring。

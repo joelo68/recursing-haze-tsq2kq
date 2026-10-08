@@ -154,6 +154,15 @@ const modulePermissionsFunctions = createModulePermissionsFunctions({ admin, db 
 exports.manageModulePermissions = modulePermissionsFunctions.manageModulePermissions;
 
 // ==========================================
+// ★ Activity Sales Center Phase 1A：活動 Authority / Version / Approval lifecycle
+// Backend-only writer；建立者、核准者與發布者皆由品牌 policy 配置。
+// ==========================================
+const { createActivitySalesAuthorityFunctions } = require("./activitySalesAuthority");
+const activitySalesAuthorityFunctions = createActivitySalesAuthorityFunctions({ admin, db });
+exports.manageActivitySalesPolicy = activitySalesAuthorityFunctions.manageActivitySalesPolicy;
+exports.manageActivityCampaign = activitySalesAuthorityFunctions.manageActivityCampaign;
+
+// ==========================================
 // ★ P0-FINAL-1D-A1：Administrative Settings Authority
 // security_config / feature_flags / kpi_targets / system_version 的 Browser writer 收斂至 Backend。
 // 最高管理者 + Trusted Device + credential + revision OCC；不新增 listener/polling。

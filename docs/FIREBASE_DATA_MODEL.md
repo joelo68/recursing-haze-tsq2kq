@@ -3497,3 +3497,19 @@ verifying the month. Annual rebuild is then event-driven after repaired month au
 converges and is de-duplicated by brand/year.
 
 No new Firestore collection or document type was introduced.
+
+# Activity Sales Center v1（Phase 1A feature branch，尚未 Production）
+品牌 path 沿用正式 resolver：
+- CYJ：`artifacts/default-app-id/public/data/{collection}`
+- 安妞 / 伊啵：`brands/{brandId}/{collection}`
+
+新增：
+- `activity_sales_policy/current`：自訂群組、建立者、直接發布者、手動發布者、revision。
+- `activity_campaigns/{campaignId}`：mutable head + draft + status + revision。
+- `activity_campaign_versions/{versionId}`：每次送審的 immutable snapshot。
+- `activity_campaign_approvals/{versionId}`：審核步驟、人員快照、決策。
+- `activity_sales_audit/{auditId}`：Backend audit。
+
+上述集合 Browser 同品牌唯讀；write 一律 Backend-only。
+- `activity_campaigns` current head 另保存 `releaseMode` / `scheduledPublishAtText`，讓排程發布在尚未加入 scheduler 前仍可 fail-closed，不會提早變成 published。
+- `activity_campaign_versions.approvalPlanSnapshot.policyRevision` 固定送審當下 policy revision；核准人員群組已解析為 immutable concrete-member snapshot。

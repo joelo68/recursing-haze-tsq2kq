@@ -3045,3 +3045,13 @@ guard.
 
 Read impact: one additional single-document `audit_exclusions` read per Annual rebuild.
 No listener, broad query, or polling was added.
+
+# Activity Sales Center Phase 1A flow（feature branch）
+`Policy → Draft → revision OCC → Submit → immutable Version → Approval transaction → approved/published/returned`
+
+本階段：
+- 無 polling / scheduler。
+- 無 App 全域 collection listener。
+- 無日報成交 writer。
+- Campaign mutation：`Trusted Application Actor → transaction read current policy + campaign → OCC → write campaign/version/approval/audit`。
+- `scheduled_after_approval`：Phase 1A 審核完成停在 approved；未到排程時間 publish action fail-closed。自動 scheduler 尚未加入。

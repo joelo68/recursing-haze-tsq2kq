@@ -61,3 +61,16 @@
 Phase 1～3 開發 / Staging 不修改 Production CURRENT_APP_VERSION。
 正式 Production 大型 Release 時才同步升版，暫定 3.6.2 → 4.0.0，
 實際版本以 Release Gate 當時最新 Production 為準。
+
+# Phase 1A 實作基線（feature branch）
+- 活動建立 / 直接發布 / 手動發布權限改為品牌可配置的「人員或群組」，不綁死職務。
+- 每檔活動可選免審核、任一人、全部、依序或自訂流程。
+- `allowCreatorApproval` 明確決定建立者能否自行核准。
+- 送審時把核准群組解析為當下實際人員快照，群組後續異動不改寫既有版本。
+- 每次送審建立 immutable `activity_campaign_versions`。
+- campaign `revision` + Firestore transaction 處理多人 race。
+- 正式售價必須等於套組內部歸屬金額合計。
+- Phase 1A 尚未做 UI、日報成交、分析、AI。
+- `scheduled_after_approval` 在 Phase 1A 採 fail-closed：審核完成先停在 `approved`，未到指定時間不得發布；自動排程 publisher 留待後續子階段接上。
+- `allowCreatorApproval=false` 時，若 `all` quorum 仍包含建立者，視為不可完成的流程並在送審前拒絕。
+- Campaign 權限在 mutation transaction 內重讀最新 policy，避免權限調整與活動操作 race 使用舊 policy。

@@ -210,6 +210,10 @@ test("P0-FINAL-1D-A1 Rules make administrative settings browser-read-only", () =
   assert.match(rules, /settingId != 'kpi_targets'/);
 
   assert.match(rules, /match \/brands\/\{brandId\}\/settings\/\{settingId\}\/\{document=\*\*\}[\s\S]{0,900}settingId != 'security_config'[\s\S]{0,300}settingId != 'feature_flags'[\s\S]{0,300}settingId != 'kpi_targets'/);
-  assert.match(rules, /match \/brands\/\{brandId\}\/\{collectionName\}\/\{document=\*\*\}[\s\S]{0,1200}collectionName != 'settings'/);
+  const genericBrandFallback = rules.match(
+    /match \/brands\/\{brandId\}\/\{collectionName\}\/\{document=\*\*\} \{([\s\S]*?)\n    \}/
+  );
+  assert.ok(genericBrandFallback, "generic brand fallback rule must exist");
+  assert.match(genericBrandFallback[1], /collectionName != 'settings'/);
   assert.doesNotMatch(rules, /collectionName == 'settings' && document == 'security_config'/);
 });

@@ -1698,3 +1698,13 @@ read Lifecycle + System Exclusion
 因此多管理者／設定變更與 scheduled rebuild 同時發生時，不應由舊 snapshot 覆蓋新 authority。
 
 Consumer trust 仍會再次核對 current Lifecycle / Reporting Calendar / System Exclusion；Rules write protection不能取代 runtime trust check。
+
+# Activity Sales Center Security（Phase 1A feature branch）
+- Policy 修改：既有最高管理者 + Trusted Device 安全邊界。
+- Campaign action：Firebase Application Identity + Trusted Device + fresh credential。
+- 建立 / 直接發布 / 手動發布不硬編職務，由品牌 policy 的帳號 / 群組配置。
+- campaign revision + transaction 防 lost update。
+- `allowCreatorApproval=false` 時建立者不可核准自己。
+- Browser 對 Activity Sales authority collections 全部禁止寫入。
+- Campaign mutation 在同一 transaction 內讀取 current Activity Sales policy，再做 creator / direct publisher / publisher 授權，避免 policy 變更 race 使用 stale authority。
+- `allowCreatorApproval=false` 對 `all` quorum 採 fail-closed：只要該步驟包含建立者即拒絕送審，避免形成永遠無法完成的審核步驟。
