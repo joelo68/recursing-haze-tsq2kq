@@ -74,3 +74,9 @@ Phase 1～3 開發 / Staging 不修改 Production CURRENT_APP_VERSION。
 - `scheduled_after_approval` 在 Phase 1A 採 fail-closed：審核完成先停在 `approved`，未到指定時間不得發布；自動排程 publisher 留待後續子階段接上。
 - `allowCreatorApproval=false` 時，若 `all` quorum 仍包含建立者，視為不可完成的流程並在送審前拒絕。
 - Campaign 權限在 mutation transaction 內重讀最新 policy，避免權限調整與活動操作 race 使用舊 policy。
+
+# Phase 2A-0 Contract addendum（feature-only，不是正式 Writer）
+- `UNCONFIRMED` 的歸屬筆數/金額是 `null`，不是 0；`CONFIRMED_ZERO` 必須有主動確認事實且不得同時含成交；`HAS_SALES` 至少含一筆成交。
+- 正式業績 `daily_reports` / `therapist_daily_reports` 已包含成交金額；活動成交只做額外 **歸屬註記**，`formalRevenueDelta=0`。不影響 Dashboard、Summary、Ranking、KPI 營收。
+- 歸屬事件必須保存 `brandId`、`campaignId`、成交時 `versionId`、`reportDate`、經驗證人員身分及獨立 `saleId`；已發布活動換版後不得改寫過去事件的版本歸屬。
+- 此 addendum 只定義 `functions/activitySalesAttributionContract.js` 純函式；真正 writer、對應正式日報的歸屬確認、更正、退款、店經理核對與目標仍是下一階段，未啟用。

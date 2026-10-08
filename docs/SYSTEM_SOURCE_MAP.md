@@ -5491,3 +5491,8 @@ Backend endpoints：
 - `tests/activitySalesAmendment.test.js`：三品牌、雙管理者 all quorum、權限、OCC、退回、停止、版本切換與 schedule 模擬 transaction 回歸。
 - `tests/activitySalesAmendmentFunctionsEmulator.test.mjs`：demo 專用三品牌真實 Firestore／Functions／Cloud Tasks 端到端新版本排程切換（不在 Production 執行）。
 - `tests/activitySalesInboxTransaction.test.js`：將原有模擬不可變版本補齊 brand/campaign/version 身分。`firestore.rules` 與 `functions/index.js` 無修改。
+
+## Activity Sales Phase 2A-0（feature-only）
+- `functions/activitySalesAttributionContract.js`：活動成交的純驗證契約／三態分類／不可重複加總／歷史版本身分雜湊鍵（不存取 Firestore，非 writer）。
+- `tests/activitySalesAttributionContract.test.js`：契約回歸測試（此批不增加日報 endpoint / UI / Rules）。
+- 既有實際日報 owner：`src/components/InputView.jsx`（`daily_reports` 店務與 `therapist_daily_reports` 個人日報寫入）；`functions/deviceApproval.js`（登入憑證與店家關聯）；活動版本發布仍在 `functions/activitySalesAuthority.js` / `functions/activitySalesPublishedProjection.js`。這批皆只檢查，不修改。

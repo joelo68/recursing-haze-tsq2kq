@@ -133,3 +133,15 @@ Frontend 顯示權限不等於 Backend 授權。
 - `discard_amendment`、緊急 `stop` 會原子清理未完成修訂與其待核准索引；排程過期／改版／停止後的舊任務因版本與狀態核對而跳過。舊版本理解確認紀錄保留為歷史但不能替新 versionId 確認。
 - Backend `getActivitySalesWorkspace` 僅在修訂待審時讀取該版本一筆 approval；Browser Rules 不加新讀寫權限。沒有大型 query、polling、listener 或額外 collection/index。
 - 此子批次不碰 Phase 2 正式日報營收／歸屬，亦不開 Phase 3 分析；Production `main`、Firestore、Functions、Hosting 與 `CURRENT_APP_VERSION=3.6.2` 均不變。
+
+# Phase 2A-0 — 日報活動歸屬契約（feature-only；尚未接入 Writer）
+
+- 基線 `feature/activity-sales-center @ a9e3876758c96f09240dbcb564e9e0b655859082`，正式 `main @ 36ee6eff1a198fc7b4d9ab33eee9068c3a882dcd`，`CURRENT_APP_VERSION=3.6.2`。
+- 新增 **純函式** `functions/activitySalesAttributionContract.js`（不接 endpoint、不讀寫 Firestore、不修改正式 `daily_reports` / `therapist_daily_reports`）。新測試 `tests/activitySalesAttributionContract.test.js`。
+- 三狀態不可混同：`UNCONFIRMED`（沒有確認紀錄，金額/筆數為 null）、`CONFIRMED_ZERO`（明確確認無成交，金額/筆數=0）、`HAS_SALES`（至少一筆成交明細）。若資料狀態互相矛盾，fail closed，不默默轉 0。
+- `attributedAmount` 表示 **原已列入業績的活動歸屬**；所有合約輸出的 `formalRevenueDelta` 固定為 **0**，正式總業績不得把歸屬額再次加總。
+- 歷史成交必須保留成交當時 `campaignId + versionId`，只對同品牌 immutable version 綁定，不能用改版後 current publication 回填舊成交； opaque event ID 包含品牌、日、角色、帳號、活動、版本、成交 ID。
+- `reportDate` 是校驗過的 `YYYY-MM-DD`；日報日期回報時間／補登安全規則仍由已存在日報合約處理，Phase 2 writer 必須沿用並獨立後端驗證。
+- **尚未實作**：授權寫入端、日報介面、店經理覆核、特殊成交、更正/退款/取消、活動目標、分析、Firestore collections/index/rules；本批不宣稱 Phase 2 完成。
+- 下一個 write gate 必須先驗證最新 `therapist` 憑證主資料所屬門市與 `store` 帳號 `stores` 名單、`daily_reports` / `therapist_daily_reports` 真正資料 ID，並考慮因既有日報 `setDoc` 覆寫造成的競爭條件。不得信任 Browser 傳入門市；不得讓活動歸屬污染正式 Summary／Ranking。
+- Reads/Writes budget：本批新增 Firebase Reads = 0，Writes = 0，Functions invocation = 0；沒有 listener、polling、index 或部署。
