@@ -1742,3 +1742,7 @@ Consumer trust 仍會再次核對 current Lifecycle / Reporting Calendar / Syste
 - 同 transaction 驗證當前 `activity_sales_publications` 與 immutable `activity_campaign_versions`，只認同版本及正式有效期間／門市適用範圍／正式套組價格。OCC revision 防競爭，immutable sale ID 拒絕不同內容覆蓋；零成交不得無審核變成有成交。
 - Browser Rules 對三個私人歸屬 collection 顯式封閉 CYJ 與安妞／伊啵，並從 generic fallback 排除；不更動既有正式日報 Browser writer 規則。
 - 真實 IAM、日報更正／退款、資料追溯與歷史活動版本歸屬仍需後續階段設計及 remote Staging／UAT；本批不宣稱 Production-ready。
+
+
+### Activity Sales Phase 2A-2 — private report read
+`getActivitySalesAttributionStatus` 為 POST only，服務端驗證 Application Identity claims、Trusted Device、fresh credential、role/account/store master、已存在且屬於本帳號/店的日報、目前發布活動與 immutable version；只讀一筆 deterministic activity attribution daily document。三品牌獨立路徑；Firestore Rules 仍拒絕 Browser 讀寫所有 attribution 私人集合；資料矛盾 fail closed，不能繞過日報驗證或把未回報當 0。無更正/刪除權限。Frontend 在 Production build 不掛載唯讀面板。

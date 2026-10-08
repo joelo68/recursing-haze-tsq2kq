@@ -5506,3 +5506,12 @@ Backend endpoints：
 - `tests/activitySalesAttributionWriter.test.js`：Backend writer mock transaction、角色／門市、品牌、版本、zero/OCC/idempotency/報價回歸。
 - `tests/activitySalesAttributionWriterEmulator.test.mjs`：僅 demo Firestore Emulator 下檢查三品牌 transaction/OCC 與正式日報不變。
 - `tests/activitySalesRulesEmulator.test.mjs`：擴充新私人集合的瀏覽器阻擋矩陣。
+
+
+### Phase 2A-2 — isolated daily report attribution view
+- `functions/activitySalesAttributionReader.js`：單筆 private attribution reader，session/Trusted Device/credential/report/version gate，無資料寫入。
+- `functions/index.js`：feature-only `getActivitySalesAttributionStatus` export。
+- `src/components/ActivitySalesAttributionStatusPanel.jsx`：本機 DEV 手動載入目前正式活動並唯讀顯示活動成交三狀態，非正式營收加總。
+- `src/components/InputView.jsx`：僅 DEV 的 store/therapist 日報表單掛載面板，原上報/覆寫流程不變。
+- `src/config/runtimeEnvironment.js`：新增 reader route 的 local emulator mapping；未知 Production Functions 維持阻擋。
+- `tests/activitySalesAttributionReader.test.js`、`tests/activitySalesAttributionReaderEmulator.test.mjs`：契約/權限/OCC 純測試與三品牌 Firestore 真交易讀回。

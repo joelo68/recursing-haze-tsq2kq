@@ -179,6 +179,10 @@ exports.acknowledgeActivitySalesPublication = createActivitySalesAcknowledgement
 const {createActivitySalesAttributionWriterFunctions}=require("./activitySalesAttributionWriter");
 exports.writeActivitySalesAttribution=createActivitySalesAttributionWriterFunctions({admin,db}).writeActivitySalesAttribution;
 
+// Phase 2A-2: private single-document attribution read; no formal report writes.
+const {createActivitySalesAttributionReaderFunctions}=require("./activitySalesAttributionReader");
+exports.getActivitySalesAttributionStatus=createActivitySalesAttributionReaderFunctions({admin,db}).getActivitySalesAttributionStatus;
+
 // ==========================================
 // ★ P0-FINAL-1D-A1：Administrative Settings Authority
 // security_config / feature_flags / kpi_targets / system_version 的 Browser writer 收斂至 Backend。

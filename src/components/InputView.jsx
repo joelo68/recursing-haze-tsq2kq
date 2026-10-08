@@ -17,6 +17,8 @@ import { classifyDailyReportDate, formatReportMonthDay, getCurrentTaipeiReportDa
 import { AppContext } from "../AppContext";
 import { ViewWrapper, Card } from "./SharedUI";
 import SmartDatePicker from "./SmartDatePicker";
+import ActivitySalesAttributionStatusPanel from "./ActivitySalesAttributionStatusPanel";
+import { ACTIVITY_SALES_DEV_MODE } from "../config/runtimeEnvironment";
 
 const getReportTodayString = () => getCurrentTaipeiReportDate();
 
@@ -103,7 +105,7 @@ const StoreInputView = () => {
   const {
     currentUser, userRole, managers, officialManagers, managerOrder, inputDate, setInputDate, showToast, logActivity, rawData,
     getCollectionPath, currentBrand, isOnline, accessibleStores = [], delegatedStores = [],
-    canEditStoreReport, getActiveDelegationForStore
+    canEditStoreReport, getActiveDelegationForStore, currentDeviceTrust
   } = useContext(AppContext);
 
   const [selectedManager, setSelectedManager] = useState("");
@@ -411,6 +413,14 @@ const StoreInputView = () => {
         </div>
       )}
 
+      {ACTIVITY_SALES_DEV_MODE && userRole === "store" && selectedStore && (
+        <ActivitySalesAttributionStatusPanel
+          key={`${typeof currentBrand === "string" ? currentBrand : currentBrand?.id}-${selectedStore}-${inputDate}`}
+          brandId={typeof currentBrand === "string" ? currentBrand : currentBrand?.id}
+          roleId="store" storeName={selectedStore} reportDate={inputDate}
+          deviceId={currentDeviceTrust?.deviceId || ""} />
+      )}
+
       <div className="bg-white p-6 rounded-2xl border border-stone-100 shadow-sm space-y-4">
         <div>
           <label className="block text-xs font-bold mb-1.5 text-stone-400 uppercase">回報日期</label>
@@ -544,7 +554,7 @@ const StoreInputView = () => {
 const TherapistInputView = () => {
   const { 
     currentUser, userRole, inputDate, setInputDate, showToast, logActivity,
-    getCollectionPath, currentBrand,
+    getCollectionPath, currentBrand, currentDeviceTrust,
     isOnline 
   } = useContext(AppContext);
   
@@ -803,6 +813,13 @@ const TherapistInputView = () => {
         <div className="bg-emerald-50 text-emerald-600 p-3 rounded-xl text-sm font-bold flex items-center gap-2 border border-emerald-100">
           <CheckCircle size={16}/> 您已完成 {inputDate} 的回報。
         </div>
+      )}
+
+      {ACTIVITY_SALES_DEV_MODE && userRole === "therapist" && resolvedTherapistStoreName && (
+        <ActivitySalesAttributionStatusPanel
+          key={`${brandInfo.id}-${currentUser?.id}-${resolvedTherapistStoreName}-${inputDate}`}
+          brandId={brandInfo.id} roleId="therapist" storeName={resolvedTherapistStoreName}
+          reportDate={inputDate} deviceId={currentDeviceTrust?.deviceId || ""} />
       )}
 
       <Card title="個人績效回報">

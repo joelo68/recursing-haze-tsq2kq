@@ -154,3 +154,14 @@ Frontend 顯示權限不等於 Backend 授權。
 - 本批不修改 `daily_reports`、`therapist_daily_reports`、Summary、Ranking、正式營收、任一既有 Firestore listener；不新增輪詢或跨品牌查詢。
 - 單次寫入核心 transaction：store 4–5 docs read，therapist 5–6 docs read；另有 Trusted Device/credential 讀取，首次成交 3 docs writes，零成交 2 docs writes；此為程式路徑估算，非實際計費量。
 - Local Emulator 測試與 Mac 完整回歸 PASS 前，不得 commit/push；Phase 1～3 仍不得部署正式環境。`CURRENT_APP_VERSION=3.6.2` 不變。
+
+
+# Phase 2A-2 — 日報活動歸屬唯讀面板（isolated feature）
+- 基線 `feature/activity-sales-center @ e4a8f3c75faa3641df2e2bb7625a099d77a08874`，Production `main @ 36ee6eff1a198fc7b4d9ab33eee9068c3a882dcd`，`CURRENT_APP_VERSION=3.6.2` 不變。
+- `InputView` 僅在 `VITE_ACTIVITY_SALES_DEV=true` 且 `store` / `therapist` 權限下顯示唯讀面板；由使用者點擊才用現有公開 `activity_sales_publications` small scoped query（單次最多 30 檔）載入目前正式活動，再選一個 `campaignId+versionId` 手動要求後端讀回。
+- `getActivitySalesAttributionStatus` 是獨立 Backend HTTP POST；必須 Firebase Application Identity claims、同品牌/帳號/角色、Trusted Device、fresh credential，並由 `store_account_data.stores` 或 `therapists` master 驗證門市／存在正式日報。僅以 `summaryDocumentId(brand,role,account,date,campaign,version)` 從私人 `activity_sales_daily_attributions` 讀**一筆**。原 Browser deny Rules 保留；不新增 query index、listener、polling 或后台掃描。
+- Status 契約：不存在摘要才 `UNCONFIRMED`（`saleCount` / `attributedAmount` = null）；`CONFIRMED_ZERO` = 0/0；`HAS_SALES` = 正整數。資料衝突、未有正式日報、改版後 current version 不一致均 fail closed；不得默默變 0。
+- 本面板**只檢索目前正式版本**；不稱其為完整歷史活動版本列表。舊版成交須另有明確版本查詢工作流，不能誤讀目前新版無紀錄為歷史零成交。
+- 不修改/重算 `daily_reports`、`therapist_daily_reports`、Summary/Ranking、formal revenue；僅顯示歸屬，`formalRevenueDelta=0`。不提供 Browser Activity Sale writer、新增成交、更正、退款、零轉成交或主管覆核按鈕。
+- 估計每次手動查詢：公開正式活動列表最多讀取 30 documents（限量 query），個別歸屬查詢 store 4 docs / therapist 5 docs transaction reads，另計 Identity/Trusted Device credential reads；無 listener/polling。需以 Emulator/部署後 Firebase Usage 確認實際費用，不把估值寫成實際 reads。
+- 只有 Mac 全 CI、build、Rules/Firestore emulator 通過後才能 commit/push 隔離 feature；Phase 1～3 不得正式 Deploy。

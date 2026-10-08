@@ -3549,3 +3549,7 @@ No new Firestore collection or document type was introduced.
   - `activity_sales_attribution_audit/{eventHash_revision}`：每次寫入的 actor/action、OCC 前後 revision、immutable 記錄。
 - `dayHash`、`saleHash` 均用 SHA-256 隔離品牌、角色、帳號、日期、campaign/version；無 `collectionGroup`、無自動 writer 觸發、無 materialized report mutation。
 - 新 collection Browser read/write DENY（品牌專用 Rules + generic fallback 排除）；報表和歷史修正尚無消費端／移轉。
+
+
+### Phase 2A-2 — read-only view
+`activity_sales_daily_attributions/{dayHash}` 維持 Phase 2A-1 私有結構與 Browser deny Rules，無新增 collection/index/listener。Backend 透過 `summaryDocumentId(brandId,roleId,accountId,reportDate,campaignId,versionId)` 單筆讀回；文件不存在代表 `UNCONFIRMED`（null/null），僅明確 `CONFIRMED_ZERO` 可顯示 0/0，`HAS_SALES` 須為正整數；revision ≥1、同一 identity/version/storeCore 及 `formalRevenueDelta=0` 皆需驗證。三品牌 Firestore path 不變，`daily_reports`/`therapist_daily_reports` 不新增欄位。

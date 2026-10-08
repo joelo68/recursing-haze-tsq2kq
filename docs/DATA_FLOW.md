@@ -3083,3 +3083,7 @@ No listener, broad query, or polling was added.
 - Backend 驗證 session + device + credential → `therapist` 的 master 或 `store` 的授權 stores → 單品牌單日既有 `daily_reports`／`therapist_daily_reports` → 讀同品牌 published projection + immutable version → 讀當日活動摘要及指定 sale ID。
 - 在同一 Firestore transaction 以 expectedRevision OCC 提交 `activity_sales_daily_attributions` + immutable `activity_sales_attribution_sales` + audit；明確無成交只寫摘要 + audit。重複 saleId 內容相同不重寫／不重加總，內容不同 fail-closed。
 - 此處的 `attributedAmount` 僅為活動歸屬，`formalRevenueDelta=0`；不寫 `daily_reports`、`therapist_daily_reports`、Summary 或 Ranking。無 listener、query、polling；後續報表消費與更正流程尚未啟用。
+
+
+### Phase 2A-2 — Submitted report → activity attribution read-only status
+`InputView.jsx` isolated `ActivitySalesAttributionStatusPanel.jsx`（僅手動觸發）→ 公開已發布活動 ≤30 筆 → Firebase Identity + Trusted Device + current credential → Backend `getActivitySalesAttributionStatus` → therapist master（若是 therapist）+ 既存日報 + current publication + immutable version + deterministic daily attribution summary；無私人 Browser read，單次查詢無 polling/listener。`UNCONFIRMED`=N/A, `CONFIRMED_ZERO`=0, `HAS_SALES`=確定成交值；`formalRevenueDelta=0`，不觸發 Summary/Ranking writer，不更新日報。舊版活動查詢另開流程。
