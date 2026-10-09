@@ -69,6 +69,8 @@ test("writer: three brands create pending-only private documents, no revenue cha
     assert.equal(r.status,200,`${brand}: ${r.body.code}`);
     assert.equal(r.body.approvalState,"PENDING_REVIEW");assert.equal(r.body.officialKpiAllocation,"UNDECIDED");
     assert.equal(f.writes.length,2);assert.ok(f.writes.every(x=>x.startsWith(`${br(brand)}/`)));
+    const requestId=specialPriceRequestId(f.id,"sale001");
+    assert.equal(f.docs.get(`${br(brand)}/activity_sales_special_price_requests/${requestId}`).reportDocId,"2026-10-08_T001");
     assert.deepEqual(f.writes.map(x=>x.split("/").at(-2)).sort(),["activity_sales_special_price_requests","activity_sales_special_price_request_state"].sort());
     assert.equal(f.docs.get(`${br(brand)}/therapist_daily_reports/2026-10-08_T001`).totalRevenue,86400);
     assert.equal(await f.call().then(x=>x.body.state),"idempotent");assert.equal(f.writes.length,2);
@@ -77,6 +79,9 @@ test("writer: three brands create pending-only private documents, no revenue cha
 test("writer: altered replay blocked, cannot produce a second application",async()=>{
   const f=fixture();assert.equal((await f.call()).status,200);
   const r=await f.call({actualAmount:17000});assert.equal(r.status,409);assert.equal(f.writes.length,2);
+  // A different raw report name cannot silently reuse the original exact-report lock.
+  const changedReport=await f.call({storeName:"崇學店"});
+  assert.equal(changedReport.status,409);assert.equal(f.writes.length,2);
 });
 test("writer: unauthorized, revoked, cross-store, no report, no policy, stale version, existing sale, confirmed zero are denied",async()=>{
   for(const options of [{claimedBrand:"anniu"},{trusted:false},{active:false},{store:"其他"},

@@ -261,3 +261,16 @@ Frontend 顯示權限不等於 Backend 授權。
 - Firestore 估算：每筆申請最多讀取 11 個單筆文件（含管理師或店主管 master），成功只建立 2 個 private docs；不加入 listener、輪詢、索引或大查詢。真實讀數仍以 Emulator/帳單為準。
 - Source 在 Mac 尚須核對 HEAD、工作樹 SHA，再跑 Node CI、Build、三品牌 Rules Emulator 與真實交易競態，才可標記 VALIDATED；不可未實測先 Commit／Push。
 - Documentation Impact：本批只更新此 staging 文件；Production canonical docs 不描述尚未啟用的資料流程。
+
+
+## Phase 2A-5B3B1 — SPECIAL_PRICE review-only handoff (ISOLATED, NOT ACTIVATED)
+
+- Anchor: `feature/activity-sales-center @ 897f5bb44573966af629a1851da6de686e2b7077`; all changes are development candidates only; `CURRENT_APP_VERSION` stays `3.6.2`.
+- B3A pending-request Writer now stores the already validated original `storeName` and `reportDocId` on both request and lock documents, since the canonical `storeCore` does **not** retain the exact report document key for a `store` account. Old request records without these fields fail closed; no migration or backfill is run.
+- Reuse the B2 `parsePlan` / `applyDecision` authority for `SPECIAL_PRICE` by accepting `price_<sha256>` request identifiers **only** with proposal-bound `SPECIAL_PRICE` kind and `PENDING_REVIEW` state. Original `life_<sha256>` contract stays lifecycle-only.
+- Unregistered `activitySalesSpecialPriceReviewWriter.js` verifies Firebase Application Identity, Trusted Device + fresh credential, active reviewer, current same-brand policy/revision/hash, B3A request + pending lock, submitted original report, unchanged published immutable version + price and current sale absence under one OCC Firestore transaction.
+- Approved outcome is only `APPROVED_PENDING_SETTLEMENT`; rejected is `REJECTED`. The original request/lock remain pending and neither action creates an official activity sale, changes daily attribution, formal reports, Summary, KPI, revenue or ranking. Writes exclusively `activity_sales_special_price_review_decisions` (append only) and `activity_sales_special_price_review_state` (OCC).
+- Both brand paths and CYJ legacy paths block Browser reads/writes to those review collections, including the generic fallback rules. No listeners, queries, polling, index, UI or externally registered HTTPS handler.
+- **Known upstream gate:** `activitySalesAttributionWriter.js` does not yet check B3A price-request lock, so B3B2 may NOT activate settlement until the ordinary-price writer and review/settlement paths share transaction-level mutual exclusion and define approved sale posting policy. No financial month/quantity/close-period policy is assumed.
+- Est. per review attempt: <= 13 scoped document reads, at most 1 immutable decision and 1 review state write. No production reads or writes from this stage (unregistered).
+- Documentation Impact: only this staging doc; do not modify production canonical docs for not-yet-activated schema.

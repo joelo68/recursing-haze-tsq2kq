@@ -75,6 +75,7 @@ function createSpecialPriceRequestHandler({admin,db,services={}}){
           const prior=request.data();
           const before=prior?.proposal;
           if(prior.state==="PENDING_REVIEW" && prior.brandId===identity.brandId && prior.storeCore===storeCore &&
+             prior.storeName===storeName && prior.reportDocId===reportRef.id &&
              prior.policyRevision===plan.policyRevision && prior.planHash===plan.planHash &&
              prior.requestedByRole===actor.actorRole && prior.requestedByAccountId===actor.actorAccountId &&
              JSON.stringify(before)===JSON.stringify(proposed) && state?.exists &&
@@ -87,7 +88,7 @@ function createSpecialPriceRequestHandler({admin,db,services={}}){
         const timestamp=activitySalesServerTimestamp(admin);
         const common={brandId:identity.brandId,campaignId:identity.campaignId,versionId:identity.versionId,
           roleId:identity.roleId,accountId:identity.accountId,reportDate:identity.reportDate,saleId,
-          storeCore,formalRevenueDelta:0,officialKpiAllocation:"UNDECIDED"};
+          storeCore,storeName,reportDocId:reportRef.id,formalRevenueDelta:0,officialKpiAllocation:"UNDECIDED"};
         tx.create(requestRef,{...common,schemaVersion:"activity-sales-special-price-request-record-v1",
           requestId,proposal:proposed,requestedByRole:actor.actorRole,requestedByAccountId:actor.actorAccountId,
           policyRevision:plan.policyRevision,planHash:plan.planHash,state:"PENDING_REVIEW",

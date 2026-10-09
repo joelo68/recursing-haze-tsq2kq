@@ -69,8 +69,13 @@ function normalizePrior(raw,requestId,plan){
   return {status:raw.status,reviewRevision:raw.reviewRevision,stepIndex:raw.stepIndex,decisions:raw.decisions};
 }
 function applyDecision({requestId,request,plan,prior,actor,decision,reasonNote="",expectedReviewRevision}){
-  if(typeof requestId!=="string" || !/^life_[a-f0-9]{48}$/.test(requestId) || !request ||
-     request.state!=="PENDING_REVIEW" || request.brandId!==plan.brandId || request.event?.kind!==plan.kind)
+  const lifecycle=/^life_[a-f0-9]{48}$/.test(requestId||"");
+  const special=/^price_[a-f0-9]{48}$/.test(requestId||"");
+  const matched=lifecycle ? request?.event?.kind===plan.kind && plan.kind!=="SPECIAL_PRICE"
+    : special ? plan.kind==="SPECIAL_PRICE" && request?.requestId===requestId &&
+      request?.proposal?.approvalState==="PENDING_REVIEW" && request?.proposal?.state==="PENDING_REVIEW"
+    : false;
+  if(typeof requestId!=="string" || !matched || request?.state!=="PENDING_REVIEW" || request?.brandId!==plan.brandId)
     reject("LIFECYCLE_REVIEW_REQUEST_INVALID",409);
   if(!DECISIONS.has(decision) || typeof reasonNote!=="string" || reasonNote.length>500 ||
      /[\u0000-\u001f\u007f]/.test(reasonNote) || (decision==="REJECT" && reasonNote.trim().length<3))
