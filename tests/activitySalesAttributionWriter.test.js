@@ -4,6 +4,7 @@ import {createRequire} from "node:module";
 const require=createRequire(import.meta.url);
 const {createAttributionWriterHandler}=require("../functions/activitySalesAttributionWriter.js");
 const logic=require("../functions/activitySalesAttributionWriterLogic.js");
+const {attributionDocumentId}=require("../functions/activitySalesAttributionContract.js");
 const frozen=new Date("2026-10-08T08:00:00.000Z"); // Taipei 16:00
 const base={action:"record_sale",brandId:"cyj",campaignId:"act01",versionId:"act01_v001",
   reportDate:"2026-10-08",storeName:"CYJ崇學店",saleId:"s001",packageId:"pkg01",quantity:1,attributedAmount:9800,
@@ -12,7 +13,8 @@ const prefix=(brand)=>brand==="cyj"?"artifacts/default-app-id/public/data":`bran
 const stamp={firestore:{FieldValue:{serverTimestamp:()=>"<server-timestamp>"}}};
 function fixture({brand="cyj",role="therapist",account="T001",storeName="CYJ崇學店",masterStore="崇學",
   allowedStores=["崇學"],claimsBrand=brand,trusted=true,publicationVersion="act01_v001",report=true,
-  version=true,packages=[{packageId:"pkg01",salePrice:9800}],storeScope="selected",versionScopeStores=["崇學"]}={}){
+  version=true,packages=[{packageId:"pkg01",salePrice:9800}],storeScope="selected",versionScopeStores=["崇學"],
+  lockedSaleId=null}={}){
   const docs=new Map(),writes=[];
   const init=(col,id,data)=>docs.set(`${prefix(brand)}/${col}/${id}`,data);
   init("activity_sales_publications","act01",{status:"published",brandId:brand,campaignId:"act01",versionId:publicationVersion,
@@ -22,6 +24,10 @@ function fixture({brand="cyj",role="therapist",account="T001",storeName="CYJ崇�
   if(report)init(role==="therapist"?"therapist_daily_reports":"daily_reports",`2026-10-08_${role==="therapist"?account:storeName}`,
     {brandId:brand,date:"2026-10-08",storeName,therapistId:role==="therapist"?account:undefined,totalRevenue:9800});
   if(role==="therapist")init("therapists",account,{id:account,store:masterStore,status:"active"});
+  if(lockedSaleId){
+    const id=attributionDocumentId({...base,brandId:brand,roleId:role,accountId:account},lockedSaleId);
+    init("activity_sales_special_price_request_state",id,{brandId:brand,state:"PENDING_REVIEW",requestId:"price_test"});
+  }
   const col=(_db,b,name)=>({doc:(id)=>({path:`${prefix(b)}/${name}/${id}`, async get(){return snap(docs.get(this.path));}})});
   const snap=(data)=>({exists:data!==undefined,data:()=>data});
   const db={runTransaction:async(fn)=>{
@@ -113,4 +119,40 @@ test("path injection from account identity and unauthorized selected store rejec
   assert.equal(path.status,400);assert.equal(path.body.code,"ATTRIBUTION_ACCOUNT_PATH_INVALID");
   const other=fixture({versionScopeStores:["中美"]});const r=await other.call();assert.equal(r.status,403);
   assert.equal(r.body.code,"ATTRIBUTION_STORE_NOT_ELIGIBLE");assert.equal(other.writes.length,0);
+});
+
+// B3B2-L1: both writers use the SAME opaque sale ID as the Firestore tx mutex.
+test("B3B2-L1: existing special-price request locks same Sale ID across all brands",async()=>{
+  for(const brand of ["cyj","anniu","yibo"]){
+    const storeName=brand==="cyj"?"CYJ崇學店":brand==="anniu"?"安妞崇學店":"伊啵崇學店";
+    const f=fixture({brand,storeName,lockedSaleId:"s001",storeScope:"all"});
+    const blocked=await f.call();
+    assert.equal(blocked.status,409,brand);
+    assert.equal(blocked.body.code,"ATTRIBUTION_SPECIAL_PRICE_REQUEST_LOCKED",brand);
+    assert.equal(f.writes.length,0,brand);
+    const other=await f.call({saleId:"s002"});
+    assert.equal(other.status,200,`${brand} unrelated sale remains available`);
+    assert.equal(other.body.formalRevenueDelta,0);
+    assert.equal(f.writes.length,3);
+  }
+});
+test("B3B2-L1: previously approved/rejected special-price IDs never become normal-sale IDs",async()=>{
+  const f=fixture({lockedSaleId:"s001"});
+  const saleDoc=attributionDocumentId({...base,brandId:"cyj",roleId:"therapist",accountId:"T001"},"s001");
+  const key=`${prefix("cyj")}/activity_sales_special_price_request_state/${saleDoc}`;
+  for(const state of ["PENDING_REVIEW","REJECTED","APPROVED_PENDING_SETTLEMENT"]){
+    f.docs.set(key,{brandId:"cyj",state});
+    const r=await f.call();assert.equal(r.status,409);
+    assert.equal(r.body.code,"ATTRIBUTION_SPECIAL_PRICE_REQUEST_LOCKED");
+  }
+  assert.equal(f.writes.length,0);
+});
+test("B3B2-L1: late lock blocks even exact idempotent retry of a standard sale",async()=>{
+  const f=fixture();const first=await f.call();assert.equal(first.status,200);
+  const id=attributionDocumentId({...base,brandId:"cyj",roleId:"therapist",accountId:"T001"},"s001");
+  f.docs.set(`${prefix("cyj")}/activity_sales_special_price_request_state/${id}`,
+    {brandId:"cyj",state:"PENDING_REVIEW"});
+  const repeat=await f.call();assert.equal(repeat.status,409);
+  assert.equal(repeat.body.code,"ATTRIBUTION_SPECIAL_PRICE_REQUEST_LOCKED");
+  assert.equal(f.writes.length,3);
 });

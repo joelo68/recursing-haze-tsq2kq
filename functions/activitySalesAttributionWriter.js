@@ -27,6 +27,12 @@ function createAttributionWriterHandler({admin,db,services={}}) {
       const versionRef=col("activity_campaign_versions").doc(identity.versionId);
       const dailyRef=col("activity_sales_daily_attributions").doc(summaryDocumentId(identity));
       const saleRef=sale?col("activity_sales_attribution_sales").doc(attributionDocumentId(identity,sale.saleId)):null;
+      // B3B2-L1: symmetric sale-id mutex with the B3A special-price request writer.
+      // B3A reads the sale doc and creates this state doc in the same transaction;
+      // this path reads the state doc before writing the sale. Firestore OCC then
+      // makes one of the two concurrent transactions retry and fail closed.
+      const specialPriceStateRef=sale?col("activity_sales_special_price_request_state")
+        .doc(attributionDocumentId(identity,sale.saleId)):null;
       const eventId=sale?attributionDocumentId(identity,sale.saleId):summaryDocumentId(identity);
       const auditRef=col("activity_sales_attribution_audit").doc(`${eventId}_${expectedRevision}`);
       const result=await db.runTransaction(async(tx)=>{
@@ -41,6 +47,11 @@ function createAttributionWriterHandler({admin,db,services={}}) {
         const versionSnap=await tx.get(versionRef);
         const dailySnap=await tx.get(dailyRef);
         const saleSnap=saleRef?await tx.get(saleRef):null;
+        const specialPriceStateSnap=specialPriceStateRef?await tx.get(specialPriceStateRef):null;
+        // Any previously created special-price application owns this sale ID,
+        // including PENDING_REVIEW, REJECTED or APPROVED_PENDING_SETTLEMENT.
+        // Never rely on caller-supplied state or an approval as an unlock.
+        if(specialPriceStateSnap?.exists) invalid("ATTRIBUTION_SPECIAL_PRICE_REQUEST_LOCKED",409);
         if(!reportSnap.exists) invalid("ATTRIBUTION_REPORT_NOT_SUBMITTED",409);
         assertReport(reportSnap.data(),identity,storeCore);
         if(!pubSnap.exists || !versionSnap.exists) invalid("ATTRIBUTION_VERSION_NOT_PUBLISHED",409);

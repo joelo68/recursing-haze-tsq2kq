@@ -274,3 +274,13 @@ Frontend 顯示權限不等於 Backend 授權。
 - **Known upstream gate:** `activitySalesAttributionWriter.js` does not yet check B3A price-request lock, so B3B2 may NOT activate settlement until the ordinary-price writer and review/settlement paths share transaction-level mutual exclusion and define approved sale posting policy. No financial month/quantity/close-period policy is assumed.
 - Est. per review attempt: <= 13 scoped document reads, at most 1 immutable decision and 1 review state write. No production reads or writes from this stage (unregistered).
 - Documentation Impact: only this staging doc; do not modify production canonical docs for not-yet-activated schema.
+
+
+## Phase 2A-5B3B2-L1 — Standard Writer / Special Price per-Sale Mutex (feature only)
+
+- 本批只在一般成交 `activitySalesAttributionWriter` 的 `record_sale` transaction 增加同品牌、同 Sale ID 的單文件讀取：`activity_sales_special_price_request_state/{opaqueSaleDocId}`；**任何存在的狀態文件一律 fail-closed**，無論 `PENDING_REVIEW`／`REJECTED`／`APPROVED_PENDING_SETTLEMENT`，不以核准狀態當作開鎖。
+- B3A 申請 Writer 原已於**同一交易**讀取一般成交 `activity_sales_attribution_sales/{opaqueSaleDocId}`，並建立特殊價格 state；本批補齊反向讀取，避免兩條交易在同一 Sale ID 同時成功。兩者均須於 transaction 讀完後才寫入；OCC retry 時重新檢查。三品牌路徑沿用 `getBrandCollection`：CYJ legacy 及 Anniu／Yibo 品牌隔離。
+- 成本：一般 `record_sale` 每次增加最多 1 次同品牌單文件 read（包含拒絕與冪等重試），`confirm_zero` 額外 reads=0；無 query、listener、polling、index 或新對外 API。
+- **尚未實作／不得宣稱已解決：** `confirm_zero` 和「尚未成為成交」的特殊價格候選之間的每日三態序列化；B3A／B3B1 核准後的最終成交結算；特殊價格在日報／ASP／組數／KPI 的會計口徑、退回後重送及跨日關帳。這些必須另行處理，不以本批 Sale ID mutex 代替。
+- 不更改正式日報／Summary／Rankings／Revenue、`CURRENT_APP_VERSION` 或原始 B3A／B3B1 文件；`formalRevenueDelta=0`。不部署、不可合併 main。
+- Documentation Impact: 本 staging 文件更新；正式資料模型／Security canonical docs 目前無變動（未啟用的新流程）。
