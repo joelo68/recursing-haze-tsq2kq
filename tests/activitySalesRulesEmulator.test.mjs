@@ -100,12 +100,14 @@ const PRIVATE_COLLECTIONS = [
   "activity_campaign_approvals", "activity_sales_audit", "activity_sales_acknowledgements",
   "activity_sales_daily_attributions", "activity_sales_attribution_sales", "activity_sales_attribution_audit",
   "activity_sales_attribution_reviews", "activity_sales_attribution_review_audit",
+  "activity_sales_lifecycle_requests", "activity_sales_lifecycle_request_state",
 ];
 const PUBLIC_COLLECTION = "activity_sales_publications";
 
 test("Activity Sales Phase 1B rules: private drafts denied; published projection same-brand read-only", async () => {
   let anniu = null;
   let cyj = null;
+  let yibo = null;
   let anonymous = null;
   try {
     await adminDb.recursiveDelete(adminDb.collection("brands"));
@@ -117,14 +119,17 @@ test("Activity Sales Phase 1B rules: private drafts denied; published projection
     }
     anniu = await createClaimedUser({ brandId: "anniu", accountId: "anniu-admin" });
     cyj = await createClaimedUser({ brandId: "cyj", accountId: "cyj-admin" });
+    yibo = await createClaimedUser({ brandId: "yibo", accountId: "yibo-admin" });
     anonymous = makeClient("activity-anonymous");
     await signInAnonymously(anonymous.auth);
 
     for (const coll of PRIVATE_COLLECTIONS) {
       await expectDenied(getDoc(doc(anniu.db, "brands", "anniu", coll, "sample")), `anniu ${coll} private read`);
       await expectDenied(getDoc(doc(cyj.db, "artifacts", "default-app-id", "public", "data", coll, "sample")), `CYJ ${coll} private read`);
+      await expectDenied(getDoc(doc(yibo.db, "brands", "yibo", coll, "sample")), `yibo ${coll} private read`);
       await expectDenied(setDoc(doc(anniu.db, "brands", "anniu", coll, "browser-write"), { injected: true }), `anniu ${coll} private write`);
       await expectDenied(setDoc(doc(cyj.db, "artifacts", "default-app-id", "public", "data", coll, "browser-write"), { injected: true }), `CYJ ${coll} private write`);
+      await expectDenied(setDoc(doc(yibo.db, "brands", "yibo", coll, "browser-write"), { injected: true }), `yibo ${coll} private write`);
     }
 
     await expectAllowed(getDoc(doc(anniu.db, "brands", "anniu", PUBLIC_COLLECTION, "sample")), "anniu published read");
@@ -139,6 +144,7 @@ test("Activity Sales Phase 1B rules: private drafts denied; published projection
   } finally {
     if (anonymous) await cleanupClient(anonymous);
     if (cyj) await cleanupClient(cyj);
+    if (yibo) await cleanupClient(yibo);
     if (anniu) await cleanupClient(anniu);
   }
 });

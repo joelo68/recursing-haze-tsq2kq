@@ -223,3 +223,14 @@ Frontend 顯示權限不等於 Backend 授權。
 - 尚未定案且**不擅自啟用**：特殊價格誰可核准與在待核准時是否計入績效；跨日退款應歸哪個 KPI 月；組數與平均單價口徑；關帳後更正權限與補報政策。下一批實作 Writer／Rules／Emulator 前需鎖定口徑並重驗上游最新檔案。
 - 成本：本批新增實際 Firebase reads/writes=0，functions invocation=0；Node 測試為純函式，無 Emulator 存取；不會接觸任何正式或 demo 專案。
 - Documentation Impact：僅更新本 staging 設計／狀態文件；正式資料模型文件尚不增列未啟用的 Firestore Schema。
+
+## Phase 2A-5B1 — 未啟用的 Lifecycle 申請 Writer（隔離開發候選）
+
+- 開發基準：隔離 `feature/activity-sales-center @ c591549c4b6f77f8c38f4a655362f883cb45517d`，正式系統繼續 3.6.2。
+- 新增 `functions/activitySalesLifecycleRequestWriter.js`，只提供**未在 functions/index.js 註冊**的可注入測試 Handler。**沒有部署、沒有前端按鈕、沒有可對外呼叫的 Cloud Function。**
+- 原始成交與正式日報、Summary、Ranking、目標一律不改。驗證本帳號 Application Identity、Trusted Device／即時憑證、現存帳號與門市歸屬、正式日報、單筆原始成交、不可變更活動版本後，最多寫入兩個 Backend 私有文件：`activity_sales_lifecycle_requests` 和 `activity_sales_lifecycle_request_state`。只允許 `PENDING_REVIEW`，`officialKpiAllocation=UNDECIDED`、`formalRevenueDelta=0`；不產生已生效沖銷。
+- 僅可有一筆未決申請；Event ID 冪等，Revision 與交易衝突 fail-closed。任一申請可重試，不可從申請宣稱已批准。取消、退款、更正真正生效需 B2/B3 加入授權、結算事件與財務口徑。
+- Firestore Rules 對 CYJ legacy 與安妞／伊啵兩種路徑明示 `read/write:false`，同時加入 fallback exclude；已擴充 Rules Emulator 回歸清單，另新增真實 Firestore Transaction 競態 Emulator 測試（等待 Mac 執行）。
+- 讀取估算：每件申請驗證約 7~8 筆單文件讀取（視角色而定，僅在測試／未來實際呼叫時發生），無常駐 listener/query/polling；每件新申請最多 2 筆私有文件寫入。
+- 仍未決定退款入帳月、部分退款組數、特殊成交核准權限、歷史關帳規則；所以沒有正式退款執行、核准或 KPI 匯總。本段為候選 source，Mac CI／Emulator 未驗證前不得宣稱 VALIDATED。
+- Documentation Impact：僅更新本 staging 文件；正式 CURRENT_STATE 與正式資料模型待上線門檻再更新。
