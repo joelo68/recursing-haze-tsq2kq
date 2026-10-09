@@ -246,3 +246,18 @@ Frontend 顯示權限不等於 Backend 授權。
 - Performance: each review action reads up to 9 exact docs (policy, request, state, previous decision, actor, B1 lock, original sale, daily attribution, immutable version), writes 1 decision + 1 state; no listener, query, polling or Production deployment.
 - Still **NOT IMPLEMENTED**: real policy management UI/writer, special-price application writer, business settlement/refund execution, after-close correction, KPI month and quantity allocation, unlock/re-request after rejection. No official approval authority exists unless a trusted future policy writer provisions a valid scoped policy.
 - Documentation Impact: only this staging file; `FIREBASE_DATA_MODEL` Production canonical docs deliberately not changed for unregistered staging collections.
+
+
+## Phase 2A-5B3A — 特殊價格「成交前」待審申請（隔離候選，NOT ACTIVATED）
+
+- Source anchor：隔離 Feature `feature/activity-sales-center @ 169f7d67198a442ec493744b03533fda9c588fb1`；正式版本仍 3.6.2，本批不改 `functions/index.js`、前端入口或正式日報。
+- 特殊價格**不是既有 B1 `CORRECTION/CANCELLATION/REFUND` 事件**。B1/B2 必須有已存在的原始 sale 才能核對；B3A 為原始 sale 尚未產生之前的申請，所以使用獨立的 `activity_sales_special_price_requests` 與 `activity_sales_special_price_request_state`，不假裝已接通 B2 決策 Writer。
+- `activitySalesSpecialPriceRequestContract.js` 只接受最小輸入與受信身份：禁止前端自稱 `approvalState`、正式售價、核准者或任意 `formalRevenueDelta`；正式售價只由 Transaction 中已發布活動版本的 `packages` 取得。實付與正式總價不同才可提出申請，必須填固定差異原因。
+- `activitySalesSpecialPriceRequestWriter.js` 是**未註冊的內部候選 handler**；每次檢查 Firebase Application Identity、Trusted Device／即時憑證、目前管理師／店主管門市、正式日報、目前已發布投影與不可變版本、品牌 `activity_sales_lifecycle_review_policy/current` 中的 `SPECIAL_PRICE` flow。政策缺失／停用即拒絕。
+- 待審請求以品牌／角色／帳號／回報日期／活動及版本／saleId 的不透明 ID 當作唯一交易錨點，Firestore Transaction 僅對**兩個私有文件** `tx.create`；完全不新增原始成交、活動每日歸屬、退款、Summary 或 KPI。相同申請允許 idempotent replay，內容不同拒絕；同交易也禁止與已存在 sale 或 lifecycle 申請混用。
+- Firestore Rules 對 CYJ legacy path 和安妞／伊啵 brand path 均明確禁讀禁寫新增私有集合，並在舊有通用 allow fallback 中排除兩個名稱。
+- 申請狀態一律 `PENDING_REVIEW`，`officialKpiAllocation=UNDECIDED`，`formalRevenueDelta=0`。B2 的 `SPECIAL_PRICE` plan 僅作為**核准政策格式**，目前 B2 決策 Writer 仍只能處理已有原始成交的 Lifecycle 申請；**本批沒有核准決策、成交入帳、核銷或退款生效能力**。
+- 待後續：B3B 需新增特殊價格專用決策與正式成交入帳的狀態機，交易內檢查仍有效之價格政策／正式版本與已提交日報、核准修訂與金額防重複；是否允許核准後跨日成交及月結政策需另外確認。
+- Firestore 估算：每筆申請最多讀取 11 個單筆文件（含管理師或店主管 master），成功只建立 2 個 private docs；不加入 listener、輪詢、索引或大查詢。真實讀數仍以 Emulator/帳單為準。
+- Source 在 Mac 尚須核對 HEAD、工作樹 SHA，再跑 Node CI、Build、三品牌 Rules Emulator 與真實交易競態，才可標記 VALIDATED；不可未實測先 Commit／Push。
+- Documentation Impact：本批只更新此 staging 文件；Production canonical docs 不描述尚未啟用的資料流程。

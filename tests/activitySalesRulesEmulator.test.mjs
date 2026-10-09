@@ -102,6 +102,7 @@ const PRIVATE_COLLECTIONS = [
   "activity_sales_attribution_reviews", "activity_sales_attribution_review_audit",
   "activity_sales_lifecycle_requests", "activity_sales_lifecycle_request_state",
   "activity_sales_lifecycle_review_policy", "activity_sales_lifecycle_review_state", "activity_sales_lifecycle_review_decisions",
+  "activity_sales_special_price_requests", "activity_sales_special_price_request_state",
 ];
 const PUBLIC_COLLECTION = "activity_sales_publications";
 
