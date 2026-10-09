@@ -477,6 +477,9 @@ service cloud.firestore {
     match /brands/{brandId}/activity_sales_attribution_review_audit/{document=**} { allow read, write: if false; }
     match /brands/{brandId}/activity_sales_lifecycle_requests/{document=**} { allow read, write: if false; }
     match /brands/{brandId}/activity_sales_lifecycle_request_state/{document=**} { allow read, write: if false; }
+    match /brands/{brandId}/activity_sales_lifecycle_review_decisions/{document=**} { allow read, write: if false; }
+    match /brands/{brandId}/activity_sales_lifecycle_review_state/{document=**} { allow read, write: if false; }
+    match /brands/{brandId}/activity_sales_lifecycle_review_policy/{document=**} { allow read, write: if false; }
 
     match /artifacts/{appId}/public/data/activity_sales_policy/{document=**} { allow read, write: if false; }
     match /artifacts/{appId}/public/data/activity_campaigns/{document=**} { allow read, write: if false; }
@@ -491,6 +494,9 @@ service cloud.firestore {
     match /artifacts/{appId}/public/data/activity_sales_attribution_review_audit/{document=**} { allow read, write: if false; }
     match /artifacts/{appId}/public/data/activity_sales_lifecycle_requests/{document=**} { allow read, write: if false; }
     match /artifacts/{appId}/public/data/activity_sales_lifecycle_request_state/{document=**} { allow read, write: if false; }
+    match /artifacts/{appId}/public/data/activity_sales_lifecycle_review_decisions/{document=**} { allow read, write: if false; }
+    match /artifacts/{appId}/public/data/activity_sales_lifecycle_review_state/{document=**} { allow read, write: if false; }
+    match /artifacts/{appId}/public/data/activity_sales_lifecycle_review_policy/{document=**} { allow read, write: if false; }
 
     match /brands/{brandId}/activity_sales_publications/{document=**} { allow read: if sameBrandIdentity(brandId); allow write: if false; }
     match /artifacts/{appId}/public/data/activity_sales_publications/{document=**} { allow read: if cyjLegacyIdentity(appId); allow write: if false; }
@@ -529,6 +535,9 @@ service cloud.firestore {
         && collectionName != 'activity_sales_attribution_review_audit'
         && collectionName != 'activity_sales_lifecycle_requests'
         && collectionName != 'activity_sales_lifecycle_request_state'
+        && collectionName != 'activity_sales_lifecycle_review_decisions'
+        && collectionName != 'activity_sales_lifecycle_review_state'
+        && collectionName != 'activity_sales_lifecycle_review_policy'
         && collectionName != 'activity_sales_attribution_reviews'
         && collectionName != 'activity_sales_attribution_sales'
         && collectionName != 'activity_sales_daily_attributions'
@@ -568,6 +577,9 @@ service cloud.firestore {
         && collectionName != 'activity_sales_attribution_review_audit'
         && collectionName != 'activity_sales_lifecycle_requests'
         && collectionName != 'activity_sales_lifecycle_request_state'
+        && collectionName != 'activity_sales_lifecycle_review_decisions'
+        && collectionName != 'activity_sales_lifecycle_review_state'
+        && collectionName != 'activity_sales_lifecycle_review_policy'
         && collectionName != 'activity_sales_attribution_reviews'
         && collectionName != 'activity_sales_attribution_sales'
         && collectionName != 'activity_sales_daily_attributions'

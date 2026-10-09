@@ -234,3 +234,15 @@ Frontend 顯示權限不等於 Backend 授權。
 - 讀取估算：每件申請驗證約 7~8 筆單文件讀取（視角色而定，僅在測試／未來實際呼叫時發生），無常駐 listener/query/polling；每件新申請最多 2 筆私有文件寫入。
 - 仍未決定退款入帳月、部分退款組數、特殊成交核准權限、歷史關帳規則；所以沒有正式退款執行、核准或 KPI 匯總。本段為候選 source，Mac CI／Emulator 未驗證前不得宣稱 VALIDATED。
 - Documentation Impact：僅更新本 staging 文件；正式 CURRENT_STATE 與正式資料模型待上線門檻再更新。
+
+
+## Phase 2A-5B2 — Lifecycle Review Policy and INERT Decision Writer (2026-10-09)
+
+- Source Gate baseline: isolated `feature/activity-sales-center @ 9a23af8d4356db69b6ce85eab944150eb0c3c90f` (not Production source). MAC LOCAL SHOWCASE uncommitted work retained untouched. CURRENT_APP_VERSION remains 3.6.2.
+- Separate brand-private `activity_sales_lifecycle_review_policy/current` from campaign publication approvals. **No policy configuration endpoint supplied**; missing/disabled policy always denies review. Policy v1 has explicit brand, revision, group-expanded named reviewers, ANY/ALL quorum and sequential steps. Account privileges depend on current named account, never merely role title. Requester's self-approval forbidden unless explicit `allowRequesterApproval=true`.
+- `activitySalesLifecycleReviewPolicy.js` is pure; `activitySalesLifecycleReviewWriter.js` is **UNREGISTERED**, not imported by `functions/index.js` or frontend. It validates token Application Identity, fresh credential + Trusted Device, current brand actor record, existing B1 PENDING request and authoritative sale/version/daily anchors inside read-only phase of a transaction; writes only append-only `activity_sales_lifecycle_review_decisions` plus OCC `activity_sales_lifecycle_review_state`.
+- Approval success only means **`APPROVED_PENDING_SETTLEMENT`**; REJECT creates an auditable `REJECTED` state. Neither changes the original pending request/lock nor settles a sale, refund, daily attribution, official KPI, Summary, ranking or reporting revenue. `formalRevenueDelta=0`, `officialKpiAllocation=UNDECIDED`. B1 pending lock is intentionally retained even after rejection pending later settlement/reopen policy.
+- Security: both brand paths and CYJ legacy paths deny browser reads/writes to the three new private collections; generic wildcard grants explicitly exclude them. Backend policy is current revision and an immutable `planHash` is recorded with each vote; changed policy midflow rejects stale revisions. Current account/store membership is re-read inside the transaction.
+- Performance: each review action reads up to 9 exact docs (policy, request, state, previous decision, actor, B1 lock, original sale, daily attribution, immutable version), writes 1 decision + 1 state; no listener, query, polling or Production deployment.
+- Still **NOT IMPLEMENTED**: real policy management UI/writer, special-price application writer, business settlement/refund execution, after-close correction, KPI month and quantity allocation, unlock/re-request after rejection. No official approval authority exists unless a trusted future policy writer provisions a valid scoped policy.
+- Documentation Impact: only this staging file; `FIREBASE_DATA_MODEL` Production canonical docs deliberately not changed for unregistered staging collections.
