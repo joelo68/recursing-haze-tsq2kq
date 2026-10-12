@@ -342,3 +342,32 @@ Frontend 顯示權限不等於 Backend 授權。
 - Final status is `SIGNED_NO_POSTING`, `postingAllowed=false`, `financialPeriodAuthority=NOT_GRANTED`, `officialKpiAllocation=UNDECIDED`, `formalRevenueDelta=0`. Absolutely no activity-sale record, original daily report, Summary, KPI, settlement, period grant, lock release, or formal revenue modification.
 - Future work: authorized editor for per-brand signoff authority, approved recognition/accounting policy, original fiscal close semantics, actual posting writer and corresponding Security/Transaction Emulator regression. No Production deployment or main merge permitted.
 - Documentation Impact: staging and policy signoff docs only; Production canonical docs unaffected.
+
+## Phase 2A-5B3B2-L3B2B3 — Brand-Scoped Signoff Authority Management (ISOLATED; UNREGISTERED)
+
+- Source anchor: `feature/activity-sales-center @ 11b2c74df0d0ab76852a6253a01694ee565be0d5` (not a Production claim); do not modify `CURRENT_APP_VERSION=3.6.2`.
+- New unregistered `activitySalesSpecialPriceSignoffAuthorityManagementWriter.js` plus pure contract allow `get_special_price_signoff_authority` (authorized one-document read), `set_special_price_signoff_authority` and `disable_special_price_signoff_authority` (revision-guarded transaction). All actions require valid Firebase Application Identity, same-brand `director` actor, `verifySuperAdminActor` current trusted device + credential + `super_admin`; master credential fallback is intentionally rejected for this isolated feature.
+- Only explicitly named, **currently active** stage reviewers are allowed; no default reviewer lists or elevated role inference. Reviewer lists are checked in a brand-scoped transaction using individual therapist docs / single setting docs; duplicate accounts across BUSINESS and FINANCE forbidden. The persisted `activity_sales_special_price_signoff_authority/current` remains **exactly** the existing B1 parser's five fields (`schemaVersion, brandId, revision, enabled, reviewers`), with no added metadata. Disabled means empty reviewer lists and `enabled=false`; B2 signoff writer must fail closed and existing in-flight decisions become stale after any revision change.
+- Successful mutations transactionally write 1 exact authority document and `tx.create` 1 immutable per-revision document in the new `activity_sales_special_price_signoff_authority_audit` collection. New Firestore Rules explicitly deny all client reads and writes to the audit collection for each of CYJ legacy and Anniu/Yibo brand paths, also excluding it from both generic wildcard scopes.
+- Firestore estimated reads per `SET`: 1 authority doc plus up to 30 reviewer credentials' docs (deduplicated common setting docs); per `DISABLE`: 1 doc; per `GET`: 1 doc. Successful mutation: 2 writes. No listener, polling, unbounded query, new index, FE callsite or new registered Cloud Function.
+- Backend super-admin device/credential validation is performed through the existing `verifySuperAdminActor` before transaction, following current system-admin conventions. **Gap for a future security hardening batch:** active trusted-device/credential revalidation *inside* the Firestore transaction against exact documents for revocation races has NOT been established; do not deploy or claim PRODUCTION CONFIRMED. Emulator tests exercise transaction OCC and brand scoping, not real device approval service integration.
+- The nine accounting decisions remain not approved; this only controls who may perform later non-posting signoffs. `SIGNED_NO_POSTING` / `postingAllowed=false` unchanged. No sale, day lock release, official revenue, Summary, ASP or KPI write. No change to `functions/index.js`, Hosting, app version or production canonical docs.
+- Documentation Impact: this staging document and `docs/ACTIVITY_SALES_SPECIAL_PRICE_POLICY_SIGNOFF.md` only; no production runtime released.
+
+
+## Phase 2A-5B3B2-L3B2B3-R3 — Transaction-time Super Admin Recheck (ISOLATED)
+
+- R2 Mac validation evidence: 67/67 focused, 1,530/1,530 CI, Emulator PASS and both builds PASS, all without Git/production deploy. R3 is a **new candidate** requiring its own complete Mac retest.
+- For SET/DISABLE only, upstream `verifySuperAdminActor` must run again using a transaction-scoped read-only Firestore adapter. The existing verifier reads account_devices, director_auth and master_auth through `tx.get`; changes during the transaction trigger Firestore OCC retry, and a now-revoked device/account/password fails closed with 403 before any Audit/Authority write. No separate credential interpretation or new privilege path.
+- Transaction-time reads: up to **3 additional exact document reads** for SET/DISABLE (device, director_auth and master_auth), with a second full credential check; no polling, listener or collection query. `GET` continues to use the existing initial authorization (no write race), and is not a signed snapshot guarantee.
+- This does not bypass application session authority, does not grant special-price posting, and does not modify the unregistered API list. Device global-block marker semantics and all other credential writers still require a production security review before activation. No Firebase deploy or `main` merge.
+- Documentation Impact: this staging document and the special-price signoff staging policy file only.
+
+
+### L3B2B3-R5：上游 Global Device Block（隔離候選、未註冊）
+
+- 根因：L3B2B3-R4 交易內重驗用的共用 `verifyTrustedApproverDevice()` 只檢查品牌裝置文件，未檢查登入流程採用的全域 `global_blocked_devices` 封鎖標記。
+- R5 直接補強 `functions/deviceApproval.js` 共用 Device Authority，沿用登入的 `active !== false` 及 `ACTIVE_BLOCK_STATUSES` 語意；所有核准者驗證在交易內讀取單一全域標記，變動時交由 Firestore OCC 重試。
+- 全域標記刻意共享三品牌；品牌裝置與憑證仍分別走 CYJ legacy、安妞／伊啵 path。簽核 Writer、授權結構、財務數字、`CURRENT_APP_VERSION` 均不變。
+- R4 Mac 曾通過 1,532/1,532；R5 需另行執行 Emulator 與完整 CI，R4 PASS 不等於 R5 PASS。未部署、未 Git 提交、未決定九項財務認列政策。
+- 既有舊裝置缺少明確 `trusted: true` 的語意另列為風險，未經正式資料稽核不得自動調整。

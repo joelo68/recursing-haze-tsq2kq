@@ -63,3 +63,23 @@
 本批新增待驗證的 Backend 簽核 Writer，必須驗證 Firebase Application Identity、目前 Trusted Device／credential 和品牌私有營運／財務名單，所有交易錨點重新在同一 Firestore Transaction 內驗證。
 品牌政策 `activity_sales_special_price_signoff_authority/current` 目前**沒有正式管理入口或預設核准者**；未提供明確授權時拒絕執行。本批不代表使用者已核定上述九項財務政策。
 簽核日誌為不可變審計，終態 `SIGNED_NO_POSTING`，仍然 **不允許**產生活動成交、ASP／組數、正式 KPI、關帳調整或解除日鎖。
+
+## L3B2B3｜品牌簽核權限名單後端管理（隔離、尚未啟用）
+
+- 僅最高管理者同品牌 Application Identity（director／super_admin）及目前信任裝置、有效 credential 可操作；本批刻意禁止 master credential 後備通道。系統**不會**自動選擇 BUSINESS／FINANCE 人員。
+- `GET` 讀取品牌專屬當前名單與 `revision`；`SET` 需提供 BUSINESS、FINANCE 各至少一位已啟用帳號，以及 `expectedRevision`；`DISABLE` 以 `expectedRevision` 明確撤銷授權，兩組名單清空，禁止舊簽核繼續。兩關不得重複相同帳號。授權名單為品牌內全域，但簽核時仍會再次驗證申請／店家 scope。
+- 後端以品牌私有 `activity_sales_special_price_signoff_authority/current` 及 append-only `activity_sales_special_price_signoff_authority_audit/revision_...` 寫入，Transaction OCC 保障多人操作不會安靜覆寫。三品牌 Rules 對前端全部封鎖。
+- **待後續工作：** 補上 Backend 裝置撤銷與 credential race transaction 內最終驗證、真實管理者授權資料及簽核角色正式確認、對外 API 上線審批與管理畫面。沒有任何人員會自動取得簽核權；也**不會**因本批而核定九項財務口徑、賦予結算權限或產生正式營收。
+
+
+## L3B2B3-R3 尚待 Mac 驗證的撤銷競態強化
+
+- SET／DISABLE 在同一 Firestore transaction 內，重用正式的 `verifySuperAdminActor` 對 brand-private trusted-device、director_auth 與 master_auth 重新讀取／比對。任一文件於交易中異動，OCC 重試會重新認證，不使用外部已過時的驗證結果直接寫授權名單。
+- 單次 mutation 預估額外 3 次指定文件讀取；無 query、listener、polling。`GET` 保持只讀，未作交易內二次驗證。
+- `SIGNED_NO_POSTING` 不變，九項會計規則仍待核定；未註冊管理 API／未部署 Rules／未合併 main。需完成全套 Mac Emulator／CI／Build，並在正式啟用前再稽核全域裝置封鎖及憑證撤銷模型。
+
+
+### R5｜Global Device Block Security Gate（僅隔離驗證）
+
+R5 在共用 Device Authority 補齊全域封鎖標記的同交易讀取：經 App Identity、品牌最高管理者 credential、品牌受信裝置核對後，亦須確認全域 `global_blocked_devices` 未有效封鎖。交易中封鎖／解除封鎖的文件變動必須導致 OCC 重新驗證。
+此機制不授予認列、結算、入帳、日鎖解鎖或 Summary Writer 權限；簽核仍固定 `SIGNED_NO_POSTING`。R5 尚待 Mac 真實 Emulator／CI／Build 驗證；既有舊裝置 `trusted` 欄位歷史語意仍待單獨稽核。

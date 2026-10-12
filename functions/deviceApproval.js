@@ -322,6 +322,13 @@ function findRecoverableKnownDeviceEntry(devices = {}, deviceInfo = {}, loginLoc
 }
 
 
+// Shared with the login-time global block check. Keep status and source semantics
+// identical, so a global security decision cannot diverge across entry points.
+function isActiveGlobalBlockRecord(block = {}) {
+  if (!block || typeof block !== 'object') return false;
+  return block.active !== false && ACTIVE_BLOCK_STATUSES.has(String(block.status || block.source || ''));
+}
+
 function isTrustedDeviceRecord(device = {}) {
   if (!device || typeof device !== 'object') return false;
   const status = String(device.status || '');
@@ -1003,7 +1010,14 @@ function buildResolvedApprovalConflictPayload(requestData = {}) {
 
 async function verifyTrustedApproverDevice({ db, brandId, roleId, accountId, deviceId }) {
   const accountKey = sanitizeSecurityKey(`${normalizeBrandId(brandId)}_${roleId}_${sanitizeSecurityKey(accountId)}`);
-  const snap = await getBrandCollection(db, brandId, 'account_devices').doc(accountKey).get();
+  // The login authority's global marker is SHARED by all brands. Read it through
+  // the supplied DB view: when this view is a Transaction, a concurrent global
+  // revoke/restore forces Firestore OCC retry before the administrative write.
+  const [snap, globalBlockSnap] = await Promise.all([
+    getBrandCollection(db, brandId, 'account_devices').doc(accountKey).get(),
+    getGlobalBlockedRef(db, roleId, accountId, deviceId).get(),
+  ]);
+  if (globalBlockSnap.exists && isActiveGlobalBlockRecord(globalBlockSnap.data())) return false;
   const device = snap.exists ? snap.data()?.devices?.[deviceId] : null;
   return isTrustedDeviceRecord(device);
 }
@@ -1177,11 +1191,8 @@ function createDeviceApprovalFunctions({ admin, db }) {
       const globalBlockSnaps = await Promise.all(
         globalDeviceIds.map((candidateDeviceId) => getGlobalBlockedRef(db, roleId, accountId, candidateDeviceId).get())
       );
-      const activeGlobalBlockSnap = globalBlockSnaps.find((snap) => {
-        if (!snap.exists) return false;
-        const block = snap.data() || {};
-        return block.active !== false && ACTIVE_BLOCK_STATUSES.has(String(block.status || block.source || ''));
-      });
+      const activeGlobalBlockSnap = globalBlockSnaps.find((snap) =>
+        snap.exists && isActiveGlobalBlockRecord(snap.data()));
       if (activeGlobalBlockSnap) {
         const block = activeGlobalBlockSnap.data() || {};
         await writeTelegramSecurityAlertWithCooldown({
