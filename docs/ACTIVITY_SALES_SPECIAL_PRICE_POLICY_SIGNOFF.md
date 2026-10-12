@@ -46,3 +46,13 @@
 - **永遠回傳 `postingAllowed=false`、金額／組數／ASP／認列月份均為 null，且 `financialPeriodAuthority=NOT_GRANTED`。**
 
 本子批次只新增純契約／測試／Staging 文件，**不新增 Firestore reads、writes、queries、listener、Cloud Function、Security Rule 修改或正式部署**。
+
+## L3B2B1 簽核狀態候選契約（純契約，尚未啟用）
+
+- 來源錨點：隔離分支 `7e03cd4ae8d7cb3b404394e57e15825a1ee0639c`。
+- 建議驗證順序：先由本品牌明確指定的 **BUSINESS 營運帳號** 表態，再由不同人的 **FINANCE 財務帳號** 表態。這是待授權的流程模型，**不是已確定的管理權限配置**。
+- 每品牌授權名單需另行由具正式權限的管理流程建立 `activity-sales-special-price-signoff-authority-v1`；當文件不存在、停用、名單或修訂不符時，預設拒絕。身份不得自行跨品牌繼承權限。
+- 每筆申請草案有獨立的 opaque `signoffId`，須鎖定草案 fingerprint 和簽核授權 revision/hash；多管理員以 `expectedRevision` OCC 排他，拒絕繞過營運關、本人核准、重複同人簽核、政策／草案被換版。
+- **本批未實作**：授權名單管理 Writer、Credential/Trusted Device 現行授權查驗、Firestore transaction/私有簽核文件持久化、Rules、append-only Audit Backend 寫入、正式財務政策批准及特殊成交入帳。
+- 即使兩關均通過，結果也只會是 `SIGNED_NO_POSTING`、`authorityVerified=false`、`businessPolicyApproved=false`、`postingAllowed=false`、`financialPeriodAuthority=NOT_GRANTED`，九項業務規則仍須經正式負責人確認。
+- 本次只是新增純契約與測試、更新本簽核表／Staging；**沒有 Firestore reads/writes、Listener、Query、正式部署或 CURRENT_APP_VERSION 修改**。
