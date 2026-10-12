@@ -284,3 +284,14 @@ Frontend 顯示權限不等於 Backend 授權。
 - **尚未實作／不得宣稱已解決：** `confirm_zero` 和「尚未成為成交」的特殊價格候選之間的每日三態序列化；B3A／B3B1 核准後的最終成交結算；特殊價格在日報／ASP／組數／KPI 的會計口徑、退回後重送及跨日關帳。這些必須另行處理，不以本批 Sale ID mutex 代替。
 - 不更改正式日報／Summary／Rankings／Revenue、`CURRENT_APP_VERSION` 或原始 B3A／B3B1 文件；`formalRevenueDelta=0`。不部署、不可合併 main。
 - Documentation Impact: 本 staging 文件更新；正式資料模型／Security canonical docs 目前無變動（未啟用的新流程）。
+
+
+## Phase 2A-5B3B2-L2 — Pending Special Price / Daily Zero Mutex (ISOLATED, NOT ACTIVATED)
+
+- Base: `feature/activity-sales-center @ b48f4682fad8159fe8c39d90a90cb4d64f8ad731`; source gate requires the exact formal feature HEAD and original changed-file SHA. No Production deployment or app version bump.
+- A special-price application now atomically creates (on first application for a day) `activity_sales_special_price_day_locks/{summaryDocumentId(identity)}` together with the immutable request and sale lock. Subsequent same-day requests revalidate this exact, brand-private day lock. The day lock persists even after a review is REJECTED or APPROVED_PENDING_SETTLEMENT; no invented release/settlement semantics.
+- `activitySalesAttributionWriter` `confirm_zero` reads the same day lock **inside its existing Firestore transaction** and denies confirmation when it exists, including malformed documents; the special request transaction already reads the daily attribution state and rejects `CONFIRMED_ZERO`. Firestore retry/OCC serializes concurrent request vs zero. Ordinary standard-sale recording is not blocked by a different Sale ID's day lock; B3B2-L1 same-sale mutex remains active.
+- New pure `activitySalesSpecialPriceDayLock.js` contract checks brand, campaign, version, role, account, report date, store, schema and formal zero-delta. CYJ `artifacts/default-app-id/public/data` and Anniu/Yibo `brands/<brand>` use `getBrandCollection`, never cross-brand. Both direct Rules denies and generic wildcard exclusions protect the new private collection. No Browser query, listener, polling, or new deployed API.
+- Estimated per call: special request +1 exact document read and at most +1 create on first request per day; `confirm_zero` +1 exact read; `record_sale` +0 day-lock reads. Day-lock cleanup or unlocking is **NOT IMPLEMENTED**; do not force `CONFIRMED_ZERO` after a rejected application until a separately approved end-state policy exists.
+- `formalRevenueDelta=0`, official KPI allocation remains `UNDECIDED`; original formal reports, Summary, ranking, and official revenue are not updated. The candidate B3A request and review writers remain unregistered. No special-price settlement.
+- Documentation Impact: only this staging file; production canonical docs remain unchanged for an unregistered feature.

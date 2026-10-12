@@ -3,6 +3,7 @@
 const {activitySalesServerTimestamp}=require("./activitySalesFirestoreFieldValue");
 const {assertActivitySalesSessionActor}=require("./activitySalesSessionBoundary");
 const {attributionDocumentId,STATES}=require("./activitySalesAttributionContract");
+const {dayLockDocumentId}=require("./activitySalesSpecialPriceDayLock");
 const {checkedInput,ownerStore,reportKey,assertReport,assertSaleWindow,
   ensureReportDateAllowed,summaryDocumentId,invalid}=require("./activitySalesAttributionWriterLogic");
 
@@ -26,6 +27,9 @@ function createAttributionWriterHandler({admin,db,services={}}) {
       const publicationRef=col("activity_sales_publications").doc(identity.campaignId);
       const versionRef=col("activity_campaign_versions").doc(identity.versionId);
       const dailyRef=col("activity_sales_daily_attributions").doc(summaryDocumentId(identity));
+      // L2: confirm_zero must serialize with pre-sale special-price applications.
+      const specialPriceDayLockRef=action==="confirm_zero"
+        ?col("activity_sales_special_price_day_locks").doc(dayLockDocumentId(identity)):null;
       const saleRef=sale?col("activity_sales_attribution_sales").doc(attributionDocumentId(identity,sale.saleId)):null;
       // B3B2-L1: symmetric sale-id mutex with the B3A special-price request writer.
       // B3A reads the sale doc and creates this state doc in the same transaction;
@@ -46,12 +50,15 @@ function createAttributionWriterHandler({admin,db,services={}}) {
         const pubSnap=await tx.get(publicationRef);
         const versionSnap=await tx.get(versionRef);
         const dailySnap=await tx.get(dailyRef);
+        const specialPriceDayLockSnap=specialPriceDayLockRef?await tx.get(specialPriceDayLockRef):null;
         const saleSnap=saleRef?await tx.get(saleRef):null;
         const specialPriceStateSnap=specialPriceStateRef?await tx.get(specialPriceStateRef):null;
         // Any previously created special-price application owns this sale ID,
         // including PENDING_REVIEW, REJECTED or APPROVED_PENDING_SETTLEMENT.
         // Never rely on caller-supplied state or an approval as an unlock.
         if(specialPriceStateSnap?.exists) invalid("ATTRIBUTION_SPECIAL_PRICE_REQUEST_LOCKED",409);
+        // Presence alone is authoritative; malformed day locks fail closed.
+        if(specialPriceDayLockSnap?.exists) invalid("ATTRIBUTION_SPECIAL_PRICE_DAY_LOCKED",409);
         if(!reportSnap.exists) invalid("ATTRIBUTION_REPORT_NOT_SUBMITTED",409);
         assertReport(reportSnap.data(),identity,storeCore);
         if(!pubSnap.exists || !versionSnap.exists) invalid("ATTRIBUTION_VERSION_NOT_PUBLISHED",409);

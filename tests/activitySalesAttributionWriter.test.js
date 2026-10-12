@@ -14,7 +14,7 @@ const stamp={firestore:{FieldValue:{serverTimestamp:()=>"<server-timestamp>"}}};
 function fixture({brand="cyj",role="therapist",account="T001",storeName="CYJ崇學店",masterStore="崇學",
   allowedStores=["崇學"],claimsBrand=brand,trusted=true,publicationVersion="act01_v001",report=true,
   version=true,packages=[{packageId:"pkg01",salePrice:9800}],storeScope="selected",versionScopeStores=["崇學"],
-  lockedSaleId=null}={}){
+  lockedSaleId=null,dayLock=false}={}){
   const docs=new Map(),writes=[];
   const init=(col,id,data)=>docs.set(`${prefix(brand)}/${col}/${id}`,data);
   init("activity_sales_publications","act01",{status:"published",brandId:brand,campaignId:"act01",versionId:publicationVersion,
@@ -24,6 +24,10 @@ function fixture({brand="cyj",role="therapist",account="T001",storeName="CYJ崇�
   if(report)init(role==="therapist"?"therapist_daily_reports":"daily_reports",`2026-10-08_${role==="therapist"?account:storeName}`,
     {brandId:brand,date:"2026-10-08",storeName,therapistId:role==="therapist"?account:undefined,totalRevenue:9800});
   if(role==="therapist")init("therapists",account,{id:account,store:masterStore,status:"active"});
+  if(dayLock){
+    const dayId=require("../functions/activitySalesSpecialPriceDayLock.js").dayLockDocumentId({...base,brandId:brand,roleId:role,accountId:account});
+    init("activity_sales_special_price_day_locks",dayId,{state:"SPECIAL_PRICE_REQUESTED",brandId:brand});
+  }
   if(lockedSaleId){
     const id=attributionDocumentId({...base,brandId:brand,roleId:role,accountId:account},lockedSaleId);
     init("activity_sales_special_price_request_state",id,{brandId:brand,state:"PENDING_REVIEW",requestId:"price_test"});
@@ -155,4 +159,16 @@ test("B3B2-L1: late lock blocks even exact idempotent retry of a standard sale",
   const repeat=await f.call();assert.equal(repeat.status,409);
   assert.equal(repeat.body.code,"ATTRIBUTION_SPECIAL_PRICE_REQUEST_LOCKED");
   assert.equal(f.writes.length,3);
+});
+
+test("B3B2-L2: day special-price lock forbids confirm_zero across three brands",async()=>{
+  for(const brand of ["cyj","anniu","yibo"]){
+    const f=fixture({brand,dayLock:true,storeScope:"all"});
+    const r=await f.call({action:"confirm_zero",saleId:undefined,packageId:undefined,attributedAmount:undefined});
+    assert.equal(r.status,409,brand);
+    assert.equal(r.body.code,"ATTRIBUTION_SPECIAL_PRICE_DAY_LOCKED",brand);
+    assert.equal(f.writes.length,0,brand);
+    const sale=await f.call({saleId:"s003"});
+    assert.equal(sale.status,200,`${brand} day lock is not a blanket ban on standard sales`);
+  }
 });

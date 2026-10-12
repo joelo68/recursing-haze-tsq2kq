@@ -482,6 +482,7 @@ service cloud.firestore {
     match /brands/{brandId}/activity_sales_lifecycle_review_policy/{document=**} { allow read, write: if false; }
     match /brands/{brandId}/activity_sales_special_price_requests/{document=**} { allow read, write: if false; }
     match /brands/{brandId}/activity_sales_special_price_request_state/{document=**} { allow read, write: if false; }
+    match /brands/{brandId}/activity_sales_special_price_day_locks/{document=**} { allow read, write: if false; }
     match /brands/{brandId}/activity_sales_special_price_review_state/{document=**} { allow read, write: if false; }
     match /brands/{brandId}/activity_sales_special_price_review_decisions/{document=**} { allow read, write: if false; }
 
@@ -503,6 +504,7 @@ service cloud.firestore {
     match /artifacts/{appId}/public/data/activity_sales_lifecycle_review_policy/{document=**} { allow read, write: if false; }
     match /artifacts/{appId}/public/data/activity_sales_special_price_requests/{document=**} { allow read, write: if false; }
     match /artifacts/{appId}/public/data/activity_sales_special_price_request_state/{document=**} { allow read, write: if false; }
+    match /artifacts/{appId}/public/data/activity_sales_special_price_day_locks/{document=**} { allow read, write: if false; }
     match /artifacts/{appId}/public/data/activity_sales_special_price_review_state/{document=**} { allow read, write: if false; }
     match /artifacts/{appId}/public/data/activity_sales_special_price_review_decisions/{document=**} { allow read, write: if false; }
 
@@ -548,6 +550,7 @@ service cloud.firestore {
         && collectionName != 'activity_sales_lifecycle_review_policy'
         && collectionName != 'activity_sales_special_price_requests'
         && collectionName != 'activity_sales_special_price_request_state'
+        && collectionName != 'activity_sales_special_price_day_locks'
         && collectionName != 'activity_sales_special_price_review_state'
         && collectionName != 'activity_sales_special_price_review_decisions'
         && collectionName != 'activity_sales_attribution_reviews'
@@ -594,6 +597,7 @@ service cloud.firestore {
         && collectionName != 'activity_sales_lifecycle_review_policy'
         && collectionName != 'activity_sales_special_price_requests'
         && collectionName != 'activity_sales_special_price_request_state'
+        && collectionName != 'activity_sales_special_price_day_locks'
         && collectionName != 'activity_sales_special_price_review_state'
         && collectionName != 'activity_sales_special_price_review_decisions'
         && collectionName != 'activity_sales_attribution_reviews'

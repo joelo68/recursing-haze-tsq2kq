@@ -6,6 +6,7 @@ const {attributionDocumentId}=require("./activitySalesAttributionContract");
 const {ownerStore,reportKey,assertReport,assertSaleWindow,summaryDocumentId,ensureReportDateAllowed,invalid}=require("./activitySalesAttributionWriterLogic");
 const {activitySalesServerTimestamp}=require("./activitySalesFirestoreFieldValue");
 const {parsePlan}=require("./activitySalesLifecycleReviewPolicy");
+const {dayLockDocumentId,assertDayLock,makeDayLock}=require("./activitySalesSpecialPriceDayLock");
 const {checkedSpecialPriceRequest,specialPriceRequestId,buildSpecialPriceRequest}=require("./activitySalesSpecialPriceRequestContract");
 function createSpecialPriceRequestHandler({admin,db,services={}}){
   const deps=services.requireFirebaseRequestAuth&&services.verifyTrustedApplicationActor&&services.getBrandCollection&&services.getBrandSettingDoc
@@ -33,6 +34,8 @@ function createSpecialPriceRequestHandler({admin,db,services={}}){
       const saleRef=col("activity_sales_attribution_sales").doc(saleDocId);
       const legacyLockRef=col("activity_sales_lifecycle_request_state").doc(saleDocId);
       const dailyRef=col("activity_sales_daily_attributions").doc(summaryDocumentId(identity));
+      // L2: private reservation shared by all special requests for this day.
+      const dayLockRef=col("activity_sales_special_price_day_locks").doc(dayLockDocumentId(identity));
       const requestId=specialPriceRequestId(identity,saleId);
       const requestRef=col("activity_sales_special_price_requests").doc(requestId);
       const stateRef=col("activity_sales_special_price_request_state").doc(saleDocId);
@@ -47,6 +50,7 @@ function createSpecialPriceRequestHandler({admin,db,services={}}){
         const sale=await tx.get(saleRef);
         const legacyLock=await tx.get(legacyLockRef);
         const daily=await tx.get(dailyRef);
+        const dayLock=await tx.get(dayLockRef);
         const request=await tx.get(requestRef);
         const state=await tx.get(stateRef);
         let storeCore;
@@ -71,7 +75,10 @@ function createSpecialPriceRequestHandler({admin,db,services={}}){
         if(sale?.exists || legacyLock?.exists)invalid("SPECIAL_PRICE_SALE_OR_LIFECYCLE_ALREADY_EXISTS",409);
         if(daily?.exists && (daily.data()?.status==="CONFIRMED_ZERO" || daily.data()?.brandId!==identity.brandId ||
           daily.data()?.storeCore!==storeCore || daily.data()?.formalRevenueDelta!==0))invalid("SPECIAL_PRICE_DAILY_STATE_CONFLICT",409);
+        if(dayLock.exists)assertDayLock(dayLock.data(),identity,storeCore);
         if(request?.exists){
+          // Old/unanchored requests must not silently bypass the day mutex.
+          if(!dayLock.exists)invalid("SPECIAL_PRICE_DAY_LOCK_MISSING",409);
           const prior=request.data();
           const before=prior?.proposal;
           if(prior.state==="PENDING_REVIEW" && prior.brandId===identity.brandId && prior.storeCore===storeCore &&
@@ -93,6 +100,7 @@ function createSpecialPriceRequestHandler({admin,db,services={}}){
           requestId,proposal:proposed,requestedByRole:actor.actorRole,requestedByAccountId:actor.actorAccountId,
           policyRevision:plan.policyRevision,planHash:plan.planHash,state:"PENDING_REVIEW",
           createdAt:timestamp,createdAtText:now});
+        if(!dayLock.exists)tx.create(dayLockRef,makeDayLock(identity,storeCore,timestamp,now));
         tx.create(stateRef,{...common,schemaVersion:"activity-sales-special-price-request-state-v1",
           requestId,state:"PENDING_REVIEW",requestRevision:1,createdAt:timestamp,createdAtText:now});
         return {state:"requested",requestId,approvalState:"PENDING_REVIEW",formalRevenueDelta:0,officialKpiAllocation:"UNDECIDED"};
