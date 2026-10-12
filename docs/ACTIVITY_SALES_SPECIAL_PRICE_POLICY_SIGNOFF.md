@@ -56,3 +56,10 @@
 - **本批未實作**：授權名單管理 Writer、Credential/Trusted Device 現行授權查驗、Firestore transaction/私有簽核文件持久化、Rules、append-only Audit Backend 寫入、正式財務政策批准及特殊成交入帳。
 - 即使兩關均通過，結果也只會是 `SIGNED_NO_POSTING`、`authorityVerified=false`、`businessPolicyApproved=false`、`postingAllowed=false`、`financialPeriodAuthority=NOT_GRANTED`，九項業務規則仍須經正式負責人確認。
 - 本次只是新增純契約與測試、更新本簽核表／Staging；**沒有 Firestore reads/writes、Listener、Query、正式部署或 CURRENT_APP_VERSION 修改**。
+
+
+## L3B2B2 — 隔離 Backend 簽核入口（未註冊，不能入帳）
+
+本批新增待驗證的 Backend 簽核 Writer，必須驗證 Firebase Application Identity、目前 Trusted Device／credential 和品牌私有營運／財務名單，所有交易錨點重新在同一 Firestore Transaction 內驗證。
+品牌政策 `activity_sales_special_price_signoff_authority/current` 目前**沒有正式管理入口或預設核准者**；未提供明確授權時拒絕執行。本批不代表使用者已核定上述九項財務政策。
+簽核日誌為不可變審計，終態 `SIGNED_NO_POSTING`，仍然 **不允許**產生活動成交、ASP／組數、正式 KPI、關帳調整或解除日鎖。

@@ -485,6 +485,9 @@ service cloud.firestore {
     match /brands/{brandId}/activity_sales_special_price_day_locks/{document=**} { allow read, write: if false; }
     match /brands/{brandId}/activity_sales_special_price_review_state/{document=**} { allow read, write: if false; }
     match /brands/{brandId}/activity_sales_special_price_review_decisions/{document=**} { allow read, write: if false; }
+    match /brands/{brandId}/activity_sales_special_price_signoff_authority/{document=**} { allow read, write: if false; }
+    match /brands/{brandId}/activity_sales_special_price_signoffs/{document=**} { allow read, write: if false; }
+    match /brands/{brandId}/activity_sales_special_price_signoff_audit/{document=**} { allow read, write: if false; }
 
     match /artifacts/{appId}/public/data/activity_sales_policy/{document=**} { allow read, write: if false; }
     match /artifacts/{appId}/public/data/activity_campaigns/{document=**} { allow read, write: if false; }
@@ -507,6 +510,9 @@ service cloud.firestore {
     match /artifacts/{appId}/public/data/activity_sales_special_price_day_locks/{document=**} { allow read, write: if false; }
     match /artifacts/{appId}/public/data/activity_sales_special_price_review_state/{document=**} { allow read, write: if false; }
     match /artifacts/{appId}/public/data/activity_sales_special_price_review_decisions/{document=**} { allow read, write: if false; }
+    match /artifacts/{appId}/public/data/activity_sales_special_price_signoff_authority/{document=**} { allow read, write: if false; }
+    match /artifacts/{appId}/public/data/activity_sales_special_price_signoffs/{document=**} { allow read, write: if false; }
+    match /artifacts/{appId}/public/data/activity_sales_special_price_signoff_audit/{document=**} { allow read, write: if false; }
 
     match /brands/{brandId}/activity_sales_publications/{document=**} { allow read: if sameBrandIdentity(brandId); allow write: if false; }
     match /artifacts/{appId}/public/data/activity_sales_publications/{document=**} { allow read: if cyjLegacyIdentity(appId); allow write: if false; }
@@ -553,6 +559,9 @@ service cloud.firestore {
         && collectionName != 'activity_sales_special_price_day_locks'
         && collectionName != 'activity_sales_special_price_review_state'
         && collectionName != 'activity_sales_special_price_review_decisions'
+        && collectionName != 'activity_sales_special_price_signoff_authority'
+        && collectionName != 'activity_sales_special_price_signoffs'
+        && collectionName != 'activity_sales_special_price_signoff_audit'
         && collectionName != 'activity_sales_attribution_reviews'
         && collectionName != 'activity_sales_attribution_sales'
         && collectionName != 'activity_sales_daily_attributions'
@@ -600,6 +609,9 @@ service cloud.firestore {
         && collectionName != 'activity_sales_special_price_day_locks'
         && collectionName != 'activity_sales_special_price_review_state'
         && collectionName != 'activity_sales_special_price_review_decisions'
+        && collectionName != 'activity_sales_special_price_signoff_authority'
+        && collectionName != 'activity_sales_special_price_signoffs'
+        && collectionName != 'activity_sales_special_price_signoff_audit'
         && collectionName != 'activity_sales_attribution_reviews'
         && collectionName != 'activity_sales_attribution_sales'
         && collectionName != 'activity_sales_daily_attributions'
