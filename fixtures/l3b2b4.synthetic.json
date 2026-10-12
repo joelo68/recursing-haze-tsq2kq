@@ -1,0 +1,8 @@
+{
+  "schemaVersion":"activity-sales-l3b2b4-offline-snapshot-v1",
+  "profiles":[
+    {"brandId":"cyj","roleId":"director","accountId":"DEMO_ONLY_C","devices":{"devA":{"status":"trusted","deviceFingerprint":"SYNTHETIC_F"},"devB":{"trusted":true,"status":"trusted","deviceFingerprint":"SYNTHETIC_F"}},"globalMarkers":{"devA":{"active":true,"status":"global_blocked"},"devB":null}},
+    {"brandId":"anniu","roleId":"director","accountId":"DEMO_ONLY_A","devices":{"devC":{"trusted":true,"status":"trusted"}},"globalMarkers":{"devC":null}},
+    {"brandId":"yibo","roleId":"director","accountId":"DEMO_ONLY_Y","devices":{},"globalMarkers":{}}
+  ]
+}

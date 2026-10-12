@@ -371,3 +371,11 @@ Frontend 顯示權限不等於 Backend 授權。
 - 全域標記刻意共享三品牌；品牌裝置與憑證仍分別走 CYJ legacy、安妞／伊啵 path。簽核 Writer、授權結構、財務數字、`CURRENT_APP_VERSION` 均不變。
 - R4 Mac 曾通過 1,532/1,532；R5 需另行執行 Emulator 與完整 CI，R4 PASS 不等於 R5 PASS。未部署、未 Git 提交、未決定九項財務認列政策。
 - 既有舊裝置缺少明確 `trusted: true` 的語意另列為風險，未經正式資料稽核不得自動調整。
+
+## L3B2B4A — Pre-activation offline security inventory (FEATURE ONLY)
+
+- Source gate: `feature/activity-sales-center @ 48276818b6f16bdc4a81b8d8490155c761f88958`. This is a **pure offline risk classifier**, not a permission authority, authenticated Firestore inventory, deployment clearance, or settlement grant. See `docs/ACTIVITY_SALES_L3B2B4_READINESS.md`.
+- Detect candidate historical device entries with implicit trust (`trusted` field missing while legacy status/source accepts), duplicate fingerprint aliases, mixed blocked/unblocked aliases and explicit global-marker evidence gaps. Fingerprints are **observations only**; do not auto-grant or auto-block on fingerprints and do not expose account identifiers in the report.
+- All three brands require authoritative data readback and human signoff; no automatic policy inference. Nine financial decisions remain unapproved and all outcomes are `HOLD_NO_POSTING`; `SIGNED_NO_POSTING` cannot become real revenue, Summary or KPI posting.
+- No Cloud Function registration, production Firestore query, write, listener, polling, security-rule modification, hosting release, or app version increase in this subbatch. Read budget of the **offline classifier** is 0; a future bounded authenticated collection step needs its own separate design/review.
+- Documentation Impact: this staging section and the new L3B2B4 readiness document; no production canonical docs.
