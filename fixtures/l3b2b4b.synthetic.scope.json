@@ -1,0 +1,8 @@
+{
+  "schemaVersion": "activity-sales-l3b2b4b-controlled-scope-v1",
+  "profiles": [
+    {"brandId":"cyj","roleId":"director","accountId":"SYNTHETIC_CYJ_ADMIN_1"},
+    {"brandId":"anniu","roleId":"director","accountId":"SYNTHETIC_ANNIU_ADMIN_1"},
+    {"brandId":"yibo","roleId":"director","accountId":"SYNTHETIC_YIBO_ADMIN_1"}
+  ]
+}
