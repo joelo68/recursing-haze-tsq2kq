@@ -21,6 +21,9 @@ function scopeFile(p,live){
 }
 async function main(){
  const a=args(process.argv.slice(2));if(!['plan','read'].includes(a.mode))throw Error('MODE_REQUIRED');
+ // L3B2B4C: hard stop BEFORE scope parsing or Firebase SDK import.
+ // An operator ACK and project environment string are not attestable approval.
+ if(a.mode==='read')throw Error('L3B2B4C_AUTHORITATIVE_APPROVAL_REQUIRED');
  const scope=checkScope(scopeFile(a.scope,a.mode==='read'));
  if(a.mode==='read'&&scope.selected.some(x=>x.accountId.startsWith('SYNTHETIC_')))throw Error('SYNTHETIC_SCOPE_NOT_ALLOWED');
  const preview={mode:'PLAN_ONLY_NO_DATABASE_ACCESS',status:'HOLD_NO_POSTING',brands:scope.byBrand,
@@ -43,4 +46,4 @@ async function main(){
    console.log(JSON.stringify(report,null,2));process.exitCode=3;
  }finally{await app.delete();}
 }
-main().catch(e=>exit(String(e?.code||e?.message||'L3B2B4B_READ_FAILED').startsWith('L3B2B4B_')?String(e.code||e.message):'L3B2B4B_READ_FAILED'));
+main().catch(e=>exit(String(e?.code||e?.message||'L3B2B4B_READ_FAILED').startsWith('L3B2B4B_')||String(e?.code||e?.message||'').startsWith('L3B2B4C_')?String(e.code||e.message):'L3B2B4B_READ_FAILED'));

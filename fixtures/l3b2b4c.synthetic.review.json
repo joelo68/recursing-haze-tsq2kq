@@ -1,0 +1,7 @@
+{
+  "schemaVersion": "activity-sales-l3b2b4c-review-request-v1",
+  "intent": "REVIEW_ONLY_NOT_AUTHORIZATION",
+  "projectId": "demo-drcyj-activity-sales",
+  "declaredPrincipal": "UNVERIFIED",
+  "readBudget": 96
+}

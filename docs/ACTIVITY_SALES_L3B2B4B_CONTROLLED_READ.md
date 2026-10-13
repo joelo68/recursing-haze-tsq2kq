@@ -31,6 +31,10 @@
 
 這些是已確認的隔離來源，**不是對部署中 Production 文件的同一性保證**。如正式來源已不同，應先更新上游基準，不得把此工具直接視為正式安全稽核。
 
+## L3B2B4C 安全變更（2026-10-13，僅隔離候選）
+
+L3B2B4B 原有 `--mode=read` 自行輸入 ACK／環境變數無法證明獨立授權，**後續 L3B2B4C 已在 CLI 入口強制拒絕任何 Live Read**，錯誤代碼 `L3B2B4C_AUTHORITATIVE_APPROVAL_REQUIRED`，且發生於開啟 Scope 檔案、載入 Firebase SDK、取得身分權杖或存取正式資料之前。下列 L3B2B4B 原先列出的正式讀取流程是**歷史設計說明，現階段禁止執行**；無論指定什麼專案、IAM 或 ACK 都不能解除。`--mode=plan` 完全保留，L3B2B4C 新增僅供離線審查的 Preflight。重新啟用 Live Read 需要另行批准真實 Project／執行身分／品牌及帳號 Scope、可驗證的獨立簽核與到期限制，並再做上游 Security Regression，**不可自行刪除 Guard**。
+
 ## 操作模式
 
 **1. 無網路 PLAN（安全，使用合成 fixture）**
